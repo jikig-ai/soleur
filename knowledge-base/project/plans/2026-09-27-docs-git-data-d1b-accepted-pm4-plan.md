@@ -567,8 +567,11 @@ before the edit, and `2` after it (the comment line and the label).
 
 **Domains relevant:** none
 
-No cross-domain implications. This PR records infrastructure status. `knowledge-base/legal/**` is
-deliberately out of the diff, and #8634 owns Art. 30 activation.
+No cross-domain implications at plan time. **Amended at review (CLO ruling, 2026-09-27):** the
+Art. 30 register's PA-36 (g)(13) said the root key "will authenticate" while this PR records root
+authentication as LIVE, so the CLO ruled an append-only, tense-only Superseded marker there plus a
+dated discharge addendum in `knowledge-base/legal/audits/2026-09-counsel-review-8189.md`. PA-36
+stays declared, not live; #8634 still owns Art. 30 activation for ADR-239.
 
 ## Acceptance Criteria
 
