@@ -3,14 +3,14 @@
 Plan: `knowledge-base/project/plans/2026-09-27-test-extractor-mutation-rows-coverage-plan.md`
 Issue: #8990
 
-## Phase 0: Setup — base sync (load-bearing prerequisite)
+## Phase 0: Setup — base check (cheap; load-bearing if it fails)
 
-- [ ] 0.1 `git merge origin/main` — expected fast-forward (merge-base == HEAD `dfee49ef53`,
-  zero unique commits). The `--rows` registrations and the `_rows_tile_check` tiling arm under
-  test exist only at `d453170127`+.
-- [ ] 0.2 Verify anchors exist post-sync: `grep -n 'lint-orphan-test-suites-mutations-b.*--rows 9-16' scripts/test-all.sh`
+- [ ] 0.1 Verify anchors exist: `grep -n 'lint-orphan-test-suites-mutations-b.*--rows 9-16' scripts/test-all.sh`
   returns exactly one line; `git grep -n _rows_tile_check plugins/soleur/test/` is non-empty.
-- [ ] 0.3 Confirm the three mutation-target paths are clean before running the battery locally
+  (Both hold at the current HEAD — the pipeline init commit `e0927dbd24` sits atop the
+  `d453170127`-bearing main tip. If a stale checkout resurfaces, run `git merge origin/main`
+  first — expected fast-forward — or every mutation anchor reports `ANCHOR MISSING`.)
+- [ ] 0.2 Confirm the three mutation-target paths are clean before running the battery locally
   (`git status --porcelain -- scripts/test-all.sh .github/workflows/ci.yml plugins/soleur/test/scripts-shard-totality.test.sh`
   prints nothing — the battery refuses to run on a dirty target).
 

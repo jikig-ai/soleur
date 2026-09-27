@@ -44,11 +44,11 @@ the orchestrator reading the files directly, inline. No independent review ran.*
 | Cited reference | Check | Result |
 |---|---|---|
 | Issue #8990 | `gh issue view 8990 --json state` | OPEN — premise holds |
-| Commit `d453170127` ("ci: split lint-orphan-test-suites-mutations via --rows over two shard legs (#8967)") | `git merge-base --is-ancestor` | Exists and **is** on `origin/main`, but is **NOT** an ancestor of this worktree's HEAD (`dfee49ef53` = merge-base; branch has zero unique commits) — see Research Reconciliation |
+| Commit `d453170127` ("ci: split lint-orphan-test-suites-mutations via --rows over two shard legs (#8967)") | `git merge-base --is-ancestor` | Exists and **is** on `origin/main`. At session start this worktree's HEAD (`dfee49ef53`) predated it; the pipeline's init commit (`e0927dbd24`, atop `6ee3acf0d8` = origin/main tip) subsequently brought the branch current — see Research Reconciliation |
 | Issue #8864 (predecessor) | `gh issue view 8864 --json state` | CLOSED — the split shipped |
-| `plugins/soleur/test/scripts-shard-totality.test.sh` tiling arm | `git grep _rows_tile_check` | Present on `origin/main` (4 sites), **absent at HEAD** |
-| `plugins/soleur/test/scripts-shard-totality-mutations.sh` | `ls` | Present at HEAD; DECLARED_TOTAL=24; 24 `in_range` row sites enumerated — **none** mutates a `--rows` registration |
-| `scripts/test-all.sh` `--rows` registrations | `git show origin/main:scripts/test-all.sh` | Present only on `origin/main` (lines 3494-3495), **absent at HEAD** |
+| `plugins/soleur/test/scripts-shard-totality.test.sh` tiling arm | `git grep _rows_tile_check` | Present at HEAD (4 sites) post-init-commit |
+| `plugins/soleur/test/scripts-shard-totality-mutations.sh` | `ls` + site enumeration | Present; DECLARED_TOTAL=24; 24 `in_range` row sites enumerated — **none** mutates a `--rows` registration |
+| `scripts/test-all.sh` `--rows` registrations | `git show`/`grep -n` | Present at HEAD post-init-commit (lines 3494-3495) |
 
 ### Property List (Phase 0.6b)
 
@@ -119,8 +119,8 @@ the orchestrator reading the files directly, inline. No independent review ran.*
 
 | Spec/issue claim | Codebase reality | Plan response |
 |---|---|---|
-| "the predecessor --rows split PR merged 2026-09-27 (commit d453170127)" | True — but only on `origin/main`; **this worktree's HEAD (`dfee49ef53`) predates it** (merge-base == HEAD, zero unique commits → clean fast-forward available) | Phase 0 task: `git merge origin/main` (fast-forward) before any edit; without it every mutation anchor below is `ANCHOR MISSING` |
-| "`scripts-shard-totality.test.sh` gained a run_suite-argv tiling block" | True on `origin/main` (extractor + `_rows_tile_check` + censuses + positive control); absent at HEAD | Same Phase 0 sync |
+| "the predecessor --rows split PR merged 2026-09-27 (commit d453170127)" | True. **Observed two ways during planning:** at session start HEAD (`dfee49ef53`) predated `d453170127`; mid-session the pipeline's init commit `e0927dbd24` landed atop `6ee3acf0d8` (origin/main tip), so the branch now contains the split. If the work phase ever sees a checkout without it, every mutation anchor below is `ANCHOR MISSING` | Phase 0 keeps a cheap verify (grep the anchors, confirm `_rows_tile_check` exists) — merge `origin/main` only if that verify fails |
+| "`scripts-shard-totality.test.sh` gained a run_suite-argv tiling block" | True at current HEAD (extractor + `_rows_tile_check` + censuses + positive control) | Phase 0 verify covers it |
 | "no committed mutation row drives the extractor itself red" | Verified: all 24 `in_range` sites in the battery enumerated; none touches a `--rows` registration | Plan adds three |
 | Fix shape: "a mutation row in a battery covering scripts-shard-totality.test.sh … whichever suite owns guard-mutation coverage for this file" | Owner is `plugins/soleur/test/scripts-shard-totality-mutations.sh` (its header declares it the Guard-1 mutation battery; it already mutates `$RUNNER` = `scripts/test-all.sh`) | Rows land there |
 
@@ -283,12 +283,14 @@ than scoring the baseline — the failure message is the drift alarm.
 
 ## Implementation Phases
 
-### Phase 0 — Base sync (load-bearing prerequisite)
+### Phase 0 — Base check (cheap; load-bearing if it fails)
 
-- [ ] `git merge origin/main` (expected fast-forward: merge-base == HEAD, zero unique commits).
-  Without it the mutation anchors and the machinery under test do not exist in this tree.
 - [ ] Verify: `grep -n 'lint-orphan-test-suites-mutations-b.*--rows 9-16' scripts/test-all.sh`
-  returns exactly one line, and `git grep -n _rows_tile_check plugins/soleur/test/` is non-empty.
+  returns exactly one line, and `git grep -n _rows_tile_check plugins/soleur/test/` is
+  non-empty. (At plan time both hold — the pipeline init commit `e0927dbd24` sits atop the
+  `d453170127`-bearing main tip. This step exists because the worktree began the session
+  stale; if a future checkout predates the split, run `git merge origin/main` first —
+  expected fast-forward — or every mutation anchor below is `ANCHOR MISSING`.)
 
 ### Phase 1 — Add the three mutation rows
 
@@ -336,10 +338,10 @@ Queried `gh issue list --label code-review --state open` (200 cap) for each file
 
 ## Dependencies & Risks
 
-- **Stale worktree base** (the dominant risk): every anchor exists only on `origin/main`.
-  Phase 0's merge is mandatory, and the AC list assumes the post-merge tree. If the merge is
-  not clean (pre-existing dirty KB files in the worktree — `git status` shows unrelated
-  `M`/`D` entries under `knowledge-base/`), resolve before implementing.
+- **Worktree base drift:** the session began on a HEAD predating the split; the pipeline's
+  init commit brought it current mid-session. Phase 0's verify greps confirm the anchors'
+  presence before any edit — the safe direction is that `mutate()` fails loudly
+  (`ANCHOR MISSING`) on a stale tree, never a silent green.
 - **Concurrent sibling edits to the registration block:** if another in-flight PR touches the
   `-a`/`-b` lines or `suite-shard-legs.tsv`, the anchors may need re-pointing — `mutate()` will
   fail loudly rather than silently pass (safe failure direction).

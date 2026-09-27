@@ -17,10 +17,12 @@ Recorded by the headless `soleur:plan` run (pipeline mode — no operator-attach
   at review (drop ROWS-DROP/ROWS-SWAP, keep ROWS-GAP, DECLARED_TOTAL 25) if the reviewer
   prefers the literal minimum.
 
-## 2. Worktree base predates the machinery under test
+## 2. Worktree base predated the machinery under test — self-resolved mid-session
 
-- **Finding:** branch HEAD (`dfee49ef53`) is an ancestor of `origin/main` but predates
-  `d453170127` — the `--rows` registrations and `_rows_tile_check` do not exist in this tree.
-- **Plan response:** Phase 0 merges `origin/main` (expected fast-forward) before any edit.
-  Not a scope deviation, but worth surfacing because a work phase that skips Phase 0 will see
+- **Finding:** at session start, branch HEAD (`dfee49ef53`) predated `d453170127` — the
+  `--rows` registrations and `_rows_tile_check` did not exist in the tree. Mid-session the
+  pipeline's init commit `e0927dbd24` landed atop `6ee3acf0d8` (origin/main tip), bringing the
+  branch current; both anchors now verify present.
+- **Plan response:** Phase 0 is a verify-only step (grep the anchors); `git merge origin/main`
+  only if it fails. Recorded because a work phase on a stale checkout would see
   `ANCHOR MISSING` on every new row.
