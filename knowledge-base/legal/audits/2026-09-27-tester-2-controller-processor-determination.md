@@ -205,8 +205,10 @@ instrument is a bounded deliverable, not because the fallback fails.
   or does not run.
 - **D4 — REQUIRED, record before processing.** Write the Art. 30(2) record for the tester-#2
   processor limb in `knowledge-base/legal/article-30-2-register.md` **before** hosted
-  workspace-content processing begins (record P-1 is the template; tester #1's was retrospective by
-  necessity — there is no excuse for a second retrospective record).
+  workspace-content processing begins — the next free record id (record P-1 is the template; `P-2`
+  is RESERVED for the first arms-length CRM-store owner, a different trigger — do not take it).
+  Tester #1's record was retrospective by necessity; there is no excuse for a second retrospective
+  record.
 - **D5 — REQUIRED, measurement stays aggregate.** No collaborator access; no repo-content reads for
   metrics. Company-level aggregates and tester-supplied counts only — the LIA recommendation,
   adopted as the default for testers 2–10.
