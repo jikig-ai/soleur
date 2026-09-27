@@ -21,3 +21,8 @@
 
 ### Post-planning re-probe
 - #8855, #8871 OPEN; no open linked/body-cited PRs; anchor probe over planned files returns only #9033.
+
+## Compound
+- Learning: knowledge-base/project/learnings/test-failures/2026-09-27-extracting-a-shared-scorer-made-the-call-site-the-unpinned-wire.md
+- Routed: plan-sharp-edges.md bullet (measure a "fails closed already" cut before cutting).
+- Archival (archive-kb) DEFERRED until after ship Phase 6: ship reads this spec dir's decision-challenges.md into the PR body.
