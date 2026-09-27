@@ -269,7 +269,7 @@ job's own verdict machinery — the thing this plan exists to prove works.
 liveness_signal:
   what: "shard-totality-mutations CI job verdict — two legs, rows 1-14 and 15-27"
   cadence: "per-PR and per-main-push via .github/workflows/ci.yml"
-  alert_target: "required-check red on the PR / red main run (no external paging)"
+  alert_target: "red shard-totality-mutations leg on the PR / red main run (non-required job — visible CI signal, not a merge block; no external paging)"
   configured_in: ".github/workflows/ci.yml — shard-totality-mutations job block"
 
 error_reporting:
@@ -329,25 +329,29 @@ than scoring the baseline — the failure message is the drift alarm.
 
 ## Acceptance Criteria
 
-- [ ] AC1: `plugins/soleur/test/scripts-shard-totality-mutations.sh` contains three new
+- [x] AC1: `plugins/soleur/test/scripts-shard-totality-mutations.sh` contains three new
   `in_range && row` sites named `ROWS-GAP`, `ROWS-DROP`, `ROWS-SWAP`, appended after the
   `MUSTPASS` row site, with the exact anchors shown in Proposed Solution.
-- [ ] AC2: `DECLARED_TOTAL=27` in the battery, and `git grep -n '24' plugins/soleur/test/scripts-shard-totality-mutations.sh .github/workflows/ci.yml` shows no stale "24" count prose for this battery (header comment, ci.yml job comment, matrix ranges all read 27 / `["1-14", "15-27"]`).
-- [ ] AC3: `bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows 25-27` exits 0
+- [x] AC2: `DECLARED_TOTAL=27` in the battery, and `git grep -n '24' plugins/soleur/test/scripts-shard-totality-mutations.sh .github/workflows/ci.yml` shows no stale "24" count prose for this battery (header comment, ci.yml job comment, matrix ranges all read 27 / `["1-14", "15-27"]`).
+- [x] AC3: `bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows 25-27` exits 0
   and prints `3 executed` (the three new rows run and pass on the unmutated tree: two RED
   verdicts + one GREEN verdict — all *expected* verdicts).
-- [ ] AC4: `bash plugins/soleur/test/scripts-shard-totality-mutations.sh` (full range) exits 0
+- [x] AC4: `bash plugins/soleur/test/scripts-shard-totality-mutations.sh` (full range) exits 0
   with `27 of 27` declared-row accounting (`_row_seq == DECLARED_TOTAL`, `EXECUTED == 27`).
-- [ ] AC5: after the DECLARED_TOTAL bump but *before* the ci.yml re-split, running
+- [x] AC5: after the DECLARED_TOTAL bump but *before* the ci.yml re-split, running
   `bash plugins/soleur/test/scripts-shard-totality.test.sh` locally goes RED on the ci.yml
   tiling arm — evidence the knock-on is load-bearing, not ceremony (then the re-split makes
   it green; commit only the green state).
-- [ ] AC6: `bash plugins/soleur/test/fixture-relative-assert.test.sh` exits 0; if the
+- [x] AC6: `bash plugins/soleur/test/fixture-relative-assert.test.sh` exits 0; if the
   battery's baseline count moved, regenerate via `--write-baseline` in the same commit.
-- [ ] AC7: `git diff origin/main...HEAD --stat` touches exactly:
+- [x] AC7: `git diff origin/main...HEAD --stat` touches exactly:
   `plugins/soleur/test/scripts-shard-totality-mutations.sh`, `.github/workflows/ci.yml`,
   plan/spec artifacts under `knowledge-base/project/`, and (only if AC6 required it)
   `plugins/soleur/test/fixture-relative-assert.baseline.txt`.
+  Review-driven additions to that set (in scope — they are the same files/class the review
+  exists to correct): `plugins/soleur/test/scripts-shard-totality.test.sh` (comment example
+  tracks the new first leg) and `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`
+  (topology table now reads the new split).
 
 ## Test Scenarios
 
