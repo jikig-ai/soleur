@@ -17,6 +17,7 @@ Source of truth: `knowledge-base/project/plans/2026-09-27-perf-dashboard-residua
 - [ ] 0.2 Pull the probe-armed Sentry transactions via the `scripts/sentry-issue.sh` Discover read path (`SENTRY_ISSUE_RO_TOKEN`, `event.type:transaction`): read `http.client` spans to `*.supabase.co` per document request — connect vs server wall-time, request-receipt→dispatch gap, middleware vs render share.
 - [ ] 0.3 Conditional in-surface probe — only if 0.2 leaves the tier blind: per-request timing log in `apps/web-platform/server/index.ts` around `handle()` and/or `performance.now()` spans inside `resolveIdentity` emitted via pino (`op: "render-identity"`, fields `headerHit`/`selectDurMs`/`totalMs`). Skip with a recorded reason if spans already discriminate.
 - [ ] 0.4 Produce the committed measurement table (tier × sample) — lands in the PR body via ship and a comment on #8978.
+- [ ] 0.5 Smoke: confirm `AbortSignal.timeout` exists in the Next middleware runtime (add a one-line probe or exercise the bound in a vitest); if absent, use the manual `AbortController + setTimeout` form (`cf-cache-purge.ts` precedent) for every bound.
 
 ## Phase 1 — Bound Supabase-facing legs (#8978)
 

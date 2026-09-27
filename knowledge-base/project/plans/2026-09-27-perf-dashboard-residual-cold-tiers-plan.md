@@ -15,6 +15,23 @@ requires_cpo_signoff: true
 
 # perf(dashboard): residual cold tiers
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27
+**Sections enhanced:** Hypotheses (L3→L7 layer table — Phase 4.5 fired on `timeout`), Encryption Posture (written — plan prose names cache/log-sink classes), Sharp Edges (`TimeoutError` DOMException name; vitest fake-timer caveat), References (citation paths re-verified; one wrong path fixed)
+**Research agents used:** sequential-fallback — no Task fan-out in this runtime; deepen-plan halt gates (4.5 network-outage, 4.6 user-brand, 4.7 observability, 4.8 PAT, 4.9 UI-wireframe, 4.10 encryption-posture, 4.11 guard-contract) applied inline with mechanical verifiers where they exist (`lint-guard-contract.py`, PAT regex sweep, rule-id registry check, kb-path glob check, `markdownlint-cli2`)
+
+### Key Improvements
+
+1. `.abortSignal(AbortSignal.timeout(…))` on a postgrest chain is **repo-precedented**, not novel: `server/cost-writer.ts` (`LEDGER_READBACK_TIMEOUT_MS`) is the precedent-diff anchor; `server/github-retry.ts` documents the abort lands as `DOMException` named `"TimeoutError"`.
+2. `cf-cache-purge.ts` notes `AbortSignal.timeout` uses a runtime-internal timer vitest does not intercept — timeout-arm fixtures either use real short timers or a manual `AbortController` (that file's own precedent).
+3. Live L3/L7 artifacts added (health 200 `supabase:"connected"`; unauth dashboard nav 307 in 165 ms) — the outage shape is inside-request latency, not connectivity loss.
+
+### New Considerations Discovered
+
+- `AbortSignal.timeout` availability in the Next middleware runtime must be confirmed by a Phase-0 smoke (it is standard web API; the manual `AbortController + setTimeout` fallback is the in-repo precedent if unavailable).
+- `verifiedUserId(req)` is typed on `Request`; Next.js route handlers hold `NextRequest` (a `Request` subclass) — compatible, but the four sites pass different request object names (`_req`, `req`) — migrate per-site, not by mechanical rewrite.
+
 ## Overview
 
 Post-deploy verification of the auth-tax + instrumentation PR (squash `9b6b0394`, PR #8984, deployed 2026-09-27) left #8978's ≲500 ms first-paint acceptance criterion unmet and produced two newly measured cold tiers: (a) an `mw-revoke` cold-miss leg of ~29.6 s on probe run cold-3, and (b) an unexplained post-middleware document tier of 23–38 s (cold-2 TTFB 38.1 s with all middleware legs served from cache in ~0.71 s). Best cold FCP 1.71 s; warm 2.08 s against a ≲500 ms AC.
@@ -39,7 +56,18 @@ Three measured facts bound the problem:
 
 ## Hypotheses
 
-Ordered per the network-outage discipline (L3 verified before L7 claims — carried from the prior plan, whose live probes hold: `curl https://app.soleur.ai/health` → 200 `supabase:connected`, i.e. server→Supabase egress is continuously live; this plan's unknowns are all L7/transport-tier):
+Ordered per the network-outage discipline (L3 verified before L7 claims). deepen-plan Phase 4.5 fired on `timeout`; the layer table records live-verified state and the hypotheses below pick up where it stops.
+
+**Network-Outage Deep-Dive (Phase 4.5 — `timeout` trigger):**
+
+| Layer | State | Artifact |
+|---|---|---|
+| L3 firewall allowlist | Not applicable — no SSH/admin host path is the symptom; the incident is inside-request latency on an HTTPS public surface | — |
+| L3 DNS/routing | Verified — `app.soleur.ai` resolves and serves continuously; unauthenticated `/dashboard` nav returns 307 in ~165 ms | `curl` this session |
+| L7 TLS/proxy | Verified — Cloudflare-fronted `https://app.soleur.ai/health` → 200, TLS handshake clean | `curl -w ttfb` this session |
+| L7 application | Verified — `/health` → `{"status":"ok",…"supabase":"connected"}` (uptime ~840 s) proves server→Supabase egress is live | health JSON this session |
+
+The unverified tier is **L7 in-request transport**: per-request outbound latency to `*.supabase.co` inside individual transactions, which the layers above do not discriminate. That is what H1–H5 instrument.
 
 - **H1 — Cold Supabase edge connection (TCP+TLS+edge routing) dominates cold-miss legs.** Discriminator: Sentry `http.client` spans on probe-armed requests show connect/TLS wall-time per outbound call; a periodic upstream warm-up (Phase C) collapses the tier iff this is the cause.
 - **H2 — Supabase compute/PostgREST warm-up dominates (server-side stall, not client connect).** Discriminator: spans show long `waiting`/server-time with short connect; the warm-up ping also exercises compute, so it covers both arms — but the fix's success criterion differs (idle-cadence correlation for H2).
@@ -119,7 +147,7 @@ Five phases. Phases 0–2 close the #8978 diagnosis→bound→verify loop; Phase
 
 Bounds re-map onto arms that already exist; no new verdict semantics.
 
-5. **mw-revoke bound.** `supabase.rpc("check_my_revocation", ...).abortSignal(AbortSignal.timeout(MW_RPC_TIMEOUT_MS))` (postgrest-js `PostgrestTransformBuilder.abortSignal`, verified installed). Timeout fires → armed `.catch` → `{kind:"grace"}` → existing grace arm (proceed + `reportEdgeSilentFallback`, `op` tags timeout distinct from error). `MW_RPC_TIMEOUT_MS` initial value ~5_000; the exact bound is set against Phase-0 numbers.
+5. **mw-revoke bound.** `supabase.rpc("check_my_revocation", ...).abortSignal(AbortSignal.timeout(MW_RPC_TIMEOUT_MS))` (postgrest-js `PostgrestTransformBuilder.abortSignal`, verified installed; precedent `server/cost-writer.ts`). Phase-0 smoke confirms `AbortSignal.timeout` exists in the middleware runtime (standard web API — expected; the manual `AbortController + setTimeout` form is the in-repo fallback, `cf-cache-purge.ts`). Abort lands as `DOMException` `"TimeoutError"` inside the armed `.catch` → `{kind:"grace"}` → existing grace arm (proceed + `reportEdgeSilentFallback`, `op` tags timeout distinct from error). `MW_RPC_TIMEOUT_MS` initial value ~5_000; the exact bound is set against Phase-0 numbers.
 6. **Revocation miss in-flight dedup.** `Map<cacheKey, Promise<RevocationOutcome>>` beside `revocationOkCache`: a concurrent miss for the same `${sub}:${iat}` joins the in-flight promise instead of issuing a second RPC; entry removed on settle. Coalesces the N-concurrent-mount-fetch miss amplification (the shape cold-3 paid). Positive-only caching rules unchanged — dedup shares *work*, not *verdicts*.
 7. **mw-tc bound.** Same `abortSignal` bound on the `users` T&C select. Timeout lands in the **existing** fail-closed `tcError` arm (`/accept-terms?error=db_unavailable` + Sentry mirror) — a ~30 s hang becomes a ~5 s compliance-preserving redirect. ADR-253 amendment records the bounded-wait posture.
 8. **mw-auth bound — measurement-gated.** `getUser()` timeout → `!user` → `/login` redirect (today's exact error arm, earlier). Prescribed at a longer bound (~10 s) only if Phase 0 shows multi-second mw-auth stalls recurring; otherwise noted as reviewed-and-kept-unbounded with the number. Either arm recorded.
@@ -211,7 +239,31 @@ discoverability_test:
 
 ## Encryption Posture
 
-Not triggered: no `Files to Edit`/`Files to Create` entry matches `.tf$`, `supabase/migrations/*.sql`, `cloud-init`, or `docker-compose`, and no new persistent store or new cross-component connection is introduced. Enumeration behind that conclusion: (a) stores — the dedup map is an in-process `Map` of promises keyed on `${sub}:${iat}` (no credential material, freed on settle), same class as the ADR-253 caches' existing posture declaration; durable suite tails land under `$XDG_STATE_HOME` (local operator disk, same machine that already wrote them); (b) connections — the warm-up reuses the existing webapp→Supabase edge at higher cadence; no new destination, credential, or payload class.
+Phase 4.10 trigger assessment: no `Files to Edit`/`Files to Create` entry matches `.tf$`, `supabase/migrations/*.sql`, `cloud-init`, or `docker-compose`; the prose does name a store class (the dedup `Map`, the durable log sink) and reuses a cross-component connection at higher cadence, so the block is written rather than waived.
+
+```yaml
+at_rest:
+  - mechanism: "in-process memory only (Map<cacheKey, Promise>) — a volatile pending-promise map, not a persistent store; same class as ADR-253's existing verdict caches"
+    evidence: "readers must wait Promise settlement; entry deleted on settle; carries no credential material, keyed on ${sub}:${iat}"
+    defends_against: "dedup of concurrent in-flight misses on the same subject — nothing at rest to encrypt"
+    does_not_defend: "anything persistent — the map is not durable state"
+    disclosed_as: "ADR-253 amendment records the mechanism"
+    live_verification: "concurrency fixture: N misses join one RPC; map is empty after settle"
+  - mechanism: "plaintext-exception — durable suite tails under ${XDG_STATE_HOME:-$HOME/.local/state}/soleur/ on the operator host"
+    evidence: "host-local files written by the local run; same fs ACLs as the scratch dir they replace; repo precedent `${XDG_STATE_HOME}/soleur/` in `scripts/tmpfs-guard.sh`, `scripts/soleur-tmp-purge.sh`, `plugins/soleur/scripts/lib/tmp-classify.sh` (`TC_RETAIN_DIR`)"
+    defends_against: "nothing additional — test-output text on the same disk that already transiently held it under /var/tmp"
+    does_not_defend: "credential redaction inside suite output — suites must not print secrets today; the durable copy adds retention, not new exposure"
+    disclosed_as: "plan body + implementation comment; no compliance-posture.md row (test output is not a processing activity)"
+    live_verification: "fixture asserts path printed on summary line resolves and holds the failure tail"
+    exception:
+      tracking_issue: "n/a — intentionally plaintext test output on the authoring host; opt-out via env var at implementation"
+      expires_on: "n/a"
+in_transit:
+  - tls: "unchanged — warm-up reuses the existing webapp→Supabase TLS edge; no new destination, credential, or payload class"
+    cert_verification: "unchanged — Node fetch/undici default verification"
+    does_not_defend: "Supabase-side compromise — existing boundary, not widened"
+    disclosed_as: "ADR-253 amendment"
+```
 
 ## Guard Contract
 
@@ -315,7 +367,7 @@ The canonical regex surfaces ARE touched (auth flows in `middleware.ts`, `app/ap
 - [ ] `resolveIdentity`'s `users`/`workspace_members` selects are bounded; timeout produces the existing degrade arm (prd/null fields, `userId`/`email` from the fast path unaffected).
 - [ ] mw-auth arm recorded per Phase-1.8 (bounded at documented value or kept unbounded with the measured justification).
 - [ ] If the warm-up arm is adopted: `server/index.ts` warmer runs on a fixed cadence, uses `AbortSignal.timeout`, logs failures, and a test proves a tick failure cannot crash the server. If rejected by Phase-0 data, the rejection + numbers are in the PR body and this AC is N/A.
-- [ ] #8926: every `app/api/**/route.ts` `auth.getUser` site is either migrated to `verifiedUserId()` (id-read) or carries a one-line documented reason; the remaining-sites grep equals the committed exceptions list (regression assertion in CI).
+- [ ] #8926: every `app/api/**/route.ts` `auth.getUser(` **call site** (awaited call, not comments/prohibition prose — grep e.g. `await auth.getUser` or `auth.getUser(` outside comment lines) is either migrated to `verifiedUserId()` (id-read) or carries a one-line documented reason; the call-site census equals the committed exceptions list (regression assertion in CI).
 - [ ] #8993: a fixture killing the runner's parent mid-suite proves the watchdog exits the run, kills in-flight children, and releases the repo flock; a live-parent fixture proves no fire; `SOLEUR_TEST_ALL_ALLOW_ORPHAN=1` documented opt-out works.
 - [ ] #8940: a failing suite leaves a durable log under `${XDG_STATE_HOME:-$HOME/.local/state}/soleur/logs/` whose printed path resolves and contains the suite's tail; all-ok runs write nothing durable; killed-mid-suite arm preserves the partial tail.
 - [ ] ADR-253 amendment committed in this PR (bounded waits + dedup + warm-up disposition).
@@ -353,7 +405,7 @@ The canonical regex surfaces ARE touched (auth flows in `middleware.ts`, `app/ap
 ## Sharp Edges
 
 - `PromiseLike` builders (postgrest): `.then(onFulfilled, onRejected)` only — no `.catch()`/`.finally()`; and `Promise.resolve()`-unwrap before arming (existing middleware shape).
-- `AbortSignal.timeout` aborts surface as abort/`TimeoutError` — they must route to the *existing* arms, never mint a new verdict kind, and must never write the positive caches.
+- `AbortSignal.timeout` aborts surface as a `DOMException` named `"TimeoutError"` (`server/github-retry.ts` docstring) — they must route to the *existing* arms, never mint a new verdict kind, and must never write the positive caches. Precedent-diff (Phase 4.4): `.abortSignal(AbortSignal.timeout(…))` on a postgrest chain already ships at `server/cost-writer.ts` (`LEDGER_READBACK_TIMEOUT_MS`); `AbortSignal.timeout` is used at `health.ts`, `token-validators.ts`, `github-api.ts`, `c4-writer.ts`. Middleware-runtime availability is unconfirmed — Phase-0 smoke; the manual `AbortController + setTimeout` fallback is itself in-repo precedent (`cf-cache-purge.ts`, chosen there because vitest fake timers do not drive `AbortSignal.timeout`'s runtime-internal timer — timeout-arm fixtures must use real short timeouts or an injected controller).
 - `x-soleur-auth-user-id` stays advisory: absent/mismatched ⇒ re-verify; the sweep must not convert any route to trusting the header unconditionally.
 - The `run_suite` pipe: `"$@" 2>&1 | tee <log>` then `rc=${PIPESTATUS[0]}` — reading `$?` reads `tee`'s rc and can false-green a suite.
 - The watchdog's kill target is identity-pinned (`lstart` comparison) — a recycled pid must never take the signal (enumerate-arm precedent).
@@ -379,5 +431,5 @@ The canonical regex surfaces ARE touched (auth flows in `middleware.ts`, `app/ap
 - Issues: #8978 (residual tiers), #8926, #8985 (deferred), #8993, #8940; prior: #8969 (shipped), PR #8984 / squash `9b6b0394`
 - Prior plan: `knowledge-base/project/plans/2026-09-26-perf-dashboard-cold-load-first-paint-plan.md`; parent plan `2026-09-25-perf-dashboard-section-load-latency-plan.md`
 - ADRs: ADR-253 (amend target), ADR-067 (GAP-G no-store), ADR-033
-- Code anchors: `apps/web-platform/middleware.ts` (revocation leg + armed catch, tc fail-closed arm), `server/request-auth.ts` (`verifiedUserId`, `sessionJwtEmailForVerifiedUser`), `lib/feature-flags/identity.ts` (`resolveIdentity`), `scripts/lib/test-contention.sh` (`acquire_lock`, no-stale-holder note), `scripts/lib/scratch-root.sh` (`_soleur_scratch_cleanup`), `scripts/test-all.sh` (enumerate watchdog ~lines 649–710, `run_suite` fail arms), `apps/web-platform/node_modules/@supabase/postgrest-js/src/PostgrestTransformBuilder.ts` (`abortSignal`), `scripts/sentry-issue.sh` (Discover read precedent), `scripts/live-verify/perf-probe.ts`
+- Code anchors: `apps/web-platform/middleware.ts` (revocation leg + armed catch, tc fail-closed arm), `apps/web-platform/server/request-auth.ts` (`verifiedUserId`, `sessionJwtEmailForVerifiedUser`), `apps/web-platform/lib/feature-flags/identity.ts` (`resolveIdentity`), `scripts/lib/test-contention.sh` (`acquire_lock`, no-stale-holder note), `scripts/lib/scratch-root.sh` (`_soleur_scratch_cleanup`), `scripts/test-all.sh` (enumerate watchdog ~lines 649–710, `run_suite` fail arms), `apps/web-platform/node_modules/@supabase/postgrest-js/src/PostgrestTransformBuilder.ts` (`abortSignal`), `scripts/sentry-issue.sh` (Discover read precedent), `apps/web-platform/scripts/live-verify/perf-probe.ts`, `apps/web-platform/server/cost-writer.ts` (`.abortSignal(AbortSignal.timeout())` precedent on a postgrest chain), `apps/web-platform/server/github-retry.ts` (`TimeoutError` DOMException name)
 - Measurement record: #8978 comments (Phase-0 run + post-merge run tables)
