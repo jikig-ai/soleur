@@ -561,9 +561,8 @@ jobs:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675 — a glob suite,
       # executed on this leg by the runner step) can compare the pin against the
-      # latest tag merged into HEAD (#8782). In CI a shallow checkout or an empty
-      # merged set FAILS the guard rather than skipping. detect-changes already
-      # uses fetch-depth: 0 as precedent.
+      # latest published tag. Without tags the guard self-skips (visible SKIP,
+      # never false-green). detect-changes already uses fetch-depth: 0 as precedent.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
