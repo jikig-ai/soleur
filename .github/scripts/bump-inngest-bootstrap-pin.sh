@@ -25,9 +25,9 @@
 #
 # WHY THE TARGET IS THE SEMVER-MAX TAG, NEVER THE TRIGGERED TAG. The drift
 # guard (AC6 in cloud-init-inngest-bootstrap.test.sh) compares the pin against
-# `git tag --merged HEAD --list 'vinngest-v*' | sort -V | tail -1` — the
-# pipeline below is byte-identical, and the fixture suite's selector
-# byte-equality rows pin it. A
+# the semver-max (`sort -V | tail -1`) of the vinngest-v* tags merged into HEAD
+# — the resolve pipeline below is byte-identical, and the fixture suite's
+# selector byte-equality rows pin it. A
 # workflow_dispatch re-publish or mirror_only backfill of an OLDER tag must
 # therefore bump to the max (or noop), never open a downgrade PR.
 #
