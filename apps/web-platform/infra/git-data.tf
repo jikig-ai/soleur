@@ -14,7 +14,8 @@
 # (hr-fresh-host-provisioning-reachable-from-terraform-apply).
 #
 # REPROVISION-PATH (ADR-103, #6242): git-data resources are OPERATOR_APPLIED_EXCLUSIONS
-# (never touched per-PR), and the per-PR path bridges over SSH to the EXISTING web host so
+# (never touched per-PR; the web-host-fed heartbeat pair below is the exception since #8754),
+# and the per-PR path bridges over SSH to the EXISTING web host so
 # it cannot reprovision this host at all. A sanctioned dispatch-only `git-data-host-replace`
 # `workflow_dispatch` path now exists (apply-web-platform-infra.yml, mirroring
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
@@ -578,7 +579,7 @@ resource "hcloud_firewall_attachment" "git_data" {
 # Better Stack cannot PULL a deny-all-public-ingress host, so liveness is a PUSH
 # heartbeat: a web-host cron probes git-data over the private net (git ls-remote /
 # ssh) and pings this heartbeat URL on success; absence-of-ping alerts. Shape
-# mirrors betteruptime_heartbeat.inngest_prd (inngest.tf:268-298).
+# mirrors resource "betteruptime_heartbeat" "inngest_prd" (inngest.tf).
 #
 # paused = true at birth (same rationale as inngest_prd): the gap between apply
 # (Better Stack starts expecting a ping within `grace`) and the first ping would
@@ -598,14 +599,14 @@ resource "betteruptime_heartbeat" "git_data_prd" {
   push      = false
   team_wait = 0
   # Literal name of the only team in this Better Stack workplace (case-sensitive
-  # provider lookup) — see inngest.tf:277-281.
+  # provider lookup) — see betteruptime_heartbeat.inngest_prd in inngest.tf.
   team_name  = "Your team"
   policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
   paused     = true
   sort_index = 0
 
   lifecycle {
-    # Operator unpause via UI MUST NOT be reverted by subsequent applies (mirrors
+    # The arm gate's live unpause (or an operator's) MUST NOT be reverted by subsequent applies (mirrors
     # betteruptime_heartbeat.inngest_prd).
     ignore_changes = [paused]
   }
@@ -614,8 +615,8 @@ resource "betteruptime_heartbeat" "git_data_prd" {
 # Heartbeat URL → Doppler prd, where the web-host probe reads it. Mirrors
 # doppler_secret.inngest_heartbeat_url_prd (inngest.tf).
 #
-# The feeder has shipped (#5274 PR C / #6548, PR #6654): web-git-data-probe.timer on web-1,
-# delivered by terraform_data.git_data_probe_install (server.tf), dereferences
+# The feeder has shipped (#5274 PR C / #6548, PR #6654): web-git-data-probe.timer on every web
+# host (web-1 via terraform_data.git_data_probe_install in server.tf, web-2 via cloud-init), dereferences
 # GIT_DATA_HEARTBEAT_URL through a per-run `doppler run` and pings on every reachable run.
 # heartbeat-manifest.ts carries this row as a fed `timer` (the reconciliation the former TODO here
 # forced when the probe shipped). See ADR-117.
@@ -623,9 +624,11 @@ resource "betteruptime_heartbeat" "git_data_prd" {
 # (#8754) Both this secret and the heartbeat above ride the per-merge `-target` list of
 # apply-web-platform-infra.yml. They used to be operator-applied exclusions whose route, a
 # full-root apply outside CI, no longer exists, so neither was ever created. The merge apply's
-# arm step (arm-heartbeats.sh --arm) measures a real beat before unpausing, and rolls back to
-# paused when none lands. The git-data BIRTH route still refuses both (GIT_DATA_BIRTH_REFUSED in
-# terraform-target-parity.test.ts): it cannot arm a web-host-fed heartbeat.
+# arm step (arm-heartbeats.sh --arm) measures a real beat before unpausing. When none lands it
+# rolls back to paused AND fails the arm step (rc=1), so an unfed monitor turns every merge apply
+# red until a beat lands (ADR-149 amendment). Every web host pings this one URL, so a beat proves
+# only that SOME web host reaches git-data over the private net. The git-data BIRTH route still
+# refuses both (GIT_DATA_BIRTH_REFUSED in terraform-target-parity.test.ts).
 resource "doppler_secret" "git_data_heartbeat_url_prd" {
   project    = "soleur"
   config     = "prd"

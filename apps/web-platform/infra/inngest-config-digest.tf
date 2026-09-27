@@ -14,6 +14,7 @@
 #
 # ────────────────────────────────────────────────────────────────────────────────────────────
 # ⚠️  APPLY ORDERING — DO NOT APPLY THIS RESOURCE ALONE (exact-set isolation self-check).
+#     (The regex half below is superseded: read the #8754 note further down first.)
 # ────────────────────────────────────────────────────────────────────────────────────────────
 # The boot isolation self-check on soleur-inngest/prd is EXACT-SET (`n_total -ne n_inngest`,
 # cloud-init-inngest.yml): every secret in the isolated project MUST be named in the self-check

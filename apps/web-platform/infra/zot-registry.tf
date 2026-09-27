@@ -753,10 +753,8 @@ resource "betteruptime_heartbeat" "registry_prd" {
 # it stayed in state and in Doppler prd and showed as `will be destroyed` in every drift report.
 # apply-web-platform-infra.yml now carries a bare `-target=doppler_secret.zot_heartbeat_url_prd`
 # (no `removed` block: a forget would leave the value in Doppler), which plans the destroy "because
-# not in configuration"; the merge carrying it needs `[ack-destroy]`. Zero readers were re-measured
-# first (repo grep, GitHub secrets/variables, Doppler raw-value scan). Deleting the Doppler copy
-# does not revoke the Better Stack ping URL of `soleur-registry-prd`; it only stops Doppler holding
-# a second copy of it.
+# not in configuration". Deleting the Doppler copy does not revoke the Better Stack ping URL of
+# `soleur-registry-prd`; it only stops Doppler holding a second copy of it.
 
 # --- Disk-capacity guard (#6122 follow-up) --------------------------------------------------
 # A SECOND heartbeat, distinct from the liveness beat above: the registry host's cron pings it

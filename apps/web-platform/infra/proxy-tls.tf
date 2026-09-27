@@ -18,15 +18,11 @@
 # container via Doppler `prd`, like the git-data keys). Long-lived (10y) ⇒ NO
 # rotation cron; the consumer logs notAfter at startup + a single Better Stack
 # cert-expiry monitor covers it (see Observability). "Contract before consumer":
-# this material ships in 3.A so the proxy server/client in 3.B can load it.
+# the config was declared in 3.A so the proxy server/client in 3.B could load it.
 #
-# COUNT-GATED ON var.host_proxy_tls_enabled (#8754, ADR-118 amendment). The four
-# resources below were declared ahead of the rollout and never applied: no workflow
-# targets them, so they sat as four `will be created` lines in every drift report.
-# Applying them before the multi-host flip would be worse than leaving them: with
-# SOLEUR_PROXY_BIND unset, a delivered PROXY_TLS_KEY/CERT makes createProxyServer
-# report a silent fallback on every container start. So they exist in the graph only
-# once the flip sets the variable (default false), and every reference is `[0]`.
+# COUNT-GATED ON var.host_proxy_tls_enabled (default false) until the multi-host flip,
+# so every reference is `[0]`. Rationale and the flip checklist: the ADR-118 amendment
+# (#8754).
 
 resource "tls_private_key" "proxy_server" {
   count = var.host_proxy_tls_enabled ? 1 : 0

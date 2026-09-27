@@ -248,18 +248,28 @@ would be harmful rather than inert: with `SOLEUR_PROXY_BIND` absent from Doppler
 `PROXY_TLS_*` material makes `createProxyServer` report a silent fallback
 (`createProxyServer.no-bind`) on every web container start.
 
-What this changes in "PR B must" above, read together with the 2026-07-17 finding that the
-material was never applied (see the proxy-TLS note in
-`tests/scripts/lib/destroy-guard-filter-web-platform.jq`):
+**"PR B must" was not executed.** PR B (#6538) found on 2026-07-17 that the material had never
+been applied (see the proxy-TLS note in `tests/scripts/lib/destroy-guard-filter-web-platform.jq`).
+It therefore kept all four addresses out of `web2_retire_allow` and out of the B6.2 `-target`
+list, and T47 in `test-destroy-guard-counter-web-platform.sh` pins that a proxy-TLS create inside
+a retirement aborts. The `cert_replaced` / `doppler_cert_ok` counters never shipped. That section,
+and the Decision's "rotate now", are historical, and so is the "makes the parity test's claim true
+for the first time" line under "Relationship to #6574". What carries forward to the multi-host
+flip:
 
-- Every address in that section now carries `[0]` in plan output
+- Every address in this ADR now carries `[0]` in plan output
   (`tls_self_signed_cert.proxy_server[0]`, `doppler_secret.proxy_tls_cert[0]`). A `-target`
   without the index still selects it.
-- The first apply is a CREATE of all four, not the replace/update the section assumed, so the
-  change that sets `host_proxy_tls_enabled = true` targets the key AND the cert together. The
-  one-target shortcut above holds only once both exist; before that, targeting the cert alone
-  writes a cert to prd with no matching key.
-- The same change adds `SOLEUR_PROXY_BIND` and `SOLEUR_PROXY_PEER_ALLOWLIST` to prd.
+- The first apply is a CREATE of all four, so the change that sets `host_proxy_tls_enabled = true`
+  targets the key AND the cert together; targeting the cert alone writes a cert to prd with no
+  matching key. The same change adds `SOLEUR_PROXY_BIND` and `SOLEUR_PROXY_PEER_ALLOWLIST` to prd,
+  moves the four addresses out of `OPERATOR_APPLIED_EXCLUSIONS` onto a `-target` list, and inverts
+  the "no workflow targets the gated resources" row of the `#8754 PR-B` describe in
+  `plugins/soleur/test/terraform-target-parity.test.ts`.
+- §3.D. Before the flip, a host added to `var.web_hosts` produces no cert diff, because nothing
+  exists. The flip's CREATE derives the SANs from the roster at that moment. After the flip, "the
+  cert replacement appears in that PR's own plan" holds only if `doppler_secret.proxy_tls_cert` is
+  `-target`ed by the route that changes roster membership (`web_host_create`), not only by the
+  per-merge list.
 
-The SAN derivation from `var.web_hosts` is unchanged. The four addresses stay in
-`OPERATOR_APPLIED_EXCLUSIONS` until that change moves them to a `-target` list.
+The SAN derivation from `var.web_hosts` is unchanged.

@@ -83,10 +83,21 @@ resource "github_repository_environment" "web_platform_infra_apply" {
 # Both addresses are `-target`ed in apply-web-platform-infra.yml: an import or a removed block
 # is planned only when its address is targeted. Once the import has applied, the `import` and
 # `removed` blocks and the old `-target` are one-shot scaffolding (removal tracked on #9060).
+# Until then the import is unconditional: if the live policy is deleted or recreated under a new
+# id, the import read fails and aborts every plan of this root (merge apply and drift alike), the
+# same blast radius seo-config-rules.tf records for its import. The fix is a one-line id update.
+#
+# prevent_destroy: the merge that adopts this policy also carries `[ack-destroy]` (for the
+# orphaned ZOT_HEARTBEAT_URL secret), and that ack is a count, not an address list. This makes a
+# replace or destroy of the main-only pin a hard plan error that no ack can wave through.
 resource "github_repository_environment_deployment_policy" "web_platform_infra_apply_main_adopted" {
   repository     = "soleur"
   environment    = github_repository_environment.web_platform_infra_apply.environment
   branch_pattern = "main"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 import {

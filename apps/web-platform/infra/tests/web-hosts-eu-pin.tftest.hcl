@@ -56,11 +56,12 @@ mock_provider "doppler" {}
 mock_provider "betteruptime" {}
 mock_provider "github" {
   # #8754: web-host-birth-environment.tf adopts the live deployment policy with an
-  # unconditional `import` block. A mock provider cannot serve an import ("Cannot import
-  # resources from mock providers"), so without this override every run block in this
-  # file fails with "Invalid import request" before the validation under test runs.
-  # Overriding the import TARGET keeps the file credential-free, which the seo_config
-  # opt-out below achieves with a variable instead.
+  # unconditional `import` block. That import goes through this MOCKED default provider,
+  # and Terraform refuses it ("Invalid import request: Cannot import resources from mock
+  # providers", measured on 1.9.8), failing every run block here. The seo_config import
+  # below behaves differently only because it names the unmocked `cloudflare.rulesets`
+  # alias, which reads the real API. Overriding the import target keeps this file
+  # credential-free. Remove with the import (#9060).
   override_resource {
     target = github_repository_environment_deployment_policy.web_platform_infra_apply_main_adopted
   }

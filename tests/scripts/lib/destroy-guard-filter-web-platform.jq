@@ -136,6 +136,9 @@ def cf_list_item_count($side):
 # web2_retire_out_of_scope_changes and ABORTS. Do NOT add them here or to B6.2's
 # -target list: targeting doppler_secret.proxy_tls_cert without
 # doppler_secret.proxy_tls_key writes a cert to prd with NO matching key.
+# (#8754) They are now count-gated on host_proxy_tls_enabled (default false), so a
+# retirement plan contains none of them unless the flip set the variable; when present
+# they carry `[0]` and still fall outside web2_retire_allow.
 def web2_retire_allow: [
   "hcloud_server.web[\"web-2\"]",
   "hcloud_server_network.web[\"web-2\"]",
