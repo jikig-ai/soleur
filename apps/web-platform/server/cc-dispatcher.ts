@@ -1654,6 +1654,15 @@ export function soleurPlatformToolsForTests(args: {
   return [...narration, ...c4, ...crm];
 }
 
+/** FQNs canUseTool will tier. Empty unless this dispatch is a crm-lead chat.
+ *  Not added to CC_PATH_ALLOWED_TOOLS: writes stay on the review gate. */
+export function crmLeadPermissionToolNames(crmLead: boolean): string[] {
+  if (!crmLead) return [];
+  return buildCrmTools({ userId: "crm-lead-permission-names" }).map(
+    (tool) => `mcp__soleur_platform__${tool.name}`,
+  );
+}
+
 /**
  * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
  * because workspace path + BYOK key + service tokens are DB-resident.
@@ -2813,7 +2822,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           workspacePath: agentWorkspacePath,
           // Allow the flag-gated edit_c4_diagram through canUseTool (its tier
           // is auto-approve; writeC4Diagram enforces the diagrams-dir scope).
-          platformToolNames: c4ToolName ? [c4ToolName] : [],
+          platformToolNames: [
+            ...(c4ToolName ? [c4ToolName] : []),
+            ...crmLeadPermissionToolNames(args.crmLead === true),
+          ],
           pluginMcpServerNames: [],
           repoOwner: "",
           repoName: "",
@@ -3556,6 +3568,7 @@ export async function dispatchSoleurGo(
   // benign false-positive) and the failure is mirrored — never a false-suppression.
   const registeredPlatformToolNames: string[] = [
     ...CC_REGISTERED_PLATFORM_TOOL_NAMES,
+    ...crmLeadPermissionToolNames(args.crmLead === true),
   ];
   void resolveC4Eligible(userId)
     .then((eligible) => {

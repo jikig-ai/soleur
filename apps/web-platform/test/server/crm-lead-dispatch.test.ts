@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { soleurPlatformToolsForTests } from "@/server/cc-dispatcher";
+import {
+  crmLeadPermissionToolNames,
+  soleurPlatformToolsForTests,
+} from "@/server/cc-dispatcher";
 
 const CRM_TOOL_NAMES = [
   "crm_contact_list",
@@ -42,5 +45,12 @@ describe("soleurPlatformToolsForTests — crmLead", () => {
       expect(offNames).not.toContain(name);
     }
     assertNoUserIdentitySchemaKey(on);
+  });
+
+  it("puts the seven crm FQNs on the permission allowlist only for crm-lead", () => {
+    const on = [...crmLeadPermissionToolNames(true)].sort();
+    const expected = CRM_TOOL_NAMES.map((name) => `mcp__soleur_platform__${name}`).sort();
+    expect(on).toEqual(expected);
+    expect(crmLeadPermissionToolNames(false)).toEqual([]);
   });
 });

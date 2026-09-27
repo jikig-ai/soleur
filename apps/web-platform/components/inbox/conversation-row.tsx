@@ -7,6 +7,7 @@ import type { ConversationStatus } from "@/lib/types";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 import { relativeTime } from "@/lib/relative-time";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { isCrmLeadModePath } from "@/server/context-validation";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import { useTeamNames } from "@/hooks/use-team-names";
 
@@ -169,7 +170,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <StatusBadge status={conversation.status} onAction={handleStatusAction} />
-            {conversation.context_path && (
+            {conversation.context_path && !isCrmLeadModePath(conversation.context_path) && (
               <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
                 KB
               </span>
@@ -216,7 +217,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
       {/* Desktop: horizontal row */}
       <div className="hidden w-full items-center gap-4 md:flex">
         <StatusBadge status={conversation.status} onAction={handleStatusAction} />
-        {conversation.context_path && (
+        {conversation.context_path && !isCrmLeadModePath(conversation.context_path) && (
           <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
             KB
           </span>
