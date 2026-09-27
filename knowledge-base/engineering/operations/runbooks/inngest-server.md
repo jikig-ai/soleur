@@ -948,8 +948,9 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    **A tag on a PR-branch commit is refused (#8747, ADR-232 §7).** The build job refuses
    before building (`::error::ancestry: vinngest-vX.Y.Z is on commit <sha>, which is not an
    ancestor of main`) and posts to Slack. A branch forked before the fix carries no
-   build-side check; its bump then dies at stage `args` (no `--signed-commit`), and any
-   other bump run that meets the off-main tag dies at stage `ancestry`. Recover by deleting
+   build-side check; its bump then dies at stage `args` (no `--signed-commit`). Every other
+   bump run ignores the off-main tag: only tags merged into `main` are candidates
+   (#8782). Recover by deleting
    the tag, waiting for the PR to merge, and tagging its squash-merge commit as a **new**
    version — never re-use the name, because GHCR may still hold the off-main image under it:
 
@@ -964,12 +965,15 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    That push runs its own publish and bump; do not re-run the failed run. **Exception: never
    delete the tag `main` pins today** (the refusal says so when it is — e.g. `v1.1.39`, off
    `main`, right after #8747 merged). Deleting it breaks the live pin; re-anchor by cutting
-   a new, higher version on `main` instead. Until an off-main tag is deleted, AC6 of
-   `cloud-init-inngest-bootstrap.test.sh` reds `main` and every open PR, because it demands a
-   pin to that tag while the bump refuses to author it. #8782 retires that trap. A
-   `mirror_only` backfill still mirrors while the semver-max tag is off `main` (the
-   build-side check is skipped on that path), but its bump job ends `result=error` at stage
-   `ancestry`: that red is the bump refusing the off-main target, not the backfill failing.
+   a new, higher version on `main` instead; while `main` pins a tag that is off `main` or
+   deleted, the bump refuses with "Refusing to author a downgrade" at stage `resolve`, and
+   that refusal is the signal. Since #8782 (2026-09-27) AC6 of
+   `cloud-init-inngest-bootstrap.test.sh` and the bump both take the semver-max over tags
+   merged into `main`, so an off-main tag no longer reds `main` or other PRs and no longer
+   blocks bumps. AC6 stays red only on the PR whose own commit carries the tag. Delete the
+   tag anyway, for hygiene — its name can never be reused. A `mirror_only` backfill of a
+   legacy off-main tag still mirrors (the build-side check is skipped on that path), and its
+   bump reconciles the pin to the merged max, normally `result=noop`.
 
    **Carrier-changing PR flow.** Merge the PR that changes a baked carrier first. Its
    `deploy-script-tests` GuardA row is red on the PR, which is expected and advisory. Then
@@ -987,9 +991,13 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    with auto-merge armed when this run's zot mirror reports `ok` and the image carries an
    `org.opencontainers.image.revision` label naming the tag's commit (unlabelled legacy images
    are opened held). The detail below is the **manual fallback**, for when that job fails (it
-   posts to Slack) or holds the PR. **Never use it after a failure at stage `ancestry` or
-   `args`**: those refusals mean the tag is off `main`, and a hand-written pin to it ships the
-   unreviewed bytes the gate exists to stop (#8747). Follow step 1's recovery instead.
+   posts to Slack) or holds the PR. **Never use it after a failure at stage `args`,
+   `ancestry`, or `resolve` "Refusing to author a downgrade"** — a hand-written pin fixes
+   none of them: `args` means a workflow copy from before #8747 (the tag is likely off
+   `main`); `ancestry` means a shallow checkout, a tag that no longer resolves or was
+   re-pointed after the build, or an image whose revision label does not match; the
+   downgrade refusal means `main` pins a tag that is off `main` or deleted. Follow step 1's
+   recovery instead.
    **Bump the cloud-init pin in lockstep** — there are **FOUR** pin sites across **TWO** files,
    not three in one: `IREF` and `ZIREF` in `apps/web-platform/infra/cloud-init-inngest.yml`
    (the dedicated host) and `IREF` and `ZIREF` in `apps/web-platform/infra/cloud-init.yml`
@@ -1000,8 +1008,8 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    deliberately stale NEGATIVE CONTROL, and the only thing keeping it out of the drift guard's
    population is that a `.test.sh` cannot match the `cloud-init*.yml` glob. Rewriting it turns a
    guard red. AC6 of
-   `cloud-init-inngest-bootstrap.test.sh` asserts pin == the semver-max published
-   `vinngest-v*` tag, so the tag in step 1 MUST exist first (else the bump PR's CI
+   `cloud-init-inngest-bootstrap.test.sh` asserts pin == the semver-max `vinngest-v*` tag
+   merged into `main`, so the tag in step 1 MUST exist first (else the bump PR's CI
    fails AC6); pushing the tag without bumping turns `main` red until this PR merges —
    and red **repo-wide**, on every concurrently open pull request that runs the suite, not just
    on the bump branch. A failed bump posts to Slack and an ancestry-refused build posts to
