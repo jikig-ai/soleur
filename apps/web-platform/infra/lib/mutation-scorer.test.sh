@@ -127,6 +127,7 @@ want_abort S8     "an empty second needle" "$FX" "$ERE_ALT" SELFTEST-TARGET ""
 want_abort S9     "zero needles" "$FX" "$ERE_ALT"
 want_abort S10    "an unreadable log" "$T/no-such.log" "$ERE_ALT" SELFTEST-TARGET
 want_abort S11    "an ERE that does not compile" "$FX" '(' SELFTEST-TARGET
+want_abort S11b   "an empty fail-line ERE" "$FX" '' SELFTEST-TARGET
 want_rc    S14a 1 "glob metacharacters in a needle are literal (absent literally)" "$T/glob-absent.log" '^  FAIL' '[ab]*'
 want_rc    S14b 0 "glob metacharacters in a needle are literal (present literally)" "$T/glob-present.log" '^  FAIL' '[ab]*'
 want_rc    S15  0 "an option-shaped needle is literal" "$T/option.log" '^  FAIL' '--branch'
@@ -137,7 +138,7 @@ want_rc    S18  0 "a NUL byte on the failure line does not hide it" "$T/nul.log"
 
 # --- assertion-count pin ----------------------------------------------------------------
 # Counts assertion CALLS. Reported with printf + exit, never through pass()/fail().
-EXPECTED=18
+EXPECTED=19
 if (( PASS != EXPECTED || FAIL != 0 )); then
   printf 'mutation-scorer self-test: %d passed, %d failed, %d expected passes\n' "$PASS" "$FAIL" "$EXPECTED"
   exit 1

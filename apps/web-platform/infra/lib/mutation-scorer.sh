@@ -12,7 +12,7 @@
 # mutation_scorer_failed_on <log> <fail-line-ERE> <needle> [<needle>...]
 #   return 0  iff EVERY needle is a substring of some line of <log> matching <fail-line-ERE>
 #   return 1  otherwise (including "the log has no failure lines at all": grep rc 1)
-#   exit 2    harness abort: no needle, an empty needle, a needle containing a newline (it could
+#   exit 2    harness abort: an empty fail-line ERE, no needle, an empty needle, a needle containing a newline (it could
 #             match across two lines), or grep rc >= 2 (unreadable log / ERE that does not compile)
 #
 # Capture once, then match in bash — NO PIPE. A reader that stops at its first match leaves the
@@ -44,6 +44,8 @@ mutation_scorer_failed_on() {
   (( $# >= 3 )) || _mutation_scorer_abort "usage: mutation_scorer_failed_on <log> <fail-line-ERE> <needle>... (got $# args)"
   local log="$1" ere="$2" needle fails rc=0
   shift 2
+  # An empty ERE selects EVERY line, silently widening "on a failure line" to "anywhere in the log".
+  [[ -n "$ere" ]] || _mutation_scorer_abort "empty fail-line ERE for $log"
   for needle in "$@"; do
     [[ -n "$needle" ]] || _mutation_scorer_abort "empty needle for $log"
     [[ "$needle" != *$'\n'* ]] || _mutation_scorer_abort "needle for $log contains a newline"
