@@ -570,38 +570,38 @@ After this change only on-main tags are candidates, a strict subset of what was 
 
 ## Acceptance Criteria
 
-- [ ] **AC1.** The writer resolves `TARGET` with `git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null`, followed by the unchanged `sed | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true` stages.
+- [x] **AC1.** The writer resolves `TARGET` with `git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null`, followed by the unchanged `sed | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true` stages.
   - `grep -c "tag --merged HEAD --list 'vinngest-v\*'" .github/scripts/bump-inngest-bootstrap-pin.sh` = 1.
   - The shallow check's `rev-parse --is-shallow-repository` line precedes the `TARGET=` line. Verify with `grep -n` ordering.
-- [ ] **AC2.** AC6 uses the identical block on `git -C "$SCRIPT_DIR"`. Guard 1's byte-equality row is green. `grep -c "tag --merged HEAD --list 'vinngest-v\*'" apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` = 1.
-- [ ] **AC3.** `bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh` ends `Results: <N> pass, 0 fail`, and `MIN_ASSERTIONS` is raised to exactly `<N>`.
+- [x] **AC2.** AC6 uses the identical block on `git -C "$SCRIPT_DIR"`. Guard 1's byte-equality row is green. `grep -c "tag --merged HEAD --list 'vinngest-v\*'" apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` = 1.
+- [x] **AC3.** `bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh` ends `Results: <N> pass, 0 fail`, and `MIN_ASSERTIONS` is raised to exactly `<N>`.
   - The run includes the Guard 1 dispatch and equality rows.
   - It includes every pre-existing `g1.*`/`g1b.*`/`g2*`/`g2b.*` row, with the Phase 1 rewrites to B1, B2, B3, B7, B7a, B8, B12 and B13.
   - It includes the new B9b, B20 and B21.
   - The old `g2.parity:*` literal rows are gone: `grep -c "g2.parity:" <suite>` = 0.
 - [ ] **AC4.** The PR body records one line of RED-first evidence: the FAIL lines from the suite run on the Phase-1-only commit.
-- [ ] **AC5.** Selection on the real repo is unchanged at merge:
+- [x] **AC5.** Selection on the real repo is unchanged at merge:
   - `git tag --merged origin/main --list 'vinngest-v*' | sed 's/^vinngest-//' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1` prints `v1.1.40`.
   - `git show origin/main:apps/web-platform/infra/cloud-init.yml | grep -oE 'soleur-inngest-bootstrap:v[0-9.]+' | sort -u` prints `soleur-inngest-bootstrap:v1.1.40`. The same holds for `cloud-init-inngest.yml`.
   - So AC6 is green, and no downgrade PR is possible.
-- [ ] **AC6.** The gate's own invocation, run the way `scripts/test-all.sh` runs it (`run_suite "scripts/lint-shell-capture-exit-live"`), exits 0: `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`. Also `bash plugins/soleur/test/fixture-dir-operand-assert.test.sh` and `bash plugins/soleur/test/fixture-env-adoption.test.sh` pass unchanged.
-- [ ] **AC7.** ADR-232 checks (against the ADR file):
+- [x] **AC6.** The gate's own invocation, run the way `scripts/test-all.sh` runs it (`run_suite "scripts/lint-shell-capture-exit-live"`), exits 0: `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`. Also `bash plugins/soleur/test/fixture-dir-operand-assert.test.sh` and `bash plugins/soleur/test/fixture-env-adoption.test.sh` pass unchanged.
+- [x] **AC7.** ADR-232 checks (against the ADR file):
   - `grep -c '^## Amendment 2026-09-27 (#8782)'` = 1.
   - `grep -c "git tag --merged HEAD --list 'vinngest-v\*'"` ≥ 1.
   - `grep -cE 'until #8782 (moves both|switches the bump)'` = 0.
   - The dated `## Amendment 2026-09-24 (#8747)` section is byte-unchanged.
   - The Alternatives table carries the adopted `--merged HEAD` row, plus the `origin/main`-anchor row and the refuse-off-main-signed-tag row.
-- [ ] **AC8.** Runbook checks (against `knowledge-base/engineering/operations/runbooks/inngest-server.md`):
+- [x] **AC8.** Runbook checks (against `knowledge-base/engineering/operations/runbooks/inngest-server.md`):
   - `grep -c '#8782 retires that trap'` = 0.
   - `grep -c 'tags merged into `main`'` ≥ 1.
   - `grep -c 'those refusals mean the tag is off `main`'` = 0.
   - `git diff origin/main...HEAD -- knowledge-base/engineering/operations/runbooks/inngest-server.md | grep '^+' | grep -ci 'ssh '` = 0.
-- [ ] **AC9.** C4 checks:
+- [x] **AC9.** C4 checks:
   - The `github -> soleurMarketplace` edge no longer contains `a semver-max target whose commit is not an ancestor of main`.
   - `bash scripts/regenerate-c4-model.sh` has been run.
   - `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
   - `(cd apps/web-platform && npx vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts)` passes. The runner comes from `apps/web-platform/package.json` `"test": "vitest"`.
-- [ ] **AC10.** `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-27-ci-vinngest-semver-max-merged-into-main-plan.md` exits 0.
+- [x] **AC10.** `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-27-ci-vinngest-semver-max-merged-into-main-plan.md` exits 0.
 - [ ] **AC11.** CI: `deploy-script-tests` (all legs) and `pr-quality-guards` are green on the PR. `git diff --name-only origin/main...HEAD -- .github/workflows` is empty.
 - [ ] **AC12.** The first line of the PR body reads: "Merging this alone mutates no production state: no pin moves (main already pins the merged-max `v1.1.40`), no Terraform/`paths:`-triggered apply fires, and the new selection first runs on the next `vinngest-v*` publish."
 
