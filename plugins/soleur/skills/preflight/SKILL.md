@@ -758,16 +758,18 @@ Form A accepts all three YAML scalar shapes for `command:`:
 | Shape | Header | Continuations joined with |
 | --- | --- | --- |
 | **inline** | `command: curl …` | — (value is on the key line) |
-| **inline quoted** | `command: "…"` / `'…'` | — decoded ONCE by the parser (see below) |
+| **inline quoted** | `command: "…"` / `'…'` | — (value is on the key line; decoded, see below) |
 | **block** | `command: \|`, `\|-`, `\|+` | newline |
 | **folded** | `command: >`, `>-`, `>+` | space |
 
 An **inline quoted** scalar is decoded once, by the parser, and nowhere else: `"…"` decodes
 `\"` and `\\` only, and every other backslash sequence (`\n`, `\t`, …) passes through
 byte-for-byte, so a shell `\n` never becomes a newline that Step 10.5 rejects. `'…'` decodes
-`''` only. The closing quote is the first unescaped one, and only whitespace, or whitespace
-followed by a `# comment`, may follow it. An empty pair (`""`, `''`), an unterminated or mismatched pair,
-or other trailing text stays unchanged. Block and folded content is never decoded.
+`''` only. The closing quote is the first unescaped one, and only space, tab or CR
+(optionally then a whitespace-led `# comment`) may follow it. An empty pair (`""`, `''`), an
+unterminated or mismatched pair, or other trailing text stays unchanged. Block and folded
+content is never decoded. `expected_output` and `credentials_required` are not YAML-decoded:
+their reads below strip one symmetric quote pair and decode no escapes.
 
 Block and folded headers may carry a trailing `# comment`. Scalar extent follows YAML
 indent semantics: a continuation is any non-empty line indented **more** than the
@@ -807,9 +809,12 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a
 # missing parser would leave $CMD empty and Form B would silently parse a DIFFERENT
 # command. Never fall through.
+#
+# LC_ALL=C pins the parse to bytes: under a UTF-8 gawk `[[:space:]]` matches U+2028, so the
+# same plan would parse differently on different operator hosts.
 FORM_A_AWK="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/parse-form-a.awk"
 test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK (plugin root unresolved? export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>, never a path inside this repository)"; exit 1; }
-CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
+CMD=$(LC_ALL=C awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
 AWK_RC=$?
 if [[ "$AWK_RC" -ne 0 ]]; then
   # `$?` here would report the `!`-inverted status (always 0) — capture the real
@@ -849,8 +854,10 @@ gap, and normalizing inside the gate alone produced exactly that: the gate judge
 normalized command while Step 10.5 rejected the raw one on its embedded newline, so a Form A
 block scalar carrying a leading `#` comment failed the runtime even though the gate (and the
 TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this. The parity
-harness once compared only the GATE, so this divergence was invisible to it; the test suite
-now also executes this block and compares the EXECUTED string (#7548).
+harness once compared only the GATE, so this divergence was invisible to it. The test suite
+now also runs the parse fence above and this fence under bash and compares the `$CMD` they
+leave, the string the gate, the reject and the exec all receive (#7548). It does not run
+the gate, the reject or the exec themselves.
 
 ```bash
 # Drop full-line `#` comments and blank lines, then trim. A `#` inside a quoted
@@ -861,8 +868,8 @@ CMD="$(printf '%s' "$CMD" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d')"
 CMD="${CMD#"${CMD%%[![:space:]]*}"}"
 CMD="${CMD%"${CMD##*[![:space:]]}"}"
 # Quoted inline scalars are decoded ONCE, by parse-form-a.awk; a strip here would double-decode `command: "'x'"` into `x`.
-# This block and the FORM_A_AWK= block are EXECUTED VERBATIM by preflight-discoverability-test.test.ts (E, #7453): keep their anchor lines unique and their fences intact.
-# Same-root rule: this text assumes parse-form-a.awk resolves from the SAME plugin root as this SKILL.md.
+# preflight-discoverability-test.test.ts slices this fence and the FORM_A_AWK= fence out of this file and runs them (E rows, #7453): keep both anchors unique and no other bash fence between the two.
+# Version skew: this fence and parse-form-a.awk must come from ONE plugin root. New SKILL.md + old awk leaves the quotes in, so the exec fails rc=127; old SKILL.md + new awk decodes twice.
 ```
 
 If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
@@ -870,7 +877,10 @@ If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>
 **Reject SSH commands** (defense-in-depth):
 
 ```bash
-if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
+# Match on a DEQUOTED COPY, as probe-verb-gate.sh does for the verb: bash resolves `\ssh`,
+# `'s''sh'` and `"ssh"` to the same binary. Never strip from the string that is executed.
+CMD_NOQ="${CMD//[\"\'\\]/}"
+if [[ "$CMD_NOQ" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
   echo "FAIL: discoverability_test.command contains ssh; rule violation per hr-observability-as-plan-quality-gate."
   exit 1
 fi
@@ -939,6 +949,19 @@ CREDS_REQ=$(awk '
 # was undone in the runtime of record by one apostrophe, invisibly to the suite.
 CREDS_REQ="${CREDS_REQ#"${CREDS_REQ%%[![:space:]]*}"}"
 CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}"
+# Drop a YAML trailing comment (` #…` after whitespace) BEFORE the quote strip, or
+# `"TODO" # fill later` keeps its comment, fails the pair match and waives the check.
+# A value OPENING with a quote keeps everything through its first matching close quote.
+case "$CREDS_REQ" in
+  \"*|\'*)
+    CR_Q="${CREDS_REQ:0:1}"; CR_BODY="${CREDS_REQ:1}"; CR_BODY="${CR_BODY%%"$CR_Q"*}"
+    CR_TAIL="${CREDS_REQ:$(( ${#CR_BODY} + 2 ))}"
+    if [[ "$CREDS_REQ" == "$CR_Q$CR_BODY$CR_Q"* && "$CR_TAIL" =~ ^[[:space:]]+# ]]; then
+      CREDS_REQ="$CR_Q$CR_BODY$CR_Q"
+    fi ;;
+  *) CREDS_REQ="${CREDS_REQ%%[[:space:]]#*}"
+     CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}" ;;
+esac
 case "$CREDS_REQ" in
   \"*\") CREDS_REQ="${CREDS_REQ#\"}"; CREDS_REQ="${CREDS_REQ%\"}" ;;
   \'*\') CREDS_REQ="${CREDS_REQ#\'}"; CREDS_REQ="${CREDS_REQ%\'}" ;;

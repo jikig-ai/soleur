@@ -7,9 +7,10 @@ type: fix
 # Fixture: quoted inline command scalars
 
 Parity and executed-string corpus for preflight Check 10 (#8102, #7548). Each
-Observability section below is ONE case, pure YAML and deliberately UNFENCED (a
-fence makes parseCommand fall back to Form B, which the P3 row forbids). The
-case ID is the leading YAML comment line.
+Observability section below is ONE case, pure YAML and deliberately UNFENCED:
+every section is also a P1 parity fixture, and the P3 row requires parity fixtures
+to be Form-A-only (the awk has no Form B to compare). The case ID is the leading
+YAML comment line.
 
 Expected values are NOT written here. The test derives them from Bun.YAML (the
 pin in .bun-version), except for the named, rule-derived deviations in the
@@ -111,7 +112,7 @@ discoverability_test:
 
 ## Observability
 
-# case: NEG-COMMENT-TAIL
+# case: COMMENT-TAIL
 discoverability_test:
   command: "printf '%s+' a" # tail "b"
   expected_output: "a+"
@@ -136,3 +137,38 @@ discoverability_test:
 discoverability_test:
   command: "printf a" 	
   expected_output: "a"
+
+## Observability
+
+# case: SQ-EMPTY
+discoverability_test:
+  command: ''
+  expected_output: "200"
+
+## Observability
+
+# case: DQ-BS-CLOSE
+discoverability_test:
+  command: "printf a\\"
+  expected_output: "a"
+
+## Observability
+
+# case: DQ-TAIL-TEXT
+discoverability_test:
+  command: "printf a" b
+  expected_output: "a"
+
+## Observability
+
+# case: HASH-IN-QUOTES
+discoverability_test:
+  command: "printf 'a #b'"
+  expected_output: "a #b"
+
+## Observability
+
+# case: DQ-TAB-KEPT
+discoverability_test:
+  command: "printf a\tb"
+  expected_output: "ok"

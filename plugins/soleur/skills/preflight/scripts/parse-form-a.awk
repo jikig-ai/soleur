@@ -15,6 +15,11 @@
 # leaves the value unchanged. Block and fold content is never decoded. Nothing downstream
 # (SKILL.md Step 10.4) may strip or decode again.
 #
+# Host invariance comes from the CALLER: SKILL.md Step 10.4 runs this file under
+# `LC_ALL=C` (and the test harness does too), so `[[:space:]]`, `length` and `substr`
+# are byte-based on every host. Without that pin a UTF-8 gawk matches U+2028 as
+# `[[:space:]]` and parses the same plan differently from mawk or a C-locale gawk.
+#
 # Scalar extent follows YAML: a continuation is any non-empty line indented MORE than the
 # `command:` key; the first line indented <= the key ends the scalar. No key-name matching
 # is used INSIDE a scalar — a key regex both truncates legitimate content (a jq object
@@ -41,11 +46,12 @@
 function indent(s,   t) { t = s; sub(/[^[:space:]].*$/, "", t); return length(t) }
 
 # Decode a YAML-quoted inline scalar per the contract in the header. POSIX awk only
-# (identical under gawk, gawk --posix, mawk and busybox). Whitespace is the explicit ASCII
-# class `[ \t\r]`, never `[[:space:]]`: under a UTF-8 gawk that class matches U+2028, which
-# would make the decode vary by operator host. `\r` keeps a CRLF plan decoding the same on
-# both surfaces. Locals must not shadow awk builtins (a local named after the `close`
-# builtin silently returned "" on every input).
+# (identical under gawk, gawk --posix, mawk and busybox, all under LC_ALL=C). Whitespace
+# after the closing quote is the explicit ASCII class `[ \t\r]`, never `[[:space:]]`: that
+# class also admits \f and \v, and outside the C-locale pin it admits U+2028. `\r` keeps a
+# CRLF plan decoding the same on both surfaces. Locals must not shadow awk builtins: a
+# parameter named `close` is a SYNTAX ERROR in every awk (gawk and busybox rc 1, mawk rc 2),
+# which Step 10.4 turns into a hard FAIL on every plan.
 function yaml_inline_scalar(v,   q, n, i, c, d, cq, rest, body, out) {
   n = length(v); q = substr(v, 1, 1)
   if (q != "\"" && q != "'") return v

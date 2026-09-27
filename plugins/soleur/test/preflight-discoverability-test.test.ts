@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitCleanEnv } from "./lib/git-clean-env";
@@ -212,10 +212,11 @@ describe("parseCommand", () => {
   });
 
   test("Form A — a YAML-quoted inline scalar is the string INSIDE the quotes (#8149)", () => {
-    // 389 plans in the corpus write `command: "…"`. The runtime executed the
-    // quotes as part of the first word and returned rc=127 on every one of
-    // them; the mirror had stripped the pair all along. Symmetric pair only —
-    // a mismatched pair is not YAML and must reach the gate untouched.
+    // Smoke subset only. Since #8102 the parser DECODES a quoted inline scalar
+    // (parse-form-a.awk, mirrored by the TS), and the full case matrix, with the
+    // YAML oracle and the executed-string E rows, lives in fixture 11 and the
+    // "#8102 quoted inline scalars" describe. A mismatched pair is not YAML and
+    // must reach the gate untouched.
     const dq = `discoverability_test:\n  command: "bash scripts/prod-version-drift-b9-probe.sh"\n`;
     expect(parseCommand(dq)).toBe("bash scripts/prod-version-drift-b9-probe.sh");
     const sq = `discoverability_test:\n  command: 'printf 200'\n`;
@@ -597,11 +598,17 @@ function expectBoth(block: string, expected: string): void {
   expect(runAwk(block)).toBe(expected);
 }
 
-/** Run the production awk over an Observability block; strip ONE trailing \n. */
+/**
+ * Run the production awk over an Observability block; strip ONE trailing \n.
+ *
+ * Under LC_ALL=C, exactly as SKILL.md Step 10.4 invokes it: the runtime pins the
+ * C locale so the parse does not vary by operator host, and a harness that ran the
+ * awk in the caller's locale would measure a program the runtime never executes.
+ */
 function runAwk(block: string): string {
   const proc = Bun.spawnSync({
     cmd: ["awk", "-f", AWK_PATH],
-    env: gitCleanEnv(),
+    env: gitCleanEnv({ LC_ALL: "C" }),
     stdin: new TextEncoder().encode(block),
     stdout: "pipe",
     stderr: "pipe",
@@ -617,11 +624,14 @@ function runAwk(block: string): string {
 // #8102 / #7548 — YAML-quoted inline `command:` scalars.
 //
 // Every section of fixture 11 enters the suite ONLY through this ID-keyed loader,
-// so a new section is covered by P1, P3, Q and E with no code change. The ID is
-// the section's leading `# case: <ID>` YAML comment.
+// which registers it for P1, P3, Q and E. Adding a section ALSO needs its ID in
+// EXPECTED_QUOTED_IDS (the Q-ids row pins the set), plus a DEVIATIONS rule when its
+// value departs from YAML. The ID is the section's leading `# case: <ID>` YAML comment.
 // ---------------------------------------------------------------------------
 const FIXTURE_11 = "11-quoted-inline-scalars.md";
 const FIXTURE_12 = "12-empty-quoted-command-with-fence.md";
+const FIXTURE_13 = "13-empty-single-quoted-command-with-fence.md";
+const FIXTURE_14 = "14-form-b-quoted-fence-line.md";
 
 const QUOTED_CASES: { id: string; section: string }[] = extractAllObservabilityBlocks(
   fx(FIXTURE_11),
@@ -645,27 +655,43 @@ const EXPECTED_QUOTED_IDS = [
   "NEG-LF",
   "NEG-MISMATCH",
   "NEG-EMPTY",
-  "NEG-COMMENT-TAIL",
+  "COMMENT-TAIL",
   "NEG-UNTERMINATED",
   "NEG-HASH-NOSPACE",
   "TRAIL-WS",
+  "SQ-EMPTY",
+  "DQ-BS-CLOSE",
+  "DQ-TAIL-TEXT",
+  "HASH-IN-QUOTES",
+  "DQ-TAB-KEPT",
 ];
 
 // The deliberate departures from YAML. KEY-PINNED (Q-ids) and RULE-DERIVED: an
 // entry names a derivation rule, never a free-form expected string, so parking a
 // broken row here fails twice — the key set moves, and the rule's own
-// precondition (YAML throws / YAML yields a real LF / YAML yields "") does not hold.
-type DeviationRule = "lf-kept" | "yaml-invalid-raw" | "empty-kept";
+// precondition (YAML throws / YAML decodes exactly one kept escape / YAML yields "")
+// does not hold.
+type DeviationRule = "escape-kept" | "yaml-invalid-raw" | "empty-kept";
 const DEVIATIONS: Record<string, DeviationRule> = {
-  // `\n` passes through byte-for-byte: a real LF would trip Step 10.5's newline reject.
-  "NEG-LF": "lf-kept",
+  // Every `\x` other than `\"` / `\\` passes through byte-for-byte: a real LF would
+  // trip Step 10.5's newline reject, and a real TAB is not what a shell author wrote.
+  "NEG-LF": "escape-kept",
+  "DQ-TAB-KEPT": "escape-kept",
   // Not YAML at all: the parser returns the value unchanged.
   "NEG-MISMATCH": "yaml-invalid-raw",
   "NEG-UNTERMINATED": "yaml-invalid-raw",
   "NEG-HASH-NOSPACE": "yaml-invalid-raw",
-  // `""` stays literal: decoding it to "" would fall through to Form B.
+  "DQ-TAIL-TEXT": "yaml-invalid-raw",
+  // An empty pair (`""` or `''`) stays literal: decoded to "", Step 10.4 would fall
+  // through to Form B.
   "NEG-EMPTY": "empty-kept",
+  "SQ-EMPTY": "empty-kept",
 };
+
+// The YAML double-quoted escapes the escape-kept rule can re-encode. Deliberately
+// SMALL: a row using an escape outside this map fails its precondition loudly
+// rather than deriving an expected value nobody checked.
+const YAML_KEPT_ESCAPES: Record<string, string> = { n: "\n", t: "\t" };
 
 const ORACLE_NOTE =
   "expected value comes from Bun.YAML at the .bun-version pin; if the Bun pin just moved, the oracle moved, not the parser";
@@ -701,10 +727,19 @@ function expectedQuoted(id: string, section: string): string {
     case undefined:
       if (!y.ok) throw new Error(`${id}: YAML did not parse (${y.error}); ${ORACLE_NOTE}`);
       return y.value;
-    case "lf-kept": {
-      if (!y.ok) throw new Error(`${id}: lf-kept requires YAML to parse (${y.error})`);
-      expect(y.value.split("\n").length, `${id}: lf-kept requires exactly one real LF in the YAML value`).toBe(2);
-      return y.value.replace("\n", "\\n");
+    case "escape-kept": {
+      // Preconditions, each re-checked per row: YAML parses; the raw value is a
+      // double-quoted scalar carrying EXACTLY ONE escape other than `\"` / `\\`; that
+      // escape is one YAML decodes (YAML_KEPT_ESCAPES); and its decoded character
+      // occurs exactly once in the YAML value. Only then is the one re-encoding safe.
+      if (!y.ok) throw new Error(`${id}: escape-kept requires YAML to parse (${y.error})`);
+      expect(raw.startsWith('"'), `${id}: escape-kept requires a double-quoted raw value`).toBe(true);
+      const kept = [...raw.matchAll(/\\(.)/g)].map((m) => m[1]).filter((c) => c !== '"' && c !== "\\");
+      expect(kept.length, `${id}: escape-kept requires exactly one kept escape, saw ${JSON.stringify(kept)}`).toBe(1);
+      const decoded = YAML_KEPT_ESCAPES[kept[0]];
+      expect(decoded, `${id}: escape-kept has no mapping for \\${kept[0]}`).toBeDefined();
+      expect(y.value.split(decoded).length, `${id}: escape-kept requires exactly one decoded ${JSON.stringify(decoded)} in the YAML value`).toBe(2);
+      return y.value.replace(decoded, `\\${kept[0]}`);
     }
     case "yaml-invalid-raw":
       expect(y.ok, `${id}: yaml-invalid-raw requires YAML to REJECT the value`).toBe(false);
@@ -712,18 +747,21 @@ function expectedQuoted(id: string, section: string): string {
     case "empty-kept":
       if (!y.ok) throw new Error(`${id}: empty-kept requires YAML to parse (${y.error})`);
       expect(y.value, `${id}: empty-kept requires the YAML value to be empty`).toBe("");
-      expect(raw, `${id}: empty-kept requires the literal empty pair`).toBe('""');
+      expect(["\"\"", "''"], `${id}: empty-kept requires a literal empty pair, saw ${JSON.stringify(raw)}`).toContain(raw);
       return raw;
   }
 }
 
 // ---------------------------------------------------------------------------
-// SKILL.md Step 10.4 slicers, SHARED at module scope (#7453, #8102). Both the
-// #7453 plugin-root describe and the #8102 executed-string rows run these exact
-// SKILL.md lines, so there is one extraction, not two drifting copies.
+// SKILL.md Step 10.4 slicers, SHARED at module scope (#7453, #8102). There is ONE
+// extraction: formAAwkSlice() is the #7453 slice, and step104Chain() builds its
+// parse slice ON it (extending past AWK_RC=$? to the fence close), so the #7453
+// plugin-root rows and the #8102 executed-string rows cannot drift apart.
 // ---------------------------------------------------------------------------
 const PLUGIN_ROOT = join(import.meta.dir, "..");
 const NORMALIZE_ANCHOR = /^CMD="\$\(printf '%s' "\$CMD" \| sed/;
+// The Step 10.4 parser invocation, C-locale pinned (see parse-form-a.awk's header).
+const FORM_A_INVOCATION = 'CMD=$(LC_ALL=C awk -f "$FORM_A_AWK"';
 
 /** FORM_A_AWK= through AWK_RC=$? — the #7453 slice. Callers assert the indices. */
 function formAAwkSlice(lines: string[]): { from: number; to: number; block: string } {
@@ -733,25 +771,43 @@ function formAAwkSlice(lines: string[]): { from: number; to: number; block: stri
 }
 
 /**
- * The executable Step 10.4 chain: FORM_A_AWK= to the end of its fence (the awk
- * parse, the EXPECTED read and the Form B fallback), then the normalize fence from
- * its first code line to its closing fence. Anchors are CODE lines resolved through
- * uniqueIndex, so call this inside a test.
+ * The executable Step 10.4 chain, with its indices.
+ *
+ *   parse     — formAAwkSlice(), extended to the FORM_A fence close (the awk parse,
+ *               the EXPECTED read and the Form B fallback).
+ *   normalize — the WHOLE normalize fence: every line after its opening ```bash, so
+ *               a line inserted above NORMALIZE_ANCHOR is executed too, not skipped.
+ *
+ * The normalize fence must be the FIRST ```bash fence after the FORM_A fence closes
+ * and must contain the anchor: a fence slipped in between would run in production
+ * and in neither slice. Anchors are CODE lines resolved through uniqueIndex, so call
+ * this inside a test.
  */
-function step104Chain(lines: string[]): { parse: string; normalize: string } {
+function step104Chain(lines: string[]): {
+  parse: string;
+  normalize: string;
+  parseEnd: number;
+  normOpen: number;
+  normEnd: number;
+} {
   const from = uniqueIndex(lines, (l) => l.startsWith("FORM_A_AWK="), "FORM_A_AWK=");
-  const parseEnd = lines.findIndex((l, i) => i > from && l.startsWith("```"));
+  const awk = formAAwkSlice(lines);
+  expect(awk.from, "formAAwkSlice resolves the same FORM_A_AWK= line").toBe(from);
+  expect(awk.to, "formAAwkSlice ends at AWK_RC=$?").toBeGreaterThan(from);
+  const parseEnd = lines.findIndex((l, i) => i > awk.to && l.startsWith("```"));
+  expect(parseEnd, "the FORM_A fence must close").toBeGreaterThan(awk.to);
   const norm = uniqueIndex(lines, (l) => NORMALIZE_ANCHOR.test(l), "normalize anchor");
-  const normEnd = lines.findIndex((l, i) => i > norm && l.startsWith("```"));
-  expect(parseEnd, "the FORM_A fence must close").toBeGreaterThan(from);
-  expect(norm, "the normalize fence follows the FORM_A fence").toBeGreaterThan(parseEnd);
-  expect(normEnd, "the normalize fence must close").toBeGreaterThan(norm);
-  const parse = lines.slice(from, parseEnd).join("\n");
-  const normalize = lines.slice(norm, normEnd).join("\n");
-  expect(parse).toContain('CMD=$(awk -f "$FORM_A_AWK"');
+  const normOpen = lines.findIndex((l, i) => i > parseEnd && l.startsWith("```bash"));
+  expect(normOpen, "a ```bash fence follows the FORM_A fence").toBeGreaterThan(parseEnd);
+  const normEnd = lines.findIndex((l, i) => i > normOpen && l.startsWith("```"));
+  expect(norm, "the first ```bash fence after FORM_A holds the normalize anchor (no fence in between)").toBeGreaterThan(normOpen);
+  expect(normEnd, "the normalize anchor sits inside that fence").toBeGreaterThan(norm);
+  const parse = [awk.block, ...lines.slice(awk.to + 1, parseEnd)].join("\n");
+  const normalize = lines.slice(normOpen + 1, normEnd).join("\n");
+  expect(parse).toContain(FORM_A_INVOCATION);
   expect(parse).toContain("if [[ -z \"$CMD\" ]]; then");
   expect(normalize).toContain("sed -e '/^[[:space:]]*#/d'");
-  return { parse, normalize };
+  return { parse, normalize, parseEnd, normOpen, normEnd };
 }
 
 /**
@@ -766,7 +822,11 @@ function step104Chain(lines: string[]): { parse: string; normalize: string } {
  */
 function runChain(
   section: string,
-  opts: { pluginRoot?: string; editNormalize?: (normalize: string) => string } = {},
+  opts: {
+    pluginRoot?: string;
+    editNormalize?: (normalize: string) => string;
+    env?: Record<string, string>;
+  } = {},
 ): { rc: number; cmd: string; stderr: string } {
   const { parse, normalize } = step104Chain(readFileSync(SKILL_PATH, "utf8").split("\n"));
   const dir = mkdtempSync(join(tmpdir(), "check10-chain-"));
@@ -783,7 +843,7 @@ function runChain(
     const p = Bun.spawnSync({
       cmd: ["bash", "-c", script],
       cwd: dir,
-      env: gitCleanEnv({ CLAUDE_PLUGIN_ROOT: opts.pluginRoot ?? PLUGIN_ROOT }),
+      env: gitCleanEnv({ CLAUDE_PLUGIN_ROOT: opts.pluginRoot ?? PLUGIN_ROOT, ...opts.env }),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1274,16 +1334,17 @@ describe("#6772 P1-P3 — awk/TS parity harness", () => {
   });
 
   // Pre-existing, NOT widened by #8102: the quote decode is ASCII-exact on both
-  // surfaces ([ \t\r] only), so a Unicode space after the closing quote declines
-  // the decode everywhere. What differs is the mirror's fallback: JS `.trim()`
+  // surfaces ([ \t\r] only, and the awk runs under LC_ALL=C, where these are
+  // multi-byte non-space sequences), so a Unicode space after the closing quote
+  // declines the decode everywhere. What differs is the mirror's fallback: JS `.trim()`
   // strips U+00A0, and INLINE_KEY_RE's `.` cannot cross U+2028 at all, while the
   // awk returns both lines unchanged. Asserted AS KNOWN so a change reddens here.
-  test("P2 known divergence - a Unicode space after a closing quote (TS fallback, awk verbatim)", () => {
-    const lineSep = obs("discoverability_test:", '  command: "x" ', '  expected_output: "200"');
-    expect(runAwk(lineSep)).toBe('"x" ');
+  test("P2 known divergence — a Unicode space after a closing quote (TS fallback, awk verbatim)", () => {
+    const lineSep = obs("discoverability_test:", '  command: "x"\u2028', '  expected_output: "200"');
+    expect(runAwk(lineSep)).toBe('"x"\u2028');
     expect(parseCommand(lineSep)).toBe("");
-    const nbsp = obs("discoverability_test:", '  command: "x" ', '  expected_output: "200"');
-    expect(runAwk(nbsp)).toBe('"x" ');
+    const nbsp = obs("discoverability_test:", '  command: "x"\u00a0', '  expected_output: "200"');
+    expect(runAwk(nbsp)).toBe('"x"\u00a0');
     expect(parseCommand(nbsp)).toBe('"x"');
   });
 
@@ -2014,23 +2075,39 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     expect(norm, "normalize before the sandboxed exec").toBeLessThan(exec);
   });
 
-  test("F1d after normalization no CMD assignment precedes the exec (#8102)", () => {
+  test("F1d between the FORM_A fence and the exec, CMD is written only by the 3 normalize assignments (#8102)", () => {
     // The parser decodes a YAML-quoted inline scalar ONCE (parse-form-a.awk). Any
     // later rewrite of $CMD — the #8149 quote strip, or a decode moved downstream —
     // double-decodes `command: "'x'"` into `x`, or makes the gate and the exec see
-    // different strings. The E rows execute the normalize fence itself; this scan
-    // covers the window E cannot see, from the normalize anchor to the exec.
-    const norm = uniqueIndex(lines, (l) => NORMALIZE_ANCHOR.test(l), "normalize anchor");
+    // different strings. The window starts at the FORM_A fence CLOSE, so a rewrite
+    // slipped into the normalize fence above its anchor is inside it.
+    //
+    // A BARE-TOKEN count rather than assignment regexes: every spelling that can
+    // write the variable — `CMD=`, `CMD+=`, `CMD[0]=`, `printf -v CMD`,
+    // `printf -v "CMD"`, `read -r CMD`, `declare -n r=CMD` — names it as a bare
+    // token, while every READ is `$CMD` / `${CMD…}`. Longer identifiers (`CMD_DEQ`)
+    // are excluded on both sides. Counted over CODE lines only (inside ``` fences,
+    // comments stripped), so prose naming the variable cannot move the pin.
+    const { parseEnd } = step104Chain(lines);
     const exec = uniqueIndex(lines, (l) => /^DT_OUT=\$\(/.test(l), "DT_OUT=$(");
-    expect(exec, "the exec follows normalization").toBeGreaterThan(norm);
-    const window = stripComments(lines.slice(norm, exec).join("\n"));
-    // Unanchored (an assignment inside a `case` arm is indented), excludes longer
-    // identifiers (`CMD_DEQ=`) and `$CMD`, and counts MATCHES, not lines.
-    const assigns = window.match(/(^|[^A-Za-z0-9_$])CMD\+?=/g) ?? [];
-    expect(assigns.length, `CMD assignments after the normalize anchor: ${JSON.stringify(assigns)}`).toBe(3);
-    expect(window, "no `read ... CMD`").not.toMatch(/(^|[\s;])read\b[^\n]*\sCMD\b/);
-    expect(window, "no `printf -v CMD`").not.toMatch(/printf\s+-v\s*CMD\b/);
-    expect(window, "no declare/local/export of CMD").not.toMatch(/\b(declare|local|export)\b[^\n]*\bCMD\+?=/);
+    expect(exec, "the exec follows the FORM_A fence").toBeGreaterThan(parseEnd);
+    let inFence = false;
+    const code: string[] = [];
+    for (const l of lines.slice(parseEnd + 1, exec + 1)) {
+      if (/^```/.test(l)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) code.push(l);
+    }
+    const window = stripComments(code.join("\n"));
+    const bare = window.match(/(?<![$\w{])CMD(?!\w)/g) ?? [];
+    const lineHits = window.split("\n").filter((l) => /(?<![$\w{])CMD(?!\w)/.test(l));
+    expect(bare.length, `bare CMD tokens after the FORM_A fence: ${JSON.stringify(lineHits)}`).toBe(3);
+    expect(
+      lineHits.every((l) => /^CMD="/.test(l)),
+      `the 3 bare tokens are the normalize block's own \`CMD="…"\` lines: ${JSON.stringify(lineHits)}`,
+    ).toBe(true);
   });
 
   test("F2 AC2 — the sandbox carries the load-bearing binds", () => {
@@ -2702,8 +2779,6 @@ describe("#7393 G — credentials_required corpus baseline", () => {
 // PRE-migration git-root form of the same block and MUST execute the decoy — that proves the
 // decoy can run, so an empty ledger above means something.
 describe("Check 10 Form A block — unset plugin root never executes the checked-out copy (#7453)", () => {
-  const { mkdtempSync, mkdirSync, writeFileSync, existsSync } = require("node:fs") as typeof import("node:fs");
-  const { tmpdir } = require("node:os") as typeof import("node:os");
   const { gitFixtureEnv } = require("./lib/git-fixture-env") as typeof import("./lib/git-fixture-env");
 
   const skillText = readFileSync(SKILL_PATH, { encoding: "utf8" });
@@ -2738,7 +2813,7 @@ describe("Check 10 Form A block — unset plugin root never executes the checked
     expect(from).toBeGreaterThan(-1);
     expect(to).toBeGreaterThan(from);
     expect(block).toContain('test -r "$FORM_A_AWK"');
-    expect(block).toContain('CMD=$(awk -f "$FORM_A_AWK"');
+    expect(block).toContain(FORM_A_INVOCATION);
   });
 
   // Measured: Check 10 runs under `set -uo pipefail`, so an unset token aborts the block at
@@ -2784,9 +2859,16 @@ describe("#8102 quoted inline scalars", () => {
     const ids = QUOTED_CASES.map((c) => c.id);
     expect(new Set(ids)).toEqual(new Set(EXPECTED_QUOTED_IDS));
     expect(ids.length, "no duplicated case section").toBe(EXPECTED_QUOTED_IDS.length);
-    expect(Object.keys(DEVIATIONS).sort()).toEqual(
-      ["NEG-EMPTY", "NEG-HASH-NOSPACE", "NEG-LF", "NEG-MISMATCH", "NEG-UNTERMINATED"],
-    );
+    expect(Object.keys(DEVIATIONS).sort()).toEqual([
+      "DQ-TAB-KEPT",
+      "DQ-TAIL-TEXT",
+      "NEG-EMPTY",
+      "NEG-HASH-NOSPACE",
+      "NEG-LF",
+      "NEG-MISMATCH",
+      "NEG-UNTERMINATED",
+      "SQ-EMPTY",
+    ]);
   });
 
   for (const { id, section } of QUOTED_CASES) {
@@ -2822,6 +2904,69 @@ describe("#8102 quoted inline scalars", () => {
     expect(rejectReason(r.cmd) ?? "").toMatch(/empty after normalization/);
   });
 
+  test("E-fence-SQ an empty single-quoted command never falls through to the Form B fence", () => {
+    const block = extractObservabilityBlock(fx(FIXTURE_13));
+    expect(block, "the fixture carries the fence the row guards against").toContain("printf LAUNDERED");
+    expect(rawCommandValue(block), "the fixture's command is the single-quoted empty pair").toBe("''");
+    const r = runChain(block);
+    expect(r.rc).toBe(0);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe("''");
+    expect(r.cmd).not.toContain("LAUNDERED");
+    expect(r.cmd).toBe(normalizeCommand(parseCommand(block)));
+    expect(rejectReason(r.cmd) ?? "").toMatch(/empty after normalization/);
+  });
+
+  test("E-formB a single-line quoted Form B fence reaches CMD verbatim, quotes included", () => {
+    // Form B is prose plus a fence, not YAML: nothing decodes it. The #8149 strip
+    // used to remove this pair; #8102 deleted it, so the quotes now reach the gate
+    // and the exec. The control proves the row can tell the two worlds apart.
+    const block = extractObservabilityBlock(fx(FIXTURE_14));
+    expect(block, "Form B only: no command: key").not.toMatch(/^[ \t]*command:/m);
+    const r = runChain(block);
+    expect(r.rc).toBe(0);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe('"printf 200"');
+    expect(r.cmd).toBe(normalizeCommand(parseCommand(block)));
+    const old = runChain(block, { editNormalize: (n) => `${n}\n${OLD_8149_STRIP}` });
+    expect(old.cmd, "control: the deleted #8149 strip would have removed the pair").toBe("printf 200");
+  });
+
+  test("CRLF awk-only a quoted inline value ending in CR still decodes (the TS mirror never sees the CR)", () => {
+    // parseCommand splits on /\r?\n/, so only the awk and the chain can exercise the
+    // `\r` in the trailing class. Asserted on both awk-backed surfaces.
+    const crlf = ["discoverability_test:", `  command: "printf '%s' \\"a\\""`, '  expected_output: "a"', ""].join("\r\n");
+    expect(crlf, "the command line really ends in CR LF").toContain('\\""\r\n');
+    expect(runAwk(crlf)).toBe(`printf '%s' "a"`);
+    const r = runChain(crlf);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe(`printf '%s' "a"`);
+  });
+
+  test("TRAIL-WS the fixture's raw command line still ends in whitespace", () => {
+    // An editor or formatter that strips trailing whitespace would silently turn
+    // TRAIL-WS into a duplicate of a plain decode row.
+    const t = QUOTED_CASES.find((c) => c.id === "TRAIL-WS");
+    expect(t, "TRAIL-WS section present").toBeDefined();
+    expect(rawCommandValue(t!.section)).toMatch(/"[ \t]+$/);
+  });
+
+  test("Locale the Step 10.4 parse is C-locale pinned, so a UTF-8 caller gets the same bytes", () => {
+    // Under a UTF-8 gawk, [[:space:]] matches U+2028, so the key-prefix strip ate it
+    // and the quote decode then fired; under C it is three non-space bytes and the
+    // value is kept verbatim. The runtime pins LC_ALL=C so the parse cannot vary by
+    // operator host. A byte-oriented awk (mawk) agrees in every locale, so on such a
+    // host this row cannot go red; it is the gawk hosts it protects.
+    const section = obs("discoverability_test:", '  command: \u2028"printf a"', '  expected_output: "a"');
+    const c = runChain(section, { editNormalize: () => "", env: { LC_ALL: "C" } });
+    const u = runChain(section, { editNormalize: () => "", env: { LC_ALL: "C.UTF-8" } });
+    expect(c.stderr).toBe("CHAIN_DONE");
+    expect(u.stderr).toBe("CHAIN_DONE");
+    expect(c.cmd).toBe('\u2028"printf a"');
+    expect(u.cmd, "a UTF-8 caller must not change the parse").toBe(c.cmd);
+    expect(runAwk(section), "the harness measures the same C-locale parse").toBe(c.cmd);
+  });
+
   test("E twin i a length-2 decoder twin DOES launder the fence, so E-fence can go red", () => {
     const block = extractObservabilityBlock(fx(FIXTURE_12));
     const root = mkdtempSync(join(tmpdir(), "check10-twin-root-"));
@@ -2855,5 +3000,109 @@ describe("#8102 quoted inline scalars", () => {
     const dq2 = QUOTED_CASES.find((c) => c.id === "DQ2");
     expect(dq2, "DQ2 section present").toBeDefined();
     expect(parseExpected(dq2!.section)).toBe(String.raw`a\\b+`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 10.4 hardening executed from SKILL.md itself (#8102 review): the ssh reject
+// and the credentials_required read. Each row runs the REAL fence (sliced around
+// its unique anchor) and the TS mirror, and asserts they agree.
+// ---------------------------------------------------------------------------
+
+/** The body of the ``` fence that contains the unique anchor line. Call inside a test. */
+function fenceAround(lines: string[], pred: (l: string) => boolean, label: string): string {
+  const idx = uniqueIndex(lines, pred, label);
+  let open = -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (lines[i].startsWith("```")) {
+      open = i;
+      break;
+    }
+  }
+  const close = lines.findIndex((l, i) => i > idx && l.startsWith("```"));
+  expect(lines[open], `${label}: the anchor sits inside a bash fence`).toBe("```bash");
+  expect(close, `${label}: the fence closes`).toBeGreaterThan(idx);
+  return lines.slice(open + 1, close).join("\n");
+}
+
+function runBash(script: string, env: Record<string, string> = {}, cwd?: string): { rc: number; out: string } {
+  const p = Bun.spawnSync({ cmd: ["bash", "-c", script], cwd, env: gitCleanEnv(env), stdout: "pipe", stderr: "pipe" });
+  return { rc: p.exitCode ?? -1, out: p.stdout.toString() + p.stderr.toString() };
+}
+
+const neverRun: Executor = async () => {
+  throw new Error("the executor must not be reached");
+};
+
+describe("Check 10 Step 10.4 hardening — ssh reject and credentials_required, runtime vs mirror", () => {
+  const skillLines = readFileSync(SKILL_PATH, "utf8").split("\n");
+
+  // Bash resolves `\ssh`, `'s''sh'` and `"ssh"` to the same binary, so the reject
+  // must match on a DEQUOTED COPY, as probe-verb-gate.sh does for the verb.
+  const SSH_SPELLINGS = [String.raw`bash -c \ssh h`, `bash -c 's''sh' h`, `'bash -c "ssh h"'`];
+
+  test("SSH the runtime reject and the mirror both refuse quoted and escaped ssh spellings", async () => {
+    const fence = fenceAround(skillLines, (l) => /^if \[\[ "\$CMD\w*" =~ \(\^\|\[\[:space:\]\]\|\/\)ssh/.test(l), "ssh reject");
+    for (const cmd of SSH_SPELLINGS) {
+      const r = runBash(`set -uo pipefail\n${fence}\nprintf SSH_PASSED`, { CMD: cmd });
+      expect(r.rc, `${cmd}: runtime rc (${r.out})`).toBe(1);
+      expect(r.out, `${cmd}: runtime reason`).toContain("contains ssh");
+      expect(rejectReason(cmd) ?? "", `${cmd}: mirror rejectReason`).toMatch(/contains ssh/);
+      const planBody = obs("## Observability", "", "discoverability_test:", `  command: ${cmd}`, '  expected_output: "ok"');
+      const c = await classifyDiscoverabilityResult({ planPath: "p.md", planBody, prBody: "", runner: neverRun });
+      expect(c.result, `${cmd}: mirror classification`).toBe("FAIL");
+      expect(c.reason ?? "", `${cmd}: mirror reason`).toMatch(/contains ssh/);
+    }
+    // Control: a token that only STARTS with ssh is not the ssh binary.
+    const ok = runBash(`set -uo pipefail\n${fence}\nprintf SSH_PASSED`, { CMD: "printf 'ssh-keys'" });
+    expect(ok.rc, ok.out).toBe(0);
+    expect(ok.out).toBe("SSH_PASSED");
+    expect(rejectReason("printf 'ssh-keys'")).toBeNull();
+  });
+
+  // [value as written after `credentials_required:`, verdict, the scope Check 10 reads]
+  const CREDS_ROWS: [string, "FAIL" | "SKIP-DECLARED", string][] = [
+    [`"TODO" # fill later`, "FAIL", "TODO"],
+    [`TODO   # fill later`, "FAIL", "TODO"],
+    [`'placeholder' # later`, "FAIL", "placeholder"],
+    [`"prd read token #3" # why`, "SKIP-DECLARED", "prd read token #3"],
+    [`prd read token # why`, "SKIP-DECLARED", "prd read token"],
+  ];
+
+  test("CREDS a YAML trailing comment is dropped before the placeholder test, on the runtime and the mirror", async () => {
+    const fence = fenceAround(skillLines, (l) => l.startsWith("CREDS_REQ=$(awk '"), "CREDS_REQ read");
+    for (const [value, verdict, scope] of CREDS_ROWS) {
+      const section = obs(
+        "discoverability_test:",
+        "  command: doppler run -- curl https://x.example/",
+        `  credentials_required: ${value}`,
+        '  expected_output: "200"',
+      );
+      const dir = mkdtempSync(join(tmpdir(), "check10-creds-"));
+      let r: { rc: number; out: string };
+      try {
+        writeFileSync(join(dir, "preflight-observability.txt"), section);
+        r = runBash(`set -uo pipefail\nPREFLIGHT_TMP='${dir}'\n${fence}\nprintf CREDS_ABSENT`, {}, dir);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+      expect(parseCredentialsRequired(section), `${value}: mirror scope`).toBe(scope);
+      const c = await classifyDiscoverabilityResult({
+        planPath: "p.md",
+        planBody: obs("## Observability", "", section),
+        prBody: "",
+        runner: neverRun,
+      });
+      expect(c.result, `${value}: mirror verdict`).toBe(verdict);
+      if (verdict === "FAIL") {
+        expect(r.rc, `${value}: runtime rc (${r.out})`).toBe(1);
+        expect(r.out, `${value}: runtime verdict`).toContain(`is a placeholder ("${scope}")`);
+        expect(c.reason ?? "").toContain(`is a placeholder ("${scope}")`);
+      } else {
+        expect(r.rc, `${value}: runtime rc (${r.out})`).toBe(0);
+        expect(r.out, `${value}: runtime scope`).toContain(`credentials_required — ${scope}. Check 10`);
+        expect(c.reason ?? "").toContain(`credentials_required — ${scope}. Check 10`);
+      }
+    }
   });
 });
