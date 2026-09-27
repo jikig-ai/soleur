@@ -241,7 +241,7 @@ recovery ack merge, and a deploy regression if the app build breaks on a danglin
 `soleur/prd` Doppler credential (whose leak would expose every prd secret, including the Supabase
 service-role key) and a revoked PAT. It strictly shrinks the exposure surface.
 
-**Brand-survival threshold:** none
+- **Brand-survival threshold:** none
 
 - threshold: none, reason: deletes a disabled function and dead credentials; no user data path, auth flow or schema changes, and the removed service token only reduced security while it existed.
 
@@ -270,8 +270,9 @@ logs:
   where: GitHub Actions logs for apply-web-platform-infra and the release/deploy runs
   retention: GitHub default (90 days)
 discoverability_test:
-  command: bash -c "git grep -qE 'resource \"doppler_(secret|service_token)\" \"ghcr_' -- apps/web-platform/infra && echo PRESENT || echo RETIRED"
-  expected_output: "RETIRED"
+  command: doppler secrets -p soleur -c prd --only-names
+  expected_output: "GHCR_READ_TOKEN absent"
+  credentials_required: "Doppler read on soleur/prd (names only) — the property is the ABSENCE of three secret names in Doppler after the merge apply; no unauthenticated probe can list a Doppler config"
 ```
 
 ## Encryption Posture
