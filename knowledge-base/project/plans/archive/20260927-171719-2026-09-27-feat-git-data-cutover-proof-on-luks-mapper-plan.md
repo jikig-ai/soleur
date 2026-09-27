@@ -692,7 +692,7 @@ PM1 waits for the release deploy to finish before dispatching.
 - `knowledge-base/engineering/architecture/diagrams/model.c4`
 - `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (regenerated)
 
-The pipeline also writes `knowledge-base/project/specs/feat-one-shot-8211-pr2-cutover-proof-already-cut-over/`
+The pipeline also writes `knowledge-base/project/specs/archive/20260927-171719-feat-one-shot-8211-pr2-cutover-proof-already-cut-over/`
 (`tasks.md`, `session-state.md`, `decision-challenges.md`), and may regenerate
 `knowledge-base/INDEX.md`.
 
@@ -1174,7 +1174,7 @@ scope dissolved with them:
 - git-history: the corrected base SHA, and 707c7d072d dropped.
 
 **Taste and User-Challenge decisions** are persisted to
-`knowledge-base/project/specs/feat-one-shot-8211-pr2-cutover-proof-already-cut-over/decision-challenges.md`:
+`knowledge-base/project/specs/archive/20260927-171719-feat-one-shot-8211-pr2-cutover-proof-already-cut-over/decision-challenges.md`:
 
 - the cut of the `dmsetup` LUKS2 check;
 - keeping the freeze probe (DHH: future scaffolding).

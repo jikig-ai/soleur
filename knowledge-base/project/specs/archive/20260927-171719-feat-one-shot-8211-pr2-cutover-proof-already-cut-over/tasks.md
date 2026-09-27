@@ -1,6 +1,6 @@
 # Tasks: git-data cutover proof on the LUKS-served store (#8211 PR2, proof half)
 
-Plan: `knowledge-base/project/plans/2026-09-27-feat-git-data-cutover-proof-on-luks-mapper-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20260927-171719-2026-09-27-feat-git-data-cutover-proof-on-luks-mapper-plan.md`.
 Commit each phase with `LEFTHOOK_EXCLUDE=bun-test,plugin-component-test`. Rely on CI for the full
 suite.
 

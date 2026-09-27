@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-27-feat-git-data-cutover-proof-on-luks-mapper-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260927-171719-2026-09-27-feat-git-data-cutover-proof-on-luks-mapper-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 
