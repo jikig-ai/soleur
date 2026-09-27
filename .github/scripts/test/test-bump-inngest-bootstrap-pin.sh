@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Fixture tests for .github/scripts/bump-inngest-bootstrap-pin.sh — the writer
 # that build-inngest-bootstrap-image.yml's bump-cloud-init-pin job invokes to
-# move the soleur-inngest-bootstrap cloud-init pin to the semver-max published
-# vinngest-v* tag + registry-resolved digest (#8359).
+# move the soleur-inngest-bootstrap cloud-init pin to the semver-max vinngest-v*
+# tag merged into main + registry-resolved digest (#8359, #8782).
 #
 # WHY THIS SUITE EXISTS. A workflow cannot be workflow_dispatch-tested from a
 # feature branch (the same reason board-status-sync keeps its logic in a
@@ -64,7 +64,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=448   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=483   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -108,9 +108,10 @@ EOF
 # from an earlier fixture is exactly how a "crane must fail" row false-greens).
 reset_state() {
   MOCK_CRANE_MAP="$TMP/crane.$1.map"; : > "$MOCK_CRANE_MAP"
-  # Every crane call is logged: the ancestry rows assert this log is EMPTY,
-  # which is what proves the refusal fired BEFORE the registry was consulted
-  # (a reorder after the digest loop would otherwise end `skipped`, green).
+  # Every crane call is logged: refusal rows assert this log is EMPTY, which
+  # proves the refusal fired BEFORE the registry was consulted (a reorder after
+  # the digest loop would otherwise end `skipped`, green); exclusion rows
+  # assert the off-main tag never appears in it.
   MOCK_CRANE_LOG="$TMP/crane.$1.log"; : > "$MOCK_CRANE_LOG"
   # digest<TAB>revision for `crane config`. run_bump fills in, for every digest
   # the map serves, the commit its tag names — the honest default ("every image
@@ -979,15 +980,16 @@ else
 fi
 
 echo ""
-echo "=== Guard 1b: ancestry stage (#8747) ==="
+echo "=== Guard 1b: merged-into-main selection + history refusals (#8747, #8782) ==="
 
 # The #8747 incident shape: vinngest-v1.1.39 was cut on a commit that existed
 # only on an unmerged PR branch, its publish opened a bump PR, and that PR
-# merged main's pin onto unreviewed bytes. Every refusal row asserts the STOP
-# POINT, not only result=error: the ancestry marker, an EMPTY crane log (the
-# refusal ran before the registry was consulted), an empty gh log and no bump
-# branch on the origin. Every fixture first asserts its own precondition, so a
-# fixture that accidentally tags main reds instead of passing vacuously.
+# merged main's pin onto unreviewed bytes. Since #8782 such a tag is EXCLUDED
+# (assert_excluded: noop on the merged max, the off-main tag never reaches
+# crane, no branch, no PR). Every REFUSAL row asserts the STOP POINT, not only
+# result=error: the stage marker, an EMPTY crane log, an empty gh log and no
+# bump branch on the origin. Every fixture first asserts its own precondition,
+# so a fixture that accidentally tags main reds instead of passing vacuously.
 
 # base_fixture <name> — pins at v1.1.37 on main, vinngest-v1.1.37 tagged there,
 # main pushed to the bare origin. Leaves HEAD on main.
@@ -1120,8 +1122,8 @@ grep -qF -- ':v1.1.39' "$MOCK_CRANE_LOG" \
   && fail 'g1b.B3:off-main-never-resolved' "crane was asked about v1.1.39" \
   || pass 'g1b.B3:off-main-never-resolved'
 
-# B4 — an OLDER off-main tag below an on-main semver-max: only the target is
-# judged, so the bump proceeds.
+# B4 — an OLDER off-main tag below an on-main semver-max: it is not a
+# candidate, and the bump proceeds on the merged max.
 base_fixture anc-b4
 s=$(side_commit pr-old main 'old unmerged')
 seed_tag_at vinngest-v1.1.38 "$s" --annotate
@@ -1168,9 +1170,8 @@ done
 
 # B7 — the history walk cannot complete: main c1<-c2<-c3 with c2's object
 # deleted, and the tag on a side commit off c1. `git tag --merged HEAD` then
-# exits 0 with an EMPTY list (the damage is reported only on stderr), so the
-# refusal comes from the empty-target die at `resolve` — never read as "not an
-# ancestor" (a different remediation) and never as a pass.
+# exits 0 with an EMPTY list and reports the damage only on stderr; the
+# walk-stderr refusal names it before resolution.
 base_fixture anc-b7
 c1=$(git -C "$F_REPO" rev-parse HEAD)
 main_commit c2; c2=$(git -C "$F_REPO" rev-parse HEAD)
@@ -1188,11 +1189,33 @@ git -C "$F_REPO" cat-file -e "$c2" 2>/dev/null \
   && pass 'g1b.B7:precondition-merged-set-empty' \
   || fail 'g1b.B7:precondition-merged-set-empty' "fixture broken: git tag --merged HEAD still lists tags on a corrupt walk"
 run_bump anc-b7 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B7' 'no vinngest-v* tag is merged into' resolve
-assert_out_has 'g1b.B7:names-cause' 'shallow or unreadable'
-grep -qF 'is not an ancestor of main' "$LAST_OUT" \
-  && fail 'g1b.B7:not-off-main-wording' "an undecided walk was reported as off-main" \
-  || pass 'g1b.B7:not-off-main-wording'
+assert_refused 'g1b.B7' 'reported an unreadable history'
+
+# B7b — no vinngest-v* tag at all (a checkout without fetch-tags): refused at
+# `resolve` with the fetch-tags remediation, before crane.
+new_fixture_repo anc-b7b
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37, no tags"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+run_bump anc-b7b --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_refused 'g1b.B7b' 'no vinngest-v* tag is merged into' resolve
+assert_out_has 'g1b.B7b:remediation' 'fetch-tags: true'
+
+# B7c — the TRUNCATED shape: the tag sits ABOVE the missing object, so
+# `--merged` still lists it (rc 0) while the walk below it is unreadable. The
+# empty-set refusal cannot see this; only the walk-stderr refusal can.
+base_fixture anc-b7c
+main_commit c2; c2=$(git -C "$F_REPO" rev-parse HEAD)
+main_commit c3
+seed_tag_at vinngest-v1.1.38 HEAD --annotate
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+rm -f "$F_REPO/.git/objects/${c2:0:2}/${c2:2}"
+[[ "$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null)" == vinngest-v1.1.38 ]] \
+  && pass 'g1b.B7c:precondition-truncated-set' \
+  || fail 'g1b.B7c:precondition-truncated-set' "fixture broken: --merged HEAD is not exactly the tag above the break"
+run_bump anc-b7c --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_refused 'g1b.B7c' 'reported an unreadable history'
 
 # B7a — the tag exists (annotated tag object intact) but the COMMIT it points
 # at is gone. `git tag --merged` silently drops it, so it is never a candidate:
@@ -1237,10 +1260,9 @@ assert_result 'g1b.B8:result' opened
 assert_out_has 'g1b.B8:provenance' 'provenance=bound'
 assert_all_pins 'g1b.B8:pins' "$F_REPO" v1.1.38 "$DIG_NEW"
 
-# B9 — a depth-1 clone. The tag IS on main's head, so with the shallow refusal
-# removed merge-base answers 0 and crane gets called: the empty-crane-log
-# assertion is what reds that mutant. A cut-off history can also answer 1 for a
-# real ancestor, which is why shallow is refused rather than trusted.
+# B9 — a depth-1 clone with the tag at HEAD: without the early shallow
+# refusal `--merged` lists it and crane gets called, which the empty-crane-log
+# assertion reds.
 base_fixture anc-b9
 seed_tag_at vinngest-v1.1.38 HEAD --annotate
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
@@ -1252,7 +1274,7 @@ F_REPO="$b9_clone"
 [[ "$(git -C "$F_REPO" tag --list 'vinngest-v1.1.38')" == vinngest-v1.1.38 ]] \
   && pass 'g1b.B9:precondition-tag-present' || fail 'g1b.B9:precondition-tag-present' "fixture broken: tag not fetched"
 run_bump anc-b9 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B9' 'shallow'
+assert_refused 'g1b.B9' 'is-shallow-repository='
 
 # B9b (#8782) — the case that makes the shallow check run BEFORE resolution: the
 # target sits BELOW the graft, so `git tag --merged HEAD` silently omits it
@@ -1273,7 +1295,7 @@ F_REPO="$b9b_clone"
   && pass 'g1b.B9b:precondition-shallow' || fail 'g1b.B9b:precondition-shallow' "fixture broken: clone is not shallow"
 [[ "$(git -C "$F_REPO" tag --list 'vinngest-v1.1.38')" == vinngest-v1.1.38 ]] \
   && pass 'g1b.B9b:precondition-tag-present' || fail 'g1b.B9b:precondition-tag-present' "fixture broken: tag not fetched"
-git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null | grep -qxF vinngest-v1.1.38 \
+grep -qxF vinngest-v1.1.38 <<<"$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null)" \
   && fail 'g1b.B9b:precondition-merged-omits-target' "fixture broken: --merged HEAD still sees the target below the graft" \
   || pass 'g1b.B9b:precondition-merged-omits-target'
 run_bump anc-b9b --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
@@ -1446,7 +1468,7 @@ exec "$B19_REAL_GIT" "\$@"
 STUB
 chmod +x "$B19_BIN/git"
 PATH="$B19_BIN:$PATH" run_bump anc-b19 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_refused 'g1b.B19' 'shallow'
+assert_refused 'g1b.B19' 'is-shallow-repository='
 
 # B20 (#8782) — selection is SEMVER, not lexical: v1.10.0 beats v1.9.0. Both
 # digests are seeded, so a `sort -V` -> `sort` mutant fails legibly (noop on
@@ -1465,25 +1487,73 @@ assert_result 'g1b.B20:result' opened
 assert_out_has 'g1b.B20:target' 'target=v1.10.0 '
 assert_all_pins 'g1b.B20:pins' "$F_REPO" v1.10.0 "$DIG_NEW"
 
-# B21 (#8782) — a pre-release name and a four-part name on main are never
-# candidates, even though both sort above v1.1.40. Neither has a seeded digest,
-# so a regex-stage mutant would reach crane for one of them and end `skipped`.
+# B21 (#8782) — malformed names on main are never candidates, although each
+# sorts above v1.1.40. One member per constraint of `^v[0-9]+\.[0-9]+\.[0-9]+$`:
+# the trailing `$` (a pre-release, a four-part name), the escaped dots
+# (v2x0x0), the leading `^` (vx-v9.9.9), and `+` over `*` (v.9.9). None has a
+# seeded digest, so a mutant of that constraint reaches crane for it and ends
+# `skipped` instead of `noop`.
 new_fixture_repo anc-b21
 write_fixture_cloud_inits "$F_REPO" v1.1.40 "$DIG_OLD" v1.1.40 "$DIG_OLD"
 fixture_commit "pins at v1.1.40"
 seed_tag vinngest-v1.1.40
-seed_tag vinngest-v1.2.0-rc1
-seed_tag vinngest-v1.2.0.1
+for bad in v1.2.0-rc1 v1.2.0.1 v2x0x0 vx-v9.9.9 v.9.9; do seed_tag "vinngest-$bad"; done
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 printf 'v1.1.40\t%s\n' "$DIG_OLD" >> "$MOCK_CRANE_MAP"
 run_bump anc-b21 --signed-tag v1.1.40 --signed-digest "$DIG_OLD" --mirror-status ok
 assert_rc     'g1b.B21:exit' 0
 assert_result 'g1b.B21:result' noop
-for bad in v1.2.0-rc1 v1.2.0.1; do
+for bad in v1.2.0-rc1 v1.2.0.1 v2x0x0 vx-v9.9.9 v.9.9; do
   grep -qF -- ":$bad" "$MOCK_CRANE_LOG" \
     && fail "g1b.B21:excluded-$bad" "crane was asked about $bad" \
     || pass "g1b.B21:excluded-$bad"
 done
+
+# B22 (#8782 review) — the DEDICATED-host file pins above the web host and above
+# every merged tag. The downgrade refusal reads the higher of the two pins, so
+# the bump never rewrites the dedicated host DOWN.
+new_fixture_repo anc-b22
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+sed -i 's/:v1\.1\.37@/:v1.1.39@/g' "$F_REPO/apps/web-platform/infra/cloud-init-inngest.yml"
+fixture_commit "web pins v1.1.37, dedicated pins v1.1.39"
+seed_tag vinngest-v1.1.37
+seed_tag vinngest-v1.1.38
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+[[ "$(grep -c ':v1.1.39@' "$F_REPO/apps/web-platform/infra/cloud-init-inngest.yml")" == 2 ]] \
+  && pass 'g1b.B22:precondition-dedicated-above' \
+  || fail 'g1b.B22:precondition-dedicated-above' "fixture broken: dedicated file does not pin v1.1.39 twice"
+run_bump anc-b22 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_refused 'g1b.B22' 'main pins v1.1.39' resolve
+
+# B23 (#8782 review) — a backfill of an OLDER tag whose target main already
+# pins, with the registry failing. Nobody else's publish is in flight, so this
+# is an error, never a green `skipped` deferral.
+base_fixture anc-b23
+seed_tag vinngest-v1.1.36
+# (crane map deliberately empty: the registry cannot resolve the target)
+run_bump anc-b23 --signed-tag v1.1.36 --signed-digest "$DIG_OLD" --mirror-status ok
+[[ "$LAST_RC" != 0 ]] && pass 'g1b.B23:nonzero' || fail 'g1b.B23:nonzero' "registry failure on the pinned target was deferred"
+assert_result  'g1b.B23:result' error
+assert_out_has 'g1b.B23:stage' '::error::resolve:'
+assert_out_has 'g1b.B23:names-crane' 'crane digest'
+
+# B24 (#8782 review) — this run signed an off-main tag ABOVE the merged-max
+# target (not pinned), and the registry fails for the target. The target is
+# OLDER than what was signed, so its publish finished long ago: error, not skip.
+new_fixture_repo anc-b24
+write_fixture_cloud_inits "$F_REPO" v1.1.36 "$DIG_OLD" v1.1.36 "$DIG_OLD"
+fixture_commit "pins at v1.1.36"
+seed_tag vinngest-v1.1.36
+seed_tag vinngest-v1.1.37
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+s=$(side_commit pr-b24 main 'off-main signed')
+seed_tag_at vinngest-v1.1.38 "$s" --annotate
+precond_off_main 'g1b.B24' vinngest-v1.1.38
+run_bump anc-b24 --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+[[ "$LAST_RC" != 0 ]] && pass 'g1b.B24:nonzero' || fail 'g1b.B24:nonzero' "registry failure on an older target was deferred"
+assert_result  'g1b.B24:result' error
+assert_out_has 'g1b.B24:stage' '::error::resolve:'
 
 echo ""
 echo "=== Guard 2: workflow shape + selector byte-equality ==="
@@ -1985,7 +2055,7 @@ sel_slice() { # file start-regex
 sel_count() { # file regex — lines matching
   RE="$2" awk '$0 ~ ENVIRON["RE"] {n++} END {print n+0}' "$1"
 }
-SEL_FIX="keep the two 3-line \`git tag --merged HEAD\` selector blocks byte-identical (ADR-232 §2)"
+SEL_FIX="keep the two 3-line \`git tag --merged HEAD\` selector blocks identical, modulo name, dir operand and indentation (ADR-232 §2)"
 for side in writer checker; do
   if [[ "$side" == writer ]]; then f="$SCRIPT"; re="$SEL_W_RE"; else f="$CONSUMER"; re="$SEL_C_RE"; fi
   n=$(sel_count "$f" "$re")
@@ -2010,15 +2080,28 @@ if [[ -n "$sel_w" && "$sel_w" == "$sel_c" ]]; then
 else
   fail 'g2.sel:byte-equal' "writer and checker selectors differ — $SEL_FIX: $(diff <(printf '%s\n' "$sel_w") <(printf '%s\n' "$sel_c") | tr '\n' '|')"
 fi
-# Consumer wiring: exactly one LATEST_TAG assignment, and BOTH pin asserts read it.
-n=$(sel_count "$CONSUMER" '^[[:space:]]*LATEST_TAG=')
-[[ "$n" == 1 ]] && pass 'g2.sel:checker-one-assignment' \
-  || fail 'g2.sel:checker-one-assignment' "$n LATEST_TAG= assignment(s) in $CONSUMER, expected 1"
+# Consumer wiring. Byte-equality covers only the 3 sliced lines, so pin what
+# the checker DOES with them: exactly one write of LATEST_TAG anywhere (an
+# `export`/`&&`/`read`/`printf -v` reassignment after the selector would
+# otherwise swap the value unseen), and each pin assert is a WHOLE line directly
+# under an `assert "` call (a substring match survives `|| true` appended inside
+# the eval string).
+n=$(sel_count "$CONSUMER" '^[[:space:]]*LATEST_TAG[+]?=|^[^#]*[^A-Za-z0-9_$]LATEST_TAG[+]?=|^[^#]*(read|printf -v|mapfile|readarray)[^#]*[[:space:]]LATEST_TAG([[:space:]]|$)')
+[[ "$n" == 1 ]] && pass 'g2.sel:checker-one-write' \
+  || fail 'g2.sel:checker-one-write' "$n write(s) of LATEST_TAG in $CONSUMER, expected exactly the selector"
 for pv in PIN DED_PIN; do
-  n=$(grep -cF "[[ '\$$pv' == '\$LATEST_TAG' ]]" "$CONSUMER" || true)
+  n=$(W="\"[[ '\$$pv' == '\$LATEST_TAG' ]]\"" awk '
+    { t=$0; sub(/^[[:space:]]+/,"",t); sub(/[[:space:]]+$/,"",t)
+      if (t==ENVIRON["W"] && prev ~ /^[[:space:]]*assert "/) n++; prev=$0 }
+    END { print n+0 }' "$CONSUMER")
   [[ "$n" == 1 ]] && pass "g2.sel:checker-$pv-reads-selector" \
-    || fail "g2.sel:checker-$pv-reads-selector" "$n assert(s) comparing \$$pv to \$LATEST_TAG, expected 1"
+    || fail "g2.sel:checker-$pv-reads-selector" "$n whole-line assert(s) comparing \$$pv to \$LATEST_TAG, expected 1"
 done
+# The two CI arms that must FAIL rather than skip (shallow history, empty merged
+# set) keep a literal "false" verdict inside the AC6 block.
+n=$(awk '/^# --- AC6:/{on=1} /^# --- AC6b:/{on=0} on && /^[[:space:]]*assert "[^"]*" "false"[[:space:]]*$/{n++} END{print n+0}' "$CONSUMER")
+[[ "$n" == 2 ]] && pass 'g2.sel:checker-ci-arms-fail' \
+  || fail 'g2.sel:checker-ci-arms-fail' "$n AC6 CI arm(s) assert \"false\", expected 2 (shallow + empty merged set)"
 
 # The script pushes ONLY via x-access-token (the minted installation token) —
 # never a bare https or ssh remote.
@@ -2038,6 +2121,30 @@ for lit in 'soleur-ai[bot]' '273333864+soleur-ai[bot]@users.noreply.github.com';
   if [[ -f "$SCRIPT" ]] && grep -qF -- "$lit" "$SCRIPT"; then pass "g2.script:$lit"
   else fail "g2.script:$lit" "script lacks identity literal: $lit"; fi
 done
+
+# Verdict-helper self-test (#8782 review): assert_excluded and assert_refused
+# decide their rows' verdicts, so a neuter inside either (a check replaced by a
+# bare `pass`) keeps every count and the floor intact. Drive each once with a
+# state that MUST fail, require FAIL to move, then unwind the counters. Output
+# is discarded so the log carries no FAIL line for an expected failure; the
+# verdict is reported directly, never through the helpers under test.
+st_p=$PASS st_f=$FAIL
+LAST_OUT="$TMP/selftest.out"; : > "$LAST_OUT"
+LAST_GOUT="$TMP/selftest.gout"; printf 'result=error\n' > "$LAST_GOUT"
+LAST_RC=1
+{ assert_excluded 'selftest.excluded' v1.1.99; } >/dev/null 2>&1
+st_ex=$((FAIL - st_f))
+PASS=$st_p FAIL=$st_f
+printf 'result=noop\n' > "$LAST_GOUT"; LAST_RC=0
+{ assert_refused 'selftest.refused' 'a wording that is not in the output' resolve; } >/dev/null 2>&1
+st_rf=$((FAIL - st_f))
+PASS=$st_p FAIL=$st_f
+if (( st_ex >= 3 && st_rf >= 4 )); then
+  pass 'selftest:verdict-helpers-can-fail'
+else
+  printf 'FAIL [selftest:verdict-helpers-can-fail]: assert_excluded moved FAIL by %s (want >=3), assert_refused by %s (want >=4)\n' "$st_ex" "$st_rf"
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 echo ""

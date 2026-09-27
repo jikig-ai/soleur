@@ -278,23 +278,36 @@ echo "--- AC6: pin drift-guard vs latest vinngest-v* tag merged into HEAD ---"
 # would abort the whole script here (before AC6b + the results summary) if the
 # image ref is ever renamed. Let the empty PIN fall through to a clean FAIL.
 PIN=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CLOUD_INIT" | sed -n '1p' | sed 's/.*://' || true)
+# `--merged` fails OPEN on a shallow checkout (rc 0, tags below the graft simply
+# vanish), so a lower-but-non-empty set would read as drift with the wrong cause.
+# Refuse it first, exactly as the bump does. A subshell rather than `git -C`
+# keeps this read out of the fixture-operand census (see the diagnostic below).
+AC6_SHALLOW=$( (cd "$SCRIPT_DIR" && git rev-parse --is-shallow-repository) 2>/dev/null || true)
 # git -C "$SCRIPT_DIR" (NOT `git rev-parse --show-toplevel`, which resolves to
 # the bare-repo parent in a worktree). Any failure (no git, no tags, not a repo)
 # collapses to an empty result → visible SKIP, never a false-green.
 LATEST_TAG=$(git -C "$SCRIPT_DIR" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null \
   | sed 's/^vinngest-//' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
   | sort -V | tail -1 || true)
-if [[ -z "$LATEST_TAG" ]]; then
+if [[ "$AC6_SHALLOW" != "false" ]]; then
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    assert "vinngest-v* merged set readable in CI (history is not shallow)" "false"
+    echo "        is-shallow-repository='${AC6_SHALLOW:-<empty>}': git tag --merged HEAD cannot see tags"
+    echo "        below the graft — verify fetch-depth: 0 on deploy-script-tests in infra-validation.yml."
+  else
+    echo "  SKIP: shallow or unreadable checkout (is-shallow-repository='${AC6_SHALLOW:-<empty>}');"
+    echo "        drift comparison skipped (CI checks out full history via fetch-depth: 0)."
+  fi
+elif [[ -z "$LATEST_TAG" ]]; then
   if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
     # In CI the deploy-script-tests checkout fetches tags (fetch-depth: 0 +
     # fetch-tags: true). An empty tag set in CI means that wiring regressed —
     # FAIL loudly rather than SKIP, so the guard can never silently disarm.
-    assert "vinngest-v* tags reachable in CI (guard must not silently disarm)" "false"
-    echo "        No vinngest-v* tags merged into HEAD in a CI checkout — verify fetch-depth: 0 +"
-    echo "        fetch-tags: true on deploy-script-tests in infra-validation.yml, or a"
-    echo "        shallow/unreadable history (git tag --merged HEAD cannot see tags below the graft)."
+    assert "vinngest-v* tags merged into HEAD in CI (guard must not silently disarm)" "false"
+    echo "        No vinngest-v* tags merged into HEAD in a CI checkout — verify fetch-tags: true"
+    echo "        on deploy-script-tests in infra-validation.yml."
   else
-    echo "  SKIP: no vinngest-v* git tags reachable (shallow clone / tagless checkout);"
+    echo "  SKIP: no vinngest-v* git tag merged into HEAD (tagless checkout);"
     echo "        drift comparison skipped (CI fetches tags via fetch-tags: true)."
   fi
 else
@@ -304,7 +317,7 @@ else
     echo "        DRIFT: cloud-init.yml pins $PIN but the latest tag merged into HEAD is $LATEST_TAG."
     # Three causes, three remedies (echo only — the assert above is the verdict).
     # (a) #8747: on a PR whose OWN commit carries the tag, --merged HEAD still
-    #     sees it; the publish and the bump refuse it, and "bump to it" by hand
+    #     sees it; the publish refuses it, the bump never selects it, and "bump to it" by hand
     #     would route around that gate. Judged against origin/main when the
     #     checkout has it, since HEAD would call that tag "merged".
     # (b) #8782: the pin sits ABOVE every merged tag — its tag is off main or
@@ -352,8 +365,14 @@ else
     "[[ '$DED_PIN' == '$LATEST_TAG' ]]"
   if [[ "$DED_PIN" != "$LATEST_TAG" ]]; then
     echo "        DRIFT: cloud-init-inngest.yml pins $DED_PIN but the latest tag merged into HEAD is $LATEST_TAG."
-    echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
-    echo "        apps/web-platform/infra/cloud-init-inngest.yml to $LATEST_TAG."
+    if [[ "$(printf '%s\n%s\n' "$DED_PIN" "$LATEST_TAG" | sort -V | tail -1)" != "$LATEST_TAG" ]]; then
+      echo "        pin $DED_PIN is ABOVE every vinngest-v* tag merged into HEAD — its tag is off main or"
+      echo "        deleted; do NOT bump down to $LATEST_TAG (runbook inngest-server.md §Bootstrap-image release)."
+    else
+      echo "        Fix: bump every 'soleur-inngest-bootstrap:<tag>' ref in"
+      echo "        apps/web-platform/infra/cloud-init-inngest.yml to $LATEST_TAG (unless the web-host"
+      echo "        diagnostic above names it off main)."
+    fi
     echo "        This is the DEDICATED inngest host. Its replace is dispatch-only and"
     echo "        force-replaces regardless of user_data, so a stale pin here means the"
     echo "        rebuild boots a pre-fix image and the dispatch changes nothing (#6536)."

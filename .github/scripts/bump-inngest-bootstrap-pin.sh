@@ -9,10 +9,10 @@
 # the bump PR merged 93 minutes before its source PR did. Since #8782 an
 # off-main tag is never a CANDIDATE: the target is chosen only from tags merged
 # into the `ref: main` checkout (`git tag --merged HEAD`), so an unmerged tag
-# can neither be pinned nor block a legitimate bump below it. Because
-# `--merged` fails OPEN on a cut-off history (rc 0, tags below the graft simply
-# vanish), a shallow checkout is refused BEFORE resolution. The `ancestry`
-# stage then binds the pin to the commit the build job checked out
+# can neither be pinned nor block a legitimate bump below it. `--merged` fails
+# OPEN on a cut-off or unreadable history, so both are refused BEFORE resolution
+# (see the history-visibility block). The script then binds the pin to the
+# commit the build job checked out
 # (--signed-commit), and requires the resolved image's
 # org.opencontainers.image.revision label to name the target's commit — so a
 # registry image left behind by an off-main build cannot be pinned under a tag
@@ -197,6 +197,14 @@ fi
 shallow=$(git -C "$REPO_DIR" rev-parse --is-shallow-repository 2>/dev/null || true)
 [[ "$shallow" == "false" ]] \
   || die ancestry "cannot decide which vinngest-v* tags are merged into main: the checkout is shallow (is-shallow-repository='${shallow:-<empty>}') — tags below the graft are invisible to git tag --merged; the bump job needs fetch-depth: 0"
+# A missing mid-history object is the same fail-open one level down: `git tag
+# --merged` still exits 0, reports `error: Could not read <sha>` ONLY on stderr,
+# and lists just the tags above the break (measured, #8782) — a truncated set
+# whose max can be wrong. Any stderr from the walk is refused, before the
+# selector below (which must discard stderr to stay AC6-identical) runs.
+walk_err=$(git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null || true)
+[[ -z "$walk_err" ]] \
+  || die ancestry "cannot decide which vinngest-v* tags are merged into main: git tag --merged reported an unreadable history ($(tr '\n' ' ' <<<"$walk_err" | cut -c1-200)) — refusing rather than selecting from a truncated tag set"
 
 # --- resolve: semver-max merged tag + registry digest -------------------------
 # AC6-IDENTICAL PIPELINE — test-bump-inngest-bootstrap-pin.sh's selector
@@ -207,21 +215,24 @@ TARGET=$(git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null \
   | sed 's/^vinngest-//' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
   | sort -V | tail -1 || true)
 [[ -n "$TARGET" ]] \
-  || die resolve "no vinngest-v* tag is merged into HEAD (the ref: main checkout) — nothing can be pinned; if tags exist, the history is shallow or unreadable (git tag --merged reports that only on stderr)"
-# The tag main pins today (first ref in the web-host file). The downgrade
-# refusal below depends on it: the pinned tag must never be deleted or re-cut
-# (#8747).
-PIN_TAG=$(grep -hoE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$F_WEB" 2>/dev/null | head -1 | sed 's/.*bootstrap://' || true)
+  || die resolve "no vinngest-v* tag is merged into HEAD (the ref: main checkout) — nothing can be pinned; the checkout needs fetch-tags: true"
+# The highest tag main pins today, over BOTH files: the downgrade refusal below
+# must see a dedicated-host pin that sits above the web-host one.
+PIN_TAG=$( { grep -hoE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$F_WEB" 2>/dev/null | head -1
+  grep -hoE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$REPO_DIR/$F_DED" 2>/dev/null | head -1; } \
+  | sed 's/.*bootstrap://' | sort -V | tail -1 || true)
 
 # --- ancestry: bind the merged target to the commit the build built ----------
 # `--merged HEAD` above already proved the target is on main (#8782), so this
-# stage no longer walks history: it resolves the tag to its commit and, when
-# this run published the target, requires that to be the commit the build
-# checked out. Runs BEFORE crane on purpose, like every refusal here.
-target_on_main() {
+# stage does not walk history: it resolves the tag to its commit and, when this
+# run published the target, requires that to be the commit the build checked
+# out. Runs BEFORE crane on purpose, like every refusal here.
+bind_target_commit() {
   local tag="vinngest-${TARGET}" tag_c
   # refs/tags/ explicitly, never the bare name: git resolves refs/<name> before
   # refs/tags/<name>, so a bare lookup can be answered by a different ref.
+  # Defensive: `--merged` lists only tags whose commit it read, so this cannot
+  # normally fail; it stays fail-closed rather than trusting that.
   tag_c=$(git -C "$REPO_DIR" rev-parse -q --verify "refs/tags/${tag}^{commit}" 2>/dev/null) \
     || die ancestry "tag not found: refs/tags/${tag} does not resolve to a commit in this checkout"
   # Bind to the commit the build BUILT. The digest cross-check cannot see a tag
@@ -232,8 +243,7 @@ target_on_main() {
   TARGET_COMMIT="$tag_c"
   echo "ancestry: ${tag} (commit ${tag_c}) is merged into main"
 }
-TARGET_COMMIT=""
-target_on_main
+bind_target_commit
 
 # A pin above every merged tag means main pins a tag that is either off main (a
 # legacy #8747 pin, which `--merged` can never select) or was deleted. The
@@ -256,16 +266,22 @@ for attempt in 1 2 3; do
   [[ "$attempt" -lt 3 ]] && sleep $(( attempt * 2 ))
 done
 if [[ "$rc" -ne 0 ]]; then
-  if [[ "$SIGNED_TAG" != "$TARGET" ]]; then
-    # Defer, don't page: the target (the semver-max merged tag) is not the tag
-    # this run published, so that tag's own publish is probably still in flight and its
-    # bump will reconcile the pin. BUT a tag outlives a failed build — if that
-    # publish died before pushing its image, this deferral does NOT self-heal:
-    # every later non-max run skips here while the AC6 drift guard stays red
-    # (main-health-monitor escalates to a ci/main-broken issue).
-    echo "::warning::crane could not resolve ${IMAGE}:${TARGET} (signed=${SIGNED_TAG}) — deferring to that tag's own publish; if that publish is dead, republish vinngest-${TARGET} or delete the tag — this deferral does not self-heal"
+  # Defer ONLY when the target is a NEWER tag than this run published and main
+  # does not already pin it: only then is its own publish plausibly in flight.
+  # A backfill of an older tag, a signed tag that is not merged into main, and a
+  # target main already pins all have a target whose publish finished long ago,
+  # so a registry failure there is an error, not "someone else will fix it".
+  if [[ "$(printf '%s\n%s\n' "$SIGNED_TAG" "$TARGET" | sort -V | tail -1)" == "$TARGET" \
+        && "$SIGNED_TAG" != "$TARGET" && "$TARGET" != "$PIN_TAG" ]]; then
+    # BUT a tag outlives a failed build — if that publish died before pushing
+    # its image, this deferral does NOT self-heal: every later non-max run skips
+    # here while the AC6 drift guard stays red (main-health-monitor escalates to
+    # a ci/main-broken issue). The target is merged into main, so republishing
+    # it passes the build's ancestry check; never delete it (its name cannot be
+    # reused, and deleting a merged tag is not the fix).
+    echo "::warning::crane could not resolve ${IMAGE}:${TARGET} (signed=${SIGNED_TAG}) — deferring to that newer tag's own publish; if that publish is dead, republish vinngest-${TARGET} (workflow_dispatch) — this deferral does not self-heal"
     emit_result skipped
-    summary "### inngest-bootstrap pin bump"$'\n\n'"Deferred: \`${TARGET}\` (the semver-max merged tag) differs from this run's signed tag \`${SIGNED_TAG}\`; its own publish resolves the pin. If that publish died before pushing the image, republish \`vinngest-${TARGET}\` or delete the tag — deferral alone does not self-heal."
+    summary "### inngest-bootstrap pin bump"$'\n\n'"Deferred: \`${TARGET}\` (the semver-max merged tag) is newer than this run's signed tag \`${SIGNED_TAG}\`; its own publish resolves the pin. If that publish died before pushing the image, republish \`vinngest-${TARGET}\` — deferral alone does not self-heal."
     exit 0
   fi
   die resolve "crane digest ${IMAGE}:${TARGET} failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "$WORK/digest.err")"
