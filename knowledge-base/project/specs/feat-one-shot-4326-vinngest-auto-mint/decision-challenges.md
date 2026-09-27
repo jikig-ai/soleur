@@ -16,9 +16,10 @@
   environment.
 - **Cost of keeping your direction:** one more job holds the App key. #8209's key-eviction step
   (O10) must cover this job too. The credential-tiers runbook row added by this PR records that.
-- **Cost of keeping your direction, continued:** the job holds an unscoped App installation token
-  for its lifetime. It has the same grant the bump job already mints; the scope-down was cut in
-  plan review.
+- **Cost of keeping your direction, continued:** the plan must carry an extra change to the shared
+  token composite (Phase 2b) so the App token can be scoped to `actions:write`. It also needs a
+  separate dispatch step. The deepen-plan security and architecture reviews also endorse
+  `GITHUB_TOKEN`.
 - **To switch:** a reply of "use GITHUB_TOKEN for the dispatch" is enough. The change is
-  mechanical: delete workflow steps 3–5 (Doppler and the App mint), and give the job
+  mechanical: delete the Doppler and App-mint steps and Phase 2b, and give the dispatch step's job
   `actions: write`.

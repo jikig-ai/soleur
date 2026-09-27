@@ -14,6 +14,45 @@ lane: cross-domain
 
 # feat: auto-mint the vinngest-v* tag when a push to main changes a baked inngest-bootstrap carrier
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27. The plan-review round (DHH, Kieran, code-simplicity, CTO devex) was
+followed by a deepen round (security-sentinel, architecture-strategist, test-design-reviewer,
+observability-coverage-reviewer, git-history-analyzer, and a verify-the-negative/self-audit
+sweep).
+
+### Key improvements
+
+1. **Credential isolation (security P1-1, P1-2).**
+   - The tag and the dispatch are separate steps and processes, and each sees only its own token.
+   - The App token is minted only after the tag succeeds, and is scoped to `actions:write` on
+     `soleur` through reinstated composite inputs (Phase 2b).
+2. **Cut after both review panels fired on it.** The runs-list self-heal and the dispatch retry are
+   gone: the runs list lags the dispatch, so either mechanism could double-build a tag. Recovery is
+   one printed `gh workflow run` line, plus the runbook recovery table.
+3. **The fake `gh` replays real GitHub contracts** (test-design P0).
+   - It returns multi-line bodies and a real `git mktag` tag object.
+   - It gives 422 semantics and real `gh` exit behaviour.
+   - Assertions check annotated-tag identity rather than tag counts.
+   - The fixture conventions are named.
+4. **ADR-232 amendment content made precise** (architecture P1).
+   - The title's "never `GITHUB_TOKEN`" is scoped to PR authoring, and the least-scope sentence is
+     corrected.
+   - After #8209, the manual fallback is `gh workflow run mint-inngest-bootstrap-tag.yml`, not a
+     hand-tag.
+   - The two-in-flight bump hold is recorded as R12.
+5. **Observability.**
+   - New failure modes for a `decide` fatal and for Slack being unset.
+   - The partial coverage of a missed run is stated honestly, with follow-up #9082.
+   - The dry-run exit-code and stdout contract is set for preflight Check 10.
+
+### New considerations discovered
+
+- The tag write and dispatch pass no gate that inspects the image's *content*. The human tagging
+  step was, in practice, a second content approval, and that step is now gone (User-Brand Impact).
+- The evidence cited for R1 is weaker than first stated.
+- An attribution fix: `wg-` rather than `hr-` on the deferral rule.
+
 ## Overview
 
 Since #8775 (ADR-232 §7), a `vinngest-v*` tag must sit on a commit reachable from `main`, so a PR
@@ -94,9 +133,13 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 - *Plan-review round-1 cuts* (DHH, simplicity and Kieran).
   - *Runs-list self-heal and dispatch retry* → P1/P6 → cut. A green `noop` re-run is disclosed
     (R11), and the lookup races the dispatch (see A10).
-  - *Composite token scope-down* → no property → cut (see A12).
-  - *Non-main refusal step* → no property. `ref: main` checkout already runs on `main`'s tree →
-    cut.
+  - *Non-main refusal STEP* → cut. Deepen-plan (security, architecture) corrected the reason:
+    a branch `workflow_dispatch` runs that branch's YAML, so `ref: main` does not help. A job-level
+    `if: github.ref == 'refs/heads/main'` stops an accidental branch dispatch, but not a malicious
+    one; the real control is #8209's main-only environment.
+  - *Composite token scope-down* was cut in round 1 (A12), then **reinstated at deepen-plan**
+    (security P1-2). An unscoped `administration:write`/`secrets:write` token for one
+    `actions:write` call is a security finding, not a YAGNI one.
   - *Separate carrier-set comparison* → folded into the blob comparison over the union.
 - *Post-dispatch polling for the build run* → P6 → cut. A 204 from the dispatch API is the
   acceptance signal. The build and bump jobs already post to Slack on failure, and AC6 on `main` is
@@ -192,14 +235,14 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 - `wg-architecture-decision-is-a-plan-deliverable`: the ADR-232 amendment and the model.c4 edit
   ship in this PR.
 - `cq-cite-content-anchor-not-line-number`.
-- `hr-when-deferring-a-capability-create-a`: the GuardA PR-context exemption gets an issue.
+- `wg-when-deferring-a-capability-create-a`: the GuardA PR-context exemption gets an issue (#9081).
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim (issue / ask) | Reality on `origin/main` | Plan response |
 |---|---|---|
 | #4326 body: "Operator must tag within 24h … option (a) push + paths-filter, (b) release workflow, (c) cron" | #8775 made in-PR tags impossible (§7). The 2026-09-24 comment recommends *mint on main, then dispatch from main*. | Option (a) with the dispatch shape. (b) and (c) are cut (Cut List). |
-| Ask: "grep the workflows for create-github-app-token" | No workflow uses it. The repo's pattern is the composite `mint-soleur-ai-app-token`. | Reuse the composite, unchanged. |
+| Ask: "grep the workflows for create-github-app-token" | No workflow uses it. The repo's pattern is the composite `mint-soleur-ai-app-token`. | Reuse the composite; add optional scope-down inputs (Phase 2b, reinstated at deepen-plan). |
 | Ask: "the mint has to use an App installation token, OR dispatch the build explicitly" | The App holds both `contents:write` and `actions:write`. An App-created tag fires `push: tags`, so a dispatch on top of it builds the same tag twice. | Dispatch from `main` with the App token. The tag is created with the job's `GITHUB_TOKEN`, *because* that event is silent. See Alternatives A1–A3 and the decision challenge. |
 | #6766 comment: "#4326 closes the deadlock" (implied) | #4326 closes the **main-side** window only. On a carrier-changing PR, GuardA still compares the pinned tag to the PR's HEAD and reds, by construction. | GuardA stays advisory. **#9081** (filed at plan time) tracks a GuardA PR-context exemption, plus moving the AC6 anchor to `origin/${GITHUB_BASE_REF}` (the ADR-232 Alternatives "Re-evaluate when #6766/#6480…" row). It is *blocked by* #4326 and *blocking* #6766. |
 | "Carrier" = a file baked into the image | Guard A's carriers are the 13 `cp`-staged files. The image also depends on the 4 binary pins (`inngest_cli_version/sha256`, `vector_version/sha256`) and on the Dockerfile recipe in the workflow. | The mint's image-input set = carriers ∪ pins ∪ recipe. A pin or recipe change must also ship (runbook: "bumped `inngest_cli_version`" requires a release). |
@@ -217,9 +260,10 @@ push to main (paths: apps/web-platform/infra/**, the build workflow, this workfl
   └─ mint job (concurrency inngest-bootstrap-automint, cancel-in-progress: false)
       1. checkout ref: main (the tip), fetch-depth 0, fetch-tags, persist-credentials false
       2. script --dry-run          → result=noop|would-mint     (git only, NO credential)
-      3. [would-mint] Doppler CLI + mint-soleur-ai-app-token (existing composite, unchanged)
-      4. [would-mint] script        → decide → allocate → tag (GITHUB_TOKEN, REST) → dispatch (App, once)
-      5. [failure()] Slack (SLACK_RELEASES_WEBHOOK_URL)
+      3. [would-mint] script --tag → decide → allocate → tag    (env: MINT_TAG_TOKEN only)
+      4. [tag ok]  Doppler CLI + mint-soleur-ai-app-token (scoped: actions:write, repo soleur)
+      5. [tag ok]  script --dispatch <tag>                      (env: MINT_DISPATCH_TOKEN only, once)
+      6. [failure()] Slack (SLACK_RELEASES_WEBHOOK_URL, payload built with jq)
   └─ build-inngest-bootstrap-image.yml  (workflow_dispatch, ref=main, inputs.ref=vinngest-vN)
       build (checks out refs/tags/vinngest-vN, ancestry on-main ✓) → bump-cloud-init-pin → pin PR
 ```
@@ -272,6 +316,11 @@ peel lines are stripped first (spec-flow G10).
   every existing name.
 - NEXT = `vX.Y.(Z+1)`.
 - Assert that NEXT is absent from ALL and that `sort -V` ranks NEXT last.
+- Refuse (`stage=allocate`) any tag whose version component has more than 6 digits, since
+  `Z+1` must not overflow on a crafted remote tag. NEXT must match
+  `^vinngest-v[0-9]+\.[0-9]+\.[0-9]+$` before any POST (security P2-4).
+- No merged tag at all (the resolve selector is empty) → `result=would-mint reason=no-base`.
+  Every input then counts as changed. This is not an error (observability P2).
 
 An off-main `v1.1.50` above a merged `v1.1.40` gives NEXT `v1.1.51`, while BASE stays `v1.1.40`.
 
@@ -284,15 +333,21 @@ An off-main `v1.1.50` above a merged `v1.1.40` gives NEXT `v1.1.51`, while BASE 
    `result=noop reason=concurrent-tag` and create nothing. Two tags on one commit would mean two
    builds.
 2. `POST /git/tags` with `{tag, message, object: HEAD, type: commit, tagger: github-actions[bot]}`.
-   The message names the run URL, the HEAD SHA, the `changed=` reasons and `#4326`.
-3. `POST /git/refs` with `refs/tags/<name>`.
+   The message names the run URL, the HEAD SHA, the `changed=` reasons and `#4326`. The body is
+   built with `jq -n --arg` and piped to `gh api … --input -` (the repo's REST ref precedent is
+   `fix-constraints-stage-b.yml`, "Draft follow-up PR" block). It is never string-built. The tag
+   object SHA is read from the response with `jq -r .sha`, not with `grep`: the response carries a
+   second `sha` under `.object`, which is the commit (test-design P0-1).
+3. `POST /git/refs` with `{ref: "refs/tags/<name>", sha: <tag-object-sha>}`.
 
 Any 422 is fatal (`stage=tag`); a re-run re-decides from a fresh re-read. A response body that
 mentions the `workflows` permission is fatal with `reason=workflows-permission`, so residual R1 is
-distinguishable from a name race. Afterwards, verify that `git ls-remote origin refs/tags/<name>^{}`
+distinguishable from a name race. Error output prints a `reason=` class plus the response body's
+byte length, never raw body bytes (observability + security P2-5). Afterwards, verify that `git ls-remote origin refs/tags/<name>^{}`
 peels to HEAD.
 
-**Dispatch (stage `dispatch`).** Call
+**Dispatch (stage `dispatch`, a separate step and process: `--dispatch <tag>`).** Re-validate
+`<tag>` against the strict regex and require that it peels to a commit on `origin/main`. Then call
 `POST /actions/workflows/build-inngest-bootstrap-image.yml/dispatches` exactly **once**, with the
 App token and the body `{ref: "main", inputs: {ref: "<name>"}}`. There is no retry. A retry after
 a lost 2xx could start a second build of the same tag and move its digest; the plan review
@@ -309,9 +364,19 @@ On a later run, `noop` prints `::notice::base=<BASE>`, naming the tag it compare
 re-run therefore reads as "compared against BASE", never as "published" (the CTO/advisor
 recovery concern, met without a racy lookup).
 
-**Result contract.** Exactly one terminal line: `result=noop|would-mint|minted|error`. Also
-emitted: `tag=`, `base=`, `changed=`, `reason=`, and a `$GITHUB_STEP_SUMMARY` block. Fatals are
-stage-named: `args|ancestry|resolve|decide|allocate|tag|dispatch`.
+**Result contract.** Exactly one terminal line: `result=noop|would-mint|tagged|dispatched|error`.
+
+- `--tag` ends `tagged` and `--dispatch` ends `dispatched`.
+- The line goes to **stdout**, because preflight Check 10 discards stderr.
+- `--dry-run` exits 0 on both `noop` and `would-mint`.
+- Writes to `GITHUB_OUTPUT` and `GITHUB_STEP_SUMMARY` use the bump's `[[ -n "${GITHUB_OUTPUT:-}" ]]`
+  guard, because both are unset in the sandbox.
+- Only fixed-vocabulary values reach `GITHUB_OUTPUT`: `result` and the validated `tag`.
+- Also emitted: `base=`, `changed=`, `reason=`, and a `$GITHUB_STEP_SUMMARY` block. The `noop`
+  summary prints each comparison made (carriers, pins, recipe), so a skipped pin or recipe check is
+  visible (observability P1).
+- Every `::error::`/`::notice::` payload has `%`, `\r` and `\n` percent-encoded.
+- Fatals are stage-named: `args|ancestry|resolve|decide|allocate|tag|dispatch`.
 
 ## Technical Approach
 
@@ -327,12 +392,44 @@ The harness mirrors the bump suite:
 - a synthesized `inngest.tf` and `vector.tf`;
 - a PATH-shimmed `gh` that replays the real REST contracts.
 
-The fake `gh` replays the real contracts:
+The fake `gh` replays the real contracts (test-design P0-1):
 
-- `POST git/tags` returns a JSON body carrying `sha`.
-- `POST git/refs` writes the tag into the bare origin, so that `ls-remote` sees it. It returns 422
-  with the real `{"message":"Reference already exists"}` body on a collision.
-- The dispatch POST returns 204, or a configured failure.
+- `POST git/tags` creates a real tag object in the bare origin with `git mktag`, and returns the
+  documented multi-line pretty-printed body. That body carries both the tag's `sha` and
+  `object.sha`.
+- `POST git/refs` runs `update-ref` in the bare origin with the posted SHA as-is. It answers 422
+  `Reference already exists` on a collision, derived from the origin's state rather than a flag,
+  and 422 `Object does not exist` for an unknown SHA.
+- The dispatch POST prints nothing and exits 0 for a 204.
+- On an error it exits 1, with the body on stdout and `gh: … (HTTP 422)` on stderr, as real `gh`
+  does.
+- The `workflows`-permission message is **synthesized**, because GitHub's verbatim text is
+  unverified. That row tests the classifier on the fake's wording, and a negative control proves
+  that a plain 422 does not yield `reason=workflows-permission`.
+
+Fixture conventions (plugins/soleur/AGENTS.md "Test Fixture Conventions"):
+
+- Source `plugins/soleur/test/lib/git-fixture-env.sh`, as the bump suite does. It scrubs an
+  inherited `GIT_DIR`/`GIT_INDEX_FILE` and arms the `rc=97` tripwire, and the scrub must also reach
+  the spawned mint script.
+- Copy the canonical `assert_fixture_dir`.
+- Set `MIN_ASSERTIONS` to the green run's exact count.
+
+Every row asserts all of these:
+
+- exactly one `result=` line, with the matching `reason=`/`stage=`;
+- the exit code;
+- the `gh` call log;
+- the origin tag set, and for a created tag: `cat-file -t` gives `tag`, it peels to HEAD, and its
+  tagger and message are right. A lightweight tag must fail.
+
+This is what makes even `noop` rows go RED against the `exit 0` stub.
+
+Script-mutation rows follow three rules:
+
+- each runs the unmutated temp copy as a positive control;
+- each checks that the edit landed inside the target function;
+- only rc 1 counts as caught, while rc 2 or 127 is reported as a broken instrument.
 
 Raise `MIN_SUITES` in `run-all.sh` from 13 to 14. Every row goes RED against a stub script
 (`exit 0`) before Phase 1.
@@ -341,7 +438,9 @@ Raise `MIN_SUITES` in `run-all.sh` from 13 to 14. Every row goes RED against a s
 
 - Preamble copied from the bump script's pattern. The xtrace refusal must be the FIRST
   statement after `set` (`lint-shell-trace-credential-refusal` Rule A); it triggers when either
-  credential env var is set. Then `LC_ALL=C` and the `GIT_TRACE*` unset (never `=0`).
+  credential env var is set. Then `LC_ALL=C` and the `GIT_TRACE*` + `GIT_CURL_VERBOSE` unset
+  (never `=0`). Also unset `GH_DEBUG` and `DEBUG`, since `gh` debug output can echo headers
+  (security P2-6).
 - Stages in the order `args → ancestry → resolve → decide → [allocate → tag → dispatch]`. The
   ancestry stage runs the two history-visibility refusals copied from the bump: a shallow checkout,
   and stderr from the `--merged` walk. There is **no** "HEAD reachable from `origin/main`" check.
@@ -350,16 +449,22 @@ Raise `MIN_SUITES` in `run-all.sh` from 13 to 14. Every row goes RED against a s
 - The selector block is copied byte-for-byte from the bump, modulo name, dir operand and
   indentation. The carrier extractor line is copied from Guard A's `GA_CP_PATHS` line. The pin
   `grep -E` patterns are copied from the build step.
-- Credential inputs come from env: `MINT_TAG_TOKEN` holds `github.token`, and
-  `MINT_DISPATCH_TOKEN` holds the App token. Both names match the lint's `_TOKEN` expansion signal,
-  so `lint-shell-trace-credential-refusal.py` actually scans this file (Kieran P0-1). Each is
-  passed per call as `GH_TOKEN="$MINT_…_TOKEN" gh api`, never exported, never in a URL.
+- Credential inputs come from env: `MINT_TAG_TOKEN` holds `github.token` and reaches only the
+  `--tag` step. `MINT_DISPATCH_TOKEN` holds the App token and reaches only the `--dispatch` step,
+  which is minted after the tag succeeds (security P1-1).
+  - Both names match the lint's `_TOKEN` expansion signal, so
+    `lint-shell-trace-credential-refusal.py` actually scans this file (Kieran P0-1).
+  - The script copies its one token into a local variable and `unset`s the env var first thing,
+    then passes it per call as `GH_TOKEN="$tok" gh api`.
+  - The correct claim is "never exported beyond its own step, never in a URL". `ls-remote` needs no
+    credential because the repo is public, and a token-in-remote-URL form is forbidden.
 - Test seams: `MINT_REPO_DIR` and `MINT_REPO` (the `owner/name` used in API paths).
-- Two modes:
+- Three modes, each one step:
   - `--dry-run` runs only through `decide`, uses no network and needs no credential. It is the
     discoverability probe. It prints `tags=local`, reminding the reader to run
     `git fetch --tags origin` first on a laptop (CTO devex).
-  - The default mode is the full run.
+  - `--tag` runs decide, allocate and tag, and ends `result=tagged tag=<name>`.
+  - `--dispatch <tag>` runs dispatch only.
 
 **Phase 2: the workflow** (`.github/workflows/mint-inngest-bootstrap-tag.yml`).
 
@@ -367,8 +472,9 @@ Raise `MIN_SUITES` in `run-all.sh` from 13 to 14. Every row goes RED against a s
   - `on.push`: `branches: [main]` with the `paths` set above.
   - `on.workflow_dispatch`: no inputs.
 - Top-level `permissions: contents: read`.
-- One job, `mint`, with `permissions: contents: write` and `timeout-minutes: 10`. The job needs no
-  `actions` permission, because the dispatch uses the App token.
+- One job, `mint`, gated `if: github.ref == 'refs/heads/main'` (security P2-3, architecture P2-5).
+  It has `permissions: contents: write` and `timeout-minutes: 10`. The job needs no `actions`
+  permission, because the dispatch uses the App token.
 - `concurrency: {group: inngest-bootstrap-automint, cancel-in-progress: false}`.
 - Pinned SHAs: reuse the exact `actions/checkout`, `DopplerHQ/cli-action` and composite pins
   from the build workflow. The composite is used unchanged, with `installation-id: "122213433"`.
@@ -378,12 +484,31 @@ Raise `MIN_SUITES` in `run-all.sh` from 13 to 14. Every row goes RED against a s
      (spec-flow G1). Tagging the tip is always correct, because the tip holds every earlier change.
      A `workflow_dispatch` from a branch also lands on `main`'s tree.
   2. `Decide` (`--dry-run`), which writes `result` to `GITHUB_OUTPUT`.
-  3. `Verify DOPPLER_TOKEN present` (if `result` is `would-mint`).
-  4. Doppler CLI (same condition).
-  5. App mint (same condition).
-  6. `Mint tag + dispatch build` (same condition). The step sets `timeout-minutes: 8`, so a hang
-     lands as a failure rather than a cancel (the bump's lesson).
-  7. Slack `if: failure()` with `continue-on-error: true`.
+  3. `Create tag` (`--tag`, if `result` is `would-mint`, env `MINT_TAG_TOKEN: ${{ github.token }}`),
+     which writes the validated `tag` to `GITHUB_OUTPUT`.
+  4. `Verify DOPPLER_TOKEN present`, Doppler CLI, and App mint. These run if step 3 produced a
+     `tag`. The composite gets `permissions: '{"actions":"write"}'` and `repositories: soleur`.
+  5. `Dispatch build` (`--dispatch "$TAG"`, env `MINT_DISPATCH_TOKEN` only).
+  6. Slack `if: failure()` with `continue-on-error: true`. The payload is built with `jq`, the
+     message is plain `curl`, and no third-party action is involved. An unset webhook emits
+     `::warning::SLACK_RELEASES_WEBHOOK_URL unset`, as the build workflow does.
+
+  Steps 3 and 5 each set `timeout-minutes: 5`, so a hang lands as a failure rather than a cancel
+  (the bump's lesson).
+
+**Phase 2b: the composite scope-down, reinstated at deepen-plan**
+(`.github/actions/mint-soleur-ai-app-token/action.yml`).
+
+- Add two optional inputs, `permissions` (a JSON object string) and `repositories` (a comma list).
+- When either is non-empty, build the access-token body with `jq`, for example
+  `{"repositories":["soleur"],"permissions":{"actions":"write"}}`. `repositories` must be a JSON
+  array (Kieran P2-9).
+- When both are empty, curl is invoked with **no `-d` at all**, byte-identical to today, so the
+  bump job is unchanged.
+- A small case in the new suite (or a sibling test) exercises the body-building shell with curl
+  shimmed, and asserts both arms.
+- Correct the stale "contents:write + pull_requests:write" doc comment to the measured grant.
+- *Coordination:* #8209 plans "name inputs" on this composite. The new inputs are additive.
 
 **Phase 3: the build workflow's comments only**
 (`.github/workflows/build-inngest-bootstrap-image.yml`).
@@ -397,15 +522,28 @@ Raise `MIN_SUITES` in `run-all.sh` from 13 to 14. Every row goes RED against a s
 
 **Phase 4: architecture and docs.**
 
-- ADR-232 amendment (§8 + Alternatives + Consequences + Verification). The amendment records
-  residuals R1, R6, R9 and R10, plus the line that the manual tag-push fallback must become
-  create-then-dispatch when #8209 binds the bump job to a main-only environment.
-- `model.c4` edge prose.
+- ADR-232 amendment (§8 + Alternatives + Consequences + Verification). Architecture review
+  requires these:
+  - Scope the title's "never `GITHUB_TOKEN`" to the PR-authoring write. The `GITHUB_TOKEN writes`
+    alternatives row gains a note that event suppression is *wanted* for the tag write.
+  - Correct the Consequences "least-scope… PR-mediated" sentence. The App grant is measured, not
+    least-scope, and the dispatch is not PR-mediated.
+  - Record residuals R1, R6, R9, R10 and R12.
+  - Record the #8798 dependency: §8 assumes strict ancestry. Content-equality would re-admit in-PR
+    tags and a duplicate publish.
+  - Record the #8781 constraint: candidate names must fall outside `refs/tags/vinngest-v*`.
+  - Record the #8209 line. After #8209, the manual fallback is
+    `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`, not a hand-tag, because any
+    human-created tag fires `push: tags`. A5 (drop `push: tags`) is a prerequisite of #8209.
+- `model.c4` edge prose. Split "It is NOT a push-to-main job… runs on the vinngest-v* TAG ref" into
+  the auto-minted case (runs from `main`) and the manual case (runs on the tag ref). Keep the
+  addition to one sentence.
 - The `infra-credential-tiers-8209.md` Group-4 row.
 - `inngest-server.md` §Bootstrap-image release:
-  - Step 1 becomes "automatic; manual = fallback". Hand-tagging applies only when no
-    `vinngest-v*` tag already points at the merge commit (`git ls-remote`). Otherwise the fallback
-    is to dispatch the build for the existing tag.
+  - Step 1 becomes "automatic". The primary manual fallback is
+    `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`, which is idempotent and builds
+    once. Hand-tagging is reserved for R1 (`reason=workflows-permission`), and only when no
+    `vinngest-v*` tag already points at the merge commit (`git ls-remote`).
   - A **recovery table** keyed on `result=`/`reason=`/stage:
 
     | Signal | Action |
@@ -414,6 +552,8 @@ Raise `MIN_SUITES` in `run-all.sh` from 13 to 14. Every row goes RED against a s
     | `reason=workflows-permission` | Hand-tag the merge commit |
     | `dispatch` | Run the `gh workflow run … -f ref=<name>` line printed by the step; never hand-tag or delete |
     | A build or bump failure | Re-run that build run |
+    | R12: a bump PR held with signed≠target | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max> -f mirror_only=true` (digest-preserving; re-arms auto-merge) |
+    | `result=noop` but BASE has no build run | The dispatch was lost: run the `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<BASE>` line |
     | R8, an off-main BASE | Delete that tag per §7 |
 
 - `main-health-monitor.yml`: the "13 fixture suites behind run-all.sh" text becomes 14
@@ -436,6 +576,8 @@ re-verifies it (AC11).
 ## Files to Edit
 
 - `.github/scripts/test/run-all.sh`: `MIN_SUITES=13` becomes 14, and the comment history line.
+- `.github/actions/mint-soleur-ai-app-token/action.yml`: the optional `permissions` and
+  `repositories` inputs (Phase 2b), plus the corrected grant doc comment.
 - `.github/workflows/build-inngest-bootstrap-image.yml`: comments only. Nothing changes inside
   the `DOCKERFILE` heredoc or the pin-read step.
 - `.github/workflows/main-health-monitor.yml`: the issue-body prose "the 13 fixture suites behind
@@ -458,7 +600,7 @@ say it does not fire.
 |---|---|---|
 | A1 | Create the tag with the App token and let `push: tags` build it (no dispatch) | It works, since an App-token event does trigger. But the run then executes on the TAG ref. #8209's main-only environment for the Tier-B bump job would refuse it, and a tag-pattern policy is forbidden (ADR-232 §7). ADR-232 §7 and the model.c4 edge both name "dispatch the build from main (#4326)" as the compatible shape, so A1 would force a redo when #8209 lands. |
 | A2 | Create the tag with the App token AND dispatch | The App-created tag fires `push: tags`, so two runs build the same tag. The second rebuild MOVES the GHCR digest (non-reproducible `docker build`), the exact hazard the dispatch arm's CAUTION describes. |
-| A3 | `GITHUB_TOKEN` for both the tag and the dispatch (no App) | Mechanically sufficient: `workflow_dispatch` is exempt from the suppression, and its run's ref is `main`, so P5 holds. The CTO review recommends it: no Doppler step, no App-key consumer to re-tier at #8209 step O10, no composite change. NOT adopted, because the operator's direction names the App installation token, and a stated direction stays the default under ADR-084. Recorded in `decision-challenges.md` as a User-Challenge. The switch is mechanical: delete workflow steps 3–5, and give the job `actions: write`. |
+| A3 | `GITHUB_TOKEN` for both the tag and the dispatch (no App) | Mechanically sufficient: `workflow_dispatch` is exempt from the suppression, and its run's ref is `main`, so P5 holds. The CTO review recommends it: no Doppler step, no App-key consumer to re-tier at #8209 step O10, no composite change. NOT adopted, because the operator's direction names the App installation token, and a stated direction stays the default under ADR-084. Recorded in `decision-challenges.md` as a User-Challenge. The switch is mechanical: delete the Doppler and App-mint steps and Phase 2b, and give the job `actions: write`. |
 | A4 | Skip auto-minted tags inside the build's push path, by checking `github.actor` or the tag message, then dispatch | It adds a gate job to the publish workflow, keyed on an undocumented actor format (research Q7 unconfirmed). One more failure surface for no gain over A-chosen. |
 | A5 | Remove `push: tags` from the build and dispatch every build | It changes the manual release flow and the runbook. It belongs with #8209, which must retire tag-ref bump runs anyway. |
 | A6 | Push-diff detection (`before..after`) | It loses events: pending-run replacement, the >3,000-file paths skip, and failed runs. A tag-vs-HEAD comparison self-heals. |
@@ -467,7 +609,7 @@ say it does not fire.
 | A9 | Whole-file diff of `inngest.tf`, `vector.tf` and the build workflow (DHH) | Unrelated Terraform edits to `inngest.tf` are frequent, so each one would mint a spurious release and open a spurious bump PR. This PR's own comment edit to the build workflow would also mint on merge. Pin and heredoc extraction costs about 10 lines. |
 | A10 | Self-heal via a runs-list lookup keyed on a `run-name` and a tag trailer, plus a dispatch retry (review round 1) | Cut in plan review. Both panels fired on it (simplicity: no listed property; Kieran: the runs list lags a dispatch, so the lookup itself can double-build). The recovery is one agent-runnable `gh workflow run` line, printed by the failure and listed in the runbook table. |
 | A11 | Roll back the tag when the dispatch fails (DHH) | After a lost 2xx, the build may already have checked the tag out. Deleting the tag then burns a name that GHCR may hold, which is the name-reuse hazard in §7. |
-| A12 | Scope the App token down to `actions:write` through new composite inputs | Dropped in plan review. No listed property requires it; it edits a composite that #8209 is also changing; and the bump job already uses the same unscoped token. DC1 (A3) removes the App token entirely. |
+| A12 | Scope the App token down to `actions:write` through new composite inputs | Dropped in plan review, then **reinstated at deepen-plan** (security P1-2): the unscoped token carries `administration:write` and `secrets:write` for one `actions:write` call. It is Phase 2b. DC1 (A3) would remove the App token entirely. |
 
 **Chosen:** App-token **dispatch** from `main`, with the tag created by `GITHUB_TOKEN`, because its
 event suppression guarantees exactly one build (P5).
@@ -545,15 +687,22 @@ is the same "end-to-end proof deferred by construction" consequence ADR-232 reco
   mirror-gated auto-merge (ADR-232 §5, §7) still stand between a tag and a host. A deploy to the
   live host stays a separate `deploy-inngest-image.yml` dispatch.
 - **If this leaks, the user's workflow is exposed via:** two credentials in the job's log.
-  - The `soleur-ai` App installation token, with the same unscoped grant the bump job already
-    mints. It is live for up to an hour, and DC1/A3 would remove it.
+  - The `soleur-ai` App installation token, scoped to `actions:write` on `soleur` (Phase 2b). It
+    exists only in the dispatch step and is live for up to an hour. DC1/A3 would remove it.
   - The job's `GITHUB_TOKEN` with `contents:write`, which could push refs until the job ends.
 
   The xtrace refusal, the `GIT_TRACE*` unset and the per-call `GH_TOKEN=` binding (never in a URL)
   keep both out of logs. No user data is read or written.
 - **Brand-survival threshold:** `none`
-- `threshold: none, reason:` a CI-only tag and dispatch. Every write it causes still passes through
-  the existing reviewed publish gates, and no user data or live host is touched by this change.
+- `threshold: none, reason:` a CI-only tag and dispatch. No user data or live host is touched, and a
+  live-host deploy remains a separate dispatch.
+- **What changes for review (security P2-7).** The ancestry and mirror gates check *where* a tag
+  sits, not *what* the image contains. Until now, a human tagging the merge commit acted in
+  practice as a second approval of the image's bytes. After this change, anything merged to `main`
+  that changes an image input becomes a published image and an auto-merged pin bump with no human
+  step. The PR review of the carrier change is now the only content review. Verified: no `main`
+  ruleset bypass actor lets unreviewed commits land. `CI Required` bypass is OrganizationAdmin and
+  RepositoryRole 5 in `pull_request` mode only; `soleur-ai` is not a bypass actor.
 
 ## Observability
 
@@ -575,9 +724,15 @@ failure_modes:
   - mode: "tag creation refused for missing workflows permission (R1)"
     detection: "::error::tag reason=workflows-permission + Slack"
     alert_route: "Slack releases channel (layer: GitHub Actions annotation + Slack webhook)"
-  - mode: "mint never ran (paths filter skipped a >3,000-file push, or the run was dropped)"
-    detection: "infra-validation.yml deploy-script-tests on push to main (Guard A + AC6) and main-health-monitor.yml, which files ci/main-broken"
-    alert_route: "ci/main-broken GitHub issue + monitor Slack (layer: existing CI backstop)"
+  - mode: "mint never ran (paths filter skipped a >3,000-file push, startup_failure, or the run was dropped): PARTIAL coverage"
+    detection: "carrier changes only: the Guard A + AC6 drift guard in infra-validation.yml deploy-script-tests on push to main and in main-health-monitor.yml. A pin- or recipe-only change is NOT detected; tracked as R13 / #9082"
+    alert_route: "ci/main-broken GitHub issue (layer: GitHub Actions CI check + main-health-monitor issue filing)"
+  - mode: "decide fatal (extractor drift after a build-workflow refactor)"
+    detection: "::error::decide + Slack"
+    alert_route: "Slack releases channel (layer: GitHub Actions annotation + Slack webhook)"
+  - mode: "SLACK_RELEASES_WEBHOOK_URL unset or the post fails, so a red run is unseen"
+    detection: "::warning::SLACK_RELEASES_WEBHOOK_URL unset on the run; nothing else watches this workflow's conclusion yet (tracked in #9082)"
+    alert_route: "none beyond the GitHub Actions run status (layer: GitHub Actions run log) — accepted residual R13"
   - mode: "build or bump fails after a successful auto-mint dispatch"
     detection: "build-inngest-bootstrap-image.yml's own publish-refused / mirror-degraded / pin-bump-failure Slack steps"
     alert_route: "Slack releases channel (layer: publish workflow)"
@@ -620,7 +775,8 @@ and a cardinality refusal protects them.
 |---|---|---|
 | 1 | Change only the LAST carrier (after 12 unchanged) | would-mint (RED if noop) |
 | 2 | Hollow the comparator to always report "same" (guard's own dispatch; the instrument self-test pair must move, as in Guard A) | suite RED |
-| 3 | Add a second changed input after a compliant first: carriers identical, `vector_sha256` changed | would-mint |
+| 3 | Add a second changed input after a compliant first: carriers identical, and ONE pin changed. The row is table-driven over all four pins, one case each (test-design P1-6) | would-mint for each |
+| 3b | Change only the FIRST carrier, the twin of row 1 | would-mint |
 | 4 | Rename the staging prefix so the extractor finds 0 carriers on HEAD | fatal `decide`, not noop |
 | 5 | Add a `cp` from outside `apps/web-platform/infra/` with its `COPY` | fatal `decide` (cardinality) |
 | 6 | Change `FROM alpine:3.20` inside the heredoc | would-mint |
@@ -650,7 +806,8 @@ patch. The pre-create re-read in `tag` consults the same source.
 | 3 | `v1.9.0` and `v1.10.0` both exist (swap `sort -V` → `sort`) | NEXT `v1.10.1`, lexical sort RED |
 | 4 | `vinngest-v1.2.0-rc1` exists above `v1.1.40` | NEXT `v1.2.1` |
 | 5 | Remove the `^{}` strip, with an annotated suffixed tag fixture | RED |
-| 6 | REORDER: move the pre-create re-read after `POST /git/refs` (the shim adds a human tag on HEAD between decide and tag) | `noop reason=concurrent-tag` and zero POSTs; the reordered form RED |
+| 6 | REORDER: move the pre-create re-read after `POST /git/refs`. Built as a human tag on HEAD present ONLY in the bare origin, absent from the local clone the selector reads (test-design P0-2) | `noop reason=concurrent-tag` and zero POSTs; the reordered form sends POSTs, RED |
+| 8 | A remote tag `vinngest-v1.1.9999999` (7 digits) | fatal `allocate`, zero POSTs |
 | 7 | 422 "Reference already exists" | fatal `tag`, exactly one `git/refs` POST |
 
 **Harness rows.** A shim `gh` that ignores the ref body leaves the tag-name assertion RED. The
@@ -668,7 +825,9 @@ modulo variable name, dir operand and indentation:
 Beyond byte parity, three shape properties hold:
 
 - The mint workflow's `paths:` globs cover every `cp` source.
-- The tag write is bound only to `github.token`, and the App token only to the dispatch.
+- The tag write is bound only to `github.token`, in its own step, and the App token only to the
+  dispatch step.
+- The checkout is `ref: main` and the job is main-gated.
 - No PAT-named secret is referenced.
 
 Every failure prints the authority file and each copy that must change with it, plus a diff (CTO
@@ -681,8 +840,8 @@ devex).
   authority;
 - `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`, Guard A;
 - `.github/workflows/build-inngest-bootstrap-image.yml`, the pin-read step;
-- `.github/workflows/mint-inngest-bootstrap-tag.yml`: the `paths:` globs and the env of the `Mint`
-  step.
+- `.github/workflows/mint-inngest-bootstrap-tag.yml`: the `paths:` globs, the job `if:`, the
+  checkout `ref:`, and the env of the `Create tag` and `Dispatch build` steps.
 
 **Mutation matrix:**
 
@@ -694,6 +853,8 @@ devex).
 | 4 | Add a second staged `cp` whose path no `paths:` glob covers, after a covered first | RED |
 | 5 | Bind `MINT_TAG_TOKEN` to the App-mint output (would fire `push: tags`, a double build) | RED |
 | 6 | Reference any `secrets.*PAT*` / `*_PAT` name | RED |
+| 7 | Give the `Create tag` step `MINT_DISPATCH_TOKEN`, or the `Dispatch build` step `MINT_TAG_TOKEN` (the credential-isolation property) | RED |
+| 8 | Change the checkout to `ref: ${{ github.sha }}`, or drop the job's `if: github.ref == 'refs/heads/main'` (spec-flow G1 at workflow level) | RED |
 
 ## Risks
 
@@ -705,7 +866,9 @@ devex).
   manual runbook tag, which fires `push: tags` normally, so it cannot cause a double build. The
   exposure is highest for carrier-*adding* PRs, which edit the build workflow. A spike was not run:
   a tag write is a production write, which this session may not perform. The first qualifying merge
-  is the live proof (AC14).
+  is the live proof (AC14). Caveat from architecture review: the bump's App-token branch pushes
+  do NOT settle R1, because those commits never touch workflow files. The evidence is only the
+  documented scope of the refusal.
 - **R2: the App key moves (#8209 step O10).** The mint's App step then fails with
   `verdict=legacy_app_key_evicted`, exactly as the bump does. The `infra-credential-tiers-8209.md`
   row makes #8209 re-tier this job alongside the bump. Because this is a push-to-main job, an
@@ -735,6 +898,17 @@ devex).
   between the checkout and the dispatch, version N gets a build recipe from a commit it does not
   contain. This is accepted and recorded in the ADR. The window is seconds, and the next qualifying
   push re-decides.
+- **R12: two auto-mints in flight can leave a bump PR held** (architecture P1-3). Builds run in
+  parallel, because their concurrency group is per tag. `inngest-pin-bump` keeps only one pending
+  job, so v42's later bump can cancel v43's pending one. The survivor then targets v43 with
+  signed≠target, so auto-merge is withheld (ADR-232 §5), and the cancelled job posts no Slack.
+  Recovery is a digest-preserving
+  `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max> -f mirror_only=true`,
+  which is in the runbook table. Accepted and recorded in the ADR; two carrier merges within one
+  build cycle are rare.
+- **R13: partial observability for a missed run** (observability P1). A skipped or dropped mint for
+  a pin- or recipe-only change is not caught by Guard A. Nothing yet watches this workflow's
+  conclusion if Slack is unset. Tracked as **#9082** (blocked by #4326).
 - **R11: after a failed dispatch, a later run is green `noop`.** The tag then sits unbuilt. The
   failed run is red and posts to Slack with the exact `gh workflow run` line. `noop` prints
   `base=<BASE>`, the runbook table covers the case, and AC6 on `main` is the backstop. The
@@ -778,6 +952,9 @@ recommendations and their dispositions:
 - **Parity messages.** Every Guard 3 failure names the authority file and the copies that must
   change with it.
 - **`--dry-run` hint.** It prints `tags=local`.
+- **Deepen-plan (2026-09-27).** The security and architecture seats independently endorsed A3 on
+  credential-tier grounds, and it stays DC1. Security P1-2 reinstated the composite scope-down
+  (Phase 2b) for as long as the App path is kept.
 - **#8209 fallback line.** Added to the ADR amendment.
 
 ### Product/UX Gate
@@ -808,10 +985,21 @@ The suite `.github/scripts/test/test-mint-inngest-bootstrap-tag.sh` covers five 
 - Ancestry refusals copied from the bump: a shallow checkout, and stderr from the `--merged` walk.
 - The xtrace refusal: `bash -x` with either `MINT_*_TOKEN` set exits non-zero before any traced
   command. The `GIT_TRACE` unset.
-- `--dry-run` on a non-main HEAD: it works, and makes no network call (the shim fails the test on
-  any invocation).
+- `--dry-run` on a non-main HEAD: it works and makes no network call. The shim fails the test on
+  any `gh` invocation, and `origin` points at a nonexistent path, so a stray `ls-remote` also fails
+  (test-design P2-8). It exits 0 on `would-mint`, and the no-merged-tag case yields
+  `would-mint reason=no-base`.
+- xtrace: seed a canary token value and assert it never appears in stderr or stdout (test-design
+  P2-9).
+- Composite scope-down (Phase 2b): with curl shimmed, empty inputs send no `-d`, and set inputs send
+  exactly `{"repositories":["soleur"],"permissions":{"actions":"write"}}`.
+- `--dispatch` with a tag that fails the strict regex, or that is not on `origin/main`, is fatal
+  with zero POSTs.
 
 ## Acceptance Criteria
+
+Plan ACs are numbered AC1–AC15. Elsewhere, "the AC6 drift guard" means the AC6 row of
+`apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`, not this plan's AC6.
 
 ### Pre-merge (PR)
 
@@ -862,8 +1050,13 @@ The suite `.github/scripts/test/test-mint-inngest-bootstrap-tag.sh` covers five 
     #6766.
   - `gh issue view 6766 --json blockedBy` lists #4326.
   - #6766 carries a comment stating the residual.
-- [ ] **AC12.** The PR body uses `Closes #4326` and `Ref #6766, #9081`. It states DC1 via ship's
+- [ ] **AC12.** The PR body uses `Closes #4326` and `Ref #6766, #9081, #9082`. It states DC1 via ship's
   decision-challenges rendering, and its infra-apply claim is consistent with AC6.
+
+- [ ] **AC15.** Composite scope-down: the suite's composite case passes (empty inputs send no `-d`;
+  set inputs send the exact JSON body). `git diff origin/main...HEAD --
+  .github/actions/mint-soleur-ai-app-token/action.yml` shows no change to the default-path `curl`
+  invocation line.
 
 ### Post-merge (automated verification, event-gated)
 
