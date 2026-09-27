@@ -330,6 +330,73 @@ describe("useC4Project — a response for a folder the page has left is discarde
   });
 });
 
+// #9050 F9 — the endpoint guard above covers the cross-folder case only. Two
+// in-flight reloads on the SAME endpoint race: last to resolve wins, so a
+// slower stale read can overwrite a fresher one.
+describe("useC4Project — a superseded same-endpoint reload is discarded", () => {
+  function deferredFetch(sources: string[]) {
+    const resolvers: Array<() => void> = [];
+    let call = 0;
+    global.fetch = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          const payload = {
+            dir: "d",
+            sources: { "model.c4": sources[call++] },
+          };
+          resolvers.push(() =>
+            resolve({ ok: true, json: async () => payload } as Response),
+          );
+        }),
+    ) as unknown as typeof fetch;
+    return resolvers;
+  }
+
+  it("a slower first reload resolving after a faster second does not clobber the fresher data", async () => {
+    const resolvers = deferredFetch(["stale-read", "fresh-read"]);
+    const { result } = renderHook(() => useC4Project("d"));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    act(() => {
+      void result.current.reload();
+    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    // The fresher (second) fetch lands first.
+    await act(async () => {
+      resolvers[1]();
+    });
+    await waitFor(() =>
+      expect(result.current.data?.sources["model.c4"]).toBe("fresh-read"),
+    );
+    // The stale (first) fetch lands late — it must not overwrite.
+    await act(async () => {
+      resolvers[0]();
+    });
+    expect(result.current.data?.sources["model.c4"]).toBe("fresh-read");
+  });
+
+  it("a superseded reload does not clear loading while the fresher one is still in flight", async () => {
+    const resolvers = deferredFetch(["stale-read", "fresh-read"]);
+    const { result } = renderHook(() => useC4Project("d"));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    act(() => {
+      void result.current.reload();
+    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    // The stale (first) fetch resolves while the fresh one is still pending.
+    await act(async () => {
+      resolvers[0]();
+    });
+    expect(result.current.loading).toBe(true);
+    await act(async () => {
+      resolvers[1]();
+    });
+    await waitFor(() =>
+      expect(result.current.data?.sources["model.c4"]).toBe("fresh-read"),
+    );
+    expect(result.current.loading).toBe(false);
+  });
+});
+
 // #8966 — the derived verdict must survive the response normalization intact:
 // `stale:true`/`false` pass through, and ABSENT stays absent (undefined), never
 // normalized to false — a false normalization would let an undervived read

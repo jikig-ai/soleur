@@ -101,10 +101,17 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
   // model on screen (a transient 5xx on an unsolicited refetch is otherwise a
   // self-inflicted canvas teardown with no retry).
   const dataPresent = useRef(false);
+  // Issue-order guard (#9050 F9): two in-flight reloads on the SAME endpoint
+  // race, and last-to-resolve wins — a slower stale read would overwrite a
+  // fresher one. Each reload stamps a generation; only the latest generation
+  // may write state.
+  const reqGen = useRef(0);
   // #8739 — `silent` refetches without the loading flip: a Concierge save
   // completing elsewhere must not unmount the canvas to flash a spinner.
   const reload = useCallback(async (opts?: { silent?: boolean }) => {
     const isCurrent = () => currentEndpoint.current === endpoint;
+    const gen = ++reqGen.current;
+    const isLatest = () => isCurrent() && gen === reqGen.current;
     if (!opts?.silent) setLoading(true);
     setError(null);
     try {
@@ -114,7 +121,7 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
         throw new Error(j.error || `Request failed (${res.status})`);
       }
       const json = (await res.json()) as Partial<ProjectResponse>;
-      if (!isCurrent()) return;
+      if (!isLatest()) return;
       dataPresent.current = true;
       setData({
         dir: json.dir ?? dirPath,
@@ -127,10 +134,10 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
         stale: json.stale,
       });
     } catch (e) {
-      if (isCurrent() && !(opts?.silent && dataPresent.current))
+      if (isLatest() && !(opts?.silent && dataPresent.current))
         setError(e instanceof Error ? e.message : "Failed to load diagram");
     } finally {
-      if (isCurrent() && !opts?.silent) setLoading(false);
+      if (isLatest() && !opts?.silent) setLoading(false);
     }
   }, [dirPath, endpoint]);
 
