@@ -153,7 +153,7 @@ assert '#6616 the arm ALSO isolates on the unforgeable host field (host_name alo
 # call shape, which a comment does not produce. #8846: the shape now opens with the shared
 # probe-row def (scripts/lib/inngest-probe-row.sh), prefixed to the same program.
 # shellcheck disable=SC2016,SC2034  # a literal shape, read inside the assert eval string below
-JQ_SHAPE='jq -R -r "$INNGEST_PROBE_ROW_JQ"'"'"' fromjson? | .raw? | fromjson?'
+JQ_SHAPE='jq -R -r "${INNGEST_PROBE_ROW_JQ:?}"'"'"' fromjson? | .raw? | fromjson?'
 assert "the arm decodes with jq -R + the shared def + double fromjson? (one bad line must not lose the rest)" \
   "grep -qF -- \"\$JQ_SHAPE\" '$WF'"
 assert "the arm carries cutover_flag into its alert (the cause travels with the alarm)" \
