@@ -41,7 +41,10 @@
 #
 # TO ADD ANOTHER LOGS ALERT (five steps, in this order):
 #   1. a `locals { <name>_sql = <<-SQL … SQL }` predicate (probe it live via betterstack-query.sh
-#      with a positive control first — the template SQL is NOT validated by `terraform validate`);
+#      with a positive control first — the template SQL is NOT validated by `terraform validate`).
+#      Source 2457081 carries EVERY web host (web-1 `soleur-web-platform`, web-2 `soleur-web-2`):
+#      if the signal belongs to one host, add a `host_name` conjunct or the other host's rows
+#      satisfy it (#8706);
 #   2. a `logtail_exploration` carrying that SQL, `variable "source"` = local.vector_prd_source_id;
 #   3. a `logtail_exploration_alert` on it (copy the paging semantics below, incl. treat_as_zero);
 #   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (the #5566
