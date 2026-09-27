@@ -784,10 +784,7 @@ logs:
 discoverability_test:
   command: bash scripts/followthroughs/luks-monitor-host-timer-8706.sh
   expected_output: "HOST_TIMER_PASS"
-  credentials_required: >-
-    BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD (Doppler prd_terraform, read-only ClickHouse
-    connection) — journald rows are readable only through that connection; no unauthenticated
-    endpoint exposes whether a host-unit OK row landed
+  credentials_required: BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD (Doppler prd_terraform, read-only ClickHouse connection) — journald rows are readable only through that connection; no unauthenticated endpoint exposes whether a host-unit OK row landed
 ```
 
 ## Encryption Posture
