@@ -1,38 +1,29 @@
-# Tasks — fix #8760: pin-redeploy gate skips carried-over git-data jobs only with deploy evidence
+# Tasks — fix #8760 (carried-over jobs) and #9085 (follower lock placement)
 
-Plan: `knowledge-base/project/plans/2026-09-27-fix-pin-redeploy-gate-ignores-carried-over-jobs-plan.md`
+Plan (v3, deepened): `knowledge-base/project/plans/2026-09-27-fix-pin-redeploy-gate-ignores-carried-over-jobs-plan.md`
 
-## Phase 1 — Setup (fixtures from the live API)
+## Phase 1 — Setup
 
-- [ ] 1.1 Capture `tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json` with the plan's exact command (`GH_REPO=jikig-ai/soleur`).
-- [ ] 1.2 Capture `tests/scripts/fixtures/gh-web-platform-release-evidence.json` with the per-id loop in the plan.
-- [ ] 1.3 Record both commands, the date and the run ids in the suite's fixture-provenance comment.
+- [ ] 1.1 Capture `tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json` with the plan's exact command (`GH_REPO=jikig-ai/soleur`), and record the command and date in the suite's provenance comment.
+- [ ] 1.2 Look in `git-data-pin-redeploy.yml` run history for evidence that a job skipped by `if:` does not cancel a pending job. Record what you find, or that there is none, for the PR body (AC12).
 
 ## Phase 2 — Tests first (RED)
 
-- [ ] 2.1 gh stub: source arms `--json jobs,startedAt` (with and without `--attempt N`); delete the `--attempt N --json jobs` arm; per-id `view.<id>.rc`; new `run list --workflow web-platform-release.yml --limit 50 --json databaseId,status,event,createdAt` arm (`relruns.json` / `relruns.rc`).
-- [ ] 2.2 `_gexec`: assert zero `UNEXPECTED` lines and, unless `EVIDENCE=1`, zero release-list calls (`grep -cxF` compared to 0).
-- [ ] 2.3 `_gjob` / `_rep` / `_birth` / `_gdoc`: timestamps from the captured fixture; carried profile sets the apply step's `completedAt` to the captured job's `completedAt`.
-- [ ] 2.4 Update G23's expected argv.
-- [ ] 2.5 Add rows GC1 (a/b/c) through GC13 (a-d) and H3; add the non-proceed GC rows to the GH list.
-- [ ] 2.6 Confirm GC1 fails against the current gate (H1 evidence for the PR body).
+- [ ] 2.1 gh stub: add source arms for `--json jobs,startedAt` with and without `--attempt N`, both covered by `view.rc`. Delete the `--attempt N --json jobs` arm.
+- [ ] 2.2 Harness: `_gexec` writes `$S/harness.violation` on any UNEXPECTED line and leaves its return code alone. The G/GH/GM loops check for the marker. `_scenario` unsets `ATT`. Add the HX row.
+- [ ] 2.3 `_gjob`/`_gdoc`: take timestamps from the fixture, with a `carried` profile. Update G23's expected argvs.
+- [ ] 2.4 Add rows GC1 (and GC1b) through GC9, each with its GH entry. Add GM mutations 1-7 (Guard 1).
+- [ ] 2.5 Parity tests (`plugins/soleur/test/terraform-target-parity.test.ts`): rewrite the follower-structure tests for the two jobs. Add Guard 2's five RED cases. PT3 checks each job; PT5's lookup reads `jobs.redeploy`.
+- [ ] 2.6 Confirm GC1 fails against the current gate with only the argv patched (H1 evidence).
 
-## Phase 3 — Gate (GREEN)
+## Phase 3 — Implementation (GREEN)
 
-- [ ] 3.1 Source read `--json jobs,startedAt`; run-level epoch read through its own checked assignment.
-- [ ] 3.2 CARRIED: one jq expression printing `yes`/`no`; any jq failure means `no`; only for attempt >= 2.
-- [ ] 3.3 DEPLOYED_AFTER: `T_apply` from the apply step's `completedAt`; list, then filter (`EVENT_ARM`, not `queued`, `createdAt >= T_apply`); view each candidate; exactly one `deploy` concluded `success`; failures mean false.
-- [ ] 3.4 Row 2c in `grade()`; `carried` flag and notice arm in the combination loop. The notice is one `echo` line carrying `deploy_after_apply=${EV}`, `verdict=carried_over` and `REDEPLOY_CMD`. Add `deploy_after_apply=none` to `rotated` when CARRIED holds without evidence.
-- [ ] 3.5 Header: predicates block, row 2c, replace the `SOURCE_RUN_ATTEMPT` paragraph, `Env:` line.
+- [ ] 3.1 Gate: switch the source argv; add CARRIED as a single jq expression whose failure means `no` (not via `_q`); add row 2c; add the `carried` flag and a notice arm that is one `echo` line with `verdict=carried_over` and `REDEPLOY_CMD`; update the header.
+- [ ] 3.2 Workflow: split into a `gate` job (no lock, `actions: read`, outputs mapped, pin_published email, failure email) and a `redeploy` job (`needs: gate`, `if: needs.gate.outputs.proceed == 'true'`, the job-level group, `actions: write`, 80 min, pointer, `track.sh`, failure email). Update the header comments.
+- [ ] 3.3 ADR-237: add the clause. Runbook: add the `verdict=carried_over` sentence on a line that names `source-run-gate`, and rewrite both `.jobs[0].steps[]` lookups to read `jobs.redeploy`.
 
-## Phase 4 — Guard battery and docs
+## Phase 4 — Verification
 
-- [ ] 4.1 Add GM mutations 1-13 from the Guard Contract; each must red its named row.
-- [ ] 4.2 Re-measure `FLOOR` from a green run and comment it with the date and #8760.
-- [ ] 4.3 Add one sentence to the workflow comment (`THE GATE` paragraph), one clause to ADR-237 and the runbook line (on a line naming `source-run-gate`).
-- [ ] 4.4 Check locally, lightly: `bash -n`, `shellcheck`, the dispatch-web-redeploy suite, then rely on CI (commit with `LEFTHOOK_EXCLUDE=bun-test,plugin-component-test`).
-
-## Phase 5 — Verification
-
-- [ ] 5.1 AC1-AC12 green in CI on the exact head SHA (PT5 via `terraform-target-parity.test.ts`, `c4-count-parity.test.sh`).
-- [ ] 5.2 PR body: `Closes #8760`, H1/H2 evidence, and the diff of re-captured fixtures against the committed ones.
+- [ ] 4.1 Re-measure `FLOOR` from a green run; comment it with the date and #8760.
+- [ ] 4.2 Local light checks: `bash -n`, `shellcheck`, the dispatch-web-redeploy suite. Commit with `LEFTHOOK_EXCLUDE=bun-test,plugin-component-test` and rely on CI for the rest.
+- [ ] 4.3 AC1-AC13 green in CI on the exact head SHA (including the parity suite and `c4-count-parity.test.sh`). The PR body carries `Closes #8760`, `Closes #9085`, H1, the fixture re-capture diff and the AC12 evidence. The PR touches `.github/`, so it gets auto-merge only.

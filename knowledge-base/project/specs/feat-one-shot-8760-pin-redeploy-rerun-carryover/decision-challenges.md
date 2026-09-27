@@ -38,3 +38,18 @@ Each can still be taken.
 - **Raised by:** DHH, CTO and code-simplicity. Each named a shared library as one of the options.
 - **Chosen:** parity row H3. It pins that the values in the two files are equal, without editing
   `track.sh` or its sparse-checkout path.
+
+## DC-5 (user-challenge, applied as a technical prerequisite): fold #9085 into this PR
+
+- **Raised by:** the deepen-plan architecture-strategist and security-sentinel reviews.
+- **Change:** v2's deploy-evidence check could certify a pin load that did not happen. A superseded
+  `deploy` ends `success`, and a branch-dispatched release can do the same. v2 also let a skipping
+  follower cancel another rotation's pending follower. Every skip is unsafe while #9085 stands.
+- **Applied:** v3 splits `git-data-pin-redeploy.yml` into a `gate` job that holds no lock and a
+  `redeploy` job (`needs: gate`, `if: proceed == 'true'`) that holds the lock. It also deletes the
+  evidence check. This keeps the brief's `startedAt` discriminator and makes it safe, and the PR
+  also closes #9085.
+- **To revert:** ship v2 without the split (it carries the risks above), or ship annotate-only
+  (DC-2).
+- **Superseded:** DC-4 (the shared-library vs parity-row choice) is moot now that no release
+  evidence is read.
