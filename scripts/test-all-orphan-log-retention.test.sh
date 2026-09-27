@@ -118,7 +118,11 @@ build_sandbox() {  # build_sandbox <out-dir> <arm>
   local dir="$1" arm="$2"
   mkdir -p "$dir/lib"
   cp "$TARGET" "$dir/test-all.sh" || return 1
-  for lib in test-relevance-paths.sh repo-write-boundary.sh scratch-root.sh test-contention.sh; do
+  # The boundary lib is an EXPLICIT cp — the repo-write-boundary census
+  # (row 28) enumerates runner-relocating suites by this literal shape and a
+  # loop-carried copy reads as an undeclared sandbox.
+  cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$dir/lib/" || return 1
+  for lib in test-relevance-paths.sh scratch-root.sh test-contention.sh; do
     [[ -f "$REPO_ROOT/scripts/lib/$lib" ]] && cp "$REPO_ROOT/scripts/lib/$lib" "$dir/lib/" || true
   done
   python3 - "$dir/test-all.sh" "$arm" "$FIXTURES" <<'PY'
