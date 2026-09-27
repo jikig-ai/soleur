@@ -1,6 +1,6 @@
 # Action-feedback contract — `components/ui`
 
-feat-ui-action-feedback (#8917). Binding spec: `knowledge-base/project/specs/feat-ui-action-feedback/implementation-brief.md`; plan: `knowledge-base/project/plans/2026-09-25-feat-ui-action-feedback-plan.md`; decision record: ADR-255 (`knowledge-base/engineering/architecture/decisions/ADR-255-canonical-action-feedback-contract.md`).
+feat-ui-action-feedback (#8917). Binding spec (archived): `knowledge-base/project/specs/archive/20260927-230451-feat-ui-action-feedback/implementation-brief.md`; plan: `knowledge-base/project/plans/archive/20260927-230451-2026-09-25-feat-ui-action-feedback-plan.md`; decision record: ADR-255 (`knowledge-base/engineering/architecture/decisions/ADR-255-canonical-action-feedback-contract.md`).
 
 ## `Button` (`components/ui/button.tsx`)
 
