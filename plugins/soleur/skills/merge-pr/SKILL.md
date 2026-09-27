@@ -363,6 +363,8 @@ Use the **Monitor tool** with the same state-machine loop as `soleur:ship` Phase
 
 **Mirror invariant:** the block below is a derived mirror of `plugins/soleur/skills/ship/SKILL.md` Phase 7 (the canonical site). If you edit one, edit both — the canonical site carries the full prose rationale for fail-open required-check fetch, BEHIND budget, and DIRTY semantics. The `ship-phase-7-poll-fixtures.test.sh` fixture extracts and executes BOTH blocks: every scenario (clean merge, required-check failure, DIRTY, BEHIND saturation, and the BEHIND sync-arm rows — conflict, refused, in-progress, push failure, fetch failure, success) runs against this mirror too, and a parity token list pins the arm's spelling — so a behavioural fix applied to one block reddens the suite until it lands in the other. Cross-grep both blocks before pushing anyway; the real-git scenario runs on ship's block only.
 
+**The plugin root is fixed only in delivered text** (ship Phase 7 carries the full rule): the root for this session is `${CLAUDE_PLUGIN_ROOT}`; a literal token there means you read this file from disk. Paste the fence from the delivered text, or prefix the Monitor command with `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` using that path, quoted. The root is ONLY that printed path or a soleur skill's `Base directory for this skill:` line (Skill tool) cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a path built from the working directory. If you cannot name it, load any soleur skill with the Skill tool just to read that line, or launch as-is and sync by hand at the first BEHIND stop; never guess.
+
 ```bash
 # <!-- phase-7-poll-block:start --> mirror of ship/SKILL.md Phase 7
 # BEHIND merge/push: plugins/soleur/scripts/sync-pr-behind.sh --step (edit it there).
@@ -393,7 +395,7 @@ SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
 SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""
 if [[ "$sync_ok" -eq 1 ]]; then
   why=""
-  if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset"
+  if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset (Claude Code/Grok: this fence was taken from disk — stop this Monitor, then re-arm with the quoted root from a soleur skill's Base directory line cut at its last /skills/, never a path built from the working directory)"
   elif ! grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"

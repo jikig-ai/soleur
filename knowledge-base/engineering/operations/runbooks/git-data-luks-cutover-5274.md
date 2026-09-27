@@ -28,6 +28,7 @@ The real cutover does not exist yet. It is blocked on all of:
 - **#7226 / #5914** — pin the SSH host keys of web-1 and git-data (ADR-237). Staged; the open items
   are the [host-key pinning post-merge sequence](#host-key-pinning-post-merge-sequence-7226-5914)
   below:
+  - [x] #7226 — closed 2026-09-22 by PR #8511; ADR-237 is `accepted` (PR #9036, host-key step 4).
   - [x] Mechanism: PR #8511 (pending merge at the time of writing). The CI bridge, the Terraform
     `connection` blocks and this workflow's two hops are strict; git-data's key is Terraform-minted
     and rotated on every replace; the app's transport pins when a pin is published.
@@ -158,6 +159,7 @@ Each prod step needs explicit authorization for that step. A menu acknowledgemen
 4. **Private-NIC readiness read** (below). It must read `up`.
 5. **Dry run.** Dispatch `git-data-cutover.yml` from `main` and approve. It must read
    `role=git-data-auth verdict=ok`, clear the store probes and the fence probe, and exit 0.
+   **Done:** first met by run [35119099336](https://github.com/jikig-ai/soleur/actions/runs/35119099336) (2026-09-16, before the fence probe and host-key pinning); met as now worded by run [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) (2026-09-27, `verdict=clear`, #5914 issuecomment-5859802570).
 
 ### Private-NIC readiness read (step 4)
 
@@ -237,12 +239,26 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
      fingerprint the source apply run printed (go/no-go below). A green follower does not by itself
      mean a redeploy happened: since #8710 its gate proceeds only when the job **and** its apply step
      both succeeded, and otherwise does not redeploy (green with a notice or warning, red when it
-     cannot decide). Check that its
-     `Dispatch web-platform-release and wait for its deploy` step is `success`, not `skipped`:
+     cannot decide). The follower has two jobs: `gate` grades the source run, and `redeploy`
+     dispatches the release only when the gate proceeds; when it does not, `redeploy` is `skipped`.
+     Check that its `redeploy` job is `success`, not `skipped`:
 
      ```bash
-     gh run view <pin-redeploy-run-id> --json jobs --jq '.jobs[0].steps[] | select(.name | startswith("Dispatch web-platform-release")) | .conclusion'
+     gh run view <pin-redeploy-run-id> --json jobs --jq '.jobs[] | select(.name == "redeploy") | .conclusion'
      ```
+
+     If `redeploy` is `skipped` and its gate printed `verdict=carried_over` (source-run-gate: the
+     git-data job was carried over from an earlier attempt of the same apply run), the previous
+     follower owns the redeploy. Find the followers whose gate names the same `in run <id>`:
+
+     ```bash
+     for id in $(gh run list --workflow git-data-pin-redeploy.yml -L 20 --json databaseId --jq '.[].databaseId'); do gh run view "$id" --log | grep -qF "in run <apply-run-id>" && echo "$id"; done
+     ```
+
+     Check the previous one's `redeploy` job with the command above: it must be `success`. If it is
+     not, run `gh workflow run git-data-pin-redeploy.yml --ref main` (no `source_run_id`, so it
+     redeploys unconditionally). If `redeploy` is `cancelled`, a newer follower's pending redeploy
+     replaced it in the lock: check that newer follower's `redeploy` job instead.
 
    - **If the replace failed after the secret published:** re-dispatch the replace. The replace gate
      accepts that plan.
@@ -269,6 +285,7 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
 4. **Strict dry run.** Dispatch `git-data-cutover.yml` from `main`. It must read
    `role=git-data-auth verdict=ok` with both hops pinned. Then tick the #7226 item under Preconditions
    and flip ADR-237 to `accepted` in a docs PR.
+   **Done:** run [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656) (2026-09-25) read `role=git-data-auth verdict=ok` with both hops pinned (it exited 5 on `probe=store-not-cut-over verdict=already_cut_over`, a store probe since retired); re-met clean by run [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) (2026-09-27, `verdict=clear`). ADR-237 `accepted` 2026-09-27 (PR #9036); see Preconditions.
 5. **Discharge the erasures left pending.** After the pin is fixed (step 3 GO) and before step 6 or any
    flag flip:
    1. Collect the repository ids from Sentry: every `op:git-data-bare-repo-erasure` event since the
@@ -673,7 +690,7 @@ amendment 2026-09-24).
 | # | Dispatch | Precondition | Clean means |
 |---|---|---|---|
 | G1 | `git-data-rung2-rehearsal.yml` `dry_run=false` (paid) | the fix PR merged | the run concludes `success`, and its evidence lands through an evidence-only PR |
-| G2 | `apply-web-platform-infra.yml` `apply_target=git-data-host-replace plan_only=true` | the evidence PR merged **and** `gh issue view 8710 --json state,closedByPullRequestsReferences` shows #8710 closed by a merged PR (otherwise this rehearsal fires a production redeploy again) | the job's destroy-guard (`git_data_host_replace_gate`, `tests/scripts/lib/git-data-host-replace-gate.sh` — the single source for which addresses a replace may touch; neither volume is among them) admits the plan and the run concludes `success`, and the pin-redeploy run it triggered did not redeploy: find it with `for id in $(gh run list --workflow git-data-pin-redeploy.yml --created ">=<G2 start>" --json databaseId --jq '.[].databaseId'); do gh run view "$id" --log \| grep -F "in run <G2 run id>" \| grep -q 'verdict=no_apply' && echo "$id"; done`, then `gh run view <that id> --json jobs --jq '.jobs[0].steps[] \| select(.name \| startswith("Dispatch web-platform-release")) \| .conclusion'` prints `skipped`. For reference, run 35979304442 planned `6 to add, 1 to change, 4 to destroy` because `tls_private_key.git_data_host_ssh` and `doppler_secret.git_data_ssh_host_key` were not yet in state; with both in state the counts differ, so compare against the gate, never against that line. (Check amended 2026-09-24 by #8710: the pin-redeploy run always starts, so read its verdict rather than its absence.) |
+| G2 | `apply-web-platform-infra.yml` `apply_target=git-data-host-replace plan_only=true` | the evidence PR merged **and** `gh issue view 8710 --json state,closedByPullRequestsReferences` shows #8710 closed by a merged PR (otherwise this rehearsal fires a production redeploy again) | the job's destroy-guard (`git_data_host_replace_gate`, `tests/scripts/lib/git-data-host-replace-gate.sh` — the single source for which addresses a replace may touch; neither volume is among them) admits the plan and the run concludes `success`, and the pin-redeploy run it triggered did not redeploy: find it with `for id in $(gh run list --workflow git-data-pin-redeploy.yml --created ">=<G2 start>" --json databaseId --jq '.[].databaseId'); do gh run view "$id" --log \| grep -F "in run <G2 run id>" \| grep -q 'verdict=no_apply' && echo "$id"; done`, then `gh run view <that id> --json jobs --jq '.jobs[] \| select(.name == "redeploy") \| .conclusion'` prints `skipped` (the gate did not proceed, so its `redeploy` job never ran). For reference, run 35979304442 planned `6 to add, 1 to change, 4 to destroy` because `tls_private_key.git_data_host_ssh` and `doppler_secret.git_data_ssh_host_key` were not yet in state; with both in state the counts differ, so compare against the gate, never against that line. (Check amended 2026-09-24 by #8710: the pin-redeploy run always starts, so read its verdict rather than its absence.) |
 | G3 | the same, real (one attempt) | G2 read clean | GO, below |
 | G4 | `git-data-cutover.yml` strict dry run | G3's `boot_complete` | `role=git-data-auth verdict=ok` |
 
@@ -953,8 +970,9 @@ re-mint refusal, which blocks a create of the key while the fingerprint file is 
 **git-data's SSH host key rotates on every replace (ADR-237).** The gated replace job re-mints
 `tls_private_key.git_data_host_ssh` with the host and republishes `GIT_DATA_SSH_HOST_KEY`; the birth
 job mints and publishes it the same way. When that apply run completes with the job and its apply
-step both green, `git-data-pin-redeploy.yml` forces a web release, so the app loads the new pin
-within about one release cycle. No step outside Terraform copies the pin, and no separate rotation
+step both green, and the job was not carried over from an earlier attempt of the run (#8760; that
+attempt's follower owns the redeploy), `git-data-pin-redeploy.yml` forces a web release, so the app
+loads the new pin within about one release cycle. No step outside Terraform copies the pin, and no separate rotation
 input exists. If the redeploy fails (it emails ops), re-run it with
 `gh run rerun <pin-redeploy-run-id> --failed`; if its gate exited 1 with `verdict=unidentified`, or printed `verdict=pin_published` or `verdict=pin_maybe_published` (a red job whose apply published the pin, also emailed), dispatch
 `gh workflow run git-data-pin-redeploy.yml --ref main` with no `source_run_id`. Until it succeeds, erasures page

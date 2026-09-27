@@ -33,8 +33,12 @@
 #   14. PR set to `#4387` → refused before the poll (exit 2)
 #   15. fetch fails then a push → the hatch counts pushes, so it does not fire
 #   16. sync no-op (exit 11) → sync_noop line, not counted, never "pushed"
+#   17b/17c/17d. DELIVERED text (token substituted literally, spaced root) with a
+#       hostile root exported / the variable unset / via the DIRTY regen arm → the
+#       loader's literal wins; the row set is pinned; plus prose pins: the paragraph
+#       above each fence says where the root may come from
 #
-# Every row also asserts: no git call fell through to the mock catch-all, and no
+# Every run_scenario row also asserts: no git call fell through to the mock catch-all, and no
 # temp file (the per-poll snapshot) outlived the block. CLAUDE_PLUGIN_ROOT is a
 # temp COPY of the plugin root, never the live checkout.
 #
@@ -626,7 +630,7 @@ SCEN_ROOT="$REGEN_ROOT" run_scenario_both "4r-dirty-regen-resolved" "$SCEN4R" \
   "\[ship\.phase7\.dirty\] regen resolved — merge committed locally
 auto-sync 1(/6)? pushed" \
   "PR is DIRTY \(merge conflict\)|ship\.phase7\.behind_exhausted|UNEXPECTED gh call"
-rm -f "$SCEN4R"
+# SCEN4R is kept for scenario 17d and removed there.
 
 # Scenario 4c — DIRTY, but the fetch that classifies it fails. A fetch outage
 # is not a conflict: the arm must report kind=fetch and let the next tick
@@ -1038,6 +1042,7 @@ gh() {
 EOF
 SCEN_ROOT='unset' run_scenario_both "13b-plugin-root-unset" "$SCEN13B" \
   "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '/scripts/sync-pr-behind\.sh': CLAUDE_PLUGIN_ROOT is unset
+CLAUDE_PLUGIN_ROOT is unset \(Claude Code/Grok: .*stop this Monitor, then re-arm .*Base directory line cut at its last /skills/, never a path built from the working directory\)
 \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
   "BEHIND detected|auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
 rm -f "$SCEN13B"
@@ -1063,6 +1068,152 @@ SCEN_ROOT="$EVIL_ROOT" run_scenario_both "13c-plugin-json-not-soleur" "$SCEN13C"
 \[ship\.phase7\.behind_no_sync\]" \
   "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|UNEXPECTED gh call"
 rm -f "$SCEN13C"
+
+# ---------------------------------------------------------------------------
+# Scenarios 17b/17c/17d — the DELIVERED text. Every other row sources the fence as
+# it sits on disk, with the token raw and the root supplied by the environment.
+# The Skill tool delivers it with the loader's literal path in place of the token,
+# and a Monitor shell does not export CLAUDE_PLUGIN_ROOT. These rows substitute the
+# token the way the loader does, into a root whose path contains a space (so an
+# unquoted $SYNC_SH / $SYNC_ROOT use word-splits), then run with a hostile decoy
+# exported (17b) or the variable unset (17c, the real Monitor shape; 17d, through
+# the DIRTY regen-resolver arm). Each must reach its success line: the loader's
+# literal wins over the environment. Scenario 13c is the implicit 17a — the same
+# decoy against the raw fence is refused. Placed after 13c: EVIL_ROOT is defined
+# there, and after 4r: SCEN4R supplies 17d's mocks.
+# ---------------------------------------------------------------------------
+[[ -d "${EVIL_ROOT:-}" ]] || { fail "EVIL_ROOT missing (17b placed before 13c?)"; exit 1; }
+[[ -s "${SCEN4R:-}" ]] || { fail "SCEN4R missing (17d placed before 4r?)"; exit 1; }
+[[ "$SKILL" != "$MIRROR" ]] || { fail "SKILL and MIRROR name the same file"; exit 1; }
+SPACED_PARENT="$(mktemp -d)"
+assert_fixture_dir "$SPACED_PARENT"
+_TMP_OWNED+=("$SPACED_PARENT")
+SPACED_ROOT="$SPACED_PARENT/plugin root"
+[[ "$SPACED_ROOT" == *' '* ]] || { fail "SPACED_ROOT lost its space"; exit 1; }
+{ mkdir -p "$SPACED_ROOT" && cp -R "$PLUGIN_COPY/." "$SPACED_ROOT/"; } \
+  || { printf 'FATAL: could not copy the plugin root into %s\n' "$SPACED_ROOT" >&2; exit 1; }
+
+# shellcheck disable=SC2016  # the loader's token, matched literally, never expanded
+ROOT_TOKEN='${CLAUDE_PLUGIN_ROOT}'
+# Pure-bash literal replace: the root carries `/` (sed's delimiter) and could carry
+# `&` or `\`, and perl would interpolate `$`. The quoted replacement is literal even
+# under bash 5.2 patsub_replacement.
+substitute_token() { # <root>  (stdin -> stdout)
+  local root="$1" text
+  text="$(cat)"
+  printf '%s\n' "${text//"$ROOT_TOKEN"/"$root"}"
+}
+count_of() { echo $(( $(grep -oF -- "$1" "$2" | wc -l) )); }
+ere_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/[].[*^$(){}+?|]/\\&/g'; }
+SUBST_BLOCK="$(mktemp)"
+_TMP_OWNED+=("$SUBST_BLOCK")
+SUBST_MIRROR="$(mktemp)"
+_TMP_OWNED+=("$SUBST_MIRROR")
+substitute_token "$SPACED_ROOT" < "$BLOCK_FILE" > "$SUBST_BLOCK"
+substitute_token "$SPACED_ROOT" < "$MIRROR_FILE" > "$SUBST_MIRROR"
+check_subst() { # <name> <raw block> <delivered block>
+  local name="$1" src="$2" dst="$3" before after roots
+  before="$(count_of "$ROOT_TOKEN" "$src")"
+  after="$(count_of "$ROOT_TOKEN" "$dst")"
+  roots="$(count_of "$SPACED_ROOT" "$dst")"
+  if [[ "$before" -ge 1 && "$after" -eq 0 && "$roots" -eq "$before" ]]; then
+    pass "[17-subst:$name] token replaced literally ($before occurrence(s), 0 left)"
+  else
+    fail "[17-subst:$name] substitution did not land: before=$before after=$after roots=$roots"
+  fi
+  if grep -qF -- "SYNC_ROOT=\"\$(set +u; printf '%s' \"$SPACED_ROOT\")\"" "$dst"; then
+    pass "[17-subst:$name] binding line carries the literal root"
+  else
+    fail "[17-subst:$name] rewritten SYNC_ROOT= binding line not found"
+  fi
+}
+check_subst ship "$BLOCK_FILE" "$SUBST_BLOCK"
+check_subst merge-pr "$MIRROR_FILE" "$SUBST_MIRROR"
+
+# Mocks: scenario 9's (17b/17c) and 4r's (17d), each preceded by a line recording
+# the CLAUDE_PLUGIN_ROOT the scenario shell actually saw, so a row that silently
+# loses its decoy or its unset root reds instead of passing on the default.
+ENV_ECHO='echo "[fixture.env] CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT-<unset>}"'
+SCEN17="$(mktemp)"
+_TMP_OWNED+=("$SCEN17")
+printf '%s\n%s\n' "$ENV_ECHO" "$SYNC_MOCKS" > "$SCEN17"
+SCEN17D="$(mktemp)"
+_TMP_OWNED+=("$SCEN17D")
+{ printf '%s\n' "$ENV_ECHO"; cat "$SCEN4R"; } > "$SCEN17D"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SPACED_ROOT/scripts/resolve-regenerable-conflicts.sh"
+DELIVERED_FORBID="$SUCCESS_FORBID|\[ship\.phase7\.precondition\]|does not name soleur"
+REGEN_FORBID="PR is DIRTY \(merge conflict\)|ship\.phase7\.behind_exhausted|UNEXPECTED gh call|\[ship\.phase7\.precondition\]|does not name soleur"
+RAN17=()
+run_delivered() { # <label> <scen-root> <expected-env-ERE> <mocks> <must-match> <forbid> <block>
+  RAN17+=("$1")
+  SCEN_ROOT="$2" run_scenario "$1" "$4" "$5
+\[fixture\.env\] CLAUDE_PLUGIN_ROOT=$3\$" "$6" "$7"
+}
+EVIL_ENV="$(ere_escape "$EVIL_ROOT")"
+[[ -n "$EVIL_ENV" ]] || { fail "ere_escape produced nothing for EVIL_ROOT"; exit 1; }
+run_delivered "17b-delivered-decoy:ship" "$EVIL_ROOT" "$EVIL_ENV" "$SCEN17" \
+  "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
+run_delivered "17b-delivered-decoy:merge-pr" "$EVIL_ROOT" "$EVIL_ENV" "$SCEN17" \
+  "\[1/60\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
+run_delivered "17c-delivered-unset:ship" unset "<unset>" "$SCEN17" \
+  "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
+run_delivered "17c-delivered-unset:merge-pr" unset "<unset>" "$SCEN17" \
+  "\[1/60\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
+run_delivered "17d-delivered-regen:ship" unset "<unset>" "$SCEN17D" \
+  "\[ship\.phase7\.dirty\] regen resolved — merge committed locally
+auto-sync 1 pushed" "$REGEN_FORBID" "$SUBST_BLOCK"
+run_delivered "17d-delivered-regen:merge-pr" unset "<unset>" "$SCEN17D" \
+  "\[ship\.phase7\.dirty\] regen resolved — merge committed locally
+auto-sync 1/6 pushed" "$REGEN_FORBID" "$SUBST_MIRROR"
+# The verdict floor counts verdicts, not which rows produced them: pin the row set.
+WANT17="17b-delivered-decoy:ship 17b-delivered-decoy:merge-pr 17c-delivered-unset:ship 17c-delivered-unset:merge-pr 17d-delivered-regen:ship 17d-delivered-regen:merge-pr"
+if [[ "${RAN17[*]}" == "$WANT17" ]]; then
+  pass "[17-rows] delivered-text row set is exactly: $WANT17"
+else
+  fail "[17-rows] delivered-text row set drifted: got '${RAN17[*]}'"
+fi
+rm -f "$SCEN17" "$SCEN17D" "$SCEN4R" "$SUBST_BLOCK" "$SUBST_MIRROR"
+
+# Prose pins: an agent that takes the fence from the file on disk (raw token) is
+# told where the root may come from. Scoped to the paragraph directly above each
+# fence (the last lines before its start marker), so the notice cannot drift away
+# from the fence or into a comment inside it; single-quoted so the harness never
+# expands the token. A text search cannot rule out a reworded meaning — the
+# fragments start at their verbs to make an inversion edit them.
+prose_region() { # <file>: the 6 lines immediately before the fence start marker
+  awk '/phase-7-poll-block:start/ { exit } { buf[NR % 6] = $0; n = NR }
+       END { for (i = n - 5; i <= n; i++) if (i > 0) print buf[i % 6] }' "$1"
+}
+PROSE_FRAGS=(
+  'The plugin root is fixed only in delivered text'
+  "the root for this session is \`$ROOT_TOKEN\`"
+  'Paste the fence from the delivered text, or prefix the Monitor command with `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` using that path, quoted.'
+  "The root is ONLY that printed path or a soleur skill's \`Base directory for this skill:\` line (Skill tool) cut at its last \`/skills/\`"
+  'never a path built from the working directory'
+  'never guess'
+)
+PROSE_SEEN=()
+check_prose() { # <name> <SKILL.md> [extra fragment...]
+  local name="$1" md="$2" region frag
+  shift 2
+  PROSE_SEEN+=("$name:$(basename "$(dirname "$md")")")
+  region="$(prose_region "$md")"
+  for frag in "${PROSE_FRAGS[@]}" "$@"; do
+    if [[ "$region" == *"$frag"* ]]; then
+      pass "[17-prose:$name] carries: $frag"
+    else
+      fail "[17-prose:$name] missing above the fence: $frag"
+    fi
+  done
+}
+check_prose ship "$SKILL" 'CLAUDE_PLUGIN_ROOT is unset` and BEHIND auto-sync off'
+check_prose merge-pr "$MIRROR"
+# Each check must read the file its label names (a loop over "$SKILL" "$SKILL" would not).
+if [[ "${PROSE_SEEN[*]}" == "ship:ship merge-pr:merge-pr" ]]; then
+  pass "[17-prose] both SKILL.md files checked"
+else
+  fail "[17-prose] prose checks drifted: got '${PROSE_SEEN[*]}'"
+fi
 
 # ---------------------------------------------------------------------------
 # Scenario 14 — a pasted `#4387` (or any non-digit PR) is refused before the poll
@@ -1419,7 +1570,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=380
+MIN_VERDICTS=451
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

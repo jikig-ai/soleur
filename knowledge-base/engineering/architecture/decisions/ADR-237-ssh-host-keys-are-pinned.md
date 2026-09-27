@@ -56,9 +56,10 @@ Terraform SSH client negotiates ECDSA-P256.
    replace re-mints the key with the host; the birth job mints it. The public half is published as a
    Terraform-owned Doppler `prd` secret, `GIT_DATA_SSH_HOST_KEY` (`doppler_secret.git_data_ssh_host_key`,
    written only after the server exists). When the apply run completes, `git-data-pin-redeploy.yml`
-   (`workflow_run`, job `redeploy`) forces a `web-platform-release` if a birth or replace job **and
-   its `Terraform apply` step (`id: apply`)** both succeeded, and waits for a newer run's deploy
-   to succeed, so the app loads the new pin within about one release cycle. The job conclusion alone
+   (`workflow_run`; job `gate` grades the source run, job `redeploy` dispatches) forces a
+   `web-platform-release` if a birth or replace job **and its `Terraform apply` step (`id: apply`)**
+   both succeeded and the job was not carried over from an earlier attempt (#8760), and waits for a
+   newer run's deploy to succeed, so the app loads the new pin within about one release cycle. The job conclusion alone
    is not evidence of an apply: a `plan_only` rehearsal ends `success` with the apply step skipped,
    so it never redeploys (#8710, amended 2026-09-24). The apply run prints the
    new fingerprint to its job summary and log; a failed redeploy emails ops. Nothing outside Terraform copies the pin, and no per-PR `-target`
@@ -87,9 +88,9 @@ Terraform SSH client negotiates ECDSA-P256.
   triggers `web-platform-release` through `git-data-pin-redeploy.yml`: `workflow_run` on the apply
   workflow's completion (any branch, dispatched runs only; birth and replace are dispatch-only
   targets), gated by `.github/actions/dispatch-web-redeploy/source-run-gate.sh`, which reads the
-  apply step's conclusion rather than the job's, so a `plan_only` rehearsal never redeploys; plus `workflow_dispatch` with an optional `source_run_id` for recovery. It runs
+  apply step's conclusion rather than the job's, so a `plan_only` rehearsal never redeploys; a job carried over from an earlier attempt by a partial re-run is left to that attempt's follower (#8760); and only the follower's `redeploy` job holds the redeploy lock, so a follower that does not redeploy cannot cancel a pending one (#9085); plus `workflow_dispatch` with an optional `source_run_id` for recovery. It runs
   `.github/actions/dispatch-web-redeploy/track.sh` with `actions: write` and no Terraform secrets
-  (only the two ops emails' Resend key), outside the apply lock. C4 does not model CI-to-CI edges, so
+  (only the three ops emails' Resend key), outside the apply lock. C4 does not model CI-to-CI edges, so
   this ADR is where it is recorded. #8211's same-version redeploy is the intended replacement (DC-2 in
   the feature's `decision-challenges.md`).
 - **Coupled to a display name.** `workflow_run` matches the apply workflow by its `name:` string
