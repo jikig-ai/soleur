@@ -564,8 +564,7 @@ After this change only on-main tags are candidates, a strict subset of what was 
 
 **If this leaks, the user's workflow is exposed via:** no path. The change reads git tags and history and writes nothing new. The existing App-token push path is unchanged.
 
-**Brand-survival threshold:** none
-
+- **Brand-survival threshold:** none
 - threshold: none, reason: the diff touches `apps/web-platform/infra/` only in a CI test file (AC6), and it narrows the bump's candidate set to reviewed on-`main` commits. No runtime, host, credential or data surface changes, and this PR redeploys nothing.
 
 ## Acceptance Criteria
