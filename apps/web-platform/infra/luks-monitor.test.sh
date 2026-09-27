@@ -466,7 +466,20 @@ fi
 # The baked-DSN path is a fixed host path with no seam, so on a host that HAS a readable
 # /etc/default/luks-monitor the no-DSN case is unreachable and is reported as skipped.
 # ===========================================================================
-EM_DIR="$RUN_SCRATCH/emit-skip"; mkdir -p "$EM_DIR/bin"
+# The canonical fixture-dir guard (byte-identical to every tracked copy; fixture-dir-operand-assert).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+EM_DIR="$RUN_SCRATCH/emit-skip"
+assert_fixture_dir "$EM_DIR"
+mkdir -p "$EM_DIR/bin"
 cat > "$EM_DIR/bin/logger" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$EM_LOG"
@@ -486,6 +499,7 @@ chmod +x "$EM_DIR"/bin/*
 EM_FAKE_DSN="https://0123456789abcdef0123456789abcdef@o0.ingest.example/0"
 # shellcheck disable=SC2016  # the bash -c body expands $EMIT in the CHILD, by design
 em_run() {
+  assert_fixture_dir "$EM_DIR"
   : > "$EM_DIR/logger.log"; : > "$EM_DIR/calls.log"
   EM_OUT="$(
     env -u SOLEUR_SENTRY_DSN -u WORKSPACES_LUKS_LOG_TAG "$@" \
