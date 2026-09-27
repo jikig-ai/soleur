@@ -49,7 +49,9 @@ each one a property the guards named but did not enforce:
 - **Writer:** read `PIN_TAG` as the max over *both* files. Defer only when the target is newer
   than the signed tag and not already pinned. Every other registry failure is an error. Never
   tell anyone to delete a merged tag.
-- **Checker:** add AC6's own shallow arm (CI FAIL, local SKIP). Pin every write of
+- **Checker:** add AC6's own shallow-or-truncated arm (CI FAIL, local SKIP). It reads the walk's stderr
+  like the writer's `walk_err`; the ship-gate advisor caught that the first version mirrored only the
+  shallow half. Pin every write of
   `LATEST_TAG` (exactly one), each pin assert as a whole line under `assert "`, and both CI
   fail-arms as literal `"false"`. Give the dedicated-host drift message the same
   "do NOT bump down" branch.

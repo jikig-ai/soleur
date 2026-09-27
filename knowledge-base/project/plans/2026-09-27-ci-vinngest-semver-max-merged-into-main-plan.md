@@ -572,13 +572,13 @@ After this change only on-main tags are candidates, a strict subset of what was 
 - [x] **AC1.** The writer resolves `TARGET` with `git -C "$REPO_DIR" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null`, followed by the unchanged `sed | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true` stages.
   - `grep -c "tag --merged HEAD --list 'vinngest-v\*'" .github/scripts/bump-inngest-bootstrap-pin.sh` = 1.
   - The shallow check's `rev-parse --is-shallow-repository` line precedes the `TARGET=` line. Verify with `grep -n` ordering.
-- [x] **AC2.** AC6 uses the identical block on `git -C "$SCRIPT_DIR"`. Guard 1's byte-equality row is green. `grep -c "tag --merged HEAD --list 'vinngest-v\*'" apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` = 1.
+- [x] **AC2.** AC6 uses the identical block on `git -C "$SCRIPT_DIR"`. Guard 1's byte-equality row is green. `grep -c "tag --merged HEAD --list 'vinngest-v\*'" apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` = 2: the selector, plus the walk-stderr pre-read that mirrors the writer's `walk_err` (amended at ship, 2026-09-27).
 - [x] **AC3.** `bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh` ends `Results: <N> pass, 0 fail`, and `MIN_ASSERTIONS` is raised to exactly `<N>`.
   - The run includes the Guard 1 dispatch and equality rows.
   - It includes every pre-existing `g1.*`/`g1b.*`/`g2*`/`g2b.*` row, with the Phase 1 rewrites to B1, B2, B3, B7, B7a, B8, B12 and B13.
   - It includes the new B9b, B20 and B21.
   - The old `g2.parity:*` literal rows are gone: `grep -c "g2.parity:" <suite>` = 0.
-- [ ] **AC4.** The PR body records one line of RED-first evidence: the FAIL lines from the suite run on the Phase-1-only commit.
+- [x] **AC4.** The PR body records one line of RED-first evidence: the FAIL lines from the suite run on the Phase-1-only commit.
 - [x] **AC5.** Selection on the real repo is unchanged at merge:
   - `git tag --merged origin/main --list 'vinngest-v*' | sed 's/^vinngest-//' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1` prints `v1.1.40`.
   - `git show origin/main:apps/web-platform/infra/cloud-init.yml | grep -oE 'soleur-inngest-bootstrap:v[0-9.]+' | sort -u` prints `soleur-inngest-bootstrap:v1.1.40`. The same holds for `cloud-init-inngest.yml`.
@@ -602,7 +602,7 @@ After this change only on-main tags are candidates, a strict subset of what was 
   - `(cd apps/web-platform && npx vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts)` passes. The runner comes from `apps/web-platform/package.json` `"test": "vitest"`.
 - [x] **AC10.** `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-27-ci-vinngest-semver-max-merged-into-main-plan.md` exits 0.
 - [ ] **AC11.** CI: `deploy-script-tests` (all legs) and `pr-quality-guards` are green on the PR. No workflow BEHAVIOUR changes: any `.github/workflows` diff is comment-only (amended at review, 2026-09-27 — stale selector comments were corrected), verified by parsed-YAML equality against the merge-base.
-- [ ] **AC12.** The first line of the PR body reads: "Merging this alone mutates no production state: no pin moves (main already pins the merged-max `v1.1.40`), no Terraform/`paths:`-triggered apply fires, and the new selection first runs on the next `vinngest-v*` publish."
+- [x] **AC12.** The first line of the PR body reads: "Merging this alone mutates no production state: no pin moves (main already pins the merged-max `v1.1.40`), no Terraform/`paths:`-triggered apply fires, and the new selection first runs on the next `vinngest-v*` publish."
 
 ## Domain Review
 

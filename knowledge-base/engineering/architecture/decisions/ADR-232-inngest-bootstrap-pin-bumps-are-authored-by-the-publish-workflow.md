@@ -285,7 +285,7 @@ kept as the dated record of the interim state it describes. Three mechanisms
 carry the change:
 
 - History visibility is refused before resolution (§7): a shallow checkout,
-  or any stderr from the `--merged` walk; AC6 refuses a shallow checkout too.
+  or any stderr from the `--merged` walk; AC6 refuses both too.
 - One downgrade refusal replaces the legacy-off-main-pin and deleted-pin
   refusals, and it reads the higher of the two files' pins.
 - The crane-failure deferral fires only for a target newer than the signed
