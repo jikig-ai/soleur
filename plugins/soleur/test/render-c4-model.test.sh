@@ -141,6 +141,10 @@ fi
 _stub2="$SANDBOX/stubbin-noviews"; assert_fixture_dir "$_stub2"; mkdir -p "$_stub2"
 {
   printf '#!/usr/bin/env bash\n'
+  # The stub also verifies the flag REACHES the invocation — a renderer that
+  # lost --no-use-dot from the argv fails here even if the text survives
+  # somewhere in the file (the census's presence pin can't prove carriage).
+  printf '[[ "$*" == *--no-use-dot* ]] || { echo "missing --no-use-dot" >&2; exit 3; }\n'
   printf 'out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && out="$2"; shift; done\n'
   printf 'printf %s | tee "$out" >/dev/null\n' "'{\"elements\":{\"a\":{}},\"relations\":{},\"views\":{}}'"
 } > "$_stub2/npx"
@@ -154,11 +158,44 @@ if [[ "$_rc" -ne 0 && "$_out" == *"no views"* && ! -e "$_zv/$DIAG/model.likec4.j
 else
   fail "zero-view model slipped through: rc=$_rc published=$([[ -e "$_zv/$DIAG/model.likec4.json" ]] && echo yes || echo no) — $_out"
 fi
+# Attribution rows must hold ONLY when the refusal actually fired — asserting
+# on $_out unconditionally passes vacuously when case 1's refusal didn't run.
+if [[ "$_rc" -ne 0 && "$_out" == *"no views"* ]]; then
+  CASES_RUN=$((CASES_RUN + 1))
+  if [[ "$_out" != *"Fix the .c4 source"* ]]; then
+    pass "the zero-view refusal does not blame the .c4 source"
+  else
+    fail "zero-view refusal misdirects to a source fix: $_out"
+  fi
+  CASES_RUN=$((CASES_RUN + 1))
+  # A refusal with no remediation strand is a dead end for an agent — the
+  # message must name what to DO, not only what not to do.
+  if [[ "$_out" == *"retry"* ]]; then
+    pass "the zero-view refusal names a next action (retry/reproduce)"
+  else
+    fail "zero-view refusal is a dead end (no remediation line): $_out"
+  fi
+fi
+
+# ── Elements AND views empty: the ELEMENT gate must fire, not the views gate ─
+# A swapped gate order would still refuse but blame OUR layout for a source
+# defect — the wrong remediation. The refusal must name empty/degenerate AND
+# the source fix.
+_stub3="$SANDBOX/stubbin-empty"; assert_fixture_dir "$_stub3"; mkdir -p "$_stub3"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && out="$2"; shift; done\n'
+  printf 'printf %s | tee "$out" >/dev/null\n' "'{\"elements\":{},\"relations\":{},\"views\":{}}'"
+} > "$_stub3/npx"
+chmod +x "$_stub3/npx"
+_em="$SANDBOX/emptymodel2"; assert_fixture_dir "$_em"; mkdir -p "$_em/$DIAG"
+printf 'model {}\n' > "$_em/$DIAG/m.c4"
+_rc=0; _out="$(PATH="$_stub3:$PATH" bash "$RENDERER" --root "$_em" 2>&1)" || _rc=$?
 CASES_RUN=$((CASES_RUN + 1))
-if [[ "$_out" != *"Fix the .c4 source"* ]]; then
-  pass "the zero-view refusal does not blame the .c4 source"
+if [[ "$_rc" -ne 0 && "$_out" == *"empty/degenerate"* && "$_out" == *"Fix the .c4 source"* && "$_out" != *"no views"* ]]; then
+  pass "an all-empty model is refused as a SOURCE defect (element gate precedes the views gate)"
 else
-  fail "zero-view refusal misdirects to a source fix: $_out"
+  fail "all-empty model attribution wrong (gate order?): rc=$_rc — $_out"
 fi
 
 # ── Every extension likec4 compiles counts as a source (.c4, .likec4, .like-c4) ─────────────
@@ -246,7 +283,7 @@ fi
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
-_min_cases=21
+_min_cases=23
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

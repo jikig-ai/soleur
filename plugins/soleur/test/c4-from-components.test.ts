@@ -235,6 +235,14 @@ describe("assessRender — the validation gates", () => {
     expect(v.reason).toBe("zero-views");
   });
 
+  it("an empty model STAYS empty-model even with no views — element gate fires first", () => {
+    // The element check precedes the views check, so a swapped order would
+    // mislabel a source defect as a layout failure. Pin the ordering.
+    const v = assessRender({ ...clean, ...g(0), elementCount: 0, relationshipCount: 0, viewCount: 0 });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toBe("empty-model");
+  });
+
   it("reports failed when the diagnostic stream carries a source fault", () => {
     for (const diagnostics of [
       "Invalid model.c4\n",

@@ -11,10 +11,13 @@
 // state as `degraded`: the docs are the defect, not the run.
 //
 // VALIDATION MIRRORS plugins/soleur/scripts/render-c4-model.sh (its DIAG_RE and
-// element-count gates), NOT c4-render.ts.
-// The two in-repo precedents deliberately disagree. `c4-render.ts` gates on
-// element count only, reasoning that likec4's stderr wording drifts across patch
-// versions — correct for a RUNTIME save path that cannot pin the CLI. This
+// element-count gates), NOT c4-render.ts — except the #8861 views gate, which
+// all three writers share identically (plain-object `views` count > 0).
+// The two in-repo precedents deliberately disagree on the DIAGNOSTIC gate:
+// `c4-render.ts` refuses to key on likec4 stderr, reasoning that its wording
+// drifts across patch versions — correct for a RUNTIME save path that cannot
+// pin the CLI (its element/view COUNT gates are identical to this module's).
+// This
 // producer pins `likec4@1.50.0` (asserted by a drift guard against both
 // precedents), so the wording is fixed and both gates are safe. That pin is load
 // bearing: if it moves, the diagnostic gate is the thing that breaks.
@@ -435,7 +438,8 @@ export function generateViewPage(viewId = "generatedComponents"): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Count elements and relationships in a rendered `model.likec4.json`.
+ * Count elements, relationships, and views in a rendered `model.likec4.json`.
+ * `views` feeds `assessRender`'s zero-views gate (#8861).
  *
  * ‼️ The relationship key is `relations`, NOT `relationships`. Reading the wrong
  * key returns `undefined` -> 0, which makes `assessRender` report EVERY corpus as
@@ -516,10 +520,19 @@ export function assessRender(input: {
     return { status: "failed", reason: "empty-model", detail: "likec4 produced an empty/degenerate model" };
   }
   if (input.viewCount === 0) {
+    // A layout failure with no diagnostic the source-fault arm could claim —
+    // the likec4 output tail is the only evidence the agent gets, so carry a
+    // trimmed copy on the wire (the marker collapses whitespace anyway).
+    const tail = diagnostics
+      .split("\n")
+      .filter(Boolean)
+      .slice(-5)
+      .join(" | ")
+      .slice(0, 300);
     return {
       status: "failed",
       reason: "zero-views",
-      detail: "likec4 produced a model with elements but no views — a layout failure, not a source fault",
+      detail: `likec4 produced a model with elements but no views — a layout failure, not a source fault${tail ? ` — last output: ${tail}` : ""}`,
     };
   }
   if (input.generatedRelationships === 0) {
