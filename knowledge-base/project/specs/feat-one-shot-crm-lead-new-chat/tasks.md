@@ -15,9 +15,9 @@ Derived from `knowledge-base/project/plans/2026-09-27-feat-crm-new-lead-chat-pla
 - [ ] 2.1 Export `CRM_CONTACT_UPSERT_FIELDS` from `server/crm/crm-tools.ts` and build the upsert schema from it
 - [ ] 2.2 Add `server/crm-lead-directive.ts` (`CRM_LEAD_DIRECTIVE`)
 - [ ] 2.3 Allow `crm-lead` as a mode-flag context type in `server/context-validation.ts`
-- [ ] 2.4 Stamp `context_path` `crm-lead/<id>.mode` on create and rehydrate it on later turns in `server/ws-handler.ts`
-- [ ] 2.5 Replace the router baseline when `crmLead` is set in `buildSoleurGoSystemPrompt`
-- [ ] 2.6 Register `buildCrmTools` only when `crmLead` is set, and set assistant message `leader_id` to `cro` at that persist site only (`server/cc-dispatcher.ts`)
+- [ ] 2.4 Stamp `context_path` `crm-lead/<id>.mode` on create, copy it onto `session.contextPath`, and rehydrate it on both the cache-hit path and the row-read path (`server/ws-handler.ts`)
+- [ ] 2.5 Replace the router baseline when `crmLead` is set in `buildSoleurGoSystemPrompt`, keeping `persona` `command_center`
+- [ ] 2.6 Register `buildCrmTools` only when `crmLead` is set, and set `leader_id` to `cro` inside `buildRow` only (`server/cc-dispatcher.ts`)
 - [ ] 2.7 Add the New lead link to the CRM header and empty state (`components/crm/crm-surface.tsx`)
 - [ ] 2.8 Map `mode=crm-lead` to `{ type: "crm-lead" }` on the chat page without a KB fetch
 - [ ] 2.9 Amend ADR-102 with the Concierge Query writer note. Do not add an ADR ordinal or edit `.c4`

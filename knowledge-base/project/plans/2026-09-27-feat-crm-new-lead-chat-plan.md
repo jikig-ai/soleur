@@ -19,6 +19,24 @@ No spec.md on this branch. Spec lacks valid lane: — defaulted to cross-domain 
 
 "Lead" has no glossary entry. In this plan it means a new `beta_contacts` row (the product's contact/opportunity head). It is not a second entity.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-27
+**Sections enhanced:** 4 (mode persistence, assistant leader id, precedent, negative-claim check)
+**Research agents used:** none spawned. Grok subagent depth is 1, so the deepen passes ran in this process. Reviewed-Coverage: sequential-fallback.
+
+### Key Improvements
+
+1. The in-memory `session.contextPath` must be the stamped `crm-lead/<id>.mode` value. A cache hit treats `null` as defined and never re-reads the row, so a reaped Query would rebuild the prompt without the mode.
+2. The only assistant `leader_id` write is `buildRow` in `cc-dispatcher.ts`. Other `CC_ROUTER_LEADER_ID` uses are log attribution, not the bubble.
+3. Keep `persona: "command_center"`. A new persona value is not in the permission-callback union. The CRO text is a prompt flag beside that persona, the same way `routineAuthoring` is.
+
+### New Considerations Discovered
+
+- Verified live: #3270 CLOSED (FLAG_CC_SOLEUR_GO removed), #5402 CLOSED (routine-authoring tab), #6172 OPEN, #6262 OPEN, #3243 OPEN.
+- `agentPath` is referenced only in `apps/web-platform/server/domain-leaders.ts`. The web prompt does not load `cro.md`.
+- Halt gates passed: User-Brand Impact, Observability, Guard Contract lint, no PAT-shaped token, committed `.pen`. No new store, no downtime DDL, no SSH/timeout trigger.
+
 ## Overview
 
 The read-only CRM board at `/dashboard/crm` already exists on `origin/main`. It tells the operator to talk to the CRO, then links to `/dashboard/chat`, which resumes the last thread. A new chat whose job is entering a contact never starts, and the live Concierge (the only path for a new `start_session`, ADR-022) is not given the existing `crm_*` tools or a field list.
@@ -146,9 +164,9 @@ No spec.md. The operator text assumed a CRM/CRO screen. Reality:
 ### Phase 3: Wire the mode through the live chat
 
 - `server/context-validation.ts`: add `crm-lead` to both allow-sets (mode flag, no path required).
-- `server/ws-handler.ts`: on create, when context type is `crm-lead`, set `context_path` to `crm-lead/<id>.mode`. In the chat-case rebuild, if `context_path` matches that prefix, pass `{ type: "crm-lead" }` and skip KB resolution. Thread `crmLead` the way `routineAuthoring` is threaded.
-- `server/soleur-go-runner.ts`: `buildSoleurGoSystemPrompt` takes `crmLead`. When true, return the CRO directive instead of the router baseline (support-persona shape). Do not also append "Dispatch via /soleur:go".
-- `server/cc-dispatcher.ts`: when `crmLead`, spread `buildCrmTools({ userId })` into the existing `soleur_platform` server. Pass `crmLead` into the prompt builder. At the assistant-message persist site only, set `leader_id` to `cro` when `crmLead`. Leave other `CC_ROUTER_LEADER_ID` sites unchanged. Grep `leader_id: CC_ROUTER_LEADER_ID` and classify each site in the PR; only the user-visible assistant row moves.
+- `server/ws-handler.ts`: on create, when context type is `crm-lead`, set `context_path` to `crm-lead/<id>.mode` and set `session.contextPath` to that same string (not only the column). The chat-case cache treats a present `session.contextPath` of `null` as a hit and skips the row read (`session.contextPath !== undefined`). In both the cache-hit path and the row-read path, a `crm-lead/<id>.mode` value rebuilds `{ type: "crm-lead" }` and skips KB resolution. Thread `crmLead` the way `routineAuthoring` is threaded.
+- `server/soleur-go-runner.ts`: `buildSoleurGoSystemPrompt` takes `crmLead` beside `persona: "command_center"`. When `crmLead` is true, return the CRO directive instead of the router baseline (same early-return shape as `persona === "support"`). Do not also append "Dispatch via /soleur:go". Do not add a persona enum value. `permission-callback.ts` only special-cases `"support"`.
+- `server/cc-dispatcher.ts`: when `crmLead`, spread `buildCrmTools({ userId })` into the existing `soleur_platform` server. Pass `crmLead` into the prompt builder. The only `leader_id:` assignment is `buildRow` (`leader_id: CC_ROUTER_LEADER_ID`). Pass the flag into `buildRow` and set `cro` there. Leave every `leaderId: CC_ROUTER_LEADER_ID` log site unchanged.
 
 ### Phase 4: CRM entry
 
@@ -289,9 +307,23 @@ discoverability_test:
 - An operator on the CRM board can start a new CRO chat in one action.
 - A reviewer can point at `CRM_CONTACT_UPSERT_FIELDS` as the only field list.
 
+## Precedent diff
+
+Routine authoring (`#5402`) is the mode-flag precedent. Side by side:
+
+| | Routine authoring | This plan |
+|---|---|---|
+| Context type | `routine-authoring`, no path | `crm-lead`, no client path |
+| Prompt | Appended to the router baseline | Replaces the router baseline, because the baseline says to dispatch `/soleur:go` |
+| Tools | Directive names `routine_run`; registration is the legacy runner | `buildCrmTools` registered on the Concierge server for this flag only |
+| Persistence | No `context_path`, so a cold Query loses the flag | Server-stamped per-id `context_path`, copied onto `session.contextPath` |
+| Persona | `command_center` | `command_center` plus `crmLead` |
+
+No new SQL function. The write RPCs stay the `SECURITY DEFINER` functions already in `126_beta_crm.sql`. This plan does not change their `search_path` or grants.
+
 ## Dependencies & Risks
 
-- The long-lived Query bakes tools at cold start. Forgetting the `context_path` rehydrate makes reconnect drop the tools. Phase 1 tests that path before the UI.
+- The long-lived Query bakes tools at cold start. Forgetting either the column stamp or the `session.contextPath` copy makes a reaped Query drop the tools while the socket cache still looks warm. Phase 1 tests both.
 - `cc-dispatcher.ts` is large (#3243). Touch only the tool-build block, the prompt flag, and the assistant `leader_id` persist.
 - `?context=` and `?mode=crm-lead` together are undefined. KB wins; do not invent a combined mode.
 - Grok subagent depth is 1, so domain leaders and the review panel were not separate processes. See Reviewed-Coverage.
