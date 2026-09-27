@@ -294,7 +294,8 @@ host. Read the amendment before relying on any bullet below:
   zot answers on the host's **private IP** — never loopback, because zot binds `0.0.0.0` and a
   loopback probe answers on a host holding no private NIC (#6400's blindness). It bakes the URL via
   `templatefile`, so `ZOT_HEARTBEAT_URL` still has zero consumers by design; that secret is reserved
-  for the off-host probe.
+  for the off-host probe. (Superseded: #6438 B3 dropped the reservation, the off-host role went to
+  `web_zot_consumer`, and #8754's per-merge apply deletes the orphaned secret from Doppler prd.)
 
   > **Superseded 2026-09-24:** `registry_prd` is armed. Better Stack reads `status=up paused=false`
   > (re-measured 2026-09-24); `zot-registry.tf`'s comment dates the arming to 2026-07-16. The paragraph

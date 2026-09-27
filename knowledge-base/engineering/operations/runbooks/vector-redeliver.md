@@ -53,7 +53,7 @@ after the merge.
    > # ["main"]
    > ```
    >
-   > `github_repository_environment_deployment_policy.web_platform_infra_apply_main` does still appear as a pending CREATE in the push plan, but that is a **state** fact, not a **liveness** one: the policy exists at GitHub and Terraform has not yet adopted it. The two are easy to conflate and the difference is the whole F7 protection — read the API, never the plan, when the question is "is the pin protecting me right now".
+   > Until #8754 the policy appeared as a pending CREATE in the push plan (Terraform had not adopted it; see the ADOPTED BY IMPORT note in `web-host-birth-environment.tf`), but that was a **state** fact, not a **liveness** one: the policy exists at GitHub and Terraform has not yet adopted it. The two are easy to conflate and the difference is the whole F7 protection — read the API, never the plan, when the question is "is the pin protecting me right now".
 
 2. **No other web-1 mutation in flight.** This job takes the `web-1-swap` mutex, so GitHub will queue it — but a queued job holds the mutex for its whole run, and this one also holds an SSH bridge. Check:
 
@@ -226,7 +226,7 @@ Verify **off-host**. No SSH (`hr-no-ssh-fallback-in-runbooks`).
 
 ## Known residual
 
-- **A successful dispatch un-wedges the push apply.** The journald replace is currently the only destroy in the pending plan, so once this arm applies it the push guard's `destroy_count` drops to 0 and **the next merge touching a `paths:`-matching file applies the four pending creates plus the `cloudflare_bot_management` update unattended**, by whoever merges it. Those resources belong to #7462 / PR #7516 / #7539. Check what is pending before dispatching, and know that this is the release path for them unless one of those PRs lands first.
+- **A successful dispatch un-wedges the push apply.** The journald replace is currently the only destroy in the pending plan, so once this arm applies it the push guard's `destroy_count` drops to 0 and **the next merge touching a `paths:`-matching file applies the four pending creates plus the `cloudflare_bot_management` update (gone once #8754 PR-B has applied) unattended**, by whoever merges it. Those resources belong to #7462 / PR #7516 / #7539. Check what is pending before dispatching, and know that this is the release path for them unless one of those PRs lands first.
 
 - **A dated future brick.** This arm is clean today only because `hcloud_server.web` carries `lifecycle { ignore_changes = [user_data, ssh_keys, image, placement_group_id] }`, which `server.tf` documents as a temporary GA deferral ("REMOVE this entry in the GA maintenance-window PR as its FIRST diff"). When `placement_group_id` leaves that list, web-1 plans a pending in-place update on every dispatch, `vector_out_of_scope_changes` reads ≥ 1 forever, and this arm refuses permanently — a gate that always fails is an outage, not a tripwire. Revisit the allow-set in the same PR that removes the lifecycle entry.
 
