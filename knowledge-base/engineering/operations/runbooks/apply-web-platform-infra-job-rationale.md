@@ -204,6 +204,12 @@ gives the delivery its own dispatch, scoped to that one address.
      understating a security control is the more dangerous direction of that error. When
      the question is whether the pin protects a dispatch RIGHT NOW, read the environments
      API, never the terraform plan.
+     UPDATE (#8754): the adoption now exists. The resource moved to
+     `github_repository_environment_deployment_policy.web_platform_infra_apply_main_adopted`,
+     an `import` block adopts live policy id 49861552 into it, and a `removed { destroy =
+     false }` block forgets the phantom `…:0` entry the old address kept re-recording. Both
+     addresses are on the per-merge `-target` list, because an import or a forget is planned
+     only for a targeted address. The rule above still holds: read the API for liveness.
 
 ── STEP ORDER IS LOAD-BEARING ─────────────────────────────────────────────────────────────
 The CF Tunnel SSH bridge MUST precede the plan. It writes TF_VAR_ci_ssh_private_key into

@@ -70,8 +70,34 @@ resource "github_repository_environment" "web_platform_infra_apply" {
 # that the environment uses a named list; without this resource the list is EMPTY, which
 # GitHub treats as "no branch may deploy" — the opposite failure from omitting the block
 # entirely, and just as wrong. Both halves are required to reproduce live state.
-resource "github_repository_environment_deployment_policy" "web_platform_infra_apply_main" {
+#
+# ADOPTED BY IMPORT, UNDER A NEW ADDRESS (#8754). The live `main` policy (id 49861552) was
+# created outside Terraform, so the provider's create collided with it: every merge apply
+# "created" it, recorded the phantom id `soleur:web-platform-infra-apply:0`, and the next
+# refresh dropped that entry again. That is the perpetual `will be created` line in every
+# drift report since #7316. An `import` into the OLD address would be skipped whenever a
+# merge apply had just re-recorded the phantom there, so the resource moves to a new address,
+# the import adopts the live id into it, and the `removed` block below forgets the phantom.
+# `destroy = false` makes that forget a state-only drop with no API call; without it the block
+# would plan a DELETE against the environment that gates host birth.
+# Both addresses are `-target`ed in apply-web-platform-infra.yml: an import or a removed block
+# is planned only when its address is targeted. Once the import has applied, the `import` and
+# `removed` blocks and the old `-target` are one-shot scaffolding (removal tracked on #9060).
+resource "github_repository_environment_deployment_policy" "web_platform_infra_apply_main_adopted" {
   repository     = "soleur"
   environment    = github_repository_environment.web_platform_infra_apply.environment
   branch_pattern = "main"
+}
+
+import {
+  to = github_repository_environment_deployment_policy.web_platform_infra_apply_main_adopted
+  id = "soleur:web-platform-infra-apply:49861552"
+}
+
+removed {
+  from = github_repository_environment_deployment_policy.web_platform_infra_apply_main
+
+  lifecycle {
+    destroy = false
+  }
 }

@@ -54,6 +54,8 @@ after the merge.
    > ```
    >
    > `github_repository_environment_deployment_policy.web_platform_infra_apply_main` does still appear as a pending CREATE in the push plan, but that is a **state** fact, not a **liveness** one: the policy exists at GitHub and Terraform has not yet adopted it. The two are easy to conflate and the difference is the whole F7 protection — read the API, never the plan, when the question is "is the pin protecting me right now".
+   >
+   > **Update (#8754):** Terraform now adopts the policy. It lives at `github_repository_environment_deployment_policy.web_platform_infra_apply_main_adopted`, imported from live id 49861552, and the old address is a `removed { destroy = false }` forget, so the pending CREATE stops appearing once that merge apply has run. The rule stands: read the API, not the plan.
 
 2. **No other web-1 mutation in flight.** This job takes the `web-1-swap` mutex, so GitHub will queue it — but a queued job holds the mutex for its whole run, and this one also holds an SSH bridge. Check:
 

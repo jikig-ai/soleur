@@ -19,14 +19,26 @@
 # rotation cron; the consumer logs notAfter at startup + a single Better Stack
 # cert-expiry monitor covers it (see Observability). "Contract before consumer":
 # this material ships in 3.A so the proxy server/client in 3.B can load it.
+#
+# COUNT-GATED ON var.host_proxy_tls_enabled (#8754, ADR-118 amendment). The four
+# resources below were declared ahead of the rollout and never applied: no workflow
+# targets them, so they sat as four `will be created` lines in every drift report.
+# Applying them before the multi-host flip would be worse than leaving them: with
+# SOLEUR_PROXY_BIND unset, a delivered PROXY_TLS_KEY/CERT makes createProxyServer
+# report a silent fallback on every container start. So they exist in the graph only
+# once the flip sets the variable (default false), and every reference is `[0]`.
 
 resource "tls_private_key" "proxy_server" {
+  count = var.host_proxy_tls_enabled ? 1 : 0
+
   algorithm   = "ECDSA"
   ecdsa_curve = "P256"
 }
 
 resource "tls_self_signed_cert" "proxy_server" {
-  private_key_pem = tls_private_key.proxy_server.private_key_pem
+  count = var.host_proxy_tls_enabled ? 1 : 0
+
+  private_key_pem = tls_private_key.proxy_server[0].private_key_pem
 
   subject {
     common_name  = "soleur-web-proxy"
@@ -55,10 +67,12 @@ resource "tls_self_signed_cert" "proxy_server" {
 # the 3.B session-router's TLS server (https.createServer / WebSocketServer
 # noServer).
 resource "doppler_secret" "proxy_tls_key" {
+  count = var.host_proxy_tls_enabled ? 1 : 0
+
   project    = "soleur"
   config     = "prd"
   name       = "PROXY_TLS_KEY"
-  value      = tls_private_key.proxy_server.private_key_pem
+  value      = tls_private_key.proxy_server[0].private_key_pem
   visibility = "masked"
 }
 
@@ -66,9 +80,11 @@ resource "doppler_secret" "proxy_tls_key" {
 # from one source). Serves double duty: the TLS server's cert AND the proxying
 # client's pinned trust anchor (`ca: [PROXY_TLS_CERT]`, rejectUnauthorized:true).
 resource "doppler_secret" "proxy_tls_cert" {
+  count = var.host_proxy_tls_enabled ? 1 : 0
+
   project    = "soleur"
   config     = "prd"
   name       = "PROXY_TLS_CERT"
-  value      = tls_self_signed_cert.proxy_server.cert_pem
+  value      = tls_self_signed_cert.proxy_server[0].cert_pem
   visibility = "masked"
 }

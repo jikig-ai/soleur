@@ -47,10 +47,20 @@ from the applied digest.
    zot. Its job summary prints `IMAGE@DIGEST`.
 
 3. **Promote the pointer (separate principal — HARD-6).** Set the published digest as the value of
-   `TF_VAR_inngest_config_digest` in Doppler `soleur/prd_terraform`, then let the
-   [`apply-web-platform-infra`](../../../../.github/workflows/apply-web-platform-infra.yml) pipeline
-   reconcile `inngest-config-digest.tf`. Terraform is the writer, so no standing CI token can write
-   the isolated `soleur-inngest/prd`. The signing run and this promotion are distinct jobs.
+   `TF_VAR_inngest_config_digest` in Doppler `soleur/prd_terraform`. Terraform is the writer, so no
+   standing CI token can write the isolated `soleur-inngest/prd`. The signing run and this
+   promotion are distinct jobs.
+
+   **No automated route applies the pointer today (#8754).** An earlier revision of this step said
+   the [`apply-web-platform-infra`](../../../../.github/workflows/apply-web-platform-infra.yml)
+   pipeline reconciles `inngest-config-digest.tf`. It does not: `doppler_secret.inngest_config_digest`
+   is on no job's `-target` list (the parity suite
+   `plugins/soleur/test/terraform-target-parity.test.ts` pins that exclusion), so no merge reaches it.
+   The resource is also `count`-gated on a non-empty digest, so setting the variable is what brings
+   it into the graph. The first promotion must bump the isolation self-check floor from 5 to 6 in
+   `cloud-init-inngest.yml` and `inngest-host.test.sh` in the same change (see the header of
+   `inngest-config-digest.tf`). The missing promotion route is tracked on #9060;
+   stop here until it exists.
 
 4. **Confirm off-box** (no host login):
 

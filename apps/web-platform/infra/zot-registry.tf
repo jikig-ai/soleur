@@ -747,8 +747,16 @@ resource "betteruptime_heartbeat" "registry_prd" {
 # own comment prescribed deleting it once #6438 resolved. #6438 is now resolved by the WEB-HOST
 # consumer probe, which mints its OWN per-host heartbeat + URL secret (betteruptime_heartbeat.
 # web_zot_consumer / doppler_secret.web_zot_consumer_url in web-probe.tf) — the registry's own
-# registry_prd beat is the registry's self-view, not the consumer's. Removing the reserved secret is
-# the single expected `-target`ed destroy on this apply (AC5).
+# registry_prd beat is the registry's self-view, not the consumer's.
+#
+# (#8754) Deleting the block did not delete the secret: no apply ever `-target`ed the address, so
+# it stayed in state and in Doppler prd and showed as `will be destroyed` in every drift report.
+# apply-web-platform-infra.yml now carries a bare `-target=doppler_secret.zot_heartbeat_url_prd`
+# (no `removed` block: a forget would leave the value in Doppler), which plans the destroy "because
+# not in configuration"; the merge carrying it needs `[ack-destroy]`. Zero readers were re-measured
+# first (repo grep, GitHub secrets/variables, Doppler raw-value scan). Deleting the Doppler copy
+# does not revoke the Better Stack ping URL of `soleur-registry-prd`; it only stops Doppler holding
+# a second copy of it.
 
 # --- Disk-capacity guard (#6122 follow-up) --------------------------------------------------
 # A SECOND heartbeat, distinct from the liveness beat above: the registry host's cron pings it

@@ -40,7 +40,8 @@
 # (the `index("delete")` check) but `before.rules` is populated while `after`
 # is null → positive count. The `removed` blocks in apps/web-platform/infra/
 # today (doppler-write-token.tf, github-app.tf, inngest-host.tf's #8754 attachment
-# forget) are non-Cloudflare types, which the nested_deletes clauses do not match.
+# forget, web-host-birth-environment.tf's #8754 phantom deployment-policy forget) are
+# non-Cloudflare types, which the nested_deletes clauses do not match.
 # A forget of a Cloudflare type WOULD trip it; the remedy DEPENDS ON THE CONSUMER:
 #   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
 #   - apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE there (a push

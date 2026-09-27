@@ -54,7 +54,17 @@ mock_provider "hcloud" {
 mock_provider "random" {}
 mock_provider "doppler" {}
 mock_provider "betteruptime" {}
-mock_provider "github" {}
+mock_provider "github" {
+  # #8754: web-host-birth-environment.tf adopts the live deployment policy with an
+  # unconditional `import` block. A mock provider cannot serve an import ("Cannot import
+  # resources from mock providers"), so without this override every run block in this
+  # file fails with "Invalid import request" before the validation under test runs.
+  # Overriding the import TARGET keeps the file credential-free, which the seo_config
+  # opt-out below achieves with a variable instead.
+  override_resource {
+    target = github_repository_environment_deployment_policy.web_platform_infra_apply_main_adopted
+  }
+}
 mock_provider "tls" {}
 
 # Dummy values for the module's required (no-default) variables — terraform test

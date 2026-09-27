@@ -29,6 +29,19 @@
 #     read-only via `doppler secrets get` → land the cloud-init regex+floor admission →
 #     THEN apply this resource in the same window (HARD-9: pointer.version > baked-floor.version).
 #
+# (#8754) WHAT CHANGED SINCE THE NOTE ABOVE WAS WRITTEN, and why the resource is now count-gated.
+#   • The admission half has LANDED: cloud-init-inngest.yml admits INNGEST_CONFIG_DIGEST in its
+#     isolation regex AHEAD of this apply ("INNGEST_CONFIG_DIGEST is admitted AHEAD of its
+#     terraform apply, deliberately"), so the secret's existence no longer bricks a boot. The
+#     self-check FLOOR stays 5 until the secret exists; bump it (there and in inngest-host.test.sh)
+#     in the change that first promotes a digest, never before.
+#   • Nothing is promoted: TF_VAR_inngest_config_digest is absent from prd_terraform, so the var
+#     takes its default "". An unconditional resource then planned a `+ create` of an EMPTY pointer
+#     in every drift report, with no route that could apply it. `count` below makes the secret exist
+#     only once a digest is promoted, so the dark state is a clean plan, not a standing diff.
+#   • It remains an operator-applied exclusion with NO per-merge -target: the promotion apply route
+#     is a tracked follow-up (#9060), re-evaluated when SOLEUR_INFRA_PULL_APPLIED first appears.
+#
 # PROMOTION (post-cutover, HARD-6): the value is a PROMOTION OUTPUT, not a rotate-at-source
 # secret — each promotion updates TF_VAR_inngest_config_digest and re-applies. So, unlike the
 # sibling isolated secrets, this resource does NOT lifecycle{ignore_changes=[value]}: Terraform
@@ -36,6 +49,11 @@
 # dev is intentionally NOT provisioned: the dark arm64 host reads --config prd exclusively.
 
 resource "doppler_secret" "inngest_config_digest" {
+  # Exists only once a digest is promoted (#8754). Terraform accepts `count` over this sensitive
+  # var (measured on 1.9.8 locally, and on 1.10.5 by the #8754 plan); the condition discloses only
+  # whether a digest is set, never the digest.
+  count = var.inngest_config_digest != "" ? 1 : 0
+
   # Reference the TF-managed project + env (NOT string literals) so Terraform builds the
   # dependency edge — mirrors inngest-betterstack-token.tf so a cold apply / `-target` of the
   # project pulls this secret in and it never schedules before doppler_environment.inngest_prd.
