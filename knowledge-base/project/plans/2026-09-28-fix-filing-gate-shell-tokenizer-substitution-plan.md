@@ -14,6 +14,74 @@ lane: cross-domain
 
 # fix(hooks): the filing gate sees filings inside substitutions, `bash -c` and quotes
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28 (revision 4).
+
+**Halt gates:**
+
+- 4.6 User-Brand Impact: pass.
+- 4.7 Observability: two proxy findings on the new block, both fixed or argued down in the plan.
+- 4.8 PAT: no match.
+- 4.9 UI wireframe: not a UI plan.
+- 4.10 Encryption: no new store or connection.
+- 4.11 Guard Contract: lint green, and the assembly is structural.
+
+**Agents:** security-sentinel, test-design-reviewer, architecture-strategist and
+performance-oracle, plus a verify-the-negative and attribution pass on the `standard` tier.
+
+**Attribution check.** All 12 negative claims and every cited PR and issue were confirmed. The one
+nuance is recorded: the cron allowlists grant two pinned `bash plugins/…/*.sh` invocations and no
+open shell.
+
+### Key improvements
+
+1. **Closed an allow-where-main-denies regression.**
+   - The failure path used to check the loose indicator before the floor. Now a floor-only hit
+     always denies, and the floor compares **counts** per shape.
+   - The indicator is computed with `grep -E` on continuation-joined text.
+2. **Closed nine bypasses** that the security review found in the per-filing field parser and the
+   lexer:
+   - `bodyvar` reading another command's text;
+   - a repeated `--body`, where gh keeps the last value;
+   - `body=@file`;
+   - a create-form `labels[]=`;
+   - `find -exec` leaking a label from a later action;
+   - `--repo` spellings: case, host, URL;
+   - `repositories/<id>/issues`, `..` segments and `"$B/issues"`;
+   - `bash -c -o posix`;
+   - the `$'…'`/`$"…"` quote ends.
+
+   A `..` segment also escapes the cron `gh api repos/jikig-ai/soleur/` allowlist prefix, so cron
+   `decide()` now denies dot-segments.
+3. **Performance.**
+   - `_api_pl` (inherited from `main`) is quadratic: 8.6 s on 70 KB. It is made linear.
+   - Bash `=~` was quadratic for the indicator, so the indicator uses `grep -E`.
+   - Re-lexing is memoized, `ALRM` exits 3 (not 142), and the per-call cost is measured at
+     +5-8 ms.
+   - The quadratic `strip_command_bodies`, also inherited, gets its own issue.
+4. **Test design.**
+   - Five mutation rows could not go RED; each is fixed.
+   - Floors now count executed rows.
+   - `decision_of` fails any non-F row that routes through the failure path, which makes about 60
+     existing deny rows into lexer witnesses.
+   - Oracle vacuity is fixed with exported variables, a `doppler` shim, per-column truth and
+     semantics aligned with the predicate.
+   - Shims run in a sandbox copy of the hooks.
+5. **Architecture.**
+   - The parity vitest moves to the `repo-wide` project, so hook-only diffs still run it.
+   - ADR-256 is reinstated as a scoped exception to ADR-157's "never denies".
+   - The `model.c4` Hook Engine description gets one sentence.
+   - The ADR-157 clauses are honored: a payload-free cause enum, and the kill switch downgrades the
+     ask to an allow.
+   - Phase 0 is split so Phase 1 can be cherry-picked.
+
+### New considerations discovered
+
+- Codex and Devin also run `guardrails.sh`. Whether they honor `ask` is unverified, and ADR-256
+  records that.
+- The union floor needs a removal criterion (3 consecutive clean oracle runs), recorded in ADR-256.
+
 ## Overview
 
 The guardrails PreToolUse hook decides whether a Bash command files a GitHub issue by grepping
@@ -37,10 +105,12 @@ This plan makes three changes:
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
-This is revision 3. It folds in:
+This is revision 4. It folds in:
 
 - the CTO domain review, the spec-flow analysis and the scoped advisor consult (revision 2);
-- the plan-review panel (DHH, Kieran, code-simplicity, CTO devex lens) in revision 3.
+- the plan-review panel (DHH, Kieran, code-simplicity, CTO devex lens) in revision 3;
+- the deepen-plan panel (security-sentinel, test-design-reviewer, architecture-strategist,
+  performance-oracle, verify-the-negative) in revision 4.
 
 `### Plan-time review revisions` records what changed and why.
 
@@ -93,8 +163,9 @@ This is revision 3. It folds in:
   operators or substitutions, and it gets the `'it'\''s'` idiom wrong.
 - **Perl cost (measured):** walking a 64 KB input one character at a time takes 13 ms, so lexing
   every Bash command is affordable (Kieran: drop the prefilter).
-- **ADR:** ADR-157 already rules that "a hook that cannot parse its input asks". This plan amends it
-  rather than opening a new ordinal (see `## Architecture Decision (ADR/C4)`).
+- **ADR:** ADR-157 already rules that "a hook that cannot parse its input asks" and that it "never
+  denies". This plan writes ADR-256 as a scoped exception with a pointer from ADR-157 (see
+  `## Architecture Decision (ADR/C4)`). `origin/main`'s highest ADR is ADR-255 (fetched 2026-09-28).
 
 ### Property List (Phase 0.6b)
 
@@ -161,7 +232,8 @@ The properties use PR-numbers so they cannot be confused with the P-rows in Test
   not. Its jobs are handled instead as follows:
   - A `$`-only endpoint with a POST signal is a filing, which errs toward gating.
   - A `$`-valued `--repo` is never external.
-  - A body that references a variable falls back to `main`'s `$COMMAND` corpus.
+  - A body that references a variable falls back to a variable corpus: the command's heredoc bodies
+    and literal assignment values. It never falls back to `$COMMAND` (revision 4, security #5).
 - **Revision 2's stdin-completion rule for `xargs`/`parallel`** (DHH, simplicity): cut to
   Non-Goals. `main` does not gate that shape either, and Kieran found a gap in the rule.
 - **The string-runner tail** (`trap`, `watch`, `su`/`runuser`, `script -c`, `env -S`, a shell fed a
@@ -174,7 +246,9 @@ The properties use PR-numbers so they cannot be confused with the P-rows in Test
   `g''''h` bypass of the prefilter.
 - **Five exit codes, and a separate floor-disagreement branch** (DHH, simplicity): collapsed into
   two exit codes. The floor is a plain union, and a floor-only hit takes the normal failure path.
-- **A new ADR-256** (DHH, simplicity): cut. ADR-157 is amended instead.
+- **A new ADR-256** (DHH, simplicity): cut in revision 3, then **reinstated in revision 4**. The
+  architecture review found that the parity contract does not belong under ADR-157's title, and that
+  the fail direction is an exception to ADR-157's "never denies", not an extension of it (DC-4).
 
 ### Relevant files
 
@@ -271,126 +345,166 @@ bypass of the cron filing gate.
 
 ### 1. The lexer: `.claude/hooks/lib/filing-shape.pl` (core Perl, no modules)
 
-**Layout contract (CTO devex).**
+**Layout contract** (CTO devex, performance-oracle):
 
-- `use strict; use warnings;`.
-- A header with a grammar sketch, the gh version the flag tables were taken from, and the
-  predicate and parity notes.
+- `use strict;` with `$^W = 1`. `use warnings` alone costs 1.8 ms per fork, measured.
+- A header that holds:
+  - a grammar sketch;
+  - the gh version the flag tables were taken from, and how to refresh them;
+  - a pointer to ADR-256 (the parity contract);
+  - the rule for removing the union floor.
 - The flag tables and the string-runner list are data at the top of the file.
 - One sub per construct.
+- Regexes that contain `$`, `}` or `)` use `qr~…~` delimiters. `[$})]` breaks a `qr{…}` literal
+  (measured).
 - The suite runs `perl -c` on the file.
 
-**Modes.**
+**Modes:**
 
 | Invocation | Input | Output |
 |---|---|---|
-| `perl filing-shape.pl` (default) | The raw command on stdin | One NUL-framed record per filing: `F\0<shape>\0<ctx>\0<nfields>\0<key>=<value>\0…`. After the last record it prints `OK\0` and exits 0. Details follow the table |
+| `perl filing-shape.pl` (default) | The raw command on stdin | One NUL-framed record per filing: `F\0<shape>\0<ctx>\0<nfields>\0<key>=<value>\0…`. After the last record it prints `OK\0` and exits 0. Details below the table |
 | `perl filing-shape.pl --classify tok…` | One token list | `create`, `api` or `none`. This is the corpus entry point, and it runs the same `filing_shape` sub |
-| `perl filing-shape.pl --trace` | A command | Each simple command's argv, its full wrapper path (e.g. `shell-c>subst`) and the parsed fields, in plain text. Named in the file header and in every lexer-failure incident, for debugging a false deny |
+| `perl filing-shape.pl --trace` | A command | Each simple command's argv, the full wrapper path (e.g. `shell-c>subst`) and the parsed fields, as plain text. The file header and every lexer-failure incident name this mode, so a false deny can be debugged |
 
 In default mode:
 
 - `<shape>` is `create` or `api`.
-- `<ctx>` is the innermost wrapper, one of `top`, `subst`, `backtick`, `shell-c`, `eval` or
-  `heredoc`.
-- Consumers parse records **by count** and never search for the `OK` or `F` sentinels.
+- `<ctx>` is the innermost wrapper: `top`, `subst`, `backtick`, `shell-c`, `eval` or `heredoc`.
+- Consumers parse records **by count**. They never search for the `OK` or `F` sentinels.
 
-Default mode has two failure exits:
+**Failure exits.** Default mode can fail in two ways, and each prints `bound=<cause>` on stderr:
 
-- **Exit 2:** an unbalanced quote or an unterminated construct. The agent can fix this.
-- **Exit 3:** a bound tripped. That means recursion deeper than 16, a character budget of
-  8 × input + 64 KiB lexed in total, or `alarm 2`. This is our machinery failing.
+- **Exit 2** means an unbalanced quote, an unterminated substitution or heredoc delimiter word, or
+  a NUL byte in the input. The agent can fix these. Unbalanced `(`/`)` are **never** an error, since
+  they are separators, so `case` patterns and `[[ =~ (a|b) ]]` lex with exit 0.
+- **Exit 3** means a bound tripped. There are three bounds:
+  - recursion deeper than 16;
+  - a character budget of 8 × input + 64 KiB, counted on ONE global counter that every frame
+    charges, including re-lexed `bash -c`/`eval` strings and heredoc terminator scans;
+  - `alarm 2`, with `$SIG{ALRM} = sub { print STDERR "bound=alarm\n"; exit 3 }` (without the
+    handler perl exits 142).
+
+  The cause is `depth`, `budget` or `alarm`. Our machinery failed, not the agent.
+
+**Memoization.** Re-lexing is memoized on the substitution's source text. A `$(…)` seen at the word
+level and again inside a `bash -c` string is lexed once, which turns 2^depth into depth.
 
 **Lexing** is one recursive-descent pass with a frame stack. A substitution is lexed in place from
-the same cursor, never by finding the closing `)` first. That is what lets a heredoc body inside
+the same cursor, never by finding its closing `)` first. That is what lets a heredoc body inside
 `$(cat <<'EOF' … EOF)` contain `)`, `(`, `it's` or `` ` ``.
 
-- **Quoting.**
+- **Quoting:**
   - `'…'` is literal.
   - In `"…"`, `\` escapes only `$`, `` ` ``, `"`, `\` and newline. `$(`, backticks and `${` stay
     live.
-  - `$'…'` and `$"…"` are treated as quoted words. Their escapes are **not** decoded (Non-Goal).
+  - In `$'…'`, the lexer honors `\\` and `\'` when finding where the string ends (security #3), so
+    `echo $'\''; gh issue create …` splits as bash splits it. Other escape sequences are not
+    decoded (Non-Goal).
+  - `$"…"` is lexed exactly like `"…"`, so its substitutions are live.
   - Outside quotes, `\` makes the next character literal, and `\`-newline continues the line.
-- **Separators.** These end a simple command: an unquoted newline, `;`, `&`, `|`, `&&`, `||`, `|&`,
-  `;;`, `;&`, `;;&`, `(` and `)`.
-  - A redirection's `&` or `|` is not a separator: `2>&1`, `&>`, `>&2`, `>|` and `<&0`.
-  - `{` and `}` are ordinary words. Any-position detection makes them harmless.
-- **Redirections.** A redirection is an optional fd number, then one of `<`, `>`, `>>`, `>|`, `<>`,
-  `>&`, `<&`, `&>` or `&>>`. The redirection and its target word are dropped from argv, but
-  substitutions inside the target are still recursed.
-- **Substitutions.** Every `$(…)`, backtick span, `<(…)` and `>(…)` is lexed as a script, wherever
-  it appears. The same holds for every substitution *inside* `${…}` and `$((…))`. The text of
-  `${…}` itself is never lexed as a script. A word's value keeps the raw source of its
-  substitutions, so `repos/$(echo o)/r/issues` stays one token.
-- **Comments.** `#` starts a comment only at the start of a word, and the comment runs to the end
-  of the line. Nothing in a comment is recursed.
-- **Heredocs** are handled natively; the lexer does not use `_incidents_heredoc_re`.
-  - Several heredocs may be pending on one line. Each body starts at the **next unquoted newline**,
-    so the rest of the opening line is still code.
-  - Quoting the delimiter in any way (`'EOF'`, `"EOF"`, `\EOF`, `E"OF"`) makes the body data.
+- **Separators:** an unquoted newline, `;`, `&`, `|`, `&&`, `||`, `|&`, `;;`, `;&`, `;;&`, `(` and
+  `)` each end a simple command.
+  - A redirection's `&` or `|` is not a separator: `2>&1`, `&>`, `>&2`, `>|`, `<&0`.
+  - `{` and `}` are ordinary words.
+- **Redirections:** an optional fd number, then one of `<`, `>`, `>>`, `>|`, `<>`, `>&`, `<&`, `&>`,
+  `&>>` or **`<<<` (here-string)**. The redirection and its target word are dropped from argv, and
+  substitutions inside the target are still recursed. `<<<` is matched before `<<` (security #4,
+  test-design #7), and the existing "guard3: <<< here-string" row pins it.
+- **Substitutions:** every `$(…)`, backtick span, `<(…)` and `>(…)` is lexed as a script wherever
+  it appears.
+  - Every substitution *inside* `${…}` and `$((…))` is lexed too, but the text of `${…}` itself
+    never is.
+  - A word keeps the raw source of its substitutions, so `repos/$(echo o)/r/issues` stays one token.
+- **Comments:** `#` starts a comment only at the start of a word, and the comment runs to the end
+  of the line. Nothing inside it is recursed.
+- **Heredocs** are handled natively, not with `_incidents_heredoc_re`:
+  - Several heredocs can be pending on one line.
+  - Each body starts at the **next unquoted newline**, so the rest of the opening line is still code.
+  - Any quoting of the delimiter makes the body data: `'EOF'`, `"EOF"`, `\EOF`, `E"OF"`.
   - An unquoted body is scanned for `$(`, backticks and `${`, and those are recursed.
-  - `<<-` strips leading tabs before matching the terminator. A missing terminator reads to EOF.
+  - `<<-` strips leading tabs before matching the terminator.
+  - A missing terminator reads to EOF.
+  - Heredoc bodies and literal `NAME=value` assignment values are collected, in text order, into a
+    per-script **variable corpus**. That corpus is used only by the `bodyvar` fallback below.
 
 **Finding filings.** In each simple command's argv, every index `i` whose word's basename is `gh`
-starts a candidate. The candidate's argv is normalized so `argv[i]` becomes `gh`, and then
+starts a candidate. The candidate's argv is normalized so that `argv[i]` becomes `gh`, and then
 `filing_shape` classifies it.
 
 - This covers `sudo gh`, `setsid gh`, `flock f gh`, `doppler run -- gh`, `/usr/bin/time -v gh`,
   `find -exec gh …` and `then gh`, with no launcher table.
-- **Deliberate over-fire:** an unquoted `echo gh issue create` is classified as a filing, and so is
-  `bash -c 'echo gh issue create'`. Both err toward gating (DC-2).
+- **`find` actions (security #9):** when the candidate follows `-exec`, `-execdir`, `-ok` or
+  `-okdir`, its argv is cut at the first bare `;` or `+` word. A later `-exec echo --label …` then
+  cannot supply the filing's exit.
+- **Deliberate over-fire (DC-2):** these commands are classified as filings, and each errs toward
+  gating: an unquoted `echo gh issue create`, `bash -c 'echo gh issue create'`,
+  `man gh issue create`, and `[[ $s =~ ^(gh issue create) ]]`.
 
-**String runners** are the only list.
+**String runners** are the only list:
 
-- `bash|sh|zsh|dash|ksh` (any argv position) with an option cluster containing `c`, such as `-c`,
-  `-lc` or `-ec`. Options like `--norc`, `-o opt` or `--` may come first. The script is the first
-  non-option word after the cluster.
+- `bash|sh|zsh|dash|ksh`, at any argv position, with an option cluster that contains `c`.
+  - The script is the first word after the cluster that is not an option and not an option's value.
+  - Options and their values can come before OR after the cluster: `--norc`, `-o posix`,
+    `-O extglob`, `+x`, `--rcfile F`, `--` (security #13).
 - `eval`, whose words are joined with spaces.
 
-**Per-filing fields.** They are parsed with gh's value-taking flag tables, pinned in Phase 0 from
-`gh issue create --help` and `gh api --help` (gh 2.101.0). A token counts as a flag only when it is
-not the value of a preceding value-taking flag.
+**Per-filing fields** are parsed with gh's value-taking flag tables. The tables are pinned in
+Phase 0 from `gh issue create --help` and `gh api --help` (gh 2.101.0). A token is read as a flag
+only when it is not the value of a preceding value-taking flag. For single-valued flags gh keeps the
+**last** value, and so does the parser.
 
 | Field | Meaning |
 |---|---|
-| `head=…` | `gh issue create`, or `gh api <path>`, with the path cut at `?`/`#` and capped at 64 characters |
-| `repo=…` | From `-R`, `--repo`, `-R=`, `--repo=` or `-Rx`, at the root or group level. A value containing `$` or a backtick is **never external** |
-| `milestone=1` | Present when the filing has `-m`, `--milestone`, `--milestone=` or `-mX` |
-| `label=…` | From `--label`/`-l` and their `=`/attached forms, and from `-f`/`-F`/`--field`/`--raw-field`/attached `labels[]=…`. Repeatable |
-| `bodyfile=…` | From `--body-file` or `-F` (create only), and their `=` forms |
-| `body=…` | The literal inline body from `--body`/`-b`, or an api `body=` field in any spelling. Repeatable. If the value contains an unquoted `$` expansion, the record carries `bodyvar=1` instead, and bash falls back to `$COMMAND` (`main`'s corpus) |
-| `input=1` | Present when an api filing has `--input` or `--input=` |
+| `head=…` | `gh issue create` or `gh api <path>`, with the path cut at `?` or `#` and capped at 64 characters |
+| `repo=…` | The last `-R`, `--repo`, `-R=`, `--repo=` or `-Rx`, at the root or group level. Normalized before the owner test (security #10): scheme and host are stripped (`https://github.com/`, `github.com/`) and the owner is lowercased, so `JIKIG-AI/soleur` and `https://github.com/jikig-ai/soleur` count as ours. A value that contains `$` or a backtick is **never external** |
+| `milestone=1` | Set when `-m`, `--milestone`, `--milestone=` or `-mX` is present |
+| `label=…` | Repeatable, because `--label` is a slice. It comes from `--label`/`-l` and their `=`/attached forms. On **api filings only**, it also comes from the value of `-f`/`-F`/`--field`/`--raw-field`, or attached `-flabels[]=…`, when that value starts with `labels[]=` (security #8). A bare `labels[]=` token or a create-form `--title 'labels[]=…'` does not count |
+| `bodyfile=…` | The last `--body-file` or `-F` value (create only), including `=` forms. Also set by an api `body=@<path>` field (security #7). `@-` or `-` is unreadable |
+| `body=…` | The **last** literal inline body (security #6): `--body`/`-b`, or an api `body=` field in any spelling that is not an `@` value. If that value contains an unquoted `$` expansion, the record carries `bodyvar=1` plus `varcorpus=<the variable corpus>`, and bash uses that corpus, never `$COMMAND` (security #5) |
+| `input=1` | Set when an api filing carries `--input` or `--input=` |
 
 ### 2. `guardrails.sh` wiring
 
 - **The lexer always runs** (Kieran: no prefilter). Its records are read with a
-  `while IFS= read -r -d ''` loop, which works on bash 3.2. The loop reads from a process
-  substitution that appends the producer's exit code as `RC\0<n>\0`.
-- **Filings are the union of the lexer's records and `main`'s detectors** (PR7). The CLASS 1 `$SCAN`
-  grep and `_api_pl` stay, and they are commented as the floor.
-- **Each lexer record goes through `_gate_one_filing`.** This function holds the existing
-  milestone, external-repo and three-exit logic. It now reads the record's fields, not `_repo_toks`
-  and not `$COMMAND`, except when `bodyvar` is set. The `xargs -n1` tokenizer and its three token
-  loops are deleted.
-- **A deny names the filing's head and context.** It adds the clause "add the exit inside the same
-  `<ctx>` command as `gh`" (CTO devex). Two refusals get extra hints:
-  - For `ctx=backtick`, or `heredoc` from an unquoted delimiter: "bash executes backticks and
-    unquoted-heredoc text. If this was prose, use single quotes or `<<'EOF'`."
-  - When a relative `bodyfile` cannot be read: "pass an absolute path".
-- **Failure path.** This covers lexer exit 2 or 3, a missing `OK`, a malformed stream, no perl, and
-  a floor hit that the lexer did not report. If the raw `$COMMAND` matches the loose indicator
-  `gh.*(issue[^A-Za-z0-9_]+(create|new)|issues)`:
-  1. **Exit 2 denies** with `TOK_MSG`.
-  2. **Otherwise, if the floor fires, the hook denies**, since those are the cases `main` itself
-     gates. The message: "the filing gate could not parse this command (`<cause>`); run the filing
-     as a plain top-level command with an absolute `--body-file` path." The existing no-perl row
-     keeps its `deny` this way.
-  3. **Otherwise the hook asks** (ADR-157): "the filing gate could not parse this command
-     (`<cause>`). Approve only if it does not file an issue."
+  `while IFS= read -r -d ''` loop (bash 3.2-safe) from a process substitution. The substitution
+  appends the producer's exit code as a final `RC\0<n>\0` record.
+- **Filings are the union** of the lexer's records and `main`'s detectors (PR7):
+  - The CLASS 1 `$SCAN` grep and `_api_pl` stay, commented as the floor.
+  - **`_api_pl` is made linear** (performance-oracle). It finds `gh\s+api\b` once and then searches
+    for the endpoint from that position. Measured on `main`, the current pattern takes 8.6 s on a
+    70 KB padded input, and that alone outruns the non-blocking timeout.
+  - The floor reports a **count per shape**: the number of CLASS 1 matches, and `_api_pl`'s number
+    of hit segments. A shape where the floor count exceeds the lexer's count is a floor-only hit
+    (security #2).
+- **Each lexer record goes through `_gate_one_filing`.** It keeps the existing milestone,
+  external-repo and three-exit logic, reading the record's fields instead of `_repo_toks` or
+  `$COMMAND`. The `xargs -n1` tokenizer and its three token loops are deleted.
+- **A deny names the filing's head and context,** and adds "add the exit inside the same `<ctx>`
+  command as `gh`" (CTO devex). Two hints are added:
+  - the prose hint, for `ctx=backtick` or an unquoted `heredoc`;
+  - "pass an absolute path", for a relative `bodyfile` that cannot be read.
+- **Failure path** (security #1, test-design #6). The indicator is computed with `grep -E`, never
+  bash `[[ =~ ]]`, which is quadratic on a miss (36 KB takes 3.3 s, measured). It runs on the raw
+  command with `\`-newline continuations joined, and matches `\bgh\b.*(issue[^A-Za-z0-9_]+(create|new)|issues)`.
+  The rules apply in this order:
+  1. **A floor-only hit denies, whatever the indicator says.** Message: "the filing gate could not
+     parse this command (`<cause>`); run the filing as a plain top-level command with an absolute
+     `--body-file` path." This covers every case `main` gates, including the no-perl row and a
+     tripped bound in front of a top-level filing.
+  2. **Lexer exit 2 with the indicator matching denies** with `TOK_MSG`.
+  3. **Any other failure with the indicator matching asks,** per ADR-157 and scoped by ADR-256.
+     Other failures are exit 3, a missing `OK`, a malformed stream, or no perl. Message: "the filing
+     gate could not parse this command (`<cause>`). Approve only if it does not file an issue." The
+     ADR-157 kill switch `SOLEUR_DISABLE_HOOK_INPUT_ASK=1` turns this ask into an allow and still
+     writes the incident.
+  4. Otherwise the hook allows. That is `main`'s behavior for a non-filing.
 
-  One incident code, `guardrails-filing-lexer-failure`, carries the cause. If the indicator does
-  not match, the hook allows, which is what `main` does for a command that is not a filing.
-- **Unchanged:** `$SCAN`, `strip_command_bodies` and every other gate.
+  **Incident.** One code, `guardrails-filing-lexer-failure`, whose cause is an **enum**: `exit2`,
+  `depth`, `budget`, `alarm`, `noperl`, `trunc` or `floor-only`. It carries no payload content,
+  per ADR-157's telemetry clause.
+- **Unchanged:** `$SCAN`, `strip_command_bodies` and every other gate. The quadratic
+  `strip_command_bodies` is pre-existing, and it is re-homed (see Non-Goals).
 
 ### 3. The shared predicate (one spec, two implementations)
 
@@ -401,267 +515,359 @@ filing_shape(tokens):
         (root- or group-level; not -R=x, --repo=x, -Rx)
   pos[0] == "issue" and pos[1] in {create, new}      -> create
   pos[0] == "api":
-      endpoint = SOME token matches ISSUES_COLLECTION_RE, or is a bare $VAR / ${VAR}
-                 (a $-only endpoint leans toward gating)
+      endpoint = SOME token matches ISSUES_COLLECTION_RE
+                 or is a bare $VAR / ${VAR}                       (leans toward gating)
+                 or contains an expansion and ends in issues[/][?…|#…]   (security #12: "$B/issues")
+                 or is a repos/… or repositories/… path with a `.`, `..` or %2e segment (security #11)
       post     = SOME token i satisfies POST_SIGNAL
       endpoint && post                               -> api
   otherwise                                          -> none
 
 ISSUES_COLLECTION_RE (case-sensitive; Perl uses \z where JS uses $):
-  /(?<![A-Za-z0-9_])repos\/[^\/?#\s]+(?:\/[^\/?#\s]+)?\/issues(?:\/?(?:[?#].*)?|[$})][^\/]*)$/
+  /(?<![A-Za-z0-9_])(?:repos\/[^\/?#\s]+(?:\/[^\/?#\s]+)?|repositories\/[0-9]+)\/issues(?:\/?(?:[?#].*)?|[$})][^\/]*)$/
 
-POST_SIGNAL(tokens, i), with C = an optional run of the boolean short flag -i (gh api's only one):
-  t matches /^-C?X$/ or t == "--method", and the next token matches /^post$/i or starts with $ or `
-  or t matches /^(-C?X=?|--method=)(post$|\$|`)/i       # -XPOST, -X=POST, -iXPOST, --method=POST, -X$M
-  or t == "--input" or t starts with "--input="
-  or t matches /^-C?[fF]$/ or t is --field / --raw-field, and the next token starts with title=, $ or `
-  or t matches /^(-C?[fF]=?|--field=|--raw-field=)?title=/   # -ftitle=, -F=title=, -iftitle=, bare title=
-  or t matches /^(-C?[fF]=?|--field=|--raw-field=)[$`]/     # -f$T (prefix required, so --jq "$Q" is not a signal)
+POST_SIGNAL(tokens, i). C = an optional run of -i, the only boolean short flag gh api has.
+V = an optional leading $NAME or ${…} (test-design #6: `$E-X POST` reaches gh as `-X POST`).
+  t matches /^V-C?X$/ or t == "--method", and the next token matches /^post$/i or starts with $ or `
+  or t matches /^V(-C?X=?|--method=)(post$|\$|`)/i          # -XPOST, -X=POST, -iXPOST, -X$M
+  or t matches /^V--input(=|$)/
+  or t matches /^V-C?[fF]$/ or t is --field / --raw-field, and the next token starts with title=, $ or `
+  or t matches /^V(-C?[fF]=?|--field=|--raw-field=)?title=/   # -ftitle=, -F=title=, -iftitle=, bare title=
+  or t matches /^V(-C?[fF]=?|--field=|--raw-field=)[$`]/     # -f$T (prefix required: --jq "$Q" is not a signal)
 ```
 
-**The corpus.** A new file, `.claude/hooks/lib/filing-shape-corpus.json`, is an array of entries of
-the form `{"id": "C<n>", "tokens": [...], "shape": "create"|"api"|"none", "why": "..."}`. Two
-suites load it:
+**The corpus.** The new file `.claude/hooks/lib/filing-shape-corpus.json` is a JSON array.
 
-- `filing-shape.test.sh` runs every row through `--classify`;
-- the vitest runs every row through `filingShape(tokens) ?? "none"`.
-
-Both assert a **literal** row floor and require all three shape classes to be present.
+- **Entries:** `{"id": "C<n>", "tokens": [...], "shape": "create"|"api"|"none", "why": "..."}`.
+- **Documentation:** a first element `{"_doc": "…schema, ownership, where new rows go…"}`. The
+  loaders skip it.
+- **Consumers:** two suites load the file.
+  - `filing-shape.test.sh` runs every row through `--classify`.
+  - A new vitest file, `apps/web-platform/test/server/inngest/filing-shape-corpus-parity.test.ts`,
+    runs every row through `filingShape(tokens) ?? "none"`. It reads the file with `readFileSync`,
+    resolved from `import.meta.url`, and it is registered in
+    `apps/web-platform/test/repo-wide-suites.ts`. Without that registration, a diff touching only
+    `.claude/hooks/lib/` would never run the JS half (architecture #1).
+- **Floors (test-design #4):**
+  - The row floor counts **executed** rows. The shell suite increments a counter inside its loop,
+    and the vitest increments `ran++` in each case and checks it in `afterAll`. Both compare
+    against a literal.
+  - The three-shape-class check runs over the asserted rows, not over the file.
 
 ### 4. The cron mirror
 
-- **`filingShape()`:** export `ISSUES_COLLECTION_RE`, and implement the predicate above (POST_SIGNAL,
-  root-level `--repo`, the `gh issue new` alias, the `-R` skip, `$`-only endpoints).
-- **`filingJustificationReason()`:** an `api` shape with an `--input`/`--input=` token returns the
-  hook's `--input` refusal. The check runs **before** exits 0 and 1.
+- **`filingShape()`:** export `ISSUES_COLLECTION_RE`, and implement the predicate above.
+- **`filingJustificationReason()`:** an `api` shape carrying an `--input`/`--input=` token returns
+  the hook's `--input` refusal. This check runs **before** exits 0 and 1.
+- **`decide()` (security #11, cron containment):** deny any `gh api` token that is a
+  `repos/…`/`repositories/…` path with a `.`, `..` or `%2e` segment. A measured GET of
+  `repos/jikig-ai/soleur/labels/../issues` returned the issues collection. So without this check a
+  `..` segment escapes the `gh api repos/jikig-ai/soleur/` allowlist prefix, for filings and for
+  any other endpoint.
 - **`cron-filing-deny-marker.ts`:** import the regex, delete the local `ENDPOINT_RE`, and cut the
   head at `?` or `#`.
+- **PR6 scope.** The deny marker shares the regex by import. The Perl side keeps its own copy,
+  bound to the JS copy only through the corpus (architecture #7).
 
 ### 5. The executed oracle and the differential corpus (opt-in, not CI)
 
-`filing-shape.test.sh --differential <base-hooks-dir>` is committed, so the result can be
-reproduced (CTO devex). It is not run in CI.
+`filing-shape.test.sh --differential <base-hooks-dir>` is committed so the result can be reproduced
+(CTO devex). It does not run in CI.
 
-**How each command runs.**
+**How each command runs:**
 
-- Each generated command runs through real bash with shims first in `PATH`, then `/usr/bin:/bin`.
-  - The `gh` shim logs its argv.
-  - The `sudo` shim execs the rest of the argv.
-  - The `git` shim does nothing.
-- Guards against reaching a real `gh`:
-  - `GH_TOKEN=invalid`, `GH_HOST=invalid.invalid` and a tmp `GH_CONFIG_DIR`;
-  - a tmp working directory, and each command wrapped in `timeout 5`;
+- **Shims, first in `PATH`, then `/usr/bin:/bin`:**
+  - `gh` logs its argv.
+  - `sudo` execs the rest of its argv.
+  - `doppler` execs the argv after `--` (test-design #8).
+  - `git` does nothing.
+- **Guards:**
+  - `GH_TOKEN=invalid`, `GH_HOST=invalid.invalid`, a tmp `GH_CONFIG_DIR` and a tmp working
+    directory;
+  - `timeout 5` on each command;
   - no absolute `gh` path in any generated command.
+- **Exported variables:** `REPO=jikig-ai/soleur`, `M=POST`, `EP=repos/jikig-ai/soleur/issues` and
+  `QS='?x=1'`. Without them, variable rows expand to empty and could never report a miss
+  (test-design #8).
 
-**Ground truth comes from the logged argv, not from `--classify`** (Kieran #10). The shim decides
-independently, using gh's own semantics:
+**Ground truth comes from gh semantics in the shim, not from `--classify`** (Kieran #10). A logged
+argv counts as a filing when either condition holds:
 
-- The path is the first positional argument after `api`.
-- The method is the last `-X`. With no `-X`, it is POST if any field or `--input` is present.
+- it is `issue create` or `issue new`, after skipping `-R`/`--repo`;
+- it is `api` to an issues-collection path (the first positional argument), where the method is the
+  last `-X`, or POST by default, AND a title field or `--input` is present (test-design #8, aligned
+  with the predicate).
 
-**Checks.**
+**Checks:**
 
-- Every truth filing must be reported by the lexer.
-- Every row tagged `prose` must produce no filing.
-- The patched hook's verdict is compared with the base hook's (`<base-hooks-dir>`, a scratch copy
-  of `4170460eea:.claude/hooks/`). Every flip must be explained (AC5).
+- **Misses:** every truth filing is reported by the lexer.
+- **Prose:** every row tagged `prose` produces no filing.
+- **Wrapper coverage:** every wrapper column produces at least one truth filing. A column with none
+  cannot fail, so it is itself a failure.
+- **Flip table:** base-hook and patched-hook verdicts are compared, and every flip must be explained
+  (AC5). This runs only once the hook is wired (Phase 5), not in Phase 3 (architecture #6).
 
 ## Implementation Phases
 
-Contract before consumer: each phase consumes only what an earlier phase produced.
+Contract before consumer: each phase consumes only what an earlier phase produced. The phases are
+split so that Phase 0a plus Phase 1 can be cherry-picked on their own (architecture #6).
 
-**Phase 0: tests first.**
+**Phase 0a: corpus and cron tests first.**
 
-- Add the corpus, the `filing-shape.test.sh` rows and the `guardrails.test.sh` rows. Each row ID
-  goes into its assert label (CTO devex).
-- The suite header says where a new row belongs:
-  - spelling → the corpus;
+- Add `filing-shape-corpus.json`, with its `_doc` element.
+- Add `filing-shape-corpus-parity.test.ts`, registered in `repo-wide-suites.ts`.
+- Add the vitest rows: the `--input` refusal, the dot-segment deny, the two `decide()` pins, and the
+  deny-marker `#fragment` row.
+- These rows start RED.
+
+**Phase 0b: hook tests first.**
+
+- Add the `filing-shape.test.sh` rows and the `guardrails.test.sh` rows. Put each row ID in its
+  assert label (CTO devex).
+- The suite header says where a new row goes:
+  - a spelling → the corpus;
   - lexing → `filing-shape.test.sh`;
-  - verdict and refusal text → `guardrails.test.sh`.
-- Include the heredoc-inside-`$(…)` rows first, so the frame-stack design is forced by tests
-  (advisor).
-- Pin gh's flag tables and version from `--help`, and add a table-staleness row: when `gh` is on
-  `PATH`, it compares the live `--help` value flags with the pinned tables; otherwise it skips.
+  - a verdict or refusal text → `guardrails.test.sh`.
+- Write the heredoc-inside-`$(…)` rows first, so the tests force the frame-stack design (advisor).
+- Pin gh's flag tables and version from `--help`.
+- Add the table-staleness row. It is **intentionally RED** until Phase 2 or 3 creates the tables.
+- Make `decision_of` fail any non-F row that writes a `guardrails-filing-lexer-failure` incident
+  (test-design #6). This turns the ~60 existing deny rows into lexer witnesses once Phase 4 wires
+  the lexer.
 
-**Phase 1: cron mirror + shared predicate.**
+**Phase 1: the cron mirror and shared predicate.**
 
-- Implement `ISSUES_COLLECTION_RE`, `filingShape`, the `--input` refusal and the deny-marker
-  import.
-- Vitest must be green. These are the first commits, so the live cron bypass can be cherry-picked
-  on its own if needed (DC-1).
+- Implement `ISSUES_COLLECTION_RE`, `filingShape`, the `--input` refusal, the dot-segment deny in
+  `decide()`, and the deny-marker import.
+- Vitest (`--project repo-wide` plus the unit files) must be green.
+- These are the first code commits, so the live cron bypass can ship on its own if needed (DC-1).
 
 **Phase 2: `filing-shape.pl --classify`.** The corpus must pass on both sides.
 
-**Phase 3: the lexer, per-filing fields, `--trace` and bounds.**
+**Phase 3: the lexer, per-filing fields, `--trace`, memoization and bounds.**
 
-- Implement the lexer and the lexer-record rows.
-- Run the `--differential` oracle pass once, before wiring (advisor). It must show no misses and no
-  prose over-fire.
+- Implement the lexer and its record rows.
+- Run `--differential` in miss-and-prose mode. It must report 0 misses, 0 prose filings, and every
+  wrapper column with at least one truth filing. The flip table waits for Phase 5.
 
 **Phase 4: wire `guardrails.sh`.**
 
-- Add `_gate_one_filing`, the union floor and the failure path. Delete `xargs -n1`.
-- Update every comment that still describes `$SCAN`-based detection.
+- Add `_gate_one_filing`, the counted union floor, the linear `_api_pl` and the failure path.
+- Delete `xargs -n1`.
+- Put the failure-path decision table in a comment next to the code.
+- Update every comment that describes `$SCAN`-based detection.
 - Run `guardrails.test.sh` and `hook-input-contract.test.sh`.
 
 **Phase 5: record and verify.**
 
-- Add the ADR-157 addendum.
-- Run AC5 again against the final tree.
-- Run `plugins/soleur/test/c4-count-parity.test.sh`.
+- Write ADR-256, and add the one-line pointer to ADR-157.
+- Add the sentence about the Hook Engine's second implementation to `model.c4`.
+- Run the C4 tests:
+  - `apps/web-platform/test/c4-code-syntax.test.ts`;
+  - `apps/web-platform/test/c4-render.test.ts`;
+  - `plugins/soleur/test/c4-count-parity.test.sh`.
+- Run the full `--differential`, including the flip table (AC5).
 
 **Phase 6 (at ship).**
 
-- File ONE residual follow-up issue listing the Non-Goals, with the `meta/machinery` label and the
-  `Post-MVP / Later` milestone. Both exist (verified).
+- File one residual follow-up issue that lists the Non-Goals, labeled `meta/machinery` with the
+  milestone `Post-MVP / Later`. Both were verified to exist.
+- File a second issue for the pre-existing quadratic `strip_command_bodies`. It is a
+  hook-wide timeout bypass: 12 s on 87 KB, measured. Label it `type/security`, `domain/engineering`
+  and `priority/p2-medium`.
 - Close #9089 from the PR body.
 
 ## Files to Create
 
-- `.claude/hooks/lib/filing-shape.pl`: the lexer, the string runners, the field parser, the
-  predicate and the bounds, with the default, `--classify` and `--trace` modes.
-- `.claude/hooks/lib/filing-shape-corpus.json`: the shared token-level corpus, with a floor of
-  75 rows.
-- `.claude/hooks/lib/filing-shape.test.sh` covers:
-  - corpus parity (the Perl side);
-  - lexer-record rows (exit 0, `OK` and exact fields);
-  - the bounds rows and `perl -c`;
-  - the flag-table staleness row;
+- **`.claude/hooks/lib/filing-shape.pl`:** the lexer, string runners, field parser, variable
+  corpus, predicate, memoization and bounds. Modes: default, `--classify` and `--trace`.
+- **`.claude/hooks/lib/filing-shape-corpus.json`:** the shared corpus, with a `_doc` element and a
+  floor of 80 executed rows.
+- **`.claude/hooks/lib/filing-shape.test.sh`:** runs the following.
+  - corpus parity, with an executed-row counter;
+  - lexer-record rows;
+  - bounds rows that assert `bound=<cause>`;
+  - `perl -c`;
+  - flag-table staleness;
   - `--probe`;
   - `--differential` (opt-in).
 
+  Shim rows copy the hook tree into a sandbox, as the existing `TAXO_SANDBOX` row does, and replace
+  `lib/filing-shape.pl` there. They never shim `perl` on `PATH`, which would also blind `$SCAN` and
+  the floor (test-design #9). Each shim touches a marker file that the row asserts.
+- **`apps/web-platform/test/server/inngest/filing-shape-corpus-parity.test.ts`:** the JS half of the
+  corpus.
+- **`knowledge-base/engineering/architecture/decisions/ADR-256-filing-gate-lexer-and-corpus-bound-predicate-parity.md`:**
+  the ordinal is provisional, and ship re-verifies it. Its latest base on `origin/main` is ADR-255,
+  checked 2026-09-28.
+
 ## Files to Edit
 
-- `.claude/hooks/guardrails.sh`, in the filing-gate block:
+- **`.claude/hooks/guardrails.sh`, in the filing-gate block:**
   - the lexer call and the record reader;
-  - `_gate_one_filing` and the union floor;
-  - the failure path;
-  - the refusal texts (head, ctx, the in-command clause, the prose hint, the absolute-path hint);
-  - deletion of `xargs -n1` and the three token loops;
-  - header comments rewritten.
-- `.claude/hooks/guardrails.test.sh`:
-  - the new rows (Test Scenarios), with `MIN_ASSERTIONS` bumped in the same commit;
-  - the "quoted endpoints on both sides of && are blanked" comment rewritten (its verdict stays
-    `<none>`, now for a different reason);
-  - the `TOK_MSG` rows kept.
-- `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs`: `ISSUES_COLLECTION_RE`,
-  `filingShape` and `filingJustificationReason`.
-- `apps/web-platform/server/cron-filing-deny-marker.ts`: import the regex and cut the head at
-  `[?#]`.
-- `apps/web-platform/test/server/inngest/cron-bash-allowlist-hook.test.ts`:
-  - the corpus `it.each`, with a literal floor;
+  - `_gate_one_filing`;
+  - the counted union floor, including the linear `_api_pl`;
+  - the failure path and its decision-table comment;
+  - the refusal texts;
+  - deleting `xargs -n1` and the three token loops;
+  - the header comments.
+- **`.claude/hooks/guardrails.test.sh`:**
+  - the new rows, with the `MIN_ASSERTIONS` bump in the same commit;
+  - the `decision_of` incident check;
+  - the "quoted endpoints on both sides of &&" comment;
+  - the `TOK_MSG` rows are kept.
+- **`apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs`:** `ISSUES_COLLECTION_RE`,
+  `filingShape`, `filingJustificationReason`, and the `decide()` dot-segment deny.
+- **`apps/web-platform/server/cron-filing-deny-marker.ts`:** import the regex, and cut at `[?#]`.
+- **`apps/web-platform/test/server/inngest/cron-bash-allowlist-hook.test.ts`:**
   - the `--input` refusal and its reorder row;
-  - two rows pinning that `decide()` denies `URL=$(gh issue create …)` and
-    `bash -c "gh issue create …"`.
-- `apps/web-platform/test/server/cron-filing-deny-marker.test.ts`: a `#fragment` head row.
-- `knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md`:
-  an addendum (see `## Architecture Decision (ADR/C4)`).
+  - the dot-segment deny rows;
+  - the two `decide()` pins, for `$(…)` and for `bash -c`.
+- **`apps/web-platform/test/repo-wide-suites.ts`:** register the parity test.
+- **`apps/web-platform/test/server/cron-filing-deny-marker.test.ts`:** the `#fragment` head row.
+- **`knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md`:**
+  a dated one-line pointer to ADR-256's scoped exception.
+- **`knowledge-base/engineering/architecture/diagrams/model.c4`:** one sentence in the
+  `hooks = container "Hook Engine"` description. It names the filing predicate's second
+  implementation (`filingShape()` in the cron containment hook) and the shared corpus that binds
+  the two.
 
 ## Open Code-Review Overlap
 
-None. No open `code-review` issue names any of the files above (queried 2026-09-28, a 200-issue
+None. No open `code-review` issue names any of the files above (queried 2026-09-28, 200-issue
 window).
 
 ## Non-Goals (re-homed to the follow-up issue at ship)
 
 - **Other filing routes:**
-  - GraphQL `createIssue` (labels there are ids, so exit 1 has no token to read);
+  - GraphQL `createIssue`;
   - `curl -X POST …/repos/o/r/issues`;
-  - variables not assigned as a literal in view.
-- **Computed or escaped command words:** `$'…'` escapes (`$'\x67h'`), brace expansion
-  (`gh {issue,} {create,}`), globs in `argv[1..2]`, and `$(printf gh)`.
+  - variables not assigned as a literal in view;
+  - `gh alias set ic 'issue create'` followed by `gh ic …`;
+  - function wrappers (`f(){ gh "$@"; }; f issue create …`);
+  - `source <(echo 'gh …')`;
+  - `python3 -c`/`node -e` running `gh` (security #14).
+- **Computed or escaped command words:** decoding `$'…'` escapes (`$'\x67h'`), brace expansion,
+  globs in `argv[1..2]`, and `$(printf gh)`.
 - **String runners beyond shells and `eval`:** `trap`, `watch`, `su`/`runuser -c`, `script -c`,
   `env -S`, a shell fed a heredoc or here-string, `ssh host STR`, `bash script.sh`,
   `printf … | bash`, and `parallel ::: "…"`.
-- **`xargs`/`parallel` completed from stdin:** `printf 'issue create …' | xargs gh` and
-  `echo -X POST … | xargs gh api …/issues`.
-- `.claude/hooks/follow-through-directive-gate.sh`, and the spellings in
-  `scripts/lint-workflow-issue-write-scope.py`'s `MUTATING_METHOD`.
-- **Cron mirror exits:** `labelTokenEquals` and the body loop still ignore flag values, and
+- **`xargs`/`parallel` completed from stdin.**
+- **Other gates and lints:**
+  - `.claude/hooks/follow-through-directive-gate.sh`;
+  - the `MUTATING_METHOD` spellings in `scripts/lint-workflow-issue-write-scope.py`.
+- **Cron mirror exits:** `labelTokenEquals` and the body loop are not value-position-aware.
   `argumentInjectionReason` does not refuse `--input <file>` to non-issue endpoints.
-- **The endpoint owner is not read**, so an api-form POST to another owner's repo is not exempt.
+- **The endpoint owner is not read:** an api-form POST to another owner's repo is not exempt.
+- **The pre-existing quadratic `strip_command_bodies`** (`_incidents_heredoc_re`, used by 13
+  hooks). It gets its own issue at ship.
 - **Over-gating that errs toward gating:**
-  - `-X GET` with fields or with `--input`;
+  - `-X GET` with fields or `--input`, and a repeated `-X POST -X GET`;
   - `gh issue create --help`;
-  - an unquoted `echo gh issue create`, and `bash -c 'echo gh issue create'`;
-  - `a=(gh issue create)`, and a function body defined but never called;
+  - an unquoted `echo gh issue create`, `bash -c 'echo gh issue create'`, `man gh issue create` and
+    `[[ … =~ (gh issue create) ]]`;
+  - `a=(gh issue create)`, and a function body that is never called;
   - a `$`-only endpoint that is not an issues collection;
-  - a comment POST whose body token ends in `repos/o/r/issues` (Kieran #14 proposes matching only
-    the first positional argument instead; see DC-3).
+  - a comment POST whose body ends in `repos/o/r/issues` (DC-3).
 
 ## Technical Considerations
 
-- **Performance.**
-  - One extra perl fork runs on every Bash call. That is 13 ms per 64 KB of input, measured.
-  - The depth limit, the character budget and `alarm 2` bound the pathological cases. Tripping any
-    of them returns exit 3.
-- **Fail direction.**
-  - Detection is the lexer **plus** `main`'s detectors, so the hook is never weaker than `main`.
-  - A lexer failure on a command that looks like a filing never allows it: it denies when `main`
-    would gate the command or the agent can fix it, and asks otherwise (ADR-157).
+- **Performance** (performance-oracle, measured on this host):
+  - The hook takes 69-76 ms per call today. The lexer fork adds about 5-8 ms, or 8-10%.
+  - A bare perl start costs 3.5-4 ms.
+  - The bounds are:
+    - one global character budget, charged in every frame;
+    - memoized re-lexing, which turns 2^depth into depth;
+    - `alarm 2` with an exit-3 handler.
+  - The quadratic `_api_pl` is made linear. The indicator runs in `grep -E`, which takes 5-17 ms
+    on the inputs where bash `=~` takes 3-72 s.
+  - Not adopted: merging the strip, `_api_pl` and the lexer into one perl process under one alarm
+    (DC-5).
+- **Fail direction:**
+  - Detection is the lexer **plus** `main`'s counted detectors.
+  - A floor-only hit always denies.
+  - A lexer failure on a command that looks like a filing denies (exit 2) or asks (our machinery),
+    and never allows. This is ADR-256's scoped exception to ADR-157's "never denies".
 - **Over-fire.** Recursing into every substitution is correct, because bash runs them. The risk is
-  the lexer misreading prose as code, which three things pin:
+  prose misread as code. Four things pin it:
   - the PR3 must-PASS rows, each also asserting that the lexer exits 0 and prints `OK`;
   - the oracle's `prose` rows;
-  - the every-commit shape, run with hostile heredoc bodies.
-- **Portability.**
-  - Perl uses core modules only, with NUL-framed output, so no JSON module is needed.
-  - The record reader works on bash 3.2.
-  - Test code reads the corpus with `jq`.
-- **Attack surface enumeration.**
+  - the every-commit shape with hostile heredoc bodies;
+  - `decision_of`'s check that no non-F row writes an incident.
+- **Portability:**
+  - Perl uses core modules only, and the NUL framing needs no JSON module.
+  - The record reader is safe on bash 3.2.
+  - Test code reads the corpus with `jq` (shell) and `readFileSync` (vitest).
+  - Other harnesses: `guardrails.sh` also runs under Codex (`.codex/config.toml`) and Devin
+    (`.devin/config.json`). Whether they honor `ask` is **unverified**, and the ADR records that
+    (architecture #5).
+- **Attack surface enumeration:**
   - **Covered (PR1/PR2):** `gh issue create|new` and REST `gh api` POSTs, in any executed position
-    this lexer models.
-  - **Re-homed:** the Non-Goals list.
+    this lexer models, including `repositories/<id>/issues` and dot-segment paths.
+  - **Re-homed:** the Non-Goals.
   - **Cron:** `decide()` stops every substitution and non-allowlisted verb before `filingShape`
-    runs, so for cron the predicate's spelling set is the whole surface (PR5).
-- **Bundle safety.** The mirror gets no new import and no asset reference, and only tests read the
+    runs, and it now also stops dot-segment escapes from the allowlist prefix.
+  - **Cron allowlists:** apart from `gh`/`git` prefixes, the cron allowlists grant only two pinned
+    `bash plugins/soleur/skills/…/*.sh` invocations (`_cron-claude-eval-substrate.ts`
+    `CRON_BASH_ALLOWLISTS`). No allowlist grants an open shell.
+- **Bundle safety.** The mirror gets no new asset reference. Only the new test file reads the
   corpus.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
 
-The plan amends **ADR-157** ("a hook that cannot parse its input asks") with a dated addendum. The
-addendum records three decisions:
+The plan creates **ADR-256**, "Filing-gate classification via a shell lexer, with a corpus-bound
+predicate shared with the cron mirror". The ordinal is provisional. ADR-157 gets a dated one-line
+pointer to it. ADR-256 records three decisions:
 
-1. **Parse failures in the filing gate.** When the lexer fails, the hook denies if the agent can
-   fix the command or `main` would gate it, and asks if our own machinery failed. The addendum
-   records the loose indicator and the union floor.
-2. **Lexing replaces blanked-text grepping.** Filings are classified by lexing the command, not by
-   grepping text with quotes blanked. The hook and the cron mirror share a predicate spec that one
-   corpus enforces; they do not share code.
-3. **Build-vs-buy alternatives, each rejected (CTO devex):**
-   - `shfmt --to-json`: a Go binary that is not on operator hosts, and `-c` strings would still
-     need re-parsing.
-   - tree-sitter-bash: heredocs inside `$(…)` are unreliable.
-   - `bashlex`: unmaintained and not installed.
-   - `bash -n`: produces no argv.
-   - `Text::ParseWords`: measured failing.
+1. **Lexing replaces blanked-text grepping.** `main`'s detectors stay as a counted union floor. The
+   floor may be removed only after the `--differential` oracle has run clean on 3 consecutive
+   filing-gate changes, and the ADR records that criterion.
+2. **Parity is a corpus-bound predicate spec, not shared code.** The ADR names the three consumers:
+   the Perl `filing_shape`, the JS `filingShape` and the deny marker's import.
+3. **A scoped exception to ADR-157's "never denies"** (architecture #2).
+   - The exception covers only commands that match the filing indicator, or that `main`'s floor
+     detects. There, an agent-fixable failure (exit 2) or a floor-only hit denies, because the
+     repair is never a filing and ADR-157's bricking concern does not apply.
+   - Every other machinery failure asks, per ADR-157. The kill switch still applies, and the
+     telemetry is a cause enum with no payload.
+   - ADR-157 covered parsing the tool-call envelope. It now also covers lexing the command.
+   - Whether Codex and Devin honor `ask` is recorded as unverified.
 
-   A CI-only shfmt cross-check is noted as a possible follow-up.
+The ADR's Alternatives section lists these rejected options:
 
-Why an addendum and not a new ADR: the fail direction extends ADR-157's own rule, and the parity
-contract lives in `filing-shape.pl`'s header, next to the code it constrains (DHH, simplicity). The
-CTO had asked for a new ADR (DC-4).
+- `shfmt --to-json`: not on operator hosts, and `-c` strings would still need re-parsing;
+- tree-sitter-bash: heredocs inside `$(…)`;
+- `bashlex`: unmaintained;
+- `bash -n`: gives no argv;
+- `Text::ParseWords`: measured failing;
+- shelling out to node: couples the hook to the web-platform module graph;
+- amending ADR-157 alone: DHH and simplicity preferred it, but architecture found the parity
+  contract does not belong under ADR-157's title (DC-4).
+
+A CI-only shfmt cross-check is noted as a follow-up option.
 
 ### C4 views
 
-No C4 impact. All three model files were checked
-(`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`):
+The C4 model gets **one edit**, in `model.c4`. The `hooks = container "Hook Engine"` description
+says `.claude/hooks/` is "the only tree of hook CODE" since the PreToolUse mirrors were retired. This
+plan names a second implementation of one hook predicate (`filingShape()` in the cron containment
+hook), bound by a corpus that lives in the Hook Engine tree. The description gets one sentence that
+says so (architecture #4).
 
-- **External human actors:** none new. The agent's envelope is already modeled as `claude -> hooks`
-  ("Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-156)…").
+The rest of the enumeration was checked against all three files and needs no change:
+
+- **External human actors:** none new. `claude -> hooks` already models the untrusted envelope.
 - **External systems:** none new. The hook calls no service.
-- **Containers and data stores:** the Hook Engine container is modeled, and its description
-  ("Guards tool calls …") stays true. The new file is a library inside that container. No data
-  store is touched.
-- **Access relationships:** none change.
+- **Data stores:** none touched.
+- **Access relationships:** none changed.
 
-Phase 5 must also show `plugins/soleur/test/c4-count-parity.test.sh` green.
+Phase 5 runs `c4-code-syntax.test.ts`, `c4-render.test.ts` and `c4-count-parity.test.sh`.
 
 ### Sequencing
 
-The addendum is true at merge. There is no soak period.
+ADR-256 and the C4 sentence are true at merge. There is no soak.
 
 ## User-Brand Impact
 
@@ -686,10 +892,10 @@ feeds it the predicate's own regex.
 
 ```yaml
 liveness_signal:
-  what: "filing-shape.test.sh verdict line (corpus parity, lexer records, bounds, flag-table staleness) and guardrails.test.sh verdict line, each under a literal MIN_ASSERTIONS floor, plus the corpus it.each in cron-bash-allowlist-hook.test.ts"
+  what: "filing-shape.test.sh verdict line (corpus parity, lexer records, bounds, flag-table staleness) and guardrails.test.sh verdict line, each under a literal executed-row floor, plus filing-shape-corpus-parity.test.ts in the repo-wide vitest project"
   cadence: "every scripts/test-all.sh run and every CI run (both .test.sh suites are glob-discovered; the vitest runs in the web-platform test job)"
   alert_target: "a RED suite fails its CI leg and blocks the PR"
-  configured_in: "scripts/test-all.sh SUITE_GLOBS (.claude/hooks/*.test.sh, .claude/hooks/lib/*.test.sh), scripts/suite-shard-legs.tsv, apps/web-platform vitest config"
+  configured_in: "scripts/test-all.sh SUITE_GLOBS (.claude/hooks/*.test.sh, .claude/hooks/lib/*.test.sh), scripts/suite-shard-legs.tsv, apps/web-platform/test/repo-wide-suites.ts"
 
 error_reporting:
   destination: "hook: permissionDecisionReason plus emit_incident rows in .claude/.rule-incidents.jsonl (guardrails-require-milestone, wg-defer-only-after-inline-triage, and the new guardrails-filing-lexer-failure code with its cause); cron: the SOLEUR_CRON_FILING_DENY pino WARN marker shipped to Better Stack by the Vector app_container_warn_filter"
@@ -718,12 +924,23 @@ logs:
 
 discoverability_test:
   command: "bash .claude/hooks/lib/filing-shape.test.sh --probe"
-  expected_output: "PROBE create"
+  expected_output: "PROBE=create"
 ```
 
 `--probe` runs exactly one lexer call, on `URL=$(gh issue create --title x)`, and prints
-`PROBE <shape>`. It takes well under a second. Check 10's allowlist does not include `perl`, which
+`PROBE=<shape>`. It takes well under a second. Check 10's allowlist does not include `perl`, which
 is why the probe goes through `bash`.
+
+**Deepen-plan Phase 4.7 disposition.** Two proxy checks flagged this block:
+
+- **The "suite-shaped command" check.** `filing-shape.test.sh` matches `[-.]test\.`, but the check
+  is a false hit. `--probe` is parsed first and exits before any row, corpus load or oracle runs,
+  so it makes one perl fork. The suite file is just the place to put a Check-10-legal `bash` entry
+  point without adding a sixth file.
+- **The "prose `expected_output`" check.** The original value `PROBE create` contained whitespace,
+  which the check reads as prose. The fix is `PROBE=create`, a single token with no whitespace.
+
+AC11 is updated to match.
 
 ## Guard Contract
 
@@ -757,16 +974,18 @@ command is not.
 | G1-6 | Heredoc body starts at `<<` instead of the next newline | RED: D21 |
 | G1-7 | Unquoted-delimiter heredoc bodies not scanned | RED: D27 |
 | G1-8 | Detection limited to `argv[0]` | RED: the D16 launcher rows (except `/usr/bin/gh`, which is `argv[0]`) |
-| G1-9 | `\|` not a separator | RED: D43, `gh issue create --title x --body y -m M \| tee --label meta/machinery`, which must deny. `tee`'s `--label` would otherwise read as the filing's exit |
+| G1-9 | `\|` not a separator | RED: D43, `gh issue create --title x --body y --milestone M \| tee --label meta/machinery` (base allows; must deny). `tee`'s `--label` would otherwise read as the filing's exit |
 | G1-10 | Quoted-delimiter heredoc bodies lexed as code | RED: P5, P6, whose body lines START with `gh issue create --title x --body y` |
 | G1-11 | Single-quoted spans lexed as code | RED: P7 |
 | G1-12 | `${…}` text lexed as a script | RED: P8 |
 | G1-13 | Comments not skipped before substitution recursion | RED: P9 |
 | G1-14 | Own dispatch: a lexer exit ≠ 0 read as "no filings" | RED: F-exit2 and F-exit3 run on `URL=$(gh issue create …)`, which the floor cannot see |
-| G1-15 | Own dispatch: `OK`/`RC` check removed, so a truncated stream reads as complete | RED: F-trunc, a shim printing a partial record on `URL=$(gh issue create …)` and exiting 0 |
+| G1-15 | Own dispatch: `OK`/`RC` check removed, so a truncated stream reads as complete | RED: F-empty, a sandbox shim printing NOTHING on `URL=$(gh issue create …)` and exiting 0 (ask expected). F-trunc alone is masked by the count parser (test-design #5) |
 | G1-16 | Floor removed from the union | RED: F-floor, a lexer shim printing only `OK` on a bare top-level create |
 | G1-17 | Second member: only the first record is gated | RED: D29 |
 | G1-18 | Reorder: records parsed by searching for `OK` instead of by count | RED: F-count, a shim record whose field value contains `OK\0` and whose `nfields` is correct. A search-based parser stops early and drops the second filing |
+| G1-19 | The floor compares yes/no instead of a per-shape count | RED: F-count2, a sandbox shim reporting ONE justified create on a command with two top-level creates (the second unjustified). The floor counts 2, which is more than 1, so the hook must deny (security #2) |
+| G1-20 | The failure path checks the indicator before the floor | RED: D53 (the depth bound trips; the indicator misses across a `\`-newline; the floor must still deny) |
 
 **Harness rows.**
 
@@ -791,14 +1010,14 @@ own argv.
 **Assembly.** The producer is the field parser in `filing-shape.pl`; its flag tables are pinned to
 a gh version, and a staleness row checks them. The consumer is `_gate_one_filing`, which reads the
 fields `repo`, `milestone`, `label`, `bodyfile`, `body`/`bodyvar` and `input`. No other reader of
-`_repo_toks` remains in the filing path, and the only reader of `$COMMAND` is the `bodyvar`
-fallback.
+`_repo_toks` remains in the filing path. No reader of `$COMMAND` remains either, since the `bodyvar`
+fallback reads the lexer's `varcorpus`.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| G2-1 | Fields computed over the whole command | RED: D24, D25, D26, D35 |
+| G2-1 | Fields computed over the whole command | RED: D24, D25, D26, D45 (`find -exec` cut) |
 | G2-2 | Value-taking flags not skipped | RED: D36, D37 |
 | G2-3 | `$`-valued `--repo` treated as external | RED: D38 |
 | G2-4 | Own dispatch: `_gate_one_filing` returns before its checks | RED: every filing deny row |
@@ -834,10 +1053,11 @@ The corpus file is the one fixture source.
 | G3-2 | Perl drops the attached `-ftitle=` arm | RED in `filing-shape.test.sh` only |
 | G3-3 | Either side drops `#` from the endpoint regex | RED in that suite |
 | G3-4 | Own dispatch: the corpus loader returns `[]` | RED: the literal floor, in both suites |
-| G3-5 | Second member: only the first corpus row asserted | RED: the literal floor |
+| G3-5 | Second member: only the first corpus row asserted | RED: the EXECUTED-row counter (shell loop counter, vitest `ran++` in `afterAll`) falls short of its literal floor |
 | G3-6 | The deny marker keeps a local `ENDPOINT_RE` without `#` | RED: the deny-marker fragment row |
 | G3-7 | Reorder: the cron `--input` refusal moved after exit 1 | RED: "`--input` with `-f labels[]=meta/machinery` still denies" |
 | G3-8 | POST_SIGNAL's `$` arm loses its required prefix | RED: C-row `gh api repos/o/r/issues --jq "$Q"` → `none` |
+| G3-9 | The cron `decide()` dot-segment deny is removed | RED: vitest `gh api repos/jikig-ai/soleur/labels/../issues …` must deny under the `gh api repos/jikig-ai/soleur/` allowlist |
 
 **Harness rows.**
 
@@ -860,13 +1080,15 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
   `git show 4170460eea:.claude/hooks/` tree (never the worktree).
   - Every D-row not tagged `[base-deny]` FAILs.
   - Every P-row not tagged `[base-deny]` passes.
-  - `[base-deny]` marks rows the base already denies (D28's `_api_pl` spellings, D34) or must-PASS
+  - `[base-deny]` marks rows the base already denies (D28's `-X=POST`, `-ftitle=` and `--input=` rows, D34) or must-PASS
     rows the base denies (P16, the `-m` form). D36 is base-denied too. Those rows pin the patched
     behavior and are
     excluded from the RED check.
-- [ ] **AC3.** Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bash-allowlist-hook.test.ts test/server/cron-filing-deny-marker.test.ts`.
-  It passes, and the corpus test asserts `corpus.length >= 75` as a literal.
-- [ ] **AC4.** The corpus holds at least 75 rows, covering:
+- [ ] **AC3.** Run `cd apps/web-platform && ./node_modules/.bin/vitest run --project repo-wide test/server/inngest/filing-shape-corpus-parity.test.ts`
+  and `./node_modules/.bin/vitest run test/server/inngest/cron-bash-allowlist-hook.test.ts test/server/cron-filing-deny-marker.test.ts`.
+  Both pass. The parity test counts executed rows (`ran >= 80` in `afterAll`, a literal) and asserts all three classes over the asserted rows.
+- [ ] **AC4.** The corpus holds at least 80 rows, covering:
+  - `$E-X POST`, `${E}-X POST`, `repositories/<id>/issues`, a `..` segment, `"$B/issues"`;
   - every POST_SIGNAL spelling against the base endpoint, including `-iXPOST`, `-iftitle=x`,
     `-X$M`, `-f "$T"` and lowercase `post`;
   - every endpoint form with `-X POST`: `/`, `?q`, `#f`, leading `/`, a full URL, `$REPO`,
@@ -886,9 +1108,13 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
   body:
   - every allow→deny flip is an oracle-truth filing;
   - every deny→allow flip is a justified filing, a `-m` filing or a sub-resource.
-- [ ] **AC6 (bounds, asserted by exit code, not wall clock).**
-  - A 20-deep nested `bash -c` gives lexer exit 3.
-  - A 12-deep `bash -c "$(…)"` nesting gives exit 3 from the character budget.
+- [ ] **AC6 (bounds, asserted by exit code and `bound=<cause>`, not wall clock).** Test-design #10
+  and performance-oracle drive these rows:
+  - A 20-deep `$(…)` nesting (which grows linearly and cannot hit the budget) gives exit 3 with
+    `bound=depth`.
+  - A budget row, sized from the formula at Phase 3 and never from a guess, gives exit 3 with
+    `bound=budget`. With memoization on, a nested `bash -c "$(…)"` stays well under the budget; a
+    row pins that too (exit 0).
   - A 300 KiB padded command ending in a bare create gets a hook decision of `deny`, through the
     floor.
   - One wall-clock tripwire, the 12-deep hook call under 8 s, stays a suite row and is not an AC.
@@ -902,9 +1128,10 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
 - [ ] **AC10.** All of these hold:
   - `python3 scripts/lint-guard-contract.py` passes on this plan;
   - `bash plugins/soleur/test/c4-count-parity.test.sh` passes;
-  - ADR-157 carries the dated addendum;
+  - ADR-256 exists (ordinal re-verified at ship), and ADR-157 carries the dated pointer to it;
+  - the C4 tests pass after the `model.c4` sentence: `c4-code-syntax.test.ts` and `c4-render.test.ts`;
   - the PR body carries `Closes #9089` and links the residual follow-up issue.
-- [ ] **AC11.** `bash .claude/hooks/lib/filing-shape.test.sh --probe` prints `PROBE create`.
+- [ ] **AC11.** `bash .claude/hooks/lib/filing-shape.test.sh --probe` prints `PROBE=create`.
 
 ## Domain Review
 
@@ -920,8 +1147,7 @@ any-position detection, lexer bounds, per-filing exits, value-position gaps, har
 separated failure causes, and `{owner}` rows. The `ISSUES` casing was probed and returns 404, so
 the regex stays case-sensitive. The devex findings were all adopted: `--trace`, the in-command
 clause in refusals, row IDs in labels plus a header guide, a committed `--differential` mode, a
-flag-table staleness row, a Perl layout contract, and build-vs-buy alternatives in the ADR
-addendum.
+flag-table staleness row, a Perl layout contract, and build-vs-buy alternatives in ADR-256.
 
 ### Product/UX Gate
 
@@ -941,7 +1167,7 @@ Not applicable. No file matches the UI-surface list, and the mechanical override
 | Hand-graded AC5, a tautological AC3 count, and a post-deploy anchor | spec-flow #12-#14 | Oracle-generated expectations and literal floors |
 | Value-position flags, `$`-repo, relative body-file, record parsing | spec-flow #19 | Flag-table fields, no exemption for `$` values, an absolute-path hint, and F-count |
 | Wall-clock AC6 | plan-review standing check | Bounds asserted by exit code |
-| Assignment map unsound and over-built | Kieran #4, DHH #5, simplicity | Cut. `$`-only endpoints gate, a `$` repo is never external, and a `$` body falls back to `$COMMAND` |
+| Assignment map unsound and over-built | Kieran #4, DHH #5, simplicity | Cut. `$`-only endpoints gate, a `$` repo is never external, and a `$` body falls back to the variable corpus (revision 4) |
 | Stdin completion, string-runner tail, `$'…'` decoding | DHH #7-#8, simplicity, Kieran #3/#9 | Moved to Non-Goals |
 | Prefilter bypassable (`g''''h`) | Kieran #3 | Cut; the lexer always runs |
 | Five exit codes and a separate disagreement branch | DHH #3-#4, simplicity | Two exit codes and a plain union floor |
@@ -949,8 +1175,19 @@ Not applicable. No file matches the UI-surface list, and the mechanical override
 | Mutations that could not go RED (G1-8, G1-9, G1-18) and failure rows the floor masked | Kieran #6-#7 | New witnesses (D43, F-count), and failure rows run on floor-invisible commands |
 | Predicate: basename vs `tokens[0]`, `$` arm too broad, `-i` clusters, Perl `$` vs `\z`, root `--repo` | Kieran #8, #11 | Normalize before classify, prefix-required `$` arm, `-i` clusters, `\z`, and root `--repo` (verified) |
 | Property IDs collided with row IDs | Kieran #12 | Properties renamed PR1-PR8 |
-| New ADR vs. amend | DHH #10, simplicity vs. CTO | Amend ADR-157 (DC-4) |
+| New ADR vs. amend | DHH #10, simplicity vs. CTO, then architecture #2-#3 | Revision 3 amended ADR-157; revision 4 reinstates ADR-256 as a scoped exception (DC-4) |
 | `--probe` ceremony | simplicity, DHH #11 | Kept: Check 10's allowlist excludes `perl`, so the probe needs `bash` |
+| Floor gated behind the indicator (allow where `main` denies); floor yes/no | security #1, #2 | Floor-only hit denies first; floor counts per shape (G1-19, G1-20, D53) |
+| `$'…'` end and `$"…"` desync; `<<<`; NUL | security #3, #4, test-design #7 | `\\`/`\'`-aware `$'…'` end; `$"…"` lexed as `"…"`; `<<<` redirection; NUL → exit 2 (D52) |
+| `bodyvar` read other commands' text; repeated `--body`; `body=@file`; `labels[]=` on create | security #5-#8 | Variable corpus (heredocs + assignments only); last value wins; `@` → bodyfile; api-only label field (D44, D46-D48) |
+| `find -exec` label leak; `--repo` spellings; `repositories/<id>`, `..`, `"$B/issues"`; `bash -c -o posix` | security #9-#13 | argv cut at `;`/`+`; repo normalization; regex + dot-segment + partial-expansion endpoints; cron `decide()` dot-segment deny (D45, D49-D51, G3-9) |
+| Mutation rows that could not go RED (D43, D28 tags, G2-1/D35, G3-5, G1-15) | test-design #1-#5 | `--milestone M` in D43, per-spelling tags, D45 for G2-1, executed-row floors, F-empty |
+| Existing `$E-X POST` row silently routed through the floor | test-design #6 | V-prefix POST_SIGNAL arms; `decision_of` fails any non-F row that writes a lexer-failure incident |
+| Oracle vacuity (unset vars, no doppler shim, truth ≠ predicate); shim blinding the floor | test-design #8-#9 | Exported vars, doppler shim, per-column truth ≥ 1, aligned truth; sandbox-copy shims with markers |
+| Bounds rows did not show which bound fired | test-design #10, performance | `bound=<cause>` on stderr; linear depth row; formula-sized budget row |
+| Quadratic `_api_pl` and `=~` indicator; re-lex doubling; alarm exit 142 | performance-oracle | Linear `_api_pl`; `grep -E` indicator; memoized re-lexing; `$SIG{ALRM}` → exit 3; `$^W` over `use warnings` |
+| Vitest corpus read skipped on hook-only diffs; ADR-157 "never denies" contradicted; parity under wrong ADR; C4 Hook Engine sentence false | architecture #1-#4 | `repo-wide` parity test; ADR-256 as a scoped exception; model.c4 sentence |
+| ADR-157 clauses (payload-free telemetry, kill switch, other harnesses); phase ordering; PR6 half-true | architecture #5-#7 | Cause enum; kill switch → allow + incident; Codex/Devin `ask` recorded unverified; Phase 0a/0b; PR6 scoped |
 
 ## Test Scenarios
 
@@ -1004,18 +1241,39 @@ A ⏎ marks a newline. `[base-deny]` marks a row the base hook already denies.
     (the milestone gate fires)
   - D26 `gh issue list --label meta/machinery && gh api repos/jikig-ai/soleur/issues -X POST -f title=x`
   - D35 `echo "User-Impact: docs page Fix-Size: 200 lines / 5 files"; bash -c "gh issue create --title x --body y --milestone M"`
+    (G2-7 witness only; its literal body `y` is the corpus)
     (the justification gate fires)
   - D36 `[base-deny]` `gh issue create --title -mx --body y --label meta/machinery` (the milestone gate fires)
   - D37 `gh issue create --title x --body --label=meta/machinery --milestone M`
   - D38 `gh issue create --repo "$OWNER/soleur" --title x --body y`
   - D40 `EP=repos/jikig-ai/soleur/issues; gh api "$EP" -X POST -f title=x`
 - **POST spellings, multiple filings and parsing:**
-  - D28 `[base-deny]` One row each: `… -X=POST -f title=x`, `… -ftitle=x`, `… --input=b.json`,
-    `… -X "$M" -f title=x`, `… -iXPOST -f title=x`, `… -iftitle=x`
+  - D28 One row each (test-design #2): `[base-deny]` `… -X=POST -f title=x`, `[base-deny]` `… -ftitle=x`,
+    `[base-deny]` `… --input=b.json`, and untagged `… -X "$M" -f body=y`, `… -iXPOST -f body=y`,
+    `… -iftitle=x` (the `body=y` field keeps the `-X` arm the only POST signal under test)
+  - D44 `echo "Mandated-By: wg-x" >/dev/null; gh issue create --title x --body "$B" -m M`
+    (the `bodyvar` corpus is heredocs plus assignment values, never another command's arguments)
+  - D45 `find . -maxdepth 0 -exec gh issue create --title x --body y -m M \; -exec echo --label meta/machinery \;`
+  - D46 `gh issue create --title x --body "Mandated-By: wg-x" --body y -m M` (gh keeps the last body)
+  - D47 `gh api repos/jikig-ai/soleur/issues -f title=x -F 'body=@/tmp/j Mandated-By: wg-x'`
+    (`body=@…` is a body file)
+  - D48 `gh issue create --title 'labels[]=meta/machinery' --body y -m M`, and
+    `gh issue create --title x -F 'labels[]=meta/machinery' -m M` (`labels[]=` is credited only on api filings)
+  - D49 `gh issue create -R JIKIG-AI/soleur --title x --body y`, `-R github.com/jikig-ai/soleur` and
+    `-R https://github.com/jikig-ai/soleur` (all ours after normalization)
+  - D50 `gh api repositories/1143547205/issues -X POST -f title=x`,
+    `gh api repos/jikig-ai/soleur/labels/../issues -X POST -f title=x`, and
+    `B=repos/jikig-ai/soleur; gh api "$B/issues" -X POST -f title=x`
+  - D51 `bash -c -o posix 'gh issue create --title x --body y'`
+  - D52 `echo $'\''; gh issue create --title x --body y -m M # '`, and
+    `echo $"$(gh issue create --title x --body y)"`
+  - D53 `: $(: $(: …17 levels…)); gh api \` ⏎ `repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y`
+    (depth bound trips; the floor still denies, security #1)
+  - D54 existing row 966's command wrapped in `$(…)` (`$E-X POST` inside a substitution; the corpus's V-prefix arm)
   - D29 `gh issue create --title a --body b$J; bash -c "gh issue create --title x --body y"`
   - D30 `gh issue create --title a --body b$J && gh api repos/jikig-ai/soleur/issues -X POST -f title=x`
   - D34 `[base-deny]` `gh issue create --title OK --body RC`
-  - D43 `gh issue create --title x --body y -m M | tee --label meta/machinery`
+  - D43 `gh issue create --title x --body y --milestone M | tee --label meta/machinery` (base allows)
 
 Every deny row that reaches the justification gate gets an `assert_reason` twin. The twin pins:
 
@@ -1071,6 +1329,8 @@ which the floor cannot see, unless noted:
 | F-exit3-bare | A shim exiting 3, bare create | deny (floor) |
 | F-nonfiling | Any failure on a command without the indicator | `<none>` |
 | F-trunc | A partial record, then exit 0 | ask |
+| F-empty | No output at all, then exit 0 | ask (G1-15 witness) |
+| F-count2 | One justified record on a command holding two bare top-level creates | deny (G1-19 witness) |
 | F-count | The G1-18 witness | both filings gated |
 | F-floor | A shim printing only `OK`, bare create | deny |
 | F-bounds | The AC6 rows | exit 3 and exit 3 from the lexer; `deny` from the hook on the 300 KiB row |
@@ -1085,7 +1345,7 @@ which the floor cannot see, unless noted:
 
 **Vitest:**
 
-- the corpus `it.each`, with its literal floor;
+- `filing-shape-corpus-parity.test.ts` (in the repo-wide project), counting executed rows against a literal floor;
 - `decide()` denies `URL=$(gh issue create …)` and `bash -c "gh issue create …"`;
 - the `--input` refusal rows, including G3-7;
 - the deny marker heads `repos/o/r/issues#x` as `gh api repos/o/r/issues`.
