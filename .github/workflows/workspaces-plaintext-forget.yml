@@ -3,11 +3,14 @@
 #
 # SINGLE-USE: PR B (the `for_each` narrowing in server.tf) deletes this file together with its test.
 #
-# WHY A SEPARATE WORKFLOW. The forget must serialize with every writer of this root's LOCKLESS R2 state,
-# i.e. take `terraform-apply-web-platform-host` — the literal every apply of apps/web-platform/infra
-# uses. As a job inside workspaces-luks-cutover.yml it would hold `web-1-swap` and then the host group:
-# the INVERSE of the apply workflows' order, which can deadlock. And it cannot be an apply_target of
-# apply-web-platform-infra.yml, which sits ~725 bytes under its 490,000-byte cap.
+# WHY A SEPARATE WORKFLOW. (1) Credential separation: the destructive wipe job (root SSH to web-1 and a
+# Hetzner WRITE token) never holds the R2 state credentials or runs `terraform init`; this run holds
+# those and nothing that reaches web-1. (2) It is independently and idempotently re-runnable
+# (`already_forgotten` once state is clean), so a failure here never re-enters the wipe. It still takes
+# `terraform-apply-web-platform-host`, the literal every apply of apps/web-platform/infra uses, as the
+# serializer of this root's LOCKLESS R2 state (belt: the pause check below proves no apply is running).
+# It cannot be an apply_target of apply-web-platform-infra.yml, which sits a few hundred bytes under
+# its 490,000-byte cap.
 #
 # WHY `state rm` AND NOT CONFIG (measured on Terraform 1.10.5, ADR-119 addendum 2026-09-28): a narrowed
 # `for_each` over state that still holds ["web-1"] plans a delete that `prevent_destroy` refuses, and
@@ -27,7 +30,7 @@
 # state is printed, tee'd, written to a file or uploaded. The job runs on `infra-privileged` (Tier-B,
 # main-only) with NO reviewer: it only forgets addresses whose object is measured gone.
 #
-# Recovery: if a newer pending apply replaced this pending run in the concurrency group, re-dispatch it.
+# Recovery: re-dispatch with the same inputs — it is idempotent (`already_forgotten` once state is clean).
 
 name: workspaces plaintext state forget (#6604 step 7, single-use)
 
@@ -102,8 +105,10 @@ jobs:
           case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
           [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN secret is not configured."; exit 1; }
 
-      # The apply job's own step, verbatim below the xtrace prelude (the loader exports no backend
-      # config; the bucket is fixed in main.tf).
+      # The apply job's own step below the xtrace prelude (the loader exports no backend config; the
+      # bucket is fixed in main.tf), with ONE deliberate difference: the GITHUB_ENV write uses the
+      # loader's HEREDOC-DELIMITER form, never `K=V` — a value carrying a newline would otherwise write a
+      # second variable (BASH_ENV=...) that every later step honours (.github/actions/infra-credentials).
       - name: Extract backend credentials
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -126,8 +131,9 @@ jobs:
           fi
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
-          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
-          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          d1="SOLEUR_EOF_$(openssl rand -hex 12)"; d2="SOLEUR_EOF_$(openssl rand -hex 12)"
+          printf 'AWS_ACCESS_KEY_ID<<%s\n%s\n%s\n' "$d1" "$KEY_ID" "$d1" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY<<%s\n%s\n%s\n' "$d2" "$SECRET" "$d2" >> "$GITHUB_ENV"
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
@@ -145,27 +151,56 @@ jobs:
           case $- in *x*) echo "::error::refusing to run under xtrace (a Hetzner token is in scope)"; exit 78 ;; esac
           [[ -n "${HCLOUD_TOKEN:-}" ]] || { echo "::error::the infra-credentials loader exported no HCLOUD_TOKEN"; exit 1; }
           HBODY="$(mktemp)"
+          # --- the Hetzner helpers: byte-identical in every copy (workspaces-luks-cutover-workflow.test.sh
+          # pins that). hapi <METHOD> <path> [json] -> prints the HTTP status ("000" on a transport error);
+          # body -> $HBODY. -w, never -f (a 404 is an ANSWER), and the token rides stdin (--config -).
           hapi() {
             local code rc=0
+            local -a extra=()
+            [[ -n "${3:-}" ]] && extra=(-H 'Content-Type: application/json' --data "$3")
             code="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" \
-              | curl -sS --max-time 15 --config - -X "$1" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
+              | curl -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
             [[ "$rc" -eq 0 ]] || code="000"
             printf '%s' "$code"
           }
+          # errcode — the API's .error.code only (never the body), at most 64 bytes; fail() escapes it.
           errcode() {
             local v
             v="$(jq -r '.error.code // empty' "$HBODY" 2>/dev/null | head -c 64 || true)"
-            v="${v//%/%25}"; v="${v//$'\r'/%0D}"; v="${v//$'\n'/%0A}"
             printf '%s' "${v:-none}"
           }
-          fail() { echo "::error::$*"; exit 1; }
+          # fail — EVERY annotation is %/CR/LF-escaped here, so no API value (a name, a status, an error
+          # code) can split the annotation or smuggle a workflow command into it.
+          fail() {
+            local m="$*"
+            m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"
+            echo "::error::$m"
+            exit 1
+          }
+          presence_proof() {
+            local code
+            code="$(hapi GET "/servers/${WEB1_SERVER_ID}")"
+            [[ "$code" == 200 ]] || fail "presence proof: GET /servers/${WEB1_SERVER_ID} -> ${code} (error.code=$(errcode)) — this token cannot see web-1, so no 404 it returns can mean 'gone'"
+            [[ "$(jq -r '.server.name' "$HBODY")" == "$WEB1_SERVER_NAME" ]] || fail "presence proof: server ${WEB1_SERVER_ID} is not named ${WEB1_SERVER_NAME}"
+            jq -e --argjson l "$LUKS_VOLUME_ID" '.server.volumes | index($l) != null' "$HBODY" >/dev/null \
+              || fail "presence proof: server ${WEB1_SERVER_ID} does not hold the live LUKS volume ${LUKS_VOLUME_ID}"
+          }
+          # assert_apply_paused_idle — the delete->PR-B window pause is REAL: both push-apply workflows
+          # disabled_manually and nothing queued or running (disabling does not cancel a queued run).
+          # Byte-identical in every copy (pinned by the workflow suite).
+          assert_apply_paused_idle() {
+            local wf st busy
+            for wf in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml; do
+              st="$(gh api "repos/${REPO}/actions/workflows/${wf}" | jq -r '.state')"
+              [[ "$st" == disabled_manually ]] || fail "${wf} is '${st}', not disabled_manually — the window pause is not real (runbook step 7 d): a push apply would re-create a plaintext volume"
+              busy="$(gh run list --repo "$REPO" --workflow "$wf" --limit 50 --json status \
+                | jq '[.[] | select(.status == "queued" or .status == "waiting" or .status == "pending" or .status == "requested" or .status == "in_progress")] | length')"
+              [[ "$busy" == 0 ]] || fail "${wf} has ${busy} queued/running run(s) — disabling does not cancel a queued run; wait for it"
+            done
+          }
           # (a) presence FIRST: a token that cannot see web-1 holding the LUKS volume is a token for
           # another project, and its 404s mean nothing.
-          code="$(hapi GET "/servers/${WEB1_SERVER_ID}")"
-          [[ "$code" == 200 ]] || fail "presence proof: GET /servers/${WEB1_SERVER_ID} -> ${code} (error.code=$(errcode))"
-          [[ "$(jq -r '.server.name' "$HBODY")" == "$WEB1_SERVER_NAME" ]] || fail "presence proof: server ${WEB1_SERVER_ID} is not ${WEB1_SERVER_NAME}"
-          jq -e --argjson l "$LUKS_VOLUME_ID" '.server.volumes | index($l) != null' "$HBODY" >/dev/null \
-            || fail "presence proof: server ${WEB1_SERVER_ID} does not hold the live LUKS volume ${LUKS_VOLUME_ID}"
+          presence_proof
           # ...then gone: the pin 404s AND the name lookup is empty.
           code="$(hapi GET "/volumes/${PINNED}")"
           [[ "$code" == 404 ]] || fail "volume ${PINNED} answers ${code}, not 404 — it is not gone; nothing is forgotten (error.code=$(errcode))"
@@ -173,13 +208,7 @@ jobs:
           [[ "$code" == 200 ]] || fail "name lookup -> ${code} (error.code=$(errcode))"
           [[ "$(jq -r '.volumes | length' "$HBODY")" == 0 ]] || fail "a volume named ${PLAINTEXT_VOLUME_NAME} still exists while the pin 404s — a typo'd pin? nothing is forgotten"
           # (b) the delete->PR-B window pause is still real (a push apply would re-create the volume).
-          for wf in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml; do
-            st="$(gh api "repos/${REPO}/actions/workflows/${wf}" | jq -r '.state')"
-            [[ "$st" == disabled_manually ]] || fail "${wf} is '${st}', not disabled_manually — the window pause is not real"
-            busy="$(gh run list --repo "$REPO" --workflow "$wf" --limit 50 --json status \
-              | jq '[.[] | select(.status == "queued" or .status == "waiting" or .status == "pending" or .status == "requested" or .status == "in_progress")] | length')"
-            [[ "$busy" == 0 ]] || fail "${wf} has ${busy} queued/running run(s)"
-          done
+          assert_apply_paused_idle
           echo "volume ${PINNED} is gone (404, empty name lookup, presence proven); both push-apply workflows paused and idle"
 
       - name: Forget the retired plaintext addresses

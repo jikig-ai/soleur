@@ -212,7 +212,14 @@ if run_step:
     check("cutover's .env carries CONFIRM_WIPE then DRY_RUN as its LAST two lines",
           re.search(r"printf 'CONFIRM_WIPE=%s\\n' \"\$CONFIRM_WIPE\";\s*printf 'DRY_RUN=%s\\n' \"\$DRY_RUN\"\s*\)", cbody) is not None)
     check("cutover's .env is built one named printf per line (no multi-%s format)", not re.search(r"printf '[^']*%s[^']*%s", cbody))
-    check("cutover's ::error:: guidance lists outcome wipe_aborted", "wipe_aborted" in cbody)
+    check("cutover's ::error:: guidance names a refused wipe rehearsal as `dry_run mode=wipe` (the outcome cleanup() really writes)",
+          "dry_run mode=wipe" in cbody and "wipe_aborted (mode=wipe" not in cbody)
+    # T5 (P1) — Guard 2's other half: DRY_RUN reaches the host as dry_run itself. A hardcoded '0' here
+    # would turn the UNGATED wipe rehearsal (CONFIRM_WIPE=1) into a real zero.
+    check("cutover delivers DRY_RUN = inputs.dry_run exactly (the ungated wipe rehearsal can never be DRY_RUN=0)",
+          cenv.get("DRY_RUN") == "${{ inputs.dry_run && '1' || '0' }}", cenv.get("DRY_RUN"))
+    check("cutover delivers PLAINTEXT_SIZE_BYTES from preflight's output exactly",
+          cenv.get("PLAINTEXT_SIZE_BYTES") == "${{ needs.preflight.outputs.size_bytes }}", cenv.get("PLAINTEXT_SIZE_BYTES"))
 wj = jobs.get("wipe") or {}
 check("wipe needs preflight", wj.get("needs") == "preflight", wj.get("needs"))
 check("wipe runs ONLY on a real wipe dispatch (if: wipe_plaintext && !dry_run, exactly)",
@@ -245,13 +252,53 @@ if i_host >= 0:
     hbody = str(hs.get("run", ""))
     check("the host step runs on EVERY wipe (no if: — a hand-detached, never-wiped volume must be refused, never deleted)", "if" not in hs, hs.get("if"))
     check("the host step unsets HCLOUD_TOKEN first", re.match(r"\s*(set [^\n]*\n\s*)*unset HCLOUD_TOKEN", hbody) is not None)
-    check("the host ssh keeps the tunnel alive through a silent zero (ServerAliveInterval)", "ServerAliveInterval=30" in hbody and "ServerAliveCountMax=10" in hbody)
+    hcode = [l for l in hbody.splitlines() if not l.lstrip().startswith("#")]
+    main_ssh = [l for l in hcode if l.lstrip().startswith("${WEB_HOST_SSH}") and "workspaces-cutover.sh" in l]
+    check("the host ssh keeps the tunnel alive through a silent zero (ServerAliveInterval=30 CountMax=10 ON the ssh line itself)",
+          len(main_ssh) == 1 and "-o ServerAliveInterval=30 -o ServerAliveCountMax=10" in main_ssh[0], main_ssh)
     check("the host output is wrapped in ::stop-commands:: with a random token", "::stop-commands::" in hbody and "openssl rand -hex" in hbody)
     check("the host step delivers CONFIRM_WIPE=1 and DRY_RUN=0 (the only destructive delivery in the file)",
           "printf 'CONFIRM_WIPE=%s\\n' 1" in hbody and "printf 'DRY_RUN=%s\\n' 0" in hbody)
     check("the host step captures the ssh rc from PIPESTATUS, not from tee", "PIPESTATUS[0]" in hbody)
 if i_bridge >= 0:
     check("the wipe bridge step blanks HCLOUD_TOKEN in its env", (wsteps[i_bridge].get("env") or {}).get("HCLOUD_TOKEN", None) == "")
+# T3 — ORDER without BLOCKING proves nothing: a continue-on-error or an if: on pre/host/api would let a
+# failed precondition or a failed host step fall through to the next step. None may carry either.
+for sid in ("pre", "host", "api"):
+    hits = [st for st in wsteps if st.get("id") == sid]
+    st = hits[0] if hits else {}
+    check(f"wipe step `{sid}` carries no continue-on-error and no if: (a failure must stop the job)",
+          bool(hits) and "continue-on-error" not in st and "if" not in st, {k: st.get(k) for k in ("if", "continue-on-error")})
+# ...and the WIRES between them are exact (a hardcoded value would sever the step from its source).
+WIRES = {
+    ("pre", "API_STATE_PREFLIGHT"): "${{ needs.preflight.outputs.api_state }}",
+    ("host", "API_STATE"): "${{ needs.preflight.outputs.api_state }}",
+    ("host", "PLAINTEXT_SIZE_BYTES"): "${{ needs.preflight.outputs.size_bytes }}",
+    ("api", "API_STATE"): "${{ needs.preflight.outputs.api_state }}",
+    ("api", "HOST_RESULT"): "${{ steps.host.outputs.result }}",
+    ("pre", "PIN"): "${{ inputs.expected_plaintext_volume_id }}",
+    ("host", "PIN"): "${{ inputs.expected_plaintext_volume_id }}",
+    ("api", "PIN"): "${{ inputs.expected_plaintext_volume_id }}",
+}
+for (sid, k), want in WIRES.items():
+    st = next((x for x in wsteps if x.get("id") == sid), {})
+    check(f"wipe step `{sid}` env {k} is exactly {want}", (st.get("env") or {}).get(k) == want, (st.get("env") or {}).get(k))
+pf_out = (jobs.get("preflight") or {}).get("outputs") or {}
+check("preflight outputs map exactly to steps.api.outputs (api_state, size_bytes)",
+      pf_out == {"api_state": "${{ steps.api.outputs.api_state }}", "size_bytes": "${{ steps.api.outputs.size_bytes }}"}, pf_out)
+# impact F2 — the post-API live-mount re-check: after api, before the bundle removal and the bridge
+# teardown, on every run whose host step succeeded (the API step may have acted, success or not).
+i_post = sidx(lambda st: st.get("id") == "post")
+i_rm = sidx(lambda st: st.get("name") == "Remove remote wipe bundle")
+i_td = sidx(lambda st: st.get("name") == "Tear down cloudflared SSH bridge")
+check("the post-API live-mount re-check runs after api and before the bundle removal and the bridge teardown",
+      -1 not in (i_api, i_post, i_rm, i_td) and i_api < i_post < i_rm < i_td, (i_api, i_post, i_rm, i_td))
+if i_post >= 0:
+    check("the post-API re-check runs whenever the host step succeeded, even if the API step failed",
+          wsteps[i_post].get("if") == "${{ always() && steps.host.outcome == 'success' }}", wsteps[i_post].get("if"))
+    pb = str(wsteps[i_post].get("run", ""))
+    check("the post-API re-check asserts the mapper mount AND readyz on the host, paging through the emit helper",
+          "findmnt -no SOURCE /mnt/data" in pb and "wl_probe_readyz" in pb and "workspaces_luks_emit" in pb and "/dev/mapper/workspaces" in pb)
 # The wipe's API bodies (preflight classification, wipe preconditions, wipe detach/delete). The
 # pre-existing LUKS-volume lookup in the cutover Run step is out of this scope and unchanged.
 wipe_api_runs = " ".join(str(st.get("run", "")) for jn, j in jobs.items() for st in (j.get("steps") or [])
@@ -262,13 +309,76 @@ check("no wipe API call uses curl -f/--fail (a 404 must be READ with -w, never t
 check("no wipe API call puts the token on curl argv — it rides --config - on stdin",
       "--config -" in wipe_api_runs and "Authorization" not in re.sub(r"printf 'header = \"Authorization: Bearer %s\"[^']*'", "", wipe_api_runs))
 # Extract the step bodies the behavioral legs below execute.
-for (jn, sid, fn) in (("preflight", "api", "pf-api.sh"), ("wipe", "pre", "wipe-pre.sh"), ("wipe", "host", "wipe-host.sh"), ("wipe", "api", "wipe-api.sh")):
+for (jn, sid, fn) in (("preflight", "api", "pf-api.sh"), ("wipe", "pre", "wipe-pre.sh"), ("wipe", "host", "wipe-host.sh"), ("wipe", "api", "wipe-api.sh"), ("wipe", "post", "wipe-post.sh")):
     hits = [st for st in (jobs.get(jn) or {}).get("steps") or [] if st.get("id") == sid]
     check(f"exactly one {jn} step with id {sid}", len(hits) == 1, len(hits))
     if len(hits) == 1:
         open(f"{scratch}/{fn}", "w").write(str(hits[0].get("run", "")))
 if run_step:
     open(f"{scratch}/cutover-run.sh", "w").write(str(run_step[0].get("run", "")))
+
+# The workflow-level env, as the behavioral legs' environment (T4's rule applied here too): the stubs
+# run the bodies with the FILE's constants, never with values this suite injects.
+wenv = wf.get("env") or {}
+with open(f"{scratch}/wf-env.txt", "w") as fh:
+    for k, v in wenv.items():
+        fh.write(f"{k}={v}\n")
+
+# T5 behavioral input: the cutover Run step's env EVALUATED for a (wipe_plaintext, dry_run) dispatch —
+# the `A && 'x' || 'y'` expressions evaluated as GitHub does (both treat '' as false, '0' as true).
+def gh_eval(expr, inputs, extra):
+    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", str(expr))
+    if not m:
+        return str(expr)
+    e = m.group(1)
+    for k, v in extra.items():
+        e = e.replace(k, repr(v))
+    e = re.sub(r"inputs\.([a-z_]+)", lambda mm: repr(inputs.get(mm.group(1), "")), e)
+    e = e.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
+    v = eval(e, {"__builtins__": {}}, {})
+    return "" if v is False or v is None else ("true" if v is True else str(v))
+if run_step:
+    for tag, inputs in (("wipe-rehearsal", {"wipe_plaintext": True, "dry_run": True, "rollback": False, "rollback_ack_luks_writes": False,
+                                            "clean_stray": False, "expected_plaintext_volume_id": "105149570"}),):
+        extra = {"needs.preflight.outputs.size_bytes": "21474836480", "env.WEB_HOST_PRIVATE_IP": str(wenv.get("WEB_HOST_PRIVATE_IP")),
+                 "secrets.WORKSPACES_LUKS_BOOT_TOKEN": "dp.st.boot-token-synth", "secrets.DOPPLER_TOKEN": "dp.st.runner-synth"}
+        with open(f"{scratch}/cutover-env-{tag}.txt", "w") as fh:
+            for k, v in (run_step[0].get("env") or {}).items():
+                fh.write(f"{k}={gh_eval(v, inputs, extra)}\n")
+
+# ── parity (simple F1/F2/F3, quality F3) — the copies are the binding checks, so they may not drift ──
+fwf = yaml.safe_load(open(".github/workflows/workspaces-plaintext-forget.yml"))
+fsteps = ((fwf.get("jobs") or {}).get("forget") or {}).get("steps") or []
+def fn_block(body, name):
+    m = re.search(r"^([ \t]*)" + re.escape(name) + r"\(\) \{\n.*?^\1\}$", body, re.M | re.S)
+    return m.group(0) if m else None
+def body_of(steps_, sid):
+    return next((str(st.get("run", "")) for st in steps_ if st.get("id") == sid), "")
+copies = {"preflight.api": body_of((jobs.get("preflight") or {}).get("steps") or [], "api"),
+          "wipe.pre": body_of(wsteps, "pre"), "wipe.api": body_of(wsteps, "api"), "forget.gone": body_of(fsteps, "gone")}
+for fname, where in (("hapi", list(copies)), ("errcode", list(copies)), ("fail", list(copies)), ("presence_proof", list(copies)),
+                     ("assert_apply_paused_idle", ["wipe.pre", "wipe.api", "forget.gone"])):
+    blocks = {w: fn_block(copies[w], fname) for w in where}
+    distinct = {b for b in blocks.values()}
+    check(f"parity: {fname}() is present and byte-identical in {'/'.join(where)}",
+          None not in distinct and len(distinct) == 1, {w: (b or "MISSING")[:40] for w, b in blocks.items()})
+fenv = fwf.get("env") or {}
+for k, lit in (("WEB1_SERVER_ID", "123931471"), ("WEB1_SERVER_NAME", "soleur-web-platform"), ("LUKS_VOLUME_ID", "106443278"),
+               ("PLAINTEXT_VOLUME_NAME", "soleur-web-platform-data")):
+    check(f"parity: {k} is {lit} in BOTH workflows", str(wenv.get(k)) == lit == str(fenv.get(k)), f"{wenv.get(k)} / {fenv.get(k)}")
+check("parity: the pin constant is 105149570 in both workflows (cutover PLAINTEXT_VOLUME_ID == forget PINNED)",
+      str(wenv.get("PLAINTEXT_VOLUME_ID")) == "105149570" == str(fenv.get("PINNED")), f"{wenv.get('PLAINTEXT_VOLUME_ID')} / {fenv.get('PINNED')}")
+DELIV = re.compile(r"\"bash -c 'install -m600 /dev/stdin .*?workspaces-cutover\.sh\\\"'\"")
+cd_ = DELIV.findall(str(run_step[0].get("run", ""))) if run_step else []
+wd_ = DELIV.findall(body_of(wsteps, "host"))
+check("parity: the remote `bash -c 'install … shred … . .env … workspaces-cutover.sh'` delivery string is byte-identical in cutover and wipe",
+      len(cd_) == 1 and len(wd_) == 1 and cd_[0] == wd_[0], (len(cd_), len(wd_)))
+# R-CENSUS (YAML) — the Hetzner detach and DELETE verbs appear ONLY in the wipe job's api step, in
+# either workflow (a detach/delete added anywhere else has no Guard 6 in front of it).
+MUT = re.compile(r"/actions/detach|hapi DELETE|-X DELETE|--request DELETE")
+where = [f"{wn}:{jn}:{st.get('id') or st.get('name')}" for wn, w in (("cutover", wf), ("forget", fwf))
+         for jn, j in (w.get("jobs") or {}).items() for st in (j.get("steps") or []) if MUT.search(str(st.get("run", "")))]
+check("census: Hetzner detach/DELETE appear ONLY in cutover:wipe:api", where == ["cutover:wipe:api"], where)
 
 for v in verdicts:
     print("\t".join(v))
@@ -278,6 +388,12 @@ while IFS=$'\t' read -r verdict name detail; do
   [[ -n "${verdict:-}" ]] || continue
   if [[ "$verdict" == "ok" ]]; then ok "$name"; else no "$name${detail:+ ($detail)}"; fi
 done < "$SCRATCH/verdicts.tsv"
+
+# The workflow-level env: the bodies run with the FILE's constants (identity ids, names, the pin), never
+# with values this suite injects — a typo in the workflow then fails here instead of passing.
+WF_ENV=()
+while IFS= read -r l; do [[ -n "$l" ]] && WF_ENV+=("$l"); done < "$SCRATCH/wf-env.txt"
+[[ "${#WF_ENV[@]}" -ge 5 ]] || no "INSTRUMENT: the workflow env could not be read from the YAML (${#WF_ENV[@]} vars)"
 
 # --- bash -n on EXTRACTED run: bodies ----------------------------------------------------------
 syntax_bad=0
@@ -345,7 +461,7 @@ fi
 if [[ -f "$SCRATCH/pregate.sh" ]]; then
   gate_out() {  # <confirm> <dry> <rollback> <clean_stray> <wipe> <pin> [ack]
     local rc=0 out
-    out="$(CONFIRM="$1" DRY="$2" ROLLBACK_IN="$3" CLEAN_STRAY_IN="$4" WIPE_IN="$5" PIN_IN="$6" ACK_IN="${7:-false}" \
+    out="$(env "${WF_ENV[@]}" CONFIRM="$1" DRY="$2" ROLLBACK_IN="$3" CLEAN_STRAY_IN="$4" WIPE_IN="$5" PIN_IN="$6" ACK_IN="${7:-false}" \
       bash --noprofile --norc -eo pipefail "$SCRATCH/pregate.sh" 2>&1)" || rc=$?
     printf '%s|%s' "$rc" "$out"
   }
@@ -362,6 +478,8 @@ if [[ -f "$SCRATCH/pregate.sh" ]]; then
     && ok "a non-numeric expected_plaintext_volume_id is refused" || no "a non-numeric pin was accepted"
   [[ "$(gate_out "$WTOK" true false false true "")" != 0\|* ]] \
     && ok "a wipe with an EMPTY pin is refused" || no "a wipe with an empty pin was accepted"
+  [[ "$(gate_out "$WTOK" true false false true 105149571)" != 0\|* ]] \
+    && ok "a numeric pin that is NOT the constant 105149570 is refused (S2: the pin is a typo-guard, never the selector)" || no "a non-constant pin was accepted"
   [[ "$(gate_out "CUTOVER-WORKSPACES-LUKS" true false false false 105149570)" != 0\|* ]] \
     && ok "a pin on a NON-wipe dispatch is refused (a mis-filled field is surfaced, not ignored)" || no "a pin on a non-wipe dispatch was accepted"
   [[ "$(gate_out "CUTOVER-WORKSPACES-LUKS" true false false true 105149570)" != 0\|* ]] \
@@ -418,12 +536,22 @@ cat > "$BIN/gh" <<'STUB'
 #!/usr/bin/env bash
 printf 'gh %s\n' "$*" >> "$GH_LOG"
 case "$*" in
-  *"actions/workflows/apply-web-platform-infra.yml"*) printf '{"state":"%s"}\n' "${GH_STATE_APPLY:-disabled_manually}" ;;
+  *"actions/workflows/apply-web-platform-infra.yml"*)
+    # GH_APPLY_STATES="a b": SEQUENCED answers per call (saturating on the last) — a pause that holds at
+    # the first check and is lifted before the second.
+    if [ -n "${GH_APPLY_STATES:-}" ]; then
+      n=0; [ -f "$GH_LOG.n" ] && n="$(cat "$GH_LOG.n")"; echo $((n + 1)) > "$GH_LOG.n"
+      set -- $GH_APPLY_STATES; i=$((n + 1)); [ "$i" -gt $# ] && i=$#; eval "st=\${$i}"
+      printf '{"state":"%s"}\n' "$st"
+    else printf '{"state":"%s"}\n' "${GH_STATE_APPLY:-disabled_manually}"; fi ;;
   *"actions/workflows/apply-deploy-pipeline-fix.yml"*) printf '{"state":"%s"}\n' "${GH_STATE_PIPELINE:-disabled_manually}" ;;
   "run list"*"--workflow apply-web-platform-infra.yml"*) printf '%s\n' "${GH_RUNS_APPLY:-[]}" ;;
   "run list"*"--workflow apply-deploy-pipeline-fix.yml"*) printf '%s\n' "${GH_RUNS_PIPELINE:-[]}" ;;
   "run list"*"--workflow workspaces-luks-verify.yml"*) printf '%s\n' "${GH_VERIFY_RUNS:-[]}" ;;
-  "run view "*"--log"*) printf '%s\n' "${GH_VERIFY_LOG:-}" ;;
+  # The log is keyed on the run id (T6): only the run the fixture lists as the verify run has a log with
+  # a verdict in it, so a body that viewed ANY other run would read no verdict.
+  "run view ${GH_VERIFY_RID:-424242} "*"--log"*) printf '%s\n' "${GH_VERIFY_LOG:-}" ;;
+  "run view "*"--log"*) printf 'verify\tset up job\t2026-09-28T04:41:00.0000000Z Current runner version\n' ;;
   *) echo "STUB_UNKNOWN gh $*" >> "$GH_LOG"; exit 64 ;;
 esac
 STUB
@@ -432,9 +560,13 @@ cat > "$BIN/ssh-stub" <<'STUB'
 cmd="${*: -1}"
 printf 'ssh %s\n' "$*" >> "$SSH_LOG"
 case "$cmd" in
-  *"mktemp -d"*) printf '/var/lib/workspaces-luks/wl-cutover.TEST\n' ;;
-  *"tar xzf"*) cat > /dev/null ;;
+  *"mktemp -d"*) printf '%s\n' "${SSH_MKTEMP_OUT-/var/lib/workspaces-luks/wl-cutover.TESTAB}"; printf 'host-rc-noise ::warning::from-mktemp\n' >&2 ;;
+  *"tar xzf"*) cat > /dev/null; printf 'host-tar-noise ::warning::from-tar\n'; exit "${SSH_UPLOAD_RC:-0}" ;;
   *"workspaces-cutover.sh"*) cat > "$SSH_ENV_CAPTURE"; [ -f "${SSH_HOST_OUT:-/dev/null}" ] && cat "$SSH_HOST_OUT"; exit "${SSH_RC:-0}" ;;
+  # the post-API re-check: its host script arrives as the `bash -c` argument and runs FOR REAL (the
+  # remote command string is evaluated as the host's shell would) against a fake bundle dir (a stub
+  # emit helper) and a findmnt stub on PATH.
+  *"' post-check '"*) eval "${cmd//\/var\/lib\/workspaces-luks\/wl-cutover.TESTAB/$SSH_POST_DIR}" ;;
   *) : ;;
 esac
 exit 0
@@ -448,7 +580,7 @@ VOL_DETACHED='{"volume":{"id":105149570,"name":"soleur-web-platform-data","serve
 SRV_BOTH='{"server":{"id":123931471,"name":"soleur-web-platform","volumes":[105149570,106443278]}}'
 SRV_LUKS_ONLY='{"server":{"id":123931471,"name":"soleur-web-platform","volumes":[106443278]}}'
 LOOKUP_ONE='{"volumes":[{"id":105149570,"name":"soleur-web-platform-data"}]}'
-fx_reset() { rm -rf "$FIX"; mkdir -p "$FIX"; : > "$SCRATCH/curl.log"; : > "$SCRATCH/curl.cfg"; : > "$SCRATCH/gh.log"; : > "$SCRATCH/ssh.log"; : > "$SCRATCH/sleep.log"; }
+fx_reset() { rm -rf "$FIX"; mkdir -p "$FIX"; : > "$SCRATCH/curl.log"; : > "$SCRATCH/curl.cfg"; : > "$SCRATCH/gh.log"; rm -f "$SCRATCH/gh.log.n"; : > "$SCRATCH/ssh.log"; : > "$SCRATCH/sleep.log"; }
 fx() {  # <METHOD> <path> <seq-index> <code> <body>
   local key; key="$(printf '%s_%s' "$1" "$2" | tr -c 'A-Za-z0-9_\n' '_')"
   printf '%s\n%s' "$4" "$5" > "$FIX/$key.$3"
@@ -467,9 +599,7 @@ run_body() {
   BODY_OUT="$(env PATH="$BIN:$PATH" CURL_LOG="$SCRATCH/curl.log" CURL_CFG="$SCRATCH/curl.cfg" FIX="$FIX" \
     GH_LOG="$SCRATCH/gh.log" SSH_LOG="$SCRATCH/ssh.log" SLEEP_LOG="$SCRATCH/sleep.log" \
     GITHUB_OUTPUT="$SCRATCH/gh_output" GITHUB_STEP_SUMMARY="$SCRATCH/gh_summary" GITHUB_ENV="$SCRATCH/gh_env" \
-    GITHUB_REPOSITORY="jikig-ai/soleur" REPO="jikig-ai/soleur" PIN="105149570" \
-    PLAINTEXT_VOLUME_NAME="soleur-web-platform-data" WEB1_SERVER_ID="123931471" WEB1_SERVER_NAME="soleur-web-platform" \
-    LUKS_VOLUME_ID="106443278" HCLOUD_TOKEN="hc-token-synth" \
+    GITHUB_REPOSITORY="jikig-ai/soleur" REPO="jikig-ai/soleur" PIN="105149570" "${WF_ENV[@]}" HCLOUD_TOKEN="hc-token-synth" \
     "$@" bash --noprofile --norc -eo pipefail "$f" 2>&1)" || BODY_RC=$?
   GHOUT="$(cat "$SCRATCH/gh_output")"
 }
@@ -520,6 +650,11 @@ if [[ -f "$SCRATCH/pf-api.sh" ]]; then
   fx_reset; fx_happy_pre
   run_body "$SCRATCH/pf-api.sh" RO_TOKEN=ro-token-synth PIN=106443278
   [[ "$BODY_RC" != 0 ]] && ok "PF8 a pin equal to the LIVE LUKS id 106443278 is refused" || no "PF8 the LUKS id was accepted as the plaintext pin"
+  fx_reset; fx_happy_pre; fx GET "/volumes/105149571" 0 200 "${VOL_ATTACHED//105149570/105149571}"
+  run_body "$SCRATCH/pf-api.sh" RO_TOKEN=ro-token-synth PIN=105149571
+  [[ "$BODY_RC" != 0 && "$GHOUT" != *"api_state="* && "$BODY_OUT" == *"not the constant"* ]] \
+    && ok "PF10 (S2) the preflight classification refuses a pin that is not the constant, even for a well-formed volume" \
+    || no "PF10 a non-constant pin was classified by preflight (rc=$BODY_RC out=[$GHOUT])"
   fx_reset; fx_happy_pre; fx GET "/volumes/105149570" 0 500 '{"error":{"code":"server%error\r\n::add-mask::x"}}'
   run_body "$SCRATCH/pf-api.sh" RO_TOKEN=ro-token-synth
   [[ "$BODY_RC" != 0 && "$BODY_OUT" != *$'\n::add-mask::x'* ]] \
@@ -532,10 +667,22 @@ if [[ -f "$SCRATCH/wipe-pre.sh" ]]; then
   NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   OLD_ISO="$(date -u -d '-30 hours' +%Y-%m-%dT%H:%M:%SZ)"
   VERIFY_OK="[{\"databaseId\":424242,\"createdAt\":\"$NOW_ISO\",\"headBranch\":\"main\",\"conclusion\":\"success\",\"event\":\"schedule\"}]"
-  VERIFY_LOG_OK='verify	probe	[luks-monitor] SOLEUR_WORKSPACES_READYZ ready=true workspace_count=9 expected=8'
+  # The shape `gh run view --log` really prints: job<TAB>step<TAB>timestamp<SPACE>line. The verify step's
+  # SCRIPT is echoed into the same log, and its text contains the verdict literal too (measured on run
+  # 36414403037) — that echo is modelled here, so a grep that is not anchored on the host line passes it.
+  cat > "$SCRATCH/verify-echo.txt" <<'VLOG'
+verify	Re-assert	2026-09-28T04:41:10.1000000Z [36;1mif [[ "$(grep -cE '^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ready=true ' "$probe_log" || true)" -lt 1 ]]; then[0m
+VLOG
+  cat > "$SCRATCH/verify-ok.txt" <<'VLOG'
+verify	Re-assert	2026-09-28T04:41:12.3456789Z [luks-monitor] SOLEUR_WORKSPACES_READYZ ready=true writable=true populated=true workspace_count=9 expected=8 capacity=use=12%,mount=rw
+VLOG
+  VERIFY_SCRIPT_ECHO="$(cat "$SCRATCH/verify-echo.txt")"
+  VERIFY_LOG_OK="$VERIFY_SCRIPT_ECHO"$'\n'"$(cat "$SCRATCH/verify-ok.txt")"
   pre_run() { run_body "$SCRATCH/wipe-pre.sh" API_STATE_PREFLIGHT=attached GH_VERIFY_RUNS="$VERIFY_OK" GH_VERIFY_LOG="$VERIFY_LOG_OK" "$@"; }
   fx_reset; fx_happy_pre; pre_run
-  if [[ "$BODY_RC" == 0 ]] && grep -q '^PUT /volumes/105149570 DATA={"labels":{"role":"workspaces"}}$' "$SCRATCH/curl.log" && [[ "$(mutations)" == 0 ]]; then
+  if [[ "$BODY_RC" == 0 ]] && grep -q '^PUT /volumes/105149570 DATA={"labels":{"role":"workspaces"}}$' "$SCRATCH/curl.log" && [[ "$(mutations)" == 0 ]] \
+    && [[ "$GHOUT" == *"verify_run=424242"* && "$GHOUT" == *"workspace_count=9"* && "$GHOUT" == *"workspace_expected=8"* ]] \
+    && grep -q '^gh run view 424242 ' "$SCRATCH/gh.log"; then
     ok "W-PRE1 the preconditions pass on a paused, verified, write-capable world — the only write is the idempotent labels PUT, verbatim"
   else
     no "W-PRE1 happy preconditions failed (rc=$BODY_RC) ${BODY_OUT:0:240} curl=[$(tr '\n' '|' < "$SCRATCH/curl.log")]"
@@ -546,8 +693,27 @@ if [[ -f "$SCRATCH/wipe-pre.sh" ]]; then
   [[ "$BODY_RC" != 0 && "$(writes)" == 0 ]] && ok "W-PRE3 (Guard 6 #8) a queued apply-deploy-pipeline-fix run → refused (disabling does not cancel a queued run)" || no "W-PRE3 a queued run was accepted"
   fx_reset; fx_happy_pre; pre_run GH_VERIFY_RUNS="[{\"databaseId\":1,\"createdAt\":\"$OLD_ISO\",\"headBranch\":\"main\",\"conclusion\":\"success\"}]"
   [[ "$BODY_RC" != 0 && "$(writes)" == 0 ]] && ok "W-PRE4 (Guard 6 #9) no successful verify run on main in the last 24h → refused before web-1" || no "W-PRE4 a stale verify run was accepted"
-  fx_reset; fx_happy_pre; pre_run GH_VERIFY_LOG='[luks-monitor] SOLEUR_WORKSPACES_READYZ ready=false'
+  fx_reset; fx_happy_pre; pre_run GH_VERIFY_LOG="${VERIFY_LOG_OK//ready=true/ready=false}"
   [[ "$BODY_RC" != 0 ]] && ok "W-PRE5 a verify run whose log lacks ready=true → refused" || no "W-PRE5 a verify run without ready=true was accepted"
+  fx_reset; fx_happy_pre; pre_run GH_VERIFY_LOG="$VERIFY_SCRIPT_ECHO"
+  [[ "$BODY_RC" != 0 && "$(writes)" == 0 && "$BODY_OUT" == *"does not carry a host-emitted SOLEUR_WORKSPACES_READYZ ready=true line"* ]] \
+    && ok "W-PRE5b (R-VERIFY) a log whose only 'ready=true' is the ECHOED verify SCRIPT → refused BY the anchored verdict match (not by a later check)" \
+    || no "W-PRE5b the echoed script text satisfied the ready=true check (vacuous grep)"
+  fx_reset; fx_happy_pre; pre_run GH_VERIFY_LOG="${VERIFY_LOG_OK/workspace_count=9/workspace_count=7}"
+  [[ "$BODY_RC" != 0 && "$(writes)" == 0 ]] && ok "W-PRE5c a same-day verify run whose workspace_count is BELOW its baseline → refused" \
+    || no "W-PRE5c a shrunken inventory was accepted as a baseline"
+  fx_reset; fx_happy_pre; pre_run GH_VERIFY_RUNS="[{\"databaseId\":424242,\"createdAt\":\"$NOW_ISO\",\"headBranch\":\"main\",\"conclusion\":\"failure\"}]"
+  [[ "$BODY_RC" != 0 && "$(writes)" == 0 ]] && ok "W-PRE9 (T6) a same-day verify run that FAILED (its log may still print ready=true) → refused" \
+    || no "W-PRE9 a failed same-day verify run was accepted as the baseline"
+  fx_reset; fx_happy_pre; pre_run GH_VERIFY_RUNS="[{\"databaseId\":424242,\"createdAt\":\"$NOW_ISO\",\"headBranch\":\"feature\",\"conclusion\":\"success\"}]"
+  [[ "$BODY_RC" != 0 && "$(writes)" == 0 ]] && ok "W-PRE10 (T6) a same-day green verify run NOT on main → refused" \
+    || no "W-PRE10 a non-main verify run was accepted"
+  fx_reset; fx_happy_pre; pre_run GH_VERIFY_RID=31337
+  [[ "$BODY_RC" != 0 && "$(writes)" == 0 ]] && ok "W-PRE11 (T6) the log read is the SELECTED run's: another run's ready=true line cannot satisfy it" \
+    || no "W-PRE11 the verify log was not tied to the selected run"
+  fx_reset; fx_happy_pre; pre_run PIN=105149571
+  [[ "$BODY_RC" != 0 && "$(writes)" == 0 && "$BODY_OUT" == *"is not the constant"* && ! -s "$SCRATCH/curl.log" ]] \
+    && ok "W-PRE12 (S2) a pin that is not the constant is refused in the gated job too, before any API call" || no "W-PRE12 a non-constant pin passed pre (or was refused only later)"
   fx_reset; fx_happy_pre; fx PUT "/volumes/105149570" 0 403 '{"error":{"code":"forbidden"}}'
   pre_run
   [[ "$BODY_RC" != 0 ]] && ok "W-PRE6 a read-only token 403s on the labels PUT HERE, before web-1 is touched" || no "W-PRE6 a 403 write probe was accepted"
@@ -570,13 +736,16 @@ if [[ -f "$SCRATCH/wipe-host.sh" ]]; then
       WORKSPACES_LUKS_BOOT_TOKEN=boot-token-synth DOPPLER_TOKEN=dp-synth PLAINTEXT_SIZE_BYTES=21474836480 \
       LUKS_DEV_ID=106443278 "$@"
   }
-  WIPED="$ROWP result=wiped arm=first_wipe volume_id=105149570 bytes=21474836480 readback=zero"
+  WIPED="$ROWP result=wiped arm=first_wipe volume_id=105149570 bytes=21474836480 readback=zero io_max=8:32_rbps=157286400_wbps=157286400_riops=max_wiops=max plaintext_only=0"
   host_run attached "[workspaces-cutover] zeroing
 $WIPED"
   if [[ "$BODY_RC" == 0 && "$GHOUT" == *"result=wiped"* ]] \
     && [[ "$(tail -n 2 "$SCRATCH/env.capture" | tr '\n' ' ')" == "CONFIRM_WIPE=1 DRY_RUN=0 " ]] \
-    && [[ -z "$(cut -d= -f1 "$SCRATCH/env.capture" | sort | uniq -d)" ]] && grep -q '^WORKSPACES_PLAINTEXT_DEV=/dev/disk/by-id/scsi-0HC_Volume_105149570$' "$SCRATCH/env.capture"; then
-    ok "W-HOST1 one wiped row for the pin + ssh rc 0 → verdict wiped; the .env ends CONFIRM_WIPE=1, DRY_RUN=0 with no duplicate key"
+    && [[ -z "$(cut -d= -f1 "$SCRATCH/env.capture" | sort | uniq -d)" ]] && grep -q '^WORKSPACES_PLAINTEXT_DEV=/dev/disk/by-id/scsi-0HC_Volume_105149570$' "$SCRATCH/env.capture" \
+    && grep -qE '^ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 10\.0\.1\.10 bash -c .*workspaces-cutover\.sh' "$SCRATCH/ssh.log" \
+    && [[ "$(cat "$SCRATCH/gh_env")" == "REMOTE_DIR=/var/lib/workspaces-luks/wl-cutover.TESTAB" ]] \
+    && [[ "$GHOUT" == *"plaintext_only=0"* && "$GHOUT" == *"reason=none"* ]]; then
+    ok "W-HOST1 one wiped row for the pin + ssh rc 0 → verdict wiped; the .env ends CONFIRM_WIPE=1, DRY_RUN=0 with no duplicate key; the MAIN ssh carries the keepalive; GITHUB_ENV gets exactly the one REMOTE_DIR line; plaintext_only reaches the output"
   else
     no "W-HOST1 happy host step wrong (rc=$BODY_RC out=[$GHOUT]) env=[$(tr '\n' '|' < "$SCRATCH/env.capture" | sed 's/boot-token-synth/<tok>/')] ${BODY_OUT:0:200}"
   fi
@@ -613,6 +782,37 @@ $WIPED"
   [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/ssh.log" ]] \
     && ok "W-HOST10 a metacharacter in a .env value is refused BEFORE web-1 is reached (the host sources .env as shell)" \
     || no "W-HOST10 a metacharacter value reached the host (rc=$BODY_RC)"
+  host_run attached "$WIPED" WORKSPACES_LUKS_BOOT_TOKEN='dp.st.x$(touch /tmp/pwn)'
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/ssh.log" ]] \
+    && ok "W-HOST13 (S3) a boot token with shell metacharacters is refused BEFORE web-1 is reached (the .env is sourced as shell)" \
+    || no "W-HOST13 a metacharacter boot token reached the host (rc=$BODY_RC)"
+  host_run attached "$WIPED" PIN=105149571
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/ssh.log" ]] && ok "W-HOST17 (S2) a pin that is not the constant is refused before web-1" || no "W-HOST17 a non-constant pin reached the host"
+  host_run attached "$WIPED" SSH_MKTEMP_OUT=$'/var/lib/workspaces-luks/wl-cutover.TESTAB\nBASH_ENV=$(echo INJECTED >&2)'
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/gh_env" && ! -s "$SCRATCH/env.capture" && "$BODY_OUT" == *"::error::"*"GITHUB_ENV"* ]] \
+    && ok "W-HOST11 (S1) a host that answers mktemp with a SECOND line (BASH_ENV=…) is refused: nothing reaches GITHUB_ENV, nothing runs" \
+    || no "W-HOST11 a multi-line REMOTE_DIR reached GITHUB_ENV or the host ran (rc=$BODY_RC env=[$(head -c 120 "$SCRATCH/gh_env")])"
+  host_run attached "$WIPED" SSH_UPLOAD_RC=1
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/env.capture" && "$BODY_OUT" == *"bundle upload to web-1 failed"* ]] \
+    && ok "W-HOST12 (F8) a failed bundle upload stops the step ('nothing ran') before the main ssh" \
+    || no "W-HOST12 a failed upload went on to run the script (rc=$BODY_RC)"
+  host_run attached "$WIPED"
+  so="$(awk '/^::stop-commands::/ { print NR; exit }' <<<"$BODY_OUT")"
+  mk="$(awk '/from-mktemp/ { print NR; exit }' <<<"$BODY_OUT")"
+  if [[ -n "$so" && -n "$mk" && "$so" -lt "$mk" && "$BODY_OUT" != *"from-tar"* ]]; then
+    ok "W-HOST14 (S6) the fence opens before the FIRST host contact (the mktemp ssh's stderr is inside it) and the upload's output never reaches the log"
+  else
+    no "W-HOST14 host output escaped the fence (fence=$so mktemp-noise=$mk tar-noise=$([[ "$BODY_OUT" == *from-tar* ]] && echo y || echo n))"
+  fi
+  host_run attached "$ROWP result=refused arm=first_wipe volume_id=105149570 reason=wipe_target_held holders=dm-3
+SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=cutover_aborted outcome=wipe_aborted mode=wipe" SSH_RC=1
+  err_ln="$(awk '/^::error::/ { l = $0 } END { print l }' <<<"$BODY_OUT")"
+  if [[ "$BODY_RC" != 0 && "$GHOUT" == *"reason=wipe_target_held"* && "$GHOUT" == *"outcome=wipe_aborted"* && "$GHOUT" != *"result="* ]] \
+    && [[ "$err_ln" == *"reason=wipe_target_held"* && "$err_ln" == *"outcome=wipe_aborted"* ]]; then
+    ok "W-HOST15 (obs P2-3) a refused host run names reason= and outcome= (strict slugs) on the ::error:: annotation and the step output"
+  else
+    no "W-HOST15 the refusal slugs did not reach the annotation/output (out=[$GHOUT] err=[${err_ln:0:160}])"
+  fi
 fi
 
 # --- wipe `api`: detach -> poll -> delete -> 404 -> server volumes == [LUKS] --------------------------
@@ -632,8 +832,9 @@ if [[ -f "$SCRATCH/wipe-api.sh" ]]; then
   fx_reset; fx_api; api_run
   if [[ "$BODY_RC" == 0 ]] && [[ "$(grep -c '^POST /volumes/105149570/actions/detach' "$SCRATCH/curl.log")" == 1 ]] \
     && [[ "$(grep -c '^DELETE /volumes/105149570' "$SCRATCH/curl.log")" == 1 ]] && ! grep -q 'hc-token-synth' "$SCRATCH/curl.log" \
-    && grep -q 'hc-token-synth' "$SCRATCH/curl.cfg"; then
-    ok "W-API1 attached: one detach, polled to success, one DELETE 204, final 404 and server volumes == [106443278]; token only on stdin"
+    && grep -q 'hc-token-synth' "$SCRATCH/curl.cfg" && [[ "$GHOUT" == *"delete_issued=true"* && "$GHOUT" == *"deleted=true"* ]] \
+    && [[ "$(grep -c '^gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml' "$SCRATCH/gh.log")" == 2 ]]; then
+    ok "W-API1 attached: the pause re-proven twice (before the detach AND before the DELETE), one detach polled to success, one DELETE 204, final 404, server volumes == [106443278]; token only on stdin"
   else
     no "W-API1 the API sequence failed (rc=$BODY_RC) ${BODY_OUT:0:240} curl=[$(tr '\n' '|' < "$SCRATCH/curl.log" | cut -c1-300)]"
   fi
@@ -646,7 +847,8 @@ if [[ -f "$SCRATCH/wipe-api.sh" ]]; then
     || no "W-API2 a long detach re-POSTed or failed (rc=$BODY_RC posts=$(grep -c '^POST ' "$SCRATCH/curl.log"))"
   fx_reset; fx_api; fx GET "/actions/777" 2 200 '{"action":{"id":777,"status":"error"}}'
   api_run
-  [[ "$BODY_RC" != 0 && "$(grep -c '^DELETE ' "$SCRATCH/curl.log")" == 0 ]] && ok "W-API3 a detach action in error → failed, no DELETE" || no "W-API3 a failed detach went on to DELETE"
+  [[ "$BODY_RC" != 0 && "$(grep -c '^DELETE ' "$SCRATCH/curl.log")" == 0 && "$GHOUT" != *"delete_issued"* ]] \
+    && ok "W-API3 a detach action in error → failed, no DELETE, and no delete_issued (the summary then says to resume the applies)" || no "W-API3 a failed detach went on to DELETE"
   fx_reset; fx_api; fx GET "/volumes/105149570" 0 200 "$VOL_DETACHED"; fx GET "/volumes/105149570" 1 404 '{}'
   run_body "$SCRATCH/wipe-api.sh" API_STATE=detached HOST_RESULT=already_wiped_detached
   [[ "$BODY_RC" == 0 && "$(grep -c '^POST ' "$SCRATCH/curl.log")" == 0 && "$(grep -c '^DELETE ' "$SCRATCH/curl.log")" == 1 ]] \
@@ -662,13 +864,104 @@ if [[ -f "$SCRATCH/wipe-api.sh" ]]; then
   [[ "$BODY_RC" == 0 ]] && ok "W-API7 a DELETE 404 is accepted once the presence proof re-runs green" || no "W-API7 DELETE 404 with a green presence proof failed (rc=$BODY_RC) ${BODY_OUT:0:200}"
   fx_reset; fx_api; fx DELETE "/volumes/105149570" 0 404 '{}'; fx GET "/servers/123931471" 1 404 '{}'
   api_run
-  [[ "$BODY_RC" != 0 ]] && ok "W-API8 a DELETE 404 with the presence proof FAILING (blind token) is an error" || no "W-API8 a blind 404 was accepted as deleted"
+  [[ "$BODY_RC" != 0 && "$BODY_OUT" == *"presence proof"* && "$(awk '/^DELETE /{f=1} f && /^GET \/volumes\/105149570$/ {n++} END {print n+0}' "$SCRATCH/curl.log")" == 0 ]] \
+    && ok "W-API8 a DELETE 404 with the presence proof FAILING (blind token) is an error — raised BY the post-DELETE presence proof, before any 'gone' GET" \
+    || no "W-API8 a blind 404 was accepted, or refused by something other than the presence proof (rc=$BODY_RC) ${BODY_OUT:0:160}"
   fx_reset; fx_api; fx GET "/servers/123931471" 2 200 "$SRV_BOTH"
   api_run
   [[ "$BODY_RC" != 0 ]] && ok "W-API9 the server still listing the plaintext volume after the delete → failed" || no "W-API9 final server volumes not asserted"
   fx_reset; fx_api
   api_run PIN=106443278
   [[ "$BODY_RC" != 0 && "$(mutations)" == 0 ]] && ok "W-API10 the pin equal to the LUKS id is re-checked in the API step → no write" || no "W-API10 the LUKS id reached the API step"
+  fx_reset; fx_api
+  api_run GH_STATE_APPLY=active
+  [[ "$BODY_RC" != 0 && "$(mutations)" == 0 ]] && ok "W-API11 (data F4) the pause is re-proven at the API step: an apply re-enabled during the host zero → no detach, no DELETE" \
+    || no "W-API11 the API step mutated with the pause lifted"
+  fx_reset; fx_api
+  api_run GH_APPLY_STATES="disabled_manually active"
+  [[ "$BODY_RC" != 0 && "$(grep -c '^POST ' "$SCRATCH/curl.log")" == 1 && "$(grep -c '^DELETE ' "$SCRATCH/curl.log")" == 0 ]] \
+    && ok "W-API12 (data F4) a pause lifted between the detach and the DELETE stops the DELETE" \
+    || no "W-API12 the DELETE ran after the pause was lifted (posts=$(grep -c '^POST ' "$SCRATCH/curl.log") deletes=$(grep -c '^DELETE ' "$SCRATCH/curl.log"))"
+  fx_reset; fx_api
+  api_run PIN=105149571
+  [[ "$BODY_RC" != 0 && "$(mutations)" == 0 && "$BODY_OUT" == *"is not the constant"* && ! -s "$SCRATCH/curl.log" ]] \
+    && ok "W-API13 (S2) a pin that is not the constant is refused before any API call" || no "W-API13 a non-constant pin reached the API (or was refused only later)"
+fi
+
+# --- wipe `post`: the LIVE mount re-checked after the API step (impact F2) — the host script runs FOR REAL --
+if [[ -f "$SCRATCH/wipe-post.sh" ]]; then
+  PD="$SCRATCH/postdir"; mkdir -p "$PD"
+  cat > "$PD/workspaces-luks-emit.sh" <<'EMIT'
+workspaces_luks_emit() { printf 'EMIT %s\n' "${WL_REASON:-}" >> "$POST_EMIT_LOG"; }
+wl_probe_readyz() { printf 'READYZ %s\n' "$1" >> "$POST_EMIT_LOG"; [ "${POST_READYZ_RC:-0}" = 0 ]; }
+EMIT
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${POST_SRC-/dev/mapper/workspaces}"\n' > "$BIN/findmnt"
+  printf '#!/usr/bin/env bash\nprintf "logger %%s\\n" "$*" >> "${POST_EMIT_LOG:-/dev/null}"\n' > "$BIN/logger"
+  chmod +x "$BIN/findmnt" "$BIN/logger"
+  post_run() {
+    : > "$SCRATCH/post-emit.log"; : > "$SCRATCH/ssh.log"
+    run_body "$SCRATCH/wipe-post.sh" WEB_HOST=10.0.1.10 WEB_HOST_SSH="$BIN/ssh-stub" REMOTE_DIR=/var/lib/workspaces-luks/wl-cutover.TESTAB \
+      SSH_POST_DIR="$PD" POST_EMIT_LOG="$SCRATCH/post-emit.log" "$@"
+  }
+  post_run
+  [[ "$BODY_RC" == 0 && "$GHOUT" == *"result=ok"* ]] && grep -q '^READYZ http://127.0.0.1:3000/internal/readyz$' "$SCRATCH/post-emit.log" && ! grep -q '^EMIT ' "$SCRATCH/post-emit.log" \
+    && ok "W-POST1 after the API step: /mnt/data is the mapper and readyz is ready → result=ok, nothing paged" \
+    || no "W-POST1 the healthy post-check failed (rc=$BODY_RC out=[$GHOUT]) ${BODY_OUT:0:200}"
+  post_run POST_SRC=/dev/sdc
+  [[ "$BODY_RC" != 0 && "$GHOUT" == *"result=fail"* && "$GHOUT" == *"reason=wipe_post_api_mount_not_mapper"* ]] && grep -q '^EMIT wipe_post_api_mount_not_mapper$' "$SCRATCH/post-emit.log" \
+    && grep -qE '^::error::after the API step' <<<"$BODY_OUT" \
+    && ok "W-POST2 /mnt/data no longer on the mapper after the detach → the job FAILS, the host pages wipe_post_api_mount_not_mapper" \
+    || no "W-POST2 a lost mapper mount was not failed+paged (rc=$BODY_RC out=[$GHOUT]) $(tr '\n' '|' < "$SCRATCH/post-emit.log")"
+  post_run POST_READYZ_RC=1
+  [[ "$BODY_RC" != 0 && "$GHOUT" == *"reason=wipe_post_api_readyz_failed"* ]] && grep -q '^EMIT wipe_post_api_readyz_failed$' "$SCRATCH/post-emit.log" \
+    && ok "W-POST3 readyz not ready after the API step → the job FAILS, the host pages wipe_post_api_readyz_failed" \
+    || no "W-POST3 a failing readyz was not failed+paged (rc=$BODY_RC out=[$GHOUT])"
+  post_run REMOTE_DIR=
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/ssh.log" ]] && ok "W-POST4 no bundle dir → the re-check fails loudly (never a silent skip)" || no "W-POST4 the re-check passed without a bundle dir"
+fi
+
+# --- T5 (P1) — the cutover job's delivery body, EXECUTED for a wipe_plaintext + dry_run dispatch with the
+# step env EVALUATED from the YAML: the host .env must end CONFIRM_WIPE=1 then DRY_RUN=1 (a rehearsal).
+if [[ -f "$SCRATCH/cutover-run.sh" && -f "$SCRATCH/cutover-env-wipe-rehearsal.txt" ]]; then
+  CENV=()
+  while IFS= read -r l; do [[ -n "$l" ]] && CENV+=("$l"); done < "$SCRATCH/cutover-env-wipe-rehearsal.txt"
+  fx_reset; fx GET "/volumes?name=soleur-web-platform-data-luks" 0 200 '{"volumes":[{"id":106443278,"name":"soleur-web-platform-data-luks"}]}'
+  printf '%s\n' "SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=rehearsal_ok arm=first_wipe volume_id=105149570 uuid=u-1 io_max=8:32_rbps=157286400_wbps=157286400_riops=max_wiops=max plaintext_only=0" > "$SCRATCH/host.out"
+  : > "$SCRATCH/env.capture"
+  run_body "$SCRATCH/cutover-run.sh" "${CENV[@]}" WEB_HOST_SSH="$BIN/ssh-stub" SSH_HOST_OUT="$SCRATCH/host.out" SSH_ENV_CAPTURE="$SCRATCH/env.capture" \
+    INFRA_DIR="apps/web-platform/infra" RO_TOKEN=ro-token-synth
+  if [[ "$BODY_RC" == 0 ]] && [[ "$(tail -n 2 "$SCRATCH/env.capture" | tr '\n' ' ')" == "CONFIRM_WIPE=1 DRY_RUN=1 " ]] \
+    && grep -qx 'WORKSPACES_PLAINTEXT_VOLUME_ID=105149570' "$SCRATCH/env.capture" && grep -qx 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_106443278' "$SCRATCH/env.capture" \
+    && grep -qF '| plaintext_only (workspace names on the plaintext, not on the live mount) | 0 |' "$SCRATCH/gh_summary"; then
+    ok "T5 the cutover job's EXECUTED delivery for wipe_plaintext+dry_run (env evaluated from the YAML) sends CONFIRM_WIPE=1 DRY_RUN=1 — a rehearsal — and surfaces plaintext_only on the summary"
+  else
+    no "T5 the cutover wipe-rehearsal delivery is wrong (rc=$BODY_RC tail=[$(tail -n 2 "$SCRATCH/env.capture" | tr '\n' ' ')]) ${BODY_OUT:0:240}"
+  fi
+  : > "$SCRATCH/env.capture"
+  run_body "$SCRATCH/cutover-run.sh" "${CENV[@]}" WEB_HOST_SSH="$BIN/ssh-stub" SSH_HOST_OUT="$SCRATCH/host.out" SSH_ENV_CAPTURE="$SCRATCH/env.capture" \
+    INFRA_DIR="apps/web-platform/infra" RO_TOKEN=ro-token-synth PIN=105149571
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/env.capture" && "$BODY_OUT" == *"not the constant"* ]] \
+    && ok "T5-S2 the cutover rehearsal refuses a pin that is not the constant before anything is delivered" \
+    || no "T5-S2 the rehearsal delivered a non-constant pin (rc=$BODY_RC)"
+  # The cutover job's twins of the wipe job's delivery guards (S1, S3, F8), executed.
+  run_body "$SCRATCH/cutover-run.sh" "${CENV[@]}" WEB_HOST_SSH="$BIN/ssh-stub" SSH_HOST_OUT="$SCRATCH/host.out" SSH_ENV_CAPTURE="$SCRATCH/env.capture" \
+    INFRA_DIR="apps/web-platform/infra" RO_TOKEN=ro-token-synth SSH_MKTEMP_OUT=$'/var/lib/workspaces-luks/wl-cutover.TESTAB\nBASH_ENV=$(echo INJECTED >&2)'
+  : > "$SCRATCH/env.capture.chk"
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/gh_env" ]] && ok "T5-S1 the cutover job refuses a multi-line REMOTE_DIR before it reaches GITHUB_ENV" \
+    || no "T5-S1 the cutover job wrote a multi-line REMOTE_DIR (rc=$BODY_RC env=[$(head -c 120 "$SCRATCH/gh_env")])"
+  : > "$SCRATCH/env.capture"; : > "$SCRATCH/ssh.log"
+  run_body "$SCRATCH/cutover-run.sh" "${CENV[@]/#WORKSPACES_LUKS_BOOT_TOKEN=*/WORKSPACES_LUKS_BOOT_TOKEN=dp.st.x\$(id)}" WEB_HOST_SSH="$BIN/ssh-stub" \
+    SSH_HOST_OUT="$SCRATCH/host.out" SSH_ENV_CAPTURE="$SCRATCH/env.capture" INFRA_DIR="apps/web-platform/infra" RO_TOKEN=ro-token-synth
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/env.capture" ]] && ok "T5-S3 the cutover job refuses a boot token with shell metacharacters before the .env is delivered" \
+    || no "T5-S3 a metacharacter boot token was delivered by the cutover job (rc=$BODY_RC)"
+  : > "$SCRATCH/env.capture"
+  run_body "$SCRATCH/cutover-run.sh" "${CENV[@]}" WEB_HOST_SSH="$BIN/ssh-stub" SSH_HOST_OUT="$SCRATCH/host.out" SSH_ENV_CAPTURE="$SCRATCH/env.capture" \
+    INFRA_DIR="apps/web-platform/infra" RO_TOKEN=ro-token-synth SSH_UPLOAD_RC=1
+  [[ "$BODY_RC" != 0 && ! -s "$SCRATCH/env.capture" && "$BODY_OUT" == *"bundle upload to web-1 failed"* ]] \
+    && ok "T5-F8 the cutover job stops on a failed bundle upload ('nothing ran') before the main ssh" \
+    || no "T5-F8 a failed upload went on in the cutover job (rc=$BODY_RC)"
+else
+  no "T5 the cutover Run body or its evaluated env was not extracted — the delivery was not executed"
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
@@ -676,7 +969,7 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # NON-DEGENERACY FLOOR — see the sibling rationale in workspaces-luks-staging.test.sh. A python
 # leg that dies before emitting verdicts, or a `check()` block deleted wholesale, would otherwise
 # leave this suite reporting "0 passed, 0 failed" and exiting 0.
-WF_MIN_ASSERTIONS=133
+WF_MIN_ASSERTIONS=189
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous"
   exit 1

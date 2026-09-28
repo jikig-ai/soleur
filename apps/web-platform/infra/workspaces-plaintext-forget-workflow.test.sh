@@ -83,13 +83,35 @@ runs = [st for st in steps if st.get("run")]
 check("every run: step refuses to run under xtrace", all(re.search(r"case \$- in \*x\*\)", str(st["run"])) for st in runs),
       [st.get("name") for st in runs if not re.search(r"case \$- in \*x\*\)", str(st["run"]))])
 check("no run: body interpolates ${{ inputs.* }} (inputs reach shell only via env:)", not any("${{ inputs." in str(st["run"]) for st in runs))
-# The extract/init steps are the apply job's own, copied verbatim (plus the xtrace prelude).
+# The extract/init steps are the apply job's own (plus the xtrace prelude), with ONE deliberate
+# difference (S7): the GITHUB_ENV write uses the loader's heredoc-delimiter form, never `K=V`, so a
+# newline in a Doppler value cannot plant a second variable (BASH_ENV) for every later step.
 apply_steps = ((ap.get("jobs") or {}).get("apply") or {}).get("steps") or []
 a_ex = next((st for st in apply_steps if st.get("name") == "Extract backend credentials"), None)
+ENVW = re.compile(r"^\s*(d1=|printf '(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)(=|<<)).*$", re.M)
 if i_extract >= 0 and a_ex:
-    mine = re.sub(r"^case \$- in \*x\*\).*\n", "", str(steps[i_extract].get("run", "")))
-    check("Extract backend credentials is the apply job's step verbatim (after the xtrace prelude)",
-          mine.strip() == str(a_ex.get("run", "")).strip() and steps[i_extract].get("env") == a_ex.get("env"))
+    mine_raw = str(steps[i_extract].get("run", ""))
+    mine = ENVW.sub("", re.sub(r"^case \$- in \*x\*\).*\n", "", mine_raw)).strip()
+    theirs = ENVW.sub("", str(a_ex.get("run", ""))).strip()
+    check("Extract backend credentials is the apply job's step (after the xtrace prelude), except its GITHUB_ENV write",
+          re.sub(r"\n\s*\n", "\n", mine) == re.sub(r"\n\s*\n", "\n", theirs) and steps[i_extract].get("env") == a_ex.get("env"))
+    check("S7: the backend credentials reach GITHUB_ENV ONLY in the heredoc-delimiter form (random SOLEUR_EOF_ delimiter), never K=V",
+          len(re.findall(r"printf '(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)<<%s\\n%s\\n%s\\n' \"\$d[12]\" \"\$(KEY_ID|SECRET)\" \"\$d[12]\" >> \"\$GITHUB_ENV\"", mine_raw)) == 2
+          and not re.search(r"printf '(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)=%s", mine_raw) and mine_raw.count("SOLEUR_EOF_$(openssl rand -hex 12)") == 2)
+# T4 — the gating the behavioral legs assume is READ from the YAML: the three guard steps can never be
+# made advisory (continue-on-error) or conditional (if:), and if: sits only on the two cleanup steps.
+for sid in ("validate", "gone", "forget"):
+    st = next((x for x in steps if x.get("id") == sid), {})
+    check(f"step `{sid}` carries no continue-on-error and no if: (a failed proof must stop the job before state rm)",
+          bool(st) and "continue-on-error" not in st and "if" not in st, {k: st.get(k) for k in ("if", "continue-on-error")})
+conds = sorted(str(st.get("name")) for st in steps if "if" in st)
+check("if: appears ONLY on the two cleanup steps (the backup removal and the summary), both always()",
+      conds == ["Forget summary", "Remove any local state backup"] and all(st.get("if") == "always()" for st in steps if "if" in st), conds)
+check("no step carries continue-on-error", not any("continue-on-error" in st for st in steps))
+# The workflow env, as the behavioral legs' environment (never values this suite injects).
+with open(f"{scratch}/wf-env.txt", "w") as fh:
+    for k, v in env.items():
+        fh.write(f"{k}={v}\n")
 if i_init >= 0:
     st = steps[i_init]
     check("Terraform init runs -input=false -lockfile=readonly in the main root",
@@ -222,6 +244,11 @@ fx_gone() {
   fx GET "/volumes/105149570" 0 404 '{"error":{"code":"not_found"}}'
   fx GET "/volumes?name=soleur-web-platform-data" 0 200 '{"volumes":[]}'
 }
+# T4 — the steps run with the WORKFLOW's env (PINNED, the identity ids, the volume name), read from the
+# YAML: a typo there (e.g. a PLAINTEXT_VOLUME_NAME that makes the name lookup vacuous) now fails here.
+WF_ENV=()
+while IFS= read -r l; do [[ -n "$l" ]] && WF_ENV+=("$l"); done < "$SCRATCH/wf-env.txt"
+[[ "${#WF_ENV[@]}" -ge 5 ]] || no "INSTRUMENT: the workflow env could not be read from the YAML (${#WF_ENV[@]} vars)"
 # run_step <file> [VAR=value ...] -> RC, OUT, and the files GitHub would read after the step
 run_step() {
   local f="$1"; shift
@@ -230,8 +257,7 @@ run_step() {
   OUT="$(cd "$SCRATCH" && env PATH="$BIN:$PATH" CURL_LOG="$SCRATCH/curl.log" CURL_CFG="$SCRATCH/curl.cfg" FIX="$FIX" \
     GH_LOG="$SCRATCH/gh.log" TF_LOG="$SCRATCH/tf.log" TF_STATE="$SCRATCH/state.json" \
     GITHUB_OUTPUT="$SCRATCH/gh_output" GITHUB_STEP_SUMMARY="$SCRATCH/gh_summary" GITHUB_ENV="$SCRATCH/gh_env" \
-    REPO="jikig-ai/soleur" PINNED=105149570 PLAINTEXT_VOLUME_NAME=soleur-web-platform-data WEB1_SERVER_ID=123931471 \
-    WEB1_SERVER_NAME=soleur-web-platform LUKS_VOLUME_ID=106443278 HCLOUD_TOKEN=hc-ro-token-synth GH_TOKEN=gh-synth \
+    REPO="jikig-ai/soleur" "${WF_ENV[@]}" HCLOUD_TOKEN=hc-ro-token-synth GH_TOKEN=gh-synth \
     "$@" bash --noprofile --norc -eo pipefail "$f" 2>&1)" || RC=$?
 }
 rm_calls() { grep -c '^terraform state rm ' "$SCRATCH/tf.log" || true; }
@@ -243,7 +269,7 @@ dispatch() {  # [VAR=value ...] for both steps
 }
 
 if [[ -f "$SCRATCH/validate.sh" ]]; then
-  vrc() { local r=0; env CONFIRM_IN="$1" PIN_IN="$2" PINNED=105149570 bash --noprofile --norc -eo pipefail "$SCRATCH/validate.sh" >/dev/null 2>&1 || r=$?; printf '%s' "$r"; }
+  vrc() { local r=0; env "${WF_ENV[@]}" CONFIRM_IN="$1" PIN_IN="$2" bash --noprofile --norc -eo pipefail "$SCRATCH/validate.sh" >/dev/null 2>&1 || r=$?; printf '%s' "$r"; }
   [[ "$(vrc FORGET-RETIRED-PLAINTEXT-VOLUME 105149570)" == 0 ]] && ok "V1 the exact confirm token + the pinned id pass" || no "V1 the valid inputs were refused"
   [[ "$(vrc FORGET-RETIRED-PLAINTEXT-VOLUME 106443278)" != 0 ]] && ok "V2 an id other than the constant pin (here the LIVE LUKS id) is refused" || no "V2 a non-pin id was accepted"
   [[ "$(vrc CUTOVER-WORKSPACES-LUKS 105149570)" != 0 ]] && ok "V3 a wrong confirm token is refused" || no "V3 a wrong token was accepted"
@@ -321,7 +347,7 @@ fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # PASS FLOOR at the measured count.
-FORGET_MIN_PASS=47
+FORGET_MIN_PASS=53
 if [[ "$pass" -lt "$FORGET_MIN_PASS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a row was dropped or stopped dispatching\n' "$pass" "$FORGET_MIN_PASS"
   exit 1
