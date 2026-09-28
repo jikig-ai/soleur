@@ -262,16 +262,16 @@ SUT; the outside anchor is the independent producer `archive-kb.sh:171`
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` contains zero remaining
+- [x] `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` contains zero remaining
   `date +%Y-%m-%d-%H%M%S` literals (both stamp sites use `date +%Y%m%d-%H%M%S`).
-- [ ] `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` is unchanged.
-- [ ] `plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh` asserts the
+- [x] `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` is unchanged.
+- [x] `plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh` asserts the
   basename of a produced `specs/archive/` entry AND a produced `plans/archive` (or
   `brainstorms/archive`) entry each match `^[0-9]{8}-[0-9]{6}-`, with existence required (not a
   vacuous pass on an absent entry).
-- [ ] `bash plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh` exits 0
+- [x] `bash plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh` exits 0
   locally; `MIN_ASSERTIONS` floor still satisfied.
-- [ ] No existing archive entry is renamed (forward-only convergence).
+- [x] No existing archive entry is renamed (forward-only convergence).
 
 ## Domain Review
 
