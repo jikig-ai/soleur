@@ -336,3 +336,11 @@ re-point of the script's own `DOCKER_CONFIG`.
 
 **Status: CODE-DECLARED.** It is LIVE once a post-apply deploy logs `IMAGE_VERIFY: ok`. The #8037
 follow-through probe grades that per host.
+
+## Amendment 2026-09-28 (#8714) — the verifier image is pulled from gcr.io
+
+The image named in the Context (`ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a…`) is now pulled as
+`gcr.io/projectsigstore/cosign@sha256:57c0e93a…`. That is the same digest and the same image ID,
+served from the Sigstore project's own registry. Everything above about the anonymous config, the
+offline verify and the pinned trust root is unchanged. The rationale and the new gcr.io dependency
+are recorded in ADR-096's amendment 2026-09-28.

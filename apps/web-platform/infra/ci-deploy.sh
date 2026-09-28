@@ -140,7 +140,12 @@ fi
 # Identity is pinned to the reusable release workflow on main/release-tags ONLY — an
 # intra-repo branch/tag signature must NOT verify (a loose `refs/(heads|tags)/.+`
 # would accept attacker-branch RCE).
-readonly COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
+# SOURCE (#8714 step 5.3b-iii): gcr.io/projectsigstore is the Sigstore project's own registry and
+# serves the SAME manifest digest as the former ghcr.io/sigstore/cosign/cosign ref — same image ID,
+# same bytes (measured 2026-09-28: an anonymous pull under COSIGN_ANON_CONFIG runs v3.1.1 and both
+# refs resolve to one local image). The move retires this host's last ghcr.io pull; the digest pin,
+# not the registry, is the trust anchor. A pull failure from gcr.io classifies as cosign_absent below.
+readonly COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
 readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@(refs/heads/main|refs/tags/v[0-9].+)$'
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
 readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enforce (soak-gated fast-follow)
@@ -2360,6 +2365,13 @@ verify_image_signature() {
   elif printf '%s' "$tail" | grep -qiE 'certificate identity|none of the expected identities|subject.*mismatch'; then result="wrong_identity"
   elif printf '%s' "$tail" | grep -qiE 'rekor|tlog|transparency|tuf'; then result="rekor_unreachable"
   elif printf '%s' "$tail" | grep -qiE 'Unable to find image|manifest unknown|pull access denied|no such image'; then result="cosign_absent"
+  # #8714: a daemon-side PULL failure of the verifier image (gcr.io rate limit or 5xx, DNS, TLS, reset, timeout).
+  # Read from the WHOLE stderr file, not $tail: docker's pull error repeats the 64-hex digest twice
+  # and runs ~420-450 bytes (measured, docker 29.7.2), so the last 400 bytes cut off its prefix.
+  # Anchored at LINE START on the docker CLI's own "docker: Error response from daemon:" prefix:
+  # cosign's errors (including a registry-supplied message quoted inside one) start with "Error:",
+  # so a cosign-side network error — fetching the signature from zot — stays verify_failed.
+  elif grep -qiE '^docker: Error response from daemon: .*(toomanyrequests|received unexpected HTTP status: 5[0-9][0-9]|no such host|dial tcp|i/o timeout|connection reset by peer|TLS handshake timeout|Client\.Timeout|context deadline exceeded)' "$err" 2>/dev/null; then result="cosign_absent"
   fi
   cosign_verify_event "$result" "$repo_digest" "$tail"
   printf '%s' "$repo_digest" # WARN: run the verified digest anyway (immutability holds)
