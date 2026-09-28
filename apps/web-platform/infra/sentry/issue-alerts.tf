@@ -631,6 +631,25 @@ resource "sentry_alert" "byok_art_33_breach" {
 # `unauthorized` in particular is fleet-wide when it fires — the REMOVE key is baked into
 # cloud-init authorized_keys, so a Doppler rotation without a host replace fails EVERY
 # deletion until the host is replaced.
+#
+# (2026-09-28, #8572) Two corrections to the paragraphs above, and one change:
+#   - "Keys on the `erasure_outcome` TAG" is wrong: the filters below are `feature` and
+#     `op` only, which is why EVERY outcome routes. `erasure_outcome` names the outcome; the
+#     message, which leads with the status, is what splits the Sentry issues. The tag is
+#     not a filter.
+#   - "The four routed values" is now refused | unauthorized | unconfigured | unreachable |
+#     host_key_mismatch | threw, and `unconfigured` also carries an `erasure_reason` tag
+#     (remove_key_absent | pin_absent | pin_invalid | ssh_client_absent).
+#   - The rule now also re-pages per event: `event_frequency_count {1h, 0}` fires on every
+#     event, not only on first-seen / reappeared / regression, so an issue left open no
+#     longer swallows the next refusal. The throttle is `frequency_minutes = 5` per issue:
+#     at most one email per issue per 5 minutes, and refusals inside that window share one
+#     email. Each event is one refused deletion, so the volume is the refusal count; 288 a
+#     day per issue is only the ceiling (CLO ruling, #8572). Triggers fire only on an
+#     UNRESOLVED issue: an archived or ignored Art. 17 issue silences every later refusal
+#     that groups into it, so these issues are resolved after the sweep, never archived.
+# The erasure report is deliberately NOT tagged `pin_fault`: that tag would also match
+# git-data-host-key-pin-fault below and send two emails for one refusal.
 resource "sentry_alert" "art17_erasure_incomplete" {
   organization      = var.sentry_org
   name              = "art17-erasure-incomplete"
@@ -642,6 +661,7 @@ resource "sentry_alert" "art17_erasure_incomplete" {
     { first_seen_event = {} },
     { reappeared_event = {} },
     { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
   ]
 
   action_filters = [
@@ -2184,6 +2204,81 @@ resource "sentry_alert" "spawn_agent_dead_letter" {
         { tagged_event = { key = "feature", match = "eq", value = "spawn-agent" } },
         { tagged_event = { key = "op", match = "eq", value = "agent-on-spawn-requested" } },
         { tagged_event = { key = "reason", match = "in", value = "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_internal_error,leader_refused,leader_response_truncated,leader_tool_invalid" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# git-data host-key pin faults (#8572). The web app reaches the git-data store only over
+# SSH pinned to the host key (ADR-237, #5914), so a missing or wrong pin, or a missing ssh
+# client, stops replication (and after the flag flip, rehydration reads) with nothing else
+# to notice.
+#
+# Keys on the `pin_fault` TAG, which the emitter sends on Sentry's MESSAGE path. The push
+# failure's own report goes through the Error path, where the pino mirror pre-captures it
+# as `feature=pino-mirror` and drops every tag (#8629), so a rule keyed on its `op` would
+# never fire. The single writer of the tag is `reportGitDataPinFault` in
+# apps/web-platform/server/git-data-pin-fault.ts, and the `in` value below is exactly its
+# GIT_DATA_PIN_FAULT_REASONS (sentry-git-data-pin-fault-alert-op-contract.test.ts holds it).
+#
+# Surfaces: boot (feature git_data_host_key_pin / git_data_ssh_client, ops
+# pin_invalid_at_startup | pin_absent_at_startup | ssh_client_absent_at_startup) and the
+# push (feature worktree_lease, op git_data_replication_push; `via` in the event's extra
+# says ssh = provision dial, git = push). Before the GIT_DATA_STORE_ENABLED flip only the
+# boot arm can fire. Not tagged, on purpose:
+#   - the Art. 17 erasure path, which pages through art17_erasure_incomplete;
+#   - the rehydration read (git-data-client.ts fetchFromGitData). Its pin is the same
+#     process-wide value the boot arm pages on, and it dials the same host as the next
+#     session-end provision dial, which pages a host identity fault. Its own stderr is
+#     git's, which a tenant can write into (below), so it is never read for host identity.
+# This rule is #8211's `pin_fault_paging_absent` anchor.
+#
+# Grouping is per message and the reason leads it, so each (surface, reason) is its own
+# Sentry issue. `frequency_minutes = 240` is Sentry's per-issue action interval and covers
+# all four triggers: a persisting fault re-pages at most every 4 h per issue (about 6 emails
+# a day per live issue). A fault that recurs within 4 h of a resolve is silent, so the
+# runbook has the operator run the `pin_fault:*` query after resolving. 240 was chosen over
+# 1443 (a 24 h blind window) and over hourly (the cadence that got the credit-probe monitor
+# muted, #8704), and is unused elsewhere in the root (Sentry dedups identical rules).
+#
+# The tag is ADVISORY. `host_key_mismatch` is read only from the provision dial's ssh
+# stderr (exit 255), never from git's: git exits 128 on every fatal error and some echo the
+# tenant's workspace (`fatal: unexpected line in .git/packed-refs: <line>`), so reading it
+# would let a tenant forge this page and, sharing its issue and 4 h window, mask a real one.
+# What remains: ssh passes the remote's stderr through, so a compromised host that already
+# holds the pinned key can print host-key text; under StrictHostKeyChecking=yes an absent or
+# unwritable known_hosts file reads the same; and anyone holding the public client DSN can
+# post an event with this tag (true of every tag-keyed rule in this root). So corroborate a
+# page against the Better Stack pino line (`pinFault`, not DSN-forgeable) before acting. A
+# network attacker can also fail the connection before the host-key check, which stays
+# unclassified. None of this leaks anything, because the pin still fails closed. The remedy
+# is never to re-pin to the key a host presents (runbook H4 rule).
+resource "sentry_alert" "git_data_host_key_pin_fault" {
+  organization      = var.sentry_org
+  name              = "git-data-host-key-pin-fault"
+  enabled           = true
+  frequency_minutes = 240
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "pin_fault", match = "in", value = "host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
