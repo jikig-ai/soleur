@@ -2761,7 +2761,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // NO SUBSTITUTE: the SOLEUR_WORKSPACES_LUKS_DEADMAN markers and the nightly OK row share web-1's
   // luks-monitor journald tag, which lands only in the Logs warehouse; it has no unauthenticated
   // read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 34;
+  // #8562 (2026-09-28): +1 (34 -> 35, after #9045 took 33 -> 34) for `2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/followthroughs/inngest-provision-unit-8562.sh`)
+  // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
+  // the provision unit's phone-home rows (provision-unit-armed, bootstrap-done keyed on iid) land only
+  // in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 35;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
