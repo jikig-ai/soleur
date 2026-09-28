@@ -119,3 +119,35 @@ Deferred items (filed/recorded):
 
 Remaining: post-deploy live probe re-run (Phase 2 acceptance evidence),
 PR ready/merge, post-merge verify. PR #9034 remains draft.
+
+## soleur:ship progress (2026-09-28, in-flight)
+
+- Preflight: probe-residue clean; Check2 prod headers PASS (CSP nonce +
+  strict-dynamic, XFO DENY, XCTO, HSTS, Referrer/Permissions-Policy,
+  COOP/CORP); Check4 dev!=prd projects PASS (mlwiod… != ifscc…);
+  Checks 1/3/5/7/8/11/12 SKIP (no matching diff surface); Check6 PASS
+  (User-Brand section + threshold in PR body + plan link); Check9 PASS;
+  Check10 PASS (discoverability command green in-tree).
+- Phase 5.5: code-review completion gate (soleur:review ran); review-
+  findings exit gate (0 unresolved); net-issue-flow PASS (net 0);
+  Incident-PIR gate fired (single-user + prod-incident corpus) → PIR
+  authored + committed: knowledge-base/engineering/operations/post-mortems/
+  2026-09-28-dashboard-cold-tiers-unbounded-supabase-legs-postmortem.md,
+  shape gate PASS; undeferred-operator-step PASS; soak gate fired → #8978
+  enrolled (follow-through label + directive +
+  scripts/followthroughs/dashboard-cold-tiers-8978.sh — 24h Sentry scan,
+  >15s GET /dashboard transactions, verified live query shape);
+  ADR ordinals PASS; no package/vendor/legal/ci-deploy surfaces.
+- Ship-advisor consult flagged 4 residuals — 3 fixed inline
+  (f63b80b924): dsar getActiveSessionId getSession → boundedAuthGetSession
+  (new shared helper, own op); workspace-identity-resolver 3 PostgREST legs
+  → bounded() Promise.race (PromiseLike-unwrap noted); all 5 census
+  keepers → boundedAuthGetUser (generic U preserves full User incl.
+  user_metadata) → keeper list now EMPTY. 4th (late setAll cookie rebind
+  vs final stamps) refuted — stamps are synchronous pre-return; accepted
+  residual documented.
+- PR body authored (title + summary + Ref #8978 / Closes #8926 #8993
+  #8940 + User-Brand + Observability + test plan + Changelog); PIR file
+  + followthrough script committed.
+- Issues filed: #9117 (durable-log GC), #9118 (RPC NULL invitee_email).
+- Battery: OWED on f63b80b92 — running `test-all.sh --affected` in-flight.
