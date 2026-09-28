@@ -69,6 +69,11 @@ function deriveTierFromSubscription(
   return getPriceTier(priceId);
 }
 
+// #8918 — two active subscriptions created closer than this on one customer
+// is the pending-claim race completing twice. Legit upgrades leave the old
+// sub active too, but with created timestamps days/months apart.
+const DOUBLE_COMPLETION_PROXIMITY_MS = 15 * 60 * 1000;
+
 export async function POST(request: Request) {
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
@@ -164,6 +169,27 @@ export async function POST(request: Request) {
       const session = event.data.object as Stripe.Checkout.Session;
       const userId = session.metadata?.supabase_user_id;
 
+      // #8918 marker hygiene: this session's claim row can never be reused
+      // or reclaimed again — delete it. Independent of the users update
+      // below; a delete failure is non-fatal (the stale-null / retrieve
+      // reclaim paths self-heal a stranded marker).
+      {
+        const { error: markerDelErr } = await supabase
+          .from("pending_checkout_sessions")
+          .delete()
+          .eq("session_id", session.id);
+        if (markerDelErr) {
+          logger.warn(
+            { err: markerDelErr, eventId: event.id },
+            "Webhook: pending_checkout_sessions marker delete failed — marker self-heals via reclaim paths",
+          );
+          Sentry.captureException(markerDelErr, {
+            tags: { feature: "stripe-webhook", op: "marker-delete" },
+            extra: { eventId: event.id },
+          });
+        }
+      }
+
       if (userId) {
         // Guard: never resurrect a cancelled row via a replayed checkout
         // event (#2771). The dedup table above closes this today, but the
@@ -204,6 +230,100 @@ export async function POST(request: Request) {
             "Webhook: checkout.session.completed guard no-op — row not in updatable status (likely cancelled or replay after dedup-row released)",
           );
         }
+      }
+
+      // #8918 double-completion anomaly: two active subscriptions on one
+      // customer created within a short window of each other is the
+      // signature of the pending-claim race completing twice. Detection
+      // only — never auto-cancel on the money path.
+      //
+      // Why proximity, not count: nothing cancels a prior subscription on
+      // upgrade, so a legit paid→paid plan-switch also leaves >1 active —
+      // but its two `created` timestamps are days/months apart. Two subs
+      // created within DOUBLE_COMPLETION_PROXIMITY_MS of each other have
+      // no legitimate path: a second checkout requires either a race the
+      // claim table missed or manual Stripe-side surgery — both worth a
+      // page, not silence.
+      const sessionCustomerId =
+        typeof session.customer === "string"
+          ? session.customer
+          : (session.customer?.id ?? null);
+      if (sessionCustomerId) {
+        try {
+          const { data: activeSubs } = await getStripe().subscriptions.list({
+            customer: sessionCustomerId,
+            status: "active",
+            limit: 100,
+          });
+          const createdMs = activeSubs
+            .map((s) => s.created * 1000)
+            .sort((a, b) => a - b);
+          const hasNearDouble = createdMs.some(
+            (t, i) => i > 0 && t - createdMs[i - 1] < DOUBLE_COMPLETION_PROXIMITY_MS,
+          );
+          if (hasNearDouble) {
+            logger.warn(
+              {
+                customerId: sessionCustomerId,
+                eventId: event.id,
+                activeCount: activeSubs.length,
+                createdGapMs:
+                  createdMs.length > 1
+                    ? Math.min(
+                        ...createdMs.slice(1).map((t, i) => t - createdMs[i]),
+                      )
+                    : null,
+              },
+              "checkout multiple-active-subscriptions anomaly — concurrent completions on one customer",
+            );
+            Sentry.captureMessage(
+              "checkout multiple-active-subscriptions anomaly",
+              {
+                level: "warning",
+                tags: {
+                  feature: "stripe-webhook",
+                  op: "checkout.session.completed",
+                },
+                extra: {
+                  customerId: sessionCustomerId,
+                  eventId: event.id,
+                  activeCount: activeSubs.length,
+                },
+              },
+            );
+          }
+        } catch (err) {
+          // Detection-path failure must not 500 the webhook — the money
+          // mutation already landed, Stripe redelivery covers the retry.
+          logger.warn(
+            { err, eventId: event.id },
+            "Webhook: multiple-active-subscriptions anomaly check failed — skipped",
+          );
+        }
+      }
+      break;
+    }
+
+    case "checkout.session.expired": {
+      // #8918 marker hygiene: an abandoned session can never be completed or
+      // reclaimed into a usable state — its marker is pure residue. Delete it
+      // so the user's next checkout claims cleanly (and so the retention
+      // claim on pending_checkout_sessions stays honest for never-returning
+      // users).
+      const expired = event.data.object as Stripe.Checkout.Session;
+      const { error: markerDelErr } = await supabase
+        .from("pending_checkout_sessions")
+        .delete()
+        .eq("session_id", expired.id);
+      if (markerDelErr) {
+        logger.warn(
+          { err: markerDelErr, eventId: event.id },
+          "Webhook: pending_checkout_sessions marker delete on expired failed — marker self-heals via reclaim paths",
+        );
+        Sentry.captureException(markerDelErr, {
+          tags: { feature: "stripe-webhook", op: "marker-delete" },
+          extra: { eventId: event.id },
+        });
       }
       break;
     }
