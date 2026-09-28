@@ -365,7 +365,7 @@ locals {
     # (#8036 item 1d / ADR-096 5.3b-i: the `ghcr_read_user`/`ghcr_read_token` keys that baked a
     # GHCR read credential into this user_data are gone. The PAT they carried is revoked, the
     # template no longer logs in to ghcr.io or pulls from it, and zot is the only boot-time read
-    # path. `var.ghcr_read_*` survives only for `doppler_secret.ghcr_read_*` until task 5.4.)
+    # path. `var.ghcr_read_*` and `doppler_secret.ghcr_read_*` were retired by task 5.4, #8714.)
     # #7462 (ADR-096) — the zot arm for the cold-boot bootstrap pull, baked so that cold boot
     # does not depend on Doppler answering at the boot instant. When this landed it DIVERGED
     # from cloud-init.yml's web-host arm, which then read ZOT_REGISTRY_URL / ZOT_PULL_* from

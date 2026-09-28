@@ -149,6 +149,8 @@ and neither closes this debt:
   the recut fireable again; it does **not** give production a fallback.
 - **#7278** — the registry host has no in-place restart lever. Reduces how often the
   no-fallback constraint gets exercised; does not remove it.
+  *(2026-09-28, #7377: still true, now by decision. ADR-172's amendment of 2026-09-28 records
+  `push-config` as the merge-to-replace path and `restart` / `reclaim` as not built.)*
 
 Neither restoration path named above (a zero-touch-mintable GHCR pull credential, or a
 second mirror) is owned by either. The closest fit for the second-mirror arm is **#6126**
@@ -1630,3 +1632,46 @@ implies no second inngest replace.
 - **It does not delete the fresh-boot trail's `app_ghcr_*` stages** (`fresh-host-boot-trail.sh`).
   #8651's probe grades that script's output until #8651 closes, so its format must not move first.
   They are now a tripwire that cannot fire.
+
+## Amendment 2026-09-27 (#8714) — 5.4: the GHCR token minter and the host-side GHCR credential plumbing are retired
+
+### Decision
+
+Delete what 5.3b-i left behind with no reader:
+
+- `cron-ghcr-token-minter` (the Inngest function, disabled since July behind
+  `GHCR_MINTER_DISABLED=true`), its test, its route/manifest/metadata entries, and the
+  `ghcr-minter-live-6031` follow-through probe (its tracker closed 2026-07-06; its Sentry monitor
+  was already gone).
+- `ghcr-minter-doppler-token.tf`: `doppler_service_token.ghcr_minter` (a **read/write** `soleur/prd`
+  token) and `doppler_secret.ghcr_minter_doppler_token` (`GHCR_MINTER_DOPPLER_TOKEN`).
+- `ghcr-read-credential.tf`: `doppler_secret.ghcr_read_user` / `.ghcr_read_token`
+  (`GHCR_READ_USER` / the revoked `GHCR_READ_TOKEN`), and `var.ghcr_read_*`.
+
+The per-merge apply destroys the four Doppler objects through the bare `-target` lines kept in
+`apply-web-platform-infra.yml` for that merge (the #9062 precedent), acknowledged with
+`[ack-destroy]`. With the keys gone from `soleur/prd`, the next `ci-deploy.sh` download no longer
+puts them in the app container env, which closes the residual the 5.3b-i bullet "remain until 5.4"
+recorded.
+
+### What this does NOT do
+
+- **It does not remove the four `-target` lines.** They plan the deletes; once applied they plan
+  nothing, and #9080 removes them (with the parity describe and the census `INTENDED_DESTROYS`
+  entries that pin them).
+- **Non-Terraform residue stays (#9080):** `GHCR_MINTER_DISABLED` in Doppler `soleur/prd`, the
+  `prd_ghcr` branch config, `prd_terraform`'s own `GHCR_READ_*` entries if they outlive the root
+  delete, and the App manifest's `packages: read` grant (a manifest-only removal reads as
+  `permission_unexpected_grant` to the drift guard while the live App still has it).
+- **`GHCR_MINTER_DISABLED` is load-bearing until no rollback-eligible image carries the minter.**
+  Every image built before this change still reads it; a canary rollback, `op=rollback` or a revert
+  that brings one back without the flag runs the minter, which pages `GHCR_MINTER_DOPPLER_TOKEN not
+  set` every 20 minutes because that token is destroyed here.
+- **A revert restores code, not credentials.** Re-adding `var.ghcr_read_*` (no default) after the
+  destroy fails every plan of this root if `prd_terraform` no longer carries the values, and
+  re-creates a read/write `prd` service token if it does. Roll back app code only.
+- **The #6178 soak probe keeps the minter in its population** (`RETIRED_IDS` in
+  `scripts/followthroughs/inngest-soak-6178.sh`): its in-window runs are still scanned, and its
+  absence from the registry is not read as `registry_drift`.
+- **5.3b-iii and 5.6 are unchanged** (the anonymous `ghcr.io` pulls, the egress allow, and this
+  ADR's status flip).

@@ -112,6 +112,7 @@ reads Doppler" is the wrong discriminator and the inventory has to show that it 
 | `board-status-sync.yml::sync` | `issues`, `pull_request` | (none) | `DOPPLER_TOKEN` → `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` inline mint | **write** — mints an installation token and writes board Status | **B** by the rule, and the highest-exposure row in this table: a write-capable App mint reachable from `pull_request`. **This is why O1b exists** — it gets its own least-privilege `soleur-board` App (`apps/web-platform/infra/github-board-app-manifest.json`) whose credentials stay Tier A, rather than a Tier-B carrier it cannot reach from a PR event |
 | `build-inngest-bootstrap-image.yml::bump-cloud-init-pin` | push, workflow_dispatch | (none) | `DOPPLER_TOKEN` → `.github/actions/mint-soleur-ai-app-token` (project `soleur`, config `prd_terraform`) | **write** — `contents:write` + `pull_requests:write` installation token | **B** — App token for writes |
 | `build-inngest-bootstrap-image.yml::build` | push, workflow_dispatch | (none) | `DOPPLER_TOKEN_PRD` | **read** | **A** — `prd` root config |
+| `mint-inngest-bootstrap-tag.yml::mint` (added by #4326) | push to `main` (paths), workflow_dispatch; job-gated `github.ref == 'refs/heads/main'` | (none) | Two, never in one step: `DOPPLER_TOKEN` → `.github/actions/mint-soleur-ai-app-token` (project `soleur`, config `prd_terraform`) scoped to `permissions: {"actions":"write"}`, `repositories: soleur`, minted BEFORE the tag step and read only by the dispatch step (then revoked); and the job's `GITHUB_TOKEN` (`contents: write`) for the tag write only | **write** — a tag ref, then one `workflow_dispatch` | **B** — an App-key consumer that declares no `environment:` (listed below). It is a push-to-`main` job, so an `infra-privileged` binding works; O10 must re-tier it with the bump job, or its App step fails `verdict=legacy_app_key_evicted` before any tag is cut (ADR-232 §8) |
 | `cutover-inngest.yml::cutover` | workflow_dispatch, push | **`inngest-cutover`** | `DOPPLER_TOKEN` → `HCLOUD_TOKEN` for `op=backup`; since 2026-09-24 also the G3 generation anchor (`GET /v1/servers?name=soleur-inngest`) on op=resume / op=arm / op=luks-*, which reads `HCLOUD_TOKEN_READONLY` first and falls back to `HCLOUD_TOKEN` until step O5 | **read** on the Hetzner side for the anchor (op=backup's `create_image` is a write, tracked in #8767); no Terraform | **A** for the Hetzner read → `HCLOUD_TOKEN_READONLY`; keeps its Tier-B environment gate |
 | `git-data-cutover.yml::cutover` | workflow_dispatch | **`web-platform-infra-apply`** | `DOPPLER_TOKEN_PRD`, `DOPPLER_TOKEN`, **`DOPPLER_TOKEN_GIT_DATA_ROOT`** | **read** of all three; host-side cutover write | **B** — it holds `DOPPLER_TOKEN_GIT_DATA_ROOT`. **No edit to this file is needed and none is made**: it belongs to the parallel #8211 session, it already declares a Tier-B environment, and an environment secret overrides a repository secret of the same name |
 | `inngest-config-drift.yml::compare` | workflow_dispatch | (none) | `DOPPLER_TOKEN` → ClickHouse / Better Stack read credentials from `prd_terraform` | **read** | **A** |
@@ -143,7 +144,8 @@ removes the legacy fallback: `apply-web-platform-infra::apply`, `::inngest_host`
 `::registry_luks_recut`, `::git_data_host_replace`, `::workspaces_luks_cutover`,
 `::ci_ssh_token_replace`, `::entrypoint_audit`, `apply-deploy-pipeline-fix::apply`,
 `apply-github-infra::apply`, `apply-sentry-infra::apply`, `board-status-sync::sync`,
-`build-inngest-bootstrap-image::bump-cloud-init-pin`, `scheduled-terraform-drift::drift-check`.
+`build-inngest-bootstrap-image::bump-cloud-init-pin`, `mint-inngest-bootstrap-tag::mint` (#4326),
+`scheduled-terraform-drift::drift-check`.
 Phase 4 binds each to a member of the Tier-B environment set; the census row is RED until it does.
 
 `infra-privileged` exists: O0's push apply created it with its `main` policy, and it is referenced
@@ -389,7 +391,7 @@ token invalidate the Doppler service tokens it created?** Terraform ran as `DOPP
 workplace **personal** token, and created the service tokens the production hosts read their own
 configuration with — `doppler_service_token.git_data` (`git-data-luks-boot`, `git-data-luks.tf`),
 `doppler_service_token.ghcr_minter` (`ghcr-minter-write-*` on `soleur/prd`,
-`ghcr-minter-doppler-token.tf`) and `doppler_service_token.registry` (the zot boot token,
+`ghcr-minter-doppler-token.tf`; destroyed by #8714 task 5.4, so it drops out of this check) and `doppler_service_token.registry` (the zot boot token,
 `zot-registry.tf`). These are **boot** tokens: a live host keeps working on the environment it has
 already read, so a cascade would surface at the next restart of a host, not at the revocation.
 

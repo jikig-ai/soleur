@@ -2749,14 +2749,19 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (`scripts/followthroughs/luks-monitor-host-timer-8706.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
   // NO SUBSTITUTE: the evidence is web-1's luks-monitor.service journald rows in the Logs warehouse,
   // which has no unauthenticated read path. Genuine.
-  // #9045 (2026-09-28): +1 (32 -> 33, after #8706 took 31 -> 32) for `2026-09-28-fix-luks-deadman-host-canary-disarm-and-snapshot-411798619-release-plan.md`.
+  // #8714 5.4 (2026-09-27): +1 (32 -> 33, after #8706 took 31 -> 32) for `2026-09-27-chore-retire-ghcr-token-minter-and-host-credential-plumbing-plan.md` (archived under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`doppler secrets -p soleur -c prd --only-names`) reads Doppler names only.
+  // NO SUBSTITUTE: the property is the ABSENCE of three secret names in Doppler after the merge
+  // apply, and a Doppler config listing has no unauthenticated read path. Genuine declaration.
+  // #9045 (2026-09-28): +1 (33 -> 34, after #8714 5.4 took 32 -> 33) for `2026-09-28-fix-luks-deadman-host-canary-disarm-and-snapshot-411798619-release-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
   // (a double-quoted scalar). TRUTH: the probe (`scripts/betterstack-query.sh --grep 'OK: /mnt/data
   // is LUKS-backed'`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform).
   // NO SUBSTITUTE: the SOLEUR_WORKSPACES_LUKS_DEADMAN markers and the nightly OK row share web-1's
   // luks-monitor journald tag, which lands only in the Logs warehouse; it has no unauthenticated
   // read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 33;
+  const BASELINE_DECLARED_PROBES = 34;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

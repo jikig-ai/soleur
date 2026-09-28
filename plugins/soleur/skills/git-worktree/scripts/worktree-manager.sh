@@ -2468,21 +2468,30 @@ cleanup_worktrees() {
 }
 
 # Archive KB artifact files matching a slug from a flat directory
-# Usage: archive_kb_files <dir> <slug> <label> <verbose>
+# Usage: archive_kb_files <dir> <slug> <label> <verbose> [batch_ts]
 archive_kb_files() {
   local dir="$1"
   local slug="$2"
   local label="$3"
   local verbose="$4"
+  local batch_ts="${5:-}"
   [[ -d "$dir" ]] || return 0
   local archive_dir="$dir/archive"
   mkdir -p "$archive_dir"
+  # One stamp per batch (archive-kb.sh precedent) — every file this call moves
+  # shares the reap's timestamp rather than recomputing `date` per file.
+  # The caller may pass the reap-wide stamp so spec/plan/brainstorm entries of
+  # one reap agree; standalone callers mint their own.
+  local ts
+  ts="${batch_ts:-$(date +%Y%m%d-%H%M%S)}"
   for f in "$dir"/*"$slug"*; do
-    [[ -f "$f" && "$f" != */archive/* ]] || continue
-    local fname ts
+    [[ -f "$f" && "${f#$dir/}" != archive/* ]] || continue
+    local fname
     fname=$(basename "$f")
-    ts="$(date +%Y-%m-%d-%H%M%S)"
-    if ! mv "$f" "$archive_dir/$ts-$fname" 2>/dev/null; then
+    if [[ -e "$archive_dir/$ts-$fname" ]]; then
+      # No-clobber: an existing archive record is never overwritten in place.
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: archive entry exists, keeping both: $ts-$fname${NC}"
+    elif ! mv "$f" "$archive_dir/$ts-$fname" 2>/dev/null; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $fname${NC}"
     fi
   done
@@ -3326,15 +3335,25 @@ cleanup_merged_worktrees() {
     # created specs at the bare root. New layout commits the spec inside the
     # worktree (git history is the canonical archive); the [[ -d ]] guard silently
     # skips when the bare-root dir does not exist.
+    # One stamp per REAP, minted once and shared by the spec-dir entry and both
+    # archive_kb_files calls below — matching archive-kb.sh's once-per-run
+    # TIMESTAMP, so a reap that straddles a second boundary still names every
+    # entry for the same feature identically.
+    local reap_ts
+    reap_ts="$(date +%Y%m%d-%H%M%S)"
+
     local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
     if [[ -d "$spec_dir" ]]; then
       local archive_dir archive_name archive_path
       archive_dir="$(dirname "$spec_dir")/archive"
-      archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
+      archive_name="$reap_ts-$safe_branch"
       archive_path="$archive_dir/$archive_name"
 
       mkdir -p "$archive_dir"
-      if ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
+      if [[ -e "$archive_path" ]]; then
+        # No-clobber: an existing archive record is never overwritten in place.
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: archive entry exists, keeping spec for $branch${NC}"
+      elif ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
         [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
       fi
     fi
@@ -3346,8 +3365,8 @@ cleanup_merged_worktrees() {
     feature_slug="${feature_slug#feature-}"
 
     # Archive brainstorms and plans matching the feature slug
-    archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose"
-    archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan" "$verbose"
+    archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose" "$reap_ts"
+    archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan" "$verbose" "$reap_ts"
 
     # Remove worktree if exists (use actual path from git, not constructed path)
     if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then

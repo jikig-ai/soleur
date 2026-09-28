@@ -736,6 +736,11 @@ post-recut fill rate before concluding the incident is closed.
   #7278 a **rollback dependency** of this runbook, not merely a prerequisite, and vetoes the recut
   while it is open. A restart-only lever was additionally refuted on the evidence: zot has already
   been restarted 15,640 times into the same 100 %-full volume.
+  *[Annotated 2026-09-28, #7377: the write-shaped set is resolved by decision, not built. See
+  ADR-172 §"Amendment 2026-09-28": `push-config` ships as a merge to `main` that fires a
+  volume-preserving `registry-host-replace`; `restart` and `reclaim` will not be built. The
+  inventory lever is also dispatched automatically when the restart-loop alarm opens a new
+  non-OOM tracker.]*
 
 **Context:**
 
