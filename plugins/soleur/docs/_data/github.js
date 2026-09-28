@@ -58,7 +58,10 @@ async function fetchGithub() {
     clearTimeout(timer);
   }
 
-  releases = releases.filter((r) => !r.draft);
+  // Prereleases are excluded too (#8714): this repo publishes infrastructure mirror artifacts
+  // (e.g. `zot-image-<ver>`, the registry host's boot image) as prereleases, and they are not
+  // Soleur releases — neither the docs version nor the changelog may show them.
+  releases = releases.filter((r) => !r.draft && !r.prerelease);
 
   const version = releases[0]?.tag_name?.replace(/^v/, "") ?? null;
 
