@@ -1,23 +1,23 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { provisionWorkspace } from "@/server/workspace";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/workspace", origin);
 
-  // Authenticate the request
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+  // Authenticate the request — middleware-verified identity
+  // (x-soleur-auth-user-id); absent header falls back to getUser() inside
+  // verifiedUserId (fail-closed; the old authError arm also lands here since
+  // a getUser error yields a null user).
+  const userId = await verifiedUserId(request);
 
-  if (authError || !user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   const { data: existingUser, error: fetchError } = await serviceClient
     .from("users")
     .select("workspace_status")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
   if (fetchError) {
@@ -44,15 +44,15 @@ export async function POST(request: Request) {
   await serviceClient
     .from("users")
     .update({ workspace_status: "provisioning" })
-    .eq("id", user.id);
+    .eq("id", userId);
 
   try {
-    // Solo provisioning: `user.id` doubles as the workspace_id per migration
+    // Solo provisioning: `userId` doubles as the workspace_id per migration
     // 053 §1.1.7 N2 invariant (workspaces.id === owner_user_id for backfilled
     // and trigger-created solo workspaces). Team-invite flows (Phase 5) will
     // call `resolveWorkspacePathForUser(userId)` to obtain the target workspace_id
     // before provisioning.
-    const workspacePath = await provisionWorkspace(user.id);
+    const workspacePath = await provisionWorkspace(userId);
 
     // Update user record with ready status. workspace_path is NO LONGER written to
     // the users column (derived now — ADR-044 PR-2b); the local is still consumed
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     const { error: updateError } = await serviceClient
       .from("users")
       .update({ workspace_status: "ready" })
-      .eq("id", user.id);
+      .eq("id", userId);
 
     if (updateError) {
       return NextResponse.json(
@@ -75,12 +75,12 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     Sentry.withIsolationScope(() => {
-      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
       reportSilentFallback(err, {
         feature: "workspace",
         op: "provisioning",
         message: "Workspace provisioning failed",
-        extra: { userId: user.id },
+        extra: { userId },
       });
     });
     return NextResponse.json(
