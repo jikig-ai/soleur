@@ -17,7 +17,7 @@ import {
 import { randomUUID } from "crypto";
 // Real child_process, bound before any vi.doMock (doMock is not hoisted) — the ssh probe.
 import { execFileSync as realExecFileSync } from "child_process";
-import { makeEd25519Pin, TOFU_OPT } from "./helpers/ssh-host-key-fixture";
+import { BAD_PIN_SHAPES, makeEd25519Pin, TOFU_OPT } from "./helpers/ssh-host-key-fixture";
 
 type ExecFileCallback = (
   err: Error | null,
@@ -631,14 +631,28 @@ describe("git-data host-key pinning (Guard 5, #7226)", () => {
   });
 
   // #5914 runtime guard: types stop a TypeScript caller; this stops a JS or `as any` caller.
-  // Matches the guard's EXACT text: a `TypeError` from `null.trim()` would satisfy the looser
-  // /host-key pin/i used below, so it cannot stand in for the guard.
+  // Matched on the guard's EXACT text, so a refusal from anywhere else cannot stand in for it.
   const GUARD_TEXT = /refusing to dial without a valid host-key pin/;
   const NON_PINS: Array<[string, () => unknown]> = [
     ["null", () => null],
     ["undefined", () => undefined],
     ["123", () => 123],
-    ["a valid pin plus a trailing comment", () => `${makeEd25519Pin()} host@x`],
+    ["empty", () => ""],
+    ["whitespace-only", () => "   "],
+    // A String object passes nothing: only a primitive string is a pin.
+    ["new String(valid pin)", () => new String(makeEd25519Pin())],
+    // The case the `typeof` clause exists for: an object whose FIRST toString() is a valid pin
+    // (read by the regex) and whose SECOND injects a line (read by the known_hosts template).
+    [
+      "an object whose toString changes between reads",
+      () => {
+        const pin = makeEd25519Pin();
+        let n = 0;
+        return { toString: () => (n++ === 0 ? pin : `${pin}\n@cert-authority * ssh-ed25519 AAAA`) };
+      },
+    ],
+    // Every shape the resolver refuses, from the ONE shared table: the guard must be exactly as strict.
+    ...BAD_PIN_SHAPES.map(([n, mk]): [string, () => unknown] => [n, () => mk(makeEd25519Pin())]),
   ];
 
   test.each(NON_PINS)("sshWithPrivateKeyAuth refuses a %s pin with the guard's text before any exec", async (_n, mk) => {
@@ -667,8 +681,8 @@ describe("git-data host-key pinning (Guard 5, #7226)", () => {
     mockExecFile(capturedCalls);
     const { sshWithPrivateKeyAuth, gitWithPrivateKeyAuth } = await import("../server/git-auth");
     const evil = `${pin}\n@cert-authority * ssh-ed25519 AAAA`;
-    await expect(sshWithPrivateKeyAuth("10.0.1.20", "ws", KEY, evil)).rejects.toThrow(/host-key pin/i);
-    await expect(gitWithPrivateKeyAuth(["fetch", "x"], KEY, evil)).rejects.toThrow(/host-key pin/i);
+    await expect(sshWithPrivateKeyAuth("10.0.1.20", "ws", KEY, evil)).rejects.toThrow(GUARD_TEXT);
+    await expect(gitWithPrivateKeyAuth(["fetch", "x"], KEY, evil)).rejects.toThrow(GUARD_TEXT);
     expect(capturedCalls).toHaveLength(0);
   });
 

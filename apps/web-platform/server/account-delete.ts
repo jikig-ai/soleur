@@ -238,8 +238,11 @@ export async function deleteAccount(
       //                    Doppler prd and redeploy.
       //                  pin_invalid | pin_absent — GIT_DATA_SSH_HOST_KEY is malformed or
       //                    unset, whatever the store flag says (#7226, #5914). Remedy:
-      //                    republish the pin (the replace job does) and redeploy, then
-      //                    sweep the refused erasures (runbook pin-fault row).
+      //                    republish the pin (the replace job does), or re-run
+      //                    git-data-pin-redeploy.yml if the secret is present but not loaded,
+      //                    then sweep the refused erasures (runbook pin-fault row).
+      //                  ssh_client_absent — the image has no `ssh` (#5914): ship
+      //                    openssh-client in the runner stage, then sweep.
       //   unreachable  — no answer at all; the repo's state is unknown, which is not the
       //                  same as un-erased.
       //   host_key_mismatch — ssh reached a host whose key does not match the pin (#7226).
@@ -251,11 +254,16 @@ export async function deleteAccount(
       // MESSAGE path (err === null, #5914): an Error-path report is pre-captured by the
       // pino mirror with only `feature=pino-mirror` and the tagged capture is dropped
       // (#8629), so art17_erasure_incomplete — which filters on `feature`/`op` — would
-      // never see it. The status leads the message so each outcome groups separately.
+      // never see it. The status (and, for `unconfigured`, the fixed reason word) leads the
+      // message so each fault groups into its own Sentry issue: the alert fires only on
+      // first-seen / reappeared / regression, so a shared issue would let an open
+      // `remove_key_absent` issue hide a later `pin_absent`.
+      const reason =
+        outcome.status === "unconfigured" ? /^([a-z_]+): /.exec(outcome.detail)?.[1] : undefined;
       reportSilentFallback(null, {
         feature: "account-delete",
         op: "git-data-bare-repo-erasure",
-        tags: { erasure_outcome: outcome.status },
+        tags: { erasure_outcome: outcome.status, ...(reason ? { erasure_reason: reason } : {}) },
         extra: {
           userId,
           // DELIBERATE, and not a duplicate of `userId` above: `reportSilentFallback`
@@ -274,8 +282,8 @@ export async function deleteAccount(
           detail: outcome.detail,
         },
         message:
-          `git-data erasure ${outcome.status}: bare-repo erasure did not complete during ` +
-          "Art. 17 deletion — the repo may persist on the git-data host",
+          `git-data erasure ${outcome.status}${reason ? ` (${reason})` : ""}: bare-repo erasure ` +
+          "did not complete during Art. 17 deletion — the repo may persist on the git-data host",
       });
     }
   } catch (err) {
@@ -283,11 +291,19 @@ export async function deleteAccount(
     // SAME honest answer as a refusal. Before #8094 this arm existed and set nothing, so
     // it was the one route that could still report an unobserved success.
     gitDataErasurePending = true;
-    reportSilentFallback(err, {
+    // MESSAGE path, like the outcome report above (#8629): the Error path never reaches
+    // art17_erasure_incomplete. The thrown MESSAGE is deliberately not carried —
+    // assertSafeWorkspaceId's embeds the raw id — only the error's name. The known throws
+    // here are pre-dial (`refusing unsafe workspace_id`, `GIT_DATA_SSH_HOST is unset in
+    // production`), so the host was not reached.
+    reportSilentFallback(null, {
       feature: "account-delete",
       op: "git-data-bare-repo-erasure",
-      extra: { userId },
-      message: "removeGitDataRepo threw during Art. 17 deletion — bare repo may persist on the git-data host",
+      tags: { erasure_outcome: "threw" },
+      extra: { userId, gitDataRepoId: userId, errorName: err instanceof Error ? err.name : typeof err },
+      message:
+        "git-data erasure threw: removeGitDataRepo threw during Art. 17 deletion — bare repo may " +
+        "persist on the git-data host",
     });
   }
 

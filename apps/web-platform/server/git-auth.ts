@@ -353,12 +353,14 @@ const PINNED_HOST_KEY_OPTS: readonly string[] = [
 /**
  * The known_hosts body and the host-key ssh options for one git-data invocation.
  *
- * Throws unless the pin is a string of exactly the resolver's shape
+ * Throws unless the pin is a primitive string of exactly the resolver's shape
  * ({@link GIT_DATA_HOST_KEY_PIN_RE}). Types stop a TypeScript caller passing `null`; this
  * stops a JS or `as any` caller, and it is the byte that becomes a known_hosts line, so a
  * second line (e.g. a `@cert-authority *` entry) or a trailing comment must be impossible
- * here too, whatever the caller. The `typeof` clause comes first so a non-string refuses
- * with this message rather than a `TypeError` from a string method.
+ * here too, whatever the caller. The `typeof` clause is what closes the non-string case:
+ * `RegExp.test` stringifies its argument, so an object whose `toString()` returns a valid
+ * pin on the first call and an injected second line on the next would pass the regex and
+ * then write that second line through the template below.
  */
 function gitDataHostKeyTrust(hostKeyPin: string): {
   knownHosts: string;

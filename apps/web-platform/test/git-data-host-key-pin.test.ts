@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectedFingerprint, makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
+import { BAD_PIN_SHAPES, expectedFingerprint, makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
 
 const gitTransport = vi.fn();
 const sshTransport = vi.fn();
@@ -105,16 +105,7 @@ describe("resolveGitDataHostKeyPin — Guard 3 shape + D4 absent semantics", () 
     expect(resolveGitDataHostKeyPin()).toBe(PIN);
   });
 
-  it.each([
-    ["embedded newline + a second `* ssh-rsa` line", (p: string) => `${p}\n* ssh-rsa AAAAB3NzaC1yc2E`],
-    ["trailing comment", (p: string) => `${p} host@x`],
-    ["host pattern prefix", (p: string) => `git-data ${p}`],
-    ["@cert-authority marker", (p: string) => `@cert-authority * ${p}`],
-    ["an ssh-rsa key", () => "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7"],
-    ["a truncated ED25519 key", (p: string) => p.slice(0, -1)],
-    ["an ED25519 key with padding appended", (p: string) => `${p}=`],
-    ["two key lines", (p: string) => `${p}\n${p}`],
-  ])("wrong shape (%s) THROWS — and never echoes the raw value", async (_n, mk) => {
+  it.each(BAD_PIN_SHAPES)("wrong shape (%s) THROWS — and never echoes the raw value", async (_n, mk) => {
     const bad = mk(PIN);
     vi.stubEnv("GIT_DATA_SSH_HOST_KEY", bad);
     const { resolveGitDataHostKeyPin } = await load();
@@ -144,7 +135,7 @@ describe("resolveGitDataHostKeyPin — Guard 3 shape + D4 absent semantics", () 
   it("absent + store disabled THROWS too (#5914: no unpinned fallback), naming the flag state, with no report", async () => {
     const { resolveGitDataHostKeyPin } = await load();
     expect(() => resolveGitDataHostKeyPin()).toThrow(/GIT_DATA_SSH_HOST_KEY is unset/);
-    expect(() => resolveGitDataHostKeyPin()).toThrow(/GIT_DATA_STORE_ENABLED=unset\/false/);
+    expect(() => resolveGitDataHostKeyPin()).toThrow(/GIT_DATA_STORE_ENABLED is not true/);
     expect(pinReports()).toHaveLength(0);
   });
 });
@@ -187,7 +178,7 @@ describe("removeGitDataRepo — guarded pin resolution + host_key_mismatch (Guar
       expect(outcome.status).toBe("unconfigured");
       if (outcome.status !== "unconfigured") throw new Error("narrow");
       expect(outcome.detail).toMatch(/^pin_absent: /);
-      expect(outcome.detail).toMatch(/GIT_DATA_STORE_ENABLED=unset\/false/);
+      expect(outcome.detail).toMatch(/GIT_DATA_STORE_ENABLED is not true/);
     }
     expect(sshTransport).not.toHaveBeenCalled();
     expect(pinReports()).toHaveLength(0);
@@ -231,6 +222,25 @@ describe("removeGitDataRepo — guarded pin resolution + host_key_mismatch (Guar
     sshTransport.mockRejectedValueOnce(sshErr(255, "git@10.0.1.20: Permission denied (publickey).\n"));
     const { removeGitDataRepo } = await load();
     expect((await removeGitDataRepo(WS)).status).toBe("unauthorized");
+  });
+
+  it("spawn ENOENT (no ssh binary in the image) is `unconfigured` `ssh_client_absent:`, not `unreachable`", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    sshTransport.mockRejectedValueOnce(
+      Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT", syscall: "spawn ssh" }),
+    );
+    const { removeGitDataRepo } = await load();
+    const outcome = await removeGitDataRepo(WS);
+    expect(outcome.status).toBe("unconfigured");
+    if (outcome.status !== "unconfigured") throw new Error("narrow");
+    expect(outcome.detail).toMatch(/^ssh_client_absent: /);
+  });
+
+  it("a non-spawn ENOENT (no syscall) stays unreachable — only a failed spawn proves the binary is missing", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    sshTransport.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const { removeGitDataRepo } = await load();
+    expect((await removeGitDataRepo(WS)).status).toBe("unreachable");
   });
 
   it("exit 255 + connection refused stays unreachable", async () => {
@@ -342,14 +352,25 @@ try {
   sshKeygenAvailable = (e as NodeJS.ErrnoException).code !== "ENOENT";
 }
 
+// A PATH holding an executable `ssh`, and one holding none — the startup ssh-client check
+// walks PATH (no spawn at boot), so each test pins PATH instead of trusting the host's.
+const sshBinDir = mkdtempSync(join(tmpdir(), "ssh-bin-"));
+writeFileSync(join(sshBinDir, "ssh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+const noSshDir = mkdtempSync(join(tmpdir(), "no-ssh-"));
+const ORIGINAL_PATH = process.env.PATH ?? "";
+const PATH_WITH_SSH = `${sshBinDir}:${ORIGINAL_PATH}`;
+
 describe("startup pin line (AC16) — logged once at WARN so Vector ships it", () => {
-  const warnMessages = () => logWarn.mock.calls.map((c) => String(c[c.length - 1]));
+  // The pin line only: the ssh-client line (below) is a separate warn line.
+  const warnMessages = () =>
+    logWarn.mock.calls.map((c) => String(c[c.length - 1])).filter((m) => m.startsWith("git_data_pin="));
+  beforeEach(() => vi.stubEnv("PATH", PATH_WITH_SSH));
 
   it("present: `git_data_pin=present fp=SHA256:<fp>` at warn, never info", async () => {
     vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
     const { logGitDataHostKeyPinAtStartup } = await load();
     logGitDataHostKeyPinAtStartup();
-    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(warnMessages()).toHaveLength(1);
     const msg = warnMessages()[0];
     expect(msg).toMatch(/^git_data_pin=present fp=SHA256:[A-Za-z0-9+/]{43}$/);
     expect(msg).toBe(`git_data_pin=present fp=${expectedFingerprint(PIN)}`);
@@ -473,4 +494,57 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
   // The boot wiring (server/index.ts calls it once) is bound by importing the boot module
   // itself: test/server-index-boot-pin-line.test.ts. A source regex here matched a
   // commented-out call.
+});
+
+// #5914 (CTO ruling 2026-09-28): node:22-slim + `--no-install-recommends` shipped NO ssh
+// client, so every git-data dial failed ENOENT. Startup now says which it is, off-host.
+describe("startup ssh-client line — git_data_ssh_client=present|absent", () => {
+  const sshLines = () =>
+    logWarn.mock.calls.map((c) => String(c[c.length - 1])).filter((m) => m.startsWith("git_data_ssh_client="));
+  const sshReports = () =>
+    reportSilentFallback.mock.calls.filter(
+      (c) => (c[1] as { op?: string }).op === "ssh_client_absent_at_startup",
+    );
+
+  it("ssh on PATH: `git_data_ssh_client=present`, no event", async () => {
+    vi.stubEnv("PATH", sshBinDir);
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(sshLines()).toEqual(["git_data_ssh_client=present"]);
+    expect(sshReports()).toHaveLength(0);
+  });
+
+  it("no ssh on PATH + armed: `git_data_ssh_client=absent` and ONE message-path event", async () => {
+    vi.stubEnv("PATH", noSshDir);
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(sshLines()).toEqual(["git_data_ssh_client=absent"]);
+    expect(sshReports()).toHaveLength(1);
+    expect(sshReports()[0][0]).toBeNull();
+    expect(sshReports()[0][1]).toEqual({
+      feature: "git_data_ssh_client",
+      op: "ssh_client_absent_at_startup",
+      message: "git-data ssh client absent at startup",
+    });
+  });
+
+  it("no ssh on PATH + UNARMED: logs absent, no event (dev without git-data inputs)", async () => {
+    vi.stubEnv("PATH", noSshDir);
+    for (const k of ["GIT_REMOVE_SSH_PRIVATE_KEY", "GIT_PROVISION_SSH_PRIVATE_KEY", "GIT_DATA_SSH_HOST"]) vi.stubEnv(k, "");
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(sshLines()).toEqual(["git_data_ssh_client=absent"]);
+    expect(sshReports()).toHaveLength(0);
+  });
+
+  it("a non-executable `ssh` file on PATH reads absent", async () => {
+    const d = mkdtempSync(join(tmpdir(), "ssh-noexec-"));
+    writeFileSync(join(d, "ssh"), "not executable\n", { mode: 0o644 });
+    vi.stubEnv("PATH", d);
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(sshLines()).toEqual(["git_data_ssh_client=absent"]);
+  });
 });

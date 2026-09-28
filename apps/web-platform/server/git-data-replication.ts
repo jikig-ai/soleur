@@ -17,6 +17,8 @@
 // never to the GitHub `origin`/`syncPush` push (GitHub runs no fence hook).
 
 import { execFileSync } from "child_process";
+import { accessSync, constants as fsConstants } from "fs";
+import { delimiter, join } from "path";
 import { createHash } from "crypto";
 import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
@@ -198,9 +200,9 @@ export function resolveGitDataHostKeyPin(): string {
     );
   }
   throw new Error(
-    `git-data: GIT_DATA_SSH_HOST_KEY is unset (GIT_DATA_STORE_ENABLED=` +
-      `${isGitDataStoreEnabled() ? "true" : "unset/false"}) — refusing unpinned SSH to the ` +
-      "git-data host. The replace job publishes it to Doppler prd.",
+    `git-data: GIT_DATA_SSH_HOST_KEY is unset (${isGitDataStoreEnabled() ? "GIT_DATA_STORE_ENABLED=true" : "GIT_DATA_STORE_ENABLED is not true"}) — ` +
+      "refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd; " +
+      "if the secret is already there, the container has not loaded it (re-run git-data-pin-redeploy.yml).",
   );
 }
 
@@ -212,6 +214,24 @@ function gitDataArmedInProcess(): boolean {
   return ["GIT_REMOVE_SSH_PRIVATE_KEY", "GIT_PROVISION_SSH_PRIVATE_KEY", "GIT_DATA_SSH_HOST"].some(
     (k) => !!process.env[k]?.trim(),
   );
+}
+
+/**
+ * Whether an executable `ssh` is on PATH — checked by walking PATH, never by spawning at
+ * boot. #5914 (CTO ruling 2026-09-28): node:22-slim + `--no-install-recommends` shipped NO
+ * ssh client (git only Recommends openssh-client), so every git-data dial failed ENOENT.
+ */
+function sshClientOnPath(): boolean {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    try {
+      accessSync(join(dir, "ssh"), fsConstants.X_OK);
+      return true;
+    } catch {
+      // not here; keep walking
+    }
+  }
+  return false;
 }
 
 /** OpenSSH-style `SHA256:<base64, no padding>` fingerprint of a validated pin. */
@@ -258,6 +278,16 @@ export function logGitDataHostKeyPinAtStartup(): void {
         feature: "git_data_host_key_pin",
         op: "pin_absent_at_startup",
         message: "git-data host-key pin absent at startup",
+      });
+    }
+    // A separate line, so the documented `git_data_pin=` line keeps its exact shape.
+    const sshPresent = sshClientOnPath();
+    log.warn({ gitDataSshClient: sshPresent }, `git_data_ssh_client=${sshPresent ? "present" : "absent"}`);
+    if (!sshPresent && gitDataArmedInProcess()) {
+      reportSilentFallback(null, {
+        feature: "git_data_ssh_client",
+        op: "ssh_client_absent_at_startup",
+        message: "git-data ssh client absent at startup",
       });
     }
   } catch (err) {
@@ -378,6 +408,8 @@ export type GitDataErasureOutcome =
    *   - `pin_invalid` / `pin_absent` (#7226, #5914) — GIT_DATA_SSH_HOST_KEY is malformed,
    *     or absent (whatever the store flag says); nothing was dialed. Events before #5914
    *     read `pin_absent_store_enabled`, which `pin_absent` prefixes, so match the colon.
+   *   - `ssh_client_absent` (#5914) — spawning `ssh` failed ENOENT: the image has no ssh
+   *     client, so nothing was dialed.
    *
    * Without this, `skipped` silently absorbed it and reported "nothing to erase" for a
    * host that is actively provisioning repos: the #8094 defect through a second door.
@@ -476,10 +508,9 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
     // Provisioning arms on a DIFFERENT variable (GIT_PROVISION_SSH_PRIVATE_KEY), so a
     // half-applied rotation or a partial birth can leave repos being created while the
     // remove key is missing — and reporting that as `skipped` tells the user their data
-    // is gone while their bare repo sits on the host.
-    const provisionKey = process.env.GIT_PROVISION_SSH_PRIVATE_KEY?.trim();
-    const sshHost = process.env.GIT_DATA_SSH_HOST?.trim();
-    if (provisionKey || sshHost) {
+    // is gone while their bare repo sits on the host. With the remove key absent, "armed"
+    // is exactly "provision key or host set" — the same predicate the startup event uses.
+    if (gitDataArmedInProcess()) {
       return {
         status: "unconfigured",
         detail:
@@ -518,7 +549,12 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
     // key), so both reach us unchanged. Read them defensively anyway: a timeout rejects
     // with a `killed` error whose `code` is null, and that is an `unreachable`, not a
     // refusal by a host that never answered.
-    const e = err as { code?: unknown; stderr?: unknown };
+    const e = err as { code?: unknown; stderr?: unknown; syscall?: unknown };
+    // spawn ENOENT: no ssh binary in the image. A configuration fault, nothing was dialed —
+    // not `unreachable`, which would send the operator to the network (#5914).
+    if (e.code === "ENOENT" && typeof e.syscall === "string" && e.syscall.startsWith("spawn")) {
+      return { status: "unconfigured", detail: `ssh_client_absent: ${e.syscall} ENOENT, nothing dialed` };
+    }
     const exitCode = typeof e.code === "number" ? e.code : null;
     const detail = scrubErasureDetail(
       String(
