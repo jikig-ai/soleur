@@ -23,6 +23,8 @@ vi.mock("@/server/release-notes", () => ({
 
 vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(),
 }));
 
 import { GET } from "@/app/api/dashboard/releases/route";
@@ -41,14 +43,14 @@ describe("GET /api/dashboard/releases", () => {
     ];
     mockFetchWebReleases.mockResolvedValue(releases);
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ releases });
   });
 
   test("returns 401 when unauthenticated", async () => {
     mockGetUser.mockResolvedValue({ data: { user: null } });
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(401);
     expect(mockFetchWebReleases).not.toHaveBeenCalled();
   });
@@ -57,7 +59,7 @@ describe("GET /api/dashboard/releases", () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "u1" } } });
     mockFetchWebReleases.mockRejectedValue(new Error("GitHub releases API 503"));
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: "releases_query_error" });
     expect(mockCaptureException).toHaveBeenCalledWith(

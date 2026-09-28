@@ -41,7 +41,16 @@ const {
 vi.mock("@supabase/ssr", () => ({
   createServerClient: vi.fn(() => ({
     auth: { getUser: mockGetUser, getSession: mockGetSession },
-    rpc: mockRpc,
+    rpc: (...args: unknown[]) => {
+      // rpc() returns a PostgrestFilterBuilder — middleware arms it with
+      // .abortSignal(...). A plain mockResolvedValue() promise has no such
+      // method, so expose the resolved value under abortSignal; a test that
+      // needs the signal honoured returns an object carrying its own.
+      const r = mockRpc(...args) as { abortSignal?: unknown } | Promise<unknown>;
+      return r && typeof (r as { abortSignal?: unknown }).abortSignal === "function"
+        ? r
+        : { abortSignal: () => r };
+    },
     from: mockFrom,
   })),
 }));
@@ -81,7 +90,7 @@ beforeEach(() => {
     data: null,
     error: { message: "ECONNRESET", code: "53000" },
   });
-  const eq = vi.fn().mockReturnValue({ single: mockTcSingle });
+  const eq = vi.fn().mockReturnValue({ single: mockTcSingle, abortSignal: vi.fn(() => ({ single: mockTcSingle })) });
   const select = vi.fn().mockReturnValue({ eq });
   mockFrom.mockReturnValue({ select });
 });

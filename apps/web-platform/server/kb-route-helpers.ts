@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs } from "node:fs";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { verifiedUserId } from "@/server/request-auth";
 import {
   resolveActiveWorkspaceKbRoot,
   resolveActiveWorkspaceRepoMeta,
@@ -65,12 +66,10 @@ export async function authenticateAndResolveKbPath(
     return { ok: false, response: rejectCsrf(opts.endpoint, origin) };
   }
 
-  // Auth
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return err(401, "Unauthorized");
+  // Auth — middleware-minted header first (zero auth-server RTT), bounded
+  // remote fallback on the absent arm (#8926 helper-level sweep).
+  const userId = await verifiedUserId(request);
+  if (!userId) return err(401, "Unauthorized");
 
   // ADR-044 resolver consolidation (#4543, #4956). Resolve the active
   // workspace's kbRoot + repo metadata via the two membership-scoped
@@ -97,7 +96,7 @@ export async function authenticateAndResolveKbPath(
   // code), so map to the legacy MESSAGE strings — 503 → "Workspace not ready",
   // 404/400 → "No repository connected".
   const serviceClient = createServiceClient();
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     return err(
       access.status,
@@ -108,7 +107,7 @@ export async function authenticateAndResolveKbPath(
   // credential all key to ONE membership-resolved id (no divergence under a
   // stale-claim self-heal; no redundant resolution) — mirrors kb/upload.
   const repoMeta = await resolveActiveWorkspaceRepoMeta(
-    user.id,
+    userId,
     serviceClient,
     access.activeWorkspaceId,
   );
@@ -170,7 +169,7 @@ export async function authenticateAndResolveKbPath(
   return {
     ok: true,
     ctx: {
-      user: { id: user.id },
+      user: { id: userId },
       userData: {
         workspace_path: userData.workspace_path,
         repo_url: userData.repo_url,
