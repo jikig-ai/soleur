@@ -2749,7 +2749,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (`scripts/followthroughs/luks-monitor-host-timer-8706.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
   // NO SUBSTITUTE: the evidence is web-1's luks-monitor.service journald rows in the Logs warehouse,
   // which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 32;
+  // #9045 (2026-09-28): +1 (32 -> 33, after #8706 took 31 -> 32) for `2026-09-28-fix-luks-deadman-host-canary-disarm-and-snapshot-411798619-release-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/betterstack-query.sh --grep 'OK: /mnt/data
+  // is LUKS-backed'`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform).
+  // NO SUBSTITUTE: the SOLEUR_WORKSPACES_LUKS_DEADMAN markers and the nightly OK row share web-1's
+  // luks-monitor journald tag, which lands only in the Logs warehouse; it has no unauthenticated
+  // read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 33;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
