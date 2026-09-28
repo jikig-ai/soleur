@@ -275,6 +275,23 @@ advisor consult.
     that zot answered. They cannot show a beat that failed its egress, or a feeder that did not
     run.
 
+## Implementation Notes (work phase, 2026-09-28)
+
+- **State format changed from `key=value` lines to one line of six positional fields**
+  (`miss ping_fail ok late_ok code last_ok_ts`). The key=value revision measured 21,292 B stored
+  user_data, over `REGISTRY_GZIP_BUDGET` (21,000). ADR-185's 2026-09-28 amendment says the next
+  feature must shrink rather than raise the constant. The positional form measures 20,924 B
+  (headroom 11,844 against the 11,768 floor). ADR-185 has a dated addendum recording the 76 B of
+  remaining slack.
+- The reporter reads the line with `read -r` instead of `timeout 5 cat | head -c 512`, and validates
+  each field in one loop: an integer of at most 10 digits with no leading zero, and a code of 3
+  digits or `none`. Anything else is `-1`.
+- The `last_ok_ts` width bug (epoch seconds have 10 digits, and the first draft allowed 9) was
+  caught by the L5 row before commit.
+- Mutation batteries: 4 rows on the key=value feeder, then 7 rows on the final feeder and reporter.
+  All were killed: state before ping, fail-as-ok, no read-back, late never counted, reporter
+  unvalidated, field after `zot_last_err`, code unvalidated.
+
 ## Open Code-Review Overlap
 
 None. Open `code-review` issues were checked against every path above on 2026-09-28.
