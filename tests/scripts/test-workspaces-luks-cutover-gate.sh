@@ -353,6 +353,17 @@ else fail "Q3b: the dead-man sh -c string does not log '$Q_MARK' behind the is-e
   source "$CUTOVER" >/dev/null 2>&1
   DRY_RUN=0
   systemd-run() { local a; for a in "$@"; do printf '%s\0' "$a"; done > "$Q_TMP/dm.args"; }
+  # #9045: arm_dead_man now queries the units before and after systemd-run and fails closed unless
+  # the timer reads waiting. Answer like a fresh host (nothing loaded) until the run, then like a
+  # just-armed timer — never the REAL host's systemd, which this suite must not touch.
+  systemctl() {
+    case "${1:-} $*" in
+      "show "*workspaces-luks-deadman.timer*SubState*) if [ -f "$Q_TMP/dm.args" ]; then echo waiting; else echo dead; fi ;;
+      "show "*) echo inactive ;;
+    esac
+    return 0
+  }
+  emit_drift() { :; }
   logger() { :; }
   arm_dead_man
 ) >/dev/null 2>&1

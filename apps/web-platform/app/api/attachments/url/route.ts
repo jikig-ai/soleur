@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
@@ -10,12 +11,9 @@ export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/attachments/url", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -35,7 +33,7 @@ export async function POST(request: Request) {
   // caller). The co-member branch mirrors the SELECT policy (segment-2 must
   // resolve to a conversation in a workspace the caller is a member of).
   const service = createServiceClient();
-  if (!body.storagePath.startsWith(`${user.id}/`)) {
+  if (!body.storagePath.startsWith(`${userId}/`)) {
     const segments = body.storagePath.split("/");
     const conversationSegment = segments[1];
     if (!conversationSegment || !UUID_RE.test(conversationSegment)) {
@@ -51,7 +49,7 @@ export async function POST(request: Request) {
     }
     const { data: isMember, error: memberErr } = await service.rpc("is_workspace_member", {
       p_workspace_id: conversation.workspace_id,
-      p_user_id: user.id,
+      p_user_id: userId,
     });
     if (memberErr || !isMember) {
       reportSilentFallback(memberErr ?? null, {
@@ -59,7 +57,7 @@ export async function POST(request: Request) {
         op: "url-route",
         message: "workspace_cutover_deny",
         extra: {
-          userId: user.id,
+          userId,
           conversationId: conversationSegment,
           workspaceId: conversation.workspace_id,
         },

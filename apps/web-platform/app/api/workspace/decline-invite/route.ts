@@ -3,16 +3,19 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { declineWorkspaceInvitation } from "@/server/workspace-invitations";
+import {
+  verifiedUserId,
+  boundedAuthGetUser,
+  sessionJwtEmailForVerifiedUser,
+} from "@/server/request-auth";
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/workspace/decline-invite", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -35,10 +38,25 @@ export async function POST(request: Request) {
     .single();
 
   if (invRow) {
-    const isInvitee =
-      invRow.invitee_user_id === user.id ||
-      (!invRow.invitee_user_id &&
-        invRow.invitee_email?.toLowerCase() === user.email?.toLowerCase());
+    let isInvitee = invRow.invitee_user_id === userId;
+    if (!isInvitee && !invRow.invitee_user_id) {
+      // The invitee_email leg needs the caller's email. Read it from the
+      // local session JWT (accepted only when the token's `sub` agrees with
+      // the verified id — the helper enforces the check); if the JWT cannot
+      // supply it, re-verify remotely (same pattern as pending-invites).
+      let callerEmail = await sessionJwtEmailForVerifiedUser(supabase, userId);
+      if (callerEmail === null) {
+        const userData = await boundedAuthGetUser(supabase);
+        callerEmail = userData?.user?.email ?? null;
+      }
+      // BOTH sides must be present: anonymized invitations null
+      // invitee_email and a claim-miss JWT yields null callerEmail —
+      // `undefined === undefined` would match any caller on an erased row.
+      isInvitee =
+        callerEmail !== null &&
+        invRow.invitee_email != null &&
+        invRow.invitee_email.toLowerCase() === callerEmail.toLowerCase();
+    }
 
     if (!isInvitee) {
       return NextResponse.json(
@@ -48,7 +66,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const result = await declineWorkspaceInvitation(body.invitationId, user.id);
+  const result = await declineWorkspaceInvitation(body.invitationId, userId);
 
   if (!result.ok) {
     const status =

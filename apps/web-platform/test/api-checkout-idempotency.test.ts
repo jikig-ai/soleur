@@ -149,6 +149,7 @@ vi.mock("@/lib/stripe", () => ({
 vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
   captureMessage: mockCaptureMessage,
+  addBreadcrumb: vi.fn(),
 }));
 
 vi.mock("@/server/logger", () => ({

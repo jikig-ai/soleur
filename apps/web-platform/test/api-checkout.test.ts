@@ -71,6 +71,8 @@ vi.mock("@/lib/stripe", () => ({
 vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
   captureMessage: mockCaptureMessage,
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
