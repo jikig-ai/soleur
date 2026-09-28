@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
 import {
@@ -27,13 +28,11 @@ export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/attachments/presign", origin);
 
-  // Authenticate
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Authenticate — middleware-verified identity (x-soleur-auth-user-id);
+  // absent header falls back to getUser() inside verifiedUserId (fail-closed).
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -90,17 +89,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
   }
 
-  if (conversation.user_id !== user.id) {
+  if (conversation.user_id !== userId) {
     const { data: isMember, error: memberErr } = await service.rpc("is_workspace_member", {
       p_workspace_id: conversation.workspace_id,
-      p_user_id: user.id,
+      p_user_id: userId,
     });
     if (memberErr || !isMember) {
       reportSilentFallback(memberErr ?? null, {
         feature: "attachments",
         op: "presign-route",
         message: "workspace_cutover_deny",
-        extra: { userId: user.id, conversationId, workspaceId: conversation.workspace_id },
+        extra: { userId, conversationId, workspaceId: conversation.workspace_id },
       });
       return NextResponse.json({ error: "not_a_workspace_member" }, { status: 403 });
     }
@@ -108,7 +107,7 @@ export async function POST(request: Request) {
 
   // Generate storage path
   const ext = getExtension(contentType);
-  const storagePath = `${user.id}/${conversationId}/${randomUUID()}.${ext}`;
+  const storagePath = `${userId}/${conversationId}/${randomUUID()}.${ext}`;
 
   // Create signed upload URL
   const { data, error } = await service.storage
@@ -120,13 +119,13 @@ export async function POST(request: Request) {
     if (error) {
       Sentry.captureException(error, {
         tags: { feature: "attachments", op: "presign" },
-        extra: { storagePath, userId: user.id },
+        extra: { storagePath, userId },
       });
     } else {
       Sentry.captureMessage("signed upload URL returned no data", {
         level: "error",
         tags: { feature: "attachments", op: "presign" },
-        extra: { storagePath, userId: user.id },
+        extra: { storagePath, userId },
       });
     }
     return NextResponse.json({ error: "upload_failed" }, { status: 500 });

@@ -6,6 +6,7 @@ import { SlidingWindowCounter } from "@/server/rate-limiter";
 import { deleteWorkspace } from "@/server/workspace";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import { abortAllSessionsForWorkspace } from "@/server/agent-session-registry";
+import { verifiedUserId } from "@/server/request-auth";
 import logger from "@/server/logger";
 
 const disconnectLimiter = new SlidingWindowCounter({
@@ -25,15 +26,13 @@ export async function DELETE(request: Request) {
   if (!valid) return rejectCsrf("api/repo/disconnect", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!disconnectLimiter.isAllowed(user.id)) {
+  if (!disconnectLimiter.isAllowed(userId)) {
     return NextResponse.json(
       { error: "Too many requests. Please wait before trying again." },
       { status: 429 },
@@ -47,7 +46,7 @@ export async function DELETE(request: Request) {
   // claim. A removed/non-member of a stale team claim is reset to their OWN solo
   // id (`resetFromClaim`) — so a removed member disconnecting tears down their OWN
   // repo, never the team's.
-  const activeResolution = await resolveActiveWorkspace(user.id, supabase);
+  const activeResolution = await resolveActiveWorkspace(userId, supabase);
   if (!activeResolution.ok) {
     return NextResponse.json(
       { error: "Could not resolve your active workspace. Please retry." },
@@ -57,7 +56,7 @@ export async function DELETE(request: Request) {
   const activeWorkspaceId = activeResolution.workspaceId;
   if (activeResolution.resetFromClaim) {
     logger.info(
-      { userId: user.id, staleClaim: activeResolution.resetFromClaim },
+      { userId, staleClaim: activeResolution.resetFromClaim },
       "repo disconnect: stale team claim reset to caller's solo workspace",
     );
   }
@@ -66,15 +65,15 @@ export async function DELETE(request: Request) {
   // handler mutates may disconnect it. `p_workspace_id` MUST equal the id the
   // handler actually mutates — now the RESOLVED active id (team or solo). A
   // non-owner member disconnecting a team workspace gets 403; a solo user owns
-  // workspace_id=user.id so it stays a no-op for solo. `is_workspace_owner` is
+  // workspace_id=userId so it stays a no-op for solo. `is_workspace_owner` is
   // SECURITY DEFINER (mig 098), GRANT authenticated.
   const ownerRes = await supabase.rpc("is_workspace_owner", {
     p_workspace_id: activeWorkspaceId,
-    p_user_id: user.id,
+    p_user_id: userId,
   });
   if (ownerRes.error) {
     logger.error(
-      { err: ownerRes.error, userId: user.id },
+      { err: ownerRes.error, userId },
       "is_workspace_owner check failed during disconnect",
     );
     return NextResponse.json(
@@ -105,7 +104,7 @@ export async function DELETE(request: Request) {
 
   if (fetchError) {
     logger.error(
-      { err: fetchError, userId: user.id, workspaceId: activeWorkspaceId },
+      { err: fetchError, userId, workspaceId: activeWorkspaceId },
       "Failed to fetch workspace record for disconnect",
     );
     return NextResponse.json(
@@ -146,7 +145,7 @@ export async function DELETE(request: Request) {
     );
   } catch (clearErr) {
     logger.error(
-      { err: clearErr, userId: user.id, workspaceId: activeWorkspaceId },
+      { err: clearErr, userId, workspaceId: activeWorkspaceId },
       "Failed to clear repo fields on the active workspace (credential may persist on the read path)",
     );
     return NextResponse.json(
@@ -163,14 +162,14 @@ export async function DELETE(request: Request) {
   // `workspace_path` is intentionally NOT cleared — access is gated by
   // `workspace_status`, not an empty path, and writing it trips the
   // zero-`users.*`-write exit criterion.
-  if (activeWorkspaceId === user.id) {
+  if (activeWorkspaceId === userId) {
     const { error: readinessError } = await serviceClient
       .from("users")
       .update({ health_snapshot: null, workspace_status: "provisioning" })
-      .eq("id", user.id);
+      .eq("id", userId);
     if (readinessError) {
       logger.error(
-        { err: readinessError, userId: user.id },
+        { err: readinessError, userId },
         "Failed to reset solo readiness during disconnect (non-fatal — repo already cleared)",
       );
     }
@@ -185,7 +184,7 @@ export async function DELETE(request: Request) {
     abortAllSessionsForWorkspace(activeWorkspaceId);
   } catch (abortErr) {
     logger.warn(
-      { err: abortErr, userId: user.id, workspaceId: activeWorkspaceId },
+      { err: abortErr, userId, workspaceId: activeWorkspaceId },
       "Failed to abort live member sessions before workspace teardown (best-effort)",
     );
   }
@@ -197,7 +196,7 @@ export async function DELETE(request: Request) {
     await deleteWorkspace(activeWorkspaceId);
   } catch (err) {
     logger.warn(
-      { err, userId: user.id, workspaceId: activeWorkspaceId },
+      { err, userId, workspaceId: activeWorkspaceId },
       "Workspace cleanup failed during disconnect (best-effort)",
     );
     Sentry.captureException(err);

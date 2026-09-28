@@ -15,6 +15,7 @@ import {
   type ActionClassTier,
 } from "@/server/scope-grants/action-class-map";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { emitWorkspaceActionContext } from "@/server/workspace-action-audit";
 
 export const dynamic = "force-dynamic";
@@ -38,10 +39,8 @@ export async function POST(req: Request) {
   if (!valid) return rejectCsrf("api/scope-grants/grant", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -81,7 +80,7 @@ export async function POST(req: Request) {
       feature: "scope-grants",
       op: "grant_action_class",
       message: "grant_action_class RPC failed",
-      extra: { userId: user.id, action_class: actionClass, tier },
+      extra: { userId, action_class: actionClass, tier },
     });
     return NextResponse.json({ error: "rpc_failed" }, { status: 500 });
   }
@@ -102,8 +101,8 @@ export async function POST(req: Request) {
   // switch and make the detector log a tenant the grant never touched).
   emitWorkspaceActionContext({
     action: "scope-grant",
-    userId: user.id,
-    workspaceId: user.id,
+    userId,
+    workspaceId: userId,
   });
 
   return NextResponse.json({ id: data, action_class: actionClass, tier });

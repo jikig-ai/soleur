@@ -23,6 +23,7 @@
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -31,16 +32,14 @@ export const dynamic = "force-dynamic";
 const NOT_FOUND_CODES = new Set(["42501", "22P02"]);
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -59,7 +58,7 @@ export async function GET(
       // a non-authorization reason. Never a 200-with-data; never raw PG text.
       Sentry.captureException(new Error(`crm-contact-detail:${code || "unknown"}`), {
         tags: { surface: "crm-contact-detail" },
-        extra: { op: "detail", userId: user.id, code: code || null },
+        extra: { op: "detail", userId, code: code || null },
       });
       return NextResponse.json({ error: "detail_query_error" }, { status: 502 });
     }
@@ -81,7 +80,7 @@ export async function GET(
         tags: { surface: "crm-contact-detail" },
         extra: {
           op: "detail",
-          userId: user.id,
+          userId,
           code: (e as { code?: string })?.code ?? null,
         },
       },

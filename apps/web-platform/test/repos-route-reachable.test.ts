@@ -76,7 +76,7 @@ describe("GET /api/repo/repos — reachable installs", () => {
         : [makeRepo("org/shared"), makeRepo("jikig-ai/soleur")],
     );
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(200);
     const body = await res.json();
     const fullNames = body.repos
@@ -87,7 +87,7 @@ describe("GET /api/repo/repos — reachable installs", () => {
 
   test("T8: reachable set empty → 400 (contract preserved)", async () => {
     mockResolveReachable.mockResolvedValue([]);
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toBe(
