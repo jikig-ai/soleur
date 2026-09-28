@@ -103,7 +103,7 @@ Hard constraints for the whole run:
 
 ## 5. Architecture record, runbooks, follow-through
 
-- [ ] 5.1 Write the ADR-256 draft (status `adopting`; re-verify the ordinal at ship).
+- [ ] 5.1 Write the ADR-257 draft (status `adopting`; re-verify the ordinal at ship).
   - Cite ADR-142.
   - Record the singleton guarantee, the AOF-safety-under-kill argument, the FSM quiesce, and the
     arming residual.

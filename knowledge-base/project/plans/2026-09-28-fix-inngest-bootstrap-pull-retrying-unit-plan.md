@@ -892,7 +892,7 @@ down. That is pre-existing behavior; the retry only makes it more frequent.
 
 ### Phase 5: architecture record (ADR and C4)
 
-- 5.1 New ADR, provisionally **ADR-256** (re-verify the number at ship): "The dedicated inngest
+- 5.1 New ADR, provisionally **ADR-257** (re-verify the number at ship): "The dedicated inngest
   host provisions through a latched, retrying systemd unit, not once-per-instance `runcmd`."
   - Status `adopting`.
   - Record the decision and its consequences: delivery is by replace only; a reboot re-provisions
@@ -905,7 +905,7 @@ down. That is pre-existing behavior; the retry only makes it more frequent.
   still not granted.
 - 5.3 Add a dated note to ADR-096's #8036-1d amendment, and a dated note to ADR-100 (new actor
   on the sole scheduler; FSM quiesce; `op=resume` after `bootstrap-done`). Cite ADR-142 in
-  ADR-256. For the inngest host, the template now
+  ADR-257. For the inngest host, the template now
   makes a zot miss end the **attempt**, and a live host keeps the old behavior until its next
   replace.
 - 5.4 C4 `model.c4`: rewrite the `inngest -> sentry` edge prose (`:775`).
@@ -993,7 +993,7 @@ down. That is pre-existing behavior; the retry only makes it more frequent.
 - `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh`
 - `scripts/followthroughs/inngest-provision-unit-8562.sh`, plus its fixture test if the 8539 twin
   has one.
-- `knowledge-base/engineering/architecture/decisions/ADR-256-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md`
   (the ordinal is provisional).
 
 ## Open Code-Review Overlap
@@ -1253,7 +1253,7 @@ exception:
 
 ### ADR
 
-- **Create ADR-256.** The ordinal is provisional; `soleur:ship`'s ADR-Ordinal Collision Gate
+- **Create ADR-257.** The ordinal is provisional; `soleur:ship`'s ADR-Ordinal Collision Gate
   re-verifies it. It records:
   - `soleur-inngest-provision.service`: a `Type=oneshot` unit with unlimited, rate-bounded
     restarts;
@@ -1271,10 +1271,10 @@ exception:
   `inngest-redis` and `inngest-server` on the sole scheduler, and it creates an ordering rule:
   quiesce the flip timers before any bootstrap run, and run `op=resume` only after the new host's
   `bootstrap-done`. The replace-to-reprovision delivery path itself is unchanged.
-- **Cite ADR-142** (Redis AOF LUKS) in ADR-256. The unit orders `After=inngest-luks-open.service`
+- **Cite ADR-142** (Redis AOF LUKS) in ADR-257. The unit orders `After=inngest-luks-open.service`
   and deliberately adds **no** mount precondition, so a failed LUKS stage keeps today's
   SQLite-degraded serving rather than going dark.
-- **ADR-256 records two guarantees** (architecture P3):
+- **ADR-257 records two guarantees** (architecture P3):
   - **Singleton:** a self-recovered host never starts serving on its own authority. The flip guard
     refuses to serve a replaced host without a `done-owner` marker until `op=resume` runs.
   - **AOF safety under a kill:** Redis, the server and the flip each run in their own unit cgroup.
@@ -1568,7 +1568,7 @@ needs an anchor. The two-ref pin invariant is anchored by an independent consume
   - `apps/web-platform/infra/cloud-init-registry.yml`
   - `.github/workflows/`
 - [ ] Architecture record:
-  - ADR-256 (or the re-verified ordinal) exists.
+  - ADR-257 (or the re-verified ordinal) exists.
   - ADR-115 and ADR-096 carry dated notes.
   - `model.c4`'s `inngest -> sentry` prose no longer says "ENDS the boot".
   - `model.likec4.json` is regenerated.
@@ -1594,7 +1594,7 @@ needs an anchor. The two-ref pin invariant is anchored by an independent consume
 
 - [ ] After the next operator-approved `inngest-host-replace` plus `op=resume`,
   `inngest-provision-unit-8562.sh` reads `verdict=PASS`. The sweeper then closes #8562, and
-  ADR-256 flips to `accepted`.
+  ADR-257 flips to `accepted`.
 
 ## Domain Review
 
@@ -1689,7 +1689,7 @@ flagged.
 
 - **DHH 7**, drop the own-dispatch and harness rows: the Guard Contract gate (plan Phase 2.12)
   requires both.
-- **DHH 8**, fold ADR-256 into an ADR-115 amendment: the issue says the restructure "needs its own
+- **DHH 8**, fold ADR-257 into an ADR-115 amendment: the issue says the restructure "needs its own
   ADR", and ADR-115 is scoped to the registry.
 - **DHH 9**, hardcode `TimeoutStartSec`: a figure that enters a budget must be measured (Sharp
   Edges). A fallback is kept.

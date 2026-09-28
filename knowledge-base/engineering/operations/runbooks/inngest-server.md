@@ -24,6 +24,7 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Read ANY host/unit state | [§ Reading host state without SSH](#reading-host-state-without-ssh) |
 | Scheduler dead after a host replace | [§ Inherited `done`](#inherited-done-after-a-host-replace-7228) |
 | Private-NIC boot event after a host replace (#8539) | [§ Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539) |
+| `inngest_pull_fatal attempt=N` / provision-unit stages after a host replace (#8562) | [§ Provision unit (#8562)](#provision-unit-8562) |
 | Flush latch stands on a `done` host / `op=arm` refused at G3.7 | expected — [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
 
@@ -226,11 +227,101 @@ matches no filter and is query-only by design — a healthy replace must not pag
 is `noarg`, `noip`, `nogrep` or `iprc`); the pull outcome markers that follow still say whether
 the boot worked.
 
+> **Addendum 2026-09-28 (#8562): "it ends the boot" is now the live host's behavior only.** The
+> template retries: since ADR-257 the pull runs in `soleur-inngest-provision.service`, so a zot
+> miss ends one **attempt**, emits `inngest_pull_fatal` with `attempt=N`, and the unit tries again
+> 120 s later. The live host keeps the old behavior until its next replace. Read a page from a
+> host born from the new template per [§ Provision unit (#8562)](#provision-unit-8562), and wait
+> for `bootstrap-done` before deciding on another replace.
+
 **Absence is detected by query only, and nothing pages on it.** If a boot has a `pre-zot-pull`
 marker and no `private_nic_*` marker within ±15 minutes of it on the same host, the helper
 crashed or never ran. Read the `pre-zot-pull` rows with the same query, `--grep pre-zot-pull`,
 and compare timestamps. `zot-login-*` is not a valid reference: the empty-credentials path emits
 `zot-creds-EMPTY` instead.
+
+## Provision unit (#8562)
+
+[ADR-257](../../architecture/decisions/ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md).
+The zot login, the isolation self-check and the pull → bootstrap block no longer run once in
+cloud-init `runcmd`. They run in `/usr/local/bin/soleur-inngest-provision`, under
+`soleur-inngest-provision.service`, which retries every 120 s without limit until one attempt
+succeeds. The success writes a latch, and the latch switches the unit off for the rest of the
+host's life. `runcmd` only arms the unit; a boot timer starts it again 90 s after any later boot of
+a host that has not latched yet.
+
+**When this applies.** Only to a host born from the #8562 template. The change reaches the host
+at its next `inngest-host-replace` (`apply-web-platform-infra.yml`, `apply_target=inngest-host-replace`)
+plus the human-approved `cutover-inngest.yml -f op=resume`. A host born before it keeps the old
+behavior until then: a zot miss ends that boot. Tell the two apart by the rows: a host running the
+unit emits `provision-unit-armed` once per host life.
+
+**Key every reading on `iid`.** Every new stage, and `bootstrap-done`, carries
+`iid=<cloud-init instance-id>`. Old and new hosts share the hostname `soleur-inngest` during a
+replace, so a late row from the destroyed host looks like the new host's unless the `iid`
+matches the newest `provision-unit-armed` row's.
+
+### Stages
+
+| Stage (channel) | Meaning |
+| --- | --- |
+| `provision-unit-armed iid=…` (Better Stack) | `runcmd` enabled the timer and started the unit. Once per host life. |
+| `provision-attempt-start attempt=N` (Better Stack) | Attempt N began. N counts every attempt since the host was born (the counter is on the root disk). |
+| `inngest_pull_fatal` with `attempt=N` (Sentry, fatal, paged; Better Stack) | This attempt's zot pull missed. One missed attempt, not a dead host. |
+| `isolation-check-FAILED` (Better Stack) | The Doppler boot credential failed the isolation self-check; the attempt ended before any pull. |
+| `provision-fsm-busy` (Better Stack) | A cutover-flip or LUKS-cutover step was still running after the 300 s quiesce bound; the attempt ended and retries. |
+| `provision-attempt-exit-<rc>` (Better Stack) | Attempt ended with `rc` (`143` = killed at `TimeoutStartSec` or at shutdown). |
+| `provision_attempt_failed` (Sentry, error, not paged) | Same failure, on the channel that does not depend on Doppler. |
+| `bootstrap-done iid=…` (Better Stack) | The bootstrap exited 0 and the latch is written. This is the recovery signal. |
+
+### Reading a page
+
+- **A page carrying `attempt=N` is one missed attempt.** The unit retries every 120 s, and
+  `zot-mirror-fallback-rate` emails at most every 23 minutes while the host stays dark (one
+  grouped Sentry issue). A second email means the host is still dark, not that a second host
+  failed.
+- **After `inngest_pull_fatal`, wait for `bootstrap-done` with the same `iid` before deciding to
+  replace.** The host may recover on its own as soon as the cause clears (a late NIC, a zot blip).
+  Query:
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep provision-attempt-start --grep bootstrap-done --grep inngest_pull_fatal`,
+  then compare the `iid=` in each row's detail with the newest `provision-unit-armed` row's.
+- **Run `op=resume` only after `bootstrap-done` for the new `iid`.** The unit also stops the flip
+  and LUKS-cutover timers before every bootstrap run, so a retry does not restart the server
+  inside the flip's verify window. The ordering rule still stands: resume after `bootstrap-done`.
+- **A repeating `provision-fsm-busy` means a flip or LUKS-cutover step is wedged.** Read the FSM
+  state with the read-only `scripts/inngest-host-state.sh` (locally, or via the
+  `inngest-host-state.yml` one-tap wrapper, #8449 UC2; see
+  [§ Reading host state without SSH](#reading-host-state-without-ssh)). Do not replace blindly:
+  the flip FSM's flag lives in Doppler and outlives the host (ADR-100 Decision 6), so read it
+  first.
+- **The delivery probe is the same reading, automated.**
+  `doppler run -p soleur -c prd_terraform -- scripts/followthroughs/inngest-provision-unit-8562.sh`
+  prints one `verdict=` line: `PASS`, `FAIL reason=never-started|no-bootstrap-done`,
+  `TRANSIENT reason=not-delivered|in-progress`, or `TRANSIENT reason=probe-fault` (exit 3; the
+  query itself failed).
+
+### Replace triggers
+
+A replace (the same `inngest-host-replace` dispatch plus `op=resume`) is the answer only when a
+retry cannot fix the cause:
+
+- `isolation-check-FAILED` on **every** attempt. The boot credential's scope is wrong, and
+  retries cannot change it. Fix the Doppler scope first, then replace.
+- No `bootstrap-done` for the new `iid` more than **2 h** after its first
+  `provision-attempt-start`. Read the latest attempt's stages (`inngest_pull_fatal` detail,
+  `bootstrap-exit-<rc>` and `bootstrap-failure-journal`) for the cause before replacing.
+- No `provision-attempt-start` at all within 10 minutes of `provision-unit-armed`, or no
+  `provision-unit-armed` for the new host: an earlier `runcmd` item aborted before the arming
+  items (its own stage names why), exactly as before #8562.
+
+### What does not happen, by design
+
+- **A provisioned host's reboot does not re-provision it.** The latch makes the unit a no-op, as
+  `runcmd`'s once-per-instance rule did before.
+- **There is no SSH, latch-delete or `systemctl` step anywhere in this recovery.** The latch has
+  one writer and is reset only by a fresh root disk. Re-provisioning a host is a replace.
+- **Rollback of #8562 itself** is a revert, then the same replace plus `op=resume`, at the same
+  bounded downtime as any inngest replace.
 
 ## Reading host state without SSH
 

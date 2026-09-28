@@ -1633,6 +1633,28 @@ implies no second inngest replace.
   #8651's probe grades that script's output until #8651 closes, so its format must not move first.
   They are now a tripwire that cannot fire.
 
+### Addendum — 2026-09-28 (#8562): for inngest, a zot miss ends the attempt, not the boot
+
+*A dated note on this amendment; the text above is not edited.* The Decision bullet "Inngest: a
+new stage, `inngest_pull_fatal`, at level **fatal** … then the pull item exits non-zero" is
+narrowed **in the template** by
+[ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md):
+
+- The inngest pull no longer runs in a `runcmd` item. It runs in
+  `/usr/local/bin/soleur-inngest-provision`, under `soleur-inngest-provision.service`
+  (`Restart=on-failure`, `RestartSec=120`, `StartLimitIntervalSec=0`). A zot miss still emits
+  `inngest_pull_fatal` at fatal on both channels, now with `attempt=N`, and still fails; what it
+  ends is the **attempt**. The unit retries every 120 s until one attempt succeeds and writes its
+  latch.
+- zot stays the sole boot-time read path, and there is still no GHCR fallback behind the miss.
+  The `IREF`/`ZIREF` pin-carrier literals and their count of exactly 2 are unchanged.
+- `zot-mirror-fallback-rate` is unchanged. Because every missed attempt is a new event, a host
+  that stays dark now pages at the rule's 23-minute throttle instead of once.
+- **The live inngest host keeps the old behavior until its next replace.** `hcloud_server.inngest`
+  takes the new template only through `inngest-host-replace` plus `op=resume` (ADR-100,
+  replace-only delivery). Until then a zot miss on a fresh boot of the current host would still
+  end that boot. The web half of this amendment is untouched.
+
 ## Amendment 2026-09-27 (#8714) — 5.4: the GHCR token minter and the host-side GHCR credential plumbing are retired
 
 ### Decision

@@ -26,7 +26,7 @@ Recorded headless per plan skill §Plan Review; defaults below are what the plan
 
 | # | Proposal (source) | Disposition | Reason |
 |---|---|---|---|
-| 1 | Fold ADR-256 into an ADR-115 amendment (DHH) | Declined | Issue #8562 states the restructure "needs its own ADR"; ADR-115's acceptance is registry-only |
+| 1 | Fold ADR-257 (provisionally ADR-256; renumbered, 256 was taken) into an ADR-115 amendment (DHH) | Declined | Issue #8562 states the restructure "needs its own ADR"; ADR-115's acceptance is registry-only |
 | 2 | Use `systemctl enable --now <timer>` as the single first-boot trigger (DHH, simplicity) | Declined | The explicit `start --no-block` does not depend on elapsed-`OnBootSec` semantics (measured on 261, unmeasured on 255); T12 pins a single trigger |
 | 3 | Hardcode `TimeoutStartSec=30min` (DHH) | Declined | A budget figure must be measured (Sharp Edges); 30 min stays as the documented fallback |
 | 4 | Drop own-dispatch / harness mutation rows (DHH) | Declined | Required by the Guard Contract gate (plan Phase 2.12) |

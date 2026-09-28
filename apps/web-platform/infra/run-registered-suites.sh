@@ -37,7 +37,7 @@
 # difference between a gate people run and one they skip.
 #
 # TOOLING DEPENDENCY, recorded here because this is the auto-glob site (#7068).
-# FIVE registered suites consume docker — two as a whole-suite requirement, three
+# SIX registered suites consume docker — two as a whole-suite requirement, four
 # for a docker-dependent arm that declines cleanly when the daemon is absent:
 #   - cloud-init-plugin-seed.test.sh    builds a small busybox fixture image (~2-4s in CI)
 #   - git-data-runcmd-rehearsal.test.sh 8 `docker run --rm` invocations from 6 source sites
@@ -52,11 +52,15 @@
 #   - zot-config-deadlines.test.sh      digest acceptance pair — `docker run` zot verify +
 #                                       negative control; the static relations and S4
 #                                       battery need no docker
+#   - cloud-init-inngest-provision-unit.test.sh  Tier B: systemd 255 as PID 1 in a
+#                                       privileged ubuntu:24.04 container (#8562); Tier A
+#                                       and the static rows need no docker
 #
-# On a non-CI host all five exit 0 when docker is missing or unreachable — the
-# first two skip the suite outright; the other three print a SKIP verdict and
-# count the declined assertions (`SKIP runtime arm` / `=== Skipped:`). Under CI
-# four of the five fail closed on the same absence (the CI arm inside each gate);
+# On a non-CI host all six exit 0 when docker is missing or unreachable — the
+# first two skip the suite outright; the other four print a SKIP verdict and
+# count the declined assertions (`SKIP runtime arm` / `=== Skipped:`; the
+# provision-unit suite names its Tier B skip). Under CI
+# five of the six fail closed on the same absence (the CI arm inside each gate);
 # only plugin-seed skips unconditionally, relying on the workflow assert step
 # ordered before it below. The skip is NOT visible
 # through this runner: the executor below captures each suite's output to a per-run log dir and
