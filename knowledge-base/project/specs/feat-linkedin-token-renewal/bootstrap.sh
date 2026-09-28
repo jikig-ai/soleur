@@ -133,7 +133,7 @@ Skip variables — one per class-1/class-3 prompt in THIS script, derived from
 its source so the list cannot drift (naming convention: SOLEUR_BOOTSTRAP_<WHAT>
 for a value, SOLEUR_BOOTSTRAP_SKIP_<WHAT>_BARRIER for a barrier). The
 destructive-write acknowledgement has NONE, by rule:
-$(grep -oE '^[[:space:]]*soleur_op_(barrier|value) SOLEUR_BOOTSTRAP_[A-Z0-9_]+' "${BASH_SOURCE[0]}" | awk '{print "  " $2}' | sort -u)
+$( { grep -oE '^[[:space:]]*soleur_op_(barrier|value) SOLEUR_BOOTSTRAP_[A-Z0-9_]+' "${BASH_SOURCE[0]}" | awk '{print $2}'; grep -E '^[[:space:]]*mint_or_reuse ' "${BASH_SOURCE[0]}" | grep -oE 'SOLEUR_BOOTSTRAP_[A-Z0-9_]+'; } | sort -u | sed 's/^/  /')
 USAGE
 }
 
@@ -256,80 +256,130 @@ LINKEDIN_USERINFO="https://api.linkedin.com/v2/userinfo"
 LINKEDIN_ORG_ACLS="https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED"
 GH_REPO="jikig-ai/soleur"
 
-# token_is_live <value> — the same probe the weekly cron runs: HTTP 2xx from
-# /v2/userinfo. Never echoes the token. `--disable --noproxy '*'` and discarded
-# curl stderr match the credentialed-request shape used by the repo's other
-# LinkedIn scripts (the URL can appear in curl's own error output).
-token_is_live() {
-  local tok="$1" response code
-  response="$(curl --disable --noproxy '*' -s -m 15 \
-    -H "Authorization: Bearer ${tok}" \
-    -w '\n%{http_code}' \
-    "$LINKEDIN_USERINFO" 2>/dev/null)" || return 1
-  code="$(printf '%s' "$response" | tail -1)"
-  [[ "$code" =~ ^2[0-9][0-9]$ ]]
+# bound <cmd...> — a 60s cap on vendor CLI calls where GNU timeout exists
+# (absent on macOS; there the Go CLIs' own transport bounds still apply).
+# Without it a gh/doppler call that connects but stalls hangs the stage
+# indefinitely — mid-prod-write worst case.
+bound() {
+  if command -v timeout >/dev/null 2>&1; then timeout 60 "$@"; else "$@"; fi
 }
 
-# doppler_token <NAME> — the current soleur/prd value, empty on any failure.
-# This is the store the deployed app actually reads (the container env is
-# downloaded from Doppler at container start), so it is the vendor-side truth
-# for "is a live token already installed".
-doppler_token() {
-  doppler secrets get "$1" -p soleur -c prd --plain 2>/dev/null || true
+# token_probe <value> -> live | rejected | transport
+# The same probe the weekly cron runs (/v2/userinfo). Three states because the
+# failure arms below prescribe different remedies: `rejected` means mint again,
+# `transport` means the token may be fine and the network/proxy is the suspect —
+# conflating them sends a founder behind a TLS-inspecting proxy through a
+# needless re-mint loop. The Bearer header travels via `--config -` (stdin), not
+# argv — `/proc/<pid>/cmdline` would otherwise carry it for up to 15s per call.
+token_probe() {
+  local tok="$1" response code rc=0
+  response="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" | \
+    curl --disable --noproxy '*' -s -m 15 --config - \
+      -w '\n%{http_code}' \
+      "$LINKEDIN_USERINFO" 2>/dev/null)" || rc=$?
+  if [[ $rc -ne 0 ]]; then printf 'transport'; return; fi
+  code="$(printf '%s' "$response" | tail -1)"
+  if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then printf 'live';
+  elif [[ "$code" == 401 ]]; then printf 'rejected';
+  else printf 'transport'; fi
+}
+
+token_is_live() { [[ "$(token_probe "$1")" == live ]]; }
+
+# token_fingerprint <value> — first 16 hex of sha256. Binds the gh-write marker
+# to the VALUE written: a stale marker from a previous token can never skip a
+# write the new token still needs (GitHub never discloses stored values, so the
+# fingerprint is the only equality check that exists).
+token_fingerprint() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | cut -c1-16
+  else
+    printf '%s' "$1" | shasum -a 256 | cut -c1-16
+  fi
+}
+
+# doppler_get <NAME> -> echoes value, rc=0 | rc!=0 (auth/network/missing)
+doppler_get() {
+  bound doppler secrets get "$1" -p soleur -c prd --plain 2>/dev/null
+}
+
+# doppler_token <NAME> — value-or-empty for precondition checks only.
+doppler_token() { doppler_get "$1" || true; }
+
+# env_get <KEY> -> recorded value or empty
+env_get() {
+  [[ -f "$ENV_FILE" ]] && sed -n "s/^$1=//p" "$ENV_FILE" | head -1 || true
 }
 
 # mint_or_reuse <SECRET-NAME> <SKIP-VAR> <scope-list>
-#   Sets MINTED_TOKEN. Ladder: Doppler live value -> .env recorded value ->
-#   credential entry. The entered token is verified BEFORE it is persisted
-#   anywhere, so a wrong paste fails here rather than propagating.
+#   Sets MINTED_TOKEN. Ladder: Doppler live value -> .env
+#   recorded value -> credential entry. The entered token is verified BEFORE
+#   it is persisted anywhere, so a wrong paste fails here rather than
+#   propagating. SOLEUR_BOOTSTRAP_FORCE_MINT=1 skips both reuse rungs — it is
+#   the recovery for a live-but-WRONG token (valid LinkedIn token, wrong
+#   scopes), which `--reset` alone cannot reach because rung 1 re-imports it
+#   from Doppler on the next run.
 MINTED_TOKEN=""
+
 mint_or_reuse() {
-  local name="$1" skipvar="$2" scopes="$3" tok=""
+  local name="$1" skipvar="$2" scopes="$3" tok="" probe=""
   MINTED_TOKEN=""
 
-  tok="$(doppler_token "$name")"
-  if [[ -n "$tok" ]] && token_is_live "$tok"; then
-    soleur_op_yellow "  already satisfied: ${name} in Doppler soleur/prd passes the live check"
-    MINTED_TOKEN="$tok"
-    return 0
-  fi
+  if [[ "${SOLEUR_BOOTSTRAP_FORCE_MINT:-}" != "1" ]]; then
+    local rc=0
+    tok="$(doppler_get "$name")" || rc=$?
+    if [[ $rc -eq 0 && -n "$tok" ]] && token_is_live "$tok"; then
+      soleur_op_yellow "  already satisfied: ${name} in Doppler soleur/prd passes the live check"
+      soleur_op_yellow "  (to replace this token anyway, re-run with SOLEUR_BOOTSTRAP_FORCE_MINT=1)"
+      soleur_op_env_upsert "$ENV_FILE" "$name" "$tok"
+      MINTED_TOKEN="$tok"
+      return 0
+    fi
 
-  if [[ -f "$ENV_FILE" ]]; then
-    tok="$(sed -n "s/^${name}=//p" "$ENV_FILE" | head -1)"
+    tok="$(env_get "$name")"
     if [[ -n "$tok" ]] && token_is_live "$tok"; then
       soleur_op_yellow "  reusing the verified token a previous run recorded"
+      soleur_op_yellow "  (to replace this token anyway, re-run with SOLEUR_BOOTSTRAP_FORCE_MINT=1)"
       MINTED_TOKEN="$tok"
       return 0
     fi
   fi
 
-  echo "  ${name} is expired or missing. Mint a replacement:"
-  echo "    1. In the page that just opened, select scopes: ${scopes}"
-  echo "    2. Accept the redirect URL confirmation -> Request access token ->"
-  echo "       sign in -> Allow"
-  echo "    3. Copy the generated token"
-  echo "    (automation: set ${skipvar} and re-run non-interactively)"
-  soleur_op_open_url "$TOKEN_GENERATOR_URL"
-
+  # Credential entry. The skip-var check comes FIRST — a fully supplied
+  # non-interactive run must not fire a desktop browser tab for nothing.
+  local from_skip=""
   tok="$(soleur_op_skip_value "$skipvar")"
+  [[ -n "$tok" ]] && from_skip=1
   if [[ -z "$tok" ]]; then
+    echo "  ${name} is expired or missing. Mint a replacement:"
+    echo "    1. In the page that just opened, select scopes: ${scopes}"
+    echo "    2. Accept the redirect URL confirmation -> Request access token ->"
+    echo "       sign in -> Allow"
+    echo "    3. Copy the generated token"
+    echo "    (automation: set ${skipvar} and re-run non-interactively)"
+    soleur_op_open_url "$TOKEN_GENERATOR_URL"
     [[ -t 0 ]] || soleur_op_input_required "$skipvar"
     read -rs -p "  Paste the new ${name}: " tok
     echo ""
   fi
 
-  if ! token_is_live "$tok"; then
-    soleur_op_red "  ${name} failed the live check — LinkedIn userinfo did not"
-    soleur_op_red "  return 2xx. Nothing was written. Re-run to paste a"
-    soleur_op_red "  different token."
-    return 1
-  fi
-  soleur_op_green "  live check passed (LinkedIn userinfo 2xx)."
+  probe="$(token_probe "$tok")"
+  case "$probe" in
+    live)
+      soleur_op_green "  live check passed (LinkedIn userinfo 2xx)." ;;
+    rejected)
+      printf 'SOLEUR_BOOTSTRAP_TOKEN_REJECTED name=%s http=401\n' "$name"
+      soleur_op_red "  ${name} was rejected by LinkedIn (401) — mint a different token."
+      [[ -n "$from_skip" ]] && soleur_op_red "  (this value came from ${skipvar} — fix or unset it and re-run)"
+      return 1 ;;
+    *)
+      printf 'SOLEUR_BOOTSTRAP_TOKEN_TRANSPORT name=%s\n' "$name"
+      soleur_op_red "  could not reach api.linkedin.com — network or proxy failure. The"
+      soleur_op_red "  token may be fine; fix connectivity and re-run (nothing was written)."
+      return 1 ;;
+  esac
 
   soleur_op_env_upsert "$ENV_FILE" "$name" "$tok"
-  # A re-minted token makes the gh-write marker from the previous token stale —
-  # clear it so the persist step writes the NEW value, not skips on the old.
-  soleur_op_env_reset "$ENV_FILE" "${name}_GH_SET" 2>/dev/null || true
   MINTED_TOKEN="$tok"
 }
 
@@ -338,19 +388,20 @@ mint_or_reuse() {
 #   mutation), and each store's "already satisfied" check runs first so a
 #   re-run only asks for what is actually missing.
 persist_token() {
-  local name="$1" tok="$2" cur=""
+  local name="$1" tok="$2" cur="" fp="" marker=""
 
   # --- GitHub Actions secret ---
   # GitHub never discloses a stored secret's value, so presence in the list
-  # says nothing about liveness. The strongest signal that exists is the
-  # marker written AFTER soleur_op_gh_secret_set's own read-back confirmed
-  # the write landed.
-  if [[ -f "$ENV_FILE" ]] && grep -aq "^${name}_GH_SET=" "$ENV_FILE"; then
-    soleur_op_yellow "  already satisfied: ${name} write to GitHub secrets is recorded"
+  # says nothing about liveness — the fingerprint marker written AFTER the
+  # library's own read-back confirms the write is the only equality signal.
+  fp="$(token_fingerprint "$tok")"
+  marker="$(env_get "${name}_GH_FP")"
+  if [[ -n "$marker" && "$marker" == "$fp" ]]; then
+    soleur_op_yellow "  already satisfied: ${name} write to GitHub secrets is recorded for this value"
   else
     soleur_op_ack_or_die "  Write ${name} to GitHub Actions secrets (${GH_REPO})? Type 'yes': "
     soleur_op_gh_secret_set "$GH_REPO" "$name" "$tok" || return 1
-    soleur_op_env_upsert "$ENV_FILE" "${name}_GH_SET" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    soleur_op_env_upsert "$ENV_FILE" "${name}_GH_FP" "$fp"
     soleur_op_green "  GitHub Actions secret updated and read-back confirmed."
   fi
 
@@ -362,17 +413,18 @@ persist_token() {
     soleur_op_yellow "  already satisfied: Doppler soleur/prd ${name} passes the live check"
   else
     soleur_op_ack_or_die "  Write ${name} to Doppler soleur/prd (the app's env source)? Type 'yes': "
-    if ! printf '%s' "$tok" | doppler secrets set "$name" -p soleur -c prd --no-interactive >/dev/null 2>&1; then
+    if ! printf '%s' "$tok" | bound doppler secrets set "$name" -p soleur -c prd --no-interactive >/dev/null 2>&1; then
       printf 'SOLEUR_BOOTSTRAP_DOPPLER_WRITE_FAILED name=%s\n' "$name"
       soleur_op_red "  doppler secrets set failed — check 'doppler configure' auth, then re-run."
       return 1
     fi
+    soleur_op_ledger_note doppler_secret "$name" "project=soleur config=prd"
     cur="$(doppler_token "$name")"
-    if [[ -z "$cur" ]]; then
+    if [[ "$cur" != "$tok" ]]; then
       SOLEUR_OP_WRITE_MAY_HAVE_LANDED=1
       export SOLEUR_OP_WRITE_MAY_HAVE_LANDED
       printf 'SOLEUR_BOOTSTRAP_DOPPLER_VERIFY_FAILED name=%s\n' "$name"
-      soleur_op_red "  the write returned 0 but the read-back is empty — check the config in Doppler."
+      soleur_op_red "  the write returned 0 but the read-back does not match — check the config in Doppler."
       return 1
     fi
     soleur_op_green "  Doppler soleur/prd updated and read-back confirmed."
@@ -380,6 +432,14 @@ persist_token() {
 }
 
 stage_1_personal() {
+  # Auth preflight first: a broken Doppler session otherwise reads as
+  # "token missing", sends the founder through a needless re-mint, and only
+  # fails at the prod write.
+  if ! bound doppler secrets --only-names -p soleur -c prd >/dev/null 2>&1; then
+    printf 'SOLEUR_BOOTSTRAP_DOPPLER_PREFLIGHT_FAILED\n'
+    soleur_op_red "  cannot read Doppler soleur/prd — check 'doppler setup' / DOPPLER_TOKEN, then re-run."
+    return 1
+  fi
   mint_or_reuse "LINKEDIN_ACCESS_TOKEN" SOLEUR_BOOTSTRAP_LINKEDIN_ACCESS_TOKEN \
     "openid, profile, w_member_social, email" || return 1
   persist_token "LINKEDIN_ACCESS_TOKEN" "$MINTED_TOKEN"
@@ -395,11 +455,11 @@ stage_2_org() {
   # WARNING, not a stage failure: the decisive check is the same userinfo probe
   # the weekly cron runs, and this endpoint's scope requirements differ by app.
   if [[ -n "$MINTED_TOKEN" ]]; then
-    local acl_code acl_body
-    acl_body="$(curl --disable --noproxy '*' -s -m 15 \
-      -H "Authorization: Bearer ${MINTED_TOKEN}" \
-      -w '\n%{http_code}' \
-      "$LINKEDIN_ORG_ACLS" 2>/dev/null)" || acl_body=""
+    local acl_body acl_code
+    acl_body="$(printf 'header = "Authorization: Bearer %s"\n' "$MINTED_TOKEN" | \
+      curl --disable --noproxy '*' -s -m 15 --config - \
+        -w '\n%{http_code}' \
+        "$LINKEDIN_ORG_ACLS" 2>/dev/null)" || acl_body=""
     acl_code="$(printf '%s' "$acl_body" | tail -1)"
     if [[ "$acl_code" =~ ^2[0-9][0-9]$ ]]; then
       soleur_op_green "  org-scope probe passed (organizationalEntityAcls 2xx)."
@@ -418,23 +478,61 @@ stage_3_env_refresh() {
   echo "  the running app on the NEXT deploy; LinkedIn posting stays down until then."
   echo ""
   echo "  Any merge to main deploys. To refresh right now, this stage can dispatch"
-  echo "  a patch release (build + deploy, a few minutes):"
+  echo "  a patch release (build + deploy of current main, a few minutes):"
   echo "    gh workflow run web-platform-release.yml -f bump_type=patch"
   echo ""
 
-  # Already dispatched in a previous run? Check that run's state.
+  # Prior-dispatch state machine. A recorded run id is checked against the
+  # VENDOR (never only the local marker): anything non-terminal keeps it and
+  # stops here — only a completed non-success clears it for a re-offer.
   if [[ -f "$ENV_FILE" ]] && grep -aq '^DEPLOY_RUN_ID=' "$ENV_FILE"; then
-    local run_id conclusion
-    run_id="$(sed -n 's/^DEPLOY_RUN_ID=//p' "$ENV_FILE" | head -1)"
-    conclusion="$(gh run view "$run_id" -R "$GH_REPO" --json conclusion,status \
-      --jq '"\(.status)/\(.conclusion // "pending")"' 2>/dev/null || echo "unknown")"
-    if [[ "$conclusion" == "completed/success" ]]; then
-      soleur_op_yellow "  already satisfied: dispatched release ${run_id} deployed successfully"
+    local run_id state
+    run_id="$(env_get DEPLOY_RUN_ID)"
+    if [[ "$run_id" == "unresolved" ]]; then
+      soleur_op_yellow "  a deploy was dispatched earlier but its run id could not be captured."
+      soleur_op_yellow "  Check 'gh run list -R ${GH_REPO} --workflow web-platform-release.yml';"
+      soleur_op_yellow "  to dispatch another, --reset DEPLOY_RUN_ID first."
       return 0
     fi
-    soleur_op_yellow "  release ${run_id} is ${conclusion} — re-check after it completes"
-    [[ "$conclusion" == in_progress/* || "$conclusion" == queued/* ]] && return 0
-    soleur_op_env_reset "$ENV_FILE" DEPLOY_RUN_ID 2>/dev/null || true
+    state="$(bound gh run view "$run_id" -R "$GH_REPO" --json status,conclusion \
+      --jq '"\(.status)/\(.conclusion // "pending")"' 2>/dev/null || echo "unknown")"
+    case "$state" in
+      completed/success)
+        soleur_op_yellow "  already satisfied: dispatched release ${run_id} deployed successfully"
+        return 0 ;;
+      unknown)
+        soleur_op_yellow "  could not read release ${run_id} state (transient gh failure?) —"
+        soleur_op_yellow "  keeping the record; re-run to re-check."
+        return 0 ;;
+      in_progress/*|queued/*|waiting/*|requested/*|pending/*)
+        soleur_op_yellow "  release ${run_id} is ${state} — still in flight; re-run after it completes."
+        return 0 ;;
+      *)
+        # A completed non-success: the deploy failed, a re-offer is legitimate.
+        soleur_op_yellow "  release ${run_id} ended ${state} — offering a fresh dispatch."
+        soleur_op_env_reset "$ENV_FILE" DEPLOY_RUN_ID ;;
+    esac
+  fi
+
+  # Interrupted-dispatch wedge: the stamp below is written BEFORE gh workflow
+  # run so a crash between dispatch and run-id capture cannot silently
+  # re-dispatch a duplicate production deploy.
+  if [[ -f "$ENV_FILE" ]] && grep -aq '^DEPLOY_DISPATCH_ATTEMPTED=' "$ENV_FILE"; then
+    soleur_op_red "  a previous run dispatched a release but stopped before recording its run id."
+    soleur_op_red "  Check 'gh run list -R ${GH_REPO} --workflow web-platform-release.yml' — if a"
+    soleur_op_red "  deploy is in flight, let it finish. To dispatch again anyway:"
+    soleur_op_red "    bash ${SCRIPT_PATH} --reset DEPLOY_DISPATCH_ATTEMPTED"
+    return 1
+  fi
+
+  # Vendor-side in-flight check — a release already running (any actor)
+  # satisfies the refresh; dispatching a second one is waste.
+  local inflight
+  inflight="$(bound gh run list -R "$GH_REPO" --workflow web-platform-release.yml \
+    --json status -L 10 --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo "0")"
+  if [[ "${inflight:-0}" != "0" ]]; then
+    soleur_op_yellow "  a release deploy is already in flight — it picks the new env up; nothing to dispatch"
+    return 0
   fi
 
   local choice=""
@@ -445,43 +543,89 @@ stage_3_env_refresh() {
     return 0
   fi
 
-  soleur_op_ack_or_die "  Run a production deploy (gh workflow run web-platform-release.yml -f bump_type=patch)? Type 'yes': "
-  if ! gh workflow run web-platform-release.yml -R "$GH_REPO" -f bump_type=patch >/dev/null 2>&1; then
+  soleur_op_ack_or_die "  Run a production deploy (gh workflow run web-platform-release.yml -f bump_type=patch, ships current main)? Type 'yes': "
+
+  # Stamp BEFORE dispatch, then capture only a run created after the stamp —
+  # the newest-run heuristic can otherwise record a predecessor (or a
+  # concurrent actor's) run and mark this stage satisfied on the wrong deploy.
+  local stamp rid="" tries=0
+  stamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  soleur_op_env_upsert "$ENV_FILE" DEPLOY_DISPATCH_ATTEMPTED "$stamp"
+
+  if ! bound gh workflow run web-platform-release.yml -R "$GH_REPO" -f bump_type=patch >/dev/null 2>&1; then
+    printf 'SOLEUR_BOOTSTRAP_DEPLOY_DISPATCH_FAILED\n'
     soleur_op_red "  workflow dispatch failed — check 'gh auth status', then re-run."
+    soleur_op_red "  (the ATTEMPTED stamp stays: the dispatch may have landed server-side —"
+    soleur_op_red "  check 'gh run list' and --reset DEPLOY_DISPATCH_ATTEMPTED if it did not)"
     return 1
   fi
-  sleep 5
-  local new_run
-  new_run="$(gh run list -R "$GH_REPO" --workflow web-platform-release.yml \
-    --event workflow_dispatch -L 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || echo "")"
-  if [[ -n "$new_run" ]]; then
-    soleur_op_env_upsert "$ENV_FILE" DEPLOY_RUN_ID "$new_run"
-    soleur_op_green "  dispatched release run ${new_run} — 'gh run watch ${new_run} -R ${GH_REPO}' to follow it."
+
+  while [[ $tries -lt 6 ]]; do
+    rid="$(bound gh run list -R "$GH_REPO" --workflow web-platform-release.yml \
+      --event workflow_dispatch -L 5 --json databaseId,createdAt \
+      --jq '[.[] | select(.createdAt >= "'"$stamp"'")][0].databaseId // empty' 2>/dev/null || echo "")"
+    [[ -n "$rid" && "$rid" != "null" ]] && break
+    tries=$((tries + 1))
+    sleep 10
+  done
+
+  if [[ -n "$rid" && "$rid" != "null" ]]; then
+    soleur_op_env_upsert "$ENV_FILE" DEPLOY_RUN_ID "$rid"
+    soleur_op_env_reset "$ENV_FILE" DEPLOY_DISPATCH_ATTEMPTED
+    soleur_op_green "  dispatched release run ${rid} — 'gh run watch ${rid} -R ${GH_REPO}' to follow it."
   else
+    # Dispatch was accepted (rc=0) but the run id could not be captured.
+    # Record the honest state so a re-run neither double-dispatches nor
+    # wedges on the ATTEMPTED stamp.
+    soleur_op_env_upsert "$ENV_FILE" DEPLOY_RUN_ID "unresolved"
+    soleur_op_env_reset "$ENV_FILE" DEPLOY_DISPATCH_ATTEMPTED
     soleur_op_green "  dispatched — could not capture the run id; check 'gh run list --workflow web-platform-release.yml'."
   fi
 }
 
 stage_4_verify() {
-  local failed=0 name cur
+  local failed=0 name cur fp_env
+  local gh_listed
+  gh_listed="$(bound gh secret list -R "$GH_REPO" 2>/dev/null || true)"
+
   for name in LINKEDIN_ACCESS_TOKEN LINKEDIN_ORG_ACCESS_TOKEN; do
     cur="$(doppler_token "$name")"
     if [[ -n "$cur" ]] && token_is_live "$cur"; then
       soleur_op_green "  ${name}: live in Doppler soleur/prd (userinfo 2xx)"
+      fp_env="$(env_get "$name")"
+      if [[ -n "$fp_env" && "$fp_env" != "$cur" ]]; then
+        soleur_op_yellow "  note: ${name} differs between Doppler and the recorded .env —"
+        soleur_op_yellow "  Doppler is the app's source; re-run to re-sync the local record."
+      fi
     else
+      printf 'SOLEUR_BOOTSTRAP_VERIFY_FAILED name=%s store=doppler\n' "$name"
       soleur_op_red "  ${name}: not live in Doppler soleur/prd"
       failed=1
     fi
   done
   for name in LINKEDIN_ACCESS_TOKEN LINKEDIN_ORG_ACCESS_TOKEN; do
-    if gh secret list -R "$GH_REPO" 2>/dev/null | grep -qE "^${name}[[:space:]]"; then
+    if grep -qE "^${name}[[:space:]]" <<<"$gh_listed"; then
       soleur_op_green "  ${name}: present in GitHub Actions secrets"
     else
+      printf 'SOLEUR_BOOTSTRAP_VERIFY_FAILED name=%s store=github\n' "$name"
       soleur_op_red "  ${name}: missing from GitHub Actions secrets"
       failed=1
     fi
   done
   [[ "$failed" -eq 0 ]] || { soleur_op_red "  verification failed — re-run to complete the missing writes."; return 1; }
+
+  # Deployment honesty: a dispatched-but-incomplete release means posting is
+  # still down — the summary must not read as all-done.
+  if [[ -f "$ENV_FILE" ]] && grep -aq '^DEPLOY_RUN_ID=' "$ENV_FILE"; then
+    local rid st
+    rid="$(env_get DEPLOY_RUN_ID)"
+    if [[ "$rid" != "unresolved" ]]; then
+      st="$(bound gh run view "$rid" -R "$GH_REPO" --json status,conclusion \
+        --jq '"\(.status)/\(.conclusion // "pending")"' 2>/dev/null || echo "unknown")"
+      [[ "$st" != "completed/success" ]] && \
+        soleur_op_yellow "  note: release ${rid} is ${st} — LinkedIn posting returns when it completes."
+    fi
+  fi
 
   echo ""
   echo "  Closeout is automatic: the weekly token check (Monday 11:00 UTC) calls"
@@ -491,7 +635,7 @@ stage_4_verify() {
 }
 
 main() {
-  soleur_op_require_bins grep sed date mktemp printenv curl gh doppler
+  soleur_op_require_bins grep sed date dirname mkdir mv chmod mktemp rm readlink printenv curl gh doppler sleep cut tail awk sort basename
   soleur_op_ledger_init "$TOTAL_STAGES" "bootstrap.sh"
 
   # No resume index: every stage's precondition makes a re-run from stage 1
