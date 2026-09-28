@@ -25,8 +25,9 @@ TOTAL=0
 command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
 mk_payload() {
-  local cmd="$1"
-  jq -nc --arg c "$cmd" '{tool_name:"Bash", tool_input:{command:$c}}'
+  # Through stdin, not --arg: one argv string is capped at 128 KiB
+  # (MAX_ARG_STRLEN), and the AC6 row feeds the hook 300 KiB.
+  printf '%s' "$1" | jq -Rsc '{tool_name:"Bash", tool_input:{command:.}}'
 }
 
 # Returns the permissionDecision or "<none>" when the hook emits no JSON (allow).
@@ -44,6 +45,15 @@ decision_of() {
   local cmd="$1" tmp; tmp="$(mktemp -d)"
   local out rc=0
   out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)" || rc=$?
+  # A row that passes only because the filing LEXER failed (and the floor or
+  # the ask path caught it) is not a witness for the lexer. Every row reds on a
+  # guardrails-filing-lexer-failure incident unless it opts in with
+  # FS_ALLOW_LEXER_INCIDENT=1 -- the failure-path (F) rows, which exist to
+  # make the lexer fail. This turns every existing deny row into a lexer row.
+  if [[ -z "${FS_ALLOW_LEXER_INCIDENT:-}" ]] \
+     && grep -qF '"guardrails-filing-lexer-failure"' "$tmp/.claude/.rule-incidents.jsonl" 2>/dev/null; then
+    rm -rf "$tmp"; echo "<lexer-failure-incident>"; return
+  fi
   rm -rf "$tmp"
   # A non-zero hook exit BLOCKS the tool call in Claude Code (exit 2) or is a
   # crash -- either way it is not the empty-output allow, so never read it as one.
@@ -821,7 +831,11 @@ assert "filing-justification: gh api POST issues without justification denies" "
   'gh api -X POST repos/jikig-ai/soleur/issues -f title=x -f body=y'
 assert "filing-justification: gh api --method POST form also denies" "deny" \
   'gh api --method POST repos/jikig-ai/soleur/issues -f title=x'
-assert "filing-justification: gh api POST with the machinery label allows" "<none>" \
+# gh api has NO --label flag (gh rejects it: unknown flag), so it is not an
+# exit; the per-filing field parser credits only the api spelling, -f
+# 'labels[]=…'. Flipped from <none> by #9089 -- stricter, never weaker.
+assert_reason "filing-justification: gh api --label is not an exit; the refusal names the api spelling" \
+  "-f labels[]=meta/machinery (the gh api spelling)" \
   'gh api -X POST repos/jikig-ai/soleur/issues -f title=x --label meta/machinery'
 
 # NARROWS ONLY. gh api takes no --milestone, so the milestone arm stays scoped
@@ -850,8 +864,9 @@ assert "filing-justification: list-then-label loop is not a filing" "<none>" \
   "for n in \$(gh api repos/jikig-ai/soleur/issues?labels=x --jq '.[].number'); do gh api -X POST repos/jikig-ai/soleur/issues/\$n/labels -f 'labels[]=y'; done"
 assert "filing-justification: list piped into a labelling xargs is not a filing" "<none>" \
   "gh api repos/jikig-ai/soleur/issues --jq '.[].number' | xargs -I{} gh api -X POST repos/jikig-ai/soleur/issues/{}/labels -f 'labels[]=y'"
-# Quote-blanking tripwire, not a segmentation row: $SCAN blanks BOTH quoted
-# endpoints, so this stays green with segmentation removed (#9089 territory).
+# Since #9089 the lexer SEES both quoted endpoints (quoting no longer hides a
+# filing); the row stays <none> because neither is one -- a POST to a comments
+# sub-resource and a GET of the collection, each in its own command.
 assert "filing-justification: quoted endpoints on both sides of && are blanked, not a filing" "<none>" \
   'gh api -X POST "repos/jikig-ai/soleur/issues/5/comments" -f body=x && gh api "repos/jikig-ai/soleur/issues?per_page=5"'
 # The collection endpoint still gates in every unquoted spelling gh routes to it.
@@ -994,7 +1009,7 @@ assert "filing-justification: a backgrounded list beside a label POST is not a f
 # Perl unavailable: the fallback is a whole-command match that errs toward gating.
 _nopl="$CM/no-perl"; mkdir -p "$_nopl"
 printf '#!/bin/sh\nexit 127\n' > "$_nopl/perl"; chmod +x "$_nopl/perl"
-_pl_got="$(PATH="$_nopl:$PATH" decision_of 'gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y')"
+_pl_got="$(PATH="$_nopl:$PATH" FS_ALLOW_LEXER_INCIDENT=1 decision_of 'gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f body=y')"
 TOTAL=$((TOTAL + 1))
 if [[ "$_pl_got" == "deny" ]]; then
   PASS=$((PASS + 1)); echo "PASS: filing-justification: without perl the fallback still gates a create"
@@ -1248,6 +1263,249 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# #9089 — the filing gate LEXES the command (lib/filing-shape.pl, ADR-256).
+# Row IDs are the plan's Test Scenarios IDs; lexing detail lives in
+# lib/filing-shape.test.sh, spellings in lib/filing-shape-corpus.json. These
+# rows pin VERDICTS and refusal TEXT. `[base-deny]` marks a row the base hook
+# (4170460eea) already denied — excluded from the RED check (AC2).
+# Every row here runs through decision_of's lexer-incident check, so a row
+# that only passes because the lexer FAILED (and the floor caught it) reds.
+# ---------------------------------------------------------------------------
+EP=repos/jikig-ai/soleur/issues
+J=' --milestone "Post-MVP / Later" --label meta/machinery'
+K=' --milestone M --label meta/machinery'
+IN_CMD="add the exit inside that same command, on the gh invocation itself"
+
+# Substitutions and runners
+assert "D1 unquoted \$(…) create denies"            "deny" 'URL=$(gh issue create --title x --body y)'
+assert_reason "D1 twin: names the filing and \$(…)"  'Refused filing: `gh issue create` inside $(…); '"$IN_CMD" 'URL=$(gh issue create --title x --body y)'
+assert "D2 quoted \"\$(…)\" create denies"          "deny" 'URL="$(gh issue create --title x --body y)"'
+assert "D3 api inside quoted \$(…) denies"          "deny" "N=\"\$(gh api $EP -X POST -f title=x -f body=y)\""
+assert_reason "D3 twin: api spelling + ctx"         "-f labels[]=meta/machinery (the gh api spelling)" "N=\"\$(gh api $EP -X POST -f title=x -f body=y)\""
+assert "D4 bash -c \"…\" denies"                    "deny" 'bash -c "gh issue create --title x --body y"'
+assert_reason "D4 twin: inside a bash -c string"    'Refused filing: `gh issue create` inside a bash -c string' 'bash -c "gh issue create --title x --body y"'
+assert "D5 sh -c '…' denies"                        "deny" "sh -c 'gh issue create --title x --body y'"
+assert "D6 bash -lc cluster denies"                 "deny" "bash -lc 'gh issue create --title x --body y'"
+assert "D7 backticks deny"                          "deny" 'echo `gh issue create --title x --body y`'
+assert_reason "D7 twin: prose hint for backticks"   "If that text is prose rather than a command, quote it" 'echo `gh issue create --title x --body y`'
+assert "D19 eval denies"                            "deny" 'eval "gh issue create --title x --body y"'
+assert "D20 escaped \$( inside bash -c denies"      "deny" 'bash -c "URL=\$(gh issue create --title x --body y)"'
+assert "D23 \$(…) inside \${:-} denies"             "deny" 'X="${Y:-$(gh issue create --title x --body y)}"'
+assert "D31a bash -c -- denies"                     "deny" "bash -c -- 'gh issue create --title x --body y'"
+assert "D31b bash --norc -c denies"                 "deny" "bash --norc -c 'gh issue create --title x --body y'"
+assert "D31c sudo sh -c denies"                     "deny" "sudo sh -c 'gh issue create --title x --body y'"
+
+# Quoted spellings and deliberate over-fire
+assert "D8 quoted endpoint denies"                  "deny" "gh api \"$EP\" -X POST -f title=x -f body=y"
+assert "D9 repos/\"\$REPO\"/issues denies"          "deny" 'gh api repos/"$REPO"/issues -X POST -f title=x'
+assert "D10 single-quoted endpoint + quoted title denies" "deny" "gh api '$EP' -f \"title=a b\""
+assert "D32a g\\h denies"                           "deny" 'g\h issue create --title x --body y'
+assert "D32b g''h denies"                           "deny" "g''h issue create --title x --body y"
+assert "D32c unquoted echo gh issue create over-fires (DC-2)" "deny" 'echo gh issue create --title x'
+assert "D32d bash -c 'echo gh issue create' over-fires (DC-2)" "deny" "bash -c 'echo gh issue create'"
+
+# Command positions
+assert "D11 pipeline stage denies"                  "deny" 'printf x | gh issue create --title x --body-file -'
+assert "D12 subshell denies"                        "deny" '( gh issue create --title x --body y )'
+assert "D13 group denies"                           "deny" '{ gh issue create --title x --body y; }'
+assert "D14 if/then denies"                         "deny" 'if true; then gh issue create --title x --body y; fi'
+assert "D15 for/do denies"                          "deny" 'for i in 1; do gh issue create --title x --body y; done'
+for _pre in 'sudo' 'sudo --' 'env A=1' 'env --' 'command' 'timeout -k 5 10' 'nohup' 'nice -5' 'setsid' \
+            'flock /tmp/l' 'doppler run --' '/usr/bin/time -v' 'strace -f' 'xargs -r0'; do
+  assert "D16 launcher '$_pre' denies" "deny" "$_pre gh issue create --title x --body y"
+done
+assert "D16 find -exec denies"                      "deny" 'find . -maxdepth 0 -exec gh issue create --title x --body y \;'
+assert "D16 /usr/bin/gh denies"                     "deny" '/usr/bin/gh issue create --title x --body y'
+
+# Subcommand forms
+assert "D17 gh issue new denies"                    "deny" 'gh issue new --title x --body y'
+assert "D18a gh issue -R … create denies"           "deny" 'gh issue -R jikig-ai/soleur create --title x --body y'
+assert "D18b root --repo denies"                    "deny" 'gh --repo jikig-ai/soleur issue create --title x --body y'
+
+# Heredocs
+assert "D21 filing on the heredoc opener line denies" "deny" $'cat <<\'EOF\' > b.md && gh issue create --title x --body-file b.md\nbody\nEOF'
+assert "D27a unquoted heredoc runs \$(…)"           "deny" $'cat <<EOF\n$(gh issue create --title x --body y)\nEOF'
+assert "D27b two heredocs on one line"              "deny" $'cat <<A <<\'B\'\n$(gh issue create --title x --body y)\nA\nplain text\nB'
+
+# Exits scoped per filing (Guard 2)
+assert_reason "D24 another command's --repo is not this filing's" "must include --milestone" \
+  'gh issue list --repo cli/cli && gh issue create --title x --body y'
+assert_reason "D25 another command's --milestone is not this filing's" "must include --milestone" \
+  'gh issue list --milestone x && gh issue create --title x --body y --label meta/machinery'
+assert_reason "D26 another command's --label is not this filing's" "names no user-visible consequence" \
+  "gh issue list --label meta/machinery && gh api $EP -X POST -f title=x"
+assert_reason "D35 another command's body text is not this filing's corpus" "names no user-visible consequence" \
+  'echo "User-Impact: docs page Fix-Size: 200 lines / 5 files"; bash -c "gh issue create --title x --body y --milestone M"'
+assert_reason "D36 [base-deny] -mx as a --title value is not a milestone" "must include --milestone" \
+  'gh issue create --title -mx --body y --label meta/machinery'
+assert_reason "D37 --label=… as a --body value is not a label" "names no user-visible consequence" \
+  'gh issue create --title x --body --label=meta/machinery --milestone M'
+assert_reason "D38 a \$-valued --repo is never external" "must include --milestone" \
+  'gh issue create --repo "$OWNER/soleur" --title x --body y'
+assert "D40 bare \$EP endpoint denies"              "deny" 'EP=repos/jikig-ai/soleur/issues; gh api "$EP" -X POST -f title=x'
+
+# POST spellings, multiple filings and parsing
+assert "D28a [base-deny] -X=POST denies"            "deny" "gh api $EP -X=POST -f title=x"
+assert "D28b [base-deny] -ftitle= denies"           "deny" "gh api $EP -ftitle=x"
+assert "D28c [base-deny] --input= denies"           "deny" "gh api $EP --input=b.json"
+assert "D28d -X \"\$M\" denies"                     "deny" "gh api $EP -X \"\$M\" -f body=y"
+assert "D28e -iXPOST denies"                        "deny" "gh api $EP -iXPOST -f body=y"
+assert "D28f -iftitle= denies"                      "deny" "gh api $EP -iftitle=x"
+assert_reason "D44 bodyvar corpus is not another command's args" "names no user-visible consequence" \
+  'echo "Mandated-By: wg-x" >/dev/null; gh issue create --title x --body "$B" -m M'
+assert_reason "D45 find -exec: a later action's --label is not the filing's" "names no user-visible consequence" \
+  'find . -maxdepth 0 -exec gh issue create --title x --body y -m M \; -exec echo --label meta/machinery \;'
+assert_reason "D46 gh keeps the LAST --body" "names no user-visible consequence" \
+  'gh issue create --title x --body "Mandated-By: wg-x" --body y -m M'
+assert_reason "D47 api body=@file is a body file" "which this gate cannot read" \
+  "gh api $EP -f title=x -F 'body=@/tmp/j Mandated-By: wg-x'"
+assert_reason "D48a labels[]= in a create --title is not a label" "names no user-visible consequence" \
+  "gh issue create --title 'labels[]=meta/machinery' --body y -m M"
+assert_reason "D48b create -F labels[]= is a body file" "which this gate cannot read" \
+  "gh issue create --title x -F 'labels[]=meta/machinery' -m M"
+assert_reason "D48b twin: relative body file names the absolute-path hint" "Pass an absolute path" \
+  "gh issue create --title x -F 'labels[]=meta/machinery' -m M"
+assert_reason "D49a -R JIKIG-AI/soleur is ours"     "must include --milestone" 'gh issue create -R JIKIG-AI/soleur --title x --body y'
+assert_reason "D49b -R github.com/… is ours"         "must include --milestone" 'gh issue create -R github.com/jikig-ai/soleur --title x --body y'
+assert_reason "D49c -R https://github.com/… is ours" "must include --milestone" 'gh issue create -R https://github.com/jikig-ai/soleur --title x --body y'
+assert "D50a repositories/<id>/issues denies"       "deny" 'gh api repositories/1143547205/issues -X POST -f title=x'
+assert "D50b [base-deny] .. segment denies"                     "deny" 'gh api repos/jikig-ai/soleur/labels/../issues -X POST -f title=x'
+assert "D50c \"\$B/issues\" denies"                 "deny" 'B=repos/jikig-ai/soleur; gh api "$B/issues" -X POST -f title=x'
+assert "D51 bash -c -o posix denies"                "deny" "bash -c -o posix 'gh issue create --title x --body y'"
+assert "D52a [base-deny] \$'\\'' ends where bash ends it"       "deny" "echo \$'\\''; gh issue create --title x --body y -m M # '"
+assert "D52b \$\"\$(…)\" is live"                   "deny" 'echo $"$(gh issue create --title x --body y)"'
+assert "D54 [base-deny] \$E-X POST inside \$(…) denies"         "deny" "X=\$(gh api $EP \$E-X POST -f body=y)"
+assert_reason "D29 the SECOND filing is gated too"  'Refused filing: `gh issue create` inside a bash -c string' \
+  "gh issue create --title a --body b$J; bash -c \"gh issue create --title x --body y\""
+assert "D30 create && api: the api filing is gated" "deny" "gh issue create --title a --body b$J && gh api $EP -X POST -f title=x"
+assert "D34 [base-deny] OK/RC as argument values"   "deny" 'gh issue create --title OK --body RC'
+assert_reason "D43 | is a separator: tee's --label is not the filing's" "names no user-visible consequence" \
+  'gh issue create --title x --body y --milestone M | tee --label meta/machinery'
+
+# Must-PASS (PR3 prose, and justified filings in every new position)
+_HOSTILE=$'fix: it\'s done, see 1) and an unclosed ( plus `code` and a literal $( and a " quote'
+assert "P1 commit <<'EOF' inside \$(…)"  "<none>" $'git commit -m "$(cat <<\'EOF\'\n'"$_HOSTILE"$'\nEOF\n)"'
+assert "P2 commit <<\"EOF\""             "<none>" $'git commit -m "$(cat <<"EOF"\n'"$_HOSTILE"$'\nEOF\n)"'
+assert "P3 commit <<\\EOF"               "<none>" $'git commit -m "$(cat <<\\EOF\n'"$_HOSTILE"$'\nEOF\n)"'
+assert "P4 commit <<-'EOF' tab terminator" "<none>" $'git commit -m "$(cat <<-\'EOF\'\n'"$_HOSTILE"$'\n\tEOF\n)"'
+assert "P5 commit -F - body starts with a filing" "<none>" $'git commit -F - <<\'EOF\'\ngh issue create --title x --body y\nEOF'
+assert "P6 heredoc body lines are data"  "<none>" $'git commit -m "$(cat <<\'EOF\'\ngh issue create --title x --body y\n$(gh issue create --title z)\nEOF\n)"'
+assert "P7a single-quoted ; is prose"    "<none>" "echo 'done; gh issue create --title x --body y'"
+assert "P7b double-quoted ; is prose"    "<none>" 'echo "a; gh issue create --title x"'
+assert "P8 \${…} text is not a script"   "<none>" 'echo "${M:-a; gh issue create --title x}"'
+assert "P9 a comment hides \$(…)"        "<none>" 'echo x # $(gh issue create --title x)'
+assert "P10 --body \"\$BODY\" reads the heredoc variable corpus" "<none>" \
+  $'BODY=$(cat <<\'EOF\'\nUser-Impact: the docs page\nFix-Size: 200 lines / 5 files\nEOF\n); gh issue create --title x --body "$BODY" --milestone "Post-MVP / Later"'
+assert "P11 commit message mentions it"  "<none>" 'git commit -m "fix(hooks): don'"'"'t run gh issue create (#9089)"'
+assert "P12a this PR's commit shape"     "<none>" 'git add -A x && git commit -F /var/tmp/msg.txt && git log --oneline -1'
+assert "P12b this PR's pr-create shape"  "<none>" 'gh pr create --title "fix(hooks): the filing gate lexes gh issue create" --body-file /var/tmp/pr.md --draft'
+assert "P13a quoted echo"                "<none>" 'echo "gh issue create --title x"'
+assert "P13b grep pattern"               "<none>" 'grep -n "gh issue create" notes.md'
+assert "P13c pr title"                   "<none>" 'gh pr create --title "gh issue create" --body x'
+assert "P13d printf to a file"           "<none>" "printf '%s\n' 'gh issue create --title x' > notes.md"
+assert "P14a justified filing inside \$(…)"   "<none>" "URL=\$(gh issue create --title x --body y$J)"
+assert "P14b justified filing inside bash -c" "<none>" "bash -c \"gh issue create --title x --body y$K\""
+assert "P15 literal external --repo"     "<none>" 'gh issue create --repo cli/cli --title x --body y'
+assert "P16 [base-deny] -m short form"   "<none>" 'gh issue create -m "Post-MVP / Later" --title x --body y --label meta/machinery'
+assert "P17 --jq program"                "<none>" $'gh issue list --json title --jq \'.[] | "it\'\\\'\'s"\''
+assert "P18 list | xargs label"          "<none>" "gh api \"$EP?labels=x\" --jq '.[].number' | xargs -I{} gh api -X POST $EP/{}/labels -f 'labels[]=y'"
+assert "P19 list-then-label loop"        "<none>" "for n in \$(gh api \"$EP?labels=x\" --jq '.[].number'); do gh api -X POST $EP/\$n/labels -f 'labels[]=y'; done"
+assert "P20 {owner} GET"                 "<none>" 'gh api repos/{owner}/{repo}/issues --jq length'
+assert "P21 two --label flags: the machinery one counts" "<none>" "gh issue create --title x --body y --label type/bug$J"
+
+# ---------------------------------------------------------------------------
+# Failure path (Guard 1 dispatch). Shims replace the LEXER in a sandbox copy of
+# the hook tree — never `perl` on PATH, which would also blind $SCAN and the
+# floor. Each shim touches a marker the row asserts, so a row cannot pass on a
+# sandbox the hook did not actually use. Default command: `URL=$(gh issue
+# create …)`, which the floor cannot see.
+# ---------------------------------------------------------------------------
+FS_SB="$(mktemp -d)"
+cp -R -- "$SCRIPT_DIR/lib" "$FS_SB/lib"
+cp -- "$HOOK" "$FS_SB/guardrails.sh"
+chmod -R u+w "$FS_SB"
+# fs_shim NAME RC PERL-PRINT-EXPR — install a lexer shim that consumes stdin,
+# prints the given bytes and exits RC.
+fs_shim() {
+  local marker="$FS_SB/marker.$1"
+  rm -f -- "$marker"
+  printf '#!/usr/bin/env perl\nopen(my $m, ">", "%s"); close $m; local $/; my $in = <STDIN>; binmode STDOUT; print %s; exit %s;\n' \
+    "$marker" "$3" "$2" > "$FS_SB/lib/filing-shape.pl"
+  FS_MARKER="$marker"
+}
+# fs_row LABEL WANT CMD [ENV…] — decision through the sandbox hook, with the
+# lexer-incident check waived (these rows EXIST to make the lexer fail), plus
+# the marker assertion.
+fs_row() {
+  local label="$1" want="$2" cmd="$3"; shift 3
+  local got
+  got="$(HOOK="$FS_SB/guardrails.sh"; export FS_ALLOW_LEXER_INCIDENT=1; for _e in "$@"; do export "${_e?}"; done; decision_of "$cmd")"
+  TOTAL=$((TOTAL + 1))
+  if [[ "$got" == "$want" && -f "$FS_MARKER" ]]; then
+    PASS=$((PASS + 1)); echo "PASS: $label → $got"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL: $label"; echo "  want: $want (shim ran)"; echo "  got:  $got (shim ran: $([[ -f "$FS_MARKER" ]] && echo yes || echo NO))"
+  fi
+}
+SUB='URL=$(gh issue create --title x --body y)'
+fs_shim exit2 2 '"E\0exit2\0"';                 fs_row "F-exit2 exit 2 on a \$(…) filing denies" "deny" "$SUB"
+fs_shim exit3 3 '"E\0depth\0"';                 fs_row "F-exit3 exit 3 on a \$(…) filing asks" "ask" "$SUB"
+fs_shim exit3k 3 '"E\0budget\0"';               fs_row "F-exit3 kill switch turns the ask into an allow" "<none>" "$SUB" SOLEUR_DISABLE_HOOK_INPUT_ASK=1
+fs_shim exit3b 3 '"E\0alarm\0"';                fs_row "F-exit3-bare exit 3 on a bare create denies (floor)" "deny" 'gh issue create --title x --body y'
+fs_shim nonfiling 3 '"E\0depth\0"';             fs_row "F-nonfiling a failure without the indicator allows" "<none>" 'echo hello world'
+fs_shim trunc 0 '"F\0create\0top\0"';           fs_row "F-trunc a partial record asks" "ask" "$SUB"
+fs_shim empty 0 '""';                           fs_row "F-empty no output at all asks" "ask" "$SUB"
+fs_shim floor 0 '"OK\0"';                       fs_row "F-floor lexer says nothing, floor sees a bare create: deny" "deny" 'gh issue create --title x --body y'
+fs_shim count2 0 '"F\0create\0top\0" . "3\0head=gh issue create\0milestone=1\0label=meta/machinery\0OK\0"'
+fs_row "F-count2 one justified record vs two top-level creates: deny" "deny" 'gh issue create --title a -m M --label meta/machinery; gh issue create --title b'
+fs_shim count 0 '"F\0create\0top\0" . "4\0head=gh issue create\0milestone=1\0label=meta/machinery\0OK\0" . "F\0create\0subst\0" . "1\0head=gh issue create\0OK\0"'
+fs_row "F-count records parse by COUNT: a field reading OK does not end the stream" "deny" "$SUB"
+# The unshimmed lexer on the no-perl rows is exercised above (PATH shim rows).
+rm -rf "$FS_SB"
+
+# F-exit3 records its cause in the incident, and nothing else (payload-free).
+_ic_tmp="$(mktemp -d)"; _ic_sb="$(mktemp -d)"
+cp -R -- "$SCRIPT_DIR/lib" "$_ic_sb/lib"; cp -- "$HOOK" "$_ic_sb/guardrails.sh"; chmod -R u+w "$_ic_sb"
+printf '#!/usr/bin/env perl\nlocal $/; <STDIN>; print "E\\0depth\\0"; exit 3;\n' > "$_ic_sb/lib/filing-shape.pl"
+(cd "$_ic_tmp" && mk_payload "$SUB" | INCIDENTS_REPO_ROOT="$_ic_tmp" bash "$_ic_sb/guardrails.sh" >/dev/null 2>&1)
+_ic_line="$(grep -h '"guardrails-filing-lexer-failure"' "$_ic_tmp/.claude/.rule-incidents.jsonl" 2>/dev/null | head -1)"
+TOTAL=$((TOTAL + 1))
+if [[ "$(jq -r '.rule_text_prefix' <<<"$_ic_line" 2>/dev/null)" == "cause=depth" && "$(jq -r '.command_snippet' <<<"$_ic_line" 2>/dev/null)" == "" ]]; then
+  PASS=$((PASS + 1)); echo "PASS: F-exit3 incident carries cause=depth and no command payload"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: F-exit3 incident carries cause=depth and no command payload"; echo "  got: ${_ic_line:-<no incident>}"
+fi
+rm -rf "$_ic_tmp" "$_ic_sb"
+
+# F-noperl-sub: no perl at all and a filing the floor cannot see asks.
+_pl_sub="$(PATH="$_nopl:$PATH" FS_ALLOW_LEXER_INCIDENT=1 decision_of "$SUB")"
+TOTAL=$((TOTAL + 1))
+if [[ "$_pl_sub" == "ask" ]]; then
+  PASS=$((PASS + 1)); echo "PASS: F-noperl-sub without perl a \$(…) filing asks"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: F-noperl-sub without perl a \$(…) filing asks"; echo "  want: ask  got: $_pl_sub"
+fi
+
+# The real lexer's bounds, through the hook (AC6).
+_deep='gh issue create --title x --body y'
+for _ in $(seq 1 17); do _deep=": \$($_deep)"; done
+FS_ALLOW_LEXER_INCIDENT=1 assert "D53 [base-deny] depth bound trips; the floor still denies a continued top-level api filing" "deny" \
+  "$_deep; gh api \\"$'\n'"$EP -X POST -f title=x -f body=y"
+_big="$(head -c 300000 /dev/zero | tr '\0' 'a')"
+assert "AC6 a 300 KiB padded command ending in a bare create denies" "deny" "echo $_big; gh issue create --title x --body y"
+_t0=$(date +%s%N)
+_deep12='gh issue create --title x --body y'
+for _ in $(seq 1 12); do _deep12="bash -c \"\$($_deep12)\""; done
+_d12="$(decision_of "$_deep12")"
+_ms=$(( ($(date +%s%N) - _t0) / 1000000 ))
+TOTAL=$((TOTAL + 1))
+if [[ "$_d12" == "deny" && "$_ms" -lt 8000 ]]; then
+  PASS=$((PASS + 1)); echo "PASS: 12-deep bash -c \"\$(…)\" denies in ${_ms} ms (tripwire < 8000)"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: 12-deep bash -c \"\$(…)\" denies in < 8 s"; echo "  got: $_d12 in ${_ms} ms"
+fi
+
+# ---------------------------------------------------------------------------
 # AC6b — ASSERTION-COUNT FLOOR.
 #
 # This suite had none. A run that executed ZERO assertions exited 0 and read as
@@ -1273,7 +1531,10 @@ fi
 # newly read POST spellings, segment scoping) = 160, + 33 review-round rows (one
 # per terminator/POST-signal/splitter member, redirects, $(...), --input, the
 # api refusal spellings, gh issue create -F, the perl-absent fallback) = 195.
-MIN_ASSERTIONS=195
+# + 128 #9089 lexer rows (the D/P verdict rows and their refusal twins, 11
+# failure-path shim rows, the incident-payload row, F-noperl-sub, D53, the
+# 300 KiB row and the 12-deep tripwire) = 323.
+MIN_ASSERTIONS=323
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2
