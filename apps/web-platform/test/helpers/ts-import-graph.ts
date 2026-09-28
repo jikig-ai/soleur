@@ -53,7 +53,7 @@ export interface WalkOptions {
   resolver?: (spec: string, fromFile: string, fs: GraphFs) => string | null | "unresolved";
 }
 
-export const SOURCE_EXTS = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
+const SOURCE_EXTS = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
 
 export function realFs(appRoot: string): GraphFs {
   return {

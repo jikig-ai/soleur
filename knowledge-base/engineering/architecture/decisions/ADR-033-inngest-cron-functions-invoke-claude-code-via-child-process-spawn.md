@@ -241,7 +241,7 @@ re-invoked the step **before** anything was memoized, so a second child spawned 
 of 30-day cron spend). Memoization protects a finished step, never a running one.
 
 Now: every Claude spawn goes through `spawnClaudeEval`, which is single-flight per
-`(cronName, runId)` — a re-invocation joins the live child, or within 15 minutes gets its settled
+`(cronName, runId)` — a re-invocation joins the live child, or within 15 minutes `[corrected 2026-09-28, #7230: SETTLED_TTL_MS is 2 hours, as merged]` gets its settled
 result — and each spawn carries a per-run `--max-budget-usd` and a 2/hour function throttle. Step
 responses stream (`serve({ streaming: "force" })`) so the proxy no longer times out. See ADR-243.
 

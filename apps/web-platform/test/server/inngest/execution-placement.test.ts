@@ -1266,6 +1266,14 @@ describe("Guard 2 — the portable boundary", () => {
     expect(g2).toContain("no edge resolved into server/");
   });
 
+  it("a closure module that exists but cannot be read fails closed", () => {
+    const base = memFs(alpha(`import { ghost } from "@/server/ghost";`, "ghost()"));
+    const ghost = join(FX_APP, "server/ghost.ts");
+    const fs: GraphFs = { ...base, exists: (p) => p === ghost || base.exists(p) };
+    const r = portableViolations({ served: servedFunctions(fs).served, manifest: BASE_MANIFEST, fs, allowlist: FX_ALLOW });
+    expect(joined(r.offenders)).toContain("server/ghost.ts: unreadable module — the walk must be total (fail-closed)");
+  });
+
   it("must-pass: a portable function whose client import is relative still satisfies the floor", () => {
     const { files, manifest } = withGamma(`import { inngest } from "../client";\nexport const cronGamma = inngest.createFunction({ id: "cron-gamma" }, { cron: "0 * * * *" }, async () => null);\n`);
     expect(runAll(files, manifest).g2).toEqual([]);
