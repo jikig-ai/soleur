@@ -4066,6 +4066,11 @@ if want_scripts; then
   # stream shape — without `-R` + `fromjson?` one malformed warehouse line aborts the whole parse
   # and a clean PASS window reports as `channel_dark`, i.e. "the host never booted".
   run_suite "scripts/inngest-zot-boot-7462" bash scripts/followthroughs/inngest-zot-boot-7462.test.sh
+  # #8562 (ADR-257): exit-code harness for the provision-unit delivery probe. Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Pins the host-life anchor:
+  # only a bootstrap-done carrying the NEWEST provision-unit-armed row's iid can PASS, so a late row
+  # from a destroyed host never closes #8562; and exactly one `verdict=` line on stdout per case.
+  run_suite "scripts/inngest-provision-unit-8562" bash scripts/followthroughs/inngest-provision-unit-8562.test.sh
   # Operator authorization for enrolling soleur-inngest as a zot client (#6500). This probe closes
   # the issue that GATES ADR-096 5.3b-i / 5.6 (#6500, CLOSED 2026-09-24), so the suite pins the two properties the #7437
   # sibling shipped wrong: the verdict is anchored at line start (an unanchored grep authorizes on

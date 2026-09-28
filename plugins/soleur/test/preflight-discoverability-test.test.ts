@@ -2767,7 +2767,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
   // the liveness_* counters ride the registry host's direct POST into the Logs warehouse, which has
   // no unauthenticated read path, and the registry host is deny-all-public. Genuine.
-  const BASELINE_DECLARED_PROBES = 35;
+  // #8562 (2026-09-28): +1 (35 -> 36, after #7262/#7270 took 34 -> 35) for `2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/followthroughs/inngest-provision-unit-8562.sh`)
+  // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
+  // the provision unit's phone-home rows (provision-unit-armed, bootstrap-done keyed on iid) land only
+  // in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 36;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

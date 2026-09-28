@@ -1741,3 +1741,41 @@ verb has no image left to act on, since #8734 satisfied it for `411798619` ahead
 `scripts/followthroughs/inngest-soak-6178.sh` still names `411798619` in its `SNAPSHOTS` line, so
 its ACTION REQUIRED text for the release verb is stale; the #8626 branch rewrites that line. This
 addendum flips nothing and closes nothing.
+
+## Addendum — 2026-09-28 (#8562) — a new actor on the sole scheduler: the provision unit, and the ordering rule it creates
+
+[ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md) moves the dedicated
+host's zot login, isolation check and pull → bootstrap block out of once-per-instance `runcmd` into
+`soleur-inngest-provision.service`, a oneshot that retries (120 s at first, backing off to 15
+minutes) and is re-started 90 s after every boot until a latch is written after a non-degraded
+`inngest-bootstrap.sh` success. This addendum records what
+that means for this ADR. It amends no Decision.
+
+- **A new actor.** Each retry re-runs the bootstrap, and the bootstrap restarts `inngest-redis` and
+  `inngest-server` and re-enables the flip timer. Before #8562 only one first-boot run did that. The
+  unit can now do it again, on the fleet's sole scheduler, at any time until the host latches.
+- **The FSM quiesce.** Immediately before every bootstrap run, the unit stops
+  `inngest-cutover-flip.timer` and `inngest-luks-cutover.timer` and waits, bounded at 300 s, until
+  neither `inngest-cutover-flip.service` nor `inngest-luks-cutover.service` is activating. If the
+  bound expires it emits `provision-fsm-busy` and the attempt retries. Without it, a retry that
+  coincided with `op=resume` could restart the server inside the flip's `verify_serving` window and
+  drive the FSM to `aborted`, which `op=resume` does not accept and which needs a `/mnt/data` recut
+  to leave. The same bounded wait also holds while `/var/lib/inngest-luks-cutover/frozen-active`
+  is non-empty or the flip FSM's host state slot shows `"flag":"flipping"`. The timers come back
+  on both paths: on success the bootstrap re-enables them as before, and on a failed attempt the
+  unit's exit handler restarts every timer that was active when the quiesce stopped it.
+- **`op=resume` runs only after the new host's `bootstrap-done`.** `bootstrap-done` now carries
+  `iid=<cloud-init instance-id>`, so the new host's row cannot be confused with a late row from the
+  destroyed one (both share `host_name` during a replace). This is runbook order
+  (`inngest-server.md` § "Provision unit (#8562)"), backed by the unit-side quiesce. A cutover gate
+  row that refuses `op=resume` until the new `iid` has emitted `bootstrap-done` is a tracked
+  deferral, not part of this change.
+- **The singleton property is unchanged.** A host that provisions late never serves on its own
+  authority: `inngest-server-flip-guard.sh` refuses a production start on an inherited `done`, one
+  this host carries no `done-owner` marker for (Decision 6, added 2026-08-12, #7228). A replaced
+  host's fresh root disk has no marker until its own verified flip, which `op=resume` drives. systemd runs one instance of the unit, so the timer and `runcmd`'s single start
+  serialize onto one job.
+- **Delivery is unchanged.** The 2026-08-25 addendum's replace-only constraint holds: the unit
+  reaches the host only at its next `inngest-host-replace` plus `op=resume`, and a provisioned
+  host's reboot does not re-provision it. Recovery is never an SSH step or a latch delete;
+  re-provisioning is a replace.
