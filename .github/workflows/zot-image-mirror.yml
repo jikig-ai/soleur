@@ -1,0 +1,121 @@
+name: zot-image-mirror
+# Publishes the zot registry host's boot image as a GitHub release asset (#8714 step 5.3b-iii;
+# ADR-096 amendment 2026-09-28).
+#
+# WHY: the registry host cannot pull its own zot image from itself (bootstrap paradox), and
+# project-zot publishes images only on ghcr.io. The exact upstream image — the manifest pinned by
+# digest D in apps/web-platform/infra/zot-registry.tf `zot_image_amd64` and every blob it names —
+# is packaged by zot-image-oci-archive.sh into one reproducible tarball and published here as a
+# PRERELEASE, never "latest", under the tag `zot-image-<version>`. It is an infrastructure mirror
+# artifact, not a Soleur release: the docs feed (plugins/soleur/docs/_data/github.js) excludes
+# prereleases, as do release-notes.ts and the weekly digest.
+#
+# CONTRACT (the three arms of `publish`, all fail-closed):
+#   release absent        -> create it, upload the asset
+#   asset absent          -> upload the freshly built asset (never --clobber)
+#   asset present         -> download it and `verify` it by CONTENT against D (every blob hashes
+#                            to its name, index.json -> D). A content check, not a byte compare,
+#                            so a GNU tar version change on the runner cannot fail a correct asset.
+# `zot-image-*` releases are NEVER deleted or replaced: a registry host boots from one (by pinned
+# sha256), and a host replace refuses when the asset is missing (registry-replace-preflight P6, #8714).
+#
+# BUMP PROCEDURE (see zot-image.provenance.md): on the bump branch, dispatch this workflow with
+# `gh workflow run zot-image-mirror.yml --ref <branch>` so the new version's asset exists before the
+# bump merges; the bytes are anchored to upstream D, not to the branch, so a branch dispatch is safe.
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/web-platform/infra/zot-image-oci-archive.sh
+      - apps/web-platform/infra/zot-registry.tf
+      - .github/workflows/zot-image-mirror.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: zot-image-mirror-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Pinned image, not -latest: the tarball's sha256 depends on the GNU tar version.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Build the archive from upstream (verifies D and every blob)
+        id: build
+        run: |
+          out="$RUNNER_TEMP/zot-build.txt"
+          bash apps/web-platform/infra/zot-image-oci-archive.sh build "$RUNNER_TEMP/zot.oci.tar" > "$out"
+          cat "$out"
+          version="$(sed -n 's/^LOCAL_REF=.*:\(v[0-9][0-9.]*\)$/\1/p' "$out")"
+          sum="$(sed -n 's/^T=\([0-9a-f]\{64\}\)$/\1/p' "$out")"
+          d="$(sed -n 's/^D=\([0-9a-f]\{64\}\)$/\1/p' "$out")"
+          [[ -n "$version" && -n "$sum" && -n "$d" ]] || { echo "::error::builder output lacks VERSION/T/D"; exit 1; }
+          {
+            echo "tag=zot-image-${version}"
+            echo "asset=zot-linux-amd64-${version}.oci.tar"
+            echo "version=${version}"
+            echo "sha256=${sum}"
+            echo "manifest=${d}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish or verify the release asset (never clobber)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.build.outputs.tag }}
+          ASSET: ${{ steps.build.outputs.asset }}
+          VERSION: ${{ steps.build.outputs.version }}
+          BUILT_SHA256: ${{ steps.build.outputs.sha256 }}
+          MANIFEST: ${{ steps.build.outputs.manifest }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          local_asset="$RUNNER_TEMP/$ASSET"
+          mv "$RUNNER_TEMP/zot.oci.tar" "$local_asset"
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "Infrastructure mirror artifact — not a Soleur release."
+            echo
+            echo "The zot registry host (apps/web-platform/infra/zot-registry.tf) boots from this asset."
+            echo "It carries the upstream image \`ghcr.io/project-zot/zot-linux-amd64:${VERSION}\` byte-for-byte:"
+            echo "manifest \`sha256:${MANIFEST}\` and every blob it names, packaged by"
+            echo "\`apps/web-platform/infra/zot-image-oci-archive.sh\` (#8714). Do not delete or replace it."
+          } > "$notes"
+          rc=0; gh api "repos/${repo}/releases/tags/${TAG}" > "$RUNNER_TEMP/rel.json" 2> "$RUNNER_TEMP/rel.err" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            if grep -q 'HTTP 404' "$RUNNER_TEMP/rel.err"; then
+              gh release create "$TAG" --repo "$repo" --target "$GITHUB_SHA" --prerelease --latest=false \
+                --title "zot image mirror ${VERSION} (infrastructure artifact)" --notes-file "$notes"
+              echo "{}" > "$RUNNER_TEMP/rel.json"
+            else
+              echo "::error::could not read release ${TAG}: $(cat "$RUNNER_TEMP/rel.err")"; exit 1
+            fi
+          fi
+          present="$(jq -r --arg a "$ASSET" '[.assets[]? | select(.name == $a)] | length' "$RUNNER_TEMP/rel.json")"
+          if [[ "$present" == "0" ]]; then
+            gh release upload "$TAG" "$local_asset" --repo "$repo"
+            echo "uploaded ${ASSET} sha256=${BUILT_SHA256}"
+          else
+            dl="$RUNNER_TEMP/dl"; mkdir -p "$dl"
+            gh release download "$TAG" --repo "$repo" --pattern "$ASSET" --dir "$dl"
+            bash apps/web-platform/infra/zot-image-oci-archive.sh verify "$dl/$ASSET"
+            echo "existing ${ASSET} verified by content against sha256:${MANIFEST}"
+          fi
+          # The published asset's GitHub-computed digest is what the host pins (T). Print it.
+          published="$(gh api "repos/${repo}/releases/tags/${TAG}" --jq ".assets[] | select(.name == \"${ASSET}\") | .digest")"
+          [[ "$published" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::published asset has no sha256 digest: [${published}]"; exit 1; }
+          echo "PUBLISHED_T=${published#sha256:}"
+          {
+            echo "### zot image mirror"
+            echo "- tag: \`${TAG}\` (prerelease)"
+            echo "- asset: \`${ASSET}\`"
+            echo "- manifest D: \`sha256:${MANIFEST}\`"
+            echo "- published T: \`${published}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

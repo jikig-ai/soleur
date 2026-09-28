@@ -37,9 +37,24 @@ LOCAL_REPO="localhost/soleur-mirror/zot-linux-${ARCH}"
 
 die() { echo "zot-image-oci-archive: $2" >&2; exit "$1"; }
 
-# One scratch dir per run, owned by the EXIT trap (a function-local would be unbound at exit).
-W=""
-trap '[[ -n "$W" ]] && rm -rf "$W" "$W.views"' EXIT
+# The canonical absolute-path guard (a COPY of plugins/soleur/test/test-helpers.sh — do not reword
+# it here only): every write below lands under $W, and $W is proven absolute before the first one.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+# One scratch dir per run, bound at top level and owned by the EXIT trap. Two fixed subtrees:
+# $W/img (the archive being built or extracted) and $W/views (verify's re-derived views).
+W="$(mktemp -d)" || die 2 "mktemp failed"
+assert_fixture_dir "$W"
+trap 'rm -rf "$W"' EXIT
 
 # ── the upstream pin record: ghcr.io/<repo>:<version>@sha256:<D> ─────────────────────────────────
 [[ -r "$TF" ]] || die 2 "cannot read $TF"
@@ -57,73 +72,77 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 pack() { tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=ustar \
   --mode='a=rX,u+w' -C "$1" -cf "$2" oci-layout index.json manifest.json blobs; }
 
-# write_views <dir> — index.json + manifest.json + oci-layout derived from blobs/sha256/<D>.
+# write_views <img|views> — index.json + manifest.json + oci-layout for $W/<sub>, derived from
+# $W/<sub>/blobs/sha256/<D>.
 write_views() {
-  local w="$1" m="$1/blobs/sha256/$D"
-  printf '{"imageLayoutVersion":"1.0.0"}' > "$w/oci-layout"
+  assert_fixture_dir "$W"
+  local m="$W/$1/blobs/sha256/$D"
+  printf '{"imageLayoutVersion":"1.0.0"}' > "$W/$1/oci-layout"
   jq -cn --arg mt "$(jq -r .mediaType "$m")" --arg d "sha256:$D" --argjson sz "$(stat -c %s "$m")" \
     --arg name "$LOCAL_REF" --arg tag "$VERSION" \
     '{schemaVersion:2,mediaType:"application/vnd.oci.image.index.v1+json",
       manifests:[{mediaType:$mt,digest:$d,size:$sz,
-        annotations:{"io.containerd.image.name":$name,"org.opencontainers.image.ref.name":$tag}}]}' > "$w/index.json"
+        annotations:{"io.containerd.image.name":$name,"org.opencontainers.image.ref.name":$tag}}]}' > "$W/$1/index.json"
   jq -c --arg name "$LOCAL_REF" \
     '[{Config:("blobs/sha256/"+(.config.digest|ltrimstr("sha256:"))),RepoTags:[$name],
-       Layers:[.layers[].digest|ltrimstr("sha256:")|"blobs/sha256/"+.]}]' "$m" > "$w/manifest.json"
+       Layers:[.layers[].digest|ltrimstr("sha256:")|"blobs/sha256/"+.]}]' "$m" > "$W/$1/manifest.json"
 }
 
 # referenced <manifest-file> — every blob hex the manifest names (config first, layers in order).
 referenced() { jq -r '.config.digest, .layers[].digest' "$1" | sed 's/^sha256://'; }
 
 build() {
-  local out="$1" tok h w
-  W="$(mktemp -d)"; w="$W"
-  mkdir -p "$w/blobs/sha256"
+  local out="$1" tok h
+  # The output path is made absolute here, so every write in this function is under a proven root.
+  case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+  assert_fixture_dir "$W"; assert_fixture_dir "$out"
+  mkdir -p "$W/img/blobs/sha256"
   tok="$(curl -fsS --proto =https --retry 3 "https://ghcr.io/token?scope=repository:${REPO}:pull" | jq -er .token)" \
     || die 1 "could not obtain an anonymous ghcr.io pull token for ${REPO}"
   curl -fsSL --proto =https --proto-redir =https --retry 3 -H "Authorization: Bearer ${tok}" \
     -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-    "https://ghcr.io/v2/${REPO}/manifests/sha256:${D}" > "$w/blobs/sha256/$D" \
+    "https://ghcr.io/v2/${REPO}/manifests/sha256:${D}" > "$W/img/blobs/sha256/$D" \
     || die 1 "could not fetch manifest sha256:${D}"
-  [[ "$(sha "$w/blobs/sha256/$D")" == "$D" ]] || die 1 "manifest bytes do not hash to the pinned D sha256:${D}"
-  for h in $(referenced "$w/blobs/sha256/$D"); do
+  [[ "$(sha "$W/img/blobs/sha256/$D")" == "$D" ]] || die 1 "manifest bytes do not hash to the pinned D sha256:${D}"
+  for h in $(referenced "$W/img/blobs/sha256/$D"); do
     [[ "$h" =~ ^[0-9a-f]{64}$ ]] || die 1 "manifest names a malformed digest: $h"
     curl -fsSL --proto =https --proto-redir =https --retry 3 -H "Authorization: Bearer ${tok}" \
-      "https://ghcr.io/v2/${REPO}/blobs/sha256:${h}" > "$w/blobs/sha256/$h" || die 1 "could not fetch blob sha256:${h}"
-    [[ "$(sha "$w/blobs/sha256/$h")" == "$h" ]] || die 1 "blob bytes do not hash to sha256:${h}"
+      "https://ghcr.io/v2/${REPO}/blobs/sha256:${h}" > "$W/img/blobs/sha256/$h" || die 1 "could not fetch blob sha256:${h}"
+    [[ "$(sha "$W/img/blobs/sha256/$h")" == "$h" ]] || die 1 "blob bytes do not hash to sha256:${h}"
   done
-  write_views "$w"
-  pack "$w" "$out.partial" && mv -f "$out.partial" "$out"
+  write_views img
+  pack "$W/img" "$W/out.tar" && mv -f "$W/out.tar" "$out"
   echo "D=$D"
-  echo "C=$(jq -r .config.digest "$w/blobs/sha256/$D" | sed 's/^sha256://')"
+  echo "C=$(jq -r .config.digest "$W/img/blobs/sha256/$D" | sed 's/^sha256://')"
   echo "T=$(sha "$out")"
   echo "BYTES=$(stat -c %s "$out")"
   echo "LOCAL_REF=$LOCAL_REF"
 }
 
 verify() {
-  local in="$1" w h want got
+  local in="$1" h want got
   [[ -r "$in" ]] || die 2 "cannot read $in"
-  W="$(mktemp -d)"; w="$W"
+  assert_fixture_dir "$W"
+  mkdir -p "$W/img" "$W/views/blobs/sha256"
   # Member names are checked BEFORE extraction: only the layout's own paths may appear.
   got="$(tar -tf "$in" | LC_ALL=C sort)" || die 1 "not a readable tar: $in"
   printf '%s\n' "$got" | grep -qvE '^(oci-layout|index\.json|manifest\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' \
     && die 1 "archive carries a member outside the OCI layout"
-  tar -xf "$in" -C "$w" --no-same-owner
-  [[ -f "$w/blobs/sha256/$D" ]] || die 1 "archive does not carry the pinned manifest sha256:${D}"
-  [[ "$(sha "$w/blobs/sha256/$D")" == "$D" ]] || die 1 "manifest blob does not hash to D"
+  tar -xf "$in" -C "$W/img" --no-same-owner
+  [[ -f "$W/img/blobs/sha256/$D" ]] || die 1 "archive does not carry the pinned manifest sha256:${D}"
+  [[ "$(sha "$W/img/blobs/sha256/$D")" == "$D" ]] || die 1 "manifest blob does not hash to D"
   want="$( { printf '%s\n' blobs/ blobs/sha256/ index.json manifest.json oci-layout "blobs/sha256/$D"
-            referenced "$w/blobs/sha256/$D" | sed 's|^|blobs/sha256/|'; } | LC_ALL=C sort -u)"
+            referenced "$W/img/blobs/sha256/$D" | sed 's|^|blobs/sha256/|'; } | LC_ALL=C sort -u)"
   [[ "$got" == "$want" ]] || die 1 "archive member set is not exactly the layout for D (extra or missing members)"
-  for h in $(referenced "$w/blobs/sha256/$D"); do
-    [[ "$(sha "$w/blobs/sha256/$h")" == "$h" ]] || die 1 "blob does not hash to its name: sha256:${h}"
+  for h in $(referenced "$W/img/blobs/sha256/$D"); do
+    [[ "$(sha "$W/img/blobs/sha256/$h")" == "$h" ]] || die 1 "blob does not hash to its name: sha256:${h}"
   done
   # The two load-path views must be exactly what write_views derives from D.
-  mkdir -p "$w.views/blobs/sha256"; cp "$w/blobs/sha256/$D" "$w.views/blobs/sha256/$D"
-  write_views "$w.views"
+  cp "$W/img/blobs/sha256/$D" "$W/views/blobs/sha256/$D"
+  write_views views
   for f in oci-layout index.json manifest.json; do
-    cmp -s "$w/$f" "$w.views/$f" || { rm -rf "$w.views"; die 1 "$f does not match the view derived from D"; }
+    cmp -s "$W/img/$f" "$W/views/$f" || die 1 "$f does not match the view derived from D"
   done
-  rm -rf "$w.views"
   echo "verified D=$D LOCAL_REF=$LOCAL_REF T=$(sha "$in")"
 }
 
