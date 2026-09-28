@@ -559,6 +559,13 @@ post_tag_ref() {
   # From here on the ref may exist whatever the POST reports (a lost 2xx), so
   # every later fatal names the tag with tag_state=unknown (see die).
   REF_POSTED=1
+  # die() covers a reported failure; a HANG is killed by the step timeout before
+  # die or finish can run. Record the name first so the Slack step still reads
+  # "MAY exist" (not "before any tag") after a kill. finish appends the final
+  # values later; for a repeated GITHUB_OUTPUT key the last line wins.
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf 'tag=%s\ntag_state=unknown\n' "$NEXT" >> "$GITHUB_OUTPUT"
+  fi
   resp=$(jq -n --arg ref "refs/tags/${NEXT}" --arg sha "$TAG_OBJ" '{ref: $ref, sha: $sha}' \
     | GH_TOKEN="$TAG_TOK" gh api --method POST "repos/${REPO}/git/refs" --input - 2> "$WORK/ref.err") || rc=$?
   [[ "$rc" -eq 0 ]] || api_fail tag "$resp" "$WORK/ref.err" "creating refs/tags/${NEXT} failed. The ref MAY exist (a lost 2xx): check git ls-remote --tags origin refs/tags/${NEXT}; if it peels to ${HEAD_SHA} and no build run exists for it, dispatch once: gh workflow run ${BUILD_WF_FILE} --ref main -f ref=${NEXT}"
@@ -575,7 +582,8 @@ stage_tag() {
   post_tag_object      # step: tag object
   post_tag_ref         # step: ref
   verify_tag
-  F_TAG="$NEXT"
+  # created overrides the provisional tag_state=unknown post_tag_ref recorded.
+  F_TAG="$NEXT" F_TAG_STATE=created
   echo "tagged ${NEXT} -> ${HEAD_SHA}"
   summary "### inngest-bootstrap auto-mint"$'\n\n'"Tagged \`${NEXT}\` on \`${HEAD_SHA}\` (base \`vinngest-${BASE:-none}\`; changed: ${F_CHANGED})."
   finish tagged

@@ -168,7 +168,7 @@ jobs:
           fi
           echo "::add-mask::$WEBHOOK"
           if [[ "$TAG" =~ ^vinngest-v[0-9]+\.[0-9]+\.[0-9]+$ && "$TAG_STATE" == unknown ]]; then
-            MESSAGE="❌ inngest-bootstrap auto-mint FAILED at the tag step after the ref POST: ${TAG} MAY exist. Check: git ls-remote --tags origin refs/tags/${TAG} — if it is there, confirm no build run exists for it (gh run list --workflow build-inngest-bootstrap-image.yml), then dispatch exactly once: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=${TAG}. Never delete or reuse the name. Run: ${RUN_URL}"
+            MESSAGE="❌ inngest-bootstrap auto-mint FAILED at the tag step after the ref POST: ${TAG} MAY exist. Check: git ls-remote --tags origin refs/tags/${TAG} ${TAG}^{} — only if it is there AND peels to ${GITHUB_SHA} (else someone else's tag: leave it), confirm no build run exists for it (gh run list --workflow build-inngest-bootstrap-image.yml), then dispatch exactly once: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=${TAG}. Never delete or reuse the name. Run: ${RUN_URL}"
           elif [[ "$TAG" =~ ^vinngest-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             MESSAGE="❌ inngest-bootstrap auto-mint FAILED after creating ${TAG}. Do NOT delete or reuse the tag. If the dispatch failed, confirm no build run exists for it, then run exactly once: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=${TAG} — Run: ${RUN_URL}"
           else

@@ -23,7 +23,8 @@
 #   - row knobs: MOCK_GH_TAG_MISMATCH (a git/tags response naming another tag),
 #     MOCK_GH_REF_ELSEWHERE (git/refs points the ref at main~1, not the posted
 #     object), MOCK_GH_REF_BREAK_ORIGIN (git/refs lands, then the origin becomes
-#     unreachable, so the verify ls-remote fails).
+#     unreachable, so the verify ls-remote fails), MOCK_GH_REF_HANG (git/refs
+#     lands, then the call hangs until the row's timeout kills the SUT).
 #   - an error exits 1 with the body on stdout and `gh: … (HTTP 422)` on stderr, as
 #     real `gh` does. The `workflows`-permission text is SYNTHESIZED (GitHub's exact
 #     wording is unverified): its row tests the classifier on this wording, and a
@@ -82,7 +83,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=541   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=545   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -182,6 +183,8 @@ case "$path" in
     git -C "$O" update-ref "$ref" "$target" || err422 'Invalid request: update-ref'
     # The ref landed; now the origin goes away, so the next ls-remote fails.
     [[ "${MOCK_GH_REF_BREAK_ORIGIN:-0}" == 1 ]] && mv "$O" "$O.unreachable"
+    # The ref landed and the response never arrives: a hang the step timeout kills.
+    [[ "${MOCK_GH_REF_HANG:-0}" == 1 ]] && sleep 8
     jq -n --arg ref "$ref" --arg sha "$sha" '{
       ref: $ref, node_id: "REF_fixture",
       url: ("https://api.github.com/repos/jikig-ai/soleur/git/" + $ref),
@@ -284,7 +287,7 @@ mf_new() {
   MOCK_GH_LOG="$TMP/$name/gh.log"; : > "$MOCK_GH_LOG"
   MOCK_GH_BODIES="$TMP/$name/gh.bodies"; : > "$MOCK_GH_BODIES"
   MINT_ENV=()
-  MINT_BASH=()
+  MINT_BASH=() MINT_WRAP=()
   SUT="${SUT_OVERRIDE:-$SCRIPT}"
 }
 
@@ -341,7 +344,7 @@ run_mint() {
     MOCK_ORIGIN="$F_ORIGIN" MOCK_GH_LOG="$MOCK_GH_LOG" MOCK_GH_BODIES="$MOCK_GH_BODIES" \
     GITHUB_OUTPUT="$LAST_GOUT" GITHUB_STEP_SUMMARY="$LAST_GSUM" \
     ${MINT_ENV[@]+"${MINT_ENV[@]}"} \
-    bash ${MINT_BASH[@]+"${MINT_BASH[@]}"} "$SUT" "$@" > "$LAST_OUT" 2> "$LAST_ERR" || LAST_RC=$?
+    ${MINT_WRAP[@]+"${MINT_WRAP[@]}"} bash ${MINT_BASH[@]+"${MINT_BASH[@]}"} "$SUT" "$@" > "$LAST_OUT" 2> "$LAST_ERR" || LAST_RC=$?
 }
 
 # ---------------------------------------------------------------------------
@@ -491,7 +494,10 @@ run_mint g1-r1-tag --tag
 expect 'g1.r1-tag' 0 tagged 2 vinngest-v1.1.40,vinngest-v1.1.41
 a_eq 'g1.r1-tag:tag' "$(field tag)" vinngest-v1.1.41
 a_annotated 'g1.r1-tag' vinngest-v1.1.41
-a_eq 'g1.r1-tag:gout' "$(paste -sd' ' "$LAST_GOUT")" 'tag=vinngest-v1.1.41 result=tagged'
+# The provisional tag_state=unknown (written before the ref POST) is followed
+# by created, and the last value wins.
+a_eq 'g1.r1-tag:gout' "$(paste -sd' ' "$LAST_GOUT")" 'tag=vinngest-v1.1.41 tag_state=unknown tag=vinngest-v1.1.41 tag_state=created result=tagged'
+a_eq 'g1.r1-tag:tag-state' "$(field tag_state)" created
 a_eq 'g1.r1-tag:tag-token' "$(grep -c "git/tags .*| token=$TAG_TOK |" "$MOCK_GH_LOG" || true)" 1
 a_eq 'g1.r1-tag:ref-token' "$(grep -c "git/refs .*| token=$TAG_TOK |" "$MOCK_GH_LOG" || true)" 1
 # The ref POST carries the TAG OBJECT sha from the response (jq .sha), never the
@@ -917,6 +923,18 @@ a_eq 'g2.verify-ls-remote-failed:stage' "$(field stage)" tag
 a_eq 'g2.verify-ls-remote-failed:reason' "$(field reason)" ls-remote-failed
 gout_has 'g2.verify-ls-remote-failed:gout-tag-state' tag_state=unknown
 a_eq 'g2.verify-ls-remote-failed:origin-tags' "$(origin_tags)" vinngest-v1.1.40,vinngest-v1.1.41
+
+# A hang after the ref landed: the step timeout SIGKILLs the script before die
+# or finish runs. The name was recorded before the POST, so GITHUB_OUTPUT still
+# names it with tag_state=unknown and no result line (the Slack "MAY exist" branch).
+g2_changed_fixture g2-ref-hang
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK" MOCK_GH_REF_HANG=1)
+MINT_WRAP=(timeout -s KILL 3)
+run_mint g2-ref-hang --tag
+MINT_WRAP=()
+a_eq 'g2.ref-hang:rc' "$LAST_RC" 137
+a_eq 'g2.ref-hang:gout' "$(paste -sd' ' "$LAST_GOUT")" 'tag=vinngest-v1.1.41 tag_state=unknown'
+a_eq 'g2.ref-hang:origin-tags' "$(origin_tags)" vinngest-v1.1.40,vinngest-v1.1.41
 
 # S7 — a git/tags response describing ANOTHER tag: bad-response, no ref POST,
 # and no tag_state (nothing can exist yet).
