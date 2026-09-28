@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Fixture-based tests for guardrails.sh — scoped to the require-milestone gate.
+# Fixture-based tests for guardrails.sh — mostly the filing gate
+# (require-milestone + require-filing-justification, lexer per ADR-256), plus
+# the stash, rm-rf and delete-branch guards it shares a hook with.
 # Asserts gh issue create against OUR repo requires --milestone, while creation
 # against an EXTERNAL repo (different owner) is exempt (their milestone sets
 # differ; the backlog-hygiene rule applies only to our own issues).
@@ -80,6 +82,12 @@ reason_of() {
   local cmd="$1" tmp; tmp="$(mktemp -d)"
   local out rc=0
   out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)" || rc=$?
+  # Same lexer-incident check as decision_of: a reason twin must not pass on
+  # a text the failure path produced when the row claims the lexer's verdict.
+  if [[ -z "${FS_ALLOW_LEXER_INCIDENT:-}" ]] \
+     && grep -qF '"guardrails-filing-lexer-failure"' "$tmp/.claude/.rule-incidents.jsonl" 2>/dev/null; then
+    rm -rf "$tmp"; echo "<lexer-failure-incident>"; return
+  fi
   rm -rf "$tmp"
   # A non-zero hook exit BLOCKS the tool call in Claude Code (exit 2) or is a
   # crash -- either way it is not the empty-output allow, so never read it as one.
@@ -101,6 +109,21 @@ assert_reason() {
     FAIL=$((FAIL + 1)); echo "FAIL: $label"; echo "  want reason containing: $want"; echo "  got:  ${got:0:160}"
   fi
 }
+
+# INSTRUMENT SELF-TEST. Every verdict-owning helper must be able to FAIL, or
+# a gutted `assert` (always PASS) satisfies every row and the floor alike.
+# Driven once each with a known-wrong expectation, then unwound; reported with
+# printf + exit, never through the helpers under test.
+_ctl_p=$PASS; _ctl_f=$FAIL; _ctl_t=$TOTAL
+assert "self-test: assert can fail" "deny" 'echo harmless' >/dev/null
+assert_reason "self-test: assert_reason can fail" "no such refusal text" 'echo harmless' >/dev/null
+assert "self-test: assert can pass" "<none>" 'echo harmless' >/dev/null
+if (( FAIL != _ctl_f + 2 || PASS != _ctl_p + 1 )); then
+  printf 'INSTRUMENT: assert/assert_reason did not report a known FAIL and a known PASS (PASS %s->%s FAIL %s->%s)\n' \
+    "$_ctl_p" "$PASS" "$_ctl_f" "$FAIL" >&2
+  exit 1
+fi
+PASS=$_ctl_p; FAIL=$_ctl_f; TOTAL=$_ctl_t
 
 # Our repo (implicit) without --milestone → deny.
 assert "implicit repo, no milestone denies" "deny" \
@@ -1203,20 +1226,20 @@ assert_reason "guard3: exit-2-shaped filing + nonexistent --body-file still deni
 
 # (d) unbalanced quoting OUTSIDE any heredoc: fail-closed, actionable.
 TOK_MSG="BLOCKED: the command could not be tokenized (unbalanced quoting); write the body to a file and pass --body-file"
-assert_reason "guard3: apostrophe inside --title (unbalanced, no heredoc) denies with the tokenizer message" \
+FS_ALLOW_LEXER_INCIDENT=1 assert_reason "guard3: apostrophe inside --title (unbalanced, no heredoc) denies with the tokenizer message" \
   "$TOK_MSG" \
   "gh issue create --title 'its unbalanced --body b --label meta/machinery $MS"
 
 # Mutation 2 pin: a whitespace-split fallback would read the --label inside
 # this quoted --body as a real flag and reopen the bare-token escape.
-assert_reason "guard3: unbalanced quote + --label inside quoted --body denies (no whitespace-split fallback)" \
+FS_ALLOW_LEXER_INCIDENT=1 assert_reason "guard3: unbalanced quote + --label inside quoted --body denies (no whitespace-split fallback)" \
   "$TOK_MSG" \
   "gh issue create --title 'x --body \"x --label meta/machinery y\" $MS"
 
-# Third member of the same class, found while fixing (a): GNU xargs cannot
-# carry a quoted token across a line, so a multi-line inline --body stopped the
-# tokenizer and a --label AFTER it was never read (measured on main: denied).
-# Newlines are folded to spaces before xargs; this row is the pin.
+# Third member of the same class, found while fixing (a): the former xargs
+# tokenizer could not carry a quoted token across a line, so a multi-line inline
+# --body hid a --label AFTER it. The lexer (lib/filing-shape.pl, ADR-256) reads
+# a quoted newline as part of the word; this row is the pin.
 assert "guard3: multi-line inline --body followed by --label meta/machinery allows" "<none>" \
   "gh issue create --title t --body \"line one
 line two\" --label meta/machinery $MS"
@@ -1234,13 +1257,13 @@ assert "guard3: --label type/bug,meta/machinery with heredoc apostrophe allows" 
 gh issue create --title t --body-file body.md --label type/bug,meta/machinery $MS"
 
 # (f) regression pin: a `gh issue create` that appears ONLY inside a heredoc
-# body is not a filing (_gh_create reads \$SCAN). Already true; pinned so the
-# tokenizer change cannot regress it.
+# body is not a filing (the lexer skips heredoc bodies that no command reads as
+# a script). Pinned so a tokenizer change cannot regress it.
 assert "guard3: gh issue create only inside a heredoc body is not a filing" "<none>" \
   $'cat > notes.md <<\'EOF\'\ngh issue create --title x --body y\nEOF'
 
-# strip_heredocs blanks ONLY the heredoc body: quoted spans survive, because
-# xargs needs them to tokenize `--milestone "Post-MVP / Later"` as one value.
+# strip_heredocs blanks ONLY the heredoc body: quoted spans survive (the helper
+# predates the filing lexer, which no longer calls it; pinned while it ships).
 TOTAL=$((TOTAL + 1))
 _sh_got="$(strip_heredocs "$HD_APOS
 gh issue create --milestone \"Post-MVP / Later\" --label 'meta/machinery'")"
@@ -1274,11 +1297,11 @@ fi
 EP=repos/jikig-ai/soleur/issues
 J=' --milestone "Post-MVP / Later" --label meta/machinery'
 K=' --milestone M --label meta/machinery'
-IN_CMD="add the exit inside that same command, on the gh invocation itself"
+IN_CMD="Its exit belongs to that same filing -- a flag on its own gh invocation, or a line in its own body -- not to another command on the line."
 
 # Substitutions and runners
 assert "D1 unquoted \$(…) create denies"            "deny" 'URL=$(gh issue create --title x --body y)'
-assert_reason "D1 twin: names the filing and \$(…)"  'Refused filing: `gh issue create` inside $(…); '"$IN_CMD" 'URL=$(gh issue create --title x --body y)'
+assert_reason "D1 twin: names the filing and \$(…)"  'Refused filing: `gh issue create` inside $(…). '"$IN_CMD" 'URL=$(gh issue create --title x --body y)'
 assert "D2 quoted \"\$(…)\" create denies"          "deny" 'URL="$(gh issue create --title x --body y)"'
 assert "D3 api inside quoted \$(…) denies"          "deny" "N=\"\$(gh api $EP -X POST -f title=x -f body=y)\""
 assert_reason "D3 twin: api spelling + ctx"         "-f labels[]=meta/machinery (the gh api spelling)" "N=\"\$(gh api $EP -X POST -f title=x -f body=y)\""
@@ -1506,6 +1529,92 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# #9089 REVIEW ROUND — one row per reproduced finding (security, structural,
+# quality, SAST, performance, agent-native seats). Each is a shape the first
+# lexer let through or mis-gated.
+# ---------------------------------------------------------------------------
+# Grammar: bash's blanks, heredoc scope, arithmetic, case, funsubs, clusters.
+assert "R-CR: \\r is a word character, so it cannot forge a milestone" "deny" \
+  $'gh issue create --title x --label meta/machinery --body=x\r-mPost'
+assert "R-FF: a form feed is a word character, not a 2 s stall" "<none>" $'echo a\fb'
+assert "R-HDQ: a newline inside \$(…) does not drain an outer heredoc" "deny" \
+  $'cat <<\'EOF\'; X="$(:\ngh issue create --title x --body y\nEOF\n)"\nEOF'
+assert "R-ARITH: (( … << … )) is a shift, not a heredoc" "deny" \
+  $'(( x = 1 << y ))\ntrue | gh issue create --title x --body y'
+assert "R-ARITH2: the line after (( … << … )) is still lexed" "deny" \
+  $'(( n = 1 << 2 ))\nbash -c \'gh issue create --title t --body b\''
+assert "R-CASE: a case pattern ) does not close \$(…)" "deny" \
+  'x="$(case $y in a|b) gh issue create --title t;; *) :;; esac)"'
+assert "R-FUNSUB: \${ cmd; } is a script" "deny" 'X=${ gh issue create --title x --body y; }'
+assert "R-OC: -oc takes its o's value before the script" "deny" \
+  "bash -oc pipefail 'gh issue create --title x --body y'"
+assert "R-ANSI: \$'…' is decoded, so \\n splits the eval string" "deny" \
+  "eval \$'gh issue create --title x --body y -l meta/machinery \\n -m M'"
+# Exits: every credit must come from the filing's own argv, as bash passes it.
+assert_reason "R-BTDQ: \\\" inside backticks in \"…\" keeps --label inside the title" \
+  "names no user-visible consequence" \
+  'X="`gh issue create --title \"a --label meta/machinery \" --milestone M`"'
+assert_reason "R-FIND: a later -exec cannot supply the filing's exits" "must include --milestone" \
+  'find /dev/null -exec timeout 9 gh issue create --title x --body y \; -exec echo -m M -l meta/machinery \;'
+assert_reason "R-SCP: git@github.com:jikig-ai/soleur is OUR repo" "must include --milestone" \
+  'gh issue create -R git@github.com:jikig-ai/soleur --title t --body x'
+assert_reason "R-EMPTYM: an empty --milestone value is not a milestone" "must include --milestone" \
+  'gh issue create --title x --body y --milestone "" --label meta/machinery'
+assert_reason "R-TRUE: substitution TEXT is not body corpus" "names no user-visible consequence" \
+  'gh issue create --title x -m M --body "$(true Mandated-By: hr-foo)"'
+assert_reason "R-RAWAT: -f body=@x sends @x literally, it is no body file" "names no user-visible consequence" \
+  "gh api repos/jikig-ai/soleur/issues -f title=x -f 'body=@/tmp/soleur-no-such-body.md'"
+# ... and the literal it sends IS the body: a Mandated-By: line in it is real.
+assert "R-RAWAT2: the literal -f body=@… text is the corpus gh sends" "<none>" \
+  "gh api repos/jikig-ai/soleur/issues -f title=x -f 'body=@/tmp/j Mandated-By: wg-x'"
+assert_reason "R-COMMA: an api labels[]= value is one label, compared exactly" "names no user-visible consequence" \
+  "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=meta/machinery,x'"
+assert_reason "R-VARPATH: a \$-valued --body-file names the expansion, not a relative path" "does not expand" \
+  'gh issue create --title x --body-file "$F" --milestone M'
+assert "R-DUP: two identical justified substitutions are two allowed filings" "<none>" \
+  "a=\$(gh api repos/jikig-ai/soleur/issues -f title=x -f 'labels[]=meta/machinery'); b=\$(gh api repos/jikig-ai/soleur/issues -f title=x -f 'labels[]=meta/machinery')"
+assert "R-PULLS: a \$-valued --jq on a pulls POST is not an issues endpoint" "<none>" \
+  'gh api repos/jikig-ai/soleur/pulls -X POST -f title=x -f head=b -f base=main --jq "$Q"'
+assert "R-DOTSEMI: a ..; segment is a dot segment" "deny" \
+  "gh api 'repos/jikig-ai/soleur/labels/..;/issues' -X POST -f title=x"
+# The body corpus agents actually use (agent-native F1: counted twice before).
+assert "R-HDBODY: --body \"\$(cat <<'EOF' …)\" carrying exit 2 allows" "<none>" \
+  $'gh issue create --title "Login flake" --milestone "Post-MVP / Later" --body "$(cat <<\'BODY\'\nLogin flakes.\nUser-Impact: login page flakes\nFix-Size: 300 lines / 5 files\nBODY\n)"'
+assert "R-HDBODY-API: -f body=\"\$(cat <<'EOF' …)\" carrying exit 2 allows" "<none>" \
+  $'gh api repos/jikig-ai/soleur/issues -f title=x -f body="$(cat <<\'EOF\'\nUser-Impact: the login page\nFix-Size: 300 lines / 5 files\nEOF\n)"'
+assert "R-READ: read … B <<EOF binds the heredoc to \$B" "<none>" \
+  $'read -r -d \'\' B <<\'EOF\'\nUser-Impact: the docs page\nFix-Size: 200 lines / 5 files\nEOF\ngh issue create --title x --body "$B" -m M'
+assert "R-BT-OK: a justified filing in backticks allows" "<none>" "echo \`gh issue create --title x --body y$K\`"
+assert "R-EVAL-OK: a justified filing in an eval string allows" "<none>" "eval \"gh issue create --title x --body y$K\""
+# The floor counts only what it can see: a decoy in quotes cannot cancel it.
+FS_ALLOW_LEXER_INCIDENT=1 assert "R-DECOY: a quoted decoy cannot offset a real top-level filing" "deny" \
+  $'false && : "$(gh issue create --title t -m M -l meta/machinery)"\ngh issue create --title x --body y'
+FS_ALLOW_LEXER_INCIDENT=1 assert_reason "R-FLOORMSG: a comment the old detector reads names that detector" \
+  "older filing detector" 'git log --oneline -1 # ; gh issue create'
+# A forced lexer failure plus a split word still reaches the indicator.
+_deep17='gh issue c'"''"'reate --title x --body y'
+for _ in $(seq 1 17); do _deep17=": \$($_deep17)"; done
+FS_ALLOW_LEXER_INCIDENT=1 assert "R-SPLIT: a bound trip + c''reate is not an allow" "ask" "$_deep17"
+_padapi="$(printf '/repos/%.0s' $(seq 1 10000))"
+assert "R-PAD: 60 KB of /repos/ padding does not stall the lexer past a \$EP filing" "deny" \
+  "gh api -H \"X-Pad: ${_padapi}!\" \"\$EP\" -X POST -f title=x"
+# The stash guard runs before the filing gate's ask.
+assert_reason "R-STASH: git stash is denied even where the filing gate would ask" "git stash is not allowed" \
+  "git stash; $_deep17"
+# decision_of's lexer-incident check can fire (its positive control).
+_pc_sb="$(mktemp -d)"
+cp -R -- "$SCRIPT_DIR/lib" "$_pc_sb/lib"; cp -- "$HOOK" "$_pc_sb/guardrails.sh"; chmod -R u+w "$_pc_sb"
+printf '#!/usr/bin/env perl\nlocal $/; <STDIN>; print "E\\0exit2\\0"; exit 2;\n' > "$_pc_sb/lib/filing-shape.pl"
+_pc_got="$(HOOK="$_pc_sb/guardrails.sh"; decision_of 'URL=$(gh issue create --title x --body y)')"
+TOTAL=$((TOTAL + 1))
+if [[ "$_pc_got" == "<lexer-failure-incident>" ]]; then
+  PASS=$((PASS + 1)); echo "PASS: decision_of reds a row whose lexer failed (positive control)"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: decision_of reds a row whose lexer failed (positive control)"; echo "  got: $_pc_got"
+fi
+rm -rf "$_pc_sb"
+
+# ---------------------------------------------------------------------------
 # AC6b — ASSERTION-COUNT FLOOR.
 #
 # This suite had none. A run that executed ZERO assertions exited 0 and read as
@@ -1533,8 +1642,10 @@ fi
 # api refusal spellings, gh issue create -F, the perl-absent fallback) = 195.
 # + 128 #9089 lexer rows (the D/P verdict rows and their refusal twins, 11
 # failure-path shim rows, the incident-payload row, F-noperl-sub, D53, the
-# 300 KiB row and the 12-deep tripwire) = 323.
-MIN_ASSERTIONS=323
+# 300 KiB row and the 12-deep tripwire) = 323, + 32 review-round rows (one
+# per reproduced finding, the R-RAWAT2 counter-row, and decision_of's
+# positive control) = 355.
+MIN_ASSERTIONS=355
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2

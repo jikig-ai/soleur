@@ -44,7 +44,7 @@ describe("filingShape() matches the shared corpus (ADR-256)", () => {
   });
 
   afterAll(() => {
-    expect(ran).toBeGreaterThanOrEqual(100);
+    expect(ran).toBeGreaterThanOrEqual(115);
     expect([...classes].sort()).toEqual(["api", "create", "none"]);
   });
 });

@@ -747,16 +747,23 @@ window).
   - function wrappers (`f(){ gh "$@"; }; f issue create …`);
   - `source <(echo 'gh …')`;
   - `python3 -c`/`node -e` running `gh` (security #14).
-- **Computed or escaped command words:** decoding `$'…'` escapes (`$'\x67h'`), brace expansion,
-  globs in `argv[1..2]`, and `$(printf gh)`.
+- **Computed or escaped command words:** brace expansion, globs in `argv[1..2]`, `$(printf gh)`,
+  `G=gh; $G …`, and aliases. (`$'…'` decoding was added in the review round.)
+- **Expansion-time evaluation (review round):** `${x@P}`, `PS4`, and arithmetic evaluation of an
+  array subscript, each of which runs a command substitution bash evaluates late.
+- **Positional re-dispatch and other shells (review round):** `sh -c 'gh "$@"' _ issue create …`
+  and `fish -c`.
+- **`--body-file` TOCTOU (review round):** the gate reads the file at hook time; the filing reads
+  it when `gh` runs, so a command that rewrites it in between is credited with the earlier text.
 - **String runners beyond shells and `eval`:** `trap`, `watch`, `su`/`runuser -c`, `script -c`,
-  `env -S`, a shell fed a heredoc or here-string, `ssh host STR`, `bash script.sh`,
-  `printf … | bash`, and `parallel ::: "…"`.
+  `env -S`, a shell fed a heredoc or here-string (`bash <<EOF`), `ssh host STR`, `bash script.sh`,
+  `printf … | bash` (any pipe into a shell), and `parallel ::: "…"`.
 - **`xargs`/`parallel` completed from stdin.**
 - **Other gates and lints:**
   - `.claude/hooks/follow-through-directive-gate.sh`;
   - the `MUTATING_METHOD` spellings in `scripts/lint-workflow-issue-write-scope.py`.
-- **Cron mirror exits:** `labelTokenEquals` and the body loop are not value-position-aware.
+- **Cron mirror exits:** the body loop is not value-position-aware (`labelTokenEquals` now
+  matches an api `labels[]=` value exactly, since the review round).
   `argumentInjectionReason` does not refuse `--input <file>` to non-issue endpoints.
 - **The endpoint owner is not read:** an api-form POST to another owner's repo is not exempt.
 - **The pre-existing quadratic `strip_command_bodies`** (`_incidents_heredoc_re`, used by 13
@@ -1128,6 +1135,9 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
   - `_api_pl` and the CLASS 1 grep are still present, each commented as the floor.
 - [x] **AC9.** `grep -c 'const ENDPOINT_RE' apps/web-platform/server/cron-filing-deny-marker.ts`
   returns 0, and the file imports `ISSUES_COLLECTION_RE`.
+  > **Amended 2026-09-28 (review round):** it now imports `issuesEndpointToken`, the mirror's
+  > endpoint finder, rather than the bare regex, so the marker and the mirror agree on WHICH
+  > token is the endpoint (a `$EP` value and a `#`/`?` suffix included).
 - [ ] **AC10.** All of these hold:
   - `python3 scripts/lint-guard-contract.py` passes on this plan;
   - `bash plugins/soleur/test/c4-count-parity.test.sh` passes;

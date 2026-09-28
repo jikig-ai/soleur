@@ -107,5 +107,12 @@
  {"id": "C105", "tokens": ["gh", "api", "-X", "POST", "repos/o/r/pulls/1/comments", "-f", "body=x"], "shape": "none", "why": "pull comment"},
  {"id": "C106", "tokens": ["echo", "gh", "api", "repos/jikig-ai/soleur/issues", "-X", "POST"], "shape": "none", "why": "tokens[0] is echo"},
  {"id": "C107", "tokens": ["git", "status"], "shape": "none", "why": "not gh"},
- {"id": "C108", "tokens": ["gh", "pr", "list"], "shape": "none", "why": "read"}
+ {"id": "C108", "tokens": ["gh", "pr", "list"], "shape": "none", "why": "read"},
+ {"id": "C109", "tokens": ["gh", "api", "-iX", "POST", "$EP"], "shape": "api", "why": "-iX takes the next word, so $EP is the endpoint"},
+ {"id": "C110", "tokens": ["gh", "api", "--jq", ".x", "$EP", "-X", "POST"], "shape": "api", "why": "a --jq value is skipped; $EP is the endpoint"},
+ {"id": "C111", "tokens": ["gh", "api", "repos/o/r/labels/..;/issues", "-X", "POST"], "shape": "api", "why": "a ..; (matrix-param) segment is a dot segment"},
+ {"id": "C112", "tokens": ["gh", "api", "repos/o/r/pulls", "-X", "POST", "-f", "title=x", "--jq", "$Q"], "shape": "none", "why": "a $-valued --jq is not the endpoint (M5)"},
+ {"id": "C113", "tokens": ["gh", "api", "repos/o/r/pulls", "--input", "$F", "-X", "POST"], "shape": "none", "why": "an --input value is not the endpoint"},
+ {"id": "C114", "tokens": ["gh", "api", "REPOS/o/r/labels/../issues", "-X", "POST"], "shape": "none", "why": "paths are case-sensitive on both sides"},
+ {"id": "C115", "tokens": ["gh", "issue", "-R", "git@github.com:o/r", "create"], "shape": "create", "why": "scp-form -R value skipped"}
 ]

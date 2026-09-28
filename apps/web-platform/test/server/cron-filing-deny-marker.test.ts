@@ -86,6 +86,17 @@ describe("countFilingDenials", () => {
     expect(r.commands).toEqual(["gh api repos/o/r/issues"]);
   });
 
+  // #9089 review — the head uses the gate's own endpoint finder, so every
+  // endpoint spelling filingShape() classifies is headed, not left empty.
+  it.each([
+    ["gh api repos/jikig-ai/soleur/labels/../issues -X POST -f title=x", "gh api repos/jikig-ai/soleur/labels/../issues"],
+    ["gh api $EP -X POST -f title=x", "gh api $EP"],
+  ])("heads a dot-segment or bare-variable endpoint (%s)", (command, head) => {
+    const r = countFilingDenials([{ tool_name: "Bash", tool_input: { command } }]);
+    expect(r.count).toBe(1);
+    expect(r.commands).toEqual([head]);
+  });
+
   it("returns 0 on an empty, absent, or malformed array", () => {
     expect(countFilingDenials([]).count).toBe(0);
     expect(countFilingDenials(undefined).count).toBe(0);

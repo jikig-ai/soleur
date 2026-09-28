@@ -814,10 +814,9 @@ When filing:
   untrusted finding text (diffs, agent output) cannot shell-interpolate.
   **Run `gh issue create` as its OWN Bash call, with an ABSOLUTE `--body-file` path and no other
   command in front of it.** The guardrails filing gate reads the body file (a `$VAR` path it
-  cannot expand is refused) and tokenizes the whole command with `xargs` — a heredoc or an
-  apostrophe elsewhere in the same call breaks the tokenizer, the `--label meta/machinery`
-  you passed becomes invisible, and the deny message asks you to add the flag you just added
-  (#7941/PR #8070, twice in one session).
+  cannot expand is refused) and credits each filing only with flags on ITS OWN argv, as a
+  shell lexer reads it (ADR-256): a flag on another command in the call is not that filing's
+  exit, and an unparseable call is refused or asked about (#7941/PR #8070).
 
 **Auto-wire deferred-scope-outs into the follow-through sweeper.** When a
 scope-out passes the CONCUR gate AND its `Re-eval by:` trigger is a concrete

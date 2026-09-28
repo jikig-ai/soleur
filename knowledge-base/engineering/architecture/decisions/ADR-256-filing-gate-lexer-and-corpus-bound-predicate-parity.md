@@ -41,7 +41,10 @@ tables. Its grammar sketch, the gh version the tables came from, and the `--trac
 are in the file header.
 
 `guardrails.sh` unions the lexer's findings with main's CLASS 1 grep and `_api_pl` (made linear),
-each counted per shape. A shape whose floor count exceeds the lexer's count denies. **The floor may
+each counted per shape. The floor reads `$SCAN`, which blanks quotes and heredoc bodies, so it is
+compared only with the lexer records marked `vis=1` (outside quotes, heredoc bodies and runner
+strings) — otherwise a quoted decoy filing would offset a real top-level one. A shape whose floor
+count exceeds that visible count denies. **The floor may
 be removed only after `bash .claude/hooks/lib/filing-shape.test.sh --differential <base>` has run
 clean — zero oracle misses, zero prose filings — on three consecutive filing-gate changes.**
 
@@ -51,7 +54,7 @@ The predicate ("create" / "api" / none over a dequoted token list) has three con
 
 - `filing_shape` in `filing-shape.pl` (the hook);
 - `filingShape` in `cron-bash-allowlist-hook.mjs` (the cron mirror);
-- the cron deny marker, which imports the mirror's `ISSUES_COLLECTION_RE` instead of copying it.
+- the cron deny marker, which imports the mirror's `issuesEndpointToken` instead of copying it.
 
 The Perl and JS copies are bound only by `.claude/hooks/lib/filing-shape-corpus.json`, which BOTH
 `filing-shape.test.sh` and `apps/web-platform/test/server/inngest/filing-shape-corpus-parity.test.ts`
@@ -68,6 +71,7 @@ to the lexing of the command, with one exception:
 |---|---|
 | main's floor sees more filings than the lexer | **deny** — `TOK_MSG` when the cause is the agent's own unbalanced quoting, else "run the filing as a plain top-level command" |
 | exit 2 (unbalanced quote, unterminated substitution, NUL) on a command matching the filing indicator | **deny** with `TOK_MSG` |
+| | *The indicator is computed on the command with quotes and backslashes removed and continuations joined, so `gh issue c''reate` cannot split the word past it.* |
 | any other failure (a tripped bound, a crash, a truncated stream, no perl) on a filing-indicated command | **ask**, as ADR-157 prescribes |
 | no filing indicator | allow |
 
@@ -75,7 +79,8 @@ The deny arms cover only commands that are filing-shaped, and their repair is ne
 ADR-157's bricking concern does not apply to them. The ADR-157 clauses still hold on the ask arm:
 the kill switch `SOLEUR_DISABLE_HOOK_INPUT_ASK=1` turns the ask into an allow, and the incident
 `guardrails-filing-lexer-failure` carries only a cause enum (`exit2`, `depth`, `budget`, `alarm`,
-`crash`, `noperl`, `trunc`, `floor-only`), never payload content.
+`records`, `crash`, `noperl`, `trunc`, `floor-only`), never payload content. `records` is the
+32-record cap; `crash` is any die inside the lexer, which is reported on stdout as `E\0crash\0`.
 
 **Unverified:** `guardrails.sh` also runs under Codex (`.codex/config.toml`) and Devin
 (`.devin/config.json`). Whether those harnesses honor `ask` has not been measured; see
@@ -86,11 +91,13 @@ there is no ask state.
 
 - Every Bash command pays one more perl fork (measured +5-8 ms on a 69-76 ms hook). The lexer is
   bounded well inside the non-blocking 10 s hook timeout: depth 16, one global character budget of
-  8 × input + 64 KiB charged by every frame, memoized re-lexing, and `alarm 2`.
+  8 × input + 64 KiB charged by every frame (output bytes included), memoized re-lexing, at most
+  32 records, and `alarm 2`.
 - Deliberate over-fire: an unquoted `echo gh issue create`, `bash -c 'echo gh issue create'`,
   `man gh issue create` and `a=(gh issue create)` are classified as filings. Each errs toward gating.
-- The Non-Goals (other filing routes such as GraphQL and `curl`, computed command words, string
-  runners beyond shells and `eval`, stdin-completed `xargs`) are tracked in the residual follow-up
+- The Non-Goals (other filing routes such as GraphQL and `curl`, computed command words and
+  aliases, expansion-time evaluation such as `${x@P}`, string runners beyond shells and `eval`
+  including a pipe into a shell, stdin-completed `xargs`, and the `--body-file` read-time gap) are tracked in the residual follow-up
   issue filed at ship.
 
 ## Alternatives Considered

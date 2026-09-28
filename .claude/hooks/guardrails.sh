@@ -112,8 +112,8 @@ fi
 
 # Derive a quote/heredoc-stripped view of the command ONCE (one perl fork per
 # Bash invocation, plus the filing lexer's fork and, for a `gh api` command, the
-# floor's -- see the filing gate below). PHRASE-detecting
-# gates (require-milestone, block-stash) scan $SCAN so a commit whose MESSAGE
+# floor's -- see the filing gate below). PHRASE-detecting gates (block-stash,
+# and the filing gate's FLOOR -- its verdict is the lexer's) scan $SCAN so a commit whose MESSAGE
 # documents `gh issue create` / `git stash` is not mistaken for the real
 # command (#5192). Gates that fire on `git commit` itself keep scanning
 # $COMMAND — a commit that mentions "git commit" in its body still IS a commit.
@@ -463,6 +463,27 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
   fi
 fi
 
+# guardrails:block-stash-in-worktrees — Block git stash unconditionally
+# Unconditional: CWD detection is unreliable in subagent contexts where the shell
+# CWD is a worktree but no explicit "cd" prefix appears in the command. Blocking
+# git stash everywhere is safe — AGENTS.md requires "commit WIP first" and there
+# is no legitimate automated use case for git stash in this repo.
+# It runs BEFORE the filing gate: that gate can end in an `ask` (a lexer
+# failure on a filing-shaped command), and approving that ask must never also
+# approve a `git stash` riding on the same line (#9089 review).
+# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
+# commit message documenting "never git stash" is not mistaken for one (#5192).
+if grep -qE '(^|&&|\|\||;)\s*git\s+stash' <<<"$SCAN"; then
+  emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
+  jq -n '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",      permissionDecision: "deny",
+      permissionDecisionReason: "BLOCKED: git stash is not allowed. Use git show <commit>:<path> to inspect old code, or commit WIP first."
+    }
+  }'
+  exit 0
+fi
+
 # guardrails:require-milestone — Block gh issue create without --milestone
 # guardrails:require-filing-justification — a filing must name who it is for.
 #
@@ -478,16 +499,22 @@ fi
 #       another command on the same line can no longer supply them. The
 #       predicate it applies is bound to filingShape() in
 #       apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs by the
-#       shared corpus lib/filing-shape-corpus.json. Debug a false deny with
-#       `perl .claude/hooks/lib/filing-shape.pl --trace <<<'<command>'`.
+#       shared corpus lib/filing-shape-corpus.json. Debug a false deny by
+#       saving the command to a file and running
+#       `perl .claude/hooks/lib/filing-shape.pl --trace < cmd.txt` (never paste
+#       it into a double-quoted argument: its substitutions would run).
 #
 #   (b) THE FLOOR — main's detectors over $SCAN (commit bodies/heredocs and
 #       quoted spans blanked, #5192): the CLASS 1 grep for `gh issue create`
 #       and _api_pl for a `gh api …/issues` POST. They stay so nothing this
 #       change does, and no way it fails, lets through a filing main denied
 #       (PR7). Each reports a COUNT per shape; a shape whose floor count is
-#       above the lexer's is a floor-only hit and denies. ADR-256 records when
-#       the floor may go (three consecutive clean --differential runs).
+#       above the lexer's count of VISIBLE records (`vis=1`: not inside quotes, a
+#       heredoc body or a runner string -- exactly what the floor can see) is a
+#       floor-only hit and denies. Counting only visible records is what stops a
+#       decoy filing inside quotes from cancelling a real one the lexer missed.
+#       ADR-256 records when the floor may go (three consecutive clean
+#       --differential runs).
 #
 # CLASS 4 of the filing surface: `gh api .../issues -X POST` creates an issue
 # without the word `create` anywhere. This repo has a DOCUMENTED instance of an
@@ -513,10 +540,14 @@ fi
 #   |                                                  | SOLEUR_DISABLE_HOOK_INPUT_ASK=1)  |
 #   | the indicator does not match                     | allow (main's non-filing verdict) |
 #
-# The indicator runs in `grep -E` on the raw command with `\`-newline
-# continuations joined -- never bash `[[ =~ ]]`, which is quadratic on a miss
-# (36 KB took 3.3 s, measured). One incident code carries the cause as an enum
-# and no payload (ADR-157 telemetry clause).
+# The indicator asks "could this be a gh filing?" of the raw command with its
+# `\`-newline continuations joined AND every quote and backslash deleted, so a
+# split word (`c''reate`, `iss""ues`, `g\h`) cannot hide it while a bound or a
+# syntax error keeps the lexer from answering: `gh` then `issue`, `issues` or
+# `api` as words. It runs in perl + `grep -E` -- never bash `[[ =~ ]]` or a
+# bash `${x//…}`, both quadratic here (36 KB took 3.3 s; 40k continuations took
+# 2.1 s, measured). One incident code carries the cause as an enum and no
+# payload (ADR-157 telemetry clause).
 _FS_PL="${BASH_SOURCE[0]%/*}/lib/filing-shape.pl"
 _FS_TOK_MSG="BLOCKED: the command could not be tokenized (unbalanced quoting); write the body to a file and pass --body-file"
 
@@ -564,7 +595,7 @@ if grep -qE 'gh\s+api\b' <<<"$SCAN"; then
       $cur .= $c;
     }
     push @seg, $cur;
-    my ($hits, $input) = (0, 0);
+    my $hits = 0;
     for my $s (@seg) {
       next unless $s =~ /gh\s+api\b/g;
       my $rest = substr($s, pos($s));
@@ -576,13 +607,12 @@ if grep -qE 'gh\s+api\b' <<<"$SCAN"; then
       next unless $ep;
       next unless $s =~ /(?:-X|--method)[\s=]*POST\b|--input(?:[\s=]|$)|-[fF][\s=]*title=|--(?:raw-)?field[\s=]+title=/;
       $hits++;
-      $input = 1 if $s =~ /--input(?:[\s=]|$)/;
     }
-    print "$hits $input";'
+    print $hits;'
   _api_rc=0
   _api_out="$(printf '%s' "$SCAN" | perl -0777 -ne "$_api_pl" 2>/dev/null)" || _api_rc=$?
-  if [[ "$_api_rc" == 0 && "$_api_out" =~ ^([0-9]+)\ [01]$ ]]; then
-    _fl_api="${BASH_REMATCH[1]}"
+  if [[ "$_api_rc" == 0 && "$_api_out" =~ ^[0-9]+$ ]]; then
+    _fl_api="$_api_out"
   elif grep -qE 'gh\s+api\b.*\brepos/[^[:space:]]+/issues' <<<"$SCAN" \
        && grep -qE '(-X|--method)[[:space:]=]*POST|--input|-[fF][[:space:]=]*title=|--(raw-)?field[[:space:]=]+title=' <<<"$SCAN"; then
     # perl unavailable or broken: a whole-command match that over-gates
@@ -616,7 +646,7 @@ if [[ -z "$_fs_cause" ]]; then
       3) _fs_cause="crash"
          if (( _fs_n >= 4 )) && [[ "${_fs_items[$((_fs_n - 4))]}" == "E" ]]; then
            case "${_fs_items[$((_fs_n - 3))]}" in
-             depth|budget|alarm) _fs_cause="${_fs_items[$((_fs_n - 3))]}" ;;
+             depth|budget|alarm|records) _fs_cause="${_fs_items[$((_fs_n - 3))]}" ;;
            esac
          fi ;;
       *) _fs_cause="crash" ;;
@@ -631,10 +661,17 @@ if [[ -z "$_fs_cause" ]]; then
         _fr_ctx+=("${_fs_items[$((_fi + 2))]}")
         _fr_nf+=("${_fs_items[$((_fi + 3))]}")
         _fr_off+=("$((_fi + 4))")
-        case "${_fs_items[$((_fi + 1))]}" in
-          create) _lex_create=$((_lex_create + 1)) ;;
-          api)    _lex_api=$((_lex_api + 1)) ;;
-        esac
+        # Only a record the floor could see offsets the floor's count.
+        _fs_v=0
+        for (( _fk = _fi + 4; _fk < _fi + 4 + ${_fs_items[$((_fi + 3))]}; _fk++ )); do
+          [[ "${_fs_items[$_fk]}" == "vis=1" ]] && _fs_v=1
+        done
+        if [[ "$_fs_v" == 1 ]]; then
+          case "${_fs_items[$((_fi + 1))]}" in
+            create) _lex_create=$((_lex_create + 1)) ;;
+            api)    _lex_api=$((_lex_api + 1)) ;;
+          esac
+        fi
         _fi=$((_fi + 4 + ${_fs_items[$((_fi + 3))]}))
       elif [[ "${_fs_items[$_fi]}" == "OK" ]] && (( _fi == _fs_n - 3 )); then
         _fs_ok=1; _fi=$((_fi + 1))
@@ -649,7 +686,8 @@ if [[ -n "$_fs_cause" ]]; then
   _lex_create=0; _lex_api=0; _fr_shape=()
 fi
 
-# Floor-only: main's detectors saw more filings of a shape than the lexer did.
+# Floor-only: main's detectors saw more filings of a shape than the lexer's
+# VISIBLE records account for.
 _fs_floor_only=0
 (( _fl_create > _lex_create || _fl_api > _lex_api )) && _fs_floor_only=1
 
@@ -657,15 +695,21 @@ if [[ -n "$_fs_cause" || "$_fs_floor_only" == 1 ]]; then
   _fs_c="${_fs_cause:-floor-only}"
   _fs_ind=0
   if [[ "$_fs_floor_only" == 0 ]]; then
-    grep -qE '\bgh\b.*(issue[^A-Za-z0-9_]+(create|new)|issues)' <<<"${COMMAND//$'\\\n'/}" && _fs_ind=1
+    _fs_src="$(printf '%s' "$COMMAND" | perl -0777 -pe 's/\\\n//g; tr/\x27"\\//d' 2>/dev/null)" \
+      || _fs_src="$COMMAND"
+    grep -qE '(^|[^A-Za-z0-9_-])gh([^A-Za-z0-9_-].*)?[^A-Za-z0-9_-](issues?|api)([^A-Za-z0-9_-]|$)' <<<"$_fs_src" && _fs_ind=1
   fi
   if [[ "$_fs_floor_only" == 1 || "$_fs_c" == "exit2" && "$_fs_ind" == 1 ]]; then
     emit_incident "guardrails-filing-lexer-failure" "deny" "cause=$_fs_c" ""
     if [[ "$_fs_c" == "exit2" ]]; then
       _fg_deny "wg-defer-only-after-inline-triage" "filing command could not be tokenized (unbalanced quoting)" "$_FS_TOK_MSG"
     fi
+    if [[ "$_fs_c" == "floor-only" ]]; then
+      _fg_deny "wg-defer-only-after-inline-triage" "filing seen only by the older detector" \
+        "BLOCKED: the older filing detector sees a gh issue create / gh api issues POST here that the filing lexer did not, so its exits cannot be read. If this is a filing, run it as a plain top-level command with an absolute --body-file path; if the match is prose (a comment, a message), reword it. Debug: save the command to a file and run perl .claude/hooks/lib/filing-shape.pl --trace < cmd.txt"
+    fi
     _fg_deny "wg-defer-only-after-inline-triage" "filing gate could not parse the command" \
-      "BLOCKED: the filing gate could not parse this command (${_fs_c}); run the filing as a plain top-level command with an absolute --body-file path."
+      "BLOCKED: the filing gate could not parse this command (${_fs_c}); run the filing as a plain top-level command with an absolute --body-file path. Debug: save the command to a file and run perl .claude/hooks/lib/filing-shape.pl --trace < cmd.txt"
   fi
   if [[ "$_fs_ind" == 1 ]]; then
     if [[ "${SOLEUR_DISABLE_HOOK_INPUT_ASK:-}" == "1" ]]; then
@@ -675,7 +719,7 @@ if [[ -n "$_fs_cause" || "$_fs_floor_only" == 1 ]]; then
       jq -n --arg c "$_fs_c" '{
         hookSpecificOutput: {
           hookEventName: "PreToolUse", permissionDecision: "ask",
-          permissionDecisionReason: ("COULD NOT VERIFY: the filing gate could not parse this command (" + $c + "), so it cannot tell whether it files a GitHub issue. Approve only if it does not file an issue. Debug with: perl .claude/hooks/lib/filing-shape.pl --trace <<< \"<command>\". Set SOLEUR_DISABLE_HOOK_INPUT_ASK=1 to suppress this prompt.")
+          permissionDecisionReason: ("COULD NOT VERIFY: the filing gate could not parse this command (" + $c + "), so it cannot tell whether it files a GitHub issue. Approve only if it does not file an issue. Debug: save the command to a file and run perl .claude/hooks/lib/filing-shape.pl --trace < cmd.txt. Set SOLEUR_DISABLE_HOOK_INPUT_ASK=1 to suppress this prompt.")
         }
       }'
       exit 0
@@ -688,7 +732,7 @@ fi
 _gate_one_filing() {
   local r="$1"
   local shape="${_fr_shape[$r]}" ctx="${_fr_ctx[$r]}" off="${_fr_off[$r]}" nf="${_fr_nf[$r]}"
-  local head="" repo="" has_repo=0 milestone=0 bodyfile="" has_bf=0 body="" has_body=0 bodyvar=0 varcorpus="" input=0
+  local head="" repo="" has_repo=0 milestone=0 bodyfile="" has_bf=0 body="" input=0
   local -a labels=()
   local k f
   for (( k = off; k < off + nf; k++ )); do
@@ -699,9 +743,7 @@ _gate_one_filing() {
       milestone=1) milestone=1 ;;
       label=*)     labels+=("${f#label=}") ;;
       bodyfile=*)  bodyfile="${f#bodyfile=}"; has_bf=1 ;;
-      body=*)      body="${f#body=}"; has_body=1 ;;
-      bodyvar=1)   bodyvar=1 ;;
-      varcorpus=*) varcorpus="${f#varcorpus=}" ;;
+      body=*)      body="${f#body=}" ;;
       input=1)     input=1 ;;
     esac
   done
@@ -717,8 +759,8 @@ _gate_one_filing() {
     *)        where='at top level' ;;
   esac
   [[ "$ctx" == backtick || "$ctx" == heredoc ]] && \
-    hint=" If that text is prose rather than a command, quote it: bash executes backticks and \$(…) in an unquoted heredoc."
-  local sfx=" Refused filing: \`${head}\` ${where}; add the exit inside that same command, on the gh invocation itself.${hint}"
+    hint=" If that text is prose rather than a command, quote it so bash does not run it: single quotes around backticks, and a quoted delimiter (<<'EOF') for a heredoc."
+  local sfx=" Refused filing: \`${head}\` ${where}. Its exit belongs to that same filing -- a flag on its own gh invocation, or a line in its own body -- not to another command on the line.${hint}"
 
   # Exempt issue creation targeting an EXTERNAL repo (--repo owner/name where
   # owner is not our org). The backlog-hygiene rule applies only to OUR
@@ -726,19 +768,16 @@ _gate_one_filing() {
   # THIS filing's last -R/--repo (gh keeps the last), normalized by the lexer
   # (scheme and host stripped, owner lowercased). A value holding `$` or a
   # backtick is never external: its owner is unknowable here.
-  local our=0 ext=0
-  if [[ "$has_repo" == 1 ]]; then
-    case "$repo" in
-      *'$'*|*'`'*) our=1 ;;
-      jikig-ai/*)  our=1 ;;
-      */*)         ext=1 ;;
-    esac
+  # EXEMPT ONLY a positively-identified OWNER/REPO whose owner is not ours:
+  # anything else -- an expansion, an unrecognized spelling -- stays gated.
+  if [[ "$has_repo" == 1 && "$repo" =~ ^([A-Za-z0-9-]+)/[A-Za-z0-9._-]+$ \
+        && "${BASH_REMATCH[1]}" != "jikig-ai" ]]; then
+    return 0
   fi
-  [[ "$our" == 1 || "$ext" == 0 ]] || return 0
 
   if [[ "$shape" == "create" && "$milestone" == 0 ]]; then
     _fg_deny "guardrails-require-milestone" "gh issue create must include --milestone" \
-      "BLOCKED: gh issue create must include --milestone. Default to 'Post-MVP / Later' for operational issues. Read knowledge-base/product/roadmap.md for feature issues.${sfx}"
+      "BLOCKED: gh issue create must include --milestone. Default to 'Post-MVP / Later' for operational issues. Read knowledge-base/product/roadmap.md for feature issues. The filing ALSO needs one of the three filing exits unless it already carries one: --label meta/machinery, a User-Impact: + Fix-Size: pair in the body, or a Mandated-By: line in the body.${sfx}"
   fi
 
   #   (1) INLINE-FIRST. Measure the fix. If it lands as <=100 changed lines AND
@@ -777,14 +816,19 @@ _gate_one_filing() {
   # The taxonomy is shared with the backfill classifier so the two cannot
   # drift. Unreadable => FAIL TOWARD GATING: a gate that silently stops
   # matching is indistinguishable from a gate that passed, which is the exact
-  # empty-telemetry-is-not-absence class this PR exists to remove.
-  local tax="${BASH_SOURCE[0]%/*}/lib/user-surface-taxonomy.txt" re=""
-  if [[ -r "$tax" ]]; then
-    re="$(grep -vE '^[[:space:]]*(#|$)' "$tax" | paste -sd'|' - || true)"
+  # empty-telemetry-is-not-absence class this PR exists to remove. Read ONCE
+  # per hook call, not once per filing (a padded command carries many).
+  local tax="${BASH_SOURCE[0]%/*}/lib/user-surface-taxonomy.txt" re
+  if [[ -z "${_FS_TAX_READ:-}" ]]; then
+    _FS_TAX_READ=1; _FS_TAX_RE=""
+    if [[ -r "$tax" ]]; then
+      _FS_TAX_RE="$(grep -vE '^[[:space:]]*(#|$)' "$tax" | paste -sd'|' - || true)"
+    fi
   fi
+  re="$_FS_TAX_RE"
   if [[ -z "$re" ]]; then
     _fg_deny "wg-defer-only-after-inline-triage" "user-surface taxonomy unreadable at ${tax}" \
-      "BLOCKED: the user-surface taxonomy could not be read at ${tax}. Failing toward gating rather than allowing an unchecked filing."
+      "BLOCKED: the user-surface taxonomy could not be read at ${tax}. Failing toward gating rather than allowing an unchecked filing.${sfx}"
   fi
 
   # --input sends the request body from a file or stdin, and gh then moves
@@ -807,10 +851,16 @@ _gate_one_filing() {
   # is why this is a field, never a grep of the command. `--label` is a cobra
   # StringSlice, so `--label meta/machinery,type/bug` is ordinary gh syntax:
   # split on commas and anchor each element between commas, so
-  # `foo/meta/machinery` still does not match.
+  # `foo/meta/machinery` still does not match. An api `labels[]=` field is ONE
+  # label sent verbatim (`labels[]=meta/machinery,x` is the label
+  # `meta/machinery,x`), so it must match exactly.
   local l
   for l in "${labels[@]+"${labels[@]}"}"; do
-    case ",${l}," in *,meta/machinery,*) pass=1 ;; esac
+    if [[ "$shape" == "api" ]]; then
+      [[ "$l" == "meta/machinery" ]] && pass=1
+    else
+      case ",${l}," in *,meta/machinery,*) pass=1 ;; esac
+    fi
   done
 
   # THE BODY CORPUS. Read `--body-file` when present, because that is the form
@@ -819,24 +869,26 @@ _gate_one_filing() {
   # GATING and names the path -- but ONLY WHEN THE BODY IS NEEDED: exit 1 is
   # decided from the labels alone, and the heredoc that WRITES the file is often
   # in the same Bash call, so it does not exist yet when this hook runs (FR7).
-  # Otherwise the corpus is THIS filing's last literal body (gh keeps the last).
-  # A body built from an expansion (`--body "$BODY"`) reads the variable corpus
-  # -- this command's heredoc bodies and literal assignment values -- never the
-  # whole command line, which another command's arguments could satisfy.
-  local corpus=""
+  # Otherwise the corpus is THIS filing's last body as the lexer resolved it:
+  # its literal text, the heredoc bodies drained inside it
+  # (`--body "$(cat <<'EOF' … EOF)"`), and the literal values of the variables
+  # it references -- never the whole command line, which another command's
+  # arguments could satisfy (filing-shape.pl header, BODY CORPUS).
+  local corpus="$body"
   if [[ "$has_bf" == 1 ]]; then
+    corpus=""
     if [[ "$bodyfile" != "-" && -r "$bodyfile" ]]; then
       corpus="$(cat -- "$bodyfile" 2>/dev/null || true)"
     elif [[ "$pass" == 0 ]]; then
       local rel=""
-      [[ "$bodyfile" != /* && "$bodyfile" != "-" ]] && \
+      if [[ "$bodyfile" == *'$'* || "$bodyfile" == *'`'* || "$bodyfile" == '~'* ]]; then
+        rel=" This gate does not expand \$VARIABLES or ~ in --body-file: pass a literal absolute path."
+      elif [[ "$bodyfile" != /* && "$bodyfile" != "-" ]]; then
         rel=" Pass an absolute path: a relative path resolves against the hook's working directory, not yours."
+      fi
       _fg_deny "wg-defer-only-after-inline-triage" "--body-file unreadable at ${bodyfile}" \
         "BLOCKED: --body-file names ${bodyfile}, which this gate cannot read, so the filing justification cannot be verified. Write the body file first (a separate step), then run gh issue create. Reading from stdin (-F -) is not supported here for the same reason.${rel}${sfx}"
     fi
-  elif [[ "$has_body" == 1 ]]; then
-    corpus="$body"
-    [[ "$bodyvar" == 1 ]] && corpus="${varcorpus}"$'\n'"${body}"
   fi
 
   # EXIT 3 — a rule MANDATES this filing. Same closed, human-gated vocabulary
@@ -872,7 +924,7 @@ _gate_one_filing() {
         [[ "$n" == 1 ]] && lw="line"
         [[ "$m" == 1 ]] && fw="file"
         _fg_deny "wg-defer-only-after-inline-triage" "fix-size ${n} lines / ${m} files is inside the inline threshold" \
-          "BLOCKED: Fix-Size: ${n} ${lw} / ${m} ${fw} is INSIDE the inline threshold (<=100 lines AND <=4 files, per ADR-131 which records it moving from <=30/<=2 to <=100/<=4). Fix it inline in this PR instead of filing. If the blocker is AUTHORITY rather than size -- an operator-only credential or a production decision -- say so with a Mandated-By: <rule-id> line, which is a different exit."
+          "BLOCKED: Fix-Size: ${n} ${lw} / ${m} ${fw} is INSIDE the inline threshold (<=100 lines AND <=4 files, per ADR-131 which records it moving from <=30/<=2 to <=100/<=4). Fix it inline in this PR instead of filing. If the blocker is AUTHORITY rather than size -- an operator-only credential or a production decision -- say so with a Mandated-By: <rule-id> line, which is a different exit.${sfx}"
       fi
       pass=1
     fi
@@ -885,7 +937,7 @@ _gate_one_filing() {
      && grep -qiE 'would have to choose|we lack|lack the numbers|no numbers|unknown values|do not have the numbers|lacking the numbers' <<<"$corpus"; then
     if ! grep -qiE 'Inputs-Derived:[[:space:]]*.*(workflow run|ci run|run [0-9]|log|telemetry|marker|measurement|probe|prior pr|pr [0-9]|dashboard|query)' <<<"$corpus"; then
       _fg_deny "wg-defer-only-after-inline-triage" "claims a missing-numbers blocker with no derivable-inputs source" \
-        "BLOCKED: this body claims the blocker is that the numbers are unknown. Before that becomes a filing, try to DERIVE them: add an Inputs-Derived: line naming a concrete source -- a workflow run, a log query, a telemetry marker, a measurement, or a prior PR. Measured precedent: a deferral blocked on choosing 19 timeout values was resolved in ~2 minutes from ten existing main runs."
+        "BLOCKED: this body claims the blocker is that the numbers are unknown. Before that becomes a filing, try to DERIVE them: add an Inputs-Derived: line naming a concrete source -- a workflow run, a log query, a telemetry marker, a measurement, or a prior PR. Measured precedent: a deferral blocked on choosing 19 timeout values was resolved in ~2 minutes from ten existing main runs.${sfx}"
     fi
   fi
 
@@ -901,24 +953,6 @@ _gate_one_filing() {
 for (( _fr = 0; _fr < ${#_fr_shape[@]}; _fr++ )); do
   _gate_one_filing "$_fr"
 done
-
-# guardrails:block-stash-in-worktrees — Block git stash unconditionally
-# Unconditional: CWD detection is unreliable in subagent contexts where the shell
-# CWD is a worktree but no explicit "cd" prefix appears in the command. Blocking
-# git stash everywhere is safe — AGENTS.md requires "commit WIP first" and there
-# is no legitimate automated use case for git stash in this repo.
-# scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
-# commit message documenting "never git stash" is not mistaken for one (#5192).
-if grep -qE '(^|&&|\|\||;)\s*git\s+stash' <<<"$SCAN"; then
-  emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
-  jq -n '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",      permissionDecision: "deny",
-      permissionDecisionReason: "BLOCKED: git stash is not allowed. Use git show <commit>:<path> to inspect old code, or commit WIP first."
-    }
-  }'
-  exit 0
-fi
 
 # All checks passed
 exit 0

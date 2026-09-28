@@ -102,20 +102,23 @@ function filingTaxonomyPath() {
 
 // Does any REAL label token in the (dequoted) segment carry `label`? Six
 // spellings — `--label v`, `-l v`, `--label=v`, `-l=v`, `-f labels[]=v`, and a
-// bare `labels[]=v` field — comma-split and comma-anchored so `foo/<label>` and
-// `<label>x` do not match. Shared by exit 1 (meta/machinery) and exit 0 (the
-// run-report directive) so the two exits cannot drift on syntax.
+// bare `labels[]=v` field. The `--label` forms are comma-split and
+// comma-anchored (a cobra StringSlice, so `--label a,b` is two labels, and
+// `foo/<label>` / `<label>x` do not match); a `labels[]=` field is ONE label,
+// sent verbatim, so `labels[]=meta/machinery,x` is the label
+// `meta/machinery,x` and is compared exactly (#9089). Shared by exit 1
+// (meta/machinery) and exit 0 (the run-report directive) so the two exits
+// cannot drift on syntax.
 export function labelTokenEquals(tokens, label) {
   const has = (v) => typeof v === "string" && `,${v},`.includes(`,${label},`);
+  const exact = (v) => typeof v === "string" && v === `labels[]=${label}`;
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     if ((t === "--label" || t === "-l") && has(tokens[i + 1])) return true;
     if (t.startsWith("--label=") && has(t.slice("--label=".length))) return true;
     if (t.startsWith("-l=") && has(t.slice("-l=".length))) return true;
-    if (/^(-f|--field|--raw-field)$/.test(t) &&
-        typeof tokens[i + 1] === "string" && tokens[i + 1].startsWith("labels[]=") &&
-        has(tokens[i + 1].slice("labels[]=".length))) return true;
-    if (t.startsWith("labels[]=") && has(t.slice("labels[]=".length))) return true;
+    if (/^(-f|--field|--raw-field)$/.test(t) && exact(tokens[i + 1])) return true;
+    if (exact(t)) return true;
   }
   return false;
 }
@@ -138,10 +141,24 @@ export function labelTokenEquals(tokens, label) {
 export const ISSUES_COLLECTION_RE =
   /(?<![A-Za-z0-9_])(?:repos\/[^/?#\s]+(?:\/[^/?#\s]+)?|repositories\/[0-9]+)\/issues(?:\/?(?:[?#].*)?|[$})][^/]*)$/;
 
-// A repos/…|repositories/… path with a `.`, `..` or `%2e` segment: gh (and
-// the API) normalizes it, so `labels/../issues` IS the issues collection.
-const DOT_SEGMENT_RE =
-  /(?<![A-Za-z0-9_])(?:repos|repositories)\/(?:[^?#\s]*\/)?(?:\.\.?|[^/?#\s]*%2e[^/?#\s]*)(?:[/?#]|$)/i;
+// A repos/…|repositories/… path with a `.` / `..` segment (matrix params
+// `;…` stripped) or a `%2e` segment: GitHub normalizes it, so
+// `labels/../issues` and `labels/..;/issues` ARE the issues collection.
+// LINEAR by construction: one boundary search per piece, then one split of the
+// tail after the FIRST occurrence (every later occurrence lies inside it). A
+// single regex here was quadratic (`repos/` × 16k took seconds, #9089 review).
+const REPOS_START_RE = /(?<![A-Za-z0-9_])(?:repos|repositories)\//;
+export function hasDotSegment(t) {
+  for (const piece of String(t).split(/[?#\s]/)) {
+    const m = REPOS_START_RE.exec(piece);
+    if (!m) continue;
+    for (const seg of piece.slice(m.index + m[0].length).split("/")) {
+      const bare = seg.replace(/;.*$/s, "");
+      if (bare === "." || bare === ".." || /%2e/i.test(seg)) return true;
+    }
+  }
+  return false;
+}
 
 // A whole token that is one unexpanded variable: its value is unknowable
 // here, so it leans toward gating.
@@ -180,11 +197,48 @@ function postSignal(tokens, i) {
   return FIELD_EXPANSION_RE.test(t);
 }
 
-function isIssuesEndpoint(t) {
-  if (ISSUES_COLLECTION_RE.test(t) || BARE_EXPANSION_RE.test(t)) return true;
+// gh api's value-taking flags (gh 2.101.0; the Perl copy's @API_VAL): a token
+// that is one of their values is never the endpoint.
+const API_VALUE_FLAGS = new Set(["--cache", "-F", "--field", "-H", "--header",
+  "--hostname", "--input", "-q", "--jq", "-X", "--method", "-p", "--preview",
+  "-f", "--raw-field", "-t", "--template"]);
+
+// The first positional argument after `api` — the endpoint gh routes.
+function apiEndpointArg(tokens) {
+  let j = tokens.indexOf("api");
+  if (j < 0) return undefined;
+  for (j += 1; j < tokens.length; j++) {
+    const a = tokens[j];
+    if (a === "--") return tokens[j + 1];
+    if (/^--[^=]+=/.test(a)) continue;
+    if (/^--./.test(a)) { if (API_VALUE_FLAGS.has(a)) j++; continue; }
+    const cl = /^-([A-Za-z].*)$/s.exec(a);
+    if (cl) {
+      for (let k = 0; k < cl[1].length; k++) {
+        if (!API_VALUE_FLAGS.has(`-${cl[1][k]}`)) continue;
+        if (k === cl[1].length - 1) j++; // the value is the next token
+        break;
+      }
+      continue;
+    }
+    return a;
+  }
+  return undefined;
+}
+
+// The token that makes this an issues-collection POST, or undefined. The
+// collection path and a dot-segment path count anywhere; an unexpanded value
+// leans toward gating only in the ENDPOINT position, so a `--jq "$Q"` or an
+// `--input "$F"` on a pulls POST is not an issues endpoint (#9089 review).
+export function issuesEndpointToken(tokens) {
+  const hit = tokens.find((t) => ISSUES_COLLECTION_RE.test(t) || hasDotSegment(t));
+  if (hit !== undefined) return hit;
+  const ep = apiEndpointArg(tokens);
+  if (typeof ep !== "string") return undefined;
+  if (BARE_EXPANSION_RE.test(ep)) return ep;
   // `"$B/issues"`: an expansion before the tail hides the repos/ prefix.
-  if (/[$\x60]/.test(t) && /(?:^|\/)issues\/?(?:[?#].*)?$/.test(t)) return true;
-  return DOT_SEGMENT_RE.test(t);
+  if (/[$\x60]/.test(ep) && /(?:^|\/)issues\/?(?:[?#].*)?$/.test(ep)) return ep;
+  return undefined;
 }
 
 export function filingShape(tokens) {
@@ -200,7 +254,7 @@ export function filingShape(tokens) {
   }
   if (pos[0] === "issue" && (pos[1] === "create" || pos[1] === "new")) return "create";
   if (pos[0] !== "api") return null;
-  if (!tokens.some(isIssuesEndpoint)) return null;
+  if (issuesEndpointToken(tokens) === undefined) return null;
   return tokens.some((_t, i) => postSignal(tokens, i)) ? "api" : null;
 }
 
@@ -433,10 +487,15 @@ export function splitSegments(command) {
     .filter(Boolean);
 }
 
-// Tokenize a single simple command respecting single/double quotes, so that a
-// quoted argument like `--jq '.[] | {n}'` is ONE token (its inner `|` is data,
-// not a shell pipe) and the leading-verb match is not fooled by quoting tricks.
-// Returns null on an unbalanced quote (→ caller denies).
+// Tokenize a single simple command the way bash does, so the tokens every check
+// below judges are the tokens gh receives: a quoted argument like
+// `--jq '.[] | {n}'` is ONE token (its inner `|` is data), a backslash escapes
+// the next character outside quotes (so `i\ssues` is `issues` and `title\=x`
+// is `title=x`) and inside double quotes only before `$` `\x60` `"` `\`, a
+// `#` that starts a word begins a comment (so `# --label meta/machinery` is
+// never a label token), and only space and tab separate words (bash does not
+// split on \f, \v or U+00A0; JS `\s` does). Returns null on an unbalanced
+// quote (→ caller denies).
 export function tokenize(segment) {
   const tokens = [];
   let cur = "";
@@ -444,14 +503,24 @@ export function tokenize(segment) {
   let sawAny = false;
   for (let i = 0; i < segment.length; i++) {
     const ch = segment[i];
-    if (quote) {
-      if (ch === quote) quote = null;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else cur += ch;
+      sawAny = true;
+    } else if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (ch === "\\" && /[$`"\\]/.test(segment[i + 1] ?? "")) cur += segment[++i];
       else cur += ch;
       sawAny = true;
     } else if (ch === "'" || ch === '"') {
       quote = ch;
       sawAny = true;
-    } else if (/\s/.test(ch)) {
+    } else if (ch === "\\") {
+      if (i + 1 < segment.length) cur += segment[++i];
+      sawAny = true;
+    } else if (ch === "#" && !cur && !sawAny) {
+      break; // a comment runs to the end of the segment
+    } else if (ch === " " || ch === "\t") {
       if (cur || sawAny) {
         tokens.push(cur);
         cur = "";
@@ -741,9 +810,9 @@ export function decide(input, allowPrefixes) {
         // repos/jikig-ai/soleur/` allowlist prefix, for filings and for any
         // other endpoint (#9089, security #11).
         if (tokens[0] === "gh" && tokens[1] === "api") {
-          const dotted = tokens.find((t) => DOT_SEGMENT_RE.test(t));
+          const dotted = tokens.find(hasDotSegment);
           if (dotted !== undefined)
-            return denyDecision(`gh api path with a dot segment: ${dotted.slice(0, 60)}`);
+            return denyDecision(`gh api path with a dot segment: ${dotted.slice(0, 60)} -- write the resolved path (no ".", ".." or %2e segment), which the allowlist then matches as written`);
         }
         // Match the allowlist against the TOKENIZED (dequoted) command, not the
         // raw segment — otherwise a quoted arg like `gh api 'repos/...'` fails

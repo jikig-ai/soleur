@@ -22,7 +22,7 @@
 > **Scoped exception — 2026-09-28 (#9089).** [ADR-256](./ADR-256-filing-gate-lexer-and-corpus-bound-predicate-parity.md)
 > carries this decision from the tool-call envelope to lexing the command in the guardrails filing
 > gate, with one exception to "never denies": on a filing-shaped command, an agent-fixable lexing
-> failure or a filing the older detectors see denies. Every other lexer failure asks, as here.
+> failure or a filing only the older detectors see denies. Every other lexer failure asks, as here.
 
 ## Context
 

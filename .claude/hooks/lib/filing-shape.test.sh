@@ -70,7 +70,7 @@ SH
         for (my $i = 0; $i < @a; $i++) {
           my $t = $a[$i];
           if ($t eq "-R" || $t eq "--repo") { $i++; next }
-          if ($t =~ /^-(?:X|-method)$/) { $method = $a[++$i]; next }
+          if ($t =~ /^-(?:i*X|-method)$/) { $method = $a[++$i]; next }
           if ($t =~ /^(?:-i*X=?|--method=)(.+)$/) { $method = $1; next }
           if ($t =~ /^--input(?:=|$)/) { $input = 1; $i++ if $t eq "--input"; next }
           if ($t =~ /^(?:-i*[fF]|--field|--raw-field)$/) { my $v = $a[++$i] // ""; $fields = 1; $title = 1 if $v =~ /^title=/; next }
@@ -120,6 +120,13 @@ SH
     mapfile -d '' toks < <(jq -j '.tokens[] | . + "\u0000"' <<<"$row")
     s=""; for t in "${toks[@]}"; do s+="${s:+ }$(tok_word "$t")"; done
     for w in "${WRAPPERS[@]}"; do CMDS+=("$(wrap "$w" "$s")"); COLS+=("$w"); KINDS+=(corpus); done
+    # A title-bearing twin of every api row, so ground truth (which requires a
+    # title or --input, as GitHub does) covers the ENDPOINT axis too: without
+    # it every endpoint-form row read as "no filing" and a weakened endpoint
+    # predicate could not show up as a miss (#9089 test-design review).
+    if [[ "$(jq -r '.shape' <<<"$row")" == api ]]; then
+      for w in "${WRAPPERS[@]}"; do CMDS+=("$(wrap "$w" "$s -f title=x")"); COLS+=("$w"); KINDS+=(corpus); done
+    fi
   done < <(jq -c '[.[] | select(has("id") and .shape != "none")] + ([.[] | select(has("id") and .shape == "none")] | .[:10]) | .[]' "$CORPUS")
   PROSE=(
     $'git commit -m "$(cat <<\'EOF\'\nfix: it\'s 1) done ( `x` $( "q"\ngh issue create --title x --body y\nEOF\n)"'
@@ -186,13 +193,19 @@ SH
       # Every flip must be EXPLAINED (AC5); an unexplained one fails the run.
       why="UNEXPLAINED"
       if [[ "$bd" == allow && "$pd" == deny ]]; then
+        # Explanations come from the COMMAND and ground truth, never from the
+        # lexer's own count (that made every over-gate self-certifying).
         if (( tf > 0 )); then why="oracle-truth filing"
         elif [[ "$cmd" == *"echo gh issue create"* || "$cmd" == *"echo \`echo gh"* ]]; then why="DC-2 over-fire"
-        elif (( lc > 0 )); then why="predicate errs toward gating (a POST signal with no title gh would send, or an unknowable \$/backtick value)"
+        elif [[ "$cmd" != *title=* && "$cmd" != *--input* ]]; then why="over-gate: a POST signal with no title field (GitHub rejects it; the predicate errs toward gating)"
+        elif [[ "$cmd" == *'`cat t`'* || "$cmd" == *'cat t\`'* || "$cmd" == *'-X$M'* || "$cmd" == *'-X=$M'* ]]; then why="over-gate: an unknowable \$/backtick value"
+        elif [[ "$cmd" == *'/..;/'* ]]; then why="policy deny: a dot-segment endpoint (servers normalize ..; differently)"
+        elif [[ "$cmd" == *'/issues title=x'* ]]; then why="over-gate: a bare title= positional (gh rejects the extra arg; corpus C51)"
+        elif [[ "$cmd" == *'repos/o/issues'* ]]; then why="over-gate: a one-segment repos/o/issues path (corpus C85)"
         fi
       elif [[ "$bd" == deny && "$pd" == allow ]]; then
         if [[ "$cmd" =~ (-m|--milestone)[[:space:]=] && "$cmd" == *meta/machinery* ]]; then why="justified filing (-m / machinery label)"
-        elif (( tf == 0 && lc == 0 )); then why="not a filing"
+        elif (( tf == 0 )); then why="not a filing (ground truth)"
         fi
       fi
       [[ "$why" == UNEXPLAINED ]] && unexplained=$((unexplained + 1))
@@ -233,7 +246,7 @@ fi
 PASS=0; FAIL=0; TOTAL=0
 
 # lex CMD -> the lexer's stream, parsed BY COUNT into lines:
-#   F <shape> <ctx> <field>|<field>…   (varcorpus= is shortened to its length)
+#   F <shape> <ctx> <field>|<field>…
 #   OK | E <cause>
 #   RC <n>
 lex() {
@@ -248,7 +261,6 @@ lex() {
         local -a fs=()
         for (( j = 0; j < nf; j++ )); do
           x="${it[$((i + 4 + j))]:-}"
-          [[ "$x" == varcorpus=* ]] && x="varcorpus#${#x}"
           fs+=("$x")
         done
         out+="F ${it[$((i + 1))]} ${it[$((i + 2))]} $(IFS='|'; echo "${fs[*]}")"$'\n'
@@ -303,7 +315,7 @@ while IFS= read -r row; do
   CLASSES[$want]=1
   if [[ "$got" == "$want" ]]; then pass "corpus $id ($want)"; else fail "corpus $id: $(jq -c '.tokens' <<<"$row")" "want: $want  got: $got"; fi
 done < <(jq -c '.[] | select(has("id"))' "$CORPUS")
-CORPUS_FLOOR=100
+CORPUS_FLOOR=115
 if (( CORPUS_RAN < CORPUS_FLOOR )); then
   printf 'FLOOR: only %s corpus rows executed, expected at least %s\n' "$CORPUS_RAN" "$CORPUS_FLOOR" >&2
   exit 1
@@ -367,8 +379,8 @@ want_shapes "D18b root --repo"               'gh --repo jikig-ai/soleur issue cr
 
 # Heredocs
 want_shapes "D21 filing after a heredoc opener, same line" $'cat <<\'EOF\' > b.md && gh issue create --title x --body-file b.md\nbody\nEOF' "create top"
-want_shapes "D27a unquoted heredoc runs \$(…)" $'cat <<EOF\n$(gh issue create --title x --body y)\nEOF' "create subst"
-want_shapes "D27b two heredocs on one line" $'cat <<A <<\'B\'\n$(gh issue create --title x --body y)\nA\n$(gh issue create --title q)\nB' "create subst"
+want_shapes "D27a unquoted heredoc runs \$(…)" $'cat <<EOF\n$(gh issue create --title x --body y)\nEOF' "create heredoc"
+want_shapes "D27b two heredocs on one line" $'cat <<A <<\'B\'\n$(gh issue create --title x --body y)\nA\n$(gh issue create --title q)\nB' "create heredoc"
 
 # Multiple filings and scope
 want_shapes "D29 top + bash -c"              "gh issue create --title a --body b$J; bash -c \"gh issue create --title x --body y\"" "create top,create shell-c"
@@ -382,64 +394,64 @@ want_shapes "D54 \$E-X POST in \$(…)"        "X=\$(gh api $EP \$E-X POST -f bo
 # Exact fields (Guard 2: a filing's exits come from its OWN argv)
 want_lex "D24 --repo of another command is not this filing's" \
   'gh issue list --repo cli/cli && gh issue create --title x --body y' \
-  'F create top head=gh issue create|body=y'
+  'F create top head=gh issue create|body=y|vis=1'
 want_lex "D25 --milestone of another command is not this filing's" \
   'gh issue list --milestone x && gh issue create --title x --body y --label meta/machinery' \
-  'F create top head=gh issue create|label=meta/machinery|body=y'
+  'F create top head=gh issue create|label=meta/machinery|body=y|vis=1'
 want_lex "D26 --label of another command is not this filing's" \
   "gh issue list --label meta/machinery && gh api $EP -X POST -f title=x" \
-  "F api top head=gh api $EP"
+  "F api top head=gh api $EP|vis=1"
 want_lex "D35 bash -c body is the literal body" \
   'echo "User-Impact: docs page Fix-Size: 200 lines / 5 files"; bash -c "gh issue create --title x --body y --milestone M"' \
   'F create shell-c head=gh issue create|milestone=1|body=y'
 want_lex "D36 -mx as a --title VALUE is not a milestone" \
   'gh issue create --title -mx --body y --label meta/machinery' \
-  'F create top head=gh issue create|label=meta/machinery|body=y'
+  'F create top head=gh issue create|label=meta/machinery|body=y|vis=1'
 want_lex "D37 --label=… as a --body VALUE is not a label" \
   'gh issue create --title x --body --label=meta/machinery --milestone M' \
-  'F create top head=gh issue create|milestone=1|body=--label=meta/machinery'
+  'F create top head=gh issue create|milestone=1|body=--label=meta/machinery|vis=1'
 want_lex "D38 a \$-valued --repo stays verbatim" \
   'gh issue create --repo "$OWNER/soleur" --title x --body y' \
-  'F create top head=gh issue create|repo=$OWNER/soleur|body=y'
+  'F create top head=gh issue create|repo=$OWNER/soleur|body=y|vis=1'
 want_lex "D40 bare \$EP endpoint" \
   'EP=repos/jikig-ai/soleur/issues; gh api "$EP" -X POST -f title=x' \
-  'F api top head=gh api $EP'
-want_lex "D44 bodyvar marks a \$-valued body" \
+  'F api top head=gh api $EP|vis=1'
+want_lex "D44 a \$B body with no assignment in view has an empty corpus" \
   'echo "Mandated-By: wg-x" >/dev/null; gh issue create --title x --body "$B" -m M' \
-  'F create top head=gh issue create|milestone=1|body=$B|bodyvar=1|varcorpus#10'
+  'F create top head=gh issue create|milestone=1|body=|vis=1'
 want_lex "D45 find -exec cut at \\;" \
   'find /dev/null -maxdepth 0 -exec gh issue create --title x --body y -m M \; -exec echo --label meta/machinery \;' \
-  'F create top head=gh issue create|milestone=1|body=y'
+  'F create top head=gh issue create|milestone=1|body=y|vis=1'
 want_lex "D46 the LAST --body wins" \
   'gh issue create --title x --body "Mandated-By: wg-x" --body y -m M' \
-  'F create top head=gh issue create|milestone=1|body=y'
+  'F create top head=gh issue create|milestone=1|body=y|vis=1'
 want_lex "D47 api body=@file is a body file" \
   "gh api $EP -f title=x -F 'body=@/tmp/j Mandated-By: wg-x'" \
-  "F api top head=gh api $EP|bodyfile=/tmp/j Mandated-By: wg-x"
+  "F api top head=gh api $EP|bodyfile=/tmp/j Mandated-By: wg-x|vis=1"
 want_lex "D48a labels[]= in a create --title is not a label" \
   "gh issue create --title 'labels[]=meta/machinery' --body y -m M" \
-  'F create top head=gh issue create|milestone=1|body=y'
+  'F create top head=gh issue create|milestone=1|body=y|vis=1'
 want_lex "D48b create -F labels[]= is a body file" \
   "gh issue create --title x -F 'labels[]=meta/machinery' -m M" \
-  'F create top head=gh issue create|milestone=1|bodyfile=labels[]=meta/machinery'
+  'F create top head=gh issue create|milestone=1|bodyfile=labels[]=meta/machinery|vis=1'
 want_lex "D49a -R owner is lowercased" \
   'gh issue create -R JIKIG-AI/soleur --title x --body y' \
-  'F create top head=gh issue create|repo=jikig-ai/soleur|body=y'
+  'F create top head=gh issue create|repo=jikig-ai/soleur|body=y|vis=1'
 want_lex "D49b -R host prefix stripped" \
   'gh issue create -R github.com/jikig-ai/soleur --title x --body y' \
-  'F create top head=gh issue create|repo=jikig-ai/soleur|body=y'
+  'F create top head=gh issue create|repo=jikig-ai/soleur|body=y|vis=1'
 want_lex "D49c -R URL stripped" \
   'gh issue create -R https://github.com/jikig-ai/soleur --title x --body y' \
-  'F create top head=gh issue create|repo=jikig-ai/soleur|body=y'
+  'F create top head=gh issue create|repo=jikig-ai/soleur|body=y|vis=1'
 want_lex "api labels[]= field is a label, --input is recorded" \
   "gh api $EP --input b.json -f 'labels[]=meta/machinery'" \
-  "F api top head=gh api $EP|label=meta/machinery|input=1"
+  "F api top head=gh api $EP|label=meta/machinery|input=1|vis=1"
 want_lex "the api head is cut at ? and #" \
   "gh api 'repos/o/r/issues?x=1#f' -X POST -f title=x" \
-  'F api top head=gh api repos/o/r/issues'
+  'F api top head=gh api repos/o/r/issues|vis=1'
 want_lex "-mX attached milestone and -l=… label" \
   'gh issue create -mM -l=meta/machinery --title x' \
-  'F create top head=gh issue create|milestone=1|label=meta/machinery'
+  'F create top head=gh issue create|milestone=1|label=meta/machinery|vis=1'
 
 # Must-PASS prose (PR3): exit 0, OK, no filing.
 BODY_HOSTILE=$'fix: it\'s done, see 1) and an unclosed ( plus `code` and a literal $( and a " quote'
@@ -468,26 +480,88 @@ want_prose "<<< here-string is a redirection" 'grep -q x <<<"gh issue create --t
 want_prose "2>&1 and >&2 are not separators" 'gh issue list 2>&1 >&2 | head -1'
 
 # Filings that pass (the verdict is guardrails.test.sh's; here: they are seen)
-want_lex "P10 bodyvar with a heredoc variable corpus" \
+want_lex "P10 --body \"\$BODY\" reads the heredoc bound to BODY" \
   $'BODY=$(cat <<\'EOF\'\nUser-Impact: the docs page\nFix-Size: 200 lines / 5 files\nEOF\n); gh issue create --title x --body "$BODY" --milestone "Post-MVP / Later"' \
-  'F create top head=gh issue create|milestone=1|body=$BODY|bodyvar=1|varcorpus#67'
-# ... and that corpus is the heredoc body plus the assignment value, not the
-# other commands' text (security #5).
-_vc="$(printf '%s' $'BODY=$(cat <<\'EOF\'\nUser-Impact: the docs page\nFix-Size: 200 lines / 5 files\nEOF\n); echo Mandated-By: wg-x; gh issue create --title x --body "$BODY" -m M' \
-  | perl "$PL" 2>/dev/null | tr '\0' '\n' | sed -n 's/^varcorpus=//p;/^Fix-Size/p')"
-if [[ "$_vc" == *"User-Impact: the docs page"* && "$_vc" == *"Fix-Size: 200 lines / 5 files"* && "$_vc" != *"Mandated-By"* ]]; then
-  pass "P10b varcorpus = heredoc body + assignment values, never another command's args"
-else
-  fail "P10b varcorpus = heredoc body + assignment values" "$_vc"
-fi
+  $'F create top head=gh issue create|milestone=1|body=User-Impact: the docs page\nFix-Size: 200 lines / 5 files\n|vis=1'
+# ... and never another command's text (security #5): the echo's Mandated-By
+# is not in the corpus.
+want_lex "P10b the body corpus is the variable's value, never another command's args" \
+  $'BODY=$(cat <<\'EOF\'\nUser-Impact: the docs page\nEOF\n); echo Mandated-By: wg-x; gh issue create --title x --body "$BODY" -m M' \
+  $'F create top head=gh issue create|milestone=1|body=User-Impact: the docs page\n|vis=1'
 want_shapes "P14a justified in \$(…)"    "URL=\$(gh issue create --title x --body y$J)" "create subst"
 want_shapes "P14b justified in bash -c"  "bash -c \"gh issue create --title x --body y$K\"" "create shell-c"
 want_lex "P15 literal external --repo" \
   'gh issue create --repo cli/cli --title x --body y' \
-  'F create top head=gh issue create|repo=cli/cli|body=y'
+  'F create top head=gh issue create|repo=cli/cli|body=y|vis=1'
 want_lex "P21 two --label flags" \
   "gh issue create --title x --body y --label type/bug$J" \
-  'F create top head=gh issue create|milestone=1|label=type/bug|label=meta/machinery|body=y'
+  'F create top head=gh issue create|milestone=1|label=type/bug|label=meta/machinery|body=y|vis=1'
+
+# Review round (#9089): one lexer row per reproduced grammar/field finding.
+want_lex "R-CR \\r is a word character (no forged milestone)" \
+  $'gh issue create --title x --label meta/machinery --body=x\r-mPost' \
+  $'F create top head=gh issue create|label=meta/machinery|body=x\r-mPost|vis=1'
+want_prose "R-FF a form feed is a word character" $'echo a\fb'
+want_shapes "R-HDQ a newline inside \$(…) does not drain an outer heredoc" \
+  $'cat <<\'EOF\'; X="$(:\ngh issue create --title x --body y\nEOF\n)"\nEOF' "create subst"
+want_shapes "R-ARITH (( … << … )) is a shift" \
+  $'(( x = 1 << y ))\ntrue | gh issue create --title x --body y' "create top"
+want_shapes "R-ARITH-FOR for (( … << … )) is a shift" \
+  $'for (( i = 1 << 2; i < 9; i++ )); do gh issue create --title x --body y; done' "create top"
+want_shapes "R-SUBSHELL ((cmd) ) is two subshells, not arithmetic" \
+  '((gh issue create --title x --body y) )' "create top"
+want_shapes "R-SUBSHELL2 \$( (cmd) ) is a subshell inside \$(…)" \
+  'X=$( (gh issue create --title x --body y) )' "create subst"
+want_shapes "R-CASE a case pattern ) does not close \$(…)" \
+  'x="$(case $y in a|b) gh issue create --title t;; *) :;; esac)"' "create subst"
+want_prose "R-CASE-PROSE case patterns are not commands" \
+  'case "$x" in gh|issue) echo a ;; create) echo b ;; esac'
+want_shapes "R-FUNSUB \${ cmd; } is a script" 'X=${ gh issue create --title x --body y; }' "create subst"
+want_shapes "R-FUNSUB2 \${| cmd; } is a script" 'X=${| gh issue create --title x --body y; }' "create subst"
+want_shapes "R-OC bash -oc takes its o's value first" \
+  "bash -oc pipefail 'gh issue create --title x --body y'" "create shell-c"
+want_lex "R-ANSI \$'…' is decoded before eval splits it" \
+  "eval \$'gh issue create --title x --body y -l meta/machinery \\n -m M'" \
+  'F create eval head=gh issue create|label=meta/machinery|body=y'
+want_lex "R-BTDQ \\\" inside backticks in \"…\" is a quote" \
+  'X="`gh issue create --title \"a --label meta/machinery \" --milestone M`"' \
+  'F create backtick head=gh issue create|milestone=1'
+want_lex "R-FIND a later -exec is outside the filing" \
+  'find /dev/null -exec timeout 9 gh issue create --title x --body y \; -exec echo -m M -l meta/machinery \;' \
+  'F create top head=gh issue create|body=y|vis=1'
+want_lex "R-SCP git@host:owner/repo normalizes to OWNER/REPO" \
+  'gh issue create -R git@github.com:JIKIG-AI/soleur.git --title t --body x' \
+  'F create top head=gh issue create|repo=jikig-ai/soleur|body=x|vis=1'
+want_lex "R-EMPTYM an empty milestone value is no milestone" \
+  'gh issue create --title x --body y --milestone "" --label meta/machinery' \
+  'F create top head=gh issue create|label=meta/machinery|body=y|vis=1'
+want_lex "R-TRUE substitution text is not body corpus" \
+  'gh issue create --title x -m M --body "$(true Mandated-By: hr-foo)"' \
+  'F create top head=gh issue create|milestone=1|body=|vis=1'
+want_lex "R-RAWAT -f body=@x is a literal body; -F body=@x is a body file" \
+  "gh api repos/o/r/issues -f title=x -f 'body=@/a' -F 'body=@/b'" \
+  'F api top head=gh api repos/o/r/issues|bodyfile=/b|vis=1'
+want_lex "R-HDBODY --body \"\$(cat <<'EOF' …)\" is the heredoc text, once" \
+  $'gh issue create --title x -m M --body "$(cat <<\'B\'\nUser-Impact: login page\nFix-Size: 3 lines / 1 file\nB\n)"' \
+  $'F create top head=gh issue create|milestone=1|body=User-Impact: login page\nFix-Size: 3 lines / 1 file\n|vis=1'
+want_lex "R-READ read … B <<EOF binds the heredoc to \$B" \
+  $'read -r -d \'\' B <<\'EOF\'\nUser-Impact: docs page\nEOF\ngh issue create --title x --body "$B" -m M' \
+  $'F create top head=gh issue create|milestone=1|body=User-Impact: docs page\n|vis=1'
+want_shapes "R-DUP two identical substitutions are two filings" \
+  'a=$(gh api repos/o/r/issues -f title=x); b=$(gh api repos/o/r/issues -f title=x)' "api subst,api subst"
+want_lex "R-VIS a filing inside quotes is invisible to the floor" \
+  'X="$(gh issue create --title x -m M)"' 'F create subst head=gh issue create|milestone=1'
+want_lex "R-VIS2 an unquoted substitution is visible to the floor" \
+  'X=$(gh issue create --title x -m M)' 'F create subst head=gh issue create|milestone=1|vis=1'
+want_shapes "R-HDCTX a \$(…) in an unquoted heredoc reports the heredoc" \
+  $'cat <<EOF\n$(gh issue create --title x)\nEOF' "create heredoc"
+want_prose "R-PULLS a \$-valued --jq on a pulls POST is no issues endpoint" \
+  'gh api repos/o/r/pulls -X POST -f title=x --jq "$Q"'
+_pad="$(printf '/repos/%.0s' $(seq 1 20000))"
+want_shapes "R-PAD 140 KB of /repos/ is linear, not an alarm" \
+  "gh api -H \"X-Pad: ${_pad}!\" \"\$EP\" -X POST -f title=x" "api top"
+_many="$(printf 'echo gh issue create -m M --label meta/machinery; %.0s' $(seq 1 40))"
+want_fail "R-RECORDS more than 32 filings is a bound, not 32 forks of the gate" "$_many" 3 records
 
 # ---------------------------------------------------------------------------
 # 3. Failure exits and bounds (asserted by exit code and bound=<cause>).
@@ -499,6 +573,22 @@ want_fail() {
   if [[ "$g_rc" == "$rc" && "$g_cause" == "$cause" && "$g_out" == "E $cause"$'\n'"RC $rc" ]]; then pass "$label"
   else fail "$label" "want rc=$rc bound=$cause stream=E $cause; got rc=$g_rc bound=$g_cause stream=${g_out//$'\n'/ ⏎ }"; fi
 }
+# INSTRUMENT SELF-TEST for the verdict-owning helpers: each must report a
+# known-wrong expectation as a FAIL, or a gutted helper (always pass) passes
+# every row and the floor alike. Unwound afterwards; reported via printf+exit.
+_hc_p=$PASS; _hc_f=$FAIL; _hc_t=$TOTAL
+want_lex    "ctl" 'echo x' 'F create top head=nope' >/dev/null
+want_prose  "ctl" 'gh issue create --title x' >/dev/null
+want_shapes "ctl" 'echo x' 'create top' >/dev/null
+want_fail   "ctl" 'echo x' 2 exit2 >/dev/null
+want_prose  "ctl" 'echo x' >/dev/null
+if (( FAIL != _hc_f + 4 || PASS != _hc_p + 1 )); then
+  printf 'INSTRUMENT: want_* helpers did not report 4 known FAILs and 1 known PASS (PASS %s->%s FAIL %s->%s)\n' \
+    "$_hc_p" "$PASS" "$_hc_f" "$FAIL" >&2
+  exit 1
+fi
+PASS=$_hc_p; FAIL=$_hc_f; TOTAL=$_hc_t
+
 want_fail "F2a unbalanced '"              "gh issue create --title 'x"            2 exit2
 want_fail "F2b unbalanced \""             'gh issue create --title "x'            2 exit2
 want_fail "F2c unterminated \$("          'X=$(gh issue create --title x'         2 exit2
@@ -518,20 +608,24 @@ _nest_rc="$(rc_of "$_nest")"
 if [[ "$_nest_rc" == 0 ]]; then pass "AC6 memoized nested bash -c \"\$(…)\" stays under budget"; else fail "AC6 memoized nested bash -c stays under budget" "rc=$_nest_rc bound=$(bound_of "$_nest")"; fi
 _al_out="$( { sleep 3; printf 'gh issue create'; } | perl "$PL" 2>&1 >/dev/null; echo "rc=$?")"
 if [[ "$_al_out" == *"bound=alarm"* && "$_al_out" == *"rc=3" ]]; then pass "AC6 the alarm exits 3 with bound=alarm"; else fail "AC6 the alarm exits 3 with bound=alarm" "$_al_out"; fi
-# The every-P-row lexing invariant has a witness that a crash cannot pass:
-# F2f's rc-0 stream above must say OK (it would say E on a crash).
 
 # ---------------------------------------------------------------------------
-# 4. Flag-table staleness (skips when gh is absent). gh's own help lists the
-#    value-taking flags as the ones with a type word after the names.
-if command -v gh >/dev/null 2>&1; then
+# 4. Flag-table staleness. gh's own help lists the value-taking flags as the
+#    ones with a type word after the names. Compared only against the gh
+#    version the tables are PINNED to: a newer gh on a CI runner must not turn
+#    every unrelated PR red, and an absent gh must not trip the floor. Skipped
+#    rows are counted in SKIPPED, which the floor adds back.
+SKIPPED=0
+_pinned_gh="$(perl "$PL" --tables | sed -n 's/^gh //p')"
+_have_gh="$(command -v gh >/dev/null 2>&1 && gh --version 2>/dev/null | awk 'NR==1{print $3}')"
+if [[ -n "$_have_gh" && "$_have_gh" == "$_pinned_gh" ]]; then
   gh_vals() {
     gh help "$@" 2>/dev/null | awk '/^FLAGS/{f=1;next} /^[A-Z]/{f=0} f' \
       | perl -ne 'if (/^\s+(?:(-\w), )?(--[\w-]+)\s(\S+)/ && $3 !~ /^[A-Z]/) { print "$1\n" if $1; print "$2\n" }' | sort -u
   }
   tables="$(perl "$PL" --tables)"
   pl_create="$(sed -n 's/^create-val //p' <<<"$tables" | tr ' ' '\n' | grep -vxE -- '-R|--repo' | sort -u)"
-  pl_api="$(sed -n 's/^api-val //p' <<<"$tables" | tr ' ' '\n' | grep -vxE -- '-R|--repo' | sort -u)"
+  pl_api="$(sed -n 's/^api-val //p' <<<"$tables" | tr ' ' '\n' | sort -u)"
   gh_create="$(gh_vals issue create)"
   gh_api="$(gh_vals api)"
   if [[ "$pl_create" == "$gh_create" ]]; then pass "flag tables: gh issue create value flags match gh $(gh --version | awk 'NR==1{print $3}')"
@@ -539,7 +633,8 @@ if command -v gh >/dev/null 2>&1; then
   if [[ "$pl_api" == "$gh_api" ]]; then pass "flag tables: gh api value flags match"
   else fail "flag tables: gh api value flags drifted" "$(diff <(echo "$pl_api") <(echo "$gh_api"))"; fi
 else
-  echo "SKIP: flag tables (gh not installed)"
+  SKIPPED=$((SKIPPED + 2))
+  echo "SKIP: flag tables (installed gh '${_have_gh:-none}' is not the pinned ${_pinned_gh}; re-pin after checking \`gh help issue create\` and \`gh help api\`)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -550,8 +645,8 @@ if [[ "$_probe_out" == "PROBE=create" ]]; then pass "probe prints PROBE=create";
 # ---------------------------------------------------------------------------
 # Floor: a literal, bumped in the same commit as the rows. Reported with
 # printf + exit, never through fail().
-MIN_ASSERTIONS=229
-if (( TOTAL < MIN_ASSERTIONS )); then
+MIN_ASSERTIONS=263
+if (( TOTAL + SKIPPED < MIN_ASSERTIONS )); then
   printf 'FLOOR: only %s assertions ran, expected at least %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
 fi

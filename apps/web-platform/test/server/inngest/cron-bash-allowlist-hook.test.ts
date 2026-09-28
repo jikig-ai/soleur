@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   decide,
+  hasDotSegment,
+  labelTokenEquals,
   filingJustificationReason,
   tokenize,
   splitSegments,
@@ -950,6 +952,48 @@ describe("Bash — gh api dot-segment containment (#9089, security #11)", () => 
 
   it("a dotted file name is not a dot segment", () => {
     expect(verdict(bash("gh api repos/jikig-ai/soleur/contents/.github/CODEOWNERS"))).toBe("allow");
+  });
+
+  it("a ..; (matrix-parameter) segment is a dot segment", () => {
+    expect(verdict(bash("gh api 'repos/jikig-ai/soleur/labels/..;/issues' -X POST -f title=x"))).toBe("deny");
+  });
+
+  it("the dot-segment check is linear: 280 KB of repos/ decides in well under a second", () => {
+    const t0 = Date.now();
+    expect(hasDotSegment(`${"/repos/".repeat(40000)}!`)).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});
+
+describe("Bash — the cron tokenizer reads a command as bash does (#9089 review)", () => {
+  it("a backslash is an escape outside quotes, so i\\ssues is issues", () => {
+    expect(tokenize("gh api repos/o/r/i\\ssues -f ti\\tle=x")).toEqual(["gh", "api", "repos/o/r/issues", "-f", "title=x"]);
+  });
+  it("inside double quotes a backslash escapes only $ ` \" \\", () => {
+    expect(tokenize('x "a\\"b\\q" y')).toEqual(["x", 'a"b\\q', "y"]);
+  });
+  it("a word-start # begins a comment, so it cannot supply a label", () => {
+    expect(tokenize("gh issue create --title x # --label meta/machinery")).toEqual(["gh", "issue", "create", "--title", "x"]);
+  });
+  it("splits on space and tab only (bash does not split on \\f)", () => {
+    expect(tokenize("a  b\f c")).toEqual(["a", "b\f", "c"]);
+  });
+  it("an escaped endpoint is still an issues filing under the gh api grant", () => {
+    const d = decide(
+      JSON.stringify({ tool_name: "Bash", tool_input: { command: "gh api repos/jikig-ai/soleur/i\\ssues -f ti\\tle=x" } }),
+      ["gh api repos/jikig-ai/soleur/"],
+    );
+    expect(d.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+});
+
+describe("labelTokenEquals — an api labels[]= field is one exact label (#9089 review)", () => {
+  it("labels[]=meta/machinery,x is the label meta/machinery,x", () => {
+    expect(labelTokenEquals(["gh", "api", "x", "-f", "labels[]=meta/machinery,x"], "meta/machinery")).toBe(false);
+    expect(labelTokenEquals(["gh", "api", "x", "-f", "labels[]=meta/machinery"], "meta/machinery")).toBe(true);
+  });
+  it("--label stays a comma-separated slice", () => {
+    expect(labelTokenEquals(["gh", "issue", "create", "--label", "type/bug,meta/machinery"], "meta/machinery")).toBe(true);
   });
 });
 
