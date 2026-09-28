@@ -32,6 +32,15 @@
 -- RLS: table is service-role-only. Service-role bypasses RLS via the
 -- Authorization header, so no policies are required or desirable.
 
+-- Cross-file FK precondition (lint-migration-fk-preconditions): a clean,
+-- named failure beats a generic CREATE TABLE error if the base schema is
+-- missing.
+DO $$ BEGIN
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.users must exist before 144';
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS public.pending_checkout_sessions (
   user_id     uuid        PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
   session_id  text,

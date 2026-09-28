@@ -578,7 +578,6 @@ Statutory-deadline **dispatch markers** (`statutory_repin_send`, migration 135) 
 
 Pending-checkout **claim rows** (`pending_checkout_sessions`, migration 144) are transient: one row per in-flight checkout, deleted when the Stripe session completes, expires, or is reclaimed, and swept daily past 24 hours (Stripe embedded sessions self-expire by then). Erasure cascades from `public.users`; the table is excluded from the Article 15 export (Data Protection Disclosure, Section 5.3(a)).
 
-
 ### 8.5 Third-Party Retention
 
 Retention periods for data held by Anthropic and GitHub are governed by their respective privacy policies and data retention schedules.
