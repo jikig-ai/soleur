@@ -281,7 +281,7 @@ advisor consult.
   (`miss ping_fail ok late_ok code last_ok_ts`). The key=value revision measured 21,292 B stored
   user_data, over `REGISTRY_GZIP_BUDGET` (21,000). ADR-185's 2026-09-28 amendment says the next
   feature must shrink rather than raise the constant. The positional form measures 20,924 B
-  (headroom 11,844 against the 11,768 floor). ADR-185 has a dated addendum recording the 76 B of
+  (later 20,932 B after the review fixes; headroom 11,836 against the 11,768 floor). ADR-185 has a dated addendum recording the 76 B of
   remaining slack.
 - The reporter reads the line with `read -r` instead of `timeout 5 cat | head -c 512`, and validates
   each field in one loop: an integer of at most 10 digits with no leading zero, and a code of 3
@@ -291,6 +291,23 @@ advisor consult.
 - Mutation batteries: 4 rows on the key=value feeder, then 7 rows on the final feeder and reporter.
   All were killed: state before ping, fail-as-ok, no read-back, late never counted, reporter
   unvalidated, field after `zot_last_err`, code unvalidated.
+
+### Review fixes (review phase, 2026-09-28)
+
+- `late_ok_cum` now counts only a beat more than 75 s after the previous good one with no miss or
+  failed ping in between: the feeder clears `last_ok_ts` on any failure, so a recovery beat is not
+  reported as timer lateness (observability and structural seats).
+- The reporter reads the state through `timeout 5 head -c 64`, so a FIFO or huge file at the path
+  cannot hang the 5-minute cron (security, structural). `2>/dev/null` moved before the `<`.
+- Tests: the heartbeat stub now answers with an HTTP status and honours `-f` (a 429 row), the
+  lateness threshold edges (70 s / 80 s), the recovery-not-late rows, a leading-zero row,
+  `TimeoutStartSec` pinned between 20 and 60 s, an order log in place of the slow-`mv` row, a
+  10-digit reporter row, a writer/reader field-order pin, and a digit-tolerant field regex.
+- The probe left both `lint-shell-trace-credential-refusal` baselines, since it now passes.
+- Runbook: stall-aware decision table, web-2's old `unexpected code 000000` spelling counted as
+  unreachable, `-1`/empty-column rows explained. C4: the #7262 note moved to the consumer edge,
+  whose verb is corrected to GET `tags/list`.
+- Stored user_data 20,932 B (68 B under the constant).
 
 ## Open Code-Review Overlap
 
@@ -321,10 +338,10 @@ error_reporting:
   fail_loud: "web: '[zot-probe] SUPPRESS ping: 000 — <endpoint> UNREACHABLE'; registry: liveness_miss_cum / liveness_ping_fail_cum increase between consecutive SOLEUR_ZOT_DISK rows of one boot_id"
 failure_modes:
   - mode: "private-net path web -> zot down"
-    detection: "web-zot-consumer-probe SUPPRESS row with code 000 (was mislabelled 000000); heartbeat absence after 240 s"
+    detection: "layer 3 (Vector journald ship from the web host): web-zot-consumer-probe SUPPRESS row with code 000 (was mislabelled 000000); layer 1: heartbeat absence after 240 s"
     alert_route: "soleur-web-zot-consumer-web-N incident"
   - mode: "zot not answering on the registry private IP"
-    detection: "liveness_miss_cum delta > 0, liveness_last_miss_code = 000 or 5xx"
+    detection: "layer 3 (direct Better Stack POST from the registry host): liveness_miss_cum delta > 0, liveness_last_miss_code = 000 or 5xx"
     alert_route: "soleur-registry-prd incident (90 s)"
   - mode: "zot fine, beat egress to Better Stack failing"
     detection: "liveness_ping_fail_cum delta > 0 with liveness_miss_cum flat"

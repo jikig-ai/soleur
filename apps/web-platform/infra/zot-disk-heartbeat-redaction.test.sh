@@ -1017,7 +1017,7 @@ assert "P-s store_expected_devid is the SINGLE-dollar templatefile variable, not
 PHASE=liveness
 LIV="$TMP/run-soleur-registry/zot-liveness.state"
 LIVENESS_FIELDS="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI_YML" | sed -n '1p' \
-  | grep -oE 'liveness_[a-z_]+=' | sed 's/=$//' | sort -u)"
+  | grep -oE 'liveness_[A-Za-z0-9_]+=' | sed 's/=$//' | sort -u)"
 LIVENESS_FIELD_N="$(printf '%s\n' "$LIVENESS_FIELDS" | grep -c . || true)"
 [ "$LIVENESS_FIELD_N" -ge 5 ] || { printf '  FATAL: derived only %s liveness_ field(s) from LINE=; the floor is 5, one per field (fix the emitter, do not lower this).\n' "$LIVENESS_FIELD_N" >&2; exit 2; }
 _liveness_in_head() {
@@ -1051,10 +1051,20 @@ _liv_case hostile-code-4-digits '2 0 0 0 1234' 2 0 0 0 -1
 _liv_case code-not-a-number '2 0 0 0 unk' 2 0 0 0 -1
 _liv_case leading-zero '007 0 0 0 none' -1 0 0 0 none
 _liv_case truncated-line '5' 5 -1 -1 -1 -1
+_liv_case ten-digit-values '1234567890 1 9999999999 2 000 1790000000' 1234567890 1 9999999999 2 000
 rm -f "$LIV"
+# The state line's field ORDER is written by the feeder and read by this reporter, two parsers in
+# two scripts of one template. A coordinated reorder on one side (swapping miss and ping_fail, the
+# distinction #7270 exists for) would pass every shape check, so pin the two orders against each
+# other: the reporter reads the writer's first five fields, in the writer's order.
+_L_W="$(grep -oE 'echo "\$m \$f \$o \$l \$c \$t"' "$CI_YML" | head -n 1)"
+_L_R="$(grep -oE 'read -r _m _f _o _l _c _ <<<' "$CI_YML" | head -n 1)"
+_L_E="$(grep -oE 'liveness_miss_cum=\$_m liveness_ping_fail_cum=\$_f liveness_ok_cum=\$_o liveness_late_ok_cum=\$_l liveness_last_miss_code=\$_c' "$CI_YML" | head -n 1)"
+assert "L-order the feeder writes m f o l c t, the reporter reads _m _f _o _l _c and emits them in that mapping" \
+  "[[ -n \"\$_L_W\" && -n \"\$_L_R\" && -n \"\$_L_E\" ]]"
 _L_LINE_HEAD="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | sed -n '1p' | sed 's/ zot_last_err=.*//')"
 assert "L-s every liveness_ field sits in the LINE= trusted head (source text, not one row)" \
-  "[ \"\$(grep -oE 'liveness_[a-z_]+=' <<<\"\$_L_LINE_HEAD\" | sort -u | grep -c .)\" -eq '$LIVENESS_FIELD_N' ]"
+  "[ \"\$(grep -oE 'liveness_[A-Za-z0-9_]+=' <<<\"\$_L_LINE_HEAD\" | sort -u | grep -c .)\" -eq '$LIVENESS_FIELD_N' ]"
 
 PHASE=redact
 
@@ -1121,7 +1131,7 @@ if [[ "$CASES_POSTURE" -lt "$CASES_POSTURE_MIN" ]]; then
     "$CASES_POSTURE" "$CASES_POSTURE_MIN" >&2
   exit 1
 fi
-CASES_LIVENESS_MIN=92
+CASES_LIVENESS_MIN=103
 if [[ "$CASES_LIVENESS" -lt "$CASES_LIVENESS_MIN" ]]; then
   printf '\n[FATAL] cardinality (#7270 liveness counters): only %s cases ran (expected >= %s).\n' \
     "$CASES_LIVENESS" "$CASES_LIVENESS_MIN" >&2

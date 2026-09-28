@@ -158,7 +158,7 @@ counters to the zot liveness feeder and five `liveness_*` fields to `SOLEUR_ZOT_
 revision measured 21,292 B stored, over the budget. It was shrunk by making the tmpfs state a single
 line of six positional fields (no per-key parsing) and validating the fields in one loop.
 
-- **Measured:** 20,924 B stored (`registry-userdata-budget.sh --json`), up from 20,408 B. Headroom is
-  11,844 B against the 11,768 B floor.
-- **Remaining slack under the constant:** 76 B. The next registry-host addition will trip the gate.
+- **Measured:** 20,932 B stored (`registry-userdata-budget.sh --json`), up from 20,408 B. Headroom is
+  11,836 B against the 11,768 B floor.
+- **Remaining slack under the constant:** 68 B. The next registry-host addition will trip the gate.
   Per the amendment above, it must shrink the payload structurally rather than raise the constant.

@@ -997,7 +997,7 @@ write_files:
       # of at most 10 digits with no leading zero; the code is 3 digits or `none`), else it is -1,
       # as is every field when the file is absent. Nothing the file holds reaches the row raw.
       _m=-1 _f=-1 _o=-1 _l=-1 _c=-1
-      read -r _m _f _o _l _c _ < /run/soleur-registry/zot-liveness.state 2>/dev/null
+      read -r _m _f _o _l _c _ <<<"$(timeout 5 head -c 64 /run/soleur-registry/zot-liveness.state 2>/dev/null)"
       for _v in _m _f _o _l; do
         case "$${!_v:-}" in '' | *[!0-9]* | 0?* | ???????????*) printf -v "$_v" %s -1 ;; esac
       done
@@ -1089,7 +1089,10 @@ write_files:
       #       m  miss_cum        zot did not answer 200/401 (c says with what)
       #       f  ping_fail_cum   zot answered, the beat's own curl failed (the false-positive arm)
       #       o  ok_cum          a beat went out; flat across rows = the feeder is not running
-      #       l  late_ok_cum     a beat went out more than 75s after the previous one (timer margin)
+      #       l  late_ok_cum     a beat went out more than 75s after the previous one with no miss
+      #                          and no failed ping in between (so a recovery beat after an outage is
+      #                          NOT late): the timer itself fired late. 75s sits between the 60s
+      #                          timer and the 90s page deadline (period 60 + grace 30).
       #       c  last_miss_code  3 digits, or `none` before the first miss
       #       t  last_ok_ts      epoch of the last beat (internal: what `l` is measured against)
       #     A field that is not a plain non-negative integer (<= 10 digits, no leading zero) is
@@ -1099,7 +1102,7 @@ write_files:
       (
         S=/run/soleur-registry/zot-liveness.state
         mkdir -p "$${S%/*}" || exit 0
-        read -r m f o l c t _ < "$S" 2>/dev/null
+        read -r m f o l c t _ 2>/dev/null < "$S"
         for v in m f o l t; do
           case "$${!v:-}" in '' | *[!0-9]* | 0?* | ???????????*) printf -v "$v" %s 0 ;; esac
         done
@@ -1107,8 +1110,8 @@ write_files:
         n=$(date +%s) || exit 0
         case $PING in
           ok) o=$((o + 1)); [ "$t" -gt 0 ] && [ $((n - t)) -gt 75 ] && l=$((l + 1)); t=$n ;;
-          fail) f=$((f + 1)) ;;
-          *) m=$((m + 1)); c=$${HTTP_CODE:-000} ;;
+          fail) f=$((f + 1)); t=0 ;;
+          *) m=$((m + 1)); c=$${HTTP_CODE:-000}; t=0 ;;
         esac
         echo "$m $f $o $l $c $t" > "$S.tmp" && mv -f "$S.tmp" "$S"
       ) || true

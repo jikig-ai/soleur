@@ -835,13 +835,15 @@ Nothing needs doing.
 
 **Step 2: what the web hosts saw.** Consumer-probe verdicts by hour and host, last 7 days. The
 probe logs `SUPPRESS ping: 000 … UNREACHABLE` when the private network to zot is down. Before #7262
-the same event read `unexpected code 000000`, so rows before that fix count under `other_suppress`.
+the same event read `unexpected code 000000`, and a web host keeps the old probe until it is
+replaced (web-1 gets the fix at the merge's apply; web-2 only at its next replace). The query counts
+both spellings as `unreachable`.
 
 ```bash
 doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh "$(cat <<'SQL'
 SELECT toStartOfHour(dt) AS hour, JSONExtractString(raw, 'host') AS web_host,
-  countIf(m LIKE '%SUPPRESS ping: 000 %') AS unreachable,
-  countIf(m LIKE '%SUPPRESS%' AND m NOT LIKE '%SUPPRESS ping: 000 %') AS other_suppress,
+  countIf(m LIKE '%SUPPRESS ping: 000 %' OR m LIKE '%unexpected code 000000 %') AS unreachable,
+  countIf(m LIKE '%SUPPRESS%' AND m NOT LIKE '%SUPPRESS ping: 000 %' AND m NOT LIKE '%unexpected code 000000 %') AS other_suppress,
   countIf(m LIKE '%HARD FAILURE%') AS auth_broken
 FROM (SELECT dt, raw, JSONExtractString(raw, 'message') AS m FROM remote($BS_TABLE)
         WHERE dt >= now() - INTERVAL 7 DAY AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'web-zot-consumer-probe'
@@ -885,20 +887,28 @@ SQL
 ```
 
 The counters are cumulative per boot and reset on reboot. Compare consecutive rows with the same
-`boot`. A healthy 5-minute step reads `ok` +5, everything else +0.
+`boot`. The feeder runs once a minute, so over a step of N minutes `ok + miss + ping_fail` should
+rise by about N (a 5-minute step reads +4 to +6, depending on where the ticks fall), and `late_ok`
+should stay flat.
 
 | Between two rows of one boot | Meaning |
 |---|---|
 | `miss` rose, `last_code` = `000` | zot gave no HTTP answer on the private IP: container down, or the private NIC is absent |
 | `miss` rose, `last_code` = `5xx` | zot answered but is wedged |
-| `ping_fail` rose, `miss` flat | zot was fine and the beat's own curl failed (Better Stack or egress). A false positive for zot |
-| `ok`, `miss` and `ping_fail` all flat | the feeder is not running (timer stopped) |
-| `late_ok` rose, `miss` and `ping_fail` flat | a beat left more than 75 s after the previous one (timer margin) |
-| everything nominal (`ok` +5) through the incident | the beat left on time. The gap was on the Better Stack side |
+| `miss` rose, any other `last_code` (for example `404`) | zot answered with something that is not liveness; read the zot container log for that window |
+| `ping_fail` rose, `miss` flat | zot was fine and the beat's own curl failed (Better Stack refused it, or egress failed). A false positive for zot |
+| `ok + miss + ping_fail` rose by clearly less than the minutes elapsed | the feeder did not run on every tick (timer stalled or stopped). All three flat = stopped |
+| `late_ok` rose, `miss` and `ping_fail` flat | a beat left more than 75 s after the previous good one, with nothing failing in between: the timer fired late, or the probe or ping was slow |
+| everything nominal through the incident | the beat left on time. The gap was on the Better Stack side |
 | a new `boot` | the host was replaced or rebooted. Go back to step 1 |
 
-A value of `-1` means the state file was absent (first seconds of a boot) or failed its shape
-check. It is never a count.
+A recovery beat after a miss or a failed ping is never counted in `late_ok`. The feeder clears its
+last-good-beat time on any failure, so `late_ok` points only at the timer, not at the outage.
+
+A value of `-1` means the state file was absent or failed its shape check; it is never a count. The
+first row of every boot reads `-1`, because the disk heartbeat runs before the liveness timer's first
+tick. `-1` on every later row of a boot means the feeder is not writing its state. Empty
+`liveness_*` columns mean the row came from a registry boot older than #7270.
 
 **Decided, not open (#7262, #7270):** there is no rate alarm on SUPPRESS rows, and
 `soleur-registry-prd` keeps 60/30. Every SUPPRESS row from 2026-08-13 to 2026-09-28 was a planned

@@ -174,20 +174,24 @@ case "$target" in
   *10.0.1.30:5000*) respond "${STUB_PRIVATE_CODE:-401}" ;;
   *localhost:5000*) respond "${STUB_LOCALHOST_CODE:-401}" ;;
   *127.0.0.1:5000*) respond "${STUB_LOCALHOST_CODE:-401}" ;;
-  # The ping is RECORDED whether or not it succeeds (it was attempted); STUB_PING_RC models a
-  # Better Stack / egress failure on the beat itself (#7270's ping_fail_cum arm).
-  *heartbeat*)      printf '%s\n' "$target" >> "$STUB_EMIT"; exit "${STUB_PING_RC:-0}" ;;
+  # The ping is RECORDED whether or not it succeeds (it was attempted), and logged to the ORDER
+  # file the mv stub also writes to. STUB_PING_CODE is the HTTP status Better Stack answers the
+  # beat with; `respond` models -f, so a 429 is an exit 22 ONLY while the feeder keeps `-f`
+  # (without it curl exits 0 on a 429 and a rejected beat would count as sent: #7270's
+  # ping_fail_cum arm depends on that flag).
+  *heartbeat*)      printf '%s\n' "$target" >> "$STUB_EMIT"; printf 'PING\n' >> "$STUB_ORDER"
+                    respond "${STUB_PING_CODE:-200}" ;;
 esac
 exit 0
 EOS
-# (#7270) A pass-through `mv` that can be made SLOW. The feeder's only `mv` is the state write,
-# so STUB_SLOW_MV=1 makes the state step hang past the harness's `timeout 10`: a ping that is
-# still recorded proves the state work runs AFTER the ping. (The feeder has no `set -e`, so a
-# merely FAILING state step placed before the ping would not stop it; only a slow one does.)
+# (#7270) A pass-through `mv` that logs itself to the ORDER file. The feeder's only `mv` is the
+# state write, so `PING` before `MV` in that file proves the state work runs AFTER the ping.
+# (The feeder has no `set -e`, so a merely FAILING state step placed before the ping would not
+# stop it: ordering has to be observed, not inferred from the ping landing.)
 REAL_MV="$(command -v mv)"
 cat > "$BIN/mv" <<EOS
 #!/usr/bin/env bash
-[[ "\${STUB_SLOW_MV:-0}" == "1" ]] && sleep 30
+printf 'MV\n' >> "\$STUB_ORDER"
 exec "$REAL_MV" "\$@"
 EOS
 chmod +x "$BIN"/*
@@ -203,6 +207,8 @@ run_feeder() {
   STUB_EMIT="$TMP/emit.$$.$RANDOM"
   STUB_PROBES="$TMP/probes.$$.$RANDOM"
   : > "$STUB_EMIT"
+  STUB_ORDER="$TMP/order.$$.$RANDOM"
+  : > "$STUB_ORDER"
   : > "$STUB_PROBES"
   env -i \
     PATH="$BIN:/usr/bin:/bin" \
@@ -211,8 +217,8 @@ run_feeder() {
     STUB_PRIVATE_CODE="$private_code" \
     STUB_LOCALHOST_CODE="$loopback_code" \
     STUB_HANG="${STUB_HANG:-0}" \
-    STUB_PING_RC="${STUB_PING_RC:-0}" \
-    STUB_SLOW_MV="${STUB_SLOW_MV:-0}" \
+    STUB_ORDER="$STUB_ORDER" \
+    STUB_PING_CODE="${STUB_PING_CODE:-200}" \
     "$TIMEOUT_BIN" 10 bash "$RENDERED" >/dev/null 2>&1
   RUN_RC=$?
 }
@@ -312,13 +318,15 @@ assert "L3 first OK after boot is never counted late" "[[ \"\$(st late_ok_cum)\"
 assert "L3 last_ok_ts recorded as epoch seconds" "[[ \"\$(st last_ok_ts)\" =~ ^[0-9]{9,10}$ ]]"
 
 echo ""
-echo "--- L4: zot answers 401 but the beat's egress fails => ping_fail_cum+1, ok_cum unchanged"
-STUB_PING_RC=22 run_feeder 401 401
-STUB_PING_RC=0
+echo "--- L4: zot answers 401 but Better Stack answers the beat 429 => ping_fail_cum+1, ok_cum unchanged"
+STUB_PING_CODE=429 run_feeder 401 401
+STUB_PING_CODE=200
 assert "L4 the ping was attempted" "[[ -s '$STUB_EMIT' ]]"
 assert "L4 ping_fail_cum=1" "[[ \"\$(st ping_fail_cum)\" == 1 ]]"
 assert "L4 ok_cum still 1" "[[ \"\$(st ok_cum)\" == 1 ]]"
 assert "L4 miss_cum still 2 (zot DID answer)" "[[ \"\$(st miss_cum)\" == 2 ]]"
+assert "L4 a failed beat clears last_ok_ts, so the recovery beat is not counted late" \
+  "[[ \"\$(st last_ok_ts)\" == 0 ]]"
 
 echo ""
 echo "--- L5: an OK beat more than 75s after the previous OK => late_ok_cum+1; a prompt one does not"
@@ -330,6 +338,19 @@ assert "L5 ok_cum=5" "[[ \"\$(st ok_cum)\" == 5 ]]"
 run_feeder 401 401
 assert "L5 a prompt next beat leaves late_ok_cum=1" "[[ \"\$(st late_ok_cum)\" == 1 ]]"
 assert "L5 last_miss_code keeps the pre-miss token 'none'" "[[ \"\$(st last_miss_code)\" == none ]]"
+# The threshold's edges: 80s is late, 70s is not.
+printf '0 0 4 0 none %s\n' "$(( $(date +%s) - 80 ))" > "$STATE"
+run_feeder 401 401
+assert "L5 an 80s gap counts late" "[[ \"\$(st late_ok_cum)\" == 1 ]]"
+printf '0 0 4 0 none %s\n' "$(( $(date +%s) - 70 ))" > "$STATE"
+run_feeder 401 401
+assert "L5 a 70s gap does not" "[[ \"\$(st late_ok_cum)\" == 0 ]]"
+# A recovery beat after a miss is not late, however old the previous OK is.
+printf '0 0 4 0 none %s\n' "$(( $(date +%s) - 500 ))" > "$STATE"
+run_feeder 000 000
+assert "L5 a miss clears last_ok_ts" "[[ \"\$(st last_ok_ts)\" == 0 ]]"
+run_feeder 401 401
+assert "L5 the recovery beat after a miss is not counted late" "[[ \"\$(st late_ok_cum)\" == 0 ]]"
 
 echo ""
 echo "--- L6: a corrupt state file => counters restart from 0, and the ping still fires"
@@ -339,6 +360,11 @@ assert "L6 pinged" "[[ -s '$STUB_EMIT' ]]"
 assert "L6 ok_cum=1 (restarted from 0)" "[[ \"\$(st ok_cum)\" == 1 ]]"
 assert "L6 miss_cum=0 (the hostile value was discarded)" "[[ \"\$(st miss_cum)\" == 0 ]]"
 assert "L6 last_miss_code=none (the hostile code was discarded)" "[[ \"\$(st last_miss_code)\" == none ]]"
+# A leading zero is octal to $(( )), and `08` is an arithmetic ERROR that would freeze the
+# counters until reboot; the shape check resets it instead.
+printf '08 0 0 0 none 0\n' > "$STATE"
+run_feeder 000 000
+assert "L6 a leading-zero field restarts from 0 (08 -> 0, +1 miss)" "[[ \"\$(st miss_cum)\" == 1 ]]"
 
 echo ""
 echo "--- L7: the state dir cannot be created => the ping still fires, exit 0"
@@ -349,12 +375,12 @@ assert "L7 exit 0" "[[ '$RUN_RC' == 0 ]]"
 rm -f "$STATE_DIR"; mkdir -p "$STATE_DIR"
 
 echo ""
-echo "--- L8: the state step hangs => the ping was already sent (state work runs AFTER the ping)"
+echo "--- L8: the state step runs AFTER the ping (PING precedes MV in the order log)"
 reset_state
-STUB_SLOW_MV=1 run_feeder 401 401
-STUB_SLOW_MV=0
-assert "L8 the harness timeout fired (the slow mv was reached)" "[[ '$RUN_RC' == 124 ]]"
-assert "L8 the ping was recorded before the state step stalled" "[[ -s '$STUB_EMIT' ]]"
+run_feeder 401 401
+assert "L8 both the ping and the state write happened" \
+  "[[ \"\$(grep -c -e PING -e MV '$STUB_ORDER')\" == 2 ]]"
+assert "L8 the ping came first" "[[ \"\$(sed -n 1p '$STUB_ORDER')\" == PING ]]"
 
 # --- STRUCTURAL --------------------------------------------------------------------------
 echo ""
@@ -403,6 +429,13 @@ assert "timer is enabled in runcmd" \
 # regression on a no-SSH host, so it is asserted rather than trusted to a comment.
 assert "timer pins AccuracySec (systemd defaults to 1min => up to 120s interval vs a 90s deadline)" \
   "grep -qE '^[[:space:]]*AccuracySec=1s[[:space:]]*$' '$CI'"
+# (#7270) The service bounds its own run: a state step that hangs (a FIFO planted at the state
+# path) must cost at most one tick, never wedge every later beat. Scoped to THIS unit's block,
+# and bounded on both sides: above the two 10s curls, below the 60s timer period.
+SVC_BLOCK="$(awk '/^  - path: \/etc\/systemd\/system\/zot-liveness-heartbeat\.service$/{f=1;next} f && /^  - path: /{exit} f' "$CI")"
+SVC_TO="$(sed -n 's/^[[:space:]]*TimeoutStartSec=\([0-9]*\)s[[:space:]]*$/\1/p' <<<"$SVC_BLOCK")"
+assert "the liveness service pins TimeoutStartSec between 20s and 60s (got '$SVC_TO')" \
+  "[[ '$SVC_TO' =~ ^[0-9]+$ ]] && (( SVC_TO > 20 && SVC_TO < 60 ))"
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="

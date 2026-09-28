@@ -247,6 +247,9 @@ const GIT_DATA_FLOOR = 3_000;
 // registry-userdata-budget.sh), so this leaves 592 B of slack (a ~1.5 KB re-inlining still trips it)
 // and ~11.8 KB below HETZNER_CAP. The 8,000 B headroom POLICY is unchanged; above 24,767 is a policy
 // change needing its own ADR.
+// (#7270, ADR-185 addendum 2026-09-28) the zot liveness feeder's per-boot counters and five
+// liveness_* fields on SOLEUR_ZOT_DISK fit without raising the constant: measured 20,932 B stored,
+// so the slack above is now 68 B. The next registry-host addition needs a structural shrink.
 const REGISTRY_GZIP_BUDGET = 21_000;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
