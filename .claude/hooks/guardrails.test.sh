@@ -1314,7 +1314,7 @@ for _pre in 'sudo' 'sudo --' 'env A=1' 'env --' 'command' 'timeout -k 5 10' 'noh
             'flock /tmp/l' 'doppler run --' '/usr/bin/time -v' 'strace -f' 'xargs -r0'; do
   assert "D16 launcher '$_pre' denies" "deny" "$_pre gh issue create --title x --body y"
 done
-assert "D16 find -exec denies"                      "deny" 'find . -maxdepth 0 -exec gh issue create --title x --body y \;'
+assert "D16 find -exec denies"                      "deny" 'find /dev/null -maxdepth 0 -exec gh issue create --title x --body y \;'
 assert "D16 /usr/bin/gh denies"                     "deny" '/usr/bin/gh issue create --title x --body y'
 
 # Subcommand forms
@@ -1354,7 +1354,7 @@ assert "D28f -iftitle= denies"                      "deny" "gh api $EP -iftitle=
 assert_reason "D44 bodyvar corpus is not another command's args" "names no user-visible consequence" \
   'echo "Mandated-By: wg-x" >/dev/null; gh issue create --title x --body "$B" -m M'
 assert_reason "D45 find -exec: a later action's --label is not the filing's" "names no user-visible consequence" \
-  'find . -maxdepth 0 -exec gh issue create --title x --body y -m M \; -exec echo --label meta/machinery \;'
+  'find /dev/null -maxdepth 0 -exec gh issue create --title x --body y -m M \; -exec echo --label meta/machinery \;'
 assert_reason "D46 gh keeps the LAST --body" "names no user-visible consequence" \
   'gh issue create --title x --body "Mandated-By: wg-x" --body y -m M'
 assert_reason "D47 api body=@file is a body file" "which this gate cannot read" \

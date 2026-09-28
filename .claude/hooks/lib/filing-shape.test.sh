@@ -357,7 +357,7 @@ for pre in 'sudo' 'sudo --' 'env A=1' 'env --' 'command' 'timeout -k 5 10' 'nohu
            'flock /tmp/l' 'doppler run --' '/usr/bin/time -v' 'strace -f' 'xargs -r0'; do
   want_shapes "D16 $pre gh" "$pre gh issue create --title x --body y" "create top"
 done
-want_shapes "D16 find -exec"                 'find . -maxdepth 0 -exec gh issue create --title x --body y \;' "create top"
+want_shapes "D16 find -exec"                 'find /dev/null -maxdepth 0 -exec gh issue create --title x --body y \;' "create top"
 want_shapes "D16 /usr/bin/gh"                '/usr/bin/gh issue create --title x --body y' "create top"
 
 # Subcommand forms
@@ -408,7 +408,7 @@ want_lex "D44 bodyvar marks a \$-valued body" \
   'echo "Mandated-By: wg-x" >/dev/null; gh issue create --title x --body "$B" -m M' \
   'F create top head=gh issue create|milestone=1|body=$B|bodyvar=1|varcorpus#10'
 want_lex "D45 find -exec cut at \\;" \
-  'find . -maxdepth 0 -exec gh issue create --title x --body y -m M \; -exec echo --label meta/machinery \;' \
+  'find /dev/null -maxdepth 0 -exec gh issue create --title x --body y -m M \; -exec echo --label meta/machinery \;' \
   'F create top head=gh issue create|milestone=1|body=y'
 want_lex "D46 the LAST --body wins" \
   'gh issue create --title x --body "Mandated-By: wg-x" --body y -m M' \
