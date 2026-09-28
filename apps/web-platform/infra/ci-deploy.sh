@@ -2366,9 +2366,12 @@ verify_image_signature() {
   elif printf '%s' "$tail" | grep -qiE 'rekor|tlog|transparency|tuf'; then result="rekor_unreachable"
   elif printf '%s' "$tail" | grep -qiE 'Unable to find image|manifest unknown|pull access denied|no such image'; then result="cosign_absent"
   # #8714: a daemon-side PULL failure of the verifier image (gcr.io rate limit, DNS, TLS, timeout).
-  # "Error response from daemon" is docker's prefix for it and never appears in cosign's own errors,
-  # so a cosign-side network error (fetching the signature from zot) stays verify_failed.
-  elif printf '%s' "$tail" | grep -qiE 'Error response from daemon.*(toomanyrequests|no such host|dial tcp|i/o timeout|TLS handshake timeout|Client\.Timeout)'; then result="cosign_absent"
+  # Read from the WHOLE stderr file, not $tail: docker's pull error repeats the 64-hex digest twice
+  # and runs ~420-450 bytes (measured, docker 29.7.2), so the last 400 bytes cut off its prefix.
+  # Anchored at LINE START on the docker CLI's own "docker: Error response from daemon:" prefix:
+  # cosign's errors (including a registry-supplied message quoted inside one) start with "Error:",
+  # so a cosign-side network error — fetching the signature from zot — stays verify_failed.
+  elif grep -qiE '^docker: Error response from daemon: .*(toomanyrequests|no such host|dial tcp|i/o timeout|TLS handshake timeout|Client\.Timeout)' "$err" 2>/dev/null; then result="cosign_absent"
   fi
   cosign_verify_event "$result" "$repo_digest" "$tail"
   printf '%s' "$repo_digest" # WARN: run the verified digest anyway (immutability holds)
