@@ -2481,7 +2481,7 @@ archive_kb_files() {
     [[ -f "$f" && "$f" != */archive/* ]] || continue
     local fname ts
     fname=$(basename "$f")
-    ts="$(date +%Y-%m-%d-%H%M%S)"
+    ts="$(date +%Y%m%d-%H%M%S)"
     if ! mv "$f" "$archive_dir/$ts-$fname" 2>/dev/null; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $fname${NC}"
     fi
@@ -3330,7 +3330,7 @@ cleanup_merged_worktrees() {
     if [[ -d "$spec_dir" ]]; then
       local archive_dir archive_name archive_path
       archive_dir="$(dirname "$spec_dir")/archive"
-      archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
+      archive_name="$(date +%Y%m%d-%H%M%S)-$safe_branch"
       archive_path="$archive_dir/$archive_name"
 
       mkdir -p "$archive_dir"
