@@ -432,6 +432,23 @@ A3="$TMP/a3"; mk_repo "$A3"
 mk_merged_branch "$A3/clone" "feat-a3-reapme" 900
 A3_WT="$A3/wt-a3"; assert_fixture_dir "$A3_WT"
 fgit -C "$A3/clone" worktree add -q "$A3_WT" "feat-a3-reapme"
+# A second merged branch, worktree-LESS and carrying NO spec dir: the
+# archive_kb_files stamp must hold without the canonical spec-dir member.
+mk_merged_branch "$A3/clone" "feat-a3-planonly"
+# KB fixtures the reap's archive step consumes: the spec dir named for
+# safe_branch, plus plans files named for each feature slug (branch minus
+# feat-). The stamp on each produced archive basename is the property under
+# test — compact YYYYMMDD-HHMMSS, the format archive-kb.sh mints.
+assert_fixture_dir "$A3/clone/knowledge-base/project/specs"
+mkdir -p "$A3/clone/knowledge-base/project/specs/feat-a3-reapme" \
+  || { printf 'FATAL: spec fixture dir failed\n' >&2; exit 2; }
+assert_fixture_dir "$A3/clone/knowledge-base/project/plans"
+mkdir -p "$A3/clone/knowledge-base/project/plans" \
+  || { printf 'FATAL: plans fixture dir failed\n' >&2; exit 2; }
+printf 'synthesized fixture plan\n' > "$A3/clone/knowledge-base/project/plans/2026-01-01-a3-reapme-plan.md" \
+  || { printf 'FATAL: plans fixture write failed\n' >&2; exit 2; }
+printf 'synthesized fixture plan\n' > "$A3/clone/knowledge-base/project/plans/2026-01-01-a3-planonly-plan.md" \
+  || { printf 'FATAL: plans fixture write failed\n' >&2; exit 2; }
 A3_STATE="$TMP/a3-state"; arm_reaper "$A3_STATE"
 run_reaper "$SCRIPT" "$A3/clone" "$A3_STATE" "$TMP/a3.log"
 
@@ -457,6 +474,30 @@ if grep -qE '^SOLEUR_WORKTREE_REAPED .*[[:space:]]remote=yes' "$TMP/a3.log"; the
   pass "A3c: the sentinel reports remote=yes, so the marker's own field is load-bearing"
 else
   fail "A3c: the reap sentinel does not report remote=yes — recovery reads a field nothing asserts"
+fi
+# The produced archive names carry the COMPACT stamp archive-kb.sh mints
+# (`date +%Y%m%d-%H%M%S`), not the dashed legacy form the reaper kept
+# reintroducing. Existence is asserted, not only shape — a format check over
+# an artifact never produced is vacuous.
+A3_SPEC_ENTRY="$(ls -1 "$A3/clone/knowledge-base/project/specs/archive" 2>/dev/null | grep -E -- '-feat-a3-reapme$' || true)"
+if [[ -n "$A3_SPEC_ENTRY" && "$A3_SPEC_ENTRY" =~ ^[0-9]{8}-[0-9]{6}-feat-a3-reapme$ ]]; then
+  pass "A3d: the spec-archive entry carries a compact YYYYMMDD-HHMMSS stamp"
+else
+  fail "A3d: spec-archive entry for feat-a3-reapme missing or not compact-stamped (got: '${A3_SPEC_ENTRY:-<none>}')"
+fi
+A3_PLAN_ENTRY="$(ls -1 "$A3/clone/knowledge-base/project/plans/archive" 2>/dev/null | grep -F 'a3-reapme' || true)"
+if [[ -n "$A3_PLAN_ENTRY" && "$A3_PLAN_ENTRY" =~ ^[0-9]{8}-[0-9]{6}- ]]; then
+  pass "A3e: the plans-archive entry carries a compact YYYYMMDD-HHMMSS stamp"
+else
+  fail "A3e: plans-archive entry for a3-reapme missing or not compact-stamped (got: '${A3_PLAN_ENTRY:-<none>}')"
+fi
+# Non-canonical arm: no spec dir existed for feat-a3-planonly, so this row
+# proves archive_kb_files stamps compact independently of the spec-dir member.
+A3_PO_ENTRY="$(ls -1 "$A3/clone/knowledge-base/project/plans/archive" 2>/dev/null | grep -F 'a3-planonly' || true)"
+if [[ -n "$A3_PO_ENTRY" && "$A3_PO_ENTRY" =~ ^[0-9]{8}-[0-9]{6}- ]]; then
+  pass "A3f: a plans-only reap entry is compact-stamped without the spec-dir member"
+else
+  fail "A3f: plans-archive entry for a3-planonly missing or not compact-stamped (got: '${A3_PO_ENTRY:-<none>}')"
 fi
 
 # ===========================================================================================
