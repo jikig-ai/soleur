@@ -19,6 +19,11 @@
 > **Ordinal.** Renumbered 156 -> 157 at `/ship` time, in lockstep with ADR-156 (was 155), after a
 > sibling PR claimed 155 on `origin/main` mid-pipeline.
 
+> **Scoped exception — 2026-09-28 (#9089).** [ADR-256](./ADR-256-filing-gate-lexer-and-corpus-bound-predicate-parity.md)
+> carries this decision from the tool-call envelope to lexing the command in the guardrails filing
+> gate, with one exception to "never denies": on a filing-shaped command, an agent-fixable lexing
+> failure or a filing the older detectors see denies. Every other lexer failure asks, as here.
+
 ## Context
 
 [ADR-156](./ADR-156-hook-stdin-is-model-controlled-and-untrusted.md) requires a hook to verify the

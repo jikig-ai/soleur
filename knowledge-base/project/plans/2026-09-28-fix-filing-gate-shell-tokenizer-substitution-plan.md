@@ -1070,13 +1070,13 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
 
 ## Acceptance Criteria
 
-- [ ] **AC1.** Both suites pass under a literal floor equal to their row count, and each floor is
+- [x] **AC1.** Both suites pass under a literal floor equal to their row count, and each floor is
   bumped in the same commit as its rows:
   - `bash .claude/hooks/guardrails.test.sh` prints `Total: N  Pass: N  Fail: 0` with
     `MIN_ASSERTIONS=N`;
   - `bash .claude/hooks/lib/filing-shape.test.sh` prints `Total: M  Pass: M  Fail: 0` with its own
     literal floor.
-- [ ] **AC2.** Run `guardrails.test.sh` against a scratch copy of the **whole**
+- [x] **AC2.** Run `guardrails.test.sh` against a scratch copy of the **whole**
   `git show 4170460eea:.claude/hooks/` tree (never the worktree).
   - Every D-row not tagged `[base-deny]` FAILs.
   - Every P-row not tagged `[base-deny]` passes.
@@ -1084,10 +1084,10 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
     rows the base denies (P16, the `-m` form). D36 is base-denied too. Those rows pin the patched
     behavior and are
     excluded from the RED check.
-- [ ] **AC3.** Run `cd apps/web-platform && ./node_modules/.bin/vitest run --project repo-wide test/server/inngest/filing-shape-corpus-parity.test.ts`
+- [x] **AC3.** Run `cd apps/web-platform && ./node_modules/.bin/vitest run --project repo-wide test/server/inngest/filing-shape-corpus-parity.test.ts`
   and `./node_modules/.bin/vitest run test/server/inngest/cron-bash-allowlist-hook.test.ts test/server/cron-filing-deny-marker.test.ts`.
   Both pass. The parity test counts executed rows (`ran >= 80` in `afterAll`, a literal) and asserts all three classes over the asserted rows.
-- [ ] **AC4.** The corpus holds at least 80 rows, covering:
+- [x] **AC4.** The corpus holds at least 80 rows, covering:
   - `$E-X POST`, `${E}-X POST`, `repositories/<id>/issues`, a `..` segment, `"$B/issues"`;
   - every POST_SIGNAL spelling against the base endpoint, including `-iXPOST`, `-iftitle=x`,
     `-X$M`, `-f "$T"` and lowercase `post`;
@@ -1097,7 +1097,7 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
     and root `--repo x issue create`;
   - at least 15 `none` rows: sub-resources, `issues.json`, `ISSUES`, `pulls`, a GET with no signal,
     `--jq "$Q"`, `gh issue list`, `gh pr create`, `git` and `echo`.
-- [ ] **AC5.** Run `bash .claude/hooks/lib/filing-shape.test.sh --differential <scratch-base-hooks>`
+- [x] **AC5.** Run `bash .claude/hooks/lib/filing-shape.test.sh --differential <scratch-base-hooks>`
   over at least 300 generated commands:
   - 12 wrappers (bare, `$(…)`, `"$(…)"`, backticks, `bash -c "…"`, `sh -c '…'`, `eval`, `sudo`,
     `setsid`, `doppler run --`, pipeline stage, unquoted heredoc) × (the corpus's `create`/`api`
@@ -1108,7 +1108,7 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
   body:
   - every allow→deny flip is an oracle-truth filing;
   - every deny→allow flip is a justified filing, a `-m` filing or a sub-resource.
-- [ ] **AC6 (bounds, asserted by exit code and `bound=<cause>`, not wall clock).** Test-design #10
+- [x] **AC6 (bounds, asserted by exit code and `bound=<cause>`, not wall clock).** Test-design #10
   and performance-oracle drive these rows:
   - A 20-deep `$(…)` nesting (which grows linearly and cannot hit the budget) gives exit 3 with
     `bound=depth`.
@@ -1118,12 +1118,15 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
   - A 300 KiB padded command ending in a bare create gets a hook decision of `deny`, through the
     floor.
   - One wall-clock tripwire, the 12-deep hook call under 8 s, stays a suite row and is not an AC.
-- [ ] **AC7.** `bash .claude/hooks/hook-input-contract.test.sh` passes, and
+- [x] **AC7.** `bash .claude/hooks/hook-input-contract.test.sh` passes, and
   `python3 scripts/lint-shell-capture-exit.py .claude/hooks/guardrails.sh` reports no new finding.
-- [ ] **AC8.** In `.claude/hooks/guardrails.sh`:
-  - `grep -c 'xargs -n1'` returns 0;
+- [x] **AC8.** In `.claude/hooks/guardrails.sh`:
+  - `grep -c 'xargs -n1'` over the filing block (`sed -n '/^# guardrails:require-milestone/,/^# guardrails:block-stash-in-worktrees/p'`)
+    returns 0. **Amended at work time:** the file-wide literal cannot reach 0 without editing an
+    unrelated gate — the one remaining `xargs -n1` tokenizes for the recursive-delete gate, which
+    this plan does not touch;
   - `_api_pl` and the CLASS 1 grep are still present, each commented as the floor.
-- [ ] **AC9.** `grep -c 'const ENDPOINT_RE' apps/web-platform/server/cron-filing-deny-marker.ts`
+- [x] **AC9.** `grep -c 'const ENDPOINT_RE' apps/web-platform/server/cron-filing-deny-marker.ts`
   returns 0, and the file imports `ISSUES_COLLECTION_RE`.
 - [ ] **AC10.** All of these hold:
   - `python3 scripts/lint-guard-contract.py` passes on this plan;
@@ -1131,7 +1134,19 @@ predicate weakened in step with the corpus therefore shows up as an oracle miss.
   - ADR-256 exists (ordinal re-verified at ship), and ADR-157 carries the dated pointer to it;
   - the C4 tests pass after the `model.c4` sentence: `c4-code-syntax.test.ts` and `c4-render.test.ts`;
   - the PR body carries `Closes #9089` and links the residual follow-up issue.
-- [ ] **AC11.** `bash .claude/hooks/lib/filing-shape.test.sh --probe` prints `PROBE=create`.
+- [x] **AC11.** `bash .claude/hooks/lib/filing-shape.test.sh --probe` prints `PROBE=create`.
+
+### Work-phase evidence (2026-09-28)
+
+- AC1: `filing-shape.test.sh` 229/229 (`MIN_ASSERTIONS=229`); `guardrails.test.sh` 323/323 (`MIN_ASSERTIONS=323`).
+- AC2: against a scratch copy of the whole `4170460eea:.claude/hooks/` tree, 78/78 untagged D rows FAIL and 26/26 untagged P rows pass.
+- AC3: vitest 163/163 (hook + deny marker), 123/123 (`--project repo-wide`, parity + eslint-config); parity floor `ran >= 100` over 108 rows.
+- AC4: the corpus holds 108 rows (11 create, 63 api, 34 none).
+- AC5: `--differential` over 1,038 executed commands: 0 misses, 0 prose filings, 0 empty columns; 545 flips, 0 unexplained (180 oracle-truth filings, 350 predicate over-gates, 14 DC-2 over-fires, 1 justified `-m` filing now allowed).
+- AC6: depth and budget rows assert `bound=depth`/`bound=budget` and exit 3; the memoized nested row exits 0; the alarm row asserts `bound=alarm`; the 300 KiB row denies; the 12-deep tripwire stays a suite row.
+- AC7: `hook-input-contract.test.sh` 111/111; `lint-shell-capture-exit.py` 0 new findings.
+- AC11: `--probe` prints `PROBE=create`.
+- Mutation battery (Guard Contract): 24/24 killed. Not run as separate mutants: G1-2, G1-18, G1-20, G2-1, G2-7 (their witnesses — F-count, D53, D24-D26, D35 — are in the committed rows).
 
 ## Domain Review
 
