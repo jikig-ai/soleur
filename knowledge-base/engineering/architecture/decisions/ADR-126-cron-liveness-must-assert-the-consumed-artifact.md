@@ -384,3 +384,13 @@ points at **#7046**, which tracks resolving it.
 
 No `views.c4` edit is required: the `containers` view already enumerates both endpoints, and LikeC4
 renders the relationship automatically.
+
+## Addendum — 2026-09-28 (#7046 resolved by #9134)
+
+The counter-evidence in the 2026-07-28 amendment no longer holds. `inngest -> github` and
+`inngest -> doppler` were deleted with the GHCR token minter's retirement (ADR-096 5.4, #9071), and
+#9134 (#7230) re-sourced the last Inngest-fired function write, `email-on-received`'s claim/finalize
+writes, from `inngest -> supabase` to `api -> supabase`. Every Inngest-fired function write is now
+attributed to `api`, and every remaining `inngest ->` edge is the Inngest host's own traffic
+(its Postgres, Redis, telemetry and bootstrap pulls). No CI check pins this; a new
+`inngest -> <external>` edge for a function's write would reintroduce the inconsistency.
