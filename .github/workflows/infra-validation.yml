@@ -757,6 +757,12 @@ jobs:
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
 
+      # (#9045) The workspaces-LUKS dead-man FIRED Logs alert: the tag, host, marker and result=fired
+      # conjuncts (read against the fire command's own logger line), the paging semantics, both
+      # -target lines, and the mutation rows that each require this guard to red.
+      - name: Run workspaces-LUKS dead-man fired alert drift guard (#9045)
+        run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh
+
       # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
       # predicate, exact literals, unpaused, both -target lines, and its mutation rows.
       - name: Run registry store-not-LUKS alert drift guard (#8408)

@@ -30,11 +30,40 @@
 #
 # This file is sourced, never executed; it defines functions and two counters and does nothing else.
 
+case "$-" in
+  *x*)
+    if [ -n "${MON_KEY:+x}${WORKSPACES_LUKS_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # --- counters + reporters ----------------------------------------------------
 pass=0
 fail=0
 ok() { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
 no() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
+# harness_selftest <suite-name> — the reporters are the instrument every verdict below runs through,
+# so prove them first (#9098 D1): one ok() must add exactly one pass and no fail, one no() exactly one
+# fail and no pass. Runs in a SUBSHELL so the real counters are untouched, and reports through
+# printf + exit 2 — never through no(), the very function under suspicion.
+harness_selftest() {
+  local got
+  got="$( pass=0; fail=0; ok selftest-ok >/dev/null; no selftest-no >/dev/null; printf '%s/%s' "$pass" "$fail" )"
+  if [ "$got" != "1/1" ]; then
+    printf 'INSTRUMENT FAIL - %s: ok()/no() self-test got pass/fail=%s, want 1/1 — every verdict below would be meaningless\n' "$1" "$got"
+    exit 2
+  fi
+}
+# harness_floor <suite-name> <floor> — the pass FLOOR, enforced by printf + exit 1, never by no(): a
+# neutered no() plus a real failure must still turn the run red (#9098 D1). Call it AFTER the summary.
+harness_floor() {
+  if [ "$pass" -lt "$2" ]; then
+    printf 'FAIL - %s: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$1" "$pass" "$2"
+    exit 1
+  fi
+}
 
 RUN_SCRATCH="$(mktemp -d -t wl-harness.XXXXXXXX)"
 CASE_N=0
@@ -140,8 +169,49 @@ harness_blockdev_other() {
 #   BLKID_RC=<n>              force `blkid`'s exit status (only 0 and 2 are acceptable to the SUT)
 #   BLKID_ABSENT=1            `command -v blkid` fails (blkid not on PATH)
 #   CRYPTSETUP_CLOSE_RC=<n>   force `cryptsetup close`'s exit status (rollback EBUSY)
+#   CRYPTSETUP_UUID           what `cryptsetup luksUUID` prints (default EMPTY: rc 1, nothing printed)
 #   READLINK_RC=<n>           force `readlink`'s exit status (the naive _same_dev fails OPEN here)
 #   READLINK_EMPTY=1          readlink exits 0 but prints NOTHING (the other fail-open half)
+#
+# Dead-man unit model (#9045). `systemctl show|stop|reset-failed` and `systemd-run` answer PER UNIT
+# for workspaces-luks-deadman.{timer,service} (a bare `workspaces-luks-deadman` is the service,
+# as systemctl reads it); every other `show` still prints ${STOP_RESULT:-success}. Each unit is
+# gone (LoadState=not-found: SubState=dead, ActiveState=inactive, every timestamp empty — the
+# shape measured on systemd 255/261), stale (loaded, elapsed) or armed (created by systemd-run).
+# LAST EVENT WINS per exact unit: a stop or reset-failed naming a loaded unit collects it (gone);
+# a stop naming a gone unit exits 5 and a reset-failed exits 1, as real systemctl does; a later
+# `systemd-run --unit=workspaces-luks-deadman` revives BOTH units (armed).
+#   DEADMAN_LOADED="timer service"  units that start LOADED (stale). Default EMPTY: both start
+#                             not-found, the fresh-host shape a first-ever arm must tolerate.
+#   DEADMAN_TIMER_SUBSTATES="dead waiting"  SEQUENCED timer SubState, consumed only by reads of a
+#                             LOADED timer (file-backed _seq_next, key show.<unit>.<prop>), and
+#                             saturating on the last value. Unset: stale reads dead, armed waiting.
+#   DEADMAN_SVC_ACTIVESTATES="activating inactive"  SEQUENCED service ActiveState, same rules.
+#                             Unset: inactive.
+#   DEADMAN_SVC_ACTIVESTATE_AFTER_STOP=activating  once a stop of the LOADED timer is recorded,
+#                             the service answers THIS instead of its sequence: a fire that began
+#                             just before the stop. Only a read placed AFTER the stop can see it.
+#   DEADMAN_TIMER_LASTTRIGGER  the timer LastTriggerUSec while loaded. Default EMPTY (never fired).
+#   DEADMAN_STOP_INEFFECTIVE=1  the timer survives stop AND reset-failed (still loaded, still
+#                             answering its sequence), so a post-stop waiting check can fail.
+#   DEADMAN_SVC_JOB=<id>      the service `Job` property while loaded (default EMPTY = no queued job).
+#                             A non-empty value is a start job the elapsed timer queued but systemd
+#                             has not begun yet: ActiveState still reads inactive (#9098 D).
+#   SYSTEMD_RUN_RC=<n>        systemd-run exit status (default 0; non-zero revives nothing)
+#   SYSTEMD_RUN_OUT=<text>    written to systemd-run STDERR (a refusal message, multi-line allowed)
+#   systemd-run REFUSES by itself (rc 1, the real "already loaded or has a fragment file" text on
+#   stderr) while EITHER dead-man unit is still loaded, i.e. not yet collected by a stop or a
+#   reset-failed. That is the H1 mechanism, measured on systemd 261 (L7a). It makes the arm
+#   pre-clear provable by its EFFECT: drop the reset-failed of the service and the arm fails.
+#   FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP  once a stop of the LOADED timer is recorded (the same
+#                             $CALLS.dm.timerstopped flag the service knob keys on), `findmnt -no
+#                             SOURCE $MOUNT` answers THIS instead of FINDMNT_MOUNT_SRC: a fire that
+#                             remounted the plaintext just before the disarm stopped the timer. Set
+#                             but EMPTY means the fire left $MOUNT unmounted.
+# logger and emit_drift are ALSO recorded in $CALLS (`logger <argv>`, `EMIT_DRIFT <reason>`), so
+# call, marker and drift order is assertable in one file. That is why every $CALLS pattern in the
+# consuming suites is ANCHORED on its command word (`^mount `, `^curl .*readyz`): an unanchored
+# pattern could now be satisfied by a marker row that merely mentions the command.
 run_case() {
   local script="$1" invocation="$2" require="$3"; shift 3
   CASE_N=$((CASE_N + 1))
@@ -161,13 +231,101 @@ run_case() {
     bash -c '
       source "$CUTOVER"                                   # guard => functions only, no main body
       rec() { printf "%s\n" "$*" >> "$CALLS"; }
+      # --- dead-man unit model (#9045); see the knob list above run_case ---
+      # NOTE: no apostrophes in this block — it lives inside a single-quoted bash -c body.
+      _hdm_key() {  # argv word -> timer | service, or rc 1 when it names no dead-man unit
+        case "$1" in
+          workspaces-luks-deadman.timer) printf timer ;;
+          workspaces-luks-deadman.service|workspaces-luks-deadman) printf service ;;
+          *) return 1 ;;
+        esac
+      }
+      _hdm_state() {  # timer|service -> gone | stale | armed (last event wins, file-backed)
+        if [ -f "$CALLS.dm.$1" ]; then cat "$CALLS.dm.$1"; return 0; fi
+        case " ${DEADMAN_LOADED-} " in *" $1 "*) printf stale ;; *) printf gone ;; esac
+      }
+      _hdm_prop() {  # timer|service <Prop> -> value; a sequence advances only on a LOADED read
+        local k="$1" p="$2" st i
+        st="$(_hdm_state "$k")"
+        if [ "$st" = gone ]; then
+          case "$p" in LoadState) printf not-found ;; ActiveState) printf inactive ;; SubState) printf dead ;; esac
+          return 0
+        fi
+        case "$k.$p" in
+          *.LoadState) printf loaded ;;
+          timer.SubState)
+            if [ -n "${DEADMAN_TIMER_SUBSTATES:-}" ]; then
+              i="$(_seq_next show.workspaces-luks-deadman.timer.SubState)"; _seq_pick "$i" "$DEADMAN_TIMER_SUBSTATES"
+            elif [ "$st" = armed ]; then printf waiting
+            else printf dead; fi ;;
+          timer.ActiveState) if [ "$st" = armed ]; then printf active; else printf inactive; fi ;;
+          timer.LastTriggerUSec) printf "%s" "${DEADMAN_TIMER_LASTTRIGGER-}" ;;
+          service.ActiveState)
+            if [ -n "${DEADMAN_SVC_ACTIVESTATE_AFTER_STOP:-}" ] && [ -f "$CALLS.dm.timerstopped" ]; then
+              printf "%s" "$DEADMAN_SVC_ACTIVESTATE_AFTER_STOP"
+            elif [ -n "${DEADMAN_SVC_ACTIVESTATES:-}" ]; then
+              i="$(_seq_next show.workspaces-luks-deadman.service.ActiveState)"; _seq_pick "$i" "$DEADMAN_SVC_ACTIVESTATES"
+            else printf inactive; fi ;;
+          service.SubState) printf dead ;;
+          service.Job) printf "%s" "${DEADMAN_SVC_JOB-}" ;;
+        esac
+        return 0
+      }
+      _hdm_svc_now() {  # the service ActiveState LAST answered (a peek: advances no sequence)
+        local f="$CALLS.seq.show.workspaces-luks-deadman.service.ActiveState" i=0
+        if [ -n "${DEADMAN_SVC_ACTIVESTATE_AFTER_STOP:-}" ] && [ -f "$CALLS.dm.timerstopped" ]; then
+          printf "%s" "$DEADMAN_SVC_ACTIVESTATE_AFTER_STOP"; return 0
+        fi
+        if [ -n "${DEADMAN_SVC_ACTIVESTATES:-}" ]; then
+          [ -f "$f" ] && i="$(cat "$f")"
+          [ "$i" -gt 0 ] && i=$((i - 1))
+          _seq_pick "$i" "$DEADMAN_SVC_ACTIVESTATES"; return 0
+        fi
+        printf inactive
+      }
+      _hdm_show() {  # the argv of `systemctl show`; unit in ANY position; rc 1 = not a dead-man query
+        local a k="" p="" val=0 prev=""
+        for a in "$@"; do
+          case "$prev" in -p|--property) p="$a" ;; esac
+          case "$a" in --property=*) p="${a#--property=}" ;; --value) val=1 ;; esac
+          _hdm_key "$a" >/dev/null && k="$(_hdm_key "$a")"
+          prev="$a"
+        done
+        [ -n "$k" ] && [ -n "$p" ] || return 1
+        if [ "$val" = 1 ]; then printf "%s\n" "$(_hdm_prop "$k" "$p")"
+        else printf "%s=%s\n" "$p" "$(_hdm_prop "$k" "$p")"; fi
+        return 0
+      }
+      _hdm_gc() {  # stop|reset-failed argv; collects every LOADED dead-man unit it names
+        local verb="$1" a k rc=0; shift
+        for a in "$@"; do
+          k="$(_hdm_key "$a")" || continue
+          if [ "$(_hdm_state "$k")" = gone ]; then
+            if [ "$verb" = stop ]; then rc=5; else rc=1; fi
+            continue
+          fi
+          [ "$verb" = stop ] && [ "$k" = timer ] && : > "$CALLS.dm.timerstopped"
+          [ "$k" = timer ] && [ "${DEADMAN_STOP_INEFFECTIVE:-0}" = "1" ] && continue
+          # reset-failed never unloads a RUNNING unit (it only clears a failed one): a fire in
+          # progress survives it, so a wait placed after the disarm still sees the fire.
+          if [ "$verb" = reset-failed ] && [ "$k" = service ]; then
+            case "$(_hdm_svc_now)" in active|activating|deactivating) continue ;; esac
+          fi
+          printf gone > "$CALLS.dm.$k"
+        done
+        return "$rc"
+      }
       systemctl() {
         rec "systemctl $*"
         if [ "${1:-}" = "is-active" ]; then
           local u="${@: -1}"
           case " ${ACTIVE_UNITS:-} " in *" $u "*) return 0;; *) return 1;; esac
         fi
-        if [ "${1:-}" = "show" ]; then printf "%s\n" "${STOP_RESULT:-success}"; fi
+        if [ "${1:-}" = "show" ]; then
+          _hdm_show "$@" && return 0
+          printf "%s\n" "${STOP_RESULT:-success}"
+        fi
+        case "${1:-}" in stop|reset-failed) _hdm_gc "$@"; return $? ;; esac
         return 0
       }
       docker()  {
@@ -211,6 +369,12 @@ run_case() {
         # remounting plaintext and reporting SUCCESS while leaking the mapper open AND mounted at
         # $STAGING with a full divergent copy. This knob is what makes that EBUSY reproducible.
         if [ "${1:-}" = "close" ]; then return "${CRYPTSETUP_CLOSE_RC:-0}"; fi
+        # luksUUID answers CRYPTSETUP_UUID (default EMPTY = an unreadable header), for the
+        # ROLLBACK=1 post-cutover guard, which compares it against the persisted CANARY_OK.
+        if [ "${1:-}" = "luksUUID" ]; then
+          [ -n "${CRYPTSETUP_UUID:-}" ] || return 1
+          printf "%s\n" "$CRYPTSETUP_UUID"
+        fi
         return 0
       }
       findmnt() {
@@ -233,7 +397,12 @@ run_case() {
           # substring comparison pass every case in both suites.
           *OPTIONS*) printf "%s\n" "${FINDMNT_MOUNT_OPTS-rw,relatime,errors=remount-ro}" ;;
           *"$WORKSPACES_STAGING"*) printf "%s\n" "${FINDMNT_STAGING_SRC:-}" ;;
-          *"$WORKSPACES_MOUNT"*)   printf "%s\n" "${FINDMNT_MOUNT_SRC:-}" ;;
+          *"$WORKSPACES_MOUNT"*)
+            if [ -n "${FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP+set}" ] && [ -f "$CALLS.dm.timerstopped" ]; then
+              printf "%s\n" "$FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP"
+            else
+              printf "%s\n" "${FINDMNT_MOUNT_SRC:-}"
+            fi ;;
         esac
         return 0
       }
@@ -293,8 +462,27 @@ run_case() {
         [ "${READLINK_EMPTY:-}" = "1" ] && { printf ""; return 0; }
         command readlink "$@"; return $?
       }
-      systemd-run() { rec "systemd-run $*"; return 0; }
-      logger()  { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+      # systemd-run: SYSTEMD_RUN_OUT goes to STDERR (where the real refusal lands), and only a
+      # successful run revives the dead-man pair. NOTE: no apostrophes in this block.
+      systemd-run() {
+        rec "systemd-run $*"
+        local a u=""
+        for a in "$@"; do case "$a" in --unit=*) u="${a#--unit=}" ;; esac; done
+        # The H1 refusal, modelled rather than injected: a same-name run while either unit is
+        # still loaded fails exactly as systemd 261 does (L7a measures the real text).
+        if [ "$u" = "workspaces-luks-deadman" ] && [ -z "${SYSTEMD_RUN_RC:-}" ] \
+          && { [ "$(_hdm_state service)" != gone ] || [ "$(_hdm_state timer)" != gone ]; }; then
+          printf "%s\n" "Failed to start transient timer unit: Unit workspaces-luks-deadman.service was already loaded or has a fragment file." >&2
+          return 1
+        fi
+        [ -n "${SYSTEMD_RUN_OUT:-}" ] && printf "%s\n" "$SYSTEMD_RUN_OUT" >&2
+        if [ "${SYSTEMD_RUN_RC:-0}" = "0" ] && [ "$u" = "workspaces-luks-deadman" ]; then
+          printf armed > "$CALLS.dm.timer"; printf armed > "$CALLS.dm.service"
+        fi
+        return "${SYSTEMD_RUN_RC:-0}"
+      }
+      # logger is recorded in $CALLS too (#9045), so a marker is ordered against the calls around it.
+      logger()  { rec "logger $*"; printf "%s\n" "$*" >> "$MARKER_LOG"; }
       hostname() { echo "test-host"; }
       apt-get() { rec "apt-get $*"; return 1; }
       timeout() { shift; "$@"; }
@@ -394,7 +582,7 @@ run_case() {
         return 0
       }
       die()     { echo "DIE: $*"; exit 1; }
-      emit_drift() { echo "EMIT_DRIFT: $1"; }
+      emit_drift() { rec "EMIT_DRIFT $1"; echo "EMIT_DRIFT: $1"; }
       lsof()    {
         rec "lsof $*"
         # The HEADER is always emitted: the SUT asserts its shape (`^COMMAND +PID +USER`) and drops

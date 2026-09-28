@@ -58,7 +58,12 @@ on:
         type: boolean
         default: true
       rollback:
-        description: "Recovery: remount the retained plaintext at /mnt/data + restart. Use if a cutover left web-1 unhealthy."
+        description: "Recovery: remount the retained plaintext at /mnt/data + restart. Use if a cutover left web-1 unhealthy. REFUSED after a COMPLETED cutover (mount = LUKS mapper, persisted CANARY_OK matches its header) unless rollback_ack_luks_writes is also ticked."
+        required: false
+        type: boolean
+        default: false
+      rollback_ack_luks_writes:
+        description: "Only with rollback=true. Acknowledge that rolling back a COMPLETED cutover strands every write made on the LUKS volume since docker start (the plaintext copy is frozen at the cutover); those writes must then be reconciled by hand. Without it the script refuses (rollback_refused_post_cutover)."
         required: false
         type: boolean
         default: false
@@ -113,8 +118,18 @@ jobs:
           DRY: ${{ inputs.dry_run }}
           ROLLBACK_IN: ${{ inputs.rollback }}
           CLEAN_STRAY_IN: ${{ inputs.clean_stray }}
+          ACK_IN: ${{ inputs.rollback_ack_luks_writes }}
         run: |
           set -euo pipefail
+
+          # The post-cutover rollback acknowledgement only means something on a rollback dispatch; on
+          # any other mode it is a mis-ticked box, and silently ignoring it would hide the mistake.
+          # `${ACK_IN:-false}`: the step runs under `set -u`, and an input added later than its siblings
+          # must not turn every harness/dispatch that predates it into an unbound-variable abort.
+          if [[ "${ACK_IN:-false}" == "true" && "$ROLLBACK_IN" != "true" ]]; then
+            echo "::error::rollback_ack_luks_writes=true requires rollback=true — it acknowledges stranding post-cutover LUKS writes and has no meaning in any other mode. Untick it or tick rollback."
+            exit 1
+          fi
 
           # clean_stray deletes user data and has no rehearsal — there is nothing it could safely
           # simulate. dry_run DEFAULTS TO TRUE, so "tick clean_stray, change nothing else" lands
@@ -386,6 +401,7 @@ jobs:
           WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           ROLLBACK: ${{ inputs.rollback && '1' || '0' }}
+          ROLLBACK_ACK_LUKS_WRITES: ${{ inputs.rollback_ack_luks_writes && '1' || '0' }}
           CLEAN_STRAY: ${{ inputs.clean_stray && '1' || '0' }}
           WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
         # The cutover body runs ON web-1 (DP-6 host-side trap): ship the script + its siblings over the
@@ -460,17 +476,19 @@ jobs:
           # un-trapped window). Fields are metacharacter-free (dp.st token / by-id path / 0|1) so
           # `set -a; . .env` is injection-safe.
           # shellcheck disable=SC2086
-          printf 'DOPPLER_TOKEN=%s\nWORKSPACES_LUKS_DEV=%s\nDRY_RUN=%s\nROLLBACK=%s\nCLEAN_STRAY=%s\n' \
-            "$WORKSPACES_LUKS_BOOT_TOKEN" "$LUKS_DEV" "$DRY_RUN" "$ROLLBACK" "$CLEAN_STRAY" \
+          printf 'DOPPLER_TOKEN=%s\nWORKSPACES_LUKS_DEV=%s\nDRY_RUN=%s\nROLLBACK=%s\nROLLBACK_ACK_LUKS_WRITES=%s\nCLEAN_STRAY=%s\n' \
+            "$WORKSPACES_LUKS_BOOT_TOKEN" "$LUKS_DEV" "$DRY_RUN" "$ROLLBACK" "$ROLLBACK_ACK_LUKS_WRITES" "$CLEAN_STRAY" \
             | ${WEB_HOST_SSH} "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/workspaces-cutover.sh\"'"
           rc=$?
           if [[ $rc -ne 0 ]]; then
-            # The DP-6 EXIT trap rolls back to the plaintext mount ONLY for a PRE-canary failure; a
-            # failure AFTER the host canary (e.g. monitor-timer arm) leaves the LUKS mount LIVE and
-            # retained (cleanup() no-ops once CANARY_OK=1). Not every failure emits a Sentry event —
-            # the at-rest asserts do; the timer-arm die now does too. Read the streamed die() message
-            # in this run log first, then the Sentry channel (feature=workspaces-luks op=workspaces-luks-drift).
-            echo "::error::workspaces-luks cutover exited $rc — see the streamed die() message above. Pre-canary failures auto-rolled-back to the plaintext mount (DP-6); a post-canary failure left the LUKS mount live. Check the run log + any emitted Sentry event (feature=workspaces-luks op=workspaces-luks-drift)."
+            # The DP-6 EXIT trap rolls back to the plaintext mount ONLY for a PRE-canary failure. After
+            # the host canary (CANARY_OK=1) cleanup() rolls FORWARD instead: it re-asserts the mapper,
+            # restarts the app + writers on the LUKS mount (or, on a wrong mount, stops them and pages),
+            # and never rolls back. Every abort writes ONE outcome row —
+            # `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<outcome>` — to this log
+            # and the luks-monitor tag; read that row first, then the streamed die() message, then the
+            # Sentry channel (feature=workspaces-luks op=workspaces-luks-drift).
+            echo "::error::workspaces-luks cutover exited $rc — read the 'result=cutover_aborted outcome=' row above (what cleanup() actually did: rolled_back / rollback_stacked / rollback_remount_failed / post_canary_* / arm_aborted / pre_freeze / dry_run / clean_stray; abnormal_exit=1 means a signal or SSH drop), then the streamed die() message, then any Sentry event (feature=workspaces-luks op=workspaces-luks-drift). Never ROLLBACK=1 after a post_canary_* outcome: it strands every write since docker start."
             exit $rc
           fi
 
@@ -511,6 +529,7 @@ jobs:
           ACTOR: ${{ github.actor }}
           DRY: ${{ inputs.dry_run }}
           ROLLBACK_IN: ${{ inputs.rollback }}
+          ACK_IN: ${{ inputs.rollback_ack_luks_writes }}
           CLEAN_STRAY_IN: ${{ inputs.clean_stray }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -534,7 +553,7 @@ jobs:
             echo ""
             echo "**Actor:** ${ACTOR}"
             echo "**Mode:** ${MODE}"
-            echo "**Inputs:** dry_run=${DRY} rollback=${ROLLBACK_IN} clean_stray=${CLEAN_STRAY_IN}"
+            echo "**Inputs:** dry_run=${DRY} rollback=${ROLLBACK_IN} rollback_ack_luks_writes=${ACK_IN:-false} clean_stray=${CLEAN_STRAY_IN}"
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
