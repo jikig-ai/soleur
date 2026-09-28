@@ -389,7 +389,7 @@ mount. See [the triage table](#dead-man-and-abort-triage-9045).
 - **Better Stack logs alert `soleur-luks-monitor-host-timer-dark-prd`** (#8706) — the host unit has
   not reported a good run in about 27 h. See the next section.
 - **`betteruptime_monitor.app`** — a refused container (failed unlock) is a hard down.
-- **Better Stack logs alert `workspaces_luks_deadman_fired`** (#9045): an unattended dead-man fire.
+- **Better Stack logs alert `soleur-workspaces-luks-deadman-fired-prd`** (#9045): an unattended dead-man fire.
   See the next section.
 
 ### Dead-man and abort triage (#9045)
@@ -409,7 +409,7 @@ one Sentry issue (135268270); **never archive it**, or later reasons stop paging
 | `cutover_aborted_post_canary` (fatal) | The app failed after `docker start` on the LUKS mount. Nothing was armed. `cleanup()` re-asserted the mapper and restarted the app on it. | **Fix-forward only.** The LUKS mount is authoritative. Diagnose the app failure from the run log and Sentry. `rollback=true` would strand every write since `docker start` (ADR-119 §(b)): reconcilable, but never the first move. | fix-forward |
 | `cleanup_mount_not_mapper` | After a post-canary abort, `/mnt/data` was no longer the mapper, so `cleanup()` did NOT restart the app. The app is down. | Run `workspaces-luks-verify.yml` to read the mount state, then decide between re-mounting the mapper and a reconciled rollback. | investigation |
 | `cleanup_docker_start_failed` | The roll-forward could not restart the container. | Read the app container error in the run log, fix it, then restart through the deploy path. | fix-forward |
-| Alert `workspaces_luks_deadman_fired` (`result=fired`) | An unattended dead-man fire remounted plaintext, for example after a SIGKILL of the host script mid-freeze. | Read the rows around it (query above) to see which run armed it. Run `workspaces-luks-verify.yml`. Any writes made on the LUKS volume after the fire are stranded there: reconcile before any re-cut. | investigation |
+| Alert `soleur-workspaces-luks-deadman-fired-prd` (`result=fired`) | An unattended dead-man fire remounted plaintext, for example after a SIGKILL of the host script mid-freeze. | Read the rows around it (query above) to see which run armed it. Run `workspaces-luks-verify.yml`. Any writes made on the LUKS volume after the fire are stranded there: reconcile before any re-cut. | investigation |
 
 ### Host-timer liveness alert (#8706)
 
