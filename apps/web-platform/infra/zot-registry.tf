@@ -64,6 +64,8 @@ locals {
   # ONE idempotent issue); enforcement is `zot-image-staleness.test.sh` in infra-validation.
   # NOTHING auto-writes these two lines: the cron files an issue, a human opens the CI-gated PR.
   # No bot manages this pin — do not describe one.
+  # DELIVERY: a merged bump reaches the host through registry-host-replace-dispatch.yml, whose gate
+  # renders the user_data at both SHAs and delivers on a byte change (#7582).
   #
   # THE ARCH IN EACH NAME MUST MATCH THE ARCH IN ITS VALUE. `local.zot_image` below selects on
   # registry_arch (amd64 today), so swapping these two values DARKS THE SOLE PULL PATH.
