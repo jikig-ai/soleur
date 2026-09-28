@@ -6,6 +6,8 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 
 > **Correction 2026-09-25 (#8754):** Of the three controls named above, the first (the zero-rule deny-all `hcloud_firewall.inngest`) was not attached to the host in service when that paragraph was written. It was also unattached for most of the period since the first scoped host replacement on 2026-07-09: from 2026-07-09 to 2026-07-31, from 2026-08-12 to 2026-09-09, and from 2026-09-09 to at least the 2026-09-25 measurement. Once the change tracked in #8754 merges, the binding lives on `hcloud_server.inngest.firewall_ids`, and the host in service gains it at its next `inngest-host-replace`. Until the post-replace check passes, treat these as the controls in force: the host-local nftables chain (`:8288`/`:8289` only) and Inngest's `/v1/*` loopback gating. Treat TCP 22 as reachable from the internet. **Post-replace check (Hetzner API, no SSH):** the new server's `public_net.firewalls` lists 11269127 with status `applied`, and firewall 11269127's `applied_to` lists that server's id. After that check passes, append a dated "restored" marker here and at the records listed in `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md` (§Post-replace verification).
 
+> **Restored 2026-09-27 (#8754):** The post-replace check passed. `inngest-host-replace` run 36327637204 created server 167651172 at 2026-09-27T14:56:48Z with the firewall applied at creation, and deleted server 167310350. Measured through the Hetzner API at about 15:02Z: server 167651172's `public_net.firewalls` lists 11269127 with status `applied`, and firewall 11269127's `applied_to` lists 167651172. TCP connects to the new public address on 22, 8288 and 6379 time out (dropped, not refused). The cloud-firewall control named in the intro is measured in force again, so stop treating TCP 22 as reachable from the internet. The host-local nftables chain and the `/v1/*` loopback gating are installed by design on every host; their load on server 167651172 was not separately measured. The record is the 2026-09-27 addendum of `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.
+
 ## Quick reference
 
 | Concern | Procedure |
@@ -941,18 +943,63 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 (`hr-no-ssh-fallback-in-runbooks`). Full context + gotchas:
 `knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md`.
 
-1. **Push an ANNOTATED `vinngest-vX.Y.Z` tag on the squash-merge commit on `main`,
-   after the PR that changes the carrier has merged** (the repo forces annotated tags — a
+1. **The tag is minted automatically (#4326, ADR-232 §8).** When a push to `main` changes an
+   image input (a `cp`-staged carrier, one of the four baked pins in `inngest.tf` /
+   `vector.tf`, or the Dockerfile heredoc), `mint-inngest-bootstrap-tag.yml` cuts the next
+   `vinngest-vX.Y.Z` on **`main`'s tip at the moment the run starts** (which carries that
+   change and may carry later ones; it is not necessarily the commit that made the change) as
+   `github-actions[bot]` (one patch above EVERY existing `vinngest-v*` tag) and dispatches
+   `build-inngest-bootstrap-image.yml` from `main`. That run
+   builds, SHA-verifies and pushes the image. It does NOT deploy. There is nothing to do in
+   this step unless the mint run failed: read its stage-named `::error::` and
+   `result=`/`reason=` lines and use the recovery table below. To see what the mint would
+   decide, run `git fetch --tags origin && bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run`.
+
+   **Manual fallback, in this order.** First re-run the decision. It is idempotent: it mints
+   only when the inputs still differ from the newest merged tag, and it builds once:
+
+   ```
+   gh workflow run mint-inngest-bootstrap-tag.yml --ref main
+   ```
+
+   Hand-tag only after `reason=workflows-permission` (residual R1), and only when no
+   `vinngest-v*` tag already carries the change. The mint tags `main`'s tip, so a tag on the
+   change's merge commit OR on any later `main` commit already carries it, and a second tag
+   means a second build. Check that this prints nothing:
+
+   ```
+   git fetch --tags origin main
+   git tag --contains <merge-sha> --list 'vinngest-v*'
+   ```
+
+   **Hand-tag:** push an ANNOTATED `vinngest-vX.Y.Z` tag, one patch above every existing
+   `vinngest-v*` tag, on `origin/main`'s current tip, after the PR that changes the
+   carrier has merged (the repo forces annotated tags — a
    bare `git tag <name> <sha>` fails `fatal: no tag message?`):
 
    ```
    git fetch origin main
-   git tag -a vinngest-v1.1.16 <main-sha> -m "inngest-bootstrap v1.1.16: <what>"
+   git tag -a vinngest-v1.1.16 origin/main -m "inngest-bootstrap v1.1.16: <what>"
    git push origin vinngest-v1.1.16
    ```
 
-   Fires `build-inngest-bootstrap-image.yml` → builds + SHA-verifies + pushes the
-   image. It does NOT deploy.
+   Today this fires `build-inngest-bootstrap-image.yml` through `push: tags` → builds +
+   SHA-verifies + pushes the image. It does NOT deploy. **Once #8209 removes `push: tags`**, a
+   hand-pushed tag starts nothing: confirm no build run exists for it (below), then dispatch it
+   once with `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`
+   (ADR-232 §8, R1).
+
+   **Confirming no build run exists for a tag** (required before ANY manual dispatch — a
+   second build of one tag moves its digest). Build runs are titled
+   `Build inngest-bootstrap <tag>`:
+
+   ```
+   gh run list --workflow build-inngest-bootstrap-image.yml --limit 100 \
+     --json displayTitle,status,conclusion,url \
+     --jq '.[] | select(.displayTitle == "Build inngest-bootstrap <tag>")'
+   ```
+
+   Empty output means no run. Any row (queued, running or finished) means do NOT dispatch.
 
    **A tag on a PR-branch commit is refused (#8747, ADR-232 §7).** The build job refuses
    before building (`::error::ancestry: vinngest-vX.Y.Z is on commit <sha>, which is not an
@@ -994,16 +1041,40 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    own publish may still be running).
 
    **Carrier-changing PR flow.** Merge the PR that changes a baked carrier first. Its
-   `deploy-script-tests` GuardA row is red on the PR, which is expected and advisory. Then
-   tag the squash-merge commit (above). The publish passes the ancestry check, and the
+   `deploy-script-tests` GuardA row is red on the PR, which is expected and advisory (the
+   PR-side exemption is #9081). The merge itself mints the tag and dispatches the build
+   (above); tag by hand only per the fallback. The publish passes the ancestry check, and the
    automated bump PR (step 2) auto-merges when the zot mirror is healthy. `main`'s GuardA is
-   red from the merge until that bump lands; #4326 (auto-mint on infra push) closes the gap.
+   red from the merge until that bump lands, which is now one mint + build + bump cycle.
    A candidate image can no longer be built from an unmerged PR (#8781).
 
+   **Auto-mint recovery table** (`mint-inngest-bootstrap-tag.yml`; every row is a
+   `gh` command or a code fix, never SSH):
+
+   | Signal | Action |
+   |---|---|
+   | `::error::args:` (`usage`, `credential-isolation`, `missing-credential`, `missing-tool`, `bad-repo-dir`, `bad-repo`, `xtrace`) | Nothing was published. The workflow step drifted from the script's contract (a token bound to the wrong step, a missing env, a traced run). Fix `.github/workflows/mint-inngest-bootstrap-tag.yml` against the script header's CREDENTIALS/MODES block, then re-run the mint. |
+   | `::error::ancestry:` | The mint's checkout lost history (shallow, or an unreadable object). Re-run the mint; the workflow checks out `fetch-depth: 0`. |
+   | `::error::resolve:` (`no-head`, `base-unresolvable`) | Nothing was published. The checkout could not resolve `HEAD` or the newest merged tag to a commit (tags not fetched, or a tag ref naming a missing object). Re-run the mint (`fetch-tags: true`); if it repeats, inspect the tag with `git ls-remote --tags origin 'refs/tags/vinngest-v*'`. |
+   | `::error::decide:` (`no-carriers`, `copy-count-unreadable`, `copy-unparsed`, `cardinality-count`, `cardinality-names`, `recipe-blocks`, `pin-empty`, `comparator-selftest`) | The mint's extractor drifted from the build workflow (a refactor of the `cp`/`COPY` lines, the heredoc or the pin files); the error prints the staged and baked name sets. Fix `.github/scripts/mint-inngest-bootstrap-tag.sh` so it reads the new shape; its parity rows name the authority to follow. Then re-run the mint. |
+   | `::error::allocate:` `reason=ls-remote-failed` | The origin was unreachable. Nothing was published. Re-run the mint. |
+   | `::error::allocate:` `reason=oversized-version` or `reason=leading-zero-version` | A remote tag carries a malformed version (a component longer than 6 digits, or zero-padded). Delete THAT tag per ADR-232 §7 (never the tag `main` pins), then re-run the mint. |
+   | `::error::allocate:` `reason=no-remote-tags`, `next-exists`, `not-last` or `bad-next` | Do NOT delete anything. `no-remote-tags` means the listing came back empty: check `git ls-remote --tags origin 'refs/tags/vinngest-v*'` and re-run. The others mean a concurrent tag landed or the allocator is wrong: re-run once; if it repeats, fix the script. |
+   | `::error::tag:` with NO `tag_state=unknown` (`workflows-permission`, `bad-response`, an `http-*` from the tag-object POST, `ls-remote-failed` at the re-read) | The failure came before the ref POST: nothing was published (a tag object alone is orphaned and harmless). For `workflows-permission` (R1), hand-tag per the fallback above. Otherwise re-run the mint; it re-decides from a fresh read of the remote tags. |
+   | `::error::tag:` WITH `tag_state=unknown` (`verify-failed`, `ls-remote-failed` at verify, an `http-*` from the ref POST), or a ref POST / verify hang killed at the step timeout (no `::error::` line; the name was recorded before the POST); Slack says the tag MAY exist | The ref POST was attempted, so the tag may exist even though the step failed. Check `git ls-remote --tags origin refs/tags/<tag> 'refs/tags/<tag>^{}'`. **Absent:** re-run the mint. **Present and peeling to the commit the run logged:** confirm no build run exists for it (above), then dispatch exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. **Present but peeling elsewhere:** do not dispatch; delete it per ADR-232 §7 only when no build run exists for it, then re-run the mint. Never reuse the name. |
+   | `::error::dispatch:` | The tag exists and is the merged max. Confirm no build run exists for it (above), then run the line the step printed, exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. Never delete or reuse the tag. `reason=ls-remote-failed` means the origin was unreachable, not that the tag is missing. |
+   | The build or the bump failed after a successful dispatch | Re-run that build run (it posts its own Slack). |
+   | R12: a bump PR held with signed ≠ target after two auto-mints in flight | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max-tag> -f mirror_only=true` (digest-preserving; the bump re-arms auto-merge). |
+   | A later run ends `result=noop` with `::notice::base=<tag>`, but that tag has no build run | An earlier dispatch was lost. Confirm no build run exists for it (above), then run `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once. |
+   | R8: `base=` names a tag that reached `main` through a merge commit and has no image | Delete that tag per ADR-232 §7 (it is off-main content), then re-run the mint. |
+
    **Rolling back** to an older image — including the legacy off-main versions (`v1.1.14`,
-   `v1.1.24`, `v1.1.26`–`v1.1.39`) — is done by re-cutting the old content on `main` as a
-   NEW, higher version: that is the only pin AC6 accepts, and the next publish's bump
-   cannot undo it. A manual pin PR to an existing older image is an emergency stopgap only:
+   `v1.1.24`, `v1.1.26`–`v1.1.39`) — is a **revert commit on `main`**: merge a PR that restores
+   the old carrier, pin or recipe content. The mint then publishes it as a NEW, higher version
+   and the bump pins it, which is the only pin AC6 accepts. **Never tag an older commit** to
+   roll back: a higher version on older content becomes the merged max, and the very next mint
+   compares `main`'s tip against it and publishes the newer content again. A manual pin PR to
+   an existing older image is an emergency stopgap only:
    AC6 reds `main` while it stands (main-health-monitor files `ci/main-broken`), and the
    next publish's bump moves the pin back up. A *rebuild* of an off-main tag is refused.
 2. **The pin bump is authored automatically** by the publish workflow's
@@ -1927,9 +1998,10 @@ ADR-100, amendment 2026-09-14.
    gh workflow run cutover-inngest.yml --field op=verify --field cron_period_seconds=1200
    ```
 
-   > **Pass `cron_period_seconds=1200`.** `cron-ghcr-token-minter` runs `*/20 * * * *` (1200 s,
-   > live in `cron-manifest.ts`), so the 3600 default collapses three legitimate runs into one
-   > bucket and reports a **phantom** double-fire.
+   > **`cron_period_seconds=1200` was required while `cron-ghcr-token-minter` ran `*/20 * * * *`**
+   > (the 3600 default collapsed three legitimate runs into one bucket and reported a phantom
+   > double-fire). That minter was deleted by #8714 (ADR-096 task 5.4); before relying on the 3600
+   > default again, confirm no `cron-manifest.ts` entry is scheduled more often than hourly.
    It reaches the dedicated GQL over the private net via `/hooks/inngest-doublefire-probe`
    (P1-12 — the runner cannot curl `10.0.1.40` directly), buckets every run by
    `(functionID, floor(startedAt / cron_period))`, and fails if any bucket has >1 run

@@ -1667,3 +1667,18 @@ firewall and the forget; its header lists the properties.
 **Still open.** git-data, the registry, grok_dogfood and the web hosts still bind by attachment. They
 re-attach inside their replace plans, so each boots briefly before its firewall attaches. Moving them
 to `firewall_ids` is tracked on #6442.
+
+**Post-replace check — measured 2026-09-27.** The replace this addendum waited on has run.
+`inngest-host-replace` run 36327637204 was dispatched from `main` at 517bf59d85, after PR #8831 and
+PR #8873. It created server 167651172 at 2026-09-27T14:56:48Z and deleted 167310350, which now
+returns 404. Hetzner API reads at about 15:02Z:
+
+- the server's `public_net.firewalls` is [11269127: `applied`];
+- firewall 11269127 (0 rules) has `applied_to` = [167651172].
+
+On those API reads, the sentence above that the live host gains the firewall at its next
+`inngest-host-replace` is superseded: it has gained it. As corroboration only, TCP connects to
+95.217.161.110 on ports 22, 8288 and 6379 time out (dropped, not refused). Whether the
+`inngest-host` and `inngest-volume-recut` dispatches stopped refusing after the replace was not
+measured. The legal record is the 2026-09-27 addendum of
+`knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.

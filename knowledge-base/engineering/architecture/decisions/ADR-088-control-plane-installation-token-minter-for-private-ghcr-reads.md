@@ -46,6 +46,11 @@ supersedes: "ADR-087 D1 (credential-provisioning choice only; ADR-087 Design Bâ€
 > warn-only" from a reversible preference into a structurally unavailable option, which is
 > exactly the distinction a future reader needs in order not to re-open it.
 
+> **IMPLEMENTATION DELETED (2026-09-27, #8714 / ADR-096 task 5.4).** `cron-ghcr-token-minter`,
+> `ghcr-minter-doppler-token.tf` (the `ghcr-minter-write-*` read/write service token and
+> `GHCR_MINTER_DOPPLER_TOKEN`) and `ghcr-read-credential.tf` (`GHCR_READ_USER` / `GHCR_READ_TOKEN`)
+> are removed; see ADR-096's 2026-09-27 amendment for what remains.
+
 ## Context
 
 #6005 makes the running-host cosign image-verify passable against the now-PRIVATE
