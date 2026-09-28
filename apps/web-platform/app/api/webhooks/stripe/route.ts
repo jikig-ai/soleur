@@ -164,6 +164,23 @@ export async function POST(request: Request) {
       const session = event.data.object as Stripe.Checkout.Session;
       const userId = session.metadata?.supabase_user_id;
 
+      // #8918 marker hygiene: this session's claim row can never be reused
+      // or reclaimed again — delete it. Independent of the users update
+      // below; a delete failure is non-fatal (the stale-null / retrieve
+      // reclaim paths self-heal a stranded marker).
+      {
+        const { error: markerDelErr } = await supabase
+          .from("pending_checkout_sessions")
+          .delete()
+          .eq("session_id", session.id);
+        if (markerDelErr) {
+          logger.warn(
+            { err: markerDelErr, eventId: event.id },
+            "Webhook: pending_checkout_sessions marker delete failed — marker self-heals via reclaim paths",
+          );
+        }
+      }
+
       if (userId) {
         // Guard: never resurrect a cancelled row via a replayed checkout
         // event (#2771). The dedup table above closes this today, but the
@@ -202,6 +219,53 @@ export async function POST(request: Request) {
           logger.warn(
             { userId, eventId: event.id },
             "Webhook: checkout.session.completed guard no-op — row not in updatable status (likely cancelled or replay after dedup-row released)",
+          );
+        }
+      }
+
+      // #8918 double-completion anomaly: >1 active subscription on one
+      // customer is the invariant violation the pending-claim race was
+      // meant to prevent (a subscription-id mismatch alone would
+      // false-alarm on every legit plan-switch). Detection only — never
+      // auto-cancel on the money path.
+      const sessionCustomerId =
+        typeof session.customer === "string"
+          ? session.customer
+          : (session.customer?.id ?? null);
+      if (sessionCustomerId) {
+        try {
+          const { data: activeSubs } = await getStripe().subscriptions.list({
+            customer: sessionCustomerId,
+            status: "active",
+          });
+          if (activeSubs.length > 1) {
+            logger.warn(
+              {
+                customerId: sessionCustomerId,
+                eventId: event.id,
+                activeCount: activeSubs.length,
+              },
+              "checkout double-completion anomaly — multiple active subscriptions on one customer",
+            );
+            Sentry.captureMessage("checkout double-completion anomaly", {
+              level: "warning",
+              tags: {
+                feature: "stripe-webhook",
+                op: "checkout.session.completed",
+              },
+              extra: {
+                customerId: sessionCustomerId,
+                eventId: event.id,
+                activeCount: activeSubs.length,
+              },
+            });
+          }
+        } catch (err) {
+          // Detection-path failure must not 500 the webhook — the money
+          // mutation already landed, Stripe redelivery covers the retry.
+          logger.warn(
+            { err, eventId: event.id },
+            "Webhook: double-completion anomaly check failed — skipped",
           );
         }
       }

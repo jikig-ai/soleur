@@ -498,6 +498,20 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "(actor_id, Art. 15) when a non-Soleur tenant exists or the " +
     "dsar-export.ts chain is wired.",
 
+  // #8918 (migration 144): pending-checkout claim row — one row per
+  // in-flight POST /api/checkout keyed by user_id. Columns are Stripe
+  // session_id + requested tier + created_at — operational bookkeeping
+  // for an in-progress purchase, no user-provided content. Transient by
+  // design: DELETEd on checkout.session.completed and on reclaim paths
+  // (complete/expired session, ≥60s null marker, different-tier expire).
+  // The durable subscription record the row gates lives on `users`
+  // (exported) and at Stripe (processor of record).
+  pending_checkout_sessions:
+    "Transient pending-checkout claim (migration 144). Operational " +
+    "bookkeeping for an in-flight purchase — Stripe session_id + tier + " +
+    "timestamp, no user-provided content; deleted on completion/reclaim. " +
+    "Art. 17 satisfied by ON DELETE CASCADE from public.users.",
+
   // #5274 (Phase 2, ADR-068 §2): per-worktree write-lease coordination state.
   // workspace_id is the only user-transitive FK; the remaining columns
   // (worktree_id, host_id, lease_generation, two timestamps) are pure infra

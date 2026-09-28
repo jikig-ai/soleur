@@ -1,16 +1,46 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getStripe } from "@/lib/stripe";
 import { priceIdForTier } from "@/lib/stripe-price-tier-map";
 import type { PlanTier } from "@/lib/types";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { PG_UNIQUE_VIOLATION, sqlStateFromError } from "@/lib/postgres-errors";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
+import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
 
 const VALID_TARGET_TIERS: PlanTier[] = ["solo", "startup", "scale", "enterprise"];
 
+// #8918 — a marker with no session_id means a sibling request won the claim
+// and is mid-sessions.create; a marker older than this is crashed-claim
+// residue and reclaimable.
+const STALE_NULL_MARKER_MS = 60_000;
+// One claim + one retry after a reclaim. The PK arbitrates any residual
+// interleaving — a loser re-enters the marker-hit path rather than failing.
+const MAX_CLAIM_ATTEMPTS = 2;
+
 function isPlanTier(v: unknown): v is PlanTier {
   return typeof v === "string" && (VALID_TARGET_TIERS as string[]).includes(v);
+}
+
+function checkoutInProgress() {
+  return NextResponse.json(
+    {
+      error: "Checkout is already starting — please wait a moment.",
+      code: "checkout_in_progress",
+    },
+    { status: 409 },
+  );
+}
+
+function checkoutError(err: unknown, op: string, extra: Record<string, unknown>) {
+  logger.error({ err, op, ...extra }, `checkout ${op} failed`);
+  Sentry.captureException(err, {
+    tags: { feature: "checkout", op },
+    extra,
+  });
+  return NextResponse.json({ error: "Checkout unavailable" }, { status: 500 });
 }
 
 export async function POST(request: Request) {
@@ -104,21 +134,160 @@ export async function POST(request: Request) {
   const returnUrl =
     `${appOrigin}/dashboard?upgrade=complete&session_id={CHECKOUT_SESSION_ID}`;
 
-  const session = await getStripe().checkout.sessions.create({
-    ...(userData?.stripe_customer_id
-      ? { customer: userData.stripe_customer_id }
-      : { customer_email: user.email }),
-    mode: "subscription",
-    ui_mode: "embedded",
-    line_items: [{ price: resolvedPriceId, quantity: 1 }],
-    return_url: returnUrl,
-    metadata: { supabase_user_id: user.id, target_tier: targetTier ?? "legacy" },
-  });
+  // #8918 — server-side idempotency. The pending_checkout_sessions PK on
+  // user_id is the only serialization point that survives Vercel's
+  // per-invocation concurrency: claim via INSERT, and a 23505 routes the
+  // loser into the marker-hit path below. All 4xx exits above deliberately
+  // run BEFORE the claim so error paths never hold a slot.
+  const resolvedTier = targetTier ?? "legacy";
+  const service = createServiceClient();
+  const stripe = getStripe();
 
-  return NextResponse.json({
-    clientSecret: session.client_secret,
-    // Legacy hosted-page callers still read `url` — keep the field so old
-    // clients don't break. `url` is null on embedded sessions.
-    url: session.url,
-  });
+  for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt++) {
+    const { error: claimErr } = await service
+      .from("pending_checkout_sessions")
+      .insert({ user_id: user.id, target_tier: resolvedTier });
+
+    if (!claimErr) {
+      // Own the slot — create, record, return.
+      try {
+        const session = await stripe.checkout.sessions.create(
+          {
+            ...(userData?.stripe_customer_id
+              ? { customer: userData.stripe_customer_id }
+              : { customer_email: user.email }),
+            mode: "subscription",
+            ui_mode: "embedded",
+            line_items: [{ price: resolvedPriceId, quantity: 1 }],
+            return_url: returnUrl,
+            metadata: {
+              supabase_user_id: user.id,
+              target_tier: resolvedTier,
+            },
+          },
+          // Fresh UUID per attempt — belt for SDK-level retries. Never a
+          // deterministic user+tier key: Stripe replays the cached first
+          // response within key retention (stale/completed sessions).
+          { idempotencyKey: randomUUID() },
+        );
+
+        // Record the session so a racing marker-hit can retrieve it. A
+        // failed UPDATE is logged but not fatal — the marker's null
+        // session_id reclaims itself via the staleness path.
+        const { error: updateErr } = await service
+          .from("pending_checkout_sessions")
+          .update({ session_id: session.id })
+          .eq("user_id", user.id);
+        if (updateErr) {
+          logger.warn(
+            { err: updateErr, userId: user.id },
+            "checkout: marker session_id update failed — marker self-heals via stale-null reclaim",
+          );
+        }
+
+        return NextResponse.json({
+          clientSecret: session.client_secret,
+          // Legacy hosted-page callers still read `url` — keep the field so
+          // old clients don't break. `url` is null on embedded sessions.
+          url: session.url,
+        });
+      } catch (err) {
+        // Release the marker before the 5xx so a retry re-enters cleanly
+        // (mirrors releaseDedupRow() in the webhook route).
+        await service
+          .from("pending_checkout_sessions")
+          .delete()
+          .eq("user_id", user.id);
+        return checkoutError(err, "create-session", { userId: user.id });
+      }
+    }
+
+    if (sqlStateFromError(claimErr) !== PG_UNIQUE_VIOLATION) {
+      return checkoutError(claimErr, "claim-insert", { userId: user.id });
+    }
+
+    // Marker-hit: a sibling request owns a claim. Retrieve the marker row.
+    const { data: marker, error: markerErr } = await service
+      .from("pending_checkout_sessions")
+      .select("session_id, target_tier, created_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (markerErr) {
+      return checkoutError(markerErr, "marker-select", { userId: user.id });
+    }
+    if (!marker) {
+      // The marker vanished between the 23505 and our SELECT (sibling
+      // reclaimed/completed) — retry the claim.
+      continue;
+    }
+
+    if (marker.session_id) {
+      let existing;
+      try {
+        existing = await stripe.checkout.sessions.retrieve(marker.session_id);
+      } catch (err) {
+        // Fail-closed: reclaiming on a transient Stripe outage would let a
+        // second session coexist with the open first — the exact defect
+        // this table exists to close. Marker is left untouched.
+        return checkoutError(err, "session-retrieve", { userId: user.id });
+      }
+
+      if (existing.status === "open" && marker.target_tier === resolvedTier) {
+        if (existing.client_secret) {
+          // Join the sibling's session instead of erroring — the second
+          // POST gets the same client_secret back.
+          return NextResponse.json({
+            clientSecret: existing.client_secret,
+            url: existing.url,
+          });
+        }
+        // Open but no client_secret — do not reclaim a session Stripe
+        // reports open.
+        return checkoutInProgress();
+      }
+
+      if (existing.status === "open") {
+        // Different tier: a wrong-price reuse is worse than no reuse —
+        // expire the stale session before reclaiming the marker.
+        try {
+          await stripe.checkout.sessions.expire(marker.session_id);
+        } catch (err) {
+          return checkoutError(err, "session-expire", { userId: user.id });
+        }
+      }
+
+      // complete / expired / just-expired-by-us — reclaim the marker and
+      // retry the claim once.
+      logger.warn(
+        { userId: user.id, sessionId: marker.session_id, status: existing.status },
+        "checkout: reclaiming completed/expired marker",
+      );
+      await service
+        .from("pending_checkout_sessions")
+        .delete()
+        .eq("user_id", user.id);
+      continue;
+    }
+
+    // Marker has no session_id yet — sibling is mid-sessions.create.
+    const markerAgeMs = Date.now() - new Date(marker.created_at).getTime();
+    if (markerAgeMs < STALE_NULL_MARKER_MS) {
+      return checkoutInProgress();
+    }
+
+    // Crashed-claim residue — reclaim and retry once.
+    logger.warn(
+      { userId: user.id, markerAgeMs },
+      "checkout: reclaiming stale null-session marker",
+    );
+    await service
+      .from("pending_checkout_sessions")
+      .delete()
+      .eq("user_id", user.id);
+  }
+
+  // Claim + one reclaim both lost to a sibling — surface the same
+  // in-progress signal rather than loop forever.
+  return checkoutInProgress();
 }

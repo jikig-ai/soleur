@@ -19,6 +19,10 @@ const {
   mockMaybeSingle,
   mockInsert,
   mockDeleteEq,
+  mockMarkerDeleteEq,
+  mockSubsList,
+  mockCaptureException,
+  mockCaptureMessage,
   mockLogger,
 } = vi.hoisted(() => ({
   mockConstructEvent: vi.fn(),
@@ -29,12 +33,17 @@ const {
   mockMaybeSingle: vi.fn(),
   mockInsert: vi.fn(),
   mockDeleteEq: vi.fn(),
+  mockMarkerDeleteEq: vi.fn(),
+  mockSubsList: vi.fn(),
+  mockCaptureException: vi.fn(),
+  mockCaptureMessage: vi.fn(),
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
     webhooks: { constructEvent: mockConstructEvent },
+    subscriptions: { list: mockSubsList },
   }),
   invalidateTierMemo: vi.fn(),
 }));
@@ -53,6 +62,12 @@ vi.mock("@/lib/supabase/server", () => ({
           delete: () => ({ eq: mockDeleteEq }),
         };
       }
+      if (table === "pending_checkout_sessions") {
+        // #8918 — webhook deletes the claim marker by session_id.
+        return {
+          delete: () => ({ eq: mockMarkerDeleteEq }),
+        };
+      }
       return {
         update: mockUpdate,
         select: () => ({
@@ -61,6 +76,13 @@ vi.mock("@/lib/supabase/server", () => ({
       };
     },
   }),
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+  captureMessage: mockCaptureMessage,
+  withIsolationScope: (fn: () => unknown) => fn(),
+  getCurrentScope: () => ({ setUser: vi.fn() }),
 }));
 
 vi.mock("@/server/logger", () => ({
@@ -117,6 +139,10 @@ describe("Stripe webhook — subscription lifecycle", () => {
     // individual mock return values to assert zero-match or error paths.
     configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
     configureSupabaseInsertChain({ mockInsert, mockDeleteEq });
+    // #8918 — pending-marker delete resolves clean; subscriptions.list
+    // defaults to a single active sub (no anomaly).
+    mockMarkerDeleteEq.mockResolvedValue({ error: null });
+    mockSubsList.mockResolvedValue({ data: [{ id: "sub_only_one" }] });
     mockMaybeSingle.mockResolvedValue({
       data: {
         id: "user-uuid-123",
@@ -148,6 +174,74 @@ describe("Stripe webhook — subscription lifecycle", () => {
         }),
       );
       expect(mockEq).toHaveBeenCalledWith("id", USER_ID);
+    });
+
+    test("deletes the pending_checkout_sessions marker by session_id (#8918)", async () => {
+      const event = makeEvent("checkout.session.completed", {
+        id: "cs_test_done_1",
+        customer: CUSTOMER_ID,
+        subscription: SUBSCRIPTION_ID,
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockMarkerDeleteEq).toHaveBeenCalledWith("session_id", "cs_test_done_1");
+    });
+
+    test("double-completion anomaly fires when >1 active subscription on the customer (#8918)", async () => {
+      mockSubsList.mockResolvedValue({
+        data: [{ id: "sub_a" }, { id: "sub_b" }],
+      });
+      const event = makeEvent("checkout.session.completed", {
+        customer: CUSTOMER_ID,
+        subscription: SUBSCRIPTION_ID,
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockSubsList).toHaveBeenCalledWith({
+        customer: CUSTOMER_ID,
+        status: "active",
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: CUSTOMER_ID, activeCount: 2 }),
+        expect.stringContaining("double-completion anomaly"),
+      );
+      expect(mockCaptureMessage).toHaveBeenCalledWith(
+        expect.stringContaining("double-completion anomaly"),
+        expect.objectContaining({ level: "warning" }),
+      );
+    });
+
+    test("single active subscription (incl. legit plan-switch) stays silent (#8918)", async () => {
+      // The session's subscription id differs from the stored one — a legit
+      // plan-switch shape. The invariant is the active-subs COUNT, not id
+      // equality, so no anomaly must fire.
+      mockSubsList.mockResolvedValue({ data: [{ id: "sub_new_tier" }] });
+      const event = makeEvent("checkout.session.completed", {
+        customer: CUSTOMER_ID,
+        subscription: "sub_new_tier",
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockCaptureMessage).not.toHaveBeenCalledWith(
+        expect.stringContaining("double-completion anomaly"),
+        expect.anything(),
+      );
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("double-completion anomaly"),
+      );
     });
   });
 

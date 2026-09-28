@@ -5,16 +5,29 @@ process.env.STRIPE_PRICE_ID_STARTUP = "price_startup";
 process.env.STRIPE_PRICE_ID_SCALE = "price_scale";
 process.env.STRIPE_PRICE_ID_ENTERPRISE = "price_enterprise";
 
-const { mockGetUser, mockFrom, mockCreateSession } = vi.hoisted(() => ({
+const { mockGetUser, mockFrom, mockCreateSession, mockMarkerInsert, mockMarkerUpdateEq } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
   mockCreateSession: vi.fn(),
+  mockMarkerInsert: vi.fn(),
+  mockMarkerUpdateEq: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
     from: mockFrom,
+  })),
+  // #8918: route claims a pending_checkout_sessions row via service-role.
+  createServiceClient: vi.fn(() => ({
+    from: () => ({
+      insert: mockMarkerInsert,
+      update: () => ({ eq: mockMarkerUpdateEq }),
+      delete: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }),
+      select: () => ({
+        eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+      }),
+    }),
   })),
 }));
 
@@ -60,9 +73,13 @@ describe("POST /api/checkout — targetTier", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreateSession.mockResolvedValue({
+      id: "cs_test_1",
       client_secret: "cs_test_clientsecret",
       url: null,
+      status: "open",
     });
+    mockMarkerInsert.mockResolvedValue({ error: null });
+    mockMarkerUpdateEq.mockResolvedValue({ error: null });
   });
 
   test("targetTier='startup' resolves to STRIPE_PRICE_ID_STARTUP", async () => {
@@ -74,6 +91,7 @@ describe("POST /api/checkout — targetTier", () => {
         line_items: [{ price: "price_startup", quantity: 1 }],
         ui_mode: "embedded",
       }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
     const [[args]] = mockCreateSession.mock.calls;
     expect(args.return_url).toContain("upgrade=complete");
@@ -103,6 +121,7 @@ describe("POST /api/checkout — targetTier", () => {
       expect.objectContaining({
         metadata: { supabase_user_id: "user-1", target_tier: "scale" },
       }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
   });
 });

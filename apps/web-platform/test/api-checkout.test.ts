@@ -8,19 +8,34 @@ process.env.STRIPE_PRICE_ID = "price_legacy";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockGetUser, mockFrom, mockCreateSession, mockCaptureException, mockCaptureMessage } =
+const { mockGetUser, mockFrom, mockCreateSession, mockCaptureException, mockCaptureMessage, mockMarkerInsert, mockMarkerUpdateEq } =
   vi.hoisted(() => ({
     mockGetUser: vi.fn(),
     mockFrom: vi.fn(),
     mockCreateSession: vi.fn(),
     mockCaptureException: vi.fn(),
     mockCaptureMessage: vi.fn(),
+    mockMarkerInsert: vi.fn(),
+    mockMarkerUpdateEq: vi.fn(),
   }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
     from: mockFrom,
+  })),
+  // #8918: route claims a pending_checkout_sessions row via service-role.
+  // Defaults here make the claim succeed so these tests stay on the
+  // own-slot path; the race paths live in api-checkout-idempotency.test.ts.
+  createServiceClient: vi.fn(() => ({
+    from: () => ({
+      insert: mockMarkerInsert,
+      update: () => ({ eq: mockMarkerUpdateEq }),
+      delete: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }),
+      select: () => ({
+        eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+      }),
+    }),
   })),
 }));
 
@@ -83,7 +98,9 @@ function setupUserQuery(data: Record<string, unknown> | null) {
 describe("POST /api/checkout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCreateSession.mockResolvedValue({ url: "https://checkout.stripe.com/session" });
+    mockCreateSession.mockResolvedValue({ id: "cs_test_1", url: "https://checkout.stripe.com/session", client_secret: "cs_secret", status: "open" });
+    mockMarkerInsert.mockResolvedValue({ error: null });
+    mockMarkerUpdateEq.mockResolvedValue({ error: null });
     // Default for existing tests — degraded-path test unsets below via vi.stubEnv(..., "")
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
   });
@@ -106,10 +123,12 @@ describe("POST /api/checkout", () => {
     expect(body.url).toBe("https://checkout.stripe.com/session");
     expect(mockCreateSession).toHaveBeenCalledWith(
       expect.objectContaining({ customer: CUSTOMER_ID }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
     // Should NOT have customer_email when customer is set
     expect(mockCreateSession).toHaveBeenCalledWith(
       expect.not.objectContaining({ customer_email: expect.any(String) }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
   });
 
@@ -124,6 +143,7 @@ describe("POST /api/checkout", () => {
     expect(body.url).toBe("https://checkout.stripe.com/session");
     expect(mockCreateSession).toHaveBeenCalledWith(
       expect.objectContaining({ customer_email: USER_EMAIL }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
   });
 
@@ -170,6 +190,7 @@ describe("POST /api/checkout", () => {
       expect.objectContaining({
         return_url: expect.stringMatching(/^https:\/\/app\.soleur\.ai\//),
       }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
   });
 
@@ -187,6 +208,7 @@ describe("POST /api/checkout", () => {
       expect.objectContaining({
         return_url: expect.stringMatching(/^https:\/\/test\.example\//),
       }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
   });
 });
