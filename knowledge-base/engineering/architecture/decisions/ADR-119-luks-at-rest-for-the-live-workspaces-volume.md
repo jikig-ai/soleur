@@ -1192,6 +1192,82 @@ exception (re-examined 2026-09-28: `cx33` is available in 0 of 6 datacenters).
 web-1 restart currently lands in emergency mode, so no reboot is planned until the coupled
 fstab + crypttab + §(e) gate fix ships.
 
+## Addendum (2026-09-28): retiring the plaintext backstop (CONFIRM_WIPE, #6604 step 7)
+
+**Status stays `adopting`.** It flips to `accepted` only in PR B, after the dispatch below has run and
+the Art. 5(2) destruction record is complete — the #6604 soak sweeper closes that issue on the string
+`accepted` alone.
+
+The soak passed on 2026-09-24. The last open item of this ADR is §(f)'s "terminal mode": until the
+retained plaintext volume (`105149570`) is gone, it holds every workspace as of the 2026-07-23 cutover,
+including ones users have deleted since, and defeats every Art. 17 erasure made on the live volume.
+
+**Decision.** Build the `CONFIRM_WIPE` slot this ADR reserved as a mode of `workspaces-cutover.sh`
+(`wipe_plaintext()`), reached through a separate, environment-gated `wipe` job in
+`workspaces-luks-cutover.yml`, followed by a single-use `workspaces-plaintext-forget.yml` for the
+Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
+`2026-09-28-feat-workspaces-plaintext-volume-wipe-plan.md`; runbook: Sequence step 7.
+
+- **AP-009 (Never delete user data): Deviation — documented carve-out.** The volume is **a superseded
+  copy frozen at the 2026-07-23 cutover** (run 29995956562), which the live LUKS volume was certified to
+  hold at least the contents of (C1 itemized verify, G3 counts, the git fsck differential),
+  green-verified daily since, soak passed 2026-09-24. It is *not* "a duplicate" (the CLEAN_STRAY basis):
+  it differs from the live volume by every deletion since the cutover, which is exactly why it must go.
+  Retaining it is the exposure #6588 exists to close. The accepted residual is stated, not hidden: after
+  the wipe the LUKS volume holds the **only** copy (tracked by #5274, #8625, #6964). W4/W5 exist so the
+  wipe never runs while that sole copy is unrecoverable.
+- **AP-001 (declarative infra): Deviation.** The delete is an API act, not a Terraform one: Terraform
+  cannot zero a device, and C5 requires a verified full-device zero to precede the delete. State
+  follows by `terraform state rm`, then config by PR B.
+- **The one property.** `blkdiscard -z` runs on exactly one device, the pinned volume, never the device
+  backing `/dev/mapper/workspaces`. The pin (`expected_plaintext_volume_id`) is bound through preflight's
+  API classification, the host's by-id path (W1), path + major:minor + holders + mount + size +
+  hypervisor `ID_SERIAL` + the `workspaces_plain` label (W6), every systemd device unit sharing the
+  target's `SysFSPath` (W6b), the success row the job parses, and the forget's state identity.
+  Recoverability of the sole copy is proven at wipe time: the persisted `CANARY_OK` UUID names the live
+  header (W3), the escrowed passphrase opens it (W4), and the off-host header object downloads, carries
+  that UUID, opens with that passphrase, and is byte-identical to a fresh `luksHeaderBackup` (W5 — a UUID
+  survives `luksAddKey`, so a UUID match alone could certify a stale backup).
+- **The zero is proven, not assumed.** `blkdiscard -z` (util-linux >= 2.36 opens O_EXCL; never `-f`)
+  under a 150M cgroup `io.max` cap (not `ionice`, a no-op under `mq-deadline`/`none`), then a full-device
+  O_DIRECT read-back that `cmp` decides (dd's rc alone never classifies), then no signature, and only
+  then `PLAINTEXT_WIPED`. `PLAINTEXT_WIPE_BEGUN` is persisted first, so an interrupted zero resumes on
+  `arm=re_zero`; a zeroed-and-detached volume reports `arm=detached`.
+- **Post-wipe rollback is refused permanently** (`outcome=refused_plaintext_wiped`), with or without the
+  ack. `arm_dead_man` needs no twin: `prepare_staging_target` refuses a cut-over host before it.
+
+**Two PRs, because Terraform will not take one.** Measured on Terraform 1.10.5 against a scratch root:
+a narrowed `for_each` over state still holding `["web-1"]` makes every `-refresh=false` plan fail with
+`Instance cannot be destroyed` (`prevent_destroy`, which web-2 keeps); `moved` + `removed` makes every
+`-target`ed plan fail with `Moved resource instances excluded by targeting` until an untargeted apply
+this root never runs; and `state rm` with the OLD config still in place makes any push apply plan
+`+create` of a fresh plaintext volume through `-target` transitivity (`hcloud_firewall_attachment.web`
+→ `hcloud_server.web` → `user_data` → `hcloud_volume.workspaces[each.key]`), conditional or not. Only
+`state rm` then narrowed config plans `No changes`. So: PR A (the mode, no `.tf` change), the dispatch,
+the forget, PR B the same day.
+
+**The delete→PR-B window is closed by a pause, not a new guard.** Both push-apply workflows
+(`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`) are `gh workflow disable`d before the
+dispatch and re-enabled after PR B, with a `manual-rerun` apply. The `wipe` job and the forget
+workflow refuse unless both read `disabled_manually` with nothing queued. A create-counting surface on
+the shared destroy-guard filter would reverse #6919 (test T55 — volume creates were removed from the
+halt because they fired on valid dispatches) and needs an edit to a file ~725 bytes under its size cap;
+#6919/T55 stands.
+
+**How the 2026-07-19 operand rule is kept.** "Every destructive mode contributes its own operand to the
+`cutover` job's `environment:` expression" holds by construction: the destructive wipe is not reachable
+from `cutover` at all. That job skips on a real wipe, and on a rehearsal delivers `CONFIRM_WIPE` only as
+`wipe_plaintext && dry_run`. The `wipe` job's environment is unconditional.
+
+**Serialization.** The forget runs in its own workflow on `terraform-apply-web-platform-host` (the
+lockless state's sole serializer). As a job in the cutover workflow it would hold `web-1-swap` then the
+host group — the inverse of the apply workflows' order, which can deadlock.
+
+**A known gap, recorded.** The `wipe` job's SSH delivery block is a **copy** of `cutover`'s (duplicated
+so the freeze path stays byte-stable). The rehearsal exercises `cutover`'s copy, so the `wipe` job's
+copy is exercised for the first time by the real dispatch. Its behaviour is pinned by the workflow
+suite, which executes the extracted step body against an ssh stub; its host half is the same script.
+
 ## References
 
 - Issue #6588 — the P1 that mandated CTO routing before terraform.

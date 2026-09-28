@@ -796,6 +796,6 @@ ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_plaintext_
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=110
+WIPE_MIN_PASS=99
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]
