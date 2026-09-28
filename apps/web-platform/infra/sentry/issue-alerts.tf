@@ -2195,3 +2195,50 @@ resource "sentry_alert" "spawn_agent_dead_letter" {
     ignore_changes = [environment]
   }
 }
+
+# ── Pre-swap image freshness abort (#6428) ────────────────────────────────────
+# ci-deploy.sh's verify_image_freshness refuses a web deploy when the image about to run was not
+# BUILT as the requested version (the stale-but-signed image a zot can serve: its cosign signature
+# is valid, so the verify alone passes it). Every event this rule matches is an ABORTED deploy,
+# emitted by image_freshness_event with level=error and `freshness_result` in
+# {version_mismatch, version_absent, inspect_failed} — the op alone is the filter, so a new result
+# value pages without editing this rule. The old container stays live, so nothing user-facing
+# breaks, but releases stop reaching the host until the registry serves the right image.
+#
+# Emitted from web-1 only until web-2's next replace: terraform_data.deploy_pipeline_fix pushes
+# ci-deploy.sh to web-1 alone (#9151).
+#
+# value = 0 pages on the FIRST event of any group (see zot_mirror_fallback_rate for why a threshold
+# above 0 is fleet-shape-dependent). The message embeds the expected and served versions, so each
+# stale version groups on its own.
+#
+# Distinct frequency_minutes = 28 avoids Sentry POST-time exact-duplicate dedup (taken:
+# 5,10-27,30,31,60-63,1440-1442). Events carry image refs, version strings and the host id — no
+# user content.
+resource "sentry_alert" "image_freshness_mismatch" {
+  organization      = var.sentry_org
+  name              = "image-freshness-mismatch"
+  enabled           = true
+  frequency_minutes = 28
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "op", match = "eq", value = "image-freshness" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
