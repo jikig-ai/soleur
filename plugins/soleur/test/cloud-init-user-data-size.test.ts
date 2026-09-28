@@ -246,7 +246,13 @@ const REGISTRY_GZIP_BUDGET = 20_000;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
 const GROK_DOGFOOD_GZIP_FLOOR = 500;
-const INNGEST_GZIP_BUDGET = 18_000;
+// #8562 (2026-09-28): 18_000 -> 20_000. The first-boot provision path moved out of runcmd into a
+// latched, retrying systemd unit (a ~200-line write_files script + .service + .timer), which this
+// model measures at 18,072 B. The byte-authoritative terraform measurement is 18,396 B stored /
+// 14,372 B headroom under the 32,768 B cap (inngest-userdata-budget.sh, the CI gate). This is the
+// early-warning bracket, not the cap: it keeps ~1.6 KB of warning margin, the same margin the
+// 18_000 bracket left over the pre-#8562 16,400 B, and matches REGISTRY_GZIP_BUDGET.
+const INNGEST_GZIP_BUDGET = 20_000;
 const INNGEST_GZIP_FLOOR = 4_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";

@@ -300,8 +300,8 @@ case_mutate row1-pre-zot-pull-after-pull \
   "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-emit="      /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull \"$ZIREF\"\n"
-pull="        timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1\n"
+emit="        /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull \"$ZIREF\"\n"
+pull="          timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1 &\n"
 assert s.count(emit)==1 and s.count(pull)==1, "pre-zot-pull / pull anchors not found exactly once"
 s=s.replace(emit,"",1).replace(pull,pull+emit,1)
 open(p,"w").write(s)
@@ -364,9 +364,9 @@ case_mutate row5-pin-carrier-pulled-on-miss \
   "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-a="        /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss"
+a="          /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss"
 assert s.count(a)==1, "miss-arm phone-home anchor not found exactly once"
-s=s.replace(a,"        docker pull \"$IREF\" || true\n"+a,1)
+s=s.replace(a,"          docker pull \"$IREF\" || true\n"+a,1)
 open(p,"w").write(s)
 '
 
@@ -430,14 +430,14 @@ p=sys.argv[1]; s=open(p).read()
 m=re.search(r"^ *if printf .*docker login \"\$ZOT_EP\" -u \"\$ZOT_PULL_USER\".*$",s,re.M)
 assert m, "zot login line not found"
 line=m.group(0).strip()
-s=s[:m.start()]+"        if true; then"+s[m.end():]
+s=s[:m.start()]+"          if true; then"+s[m.end():]
 # Anchor on the PULL itself, not on the pre-zot-pull emit. The emit precedes the pull, so
 # inserting there relocates the login to a DIFFERENT place that is still before the pull --
 # a mutation that does not reproduce the defect it names, and its survival would read as a
 # gap in the guard rather than a bug in this case. It did, on the first run.
-pm=re.search(r"^ *(timeout [0-9]+ )?docker pull \"\$ZIREF\" > /var/log/inngest-zot-pull\.log 2>&1\n",s,re.M)
+pm=re.search(r"^ *(timeout [0-9]+ )?docker pull \"\$ZIREF\" > /var/log/inngest-zot-pull\.log 2>&1( &)?\n",s,re.M)
 assert pm, "zot pull anchor not found"
-s=s[:pm.end()] + "      " + line + " :; fi\n" + s[pm.end():]
+s=s[:pm.end()] + "          " + line + " :; fi\n" + s[pm.end():]
 open(p,"w").write(s)
 '
 
@@ -458,8 +458,10 @@ open(p,"w").write(s.replace(old,"",1))
 # Every row names the Guard 1b assertion it must red; a row that reds on something else is
 # MISROUTED, not killed.
 # =======================================================================================
-G1_ZOT='        soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true\n'
-G1_FB='        soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true\n'
+# #8562: the pull block moved into the provision script (a write_files `content: |` body), so
+# every anchor below carries the script's deeper indentation.
+G1_ZOT='          soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true\n'
+G1_FB='          soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true\n'
 g1_replace() { # g1_replace <id> <expect> <old> <new> [target]
   case_mutate "$1" "$2" "${5:-$SRC}" "
 import sys
@@ -474,16 +476,16 @@ g1_replace g1-row1-served-emit-deleted "G1b: the served arm emits inngest_zot ex
 g1_replace g1-row2-missed-emit-deleted "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once" \
   "'''$G1_FB'''" "''"
 g1_replace g1-row3a-served-not-guarded "G1b: the served arm emits inngest_zot exactly once" \
-  "'''$G1_ZOT'''" "'''        soleur-boot-emit inngest_zot info \"ep=\$ZOT_EP\"\n'''"
+  "'''$G1_ZOT'''" "'''          soleur-boot-emit inngest_zot info \"ep=\$ZOT_EP\"\n'''"
 g1_replace g1-row3b-missed-not-guarded "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once" \
-  "'''$G1_FB'''" "'''        soleur-boot-emit inngest_pull_fatal fatal \"rc=\$zot_rc\"\n'''"
+  "'''$G1_FB'''" "'''          soleur-boot-emit inngest_pull_fatal fatal \"rc=\$zot_rc\"\n'''"
 # Row 4: relocate the served call into the missed arm — both calls then sit in one arm, which a
 # file-level count cannot see.
 case_mutate g1-row4-served-call-in-missed-arm "G1b: the served arm emits inngest_zot exactly once" "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
-fb="        soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
+zot="          soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
+fb="          soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
 assert s.count(zot)==1 and s.count(fb)==1, "call sites not found"
 s=s.replace(zot,"",1).replace(fb,fb+zot,1)
 open(p,"w").write(s)
@@ -491,31 +493,31 @@ open(p,"w").write(s)
 g1_replace g1-row5-served-emits-twice "G1b: the served arm emits inngest_zot exactly once" \
   "'''$G1_ZOT'''" "'''$G1_ZOT$G1_ZOT'''"
 g1_replace g1-row6-stage-renamed "G1b: the served arm emits inngest_zot exactly once" \
-  "'''$G1_ZOT'''" "'''        soleur-boot-emit inngest_zot_ok info \"ep=\$ZOT_EP\" || true\n'''"
+  "'''$G1_ZOT'''" "'''          soleur-boot-emit inngest_zot_ok info \"ep=\$ZOT_EP\" || true\n'''"
 g1_replace g1-row7-absolute-path "G1b: the served arm emits inngest_zot exactly once" \
-  "'''$G1_ZOT'''" "'''        /usr/local/bin/soleur-boot-emit inngest_zot info \"ep=\$ZOT_EP\" || true\n'''"
+  "'''$G1_ZOT'''" "'''          /usr/local/bin/soleur-boot-emit inngest_zot info \"ep=\$ZOT_EP\" || true\n'''"
 g1_replace g1-row8-double-space "G1b: the served arm emits inngest_zot exactly once" \
-  "'''$G1_ZOT'''" "'''        soleur-boot-emit  inngest_zot info \"ep=\$ZOT_EP\" || true\n'''"
+  "'''$G1_ZOT'''" "'''          soleur-boot-emit  inngest_zot info \"ep=\$ZOT_EP\" || true\n'''"
 g1_replace g1-row9-tf-key-dropped "G1b: inngest-host.tf threads sentry_dsn = var.sentry_dsn" \
   "'''    sentry_dsn = var.sentry_dsn\n'''" "''" inngest-host.tf
 g1_replace g1-row11-dsn-file-world-readable "G1b: write_files delivers /etc/default/soleur-sentry-dsn 0600" \
   "'''      SOLEUR_SENTRY_DSN='\${sentry_dsn}'\n    owner: root:root\n    permissions: '0600'\n'''" \
   "'''      SOLEUR_SENTRY_DSN='\${sentry_dsn}'\n    owner: root:root\n    permissions: '0644'\n'''"
 g1_replace g1-row12-arm-anchor-drifted "G1b dispatch: the served (zot) arm was extracted" \
-  "'''      if [ \"\$zot_rc\" -eq 0 ]; then\n'''" "'''      if [ \"\$zot_rc\" = 0 ]; then\n'''"
+  "'''        if [ \"\$zot_rc\" -eq 0 ]; then\n'''" "'''        if [ \"\$zot_rc\" = 0 ]; then\n'''"
 g1_replace g1-extra-backgrounded-emit "G1b: no soleur-boot-emit call is backgrounded" \
-  "'''$G1_FB'''" "'''        soleur-boot-emit inngest_pull_fatal fatal \"rc=\$zot_rc\" || true &\n'''"
+  "'''$G1_FB'''" "'''          soleur-boot-emit inngest_pull_fatal fatal \"rc=\$zot_rc\" || true &\n'''"
 # Review P1-2: a nested if/else inside the SERVED arm must not be read as the arm split. Delete
 # the real fallback emit and plant one behind a nested `else` in the served arm.
 case_mutate g1-row14-nested-else-hijack "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once" "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
-fb="        soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
+zot="          soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
+fb="          soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
 assert s.count(zot)==1 and s.count(fb)==1, "call sites not found"
-plant=("        if [ -n \"$IREF\" ]; then :\n        else\n"
-       "          zot_rc=\"$zot_rc\"\n          zot_rc=\"$zot_rc\"\n"
-       "          soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n        fi\n")
+plant=("          if [ -n \"$IREF\" ]; then :\n        else\n"
+       "            zot_rc=\"$zot_rc\"\n          zot_rc=\"$zot_rc\"\n"
+       "            soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n          fi\n")
 s=s.replace(fb,"",1).replace(zot,zot+plant,1)
 open(p,"w").write(s)
 '
@@ -524,17 +526,17 @@ open(p,"w").write(s)
 case_mutate g1-row15-dead-if-false "G1b: the served arm emits inngest_zot exactly once" "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-zot="        soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
+zot="          soleur-boot-emit inngest_zot info \"ep=$ZOT_EP\" || true\n"
 assert s.count(zot)==1, "call site not found"
-s=s.replace(zot,"        if false; then\n  "+zot+"        fi\n",1)
+s=s.replace(zot,"          if false; then\n  "+zot+"          fi\n",1)
 open(p,"w").write(s)
 '
 case_mutate g1-row16-dead-heredoc "G1b: the missed arm emits inngest_pull_fatal at FATAL exactly once" "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-fb="        soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
+fb="          soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
 assert s.count(fb)==1, "call site not found"
-s=s.replace(fb,"        : <<'"'"'OFF'"'"'\n"+fb+"        OFF\n",1)
+s=s.replace(fb,"          : <<'"'"'OFF'"'"'\n"+fb+"          OFF\n",1)
 open(p,"w").write(s)
 '
 # Row 13 (harness): a mutator that changes nothing must ABORT the battery, never score a verdict.
@@ -577,17 +579,19 @@ def item_end(t, pos):
     raise AssertionError("runcmd item end not found")
 def save(t): open(p,"w").write(t)
 '
-# Row 1: move the NIC-wait call to AFTER the zot-login item (the item that follows it).
+# Row 1: move the NIC-wait call to AFTER the item that starts the provision unit (#8562: the
+# first private-net use is that start — the unit runs the zot login and pull; it used to be the
+# zot-login runcmd item directly after the call).
 NG1_ROW1_MUT="$NG1_PY"'
 once(CALL)
-i=s.index(CALL); t=s[:i]+s[i+len(CALL):]
-m=re.compile(r"^  - ", re.M).search(t, i)
-assert m, "item after the call not found"
-e=item_end(t, m.start())
-assert "docker login \"$ZOT_EP\"" in t[m.start():e], "the item after the call is not the zot login"
+START="  - systemctl start --no-block soleur-inngest-provision.service\n"
+once(START)
+t=s.replace(CALL,"",1)
+i=t.index(START)
+e=item_end(t, i)
 save(t[:e]+CALL+t[e:])
 '
-case_mutate ng1-row1-call-after-zot-login "NIC-G1 row1:" "$SRC" "$NG1_ROW1_MUT"
+case_mutate ng1-row1-call-after-provision-start "NIC-G1 row1:" "$SRC" "$NG1_ROW1_MUT"
 # Row 2: REORDER (not delete) the reload to after the call.
 case_mutate ng1-row2-reload-after-call "NIC-G1 row2:" "$SRC" "$NG1_PY"'
 once(CALL); t=rep(RELOAD, "")
@@ -739,7 +743,7 @@ cp "$NG1_HARN_GUARD" "$WORK/harness-ng1.before" || die "NIC-G1 harness: could no
 python3 -c '
 import sys
 p=sys.argv[1]; s=open(p).read()
-old="\"(( NG1_CALL_POS >= 0 && NG1_CALL_POS + 1 == NG1_FIRST_USE_POS ))\""
+old="\"(( NG1_CALL_POS >= 0 && NG1_CALL_POS < NG1_FIRST_USE_POS ))\""
 new="\"(( NG1_CALL_POS >= 0 && NG1_FIRST_USE_POS == NG1_FIRST_USE_POS ))\""
 assert s.count(old)==1, "row-1 order comparison not found exactly once"
 open(p,"w").write(s.replace(old,new,1))
@@ -772,19 +776,24 @@ fi
 G4_PY='
 import sys
 p=sys.argv[1]; s=open(p).read()
-EMIT="        soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
-EXIT="        exit \"$zot_rc\"\n"
-PH="        /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss ep=$ZOT_EP rc=$zot_rc tries=$zot_try tail=$zot_tail\" || true\n"
+# #8562: the pull block is the provision script now (a write_files body, deeper indentation), the
+# pull runs as `& wait` so a TERM can interrupt it, and the miss phone-home carries attempt=.
+EMIT="          soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
+EXIT="          exit \"$zot_rc\"\n"
+PH="          /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss ep=$ZOT_EP rc=$zot_rc tries=$zot_try attempt=$attempt tail=$zot_tail\" || true\n"
 # The whole retry loop, as ONE string (adjacent literals concatenate); FOR is its first line.
-LOOP=("      for zot_try in 1 2 3; do\n"
-      "        timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1\n"
-      "        zot_rc=$?\n"
-      "        [ \"$zot_rc\" -eq 0 ] && break\n"
-      "        [ \"$zot_rc\" -eq 124 ] && break\n"
-      "        [ \"$zot_try\" -lt 3 ] && sleep 5\n"
-      "      done\n")
-TO_BREAK="        [ \"$zot_rc\" -eq 124 ] && break\n"
-FOR="      for zot_try in 1 2 3; do\n"
+LOOP=("        for zot_try in 1 2 3; do\n"
+      "          timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1 &\n"
+      "          child=$!\n"
+      "          wait \"$child\"\n"
+      "          zot_rc=$?\n"
+      "          child=\"\"\n"
+      "          [ \"$zot_rc\" -eq 0 ] && break\n"
+      "          [ \"$zot_rc\" -eq 124 ] && break\n"
+      "          [ \"$zot_try\" -lt 3 ] && sleep 5\n"
+      "        done\n")
+TO_BREAK="          [ \"$zot_rc\" -eq 124 ] && break\n"
+FOR="        for zot_try in 1 2 3; do\n"
 def rep(a, b):
     assert s.count(a)==1, "anchor not found exactly once: %r" % a
     return s.replace(a, b, 1)
@@ -803,15 +812,19 @@ save(rep(EMIT, EMIT.replace(" fatal ", " warning ")))
 case_mutate g4-row3-exit-falls-through "G4 miss: no docker pull/create/run in any spelling after the fatal" "$SRC" "$G4_PY"'
 save(rep(EXIT, "        :\n"))
 '
-# Row 7: the exit ends only a subshell whose status is swallowed — the rest of the ONE runcmd
-# shell keeps running. (The BARE `( exit "$zot_rc" )` is an EQUIVALENT mutant: `set -e` is live in
-# this item, so the non-zero subshell status aborts the parent anyway — the must-PASS row below
-# pins that, so the equivalence is recorded rather than assumed.)
-case_mutate g4-row7-exit-in-swallowed-subshell "G4 miss: the miss arm ends the WHOLE runcmd" "$SRC" "$G4_PY"'
-save(rep(EXIT, "        ( exit \"$zot_rc\" ) || true\n"))
+# Row 7: the exit ends only a subshell whose status is swallowed — the rest of the attempt keeps
+# running.
+case_mutate g4-row7-exit-in-swallowed-subshell "G4 miss: the miss arm ends the ATTEMPT" "$SRC" "$G4_PY"'
+save(rep(EXIT, "          ( exit \"$zot_rc\" ) || true\n"))
 '
-case_must_pass g4-row7a-bare-subshell-is-equivalent-under-set-e "$SRC" "$G4_PY"'
-save(rep(EXIT, "        ( exit \"$zot_rc\" )\n"))
+# Row 7a. This WAS a must-PASS row: the bare `( exit "$zot_rc" )` was an EQUIVALENT mutant because
+# `set -e` was live in the runcmd item and the non-zero subshell status aborted the parent anyway.
+# #8562 runs the miss arm under `set +e` on purpose (restored after the arms), so errexit can no
+# longer rescue a subshell exit into looking correct — the bare form now FALLS THROUGH, and the
+# row is a must-RED. Converting it is a strengthening: the guard now sees the defect errexit used
+# to hide. (Plan Guard 2 row 2.)
+case_mutate g4-row7a-bare-subshell-falls-through-under-set-plus-e "G4 miss: the miss arm ends the ATTEMPT" "$SRC" "$G4_PY"'
+save(rep(EXIT, "          ( exit \"$zot_rc\" )\n"))
 '
 # One property (#8664): the guard's Guard 1b arm splitter must survive a producer that is still
 # writing when the splitter stops reading. ~160 KB of no-op CODE lines (not comments, which the
@@ -823,9 +836,9 @@ save(rep(EXIT, "        ( exit \"$zot_rc\" )\n"))
 G1B_PAD_PY='
 import sys
 p=sys.argv[1]; s=open(p).read()
-a="    docker create --name soleur-inngest-bootstrap-extract \"$IREF\"\n"
+a="      cid=\"$(docker create --name soleur-inngest-bootstrap-extract \"$IREF\")\"\n"
 assert s.count(a)==1, "docker create anchor not found exactly once"
-pad=("    : pad %s\n" % ("x"*58))*2400
+pad=("      : pad %s\n" % ("x"*58))*2400
 assert len(pad) >= 131072, "pad no longer exceeds twice the 64 KiB pipe buffer"
 assert not any(l.lstrip().startswith("#") for l in pad.splitlines()), "a comment pad is dropped before the pipe"
 open(p,"w").write(s.replace(a, a+pad, 1))
@@ -859,15 +872,19 @@ if [[ "$G1B_HARN_OUT" != *"BROKE:"* || "$G1B_HARN_OUT" != *"CRASHED"* ]]; then
 fi
 rm -rf "$G1B_HARN_ROOT"
 echo "  HARNESS:  the padded row breaks the pre-#8664 piped splitter (positive control)"
-# Phone-home-fails row: without `|| true`, a failing phone-home aborts the item under set -e
-# BEFORE the Sentry emit — the boot still dies, but silently on the channel that pages.
+# Phone-home-fails row: a failing phone-home must never cost the Sentry emit — otherwise the
+# attempt still dies, but silently on the channel that pages.
+# #8562 RE-POINT: the row used to DROP the `|| true` (under the runcmd item's `set -e` that
+# aborted before the emit). The miss arm now runs under `set +e` by design (plan Guard 2 row 2),
+# so dropping `|| true` alone is an EQUIVALENT mutant — the property is carried by `set +e`. The
+# row therefore injects the defect itself: a phone-home failure that ENDS the arm before the emit.
 case_mutate g4-phfail-phone-home-unguarded "G4 phone-home-fails: the Sentry emit inngest_pull_fatal fatal still runs" "$SRC" "$G4_PY"'
-save(rep(PH, PH.replace(" || true\n", "\n")))
+save(rep(PH, PH.replace(" || true\n", " || exit 3\n")))
 '
 # The no-endpoint arm falls through to the pin carrier (the retired "GHCR-only path").
 case_mutate g4-noep-falls-through "G4 noendpoint: exits non-zero with NO docker pull/create/run in any spelling" "$SRC" "$G4_PY"'
-a="      exit 1\n    fi\n    # #6617a"
-save(rep(a, "      :\n    fi\n    # #6617a"))
+a="        exit 1\n      fi\n      set -e\n      # #6617a"
+save(rep(a, "        :\n      fi\n      set -e\n      # #6617a"))
 '
 # Row 5 (harness, must-RED): the guard'"'"'s own stub makes the failing pull SUCCEED. The miss
 # scenario then exercises the hit arm twice, and the miss assertions must notice.
@@ -882,7 +899,7 @@ open(p,"w").write(s.replace(a,"G4_LOG=\"$G4_DIR/$n.log\" G4_PULL_RC=0",1))
 # Retry rows (#8036 1d review, perf P2). Deleting the retry restores the single-shot pull: one
 # transient reset then darkens the sole scheduler. The transient row is the one that must see it.
 case_mutate g4-retry-deleted "G4 transient: a failed first attempt then a served second is a HIT" "$SRC" "$G4_PY"'
-save(rep(LOOP, "      timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1\n      zot_rc=$?\n"))
+save(rep(LOOP, "        timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1\n        zot_rc=$?\n"))
 '
 # A timeout retried triples the stall on the sole scheduler (3 x 180s) for a zot that is
 # unreachable, not flaky.
@@ -893,7 +910,7 @@ save(rep(TO_BREAK, ""))
 # NON-canonical pull spelling. Both counters were anchored on `docker pull` and read this as zero
 # extra pulls; each counter gets its own row so neither can regress behind the other.
 G4_IMAGE_PULL_MUT="$G4_PY"'
-save(rep(FOR, "      docker image pull \"$IREF\" > /dev/null 2>&1 || true\n" + FOR))
+save(rep(FOR, "        docker image pull \"$IREF\" > /dev/null 2>&1 || true\n" + FOR))
 '
 case_mutate row1-image-pull-spelling "Row1: exactly ONE docker pull code line" "$SRC" "$G4_IMAGE_PULL_MUT"
 case_mutate g4-image-pull-spelling "G4 hit: exactly ONE image pull in ANY spelling" "$SRC" "$G4_IMAGE_PULL_MUT"

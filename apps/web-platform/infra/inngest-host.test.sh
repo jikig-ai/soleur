@@ -428,7 +428,7 @@ grep -qE 'vector_sha256[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$VECTOR_TF" \
   && grep -qE 'vector_sha256_arm64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$VECTOR_TF" \
   && grep -qF 'VECTOR_CLI_SHA256=${vector_sha256}' "$CLOUD_INIT" \
   && grep -qF 'VECTOR_CLI_ARCH=${inngest_cli_arch}' "$CLOUD_INIT" \
-  && grep -qF ':/vector.toml /tmp/vector.toml' "$CLOUD_INIT" \
+  && grep -qF 'docker cp "$cid:/vector.toml" /tmp/vector.toml' "$CLOUD_INIT" \
   && pass || fail "Vector wired dual-arch — amd64+arm64 SHA locals + arch-matched cloud-init override + VECTOR_CLI_ARCH derived + /tmp/vector.toml staged"
 # The DEFERRED empty VECTOR_CLI_* form must be GONE (would skip the install).
 if grep -qE 'VECTOR_CLI_VERSION=""|"VECTOR_CLI_VERSION="' "$CLOUD_INIT"; then
@@ -463,11 +463,16 @@ fi
 #    member (#6197). A NESTED member would match INNGEST_BETTERSTACK_LOGS_TOKEN and fail to
 #    match a bare BETTERSTACK_LOGS_TOKEN → boot-brick. The HEARTBEAT_URL)|BETTERSTACK anchor
 #    proves the token is a sibling of the INNGEST_ group, not inside it. Floor rose 4->5.
-grep -qF 'HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)' "$CLOUD_INIT" \
-  && grep -qF '"$n_inngest" -lt 5' "$CLOUD_INIT" \
+#    SOURCE LOCATION (#8562): the check moved out of runcmd into the provision script
+#    (/usr/local/bin/soleur-inngest-provision, a write_files entry), so §9-§9c read THAT entry's
+#    body, not the whole file — a copy of the regex anywhere else cannot satisfy them.
+ISO_SRC="${_G1_TMP}/provision-script.sh"
+awk '/^  - path: \/usr\/local\/bin\/soleur-inngest-provision$/{f=1;next} f&&/^  - path: /{f=0} f&&/^[^[:space:]]/{f=0} f' "$CLOUD_INIT" > "$ISO_SRC"
+grep -qF 'HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)' "$ISO_SRC" \
+  && grep -qF '"$n_inngest" -lt 5' "$ISO_SRC" \
   && pass || fail "isolation self-check admits BETTERSTACK_LOGS_TOKEN (top-level) and the floor is -lt 5"
 # The old floor must be gone.
-if grep -qF '"$n_inngest" -lt 4' "$CLOUD_INIT"; then
+if grep -qF '"$n_inngest" -lt 4' "$ISO_SRC"; then
   fail "isolation floor must be -lt 5, not the old -lt 4"
 else
   pass
@@ -482,11 +487,11 @@ fi
 #     Instead, extract the guard's OWN bytes and replay its predicate over synthesized name
 #     sets, so the assertions are about the decision the host actually makes.
 #     Mirrors registry-boot-guard.test.sh's extract-and-replay idiom (the sibling host).
-GUARD_RE="$(grep -E "n_inngest=.*grep -Ec" "$CLOUD_INIT" | grep -oE "grep -Ec '[^']*'" | sed "s/grep -Ec '//; s/'$//")"
-FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$CLOUD_INIT" | grep -oE '[0-9]+' | sed -n '1p')"
+GUARD_RE="$(grep -E "n_inngest=.*grep -Ec" "$ISO_SRC" | grep -oE "grep -Ec '[^']*'" | sed "s/grep -Ec '//; s/'$//")"
+FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$ISO_SRC" | grep -oE '[0-9]+' | sed -n '1p')"
 # Non-vacuity: a failed extraction must NOT silently pass every case below. An empty GUARD_RE
 # makes `grep -Ec ""` match every line, which would fake a clean replay.
-[[ -n "$GUARD_RE" ]] && pass || fail "could not extract the admit-regex from $CLOUD_INIT (the replay below would be vacuous)"
+[[ -n "$GUARD_RE" ]] && pass || fail "could not extract the admit-regex from the provision script in $CLOUD_INIT (the replay below would be vacuous)"
 [[ "$FLOOR" == "5" ]] && pass || fail "could not extract the cardinality floor, or it is not 5 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
 
 # Replays the file's exact predicate: strip DOPPLER_ builtins, then FATAL unless the visible
@@ -551,7 +556,7 @@ LIVE7=("${DARK5[@]}" INNGEST_CUTOVER_FLIP INNGEST_HEARTBEAT_URL)
 #     an inversion in the file itself: flipping -ne to -eq makes an isolated host FATAL and a
 #     LEAKY one boot clean, with every behavioral case above still green.
 # shellcheck disable=SC2016  # literal $n_total/$n_inngest is intentional — matching the file's text
-grep -qF '[ "$n_total" -ne "$n_inngest" ]' "$CLOUD_INIT" \
+grep -qF '[ "$n_total" -ne "$n_inngest" ]' "$ISO_SRC" \
   && pass || fail "the isolation self-check must compare with -ne (an -eq inversion admits an over-scoped credential and rejects an isolated one)"
 
 # 10. (#6536, AC6) The dark-host heartbeat prose must NOT re-assert the false "curl no-ops"
@@ -634,12 +639,19 @@ for asset in "${FLIP_REQUIRED[@]}"; do
   # SOURCE container (`docker cp WRONGNAME:/asset ...`) fails at runtime, is swallowed by
   # `2>/dev/null || true`, and silently skips staging — the exact silent-skip class this fix
   # exists to prevent. A `[^ ]*:/asset` match would pass on the typo'd container.
-  if grep -qE "docker cp soleur-inngest-bootstrap-extract:/${asset//./\\.} /tmp/${asset//./\\.}" "$CLOUD_INIT"; then
+  # #8562: the container is addressed by the ID `docker create` returned (`$cid`), not by its
+  # fixed name, so a SIGKILLed attempt's leftover container can never be the source. The pin moves
+  # with it: the source must be exactly "$cid", and $cid must be bound (below) to the create of
+  # the pinned extract container — a typo'd variable fails here exactly as a typo'd name did.
+  if grep -qE "docker cp \"\\\$cid:/${asset//./\\.}\" /tmp/${asset//./\\.}" "$CLOUD_INIT"; then
     pass
   else
-    fail "cloud-init-inngest.yml must 'docker cp soleur-inngest-bootstrap-extract:/${asset} /tmp/${asset}' — bootstrap's install-gate requires it at /tmp; without the cp DEDICATED_FLIP=0 and the flip timer never installs (#6178)"
+    fail "cloud-init-inngest.yml must 'docker cp \"\$cid:/${asset}\" /tmp/${asset}' — bootstrap's install-gate requires it at /tmp; without the cp DEDICATED_FLIP=0 and the flip timer never installs (#6178)"
   fi
 done
+# ...and $cid is the ID of the pinned extract container, bound exactly once.
+[ "$(grep -cE '^[[:space:]]*cid="\$\(docker create --name soleur-inngest-bootstrap-extract "\$IREF"\)"$' "$CLOUD_INIT")" = 1 ] \
+  && pass || fail "cloud-init-inngest.yml must bind cid=\"\$(docker create --name soleur-inngest-bootstrap-extract \"\$IREF\")\" exactly once — every docker cp source is that ID (#8562)"
 # The staging outcome must self-report off-box (the silent absence hid the bug for a full
 # cutover attempt): assert a flip-assets phone-home marker exists.
 grep -qE 'inngest-boot-phone-home\.sh flip-assets-(staged|MISSING)' "$CLOUD_INIT" \
@@ -647,7 +659,7 @@ grep -qE 'inngest-boot-phone-home\.sh flip-assets-(staged|MISSING)' "$CLOUD_INIT
 
 # ANTI-VACUITY FLOOR. Reported by printf + exit, never through fail()/pass(), so neutering those
 # cannot disarm it. The bound is the exact passing count; raise it with every added assertion.
-INNGEST_HOST_MIN_ASSERTIONS=82
+INNGEST_HOST_MIN_ASSERTIONS=83
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1
