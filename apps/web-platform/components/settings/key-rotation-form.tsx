@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface KeyRotationFormProps {
   hasExistingKey: boolean;
@@ -26,17 +27,15 @@ export function KeyRotationForm({
   const router = useRouter();
   const [apiKey, setApiKey] = useState("");
   const [credentialType, setCredentialType] = useState<CredentialType>("api_key");
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
   const isOauth = canUseOauthCredential && credentialType === "oauth_token";
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  // asyncFn never throws: failures land on the local `error` surface.
+  const { run, pending: isSubmitting } = usePendingAction(async () => {
     if (!apiKey.trim()) return;
 
-    setIsSubmitting(true);
     setError(null);
     setSuccess(false);
 
@@ -55,24 +54,25 @@ export function KeyRotationForm({
 
       if (!res.ok) {
         setError(data.error || "Failed to save key");
-        setIsSubmitting(false);
         return;
       }
 
       if (!data.valid) {
         setError("Invalid API key. Please check and try again.");
-        setIsSubmitting(false);
         return;
       }
 
       setSuccess(true);
       setApiKey("");
-      setIsSubmitting(false);
       router.refresh();
     } catch {
       setError("Network error. Please try again.");
-      setIsSubmitting(false);
     }
+  });
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    run();
   }
 
   return (

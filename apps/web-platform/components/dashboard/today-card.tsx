@@ -14,13 +14,14 @@
 // Each source dispatches to its own component so React rules-of-hooks
 // stay clean (no conditional hooks after early returns).
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 
 import { AcknowledgedPill } from "@/components/dashboard/acknowledged-pill";
 import { LeaderLoopStatus } from "@/components/dashboard/leader-loop-status";
 import { Button } from "@/components/ui/button";
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { useActionSend } from "@/hooks/use-action-send";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import { humanTitle } from "@/lib/messages/action-class-copy";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
@@ -146,12 +147,14 @@ function KbDriftCard({
 
   const [archived, setArchived] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
-  const [isDismissing, startDismiss] = useTransition();
 
-  function onDismiss() {
-    setArchived(true);
-    setDismissError(null);
-    startDismiss(async () => {
+  // Keep AbortSignal.timeout: the hook releases the flag on watchdog but does
+  // not abort the zombie fetch — the signal bound is what kills the flight.
+  // asyncFn never throws; failures revert the optimistic archive + set error.
+  const { run: onDismiss, pending: isDismissing } = usePendingAction(
+    async () => {
+      setArchived(true);
+      setDismissError(null);
       try {
         const res = await fetch(`/api/dashboard/today/${id}/discard`, {
           method: "POST",
@@ -167,8 +170,8 @@ function KbDriftCard({
         setArchived(false);
         setDismissError("Dismiss failed — network error");
       }
-    });
-  }
+    },
+  );
 
   if (archived) return null;
 
@@ -367,7 +370,6 @@ function StripeCard({
   draftPreview,
   urgency,
 }: TodayCardProps) {
-  const [isPendingLocal, startTransition] = useTransition();
   const [archived, setArchived] = useState(false);
   const [draft, setDraft] = useState(draftPreview);
   const [editError, setEditError] = useState<string | null>(null);
@@ -386,36 +388,31 @@ function StripeCard({
     onAcknowledgedArchive: () => setArchived(true),
   });
 
-  const isPending = isPendingLocal || isPendingSend;
-  const error = sendError ?? editError;
-
-  function onEdit() {
-    const next = window.prompt("Edit draft", draft);
-    if (next === null) return;
-    if (next === draft) return;
-    startTransition(async () => {
-      try {
-        const res = await fetch(`/api/dashboard/today/${id}/edit`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ draft_preview: next }),
-          signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
-        });
-        if (res.status === 200) {
-          setDraft(next);
-          return;
+  // Keep AbortSignal.timeout on both fetches: the hook releases the flag on
+  // watchdog but does not abort the zombie fetch — the signal bound is what
+  // kills the flight. asyncFn never throws; failures set the local error.
+  const { run, pending: isPendingLocal } = usePendingAction(
+    async (op: "edit" | "discard", next?: string) => {
+      if (op === "edit") {
+        try {
+          const res = await fetch(`/api/dashboard/today/${id}/edit`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ draft_preview: next }),
+            signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
+          });
+          if (res.status === 200) {
+            setDraft(next!);
+            return;
+          }
+          setEditError(`Edit failed (${res.status})`);
+        } catch {
+          setEditError("Edit failed — network error");
         }
-        setEditError(`Edit failed (${res.status})`);
-      } catch {
-        setEditError("Edit failed — network error");
+        return;
       }
-    });
-  }
-
-  function onDiscard() {
-    setArchived(true);
-    setEditError(null);
-    startTransition(async () => {
+      setArchived(true);
+      setEditError(null);
       try {
         const res = await fetch(`/api/dashboard/today/${id}/discard`, {
           method: "POST",
@@ -431,7 +428,21 @@ function StripeCard({
         setArchived(false);
         setEditError("Discard failed — network error");
       }
-    });
+    },
+  );
+
+  const isPending = isPendingLocal || isPendingSend;
+  const error = sendError ?? editError;
+
+  function onEdit() {
+    const next = window.prompt("Edit draft", draft);
+    if (next === null) return;
+    if (next === draft) return;
+    run("edit", next);
+  }
+
+  function onDiscard() {
+    run("discard");
   }
 
   if (archived) return null;

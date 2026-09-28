@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 /**
  * feat-debug-mode-stream — per-workspace internal "debug mode" toggle (FR2).
@@ -24,42 +25,41 @@ export function DebugModeToggle({
   isOwner: boolean;
 }) {
   const [debugMode, setDebugMode] = useState(initialDebugMode);
-  const [loading, setLoading] = useState(false);
 
-  const persist = useCallback(async (value: boolean) => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/workspace/debug-mode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ value }),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { debugMode?: boolean };
-        setDebugMode(data.debugMode ?? value);
-      } else {
-        // Never silently swallow a non-OK response — a failed write must be
-        // visible, not a toggle that snaps back with no signal.
-        console.error("[debug-mode-toggle] write failed:", res.status);
+  // asyncFn never throws: failure surfaces are the window.alert paths below.
+  const { run: persist, pending: loading } = usePendingAction(
+    async (value: boolean) => {
+      try {
+        const res = await fetch("/api/workspace/debug-mode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { debugMode?: boolean };
+          setDebugMode(data.debugMode ?? value);
+        } else {
+          // Never silently swallow a non-OK response — a failed write must be
+          // visible, not a toggle that snaps back with no signal.
+          console.error("[debug-mode-toggle] write failed:", res.status);
+          window.alert(
+            res.status === 403
+              ? "Only a workspace owner can change debug mode."
+              : "Couldn't update debug mode. Please try again.",
+          );
+        }
+      } catch (err) {
+        console.error("[debug-mode-toggle] request failed:", err);
         window.alert(
-          res.status === 403
-            ? "Only a workspace owner can change debug mode."
-            : "Couldn't update debug mode. Please try again.",
+          "Something went wrong. Please check your connection and try again.",
         );
       }
-    } catch (err) {
-      console.error("[debug-mode-toggle] request failed:", err);
-      window.alert(
-        "Something went wrong. Please check your connection and try again.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+  );
 
   const handleToggleClick = useCallback(() => {
     if (loading || !isOwner) return;
-    void persist(!debugMode);
+    persist(!debugMode);
   }, [debugMode, loading, isOwner, persist]);
 
   return (
