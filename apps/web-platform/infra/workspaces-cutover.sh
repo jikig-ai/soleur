@@ -807,7 +807,9 @@ rollback() {
   #      SubState BEFORE stopping it (a stop collects the unit and empties every property), stop it,
   #      and say which case this is without a false fatal page.
   #   2. Wait, bounded by ATTEMPTS (never wall clock), for any fire already running to leave the live
-  #      state: unmounting under it would race two restores over one mountpoint. On expiry report
+  #      state, or carrying a QUEUED start job (disarm check (b)'s second arm: an elapsed timer whose
+  #      fire systemd has not begun still reads inactive, and only `Job` shows it): unmounting under
+  #      it would race two restores over one mountpoint. On expiry report
   #      check=fire_stuck and proceed — the plaintext remount the fire was performing is this
   #      function's own end state. The page is emitted ONLY if the disarm above has not already paged.
   local i=0 prior="" paged=0 src=""
@@ -824,7 +826,7 @@ rollback() {
   fi
   while [ "$i" -lt 30 ]; do
     i=$((i + 1))
-    _deadman_fire_live || break
+    _deadman_fire_live || [ -n "$(_dm_prop service Job)" ] || break
     if [ "$i" -ge 30 ]; then
       _deadman_row "result=disarm_failed reason=rollback_engaged check=fire_stuck"
       [ "$paged" = "1" ] || emit_drift deadman_disarm_failed
@@ -874,6 +876,9 @@ rollback() {
 # rollback_ack_luks_writes input). FAIL-CLOSED on an unreadable live header UUID while the mapper is
 # mounted and a CANARY_OK is persisted: "cannot tell" is not "not cut over", and the ack is the override.
 # A different header (a later re-format) or a plaintext mount is not this cutover and proceeds.
+# The key is the HEADER, not the run: STATE_FILE is append-only and read_state returns the LAST
+# CANARY_OK, so a later cutover that reuses the same header and dies before its own canary is refused
+# too, and the refusal text then overstates the stranding. That is fail-closed; the ack is the override.
 assert_rollback_not_post_cutover() {
   local src persisted p_uuid mapper_dev live_uuid=""
   src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
@@ -907,6 +912,24 @@ _stop_app_and_writers() {
   done
 }
 
+# _rollback_outcome — #9098 B: the outcome of a rollback() is read off the mount AND the mapper, never
+# assumed from rollback()'s own swallowed remount: rolled_back only for exactly ONE non-mapper source
+# with the mapper CLOSED. Two sources (a remount stacked over a mapper that would not unmount) or a
+# mapper still open (a decrypted copy still live) is rollback_stacked; nothing, or the mapper, is
+# remount_failed. Sets `outcome` — cleanup()'s local by dynamic scope, a global in ROLLBACK mode.
+_rollback_outcome() {
+  local src n_src
+  src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+  n_src="$(grep -c . <<<"$src" || true)"
+  if [ -z "$src" ] || [ "$src" = "$MAPPER" ]; then
+    outcome=rollback_remount_failed
+  elif [ "$n_src" -ne 1 ] || [ -e "$MAPPER" ]; then
+    outcome=rollback_stacked; emit_drift rollback_stacked
+  else
+    outcome=rolled_back
+  fi
+}
+
 # shellcheck disable=SC2317  # invoked indirectly via the EXIT trap
 cleanup() {
   # `$?` MUST be captured before any other builtin runs (the `trap` below resets it to 0). Then,
@@ -915,7 +938,7 @@ cleanup() {
   # SIGPIPE and kills bash mid-rollback. HUP/INT/TERM are ignored for the same reason — a second
   # signal must not abort the recovery halfway. (The main body keeps the default dispositions: an SSH
   # drop mid-freeze must still abort INTO this trap, DP-6.)
-  local rc=$? outcome="" src="" n_src=0 abnormal="" detail="" derr="" drc=0
+  local rc=$? outcome="" src="" abnormal="" detail="" derr="" drc=0
   trap '' PIPE HUP INT TERM
   trap - EXIT
   if [ "$rc" -eq 0 ]; then
@@ -930,19 +953,7 @@ cleanup() {
   # not tear it down). Single condition avoids the double stop/umount/remount flap.
   if [ "$CANARY_OK" != "1" ] && { [ "$FLIP_DONE" = "1" ] || [ "$FREEZE_HELD" = "1" ]; }; then
     rollback
-    # #9098 B — the outcome is read off the mount AND the mapper, never assumed from rollback()'s own
-    # swallowed remount: rolled_back only for exactly ONE non-mapper source with the mapper CLOSED.
-    # Two sources (a remount stacked over a mapper that would not unmount) or a mapper still open
-    # (a decrypted copy still live) is rollback_stacked; nothing, or the mapper, is remount_failed.
-    src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
-    n_src="$(grep -c . <<<"$src" || true)"
-    if [ -z "$src" ] || [ "$src" = "$MAPPER" ]; then
-      outcome=rollback_remount_failed
-    elif [ "$n_src" -ne 1 ] || [ -e "$MAPPER" ]; then
-      outcome=rollback_stacked; emit_drift rollback_stacked
-    else
-      outcome=rolled_back
-    fi
+    _rollback_outcome
   elif [ "$CANARY_OK" = "1" ]; then
     # #9045 — past the host-canary door the LUKS mount is authoritative (ADR-119 §(b)), and nothing
     # unattended is armed any more. Roll FORWARD: a death between CANARY_OK=1 and the end of
@@ -2307,6 +2318,18 @@ if [ "$ROLLBACK" = "1" ]; then
   DRY_RUN=0
   assert_rollback_not_post_cutover
   rollback
+  # The outcome is read off the mount, as cleanup() does: rollback() never fails, so an unconditional
+  # `exit 0` turned a failed remount (app and writers left DOWN) or a still-open mapper into a green
+  # run with no outcome row. Anything but rolled_back records its row and exits non-zero. The EXIT
+  # trap is dropped first: cleanup() would otherwise add a second, false pre_freeze row.
+  outcome=""
+  _rollback_outcome
+  if [ "$outcome" != "rolled_back" ]; then
+    _deadman_row "result=cutover_aborted outcome=${outcome} mode=rollback"
+    log "ERROR: ROLLBACK=1 did not complete cleanly (outcome=${outcome}) — see the runbook's abort triage table"
+    trap - EXIT
+    exit 1
+  fi
   RUN_COMPLETE=1
   exit 0
 fi

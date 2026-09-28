@@ -413,7 +413,8 @@ for pat in \
   "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
   "result=not_armed reason=rollback_engaged prior=" \
   "result=already_disarmed reason=rollback_engaged" \
-  'result=cutover_aborted outcome=${outcome}${abnormal}${detail}'; do
+  'result=cutover_aborted outcome=${outcome}${abnormal}${detail}' \
+  'result=cutover_aborted outcome=${outcome} mode=rollback'; do
   if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
   else

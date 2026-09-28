@@ -408,6 +408,9 @@ says what `cleanup()` did:
 
 `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WORKSPACES_LUKS_DEADMAN`
 
+A `rollback=true` dispatch that does not end `rolled_back` writes the same row with a trailing
+`mode=rollback` field and fails its run. Read its `outcome` from the table below.
+
 The drift reasons (the second column below) reach Sentry only, as `workspaces-luks-drift` events.
 They all group into one Sentry issue (135268270); **never archive it**, or later reasons stop paging.
 Read its latest event with `doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh 135268270 --latest-event`.

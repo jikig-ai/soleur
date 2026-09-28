@@ -987,6 +987,17 @@ for t35d in activating active; do
     no "T35d stuck-fire wait wrong ($t35d, reads=$(reads_before_umount "$DM_SVC_READ") pages=$(cnt '^EMIT_DRIFT deadman_disarm_failed$') rc=$CASE_RC) ${CASE_OUT:0:200}"
   fi
 done
+# T35c3 — a QUEUED fire (the timer elapsed; the service still reads inactive but carries a start Job):
+# rollback() must wait on the Job too, never unmount under a fire systemd is about to begin. The Job
+# never clears in this model, so the wait expires: 30 reads, check=fire_stuck, one page.
+run_case "$CUTOVER" 'DRY_RUN=0; rollback' 'rollback' DEADMAN_LOADED="service" DEADMAN_SVC_ACTIVESTATES=inactive DEADMAN_SVC_JOB=4711 \
+  ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service" FINDMNT_MOUNT_SRC=/dev/sdz9
+if ran && [ "$(reads_before_umount "$DM_SVC_READ")" -eq 30 ] && markerF "$DM result=disarm_failed reason=rollback_engaged check=fire_stuck" \
+  && [ "$(cnt '^EMIT_DRIFT deadman_disarm_failed$')" -eq 1 ]; then
+  ok "T35c3 rollback() waits on a QUEUED start job (ActiveState inactive, Job set) before the first umount"
+else
+  no "T35c3 rollback() ignored a queued fire (reads=$(reads_before_umount "$DM_SVC_READ") pages=$(cnt '^EMIT_DRIFT deadman_disarm_failed$')) ${CASE_OUT:0:200}"
+fi
 # T35d2 — armed AND stuck: the disarm already reported check=b and paged; the expired wait adds its
 # fire_stuck row but NOT a second deadman_disarm_failed page (#9098 C: no duplicate pages).
 run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; rollback' 'rollback disarm_dead_man' DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting \
@@ -1309,7 +1320,10 @@ if died && has '^EMIT_DRIFT rollback_refused_post_cutover$' && outF 'strand' && 
 else
   no "J1 a post-cutover ROLLBACK=1 was not refused (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
-rb_case "1:uuid-live" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=uuid-live ROLLBACK_ACK_LUKS_WRITES=1
+# The source flips to the plaintext once rollback() stops the (loaded) timer: the guard reads the
+# mapper, the post-rollback outcome read sees the remount land.
+rb_case "1:uuid-live" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=uuid-live ROLLBACK_ACK_LUKS_WRITES=1 \
+  DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP=/dev/sdz9
 if ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_post_cutover$' && ! markerF 'result=cutover_aborted'; then
   ok "J2 ROLLBACK_ACK_LUKS_WRITES=1 lets the same post-cutover rollback run, and its green exit records no abort (RUN_COMPLETE=1)"
 else
@@ -1321,7 +1335,8 @@ if ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_post_cu
 else
   no "J3 a not-cut-over rollback was refused (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
-rb_case "1:uuid-old" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=uuid-new
+rb_case "1:uuid-old" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=uuid-new \
+  DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP=/dev/sdz9
 if ran && nhas '^EMIT_DRIFT rollback_refused_post_cutover$'; then
   ok "J4 a persisted CANARY_OK for a DIFFERENT header (uuid-old vs live uuid-new) does not block the rollback"
 else
@@ -1332,6 +1347,27 @@ if died && has '^EMIT_DRIFT rollback_refused_post_cutover$' && nhas '^umount[[:s
   ok "J5 mapper mounted + CANARY_OK persisted but the live header UUID UNREADABLE: refused (fail-closed; the ack is the override)"
 else
   no "J5 an unverifiable post-cutover state was rolled back without the ack (rc=$CASE_RC) ${CASE_OUT:0:200}"
+fi
+# J7 — a ROLLBACK=1 whose remount FAILED (the mount still reads the mapper afterwards) left the app
+# and the writers DOWN. It must not exit 0: it records ONE outcome row (mode=rollback) and exits
+# non-zero, and the EXIT trap does not add a second, false pre_freeze row.
+rb_case "1:uuid-live" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=uuid-live ROLLBACK_ACK_LUKS_WRITES=1
+if died && has '^umount[[:space:]]' && has '^EMIT_DRIFT rollback_remount_failed$' \
+  && markerF "$DM result=cutover_aborted outcome=rollback_remount_failed mode=rollback" \
+  && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ]; then
+  ok "J7 a ROLLBACK=1 whose remount failed exits non-zero with ONE outcome=rollback_remount_failed mode=rollback row"
+else
+  no "J7 a failed-remount ROLLBACK=1 went green or mis-recorded (rc=$CASE_RC): $(grep -F 'cutover_aborted' "$MARKER_LOG" | tr '\n' '|')"
+fi
+# J8 — the plaintext remounted but the mapper is STILL OPEN (a close that failed EBUSY): a decrypted
+# copy is live, so the rollback is not clean either — rollback_stacked, non-zero.
+run_case "$CUTOVER" "MAPPER=\"\$WORKSPACES_STAGING\"; persist_state CANARY_OK '1:uuid-live'; trap cleanup EXIT; eval \"\$RB_TEXT\"" \
+  'rollback cleanup assert_rollback_not_post_cutover' \
+  ROLLBACK=1 RB_TEXT="$RB_TEXT" ACTIVE_UNITS="$T37_ACT" CRYPTSETUP_DEV=/dev/sdz7 FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live
+if died && markerF "$DM result=cutover_aborted outcome=rollback_stacked mode=rollback" && has '^EMIT_DRIFT rollback_stacked$'; then
+  ok "J8 a ROLLBACK=1 that leaves the mapper open exits non-zero with outcome=rollback_stacked mode=rollback"
+else
+  no "J8 an open mapper after ROLLBACK=1 was reported clean (rc=$CASE_RC): $(grep -F 'cutover_aborted' "$MARKER_LOG" | tr '\n' '|')"
 fi
 # J6 — the workflow plumbs the ack the same way `rollback` reaches the host: a boolean input
 # defaulting to false, mapped to 0|1 in the Run step env, written into the 0600 .env, and refused
@@ -1537,7 +1573,7 @@ echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
 # still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=166
+FREEZE_MIN_PASS=169
 [ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
 harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
 [ "$fail" -eq 0 ]
