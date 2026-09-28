@@ -82,7 +82,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=537   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=541   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1055,6 +1055,24 @@ expect 'fl.dispatch-needs-token' 1 error 0 vinngest-v1.1.40
 run_mint fl-usage --bogus
 expect 'fl.usage' 1 error 0 vinngest-v1.1.40
 a_eq 'fl.usage:stage' "$(field stage)" args
+
+# die() refuses a call without all three of <stage> <reason> <msg>: a TEMP COPY
+# with one injected two-argument call reports stage=internal reason=die-usage
+# instead of an error line with an empty message.
+DIE2="$TMP/die2-mint.sh"
+python3 - "$SCRIPT" "$DIE2" <<'PYDIE'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"(?m)^die\(\) \{.*?^\}\n", s, re.S)
+if not m: sys.exit(2)
+open(sys.argv[2], "w").write(s[:m.end()] + 'die args two-args-only\n' + s[m.end():])
+PYDIE
+a_eq 'fl.die-needs-three-args:landed' "$(grep -c '^die args two-args-only$' "$DIE2" 2>/dev/null || true)" 1
+SUT_OVERRIDE="$DIE2"; mf_new fl-die2; unset SUT_OVERRIDE
+run_mint fl-die2 --dry-run
+a_eq 'fl.die-needs-three-args:rc' "$LAST_RC" 1
+a_eq 'fl.die-needs-three-args:stage' "$(field stage)" internal
+a_eq 'fl.die-needs-three-args:reason' "$(field reason)" die-usage
 
 # --dry-run makes NO network call: gh is forbidden and origin points at a
 # nonexistent path, so a stray ls-remote fails the row too.
