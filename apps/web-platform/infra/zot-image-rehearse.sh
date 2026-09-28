@@ -41,7 +41,7 @@ b() { sed -n "s/^$1=//p" "$W/build.txt"; }
 bash "$ROOT/scripts/registry-replace-preflight.sh" --print-asset > "$W/asset.txt"
 cat "$W/asset.txt"
 a() { sed -n "s/^$1=//p" "$W/asset.txt"; }
-PIN_C="$(grep -E '^[[:space:]]*zot_config_digest_amd64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"[[:space:]]*$' "$DIR/zot-registry.tf" | grep -oE '[0-9a-f]{64}')"
+PIN_C="$(grep -E '^[[:space:]]*zot_config_digest_amd64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"[[:space:]]*$' "$DIR/zot-registry.tf" | grep -oE '[0-9a-f]{64}' || true)"
 [[ "$PIN_C" =~ ^[0-9a-f]{64}$ ]] || die "could not read zot_config_digest_amd64 from zot-registry.tf"
 [[ "$(b T)" == "$(a sha256)" ]] || die "the rebuilt archive hashes to $(b T), but zot-registry.tf pins T=$(a sha256). Upstream D does not reproduce the pinned tarball."
 [[ "$(b C)" == "$PIN_C" ]] || die "upstream D's config digest is $(b C), but zot-registry.tf pins C=$PIN_C"
