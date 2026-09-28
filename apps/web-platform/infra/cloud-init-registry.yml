@@ -173,6 +173,75 @@ write_files:
   # routing); BETTERSTACK_LOGS_TOKEN is injected AT CRON TIME by `doppler run` from the isolated
   # soleur-registry/prd config (NEVER baked into user_data). Plain dollar-VARs stay literal
   # (templatefile only expands dollar-brace); shell brace-expansions are written $${VAR:-}.
+  # --- #8714 5.3b-iii: zot's BOOT IMAGE comes from a pinned GitHub release asset, not ghcr.io ----
+  # The five values the fetch verifies against, templated from zot-registry.tf's zot-mirror locals.
+  # Public, non-secret digests and a URL (same class as a digest pin). The heartbeat reads C and D
+  # from here to map the running container's image ID back to the upstream pin.
+  - path: /etc/default/zot-image
+    content: |
+      ZOT_ASSET_URL=${zot_asset_url}
+      ZOT_ASSET_SHA256=${zot_asset_sha256}
+      ZOT_MANIFEST_DIGEST=${zot_manifest_digest}
+      ZOT_CONFIG_DIGEST=${zot_config_digest}
+      ZOT_LOCAL_REF=${zot_local_ref}
+    owner: root:root
+    permissions: '0644'
+
+  # The fetch-and-verify step. Runs ONCE from runcmd, as root, OUTSIDE any `doppler run` (so no
+  # token or LUKS key is ever in its environment), after the ghcr.io name-resolution deny and after
+  # docker is up, and BEFORE the ZOTEOF launch, which refuses to start zot without the ID this
+  # writes. Every outcome records a one-word verdict in /var/lib/soleur/zot-image-fetch.state,
+  # which the SOLEUR_ZOT_DISK heartbeat ships as zot_image_fetch= (absent file: not_run).
+  # Verdicts: ok | config_invalid | download_failed | sha_mismatch | load_failed | id_mismatch.
+  # stdout carries ONLY the verified image ID; every diagnostic goes to stderr.
+  # BRACE-FREE ON PURPOSE: this body is a terraform templatefile, so it carries no dollar-brace and
+  # no percent-brace sequence at all (zot-image-fetch.test.sh asserts it) -- plain $VAR forms only.
+  - path: /usr/local/bin/zot-image-fetch.sh
+    content: |
+      #!/usr/bin/env bash
+      set -u
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      export LC_ALL=C
+      ENV_FILE=/etc/default/zot-image
+      STATE_DIR=/var/lib/soleur
+      ID_DIR=/run/soleur
+      TAR=/var/lib/soleur/zot-image.oci.tar
+      verdict() { mkdir -p "$STATE_DIR" && printf '%s\n' "$1" > "$STATE_DIR/zot-image-fetch.state"; }
+      refuse() { verdict "$1"; rm -f "$TAR"; echo "[zot-image-fetch] REFUSED verdict=$1: $2" >&2; exit 1; }
+      # Parse, never source: a value is taken only from its own KEY= line.
+      val() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
+      URL=$(val ZOT_ASSET_URL); T=$(val ZOT_ASSET_SHA256); D=$(val ZOT_MANIFEST_DIGEST)
+      C=$(val ZOT_CONFIG_DIGEST); LOCAL_REF=$(val ZOT_LOCAL_REF)
+      printf '%s' "$URL" | grep -qxE 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.oci\.tar' \
+        || refuse config_invalid "ZOT_ASSET_URL is not an https github.com release-asset URL: [$URL]"
+      for h in "$T" "$D" "$C"; do
+        printf '%s' "$h" | grep -qxE '[0-9a-f]{64}' || refuse config_invalid "a pinned digest is not 64 lowercase hex: [$h]"
+      done
+      printf '%s' "$LOCAL_REF" | grep -qxE 'localhost/[a-z0-9._/-]+:v[0-9]+\.[0-9]+\.[0-9]+' \
+        || refuse config_invalid "ZOT_LOCAL_REF is not a localhost/ ref: [$LOCAL_REF]"
+      mkdir -p "$STATE_DIR" "$ID_DIR" || refuse download_failed "cannot create $STATE_DIR or $ID_DIR"
+      rm -f "$TAR" "$ID_DIR/zot-image-id"
+      # Bounded retries (a boot-time blip must not dark the host) and https-only, redirects included.
+      curl -fsSL --proto =https --proto-redir =https --connect-timeout 20 --max-time 900 \
+        --retry 5 --retry-delay 5 --retry-all-errors -o "$TAR" "$URL" \
+        || refuse download_failed "curl could not fetch $URL"
+      GOT=$(sha256sum "$TAR" | cut -d' ' -f1)
+      [ "$GOT" = "$T" ] || refuse sha_mismatch "asset sha256 $GOT != pinned $T; not loading it"
+      for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+      docker load -i "$TAR" >&2 || refuse load_failed "docker load failed"
+      rm -f "$TAR"
+      ID=$(docker image inspect -f '{{.Id}}' "$LOCAL_REF" 2>/dev/null) || refuse load_failed "loaded image $LOCAL_REF is not inspectable"
+      case "$ID" in
+        "sha256:$C" | "sha256:$D") : ;;
+        *) refuse id_mismatch "loaded image ID [$ID] is neither the upstream config sha256:$C nor manifest sha256:$D" ;;
+      esac
+      printf '%s\n' "$ID" > "$ID_DIR/zot-image-id" || refuse load_failed "cannot record the verified ID"
+      verdict ok
+      echo "[zot-image-fetch] ok: $LOCAL_REF is $ID (asset sha256 $T)" >&2
+      printf '%s\n' "$ID"
+    owner: root:root
+    permissions: '0755'
+
   - path: /usr/local/bin/zot-disk-heartbeat.sh
     content: |
       #!/usr/bin/env bash
@@ -250,20 +319,25 @@ write_files:
       INSPECT=$(docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}} {{.State.StartedAt}} {{.Config.Image}}' zot 2>/dev/null)
       if [ -n "$INSPECT" ]; then
         read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE STARTED_AT ZOT_IMAGE_REF <<<"$INSPECT"
-        # Emit the leading 12 hex of the digest, not the ~90-char reference: unambiguous
-        # against a known pin set and keeps the line bounded. `unknown` is the DEFAULT here,
-        # never a fallback — same discipline as the htpasswd block below: "cannot tell" must
-        # never be conflated with a value. A container created by TAG only (no @sha256) has no
-        # digest to report and correctly reads `unknown` rather than a fabricated one.
-        # [0-9a-f]{12}, NOT twelve dots. `.` matches `"` and `\`, and this value is
-        # interpolated into --data-raw "{\"message\":\"$LINE\"}" -- an unescaped byte makes
-        # Better Stack reject the WHOLE payload, taking the entire heartbeat dark. The
-        # ZOT_LAST_ERR block below sanitizes for exactly that reason. A character class also
-        # makes the `unknown`-is-a-default property true BY CONSTRUCTION rather than by
-        # upstream convention: junk now falls to `unknown` instead of becoming a
-        # plausible-looking 12-char "digest".
-        ZOT_IMAGE_DIGEST=$(printf '%s' "$${ZOT_IMAGE_REF:-}" | sed -n 's/.*@sha256:\([0-9a-f]\{12\}\).*/\1/p')
-        ZOT_IMAGE_DIGEST=$${ZOT_IMAGE_DIGEST:-unknown}
+        # Emit the leading 12 hex of D, not the ~90-char reference. `unknown` is the DEFAULT,
+        # never a fallback: "cannot tell" must never be conflated with a value. The emitted token
+        # is only ever D's own 12 hex (read as [0-9a-f]{64} below), so no byte that could corrupt
+        # the unescaped --data-raw JSON envelope can reach the row through this field.
+        #
+        # (#8714 5.3b-iii) zot now runs BY IMAGE ID, so `.Config.Image` is `sha256:<id>`, not a
+        # `repo@sha256:<D>` reference. The ID is the upstream config digest C (classic image store)
+        # or the manifest digest D (containerd store) -- zot-image-fetch.sh refuses any other --
+        # so map EITHER back to D's leading 12 hex, the same token the pre-mirror hosts reported,
+        # and report `unknown` for anything else. C and D are read (parse-only) from
+        # /etc/default/zot-image, which the same cloud-init writes.
+        ZOT_IMAGE_DIGEST=unknown
+        _zc=$(grep -E '^ZOT_CONFIG_DIGEST=[0-9a-f]{64}$' /etc/default/zot-image 2>/dev/null | head -1 | cut -d= -f2)
+        _zd=$(grep -E '^ZOT_MANIFEST_DIGEST=[0-9a-f]{64}$' /etc/default/zot-image 2>/dev/null | head -1 | cut -d= -f2)
+        if [ -n "$_zc" ] && [ -n "$_zd" ]; then
+          case "$ZOT_IMAGE_REF" in
+            "sha256:$_zc" | "sha256:$_zd") ZOT_IMAGE_DIGEST=$(printf '%.12s' "$_zd") ;;
+          esac
+        fi
       else
         ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1; STARTED_AT=
         # Rides the SAME sentinel arm as every sibling field, so a dead container reports
@@ -875,6 +949,24 @@ write_files:
       case "$STORE_LUKS" in
         '' | *[[:space:]]*) STORE_LUKS=unknown ;;
       esac
+      # (#8714 5.3b-iii) zot_image_fetch: the boot fetch's one-word verdict (zot-image-fetch.sh),
+      # allowlisted; `not_run` when the state file is absent (the fetch never ran this instance).
+      ZOT_IMAGE_FETCH=not_run
+      if [ -e /var/lib/soleur/zot-image-fetch.state ]; then
+        ZOT_IMAGE_FETCH=$(head -1 /var/lib/soleur/zot-image-fetch.state 2>/dev/null)
+        case "$ZOT_IMAGE_FETCH" in
+          ok | config_invalid | download_failed | sha_mismatch | load_failed | id_mismatch) : ;;
+          *) ZOT_IMAGE_FETCH=unknown ;;
+        esac
+      fi
+      # ghcr_blocked: 1 when ghcr.io resolves ONLY to the runcmd sinkhole (0.0.0.0 / ::), 0 when it
+      # resolves to anything else (the name-resolution deny is not in effect), unknown when it does
+      # not resolve at all (that is not the deny, so it is not reported as one).
+      GHCR_BLOCKED=unknown
+      _gh_addrs=$(getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u)
+      if [ -n "$_gh_addrs" ]; then
+        if printf '%s\n' "$_gh_addrs" | grep -qvxE '0\.0\.0\.0|::'; then GHCR_BLOCKED=0; else GHCR_BLOCKED=1; fi
+      fi
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
       # err_redact_rev (#7960, ADR-211): integer revision of the zot_last_err redaction gate — the
@@ -882,7 +974,7 @@ write_files:
       # follow-through probe keys delivery proof on it, read from this trusted region. A LITERAL, not
       # a $VAR: this script runs set -u. Bump when the gate changes; never decrement or reuse; never
       # keep the token while removing the gate.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS luks_open_arm=$LUKS_OPEN_ARM store_escrow=$STORE_ESCROW store_escrow_age_s=$STORE_ESCROW_AGE_S host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST zot_image_fetch=$ZOT_IMAGE_FETCH ghcr_blocked=$GHCR_BLOCKED htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS luks_open_arm=$LUKS_OPEN_ARM store_escrow=$STORE_ESCROW store_escrow_age_s=$STORE_ESCROW_AGE_S host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -2161,6 +2253,21 @@ runcmd:
   # Apply SSH hardening immediately.
   - systemctl restart sshd
 
+  # (#8714 5.3b-iii) ghcr.io NAME-RESOLUTION DENY, FIRST, before anything on this host fetches. Nothing
+  # here needs ghcr.io any more (zot boots from the pinned release asset below), and this entry is
+  # what makes that a measured fact rather than a claim: the heartbeat's ghcr_blocked=1 next to
+  # state_status=running proves the host booted and served with ghcr.io unresolvable. It is a deny
+  # of the NAME, not an egress firewall rule (the hcloud firewall carries inbound rules only).
+  # Written to /etc/hosts AND to cloud-init's hosts template when one exists, so a
+  # `manage_etc_hosts: true` regeneration on a later boot keeps it. POSIX sh (runcmd is /bin/sh).
+  - |
+    for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
+      [ -f "$f" ] || continue
+      for h in ghcr.io pkg-containers.githubusercontent.com; do
+        grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
+      done
+    done
+
   # #6895: the zot store volume mount + resize is now the guest-side LUKS block, and it needs the
   # Doppler CLI + /etc/default/registry-doppler in place to read REGISTRY_LUKS_KEY (P1-B). So the
   # Doppler CLI install + env-file write below run FIRST, and the LUKS format/open/mount/resize
@@ -2265,6 +2372,14 @@ runcmd:
   # Ensure docker is up before the container launch.
   - systemctl enable --now docker
 
+  # (#8714 5.3b-iii) FETCH + VERIFY zot's boot image: the pinned release asset (sha256 == T), loaded
+  # and refused unless its image ID is the upstream C or D. Its own entry, OUTSIDE `doppler run`, so
+  # no secret is ever in the environment of curl or `docker load`. On success it writes the verified
+  # ID to /run/soleur/zot-image-id, which the launch below requires; on any refusal it writes a
+  # verdict the heartbeat ships as zot_image_fetch=, zot never starts, and the liveness heartbeat's
+  # absence alarm fires. The ID on stdout is discarded here (the file is the hand-off).
+  - /usr/local/bin/zot-image-fetch.sh >/dev/null
+
   # --- Build htpasswd from the Doppler tokens + launch zot -----------------------------
   # Runs UNDER `doppler run` (scoped to the isolated `soleur-registry` project's `prd` root)
   # so ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN are in the env. Usernames are terraform-interpolated
@@ -2306,6 +2421,11 @@ runcmd:
     htpasswd -Bbn '${zot_push_user}' "$ZOT_PUSH_TOKEN" >> /etc/zot/htpasswd
     chmod 600 /etc/zot/htpasswd
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+    # (#8714 5.3b-iii) zot runs ONLY by the image ID zot-image-fetch.sh verified (asset sha256 == T,
+    # ID == upstream C or D). No ID file, or one that is not a bare sha256 ID: refuse, never fall
+    # back to pulling anything.
+    ZOT_IMAGE_ID="$(head -1 /run/soleur/zot-image-id 2>/dev/null || true)"
+    [[ "$ZOT_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "[zot] FATAL: no verified zot image ID in /run/soleur/zot-image-id (zot_image_fetch verdict: $(cat /var/lib/soleur/zot-image-fetch.state 2>/dev/null || echo not_run)) — refusing to launch zot" >&2; exit 1; }
     docker rm -f zot >/dev/null 2>&1 || true
     # Container memory cap (ADR-062 pattern) — bounds zot's startup scan so a host-level OOM can't
     # restart-loop the box (#6288). cap = host RAM − ~1024m host overhead (cron+doppler+sshd+OS,
@@ -2353,7 +2473,7 @@ runcmd:
       -v /etc/zot/config.json:/etc/zot/config.json:ro \
       -v /etc/zot/htpasswd:/etc/zot/htpasswd:ro \
       -p 0.0.0.0:5000:5000 \
-      '${zot_image}' serve /etc/zot/config.json
+      "$ZOT_IMAGE_ID" serve /etc/zot/config.json
     # Readiness: /v2/ answers (401 unauth IS healthy — reachable, auth-gated). `curl -s`
     # without -f returns 0 on any HTTP response, non-zero only on connection-refused.
     for i in $(seq 1 30); do

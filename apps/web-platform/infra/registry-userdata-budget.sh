@@ -188,8 +188,52 @@ printf '%s' "$TF_JOINED" | grep -qF 'local.registry_rationale_strip' || {
   exit 2
 }
 
+# (#8714 5.3b-iii) THE ZOT-MIRROR LOCALS ARE COPIED VERBATIM, NEVER RESTATED. The host now boots zot
+# from a release asset whose URL, tarball sha256 (T), upstream config digest (C), manifest digest
+# (D) and local ref come from the `zot-mirror:begin`..`zot-mirror:end` block in zot-registry.tf —
+# literals plus expressions over local.zot_image_amd64. Re-deriving them here in bash would be a
+# second copy the dispatcher's render diff could not see drift in, so the block's assignment lines
+# are lifted as-is into the scratch root below (the file header's "READ, not copied" rule, applied
+# to expressions). FAIL CLOSED: an absent, duplicated or unterminated block, or a line in it that is
+# not `name = <expr>` over literals and local.zot_image_amd64 / sibling locals, is UNMEASURABLE.
+MIRROR_BEGINS="$(grep -cE '^[[:space:]]*# zot-mirror:begin[[:space:]]*$' "$DIR/zot-registry.tf")"
+MIRROR_ENDS="$(grep -cE '^[[:space:]]*# zot-mirror:end[[:space:]]*$' "$DIR/zot-registry.tf")"
+[ "$MIRROR_BEGINS" = "1" ] && [ "$MIRROR_ENDS" = "1" ] || {
+  echo "registry-userdata-budget: expected exactly one '# zot-mirror:begin' / '# zot-mirror:end' pair in zot-registry.tf (found ${MIRROR_BEGINS}/${MIRROR_ENDS})" >&2
+  exit 2
+}
+MIRROR_BLOCK="$(awk '/^[[:space:]]*# zot-mirror:begin[[:space:]]*$/{f=1; next} /^[[:space:]]*# zot-mirror:end[[:space:]]*$/{f=0} f' "$DIR/zot-registry.tf" | grep -vE '^[[:space:]]*(#|$)')"
+for want in zot_mirror_asset_url zot_mirror_asset_sha256_amd64 zot_manifest_digest zot_config_digest_amd64 zot_local_ref; do
+  [ "$(printf '%s\n' "$MIRROR_BLOCK" | grep -cE "^[[:space:]]*${want}[[:space:]]*=")" = "1" ] || {
+    echo "registry-userdata-budget: the zot-mirror block does not assign local.${want} exactly once" >&2
+    exit 2
+  }
+done
+# Every line is an assignment, and every local it references is zot_image_amd64 or a block member.
+if printf '%s\n' "$MIRROR_BLOCK" | grep -qvE '^[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*[^[:space:]]'; then
+  echo "registry-userdata-budget: the zot-mirror block carries a line that is not a single-line 'name = <expr>' assignment" >&2
+  exit 2
+fi
+MIRROR_NAMES="$(printf '%s\n' "$MIRROR_BLOCK" | sed -E 's/^[[:space:]]*([a-z0-9_]+)[[:space:]]*=.*/\1/')"
+for ref in $(printf '%s\n' "$MIRROR_BLOCK" | grep -oE 'local\.[a-z0-9_]+' | sed 's/^local\.//' | sort -u); do
+  [ "$ref" = zot_image_amd64 ] && continue
+  printf '%s\n' "$MIRROR_NAMES" | grep -qx "$ref" || {
+    echo "registry-userdata-budget: the zot-mirror block references local.${ref}, which the offline render cannot see (only zot_image_amd64 and block members are admitted)" >&2
+    exit 2
+  }
+done
+
 TFDIR=$(mktemp -d -t regbudget.XXXXXXXX)
 trap 'rm -rf "$TFDIR"' EXIT
+
+# Written with printf, NOT inside the unquoted heredoc below: the block carries HCL `${...}`
+# interpolations, which an unquoted heredoc would hand to the shell.
+{
+  printf 'locals {\n'
+  printf '  zot_image_amd64 = "%s"\n' "$ZOT_IMAGE"
+  printf '%s\n' "$MIRROR_BLOCK"
+  printf '}\n'
+} > "$TFDIR/mirror.tf"
 
 # The expression lives in a `locals` block because `terraform console` reads ONE expression
 # per LINE and collapsing a multi-line HCL object produces "Missing attribute separator".
@@ -198,7 +242,11 @@ locals {
   vars = {
     registry_volume_id     = "100000003"
     doppler_token          = join(".", ["dp", "st", "prd_registry", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTU"])
-    zot_image              = "${ZOT_IMAGE}"
+    zot_asset_url          = local.zot_mirror_asset_url
+    zot_asset_sha256       = local.zot_mirror_asset_sha256_amd64
+    zot_manifest_digest    = local.zot_manifest_digest
+    zot_config_digest      = local.zot_config_digest_amd64
+    zot_local_ref          = local.zot_local_ref
     zot_pull_user          = "${ZOT_PULL_USER}"
     zot_push_user          = "${ZOT_PUSH_USER}"
     doppler_arch           = "amd64"

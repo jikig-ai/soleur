@@ -30,15 +30,31 @@ name: zot-image-mirror
 # archive from upstream D and requires it to equal T, and the host refuses to start zot unless the
 # loaded image ID is the upstream config digest C or manifest digest D.
 #
-# BUMP PROCEDURE (zot-image.provenance.md, PR 2b): on the bump branch, dispatch this workflow with
+# BUMP PROCEDURE (zot-image.provenance.md): on the bump branch, dispatch this workflow with
 # `gh workflow run zot-image-mirror.yml --ref <branch>` so the new version's asset exists before the
-# bump merges, then pin its T.
+# bump merges, then pin its T and C in zot-registry.tf.
+#
+# REHEARSE (#8714 5.3b-iii PR 2b). On every PR touching the boot path, and after every publish:
+# zot-image-rehearse.sh rebuilds the archive from upstream D and requires it to equal the pinned T
+# (and C to be D's config digest), then applies the RENDERED ghcr.io deny, runs the RENDERED fetch
+# against the real published asset under BOTH docker image stores, and starts zot by the verified
+# ID. That is the anchor the publish job's header defers to: a PR cannot move T/C without
+# reproducing the upstream bytes, and cannot change the boot path without booting it.
 on:
   push:
     branches: [main]
     paths:
       - apps/web-platform/infra/zot-image-oci-archive.sh
       - apps/web-platform/infra/zot-registry.tf
+      - .github/workflows/zot-image-mirror.yml
+  pull_request:
+    paths:
+      - apps/web-platform/infra/zot-image-oci-archive.sh
+      - apps/web-platform/infra/zot-image-rehearse.sh
+      - apps/web-platform/infra/zot-registry.tf
+      - apps/web-platform/infra/cloud-init-registry.yml
+      - apps/web-platform/infra/registry-userdata-budget.sh
+      - scripts/registry-replace-preflight.sh
       - .github/workflows/zot-image-mirror.yml
   workflow_dispatch:
 
@@ -50,12 +66,17 @@ defaults:
     # shell key runs as bash -e, without pipefail).
     shell: bash
 
-concurrency:
-  group: zot-image-mirror-publish
-  cancel-in-progress: false
+env:
+  TERRAFORM_VERSION: "1.10.5"
 
 jobs:
   publish:
+    # Never on a pull_request: publishing needs contents: write, which a PR run must not hold.
+    if: github.event_name != 'pull_request'
+    # Job-level, so a PR's rehearsal never queues behind a publish. Publishes serialise, never cancel.
+    concurrency:
+      group: zot-image-mirror-publish
+      cancel-in-progress: false
     # A versioned label, not -latest: the tarball's sha256 depends on the GNU tar version. The label
     # can still move within 24.04; T is re-derived and compared downstream (see WHAT BINDS THE BYTES).
     runs-on: ubuntu-24.04
@@ -152,3 +173,32 @@ jobs:
             echo "- manifest D: \`sha256:${MANIFEST}\`"
             echo "- published T: \`${published}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  rehearse:
+    # After publish on push/dispatch (so a bump branch's dispatch rehearses the asset it just
+    # published); alone on a pull_request, where publish is skipped.
+    needs: publish
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
+    # Pinned for the same reason as publish: T depends on the GNU tar version the rebuild uses.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        store: [classic, containerd]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      # The rehearsal renders the user_data with terraform's own templatefile (the dispatcher's
+      # render), so it boots exactly the bytes a replaced host would receive.
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Rehearse the registry host's zot boot (${{ matrix.store }} image store)
+        env:
+          STORE: ${{ matrix.store }}
+        run: bash apps/web-platform/infra/zot-image-rehearse.sh "$STORE"
