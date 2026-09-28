@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Button } from "@/components/ui/button";
 import type { AttachmentRef } from "@/lib/types";
 import { reportSilentFallback } from "@/lib/client-observability";
 
@@ -121,13 +122,14 @@ function PreviewUnavailable({
         Preview unavailable
         <span className="sr-only"> for {filename}</span>
       </p>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={onRetry}
         className="mt-1 text-soleur-text-accent underline"
       >
         Retry
-      </button>
+      </Button>
     </div>
   );
 }
@@ -150,6 +152,7 @@ function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
     <>
       <button
         type="button"
+        data-button-exempt="composite image-thumbnail wrapper — primitive padding/text styles would distort the thumbnail"
         onClick={() => setExpanded(true)}
         className="overflow-hidden rounded-lg border border-soleur-border-default transition-opacity hover:opacity-80"
       >

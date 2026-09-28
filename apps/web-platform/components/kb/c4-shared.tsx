@@ -17,6 +17,8 @@ import {
   MAX_CODE_FONT_PX,
 } from "./c4-code-syntax";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { ChevronDownIcon } from "@/components/icons";
 import {
   LikeC4ModelProvider,
@@ -101,11 +103,24 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
   // model on screen (a transient 5xx on an unsolicited refetch is otherwise a
   // self-inflicted canvas teardown with no retry).
   const dataPresent = useRef(false);
+  // Issue-order guard (#9050 F9): two in-flight reloads on the SAME endpoint
+  // race, and last-to-resolve wins — a slower stale read would overwrite a
+  // fresher one. Each reload stamps a generation; only the latest generation
+  // may write data/error state. `loading` is owned by the latest NON-SILENT
+  // reload instead: a superseded non-silent fetch must still clear the
+  // spinner when the superseding fetch never claimed it.
+  const reqGen = useRef(0);
+  const loadingGen = useRef(0);
   // #8739 — `silent` refetches without the loading flip: a Concierge save
   // completing elsewhere must not unmount the canvas to flash a spinner.
   const reload = useCallback(async (opts?: { silent?: boolean }) => {
     const isCurrent = () => currentEndpoint.current === endpoint;
-    if (!opts?.silent) setLoading(true);
+    const gen = ++reqGen.current;
+    const isLatest = () => isCurrent() && gen === reqGen.current;
+    if (!opts?.silent) {
+      loadingGen.current = gen;
+      setLoading(true);
+    }
     setError(null);
     try {
       const res = await fetch(endpoint);
@@ -114,7 +129,7 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
         throw new Error(j.error || `Request failed (${res.status})`);
       }
       const json = (await res.json()) as Partial<ProjectResponse>;
-      if (!isCurrent()) return;
+      if (!isLatest()) return;
       dataPresent.current = true;
       setData({
         dir: json.dir ?? dirPath,
@@ -127,10 +142,10 @@ export function useC4Project(dirPath: string, options?: { url?: string }) {
         stale: json.stale,
       });
     } catch (e) {
-      if (isCurrent() && !(opts?.silent && dataPresent.current))
+      if (isLatest() && !(opts?.silent && dataPresent.current))
         setError(e instanceof Error ? e.message : "Failed to load diagram");
     } finally {
-      if (isCurrent() && !opts?.silent) setLoading(false);
+      if (!opts?.silent && gen === loadingGen.current) setLoading(false);
     }
   }, [dirPath, endpoint]);
 
@@ -312,7 +327,8 @@ export function C4Canvas({
       {!expanded ? (
         <>
           {canvas}
-          <button
+          <Button
+            variant="outlined"
             ref={expandButtonRef}
             type="button"
             aria-label="Enter fullscreen"
@@ -321,7 +337,7 @@ export function C4Canvas({
             className="absolute right-2 top-2 z-10 rounded-md border border-soleur-border-default bg-soleur-bg-base/80 p-1.5 text-soleur-text-muted backdrop-blur transition-colors hover:text-soleur-text-primary"
           >
             <MaximizeIcon />
-          </button>
+          </Button>
         </>
       ) : (
         <>
@@ -341,7 +357,8 @@ export function C4Canvas({
               className="soleur-c4 fixed inset-0 z-50 bg-soleur-bg-base"
             >
               {canvas}
-              <button
+              <Button
+                variant="outlined"
                 ref={closeButtonRef}
                 type="button"
                 aria-label="Exit fullscreen"
@@ -351,7 +368,7 @@ export function C4Canvas({
               >
                 <MinimizeIcon />
                 <span className="text-[11px]">Esc</span>
-              </button>
+              </Button>
             </div>,
             document.body,
           )}
@@ -389,7 +406,6 @@ export function C4CodePanel({
   const files = useMemo(() => Object.keys(data.sources), [data.sources]);
   const [activeFile, setActiveFile] = useState<string>("");
   const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   // Optimistic apply (F-A1): content the user has SUCCESSFULLY saved this
   // session, keyed by file. On a 200 PUT the GitHub commit is the source of
@@ -462,49 +478,46 @@ export function C4CodePanel({
         (savedContentRef.current[activeFile] ?? data.sources[activeFile] ?? "")
       : false;
 
-  const save = useCallback(async () => {
-    setSaving(true);
+  // feat-ui-action-feedback: pending contract via usePendingAction — pendingRef
+  // covers the click-to-render gap, failure lands on `saveAction.error` rendered
+  // as role="alert" (pending must always terminate into success or an announced
+  // error).
+  const saveAction = usePendingAction(async () => {
     setSaveMsg(null);
-    try {
-      const res = await fetch(`/api/kb/c4/${dirPath}/${activeFile}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: draft }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.error || `Save failed (${res.status})`);
-      // F-A1: the commit landed on origin (200). Pin the saved content as the
-      // optimistic editor value BEFORE onSaved triggers the parent reload(), so
-      // a stale-clone GET /project cannot revert the editor to the pre-edit text.
-      savedContentRef.current[activeFile] = draft;
-      // Layer 2 (#4964): the server re-renders the diagram after a .c4 save.
-      // `rerendered` reports whether that succeeded. On success the reloaded
-      // dump is the fresh geometry; on failure the diagram stays stale and the
-      // C4Diagnostics banner says so. Default true if the field is absent
-      // (older server) so we don't false-warn.
-      const rerendered = j?.rerendered !== false;
-      // On a re-render failure the server may explain WHY (e.g. an unresolved
-      // reference because spec.c4 is missing) so the user can fix their source
-      // instead of staring at a silently-stale diagram (#4966).
-      const diagnostic =
-        typeof j?.rerenderDiagnostic === "string" ? j.rerenderDiagnostic : null;
-      setSaveMsg(
-        rerendered
-          ? "Saved — diagram updated."
-          : diagnostic
-            ? `Saved — ${diagnostic}`
-            : // No reason: a newer source change superseded this render (#8695).
-              "Saved — a newer change was saved before this one was rendered.",
-      );
-      // One arg when there is no diagnostic, so a parent (and its tests) see
-      // exactly `onSaved(rerendered)`.
-      await (diagnostic ? onSaved(rerendered, diagnostic) : onSaved(rerendered));
-    } catch (e) {
-      setSaveMsg(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setSaving(false);
-    }
-  }, [activeFile, dirPath, draft, onSaved]);
+    const res = await fetch(`/api/kb/c4/${dirPath}/${activeFile}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: draft }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `Save failed (${res.status})`);
+    // F-A1: the commit landed on origin (200). Pin the saved content as the
+    // optimistic editor value BEFORE onSaved triggers the parent reload(), so
+    // a stale-clone GET /project cannot revert the editor to the pre-edit text.
+    savedContentRef.current[activeFile] = draft;
+    // Layer 2 (#4964): the server re-renders the diagram after a .c4 save.
+    // `rerendered` reports whether that succeeded. On success the reloaded
+    // dump is the fresh geometry; on failure the diagram stays stale and the
+    // C4Diagnostics banner says so. Default true if the field is absent
+    // (older server) so we don't false-warn.
+    const rerendered = j?.rerendered !== false;
+    // On a re-render failure the server may explain WHY (e.g. an unresolved
+    // reference because spec.c4 is missing) so the user can fix their source
+    // instead of staring at a silently-stale diagram (#4966).
+    const diagnostic =
+      typeof j?.rerenderDiagnostic === "string" ? j.rerenderDiagnostic : null;
+    setSaveMsg(
+      rerendered
+        ? "Saved — diagram updated."
+        : diagnostic
+          ? `Saved — ${diagnostic}`
+          : // No reason: a newer source change superseded this render (#8695).
+            "Saved — a newer change was saved before this one was rendered.",
+    );
+    // One arg when there is no diagnostic, so a parent (and its tests) see
+    // exactly `onSaved(rerendered)`.
+    await (diagnostic ? onSaved(rerendered, diagnostic) : onSaved(rerendered));
+  });
 
   return (
     <div className="flex h-full flex-col">
@@ -533,6 +546,7 @@ export function C4CodePanel({
             <div className="flex items-center gap-0.5 rounded border border-soleur-border-default px-0.5">
               <button
                 type="button"
+                data-button-exempt="segmented font-size stepper — three controls share one bordered group; Button base padding would break the compact cluster"
                 aria-label="Decrease code font size"
                 onClick={() =>
                   setZoom((z) =>
@@ -546,6 +560,7 @@ export function C4CodePanel({
               </button>
               <button
                 type="button"
+                data-button-exempt="segmented font-size stepper — three controls share one bordered group; Button base padding would break the compact cluster"
                 aria-label="Reset code font size"
                 onClick={() => setZoom(0)}
                 title="Reset code font size"
@@ -555,6 +570,7 @@ export function C4CodePanel({
               </button>
               <button
                 type="button"
+                data-button-exempt="segmented font-size stepper — three controls share one bordered group; Button base padding would break the compact cluster"
                 aria-label="Increase code font size"
                 onClick={() =>
                   setZoom((z) =>
@@ -572,13 +588,21 @@ export function C4CodePanel({
                 {saveMsg}
               </span>
             )}
-            <button
-              onClick={() => void save()}
-              disabled={saving || (!dirty && !allowResave)}
-              className="rounded bg-soleur-accent-gold-fg/90 px-2.5 py-1 text-xs font-medium text-black disabled:opacity-40"
+            {saveAction.error && (
+              <span role="alert" className="text-[11px] text-red-400">
+                {saveAction.error.message}
+              </span>
+            )}
+            <Button
+              variant="gold"
+              onClick={() => saveAction.run()}
+              loading={saveAction.pending}
+              loadingLabel="Saving"
+              disabled={!dirty && !allowResave}
+              className="rounded px-2.5 py-1 text-xs font-medium"
             >
-              {saving ? "Saving…" : "Save"}
-            </button>
+              Save
+            </Button>
           </div>
         )}
       </div>

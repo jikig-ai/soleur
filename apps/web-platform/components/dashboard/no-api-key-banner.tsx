@@ -11,7 +11,7 @@
 // grant (one click) rather than to buy a separate Anthropic account.
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 interface EffectiveStatus {
@@ -109,12 +109,12 @@ export function NoApiKeyBanner() {
           </p>
           <p className="text-xs text-soleur-text-secondary">{body}</p>
         </div>
-        <Link
+        <NavLink
           href={ctaHref}
           className="shrink-0 rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           {ctaLabel}
-        </Link>
+        </NavLink>
       </div>
     </div>
   );

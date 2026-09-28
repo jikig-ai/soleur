@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* anti-slop:disable BRAND-RAW-HEX reason="token-definition file — literal hex defines the --soleur-* token layer (parity with brand-hex-commit-gate is_token_def exemption)" */
 /*
  * Tailwind v4 dark variant — pin to our data-theme contract. Default
  * Tailwind v4 resolves `dark:*` via `prefers-color-scheme: dark`, which
@@ -288,6 +289,46 @@
     animation: none !important;
     width: 100% !important;
     opacity: 0.5;
+  }
+}
+
+/*
+ * feat-ui-action-feedback — route-pending bar. Reuses the `refresh-shimmer`
+ * keyframes verbatim (the island's animate-[refresh-shimmer_…] arbitrary
+ * utility); the sliver consumes --soleur-accent-gold-fg (per-palette
+ * foreground gold — implementation-brief §0/AC6c) via the
+ * bg-soleur-accent-gold-fg/80 utility in nav-pending-island.tsx.
+ */
+
+/* Reduced-motion carve-out mirrors the refresh-shimmer precedent: a static
+   dim sliver instead of the sweep (the bar still marks "in progress"). */
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="nav-pending-bar"] > * {
+    animation: none !important;
+    width: 100% !important;
+    opacity: 0.5;
+  }
+}
+
+/*
+ * feat-ui-action-feedback — global press affordance (implementation-brief
+ * §3.3): every enabled button and in-app anchor gets a ~2% shrink + opacity
+ * dip on :active. Transform, not padding — zero layout shift. The reduced-
+ * motion sweep above already compresses the 120ms transition to ~instant;
+ * the block below suppresses the transform entirely so reduced-motion users
+ * keep only the opacity dip.
+ */
+button:not(:disabled):active,
+a[href]:active {
+  transform: scale(0.98);
+  opacity: 0.9;
+  transition: transform 120ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active,
+  a[href]:active {
+    transform: none;
   }
 }
 

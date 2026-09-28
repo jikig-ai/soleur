@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { reportSilentFallback } from "@/lib/client-observability";
+import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 
 interface DelegationAcceptanceModalProps {
@@ -178,14 +179,18 @@ export function DelegationAcceptanceModal({
             in-flight run is billed back to you within one turn.
           </p>
           <div className="mt-6 flex gap-3">
-            <button
+            <Button
+              variant="outlined"
               type="button"
               onClick={handleWithdraw}
               disabled={loading}
-              className="flex-1 rounded-lg border border-soleur-border-default px-4 py-2 text-sm font-medium text-soleur-text-secondary hover:bg-soleur-bg-surface-2 disabled:opacity-50"
+              loading={loading}
+              loadingLabel="Processing"
+              modal
+              className="flex-1 text-soleur-text-secondary"
             >
-              {loading ? "Processing..." : "Withdraw consent"}
-            </button>
+              Withdraw consent
+            </Button>
           </div>
         </>
       ) : (
@@ -204,22 +209,27 @@ export function DelegationAcceptanceModal({
           </label>
 
           <div className="mt-6 flex gap-3">
-            <button
+            <Button
+              variant="outlined"
               type="button"
               onClick={handleDecline}
               disabled={loading}
-              className="flex-1 rounded-lg border border-soleur-border-default px-4 py-2 text-sm font-medium text-soleur-text-secondary hover:bg-soleur-bg-surface-2 disabled:opacity-50"
+              className="flex-1 text-soleur-text-secondary"
             >
               Decline
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="gold"
               type="button"
               onClick={handleAccept}
               disabled={loading || !telemetryAck}
-              className="flex-1 rounded-lg bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-soleur-bg-surface-1 hover:opacity-90 disabled:opacity-50"
+              loading={loading}
+              loadingLabel="Processing"
+              modal
+              className="flex-1"
             >
-              {loading ? "Processing..." : "I accept"}
-            </button>
+              I accept
+            </Button>
           </div>
         </>
       )}

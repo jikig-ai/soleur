@@ -120,6 +120,7 @@ export default function C4Diagram({
           ).map((t) => (
             <button
               key={t}
+              data-button-exempt="segmented Diagram|Code tab — active state lives in conditional className that variant base colors would flatten"
               onClick={() => setTab(t)}
               className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
                 tab === t

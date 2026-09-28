@@ -12,6 +12,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+import { Button } from "@/components/ui/button";
 import { humanTitle } from "@/lib/messages/action-class-copy";
 
 export interface TemplateAuthorizationRowProps {
@@ -86,15 +87,21 @@ export function TemplateAuthorizationRow({
             {truncatedHash}…
           </code>
         </div>
-        <button
+        {/* text-soleur-text-danger referenced a token absent from the @theme
+            map (dead class — the button was never red). variant="danger" is
+            the live destructive treatment. */}
+        <Button
+          variant="danger"
           type="button"
           onClick={onRevoke}
           disabled={isPending}
-          className="rounded-md px-3 py-1.5 text-xs text-soleur-text-danger hover:bg-soleur-bg-surface-2 disabled:opacity-50"
+          loading={isPending}
+          loadingLabel="Revoking"
+          className="rounded-md text-xs"
           aria-label={`Revoke template authorization for ${humanTitle(actionClass)}`}
         >
-          {isPending ? "Revoking…" : "Revoke"}
-        </button>
+          Revoke
+        </Button>
       </header>
       {error ? (
         <p

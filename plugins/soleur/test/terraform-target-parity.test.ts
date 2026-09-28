@@ -2198,7 +2198,16 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     const src = readFileSync(PIN_REDEPLOY_WORKFLOW, "utf8");
     const d = parseYaml(src) as Record<string, any>;
     const on = d.on ?? d[true as unknown as string];
+    // Two jobs (#9085): `gate` holds no lock; only `redeploy`, which runs only when the gate
+    // proceeds, enters the redeploy lock — so a follower that does not redeploy cannot cancel
+    // a pending one.
+    const gateJob = d.jobs?.gate ?? {};
     const job = d.jobs?.redeploy ?? {};
+    const LOCK = { group: "git-data-pin-redeploy", "cancel-in-progress": false };
+    const PROCEED_IF = "needs.gate.outputs.proceed == 'true'";
+    // ONE `if:` normalisation for the plain lock test and Guard 2: strip one optional, matched
+    // `${{ ... }}` wrapper (GitHub evaluates both spellings the same), nothing else.
+    const normIf = (x: unknown) => String(x ?? "").trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1").trim();
 
     test("fires on completion of the apply workflow, by its exact name, plus a recovery dispatch", () => {
       const applyName = (parseYaml(wf) as { name: string }).name;
@@ -2207,51 +2216,85 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       expect(on.workflow_dispatch.inputs.source_run_id.required).toBe(false);
     });
 
-    test("runs for dispatched apply runs from ANY branch, in its own JOB-level lock", () => {
-      const cond = String(job.if ?? "");
+    test("gate runs for dispatched apply runs from ANY branch; only redeploy holds the JOB-level lock", () => {
+      expect(Object.keys(d.jobs ?? {}).sort()).toEqual(["gate", "redeploy"]);
+      const cond = String(gateJob.if ?? "");
       // A replace dispatched from a non-main branch rotates the live key too.
       expect(cond).not.toContain("head_branch");
       expect(cond).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
       expect(cond).toContain("github.ref == 'refs/heads/main'");
-      // Job-level so a skipped follower run (every ordinary merge apply) never enters the
-      // group and cannot cancel a pending redeploy.
+      // Job-level, on the redeploy job only: a job skipped by its `if:` never enters the group,
+      // so neither an ordinary merge apply's follower nor a follower whose gate did not proceed
+      // can cancel a pending redeploy.
       expect(d.concurrency).toBeUndefined();
-      expect(job.concurrency).toEqual({ group: "git-data-pin-redeploy", "cancel-in-progress": false });
+      expect(gateJob.concurrency).toBeUndefined();
+      expect(job.concurrency).toEqual(LOCK);
+      expect(job.needs).toBe("gate");
+      expect(normIf(job.if)).toBe(PROCEED_IF);
       expect(stripComments(src)).not.toContain("terraform-apply-web-platform-host");
     });
 
-    test("least privilege: actions:write + contents:read, only RESEND_API_KEY on the two ops emails, no environment, 80 min", () => {
+    test("least privilege: gate actions:read, redeploy actions:write, only RESEND_API_KEY on the three ops emails, no environment, 10/80 min", () => {
+      expect(gateJob.permissions).toEqual({ actions: "read", contents: "read" });
       expect(job.permissions).toEqual({ actions: "write", contents: "read" });
+      expect(gateJob.environment).toBeUndefined();
       expect(job.environment).toBeUndefined();
-      expect([...stripComments(src).matchAll(/secrets\.[A-Za-z0-9_]+/g)].map((m) => m[0])).toEqual(["secrets.RESEND_API_KEY", "secrets.RESEND_API_KEY"]);
+      expect([...stripComments(src).matchAll(/secrets\.[A-Za-z0-9_]+/g)].map((m) => m[0])).toEqual(["secrets.RESEND_API_KEY", "secrets.RESEND_API_KEY", "secrets.RESEND_API_KEY"]);
+      expect(Number(gateJob["timeout-minutes"])).toBe(10);
       expect(Number(job["timeout-minutes"])).toBe(80);
     });
 
-    test("sparse credential-less checkout, the source-run gate, the tracker gated on it, a failure email", () => {
-      const steps = (job.steps as Array<Record<string, any>>) ?? [];
+    /** Asserts a job's first step is the sparse credential-less checkout and its last is a failure() email. */
+    function checkoutAndFailureMail(steps: Array<Record<string, any>>): Record<string, any> {
       const co = steps.findIndex((s) => String(s.uses ?? "").startsWith("actions/checkout@"));
-      const gate = steps.findIndex((s) => String(s.run ?? "").includes("dispatch-web-redeploy/source-run-gate.sh"));
-      const act = steps.findIndex((s) => String(s.run ?? "").trim() === "bash .github/actions/dispatch-web-redeploy/track.sh");
-      const mail = steps.findIndex((s) => s.uses === "./.github/actions/notify-ops-email" && String(s.if ?? "").includes("failure()"));
       expect(co).toBe(0);
       expect(steps[co].with["persist-credentials"]).toBe(false);
       expect(String(steps[co].with["sparse-checkout"]).trim().split(/\s+/).sort()).toEqual([
         ".github/actions/dispatch-web-redeploy",
         ".github/actions/notify-ops-email",
       ]);
-      expect(gate).toBeGreaterThan(co);
-      expect(act).toBeGreaterThan(gate);
-      expect(steps[gate].id).toBe("gate");
-      expect(steps[act].if).toBe("steps.gate.outputs.proceed == 'true'");
-      expect(steps[act].env).toEqual({ GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" });
       expect(steps.some((s) => String(s.uses ?? "").includes("dispatch-web-redeploy"))).toBe(false);
-      // The failure email: last step, failure() only; the pin_published email (PT3) is the only other binding of the secret.
+      const mail = steps.findIndex((s) => s.uses === "./.github/actions/notify-ops-email" && String(s.if ?? "").includes("failure()"));
       expect(mail).toBe(steps.length - 1);
       expect(String(steps[mail].if).replace(/\s+/g, "")).toBe("${{failure()}}");
       expect(steps[mail].with["resend-api-key"]).toBe("${{ secrets.RESEND_API_KEY }}");
-      expect(String(steps[mail].with.subject)).toContain("git-data pin NOT loaded by the app");
       expect(String(steps[mail].with.body)).toContain("gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=");
-      // The gate names the two jobs by their exact apply-workflow ids.
+      return steps[mail];
+    }
+
+    test("gate job: checkout, the source-run gate (id: gate), the emails; its outputs map the two outputs redeploy reads", () => {
+      const steps = (gateJob.steps as Array<Record<string, any>>) ?? [];
+      const gate = steps.findIndex((s) => String(s.run ?? "").includes("dispatch-web-redeploy/source-run-gate.sh"));
+      expect(gate).toBe(1);
+      expect(steps[gate].id).toBe("gate");
+      // Every step after the gate is an email or the unsent-email fail step: no tracker here.
+      expect(steps.filter((s) => String(s.run ?? "").includes("dispatch-web-redeploy/track.sh"))).toEqual([]);
+      for (const s of steps.slice(gate + 1)) expect([s.name, s.uses === "./.github/actions/notify-ops-email" || /^\s*echo "::error::[^\n]*\n\s*exit 1\s*$/.test(String(s.run ?? ""))]).toEqual([s.name, true]);
+      // A missing mapping makes `redeploy` always skip; Guard 2 cannot see that, this can.
+      // pin_published stays a STEP output (the gate job's own emails read it); no job reads it.
+      expect(gateJob.outputs).toEqual({
+        proceed: "${{ steps.gate.outputs.proceed }}",
+        source_job: "${{ steps.gate.outputs.source_job }}",
+      });
+      checkoutAndFailureMail(steps);
+    });
+
+    test("redeploy job: checkout, the pointer (reads needs.gate), the tracker (the workflow's only track.sh step), a failure email", () => {
+      const steps = (job.steps as Array<Record<string, any>>) ?? [];
+      expect(steps.length).toBe(4);
+      const pointer = steps[1];
+      expect(String(pointer.run ?? "")).toContain("GITHUB_STEP_SUMMARY");
+      expect(pointer.env.SOURCE_JOB).toBe("${{ needs.gate.outputs.source_job }}");
+      expect(JSON.stringify(steps)).not.toContain("steps.gate.outputs");
+      const act = steps[2];
+      expect(String(act.run ?? "").trim()).toBe("bash .github/actions/dispatch-web-redeploy/track.sh");
+      expect(act.if).toBeUndefined(); // the job-level `if:` gates it
+      expect(act.env).toEqual({ GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" });
+      const mail = checkoutAndFailureMail(steps);
+      expect(String(mail.with.subject)).toContain("git-data pin NOT loaded by the app");
+    });
+
+    test("the gate names the two apply jobs by their exact apply-workflow ids", () => {
       const g = readFileSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"), "utf8");
       const jobs = (parseYaml(wf) as { jobs: Record<string, unknown> }).jobs;
       for (const [j, v] of [["git_data_host_create", "BIRTH_JOB"], ["git_data_host_replace", "REPLACE_JOB"]]) {
@@ -2302,10 +2345,10 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       return v;
     }
 
-    /** PT3 violations for the follower doc. */
+    /** PT3 violations for the follower doc: the pin_published email lives in `gate`; each job has its own failure() email. */
     function pinPublishedEmailParity(doc: { jobs: Record<string, { steps?: Step[] }> }): string[] {
       const v: string[] = [];
-      const steps = doc.jobs?.redeploy?.steps ?? [];
+      const steps = doc.jobs?.gate?.steps ?? [];
       const mails = steps.filter((s) => s.uses === "./.github/actions/notify-ops-email");
       const pub = mails.filter((s) => /\bsteps\.gate\.outputs\.pin_published\s*==\s*'true'/.test(String(s.if ?? "")));
       if (pub.length !== 1) v.push(`PT3: ${pub.length} notify-ops-email steps gated on steps.gate.outputs.pin_published`);
@@ -2314,11 +2357,82 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       const retry = steps.filter((s) => String(s.if ?? "") === "${{ always() && steps.gate.outputs.pin_published == 'true' && steps.pin_email.outputs.sent != 'true' }}");
       if (pub.length === 1 && pub[0].id !== "pin_email") v.push("PT3: the pin_published email has no id: pin_email");
       if (retry.length !== 1 || !/^\s*exit 1\s*$/m.test(String(retry[0].run ?? ""))) v.push("PT3: no step fails the run when the pin email is not sent");
-      const fail = mails.filter((s) => String(s.if ?? "").replace(/\s+/g, "") === "${{failure()}}");
-      const body = String(fail[0]?.with?.body ?? "");
-      if (fail.length !== 1) v.push(`PT3: ${fail.length} failure() email steps`);
-      if (!body.includes("gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=")) v.push("PT3: failure email lost the -f source_run_id= recovery");
-      if (!/gh workflow run git-data-pin-redeploy\.yml --ref main(?!\s*-f)/.test(body)) v.push("PT3: failure email lacks the no-source_run_id dispatch");
+      // A failure() email in EACH job: a red gate (verdict=unidentified, unsent pin email) and a
+      // red tracker are different jobs, and a job's failure() sees only its own steps.
+      for (const jn of ["gate", "redeploy"]) {
+        const fail = (doc.jobs?.[jn]?.steps ?? []).filter((s) => s.uses === "./.github/actions/notify-ops-email" && String(s.if ?? "").replace(/\s+/g, "") === "${{failure()}}");
+        const body = String(fail[0]?.with?.body ?? "");
+        if (fail.length !== 1) v.push(`PT3 ${jn}: ${fail.length} failure() email steps`);
+        if (!body.includes("gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=")) v.push(`PT3 ${jn}: failure email lost the -f source_run_id= recovery`);
+        if (!/gh workflow run git-data-pin-redeploy\.yml --ref main(?!\s*-f)/.test(body)) v.push(`PT3 ${jn}: failure email lacks the no-source_run_id dispatch`);
+      }
+      return v;
+    }
+
+    // Guard 2 (#9085): the job-level group is declared on exactly one job, with
+    // cancel-in-progress false; that job runs the workflow's single track.sh step, it needs `gate`
+    // and runs only when gate's `proceed` is 'true', and no workflow-level concurrency exists.
+    // GitHub compares group names case-insensitively AFTER expression expansion, so names are
+    // compared lowercased and any group holding `${{` is refused outright (its value is unknowable
+    // here). Run on the real file and mutated copies.
+    type FollowerDoc = { concurrency?: unknown; jobs: Record<string, { if?: unknown; needs?: unknown; concurrency?: unknown; steps?: Step[] }> };
+    const groupOf = (c: unknown) => String((typeof c === "string" ? c : (c as { group?: unknown } | undefined)?.group) ?? "");
+    // The tracker is the command at line start, over comment-stripped text: a comment or an echo
+    // that merely mentions the path is not a tracker.
+    const TRACK_CMD = /^\s*bash\s+\.github\/actions\/dispatch-web-redeploy\/track\.sh\s*$/m;
+    const runsTracker = (s: Step) => TRACK_CMD.test(stripComments(String(s.run ?? "")));
+    function lockParity(doc: FollowerDoc): string[] {
+      const v: string[] = [];
+      if (doc.concurrency !== undefined) v.push("G2: a workflow-level concurrency exists");
+      const jobs = Object.entries(doc.jobs ?? {});
+      for (const [id, j] of jobs) {
+        if (j?.concurrency !== undefined && groupOf(j.concurrency).includes("${{")) v.push(`G2: ${id}'s concurrency group is an expression`);
+      }
+      const holders = jobs.filter(([, j]) => j?.concurrency !== undefined && groupOf(j.concurrency).trim().toLowerCase() === LOCK.group);
+      if (holders.length !== 1) v.push(`G2: ${holders.length} jobs declare the ${LOCK.group} group`);
+      const trackers = jobs.flatMap(([id, j]) => (j?.steps ?? []).filter(runsTracker).map(() => id));
+      if (trackers.length !== 1) v.push(`G2: track.sh runs in ${trackers.length} steps`);
+      if (holders.length === 1) {
+        const [id, j] = holders[0];
+        const cancel = typeof j.concurrency === "object" && j.concurrency !== null ? (j.concurrency as Record<string, unknown>)["cancel-in-progress"] : undefined;
+        if (cancel !== false) v.push(`G2: the lock holder ${id} does not set cancel-in-progress: false`);
+        if (trackers.length === 1 && trackers[0] !== id) v.push(`G2: track.sh runs in ${trackers[0]}, not in the lock holder ${id}`);
+        if (![j.needs ?? []].flat().includes("gate")) v.push(`G2: the lock holder ${id} does not need gate`);
+        if (normIf(j.if) !== PROCEED_IF) v.push(`G2: the lock holder ${id} does not run only when gate proceeds`);
+      }
+      return v;
+    }
+
+    // Gate wiring (#8760): the `id: gate` step's env, continue-on-error and run body, pinned
+    // exactly. The manual arm (`workflow_dispatch` with an empty source_run_id) is the only path
+    // that proceeds without the source-run gate, and SOURCE_RUN_ATTEMPT is what lets the gate
+    // tell a carried-over job; a widened arm, a rebound attempt or an appended fallback all
+    // redeploy (or skip) without the gate's say.
+    const GATE_ENV = {
+      GH_TOKEN: "${{ github.token }}",
+      GH_REPO: "${{ github.repository }}",
+      SOURCE_RUN_ID: "${{ github.event.workflow_run.id || inputs.source_run_id }}",
+      SOURCE_RUN_ATTEMPT: "${{ github.event.workflow_run.run_attempt }}",
+    };
+    const GATE_RUN = [
+      "set -euo pipefail",
+      'if [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch && -z "${SOURCE_RUN_ID}" ]]; then',
+      '  echo "Manual dispatch with no source_run_id: redeploying unconditionally."',
+      '  { echo "proceed=true"; echo "source_job=manual"; echo "pin_published=false"; } >> "$GITHUB_OUTPUT"',
+      "  exit 0",
+      "fi",
+      "bash .github/actions/dispatch-web-redeploy/source-run-gate.sh",
+    ].join("\n");
+    const normWs = (x: unknown) => String(x ?? "").replace(/\s+/g, " ").trim();
+    const sortedJson = (o: unknown) => JSON.stringify(Object.entries((o ?? {}) as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
+    function gateWiring(doc: FollowerDoc): string[] {
+      const v: string[] = [];
+      const steps = (doc.jobs?.gate?.steps ?? []).filter((s) => s.id === "gate");
+      if (steps.length !== 1) return [`GW: ${steps.length} steps with id: gate in jobs.gate`];
+      const st = steps[0] as Step & { env?: unknown };
+      if (sortedJson(st.env) !== sortedJson(GATE_ENV)) v.push("GW: the gate step's env differs from the pinned map");
+      if (st["continue-on-error"] !== undefined) v.push("GW: the gate step carries continue-on-error");
+      if (normWs(st.run) !== normWs(GATE_RUN)) v.push("GW: the gate step's run body differs from the pinned body");
       return v;
     }
 
@@ -2407,14 +2521,23 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     const PIN_GATE_LINE = /pin-redeploy|source-run-gate|pin_published|plan_only/;
     const citedPinTokens = (d: string) => d.split("\n").filter((l) => PIN_GATE_LINE.test(l))
       .flatMap((l) => [...l.matchAll(/verdict=([a-z_]+)/g)].map((m) => m[1]));
-    function verdictParity(gate: string, docs: string[]): string[] {
-      const emitted = new Set(
-        stripComments(gate).split("\n").filter((l) => /^\s*(echo|_summary)\b/.test(l))
-          .flatMap((l) => [...l.matchAll(/verdict=([a-z_]+)/g)].map((m) => m[1])),
-      );
-      // Only lines about THIS gate: the runbook also cites other gates' verdicts (verdict=ok, ...).
-      const cited = new Set(docs.flatMap((d) => d.split("\n").filter((l) => PIN_GATE_LINE.test(l))
-        .flatMap((l) => [...l.matchAll(/verdict=([a-z_]+)/g)].map((m) => m[1]))));
+    const allVerdictTokens = (d: string) => [...d.matchAll(/verdict=([a-z_]+)/g)].map((m) => m[1]);
+    const gateEmitted = (gate: string) => new Set(
+      stripComments(gate).split("\n").filter((l) => /^\s*(echo|_summary)\b/.test(l)).flatMap(allVerdictTokens),
+    );
+    // ADR-237 also records the cutover gate's verdicts (git-data-cutover.sh: `role=... verdict=ok`,
+    // `verdict=already_cut_over`, `verdict=clear`); exactly these, and only in the ADR.
+    const ADR237_FOREIGN = ["ok", "already_cut_over", "clear"];
+    /**
+     * `filtered` docs are scanned only on lines about THIS gate (the runbook cites other gates'
+     * verdicts too); `unfiltered` docs are scanned whole, minus their own foreign allowlist.
+     */
+    function verdictParity(gate: string, filtered: string[], unfiltered: Array<{ doc: string; foreign?: readonly string[] }> = []): string[] {
+      const emitted = gateEmitted(gate);
+      const cited = new Set([
+        ...filtered.flatMap((d) => d.split("\n").filter((l) => PIN_GATE_LINE.test(l)).flatMap(allVerdictTokens)),
+        ...unfiltered.flatMap(({ doc, foreign = [] }) => allVerdictTokens(doc).filter((t) => !foreign.includes(t))),
+      ]);
       return [...cited].filter((t) => !emitted.has(t)).map((t) => `PT5: verdict=${t} is cited but never emitted by the gate`);
     }
 
@@ -2423,7 +2546,25 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       // Non-vacuity: each document really cites this gate's tokens, and the G2 check's token is among them.
       expect(docs.map((d) => citedPinTokens(d).length > 0)).toEqual([true, true, true]);
       expect(citedPinTokens(docs[0])).toContain("no_apply");
-      expect(verdictParity(gateSrc, docs)).toEqual([]);
+      // #8760: the runbook tells the operator what a carried-over follower means.
+      expect(citedPinTokens(docs[0])).toContain("carried_over");
+      // The runbook cites many gates, so it keeps the line filter; ADR-237 and the workflow are
+      // scanned WHOLE (a pin token on a line without a filter keyword is still checked).
+      expect(verdictParity(gateSrc, [docs[0]], [{ doc: docs[1], foreign: ADR237_FOREIGN }, { doc: docs[2] }])).toEqual([]);
+      // The ADR's foreign allowlist is exact (a stale entry fails) and disjoint from this gate's tokens.
+      const emitted = gateEmitted(gateSrc);
+      expect([...new Set(allVerdictTokens(docs[1]).filter((t) => !emitted.has(t)))].sort()).toEqual([...ADR237_FOREIGN].sort());
+      expect(ADR237_FOREIGN.filter((t) => emitted.has(t))).toEqual([]);
+    });
+
+    test("PT5 RED: an unfiltered doc's pin token on a line with no filter keyword is still checked", () => {
+      const line = "a red job whose apply may have run prints verdict=pin_maybe_publishd";
+      // The line filter alone misses it (the L1 gap) ...
+      expect(verdictParity(gateSrc, [line])).toEqual([]);
+      // ... the whole-document scan does not, and a foreign allowlist covers only its own tokens.
+      expect(verdictParity(gateSrc, [], [{ doc: line }])).toEqual(["PT5: verdict=pin_maybe_publishd is cited but never emitted by the gate"]);
+      expect(verdictParity(gateSrc, [], [{ doc: `${line}\nrole=web verdict=ok`, foreign: ADR237_FOREIGN }])).toEqual(["PT5: verdict=pin_maybe_publishd is cited but never emitted by the gate"]);
+      expect(verdictParity(gateSrc, [], [{ doc: "role=web verdict=ok" }])).toEqual(["PT5: verdict=ok is cited but never emitted by the gate"]);
     });
 
     test("PT5 RED: a misspelt cited token, or a token the gate stops emitting, is a violation", () => {
@@ -2432,28 +2573,32 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       expect(verdictParity(muted, ["the pin-redeploy run printed verdict=no_apply"])).toEqual(["PT5: verdict=no_apply is cited but never emitted by the gate"]);
     });
 
-    test("PT5: the runbook's follower-step lookup prefix names the step that runs track.sh", () => {
-      const prefix = /startswith\("([^"]+)"\)/.exec(readFileSync(RUNBOOK, "utf8"))?.[1];
-      expect(prefix).toBe("Dispatch web-platform-release");
-      const track = (freshFollower().jobs.redeploy.steps ?? []).filter((st) => String(st.run ?? "").includes("dispatch-web-redeploy/track.sh"));
-      expect(track.length).toBe(1);
-      expect(String(track[0].name).startsWith(prefix!)).toBe(true);
+    test("PT5: the runbook's follower lookups name the job that runs track.sh, never a positional job", () => {
+      const rb = readFileSync(RUNBOOK, "utf8");
+      // gh reports a job with no `name:` by its id, which the lookups select on (the G2 table row escapes its pipes).
+      const names = [...rb.matchAll(/\.jobs\[\] \\?\| select\(\.name == "([^"]+)"\) \\?\| \.conclusion/g)].map((m) => m[1]);
+      expect(names).toEqual(["redeploy", "redeploy"]);
+      expect(rb).not.toMatch(/\.jobs\[\d+\]\.steps/);
+      const doc = freshFollower();
+      const track = Object.entries(doc.jobs).filter(([, j]) => (j.steps ?? []).some((st) => String(st.run ?? "").includes("dispatch-web-redeploy/track.sh")));
+      expect(track.map(([id]) => id)).toEqual(["redeploy"]);
+      expect((doc.jobs.redeploy as { name?: string }).name).toBeUndefined();
     });
 
-    test("PT3: the follower emails ops on pin_published and names both recoveries in the failure email", () => {
+    test("PT3: the gate job emails ops on pin_published; each job's failure email names both recoveries", () => {
       expect(pinPublishedEmailParity(freshFollower())).toEqual([]);
     });
 
-    test("PT3 RED: dropping the pin_published email, its if: reference, or the no-source_run_id sentence is a violation", () => {
+    test("PT3 RED: dropping the pin_published email, its if: reference, or either job's failure email or no-source_run_id sentence is a violation", () => {
       const isPub = (s: Step) => String(s.if ?? "").includes("pin_published");
       const dropped = freshFollower();
-      dropped.jobs.redeploy.steps = dropped.jobs.redeploy.steps!.filter((s) => !isPub(s));
+      dropped.jobs.gate.steps = dropped.jobs.gate.steps!.filter((s) => !isPub(s));
       expect(pinPublishedEmailParity(dropped)).toEqual([
         "PT3: 0 notify-ops-email steps gated on steps.gate.outputs.pin_published",
         "PT3: no step fails the run when the pin email is not sent",
       ]);
       const unref = freshFollower();
-      unref.jobs.redeploy.steps!.find(isPub)!.if = "${{ always() }}";
+      unref.jobs.gate.steps!.find(isPub)!.if = "${{ always() }}";
       expect(pinPublishedEmailParity(unref).length).toBe(1);
       for (const bad of [
         "${{ always() && steps.gate.outputs.pin_published == 'true' && false }}",
@@ -2461,16 +2606,145 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
         "${{ !always() && steps.gate.outputs.pin_published == 'true' }}",
       ]) {
         const d = freshFollower();
-        d.jobs.redeploy.steps!.find((s) => s.id === "pin_email")!.if = bad;
+        d.jobs.gate.steps!.find((s) => s.id === "pin_email")!.if = bad;
         expect(pinPublishedEmailParity(d)).toEqual(["PT3: the pin_published email if: is not exactly always() && pin_published == 'true'"]);
       }
       const noRetry = freshFollower();
-      noRetry.jobs.redeploy.steps = noRetry.jobs.redeploy.steps!.filter((s) => !String(s.if ?? "").includes("pin_email"));
+      noRetry.jobs.gate.steps = noRetry.jobs.gate.steps!.filter((s) => !String(s.if ?? "").includes("pin_email"));
       expect(pinPublishedEmailParity(noRetry)).toEqual(["PT3: no step fails the run when the pin email is not sent"]);
-      const noArm = freshFollower();
-      const mail = noArm.jobs.redeploy.steps!.find((s) => String(s.if ?? "").includes("failure()"))!;
-      mail.with!.body = String(mail.with!.body).replace(/gh workflow run git-data-pin-redeploy\.yml --ref main(?!\s*-f)/g, "(removed)");
-      expect(pinPublishedEmailParity(noArm)).toEqual(["PT3: failure email lacks the no-source_run_id dispatch"]);
+      // The pin_published email left in (or moved to) the redeploy job does not count: it would never run.
+      const moved = freshFollower();
+      moved.jobs.redeploy.steps!.push(...moved.jobs.gate.steps!.filter((s) => isPub(s)));
+      moved.jobs.gate.steps = moved.jobs.gate.steps!.filter((s) => !isPub(s));
+      expect(pinPublishedEmailParity(moved)).toEqual([
+        "PT3: 0 notify-ops-email steps gated on steps.gate.outputs.pin_published",
+        "PT3: no step fails the run when the pin email is not sent",
+      ]);
+      for (const jn of ["gate", "redeploy"]) {
+        const noArm = freshFollower();
+        const mail = noArm.jobs[jn].steps!.find((s) => String(s.if ?? "").includes("failure()"))!;
+        mail.with!.body = String(mail.with!.body).replace(/gh workflow run git-data-pin-redeploy\.yml --ref main(?!\s*-f)/g, "(removed)");
+        expect(pinPublishedEmailParity(noArm)).toEqual([`PT3 ${jn}: failure email lacks the no-source_run_id dispatch`]);
+        const noMail = freshFollower();
+        noMail.jobs[jn].steps = noMail.jobs[jn].steps!.filter((s) => !String(s.if ?? "").includes("failure()"));
+        expect(pinPublishedEmailParity(noMail)).toEqual([
+          `PT3 ${jn}: 0 failure() email steps`,
+          `PT3 ${jn}: failure email lost the -f source_run_id= recovery`,
+          `PT3 ${jn}: failure email lacks the no-source_run_id dispatch`,
+        ]);
+      }
+    });
+
+    const freshLock = () => parseYaml(src) as FollowerDoc;
+    const trackStep = (doc: FollowerDoc) => doc.jobs.redeploy.steps!.find(runsTracker)!;
+    const gateStep = (doc: FollowerDoc) => doc.jobs.gate.steps!.find((s) => s.id === "gate") as Step & { env: Record<string, string> };
+
+    test("gate wiring: the id: gate step's env, continue-on-error and run body are exactly the pinned ones", () => {
+      expect(gateWiring(freshLock())).toEqual([]);
+    });
+
+    test("gate wiring RED: a widened manual arm, a rebound or missing attempt, continue-on-error, or an appended fallback is a violation", () => {
+      const runMut: Array<[string, (r: string) => string]> = [
+        ["if true in the manual arm", (r) => r.replace(/if \[\[[^\n]*\]\]; then/, "if true; then")],
+        ["dropped -z source_run_id", (r) => r.replace(' && -z "${SOURCE_RUN_ID}"', "")],
+        ["appended || proceed=true", (r) => r.replace("source-run-gate.sh", 'source-run-gate.sh || echo proceed=true >> "$GITHUB_OUTPUT"')],
+      ];
+      for (const [what, f] of runMut) {
+        const doc = freshLock();
+        const before = String(gateStep(doc).run);
+        gateStep(doc).run = f(before);
+        expect([what, gateStep(doc).run !== before]).toEqual([what, true]); // the mutation landed
+        expect([what, gateWiring(doc)]).toEqual([what, ["GW: the gate step's run body differs from the pinned body"]]);
+      }
+      const rebound = freshLock();
+      gateStep(rebound).env.SOURCE_RUN_ATTEMPT = "${{ github.run_attempt }}";
+      expect(gateWiring(rebound)).toEqual(["GW: the gate step's env differs from the pinned map"]);
+      const missing = freshLock();
+      delete gateStep(missing).env.SOURCE_RUN_ATTEMPT;
+      expect(gateWiring(missing)).toEqual(["GW: the gate step's env differs from the pinned map"]);
+      const coe = freshLock();
+      gateStep(coe)["continue-on-error"] = true;
+      expect(gateWiring(coe)).toEqual(["GW: the gate step carries continue-on-error"]);
+    });
+
+    test("Guard 2: only the redeploy job, which runs track.sh and only when gate proceeds, holds the lock", () => {
+      expect(lockParity(freshLock())).toEqual([]);
+    });
+
+    test("Guard 2 RED 1: moving the group from redeploy to gate is a violation", () => {
+      const doc = freshLock();
+      doc.jobs.gate.concurrency = doc.jobs.redeploy.concurrency;
+      delete doc.jobs.redeploy.concurrency;
+      expect(lockParity(doc)).toEqual([
+        "G2: track.sh runs in redeploy, not in the lock holder gate",
+        "G2: the lock holder gate does not need gate",
+        "G2: the lock holder gate does not run only when gate proceeds",
+      ]);
+    });
+
+    test("Guard 2 RED 2: dropping redeploy's if: (a non-rotating follower would enter the lock) is a violation", () => {
+      const doc = freshLock();
+      delete doc.jobs.redeploy.if;
+      expect(lockParity(doc)).toEqual(["G2: the lock holder redeploy does not run only when gate proceeds"]);
+      // A weakened condition is no better than none.
+      for (const bad of ["needs.gate.outputs.proceed != 'false'", "always() || needs.gate.outputs.proceed == 'true'", "${{ always() }}"]) {
+        const w = freshLock();
+        w.jobs.redeploy.if = bad;
+        expect(lockParity(w)).toEqual(["G2: the lock holder redeploy does not run only when gate proceeds"]);
+      }
+    });
+
+    test("Guard 2 RED 3: the group on gate as a SECOND member after a compliant redeploy is a violation", () => {
+      for (const c of [{ ...LOCK }, LOCK.group]) {
+        const doc = freshLock();
+        doc.jobs.gate.concurrency = c;
+        expect(lockParity(doc)).toEqual([`G2: 2 jobs declare the ${LOCK.group} group`]);
+      }
+    });
+
+    test("Guard 2 RED 4: moving the track.sh step into gate is a violation", () => {
+      const doc = freshLock();
+      const t = trackStep(doc);
+      doc.jobs.redeploy.steps = doc.jobs.redeploy.steps!.filter((s) => s !== t);
+      doc.jobs.gate.steps!.push(t);
+      expect(lockParity(doc)).toEqual(["G2: track.sh runs in gate, not in the lock holder redeploy"]);
+      // A second copy in gate is no better.
+      const dup = freshLock();
+      dup.jobs.gate.steps!.push({ ...trackStep(dup) });
+      expect(lockParity(dup)).toEqual(["G2: track.sh runs in 2 steps"]);
+    });
+
+    test("Guard 2 RED 5: a workflow-level concurrency is a violation", () => {
+      const doc = freshLock();
+      doc.concurrency = { ...LOCK };
+      expect(lockParity(doc)).toEqual(["G2: a workflow-level concurrency exists"]);
+    });
+
+    test("Guard 2 RED 6: dropping redeploy's needs: gate is a violation", () => {
+      const doc = freshLock();
+      delete doc.jobs.redeploy.needs;
+      expect(lockParity(doc)).toEqual(["G2: the lock holder redeploy does not need gate"]);
+    });
+
+    test("Guard 2 RED 7: the group on gate spelt in another case, or as an expression, is a violation", () => {
+      const cased = freshLock();
+      cased.jobs.gate.concurrency = { ...LOCK, group: "Git-Data-Pin-Redeploy" };
+      expect(lockParity(cased)).toEqual([`G2: 2 jobs declare the ${LOCK.group} group`]);
+      const expr = freshLock();
+      expr.jobs.gate.concurrency = { ...LOCK, group: "${{ 'git-data-pin-redeploy' }}" };
+      expect(lockParity(expr)).toEqual(["G2: gate's concurrency group is an expression"]);
+    });
+
+    test("Guard 2 RED 8: cancel-in-progress true on the lock holder is a violation", () => {
+      const doc = freshLock();
+      doc.jobs.redeploy.concurrency = { ...LOCK, "cancel-in-progress": true };
+      expect(lockParity(doc)).toEqual(["G2: the lock holder redeploy does not set cancel-in-progress: false"]);
+    });
+
+    test("Guard 2 RED 9: a comment that only mentions track.sh's path is not a tracker", () => {
+      const doc = freshLock();
+      trackStep(doc).run = "# bash .github/actions/dispatch-web-redeploy/track.sh\necho skipped";
+      expect(lockParity(doc)).toEqual(["G2: track.sh runs in 0 steps"]);
     });
   });
 });

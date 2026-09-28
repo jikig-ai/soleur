@@ -16,7 +16,9 @@
 // asserts zero anchors and a neutralized bidi fixture — keep it in lockstep.
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
+import { usePendingAction } from "@/hooks/use-pending-action";
+import { Button } from "@/components/ui/button";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import { relativeTime } from "@/lib/relative-time";
 import { triagePillClass, triagePillLabel } from "@/lib/email-triage-display";
@@ -48,8 +50,7 @@ interface EmailTriageRowProps {
 }
 
 export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
-  const router = useRouter();
-  const [pending, setPending] = useState(false);
+  const router = usePendingRouter();
   const [actionError, setActionError] = useState<string | null>(null);
 
   const isStatutory = item.statutory_class !== null;
@@ -81,34 +82,32 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
       ? "border-amber-500/30 bg-amber-500/[0.06] hover:bg-amber-500/[0.1]"
       : "border-soleur-border-default bg-soleur-bg-surface-1/50 hover:bg-soleur-bg-surface-2/50";
 
-  async function runAction(action: "acknowledge" | "archive") {
-    if (pending) return;
-    setPending(true);
-    setActionError(null);
-    try {
-      const res = await fetch(`/api/inbox/emails/${item.id}/${action}`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        onChanged?.();
-      } else if (res.status === 409) {
-        // Row already transitioned elsewhere (another tab/device) — the
-        // refetch reconciles the stale row, so report the change upward.
-        onChanged?.();
-      } else {
-        setActionError(
-          action === "acknowledge"
-            ? "Couldn't acknowledge — try again."
-            : "Couldn't archive — try again.",
-        );
+  const { run: runAction, pending } = usePendingAction(
+    async (action: "acknowledge" | "archive") => {
+      setActionError(null);
+      try {
+        const res = await fetch(`/api/inbox/emails/${item.id}/${action}`, {
+          method: "POST",
+        });
+        if (res.ok) {
+          onChanged?.();
+        } else if (res.status === 409) {
+          // Row already transitioned elsewhere (another tab/device) — the
+          // refetch reconciles the stale row, so report the change upward.
+          onChanged?.();
+        } else {
+          setActionError(
+            action === "acknowledge"
+              ? "Couldn't acknowledge — try again."
+              : "Couldn't archive — try again.",
+          );
+        }
+      } catch {
+        // Network drop: surface it; the operator can retry.
+        setActionError("Network error — try again.");
       }
-    } catch {
-      // Network drop: surface it; the operator can retry.
-      setActionError("Network error — try again.");
-    } finally {
-      setPending(false);
-    }
-  }
+    },
+  );
 
   const navigate = () => router.push(`/dashboard/inbox/email/${item.id}`);
 
@@ -180,32 +179,36 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
             </p>
           )}
           {isStatutory && item.status === "new" && (
-            <button
+            <Button
+              variant="danger"
               type="button"
               aria-label="Acknowledge email"
               disabled={pending}
+              loading={pending}
               onClick={(e) => {
                 e.stopPropagation();
-                void runAction("acknowledge");
+                runAction("acknowledge");
               }}
               className="min-h-[32px] rounded-md border border-red-500/30 px-3 py-1 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10 disabled:opacity-50"
             >
               Acknowledge
-            </button>
+            </Button>
           )}
           {!isStatutory && item.status !== "archived" && (
-            <button
+            <Button
+              variant="outlined"
               type="button"
               aria-label="Archive email"
               disabled={pending}
+              loading={pending}
               onClick={(e) => {
                 e.stopPropagation();
-                void runAction("archive");
+                runAction("archive");
               }}
               className="min-h-[32px] rounded-md border border-soleur-border-default px-3 py-1 text-xs font-medium text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 disabled:opacity-50"
             >
               Archive
-            </button>
+            </Button>
           )}
         </div>
       </div>

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 import { ChatSurface } from "@/components/chat/chat-surface";
 import type { ConversationContext } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
@@ -24,7 +25,7 @@ import { useNavResume } from "@/hooks/use-nav-resume";
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
   const searchParams = useSearchParams();
-  const router = useRouter();
+  const router = usePendingRouter();
   const { clearChatId } = useNavResume();
   const contextParam = searchParams.get("context");
   const conversationId = params.conversationId;

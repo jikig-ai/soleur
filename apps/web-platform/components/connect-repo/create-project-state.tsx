@@ -4,8 +4,7 @@ import { useState } from "react";
 
 import { LockIcon, GlobeIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
-import { GoldButton } from "@/components/ui/gold-button";
-import { OutlinedButton } from "@/components/ui/outlined-button";
+import { Button } from "@/components/ui/button";
 
 interface CreateProjectStateProps {
   onBack: () => void;
@@ -86,6 +85,7 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
             <button
               type="button"
               onClick={() => setIsPrivate(true)}
+              data-button-exempt="segmented private/public toggle — paired selected/unselected styling inside a shared border; a per-button variant would break the joined chrome"
               className={`flex flex-1 items-center justify-center gap-2 px-4 py-2.5 text-sm transition-colors ${
                 isPrivate
                   ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
@@ -98,6 +98,7 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
             <button
               type="button"
               onClick={() => setIsPrivate(false)}
+              data-button-exempt="segmented private/public toggle — paired selected/unselected styling inside a shared border; a per-button variant would break the joined chrome"
               className={`flex flex-1 items-center justify-center gap-2 border-l border-soleur-border-default px-4 py-2.5 text-sm transition-colors ${
                 !isPrivate
                   ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
@@ -113,10 +114,16 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
         {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
         <div className="flex items-center gap-3">
-          <GoldButton type="submit" disabled={!slug || submitting}>
-            {submitting ? "Creating..." : "Create Project"}
-          </GoldButton>
-          <OutlinedButton onClick={onBack}>Back</OutlinedButton>
+          <Button
+            variant="gold"
+            type="submit"
+            disabled={!slug}
+            loading={submitting}
+            loadingLabel="Creating"
+          >
+            Create Project
+          </Button>
+          <Button variant="outlined" type="button" onClick={onBack}>Back</Button>
         </div>
       </form>
     </div>

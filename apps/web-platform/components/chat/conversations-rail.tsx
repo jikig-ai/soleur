@@ -1,7 +1,8 @@
 "use client";
 
 import { memo } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { useParams } from "next/navigation";
 import { useConversations } from "@/hooks/use-conversations";
 import { RailEmptyState } from "@/components/dashboard/rail-empty-state";
@@ -66,7 +67,7 @@ function ConversationRailRowImpl({
     ? LEADER_COLORS[leader]
     : "border-l-transparent";
   return (
-    <Link
+    <NavLink
       href={`/dashboard/chat/${conversation.id}`}
       aria-current={active ? "page" : undefined}
       className={`block border-l-2 ${borderColor} px-3 py-2 transition-colors ${
@@ -80,7 +81,7 @@ function ConversationRailRowImpl({
         <StatusBadge status={conversation.status} />
         <span>{relativeTime(conversation.last_active)}</span>
       </div>
-    </Link>
+    </NavLink>
   );
 }
 
@@ -115,13 +116,13 @@ export function ConversationsRail() {
         {/* Persistent new-conversation entry point — visible regardless of
             list state (the empty-state CTA below only shows when zero rows).
             Expanded branch only: the collapsed rail returns null above. */}
-        <Link
+        <NavLink
           href={NEW_CONVERSATION_HREF}
           aria-label="New conversation"
           className="text-xs font-medium text-soleur-accent-gold-fg hover:underline"
         >
           + New
-        </Link>
+        </NavLink>
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto py-1">
@@ -137,13 +138,14 @@ export function ConversationsRail() {
             className="px-3 py-4 text-xs text-soleur-text-muted"
           >
             <p>Couldn&rsquo;t load conversations.</p>
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => refetch()}
               className="mt-1 text-soleur-text-secondary underline hover:text-soleur-text-primary"
             >
               Retry
-            </button>
+            </Button>
           </div>
         ) : !loading && conversations.length === 0 ? (
           <RailEmptyState
@@ -164,12 +166,12 @@ export function ConversationsRail() {
       </nav>
 
       <div className="border-t border-soleur-border-default px-3 py-2">
-        <Link
+        <NavLink
           href="/dashboard"
           className="text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           View all in Dashboard
-        </Link>
+        </NavLink>
       </div>
     </div>
   );

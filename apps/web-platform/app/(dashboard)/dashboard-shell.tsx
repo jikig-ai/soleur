@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { usePathname } from "next/navigation";
 import { SWRConfig } from "swr";
 import { swrConfig } from "@/lib/swr-config";
@@ -315,14 +316,15 @@ export function DashboardShell({
           band replaces the bare "Soleur" label so workspace identity is shown
           in EVERY mobile state, OUTSIDE the hamburger drawer. */}
       <div className="flex min-h-14 shrink-0 items-center gap-1 border-b border-soleur-border-default bg-soleur-bg-surface-1 px-2 safe-top md:hidden">
-        <button
+        <Button
+          variant="ghost"
           onClick={() => setDrawerOpen(true)}
           aria-label="Open navigation"
           aria-expanded={drawerOpen}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+          className="h-11 w-11 shrink-0 hover:text-soleur-text-primary"
         >
           <MenuIcon className="h-5 w-5" />
-        </button>
+        </Button>
         {/* Workspace identity now lives at the TOP of the hamburger drawer (the
             switcher belongs in the sidebar), so the top bar stays minimal:
             hamburger on the left, palette trigger on the right. */}
@@ -382,13 +384,14 @@ export function DashboardShell({
             drawer-close button; it keeps `safe-top` for the notch inset (desktop
             has no safe-area inset, so dropping it from the desktop path is correct). */}
         <div className="flex items-center safe-top px-3 pt-3 pb-2 md:hidden">
-          <button
+          <Button
+            variant="ghost"
             onClick={() => setDrawerOpen(false)}
             aria-label="Close navigation"
-            className="flex h-11 w-11 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+            className="h-11 w-11 hover:text-soleur-text-primary"
           >
             <XIcon className="h-5 w-5" />
-          </button>
+          </Button>
         </div>
 
         {/* Workspace switcher at the top of the mobile drawer. CSS-exclusive
@@ -417,7 +420,8 @@ export function DashboardShell({
             COLLAPSED: centered on the icon column at `top-3`, in the band's pt-16
             clearance above the monogram. Always mounted (no exclusive unmount), so
             no focus-swap handling is needed. */}
-        <button
+        <Button
+          variant="ghost"
           onClick={toggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={
@@ -425,12 +429,12 @@ export function DashboardShell({
               ? `Expand sidebar (${modChord("B", isApplePlatform)})`
               : `Collapse sidebar (${modChord("B", isApplePlatform)})`
           }
-          className={`absolute ${collapsed ? "left-1/2 -translate-x-1/2 top-3" : "right-3 top-10"} z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex`}
+          className={`absolute ${collapsed ? "left-1/2 -translate-x-1/2 top-3" : "right-3 top-10"} z-10 hidden h-6 w-6 hover:text-soleur-text-primary md:flex`}
         >
           <RailToggleIcon
             className={`h-4 w-4 transition-transform duration-200 ${collapsed ? "rotate-180" : ""}`}
           />
-        </button>
+        </Button>
 
         {/* Persistent workspace context band (ADR-047). Mounted OUTSIDE the
             rail swap region and NEVER gated on `collapsed` — this fixes the
@@ -468,7 +472,7 @@ export function DashboardShell({
                 const Icon = NAV_ICONS[item.href] ?? GridIcon;
 
                 return (
-                  <Link
+                  <NavLink
                     key={item.href}
                     href={href}
                     data-tour-id={item.href}
@@ -510,7 +514,7 @@ export function DashboardShell({
                     {item.href === "/dashboard/workstream" && (
                       <WorkstreamNavBadge collapsed={collapsed} />
                     )}
-                  </Link>
+                  </NavLink>
                 );
               })}
             </nav>
@@ -530,7 +534,7 @@ export function DashboardShell({
                   NAV_ICONS, which is consumed only inside the primary loop);
                   neutral active treatment mirrors Settings so it reads as part
                   of this group, driven by the direct pathname check. */}
-              <Link
+              <NavLink
                 href={RELEASES_HREF}
                 data-tour-id={RELEASES_HREF}
                 title={collapsed ? "Releases" : undefined}
@@ -548,7 +552,7 @@ export function DashboardShell({
                     (feat-releases-nav-badge). Mounted inside the layout's
                     <SWRConfig> so its fetch dedups with the Releases surface. */}
                 <ReleasesNavBadge collapsed={collapsed} />
-              </Link>
+              </NavLink>
               <a
                 href="https://soleur-ai.betteruptime.com/"
                 target="_blank"
@@ -559,7 +563,7 @@ export function DashboardShell({
                 <StatusIcon className="h-4 w-4 shrink-0" />
                 <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
               </a>
-              <Link
+              <NavLink
                 href="/dashboard/settings"
                 data-tour-id="/dashboard/settings"
                 title={collapsed ? "Settings" : undefined}
@@ -572,15 +576,16 @@ export function DashboardShell({
               >
                 <SettingsIcon className="h-4 w-4 shrink-0" />
                 <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Settings</span>
-              </Link>
-              <button
+              </NavLink>
+              <Button
+                variant="ghost"
                 onClick={() => setSignOutModalOpen(true)}
                 title={collapsed ? "Sign out" : undefined}
-                className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+                className={`min-h-[44px] w-full justify-start gap-3 hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
               >
                 <LogOutIcon className="h-4 w-4 shrink-0" />
                 <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Sign out</span>
-              </button>
+              </Button>
               {/* Theme toggle — the quiet, lowest-priority affordance sits at the
                   very bottom of the rail, BELOW Sign out (matches the D4 wireframe
                   frames 16/23). Stays top-level chrome, render-conditional via the
@@ -605,14 +610,14 @@ export function DashboardShell({
                 treatment (`text-soleur-accent-gold-fg` + BackArrowIcon), which
                 the lift silently dropped for muted grey and a bare chevron. Any
                 future change to one of the two renderers belongs in both. */}
-            <Link
+            <NavLink
               href="/dashboard"
               data-testid="drawer-back-to-menu"
               className="mx-3 mt-3 flex min-h-[44px] shrink-0 items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-accent-gold-fg hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-primary md:hidden"
             >
               <BackArrowIcon className="h-4 w-4 shrink-0" />
               Back to menu
-            </Link>
+            </NavLink>
             <div
               ref={setRailSlotEl}
               data-testid="rail-secondary-slot"
@@ -675,12 +680,12 @@ export function DashboardShell({
                 <span className="font-medium text-red-400">Your subscription is unpaid.</span>{" "}
                 Your account is in read-only mode.
               </p>
-              <a
+              <NavLink
                 href="/dashboard/settings"
                 className="shrink-0 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:bg-red-500"
               >
                 Resolve Payment
-              </a>
+              </NavLink>
             </div>
           </div>
         )}
