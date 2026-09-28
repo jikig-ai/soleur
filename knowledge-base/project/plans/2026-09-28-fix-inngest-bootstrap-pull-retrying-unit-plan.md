@@ -23,6 +23,80 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 # fix(infra): move the inngest host's first-boot bootstrap pull into a latched, retrying systemd unit
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28.
+
+**Sections enhanced (12):**
+
+- Design (script + a Research Insights subsection)
+- Implementation Phases 1.4, 4.3, 5.3, 6.1 and 6.3
+- Observability (rewritten)
+- Downtime & Cutover (new, gate 4.55)
+- Guard Contract (Guard 8 added; rows 46 → 59)
+- Test Scenarios (rewritten)
+- Acceptance Criteria
+- Architecture Decision
+- Deferrals
+- Risks
+
+**Agents used:**
+
+- `soleur:engineering:review:architecture-strategist`
+- `soleur:engineering:review:observability-coverage-reviewer`
+- `soleur:engineering:review:security-sentinel`
+- `soleur:engineering:review:test-design-reviewer`
+- `soleur:product:spec-flow-analyzer` (the plan-phase SpecFlow step had not run, so it runs here)
+- `soleur:engineering:research:best-practices-researcher` (systemd 255 semantics; systemd-in-docker
+  on GitHub runners)
+- a verify-the-negative and attribution audit: 27 of 29 anchors confirmed, and all negative claims
+  confirmed.
+
+**Gates:** 4.6 User-Brand passes. 4.7 Observability passes: all 5 fields, the verb is on the
+allowlist, credentials are declared. 4.8 found no PAT shapes. 4.9 does not apply (no UI). 4.10
+Encryption Posture passes. 4.11 Guard lint passes (8 entries). 4.55 fired and is satisfied by the
+new `## Downtime & Cutover`. 4.5 did not trigger. Every cited rule ID is active. All 18 cited
+issue and PR numbers were verified live, and the prescribed labels exist.
+
+### Key Improvements
+
+1. **Cutover-FSM collision closed (architecture P1).** A retried bootstrap during an operator
+   `op=resume` could abort the flip, and recovering from `aborted` needs a recut. The script now
+   stops `inngest-cutover-flip.timer` and `inngest-luks-cutover.timer` and waits a bounded time
+   for in-flight steps before every bootstrap run (T15, Guard 2 row 10).
+2. **Mount precondition withdrawn (architecture P2).** Kieran's `mountpoint -q /mnt/data` check
+   would have turned today's degraded-but-serving first boot (a failed LUKS stage leads to
+   SQLite-only mode) into a dark retry loop. The existing Redis mapper-identity guard is stronger.
+3. **Follow-through probe redesigned (observability P1).** The old design grouped by newest boot,
+   which reads a healthy latched host as TRANSIENT forever. The probe now anchors on
+   `provision-unit-armed` plus the cloud-init `iid`, has distinct TRANSIENT reasons, and prints
+   its verdict to stdout.
+4. **Off-host channel survives a Doppler outage.** The bs-token is re-staged per attempt, and the
+   EXIT trap also emits `provision_attempt_failed` to Sentry through the baked DSN.
+5. **Signal-safe children.** The pull and the bootstrap run as `& wait` with TERM forwarding, so a
+   `TimeoutStartSec` kill reports before SIGKILL (research: dash defers traps until its foreground
+   child exits).
+6. **Tier A never skips.** It reuses the proven G4 fixture-root path-rewrite harness
+   (`cloud-init-inngest-bootstrap.test.sh`) under `dash -u`. It requires exact return codes, treats
+   rc 2 or 127 as an instrument fault, and adds a control row (test-design P1s).
+7. **Security hardening.** An xtrace refusal (the token is piped to `docker login` and the journal
+   is persistent), per-attempt clearing of the fixed `/tmp` staging names, the extract container
+   addressed by the ID `docker create` returns, a counter that cannot wedge, and the retired `/run`
+   sentinel forbidden (Guard 8).
+8. **`TimeoutStartSec` derived from step bounds** (about 45 min), not from healthy history.
+
+### New Considerations Discovered
+
+- `betteruptime_heartbeat.inngest_prd` is `paused = true`. Non-pull provision failures page nobody.
+  This is a pre-existing gap. Closing it needs a `sentry/**` edit, which triggers a production
+  apply, so it is deferred to a new issue.
+- There is no repo precedent for systemd as PID 1 in a container. Tier B is novel
+  infrastructure; every row it would catch also has a static or Tier A detector.
+- `ci-deploy.sh` cannot run the bootstrap on the dedicated host, which has no webhook. So no two
+  bootstraps can overlap there (verified).
+- A plan-provenance pin drifted: line numbers were measured on merge-base `7bc9bde2db`, not
+  `f1f2336156`. Corrected.
+
 ## Overview
 
 The dedicated Inngest host is the fleet's only scheduler. It fetches its bootstrap image, extracts
@@ -67,8 +141,10 @@ with a probe enrolled.
 
 ## Merge-Consequence Analysis (measured, required by the brief)
 
-Every claim cites a file and anchor. Line numbers are from `origin/main` at `f1f2336156`, and the
-quoted anchor is authoritative (`cq-cite-content-anchor-not-line-number`).
+Every claim cites a file and anchor. Line numbers were measured on this branch's base (`origin/main`
+as of 2026-09-28, merge-base `7bc9bde2db`; a deepen-plan audit found two drifted by a few lines
+against the older `f1f2336156`). The quoted anchor is authoritative
+(`cq-cite-content-anchor-not-line-number`).
 
 **Planned diff surface (exhaustive).**
 
@@ -348,7 +424,7 @@ Type=oneshot
 RemainAfterExit=yes
 Restart=on-failure
 RestartSec=120
-TimeoutStartSec=30min
+TimeoutStartSec=45min
 Environment=HOME=/root
 EnvironmentFile=/etc/default/inngest-doppler
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -464,16 +540,162 @@ replaces the earlier one, and a command that fails inside an EXIT trap under `se
 
 Guard 2 rows 7 and 8 pin this.
 
-**Mount precondition (plan review).** On a host that never latched, a reboot now re-runs the
-bootstrap. `After=inngest-luks-open.service` only orders the start. If the LUKS reopen failed, the
-bootstrap would write to an unmounted `/mnt/data`, whereas today such a reboot does nothing. So
-before the bootstrap invocation:
+**No mount precondition. It was proposed at plan review and withdrawn at deepen-plan (architecture
+P2).** A `mountpoint -q /mnt/data || exit 1` check would **reverse** today's first-boot behavior:
+
+- **Today:** a failed LUKS stage does not stop the later `runcmd` items. `inngest-redis.service`'s
+  mount guard (`RequiresMountsFor=/mnt/data`, plus the mapper-identity check in
+  `inngest-redis-bootstrap.sh`) refuses Redis, and the server comes up SQLite-only
+  (`INNGEST_DURABLE_DEGRADED`). The scheduler is degraded but serving.
+- **With the check:** the host would fail fast and retry forever with the scheduler dark, and
+  nothing re-runs the LUKS stage on that boot.
+
+The existing guards are stronger anyway: they verify mapper identity, not just that a mountpoint
+exists. They already protect the AOF on a reboot re-run. See the Cut List.
+
+**Quiesce the cutover FSMs before each bootstrap run (architecture P1).** A retry after a late
+failure or a timeout kill re-runs the bootstrap's `systemctl restart inngest-redis` and
+`inngest-server` steps and re-enables the flip timer (`inngest-bootstrap.sh:1701`, `:1728`).
+
+If that coincides with an operator's `op=resume`, the flip's `flushed` step may be inside its
+`verify_serving` window. A restart there fails verification, and the FSM writes `aborted`.
+`op=resume` G1 accepts only `done`, so recovering from `aborted` needs a `/mnt/data` recut.
+"Resume after `bootstrap-done`" is runbook prose, not a gate.
+
+So, immediately before invoking `inngest-bootstrap.sh`, the script:
 
 ```sh
-mountpoint -q /mnt/data || { inngest-boot-phone-home.sh provision-mnt-data-ABSENT "attempt=N"; exit 1; }
+systemctl stop inngest-cutover-flip.timer inngest-luks-cutover.timer 2>/dev/null || true
+# bounded: wait (max 300 s) until neither oneshot is activating, so an in-flight FSM step finishes
+for _u in inngest-cutover-flip.service inngest-luks-cutover.service; do
+  _t=0; while [ "$(systemctl is-active "$_u" 2>/dev/null)" = activating ] && [ "$_t" -lt 300 ]; do sleep 5; _t=$((_t+5)); done
+done
 ```
 
-The attempt fails and retries (T13).
+- The bootstrap re-enables both timers as today (`enable --now`).
+- On attempt 1 of a fresh host the timers do not exist yet, so the stop is a harmless no-op.
+- If the 300 s bound expires, emit `provision-fsm-busy` and exit non-zero, then retry.
+- **Do not** order the provision unit with `Before=` on those services. The bootstrap restarts
+  units synchronously, so that ordering would invite the deadlock Guard 5 row 5 forbids.
+- Covered by T15 (Tier B) and a Guard 2 REORDER row (quiesce placed after the bootstrap call →
+  RED).
+
+#### Research Insights (deepen-plan, 2026-09-28)
+
+**Shell safety.**
+
+- **Refuse xtrace (security P2).** Copy the refusal from `inngest-bootstrap.sh:33-35` verbatim to
+  the top of the script:
+
+  ```sh
+  case "$-" in *x*) printf '[FATAL] refusing to run under xtrace ...\n' >&2; exit 78 ;; esac
+  ```
+
+  The unit's journal is persistent (`journald-soleur.conf`, `Storage=persistent`), and every
+  attempt pipes `ZOT_PULL_TOKEN` into `docker login`. One `set -x` would write the token to disk
+  on every retry. Guard 6 pins this.
+  - Exit 78 is **not** in `RestartPreventExitStatus`. A refusal is a code defect and should keep
+    paging, not stop quietly.
+- **Keep long children interruptible (research, systemd.kill(5) + dash semantics).** dash runs a
+  trap only after the foreground child exits. Under `KillMode=control-group`, SIGTERM reaches the
+  whole cgroup, and SIGKILL follows `TimeoutStopSec=` (default 90 s) later.
+  - Run the two long children, the `docker pull` loop body and the `bash inngest-bootstrap.sh`
+    invocation, as `cmd & child=$!; wait "$child"; rc=$?`.
+  - Have the TERM trap `kill "$child" 2>/dev/null; exit 143`. The EXIT trap's emit then runs
+    promptly, not after SIGKILL.
+  - T9 asserts that the emit lands before the next attempt.
+  - **A shutdown or reboot mid-attempt is the same SIGTERM path**, bounded by `TimeoutStopSec`.
+    The emit may not leave the host if the network is already down during shutdown. The next
+    boot's `provision-attempt-start attempt=N+1` is the durable trace (SpecFlow gaps 7 and 12).
+
+**Per-attempt hygiene (security P2 and P3, SpecFlow).**
+
+- **Clear stale staged files.** `rm -f` the full list of fixed `/tmp` staging paths the block
+  copies to (`/tmp/inngest-redis.{conf,service}`, `/tmp/inngest-redis-bootstrap.sh`,
+  `/tmp/vector.toml`, `/tmp/inngest-cutover-flip.{sh,service,timer}`,
+  `/tmp/inngest-server-flip-guard.sh`, `/tmp/cat-inngest-cutover-state.sh`,
+  `/tmp/inngest-luks-cutover.{sh,service,timer}`).
+  - Without this, a failed `docker cp … || true` on attempt N+1 silently reuses attempt N's file.
+  - The threat model relies on `fs.protected_symlinks=1` and `fs.protected_regular=2`, which are
+    Ubuntu 24.04 defaults. `post-boot-health` records both values.
+- **Address the extract container by the ID `docker create` returns**, not by its fixed name, and
+  keep `docker create` fatal (never `|| true`). The pre-clean `docker rm -f
+  soleur-inngest-bootstrap-extract` still clears a name left behind by a SIGKILLed attempt.
+- **Attempt counter that cannot wedge.**
+  `n=$(tr -cd 0-9 < …/attempts 2>/dev/null); n=$(( ${n:-0} + 1 ))`, followed by
+  `printf '%s\n' "$n" > …/attempts || true`. A truncated or garbled counter file must never abort
+  an attempt (T14).
+- **The `/run/soleur-inngest-doppler.ok` sentinel is gone.** The script neither reads nor writes
+  it, because `/run` survives across attempts within a boot. An earlier pass must not admit a later
+  attempt after Doppler scope widened. A static row forbids the path, and the fixture at
+  `cloud-init-inngest-bootstrap.test.sh:1903` is re-pointed.
+
+**Channel re-arm (observability P1).**
+
+- `inngest-bs-token-restage.service` makes one attempt per boot, with no retry. If it failed
+  during a Doppler outage, `/run/inngest-bs-logs-token` is empty and every phone-home row is lost
+  for the rest of the boot.
+- So each attempt starts with:
+
+  ```sh
+  [ -s /run/inngest-bs-logs-token ] || /usr/local/bin/inngest-bs-token-restage.sh || true
+  ```
+
+  That reuses the existing script unchanged.
+- The EXIT trap also sends `soleur-boot-emit provision_attempt_failed error "rc=… attempt=N"` to
+  Sentry. Its DSN is baked into `/etc/default/soleur-sentry-dsn` on the root disk, so a failing
+  host is visible in Sentry even when Better Stack is unreachable. This stage has no alert rule;
+  see Deferrals.
+
+**Host-life identity (observability P1, SpecFlow gap 6).** Every new stage, and the existing
+`bootstrap-done` detail, carries `iid=<cloud-init instance-id>`. `soleur-boot-emit` already
+derives it from `/var/lib/cloud/data/instance-id` (`cloud-init-inngest.yml:405`). Old and new
+hosts share `host_name` during a replace, so the follow-through probe and the runbook key on
+`iid`. A late `bootstrap-done` from a destroyed host can then never read as the new host's.
+
+**Why no two bootstraps can overlap on this host (SpecFlow gap 5, verified).** `ci-deploy.sh`
+runs `inngest-bootstrap.sh` directly (`ci-deploy.sh:3880-3946`), but it runs only on web hosts,
+reached through the `deploy.` webhook that `deploy-inngest-image.yml:54` posts to. The dedicated
+host has no webhook: "The dedicated host has NO /etc/default/webhook-deploy"
+(`cloud-init-inngest.yml` `:1454-1456`). systemd never runs two instances of one unit, so the
+unit, runcmd's single `start --no-block` and the timer serialize onto one job.
+
+**Timer tick during a restart wait (SpecFlow gap 11).** A timer start delivered while the unit
+sits in `auto-restart` merges into that pending job. It does not add a second attempt. T10
+asserts `NRestarts` equals the number of failures. An early attempt caused by the merge would
+be harmless.
+
+**Latch durability (SpecFlow gap 10).** The latch write is followed by `sync -f
+/var/lib/soleur-inngest-provision` (coreutils ≥ 8.24). Even without it, losing the latch to a
+hard reset only re-runs an idempotent bootstrap on the next boot.
+
+**Reboot of a host that never latched (SpecFlow gap 4).** Units a partial bootstrap already
+enabled start at boot before the timer's 90 s re-run. That is exactly today's behavior after a
+partial first-boot failure followed by a reboot (the units persist). The new behavior adds a
+reconciling bootstrap run 90 s later. `inngest-server-flip-guard.sh` still gates the server on the
+flip flag, and the bootstrap's idempotent contract (`inngest-bootstrap.sh:4`, `:103-118`)
+re-installs units. No new state is reachable.
+
+**Arming residual (SpecFlow P1, acknowledged).** The timer is enabled in the last `runcmd` items,
+directly after the last prerequisite the unit needs: `/etc/default/inngest-server`, the deploy user
+and the probe credential. If an earlier `runcmd` item aborts, for example on a LUKS-stage FATAL,
+the unit is never armed. That host stays dark until a replace, **exactly as today**, and the
+aborting item's own phone-home stage says why.
+
+Arming earlier would let the unit run on a later reboot without prerequisites that only `runcmd`
+writes (env files, deploy user). That would turn a loud stage FATAL into an endless retry loop
+that can never succeed. This is recorded as a scoped residual, not a regression.
+
+**Doppler read count (security P3, corrected).** A failed-bootstrap attempt makes about 6 Doppler
+reads:
+
+- the isolation check;
+- `DIAG_BOOT`;
+- one `doppler secrets download` inside each `inngest-redact.sh` call (`zot_tail`, `boot_tail`,
+  `unit_journal`, `jl`).
+
+A zot-miss attempt makes about 2. Redaction falls back to pattern-only matching when Doppler is
+down. That is pre-existing behavior; the retry only makes it more frequent.
 
 ## Options Evaluated
 
@@ -481,7 +703,7 @@ The attempt fails and retries (T13).
 |---|---|---|
 | **A. Unit only.** `runcmd` enables a boot timer (no `--now`) and starts the unit `--no-block`: one execution context | **Chosen** | One code path and one environment. Both retry and reboot are covered |
 | B. `runcmd` runs the script synchronously for attempt 1, with a unit and timer for later runs | Rejected | Two environments (the shared shell vs `EnvironmentFile`) reproduce the #6985 class by construction. A concurrent timer tick would need `flock` |
-| C. git-data shape: `StartLimitBurst=5` window, `OnFailure=` reporter, 15-min standing timer | Rejected | With a 30-min timeout, a window at least as long as the slow ladder is ≥ 2.5 h, so a 20-min zot blip would retry only after it closes. `RestartSec=120` recovers within about 2 min of the cause clearing |
+| C. git-data shape: `StartLimitBurst=5` window, `OnFailure=` reporter, 15-min standing timer | Rejected | With a 45-min timeout, a window at least as long as the slow ladder is ≥ 3.8 h, so a 20-min zot blip would retry only after it closes. `RestartSec=120` recovers within about 2 min of the cause clearing |
 | D. `cloud-init clean` and re-run on reboot | Rejected | ADR-115's three verified failure modes |
 | E. Reboot for inngest | Rejected | Rejected by ADR-115; `runcmd` would not re-run anyway |
 | F. Bake the retry into the bootstrap image | Impossible | The image is the thing being fetched |
@@ -521,13 +743,26 @@ The attempt fails and retries (T13).
   `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh`, and
   `tests/scripts/test-sentry-alert-live-fidelity.sh`. Any "is the host done?" reader must key on
   `bootstrap-done`, never on cloud-init completion.
-- 1.4 **`TimeoutStartSec` derivation.**
-  - Read the historical deltas from Better Stack with a read-only `BETTERSTACK_QUERY_*` query,
-    the same credentials `inngest-private-nic-8539.sh` uses: `pre-zot-pull` → `inngest_zot`, and
-    `pre-bootstrap-run` → `bootstrap-exit-0`.
-  - Set `TimeoutStartSec` to at least 3× the observed maximum attempt, with a floor of 20 min.
-  - Record the query and the numbers.
-  - If the credentials are not available locally, use 30 min and say so.
+- 1.4 **`TimeoutStartSec` derivation.** This was deepened by the architecture review (P2): derive
+  the value from the **bounds the steps themselves carry**, not from healthy history. A value fitted
+  to history can land the kill inside the post-restart tail, which is exactly the window that
+  collides with the flip.
+  - Sum the bounded steps:
+    - docker-readiness wait (30 × 2 s);
+    - zot login (`timeout 60`);
+    - 3 pulls (`timeout 180` each, plus 2 × 5 s sleeps);
+    - the Vector download (4 × 180 s plus sleeps, about 12.5 min, per the architecture review's
+      reading of `inngest-bootstrap.sh`);
+    - the FSM quiesce wait (300 s);
+    - the post-boot `sleep 8`.
+  - Then add the steps that have **no** bound: the inngest binary `curl` (`inngest-bootstrap.sh`
+    `:150`) and the apt path in `inngest-redis-bootstrap.sh`. Record each as unbounded.
+  - Set `TimeoutStartSec` to the bounded sum plus a margin of at least 10 min for the unbounded
+    steps. Expect about 45 min. Cross-check against historical `pre-bootstrap-run` →
+    `bootstrap-exit-0` deltas read from Better Stack (read-only `BETTERSTACK_QUERY_*`), if the
+    credentials are available locally.
+  - Record the arithmetic in the PR body and in the unit's comment.
+  - Replace every "30min" in this plan's unit sketch with the derived value.
 
 ### Phase 2: template change (`cloud-init-inngest.yml`)
 
@@ -581,36 +816,71 @@ The attempt fails and retries (T13).
   run can see: where the pull lives, arming order and back-edges, and directive values.
 - 4.2 **`systemd-analyze verify`** over the extracted `.service` and `.timer`, following the Y1
   precedent. Skip only when `systemd-analyze` is absent.
-- 4.3 **One runtime harness, two tiers.** Both tiers use the same pinned Ubuntu 24.04 image (the
-  `git-data-runcmd-rehearsal.test.sh` digest), the same stubs and the **rendered** script, run
-  byte-for-byte. Guards 2, 3, 4 and 7 are enforced here.
-  - Stubs, each at the absolute path or PATH position the script calls:
-    - `docker` stub, whose login, pull, create, cp and inspect behavior is scripted per scenario;
+- 4.3 **One runtime harness file, two tiers.** Both tiers run the **Terraform-rendered, stripped**
+  script, the same bytes that reach the host. Guards 2, 3, 4 and 7 are enforced here.
+  - Stubs, each placed at the absolute path or PATH position the script calls:
+    - `docker` stub, normalizing `image pull` and `--config` exactly like the G4 stub, with
+      login, pull, create, cp and inspect outcomes scripted per scenario;
     - `doppler` stub, which records the environment it saw;
-    - phone-home and `soleur-boot-emit` stubs, which append to a capture file;
-    - a fake `inngest-bootstrap.sh` extracted by the `docker cp` stub, with a scripted return
-      code.
+    - `timeout`, `sleep`, `systemctl` and `sync` stubs;
+    - phone-home, `soleur-boot-emit` and `inngest-redact.sh` stubs, which append to a single call
+      log;
+    - a fake `inngest-bootstrap.sh`, extracted by the `docker cp` stub, with a scripted return
+      code and sleep.
   - **No test seam is added to the production script.**
-  - **Tier A, script level (always runs where docker exists).**
-    - Run T1–T5, T7 and T8.
-    - Every Tier A run executes `sh -u <rendered script>` with an environment built **only** from
-      the `/etc/default/inngest-doppler` fixture keys (the `:753` format) plus the unit's
-      `Environment=` lines, under `env -i`.
-    - Any read of a variable no source sets aborts the scenario. This is Guard 7, proven by
-      execution rather than a static parser.
-  - **Tier B, systemd 255 as PID 1.**
-    - Boot the same image `--privileged` with systemd 255 installed from the image's apt archive.
-    - Install the rendered `.service`, `.timer` and script plus the stubs, and a test-only drop-in
-      that sets `ExecStart=/bin/sh -u /usr/local/bin/soleur-inngest-provision`.
-    - Assert T6 and T9–T12 on real systemd.
-    - Allowed skips, each printed with a reason: an apt-archive fault takes `arm_skip` per the
-      ADR-188 contract, and an unbootable systemd container (for example, no cgroup delegation)
-      takes a named `_skip`.
-    - **The PR body must show at least one green Tier B run**, from CI or a local run on the
-      branch, with its log line.
-    - There is no repo precedent for systemd-as-PID-1 in a container, so Tier B is new
-      infrastructure. Keeping Tier A independent means an apt or cgroup fault cannot erase all
-      runtime coverage (plan review consolidated two harnesses into one file with two tiers).
+  - **Tier A: fixture root, no docker, and it never skips.** It extends the proven Guard 4
+    machinery in `cloud-init-inngest-bootstrap.test.sh` (the `G4_FX` path-rewrite table
+    `/usr/local/bin/`, `/etc/default/`, `/var/log/`, `/run/`, extended with `/var/lib/`, `/tmp/`
+    and `/root/`).
+    - Slice the script from the rendered `write_files` entry, **not** from `runcmd`.
+    - **Every rewrite pair must match at least once.** A pair that matches nothing is an
+      instrument fault, not a pass.
+    - Run each scenario as `env -i PATH=<fx>/bin:… "$(command -v dash)" -u <fx>/script` (the G4
+      invocation plus `-u`). The environment is built **only** by `set -a`-sourcing a fixture
+      produced by **executing the rendered `:753` `printf`** into the path named by the unit's
+      `EnvironmentFile=`, plus the unit's `Environment=` lines. The fixture is never hand-written
+      (test-design P1-3).
+    - Scenarios: T1–T5, T7, T8, T14.
+    - **Instrument-fault discipline (test-design P1-1).**
+      - Every scenario asserts its **exact** return code.
+      - stderr must not contain `parameter not set`.
+      - A mutation counts as caught only when the scenario fails on its **expected** rc or an
+        expected-emit mismatch. rc 2 or rc 127 is an instrument fault and fails the suite loudly.
+      - A **control row** runs the pristine render first: all scenarios must pass, and every
+        must-PASS row must pass.
+  - **Tier B: systemd 255 as PID 1 in a container.**
+    - Pinned image: `ubuntu:24.04`, using the digest from `git-data-runcmd-rehearsal.test.sh`.
+      Install systemd from its apt archive.
+    - Boot command:
+
+      ```sh
+      docker run -d --privileged --cgroupns=private --cgroup-parent=docker.slice \
+        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+        -v /sys/fs/cgroup:/sys/fs/cgroup:rw <img> /lib/systemd/systemd
+      ```
+
+    - Mask `systemd-resolved` and `getty@.service`, then poll `systemctl is-system-running` until
+      it reads `running` or `degraded`, with a 60 s bound.
+    - Install the rendered `.service`, `.timer` and script, the stubs, the executed-`:753` fixture,
+      and test-only drop-ins:
+      - `ExecStart=/bin/sh -u …`;
+      - short `RestartSec=`, `TimeoutStartSec=` and `OnBootSec=` values per scenario.
+    - Assert T6, T9–T12 and T15 **in one logged run**.
+    - Allowed skips, each printed with a reason: docker absent, an ADR-188 apt-archive
+      `arm_skip`, or an unbootable systemd container.
+    - **The PR body shows one green Tier B run of all six scenarios**, from CI or a local run on
+      the branch, with its log excerpt.
+    - Every Tier B RED row also has a static or Tier A detector (Guard Contract), so a skipped
+      Tier B loses no RED row.
+    - **Precedent:** none in the repo for systemd as PID 1 in a container. This is novel
+      infrastructure, flagged for review scrutiny (deepen-plan 4.4). The flags come from
+      actions/runner-images discussion #10075.
+  - **Harness sources:**
+    - systemd.timer(5): "If a timer configured with OnBootSec= … is already in the past when the
+      timer unit is activated, it will immediately elapse".
+    - systemd.service(5): `TimeoutStartSec` expiry is a failure that `Restart=on-failure` restarts.
+    - systemd.unit(5): no `[Install]` section means no automatic ordering against
+      `multi-user.target`.
 - 4.4 Keep the local systemd 261 measurement in Research Insights as supporting evidence only.
   Tier B on 255 is the gate.
 - 4.5 **Ratchet.** Bump `BASELINE_DECLARED_PROBES` from 34 to 35 in
@@ -633,7 +903,9 @@ The attempt fails and retries (T13).
   premise now applies only to a host that has provisioned. The note must not read as extending
   ADR-115's acceptance, which covers the registry host only, to inngest. Reboot authority is
   still not granted.
-- 5.3 Add a dated note to ADR-096's #8036-1d amendment. For the inngest host, the template now
+- 5.3 Add a dated note to ADR-096's #8036-1d amendment, and a dated note to ADR-100 (new actor
+  on the sole scheduler; FSM quiesce; `op=resume` after `bootstrap-done`). Cite ADR-142 in
+  ADR-256. For the inngest host, the template now
   makes a zot miss end the **attempt**, and a live host keeps the old behavior until its next
   replace.
 - 5.4 C4 `model.c4`: rewrite the `inngest -> sentry` edge prose (`:775`).
@@ -646,13 +918,21 @@ The attempt fails and retries (T13).
 
 ### Phase 6: runbooks and follow-through enrollment
 
-- 6.1 `knowledge-base/engineering/operations/runbooks/inngest-server.md`: add a "Provision unit
-  (#8562)" section. It covers:
+- 6.1 `knowledge-base/engineering/operations/runbooks/inngest-server.md`: add a section headed exactly
+  `## Provision unit (#8562)`. It covers:
   - Stage meanings. A page carrying `attempt=N` is one missed attempt; the unit retries every
     120 s and the email repeats at most every 23 min while the host stays dark.
-  - **After `inngest_pull_fatal`, wait for `bootstrap-done` before deciding to replace**, because
-    the host may recover on its own.
-  - Run `op=resume` after `bootstrap-done`.
+  - **After `inngest_pull_fatal`, wait for `bootstrap-done` (same `iid`) before deciding to
+    replace**, because the host may recover on its own. Key every read on `iid`: an old host's
+    late row must not be read as the new host's.
+  - Run `op=resume` only after `bootstrap-done` for the new `iid`. The unit also quiesces the flip
+    timers before every bootstrap run.
+  - A repeating `provision-fsm-busy` means a flip or LUKS-cutover step is wedged. Read the FSM
+    state with the existing read-only `scripts/inngest-host-state.sh` (locally, or via the
+    `inngest-host-state.yml` one-tap wrapper, #8449 UC2), which reads journald → Vector → Better
+    Stack. Do not replace blindly.
+  - Replace triggers: `isolation-check-FAILED` on every attempt (credential scope, which retries
+    cannot fix), or no `bootstrap-done` more than 2 h after the first attempt.
   - The change reaches a host only at its next replace.
   - A provisioned host's reboot does not re-provision it.
   - **No SSH, latch-delete or `systemctl` step.** Re-provisioning is a replace.
@@ -661,13 +941,16 @@ The attempt fails and retries (T13).
   ends the boot" callouts. Only the inngest half changes, stated as "template retries; the live
   host keeps the old behavior until its next replace."
 - 6.3 Add `scripts/followthroughs/inngest-provision-unit-8562.sh`, modeled on
-  `inngest-private-nic-8539.sh`: field-isolated decode, newest boot of
-  `host_name=soleur-inngest`.
-  - It prints exactly one `verdict=PASS|FAIL|TRANSIENT` line.
-  - PASS (exit 0): the newest boot has `provision-attempt-start` and `bootstrap-done`.
-  - FAIL (exit 1): `provision-attempt-start` rows but no `bootstrap-done` for more than 2 h after
-    the first attempt.
-  - TRANSIENT (exit 2): no `provision-attempt-start` yet, meaning not delivered.
+  `inngest-private-nic-8539.sh`: field-isolated decode of the rows for `host_name=soleur-inngest`,
+  anchored on the newest `provision-unit-armed` row's `iid` (see the Probe design note under
+  Observability).
+  - It prints exactly one `verdict=…` line **to stdout**.
+  - PASS (exit 0): a `bootstrap-done` with the same `iid` exists after the armed row.
+  - FAIL (exit 1), either:
+    - no `provision-attempt-start` for that `iid` within 10 min of the armed row; or
+    - attempts with no `bootstrap-done` more than 2 h after the first attempt.
+  - `TRANSIENT reason=not-delivered` (exit 2): no armed row in the 30-day window.
+  - `TRANSIENT reason=probe-fault` (exit 3): the query failed.
   - Secrets: `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`, which the sweeper already wires, so no
     workflow edit is needed.
   - Fixture-test it the way its 8539 twin is tested.
@@ -682,8 +965,9 @@ The attempt fails and retries (T13).
 - 7.2 **The squash-merge commit body includes a line that is exactly
   `[skip-web-platform-apply]`**, passed with `gh pr merge --squash --admin --body-file <file>`.
   After merge, check that the push run's `apply` job reads `skipped`.
-- 7.3 File the forced-race rehearsal follow-up issue, see Deferrals. Comment the SOLEUR-DEBT note
-  on #6780.
+- 7.3 File the three follow-up issues from Deferrals: the forced-race rehearsal, the Sentry alert
+  for non-pull provision failures, and the `op=resume` `bootstrap-done` G-row. Comment the
+  SOLEUR-DEBT and Vector notes on #6780.
 
 ## Files to Edit
 
@@ -696,6 +980,8 @@ The attempt fails and retries (T13).
   `inngest-nic-wait.test.sh`, `journald-config.test.sh`: anchors only, and only if red.
 - `knowledge-base/engineering/architecture/decisions/ADR-115-dedicated-host-private-nic-boot-convergence.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md`
+  (dated note, deepen-plan)
 - `knowledge-base/engineering/architecture/diagrams/model.c4`, plus a regenerated `model.likec4.json`
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md`
 - `knowledge-base/engineering/operations/runbooks/zot-registry-revert.md`
@@ -728,6 +1014,8 @@ stays open.
 | Carrier-side `DOPPLER_PROJECT` value check (SOLEUR-DEBT at `inngest-bootstrap.sh:58`) | Any change to a carrier auto-mints a tag (#9079) | A comment on **#6780** | The next PR that changes a carrier anyway |
 | Shipping the unit's journald rows via Vector | A `vector.toml` edit is a mint | A comment on **#6780**, same batching reason | Same trigger |
 | #6985 (bare-sourced Doppler sites on the web host) | Different host and file. The fix activates zot selection on web | #6985 (open) | Independently |
+| A Sentry issue alert for non-pull provision failures (`provision_attempt_failed`, isolation FATAL, bootstrap failure, FSM busy) | Any `apps/web-platform/infra/sentry/**` edit fires `apply-sentry-infra.yml` on merge, which is a production write. Today a bootstrap failure also pages nobody, so the gap predates this PR; retries make it longer-lived | **New issue** filed at ship (Phase 7.3) | The next Sentry-rules PR, or the first `provision_attempt_failed` event in Sentry |
+| An `op=resume` G-row that refuses unless the new `iid` has emitted `bootstrap-done` (architecture P2, defense in depth behind the unit-side FSM quiesce) | This changes `scripts/cutover-inngest.sh` gate semantics, a separately reviewed gate surface. The unit-side quiesce already prevents the collision | **New issue** filed at ship | The first `aborted` flip after a replace, or the next cutover-gate PR |
 
 ## User-Brand Impact
 
@@ -752,60 +1040,145 @@ scheduler. No per-PR CPO sign-off.
 
 ## Observability
 
+Layers cited per `hr-observability-layer-citation`:
+
+- **Sentry issue alert** `sentry_alert.zot_mirror_fallback_rate`: pages on the pull miss.
+- **Sentry event stream** (store API via `soleur-boot-emit`): visibility only, with no alert rule
+  for non-pull provision failures (Deferrals).
+- **Better Stack Logs** source (the direct-curl phone-home): the per-stage trail.
+- **Follow-through sweeper** (`scripts/sweep-followthroughs.sh` probe): delivery verdict.
+
+The external heartbeat `betteruptime_heartbeat.inngest_prd` is **not** a layer here. It is
+`paused = true` (`inngest.tf`, measured 2026-09-28), so it pages nobody.
+
 ```yaml
 liveness_signal:
   what: >-
-    Boot-stage events from host_name=soleur-inngest. On the Better Stack boot-trace source
-    (inngest-boot-phone-home.sh, direct curl): provision-attempt-start attempt=N, bootstrap-done,
-    post-boot-health. On Sentry (store API via soleur-boot-emit): inngest_zot (info) and
-    inngest_pull_fatal (fatal, every missed attempt).
+    Boot-stage events from host_name=soleur-inngest, keyed by iid=<cloud-init instance-id>. On the
+    Better Stack Logs source (inngest-boot-phone-home.sh, direct curl): provision-unit-armed,
+    provision-attempt-start attempt=N, bootstrap-done, post-boot-health. On Sentry (store API via
+    soleur-boot-emit): inngest_zot (info), inngest_pull_fatal (fatal, every missed attempt) and
+    provision_attempt_failed (error, every failed attempt).
   cadence: per provision attempt (one on a healthy boot; at most one per RestartSec=120 s while failing)
-  alert_target: Sentry rule zot-mirror-fallback-rate (email to issue owners, frequency_minutes=23) on stage=inngest_pull_fatal
+  alert_target: Sentry issue alert zot-mirror-fallback-rate (email to issue owners, frequency_minutes=23) on stage=inngest_pull_fatal
   configured_in: apps/web-platform/infra/sentry/issue-alerts.tf (resource sentry_alert.zot_mirror_fallback_rate, unchanged)
 
 error_reporting:
   destination: >-
-    Sentry web-platform project via the baked DSN in /etc/default/soleur-sentry-dsn
-    (soleur-boot-emit), and Better Stack Logs via /run/inngest-bs-logs-token (inngest-boot-phone-home.sh).
-    Vector is not a channel for this unit: it is installed by the bootstrap this unit runs.
+    Sentry web-platform project via the baked DSN in /etc/default/soleur-sentry-dsn (soleur-boot-emit,
+    root disk, survives a Doppler outage), and Better Stack Logs via /run/inngest-bs-logs-token
+    (inngest-boot-phone-home.sh), re-staged at each attempt start when empty. Vector is not a
+    channel for this unit: it is installed by the bootstrap this unit runs.
   fail_loud: >-
-    stage=inngest_pull_fatal at level fatal with detail "rc=<n> attempt=<N>"; phone-home
-    provision-attempt-exit-<rc> (EXIT trap, including a TimeoutStartSec SIGTERM via the TERM trap)
-    for any arm without a named emit; bootstrap-exit-<rc> with a redacted tail plus
-    bootstrap-failure-journal for a failed bootstrap.
+    stage=inngest_pull_fatal at level fatal with detail "rc=<n> attempt=<N>"; the EXIT trap emits
+    provision-attempt-exit-<rc> (phone-home) and provision_attempt_failed (Sentry) for every failed
+    attempt, including a TimeoutStartSec kill (TERM trap, child run as `& wait`); bootstrap-exit-<rc>
+    with a redacted tail plus bootstrap-failure-journal for a failed bootstrap.
 
 failure_modes:
   - mode: zot pull misses on an attempt (late NIC, zot down, transient docker error)
     detection: inngest_pull_fatal attempt=N on both channels, every missed attempt
-    alert_route: Sentry zot-mirror-fallback-rate email (throttled 23 min, one grouped issue)
+    alert_route: Sentry issue alert zot-mirror-fallback-rate email (throttled 23 min, one grouped issue)
   - mode: attempt recovers after one or more misses
-    detection: bootstrap-done (phone-home) following an inngest_pull_fatal from the same host
+    detection: bootstrap-done iid=<same> following an inngest_pull_fatal from the same iid
     alert_route: none (informational; the runbook reads it as recovery)
   - mode: isolation self-check fails (over-scoped or unreachable Doppler)
-    detection: isolation-check-FAILED and provision-attempt-exit-<rc> phone-home every attempt
-    alert_route: Better Stack boot-trace source; no pull happens so no Sentry page (unchanged from today)
+    detection: isolation-check-FAILED (phone-home) and provision_attempt_failed (Sentry event) every attempt
+    alert_route: no page (Sentry event stream + Better Stack Logs only) — pre-existing gap, Sentry rule deferred (Deferrals)
   - mode: bootstrap script fails after a successful pull
-    detection: bootstrap-exit-<rc> plus bootstrap-failure-journal (redacted) every attempt
-    alert_route: Better Stack boot-trace source (unchanged from today)
-  - mode: unit never starts (arming item fails or timer not enabled)
-    detection: provision-unit-armed carries timer=<is-enabled output>; no provision-attempt-start after it
-    alert_route: follow-through probe inngest-provision-unit-8562.sh reads FAIL or TRANSIENT on the daily sweeper
+    detection: bootstrap-exit-<rc> plus bootstrap-failure-journal (phone-home), provision_attempt_failed (Sentry) every attempt
+    alert_route: no page — pre-existing gap (today this also pages nobody), Sentry rule deferred (Deferrals)
+  - mode: cutover FSM busy (a flip or LUKS-cutover step still activating past the 300 s quiesce bound)
+    detection: provision-fsm-busy (phone-home) and provision_attempt_failed (Sentry); the attempt retries
+    alert_route: no page; the runbook reads a repeating provision-fsm-busy as "an FSM step is wedged"
+  - mode: Better Stack channel dead for the boot (bs-token restage failed during a Doppler outage)
+    detection: per-attempt re-stage; while still empty, Sentry provision_attempt_failed carries the attempt
+    alert_route: Sentry event stream (baked DSN, no Doppler dependency)
+  - mode: unit never armed (an earlier runcmd item aborted) or armed but never started
+    detection: no provision-unit-armed for the new iid (the aborting item's own stage names why), or provision-unit-armed with no provision-attempt-start within 10 min
+    alert_route: follow-through probe inngest-provision-unit-8562.sh reads FAIL on the daily sweeper
   - mode: an attempt hangs
-    detection: TimeoutStartSec SIGTERM -> TERM trap -> EXIT trap emits provision-attempt-exit-143; next attempt-start carries N+1
-    alert_route: Better Stack boot-trace source
+    detection: TimeoutStartSec SIGTERM -> TERM trap kills the child -> EXIT trap emits provision-attempt-exit-143 within seconds; the next attempt-start carries N+1 (a shutdown-time emit may not leave the host)
+    alert_route: Sentry event stream (provision_attempt_failed) + Better Stack Logs
+  - mode: latched host whose services later break
+    detection: none new (the Condition skip emits nothing); pre-existing — the external heartbeat that would catch it is paused=true
+    alert_route: out of scope for #8562; pre-existing gap, not widened by this change
 
 logs:
   where: >-
-    Better Stack boot-trace source (phone-home rows with redacted tails). Host-local
+    Better Stack Logs source (phone-home rows with redacted tails). Host-local
     /var/log/inngest-zot-pull.log and /var/log/inngest-bootstrap.log (0600), whose redacted tails
-    ship in those rows. The unit's journald rows are host-local by design.
+    ship in those rows. The unit's journald rows are host-local by design (below Vector's CRIT floor).
   retention: Better Stack source retention per the source plan; host-local files live until the next replace
 
 discoverability_test:
   command: bash scripts/followthroughs/inngest-provision-unit-8562.sh
-  expected_output: "verdict=PASS or verdict=TRANSIENT"
-  credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD (read-only Better Stack query) — the boot-stage rows exist only in the Better Stack boot-trace source; no unauthenticated endpoint exposes a no-SSH host's boot stages"
+  expected_output: "verdict=PASS or verdict=TRANSIENT reason=not-delivered"
+  credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD (read-only Better Stack query) — the boot-stage rows exist only in the Better Stack Logs source; no unauthenticated endpoint exposes a no-SSH host's boot stages"
 ```
+
+**Probe design (deepen-plan, observability P1).** Newest-boot grouping cannot work. A latched
+host that reboots emits no `provision-attempt-start`, so it would read TRANSIENT forever. And the
+phone-home carries no boot id. So the probe anchors on host life instead:
+
+- It selects the newest `provision-unit-armed` row. That row is emitted once per host life, from
+  `runcmd`, and carries `iid`. It takes that row's `iid`.
+- **PASS:** a `bootstrap-done` with the same `iid` exists after the armed row.
+- **FAIL:** no `provision-attempt-start` for that `iid` within 10 min of the armed row, **or**
+  attempts for that `iid` with no `bootstrap-done` more than 2 h after the first attempt.
+- **TRANSIENT reason=not-delivered:** no `provision-unit-armed` row in the 30-day window.
+- **TRANSIENT reason=probe-fault:** the Better Stack query failed. It is a distinct token, so a bad
+  credential can never match `expected_output`.
+- The single `verdict=…` line goes to **stdout**, and detail goes to stderr. Its 8539 twin prints
+  verdicts to stderr, and Check 10 only matches stdout.
+- Field isolation and `fromjson?` decoding mirror `inngest-private-nic-8539.sh`.
+
+## Downtime & Cutover
+
+(Deepen-plan gate 4.55: at delivery, this change is a `must be replaced` on `hcloud_server.inngest`.)
+
+**Offline-inducing operation.** The next `apply_target=inngest-host-replace` dispatch destroys and
+recreates `hcloud_server.inngest`, followed by a human-approved `cutover-inngest.yml -f op=resume`.
+Affected surface: every scheduled and background job (crons, reminders, agent follow-ups). **This PR
+performs no replace.** Its merge is inert (see Merge-Consequence Analysis). It adds no replace
+event of its own: it rides the next replace that some change requires.
+
+**Zero-downtime paths evaluated. None applies, for a structural reason, not by default.**
+
+| Path | Verdict | Why |
+|---|---|---|
+| Blue-green (birth a second inngest host, drain, cut over, retire the old one) | Not available | ADR-100 enforces **exactly one scheduler by topology**. Two live scheduler hosts double-fire every cron. The cutover FSM and flush latch exist to keep a single owner, so a parallel host is the failure mode, not a mitigation. |
+| Rolling | Not available | There is one host. |
+| In-place redelivery (apply the new unit to the running host without a replace) | Not available | There is no in-place channel for the dedicated host, tracked in #6780. `hr-prod-host-config-change-immutable-redeploy` makes a replace the delivery path. |
+| State-only re-address (`terraform state mv`) | Not applicable | The resource does change: user_data is ForceNew. |
+
+**Residual downtime is accepted, with justification and a bounded window.**
+
+- **Measured window of the last delivery (2026-09-27):** the `inngest_host_replace` job ran
+  14:55:48Z–14:57:36Z (run `36327637204`), and the following `op=resume` run `36327875467` ran
+  14:59:05Z–15:29:49Z, including its approval gate. The scheduler was therefore dark for about 34
+  minutes.
+- **This change shortens the worst case.** Today a missed first-boot pull extends the window
+  until a second replace (the 2026-09-22 incident cost about 59 min). After delivery, the unit
+  retries the pull every 120 s on the same host.
+- **Operator sign-off already exists** on this path. The replace is an operator-approved dispatch,
+  and `op=resume` holds in the `inngest-cutover` environment gate until a human approves it.
+- **Timing guidance for the follow-through.**
+  - Deliver with the next replace that another change needs, in a low-traffic window.
+  - Run `op=resume` only after the new boot emits `bootstrap-done`.
+  - **Rollback** is a revert plus another replace and `op=resume`, which costs the same bounded
+    window.
+
+**Per-stage verification (delivery day, all read-only and SSH-free).**
+
+1. The replace job is green.
+2. Better Stack shows `provision-unit-armed`, then `provision-attempt-start attempt=1`, then
+   `bootstrap-done` and `post-boot-health` with `svc=[active,…]`.
+3. `op=resume` completes.
+4. `inngest-provision-unit-8562.sh` reads `verdict=PASS`.
+
+Any `inngest_pull_fatal attempt=N` in step 2 means wait for `bootstrap-done` rather than replacing
+again (runbook).
 
 ## Infrastructure (IaC)
 
@@ -894,7 +1267,19 @@ exception:
   not granted.
 - **Amend ADR-096** with a dated note on the #8036-1d amendment: for inngest, the template's zot
   miss now ends the attempt, not the boot.
-- **ADR-100** is cited and not amended. Its replace-to-reprovision path is unchanged.
+- **Amend ADR-100** with a dated note (architecture P2). The unit is a new actor that can restart
+  `inngest-redis` and `inngest-server` on the sole scheduler, and it creates an ordering rule:
+  quiesce the flip timers before any bootstrap run, and run `op=resume` only after the new host's
+  `bootstrap-done`. The replace-to-reprovision delivery path itself is unchanged.
+- **Cite ADR-142** (Redis AOF LUKS) in ADR-256. The unit orders `After=inngest-luks-open.service`
+  and deliberately adds **no** mount precondition, so a failed LUKS stage keeps today's
+  SQLite-degraded serving rather than going dark.
+- **ADR-256 records two guarantees** (architecture P3):
+  - **Singleton:** a self-recovered host never starts serving on its own authority. The flip guard
+    refuses to serve a replaced host without a `done-owner` marker until `op=resume` runs.
+  - **AOF safety under a kill:** Redis, the server and the flip each run in their own unit cgroup.
+    `KillMode=control-group` on the provision unit kills only the script and its `systemctl`
+    clients, and killing a client does not cancel the job in PID 1.
 
 ### C4 views
 
@@ -940,7 +1325,8 @@ the guard quantifies over both.
 | 4 | Change `ExecStart=` to `/usr/local/bin/soleur-inngest-provision2`; the `write_files` path stays | RED |
 | 5 | Add a `runcmd` item `docker login "$ZOT_EP" …` after the NIC wait (a login outside the unit) | RED |
 | 6 (harness) | Suite edit: `case_mutate` writes the mutated render to a file the guard does not read | RED (harness sentinel row) |
-| 7 (must-PASS) | Compliant render with blank lines and an unrelated `write_files` entry before the script | PASS |
+| 7 | Add a second pull spelled `docker image pull "$ZIREF"` (or `docker --config /root/.docker pull`) after the compliant one | RED (the static check normalizes spellings the way the G4 stub does) |
+| 8 (must-PASS) | Compliant render with blank lines and an unrelated `write_files` entry before the script | PASS |
 
 ### Guard 2 — every failure arm retries, no arm latches, and one EXIT trap reports it (runtime + static)
 
@@ -967,7 +1353,9 @@ only B).
 | 6 | Delete `trap 'exit 143' TERM INT` | RED (static row, plus T9 in Tier B) |
 | 7 | Re-add the moved block's own `trap cleanup EXIT` after the combined trap (a second EXIT trap) | RED (static trap count, plus T7: no provision-attempt-exit emit) |
 | 8 | Remove `set +e` from the EXIT trap body and make `docker rm -f` fail inside it | RED (T2: a latched attempt exits 1) |
-| 9 (must-PASS) | Reorder unrelated `[Service]` directives; add a comment line between arms | PASS |
+| 9 | REORDER: install the combined EXIT trap below the zot login (a login failure exits unreported) | RED (static: the trap precedes the first fallible command; T7 variant with login failing) |
+| 10 | REORDER: move the cutover-FSM quiesce below the `inngest-bootstrap.sh` invocation | RED (T4 call-order assertion, plus T15) |
+| 11 (must-PASS) | Reorder unrelated `[Service]` directives; add a comment line between arms | PASS |
 
 ### Guard 3 — latch identity and position
 
@@ -977,7 +1365,7 @@ fail, and the script then ends `exit 0`.
 
 **Assembly.** `ConditionPathExists=` in the unit, every write under `/var/lib/soleur-inngest-provision/`
 in the script, the `boot_rc` check, and the final `exit 0`. The chokepoint is the single latch
-`printf … >` site.
+`: > …/done` site, which lives under the unit's `StateDirectory=` (root disk), so it survives a reboot.
 
 **Mutation matrix:**
 
@@ -988,7 +1376,9 @@ in the script, the `boot_rc` check, and the final `exit 0`. The chokepoint is th
 | 3 | Add a second latch write inside the `boot_rc -ne 0` arm, after the compliant one | RED (static write-site count, plus T4) |
 | 4 | Remove the latch write | RED (static write-site count, plus T2) |
 | 5 | Delete the final `exit 0` and make the last diagnostic fail | RED (T2) |
-| 6 (must-PASS) | Latch written with `touch` instead of `: >` | PASS |
+| 6 | LIFETIME: move the latch to `/run/soleur-inngest-provision/done` in BOTH the Condition and the write (paths stay equal) | RED (static: the latch path must sit under `/var/lib/soleur-inngest-provision/`; T11 latch-present arm after a real T10 success) |
+| 7 | After a compliant first write, add a second one spelled `install -m 0644 /dev/null "$LATCH"` in a failure arm | RED (static write-site census normalizes `: >`, `touch`, `install`, `cp`, `printf … >` and `$VAR` targets) |
+| 8 (must-PASS) | Latch written with `touch` instead of `: >` | PASS |
 
 ### Guard 4 — every Doppler call gets an exported token (the #6985 class)
 
@@ -1010,7 +1400,7 @@ The chokepoint is the unit's environment. The script must not re-source the file
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Delete `EnvironmentFile=/etc/default/inngest-doppler` | RED (static directive row, plus T6 in Tier B) |
-| 2 | Change it to `EnvironmentFile=-/etc/default/inngest-doppler-typo` | RED |
+| 2 | Change it to `EnvironmentFile=-/etc/default/inngest-doppler-typo` | RED (static: exact path, and the `-` prefix is itself forbidden; plus T6) |
 | 3 | Add a second doppler call under `env -i`, after a compliant first | RED |
 | 4 | Remove `HOME=/root` from both the unit and the file write | RED |
 | 5 | `"DOPPLER_PROJECT=soleur-inngest"` → `"DOPPLER_PROJECT=soleur"` in the bootstrap env list | RED |
@@ -1046,7 +1436,7 @@ The chokepoint is the unit's environment. The script must not re-source the file
 ### Guard 6 — bounded rate, unbounded persistence, runcmd-equivalent environment
 
 **Property.** The unit retries with no start limit and never faster than every 60 s. Each attempt
-is time-bounded. The unit has no `[Install]`, the timer re-enters on boot, and no sandboxing
+is time-bounded, and the script refuses to run under xtrace. The unit has no `[Install]`, the timer re-enters on boot, and no sandboxing
 directive changes the environment the moved block ran in.
 
 **Assembly.** The unit's `StartLimitIntervalSec=`, `StartLimitBurst=`, `Restart=`, `RestartSec=`,
@@ -1064,7 +1454,10 @@ covers the absence of `PrivateTmp`, `ProtectSystem`, `ProtectHome`, `NoNewPrivil
 | 4 | Add `[Install] WantedBy=multi-user.target` to the service | RED |
 | 5 | Add `PrivateTmp=yes` | RED |
 | 6 | The timer loses `OnBootSec=` | RED (static directive row, plus T11 in Tier B) |
-| 7 (must-PASS) | `RestartSec=2min` (a unit-suffixed equivalent) | PASS |
+| 7 | Move `StartLimitIntervalSec=0` from `[Unit]` into `[Service]` | RED (the static parser is section-aware: in `[Service]` the key is ignored with a warning) |
+| 8 | Delete the xtrace refusal `case "$-" in *x*) … exit 78` | RED (static presence, plus a Tier A run under `dash -x -u` that must exit 78 before any emit) |
+| 9 | Change `ExecStart=` to `/bin/sh -x /usr/local/bin/soleur-inngest-provision` | RED (static: ExecStart must be the bare script path) |
+| 10 (must-PASS) | `RestartSec=2min` (a unit-suffixed equivalent) | PASS |
 
 ### Guard 7 — no implicit shared-shell state (P8; runtime, by execution)
 
@@ -1073,7 +1466,7 @@ these sources: the script itself, a file the script loads with `.` (`/etc/defaul
 the unit's `Environment=`/`EnvironmentFile=` keys, or a Terraform template variable resolved at
 render. No value may reach it from a `runcmd` item it no longer shares a shell with.
 
-**Assembly.** Every Tier A and Tier B scenario (T1–T13) runs the rendered script under `sh -u`.
+**Assembly.** Every Tier A and Tier B scenario (T1–T12, T14, T15) runs the rendered script under `sh -u`.
 
 - **Tier A** runs it with `env -i` plus only the fixture keys of `/etc/default/inngest-doppler`
   (the `:753` format) and the unit's `Environment=` lines.
@@ -1088,7 +1481,7 @@ with, plus the files it loads.
 This replaced a static free-variable parser, which a line scanner cannot do correctly over dash
 heredocs and quoting (Sharp Edges). The residual is that it covers **exercised paths only**. The
 scenario list is chosen so that every arm runs at least once: miss, recover, isolation FATAL,
-bootstrap fail, stale container, unnamed arm, rc 124, timeout, and `/mnt/data` absent.
+bootstrap fail, stale container, unnamed arm, rc 124, garbled counter, timeout, and FSM busy.
 
 **Mutation matrix:**
 
@@ -1100,7 +1493,28 @@ bootstrap fail, stale container, unnamed arm, rc 124, timeout, and `/mnt/data` a
 | 4 | Remove `DOPPLER_CONFIG_DIR` from the fixture (and the `:753` write) while the script still reads it | RED |
 | 5 (must-PASS) | A `${VAR:-default}` read of an unset name | PASS |
 
-**Anchor (all seven guards).** The guards compare structure, not stored hashes, so no stored value
+### Guard 8 — isolation is re-proven on every attempt (security P2; static + runtime)
+
+**Property.** Every attempt runs the boot-credential isolation check before any `docker pull`, and
+no state that persists across attempts can admit a pull without a fresh check.
+
+**Assembly.** The script's isolation-check site, its first `docker pull` site, and every read or
+write of any path under `/run/`, `/var/lib/soleur-inngest-provision/` or `/tmp/` that could carry
+an isolation verdict between attempts. The chokepoint is the ordering of the check relative to the
+first pull within one script execution. The retired `/run/soleur-inngest-doppler.ok` sentinel is
+the known instance of the forbidden shape.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Replace the isolation check with `test -f /run/soleur-inngest-doppler.ok \|\| exit 1` (the retired sentinel gate) | RED (static: any reference to the retired sentinel path) |
+| 2 | REORDER: move the isolation check below the pull loop | RED (T3: exactly zero pull calls before the FATAL) |
+| 3 | Empty script (the guard's own dispatch: zero isolation sites found) | RED |
+| 4 | After a compliant check, cache its verdict to `/var/lib/soleur-inngest-provision/iso.ok` and skip the check when that file exists | RED (static: a verdict file written or read by the script; Tier A T3 run after a prior passing run in the same fixture must still FATAL) |
+| 5 (must-PASS) | The isolation regex gains a new admitted name appended in its `INNGEST_(…)` group, keeping the `HEARTBEAT_URL)\|BETTERSTACK_LOGS_TOKEN)` anchor | PASS |
+
+**Anchor (all eight guards).** The guards compare structure, not stored hashes, so no stored value
 needs an anchor. The two-ref pin invariant is anchored by an independent consumer,
 `bump-inngest-bootstrap-pin.sh`, which fails closed at the next bump.
 
@@ -1114,20 +1528,25 @@ needs an anchor. The two-ref pin invariant is anchored by an independent consume
 - [ ] `BASELINE_DECLARED_PROBES` in `plugins/soleur/test/preflight-discoverability-test.test.ts`
   equals 35 and carries the PLACEMENT/TRUTH/NO SUBSTITUTE comment for this plan. The G1 test in
   that file is green.
-- [ ] The script contains exactly one `trap … EXIT` (Guard 2 row 7) and a
-  `mountpoint -q /mnt/data` precondition before the bootstrap invocation (T13).
+- [ ] The script contains exactly one `trap … EXIT` (Guard 2 row 7), the xtrace refusal (Guard 6),
+  the cutover-FSM quiesce **before** the bootstrap invocation (Guard 2 REORDER row, T15), and **no**
+  `mountpoint` precondition (withdrawn at deepen-plan; `grep -c 'mountpoint -q /mnt/data'` on the
+  script is 0).
 - [ ] The Terraform-pipeline render (Phase 0.2) is ≤ 32,768 B and starts with `#cloud-config`.
 - [ ] `inngest-userdata-budget.sh` passes, with the measured stored bytes recorded in the PR body.
 - [ ] Every Guard Contract RED row reddens its guard and every must-PASS row passes.
   - The suite prints its row count.
-  - That count equals the matrix total: 7 guards, 46 rows, of which 39 RED and 7 must-PASS.
+  - That count equals the matrix total: 8 guards, 59 rows, of which 51 RED and 8 must-PASS.
+  - The suite reports rows **by ID** (`G<n>-r<m>`), counts only rows it actually **executed**,
+    and in CI fails if any row did not execute. Tier B rows execute through their static or Tier A
+    detector when Tier B is skipped.
   - This total was derived by an awk count over `## Guard Contract` at plan time. Re-derive it
     the same way if a row changes.
-- [ ] Tier A scenarios T1–T5, T7, T8 and T13 pass. Each runs the rendered script byte-for-byte
-  under `sh -u` with `env -i` plus the fixture keys.
-- [ ] Tier B scenarios T6 and T9–T12 pass on systemd 255 as PID 1.
-  - The PR body shows at least one green Tier B run on this branch (CI or local) with its log
-    line.
+- [ ] Tier A scenarios C0, T1–T5, T7, T8, T14, T16 and T17 pass (Tier A never skips). Each runs the Terraform-rendered script, path-rewritten through the G4
+  table (every pair asserted to match), under `dash -u` with `env -i` plus the executed-`:753` fixture.
+- [ ] Tier B scenarios T6, T9–T12 and T15 pass on systemd 255 as PID 1, all six in one logged run.
+  - The PR body shows one green Tier B run of all six scenarios on this branch (CI or local),
+    with its log excerpt.
   - The only allowed skips are named: docker absent, an ADR-188 apt-archive `arm_skip`, or an
     unbootable systemd container. The PR body names any arm that skipped.
 - [ ] `systemd-analyze verify` is clean over the extracted `.service` and `.timer`.
@@ -1154,7 +1573,7 @@ needs an anchor. The two-ref pin invariant is anchored by an independent consume
   - `model.c4`'s `inngest -> sentry` prose no longer says "ENDS the boot".
   - `model.likec4.json` is regenerated.
   - The C4 syntax, render and count-parity tests are green.
-- [ ] The runbook section exists. `grep -nE 'ssh |rm .*soleur-inngest-provision/done|systemctl (restart|start) soleur-inngest-provision' knowledge-base/engineering/operations/runbooks/inngest-server.md` returns nothing.
+- [ ] The runbook section exists: `grep -c '^## Provision unit (#8562)' knowledge-base/engineering/operations/runbooks/inngest-server.md` prints `1`, which makes the negative grep below non-vacuous. Then `grep -nE 'ssh |rm .*soleur-inngest-provision/done|systemctl (restart|start) soleur-inngest-provision' knowledge-base/engineering/operations/runbooks/inngest-server.md` returns nothing.
 - [ ] `scripts/followthroughs/inngest-provision-unit-8562.sh` prints exactly one
   `verdict=` line, exits 0/1/2 per its documented verdicts, and is fixture-tested like its 8539
   twin.
@@ -1167,7 +1586,8 @@ needs an anchor. The two-ref pin invariant is anchored by an independent consume
   run, or the run's summary reads `noop`.
 - [ ] No `registry-host-replace-dispatch.yml` run exists on the merge SHA.
 - [ ] #8562 carries the follow-through directive and the `follow-through` label.
-- [ ] The rehearsal follow-up issue exists.
+- [ ] The three follow-up issues exist (rehearsal, Sentry non-pull provision alert, `op=resume`
+  `bootstrap-done` G-row), each with a re-evaluation trigger.
 - [ ] #6780 carries the SOLEUR-DEBT and Vector notes.
 
 ### Post-delivery (follow-through, not this PR)
@@ -1238,7 +1658,8 @@ flagged.
 
 **Applied (mechanical):**
 
-- Kieran 1: guard row totals are derived by count (46 rows: 39 RED, 7 must-PASS).
+- Kieran 1: guard row totals are derived by count (46 rows at plan review; 59 rows, 51 RED, 8
+  must-PASS after deepen-plan).
 - Kieran 2: one combined EXIT trap, the moved `trap` lines deleted, `set +e` in the trap body
   (measured in dash).
 - Kieran 3: Guard 7 source set, recast as a runtime `sh -u` guard.
@@ -1259,7 +1680,9 @@ flagged.
   depend on it.
 - DHH 4 / simplicity: the power-of-two page decay is cut.
 - Kieran 7: timing is driven through a `timeout` stub and unit drop-ins.
-- Kieran 8: the `/mnt/data` mount precondition and T13.
+- Kieran 8: the `/mnt/data` mount precondition and T13. **Withdrawn at deepen-plan** (architecture
+  P2): it would turn today's degraded-but-serving first boot into a dark retry loop; the existing
+  Redis mount and mapper-identity guards already protect the AOF.
 - Kieran 9: rate figures account for how long a failed attempt takes.
 
 **Declined, with reasons (persisted to `decision-challenges.md`):**
@@ -1279,63 +1702,86 @@ flagged.
 
 ## Test Scenarios
 
-### Tier A (container, script level, `sh -u`, `env -i` + fixture keys)
+Every scenario asserts an **exact** return code and an ordered emit sequence. It fails on any
+`parameter not set` in stderr, and treats rc 2 or rc 127 as an instrument fault (Phase 4.3).
+Timing is driven only by stubs and unit drop-ins in the test fixture or container, never by a
+seam in the production script.
 
-The rendered script runs byte-for-byte in each scenario. Timing is driven only by stubs and
-drop-ins that live in the test container, never by a seam in the production script:
+### Tier A (fixture root, `dash -u`, `env -i` + executed-`:753` fixture; never skips)
 
-- a `timeout` stub placed ahead of coreutils on PATH, which returns 124 on demand;
-- a Tier B unit drop-in that overrides `TimeoutStartSec=`.
+- **C0, control.** The pristine render runs every scenario below green before any mutation is
+  applied.
+- **T1, miss.** The pull stub returns rc 1 on all 3 tries.
+  - Exit is **1**, and there is no latch.
+  - **No** `docker create`/`cp` is recorded after the miss.
+  - `inngest_pull_fatal … attempt=1` is emitted on both channels and is the **last** named-stage
+    emit before `provision-attempt-exit-1`.
+- **T2, recover.** Attempt 2: the pull returns 0 and the bootstrap returns 0.
+  - Exit is **0**, the empty latch exists, and the counter reads 2.
+  - `bootstrap-done iid=…` is emitted after attempt 1's `inngest_pull_fatal`.
+  - No `provision-attempt-exit` is emitted.
+- **T3, isolation FATAL.** The doppler stub lists a foreign name.
+  - Exit is **1**, and `isolation-check-FAILED` is emitted.
+  - **Zero** `docker pull` calls are recorded, and there is no latch.
+- **T4, bootstrap fails.** The pull returns 0 and the bootstrap returns 1.
+  - Exit is **1**, with `bootstrap-exit-1` then `bootstrap-failure-journal` emitted, and there is
+    no latch.
+  - The `systemctl stop inngest-cutover-flip.timer inngest-luks-cutover.timer` stub call is
+    recorded **before** the bootstrap invocation.
+- **T5, stale container.** Create returns a new ID after the stale-name pre-clean.
+  - `rm -f soleur-inngest-bootstrap-extract` precedes `create`, and every `cp` addresses the
+    **returned ID**.
+  - Exit is **0**.
+- **T7, unnamed arm.** The `docker cp …/inngest-bootstrap.sh` stub returns 1.
+  - Exit is **1**.
+  - The EXIT trap emits `provision-attempt-exit-1` on the phone-home and
+    `provision_attempt_failed` via `soleur-boot-emit`.
+- **T8, timeout miss.** The `timeout` stub returns 124 for the pull.
+  - There is exactly **one** pull call (no inner retry after 124), and exit is **124**.
+  - `inngest_pull_fatal … rc=124 attempt=1` is emitted.
+- **T14, garbled counter.** The `attempts` file holds non-digits from a truncated write.
+  - The attempt runs as `attempt=1` and ends with the scenario's own expected rc, never an abort
+    from counter parsing.
+- **T16, stale staged asset.** A planted `/tmp/inngest-cutover-flip.sh` from a prior attempt, with
+  the `docker cp` of that asset stubbed to fail.
+  - The planted file is **absent** when the bootstrap stub runs, because the per-attempt `rm -f`
+    removed it.
+- **T17, channel re-arm.** `/run/inngest-bs-logs-token` is empty at attempt start.
+  - The restage script stub is invoked once, before `provision-attempt-start`.
 
-Scenarios:
+### Tier B (systemd 255 as PID 1; rendered unit, timer and script; stubs; `sh -u` drop-in)
 
-- **T1, miss.** The pull stub fails 3 times with rc 1.
-  - Exit is non-zero, and there is no latch.
-  - `inngest_pull_fatal … attempt=1` is emitted on both channels.
-- **T2, recover.** Attempt 2: the pull succeeds and the bootstrap returns 0.
-  - Exit is 0, the empty latch exists, and the attempt counter reads 2.
-  - `bootstrap-done` is emitted after the attempt-1 `inngest_pull_fatal`, which is the recovery
-    signal.
-- **T3, isolation FATAL.** The doppler stub lists a foreign secret name.
-  - Exit is non-zero, and `isolation-check-FAILED` is emitted.
-  - **No** `docker pull` is recorded, and there is no latch.
-- **T4, bootstrap fails.** The pull succeeds and the bootstrap returns 1.
-  - Exit is 1, `bootstrap-exit-1` and `bootstrap-failure-journal` are emitted, and there is no
-    latch.
-- **T5, stale container.** The docker stub reports `soleur-inngest-bootstrap-extract` already
-  exists.
-  - `rm -f` runs before `create`, and the attempt succeeds.
-- **T7, unnamed arm.** The `docker cp …/inngest-bootstrap.sh` stub fails.
-  - Exit is non-zero, and the EXIT trap emits `provision-attempt-exit-<rc>`.
-- **T8, timeout miss (rc 124).** The `timeout` stub returns 124 for the pull.
-  - There is no inner retry after rc 124, exit is 124, and `inngest_pull_fatal rc=124 attempt=1`
-    is emitted.
-- **T13, store not mounted.** The `mountpoint` stub reports `/mnt/data` absent.
-  - Exit is non-zero and `provision-mnt-data-ABSENT` is emitted.
-  - **The bootstrap stub is never invoked**, and there is no latch.
-
-### Tier B (systemd 255 as PID 1, rendered unit + timer + script + stubs + `sh -u` drop-in)
-
-- **T6, token delivery.** Every doppler stub call records `DOPPLER_TOKEN` and `HOME=/root`, and
-  those values come only from `EnvironmentFile` parsing on real systemd.
-- **T9, timeout.** A drop-in sets `TimeoutStartSec=5s`, and the bootstrap stub sleeps 30 s.
-  `provision-attempt-exit-143` is emitted before the next attempt starts.
-- **T10, ladder.** A drop-in sets `RestartSec=2s`. The pull stub fails twice, then succeeds.
+- **T6, token delivery.** Every doppler stub call records `DOPPLER_TOKEN` and `HOME=/root`, which
+  come only from real `EnvironmentFile=` parsing.
+- **T9, timeout.** A drop-in sets `TimeoutStartSec=5s`, and the bootstrap stub sleeps 60 s.
+  - `provision-attempt-exit-143` is emitted **within 10 s** of the timeout, well before the 90 s
+    `TimeoutStopSec` SIGKILL, because the child runs as `& wait`.
+  - The next attempt's `provision-attempt-start attempt=2` follows it.
+- **T10, ladder.** A drop-in sets `RestartSec=2s`. The pull fails twice, then succeeds.
   - `NRestarts=2`, the state is `active (exited)`, and the latch is present.
-- **T11, reboot re-entry.** A drop-in sets the timer to `OnBootSec=5s` to keep the run short.
-  - **Latch absent:** restart the container. The timer's `OnBootSec` starts the unit within its
-    window, and **`multi-user.target` reaches `active` while the unit is still retrying.** This
-    catches a stray `[Install] WantedBy=multi-user.target`.
-  - **Latch present:** restart the container. The unit is condition-skipped with no
-    `provision-attempt-start`.
-- **T12, single first-boot trigger.** Run the arming items in order.
-  - Exactly one `provision-attempt-start attempt=1` is emitted within 10 s.
-  - `systemctl is-active soleur-inngest-provision.timer` reads `inactive` until the next boot,
-    because the timer is enabled without `--now`.
+  - A timer start injected during the restart wait adds **no** attempt.
+- **T11, reboot re-entry.** A drop-in sets the timer to `OnBootSec=2s`. Poll with a bound; do not
+  sleep.
+  - **Latch absent:** restart the container. The unit starts from the timer within 15 s, and
+    **`multi-user.target` reaches `active` while the unit is still retrying**, which catches a
+    stray `[Install]`.
+  - **Latch present, set by a real T10 success rather than a pre-seeded file:** restart the
+    container. The unit is condition-skipped, and **zero** `provision-attempt-start` rows appear.
+    This checks that the latch survives a reboot (latch lifetime).
+- **T12, single first-boot trigger.** A drop-in sets `OnBootSec=1s`, and the arming items run
+  after 5 s of uptime (the timer is already elapsed).
+  - Exactly **one** `provision-attempt-start attempt=1` appears within 10 s.
+  - `systemctl is-active soleur-inngest-provision.timer` reads `inactive`, because the timer is
+    enabled without `--now`.
+- **T15, cutover FSM busy.** A stub `inngest-cutover-flip.service` sits `activating` for 20 s when
+  the attempt reaches the bootstrap step.
+  - The bootstrap stub starts only **after** that service leaves `activating`.
+  - With the wait bound shortened to 5 s by the stub, the attempt exits **1** with
+    `provision-fsm-busy` and retries.
 
-Guards 1, 5 and 6 and `systemd-analyze verify` cover the static and structural checks. Each Guard
-2–4 and 7 row that Tier B would detect also has a static detector, so a Tier B skip loses no RED
-row (plan review).
+Guards 1, 5 and 6 (static) and `systemd-analyze verify` cover structure. Every Guard 2, 3, 4 and 7
+row that only Tier B would catch also has a static or Tier A detector (Guard Contract), so a Tier B
+skip loses no RED row.
 
 ## Risks and Sharp Edges
 
@@ -1343,10 +1789,17 @@ row (plan review).
   cannot prove real Doppler, real zot, the private NIC, or Hetzner's boot timing; the rehearsal
   follow-up issue covers those. Rollback is a revert, another replace and `op=resume`. The runbook
   says so.
-- **SIGKILL mid-bootstrap.** A `TimeoutStartSec` expiry kills the cgroup. `inngest-bootstrap.sh`'s
-  idempotency contract covers re-runs but has not been tested against a kill at an arbitrary line.
-  The mitigation is a generous timeout derived from measurement. The residual is recorded in
-  ADR-256.
+- **SIGKILL mid-bootstrap, from a timeout, reboot or shutdown.** The kill reaches only the
+  provision unit's cgroup: the script and its `systemctl` clients. Redis, the server and the flip
+  run in their own cgroups, and PID 1 finishes a job even when its client dies (architecture P3).
+  - What remains is a half-written unit file or binary, which the next attempt's idempotent
+    bootstrap re-installs.
+  - Mitigations: a `TimeoutStartSec` derived from step bounds, and the children run as `& wait`
+    with the TERM trap so the attempt reports before SIGKILL.
+- **Collision with an operator `op=resume`** is mitigated by the pre-bootstrap FSM quiesce (T15).
+  The `op=resume` G-row is deferred.
+- **Arming residual.** If a `runcmd` item aborts before the arming items, the host stays dark
+  until a replace, exactly as today. It is not widened.
 - **The pending delta blocks `inngest-volume-recut` until delivery.** Disclosed.
 - **A `web-v*` release on merge is unavoidable** for any change under `apps/web-platform/**`.
   Disclosed and recorded in `decision-challenges.md`.
