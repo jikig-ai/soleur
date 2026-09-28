@@ -66,7 +66,9 @@ vi.mock("@/server/logger", () => ({
   },
 }));
 
-vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 
 import { GET } from "@/app/api/kb/c4/project/route";
 import { GitHubApiError } from "@/server/github-api";

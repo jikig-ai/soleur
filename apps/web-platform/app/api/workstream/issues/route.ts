@@ -15,7 +15,6 @@
 
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { getWorkstreamIssues } from "@/server/workstream/get-workstream-issues";
 import {
@@ -26,6 +25,7 @@ import {
   checkWorkstreamWriteRate,
   classifyWriteError,
 } from "@/server/workstream/workstream-write-throttle";
+import { verifiedUserId } from "@/server/request-auth";
 import {
   STATUS_ORDER,
   WorkstreamDegradedError,
@@ -34,18 +34,15 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+export async function GET(request: Request) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   try {
     const [issues, board] = await Promise.all([
-      getWorkstreamIssues(user.id),
-      resolveWorkstreamBoardMeta(user.id),
+      getWorkstreamIssues(userId),
+      resolveWorkstreamBoardMeta(userId),
     ]);
     return NextResponse.json({ issues, board });
   } catch (e) {
@@ -66,15 +63,12 @@ export async function POST(req: Request) {
   const { valid, origin } = validateOrigin(req);
   if (!valid) return rejectCsrf("api/workstream/issues", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  if (!checkWorkstreamWriteRate(user.id)) {
+  if (!checkWorkstreamWriteRate(userId)) {
     return NextResponse.json(
       { error: "rate_limited" },
       { status: 429, headers: { "Retry-After": "60" } },
@@ -119,14 +113,14 @@ export async function POST(req: Request) {
   }
 
   try {
-    const issue = await createWorkstreamIssue(user.id, input);
+    const issue = await createWorkstreamIssue(userId, input);
     return NextResponse.json({ issue });
   } catch (e) {
     const { status, code } = classifyWriteError(e);
     if (status >= 500) {
       Sentry.captureException(e, {
         tags: { surface: "workstream-issue-create" },
-        extra: { userId: user.id },
+        extra: { userId },
       });
     }
     return NextResponse.json({ error: code }, { status });

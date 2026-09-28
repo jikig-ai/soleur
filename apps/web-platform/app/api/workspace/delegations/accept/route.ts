@@ -4,6 +4,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 import { BYOK_SIDE_LETTER_VERSION } from "@/server/byok-side-letter";
+import { verifiedUserId } from "@/server/request-auth";
 import { createHash } from "node:crypto";
 
 export async function POST(request: Request) {
@@ -11,13 +12,13 @@ export async function POST(request: Request) {
   if (!valid) return rejectCsrf("api/workspace/delegations/accept", origin);
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = await verifiedUserId(request);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
+  const orgId = await resolveCurrentOrganizationId(userId, supabase);
   if (!orgId) return NextResponse.json({ error: "no_org" }, { status: 403 });
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId , email: null, subscriptionStatus: null };
+  const identity: Identity = { userId, role: "prd", orgId , email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "delegation_not_found" }, { status: 404 });
   }
 
-  if ((delegation.grantee_user_id as string) !== user.id) {
+  if ((delegation.grantee_user_id as string) !== userId) {
     return NextResponse.json({ error: "not_grantee" }, { status: 403 });
   }
 
@@ -65,7 +66,7 @@ export async function POST(request: Request) {
   const { error: insertErr } = await supabase
     .from("byok_delegation_acceptances")
     .insert({
-      user_id: user.id,
+      user_id: userId,
       delegation_id: body.delegationId,
       side_letter_version: BYOK_SIDE_LETTER_VERSION,
       ip_hash: ipHash,

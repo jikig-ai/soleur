@@ -41,6 +41,7 @@ import { createGitHubAppClient } from "@/server/github/app-client";
 import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -101,10 +102,8 @@ export async function POST(
   if (!valid) return rejectCsrf("api/dashboard/today/[id]/undo", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -115,14 +114,14 @@ export async function POST(
     .from("messages")
     .select("id")
     .eq("id", messageId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (msgErr) {
     reportSilentFallback(msgErr, {
       feature: "dashboard-undo",
       op: "messages-owner-check",
       message: "messages select failed during undo",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
@@ -140,7 +139,7 @@ export async function POST(
     reportSilentFallback(sendErr, {
       feature: "dashboard-undo",
       op: "action-sends-read",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
@@ -148,7 +147,7 @@ export async function POST(
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
   const send = rawSend as ActionSendRow;
-  if (send.user_id !== user.id) {
+  if (send.user_id !== userId) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   if (!send.reversal_handles || send.reversal_handles.length === 0) {
@@ -164,7 +163,7 @@ export async function POST(
   // user after the write relocated to `workspaces`). null = no install OR a
   // transient read error (Sentry-mirrored inside the resolver) → 403, preserving
   // the prior unauthorized contract.
-  const installationId = await resolveInstallationId(user.id);
+  const installationId = await resolveInstallationId(userId);
   if (!installationId) {
     return NextResponse.json(
       { error: "github_installation_unauthorized" },
@@ -174,7 +173,7 @@ export async function POST(
 
   const octokit = (await createGitHubAppClient(
     installationId,
-    user.id,
+    userId,
   )) as OctokitLike;
 
   const ledger: ElementLedgerEntry[] = [];
@@ -227,7 +226,7 @@ export async function POST(
       reportSilentFallback(updErr, {
         feature: "dashboard-undo",
         op: "action-sends-undone-write",
-        extra: { userId: user.id, messageId },
+        extra: { userId, messageId },
       });
       return NextResponse.json({ error: "internal_error" }, { status: 500 });
     }
@@ -243,7 +242,7 @@ export async function POST(
     reportSilentFallback(rewriteErr, {
       feature: "dashboard-undo",
       op: "action-sends-partial-rewrite",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }

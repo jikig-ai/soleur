@@ -153,7 +153,7 @@ describe("GET /api/workstream/issues", () => {
       onKanbanOrg: true,
       projectWritable: false,
     });
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(200);
     const json = (await res.json()) as {
       issues: unknown[];
@@ -165,7 +165,7 @@ describe("GET /api/workstream/issues", () => {
 
   it("502s when the read throws", async () => {
     getWorkstreamIssues.mockRejectedValue(new Error("gh down"));
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(502);
     // A generic (non-degraded) error keeps its route-level Sentry capture.
     expect(captureException).toHaveBeenCalledTimes(1);
@@ -178,7 +178,7 @@ describe("GET /api/workstream/issues", () => {
     getWorkstreamIssues.mockRejectedValue(
       new WorkstreamDegradedError("workstream read degraded"),
     );
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(502);
     const json = (await res.json()) as { error: string };
     expect(json.error).toBe("workstream_query_error");

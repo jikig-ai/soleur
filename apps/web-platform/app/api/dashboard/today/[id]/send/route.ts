@@ -45,6 +45,7 @@ import { getTemplateHash } from "@/server/templates/template-registry";
 import { runTemplateGate } from "@/server/templates/run-template-gate";
 import { inngest } from "@/server/inngest/client";
 import { parseSourceRef } from "@/server/inngest/agent-acknowledgment-templates";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -80,10 +81,8 @@ export async function POST(
   if (!valid) return rejectCsrf("api/dashboard/today/[id]/send", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -107,7 +106,7 @@ export async function POST(
       "id, user_id, action_class, status, draft_preview, owning_domain, template_id, source_ref",
     )
     .eq("id", messageId)
-    .eq("user_id", user.id) // belt-and-suspenders alongside RLS
+    .eq("user_id", userId) // belt-and-suspenders alongside RLS
     .maybeSingle();
 
   if (msgErr) {
@@ -115,7 +114,7 @@ export async function POST(
       feature: "dashboard-send",
       op: "messages-select",
       message: "Failed to load message for send",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
@@ -141,7 +140,7 @@ export async function POST(
 
   // Re-check isGranted at click-time. Plan Phase 4.3 + TR8: revocation
   // race must fail-closed.
-  const grant = await isGranted(supabase, user.id, actionClass);
+  const grant = await isGranted(supabase, userId, actionClass);
   if (!grant) {
     return NextResponse.json(
       { error: "no_active_grant", action_class: actionClass },
@@ -188,8 +187,8 @@ export async function POST(
     });
     const gate = await runTemplateGate({
       supabase,
-      founderId: user.id,
-      founderIdHash: hashUserId(user.id),
+      founderId: userId,
+      founderIdHash: hashUserId(userId),
       templateHash: templateHashForGate,
       grantId: grant.id,
       actionClass,
@@ -273,7 +272,7 @@ export async function POST(
   try {
     const written = await writeActionSend({
       supabase,
-      founderId: user.id,
+      founderId: userId,
       message: {
         id: message.id as string,
         action_class: actionClass,
@@ -351,7 +350,7 @@ export async function POST(
         await inngest.send({
           name: "agent.spawn.requested",
           data: {
-            founderId: user.id,
+            founderId: userId,
             messageId: messageIdStr,
             actionClass,
             sourceRef,
@@ -366,7 +365,7 @@ export async function POST(
             op: "inngest-enqueue",
             message:
               "inngest.send failed after action_sends written; row stays committed, manual retry via new messages row",
-            extra: { userId: user.id, messageId, actionSendId: written.id },
+            extra: { userId, messageId, actionSendId: written.id },
           },
         );
         degraded = "enqueue_failed";
@@ -383,14 +382,14 @@ export async function POST(
       .from("messages")
       .update({ status: "archived" })
       .eq("id", message.id)
-      .eq("user_id", user.id);
+      .eq("user_id", userId);
     if (archiveErr) {
       reportSilentFallback(archiveErr, {
         feature: "dashboard-send",
         op: "messages-archive",
         message:
           "action_sends row written but messages.status archive failed (orphan record)",
-        extra: { userId: user.id, messageId, actionSendId: written.id },
+        extra: { userId, messageId, actionSendId: written.id },
       });
       // The action_sends row IS the load-bearing artefact; archive
       // failure is non-fatal at the route layer.
