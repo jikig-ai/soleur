@@ -151,6 +151,12 @@ properties:
   > reason (`After=local-fs.target mnt-data.mount`, the `inngest-cutover-flip.service` precedent,
   > #7228). `resume_writers()`'s `mountpoint -q` gate is what actually keeps writers off an
   > unmounted `$MOUNT`.
+  >
+  > **Qualified 2026-09-28 (#9045):** "the fstab can name the superseded plaintext volume" does not
+  > hold as stated. Apply run 36340195638 printed web-1's `/mnt/data` fstab source as the literal
+  > glob `/dev/disk/by-id/scsi-0HC_Volume_*`, the 2026-03-17 first-boot line. systemd does not expand
+  > it, so it names no device at all. The real hazard is a reboot into emergency mode, tracked in
+  > #9123.
 - `webhook.service` carries **no** `RequiresMountsFor`, only `ReadWritePaths=/mnt/data`, so it
   starts **successfully onto the bare root-disk mountpoint directory**. It is the CI deploy
   receiver, so a deploy landing during the incident writes user data into the root filesystem,
@@ -167,6 +173,12 @@ it cannot fail on an empty or unmounted volume — if the mapper mounts but `$MO
 absent, docker auto-creates an empty bind source and a cutover serving zero user data reports green.
 `app_canary` therefore also asserts `/internal/readyz` (`workspaces_writable` + `workspaces_populated`),
 and runs **before** `disarm_dead_man` so an app-level failure still has the unattended backstop.
+
+> **Superseded 2026-09-28 (#9045):** `app_canary` no longer runs before the disarm. The single
+> disarm now sits at the host-canary pass, before `docker start`, so the dead-man guards the freeze
+> window only. An app-level failure after `docker start` is fix-forward: `cleanup()` rolls forward on
+> the LUKS mount and pages. See the
+> [2026-09-28 addendum](#addendum-2026-09-28-the-dead-man-guards-the-freeze-window-only-9045).
 
 **`readyz` proves a FLOOR, not an INVENTORY (#6807).** `readiness.ts:81` is
 `countWorkspaceDirsAt(root) > 0`, and `isWorkspacesWritable` write+unlinks **one** probe file at the
@@ -983,6 +995,11 @@ armed: `cleanup()` does nothing once `CANARY_OK=1`, and both such runs died befo
 not inherit this silently. It is tracked in #9045. Meanwhile this installer's state print shows the
 dead-man units' state on every fire.
 
+> **Superseded 2026-09-28 (#9045):** the gap is closed. The dead-man is disarmed at the host-canary
+> pass, before `docker start`, so a post-canary abort has nothing armed. `cleanup()` also records a
+> `result=cutover_aborted outcome=<x>` marker on every abort. See the
+> [2026-09-28 addendum](#addendum-2026-09-28-the-dead-man-guards-the-freeze-window-only-9045).
+
 ### Review amendments (2026-09-27)
 
 Appended after the 10-agent review of PR #9044. Each item below changes or qualifies a claim above.
@@ -995,6 +1012,10 @@ Appended after the 10-agent review of PR #9044. Each item below changes or quali
   and reports `not_mounted` itself. Same downgrade as `inngest-cutover-flip.service` (#7228). This
   also corrects the §(a) claim that `RequiresMountsFor=` makes systemd "refuse to start" a unit (see
   the note there).
+
+  > **Qualified 2026-09-28 (#9045):** "that can be the superseded plaintext volume" does not hold.
+  > The fstab source is a literal glob that names no device. The ordering-only downgrade is still
+  > correct, because a mount the unit started would still be wrong. See the §(a) note and #9123.
 - **A cutover-freeze guard (exit 17).** Before it arms, the installer refuses with exit 17 when
   `workspaces-luks-deadman.timer` reads `SubState=waiting`: a cutover freeze is live. The apply goes
   red, the resource taints, and the next apply re-fires it. The plan cut an earlier freeze guard.
@@ -1002,6 +1023,15 @@ Appended after the 10-agent review of PR #9044. Each item below changes or quali
   transient timer keeps `ActiveState=active`, `SubState=elapsed` until reboot, so an old July
   dead-man would have blocked every install. `SubState=waiting` is reported only by a live transient
   timer that has not fired yet, which is exactly a freeze in progress.
+
+  > **Qualified 2026-09-28 (#9045):** "an elapsed transient timer keeps `ActiveState=active`,
+  > `SubState=elapsed` until reboot" was never measured. The same run's state print shows the timer
+  > `inactive/dead`. systemd.timer(5)'s `RemainAfterElapse=yes` default would keep it loaded, so the
+  > two sources disagree. #9045's real-systemd loopback case measures it on systemd 255. The guard
+  > keys on `SubState=waiting` and holds under either reading. Measured 2026-09-28 against a user
+  > systemd 261 (the same case body, run unprivileged): once a transient timer fires, systemd
+  > unloads it. It then reads `inactive/dead` with an empty `LastTriggerUSec`, which matches web-1's
+  > print. The privileged CI run on systemd 255 is the authoritative reading.
 - **Host scope.** The alert predicate gains `AND JSONExtractString(raw, 'host_name') =
   'soleur-web-platform'`. web-2 (`soleur-web-2`) ships to the same Logs source (measured
   2026-09-27). Its `incident_cause` no longer says "the volume is still encrypted": the alert also
@@ -1029,6 +1059,138 @@ Appended after the 10-agent review of PR #9044. Each item below changes or quali
   2026-09-27 a throwaway PAUSED alert was created on the live API with `query_period = 97200`, read
   back `query_period:97200 confirmation_period:0` (not clamped), and deleted.
 - **The dead-man gap** above is tracked in #9045.
+
+## Addendum (2026-09-28): the dead-man guards the freeze window only (#9045)
+
+**Decision.** The cutover disarms the dead-man once, at the host-canary pass, before
+`docker start`. This follows from §(b): the rollback door closes at `docker start`, so an unattended
+revert after it strands every write the app made on the LUKS mount. That is the 2026-07-20 incident.
+The cutover previously kept the dead-man armed across `app_canary`, as an app-health backstop. That
+intent is reversed: app health is attended, and the dead-man now guards the freeze only.
+
+The mechanics live in `workspaces-cutover.sh`:
+
+- **`arm_dead_man` fails closed and verifies itself.**
+  - It refuses when a timer already reads `SubState=waiting` or a fire is live
+    (`ActiveState` `active`, `activating` or `deactivating`; a running fire is a simple service,
+    so it reads `active`).
+  - It clears a stale unit before arming: it stops the timer, then runs `reset-failed` on both units.
+  - It no longer discards `systemd-run`'s error; a refusal emits `result=arm_failed` with the first
+    stderr line, scrubbed, as `detail=`. Every arm failure `die`s, so the freeze never starts behind an
+    unverified backstop.
+  - It sets `DEADMAN_ARMED=1` as soon as `systemd-run` returns, then polls for `waiting`.
+  - The arm runs BEFORE `FREEZE_HELD=1`, so a failed arm leaves no freeze to unwind.
+- **`disarm_dead_man <reason>` verifies and never `die`s.**
+  - It reads the timer's `LastTriggerUSec` before the stop, and after the stop the service's
+    `ActiveState` and any queued start `Job`.
+  - It checks that the timer is no longer `waiting`.
+  - Any failed check emits `result=disarm_failed … check=<a|b|c>`.
+  - The reasons are a closed set: `host_canary_passed`, `rollback_engaged`, `arm_aborted`.
+- **The host canary gates the disarm.**
+  - Before disarming, it compares the workspace count on the live `$MOUNT` against the count G3 took
+    in THIS run (an in-process value, never the append-only state file, which carries earlier runs'
+    counts). A missing count fails closed, and a G3 count failure is now fatal at G3
+    (`workspace_count_persist_failed`), where the rollback is lossless.
+  - This re-proves that the mounted filesystem is the copy G3 counted and that the repoint landed.
+    It is not a plaintext-versus-copy population proof; that proof is G3 against G2, plus C1.
+  - After disarming, `findmnt -no SOURCE "$MOUNT"` must still equal the mapper, because a fire that
+    raced the disarm unmounts `$MOUNT`.
+  - Either failure dies while `CANARY_OK=0`, so the rollback is still lossless.
+  - The `findmnt` re-assert is the real proof. A fired transient timer is unloaded, so its
+    `LastTriggerUSec` reads empty and check (a) only catches a fire in the short window before
+    that. This was measured on systemd 261; see the qualification under the 2026-09-27 review
+    amendments.
+- **`rollback()` stops the timer first, then waits.**
+  - With the dead-man armed it runs the verifying disarm, which stops the timer, so no new fire can
+    start. It then waits, bounded by attempt count, for a fire already in flight to finish, and
+    emits `check=fire_stuck` only if that wait expires.
+  - With nothing armed by this run it records the timer's prior state (`result=not_armed
+    prior=<substate>`). If this run armed and already disarmed, it records `result=already_disarmed`.
+  - It restarts the app only when the plaintext volume is mounted. A failed remount leaves the app
+    down and pages `rollback_remount_failed`, rather than starting it on the bare root-disk directory.
+- **`cleanup()` records one outcome on every abort**, on the existing `luks-monitor` tag:
+  `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<x>`. The values are:
+  - `rolled_back` — one plaintext mount and the mapper closed;
+  - `rollback_stacked` — a mount stacked on another, or the mapper still open (pages);
+  - `rollback_remount_failed` — nothing, or the mapper, is mounted;
+  - `post_canary_luks_retained` — rolled forward and the app restarted;
+  - `post_canary_restart_failed` — rolled forward, but `docker start` failed;
+  - `post_canary_mount_not_mapper` — the mount is no longer the mapper, so the app and writers were
+    stopped;
+  - `arm_aborted`, `pre_freeze`, `clean_stray`, `dry_run`.
+- **`cleanup()` is signal-safe.**
+  - The workflow runs the script over `ssh` without a pty, so a dropped connection does not deliver
+    SIGHUP. The script dies of SIGPIPE on its next write, and bash still runs the EXIT trap.
+  - Two defects made that trap silent, and both are fixed:
+    - `$?` inside the trap is the last command's status, usually 0, so the trap took the success
+      exit. A `RUN_COMPLETE` sentinel, set only at intentional exits, now separates a normal end
+      from a signal death, which is recorded with `abnormal_exit=1`.
+    - The trap's own first `log` raised SIGPIPE again and killed it. It now ignores PIPE, HUP,
+      INT and TERM.
+- **A post-canary abort rolls FORWARD.** `cleanup()` re-asserts the mapper, restarts the app with its
+  exit status checked, and resumes writers. It pages through the fatal Sentry drift
+  `cutover_aborted_post_canary`. If the mapper re-assert fails, it stops the app and the writers, so
+  nothing writes to a mount that is not the mapper. The runbook makes this path fix-forward only.
+- **`ROLLBACK=1` refuses after a successful cutover.** When `/mnt/data` is the mapper and the
+  persisted `CANARY_OK` matches the live volume's LUKS UUID, a rollback dispatch refuses unless the
+  `rollback_ack_luks_writes` input is set. Such a rollback strands every write made since
+  `docker start` on the LUKS volume. It also refuses, with the same override, when the mapper is
+  mounted and `CANARY_OK` is persisted but the live header UUID cannot be read or the persisted
+  UUID is empty: an unmeasurable match fails closed. A refusal records `outcome=pre_freeze`.
+- **An unattended fire pages.** `logtail_exploration_alert.workspaces_luks_deadman_fired` (ADR-218
+  semantics) matches `op=workspaces-luks-deadman result=fired` from `soleur-web-platform`. This
+  closes the #6812 six-hour silence. The alert auto-resolves after ten quiet minutes; that does not
+  mean the stranded writes were reconciled.
+
+**Rejected alternatives.**
+
+- **Keep the dead-man armed across `app_canary`, or only for data-shaped `readyz` failures.** Either
+  way an automated revert still strands writes. C1 byte-identity, the G3 count and the host-canary
+  device anchor already certify the data before the door.
+- **A fire-time guard inside the dead-man's `sh -c` keyed on `CANARY_OK`.** The state file persists
+  across runs, so a stale `CANARY_OK` could suppress a legitimate pre-canary revert.
+- **Clear web-1's failed dead-man unit now through Terraform.** That is a host mutation with no
+  functional gain, and it would destroy the evidence before the forensic print reads it.
+- **A watchdog for a SIGKILL.** Disproportionate. An SSH drop is SIGPIPE, not SIGKILL, and the
+  signal-safe `cleanup()` handles it. Two SIGKILL residuals are accepted:
+  - after the host-canary disarm, where nothing is armed and nothing records an outcome;
+  - mid-`rollback()` after its own disarm, where the app stays down with no backstop.
+
+  Neither loses data: both land before the app serves from the LUKS mount, or on a mount already
+  certified. The uptime monitor pages both.
+
+**Accepted narrowing.** The installer's exit-17 guard keys on the dead-man reading `waiting`, which
+now spans only the freeze, not the whole run. An apply that lands between the host-canary door and
+the cutover's tail passes the guard. It redelivers files the tail also installs, and kicks the monitor
+probe while `app_canary` boots the app. The worst case is a false readyz page during an attended
+cutover. No user data is touched.
+
+**What the dead-man did in July (H1/H2).** The 2026-09-27 state print showed
+`workspaces-luks-deadman.service` `failed` (`Result=exit-code`) and the timer `inactive/dead`.
+
+- **H1 (favoured).** The 2026-07-20 fire left the service loaded and failed, and only a dry run
+  touched the unit before 2026-07-23. On 07-23, `systemd-run --unit=workspaces-luks-deadman` was
+  refused, the refusal was discarded (`2>/dev/null || true`), and `result=armed` was logged anyway.
+  The 07-23 dead-man never armed, which is why the LUKS mount survived that post-canary abort.
+- **H2.** It armed and failed on firing. This is disfavoured, because the live mount is the mapper.
+
+The discriminator is the new forensic print. It shows `ExecMainExitTimestamp`, and whether the
+loaded unit's `ExecStart` contains `result=fired`, a substring that exists only in the post-#6807
+fire command. An exit on 2026-07-20 without that substring confirms H1. The verdict is posted on
+#9045 from the first apply after merge.
+
+**Print/installer coupling.** The forensic step's command list is `local.luks_monitor_forensic_print`,
+and it is folded into `terraform_data.luks_monitor_install`'s `triggers_replace`. So any later edit
+to the print re-delivers the installer on web-1: files byte-identical, the DSN line rewritten
+identically, one extra probe kick. The step runs BEFORE the exit-17 freeze guard, so a live freeze
+cannot suppress it. It reads manager-memory properties, which survive journal rotation. It never
+prints `ExecStart` itself or a journal tail, because a transient unit's journal echoes its command
+line into the public Actions log. This is another in-place web-1 change under ADR-154's standing
+exception (re-examined 2026-09-28: `cx33` is available in 0 of 6 datacenters).
+
+**Reboot hazard.** The fstab finding moved the green-path reboot instruction (C15) to #9123. A
+web-1 restart currently lands in emergency mode, so no reboot is planned until the coupled
+fstab + crypttab + §(e) gate fix ships.
 
 ## References
 

@@ -811,6 +811,8 @@ jobs:
               -target=logtail_exploration_alert.claude_cost_capture_dark \
               -target=logtail_exploration.luks_monitor_host_timer_dark \
               -target=logtail_exploration_alert.luks_monitor_host_timer_dark \
+              -target=logtail_exploration.workspaces_luks_deadman_fired \
+              -target=logtail_exploration_alert.workspaces_luks_deadman_fired \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key
           rc=$?

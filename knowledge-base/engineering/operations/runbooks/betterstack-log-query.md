@@ -121,6 +121,18 @@ Live standing alarms over this source:
   `terraform_data.luks_monitor_install` (`workspaces-luks.tf`); self-health via the `logs_alert` arm
   of `reconcile-live-heartbeats.ts`. Runbook and no-SSH decode:
   [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
+- **`logtail_exploration_alert.workspaces_luks_deadman_fired`** (#9045, `higher_than 0`, missing
+  data counts as zero): `soleur-workspaces-luks-deadman-fired-prd`. It pages (team email) on any
+  `luks-monitor` row from `host_name = 'soleur-web-platform'` whose message starts with
+  `SOLEUR_WORKSPACES_LUKS_DEADMAN` (followed by a space) and contains `op=workspaces-luks-deadman result=fired`. That
+  row means the /workspaces LUKS cutover's dead-man timer fired unattended: it stopped the app and
+  remounted the retained plaintext volume. Any writes made on the LUKS volume since the fire are
+  stranded there. It closes the #6812 blind spot, where a fire wrote rows but paged nobody. Defined
+  in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh` (mutation rows). It
+  auto-resolves after 10 quiet minutes, which does not mean the stranded writes were reconciled.
+  Runbook and no-SSH decode:
+  [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#dead-man-and-abort-triage-9045).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the

@@ -113,7 +113,7 @@ container boot** in `server/index.ts` via `inngest.send({ name, id, ts, data })`
 with a **future `ts`** (Inngest natively schedules the delayed delivery — no
 `step.sleepUntil`). Copy `oneshot-TEMPLATE.ts.template` and fill it in.
 
-### The 3 integration points (+ 1 easy-to-forget)
+### The 3 integration points (+ 2 easy-to-forget)
 
 1. **New function file** `server/inngest/functions/oneshot-<name>.ts` (copy the template).
 2. **Register** it in `app/api/inngest/route.ts` — add the import AND the entry in
@@ -126,6 +126,10 @@ with a **future `ts`** (Inngest natively schedules the delayed delivery — no
    is hard-asserted. A new `event-*`/`oneshot-*` function is NOT a cron, so do
    NOT add it to `EXPECTED_CRON_FUNCTIONS` / `KNOWN_UNMONITORED_SLUGS` /
    `cron-monitors.tf` (those guards are cron-only and would trip).
+5. **(easy to forget)** Add an `EXECUTION_PLACEMENT` row for the function id in
+   `server/inngest/execution-placement.ts`, classed by the first matching rule in
+   that file's header — `execution-placement.test.ts` Guard 1 fails without it
+   (ADR-033 §Registration checklist has the full list for every served function).
 
 ### Gotchas
 

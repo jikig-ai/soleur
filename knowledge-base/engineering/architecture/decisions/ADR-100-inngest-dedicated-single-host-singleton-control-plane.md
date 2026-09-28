@@ -123,6 +123,12 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    spike showed the last-writer-wins URL flaps under multi-url. Route-once means multi-url is
    *safe from duplicate execution* (an acceptable fallback), but the VIP is the deterministic
    primary for N>1. This defers the LB cost to when N>1 is actually reached.
+
+   **Note (2026-09-28, #7230):** `--sdk-url` is the registration poll (#8611), not the step
+   path. Where steps run is governed by the registered `serveHost` (`https://app.soleur.ai`)
+   plus `cloudflare_record.app`, and by the execution placement classes in the ADR-033
+   amendment of 2026-09-28 (#7230). A VIP behind `--sdk-url` alone would not change where
+   steps run; placement-aware execution is #9137.
 2. **Hooks stay web-host-resident.** The dedicated host has no app (`rearm` posts to the local
    app's `/api/internal/schedule-reminder`) and no public ingress (the GH runner reaches only
    `deploy.soleur.ai`). Capture/rearm/inventory hooks run on the web host and reach the inngest
@@ -1453,7 +1459,8 @@ step. On a clean day-7 reading its ACTION REQUIRED text names the verbs in order
 `adopting → accepted` (reversible); wait for the NEXT sweep's comment to read SOAK CLEAN again — a
 fresh reading between the reversible and the irreversible verb is what protects the snapshots;
 release the four `inngest-cutover-pre-*` hcloud images (398857857, 406654994, 407991378, 411798619 —
-none from 09-15; no `op=backup` ran for the completed cutover); and close #6178 LAST, because a
+none from 09-15; no `op=backup` ran for the completed cutover) [superseded as to 411798619 on
+2026-09-28, see the #8734 addendum]; and close #6178 LAST, because a
 notify-only probe never exits 1 and a group found after the close is dropped by the sweeper's
 closed-set path. Past 2026-10-06 the probe refuses before any GET (`horizon_passed`): the heaviest
 slice has outgrown the host's page budget by then and the verbs are overdue.
@@ -1573,7 +1580,7 @@ instead — effective permission, independent of membership visibility — and h
 `observed authorAssociation=CONTRIBUTOR` next to `would close with verdict=PASS` — the reading and
 its fix in one log), so the CODEOWNERS-derived fallback held in reserve was not needed.
 
-This addendum flips nothing. ADR-100 stays `adopting`; the `accepted` flip is #7230 and the day-7
+This addendum flips nothing. ADR-100 stays `adopting`; the `accepted` flip is #6178 `[corrected 2026-09-28, #7230: this read #7230, which closes with the placement rule and never owned the flip]` and the day-7
 soak reading it depends on is the 2026-09-19 (#6178) addendum above.
 
 ## Addendum — 2026-09-20 (#8079) — `op=registry-probe` becomes three-valued, and the dark-host gate gains a second consumer
@@ -1682,3 +1689,55 @@ On those API reads, the sentence above that the live host gains the firewall at 
 `inngest-host` and `inngest-volume-recut` dispatches stopped refusing after the replace was not
 measured. The legal record is the 2026-09-27 addendum of
 `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.
+
+## Addendum — 2026-09-28 (#8734) — 411798619 is released before SOAK CLEAN
+
+**What changed.** Hetzner snapshot image `411798619` (`inngest-cutover-pre-20260723T153403Z`, web-1's
+root disk, taken by `scripts/cutover-inngest.sh` `op=backup` on 2026-07-23) was deleted on
+2026-09-28T08:01:45Z, on the operator's per-command go-ahead: `DELETE /v1/images/411798619` answered
+`204` and the next `GET` answered `404 not_found`. The evidence record is #8734 comment 5865894224.
+This departs, for this one image, from the verb order in the 2026-09-19 addendum: "wait for the NEXT
+sweep's comment to read SOAK CLEAN again … release the four `inngest-cutover-pre-*` hcloud images
+(398857857, 406654994, 407991378, 411798619 …)".
+That addendum is superseded as to `411798619` only, not edited. The other three images it names
+(398857857, 406654994, 407991378) were already gone when the project was read on 2026-09-28: the
+Hetzner image actions show `delete_image` for each on 2026-09-24, recorded on the unmerged PR #8626.
+That PR also carries a 2026-09-23 addendum to this ADR that retains `411798619` until SOAK CLEAN.
+This addendum supersedes that clause. On rebase, #8626 orders its 2026-09-23 addendum above this one
+and marks the clause `Superseded 2026-09-28 (#8734)`.
+
+The image was this ADR's Inngest-cutover rollback substrate. It was never ADR-119's rollback anchor:
+ADR-119 §(b) says not to take a pre-cutover Hetzner snapshot, and a server snapshot holds the root
+disk only, never an attached volume. ADR-119 is cited, not edited here.
+
+**Rollback value: about nil.**
+
+- No arm restores from the image. `op=rollback` re-arms web-1's own quiesced scheduler from its live
+  root disk, and no op reads an `inngest-cutover-pre-*` image back.
+- The image predates the completed cutover. It was taken for the 2026-07-23 attempt, and no
+  `op=backup` ran for the 2026-09-15 cutover (2026-09-19 addendum).
+- A restore would bring back a root disk two months stale, whose credentials have since been revoked
+  or rotated: the prd token on 2026-07-30, `workspaces-luks-boot` (#8632, PR #8703),
+  `web-probes-read` (#8705, PR #8733) and the minter tokens (#8737).
+
+**Retention cost.** The image held `soleur/prd` secret values and personal data from web-1's root
+disk past their purpose. That is an Art. 5(1)(e) storage-limitation cost and an Art. 32 security
+cost. Rotating the tokens that could read Doppler does not invalidate the other secret values the
+image held; only rotating those values, or deleting the image, does (#8734). The legal records
+carry the determination: `knowledge-base/legal/audits/2026-09-8209-prior-exposure-assessment.md`
+§Addendum — 2026-09-28 (#8734), where the image-use sub-limb is CLEAN from the image's creation to
+its deletion, and the matching `knowledge-base/legal/breach-register.md` and
+`knowledge-base/legal/compliance-posture.md` entries.
+
+**Soak state.** SOAK CLEAN is unlikely before the 2026-10-06 horizon. The soak read `UNEXPLAINED=1`
+on 2026-09-27. The 2026-09-25 update to the 2026-09-19 addendum expects the heaviest slice to
+outgrow the host's page budget around 2026-09-28, after which the probe reads CANNOT ESTABLISH
+until #6178 closes, and past 2026-10-06 it refuses (`horizon_passed`). Waiting for SOAK CLEAN would
+have kept the image to #8734's own 2026-10-06 expiry for a rollback that has no value.
+
+**Scope.** This ADR's status (`adopting`) and #6178's close order are unchanged: flip
+`adopting → accepted` on a clean reading, re-read SOAK CLEAN, then close #6178 last. The release
+verb has no image left to act on, since #8734 satisfied it for `411798619` ahead of SOAK CLEAN.
+`scripts/followthroughs/inngest-soak-6178.sh` still names `411798619` in its `SNAPSHOTS` line, so
+its ACTION REQUIRED text for the release verb is stale; the #8626 branch rewrites that line. This
+addendum flips nothing and closes nothing.

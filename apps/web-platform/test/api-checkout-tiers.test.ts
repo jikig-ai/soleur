@@ -5,10 +5,14 @@ process.env.STRIPE_PRICE_ID_STARTUP = "price_startup";
 process.env.STRIPE_PRICE_ID_SCALE = "price_scale";
 process.env.STRIPE_PRICE_ID_ENTERPRISE = "price_enterprise";
 
-const { mockGetUser, mockFrom, mockCreateSession } = vi.hoisted(() => ({
+const { mockGetUser, mockFrom, mockCreateSession, mockMarkerInsert, mockClaimSingle, mockMarkerUpdate, mockUpdateSelect } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
   mockCreateSession: vi.fn(),
+  mockMarkerInsert: vi.fn(),
+  mockClaimSingle: vi.fn(),
+  mockMarkerUpdate: vi.fn(),
+  mockUpdateSelect: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -18,9 +22,41 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
+vi.mock("@/lib/supabase/service", () => ({
+  // #8918: route claims a pending_checkout_sessions row via service-role.
+  getServiceClient: vi.fn(() => ({
+    from: () => {
+      const deleteEq2 = {
+        select: vi.fn().mockResolvedValue({ data: [{ user_id: "user-1" }], error: null }),
+        then: (res: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(res),
+      };
+      return {
+        insert: (row: unknown) => {
+          mockMarkerInsert(row);
+          return { select: () => ({ single: mockClaimSingle }) };
+        },
+        update: (patch: unknown) => {
+          mockMarkerUpdate(patch);
+          return { eq: () => ({ eq: () => ({ select: mockUpdateSelect }) }) };
+        },
+        delete: () => ({ eq: () => ({ eq: () => deleteEq2, is: () => ({ eq: () => ({ select: vi.fn() }) }) }) }),
+        select: () => ({
+          eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+        }),
+      };
+    },
+  })),
+}));
+
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
-    checkout: { sessions: { create: mockCreateSession } },
+    checkout: {
+      sessions: {
+        create: mockCreateSession,
+        retrieve: vi.fn(),
+        expire: vi.fn(),
+      },
+    },
   }),
 }));
 
@@ -60,8 +96,18 @@ describe("POST /api/checkout — targetTier", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreateSession.mockResolvedValue({
+      id: "cs_test_1",
       client_secret: "cs_test_clientsecret",
       url: null,
+      status: "open",
+    });
+    mockClaimSingle.mockResolvedValue({
+      data: { created_at: new Date().toISOString() },
+      error: null,
+    });
+    mockUpdateSelect.mockResolvedValue({
+      data: [{ user_id: "user-1" }],
+      error: null,
     });
   });
 
@@ -74,6 +120,7 @@ describe("POST /api/checkout — targetTier", () => {
         line_items: [{ price: "price_startup", quantity: 1 }],
         ui_mode: "embedded",
       }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
     const [[args]] = mockCreateSession.mock.calls;
     expect(args.return_url).toContain("upgrade=complete");
@@ -103,6 +150,7 @@ describe("POST /api/checkout — targetTier", () => {
       expect.objectContaining({
         metadata: { supabase_user_id: "user-1", target_tier: "scale" },
       }),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
   });
 });
