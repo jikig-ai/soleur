@@ -337,3 +337,16 @@ for the affected activity.
 > the chain as provisioned on every host; its load was measured on the live host only, and on the
 > destroyed hosts it cannot now be measured. The SSH-log statement covers the third interval only up
 > to the 2026-09-25 read; the rest of that interval is read when the firewall is measured restored.
+
+> **Restored 2026-09-27 (#8754):** The post-replacement measurement named in the correction above
+> has passed. `inngest-host-replace` run 36327637204 created the new dedicated Inngest host (Hetzner
+> server 167651172, created 2026-09-27 14:56:48 UTC) with the firewall applied at creation, and
+> deleted server 167310350. Measured through the Hetzner API at about 15:02 UTC, the new server lists
+> firewall 11269127 with status `applied`, and the firewall's `applied_to` lists server 167651172.
+> The cloud-firewall layer is in force from the new host's creation, and the third interval ends at
+> about 2026-09-27 14:56 UTC. The rest of that interval's SSH log was read afterwards (Better Stack,
+> 2026-09-25 00:00 UTC to 2026-09-27 15:10 UTC). It records no successful SSH login and no opened
+> session on the host. Five rows from the host contain the phrase `Accepted publickey`; they come
+> from its Inngest event log, not from sshd. The conclusion above is unchanged. The details are in
+> the 2026-09-27 addendum of
+> `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.
