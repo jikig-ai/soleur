@@ -3,6 +3,7 @@
 import { useState } from "react";
 import dynamic from "next/dynamic";
 import type { FileKind } from "@/lib/kb-file-kind";
+import { Button } from "@/components/ui/button";
 import { TextPreview } from "@/components/kb/text-preview";
 import { DownloadPreview } from "@/components/kb/download-preview";
 
@@ -63,6 +64,7 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
   return (
     <div className="flex flex-col items-center gap-4 p-6">
       <button
+        data-button-exempt="image lightbox trigger — wraps an <img> (composite content, cursor-zoom-in)"
         onClick={() => setLightbox(true)}
         className="cursor-zoom-in overflow-hidden rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50"
       >
@@ -83,7 +85,8 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
           role="dialog"
           aria-label={`Preview of ${filename}`}
         >
-          <button
+          <Button
+            variant="ghost"
             onClick={() => setLightbox(false)}
             className="absolute right-4 top-4 rounded-full p-2 text-soleur-text-secondary hover:text-soleur-text-primary"
             aria-label="Close lightbox"
@@ -92,7 +95,7 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
-          </button>
+          </Button>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={src}

@@ -3686,6 +3686,12 @@ if want_scripts; then
   # qualifies ONLY when all six jobs (4 legs + fixed + done) are present, green, and
   # measured — a skipped leg is unmeasurable and fail-closed, never a green leg.
   run_suite "scripts/deploy-script-tests-legs-8736" bash scripts/followthroughs/deploy-script-tests-legs-8736.test.sh
+  # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
+  # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
+  # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
+  # luks-monitor rows) is exit 2 and never FAIL/PASS, and that an empty result is a real zero
+  # while a failed query is exit 2.
+  run_suite "scripts/luks-monitor-host-timer-8706" bash scripts/followthroughs/luks-monitor-host-timer-8706.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the

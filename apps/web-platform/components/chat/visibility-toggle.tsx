@@ -50,6 +50,7 @@ export function VisibilityToggle({
   return (
     <div className="inline-flex flex-col">
       <button
+        data-button-exempt="aria-pressed toggle with bespoke inline-style state colors"
         onClick={toggle}
         disabled={loading}
         aria-pressed={isShared}

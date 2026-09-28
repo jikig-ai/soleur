@@ -103,7 +103,7 @@ encrypted volume and silently lost armed Inngest reminders. The writer was not q
 | `${CONTAINER}-canary` | yes, best-effort | shares the same `-v /mnt/data/workspaces:/workspaces` bind mount; an aborted deploy leaves it running |
 | `inngest-redis.service` | **yes (new)** | writes `/mnt/data/redis`; `TimeoutStopSec=30` gives a graceful SIGTERM + AOF flush |
 | `orphan-reaper.{timer,service}` | **yes (new)** | a 6-hourly **root `rm -rf`** over `/mnt/data/workspaces/*.orphaned-*` with **no** `RequiresMountsFor`. Firing between the delta rsync and the verify makes `rsync --delete --dry-run` emit a `*deleting` line — the *identical* C1 abort signature as the AOF, on a 6h duty cycle against a ~20 min freeze |
-| `luks-monitor.{timer,service}` | yes, best-effort | armed by a *prior* successful cutover; `luks-monitor.service` is `RequiresMountsFor=/mnt/data`, so a mid-run instance holds the mount and trips the now fail-closed G4 |
+| `luks-monitor.{timer,service}` | yes, best-effort | armed by a *prior* successful cutover; `luks-monitor.service` is `RequiresMountsFor=/mnt/data`, so a mid-run instance holds the mount and trips the now fail-closed G4 **Superseded 2026-09-27 (#8706):** Terraform arms it now (`terraform_data.luks_monitor_install`), not a prior cutover. And the service is ordering-only now (`After=local-fs.target mnt-data.mount`), not `RequiresMountsFor=`. The quiesce still stops the pair, and G4 still catches a mid-run instance that holds the mount |
 | `inngest-server.service` | **no — deliberately** | `ProtectSystem=strict` + `ReadWritePaths=/var/lib/inngest /var/lock` means it provably cannot **write** `/mnt/data`; `TimeoutStopSec=180` would burn 3 min of a ~10 min freeze for zero quiescence benefit. Reconciled post-freeze instead (clear failed state, start only if inactive). The write claim is **not** a hold claim — `ProtectSystem=strict` makes the mount read-only, not invisible — so the *hold* axis is delegated to G4 by design. |
 
 Timers are stopped as **`<timer> <service>` pairs**: stopping a `.timer` only prevents future
@@ -142,6 +142,15 @@ properties:
 
 - `inngest-redis.service` carries `RequiresMountsFor=/mnt/data`, so it fails **safely** — systemd
   refuses to start it and it lands in `failed`, outliving the run.
+
+  > **Superseded 2026-09-27 (#8706):** "systemd refuses to start it" is not what
+  > `RequiresMountsFor=` does. It is Requires-strength: starting the unit while `/mnt/data` is
+  > unmounted makes systemd START `mnt-data.mount`, which mounts whatever `/etc/fstab` names. The
+  > unit lands in `failed` only if that mount itself fails. On web-1 the fstab can name the
+  > superseded plaintext volume. The #8706 review made `luks-monitor.service` ordering-only for this
+  > reason (`After=local-fs.target mnt-data.mount`, the `inngest-cutover-flip.service` precedent,
+  > #7228). `resume_writers()`'s `mountpoint -q` gate is what actually keeps writers off an
+  > unmounted `$MOUNT`.
 - `webhook.service` carries **no** `RequiresMountsFor`, only `ReadWritePaths=/mnt/data`, so it
   starts **successfully onto the bare root-disk mountpoint directory**. It is the CI deploy
   receiver, so a deploy landing during the incident writes user data into the root filesystem,
@@ -251,6 +260,11 @@ gate would pass against a gate that never runs in production.
 `isLuks` guard is safe there in its intended direction — the volume is born empty), but **the live
 delivery path for web-1 is the cutover job's SSH channel**. Any claim that merging this work protects
 web-1 is false until the cutover runs.
+
+> **Superseded 2026-09-27 (#8706):** for the monitor units, `workspaces-luks-emit.sh` and the
+> `SOLEUR_SENTRY_DSN=` line only. No real cutover reached the step that delivers them, so
+> `terraform_data.luks_monitor_install` now does. The mount-gate claim above stands. See the
+> 2026-09-27 addendum.
 
 **Reboot is the sharper edge.** `docker run --restart unless-stopped` means `dockerd` resurrects the
 container on reboot **without ever executing `docker run`** — so a pre-`docker run` gate catches
@@ -760,6 +774,10 @@ evidence. It was replaced before merge.
 | `SOLEUR_SENTRY_DSN=` | cloud-init (fresh hosts only; `ignore_changes = [user_data]` means web-1's file may lack it) |
 | `DOPPLER_TOKEN=` | first write: `workspaces-cutover.sh`. After that: `terraform_data.luks_monitor_token_install` (`workspaces-luks.tf`), triggered only by the token's hash |
 
+> **Superseded 2026-09-27 (#8706):** the `SOLEUR_SENTRY_DSN=` row. On web-1 that line is now
+> written by `terraform_data.luks_monitor_install`; cloud-init keeps it for fresh hosts. See the
+> 2026-09-27 addendum's table.
+
 The installer ships `luks-monitor-token-refresh.sh`, which proves the new token can read
 `WORKSPACES_LUKS_KEY` (the pinned `doppler secrets get … --plain --config prd_workspaces_luks` form)
 BEFORE it rewrites only the token line, keeping every other line byte for byte and restoring the
@@ -774,6 +792,11 @@ before deleting the old one; its SSH step re-fires the installer. No dispatch, n
 probe's health is proven by `workspaces-luks-verify.yml`, not by this installer and not by the host
 timer (which #8632 review found silent; tracked separately). The installer prints the timer's state
 into the apply log as evidence.
+
+> **Superseded 2026-09-27 (#8706), in part:** this still holds for the token installer. The host
+> timer was silent because it was never installed. The new `terraform_data.luks_monitor_install`
+> starts the service once with `--no-block`, so probe faults still never redden a merge. See the
+> 2026-09-27 addendum's "Proof boundary, qualified".
 
 **Deviation from `hr-prod-host-config-change-immutable-redeploy`.** This is an in-place edit of one
 line over SSH through Terraform, allowed under ADR-154's standing exception (web-1 cannot be
@@ -800,6 +823,9 @@ leaves (0600 root):
 
 The addendum above still holds for the `DOPPLER_TOKEN=` line. The file itself is created by this
 installer when absent. The missing `SOLEUR_SENTRY_DSN=` line stays cloud-init's, tracked in #8706.
+
+> **Superseded 2026-09-27 (#8706):** the DSN line on web-1 is now delivered by
+> `terraform_data.luks_monitor_install`. See the 2026-09-27 addendum.
 
 ## Addendum (2026-09-24): the same rotation shape, applied to `web_probes` (#8705)
 
@@ -834,6 +860,175 @@ Retained web-1 snapshot `411798619` very likely holds its first token, `web-prob
 - **No C4 impact.** Checked `diagrams/{model,views,spec}.c4`: no element or edge names this token.
 
 This closes forward read access only. Values the image already holds are tracked in #8734.
+
+## Addendum (2026-09-27): the monitor units and the DSN line have a Terraform owner (#8706)
+
+**What was wrong.** `luks-monitor.timer`, `luks-monitor.service` and `/usr/local/bin/luks-monitor`
+were never installed on web-1. They were not disabled, and they did not fail before exec. The
+token installer's state print in `apply-web-platform-infra.yml` run 36005279546 (2026-09-24) read
+`0 timers listed.` and an empty `UnitFileState=` for the timer. A disabled unit reads
+`UnitFileState=disabled`; an empty value means there is no unit file.
+
+The only installer was the tail of `workspaces-cutover.sh` (anchor: `# Deliver the standing
+observability to the LIVE host via THIS channel (ADR-119 §(e)).`). That tail runs after
+`app_canary`. The two real cutovers that passed the host canary, runs 29782780158 and 29995956562,
+both died in `app_canary`. Every other real run died earlier, and every dry run stops before the
+tail. So no run ever installed the units. The same unreached tail explains the missing
+`/etc/default/luks-monitor` that #8724 fixed and the missing `SOLEUR_SENTRY_DSN=` line. It is one
+defect, not three.
+
+**Why nobody noticed for about nine weeks.** Three things read green over the gap:
+
+- `betteruptime_heartbeat.workspaces_luks` has a second pusher, the daily
+  `workspaces-luks-verify.yml` job, which ships its own copy of the probe. One live pusher keeps a
+  shared beat `up`.
+- The ADR-117 static guard cited the arming line in the cutover tail. The line exists, so the guard
+  passed over code that never ran (see the ADR-117 amendment of 2026-09-27).
+- A failing host run would not have reached Sentry (see "The DSN line is the only Sentry path on
+  web-1" below).
+
+**Decision.** `terraform_data.luks_monitor_install` in `workspaces-luks.tf` now owns delivery. It
+rides the per-merge SSH apply and does four things:
+
+1. It copies `luks-monitor.sh` to `/usr/local/bin/luks-monitor`, `workspaces-luks-emit.sh` to
+   `/usr/local/bin/workspaces-luks-emit.sh`, and `luks-monitor.service` and `luks-monitor.timer` to
+   `/etc/systemd/system/`. These are the cutover tail's destinations.
+2. It writes the `SOLEUR_SENTRY_DSN=` line in `/etc/default/luks-monitor`. The file stays 0600 root,
+   and every other line, the `DOPPLER_TOKEN=` line included, is kept byte for byte.
+3. It runs `systemctl enable --now luks-monitor.timer`, asserts `is-enabled` and `is-active`, then
+   starts the service once with `systemctl start --no-block luks-monitor.service`.
+4. It prints the unit state into the apply log, the dead-man units included.
+
+Its trigger hashes the four delivered files and the DSN, so a change to any of them re-delivers. The
+cutover tail stays as it is. It installs the same repo files, so it is a harmless second installer
+for a future re-cut.
+
+**What this changes in §(e), and what it does not.** §(e)'s delivery claim no longer covers the
+monitor units, `workspaces-luks-emit.sh` or the `SOLEUR_SENTRY_DSN=` line on web-1: Terraform owns
+them now. §(e)'s mount-gate claim stands: the fail-closed mount gate still reaches web-1 through the
+cutover channel. "§(e) is not a standing write channel" (2026-09-24) still holds, and this addendum
+does not rely on §(e) at all. In the 2026-07-19 quiesce table, `luks-monitor.{timer,service}` is
+now armed by this resource, not "by a *prior* successful cutover". The quiesce itself is unchanged.
+
+**The DSN line is the only Sentry path on web-1.** `workspaces-luks-emit.sh` reads the DSN from
+`/etc/default/luks-monitor` first. Its fallback is `doppler secrets get SENTRY_DSN --config prd`,
+run with the `prd_workspaces_luks`-scoped token. That token cannot read `prd`, so the fallback is
+unreachable, and the helper then returned without sending. Before this change a host drift event
+on web-1 could not reach Sentry.
+
+> **Qualified 2026-09-27 (#8706 review):** "that token cannot read `prd`, so the fallback is
+> unreachable" is ASSERTED, not measured. It follows from the token's `prd_workspaces_luks` scope,
+> but no run read the fallback with that token. What was measured is the missing DSN line. Since
+> the review, a lost event is visible either way: the helper logs
+> `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn` when no DSN resolves (see the review amendments
+> below).
+
+**Why the installer is in `workspaces-luks.tf`, not `server.tf`.** The units are web-1-only by
+design (§(d)), so a fresh web host must NOT get them. Sections 1 and 2 of
+`web-host-provisioner-parity.test.sh` scan `server.tf` only and require every SSH-written
+destination there to have a fresh-boot writer. The installer therefore sits beside its sibling,
+`terraform_data.luks_monitor_token_install`. This placement is a decision, not a way around that
+sweep. The file-wide SSH connection count (G2) does include it.
+
+**Line ownership of `/etc/default/luks-monitor`, from 2026-09-27.** This replaces the
+`SOLEUR_SENTRY_DSN=` row of the 2026-09-24 table, and the sentence "The missing
+`SOLEUR_SENTRY_DSN=` line stays cloud-init's, tracked in #8706" in the second 2026-09-24 addendum.
+
+| Line | Owner |
+|---|---|
+| `SOLEUR_SENTRY_DSN=` on web-1 | `terraform_data.luks_monitor_install` (`workspaces-luks.tf`), re-fired when the DSN's hash or a delivered file changes |
+| `SOLEUR_SENTRY_DSN=` on a fresh host | cloud-init, at the host's birth |
+| `DOPPLER_TOKEN=` | unchanged: the 2026-09-24 table |
+
+Each writer keeps the other's line. The DSN writer drops only `^SOLEUR_SENTRY_DSN=` lines and
+refuses if any other line changed. The token helper does the same for its own line. `depends_on`
+runs the token installer first within one apply.
+
+**The DSN precondition, and its blast radius.** The resource accepts an empty `var.sentry_dsn`, or
+one matching `^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$` (the expression `inngest-host.tf`
+already uses). The class is strict because the value lands in a single-quoted shell `printf` and in
+a file that root sources. Empty is allowed at plan time on purpose. A failed precondition stops the
+whole `-target`-scoped SSH apply, every SSH-provisioned resource in it, and other workflows plan this
+root too. So the host-side writer refuses an empty value instead (exit 10), which fails only this
+resource. A malformed non-empty value still fails the precondition and stops the SSH apply step.
+That is deliberate: writing it would put an unchecked string into a file root sources.
+
+**Proof boundary, qualified.** The 2026-09-24 "Proof boundary" paragraph still holds for the token
+installer: it never starts `luks-monitor.service`. This installer starts it once, with `--no-block`,
+so the apply never waits on the probe and a mount, escrow or readyz fault still cannot redden a
+merge. What the apply asserts is delivery: `is-enabled` and `is-active` on the timer. The kick
+exists to produce a same-day host row. It fires only when a delivered file or the DSN changes.
+
+**The runtime proof is a logs alert, not the static guard.**
+`logtail_exploration_alert.luks_monitor_host_timer_dark` (`soleur-luks-monitor-host-timer-dark-prd`,
+in `betterstack-logs-alerts.tf`, per ADR-218) fires when the trailing 27 h holds no
+`OK: /mnt/data is LUKS-backed` row from `_SYSTEMD_UNIT=luks-monitor.service`. The verify job's rows
+never carry that unit, so it cannot mask the host. The heartbeat manifest now cites
+`workspaces-luks.tf` as evidence, but a green static guard only proves the arming line exists. #8706
+closes when `scripts/followthroughs/luks-monitor-host-timer-8706.sh` prints
+`HOST_TIMER_PASS nights=3` after three consecutive timer-fired nights.
+
+**Deviation from `hr-prod-host-config-change-immutable-redeploy`.** Two binaries, two unit files, one
+env-file line, a `daemon-reload`, a timer enable and one service start change web-1 in place, over
+SSH, through Terraform. This rests on ADR-154's standing exception, as the 2026-09-24 token line does:
+web-1 cannot be redeployed, because `cx33` remains unorderable.
+
+> **Qualified 2026-09-27 (#8706 review):** "`cx33` remains unorderable" is re-measured in ADR-154's
+> [Re-examined 2026-09-27 (#8706)](./ADR-154-repair-the-credential-channel-not-the-host.md#consequences)
+> block: available in 0 of 6 datacenters. The exception stands for this change.
+
+**Known gap, not fixed here.** A cutover that aborts after the host canary leaves the dead-man timer
+armed: `cleanup()` does nothing once `CANARY_OK=1`, and both such runs died before
+`disarm_dead_man`. What the dead-man did in July has aged out of log retention. A future re-cut must
+not inherit this silently. It is tracked in #9045. Meanwhile this installer's state print shows the
+dead-man units' state on every fire.
+
+### Review amendments (2026-09-27)
+
+Appended after the 10-agent review of PR #9044. Each item below changes or qualifies a claim above.
+
+- **`RequiresMountsFor=` became `After=`.** `luks-monitor.service` now carries
+  `After=local-fs.target mnt-data.mount`, ordering only. `RequiresMountsFor=/mnt/data` is
+  Requires-strength: starting the unit while `/mnt/data` is unmounted would start `mnt-data.mount`,
+  which mounts whatever `/etc/fstab` names. On web-1 that can be the superseded plaintext volume,
+  served over the only copy. The probe needs no mount to run: it checks `mountpoint -q /mnt/data`
+  and reports `not_mounted` itself. Same downgrade as `inngest-cutover-flip.service` (#7228). This
+  also corrects the §(a) claim that `RequiresMountsFor=` makes systemd "refuse to start" a unit (see
+  the note there).
+- **A cutover-freeze guard (exit 17).** Before it arms, the installer refuses with exit 17 when
+  `workspaces-luks-deadman.timer` reads `SubState=waiting`: a cutover freeze is live. The apply goes
+  red, the resource taints, and the next apply re-fires it. The plan cut an earlier freeze guard.
+  That cut does not apply here. The cut guard keyed on the dead-man reading `active`, and an elapsed
+  transient timer keeps `ActiveState=active`, `SubState=elapsed` until reboot, so an old July
+  dead-man would have blocked every install. `SubState=waiting` is reported only by a live transient
+  timer that has not fired yet, which is exactly a freeze in progress.
+- **Host scope.** The alert predicate gains `AND JSONExtractString(raw, 'host_name') =
+  'soleur-web-platform'`. web-2 (`soleur-web-2`) ships to the same Logs source (measured
+  2026-09-27). Its `incident_cause` no longer says "the volume is still encrypted": the alert also
+  fires when the host run fails an assert. It means "no PASSING host run in about 27 h".
+- **Lost drift events page.** The two exits in `workspaces-luks-emit.sh` that drop a drift event
+  (no DSN resolved; the Sentry POST failed) now log
+  `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn|send_failed drift_reason=<slug>` at
+  `user.crit` through an `emit_refusal()` definer. So `logtail_exploration_alert.monitor_send_failed`
+  pages on them. Sentry is the channel that failed, so the mirror is journal to Vector to Better
+  Stack.
+- **Script cleanup.** Terraform leaves an inline script's full body on the host when it exits
+  non-zero. The DSN writer carries the DSN, so it now removes its own uploaded script
+  (`rm -f -- "$0"`), uses the temp file `$f.dsn.tmp`, and has an EXIT trap. The state print removes
+  the `/root/tf-luks-*.sh` stubs. The installer also deletes stale root-owned `/tmp/terraform_*.sh`
+  older than 60 minutes: pre-#8706 failed runs could leave the token there. It chmods both binaries
+  right after delivery, and its state print adds the `luks-monitor.service` state,
+  `findmnt --fstab /mnt/data`, and `mnt-data.mount`'s `What` and `FragmentPath`.
+- **An empty DSN leaves the timer unarmed.** The DSN writer runs before the arming step. So its
+  exit 10 means that fire does not arm the timer, and the apply stays red until the DSN is fixed.
+  Writer exits: 10 empty DSN, 11 symlink, 12 not a regular file, 13 read error, 14 another line
+  would change, 15 not exactly one DSN line, 16 `mv` failed. Installer exit 17: cutover freeze live.
+- **The DSN fallback claim is asserted.** See the qualification under "The DSN line is the only
+  Sentry path on web-1".
+- **`query_period = 97200` is measured, not assumed.** Better Stack's docs list no bounds. On
+  2026-09-27 a throwaway PAUSED alert was created on the live API with `query_period = 97200`, read
+  back `query_period:97200 confirmation_period:0` (not clamped), and deleted.
+- **The dead-man gap** above is tracked in #9045.
 
 ## References
 

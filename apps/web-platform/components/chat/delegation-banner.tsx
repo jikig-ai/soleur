@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { DelegationAcceptanceModal } from "@/components/settings/delegation-acceptance-modal";
+import { Button } from "@/components/ui/button";
 
 export interface DelegationBannerProps {
   grantorDisplayName: string;
@@ -68,13 +69,14 @@ export function DelegationBanner({
           {grantorDisplayName} has offered to fund your runs. Accept the
           Delegation Consent Side Letter to activate.
         </span>
-        <button
+        <Button
+          variant="gold"
           type="button"
           onClick={() => setOpen(true)}
           className="ml-auto rounded-md bg-soleur-accent-gold-fg px-3 py-1 text-xs font-medium text-soleur-bg-surface-1 hover:opacity-90"
         >
           Review &amp; accept
-        </button>
+        </Button>
         {open && (
           <DelegationAcceptanceModal
             delegationId={delegationId}
@@ -112,13 +114,14 @@ export function DelegationBanner({
           {(dailyCapCents / 100).toFixed(0)} today
         </span>
       )}
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => setOpen(true)}
         className="ml-auto text-xs underline hover:text-soleur-accent-gold-fg/80"
       >
         Manage
-      </button>
+      </Button>
       {open && (
         <DelegationAcceptanceModal
           delegationId={delegationId}

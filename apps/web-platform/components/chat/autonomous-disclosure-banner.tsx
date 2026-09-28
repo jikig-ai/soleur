@@ -1,5 +1,7 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+
 /**
  * feat-bash-autonomous-default-on — first-run consent soft-gate banner.
  *
@@ -54,32 +56,35 @@ export function AutonomousDisclosureBanner({
       <div className="flex flex-wrap justify-end gap-2">
         {existingWorkspace ? (
           <>
-            <button
+            <Button
+              variant="outlined"
               type="button"
               disabled={resolved}
               onClick={() => onRespond(gateId, "Ask me each time")}
               className="rounded-none border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2 disabled:opacity-50"
             >
               Ask me each time
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="gold"
               type="button"
               disabled={resolved}
               onClick={() => onRespond(gateId, "Keep autonomous on")}
               className="rounded-none bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
             >
               Keep autonomous on
-            </button>
+            </Button>
           </>
         ) : (
-          <button
+          <Button
+            variant="gold"
             type="button"
             disabled={resolved}
             onClick={() => onRespond(gateId, "Got it")}
             className="rounded-none bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
           >
             Got it
-          </button>
+          </Button>
         )}
       </div>
     </div>

@@ -1,5 +1,6 @@
 "use client";
 import { useEffect } from "react";
+import { Button } from "@/components/ui/button";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 // Shared body for `app/error.tsx` and `app/(dashboard)/error.tsx`. The
@@ -43,12 +44,14 @@ export function ErrorBoundaryView({
           ? `Error ID: ${error.digest}`
           : "An unexpected error occurred."}
       </p>
-      <button
+      <Button
+        variant="outlined"
+        type="button"
         onClick={reset}
-        className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
+        className="text-soleur-text-secondary hover:text-soleur-text-primary"
       >
         Try again
-      </button>
+      </Button>
     </div>
   );
 }

@@ -92,6 +92,21 @@ function setupGitHub(
     /** The listing's own path prefix, when it should differ from the request
      *  dir (GitHub reports its canonical path, not the caller's spelling). */
     listingDir?: string;
+    /** #8966: commits response for `commits?path=<dir>/model.likec4.json`
+     *  (the newest model commit). Default [] — "no model commit" — so stale
+     *  derivation answers ABSENT and pre-existing rows see no `stale` field.
+     *  A function may throw to simulate a transport failure. */
+    modelCommits?: unknown[] | (() => unknown);
+    /** Commits response for `commits?path=<dir>` (the grace-window tip probe,
+     *  issued only when the source sets diff). */
+    dirCommits?: unknown[];
+    /** The dir listing AT the model commit, served for `contents/<dir>?ref=…`.
+     *  Defaults to the HEAD `entries` — identical listings derive stale:false.
+     *  Set it to a different listing to derive stale:true. */
+    atCommitEntries?: unknown;
+    /** `git/trees/{sha}?recursive=1` responses keyed by sha — issued only to
+     *  compare the SOURCE sets of subdirs whose tree shas differ. */
+    trees?: Record<string, unknown>;
   } = {},
 ) {
   const entries = Object.keys(files).map((name) => ({
@@ -103,7 +118,21 @@ function setupGitHub(
   mocks.mockGithubApiGet.mockImplementation(async (_inst: number, p: string) => {
     if (p.includes("/contents/")) {
       if (opts.listingError) throw opts.listingError;
+      if (p.includes("?ref=")) return opts.atCommitEntries ?? entries;
       return entries;
+    }
+    if (p.includes("/commits?path=")) {
+      if (p.includes("model.likec4.json")) {
+        const v = opts.modelCommits ?? [];
+        return typeof v === "function" ? v() : v;
+      }
+      return opts.dirCommits ?? [];
+    }
+    const t = p.match(/\/git\/trees\/(.+?)(\?recursive=1)?$/);
+    if (t) {
+      const hit = opts.trees?.[t[1]];
+      if (hit === undefined) throw new GitHubApiError("tree not found", 404);
+      return hit;
     }
     const m = p.match(/\/git\/blobs\/(.+)$/);
     if (m) {
@@ -537,5 +566,184 @@ describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => 
       "utf8",
     );
     expect(src.split('op: "zero-view-model"').length - 1).toBe(1);
+  });
+});
+
+// #8966: staleness is DERIVED on every GET — the newest model.likec4.json
+// commit's dir subtree is content-diffed against the current listing, so the
+// banner is a recomputed fact that survives dropped c4_diagram_saved frames,
+// remounts, and out-of-band source pushes. `stale` is present only on a
+// produced verdict; every derivation failure answers ABSENT (never false).
+describe("GET /api/kb/c4/project — derived staleness (#8966)", () => {
+  const GHDIR = `knowledge-base/${C4_DIAGRAMS_DIR}`;
+  const MODEL = JSON.stringify({
+    elements: { a: { id: "a" } },
+    views: { index: { id: "index" } },
+  });
+  // The commits payload the derivation reads for the model file: its sha is
+  // the `?ref=` the at-commit Contents listing is fetched under.
+  function armDerivation(over: {
+    dir?: string;
+    /** Source entries at model-commit time (name→sha; files only). */
+    atCommit?: Record<string, string>;
+    /** Raw override for the at-commit Contents response (e.g. a non-array). */
+    atCommitRaw?: unknown;
+    dirCommits?: unknown[];
+    trees?: Record<string, unknown>;
+  } = {}) {
+    return {
+      dir: over.dir,
+      modelCommits: [
+        {
+          sha: "model-commit",
+          commit: { committer: { date: "2026-09-20T00:00:00Z" } },
+        },
+      ],
+      // Old dir tip — outside the render-budget grace window.
+      dirCommits: over.dirCommits ?? [
+        { sha: "tip", commit: { committer: { date: "2020-01-01T00:00:00Z" } } },
+      ],
+      atCommitEntries:
+        over.atCommitRaw ??
+        Object.entries(over.atCommit ?? {}).map(([name, sha]) => ({
+          name,
+          type: "file",
+          sha,
+        })),
+      trees: over.trees,
+    };
+  }
+  const SOURCE = 'model {\n  a = element "A TEST"\n}';
+  const files = { "model.c4": SOURCE, "model.likec4.json": MODEL };
+  const calls = () => mocks.mockGithubApiGet.mock.calls.map((c) => c[1] as string);
+
+  it("D1: the derivation actually runs — commits + at-commit contents calls are issued, not a dead arm", async () => {
+    setupGitHub(files, armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }));
+    const res = await callGET();
+    expect(res.status).toBe(200);
+    const paths = calls();
+    expect(paths).toContain(
+      `/repos/${OWNER}/${REPO}/commits?path=${GHDIR}/model.likec4.json&per_page=1`,
+    );
+    expect(paths).toContain(`/repos/${OWNER}/${REPO}/contents/${GHDIR}?ref=model-commit`);
+    // No root-tree walk — the at-commit listing is one Contents call.
+    expect(paths.filter((p) => p.includes("/git/trees/"))).toEqual([]);
+  });
+
+  it("D2: identical source set at model-commit time → stale:false present (not merely absent)", async () => {
+    setupGitHub(files, armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }));
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(false);
+  });
+
+  it("D3: a source modified since the model commit (sha drift) → stale:true", async () => {
+    setupGitHub(files, armDerivation({ atCommit: { "model.c4": "sha-OLD" } }));
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(true);
+  });
+
+  it("D3b: a source added out-of-band → stale:true", async () => {
+    setupGitHub(
+      { ...files, "extra.likec4": "specification {}" },
+      armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }),
+    );
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(true);
+  });
+
+  it("D3c: a source deleted out-of-band → stale:true", async () => {
+    setupGitHub(
+      files,
+      armDerivation({
+        atCommit: { "model.c4": "sha-model.c4", "gone.c4": "sha-gone" },
+      }),
+    );
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(true);
+  });
+
+  it("D3d: a .md-only drift → stale:false (markdown never moves the verdict)", async () => {
+    // README.md changed since the model commit — only its listing sha differs;
+    // .md files are excluded on both sides of the compare.
+    setupGitHub(
+      { ...files, "README.md": "# changed" },
+      armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }),
+    );
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(false);
+  });
+
+  it("D4: a diff whose dir tip is inside the grace window → stale ABSENT (in-flight save)", async () => {
+    setupGitHub(
+      files,
+      armDerivation({
+        atCommit: { "model.c4": "sha-OLD" },
+        dirCommits: [
+          { sha: "tip", commit: { committer: { date: new Date().toISOString() } } },
+        ],
+      }),
+    );
+    const body = await (await callGET()).json();
+    expect("stale" in body).toBe(false);
+  });
+
+  it("D5: no model commit (dir never rendered) → stale ABSENT", async () => {
+    setupGitHub(files); // modelCommits defaults to []
+    const body = await (await callGET()).json();
+    expect("stale" in body).toBe(false);
+  });
+
+  it("D6: derivation failure → stale ABSENT (never normalized to false) + stale-derivation report", async () => {
+    setupGitHub(files, {
+      modelCommits: () => {
+        throw new GitHubApiError("rate limited", 429);
+      },
+    });
+    const res = await callGET();
+    expect(res.status).toBe(200); // the READ still succeeds — derivation is additive
+    const body = await res.json();
+    expect("stale" in body).toBe(false);
+    // The report is debounced per (installation, dir) — a persistently
+    // failing derivation must not be a Sentry event per page load (#8966).
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "c4-project-read",
+        op: "stale-derivation",
+      }),
+      expect.anything(),
+      "stale-derivation",
+    );
+  });
+
+  it("D7: an at-commit listing that is not a directory → stale ABSENT + report", async () => {
+    setupGitHub(
+      files,
+      armDerivation({ atCommitRaw: { type: "file", sha: "x" } }),
+    );
+    const body = await (await callGET()).json();
+    expect("stale" in body).toBe(false);
+    // No real Error exists for a non-directory listing — the emit carries null
+    // first arg (the pino-mirror convention, #8629).
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "stale-derivation" }),
+      expect.anything(),
+      "stale-derivation",
+    );
+  });
+
+  it("D8: a non-canonical dir derives against ITS OWN path, not the canonical one", async () => {
+    setupGitHub(
+      { "model.c4": SOURCE, "model.likec4.json": MODEL },
+      armDerivation({ dir: "product/diagrams", atCommit: { "model.c4": "sha-OLD" } }),
+    );
+    const res = await callGET("product/diagrams");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.stale).toBe(true);
+    expect(calls()).toContain(
+      `/repos/${OWNER}/${REPO}/commits?path=knowledge-base/product/diagrams/model.likec4.json&per_page=1`,
+    );
   });
 });

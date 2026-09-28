@@ -17,6 +17,7 @@ import { KbChatContent } from "@/components/chat/kb-chat-content";
 import { KbChatFullScreen } from "@/components/chat/kb-chat-fullscreen";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { Button } from "@/components/ui/button";
 import {
   Spinner,
   useC4Project,
@@ -30,6 +31,10 @@ import {
   C4_EDIT_FLAG,
   type C4DiagramSavedDetail,
 } from "@/lib/c4-constants";
+import {
+  staleActionLine,
+  staleOutcomeVerdict,
+} from "@/components/kb/c4-diagnostics";
 
 function ResizeHandle() {
   // Active/drag wash is brand gold (`soleur-accent-gold-fill/70`), grey on hover
@@ -77,8 +82,22 @@ export default function C4Workspace({
     dirPath: string;
     diagnostic: string | null;
   } | null>(null);
-  const stale = staleSave?.dirPath === dirPath;
-  const staleDiagnostic = stale ? staleSave.diagnostic : null;
+  // #8966 — the GET-derived verdict is authoritative when present; the
+  // outcome-driven `staleSave` is only the fallback for a GET that produced
+  // none (derivation failure / no model commit / in-flight save window).
+  // `??` keeps undefined distinct from false: absent is "no information".
+  // A present verdict also RETIRES the fallback — otherwise a later ABSENT
+  // answer would resurrect a banner the last verdict already overrode.
+  useEffect(() => {
+    if (data?.stale !== undefined) setStaleSave(null);
+  }, [data?.stale]);
+  const derivedStale = data?.stale;
+  const stale =
+    derivedStale !== undefined ? derivedStale : staleSave?.dirPath === dirPath;
+  // A diagnostic is outcome state — the retirement effect already dropped any
+  // stale-era one, so a `staleSave` present here post-dates the verdict.
+  const staleDiagnostic =
+    stale && staleSave?.dirPath === dirPath ? staleSave.diagnostic : null;
 
   // The save-outcome transition shared by the Code panel (`onSaved`) and the
   // #8739 Concierge-save event listener: refetch, then reconcile THIS folder's
@@ -89,12 +108,20 @@ export default function C4Workspace({
   const applySavedOutcome = useCallback(
     async (rerendered: boolean, diagnostic?: string | null, silent?: boolean) => {
       await reload({ silent });
+      // #8966: the outcome NEVER overrules a derived verdict — the render-time
+      // `data.stale ?? …` union handles that. The helper only decides what the
+      // outcome contributes as the absent-verdict fallback; a supersede shape
+      // (rerendered:false, no diagnostic) defers entirely — a superseding
+      // save's model commit is already live.
+      const v = staleOutcomeVerdict(rerendered, diagnostic);
       setStaleSave((cur) =>
-        rerendered
-          ? cur?.dirPath === dirPath
-            ? null
-            : cur
-          : { dirPath, diagnostic: diagnostic ?? null },
+        !v.apply
+          ? cur
+          : v.stale
+            ? { dirPath, diagnostic: v.diagnostic }
+            : cur?.dirPath === dirPath
+              ? null
+              : cur,
       );
     },
     [dirPath, reload],
@@ -196,6 +223,7 @@ export default function C4Workspace({
           ).map(([t, label]) => (
             <button
               key={t}
+              data-button-exempt="segmented Concierge|Code tab — active state lives in conditional className that variant base colors would flatten"
               onClick={() => setRightTab(t)}
               className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                 rightTab === t
@@ -217,7 +245,8 @@ export default function C4Workspace({
         )}
         <div className="ml-auto flex items-center gap-1.5 pr-1">
           {isDesktop && (
-          <button
+          <Button
+            variant="ghost"
             type="button"
             aria-label="Collapse Concierge"
             onClick={collapseConcierge}
@@ -227,7 +256,7 @@ export default function C4Workspace({
               <polyline points="13 17 18 12 13 7" />
               <polyline points="6 17 11 12 6 7" />
             </svg>
-          </button>
+          </Button>
           )}
         </div>
       </div>
@@ -291,6 +320,7 @@ export default function C4Workspace({
                   hasModel={!!data.dump}
                   stale={stale}
                   staleDiagnostic={staleDiagnostic}
+                  staleAction={staleActionLine(c4EditEnabled, dirPath)}
                 />
                 <div className="relative min-h-0 flex-1">
                   <C4Canvas dump={data.dump} initialViewId={viewId} />

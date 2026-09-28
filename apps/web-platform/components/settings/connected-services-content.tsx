@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
   PROVIDER_CONFIG,
   EXCLUDED_FROM_SERVICES_UI,
@@ -105,27 +106,32 @@ function ProviderCard({
         <div className="flex shrink-0 items-center gap-2">
           {connected ? (
             <>
-              <button
+              <Button
+                variant="outlined"
                 onClick={() => setExpanded(!expanded)}
-                className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
+                className="text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
               >
                 Rotate
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
                 onClick={handleRemove}
                 disabled={removing}
-                className="rounded-lg border border-red-900/30 px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:border-red-800 hover:text-red-300 disabled:opacity-50"
+                loading={removing}
+                loadingLabel="Removing"
+                className="text-xs"
               >
-                {removing ? "Removing..." : "Remove"}
-              </button>
+                Remove
+              </Button>
             </>
           ) : (
-            <button
+            <Button
+              variant="gold"
               onClick={() => setExpanded(!expanded)}
-              className="rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent transition-colors hover:opacity-90"
+              className="text-xs"
             >
               {expanded ? "Cancel" : "Connect"}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -164,13 +170,15 @@ function ProviderCard({
             <p className="text-xs text-soleur-text-muted">
               Token will be encrypted at rest and validated before saving.
             </p>
-            <button
+            <Button
+              variant="gold"
               onClick={handleSubmit}
               disabled={loading || !token.trim()}
-              className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
+              loading={loading}
+              loadingLabel="Validating"
             >
-              {loading ? "Validating..." : "Save"}
-            </button>
+              Save
+            </Button>
           </div>
         </div>
       )}

@@ -21,6 +21,7 @@ export function IssueCard({
   return (
     <button
       type="button"
+      data-button-exempt="composite kanban card — block-level content (id, title, pills, chips, avatars); Button base inline-flex/padding conflicts with block w-full text-left card layout"
       onClick={() => onOpen(issue.id)}
       className="block w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 text-left transition-colors hover:border-soleur-text-muted hover:bg-soleur-bg-surface-2/40"
     >

@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { usePathname } from "next/navigation";
 import { useKb } from "./kb-context";
 import { UploadProgress } from "./upload-progress";
@@ -196,6 +197,7 @@ function TreeItem({
     <li>
       <div className="group relative">
         <button
+          data-button-exempt="composite tree row — chevron/upload-progress slot + icon + name + timestamp, dynamic indent style, aria-expanded, isBusy tint"
           onClick={() => onToggle(dirKey)}
           className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 ${
             isBusy ? "bg-amber-500/10" : ""
@@ -229,7 +231,8 @@ function TreeItem({
           )}
         </button>
         {!isBusy && (
-          <button
+          <Button
+            variant="ghost"
             onClick={(e) => {
               e.stopPropagation();
               fileInputRef.current?.click();
@@ -239,7 +242,7 @@ function TreeItem({
             aria-label={`Upload file to ${node.name}`}
           >
             <UploadIcon />
-          </button>
+          </Button>
         )}
         <input
           ref={fileInputRef}
@@ -253,7 +256,7 @@ function TreeItem({
       {uploadState.status === "error" && (
         <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
           <span className="flex-1">{uploadState.message}</span>
-          <button onClick={() => setUploadState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
+          <Button variant="ghost" onClick={() => setUploadState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</Button>
         </div>
       )}
       {uploadState.status === "duplicate" && (
@@ -261,6 +264,7 @@ function TreeItem({
           <p className="mb-1.5">&ldquo;{uploadState.filename}&rdquo; already exists. Replace?</p>
           <div className="flex gap-2">
             <button
+              data-button-exempt="amber warning-tinted confirm chip — overwrite caution cue has no variant equivalent"
               onClick={() => {
                 const { file, targetDir, sha } = uploadState;
                 uploadFile(file, targetDir, sha);
@@ -269,12 +273,13 @@ function TreeItem({
             >
               Replace
             </button>
-            <button
+            <Button
+              variant="ghost"
               onClick={() => setUploadState({ status: "idle" })}
               className="rounded px-2 py-0.5 text-soleur-text-secondary hover:text-soleur-text-primary"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -417,7 +422,7 @@ function FileNode({
             <span className="shrink-0 text-sm text-soleur-text-muted">{ext}</span>
           </div>
         ) : (
-          <Link
+          <NavLink
             href={filePath}
             aria-current={isActive ? "page" : undefined}
             className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
@@ -452,11 +457,12 @@ function FileNode({
                 Renaming...
               </span>
             )}
-          </Link>
+          </NavLink>
         )}
         {isAttachment && deleteState.status === "idle" && renameState.status === "idle" && (
           <div className="kb-tree-actions absolute right-1 top-1/2 flex -translate-y-1/2 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-            <button
+            <Button
+              variant="ghost"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -468,8 +474,9 @@ function FileNode({
               aria-label={`Rename ${node.name}`}
             >
               <PencilIcon />
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -480,7 +487,7 @@ function FileNode({
               aria-label={`Delete ${node.name}`}
             >
               <TrashIcon />
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -488,31 +495,35 @@ function FileNode({
         <div className="mx-2 mt-1 rounded bg-red-500/10 px-2 py-1.5 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
           <p className="mb-1.5">Delete &ldquo;{node.name}&rdquo;?</p>
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="danger"
               onClick={() => node.path && deleteFile(node.path)}
+              loading={isDeleting}
+              loadingLabel="Deleting"
               className="rounded bg-red-500/20 px-2 py-0.5 text-red-300 hover:bg-red-500/30"
             >
               Delete
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
               onClick={() => setDeleteState({ status: "idle" })}
               className="rounded px-2 py-0.5 text-soleur-text-secondary hover:text-soleur-text-primary"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
       {deleteState.status === "error" && (
         <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
           <span className="flex-1">{deleteState.message}</span>
-          <button onClick={() => setDeleteState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
+          <Button variant="ghost" onClick={() => setDeleteState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</Button>
         </div>
       )}
       {renameState.status === "error" && (
         <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
           <span className="flex-1">{renameState.message}</span>
-          <button onClick={() => setRenameState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
+          <Button variant="ghost" onClick={() => setRenameState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</Button>
         </div>
       )}
     </li>

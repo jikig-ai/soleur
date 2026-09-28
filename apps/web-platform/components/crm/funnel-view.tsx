@@ -9,7 +9,7 @@
 // apart. Honest thin-data footnote.
 
 import useSWR from "swr";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
 import { LockIcon } from "@/components/icons";
@@ -136,9 +136,9 @@ export function FunnelView() {
       <p className="flex items-center gap-1.5 text-xs text-soleur-text-muted">
         <LockIcon className="h-3.5 w-3.5 shrink-0" />
         Read-only. Update contacts by mentioning them in a{" "}
-        <Link href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
+        <NavLink href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
           chat with your CRO or CPO agent
-        </Link>
+        </NavLink>
         .
       </p>
     </div>

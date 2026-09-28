@@ -111,7 +111,7 @@ if [[ -n "$FILE_PATH" && -z "$COMMAND" ]] && declare -f freeze_active_prefix >/d
 fi
 
 # Derive a quote/heredoc-stripped view of the command ONCE (one perl fork per
-# Bash invocation, alongside the existing jq + grep overhead). PHRASE-detecting
+# Bash invocation -- plus one more for a `gh api` command, below -- alongside the existing jq + grep overhead). PHRASE-detecting
 # gates (require-milestone, block-stash) scan $SCAN so a commit whose MESSAGE
 # documents `gh issue create` / `git stash` is not mistaken for the real
 # command (#5192). Gates that fire on `git commit` itself keep scanning
@@ -477,11 +477,69 @@ fi
 # both shapes. The MILESTONE arm below stays scoped to `gh issue create` --
 # `gh api` takes no --milestone flag, so requiring one there would deny every
 # legitimate API filing.
-_gh_create=0; _gh_api_issue=0
+# Endpoint scope: only the issues COLLECTION (`repos/<o>/<r>/issues`, optional
+# trailing `/`, `?query` or `#fragment`) creates an issue -- a POST to
+# `issues/<N>/labels`, `/comments` or `/assignees` edits an existing one. The
+# endpoint and its POST signal must share one command SEGMENT, so listing issues
+# then labelling them is not a filing. One perl pass does the whole match (a fork
+# per segment made the hook O(segments), and a padded command could outrun the
+# hook timeout, which is non-blocking): it joins `\`-newline continuations,
+# neutralises escaped separators, drops redirect operators (`2>&1`, `&>`, `>&2`,
+# `<&0`, `>|` -- their `&`/`|` is not a separator), and splits on `;&|`/newline
+# only at nesting depth 0, so `$(...)`, backticks and `( ... )` stay inside the
+# command that contains them. Prints 2 for a filing using --input, 1 for any
+# other filing, 0 otherwise. The source is $SCAN, so a QUOTED endpoint is
+# invisible here (pre-existing; tokenizer fix on #9089). Owner/repo stays ONE
+# word so an unexpanded `$REPO` still matches; `$`/`}` count as terminators only
+# with no `/` before them (`issues$QS` gates, `issues/$N/labels` does not). The
+# POST signal is unanchored, like main's: an anchor was dodged by `\-f`,
+# `${E}-f` and `$E-f`. filingShape() in
+# apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs is the cron
+# mirror; this side is deliberately WIDER (unexpanded `$VAR` endpoints, attached
+# `-ftitle=`, `-X=POST`) because it sees unexpanded shell text.
+_gh_create=0; _gh_api_issue=0; _gh_api_input=0
 grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN" && _gh_create=1
-grep -qE 'gh\s+api\b[^|]*\brepos/[^[:space:]]+/issues\b' <<<"$SCAN" \
-  && grep -qE '(-X|--method)[[:space:]]+POST|-f[[:space:]]+title=|--field[[:space:]]+title=' <<<"$SCAN" \
-  && _gh_api_issue=1
+if grep -qE 'gh\s+api\b' <<<"$SCAN"; then
+  _api_pl='
+    s/\\\n/ /g;
+    s/\\[;&|()]/_/g;
+    s/>\|/> /g;
+    s/(?<!\S)\d+(?=&>|[<>]&)//g;
+    s/(?:&>>?|[<>]&)[\d-]*/ /g;
+    my ($d, $bt, $cur, @seg) = (0, 0, "");
+    for my $c (split //) {
+      if ($c eq "`") { $bt = !$bt; $cur .= $c; next }
+      if (!$bt) {
+        if ($c eq "(") { $d++ }
+        elsif ($c eq ")") { $d-- if $d > 0 }
+        elsif ($d == 0 && $c =~ /[;&|\n]/) { push @seg, $cur; $cur = ""; next }
+      }
+      $cur .= $c;
+    }
+    push @seg, $cur;
+    my $hit = 0;
+    for (@seg) {
+      next unless m{gh\s+api\b.*\brepos/\S+/issues(?:/?(?:[?#\s()<>`\\]|$)|[\$\}])};
+      next unless /(?:-X|--method)[\s=]*POST\b|--input(?:[\s=]|$)|-[fF][\s=]*title=|--(?:raw-)?field[\s=]+title=/;
+      if (/--input(?:[\s=]|$)/) { $hit = 2; last }
+      $hit = 1;
+    }
+    print $hit;'
+  _api_rc=0
+  _api_hit="$(printf '%s' "$SCAN" | perl -0777 -ne "$_api_pl" 2>/dev/null)" || _api_rc=$?
+  if [[ "$_api_rc" != 0 || ! "$_api_hit" =~ ^[012]$ ]]; then
+    # perl unavailable or broken: fall back to a whole-command match, which
+    # over-gates sub-resource POSTs rather than letting a create through.
+    if grep -qE 'gh\s+api\b.*\brepos/[^[:space:]]+/issues' <<<"$SCAN" \
+       && grep -qE '(-X|--method)[[:space:]=]*POST|--input|-[fF][[:space:]=]*title=|--(raw-)?field[[:space:]=]+title=' <<<"$SCAN"; then
+      _api_hit=1
+    else
+      _api_hit=0
+    fi
+  fi
+  [[ "$_api_hit" != 0 ]] && _gh_api_issue=1
+  [[ "$_api_hit" == 2 ]] && _gh_api_input=1
+fi
 if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
   # Exempt issue creation targeting an EXTERNAL repo (--repo owner/name where
   # owner is not our org). The constitution backlog-hygiene rule applies only to
@@ -657,6 +715,23 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
     # the filer to add the very flag they had just passed. Split on commas and
     # anchor each element between commas, so `foo/meta/machinery` still does not
     # match (the anchor requires a comma, not a slash, before the element).
+    # --input sends the request body from a file or stdin, and gh then moves
+    # every -f/-F field to the QUERY STRING -- so a `labels[]=meta/machinery` or
+    # a body line passed as a field never reaches the new issue, and this gate
+    # cannot read the JSON. Refuse with the recovery rather than crediting an
+    # exit the filing does not actually carry.
+    if [[ "$_gh_api_input" == 1 ]]; then
+      emit_incident "wg-defer-only-after-inline-triage" "deny" \
+        "gh api issue create via --input cannot be verified" "$COMMAND"
+      jq -n '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse", permissionDecision: "deny",
+          permissionDecisionReason: "BLOCKED: this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f labels[]=meta/machinery. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line)."
+        }
+      }'
+      exit 0
+    fi
+
     _fj_li=0
     while (( _fj_li < ${#_repo_toks[@]} )); do
       _fj_t="${_repo_toks[$_fj_li]}"; _fj_v=""
@@ -706,7 +781,10 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
     while (( _fj_bi < ${#_repo_toks[@]} )); do
       _fj_bt="${_repo_toks[$_fj_bi]}"
       case "$_fj_bt" in
-        --body-file|-F) _fj_bf="${_repo_toks[$((_fj_bi + 1))]:-}" ;;
+        --body-file) _fj_bf="${_repo_toks[$((_fj_bi + 1))]:-}" ;;
+        # -F is --body-file only for `gh issue create`; for `gh api` it is a
+        # typed field (`-F title=x`), and reading it as a path mis-refuses.
+        -F) [[ "$_gh_create" == 1 ]] && _fj_bf="${_repo_toks[$((_fj_bi + 1))]:-}" ;;
         --body-file=*)  _fj_bf="${_fj_bt#--body-file=}" ;;
       esac
       _fj_bi=$((_fj_bi + 1))
@@ -817,10 +895,12 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
     if [[ "$_fj_pass" == 0 ]]; then
       emit_incident "wg-defer-only-after-inline-triage" "deny" \
         "gh issue create names no user-visible consequence" "$COMMAND"
-      jq -n '{
+      _fj_x1="--label meta/machinery"
+      [[ "$_gh_api_issue" == 1 && "$_gh_create" == 0 ]] && _fj_x1="-f labels[]=meta/machinery (the gh api spelling)"
+      jq -n --arg x1 "$_fj_x1" '{
         hookSpecificOutput: {
           hookEventName: "PreToolUse", permissionDecision: "deny",
-          permissionDecisionReason: "BLOCKED: this filing names no user-visible consequence. Take ONE of three exits. (1) It is a finding about Soleur own verification machinery -- add --label meta/machinery. That ledger is excluded from the operator digest and from user-facing drains, and is the honest home for a guard/gate/ledger/probe finding. (2) It affects something a user receives -- add two lines to the body: `User-Impact: <named route, page, component, CLI command, email or document>` and `Fix-Size: <N> lines / <M> files` measured, not estimated. (3) A rule mandates the filing -- add `Mandated-By: <rule-id>` ON ITS OWN LINE in the body (the merge-boundary gate anchors it whole-line, so a claim written mid-sentence or in the title passes here and is refused there). \"The guard is imperfect\" is exit 1, not exit 2."
+          permissionDecisionReason: ("BLOCKED: this filing names no user-visible consequence. Take ONE of three exits. (1) It is a finding about Soleur own verification machinery -- add " + $x1 + ". That ledger is excluded from the operator digest and from user-facing drains, and is the honest home for a guard/gate/ledger/probe finding. (2) It affects something a user receives -- add two lines to the body: `User-Impact: <named route, page, component, CLI command, email or document>` and `Fix-Size: <N> lines / <M> files` measured, not estimated. (3) A rule mandates the filing -- add `Mandated-By: <rule-id>` ON ITS OWN LINE in the body (the merge-boundary gate anchors it whole-line, so a claim written mid-sentence or in the title passes here and is refused there). \"The guard is imperfect\" is exit 1, not exit 2.")
         }
       }'
       exit 0

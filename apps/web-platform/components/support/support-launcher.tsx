@@ -6,6 +6,7 @@
 // while the panel is open; the panel's X / Escape / backdrop close it.
 
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { useTour } from "@/components/tour/tour-provider";
 import { SupportPanel } from "./support-panel";
@@ -42,12 +43,17 @@ export function SupportLauncher() {
   return (
     <>
       {!open && (
-        <button
+        <Button
+          variant="gold"
           ref={bubbleRef}
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Open support"
-          className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-soleur-accent-gold-fill text-soleur-text-on-accent shadow-lg transition-opacity hover:opacity-90"
+          // rounded-full loses Tailwind emit-order against the Button base
+          // rounded-lg — pin the circular FAB via style. h-12 w-12 + p-0 keep
+          // the 48px circle (Button's px-6 py-3 geometry would pad it out).
+          style={{ borderRadius: "9999px", padding: 0 }}
+          className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-5 z-50 h-12 w-12 shadow-lg"
         >
           <svg
             viewBox="0 0 24 24"
@@ -61,7 +67,7 @@ export function SupportLauncher() {
           >
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
           </svg>
-        </button>
+        </Button>
       )}
       <SupportPanel
         open={open}

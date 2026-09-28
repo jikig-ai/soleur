@@ -29,10 +29,12 @@ signals + the operator-surface reasons documented there).
 Live standing alarms over this source:
 
 - **`logtail_exploration_alert.monitor_send_failed`** (#8097 / ADR-218, evaluated every 60 s over
-  a 300 s window) — the one Terraform-managed native Better Stack Logs alert, `soleur-monitor-send-failed-prd`. Pages
+  a 300 s window) — the first Terraform-managed native Better Stack Logs alert, `soleur-monitor-send-failed-prd`. Pages
   (team email; `betteruptime_policy.uptime` on the paid tier) on any PRIORITY-2 row whose message
   starts `SOLEUR_` and contains `_SEND_FAILED` or `_REFUSED` — a web-1 monitor unit's own Resend/
   Sentry send failed. `SOLEUR_*_SEND_SKIPPED` and `SOLEUR_*_HALT` never match by construction.
+  Since #8706 it also pages on `SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn|send_failed`, which
+  `workspaces-luks-emit.sh` logs at `user.crit` when a LUKS drift event cannot reach Sentry.
   Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; verified through the real apply
   path by `terraform_data.send_failed_alert_probe` + `scripts/followthroughs/send-failed-alert-probe-8097.sh`;
   self-health via the `logs_alert` arm of `reconcile-live-heartbeats.ts`. Runbook:
@@ -107,6 +109,18 @@ Live standing alarms over this source:
     again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
     `anthropic-credit-exhausted` Sentry issue alert (the credit probe's own cron monitor is
     routed since #8630 but muted, #8704).
+- **`logtail_exploration_alert.luks_monitor_host_timer_dark`** (#8706, hourly over a trailing 27 h
+  window, `lower_than 1`, missing data counts as zero) — `soleur-luks-monitor-host-timer-dark-prd`.
+  Pages (team email) when no `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` carries
+  `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own
+  nightly LUKS probe has not reported a PASSING run. It is host-scoped to web-1: web-2
+  (`soleur-web-2`) ships to the same source. The daily `workspaces-luks-verify.yml` rows never carry
+  that unit, so they cannot mask it. A host run that fails an assert, or a Vector or Logs-source
+  outage, also trips it. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; the unit it watches is delivered by
+  `terraform_data.luks_monitor_install` (`workspaces-luks.tf`); self-health via the `logs_alert` arm
+  of `reconcile-live-heartbeats.ts`. Runbook and no-SSH decode:
+  [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the

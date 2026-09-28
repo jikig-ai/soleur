@@ -41,7 +41,10 @@
 #
 # TO ADD ANOTHER LOGS ALERT (five steps, in this order):
 #   1. a `locals { <name>_sql = <<-SQL … SQL }` predicate (probe it live via betterstack-query.sh
-#      with a positive control first — the template SQL is NOT validated by `terraform validate`);
+#      with a positive control first — the template SQL is NOT validated by `terraform validate`).
+#      Source 2457081 carries EVERY web host (web-1 `soleur-web-platform`, web-2 `soleur-web-2`):
+#      if the signal belongs to one host, add a `host_name` conjunct or the other host's rows
+#      satisfy it (#8706);
 #   2. a `logtail_exploration` carrying that SQL, `variable "source"` = local.vector_prd_source_id;
 #   3. a `logtail_exploration_alert` on it (copy the paging semantics below, incl. treat_as_zero);
 #   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (the #5566
@@ -692,6 +695,95 @@ resource "logtail_exploration_alert" "claude_cost_capture_dark" {
   incident_cause = "No claude-eval cron cost marker with a cost_usd (and no credit-probe RED row) reached Better Stack in 24 h: the spend telemetry is dark, so the daily burn alert cannot fire. Runbook: ${local.claude_spend_runbook_url}"
   metadata = {
     runbook = local.claude_spend_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #8706: web-1's daily LUKS at-rest probe has stopped reporting ───────────────────────────────
+# luks-monitor.timer never existed on web-1 for nine weeks and nothing noticed: the shared
+# betteruptime_heartbeat.workspaces_luks has a second pusher (workspaces-luks-verify.yml, over SSH)
+# that kept it green. This alert singles out the HOST unit on web-1. Under luks-monitor.service
+# every log() line is journaled twice; the stdout copy carries _SYSTEMD_UNIT (measured 100% on the
+# stdout rows of sibling web-1 units such as web-private-nic-guard.service, whose SyslogIdentifier
+# also differs from its unit name; luks-monitor.service itself has never run). logger rows drop it
+# about half the time. The verify job's rows carry session-N.scope or no unit, so they can never
+# keep this quiet. host_name scopes it to web-1: web-2 (soleur-web-2) ships to the same source.
+#
+# Window: OnCalendar=daily + RandomizedDelaySec=1800 can space two runs 24h30m (88200 s) apart,
+# so a 24 h window would read empty for up to 30 minutes on a healthy day. 27 h (97200 s) covers it
+# with margin. Pages about 27 h after the last good host run; a Vector or Logs-source outage trips
+# it too (the runbook's decode says to check the pipeline before the host).
+#
+# Live-probed 2026-09-27 (7 days, hot+archive): as written 0 (the dark state this pages on);
+# control with the unit swapped for inngest-heartbeat.service and no needle 39228; the unit
+# conjunct dropped 9 (the verify job's OK rows — the unit conjunct is what excludes them).
+# The host_name conjunct was added at review (2026-09-27): stdout rows from web-1 units read
+# host_name='soleur-web-platform', web-2's read 'soleur-web-2' (measured over 2 days).
+locals {
+  luks_monitor_host_timer_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
+      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'
+      AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%'
+      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
+  SQL
+
+  luks_monitor_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706"
+}
+
+resource "logtail_exploration" "luks_monitor_host_timer_dark" {
+  name      = "soleur-luks-monitor-host-timer-dark-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.luks_monitor_host_timer_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "luks_monitor_host_timer_dark" {
+  exploration_id = logtail_exploration.luks_monitor_host_timer_dark.id
+  name           = "soleur-luks-monitor-host-timer-dark-prd"
+
+  alert_type          = "threshold"
+  operator            = "lower_than"
+  value               = 1
+  check_period        = 3600
+  query_period        = 97200
+  confirmation_period = 0
+  recovery_period     = 3600
+  # A missing value must read as 0 so silence FIRES (the claude_cost_capture_dark precedent).
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "web-1's nightly encryption self-check (luks-monitor.service) has not recorded a PASSING run in about 27 hours. Either the host check is not running, or it runs and fails one of its checks; a failing check is the incident, so look first for a luks-monitor FAIL row or a workspaces-luks-drift event. First step: check whether ANY luks-monitor rows arrived at all; total silence means the log pipeline, not the host. The daily workspaces-luks-verify job checks the volume independently. Runbook: ${local.luks_monitor_runbook_url}"
+  metadata = {
+    runbook = local.luks_monitor_runbook_url
   }
 
   escalation_target {

@@ -37,6 +37,12 @@ import {
   useC4Project,
   type ProjectResponse,
 } from "@/components/kb/c4-shared";
+import {
+  staleActionLine,
+  staleOutcomeVerdict,
+  CONCIERGE_ACTION_LINE,
+  OTHER_DIR_ACTION_LINE,
+} from "@/components/kb/c4-diagnostics";
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -321,5 +327,219 @@ describe("useC4Project — a response for a folder the page has left is discarde
     });
     expect(result.current.data?.dir).toBe("B");
     expect(result.current.data?.sources["model.c4"]).toBe("b-source");
+  });
+});
+
+// #9050 F9 — the endpoint guard above covers the cross-folder case only. Two
+// in-flight reloads on the SAME endpoint race: last to resolve wins, so a
+// slower stale read can overwrite a fresher one.
+describe("useC4Project — a superseded same-endpoint reload is discarded", () => {
+  function deferredFetch(sources: string[]) {
+    const resolvers: Array<() => void> = [];
+    let call = 0;
+    global.fetch = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          const payload = {
+            dir: "d",
+            sources: { "model.c4": sources[call++] },
+          };
+          resolvers.push(() =>
+            resolve({ ok: true, json: async () => payload } as Response),
+          );
+        }),
+    ) as unknown as typeof fetch;
+    return resolvers;
+  }
+
+  it("a slower first reload resolving after a faster second does not clobber the fresher data", async () => {
+    const resolvers = deferredFetch(["stale-read", "fresh-read"]);
+    const { result } = renderHook(() => useC4Project("d"));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    act(() => {
+      void result.current.reload();
+    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    // The fresher (second) fetch lands first.
+    await act(async () => {
+      resolvers[1]();
+    });
+    await waitFor(() =>
+      expect(result.current.data?.sources["model.c4"]).toBe("fresh-read"),
+    );
+    // The stale (first) fetch lands late — it must not overwrite.
+    await act(async () => {
+      resolvers[0]();
+    });
+    expect(result.current.data?.sources["model.c4"]).toBe("fresh-read");
+  });
+
+  it("a superseded reload does not clear loading while the fresher one is still in flight", async () => {
+    const resolvers = deferredFetch(["stale-read", "fresh-read"]);
+    const { result } = renderHook(() => useC4Project("d"));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    act(() => {
+      void result.current.reload();
+    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    // The stale (first) fetch resolves while the fresh one is still pending.
+    await act(async () => {
+      resolvers[0]();
+    });
+    expect(result.current.loading).toBe(true);
+    await act(async () => {
+      resolvers[1]();
+    });
+    await waitFor(() =>
+      expect(result.current.data?.sources["model.c4"]).toBe("fresh-read"),
+    );
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("a superseded non-silent reload still clears loading when the superseding fetch is silent", async () => {
+    const resolvers = deferredFetch(["mount-read", "stale-read", "fresh-read"]);
+    const { result } = renderHook(() => useC4Project("d"));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    // Settle the initial mount fetch first so `loading` is a clean slate.
+    await act(async () => {
+      resolvers[0]();
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // A non-silent reload claims the spinner, then a silent refetch supersedes
+    // it — save outcomes refetch silently (#8739).
+    act(() => {
+      void result.current.reload();
+    });
+    expect(result.current.loading).toBe(true);
+    act(() => {
+      void result.current.reload({ silent: true });
+    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(3));
+    // The superseded non-silent fetch resolves: it must still clear the
+    // spinner it owns — the silent fetch never claimed it.
+    await act(async () => {
+      resolvers[1]();
+    });
+    expect(result.current.loading).toBe(false);
+    await act(async () => {
+      resolvers[2]();
+    });
+    expect(result.current.data?.sources["model.c4"]).toBe("fresh-read");
+    expect(result.current.loading).toBe(false);
+  });
+});
+
+// #8966 — the derived verdict must survive the response normalization intact:
+// `stale:true`/`false` pass through, and ABSENT stays absent (undefined), never
+// normalized to false — a false normalization would let an undervived read
+// clear a banner a dropped frame earned.
+describe("useC4Project — stale passthrough (#8966)", () => {
+  async function load(payload: Record<string, unknown>) {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => payload,
+    })) as unknown as typeof fetch;
+    const { result } = renderHook(() => useC4Project("engineering/diagrams"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    return result.current.data;
+  }
+
+  it("stale:true is preserved", async () => {
+    const data = await load({ dir: "d", sources: {}, dump: null, viewIds: [], diagnostics: [], stale: true });
+    expect(data?.stale).toBe(true);
+  });
+
+  it("stale:false is preserved — a clean verdict is authoritative, not 'no banner info'", async () => {
+    const data = await load({ dir: "d", sources: {}, dump: null, viewIds: [], diagnostics: [], stale: false });
+    expect(data?.stale).toBe(false);
+  });
+
+  it("absent stays absent — undefined, never false", async () => {
+    const data = await load({ dir: "d", sources: {}, dump: null, viewIds: [], diagnostics: [] });
+    expect(data?.stale).toBeUndefined();
+    expect("stale" in (data ?? {})).toBe(true); // key exists on the normalized shape…
+    expect(data?.stale).toBeUndefined();       // …but the VALUE is absent
+  });
+});
+
+// #8966 — the shared reconcile both banner consumers call. Pinned here once so
+// the workspace and the embed can never drift on the supersede deferral.
+describe("staleOutcomeVerdict — the shared reconcile (#8966)", () => {
+  it("rerendered:true clears", () => {
+    expect(staleOutcomeVerdict(true)).toEqual({
+      apply: true,
+      stale: false,
+      diagnostic: null,
+    });
+  });
+
+  it("rerendered:false WITH a diagnostic sets the banner with the reason", () => {
+    expect(staleOutcomeVerdict(false, "rate limited")).toEqual({
+      apply: true,
+      stale: true,
+      diagnostic: "rate limited",
+    });
+  });
+
+  it("the supersede shape (rerendered:false, no diagnostic) DEFERS — never self-sets", () => {
+    expect(staleOutcomeVerdict(false, null)).toEqual({ apply: false });
+    expect(staleOutcomeVerdict(false)).toEqual({ apply: false });
+  });
+});
+
+describe("staleActionLine — the flag × dir copy matrix (#8966)", () => {
+  it("flag ON → the supersede line (Save is a live affordance)", () => {
+    expect(staleActionLine(true, "engineering/architecture/diagrams")).toBe(
+      SUPERSEDED,
+    );
+    expect(staleActionLine(true, "anywhere/else")).toBe(SUPERSEDED);
+  });
+
+  it("flag OFF + canonical dir → the Concierge line", () => {
+    expect(staleActionLine(false, "engineering/architecture/diagrams")).toBe(
+      CONCIERGE_ACTION_LINE,
+    );
+  });
+
+  it("flag OFF + non-canonical dir → the export line", () => {
+    expect(staleActionLine(false, "product/diagrams")).toBe(
+      OTHER_DIR_ACTION_LINE,
+    );
+  });
+});
+
+describe("C4Diagnostics — staleAction resolves line 2 (#8966)", () => {
+  it("uses staleAction as the no-diagnostic fallback", () => {
+    render(
+      <C4Diagnostics
+        diagnostics={[]}
+        hasModel={true}
+        stale={true}
+        staleAction={CONCIERGE_ACTION_LINE}
+      />,
+    );
+    expect(screen.getByText(CONCIERGE_ACTION_LINE)).toBeTruthy();
+    expect(screen.queryByText(SUPERSEDED)).toBeNull();
+  });
+
+  it("a save diagnostic still wins over staleAction", () => {
+    render(
+      <C4Diagnostics
+        diagnostics={[]}
+        hasModel={true}
+        stale={true}
+        staleDiagnostic={RATE_LIMIT_DIAG}
+        staleAction={CONCIERGE_ACTION_LINE}
+      />,
+    );
+    expect(screen.queryByText(CONCIERGE_ACTION_LINE)).toBeNull();
+    expect(screen.getByText(/rate limit/i)).toBeTruthy();
+  });
+
+  it("the amber strip announces itself — aria-live=polite", () => {
+    render(<C4Diagnostics diagnostics={[]} hasModel={true} stale={true} />);
+    const strip = document.querySelector('[aria-live="polite"]');
+    expect(strip).toBeTruthy();
+    expect(strip?.textContent).toContain("out of date");
   });
 });

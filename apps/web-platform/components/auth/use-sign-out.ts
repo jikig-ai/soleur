@@ -5,6 +5,7 @@ import { useSWRConfig } from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { clearSwrCache } from "@/lib/swr-config";
 import { reportSilentFallback } from "@/lib/client-observability";
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 
 /**
  * Encapsulates the dashboard sign-out teardown contract.
@@ -88,33 +89,54 @@ export function useSignOut() {
     buttonPathNavigatingRef.current = true;
     try {
       const supabase = createClient();
-      try {
-        await supabase.removeAllChannels();
-      } catch (err) {
-        reportSilentFallback(err, {
-          feature: "auth",
-          op: "signOut",
-          extra: { stage: "removeAllChannels" },
-        });
-      }
-      try {
-        const { error } = await supabase.auth.signOut();
-        if (error) {
-          reportSilentFallback(error, {
-            feature: "auth",
-            op: "signOut",
-            extra: { stage: "signOut.resultError" },
-          });
-          await forceLocalSignOut(supabase);
-        }
-      } catch (err) {
-        reportSilentFallback(err, {
-          feature: "auth",
-          op: "signOut",
-          extra: { stage: "signOut.throw" },
-        });
-        await forceLocalSignOut(supabase);
-      }
+      // feat-ui-action-feedback: bound the teardown — every dismiss vector
+      // on the confirm modal is inert while isSigningOut holds (Esc, Cancel,
+      // backdrop all dead), so a stalled removeAllChannels/GoTrue call would
+      // leave a permanent "Still working…" modal. Losing the race proceeds
+      // to the finally's unconditional hard nav; the zombie promise's later
+      // resolution is harmless (SIGNED_OUT's nav is already suppressed by
+      // buttonPathNavigatingRef).
+      await Promise.race([
+        (async () => {
+          try {
+            await supabase.removeAllChannels();
+          } catch (err) {
+            reportSilentFallback(err, {
+              feature: "auth",
+              op: "signOut",
+              extra: { stage: "removeAllChannels" },
+            });
+          }
+          try {
+            const { error } = await supabase.auth.signOut();
+            if (error) {
+              reportSilentFallback(error, {
+                feature: "auth",
+                op: "signOut",
+                extra: { stage: "signOut.resultError" },
+              });
+              await forceLocalSignOut(supabase);
+            }
+          } catch (err) {
+            reportSilentFallback(err, {
+              feature: "auth",
+              op: "signOut",
+              extra: { stage: "signOut.throw" },
+            });
+            await forceLocalSignOut(supabase);
+          }
+        })(),
+        new Promise<void>((resolve) =>
+          setTimeout(() => {
+            reportSilentFallback(null, {
+              feature: "auth",
+              op: "signOut-watchdog",
+              message: `sign-out teardown exceeded ${PENDING_WATCHDOG_MS}ms — proceeding to hard nav`,
+            });
+            resolve();
+          }, PENDING_WATCHDOG_MS),
+        ),
+      ]);
     } catch (err) {
       reportSilentFallback(err, {
         feature: "auth",
@@ -127,7 +149,21 @@ export function useSignOut() {
       // principal's first paint — closes the cross-user leak window in the SWR
       // (data) layer.
       try {
-        await clearSwrCache(mutate);
+        // Same bound as the teardown — a hang here parks isSigningOut on the
+        // undismissable modal one step before the nav.
+        await Promise.race([
+          clearSwrCache(mutate),
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              reportSilentFallback(null, {
+                feature: "auth",
+                op: "signOut-watchdog",
+                message: `clearSwrCache exceeded ${PENDING_WATCHDOG_MS}ms — proceeding to hard nav`,
+              });
+              resolve();
+            }, PENDING_WATCHDOG_MS),
+          ),
+        ]);
       } catch (err) {
         reportSilentFallback(err, {
           feature: "auth",

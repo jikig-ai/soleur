@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { Button } from "@/components/ui/button";
 
 interface DelegationToggleProps {
   memberUserId: string;
@@ -186,8 +187,10 @@ function OwnerDelegationControl({
         role="switch"
         aria-checked={active}
         aria-label={`Fund ${memberEmail.split("@")[0]}'s runs`}
+        aria-busy={loading || undefined}
         disabled={loading}
         onClick={handleToggle}
+        data-button-exempt="role=switch composite — fixed h-5 w-9 track + sliding thumb span cannot reduce to Button's padding/radius geometry"
         className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
           active ? "bg-soleur-accent-gold-fg" : "bg-soleur-bg-surface-2"
         } ${loading ? "opacity-50" : ""}`}
@@ -206,17 +209,18 @@ function OwnerDelegationControl({
               : `$${(delegation.todaySpentCents / 100).toFixed(2)}`}
             /${(displayCapCents / 100).toFixed(0)}
           </span>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             disabled={loading}
             onClick={() => {
               setDraftDollars(String(displayCapCents / 100));
               setEditingCap(true);
             }}
-            className="text-xs text-soleur-text-muted underline decoration-dotted underline-offset-2 hover:text-soleur-text-secondary"
+            className="text-xs underline decoration-dotted underline-offset-2"
           >
             Edit cap
-          </button>
+          </Button>
         </>
       )}
       {active && delegation && editingCap && (
@@ -229,24 +233,32 @@ function OwnerDelegationControl({
             className="w-16 rounded border border-soleur-border-default bg-soleur-bg-base px-1 py-0.5 text-xs text-soleur-text-primary"
             aria-label="Daily cap in dollars"
           />
-          <button
+          <Button
+            variant="ghost"
             type="button"
             // Block Save on empty/invalid/sub-$1 input so clearing the field and
             // saving can't silently write the $1.00 floor (an unintended de-fund).
             disabled={loading || !(Number(draftDollars) >= 1)}
+            loading={loading}
+            loadingLabel="Saving"
             onClick={handleSaveCap}
-            className="text-xs font-medium text-soleur-accent-gold-fg hover:underline disabled:opacity-50"
+            className="text-xs"
+            // text-soleur-accent-gold-fg loses Tailwind emit-order against the
+            // ghost variant's text-soleur-text-secondary — preserve the gold
+            // action affordance via the token directly.
+            style={{ color: "var(--soleur-accent-gold-fg)" }}
           >
             Save
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             type="button"
             disabled={loading}
             onClick={() => setEditingCap(false)}
-            className="text-xs text-soleur-text-muted hover:text-soleur-text-secondary"
+            className="text-xs"
           >
             Cancel
-          </button>
+          </Button>
         </>
       )}
       {!active && !delegation && (

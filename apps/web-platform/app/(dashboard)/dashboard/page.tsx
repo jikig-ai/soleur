@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
+import { Button } from "@/components/ui/button";
 import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { swrKeys, jsonFetcher } from "@/lib/swr-config";
@@ -107,7 +108,7 @@ const DOMAIN_OPTIONS: { value: string; label: string }[] = [
 ];
 
 export default function DashboardPage() {
-  const router = useRouter();
+  const router = usePendingRouter();
   const {
     completeOnboarding,
     runtimeExplainerDismissed,
@@ -293,6 +294,11 @@ export default function DashboardPage() {
   // ---------------------------------------------------------------------------
 
   const [firstRunAttachments, setFirstRunAttachments] = useState<FirstRunAttachment[]>([]);
+  // feat-ui-action-feedback: the exempt send submit had no re-entry guard —
+  // a second Enter before the soft nav commits re-fires completeOnboarding +
+  // the vision POST. Ref (sync) + state (visual disable).
+  const [sendSubmitting, setSendSubmitting] = useState(false);
+  const sendSubmittingRef = useRef(false);
   const [attachError, setAttachError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -375,10 +381,13 @@ export default function DashboardPage() {
   const handleFirstRunSend = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      if (sendSubmittingRef.current) return;
       const form = e.currentTarget;
       const input = form.elements.namedItem("idea") as HTMLInputElement;
       const message = input?.value?.trim();
       if (!message && firstRunAttachments.length === 0) return;
+      sendSubmittingRef.current = true;
+      setSendSubmitting(true);
       completeOnboarding();
 
       // Store pending files for the chat page to upload after conversation creation
@@ -523,16 +532,17 @@ export default function DashboardPage() {
                     </svg>
                   )}
                   <span className="max-w-[120px] truncate text-xs text-soleur-text-secondary">{att.file.name}</span>
-                  <button
+                  <Button
+                    variant="ghost"
                     type="button"
                     onClick={() => removeFirstRunAttachment(att.id)}
-                    className="ml-1 text-soleur-text-muted hover:text-soleur-text-primary"
+                    className="ml-1 h-5 w-5 hover:text-soleur-text-primary"
                     aria-label={`Remove ${att.file.name}`}
                   >
                     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
                     </svg>
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
@@ -549,16 +559,17 @@ export default function DashboardPage() {
               dashboard landing prompt matches the chat and KB surfaces. */}
           <div className="flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-text-secondary">
             {/* Paperclip / attach button */}
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+              className="h-[36px] w-[36px] shrink-0 hover:text-soleur-text-primary"
               aria-label="Attach files"
             >
               <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
               </svg>
-            </button>
+            </Button>
             <input
               ref={fileInputRef}
               type="file"
@@ -590,7 +601,10 @@ export default function DashboardPage() {
             </div>
             <button
               type="submit"
-              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500"
+              data-button-exempt="flat amber-600 send affordance inside the composite attach/input/send box — fill is not a Button variant"
+              disabled={sendSubmitting}
+              aria-busy={sendSubmitting}
+              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-60"
               aria-label="Send message"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -638,14 +652,15 @@ export default function DashboardPage() {
           Start a conversation to put your agents to work.
         </p>
 
-        <button
+        <Button
+          variant="gold"
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
           data-tour-id="action:new-conversation"
-          className="mb-10 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="mb-10 font-semibold"
         >
           New conversation
-        </button>
+        </Button>
 
         <LeaderStrip onLeaderClick={handleLeaderClick} getIconPath={getIconPath} />
       </div>
@@ -735,6 +750,7 @@ export default function DashboardPage() {
         <div className="flex rounded-lg border border-soleur-border-default overflow-hidden">
           <button
             type="button"
+            data-button-exempt="archive-filter segmented toggle pair — per-option active treatment inside one shared bordered control"
             onClick={() => setArchiveFilter("active")}
             className={`min-h-[44px] px-3 py-2 text-sm font-medium transition-colors ${
               archiveFilter === "active"
@@ -746,6 +762,7 @@ export default function DashboardPage() {
           </button>
           <button
             type="button"
+            data-button-exempt="archive-filter segmented toggle pair — per-option active treatment inside one shared bordered control"
             onClick={() => setArchiveFilter("archived")}
             className={`min-h-[44px] px-3 py-2 text-sm font-medium transition-colors ${
               archiveFilter === "archived"
@@ -791,14 +808,15 @@ export default function DashboardPage() {
 
         <div className="flex-1" />
 
-        <button
+        <Button
+          variant="gold"
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
           data-tour-id="action:new-conversation"
-          className="min-h-[44px] rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="min-h-[44px] font-semibold"
         >
           + New conversation
-        </button>
+        </Button>
       </div>
 
       {/* Loading state */}
@@ -837,13 +855,14 @@ export default function DashboardPage() {
           <p className="mb-4 text-sm text-soleur-text-secondary">
             No conversations match your filters.
           </p>
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={clearFilters}
-            className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2"
+            className="text-soleur-text-secondary"
           >
             Clear filters
-          </button>
+          </Button>
         </div>
       )}
 
@@ -873,17 +892,18 @@ function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId:
       </p>
       <div className="flex flex-wrap justify-center gap-3">
         {ROUTABLE_DOMAIN_LEADERS.map((leader) => (
-          <button
+          <Button
             key={leader.id}
+            variant="ghost"
             type="button"
             onClick={() => onLeaderClick(leader.id)}
-            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-soleur-bg-surface-2/50"
+            className="group gap-1.5 hover:bg-soleur-bg-surface-2/50"
           >
             <LeaderAvatar leaderId={leader.id} size="sm" customIconPath={getIconPath(leader.id as DomainLeaderId)} />
             <span className="text-xs text-soleur-text-muted group-hover:text-soleur-text-secondary">
               {leader.name}
             </span>
-          </button>
+          </Button>
         ))}
       </div>
     </div>
