@@ -86,10 +86,12 @@ refuse() { printf 'stub-curl: %s\n' "$*" >> "$STUB_ERR"; exit 22; }
 case "$url" in
   "https://ghcr.io/token?scope=repository:project-zot/zot-linux-amd64:pull") printf '{"token":"synthetic"}'; exit 0 ;;
   https://ghcr.io/v2/project-zot/zot-linux-amd64/manifests/sha256:*)
+    [[ " $* " == *" Authorization: Bearer synthetic "* ]] || refuse "manifest read without the pull token"
     h="${url##*/sha256:}"
     [[ "$h" == "$(cat "$STUB_IMG/manifest.hex")" ]] || refuse "manifest for unexpected digest $h"
     f="$STUB_IMG/blobs/${STUB_MANIFEST_OVERRIDE:-$h}"; cat "$f"; exit 0 ;;
   https://ghcr.io/v2/project-zot/zot-linux-amd64/blobs/sha256:*)
+    [[ " $* " == *" Authorization: Bearer synthetic "* ]] || refuse "blob read without the pull token"
     h="${url##*/sha256:}"
     [[ -f "$STUB_IMG/blobs/$h" ]] || refuse "no blob $h"
     if [[ "$h" == "${STUB_TAMPER:-none}" ]]; then printf 'tampered'; exit 0; fi
@@ -122,7 +124,8 @@ echo "== build =="
 if run_build "$IMG2" "$TF2" "$TMP/a.tar" && no_stub_refusals; then
   T_A="$(sha256sum "$TMP/a.tar" | cut -d' ' -f1)"
   grep -qx "C=$C2" "$TMP/out.txt" && grep -qx "T=$T_A" "$TMP/out.txt" \
-    && pass "B1 canonical build prints C (upstream config digest) and T (tarball sha256)" \
+    && grep -qx "TAG=zot-image-v9.9.9-${D2:0:12}" "$TMP/out.txt" && grep -qx "ASSET=zot-linux-amd64-v9.9.9.oci.tar" "$TMP/out.txt" \
+    && pass "B1 canonical build prints C, T, and the digest-suffixed TAG + ASSET names" \
     || fail "B1 build output lacks exact C=/T= lines: $(tr '\n' ' ' < "$TMP/out.txt")"
   members="$(tar -tf "$TMP/a.tar" | LC_ALL=C sort | tr '\n' ' ')"
   want="$(printf '%s\n' blobs/ blobs/sha256/ "blobs/sha256/$C2" "blobs/sha256/$D2" "blobs/sha256/$L2A" "blobs/sha256/$L2B" index.json manifest.json oci-layout | LC_ALL=C sort | tr '\n' ' ')"
@@ -156,10 +159,19 @@ fi
 # B4 — two independent builds are byte-identical (T is pinned, so the bytes must be a function of D).
 sleep_free_touch() { find "$IMG2" -type f -exec touch -d '2001-01-01' {} +; }
 sleep_free_touch
-if run_build "$IMG2" "$TF2" "$TMP/b.tar" && cmp -s "$TMP/a.tar" "$TMP/b.tar"; then
-  pass "B4 a second build (fixture mtimes changed) is byte-identical"
+# The second build runs under umask 077: ownership/mode normalisation must hold regardless of the
+# builder's umask (a runner's differs from a laptop's), or T would be a function of who built it.
+if (umask 077; run_build "$IMG2" "$TF2" "$TMP/b.tar") && cmp -s "$TMP/a.tar" "$TMP/b.tar"; then
+  pass "B4 a second build (fixture mtimes changed, umask 077) is byte-identical"
 else
   fail "B4 two builds differ"
+fi
+# B4b — every member is uid/gid 0 with mode 0644/0755, epoch mtime, POSIX ustar format (magic "ustar\\0" + version "00" at 257; GNU format writes "ustar  \\0").
+if [[ -z "$(TZ=UTC tar --numeric-owner -tvf "$TMP/a.tar" | awk '$2 != "0/0" || ($1 != "-rw-r--r--" && $1 != "drwxr-xr-x") || $4 != "1970-01-01"')" ]] \
+   && python3 -c 'import sys; sys.exit(0 if open(sys.argv[1],"rb").read()[257:265] == b"ustar\x0000" else 1)' "$TMP/a.tar"; then
+  pass "B4b members are 0/0, 0644/0755, epoch mtime, ustar format"
+else
+  fail "B4b member metadata/format not normalised: $(TZ=UTC tar --numeric-owner -tvf "$TMP/a.tar" | head -3 | tr '\n' ' ')"
 fi
 
 # B5 — a 1-layer image builds too (layer count is not hard-coded).
@@ -198,6 +210,23 @@ else
   [[ ! -s "$STUB_LOG" ]] && pass "B8 a tag-only pin is refused before any network call" || fail "B8 refused only after contacting the registry"
 fi
 
+# B8b — a lookalike upstream OWNER is refused (the release notes name project-zot).
+mkdir -p "$TMP/tfown"; sed 's|ghcr.io/project-zot/zot-linux-amd64|ghcr.io/project-z0t/zot-linux-amd64|' "$TF2" > "$TMP/tfown/zot-registry.tf"
+: > "$STUB_LOG"
+if run_build "$IMG2" "$TMP/tfown/zot-registry.tf" "$TMP/own.tar"; then
+  fail "B8b a lookalike owner (project-z0t) was accepted"
+else
+  [[ ! -s "$STUB_LOG" ]] && pass "B8b a lookalike upstream owner is refused before any network call" || fail "B8b refused only after contacting the registry"
+fi
+
+# B9 — a tampered CONFIG blob is refused (B6 tampers a layer; the config is the first blob fetched).
+rm -f "$TMP/c.tar"
+if STUB_TAMPER="$C2" run_build "$IMG2" "$TF2" "$TMP/c.tar"; then
+  fail "B9 a tampered config blob was accepted"
+else
+  [[ ! -e "$TMP/c.tar" ]] && grep -q "$C2" "$TMP/out.txt" && pass "B9 a tampered config blob is refused and names it" || fail "B9 refused without naming the config blob or left an archive"
+fi
+
 echo "== verify =="
 # V1 — the canonical archive verifies.
 run_verify "$TF2" "$TMP/a.tar" && pass "V1 the canonical archive verifies against D" || fail "V1 canonical archive failed verify: $(tr '\n' ' ' < "$TMP/vout.txt")"
@@ -205,25 +234,53 @@ run_verify "$TF2" "$TMP/a.tar" && pass "V1 the canonical archive verifies agains
 # retar <src-dir> <out> — re-pack an extracted layout with the builder's normalisation.
 retar() { tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=ustar -C "$1" -cf "$2" oci-layout index.json manifest.json blobs; }
 mut() { rm -rf "$TMP/mut"; mkdir -p "$TMP/mut"; tar -xf "$TMP/a.tar" -C "$TMP/mut"; }
+# vrow <label> <tar> <message> — the fixture must EXIST, verify must exit exactly 1 (refused, not
+# "cannot read"), and it must refuse for the named reason: a row that passes on a missing tar or on an
+# unrelated refusal proves nothing about the check it names.
+vrow() {
+  local label="$1" tarf="$2" msg="$3" rc=0
+  [[ -s "$tarf" ]] || { fail "$label fixture was not built ($tarf)"; return; }
+  run_verify "$TF2" "$tarf" || rc=$?
+  if [[ "$rc" -eq 1 ]] && grep -qF "$msg" "$TMP/vout.txt"; then pass "$label"
+  else fail "$label: rc=$rc out=[$(tr '\n' ' ' < "$TMP/vout.txt")] want [$msg]"; fi
+}
 
-# V2 — first layer blob tampered.
 mut; printf 'x' >> "$TMP/mut/blobs/sha256/$L2A"; retar "$TMP/mut" "$TMP/v2.tar"
-run_verify "$TF2" "$TMP/v2.tar" && fail "V2 a tampered first blob verified" || pass "V2 a tampered first blob is refused"
-# V3 — SECOND blob tampered, first intact (a verifier that stops after one blob must red here).
+vrow "V2 a tampered first layer blob is refused" "$TMP/v2.tar" "blob does not hash to its name"
 mut; printf 'x' >> "$TMP/mut/blobs/sha256/$L2B"; retar "$TMP/mut" "$TMP/v3.tar"
-run_verify "$TF2" "$TMP/v3.tar" && fail "V3 a tampered second blob verified" || pass "V3 a tampered second blob (first intact) is refused"
+vrow "V3 a tampered SECOND layer blob (first intact) is refused" "$TMP/v3.tar" "blob does not hash to its name"
 # V4 — the archive is for a different D than the tf pins.
-run_verify "$TF1" "$TMP/a.tar" && fail "V4 an archive for another D verified" || pass "V4 an archive whose index names another digest is refused"
-# V5 — an extra member rides along.
+rc=0; run_verify "$TF1" "$TMP/a.tar" || rc=$?
+[[ "$rc" -eq 1 ]] && grep -qF "does not carry the pinned manifest" "$TMP/vout.txt" \
+  && pass "V4 an archive whose index names another digest is refused" || fail "V4 rc=$rc $(tr '\n' ' ' < "$TMP/vout.txt")"
 mut; printf 'x' > "$TMP/mut/blobs/sha256/$(printf 'b%.0s' {1..64})"; retar "$TMP/mut" "$TMP/v5.tar"
-run_verify "$TF2" "$TMP/v5.tar" && fail "V5 an archive with an extra blob verified" || pass "V5 an archive carrying an unreferenced extra member is refused"
-# V6 — manifest.json (the classic-store load path) points at a different config than the manifest.
+vrow "V5 an unreferenced extra blob is refused" "$TMP/v5.tar" "member set is not exactly the layout"
 mut; python3 - "$TMP/mut/manifest.json" "$L2A" <<'PY'
 import json, sys
 p = sys.argv[1]; m = json.load(open(p)); m[0]["Config"] = "blobs/sha256/" + sys.argv[2]; open(p, "w").write(json.dumps(m))
 PY
 retar "$TMP/mut" "$TMP/v6.tar"
-run_verify "$TF2" "$TMP/v6.tar" && fail "V6 a manifest.json disagreeing with the manifest verified" || pass "V6 a manifest.json that disagrees with the OCI manifest is refused"
+vrow "V6 a manifest.json that disagrees with the OCI manifest is refused" "$TMP/v6.tar" "does not match the view derived from D"
+# V7 — the blob NAMED D holds different (valid) manifest bytes, with index.json made consistent with
+# them: only the manifest==D check can refuse it. (B7 covers build; this is the verify-side twin.)
+mut; python3 - "$TMP/mut" "$D2" "$(cat "$IMG2/manifest-alt.hex")" "$IMG2" <<'PY'
+import json, os, sys
+d, D, alt, img = sys.argv[1:]
+b = open(os.path.join(img, "blobs", alt), "rb").read()
+open(os.path.join(d, "blobs/sha256", D), "wb").write(b)
+idx = json.load(open(os.path.join(d, "index.json"))); idx["manifests"][0]["size"] = len(b)
+open(os.path.join(d, "index.json"), "w").write(json.dumps(idx, separators=(",", ":")))
+PY
+retar "$TMP/mut" "$TMP/v7.tar"
+vrow "V7 manifest bytes at name D that do not hash to D are refused" "$TMP/v7.tar" "manifest blob does not hash to D"
+mut; printf 'x' >> "$TMP/mut/blobs/sha256/$C2"; retar "$TMP/mut" "$TMP/v8.tar"
+vrow "V8 a tampered config blob is refused" "$TMP/v8.tar" "blob does not hash to its name"
+mut; printf 'x' > "$TMP/mut/blobs/evil.txt"; retar "$TMP/mut" "$TMP/v9.tar"
+vrow "V9 a member outside the layout names is refused" "$TMP/v9.tar" "member outside the OCI layout"
+mut; rm -f "$TMP/mut/blobs/sha256/$L2B"; ln -s /etc/hostname "$TMP/mut/blobs/sha256/$L2B"; retar "$TMP/mut" "$TMP/v10.tar"
+vrow "V10 a symlink member is refused before extraction" "$TMP/v10.tar" "non-regular member"
+cp "$TMP/a.tar" "$TMP/v11.tar"; mut; tar --owner=0 --group=0 --numeric-owner --format=ustar -C "$TMP/mut" -rf "$TMP/v11.tar" "blobs/sha256/$L2A"
+vrow "V11 a duplicate member is refused" "$TMP/v11.tar" "duplicate member"
 
 # --- anti-vacuity: helper self-test + an exact count ----------------------------------------------
 _cp=$PASS; _cf=$FAIL; _cl=${#FAILURES[@]}
@@ -233,8 +290,8 @@ if [[ "$PASS" -ne $((_cp+1)) || "$FAIL" -ne $((_cf+1)) || "${#FAILURES[@]}" -ne 
 fi
 PASS=$((PASS-1)); FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
 # EQUALITY, not a floor: adding a row must move this literal.
-if [[ "$((PASS + FAIL))" -ne 15 ]]; then
-  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 15 are expected.\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 23 ]]; then
+  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 23 are expected.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="

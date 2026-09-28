@@ -58,7 +58,9 @@ trap 'rm -rf "$W"' EXIT
 
 # ── the upstream pin record: ghcr.io/<repo>:<version>@sha256:<D> ─────────────────────────────────
 [[ -r "$TF" ]] || die 2 "cannot read $TF"
-PIN="$(grep -oE "^[[:space:]]*zot_image_${ARCH}[[:space:]]*=[[:space:]]*\"ghcr\.io/[a-z0-9._/-]+/zot-linux-${ARCH}:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"[[:space:]]*$" "$TF" || true)"
+# The upstream OWNER is fixed here, not read from the pin: the published release's notes name
+# project-zot, so a lookalike owner in a pin must be refused rather than packaged under that name.
+PIN="$(grep -oE "^[[:space:]]*zot_image_${ARCH}[[:space:]]*=[[:space:]]*\"ghcr\.io/project-zot/zot-linux-${ARCH}:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"[[:space:]]*$" "$TF" || true)"
 [[ "$(printf '%s' "$PIN" | grep -c . || true)" == 1 ]] \
   || die 2 "expected exactly one digest-pinned zot_image_${ARCH} line in $TF"
 REF="$(printf '%s' "$PIN" | grep -oE 'ghcr\.io/[^"]+')" || die 2 "could not extract the ref from the zot_image_${ARCH} line"
@@ -66,6 +68,11 @@ REPO="${REF#ghcr.io/}"; REPO="${REPO%%:*}"
 VERSION="${REF##*:v}"; VERSION="v${VERSION%%@*}"
 D="${REF##*@sha256:}"
 LOCAL_REF="${LOCAL_REPO}:${VERSION}"
+# Release naming, derived ONCE here (the publish workflow and, in PR 2b, zot-registry.tf consume it).
+# The tag carries D's 12-hex prefix: this repo's releases are IMMUTABLE once published, so a re-tagged
+# upstream version (same version, new digest) must land under a NEW tag rather than collide forever.
+TAG="zot-image-${VERSION}-${D:0:12}"
+ASSET="zot-linux-${ARCH}-${VERSION}.oci.tar"
 
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 # ustar + sorted + epoch mtime + root owner: the bytes depend only on the member contents.
@@ -117,6 +124,8 @@ build() {
   echo "T=$(sha "$out")"
   echo "BYTES=$(stat -c %s "$out")"
   echo "LOCAL_REF=$LOCAL_REF"
+  echo "TAG=$TAG"
+  echo "ASSET=$ASSET"
 }
 
 verify() {
@@ -124,11 +133,17 @@ verify() {
   [[ -r "$in" ]] || die 2 "cannot read $in"
   assert_fixture_dir "$W"
   mkdir -p "$W/img" "$W/views/blobs/sha256"
-  # Member names are checked BEFORE extraction: only the layout's own paths may appear.
+  # Members are checked BEFORE extraction: only the layout's own names, each once, and only regular
+  # files or directories. A symlink/hardlink/FIFO/device member is refused here, not after extraction
+  # (a FIFO hangs sha256sum; an absolute symlink would make the digest checks read the runner's files).
   got="$(tar -tf "$in" | LC_ALL=C sort)" || die 1 "not a readable tar: $in"
   printf '%s\n' "$got" | grep -qvE '^(oci-layout|index\.json|manifest\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' \
     && die 1 "archive carries a member outside the OCI layout"
+  [[ -z "$(printf '%s\n' "$got" | uniq -d)" ]] || die 1 "archive carries a duplicate member"
+  tar -tvf "$in" | cut -c1 | grep -qv '^[-d]$' && die 1 "archive carries a non-regular member (link, FIFO or device)"
   tar -xf "$in" -C "$W/img" --no-same-owner
+  [[ -z "$(find "$W/img" -mindepth 1 ! -type f ! -type d -print -quit)" ]] \
+    || die 1 "archive extracted a non-regular member (link, FIFO or device)"
   [[ -f "$W/img/blobs/sha256/$D" ]] || die 1 "archive does not carry the pinned manifest sha256:${D}"
   [[ "$(sha "$W/img/blobs/sha256/$D")" == "$D" ]] || die 1 "manifest blob does not hash to D"
   want="$( { printf '%s\n' blobs/ blobs/sha256/ index.json manifest.json oci-layout "blobs/sha256/$D"
