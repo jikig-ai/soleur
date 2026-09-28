@@ -129,7 +129,7 @@ implicit:
     run `ci-deploy.test.sh` too, even if the diff never touches `ci-deploy.sh`.
 18. **The required `e2e` check failed on unchanged app code.** 71 tests passed, then the test
     dev server stopped accepting connections and the remaining 37 read `ERR_CONNECTION_REFUSED`.
-    The re-run from the next push passed. **Prevention:** one-off environmental. Classify by the
+    The next push's fresh CI run passed. **Prevention:** one-off environmental. Classify by the
     failure's shape (a connection refused on localhost after a partial pass) before touching
     code, and never on the check name.
 
