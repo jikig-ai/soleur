@@ -403,6 +403,26 @@ if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && ! grep -q 'waiting 
 else
   fail "P6 ran after (or not instead of) P3's wait: rc=$RC: $(head -2 "$TMP/out" | tr '\n' ' ')"
 fi
+run_sut STUB_API_JSON="$(printf '{"assets":[{"name":"%s","state":"uploaded","digest":"sha256:%s"},{"name":"%s","state":"uploaded","digest":"sha256:%s"}]}' "$P6_ASSET" "$P6_T" "$P6_ASSET" "$P6_T")" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && grep -q 'ambiguous' "$TMP/err"; then
+  pass "P6 synthesized red: two uploaded assets with the asset's name (even both == T) REFUSE as ambiguous"
+else
+  fail "P6 accepted an ambiguous asset list: rc=$RC: $(head -1 "$TMP/out")"
+fi
+# --check-asset: P6 ALONE, for the routes that create a registry host without this dispatcher
+# (apply-web-platform-infra.yml registry_host_replace / luks_recut / region_migrate) and rule-audit.
+run_sut STUB_LOCAL_CACHE_ROWS="$(printf 'pull registry=local-cache image=web\n')" STUB_RUNS_JSON='[{"status":"in_progress"}]' -- --check-asset > "$TMP/out"
+if [[ "$RC" -eq 0 ]] && grep -qx "verdict=CLEAR predicate=P6 boot_asset=$P6_TAG/$P6_ASSET" "$TMP/out" && ! grep -q 'local_cache_hits' "$TMP/out"; then
+  pass "--check-asset runs P6 only: CLEAR on a published asset even with P1/P3 conditions that would refuse a replace"
+else
+  fail "--check-asset did not run P6 alone: rc=$RC: $(head -2 "$TMP/out" | tr '\n' ' ')"
+fi
+run_sut STUB_API_RC=1 STUB_API_ERR="gh: Not Found (HTTP 404)" -- --check-asset > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && grep -q 'immutable releases' "$TMP/err"; then
+  pass "--check-asset refuses a missing asset, and says a vanished release cannot be re-created under its tag"
+else
+  fail "--check-asset passed a missing asset: rc=$RC: $(head -1 "$TMP/out")"
+fi
 if [[ ! -s "$STUB_API_REFUSALS" ]]; then
   pass "P6 asked the gh stub only for repos/$P6_REPO/releases/tags/$P6_TAG (no refused call)"
 else
@@ -468,9 +488,9 @@ if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
 fi
 FAIL=$((FAIL - 1))
 TOTAL=$((PASS+FAIL))
-# 30 assertions ran before #8714 5.3b-iii (floor was 26); +12 P6 rows and +1 seam-guard arm = 43.
-if [[ "$TOTAL" -lt 43 ]]; then
-  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 43. Fix the dispatch, do not lower the floor." >&2
+# 30 assertions ran before #8714 5.3b-iii (floor was 26); +15 P6/--check-asset rows and +1 seam-guard arm = 46.
+if [[ "$TOTAL" -lt 46 ]]; then
+  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 46. Fix the dispatch, do not lower the floor." >&2
   exit 2
 fi
 

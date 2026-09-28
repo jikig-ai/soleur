@@ -34,12 +34,10 @@ name: zot-image-mirror
 # `gh workflow run zot-image-mirror.yml --ref <branch>` so the new version's asset exists before the
 # bump merges, then pin its T and C in zot-registry.tf.
 #
-# REHEARSE (#8714 5.3b-iii PR 2b). On every PR touching the boot path, and after every publish:
-# zot-image-rehearse.sh rebuilds the archive from upstream D and requires it to equal the pinned T
-# (and C to be D's config digest), then applies the RENDERED ghcr.io deny, runs the RENDERED fetch
-# against the real published asset under BOTH docker image stores, and starts zot by the verified
-# ID. That is the anchor the publish job's header defers to: a PR cannot move T/C without
-# reproducing the upstream bytes, and cannot change the boot path without booting it.
+# REHEARSE (#8714 5.3b-iii PR 2b), on every PR touching the boot path and after every publish:
+# zot-image-rehearse.sh (its header is the contract) boots the RENDERED fetch against the real
+# asset under the classic store, the containerd store, and the host's own Ubuntu docker.io. The
+# host itself also anchors C to D before loading (zot-image-fetch.sh manifest_mismatch).
 on:
   push:
     branches: [main]
@@ -187,7 +185,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        store: [classic, containerd]
+        store: [classic, containerd, host]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:

@@ -182,7 +182,8 @@ The pins and the derivation live in the `zot-mirror` block of `zot-registry.tf`.
 ADR-096's amendment of 2026-09-28 (part 2).
 
 - **Never delete or replace a `zot-image-*` release.** A registry replace fetches it by URL and
-  refuses any bytes other than T. Releases here are immutable once published. A deleted one is
+  refuses any bytes other than T. Releases here are immutable once published, so a deleted one
+  cannot be re-created under the same tag: the only recovery is reverting the pin. A deleted one is
   named by rule-audit's asset probe and refused at the next replace by preflight P6.
 - **Recovery.** It is workflow-only, with no SSH. Use the "zot boot image (#8714)" section of
   `knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`: re-fire the

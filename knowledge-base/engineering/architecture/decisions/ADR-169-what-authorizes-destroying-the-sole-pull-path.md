@@ -666,6 +666,10 @@ Against the independence criterion, P6 reads **GitHub**, not zot or the pull pat
 replace cures cannot trip it, so it keeps gating on the manual re-fire arm too (unlike P1). It runs
 **before** P3's drain wait, so a missing asset refuses in seconds rather than after 35 minutes.
 
-The same probe runs on rule-audit's cron. There, a deleted or replaced asset is named as a latent
-outage before the next replace, not at it. `zot-image-*` releases are never deleted. Recovery is
-workflow-only: `runbooks/registry-host-replace-dispatch.md` § "zot boot image (#8714)".
+The dispatcher is not the only route that creates a registry host. `apply-web-platform-infra.yml`'s
+`registry_host_replace`, `registry_luks_recut` and `registry_region_migrate` jobs each run P6 alone
+(`registry-replace-preflight.sh --check-asset`) before terraform, so no route boots a host onto an
+asset P6 would refuse. The same `--check-asset` runs on rule-audit's cron. There, a deleted or
+replaced asset is named as a latent outage before the next replace, not at it. `zot-image-*` releases
+are never deleted, and a deleted one cannot be re-created under its tag (immutable releases). Recovery
+is workflow-only: `runbooks/registry-host-replace-dispatch.md` § "zot boot image (#8714)".

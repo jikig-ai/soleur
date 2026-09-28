@@ -34,11 +34,14 @@
 #
 # Output: a single `verdict=` line on stdout. Exit 0 = clear to dispatch, non-zero = do not.
 #
-# Usage: scripts/registry-replace-preflight.sh [--manual] | --print-asset
+# Usage: scripts/registry-replace-preflight.sh [--manual] | --print-asset | --check-asset
 #   --print-asset  print the release asset the rendered user_data will fetch (repo/tag/asset/
 #             sha256/url, derived from zot-registry.tf exactly as P6 derives it) and exit. Read-only,
-#             no credentials; the rendered-template suite and rule-audit's asset probe use it so the
-#             derivation lives in ONE place outside the .tf.
+#             no credentials.
+#   --check-asset  run ONLY P6 (the boot-image asset exists and matches T) and exit. The gate the
+#             other registry-host-creating routes call before terraform creates a host
+#             (apply-web-platform-infra.yml registry_host_replace / registry_luks_recut /
+#             registry_region_migrate), and rule-audit's standing probe. Needs gh + GH_TOKEN.
 #   --manual  this run is the operator's re-fire of a refused/dark replace. Skips P1 only.
 #             A FLAG, NOT AN ENV VAR, on purpose: the caller that may set it is the
 #             workflow_dispatch arm, and `github.event_name` is unforgeable by the caller,
@@ -59,10 +62,12 @@ esac
 
 MANUAL=0
 PRINT_ASSET=0
+CHECK_ASSET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --manual) MANUAL=1; shift ;;
     --print-asset) PRINT_ASSET=1; shift ;;
+    --check-asset) CHECK_ASSET=1; shift ;;
     -h|--help) sed -n '1,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "registry-replace-preflight: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -127,26 +132,24 @@ abort() { # $1 = predicate, rest = message
 }
 
 # ── The boot-image asset the rendered user_data will fetch (#8714 5.3b-iii) ─────────────────
-# Derived from zot-registry.tf exactly as its zot-mirror locals derive it: the tag is
-# zot-image-<version>-<first 12 hex of D>, the asset zot-linux-amd64-<version>.oci.tar, both taken
-# from the upstream pin `zot_image_amd64`; T and the repo are literals in the zot-mirror block.
-# Parity with the terraform render is pinned by apps/web-platform/infra/zot-image-fetch.test.sh
-# (the rendered ZOT_ASSET_URL must equal the url printed here). Sets MIRROR_* or returns 1.
+# Tag, asset name and version come from the mirror builder's `names` mode, the one bash
+# derivation the publish workflow also uses (zot-image-oci-archive.sh); T and the repo are literals
+# in zot-registry.tf's zot-mirror block. zot-image-fetch.test.sh pins the rendered ZOT_ASSET_URL
+# (terraform's own derivation) equal to the url printed here. Sets MIRROR_* or returns 1.
 mirror_asset() {
-  local pin ver d
+  local names
   MIRROR_ERR=""
   [[ -r "$TF_FILE" ]] || { MIRROR_ERR="cannot read $TF_FILE"; return 1; }
-  pin="$(grep -oE '^[[:space:]]*zot_image_amd64[[:space:]]*=[[:space:]]*"ghcr\.io/project-zot/zot-linux-amd64:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}"[[:space:]]*$' "$TF_FILE" || true)"
-  [[ "$(printf '%s' "$pin" | grep -c . || true)" == 1 ]] || { MIRROR_ERR="expected exactly one digest-pinned zot_image_amd64 in $TF_FILE"; return 1; }
-  ver="$(printf '%s' "$pin" | grep -oE ':v[0-9]+\.[0-9]+\.[0-9]+@' | tr -d ':@')"
-  d="$(printf '%s' "$pin" | grep -oE '@sha256:[0-9a-f]{64}' | sed 's/^@sha256://')"
+  names="$(ZOT_REGISTRY_TF="$TF_FILE" bash "${ROOT}/apps/web-platform/infra/zot-image-oci-archive.sh" names 2>&1)" \
+    || { MIRROR_ERR="zot-image-oci-archive.sh names failed: $(printf '%s' "$names" | tail -1)"; return 1; }
+  MIRROR_TAG="$(printf '%s\n' "$names" | sed -n 's/^TAG=//p')"
+  MIRROR_ASSET="$(printf '%s\n' "$names" | sed -n 's/^ASSET=//p')"
   MIRROR_T="$(grep -E '^[[:space:]]*zot_mirror_asset_sha256_amd64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"[[:space:]]*$' "$TF_FILE" | grep -oE '[0-9a-f]{64}' || true)"
   MIRROR_REPO="$(grep -E '^[[:space:]]*zot_mirror_repo[[:space:]]*=[[:space:]]*"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"[[:space:]]*$' "$TF_FILE" | sed -E 's/^[^"]*"([^"]+)".*$/\1/' || true)"
   [[ "$(printf '%s' "$MIRROR_T" | grep -c . || true)" == 1 ]] || { MIRROR_ERR="expected exactly one zot_mirror_asset_sha256_amd64 = \"<64 hex>\" in $TF_FILE"; return 1; }
   [[ "$(printf '%s' "$MIRROR_REPO" | grep -c . || true)" == 1 ]] || { MIRROR_ERR="expected exactly one zot_mirror_repo = \"<owner>/<repo>\" in $TF_FILE"; return 1; }
-  [[ -n "$ver" && -n "$d" ]] || { MIRROR_ERR="could not split zot_image_amd64 into version and digest"; return 1; }
-  MIRROR_TAG="zot-image-${ver}-${d:0:12}"
-  MIRROR_ASSET="zot-linux-amd64-${ver}.oci.tar"
+  [[ "$MIRROR_TAG" =~ ^zot-image-v[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{12}$ && "$MIRROR_ASSET" =~ ^zot-linux-amd64-v[0-9]+\.[0-9]+\.[0-9]+\.oci\.tar$ ]] \
+    || { MIRROR_ERR="the builder printed an unexpected tag/asset: [$MIRROR_TAG] [$MIRROR_ASSET]"; return 1; }
   MIRROR_URL="https://github.com/${MIRROR_REPO}/releases/download/${MIRROR_TAG}/${MIRROR_ASSET}"
 }
 
@@ -161,6 +164,42 @@ fi
 # read as "no events found". betterstack-query.sh exits 3 when the credentials are absent.
 p0_err="$(mktemp)"
 trap 'rm -f "$p0_err"' EXIT INT TERM
+
+# ── P6 — GATING, fail-closed. The asset the replaced host will boot from must EXIST and MATCH. ──
+# The host fetches zot's image from a release asset and refuses to start zot unless its sha256 is
+# the pinned T (cloud-init-registry.yml, zot-image-fetch.sh). A replace onto an asset that is not
+# published yet, was deleted, or carries other bytes therefore boots a host that serves NOTHING,
+# with no tier beneath it. So the replace is refused unless GitHub's own digest of the published
+# asset equals the pinned T. Checked BEFORE P3's drain wait, so a missing asset refuses in seconds.
+# Unlike P1/P3 this cannot be tripped by the condition a replace cures: it reads GitHub, not zot.
+# NOT skipped on the manual arm: a manual re-fire onto a missing asset darks the host the same way.
+# A published release is immutable here (repository setting), and /releases/tags/ never returns a
+# draft, so an `uploaded` asset under a published tag is the exact object the host will download.
+p6_check() {
+  mirror_asset || abort P6 "cannot derive the boot-image asset from zot-registry.tf: ${MIRROR_ERR}. Refusing to replace the host onto an asset it cannot name."
+  p6_json="$("$RUNS_CMD" api "repos/${MIRROR_REPO}/releases/tags/${MIRROR_TAG}" 2>"$p0_err")"; p6_rc=$?
+  if (( p6_rc != 0 )); then
+    if grep -q 'HTTP 404' "$p0_err"; then
+      abort P6 "release ${MIRROR_TAG} is not published in ${MIRROR_REPO}, so ${MIRROR_ASSET} does not exist and the replaced host could not start zot. A NEW pin: publish it first with gh workflow run zot-image-mirror.yml --ref <branch> (zot-image.provenance.md, bump procedure). A release that WAS published and is now gone cannot be re-created under this tag (immutable releases): revert the pin (runbooks/registry-host-replace-dispatch.md, zot boot image)."
+    fi
+    abort P6 "could not read release ${MIRROR_TAG} (gh exited ${p6_rc}): $(head -c 300 "$p0_err"). A failed read is not a present asset."
+  fi
+  p6_digests="$(printf '%s' "$p6_json" | jq -r --arg a "$MIRROR_ASSET" '[.assets[]? | select(.name == $a and .state == "uploaded") | .digest] | if length == 1 then .[0] // "" else "count=\(length)" end' 2>/dev/null)" \
+    || abort P6 "the release ${MIRROR_TAG} response is not parseable JSON. A failed read is not a present asset."
+  case "$p6_digests" in
+    "sha256:${MIRROR_T}") : ;;
+    "count=0") abort P6 "release ${MIRROR_TAG} is published but carries no uploaded ${MIRROR_ASSET}; the replaced host could not start zot." ;;
+    count=*) abort P6 "release ${MIRROR_TAG} carries ${p6_digests#count=} uploaded assets named ${MIRROR_ASSET}; refusing an ambiguous boot image." ;;
+    *) abort P6 "${MIRROR_ASSET} in ${MIRROR_TAG} has digest '${p6_digests:-none}', but zot-registry.tf pins sha256:${MIRROR_T}. The replaced host would refuse it (sha_mismatch) and never start zot." ;;
+  esac
+  echo "NOTE: P6 ${MIRROR_ASSET} in ${MIRROR_TAG} is published with the pinned sha256:${MIRROR_T:0:12}..."
+}
+
+if [[ "$CHECK_ASSET" == "1" ]]; then
+  p6_check
+  echo "verdict=CLEAR predicate=P6 boot_asset=${MIRROR_TAG}/${MIRROR_ASSET}"
+  exit 0
+fi
 
 probe() { # $1 = --grep value; prints rows, sets PROBE_RC
   local marker="$1"
@@ -218,33 +257,7 @@ else
   gf_hits="unreadable"
 fi
 
-# ── P6 — GATING, fail-closed. The asset the replaced host will boot from must EXIST and MATCH. ──
-# The host fetches zot's image from a release asset and refuses to start zot unless its sha256 is
-# the pinned T (cloud-init-registry.yml, zot-image-fetch.sh). A replace onto an asset that is not
-# published yet, was deleted, or carries other bytes therefore boots a host that serves NOTHING,
-# with no tier beneath it. So the replace is refused unless GitHub's own digest of the published
-# asset equals the pinned T. Checked BEFORE P3's drain wait, so a missing asset refuses in seconds.
-# Unlike P1/P3 this cannot be tripped by the condition a replace cures: it reads GitHub, not zot.
-# NOT skipped on the manual arm: a manual re-fire onto a missing asset darks the host the same way.
-# A published release is immutable here (repository setting), and /releases/tags/ never returns a
-# draft, so an `uploaded` asset under a published tag is the exact object the host will download.
-mirror_asset || abort P6 "cannot derive the boot-image asset from zot-registry.tf: ${MIRROR_ERR}. Refusing to replace the host onto an asset it cannot name."
-p6_json="$("$RUNS_CMD" api "repos/${MIRROR_REPO}/releases/tags/${MIRROR_TAG}" 2>"$p0_err")"; p6_rc=$?
-if (( p6_rc != 0 )); then
-  if grep -q 'HTTP 404' "$p0_err"; then
-    abort P6 "release ${MIRROR_TAG} is not published in ${MIRROR_REPO}, so ${MIRROR_ASSET} does not exist and the replaced host could not start zot. Publish it first: gh workflow run zot-image-mirror.yml --ref <branch> (zot-image.provenance.md, bump procedure)."
-  fi
-  abort P6 "could not read release ${MIRROR_TAG} (gh exited ${p6_rc}): $(head -c 300 "$p0_err"). A failed read is not a present asset."
-fi
-p6_digests="$(printf '%s' "$p6_json" | jq -r --arg a "$MIRROR_ASSET" '[.assets[]? | select(.name == $a and .state == "uploaded") | .digest] | if length == 1 then .[0] // "" else "count=\(length)" end' 2>/dev/null)" \
-  || abort P6 "the release ${MIRROR_TAG} response is not parseable JSON. A failed read is not a present asset."
-case "$p6_digests" in
-  "sha256:${MIRROR_T}") : ;;
-  "count=0") abort P6 "release ${MIRROR_TAG} is published but carries no uploaded ${MIRROR_ASSET}; the replaced host could not start zot." ;;
-  count=*) abort P6 "release ${MIRROR_TAG} carries ${p6_digests#count=} uploaded assets named ${MIRROR_ASSET}; refusing an ambiguous boot image." ;;
-  *) abort P6 "${MIRROR_ASSET} in ${MIRROR_TAG} has digest '${p6_digests:-none}', but zot-registry.tf pins sha256:${MIRROR_T}. The replaced host would refuse it (sha_mismatch) and never start zot." ;;
-esac
-echo "NOTE: P6 ${MIRROR_ASSET} in ${MIRROR_TAG} is published with the pinned sha256:${MIRROR_T:0:12}..."
+p6_check
 
 # ── P3 — GATING. Do not replace the host out from under an in-flight push. ──────────────────
 # Replacing mid-push strands a partially-uploaded manifest on the PRESERVED volume. Directly

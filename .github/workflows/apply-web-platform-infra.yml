@@ -2580,6 +2580,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # (#8714 5.3b-iii) Boot-image gate: this job creates a registry host, which boots zot only from
+      # the pinned release asset. Refuse BEFORE terraform runs if that asset is missing or not T.
+      - name: Boot-image asset gate (preflight P6, --check-asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/registry-replace-preflight.sh --check-asset
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -2815,6 +2821,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # (#8714 5.3b-iii) Boot-image gate: this job creates a registry host, which boots zot only from
+      # the pinned release asset. Refuse BEFORE terraform runs if that asset is missing or not T.
+      - name: Boot-image asset gate (preflight P6, --check-asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/registry-replace-preflight.sh --check-asset
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -3487,6 +3499,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # (#8714 5.3b-iii) Boot-image gate: this job creates a registry host, which boots zot only from
+      # the pinned release asset. Refuse BEFORE terraform runs if that asset is missing or not T.
+      - name: Boot-image asset gate (preflight P6, --check-asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/registry-replace-preflight.sh --check-asset
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}

@@ -1716,25 +1716,31 @@ for the zot half. The cosign half moved in part 1 (the amendment above).
 
 - **What the host boots.** `cloud-init-registry.yml` no longer runs `'${zot_image}'` from ghcr.io.
   `zot-image-fetch.sh` downloads the prerelease asset `zot-image-<version>-<D12>` /
-  `zot-linux-amd64-<version>.oci.tar` that part 1 publishes. It runs from its own runcmd entry,
-  outside `doppler run`, so no secret is in its environment. It then:
+  `zot-linux-amd64-<version>.oci.tar` that part 1 publishes. It runs from its own runcmd entry under
+  `env -i`, because runcmd is one `/bin/sh` script and earlier entries export the Doppler service
+  token into it. It then:
   1. refuses unless the tarball's sha256 is `T` (`zot_mirror_asset_sha256_amd64`);
-  2. runs `docker load` with its stdout sent to stderr;
-  3. refuses unless the loaded image ID is `sha256:<C>` (the classic image store) or `sha256:<D>`
-     (the containerd store). `C` is `zot_config_digest_amd64`; `D` is the manifest digest in the
-     upstream pin `zot_image_amd64`.
+  2. refuses unless the tarball's manifest blob hashes to `D` (the digest in the upstream pin
+     `zot_image_amd64`) and names `C` (`zot_config_digest_amd64`) as its config. This makes `C` a
+     consequence of `D` on the host itself, not a second free literal;
+  3. runs `docker load` (bounded by a timeout) with its stdout sent to stderr;
+  4. refuses unless the loaded image ID is `sha256:<C>` (the classic image store) or `sha256:<D>`
+     (the containerd store).
 
-  zot runs **by that verified ID**, never by a registry reference. Each outcome records a verdict
-  (`ok`, `config_invalid`, `download_failed`, `sha_mismatch`, `load_failed`, `id_mismatch`), and the
-  heartbeat ships it as `zot_image_fetch`. `zot_image_digest` still reports D's first 12 hex, now
-  mapped from the running ID.
+  zot runs **by that verified ID**, never by a registry reference. Each outcome records a verdict and
+  an exit code, which the heartbeat ships as `zot_image_fetch` / `zot_image_fetch_rc`. The verdict table
+  and recovery live in `runbooks/registry-host-replace-dispatch.md` § "zot boot image (#8714)".
+  `zot_image_digest` still reports D's first 12 hex, now mapped from the running ID.
 - **Why the bytes are upstream's.** The asset carries upstream D's manifest and blobs byte for
   byte, so docker verifies layer content against `C`/`D` on load. `T` is anchored outside the
-  commit: on every PR touching this path, the `rehearse` job in `zot-image-mirror.yml` rebuilds the
-  archive from upstream D and requires it to equal `T`, and requires `C` to be D's config digest.
-  It then boots the rendered fetch against the real asset under both docker image stores. The
-  trust root is still project-zot at D, as before. What is new is GitHub's availability of one
-  asset. Preflight P6 (ADR-169 amendment 2026-09-28) and rule-audit guard it.
+  commit, twice: on every PR touching this path, the `rehearse` job in `zot-image-mirror.yml` rebuilds
+  the archive from upstream D and requires it to equal `T`, then boots the rendered fetch against the
+  real asset under the classic store, the containerd store and Ubuntu's own `docker.io`; and the host
+  itself refuses a `C` that D's manifest does not name. The trust root is still project-zot at D, as
+  before. What is new is GitHub's availability of one asset. Preflight P6 guards it on every route that
+  creates a registry host (ADR-169 amendment 2026-09-28), and rule-audit probes it on its cron. A
+  published release is immutable, so a deleted one cannot be re-created under its tag; the recovery is
+  to revert the pin.
 - **The ghcr.io deny.** The first runcmd entry sinkholes `ghcr.io` and
   `pkg-containers.githubusercontent.com` to `0.0.0.0`/`::` in `/etc/hosts`, and in cloud-init's
   hosts template when present. This is a name-resolution deny, not a firewall rule. The heartbeat

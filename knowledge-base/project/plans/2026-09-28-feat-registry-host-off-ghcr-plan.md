@@ -203,6 +203,31 @@ A 5-seat PR-2a review panel applied these changes inline:
 - **Residual (pre-existing class, not widened).** Repeated `cosign_absent` pages nobody. Standing
   enforcement is #6129 (WARN→ENFORCE). This PR changes the registry, not the alerting.
 
+## PR 2b Review Revisions [Updated 2026-09-28]
+
+A 5-seat review panel of PR #9147 (security, user-impact, test-design, observability,
+simplicity) changed the following. Each item was fixed in the PR itself:
+
+- **env -i.** The fetch runs under `env -i`. runcmd is one `/bin/sh` script, and the earlier blocks
+  export `DOPPLER_TOKEN`/`HOME` into it, so "outside `doppler run`" alone did not keep secrets out of
+  its environment.
+- **C anchored to D on the host.** The tarball's manifest blob must hash to D and name C, checked
+  before `docker load` (`manifest_mismatch`). `rehearse` is not a required check.
+- **P6 on every route that creates a host.** P6 is exposed as `--check-asset`. The three direct
+  `apply-web-platform-infra.yml` registry jobs and rule-audit run it.
+- **Immutable releases.** A deleted `zot-image-*` release cannot be re-created under its tag. The
+  recovery for it is reverting the pin, and the runbook, P6 text and ADRs say so.
+- **Fetch hardening.** Retries are bounded in total, `docker load` has a timeout, and `curl -q` is
+  used. The verdicts gain `fetching`, `docker_unavailable` and `record_failed`, plus an rc line
+  shipped as `zot_image_fetch_rc`. A stale hand-off file is removed first on every attempt.
+- **`rehearse` gains a `host` leg** (Ubuntu `docker.io`, the host's own package).
+- **Budget.** `REGISTRY_GZIP_BUDGET` goes from 20,000 to 21,000 by CTO ruling, with an ADR-185
+  amendment. The payload measured 20,408 B, and the 8,000 B policy is unchanged.
+- **AC-B2 as shipped.** ghcr.io appears on exactly two code lines, the deny and its heartbeat probe.
+  Both are executed or asserted by `zot-image-fetch.test.sh` R5/R10.
+- **Correction to the Kieran bullet below.** The LUKS refusal in ZOTEOF runs AFTER the fetch. It
+  reads as `zot_image_fetch=ok` with `state_status=unknown` and `store_luks=`, not as a fetch verdict.
+
 ## Plan Review Revisions [Updated 2026-09-28]
 
 A seven-seat panel reviewed the plan: DHH, Kieran, code-simplicity, architecture-strategist,

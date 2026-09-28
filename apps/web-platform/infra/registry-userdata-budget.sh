@@ -36,8 +36,8 @@
 # by value and those resource blocks by text for exactly that reason.
 # (Technique mirrored from git-data-userdata-budget.sh, which documents it at length.)
 #
-# `zot_image` is NOT stubbed — it is read from zot-registry.tf, because the pin's own
-# length (the `:vX.Y.Z` tag this change adds) is part of what is being measured.
+# The upstream pin `zot_image_amd64` is NOT stubbed — it is read from zot-registry.tf, because the
+# zot-mirror locals (asset URL, D, local ref) are derived from it (#8714 5.3b-iii).
 #
 # MEASURE WITH TERRAFORM'S OWN `base64gzip`, NEVER `gzip -9`. They are different
 # compression levels and `-9` OVERSTATES headroom. On a hard gate an optimistic
@@ -71,7 +71,7 @@ command -v terraform >/dev/null 2>&1 || {
   exit 0
 }
 
-# The amd64 branch of local.zot_image (registry_arch is amd64 for the cpx22 default). Read
+# The amd64 upstream pin (the zot-mirror locals derive from it; the host is amd64-only). Read
 # from the .tf so the measurement tracks the real pin rather than a copy that can rot.
 # Anchored on the ASSIGNMENT, like the staleness gate -- an unanchored grep is satisfied by
 # a comment (e.g. a rollback annotation above the locals), which would measure the wrong
@@ -194,8 +194,9 @@ printf '%s' "$TF_JOINED" | grep -qF 'local.registry_rationale_strip' || {
 # literals plus expressions over local.zot_image_amd64. Re-deriving them here in bash would be a
 # second copy the dispatcher's render diff could not see drift in, so the block's assignment lines
 # are lifted as-is into the scratch root below (the file header's "READ, not copied" rule, applied
-# to expressions). FAIL CLOSED: an absent, duplicated or unterminated block, or a line in it that is
-# not `name = <expr>` over literals and local.zot_image_amd64 / sibling locals, is UNMEASURABLE.
+# to expressions). FAIL CLOSED: an absent, duplicated or unterminated block is refused here; a
+# member missing, duplicated, malformed or reading a local the scratch root lacks makes terraform
+# refuse the render, which is the RENDER FAILED arm below (exit 2) -- not re-checked by hand.
 MIRROR_BEGINS="$(grep -cE '^[[:space:]]*# zot-mirror:begin[[:space:]]*$' "$DIR/zot-registry.tf")"
 MIRROR_ENDS="$(grep -cE '^[[:space:]]*# zot-mirror:end[[:space:]]*$' "$DIR/zot-registry.tf")"
 [ "$MIRROR_BEGINS" = "1" ] && [ "$MIRROR_ENDS" = "1" ] || {
@@ -203,25 +204,6 @@ MIRROR_ENDS="$(grep -cE '^[[:space:]]*# zot-mirror:end[[:space:]]*$' "$DIR/zot-r
   exit 2
 }
 MIRROR_BLOCK="$(awk '/^[[:space:]]*# zot-mirror:begin[[:space:]]*$/{f=1; next} /^[[:space:]]*# zot-mirror:end[[:space:]]*$/{f=0} f' "$DIR/zot-registry.tf" | grep -vE '^[[:space:]]*(#|$)')"
-for want in zot_mirror_asset_url zot_mirror_asset_sha256_amd64 zot_manifest_digest zot_config_digest_amd64 zot_local_ref; do
-  [ "$(printf '%s\n' "$MIRROR_BLOCK" | grep -cE "^[[:space:]]*${want}[[:space:]]*=")" = "1" ] || {
-    echo "registry-userdata-budget: the zot-mirror block does not assign local.${want} exactly once" >&2
-    exit 2
-  }
-done
-# Every line is an assignment, and every local it references is zot_image_amd64 or a block member.
-if printf '%s\n' "$MIRROR_BLOCK" | grep -qvE '^[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*[^[:space:]]'; then
-  echo "registry-userdata-budget: the zot-mirror block carries a line that is not a single-line 'name = <expr>' assignment" >&2
-  exit 2
-fi
-MIRROR_NAMES="$(printf '%s\n' "$MIRROR_BLOCK" | sed -E 's/^[[:space:]]*([a-z0-9_]+)[[:space:]]*=.*/\1/')"
-for ref in $(printf '%s\n' "$MIRROR_BLOCK" | grep -oE 'local\.[a-z0-9_]+' | sed 's/^local\.//' | sort -u); do
-  [ "$ref" = zot_image_amd64 ] && continue
-  printf '%s\n' "$MIRROR_NAMES" | grep -qx "$ref" || {
-    echo "registry-userdata-budget: the zot-mirror block references local.${ref}, which the offline render cannot see (only zot_image_amd64 and block members are admitted)" >&2
-    exit 2
-  }
-done
 
 TFDIR=$(mktemp -d -t regbudget.XXXXXXXX)
 trap 'rm -rf "$TFDIR"' EXIT

@@ -130,16 +130,12 @@ locals {
 # --- zot's BOOT IMAGE: the pinned GitHub release asset (#8714 step 5.3b-iii) ------------------
 # The registry host no longer pulls zot from ghcr.io. `zot_image_amd64` above stays the UPSTREAM
 # RECORD (staleness gate, rule-audit probes, the D10 rehearsal read it); what the host BOOTS is the
-# exact upstream image packaged by zot-image-oci-archive.sh and published by zot-image-mirror.yml
-# as a prerelease asset of this repo. The host (cloud-init-registry.yml, zot-image-fetch.sh):
-#   1. downloads zot_mirror_asset_url, refuses unless its sha256 == zot_mirror_asset_sha256_amd64 (T);
-#   2. `docker load`s it and refuses unless the loaded image ID is the upstream config digest C
-#      (classic image store) or the upstream manifest digest D (containerd store);
-#   3. runs zot BY THAT ID. ghcr.io is name-resolution-denied on the host before step 1.
-# Rationale and the trust argument: ADR-096 amendment 2026-09-28. Bump procedure and recovery:
-# zot-image.provenance.md. A replace onto a missing or altered asset is refused before it fires
-# (scripts/registry-replace-preflight.sh P6), and the asset is re-proven against upstream on every
-# PR touching this file (zot-image-mirror.yml `rehearse`: rebuild == T, C == the manifest config).
+# exact upstream image, packaged by zot-image-oci-archive.sh and published by zot-image-mirror.yml as
+# a prerelease asset, fetched and verified on the host by zot-image-fetch.sh (cloud-init-registry.yml)
+# against T and C below and D from the pin. Mechanism and trust argument: ADR-096 amendment
+# 2026-09-28 (part 2). Every route that creates this host refuses a missing or altered asset first
+# (registry-replace-preflight.sh P6 / --check-asset; ADR-169 amendment 2026-09-28). Bump procedure
+# and recovery: zot-image.provenance.md.
 #
 # amd64 ONLY. The mirror publishes the amd64 image; the precondition on hcloud_server.registry
 # refuses an arm64 registry_server_type rather than booting a host with no asset to fetch.
@@ -648,7 +644,7 @@ resource "hcloud_server" "registry" {
 
     precondition {
       condition     = data.hcloud_server_type.registry.architecture == (local.registry_arch == "arm64" ? "arm" : "x86")
-      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but Hetzner reports architecture=${data.hcloud_server_type.registry.architecture}. local.zot_image would select the wrong OCI repository and every pull would 404 (MANIFEST_UNKNOWN), darking the sole pull path (ADR-169)."
+      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but Hetzner reports architecture=${data.hcloud_server_type.registry.architecture}. the host would provision against the wrong architecture's Doppler CLI build and zot boot image, darking the sole pull path (ADR-169)."
     }
 
     # `ssh_keys` is a CREATE-TIME attribute (Hetzner injects it at first boot and never
