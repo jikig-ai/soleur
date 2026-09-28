@@ -118,6 +118,11 @@ else
   # transport failure (unreachable private net) yields the curl default 000.
   CODE=$(curl -s -u "$ZUSER:$ZTOK" -o /dev/null -w '%{http_code}' -m 10 "http://${ENDPOINT}/v2/${REPO}/tags/list" 2>/dev/null || echo 000)
   [ -n "$CODE" ] || CODE=000
+  # (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the fallback
+  # above appends a second one and CODE is `000000`, which misses the `000)` arm below. Normalize
+  # ONLY that exact value: an HTTP code followed by a curl failure (e.g. `404000` when -f is
+  # injected) must stay in the catch-all, because zot did answer.
+  case "$CODE" in 000000) CODE=000 ;; esac
 fi
 
 # Source-4 liveness beacon — fires on EVERY run (rate-limited), independent of the zot verdict below,

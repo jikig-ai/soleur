@@ -137,6 +137,23 @@ assert "(d) authed probe of a nonexistent repo => 404 => NO ping" "[[ '$PINGED' 
 assert "(d) => exit 0 (absence alarms)"                           "[[ '$EC' -eq 0 ]]"
 assert "(d) => reports the #6400-inside-the-probe 404 case"       "grep -q 'EMPTY/DETACHED' <<<\"\$OUT\""
 
+# (e) real script, NOTHING listening (#7262) => a transport failure must take the `000` branch.
+# curl prints `000` via -w AND exits non-zero, so the `|| echo 000` fallback appends a second
+# `000`: before the fix CODE was `000000`, which missed the `000)` arm and landed in the
+# catch-all as "unexpected code 000000" -- all 10 production SUPPRESS rows 08-13..09-28 read
+# exactly that, so the private-net-down verdict never once fired. Port 1 on loopback has no
+# listener (binding it needs root), so the connect is refused immediately. Only this
+# behavioural row reaches the live capture; the seam override bypasses it.
+DEAD_PING="$(mktemp "$TMP/ping.XXXXXX")"; DEAD_OUT="$(mktemp "$TMP/out.XXXXXX")"; DEAD_EC=0
+SOLEUR_ZOT_PROBE_PING_LOG="$DEAD_PING" ZOT_ENDPOINT="127.0.0.1:1" ZOT_PROBE_REPO=known/repo \
+  ZUSER=zuser ZTOK=ztok timeout 20 bash "$SUT" >"$DEAD_OUT" 2>&1 || DEAD_EC=$?
+assert "(e) dead endpoint => the 000 UNREACHABLE verdict (private-net path down)" \
+  "grep -q 'SUPPRESS ping: 000 — 127.0.0.1:1 UNREACHABLE' '$DEAD_OUT'"
+assert "(e) dead endpoint => NOT the unexpected-code catch-all (the 000000 double-write)" \
+  "! grep -q 'unexpected code' '$DEAD_OUT'"
+assert "(e) dead endpoint => NO ping (absence alarms)" "[[ ! -s '$DEAD_PING' ]]"
+assert "(e) dead endpoint => exit 0" "[[ '$DEAD_EC' -eq 0 ]]"
+
 # (b) COPY with `-u ...` stripped => anonymous => 401 => exit 3, no ping (proves -u load-bearing).
 STRIP_U="$TMP/probe-no-u.sh"
 sed 's/ -u "$ZUSER:$ZTOK"//' "$SUT" > "$STRIP_U"
