@@ -142,8 +142,8 @@ resource "doppler_secret" "workspaces_luks_key" {
 # which is safe here because the names differ. A future same-name `-replace` needs a probe that
 # Doppler accepts two service tokens with one name first (the tunnel.tf 2026-07-29 probe shape).
 #
-# Rotated 2026-09-24 from `workspaces-luks-boot` (created 2026-07-18) because retained web-1
-# snapshot 411798619 very likely holds that token.
+# Rotated 2026-09-24 from `workspaces-luks-boot` (created 2026-07-18) because web-1 snapshot
+# 411798619, retained at the time, very likely held that token (deleted 2026-09-28, #8734).
 resource "doppler_service_token" "workspaces_luks" {
   project = "soleur"
   config  = "prd_workspaces_luks"
@@ -225,6 +225,38 @@ resource "terraform_data" "luks_monitor_token_install" {
 # escrow or readyz faults still cannot redden a merge (ADR-119 2026-09-24). Delivery faults do: the
 # is-enabled / is-active asserts. The runtime proof that the timer fires is
 # logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf).
+#
+# #9045 — the read-only forensic print, run as the installer's FIRST step (so a live cutover freeze,
+# which refuses the arm step with exit 17, cannot suppress it). It reads what systemd manager memory
+# still holds about the dead-man units (answers H1/H2 without a journal read), plus the boot-path
+# facts the fstab issue needs. It is PUBLIC output: no var. reference (Terraform would suppress the
+# whole step), and every line is guarded (`|| echo none` / `|| true`) so a missing value can neither
+# fail the step nor taint the resource. Deliberately NOT here, pinned by luks-monitor-install.test.sh:
+# journalctl (a transient unit's journal echoes its command line), the ExecStart text itself (only
+# fired_cmd=yes|no and a sha256 of its argv[] portion, `none` when that portion is empty; the full
+# property embeds start_time/pid), systemctl cat/status or a bare `systemctl show`, /etc/fstab beyond
+# the exact-field /mnt/data entries (the device only as /dev/…, UUID= or LABEL=, else
+# <redacted-device>; the options only when every one is on a fixed allowlist, else
+# <redacted-options>; has_nofail=yes|no either way), /etc/crypttab beyond a count, `apt-config dump`
+# (it prints proxy credentials), and /etc/default/luks-monitor beyond the existing counts. A deny list
+# cannot enumerate every leaking spelling, so the test also pins the sha256 of the decoded lines: any
+# edit here needs a security re-review and a pin update. The list is hashed into triggers_replace, so
+# ANY edit to it re-fires the installer on web-1 (idempotent redelivery plus one probe kick; ADR-119
+# 2026-09-28 addendum).
+locals {
+  luks_monitor_forensic_print = [
+    "echo 'luks-monitor forensic (#9045): read-only print, runs before the exit-17 freeze refusal'",
+    "for p in LoadState ActiveState SubState Result LastTriggerUSec ExecMainStartTimestamp ExecMainExitTimestamp ExecMainStatus InvocationID; do echo \"luks-monitor forensic workspaces-luks-deadman.timer $p=$(systemctl show -p \"$p\" --value workspaces-luks-deadman.timer 2>/dev/null || echo none)\"; done || true",
+    "for p in LoadState ActiveState SubState Result LastTriggerUSec ExecMainStartTimestamp ExecMainExitTimestamp ExecMainStatus InvocationID; do echo \"luks-monitor forensic workspaces-luks-deadman.service $p=$(systemctl show -p \"$p\" --value workspaces-luks-deadman.service 2>/dev/null || echo none)\"; done || true",
+    "if [ \"$(systemctl show -p LoadState --value workspaces-luks-deadman.service 2>/dev/null || echo none)\" = loaded ]; then av=$(systemctl show -p ExecStart --value workspaces-luks-deadman.service 2>/dev/null | sed -n 's/^.*argv[[][]]=\\(.*\\) ; ignore_errors=.*$/\\1/p' || true); echo \"luks-monitor forensic workspaces-luks-deadman.service fired_cmd=$(systemctl show -p ExecStart --value workspaces-luks-deadman.service 2>/dev/null | grep -q 'result=fired' && echo yes || echo no) argv_sha256=$(if [ -n \"$av\" ]; then printf '%s\\n' \"$av\" | sha256sum | cut -c1-64; else echo none; fi || echo none)\"; else echo 'luks-monitor forensic workspaces-luks-deadman.service exec=not-loaded'; fi || true",
+    "echo \"luks-monitor forensic uptime-s=$(uptime -s 2>/dev/null || echo none)\"",
+    "echo \"luks-monitor forensic reboot-required=$([ -e /var/run/reboot-required ] && echo yes || echo no)\"",
+    "echo \"luks-monitor forensic fstab /mnt/data=$(awk '$1 !~ /^#/ && $2 == \"/mnt/data\" { n++; d = $1; if (d !~ \"^(/dev/[A-Za-z0-9/_.*-]+|UUID=[0-9a-fA-F-]+|LABEL=[A-Za-z0-9_.-]+)$\") d = \"<redacted-device>\"; t = $3; if (t !~ \"^[A-Za-z0-9._+-]+$\") t = \"<redacted-fstype>\"; nf = \"no\"; bad = 0; k = split(tolower($4), a, \",\"); if (k < 1) bad = 1; for (i = 1; i <= k; i++) { if (a[i] == \"nofail\") nf = \"yes\"; if (a[i] !~ \"^(defaults|nofail|discard|noatime|nodiratime|relatime|ro|rw|auto|noauto|nodev|nosuid|noexec|_netdev|errors=remount-ro|errors=continue|errors=panic|user_xattr|acl|x-systemd[.][a-z0-9-]+(=[a-z0-9._:-]+)?)$\") bad = 1 }; o = bad ? \"<redacted-options>\" : $4; printf \"%s %s %s %s %s %s has_nofail=%s; \", d, $2, t, o, ($5 ~ \"^[0-9]+$\" ? $5 : \"?\"), ($6 ~ \"^[0-9]+$\" ? $6 : \"?\"), nf } END { if (!n) print \"none\" }' /etc/fstab 2>/dev/null || echo none)\"",
+    "echo \"luks-monitor forensic crypttab-workspaces-lines=$(grep -c '^workspaces' /etc/crypttab 2>/dev/null || true)\"",
+    "ar=$(apt-config shell AR Unattended-Upgrade::Automatic-Reboot 2>/dev/null | sed -n \"s/^AR='//; s/'$//p\" || true); case \"$ar\" in true|yes|on|with|enable|1) ar=true ;; false|no|off|without|disable|0) ar=false ;; '') ar=unset ;; *) ar=unrecognised ;; esac; echo \"luks-monitor forensic automatic-reboot=$ar\" || true",
+  ]
+}
+
 resource "terraform_data" "luks_monitor_install" {
   # Serializes the two writers of /etc/default/luks-monitor, and orders after journald_persistent
   # (the Vector config that allowlists the luks-monitor tag) when both fire in one apply
@@ -237,6 +269,7 @@ resource "terraform_data" "luks_monitor_install" {
     file("${path.module}/luks-monitor.service"),
     file("${path.module}/luks-monitor.timer"),
     nonsensitive(sha256(var.sentry_dsn)),
+    join("\n", local.luks_monitor_forensic_print),
   ]))
 
   lifecycle {
@@ -260,6 +293,13 @@ resource "terraform_data" "luks_monitor_install" {
     host_key    = local.web_1_ssh_host_key
     # Inline scripts upload here instead of world-readable /tmp: the DSN writer carries the DSN.
     script_path = "/root/tf-luks-monitor-%RAND%.sh"
+  }
+
+  # #9045 — FIRST: the read-only forensic print (local.luks_monitor_forensic_print, above). Before
+  # the exit-17 freeze refusal, and before every other step, so no earlier failure or live freeze
+  # can suppress the evidence it prints.
+  provisioner "remote-exec" {
+    inline = local.luks_monitor_forensic_print
   }
 
   # Straight into place, at the cutover tail's destinations exactly (luks-monitor-install.test.sh

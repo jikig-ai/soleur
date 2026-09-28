@@ -197,8 +197,11 @@ expect_red "G1 (AND PRIORITY → OR PRIORITY)" betterstack-logs-alerts.tf "predi
 
 MUT='
 old = "      AND startsWith(JSONExtractString("
-assert s.count(old) == 1, "anchor"
-s = s.replace(old, "      AND NOT startsWith(JSONExtractString(")'
+# #9045 added a second exploration using startsWith (workspaces_luks_deadman_fired); the edit is
+# scoped to THIS heredoc, and the one occurrence it replaces is asserted to sit inside it.
+i = s.index("monitor_send_failed_sql = <<-SQL"); j = s.index("  SQL\n", i)
+assert s[i:j].count(old) == 1, "anchor"
+s = s[:i] + s[i:j].replace(old, "      AND NOT startsWith(JSONExtractString(", 1) + s[j:]'
 expect_red "G2 (NOT startsWith)" betterstack-logs-alerts.tf "predicate widened: NOT in WHERE"
 
 MUT='
@@ -242,14 +245,14 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# SEVEN explorations carry this line (#6894, #8408's registry_store_not_luks, #8611's three, #8706's
-# luks_monitor_host_timer_dark), and the guard
+# EIGHT explorations carry this line (#6894, #8408's registry_store_not_luks, #8611's three, #8706's
+# luks_monitor_host_timer_dark, #9045's workspaces_luks_deadman_fired), and the guard
 # reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the
 # first occurrence in the file. The count is asserted exactly (not `>= 1`), and the first-occurrence
 # premise is asserted directly below, so a reordered file cannot make "the first" mean another block.
 MUT='
 old = "    values        = [local.vector_prd_source_id]"
-assert s.count(old) == 7, "anchor"
+assert s.count(old) == 8, "anchor"
 assert s.index(old) > s.index("resource \"logtail_exploration\" \"monitor_send_failed\" {") and s.index(old) < s.index("resource \"logtail_exploration\" \"inngest_luks_wrong_volume\" {"), "first occurrence is not in monitor_send_failed"
 s = s.replace(old, "    values        = [\"2734275\"]", 1)'
 expect_red "M17 (exploration values literal, not the pinned local)" betterstack-logs-alerts.tf "exploration source not pinned"

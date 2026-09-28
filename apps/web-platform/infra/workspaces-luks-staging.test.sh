@@ -30,6 +30,8 @@ CUTOVER="$SCRIPT_DIR/workspaces-cutover.sh"
 
 # shellcheck source=apps/web-platform/infra/workspaces-luks-harness.sh
 . "$SCRIPT_DIR/workspaces-luks-harness.sh"
+# #9098 D1 — prove ok()/no() count before any verdict runs through them (exit 2 on an instrument fault).
+harness_selftest workspaces-luks-staging.test.sh
 
 # `_same_dev` ends in `[ -b "$b" ]` and `[` is a builtin, so every case that needs it to return TRUE
 # must be handed a path that really IS a block device. Nothing is written to it (mkfs/mount/blkid/
@@ -750,11 +752,26 @@ repoint_case() {  # <script> [env...]
   REPOINT_OK=1
   # CRYPTSETUP_DEV is required by the C13 canary's mapper->device anchor, which now runs
   # `_same_dev "$_canary_mapper_dev" "$FRESH_DEV"`; without it the happy control dies there.
+  #
+  # #9098 E/G — the door's population assert compares $MOUNT/workspaces against the IN-PROCESS G3
+  # count ($WS_INVENTORY). The happy path seeds ONE real workspace dir and the matching count: the old
+  # `WORKSPACES_COUNT 0` against an empty mount only ever exercised 0 == 0 — the wipe shape
+  # wl_count_workspace_dirs exists to catch. Knobs (all optional, `-` form so empty is expressible):
+  #   RP_WS_DIRS="ws-a"   dirs seeded under $MOUNT/workspaces       RP_WS_INVENTORY=1  the G3 count
+  #   RP_RM_WS=1          remove the (EMPTY — pair with RP_WS_DIRS="") $MOUNT/workspaces: uncountable
+#   RP_NO_INVENTORY=1   leave WS_INVENTORY unset
   run_case "$script" \
-    'DRY_RUN=0; FRESH_DEV="$BLK"; MAPPER="$BLK"; FLIP_DONE=0; CANARY_OK=0; source "$REPOINT_BLOCK"' \
-    'emit_drift persist_state' \
+    'DRY_RUN=0; FRESH_DEV="$BLK"; MAPPER="$BLK"; FLIP_DONE=0; CANARY_OK=0
+     for d in ${RP_WS_DIRS-ws-a}; do command mkdir -p "$WORKSPACES_MOUNT/workspaces/$d"; done
+     [ "${RP_RM_WS:-0}" = 1 ] && command rmdir "$WORKSPACES_MOUNT/workspaces"
+     if [ "${RP_NO_INVENTORY:-0}" = 1 ]; then unset WS_INVENTORY; else WS_INVENTORY="${RP_WS_INVENTORY-1}"; fi
+     source "$REPOINT_BLOCK"' \
+    'emit_drift persist_state assert_host_canary_population disarm_dead_man' \
     BLK="$BLKDEV" REPOINT_BLOCK="$blk" CRYPTSETUP_DEV="$BLKDEV" "$@"
 }
+# canary_ok_written — did the door persist CANARY_OK? The one irreversible-direction write the door
+# guards: every negative row below must leave it absent, and the happy row must write it.
+canary_ok_written() { grep -qE '^CANARY_OK=' "$STATE/state" 2>/dev/null; }
 
 # MOUNTPOINT_RCS="1 0" is the STATE TRANSITION: after `umount "$MOUNT"` the repoint asserts $MOUNT
 # is NOT a mountpoint (rc 1), and after `mount "$MAPPER" "$MOUNT"` the canary asserts it IS (rc 0).
@@ -765,6 +782,9 @@ if ! repoint_landed; then
 else
   ran && ok "T5z the repoint block completes and reaches the host canary (positive control)" \
       || no "T5z the repoint block did not complete on the happy path: rc=$CASE_RC ${CASE_OUT:0:300}"
+  canary_ok_written && markerF 'result=disarmed reason=host_canary_passed' && nhas '^EMIT_DRIFT ' \
+    && ok "T5z3 the happy door (1 workspace == G3 count 1) disarms and persists CANARY_OK — the absence checks below are not vacuous" \
+    || no "T5z3 the happy door did not disarm + persist CANARY_OK (rc=$CASE_RC) ${CASE_OUT:0:300}"
   hasF 'cryptsetup status' \
     && ok "T5z2 the happy repoint reaches the C13 host canary" \
     || no "T5z2 the happy repoint never reached the canary — T6's negative assertion would be vacuous"
@@ -807,6 +827,38 @@ else
     no "T6c the canary ran after a failed repoint — it would certify whatever is still at \$MOUNT"
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# #9098 G — THE DOOR, EXECUTED. Each row runs the real extracted repoint + host-canary block with ONE
+# fault, and must: die, emit the NAMED drift, write NO CANARY_OK to the state file, and never reach
+# `docker start` (the rollback door stays open, so cleanup() would still roll back losslessly). These
+# replace grepping the door's text (freeze T25'/T36c/T40b keep only the structural ordering).
+# ---------------------------------------------------------------------------
+door_neg() {  # <label> <expected drift> [env...]
+  local label="$1" drift="$2"; shift 2
+  repoint_case "$CUTOVER" MOUNTPOINT_RCS="1 0" FINDMNT_MOUNT_SRC="$BLKDEV" BLKID_FS="crypto_LUKS" "$@"
+  if ! repoint_landed; then
+    no "T7 door [$label] NOT RUN: repoint extraction missed — treat as un-run, not as evidence"
+  elif died && outF 'DIE:' && outF "EMIT_DRIFT: $drift" && ! canary_ok_written && nhas '^docker start'; then
+    ok "T7 door [$label]: dies with $drift, no CANARY_OK persisted, no docker start"
+  else
+    no "T7 door [$label] did not fail closed (rc=$CASE_RC canary_ok=$(canary_ok_written && echo yes || echo no) want drift=$drift) ${CASE_OUT:0:300}"
+  fi
+}
+# The dead-man cannot be PROVEN disarmed: it already fired (LastTriggerUSec set, check a).
+door_neg "disarm fails (fired timer)" deadman_disarm_failed DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting DEADMAN_TIMER_LASTTRIGGER="Mon 2026-09-28 10:00:00 UTC"
+# A queued fire start job at the stop (check b via Job).
+door_neg "disarm fails (queued fire job)" deadman_disarm_failed DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting DEADMAN_SVC_JOB=99
+# The fire remounted the plaintext just BEFORE the disarm stopped the timer, then was collected: the
+# disarm itself reads clean, and only the post-disarm findmnt re-assert can see it.
+door_neg "source changed after the stop" deadman_fired_before_disarm DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP=/dev/sdz9
+door_neg "source EMPTY after the stop" deadman_fired_before_disarm DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP=
+# Population: higher than G3's count, lower, uncountable, and a missing baseline.
+door_neg "population higher than G3" host_canary_workspace_count_mismatch RP_WS_DIRS="ws-a ws-b" RP_WS_INVENTORY=1
+door_neg "population lower than G3" host_canary_workspace_count_mismatch RP_WS_DIRS="ws-a" RP_WS_INVENTORY=2
+door_neg "workspaces dir removed (uncountable)" host_canary_workspace_count_mismatch RP_WS_DIRS="" RP_RM_WS=1 RP_WS_INVENTORY=1
+door_neg "G3 baseline missing" host_canary_baseline_missing RP_NO_INVENTORY=1
+door_neg "G3 baseline zero on an empty mount" host_canary_baseline_missing RP_WS_DIRS="" RP_WS_INVENTORY=0
 
 # ---------------------------------------------------------------------------
 # Whole-script cases (L3 gate, luksFormat) — these lines run in the MAIN BODY before any function
@@ -1424,9 +1476,8 @@ echo "workspaces-luks-staging.test.sh: $pass passed, $fail failed"
 # dropping every assertion that covers the user-data deletion. A suite whose whole purpose is
 # refusing to pass vacuously must first prove it ran. Raise this floor when adding cases; if it
 # ever exceeds the real count the failure is loud and one line to fix.
-STAGING_MIN_ASSERTIONS=150
-if [ "$pass" -lt "$STAGING_MIN_ASSERTIONS" ]; then
-  echo "FAIL - only $pass assertions ran (floor $STAGING_MIN_ASSERTIONS) — cases were dropped or a case aborted early; a green run here would be vacuous"
-  exit 1
-fi
+# #9098 D1: set to the MEASURED count (not a round number with headroom), and enforced through
+# harness_floor (printf + exit 1), never through no().
+STAGING_MIN_ASSERTIONS=162
+harness_floor workspaces-luks-staging.test.sh "$STAGING_MIN_ASSERTIONS"
 [ "$fail" -eq 0 ]
