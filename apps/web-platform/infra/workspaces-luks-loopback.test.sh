@@ -1478,10 +1478,15 @@ fi
 #        the shape the stub models — is pinned here.
 #   LW7  W5 against a REAL header: after `luksAddKey` the escrowed backup keeps the same UUID but is
 #        STALE, and the wipe refuses wipe_header_backup_stale (a UUID match alone would have passed).
+#   LW8  the io.max cap against REAL systemd: the rehearsal's in-scope gate read back the scope's own
+#        io.max line for the loop's MAJ:MIN, carrying rbps=wbps=157286400 (systemd-run's rc alone proves
+#        nothing: it starts an uncapped scope when io.max cannot apply).
+#   LW5c W6b against a MOUNTED loop: the real reverse-dependency probe must REFUSE
+#        wipe_target_has_dependents naming the mount unit (the must-refuse direction LW6 cannot show).
 # Host identity that a loop device cannot carry (the Hetzner ID_SERIAL, the R2 download, the Doppler
 # read) is stubbed; every block-layer call is real. A missing binary or systemd is a FAILURE, never a
 # skip.
-for b in blkdiscard dd cmp od blockdev systemd-run systemd-escape systemctl udevadm lsblk dumpe2fs pgrep; do
+for b in blkdiscard dd cmp od blockdev systemd-run systemd-escape systemctl udevadm lsblk dumpe2fs debugfs pgrep; do
   command -v "$b" >/dev/null 2>&1 || unavailable "session W: required binary '$b' not found on PATH"
 done
 
@@ -1540,6 +1545,9 @@ run_wipe_real() {
         command udevadm "$@"
       }
       if [ "${W6B_REAL:-0}" != 1 ]; then _wipe_assert_no_dependents() { echo "W6B_STUBBED $*"; return 0; }; fi
+      # The plaintext loop is formatted TODAY, so the production freeze constant (2026-07-23) would refuse
+      # it as written-after-cutover; the provenance gate itself is proven in the stubbed suite.
+      _wipe_frozen_at_epoch() { printf "%s" "$(( $(date -u +%s) + 3600 ))"; }
       logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
       emit_drift() { echo "EMIT_DRIFT: $1"; }
       die()        { echo "DIE: $*"; exit 1; }
@@ -1567,6 +1575,13 @@ if [ "$CASE_RC" -eq 0 ] && [ -n "$(wout_row rehearsal_ok first_wipe)" ] && grep 
 else
   no "LW1a real rehearsal wrong (rc=$CASE_RC magic=$(dev_magic "$WP_DEV")): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-400)"
 fi
+# --- LW8: the io.max cap was IN FORCE in a real scope, read back by the in-scope gate ---------------
+LW8_DEVNUM="$(tr -d '[:space:]' < "/sys/class/block/$(basename "$(readlink -f "$WP_DEV")")/dev")"
+if grep -qE " io_max=${LW8_DEVNUM}_rbps=157286400_wbps=157286400(_|\$| )" "$CASE_OUT"; then
+  ok "LW8 real systemd wrote io.max for the loop's MAJ:MIN ($LW8_DEVNUM) with rbps=wbps=157286400 in the rehearsal's scope, and the gate read it back"
+else
+  no "LW8 the rehearsal's io.max read-back is missing or wrong for $LW8_DEVNUM: $(grep -oE ' io_max=[^ ]*' "$CASE_OUT" | head -1) $(grep -E 'io_cap' "$CASE_OUT" | head -1 | cut -c1-200)"
+fi
 # --- LW1: the real zero + read-back -------------------------------------------------------------
 run_wipe_real 'wipe_plaintext; echo WIPE_RETURNED'
 LW1_BLKID_RC=0; blkid -p -s TYPE -o value "$WP_DEV" >/dev/null 2>&1 || LW1_BLKID_RC=$?
@@ -1578,13 +1593,14 @@ else
 fi
 
 # --- LW2: the read-back can fail, at fixed offsets; H1 the zeroed device passes --------------------
-run_wipe_real '_wipe_readback "$WP_DEV" "$WORKSPACES_PLAINTEXT_SIZE_BYTES"; echo "rb_rc=$? cmp_rc=$WIPE_CMP_RC dd_rc=$WIPE_DD_RC"'
+LW2_RB='_wipe_readback "$WP_DEV" "$WORKSPACES_PLAINTEXT_SIZE_BYTES" "$(_wipe_cgroup_root)" "$(tr -d "[:space:]" < "/sys/class/block/$(basename "$(readlink -f "$WP_DEV")")/dev")"; echo "rb_rc=$? cmp_rc=$WIPE_CMP_RC dd_rc=$WIPE_DD_RC"'
+run_wipe_real "$LW2_RB"
 grep -q 'rb_rc=0 cmp_rc=0 dd_rc=0' "$CASE_OUT" \
   && ok "LW2-H1 the real read-back of the zeroed, odd-sized loop passes (cmp_rc=0 dd_rc=0)" \
   || no "LW2-H1 the zeroed loop failed the read-back: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
 for off in 1048577 4194303 $((WP_SIZE - 1)); do
   poke "$WP_DEV" "$off" 001
-  run_wipe_real '_wipe_readback "$WP_DEV" "$WORKSPACES_PLAINTEXT_SIZE_BYTES"; echo "rb_rc=$? cmp_rc=$WIPE_CMP_RC dd_rc=$WIPE_DD_RC"'
+  run_wipe_real "$LW2_RB"
   if grep -qE 'rb_rc=[1-9][0-9]* cmp_rc=1 ' "$CASE_OUT"; then
     ok "LW2 one non-zero byte at offset $off after zeroing fails the real read-back with cmp_rc=1"
   else
@@ -1624,6 +1640,24 @@ else
     ok "LW5b blkdiscard $LW5_FLAGS on a MOUNTED loop fails (O_EXCL) and its data is intact"
   else
     no "LW5b blkdiscard $LW5_FLAGS on a mounted device rc=$lw5_rc — O_EXCL did not protect it"
+  fi
+  # LW5c (T7) — the must-REFUSE direction of W6b against real systemd, while the loop is mounted: its
+  # device unit gains a .mount dependent. systemd picks the mount up from mountinfo asynchronously, so
+  # wait (bounded by attempts) for the dependent to show before asserting.
+  LW5C_UNIT="dev-$(basename "$(readlink -f "$WP_DEV")").device"; lw5c_deps=""; lw5c_i=0
+  while [ "$lw5c_i" -lt 20 ]; do
+    lw5c_i=$((lw5c_i + 1))
+    lw5c_deps="$(systemctl list-dependencies --reverse --plain --no-pager -- "$LW5C_UNIT" 2>/dev/null)"
+    awk 'NR > 1' <<<"$lw5c_deps" | grep -qE '^[[:space:]]+[^[:space:]]+\.mount$' && break
+    sleep 0.5
+  done
+  run_wipe_real '_wipe_assert_no_dependents "$(readlink -f "$WP_DEV")"; echo W6B_PASSED' W6B_REAL=1
+  if [ "$CASE_RC" -ne 0 ] && ! grep -q '^W6B_PASSED$' "$CASE_OUT" \
+    && grep -qE 'result=refused .*reason=wipe_target_has_dependents .*dependent=[^ ]+\.mount' "$CASE_OUT" \
+    && awk 'NR > 1' <<<"$lw5c_deps" | grep -qE '^  [^ ]+\.mount$'; then
+    ok "LW5c the real W6b REFUSES a mounted loop (wipe_target_has_dependents naming the .mount), and real list-dependencies shows that dependent indented on line 2+"
+  else
+    no "LW5c real W6b did not refuse a mounted loop (rc=$CASE_RC deps=$(tr '\n' '|' <<<"$lw5c_deps" | cut -c1-200)): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
   fi
   umount "$LW5_MNT" 2>/dev/null || true
 fi

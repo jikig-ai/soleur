@@ -327,13 +327,18 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    reaches Sentry (`op:workspaces-luks-drift`). A refusal raised inside a reused helper (the escrow
    credential read) shows instead as `outcome=wipe_aborted mode=wipe` on the cutover-aborted row.
    There is **no webhook verb** to unmount, stop a unit or kill a process on web-1, so a condition only
-   a shell could clear reads **halt and escalate** — never "SSH and …".
+   a shell could clear reads **halt and escalate** — never "SSH and …". Read the rows from the run log
+   with `gh run view <id> --log | grep -E 'SOLEUR_WORKSPACES_LUKS_(WIPE|DEADMAN)'`. A refused
+   **rehearsal** still opens the Sentry issue (the alert keys on the op, not the level); its event is
+   sent at level `warning`, a real run's at `fatal`. A real wipe that aborts without a refusal row
+   (an SSH drop, a cancel or the timeout) pages `wipe_aborted`, and its outcome row carries `begun=1`
+   when the zero had started.
 
    | `reason=` | Irreversible act done? | Safe to re-dispatch the same command? | Next action |
    |---|---|---|---|
-   | `wipe_tool_missing` | No | Yes, once fixed | A required tool is absent or util-linux < 2.36, or `pgrep` errored. This mode installs nothing (not even `aws`): halt and escalate — the host image needs the tool. |
+   | `wipe_tool_missing` | No | No | A required tool is absent (`tool=`), util-linux < 2.36, or `pgrep` errored. This mode installs nothing (not even `aws`), and web-1 cannot be rebuilt or rebooted to gain one (it is LUKS-pinned). **Halt and escalate** to the infra owner with the `tool=` field; there is no automated path. |
    | `wipe_in_progress` | Possibly (an orphaned zero is running) | Rehearsal only | A `blkdiscard` is already running (an SSH drop orphaned it). Re-dispatch the read-only rehearsal (b) until W0 passes, then re-dispatch D; it resumes on `arm=re_zero`. |
-   | `wipe_input_invalid` | No | After fixing the inputs | The pin, by-id path, size or LUKS path is malformed. Re-read preflight's banner; re-dispatch with the correct pin. |
+   | `wipe_input_invalid` | No | After fixing the inputs | The pin, by-id path, size or LUKS path is malformed, or `DRY_RUN`/`CONFIRM_WIPE` is not exactly `0` or `1` (`detail=mode_flag`). Re-read preflight's banner; re-dispatch with the correct pin. |
    | `wipe_live_mount_not_mapper` | No | No | `/mnt/data` is not the LUKS mapper — this is not a cut-over host. Run `workspaces-luks-verify.yml`; halt and escalate. |
    | `wipe_marker_other_volume` | No | No | A persisted wipe marker names another volume id. Halt and escalate: the pin or the host state is wrong. |
    | `wipe_target_absent_unexplained` | No | No | The pinned device is not on web-1 and no `PLAINTEXT_WIPED` marker explains it (detached by hand without a wipe?). Halt and escalate; **never** delete it by API unwiped. |
@@ -344,7 +349,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `wipe_header_uuid_mismatch` | No | No | The live header UUID is not the persisted `CANARY_OK` UUID. Halt and escalate: the mapper may be backed by a re-formatted volume. |
    | `wipe_mapper_not_luks_volume` | No | No | The mapper is backed by a device other than the LUKS volume `106443278`. Halt and escalate. |
    | `wipe_escrow_passphrase_mismatch` | No | After re-escrow | The Doppler passphrase does not open the live header (or is unreadable). **Never wipe while the sole copy is unrecoverable**: fix the escrow (ADR-119 §(c)) and re-run the rehearsal. |
-   | `wipe_header_backup_absent` | No | After re-escrow | The off-host header object for this UUID did not download. Re-escrow the header, then re-run the rehearsal. |
+   | `wipe_header_backup_absent` | No | After the fix `class=` names | The off-host header object for this UUID did not download. The row carries `aws_rc=` and `class=` (never aws's text). `class=not_found` or `empty_object`: re-escrow the header, then re-run the rehearsal. `class=access_denied`: the escrow read credential is wrong or revoked — fix it (re-escrowing would fail the same way). `class=network`: re-run the rehearsal; on a repeat, escalate. `class=other`: escalate. |
    | `wipe_header_backup_mismatch` | No | After re-escrow | The escrowed header's UUID differs, or the passphrase does not open its keyslot. Re-escrow, then the rehearsal. |
    | `wipe_header_backup_stale` | No | After re-escrow | The escrowed header differs from a fresh backup of the live one (same UUID, different keyslots), or the fresh backup failed. Re-escrow, then the rehearsal. |
    | `wipe_target_is_mapper_backing` | No | No | The target resolves to the device backing the live mapper (path or major:minor). **Halt and escalate — this is the one refusal that stands between the zero and every user's data.** |
@@ -354,11 +359,13 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `wipe_target_serial_mismatch` | No | No | udev's `ID_SERIAL` does not name `HC_Volume_<pin>`. Halt and escalate. |
    | `wipe_target_label_mismatch` | No | No | The first-wipe target is not labelled `workspaces_plain`. Halt and escalate. |
    | `wipe_target_has_dependents` | No | No | A `.mount`/`.swap`/`.service` depends on one of the target's device units, a unit is unloaded/inactive, none maps to the target, or the live mount unit binds one — a detach would stop it. Halt and escalate. |
-   | `wipe_deadman_armed` | No | After it resolves | A cutover dead-man is armed, firing or queued. Let it resolve (≤30 min), run `workspaces-luks-verify.yml`, then re-run the rehearsal. |
-   | `wipe_io_cap_unavailable` | No | No | systemd could not apply the 150M `io.max` cap; the zero would run uncapped against the live volume's storage path. Halt and escalate. |
+   | `wipe_deadman_armed` | No | No | A cutover dead-man is armed, firing or queued on a cut-over host. **Halt and escalate — do not let it fire**: its fire command would remount the stale 2026-07-23 plaintext over `/mnt/data` and serve every user the old copy (the fire now refuses when it finds a wipe marker or the plaintext label gone, but on this host neither holds yet). |
+   | `wipe_io_cap_unavailable` | No (from W8), or No with `PLAINTEXT_WIPE_BEGUN` persisted (from the zero's own scope, `gate_rc=97`) | Rehearsal only | The scope's own `io.max` does not carry `rbps=wbps=157286400` for the target's MAJ:MIN (`io_max=` on the row is what it read; `absent` means the io controller is not enabled on the scope's path — systemd starts such a scope uncapped with rc 0). The zero would run uncapped against the live volume's storage path. Halt and escalate. |
+   | `wipe_target_changed` | No | No | At the act, the by-id link no longer resolves to the device W6 measured, or that device no longer carries `HC_Volume_<pin>`: a volume was detached or attached between the checks and the zero. Nothing was zeroed and no marker was written. Halt and escalate; re-run the rehearsal only once the attachment is understood. |
+   | `wipe_plaintext_written_after_cutover` | No | No | The plaintext's superblock `Last write time` is later than the 2026-07-23 cutover froze it (`2026-07-23T09:45:00Z`; run 29995956562's host step ended 09:40:41Z), or unreadable (`detail=unparseable`). Something remounted it read-write since, so it may hold writes that exist on no other volume. **Halt and escalate**; never wipe until those writes are reconciled. The `field=last_write` evidence row carries the time. |
    | `wipe_positive_control_failed` | No | No | The first 4 KiB does not carry the ext4 magic, so the read path cannot be trusted to see the zero. Halt and escalate. |
    | `wipe_marker_write_failed` | `marker=begun`: No. `marker=wiped`: Yes — zeroed and verified, but no API write | No, until the disk is fixed | The state file on web-1's root disk (`/var/lib/workspaces-luks/state`) could not be written and read back (disk full or read-only). `marker=begun`: nothing was zeroed. `marker=wiped`: the zero completed and verified, `PLAINTEXT_WIPE_BEGUN` still locks ROLLBACK out, and the job made no API write. Halt and escalate: freeing root-disk space needs a shell. Once fixed, re-dispatch D (it resumes on `arm=re_zero`). |
-   | `wipe_blkdiscard_failed` | Partially (`PLAINTEXT_WIPE_BEGUN` persisted) | Yes | The zero itself failed. Re-dispatch D; it resumes on `arm=re_zero` and re-runs every identity check. ROLLBACK is now refused permanently (nothing to remount). |
+   | `wipe_blkdiscard_failed` | Partially (`PLAINTEXT_WIPE_BEGUN` persisted) | Yes | The zero itself failed (`rc=` on the row). Re-dispatch D; it resumes on `arm=re_zero` and re-runs every identity check. ROLLBACK is now refused permanently (nothing to remount). |
    | `wipe_readback_failed` | Yes — the zero ran, the device is not all-zero | Yes | The O_DIRECT read-back found a non-zero byte (`cmp_rc`/`dd_rc` on the row, the first difference on the evidence row). Re-dispatch D (re-zero); on a repeat, halt and escalate. No API write happened. |
    | `wipe_signature_survived` | Yes — the zero ran | Yes | `blkid` still finds a signature after the zero. Re-dispatch D once; on a repeat, escalate. No API write happened. |
 

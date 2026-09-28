@@ -219,10 +219,12 @@ ROLLBACK_REFUSED=0
 # is an append-only file across runs, so it cannot stand in for THIS run's count.
 WS_INVENTORY=""
 
-# Emit a discriminating drift event (any failed at-rest assert routes here).
+# Emit a discriminating drift event (any failed at-rest assert routes here). $2 is the Sentry level
+# (default fatal); a refused wipe REHEARSAL passes `warning` (#6604 step 7). The alert keys on the op,
+# not the level, so a warning still opens the issue — the level only tells a rehearsal from a real run.
 emit_drift() {
   WL_REASON="$1"; export WL_REASON
-  if command -v workspaces_luks_emit >/dev/null 2>&1; then WL_LEVEL=fatal workspaces_luks_emit;
+  if command -v workspaces_luks_emit >/dev/null 2>&1; then WL_LEVEL="${2:-fatal}" workspaces_luks_emit;
   else echo "[workspaces-cutover] DRIFT reason=$1 (workspaces_luks_emit unavailable — Sentry channel not reached; workflow-run log is the only sink)" >&2; fi
 }
 
@@ -997,7 +999,7 @@ cleanup() {
   # SIGPIPE and kills bash mid-rollback. HUP/INT/TERM are ignored for the same reason — a second
   # signal must not abort the recovery halfway. (The main body keeps the default dispositions: an SSH
   # drop mid-freeze must still abort INTO this trap, DP-6.)
-  local rc=$? outcome="" src="" abnormal="" detail="" derr="" drc=0 mode=""
+  local rc=$? outcome="" src="" abnormal="" detail="" derr="" drc=0 mode="" begun=""
   trap '' PIPE HUP INT TERM
   trap - EXIT
   if [ "$rc" -eq 0 ]; then
@@ -1046,7 +1048,15 @@ cleanup() {
   elif [ "$CONFIRM_WIPE" = "1" ]; then
     # The wipe never sets CANARY_OK/FREEZE_HELD/FLIP_DONE/DEADMAN_ARMED, so none of the arms above can
     # fire for it: an aborted wipe is recorded, never rolled back or rolled forward (#6604 step 7).
+    # A REAL wipe that aborts pages (obs P2-2): an SSH drop, a cancel or the job timeout mid-zero kills
+    # the run before any _wipe_refuse, and would otherwise reach nobody. `begun=1` on the row says the
+    # zero had started (PLAINTEXT_WIPE_BEGUN names the pin): the volume is partly zeroed, ROLLBACK is
+    # locked out, and a re-dispatch resumes on arm=re_zero. (PIPE is ignored here, so the send survives.)
     outcome=wipe_aborted
+    if [ "$DRY_RUN" != "1" ]; then
+      case "$(read_state PLAINTEXT_WIPE_BEGUN)" in "${WORKSPACES_PLAINTEXT_VOLUME_ID:-<none>}":*) begun=" begun=1" ;; esac
+      emit_drift wipe_aborted
+    fi
   elif [ "$CLEAN_STRAY" = "1" ]; then
     outcome=clean_stray
   else
@@ -1054,7 +1064,7 @@ cleanup() {
   fi
   # A wipe abort sweeps the two fixed LUKS-header copies W5 may have left on the root disk, and says
   # which mode it was (a refused rehearsal therefore reads `outcome=dry_run mode=wipe`).
-  if [ "$CONFIRM_WIPE" = "1" ]; then _wipe_shred_hdrs; mode=" mode=wipe"; fi
+  if [ "$CONFIRM_WIPE" = "1" ]; then _wipe_shred_hdrs; mode=" mode=wipe${begun}"; fi
   # A dry run froze, flipped and armed nothing (every mutation is DRY_RUN-gated), so whatever the flags
   # say, the truthful outcome is dry_run — never a "rolled back" page for a rehearsal.
   [ "$DRY_RUN" = "1" ] && outcome=dry_run
@@ -2400,17 +2410,44 @@ fsck_advisory_probe() {
 WIPE_IO_CAP="150M"                   # cgroup io.max, per device, on the zero AND the read-back
 WIPE_HDR_DL="${STATE_DIR}/wipe-header-download.img"
 WIPE_HDR_FRESH="${STATE_DIR}/wipe-header-fresh.img"
+WIPE_IO_CAP_BYTES=157286400          # WIPE_IO_CAP as systemd writes it to io.max (150 * 1024 * 1024)
+# The plaintext was frozen by the 2026-07-23 cutover: run 29995956562's host step ran 09:37:15Z-09:40:41Z
+# (read back with `gh run view 29995956562 --json jobs`), and its flip unmounted the plaintext for the
+# last time. 09:45:00Z leaves a few minutes for host clock skew. W9 refuses a first wipe whose
+# superblock `Last write time` is LATER: that volume was written after the cutover (a dead-man fire or
+# a rollback remounted it read-write) and may hold writes that exist nowhere else.
+WIPE_PLAINTEXT_FROZEN_AT="2026-07-23T09:45:00Z"
 WIPE_ARM="none"
 WIPE_CMP_RC=""
 WIPE_DD_RC=""
+WIPE_CMP_LINE=""
+WIPE_DEVICE_UNITS=0
+WIPE_IOMAX=""
+WIPE_PLAINTEXT_ONLY=""
 
 # _wipe_dev_path <by-id path> — the DEVICE-RESOLUTION SEAM. Production returns its argument (the kernel
 # resolves the by-id symlink). It reads NO environment on purpose: the stubbed suite overrides the
 # FUNCTION to hand back a real block device, and a census row asserts this body reads nothing but $1, so
 # an .env line can never repoint the zero.
 _wipe_dev_path() { printf '%s' "$1"; }
-# _wipe_sysfs_block — the sysfs root for holders/ and queue/ reads (same seam rule: no environment).
+# _wipe_sysfs_block — the sysfs root for holders/, queue/ and dev reads (same seam rule: no environment).
 _wipe_sysfs_block() { printf '%s' /sys/class/block; }
+# _wipe_cgroup_root — the cgroup2 mount the in-scope io.max gate reads (same seam rule).
+_wipe_cgroup_root() { printf '%s' /sys/fs/cgroup; }
+# _wipe_frozen_at_epoch — WIPE_PLAINTEXT_FROZEN_AT (2026-07-23T09:45:00Z) as epoch seconds, a LITERAL (same
+# seam rule: the loopback suite, whose plaintext loop is formatted today, overrides the function; nothing
+# in the environment can). workspaces-luks-wipe.test.sh pins that the two agree.
+_wipe_frozen_at_epoch() { printf '%s' 1784799900; }
+
+# WIPE_IO_GATE — the io.max gate that runs INSIDE the transient scope, as its first act, so it reads the
+# cgroup the zero (or the read-back) itself runs in: systemd applies IO*BandwidthMax best-effort, and
+# when the io controller is not enabled on the path it logs a warning and starts the scope UNCAPPED with
+# rc 0 (measured, systemd 261). Args: $1 cgroup root, $2 MAJ:MIN, $3 required rbps, $4 required wbps
+# (`-` = not required), then the command, which runs only if io.max carries both limits for the device.
+# Prints the io.max line (or `absent`) on stderr as `WIPE_IOMAX <line>`; exits 97 when the cap is not in
+# force. A command, not a function: it must run in the scope's own process.
+# shellcheck disable=SC2016  # expanded by the in-scope bash, never here
+WIPE_IO_GATE='cg="$(sed -n "s/^0:://p" /proc/self/cgroup)"; line="$(grep -E "^$2 " "$1$cg/io.max" 2>/dev/null)"; printf "WIPE_IOMAX %s\n" "${line:-absent}" >&2; case " $line " in *" rbps=$3 "*) ;; *) exit 97 ;; esac; [ "$4" = - ] || case " $line " in *" wbps=$4 "*) ;; *) exit 97 ;; esac; shift 4; "$@"'
 
 # _wv <value> — one row VALUE: printable, single-line, spaces mapped to `_` (the workflow's success-row
 # parser splits fields on single spaces), never empty (`-` placeholder).
@@ -2418,8 +2455,10 @@ _wv() { local v; v="$(_vscrub "${1:-}")"; v="${v// /_}"; printf '%s' "${v:--}"; 
 
 # emit_wipe <result> <arm> [key=value ...] — the ONE builder of the wipe row (the Observability
 # discoverability probe counts its prefix literal and expects exactly one). Field order is the contract
-# the wipe job's parser anchors on: result, arm, volume_id, then key=value pairs. Bare echo at column 0
-# + the Vector-allowlisted luks-monitor tag; EPIPE-tolerant (it can run inside cleanup's dead pipe).
+# the wipe job's parser anchors on: result, arm, volume_id, then key=value pairs. The Vector-allowlisted
+# luks-monitor tag FIRST, then a bare echo at column 0: in the main body SIGPIPE keeps its default
+# disposition, so after an SSH drop the echo into the dead pipe KILLS the process — the off-host copy
+# must already be written by then (obs P2-1). EPIPE-tolerant inside cleanup(), which ignores PIPE.
 emit_wipe() {
   local result="$1" arm="$2" kv k row
   shift 2
@@ -2428,11 +2467,13 @@ emit_wipe() {
     k="${kv%%=*}"
     # Keys are lower-case identifiers. The wiped/already_wiped_detached rows the wipe job parses use
     # [a-z_] keys only (its regex); the rehearsal row may carry a digit (hdr_sha256), it is never parsed.
-    [[ "$k" =~ ^[a-z][a-z0-9_]*$ ]] || continue
+    # Every caller passes a literal key, so a malformed one is a bug in THIS file: die loudly rather than
+    # silently drop a field the wipe job parses or the destruction record is built from.
+    [[ "$k" =~ ^[a-z][a-z0-9_]*$ ]] || die "emit_wipe: malformed row key '$(_vscrub "$k")'"
     row="$row $k=$(_wv "${kv#*=}")"
   done
-  { echo "$row"; } 2>/dev/null || true
   logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+  { echo "$row"; } 2>/dev/null || true
 }
 # emit_wipe_evidence <field> <free text> — FREE TEXT never rides the parsed row: the `cmp` first-difference
 # line and the dumpe2fs provenance times go here, through _deadman_detail (first line, <=200 bytes,
@@ -2440,16 +2481,19 @@ emit_wipe() {
 emit_wipe_evidence() {
   local row
   row="SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE feature=workspaces-luks op=workspaces-luks-wipe-evidence volume_id=$(_wv "${WORKSPACES_PLAINTEXT_VOLUME_ID:-}") field=$(_wv "$1") detail=$(_deadman_detail "${2:-}")"
-  { echo "$row"; } 2>/dev/null || true
   logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+  { echo "$row"; } 2>/dev/null || true
 }
-# _wipe_refuse <reason> <message> [key=value ...] — the refusal row, then the Sentry slug, then die.
-# Row BEFORE die (learning 2026-07-19: a fail-closed gate must self-report). Called directly, never in $().
+# _wipe_refuse <reason> <message> [key=value ...] — the Sentry slug, then the refusal row, then die.
+# Row BEFORE die (learning 2026-07-19: a fail-closed gate must self-report). The Sentry send comes FIRST
+# because it writes nothing to stdout (the emit helper runs in a subshell), while the row's echo is the
+# first write that a dead SSH pipe turns into SIGPIPE (obs P2-1). A refused REHEARSAL pages at `warning`,
+# a real run at `fatal`. Called directly, never in $().
 _wipe_refuse() {
   local reason="$1" msg="$2"
   shift 2
+  if [ "$DRY_RUN" = "1" ]; then emit_drift "$reason" warning; else emit_drift "$reason"; fi
   emit_wipe refused "$WIPE_ARM" "reason=$reason" "$@"
-  emit_drift "$reason"
   die "CONFIRM_WIPE refused (reason=${reason}, arm=${WIPE_ARM}): ${msg} — see the runbook step-7 verdict table for ${reason}"
 }
 # _wipe_shred_hdrs — the two fixed LUKS-header copies W5 writes to the root disk. A header left there
@@ -2503,21 +2547,22 @@ _wipe_assert_no_dependents() {
   WIPE_DEVICE_UNITS="${#tunits[@]}"
 }
 
-# _wipe_readback <real device> <size> — W11, the gate that proves the zero took. A capped O_DIRECT read
+# _wipe_readback <real device> <size> <cgroup root> <MAJ:MIN> — W11, the gate that proves the zero took. A capped O_DIRECT read
 # of the whole device (never the page cache), compared by `cmp -n <size>` against /dev/zero. cmp
 # DECIDES: when cmp exits early on a difference, dd takes EPIPE/SIGPIPE, so dd's rc alone never
 # classifies; both rcs are required to be 0. Never `cmp -l`/`-b` (they print device bytes — user
 # content — into the log). Both PIPESTATUS values land in plain globals (never a $() capture, which
 # would lose them), cmp's stdout/stderr in mktemp files. Returns 0 iff zero; never dies.
 _wipe_readback() {
-  local real="$1" size="$2" cout cerr
+  local real="$1" size="$2" cgroot="$3" devnum="$4" cout cerr
   local -a ps
   WIPE_CMP_RC=""; WIPE_DD_RC=""; WIPE_CMP_LINE=""
   blockdev --flushbufs "$real" >/dev/null 2>&1 || log "WARN: blockdev --flushbufs $real failed — the read-back is O_DIRECT regardless"
   # cmp's two capture files hold only its first-difference line / its own diagnostics (never device
   # bytes — no -l/-b), so plain mktemp is fine here.
   cout="$(mktemp)"; cerr="$(mktemp)"
-  systemd-run --scope --quiet -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" dd if="$real" iflag=direct bs=4M status=none 2>/dev/null \
+  # Behind the same in-scope io.max gate as the zero (read cap only); a gate refusal reads as dd rc 97.
+  systemd-run --scope --quiet -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" bash -c "$WIPE_IO_GATE" wipe-io-gate "$cgroot" "$devnum" "$WIPE_IO_CAP_BYTES" - dd if="$real" iflag=direct bs=4M status=none 2>/dev/null \
     | cmp -n "$size" - /dev/zero >"$cout" 2>"$cerr"
   ps=("${PIPESTATUS[@]}")
   WIPE_DD_RC="${ps[0]:-x}"; WIPE_CMP_RC="${ps[1]:-x}"
@@ -2533,14 +2578,15 @@ wipe_plaintext() {
   local size="${WORKSPACES_PLAINTEXT_SIZE_BYTES:-}" luks_dev="${WORKSPACES_LUKS_DEV:-}"
   local tool ver maj min prc src begun wiped m dev sig brc canary c_uuid backing breal live_uuid key
   local hkey dl_uuid hdr_bytes hdr_sha real tmm bmm kname sys got props label gran dmax wz sched magic
-  local last_mount last_write sig2 brc2 mk
+  local last_mount last_write sig2 brc2 mk devnum cgroot iorc lw_epoch frozen e2 aerr arc aclass zrc
+  local plain_ls live_ls plain_only n_only nm
   WIPE_ARM="none"; WIPE_DEVICE_UNITS=0
   step "CONFIRM_WIPE — retire the retained plaintext volume ${id:-<unset>} (runbook step 7; dry_run=${DRY_RUN})"
 
   # --- Stage 1: environment ----------------------------------------------------------------------
   # W0 — tools present. aws must ALREADY be installed: ensure_aws can apt-get on prod web-1, and this
   # mode never installs anything.
-  for tool in blkdiscard systemd-run aws cryptsetup blkid blockdev udevadm lsblk dumpe2fs findmnt pgrep systemctl systemd-escape; do
+  for tool in blkdiscard systemd-run aws cryptsetup blkid blockdev udevadm lsblk dumpe2fs debugfs findmnt pgrep systemctl systemd-escape; do
     command -v "$tool" >/dev/null 2>&1 || _wipe_refuse wipe_tool_missing "required tool '$tool' is not on PATH (this mode installs nothing)" "tool=$tool"
   done
   # util-linux >= 2.36: blkdiscard opens the device O_EXCL, so a mounted or held device is refused by
@@ -2557,7 +2603,11 @@ wipe_plaintext() {
     1) ;;
     *) _wipe_refuse wipe_tool_missing "pgrep failed (rc=${prc}) — cannot prove no zero is already running" "pgrep_rc=$prc" ;;
   esac
-  # W1 — inputs well-formed and bound to the PIN, never to a name.
+  # W1 — inputs well-formed and bound to the PIN, never to a name. The two mode flags first: the rehearsal
+  # gate below is an exact `= "1"`, so a `true`/`yes`/` 1` would otherwise take the DESTRUCTIVE arm.
+  case "${DRY_RUN}:${CONFIRM_WIPE}" in 0:0|0:1|1:0|1:1) ;; *)
+    _wipe_refuse wipe_input_invalid "DRY_RUN and CONFIRM_WIPE must each be exactly 0 or 1 (got '$(_vscrub "$DRY_RUN")' / '$(_vscrub "$CONFIRM_WIPE")')" "detail=mode_flag" ;;
+  esac
   [[ "$id" =~ ^[0-9]+$ ]] || _wipe_refuse wipe_input_invalid "WORKSPACES_PLAINTEXT_VOLUME_ID is not a numeric volume id"
   [ "$byid" = "/dev/disk/by-id/scsi-0HC_Volume_${id}" ] || _wipe_refuse wipe_input_invalid "WORKSPACES_PLAINTEXT_DEV must be exactly /dev/disk/by-id/scsi-0HC_Volume_${id}" "dev=$byid"
   [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -gt 0 ] || _wipe_refuse wipe_input_invalid "WORKSPACES_PLAINTEXT_SIZE_BYTES is not a positive byte count" "size=$size"
@@ -2637,10 +2687,20 @@ wipe_plaintext() {
   _wipe_shred_hdrs
   hkey="workspaces-luks-header-${live_uuid}.img"
   # s3api get-object (the same API family as the escrow's head-object read-back): a GET, never a write.
-  if ! aws s3api get-object --bucket "$HEADER_BACKUP_BUCKET" --key "$hkey" --endpoint-url "$HEADER_R2_ENDPOINT" "$WIPE_HDR_DL" >/dev/null 2>&1 || [ ! -s "$WIPE_HDR_DL" ]; then
-    key=""; _wipe_shred_hdrs
-    _wipe_refuse wipe_header_backup_absent "the off-host header object $hkey could not be downloaded — re-escrow the header before any wipe" "object=$hkey"
+  # Its stderr is CLASSIFIED and then dropped — never logged: an S3/R2 error can carry the access key id
+  # (the #8054 class), and re-escrowing is the wrong remedy for a credential or network failure.
+  aerr="$(aws s3api get-object --bucket "$HEADER_BACKUP_BUCKET" --key "$hkey" --endpoint-url "$HEADER_R2_ENDPOINT" "$WIPE_HDR_DL" 2>&1 >/dev/null)"; arc=$?
+  if [ "$arc" -ne 0 ] || [ ! -s "$WIPE_HDR_DL" ]; then
+    case "$aerr" in
+      *NoSuchKey*|*"Not Found"*|*"(404)"*) aclass=not_found ;;
+      *AccessDenied*|*Forbidden*|*"(403)"*|*"(401)"*|*InvalidAccessKeyId*|*SignatureDoesNotMatch*|*ExpiredToken*) aclass=access_denied ;;
+      *"Could not connect"*|*EndpointConnectionError*|*"timed out"*|*"Connection reset"*|*"Name or service not known"*|*"name resolution"*|*SSL*) aclass=network ;;
+      *) if [ "$arc" -eq 0 ]; then aclass=empty_object; else aclass=other; fi ;;
+    esac
+    aerr=""; key=""; _wipe_shred_hdrs
+    _wipe_refuse wipe_header_backup_absent "the off-host header object $hkey could not be downloaded (aws rc=${arc}, ${aclass}) — not_found: re-escrow the header; access_denied/network: fix the escrow credential or the path, re-escrowing would fail the same way" "object=$hkey" "aws_rc=$arc" "class=$aclass"
   fi
+  aerr=""
   dl_uuid="$(cryptsetup luksUUID "$WIPE_HDR_DL" 2>/dev/null)" || dl_uuid=""
   if [ "$dl_uuid" != "$live_uuid" ]; then
     key=""; _wipe_shred_hdrs
@@ -2694,35 +2754,90 @@ wipe_plaintext() {
   [ "$(_dm_prop timer ActiveState)" != active ] || _wipe_refuse wipe_deadman_armed "the workspaces-luks dead-man timer is active"
   if _deadman_fire_live; then _wipe_refuse wipe_deadman_armed "a dead-man fire is ${DM_FIRE_STATE}"; fi
   [ -z "$(_dm_prop service Job)$(_dm_prop timer Job)" ] || _wipe_refuse wipe_deadman_armed "a dead-man job is queued"
-  # W8 — evidence, plus the one capability the zero needs: the io.max cap must be applicable (ionice is
-  # a no-op under mq-deadline/none, which is why the cap is a cgroup property, not a priority).
+  # W8 — evidence, plus the one capability the zero needs: the io.max cap must be IN FORCE (ionice is a
+  # no-op under mq-deadline/none, which is why the cap is a cgroup property, not a priority). The probe is
+  # a real scope carrying the zero's exact properties on the exact device, and the in-scope gate reads
+  # that scope's own io.max for the device's MAJ:MIN — rc 0 from systemd-run proves nothing on its own
+  # (it starts an uncapped scope when io.max cannot apply). The zero and the read-back then run behind
+  # the same gate, so neither can run uncapped even if the environment changed after this probe.
   read -r gran dmax < <(lsblk -D -b -n -o DISC-GRAN,DISC-MAX "$real" 2>/dev/null || true)
   wz="$(cat "$(_wipe_sysfs_block)/${kname}/queue/write_zeroes_max_bytes" 2>/dev/null || echo unknown)"
   sched="$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$(_wipe_sysfs_block)/${kname}/queue/scheduler" 2>/dev/null || true)"
-  systemd-run --scope --quiet -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" true >/dev/null 2>&1 \
-    || _wipe_refuse wipe_io_cap_unavailable "systemd-run could not apply IOReadBandwidthMax on $real — the zero would run uncapped against the live volume's storage path"
-  # W9 — positive control (first wipe only): the ext4 magic 53 ef at bytes 1080-1081, read O_DIRECT.
-  magic="n/a"
+  devnum="$(tr -d '[:space:]' < "$(_wipe_sysfs_block)/${kname}/dev" 2>/dev/null)"
+  cgroot="$(_wipe_cgroup_root)"
+  [[ "$devnum" =~ ^[0-9]+:[0-9]+$ ]] \
+    || _wipe_refuse wipe_io_cap_unavailable "cannot read $real's MAJ:MIN from sysfs — the io.max cap cannot be verified" "detail=no_devnum"
+  WIPE_IOMAX="$(systemd-run --scope --quiet -p "IOWriteBandwidthMax=$real $WIPE_IO_CAP" -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" \
+    bash -c "$WIPE_IO_GATE" wipe-io-gate "$cgroot" "$devnum" "$WIPE_IO_CAP_BYTES" "$WIPE_IO_CAP_BYTES" : 2>&1 >/dev/null)"; iorc=$?
+  WIPE_IOMAX="$(sed -n 's/^WIPE_IOMAX //p' <<<"$WIPE_IOMAX" | head -1)"
+  [ "$iorc" -eq 0 ] \
+    || _wipe_refuse wipe_io_cap_unavailable "the scope's io.max does not carry rbps=wbps=${WIPE_IO_CAP_BYTES} for $real (${devnum}) — the zero would run uncapped against the live volume's storage path" "io_max=${WIPE_IOMAX:-absent}" "gate_rc=$iorc"
+  # W9 — positive control (first wipe only): the ext4 magic 53 ef at bytes 1080-1081, read O_DIRECT. Then
+  # the PROVENANCE gate and the completeness EVIDENCE, both read from the unmounted device, read-only.
+  magic="n/a"; WIPE_PLAINTEXT_ONLY="n/a"
   if [ "$WIPE_ARM" = first_wipe ]; then
     magic="$(dd if="$real" iflag=direct bs=4096 count=1 status=none 2>/dev/null | od -An -tx1 -j1080 -N2 | tr -d ' \n')"
     [ "$magic" = "53ef" ] || _wipe_refuse wipe_positive_control_failed "the first 4 KiB of $real does not carry the ext4 magic (got '${magic:-<unreadable>}') — the read path cannot be trusted to see what the zero did" "magic=${magic:-none}"
-    last_mount="$(dumpe2fs -h "$real" 2>/dev/null | sed -n 's/^Last mount time:[[:space:]]*//p')"
-    last_write="$(dumpe2fs -h "$real" 2>/dev/null | sed -n 's/^Last write time:[[:space:]]*//p')"
+    e2="$(dumpe2fs -h "$real" 2>/dev/null)"
+    last_mount="$(sed -n 's/^Last mount time:[[:space:]]*//p' <<<"$e2")"
+    last_write="$(sed -n 's/^Last write time:[[:space:]]*//p' <<<"$e2")"
     emit_wipe_evidence last_mount "${last_mount:-unknown}"
     emit_wipe_evidence last_write "${last_write:-unknown}"
+    # Provenance (data F5): the superblock must not have been written after the cutover froze this copy
+    # (WIPE_PLAINTEXT_FROZEN_AT). A later write means something remounted it read-write since (a dead-man
+    # fire, a rollback) and it may hold writes that exist on no other volume. dumpe2fs prints the host's
+    # local time and `date -d` parses it in the same zone. Unparseable is not "old enough".
+    frozen="$(_wipe_frozen_at_epoch)"
+    lw_epoch="$(date -d "${last_write:-unparseable}" +%s 2>/dev/null)" || lw_epoch=""
+    [[ "$lw_epoch" =~ ^[0-9]+$ ]] \
+      || _wipe_refuse wipe_plaintext_written_after_cutover "the plaintext's superblock Last write time '${last_write:-<none>}' is unreadable — its provenance cannot be proven" "detail=unparseable"
+    [ "$lw_epoch" -le "$frozen" ] \
+      || _wipe_refuse wipe_plaintext_written_after_cutover "the plaintext was written at '${last_write}' — AFTER the 2026-07-23 cutover froze it (${WIPE_PLAINTEXT_FROZEN_AT}); it may hold writes that exist nowhere else" "last_write_epoch=$lw_epoch" "frozen_at=$frozen"
+    # Completeness EVIDENCE, never a refusal (data F2): the workspace NAMES on the unmounted plaintext
+    # (debugfs opens it read-only; it is never mounted) that the live /mnt/data/workspaces lacks. An Art. 17
+    # deletion since 2026-07-23 is expected to appear here; anything else is a workspace the LUKS copy lost.
+    # Names only (workspace ids), never content. debugfs exits 0 even when it cannot open the device or find
+    # the path, so the listing counts only when it carries its own `.` and `..` entries.
+    plain_ls="$(debugfs -R 'ls -p /workspaces' "$real" 2>/dev/null)"
+    if grep -qE '^/[0-9]+/04[0-7]+/[0-9]+/[0-9]+/\.\./' <<<"$plain_ls" && grep -qE '^/[0-9]+/04[0-7]+/[0-9]+/[0-9]+/\./' <<<"$plain_ls"; then
+      plain_ls="$(awk -F/ 'NF >= 7 && $6 != "." && $6 != ".." && $6 != "" { print $6 }' <<<"$plain_ls" | LC_ALL=C sort -u)"
+      live_ls="$(ls -A "$MOUNT/workspaces" 2>/dev/null | LC_ALL=C sort -u)"
+      plain_only="$(grep -vxF -f <(printf '%s\n' "$live_ls") <<<"$plain_ls" || true)"
+      n_only="$(grep -c . <<<"$plain_only" || true)"
+      WIPE_PLAINTEXT_ONLY="$n_only"
+      emit_wipe_evidence plaintext_only "$n_only"
+      n_only=0
+      while IFS= read -r nm; do
+        [ -n "$nm" ] || continue
+        n_only=$((n_only + 1))
+        if [ "$n_only" -gt 200 ]; then emit_wipe_evidence plaintext_only_truncated "more than 200 names; the first 200 are listed"; break; fi
+        emit_wipe_evidence plaintext_only_name "$nm"
+      done <<<"$plain_only"
+    else
+      WIPE_PLAINTEXT_ONLY=unknown
+      emit_wipe_evidence plaintext_only unknown
+    fi
   fi
 
   if [ "$DRY_RUN" = "1" ]; then
     emit_wipe rehearsal_ok "$WIPE_ARM" "uuid=$live_uuid" "target=$real" "backing=$breal" "size=$size" "serial=ok" \
       "label=$label" "holders=0" "dependents=0" "device_units=${WIPE_DEVICE_UNITS}" "hdr_bytes=$hdr_bytes" "hdr_sha256=${hdr_sha:-unknown}" \
-      "discard_gran=${gran:-unknown}" "discard_max=${dmax:-unknown}" "write_zeroes_max=$wz" "scheduler=${sched:-unknown}" "magic=$magic"
+      "discard_gran=${gran:-unknown}" "discard_max=${dmax:-unknown}" "write_zeroes_max=$wz" "scheduler=${sched:-unknown}" "magic=$magic" \
+      "io_max=${WIPE_IOMAX:-absent}" "plaintext_only=${WIPE_PLAINTEXT_ONLY}"
     log "(dry-run) every wipe precondition passed for volume $id (arm=${WIPE_ARM}); nothing was written"
     return 0
   fi
 
   # --- the act --------------------------------------------------------------------------------------
-  # W10 — BEGUN first (an interrupted zero resumes on re_zero), then the zero. Never -f: util-linux opens
-  # the device O_EXCL, so a mounted or held device is refused by the kernel itself. stdin from /dev/null:
+  # W10 — the identity measured at W6 is re-asserted HERE, at the act (struct R-TOCTOU): `real` is a
+  # kernel name, and between W6 and now the pinned volume could have been hot-removed and another,
+  # unheld volume attached under the same name (O_EXCL protects only a held or mounted device). The by-id
+  # link must still resolve to `real`, and `real` must still carry the pin's hypervisor serial.
+  { [ "$(readlink -f -- "$dev" 2>/dev/null)" = "$real" ] \
+      && grep -Eq "^(ID_SERIAL|ID_SCSI_SERIAL)=.*HC_Volume_${id}([^0-9]|\$)" <<<"$(udevadm info --query=property --name="$real" 2>/dev/null || true)"; } \
+    || _wipe_refuse wipe_target_changed "$byid no longer resolves to $real carrying HC_Volume_${id} — the device changed after the identity checks; nothing was zeroed" "target=$real"
+  # Then BEGUN (an interrupted zero resumes on re_zero), then the zero. Never -f: util-linux opens the
+  # device O_EXCL, so a mounted or held device is refused by the kernel itself. stdin from /dev/null:
   # blkdiscard asks for confirmation on a device with a signature when stdin is a terminal.
   # BEGUN is Guard 5's precondition (the permanent ROLLBACK lockout) and the resume key, and this script
   # has no `set -e`: its write is CHECKED and READ BACK, and an unwritable state file (root disk full or
@@ -2732,26 +2847,36 @@ wipe_plaintext() {
     _wipe_refuse wipe_marker_write_failed "PLAINTEXT_WIPE_BEGUN could not be written and read back in $STATE_FILE — nothing was zeroed (the marker is what locks ROLLBACK out and lets an interrupted zero resume)" "marker=begun"
   fi
   emit_wipe begun "$WIPE_ARM" "target=$real"
-  if ! systemd-run --scope --quiet -p "IOWriteBandwidthMax=$real $WIPE_IO_CAP" -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" blkdiscard -z -v "$real" </dev/null; then
-    _wipe_refuse wipe_blkdiscard_failed "blkdiscard -z on $real failed — PLAINTEXT_WIPE_BEGUN is persisted, so a re-dispatch resumes on arm=re_zero"
+  # The zero runs behind the in-scope io.max gate (rc 97 = the cap is not in force; nothing was zeroed).
+  systemd-run --scope --quiet -p "IOWriteBandwidthMax=$real $WIPE_IO_CAP" -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" bash -c "$WIPE_IO_GATE" wipe-io-gate "$cgroot" "$devnum" "$WIPE_IO_CAP_BYTES" "$WIPE_IO_CAP_BYTES" blkdiscard -z -v "$real" </dev/null
+  zrc=$?
+  if [ "$zrc" -eq 97 ]; then
+    _wipe_refuse wipe_io_cap_unavailable "the zero's own scope did not carry the io.max cap for $real (${devnum}) — nothing was zeroed; PLAINTEXT_WIPE_BEGUN is persisted, so a re-dispatch resumes on arm=re_zero" "gate_rc=$zrc"
+  elif [ "$zrc" -ne 0 ]; then
+    _wipe_refuse wipe_blkdiscard_failed "blkdiscard -z on $real failed (rc=${zrc}) — PLAINTEXT_WIPE_BEGUN is persisted, so a re-dispatch resumes on arm=re_zero" "rc=$zrc"
   fi
   # W11 — the read-back decides.
   emit_wipe readback_start "$WIPE_ARM"
-  if ! _wipe_readback "$real" "$size"; then
+  if ! _wipe_readback "$real" "$size" "$cgroot" "$devnum"; then
     emit_wipe_evidence cmp "${WIPE_CMP_LINE:-none}"
     _wipe_refuse wipe_readback_failed "the full-device O_DIRECT read-back of $real is not all-zero over ${size} bytes" "cmp_rc=${WIPE_CMP_RC}" "dd_rc=${WIPE_DD_RC}"
   fi
-  # W12 — no signature survives; only now is the volume recorded as wiped.
+  # W12 — no signature survives.
   sig2="$(blkid -p -s TYPE -o value "$real" 2>/dev/null)"; brc2=$?
   [ "$brc2" = 2 ] || _wipe_refuse wipe_signature_survived "blkid still reports a signature on $real after the zero (rc=${brc2} type=${sig2:-?})" "blkid_rc=$brc2" "type=${sig2:-none}"
-  # WIPED is checked and read back the same way: no durable marker, no success row, so the wipe job makes
-  # no API write (BEGUN, already persisted, keeps ROLLBACK locked out).
+  # W6b again, AFTER the zero and right before the success row (struct R-W6B): the API detach follows
+  # this row, minutes later, and a dependent that appeared since W6b would be stopped by it.
+  _wipe_assert_no_dependents "$real"
+  # Only now is the volume recorded as wiped. WIPED is checked and read back the same way: no durable
+  # marker, no success row, so the wipe job makes no API write (BEGUN, already persisted, keeps ROLLBACK
+  # locked out).
   mk="${id}:$(date -u +%s)"
   if ! persist_state PLAINTEXT_WIPED "$mk" || [ "$(read_state PLAINTEXT_WIPED)" != "$mk" ]; then
     _wipe_refuse wipe_marker_write_failed "PLAINTEXT_WIPED could not be written and read back in $STATE_FILE after a verified zero — no success row, so no API detach/delete" "marker=wiped"
   fi
   emit_wipe wiped "$WIPE_ARM" "bytes=$size" "readback=zero" "target=$real" "discard_gran=${gran:-unknown}" \
-    "discard_max=${dmax:-unknown}" "write_zeroes_max=$wz" "scheduler=${sched:-unknown}" "last_write=${last_write:-n/a}"
+    "discard_max=${dmax:-unknown}" "write_zeroes_max=$wz" "scheduler=${sched:-unknown}" "last_write=${last_write:-n/a}" \
+    "io_max=${WIPE_IOMAX:-absent}" "plaintext_only=${WIPE_PLAINTEXT_ONLY}"
   log "plaintext volume $id zeroed and verified (${size} bytes read back as zero); the API detach + delete is the wipe job's next step"
 }
 

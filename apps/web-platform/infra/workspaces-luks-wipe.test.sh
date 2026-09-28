@@ -60,6 +60,13 @@ TGT_BLK="$(harness_blockdev)" || { printf 'INSTRUMENT FAIL - no block device on 
 LUKS_BLK="$(harness_blockdev_other "$TGT_BLK")" || { printf 'INSTRUMENT FAIL - only one block device on this host; target and LUKS backing must be DISTINCT real devices\n'; exit 2; }
 TGT_REAL="$(readlink -f -- "$TGT_BLK")"
 TGT_KNAME="$(basename "$TGT_REAL")"
+# T10 — the stubs cover COMMANDS, not shell redirections: a `> "$real"` in the SUT (or in a mutant of it)
+# would reach the real device handed through the seam. So the suite refuses to run with write access to
+# either device — root, or a `disk` group member — rather than trusting the closed world alone.
+if [ "$(id -u)" = 0 ] || [ -w "$TGT_BLK" ] || [ -w "$LUKS_BLK" ]; then
+  printf 'INSTRUMENT FAIL - this suite hands REAL block devices (%s, %s) to the SUT and must not be able to write them: run it as an unprivileged user outside the disk group\n' "$TGT_BLK" "$LUKS_BLK"
+  exit 2
+fi
 
 # --- the stub world, sourced INSIDE each case after the script (a file, so no quoting contortions) ---
 # Every path below hangs off ONE absolute mktemp root. The harness owns the EXIT trap (this suite must
@@ -76,11 +83,22 @@ command_not_found_handle() { printf 'UNSTUBBED %s\n' "$1" >> "$CALLS"; return 12
 TGT_REAL="$(readlink -f -- "$TGT_BLK")"
 TGT_KNAME="$(basename "$TGT_REAL")"
 W_BACKING_DEV="${W_BACKING-$LUKS_BLK}"
+LUKS_REAL="$(readlink -f -- "$W_BACKING_DEV" 2>/dev/null)"
 W_TARGET_UNITS="${W_TARGET_UNITS-dev-${TGT_KNAME}.device dev-disk-by\\x2did-scsi\\x2d0HC_Volume_105149570.device}"
 zeroed() { [ -f "$W_CASE_DIR/zeroed" ] && [ "${W_SIG_SURVIVES:-0}" != 1 ]; }
 in_target_units() { local u; for u in $W_TARGET_UNITS; do [ "$u" = "$1" ] && return 0; done; return 1; }
+# devkind <path> — which device a probe NAMED: tgt (the pinned target), luks (the mapper's backing
+# device) or other. Every device-probing stub keys its answer on this (T1): a probe pointed at the
+# wrong device gets the WRONG device's answer, or an `unk` that fails the case — never the target's.
+devkind() {
+  local r; r="$(readlink -f -- "${1:-}" 2>/dev/null)"
+  if [ -n "$r" ] && [ "$r" = "$TGT_REAL" ]; then printf tgt
+  elif [ -n "$r" ] && [ "$r" = "$LUKS_REAL" ]; then printf luks
+  else printf other; fi
+}
 
-# THE SEAM. Production returns its argument; here it returns a real block device (or an absent path).
+# THE SEAMS. Production returns its argument / the real roots; here a real block device (or an absent
+# path), a per-case fake sysfs and a per-case fake cgroup root.
 _wipe_dev_path() {
   rec "SEAM _wipe_dev_path $*"
   if [ "${W_DEV_ABSENT:-0}" = 1 ]; then printf '%s' "$W_CASE_DIR/no-such-dev"; return 0; fi
@@ -88,13 +106,17 @@ _wipe_dev_path() {
   printf '%s' "$TGT_BLK"
 }
 _wipe_sysfs_block() { printf '%s' "$W_CASE_DIR/sysfs"; }
+_wipe_cgroup_root() { printf '%s' "$W_CASE_DIR/cgroup"; }
+_plaintext_label_present() { [ "${PLAINTEXT_LABEL_ABSENT:-0}" != "1" ]; }
 
 command() {
   if [ "${1:-}" = -v ] && [ -n "${W_TOOL_ABSENT:-}" ] && [ "${2:-}" = "$W_TOOL_ABSENT" ]; then return 1; fi
   builtin command "$@"
 }
 die()        { echo "DIE: $*"; exit 1; }
-emit_drift() { rec "EMIT_DRIFT $1"; echo "EMIT_DRIFT: $1"; }
+# emit_drift mirrors production's shape: its only terminal output happens inside a SUBSHELL (the real
+# workspaces_luks_emit runs in `( ... ) || true`), so a dead stdout cannot kill the caller here either.
+emit_drift() { rec "EMIT_DRIFT $1"; rec "EMIT_DRIFT_LEVEL $1 ${2:-fatal}"; ( echo "EMIT_DRIFT: $1" ) 2>/dev/null || true; }
 logger()     { rec "logger $*"; printf '%s\n' "$*" >> "$MARKER_LOG"; }
 hostname()   { echo test-host; }
 sleep()      { rec "sleep $*"; return 0; }
@@ -110,17 +132,29 @@ blkdiscard() {
   local a
   for a in "$@"; do case "$a" in -z|-v|--version|/*) ;; *) unk blkdiscard "$a"; return 64 ;; esac; done
   if [ "${1:-}" = --version ]; then printf 'blkdiscard from util-linux %s\n' "${W_BLKD_VER:-2.39.3}"; return 0; fi
+  [ "$(devkind "${@: -1}")" = tgt ] || { unk blkdiscard "device ${*: -1}"; return 64; }
   [ -t 0 ] && rec "BLKDISCARD_STDIN_IS_A_TTY"
   if [ "${W_BLKDISCARD_RC:-0}" = 0 ]; then : > "$W_CASE_DIR/zeroed"; fi
   return "${W_BLKDISCARD_RC:-0}"
 }
-pgrep() { rec "pgrep $*"; [ "${1:-}" = -x ] || { unk pgrep "${1:-}"; return 64; }; return "${W_PGREP_RC:-1}"; }
+# pgrep: ONLY `pgrep -x blkdiscard` is legal (T1/H13: a mistyped pattern can never match the orphan).
+pgrep() { rec "pgrep $*"; [ "$*" = "-x blkdiscard" ] || { unk pgrep "$*"; return 64; }; return "${W_PGREP_RC:-1}"; }
 findmnt() {
   rec "findmnt $*"
-  local a
-  for a in "$@"; do case "$a" in -n|-o|-r|-S|-no|-rn|SOURCE|TARGET|OPTIONS|/*) ;; -*) unk findmnt "$a"; return 64 ;; esac; done
+  local a prev="" sdev=""
+  for a in "$@"; do
+    [ "$prev" = -S ] && sdev="$a"
+    case "$a" in -n|-o|-r|-S|-no|-rn|SOURCE|TARGET|OPTIONS|/*) ;; -*) unk findmnt "$a"; return 64 ;; esac
+    prev="$a"
+  done
+  if [ -n "$sdev" ]; then
+    case "$(devkind "$sdev")" in
+      tgt) if [ -n "${W_TGT_MNT:-}" ]; then printf '%s\n' "$W_TGT_MNT"; return 0; fi; return 1 ;;
+      luks) return 1 ;;   # the backing device itself is never mounted: the MAPPER is (production-faithful)
+      *) unk findmnt "-S $sdev"; return 64 ;;
+    esac
+  fi
   case " $* " in
-    *" -S "*) if [ -n "${W_TGT_MNT:-}" ]; then printf '%s\n' "$W_TGT_MNT"; return 0; fi; return 1 ;;
     *"$WORKSPACES_MOUNT"*) printf '%s\n' "${W_MOUNT_SRC-/dev/mapper/workspaces}"; return 0 ;;
   esac
   return 1
@@ -167,7 +201,12 @@ aws() {   # only a GET is legal in this mode: s3api get-object --bucket B --key 
   rec "aws $*"
   [ "${1:-} ${2:-}" = "s3api get-object" ] || { unk aws "${1:-} ${2:-}"; return 64; }
   [ "${3:-}" = --bucket ] && [ "${5:-}" = --key ] && [ "${7:-}" = --endpoint-url ] || { unk aws "$*"; return 64; }
-  [ "${W_HDR_ABSENT:-0}" = 1 ] && return 1
+  # W_HDR_ERR — what the real aws-cli prints on STDERR for a failed GetObject (it never prints the
+  # body): the SUT classifies it and must never echo it.
+  if [ "${W_HDR_ABSENT:-0}" = 1 ]; then
+    printf '%s\n' "${W_HDR_ERR-An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.}" >&2
+    return "${W_HDR_RC:-254}"
+  fi
   printf '%s' "${W_DL_CONTENT-HDR-v1}" > "$9"; return 0
 }
 stat() {
@@ -175,32 +214,54 @@ stat() {
   local p
   if [ "${1:-}" = -Lc ] && [ "${2:-}" = '%t:%T' ]; then
     p="$(readlink -f -- "${3:-}")"
-    if [ "$p" = "$TGT_REAL" ]; then printf '%s\n' "${W_TGT_MAJMIN-8:32}"; return 0; fi
-    if [ "$p" = "$(readlink -f -- "$W_BACKING_DEV")" ]; then printf '%s\n' "${W_BACKING_MAJMIN-8:16}"; return 0; fi
+    if [ "$p" = "$TGT_REAL" ]; then
+      # W_TGT_MAJMIN_2: the answer from the SECOND stat of the target (H7: when the backing path equals
+      # the target's, only the PATH compare can refuse — the major:minor compare then sees two values).
+      if [ -n "${W_TGT_MAJMIN_2:-}" ] && [ -f "$W_CASE_DIR/stat.tgt.1" ]; then printf '%s\n' "$W_TGT_MAJMIN_2"; return 0; fi
+      : > "$W_CASE_DIR/stat.tgt.1"
+      printf '%s\n' "${W_TGT_MAJMIN-8:32}"; return 0
+    fi
+    if [ "$p" = "$LUKS_REAL" ]; then printf '%s\n' "${W_BACKING_MAJMIN-8:16}"; return 0; fi
     return 1
   fi
   builtin command stat "$@"
 }
 blockdev() {
   rec "blockdev $*"
-  case "${1:-}" in
-    --getsize64) printf '%s\n' "${W_SIZE-21474836480}" ;;
-    --flushbufs) ;;
-    *) unk blockdev "${1:-}"; return 64 ;;
+  case "${1:-}:$(devkind "${2:-}")" in
+    --getsize64:tgt) printf '%s\n' "${W_SIZE-21474836480}" ;;
+    --getsize64:luks) printf '%s\n' 21474836480 ;;   # both volumes ARE var.volume_size (production-faithful)
+    --flushbufs:tgt) ;;
+    *) unk blockdev "$*"; return 64 ;;
   esac
 }
 udevadm() {
   rec "udevadm $*"
   [ "${1:-}" = info ] || { unk udevadm "${1:-}"; return 64; }
-  case "${2:-}" in
-    --query=property) printf 'DEVNAME=%s\nID_SERIAL=%s\nID_SCSI_SERIAL=%s\n' "$TGT_REAL" "${W_SERIAL-0HC_Volume_105149570}" "${W_SERIAL-0HC_Volume_105149570}" ;;
-    --query=path) printf '/devices/virtual/wipe-test/block/%s\n' "$TGT_KNAME" ;;
-    *) unk udevadm "${2:-}"; return 64 ;;
+  local n="${3#--name=}" k s
+  k="$(devkind "$n")"
+  case "${2:-}:$k" in
+    --query=property:tgt)
+      s="${W_SERIAL-0HC_Volume_105149570}"
+      # W_SERIAL_AFTER_W6: the serial the target reports on every property read AFTER the first (W6),
+      # i.e. at the W10 re-check — a different volume took the kernel name in between.
+      if [ -n "${W_SERIAL_AFTER_W6:-}" ] && [ -f "$W_CASE_DIR/udev.prop.1" ]; then s="$W_SERIAL_AFTER_W6"; fi
+      : > "$W_CASE_DIR/udev.prop.1"
+      printf 'DEVNAME=%s\nID_SERIAL=%s\nID_SCSI_SERIAL=%s\n' "$TGT_REAL" "$s" "$s" ;;
+    --query=property:luks) printf 'DEVNAME=%s\nID_SERIAL=0HC_Volume_106443278\n' "$LUKS_REAL" ;;
+    --query=path:tgt) printf '/devices/virtual/wipe-test/block/%s\n' "$TGT_KNAME" ;;
+    *) unk udevadm "$*"; return 64 ;;
   esac
 }
 blkid() {
   rec "blkid $*"
   if [ "${1:-}" != -p ] || [ "${2:-}" != -s ] || [ "${4:-}" != -o ] || [ "${5:-}" != value ]; then unk blkid "$*"; return 64; fi
+  case "$(devkind "${6:-}"):${3:-}" in
+    luks:TYPE) printf 'crypto_LUKS\n'; return 0 ;;
+    luks:LABEL) return 2 ;;
+    tgt:*) ;;
+    *) unk blkid "$*"; return 64 ;;
+  esac
   if zeroed; then return 2; fi
   case "${3:-}" in
     TYPE)
@@ -215,38 +276,80 @@ blkid() {
 }
 lsblk() {
   rec "lsblk $*"
-  [ "${1:-} ${2:-} ${3:-} ${4:-} ${5:-}" = "-D -b -n -o DISC-GRAN,DISC-MAX" ] || { unk lsblk "$*"; return 64; }
+  [ "${1:-} ${2:-} ${3:-} ${4:-} ${5:-}" = "-D -b -n -o DISC-GRAN,DISC-MAX" ] && [ "$(devkind "${6:-}")" = tgt ] || { unk lsblk "$*"; return 64; }
+  # W_RETARGET_LINK: between W6 and W10 (lsblk runs at W8) the kernel name the by-id link resolves
+  # through is taken over by ANOTHER device (hot-remove + reattach).
+  if [ "${W_RETARGET_LINK:-0}" = 1 ]; then ln -sfn "$LUKS_REAL" "$W_CASE_DIR/dev/sdc"; fi
   printf '%s %s\n' 4096 1073741824
 }
 dumpe2fs() {
   rec "dumpe2fs $*"
-  [ "${1:-}" = -h ] || { unk dumpe2fs "${1:-}"; return 64; }
-  printf 'Filesystem volume name:   workspaces_plain\nLast mount time:          Thu Jul 23 10:00:00 2026\nLast write time:          Thu Jul 23 10:05:00 2026\n'
+  [ "${1:-}" = -h ] && [ "$(devkind "${2:-}")" = tgt ] || { unk dumpe2fs "$*"; return 64; }
+  printf 'Filesystem volume name:   workspaces_plain\nLast mount time:          %s\nLast write time:          %s\n' \
+    "${W_LAST_MOUNT-Thu Jul 23 09:30:00 2026}" "${W_LAST_WRITE-Thu Jul 23 09:40:30 2026}"
+}
+# debugfs — the READ-ONLY listing of the unmounted plaintext's /workspaces. The real one exits 0 even
+# when it cannot open the device or find the path (measured, e2fsprogs 1.47.4), so the SUT must key on
+# the listing's own `.`/`..` entries, which W_DEBUGFS_FAIL=1 withholds.
+debugfs() {
+  rec "debugfs $*"
+  [ "${1:-} ${2:-}" = "-R ls -p /workspaces" ] && [ "$(devkind "${3:-}")" = tgt ] || { unk debugfs "$*"; return 64; }
+  if [ "${W_DEBUGFS_FAIL:-0}" = 1 ]; then printf 'debugfs 1.47.4 (6-Mar-2025)\n/workspaces: File not found by ext2_lookup\n' >&2; return 0; fi
+  local n=20 w
+  printf '/%s/040755/0/0/.//\n/2/040755/0/0/..//\n' 13
+  for w in ${W_PLAIN_WS-ws-a ws-b}; do n=$((n + 1)); printf '/%s/040755/0/0/%s//\n' "$n" "$w"; done
+  printf '\n'
 }
 systemd-escape() {
   rec "systemd-escape $*"
   [ "${1:-} ${2:-}" = "--path --suffix=mount" ] || { unk systemd-escape "$*"; return 64; }
   printf 'mnt-data.mount\n'
 }
+# systemd-run --scope models what systemd does with IO*BandwidthMax: it writes io.max in the SCOPE's
+# cgroup, for the major:minor of the device the property names, in bytes (150M = 157286400). The SUT's
+# in-scope gate then reads that file FOR REAL (the gate text runs in a child bash). W_IOMAX_ABSENT=1 is
+# the measured failure: the io controller is not enabled on the path, systemd logs a warning, the scope
+# starts anyway, and io.max does not exist. W_IOMAX_LINE overrides the line verbatim.
 systemd-run() {
   rec "systemd-run $*"
+  local r=max w=max dv="" cg dir
   while [ $# -gt 0 ]; do
     case "$1" in
       --scope|--quiet) shift ;;
-      -p) shift 2 ;;
+      -p)
+        case "$2" in
+          IOReadBandwidthMax=*)  dv="${2#IOReadBandwidthMax=}"; r="${dv##* }" ;;
+          IOWriteBandwidthMax=*) dv="${2#IOWriteBandwidthMax=}"; w="${dv##* }" ;;
+          *) unk systemd-run "-p $2"; return 64 ;;
+        esac
+        shift 2 ;;
       -*) unk systemd-run "$1"; return 64 ;;
       *) break ;;
     esac
   done
-  if [ "${1:-}" = true ]; then return "${W_SCOPE_PROBE_RC:-0}"; fi
+  dv="${dv%% *}"
+  case "$r" in 150M) r=157286400 ;; esac
+  case "$w" in 150M) w=157286400 ;; esac
+  cg="$(sed -n 's/^0:://p' /proc/self/cgroup)"
+  dir="$W_CASE_DIR/cgroup$cg"; mkdir -p "$dir"; rm -f "$dir/io.max"
+  if [ "${W_IOMAX_ABSENT:-0}" != 1 ] && ! { [ "${W_IOMAX_ABSENT_AT_ZERO:-0}" = 1 ] && [[ " $* " == *" blkdiscard "* ]]; }; then
+    if [ -n "${W_IOMAX_LINE:-}" ]; then printf '%s\n' "$W_IOMAX_LINE" > "$dir/io.max"
+    elif [ "$(devkind "$dv")" = tgt ]; then printf '%s rbps=%s wbps=%s riops=max wiops=max\n' "${W_DEVNUM-8:32}" "$r" "$w" > "$dir/io.max"
+    else printf '9:99 rbps=%s wbps=%s riops=max wiops=max\n' "$r" "$w" > "$dir/io.max"; fi
+  fi
   "$@"
 }
 dd() {
   rec "dd $*"
-  local a count=""
+  local a count="" src=""
   for a in "$@"; do
-    case "$a" in if=*|iflag=direct|status=none|bs=*) ;; count=*) count="${a#count=}" ;; *) unk dd "$a"; return 64 ;; esac
+    case "$a" in if=*) src="${a#if=}" ;; iflag=direct|status=none|bs=*) ;; count=*) count="${a#count=}" ;; *) unk dd "$a"; return 64 ;; esac
   done
+  case "$(devkind "$src")" in
+    tgt) ;;
+    luks) if [ "$count" = 1 ]; then printf 'LUKS\272\276'; head -c 4090 /dev/zero; return 0; fi ;;
+    *) unk dd "if=$src"; return 64 ;;
+  esac
   if [ "$count" = 1 ]; then
     if zeroed || [ "${W_MAGIC:-1}" != 1 ]; then head -c 4096 /dev/zero
     else head -c 1080 /dev/zero; printf '\123\357'; head -c 3014 /dev/zero; fi
@@ -269,17 +372,21 @@ cmp() {
 }
 systemctl() {
   rec "systemctl $*"
-  local a u prop="" val=0 prev="" unit="" v
+  local a u prop="" val=0 prev="" unit="" v rev=0
   case "${1:-}" in
     list-units)
       for a in "$@"; do case "$a" in list-units|--all|--type=device|--plain|--no-legend|--no-pager) ;; *) unk systemctl "$a"; return 64 ;; esac; done
       for u in $W_TARGET_UNITS dev-other.device; do printf '%s loaded active plugged Volume\n' "$u"; done
       return 0 ;;
     list-dependencies)
-      for a in "$@"; do case "$a" in list-dependencies|--reverse|--plain|--no-pager|--) ;; -*) unk systemctl "$a"; return 64 ;; *) unit="$a" ;; esac; done
+      # The shape systemd 258/261 prints (measured): the unit on line 1, each dependent on its own
+      # indented line — the FIRST dependent is line 2. Without --reverse a device unit lists only itself,
+      # so a call missing it is an `unk` (T2/H5), never a quiet empty answer.
+      for a in "$@"; do case "$a" in --reverse) rev=1 ;; list-dependencies|--plain|--no-pager|--) ;; -*) unk systemctl "$a"; return 64 ;; *) unit="$a" ;; esac; done
+      [ "$rev" = 1 ] || { unk systemctl "list-dependencies without --reverse"; return 64; }
       printf '%s\n' "$unit"
-      printf '  blockdev@%s.target\n' "${unit%.device}"
       if [ -n "${W_REVDEP:-}" ]; then for v in $W_REVDEP; do printf '  %s\n' "$v"; done; fi
+      if [ -n "${W_REVDEP_AFTER_ZERO:-}" ] && [ -f "$W_CASE_DIR/zeroed" ]; then for v in $W_REVDEP_AFTER_ZERO; do printf '  %s\n' "$v"; done; fi
       return 0 ;;
     show)
       shift
@@ -309,6 +416,10 @@ What=/dev/mapper/workspaces}"; return 0 ;;
     *) unk systemctl "${1:-}"; return 64 ;;
   esac
 }
+# The in-scope io.max gate runs in a CHILD bash (the real gate text), so the stubs it runs — the zero
+# and the read-back dd — and everything they call must reach that child. Exported, never re-defined.
+export TGT_REAL LUKS_REAL
+export -f rec unk command_not_found_handle devkind zeroed blkdiscard dd
 STUBS
 
 # --- PATH tripwires + the allowlist -------------------------------------------------------------
@@ -318,7 +429,7 @@ for t in blkdiscard dd doppler aws; do
   printf '#!/usr/bin/env bash\nprintf "TRIPWIRE %%s %%s\\n" %s "$*" >> "${CALLS:-/dev/null}"\nexit 64\n' "$t" > "$TRIP_DIR/$t"
   chmod +x "$TRIP_DIR/$t"
 done
-for b in tr sed cut head tail grep awk cat od date mktemp basename dirname readlink sort uniq wc mkdir rm chmod sha256sum stat cmp ls env touch bash; do
+for b in tr sed cut head tail grep awk cat od date mktemp basename dirname readlink sort uniq wc mkdir rm chmod sha256sum stat cmp ls env touch bash ln; do
   p="$(command -v "$b" 2>/dev/null)" || { printf 'INSTRUMENT FAIL - allowlist binary %s not found\n' "$b"; exit 2; }
   ln -sf "$p" "$ALLOW_DIR/$b"
 done
@@ -328,18 +439,21 @@ done
 #   W_HOLDERS='dm-3'      holder entries under the target's sysfs holders/ dir.
 #   UNSET_DRY_RUN=1       run with DRY_RUN absent from the environment (the script default applies).
 #   SEED_HDRS=1           pre-create the two fixed W5 header paths (as a mid-W5 abort would leave them).
+#   W_LIVE_WS='a b'       workspace dirs on the LIVE mount (default `ws-a ws-b`, the plaintext listing's
+#                         default too, so the happy path reads plaintext_only=0).
 #   PRE_INV='<shell>'     eval'd after the stubs and BEFORE the invocation (a per-case override of a
 #                         script function, e.g. an unwritable persist_state).
 # Sets CASE_RC, CASE_OUT, CALLS, MARKER_LOG, STATE.
 run_wipe() {
   local invocation="$1"; shift
   CASE_N=$((CASE_N + 1))
-  local d="$WIPE_SCRATCH/case-$CASE_N" k h seeded=0 unset_dry=0
+  local d="$WIPE_SCRATCH/case-$CASE_N" k h seeded=0 unset_dry=0 live="ws-a ws-b"
   CALLS="$d/calls"; MARKER_LOG="$d/marker"; STATE="$d/state"
   mkdir -p "$STATE" "$d/mnt/workspaces" "$d/staging" "$d/sysfs/$TGT_KNAME/holders" "$d/sysfs/$TGT_KNAME/queue" "$d/dev/disk/by-id"
   : > "$CALLS"; : > "$MARKER_LOG"
   printf '33554432\n' > "$d/sysfs/$TGT_KNAME/queue/write_zeroes_max_bytes"
   printf '[mq-deadline] none\n' > "$d/sysfs/$TGT_KNAME/queue/scheduler"
+  printf '8:32\n' > "$d/sysfs/$TGT_KNAME/dev"
   ln -s "$TGT_REAL" "$d/dev/sdc"
   ln -s ../../sdc "$d/dev/disk/by-id/scsi-0HC_Volume_${PIN}"
   local -a envs=()
@@ -349,17 +463,19 @@ run_wipe() {
       W_HOLDERS=*) for h in ${k#W_HOLDERS=}; do mkdir -p "$d/sysfs/$TGT_KNAME/holders/$h"; done ;;
       UNSET_DRY_RUN=1) unset_dry=1 ;;
       SEED_HDRS=1) printf 'hdr' > "$STATE/wipe-header-download.img"; printf 'hdr' > "$STATE/wipe-header-fresh.img" ;;
+      W_LIVE_WS=*) live="${k#W_LIVE_WS=}" ;;
       *) envs+=("$k") ;;
     esac
   done
   [ "$seeded" = 1 ] || printf 'CANARY_OK=1:%s\n' "$UUID_LIVE" > "$STATE/state"
+  for h in $live; do mkdir -p "$d/mnt/workspaces/$h"; done
   local -a pre=(env)
   [ "$unset_dry" = 1 ] && pre+=(-u DRY_RUN)
   local -a base=(CUTOVER="$CUTOVER" WIPE_STUBS="$WIPE_STUBS" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG"
     W_CASE_DIR="$d" TRIP_DIR="$TRIP_DIR" ALLOW_DIR="$ALLOW_DIR" TGT_BLK="$TGT_BLK" LUKS_BLK="$LUKS_BLK"
     INVOCATION="$invocation" MAIN_PREFIX="${MAIN_PREFIX:-}" RB_TEXT="${RB_TEXT:-}" PRE_INV="${PRE_INV:-}"
     WORKSPACES_STATE_DIR="$STATE" WORKSPACES_MOUNT="$d/mnt" WORKSPACES_STAGING="$d/staging"
-    CONFIRM_WIPE=1 ROLLBACK=0 CLEAN_STRAY=0
+    CONFIRM_WIPE=1 ROLLBACK=0 CLEAN_STRAY=0 TZ=UTC
     WORKSPACES_PLAINTEXT_VOLUME_ID="$PIN" WORKSPACES_PLAINTEXT_DEV="$BYID"
     WORKSPACES_PLAINTEXT_SIZE_BYTES="$SIZE" WORKSPACES_LUKS_DEV="$LUKS_BLK")
   [ "$unset_dry" = 1 ] || base+=(DRY_RUN=0)
@@ -422,6 +538,36 @@ if ! hasF 'blkdiscard -z /dev/h1-probe' || ! has '^TRIPWIRE blkdiscard -z /dev/h
   exit 2
 fi
 ok "H1 instrument: the recorder records, an escaped blkdiscard hits the PATH tripwire (rc 64), an unstubbed command is recorded"
+# T8 — the verdict-owning predicates prove themselves on synthetic evidence (a known-positive and a
+# known-negative each), or every refusal row below would be only as strong as a neutered helper.
+t8_fail=""
+T8D="$WIPE_SCRATCH/t8"; mkdir -p "$T8D/state"
+CALLS="$T8D/calls"; STATE="$T8D/state"
+printf 'blkid -p -s TYPE -o value /dev/x\n' > "$CALLS"; nounk || t8_fail="$t8_fail nounk-clean"
+for bad in 'STUB_UNKNOWN_FLAG blkid -q' 'UNSTUBBED wipefs' 'TRIPWIRE blkdiscard -z /dev/x'; do
+  printf '%s\n' "$bad" >> "$CALLS"; nounk && t8_fail="$t8_fail nounk-missed[$bad]"
+  printf 'blkid -p\n' > "$CALLS"
+done
+: > "$STATE/wipe-header-download.img"; hdrs_gone && t8_fail="$t8_fail hdrs_gone-missed-download"
+rm -f "$STATE/wipe-header-download.img"; : > "$STATE/wipe-header-fresh.img"; hdrs_gone && t8_fail="$t8_fail hdrs_gone-missed-fresh"
+rm -f "$STATE/wipe-header-fresh.img"; hdrs_gone || t8_fail="$t8_fail hdrs_gone-clean"
+t8_refusal() {  # <slug in row> <slug in drift> <die after row: 1|0> <rows>
+  CASE_RC=1; printf 'EMIT_DRIFT %s\n' "$2" > "$CALLS"
+  local r="$WROW result=refused arm=first_wipe volume_id=105149570 reason=$1" out="" i
+  for ((i = 0; i < $4; i++)); do out="$out$r"$'\n'; done
+  if [ "$3" = 1 ]; then CASE_OUT="${out}DIE: x"; else CASE_OUT="DIE: x"$'\n'"$out"; fi
+}
+t8_refusal wipe_a wipe_a 1 1; refused_ok wipe_a || t8_fail="$t8_fail refused_ok-positive"
+t8_refusal wipe_a wipe_a 1 1; refused_ok wipe_b && t8_fail="$t8_fail refused_ok-wrong-slug"
+t8_refusal wipe_a wipe_a 0 1; refused_ok wipe_a && t8_fail="$t8_fail refused_ok-row-after-die"
+t8_refusal wipe_a wipe_a 1 2; refused_ok wipe_a && t8_fail="$t8_fail refused_ok-two-rows"
+t8_refusal wipe_a wipe_other 1 1; refused_ok wipe_a && t8_fail="$t8_fail refused_ok-drift-slug"
+t8_refusal wipe_a wipe_a 1 1; CASE_RC=0; refused_ok wipe_a && t8_fail="$t8_fail refused_ok-rc0"
+if [ -n "$t8_fail" ]; then
+  printf 'INSTRUMENT FAIL - T8: a verdict predicate is neutered:%s\n' "$t8_fail"
+  exit 2
+fi
+ok "T8 instrument: nounk, hdrs_gone and refused_ok each accept their known-positive and reject their known-negatives (wrong slug, row after DIE, two rows, wrong drift slug, rc 0)"
 
 # ============================================================================
 # Happy paths
@@ -439,13 +585,31 @@ if ran && outF WIPE_RETURNED && [ -n "$P1_ROW" ] && [ "$(zero_calls)" -eq 1 ] \
 else
   no "P1 first wipe did not complete cleanly (rc=$CASE_RC zero=$(zero_calls) unk=[$(unkdump)]) ${CASE_OUT:0:300}"
 fi
-hasF "systemd-run --scope --quiet -p IOWriteBandwidthMax=$TGT_REAL 150M -p IOReadBandwidthMax=$TGT_REAL 150M blkdiscard -z -v $TGT_REAL" \
-  && ok "P1b the zero runs inside a systemd scope capped at 150M read AND write on the target (cgroup io.max, not ionice)" \
-  || no "P1b the zero is not wrapped in the io.max-capped scope: $(grep -E '^systemd-run .*blkdiscard' "$CALLS" | head -1)"
-hasF "systemd-run --scope --quiet -p IOReadBandwidthMax=$TGT_REAL 150M dd if=$TGT_REAL iflag=direct bs=4M status=none" \
+# scoped <prefix> <suffix> — a recorded systemd-run line that STARTS with the scope properties and ENDS with
+# the gate arguments + the command (the gate text itself sits between them).
+scoped() { awk -v p="$1" -v q="$2" 'index($0, p) == 1 && substr($0, length($0) - length(q) + 1) == q { f = 1 } END { exit !f }' "$CALLS"; }
+P1_CG="$WIPE_SCRATCH/case-$CASE_N/cgroup"
+scoped "systemd-run --scope --quiet -p IOWriteBandwidthMax=$TGT_REAL 150M -p IOReadBandwidthMax=$TGT_REAL 150M bash -c " \
+  " wipe-io-gate $P1_CG 8:32 157286400 157286400 blkdiscard -z -v $TGT_REAL" \
+  && ok "P1b the zero runs inside a scope capped at 150M read AND write on the target, behind the in-scope io.max gate (rbps=wbps=157286400 for the target's MAJ:MIN)" \
+  || no "P1b the zero is not wrapped in the gated io.max scope: $(grep -E '^systemd-run .*blkdiscard' "$CALLS" | head -1 | cut -c1-200)"
+scoped "systemd-run --scope --quiet -p IOReadBandwidthMax=$TGT_REAL 150M bash -c " \
+  " wipe-io-gate $P1_CG 8:32 157286400 - dd if=$TGT_REAL iflag=direct bs=4M status=none" \
   && hasF "cmp -n $SIZE - /dev/zero" \
-  && ok "P1c the read-back is a capped O_DIRECT full-device read compared by cmp -n <size> against /dev/zero" \
-  || no "P1c the read-back shape drifted (direct IO / cap / cmp -n size): $(grep -E '^(systemd-run .*dd|cmp -n)' "$CALLS" | tr '\n' '|')"
+  && ok "P1c the read-back is a capped (gated, read cap) O_DIRECT full-device read compared by cmp -n <size> against /dev/zero" \
+  || no "P1c the read-back shape drifted (gate / direct IO / cap / cmp -n size): $(grep -E '^(systemd-run .*dd|cmp -n)' "$CALLS" | tr '\n' '|' | cut -c1-240)"
+# P1f (T1) — every identity probe names the RESOLVED TARGET, never another device. The device-keyed
+# stubs answer the backing device with the backing device's facts (same size, not mounted), so these
+# pins are what kill a probe re-pointed at it.
+p1f_missing=""
+for pin in "findmnt -rn -S $TGT_REAL -o TARGET" "blockdev --getsize64 $TGT_REAL" "udevadm info --query=property --name=$TGT_REAL" \
+  "blkid -p -s LABEL -o value $TGT_REAL" "dd if=$TGT_REAL iflag=direct bs=4096 count=1 status=none" "dumpe2fs -h $TGT_REAL" \
+  "debugfs -R ls -p /workspaces $TGT_REAL" "blkid -p -s TYPE -o value $TGT_REAL" "pgrep -x blkdiscard" "lsblk -D -b -n -o DISC-GRAN,DISC-MAX $TGT_REAL"; do
+  hasF "$pin" || p1f_missing="$p1f_missing [$pin]"
+done
+[ "$(grep -cxF "udevadm info --query=property --name=$TGT_REAL" "$CALLS")" -eq 2 ] || p1f_missing="$p1f_missing [udevadm property x2: W6 + the W10 re-check]"
+[ -z "$p1f_missing" ] && ok "P1f each identity/evidence probe names the resolved target (findmnt -S, blockdev, udevadm x2, blkid LABEL/TYPE, the magic dd, dumpe2fs, debugfs, lsblk) and pgrep names blkdiscard exactly" \
+  || no "P1f probe arguments drifted, missing:$p1f_missing"
 grep -qE -- "^cmp .*(-l|-b)" "$CALLS" \
   && no "P1d cmp was run with -l/-b — it would print device bytes (user content) into the log" \
   || ok "P1d cmp never runs with -l/-b (no device bytes can reach a log)"
@@ -463,7 +627,8 @@ run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1
 P2_ROW="$(wrow rehearsal_ok first_wipe)"
 p2_fields=1; p2_missing=""
 for f in "uuid=$UUID_LIVE" "hdr_sha256=" "hdr_bytes=" "label=workspaces_plain" "dependents=0" "holders=0" "device_units=2" \
-  "discard_gran=4096" "write_zeroes_max=33554432" "scheduler=mq-deadline" "magic=53ef" "size=$SIZE"; do
+  "discard_gran=4096" "write_zeroes_max=33554432" "scheduler=mq-deadline" "magic=53ef" "size=$SIZE" \
+  "io_max=8:32_rbps=157286400_wbps=157286400_riops=max_wiops=max" "plaintext_only=0"; do
   [[ "$P2_ROW" == *" $f"* ]] || { p2_fields=0; p2_missing="$p2_missing $f"; }
 done
 if ran && [ -n "$P2_ROW" ] && [ "$p2_fields" = 1 ] && [ "$(zero_calls)" -eq 0 ] && nounk \
@@ -486,7 +651,8 @@ grep -qE '^SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE feature=workspaces-luks op=works
 
 # P3 — re_zero: an interrupted zero (BEGUN set, superblock already cleared) resumes; W9 does not run.
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_WIPE_BEGUN=$PIN:1759000000" W_TYPE=
-if ran && [ -n "$(wrow wiped re_zero)" ] && [ "$(zero_calls)" -eq 1 ] && nhas '^dd .*count=1' && nhas '^blkid .* LABEL ' && nounk; then
+if ran && [ -n "$(wrow wiped re_zero)" ] && [ "$(zero_calls)" -eq 1 ] && nhas '^dd .*count=1' && nhas '^blkid .* LABEL ' \
+  && nhas '^(dumpe2fs|debugfs) ' && nounk; then
   ok "P3 re_zero: BEGUN + blank superblock re-zeroes without the positive control or the label check"
 else
   no "P3 re_zero wrong (rc=$CASE_RC zero=$(zero_calls) unk=[$(unkdump)]) ${CASE_OUT:0:240}"
@@ -537,6 +703,11 @@ refusal "W1 (Guard 1 #6) a by-id path for a different id than the pin" wipe_inpu
 refusal "W1 a non-numeric volume id" wipe_input_invalid "WORKSPACES_PLAINTEXT_VOLUME_ID=1 2"
 refusal "W1 a non-numeric size" wipe_input_invalid WORKSPACES_PLAINTEXT_SIZE_BYTES=20G
 refusal "W1 the plaintext path equals the LUKS path" wipe_input_invalid "WORKSPACES_LUKS_DEV=$BYID"
+# W1 (struct R-DRY) — the rehearsal gate is an exact `= "1"`, so the mode flags are validated to {0,1}
+# first: every other spelling would otherwise take the DESTRUCTIVE arm.
+refusal "W1 DRY_RUN=true (not 0/1) never reaches the zero" wipe_input_invalid DRY_RUN=true
+refusal "W1 DRY_RUN=' 1' (not 0/1) never reaches the zero" wipe_input_invalid "DRY_RUN= 1"
+refusal "W1 CONFIRM_WIPE=yes (not 0/1)" wipe_input_invalid CONFIRM_WIPE=yes
 refusal "W2 /mnt/data is not the LUKS mapper" wipe_live_mount_not_mapper W_MOUNT_SRC=/dev/sdz9
 
 # ============================================================================
@@ -595,6 +766,15 @@ died && outF HDRS_SEEDED && hdrs_gone && markerF "outcome=wipe_aborted mode=wipe
 
 refusal "W6 (Guard 1 #1) the mapper's backing device IS the target" wipe_target_is_mapper_backing "W_BACKING=$TGT_BLK" "WORKSPACES_LUKS_DEV=$TGT_BLK"
 refusal "W6 (Guard 1 #2) same major:minor through a different path" wipe_target_is_mapper_backing W_BACKING_MAJMIN=8:32
+# H7 (T9) — the PATH compare on its own: the backing path IS the target's, but the second stat of it
+# answers a different major:minor, so only the path compare can refuse (its row carries target=/backing=,
+# the major:minor compare's carries target_majmin=/backing_majmin=).
+refusal "W6 (Guard 1 #1, path compare alone) the backing path IS the target, major:minor reads differ" wipe_target_is_mapper_backing \
+  "W_BACKING=$TGT_BLK" "WORKSPACES_LUKS_DEV=$TGT_BLK" W_TGT_MAJMIN_2=8:99
+h7_row="$(awk -v p="^$WROW result=refused " '$0 ~ p { print; exit }' <<<"$CASE_OUT")"
+[[ "$h7_row" == *" backing=$TGT_REAL"* && "$h7_row" != *"backing_majmin="* ]] \
+  && ok "H7 the path compare refused by itself (row carries backing=<path>, not backing_majmin=)" \
+  || no "H7 the refusal did not come from the path compare (row=[${h7_row:0:200}])"
 refusal "W6 (Guard 1 #4) a holder under /sys/class/block/<k>/holders" wipe_target_held W_HOLDERS=dm-7
 refusal "W6 the target is mounted somewhere (findmnt -S)" wipe_target_mounted W_TGT_MNT=/mnt/stray
 refusal "W6 (Guard 1 #5) size off by one GiB" wipe_target_size_mismatch W_SIZE=22548578304
@@ -612,16 +792,93 @@ refusal "W6b no device unit maps to the target (cannot prove no dependents)" wip
 refusal "W6b mnt-data.mount binds one of the target's device units" wipe_target_has_dependents "W_MNT_BINDS=BindsTo=dev-$TGT_KNAME.device
 Requires=
 What=/dev/disk/by-id/scsi-0HC_Volume_*"
+# W10 (struct R-TOCTOU) — the identity is re-asserted at the act: the kernel name W6 measured must still
+# be what the by-id link resolves to, and must still carry the pin's serial.
+refusal "W10 the by-id link resolves to ANOTHER device at the act (hot-remove + reattach after W6)" wipe_target_changed \
+  W_DEV_VIA_RELLINK=1 W_RETARGET_LINK=1
+refusal "W10 the target reports another volume's serial at the act" wipe_target_changed W_SERIAL_AFTER_W6=0HC_Volume_106443278
+nhas '^blkdiscard (-z|-v|/)' && ! state_has PLAINTEXT_WIPE_BEGUN \
+  && ok "W10 a changed target refuses BEFORE BEGUN is persisted (a re-dispatch re-measures from first_wipe)" \
+  || no "W10 the changed-target refusal came after BEGUN or the zero"
+# W6b again after the zero (struct R-W6B): a dependent that appeared since the first W6b refuses the
+# success row, so the API detach never runs.
+run_wipe 'wipe_plaintext' W_REVDEP_AFTER_ZERO=mnt-data.mount
+if refused_ok wipe_target_has_dependents && [ "$(zero_calls)" -eq 1 ] && [ "$(nrows wiped)" -eq 0 ] && ! state_has PLAINTEXT_WIPED; then
+  ok "W12b W6b re-runs after the zero: a dependent that appeared since refuses the success row (no API detach), WIPED not persisted"
+else
+  no "W12b a post-zero dependent did not block the success row (rc=$CASE_RC wiped=$(nrows wiped)) ${CASE_OUT:0:200}"
+fi
+# W9 provenance (data F5) — a first wipe refuses a plaintext written after the 2026-07-23 freeze.
+refusal "W9 the plaintext's Last write time is after the cutover froze it" wipe_plaintext_written_after_cutover "W_LAST_WRITE=Fri Jul 24 08:00:00 2026"
+refusal "W9 the plaintext's Last write time is unparseable" wipe_plaintext_written_after_cutover "W_LAST_WRITE=never"
+run_wipe 'wipe_plaintext' DRY_RUN=1 "W_LAST_WRITE=Thu Jul 23 09:44:59 2026"
+[ -n "$(wrow rehearsal_ok first_wipe)" ] && ok "W9 H1 a Last write time one second before the freeze constant passes" \
+  || no "W9 H1 a pre-freeze Last write time was refused (rc=$CASE_RC) ${CASE_OUT:0:200}"
+fz_iso="$(sed -n 's/^WIPE_PLAINTEXT_FROZEN_AT="\(.*\)"$/\1/p' "$CUTOVER")"
+fz_lit="$(sed -n "s/^_wipe_frozen_at_epoch() { printf '%s' \([0-9]*\); }$/\1/p" "$CUTOVER")"
+[ -n "$fz_iso" ] && [ -n "$fz_lit" ] && [ "$(date -u -d "$fz_iso" +%s)" = "$fz_lit" ] && [ "$fz_iso" = 2026-07-23T09:45:00Z ] \
+  && ok "W9 the frozen-at literal ($fz_lit) is exactly WIPE_PLAINTEXT_FROZEN_AT ($fz_iso), the 2026-07-23 cutover's host-step end plus skew" \
+  || no "W9 the frozen-at constant and its epoch literal disagree (iso=[$fz_iso] lit=[$fz_lit])"
+# W9 completeness EVIDENCE (data F2) — never a refusal.
+run_wipe 'wipe_plaintext' DRY_RUN=1 W_LIVE_WS=ws-a
+p9_row="$(wrow rehearsal_ok first_wipe)"
+if [ -n "$p9_row" ] && [[ "$p9_row" == *" plaintext_only=1"* ]] \
+  && grep -qE '^SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE .* field=plaintext_only_name detail=ws-b$' <<<"$CASE_OUT" \
+  && ! grep -qE 'field=plaintext_only_name detail=ws-a$' <<<"$CASE_OUT" && nounk; then
+  ok "W9 a workspace on the unmounted plaintext but not on the live mount is EVIDENCE: plaintext_only=1 on the row, its name on an evidence row, no refusal"
+else
+  no "W9 plaintext-only evidence wrong (rc=$CASE_RC row=[${p9_row:0:160}]) $(grep -F EVIDENCE <<<"$CASE_OUT" | tr '\n' '|' | cut -c1-200)"
+fi
+run_wipe 'wipe_plaintext' DRY_RUN=1 W_DEBUGFS_FAIL=1
+[[ "$(wrow rehearsal_ok first_wipe)" == *" plaintext_only=unknown"* ]] \
+  && ok "W9 a debugfs that cannot list /workspaces (it exits 0 regardless) reads plaintext_only=unknown, never 0" \
+  || no "W9 a failed listing did not read unknown: $(wrow rehearsal_ok first_wipe | cut -c1-200)"
+# W5 (obs P3-5) — a failed header download carries aws_rc and a CLASS, never aws's stderr text.
+W5_SECRET='AKIASYNTHLEAKCANARY'
+run_wipe 'wipe_plaintext' W_HDR_ABSENT=1 W_HDR_RC=254 "W_HDR_ERR=An error occurred (AccessDenied) when calling the GetObject operation: Access Denied for $W5_SECRET"
+w5_row="$(awk -v p="^$WROW result=refused " '$0 ~ p { print; exit }' <<<"$CASE_OUT")"
+if refused_ok wipe_header_backup_absent && [[ "$w5_row" == *" aws_rc=254"* && "$w5_row" == *" class=access_denied"* ]] \
+  && ! grep -qF "$W5_SECRET" <<<"$CASE_OUT" && ! grep -qF "$W5_SECRET" "$MARKER_LOG"; then
+  ok "W5 a 403 on the header GET is classed access_denied with aws_rc, and aws's stderr (which can carry a key id) reaches no log"
+else
+  no "W5 403 classification wrong or stderr leaked (row=[${w5_row:0:200}])"
+fi
+run_wipe 'wipe_plaintext' W_HDR_ABSENT=1
+[[ "$(awk -v p="^$WROW result=refused " '$0 ~ p { print; exit }' <<<"$CASE_OUT")" == *" class=not_found"* ]] \
+  && ok "W5 a missing object is classed not_found (the one class whose remedy is re-escrow)" || no "W5 NoSuchKey not classed not_found"
+run_wipe 'wipe_plaintext' W_HDR_ABSENT=1 W_HDR_RC=255 "W_HDR_ERR=Could not connect to the endpoint URL: https://r2.invalid/"
+[[ "$(awk -v p="^$WROW result=refused " '$0 ~ p { print; exit }' <<<"$CASE_OUT")" == *" class=network"* ]] \
+  && ok "W5 a connection failure is classed network" || no "W5 a connection failure not classed network"
 refusal "W7 the dead-man timer is active" wipe_deadman_armed W_DM_TIMER_ACTIVE=active
 refusal "W7 a dead-man fire is activating" wipe_deadman_armed W_DM_SVC_ACTIVE=activating
 refusal "W7 a dead-man start job is queued" wipe_deadman_armed W_DM_SVC_JOB=4242
-refusal "W8 the io.max cap cannot be applied (systemd-run scope probe fails)" wipe_io_cap_unavailable W_SCOPE_PROBE_RC=1
+# W8 (impact F1 / quality F1) — the cap is proven IN FORCE by reading the scope's own io.max; systemd-run's
+# rc proves nothing (it starts an uncapped scope when io.max cannot apply — measured, systemd 261).
+refusal "W8 io.max absent in the scope (io controller not enabled: systemd starts the scope uncapped, rc 0)" wipe_io_cap_unavailable W_IOMAX_ABSENT=1
+refusal "W8 io.max carries the cap for ANOTHER device (wrong MAJ:MIN)" wipe_io_cap_unavailable "W_IOMAX_LINE=9:99 rbps=157286400 wbps=157286400 riops=max wiops=max"
+refusal "W8 io.max carries the read cap but no write cap" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=157286400 wbps=max riops=max wiops=max"
+refusal "W8 io.max carries the write cap but no read cap" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=max wbps=157286400 riops=max wiops=max"
+refusal "W8 io.max carries a different rate (15M, not 150M)" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=15728640 wbps=15728640 riops=max wiops=max"
+refusal "W8 the target's MAJ:MIN is unreadable from sysfs" wipe_io_cap_unavailable PRE_INV='rm -f "$W_CASE_DIR/sysfs/$TGT_KNAME/dev"'
+run_wipe 'wipe_plaintext' W_IOMAX_ABSENT=1
+w8_row="$(awk -v p="^$WROW result=refused " '$0 ~ p { print; exit }' <<<"$CASE_OUT")"
+[[ "$w8_row" == *" io_max=absent"* && "$w8_row" == *" gate_rc=97"* ]] && ! state_has PLAINTEXT_WIPE_BEGUN && nhas '^systemd-run .*blkdiscard' \
+  && ok "W8 the refusal row carries io_max=absent gate_rc=97, and nothing (not even BEGUN) was written" \
+  || no "W8 refusal row lacks the measured io.max (row=[${w8_row:0:200}])"
+# The zero's OWN scope is gated too: the cap proven at W8 but absent when the zero's scope starts (the
+# environment changed) refuses wipe_io_cap_unavailable with nothing zeroed — never wipe_blkdiscard_failed.
+refusal "W10 the zero's own scope lacks io.max (cap gone after W8): the gate stops blkdiscard" wipe_io_cap_unavailable W_IOMAX_ABSENT_AT_ZERO=1
+state_has PLAINTEXT_WIPE_BEGUN && ! grep -q '^blkdiscard -z' "$CALLS" \
+  && ok "W10 the gated zero never started blkdiscard; BEGUN is persisted, so the next dispatch resumes on re_zero" \
+  || no "W10 the zero-scope gate refusal ran blkdiscard or lost BEGUN"
 refusal "W9 (Guard 3 #6) first-wipe positive control sees no ext4 magic" wipe_positive_control_failed W_MAGIC=0
 
 # W10 — the zero itself fails: refused, BEGUN persisted (the next dispatch takes re_zero), no wiped row.
 run_wipe 'wipe_plaintext' W_BLKDISCARD_RC=1
-if refused_ok wipe_blkdiscard_failed && state_has PLAINTEXT_WIPE_BEGUN && ! state_has PLAINTEXT_WIPED && [ "$(nrows wiped)" -eq 0 ]; then
-  ok "W10 a failed blkdiscard refuses wipe_blkdiscard_failed with BEGUN persisted and no wiped row"
+w10_row="$(awk -v p="^$WROW result=refused " '$0 ~ p { print; exit }' <<<"$CASE_OUT")"
+if refused_ok wipe_blkdiscard_failed && state_has PLAINTEXT_WIPE_BEGUN && ! state_has PLAINTEXT_WIPED && [ "$(nrows wiped)" -eq 0 ] \
+  && [[ "$w10_row" == *" rc=1"* ]]; then
+  ok "W10 a failed blkdiscard refuses wipe_blkdiscard_failed carrying rc=1, with BEGUN persisted and no wiped row"
 else
   no "W10 failed blkdiscard mis-handled (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
@@ -663,6 +920,20 @@ refused_ok wipe_signature_survived && ! state_has PLAINTEXT_WIPED \
   && ok "W12 a surviving signature refuses and never persists PLAINTEXT_WIPED" \
   || no "W12 surviving signature accepted (rc=$CASE_RC) ${CASE_OUT:0:200}"
 
+# obs P2-1 — after an SSH drop the run's stdout is a DEAD pipe, and in the main body SIGPIPE keeps its
+# default disposition: the first echo kills the process. The refusal must already be off-host by then —
+# the Sentry slug and the luks-monitor row are written BEFORE the echo. Driven through a pipe whose only
+# reader has already exited (race-free: the reader is waited for before the first write).
+run_wipe 'exec 1> >(true); wait $!; exec 2>&1; _wipe_refuse wipe_blkdiscard_failed "dead-pipe probe" "rc=1"; exit 0'
+if [ "$CASE_RC" -ne 0 ] && has '^EMIT_DRIFT wipe_blkdiscard_failed$' && markerF "result=refused arm=none volume_id=105149570 reason=wipe_blkdiscard_failed"; then
+  ok "OBS1 a refusal into a DEAD stdout (the process dies on SIGPIPE) still reached Sentry AND the luks-monitor tag first"
+else
+  no "OBS1 a dead-pipe refusal lost its off-host signal (rc=$CASE_RC drift=$(grep -c '^EMIT_DRIFT wipe_blkdiscard_failed' "$CALLS") marker=$(grep -c reason=wipe_blkdiscard_failed "$MARKER_LOG"))"
+fi
+run_wipe 'emit_wipe rehearsal_ok first_wipe "Bad-Key=1"; echo EMITTED'
+died && ! outF EMITTED && ok "F7 emit_wipe dies on a malformed row key instead of silently dropping the field" \
+  || no "F7 emit_wipe accepted or silently dropped a malformed key (rc=$CASE_RC)"
+
 # ============================================================================
 # The mode block, dispatched through the REAL main-body prefix (Guard 1 #12, Guard 2 #2)
 # ============================================================================
@@ -684,16 +955,23 @@ else
   no "M2 the mode block zeroed or fell through on DRY_RUN=1 (rc=$CASE_RC zero=$(zero_calls))"
 fi
 run_wipe 'eval "$MAIN_PREFIX"' W_CMP_RC=1
-if died && markerF "$DM result=cutover_aborted outcome=wipe_aborted mode=wipe" && nhas '^umount ' && nhas '^docker (start|stop) ' \
-  && nhas '^mount ' && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ]; then
-  ok "M3 (Guard 5 #3) an aborted wipe (die at W11) with CANARY_OK persisted records outcome=wipe_aborted mode=wipe and never rolls back or starts the app"
+if died && markerF "$DM result=cutover_aborted outcome=wipe_aborted mode=wipe begun=1" && nhas '^umount ' && nhas '^docker (start|stop) ' \
+  && nhas '^mount ' && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ] && has '^EMIT_DRIFT wipe_aborted$'; then
+  ok "M3 (Guard 5 #3) an aborted wipe (die at W11) records outcome=wipe_aborted mode=wipe begun=1, PAGES wipe_aborted (obs P2-2), and never rolls back or starts the app"
 else
   no "M3 an aborted wipe mis-recorded or touched the live mount (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') calls=[$(grep -E '^(umount|mount|docker) ' "$CALLS" | tr '\n' '|')]"
 fi
 run_wipe 'eval "$MAIN_PREFIX"' DRY_RUN=1 W_MOUNT_SRC=/dev/sdz9
-markerF "$DM result=cutover_aborted outcome=dry_run mode=wipe" \
-  && ok "M4 a refused rehearsal reads outcome=dry_run mode=wipe" \
+markerF "$DM result=cutover_aborted outcome=dry_run mode=wipe" && nhas '^EMIT_DRIFT wipe_aborted$' \
+  && has '^EMIT_DRIFT_LEVEL wipe_live_mount_not_mapper warning$' \
+  && ok "M4 a refused rehearsal reads outcome=dry_run mode=wipe, pages its slug at level warning (obs P3-7) and never pages wipe_aborted" \
   || no "M4 a refused rehearsal mis-recorded: $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
+# M3b — a REAL wipe aborted BEFORE the zero pages wipe_aborted WITHOUT begun=1 (the volume is untouched).
+run_wipe 'eval "$MAIN_PREFIX"' W_BUCKET=
+markerF "$DM result=cutover_aborted outcome=wipe_aborted mode=wipe" && ! markerF 'begun=1' && has '^EMIT_DRIFT wipe_aborted$' \
+  && has '^EMIT_DRIFT_LEVEL header_bucket_unreadable fatal$' \
+  && ok "M3b a real wipe aborted before the zero pages wipe_aborted (fatal) with no begun=1" \
+  || no "M3b pre-zero abort mis-recorded: $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
 run_wipe 'eval "$MAIN_PREFIX"' ROLLBACK=1
 if died && has '^EMIT_DRIFT clean_stray_mode_conflict$' && [ "$(zero_calls)" -eq 0 ]; then
   ok "M5 CONFIRM_WIPE=1 with ROLLBACK=1 is refused by the counted mode exclusion before either block"
@@ -720,19 +998,35 @@ l3_ln="$(grep -n '^step "L3 gates' "$CUTOVER" | head -1 | cut -d: -f1)"
   || no "S2 mode-block placement wrong (exclusive=$ame_ln clean_stray=$cs_ln wipe=$wb_ln l3=$l3_ln)"
 # Guard 1 #10/#11 — exactly one zeroing call site, and never -f/--force.
 BODY_NC="$(grep -vE '^[[:space:]]*#' "$CUTOVER")"
-n_zero_sites="$(grep -cE '(^|[;&|[:space:]])blkdiscard[[:space:]]+-z' <<<"$BODY_NC" || true)"
-[ "$n_zero_sites" -eq 1 ] && ok "S3 (Guard 1 #10) exactly one blkdiscard -z call site in the script" \
-  || no "S3 blkdiscard -z call sites = $n_zero_sites (want exactly 1)"
+# S3 (struct R-CENSUS) counts EVERY blkdiscard invocation, in any flag spelling (`--zeroout`, `-v -z`, a
+# bare discard): comments and quoted text are stripped, then every remaining `blkdiscard` word is an
+# invocation unless it is one of the three non-invocations (the W0 tool list, `--version`, `pgrep -x`).
+zero_sites() {
+  sed -E 's/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g' <<<"$1" \
+    | grep -oE '(^|[^A-Za-z0-9_-])blkdiscard([[:space:]]+[^[:space:];|&)]+)?' \
+    | grep -vE 'blkdiscard[[:space:]]+(--version|systemd-run)$' | grep -vcE '^-x blkdiscard' || true
+}
+n_zero_sites="$(zero_sites "$(grep -vE 'pgrep -x blkdiscard' <<<"$BODY_NC")")"
+n_ctl="$(zero_sites "$(grep -vE 'pgrep -x blkdiscard' <<<"$BODY_NC")
+  blkdiscard --zeroout \"\$x\"")"
+[ "$n_zero_sites" -eq 1 ] && [ "$n_ctl" -eq 2 ] && ok "S3 (Guard 1 #10) exactly one blkdiscard invocation in the script, any flag spelling (control: a planted --zeroout counts 2)" \
+  || no "S3 blkdiscard invocation sites = $n_zero_sites (want exactly 1; control=$n_ctl, want 2)"
+# H6 (T9) — the zero's stdin is /dev/null on the line itself (blkdiscard prompts on a TTY; the stub's
+# TTY clause cannot fire under a non-TTY harness, so the literal is pinned).
+grep -qE 'blkdiscard -z -v "\$real" </dev/null$' <<<"$WIPE_FN" \
+  && ok "H6 the zero's line ends with </dev/null (no confirmation prompt can ever block or answer it)" \
+  || no "H6 the zero is not fed </dev/null on its own line"
 if grep -qE 'blkdiscard([^#]*[[:space:]])(-[a-zA-Z]*f[a-zA-Z]*|--force)([[:space:]]|$)' <<<"$BODY_NC"; then
   no "S4 (Guard 1 #11) blkdiscard is invoked with -f/--force somewhere — O_EXCL would be disabled"
 else
   ok "S4 (Guard 1 #11) no blkdiscard invocation carries -f/--force (O_EXCL stays on)"
 fi
 # The seams are not settable from the environment (an .env line could otherwise repoint the zero).
-seam_env="$(awk '/^_wipe_dev_path\(\)|^_wipe_sysfs_block\(\)/{f=1} f{print} f && /\}$/{f=0}' "$CUTOVER" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | grep -vE '^\$\{?1$' || true)"
-seam_n="$(grep -cE '^_wipe_dev_path\(\) |^_wipe_sysfs_block\(\) ' "$CUTOVER" || true)"
-[ "$seam_n" -eq 2 ] && [ -z "$seam_env" ] \
-  && ok "S5 the device and sysfs seams read no variable but their own argument (not env-settable)" \
+seam_env="$(awk '/^_wipe_dev_path\(\)|^_wipe_sysfs_block\(\)|^_wipe_cgroup_root\(\)|^_wipe_frozen_at_epoch\(\)|^_plaintext_label_present\(\)/{f=1} f{print} f && /\}$/{f=0}' "$CUTOVER" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | grep -vE '^\$\{?(1|PLAINTEXT_LABEL)$' || true)"
+seam_n="$(grep -cE '^_wipe_dev_path\(\) |^_wipe_sysfs_block\(\) |^_wipe_cgroup_root\(\) |^_wipe_frozen_at_epoch\(\) |^_plaintext_label_present\(\) ' "$CUTOVER" || true)"
+pl_lit="$(grep -cE '^PLAINTEXT_LABEL="workspaces_plain"$' "$CUTOVER" || true)"
+[ "$seam_n" -eq 5 ] && [ -z "$seam_env" ] && [ "$pl_lit" -eq 1 ] \
+  && ok "S5 the device, sysfs, cgroup, frozen-at and plaintext-label seams read no variable but their own argument or the PLAINTEXT_LABEL literal (not env-settable)" \
   || no "S5 a seam reads an environment variable or is missing (defs=$seam_n vars=[$seam_env])"
 # arm_dead_man reachability — the plan asked whether any dispatch can still reach arm_dead_man on a
 # post-cutover host. It cannot: the main body runs prepare_staging_target (which refuses
@@ -885,6 +1179,6 @@ fi
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=110
+WIPE_MIN_PASS=142
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]
