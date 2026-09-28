@@ -13,9 +13,10 @@ awareness_anchor: "2026-09-22 — the measurement session recorded in `knowledge
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — no Art. 33 duty arose on the facts established to date, so nothing fell due 72h from the awareness anchor. Re-opens with a FRESH 72h from awareness of any evidence of use surfaced by a limb below."
-open_limbs: "five, all INCONCLUSIVE and none yet run: (L1) the read-only GitHub non-`main` run census; (L2) Doppler access logs for `prd_terraform` and `prd`; (L3) Hetzner actions (rescue, rebuild, volume attach); (L4) the Cloudflare account audit log; (L5) the start of the exposure window, from the `prd_terraform` secret history. L1 must be gathered BEFORE operator step O13 — see §Evidence gathering order."
+open_limbs: "five, all INCONCLUSIVE, none run in full (one L3 sub-limb run 2026-09-28, #8734; widened in-cell from \"none yet run\"): (L1) the read-only GitHub non-`main` run census; (L2) Doppler access logs for `prd_terraform` and `prd`; (L3) Hetzner actions (rescue, rebuild, volume attach) and a server created or rebuilt from retained snapshot image 411798619, the fourth route, #8734 [widened in-cell 2026-09-28 (#8734): the image-use sub-limb was run 2026-09-28 and is CLEAN within its window; L3 as a whole stays INCONCLUSIVE — see §Addendum — 2026-09-28 (#8734)]; (L4) the Cloudflare account audit log; (L5) the start of the exposure window, from the `prd_terraform` secret history. L1 must be gathered BEFORE operator step O13 — see §Evidence gathering order."
 tier_classification: "Tier 1 — an internal assessment record. No public document is edited, no right is narrowed, no processing is added. The mirror/SHA/heading gates are NOT engaged."
 semver: "No TC_VERSION bump."
+addendum_2026_09_28: "The fourth L3 route (§Addendum — 2026-09-28 (#8734)). Hetzner snapshot image 411798619 (web-1 root disk, 2026-07-23) was deleted 2026-09-28T08:01:45Z (DELETE 204, GET 404). Its image-use sub-limb is CLEAN within [2026-07-23T15:34:04Z, 2026-09-28T08:01:45Z]; the `web-probes-read` token-read limb stays INCONCLUSIVE and its value-rotation determination is owed under #9122. L3 as a whole stays INCONCLUSIVE. Determination unchanged: REACHABILITY-ONLY, PROVISIONAL."
 ---
 
 # CLO assessment — #8209 prior exposure of the `prd_terraform` privileged credentials
@@ -51,6 +52,11 @@ held four credentials whose reach goes far past Terraform:
 | `CF_API_TOKEN_R2` | account-wide Cloudflare R2 |
 | `HCLOUD_TOKEN` | read/write Hetzner, which is root on any host through rescue, rebuild or a volume re-attach |
 | `GITHUB_APP_PRIVATE_KEY` | a distinct private key of the **same** soleur-ai App (plan M3/M4), which holds 3 installations, 2 of them outside `jikig-ai` (plan M5) |
+
+> **Superseded 2026-09-28 (#8734):** the `HCLOUD_TOKEN` row's "root on any host through rescue,
+> rebuild or a volume re-attach" undercounts that credential's reach. It also reached the contents
+> of web-1's past root disk, through a server built from retained snapshot image `411798619`. See
+> §Addendum — 2026-09-28 (#8734).
 
 Two further paths reached the git-data root key: the repository secret
 `DOPPLER_TOKEN_GIT_DATA_ROOT`, and the state object
@@ -195,6 +201,12 @@ These are recorded in §Findings when they are run. Each is read-only and each p
 - **L3 — Hetzner actions**: `rescue`, `rebuild` and volume `attach`/`detach` actions on any
   project server over the window. These are the three that convert `HCLOUD_TOKEN` into root on a
   host.
+
+  > **Superseded 2026-09-28 (#8734):** "These are the three" undercounts the routes. A fourth
+  > route converts `HCLOUD_TOKEN` into the contents of web-1's root disk without touching a live
+  > host: create or rebuild a server from retained snapshot image `411798619` (web-1's root disk
+  > as of 2026-07-23). The limb now covers it. Its image-use sub-limb was run and is recorded in
+  > §Addendum — 2026-09-28 (#8734); L3 as a whole stays INCONCLUSIVE.
 - **L4 — the Cloudflare account audit log**: R2 token use and any token creation over the window.
 - **L5 — the start of the exposure window**, from the `prd_terraform` secret history: the date
   each of the four names first appeared in that config. Until L5 is recorded, the window is
@@ -207,6 +219,13 @@ limb's result lands, each with its own date, the command that produced it, and a
 naming the surface actually queried — the discipline Art. 30 PA-8 §(g) now requires of any Art. 33
 evidentiary chain, after the 2026-09-03 addendum to the 2026-06-29 precedent established that an
 access-log zero from an uninstrumented source was never evidence.
+
+> **Superseded 2026-09-28 (#8734):** "**None recorded yet.** No limb has been run at the date of
+> this record." The second sentence stays true of 2026-09-23; the first no longer holds for one
+> sub-limb. The
+> L3 image-use sub-limb (retained snapshot image `411798619`) was run 2026-09-28 and is recorded,
+> with its command surface and coverage verdict, in §Addendum — 2026-09-28 (#8734). Every other
+> limb, and L3 as a whole, is still unrecorded here.
 
 ## If the finding flips
 
@@ -250,3 +269,128 @@ This record is **append-only**. A later limb result, a changed disposition or a 
 added as a dated addendum below, which cites the text it annotates and amends nothing above it.
 The convention is the 2026-06-29 precedent's, and it is why that file carries two addenda rather
 than two rewrites.
+
+## Addendum — 2026-09-28 (#8734) — the fourth L3 route: snapshot image 411798619
+
+**What this addendum annotates.** Four passages above:
+
+- the frontmatter `open_limbs` text, which read "five, all INCONCLUSIVE and none yet run" and
+  "(L3) Hetzner actions (rescue, rebuild, volume attach)";
+- the §The fact pattern table's `HCLOUD_TOKEN` row, which read "root on any host through rescue,
+  rebuild or a volume re-attach";
+- the §L2-L5 L3 bullet, which read "These are the three that convert `HCLOUD_TOKEN` into root on a
+  host";
+- §Findings, which read "**None recorded yet.**"
+
+The `open_limbs` text is widened in-cell; the other three carry Superseded markers. Nothing above is
+otherwise amended.
+
+### 1. The route
+
+Hetzner image `411798619` was a snapshot of web-1's **root disk**. It was created
+2026-07-23T15:34:04Z from server `123931471` by `scripts/cutover-inngest.sh` `op=backup`, with
+labels `purpose=inngest-cutover-pre` and description `inngest-cutover-pre-20260723T153403Z`. It
+held the `soleur/prd` secret values written to web-1's root disk on that date. Any holder of
+`HCLOUD_TOKEN` could create or rebuild a server from it and read that disk. That is a route to
+secret values and personal data that needs no rescue, rebuild or volume re-attach of a live host.
+
+It was ADR-100's Inngest-cutover rollback substrate. It was **never** ADR-119's rollback anchor:
+ADR-119 §(b) says not to take a pre-cutover Hetzner snapshot, and a server snapshot holds the root
+disk only, never an attached volume.
+
+### 2. The deletion
+
+The image was deleted 2026-09-28T08:01:45Z, on the operator's explicit per-command go-ahead.
+`DELETE /v1/images/411798619` answered `204`, the following `GET` answered `404 not_found`, and the
+image action `delete_image` reads `status=success` at 08:01:45Z. The evidence record, including
+the identity re-read made before the DELETE, is
+<https://github.com/jikig-ai/soleur/issues/8734#issuecomment-5865894224>.
+
+The Art. 5(2) destruction record for the web-1 snapshots lives on the unmerged PR #8626. It stays
+`partial` until that PR lands, and this addendum does not call it complete.
+
+### 3. The image-use sub-limb — CLEAN within [2026-07-23T15:34:04Z, 2026-09-28T08:01:45Z]
+
+**Surface queried:** the Hetzner Cloud API for the project, read-only, `GET /v1/servers/actions`
+(every page, deleted servers included), `GET /v1/images/actions` and `GET /v1/servers`. The action
+set was 7 pages and 317 server actions spanning 2026-07-03T07:13:22Z to 2026-09-27T14:56:48Z. It
+was pulled at 2026-09-28T07:56:04Z and again after the DELETE, at 08:01:46Z; at both pulls its
+newest action was 2026-09-27T14:56:48Z, so no server action falls between that one and the DELETE.
+Every assertion was a
+`jq` expression with an exit status. Both pulls read:
+
+- zero `rebuild_server` actions;
+- 101 `create_server` actions, **every one** carrying an image resource, all of them image
+  `161547269`, and none naming `411798619`;
+- the only action naming `411798619` is its own `create_image`;
+- no `delete_image` or `change_protection` action on it before the DELETE;
+- `GET /v1/servers`: no live server built from it.
+
+**Coverage verdict.** The window opens at the image's creation, because the image did not exist
+earlier, so the action log's 2026-07-03 start does not limit this sub-limb. It closes at the
+DELETE, because a deleted image cannot be used. Within that window the sub-limb is **CLEAN**.
+
+**Why a CLEAN image-use limb bounds the in-image copy of `web-probes-read`.** The Hetzner Cloud API
+offers no read of an image's contents other than booting a server from it by `create_server` or
+`rebuild_server`. No such action named this image, so any copy of the `web-probes-read` service
+token held inside the image (ADR-119's 2026-09-24 (#8705) addendum: "very likely") was never
+materialised and never read through the image. Any other
+holder of that token, through its live copies or through the Doppler side, is not reached by this
+limb. That holder belongs to #8705's population, and is assessed under the token-read limb below.
+
+### 4. The token-read limb — INCONCLUSIVE
+
+`web-probes-read` is a read token on `soleur/prd` (created 2026-07-18, rotated under #8705 by PR
+#8733). Whether it was used, outside its legitimate consumer, to read `soleur/prd`
+values is not answered by any instrument run to date. The limb stays **INCONCLUSIVE**. Deleting the
+image does not close it: the token route never depended on the image.
+
+**Where the Art. 4(12) / Art. 33 assessment of that token route lives: nowhere yet.** #9122 is
+framed as a value-rotation determination. This record's credentials and reachable class are
+#8209's, not that token's, and `knowledge-base/legal/` holds no #8705 assessment and no
+breach-register row for it. That assessment is owed. It belongs either in #9122's determination,
+widened to cover Art. 33 as well as rotation, or in a record of its own with a breach-register row.
+This addendum does not make it.
+
+**`HCLOUD_TOKEN` was not readable through that token.** Measured read-only on 2026-09-28:
+`HCLOUD_TOKEN` exists only in `soleur/prd_terraform` and is absent from `soleur/prd`, the config
+`web-probes-read` was scoped to.
+
+### 5. #8209's L3 as a whole stays INCONCLUSIVE
+
+The image route is one sub-limb. The rest of L3 is not closed by it:
+
+- volume attach and detach actions in #8209's window are unattributed;
+- the two `enable_rescue` actions (2026-07-07 and 2026-07-14, both on servers other than web-1) are
+  unattributed;
+- nothing before 2026-07-03, where the retained action log starts, is covered.
+
+### 6. Credential dispositions
+
+- **`SUPABASE_SERVICE_ROLE_KEY`:** not rotated under #8734's image route (image-use CLEAN, image
+  deleted before 2026-10-06); the token-route decision is owed under #9122.
+- **`BYOK_ENCRYPTION_KEY`:** not rotated under #8734's image route (image-use CLEAN, image deleted
+  before 2026-10-06); the token-route decision is owed under #9122. The CTO's concurrence, dated
+  2026-09-28 in the #8734 plan and recorded here, has two conditions. The first, a re-pull of the evidence at deletion, is
+  met by the 08:01:46Z pull above. The second, a mandatory rotation issue if the image outlived
+  2026-10-06, is not engaged, because the image was deleted on 2026-09-28.
+- **Both keys stay readable through the `web-probes-read` token route**, whose read limb is
+  INCONCLUSIVE (§4). The image deletion does not close that route. #9122 names both keys,
+  alongside `STRIPE_SECRET_KEY` and the other `soleur/prd` values.
+- **Every other root-disk secret class the image held** is tied to the same CLEAN image-use limb
+  and is not rotated under the image route: web-1's SSH host private keys (CI pins
+  `local.web_1_ssh_host_key`), cloud-init `user-data`, the cloudflared tunnel credentials, the GHCR
+  pull token and the Vector/Better Stack ingest token. A copy of any of them held in `soleur/prd`
+  falls under #9122's token-route determination, not under this limb.
+- **`STRIPE_SECRET_KEY`:** not triggered on the image route. #8705 left value exposure to #8734, so
+  the token-route value-rotation determination had no owner. It is filed as the separate,
+  operator-gated #9122, which covers the Stripe key, the service-role key, BYOK and the other
+  `soleur/prd` values.
+- **`GITHUB_APP_PRIVATE_KEY`:** not rotated under #8734; owed under #8209 R5 / R1.
+
+### 7. Disposition unchanged
+
+The record stays **REACHABILITY-ONLY** and **PROVISIONAL**. `art_33_triggered` and
+`art_34_triggered` stay `false`. No limb has surfaced evidence of use, so §If the finding flips is
+not engaged. If evidence of use of the image, or of the token, surfaces later, a FRESH 72h
+Art. 33(1) clock runs from awareness of it, as §If the finding flips states.
