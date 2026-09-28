@@ -246,6 +246,37 @@ amendment) is discharged.
 > longer stops at `already_cut_over`. Post-merge step 5 is unblocked on the first `verdict=clear` run;
 > its procedure is host-key step 5 in the LUKS cutover runbook.
 
+## Addendum — PR #9096 (#5914): the transitional app arm is deleted
+
+The Residual "The transitional app arm (#5914)" is closed by PR #9096 (host-key step 6 in the LUKS
+cutover runbook). Earlier text in this ADR is not edited.
+
+- **What was deleted.** `TOFU_FALLBACK_OPTS` (`StrictHostKeyChecking=accept-new`) and the `null`-pin
+  path in `apps/web-platform/server/git-auth.ts`; the `null` return of `resolveGitDataHostKeyPin()`;
+  the `pin_absent_store_disabled` Sentry report; and `git-auth.ts`'s entry in Guard 1's allow-list
+  (`tests/scripts/test-no-tofu-ssh.sh`), whose mutation harness now reds on a literal re-added there.
+- **New refusal semantics.** Both git-auth helpers take a required pin, and `gitDataHostKeyTrust`
+  refuses any value that does not match the resolver's exact shape (now shared in
+  `server/git-data-host-key-pin-shape.ts`), so a JS or `as any` caller cannot dial unpinned either. An
+  absent pin throws whatever `GIT_DATA_STORE_ENABLED` says. An Art. 17 erasure then returns
+  `unconfigured` with detail `pin_absent: …` (events before this PR read `pin_absent_store_enabled:`),
+  and nothing is dialed. The enforcing control this ADR named for the flag-on case (the resolver's
+  throw) now covers the flag-off case too.
+- **New proactive signal.** A web container armed for git-data (remove key, provision key or
+  `GIT_DATA_SSH_HOST` set) that boots without a pin emits `op=pin_absent_at_startup`, replacing the
+  deleted `pin_absent_store_disabled`. It and `pin_invalid_at_startup` use the message path, so their
+  tags reach Sentry (#8629). Paging on them is #8572's scope.
+- **Rotation is unchanged.** Since step 3 the pin is present, so a host replace still yields
+  `host_key_mismatch` until the pin-redeploy follower loads the new pin; the deleted arm only ever ran
+  with the pin absent. This PR changes only the absent-pin case (a fresh create, or the secret deleted
+  outside Terraform), which now fails closed.
+- **The residual that remains.** A writer of Doppler `prd` who replaces `GIT_DATA_SSH_HOST_KEY` with
+  their own key and holds a private-network position is pinned by the app; only
+  `scheduled-terraform-drift.yml` (the secret is Terraform-owned) sees it, after the fact. The other
+  residuals above are unchanged.
+- **Step 5 preceded this.** The step-5 discharge record is #5914 issuecomment-5865758722 (0 ids in
+  the window 2026-09-22T12:07:01Z to 2026-09-28T07:51:53Z).
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md`
