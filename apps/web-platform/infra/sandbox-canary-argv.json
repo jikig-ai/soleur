@@ -21,6 +21,8 @@
     "/proc",
     "--tmpfs",
     "${CANARY_C4_STAGING}",
+    "--tmpfs",
+    "/etc/ssh/ssh_config.d",
     "--ro-bind",
     "${CANARY_EMPTY}",
     "${CANARY_WS}/.claude",

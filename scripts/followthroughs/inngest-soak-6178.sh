@@ -158,6 +158,10 @@ SOAK_STALE=2026-10-06T00:00:00Z     # past this, refuse before any GET: the read
 PERIOD=1200
 SLICE_MAX=8
 POPULATION_SIZE=52
+# Population ids whose function was DELETED on purpose after 09-15: they stay in the population (their
+# in-window runs remain in the host run index and are still scanned) but are allowed to be absent from
+# the registry. 26e6836b… = cron-ghcr-token-minter, deleted by #8714 (ADR-096 task 5.4).
+RETIRED_IDS="26e6836b-97ad-503f-8b08-490d8a2f4ce8"
 RUN_FLOOR=800                       # half the day-3.6 count (826); a hole that lost > half the window
 PROBE_BUDGET_S=420                  # wall-clock cap for the slice loop: the sweeper's job is 15 min for ALL probes
 # The explained groups, pinned as exact run-id SETS (host `.id` == `routine_runs.run_id`): the two
@@ -307,14 +311,26 @@ jqv reg_ids_raw registry_ids -r '.function_ids[]' "$WORK/registry.body"
 printf '%s\n' "$reg_ids_raw" | LC_ALL=C grep -E "$UUID_RE" | LC_ALL=C sort -u > "$WORK/registry.ids"
 reg_missing_list="$(LC_ALL=C comm -23 "$WORK/population.sorted" "$WORK/registry.ids")"; rc=$?
 [[ "$rc" -eq 0 ]] || cannot_establish "registry_unreadable cause=comm_failed rc=${rc}" "the population/registry set difference could not be computed on the runner"
-reg_missing="$(printf '%s\n' "$reg_missing_list" | grep -c . || true)"
+# A retired id's absence is expected; any OTHER missing id is drift.
+retired_absent=0
+reg_drift_list=""
+while IFS= read -r _mid; do
+  [[ -n "$_mid" ]] || continue
+  case " $RETIRED_IDS " in
+    *" $_mid "*) retired_absent=$((retired_absent + 1)) ;;
+    *) reg_drift_list="${reg_drift_list}${_mid}"$'\n' ;;
+  esac
+done <<<"$reg_missing_list"
+reg_missing="$(printf '%s' "$reg_drift_list" | grep -c . || true)"
 if [[ "$reg_missing" -ne 0 ]]; then
   cannot_establish "registry_drift missing_from_registry=${reg_missing} function_count=${reg_count}" "a pinned cron is no longer registered, so the pinned population no longer covers the registry — do not flip; re-derive the cron population (gh workflow run cutover-inngest.yml -f op=registry-probe is read-only) and re-measure"
 fi
 reg_total="$(grep -c . "$WORK/registry.ids" || true)"
 # Ids registered that are NOT in the population: 18 event-driven functions on 09-15. Anything above
 # that is a function registered since — UNMEASURED by this reading, so the verdict is qualified.
-UNMEASURED_N=$(( reg_total > POPULATION_SIZE + 18 ? reg_total - POPULATION_SIZE - 18 : 0 ))
+# Registered population ids = POPULATION_SIZE minus the retired ids already gone from the registry.
+reg_pop=$(( POPULATION_SIZE - retired_absent ))
+UNMEASURED_N=$(( reg_total > reg_pop + 18 ? reg_total - reg_pop - 18 : 0 ))
 UNMEASURED_LINE=""
 if [[ "$UNMEASURED_N" -gt 0 ]]; then
   UNMEASURED_LINE="registry: ${UNMEASURED_N} function(s) registered after 09-15 (function_count=${reg_count}) are UNMEASURED by this reading — attribute their triggers (cron or event) before flipping; a new cron needs the population file re-derived"

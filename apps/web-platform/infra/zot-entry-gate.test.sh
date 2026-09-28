@@ -14,6 +14,7 @@ make_mock_curl() {
   cat > "$1/curl" <<'MOCK'
 #!/bin/bash
 url=""; want_code=0
+[[ -n "${MOCK_CURL_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_CURL_LOG"
 for a in "$@"; do
   case "$a" in
     http*) url="$a" ;;
@@ -65,6 +66,20 @@ check "web image missing → BLOCK (exit 1)"               1 "export MOCK_WEB_MI
 check "inngest image missing → BLOCK (exit 1)"           1 "export MOCK_INNGEST_MISSING=1"
 check "zot /v2/ unreachable → TRANSIENT (exit 2)"        2 "export MOCK_ZOT_DOWN=1"
 check "missing pull creds → TRANSIENT (exit 2)"          2 "export ZOT_PULL_TOKEN=''"
+
+
+# #8714 review: the three values are all-or-nothing. With ONLY ZOT_REGISTRY_URL in the env and the
+# pull credential in Doppler, the gate must not send that credential to the env-supplied host: it
+# takes all three from Doppler instead.
+LOG="$(mktemp)"
+run_gate "export ZOT_REGISTRY_URL=evil.example.invalid ZOT_PULL_USER='' ZOT_PULL_TOKEN='' MOCK_CURL_LOG=$LOG
+printf '#!/usr/bin/env bash\ncase \"\$3\" in ZOT_REGISTRY_URL) echo 10.0.1.30:5000 ;; ZOT_PULL_USER) echo zot-pull ;; ZOT_PULL_TOKEN) echo dtok ;; esac\n' > \"\$md/doppler\""; rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q 'dtok' "$LOG" && ! grep -q 'evil.example.invalid' "$LOG"; then
+  PASS=$((PASS+1)); echo "  PASS: env URL alone does not steer the Doppler credential (all three from Doppler, exit $rc)"
+else
+  FAIL=$((FAIL+1)); echo "  FAIL: env URL alone steered the request (rc=$rc; log: $(tr '\n' ' ' < "$LOG" | cut -c1-200))"
+fi
+rm -f "$LOG"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

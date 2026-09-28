@@ -61,9 +61,18 @@
 #   ZOT_PUSH_USER / ZOT_PUSH_TOKEN     MUST BE ABSENT. Populated => refuse to start.
 #   GITHUB_RUN_ID / GITHUB_SHA         Marker provenance (`run_id`, `commit_sha`).
 #   ZOT_DISK_PCENT, ZOT_DISK_FS_SIZE_GB, ZOT_DISK_BOOT_ID, ZOT_DISK_SAMPLE_AGE_S,
-#   ZOT_RESTARTS_AT_START, ZOT_RESTARTS_AT_END
-#                                      From the caller's two `SOLEUR_ZOT_DISK` self-pulls,
-#                                      taken either side of the sweep.
+#   ZOT_DISK_SAMPLE_AT, ZOT_RESTARTS_AT_START
+#                                      From the caller's START `SOLEUR_ZOT_DISK` self-pull.
+#                                      ZOT_DISK_SAMPLE_AT is what the END sample must be newer than.
+#   ZOT_RESTARTS_AT_END                OPTIONAL. When set, it wins. When empty, this script
+#                                      takes its OWN END sample after the enumeration (#7377):
+#                                      the caller's end-sample step runs after this script has
+#                                      already emitted, so only a sample taken here can reach
+#                                      the durable marker.
+#   BETTERSTACK_QUERY_HOST / _USERNAME / _PASSWORD
+#                                      Read ONLY by the END sampler (scripts/zot-disk-sample.sh
+#                                      -> scripts/betterstack-query.sh). Unset => no END sample,
+#                                      `zot_restarts_at_end=unknown`, sweep unaffected.
 #   ZOT_INVENTORY_*                    Test seams; every one has a production default.
 #
 # Exit: 0 for outcome ok|degraded, 1 for outcome partial|failed, 2 for a precondition refusal.
@@ -82,7 +91,7 @@ set -f
 # of which carry no `-x` token at all.
 case "$-" in
   *x*)
-    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${ZOT_PULL_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${BETTERSTACK_QUERY_PASSWORD:+x}${ZOT_PULL_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -139,6 +148,21 @@ DISK_SAMPLE_MAX_AGE_S="${ZOT_INVENTORY_DISK_SAMPLE_MAX_AGE_S:-900}"
 # instead ships a `partial` marker that names the reason, which is the whole point of having a
 # durable record. 0 disables (tests).
 DEADLINE_S="${ZOT_INVENTORY_DEADLINE_S:-1200}"
+
+# The END restart sample (#7377). The sampler is scripts/zot-disk-sample.sh: it reads the newest
+# SOLEUR_ZOT_DISK row through betterstack-query.sh, which allow-lists the query host to
+# *.betterstackdata.com and caps each query at 60 s, so this adds one READ destination and no
+# new egress code in this file.
+#
+# THE WAIT. The heartbeat lands every 5 minutes and the measured sweep took 104 s (run of
+# 2026-08-10), so the newest row right after a sweep is usually the START row itself. Reading
+# it again would put a number in `zot_restarts_at_end` without measuring anything. The sampler
+# is therefore re-polled until a row NEWER than the START row (ZOT_DISK_SAMPLE_AT) appears:
+# 360 s = one heartbeat interval plus ingest margin. A long sweep never waits (a newer row
+# already exists). No newer row inside the wait => `unknown`, never a re-read.
+END_SAMPLE_CMD="${ZOT_INVENTORY_END_SAMPLE_CMD:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/zot-disk-sample.sh}"
+END_SAMPLE_WAIT_S="${ZOT_INVENTORY_END_SAMPLE_WAIT_S:-360}"
+END_SAMPLE_POLL_S="${ZOT_INVENTORY_END_SAMPLE_POLL_S:-30}"
 
 # The CLOSED reason vocabulary. Pinned as data, not prose: a `reason` outside this set would
 # both defeat the marker's allow-list and turn any interpolated error string into an
@@ -491,6 +515,76 @@ ZOT_RESTARTS_AT_END_V="${ZOT_RESTARTS_AT_END:-}"
 
 ORIGIN_VERDICT=unmeasured
 ENUMERATION_COMPLETE=false
+END_BOOT_CHANGED=0
+
+# END restart sample (#7377). Called once, after the enumeration and before the verdict chain.
+# Every failure leaves `zot_restarts_at_end=unknown` and returns 0: a missing END sample costs
+# only the straddle check, never the sweep.
+#
+# BOOT, not just the counter. `zot_restarts` is a per-boot count, so a replace or reboot
+# mid-sweep reads 15640 -> 0 (or 0 -> 0), which a numeric comparison alone would call "no
+# restart" or worse. When both boot ids are known and differ, that IS the straddle.
+#
+# LEAST PRIVILEGE. The sampler needs the QUERY credential only (see the allow-list below).
+take_end_sample() {
+  [[ "$ZOT_RESTARTS_AT_END_V" == "unknown" ]] || return 0
+  if [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]]; then
+    printf 'no END restart sample: BETTERSTACK_QUERY_HOST is unset, so zot_restarts_at_end=unknown and a restart during the sweep cannot be detected in the marker.\n' >&2
+    return 0
+  fi
+  # Both knobs reach `$(( ))`/`(( ))`, where a non-numeric value is an evaluation (and
+  # `a[$(cmd)]` an execution) rather than a number. Shape-checked before any use; a bad value
+  # costs the END sample, never the sweep.
+  if [[ ! "$END_SAMPLE_WAIT_S" =~ ^[0-9]+$ || ! "$END_SAMPLE_POLL_S" =~ ^[0-9]+$ ]]; then
+    printf 'no END restart sample: ZOT_INVENTORY_END_SAMPLE_WAIT_S / _POLL_S are not non-negative integers, so zot_restarts_at_end=unknown.\n' >&2
+    return 0
+  fi
+  local start_at="${ZOT_DISK_SAMPLE_AT:-}" deadline=$((SECONDS + END_SAMPLE_WAIT_S))
+  local sample rc end_at end_restarts end_boot
+  while :; do
+    rc=0
+    # ALLOW-LIST, not deny-list: the sampler gets the query credential and a minimal shell
+    # environment, nothing else. A deny-list (`env -u …`) would leak whatever it forgot to
+    # name — the Doppler service token in this job's step env among them. Its stderr (the
+    # sampler's own exit-contract diagnostics) is left on this script's stderr, i.e. the job log.
+    sample="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" LC_ALL=C TMPDIR="${TMPDIR:-/tmp}" \
+                BETTERSTACK_QUERY_HOST="${BETTERSTACK_QUERY_HOST}" \
+                BETTERSTACK_QUERY_USERNAME="${BETTERSTACK_QUERY_USERNAME:-}" \
+                BETTERSTACK_QUERY_PASSWORD="${BETTERSTACK_QUERY_PASSWORD:-}" \
+                bash "$END_SAMPLE_CMD" --since 30m --limit 50)" || rc=$?
+    if [[ $rc -ne 0 ]]; then
+      printf 'no END restart sample: the sampler exited %s (2=query failed, 3=no heartbeat row, 4=decode failed), so zot_restarts_at_end=unknown.\n' "$rc" >&2
+      return 0
+    fi
+    end_at="$(printf '%s\n' "$sample" | awk -F= '$1=="sample_at" {print $2; exit}')"
+    # ISO-8601 from the same sampler on both sides, so lexical order is time order. An empty
+    # START timestamp cannot be compared; the row is taken as-is (no production caller omits it).
+    # (Written START < END, not END > START: the fixture-write ratchet reads a `>` inside `[[ ]]`
+    # as an output redirect.)
+    if [[ -z "$start_at" || "$start_at" < "$end_at" ]]; then
+      break
+    fi
+    if (( SECONDS + END_SAMPLE_POLL_S > deadline )); then
+      printf 'no END restart sample: no SOLEUR_ZOT_DISK row newer than the START row (sample_at=%s) landed within %ss, so zot_restarts_at_end=unknown rather than a re-read of the START row.\n' \
+        "$start_at" "$END_SAMPLE_WAIT_S" >&2
+      return 0
+    fi
+    sleep "$END_SAMPLE_POLL_S"
+  done
+  end_restarts="$(printf '%s\n' "$sample" | awk -F= '$1=="zot_restarts" {print $2; exit}')"
+  end_boot="$(printf '%s\n' "$sample" | awk -F= '$1=="boot_id" {print $2; exit}' | tr -cd '[:alnum:].:_-')"
+  if [[ ! "$end_restarts" =~ ^[0-9]+$ ]]; then
+    printf 'no END restart sample: the newest SOLEUR_ZOT_DISK row carried a non-numeric zot_restarts, so zot_restarts_at_end=unknown.\n' >&2
+    return 0
+  fi
+  ZOT_RESTARTS_AT_END_V="$end_restarts"
+  if [[ "$BOOT_ID" != "unknown" && -n "$end_boot" && "$end_boot" != "$BOOT_ID" ]]; then
+    END_BOOT_CHANGED=1
+    printf 'the END sample is on a different boot (start boot_id=%s, end boot_id=%s): the host restarted or was replaced during the sweep.\n' \
+      "$BOOT_ID" "$end_boot" >&2
+  fi
+  return 0
+}
 
 reason_is_known() {  # $1 candidate
   local r
@@ -740,6 +834,8 @@ for repo in $REPO_LIST; do
   done
 done
 
+take_end_sample
+
 # ---------------------------------------------------------------------------------
 # Completeness and the verdict.
 # ---------------------------------------------------------------------------------
@@ -781,8 +877,9 @@ if [[ "$REPOS" -lt "$REPO_FLOOR" ]]; then
     "$REPOS" "$REPO_FLOOR" >&2
   emit_and_exit partial catalog_undercount
 fi
-if [[ "$ZOT_RESTARTS_AT_START_V" != "unknown" && "$ZOT_RESTARTS_AT_END_V" != "unknown" \
-      && "$ZOT_RESTARTS_AT_START_V" != "$ZOT_RESTARTS_AT_END_V" ]]; then
+if [[ "$END_BOOT_CHANGED" -eq 1 ]] \
+   || [[ "$ZOT_RESTARTS_AT_START_V" != "unknown" && "$ZOT_RESTARTS_AT_END_V" != "unknown" \
+         && "$ZOT_RESTARTS_AT_START_V" != "$ZOT_RESTARTS_AT_END_V" ]]; then
   printf 'zot restarted during the sweep: zot_restarts_at_start=%s zot_restarts_at_end=%s (verdict=restart_during_sweep).\n' \
     "$ZOT_RESTARTS_AT_START_V" "$ZOT_RESTARTS_AT_END_V" >&2
   emit_and_exit partial restart_during_sweep

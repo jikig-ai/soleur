@@ -227,9 +227,9 @@ export async function fetchFromGitData(params: {
   // workspaceId)`): a clone whose local `git-data` remote pointed at a DIFFERENT
   // workspace could otherwise pull tenant-B objects while authz passed for tenant-A.
   const remoteUrl = gitDataRemoteUrl(workspaceId);
-  // (#7226) Guard before the transport: with the store enabled an absent or malformed
-  // pin throws here, into the caller's existing failure report (ensure-workspace-repo's
-  // fail-soft overlay), and nothing is fetched unpinned.
+  // (#7226, #5914) Guard before the transport: an absent or malformed pin throws here,
+  // whatever the store flag says, into the caller's existing failure report
+  // (ensure-workspace-repo's fail-soft overlay), and nothing is fetched unpinned.
   const hostKeyPin = resolveGitDataHostKeyPin();
 
   // Map this user's OWN namespace into REMOTE-TRACKING refs (`refs/remotes/git-data/*`),

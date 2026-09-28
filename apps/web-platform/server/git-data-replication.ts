@@ -17,10 +17,13 @@
 // never to the GitHub `origin`/`syncPush` push (GitHub runs no fence hook).
 
 import { execFileSync } from "child_process";
+import { accessSync, constants as fsConstants } from "fs";
+import { delimiter, join } from "path";
 import { createHash } from "crypto";
 import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
+import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
 import { hashUserId, reportSilentFallback } from "./observability";
 import { assertSafeWorktreeId } from "./worktree-write-lease";
 // D2 write-boundary sentinel (ADR-068 §6, epic #5274 Sub-PR 3.C). The membership
@@ -149,17 +152,12 @@ export function resolveGitDataSshHost(): string {
 //
 // The pin is the git-data host's Terraform-minted ED25519 public key, published to Doppler
 // prd as GIT_DATA_SSH_HOST_KEY by the birth/replace job and loaded into this container at
-// deploy time. It is passed to BOTH git-auth helpers, which pin the host under the alias
-// `git-data` when it is non-null.
+// deploy time. It is passed to BOTH git-auth helpers, which always pin the host under the
+// alias `git-data`; there is no unpinned arm (#5914).
 //
-// Exactly one key of the expected algorithm: no host pattern, marker, comment or newline.
-// The value is trimmed first, and the regex has NO `m` flag, so an embedded second line
-// can never half-match. 68 base64 characters, no padding (a 51-byte ED25519 wire blob).
-// # twin: apps/web-platform/infra/git-data-flag-precheck.sh,
-// #       .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh (ED25519 arm) and
-// #       apps/web-platform/infra/modules/git-data-userdata/variables.tf carry the same
-// #       shape check. Change them together.
-const GIT_DATA_HOST_KEY_PIN_RE = /^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$/;
+// The shape (GIT_DATA_HOST_KEY_PIN_RE) lives in git-data-host-key-pin-shape.ts, shared
+// with git-auth.ts's runtime guard so the two are exactly as strict as each other; its
+// `# twin:` list names the non-TypeScript copies.
 
 type GitDataHostKeyPinState =
   | { state: "present"; pin: string }
@@ -173,27 +171,23 @@ function inspectGitDataHostKeyPin(): GitDataHostKeyPinState {
   return GIT_DATA_HOST_KEY_PIN_RE.test(raw) ? { state: "present", pin: raw } : { state: "invalid" };
 }
 
-// Module state: the transitional "no pin, store disabled" report fires once per process.
-let pinAbsentReported = false;
-
 /**
  * Resolve the git-data host-key pin for one SSH invocation.
  *
  *   - valid pin → the pin;
  *   - wrong shape → THROWS (never dial on a pin we cannot trust);
- *   - absent while `isGitDataStoreEnabled()` → THROWS (the store never runs unpinned);
- *   - absent while the store is disabled → `null` (the helpers' transitional fallback
- *     arm), reported to Sentry once per process under `pin_absent_store_disabled`.
+ *   - absent → THROWS, whatever `isGitDataStoreEnabled()` says. The message names the
+ *     flag state for the operator; it no longer changes the outcome.
  *
  * Callers resolve it in a DEDICATED guard before their ssh `try`: a throw inside the try
  * would be sorted by `e.code` and misread as `unreachable`.
  *
- * The `null` arm exists only until the first replace publishes the pin (erasure SSH is
- * live today and is deliberately not flag-gated — see removeGitDataRepo). "Pin present in
- * prd AND #5914 closed (this arm deleted)" is a hard precondition for ever setting
- * GIT_DATA_STORE_ENABLED.
+ * History: until #5914 an absent pin with the store disabled returned `null`, and the
+ * helpers dialed through a transitional unpinned fallback arm. That arm was deleted by
+ * #5914 (PR #9096, ADR-237 Addendum); "#5914 closed" was one of ADR-220's flag-flip
+ * preconditions.
  */
-export function resolveGitDataHostKeyPin(): string | null {
+export function resolveGitDataHostKeyPin(): string {
   const s = inspectGitDataHostKeyPin();
   if (s.state === "present") return s.pin;
   if (s.state === "invalid") {
@@ -205,23 +199,39 @@ export function resolveGitDataHostKeyPin(): string | null {
         "Refusing to dial the git-data host.",
     );
   }
-  if (isGitDataStoreEnabled()) {
-    throw new Error(
-      "git-data: GIT_DATA_SSH_HOST_KEY is unset while GIT_DATA_STORE_ENABLED=true — " +
-        "refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd.",
-    );
+  throw new Error(
+    `git-data: GIT_DATA_SSH_HOST_KEY is unset (${isGitDataStoreEnabled() ? "GIT_DATA_STORE_ENABLED=true" : "GIT_DATA_STORE_ENABLED is not true"}) — ` +
+      "refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd; " +
+      "if the secret is already there, the container has not loaded it (re-run git-data-pin-redeploy.yml).",
+  );
+}
+
+/**
+ * Whether this process is armed for git-data: any of the three inputs removeGitDataRepo
+ * and provisioning read is non-empty after trim. Dev carries none of them.
+ */
+function gitDataArmedInProcess(): boolean {
+  return ["GIT_REMOVE_SSH_PRIVATE_KEY", "GIT_PROVISION_SSH_PRIVATE_KEY", "GIT_DATA_SSH_HOST"].some(
+    (k) => !!process.env[k]?.trim(),
+  );
+}
+
+/**
+ * Whether an executable `ssh` is on PATH — checked by walking PATH, never by spawning at
+ * boot. #5914 (CTO ruling 2026-09-28): node:22-slim + `--no-install-recommends` shipped NO
+ * ssh client (git only Recommends openssh-client), so every git-data dial failed ENOENT.
+ */
+function sshClientOnPath(): boolean {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    try {
+      accessSync(join(dir, "ssh"), fsConstants.X_OK);
+      return true;
+    } catch {
+      // not here; keep walking
+    }
   }
-  if (!pinAbsentReported) {
-    pinAbsentReported = true;
-    reportSilentFallback(new Error("git-data host-key pin absent (store disabled)"), {
-      feature: "git_data_host_key_pin",
-      op: "pin_absent_store_disabled",
-      message:
-        "GIT_DATA_SSH_HOST_KEY is absent; git-data SSH (erasure) uses the transitional " +
-        "unpinned fallback until the first replace publishes the pin (#5914)",
-    });
-  }
-  return null;
+  return false;
 }
 
 /** OpenSSH-style `SHA256:<base64, no padding>` fingerprint of a validated pin. */
@@ -249,12 +259,35 @@ export function logGitDataHostKeyPinAtStartup(): void {
         ? `git_data_pin=present fp=${gitDataHostKeyFingerprint(s.pin)}`
         : `git_data_pin=${s.state}`;
     log.warn({ gitDataPin: s.state }, line);
+    // Both reports use the MESSAGE path (err === null): an Error-path report is
+    // pre-captured by the pino mirror with only `feature=pino-mirror`, and the tagged
+    // capture is dropped (#8629), so an alert rule keyed on `op` would never see it.
     if (s.state === "invalid") {
       // An invalid pin fails every git-data call closed, so it is an operator fault worth
       // an event at boot, not only a log line. The value is never included.
-      reportSilentFallback(new Error("git-data host-key pin invalid at startup"), {
+      reportSilentFallback(null, {
         feature: "git_data_host_key_pin",
         op: "pin_invalid_at_startup",
+        message: "git-data host-key pin invalid at startup",
+      });
+    } else if (s.state === "absent" && gitDataArmedInProcess()) {
+      // Since #5914 an absent pin refuses every git-data dial (every Art. 17 erasure
+      // returns `unconfigured` `pin_absent:`), so an armed container booting without one
+      // is an event at boot, before any user's erasure is refused. Unarmed (dev) is silent.
+      reportSilentFallback(null, {
+        feature: "git_data_host_key_pin",
+        op: "pin_absent_at_startup",
+        message: "git-data host-key pin absent at startup",
+      });
+    }
+    // A separate line, so the documented `git_data_pin=` line keeps its exact shape.
+    const sshPresent = sshClientOnPath();
+    log.warn({ gitDataSshClient: sshPresent }, `git_data_ssh_client=${sshPresent ? "present" : "absent"}`);
+    if (!sshPresent && gitDataArmedInProcess()) {
+      reportSilentFallback(null, {
+        feature: "git_data_ssh_client",
+        op: "ssh_client_absent_at_startup",
+        message: "git-data ssh client absent at startup",
       });
     }
   } catch (err) {
@@ -312,13 +345,13 @@ export async function provisionGitDataRepo(
   workspaceId: string,
   // A caller that already resolved the pin (replicateToGitData) passes it so the env is
   // read once per push; omitted (`undefined`), it is resolved here.
-  preResolvedHostKeyPin?: string | null,
+  preResolvedHostKeyPin?: string,
 ): Promise<void> {
   if (!isGitDataStoreEnabled()) return;
   assertSafeWorkspaceId(workspaceId);
   const host = resolveGitDataSshHost();
   const provisionKey = requireEnvKey("GIT_PROVISION_SSH_PRIVATE_KEY");
-  // Guard: resolved before any ssh. A throw (store enabled + absent/invalid pin) reaches
+  // Guard: resolved before any ssh. A throw (absent/invalid pin) reaches
   // the caller's existing failure report; nothing is dialed unpinned.
   const hostKeyPin =
     preResolvedHostKeyPin === undefined ? resolveGitDataHostKeyPin() : preResolvedHostKeyPin;
@@ -372,8 +405,11 @@ export type GitDataErasureOutcome =
    * A configuration fault; `detail` starts with a fixed reason word:
    *   - `remove_key_absent` — the REMOVE key is absent while the sibling git-data inputs
    *     ARE set: a partial birth or a half-applied rotation, not a non-git-data env.
-   *   - `pin_invalid` / `pin_absent_store_enabled` (#7226) — GIT_DATA_SSH_HOST_KEY is
-   *     malformed, or absent while the store is enabled; nothing was dialed.
+   *   - `pin_invalid` / `pin_absent` (#7226, #5914) — GIT_DATA_SSH_HOST_KEY is malformed,
+   *     or absent (whatever the store flag says); nothing was dialed. Events before #5914
+   *     read `pin_absent_store_enabled`, which `pin_absent` prefixes, so match the colon.
+   *   - `ssh_client_absent` (#5914) — spawning `ssh` failed ENOENT: the image has no ssh
+   *     client, so nothing was dialed.
    *
    * Without this, `skipped` silently absorbed it and reported "nothing to erase" for a
    * host that is actively provisioning repos: the #8094 defect through a second door.
@@ -472,10 +508,9 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
     // Provisioning arms on a DIFFERENT variable (GIT_PROVISION_SSH_PRIVATE_KEY), so a
     // half-applied rotation or a partial birth can leave repos being created while the
     // remove key is missing — and reporting that as `skipped` tells the user their data
-    // is gone while their bare repo sits on the host.
-    const provisionKey = process.env.GIT_PROVISION_SSH_PRIVATE_KEY?.trim();
-    const sshHost = process.env.GIT_DATA_SSH_HOST?.trim();
-    if (provisionKey || sshHost) {
+    // is gone while their bare repo sits on the host. With the remove key absent, "armed"
+    // is exactly "provision key or host set" — the same predicate the startup event uses.
+    if (gitDataArmedInProcess()) {
       return {
         status: "unconfigured",
         detail:
@@ -487,17 +522,19 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
   }
   const host = resolveGitDataSshHost();
   // Guard OUTSIDE the ssh try (#7226): the catch below sorts by `e.code`, so a resolver
-  // throw inside it would read as `unreachable`. An absent-while-enabled or malformed pin
-  // is a configuration fault, and nothing is dialed.
-  let hostKeyPin: string | null;
+  // throw inside it would read as `unreachable`. An absent or malformed pin is a
+  // configuration fault, and nothing is dialed. (git-auth's own runtime guard is a second
+  // layer only a caller bypassing the resolver can reach; here it would throw inside the
+  // try and read as `unreachable`, which is unreachable by construction because this
+  // guard always runs first.)
+  let hostKeyPin: string;
   try {
     hostKeyPin = resolveGitDataHostKeyPin();
   } catch (e) {
     // Same `unconfigured` status as a missing remove key, but a different fault with a
     // different remedy, so `detail` leads with a FIXED reason word an operator (or a
-    // Sentry search) can key on: `pin_invalid` | `pin_absent_store_enabled`.
-    const reason =
-      inspectGitDataHostKeyPin().state === "invalid" ? "pin_invalid" : "pin_absent_store_enabled";
+    // Sentry search) can key on: `pin_invalid` | `pin_absent`.
+    const reason = inspectGitDataHostKeyPin().state === "invalid" ? "pin_invalid" : "pin_absent";
     return {
       status: "unconfigured",
       detail: `${reason}: ${e instanceof Error ? e.message : String(e)}`,
@@ -512,7 +549,12 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
     // key), so both reach us unchanged. Read them defensively anyway: a timeout rejects
     // with a `killed` error whose `code` is null, and that is an `unreachable`, not a
     // refusal by a host that never answered.
-    const e = err as { code?: unknown; stderr?: unknown };
+    const e = err as { code?: unknown; stderr?: unknown; syscall?: unknown };
+    // spawn ENOENT: no ssh binary in the image. A configuration fault, nothing was dialed —
+    // not `unreachable`, which would send the operator to the network (#5914).
+    if (e.code === "ENOENT" && typeof e.syscall === "string" && e.syscall.startsWith("spawn")) {
+      return { status: "unconfigured", detail: `ssh_client_absent: ${e.syscall} ENOENT, nothing dialed` };
+    }
     const exitCode = typeof e.code === "number" ? e.code : null;
     const detail = scrubErasureDetail(
       String(

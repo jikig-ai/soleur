@@ -45,7 +45,6 @@ import { cronExpensesVerifyBy } from "@/server/inngest/functions/cron-expenses-v
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertReissue } from "@/server/inngest/functions/cron-gh-pages-cert-reissue";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
-import { cronGhcrTokenMinter } from "@/server/inngest/functions/cron-ghcr-token-minter";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
 import { cronGithubCidrRefresh } from "@/server/inngest/functions/cron-github-cidr-refresh";
 import { cronGrowthAudit } from "@/server/inngest/functions/cron-growth-audit";
@@ -158,7 +157,6 @@ const handlers = serve({
     cronFollowThroughMonitor,
     cronGhPagesCertReissue,
     cronGhPagesCertState,
-    cronGhcrTokenMinter,
     cronGithubAppDriftGuard,
     cronGithubCidrRefresh,
     cronGrowthAudit,
