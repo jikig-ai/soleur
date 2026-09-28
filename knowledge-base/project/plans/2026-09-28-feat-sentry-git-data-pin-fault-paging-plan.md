@@ -917,7 +917,7 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
   - **Deepen pass (2026-09-28):** the observability, security, test-design, user-impact and
     Terraform reviews (see Enhancement Summary).
   - Taste findings that were not applied are recorded in
-    `knowledge-base/project/specs/feat-one-shot-8572-git-data-pin-fault-paging/decision-challenges.md`.
+    `knowledge-base/project/specs/archive/20260928-172241-feat-one-shot-8572-git-data-pin-fault-paging/decision-challenges.md`.
 
 ## Acceptance Criteria
 
