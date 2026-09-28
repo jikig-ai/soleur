@@ -148,9 +148,12 @@ Issue: #9089. Row IDs (D*, P*, F*, C*) and guard rows (G*) refer to the plan.
 
 ## Phase 6: Ship
 
-- [ ] 6.1 File the residual follow-up issue listing the Non-Goals, with the `meta/machinery` label
+- [x] 6.1 File the residual follow-up issue listing the Non-Goals, with the `meta/machinery` label
   and the `Post-MVP / Later` milestone.
-- [ ] 6.2 File the issue for the quadratic `strip_command_bodies`, a hook-wide timeout bypass (12 s
+- [x] 6.2 File the issue for the quadratic `strip_command_bodies`, a hook-wide timeout bypass (12 s
   on 87 KB), with labels `type/security`, `domain/engineering` and `priority/p2-medium`.
-- [ ] 6.3 Put `Closes #9089` in the PR body, link both issues, and render DC-1 through DC-5 from
+- [x] 6.3 Put `Closes #9089` in the PR body, link both issues, and render DC-1 through DC-5 from
   `decision-challenges.md`.
+  > **Done 2026-09-28, with one deviation:** 6.1 and 6.2 were CONSOLIDATED into one tracker,
+  > #9142 (`type/security`, `domain/engineering`, `priority/p2-medium`, not `meta/machinery`), so
+  > the PR closes as many issues as it files. The decision-challenge issue is #9143.

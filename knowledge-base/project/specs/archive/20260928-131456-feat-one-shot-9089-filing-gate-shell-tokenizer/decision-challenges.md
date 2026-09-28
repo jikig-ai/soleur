@@ -74,3 +74,12 @@
   - the quadratic strip gets its own issue at ship.
 - **What would change it:** that issue landing a bounded strip, or measurements showing the extra
   fork matters.
+
+## Addendum — 2026-09-28 (review round, PR #9099)
+
+- **DC-3 partially superseded.** The review panel (security seat, M5) showed "any token matches"
+  let a `$`-valued `--jq`/`-H` value on a non-issues POST read as the endpoint. The `$`/variable
+  arms now match only in the endpoint position (after skipping gh api's value flags), in both
+  `filing-shape.pl` and `issuesEndpointToken()`; literal `repos/o/r/issues` tokens still match
+  anywhere. Pinned by R-PULLS.
+- **DC-5 follow-up filed:** the quadratic strip is tracked in #9142.
