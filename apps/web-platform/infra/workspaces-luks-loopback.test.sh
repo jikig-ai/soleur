@@ -120,6 +120,8 @@ teardown() {
   for ((i = ${#CLEAN_LOOPS[@]} - 1; i >= 0; i--)); do
     losetup -d "${CLEAN_LOOPS[$i]}" >/dev/null 2>&1
   done
+  # #9045 L7 backstop: the throwaway systemd units, if that case got as far as creating them.
+  if [ -n "${L7_UNIT:-}" ] && declare -F l7_clear >/dev/null; then l7_clear; fi
   [ -n "$TMPROOT" ] && rm -rf "$TMPROOT" >/dev/null 2>&1
   return 0
 }
@@ -1305,6 +1307,105 @@ else
   no "L6j: advisory probe misbehaved (partial_rc=$L6J_PARTIAL_RC all_rc=$L6J_ALL_RC)"
   note "partial marker: $(grep -m2 SOLEUR "$L6J_MARKER" 2>/dev/null)"
   note "all out:        $(tail -n 5 "$L6J_ALL_OUT" 2>/dev/null)"
+fi
+
+# ===========================================================================
+# L7 — #9045 REAL SYSTEMD: the dead-man arm's one load-bearing assumption
+# ===========================================================================
+# arm_dead_man now pre-clears a stale unit (stop the timer, reset-failed BOTH units) and runs an
+# UN-swallowed systemd-run, because the working hypothesis for the 2026-07-23 cutover (#9045 H1) is
+# that a loaded FAILED transient service — left by the 2026-07-20 fire — made the same-name
+# systemd-run refuse, into `2>/dev/null || true`. Every other suite FAKES systemd; this case
+# measures it, on this runner's systemd, with a THROWAWAY unit name and plain systemd-run (never
+# arm_dead_man, never workspaces-luks-deadman). It also records, as measurements for the fakes, what
+# an elapsed transient timer looks like (systemd.timer(5) says RemainAfterElapse=yes keeps it
+# loaded; web-1's apply-log print read it inactive/dead — measured on systemd 261 --user: the timer
+# is collected, so it reads not-found => inactive/dead).
+#
+# NO SILENT SKIP: without a usable system manager the case reports SYSTEMD_UNAVAILABLE and FAILS.
+# The measurement body runs in a subshell whose EXIT trap stops and resets the throwaway units; the
+# parent then asserts that nothing was left loaded. teardown() clears them too, as a backstop.
+L7_UNIT="wl-luks-deadman-probe-$$"
+l7_clear() {
+  systemctl stop "$L7_UNIT.timer" "$L7_UNIT.service" >/dev/null 2>&1
+  systemctl reset-failed "$L7_UNIT.timer" "$L7_UNIT.service" >/dev/null 2>&1
+  return 0
+}
+l7_prop() { systemctl show "$1" -p "$2" --value 2>/dev/null || true; }
+l7_val() { sed -n "s/^$1=//p" "$L7_OUT" | sed -n '1p'; }
+L7_OUT="$TMPROOT/l7.out"; : > "$L7_OUT"
+if [ ! -d /run/systemd/system ] || ! command -v systemd-run >/dev/null 2>&1 \
+  || [ -z "$(systemctl show -p Version --value 2>/dev/null)" ]; then
+  no "L7: SYSTEMD_UNAVAILABLE — no usable system manager (/run/systemd/system, systemd-run, systemctl show); the #9045 real-systemd evidence was NOT collected (a failure, never a skip)"
+else
+  (
+    trap l7_clear EXIT
+    # 1. A transient timer+service pair whose service FAILS: the 2026-07-20 fire's end state.
+    systemd-run --unit="$L7_UNIT" --on-active=1s --description="wl-luks #9045 probe" /bin/sh -c 'exit 3' >/dev/null 2>&1
+    echo "create_rc=$?"
+    i=0; st=""
+    while [ "$i" -lt 20 ]; do
+      i=$((i + 1)); st="$(l7_prop "$L7_UNIT.service" ActiveState)"
+      [ "$st" = failed ] && break
+      sleep 1
+    done
+    echo "svc_after_fire=$st"
+    echo "measure_timer=LoadState:$(l7_prop "$L7_UNIT.timer" LoadState) ActiveState:$(l7_prop "$L7_UNIT.timer" ActiveState) SubState:$(l7_prop "$L7_UNIT.timer" SubState) LastTriggerUSec:[$(l7_prop "$L7_UNIT.timer" LastTriggerUSec)]"
+    echo "measure_service=LoadState:$(l7_prop "$L7_UNIT.service" LoadState) ActiveState:$(l7_prop "$L7_UNIT.service" ActiveState) Result:$(l7_prop "$L7_UNIT.service" Result)"
+    # 2. H1: a same-name systemd-run must REFUSE while the failed service is loaded, AND its stderr
+    #    must name the collision — a bare non-zero could be a bus or permission error.
+    err="$(systemd-run --unit="$L7_UNIT" --on-active=30min --description="wl-luks #9045 probe" /bin/true 2>&1 >/dev/null)"; rc=$?
+    echo "h1_rc=$rc"
+    echo "h1_err=$(printf '%s\n' "$err" | head -n1 | cut -c1-200)"
+    # 3. The script's EXACT clear-out (arm_dead_man step 2), then the same-name arm must succeed
+    #    within the bounded attempts and read SubState=waiting (arm_dead_man step 5).
+    systemctl stop "$L7_UNIT.timer" >/dev/null 2>&1; echo "clear_stop_rc=$?"
+    systemctl reset-failed "$L7_UNIT.timer" "$L7_UNIT.service" >/dev/null 2>&1; echo "clear_rf_rc=$?"
+    n=0; rc=1
+    while [ "$n" -lt 5 ]; do
+      n=$((n + 1))
+      systemd-run --unit="$L7_UNIT" --on-active=30min --description="wl-luks #9045 probe" /bin/true >/dev/null 2>&1; rc=$?
+      [ "$rc" -eq 0 ] && break
+      sleep 1
+    done
+    echo "rearm_rc=$rc"; echo "rearm_attempts=$n"
+    n=0; st=""
+    while [ "$n" -lt 5 ]; do
+      n=$((n + 1)); st="$(l7_prop "$L7_UNIT.timer" SubState)"
+      [ "$st" = waiting ] && break
+      sleep 1
+    done
+    echo "rearm_substate=$st"
+  ) > "$L7_OUT" 2>&1
+  # 4. After the subshell's EXIT trap: nothing throwaway is left loaded (collection is asynchronous,
+  #    so bounded by attempts).
+  n=0; l7_t=""; l7_s=""
+  while [ "$n" -lt 10 ]; do
+    n=$((n + 1)); l7_t="$(l7_prop "$L7_UNIT.timer" LoadState)"; l7_s="$(l7_prop "$L7_UNIT.service" LoadState)"
+    [ "$l7_t" = not-found ] && [ "$l7_s" = not-found ] && break
+    sleep 1
+  done
+  note "L7 systemd=$(systemctl show -p Version --value 2>/dev/null) after an elapsed fire: $(l7_val measure_timer)"
+  note "L7 failed service: $(l7_val measure_service)"
+  note "L7 H1 same-name refusal: rc=$(l7_val h1_rc) stderr=[$(l7_val h1_err)]"
+  note "L7 clear-out: stop rc=$(l7_val clear_stop_rc) reset-failed rc=$(l7_val clear_rf_rc); re-arm rc=$(l7_val rearm_rc) after $(l7_val rearm_attempts) attempt(s), SubState=$(l7_val rearm_substate)"
+  if [ "$(l7_val create_rc)" = 0 ] && [ "$(l7_val svc_after_fire)" = failed ] && [ -n "$(l7_val h1_rc)" ] \
+    && [ "$(l7_val h1_rc)" != 0 ] && grep -qE '^h1_err=.*(already loaded|fragment)' "$L7_OUT"; then
+    ok "L7a: H1 reproduced — while a FAILED transient service is loaded, a same-name systemd-run exits non-zero and its stderr names the collision"
+  else
+    no "L7a: H1 NOT reproduced on this systemd (create=$(l7_val create_rc) svc=$(l7_val svc_after_fire) rc=$(l7_val h1_rc) err=[$(l7_val h1_err)])"
+    note "out: $(tr '\n' '|' < "$L7_OUT")"
+  fi
+  if [ "$(l7_val rearm_rc)" = 0 ] && [ "$(l7_val rearm_substate)" = waiting ]; then
+    ok "L7b: after the script's exact clear-out (stop timer, reset-failed both), the same-name systemd-run succeeds within the bound and reads SubState=waiting"
+  else
+    no "L7b: the clear-out did not make the unit armable (rearm rc=$(l7_val rearm_rc) attempts=$(l7_val rearm_attempts) substate=$(l7_val rearm_substate))"
+  fi
+  if [ "$l7_t" = not-found ] && [ "$l7_s" = not-found ]; then
+    ok "L7c: the EXIT trap left no throwaway unit loaded (timer + service both not-found)"
+  else
+    no "L7c: a throwaway unit outlived the EXIT trap (timer=$l7_t service=$l7_s)"
+  fi
 fi
 
 # ===========================================================================

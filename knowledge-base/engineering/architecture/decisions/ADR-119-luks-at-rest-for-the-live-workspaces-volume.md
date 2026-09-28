@@ -1028,7 +1028,10 @@ Appended after the 10-agent review of PR #9044. Each item below changes or quali
   > `SubState=elapsed` until reboot" was never measured. The same run's state print shows the timer
   > `inactive/dead`. systemd.timer(5)'s `RemainAfterElapse=yes` default would keep it loaded, so the
   > two sources disagree. #9045's real-systemd loopback case measures it on systemd 255. The guard
-  > keys on `SubState=waiting` and holds under either reading.
+  > keys on `SubState=waiting` and holds under either reading. Measured 2026-09-28 against a user
+  > systemd 261 (the same case body, run unprivileged): once a transient timer fires, systemd
+  > unloads it. It then reads `inactive/dead` with an empty `LastTriggerUSec`, which matches web-1's
+  > print. The privileged CI run on systemd 255 is the authoritative reading.
 - **Host scope.** The alert predicate gains `AND JSONExtractString(raw, 'host_name') =
   'soleur-web-platform'`. web-2 (`soleur-web-2`) ships to the same Logs source (measured
   2026-09-27). Its `incident_cause` no longer says "the volume is still encrypted": the alert also
@@ -1082,10 +1085,14 @@ The mechanics live in `workspaces-cutover.sh`:
   live `$MOUNT` against the `WORKSPACES_COUNT` persisted at G3. After disarming,
   `findmnt -no SOURCE "$MOUNT"` must still equal the mapper, because a fire that raced the disarm
   unmounts `$MOUNT`. Either failure dies while `CANARY_OK=0`, so the rollback is still lossless.
+  The `findmnt` re-assert is the real proof. A fired transient timer is unloaded, so its
+  `LastTriggerUSec` reads empty and check (a) only catches a fire in the short window before
+  that. This was measured on systemd 261; see the qualification under the 2026-09-27 review
+  amendments.
 - **`rollback()` handles the dead-man first**, before any unmount, with a bounded wait for a fire
   already in progress.
 - **`cleanup()` records one outcome on every abort:**
-  `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<rolled_back|rollback_remount_failed|post_canary_luks_retained|arm_aborted|pre_freeze>`,
+  `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<rolled_back|rollback_remount_failed|post_canary_luks_retained|arm_aborted|pre_freeze|dry_run>`,
   on the existing `luks-monitor` tag.
 - **A post-canary abort rolls FORWARD.** `cleanup()` re-asserts the mapper, restarts the app with
   its exit status checked, and resumes writers. It also pages through the fatal Sentry drift

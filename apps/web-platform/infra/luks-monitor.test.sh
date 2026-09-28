@@ -376,20 +376,47 @@ shopt -q dotglob && no "wl_count_workspace_dirs leaked dotglob=on to the caller"
   || ok "wl_count_workspace_dirs restores the caller's glob state"
 rm -rf "$wc_root"
 
-# (x) DEAD-MAN OBSERVABILITY (#6812). A successful remount silently undid the 2026-07-20 cutover;
-# the fire, the arm, the disarm, and both remount outcomes must now each emit a marker.
+# (x) DEAD-MAN OBSERVABILITY (#6812, #9045). A successful remount silently undid the 2026-07-20
+# cutover; the fire, the arm, the disarm, and both remount outcomes must each emit a marker. #9045
+# added the arm's refusal/failure rows, the disarm's verified-failure row, the unarmed-rollback row
+# and one outcome row per abort, and retired the false `reason=canary_passed` (rollback() used to
+# log it). Every row shares the full prefix below, so ONE Better Stack grep finds the whole story.
+DM_PFX='SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman'
 for pat in \
   "result=fired reason=timer_elapsed" \
   "result=armed reason=freeze_engaged" \
-  "result=disarmed reason=canary_passed" \
   "result=ok reason=plaintext_remounted" \
-  "result=fail reason=remount_failed"; do
-  if grep -qF "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman $pat" "$CUT"; then
+  "result=fail reason=remount_failed" \
+  "result=arm_refused reason=already_armed" \
+  "result=arm_refused reason=fire_in_progress" \
+  "result=arm_failed reason=systemd_run_refused" \
+  "result=arm_failed reason=timer_not_waiting" \
+  'result=disarmed reason=${reason}' \
+  'result=disarm_failed reason=${reason} check=${check}' \
+  "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
+  "result=not_armed reason=rollback_engaged" \
+  'result=cutover_aborted outcome=${outcome}'; do
+  if grep -qF "$DM_PFX $pat" "$CUT"; then
     ok "dead-man emits marker: $pat"
   else
     no "dead-man MISSING marker ($pat) — the #6812 blind spot is not closed"
   fi
 done
+# Each reason of the CLOSED disarm vocabulary has exactly its call site (comment-stripped), and the
+# retired reason is gone: `canary_passed` described a rollback as a pass.
+DM_SRC="$(grep -vE '^[[:space:]]*#' "$CUT")"
+for site in "disarm_dead_man host_canary_passed" "disarm_dead_man rollback_engaged" "disarm_dead_man arm_aborted"; do
+  if grep -qE "(^|[[:space:];&|{])${site}([[:space:]]|;|\$)" <<<"$DM_SRC"; then
+    ok "dead-man disarm call site present: $site"
+  else
+    no "dead-man disarm call site MISSING: $site — that reason can no longer be emitted"
+  fi
+done
+if grep -qE '(^|[^_])canary_passed' <<<"$DM_SRC"; then
+  no "dead-man still carries the retired bare canary_passed reason (a rollback logged as a pass)"
+else
+  ok "dead-man carries no retired reason=canary_passed"
+fi
 
 # (y) VERDICT-LINE ANCHOR PARITY. The verify workflow's positive control greps the probe output with
 # `^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ready=true `. That anchor depends on log()'s

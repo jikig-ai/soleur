@@ -14,7 +14,9 @@
 # (/var/lib/workspaces-luks/state), not shell vars, so a deliberate reboot (C15) does not destroy
 # the trap or the recovery state; the post-reboot re-canary is its OWN gated step reading that file
 # (a pre-reboot CANARY_OK MUST NOT satisfy it — F5). A host-local dead-man timer auto-remounts
-# plaintext if no orchestrator heartbeat lands within the window.
+# plaintext if the run dies mid-freeze and nothing disarms it within the window. It guards the FREEZE
+# WINDOW only: the arm is verified (fail-closed) and the single disarm sits at the host-canary door,
+# before `docker start` (#9045, ADR-119 §(b) "the rollback door closes at docker start").
 #
 # ⚠️ R7/C3 — the escrow proof runs AFTER prepare_luks_target, against the REAL device via the host's
 # prd_workspaces_luks token path (`doppler secrets get WORKSPACES_LUKS_KEY --plain --config
@@ -186,6 +188,10 @@ read_state()    { [ -f "$STATE_FILE" ] && (grep -E "^$1=" "$STATE_FILE" | tail -
 FREEZE_HELD=0
 FLIP_DONE=0
 CANARY_OK=0
+# #9045 — set to 1 the moment the dead-man's systemd-run returns 0 (BEFORE the arm is verified), so a
+# failed verification still reaches the disarm in cleanup(). Initialised here because `set -u`
+# would otherwise abort cleanup() inside the EXIT trap on an early die.
+DEADMAN_ARMED=0
 
 # Emit a discriminating drift event (any failed at-rest assert routes here).
 emit_drift() {
@@ -735,12 +741,57 @@ app_canary() {
   log "app canary PASSED — /health 200 and /internal/readyz ready=true (workspaces writable + populated)"
 }
 
+# assert_host_canary_population — #9045 (user-impact review). The host canary's last content check
+# BEFORE the door closes. Until #9045 the only content check on $MOUNT was readyz, which runs after
+# `docker start` — past the door, where a rollback is no longer lossless. G3 persisted
+# WORKSPACES_COUNT from $STAGING; this proves the SAME count on $MOUNT after the repoint, with the
+# SAME counter the daily monitor uses. A missing baseline fails closed too: the door must not close
+# on an unproven population. Dies while CANARY_OK=0, so cleanup() still rolls back losslessly.
+assert_host_canary_population() {
+  local want got
+  want="$(read_state WORKSPACES_COUNT)"
+  got="$(wl_count_workspace_dirs "$MOUNT/workspaces" 2>/dev/null)" || got=""
+  if [ -z "$want" ] || [ "$got" != "$want" ]; then
+    emit_drift host_canary_workspace_count_mismatch
+    die "host canary: $MOUNT/workspaces holds '${got:-<uncountable>}' workspace(s), persisted WORKSPACES_COUNT is '${want:-<missing>}' — refusing to close the rollback door on an unproven population (C13/#9045)"
+  fi
+  log "host canary population OK — $MOUNT/workspaces holds $got workspace(s) (= persisted WORKSPACES_COUNT)"
+}
+
 # Host-local rollback: unmount the mapper, remount the RETAINED plaintext volume at $MOUNT, restart.
 # Reconcilable, not a one-way door (C13): the LUKS volume RETAINS post-cutover writes.
 # shellcheck disable=SC2317  # invoked indirectly via the EXIT trap / ROLLBACK mode
 rollback() {
   step "ROLLBACK — remount the retained plaintext at $MOUNT + restart"
   [ "$DRY_RUN" = "1" ] && { log "(dry-run) would rollback"; return 0; }
+  # #9045 — the dead-man FIRST, before any unmount. A fire that is already running is remounting
+  # the plaintext itself; unmounting under it would race two restores over one mountpoint. Wait
+  # (bounded by ATTEMPTS, never wall clock) for the service to leave active/activating. On expiry
+  # report it and proceed anyway: the plaintext remount the fire was performing is this
+  # function's own end state.
+  local i=0 s_act
+  while [ "$i" -lt 30 ]; do
+    i=$((i + 1))
+    s_act="$(systemctl show workspaces-luks-deadman.service -p ActiveState --value 2>/dev/null || true)"
+    case "$s_act" in active|activating) ;; *) break ;; esac
+    if [ "$i" -ge 30 ]; then
+      _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=disarm_failed reason=rollback_engaged check=fire_stuck"
+      emit_drift deadman_disarm_failed
+      break
+    fi
+    sleep 3
+  done
+  if [ "$DEADMAN_ARMED" = "1" ]; then
+    # This run armed it: the VERIFYING disarm (its check (a) reads before its own stop). It returns
+    # a status and never dies, so a failed disarm cannot abort the rollback halfway; the marker and
+    # the deadman_disarm_failed drift are already emitted.
+    disarm_dead_man rollback_engaged || true
+  else
+    # Nothing armed by THIS run (a ROLLBACK=1 dispatch, possibly after an earlier fire). Stop any
+    # leftover timer unconditionally, and say so without a false fatal page.
+    systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
+    _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=not_armed reason=rollback_engaged"
+  fi
   systemctl stop webhook.service 2>/dev/null || true
   docker stop -t 30 "$CONTAINER" 2>/dev/null || true
   umount "$MOUNT" 2>/dev/null || true
@@ -765,16 +816,12 @@ rollback() {
   # failed (the `|| true` swallows it), so webhook cannot land on the bare mountpoint directory.
   mountpoint -q "$MOUNT" 2>/dev/null || emit_drift rollback_remount_failed
   resume_writers
-  # Disarm HERE too, not only on the success path: an abort that reaches rollback has already
-  # restored the host, so leaving the transient timer armed means it fires DEAD_MAN_MIN later and
-  # takes a second, unannounced outage — one that now stops inngest-redis as well.
-  disarm_dead_man
   emit_drift rollback_engaged
 }
 
 # shellcheck disable=SC2317  # invoked indirectly via the EXIT trap
 cleanup() {
-  local rc=$?
+  local rc=$? outcome src
   trap - EXIT
   if [ "$rc" -eq 0 ]; then exit 0; fi
   log "ABORT (rc=$rc) — host-local auto-recovery"
@@ -783,12 +830,58 @@ cleanup() {
   # not tear it down). Single condition avoids the double stop/umount/remount flap.
   if [ "$CANARY_OK" != "1" ] && { [ "$FLIP_DONE" = "1" ] || [ "$FREEZE_HELD" = "1" ]; }; then
     rollback
+    # The outcome is read off the mount, not assumed from rollback()'s own swallowed remount.
+    src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+    if [ -n "$src" ] && [ "$src" != "$MAPPER" ]; then outcome=rolled_back; else outcome=rollback_remount_failed; fi
+    # A dry run never froze anything, so its rollback() was a no-op: do not call that a rollback.
+    [ "$DRY_RUN" = "1" ] && outcome=dry_run
+  elif [ "$CANARY_OK" = "1" ]; then
+    # #9045 — past the host-canary door the LUKS mount is authoritative (ADR-119 §(b)), and nothing
+    # unattended is armed any more. Roll FORWARD: a death between CANARY_OK=1 and the end of
+    # resume_writers would otherwise leave the app DOWN on a correct mount. Re-assert the mapper
+    # first — resume_writers() checks only `mountpoint -q`, never device identity — and on a
+    # mismatch do NOT start anything: leave the app down and page (fix-forward, never ROLLBACK=1:
+    # that would strand every write made since docker start).
+    outcome=post_canary_luks_retained
+    src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+    if [ "$src" = "$MAPPER" ]; then
+      docker start "$CONTAINER" >/dev/null 2>&1 || emit_drift cleanup_docker_start_failed
+      resume_writers
+    else
+      emit_drift cleanup_mount_not_mapper
+    fi
+    emit_drift cutover_aborted_post_canary
+  elif [ "$DEADMAN_ARMED" = "1" ]; then
+    # The arm's systemd-run succeeded but its verification failed, before anything was frozen.
+    disarm_dead_man arm_aborted || true
+    outcome=arm_aborted
+  else
+    outcome=pre_freeze
   fi
+  # ONE outcome row per abort, on the existing luks-monitor tag (readable off-host, no SSH).
+  _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=cutover_aborted outcome=${outcome}"
   exit "$rc"
 }
 
-# NOTE: defined ABOVE the sourced-detection guard so rollback() (which disarms after a
-# restore) and the freeze test harness can both reach them. Definitions only — arm_dead_man is
+# _deadman_row <marker> — every dead-man marker is echoed to the run log AND logged on the existing
+# Vector-allowlisted luks-monitor tag (no new tag), the pattern the verify-diff rows already use.
+_deadman_row() {
+  echo "$1"
+  logger -t "$LUKS_LOG_TAG" -- "$1" 2>/dev/null || true
+}
+# _deadman_detail <free text> — the ONLY way free text enters a dead-man marker, always as its LAST
+# field: first line, at most 200 bytes, printable only, and every `=` mapped to `_`, so a refusal
+# message that says `result=armed` cannot spoof a marker field. It is never passed to emit_drift or
+# WL_REASON: Sentry receives reason slugs only, never free text.
+_deadman_detail() {
+  local s
+  s="$(printf '%s\n' "${1:-}" | LC_ALL=C head -n1 | LC_ALL=C cut -c1-200)"
+  s="$(LC_ALL=C _vscrub "$s")"
+  printf '%s' "${s//=/_}"
+}
+
+# NOTE: defined ABOVE the sourced-detection guard so rollback() (which handles the dead-man before
+# any unmount) and the freeze test harness can both reach them. Definitions only — arm_dead_man is
 # not CALLED until the main body, so sourcing still has no side effect.
 # Arm a host-local dead-man timer: if the orchestrator does not clear it within DEAD_MAN_MIN,
 # systemd-run auto-remounts plaintext + restarts (closes "frozen-and-SSH-unreachable", F3).
@@ -818,36 +911,117 @@ arm_dead_man() {
     stops="${stops}systemctl stop ${u}.timer ${u}.service 2>/dev/null; "
     tstarts="${tstarts}systemctl restart ${u}.timer 2>/dev/null; "
   done
-  systemd-run --on-active="${DEAD_MAN_MIN}min" --unit=workspaces-luks-deadman \
-    `# umount ${STAGING} BEFORE the close, in lockstep with rollback(): a mapper still mounted at` \
-    `# $STAGING makes cryptsetup close fail EBUSY. This is the UNATTENDED restore path, so the` \
-    `# swallowed failure leaves a complete DECRYPTED copy of every user's source live at $STAGING` \
-    `# through the still-open mapper, indefinitely, with zero telemetry on any channel — the exact` \
-    `# at-rest exposure #6588 exists to close, reached by a different door. The next run's stray` \
-    `# guard does NOT surface it either (it is a mountpoint, so that guard is skipped). The close` \
-    `# keeps its own error visible on the journal rather than 2>/dev/null.` \
-    `# #6807/#6812 OBSERVABILITY: the FIRE itself must emit. On 2026-07-20 this timer remounted the` \
-    `# plaintext over a healthy LUKS mount and NOTHING paged for ~6h, because a SUCCESSFUL remount` \
-    `# emitted no marker on any channel (only the close-EBUSY branch did). It fires at the TOP (the` \
-    `# event is "the backstop engaged" regardless of outcome), on the remount-failed else (the host` \
-    `# is now serving a bare mountpoint), and on success. logger -t luks-monitor is Vector-allowlisted.` \
-    `# #6921/#8077: the inngest-server start is guarded by an ESCAPED is-enabled = disabled test —` \
-    `# a disabled unit was quiesced by op=quiesce-web and only op=rollback may re-arm it (the same` \
-    `# guard as resume_writers). The backslash escapes render to plain quotes inside the sh -c string.` \
-    `# The skip logs the SAME INNGEST_START_SKIPPED marker as resume_writers (a separate test, so a` \
-    `# logger failure can never turn into a start). disabled alone suffices here: skipping the start of` \
-    `# an ACTIVE+disabled unit changes nothing, since start on an active unit is a no-op.` \
-    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] && logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
-    2>/dev/null || true
-  # ARM marker: the timer is now set. Pairs with the disarm marker so a cutover that armed but never
-  # disarmed (the 2026-07-20 shape — abort at app_canary before disarm_dead_man) is visible as an
-  # arm-without-disarm on the log timeline rather than inferred from an adjacent banner.
-  logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=armed reason=freeze_engaged deadline_min=${DEAD_MAN_MIN}" 2>/dev/null || true
-}
-disarm_dead_man() {
+  # The FIRE command (#6588/#6807/#6921 — kept byte-for-byte; T12/T12b/T12c pin it):
+  # umount ${STAGING} BEFORE the close, in lockstep with rollback(): a mapper still mounted at
+  # $STAGING makes cryptsetup close fail EBUSY. This is the UNATTENDED restore path, so the
+  # swallowed failure leaves a complete DECRYPTED copy of every user's source live at $STAGING
+  # through the still-open mapper, indefinitely, with zero telemetry on any channel — the exact
+  # at-rest exposure #6588 exists to close, reached by a different door. The next run's stray
+  # guard does NOT surface it either (it is a mountpoint, so that guard is skipped). The close
+  # keeps its own error visible on the journal rather than 2>/dev/null.
+  # #6807/#6812 OBSERVABILITY: the FIRE itself must emit. On 2026-07-20 this timer remounted the
+  # plaintext over a healthy LUKS mount and NOTHING paged for ~6h, because a SUCCESSFUL remount
+  # emitted no marker on any channel (only the close-EBUSY branch did). It fires at the TOP (the
+  # event is "the backstop engaged" regardless of outcome), on the remount-failed else (the host
+  # is now serving a bare mountpoint), and on success. logger -t luks-monitor is Vector-allowlisted.
+  # #6921/#8077: the inngest-server start is guarded by an ESCAPED is-enabled = disabled test —
+  # a disabled unit was quiesced by op=quiesce-web and only op=rollback may re-arm it (the same
+  # guard as resume_writers). The backslash escapes render to plain quotes inside the sh -c string.
+  # The skip logs the SAME INNGEST_START_SKIPPED marker as resume_writers (a separate test, so a
+  # logger failure can never turn into a start). disabled alone suffices here: skipping the start of
+  # an ACTIVE+disabled unit changes nothing, since start on an active unit is a no-op.
+  #
+  # #9045 — the ARM fails closed and verifies itself. Until #9045 this call ended in
+  # `2>/dev/null || true` and `result=armed` was logged unconditionally afterwards. The 2026-07-20
+  # fire had left workspaces-luks-deadman.service loaded and FAILED, a loaded failed unit makes a
+  # same-name systemd-run refuse ("already loaded or has a fragment file" — measured on systemd
+  # 261), and so the 2026-07-23 arm was most likely refused into /dev/null while the log said armed.
+  #   1. Refuse if a dead-man is LIVE — a waiting timer belongs to an earlier run's freeze, and a
+  #      running service is a fire in progress. Never stop either.
+  #   2. Pre-clear a STALE unit: stop the timer (exit 5 = not loaded, the fresh-host answer) and
+  #      reset-failed both units. Neither is gated: the verified systemd-run below is the gate.
+  #   3. systemd-run UN-swallowed, with a fixed --description= (the default description is the whole
+  #      command line, which the journal would echo). Its stderr is captured without a temp file.
+  #   4. DEADMAN_ARMED=1 the moment it returns 0 — BEFORE verification — so a failed verification
+  #      still reaches the disarm in cleanup() and no timer outlives the run with nothing frozen.
+  #   5. Verify SubState=waiting, bounded by ATTEMPTS (5 x 1s), never wall clock.
+  # The unit name stays fixed: the installer's exit-17 guard, the forensic print, the runbook and
+  # the harness all key on it.
+  local t_sub s_act err rc n=0
+  t_sub="$(systemctl show workspaces-luks-deadman.timer -p SubState --value 2>/dev/null || true)"
+  s_act="$(systemctl show workspaces-luks-deadman.service -p ActiveState --value 2>/dev/null || true)"
+  if [ "$t_sub" = "waiting" ]; then
+    _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=arm_refused reason=already_armed"
+    emit_drift deadman_already_armed
+    die "a workspaces-luks-deadman timer is already WAITING — it belongs to an earlier run's freeze. Refusing to arm (and never stopping it): let it resolve within DEAD_MAN_MIN, read the next workspaces-luks-verify.yml run, then re-dispatch (runbook: deadman_already_armed)"
+  fi
+  case "$s_act" in
+    active|activating)
+      _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=arm_refused reason=fire_in_progress"
+      emit_drift deadman_already_armed
+      die "workspaces-luks-deadman.service is ${s_act} — a dead-man FIRE is in progress. Refusing to arm over it (runbook: deadman_already_armed)" ;;
+  esac
   systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
-  systemctl reset-failed workspaces-luks-deadman 2>/dev/null || true
-  logger -t "${LUKS_LOG_TAG:-luks-monitor}" -- "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=disarmed reason=canary_passed" 2>/dev/null || true
+  systemctl reset-failed workspaces-luks-deadman.timer workspaces-luks-deadman.service 2>/dev/null || true
+  err="$(systemd-run --on-active="${DEAD_MAN_MIN}min" --unit=workspaces-luks-deadman \
+    --description="workspaces LUKS cutover dead-man (auto-remount plaintext)" \
+    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] && logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
+    2>&1 >/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=arm_failed reason=systemd_run_refused rc=${rc} detail=$(_deadman_detail "$err")"
+    emit_drift deadman_arm_failed
+    die "systemd-run refused to arm the dead-man (rc=${rc}) — no freeze is held. Re-dispatch once (the stale unit was already reset-failed); on a second refusal escalate (runbook: deadman_arm_failed)"
+  fi
+  DEADMAN_ARMED=1
+  t_sub=""
+  while [ "$n" -lt 5 ]; do
+    n=$((n + 1))
+    t_sub="$(systemctl show workspaces-luks-deadman.timer -p SubState --value 2>/dev/null || true)"
+    [ "$t_sub" = "waiting" ] && break
+    [ "$n" -lt 5 ] && sleep 1
+  done
+  if [ "$t_sub" != "waiting" ]; then
+    _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=arm_failed reason=timer_not_waiting substate=$(_deadman_detail "${t_sub:-empty}")"
+    emit_drift deadman_arm_failed
+    die "the dead-man timer never read SubState=waiting after systemd-run (last=${t_sub:-empty}) — refusing to freeze behind an unverified backstop; cleanup() disarms what this run created (runbook: deadman_arm_failed)"
+  fi
+  # ARM marker: the timer is VERIFIED waiting. Pairs with the disarm marker so a cutover that armed
+  # but never disarmed is visible as an arm-without-disarm on the log timeline.
+  _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=armed reason=freeze_engaged deadline_min=${DEAD_MAN_MIN}"
+}
+
+# disarm_dead_man <reason> — returns 0 (disarmed) or 1 (NOT proven disarmed). NEVER dies: a die
+# inside rollback() would abort the rollback halfway. Closed reason vocabulary: host_canary_passed
+# (the one main-body call, at the host-canary door), rollback_engaged (rollback(), only when THIS
+# run armed), arm_aborted (cleanup(), after a failed arm verification). Race-free order:
+#   (a) the timer LastTriggerUSec BEFORE the stop — stopping a transient timer unloads it, and
+#       garbage collection then empties every property, so a fired timer would read never-fired;
+#   stop the timer — from here no NEW fire can start;
+#   (b) the service ActiveState AFTER the stop — a fire that began before the stop is still
+#       active/activating, and a running unit is not collected;
+#   reset-failed both units, then (c) the timer must no longer read waiting.
+# GC can still erase (a) for a fire that finished and was collected before this ran, so the
+# CALLER's findmnt re-assert (the mount source cannot be garbage-collected) is the final proof.
+disarm_dead_man() {
+  local reason="${1:-}" last s_act t_sub check=""
+  last="$(systemctl show workspaces-luks-deadman.timer -p LastTriggerUSec --value 2>/dev/null || true)"
+  systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
+  s_act="$(systemctl show workspaces-luks-deadman.service -p ActiveState --value 2>/dev/null || true)"
+  systemctl reset-failed workspaces-luks-deadman.timer workspaces-luks-deadman.service 2>/dev/null || true
+  t_sub="$(systemctl show workspaces-luks-deadman.timer -p SubState --value 2>/dev/null || true)"
+  if [ -n "$last" ] && [ "$last" != "n/a" ]; then check=a
+  else
+    case "$s_act" in active|activating|deactivating) check=b ;; esac
+    [ -z "$check" ] && [ "$t_sub" = "waiting" ] && check=c
+  fi
+  if [ -n "$check" ]; then
+    _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=disarm_failed reason=${reason} check=${check}"
+    emit_drift deadman_disarm_failed
+    return 1
+  fi
+  DEADMAN_ARMED=0
+  _deadman_row "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=disarmed reason=${reason}"
+  return 0
 }
 
 # ============================================================================
@@ -1938,7 +2112,7 @@ fsck_advisory_probe() {
   # equality the pre-freeze abort depends on.
   probed="$(awk -F'\t' '$1 ~ /^[01]$/ { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
   probe_failed_n="$(awk -F'\t' '$2 == "probe_failed" { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
-  # Runs BEFORE `FREEZE_HELD=1; arm_dead_man`, so die() reaches cleanup() with both flags 0 and NO
+  # Runs BEFORE `arm_dead_man` and `FREEZE_HELD=1`, so die() reaches cleanup() with every flag 0 and NO
   # rollback runs. That is correct; do not "fix" it into a rollback. Language mirrors the script's
   # other pre-freeze dies.
   #
@@ -2204,7 +2378,10 @@ fsck_advisory_probe "$MOUNT"
 # FREEZE (≤20 min budget) — quiesce, drain, copy the delta, verify, repoint
 # ============================================================================
 step "FREEZE — quiesce $QUIESCE_UNITS + docker stop -t 120 (C8) + interrupted-write asserts (G4)"
-FREEZE_HELD=1; persist_state FREEZE_HELD 1; arm_dead_man
+# #9045 — ARM FIRST, on its own line: arm_dead_man now fails closed (a refused or unverified arm
+# dies), so it must run before FREEZE_HELD=1 — a refused arm then aborts with nothing frozen.
+arm_dead_man
+FREEZE_HELD=1; persist_state FREEZE_HELD 1
 if [ "$DRY_RUN" != "1" ]; then
   freeze_writers
 else
@@ -2344,6 +2521,15 @@ if [ "$DRY_RUN" != "1" ]; then
   _same_dev "$_canary_mapper_dev" "$FRESH_DEV" \
     || { emit_drift canary_mapper_wrong_device; die "C13 canary: $MAPPER is backed by '${_canary_mapper_dev:-<unknown>}', not $FRESH_DEV — refusing to certify the repoint"; }
   mountpoint -q "$MOUNT" || { emit_drift not_mounted; die "mountpoint -q $MOUNT failed"; }
+  # #9045 — THE DOOR. Everything below CANARY_OK=1 rolls forward, never back (ADR-119 §(b): the
+  # rollback door closes at docker start), so the dead-man — which exists only to undo a frozen,
+  # unattended host — is disarmed HERE, exactly once, before either. First prove the population on
+  # the live mount; then disarm (a failed disarm dies while CANARY_OK=0, so cleanup() rolls back
+  # while that is still lossless); then re-assert the mount SOURCE, which a fire that raced the
+  # disarm would have changed and which garbage collection cannot hide.
+  assert_host_canary_population
+  disarm_dead_man host_canary_passed || die "the dead-man could not be PROVEN disarmed at the host canary (see the disarm_failed check= marker) — refusing to close the rollback door with a possibly-live backstop; cleanup() rolls back"
+  [ "$(findmnt -no SOURCE "$MOUNT" 2>/dev/null)" = "$MAPPER" ] || { emit_drift deadman_fired_before_disarm; die "findmnt: $MOUNT is no longer $MAPPER after the dead-man disarm — a fire raced the disarm; refusing to certify (cleanup() rolls back before docker start)"; }
   CANARY_OK=1; persist_state CANARY_OK "1:$(cryptsetup luksUUID "$FRESH_DEV")"  # DP-7: run-keyed + header UUID
   log "host canary PASSED — $MOUNT is the LUKS mapper"
 fi
@@ -2354,10 +2540,12 @@ if [ "$DRY_RUN" != "1" ]; then
   # Restore every unit freeze_writers() quiesced (webhook + inngest-redis) and reconcile
   # inngest-server — AFTER the mapper mount (see resume_writers' mount guard).
   resume_writers
-  # app_canary BEFORE disarm_dead_man. CANARY_OK=1 was set by the HOST canary above, so cleanup()
-  # will no longer roll back; if the dead-man were disarmed first, an app-level failure here would
-  # have ZERO automated recovery — on the one gate that actually proves user-facing health. Keeping
-  # the dead-man armed across the canary preserves the unattended backstop for exactly that window.
+  # The dead-man is ALREADY disarmed (at the host canary, #9045): it guards the freeze window, not
+  # app health. Before #9045 it stayed armed across this canary, and on 2026-07-20 an app-level abort
+  # here let it fire 27 minutes later and silently remount the plaintext over a correct LUKS mount,
+  # stranding every write since docker start (#6812). CANARY_OK=1 is set, so an abort from here on
+  # makes cleanup() roll FORWARD on the LUKS mount and page (cutover_aborted_post_canary); recovery
+  # is fix-forward, never ROLLBACK=1.
   app_canary
   # The durable Inngest queue must be up before this run may call itself green. A dead queue behind
   # a green cutover is the "component reports SUCCESS but its downstream effect is absent"
@@ -2367,7 +2555,6 @@ if [ "$DRY_RUN" != "1" ]; then
     emit_drift green_run_degraded_queue
     die "inngest-redis.service is not active after a successful repoint — the durable Inngest queue is DOWN and armed reminders would silently never fire. Refusing to report a green cutover. The mount is correct and retained; restart the unit and re-run workspaces-luks-verify.yml."
   }
-  disarm_dead_man
   # Deliver the standing observability to the LIVE host via THIS channel (ADR-119 §(e)).
   install -D -m 0755 "${SELF_DIR}/luks-monitor.sh" /usr/local/bin/luks-monitor 2>/dev/null || true
   install -D -m 0755 "$EMIT" /usr/local/bin/workspaces-luks-emit.sh 2>/dev/null || true
@@ -2397,13 +2584,14 @@ if [ "$DRY_RUN" != "1" ]; then
   # Fail loud if the timer did not arm (a silently-missing unit would leave the daily probe dark; the
   # `install … || true` above swallows delivery errors deliberately, so assert the end state here).
   systemctl is-enabled luks-monitor.timer >/dev/null 2>&1 || { emit_drift luks_monitor_timer_enable_failed; die "luks-monitor.timer failed to enable — the daily at-rest probe would not run (C15/ADR-119 §(e))"; }
-  # Reboot-once re-canary (C15): the realistic failure is the boot path (the structural gate + the
-  # --restart resurrection). This script does NOT auto-reboot — a reboot drops the CF-Tunnel SSH
-  # session mid-run. The run-keyed CANARY_OK is persisted to $STATE_FILE with the header UUID (above)
-  # so a pre-reboot value cannot satisfy a fresh post-reboot check. The boot-path proof is an
-  # OPERATOR step AFTER this run: reboot web-1 once, then dispatch workspaces-luks-verify.yml (the
-  # read-only re-assert) — a fresh green there proves the boot path. See the runbook.
-  log "cutover green. Operator: reboot web-1 once, then run workspaces-luks-verify.yml to prove the boot path (C15)."
+  # Boot path (C15) — BLOCKED, do not reboot (#9123). The C15 plan was "reboot web-1 once, then
+  # re-verify", but measured on 2026-09-27: web-1's /mnt/data fstab line is the literal glob
+  # /dev/disk/by-id/scsi-0HC_Volume_* (no nofail), there is no boot-time unlock for the mapper, and
+  # the ADR-119 §(e) mount gate was never delivered. A reboot would send web-1 to emergency mode and
+  # take every user's workspace offline until a console repair. The coupled boot-path fix is #9123.
+  # The run-keyed CANARY_OK is still persisted to $STATE_FILE with the header UUID (above), so a
+  # pre-reboot value cannot satisfy a post-reboot check once that fix lands.
+  log "cutover green. Do NOT reboot web-1 to prove the boot path: a reboot currently takes the site down (fstab/boot-unlock hazard, #9123). Run workspaces-luks-verify.yml for the read-only re-assert."
 fi
 
 step "cutover body complete (DRY_RUN=$DRY_RUN). The WIPE/converge is a SEPARATE environment-gated dispatch (DP-4)."

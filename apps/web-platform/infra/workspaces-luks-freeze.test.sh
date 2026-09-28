@@ -64,7 +64,7 @@ fi
 
 # T2b — the drain timeout is the C8 property, not an incidental number. `-t 1` truncates an
 # in-flight write(); the whole point of -t 120 is to let it finish.
-hasF 'docker stop -t 120' && ok "T2b the container drain keeps its 120s C8 timeout" \
+has '^docker stop -t 120 ' && ok "T2b the container drain keeps its 120s C8 timeout" \
                           || no "T2b the container drain timeout changed — a short -t SIGKILLs mid-write() (C8)"
 
 grep -qE '^QUIESCED_UNITS=.*inngest-redis\.service' "$STATE/state" 2>/dev/null \
@@ -85,10 +85,10 @@ else
 fi
 
 # T3c — the timer/service PAIRS. Stopping a .timer does not stop the instance it already launched.
-hasF 'systemctl stop orphan-reaper.timer orphan-reaper.service' \
+has '^systemctl stop orphan-reaper\.timer orphan-reaper\.service' \
   && ok "T3c orphan-reaper timer AND service are stopped (6h root rm -rf over \$MOUNT/workspaces)" \
   || no "T3c orphan-reaper not quiesced as a timer+service pair — a mid-freeze reap yields the same C1 abort as the AOF"
-hasF 'systemctl stop luks-monitor.timer luks-monitor.service' \
+has '^systemctl stop luks-monitor\.timer luks-monitor\.service' \
   && ok "T3d luks-monitor timer AND service are stopped (a running instance holds \$MOUNT)" \
   || no "T3d luks-monitor not quiesced as a timer+service pair"
 
@@ -244,17 +244,17 @@ fi
 run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200
 ran && ok "T10z app_canary succeeds on 200 + ready=true (positive control)" \
     || no "T10z app_canary did not pass the happy path: rc=$CASE_RC ${CASE_OUT:0:200}"
-hasF 'https://app.soleur.ai/health' \
+has '^curl .*https://app\.soleur\.ai/health' \
   && ok "T10 app_canary probes https app.soleur.ai/health (liveness)" \
   || no "T10 app_canary does not probe /health over https"
-nhas 'app\.soleur\.ai/api/health' \
+nhas '^(curl|docker) .*app\.soleur\.ai/api/health' \
   && ok "T11 app_canary never probes /api/health (no route; 307s to /login)" \
   || no "T11 app_canary still probes /api/health — it would abort every good cutover"
 
 # T22 — THE GATE THAT MATTERS. /health is `res.writeHead(200)` unconditionally and never touches
 # $MOUNT (readiness.ts states the no-mount-coupling invariant explicitly), so it CANNOT fail on an
 # empty or unmounted volume. /internal/readyz asserts workspaces_writable + workspaces_populated.
-hasF '/internal/readyz' \
+has '^curl .*/internal/readyz' \
   && ok "T22 app_canary also asserts /internal/readyz (mount-coupled readiness)" \
   || no "T22 app_canary relies on /health alone — a 200-always probe that cannot fail on an empty \$MOUNT"
 # T22d — the readyz probe runs INSIDE the container (docker exec), not a bare host curl. A host-side
@@ -265,7 +265,7 @@ hasF '/internal/readyz' \
 # DELIBERATELY (not wildcarded) — it locks that the probe targets the RIGHT container and reds on an
 # incomplete rename. SIBLING: luks-monitor.test.sh (n2) covers the OTHER consumer (daily monitor)
 # through the OTHER docker stub (the $d/bin/docker PATH-stub form).
-hasF 'docker exec soleur-web-platform curl' \
+has '^docker exec soleur-web-platform curl ' \
   && ok "T22d app_canary probes readyz via docker exec into the container (genuine-loopback peer, not the bridge gateway)" \
   || no "T22d app_canary readyz probe is a bare host curl — in prod the bridge-gateway peer gets 403 and the cutover can never certify"
 run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 READYZ_BODY='{"ready":false,"checks":{"workspaces_populated":false}}'
@@ -439,48 +439,128 @@ for badint in -1 abc; do
   fi
 done
 
-# T25 — ORDERING. app_canary must precede disarm_dead_man. CANARY_OK=1 is set by the HOST canary
-# before this point, so cleanup() will not roll back; if the dead-man were disarmed FIRST, an
-# app-level failure would have zero automated recovery on the one gate that proves user-facing
-# health. Comments stripped first: this file discusses the ordering in prose right above the code.
+# T25' — PLACEMENT, INVERTED BY #9045. The dead-man guards the FREEZE WINDOW, not app health: it is
+# disarmed exactly once in the main body, at the host-canary door — AFTER the last host-canary
+# assert (`not_mounted`) and BEFORE both `CANARY_OK=1` and `docker start "$CONTAINER"`. Before
+# #9045 it stayed armed across app_canary, and on 2026-07-20 an app-level abort let it fire 27
+# minutes later and silently remount the plaintext over a correct LUKS mount (#6812). ADR-119 §(b):
+# "The rollback door closes at `docker start`" — so nothing unattended may stay armed past it.
+# Moving CANARY_OK=1 above the disarm is also RED: a failed disarm would then skip the rollback.
 #
-# SCOPED TO THE MAIN BODY. rollback() also calls disarm_dead_man on its own line, and it is defined
-# far ABOVE the main body — so an unscoped `head -1` picks the rollback call and compares two lines
-# that have no ordering relationship, failing (or passing) for a reason unrelated to the property.
-# The sourced-detection guard is the boundary between definitions and the main body.
+# SCOPED TO THE MAIN BODY. rollback() and cleanup() also call disarm_dead_man, and they are defined
+# far ABOVE the main body; an unscoped search would compare lines that have no ordering
+# relationship. The sourced-detection guard is the boundary between definitions and the main body.
+# Comments are stripped first: this file discusses the ordering in prose right above the code.
 T25BODY="$RUN_SCRATCH/t25body"
 grep -vE '^[[:space:]]*#' "$CUTOVER" > "$T25BODY" || :
 t25_guard=$(grep -nE 'BASH_SOURCE\[0\]:-\$0.*!=' "$T25BODY" | sed -n '1p' | cut -d: -f1 || true)
+t25_nm=""; t25_disarm=""; t25_cok=""; t25_dstart=""; t25_ndisarm=0
 if [ -z "$t25_guard" ]; then
-  no "T25 could not locate the sourced-detection guard — the main-body boundary is unfindable, so the ordering assertion would be scoped to the wrong region"
-  t25_canary=""; t25_disarm=""
+  no "T25' could not locate the sourced-detection guard — the main-body boundary is unfindable, so the placement assertion would be scoped to the wrong region"
+  : > "$T25BODY.main"
 else
   awk -v g="$t25_guard" 'NR>g' "$T25BODY" > "$T25BODY.main"
-  t25_canary=$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
-  t25_disarm=$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+  t25_nm=$(grep -nE '^[[:space:]]*mountpoint -q "\$MOUNT" \|\| \{ emit_drift not_mounted;' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+  # A trailing `|| die …` or comment and any indentation are tolerated (Guard 2 harness row H2).
+  t25_disarm=$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]+host_canary_passed([[:space:]]|$)' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+  t25_cok=$(grep -nE '^[[:space:]]*CANARY_OK=1' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+  t25_dstart=$(grep -nE '^[[:space:]]*docker start "\$CONTAINER"' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+  t25_ndisarm=$(grep -cE '(^|[;&|{[:space:]])disarm_dead_man([[:space:]]|;|$)' "$T25BODY.main" || true)
 fi
-if [ -n "$t25_canary" ] && [ -n "$t25_disarm" ] && [ "$t25_canary" -lt "$t25_disarm" ]; then
-  ok "T25 app_canary is invoked BEFORE disarm_dead_man (the unattended backstop spans the canary)"
+if [ -z "$t25_disarm" ]; then
+  # Never a pass on an empty extraction: a renamed or deleted call must read as NOT FOUND.
+  no "T25' disarm_dead_man host_canary_passed not found in the main body (renamed, deleted, or reason changed) — the single disarm point is unproven"
+elif [ -n "$t25_nm" ] && [ -n "$t25_cok" ] && [ -n "$t25_dstart" ] \
+  && [ "$t25_nm" -lt "$t25_disarm" ] && [ "$t25_disarm" -lt "$t25_cok" ] && [ "$t25_disarm" -lt "$t25_dstart" ] \
+  && [ "$t25_ndisarm" -eq 1 ]; then
+  ok "T25' the main body disarms EXACTLY once, after the not_mounted host-canary assert and before CANARY_OK=1 and docker start"
 else
-  no "T25 canary/disarm ordering wrong or unfindable (canary=$t25_canary disarm=$t25_disarm)"
+  no "T25' disarm placement wrong (not_mounted=$t25_nm disarm=$t25_disarm CANARY_OK=$t25_cok docker_start=$t25_dstart main-body disarms=$t25_ndisarm; want not_mounted<disarm<CANARY_OK, disarm<docker_start, exactly 1)"
 fi
-# T25b — PLACEMENT is not EXECUTION. T25's ordering grep passes even when the call is neutered
-# (`if [ false ]; then app_canary; fi` gates it OFF while keeping the token) — the exact 2026-07-20
-# failure class. The main-body app_canary is an UNCONDITIONAL sibling of resume_writers /
-# disarm_dead_man inside the one `if [ "$DRY_RUN" != "1" ]` block, so its leading whitespace must
-# EQUAL its siblings'. A wrapping conditional deepens the indent; an inline `; app_canary;` fails the
-# own-line anchor. Compare the exact indent string, not just "present".
-t25b_canary_ws="$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" 2>/dev/null | sed -n '1p' | sed -E 's/^[0-9]+:([[:space:]]*)app_canary.*/\1/' | cat -A | sed 's/\$$//')"
-t25b_disarm_ws="$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" 2>/dev/null | sed -n '1p' | sed -E 's/^[0-9]+:([[:space:]]*)disarm_dead_man.*/\1/' | cat -A | sed 's/\$$//')"
-# Also assert app_canary never appears at a DEEPER indent than the sibling in the main body (a
-# nested guard). Count main-body app_canary lines whose indent is strictly longer than the sibling.
-t25b_deeper="$(awk -v sib="$t25b_disarm_ws" '
-  /^[[:space:]]*app_canary[[:space:]]*$/ { match($0,/^[[:space:]]*/); if (RLENGTH > length(sib)) n++ }
+# T25b' — PLACEMENT is not EXECUTION. The ordering grep passes even when a call is neutered behind an
+# extra conditional (the 2026-07-20 failure class). The disarm is an UNCONDITIONAL sibling of
+# `CANARY_OK=1` inside the host-canary `if [ "$DRY_RUN" != "1" ]` block, and app_canary is an
+# unconditional sibling of resume_writers inside the docker-start block: each pair's leading
+# whitespace must be EQUAL, and neither call may appear nested deeper anywhere in the main body.
+t25_ws() {  # <ERE for the own-line call> -> the exact indent of its first main-body occurrence
+  grep -E "$1" "$T25BODY.main" 2>/dev/null | sed -n '1p' | sed -E 's/^([[:space:]]*).*/\1/' | cat -A | sed 's/\$$//'
+}
+t25b_disarm_ws="$(t25_ws '^[[:space:]]*disarm_dead_man[[:space:]]+host_canary_passed([[:space:]]|$)')"
+t25b_cok_ws="$(t25_ws '^[[:space:]]*CANARY_OK=1')"
+t25b_canary_ws="$(t25_ws '^[[:space:]]*app_canary[[:space:]]*$')"
+t25b_resume_ws="$(t25_ws '^[[:space:]]*resume_writers[[:space:]]*$')"
+t25b_deeper="$(awk -v a="$t25b_canary_ws" -v d="$t25b_disarm_ws" '
+  /^[[:space:]]*app_canary[[:space:]]*$/ { match($0,/^[[:space:]]*/); if (RLENGTH > length(a)) n++ }
+  /^[[:space:]]*disarm_dead_man[[:space:]]/ { match($0,/^[[:space:]]*/); if (RLENGTH > length(d)) n++ }
   END { print n+0 }' "$T25BODY.main" 2>/dev/null)"
-if [ -n "$t25b_canary_ws" ] && [ "$t25b_canary_ws" = "$t25b_disarm_ws" ] && [ "${t25b_deeper:-0}" -eq 0 ]; then
-  ok "T25b app_canary is an UNCONDITIONAL sibling (indent matches disarm_dead_man; never nested deeper) — a neutered canary is caught, not just a moved one"
+if [ -n "$t25b_disarm_ws" ] && [ "$t25b_disarm_ws" = "$t25b_cok_ws" ] \
+  && [ -n "$t25b_canary_ws" ] && [ "$t25b_canary_ws" = "$t25b_resume_ws" ] && [ "${t25b_deeper:-0}" -eq 0 ]; then
+  ok "T25b' the disarm is an UNCONDITIONAL sibling of CANARY_OK=1 and app_canary of resume_writers (never nested deeper) — a neutered call is caught, not just a moved one"
 else
-  no "T25b app_canary indent [$t25b_canary_ws] != sibling [$t25b_disarm_ws] or a deeper-nested occurrence exists (deeper=$t25b_deeper) — it may be gated behind an extra conditional (neutered canary)"
+  no "T25b' indent mismatch (disarm=[$t25b_disarm_ws] CANARY_OK=[$t25b_cok_ws] app_canary=[$t25b_canary_ws] resume_writers=[$t25b_resume_ws] deeper=$t25b_deeper) — a call may be gated behind an extra conditional"
+fi
+# T25c — NEGATIVE SENTINEL: no disarm_dead_man anywhere in the main body after `docker start`. A
+# SECOND disarm kept "for safety" after the app canary is exactly the pre-#9045 shape, and T25'
+# (first occurrence) cannot see it. The detector carries its own positive control on synthesized
+# bodies, so a detector that can never fire (say, one pointed at the wrong region) cannot pass.
+t25c_after() {  # <file> -> count of disarm_dead_man command lines after the first docker start "$CONTAINER"
+  awk '/^[[:space:]]*docker start "\$CONTAINER"/ { seen=1; next }
+       seen && /(^|[;&|{[:space:]])disarm_dead_man([[:space:]]|;|$)/ { n++ }
+       END { print n+0 }' "$1"
+}
+printf '%s\n' '  disarm_dead_man host_canary_passed || die "x"' '  CANARY_OK=1' '  docker start "$CONTAINER"' '  app_canary' > "$T25BODY.ctl-ok"
+printf '%s\n' '  disarm_dead_man host_canary_passed || die "x"' '  CANARY_OK=1' '  docker start "$CONTAINER"' '  app_canary' '  disarm_dead_man host_canary_passed' > "$T25BODY.ctl-bad"
+t25c_real="$(t25c_after "$T25BODY.main")"; t25c_ok="$(t25c_after "$T25BODY.ctl-ok")"; t25c_bad="$(t25c_after "$T25BODY.ctl-bad")"
+if [ -n "$t25_dstart" ] && [ "$t25c_real" -eq 0 ] && [ "$t25c_ok" -eq 0 ] && [ "$t25c_bad" -eq 1 ]; then
+  ok "T25c no disarm_dead_man follows docker start in the main body (detector control: compliant=0, planted second disarm=1)"
+else
+  no "T25c post-docker-start disarm check failed (docker_start=$t25_dstart real=$t25c_real control-ok=$t25c_ok control-bad=$t25c_bad; want real=0 ok=0 bad=1)"
+fi
+# T25d — the ARM precedes the freeze flag, on SEPARATE lines. `arm_dead_man` fails closed now (it
+# dies on a refused or unverified arm), so it must run before FREEZE_HELD=1: a refused arm then
+# aborts with nothing frozen and nothing to roll back. A same-line pair is refused outright,
+# because a line-number comparison cannot order two statements on one line.
+t25d_arm=$(grep -nE '^[[:space:]]*arm_dead_man[[:space:]]*$' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+t25d_frz=$(grep -nE '^[[:space:]]*FREEZE_HELD=1' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+t25d_same=$(grep -cE 'arm_dead_man.*FREEZE_HELD=1|FREEZE_HELD=1.*arm_dead_man' "$T25BODY.main" || true)
+if [ -n "$t25d_arm" ] && [ -n "$t25d_frz" ] && [ "$t25d_arm" -lt "$t25d_frz" ] && [ "$t25d_same" -eq 0 ]; then
+  ok "T25d arm_dead_man runs on its own line BEFORE FREEZE_HELD=1 (a refused arm aborts with nothing frozen)"
+else
+  no "T25d arm/freeze order wrong (arm=$t25d_arm FREEZE_HELD=1=$t25d_frz same-line=$t25d_same; want arm<freeze on separate lines)"
+fi
+# T36c — the GC-PROOF re-assert. A fire unmounts $MOUNT, and garbage collection can erase every
+# property disarm_dead_man reads, but it cannot hide a changed mount source. So between the host-
+# canary disarm and CANARY_OK=1 there must be a `findmnt -no SOURCE "$MOUNT"` compared against
+# $MAPPER. Searched ONLY inside that window: the earlier canary findmnt sits outside it.
+t36c_n=0
+if [ -n "$t25_disarm" ] && [ -n "$t25_cok" ] && [ "$t25_disarm" -lt "$t25_cok" ]; then
+  t36c_n=$(awk -v a="$t25_disarm" -v b="$t25_cok" 'NR>a && NR<b && /findmnt -no SOURCE "\$MOUNT"/ && /\$MAPPER/ && /deadman_fired_before_disarm/ { n++ } END { print n+0 }' "$T25BODY.main")
+fi
+[ "$t36c_n" -ge 1 ] \
+  && ok "T36c a findmnt SOURCE == \$MAPPER re-assert (deadman_fired_before_disarm) sits between the host-canary disarm and CANARY_OK=1" \
+  || no "T36c no GC-proof findmnt re-assert between the disarm (line $t25_disarm) and CANARY_OK=1 (line $t25_cok) — a fire that raced the disarm would be certified"
+# T40b — the population assert runs INSIDE the door: after not_mounted, before the disarm.
+t40_pop=$(grep -nE '^[[:space:]]*assert_host_canary_population[[:space:]]*$' "$T25BODY.main" | sed -n '1p' | cut -d: -f1 || true)
+if [ -n "$t40_pop" ] && [ -n "$t25_nm" ] && [ -n "$t25_disarm" ] && [ "$t25_nm" -lt "$t40_pop" ] && [ "$t40_pop" -lt "$t25_disarm" ]; then
+  ok "T40b the host-canary population assert runs after not_mounted and before the disarm (rollback is still lossless when it fails)"
+else
+  no "T40b population assert missing or misplaced (not_mounted=$t25_nm population=$t40_pop disarm=$t25_disarm)"
+fi
+# T39 — the arm is NOT swallowed. Over un-commented LOGICAL lines (backslash continuations folded)
+# there is exactly ONE `systemd-run --on-active` command, and it carries no `|| true`. A bare
+# `grep -c` is wrong here: comments name the command too, and the command spans many physical
+# lines. The 2026-07-23 arm was refused ("already loaded") into /dev/null and `|| true`, and
+# `result=armed` was logged anyway (#9045 H1).
+t39_logical=$(awk '{ if (buf != "") buf = buf " " $0; else buf = $0
+       if (buf ~ /\\$/) { sub(/\\$/, "", buf); next }
+       print buf; buf = "" }
+     END { if (buf != "") print buf }' "$T25BODY")
+t39_n=$(grep -cE 'systemd-run[[:space:]]+--on-active' <<<"$t39_logical" || true)
+t39_swallow=$(awk '/systemd-run[[:space:]]+--on-active/ && index($0, "|| true") { n++ } END { print n+0 }' <<<"$t39_logical")
+if [ "$t39_n" -eq 1 ] && [ "$t39_swallow" -eq 0 ]; then
+  ok "T39 exactly one systemd-run --on-active logical command, with no || true swallow"
+else
+  no "T39 systemd-run --on-active logical commands=$t39_n (want 1), swallowed=$t39_swallow (want 0)"
 fi
 # T11b/T11c — the gate strength itself: exactly 200, not any 2xx.
 run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=307
@@ -514,6 +594,277 @@ dm2="$RUN_SCRATCH/case-$CASE_N/dm"; grep -E '^systemd-run ' "$CALLS" > "$dm2" 2>
 grep -qF -- 'start extra-writer.service' "$dm2" \
   && ok "T12c dead-man derives its units from _quiesce_list (an override reaches the unattended path)" \
   || no "T12c dead-man hardcodes its units — an override is stopped but never restored unattended"
+
+# ---------------------------------------------------------------------------
+# #9045 — HARNESS SELF-TEST for the dead-man unit model. Every T30-T38 verdict below reads this
+# stub, so the stub is proven first: a `systemctl show` fake that ignored its unit operand would
+# answer the SERVICE with the timer's `waiting`, and the arm/disarm rows would then pass or fail
+# for a reason unrelated to the code under test.
+# ---------------------------------------------------------------------------
+run_case "$CUTOVER" \
+  'systemctl show workspaces-luks-deadman.service -p SubState --value; systemctl show -p SubState --value workspaces-luks-deadman.timer' \
+  '' DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting
+if [ "$CASE_OUT" = $'dead\nwaiting' ]; then
+  ok "HS1 the systemctl show stub is keyed on the UNIT (service SubState is not the timer's waiting; unit read in any argv position)"
+else
+  no "HS1 the systemctl show stub is not unit-keyed — got [$(tr '\n' '|' <<<"$CASE_OUT")], want [dead|waiting]"
+fi
+# HS2 — last event wins: a stop collects a loaded unit, a second stop exits 5 (not loaded), a later
+# systemd-run revives it, and an unset knob then answers the real just-armed shape (waiting).
+run_case "$CUTOVER" \
+  'systemctl stop workspaces-luks-deadman.timer; echo "rc1=$?"; systemctl show workspaces-luks-deadman.timer -p LoadState --value; systemctl stop workspaces-luks-deadman.timer; echo "rc2=$?"; systemd-run --on-active=1min --unit=workspaces-luks-deadman /bin/true; systemctl show workspaces-luks-deadman.timer -p SubState --value; systemctl show workspaces-luks-deadman.timer -p LastTriggerUSec' \
+  '' DEADMAN_LOADED="timer"
+if [ "$CASE_OUT" = $'rc1=0\nnot-found\nrc2=5\nwaiting\nLastTriggerUSec=' ]; then
+  ok "HS2 the GC model: stop collects (not-found), a second stop exits 5, systemd-run revives (waiting), no --value prints Prop="
+else
+  no "HS2 the dead-man GC model is wrong — got [$(tr '\n' '|' <<<"$CASE_OUT")]"
+fi
+
+# ---------------------------------------------------------------------------
+# #9045 — the dead-man ARM is verified, and fails closed. Every invocation sets DRY_RUN=0 inline:
+# the script defaults DRY_RUN=1, arm_dead_man/rollback return early under it, and sourcing resets
+# every global, so a flag set outside the invocation string would never reach the code.
+# Markers are asserted on the full SOLEUR_WORKSPACES_LUKS_DEADMAN prefix, drift as `EMIT_DRIFT <r>`.
+# ---------------------------------------------------------------------------
+DM='SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman'
+# The script's OWN mapper path, read from the script rather than hardcoded (T37/T38 compare to it).
+T_MAPPER="$(env -u WORKSPACES_MAPPER_NAME bash -c 'source "$1" >/dev/null 2>&1; printf "%s" "$MAPPER"' _ "$CUTOVER")"
+[ -n "$T_MAPPER" ] || no "T_MAPPER could not be read from the script — T37/T38 would compare against an empty mapper"
+# drift_last — the LAST drift recorded (rollback_engaged is rollback()'s last line).
+drift_last() { awk '/^EMIT_DRIFT /{l=$2} END{print l}' "$CALLS"; }
+# reads_before_umount <ERE> — how many recorded calls match <ERE> before the first ^umount.
+reads_before_umount() { RB_RE="$1" awk '/^umount[[:space:]]/{exit} $0 ~ ENVIRON["RB_RE"] {n++} END{print n+0}' "$CALLS"; }
+DM_SVC_READ='^systemctl show workspaces-luks-deadman\.service -p ActiveState --value$'
+
+# T30 — the happy path, from a FRESH host (both units not-found, so the pre-clear stop exits 5 and
+# must be tolerated). Pre-clear strictly BEFORE systemd-run; --description= set (the journal must
+# not echo the command line); the unchanged armed marker; DEADMAN_ARMED=1.
+run_case "$CUTOVER" 'DRY_RUN=0; arm_dead_man; r=$?; echo "ARMED=$DEADMAN_ARMED"; exit $r' 'arm_dead_man' \
+  DEADMAN_TIMER_SUBSTATES=waiting
+t30_stop="$(idx '^systemctl stop workspaces-luks-deadman\.timer')"
+t30_rft="$(idx '^systemctl reset-failed .*workspaces-luks-deadman\.timer')"
+t30_rfs="$(idx '^systemctl reset-failed .*workspaces-luks-deadman\.service')"
+t30_run="$(idx '^systemd-run ')"
+if ran && outF 'ARMED=1' && [ -n "$t30_stop" ] && [ -n "$t30_rft" ] && [ -n "$t30_rfs" ] && [ -n "$t30_run" ] \
+  && [ "$t30_stop" -lt "$t30_run" ] && [ "$t30_rft" -lt "$t30_run" ] && [ "$t30_rfs" -lt "$t30_run" ] \
+  && has '^systemd-run .*--description=' && markerF "$DM result=armed reason=freeze_engaged deadline_min=30"; then
+  ok "T30 arm: stale units cleared (stop tolerates exit 5, reset-failed both) BEFORE systemd-run --description=, verified waiting, result=armed"
+else
+  no "T30 arm happy path wrong (rc=$CASE_RC stop=$t30_stop rf.timer=$t30_rft rf.service=$t30_rfs run=$t30_run) ${CASE_OUT:0:240}"
+fi
+# T30b — Guard 1 harness row H2 (must PASS, non-canonical): waiting only on the SECOND verify read.
+run_case "$CUTOVER" 'DRY_RUN=0; arm_dead_man' 'arm_dead_man' DEADMAN_TIMER_SUBSTATES="dead waiting"
+if ran && markerF "$DM result=armed reason=freeze_engaged" && [ "$(cnt '^sleep 1$')" -eq 1 ]; then
+  ok "T30b a timer that reads waiting on the second poll arms (exactly one 1s poll interval)"
+else
+  no "T30b a late-waiting timer did not arm cleanly (rc=$CASE_RC sleeps=$(cnt '^sleep 1$')) ${CASE_OUT:0:200}"
+fi
+# T31 — systemd-run REFUSES (the H1 shape: a loaded failed unit). Fails closed: died, arm_failed with
+# the named reason, drift deadman_arm_failed, and NO result=armed. The refusal text is captured,
+# not discarded.
+T31_ERR="Failed to start transient timer unit: Unit workspaces-luks-deadman.service was already loaded or has a fragment file. result=armed $(printf 'x%.0s' $(seq 1 300))"$'\n''second-line-must-not-appear'
+run_case "$CUTOVER" 'DRY_RUN=0; arm_dead_man' 'arm_dead_man' SYSTEMD_RUN_RC=1 SYSTEMD_RUN_OUT="$T31_ERR"
+if died && markerF "$DM result=arm_failed reason=systemd_run_refused" && ! markerF 'result=armed' \
+  && has '^EMIT_DRIFT deadman_arm_failed$' && outF 'DIE:'; then
+  ok "T31 a refused systemd-run dies with result=arm_failed reason=systemd_run_refused + deadman_arm_failed, never result=armed"
+else
+  no "T31 a refused arm was not fail-closed (rc=$CASE_RC) — the 2026-07-23 swallow: ${CASE_OUT:0:240}"
+fi
+# T31b — detail= is SCRUBBED and LAST: first line only, <=200 chars, every `=` mapped to `_` (so the
+# refusal text `result=armed` cannot spoof a marker field), and it never reaches the Sentry reason.
+t31_detail="$(grep -oE 'reason=systemd_run_refused .*$' "$MARKER_LOG" | sed -n '1p')"
+t31_rest="${t31_detail##* detail=}"
+if [[ "$t31_detail" == *" detail="* ]] && [[ "$t31_rest" == *"already loaded"* ]] && [[ "$t31_rest" != *"="* ]] \
+  && [[ "$t31_rest" != *"second-line"* ]] && [ "${#t31_rest}" -le 200 ] && [[ "$t31_rest" == *"result_armed"* ]] \
+  && [ "$(cnt '^EMIT_DRIFT ')" -eq 1 ] && has '^EMIT_DRIFT deadman_arm_failed$'; then
+  ok "T31b detail= is last, first-line, <=200 chars, =-scrubbed (result=armed -> result_armed), and absent from the drift reason"
+else
+  no "T31b detail scrub wrong (len=${#t31_rest}) [${t31_detail:0:260}]"
+fi
+# T32 — systemd-run returns 0 but the timer NEVER reads waiting: the bounded attempt-counted poll
+# (5 reads, 4 x `sleep 1`) runs out, then it dies timer_not_waiting. No result=armed.
+run_case "$CUTOVER" 'DRY_RUN=0; arm_dead_man' 'arm_dead_man' DEADMAN_TIMER_SUBSTATES=dead
+if died && markerF "$DM result=arm_failed reason=timer_not_waiting substate=dead" && ! markerF 'result=armed' \
+  && has '^EMIT_DRIFT deadman_arm_failed$' && [ "$(cnt '^sleep 1$')" -eq 4 ]; then
+  ok "T32 an unverified arm dies timer_not_waiting after exactly 5 attempt-counted polls, never result=armed"
+else
+  no "T32 unverified arm mishandled (rc=$CASE_RC sleeps=$(cnt '^sleep 1$')) ${CASE_OUT:0:240}"
+fi
+# T32b — DEADMAN_ARMED=1 is set the moment systemd-run returns 0, BEFORE the verification, so the
+# cleanup() that a timer_not_waiting die reaches disarms the timer this run created. Nothing is
+# frozen yet, so the outcome is arm_aborted.
+run_case "$CUTOVER" 'trap cleanup EXIT; DRY_RUN=0; arm_dead_man' 'arm_dead_man cleanup disarm_dead_man' DEADMAN_TIMER_SUBSTATES=dead
+if died && { markerF "$DM result=disarmed reason=arm_aborted" || markerF "$DM result=disarm_failed reason=arm_aborted"; } \
+  && markerF "$DM result=cutover_aborted outcome=arm_aborted"; then
+  ok "T32b a failed arm verification still reaches the disarm in cleanup (disarm reason=arm_aborted, outcome=arm_aborted)"
+else
+  no "T32b the timer this run created outlives a failed arm — no arm_aborted disarm/outcome (rc=$CASE_RC) ${CASE_OUT:0:240}"
+fi
+# T33 — a LIVE dead-man is never stopped by an arm: a waiting timer belongs to an earlier run's freeze,
+# and a running service is a fire in progress. Refuse, and record neither a stop nor a systemd-run.
+for t33 in "already_armed DEADMAN_TIMER_SUBSTATES=waiting" "fire_in_progress DEADMAN_SVC_ACTIVESTATES=activating"; do
+  t33_reason="${t33%% *}"; t33_knob="${t33#* }"
+  run_case "$CUTOVER" 'DRY_RUN=0; arm_dead_man' 'arm_dead_man' DEADMAN_LOADED="timer service" "$t33_knob"
+  if died && markerF "$DM result=arm_refused reason=$t33_reason" && has '^EMIT_DRIFT deadman_already_armed$' \
+    && nhas '^systemctl stop workspaces-luks-deadman' && nhas '^systemd-run '; then
+    ok "T33 arm refuses a live dead-man ($t33_reason): no stop, no systemd-run, drift deadman_already_armed"
+  else
+    no "T33 arm did not refuse a live dead-man ($t33_reason, rc=$CASE_RC) ${CASE_OUT:0:240}"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# #9045 — the DISARM verifies itself, returns a status, and never dies.
+# ---------------------------------------------------------------------------
+# T36 — success: the four steps in race-free order — (a) LastTriggerUSec BEFORE the stop, the stop,
+# (b) the service ActiveState AFTER the stop, then reset-failed — rc 0 and DEADMAN_ARMED=0.
+run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; disarm_dead_man host_canary_passed; r=$?; echo "ARMED_AFTER=$DEADMAN_ARMED"; exit $r' \
+  'disarm_dead_man' DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting
+t36_a="$(idx '^systemctl show workspaces-luks-deadman\.timer -p LastTriggerUSec --value$')"
+t36_s="$(idx '^systemctl stop workspaces-luks-deadman\.timer')"
+t36_b="$(idx "$DM_SVC_READ")"
+t36_r="$(idx '^systemctl reset-failed ')"
+if ran && outF 'ARMED_AFTER=0' && markerF "$DM result=disarmed reason=host_canary_passed" \
+  && [ -n "$t36_a" ] && [ -n "$t36_s" ] && [ -n "$t36_b" ] && [ -n "$t36_r" ] \
+  && [ "$t36_a" -lt "$t36_s" ] && [ "$t36_s" -lt "$t36_b" ] && [ "$t36_b" -lt "$t36_r" ]; then
+  ok "T36 disarm succeeds in order LastTriggerUSec < stop < service ActiveState < reset-failed, rc 0, DEADMAN_ARMED=0"
+else
+  no "T36 disarm order/result wrong (rc=$CASE_RC a=$t36_a stop=$t36_s b=$t36_b rf=$t36_r) ${CASE_OUT:0:240}"
+fi
+# T36a — fired then collected: the timer already carries a LastTriggerUSec. Read BEFORE the stop it
+# is seen; read after, garbage collection has emptied it and a fired timer reports "disarmed".
+run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; disarm_dead_man host_canary_passed' 'disarm_dead_man' \
+  DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting DEADMAN_TIMER_LASTTRIGGER="Mon 2026-09-28 10:00:00 UTC"
+if [ "$CASE_RC" -eq 1 ] && ! undef && ! outF 'DIE:' && markerF "$DM result=disarm_failed reason=host_canary_passed check=a" \
+  && ! markerF 'result=disarmed' && has '^EMIT_DRIFT deadman_disarm_failed$'; then
+  ok "T36a a fired timer is caught by the PRE-stop LastTriggerUSec read: rc 1, check=a, no disarmed, never die"
+else
+  no "T36a a fired-then-collected timer was reported disarmed or died (rc=$CASE_RC) ${CASE_OUT:0:240}"
+fi
+# T36a twin + T36b — rollback() reaches the SAME check=a, with reason rollback_engaged, never the old
+# canary_passed.
+run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; rollback' 'rollback disarm_dead_man' \
+  DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting DEADMAN_TIMER_LASTTRIGGER="Mon 2026-09-28 10:00:00 UTC"
+markerF "$DM result=disarm_failed reason=rollback_engaged check=a" \
+  && ok "T36a' rollback() reaches the same check=a through its verifying disarm" \
+  || no "T36a' rollback() did not report the fired timer (check=a): ${CASE_OUT:0:240}"
+run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; rollback' 'rollback disarm_dead_man' \
+  DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting \
+  ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+if markerF "$DM result=disarmed reason=rollback_engaged" && ! grep -qF 'canary_passed' "$MARKER_LOG"; then
+  ok "T36b rollback()'s disarm marker reads reason=rollback_engaged, never canary_passed"
+else
+  no "T36b rollback() disarm marker reason wrong: $(grep -F 'op=workspaces-luks-deadman' "$MARKER_LOG" | tr '\n' '|')"
+fi
+# T36d — a fire that starts just BEFORE the stop is still running AFTER it. Only the post-stop read
+# (b) can see it: the service reads inactive before the stop and activating after.
+run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; disarm_dead_man host_canary_passed' 'disarm_dead_man' \
+  DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting \
+  DEADMAN_SVC_ACTIVESTATES=inactive DEADMAN_SVC_ACTIVESTATE_AFTER_STOP=activating
+if [ "$CASE_RC" -eq 1 ] && ! undef && markerF "$DM result=disarm_failed reason=host_canary_passed check=b"; then
+  ok "T36d a fire racing the stop is caught by the POST-stop service read: rc 1, check=b"
+else
+  no "T36d the post-stop service read missed a racing fire (rc=$CASE_RC) ${CASE_OUT:0:240}"
+fi
+# T35 — rollback() with an INEFFECTIVE stop (check c fails). The disarm handles the dead-man FIRST —
+# its marker precedes the first umount — and its failure does not stop the rollback halfway: the
+# plaintext remount, docker start and rollback_engaged (the last line) are all still recorded.
+run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; rollback' 'rollback disarm_dead_man' \
+  DEADMAN_LOADED="timer service" DEADMAN_TIMER_SUBSTATES=waiting DEADMAN_STOP_INEFFECTIVE=1 \
+  ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+t35_m="$(idx '^logger .*result=disarm_failed reason=rollback_engaged check=c')"; t35_u="$(idx '^umount[[:space:]]')"
+if ran && [ -n "$t35_m" ] && [ -n "$t35_u" ] && [ "$t35_m" -lt "$t35_u" ] \
+  && has '^mount /dev/disk/by-label/workspaces_plain ' && has '^docker start ' && [ "$(drift_last)" = "rollback_engaged" ]; then
+  ok "T35 rollback() disarms BEFORE any umount, and a failed disarm (check=c) never aborts it mid-way"
+else
+  no "T35 rollback() dead-man handling wrong (rc=$CASE_RC marker=$t35_m umount=$t35_u last-drift=$(drift_last)) ${CASE_OUT:0:240}"
+fi
+# T35b — nothing armed (a ROLLBACK=1 dispatch after an earlier fire): the timer stop still runs
+# (T6b), the marker is result=not_armed, and no false deadman_disarm_failed page.
+run_case "$CUTOVER" 'DRY_RUN=0; rollback' 'rollback' ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+if ran && has '^systemctl stop workspaces-luks-deadman\.timer' && markerF "$DM result=not_armed reason=rollback_engaged" \
+  && nhas '^EMIT_DRIFT deadman_disarm_failed$'; then
+  ok "T35b rollback() with nothing armed stops the timer, logs result=not_armed, and pages no disarm failure"
+else
+  no "T35b unarmed rollback wrong (rc=$CASE_RC) ${CASE_OUT:0:240}"
+fi
+# T35c — a fire IN PROGRESS: rollback() waits for the service to leave activating before it touches
+# the mount (three reads, two 3s waits), rather than unmounting under a running remount.
+run_case "$CUTOVER" 'DRY_RUN=0; rollback' 'rollback' DEADMAN_LOADED="service" \
+  DEADMAN_SVC_ACTIVESTATES="activating activating inactive" ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+if ran && [ "$(reads_before_umount "$DM_SVC_READ")" -eq 3 ] && [ "$(reads_before_umount '^sleep 3$')" -eq 2 ] && has '^umount[[:space:]]'; then
+  ok "T35c rollback() waits out a running fire (3 reads, 2 x 3s) before the first umount"
+else
+  no "T35c rollback() did not wait for the fire (reads=$(reads_before_umount "$DM_SVC_READ") sleeps=$(reads_before_umount '^sleep 3$')) ${CASE_OUT:0:200}"
+fi
+# T35d — a STUCK fire: the wait is bounded by ATTEMPTS (exactly 30 reads), then it reports
+# check=fire_stuck and proceeds — the remount the fire was performing is the same end state.
+run_case "$CUTOVER" 'DRY_RUN=0; rollback' 'rollback' DEADMAN_LOADED="service" DEADMAN_SVC_ACTIVESTATES=activating \
+  ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+if ran && [ "$(reads_before_umount "$DM_SVC_READ")" -eq 30 ] && markerF "$DM result=disarm_failed reason=rollback_engaged check=fire_stuck" \
+  && has '^umount[[:space:]]' && [ "$(drift_last)" = "rollback_engaged" ]; then
+  ok "T35d a stuck fire is waited out for exactly 30 attempts, reported check=fire_stuck, and the rollback proceeds"
+else
+  no "T35d stuck-fire wait wrong (reads=$(reads_before_umount "$DM_SVC_READ") rc=$CASE_RC) ${CASE_OUT:0:200}"
+fi
+# T40 — the host-canary POPULATION assert (user-impact review): the workspace count on the LIVE mount
+# must equal the persisted WORKSPACES_COUNT before the door closes. 2 dirs vs 3 dies with no disarm.
+run_case "$CUTOVER" 'DRY_RUN=0; mkdir -p "$WORKSPACES_MOUNT/workspaces/ws-a" "$WORKSPACES_MOUNT/workspaces/ws-b"; persist_state WORKSPACES_COUNT 3; assert_host_canary_population' \
+  'assert_host_canary_population'
+if died && has '^EMIT_DRIFT host_canary_workspace_count_mismatch$' && nhas '^logger .*result=disarm'; then
+  ok "T40 a population mismatch on \$MOUNT (2 vs persisted 3) dies host_canary_workspace_count_mismatch, before any disarm"
+else
+  no "T40 population mismatch not refused (rc=$CASE_RC) ${CASE_OUT:0:200}"
+fi
+run_case "$CUTOVER" 'DRY_RUN=0; mkdir -p "$WORKSPACES_MOUNT/workspaces/ws-a" "$WORKSPACES_MOUNT/workspaces/ws-b" "$WORKSPACES_MOUNT/workspaces/ws-c"; persist_state WORKSPACES_COUNT 3; assert_host_canary_population' \
+  'assert_host_canary_population'
+ran && nhas '^EMIT_DRIFT ' \
+  && ok "T40 (control) a matching population (3 == 3) passes the host-canary assert" \
+  || no "T40 (control) a matching population was refused (rc=$CASE_RC) ${CASE_OUT:0:200}"
+
+# ---------------------------------------------------------------------------
+# #9045 — cleanup() records ONE outcome on every non-zero exit, and rolls FORWARD after the canary.
+# Each case injects `(exit 9)` and asserts CASE_RC=9, so an injected failure cannot be confused
+# with a die inside cleanup (exit 1).
+# ---------------------------------------------------------------------------
+T37_ACT="inngest-server.service webhook.service inngest-redis.service"
+# T37 — CANARY_OK=1 on the mapper: roll FORWARD (docker start + resume_writers), never unmount.
+run_case "$CUTOVER" 'CANARY_OK=1; DRY_RUN=0; (exit 9); cleanup' 'cleanup' FINDMNT_MOUNT_SRC="$T_MAPPER" ACTIVE_UNITS="$T37_ACT"
+if [ "$CASE_RC" -eq 9 ] && ! undef && nhas '^umount[[:space:]]' && nhas '^mount[[:space:]]' && nhas '^cryptsetup close' \
+  && has '^docker start ' && has '^systemctl start webhook\.service' \
+  && markerF "$DM result=cutover_aborted outcome=post_canary_luks_retained" && has '^EMIT_DRIFT cutover_aborted_post_canary$'; then
+  ok "T37 a post-canary abort rolls FORWARD on the LUKS mount (docker start + resume_writers, no umount), outcome=post_canary_luks_retained, fatal drift"
+else
+  no "T37 post-canary cleanup wrong (rc=$CASE_RC want 9) ${CASE_OUT:0:240}"
+fi
+# T37b — the mapper re-assert FAILS: do not start the app on a wrong mount; page instead.
+run_case "$CUTOVER" 'CANARY_OK=1; DRY_RUN=0; (exit 9); cleanup' 'cleanup' FINDMNT_MOUNT_SRC=/dev/sdz9 ACTIVE_UNITS="$T37_ACT"
+if [ "$CASE_RC" -eq 9 ] && ! undef && nhas '^docker start ' && nhas '^systemctl start webhook\.service' \
+  && has '^EMIT_DRIFT cleanup_mount_not_mapper$' && has '^EMIT_DRIFT cutover_aborted_post_canary$'; then
+  ok "T37b a post-canary abort on a NON-mapper source does not roll forward (no docker start), drift cleanup_mount_not_mapper"
+else
+  no "T37b roll-forward ran on a wrong mount (rc=$CASE_RC) ${CASE_OUT:0:240}"
+fi
+# T37c — the roll-forward docker start FAILS: checked, and reported.
+run_case "$CUTOVER" 'docker() { rec "docker $*"; [ "${1:-}" = start ] && return 1; return 0; }; CANARY_OK=1; DRY_RUN=0; (exit 9); cleanup' 'cleanup' \
+  FINDMNT_MOUNT_SRC="$T_MAPPER" ACTIVE_UNITS="$T37_ACT"
+if [ "$CASE_RC" -eq 9 ] && ! undef && has '^EMIT_DRIFT cleanup_docker_start_failed$'; then
+  ok "T37c a failed roll-forward docker start emits cleanup_docker_start_failed"
+else
+  no "T37c a failed roll-forward docker start was silent (rc=$CASE_RC) ${CASE_OUT:0:200}"
+fi
+# T38 — pre-canary with the freeze held: the REAL rollback runs, and the outcome is read off the
+# post-rollback mount source — plaintext = rolled_back; the mapper or nothing = rollback_remount_failed.
+for t38 in "/dev/sdz9:rolled_back" "$T_MAPPER:rollback_remount_failed" ":rollback_remount_failed"; do
+  t38_src="${t38%%:*}"; t38_want="${t38##*:}"
+  run_case "$CUTOVER" 'FREEZE_HELD=1; CANARY_OK=0; DRY_RUN=0; (exit 9); cleanup' 'cleanup rollback' \
+    FINDMNT_MOUNT_SRC="$t38_src" ACTIVE_UNITS="$T37_ACT"
+  if [ "$CASE_RC" -eq 9 ] && ! undef && has '^umount[[:space:]]' && markerF "$DM result=cutover_aborted outcome=$t38_want"; then
+    ok "T38 a pre-canary abort rolls back and records outcome=$t38_want (post-rollback source [${t38_src:-empty}])"
+  else
+    no "T38 pre-canary outcome wrong for source [${t38_src:-empty}] (rc=$CASE_RC want outcome=$t38_want): $(grep -F 'cutover_aborted' "$MARKER_LOG" | tr '\n' '|')"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # cleanup() — the rollback decision. Replacing this guard with `if true` must NOT stay green: it
@@ -574,12 +925,15 @@ fi
   && ok "AC7b the /api/health detector still matches a bare occurrence (gate is not vacuous)" \
   || no "AC7b the /api/health detector matches nothing — the gate above cannot fail"
 
-# AC8 — the dead-man margin. The retry budget added by #6807 extends the window in which
-# app_canary can fail WITHOUT rolling back (CANARY_OK=1 is set by the host canary before it) and
-# WITHOUT reaching disarm_dead_man. On 2026-07-20 that window was 27 minutes and the timer won:
-# it remounted the plaintext volume over a healthy LUKS mount and stranded 27 minutes of sole-copy
-# writes (#6812). So the inequality is not decorative — it is the thing that keeps the retry from
-# eating the backstop.
+# AC8 — the dead-man margin. The retry budget added by #6807 made app_canary slow to fail, and on
+# 2026-07-20 the dead-man was still armed across it: a 27-minute window in which the timer won,
+# remounted the plaintext volume over a healthy LUKS mount and stranded sole-copy writes (#6812).
+# Since #9045 the dead-man is disarmed at the HOST-CANARY door, before `docker start`, so app_canary
+# no longer races the timer at all (T25'). The bound is KEPT anyway, reworded rather than deleted:
+# it now bounds the whole freeze-to-green span (pre-canary elapsed + both probes) inside the
+# dead-man window, which is the margin an operator reading the run log assumes, and it costs nothing
+# to hold. Removing it would let a future knob change (attempts 30 -> 300) grow a green run past
+# DEAD_MAN_MIN with nothing noticing.
 #
 # Every operand is EXTRACTED BY SHAPE from its own source file. Hardcoding any of them would let a
 # future knob change (attempts 30 -> 300) sail past a guard that still asserts the old arithmetic.

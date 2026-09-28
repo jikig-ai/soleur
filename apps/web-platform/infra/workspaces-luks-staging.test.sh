@@ -751,7 +751,7 @@ repoint_case() {  # <script> [env...]
   # CRYPTSETUP_DEV is required by the C13 canary's mapper->device anchor, which now runs
   # `_same_dev "$_canary_mapper_dev" "$FRESH_DEV"`; without it the happy control dies there.
   run_case "$script" \
-    'DRY_RUN=0; FRESH_DEV="$BLK"; MAPPER="$BLK"; FLIP_DONE=0; CANARY_OK=0; source "$REPOINT_BLOCK"' \
+    'DRY_RUN=0; FRESH_DEV="$BLK"; MAPPER="$BLK"; FLIP_DONE=0; CANARY_OK=0; persist_state WORKSPACES_COUNT 0; source "$REPOINT_BLOCK"' \
     'emit_drift persist_state' \
     BLK="$BLKDEV" REPOINT_BLOCK="$blk" CRYPTSETUP_DEV="$BLKDEV" "$@"
 }
