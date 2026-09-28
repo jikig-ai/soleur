@@ -9,11 +9,12 @@
 //   - router.refresh() on success (server-component parent re-fetches).
 //   - Inline error message on failure with retry.
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { humanTitle } from "@/lib/messages/action-class-copy";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 export interface TemplateAuthorizationRowProps {
   id: string;
@@ -36,31 +37,30 @@ export function TemplateAuthorizationRow({
   sendsUsed,
 }: TemplateAuthorizationRowProps) {
   const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
-  function onRevoke() {
+  // Per-row granularity is preserved: each row instance owns its hook.
+  // asyncFn never throws — failures land on the local `error` surface.
+  const { run: onRevoke, pending: isPending } = usePendingAction(async () => {
     setError(null);
-    startTransition(async () => {
-      try {
-        const res = await fetch("/api/template-authorizations/revoke", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            template_hash: templateHash,
-            reason: "founder_revoked",
-          }),
-        });
-        if (!res.ok) {
-          setError(`Failed to revoke (${res.status})`);
-          return;
-        }
-        router.refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Network error");
+    try {
+      const res = await fetch("/api/template-authorizations/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          template_hash: templateHash,
+          reason: "founder_revoked",
+        }),
+      });
+      if (!res.ok) {
+        setError(`Failed to revoke (${res.status})`);
+        return;
       }
-    });
-  }
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Network error");
+    }
+  });
 
   const sendsRemaining = Math.max(0, maxSends - sendsUsed);
   const truncatedHash = templateHash.slice(0, 12);

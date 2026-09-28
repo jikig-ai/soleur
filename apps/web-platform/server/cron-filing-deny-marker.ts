@@ -22,6 +22,7 @@
 // line 1d also counts. Runbook: betterstack-log-query.md.
 import pino from "pino";
 import {
+  issuesEndpointToken,
   filingShape,
   splitSegments,
   tokenize,
@@ -56,15 +57,18 @@ export interface CronFilingDenyMarker {
 
 // The api form's endpoint token is agent-controlled and unbounded (a 5 kB
 // `…/issues?title=…` is a valid token), so the head is the PATH ONLY — query
-// string dropped — and capped. `gh issue create` is always its three literals.
+// string and fragment dropped — and capped. The endpoint regex is the hook's
+// own endpoint finder (#9089), the same one filingShape() uses, so every
+// endpoint spelling the gate classifies — including a bare `$EP`, `$B/issues`
+// and a dot-segment path — is the one this heads.
+// `gh issue create` is always its three literals.
 const HEAD_TOKEN_MAX = 64;
-const ENDPOINT_RE = /(^|\/)repos\/[^/?]+\/[^/?]+\/issues\/?(\?[^/]*)?$/;
 
 /** The command head for one denied filing segment: `gh issue create` or `gh api <path>`. */
 function filingHead(tokens: string[], shape: "create" | "api"): string {
   if (shape === "create") return "gh issue create";
-  const endpoint = tokens.find((t) => ENDPOINT_RE.test(t)) ?? "";
-  const path = endpoint.split("?")[0].slice(0, HEAD_TOKEN_MAX);
+  const endpoint = issuesEndpointToken(tokens) ?? "";
+  const path = endpoint.split(/[?#]/)[0].slice(0, HEAD_TOKEN_MAX);
   return `gh api ${path}`;
 }
 

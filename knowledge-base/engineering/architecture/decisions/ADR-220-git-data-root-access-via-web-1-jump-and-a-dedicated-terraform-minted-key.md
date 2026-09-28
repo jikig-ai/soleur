@@ -695,3 +695,14 @@ Dated text above is not rewritten.
   (the pin present in `prd`, #8572 paging, and #8211's per-id re-erasure path, which the LUKS
   cutover runbook requires before the first flip) stand. No earlier entry is edited, and no status in D5
   changes.
+
+### 2026-09-28 (#8572): the "#8572 paging" flip precondition
+
+- **Met on #8572's merge plus a green `apply-sentry-infra.yml` and `web-platform-release.yml`.** The
+  `git-data-host-key-pin-fault` rule pages on the `pin_fault` tag (boot and replication-push pin
+  faults), and `art17-erasure-incomplete` now also re-pages per event on an unresolved issue. The
+  #8211 PR2 flip check (`pin_fault_paging_absent`, not built yet) must read the live rule's content
+  (enabled, the exact `in` set, the issue-owners email falling back to active members) and the
+  deployed release, not the rule's name; until it exists, `scripts/sentry-alert-live-fidelity.sh`'s
+  `sentry_alert live fidelity: PASS` is that read. #8211's per-id re-erasure path remains a separate, hard precondition. No earlier entry
+  is edited.

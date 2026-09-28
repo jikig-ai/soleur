@@ -6,6 +6,14 @@ import { removeGitDataRepo } from "@/server/git-data-replication";
 import { createChildLogger } from "./logger";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
+/**
+ * Sentry tag literals of the Art. 17 git-data erasure report. `sentry_alert.art17_erasure_incomplete`
+ * (infra/sentry/issue-alerts.tf) filters on exactly these two, and
+ * sentry-git-data-pin-fault-alert-op-contract.test.ts pins the rule to them (#8572).
+ */
+export const ART17_ERASURE_FEATURE = "account-delete";
+export const ART17_ERASURE_OP = "git-data-bare-repo-erasure";
+
 const log = createChildLogger("account-delete");
 
 const PAGE_SIZE = 1_000;
@@ -255,14 +263,17 @@ export async function deleteAccount(
       // pino mirror with only `feature=pino-mirror` and the tagged capture is dropped
       // (#8629), so art17_erasure_incomplete — which filters on `feature`/`op` — would
       // never see it. The status (and, for `unconfigured`, the fixed reason word) leads the
-      // message so each fault groups into its own Sentry issue: the alert fires only on
-      // first-seen / reappeared / regression, so a shared issue would let an open
-      // `remove_key_absent` issue hide a later `pin_absent`.
+      // message so each fault groups into its own Sentry issue, and a `remove_key_absent`
+      // issue can never hide a later `pin_absent`. Since #8572 the rule also re-pages per
+      // event (`event_frequency_count {1h, 0}`, throttled by its 5-minute per-issue action
+      // interval), so an open issue no longer swallows the next fault; before, it paged
+      // only on first-seen / reappeared / regression. An archived or ignored issue fires
+      // no trigger at all, so these issues are resolved after the sweep, never archived.
       const reason =
         outcome.status === "unconfigured" ? /^([a-z_]+): /.exec(outcome.detail)?.[1] : undefined;
       reportSilentFallback(null, {
-        feature: "account-delete",
-        op: "git-data-bare-repo-erasure",
+        feature: ART17_ERASURE_FEATURE,
+        op: ART17_ERASURE_OP,
         tags: { erasure_outcome: outcome.status, ...(reason ? { erasure_reason: reason } : {}) },
         extra: {
           userId,
@@ -297,8 +308,8 @@ export async function deleteAccount(
     // here are pre-dial (`refusing unsafe workspace_id`, `GIT_DATA_SSH_HOST is unset in
     // production`), so the host was not reached.
     reportSilentFallback(null, {
-      feature: "account-delete",
-      op: "git-data-bare-repo-erasure",
+      feature: ART17_ERASURE_FEATURE,
+      op: ART17_ERASURE_OP,
       tags: { erasure_outcome: "threw" },
       extra: { userId, gitDataRepoId: userId, errorName: err instanceof Error ? err.name : typeof err },
       message:

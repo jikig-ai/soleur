@@ -442,7 +442,7 @@ helper itself errors.
 
 | Hook | Denies | Rule IDs emitted |
 |---|---|---|
-| `guardrails.sh` | 6 | `guardrails-block-commit-on-main`, `guardrails-block-rm-rf-worktrees`, `guardrails-block-delete-branch`, `guardrails-block-conflict-markers`, `guardrails-require-milestone`, `hr-never-git-stash-in-worktrees` |
+| `guardrails.sh` | 7 | `guardrails-block-commit-on-main`, `guardrails-block-rm-rf-worktrees`, `guardrails-block-delete-branch`, `guardrails-block-conflict-markers`, `guardrails-require-milestone`, `guardrails-filing-lexer-failure`, `hr-never-git-stash-in-worktrees` |
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
 | `pkill-self-match-guard.sh` | 2 | `pkill-self-match-guard-readonly` (the `-f` arm emits none) |

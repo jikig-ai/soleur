@@ -164,6 +164,13 @@
       {
         "comparison": true,
         "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
       }
     ],
     "triggerLogicType": "any-short"
@@ -937,6 +944,59 @@
     ],
     "triggerLogicType": "single"
   },
+  "git-data-host-key-pin-fault": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "pin_fault",
+              "match": "in",
+              "value": "host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 240,
+    "name": "git-data-host-key-pin-fault",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "github-webhook-founder-ambiguous": {
     "actionFilters": [
       {
@@ -990,6 +1050,47 @@
       }
     ],
     "triggerLogicType": "any-short"
+  },
+  "image-freshness-mismatch": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "image-freshness"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 28,
+    "name": "image-freshness-mismatch",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
   },
   "inbox-action-required-notify-failure": {
     "actionFilters": [
