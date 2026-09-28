@@ -780,7 +780,7 @@ p=sys.argv[1]; s=open(p).read()
 # pull runs as `& wait` so a TERM can interrupt it, and the miss phone-home carries attempt=.
 EMIT="          soleur-boot-emit inngest_pull_fatal fatal \"rc=$zot_rc\" || true\n"
 EXIT="          exit \"$zot_rc\"\n"
-PH="          /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss ep=$ZOT_EP rc=$zot_rc tries=$zot_try attempt=$attempt tail=$zot_tail\" || true\n"
+PH="          /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal \"zot miss ep=$ZOT_EP rc=$zot_rc tries=$zot_try attempt=$attempt iid=$IID tail=$zot_tail\" || true\n"
 # The whole retry loop, as ONE string (adjacent literals concatenate); FOR is its first line.
 LOOP=("        for zot_try in 1 2 3; do\n"
       "          timeout 180 docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1 &\n"

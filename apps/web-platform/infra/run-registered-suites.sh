@@ -64,8 +64,8 @@
 # only plugin-seed skips unconditionally, relying on the workflow assert step
 # ordered before it below. The skip is NOT visible
 # through this runner: the executor below captures each suite's output to a per-run log dir and
-# prints `PASS`, so a docker-less laptop reports PASS for all five — for the first two while
-# neither asserts anything (~50-65s of coverage, silently absent), and for the three partial
+# prints `PASS`, so a docker-less laptop reports PASS for all six — for the first two while
+# neither asserts anything (~50-65s of coverage, silently absent), and for the four partial
 # declines while their docker arms never adjudicate. (An earlier version of this paragraph
 # called it a "visible SKIP", which was false in the one file where it mattered most.)
 #
@@ -82,9 +82,11 @@
 # That is deliberate for local DX, and it is why CI does NOT rely on the skip:
 # infra-validation.yml has a separate `docker info` assertion step that reds the job when the
 # daemon is absent, rather than letting any suite pass vacuously. That step must stay
-# ORDERED BEFORE all five consumers — today it precedes plugin-seed, and
-# git-data-runcmd-rehearsal, git-data-cutover-access, git-data-ownership, and
-# zot-config-deadlines are all later in the same job, so all five are covered. That ordering
+# ORDERED BEFORE all six consumers — today it precedes plugin-seed, and
+# git-data-runcmd-rehearsal, git-data-cutover-access, git-data-ownership,
+# zot-config-deadlines and cloud-init-inngest-provision-unit (all glob-derived, run by the
+# "Run registered infra suites" leg step that follows the assert) are later in the same job, so
+# all six are covered. That ordering
 # is the invariant; it is not self-evident from either step. If you are debugging why a
 # docker-dependent regression reproduced in CI but not locally, this is the reason.
 #

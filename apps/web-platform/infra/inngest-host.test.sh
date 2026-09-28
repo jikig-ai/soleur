@@ -428,7 +428,8 @@ grep -qE 'vector_sha256[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$VECTOR_TF" \
   && grep -qE 'vector_sha256_arm64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"' "$VECTOR_TF" \
   && grep -qF 'VECTOR_CLI_SHA256=${vector_sha256}' "$CLOUD_INIT" \
   && grep -qF 'VECTOR_CLI_ARCH=${inngest_cli_arch}' "$CLOUD_INIT" \
-  && grep -qF 'docker cp "$cid:/vector.toml" /tmp/vector.toml' "$CLOUD_INIT" \
+  && grep -qE '^[[:space:]]*STAGED="[^"]*(^|[" ])vector\.toml([" ]|$)' "$CLOUD_INIT" \
+  && grep -qF 'for _f in $STAGED; do docker cp "$cid:/$_f" "/tmp/$_f" 2>/dev/null || true; done' "$CLOUD_INIT" \
   && pass || fail "Vector wired dual-arch — amd64+arm64 SHA locals + arch-matched cloud-init override + VECTOR_CLI_ARCH derived + /tmp/vector.toml staged"
 # The DEFERRED empty VECTOR_CLI_* form must be GONE (would skip the install).
 if grep -qE 'VECTOR_CLI_VERSION=""|"VECTOR_CLI_VERSION="' "$CLOUD_INIT"; then
@@ -629,6 +630,10 @@ grep -qE '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.
 # static allowlist misses). The gate block runs from `DEDICATED_FLIP=0` to its `then`.
 # Anchor on the INNER flip-gate `if [[ -f /tmp/inngest-cutover-flip.sh ...` (NOT the outer
 # DOPPLER_PROJECT `if`, whose `then` would end the capture before the -f tests).
+# The ONE staging list (#8562 review), read from its single assignment in the provision script.
+STAGED_LIST="$(sed -n 's/^[[:space:]]*STAGED="\([^"]*\)"$/\1/p' "$CLOUD_INIT")"
+[ "$(grep -cE '^[[:space:]]*STAGED="' "$CLOUD_INIT")" = 1 ] && [ -n "$STAGED_LIST" ] \
+  && pass || fail "cloud-init-inngest.yml must assign the STAGED asset list exactly once (#8562)"
 GATE_BLOCK="$(awk '/if \[\[ -f \/tmp\/inngest-cutover-flip\.sh/{i=1} i{print} i&&/then$/{exit}' "$BOOTSTRAP")"
 mapfile -t FLIP_REQUIRED < <(printf '%s\n' "$GATE_BLOCK" | grep -oE '/tmp/inngest-[a-z-]+\.[a-z]+' | sed 's#^/tmp/##' | sort -u)
 [[ "${#FLIP_REQUIRED[@]}" -ge 4 ]] \
@@ -640,15 +645,18 @@ for asset in "${FLIP_REQUIRED[@]}"; do
   # `2>/dev/null || true`, and silently skips staging — the exact silent-skip class this fix
   # exists to prevent. A `[^ ]*:/asset` match would pass on the typo'd container.
   # #8562: the container is addressed by the ID `docker create` returned (`$cid`), not by its
-  # fixed name, so a SIGKILLed attempt's leftover container can never be the source. The pin moves
-  # with it: the source must be exactly "$cid", and $cid must be bound (below) to the create of
-  # the pinned extract container — a typo'd variable fails here exactly as a typo'd name did.
-  if grep -qE "docker cp \"\\\$cid:/${asset//./\\.}\" /tmp/${asset//./\\.}" "$CLOUD_INIT"; then
+  # fixed name, so a SIGKILLed attempt's leftover container can never be the source; and (review)
+  # every staged asset is copied by ONE loop over ONE list, $STAGED, which also drives the
+  # per-attempt stale-file rm — so the asset must be a WORD of that list (a substring would let
+  # `inngest-cutover-flip.shx` satisfy it), and the loop line below must copy from "$cid".
+  if [[ " $STAGED_LIST " == *" ${asset} "* ]]; then
     pass
   else
-    fail "cloud-init-inngest.yml must 'docker cp \"\$cid:/${asset}\" /tmp/${asset}' — bootstrap's install-gate requires it at /tmp; without the cp DEDICATED_FLIP=0 and the flip timer never installs (#6178)"
+    fail "cloud-init-inngest.yml's STAGED list must name ${asset} — the provision script docker-cps every STAGED asset to /tmp; bootstrap's install-gate requires it there; without it DEDICATED_FLIP=0 and the flip timer never installs (#6178)"
   fi
 done
+grep -qF 'for _f in $STAGED; do docker cp "$cid:/$_f" "/tmp/$_f" 2>/dev/null || true; done' "$CLOUD_INIT" \
+  && pass || fail "cloud-init-inngest.yml must copy every STAGED asset with the one loop 'for _f in \$STAGED; do docker cp \"\$cid:/\$_f\" \"/tmp/\$_f\" …' (#8562)"
 # ...and $cid is the ID of the pinned extract container, bound exactly once.
 [ "$(grep -cE '^[[:space:]]*cid="\$\(docker create --name soleur-inngest-bootstrap-extract "\$IREF"\)"$' "$CLOUD_INIT")" = 1 ] \
   && pass || fail "cloud-init-inngest.yml must bind cid=\"\$(docker create --name soleur-inngest-bootstrap-extract \"\$IREF\")\" exactly once — every docker cp source is that ID (#8562)"
@@ -659,7 +667,7 @@ grep -qE 'inngest-boot-phone-home\.sh flip-assets-(staged|MISSING)' "$CLOUD_INIT
 
 # ANTI-VACUITY FLOOR. Reported by printf + exit, never through fail()/pass(), so neutering those
 # cannot disarm it. The bound is the exact passing count; raise it with every added assertion.
-INNGEST_HOST_MIN_ASSERTIONS=83
+INNGEST_HOST_MIN_ASSERTIONS=85
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1

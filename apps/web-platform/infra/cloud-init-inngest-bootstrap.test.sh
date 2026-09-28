@@ -1629,7 +1629,10 @@ def expand(t):
             q = UNIT_EXEC.get(m.group(2), "")
             if q in SCRIPTS and q not in seen:
                 seen.add(q)
-                body.append(SCRIPTS[q])
+                # The unit's own reboot-path NIC re-check (it calls the helper only when the address
+                # is absent) is the UNIT's wait, not a runcmd call site: rows 1/4/5 are about runcmd.
+                body.append("\n".join(x for x in SCRIPTS[q].split("\n")
+                                      if not re.search(r"(^|[\s;&|(])/usr/local/bin/soleur-inngest-nic-wait(\s|$)", x)))
     return "\n".join(body)
 BOOTN = len(d.get("bootcmd") or [])
 items = [expand(text(x)) for x in (d.get("bootcmd") or [])] + [expand(text(x)) for x in rc]
@@ -1951,6 +1954,10 @@ esac
 exit 0
 STUB
   printf '#!/bin/sh\nexit 0\n' > "$G4_FX/bin/inngest-bs-token-restage.sh"
+  # #8562 review: the script re-checks the private address before the zot login (the reboot path
+  # has no runcmd NIC wait). Present here, so the helper is never called and the pull arms run.
+  printf '#!/bin/sh\nprintf "3: enp7s0    inet 10.0.1.40/32 scope global enp7s0\\n"\n' > "$G4_FX/bin/ip"
+  printf '#!/bin/sh\nexit 0\n' > "$G4_FX/bin/soleur-inngest-nic-wait"
   chmod +x "$G4_FX/bin/"*
   # g4_run <scenario> <endpoint> <pull rc list> <phone-home stage that fails, or ''>; echoes the
   # rc. env -i: the item sources files and reads variables; nothing from this shell may leak in.
