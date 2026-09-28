@@ -24,6 +24,8 @@
 # Usage:
 #   zot-image-oci-archive.sh build  <out.tar>   fetch D + blobs anonymously from ghcr.io, verify
 #                                               every digest, write the archive, print C= / T=
+#   zot-image-oci-archive.sh names              print D= VERSION= LOCAL_REF= TAG= ASSET= from the pin
+#                                               (no network, no writes)
 #   zot-image-oci-archive.sh verify <in.tar>    content check of an existing archive against D:
 #                                               exact member set, every blob hashes to its name,
 #                                               index.json -> D, manifest.json agrees with D
@@ -68,7 +70,9 @@ REPO="${REF#ghcr.io/}"; REPO="${REPO%%:*}"
 VERSION="${REF##*:v}"; VERSION="v${VERSION%%@*}"
 D="${REF##*@sha256:}"
 LOCAL_REF="${LOCAL_REPO}:${VERSION}"
-# Release naming, derived ONCE here (the publish workflow and, in PR 2b, zot-registry.tf consume it).
+# Release naming, derived ONCE in bash here: the publish workflow and registry-replace-preflight.sh
+# (P6, --print-asset, --check-asset; via the `names` mode below) consume it. zot-registry.tf's
+# zot-mirror locals derive the same names in HCL; zot-image-fetch.test.sh pins the two equal.
 # The tag carries D's 12-hex prefix: this repo's releases are IMMUTABLE once published, so a re-tagged
 # upstream version (same version, new digest) must land under a NEW tag rather than collide forever.
 TAG="zot-image-${VERSION}-${D:0:12}"
@@ -162,7 +166,9 @@ verify() {
 }
 
 case "${1:-}" in
+  names)  [[ $# -eq 1 ]] || die 2 "usage: $0 names"
+          printf 'D=%s\nVERSION=%s\nLOCAL_REF=%s\nTAG=%s\nASSET=%s\n' "$D" "$VERSION" "$LOCAL_REF" "$TAG" "$ASSET" ;;
   build)  [[ $# -eq 2 ]] || die 2 "usage: $0 build <out.tar>";  build "$2" ;;
   verify) [[ $# -eq 2 ]] || die 2 "usage: $0 verify <in.tar>"; verify "$2" ;;
-  *) die 2 "usage: $0 {build <out.tar>|verify <in.tar>}" ;;
+  *) die 2 "usage: $0 {names|build <out.tar>|verify <in.tar>}" ;;
 esac

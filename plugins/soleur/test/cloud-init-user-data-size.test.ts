@@ -242,7 +242,12 @@ const GIT_DATA_FLOOR = 3_000;
 // the floor is set below that and the budget well under the cap. This host is `count`-gated
 // (local.grok_dogfood_enabled) and usually absent from the plan — which is exactly why a size
 // defect here would sit unnoticed until someone enabled it.
-const REGISTRY_GZIP_BUDGET = 20_000;
+// (#8714 5.3b-iii, ADR-185 amendment 2026-09-28) 20_000 -> 21_000. The registry host now carries the
+// zot boot-image fetch-and-verify step; measured 20,408 B stored (terraform base64gzip,
+// registry-userdata-budget.sh), so this leaves 592 B of slack (a ~1.5 KB re-inlining still trips it)
+// and ~11.8 KB below HETZNER_CAP. The 8,000 B headroom POLICY is unchanged; above 24,767 is a policy
+// change needing its own ADR.
+const REGISTRY_GZIP_BUDGET = 21_000;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
 const GROK_DOGFOOD_GZIP_FLOOR = 500;
