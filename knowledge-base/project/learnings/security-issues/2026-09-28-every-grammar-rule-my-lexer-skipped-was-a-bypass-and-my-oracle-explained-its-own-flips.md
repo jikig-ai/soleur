@@ -84,6 +84,9 @@ the POST, so every endpoint-form row read "no filing" and the endpoint axis was 
 15. **`pgrep -f` blocked by the self-match hook** — Recovery: `pgrep lefthook`. — Prevention: covered by the hook.
 16. **review/SKILL.md edit 34 bytes over its body budget** — Recovery: tightened the text. — Prevention: covered by `lint-skill-body-budget`; that file sits ~60 bytes under its ceiling, so any addition must be offset.
 17. **31 review findings, ~12 of them unmodelled bash grammar** — Recovery: fixed inline. — Prevention: the Key Insight above; routed to plan sharp-edges.
+18. **Ship advisor found a fail-open after the 11-seat review** — a tripped lexer bound plus a computed word (`$'\x69ssue'`, `is$(:)sue`) was allowed, because the text indicator cannot decode what only the lexer decodes. — Recovery: a defeated lexer asks on any command; four rows, all red with the fix removed. — Prevention: a fallback taken BECAUSE the precise parser failed must not be gated on a weaker parser's verdict; when a precise check is defeated, fail toward the safe decision unconditionally.
+19. **CI red on `test-no-at-mention-credfile-footgun`** — fixtures used `@/tmp/…` to model an unreadable `-F body=@file`. — Recovery: `@/nonexistent-soleur/…`. — Prevention: a repo-global ratchet references no changed file, so file-selected suites never pick it; before pushing hook fixtures, grep new rows for `@` followed by a filesystem root.
+20. **CI red on `rename-guard` after a conflict-resolution sync** — the first-parent scan of the merge re-attributed main's #9120 file to this PR. — Recovery: a `Rename-Allowed-By:` trailer commit (#9120's own precedent). — Prevention: tracked class #9028; after any sync merge, run `rename-guard.sh` locally with `BASE_SHA=origin/main` before re-queueing.
 
 ## Related
 
