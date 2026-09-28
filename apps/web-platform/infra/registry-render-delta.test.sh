@@ -59,22 +59,26 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_LOG"
+# Every refusal ALSO lands in $STUB_ERR: the gate discards gh's stderr (`2>/dev/null`), so a
+# refusal visible only on stderr would be swallowed and the row would pass for the wrong reason.
+refuse() { printf 'stub: %s\n' "$*" | tee -a "$STUB_ERR" >&2; exit 64; }
 case " $* " in
   *" run list "*) printf '%s\n' "$STUB_WATERMARK"; exit 0 ;;
   *"/compare/"*)
-    case " $* " in *"/compare/${STUB_WATERMARK}...${STUB_AFTER} "*) ;; *) echo "stub: compare for an unexpected range: $*" >&2; exit 64 ;; esac
+    case " $* " in *"/compare/${STUB_WATERMARK}...${STUB_AFTER} "*) ;; *) refuse "compare for an unexpected range: $*" ;; esac
     printf '%s' "$STUB_COMPARE"; exit 0 ;;
   *"/contents/"*)
     url=""; for a in "$@"; do case "$a" in *"/contents/"*) url="$a" ;; esac; done
     p="${url#*/contents/}"; ref="${p##*\?ref=}"; p="${p%%\?ref=*}"
-    [[ "$ref" == "$STUB_WATERMARK" ]] || { echo "stub: contents read for unexpected ref '$ref'" >&2; exit 64; }
+    [[ "$ref" == "$STUB_WATERMARK" ]] || refuse "contents read for unexpected ref '$ref'"
+    # A modelled API failure (G12) is NOT a refusal: the gate asked the right question.
+    [[ -n "${STUB_CONTENTS_FAIL:-}" ]] && { echo "HTTP 502: Bad Gateway" >&2; exit 1; }
     f="$STUB_BEFORE/$p"
-    [[ -f "$f" ]] || { echo "stub: no BEFORE fixture for $p" >&2; exit 64; }
+    [[ -f "$f" ]] || refuse "no BEFORE fixture for $p"
     # The real API wraps base64 at 60 columns; the gate pipes `.content` through `base64 -d`.
     base64 -w 60 "$f"; exit 0 ;;
 esac
-echo "stub: unrouted gh call: $*" >&2
-exit 64
+refuse "unrouted gh call: $*"
 STUB
 chmod +x "$TMP/bin/gh"
 
@@ -104,17 +108,18 @@ compare_of() {  # filenames... -> compare JSON
 }
 # The Actions default shell for a `run:` with no `shell:` key.
 run_gate() {  # extra env assignments... ; uses $COMPARE
-  : > "$TMP/out"; : > "$TMP/gh.log"
-  ( cd "$SB" && env PATH="$TMP/bin:${GATE_PATH:-$PATH}" GH_LOG="$TMP/gh.log" \
+  : > "$TMP/out"; : > "$TMP/gh.log"; : > "$TMP/stub.err"
+  ( cd "$SB" && env PATH="$TMP/bin:${GATE_PATH:-$PATH}" GH_LOG="$TMP/gh.log" STUB_ERR="$TMP/stub.err" \
       STUB_WATERMARK="$W" STUB_AFTER="$A" STUB_COMPARE="$COMPARE" STUB_BEFORE="$BF" \
       GITHUB_OUTPUT="$TMP/out" GITHUB_REPOSITORY=jikig-ai/soleur GH_TOKEN=x \
       EVENT_NAME=push AFTER_SHA="$A" CFG="$CFG_REL" SELF=registry-host-replace-dispatch.yml "$@" \
       bash --noprofile --norc -eo pipefail "$TMP/gate.sh" > "$TMP/log" 2>&1 ); RC=$?
-  if grep -q '^stub: ' "$TMP/log"; then
-    HARN=$((HARN+1)); fail "harness: the gate made a request the stub did not expect: $(grep -m1 '^stub: ' "$TMP/log")"
+  if [[ -s "$TMP/stub.err" ]]; then
+    HARN=$((HARN+1)); fail "harness: the gate made a request the stub did not expect: $(head -1 "$TMP/stub.err")"
   fi
 }
 out() { sed -n "s/^$1=//p" "$TMP/out" | tail -1; }
+fetched() { grep -qF "contents/$1?ref=$W" "$TMP/gh.log"; }
 # A PATH with every directory holding a `terraform` removed (the G8 / G3 arms).
 NO_TF_PATH=""
 IFS=: read -ra _pp <<<"$PATH"
@@ -135,6 +140,7 @@ mutate "$BF/$TF_REL" "s.replace('$ZOT_AMD64_DIGEST', '$OTHER_HEX')"
 COMPARE="$(compare_of "$TF_REL")"; run_gate
 [[ "$RC" -eq 0 && "$(out deliver)" == "true" ]] && pass "G1: a zot digest bump alone (template unchanged) delivers" || fail "G1: rc=$RC deliver=$(out deliver) — $(tail -2 "$TMP/log" | tr '\n' ' ')"
 [[ "$(out render_changed)" == "true" ]] && pass "G1: render_changed=true is emitted for the consumers" || fail "G1: render_changed=$(out render_changed)"
+fetched "$CFG_REL" && fetched "$TF_REL" && [[ "$(out why)" == *"rendered user_data differs"* ]] && pass "G1: both inputs read AT THE WATERMARK and the render diff (not a fallback) decided" || fail "G1: why=$(out why) fetched=$(grep -c contents/ "$TMP/gh.log")"
 
 # G1b — a second render input changed after a compliant first (a comment-only template edit)
 # must not mask the digest bump.
@@ -163,6 +169,12 @@ mutate "$BF/$VARS_REL" "re.sub(r'(variable \"registry_server_type\" \\{.*?\n  de
 COMPARE="$(compare_of "$VARS_REL")"; run_gate
 [[ "$RC" -eq 0 && "$(out deliver)" == "true" ]] && pass "G4: registry_server_type change delivers" || fail "G4: rc=$RC deliver=$(out deliver)"
 
+# G4d — registry_location differs (a new store volume, whose id the render stubs).
+reset_trees
+mutate "$BF/$VARS_REL" "re.sub(r'(variable \"registry_location\" \\{.*?\n  default\\s*=\\s*)\"hel1\"', r'\\1\"fsn1\"', s, count=1, flags=re.S)"
+COMPARE="$(compare_of "$VARS_REL")"; run_gate
+[[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out why)" == *"registry_location fsn1 -> hel1"* ]] && pass "G4d: registry_location change delivers" || fail "G4d: rc=$RC deliver=$(out deliver) why=$(out why)"
+
 # G4b — registry_server_type unreadable on one side: fail toward delivering.
 reset_trees
 mutate "$BF/$VARS_REL" "re.sub(r'(variable \"registry_server_type\" \\{.*?\n)  default = \"cpx22\"\n', r'\\1', s, count=1, flags=re.S)"
@@ -190,7 +202,53 @@ COMPARE="$(compare_of "$TF_REL")"; run_gate
 reset_trees
 mutate "$BF/$TF_REL" "s.replace('$DOPPLER_AMD64', '$OTHER_HEX')"
 COMPARE="$(compare_of "$TF_REL")"; run_gate
-[[ "$RC" -eq 0 && "$(out deliver)" == "true" ]] && pass "G5b: doppler_sha256 bump alone delivers (read from the .tf, not a stub copy)" || fail "G5b: rc=$RC deliver=$(out deliver)"
+[[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out why)" == *"rendered user_data differs"* ]] && pass "G5b: doppler_sha256 bump alone delivers via the render (read from the .tf, not a stub copy)" || fail "G5b: rc=$RC deliver=$(out deliver) why=$(out why)"
+
+# G5c — every OTHER zot-registry.tf literal the budget script now reads: a watermark with a
+# different value must render differently. One row per literal (a stub copy of any of them would
+# make its bump invisible).
+for lit in 'registry_private_ip = "10.0.1.30"|registry_private_ip = "10.0.1.99"' \
+           'zot_pull_user = "zot-pull"|zot_pull_user = "zot-pulx"' \
+           'betterstack_logs_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"|betterstack_logs_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/x/"' \
+           'registry_host_reserve_mb = 1024|registry_host_reserve_mb = 1000'; do
+  reset_trees
+  mutate "$BF/$TF_REL" "s.replace('${lit%%|*}', '${lit#*|}', 1)"
+  COMPARE="$(compare_of "$TF_REL")"; run_gate
+  [[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out why)" == *"rendered user_data differs"* ]] && pass "G5c: ${lit%% =*} bump alone renders differently and delivers" || fail "G5c: ${lit%% =*}: rc=$RC deliver=$(out deliver) why=$(out why)"
+done
+
+# G9 — a REAL (non-comment) template edit, template only: delivers through the render.
+reset_trees
+mutate "$BF/$CFG_REL" "s.replace('#cloud-config\n', '#cloud-config\nx-g9-watermark-only: 1\n', 1)"
+COMPARE="$(compare_of "$CFG_REL")"; run_gate
+[[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out why)" == *"rendered user_data differs"* ]] && fetched "$CFG_REL" && pass "G9: a host-visible template edit alone delivers" || fail "G9: rc=$RC deliver=$(out deliver) why=$(out why)"
+
+# G10 — a derivation-local EXPRESSION change the offline render cannot see (the cap formula; the
+# render stubs the catalog memory): delivers on the wiring compare.
+reset_trees
+mutate "$SB/$TF_REL" "s.replace('* 1024 - local.registry_host_reserve_mb\n', '* 1024 - local.registry_host_reserve_mb - 512\n', 1)"
+COMPARE="$(compare_of "$TF_REL")"; run_gate
+[[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out why)" == *"wiring"* ]] && pass "G10: a user_data wiring/derivation change the render stubs delivers" || fail "G10: rc=$RC deliver=$(out deliver) why=$(out why)"
+
+# G11 — a resource the host is built from (the store volume) changed: delivers.
+reset_trees
+mutate "$BF/$TF_REL" "re.sub(r'(resource \"hcloud_volume\" \"registry\" \\{\n(?:.*\n)*?)(\\s*size\\s*=\\s*)', r'\\1\\2 1 + ', s, count=1)"
+COMPARE="$(compare_of "$TF_REL")"; run_gate
+[[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out why)" == *"resource the host is built from"* ]] && pass "G11: a change to hcloud_volume.registry delivers" || fail "G11: rc=$RC deliver=$(out deliver) why=$(out why)"
+
+# G12 — the watermark revision cannot be read (API failure after retries): REFUSE, never
+# deliver on a blip and never skip.
+reset_trees
+mutate "$BF/$TF_REL" "s.replace('$ZOT_AMD64_DIGEST', '$OTHER_HEX')"
+COMPARE="$(compare_of "$TF_REL")"; run_gate STUB_CONTENTS_FAIL=1
+[[ "$RC" -ne 0 && -z "$(out deliver)" ]] && grep -q '::error::could not read' "$TMP/log" && pass "G12: an unreadable watermark revision is a refusal (no deliver decision at all)" || fail "G12: rc=$RC deliver=$(out deliver)"
+
+# G13 — comments and a terraform-fmt realignment inside a watched resource block: no delivery
+# (must-PASS, non-canonical input).
+reset_trees
+mutate "$BF/$TF_REL" "re.sub(r'(resource \"hcloud_server\" \"registry\" \\{\n)', r'\\1  # rationale-only line (G13)\n', s, count=1).replace('  zot_pull_user = \"zot-pull\"', '  zot_pull_user   = \"zot-pull\"', 1)"
+COMPARE="$(compare_of "$TF_REL")"; run_gate
+[[ "$RC" -eq 0 && "$(out deliver)" == "false" ]] && pass "G13: comment + fmt-only edits in watched blocks -> deliver=false" || fail "G13: rc=$RC deliver=$(out deliver) why=$(out why)"
 
 # G6 — the AFTER render is unmeasurable (pin removed): refuse; never replace blind.
 reset_trees
@@ -246,8 +304,8 @@ if [[ "$PASS" -ne $((_cp+1)) || "$FAIL" -ne $((_cf+1)) || "${#FAILURES[@]}" -ne 
 fi
 FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
 # EQUALITY, not a floor: adding a row must move this literal.
-if [[ "$((PASS + FAIL - HARN))" -ne 18 ]]; then
-  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 18 are expected (fix the dispatch, do not edit the literal to match).\n' "$((PASS + FAIL - HARN))" >&2
+if [[ "$((PASS + FAIL - HARN))" -ne 29 ]]; then
+  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 29 are expected (fix the dispatch, do not edit the literal to match).\n' "$((PASS + FAIL - HARN))" >&2
   exit 1
 fi
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="

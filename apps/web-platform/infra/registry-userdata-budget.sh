@@ -26,15 +26,14 @@
 # would require Doppler prd_terraform and would be unrunnable on a fork PR. Stub LENGTHS
 # are what a size check needs, and each stub is a length UPPER BOUND on its real value.
 #
-# Nine of the twelve are byte-identical copies of the real literal, so the bound is exact. The
-# other three were asserted rather than checked until #7299's review: `doppler_token` stubs the
-# config slug as `prd_registry` where the real slug is `prd` (+9 B of slack); `registry_volume_id`
-# is 9 digits, matching every live hcloud volume id in-repo; and the two heartbeat URLs stub a
-# 64-char token, widened from 24 because the real Better Stack token length is NOT derivable from
-# anything in this repo (every in-tree sample is synthetic or redacted) — 64 exceeds any plausible
-# value, so the bound is true by construction instead of by belief. `zot_memory_cap_mb` (4 digits
-# at 8 GB, 5 at 16 GB) and the amd64-only `zot_image` read are exact only while those shapes hold;
-# both are single-byte effects against ~23 kB of headroom.
+# (#7582) Every map value that is a LITERAL in zot-registry.tf (zot_image, doppler_sha256, the
+# two users, the private IP, the ingest URL, the memory reserve) is READ from the .tf, never
+# copied, because registry-host-replace-dispatch.yml renders this script at two SHAs and a stub
+# copy made a bump to that value render identical. What stays stubbed is what an offline render
+# cannot know: the volume id, the Doppler service-token key and the two heartbeat URLs (resource
+# attributes, each a length upper bound on its real value), the cgroup cap's catalog memory
+# (4096 MB, the cpx22 shape) and the arch (amd64). The dispatcher compares registry_server_type
+# by value and those resource blocks by text for exactly that reason.
 # (Technique mirrored from git-data-userdata-budget.sh, which documents it at length.)
 #
 # `zot_image` is NOT stubbed — it is read from zot-registry.tf, because the pin's own
@@ -45,7 +44,7 @@
 # measurement is worse than none.
 #
 # Exit 0 under cap, 1 over, 2 UNMEASURABLE. Exit 2 covers: terraform absent in CI; the zot pin
-# unreadable; the strip declaration absent, duplicated, not a slash-delimited literal, missing
+# unreadable; a read zot-registry.tf literal absent or not in its exact shape (#7582); the strip declaration absent, duplicated, not a slash-delimited literal, missing
 # `(?m)` or missing `^`; the strip not APPLIED at hcloud_server.registry.user_data; the render or
 # base64gzip failing; a stored payload below the 4,000 B plausibility floor; or `#cloud-config`
 # not surviving the strip.
@@ -94,14 +93,18 @@ ZOT_IMAGE="$(grep -oE '^[[:space:]]*zot_image_amd64[[:space:]]*=[[:space:]]*"[a-
 # copy compared equal. Each read is anchored on its string/number-literal assignment in the
 # locals block (the templatefile map's `x = local.x` lines are not literals, so they never match),
 # and a missing one is UNMEASURABLE (exit 2), never a silent default.
-tf_literal() {  # $1 = local name -> the quoted literal's value (last one on the line)
-  grep -E "^[[:space:]]*$1[[:space:]]*=[[:space:]]*[^[:space:]].*\"[[:space:]]*$" "$DIR/zot-registry.tf" | head -1 | grep -oE '"[^"]*"' | tail -1 | tr -d '"'
+tf_literal() {  # $1 = local name -> its value, when the literal is the ONLY thing right of `=`
+  # Anchored at BOTH ends: a trailing comment (`x = "a" # was "b"`) or any expression makes the
+  # read fail (empty -> exit 2 below) instead of silently picking a quoted string from the comment.
+  grep -E "^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"[^\"]*\"[[:space:]]*$" "$DIR/zot-registry.tf" | head -1 | sed -E 's/^[^=]*=[[:space:]]*"([^"]*)"[[:space:]]*$/\1/'
 }
-tf_number() {  # $1 = local name -> its integer literal
+tf_number() {  # $1 = local name -> its integer literal (same both-ends anchoring)
   grep -oE "^[[:space:]]*$1[[:space:]]*=[[:space:]]*[0-9]+[[:space:]]*$" "$DIR/zot-registry.tf" | head -1 | grep -oE '[0-9]+[[:space:]]*$' | tr -d '[:space:]'
 }
-# doppler_sha256 is `arch == "arm64" ? "<arm64>" : "<amd64>"` -- the LAST quoted value is amd64.
-DOPPLER_SHA256="$(tf_literal doppler_sha256)"
+# doppler_sha256 is `local.registry_arch == "arm64" ? "<arm64>" : "<amd64>"` — matched as that
+# EXACT shape (not "the last quoted string"), so reordering the ternary or appending a comment
+# reads as unmeasurable rather than as the wrong arch's checksum.
+DOPPLER_SHA256="$(grep -E '^[[:space:]]*doppler_sha256[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*==[[:space:]]*"arm64"[[:space:]]*\?[[:space:]]*"[0-9a-f]{64}"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"[[:space:]]*$' "$DIR/zot-registry.tf" | head -1 | sed -E 's/.*:[[:space:]]*"([0-9a-f]{64})"[[:space:]]*$/\1/')"
 ZOT_PULL_USER="$(tf_literal zot_pull_user)"
 ZOT_PUSH_USER="$(tf_literal zot_push_user)"
 PRIVATE_IP="$(tf_literal registry_private_ip)"
