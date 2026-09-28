@@ -12,6 +12,38 @@ brand_survival_threshold: none
 
 # fix: linkedin-token-check org-token probe and generator URL assume wrong app
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28
+**Sections enhanced:** Proposed Solution (probe resolution fail-loud rule,
+`httpStatus` observability, rejected `insufficient_scope` alternative), scope
+lists (`rw_organization_admin` named as the ACL probe's own requirement),
+References (OpenAPI/permissions-mapping citation).
+**Research agents used:** none spawnable in this environment — deepen-plan's
+conditional halt gates (4.6 user-brand, 4.7 observability, 4.8 PAT-shape, 4.9
+UI-wireframe, 4.10 encryption, 4.11 guard-contract lint) were executed
+mechanically and all pass; the per-section fan-outs were covered by inline
+repo greps + one external contract check.
+
+### Key Improvements
+
+1. Missing-`TOKEN_PROBES`-entry behavior specified (fail loud via
+   `reportSilentFallback` + `unknown`, never a default endpoint).
+2. `403` filing carries `httpStatus` in log extras so the 401-vs-403
+   distinction survives enum sharing.
+3. Renewal scope text names both mandatory Community-app scopes
+   (`w_organization_social` + `rw_organization_admin`).
+
+### New Considerations Discovered
+
+- `organizationalEntityAcls` requires `rw_organization_admin`-class access
+  (LinkedIn permissions mapping) — a Community-app token minted with only
+  `w_organization_social` would still 403 the probe; "all offered scopes" is
+  the correct runbook instruction.
+- Inngest `step.run` memoization constraint: `check-tokens`' return shape is
+  deliberately unchanged (`TokenCheckResult[]`) so in-flight runs resume
+  cleanly post-deploy.
+
 ## Overview
 
 The weekly LinkedIn token check and the renewal bootstrap script were written
@@ -194,20 +226,33 @@ env-var name, in both artifacts.
   ```
 
 - `checkToken` resolves its probe from `tokenName` (or takes the URL as a
-  parameter — pick one; the signature records the decision). `holder` for the
-  ACL response reads `elements` length instead of `name` (ACL payload shape is
-  `{elements: [...], paging}`), e.g. `holder: "<n> administered org(s)"`.
+  parameter — pick one; the signature records the decision). A `tokenName`
+  absent from the table must fail LOUD — `reportSilentFallback` + status
+  `unknown`, never a default endpoint: probing a future token at the wrong
+  endpoint is exactly the defect class being removed. `holder` for the ACL
+  response reads `elements` length instead of `name` (ACL payload shape is
+  `{elements: [{organizationalTarget, role, state}], paging}` per LinkedIn's
+  OpenAPI — no `name` field), e.g. `holder: "<n> administered org(s)"`.
 - Filing rule: `401` → `expired` (unchanged semantics); `403` on the resolved
   probe → also files the SAME issue title (dedup by title keeps #7606's
   auto-close path single-threaded) but the body names the actual HTTP code and
   says what it means: `403` on an org endpoint = token alive but missing the
   app's scopes → re-mint WITH the listed scopes. A wrong-scope token is not
   "unknown" — that was the silent-failure mode. Non-401/403 non-2xx stays
-  `unknown`.
+  `unknown`. The result carries `httpStatus` in its logger `extra` so the
+  401-vs-403 distinction survives into Inngest logs even though both share the
+  `expired` status.
+- **Rejected alternative — a new `insufficient_scope` status member:** more
+  honest enum semantics, but it widens `TokenCheckResult` (consumer sweep:
+  the `ok` calc and every test matcher), splits the dedup/auto-close lifecycle
+  across two titles unless carefully keyed, and buys nothing operational —
+  the filed body + `httpStatus` carry the distinction.
 - Renewal body becomes per-token: generator URL `clientId=78wtm2wu15iikn` +
   `openid, profile, w_member_social, email` for `LINKEDIN_ACCESS_TOKEN`;
   `clientId=78s808ujpe6lve` + "all scopes the Community app offers —
-  `w_organization_social` is mandatory" for `LINKEDIN_ORG_ACCESS_TOKEN`.
+  `w_organization_social` (org posting) and `rw_organization_admin` (the
+  ACL probe's own scope requirement) are mandatory" for
+  `LINKEDIN_ORG_ACCESS_TOKEN`.
 
 **Bootstrap (`bootstrap.sh`):**
 
@@ -221,8 +266,9 @@ env-var name, in both artifacts.
   "userinfo".
 - `stage_1_personal` passes the userinfo probe + Soleur generator URL +
   existing scope list. `stage_2_org` passes the ACL probe + Community
-  generator URL + a corrected scope line (all offered Community scopes,
-  `w_organization_social` mandatory) — and the now-redundant advisory ACL
+  generator URL + a corrected scope line (all offered Community scopes;
+  `w_organization_social` and `rw_organization_admin` mandatory — the second
+  is the ACL probe's own requirement) — and the now-redundant advisory ACL
   block is removed because the primary probe IS the ACL probe.
 - `stage_4_verify` probes each Doppler value at its per-token endpoint (the
   `(userinfo 2xx)` message text is parameterized).
@@ -377,8 +423,8 @@ logs:
   where: "Inngest run logs (logger.info per-token status incl. probe outcome)"
   retention: "Inngest retention window"
 discoverability_test:
-  command: "grep -c organizationalEntityAcls apps/web-platform/server/inngest/functions/cron-linkedin-token-check.ts"
-  expected_output: "1"
+  command: "grep -l organizationalEntityAcls apps/web-platform/server/inngest/functions/cron-linkedin-token-check.ts"
+  expected_output: "cron-linkedin-token-check.ts"
 ```
 
 ## Guard Contract
@@ -502,6 +548,15 @@ skipped); no new infrastructure (IaC gate skipped).
 ## References & Research
 
 - Issue: `gh issue view 9181` (defects + live-verified probe matrix, 2026-09-28).
+- LinkedIn org-ACL contract (deepen-plan external check, 2026-09-28):
+  `GET /v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR` lists
+  organizations the member administers; response shape `{elements:
+  [{organizationalTarget, role, state}], paging}`; requires
+  `rw_organization_admin`-class Community Management access — hence 403 for a
+  token minted outside the Community app or without the product scopes.
+  Sources: LinkedIn Marketing permissions mapping
+  (learn.microsoft.com/linkedin/shared/references/migrations/permissions-resources-mapping)
+  and the organization access-control OpenAPI surface.
 - `apps/web-platform/server/inngest/functions/cron-linkedin-token-check.ts` —
   full file reviewed (262 lines).
 - `knowledge-base/project/specs/feat-linkedin-token-renewal/bootstrap.sh` —

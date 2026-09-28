@@ -13,12 +13,13 @@ Plan: `knowledge-base/project/plans/2026-09-28-fix-linkedin-org-token-probe-plan
   - [ ] 1.1.6 bootstrap.sh anchor block (read the file, assert `78s808ujpe6lve`, org stage routes through `LINKEDIN_ORG_ACLS`, `token_probe` is endpoint-parameterized).
   - [ ] 1.1.7 Confirm new tests are RED.
 - [ ] 1.2 Edit `apps/web-platform/server/inngest/functions/cron-linkedin-token-check.ts`:
-  - [ ] 1.2.1 Replace `LINKEDIN_USERINFO_URL` with a per-token probe table keyed by env-var name (url + app label).
-  - [ ] 1.2.2 `checkToken` resolves the probe per `tokenName`; `holder` tolerates the ACL `{elements:[...]}` shape (no `name`).
-  - [ ] 1.2.3 `401` → `expired` unchanged; `403` on the resolved probe files the same per-token issue title with an HTTP-code-aware body; other non-2xx stays `unknown`.
-  - [ ] 1.2.4 Renewal body per token: Soleur app (`78wtm2wu15iikn`, `openid, profile, w_member_social, email`) vs Community app (`78s808ujpe6lve`, "all offered scopes, `w_organization_social` mandatory").
-  - [ ] 1.2.5 Rename the `op: "fetch-userinfo"` reportSilentFallback tag to a per-probe value.
-- [ ] 1.3 Run the scoped vitest file; GREEN.
+  - [ ] 1.2.1 Replace `LINKEDIN_USERINFO_URL` with a per-token probe table keyed by env-var name (url + app label). A `tokenName` absent from the table must fail LOUD (`reportSilentFallback` + status `unknown`) — never default to an endpoint.
+  - [ ] 1.2.2 `checkToken` resolves the probe per `tokenName`; `holder` tolerates the ACL `{elements:[...]}` shape (no `name` field — use administered-org count).
+  - [ ] 1.2.3 `401` → `expired` unchanged; `403` on the resolved probe files the same per-token issue title with an HTTP-code-aware body; other non-2xx stays `unknown`. Add `httpStatus` to the result's logger extras.
+  - [ ] 1.2.4 Renewal body per token: Soleur app (`78wtm2wu15iikn`, `openid, profile, w_member_social, email`) vs Community app (`78s808ujpe6lve`, "all offered scopes; `w_organization_social` + `rw_organization_admin` mandatory").
+  - [ ] 1.2.5 Rename the `op: "fetch-userinfo"` reportSilentFallback tag to a per-probe value (verified: no Sentry alert filters consume the tag).
+  - [ ] 1.2.6 Keep `TokenCheckResult` shape unchanged (Inngest `step.run` memoization: in-flight runs resume on the new code).
+- [ ] 1.3 Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-linkedin-token-check.test.ts` — GREEN (NOT `bun test`; bunfig blocks discovery). Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 
 ## Phase 2 — Bootstrap script per-token probes
 
@@ -27,7 +28,7 @@ Plan: `knowledge-base/project/plans/2026-09-28-fix-linkedin-org-token-probe-plan
   - [ ] 2.1.2 `token_probe <value> <url>` and `token_is_live <value> <url>` take the endpoint as a parameter; update messages that hardcode "userinfo".
   - [ ] 2.1.3 `mint_or_reuse` gains `<generator-url>` and `<probe-url>` params; keep the `SOLEUR_BOOTSTRAP_*` skip-var token on the same call line (usage() grep derives it).
   - [ ] 2.1.4 `stage_1_personal` → userinfo probe + personal generator URL (scope list unchanged).
-  - [ ] 2.1.5 `stage_2_org` → ACL probe + Community generator URL + corrected scope text; DELETE the advisory ACL block (primary probe is now the ACL probe).
+  - [ ] 2.1.5 `stage_2_org` → ACL probe + Community generator URL + corrected scope text ("all offered scopes; `w_organization_social` + `rw_organization_admin` mandatory"); DELETE the advisory ACL block (primary probe is now the ACL probe).
   - [ ] 2.1.6 `stage_4_verify` probes each Doppler value at its per-token endpoint; parameterize the "(userinfo 2xx)" message.
   - [ ] 2.1.7 Update the scope-table header comment (~L236) and closeout prose (~L631) that claim both tokens probe userinfo.
 - [ ] 2.2 `bash -n bootstrap.sh` clean; `bash bootstrap.sh --help` still lists `SOLEUR_BOOTSTRAP_LINKEDIN_ACCESS_TOKEN` / `SOLEUR_BOOTSTRAP_LINKEDIN_ORG_ACCESS_TOKEN`.
