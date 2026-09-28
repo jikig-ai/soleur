@@ -55,6 +55,9 @@ cp "$REPO_ROOT/.claude/hooks/lib/hook-input.sh" "$WORK/.claude/hooks/lib/"
 # hook-tool-kind.sh is hook-input.sh's own fail-hard dependency (#8205 —
 # HOOK_TOOL_KIND canonicalization); the mirror needs it for the same reason.
 cp "$REPO_ROOT/.claude/hooks/lib/hook-tool-kind.sh" "$WORK/.claude/hooks/lib/"
+# guardrails.sh lexes filing commands with lib/filing-shape.pl (ADR-256); without it
+# the mirror reads cause=noperl and the require-milestone emission never fires.
+cp "$REPO_ROOT/.claude/hooks/lib/filing-shape.pl" "$WORK/.claude/hooks/lib/"
 cp "$REPO_ROOT/.claude/hooks/guardrails.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/.claude/hooks/pencil-open-guard.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/.claude/hooks/worktree-write-guard.sh" "$WORK/.claude/hooks/"
