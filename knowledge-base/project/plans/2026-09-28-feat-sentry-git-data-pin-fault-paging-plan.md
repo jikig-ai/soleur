@@ -919,7 +919,7 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
 
 ### Pre-merge (PR)
 
-- [ ] AC1: This command passes, including every Phase 1 case and the unmodified erasure cases:
+- [x] AC1: This command passes, including every Phase 1 case and the unmodified erasure cases:
 
   ```bash
   cd apps/web-platform && ./node_modules/.bin/vitest run test/git-data-host-key-pin.test.ts \
@@ -927,16 +927,16 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
     test/account-delete.test.ts test/sentry-git-data-pin-fault-alert-op-contract.test.ts
   ```
 
-- [ ] AC2: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
-- [ ] AC3: `git grep -nE "[\"']?pin_fault[\"']?[[:space:]]*:" -- apps/web-platform/server apps/web-platform/app apps/web-platform/lib ':!*.test.*'` matches only `apps/web-platform/server/git-data-pin-fault.ts`. Comment mentions are allowed; the contract-test census is the precise check.
-- [ ] AC4: This command prints `git-data-host-key-pin-fault`, `240`, `host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent`, `ActiveMembers` and `1h/0`:
+- [x] AC2: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
+- [x] AC3: `git grep -nE "[\"']?pin_fault[\"']?[[:space:]]*:" -- apps/web-platform/server apps/web-platform/app apps/web-platform/lib ':!*.test.*'` matches only `apps/web-platform/server/git-data-pin-fault.ts`. Comment mentions are allowed; the contract-test census is the precise check.
+- [x] AC4: This command prints `git-data-host-key-pin-fault`, `240`, `host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent`, `ActiveMembers` and `1h/0`:
 
   ```bash
   jq -r '."git-data-host-key-pin-fault" | [.name, .frequency, (.actionFilters[0].conditions[0].comparison.value), .actionFilters[0].actions[0].fallthroughType, (.triggerConditions[] | select(.type == "event_frequency_count") | .comparison | "\(.interval)/\(.value)")] | @tsv' \
     apps/web-platform/infra/sentry/alert-reference.json
   ```
 
-- [ ] AC5: This command prints `{"t":["event_frequency_count","first_seen_event","reappeared_event","regression_event"],"k":["feature","op"],"f":["1h/0"]}`:
+- [x] AC5: This command prints `{"t":["event_frequency_count","first_seen_event","reappeared_event","regression_event"],"k":["feature","op"],"f":["1h/0"]}`:
 
   ```bash
   jq -c '."art17-erasure-incomplete" | {t: ([.triggerConditions[].type] | sort), k: ([.actionFilters[].conditions[].comparison.key] | sort), f: [.triggerConditions[] | select(.type == "event_frequency_count") | .comparison | "\(.interval)/\(.value)"]}' \
@@ -944,7 +944,7 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
   ```
 
 - [ ] AC6: The `apply-sentry-infra.yml` `plan_pr` job is green on the head SHA. Its plan shows **exactly** `1 to add, 1 to change, 0 to destroy`: `sentry_alert.git_data_host_key_pin_fault` is created and `sentry_alert.art17_erasure_incomplete` is updated in place (`~`, never `-/+`). Any other drift in the full-root plan blocks the merge. The reference gate and `sentry-destroy-required` are green.
-- [ ] AC7: This command prints `0` (append-only: no deleted tokens in dated records):
+- [x] AC7: This command prints `0` (append-only: no deleted tokens in dated records):
 
   ```bash
   git diff origin/main...HEAD --word-diff=porcelain -- \
@@ -955,12 +955,12 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
     | grep -E '^-' | grep -vE '^--- (a/|/dev/null)' | wc -l
   ```
 
-- [ ] AC8: Let `S(f)` be the file with comment lines stripped (`grep -v '^\s*#' f`) and `M = S(issue-alerts.tf) | grep -c '^resource "sentry_alert"'`.
+- [x] AC8: Let `S(f)` be the file with comment lines stripped (`grep -v '^\s*#' f`) and `M = S(issue-alerts.tf) | grep -c '^resource "sentry_alert"'`.
   - The `model.c4` edge reads "N of the M", where N = M − `S(issue-alerts.tf) | grep -c 'fallthrough_type = "NoOne"'`. Expected "33 of the 35".
   - The README total is M + `S(cron-monitor-alerts.tf) | grep -c '^resource "sentry_alert"'` (expected 36).
   - The README's `issue-alerts.tf` Terraform-owned figure is M − `S(issue-alerts.tf) | grep -c 'ignore_changes = all'` (expected 33).
   - `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
-- [ ] AC9: `git grep -n 'none pages until #8572' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'` returns nothing. The runbook names `git-data-host-key-pin-fault` and has a push pin-fault row.
+- [x] AC9: `git grep -n 'none pages until #8572' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'` returns nothing. The runbook names `git-data-host-key-pin-fault` and has a push pin-fault row.
 - [ ] AC10: The PR body's first line states that the merge mutates production through `apply-sentry-infra.yml` and `web-platform-release.yml`. The body carries `Ref #8572`, not `Closes`, and notes the `GitDataHostKeyPinError` grouping-name change.
 - [ ] AC11: Every required check passes by name on the exact head SHA before the admin merge.
 

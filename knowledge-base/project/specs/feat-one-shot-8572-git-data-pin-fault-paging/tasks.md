@@ -4,12 +4,12 @@ Plan (deepened 2026-09-28): `knowledge-base/project/plans/2026-09-28-feat-sentry
 
 ## Phase 1: RED — emitter contract
 
-- [ ] 1.1 In `apps/web-platform/test/git-data-host-key-pin.test.ts` (call-argument assertions only):
-  - [ ] 1.1.1 Update the three boot `toEqual` assertions to add `tags: { pin_fault }` and
+- [x] 1.1 In `apps/web-platform/test/git-data-host-key-pin.test.ts` (call-argument assertions only):
+  - [x] 1.1.1 Update the three boot `toEqual` assertions to add `tags: { pin_fault }` and
     `extra: { pinFault }`. Keep them strict.
-  - [ ] 1.1.2 Build every transport rejection as
+  - [x] 1.1.2 Build every transport rejection as
     `Object.assign(new Error("Command failed: …"), { code, stderr, syscall })`.
-  - [ ] 1.1.3 Add the push cases:
+  - [x] 1.1.3 Add the push cases:
     - absent pin → `pin_absent`, and invalid pin → `pin_invalid`, each with one report, `err = null`
       and `extra.via`;
     - provision `spawn ssh` ENOENT → `ssh_client_absent`;
@@ -18,13 +18,13 @@ Plan (deepened 2026-09-28): `knowledge-base/project/plans/2026-09-28-feat-sentry
     - git 128 with host-key text → `host_key_mismatch` (`via: git`);
     - `spawn git` ENOENT → not a pin fault;
     - fence reject → `toEqual` of the full Error-path options.
-- [ ] 1.2 Create `apps/web-platform/test/git-data-pin-fault.test.ts` (unit, no module mocks):
+- [x] 1.2 Create `apps/web-platform/test/git-data-pin-fault.test.ts` (unit, no module mocks):
   - a classifier table over every arm × `via`;
   - the `err.name` fallback without `instanceof`;
   - a forged `reason` → `null`;
   - hostile inputs → `null`, never a throw;
   - the `GitDataHostKeyPinError` messages are byte-identical to today's resolver strings.
-- [ ] 1.3 Create `apps/web-platform/test/git-data-pin-fault-event.test.ts`, the real-path test:
+- [x] 1.3 Create `apps/web-platform/test/git-data-pin-fault-event.test.ts`, the real-path test:
   - drive `replicateToGitData` with real `observability` and `logger`, and `vi.mock`
     `@sentry/nextjs` (importOriginal plus spies, and a `withIsolationScope` that records
     `clearBreadcrumbs`);
@@ -34,13 +34,13 @@ Plan (deepened 2026-09-28): `knowledge-base/project/plans/2026-09-28-feat-sentry
     breadcrumbs were cleared;
   - assert no raw `WS`, `WT` or `USER` anywhere in the payload;
   - positive control: `hashUserId(WS)` is present.
-- [ ] 1.4 In `apps/web-platform/test/account-delete.test.ts`: assert the erasure report is called for
+- [x] 1.4 In `apps/web-platform/test/account-delete.test.ts`: assert the erasure report is called for
   each outcome, that its tags never carry `pin_fault`, and that both sites use `ART17_ERASURE_OP`.
-- [ ] 1.5 Confirm the existing erasure-outcome tests stay unmodified.
+- [x] 1.5 Confirm the existing erasure-outcome tests stay unmodified.
 
 ## Phase 2: GREEN — emitter
 
-- [ ] 2.1 Create `apps/web-platform/server/git-data-pin-fault.ts`, with a "MESSAGE PATH ON PURPOSE"
+- [x] 2.1 Create `apps/web-platform/server/git-data-pin-fault.ts`, with a "MESSAGE PATH ON PURPOSE"
   header like `anthropic-credit.ts` and `spawn-dead-letter.ts`. It contains:
   - `GIT_DATA_PIN_FAULT_REASONS` and `GitDataPinFault`;
   - `GitDataHostKeyPinError(reason, { storeEnabled })`, which builds its own fixed messages;
@@ -49,21 +49,21 @@ Plan (deepened 2026-09-28): `knowledge-base/project/plans/2026-09-28-feat-sentry
     `spawn ssh`; 255 for ssh, 128 for git; a `// review: swallowed` catch;
   - `reportGitDataPinFault`, the only writer of `pin_fault`, which captures inside
     `Sentry.withIsolationScope` with `clearBreadcrumbs()`.
-- [ ] 2.2 In `apps/web-platform/server/git-data-replication.ts`:
+- [x] 2.2 In `apps/web-platform/server/git-data-replication.ts`:
   - the resolver throws `GitDataHostKeyPinError`;
   - the boot reports go through `reportGitDataPinFault`;
   - the push tracks `via`, classifies, sends `extra.via`, and makes one report per failure;
   - add the provision-before-push comment;
   - the erasure logic stays unchanged (it only imports the regex).
-- [ ] 2.3 In `apps/web-platform/server/account-delete.ts`:
+- [x] 2.3 In `apps/web-platform/server/account-delete.ts`:
   - export `ART17_ERASURE_FEATURE` and `ART17_ERASURE_OP`, used at both erasure sites
     (behavior-neutral);
   - append a dated comment correcting "first-seen / reappeared / regression".
-- [ ] 2.4 Run the Phase 1 suites green, then `./node_modules/.bin/tsc --noEmit`.
+- [x] 2.4 Run the Phase 1 suites green, then `./node_modules/.bin/tsc --noEmit`.
 
 ## Phase 3: Rule contract and Terraform
 
-- [ ] 3.1 Create `apps/web-platform/test/sentry-git-data-pin-fault-alert-op-contract.test.ts`
+- [x] 3.1 Create `apps/web-platform/test/sentry-git-data-pin-fault-alert-op-contract.test.ts`
   implementing Guards 1 and 2 with every mutation and harness row in the plan. That covers:
   - a comment-stripped, test-excluding writer-shape census with an import check and a
     recursion-proof floor;
@@ -75,37 +75,37 @@ Plan (deepened 2026-09-28): `knowledge-base/project/plans/2026-09-28-feat-sentry
   - `frequency_minutes` uniqueness.
 
   Confirm it fails first.
-- [ ] 3.2 In `issue-alerts.tf`, append `sentry_alert.git_data_host_key_pin_fault` per §B.1:
+- [x] 3.2 In `issue-alerts.tf`, append `sentry_alert.git_data_host_key_pin_fault` per §B.1:
   - `frequency_minutes = 240`;
   - 4 triggers;
   - `pin_fault in` the 4 values;
   - `ActiveMembers`;
   - a comment block that includes the advisory-tag note.
-- [ ] 3.3 In `issue-alerts.tf`, add `event_frequency_count {1h,0}` to `art17_erasure_incomplete`.
+- [x] 3.3 In `issue-alerts.tf`, add `event_frequency_count {1h,0}` to `art17_erasure_incomplete`.
   Append a dated comment correcting "Keys on erasure_outcome" and "four routed values", and stating
   the 5-minute throttle and its 288-a-day ceiling.
-- [ ] 3.4 In `alert-reference.json`, add the new entry and the art17 trigger, hand-authored in
+- [x] 3.4 In `alert-reference.json`, add the new entry and the art17 trigger, hand-authored in
   `jq -S` shape. If the gate mismatches, copy only those two entries from its artifact.
-- [ ] 3.5 Run `terraform fmt -check` (plus `init -backend=false && validate` if the provider is
+- [x] 3.5 Run `terraform fmt -check` (plus `init -backend=false && validate` if the provider is
   reachable). The contract test is green.
 
 ## Phase 4: Records
 
-- [ ] 4.1 Update the README counts and the `model.c4` edge count using the AC8 formula, then run
+- [x] 4.1 Update the README counts and the `model.c4` edge count using the AC8 formula, then run
   `bash scripts/regenerate-c4-model.sh`.
-- [ ] 4.2 Runbook `git-data-luks-cutover-5274.md`:
-  - [ ] 4.2.1 Erasure pin-fault row: name the rule, add the post-resolve query and the post-flip
+- [x] 4.2 Runbook `git-data-luks-cutover-5274.md`:
+  - [x] 4.2.1 Erasure pin-fault row: name the rule, add the post-resolve query and the post-flip
     #8211 dependency.
-  - [ ] 4.2.2 New push pin-fault row:
+  - [x] 4.2.2 New push pin-fault row:
     - verify through the Better Stack `git_data_pin=present fp=` line and a Sentry query;
     - diagnose with `extra.via` and the cutover dry-run `_access_reason`;
     - add the H4 never-re-pin rule.
-  - [ ] 4.2.3 Host-key rows: add the known_hosts note.
-  - [ ] 4.2.4 Add the soak-query note near line 1196.
-  - [ ] 4.2.5 Flag-flip precondition bullet: append that #8572 is met on merge plus both deploys,
+  - [x] 4.2.3 Host-key rows: add the known_hosts note.
+  - [x] 4.2.4 Add the soak-query note near line 1196.
+  - [x] 4.2.5 Flag-flip precondition bullet: append that #8572 is met on merge plus both deploys,
     with the re-erasure path as a hard precondition.
-- [ ] 4.3 Append the dated ADR-237 addendum bullet and the ADR-220 precondition note.
-- [ ] 4.4 Spawn `soleur:legal:clo` to draft the register markers (PA-36 TOM (g)) and the counsel
+- [x] 4.3 Append the dated ADR-237 addendum bullet and the ADR-220 precondition note.
+- [x] 4.4 Spawn `soleur:legal:clo` to draft the register markers (PA-36 TOM (g)) and the counsel
   audit addendum. The marker text should say "at most once per issue per 5 min, not per refusal",
   conditioned on the merge and both deploys. Apply them append-only (AC7).
 
