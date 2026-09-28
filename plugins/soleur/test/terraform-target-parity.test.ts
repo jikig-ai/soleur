@@ -2168,6 +2168,30 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     }
   });
 
+  // #6604 step 7 — a workflow that WRITES the main root's state without planning (a dispatched
+  // `terraform state rm|mv|push`, e.g. workspaces-plaintext-forget.yml) is invisible to the planner
+  // census below, but a Terraform version other than the apply workflows' could upgrade the state format
+  // under them. Discovered, not listed, so PR B deleting the forget workflow needs no edit here.
+  test("every main-root state-write-only workflow pins TERRAFORM_VERSION == apply-web-platform-infra's", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    const STATE_WRITE = /terraform\s+state\s+(rm|mv|push)\b/;
+    const MAIN_ROOT = /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m;
+    // Non-vacuity: the discovery pattern must match the shape it exists for.
+    expect(STATE_WRITE.test("          terraform state rm \"${addrs[@]}\"")).toBe(true);
+    const applyEnv = (parseYaml(readFileSync(resolve(dir, "apply-web-platform-infra.yml"), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
+    expect(typeof applyEnv.TERRAFORM_VERSION).toBe("string");
+    const writers = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        return STATE_WRITE.test(t) && MAIN_ROOT.test(t);
+      });
+    for (const f of writers) {
+      const env = (parseYaml(readFileSync(join(dir, f), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
+      expect([f, env.TERRAFORM_VERSION]).toEqual([f, applyEnv.TERRAFORM_VERSION]);
+    }
+  });
+
   test("the main-root workflow census is complete (a new planner cannot skip the variable)", () => {
     const dir = resolve(REPO_ROOT, ".github/workflows");
     // Every spelling of "this workflow runs Terraform in the main root": an INFRA_DIR env, a

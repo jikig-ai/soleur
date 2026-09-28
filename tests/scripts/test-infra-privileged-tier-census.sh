@@ -360,7 +360,9 @@ def apply_steps(j):
 # would run credential-less and strand a paid host. A destroy needs the same credentials as the
 # apply and writes the same state object. G4b and G5 keep `apply_steps`: they reason about -target
 # lists and plan_only guards, which a teardown carries neither of.
-STATE_WRITE = re.compile(r"(?<![-\w])terraform\s+(apply|destroy)(?![-\w])")
+# #6604 step 7 widened it to `state rm|mv|push`: workspaces-plaintext-forget.yml writes this state with
+# `terraform state rm` and no apply at all, which must classify exactly like an apply (G1h).
+STATE_WRITE = re.compile(r"(?<![-\w])terraform\s+(apply|destroy|state\s+(rm|mv|push))(?![-\w])")
 def state_write_steps(j):
     for s in j.steps:
         if STATE_WRITE.search(str(s.get("run") or "")):
@@ -1503,6 +1505,16 @@ if fixture_written g1-10-destroy-only-no-environment "$MUTDIR/tree/.github/workf
   mutant_red g1-10-destroy-only-no-environment wf_row "$T/mut/g1-10.tsv" "G1h:"
 fi
 
+# Row 11 (#6604 step 7) — a STATE-RM-ONLY job against the privileged-state root, no `environment:`.
+# `terraform state rm` writes the same state object an apply does; before the STATE_WRITE widening this
+# job scored Tier A and G1h never saw it (workspaces-plaintext-forget.yml is the live instance).
+MUTDIR="$(fixcopy g1-11)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\nenv:\n  INFRA_DIR: apps/web-platform/infra\njobs:\n  forget:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}\n      - name: Forget\n        working-directory: ${{ env.INFRA_DIR }}\n        run: |\n          set -euo pipefail\n          terraform state rm \x27hcloud_volume.workspaces["web-1"]\x27\n' > "$MUTDIR/tree/.github/workflows/zz-forget.yml"
+if fixture_written g1-11-state-rm-only-no-environment "$MUTDIR/tree/.github/workflows/zz-forget.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1-11.tsv" ""
+  mutant_red g1-11-state-rm-only-no-environment wf_row "$T/mut/g1-11.tsv" "G1h:"
+fi
+
 # ── G1g: the read-only-first allowance must not be launderable by a comment ──────────
 # The allowance is 1-of-1 on the live tree (`workspaces-luks-cutover::cutover`), so anything
 # that satisfies it cheaply removes the row's only teeth. `_first` is a raw scan, so a single
@@ -1702,7 +1714,8 @@ fi
 _ran=$((passes + fails))
 # 80 -> 82 (review W1): M-g1-10's fixture-written row and its RED row. Measured: 82 ran.
 # 82 -> 88 (#8714): live G4f, and M-g4-6/M-g4-7 (3 landings + 2 verdicts). Measured: 88 ran.
-FLOOR=88
+# 88 -> 90 (#6604 step 7): M-g1-11, the state-rm-only writer (1 landing + 1 verdict). Measured: 90 ran.
+FLOOR=90
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
