@@ -1083,43 +1083,43 @@ operator-requested scope. Keeping it follows the operator's direction.
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/server/inngest/execution-placement.ts` exists and has zero import
+- [x] `apps/web-platform/server/inngest/execution-placement.ts` exists and has zero import
       declarations. It exports `EXECUTION_PLACEMENT`, keyed by function id, with one row per
       served function, each in one of `portable`, `host-affine` or `volume-bound` and each with a
       non-empty `reason`. It exports **only** the type and `EXECUTION_PLACEMENT`: the guard
       config lives in the test file.
-- [ ] `execution-placement.test.ts` implements Guards 1–4. Every mutation-matrix row and harness row
+- [x] `execution-placement.test.ts` implements Guards 1–4. Every mutation-matrix row and harness row
       in `## Guard Contract` is an executed test case: each RED row is asserted RED against a
       synthesized fixture, and each must-PASS row is asserted PASS.
-- [ ] At least one RED row per guard asserts that the failure message **names the fix**: a row
+- [x] At least one RED row per guard asserts that the failure message **names the fix**: a row
       stub, the re-class instruction, the #6808 pointer, or the serve-URL literal (CTO devex).
-- [ ] All four guards are green on the real tree.
+- [x] All four guards are green on the real tree.
       `./node_modules/.bin/vitest run test/server/inngest/execution-placement.test.ts` passes,
       with the portable and served counts printed in the test names or messages.
-- [ ] Walker extraction is equivalent: `watchdog-dispatch-clock.test.ts` passes (plan-time
+- [x] Walker extraction is equivalent: `watchdog-dispatch-clock.test.ts` passes (plan-time
       baseline on 9926a1e82c: **63 passed**), and the Phase-0 `diff` of the pre- and
       post-extraction `walk(CLOCK)` reach and problems sets is empty. The PR body records both.
-- [ ] `function-registry-count.test.ts` passes unchanged except for the one cross-reference comment.
-- [ ] The ADR-033 file
+- [x] `function-registry-count.test.ts` passes unchanged except for the one cross-reference comment.
+- [x] The ADR-033 file
       `ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md` carries
       `## Amendment — 2026-09-28 (#7230): execution placement`. It includes the decision table,
       the three classes, a pointer to `execution-placement.test.ts` (not a restatement of the
       guards), Guard 4 plus (g) plus Condition C as the single-host enforcement, the re-open
       triggers (#9137), the four known gaps and the re-derived corollary table (citing #9138).
       Registration-checklist row 8 is present and the count reads **eight**.
-- [ ] The stale binding claim is gone from the ADR-033 file:
+- [x] The stale binding claim is gone from the ADR-033 file:
       `grep -c 'pinned to web-1 by the single \`sdk_url\` callback'` returns `0` (it is `1` on
       origin/main), and `grep -c '34 of 53'` returns `0`. The amendment explains the correction
       without re-quoting either phrase.
-- [ ] ADR-030 (`ADR-030-inngest-as-durable-trigger-layer.md`) has the log line. ADR-248's
+- [x] ADR-030 (`ADR-030-inngest-as-durable-trigger-layer.md`) has the log line. ADR-248's
       failure-domain row no longer says "via `sdk_url`", and its #7230 reversal trigger points to
       #9137. ADR-143's #8611 amendment has the placement line. ADR-100's sub-decision 1 carries
       the serve-URL note.
-- [ ] The `model.c4` `inngest -> api` edge names the single step-executing host, the placement
+- [x] The `model.c4` `inngest -> api` edge names the single step-executing host, the placement
       rule and the registration-only role of `--sdk-url`. The three function-effect edges are
       sourced from `api`, and `grep -cE '^\s*inngest -> (supabase|github|doppler) '` on
       `model.c4` returns `0`. `model.likec4.json` is regenerated. The c4 syntax and render tests and `c4-count-parity.test.sh` pass.
-- [ ] `git diff --name-only origin/main...HEAD` lists **no** path under `apps/web-platform/infra/`,
+- [x] `git diff --name-only origin/main...HEAD` lists **no** path under `apps/web-platform/infra/`,
       **no** path under `.github/workflows/`, and not `apps/web-platform/app/api/inngest/route.ts`.
 - [ ] The PR body says `Closes #7230` and links #9137 and #9138. Its first line is the
       merge-consequence statement from `## Sharp Edges`.
