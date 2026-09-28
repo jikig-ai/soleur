@@ -4,7 +4,8 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect as reactUseLa
 
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? reactUseLayoutEffect : useEffect;
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { SpinnerIcon } from "@/components/icons";
 import type { AttachmentRef } from "@/lib/types";
 import type { StreamState } from "@/lib/ws-client";
@@ -592,7 +593,8 @@ export function ChatInput({
                   <span className="text-xs text-green-400">Uploaded</span>
                 ) : null}
               </div>
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={() => removeAttachment(att.id)}
                 className="ml-1 rounded p-0.5 text-soleur-text-muted hover:text-soleur-text-secondary"
@@ -602,7 +604,7 @@ export function ChatInput({
                   <line x1="18" y1="6" x2="6" y2="18" />
                   <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -635,12 +637,12 @@ export function ChatInput({
       {repoError && (
         <div className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
           Your repository setup failed.{" "}
-          <Link
+          <NavLink
             href="/dashboard/settings"
             className="font-medium text-red-200 underline hover:text-red-100"
           >
             Reconnect in Settings → Repository
-          </Link>
+          </NavLink>
         </div>
       )}
 
@@ -657,7 +659,8 @@ export function ChatInput({
         }
       >
         {/* Paperclip / attach button */}
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || isUploading}
@@ -667,7 +670,7 @@ export function ChatInput({
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
           </svg>
-        </button>
+        </Button>
 
         <input
           ref={fileInputRef}
@@ -696,7 +699,8 @@ export function ChatInput({
             className="w-full resize-none border-none bg-transparent px-1 py-2 pr-11 text-base text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none focus-visible:shadow-none disabled:opacity-50 min-h-[36px] max-h-[140px] overflow-y-auto md:pr-8 md:text-sm"
           />
           {/* Mobile @ button */}
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={handleAtButtonClick}
             disabled={disabled}
@@ -704,7 +708,7 @@ export function ChatInput({
             aria-label="Mention a leader"
           >
             <span className="text-sm font-medium">@</span>
-          </button>
+          </Button>
         </div>
         {showStop ? (
           // #3448 PR2: Stop button replaces Send while a turn is in flight
@@ -712,7 +716,8 @@ export function ChatInput({
           // the server's `session_ended` ack (`stopping`). The accessible
           // name + visible label both transition to "Stopping…" so the
           // user has a single source of truth on the Stop affordance.
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={onStop}
             disabled={isStopping || onStop === undefined}
@@ -723,27 +728,22 @@ export function ChatInput({
             <span className="text-xs font-medium">
               {isStopping ? "Stopping…" : "Stop"}
             </span>
-          </button>
+          </Button>
         ) : (
-          <button
+          <Button
+            variant="gold"
             type="button"
             onClick={handleSubmit}
             disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
+            loading={isUploading}
             className="flex h-[36px] w-[36px] min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600 md:min-h-0 md:min-w-0"
             aria-label="Send message"
           >
-            {isUploading ? (
-              <svg width="18" height="18" viewBox="0 0 24 24" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
-                <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
-              </svg>
-            ) : (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="19" x2="12" y2="5" />
-                <polyline points="5 12 12 5 19 12" />
-              </svg>
-            )}
-          </button>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+          </Button>
         )}
       </div>
     </div>

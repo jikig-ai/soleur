@@ -11,6 +11,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
 import {
   TRUST_TIER_COPY,
   type TrustTier,
@@ -147,14 +148,20 @@ export function ScopeGrantRow({
           </code>
         </div>
         {committedTier ? (
-          <button
+          // text-soleur-text-danger referenced a token absent from the @theme
+          // map (dead class — the button was never red). variant="danger" is
+          // the live destructive treatment.
+          <Button
+            variant="danger"
             type="button"
             onClick={onRevoke}
             disabled={isPending}
-            className="rounded-md px-3 py-1.5 text-xs text-soleur-text-danger hover:bg-soleur-bg-surface-2 disabled:opacity-50"
+            loading={isPending}
+            loadingLabel="Revoking"
+            className="rounded-md text-xs"
           >
             Revoke
-          </button>
+          </Button>
         ) : null}
       </header>
 
@@ -239,14 +246,20 @@ export function ScopeGrantRow({
           Cost disclosure: Soleur runs use your BYOK Anthropic key. You set the
           spending cap.
         </p>
-        <button
+        {/* bg-soleur-gold / text-soleur-bg-page reference tokens absent from
+            the @theme map (dead classes — the CTA rendered unstyled).
+            variant="gold" is the live gold-CTA treatment. */}
+        <Button
+          variant="gold"
           type="button"
           onClick={onGrant}
           disabled={!canSubmit}
-          className="rounded-md bg-soleur-gold px-4 py-2 text-sm font-medium text-soleur-bg-page hover:opacity-90 disabled:opacity-40"
+          loading={isPending}
+          loadingLabel="Saving"
+          className="rounded-md disabled:opacity-40"
         >
-          {isPending ? "Saving…" : committedTier ? "Update" : "Authorize"}
-        </button>
+          {committedTier ? "Update" : "Authorize"}
+        </Button>
       </footer>
     </div>
   );

@@ -17,6 +17,7 @@ import { KbChatContent } from "@/components/chat/kb-chat-content";
 import { KbChatFullScreen } from "@/components/chat/kb-chat-fullscreen";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { Button } from "@/components/ui/button";
 import {
   Spinner,
   useC4Project,
@@ -222,6 +223,7 @@ export default function C4Workspace({
           ).map(([t, label]) => (
             <button
               key={t}
+              data-button-exempt="segmented Concierge|Code tab — active state lives in conditional className that variant base colors would flatten"
               onClick={() => setRightTab(t)}
               className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                 rightTab === t
@@ -243,7 +245,8 @@ export default function C4Workspace({
         )}
         <div className="ml-auto flex items-center gap-1.5 pr-1">
           {isDesktop && (
-          <button
+          <Button
+            variant="ghost"
             type="button"
             aria-label="Collapse Concierge"
             onClick={collapseConcierge}
@@ -253,7 +256,7 @@ export default function C4Workspace({
               <polyline points="13 17 18 12 13 7" />
               <polyline points="6 17 11 12 6 7" />
             </svg>
-          </button>
+          </Button>
           )}
         </div>
       </div>

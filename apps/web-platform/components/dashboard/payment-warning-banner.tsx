@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -65,19 +67,20 @@ export function PaymentWarningBanner({
           Update your payment method to avoid service interruption.
         </p>
         <div className="flex shrink-0 items-center gap-2">
-          <a
+          <NavLink
             href="/dashboard/settings"
             className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:bg-orange-500"
           >
             Update Payment
-          </a>
-          <button
+          </NavLink>
+          <Button
+            variant="ghost"
             onClick={dismissBanner}
             aria-label="Dismiss payment warning"
-            className="rounded p-1 text-soleur-text-secondary hover:text-soleur-text-primary"
+            className="h-6 w-6 shrink-0 hover:text-soleur-text-primary"
           >
             <XIcon className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
       </div>
     </div>

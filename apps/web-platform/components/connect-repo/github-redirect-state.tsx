@@ -2,16 +2,17 @@
 
 import { ShieldIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
-import { GoldButton } from "@/components/ui/gold-button";
-import { OutlinedButton } from "@/components/ui/outlined-button";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 interface GitHubRedirectStateProps {
   onContinue: () => void;
   onBack: () => void;
+  /** feat-ui-action-feedback: Continue triggers an external OAuth hard nav. */
+  navPending?: boolean;
 }
 
-export function GitHubRedirectState({ onContinue, onBack }: GitHubRedirectStateProps) {
+export function GitHubRedirectState({ onContinue, onBack, navPending }: GitHubRedirectStateProps) {
   return (
     <div className="mx-auto max-w-lg space-y-8">
       <div className="space-y-4 text-center">
@@ -69,8 +70,8 @@ export function GitHubRedirectState({ onContinue, onBack }: GitHubRedirectStateP
       </Card>
 
       <div className="flex items-center gap-3">
-        <GoldButton onClick={onContinue}>Continue to GitHub</GoldButton>
-        <OutlinedButton onClick={onBack}>Go Back</OutlinedButton>
+        <Button variant="gold" type="button" onClick={onContinue} disabled={navPending} loading={navPending} loadingLabel="Continue to GitHub">Continue to GitHub</Button>
+        <Button variant="outlined" type="button" onClick={onBack} disabled={navPending}>Go Back</Button>
       </div>
     </div>
   );

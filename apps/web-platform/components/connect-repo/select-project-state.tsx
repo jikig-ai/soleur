@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { ArrowLeftIcon, SearchIcon, SpinnerIcon, ChevronDownIcon, RefreshIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
-import { GoldButton } from "@/components/ui/gold-button";
+import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/relative-time";
 import type { Repo } from "./types";
 
@@ -39,23 +39,27 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div className="flex items-center gap-3">
-        <button
+        <Button
+          variant="outlined"
           type="button"
           onClick={onBack}
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-soleur-border-default text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+          aria-label="Back"
+          className="h-8 w-8 text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           <ArrowLeftIcon className="h-4 w-4" />
-        </button>
+        </Button>
         <Badge>CONNECT PROJECT</Badge>
         {onRefresh && (
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={onRefresh}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-soleur-border-default text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+            loading={loading}
+            className="h-8 w-8 text-soleur-text-secondary hover:text-soleur-text-primary"
             aria-label="Refresh"
           >
             <RefreshIcon className="h-4 w-4" />
-          </button>
+          </Button>
         )}
       </div>
 
@@ -99,6 +103,7 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
               key={repo.fullName}
               type="button"
               onClick={() => setSelected(repo.fullName)}
+              data-button-exempt="composite repo-select row — name + badge + description + timestamp; the Button label-row chrome cannot express it"
               className={`flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left transition-colors ${
                 selected === repo.fullName
                   ? "border-soleur-border-emphasized/40 bg-soleur-accent-gold-fg/5"
@@ -137,47 +142,49 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
       {/* Pagination */}
       {!loading && totalPages > 1 && (
         <div className="flex items-center justify-between text-xs text-soleur-text-muted">
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page === 1}
-            className="rounded px-2 py-1 hover:bg-soleur-bg-surface-2 disabled:opacity-30"
           >
             Previous
-          </button>
+          </Button>
           <span>
             Page {page} of {totalPages}
           </span>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page === totalPages}
-            className="rounded px-2 py-1 hover:bg-soleur-bg-surface-2 disabled:opacity-30"
           >
             Next
-          </button>
+          </Button>
         </div>
       )}
 
       {/* Connect CTA */}
       <div className="flex items-center gap-3">
-        <GoldButton onClick={handleConnect} disabled={!selected}>
+        <Button variant="gold" type="button" onClick={handleConnect} disabled={!selected}>
           Connect This Repository
-        </GoldButton>
+        </Button>
       </div>
 
       {/* Expandable: access info */}
       <div className="border-t border-soleur-border-default pt-4">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => setShowAccess((v) => !v)}
-          className="flex items-center gap-2 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
+          aria-expanded={showAccess}
+          className="hover:text-soleur-text-primary"
         >
           <ChevronDownIcon
             className={`h-4 w-4 transition-transform ${showAccess ? "rotate-180" : ""}`}
           />
           What can the GitHub App access?
-        </button>
+        </Button>
         {showAccess && (
           <div className="mt-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 text-xs text-soleur-text-muted">
             <p>

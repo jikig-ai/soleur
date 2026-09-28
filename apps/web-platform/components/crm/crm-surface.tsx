@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import useSWR from "swr";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -153,21 +153,21 @@ function Header({ view, onSwitch }: { view: View; onSwitch: (v: View) => void })
           {view === "board" ? (
             <>
               Editing happens in a{" "}
-              <Link href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
+              <NavLink href="/dashboard/chat" className="text-soleur-accent-gold-fg hover:underline">
                 chat with your CRO or CPO agent
-              </Link>
+              </NavLink>
               .
             </>
           ) : null}
         </p>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-3">
-        <Link
+        <NavLink
           href={newLeadHref()}
           className="text-sm font-medium text-soleur-accent-gold-fg hover:underline"
         >
           New lead
-        </Link>
+        </NavLink>
         <ViewToggle view={view} onSwitch={onSwitch} />
       </div>
     </div>
@@ -185,6 +185,7 @@ function ViewToggle({ view, onSwitch }: { view: View; onSwitch: (v: View) => voi
         <button
           key={v}
           type="button"
+          data-button-exempt="role=tab in tablist — aria-selected segmented Board|Funnel toggle inside a shared bordered control; per-option active tint conflicts with variant base"
           role="tab"
           aria-selected={view === v}
           onClick={() => onSwitch(v)}
@@ -213,12 +214,12 @@ function EmptyState() {
       <p className="mx-auto mt-2 max-w-sm text-sm text-soleur-text-secondary">
         The CRO chat is how a lead is entered.
       </p>
-      <Link
+      <NavLink
         href={newLeadHref()}
         className="mt-4 inline-block text-sm font-medium text-soleur-accent-gold-fg hover:underline"
       >
         New lead
-      </Link>
+      </NavLink>
       <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-soleur-text-muted">
         <LockIcon className="h-3.5 w-3.5" />
         This board is read-only

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import useSWR from "swr";
 
 import { ChatSurface } from "@/components/chat/chat-surface";
+import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { swrKeys } from "@/lib/swr-config";
 import {
@@ -172,6 +173,8 @@ export function RoutinesSurface() {
           Recent Runs
         </TabButton>
         <button
+          type="button"
+          data-button-exempt="role=tab in tablist — aria-selected underline-style tab strip; active border/text state cannot reduce to a Button variant"
           role="tab"
           aria-selected={tab === "draft"}
           onClick={() => setTab("draft")}
@@ -207,6 +210,8 @@ function TabButton({
 }) {
   return (
     <button
+      type="button"
+      data-button-exempt="role=tab in tablist — aria-selected underline-style tab strip; active border/text state cannot reduce to a Button variant"
       role="tab"
       aria-selected={active}
       onClick={onClick}
@@ -440,6 +445,7 @@ function RoutineRow({
       <div className="min-w-0 flex-1">
         <button
           type="button"
+          data-button-exempt="truncated text-link row trigger — hover:underline name cell inside a flex row; Button padding/inline-flex chrome would break the truncate layout"
           onClick={onOpen}
           data-testid={`routine-open-${item.fnId}`}
           className="truncate text-left text-sm text-soleur-text-primary hover:underline"
@@ -476,14 +482,17 @@ function RoutineRow({
           <StatusPill status="never" />
         )}
       </div>
-      <button
+      <Button
+        variant="outlined"
+        type="button"
         onClick={onRunNow}
-        disabled={busy}
+        loading={busy}
+        loadingLabel="Running"
         data-testid={`run-now-${item.fnId}`}
         className="rounded border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-primary hover:bg-soleur-bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {busy ? "Running…" : "▷ Run now"}
-      </button>
+        ▷ Run now
+      </Button>
       <span className="text-xs text-green-400">● On</span>
     </li>
   );
@@ -526,20 +535,26 @@ function ConfirmRunModal({
           the audit ledger under your operator identity.
         </p>
         <div className="mt-4 flex justify-end gap-2">
-          <button
+          <Button
+            variant="outlined"
+            type="button"
             onClick={onCancel}
             className="rounded border border-soleur-border-default px-3 py-1.5 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="gold"
+            type="button"
             onClick={onConfirm}
-            disabled={busy}
+            loading={busy}
+            loadingLabel="Running"
+            modal
             data-testid="confirm-run"
             className="rounded bg-amber-500 px-3 py-1.5 text-xs font-medium text-black hover:bg-amber-400 disabled:opacity-50"
           >
-            {busy ? "Running…" : "▷ Run now"}
-          </button>
+            ▷ Run now
+          </Button>
         </div>
       </div>
     </div>
@@ -706,13 +721,14 @@ function RunLogView({
       {error ? (
         <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-5 text-sm text-red-400">
           {error}{" "}
-          <button
+          <Button
+            variant="ghost"
             type="button"
-            onClick={() => loadMore(true)}
+            onClick={() => void loadMore(true)}
             className="ml-1 underline hover:text-red-300"
           >
             Retry
-          </button>
+          </Button>
         </div>
       ) : loaded && runs.length === 0 && live.length === 0 ? (
         <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-8 text-center text-sm text-soleur-text-muted">
@@ -779,13 +795,16 @@ function RunLogView({
             </table>
           )}
           {cursor && (
-            <button
-              onClick={() => loadMore(false)}
-              disabled={loading}
+            <Button
+              variant="outlined"
+              type="button"
+              onClick={() => void loadMore(false)}
+              loading={loading}
+              loadingLabel="Loading"
               className="mt-4 rounded border border-soleur-border-default px-3 py-1.5 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-1 disabled:opacity-50"
             >
-              {loading ? "Loading…" : "Load more"}
-            </button>
+              Load more
+            </Button>
           )}
         </>
       )}
@@ -834,6 +853,7 @@ function RunsFilterBar({
           <button
             key={s.value || "all"}
             type="button"
+            data-button-exempt="segmented status-filter group — per-option active tint inside one shared bordered control"
             data-testid={`runs-filter-status-${s.value || "all"}`}
             onClick={() => onChange({ ...filters, status: s.value })}
             className={`px-2 py-1 text-xs ${
@@ -868,6 +888,7 @@ function RunsFilterBar({
           <button
             key={p.key}
             type="button"
+            data-button-exempt="segmented range-preset group — per-option active tint inside one shared bordered control"
             data-testid={`runs-filter-range-${p.key}`}
             onClick={() => onChange({ ...filters, range: p.key })}
             className={`px-2 py-1 text-xs ${
@@ -882,14 +903,15 @@ function RunsFilterBar({
       </div>
 
       {hasActiveFilters && (
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClear}
           data-testid="runs-filter-clear"
           className="text-xs text-soleur-text-secondary underline hover:text-soleur-text-primary"
         >
           Clear
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -1093,14 +1115,15 @@ function RunDetailPanel({
             </div>
             <StatusPill status={run.status} />
           </div>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={onClose}
             aria-label="Close"
             className="text-soleur-text-muted hover:text-soleur-text-primary"
           >
             ✕
-          </button>
+          </Button>
         </div>
 
         <dl className="mt-4 space-y-2 text-xs">
@@ -1176,14 +1199,15 @@ function RoutineDetailDrawer({
           <div className="text-sm font-medium text-soleur-text-primary">
             {humanizeFnId(item.fnId)}
           </div>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={onClose}
             aria-label="Close"
             className="text-soleur-text-muted hover:text-soleur-text-primary"
           >
             ✕
-          </button>
+          </Button>
         </div>
 
         <p className="mt-2 text-xs leading-relaxed text-soleur-text-secondary">

@@ -80,8 +80,10 @@ export function DebugModeToggle({
         role="switch"
         aria-checked={debugMode}
         aria-label="Debug mode"
+        aria-busy={loading || undefined}
         disabled={loading || !isOwner}
         onClick={handleToggleClick}
+        data-button-exempt="role=switch composite — fixed h-5 w-9 track + sliding thumb span cannot reduce to Button's padding/radius geometry"
         className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${
           debugMode ? "bg-soleur-accent-gold-fg" : "bg-soleur-bg-surface-2"
         } ${loading || !isOwner ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}

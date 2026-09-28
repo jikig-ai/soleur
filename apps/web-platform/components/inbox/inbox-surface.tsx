@@ -12,7 +12,8 @@
 // the ?status=archived query param so the view is deep-linkable.
 
 import { useCallback } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 import useSWR from "swr";
 import { EmailTriageRow } from "@/components/inbox/email-triage-row";
 import { InboxItemRow } from "@/components/inbox/inbox-item-row";
@@ -81,7 +82,7 @@ function EmptyState({
 }
 
 export function InboxSurface() {
-  const router = useRouter();
+  const router = usePendingRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const archived = searchParams.get("status") === "archived";
@@ -259,6 +260,7 @@ function TabButton({
 }) {
   return (
     <button
+      data-button-exempt="role=tab + aria-selected toggle tab strip"
       role="tab"
       aria-selected={active}
       onClick={onClick}

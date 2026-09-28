@@ -32,8 +32,8 @@ import {
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ErrorCard } from "@/components/ui/error-card";
-import { GoldButton } from "@/components/ui/gold-button";
-import { RefreshIcon, SearchIcon, SpinnerIcon } from "@/components/icons";
+import { Button } from "@/components/ui/button";
+import { RefreshIcon, SearchIcon } from "@/components/icons";
 import { FilterBar } from "./filter-bar";
 import { IssueColumn } from "./issue-column";
 import { MobileBoard } from "./mobile-board";
@@ -522,35 +522,36 @@ export function WorkstreamBoard() {
           onChange={setFilters}
         />
         <div className="ml-auto flex items-center gap-2">
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={resetFilters}
             disabled={!anyActive}
             className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-transparent px-3 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-40"
           >
             Reset filters
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="outlined"
             type="button"
             onClick={refetch}
-            disabled={isValidating}
+            loading={isValidating}
+            loadingLabel="Refreshing"
             aria-label="Refresh"
             className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-transparent px-3 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isValidating ? (
-              <SpinnerIcon className="h-4 w-4" />
-            ) : (
-              <RefreshIcon className="h-4 w-4" />
-            )}
-            {isValidating ? "Refreshing…" : "Refresh"}
-          </button>
-          <GoldButton
+            <RefreshIcon className="h-4 w-4" />
+            Refresh
+          </Button>
+          <Button
+            variant="gold"
+            type="button"
             onClick={() => setNewOpen(true)}
             disabled={readOnly || firstLoadFailed}
             data-tour-id="action:new-issue"
           >
             + New Issue
-          </GoldButton>
+          </Button>
         </div>
       </div>
       {refreshFailed ? (
@@ -570,13 +571,14 @@ export function WorkstreamBoard() {
           className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500/90"
         >
           <span>{toast}</span>
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={() => setToast(null)}
             className="rounded border border-amber-500/40 px-2 py-0.5 font-medium hover:bg-amber-500/10"
           >
             Dismiss
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -666,9 +668,9 @@ function EmptyState({
         Issues sync from your connected GitHub repo.
       </p>
       <div className="mt-4 flex justify-center">
-        <GoldButton onClick={onNew} disabled={disabled}>
+        <Button variant="gold" type="button" onClick={onNew} disabled={disabled}>
           + New Issue
-        </GoldButton>
+        </Button>
       </div>
     </div>
   );
@@ -680,13 +682,14 @@ function NoResults({ onReset }: { onReset: () => void }) {
       <p className="text-sm text-soleur-text-secondary">
         No issues match your filters or search.
       </p>
-      <button
+      <Button
+        variant="outlined"
         type="button"
         onClick={onReset}
         className="mt-3 rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
       >
         Reset filters
-      </button>
+      </Button>
     </div>
   );
 }
