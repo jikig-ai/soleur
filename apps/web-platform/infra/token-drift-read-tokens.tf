@@ -96,10 +96,11 @@
 # distinct typo-guard token, a required reason, a concurrency mutex and a publish-channel check
 # BEFORE the irreversible apply. Nothing equivalent exists for these tokens, so rotating one today
 # means an operator running Terraform locally with `DOPPLER_TOKEN_TF` in hand. That is an operator
-# step, and it is the status quo for all nine sibling `doppler_service_token`s in this root
-# (`git_data`, `registry`, `kb_drift`, `inngest`, `inngest_arm_write`, …). Three of them,
-# `workspaces_luks`, `web_probes` and `ghcr_minter`, now document a rename route instead (a
-# ForceNew `name` change with create_before_destroy, merged with `[ack-destroy]`); the rest
+# step, and it is the status quo for all eight sibling `doppler_service_token`s in this root
+# (`git_data`, `registry`, `kb_drift`, `inngest`, `inngest_arm_write`, …). Two of them,
+# `workspaces_luks` and `web_probes`, now document a rename route instead (a
+# ForceNew `name` change with create_before_destroy, merged with `[ack-destroy]`; a third,
+# `ghcr_minter`, did until #8714 task 5.4 destroyed it); the rest
 # document the same bare recipe. The `-replace` arm is a family-wide gap rather than one this
 # shape introduces — tracked in issue #7263 so it is fixed for the whole family at once rather
 # than bolted onto this change for one.
@@ -116,7 +117,7 @@
 # STATE STORAGE — THIRTEEN KEYS, AND A FOURTEENTH COPY OF ALL OF THEM. Each token's `key` is
 # Computed + Sensitive + write-once, so the cleartext lands in `terraform.tfstate` on the R2 backend
 # (`soleur-terraform-state`; server-side encrypted, TLS-only — see `main.tf`), the same posture the
-# other ten `doppler_service_token` keys in this root already have.
+# other eight `doppler_service_token` keys in this root already have.
 #
 # What is NOT the same posture, and what this paragraph used to omit: `github_actions_secret
 # .doppler_token_drift_map` carries `plaintext_value` — the WHOLE JSON map — so the state also holds
@@ -130,7 +131,8 @@
 # covering the whole `soleur` project, including `prd`, which holds SUPABASE_SERVICE_ROLE_KEY
 # (bypass-RLS read of all user data), the Terraform GitHub App private key (which yields an
 # installation token that can rewrite every repository Actions secret, INCLUDING this one),
-# GHCR_MINTER_DOPPLER_TOKEN (itself a read/write Doppler credential), PROXY_TLS_KEY and three git
+# GHCR_MINTER_DOPPLER_TOKEN (a read/write Doppler credential, destroyed by #8714 task 5.4),
+# PROXY_TLS_KEY and three git
 # transport SSH keys. That reach was disclosed and accepted at #7159; what changes here is that it
 # becomes REAL, where today's live reach is one config. A leaked `DOPPLER_TOKEN_DRIFT_MAP` or a
 # leaked R2 access key yields all thirteen at once.

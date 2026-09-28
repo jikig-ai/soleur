@@ -327,7 +327,7 @@
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) — in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation, now substantiated",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) — in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 (that file was deleted by #8714 task 5.4) previously asserted 'encrypted' with no attestation, now substantiated",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "physical-media compromise of the Terraform state store",
