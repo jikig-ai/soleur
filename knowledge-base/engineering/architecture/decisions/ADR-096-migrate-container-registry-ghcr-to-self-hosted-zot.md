@@ -149,6 +149,8 @@ and neither closes this debt:
   the recut fireable again; it does **not** give production a fallback.
 - **#7278** — the registry host has no in-place restart lever. Reduces how often the
   no-fallback constraint gets exercised; does not remove it.
+  *(2026-09-28, #7377: still true, now by decision. ADR-172's amendment of 2026-09-28 records
+  `push-config` as the merge-to-replace path and `restart` / `reclaim` as not built.)*
 
 Neither restoration path named above (a zero-touch-mintable GHCR pull credential, or a
 second mirror) is owned by either. The closest fit for the second-mirror arm is **#6126**
