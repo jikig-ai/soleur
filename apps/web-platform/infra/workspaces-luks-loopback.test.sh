@@ -1322,18 +1322,39 @@ fi
 # loaded; web-1's apply-log print read it inactive/dead — measured on systemd 261 --user: the timer
 # is collected, so it reads not-found => inactive/dead).
 #
+# #9098 I — four tightenings:
+#   * the pre-clear is EXTRACTED from arm_dead_man (its `systemctl stop|reset-failed
+#     workspaces-luks-deadman.*` lines, unit name substituted), never hand-copied, so a drift in the
+#     script's clear-out turns this case red instead of leaving it green on a stale copy;
+#   * the re-arm must succeed on the FIRST systemd-run (rearm_attempts=1): production calls it ONCE
+#     and dies arm_failed on a refusal, so a retry that "eventually" arms proves nothing;
+#   * L7d: a loaded, never-fired timer's LastTriggerUSec must read EMPTY — the fact that made
+#     disarm_dead_man's old `!= n/a` clause dead (check (a) is now "any non-empty value");
+#   * L7e: a RUNNING transient simple service (/bin/sleep, the dead-man fire's service type) must read
+#     ActiveState=active — the value the fire-in-progress fixtures and _deadman_fire_live pin.
+#
 # NO SILENT SKIP: without a usable system manager the case reports SYSTEMD_UNAVAILABLE and FAILS.
 # The measurement body runs in a subshell whose EXIT trap stops and resets the throwaway units; the
 # parent then asserts that nothing was left loaded. teardown() clears them too, as a backstop.
 L7_UNIT="wl-luks-deadman-probe-$$"
+L7_RUN_UNIT="${L7_UNIT}-run"
 l7_clear() {
-  systemctl stop "$L7_UNIT.timer" "$L7_UNIT.service" >/dev/null 2>&1
-  systemctl reset-failed "$L7_UNIT.timer" "$L7_UNIT.service" >/dev/null 2>&1
+  systemctl stop "$L7_UNIT.timer" "$L7_UNIT.service" "$L7_RUN_UNIT.service" >/dev/null 2>&1
+  systemctl reset-failed "$L7_UNIT.timer" "$L7_UNIT.service" "$L7_RUN_UNIT.service" >/dev/null 2>&1
   return 0
 }
 l7_prop() { systemctl show "$1" -p "$2" --value 2>/dev/null || true; }
 l7_val() { sed -n "s/^$1=//p" "$L7_OUT" | sed -n '1p'; }
 L7_OUT="$TMPROOT/l7.out"; : > "$L7_OUT"
+# The script's OWN pre-clear, extracted from arm_dead_man (comment-stripped), unit renamed.
+L7_PRECLEAR="$(awk '/^arm_dead_man\(\) \{/{f=1} f{print} f && /^}/{exit}' "$CUTOVER" \
+  | grep -vE '^[[:space:]]*#' | grep -E '^[[:space:]]*systemctl (stop|reset-failed) workspaces-luks-deadman\.' \
+  | sed -E "s/workspaces-luks-deadman\\./${L7_UNIT}./g")"
+L7_PRECLEAR_N="$(grep -c . <<<"$L7_PRECLEAR" || true)"
+if [ "$L7_PRECLEAR_N" -ne 2 ] || ! grep -qE "systemctl stop ${L7_UNIT}\.timer" <<<"$L7_PRECLEAR" \
+  || ! grep -qE "systemctl reset-failed ${L7_UNIT}\.timer ${L7_UNIT}\.service" <<<"$L7_PRECLEAR"; then
+  no "L7: could not extract arm_dead_man's pre-clear (got $L7_PRECLEAR_N line(s): [$(tr '\n' '|' <<<"$L7_PRECLEAR")]) — the clear-out under test would be a hand copy; treat L7b as UN-RUN"
+fi
 if [ ! -d /run/systemd/system ] || ! command -v systemd-run >/dev/null 2>&1 \
   || [ -z "$(systemctl show -p Version --value 2>/dev/null)" ]; then
   no "L7: SYSTEMD_UNAVAILABLE — no usable system manager (/run/systemd/system, systemd-run, systemctl show); the #9045 real-systemd evidence was NOT collected (a failure, never a skip)"
@@ -1357,10 +1378,10 @@ else
     err="$(systemd-run --unit="$L7_UNIT" --on-active=30min --description="wl-luks #9045 probe" /bin/true 2>&1 >/dev/null)"; rc=$?
     echo "h1_rc=$rc"
     echo "h1_err=$(printf '%s\n' "$err" | head -n1 | cut -c1-200)"
-    # 3. The script's EXACT clear-out (arm_dead_man step 2), then the same-name arm must succeed
-    #    within the bounded attempts and read SubState=waiting (arm_dead_man step 5).
-    systemctl stop "$L7_UNIT.timer" >/dev/null 2>&1; echo "clear_stop_rc=$?"
-    systemctl reset-failed "$L7_UNIT.timer" "$L7_UNIT.service" >/dev/null 2>&1; echo "clear_rf_rc=$?"
+    # 3. The script's OWN clear-out (extracted above, arm_dead_man step 2), then ONE same-name
+    #    systemd-run, as production issues exactly one. Up to 5 attempts are still MEASURED (so a
+    #    late success is visible in the note), but only attempts=1 passes L7b.
+    eval "$L7_PRECLEAR"; echo "clear_rc=$?"
     n=0; rc=1
     while [ "$n" -lt 5 ]; do
       n=$((n + 1))
@@ -1376,19 +1397,37 @@ else
       sleep 1
     done
     echo "rearm_substate=$st"
+    # 4. L7d — the re-armed timer is LOADED and has NEVER fired: its LastTriggerUSec, read exactly as
+    #    disarm_dead_man reads it (`-p LastTriggerUSec --value`), in brackets so empty is visible.
+    echo "neverfired_loadstate=$(l7_prop "$L7_UNIT.timer" LoadState)"
+    echo "neverfired_lasttrigger=[$(l7_prop "$L7_UNIT.timer" LastTriggerUSec)]"
+    # 5. L7e — a RUNNING transient simple service: the fire's own service type (no --service-type).
+    systemd-run --unit="$L7_RUN_UNIT" --description="wl-luks #9098 running-fire probe" /bin/sleep 5 >/dev/null 2>&1
+    echo "run_rc=$?"
+    n=0; st=""
+    while [ "$n" -lt 5 ]; do
+      n=$((n + 1)); st="$(l7_prop "$L7_RUN_UNIT.service" ActiveState)"
+      [ "$st" = active ] && break
+      sleep 1
+    done
+    echo "running_activestate=$st"
+    echo "running_job=[$(l7_prop "$L7_RUN_UNIT.service" Job)]"
   ) > "$L7_OUT" 2>&1
-  # 4. After the subshell's EXIT trap: nothing throwaway is left loaded (collection is asynchronous,
+  # 6. After the subshell's EXIT trap: nothing throwaway is left loaded (collection is asynchronous,
   #    so bounded by attempts).
-  n=0; l7_t=""; l7_s=""
+  n=0; l7_t=""; l7_s=""; l7_r=""
   while [ "$n" -lt 10 ]; do
     n=$((n + 1)); l7_t="$(l7_prop "$L7_UNIT.timer" LoadState)"; l7_s="$(l7_prop "$L7_UNIT.service" LoadState)"
-    [ "$l7_t" = not-found ] && [ "$l7_s" = not-found ] && break
+    l7_r="$(l7_prop "$L7_RUN_UNIT.service" LoadState)"
+    [ "$l7_t" = not-found ] && [ "$l7_s" = not-found ] && [ "$l7_r" = not-found ] && break
     sleep 1
   done
   note "L7 systemd=$(systemctl show -p Version --value 2>/dev/null) after an elapsed fire: $(l7_val measure_timer)"
   note "L7 failed service: $(l7_val measure_service)"
   note "L7 H1 same-name refusal: rc=$(l7_val h1_rc) stderr=[$(l7_val h1_err)]"
-  note "L7 clear-out: stop rc=$(l7_val clear_stop_rc) reset-failed rc=$(l7_val clear_rf_rc); re-arm rc=$(l7_val rearm_rc) after $(l7_val rearm_attempts) attempt(s), SubState=$(l7_val rearm_substate)"
+  note "L7 clear-out (extracted: $(tr '\n' ';' <<<"$L7_PRECLEAR")) rc=$(l7_val clear_rc); re-arm rc=$(l7_val rearm_rc) after $(l7_val rearm_attempts) attempt(s), SubState=$(l7_val rearm_substate)"
+  note "L7 never-fired loaded timer: LoadState=$(l7_val neverfired_loadstate) LastTriggerUSec=$(l7_val neverfired_lasttrigger)"
+  note "L7 running transient simple service: ActiveState=$(l7_val running_activestate) Job=$(l7_val running_job)"
   if [ "$(l7_val create_rc)" = 0 ] && [ "$(l7_val svc_after_fire)" = failed ] && [ -n "$(l7_val h1_rc)" ] \
     && [ "$(l7_val h1_rc)" != 0 ] && grep -qE '^h1_err=.*(already loaded|fragment)' "$L7_OUT"; then
     ok "L7a: H1 reproduced — while a FAILED transient service is loaded, a same-name systemd-run exits non-zero and its stderr names the collision"
@@ -1396,15 +1435,25 @@ else
     no "L7a: H1 NOT reproduced on this systemd (create=$(l7_val create_rc) svc=$(l7_val svc_after_fire) rc=$(l7_val h1_rc) err=[$(l7_val h1_err)])"
     note "out: $(tr '\n' '|' < "$L7_OUT")"
   fi
-  if [ "$(l7_val rearm_rc)" = 0 ] && [ "$(l7_val rearm_substate)" = waiting ]; then
-    ok "L7b: after the script's exact clear-out (stop timer, reset-failed both), the same-name systemd-run succeeds within the bound and reads SubState=waiting"
+  if [ "$L7_PRECLEAR_N" -eq 2 ] && [ "$(l7_val rearm_rc)" = 0 ] && [ "$(l7_val rearm_attempts)" = 1 ] && [ "$(l7_val rearm_substate)" = waiting ]; then
+    ok "L7b: after the script's OWN extracted clear-out (stop timer, reset-failed both), the FIRST same-name systemd-run succeeds and reads SubState=waiting"
   else
-    no "L7b: the clear-out did not make the unit armable (rearm rc=$(l7_val rearm_rc) attempts=$(l7_val rearm_attempts) substate=$(l7_val rearm_substate))"
+    no "L7b: the clear-out did not make the unit armable on the single attempt production makes (extracted=$L7_PRECLEAR_N rearm rc=$(l7_val rearm_rc) attempts=$(l7_val rearm_attempts) substate=$(l7_val rearm_substate))"
   fi
-  if [ "$l7_t" = not-found ] && [ "$l7_s" = not-found ]; then
-    ok "L7c: the EXIT trap left no throwaway unit loaded (timer + service both not-found)"
+  if [ "$(l7_val neverfired_loadstate)" = loaded ] && [ "$(l7_val neverfired_lasttrigger)" = "[]" ]; then
+    ok "L7d: a LOADED never-fired timer reads LastTriggerUSec EMPTY — disarm check (a) = 'any non-empty value' is exact (the dropped n/a clause was dead)"
   else
-    no "L7c: a throwaway unit outlived the EXIT trap (timer=$l7_t service=$l7_s)"
+    no "L7d: a loaded never-fired timer read LoadState=$(l7_val neverfired_loadstate) LastTriggerUSec=$(l7_val neverfired_lasttrigger) — if non-empty, disarm check (a) would fail EVERY door on this systemd"
+  fi
+  if [ "$(l7_val run_rc)" = 0 ] && [ "$(l7_val running_activestate)" = active ]; then
+    ok "L7e: a RUNNING transient simple service reads ActiveState=active (the fire-in-progress value _deadman_fire_live must match)"
+  else
+    no "L7e: a running transient simple service read ActiveState=$(l7_val running_activestate) (run rc=$(l7_val run_rc)) — the fire-in-progress fixtures model the wrong value"
+  fi
+  if [ "$l7_t" = not-found ] && [ "$l7_s" = not-found ] && [ "$l7_r" = not-found ]; then
+    ok "L7c: the EXIT trap left no throwaway unit loaded (timer + service + running probe all not-found)"
+  else
+    no "L7c: a throwaway unit outlived the EXIT trap (timer=$l7_t service=$l7_s run=$l7_r)"
   fi
 fi
 

@@ -376,17 +376,34 @@ shopt -q dotglob && no "wl_count_workspace_dirs leaked dotglob=on to the caller"
   || ok "wl_count_workspace_dirs restores the caller's glob state"
 rm -rf "$wc_root"
 
-# (x) DEAD-MAN OBSERVABILITY (#6812, #9045). A successful remount silently undid the 2026-07-20
+# (x) DEAD-MAN OBSERVABILITY (#6812, #9045, #9098). A successful remount silently undid the 2026-07-20
 # cutover; the fire, the arm, the disarm, and both remount outcomes must each emit a marker. #9045
 # added the arm's refusal/failure rows, the disarm's verified-failure row, the unarmed-rollback row
 # and one outcome row per abort, and retired the false `reason=canary_passed` (rollback() used to
 # log it). Every row shares the full prefix below, so ONE Better Stack grep finds the whole story.
+# #9098 K: `_deadman_row` now PREPENDS that prefix itself and call sites pass `result=…`, so the
+# fire rows (literal, inside the self-contained systemd-run string) and the _deadman_row rows are
+# checked separately. Every check reads COMMENT-STRIPPED source: a call commented out is gone.
 DM_PFX='SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman'
+DM_SRC="$(grep -vE '^[[:space:]]*#' "$CUT")"
 for pat in \
   "result=fired reason=timer_elapsed" \
-  "result=armed reason=freeze_engaged" \
   "result=ok reason=plaintext_remounted" \
   "result=fail reason=remount_failed" \
+  "result=fail reason=mapper_close_failed"; do
+  if grep -qF "$DM_PFX $pat" <<<"$DM_SRC"; then
+    ok "dead-man FIRE emits marker: $pat"
+  else
+    no "dead-man FIRE MISSING marker ($pat) — the #6812 blind spot is not closed"
+  fi
+done
+if grep -qF "local row=\"$DM_PFX \$1\"" <<<"$DM_SRC"; then
+  ok "_deadman_row prepends the full dead-man prefix to every row"
+else
+  no "_deadman_row does not prepend '$DM_PFX' — its rows would not be found by the one prefix grep"
+fi
+for pat in \
+  "result=armed reason=freeze_engaged" \
   "result=arm_refused reason=already_armed" \
   "result=arm_refused reason=fire_in_progress" \
   "result=arm_failed reason=systemd_run_refused" \
@@ -394,17 +411,32 @@ for pat in \
   'result=disarmed reason=${reason}' \
   'result=disarm_failed reason=${reason} check=${check}' \
   "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
-  "result=not_armed reason=rollback_engaged" \
-  'result=cutover_aborted outcome=${outcome}'; do
-  if grep -qF "$DM_PFX $pat" "$CUT"; then
+  "result=not_armed reason=rollback_engaged prior=" \
+  "result=already_disarmed reason=rollback_engaged" \
+  'result=cutover_aborted outcome=${outcome}${abnormal}${detail}'; do
+  if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
   else
     no "dead-man MISSING marker ($pat) — the #6812 blind spot is not closed"
   fi
 done
+# The closed OUTCOME vocabulary of cleanup() (#9098 B): each value is assigned somewhere, and the
+# abnormal-exit field exists. A renamed outcome would silently orphan the runbook's triage row.
+for o in rolled_back rollback_stacked rollback_remount_failed post_canary_luks_retained post_canary_restart_failed \
+         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run; do
+  if grep -qE "(^|[;[:space:]])outcome=${o}([;[:space:]]|\$)" <<<"$DM_SRC"; then
+    ok "cleanup() outcome vocabulary carries outcome=$o"
+  else
+    no "cleanup() outcome=$o is never assigned — its runbook row is orphaned"
+  fi
+done
+if grep -qF 'abnormal=" abnormal_exit=1"' <<<"$DM_SRC"; then
+  ok "cleanup() marks a signal/incomplete exit with abnormal_exit=1"
+else
+  no "cleanup() never emits abnormal_exit=1 — a signal-driven abort is indistinguishable from a die"
+fi
 # Each reason of the CLOSED disarm vocabulary has exactly its call site (comment-stripped), and the
 # retired reason is gone: `canary_passed` described a rollback as a pass.
-DM_SRC="$(grep -vE '^[[:space:]]*#' "$CUT")"
 for site in "disarm_dead_man host_canary_passed" "disarm_dead_man rollback_engaged" "disarm_dead_man arm_aborted"; do
   if grep -qE "(^|[[:space:];&|{])${site}([[:space:]]|;|\$)" <<<"$DM_SRC"; then
     ok "dead-man disarm call site present: $site"
