@@ -96,6 +96,14 @@ re-review is reserved for the triggers above.
 > throttled by `frequency_minutes = 5`: at most one email per issue per 5 minutes, never one per refusal. Its
 > `feature` and `op` filters are unchanged. The rows are not edited. See the addendum at the end of this file.
 
+> **Superseded 2026-09-28 (#5914): O2, as to "stays on the error path" and "it neither reaches `art17_erasure_incomplete`
+> nor matches a tag sweep", and D6, as to "the outer catch is still affected (O2)".** O2 sits in the frontmatter, so its
+> correction is placed here, beside D6, which cites it. Since the merge of PR #9096 the outer-catch report in
+> `deleteAccount` also goes through the message path (`reportSilentFallback(null, …)`), tagged
+> `feature=account-delete`, `op=git-data-bare-repo-erasure` and `erasure_outcome=threw`, so
+> `art17_erasure_incomplete` routes it and a tag sweep matches it. This correction is not conditioned on #8572. O2 is
+> not edited.
+
 ## Processors, recipients, data categories
 
 No new processor, recipient, transfer or category of personal data. The pin is a host public key,
