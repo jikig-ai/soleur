@@ -50,6 +50,13 @@ apps/web-platform/server/byok-delegation-ui-resolver.ts
 apps/web-platform/app/api/workspace/delegations/route.ts
 apps/web-platform/app/api/workspace/delegations/accept/route.ts
 
+# Billing routes (#8918): pending_checkout_sessions claim/marker writes on
+# POST /api/checkout and marker cleanup in the Stripe webhook. The marker
+# table is service-role-only by design (RLS enabled, zero policies) —
+# the per-user claim cannot live behind an authenticated client.
+apps/web-platform/app/api/checkout/route.ts
+apps/web-platform/app/api/webhooks/stripe/route.ts
+
 # Bulk sweeps in agent-runner.ts at `cleanupOrphanedConversations`
 # and `startInactivityTimer`. Both are staleness-keyed
 # (`last_active < cutoff`) — no per-tenant key, no userId in scope.
