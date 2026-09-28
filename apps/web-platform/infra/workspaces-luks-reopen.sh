@@ -47,8 +47,9 @@
 #                   mounted (ACTION=mounted)
 #   identity-mount  findmnt SOURCE of the target is the mapper (mountedness is
 #                   not identity)
-#   emit            the reporter's emit channel is structurally sound and the
-#                   success row is journaled (reopened/mounted only; noop silent)
+#   emit            the reporter's emit channel is structurally sound — checked
+#                   on EVERY run, noop included — and the success row is
+#                   journaled (reopened/mounted only; noop silent)
 # Success: ACTION=reopened|mounted logs ONE journald line; ACTION=noop is silent.
 # Neither arm reaches workspaces_luks_emit — failure-only is the whole emit
 # contract (AC9).
@@ -193,7 +194,8 @@ esac
 phase mount
 if ! mountpoint -q "$TARGET"; then
   _munit=$(systemd-escape -p --suffix=mount "$TARGET")
-  systemctl daemon-reload 2>>"$LOG" || true
+  systemctl daemon-reload 2>>"$LOG" \
+    || { _rc=$?; logger -t workspaces-luks-reopen "daemon-reload rc=$_rc (stale generated units possible)"; }
   if ! systemctl start "$_munit" 2>>"$LOG"; then
     journalctl -u "$_munit" -n 20 --no-pager -o cat >>"${LOG:?}" 2>&1 || true
     die "systemctl start $_munit failed"
@@ -205,14 +207,27 @@ phase identity-mount
 _src=$(findmnt -n -o SOURCE "$TARGET" 2>>"$LOG" || true)
 [ "$_src" = "$MAPPER" ] || die "$TARGET is mounted from '${_src:-nothing}', not $MAPPER"
 
+# A recovered boot can still leave the site down: while /mnt/data was absent,
+# RequiresMountsFor=/mnt/data held docker.service in dependency-failed, and a
+# dependency-failed unit does NOT re-queue once the mount is satisfied — nothing
+# else starts it again. On the REAL unlock arm only (ACTION=reopened|mounted —
+# never the installer's noop proof, where docker is already running and an
+# unbounded start would eat the client's 420s bound), kick it explicitly; the rc
+# is journaled nonfatal evidence, not a phase fault.
+if [ "$ACTION" != noop ]; then
+  systemctl start docker.service 2>>"$LOG" \
+    || logger -t workspaces-luks-reopen "docker.service start rc=$? (nonfatal)"
+fi
+
 # THE SUCCESS PATH IS JOURNALD-ONLY, AND THAT IS LOAD-BEARING. Everything above
 # has already succeeded — the mapper is open and /mnt/data is mounted from it —
 # so the evidence row is `logger -t workspaces-luks-reopen`, NEVER
 # workspaces_luks_emit: that emitter hardcodes op=workspaces-luks-drift, the sole
 # paging op, and its Sentry issue alert pages on count > 0 regardless of level —
-# a success emit would page on every healthy reboot. The emit file's PRESENCE is
-# still asserted here, on the success path, because on the failure path it is the
-# thing that would be broken: workspaces-luks-reopen-failure.service sources
+# a success emit would page on every healthy reboot. The emit channel's
+# structural soundness is asserted on EVERY run — noop included — because on the
+# failure path it is the thing that would be broken:
+# workspaces-luks-reopen-failure.service sources
 # /usr/local/bin/workspaces-luks-emit.sh to emit via workspaces_luks_emit. An
 # absent/unreadable helper makes EVERY later failure on this host silent — a
 # structural fault, so it refuses with exit 3, NOT 1:
@@ -221,14 +236,15 @@ _src=$(findmnt -n -o SOURCE "$TARGET" 2>>"$LOG" || true)
 # reported by the reporter as action=emit; off-host the emit itself is dark by
 # construction — what an agent sees is the unit failed with ExecMainStatus=3.
 phase emit
+# Sibling-first resolution, the luks-monitor.sh EMIT shape: production finds
+# /usr/local/bin/workspaces-luks-emit.sh, the suite's scratch copy finds its
+# own fixture next to the script under test. Hoisted OUT of the noop guard so
+# the noop proof run also certifies the reporter's paging channel.
+EMIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspaces-luks-emit.sh"
+[ -f "$EMIT" ] || EMIT="/usr/local/bin/workspaces-luks-emit.sh"
+[ -r "$EMIT" ] \
+  || { printf '%s\n' "workspaces-luks-emit.sh is absent or unreadable: the OnFailure reporter cannot page — every later failure on this host would be silent" >> "${LOG:?}"; exit 3; }
 if [ "$ACTION" != noop ]; then
-  # Sibling-first resolution, the luks-monitor.sh EMIT shape: production finds
-  # /usr/local/bin/workspaces-luks-emit.sh, the suite's scratch copy finds its
-  # own fixture next to the script under test.
-  EMIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspaces-luks-emit.sh"
-  [ -f "$EMIT" ] || EMIT="/usr/local/bin/workspaces-luks-emit.sh"
-  [ -r "$EMIT" ] \
-    || { printf '%s\n' "workspaces-luks-emit.sh is absent or unreadable: the OnFailure reporter cannot page — every later failure on this host would be silent" >> "${LOG:?}"; exit 3; }
   _restarts=$(systemctl show --value -p NRestarts "$UNIT" 2>/dev/null || echo unknown)
   logger -t workspaces-luks-reopen -- "workspaces LUKS mapper reopened at boot action=$ACTION target=$TARGET restarts=${_restarts:-unknown}" || true
 fi

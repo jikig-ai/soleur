@@ -29,9 +29,13 @@ Environment=HOME=/root
 EnvironmentFile=-/etc/default/luks-monitor
 EnvironmentFile=-/etc/default/workspaces-luks-boot
 UMask=0077
-# Confines /tmp/.doppler (the doppler CLI honours api-host/verify-tls from a
-# .doppler.yaml found there — the git-data reporter measurement); the emit runs
-# in a child shell that inherits the same confinement.
+# Belt-and-suspenders only: confines any CLI tmp writes. The git-data reporter's
+# cited mechanism (DOPPLER_CONFIG_DIR=/tmp/.doppler) is NOT set on web-1 — the
+# CLI resolves $HOME/.doppler = /root/.doppler here, already root-only. The emit
+# runs in a child shell that inherits the same confinement.
+# Environment=TMPDIR is DELIBERATELY absent: this unit's emit path writes no
+# temp files (the DP-9 in-memory emit) — unlike the git-data sibling, whose
+# emitter's _devalue mktemp needed TMPDIR=/dev/shm.
 PrivateTmp=yes
 LimitCORE=0
 # Without this the ExecStart basename (`sh`) is the journald tag, so the
@@ -47,9 +51,11 @@ SyslogIdentifier=workspaces-luks-reopen
 #     envelope is fixed-shape; that tag is where the discriminating tuple rides).
 #  3. the discriminating WL_* fields: mapper_present ([ -e ] + cryptsetup status
 #     for cryptsetup_unit_result), mountpoint_ok + mount_source (findmnt), and
-#     doppler_reachable — a bounded `timeout 15` `doppler secrets get
-#     WORKSPACES_LUKS_KEY --plain` probe whose output goes to /dev/null (the rc
-#     is the signal; the passphrase never touches argv, disk or the envelope).
+#     doppler_reachable — a bounded `timeout 15` NON-SECRET probe,
+#     `doppler secrets --only-names --config <scoped>` (the same config-scoped
+#     no-run/no-download shape as the R9-pinned key read, minus the value: a
+#     names listing proves reachability+scope without a secret ever transiting
+#     the probe; the rc is the signal, output to /dev/null).
 #  4. one emit under `timeout 90`: workspaces_luks_emit is fail-open and
 #     read-only, but a hang (network, resolver) must not eat TimeoutStartSec and
 #     lose the whole report on the one unit that is the sole signal for a
@@ -70,10 +76,10 @@ ExecStart=/bin/sh -c 'u=workspaces-luks-reopen.service; \
   if cryptsetup status workspaces >/dev/null 2>&1; then cs=active; else cs=inactive; fi; \
   if mountpoint -q /mnt/data 2>/dev/null; then mok=true; else mok=false; fi; \
   ms=$(findmnt -n -o SOURCE /mnt/data 2>/dev/null || true); [ -n "$ms" ] || ms=none; \
-  if timeout 15 /usr/local/bin/doppler secrets get WORKSPACES_LUKS_KEY --plain --config "${WORKSPACES_DOPPLER_CONFIG:-prd_workspaces_luks}" >/dev/null 2>&1; then dr=true; else dr=false; fi; \
+  if timeout 15 /usr/local/bin/doppler secrets --only-names --config "${WORKSPACES_DOPPLER_CONFIG:-prd_workspaces_luks}" >/dev/null 2>&1; then dr=true; else dr=false; fi; \
   d=/run/workspaces-luks-reopen/log; \
   echo "workspaces-luks-reopen FAILED action=$a result=$r rc=$c code=$k restarts=$n mapper_present=$mp cryptsetup_unit=$cs mountpoint_ok=$mok mount_source=$ms doppler_reachable=$dr" >&2; \
-  [ ! -s "$d" ] || tail -n 4 "$d" >&2; \
+  [ ! -s "$d" ] || sed "s/[[:cntrl:]]//g; s/[[][0-9;]*m//g" "$d" | grep -iE "doppler error|unable to|failed|fatal|error" | tail -n 4 >&2 || true; \
   WL_REASON="boot_unlock_failed:$a" WL_LEVEL=fatal WL_MAPPER_PRESENT="$mp" WL_CRYPTSETUP_UNIT_RESULT="$cs" WL_MOUNTPOINT_OK="$mok" WL_MOUNT_SOURCE="$ms" WL_DOPPLER_REACHABLE="$dr" WL_LUKS_OPEN_RESULT="result=$r,rc=$c,code=$k,restarts=$n" \
   timeout 90 /bin/bash -c ". /usr/local/bin/workspaces-luks-emit.sh; workspaces_luks_emit" \
   || logger -p user.crit -t workspaces-luks-reopen -- "SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=emit_leg_failed drift_reason=boot_unlock_failed:$a"'

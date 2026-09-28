@@ -1232,26 +1232,33 @@ delivery, riding the same CF-Tunnel-SSH apply stage as `terraform_data.luks_moni
 the probe channel land first. In one resource fire it:
 
 1. prints the read-only "before" state (field-selected fstab source, crypttab
-   `^workspaces` count, unit states);
+   `^[[:space:]]*workspaces[[:space:]]` count — an INDENTED `workspaces` mapping is live
+   crypttab syntax, so the anchor skips leading whitespace, unit states);
 2. delivers the `workspaces-luks-reopen` family — the phase-tagged reopen script
    (`config → key → device → header → open → identity → target → mount → identity-mount →
    emit`), the `Type=oneshot` unit with the bounded restart ladder, the `-failure.service`
    reporter, and the standing-retry `.timer` — modelled on the `git-data-luks-reopen` family
    (#8210);
-3. writes `/etc/default/workspaces-luks-boot` (0600 root: the by-id device pin and the Doppler
+3. appends-if-absent the crypttab line `workspaces
+   /dev/disk/by-id/scsi-0HC_Volume_<hcloud_volume.workspaces_luks.id> none luks,noauto` —
+   FIRST of the mutating steps, so an exit-32 foreign-line refusal leaves the consistent OLD
+   pin pair;
+4. writes `/etc/default/workspaces-luks-boot` (0600 root: the by-id device pin and the Doppler
    config name — a NEW env file; `/etc/default/luks-monitor`'s two-writer ownership is
    untouched, the reopen unit reads `DOPPLER_TOKEN` through it and never writes);
-4. appends-if-absent the crypttab line `workspaces
-   /dev/disk/by-id/scsi-0HC_Volume_<hcloud_volume.workspaces_luks.id> none luks,noauto`;
-5. rewrites fstab idempotently to exactly one `/dev/mapper/workspaces /mnt/data ext4
-   defaults,nofail 0 2` line, commenting every superseded line and refusing on a zero- or
-   two-plus-`/mnt/data` post-edit table;
-6. arms the §(e) gate: `docker.service.d/10-workspaces-luks-mount.conf` carrying
-   `RequiresMountsFor=/mnt/data` AND `After=workspaces-luks-reopen.service` (docker queues
-   behind the unlock ladder instead of racing `dev-mapper-workspaces.device`'s timeout), plus
+5. arms the §(e) gate: `docker.service.d/10-workspaces-luks-mount.conf` carrying
+   `RequiresMountsFor=/mnt/data` AND `After=workspaces-luks-reopen.service` (docker
+   fails-then-retries under `RequiresMountsFor` — its own restart policy re-queues it —
+   while `mnt-data.mount`'s device wait can still race `dev-mapper-workspaces.device`'s
+   timeout), plus
    `chattr +i` on the **covered** root-disk `/mnt/data` inode through a non-recursive
    `mount --bind /` peek — the mapper is mounted, so the baked gate's `mountpoint -q`-guarded
-   arm cannot reach that inode on web-1;
+   arm cannot reach that inode on web-1. The gate lands BEFORE the fstab rewrite: a
+   mid-window abort leaves the boot fail-closed (emergency mode), never
+   fstab-fixed-but-gate-absent;
+6. rewrites fstab idempotently to exactly one `/dev/mapper/workspaces /mnt/data ext4
+   defaults,nofail 0 2` line, commenting every superseded line and refusing on a zero- or
+   two-plus-`/mnt/data` post-edit table;
 7. daemon-reloads (docker is never restarted — the drop-in takes effect at the next
    `docker.service` start), enables the units, and runs one proof start of the reopen service,
    which takes the `noop` arm on the live system — the mapper is already open, so the run
@@ -1260,10 +1267,14 @@ the probe channel land first. In one resource fire it:
 8. prints the post-state into the apply log: `findmnt --fstab`, `crypttab-workspaces-lines`,
    unit states, `lsattr -d` through a second peek, `systemd-analyze verify`.
 
-Every mutating step refuses with the exit-17 convention while `workspaces-luks-deadman.timer`
-reads `SubState=waiting` — the installer and a live cutover are mutually exclusive writers of
-fstab/crypttab. `triggers_replace` hashes every delivered byte (the four files plus the writer
-locals), so host drift re-delivers on the next apply; nothing marks the host done permanently.
+Every remote-exec mutating step refuses with the exit-17 convention while
+`workspaces-luks-deadman.timer` reads `SubState=waiting` — the four file provisioners land
+inert payloads before the first remote-exec check (the units stay un-enabled until `arm`),
+and the installer and a live cutover are mutually exclusive around the /mnt/data mount
+epoch: the cutover never writes fstab, but a mid-flight fstab writer races its mount flip.
+`triggers_replace` hashes every delivered byte (the four files plus the writer locals), so
+an edit to delivered bytes re-fires the installer; host-side drift is caught by the units'
+and the daily probe's own asserts, not the apply — nothing marks the host done permanently.
 
 **What this changes in §(e).** §(e)'s last standing claim — "the live delivery path for web-1
 is the cutover job's SSH channel" — is superseded for the mount gate too. The gate and the
@@ -1272,6 +1283,14 @@ stays: it installs the same state a future re-cut re-verifies, and it remains th
 *while a cutover owns the freeze* (which is why the exit-17 refusal exists). The bake
 (`soleur-luks-structural-gate`) is unchanged and stays the fresh-host convention; #6931 owns
 the fresh-host boot-unlock path and is deliberately not this work.
+
+**The §(e) gate's honest boundary.** The drop-in + covered-inode `chattr +i` is a tripwire
+for dockerd-class resurrection — a daemon or an unprivileged process cannot write the bare
+root-disk `/mnt/data` while the mapper is absent. It is NOT an adversarial boundary: root
+can still mount over the covered inode or rename it, and nothing here resists that. What
+covers that residual is the daily `luks-monitor` probe's mount-source/identity asserts
+(`findmnt` source == `/dev/mapper/workspaces`, cryptsetup mapper→device link, header UUID),
+which page the drift a mount-over would create.
 
 **The crypttab divergence is recorded, not reconciled.** The baked gate writes `workspaces
 /dev/disk/by-label/workspaces_luks none luks,nofail`; web-1's line is `workspaces

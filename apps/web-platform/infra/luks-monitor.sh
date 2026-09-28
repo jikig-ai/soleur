@@ -6,9 +6,11 @@
 #
 # On success: pushes the Better Stack heartbeat (a DEAD probe therefore FAILS the heartbeat — P1-4)
 # and logs one OK line under SyslogIdentifier=luks-monitor (Vector ships it to Better Stack).
-# On ANY failed assert: exports the nine WL_* discriminating fields and calls workspaces-luks-emit.sh
+# On ANY failed assert: exports the WL_* discriminating fields and calls workspaces-luks-emit.sh
 # (a direct-curl Sentry envelope carrying feature=workspaces-luks / op=workspaces-luks-drift so the
-# sentry_issue_alert pages — DP-8), then exits non-zero. The probe is read-only; it mutates nothing.
+# sentry_issue_alert pages — DP-8), then exits non-zero. The probe is read-only on every persistent
+# object; the covered-inode check mounts a transient non-recursive bind of / under /run and removes it
+# in the same run.
 #
 # The passphrase is read ONLY via the pinned form `doppler secrets get WORKSPACES_LUKS_KEY --plain
 # --config prd_workspaces_luks` (R9 / workspaces-luks.tf:112) — NEVER `doppler run`/`download
@@ -76,8 +78,9 @@ export WL_DEVICE_TYPE WL_MOUNT_SOURCE WL_MAPPER_PRESENT WL_LUKS_OPEN_RESULT WL_H
 emit_and_die() {
   WL_REASON="$1"
   export WL_DEVICE_TYPE WL_MOUNT_SOURCE WL_MAPPER_PRESENT WL_LUKS_OPEN_RESULT WL_HEADER_UUID_MATCH \
-    WL_CRYPTSETUP_UNIT_RESULT WL_DOPPLER_REACHABLE WL_MOUNTPOINT_OK WL_REASON
-  log "FAIL ($WL_REASON): device_type=$WL_DEVICE_TYPE mount_source=$WL_MOUNT_SOURCE mapper_present=$WL_MAPPER_PRESENT luks_open_result=$WL_LUKS_OPEN_RESULT header_uuid_match=$WL_HEADER_UUID_MATCH cryptsetup_unit_result=$WL_CRYPTSETUP_UNIT_RESULT doppler_reachable=$WL_DOPPLER_REACHABLE mountpoint_ok=$WL_MOUNTPOINT_OK"
+    WL_CRYPTSETUP_UNIT_RESULT WL_DOPPLER_REACHABLE WL_MOUNTPOINT_OK \
+    WL_FSTAB_MNT_DATA_LINES WL_FSTAB_MAPPER_LINE WL_COVERED_INODE_IMMUTABLE WL_REASON
+  log "FAIL ($WL_REASON): device_type=$WL_DEVICE_TYPE mount_source=$WL_MOUNT_SOURCE mapper_present=$WL_MAPPER_PRESENT luks_open_result=$WL_LUKS_OPEN_RESULT header_uuid_match=$WL_HEADER_UUID_MATCH cryptsetup_unit_result=$WL_CRYPTSETUP_UNIT_RESULT doppler_reachable=$WL_DOPPLER_REACHABLE mountpoint_ok=$WL_MOUNTPOINT_OK fstab_mnt_data_lines=${WL_FSTAB_MNT_DATA_LINES:-unknown} fstab_mapper_line=${WL_FSTAB_MAPPER_LINE:-unknown} covered_inode_immutable=${WL_COVERED_INODE_IMMUTABLE:-unknown}"
   if command -v workspaces_luks_emit >/dev/null 2>&1; then
     WL_LEVEL=fatal workspaces_luks_emit
   else
@@ -189,6 +192,45 @@ else
   WL_HEADER_UUID_MATCH=false; emit_and_die header_uuid_unreadable
 fi
 : "${map_uuid:-}"  # informational; the device-header read above is the terminal-limb check
+
+# ---------------------------------------------------------------------------
+# 5b. #9123 review — DELIVERED-STATE asserts (cheap, host-side, every run)
+# ---------------------------------------------------------------------------
+# Steps 1-5 prove the LIVE mount state (mapper open, mounted, keyed). These
+# three prove the DELIVERY state the boot-unlock installer left behind has not
+# regressed — a re-image, a host-side edit, or a partial apply surfaces on the
+# daily probe long before a reboot does. They ride the same drift emit: a
+# regression here IS workspaces-luks-drift, not a new op.
+WL_FSTAB_MNT_DATA_LINES="$(awk '{ m=$2; sub(/\/+$/,"",m); if ($1 !~ /^#/ && m == "/mnt/data") n++ } END { print n+0 }' /etc/fstab 2>/dev/null || true)"
+WL_FSTAB_MNT_DATA_LINES="${WL_FSTAB_MNT_DATA_LINES:-unknown}"
+WL_FSTAB_MAPPER_LINE="$(awk '$1 == "/dev/mapper/workspaces" { f=1 } END { print f+0 }' /etc/fstab 2>/dev/null || true)"
+WL_FSTAB_MAPPER_LINE="${WL_FSTAB_MAPPER_LINE:-unknown}"
+export WL_FSTAB_MNT_DATA_LINES WL_FSTAB_MAPPER_LINE
+# The mount-point match normalizes trailing slashes on a COPY of $2 — the
+# installer's fstab writer shape; a `… /mnt/data/ …` line is the same mount.
+[ "$WL_FSTAB_MNT_DATA_LINES" = 1 ] || emit_and_die fstab_mnt_data_lines
+[ "$WL_FSTAB_MAPPER_LINE" = 1 ] || emit_and_die fstab_mapper_line_missing
+
+# The §(e) gate's covered-inode assert, via the SAME non-recursive `mount
+# --bind /` peek shape the installer's gate_writer uses — the mapper is mounted
+# on web-1, so `lsattr -d /mnt/data` would see the MAPPER's root inode, not the
+# covered root-disk one.
+WL_COVERED_INODE_IMMUTABLE=unknown
+_lm_peek=/run/luks-monitor-peek
+mkdir -p "$_lm_peek" 2>/dev/null || true
+if mount --bind / "$_lm_peek" 2>/dev/null; then
+  case "$(lsattr -d "$_lm_peek/mnt/data" 2>/dev/null | awk '{print $1}')" in
+    *i*) WL_COVERED_INODE_IMMUTABLE=1 ;;
+    *)   WL_COVERED_INODE_IMMUTABLE=0 ;;
+  esac
+  while mountpoint -q "$_lm_peek" 2>/dev/null; do umount "$_lm_peek" 2>/dev/null || break; done
+  rmdir "$_lm_peek" 2>/dev/null || true
+fi
+export WL_COVERED_INODE_IMMUTABLE
+if [ "$WL_COVERED_INODE_IMMUTABLE" = unknown ]; then
+  emit_and_die covered_inode_peek_failed
+fi
+[ "$WL_COVERED_INODE_IMMUTABLE" = 1 ] || emit_and_die covered_inode_not_immutable
 
 # ---------------------------------------------------------------------------
 # 6. #6807 — APPLICATION READINESS + WORKSPACE INVENTORY (flag-gated, default OFF)

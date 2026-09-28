@@ -88,9 +88,13 @@ ExecStart=/usr/local/bin/workspaces-luks-reopen.sh
 # Doppler at boot + a 30 s device wait + the mount job, PER ATTEMPT. After a hard
 # reset the fstab `pass=2` fsck runs inside this bound too.
 TimeoutStartSec=300
-# Confines /tmp/.doppler. NOT ProtectSystem=strict: cryptsetup needs
-# /run/cryptsetup and the reporter reads /run/workspaces-luks-reopen; both would
-# need ReadWritePaths= on a unit whose script writes nothing else.
+# Belt-and-suspenders only: confines any CLI tmp writes. The cited mechanism
+# (DOPPLER_CONFIG_DIR=/tmp/.doppler, the git-data measurement) is NOT set on
+# web-1 — the CLI resolves $HOME/.doppler = /root/.doppler, already root-only.
+# NOT ProtectSystem=strict: cryptsetup needs /run/cryptsetup and the reporter
+# reads /run/workspaces-luks-reopen; both would need ReadWritePaths= on a unit
+# whose script writes nothing else. Environment=TMPDIR is DELIBERATELY absent:
+# the emit path writes no temp files (DP-9 in-memory emit).
 PrivateTmp=yes
 # SyslogIdentifier MUST equal the vector.toml include_matches tag — else the
 # unit's own stderr is tagged with the ExecStart basename and never reaches

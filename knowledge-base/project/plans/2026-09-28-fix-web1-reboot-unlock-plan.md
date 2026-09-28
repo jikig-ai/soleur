@@ -95,8 +95,10 @@ a fresh host must not get these), modelled on the two existing precedents:
   the mapper.
 - **§(e) structural gate** — the `docker.service.d/10-workspaces-luks-mount.conf`
   drop-in carrying `RequiresMountsFor=/mnt/data` plus
-  `After=workspaces-luks-reopen.service` (docker queues behind the unlock ladder
-  instead of racing the device timeout), and `chattr +i` on the **covered**
+  `After=workspaces-luks-reopen.service` (docker fails-then-retries under
+  `RequiresMountsFor` — its own restart policy re-queues it — while
+  `mnt-data.mount`'s device wait can still race
+  `dev-mapper-workspaces.device`'s timeout), and `chattr +i` on the **covered**
   root-disk `/mnt/data` inode via a non-recursive bind peek (`mount --bind /` to
   a scratch path → `chattr +i <peek>/mnt/data` → umount) — the mapper is mounted,
   so the plain `mountpoint -q`-guarded arm in the baked gate cannot reach that
@@ -150,8 +152,9 @@ none luks,noauto` — two deliberate divergences:
   terraform_data.luks_monitor_install]` orders after both in a shared apply.
 - **Freeze-window refusal** — mirror `luks_monitor_install`'s exit-17 pattern:
   the fstab/crypttab writers refuse while `workspaces-luks-deadman.timer` reads
-  `SubState=waiting` (a live cutover owns fstab during its repoint — two writers
-  is a race).
+  `SubState=waiting` (a live cutover owns the /mnt/data mount epoch — the
+  cutover never writes fstab, but a mid-flight fstab writer races its mount
+  flip).
 - **No docker restart.** The drop-in is armed by `daemon-reload` only; it takes
   effect at the next `docker.service` start. The apply must never restart docker —
   that would bounce production to prove a point the state print already proves.
@@ -280,8 +283,10 @@ precedent, not the fix.
   drop-in, the fresh-host analogue).
 - `apps/web-platform/infra/workspaces-luks-emit.sh` — `workspaces_luks_emit`
   (Sentry envelope; `op` hardcoded `workspaces-luks-drift` = the sole paging op).
-- `apps/web-platform/infra/workspaces-cutover.sh` — the cutover owns fstab
-  during a live run; the installer refuses while the dead-man is armed.
+- `apps/web-platform/infra/workspaces-cutover.sh` — the cutover owns the
+  /mnt/data mount epoch during a live run (it never writes fstab — a
+  mid-flight writer races the mount flip); the installer refuses while the
+  dead-man is armed.
 - `apps/web-platform/infra/luks-monitor-install.test.sh` — guard-suite shape
   (decode-and-execute behavioural arm, sha256-pinned public prints, mutation
   battery via env overrides).
@@ -289,7 +294,8 @@ precedent, not the fix.
   `include_matches.SYSLOG_IDENTIFIER` allowlist (`luks-monitor` present).
 - `.github/workflows/apply-web-platform-infra.yml` — the `-target=` SSH apply
   list; `terraform-target-parity.test.ts` derives the covered set
-  (`MIN_SSH_PROVISIONED=18` becomes 19).
+  (`MIN_SSH_PROVISIONED` is a `>=` floor, unchanged — the discovered set goes
+  21 → 22).
 - `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`
   §4 — the "Boot-path re-canary (C15) — blocked on #9123" step flips to the
   post-fix reading.
@@ -369,19 +375,25 @@ context: recorded here; the review phase invokes
     `^[0-9]+$` (it is interpolated into a shell `printf` writing a root-owned
     file) — same shape as the DSN precondition.
   - Provisioners, in order: (1) read-only "before" print; (2) `file` deliveries
-    (0755 script, 0644 units); (3) `/etc/default/workspaces-luks-boot` writer
-    (0600, byte-count asserts); (4) crypttab writer (append-if-absent on
-    `^workspaces[[:space:]]`); (5) fstab writer (backup → comment every
-    existing non-comment `/mnt/data` line → append the mapper line → assert
-    exactly one); (6) `docker.service.d` drop-in + `chattr +i` via bind peek;
-    (7) daemon-reload + enable the units and the timer + one proof run of the
-    reopen service (the mapper is open, so the run takes the `noop`-verified
-    arm — exercising config/key/device/header/identity/target/mount phases
-    end to end); (8) post-state print (`findmnt --fstab`, crypttab count, unit
-    states, `lsattr -d` via a second peek, `systemd-analyze verify` on the
-    units).
-  - Freeze refusal (exit 17, same convention) at the head of every mutating
-    step: refuse while `workspaces-luks-deadman.timer` is `SubState=waiting`.
+    (0755 script, 0644 units — inert payloads, nothing enables them until
+    `arm`); (3) crypttab writer (append-if-absent on
+    `^[[:space:]]*workspaces[[:space:]]` — leading whitespace is live crypttab
+    syntax — FIRST so an exit-32 foreign-line refusal leaves the consistent
+    OLD pin pair); (4) `/etc/default/workspaces-luks-boot` writer
+    (0600, byte-count asserts); (5) `docker.service.d` drop-in + `chattr +i`
+    via bind peek (the gate lands BEFORE the fstab rewrite, so a mid-window
+    abort leaves the boot fail-closed rather than fstab-fixed-but-gate-absent);
+    (6) fstab writer (backup → comment every existing non-comment `/mnt/data`
+    line → append the mapper line → assert exactly one); (7) daemon-reload +
+    enable the units and the timer + one client-bounded (`timeout 420`) proof
+    run of the reopen service (the mapper is open, so the run takes the
+    `noop`-verified arm — exercising config/key/device/header/identity/target/
+    mount phases end to end); (8) post-state print (`findmnt --fstab`, crypttab
+    count, unit states, `lsattr -d` via a second peek, `systemd-analyze verify`
+    on the units).
+  - Freeze refusal (exit 17, same convention) at the head of every
+    remote-exec mutating step: refuse while `workspaces-luks-deadman.timer` is
+    `SubState=waiting`.
 - `apps/web-platform/infra/vector.toml` — add `"workspaces-luks-reopen"` to
   `sources.host_scripts_journald` `include_matches.SYSLOG_IDENTIFIER` (re-fired
   through `terraform_data.journald_persistent`, already in the SSH target set).
@@ -411,8 +423,9 @@ apply.
   sweep `web-host-provisioner-parity.test.sh` scans server.tf destinations and
   requires fresh-boot writers; web-1's unlock path is deliberately not the
   fresh-host path — #6931 owns that).
-- `triggers_replace` hashing means a stale host drifts back into delivery on
-  the next apply; nothing marks the host "done" permanently.
+- `triggers_replace` hashing means an edit to delivered bytes re-fires the
+  installer; host-side drift is caught by the units'/probe's own asserts, not
+  the apply — nothing marks the host "done" permanently.
 - A re-fired installer is idempotent: append-if-absent crypttab,
   rewrite-to-canonical fstab, `chattr +i` idempotent, unit enables idempotent.
 - **ADR-154 re-examination is a plan task:** probe `GET /v1/datacenters`
@@ -807,8 +820,8 @@ to Edit`: `.tf`, `.sh`, `.service`, `.timer`, `.test.sh`, `.toml`, `.yml`,
 - Given the mapper open and mounted (today's live state), when the reopen
   service runs its proof start, then all phases pass and ACTION=noop.
 - Given `workspaces-luks-deadman.timer` SubState=waiting (live freeze), when the
-  installer fires, then every mutating step refuses with the distinct exit code
-  and the resource taints for re-fire.
+  installer fires, then every remote-exec mutating step refuses with the
+  distinct exit code and the resource taints for re-fire.
 - Given a Doppler outage at boot (stubbed `secrets get` failure), when the unit
   ladder exhausts, then exactly one fatal emit reaches `workspaces_luks_emit`
   carrying the failing phase name, and the standing timer resumes retries after

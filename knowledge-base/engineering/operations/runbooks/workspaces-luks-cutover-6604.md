@@ -113,6 +113,16 @@ forever — which the escrow proof + off-host header backup exist to prevent.
      `RequiresMountsFor=/mnt/data` + `After=workspaces-luks-reopen.service`, and the covered
      root-disk `/mnt/data` inode is `chattr +i`.
 
+   **Refusal → recovery map** (the installer's mutating steps refuse with distinct exit
+   codes; what each code means for your next move):
+
+   | Apply step exit | Cause | Recovery |
+   | --- | --- | --- |
+   | `17` | A live cutover freeze is armed (`workspaces-luks-deadman.timer` `SubState=waiting`) | **Self-heals.** The resource taints; the next apply re-fires it once the freeze clears |
+   | `32` | `/etc/crypttab` has a foreign (whitespace-anchored, non-canonical) `workspaces` mapping | **Host reconciliation.** Comment the foreign `^[[:space:]]*workspaces` line, append the pinned by-id line `workspaces /dev/disk/by-id/scsi-0HC_Volume_<volume-id> none luks,noauto`, re-apply |
+   | `42` | `/mnt/data`'s live source is not `/dev/mapper/workspaces` | **Host reconciliation.** The writer refuses to point fstab at a device that is not the live mount — reconcile the mount first, then re-apply |
+   | `54` / `55` / `56` | The covered-inode bind peek failed / peek target is a symlink / peek is not on the root fs | **Host reconciliation.** Inspect `/run/workspaces-boot-unlock-peek` and `/mnt/data` on the host, clear the anomaly, re-apply |
+
    The C15 proof is: reboot once, then run the read-only verify below. Before rebooting,
    confirm the delivery actually landed — the `terraform_data.workspaces_boot_unlock_install`
    post-state print in the latest `apply-web-platform-infra.yml` run must show the single
@@ -126,6 +136,12 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    > down (site down, data-safe — nothing can write the covered root-disk inode), the restart
    > ladder retries, and an exhausted ladder pages once via `op=workspaces-luks-drift` naming
    > the failing phase. That is the failure mode to look for on a bad outcome.
+   >
+   > On a RECOVERED boot — the standing timer later remounts the mapper — the site does not
+   > come back on its own: a dependency-failed `docker.service` does not re-queue once
+   > `RequiresMountsFor` is satisfied, so `systemctl start docker.service` may be needed.
+   > Since the review-fix pass the reopen script self-issues exactly that start on its real
+   > (non-noop) arm — the manual step above is the fallback if that kick itself fails.
 <!-- lint-infra-ignore end -->
 
 5. **Verify (read-only, no SSH).**

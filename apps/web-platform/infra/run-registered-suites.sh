@@ -623,9 +623,10 @@ _SUITE_BOUNDS=(
   # #9123: the boot-unlock guard suite re-runs itself once per mutation row
   # (38 rows), each child executing the writer-arm + stub-PATH runtime arm —
   # ~253 s serial on the dev box. Under -P4 contention the #8688 measurement
-  # says degraded days run ~2.5x; pin at 600 s so a slow day renders as this
+  # says degraded days run ~2.5x, which is ~633 s — already over a 600 pin —
+  # so pin at 700 for sibling-parity headroom; a slow day renders as this
   # suite's RED, not a leg timeout.
-  "apps/web-platform/infra/workspaces-boot-unlock.test.sh=600"
+  "apps/web-platform/infra/workspaces-boot-unlock.test.sh=700"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT
