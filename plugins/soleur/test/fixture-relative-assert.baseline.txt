@@ -282,8 +282,9 @@
 3	plugins/soleur/skills/constraint-scaffold/test/generator.test.sh
 1	plugins/soleur/skills/eval-harness/scripts/gen-models.sh
 2	plugins/soleur/skills/feature-video/scripts/check_deps.sh
-18	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
+20	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
 1	plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh
+1	plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh
 1	plugins/soleur/skills/incident/test/redact-sentinel.test.sh
 1	plugins/soleur/skills/kb-search/scripts/kb-search-cache.sh
 1	plugins/soleur/skills/model-launch-review/scripts/audit-models.sh
