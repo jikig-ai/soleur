@@ -647,7 +647,7 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
         tail_claim="zot_last_err tail (tier=${err_src}, unrecognised by this checker -- treat the provenance as unverified): ${last_err:-none}" ;;
     esac
     fi
-    CAUSE="non-OOM crash-loop — zot_restarts climbed across >= ${CLIMB_N} consecutive events; ${tail_claim}. NEXT (read-only, no SSH, no host change): dispatch registry-zot-inventory.yml to measure what is actually on the store volume before reaching for a destroy — this alarm's own SOLEUR_ZOT_DISK source has no per-path breakdown"
+    CAUSE="non-OOM crash-loop — zot_restarts climbed across >= ${CLIMB_N} consecutive events; ${tail_claim}. NEXT (read-only, no SSH, no host change): registry-zot-inventory.yml measures what is actually on the store volume before anything is destroyed (the alarm workflow dispatches it when it opens a new tracker) — this alarm's own SOLEUR_ZOT_DISK source has no per-path breakdown"
   fi
   DETAIL="newest boot_id=${NEWEST_BOOT}: 137=${has_137} climb_run=${max_run}(>=${CLIMB_N}?${climb_fire}) oom_kills_5m_peak=${max_oom5m}"
   emit_and_exit 1
