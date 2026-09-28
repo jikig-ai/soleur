@@ -500,16 +500,16 @@ path renders `data.error`, which is server text on an existing surface).
 
 ## Acceptance Criteria
 
-- [ ] AC1: Migration `NNN_pending_checkout_sessions.sql` + `.down.sql` create/drop the table with PK on `user_id`, `ON DELETE CASCADE` FK, RLS enabled with zero policies, LAWFUL_BASIS annotation, and a migration test under `test/supabase-migrations/`.
-- [ ] AC2: Two sequential POSTs with a live marker return the SAME checkout session — the second response's `client_secret`/`url` belongs to the session created by the first (covered by a vitest case simulating the 23505 → retrieve → open path).
-- [ ] AC3: A marker-hit where retrieve reports `complete` or `expired` deletes the marker, re-claims, and creates a NEW session (vitest case).
-- [ ] AC4: A null-`session_id` marker younger than 60s returns `409` with a human-readable `error` string plus `code: "checkout_in_progress"`; older than 60s it is reclaimed (vitest cases).
-- [ ] AC5: Stripe `create` failure after a won claim deletes the marker before the 5xx (vitest case asserting the DELETE was issued).
-- [ ] AC5b: A marker-hit whose `sessions.retrieve` throws returns 500 + Sentry and does NOT delete the marker (vitest case — fail-closed on transient Stripe outage).
-- [ ] AC5c: A marker-hit on an `open` session for a DIFFERENT `target_tier` calls `sessions.expire`, deletes the marker, and creates a new session for the requested tier (vitest case — never reuse a wrong-price session).
-- [ ] AC6: `sessions.create` is called with a fresh `idempotencyKey` string in the options arg (asserted in updated `api-checkout*.test.ts`).
-- [ ] AC7: Webhook `checkout.session.completed` deletes the matching marker row, and when `stripe.subscriptions.list({customer, status:"active"})` returns >1 it logs + captures a Sentry anomaly message (test update — asserts the live-subscription invariant, not a subscription-id mismatch proxy that legit plan-switches would trip).
-- [ ] AC8: `cd apps/web-platform && ./node_modules/.bin/vitest run` passes with no regressions in `api-checkout.test.ts` / `api-checkout-tiers.test.ts` / webhook tests (vitest is the sole runner — `bunfig.toml` sets `pathIgnorePatterns = ["**"]` so `bun test` discovers nothing).
+- [x] AC1: Migration `NNN_pending_checkout_sessions.sql` + `.down.sql` create/drop the table with PK on `user_id`, `ON DELETE CASCADE` FK, RLS enabled with zero policies, LAWFUL_BASIS annotation, and a migration test under `test/supabase-migrations/`.
+- [x] AC2: Two sequential POSTs with a live marker return the SAME checkout session — the second response's `client_secret`/`url` belongs to the session created by the first (covered by a vitest case simulating the 23505 → retrieve → open path).
+- [x] AC3: A marker-hit where retrieve reports `complete` or `expired` deletes the marker, re-claims, and creates a NEW session (vitest case).
+- [x] AC4: A null-`session_id` marker younger than 60s returns `409` with a human-readable `error` string plus `code: "checkout_in_progress"`; older than 60s it is reclaimed (vitest cases).
+- [x] AC5: Stripe `create` failure after a won claim deletes the marker before the 5xx (vitest case asserting the DELETE was issued).
+- [x] AC5b: A marker-hit whose `sessions.retrieve` throws returns 500 + Sentry and does NOT delete the marker (vitest case — fail-closed on transient Stripe outage).
+- [x] AC5c: A marker-hit on an `open` session for a DIFFERENT `target_tier` calls `sessions.expire`, deletes the marker, and creates a new session for the requested tier (vitest case — never reuse a wrong-price session).
+- [x] AC6: `sessions.create` is called with a fresh `idempotencyKey` string in the options arg (asserted in updated `api-checkout*.test.ts`).
+- [x] AC7: Webhook `checkout.session.completed` deletes the matching marker row, and when `stripe.subscriptions.list({customer, status:"active"})` returns >1 it logs + captures a Sentry anomaly message (test update — asserts the live-subscription invariant, not a subscription-id mismatch proxy that legit plan-switches would trip).
+- [x] AC8: `cd apps/web-platform && ./node_modules/.bin/vitest run` passes with no regressions in `api-checkout.test.ts` / `api-checkout-tiers.test.ts` / webhook tests (vitest is the sole runner — `bunfig.toml` sets `pathIgnorePatterns = ["**"]` so `bun test` discovers nothing).
 
 ## Test Scenarios
 
