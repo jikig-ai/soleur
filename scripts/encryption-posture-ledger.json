@@ -542,18 +542,12 @@
     },
     {
       "connection": "web-1 app container -> git-data sshd (Hetzner private network, 10.0.1.20:22)",
-      "enforced_at": "apps/web-platform/server/git-auth.ts gitWithPrivateKeyAuth / sshWithPrivateKeyAuth (hostKeyPin); apps/web-platform/server/git-data-replication.ts resolveGitDataHostKeyPin",
+      "enforced_at": "apps/web-platform/server/git-auth.ts gitDataHostKeyTrust (gitWithPrivateKeyAuth / sshWithPrivateKeyAuth); apps/web-platform/server/git-data-replication.ts resolveGitDataHostKeyPin",
       "in_transit": {
-        "tls": "SSH-2 over the Hetzner private network; git-data authenticated by its ED25519 host key (GIT_DATA_SSH_HOST_KEY) whenever a pin is published. Until the first key-rotating replace publishes it, the transitional unpinned fallback arm applies (see exception).",
-        "cert_verification": "off",
-        "does_not_defend": "until the exception closes, an impersonator of 10.0.1.20 on the private network during an Art. 17 erasure call (the only live call; the store holds no repository); after it closes, a reader of main-root Terraform state with a network position (#8209) and a rooted web-1 (it holds the transport, provision and remove keys)",
-        "disclosed_as": "not-publicly-claimed",
-        "exception": {
-          "justification": "Until the first git-data replace publishes GIT_DATA_SSH_HOST_KEY and the git-data-pin-redeploy.yml workflow loads it, the app keeps an unpinned fallback arm (TOFU_FALLBACK_OPTS in git-auth.ts), reachable only with no pin in the environment AND the store flag off; with the flag on a missing pin throws. The store holds no repository until the flag is first set, and deleting the arm is a precondition for that. Failing closed now would fail every production Art. 17 erasure.",
-          "tracking_issue": "#5914",
-          "reevaluate_when": "post-merge step 3 completes (startup line git_data_pin=present on the current deploy); the #5914 follow-up PR then deletes the arm and this row flips to cert_verification on",
-          "expires_on": "2026-12-20"
-        }
+        "tls": "SSH-2 over the Hetzner private network; git-data authenticated by its Terraform-minted ED25519 host key (GIT_DATA_SSH_HOST_KEY), pinned on every dial; an absent or malformed pin refuses. Unpinned fallback arm deleted by PR #9096, #5914; ADR-237 Addendum",
+        "cert_verification": "on",
+        "does_not_defend": "a reader of main-root Terraform state (the host private key lives there and in user_data) who also holds a private-network position (#8209); a writer of Doppler prd who replaces GIT_DATA_SSH_HOST_KEY with their own key and holds a private-network position (the app then pins the impersonator; detected only after the fact by scheduled-terraform-drift.yml); a rooted web-1, which holds the transport, provision and remove keys; a rooted git-data answering falsely under its own key",
+        "disclosed_as": "not-publicly-claimed"
       }
     }
   ]
