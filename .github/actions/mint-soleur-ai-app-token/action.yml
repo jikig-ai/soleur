@@ -8,6 +8,12 @@ description: >
   apply-github-infra.yml, apply-web-platform-infra.yml — migrating them is a
   separate change). `gh api` cannot take a JWT as GH_TOKEN, so the JWT is
   exchanged for an installation token via curl.
+  The installation's FULL grant, read 2026-09-28 with
+  `gh api /orgs/jikig-ai/installations --jq '.installations[]|select(.id==122213433)|.permissions'`
+  (read-only): actions, administration, checks, contents, issues,
+  organization_projects, pages, pull_requests and secrets WRITE; members,
+  metadata, packages, repository_advisories and secret_scanning_alerts READ;
+  NO workflows; repository_selection all. An unscoped token carries all of it.
 
 inputs:
   doppler-token:
@@ -25,23 +31,25 @@ inputs:
     default: 'prd_terraform'
   installation-id:
     description: >
-      soleur-ai App org installation id. The installation's grant, measured
-      2026-09-27 via `gh api /orgs/jikig-ai/installations` (read-only):
-      actions:write, contents:write, pull_requests:write, administration:write,
-      secrets:write, and NO workflows. An unscoped token carries all of that,
-      so a consumer that needs less passes `permissions`/`repositories` below.
+      soleur-ai App org installation id. Its full grant is listed in this
+      action's description above; an unscoped token carries all of it, so a
+      consumer that needs less passes `permissions`/`repositories` below.
     required: true
   permissions:
     description: >
       Optional JSON object narrowing the token, e.g. '{"actions":"write"}'
-      (#4326). Empty (the default) requests the installation's full grant, and
-      the access-token call is then byte-identical to the pre-#4326 one.
+      (#4326). Empty (the default) requests the installation's full grant: no
+      request body is sent and the granted scope is not checked. When set, the
+      mint FAILS unless the response grants exactly these permissions (plus the
+      implicit metadata:read).
     required: false
     default: ''
   repositories:
     description: >
       Optional comma list of repository NAMES the token is limited to, e.g.
       'soleur'. Empty (the default) means every repository of the installation.
+      When set, the mint FAILS unless the response says
+      repository_selection=selected over exactly these names.
     required: false
     default: ''
 
@@ -139,14 +147,31 @@ runs:
             echo "::error::mint-soleur-ai-app-token: 'permissions' must be a JSON object (e.g. '{\"actions\":\"write\"}') and 'repositories' a comma list."; exit 1; }
           SCOPE_ARGS=(-d "$scope_body")
         fi
-        INSTALL_TOKEN=$(curl -sS -X POST \
+        INSTALL_RESP=$(curl -sS --max-time 30 -X POST \
           ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} \
           -H "Authorization: Bearer $JWT" \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-          | jq -r '.token // empty')
+          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
+        INSTALL_TOKEN=$(jq -r '.token // empty' <<<"$INSTALL_RESP")
         [[ -n "$INSTALL_TOKEN" ]] || {
           echo "::error::Installation-token exchange returned empty token (App permission or installation_id mismatch)."; exit 1; }
         echo "::add-mask::$INSTALL_TOKEN"
+        # Scope check (#4326): a scoped request must get back exactly what it asked
+        # for. GitHub may add metadata:read on its own, and nothing else is accepted.
+        # With both inputs empty nothing is checked, as before.
+        if [[ -n "${SCOPE_PERMISSIONS:-}" ]]; then
+          jq -e --argjson want "$SCOPE_PERMISSIONS" \
+            '(.permissions | type) == "object" and (.permissions | del(.metadata)) == $want
+             and ((.permissions.metadata // "read") == "read")' <<<"$INSTALL_RESP" >/dev/null || {
+            echo "::error::mint-soleur-ai-app-token: the granted permissions $(jq -c '.permissions // null' <<<"$INSTALL_RESP") differ from the requested ${SCOPE_PERMISSIONS} (plus metadata:read); refusing to hand out the token."; exit 1; }
+        fi
+        if [[ -n "${SCOPE_REPOSITORIES:-}" ]]; then
+          jq -e --arg repos "$SCOPE_REPOSITORIES" '
+            .repository_selection == "selected"
+            and ([.repositories[]?.name] | sort)
+                == ($repos | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | sort)' \
+            <<<"$INSTALL_RESP" >/dev/null || {
+            echo "::error::mint-soleur-ai-app-token: the token is not limited to the requested repositories (${SCOPE_REPOSITORIES}); got repository_selection=$(jq -r '.repository_selection // "none"' <<<"$INSTALL_RESP"); refusing to hand out the token."; exit 1; }
+        fi
         echo "token=${INSTALL_TOKEN}" >> "$GITHUB_OUTPUT"

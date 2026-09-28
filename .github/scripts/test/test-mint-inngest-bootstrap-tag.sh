@@ -18,11 +18,18 @@
 #     422 `Reference already exists` is derived from the origin's state, and 422
 #     `Object does not exist` from an unknown SHA.
 #   - the dispatch POST prints nothing and exits 0 (a 204).
+#   - DELETE installation/token (the post-dispatch revoke, no --input) prints
+#     nothing and exits 0 (a 204); MOCK_GH_REVOKE_FAIL=1 makes it a 401.
+#   - row knobs: MOCK_GH_TAG_MISMATCH (a git/tags response naming another tag),
+#     MOCK_GH_REF_ELSEWHERE (git/refs points the ref at main~1, not the posted
+#     object), MOCK_GH_REF_BREAK_ORIGIN (git/refs lands, then the origin becomes
+#     unreachable, so the verify ls-remote fails).
 #   - an error exits 1 with the body on stdout and `gh: … (HTTP 422)` on stderr, as
 #     real `gh` does. The `workflows`-permission text is SYNTHESIZED (GitHub's exact
 #     wording is unverified): its row tests the classifier on this wording, and a
 #     plain-422 negative control proves the class is not assigned to every 422.
-#   - anything else (another subcommand, a GET, a missing `--input -`) exits 64.
+#   - anything else (another subcommand, a GET, a missing `--input -` on a POST,
+#     an unmodelled path) exits 64.
 #
 # GUARD CONTRACT (plan §Guard Contract). Guard 1 = the image-input decision,
 # Guard 2 = version allocation, Guard 3 = writer/checker parity and the
@@ -30,6 +37,12 @@
 # edit landed inside the target function, run the unmutated copy as a positive
 # control, and count only rc 1 as caught (rc 2 is a broken instrument).
 set -uo pipefail
+# LC_ALL=C here also reaches the SUT, so deleting the script's own
+# `export LC_ALL=C` is an EQUIVALENT mutant in this suite (S8). That is accepted:
+# every comparison the script makes sorts BOTH sides in the one process and
+# locale, so ordering cannot flip a verdict, and the ASCII-only ranges it greps
+# with ([A-Za-z0-9._-]) meet no non-ASCII name in any fixture or in the real tree.
+# The script keeps the export for the runner, whose locale is not pinned.
 export LC_ALL=C
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -69,22 +82,11 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=373   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=537   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
-
-# Instrument self-test: both helpers must move their counters, or every verdict
-# below is unobservable. Reported with printf + exit, never through the helpers.
-st_p=$PASS st_f=$FAIL
-pass 'selftest.pass' >/dev/null
-fail 'selftest.fail' 'expected' >/dev/null
-if (( PASS != st_p + 1 || FAIL != st_f + 1 )); then
-  printf 'FATAL [selftest]: pass()/fail() did not move their counters (pass %s->%s, fail %s->%s)\n' \
-    "$st_p" "$PASS" "$st_f" "$FAIL"
-  exit 2
-fi
-PASS=$st_p FAIL=$st_f
+# (The instrument self-test runs below, once every verdict helper is defined.)
 
 python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml 2>/dev/null || true
 if ! python3 -c 'import yaml' 2>/dev/null; then
@@ -124,6 +126,15 @@ for ((i=1; i<${#args[@]}; i++)); do
     *)  if [[ -z "$path" ]]; then path="${args[$i]}"; else echo "gh-stub: extra operand ${args[$i]}" >&2; exit 64; fi ;;
   esac
 done
+# The post-dispatch revoke: DELETE /installation/token, no body (a 204).
+if [[ "$method" == DELETE && "$path" == installation/token && -z "$input" ]]; then
+  if [[ "${MOCK_GH_REVOKE_FAIL:-0}" == 1 ]]; then
+    jq -n '{message: "Bad credentials", status: "401"}'
+    printf 'gh: Bad credentials (HTTP 401)\n' >&2
+    exit 1
+  fi
+  exit 0
+fi
 [[ "$method" == POST && "$input" == - ]] \
   || { echo "gh-stub: only POST --input - is modelled (method=$method input=$input)" >&2; exit 64; }
 body=$(cat)
@@ -151,6 +162,7 @@ case "$path" in
     # A racer lands the same name between this tag object and the ref POST.
     [[ "${MOCK_GH_RACE_REF:-0}" == 1 ]] && git -C "$O" update-ref "refs/tags/$tag" "$obj"
     [[ "${MOCK_GH_TAG_WRONGSHA:-0}" == 1 ]] && sha=0123456789abcdef0123456789abcdef01234567
+    [[ "${MOCK_GH_TAG_MISMATCH:-0}" == 1 ]] && tag=vinngest-v9.9.9
     jq -n --arg sha "$sha" --arg tag "$tag" --arg msg "$msg" --arg obj "$obj" --arg tn "$tn" --arg te "$te" '{
       node_id: "TAG_fixture", tag: $tag, sha: $sha,
       url: ("https://api.github.com/repos/jikig-ai/soleur/git/tags/" + $sha),
@@ -165,7 +177,11 @@ case "$path" in
     [[ "$ref" == refs/tags/* ]] || err422 'Invalid request: ref'
     git -C "$O" cat-file -e "$sha" 2>/dev/null || err422 'Object does not exist'
     git -C "$O" rev-parse -q --verify "$ref" >/dev/null 2>&1 && err422 'Reference already exists'
-    git -C "$O" update-ref "$ref" "$sha" || err422 'Invalid request: update-ref'
+    target="$sha"
+    [[ "${MOCK_GH_REF_ELSEWHERE:-0}" == 1 ]] && target=$(git -C "$O" rev-parse refs/heads/main~1)
+    git -C "$O" update-ref "$ref" "$target" || err422 'Invalid request: update-ref'
+    # The ref landed; now the origin goes away, so the next ls-remote fails.
+    [[ "${MOCK_GH_REF_BREAK_ORIGIN:-0}" == 1 ]] && mv "$O" "$O.unreachable"
     jq -n --arg ref "$ref" --arg sha "$sha" '{
       ref: $ref, node_id: "REF_fixture",
       url: ("https://api.github.com/repos/jikig-ai/soleur/git/" + $ref),
@@ -289,10 +305,12 @@ fx_pin() {
 }
 fx_wf_sed() { sed -i -E "$1" "$F_REPO/$FX_WF"; }
 
-# side_tag_on_origin <tag> [--annotate] — a tag on a side commit that exists ONLY
-# on the bare origin: never merged into main, absent from the local clone.
+# side_tag_on_origin <tag> [--annotate] [--keep-local] — a tag on a side commit
+# that is never merged into main. It exists ONLY on the bare origin unless
+# --keep-local also leaves it in the local clone.
 side_tag_on_origin() {
-  local tag="$1" s
+  local tag="$1" s keep=0
+  [[ " $* " == *" --keep-local "* ]] && keep=1
   git -C "$F_REPO" checkout -q -b "side-$tag" main
   git -C "$F_REPO" commit -q --allow-empty -m "side $tag"
   s=$(git -C "$F_REPO" rev-parse HEAD)
@@ -304,7 +322,7 @@ side_tag_on_origin() {
     git -C "$F_REPO" tag "$tag" "$s"
   fi
   git -C "$F_REPO" push -q origin "refs/tags/$tag" 2>/dev/null
-  git -C "$F_REPO" tag -d "$tag" >/dev/null
+  (( keep )) || git -C "$F_REPO" tag -d "$tag" >/dev/null
   git -C "$F_REPO" branch -q -D "side-$tag"
 }
 
@@ -379,6 +397,60 @@ a_annotated() {
     fail "$id:message" "tag message does not name #4326 and the commit"
   fi
 }
+report() { # report <prefix> — pass/fail each OK/BAD line on stdin; counts rows
+  local line n=0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    n=$((n+1))
+    case "$line" in
+      OK\ *)  pass "$1.${line#OK }" ;;
+      BAD\ *) local rest="${line#BAD }"; fail "$1.${rest%% *}" "${rest#* }" ;;
+      *)      fail "$1.unparsed" "$line" ;;
+    esac
+  done
+  REPORTED=$n
+}
+gout_has() { # gout_has <id> <line> — GITHUB_OUTPUT carries exactly this line
+  if grep -qxF -- "$2" "$LAST_GOUT"; then pass "$1"; else fail "$1" "GITHUB_OUTPUT lacks line: $2 (has: $(paste -sd' ' "$LAST_GOUT"))"; fi
+}
+
+# ---------------------------------------------------------------------------
+# Instrument self-test. Every verdict helper must move the counters in BOTH
+# directions (a helper that always passes, or never counts, would make every row
+# below unobservable), and field() must return a single value or a marker. A
+# failure is reported with printf + exit 2, never through the helpers under test;
+# the counters are unwound afterwards, so no self-test verdict reaches the total.
+# ---------------------------------------------------------------------------
+st_p0=$PASS st_f0=$FAIL st_mp=$PASS st_mf=$FAIL
+st_die() { printf 'FATAL [selftest:%s]: %s\n' "$1" "$2"; exit 2; }
+st_moved() { # st_moved <label> <want-pass-delta> <want-fail-delta> — since the last mark
+  local dp=$((PASS - st_mp)) df=$((FAIL - st_mf))
+  (( dp == $2 && df == $3 )) || st_die "$1" "counters moved +${dp}/+${df}, want +$2/+$3"
+  st_mp=$PASS st_mf=$FAIL
+}
+LAST_OUT="$TMP/selftest.out"; LAST_ERR="$TMP/selftest.err"; LAST_GOUT="$TMP/selftest.gout"
+printf 'result=selftest-value\n' > "$LAST_OUT"
+printf 'selftest-stderr-canary\n' > "$LAST_ERR"
+printf 'tag_state=unknown\n' > "$LAST_GOUT"
+pass st >/dev/null;                          st_moved pass 1 0
+fail st x >/dev/null;                        st_moved fail 0 1
+a_eq st same same >/dev/null;                st_moved a_eq-equal 1 0
+a_eq st got want >/dev/null;                 st_moved a_eq-differ 0 1
+a_out_has st selftest-stderr-canary >/dev/null; st_moved a_out_has-present 1 0
+a_out_has st absent-canary >/dev/null;       st_moved a_out_has-absent 0 1
+a_out_lacks st absent-canary >/dev/null;     st_moved a_out_lacks-absent 1 0
+a_out_lacks st selftest-stderr-canary >/dev/null; st_moved a_out_lacks-present 0 1
+gout_has st tag_state=unknown >/dev/null;    st_moved gout_has-present 1 0
+gout_has st tag_state=created >/dev/null;    st_moved gout_has-absent 0 1
+report st < <(printf 'OK a\nBAD b why\n') >/dev/null; st_moved report-ok-bad 1 1
+(( REPORTED == 2 )) || st_die report-count "REPORTED=${REPORTED}, want 2"
+report st < <(printf 'neither ok nor bad\n') >/dev/null; st_moved report-unparsed 0 1
+[[ "$(field result)" == selftest-value ]] || st_die field-single "field result gave '$(field result)'"
+printf 'result=a\nresult=b\n' > "$LAST_OUT"
+[[ "$(field result)" == '<2 result= lines>' ]] || st_die field-duplicate "field result gave '$(field result)'"
+[[ "$(field absent)" == '<0 absent= lines>' ]] || st_die field-missing "field absent gave '$(field absent)'"
+PASS=$st_p0 FAIL=$st_f0
+unset LAST_OUT LAST_ERR LAST_GOUT REPORTED
 
 # ===========================================================================
 echo "=== Guard 1: image-input drift decision ==="
@@ -489,7 +561,10 @@ mf_commit 'stage a file from outside infra'
 run_mint g1-r5 --dry-run
 expect 'g1.r5' 1 error 0 vinngest-v1.1.40
 a_eq 'g1.r5:stage' "$(field stage)" decide
-a_eq 'g1.r5:reason' "$(field reason)" cardinality
+a_eq 'g1.r5:reason' "$(field reason)" cardinality-count
+# The error prints both name sets, so the drift is readable from the log.
+a_out_has 'g1.r5:names-staged' 'staged (cp): {carrier-01.sh,'
+a_out_has 'g1.r5:names-baked' 'outside.sh}'
 
 # Same COUNTS but different FILES (a cp swapped for another name) — cardinality.
 mf_new g1-swap
@@ -497,7 +572,17 @@ fx_wf_sed "$(fxt swap_sed)"
 mf_commit 'swap a staged file'
 run_mint g1-swap --dry-run
 expect 'g1.name-swap' 1 error 0 vinngest-v1.1.40
-a_eq 'g1.name-swap:reason' "$(field reason)" cardinality
+a_eq 'g1.name-swap:reason' "$(field reason)" cardinality-names
+a_out_has 'g1.name-swap:names-staged' 'carrier-12.sh,other.tf}'
+a_out_has 'g1.name-swap:names-baked' 'carrier-12.sh,carrier-13.sh}'
+
+# A COPY line the strict parser cannot read (three operands): its own reason.
+mf_new g1-copy-unparsed
+fx_wf_sed 's#COPY carrier-13.sh /carrier-13.sh#COPY carrier-13.sh extra /carrier-13.sh#'
+mf_commit 'unparseable COPY'
+run_mint g1-copy-unparsed --dry-run
+expect 'g1.copy-unparsed' 1 error 0 vinngest-v1.1.40
+a_eq 'g1.copy-unparsed:reason' "$(field reason)" copy-unparsed
 
 # G1 row 6 — the recipe changes inside the heredoc.
 mf_new g1-r6
@@ -542,6 +627,8 @@ mf_commit 'unterminated heredoc'
 run_mint g1-unterminated --dry-run
 expect 'g1.unterminated' 1 error 0 vinngest-v1.1.40
 a_eq 'g1.unterminated:reason' "$(field reason)" recipe-blocks
+a_out_has 'g1.unterminated:wording' 'an unterminated DOCKERFILE heredoc block'
+a_out_lacks 'g1.unterminated:no-bad-count' 'carries bad '
 
 # inngest_cli_version empty on HEAD: fatal (the build would refuse it anyway).
 mf_new g1-pin-empty
@@ -550,6 +637,53 @@ mf_commit 'empty pin'
 run_mint g1-pin-empty --dry-run
 expect 'g1.inngest-pin-empty' 1 error 0 vinngest-v1.1.40
 a_eq 'g1.inngest-pin-empty:reason' "$(field reason)" pin-empty
+
+# S9 twin: inngest_cli_sha256 empty on HEAD is refused the same way.
+mf_new g1-sha-empty
+sed -i -E '/^[[:space:]]*inngest_cli_sha256[[:space:]]*=/d' "$F_REPO/$FX_INFRA/inngest.tf"
+mf_commit 'empty sha pin'
+run_mint g1-sha-empty --dry-run
+expect 'g1.inngest-sha-empty' 1 error 0 vinngest-v1.1.40
+a_eq 'g1.inngest-sha-empty:reason' "$(field reason)" pin-empty
+
+# A chmod-only carrier change: COPY keeps the mode, so it is an image change.
+mf_new g1-chmod
+chmod +x "$F_REPO/$FX_INFRA/carrier-06.sh"
+mf_commit 'chmod a carrier'
+a_eq 'g1.chmod:precondition-mode' "$(git -C "$F_REPO" ls-tree HEAD -- "$FX_INFRA/carrier-06.sh" | awk '{print $1}')" 100755
+run_mint g1-chmod --dry-run
+expect 'g1.chmod-only' 0 would-mint 0 vinngest-v1.1.40
+a_eq 'g1.chmod-only:changed' "$(field changed)" 'carrier:carrier-06.sh'
+
+# S1 anchor: tag the base, change a carrier, then a docs-only commit on top. The
+# decision still sees the carrier change, and the tag lands on the TIP.
+mf_new g1-anchor
+fx_carrier carrier-09.sh 'carrier-09 v2'
+mf_commit 'change a carrier'
+mf_commit 'docs only, on top'
+run_mint g1-anchor --dry-run
+expect 'g1.anchor' 0 would-mint 0 vinngest-v1.1.40
+a_eq 'g1.anchor:changed' "$(field changed)" 'carrier:carrier-09.sh'
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+run_mint g1-anchor-tag --tag
+expect 'g1.anchor-tag' 0 tagged 2 vinngest-v1.1.40,vinngest-v1.1.41
+a_annotated 'g1.anchor-tag' vinngest-v1.1.41
+
+# S2 twin: a LOCAL-only suffixed tag on HEAD plus a carrier change. The suffixed
+# name is neither a merged base (the selector wants X.Y.Z) nor a head-tagged
+# noop (strict names only), and allocation reads the remote, so the intended
+# outcome is a normal mint of v1.1.41 on HEAD.
+mf_new g1-local-rc
+fx_carrier carrier-08.sh 'carrier-08 v2'
+mf_commit 'change a carrier'
+git -C "$F_REPO" tag -a vinngest-v1.1.41-rc1 -m rc HEAD
+run_mint g1-local-rc --dry-run
+expect 'g1.local-rc' 0 would-mint 0 vinngest-v1.1.40
+a_eq 'g1.local-rc:base' "$(field base)" v1.1.40
+a_eq 'g1.local-rc:changed' "$(field changed)" 'carrier:carrier-08.sh'
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+run_mint g1-local-rc-tag --tag
+expect 'g1.local-rc-tag' 0 tagged 2 vinngest-v1.1.40,vinngest-v1.1.41
 
 # Flow (i) — a carrier ADDED (cp + COPY + file).
 mf_new g1-added
@@ -635,6 +769,16 @@ a_eq 'g2.r1:tag' "$(field tag)" vinngest-v1.1.51
 a_eq 'g2.r1:base' "$(field base)" v1.1.40
 a_annotated 'g2.r1' vinngest-v1.1.51
 
+# S10 twin — the same off-main v1.1.50, but ALSO in the local clone: BASE is
+# still the merged v1.1.40 (--merged HEAD excludes it), NEXT is v1.1.51.
+g2_changed_fixture g2-r1-local
+side_tag_on_origin vinngest-v1.1.50 --annotate --keep-local
+a_eq 'g2.r1-local:precondition-local' "$(git -C "$F_REPO" rev-parse -q --verify refs/tags/vinngest-v1.1.50 >/dev/null && echo yes)" yes
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+run_mint g2-r1-local --tag
+expect 'g2.r1-local' 0 tagged 2 vinngest-v1.1.40,vinngest-v1.1.50,vinngest-v1.1.51
+a_eq 'g2.r1-local:base' "$(field base)" v1.1.40
+
 # G2 row 3 — v1.9.0 and v1.10.0 both exist: version sort, not lexical.
 g2_changed_fixture g2-r3
 side_tag_on_origin vinngest-v1.9.0
@@ -670,6 +814,27 @@ run_mint g2-r6 --tag
 expect 'g2.r6' 0 noop 0 vinngest-v1.1.40,vinngest-v1.1.41
 a_eq 'g2.r6:reason' "$(field reason)" concurrent-tag
 
+# S3 twin — the same, but the human tag is LIGHTWEIGHT (no ^{} line): the re-read
+# must fall back to the direct line and still end noop with zero POSTs.
+g2_changed_fixture g2-r6-light
+git -C "$F_REPO" push -q origin HEAD:refs/tags/vinngest-v1.1.41 2>/dev/null
+a_eq 'g2.r6-light:precondition-lightweight' "$(git -C "$F_ORIGIN" cat-file -t refs/tags/vinngest-v1.1.41)" commit
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+run_mint g2-r6-light --tag
+expect 'g2.r6-light' 0 noop 0 vinngest-v1.1.40,vinngest-v1.1.41
+a_eq 'g2.r6-light:reason' "$(field reason)" concurrent-tag
+
+# S4 twin — a SUFFIXED tag on HEAD, only on the origin: not a strict name, so
+# not a concurrent mint. It still counts for allocation (1.1.41 -> 1.1.42).
+g2_changed_fixture g2-r6-rc
+git -C "$F_REPO" tag -a vinngest-v1.1.41-rc1 -m rc HEAD
+git -C "$F_REPO" push -q origin refs/tags/vinngest-v1.1.41-rc1 2>/dev/null
+git -C "$F_REPO" tag -d vinngest-v1.1.41-rc1 >/dev/null
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+run_mint g2-r6-rc --tag
+expect 'g2.r6-rc' 0 tagged 2 vinngest-v1.1.40,vinngest-v1.1.41-rc1,vinngest-v1.1.42
+a_annotated 'g2.r6-rc' vinngest-v1.1.42
+
 # G2 row 8 — a 7-digit component on the remote: fatal allocate, zero POSTs.
 g2_changed_fixture g2-r8
 side_tag_on_origin vinngest-v1.1.9999999
@@ -677,6 +842,41 @@ MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
 run_mint g2-r8 --tag
 expect 'g2.r8' 1 error 0 vinngest-v1.1.40,vinngest-v1.1.9999999
 a_eq 'g2.r8:stage' "$(field stage)" allocate
+a_eq 'g2.r8:reason' "$(field reason)" oversized-version
+
+# S5 twins — a 7-digit MAJOR, then MINOR, component is refused the same way.
+for big in vinngest-v1234567.1.1 vinngest-v1.1234567.1; do
+  g2_changed_fixture "g2-r8-$big"
+  side_tag_on_origin "$big"
+  MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+  run_mint "g2-r8-$big" --tag
+  a_eq "g2.r8[$big]:rc" "$LAST_RC" 1
+  a_eq "g2.r8[$big]:reason" "$(field reason)" oversized-version
+  a_eq "g2.r8[$big]:no-post" "$(gh_calls)" 0
+done
+
+# A zero-padded component names the same number as its unpadded twin: refused.
+for padded in vinngest-v1.01.1 vinngest-v1.1.041; do
+  g2_changed_fixture "g2-pad-$padded"
+  side_tag_on_origin "$padded"
+  MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+  run_mint "g2-pad-$padded" --tag
+  a_eq "g2.leading-zero[$padded]:rc" "$LAST_RC" 1
+  a_eq "g2.leading-zero[$padded]:stage" "$(field stage)" allocate
+  a_eq "g2.leading-zero[$padded]:reason" "$(field reason)" leading-zero-version
+  a_eq "g2.leading-zero[$padded]:no-post" "$(gh_calls)" 0
+done
+
+# allocate's ls-remote failing (origin unreachable) is its own fatal, not
+# "no remote tags".
+g2_changed_fixture g2-lsr-fail
+git -C "$F_REPO" remote set-url origin "$TMP/g2-lsr-fail/does-not-exist.git"
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+run_mint g2-lsr-fail --tag
+a_eq 'g2.allocate-ls-remote-failed:rc' "$LAST_RC" 1
+a_eq 'g2.allocate-ls-remote-failed:stage' "$(field stage)" allocate
+a_eq 'g2.allocate-ls-remote-failed:reason' "$(field reason)" ls-remote-failed
+a_eq 'g2.allocate-ls-remote-failed:no-post' "$(gh_calls)" 0
 
 # G2 row 7 — 422 "Reference already exists" (a racer lands the name between the
 # tag object and the ref): fatal tag, exactly one git/refs POST.
@@ -689,6 +889,43 @@ a_eq 'g2.r7:stage' "$(field stage)" tag
 a_eq 'g2.r7:reason' "$(field reason)" http-422
 a_eq 'g2.r7:one-ref-post' "$(gh_calls_to 'git/refs')" 1
 a_out_lacks 'g2.r7:no-raw-body' 'Reference already exists'
+# The ref POST was attempted, so the tag MAY exist: the name survives the error.
+gout_has 'g2.r7:gout-tag' tag=vinngest-v1.1.41
+gout_has 'g2.r7:gout-tag-state' tag_state=unknown
+a_eq 'g2.r7:tag-state' "$(field tag_state)" unknown
+
+# S6 — the ref lands on something other than the posted tag object (main~1):
+# verify refuses, and the name survives with tag_state=unknown.
+g2_changed_fixture g2-ref-elsewhere
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK" MOCK_GH_REF_ELSEWHERE=1)
+run_mint g2-ref-elsewhere --tag
+a_eq 'g2.ref-elsewhere:rc' "$LAST_RC" 1
+a_eq 'g2.ref-elsewhere:stage' "$(field stage)" tag
+a_eq 'g2.ref-elsewhere:reason' "$(field reason)" verify-failed
+gout_has 'g2.ref-elsewhere:gout-tag' tag=vinngest-v1.1.41
+gout_has 'g2.ref-elsewhere:gout-tag-state' tag_state=unknown
+gout_has 'g2.ref-elsewhere:gout-result' result=error
+
+# Verify's ls-remote fails after the ref landed: ls-remote-failed, never
+# tag-not-found, and the name still survives.
+g2_changed_fixture g2-verify-lsr
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK" MOCK_GH_REF_BREAK_ORIGIN=1)
+run_mint g2-verify-lsr --tag
+[[ -d "$F_ORIGIN.unreachable" ]] && mv "$F_ORIGIN.unreachable" "$F_ORIGIN"
+a_eq 'g2.verify-ls-remote-failed:rc' "$LAST_RC" 1
+a_eq 'g2.verify-ls-remote-failed:stage' "$(field stage)" tag
+a_eq 'g2.verify-ls-remote-failed:reason' "$(field reason)" ls-remote-failed
+gout_has 'g2.verify-ls-remote-failed:gout-tag-state' tag_state=unknown
+a_eq 'g2.verify-ls-remote-failed:origin-tags' "$(origin_tags)" vinngest-v1.1.40,vinngest-v1.1.41
+
+# S7 — a git/tags response describing ANOTHER tag: bad-response, no ref POST,
+# and no tag_state (nothing can exist yet).
+g2_changed_fixture g2-tag-mismatch
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK" MOCK_GH_TAG_MISMATCH=1)
+run_mint g2-tag-mismatch --tag
+expect 'g2.tag-mismatch' 1 error 1 vinngest-v1.1.40
+a_eq 'g2.tag-mismatch:reason' "$(field reason)" bad-response
+a_eq 'g2.tag-mismatch:gout' "$(paste -sd' ' "$LAST_GOUT")" 'result=error'
 
 # 422 Object does not exist (a response whose sha is unknown): fatal tag.
 g2_changed_fixture g2-badsha
@@ -703,6 +940,7 @@ g2_changed_fixture g2-wfperm
 MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK" MOCK_GH_TAGS_FAIL=workflows)
 run_mint g2-wfperm --tag
 expect 'g2.workflows-permission' 1 error 1 vinngest-v1.1.40
+a_eq 'g2.workflows-permission:gout' "$(paste -sd' ' "$LAST_GOUT")" 'result=error'
 a_eq 'g2.workflows-permission:reason' "$(field reason)" workflows-permission
 a_eq 'g2.workflows-permission:stage' "$(field stage)" tag
 a_out_lacks 'g2.workflows-permission:no-raw-body' 'refusing to allow'
@@ -729,6 +967,20 @@ a_eq 'fl.dispatch:body' "$(awk -F'\t' '$1 ~ /dispatches$/ {print $2}' "$MOCK_GH_
   '{"ref":"main","inputs":{"ref":"vinngest-v1.1.41"}}'
 a_eq 'fl.dispatch:token' "$(grep -c "/dispatches .*| token=$DSP_TOK |" "$MOCK_GH_LOG" || true)" 1
 a_eq 'fl.dispatch:no-tag-token-on-dispatch' "$(grep '/dispatches' "$MOCK_GH_LOG" | grep -c "$TAG_TOK" || true)" 0
+# The App token is revoked with itself, once, AFTER the dispatch POST.
+a_eq 'fl.dispatch:revoke' "$(grep -c "^gh api --method DELETE installation/token | token=$DSP_TOK |" "$MOCK_GH_LOG" || true)" 1
+a_eq 'fl.dispatch:revoke-after-post' "$(grep -E '/dispatches|installation/token' "$MOCK_GH_LOG" | awk '{print $5}' | paste -sd' ' -)" \
+  'repos/jikig-ai/soleur/actions/workflows/build-inngest-bootstrap-image.yml/dispatches installation/token'
+
+# A failed revoke is a warning: the dispatch happened and the run says so.
+g2_changed_fixture fl-revoke-fail
+MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK")
+run_mint fl-revoke-fail-tag --tag
+MINT_ENV=(MINT_DISPATCH_TOKEN="$DSP_TOK" MOCK_GH_REVOKE_FAIL=1)
+run_mint fl-revoke-fail --dispatch vinngest-v1.1.41
+a_eq 'fl.revoke-fail:rc' "$LAST_RC" 0
+a_eq 'fl.revoke-fail:result' "$(field result)" dispatched
+a_out_has 'fl.revoke-fail:warning' '::warning::dispatch: revoking the App installation token failed'
 
 # Flow (e) — a failed dispatch: fatal, exactly ONE POST (no retry), the exact
 # `gh workflow run` remediation, and the tag is never deleted.
@@ -741,6 +993,7 @@ a_eq 'fl.dispatch-fail:rc' "$LAST_RC" 1
 a_eq 'fl.dispatch-fail:result' "$(field result)" error
 a_eq 'fl.dispatch-fail:stage' "$(field stage)" dispatch
 a_eq 'fl.dispatch-fail:one-post' "$(gh_calls_to '/dispatches')" 1
+a_eq 'fl.dispatch-fail:revoked-anyway' "$(gh_calls_to 'installation/token')" 1
 a_out_has 'fl.dispatch-fail:remediation' 'gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-v1.1.41'
 a_eq 'fl.dispatch-fail:tag-kept' "$(origin_tags)" vinngest-v1.1.40,vinngest-v1.1.41
 a_out_lacks 'fl.dispatch-fail:never-delete' 'git push origin :refs/tags'
@@ -772,6 +1025,17 @@ MINT_ENV=(MINT_DISPATCH_TOKEN="$DSP_TOK")
 run_mint fl-absent --dispatch vinngest-v1.1.77
 expect 'fl.dispatch-absent' 1 error 0 vinngest-v1.1.40
 a_eq 'fl.dispatch-absent:reason' "$(field reason)" tag-not-found
+
+# --dispatch against an UNREACHABLE origin: ls-remote-failed, never
+# tag-not-found (a network failure must not read as "the tag is gone").
+mf_new fl-dispatch-lsr
+git -C "$F_REPO" remote set-url origin "$TMP/fl-dispatch-lsr/does-not-exist.git"
+MINT_ENV=(MINT_DISPATCH_TOKEN="$DSP_TOK")
+run_mint fl-dispatch-lsr --dispatch vinngest-v1.1.40
+a_eq 'fl.dispatch-ls-remote-failed:rc' "$LAST_RC" 1
+a_eq 'fl.dispatch-ls-remote-failed:stage' "$(field stage)" dispatch
+a_eq 'fl.dispatch-ls-remote-failed:reason' "$(field reason)" ls-remote-failed
+a_eq 'fl.dispatch-ls-remote-failed:no-post' "$(gh_calls)" 0
 
 # Credential isolation inside the script: each mode refuses the OTHER token and
 # requires its own; nothing is POSTed on a refusal.
@@ -915,6 +1179,13 @@ g3_parity() {
     if [[ "$na" == 1 && "$nm" == 1 && -n "$la" && "$la" == "$lm" ]]; then echo "OK pin-$pin"
     else echo "BAD pin-$pin the ${pin} extraction (found $nm) differs from the build step's (found $na). Authority: $bwf (Read pinned inngest-cli + vector versions); copy: $mint. diff: $(diff <(printf '%s\n' "$la") <(printf '%s\n' "$lm") | tr '\n' '|')"; fi
   done
+  # The strict tag-name regex is the build's own "Validate dispatch ref" gate: a
+  # name the mint accepts but the build refuses would tag and never publish.
+  la=$(grep -oE '^[[:space:]]*if \[\[ ! "\$REF" =~ [^ ]+ \]\]' "$bwf" | sed -E 's/.*=~ ([^ ]+) \]\]$/\1/')
+  lm=$(grep -E "^STRICT_TAG_RE='" "$mint" | sed -E "s/^STRICT_TAG_RE='(.*)'\$/\1/")
+  na=$(grep -c . <<<"$la"); nm=$(grep -c . <<<"$lm")
+  if [[ "$na" == 1 && "$nm" == 1 && -n "$la" && "$la" == "$lm" ]]; then echo "OK strict-tag-re"
+  else echo "BAD strict-tag-re the mint's STRICT_TAG_RE ('${lm}', found $nm) differs from the build's Validate dispatch ref regex ('${la}', found $na). Authority: $bwf (Validate dispatch ref); copy: $mint STRICT_TAG_RE"; fi
   # The heredoc start line the mint looks for exists exactly once in the build workflow.
   n=$(grep -cE '^[[:space:]]*cat > "\$BUILD_DIR/Dockerfile" <<DOCKERFILE[[:space:]]*$' "$bwf" || true)
   if [[ "$n" == 1 ]]; then echo "OK recipe-one-block"
@@ -922,13 +1193,15 @@ g3_parity() {
 }
 
 cat > "$TMP/g3_wf.py" <<'PY'
-import fnmatch, json, re, sys
+import fnmatch, json, os, re, sys
 import yaml
-mint_wf, build_wf = sys.argv[1], sys.argv[2]
+mint_wf, build_wf, mint_sh, composite = sys.argv[1:5]
 out = []
 def ok(i, m=None): out.append("OK " + i)
 def bad(i, m): out.append("BAD " + i + " " + m)
 AUTH = " (authority: .github/workflows/mint-inngest-bootstrap-tag.yml; the script's credential contract lives in .github/scripts/mint-inngest-bootstrap-tag.sh)"
+SCRIPT = "bash .github/scripts/mint-inngest-bootstrap-tag.sh"
+WOULD = "steps.decide.outputs.result == 'would-mint'"
 raw = open(mint_wf).read()
 try:
     doc = yaml.safe_load(raw)
@@ -951,6 +1224,7 @@ unc = [s for s in srcs if not any(fnmatch.fnmatchcase(s, g) for g in paths)]
 for req in (".github/workflows/build-inngest-bootstrap-image.yml", ".github/workflows/mint-inngest-bootstrap-tag.yml",
             ".github/scripts/mint-inngest-bootstrap-tag.sh", "apps/web-platform/infra/inngest.tf", "apps/web-platform/infra/vector.tf"):
     (ok if any(fnmatch.fnmatchcase(req, g) for g in paths) else bad)("paths-" + req.rsplit("/", 1)[-1], req + " is not covered by on.push.paths" + AUTH)
+(ok if "apps/web-platform/infra/**" not in paths else bad)("paths-narrow", "on.push.paths must not be the whole infra/** tree (every Terraform edit would start a run)" + AUTH)
 (ok if doc.get("permissions") == {"contents": "read"} else bad)("top-permissions", "top-level permissions must be exactly contents: read" + AUTH)
 jobs = doc.get("jobs") or {}
 job = jobs.get("mint") or {}
@@ -970,56 +1244,75 @@ w = co.get("with") or {}
 (ok if w.get("ref") == "main" else bad)("checkout-ref-main", "checkout must be ref: main (the tip, not github.sha)" + AUTH)
 (ok if w.get("fetch-depth") == 0 and w.get("fetch-tags") is True and w.get("persist-credentials") is False else bad)("checkout-history", "checkout needs fetch-depth 0, fetch-tags true, persist-credentials false" + AUTH)
 di, dec = find(lambda s: s.get("id") == "decide")
-(ok if di > 0 and "--dry-run" in str(dec.get("run", "")) and not dec.get("env") else bad)("decide-step", "the decide step runs --dry-run with no env" + AUTH)
-ti, tag = find(lambda s: s.get("name") == "Create tag")
+ii, inst = find(lambda s: str(s.get("uses", "")).startswith("DopplerHQ/cli-action@"))
+ki, chk = find(lambda s: s.get("name") == "Verify DOPPLER_TOKEN present")
 ai, app = find(lambda s: str(s.get("uses", "")).endswith("mint-soleur-ai-app-token"))
+ti, tag = find(lambda s: s.get("name") == "Create tag")
 xi, dsp = find(lambda s: s.get("name") == "Dispatch build")
-(ok if tag.get("env") == {"MINT_TAG_TOKEN": "${{ github.token }}"} else bad)("tag-env", "Create tag env must be exactly MINT_TAG_TOKEN: ${{ github.token }}" + AUTH)
-(ok if "--tag" in str(tag.get("run", "")) and "would-mint" in str(tag.get("if", "")) and tag.get("id") == "tag" else bad)("tag-step", "Create tag (id tag) runs --tag only when decide says would-mint" + AUTH)
-de = dsp.get("env") or {}
-(ok if de.get("MINT_DISPATCH_TOKEN") == "${{ steps.app.outputs.token }}" and "MINT_TAG_TOKEN" not in de and app.get("id") == "app" else bad)("dispatch-env", "Dispatch build env must bind MINT_DISPATCH_TOKEN to steps.app.outputs.token and nothing to MINT_TAG_TOKEN" + AUTH)
-(ok if "--dispatch" in str(dsp.get("run", "")) else bad)("dispatch-step", "Dispatch build runs --dispatch" + AUTH)
-(ok if 0 < ti < ai < xi else bad)("step-order", "order must be Create tag, then the App mint, then Dispatch build (the App token exists only after the tag)" + AUTH)
+# EXACT shape of every step that decides, holds a credential or writes: an `if`,
+# `run` or `env` that merely CONTAINS the right words (a `|| true`, an extra env
+# var, a widened condition) is a different step.
+def exact(sid, st, want):
+    got = {k: st.get(k) for k in want}
+    (ok if got == want else bad)(sid + "-exact", "%s must be exactly %s, got %s%s" % (sid, json.dumps(want, sort_keys=True), json.dumps(got, sort_keys=True, default=str), AUTH))
+exact("decide", dec, {"id": "decide", "if": None, "env": None, "run": SCRIPT + " --dry-run", "uses": None})
+exact("doppler-install", inst, {"if": WOULD, "env": None, "run": None})
+exact("doppler-check", chk, {"if": WOULD, "uses": None, "env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN }}"}})
+exact("app", app, {"id": "app", "if": WOULD, "env": None, "run": None, "uses": "./.github/actions/mint-soleur-ai-app-token",
+                   "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN }}", "installation-id": "122213433",
+                            "permissions": '{"actions":"write"}', "repositories": "soleur"}})
+exact("tag", tag, {"id": "tag", "if": WOULD, "uses": None, "run": SCRIPT + " --tag",
+                   "env": {"MINT_TAG_TOKEN": "${{ github.token }}"}})
+exact("dispatch", dsp, {"if": "steps.tag.outputs.result == 'tagged'", "uses": None, "run": SCRIPT + ' --dispatch "$TAG"',
+                        "env": {"MINT_DISPATCH_TOKEN": "${{ steps.app.outputs.token }}", "TAG": "${{ steps.tag.outputs.tag }}"}})
+(ok if 0 < di < ii < ki < ai < ti < xi else bad)("step-order", "order must be Decide, Doppler install, token check, App mint, Create tag, Dispatch build: every credential exists BEFORE the tag, and the dispatch is the only step after it" + AUTH)
 aw = app.get("with") or {}
 try: perms = json.loads(str(aw.get("permissions", "")))
 except Exception: perms = None  # noqa: BLE001
 (ok if perms == {"actions": "write"} and aw.get("repositories") == "soleur" and str(aw.get("installation-id")) == "122213433" else bad)("app-scope", "the App mint must be scoped to permissions {\"actions\":\"write\"} and repositories soleur" + AUTH)
+# Every steps.X.outputs.Y names a real step id and an output that step emits:
+# the mint script's GITHUB_OUTPUT keys, or a local composite's declared outputs.
+script_keys = set(re.findall(r"printf '([a-z_]+)=[^']*'[^\n]*>>\s*\"\$GITHUB_OUTPUT\"", open(mint_sh).read()))
+comp_keys = set(((yaml.safe_load(open(composite)) or {}).get("outputs") or {}).keys())
+emits = {}
+for s in steps:
+    if not s.get("id"): continue
+    if SCRIPT in str(s.get("run", "")): emits[s["id"]] = script_keys
+    elif str(s.get("uses", "")) == "./.github/actions/mint-soleur-ai-app-token": emits[s["id"]] = comp_keys
+    else: emits[s["id"]] = set()
+refs = re.findall(r"steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)", raw)
+dangling = sorted({"%s.%s" % r for r in refs if r[1] not in emits.get(r[0], set())})
+(ok if refs and script_keys >= {"result", "tag", "tag_state"} and not dangling else bad)("output-refs", "steps.X.outputs.Y reference(s) with no such step id or output key: %s (script writes %s; composite outputs %s)%s" % (dangling, sorted(script_keys), sorted(comp_keys), AUTH))
 for i, s in enumerate(steps):
     txt = yaml.safe_dump(s)
     if "MINT_TAG_TOKEN" in txt and i != ti: bad("tag-token-isolated", "step %d (%s) references MINT_TAG_TOKEN" % (i, s.get("name")) + AUTH)
     if "MINT_DISPATCH_TOKEN" in txt and i != xi: bad("dispatch-token-isolated", "step %d (%s) references MINT_DISPATCH_TOKEN" % (i, s.get("name")) + AUTH)
+    if "steps.app.outputs" in txt and i != xi: bad("app-token-isolated", "step %d (%s) reads the App token" % (i, s.get("name")) + AUTH)
     if re.search(r"github\.token|secrets\.GITHUB_TOKEN", txt) and i != ti: bad("github-token-isolated", "step %d (%s) references the job GITHUB_TOKEN" % (i, s.get("name")) + AUTH)
     u = str(s.get("uses", ""))
     if u and not u.startswith("./") and not re.search(r"@[0-9a-f]{40}$", u): bad("sha-pinned", "step %d uses %s, not a 40-hex SHA pin" % (i, u))
-if not any(o.startswith("BAD tag-token-isolated") for o in out): ok("tag-token-isolated")
-if not any(o.startswith("BAD dispatch-token-isolated") for o in out): ok("dispatch-token-isolated")
-if not any(o.startswith("BAD github-token-isolated") for o in out): ok("github-token-isolated")
-if not any(o.startswith("BAD sha-pinned") for o in out): ok("sha-pinned")
+for rid in ("tag-token-isolated", "dispatch-token-isolated", "app-token-isolated", "github-token-isolated", "sha-pinned"):
+    if not any(o.startswith("BAD " + rid + " ") for o in out): ok(rid)
 (bad if re.search(r"secrets\.[A-Za-z0-9_]*PAT\b|\b[A-Z0-9_]*_PAT\b", raw) else ok)("no-pat", "a PAT-named secret is referenced (hr-github-app-auth-not-pat)")
-si, sl = find(lambda s: str(s.get("if", "")).strip() == "failure()")
-(ok if si > xi and sl.get("continue-on-error") is True else bad)("slack-on-failure", "a final if: failure() Slack step with continue-on-error: true" + AUTH)
-(ok if tag.get("timeout-minutes") and dsp.get("timeout-minutes") else bad)("step-timeouts", "Create tag and Dispatch build carry step timeouts" + AUTH)
+si, sl = find(lambda s: str(s.get("name", "")).startswith("Post to Slack"))
+(ok if si == len(steps) - 1 and str(sl.get("if", "")).strip() == "failure() || cancelled()" and sl.get("continue-on-error") is True else bad)("slack-on-failure", "the LAST step is the Slack step, if: failure() || cancelled(), continue-on-error: true" + AUTH)
+srun = str(sl.get("run", ""))
+(ok if re.search(r"--max-time\s+15\b", srun) and re.search(r'\|\|\s*echo\s+"?000"?', srun) else bad)("slack-curl-bounded", "the Slack curl needs --max-time 15 and || echo 000 (the bump job's form)" + AUTH)
+(ok if "steps.tag.outputs.tag_state" in str(sl.get("env", {})) and '"$TAG_STATE" == unknown' in srun and "ls-remote" in srun else bad)("slack-tag-unknown-branch", "the Slack step must carry a tag_state=unknown branch that says the tag MAY exist" + AUTH)
+# Every step carries its own timeout, and they sum BELOW the job cap, so a hung
+# step fails as a step and the Slack step still runs inside the cap.
+jt = job.get("timeout-minutes")
+st = [s.get("timeout-minutes") for s in steps]
+missing = [s.get("name") or s.get("uses") or s.get("id") for s in steps if not isinstance(s.get("timeout-minutes"), int) or s.get("timeout-minutes") <= 0]
+(ok if isinstance(jt, int) and not missing and sum(st) < jt else bad)("step-timeouts", "every step needs a positive timeout-minutes (missing: %s) summing below the job's %s (sum %s)%s" % (missing, jt, sum(t for t in st if isinstance(t, int)), AUTH))
 print("\n".join(out))
 PY
-g3_wf() { python3 "$TMP/g3_wf.py" "$1" "$2" 2>&1 || echo "BAD python-crashed"; }
+g3_wf() { python3 "$TMP/g3_wf.py" "$1" "$2" "${3:-$SCRIPT}" "${4:-$COMPOSITE}" 2>&1 || echo "BAD python-crashed"; }
 
-report() { # report <prefix> — pass/fail each OK/BAD line on stdin; counts rows
-  local line n=0
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    n=$((n+1))
-    case "$line" in
-      OK\ *)  pass "$1.${line#OK }" ;;
-      BAD\ *) local rest="${line#BAD }"; fail "$1.${rest%% *}" "${rest#* }" ;;
-      *)      fail "$1.unparsed" "$line" ;;
-    esac
-  done
-  REPORTED=$n
-}
 report g3.parity < <(g3_parity "$SCRIPT" "$BUMP" "$CONSUMER" "$BUILD_WF")
-a_eq 'g3.parity:row-count' "$REPORTED" 10
+a_eq 'g3.parity:row-count' "$REPORTED" 11
 report g3.wf < <(g3_wf "$MINT_WF" "$BUILD_WF")
-if (( REPORTED >= 30 )); then pass 'g3.wf:row-count'; else fail 'g3.wf:row-count' "only $REPORTED workflow-shape rows reported"; fi
+a_eq 'g3.wf:row-count' "$REPORTED" 36
 
 # Guard 3 mutation rows: mutate a TEMP copy; RED = at least one BAD line.
 MUTDIR="$TMP/g3mut"; mkdir -p "$MUTDIR"
@@ -1033,15 +1326,15 @@ g3_mut() { # g3_mut <id> <which: mint|ga|bwf|mwf> <python-replace-old> <new>
 import sys
 src, dst, old, new = sys.argv[1:5]
 s = open(src).read()
-if s.count(old) < 1: sys.exit(2)
+if s.count(old) != 1: sys.exit(2)
 open(dst, "w").write(s.replace(old, new, 1))
 PY
-  then fail "$id:landed" "mutation anchor not found in $src"; return; fi
+  then fail "$id:landed" "mutation anchor must match exactly once in $src"; return; fi
   if cmp -s "$src" "$dst"; then fail "$id:landed" "mutation produced an identical file"; return; fi
   pass "$id:landed"
   local m="$SCRIPT" g="$CONSUMER" b="$BUILD_WF" w="$MINT_WF"
   case "$which" in mint) m="$dst" ;; ga) g="$dst" ;; bwf) b="$dst" ;; mwf) w="$dst" ;; esac
-  out=$( { g3_parity "$m" "$BUMP" "$g" "$b"; g3_wf "$w" "$b"; } )
+  out=$( { g3_parity "$m" "$BUMP" "$g" "$b"; g3_wf "$w" "$b" "$m"; } )
   # A crashed or unparsed checker is a broken INSTRUMENT, never a kill.
   if grep -qE '^BAD (python-crashed|parse)|^Traceback' <<<"$out"; then
     fail "$id:caught" "instrument broken: the workflow checker crashed on the mutant"; return
@@ -1062,6 +1355,21 @@ g3_mut g3.m8a-checkout-sha 'mwf' '          ref: main' '          ref: ${{ githu
 g3_mut g3.m8b-no-job-if 'mwf' "    if: github.ref == 'refs/heads/main'" '    # (job if removed)'
 g3_mut g3.m9-pin-pattern 'mint' "grep -E '^\\s*vector_sha256\\s*=' \"\$VTF\"" "grep -E '^\\s*vector_sha256.*=' \"\$VTF\""
 g3_mut g3.m10-unscoped-app 'mwf' "permissions: '{\"actions\":\"write\"}'" "permissions: ''"
+g3_mut g3.m11-strict-re 'mint' "STRICT_TAG_RE='^vinngest-v[0-9]+\.[0-9]+\.[0-9]+\$'" "STRICT_TAG_RE='^vinngest-v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?\$'"
+# W1-W6: mutants that CONTAIN the right words, which a substring check let live.
+g3_mut g3.w1-decide-or-true 'mwf' 'run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run' 'run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run || true'
+g3_mut g3.w2-tag-if-widened 'mwf' $'        id: tag\n        if: steps.decide.outputs.result == \'would-mint\'' $'        id: tag\n        if: steps.decide.outputs.result == \'would-mint\' || always()'
+g3_mut g3.w3-dispatch-or-true 'mwf' 'mint-inngest-bootstrap-tag.sh --dispatch "$TAG"' 'mint-inngest-bootstrap-tag.sh --dispatch "$TAG" || true'
+g3_mut g3.w4-dispatch-extra-env 'mwf' '          TAG: ${{ steps.tag.outputs.tag }}'$'\n''        run:' '          TAG: ${{ steps.tag.outputs.tag }}'$'\n''          GH_TOKEN: ${{ steps.app.outputs.token }}'$'\n''        run:'
+g3_mut g3.w5-tag-or-true 'mwf' 'mint-inngest-bootstrap-tag.sh --tag' 'mint-inngest-bootstrap-tag.sh --tag || true'
+g3_mut g3.w6-output-typo 'mwf' "if: steps.tag.outputs.result == 'tagged'" "if: steps.tag.outputs.results == 'tagged'"
+g3_mut g3.w7-app-gated-on-tag 'mwf' $'        id: app\n        if: steps.decide.outputs.result == \'would-mint\'' $'        id: app\n        if: steps.tag.outputs.result == \'tagged\''
+# An output typo in a step no exact-shape row covers: only output-refs sees it.
+g3_mut g3.w6b-slack-output-typo 'mwf' '          TAG: ${{ steps.tag.outputs.tag }}'$'\n''          TAG_STATE:' '          TAG: ${{ steps.tag.outputs.tags }}'$'\n''          TAG_STATE:'
+g3_mut g3.w8-slack-failure-only 'mwf' 'if: failure() || cancelled()' 'if: failure()'
+g3_mut g3.w9-job-cap-below-sum 'mwf' '    timeout-minutes: 20' '    timeout-minutes: 10'
+g3_mut g3.w10-no-tag-state-branch 'mwf' '          TAG_STATE: ${{ steps.tag.outputs.tag_state }}'$'\n' ''
+g3_mut g3.w11-paths-whole-infra 'mwf' "      - 'apps/web-platform/infra/inngest*'" "      - 'apps/web-platform/infra/**'"
 
 # ===========================================================================
 echo "=== Composite scope-down (mint-soleur-ai-app-token) ==="
@@ -1072,7 +1380,7 @@ echo "=== Composite scope-down (mint-soleur-ai-app-token) ==="
 # exactly the scoped JSON body.
 CDIR="$TMP/composite"; CBIN="$CDIR/bin"; mkdir -p "$CBIN"
 awk '/^      run: \|[[:space:]]*$/ {on=1; next} on' "$COMPOSITE" | sed 's/^        //' > "$CDIR/run.sh"
-if grep -qF 'INSTALL_TOKEN=$(curl -sS -X POST \' "$CDIR/run.sh"; then pass 'comp:extracted'
+if grep -qF 'INSTALL_RESP=$(curl -sS --max-time 30 -X POST \' "$CDIR/run.sh"; then pass 'comp:extracted'
 else fail 'comp:extracted' "could not extract the composite run block from $COMPOSITE"; fi
 openssl genrsa 2048 > "$CDIR/key.pem" 2>/dev/null
 cat > "$CBIN/doppler" <<STUB
@@ -1086,13 +1394,14 @@ STUB
 cat > "$CBIN/curl" <<'STUB'
 #!/usr/bin/env bash
 { printf -- '--call--\n'; printf '%s\n' "$@"; } >> "${CURL_LOG:?unset}"
-printf '{"token":"fixture-installation-credential"}'
+if [[ -n "${CURL_RESP:-}" ]]; then printf '%s' "$CURL_RESP"
+else printf '%s' '{"token":"fixture-installation-credential"}'; fi
 STUB
 chmod +x "$CBIN/doppler" "$CBIN/curl"
-run_comp() { # run_comp <label> <permissions> <repositories>
+run_comp() { # run_comp <label> <permissions> <repositories> [response-json]
   CLOG="$CDIR/$1.curl"; COUT="$CDIR/$1.out"; : > "$CLOG"; : > "$COUT"
   CRC=0
-  env -u SCOPE_PERMISSIONS -u SCOPE_REPOSITORIES PATH="$CBIN:$PATH" CURL_LOG="$CLOG" \
+  env -u SCOPE_PERMISSIONS -u SCOPE_REPOSITORIES -u CURL_RESP ${4:+CURL_RESP="$4"} PATH="$CBIN:$PATH" CURL_LOG="$CLOG" \
     DOPPLER_TOKEN=fixture DOPPLER_PROJECT=soleur DOPPLER_CONFIG=prd_terraform INSTALLATION_ID=122213433 \
     SCOPE_PERMISSIONS="$2" SCOPE_REPOSITORIES="$3" RUNNER_TEMP="$CDIR" GITHUB_OUTPUT="$COUT" \
     bash --noprofile --norc -eo pipefail "$CDIR/run.sh" > "$CDIR/$1.stdout" 2>&1 || CRC=$?
@@ -1104,11 +1413,29 @@ a_eq 'comp.default:rc' "$CRC" 0
 a_eq 'comp.default:no-data' "$(data_arg)" NONE
 a_eq 'comp.default:one-call' "$(grep -c -- '^--call--$' "$CLOG" || true)" 1
 a_eq 'comp.default:token-out' "$(cat "$COUT")" 'token=fixture-installation-credential'
-run_comp scoped '{"actions":"write"}' soleur
+# The token call is bounded, on every path.
+a_eq 'comp.default:max-time' "$(awk 'f {print; exit} $0 == "--max-time" {f=1}' "$CLOG")" 30
+# Scoped: the response must grant exactly the request (+ metadata:read) over
+# repository_selection=selected, or no token is handed out.
+R_OK='{"token":"fixture-installation-credential","permissions":{"actions":"write","metadata":"read"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
+run_comp scoped '{"actions":"write"}' soleur "$R_OK"
 a_eq 'comp.scoped:rc' "$CRC" 0
 a_eq 'comp.scoped:body' "$(data_arg)" '{"repositories":["soleur"],"permissions":{"actions":"write"}}'
-run_comp repos-only '' 'soleur, other'
+a_eq 'comp.scoped:token-out' "$(cat "$COUT")" 'token=fixture-installation-credential'
+run_comp scoped-no-meta '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
+a_eq 'comp.scoped-no-metadata:rc' "$CRC" 0
+run_comp scope-wider '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","contents":"write","metadata":"read"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
+a_eq 'comp.scope-mismatch:refused' "$( (( CRC != 0 )) && echo yes || echo "no (rc=$CRC)")" yes
+a_eq 'comp.scope-mismatch:no-token-out' "$(cat "$COUT")" ''
+a_eq 'comp.scope-mismatch:named' "$(grep -c 'differ from the requested' "$CDIR/scope-wider.stdout" || true)" 1
+run_comp scope-all-repos '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","metadata":"read"},"repository_selection":"all"}'
+a_eq 'comp.selection-all:refused' "$( (( CRC != 0 )) && echo yes || echo "no (rc=$CRC)")" yes
+a_eq 'comp.selection-all:no-token-out' "$(cat "$COUT")" ''
+run_comp repos-only '' 'soleur, other' '{"token":"fixture-installation-credential","permissions":{"contents":"write"},"repository_selection":"selected","repositories":[{"name":"other"},{"name":"soleur"}]}'
 a_eq 'comp.repos-only:body' "$(data_arg)" '{"repositories":["soleur","other"]}'
+a_eq 'comp.repos-only:rc' "$CRC" 0
+# Unscoped: nothing is checked, so a response without permissions still mints.
+a_eq 'comp.default:unchecked' "$(grep -c '::error::' "$CDIR/default.stdout" || true)" 0
 run_comp bad-json 'not json' soleur
 a_eq 'comp.bad-json:refused' "$( (( CRC != 0 )) && echo yes || echo "no (rc=$CRC)")" yes
 a_eq 'comp.bad-json:no-call' "$(grep -c -- '^--call--$' "$CLOG" || true)" 0
@@ -1149,6 +1476,16 @@ chk_suffix_annotated() {
   mf_new "$1"; fx_carrier carrier-03.sh "v2 $1"; mf_commit c
   side_tag_on_origin vinngest-v1.2.0-rc1 --annotate
   MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK"); run_mint "$1" --tag; v_classify tagged tag vinngest-v1.2.1
+}
+chk_chmod() {
+  mf_new "$1"; chmod +x "$F_REPO/$FX_INFRA/carrier-06.sh"; mf_commit c
+  run_mint "$1" --dry-run; v_classify would-mint changed 'carrier:carrier-06.sh'
+}
+chk_verify_lsr() {
+  mf_new "$1"; fx_carrier carrier-03.sh "v2 $1"; mf_commit c
+  MINT_ENV=(MINT_TAG_TOKEN="$TAG_TOK" MOCK_GH_REF_BREAK_ORIGIN=1); run_mint "$1" --tag
+  [[ -d "$F_ORIGIN.unreachable" ]] && mv "$F_ORIGIN.unreachable" "$F_ORIGIN"
+  v_classify error reason ls-remote-failed
 }
 chk_concurrent() {
   mf_new "$1"; fx_carrier carrier-03.sh "v2 $1"; mf_commit c
@@ -1196,11 +1533,20 @@ PY
 mut_row m.g1-hollow-comparator cmp_inputs \
   "if [[ -n \"\$1\" && \"\$1\" == \"\$2\" ]]; then printf 'same'; else printf 'differs'; fi" \
   "printf 'same'" chk_last_carrier
-mut_row m.g2-local-tag-list list_remote_tags \
-  "git -C \"\$REPO_DIR\" ls-remote --tags origin 'refs/tags/vinngest-v*'" \
-  "git -C \"\$REPO_DIR\" for-each-ref --format='%(objectname) %(refname)' 'refs/tags/vinngest-v*'" chk_remote_only
+mut_row m.g2-local-tag-list ls_remote \
+  'git -C "$REPO_DIR" ls-remote --tags origin "$@"' \
+  "git -C \"\$REPO_DIR\" for-each-ref --format='%(objectname) %(refname)' \"\$@\"" chk_remote_only
 mut_row m.g2-lexical-sort stage_allocate '| sort -V | tail -1)' '| sort | tail -1)' chk_lexical
+# EQUIVALENT, and why: without the filter the `^{}` peel lines stay in `names`.
+# Their X.Y.Z prefix equals their own direct line's, so the prefix set (and the
+# max, and NEXT) is unchanged; `grep -qxF NEXT` never equals a `...^{}` name; and
+# a peel line's prefix is <= max < NEXT, so it never sorts above NEXT in the
+# not-last check. The filter is hygiene: it keeps the name set equal to the set of
+# refs, which is what the messages print.
 mut_row m.g2-peel-strip stage_allocate "grep -v '\\^{}\$'" "cat" chk_suffix_annotated equivalent
+mut_row m.g1-blob-only tree_entry 'print a[1] " " a[3]' 'print a[3]' chk_chmod
+mut_row m.g2-verify-swallows-lsr ls_remote \
+  'die "$stage" ls-remote-failed' '[[ "$stage" == tag ]] || die "$stage" ls-remote-failed' chk_verify_lsr
 mut_row m.g2-reorder-reread stage_tag \
   $'  precreate_reread     # step: re-read\n  post_tag_object      # step: tag object\n  post_tag_ref         # step: ref\n' \
   $'  post_tag_object      # step: tag object\n  post_tag_ref         # step: ref\n  precreate_reread     # step: re-read\n' chk_concurrent

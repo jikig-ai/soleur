@@ -14,9 +14,17 @@ name: Mint inngest-bootstrap tag
 # ONE BUILD PER TAG. The tag is created with the job's GITHUB_TOKEN on purpose:
 # GitHub starts no workflow from a GITHUB_TOKEN event, so the tag's `push: tags`
 # trigger stays silent and the build runs exactly once — from the dispatch below,
-# made from main by the soleur-ai App (a workflow_dispatch that #8209's main-only
-# environment can accept, unlike a tag-ref run). The dispatch is sent once and never
-# retried: a retry after a lost 2xx could start a second build and MOVE the digest.
+# made from main by the soleur-ai App. A workflow_dispatch run executes main's copy
+# of the build workflow, not a tag-ref copy, which is the shape #8209 can bind to a
+# main-only environment once it re-tiers this job. The dispatch is sent once and
+# never retried: a retry after a lost 2xx could start a second build and MOVE the
+# digest.
+#
+# CREDENTIALS BEFORE THE TAG. Every credential step (Doppler CLI, the
+# DOPPLER_TOKEN check, the App-token mint) runs after Decide and BEFORE Create tag,
+# so a credential failure publishes nothing and the only step after the tag is the
+# dispatch. Isolation still holds: Create tag sees only the job's GITHUB_TOKEN, and
+# only Dispatch build sees the App token (the script refuses the other one too).
 #
 # RECOVERY. Every failure is stage-named (::error::<stage>:) and posts to Slack; see
 # knowledge-base/engineering/operations/runbooks/inngest-server.md §Bootstrap-image
@@ -26,12 +34,17 @@ name: Mint inngest-bootstrap tag
 on:
   push:
     branches: [main]
-    # The image's source tree: the carriers and pins under infra/, the build recipe,
-    # and this mint's own machinery. A push the filter skips (e.g. >3,000 files) is
-    # caught by the next qualifying push or a workflow_dispatch, because the decision
+    # The image's source tree: every `cp`-staged carrier (all named inngest*,
+    # vector.* or cat-inngest-* under infra/, a test suite row checks each `cp`
+    # source is covered), the two pin files, the build recipe, and this mint's own
+    # machinery. Deliberately narrower than infra/**, so an unrelated Terraform
+    # edit starts no run. A push the filter skips (e.g. >3,000 files) is caught by
+    # the next qualifying push or a workflow_dispatch, because the decision
     # compares HEAD against the newest merged TAG, never against the previous push.
     paths:
-      - 'apps/web-platform/infra/**'
+      - 'apps/web-platform/infra/inngest*'
+      - 'apps/web-platform/infra/vector.*'
+      - 'apps/web-platform/infra/cat-inngest-*'
       - '.github/workflows/build-inngest-bootstrap-image.yml'
       - '.github/workflows/mint-inngest-bootstrap-tag.yml'
       - '.github/scripts/mint-inngest-bootstrap-tag.sh'
@@ -45,11 +58,15 @@ permissions:
 jobs:
   mint:
     # A branch workflow_dispatch runs that branch's copy of this file; this gate stops
-    # the accidental case (the real control for a malicious one is #8209's main-only
-    # environment).
+    # the accidental case only. There is NO `environment:` on this job today, so
+    # nothing stops a malicious branch copy that deletes the gate: #8209 must bind
+    # this job to its main-only environment (infra-credential-tiers-8209.md lists it).
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Above the sum of every step's own timeout (checkout 3 + decide 2 + Doppler
+    # install 2 + token check 1 + App 2 + tag 3 + dispatch 3 + Slack 1 = 17), so a
+    # hung step fails as a STEP and the Slack step still runs inside the job cap.
+    timeout-minutes: 20
     # Serialized, never cancelled: GitHub keeps one running and one pending run per
     # group and a newer queued run replaces the pending one. Dropping an intermediate
     # run is safe because each run decides tag-vs-tip.
@@ -67,6 +84,7 @@ jobs:
       # from the tags merged into HEAD). persist-credentials false: nothing here
       # pushes through git.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 3
         with:
           ref: main
           fetch-depth: 0
@@ -76,23 +94,17 @@ jobs:
       # No credential: git only. Writes result=noop|would-mint to GITHUB_OUTPUT.
       - name: Decide
         id: decide
+        timeout-minutes: 2
         run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run
 
-      - name: Create tag
-        id: tag
-        if: steps.decide.outputs.result == 'would-mint'
-        # A hang lands as a step failure (reaching the Slack step), not a job cancel.
-        timeout-minutes: 5
-        env:
-          MINT_TAG_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --tag
-
       - name: Install Doppler CLI
-        if: steps.tag.outputs.tag != ''
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4.0.0
+        if: steps.decide.outputs.result == 'would-mint'
+        timeout-minutes: 2
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
       - name: Verify DOPPLER_TOKEN present
-        if: steps.tag.outputs.tag != ''
+        if: steps.decide.outputs.result == 'would-mint'
+        timeout-minutes: 1
         env:
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
         run: |
@@ -102,11 +114,14 @@ jobs:
             exit 1
           fi
 
-      # Minted only AFTER the tag exists, and scoped to what the one call needs:
-      # actions:write on this repository (not the installation's full grant).
+      # Minted BEFORE the tag (a failure here publishes nothing), scoped to what the
+      # one call needs: actions:write on this repository, not the installation's full
+      # grant. The composite verifies the granted scope, and the script revokes the
+      # token right after the dispatch POST.
       - name: Mint soleur-ai App token (actions:write on soleur)
         id: app
-        if: steps.tag.outputs.tag != ''
+        if: steps.decide.outputs.result == 'would-mint'
+        timeout-minutes: 2
         uses: ./.github/actions/mint-soleur-ai-app-token
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN }}
@@ -114,21 +129,35 @@ jobs:
           permissions: '{"actions":"write"}'
           repositories: soleur
 
+      - name: Create tag
+        id: tag
+        if: steps.decide.outputs.result == 'would-mint'
+        # A hang lands as a step failure (reaching the Slack step), not a job cancel.
+        timeout-minutes: 3
+        env:
+          MINT_TAG_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --tag
+
+      # The only step after the tag. `result == 'tagged'` excludes a pre-create
+      # re-read that found a concurrent tag (result=noop, nothing to dispatch).
       - name: Dispatch build
-        if: steps.tag.outputs.tag != ''
-        timeout-minutes: 5
+        if: steps.tag.outputs.result == 'tagged'
+        timeout-minutes: 3
         env:
           MINT_DISPATCH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --dispatch "$TAG"
 
       - name: Post to Slack (auto-mint failure)
-        # Fires on any failed step above; none of them carries continue-on-error.
-        if: failure()
+        # Fires on any failed step above (none carries continue-on-error) and on a
+        # cancel, including a step or job timeout.
+        if: failure() || cancelled()
+        timeout-minutes: 1
         continue-on-error: true
         env:
           SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
           TAG: ${{ steps.tag.outputs.tag }}
+          TAG_STATE: ${{ steps.tag.outputs.tag_state }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -138,20 +167,25 @@ jobs:
             exit 0
           fi
           echo "::add-mask::$WEBHOOK"
-          if [[ "$TAG" =~ ^vinngest-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            MESSAGE="❌ inngest-bootstrap auto-mint FAILED after creating ${TAG}. Do NOT delete or reuse the tag. If the dispatch failed, run exactly once: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=${TAG} — Run: ${RUN_URL}"
+          if [[ "$TAG" =~ ^vinngest-v[0-9]+\.[0-9]+\.[0-9]+$ && "$TAG_STATE" == unknown ]]; then
+            MESSAGE="❌ inngest-bootstrap auto-mint FAILED at the tag step after the ref POST: ${TAG} MAY exist. Check: git ls-remote --tags origin refs/tags/${TAG} — if it is there, confirm no build run exists for it (gh run list --workflow build-inngest-bootstrap-image.yml), then dispatch exactly once: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=${TAG}. Never delete or reuse the name. Run: ${RUN_URL}"
+          elif [[ "$TAG" =~ ^vinngest-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            MESSAGE="❌ inngest-bootstrap auto-mint FAILED after creating ${TAG}. Do NOT delete or reuse the tag. If the dispatch failed, confirm no build run exists for it, then run exactly once: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=${TAG} — Run: ${RUN_URL}"
           else
             MESSAGE="❌ inngest-bootstrap auto-mint FAILED before any tag was created (read the stage-named ::error:: in the run; recovery table in the inngest-server runbook). Run: ${RUN_URL}"
           fi
           # jq --arg keeps the payload injection-inert.
           PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
+          # `|| echo 000` keeps a curl transport failure (timeout, DNS) on the ::warning
+          # path — without it pipefail would abort before the warning is emitted.
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
+            --max-time 15 \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "$WEBHOOK")
+            "$WEBHOOK" || echo "000")
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Slack notification sent"
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
           else
             echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
           fi
