@@ -94,6 +94,14 @@ the host's page 8 every time, and only the dry run showed it
 | `secrets` | optional | Comma-separated GitHub secret names. Only these are exported into the script's environment. Omit if the script needs no secrets. |
 | **Placement** | yes | The `<!--` opener MUST be at **column 0 and outside any code fence**. Fenced blocks are skipped wholesale and the anchor is column-0, so an indented or fenced directive parses as no directive at all. This is a field of the directive in every sense that matters — get it wrong and the other three are never read. |
 
+**Where the gate resolves `script=` (worktree caveat).** The PreToolUse
+directive gate resolves `script=` under `HOOK_CWD` — the MAIN checkout, not
+the worktree — so a probe that exists only inside the PR worktree is
+reported "does not exist" at `gh issue create` time (measured on PR #9113).
+Copy the probe to `<main-checkout>/scripts/followthroughs/` (untracked; the
+PR lands the canonical copy) before filing, and give `earliest=` the full
+ISO-8601 form (`YYYY-MM-DDTHH:MM:SSZ`, not a bare date).
+
 ## Trigger → verification mapping
 
 Deferred-scope-out issues (filed by `/soleur:review` §5) carry a **re-evaluation
