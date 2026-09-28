@@ -10,8 +10,9 @@
 # many of the ~59 GB the store reports are actually referenced by a manifest.
 #
 # WHAT IT IS NOT. It restarts nothing, reclaims nothing and pushes no config. `restart`,
-# `push-config` and `reclaim` are documented in the plan as BLOCKED ON A PROVISIONING EVENT —
-# named, not dropped. It also asserts no CAUSE for the delta: `delta_gb` is an UPPER BOUND on
+# `push-config` and `reclaim` are resolved by decision in ADR-172's amendment of 2026-09-28
+# (#7377): a config change ships as a merge that fires a volume-preserving registry replace;
+# restart and reclaim are not built. It also asserts no CAUSE for the delta: `delta_gb` is an UPPER BOUND on
 # unreferenced blob bytes, and the two named candidates (zot's dedupe cache DB, orphaned
 # `.uploads/` staging) have completely different remedies. The deliverable is the number.
 #
@@ -56,6 +57,13 @@ on:
         default: inventory
         options:
           - inventory
+      # #7377: the restart-loop alarm passes the [ci/zot-restart-loop] tracker it just opened, so
+      # the result is commented where the operator is looking. Optional; numeric or ignored.
+      tracker:
+        description: 'Optional issue number to ALSO comment the result on (the alarm passes its new tracker).'
+        type: string
+        required: false
+        default: ''
   # Registration only — see the TRIGGER SHAPE note in the header. The job-level guard below
   # makes this trigger a no-op.
   push:
@@ -88,7 +96,9 @@ jobs:
     # byte-identical to a run that never happened. So the real bound is the enumerator's own
     # wall-clock deadline (ZOT_INVENTORY_DEADLINE_S), which trips `partial
     # sweep_deadline_exceeded` and SHIPS the marker while there is still budget to ship it.
-    # This cap only backstops a hang outside that deadline's reach.
+    # This cap only backstops a hang outside that deadline's reach. Since #7377 the enumerator
+    # also waits up to ~360 s (plus one query) AFTER the sweep for a heartbeat newer than its
+    # START row; a long sweep never waits, a short one fits well inside this cap.
     timeout-minutes: 30
     concurrency:
       group: registry-zot-inventory
@@ -109,7 +119,7 @@ jobs:
           case "${DISPATCH_ACTION:-inventory}" in
             inventory) echo "dispatched action=${DISPATCH_ACTION:-inventory} (the only member of this lever's allow-list)" ;;
             *)
-              echo "::error::Dispatched action read as '${DISPATCH_ACTION}', which is outside this lever's one-member allow-list {inventory}. Refusing to proceed. restart / push-config / reclaim are documented as BLOCKED ON A PROVISIONING EVENT and are deliberately not dispatchable here."
+              echo "::error::Dispatched action read as '${DISPATCH_ACTION}', which is outside this lever's one-member allow-list {inventory}. Refusing to proceed. restart / push-config / reclaim are resolved by decision (ADR-172 amendment 2026-09-28, #7377) and are deliberately not dispatchable here."
               exit 1
               ;;
           esac
@@ -287,9 +297,12 @@ jobs:
             printf 'age_s=%s\n'    "$AGE_S"
           } >> "$GITHUB_OUTPUT"
           echo "SOLEUR_ZOT_DISK start sample: fs_size_gb=${FS_SIZE_GB} pcent=${PCENT} zot_restarts=${RESTARTS} boot_id=${BOOT_ID} sample_age_s=${AGE_S} sampled_at=${DT}"
-      # THE SWEEP. scripts/zot-inventory.sh owns ALL registry and telemetry egress and reaches
-      # exactly two destinations: http://127.0.0.1:5000 (this job's bridge) and the pinned
-      # Better Stack ingest URL. It reads its own credentials from Doppler (ZOT_PULL_USER /
+      # THE SWEEP. scripts/zot-inventory.sh owns ALL registry and telemetry egress and its own
+      # curl reaches exactly two destinations: http://127.0.0.1:5000 (this job's bridge) and the
+      # pinned Better Stack ingest URL. Since #7377 it also runs ONE read-only END sample in a
+      # child process (scripts/zot-disk-sample.sh -> betterstack-query.sh, which allow-lists the query
+      # host to *.betterstackdata.com), with the pull and ingest tokens stripped from that
+      # child's environment. It reads its own credentials from Doppler (ZOT_PULL_USER /
       # ZOT_PULL_TOKEN, BETTERSTACK_LOGS_TOKEN) and `::add-mask::`s each immediately — this
       # repository is PUBLIC and `doppler secrets get --plain` values are NOT auto-masked.
       #
@@ -298,33 +311,26 @@ jobs:
       #   ZOT_DISK_FS_SIZE_GB / ZOT_DISK_PCENT / ZOT_DISK_BOOT_ID /
       #   ZOT_DISK_RESTARTS_AT_START / ZOT_DISK_SAMPLE_AGE_S / ZOT_DISK_SAMPLE_AT
       #                                                    — the start sample, exported above.
-      #   BETTERSTACK_QUERY_*                              — PASSED BUT NOT YET CONSUMED. This
-      #                                                      said the script takes its own END
-      #                                                      sample; it does not — grep it for
-      #                                                      BETTERSTACK_QUERY or
-      #                                                      betterstack-query.sh and both
-      #                                                      return zero. So ZOT_RESTARTS_AT_END
-      #                                                      is set by no production caller,
-      #                                                      zot_restarts_at_end ships `unknown`
-      #                                                      on every run, and the enumerator's
-      #                                                      restart_during_sweep arm is
-      #                                                      unreachable outside its tests. The
-      #                                                      straddle IS still detected, at job
-      #                                                      level in the end-sample step below,
-      #                                                      and reaches the issue comment — it
-      #                                                      just never reaches the DURABLE
-      #                                                      marker. Tracked in #7377, not fixed
-      #                                                      here: giving the
-      #                                                      enumerator a network call inside
-      #                                                      its emit path is not a change to
-      #                                                      make late in a review pass. The
-      #                                                      vars stay wired so the follow-up is
-      #                                                      a script change only. The emission
-      #                                                      is inside the script, so the
-      #                                                      workflow's own end sample below
-      #                                                      lands too late to reach the marker;
-      #                                                      it is the JOB-LEVEL straddle check
-      #                                                      and the input to the issue comment.
+      #   BETTERSTACK_QUERY_*                              — CONSUMED BY THE SCRIPT'S OWN END
+      #                                                      SAMPLE (#7377). After the
+      #                                                      enumeration and before it emits,
+      #                                                      the script runs
+      #                                                      scripts/zot-disk-sample.sh (with
+      #                                                      the pull and ingest tokens
+      #                                                      stripped from its environment),
+      #                                                      so zot_restarts_at_end carries a
+      #                                                      real value and a restart or host
+      #                                                      replace during the sweep reaches
+      #                                                      the DURABLE marker as
+      #                                                      reason=restart_during_sweep.
+      #                                                      Until #7377 no caller set
+      #                                                      ZOT_RESTARTS_AT_END and the field
+      #                                                      shipped `unknown` on every run.
+      #                                                      The workflow's own end sample
+      #                                                      below still runs: it lands too
+      #                                                      late for the marker and remains
+      #                                                      the JOB-LEVEL straddle check and
+      #                                                      the input to the issue comment.
       #   MARKER_FILE                                      — where this step captures the
       #                                                      enumerator's STDOUT so
       #                                                      later steps can read it back.
@@ -508,9 +514,11 @@ jobs:
       # DEDICATED issues precisely because "#7247 is a live P1 that will close and take any
       # tracker on it with it."
       #
-      # #7339 is the dedicated, OPEN follow-through whose sole directive is "observe a real
-      # SOLEUR_ZOT_INVENTORY marker with enumeration_complete=true" — i.e. it exists to
-      # receive this number, and it stays open until the number arrives.
+      # #7339 was the dedicated follow-through whose sole directive was "observe a real
+      # SOLEUR_ZOT_INVENTORY marker with enumeration_complete=true"; it closed 2026-08-10 on
+      # that observation. It stays the stable home for the record. Since #7377 a dispatch may
+      # also name a `tracker` (the restart-loop alarm passes the tracker it just opened), and
+      # the same body is posted there, which is where an operator is actually looking.
       #
       # `!cancelled()` rather than `always()`: this step MUTATES something (it writes to a
       # public issue), and a cancelled run should not leave a partial record behind.
@@ -520,6 +528,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MARKER_FILE: ${{ runner.temp }}/zot-inventory-marker.txt
           INVENTORY_OUTCOME: ${{ steps.inventory.outcome }}
+          TRACKER_INPUT: ${{ inputs.tracker }}
           ASSERT_OUTCOME: ${{ steps.assert_marker.outcome }}
           STRADDLE: ${{ steps.disk_end.outputs.straddle }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -585,6 +594,12 @@ jobs:
             # Failing the run here would discard a successfully measured and successfully
             # persisted number over a comment.
             echo "::warning::gh issue comment on #7339 exited ${rc} (comment_rc=${rc}). The marker itself is unaffected — it is in Better Stack Logs source 2457081 and printed above. Re-post by hand from this run's log if the comment matters."
+          fi
+          # #7377: also post on the dispatching tracker. Validated numeric (it travels through
+          # env, never interpolated into a command), and non-fatal for the same reason as above.
+          if [[ "${TRACKER_INPUT:-}" =~ ^[0-9]+$ && "${TRACKER_INPUT}" != "7339" ]]; then
+            gh issue comment "$TRACKER_INPUT" --repo "${GITHUB_REPOSITORY}" --body-file "$BODY_FILE" \
+              || echo "::warning::gh issue comment on #${TRACKER_INPUT} (the dispatching tracker) failed; the marker is unaffected."
           fi
 
       # Teardown, copied from the composite's documented CALLER-SIDE TEARDOWN CONTRACT. The
