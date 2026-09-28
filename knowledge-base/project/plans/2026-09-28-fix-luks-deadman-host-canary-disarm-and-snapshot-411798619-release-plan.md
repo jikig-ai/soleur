@@ -14,6 +14,57 @@ requires_cpo_signoff: true
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28
+**Agents used:**
+
+- review: security-sentinel, observability-coverage-reviewer, test-design-reviewer, user-impact-reviewer;
+- research: best-practices-researcher (systemd transient-unit semantics), plus a verify-the-negative sweep;
+- earlier, in plan-review: DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO.
+
+**Halt gates:** 4.6, 4.7, 4.8, 4.10 and 4.11 all passed (`lint-guard-contract.py`: 3 entries). The
+probe verb passes `probe-verb-gate.sh`. 4.5 and 4.55 do not trigger: there is no connectivity
+symptom, and the only apply is an idempotent re-fire with no downtime.
+
+### Key improvements
+
+1. **The post-canary roll-forward can no longer start the app on an empty or wrong mount.**
+   - Before the disarm, the host canary checks the workspace count on `$MOUNT` against
+     `WORKSPACES_COUNT`.
+   - `cleanup` re-asserts the mapper before rolling forward. `resume_writers` alone checks only
+     `mountpoint` (user-impact review and verify sweep).
+2. **An unattended dead-man fire now pages** through a new Better Stack logs alert on
+   `result=fired`. That closes the #6812 six-hour-silence class, and the SIGKILL residual with it
+   (observability review).
+3. **`rollback()` handles the dead-man before any unmount**, with a bounded wait for a running
+   fire. The harness gains a last-event-wins GC model, `DRY_RUN=0` everywhere, `(exit 9)`
+   injection, a stub self-test and an instrument control. Without these, about half the planned
+   cases would have passed vacuously (test-design review).
+4. **The forensic print and the delete script are leak-safe** (security review):
+   - exact-field fstab select;
+   - a one-key `apt-config shell`;
+   - an argv-only `ExecStart` hash;
+   - a wider DIAG_OK deny list;
+   - xtrace refusal and the token passed on stdin;
+   - a scrubbed, length-capped `detail=`, kept out of Sentry.
+5. **Credential dispositions are scoped to the image route.** The service-role key and BYOK
+   also go into the token-route issue. A blanket line covers every other root-disk secret class,
+   and `GET /v1/servers` joins the evidence limb.
+6. **The 2026-10-06 deadline is enforced without a new secret.** A follow-through probe keys on
+   #8734's deletion-evidence marker; putting `HCLOUD_TOKEN` in the public-repo sweeper is the
+   #8209 class.
+
+### New considerations discovered
+
+- **Two authorities disagree on elapsed-timer retention.** systemd.timer(5) says an elapsed
+  timer stays loaded (`RemainAfterElapse=yes`), but web-1 printed the timer `inactive/dead`. The
+  real-systemd case settles it, and no design decision depends on the answer: the arm's timer
+  stop tolerates both.
+- **The drift alert's filter is `eq`, not `IS_IN`**, and every reason groups into Sentry issue
+  135268270. The runbook says never to archive it.
+- **`WORKSPACES_DEAD_MAN_MIN` is never passed by the workflow**, so the window is always 30 min.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -246,7 +297,10 @@ Runs FIRST in the work phase, in this order:
    - (b) EVERY `create_server` row carries a `resources[]` entry of `type=image` (measured today:
      all 101 do), and none names `411798619`;
    - (c) the only action naming `411798619` is its own `create_image`;
-   - (d) no `delete_image` or `change_protection` action exists on it.
+   - (d) no `delete_image` or `change_protection` action exists on it;
+   - (e) `GET /v1/servers`: no live server has `image.id == 411798619` (security review).
+
+   Every assertion is a `jq` expression with an exit status, never a reading by eye.
 
    The coverage window runs from `2026-07-23T15:34:04Z`, the image's creation, to the DELETE
    instant. The image did not exist earlier, so the action log's 2026-07-03 start does not limit
@@ -264,13 +318,21 @@ Runs FIRST in the work phase, in this order:
    - It then re-pulls every page of `GET /v1/servers/actions` and re-asserts (a)–(d) up to the
      DELETE timestamp, so the coverage window really ends at the DELETE (spec-flow).
    - It prints UTC timestamps for every step.
+   - **Token hygiene (security review):**
+     - it refuses to run under xtrace, with the same `case "$-" in *x*)` guard as
+       `workspaces-cutover.sh`;
+     - it passes the `Authorization` header to curl on stdin (`--config -`), never in argv, and
+       never uses `-v`;
+     - it posts only the status code and `jq`-selected fields;
+     - it deletes itself after use.
    - **Named failure branches:**
      - a failed identity check, a non-204 DELETE or a non-404 GET makes it stop, edit no records,
        and post the raw status on #8734;
      - a post-DELETE re-pull that shows image use makes it stop, file the rotation issue at once,
        and treat the image-use sub-limb as INCONCLUSIVE.
 3. **Record the deletion at the moment it happens.**
-   - **One evidence comment on #8734**, carrying:
+   - **One evidence comment on #8734**, opened with the marker
+     `<!-- soleur:snapshot-411798619-deleted -->`, carrying:
      - the identity re-read;
      - the DELETE 204 and GET 404 timestamps;
      - the go-ahead text;
@@ -324,15 +386,26 @@ Runs FIRST in the work phase, in this order:
    - A correcting comment on #8632. It retracts "the service-role and BYOK exposure through the
      images is closed", citing #8734's value paths and this deletion.
 5. **Credential dispositions (recorded on #8734 and in the assessment addendum).**
-   - `SUPABASE_SERVICE_ROLE_KEY`: not rotated. The rule does not fire: the image-use limb is CLEAN
-     and the image is deleted before 2026-10-06.
-   - `BYOK_ENCRYPTION_KEY`: not rotated, with the CTO's concurrence recorded on 2026-09-28. The
-     concurrence has two conditions: the re-pull at deletion, and a mandatory rotation issue if the
-     image outlives 2026-10-06.
+   - `SUPABASE_SERVICE_ROLE_KEY`: "not rotated under #8734's image route (image-use CLEAN, image
+     deleted before 2026-10-06); the token-route decision is owed under #<token-route issue>".
+   - `BYOK_ENCRYPTION_KEY`: worded the same way, with the CTO's concurrence recorded on
+     2026-09-28. The concurrence has two conditions: the re-pull at deletion, and a mandatory
+     rotation issue if the image outlives 2026-10-06.
+   - The two keys are still readable through the `web-probes-read` token route, whose read limb is
+     INCONCLUSIVE, and deleting the image does not close that route (security review). The
+     token-route issue names both keys, alongside Stripe.
+   - **Every other root-disk secret class the image holds** is tied to the same CLEAN image-use
+     limb in one blanket line (security review). That covers web-1's SSH host private keys (CI
+     pins `local.web_1_ssh_host_key`), cloud-init `user-data`, the cloudflared tunnel credentials,
+     the GHCR pull token and the Vector/Better Stack ingest token.
+   - The addendum also states whether `HCLOUD_TOKEN` itself was readable through any config the
+     exposed tokens could read. It lives in `prd_terraform`, which `web-probes-read` (scoped to
+     `soleur/prd`) could not read. Verify this read-only from the token's config scope, and record
+     it.
    - `STRIPE_SECRET_KEY`: not triggered on the image route. #8705 left value exposure to #8734, so
      nobody owns the token-route disposition. **File a separate operator-gated issue** for the
-     token-route value-rotation determination (the Stripe key plus the other `soleur/prd` values).
-     It does not belong in this PR.
+     token-route value-rotation determination. It covers the Stripe key, the service-role key,
+     BYOK, and the other `soleur/prd` values. It does not belong in this PR.
    - `GITHUB_APP_PRIVATE_KEY`: "not rotated under #8734; owed under #8209 R5 / R1". Never write
      "no rotation needed".
 6. **If the go-ahead does not come in-session,** leave the records unedited: they must describe
@@ -342,6 +415,19 @@ Runs FIRST in the work phase, in this order:
    - The comment states the 2026-10-06 expiry. Past it, the service-role and BYOK rotation issues
      become mandatory (CTO condition).
    - The records and the ADR-100 addendum then ride a follow-up PR opened after the DELETE.
+   - **A follow-through probe enforces the deadline** (user-impact and spec-flow reviews):
+     `scripts/followthroughs/snapshot-411798619-expiry-8734.sh`. It is enrolled on #8734 with
+     `earliest=2026-10-06T00:00Z` and needs **no new secret**. The sweeper already has
+     `GH_TOKEN`, and wiring `HCLOUD_TOKEN` into a public-repo workflow is the exact
+     repo-secret-reachable class #8209 is evicting.
+     - It reads #8734's comments for the deletion-evidence marker
+       `<!-- soleur:snapshot-411798619-deleted -->`, which the Phase 1 evidence comment carries.
+     - Marker present: exit 0.
+     - Absent on or after 2026-10-06: exit 5 (ACTION REQUIRED), naming the service-role and
+       BYOK rotation issues to file.
+     - The marker is a proxy for the deletion; the evidence comment holds the actual GET-404
+       proof.
+     - The probe ships only on the no-go-ahead branch; the go-ahead path does not need it.
 
 ### Phase 2 — #9045: disarm at the host-canary door, verify the arm, record the outcome (TDD)
 
@@ -359,9 +445,13 @@ In `apps/web-platform/infra/workspaces-cutover.sh`:
    - **Pre-clear a stale unit.** It stops the timer, tolerating exit 5 ("not loaded"), then
      `reset-failed`s both units. The forensic print on this PR's merge apply captures web-1's
      current stale unit before any re-cut, so no evidence-emit step is added here.
-   - **Run `systemd-run` without the swallow.** The `2>/dev/null || true` goes, the first stderr
-     line is captured, and `--description=workspaces-luks dead-man` is added so the journal no
-     longer echoes the command line. On a non-zero exit it emits
+   - **Run `systemd-run` without the swallow.** The `2>/dev/null || true` goes. `--description=`
+     is set to a fixed string, so the journal no longer echoes the command line (systemd-run(1):
+     the default description is the command).
+   - **Capture the error without a temp file:** `err="$(systemd-run … 2>&1 >/dev/null)"`. Then
+     scrub it under `LC_ALL=C`: `head -n1`, `cut -c1-200`, `_vscrub`, and `=` mapped to `_` so
+     text like `result=armed` cannot spoof a marker field. `detail=` goes LAST in the marker and
+     never into `WL_REASON`/`emit_drift`, so Sentry never receives free text (security review). On a non-zero exit it emits
      `result=arm_failed reason=systemd_run_refused detail=<scrubbed first line>` plus the drift
      `deadman_arm_failed`, then dies. A lagging garbage collection surfaces here, as a named
      failure, and the runbook row gives the no-SSH recovery: re-dispatch, since the
@@ -369,7 +459,8 @@ In `apps/web-platform/infra/workspaces-cutover.sh`:
    - **Set `DEADMAN_ARMED=1` as soon as `systemd-run` returns 0,** before any verification. A
      failed verification then still reaches the disarm in `cleanup()`, so no timer is ever left
      live with nothing frozen (P0 from Kieran, spec-flow and the architecture review).
-   - **Verify the arm.** A bounded poll (≤ 5 s) checks for `SubState=waiting`. On a miss it emits
+   - **Verify the arm.** A bounded poll checks for `SubState=waiting`: at most 5 attempts, 1 s
+     apart, counted by attempt rather than clock, so the harness's no-op `sleep` cannot spin it. On a miss it emits
      `result=arm_failed reason=timer_not_waiting substate=<x>` and dies, and `cleanup()` disarms.
    - On success it emits `result=armed reason=freeze_engaged deadline_min=<n>`, the existing
      marker.
@@ -391,16 +482,28 @@ In `apps/web-platform/infra/workspaces-cutover.sh`:
      and returns 1. Otherwise it emits `result=disarmed reason=<reason>`, sets `DEADMAN_ARMED=0`
      and returns 0.
    - The reason vocabulary is closed: `host_canary_passed`, `rollback_engaged`, `arm_aborted`.
-4. **`rollback()` changes in two ways.**
-   - It waits, bounded at 90 s, for the dead-man service to leave `active`/`activating` before it
-     unmounts. A cleanup rollback then never races a running fire.
-   - It always stops the timer (T6b stays pinned). It runs the verifying
-     `disarm_dead_man rollback_engaged` only when `DEADMAN_ARMED=1`. Otherwise it emits
-     `result=not_armed reason=rollback_engaged`, which prevents a false fatal page in a
-     `ROLLBACK=1` dispatch after an earlier fire. Today the path logs the false
-     `reason=canary_passed`.
+   - **Every new dead-man marker is echoed to stdout AND logged** (`echo "$row"; logger -t …`),
+     the pattern the drift rows already use. The cutover run log then shows `detail=` at once,
+     while Better Stack keeps the durable copy (observability review).
+4. **`rollback()` handles the dead-man FIRST, before any unmount** (test-design review):
+   - It waits for the dead-man service to leave `active`/`activating`, for at most 30 attempts
+     3 s apart. On expiry it emits `result=disarm_failed reason=rollback_engaged check=fire_stuck`
+     and proceeds anyway: the plaintext remount the fire was performing is the same end state.
+   - With `DEADMAN_ARMED=1` it runs the verifying `disarm_dead_man rollback_engaged`, whose check
+     (a) reads before its own stop.
+   - With `DEADMAN_ARMED=0` it runs an unconditional timer stop (T6b stays pinned) and emits
+     `result=not_armed reason=rollback_engaged`. That avoids a false fatal page in a `ROLLBACK=1`
+     dispatch after an earlier fire.
+   - Only then does it unmount and remount. Today the path logs the false
+     `reason=canary_passed`, after the remount.
 5. **The single disarm point moves to the host canary.** It sits after the last host-canary assert
-   (`mountpoint -q "$MOUNT" || { emit_drift not_mounted; … }`) and before `CANARY_OK=1`:
+   (`mountpoint -q "$MOUNT" || { emit_drift not_mounted; … }`) and before `CANARY_OK=1`.
+   - **First, a population assert on the live mount (user-impact review).**
+     `wl_count_workspace_dirs "$MOUNT/workspaces"` must equal the persisted `WORKSPACES_COUNT`.
+     Otherwise it runs `emit_drift host_canary_workspace_count_mismatch` and dies while
+     `CANARY_OK=0`, and the rollback is still lossless. Today the only content check on `$MOUNT`
+     is `readyz`, which runs after `docker start`, past the door. The count G3 persisted was
+     taken on `$STAGING`, and this check proves it on `$MOUNT` after the repoint.
    - `disarm_dead_man host_canary_passed || die "…"`.
    - Then the GC-proof re-assert: `findmnt -no SOURCE "$MOUNT"` must equal `$MAPPER`. A fire
      unmounts `$MOUNT`, and garbage collection cannot hide that. A mismatch runs
@@ -416,19 +519,41 @@ In `apps/web-platform/infra/workspaces-cutover.sh`:
    - **Pre-canary with the freeze or flip held:** it runs `rollback`. The outcome is
      `rolled_back` if `findmnt` then shows a non-mapper source at `$MOUNT`, else
      `rollback_remount_failed`.
-   - **`CANARY_OK=1` (post-canary):** it rolls FORWARD on the LUKS mount. `docker start` and
-     `resume_writers` are idempotent and mount-guarded, which covers a death between
-     `CANARY_OK=1` and the end of `resume_writers` (architecture review #1). The outcome is
+   - **`CANARY_OK=1` (post-canary):** it rolls FORWARD on the LUKS mount, but only after it
+     re-asserts `findmnt -no SOURCE "$MOUNT"` equals `$MAPPER`. `resume_writers` is guarded only
+     by `mountpoint -q`, not by device identity (verify-the-negative sweep).
+     - It then runs `docker start` with its exit status checked; a failure emits
+       `cleanup_docker_start_failed`.
+     - Then `resume_writers`.
+     - This covers a death between `CANARY_OK=1` and the end of `resume_writers` (architecture
+       review #1). The main body's own `docker start` stays unchecked, as today; the roll-forward
+       is the backstop.
+     - If the mapper re-assert fails, it does not roll forward. It emits
+       `cleanup_mount_not_mapper` and leaves the app down: that is a page, not a silent start. The outcome is
      `post_canary_luks_retained`, and it calls `emit_drift cutover_aborted_post_canary` (fatal).
-     That matches the existing `sentry_issue_alert` filter
-     `feature=workspaces-luks ∧ op IS_IN workspaces-luks-drift` in
-     `apps/web-platform/infra/sentry/issue-alerts.tf`.
+     That matches the existing `sentry_alert.workspaces_luks_drift` filter in
+     `apps/web-platform/infra/sentry/issue-alerts.tf` (`feature eq workspaces-luks` AND
+     `op eq workspaces-luks-drift`; `workspaces-luks-emit.sh` hard-codes both). The reason goes
+     in a tag. All reasons group into one Sentry issue (135268270), so the runbook notes that
+     this issue must never be archived (observability review).
    - **`DEADMAN_ARMED=1`, nothing frozen (an arm-verification failure):** it runs
      `disarm_dead_man arm_aborted`. The outcome is `arm_aborted`.
    - **Otherwise:** the outcome is `pre_freeze`.
-   - **Accepted residual:** a SIGKILL of the host-side script after the host-canary disarm pages
-     nobody. An SSH drop delivers SIGHUP, and SIGHUP runs the EXIT trap (measured by spec-flow,
-     rc=129). A watchdog timer for SIGKILL alone is cut as disproportionate.
+   - **Accepted residual:** a SIGKILL of the host-side script after the host-canary disarm leaves
+     nothing armed and pages nobody. An SSH drop delivers SIGHUP, and SIGHUP runs the EXIT trap
+     (measured by spec-flow, rc=129). A watchdog timer for SIGKILL alone is cut as
+     disproportionate.
+   - **A dead-man fire now pages** (observability review): a new
+     `logtail_exploration_alert.workspaces_luks_deadman_fired` in
+     `apps/web-platform/infra/betterstack-logs-alerts.tf`. Its predicate is
+     `SYSLOG_IDENTIFIER='luks-monitor'`, `host_name='soleur-web-platform'` and the message
+     containing `op=workspaces-luks-deadman result=fired`, with the paging semantics copied from
+     `monitor_send_failed` and ADR-218. It adds a sibling `*-alert.test.sh` in
+     `apps/web-platform/test/infra/`, following `inngest-luks-wrong-volume-alert.test.sh`.
+   - Today an unattended fire (SIGKILL residual, or any future path) writes only Better Stack
+     rows, and nothing alerts on them: that is the #6812 six-hour blind spot. No alert is added
+     for `cutover_aborted` or `arm_failed`, because Sentry already pages those (it would double
+     the page).
 7. **The dead-man fire command is unchanged** (T12/T12b/T12c). The green-path log line changes:
    the C15 boot-path instruction is replaced by a pointer to the new fstab issue, because the
    plan's fstab finding shows a restart sends web-1 to emergency mode.
@@ -449,17 +574,26 @@ In `apps/web-platform/infra/workspaces-luks.tf` (`terraform_data.luks_monitor_in
    - It prints:
      - both dead-man units, one property per call:
        `LoadState ActiveState SubState Result LastTriggerUSec ExecMainStartTimestamp ExecMainExitTimestamp ExecMainStatus InvocationID`;
-     - the loaded service's `ExecStart` as a sha256 plus `fired_cmd=yes|no` (a grep for
-       `result=fired`), or `exec=not-loaded`. Never the command itself;
+     - the loaded service's `ExecStart` handled in exactly two ways (security review):
+       - `fired_cmd=yes|no`, from `grep -q result=fired`;
+       - the sha256 of the `argv[]` portion only. The full property embeds `start_time`/`pid`
+         and changes every run.
+       - Or `exec=not-loaded`. Never the command itself.
      - `uptime -s`;
-     - the full non-comment `/etc/fstab` line for `/mnt/data`;
+     - the `/mnt/data` fstab entry, selected with `awk '$1 !~ /^#/ && $2 == "/mnt/data"'`, its
+       options field restricted to `[A-Za-z0-9,=._-]` or printed as `<redacted-options>`;
      - a COUNT of `^workspaces` lines in `/etc/crypttab`;
      - `reboot-required=yes|no`;
-     - `automatic-reboot=<value|unset(default false)>` from `apt-config dump`.
+     - `automatic-reboot=true|false|unset`, from
+       `apt-config shell AR Unattended-Upgrade::Automatic-Reboot` (one key; a full dump prints any
+       proxy credentials).
    - **No `journalctl` tail.** A transient unit's journal echoes its command line and possibly
      personal data into the public Actions log (four review seats). The manager-memory properties
      answer H1/H2 without it.
-   - Never add a read of `/etc/default/luks-monitor` beyond the existing counts.
+   - Never add a read of `/etc/default/luks-monitor` beyond the existing counts. The DIAG_OK deny
+     list in `luks-monitor-install.test.sh` gains: a `-p ExecStart` without the hash or
+     `grep -q` pipe, `systemctl cat`, a `systemctl show` with no `-p`, `cat /etc/fstab`,
+     `apt-config dump`, and `journalctl`.
 
 Tests (RED first, `cq-write-failing-tests-before`):
 
@@ -469,21 +603,38 @@ Tests (RED first, `cq-write-failing-tests-before`):
      `show.<unit>.<prop>`, because a shell counter never advances inside `$( )`. The knobs are
      `DEADMAN_TIMER_SUBSTATES`, `DEADMAN_SVC_ACTIVESTATES` and `DEADMAN_TIMER_LASTTRIGGER`, with
      the last one **defaulting to empty**. Every other `show` keeps `${STOP_RESULT:-success}`;
-   - **garbage-collection modelling:** once `$CALLS` records a
-     `systemctl stop|reset-failed workspaces-luks-deadman…` for a unit, that unit answers
-     `LoadState=not-found` with empty properties. This is what makes a read-after-stop mutation
-     observable;
+   - **garbage-collection modelling, last event wins per exact unit** (test-design review):
+     - a `systemctl stop|reset-failed` naming `X.timer` or `X.service` puts that unit into
+       `LoadState=not-found` with empty properties;
+     - a later `systemd-run --unit=X` revives both units, and the sequenced knobs apply again;
+     - a bare `workspaces-luks-deadman` means the service;
+     - a `DEADMAN_STOP_INEFFECTIVE=1` knob keeps the timer `waiting` after a stop, so check (c) can
+       fail;
    - `SYSTEMD_RUN_RC` / `SYSTEMD_RUN_OUT` knobs;
-   - the `logger` stub also runs `rec "logger $*"`, so call and marker ORDER is assertable.
+   - the `logger` stub also runs `rec "logger $*"`, and the `emit_drift` stub records
+     `rec "EMIT_DRIFT $1"` as well, so call, marker and drift ORDER is assertable in one file.
+     Every existing `has`/`idx` pattern is re-anchored (`^mount[[:space:]]`, not `mount`) so the added
+     `logger` lines cannot match it;
+   - a stub self-test: `systemctl show workspaces-luks-deadman.service -p SubState --value`,
+     run with `DEADMAN_TIMER_SUBSTATES=waiting`, must NOT print `waiting`. This proves the stub is
+     keyed on the unit;
+   - an **instrument control**: the pass count of every existing suite is compared against the
+     unchanged harness before any new verdict is trusted.
 10. `apps/web-platform/infra/workspaces-luks-freeze.test.sh`:
     - new cases T30–T38 (see Test Scenarios);
     - T25/T25b inverted: `disarm_dead_man host_canary_passed` follows the host canary's
       `not_mounted` assert and precedes `CANARY_OK=1` and `docker start "$CONTAINER"`;
     - T25c: no `disarm_dead_man` in the main body after `docker start`;
-    - T25d: `arm_dead_man` precedes `FREEZE_HELD=1`;
+    - T25d: `arm_dead_man` precedes `FREEZE_HELD=1`. The two move to SEPARATE lines, and the test
+      requires that, because a same-line pair defeats a line-number comparison;
     - the AC8 comment reworded, with its bound kept.
-    - Flags are set INSIDE the invocation string (`DEADMAN_ARMED=1; CANARY_OK=0; (exit 1); cleanup`),
-      because sourcing the script resets the globals.
+    - Flags are set INSIDE the invocation string, always including `DRY_RUN=0`: the script
+      defaults `DRY_RUN=1`, and `arm_dead_man`/`rollback` return early under it. Sourcing also
+      resets every global.
+    - Cleanup cases inject a distinctive status, `(exit 9)`, and assert `CASE_RC=9`, so an
+      injected failure cannot be confused with a `die` inside `cleanup` (as T23 already does).
+    - Arm-then-cleanup cases use `trap cleanup EXIT; …; arm_dead_man`, because the `die` stub
+      exits the subshell.
 11. `apps/web-platform/infra/luks-monitor.test.sh` (x): replace the
     `result=disarmed reason=canary_passed` literal. Assert the disarm marker template, each
     reason's call site (`disarm_dead_man host_canary_passed`, `disarm_dead_man rollback_engaged`),
@@ -505,9 +656,17 @@ Tests (RED first, `cq-write-failing-tests-before`):
     `sudo bash …` in `.github/workflows/infra-validation.yml`, so no new file and no registry
     work. It uses a throwaway unit name with plain `systemd-run` (not `arm_dead_man`) and measures
     the one load-bearing assumption:
-    - a loaded failed transient service makes a same-name `systemd-run` exit non-zero (H1);
-    - after `reset-failed`, the same-name `systemd-run` succeeds within the bounded window and
-      reads `SubState=waiting`.
+    - a loaded failed transient service makes a same-name `systemd-run` exit non-zero, AND its
+      stderr names the collision ("already loaded" or "fragment"). A bare non-zero could be a bus
+      or permission error;
+    - after the script's exact clear-out (stop the timer, then `reset-failed` both units), the
+      same-name `systemd-run` succeeds within the bounded attempts and reads `SubState=waiting`;
+    - it records, as measurements for the fakes, the unit states after a transient service
+      finishes (`LoadState`, `SubState`, `LastTriggerUSec` on the timer).
+
+    The research sources disagree here: systemd.timer(5) says `RemainAfterElapse=yes` keeps an
+    elapsed timer loaded, while web-1's print read the timer `inactive/dead`. This case settles it
+    on systemd 255. After its EXIT trap it asserts that no throwaway unit is left loaded.
 
     An EXIT trap stops and resets the throwaway unit. With no usable systemd the case reports
     `SYSTEMD_UNAVAILABLE` and fails, never passes.
@@ -591,6 +750,7 @@ with the `s3Cluster` archive. This PR carries `Ref #8706` only.
 - `apps/web-platform/infra/luks-monitor-install.test.sh`: `inline_raw()` resolves locals, plus the new G-rows and mutations.
 - `apps/web-platform/infra/workspaces-luks-loopback.test.sh`: one real-systemd case (Phase 2 step 14). It is already wired as a privileged step in `infra-validation.yml`.
 - `tests/scripts/test-workspaces-luks-cutover-gate.sh`: Q3/Q4 stubs (Phase 2 step 13).
+- `apps/web-platform/infra/betterstack-logs-alerts.tf`: `logtail_exploration_alert.workspaces_luks_deadman_fired` (Phase 2 step 6).
 - `knowledge-base/engineering/architecture/decisions/ADR-154-repair-the-credential-channel-not-the-host.md`: the `Re-examined 2026-09-28` note (Phase 2 step 17).
 - `plugins/soleur/test/preflight-discoverability-test.test.ts`: bump `BASELINE_DECLARED_PROBES` 32 → 33, with the PLACEMENT/TRUTH/NO SUBSTITUTE comment its failure text asks for. This plan's `discoverability_test` declares `credentials_required`, and committing the plan moves that repo-global ratchet.
 - `knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`: the addendum and the in-place markers.
@@ -600,7 +760,10 @@ with the `s3Cluster` archive. This PR carries `Ref #8706` only.
 
 ## Files to Create
 
-None. The real-systemd case folds into the existing loopback suite. The deletion script is a session scratch file, as in PR-4b, and is not committed.
+- `apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh`: the alert's predicate test.
+- `scripts/followthroughs/snapshot-411798619-expiry-8734.sh` plus its `.test.sh`, ONLY on the no-go-ahead branch of Phase 1.
+
+The real-systemd case folds into the existing loopback suite. The deletion script is a session scratch file, as in PR-4b, and is not committed.
 
 ## Alternative Approaches Considered
 
@@ -708,12 +871,28 @@ are committed only after the Phase 1 DELETE has run and been verified.
   `terraform_data.luks_monitor_install` taints the installer. The nightly encryption self-check then
   stays un-re-armed until the next apply, and the host-timer-dark alert fires after about 27 h.
 - **If this leaks, the user's data is exposed via:** retained image 411798619 until it is
-  deleted. Anyone holding `HCLOUD_TOKEN` can create a server from it and read three things: the
-  2026-07-23 `SUPABASE_SERVICE_ROLE_KEY` (RLS bypass on every user's rows), `BYOK_ENCRYPTION_KEY`
-  (decrypts every user's stored third-party API keys), and journald email addresses.
+  deleted. Anyone holding `HCLOUD_TOKEN` can create a server from it and read:
+  - the 2026-07-23 `SUPABASE_SERVICE_ROLE_KEY` (RLS bypass on every user's rows);
+  - `BYOK_ENCRYPTION_KEY` (decrypts every user's stored third-party API keys);
+  - `STRIPE_SECRET_KEY` (charges and refunds on customers' saved payment methods);
+  - `GITHUB_APP_PRIVATE_KEY` (write access to every installed user's repos);
+  - journald email addresses.
+
+  Dispositions are in Phase 1 step 5: the image route is closed by the deletion, and the token
+  route is owed under a new issue (and, for the App key, under #8209). If the deletion does not
+  happen in-session, the 2026-10-06 follow-through probe enforces the deadline.
 - **If this leaks, the user's data is exposed via:** the forensic print in the public Actions log.
-  It is bounded to unit properties, a hash, counts, the fstab line and state-file keys. It never
-  prints a command body, an env-file line, crypttab contents or a value.
+  It is bounded to unit properties, an argv hash, counts, the exact `/mnt/data` fstab entry and
+  three single-value host flags. It never prints a command body, an env-file line, crypttab
+  contents, an apt config dump or a state-file value.
+- **If this lands broken, the user experiences:** nothing from the merge-time installer re-fire.
+  Its one probe run is read-only (`luks-monitor.sh` header), so the worst case is a false page.
+- **Accepted and tracked, not fixed here:** any web-1 reboot (provider maintenance, kernel
+  panic) currently lands in emergency mode, taking every user's workspace offline until repaired
+  from the provider console. Detection is the existing uptime monitoring of app.soleur.ai. It is
+  tracked as P1 in the new fstab issue (Phase 3), which carries the console-recovery procedure and
+  the escalation rule when the forensic print shows `reboot-required=yes` or
+  `automatic-reboot=true`.
 - **Brand-survival threshold:** `single-user incident`
 
 `requires_cpo_signoff: true`. The CPO signed off at plan time (2026-09-28) with four conditions,
@@ -743,30 +922,35 @@ error_reporting:
   fail_loud: "die prints '[workspaces-cutover] FATAL: ...' in the workspaces-luks-cutover.yml run log AND a Sentry fatal drift event with the reason slug; a lost Sentry send logs SOLEUR_WORKSPACES_LUKS_SEND_FAILED, which pages through logtail_exploration_alert.monitor_send_failed"
 
 failure_modes:
-  - mode: "systemd-run refuses the arm (a stale loaded unit, the H1 shape)"
-    detection: "arm_dead_man checks the exit status and polls SubState=waiting; emits result=arm_failed and drift deadman_arm_failed, then dies before FREEZE_HELD=1"
-    alert_route: "Sentry fatal issue alert (workspaces-luks-drift) + red cutover run"
+  - mode: "systemd-run refuses the arm (a stale loaded unit, the H1 shape), or the timer never reads waiting"
+    detection: "arm_dead_man checks the exit status and a bounded SubState=waiting check; emits result=arm_failed (echo + logger) and drift deadman_arm_failed, then dies before FREEZE_HELD=1; cleanup disarms any timer it created"
+    alert_route: "direct Sentry envelope (workspaces-luks-emit.sh -> sentry_alert.workspaces_luks_drift, fatal) + layer 3 (vector journald -> Better Stack, luks-monitor tag) + layer 6 (workflow run log: die FATAL in workspaces-luks-cutover.yml)"
   - mode: "a dead-man timer is already waiting, or a fire is in progress, when a cutover arms"
     detection: "arm_dead_man pre-check; result=arm_refused + drift deadman_already_armed"
-    alert_route: "Sentry fatal issue alert + red cutover run"
-  - mode: "the disarm at the host canary does not take (timer still waiting, service active, or a fire already started)"
-    detection: "disarm_dead_man checks (a)/(b)/(c) plus the caller's findmnt re-assert; result=disarm_failed check=<x> + drift deadman_disarm_failed, or drift deadman_fired_before_disarm; the main body dies before CANARY_OK=1 and cleanup rolls back before docker start"
-    alert_route: "Sentry fatal issue alert + red cutover run"
+    alert_route: "direct Sentry envelope (sentry_alert.workspaces_luks_drift, fatal) + layer 3 (vector journald -> Better Stack, luks-monitor tag) + layer 6 (workflow run log: die FATAL in workspaces-luks-cutover.yml)"
+  - mode: "the host canary finds a population mismatch, or the disarm does not take (timer still waiting, service active, fire already started)"
+    detection: "host_canary_workspace_count_mismatch; disarm_dead_man checks (a)/(b)/(c) plus the caller's findmnt re-assert (deadman_disarm_failed / deadman_fired_before_disarm); the main body dies before CANARY_OK=1 and cleanup rolls back before docker start"
+    alert_route: "direct Sentry envelope (sentry_alert.workspaces_luks_drift, fatal) + layer 3 (vector journald -> Better Stack) + layer 6 (workflow run log: die FATAL in workspaces-luks-cutover.yml)"
   - mode: "the cutover aborts after the host canary (app canary, queue check, monitor arm)"
-    detection: "cleanup rolls forward (docker start + resume_writers on the LUKS mount), logs result=cutover_aborted outcome=post_canary_luks_retained and emits drift cutover_aborted_post_canary"
-    alert_route: "Sentry fatal issue alert; the runbook triage row gives the recovery path and time to recovery"
+    detection: "cleanup re-asserts the mapper, rolls forward (checked docker start + resume_writers), logs result=cutover_aborted outcome=post_canary_luks_retained and emits drift cutover_aborted_post_canary (or cleanup_mount_not_mapper / cleanup_docker_start_failed)"
+    alert_route: "direct Sentry envelope (sentry_alert.workspaces_luks_drift, fatal; the runbook row gives fix-forward recovery and time to recovery) + layer 3 (vector journald -> Better Stack) + layer 6 (workflow run log: die FATAL in workspaces-luks-cutover.yml)"
+  - mode: "a pre-canary rollback cannot remount the plaintext"
+    detection: "existing emit_drift rollback_remount_failed and rollback_engaged in rollback(); outcome marker rollback_remount_failed"
+    alert_route: "direct Sentry envelope (sentry_alert.workspaces_luks_drift, fatal) + layer 3 (vector journald -> Better Stack) + layer 6 (workflow run log: die FATAL in workspaces-luks-cutover.yml)"
+  - mode: "the dead-man fires unattended (SIGKILL residual, or any path that leaves it armed)"
+    detection: "the fire command's own result=fired marker, matched by logtail_exploration_alert.workspaces_luks_deadman_fired"
+    alert_route: "layer 3 (vector journald -> Better Stack logs alert, paging per ADR-218)"
   - mode: "the installer's forensic step fails"
     detection: "red SSH step in apply-web-platform-infra.yml; the resource taints and re-fires on the next apply"
-    alert_route: "the red apply run on the merge commit; soleur-luks-monitor-host-timer-dark-prd fires if the timer stays unarmed for about 27 h"
-
+    alert_route: "layer 6 (workflow run log, apply-web-platform-infra.yml) + layer 3 (soleur-luks-monitor-host-timer-dark-prd fires if the timer stays unarmed for about 27 h)"
 logs:
   where: "web-1 journald (SYSLOG_IDENTIFIER=luks-monitor) -> Vector -> Better Stack source soleur-inngest-vector-prd (hot table + s3Cluster archive); GitHub Actions logs of workspaces-luks-cutover.yml and apply-web-platform-infra.yml"
   retention: "Better Stack archive: earliest retained row measured 2026-08-13 on 2026-09-28 (about 6-7 weeks); Actions logs 90 days; web-1 journald bounded by SystemMaxUse=1G (journald-soleur.conf); the unit properties the forensic print reads live in systemd manager memory until reboot or reset-failed"
 
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_WORKSPACES_LUKS_DEADMAN
-  expected_output: "SOLEUR_WORKSPACES_LUKS_DEADMAN"
-  credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD from Doppler soleur/prd_terraform, read-only ClickHouse connection — the markers exist only in the Better Stack warehouse and the host journal; there is no unauthenticated reader of either"
+  command: bash scripts/betterstack-query.sh --since 2d --grep 'OK: /mnt/data is LUKS-backed'
+  expected_output: "LUKS-backed"
+  credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD from Doppler soleur/prd_terraform, read-only ClickHouse connection — the new dead-man markers share the luks-monitor tag path with the nightly OK row, which proves that path live; dead-man rows themselves exist only during a cutover run, and the warehouse has no unauthenticated reader"
 ```
 
 ## Encryption Posture
@@ -829,7 +1013,7 @@ every exit path that does not reach the host-canary disarm.
 
 | # | Suite edit or input | Expected |
 |---|---|---|
-| H1 | Make the `systemctl show` stub ignore the unit operand | T33 RED: the service answers `waiting` too. This proves the stub is operand-keyed |
+| H1 | Make the `systemctl show` stub ignore the unit operand | The stub self-test goes RED: the service's `SubState` answers `waiting` under `DEADMAN_TIMER_SUBSTATES=waiting`. T33 alone cannot see it, because the code reads different properties per unit |
 | H2 | Must-PASS, non-canonical: `DEADMAN_TIMER_SUBSTATES="dead waiting"` (waiting on the second read) | T30b PASS |
 
 **Anchor.** No stored value. The rows read the live script.
@@ -949,10 +1133,12 @@ removed its `journalctl` tail for this reason.
 the CTO asked for is adopted in Phase 2:
 
 - print `ExecStart` as a hash plus a `result=fired` probe, with `InvocationID` and `LoadState`;
-- tolerate exit 5 on stopping the timer, and poll garbage collection;
-- emit the stale-unit evidence before clearing it;
+- tolerate exit 5 on stopping the timer (the GC poll and the stale-unit evidence emit were later
+  cut by the plan review: the arm fails closed on a lagging GC, and the merge-apply forensic print
+  captures the one stale unit that exists);
 - `disarm_dead_man` returns a status and never `die`s inside `rollback()`;
-- the disarm also verifies that the service is not active and has not started since the arm;
+- the disarm also verifies that the service is not active after the timer stop (the
+  `InvocationID` gate was cut: it is vacuous under GC);
 - a `DEADMAN_ARMED` flag lets `cleanup()` disarm on an abort between the arm and the freeze;
 - a post-canary abort pages through fatal `emit_drift`;
 - T25 is inverted, with a negative sentinel;
@@ -982,8 +1168,9 @@ The CPO judges it the right call.
 ## Test Scenarios
 
 All run through `run_case` in `workspaces-luks-freeze.test.sh` with the new harness knobs, unless
-marked static. Globals are set INSIDE the invocation string, because sourcing the script resets
-them.
+marked static. Every invocation string sets `DRY_RUN=0` and its globals inline, because sourcing
+resets them. Cleanup cases inject `(exit 9)` and assert `CASE_RC=9`. Drift is observed as
+`EMIT_DRIFT <reason>` in `CALLS` (and on `CASE_OUT`).
 
 ### Arm
 
@@ -997,9 +1184,9 @@ them.
   `result=armed`.
 - **T32** — rc 0 but never `waiting`: `died`, `result=arm_failed reason=timer_not_waiting`, NO
   `result=armed`.
-- **T32b** — T32's shape followed by `cleanup` (`CANARY_OK=0; FREEZE_HELD=0` inside the
-  invocation):
-  - `disarm_dead_man arm_aborted` is recorded;
+- **T32b** — `trap cleanup EXIT; DRY_RUN=0; …; arm_dead_man` with T32's knobs:
+  - a `result=disarmed reason=arm_aborted` (or `disarm_failed reason=arm_aborted`) marker is
+    present. It is a function, so the marker is asserted, not a recorded call;
   - the outcome marker reads `outcome=arm_aborted`.
 - **T33** — the timer is already `waiting`, or the service is `activating`:
   - `died`, `result=arm_refused`;
@@ -1007,11 +1194,15 @@ them.
 
 ### Disarm
 
-- **T35** — `rollback()` with `DEADMAN_ARMED=1` where the disarm fails (the timer stays
-  `waiting`):
-  - the rollback still records the plaintext remount and `docker start`;
+- **T35** — `rollback()` with `DEADMAN_ARMED=1` and `DEADMAN_STOP_INEFFECTIVE=1` (check c
+  fails):
+  - the disarm marker precedes the first `^umount[[:space:]]` in `CALLS`;
+  - the rollback still records the plaintext remount, `docker start`, and
+    `EMIT_DRIFT rollback_engaged` (the function's last line);
   - the marker reads `result=disarm_failed reason=rollback_engaged`;
   - there is no mid-rollback exit.
+- **T35d** — the service is stuck `activating`: the bounded wait runs to exactly its attempt
+  limit, emits `check=fire_stuck`, and the rollback proceeds.
 - **T35b** — `rollback()` with `DEADMAN_ARMED=0`:
   - the timer `stop` is still recorded (T6b);
   - the marker is `result=not_armed`;
@@ -1019,26 +1210,39 @@ them.
 - **T35c** — `rollback()` while the service reads `activating activating inactive`: it waits, and
   no `umount` is recorded before the service reads `inactive`.
 - **T36** — `disarm_dead_man host_canary_passed` succeeds: marker
-  `result=disarmed reason=host_canary_passed`, rc 0.
+  `result=disarmed reason=host_canary_passed`, rc 0. In `CALLS` the order is:
+  `show … LastTriggerUSec` < timer `stop` < `show …service … ActiveState` < `reset-failed`.
 - **T36a** — fired then collected (`DEADMAN_TIMER_LASTTRIGGER` non-empty on the pre-stop read, GC
-  model active): rc 1, `check=a`, no `result=disarmed`.
+  model active): rc 1, `check=a`, no `result=disarmed`. It has a rollback-path twin
+  (`DEADMAN_ARMED=1`) that must reach the same `check=a`.
 - **T36b** — `rollback()`'s marker reason is `rollback_engaged`, never `canary_passed`.
-- **T36c (static)** — the `findmnt -no SOURCE "$MOUNT"` re-assert follows
-  `disarm_dead_man host_canary_passed` and precedes `CANARY_OK=1`.
+- **T36c (static)** — searched only BETWEEN the `disarm_dead_man host_canary_passed` line and
+  `CANARY_OK=1`: a `findmnt -no SOURCE "$MOUNT"` re-assert against `$MAPPER` is present. The
+  existing canary `findmnt` lines sit outside that window, so they cannot satisfy it.
+- **T40** — the host-canary population assert, run through a function extracted from the canary
+  tail: `wl_count_workspace_dirs` over `$MNT/workspaces` with 2 dirs against a persisted
+  `WORKSPACES_COUNT=3` gives `died`, `EMIT_DRIFT host_canary_workspace_count_mismatch`, and no
+  disarm marker. With 3 dirs it passes.
 - **T36d** — the service sequence `inactive activating` against the post-stop read: rc 1,
   `check=b`.
 
 ### Cleanup
 
-- **T37** — `CANARY_OK=1`, rc 1:
-  - no `umount`/`mount`/`cryptsetup close` recorded;
+- **T37** — `CANARY_OK=1`, `(exit 9)`, `FINDMNT_MOUNT_SRC` set to the script's own `$MAPPER`
+  value:
+  - no `^umount[[:space:]]`/`^mount[[:space:]]`/`cryptsetup close` recorded;
   - `docker start` plus the `resume_writers` starts recorded (roll-forward);
   - marker `outcome=post_canary_luks_retained`;
-  - drift `cutover_aborted_post_canary`;
-  - rc 1 preserved.
-- **T38** — `FREEZE_HELD=1`, `CANARY_OK=0`, rc 1: the rollback runs, and the marker reads
-  `outcome=rolled_back`, or `rollback_remount_failed` when `FINDMNT_MOUNT_SRC` still names the
-  mapper.
+  - `EMIT_DRIFT cutover_aborted_post_canary`;
+  - `CASE_RC=9`.
+- **T37b** — the same with `FINDMNT_MOUNT_SRC` naming a plaintext device: NO `docker start`,
+  and `EMIT_DRIFT cleanup_mount_not_mapper`.
+- **T37c** — a `docker start` failure in the roll-forward: `EMIT_DRIFT cleanup_docker_start_failed`.
+- **T38** — `FREEZE_HELD=1`, `CANARY_OK=0`, `(exit 9)`. The rollback runs. Three arms on the
+  post-rollback source:
+  - a plaintext device gives `outcome=rolled_back`;
+  - `$MAPPER` (read from the script) gives `rollback_remount_failed`;
+  - empty gives `rollback_remount_failed`.
 
 ### Static
 
@@ -1046,14 +1250,19 @@ them.
   `CANARY_OK=1` and `docker start "$CONTAINER"`.
 - **T25c** — no `disarm_dead_man` in the main body after `docker start`. It carries a synthesized
   positive control.
-- **T25d** — `arm_dead_man` precedes `FREEZE_HELD=1`.
+- **T25d** — `arm_dead_man` and `FREEZE_HELD=1` sit on separate lines, and the arm comes first.
 - **T39** — over un-commented logical command lines, with backslash continuations folded: exactly
   one `systemd-run --on-active`, and it carries no `|| true`.
 
 ### Other suites
 
-- **Real systemd** (`workspaces-luks-loopback.test.sh`, privileged): H1 reproduced (same-name
-  `systemd-run` non-zero while a failed unit is loaded), and success after `reset-failed`.
+- **Real systemd** (`workspaces-luks-loopback.test.sh`, privileged):
+  - H1 reproduced, with stderr naming the collision;
+  - success after the script's exact clear-out;
+  - no unit left loaded after the EXIT trap.
+- **Alert** (`apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh`): the
+  predicate carries the tag, host and `result=fired` conjuncts. A mutation dropping any one of
+  them goes RED (mirrors `inngest-luks-wrong-volume-alert.test.sh`).
 - **Existing suites stay green:** T6b, T12/T12b/T12c, AC8, every suite
   `git grep -l workspaces-cutover.sh` lists (including
   `tests/scripts/test-workspaces-luks-cutover-gate.sh` with its new stubs), `luks-monitor.test.sh`
