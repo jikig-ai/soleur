@@ -91,7 +91,7 @@ set -f
 # of which carry no `-x` token at all.
 case "$-" in
   *x*)
-    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${ZOT_PULL_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${BETTERSTACK_QUERY_PASSWORD:+x}${ZOT_PULL_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
