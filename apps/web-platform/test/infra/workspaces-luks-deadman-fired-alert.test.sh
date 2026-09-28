@@ -83,18 +83,21 @@ EXPL="$(awk '/^resource "logtail_exploration" "workspaces_luks_deadman_fired" \{
 
 # Whole-line assertions anchored at both ends: a bare substring grep is satisfied by the same text
 # inside a comment, or with a suffix that inverts it (`paused = false || true`).
+# Every grep reads a HERE-STRING, never `printf … | grep -q`: under pipefail, grep -q exiting on its
+# first match can SIGPIPE the writer and fail the pipeline, which fails a negated check OPEN.
 line_in() {  # line_in <text> <ERE for the whole line, without anchors>
-  printf '%s\n' "$1" | grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$"
+  grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$" <<< "$1"
 }
 sql_has() {  # sql_has <fixed conjunct text, one line of the heredoc>
-  printf '%s\n' "$LOCAL_SQL" | grep -qxF -- "      AND $1"
+  grep -qxF -- "      AND $1" <<< "$LOCAL_SQL"
 }
 
 [ -n "$LOCAL_SQL" ] \
   && ok "the predicate local is a heredoc this guard can read" \
   || no "workspaces_luks_deadman_fired_sql: heredoc not found — every predicate row below would be vacuous"
 
-printf '%s\n' "$LOCAL_SQL" | head -3 | tr -s ' ' | sed 's/^ //' | paste -sd' ' | grep -qxF 'SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}}' \
+_head="$(head -3 <<< "$LOCAL_SQL" | tr -s ' ' | sed 's/^ //' | paste -sd' ')"
+grep -qxF 'SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}}' <<< "$_head" \
   && ok "the head is the per-bucket count shape monitor_send_failed uses (ADR-218)" \
   || no "the predicate head is not SELECT {{time}} … count(*) … WHERE time BETWEEN {{start_time}} AND {{end_time}}"
 
@@ -116,19 +119,25 @@ sql_has "startsWith(JSONExtractString(raw, 'message'), '$MARKER ')" \
 
 # Exactly the head, four AND conjuncts and GROUP BY: no OR, no negation, no fifth clause that could
 # narrow the rule to nothing.
-_body="$(printf '%s\n' "$LOCAL_SQL" | sed -n '4,$p')"
-if [ "$(printf '%s\n' "$_body" | grep -c '^      AND ')" -eq 4 ] \
-   && [ "$(printf '%s\n' "$_body" | grep -vc '^      AND ')" -eq 1 ] \
-   && printf '%s\n' "$_body" | tail -1 | grep -qxF '    GROUP BY time' \
-   && ! printf '%s\n' "$LOCAL_SQL" | grep -qiE '(^|[^A-Za-z_])(OR|NOT)([^A-Za-z_]|$)|!=|<>'; then
+_body="$(sed -n '4,$p' <<< "$LOCAL_SQL")"
+if [ "$(grep -c '^      AND ' <<< "$_body")" -eq 4 ] \
+   && [ "$(grep -vc '^      AND ' <<< "$_body")" -eq 1 ] \
+   && [ "$(tail -1 <<< "$_body")" = '    GROUP BY time' ] \
+   && ! grep -qiE '(^|[^A-Za-z_])(OR|NOT)([^A-Za-z_]|$)|!=|<>' <<< "$LOCAL_SQL"; then
   ok "the predicate is exactly four ANDed conjuncts and GROUP BY time (no OR, no negation)"
 else
   no "the predicate carries an OR, a negation or an extra clause"
 fi
 
 # The needle must be what the fire command actually logs: the systemd-run inline command's first
-# logger call, on the luks-monitor tag.
-FIRE_LINE="$(grep -F -- "/bin/sh -c \"logger -t \${LUKS_LOG_TAG} -- '$MARKER feature=workspaces-luks $NEEDLE " "$CUT" | head -1)"
+# logger call, on the luks-monitor tag. Read ONLY from arm_dead_man's body, full-line comments
+# dropped, and only a line that STARTS with the /bin/sh -c argument: the same text in a comment, in
+# another function or after other code on a line is not the fire command.
+FIRE_PFX="/bin/sh -c \"logger -t \${LUKS_LOG_TAG} -- '$MARKER feature=workspaces-luks $NEEDLE "
+FIRE_LINE="$(awk -v pfx="$FIRE_PFX" '
+  /^arm_dead_man\(\)[[:space:]]*\{/ { f = 1; next }
+  f && /^\}/ { exit }
+  f { l = $0; sub(/^[[:space:]]+/, "", l); if (l ~ /^#/) next; if (index(l, pfx) == 1) { print l; exit } }' "$CUT")"
 [ -n "$FIRE_LINE" ] \
   && ok "workspaces-cutover.sh's fire command logs '$MARKER … $NEEDLE ' first, on \${LUKS_LOG_TAG}" \
   || no "the fire command no longer logs '$MARKER … $NEEDLE ' as its first act — the alert would never page"
@@ -166,8 +175,8 @@ line_in "$ALERT" 'paused[[:space:]]*=[[:space:]]*false' \
 line_in "$ALERT" 'email[[:space:]]*=[[:space:]]*true' \
   && ok "email = true (the free-tier paging surface)" \
   || no "email is not true"
-QP="$(printf '%s\n' "$ALERT" | grep -oE '^[[:space:]]*query_period[[:space:]]*=[[:space:]]*[0-9]+' | grep -oE '[0-9]+$')"
-CK="$(printf '%s\n' "$ALERT" | grep -oE '^[[:space:]]*check_period[[:space:]]*=[[:space:]]*[0-9]+' | grep -oE '[0-9]+$')"
+QP="$(grep -oE '^[[:space:]]*query_period[[:space:]]*=[[:space:]]*[0-9]+' <<< "$ALERT" | grep -oE '[0-9]+$')"
+CK="$(grep -oE '^[[:space:]]*check_period[[:space:]]*=[[:space:]]*[0-9]+' <<< "$ALERT" | grep -oE '[0-9]+$')"
 if [ -n "$QP" ] && [ -n "$CK" ] && [ "$CK" -ge 1 ] && [ "$QP" -ge "$CK" ] && [ "$CK" -le 300 ]; then
   ok "evaluated at least every 5 min (check_period ${CK}s) over a window that covers it (query_period ${QP}s)"
 else
@@ -177,7 +186,7 @@ line_in "$ALERT" 'policy_id[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \
   && line_in "$ALERT" 'team_name[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? null : "Your team"' \
   && ok "the escalation target is the free/paid ternary every sibling uses (ADR-218)" \
   || no "the escalation_target drifted from the sibling ternary"
-printf '%s\n' "$ALERT" | grep -qF 'Runbook: ${local.workspaces_luks_deadman_runbook_url}' \
+grep -qF 'Runbook: ${local.workspaces_luks_deadman_runbook_url}' <<< "$ALERT" \
   && line_in "$ALERT" 'runbook[[:space:]]*=[[:space:]]*local\.workspaces_luks_deadman_runbook_url' \
   && grep -qE '^[[:space:]]*workspaces_luks_deadman_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604\.md[#"]' "$TF" \
   && ok "incident_cause and metadata.runbook carry the cutover runbook URL (the email is what a reader acts on)" \
@@ -286,6 +295,18 @@ s = s.replace(old, "exploration_id = logtail_exploration.monitor_send_failed.id"
     'old = "            -target=logtail_exploration_alert.workspaces_luks_deadman_fired \\\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
+  mutate RED "the marker anchor loses its trailing space (SOLEUR_WORKSPACES_LUKS_DEADMAN_X rows would page)" TF \
+    's = dm_replace(s, "\x27SOLEUR_WORKSPACES_LUKS_DEADMAN \x27)", "\x27SOLEUR_WORKSPACES_LUKS_DEADMAN\x27)")'
+  mutate RED "the fire line survives only as a COMMENT inside arm_dead_man (the real one reworded)" CUT \
+    'import re
+m = re.search(r"(?m)^([ \t]*)(/bin/sh -c \"logger -t \$\{LUKS_LOG_TAG\} -- \x27SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed\x27;.*)$", s)
+assert m and s.count("result=fired reason=timer_elapsed") == 1
+real = m.group(0)
+s = s.replace(real, m.group(1) + "# " + m.group(2) + "\n" + real.replace("result=fired reason=timer_elapsed", "result=engaged reason=timer_elapsed"), 1)'
+  mutate RED "the fire text is quoted OUTSIDE arm_dead_man (the real one reworded)" CUT \
+    'old = "result=fired reason=timer_elapsed"
+assert s.count(old) == 1
+s = s.replace(old, "result=engaged reason=timer_elapsed") + "\n_fire_doc() {\n    /bin/sh -c \"logger -t ${LUKS_LOG_TAG} -- \x27SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed\x27\"\n}\n"'
   mutate PASS "the four conjuncts reordered" TF \
     'a = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n"
 b = "      AND position(JSONExtractString(raw, \x27message\x27), \x27op=workspaces-luks-deadman result=fired\x27) > 0\n"
@@ -293,12 +314,13 @@ assert s.count(b) == 1
 s = dm_replace(s, a, "@@A@@").replace(b, a).replace("@@A@@", b)'
 fi
 
-# 34 = 22 presence rows + 12 mutation rows. The MUT_SKIP floor is exactly the presence-row count;
+# 37 = 22 presence rows + 15 mutation rows. The MUT_SKIP floor is exactly the presence-row count;
 # the instrument control above is what catches a floor that drifts past them.
-_floor=34
+_floor=37
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))
-if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
-if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
+# Instrument failures exit 2, never 1: the battery grades an inner rc 1 as a CAUGHT mutation.
+if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 2; fi
+if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 2; fi
 printf '\n=== workspaces-luks-deadman-fired-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]

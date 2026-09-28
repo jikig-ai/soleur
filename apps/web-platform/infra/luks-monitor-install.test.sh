@@ -21,7 +21,11 @@
 #     referenced local is hashed into triggers_replace, the step runs before the exit-17 freeze
 #     refusal, every line is guarded, and the wider deny list (journalctl, systemctl cat/status, a
 #     bare systemctl show, a raw ExecStart, raw fstab/crypttab, apt-config dump) holds over every
-#     unsuppressed step. The decoded bytes are also RUN against scratch fixtures.
+#     unsuppressed step. The decoded bytes are also RUN against scratch fixtures (hostile fstab rows,
+#     a per-unit systemctl stub, an ExecStart with no argv[]), and their sha256 is PINNED: a deny list
+#     cannot enumerate every leaking spelling, so any change to this public print reds until a
+#     security re-review updates the pin. The dead-man unit name is read from arm_dead_man's --unit=
+#     and must match the exit-17 guard, the forensic print and the state print.
 #
 # Mutation rows live at the bottom. They mutate COPIES and re-run this file against them through
 # the LMI_* overrides, so tracked files are never written. rc 1 = the mutation was caught; rc 2 = a
@@ -562,10 +566,16 @@ DIAG_OK = re.compile(r"stat -c '%F %a %U' /etc/default/luks-monitor|grep -c '\^(
 # argv[] extraction piped into sha256sum; fstab only through the exact-field awk select; crypttab
 # only as a COUNT; apt-config only as the one Automatic-Reboot key (a dump prints proxy credentials).
 EXECSTART_SRC = "systemctl show -p ExecStart --value workspaces-luks-deadman.service 2>/dev/null | "
-ARGV_SED = "sed -n 's/^.*argv[[][]]=//; s/ ; ignore_errors=.*$//p'"
+# One substitution with both anchors: a property that lacks either one extracts NOTHING (so the
+# print says argv_sha256=none) instead of hashing a half-parsed fragment such as "{ path=/bin/sh".
+ARGV_SED = r"sed -n 's/^.*argv[[][]]=\(.*\) ; ignore_errors=.*$/\1/p'"
+# The argv[] text lands in $av and is only ever hashed (an empty extraction prints `none`, never the
+# empty-string digest e3b0c442…). ARGV_HASH is the one consumer of $av (a G4 row pins that).
+ARGV_ASSIGN = "av=$(" + EXECSTART_SRC + ARGV_SED + " || true)"
+ARGV_HASH = """if [ -n "$av" ]; then printf '%s\\n' "$av" | sha256sum | cut -c1-64; else echo none; fi"""
 APPROVED = [
     re.compile(re.escape(EXECSTART_SRC) + r"grep -q '[^']*'"),
-    re.compile(re.escape(EXECSTART_SRC + ARGV_SED + " | sha256sum")),
+    re.compile(re.escape(ARGV_ASSIGN)),
     re.compile(r"""awk '\$1 !~ /\^#/ && \$2 == "/mnt/data"[^']*' /etc/fstab"""),
     re.compile(r"grep -c '\^workspaces' /etc/crypttab"),
     re.compile(r"apt-config shell AR Unattended-Upgrade::Automatic-Reboot"),
@@ -580,6 +590,13 @@ FORBIDDEN = [
     ("apt-config beyond the one Automatic-Reboot key", re.compile(r'\bapt-config\b')),
 ]
 leaks, forbidden = [], []
+etc_default, status_verb, globs = [], [], []
+def read_path_globs(c):
+    # Single-quoted spans are literal to the shell (the awk/sed programs, find -name patterns), so
+    # they are removed first; any remaining word that names a path and carries a glob metacharacter
+    # would let the shell pick the file (`cat /etc/default/luks-m*`, `/proc/*/cmdline`).
+    bare = re.sub(r"'[^']*'", "''", c)
+    return [w for w in bare.split() if "/" in w and re.search(r'[*?\[]', w)]
 for nm, bd in (("luks_monitor_install", inst), ("luks_monitor_token_install", tok)):
     for k, b in provisioners(bd or ""):
         if k != "remote-exec":
@@ -590,6 +607,12 @@ for nm, bd in (("luks_monitor_install", inst), ("luks_monitor_token_install", to
         for c in cmds:
             if "/etc/default/luks-monitor" in DIAG_OK.sub("", c):
                 leaks.append("%s: %s" % (nm, c))
+            if "/etc/default" in DIAG_OK.sub("", c):
+                etc_default.append("%s: %s" % (nm, c[:120]))
+            if re.search(r'\bstatus\b', c):
+                status_verb.append("%s: %s" % (nm, c[:120]))
+            if read_path_globs(c):
+                globs.append("%s: %s" % (nm, read_path_globs(c)))
             residue = c
             for a in APPROVED:
                 residue = a.sub("", residue)
@@ -597,6 +620,12 @@ for nm, bd in (("luks_monitor_install", inst), ("luks_monitor_token_install", to
                 if rx.search(residue):
                     forbidden.append("%s [%s]: %s" % (nm, label, c[:120]))
 check("G2: unsuppressed provisioners touch the env file only through counts-only forms", not leaks, leaks)
+check("G4: no /etc/default reference in an unsuppressed step beyond the counts-only env-file reads",
+      not etc_default, etc_default)
+check("G4: no `status` word in an unsuppressed step (systemctl -M .host status, service … status)",
+      not status_verb, status_verb)
+check("G4: no glob in a read path of an unsuppressed step (cat /etc/default/luks-m*, /proc/*/cmdline)",
+      not globs, globs)
 check("G2: unsuppressed provisioners use no forbidden diagnostic (journalctl, systemctl cat/status, bare show, raw ExecStart, raw fstab/crypttab, apt-config dump)",
       not forbidden, forbidden)
 check("G2: each secret-bearing remote-exec deletes its own uploaded script (rm -f -- \"$0\")",
@@ -685,13 +714,16 @@ for unit in ("workspaces-luks-deadman.timer", "workspaces-luks-deadman.service")
     missing = [p for p in DEADMAN_PROPS
                if not any(unit in c and re.search(r'\bsystemctl show -p\b', c) and re.search(r'\b%s\b' % p, c) for c in F)]
     check("G4: the print reads every dead-man property of %s through systemctl show -p" % unit, not missing, missing)
-check("G4: ExecStart is read only as fired_cmd (grep -q result=fired) and an argv[] sha256, else exec=not-loaded",
+check("G4: ExecStart is read only as fired_cmd (grep -q result=fired) and an argv[] sha256 (none when empty), else exec=not-loaded",
       any(EXECSTART_SRC + "grep -q 'result=fired'" in c and "fired_cmd=" in c for c in F)
-      and any(EXECSTART_SRC + ARGV_SED + " | sha256sum" in c for c in F)
+      and any(ARGV_ASSIGN in c and ("argv_sha256=$(" + ARGV_HASH) in c for c in F)
       and any("exec=not-loaded" in c for c in F))
-check("G4: the /mnt/data fstab entry is selected by exact field, options restricted to [A-Za-z0-9,=._-] else <redacted-options>",
-      any("""awk '$1 !~ /^#/ && $2 == "/mnt/data\"""" in c and "/^[A-Za-z0-9,=._-]+$/" in c and "<redacted-options>" in c
-          and "/etc/fstab" in c for c in F))
+av_residue = [c[:100] for c in F if "$av" in c.replace(ARGV_ASSIGN, "").replace(ARGV_HASH, "")]
+check("G4: the extracted argv ($av) is consumed only by the sha256 pipe (never echoed)",
+      any(ARGV_ASSIGN in c for c in F) and not av_residue, av_residue)
+check("G4: the /mnt/data fstab entry is selected by exact field; device and options are allowlisted, else <redacted-device>/<redacted-options>, and has_nofail is printed",
+      any("""awk '$1 !~ /^#/ && $2 == "/mnt/data\"""" in c and "<redacted-device>" in c and "<redacted-options>" in c
+          and "has_nofail=" in c and "/etc/fstab" in c for c in F))
 check("G4: crypttab is read only as a COUNT of ^workspaces lines", any("grep -c '^workspaces' /etc/crypttab" in c for c in F))
 check("G4: the print carries uptime -s, reboot-required=yes|no and automatic-reboot=true|false|unset",
       any("uptime -s" in c for c in F) and any("reboot-required=" in c and "/var/run/reboot-required" in c for c in F)
@@ -710,6 +742,11 @@ check("G4: the decoded forensic print parses under %s -n" % os.path.basename(g4_
 ARGV = ("/bin/sh -c logger -t luks-monitor -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman "
         "result=fired reason=timer_elapsed'; docker stop -t 30 soleur-web-platform 2>/dev/null; SECRET-ARGV-TEXT")
 EXECSTART_VAL = "{ path=/bin/sh ; argv[]=%s ; ignore_errors=no ; start_time=[Mon 2026-07-20 22:42:13 UTC] ; stop_time=[Mon 2026-07-20 22:42:14 UTC] ; pid=4242 ; code=exited ; status=0 }" % ARGV
+NOARGV_VAL = "{ path=/bin/sh ; ignore_errors=no ; start_time=[Mon 2026-07-20 22:42:13 UTC] ; pid=4242 ; code=exited ; status=0 }"
+# Every hostile /mnt/data row must print only <redacted-device>/<redacted-options>; none of these may
+# reach the (public) output. Mixed case on purpose: the allowlist compares lowercased options.
+FSTAB_SECRETS = ("hunter", "Password", "PASSWORD", "pw=", "credentials", "smbcred", "token=", "tok-", "secret=",
+                 "username", "alice", "bob", "s3cret", "dav.example", "https", "//srv", "$(id)", "COMMENTED-OUT", "OTHER-MOUNT")
 def g4_run(mode):
     d = os.path.join(g4_dir, mode); b = os.path.join(d, "bin"); os.makedirs(b)
     paths = {"/etc/fstab": os.path.join(d, "fstab"), "/etc/crypttab": os.path.join(d, "crypttab"),
@@ -717,23 +754,35 @@ def g4_run(mode):
     body = g4_script
     for real, fake in paths.items():
         body = body.replace(real, fake)
-    if mode == "fired":
+    if mode in ("fired", "noargv"):
         open(paths["/etc/fstab"], "w").write(
             "# /dev/sdz /mnt/data ext4 COMMENTED-OUT 0 2\n"
             "/dev/disk/by-id/scsi-0HC_Volume_1 /mnt/data ext4 discard,nofail,defaults 0 0\n"
             "/dev/sdb /mnt/data2 ext4 OTHER-MOUNT 0 0\n"
             "/dev/sdc /mnt/data ext4 x-opt=$(id) 0 0\n"
-            "/dev/sdd /mnt/data ext4 defaults,password=hunter2 0 0\n")
+            "/dev/sdd /mnt/data ext4 defaults,password=hunter2 0 0\n"
+            "/dev/sde /mnt/data ext4 nofail,Password=hunter3 0 0\n"
+            "/dev/sdf /mnt/data ext4 PASSWORD=hunter4 0 0\n"
+            "/dev/sdg /mnt/data ext4 pw=hunter5 0 0\n"
+            "/dev/sdh /mnt/data cifs credentials=/root/.smbcred,nofail 0 0\n"
+            "/dev/sdi /mnt/data ext4 token=tok-hunter6 0 0\n"
+            "/dev/sdj /mnt/data ext4 secret=hunter7 0 0\n"
+            "//srv/share /mnt/data cifs username=alice,nofail 0 0\n"
+            "https://bob:s3cret@dav.example/ /mnt/data davfs defaults,nofail 0 0\n"
+            "UUID=0a1b-2c3d /mnt/data ext4 NOATIME,x-systemd.device-timeout=10s 0 2\n"
+            "LABEL=workspaces_plain /mnt/data ext4 errors=remount-ro,_netdev 0 2\n")
         open(paths["/etc/crypttab"], "w").write("workspaces_luks UUID=abc none luks\n# workspaces_old UUID=d none luks\nother UUID=e none luks\n")
         open(paths["/var/run/reboot-required"], "w").write("*** System restart required ***\n")
+        # Answers PER UNIT (the last argument): a loop labelled with one unit that reads the other
+        # prints the wrong unit's name in its value, so the pairing below catches it (I-M1).
         stubs = {
-            "systemctl": 'for a; do case "$prev" in -p) prop="$a" ;; esac; prev="$a"; done\n'
-                         'case "$prop" in ExecStart) cat "%s" ;; LoadState) echo loaded ;; *) echo "$prop-value" ;; esac\n'
+            "systemctl": 'for a; do case "$prev" in -p) prop="$a" ;; esac; prev="$a"; unit="$a"; done\n'
+                         'case "$prop:$unit" in ExecStart:*.service) cat "%s" ;; LoadState:*.service) echo loaded ;; *) echo "$unit/$prop" ;; esac\n'
                          % os.path.join(d, "execstart"),
             "apt-config": "echo \"AR='true'\"\n",
             "uptime": "echo '2026-07-01 00:00:00'\n",
         }
-        open(os.path.join(d, "execstart"), "w").write(EXECSTART_VAL + "\n")
+        open(os.path.join(d, "execstart"), "w").write((EXECSTART_VAL if mode == "fired" else NOARGV_VAL) + "\n")
     else:
         stubs = {n: "exit 1\n" for n in ("systemctl", "apt-config", "uptime")}
     for n, s in stubs.items():
@@ -753,14 +802,70 @@ if F and g4_shell:
           rc_x == 0 and "fired_cmd=yes" in out_x and ("argv_sha256=%s" % argv_sha) in out_x, (rc_x, out_x[-240:], err_x[-120:]))
     check("G4: …and never prints the command line, its pid or its start time",
           not any(t in out_x for t in ("SOLEUR_WORKSPACES_LUKS_DEADMAN", "SECRET-ARGV-TEXT", "docker stop", "pid=4242", "argv[]")), out_x[-240:])
-    check("G4: …the live /mnt/data fstab entry prints, commented and other mounts do not, hostile options are <redacted-options>",
-          "/dev/disk/by-id/scsi-0HC_Volume_1 /mnt/data ext4 discard,nofail,defaults 0 0" in out_x
-          and "/dev/sdc /mnt/data ext4 <redacted-options> 0 0" in out_x
-          and "/dev/sdd /mnt/data ext4 <redacted-options> 0 0" in out_x
-          and not any(t in out_x for t in ("COMMENTED-OUT", "OTHER-MOUNT", "$(id)", "hunter2")), out_x[-300:])
-    check("G4: …crypttab is a count (1), reboot-required=yes, automatic-reboot=true, and the dead-man properties print",
-          "crypttab-workspaces-lines=1" in out_x and "reboot-required=yes" in out_x and "automatic-reboot=true" in out_x
-          and "ExecMainExitTimestamp=ExecMainExitTimestamp-value" in out_x, out_x[-300:])
+    want_fstab = [
+        "/dev/disk/by-id/scsi-0HC_Volume_1 /mnt/data ext4 discard,nofail,defaults 0 0 has_nofail=yes;",
+        "/dev/sdc /mnt/data ext4 <redacted-options> 0 0 has_nofail=no;",
+        "/dev/sdd /mnt/data ext4 <redacted-options> 0 0 has_nofail=no;",
+        "/dev/sde /mnt/data ext4 <redacted-options> 0 0 has_nofail=yes;",
+        "/dev/sdf /mnt/data ext4 <redacted-options> 0 0 has_nofail=no;",
+        "/dev/sdg /mnt/data ext4 <redacted-options> 0 0 has_nofail=no;",
+        "/dev/sdh /mnt/data cifs <redacted-options> 0 0 has_nofail=yes;",
+        "/dev/sdi /mnt/data ext4 <redacted-options> 0 0 has_nofail=no;",
+        "/dev/sdj /mnt/data ext4 <redacted-options> 0 0 has_nofail=no;",
+        "<redacted-device> /mnt/data cifs <redacted-options> 0 0 has_nofail=yes;",
+        "<redacted-device> /mnt/data davfs defaults,nofail 0 0 has_nofail=yes;",
+        "UUID=0a1b-2c3d /mnt/data ext4 NOATIME,x-systemd.device-timeout=10s 0 2 has_nofail=no;",
+        "LABEL=workspaces_plain /mnt/data ext4 errors=remount-ro,_netdev 0 2 has_nofail=no;",
+    ]
+    fline = next((l for l in out_x.splitlines() if l.startswith("luks-monitor forensic fstab /mnt/data=")), "")
+    check("G4: …the live /mnt/data fstab entries print, commented and other mounts do not, hostile devices/options are redacted, has_nofail is reported",
+          all(w in fline for w in want_fstab) and fline.count("has_nofail=") == len(want_fstab)
+          and not [t for t in FSTAB_SECRETS if t in out_x],
+          ([w for w in want_fstab if w not in fline], [t for t in FSTAB_SECRETS if t in out_x], fline[:200]))
+    check("G4: …crypttab is a count (1), reboot-required=yes, automatic-reboot=true",
+          "crypttab-workspaces-lines=1" in out_x and "reboot-required=yes" in out_x and "automatic-reboot=true" in out_x, out_x[-300:])
+    xlines = set(out_x.splitlines())
+    mispaired = ["%s %s" % (u, p_) for u in ("workspaces-luks-deadman.timer", "workspaces-luks-deadman.service") for p_ in DEADMAN_PROPS
+                 if "luks-monitor forensic %s %s=%s" % (u, p_, "loaded" if (p_ == "LoadState" and u.endswith(".service")) else "%s/%s" % (u, p_)) not in xlines]
+    check("G4: …each dead-man property line reads the unit its label names (per-unit stub; a .timer label over a .service read fails)",
+          not mispaired, mispaired[:4])
+    rc_n, out_n, err_n = g4_run("noargv")
+    check("G4: with a loaded dead-man whose ExecStart carries no argv[], argv_sha256=none (never the empty-string digest)",
+          rc_n == 0 and "argv_sha256=none" in out_n and "e3b0c442" not in out_n and "01ba4719" not in out_n, (rc_n, out_n[-200:], err_n[-120:]))
+
+# CHANGE-DETECTOR (#9045 review). The forensic print goes to the PUBLIC Actions log, and a deny list
+# cannot enumerate every leaking spelling (`cat /etc/default/luks-m*`, `systemctl -M .host show`,
+# `apt-config shell AR … P Acquire::http::Proxy`, `/proc/*/cmdline`, `/var/log/syslog`,
+# `journal''ctl`). So the exact decoded bytes are pinned: ANY change to the print, however
+# harmless-looking, reds here until a security re-review signs it off and updates the pin.
+# Regenerate: LMI_MUTANT=1 bash apps/web-platform/infra/luks-monitor-install.test.sh | grep change-detector
+# prints actual=<sha>; paste it below only after the re-review.
+FORENSIC_PRINT_SHA256 = "9686b7fdc5f0b1b91b115d212469248cc5056171455a3e676b2c16271ec96400"
+g4_sha = __import__("hashlib").sha256(g4_script.encode()).hexdigest()
+check("G4: change-detector: the public-log forensic print is byte-identical to the security-reviewed version (sha256 pin)",
+      bool(F) and g4_sha == FORENSIC_PRINT_SHA256,
+      "actual=%s: any change to the public-log forensic print requires security re-review and a pin update (FORENSIC_PRINT_SHA256)" % g4_sha)
+
+# UNIT-NAME PARITY (#9045 review). The dead-man unit is named once, by arm_dead_man's systemd-run
+# --unit= in workspaces-cutover.sh. The installer's exit-17 guard, forensic print and state print all
+# read it by name; a rename on one side would leave them reading a unit that never exists.
+am = re.search(r'(?ms)^arm_dead_man\(\)\s*\{\n(.*?)^\}', cutover)
+am_body = "\n".join(l for l in (am.group(1) if am else "").splitlines() if not l.lstrip().startswith("#"))
+dm_units = re.findall(r'--unit=([A-Za-z0-9@_.-]+)', am_body)
+check("G4: arm_dead_man's systemd-run names exactly one --unit= (positive control: the extractor finds it)",
+      len(dm_units) == 1, dm_units)
+DM = dm_units[0] if len(dm_units) == 1 else "@@no-unit@@"
+UNIT_TOK = re.compile(r'[A-Za-z0-9@_.-]+\.(?:timer|service)\b')
+frz_units = set(UNIT_TOK.findall(stream[frz][2])) if (inst and frz is not None) else set()
+f_units = set(u for c in F for u in UNIT_TOK.findall(c))
+st_units = set()
+if inst:
+    for idx, cmds in remote:
+        if any(re.search(r'systemctl show -p Id,ActiveState,SubState,Result ', c) for c in cmds):
+            st_units |= set(u for c in cmds for u in UNIT_TOK.findall(c)) - {"luks-monitor.timer", "luks-monitor.service"}
+check("G4: the exit-17 guard, forensic print and state print read the unit arm_dead_man creates (%s.timer/.service)" % DM,
+      frz_units == {DM + ".timer"} and f_units == {DM + ".timer", DM + ".service"} and st_units == {DM + ".timer", DM + ".service"},
+      (DM, sorted(frz_units), sorted(f_units), sorted(st_units)))
 
 # ─────────────────────────────── Guard 3 — the DSN writer ───────────────────────────────
 # Census: every Terraform-driven writer of the env file, including through a delivered script.
@@ -990,6 +1095,10 @@ PY
       if ! grep -F '[FAIL]' "$log" | grep -qF -- "$exp"; then
         no "mutation $label: rc 1 but not through the named check [$exp]"; return
       fi
+      # ONLY rows: the named check must be the SOLE failure (it proves no other row sees the edit).
+      if [[ -n "${EXPECT_ONLY[$key]:-}" ]] && [[ "$(grep -c '^\[FAIL\]' "$log")" -ne 1 ]]; then
+        no "mutation $label: [$exp] failed, but so did other rows (want it to be the only [FAIL])"; return
+      fi
     fi
     ok "mutation $label -> rc $got${exp:+ via [$exp]}"
   }
@@ -1027,9 +1136,17 @@ PY
     [G4-6]="forbidden diagnostic" [G4-7]="forbidden diagnostic" [G4-8]="forbidden diagnostic"
     [G4-9]="forbidden diagnostic" [G4-10]="forbidden diagnostic" [G4-11]="forbidden diagnostic"
     [G4-12]="guard (a missing value cannot fail the step)" [G4-13]="forbidden diagnostic"
-    [G4-14]="options restricted" [G4-15]="references no var." [G4-16]="forbidden diagnostic"
-    [G4-17]="exactly one installer step runs inline = local"
+    [G4-14]="hostile devices/options are redacted" [G4-15]="references no var." [G4-16]="forbidden diagnostic"
+    [G4-17]="exactly one installer step runs inline = local" [G4-H1]="change-detector"
+    [G4-18]="hostile devices/options are redacted" [G4-19]="hostile devices/options are redacted"
+    [G4-20]="hostile devices/options are redacted" [G4-21]="argv_sha256=none"
+    [G4-22]="reads the unit its label names" [G4-23]="no /etc/default reference"
+    [G4-24]="word in an unsuppressed step" [G4-25]="no glob in a read path"
+    [G4-26]="change-detector" [G4-27]="change-detector"
+    [G4-P1]="read the unit arm_dead_man creates" [G4-P2]="read the unit arm_dead_man creates"
   )
+  # Rows whose named check must be the ONLY failure: the edit is invisible to every other row.
+  declare -A EXPECT_ONLY=([G4-H1]=1 [G4-26]=1 [G4-27]=1)
   mut_rows=0
   A="$LMI_ALERTS_TF"; T="$LMI_LUKS_TF"; W="$LMI_WF"
   ARM_LINE="systemctl enable --now luks-monitor.timer"
@@ -1176,19 +1293,49 @@ X
   fins "G4-11 apt-config dump" "'\"apt-config dump || true\"'"
   fins "G4-12 an unguarded line" "'\"echo \\\\\"x=\$(uptime -s)\\\\\"\"'"
   mutate "G4-13 ExecStart smuggled into the property loop" 1 LMI_LUKS_TF "$T" "s.replace('for p in LoadState ', 'for p in ExecStart LoadState ', 1)"
-  mutate "G4-14 the fstab options restriction removed" 1 LMI_LUKS_TF "$T" "re.sub(r'if \\(o !~ [^;]*; ', '', s, 1)"
+  mutate "G4-14 the fstab options redaction removed" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('o = bad ? \\"<redacted-options>\\" : $4; ', 'o = $4; ', 1)
+X
+)"
   fins "G4-15 a var. reference in the forensic print" "'\"echo \$\${var.betterstack_paid_tier} || true\"'.replace('\$\$', '\$')"
   fins "G4-16 systemctl status of the dead-man unit" "'\"systemctl status workspaces-luks-deadman.service --no-pager || true\"'"
   mutate "G4-17 the forensic step deleted" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
 s.replace('  provisioner "remote-exec" {\n    inline = local.luks_monitor_forensic_print\n  }\n', '', 1)
 X
 )"
-  mutate "G4-H1 the forensic lines reordered (must PASS)" 0 LMI_LUKS_TF "$T" "$(cat <<'X'
+  # Every structural row is order-blind (this edit fails ONLY the change-detector pin): a reorder
+  # of the public print is still a change a security re-review has to sign off.
+  mutate "G4-H1 the forensic lines reordered (only the pin reds)" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
 (lambda m: s[:m.start()] + m.group(2) + m.group(1) + s[m.end():])(re.search(r'(    "echo \\"luks-monitor forensic uptime-s=[^\n]*\n)(    "echo \\"luks-monitor forensic reboot-required=[^\n]*\n)', s))
 X
 )"
-  # A deleted row must not pass silently: 20 Guard 1 + 17 Guard 2 + 13 Guard 3 + 18 Guard 4 rows.
-  MUT_ROWS_EXPECTED=68
+  # #9045 review: fstab allowlists, argv none, per-unit stub (I-M1), leak rows, pin, unit parity.
+  mutate "G4-18 the option allowlist accepts any key=value" 1 LMI_LUKS_TF "$T" "s.replace('|user_xattr|acl|', '|user_xattr|acl|[a-z]+=.*|', 1)"
+  mutate "G4-19 the device allowlist bypassed" 1 LMI_LUKS_TF "$T" "s.replace('if (d !~ ', 'if (0 && d !~ ', 1)"
+  mutate "G4-20 has_nofail never set" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('if (a[i] == \\"nofail\\") nf = \\"yes\\"; ', '', 1)
+X
+)"
+  mutate "G4-21 an empty argv hashed (the e3b0c442 digest again)" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('if [ -n \\"$av\\" ]; then printf', 'if true; then printf', 1)
+X
+)"
+  mutate "G4-22 the .timer-labelled loop reads the .service (I-M1)" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('--value workspaces-luks-deadman.timer 2>/dev/null || echo none)\\"; done', '--value workspaces-luks-deadman.service 2>/dev/null || echo none)\\"; done', 1)
+X
+)"
+  fins "G4-23 a glob read of /etc/default" "'\"cat /etc/default/luks-m* || true\"'"
+  fins "G4-24 systemctl -M .host status" "'\"systemctl -M .host status workspaces-luks-deadman.service --no-pager || true\"'"
+  fins "G4-25 a /proc/*/cmdline glob" "'\"cat /proc/*/cmdline || true\"'"
+  mutate "G4-26 journal''ctl (no deny row sees it; only the pin)" 1 LMI_LUKS_TF "$T" "$(cat <<'X'
+s.replace('  luks_monitor_forensic_print = [\n', '  luks_monitor_forensic_print = [\n    "journal' + "''" + 'ctl -u workspaces-luks-deadman.service --no-pager || true",\n', 1)
+X
+)"
+  mutate "G4-27 apt-config proxy key appended (no deny row sees it; only the pin)" 1 LMI_LUKS_TF "$T" "s.replace('apt-config shell AR Unattended-Upgrade::Automatic-Reboot 2>', 'apt-config shell AR Unattended-Upgrade::Automatic-Reboot P Acquire::http::Proxy 2>', 1)"
+  mutate "G4-P1 the dead-man unit renamed in workspaces-cutover.sh only" 1 LMI_CUTOVER_SH "$LMI_CUTOVER_SH" "re.sub(r'--unit=workspaces-luks-deadman\\b', '--unit=workspaces-luks-deadman-v2', s, 1)"
+  mutate "G4-P2 the state print names another dead-man service" 1 LMI_LUKS_TF "$T" "s.replace('workspaces-luks-deadman.timer workspaces-luks-deadman.service --no-pager', 'workspaces-luks-deadman.timer workspaces-luks-deadman-old.service --no-pager', 1)"
+  # A deleted row must not pass silently: 20 Guard 1 + 17 Guard 2 + 13 Guard 3 + 30 Guard 4 rows.
+  MUT_ROWS_EXPECTED=80
   if [[ "$mut_rows" -ne "$MUT_ROWS_EXPECTED" ]]; then
     printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"
     exit 1
@@ -1197,8 +1344,12 @@ fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
-# Anti-vacuity floor. The threshold sits on the line directly above its `if`.
-MIN_ASSERTIONS=100
+# Anti-vacuity floor. The threshold sits on the line directly above its `if`. It is EXACT: 118 is the
+# measured inner-run (LMI_MUTANT=1) assertion count, and the outer run adds the 80 mutation rows
+# (MUT_ROWS_EXPECTED), so deleting any one check, not only a whole block, trips it. Adding a check
+# means raising 118 here.
+_lmi_mut_floor="${LMI_MUTANT:+0}"
+MIN_ASSERTIONS=$((118 + ${_lmi_mut_floor:-80}))
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1

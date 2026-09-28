@@ -800,8 +800,13 @@ resource "logtail_exploration_alert" "luks_monitor_host_timer_dark" {
 # (#6812). The fire command's FIRST act is
 #   logger -t luks-monitor -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'
 # and this alert pages on that row. Its later result=ok / result=fail rows say how the revert
-# ended; the runbook reads them. arm_failed / cutover_aborted are NOT here: Sentry already pages
-# those (sentry_alert.workspaces_luks_drift), and a second page would double it.
+# ended; the runbook reads them. arm_failed / cutover_aborted are NOT here. Sentry
+# (sentry_alert.workspaces_luks_drift) pages only the rows whose path also calls emit_drift:
+# arm_failed (deadman_arm_failed), disarm_failed (deadman_disarm_failed), and a cutover_aborted
+# whose cleanup() rolled back (rollback_engaged) or rolled forward past the canary
+# (cutover_aborted_post_canary). A plain `result=cutover_aborted outcome=pre_freeze` row, from a
+# die() that never called emit_drift, pages NOTHING: it is only in the run log and Better Stack.
+# Nothing was frozen on that path, and no alert watches it.
 #
 # Paging semantics are monitor_send_failed's (ADR-218): any one matching row in a bucket pages,
 # treat_as_zero so the open incident observes recovery. Scoped by tag AND host (web-2 ships to the
@@ -872,7 +877,7 @@ resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer stopped the app, unmounted the encrypted /workspaces volume and remounted the retained plaintext one. Writes since the freeze may be stranded on the LUKS volume. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result=ok or result=fail) to see how the revert ended, then follow the runbook. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
+  incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer stopped the app, unmounted the encrypted /workspaces volume and remounted the retained plaintext one. Writes since the freeze may be stranded on the LUKS volume. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result=ok or result=fail) to see how the revert ended, then follow the runbook. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the stranded writes were reconciled, only that no new fire row arrived. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
   metadata = {
     runbook = local.workspaces_luks_deadman_runbook_url
   }
