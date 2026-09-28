@@ -470,15 +470,21 @@ logs:
   where: Better Stack Logs source for the registry host and web hosts; GitHub Actions logs for zot-image-mirror.yml
   retention: Better Stack plan retention; GitHub 90 days
 discoverability_test:
-  command: curl -sSIL -o /dev/null -w '%{http_code}' https://github.com/jikig-ai/soleur/releases/download/zot-image-v2.1.20/zot-linux-amd64-v2.1.20.oci.tar
+  command: curl -sSI -o /dev/null -w '%{http_code}' -H 'Accept: application/vnd.oci.image.manifest.v1+json' https://gcr.io/v2/projectsigstore/cosign/manifests/sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870
   expected_output: "200"
 ```
+
+The probe above is the pre-merge half: anonymous gcr.io serves the pinned cosign digest. The
+post-merge half (AC-A4) is the release asset, which exists only after `publish` runs. The tag
+carries D's prefix:
+`curl -sSIL -o /dev/null -w '%{http_code}' https://github.com/jikig-ai/soleur/releases/download/zot-image-v2.1.20-95a837a0afac/zot-linux-amd64-v2.1.20.oci.tar`
+should return `200`.
 
 ## Encryption Posture
 
 ```yaml
 at_rest:
-  - store: GitHub release asset zot-image-v2.1.20 (public repo)
+  - store: GitHub release asset zot-image-v2.1.20-95a837a0afac (public repo)
     mechanism: plaintext-exception
     evidence: the asset is a public, unmodified copy of a public upstream image; integrity (not confidentiality) is the property, enforced by the pinned sha256 T in zot-registry.tf and the post-load image ID check against upstream C/D
     defends_against: substitution of the zot image between publish and boot (sha256 T), and a wrong-content load (ID in {C, D})
