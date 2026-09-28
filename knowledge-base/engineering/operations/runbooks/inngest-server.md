@@ -1998,9 +1998,10 @@ ADR-100, amendment 2026-09-14.
    gh workflow run cutover-inngest.yml --field op=verify --field cron_period_seconds=1200
    ```
 
-   > **Pass `cron_period_seconds=1200`.** `cron-ghcr-token-minter` runs `*/20 * * * *` (1200 s,
-   > live in `cron-manifest.ts`), so the 3600 default collapses three legitimate runs into one
-   > bucket and reports a **phantom** double-fire.
+   > **`cron_period_seconds=1200` was required while `cron-ghcr-token-minter` ran `*/20 * * * *`**
+   > (the 3600 default collapsed three legitimate runs into one bucket and reported a phantom
+   > double-fire). That minter was deleted by #8714 (ADR-096 task 5.4); before relying on the 3600
+   > default again, confirm no `cron-manifest.ts` entry is scheduled more often than hourly.
    It reaches the dedicated GQL over the private net via `/hooks/inngest-doublefire-probe`
    (P1-12 — the runner cannot curl `10.0.1.40` directly), buckets every run by
    `(functionID, floor(startedAt / cron_period))`, and fails if any bucket has >1 run

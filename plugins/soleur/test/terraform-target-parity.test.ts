@@ -74,7 +74,7 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-const TEST_FLOOR = 233;
+const TEST_FLOOR = 238;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -4138,6 +4138,76 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(perms.contents).toBe("read");
     const writes = Object.entries(perms).filter(([, v]) => v === "write").map(([k]) => k);
     expect(writes).toEqual(["pull-requests"]);
+  });
+});
+
+/**
+ * #8714 task 5.4 (ADR-096): retire the GHCR token minter and the host-side GHCR credential
+ * plumbing. The four Doppler objects are destroyed by the per-merge apply through BARE -targets:
+ * the address stays in the saved plan while no configuration declares it, which plans its delete
+ * (precedent: doppler_secret.zot_heartbeat_url_prd, #9062). A resource block would keep the value
+ * in Doppler prd; a `removed { destroy = false }` block would forget it and leave the value there,
+ * and even `destroy = true` needs the -target to be planned. Removing the -target lines (and this
+ * describe) is a follow-up AFTER the destroy has applied (the lines then plan nothing).
+ */
+describe("#8714 5.4 GHCR minter retirement: bare -targets destroy the four Doppler objects", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(stripComments(extractJobBlock(wf, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+  const planTargets = extractAllTargets(savedPlan);
+  const allTf = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const RETIRED: Array<[string, string]> = [
+    ["doppler_secret", "ghcr_read_user"],
+    ["doppler_secret", "ghcr_read_token"],
+    ["doppler_service_token", "ghcr_minter"],
+    ["doppler_secret", "ghcr_minter_doppler_token"],
+  ];
+  const addrs = RETIRED.map(([t, n]) => `${t}.${n}`);
+
+  test("all four addresses stay in the per-merge saved plan, so their deletes are planned", () => {
+    expect(planTargets.has("doppler_secret.github_app_id")).toBe(true); // non-vacuity
+    expect(addrs.filter((a) => !planTargets.has(a))).toEqual([]);
+  });
+
+  test("no .tf declares, forgets, or re-names any of them", () => {
+    expect(allTf).toContain('resource "doppler_secret" "zot_pull_token"'); // non-vacuity
+    const declared = RETIRED.filter(([t, n]) => new RegExp(`resource\\s+"${t}"\\s+"${n}"`).test(allTf)).map(
+      ([t, n]) => `${t}.${n}`,
+    );
+    expect(declared).toEqual([]);
+    const forgotten = addrs.filter((a) => new RegExp(`from\\s*=\\s*${escapeRe(a)}\\b`).test(allTf));
+    expect(forgotten).toEqual([]);
+    // Any address, not just the four: a second resource publishing one of these names would keep it.
+    const names = ["GHCR_READ_USER", "GHCR_READ_TOKEN", "GHCR_MINTER_DOPPLER_TOKEN"].filter((n) =>
+      new RegExp(`^\\s*name\\s*=\\s*"${n}"\\s*$`, "m").test(allTf),
+    );
+    expect(names).toEqual([]);
+  });
+
+  test("each retired address is targeted BARE (an instance key would target nothing in state)", () => {
+    const keyed = extractTargetsWithKeys(savedPlan);
+    expect(keyed).toContain("doppler_secret.github_app_id"); // non-vacuity
+    expect(addrs.filter((a) => !keyed.includes(a))).toEqual([]);
+  });
+
+  test("no config file anywhere under infra/ names a retired object, in any spelling", () => {
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? e.name === ".terraform" ? [] : walk(resolve(d, e.name))
+          : /\.tf(\.json)?$/.test(e.name) ? [resolve(d, e.name)] : [],
+      );
+    const TOKEN = /\bghcr_(read|minter)/i;
+    const files = walk(INFRA_DIR);
+    expect(files.some((f) => f.endsWith("/sentry/cron-monitors.tf"))).toBe(true); // the walk recursed
+    // The regex matches the retirement note in inngest-host.tf before comment-stripping (non-vacuity).
+    expect(TOKEN.test(readFileSync(resolve(INFRA_DIR, "inngest-host.tf"), "utf8"))).toBe(true);
+    const hits = files.filter((f) => TOKEN.test(stripComments(readFileSync(f, "utf8"))));
+    expect(hits.map((f) => f.slice(INFRA_DIR.length + 1))).toEqual([]);
+  });
+
+  test("the ghcr_read_* root variables are gone", () => {
+    expect(allTf).toMatch(/^variable\s+"image_name"\s*\{/m); // non-vacuity
+    expect(allTf).not.toMatch(/^variable\s+"ghcr_read_(user|token)"\s*\{/m);
   });
 });
 

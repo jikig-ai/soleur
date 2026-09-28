@@ -391,7 +391,7 @@ token invalidate the Doppler service tokens it created?** Terraform ran as `DOPP
 workplace **personal** token, and created the service tokens the production hosts read their own
 configuration with — `doppler_service_token.git_data` (`git-data-luks-boot`, `git-data-luks.tf`),
 `doppler_service_token.ghcr_minter` (`ghcr-minter-write-*` on `soleur/prd`,
-`ghcr-minter-doppler-token.tf`) and `doppler_service_token.registry` (the zot boot token,
+`ghcr-minter-doppler-token.tf`; destroyed by #8714 task 5.4, so it drops out of this check) and `doppler_service_token.registry` (the zot boot token,
 `zot-registry.tf`). These are **boot** tokens: a live host keeps working on the environment it has
 already read, so a cascade would surface at the next restart of a host, not at the revocation.
 
