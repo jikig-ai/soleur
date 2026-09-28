@@ -216,7 +216,8 @@ describe("Inngest function registry — drift guards", () => {
     expect(tfMonitors.size).toBeGreaterThan(0);
   });
 
-  // UPDATE this number when adding/removing Inngest functions.
+  // UPDATE this number when adding/removing Inngest functions, and add an EXECUTION_PLACEMENT row
+  // with the tightest class (execution-placement.test.ts, Guard 1; #7230).
   // 68 -> 69: cron-machinery-drain (the weekly issue-flow measurement + drain).
   // 69 -> 70: agentOnSpawnSettle (#8803, settles orphaned leader-loop runs).
   // 70 -> 69: cron-ghcr-token-minter deleted (#8714, ADR-096 task 5.4).
