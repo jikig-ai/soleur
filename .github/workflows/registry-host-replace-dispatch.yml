@@ -1,8 +1,9 @@
 # Delivery dispatcher for registry-host user_data changes (#7555, ADR-190).
 #
 # WHY THIS EXISTS. `apps/web-platform/infra/cloud-init-registry.yml` is the registry host's
-# user_data, and the host is cloud-init-only (ADR-096) with no SSH edit path. So a merged change
-# to that file is INERT until a `registry-host-replace` runs — and `registry-host-replace` is
+# user_data TEMPLATE — rendered with inputs from `zot-registry.tf` and `variables.tf` (#7582) —
+# and the host is cloud-init-only (ADR-096) with no SSH edit path. So a merged change to any of
+# those render inputs is INERT until a `registry-host-replace` runs — and `registry-host-replace` is
 # `workflow_dispatch`-only, with nothing in the repo firing it. Every reference to it was a
 # command printed for a human to type.
 #
@@ -32,7 +33,13 @@ on:
   push:
     branches: [main]
     paths:
+      # (#7582) EVERY render input, not only the template: the user_data is a templatefile()
+      # render whose map also reads zot-registry.tf (zot_image, doppler_sha256, ...) and
+      # variables.tf (registry_server_type). The path only WAKES the gate; the render diff in the
+      # gate decides, so an unrelated variables.tf merge is a cheap deliver=false run.
       - 'apps/web-platform/infra/cloud-init-registry.yml'
+      - 'apps/web-platform/infra/zot-registry.tf'
+      - 'apps/web-platform/infra/variables.tf'
       # Registration only (see the note on the job guard below). A workflow with no push trigger
       # can take 30+ minutes to appear in the Actions UI, and this path lets an edit to THIS file
       # register it without also dispatching a production host replace as a side effect.
@@ -49,6 +56,13 @@ on:
         required: false
         default: ''
         type: string
+
+# (#7582) The gate renders the registry user_data offline with terraform's own templatefile /
+# base64gzip builtins (registry-userdata-budget.sh). Pinned to the version apply-web-platform-infra.yml
+# applies with, so the render it compares is the render the apply would store
+# (apps/web-platform/infra/registry-render-delta.test.sh P1 asserts the two agree).
+env:
+  TERRAFORM_VERSION: "1.10.5"
 
 concurrency:
   # Never let two replaces of the same host queue up behind each other.
@@ -84,7 +98,9 @@ concurrency:
   cancel-in-progress: false
 
 # STEP MAP (#8279) — where each string lives, so the next editor does not read the whole file:
-#   gate      decides deliver=true|false; emits `watermark=` (head of the last successful run)
+#   gate      decides deliver=true|false by RENDERING the user_data at the watermark and the head
+#             (#7582); emits `watermark=` (head of the last successful run) and, when it delivers
+#             on the push arm, `render_changed=true` + `why=` (what it measured)
 #   change    names the change(s) this run delivers — the helper's six keys `range=`,
 #             `range_note=`, `commits=`, `prs=`, `unattributed=`, `summary=` plus `targets=` —
 #             via scripts/registry-delivery-change.sh; never fails the job
@@ -128,13 +144,31 @@ jobs:
     # four other predicates — measured at ~74s on run 31976455167. 45 would have left the sum
     # 20 minutes over budget.
     #
+    # 70 -> 75 (#7582): the gate now renders the user_data with terraform under its own
+    # `timeout-minutes: 5`, so the deadline sum is 2100 + 1500 + 300 + 300 = 4200s (70 min) plus
+    # checkout, setup-terraform and the predicates. 70 would have left zero slack.
+    #
     # Getting this wrong is not a slow job, it is a silent one: a ceiling cancellation runs only
     # `always()` steps, inside the runner's grace window — the verdict step below is one, which
     # is what lets it file the CANCELLED arm at all. Whenever a step gains an internal deadline,
     # re-derive this number from the SUM of every deadline on the path.
-    timeout-minutes: 70
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # (#7582) Every step talks to GitHub through `gh` + GH_TOKEN, never git; keep the
+          # write-scoped token out of .git/config now that a third-party binary runs in this job.
+          persist-credentials: false
+
+      # (#7582) terraform for the gate's render. continue-on-error: a HashiCorp download failure
+      # must not turn a registration-only or variables.tf-only run red (those arms never render,
+      # and a red run does not advance the watermark). On a render arm the budget script then
+      # fails closed ("terraform is REQUIRED in CI", rc 2) and the gate refuses with that message.
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        continue-on-error: true
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
 
       # WHAT MAKES THIS A DELIVERY, and why it is not "the file changed".
       #
@@ -144,10 +178,12 @@ jobs:
       # reviewer gate and NO `confirm=` token (verified), so path-triggering would remove the last
       # human decision in front of a pull-path outage.
       #
-      # So the gate asks whether the bytes that REACH THE HOST changed. `zot-registry.tf` applies
-      # `registry_rationale_strip` (`/(?m)^[ \t]*#([ \t][^\n]*)?\n/`) at render, so a comment-only
-      # edit renders byte-identical — comparing the stripped file at both SHAs reproduces that
-      # without needing terraform in this job.
+      # So the gate asks whether the bytes that REACH THE HOST changed. (#7582) It RENDERS them:
+      # `registry-userdata-budget.sh` produces the stripped templatefile() render offline (no
+      # credentials, no state), at the watermark and at the head, and the gate `cmp`s the two. A
+      # comment-only edit renders byte-identical (the strip is applied by the render itself), and a
+      # change to any other templatefile input — a zot digest bump in zot-registry.tf — is seen.
+      # Comparing only the stripped TEMPLATE, as this gate did until #7582, was blind to the latter.
       #
       # THE DIFF IS FETCHED VIA THE COMPARE API, NOT `git diff`. actions/checkout is fetch-depth:1,
       # so the compare base is not in the object store and `git diff` exits 128 — which, with
@@ -156,6 +192,9 @@ jobs:
       # `web-platform-release.yml` already documents this trap verbatim.
       - name: Decide whether this push changes the bytes the host boots
         id: gate
+        # Two renders (~3 terraform console calls each) take seconds; this bounds a hung console
+        # so it cannot consume the job ceiling. Part of the job's timeout-minutes sum below.
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
@@ -259,56 +298,146 @@ jobs:
             echo "::warning::the compare API returned ${n_files} files, at or above its 300 cap, so the changed-file list may be TRUNCATED and cannot prove $CFG was untouched. Delivering rather than silently skipping. The preflight still gates."
             exit 0
           fi
-          if ! grep -qx "$CFG" <<<"$changed"; then
+          # (#7582) THE QUESTION IS WHETHER THE RENDERED user_data CHANGED, NOT WHETHER THE TEMPLATE DID.
+          # The host boots base64gzip(replace(templatefile(cloud-init-registry.yml, {...}), strip, ""))
+          # and that map also reads zot-registry.tf (zot_image, doppler_sha256, users, IP, ingest URL)
+          # and, through the live Hetzner catalog, variables.tf's registry_server_type (the zot
+          # cgroup cap and the arch). Comparing the template alone let a zot digest bump change the
+          # bytes the host boots with deliver=false — the new zot then sat inert until an unrelated
+          # apply replaced the host by surprise.
+          INFRA=apps/web-platform/infra
+          TF="$INFRA/zot-registry.tf"
+          VARS="$INFRA/variables.tf"
+          tpl_changed=0; tf_changed=0; vars_changed=0
+          grep -qx "$CFG" <<<"$changed" && tpl_changed=1
+          grep -qx "$TF" <<<"$changed" && tf_changed=1
+          grep -qx "$VARS" <<<"$changed" && vars_changed=1
+          if (( tpl_changed + tf_changed + vars_changed == 0 )); then
             echo "deliver=false" >> "$GITHUB_OUTPUT"
-            echo "Nothing since the watermark ${BEFORE_SHA} touched $CFG (registration-only pushes). Not dispatching."
+            echo "Nothing since the watermark ${BEFORE_SHA} touched a render input ($CFG, $TF, $VARS) — registration-only pushes. Not dispatching."
             exit 0
           fi
-          # The path changed — now ask whether the HOST-VISIBLE bytes changed.
-          #
-          # THIS MUST REPRODUCE terraform's `/(?m)^[ \t]*#([ \t][^\n]*)?\n/` → "" EXACTLY, and two
-          # details are load-bearing in opposite directions:
-          #
-          #   * That regex consumes the trailing \n, so a comment LINE vanishes — but a line that
-          #     was ALREADY blank survives the render. An earlier form here piped through
-          #     `grep -v '^$'`, deleting pre-existing blank lines on both sides too. A push whose
-          #     only change was adding or removing a blank line then compared IDENTICAL, so
-          #     deliver=false, while the real rendered user_data differed: the host kept booting
-          #     stale bytes and a pending ForceNew sat in state until some unrelated apply
-          #     delivered it as a surprise replace. That is the silent non-delivery this workflow
-          #     exists to remove, printed under a message claiming the bytes were identical.
-          #   * `#` must be followed by a BLANK or end-of-line to count as a comment. `#cloud-config`
-          #     and `#!/bin/sh` are therefore NOT stripped — by terraform, and so not here either.
-          #     Widening this to any leading `#` would silently drop the cloud-init header.
-          #
-          # Trailing-whitespace and key-reordering edits still compare as changed and fire an
-          # unnecessary (volume-preserving) replace. That direction is deliberate: an unnecessary
-          # replace is recoverable, an undelivered one is silent.
-          strip_comments() { grep -vE '^[[:blank:]]*#([[:blank:]].*)?$' "$1" || true; }
-          befr="$(mktemp)"
-          brc=0; arc=0
-          gh api "repos/${GITHUB_REPOSITORY}/contents/${CFG}?ref=${BEFORE_SHA}" \
-            --jq '.content' 2>/dev/null | base64 -d > "$befr" || brc=$?
-          # The AFTER side is already on disk: actions/checkout ran at github.sha, which IS
-          # AFTER_SHA. Re-fetching it over the API added a second failure mode whose fail-open
-          # direction is "replace the production host".
-          aftr="$CFG"
-          [[ -s "$aftr" ]] || arc=1
-          if [[ "$brc" -ne 0 || "$arc" -ne 0 ]]; then
-            # FAIL CLOSED TOWARD DELIVERING, not toward skipping: the path did change, so a
-            # comparison we could not make must not be read as "nothing to deliver". The preflight
-            # below still gates, and an unnecessary replace is recoverable where an undelivered
-            # fix is silent.
-            echo "deliver=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::could not read both revisions of $CFG (before-fetch rc=$brc, checked-out copy readable=$((1-arc))) — delivering anyway rather than silently skipping a real change."
-            exit 0
+          WORK="$(mktemp -d)"
+          mkdir -p "$WORK/before"
+          # A watermark-revision read that FAILS is a refusal, not a delivery: a contents-API blip
+          # must not destroy and recreate the sole pull path. Three attempts, then exit 1 — a red
+          # run does not advance the watermark and files the gate-failed verdict, so nothing is
+          # silently skipped. (A watermark render that is UNMEASURABLE is different: see below.)
+          fetch_before() {  # $1 = repo path, $2 = destination
+            local n
+            for n in 1 2 3; do
+              if gh api "repos/${GITHUB_REPOSITORY}/contents/$1?ref=${BEFORE_SHA}" --jq '.content' 2>/dev/null | base64 -d > "$2" && [[ -s "$2" ]]; then
+                return 0
+              fi
+              sleep "$n"
+            done
+            echo "::error::could not read $1 at the delivery watermark ${BEFORE_SHA} (3 attempts). Refusing to decide a registry host replace on a revision it cannot read — re-fire via workflow_dispatch once the API recovers."
+            exit 1
+          }
+          # The same awk as the stock probe in apply-web-platform-infra.yml (read_default), with the
+          # `default` line anchored at line start so a commented `# default = "x"` cannot be read.
+          read_default() {  # $1 = variable name, $2 = file
+            awk -v v="variable \"$1\"" '$0 ~ "^"v, /^}/' "$2" \
+              | grep -E '^[[:space:]]*default[[:space:]]*=' | head -1 \
+              | sed -E 's/^[^=]*=[[:space:]]*"?([^"#]*)"?.*$/\1/' | tr -cd 'A-Za-z0-9._-'
+          }
+          # Comment-stripped, whitespace-normalized text: a comment or a `terraform fmt` realignment
+          # compares equal; any token change does not.
+          norm() { grep -vE '^[[:space:]]*(#|//)' | sed -E 's/[[:space:]]+(#|\/\/).*$//; s/[[:space:]]+/ /g; s/^ //; s/ $//' | grep -v '^$' || true; }
+          tf_block() {  # $1 = file, $2 = regex matching the block's first line (to the next col-0 `}`)
+            awk -v re="$2" '$0 ~ re {f=1} f {print} f && /^}/ {f=0}' "$1" | norm
+          }
+          # Everything in zot-registry.tf that shapes the user_data but that an OFFLINE render must
+          # stub or restate, compared as TEXT: the templatefile map + wrapper, the derivation locals,
+          # and the resources whose attributes the map reads (volume id, token key, heartbeat URLs)
+          # or whose change forces a replace (the server itself, the replace_triggered_by passwords).
+          tf_wiring() {  # $1 = file
+            awk '/^[[:space:]]*user_data[[:space:]]*=[[:space:]]*base64gzip\(/{f=1} f{print} f && /local\.registry_rationale_strip,[[:space:]]*""\)\)/{f=0}' "$1" | norm
+            grep -E '^[[:space:]]*(registry_arch|registry_memory_cap_mb|registry_host_reserve_mb|zot_image|doppler_sha256)[[:space:]]*=' "$1" | norm
+            local r
+            for r in '^resource "hcloud_server" "registry"' '^resource "hcloud_volume" "registry"' \
+                     '^resource "doppler_service_token" "registry"' '^resource "betteruptime_heartbeat" "registry_' \
+                     '^resource "random_password" "zot_(pull|push)"'; do
+              tf_block "$1" "$r"
+            done
+          }
+          # Run the budget script with NO GitHub token in its environment: it runs a third-party
+          # binary (terraform) against watermark-revision files, and this job's token can write.
+          budget() { env -u GH_TOKEN -u GITHUB_TOKEN HOME="$WORK" bash "$@"; }
+          WHY=()
+          # VARIABLES — the inputs the offline render cannot see: registry_server_type (the cgroup
+          # cap and the arch), registry_location (a new volume id), registry_volume_size (the boot
+          # resize). Compared BY VALUE, and only when variables.tf changed, so an unrelated
+          # variables.tf merge never runs terraform.
+          ST_AFTER="$(read_default registry_server_type "$VARS" || true)"
+          if (( vars_changed )); then
+            fetch_before "$VARS" "$WORK/variables.before.tf"
+            for v in registry_server_type registry_location registry_volume_size; do
+              vb="$(read_default "$v" "$WORK/variables.before.tf" || true)"
+              va="$(read_default "$v" "$VARS" || true)"
+              if [[ -z "$vb" || -z "$va" ]]; then
+                # Cannot prove it is unchanged: fail toward delivering, like every arm above.
+                WHY+=("$v unreadable (watermark='${vb:-?}' head='${va:-?}')")
+                echo "::warning::could not read $v at both revisions — delivering rather than assuming it is unchanged."
+              elif [[ "$vb" != "$va" ]]; then
+                WHY+=("$v ${vb} -> ${va}")
+              fi
+            done
           fi
-          if diff -q <(strip_comments "$befr") <(strip_comments "$aftr") >/dev/null 2>&1; then
-            echo "deliver=false" >> "$GITHUB_OUTPUT"
-            echo "$CFG changed, but only in comments — the rendered user_data is byte-identical, so the running host boots the same bytes. Not dispatching."
+          if (( tpl_changed + tf_changed > 0 )); then
+            case "$ST_AFTER" in
+              cax*) WHY+=("registry_server_type ${ST_AFTER} is arm64; the offline render only renders the amd64 branch") ;;
+            esac
+            # THE HEAD SIDE FIRST, AND IT MUST MEASURE. A payload that cannot be measured, or that
+            # exceeds Hetzner's 32,768 B user_data cap, is a replace whose CREATE hcloud rejects
+            # AFTER the DESTROY succeeded — the sole pull path stranded. Refuse; never replace blind.
+            # An empty output on rc 0 is the budget script's local no-terraform SKIP: unmeasured.
+            arc=0
+            budget "$INFRA/registry-userdata-budget.sh" "$WORK/after.yml" > "$WORK/after.log" 2>&1 || arc=$?
+            cat "$WORK/after.log"
+            if [[ "$arc" -eq 1 ]]; then
+              echo "::error::the head's registry user_data is OVER Hetzner's 32,768 B cap (registry-userdata-budget.sh rc=1, output above). Refusing: a replace would destroy the host and then fail its create."
+              exit 1
+            elif [[ "$arc" -ne 0 || ! -s "$WORK/after.yml" ]]; then
+              echo "::error::the head's registry user_data is UNMEASURABLE (registry-userdata-budget.sh rc=$arc, render $([[ -s "$WORK/after.yml" ]] && echo present || echo absent) — e.g. terraform absent, or a zot-registry.tf literal the script reads changed shape; output above). Refusing to dispatch a replace it cannot measure."
+              exit 1
+            fi
+            # THE WATERMARK SIDE, rendered by the HEAD's budget script against the watermark's
+            # inputs — so a change to the measuring tool itself never reads as a host change.
+            cp "$INFRA/registry-userdata-budget.sh" "$WORK/before/"
+            fetch_before "$CFG" "$WORK/before/cloud-init-registry.yml"
+            fetch_before "$TF" "$WORK/before/zot-registry.tf"
+            brc=0
+            budget "$WORK/before/registry-userdata-budget.sh" "$WORK/before.yml" > "$WORK/before.log" 2>&1 || brc=$?
+            if [[ ( "$brc" -ne 0 && "$brc" -ne 1 ) || ! -s "$WORK/before.yml" ]]; then
+              # e.g. a pin shape the head's script no longer parses. Cannot prove "unchanged".
+              WHY+=("the watermark user_data is unmeasurable by the head render (rc=$brc)")
+              echo "::warning::the watermark ${BEFORE_SHA} render is unmeasurable (rc=$brc) — delivering rather than assuming it is unchanged."
+              sed 's/^/  [watermark render] /' "$WORK/before.log"
+            elif ! cmp -s "$WORK/before.yml" "$WORK/after.yml"; then
+              changed_inputs=""
+              (( tpl_changed )) && changed_inputs="cloud-init-registry.yml"
+              (( tf_changed )) && changed_inputs="${changed_inputs:+$changed_inputs, }zot-registry.tf"
+              WHY+=("rendered user_data differs (render inputs changed: ${changed_inputs})")
+            fi
+            # What the render stubs or restates, compared as text (see tf_wiring).
+            if (( tf_changed )) && ! cmp -s <(tf_wiring "$WORK/before/zot-registry.tf") <(tf_wiring "$TF"); then
+              WHY+=("zot-registry.tf changed the user_data wiring or a resource the host is built from")
+            fi
+          fi
+          if (( ${#WHY[@]} > 0 )); then
+            why_line=""; for w in "${WHY[@]}"; do why_line="${why_line:+$why_line; }$w"; done
+            # `why` crosses into GITHUB_OUTPUT and then into markdown: every part above is fixed text
+            # or a tr-filtered value, and this assertion keeps it that way for any future part.
+            if [[ ! "$why_line" =~ ^[A-Za-z0-9\ ._:\;,()\'=\>?-]*$ ]]; then
+              echo "::error::internal: the delivery reason carries a character outside its allowlist — refusing to publish it."
+              exit 1
+            fi
+            { echo "deliver=true"; echo "render_changed=true"; echo "why=${why_line}"; } >> "$GITHUB_OUTPUT"
+            echo "The bytes the registry host boots changed since the watermark ${BEFORE_SHA}: ${why_line}. The merged user_data is inert until a replace runs."
           else
-            echo "deliver=true" >> "$GITHUB_OUTPUT"
-            echo "$CFG changed in host-visible bytes — the merged user_data is inert until a replace runs."
+            echo "deliver=false" >> "$GITHUB_OUTPUT"
+            echo "Render inputs changed since the watermark ${BEFORE_SHA}, but the rendered user_data is byte-identical and nothing it is built from changed — the running host boots the same bytes. Not dispatching."
           fi
 
       # NAME THE CHANGE THIS RUN DELIVERS (#8279). The dispatch reason, the step summary and the
@@ -428,11 +557,26 @@ jobs:
           MERGE_SHA: ${{ github.sha }}
           MANUAL_REASON: ${{ inputs.reason }}
           SUMMARY: ${{ steps.change.outputs.summary }}
+          COMMITS: ${{ steps.change.outputs.commits }}
+          RENDER_CHANGED: ${{ steps.gate.outputs.render_changed }}
+          GATE_WHY: ${{ steps.gate.outputs.why }}
         run: |
           set -euo pipefail
           # Consumer default (#8279): the `change` step cannot fail the job, but it can be killed
           # by its timeout, and then its outputs are empty. Say so rather than naming nothing.
           SUMMARY="${SUMMARY:-the user_data merged at ${MERGE_SHA:0:7} (change attribution unavailable)}"
+          # (#7582) A delivery decided by a NON-template render input has no template commit to
+          # attribute, and the helper's summary would then read "unchanged since the watermark".
+          # Name what the gate measured instead.
+          if [[ "${RENDER_CHANGED:-}" == "true" ]]; then
+            if [[ -z "${COMMITS// /}" ]]; then
+              SUMMARY="the registry user_data render at ${MERGE_SHA:0:7} (${GATE_WHY:-render inputs changed})"
+            else
+              # A template commit in range does not mean the template is what changed the bytes (a
+              # comment edit beside a zot digest bump) — carry what the gate measured too.
+              SUMMARY="${SUMMARY} [gate: ${GATE_WHY:-render inputs changed}]"
+            fi
+          fi
           # workflow_dispatch inputs are capped at 65,535 characters in total; the helper caps
           # each subject, and this belt-and-braces cap keeps the reason inside the payload even
           # if that changes.
@@ -448,7 +592,7 @@ jobs:
           if [[ -n "${MANUAL_REASON:-}" ]]; then
             REASON="registry-host-replace re-fired manually: ${MANUAL_REASON} (delivering user_data at ${MERGE_SHA}) — ${SUMMARY_MD}"
           else
-            REASON="Delivering the cloud-init-registry.yml user_data merged at ${MERGE_SHA} — ${SUMMARY_MD}. Inert until this replace runs; the store volume is preserved."
+            REASON="Delivering the registry host user_data merged at ${MERGE_SHA} — ${SUMMARY_MD}. Inert until this replace runs; the store volume is preserved."
           fi
           # Stamped BEFORE the dispatch, so the poll below can select the run this step caused
           # rather than whatever apply happens to be in flight. One second of slack absorbs
@@ -610,6 +754,8 @@ jobs:
           RANGE: ${{ steps.change.outputs.range }}
           RANGE_NOTE: ${{ steps.change.outputs.range_note }}
           TRACKER: ${{ inputs.tracker || '' }}
+          RENDER_CHANGED: ${{ steps.gate.outputs.render_changed }}
+          GATE_WHY: ${{ steps.gate.outputs.why }}
         run: |
           set -uo pipefail
           # `set -f`: the raw tracker is word-split below; nothing here may glob against the checkout.
@@ -645,12 +791,17 @@ jobs:
           # tests/scripts/test-registry-delivery-change.sh) is that `commits=` is EMPTY on a proven
           # range with no config touch and never falls back to github.sha. `commits=`, not `prs=`:
           # an unattributed direct push (T8) has an empty `prs=` and DID change the config.
-          if [[ -z "${COMMITS// /}" && "${RANGE:-}" == "proven" ]]; then
+          if [[ -z "${COMMITS// /}" && "${RANGE:-}" == "proven" && "${RENDER_CHANGED:-}" == "true" ]]; then
+            # (#7582) The gate delivered on a NON-template render input (a zot digest bump in
+            # zot-registry.tf, a server-type change): no commit touched the template, so `commits=`
+            # is empty, but the bytes the host boots DID change and are not live.
+            NOT_LIVE="The registry host still runs its previous user_data: the render change since the delivery watermark ${WATERMARK:0:7} ($(md_esc "${GATE_WHY:-render inputs changed}")) is NOT live."
+          elif [[ -z "${COMMITS// /}" && "${RANGE:-}" == "proven" ]]; then
             # Nothing in range touched the config (includes a re-fire at the watermark SHA): the
             # bytes ARE live, and "NOT live" here would be the false-text defect in a new arm.
             NOT_LIVE="The registry host's user_data is unchanged since the delivery watermark ${WATERMARK:0:7}; this run was not applied."
           else
-            NOT_LIVE="The registry host still runs its previous user_data, so the cloud-init-registry.yml change(s) in ${SUMMARY_MD} are NOT live"
+            NOT_LIVE="The registry host still runs its previous user_data, so the registry user_data change(s) in ${SUMMARY_MD} are NOT live"
             if [[ -n "${RANGE_NOTE:-}" ]]; then
               # A note on a PROVEN range (subject-attributed PR, a capped lookup) is a caveat,
               # not an unproven range.
@@ -696,11 +847,12 @@ jobs:
             WHY="The dispatch was accepted and a replace may have run; this run could not read its conclusion."
             STATE="The delivering change's own follow-through is the authority on whether the host serves; read the apply run before re-firing."
           elif [[ "${GATE_OUTCOME:-}" == "failure" ]]; then
-            # The gate's own exit 1 (compare API unreadable). Not the `else`: that arm would
+            # The gate's own exit 1 (compare API unreadable, a watermark revision unreadable, or —
+            # #7582 — the head render unmeasurable or over Hetzner's cap). Not the `else`: that arm would
             # print "no step reports a failure" beside gate=failure in the same sentence.
             KIND="gate-failed"
             WHAT="Delivery UNCLASSIFIED: the delta gate could not classify the diff"
-            WHY="The gate's own \`::error::\` in the run names the cause (compare API unreadable). Nothing was dispatched."
+            WHY="The gate's own \`::error::\` in the run names the cause (compare API or a watermark revision unreadable, or the head render unmeasurable or over the 32,768 B cap). Nothing was dispatched."
           else
             # REACHABLE with no step in `failure`: an actions/checkout failure leaves the gate
             # `skipped` and the job failed. Print the four bound outcomes rather than guess.
