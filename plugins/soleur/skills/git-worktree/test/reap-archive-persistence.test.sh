@@ -137,8 +137,22 @@ fi
 # Fixture helpers
 # ---------------------------------------------------------------------------
 
+# The body below is the CANONICAL copy, asserted byte-for-byte against every other copy by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 mk_lease_root() {
   local d="$1"
+  assert_fixture_dir "$d"
   mkdir -p "$d/leases" "$d/locks" "$d/logs" || return 1
   # Pre-stamp the #7409 first-run arming hold: without it the reaper reports
   # rather than reaps on the first armed run and every assertion below would
@@ -186,6 +200,7 @@ build_clone() {
 # cleanup-merged returns 0 for most internal failures by design.
 run_cleanup() {
   local dir="$1" out="$2"; shift 2
+  assert_fixture_dir "$dir"; assert_fixture_dir "$out"
   ( cdx "$dir"
     env "$@" SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" bash "$WM" cleanup-merged
   ) >"$out" 2>&1 || true
@@ -193,6 +208,7 @@ run_cleanup() {
 
 run_cleanup_bare() {
   local dir="$1" out="$2"; shift 2
+  assert_fixture_dir "$dir"; assert_fixture_dir "$out"
   ( cdb "$dir"
     env "$@" SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" bash "$WM" cleanup-merged
   ) >"$out" 2>&1 || true
@@ -324,13 +340,14 @@ else
 fi
 
 # The commit's touched-path set equals EXACTLY the archive-move set.
+# `git show --name-only` on a rename commit lists the DESTINATION paths
+# (sources appear only via --name-status, asserted above as R100).
 COMMIT_PATHS="$(git -C "$CLONE_B" show --name-only --format= feat-actor | LC_ALL=C sort)"
-if [[ -n "$COMMIT_PATHS" ]] \
-   && ! grep -q '^staged\.txt$' <<<"$COMMIT_PATHS" \
-   && ! grep -q 'brainstorms/' <<<"$COMMIT_PATHS" \
-   && grep -q 'knowledge-base/project/specs/feat-victim/spec\.md$' <<<"$COMMIT_PATHS" \
-   && grep -q 'knowledge-base/project/specs/archive/.*feat-victim' <<<"$COMMIT_PATHS" \
-   && grep -q 'knowledge-base/project/plans/archive/.*feat-victim' <<<"$COMMIT_PATHS"; then
+COMMIT_PATH_COUNT="$(printf '%s\n' "$COMMIT_PATHS" | grep -c .)"
+BAD_PATHS="$(printf '%s\n' "$COMMIT_PATHS" | grep -vcE '^knowledge-base/project/(specs|plans)/archive/.*feat-victim' || true)"
+if [[ "$COMMIT_PATH_COUNT" -eq 2 && "$BAD_PATHS" -eq 0 ]] \
+   && grep -q 'specs/archive/.*feat-victim' <<<"$COMMIT_PATHS" \
+   && grep -q 'plans/archive/.*feat-victim' <<<"$COMMIT_PATHS"; then
   pass "B: commit path-set is exactly the archive-move set (no staged.txt, no untracked brainstorm)"
 else
   fail "B: commit path-set wrong: $(printf '%s' "$COMMIT_PATHS" | head -8)"
@@ -462,10 +479,11 @@ build_clone "$BARE_E" "$CLONE_E" tracked
   git config user.useConfigOnly true
   git checkout -b feat-actor >/dev/null 2>&1
 )
-mkdir -p "$TMP/nohome"   # empty HOME => no --global identity either
+mkdir -p "$TMP/nohome"   # empty HOME + XDG_CONFIG_HOME => no --global identity either
+# (git reads $XDG_CONFIG_HOME/git/config for global config; HOME alone is not enough)
 
 OUT_E="$TMP/e-out.txt"
-run_cleanup "$CLONE_E" "$OUT_E" "HOME=$TMP/nohome"
+run_cleanup "$CLONE_E" "$OUT_E" "HOME=$TMP/nohome" "XDG_CONFIG_HOME=$TMP/nohome" "GIT_CONFIG_NOSYSTEM=1"
 
 if grep -q 'SOLEUR_REAP_ARCHIVE_STAGED' "$OUT_E"; then
   pass "E: commit failure emits SOLEUR_REAP_ARCHIVE_STAGED"
@@ -489,7 +507,7 @@ fi
 # a bare `mv`/`git mv` in a caller region is the defect class reborn.
 # ===========================================================================
 _arch_body="$(awk '/^archive_kb_files\(\) \{/,/^\}/' "$WM")"
-_spec_block="$(awk '/local spec_dir=/,/Extract feature slug/' "$WM")"
+_spec_block="$(awk '/Archive spec directory/,/Extract feature slug/' "$WM")"
 _helper_body="$(awk '/^reap_archive_persist\(\) \{/,/^\}/' "$WM")"
 
 _mv_cmds() { grep -vE '^[[:space:]]*#' | grep -cE '\b(git[[:space:]]+)?mv[[:space:]]' || true; }
