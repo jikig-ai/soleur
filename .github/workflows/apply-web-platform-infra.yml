@@ -2580,8 +2580,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      # (#8714 5.3b-iii) Boot-image gate: this job creates a registry host, which boots zot only from
-      # the pinned release asset. Refuse BEFORE terraform runs if that asset is missing or not T.
       - name: Boot-image asset gate (preflight P6, --check-asset)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2821,8 +2819,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      # (#8714 5.3b-iii) Boot-image gate: this job creates a registry host, which boots zot only from
-      # the pinned release asset. Refuse BEFORE terraform runs if that asset is missing or not T.
       - name: Boot-image asset gate (preflight P6, --check-asset)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -3499,8 +3495,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      # (#8714 5.3b-iii) Boot-image gate: this job creates a registry host, which boots zot only from
-      # the pinned release asset. Refuse BEFORE terraform runs if that asset is missing or not T.
       - name: Boot-image asset gate (preflight P6, --check-asset)
         env:
           GH_TOKEN: ${{ github.token }}
