@@ -2547,7 +2547,7 @@
 "id": "1wan2ye"
 },
 "1r2iigu": {
-"title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot at info / inngest_pull_fatal at fatal — a zot miss that ENDS the boot, renamed from inngest_ghcr_fallback by #8036 1d because no GHCR fallback exists — host_name soleur-inngest) and the private-NIC boot outcome (stage family private_nic_*, #8539) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
+"title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot at info / inngest_pull_fatal at fatal — a zot miss ends the attempt; soleur-inngest-provision.service retries (120 s at first, backing off to 15 min) until one succeeds (#8562; a host replaced before this change still ends the boot), each failed attempt also emitting provision_attempt_failed at warning; renamed from inngest_ghcr_fallback by #8036 1d because no GHCR fallback exists — host_name soleur-inngest) and the private-NIC boot outcome (stage family private_nic_*, #8539) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
 "technology": "HTTPS (Sentry store API, X-Sentry-Auth sentry_version=7)",
 "source": {
 "model": "platform.infra.inngest"
@@ -16234,31 +16234,31 @@
 1542
 ],
 [
-7506,
-1583
+7504,
+1582
 ],
 [
-7573,
-1512
+7571,
+1513
 ],
 [
-7790,
+7786,
 1572
 ],
 [
-7892,
+7888,
 1601
 ],
 [
-7899,
+7895,
 1656
 ],
 [
-8001,
+7997,
 1683
 ],
 [
-8143,
+8139,
 1719
 ],
 [
@@ -16270,7 +16270,7 @@
 1743
 ],
 [
-10797,
+10798,
 1840
 ],
 [
@@ -20479,24 +20479,24 @@
 1312
 ],
 [
-7900,
+7899,
 1437
 ],
 [
-7888,
+7885,
 1571
 ],
 [
-8118,
+8114,
 1683
 ],
 [
-8292,
-1767
+8289,
+1768
 ],
 [
-8509,
-1807
+8508,
+1808
 ],
 [
 8666,
@@ -20504,7 +20504,7 @@
 ]
 ],
 "labelBBox": {
-"x": 7928,
+"x": 7926,
 "y": 1400,
 "width": 25,
 "height": 18
@@ -20839,35 +20839,35 @@
 1832
 ],
 [
-8482,
+8481,
 1817
 ],
 [
-8178,
+8176,
 1779
 ],
 [
-7932,
+7929,
 1683
 ],
 [
-7849,
+7845,
 1650
 ],
 [
-7849,
+7845,
 1601
 ],
 [
-7764,
+7760,
 1572
 ],
 [
-7683,
+7680,
 1545
 ],
 [
-7446,
+7445,
 1595
 ],
 [
@@ -20876,7 +20876,7 @@
 ],
 [
 7231,
-1427
+1426
 ],
 [
 7399,
@@ -20973,23 +20973,23 @@
 1252
 ],
 [
-7761,
+7760,
 1325
 ],
 [
-7824,
+7822,
 1258
 ],
 [
-7981,
+7979,
 1312
 ],
 [
-8182,
+8180,
 1381
 ],
 [
-8198,
+8197,
 1476
 ],
 [
@@ -20997,23 +20997,23 @@
 1542
 ],
 [
-8495,
-1574
+8493,
+1573
 ],
 [
-8527,
-1543
+8525,
+1544
 ],
 [
-8623,
+8619,
 1572
 ],
 [
-8728,
+8725,
 1605
 ],
 [
-8737,
+8735,
 1656
 ],
 [
@@ -21022,7 +21022,7 @@
 ],
 [
 9271,
-1791
+1789
 ],
 [
 10397,
@@ -21064,7 +21064,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss that ENDS the \nboot, renamed from inngest_ghcr_fallback \nby #8036 1d because no GHCR fallback ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
 2102,
@@ -21134,7 +21134,7 @@
 "labelBBox": {
 "x": 7497,
 "y": 1572,
-"width": 265,
+"width": 261,
 "height": 106
 },
 "parent": null,
@@ -21169,35 +21169,35 @@
 1542
 ],
 [
-6220,
+6219,
 1554
 ],
 [
-7344,
-1523
+7341,
+1524
 ],
 [
-7790,
+7786,
 1572
 ],
 [
-8031,
+8027,
 1599
 ],
 [
-8083,
+8079,
 1655
 ],
 [
-8324,
+8320,
 1683
 ],
 [
-9345,
+9342,
 1801
 ],
 [
-9615,
+9614,
 1616
 ],
 [
@@ -21218,7 +21218,7 @@
 ]
 ],
 "labelBBox": {
-"x": 8325,
+"x": 8321,
 "y": 1572,
 "width": 274,
 "height": 106
@@ -21495,15 +21495,15 @@
 1541
 ],
 [
-8272,
-1968
+8268,
+1969
 ],
 [
 8128,
 1542
 ],
 [
-8095,
+8096,
 1445
 ],
 [
@@ -41422,24 +41422,24 @@
 1482
 ],
 [
-2719,
+2720,
 1514
 ],
 [
-3484,
+3487,
 1639
 ],
 [
-3593,
+3597,
 1652
 ],
 [
-3976,
+3978,
 1699
 ],
 [
-4087,
-1608
+4089,
+1609
 ],
 [
 4458,
@@ -41459,7 +41459,7 @@
 ]
 ],
 "labelBBox": {
-"x": 3594,
+"x": 3598,
 "y": 1542,
 "width": 281,
 "height": 106
@@ -41563,7 +41563,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss that ENDS the \nboot, renamed from inngest_ghcr_fallback \nby #8036 1d because no GHCR fallback ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
 2559,
@@ -41582,35 +41582,35 @@
 1482
 ],
 [
-2892,
+2893,
 1547
 ],
 [
-3643,
+3646,
 1414
 ],
 [
-3899,
+3903,
 1542
 ],
 [
-3956,
+3961,
 1570
 ],
 [
-3934,
+3939,
 1623
 ],
 [
-3991,
+3996,
 1652
 ],
 [
-4168,
-1743
+4172,
+1742
 ],
 [
-4690,
+4691,
 1664
 ],
 [
@@ -41631,9 +41631,9 @@
 ]
 ],
 "labelBBox": {
-"x": 3992,
+"x": 3997,
 "y": 1542,
-"width": 265,
+"width": 261,
 "height": 106
 },
 "parent": null,
@@ -54413,31 +54413,31 @@
 ],
 [
 1573,
-529
+530
 ],
 [
-1068,
-572
+1069,
+573
 ],
 [
-906,
+907,
 650
 ],
 [
-824,
+825,
 690
 ],
 [
-750,
+751,
 763
 ],
 [
-699,
+700,
 823
 ]
 ],
 "labelBBox": {
-"x": 907,
+"x": 908,
 "y": 650,
 "width": 281,
 "height": 106
@@ -54462,32 +54462,32 @@
 509
 ],
 [
-1698,
+1699,
 522
 ],
 [
-1491,
-557
+1494,
+558
 ],
 [
-1336,
+1339,
 650
 ],
 [
-1266,
+1269,
 693
 ],
 [
-1208,
+1209,
 764
 ],
 [
-1168,
+1169,
 822
 ]
 ],
 "labelBBox": {
-"x": 1337,
+"x": 1340,
 "y": 650,
 "width": 278,
 "height": 106
@@ -54505,41 +54505,41 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss that ENDS the \nboot, renamed from inngest_ghcr_fallback \nby #8036 1d because no GHCR fallback ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
 1843,
-567
+570
 ],
 [
-1800,
-589
+1801,
+591
 ],
 [
-1756,
-617
+1760,
+618
 ],
 [
-1722,
+1726,
 650
 ],
 [
-1673,
+1677,
 698
 ],
 [
-1636,
+1639,
 766
 ],
 [
-1612,
-821
+1614,
+822
 ]
 ],
 "labelBBox": {
-"x": 1723,
+"x": 1727,
 "y": 650,
-"width": 265,
+"width": 261,
 "height": 106
 },
 "parent": null,

@@ -254,3 +254,15 @@ NEVER CODE! Just research and write the plan.
 
   **Why:** #8714/PR #9147. P6 gated only the dispatcher, while three apply jobs could create the registry host unguarded. The fetch "outside `doppler run`" still inherited `DOPPLER_TOKEN`. The missing ledger row reddened CI. See `knowledge-base/project/learnings/2026-09-28-a-replace-gate-on-one-route-and-an-isolation-that-shared-one-shell.md`.
 - **A counter or signal named for a CAUSE (late, stalled, egress-failed) must be defined by the predicate that isolates that cause, including a reset on every competing cause — and its decision-table row must be checked against a SEQUENCE (outage → recovery), not a single event.** "X rose, others flat → cause C" is true only if no other cause can move X on a later row. **Why:** #7270 — `late_ok_cum` counted OK-to-OK gaps, so every recovery beat after an outage read as timer lateness; two review seats reproduced it with a simulation the plan never ran. See `knowledge-base/project/learnings/2026-09-28-a-counter-named-for-a-cause-measured-a-gap-that-every-outage-produced.md`.
+- **A plan that wraps work in a retrying unit (a systemd `Restart=` oneshot, a timer loop, a queue retry) must state three things as predicates, and each needs a mutation row per exit route.**
+  - The **latch predicate** is the full health predicate, never "exit 0". Latching a degraded success makes permanent exactly the transient failures the loop exists for.
+  - **What each attempt pauses**, restored on every non-success exit. The loop pauses timers, locks and flags to make its attempt safe.
+  - **Every override surface the guards must survive**: drop-ins, alternate binary paths, other boot routes, aliased directives such as `TimeoutSec=` over `TimeoutStartSec=`, and `set -x` after a refusal.
+
+  **Why:** #8562/PR #9159. Review found:
+  - a failure-path `tee "$LATCH"` that three suites passed
+  - a latched degraded bootstrap
+  - FSM timers never restored
+  - five spelling-based guards (the same class as #9134)
+
+  See `knowledge-base/project/learnings/2026-09-28-a-retrying-unit-must-latch-only-full-success-and-undo-what-it-paused.md`.
