@@ -1089,7 +1089,8 @@ The mechanics live in `workspaces-cutover.sh`:
 - **The host canary gates the disarm.**
   - Before disarming, it compares the workspace count on the live `$MOUNT` against the count G3 took
     in THIS run (an in-process value, never the append-only state file, which carries earlier runs'
-    counts). A missing count fails closed.
+    counts). A missing count fails closed, and a G3 count failure is now fatal at G3
+    (`workspace_count_persist_failed`), where the rollback is lossless.
   - This re-proves that the mounted filesystem is the copy G3 counted and that the repoint landed.
     It is not a plaintext-versus-copy population proof; that proof is G3 against G2, plus C1.
   - After disarming, `findmnt -no SOURCE "$MOUNT"` must still equal the mapper, because a fire that
@@ -1133,7 +1134,9 @@ The mechanics live in `workspaces-cutover.sh`:
 - **`ROLLBACK=1` refuses after a successful cutover.** When `/mnt/data` is the mapper and the
   persisted `CANARY_OK` matches the live volume's LUKS UUID, a rollback dispatch refuses unless the
   `rollback_ack_luks_writes` input is set. Such a rollback strands every write made since
-  `docker start` on the LUKS volume.
+  `docker start` on the LUKS volume. It also refuses, with the same override, when the mapper is
+  mounted and `CANARY_OK` is persisted but the live header UUID cannot be read or the persisted
+  UUID is empty: an unmeasurable match fails closed. A refusal records `outcome=pre_freeze`.
 - **An unattended fire pages.** `logtail_exploration_alert.workspaces_luks_deadman_fired` (ADR-218
   semantics) matches `op=workspaces-luks-deadman result=fired` from `soleur-web-platform`. This
   closes the #6812 six-hour silence. The alert auto-resolves after ten quiet minutes; that does not
