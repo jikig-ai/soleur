@@ -123,7 +123,7 @@ for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
          mem_total_mb= zot_anon_mb= zot_oom_kills= state_status= oom_killed= exit_code= \
          zot_uptime_s= zot_last_err_src= err_redact_rev= \
          $POSTURE_NAMES \
-         oom_kills_5m= zot_last_err= boot_id= zot_image_digest= htpasswd_pull_matches= htpasswd_push_matches=; do
+         oom_kills_5m= zot_last_err= boot_id= zot_image_digest= zot_image_fetch= ghcr_blocked= htpasswd_pull_matches= htpasswd_push_matches=; do
   assert "SOLEUR_ZOT_DISK LINE carries field ${f}" "grep -qF '${f}' <<<\"\$LINE_ASSIGN\""
 done
 # ── the producer<->consumer seam (#8386 review, structural-enumeration seat) ─────────────────

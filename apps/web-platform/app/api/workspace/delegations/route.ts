@@ -5,6 +5,7 @@ import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/ser
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
 import { resolveGrantorDelegations } from "@/server/byok-delegation-ui-resolver";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { emitWorkspaceActionContext } from "@/server/workspace-action-audit";
 
 export async function GET(request: Request) {
@@ -12,13 +13,13 @@ export async function GET(request: Request) {
   if (!valid) return rejectCsrf("api/workspace/delegations", origin);
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = await verifiedUserId(request);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
+  const orgId = await resolveCurrentOrganizationId(userId, supabase);
   if (!orgId) return NextResponse.json({ error: "no_org" }, { status: 403 });
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId , email: null, subscriptionStatus: null };
+  const identity: Identity = { userId, role: "prd", orgId , email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -32,11 +33,11 @@ export async function GET(request: Request) {
     .from("workspace_members")
     .select("role")
     .eq("workspace_id", workspaceId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (!membership) return NextResponse.json({ error: "not_member" }, { status: 403 });
 
-  const delegations = await resolveGrantorDelegations(user.id, workspaceId, orgId, identity);
+  const delegations = await resolveGrantorDelegations(userId, workspaceId, orgId, identity);
   return NextResponse.json({ delegations });
 }
 
@@ -45,13 +46,13 @@ export async function POST(request: Request) {
   if (!valid) return rejectCsrf("api/workspace/delegations", origin);
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = await verifiedUserId(request);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
+  const orgId = await resolveCurrentOrganizationId(userId, supabase);
   if (!orgId) return NextResponse.json({ error: "no_org" }, { status: 403 });
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId , email: null, subscriptionStatus: null };
+  const identity: Identity = { userId, role: "prd", orgId , email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -72,7 +73,7 @@ export async function POST(request: Request) {
     .from("workspace_members")
     .select("role")
     .eq("workspace_id", body.workspaceId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (!membership || membership.role !== "owner") {
     return NextResponse.json({ error: "not_owner" }, { status: 403 });
@@ -84,13 +85,13 @@ export async function POST(request: Request) {
   // hourly defaults to the daily cap (RPC rejects NULL with 22003; the UI exposes
   // only a daily stepper). expires_at is null = never expires (UI-created grants).
   const { data, error } = await service.rpc("grant_byok_delegation", {
-    p_grantor_user_id: user.id,
+    p_grantor_user_id: userId,
     p_grantee_user_id: body.granteeUserId,
     p_workspace_id: body.workspaceId,
     p_daily_usd_cap_cents: body.dailyCapCents,
     p_hourly_usd_cap_cents: body.hourlyCapCents ?? body.dailyCapCents,
     p_expires_at: null,
-    p_actor_user_id: user.id,
+    p_actor_user_id: userId,
   });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
@@ -99,7 +100,7 @@ export async function POST(request: Request) {
   // (wrong-workspace detector). Ownership of body.workspaceId was just proven.
   emitWorkspaceActionContext({
     action: "api-key-share",
-    userId: user.id,
+    userId: userId,
     workspaceId: body.workspaceId,
     organizationId: orgId,
   });
@@ -112,13 +113,13 @@ export async function PATCH(request: Request) {
   if (!valid) return rejectCsrf("api/workspace/delegations", origin);
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = await verifiedUserId(request);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
+  const orgId = await resolveCurrentOrganizationId(userId, supabase);
   if (!orgId) return NextResponse.json({ error: "no_org" }, { status: 403 });
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId , email: null, subscriptionStatus: null };
+  const identity: Identity = { userId, role: "prd", orgId , email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -148,13 +149,13 @@ export async function PATCH(request: Request) {
     reportSilentFallback(probeError, {
       feature: "byok-delegations",
       op: "PATCH.ownership-probe",
-      extra: { userId: user.id, delegationId: body.delegationId },
+      extra: { userId: userId, delegationId: body.delegationId },
     });
     return NextResponse.json({ error: "probe_failed" }, { status: 503 });
   }
   if (
     !delegation ||
-    (delegation.grantor_user_id !== user.id && delegation.created_by_user_id !== user.id)
+    (delegation.grantor_user_id !== userId && delegation.created_by_user_id !== userId)
   ) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
@@ -168,7 +169,7 @@ export async function PATCH(request: Request) {
     p_delegation_id: body.delegationId,
     p_daily_usd_cap_cents: body.dailyCapCents,
     p_hourly_usd_cap_cents: body.hourlyCapCents ?? null,
-    p_actor_user_id: user.id,
+    p_actor_user_id: userId,
   });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
@@ -180,13 +181,13 @@ export async function DELETE(request: Request) {
   if (!valid) return rejectCsrf("api/workspace/delegations", origin);
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = await verifiedUserId(request);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
+  const orgId = await resolveCurrentOrganizationId(userId, supabase);
   if (!orgId) return NextResponse.json({ error: "no_org" }, { status: 403 });
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId , email: null, subscriptionStatus: null };
+  const identity: Identity = { userId, role: "prd", orgId , email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -222,11 +223,11 @@ export async function DELETE(request: Request) {
     reportSilentFallback(probeError, {
       feature: "byok-delegations",
       op: "DELETE.ownership-probe",
-      extra: { userId: user.id, delegationId: body.delegationId },
+      extra: { userId: userId, delegationId: body.delegationId },
     });
     return NextResponse.json({ error: "probe_failed" }, { status: 503 });
   }
-  if (!delegation || (delegation.grantor_user_id !== user.id && delegation.grantee_user_id !== user.id)) {
+  if (!delegation || (delegation.grantor_user_id !== userId && delegation.grantee_user_id !== userId)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   // Idempotent stop: if already revoked, the spend is already off. Returning
@@ -244,7 +245,7 @@ export async function DELETE(request: Request) {
   // this is the same defect class #4761 fixed for the grant path.
   const { error } = await service.rpc("revoke_byok_delegation", {
     p_delegation_id: body.delegationId,
-    p_actor_user_id: user.id,
+    p_actor_user_id: userId,
     p_reason: reason,
   });
 

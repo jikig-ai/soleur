@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import {
   resolveActiveWorkspaceKbRoot,
   resolveActiveWorkspaceRepoMeta,
@@ -9,6 +9,7 @@ import { githubApiGet, GitHubApiError } from "@/server/github-api";
 import { kbGithubUrlPath } from "@/server/kb-github-path";
 import { mirrorWarnWithDebounce, reportSilentFallback } from "@/server/observability";
 import { deriveDiagramStale } from "@/server/c4-staleness";
+import { verifiedUserId } from "@/server/request-auth";
 import {
   C4_DIAGRAMS_DIR,
   C4_SOURCE_EXT,
@@ -134,11 +135,8 @@ async function fetchBlobUtf8(
  * is covered by the existing Layer-1 honest-stale banner (#4963/#4976).
  */
 export async function GET(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -147,7 +145,7 @@ export async function GET(request: Request) {
   // workspace has an empty solo row. Resolve the active workspace once (kbRoot +
   // readiness gate), then resolve its repo coordinates for the SAME id.
   const serviceClient = createServiceClient();
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     return access.status === 404
       ? NextResponse.json({ error: "Workspace not found" }, { status: 404 })
@@ -171,7 +169,7 @@ export async function GET(request: Request) {
   // reusing the membership-scoped resolver already wired in sync/upload). Pass
   // the pre-resolved active id so kbRoot + repo key to ONE membership decision.
   const repoMeta = await resolveActiveWorkspaceRepoMeta(
-    user.id,
+    userId,
     serviceClient,
     activeWorkspaceId,
   );
@@ -189,7 +187,7 @@ export async function GET(request: Request) {
   }
 
   const installationId = repoMeta.githubInstallationId;
-  const userLog = renameUserIdToHash({ userId: user.id });
+  const userLog = renameUserIdToHash({ userId });
 
   try {
     // 1. List the diagrams dir (one call) for per-file blob shas. A 404 here

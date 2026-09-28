@@ -6,6 +6,7 @@ import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver
 import { createWorkspaceInvitation } from "@/server/workspace-invitations";
 import { sendInviteEmail } from "@/server/notifications";
 import { emitWorkspaceActionContext } from "@/server/workspace-action-audit";
+import { boundedAuthGetUser } from "@/server/request-auth";
 
 // POST /api/workspace/invite-member
 // Body: { workspaceId, email, role: "owner"|"member", attestationText }
@@ -14,9 +15,8 @@ export async function POST(request: Request) {
   if (!originValid) return rejectCsrf("api/workspace/invite-member", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userData = await boundedAuthGetUser(supabase);
+  const user = userData?.user;
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

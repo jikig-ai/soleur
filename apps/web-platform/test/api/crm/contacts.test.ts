@@ -19,7 +19,11 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
-vi.mock("@sentry/nextjs", () => ({ captureException: mockCaptureException }));
+// verifiedUserId breadcrumbs on the absent-header fallback path.
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+  addBreadcrumb: vi.fn(),
+}));
 
 import { GET } from "@/app/api/crm/contacts/route";
 
@@ -43,7 +47,7 @@ beforeEach(() => {
 describe("GET /api/crm/contacts", () => {
   test("401 when unauthenticated", async () => {
     mockGetUser.mockResolvedValue({ data: { user: null } });
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(401);
     expect(mockFrom).not.toHaveBeenCalled();
   });
@@ -76,7 +80,7 @@ describe("GET /api/crm/contacts", () => {
       }),
     );
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({
@@ -113,7 +117,7 @@ describe("GET /api/crm/contacts", () => {
       }),
     );
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(502);
     const body = await res.json();
     expect(body).toEqual({ error: "contacts_query_error" });

@@ -16,7 +16,11 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
-vi.mock("@sentry/nextjs", () => ({ captureException: mockCaptureException }));
+// verifiedUserId breadcrumbs on the absent-header fallback path.
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+  addBreadcrumb: vi.fn(),
+}));
 
 import { GET } from "@/app/api/crm/funnel/route";
 
@@ -126,7 +130,7 @@ describe("GET /api/crm/funnel", () => {
 
   test("401 when unauthenticated", async () => {
     mockGetUser.mockResolvedValue({ data: { user: null } });
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(401);
     expect(mockFrom).not.toHaveBeenCalled();
   });
@@ -147,7 +151,7 @@ describe("GET /api/crm/funnel", () => {
       return queryResult({ data: [], error: null });
     });
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.stages[0]).toEqual({ stage: "new", reached: 3, conversionPct: null });
@@ -166,7 +170,7 @@ describe("GET /api/crm/funnel", () => {
       return queryResult({ data: [], error: null });
     });
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: "funnel_query_error" });
     const [errArg, ctxArg] = mockCaptureException.mock.calls[0];

@@ -31,13 +31,13 @@ afterEach(() => vi.clearAllMocks());
 describe("GET /api/workstream/issues/options", () => {
   it("401s an unauthenticated caller", async () => {
     getUser.mockResolvedValue({ data: { user: null } });
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(401);
     expect(getWorkstreamIssueOptions).not.toHaveBeenCalled();
   });
 
   it("serves the accessor payload for the session user", async () => {
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/test"));
     expect(res.status).toBe(200);
     expect(getWorkstreamIssueOptions).toHaveBeenCalledWith("user-9");
     const json = (await res.json()) as {

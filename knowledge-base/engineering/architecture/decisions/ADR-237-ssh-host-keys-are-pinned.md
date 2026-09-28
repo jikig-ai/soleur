@@ -269,6 +269,15 @@ the LUKS cutover runbook). Earlier text in this ADR is not edited.
   deleted `pin_absent_store_disabled`. It and `pin_invalid_at_startup` use the message path, so their
   tags reach Sentry (#8629). Paging on them is #8572's scope (extended to these ops by a comment on
   #8572, 2026-09-28); until then they are pull-only.
+  > **2026-09-28 (#8572):** these now page. The three boot reports, and a replication push that
+  > fails on the pin (absent or invalid pin, no ssh client, or host identity not established), carry
+  > a `pin_fault` tag written only by `server/git-data-pin-fault.ts` `reportGitDataPinFault`, and the
+  > `git-data-host-key-pin-fault` Sentry rule emails issue owners, falling back to active members,
+  > on it (first seen, reappeared, regression, and every event, at most once per issue per 4 h).
+  > Conditioned on #8572's merge and a green `apply-sentry-infra.yml` and `web-platform-release.yml`;
+  > if either fails, "pull-only" above stands. The tag is advisory (host identity is read only from
+  > the provision dial's ssh stderr, never from git's, which a tenant can write into), and the pin
+  > still fails closed.
 - **The pinned transport needs an ssh client, which the image lacked.** `openssh-client` was absent
   from the runner image until PR #9096 (`node:22-slim` plus `--no-install-recommends` drops git's
   Recommends), so every app-side git-data dial failed ENOENT and an erasure read `unreachable`. The

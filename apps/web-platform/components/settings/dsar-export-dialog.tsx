@@ -13,6 +13,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface DsarExportDialogProps {
   /** Controlled open state — lifted so a Re-request button on an
@@ -36,12 +37,13 @@ export function DsarExportDialog({
   hasActiveJob,
 }: DsarExportDialogProps) {
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleConfirm() {
+  // Local `error` state (not the hook's slot): Cancel must be able to clear
+  // the visible message on close, which the hook's internal slot cannot do.
+  // asyncFn never throws.
+  const { run: handleConfirm, pending: busy } = usePendingAction(async () => {
     if (!password) return;
-    setBusy(true);
     setError(null);
     try {
       await onConfirmPassword(password);
@@ -49,10 +51,8 @@ export function DsarExportDialog({
       setPassword("");
     } catch (err) {
       setError((err as Error).message);
-    } finally {
-      setBusy(false);
     }
-  }
+  });
 
   if (!isOpen) {
     return (

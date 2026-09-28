@@ -5,6 +5,7 @@ import { useState } from "react";
 import { LockIcon, GlobeIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface CreateProjectStateProps {
   onBack: () => void;
@@ -14,7 +15,6 @@ interface CreateProjectStateProps {
 export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps) {
   const [projectName, setProjectName] = useState("");
   const [isPrivate, setIsPrivate] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   const slug = projectName
@@ -23,17 +23,27 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!slug) return;
-    setSubmitting(true);
+  // Canonical latch() site (#9053): onSubmit is the parent's fire-and-forget
+  // async handler — every success path ends in a setState that unmounts this
+  // component, so `pending` must NOT release on resolution; the unmount is
+  // the reset. A thrown onSubmit resolves unlatched → releases with the local
+  // error. A latch whose teardown never arrives still Sentry-reports at 30s
+  // (pending-watchdog-latch-held).
+  const { run, pending: submitting, latch } = usePendingAction(async () => {
     setError("");
     try {
       onSubmit(slug, isPrivate);
     } catch {
       setError("Something went wrong. Please try again.");
-      setSubmitting(false);
+      return;
     }
+    latch();
+  });
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!slug) return;
+    run();
   }
 
   return (

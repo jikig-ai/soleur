@@ -200,6 +200,20 @@ jobs:
             fi
           done
 
+          # --- (4b) the registry host's BOOT asset (#8714 5.3b-iii) --------------------
+          # The registry host boots zot from a release asset and refuses to start it unless the
+          # asset's sha256 is the T pinned in zot-registry.tf, so a deleted or replaced asset is a
+          # latent outage that surfaces only at the NEXT host replace. This names it on the cron,
+          # by running the SAME check the replace routes gate on (preflight P6, --check-asset).
+          set +e
+          ASSET_OUT="$(bash scripts/registry-replace-preflight.sh --check-asset 2>&1)"
+          AI_RC=$?
+          set -e
+          if [ "$AI_RC" -ne 0 ]; then
+            ASSET_WHY="$(printf '%s\n' "$ASSET_OUT" | sed -n 's/^::error::registry-replace-preflight: //p' | head -1)"
+            PROBLEMS="${PROBLEMS}- **the zot boot asset check (preflight P6) failed (rc=$AI_RC)**: ${ASSET_WHY:-$(printf '%s' "$ASSET_OUT" | tail -1)} Do NOT replace the registry host until this is resolved."$'\n'
+          fi
+
           # --- (5) the git-data rehearsal's ubuntu base pin (#7544) --------------------
           # WHY HERE AND NOT A FOLLOW-THROUGH PROBE. The follow-through substrate is a one-shot
           # CLOSE-CRITERIA tracker: exit 0 means "close the issue". On the first sweep after the
