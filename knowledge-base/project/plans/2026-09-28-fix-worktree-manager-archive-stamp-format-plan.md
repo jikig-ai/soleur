@@ -11,6 +11,49 @@ lane: cross-domain
 
 # machinery: align worktree-manager archive stamp to compact YYYYMMDD-HHMMSS
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28
+**Sections enhanced:** Research Insights (verification evidence), Proposed Solution (precedent
++ adjacent-divergence note), References
+**Research agents used:** sequential inline equivalents of repo-research-analyst,
+learnings-researcher, code-simplicity / correctness / test-design / pattern-recognition /
+security / architecture lenses (no subagent spawn surface in this harness — one-shot pipeline).
+
+### Key Improvements (deepen-pass verifications)
+
+1. **Two-producers claim verified repo-wide:** the only `mv`-into-`archive/` producers under
+   `plugins/soleur/` scripts and `.claude/hooks/` are `worktree-manager.sh:2485` (inside
+   `archive_kb_files`) and `worktree-manager.sh:3337` (spec-archive block) — plus `archive-kb.sh`
+   itself, already compact. No third producer exists.
+2. **"Nothing parses the stamp" held with a nuance:** literal full-path citations to existing
+   archive entries exist (`scripts/generate-article-30-register.sh:17`,
+   `scripts/followthroughs/plugin-delivery-canary-7490.sh:34`, docs/README references) — they
+   name existing entries verbatim, never parse the stamp shape, so the format change cannot
+   break them. `generate-kb-index` excludes `*/archive/*` by path segment regardless of stamp.
+3. **No SKILL.md documents the stamp format** (`git-worktree`/`archive-kb` SKILL.md say
+   "timestamp prefixes" format-agnostically) — no doc edits required; Files-to-Edit list is
+   complete.
+4. **PR/issue citations verified live:** #9091 OPEN; #9087 MERGED (`chore(archive-kb): archive
+   the #9035 spec dir`); #8493 MERGED (the #8490 fix); #8418 MERGED (`fix(8400,8401,8402)` —
+   provenance of the suite this plan extends). Rule id `cq-test-fixtures-synthesized-only`
+   verified ACTIVE in `AGENTS.md`.
+5. **Precedent-diff (Phase 4.4):** the stamp format's precedent is `archive-kb.sh:171`; the
+   test-extension's precedent is the suite's own A3 must-PASS arm + `assert_fixture_dir`/
+   `mk_repo`/`mk_merged_branch` helpers — no novel pattern.
+6. **Portability:** `date +%Y%m%d-%H%M%S` uses only POSIX format codes — identical on GNU and
+   BSD/macOS `date`; no `-d`, `stat -c`, or `readlink -f` class risk (Sharp Edges line 4).
+
+### New Considerations Discovered
+
+- **Adjacent divergence (recorded, not in scope):** `archive-kb.sh` moves artifacts via
+  `git mv` (SKILL.md: "uses `git mv` to preserve history") while `archive_kb_files` uses a bare
+  `mv`. Same class of producer-level divergence as this issue but orthogonal to the stamp
+  format; deliberately left out of scope — candidate for a future machinery issue if it recurs.
+- **Discoverability probe constraint:** the `discoverability_test.command` was rewritten during
+  plan review to satisfy preflight Check 10's byte-level shell-active reject (no `|`, `;`,
+  `&`, `<`, `>`, `$`, backtick) — the final form is a single `grep -c` producing a literal `2`.
+
 ## Overview
 
 Issue #9091 (surfaced during the PR #9087 review) records a cosmetic divergence in the
@@ -281,4 +324,4 @@ override did not fire; Product/UX Gate tier is NONE.
 - Related scope-out: #8496 (acknowledged above)
 - Reference producer: `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh:171`
 - Suite under extension: `plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh`
-  (plan provenance: `knowledge-base/project/plans/` #8400 work)
+  (provenance: #8400, fixed by PR #8418 — verified live)
