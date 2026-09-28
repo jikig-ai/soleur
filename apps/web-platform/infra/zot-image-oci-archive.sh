@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# zot-image-oci-archive.sh — build or verify the release asset the zot registry host boots from
+# (#8714 step 5.3b-iii; ADR-096 amendment 2026-09-28).
+#
+# WHY THIS EXISTS. The registry host cannot pull its own zot image from itself (bootstrap
+# paradox), and project-zot publishes images only on ghcr.io. So the exact upstream image — the
+# manifest pinned by digest D in zot-registry.tf `zot_image_amd64` and every blob it names — is
+# packaged as ONE tarball and published as a GitHub release asset. The host checks the tarball's
+# pinned sha256 (T), `docker load`s it and refuses to start zot unless the loaded image ID is the
+# upstream config digest C (classic image store) or D (containerd store).
+#
+# The tarball is simultaneously:
+#   - an OCI image layout (oci-layout, index.json -> D, blobs/sha256/*) — the containerd store's
+#     `docker load` path; index.json names a FULLY-QUALIFIED local ref, because the containerd
+#     store does not normalise a short name and `docker image inspect <short>` then fails after a
+#     successful load (measured 2026-09-28, docker 29.7.2);
+#   - a legacy docker-save archive (manifest.json -> config + layers) — the classic store's path.
+# Both views reference the SAME upstream blobs byte-for-byte; nothing is re-compressed.
+#
+# REPRODUCIBLE BY CONSTRUCTION: every member is written from the manifest, and the tar is
+# normalised (sorted, mtime 0, uid/gid 0, ustar). T is therefore a function of D and the GNU tar
+# version, which is why the publishing/rehearsal jobs pin their runner image.
+#
+# Usage:
+#   zot-image-oci-archive.sh build  <out.tar>   fetch D + blobs anonymously from ghcr.io, verify
+#                                               every digest, write the archive, print C= / T=
+#   zot-image-oci-archive.sh verify <in.tar>    content check of an existing archive against D:
+#                                               exact member set, every blob hashes to its name,
+#                                               index.json -> D, manifest.json agrees with D
+# Env: ZOT_REGISTRY_TF (default: zot-registry.tf beside this script).
+# Exit: 0 ok · 1 refused (a digest/content check failed) · 2 usage/config error.
+set -euo pipefail
+
+TF="${ZOT_REGISTRY_TF:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/zot-registry.tf}"
+ARCH=amd64
+LOCAL_REPO="localhost/soleur-mirror/zot-linux-${ARCH}"
+
+die() { echo "zot-image-oci-archive: $2" >&2; exit "$1"; }
+
+# One scratch dir per run, owned by the EXIT trap (a function-local would be unbound at exit).
+W=""
+trap '[[ -n "$W" ]] && rm -rf "$W" "$W.views"' EXIT
+
+# ── the upstream pin record: ghcr.io/<repo>:<version>@sha256:<D> ─────────────────────────────────
+[[ -r "$TF" ]] || die 2 "cannot read $TF"
+PIN="$(grep -oE "^[[:space:]]*zot_image_${ARCH}[[:space:]]*=[[:space:]]*\"ghcr\.io/[a-z0-9._/-]+/zot-linux-${ARCH}:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"[[:space:]]*$" "$TF" || true)"
+[[ "$(printf '%s' "$PIN" | grep -c . || true)" == 1 ]] \
+  || die 2 "expected exactly one digest-pinned zot_image_${ARCH} line in $TF"
+REF="$(printf '%s' "$PIN" | grep -oE 'ghcr\.io/[^"]+')" || die 2 "could not extract the ref from the zot_image_${ARCH} line"
+REPO="${REF#ghcr.io/}"; REPO="${REPO%%:*}"
+VERSION="${REF##*:v}"; VERSION="v${VERSION%%@*}"
+D="${REF##*@sha256:}"
+LOCAL_REF="${LOCAL_REPO}:${VERSION}"
+
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+# ustar + sorted + epoch mtime + root owner: the bytes depend only on the member contents.
+pack() { tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=ustar \
+  --mode='a=rX,u+w' -C "$1" -cf "$2" oci-layout index.json manifest.json blobs; }
+
+# write_views <dir> — index.json + manifest.json + oci-layout derived from blobs/sha256/<D>.
+write_views() {
+  local w="$1" m="$1/blobs/sha256/$D"
+  printf '{"imageLayoutVersion":"1.0.0"}' > "$w/oci-layout"
+  jq -cn --arg mt "$(jq -r .mediaType "$m")" --arg d "sha256:$D" --argjson sz "$(stat -c %s "$m")" \
+    --arg name "$LOCAL_REF" --arg tag "$VERSION" \
+    '{schemaVersion:2,mediaType:"application/vnd.oci.image.index.v1+json",
+      manifests:[{mediaType:$mt,digest:$d,size:$sz,
+        annotations:{"io.containerd.image.name":$name,"org.opencontainers.image.ref.name":$tag}}]}' > "$w/index.json"
+  jq -c --arg name "$LOCAL_REF" \
+    '[{Config:("blobs/sha256/"+(.config.digest|ltrimstr("sha256:"))),RepoTags:[$name],
+       Layers:[.layers[].digest|ltrimstr("sha256:")|"blobs/sha256/"+.]}]' "$m" > "$w/manifest.json"
+}
+
+# referenced <manifest-file> — every blob hex the manifest names (config first, layers in order).
+referenced() { jq -r '.config.digest, .layers[].digest' "$1" | sed 's/^sha256://'; }
+
+build() {
+  local out="$1" tok h w
+  W="$(mktemp -d)"; w="$W"
+  mkdir -p "$w/blobs/sha256"
+  tok="$(curl -fsS --proto =https --retry 3 "https://ghcr.io/token?scope=repository:${REPO}:pull" | jq -er .token)" \
+    || die 1 "could not obtain an anonymous ghcr.io pull token for ${REPO}"
+  curl -fsSL --proto =https --proto-redir =https --retry 3 -H "Authorization: Bearer ${tok}" \
+    -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+    "https://ghcr.io/v2/${REPO}/manifests/sha256:${D}" > "$w/blobs/sha256/$D" \
+    || die 1 "could not fetch manifest sha256:${D}"
+  [[ "$(sha "$w/blobs/sha256/$D")" == "$D" ]] || die 1 "manifest bytes do not hash to the pinned D sha256:${D}"
+  for h in $(referenced "$w/blobs/sha256/$D"); do
+    [[ "$h" =~ ^[0-9a-f]{64}$ ]] || die 1 "manifest names a malformed digest: $h"
+    curl -fsSL --proto =https --proto-redir =https --retry 3 -H "Authorization: Bearer ${tok}" \
+      "https://ghcr.io/v2/${REPO}/blobs/sha256:${h}" > "$w/blobs/sha256/$h" || die 1 "could not fetch blob sha256:${h}"
+    [[ "$(sha "$w/blobs/sha256/$h")" == "$h" ]] || die 1 "blob bytes do not hash to sha256:${h}"
+  done
+  write_views "$w"
+  pack "$w" "$out.partial" && mv -f "$out.partial" "$out"
+  echo "D=$D"
+  echo "C=$(jq -r .config.digest "$w/blobs/sha256/$D" | sed 's/^sha256://')"
+  echo "T=$(sha "$out")"
+  echo "BYTES=$(stat -c %s "$out")"
+  echo "LOCAL_REF=$LOCAL_REF"
+}
+
+verify() {
+  local in="$1" w h want got
+  [[ -r "$in" ]] || die 2 "cannot read $in"
+  W="$(mktemp -d)"; w="$W"
+  # Member names are checked BEFORE extraction: only the layout's own paths may appear.
+  got="$(tar -tf "$in" | LC_ALL=C sort)" || die 1 "not a readable tar: $in"
+  printf '%s\n' "$got" | grep -qvE '^(oci-layout|index\.json|manifest\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' \
+    && die 1 "archive carries a member outside the OCI layout"
+  tar -xf "$in" -C "$w" --no-same-owner
+  [[ -f "$w/blobs/sha256/$D" ]] || die 1 "archive does not carry the pinned manifest sha256:${D}"
+  [[ "$(sha "$w/blobs/sha256/$D")" == "$D" ]] || die 1 "manifest blob does not hash to D"
+  want="$( { printf '%s\n' blobs/ blobs/sha256/ index.json manifest.json oci-layout "blobs/sha256/$D"
+            referenced "$w/blobs/sha256/$D" | sed 's|^|blobs/sha256/|'; } | LC_ALL=C sort -u)"
+  [[ "$got" == "$want" ]] || die 1 "archive member set is not exactly the layout for D (extra or missing members)"
+  for h in $(referenced "$w/blobs/sha256/$D"); do
+    [[ "$(sha "$w/blobs/sha256/$h")" == "$h" ]] || die 1 "blob does not hash to its name: sha256:${h}"
+  done
+  # The two load-path views must be exactly what write_views derives from D.
+  mkdir -p "$w.views/blobs/sha256"; cp "$w/blobs/sha256/$D" "$w.views/blobs/sha256/$D"
+  write_views "$w.views"
+  for f in oci-layout index.json manifest.json; do
+    cmp -s "$w/$f" "$w.views/$f" || { rm -rf "$w.views"; die 1 "$f does not match the view derived from D"; }
+  done
+  rm -rf "$w.views"
+  echo "verified D=$D LOCAL_REF=$LOCAL_REF T=$(sha "$in")"
+}
+
+case "${1:-}" in
+  build)  [[ $# -eq 2 ]] || die 2 "usage: $0 build <out.tar>";  build "$2" ;;
+  verify) [[ $# -eq 2 ]] || die 2 "usage: $0 verify <in.tar>"; verify "$2" ;;
+  *) die 2 "usage: $0 {build <out.tar>|verify <in.tar>}" ;;
+esac
