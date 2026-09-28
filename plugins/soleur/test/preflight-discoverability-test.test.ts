@@ -2761,7 +2761,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // NO SUBSTITUTE: the SOLEUR_WORKSPACES_LUKS_DEADMAN markers and the nightly OK row share web-1's
   // luks-monitor journald tag, which lands only in the Logs warehouse; it has no unauthenticated
   // read path. Genuine.
-  // #7262/#7270 (2026-09-28): +1 (34 -> 35, after #9045 took 33 -> 34) for `2026-09-28-fix-zot-probe-self-diagnosis-plan.md`.
+  // #7262/#7270 (2026-09-28): +1 (34 -> 35, after #9045 took 33 -> 34) for `2026-09-28-fix-zot-probe-self-diagnosis-plan.md` (archived under plans/archive/).
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
   // (a double-quoted scalar). TRUTH: the probe (`scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK`)
   // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:

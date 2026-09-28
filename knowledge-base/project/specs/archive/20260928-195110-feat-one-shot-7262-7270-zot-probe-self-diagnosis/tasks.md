@@ -1,6 +1,6 @@
 ---
 lane: single-domain
-plan: knowledge-base/project/plans/2026-09-28-fix-zot-probe-self-diagnosis-plan.md
+plan: knowledge-base/project/plans/archive/20260928-195110-2026-09-28-fix-zot-probe-self-diagnosis-plan.md
 ---
 
 # Tasks: zot probe self-diagnosis (#7262, #7270)
