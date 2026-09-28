@@ -62,7 +62,12 @@ TGT_REAL="$(readlink -f -- "$TGT_BLK")"
 TGT_KNAME="$(basename "$TGT_REAL")"
 
 # --- the stub world, sourced INSIDE each case after the script (a file, so no quoting contortions) ---
-WIPE_STUBS="$RUN_SCRATCH/wipe-stubs.sh"
+# Every path below hangs off ONE absolute mktemp root. The harness owns the EXIT trap (this suite must
+# not REPLACE it, #6713), so its trap FUNCTION is extended to remove this root too.
+WIPE_SCRATCH="$(mktemp -d -t wl-wipe.XXXXXXXX)" || { printf 'INSTRUMENT FAIL - mktemp -d failed\n'; exit 2; }
+eval "_wl_harness_cleanup_scratch() $(declare -f cleanup_scratch | tail -n +2)"
+cleanup_scratch() { rm -rf "$WIPE_SCRATCH"; _wl_harness_cleanup_scratch; }
+WIPE_STUBS="$WIPE_SCRATCH/wipe-stubs.sh"
 cat > "$WIPE_STUBS" <<'STUBS'
 # shellcheck shell=bash
 rec() { printf '%s\n' "$*" >> "$CALLS"; }
@@ -158,13 +163,12 @@ doppler() {
     *) unk doppler "$*"; return 64 ;;
   esac
 }
-aws() {
+aws() {   # only a GET is legal in this mode: s3api get-object --bucket B --key K --endpoint-url E OUTFILE
   rec "aws $*"
-  [ "${1:-} ${2:-}" = "s3 cp" ] || { unk aws "${1:-} ${2:-}"; return 64; }
-  case "${3:-}" in s3://*) ;; *) unk aws "upload-direction ${3:-}"; return 64 ;; esac
-  [ "${5:-}" = --endpoint-url ] || { unk aws "${5:-}"; return 64; }
+  [ "${1:-} ${2:-}" = "s3api get-object" ] || { unk aws "${1:-} ${2:-}"; return 64; }
+  [ "${3:-}" = --bucket ] && [ "${5:-}" = --key ] && [ "${7:-}" = --endpoint-url ] || { unk aws "$*"; return 64; }
   [ "${W_HDR_ABSENT:-0}" = 1 ] && return 1
-  printf '%s' "${W_DL_CONTENT-HDR-v1}" > "$4"; return 0
+  printf '%s' "${W_DL_CONTENT-HDR-v1}" > "$9"; return 0
 }
 stat() {
   rec "stat $*"
@@ -308,7 +312,7 @@ What=/dev/mapper/workspaces}"; return 0 ;;
 STUBS
 
 # --- PATH tripwires + the allowlist -------------------------------------------------------------
-TRIP_DIR="$RUN_SCRATCH/trip"; ALLOW_DIR="$RUN_SCRATCH/allow"
+TRIP_DIR="$WIPE_SCRATCH/trip"; ALLOW_DIR="$WIPE_SCRATCH/allow"
 mkdir -p "$TRIP_DIR" "$ALLOW_DIR"
 for t in blkdiscard dd doppler aws; do
   printf '#!/usr/bin/env bash\nprintf "TRIPWIRE %%s %%s\\n" %s "$*" >> "${CALLS:-/dev/null}"\nexit 64\n' "$t" > "$TRIP_DIR/$t"
@@ -323,12 +327,13 @@ done
 #   SEED_STATE='K=V;K=V'  written to the state file BEFORE the run (default: CANARY_OK=1:u-live-1).
 #   W_HOLDERS='dm-3'      holder entries under the target's sysfs holders/ dir.
 #   UNSET_DRY_RUN=1       run with DRY_RUN absent from the environment (the script default applies).
-# Sets CASE_RC, CASE_OUT, CALLS, MARKER_LOG, STATE, WCASE.
+#   SEED_HDRS=1           pre-create the two fixed W5 header paths (as a mid-W5 abort would leave them).
+# Sets CASE_RC, CASE_OUT, CALLS, MARKER_LOG, STATE.
 run_wipe() {
   local invocation="$1"; shift
   CASE_N=$((CASE_N + 1))
-  local d="$RUN_SCRATCH/wipe-$CASE_N" k h seeded=0 unset_dry=0
-  WCASE="$d"; CALLS="$d/calls"; MARKER_LOG="$d/marker"; STATE="$d/state"
+  local d="$WIPE_SCRATCH/case-$CASE_N" k h seeded=0 unset_dry=0
+  CALLS="$d/calls"; MARKER_LOG="$d/marker"; STATE="$d/state"
   mkdir -p "$STATE" "$d/mnt/workspaces" "$d/staging" "$d/sysfs/$TGT_KNAME/holders" "$d/sysfs/$TGT_KNAME/queue" "$d/dev/disk/by-id"
   : > "$CALLS"; : > "$MARKER_LOG"
   printf '33554432\n' > "$d/sysfs/$TGT_KNAME/queue/write_zeroes_max_bytes"
@@ -341,6 +346,7 @@ run_wipe() {
       SEED_STATE=*) seeded=1; [ -n "${k#SEED_STATE=}" ] && printf '%s\n' "${k#SEED_STATE=}" | tr ';' '\n' > "$STATE/state" ;;
       W_HOLDERS=*) for h in ${k#W_HOLDERS=}; do mkdir -p "$d/sysfs/$TGT_KNAME/holders/$h"; done ;;
       UNSET_DRY_RUN=1) unset_dry=1 ;;
+      SEED_HDRS=1) printf 'hdr' > "$STATE/wipe-header-download.img"; printf 'hdr' > "$STATE/wipe-header-fresh.img" ;;
       *) envs+=("$k") ;;
     esac
   done
@@ -452,17 +458,17 @@ fi
 # W3–W9 measured (a rehearsal that stopped at W2 must not read as green — Guard 2 row 6).
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1
 P2_ROW="$(wrow rehearsal_ok first_wipe)"
-p2_fields=1
+p2_fields=1; p2_missing=""
 for f in "uuid=$UUID_LIVE" "hdr_sha256=" "hdr_bytes=" "label=workspaces_plain" "dependents=0" "holders=0" "device_units=2" \
   "discard_gran=4096" "write_zeroes_max=33554432" "scheduler=mq-deadline" "magic=53ef" "size=$SIZE"; do
-  [[ "$P2_ROW" == *" $f"* ]] || p2_fields=0
+  [[ "$P2_ROW" == *" $f"* ]] || { p2_fields=0; p2_missing="$p2_missing $f"; }
 done
 if ran && [ -n "$P2_ROW" ] && [ "$p2_fields" = 1 ] && [ "$(zero_calls)" -eq 0 ] && nounk \
   && ! state_has PLAINTEXT_WIPE_BEGUN && ! state_has PLAINTEXT_WIPED && hdrs_gone \
   && [ "$(nrows begun)" -eq 0 ] && [ "$(nrows wiped)" -eq 0 ]; then
   ok "P2 rehearsal: one rehearsal_ok arm=first_wipe row carrying the W3–W9 fields; no blkdiscard, no PLAINTEXT_* marker, both header copies shredded"
 else
-  no "P2 rehearsal wrong (rc=$CASE_RC zero=$(zero_calls) fields=$p2_fields unk=[$(unkdump)]) row=[${P2_ROW:0:300}] ${CASE_OUT:0:200}"
+  no "P2 rehearsal wrong (rc=$CASE_RC zero=$(zero_calls) missing=[$p2_missing] unk=[$(unkdump)]) ${CASE_OUT:0:200}"
 fi
 # P2b — Guard 2 H1: the same with DRY_RUN absent from the environment (the script default, 1).
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' UNSET_DRY_RUN=1
@@ -579,8 +585,8 @@ else
   no "W5 reused-helper refusal mis-recorded (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:160}"
 fi
 # cleanup() sweeps the two fixed header paths on ANY wipe abort (belt to the explicit shreds).
-run_wipe ': > "$STATE_DIR/wipe-header-download.img"; : > "$STATE_DIR/wipe-header-fresh.img"; trap cleanup EXIT; die "synthetic abort mid-W5"'
-died && hdrs_gone && markerF "outcome=wipe_aborted mode=wipe" \
+run_wipe '[ -e "$STATE_DIR/wipe-header-download.img" ] && [ -e "$STATE_DIR/wipe-header-fresh.img" ] && echo HDRS_SEEDED; trap cleanup EXIT; die "synthetic abort mid-W5"' SEED_HDRS=1
+died && outF HDRS_SEEDED && hdrs_gone && markerF "outcome=wipe_aborted mode=wipe" \
   && ok "W5 cleanup() sweeps both fixed header paths on a wipe abort" \
   || no "W5 cleanup() left a header copy on the root disk (rc=$CASE_RC)"
 
@@ -681,7 +687,8 @@ fi
 WIPE_BLOCK="$(awk '/^if \[ "\$CONFIRM_WIPE" = "1" \]; then$/{f=1} f{print} f && /^fi$/{exit}' "$CUTOVER")"
 WIPE_FN="$(awk '/^wipe_plaintext\(\) \{$/{f=1} f{print} f && /^\}$/{exit}' "$CUTOVER")"
 if [ -n "$WIPE_BLOCK" ] && grep -qE '^[[:space:]]*wipe_plaintext$' <<<"$WIPE_BLOCK" \
-  && ! grep -qE '(^|[;[:space:]])(DRY_RUN|CANARY_OK|FREEZE_HELD|FLIP_DONE|DEADMAN_ARMED)=' <<<"$WIPE_BLOCK$WIPE_FN"; then
+  && ! grep -qE '(^|[;&|[:space:]])(DRY_RUN|CANARY_OK|FREEZE_HELD|FLIP_DONE|DEADMAN_ARMED)=' <<<"$(sed -E 's/"[^"]*"//g; s/^[[:space:]]*#.*$//' <<<"$WIPE_BLOCK
+$WIPE_FN")"; then
   ok "S1 (Guard 2 #2) neither the mode block nor wipe_plaintext assigns DRY_RUN or a cleanup() rollback global (CANARY_OK/FREEZE_HELD/FLIP_DONE/DEADMAN_ARMED)"
 else
   no "S1 the mode block/function assigns DRY_RUN or a rollback global, or could not be extracted"
@@ -725,7 +732,7 @@ disc_n="$(grep -c -e 'SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks' "$CUT
   || no "S7 WIPE row prefix count=$disc_n (want 1)"
 
 # --- reason-slug census: every refusal the function raises has a RED row in THIS file ---------------
-SLUGS="$(grep -oE '_wipe_refuse[[:space:]]+wipe_[a-z_]+' "$CUTOVER" | awk '{print $2}' | sort -u)"
+SLUGS="$(grep -oE '_wipe_refuse[[:space:]]+wipe_[a-z0-9_]+' "$CUTOVER" | awk '{print $2}' | sort -u)"
 slug_n="$(grep -c . <<<"$SLUGS" || true)"
 missing_rows=""
 while IFS= read -r s; do
@@ -749,7 +756,7 @@ if [ -z "$PLAN" ]; then
   no "C3 the plan file could not be found under knowledge-base/project/plans — the observability token census did not run"
 else
   OBS="$(awk '/^## Observability$/{f=1; next} /^## /{f=0} f' "$PLAN")"
-  toks="$( { grep -oE '(reason|arm|result|outcome)=[a-z_|]+' <<<"$OBS" | cut -d= -f2 | tr '|' '\n'; grep -oE '\bwipe_[a-z_]+' <<<"$OBS"; } | grep -E '^[a-z_]+$' | sort -u)"
+  toks="$( { grep -oE '(reason|arm|result|outcome)=[a-z_|]+' <<<"$OBS" | cut -d= -f2 | tr '|' '\n'; grep -oE '\bwipe_[a-z0-9_]+' <<<"$OBS"; } | grep -E '^[a-z0-9_]+$' | sort -u)"
   tok_missing=""
   while IFS= read -r t; do [ -n "$t" ] || continue; grep -qE "(^|[^a-z_])${t}([^a-z_]|\$)" "$CUTOVER" || tok_missing="$tok_missing $t"; done <<<"$toks"
   [ -n "$toks" ] && [ -z "$tok_missing" ] \

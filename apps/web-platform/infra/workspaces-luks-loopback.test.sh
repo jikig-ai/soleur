@@ -1534,7 +1534,7 @@ run_wipe_real() {
       _wipe_dev_path() { printf "%s" "$WP_DEV"; }
       read_key() { cat "$KEYFILE"; }
       load_escrow_creds() { HEADER_BACKUP_BUCKET=wl-loopback; HEADER_R2_ENDPOINT=https://r2.invalid; }
-      aws() { [ "$1 $2" = "s3 cp" ] || return 64; cp "$WP_HDR" "$4"; }
+      aws() { [ "$1 $2" = "s3api get-object" ] || return 64; cat "$WP_HDR" > "$9"; }
       udevadm() {
         if [ "${2:-}" = --query=property ]; then printf "ID_SERIAL=0HC_Volume_%s\n" "$WP_ID"; return 0; fi
         command udevadm "$@"
