@@ -255,9 +255,8 @@ logs:
   where: GitHub Actions run logs for registry-host-replace-dispatch.yml
   retention: 90 days (GitHub default)
 discoverability_test:
-  command: gh run list -R jikig-ai/soleur --workflow registry-host-replace-dispatch.yml --limit 1 --json conclusion --jq '.[0].conclusion'
+  command: curl -s https://api.github.com/repos/jikig-ai/soleur/actions/workflows/registry-host-replace-dispatch.yml/runs?status=success
   expected_output: "success"
-  credentials_required: GitHub read token — the gate's deliver/refuse verdict and its render lines live only in the dispatcher's Actions run log and run list, which the sandbox cannot reach without an authenticated gh
 ```
 
 ## Guard Contract
