@@ -229,6 +229,19 @@ to deploy is to mint a new version.
 > 6 datacenters. Web-1 still cannot be redeployed. See
 > [ADR-119's 2026-09-27 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-27-the-monitor-units-and-the-dsn-line-have-a-terraform-owner-8706).
 
+> **Re-examined 2026-09-28 (#9045): the trigger fired again, and the exception STANDS.** #9045 adds
+> a read-only forensic step to `terraform_data.luks_monitor_install`, and its command list is folded
+> into `triggers_replace`. The merge therefore re-fires the installer once on web-1, in place:
+>
+> - the same files are redelivered byte-identical;
+> - the DSN line is rewritten identically;
+> - the probe is kicked once more.
+>
+> The forensic step itself writes nothing. Measured with `GET /v1/datacenters`
+> `.server_types.available` at 2026-09-28T08:05:28Z: `cx33` (id 115) is available in 0 of the 6
+> datacenters. Web-1 still cannot be redeployed. See
+> [ADR-119's 2026-09-28 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-28-the-dead-man-guards-the-freeze-window-only-9045).
+
 ## Rejected alternatives
 
 **Convert the Access tokens from Terraform `output`s to `doppler_secret` resources.** This was the
