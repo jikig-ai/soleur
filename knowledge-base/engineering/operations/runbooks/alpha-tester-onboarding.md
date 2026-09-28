@@ -430,8 +430,10 @@ The four remaining items are operator-executable today on this runbook alone; no
   growth from the git history + self-reported usage, marked as such — it decays weekly) is
   tracked on #8981.
 - [x] **Send the terms re-notification** (#7459) — **sent 2026-09-27** by the operator on their
-  personal channel (drafted notice on #7459; issue closed). Terms cell → `sent-awaiting-reply`;
-  on reply → `agreed`; dated note if no reply.
+  personal channel (drafted notice on #7459; issue closed). On 2026-09-28 the operator moved the
+  acceptance channel: no DM reply is awaited — terms coverage lands via the platform
+  `accept-terms` flow at the hosted webapp onboarding on 2026-10-02. The cell stays
+  `sent-awaiting-reply` until that acceptance, then → `agreed`.
 - [ ] **Create the beta-CRM contact** (owner-authenticated, `/dashboard/crm`) — the write gate is
   deliberate; do not script around it. Verified absent 2026-09-26 (`beta_contacts` company
   match: 0 rows).
@@ -443,7 +445,9 @@ The four remaining items are operator-executable today on this runbook alone; no
 - [ ] **Retro problem interview** with tester #1 — flagged post-exposure; never pool with #1440.
   Invite draft posted on #8981; **meeting agreed for Friday 2026-10-02** — run the #1443
   exit-interview instrument on the call (domain leaders used, check-in effect, WTP, testimonial
-  opt-in).
+  opt-in). The same session doubles as the hosted webapp onboarding (signup + `accept-terms`
+  covers the open terms item); repo-connect stays gated on the Art. 28(3) instrument (#7468) —
+  Posture B trigger 1 applies to tester #1 exactly as to tester #2.
 
 ## Recruitment mix tally
 
@@ -452,8 +456,8 @@ Update this table at Step 1 of every onboarding. `cohort_key` and `nudged_at` ar
 
 | Tester | Company | Claude Code user? | Surface | Onboarded | Terms | cohort_key | nudged_at |
 |---|---|---|---|---|---|---|---|
-| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `sent-awaiting-reply` (re-notify covering TC 2.5.0→2.5.1 sent 2026-09-27 — #7459 closed; → `agreed` on reply, dated note if none) | — (CLI; no hosted account) | — |
-| #2 | network-sealant | pending (screening question) | Hosted platform | pending | — (platform-mediated via accept-terms at signup; Step-2 notice paragraph still owed — it is the Art. 14 CRM notice the platform flow does not give) | — (pending signup) | — |
+| #1 | Skouer | Yes | Self-hosted CLI → Hosted platform (webapp onboarding 2026-10-02) | 2026-08-06 | `sent-awaiting-reply` (acceptance now lands via platform `accept-terms` at the hosted onboarding — the 2026-09-27 DM re-notify covering TC 2.5.0→2.5.1 is superseded; #7459 closed; → `agreed` on acceptance) | — (hosted account lands 2026-10-02; key then) | — |
+| #2 | network-sealant | No (Cursor + Perplexity — screening answered 2026-09-28) | Hosted platform | pending | — (platform-mediated via accept-terms at signup; Step-2 notice paragraph still owed — it is the Art. 14 CRM notice the platform flow does not give) | — (pending signup) | — |
 
 **`Terms` values:** `agreed` (tester replied), `sent-awaiting-reply`, `superseded-resend-required` (a `TC_VERSION` bump landed after the terms were sent; a fresh notice is owed), or `not-required`. Update at
 Step 1. A tester at `sent-awaiting-reply` may still be worked with; a tester at blank has not been
@@ -461,7 +465,7 @@ sent anything and that is the state this column exists to make visible.
 
 | | Claude Code users | Non-Claude-Code users |
 |---|---|---|
-| **Recorded** | 1 | 0 |
+| **Recorded** | 1 | 1 |
 | **Ceiling / floor** | ≤ 7 | ≥ 3 |
 
 **Before recruiting tester #8:** confirm the ≥3 non-Claude-Code floor is still reachable. It
