@@ -759,3 +759,15 @@ new processor.
   - `publish` only writes a release;
   - the cosign flip is a behavior change on an already-live path, delivered and verified by
     AC-A6.
+
+## Operator Holds
+
+These come from the orchestrator's instruction for this work. They gate merging, not implementation.
+
+- **H1:** do not merge PR 2a or PR 2b until PR #9071 (#8714 step 5.4) is `MERGED`.
+  - Check with `gh pr view 9071 --json state`.
+  - Once it has merged, rebase onto `origin/main`; do not merge `main` in.
+- **H2:** do not merge PR 2b while any `apply-web-platform-infra.yml` run is queued or in progress.
+  - Check with `gh run list --workflow apply-web-platform-infra.yml --status in_progress` and again with `--status queued`.
+- **H3:** if the registry replace waits on an environment approval, do not approve it. Report the run URL to the orchestrator and stop.
+- Never admin-merge.

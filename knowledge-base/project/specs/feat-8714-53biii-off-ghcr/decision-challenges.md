@@ -25,3 +25,11 @@ Taste findings the plan did NOT apply. Each is recorded for the operator.
 6. **Spec-flow/Kieran: add a standing alert on `ghcr_blocked != 1`.** Not applied. Nothing on the
    host needs ghcr.io, so the deny is proof, not protection. It persists through the cloud hosts
    template.
+
+> **Correction 2026-09-28 (PR 2a work):** item 5's premise was wrong. Immutable releases are
+> ALREADY on for this repo (`gh api repos/jikig-ai/soleur/immutable-releases` → `{"enabled":true}`).
+> Two consequences:
+> - a published `zot-image-*` asset cannot be replaced, only deleted with its release;
+> - `publish` goes through a draft (create `--draft`, upload, then publish).
+>
+> The residual risk (deletion) and the mitigations above still hold.
