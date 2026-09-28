@@ -295,9 +295,17 @@ expect "C0b a function registered after 09-15 → still read, but reported UNMEA
 expect "C0b ...with the registry line" 2 "registry: 1 function(s) registered after 09-15"
 default_fixtures; registry_fixture 71 "" '["b0000000-0000-4000-8000-000000000001"]'; NOW=$SOAK_END_EPOCH run C0b2
 expect "C0b2 ...and at SOAK_END the verdict is QUALIFIED, not blocked" 5 "SOAK CLEAN outside the explained bucket (QUALIFIED: 1 unmeasured function(s)"
-default_fixtures; registry_fixture 69 "$MINTER"; run C0c
-expect "C0c a population id missing from the registry → registry_drift missing_from_registry=1" 3 "reason=registry_drift missing_from_registry=1"
+default_fixtures; registry_fixture 69 "$CREDIT"; run C0c
+expect "C0c a (non-retired) population id missing from the registry → registry_drift missing_from_registry=1" 3 "reason=registry_drift missing_from_registry=1"
 [[ "$(slice_calls)" == 0 ]] && pass "C0c ...and no slice request was made" || fail "C0c slices were requested after a drifted registry"
+# #8714: the minter is RETIRED (RETIRED_IDS) — deleted on purpose, so its absence is not drift, and
+# its in-window runs are still queried because it stays in the population.
+default_fixtures; registry_fixture 69 "$MINTER"; run C0e
+expect "C0e the RETIRED minter id absent from the registry → not drift, the slices are queried (rc 2)" 2 "NOT YET: interim reading at day"
+expect "C0e ...and the retired id's absence is not counted as an unmeasured function" 2 "unmeasured_fns=0"
+grep -q "$MINTER" "$WORK/slice-ids.log" && pass "C0e ...and the retired id is still requested in a slice" || fail "C0e the retired id was dropped from the slices"
+default_fixtures; registry_fixture 70 "$MINTER" '["b0000000-0000-4000-8000-000000000001"]'; run C0f
+expect "C0f retired id absent AND one new function → exactly that one is UNMEASURED" 2 "unmeasured_fns=1"
 default_fixtures; echo 500 > "$WORK/registry.code"; run C0d
 expect "C0d registry HTTP 500 → registry_unreadable" 3 "reason=registry_unreadable"
 [[ "$(slice_calls)" == 0 ]] && pass "C0d ...and no slice request was made" || fail "C0d slices were requested after an unreadable registry"
@@ -561,7 +569,7 @@ fi
 # FLOOR is bound IMMEDIATELY above the floor it feeds: guard-vacuity-floor.test.sh slices the
 # floor block backward over contiguous simple assignments only, so a non-assignment line between
 # the binding and the `if` leaves the mutant unbound and the floor scored "not constructible".
-FLOOR=151
+FLOOR=155
 if [[ "$passes" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
   exit 1

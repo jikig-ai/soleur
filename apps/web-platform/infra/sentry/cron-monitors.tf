@@ -1146,12 +1146,9 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
   timezone                = "UTC"
 }
 
-# #6031 (ADR-088) — the scheduled-ghcr-token-minter monitor was REMOVED: the minter
-# cron is disabled (ADR-088 arm-b — App installation tokens cannot pull the private
-# repo-linked GHCR packages; pending GitHub-support confirmation). The handler
-# no-ops under Doppler `GHCR_MINTER_DISABLED=true`, so there is nothing to monitor.
-# Its slug is carried in KNOWN_UNMONITORED_SLUGS (function-registry-count.test.ts).
-# Restore this block when the cron is re-enabled.
+# #6031 (ADR-088) — the scheduled-ghcr-token-minter monitor was REMOVED when the minter was
+# disabled (App installation tokens cannot pull the private repo-linked GHCR packages). The
+# minter itself was deleted by #8714 (ADR-096 task 5.4); there is nothing to restore.
 
 # Liveness for the production version-drift alerter (#7091):
 # .github/workflows/scheduled-prod-version-drift.yml. This is the watch-the-watcher layer —

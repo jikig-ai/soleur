@@ -714,23 +714,6 @@ variable "github_infra_app_private_key" {
   default     = ""
 }
 
-# #6005: scoped read:packages credential (machine account) for the now-PRIVATE GHCR
-# packages. NO default (hr-tf-variable-no-operator-mint-default) — the operator mints
-# it and writes the value into Doppler `prd_terraform` (the TF_VAR source) BEFORE this
-# file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
-# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-087).
-variable "ghcr_read_user" {
-  description = "GitHub login that owns the scoped read:packages PAT (the docker login -u value). Measured 2026-09-24: the operator\u0027s own org-admin account, not a machine account (ADR-096 amendment 2026-09-24). Published to Doppler soleur/prd as GHCR_READ_USER. No host consumer since #8036 item 1d (2026-09-24): no fresh-boot template receives it. Remaining consumer: doppler_secret.ghcr_read_user, retired with this variable by ADR-096 task 5.4. NO default."
-  type        = string
-  sensitive   = true
-}
-
-variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages. Published to Doppler soleur/prd as GHCR_READ_TOKEN. The value is revoked (401, ADR-096 amendment 2026-07-30; 5.5 observed 2026-09-24). NO HOST CONSUMER since #8036 item 1d (2026-09-24): the three fresh-boot login sites (cloud-init.yml, soleur-host-bootstrap.sh, cloud-init-inngest.yml) are deleted and no templatefile call passes this variable into any host user_data. The ci-deploy.sh consumer was retired earlier, in #8036 item 1c (2026-09-23). Remaining consumer: doppler_secret.ghcr_read_token (ghcr-read-credential.tf), retired with this variable by ADR-096 task 5.4 (#8714), plus the dummy values in tests/web-hosts-eu-pin.tftest.hcl. Until then the revoked value stays in Doppler soleur/prd, which ci-deploy.sh downloads into the app container env; do not re-enable the minter before 5.4. NO default."
-  type        = string
-  sensitive   = true
-}
-
 # #6178 — post-cutover web-host scheduling toggle. When true, a freshly-CREATED web
 # host bootstraps + enables the co-located inngest-server.service (pre-cutover
 # behavior). Default false: scheduling lives on the dedicated soleur-inngest host
