@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import {
   UNTITLED_FALLBACK,
   WORKSPACE_NAME_MAX,
@@ -24,17 +25,18 @@ export function RenameWorkspaceAction({
   const [name, setName] = useState(organizationName ?? "");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const save = useCallback(async () => {
+  // The validation early-return stays inside asyncFn: an invalid draft
+  // resolves immediately — never starts a fetch, releases normally.
+  // asyncFn never throws: failures land on the local `error` surface.
+  const { run: save, pending: submitting } = usePendingAction(async () => {
     const validated = validateWorkspaceName(draft);
     if (!validated.ok) {
       setError(`Workspace name must be 1–${WORKSPACE_NAME_MAX} characters.`);
       return;
     }
     const trimmed = validated.trimmed;
-    setSubmitting(true);
     setError(null);
     try {
       const res = await fetch("/api/workspace/rename", {
@@ -44,17 +46,14 @@ export function RenameWorkspaceAction({
       });
       if (!res.ok) {
         setError("Couldn't rename workspace. Please try again.");
-        setSubmitting(false);
         return;
       }
       setName(trimmed);
       setEditing(false);
-      setSubmitting(false);
     } catch {
       setError("Couldn't rename workspace. Please try again.");
-      setSubmitting(false);
     }
-  }, [draft, organizationId]);
+  });
 
   return (
     <div className="mb-6 flex flex-col gap-2">
