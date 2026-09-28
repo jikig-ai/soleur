@@ -25,7 +25,7 @@ Three existed in production. The divergence was recorded as a *rationale* in
 the revert machinery — it sat visible for seven months as a comment, not a
 bug.
 
-## Solution (ADR-257)
+## Solution (ADR-258)
 
 One chokepoint — `reap_archive_persist` — routes every reap archive write
 through per-file tracked-ness probing (`ls-files` on worktrees, `ls-tree HEAD`

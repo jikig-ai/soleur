@@ -1,5 +1,5 @@
 ---
-title: "ADR-257: Reaper archive writes persist via the checkout's commit path; deferred on non-committable checkouts"
+title: "ADR-258: Reaper archive writes persist via the checkout's commit path; deferred on non-committable checkouts"
 status: Accepted
 date: 2026-09-28
 supersedes: []
@@ -7,7 +7,7 @@ amends: []
 tags: [git-worktree, reaper, persistence, kb-archival, machinery]
 ---
 
-# ADR-257: Reaper archive writes persist via the checkout's commit path; deferred on non-committable checkouts
+# ADR-258: Reaper archive writes persist via the checkout's commit path; deferred on non-committable checkouts
 
 ## Status
 

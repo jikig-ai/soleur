@@ -122,7 +122,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     bases-empty). NOT paged — every skip reason is either the safe outcome
 //     (lock contention, missing flock) or an intentional disarm (empty bases);
 //     a sweep that does nothing is correct-by-design on a clean host.
-// MIRRORED-NOT-PAGED (#9127, ADR-257): the SOLEUR_REAP_ARCHIVE_* family —
+// MIRRORED-NOT-PAGED (#9127, ADR-258): the SOLEUR_REAP_ARCHIVE_* family —
 // COMMITTED / STAGED / DEFERRED — emitted by worktree-manager.sh's reap loop at
 // the archive-persistence decision point. They report WHICH arm ran for a
 // reap-produced KB archive move: committed via the checkout's own commit path,

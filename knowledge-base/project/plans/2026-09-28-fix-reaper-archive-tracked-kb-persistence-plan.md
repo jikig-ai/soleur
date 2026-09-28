@@ -25,7 +25,7 @@ and the load-bearing mechanism probe were executed directly rather than claimed 
 
 ### Key Improvements
 
-1. **ADR ordinal corrected to ADR-257** — cross-ref scan found ADR-256 already claimed on
+1. **ADR ordinal corrected to ADR-258** — cross-ref scan found ADR-256 already claimed on
    `origin/feat-one-shot-9089-filing-gate-shell-tokenizer`; main-only scan (max ADR-255) would
    have collided. Propagated to plan §Architecture Decision, AC8, and tasks.md.
 2. **Scoped-commit mechanism verified live** — a throwaway repo exercise of
@@ -258,10 +258,10 @@ where a commit path exists. The test "would a competent engineer reading only th
 be misled?" answers yes: ADR-195/ADR-250 cover reclamation *ownership* for processes/scratch, not
 KB-artifact persistence across checkout classes.
 
-- **ADR:** create provisional **ADR-257** — "Reaper archive writes persist via the checkout's commit
+- **ADR:** create provisional **ADR-258** — "Reaper archive writes persist via the checkout's commit
   path; deferred on non-committable checkouts" (decision + the (a)/(b) rejected alternatives with
   the ruleset and divergence evidence above). Ordinal is provisional — `soleur:ship`'s ADR-Ordinal
-  Collision Gate re-verifies against `origin/main`; on renumber, sweep `grep -rn 'ADR-257'
+  Collision Gate re-verifies against `origin/main`; on renumber, sweep `grep -rn 'ADR-258'
   knowledge-base/project/{plans,specs}/feat-one-shot-9127-reaper-archive-persistence/` plus this
   plan's AC in the same edit.
 - **C4 views:** **no C4 impact.** Enumerated per the completeness mandate against
@@ -328,7 +328,7 @@ helper is itself the defect class.
 
 - `plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh` — fixture suite per
   the established `mktemp`-repo + `cdx` containment pattern (see `lease-protects-active.test.sh`).
-- `knowledge-base/engineering/architecture/decisions/ADR-257-reaper-archive-persistence-commit-path.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-258-reaper-archive-persistence-commit-path.md`
   — provisional ordinal per the ADR section above.
 
 ## Acceptance Criteria
@@ -354,7 +354,7 @@ helper is itself the defect class.
 - [ ] **AC7** — New suite `reap-archive-persistence.test.sh` registered: auto-discovered by the
   `plugins/soleur/skills/*/test/*.test.sh` glob, a declared-edge array in
   `scripts/lib/test-affected-paths.sh`, and a `scripts/suite-shard-legs.tsv` row.
-- [ ] **AC8** — Provisional `ADR-257-*.md` created; plan AC naming the ordinal stays consistent if
+- [ ] **AC8** — Provisional `ADR-258-*.md` created; plan AC naming the ordinal stays consistent if
   `soleur:ship` renumbers (sweep per the ADR section).
 - [ ] **AC9** — `git-worktree/SKILL.md` documents the persistence rule and both sentinels;
   `description:` frontmatter untouched.

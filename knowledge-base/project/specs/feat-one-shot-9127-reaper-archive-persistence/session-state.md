@@ -7,7 +7,7 @@
 
 ### Errors
 - `gh issue view --json merged` rejected early in issue fetch — corrected to supported fields.
-- Provisional ADR-256 already claimed on a pushed sibling branch; renumbered to ADR-257.
+- Provisional ADR-256 already claimed on a pushed sibling branch; renumbered to ADR-258.
 - `scripts/markdown-lint.sh` reported the plan out of scope; direct `markdownlint -s` used instead.
 - No Task/sub-agent tool on this harness — reviewer panels and research fan-outs ran inline (sequential-fallback), disclosed in the plan's Enhancement Summary.
 
@@ -15,7 +15,7 @@
 - Selected issue option (c) — `git mv` + per-reaped-branch pathspec-scoped `chore(archive-kb)` commit on committable checkouts; `SOLEUR_REAP_ARCHIVE_DEFERRED` (no move) on `main`/detached/bare — over (a) (push-rejected by rulesets; local commit breaks ff-pull) and (b) (no persistence owner).
 - Stranded-spec dedup designed as union-merge (`git mv` live-only files into archive twins) then `git rm -r`.
 - New suite `reap-archive-persistence.test.sh` uses tracked fixtures; plus chokepoint census and vacuous-fixture precondition asserts.
-- Provisional ADR-257 created per Phase 2.10.
+- Provisional ADR-258 created per Phase 2.10.
 - #8496 acknowledged as overlap, not folded in.
 
 ### Components Invoked

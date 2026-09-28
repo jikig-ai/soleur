@@ -7,7 +7,7 @@
 # checkout-index mirroring — restores the tracked half while the untracked
 # archive copy persists. Result: a live+archive twin ("stranded spec").
 #
-# The fix (ADR-257): every reap archive move persists via the checkout's own
+# The fix (ADR-258): every reap archive move persists via the checkout's own
 # commit path, or is not made at all.
 #   tracked + committable (feature branch) -> `git mv` + a pathspec-scoped
 #     `chore(archive-kb)` commit on the current branch (SOLEUR_REAP_ARCHIVE_COMMITTED)

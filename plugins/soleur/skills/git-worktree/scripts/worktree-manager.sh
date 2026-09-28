@@ -2470,7 +2470,7 @@ cleanup_worktrees() {
 }
 
 # ---------------------------------------------------------------------------
-# Reap archive persistence (#9127, ADR-257)
+# Reap archive persistence (#9127, ADR-258)
 #
 # A reaper archive move must have a persistence owner: the move either lands in
 # git history in the same reap run, or it is not made at all. Plain `mv` of a
@@ -3324,7 +3324,7 @@ cleanup_merged_worktrees() {
     fi
   fi
 
-  # Reap-archive persistence classification (#9127, ADR-257): computed ONCE per
+  # Reap-archive persistence classification (#9127, ADR-258): computed ONCE per
   # run, read by every archive site below via the dynamic-scope globals
   # _REAP_ARCHIVE_COMMITTABLE / _REAP_ARCHIVE_DEFER_REASON.
   _reap_archive_classify
