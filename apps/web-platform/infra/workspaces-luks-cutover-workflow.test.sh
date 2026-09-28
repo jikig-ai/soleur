@@ -598,10 +598,12 @@ $WIPED"
   [[ "$BODY_RC" != 0 ]] && ok "W-HOST8 an indented (not column-0) success row does not parse" || no "W-HOST8 an indented row was accepted"
   host_run attached "$WIPED
 ::add-mask::host-line-injection"
-  so="$(grep -n '^::stop-commands::' <<<"$BODY_OUT" | head -1 | cut -d: -f1)"
-  tk="$(grep -m1 '^::stop-commands::' <<<"$BODY_OUT" | sed 's/^::stop-commands:://')"
-  inj="$(grep -n '^::add-mask::host-line-injection' <<<"$BODY_OUT" | head -1 | cut -d: -f1)"
-  rs="$(grep -n "^::${tk}::\$" <<<"$BODY_OUT" | head -1 | cut -d: -f1)"
+  # awk, never grep, in these captures: this suite runs `set -e`, and grep's rc 1 on "no match" is an
+  # ANSWER here (the fence is missing), not an error that should kill the suite.
+  so="$(awk '/^::stop-commands::/ { print NR; exit }' <<<"$BODY_OUT")"
+  tk="$(awk '/^::stop-commands::/ { sub(/^::stop-commands::/, ""); print; exit }' <<<"$BODY_OUT")"
+  inj="$(awk '/^::add-mask::host-line-injection/ { print NR; exit }' <<<"$BODY_OUT")"
+  rs="$(awk -v t="::${tk}::" '$0 == t { print NR; exit }' <<<"$BODY_OUT")"
   if [[ -n "$tk" && ${#tk} -ge 16 && -n "$so" && -n "$inj" && -n "$rs" && "$so" -lt "$inj" && "$inj" -lt "$rs" ]]; then
     ok "W-HOST9 (Guard 6 #7) host output streams inside ::stop-commands::<random token> … ::<token>:: — a host ::add-mask:: line is inert"
   else
@@ -635,7 +637,7 @@ if [[ -f "$SCRATCH/wipe-api.sh" ]]; then
   else
     no "W-API1 the API sequence failed (rc=$BODY_RC) ${BODY_OUT:0:240} curl=[$(tr '\n' '|' < "$SCRATCH/curl.log" | cut -c1-300)]"
   fi
-  d_idx="$(grep -n '^DELETE ' "$SCRATCH/curl.log" | head -1 | cut -d: -f1)"; p_idx="$(grep -n '^POST ' "$SCRATCH/curl.log" | head -1 | cut -d: -f1)"
+  d_idx="$(awk '/^DELETE / { print NR; exit }' "$SCRATCH/curl.log")"; p_idx="$(awk '/^POST / { print NR; exit }' "$SCRATCH/curl.log")"
   [[ -n "$d_idx" && -n "$p_idx" && "$p_idx" -lt "$d_idx" ]] && ok "W-API1b the detach precedes the delete" || no "W-API1b delete not after detach (post=$p_idx delete=$d_idx)"
   fx_reset; fx_api; fx GET "/actions/777" 2 200 '{"action":{"id":777,"status":"running"}}'; fx GET "/actions/777" 70 200 '{"action":{"id":777,"status":"success"}}'
   api_run

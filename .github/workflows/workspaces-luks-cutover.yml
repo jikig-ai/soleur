@@ -224,7 +224,7 @@ jobs:
           echo "mode validated; confirm token accepted (the environment reviewer is the authorization; this is the typo-guard)."
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        if: ${{ inputs.clean_stray || inputs.wipe_plaintext }}
+        if: ${{ inputs.clean_stray }}
 
       - name: Install Doppler CLI
         if: ${{ inputs.clean_stray || inputs.wipe_plaintext }}
@@ -988,6 +988,7 @@ jobs:
             jq -e --argjson l "$LUKS_VOLUME_ID" '.server.volumes | index($l) != null' "$HBODY" >/dev/null \
               || fail "presence proof: server ${WEB1_SERVER_ID} does not hold the live LUKS volume ${LUKS_VOLUME_ID}"
           }
+          [[ -n "${HCLOUD_TOKEN:-}" ]] || fail "the infra-credentials loader exported no HCLOUD_TOKEN"
           # Re-derived here, never trusted from an earlier step: the pin, and the host verdict for it.
           [[ "$PIN" =~ ^[0-9]+$ && "$PIN" != "$LUKS_VOLUME_ID" ]] || fail "pin '${PIN}' is not numeric or is the live LUKS volume — no API write"
           case "${API_STATE}:${HOST_RESULT}" in

@@ -8,7 +8,7 @@ Decision record: `knowledge-base/project/specs/feat-one-shot-6604-workspaces-pla
 
 ## Phase 1 — RED tests first (PR A)
 
-- [ ] 1.1 `apps/web-platform/infra/workspaces-luks-wipe.test.sh` on `workspaces-luks-harness.sh`:
+- [x] 1.1 `apps/web-platform/infra/workspaces-luks-wipe.test.sh` on `workspaces-luks-harness.sh`:
       Guards 1, 2, 3 (stubbed rows), 5 as cases; `harness_floor` at the measured count. Harness
       requirements (plan Phase 1): `PATH` tripwires for `blkdiscard`/`dd`/`doppler`/`aws`,
       `systemd-run` pass-through stub, device-resolution seam (not env-settable), stub fidelity
@@ -19,61 +19,65 @@ Decision record: `knowledge-base/project/specs/feat-one-shot-6604-workspaces-pla
       `mkfs.ext4 -L workspaces_plain`; zero + read-back GREEN; non-zero byte at fixed offsets RED;
       interrupted zero resumes (`arm=re_zero`); `blkdiscard` command line fails `EBUSY` on an
       open-LUKS and on a mounted loop device; capture real `list-dependencies` output.
-- [ ] 1.3 `workspaces-luks-cutover-workflow.test.sh`: job set `{preflight, cutover, wipe}`; `cutover`
+      *(Written as Session W, LW1–LW7, `bash -n` clean; needs root + loop devices, so it runs in CI
+      only — `infra-validation.yml` deploy-script-tests. Left unticked until CI shows it green.)*
+- [x] 1.3 `workspaces-luks-cutover-workflow.test.sh`: job set `{preflight, cutover, wipe}`; `cutover`
       env expression byte-identical and first `environment:` line; `cutover` `if:` predicate;
       `CONFIRM_WIPE = wipe_plaintext && dry_run`; `wipe` unconditional environment; Guard 6 rows.
-- [ ] 1.4 New workflow test for `workspaces-plaintext-forget.yml`: Guard 4 rows (incl. presence proof,
+- [x] 1.4 New workflow test for `workspaces-plaintext-forget.yml`: Guard 4 rows (incl. presence proof,
       no state printed/stored, exact type/name selection, serial/lineage), concurrency literal,
       `infra-privileged`, constant pin, `TERRAFORM_VERSION`. Workflow behavior rows run `yq`-extracted
       step bodies against a `curl` stub.
-- [ ] 1.5 Tier census: `STATE_WRITE` widened to `state (rm|mv|push)`; `terraform-target-parity.test.ts`
+- [x] 1.5 Tier census: `STATE_WRITE` widened to `state (rm|mv|push)`; `terraform-target-parity.test.ts`
       covers the forget workflow.
 
 ## Phase 2 — Script (PR A)
 
-- [ ] 2.1 `wipe_plaintext()` Stage 1 (W0–W2), Stage 2 arm table (`first_wipe`/`re_zero`/`detached`,
+- [x] 2.1 `wipe_plaintext()` Stage 1 (W0–W2), Stage 2 arm table (`first_wipe`/`re_zero`/`detached`,
       explicit `blkid -p` rc map, `crypto_LUKS` refused on every arm), Stage 3 (W3–W12) per plan §A
       incl. W5 restorability (test-passphrase on the file + fresh `luksHeaderBackup` cmp, shred on
       every exit), W6 `ID_SERIAL`, W6b all `SysFSPath` units, W7 service/job, `result=begun` /
       `readback_start` rows, `systemd-run --scope` io.max cap; `emit_wipe()` single row format;
       heredoc `.env` inputs with duplicate-key refusal.
-- [ ] 2.2 Mode block after CLEAN_STRAY; never assigns `DRY_RUN`; never sets the cleanup globals.
-- [ ] 2.3 `cleanup()` `wipe_aborted` arm + `mode=wipe`; run-step `::error::` lists it.
-- [ ] 2.4 ROLLBACK refusal on `PLAINTEXT_WIPE_BEGUN`/`PLAINTEXT_WIPED` (explicit row + `trap - EXIT`);
+- [x] 2.2 Mode block after CLEAN_STRAY; never assigns `DRY_RUN`; never sets the cleanup globals.
+- [x] 2.3 `cleanup()` `wipe_aborted` arm + `mode=wipe`; run-step `::error::` lists it.
+- [x] 2.4 ROLLBACK refusal on `PLAINTEXT_WIPE_BEGUN`/`PLAINTEXT_WIPED` (explicit row + `trap - EXIT`);
       check `arm_dead_man` reachability, refuse there too or drop with a note.
-- [ ] 2.5 Header comment points at the mode.
+- [x] 2.5 Header comment points at the mode.
 
 ## Phase 3 — Workflows (PR A)
 
-- [ ] 3.1 `workspaces-luks-cutover.yml`: inputs (env-only into `run:`); `dry_run` description;
+- [x] 3.1 `workspaces-luks-cutover.yml`: inputs (env-only into `run:`); `dry_run` description;
       preflight order (exclusion → pin shape → token → presence proof → `api_state` → banner,
       `-w '%{http_code}'` status reads, escaped `.error.code` only).
-- [ ] 3.2 `cutover` wipe-rehearsal wiring (`${{ (inputs.wipe_plaintext && inputs.dry_run) && '1' || '0' }}`),
+- [x] 3.2 `cutover` wipe-rehearsal wiring (`${{ (inputs.wipe_plaintext && inputs.dry_run) && '1' || '0' }}`),
       job-level `if:`, `.env` re-validation before the heredoc.
-- [ ] 3.3 `wipe` job: loader, presence proof, re-GET, pause-is-real check (both workflows
+- [x] 3.3 `wipe` job: loader, presence proof, re-GET, pause-is-real check (both workflows
       `disabled_manually`, no queued run), same-day verify run, labels-PUT probe — all before web-1;
       bridge (`unset HCLOUD_TOKEN`) + heredoc `.env` + run with `ServerAliveInterval`,
       `::stop-commands::`, `PIPESTATUS` rc, strict success-row regex tied to `api_state`;
       detach/poll/delete/404 with token via `--config -`; `timeout-minutes: 240`; summary.
-- [ ] 3.4 `workspaces-plaintext-forget.yml` per plan §C (constant pin; xtrace refusal; copied
+- [x] 3.4 `workspaces-plaintext-forget.yml` per plan §C (constant pin; xtrace refusal; copied
       extract+init steps; presence proof + 404 + empty name + pause check; `state pull` piped only into
       a field-selecting `jq`; `state rm`; serial/lineage + list diff).
-- [ ] 3.5 `actionlint` both workflows; tier census; version parity.
+- [x] 3.5 `actionlint` both workflows; tier census; version parity.
 
 ## Phase 4 — Docs (PR A)
 
-- [ ] 4.1 Runbook step 7: commands, pause/un-pause, approval (and delegation limits), freeze, verdict
+- [x] 4.1 Runbook step 7: commands, pause/un-pause, approval (and delegation limits), freeze, verdict
       table with irreversible?/re-dispatch-safe?/next-action columns (halt-and-escalate where no
       webhook verb exists); summary prints the anchor; Step 0 marked never-after-step-7.
-- [ ] 4.2 ADR-119 addendum (AP-009 superseded-copy basis, AP-001 deviation, two-PR ordering + TF
+- [x] 4.2 ADR-119 addendum (AP-009 superseded-copy basis, AP-001 deviation, two-PR ordering + TF
       measurements, pause-not-guard and #6919/T55, operand rule kept, duplicated delivery block).
-- [ ] 4.3 ADR-241 D2 one-line note.
-- [ ] 4.4 `model.c4` edges `github -> hetzner`, `hetzner -> cloudflare`; C4 syntax/render/count-parity tests.
-- [ ] 4.5 Destruction-record template (`status: template`, CLO field set).
-- [ ] 4.6 CODEOWNERS rows if required; a test that every `reason=`/`arm=` token in the plan's
+- [x] 4.3 ADR-241 D2 one-line note.
+- [x] 4.4 `model.c4` edges `github -> hetzner`, `hetzner -> cloudflare`; C4 syntax/render/count-parity tests.
+- [x] 4.5 Destruction-record template (`status: template`, CLO field set).
+- [x] 4.6 CODEOWNERS rows if required; a test that every `reason=`/`arm=` token in the plan's
       Observability section exists in `workspaces-cutover.sh`.
 - [ ] 4.7 AC check: no `*.tf`, filter or `apply-web-platform-infra.yml` diff; web-platform plan counts
       equal `main`'s baseline.
+      *(First half verified locally: the three-path diff is empty and ADR-119 `status:` is unchanged.
+      The plan-count half is `infra-validation`'s web-platform plan in CI; left unticked until read.)*
 
 ## Phase 5 — Ship PR A, prepare PR B, stop (post-merge)
 
