@@ -39,6 +39,10 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
   rotated, by design: 5.3b-i (#8036 item 1d) removed the last host boot sites that read
   `GHCR_READ_TOKEN`, and B3 intends no host to read GHCR. The revoked value stays in Doppler
   `soleur/prd` until 5.4.
+- **5.3b-iii is done at template level** (2026-09-28, #8714): the cosign verifier pulls from gcr.io
+  (part 1), and the registry host boots zot from a pinned release asset with ghcr.io denied
+  (part 2). See the two "Amendment 2026-09-28 (#8714 step 5.3b-iii, …)" sections. 5.4 is done
+  (#9071).
 
 This ADR flips to **accepted** (task 5.6) when 5.3b-iii and 5.4 are also complete (5.3b-i is done).
 
@@ -1704,3 +1708,48 @@ unchanged" bullet. The zot half is part 2 (PR 2b of the same step).
 - **Also shipped here.** The mirror that part 2 consumes: `zot-image-oci-archive.sh` and
   `.github/workflows/zot-image-mirror.yml`. They publish the exact upstream zot blobs as the
   immutable prerelease `zot-image-<version>-<D12>`. No host reads it yet.
+
+## Amendment 2026-09-28 (#8714 step 5.3b-iii, part 2) — the registry host boots zot from a pinned release asset; ghcr.io is denied there
+
+This completes the 2026-09-24 amendment's "The anonymous `ghcr.io` pulls … are unchanged" bullet
+for the zot half. The cosign half moved in part 1 (the amendment above).
+
+- **What the host boots.** `cloud-init-registry.yml` no longer runs `'${zot_image}'` from ghcr.io.
+  `zot-image-fetch.sh` downloads the prerelease asset `zot-image-<version>-<D12>` /
+  `zot-linux-amd64-<version>.oci.tar` that part 1 publishes. It runs from its own runcmd entry,
+  outside `doppler run`, so no secret is in its environment. It then:
+  1. refuses unless the tarball's sha256 is `T` (`zot_mirror_asset_sha256_amd64`);
+  2. runs `docker load` with its stdout sent to stderr;
+  3. refuses unless the loaded image ID is `sha256:<C>` (the classic image store) or `sha256:<D>`
+     (the containerd store). `C` is `zot_config_digest_amd64`; `D` is the manifest digest in the
+     upstream pin `zot_image_amd64`.
+
+  zot runs **by that verified ID**, never by a registry reference. Each outcome records a verdict
+  (`ok`, `config_invalid`, `download_failed`, `sha_mismatch`, `load_failed`, `id_mismatch`), and the
+  heartbeat ships it as `zot_image_fetch`. `zot_image_digest` still reports D's first 12 hex, now
+  mapped from the running ID.
+- **Why the bytes are upstream's.** The asset carries upstream D's manifest and blobs byte for
+  byte, so docker verifies layer content against `C`/`D` on load. `T` is anchored outside the
+  commit: on every PR touching this path, the `rehearse` job in `zot-image-mirror.yml` rebuilds the
+  archive from upstream D and requires it to equal `T`, and requires `C` to be D's config digest.
+  It then boots the rendered fetch against the real asset under both docker image stores. The
+  trust root is still project-zot at D, as before. What is new is GitHub's availability of one
+  asset. Preflight P6 (ADR-169 amendment 2026-09-28) and rule-audit guard it.
+- **The ghcr.io deny.** The first runcmd entry sinkholes `ghcr.io` and
+  `pkg-containers.githubusercontent.com` to `0.0.0.0`/`::` in `/etc/hosts`, and in cloud-init's
+  hosts template when present. This is a name-resolution deny, not a firewall rule. The heartbeat
+  reports `ghcr_blocked` (1 when ghcr.io resolves only to the sinkhole). So `state_status=running`
+  together with `ghcr_blocked=1` is a live proof that the host booted and serves without ghcr.io.
+- **"The GHCR egress allow" had no object.** #8714 names removing a GHCR egress allow. Measured
+  2026-09-28: no hcloud firewall in this root has an `out` rule (5 rules, all `in`), and the
+  web-host container egress allowlist (`cron-egress-allowlist*.txt`) names no GHCR host. Host
+  egress is open, so there was no allow to remove. The step becomes an enforced, observed deny on
+  the one host whose boot needed ghcr.io. Web hosts still resolve ghcr.io. Nothing on them pulls
+  from it any more (cosign moved in part 1; app images come from zot), and a web-host deny is a
+  tracked follow-up. The C4 edge `zotRegistry -> projectZot` becomes `zotRegistry -> github`
+  (the asset fetch) plus `github -> projectZot` (the mirror workflow's build).
+- **amd64 only.** A precondition on `hcloud_server.registry` refuses an arm64 `registry_server_type`,
+  because no arm64 asset is mirrored. `zot_image_arm64` stays as the upstream record.
+- **Status.** 5.3b-iii is complete at template level once this merges. The live proof is the first
+  post-replace `SOLEUR_ZOT_DISK` row with a new `boot_id`, `zot_image_fetch=ok` and
+  `ghcr_blocked=1`. The ADR stays **Adopting**; 5.6 flips it.

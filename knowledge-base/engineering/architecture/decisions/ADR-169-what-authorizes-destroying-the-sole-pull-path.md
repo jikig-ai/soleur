@@ -646,3 +646,26 @@ rather than left implicit in a passing gate.
 > **Note 2026-09-28 (#7377):** this merge-to-replace path is also the ONLY registry config-delivery
 > mechanism by decision: ADR-172's amendment of 2026-09-28 records `push-config` as realized by it,
 > and `restart` / `reclaim` as not built. No in-place lever sits beside it.
+
+## Amendment 2026-09-28 — the boot-image asset is a replace precondition (P6, #8714 step 5.3b-iii)
+
+The registry host no longer pulls zot from ghcr.io at boot. It downloads a release asset of this
+repository, refuses it unless its sha256 equals the `T` pinned in `zot-registry.tf`, and refuses
+to start zot unless the loaded image ID is the upstream config digest `C` or manifest digest `D`
+(ADR-096 amendment 2026-09-28, part 2). So the release asset is now a **boot dependency of the sole
+pull path**. A replace onto an asset that is unpublished, deleted, or carries other bytes boots a
+host that serves nothing, and #7071 left no tier beneath it.
+
+`scripts/registry-replace-preflight.sh` therefore gains **P6, gating and fail-closed**. It reads
+the asset the rendered `user_data` will fetch from the same `zot-registry.tf` literals, asks GitHub
+for that release's asset `digest`, and refuses unless exactly one uploaded asset of that name
+carries `sha256:<T>`. A 404, an API error, a missing asset, an ambiguous asset list or a digest
+other than `T` each refuse, naming the cause.
+
+Against the independence criterion, P6 reads **GitHub**, not zot or the pull path. The condition a
+replace cures cannot trip it, so it keeps gating on the manual re-fire arm too (unlike P1). It runs
+**before** P3's drain wait, so a missing asset refuses in seconds rather than after 35 minutes.
+
+The same probe runs on rule-audit's cron. There, a deleted or replaced asset is named as a latent
+outage before the next replace, not at it. `zot-image-*` releases are never deleted. Recovery is
+workflow-only: `runbooks/registry-host-replace-dispatch.md` § "zot boot image (#8714)".

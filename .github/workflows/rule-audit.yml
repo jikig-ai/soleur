@@ -200,6 +200,36 @@ jobs:
             fi
           done
 
+          # --- (4b) the registry host's BOOT asset (#8714 5.3b-iii) --------------------
+          # The registry host boots zot from a release asset and refuses to start it unless the
+          # asset's sha256 is the T pinned in zot-registry.tf. A deleted or replaced asset is
+          # therefore a latent outage that surfaces only at the NEXT host replace (where preflight
+          # P6 refuses it). This names it on the cron instead. Same derivation as P6
+          # (--print-asset), and GitHub's own asset digest -- no 75 MB download.
+          set +e
+          ASSET_INFO="$(bash scripts/registry-replace-preflight.sh --print-asset 2>&1)"
+          AI_RC=$?
+          set -e
+          if [ "$AI_RC" -ne 0 ]; then
+            PROBLEMS="${PROBLEMS}- could not derive the zot boot asset from $TF (rc=$AI_RC): $(printf '%s' "$ASSET_INFO" | head -1)"$'\n'
+          else
+            A_REPO="$(printf '%s\n' "$ASSET_INFO" | sed -n 's/^repo=//p')"
+            A_TAG="$(printf '%s\n' "$ASSET_INFO" | sed -n 's/^tag=//p')"
+            A_NAME="$(printf '%s\n' "$ASSET_INFO" | sed -n 's/^asset=//p')"
+            A_T="$(printf '%s\n' "$ASSET_INFO" | sed -n 's/^sha256=//p')"
+            set +e
+            A_DIGEST="$(gh api "repos/${A_REPO}/releases/tags/${A_TAG}" --jq "[.assets[] | select(.name == \"${A_NAME}\" and .state == \"uploaded\") | .digest] | if length == 1 then .[0] else \"count=\\(length)\" end" 2>&1)"
+            A_RC=$?
+            set -e
+            if [ "$A_RC" -ne 0 ] && printf '%s' "$A_DIGEST" | grep -q 'HTTP 404'; then
+              PROBLEMS="${PROBLEMS}- **the zot boot asset release \`${A_TAG}\` is GONE.** The registry host cannot be replaced (preflight P6 refuses), and a replace forced past P6 would boot with no zot. Re-publish it: \`gh workflow run zot-image-mirror.yml\` (reproducible from upstream D; zot-image.provenance.md)."$'\n'
+            elif [ "$A_RC" -ne 0 ]; then
+              PROBLEMS="${PROBLEMS}- could not read the zot boot asset release \`${A_TAG}\` (rc=$A_RC); this run cannot tell whether it still exists."$'\n'
+            elif [ "$A_DIGEST" != "sha256:${A_T}" ]; then
+              PROBLEMS="${PROBLEMS}- **the zot boot asset \`${A_NAME}\` in \`${A_TAG}\` reads \`${A_DIGEST}\`, but zot-registry.tf pins \`sha256:${A_T}\`.** A replaced host would refuse it (sha_mismatch) and never start zot. Do NOT replace the registry host until this is resolved."$'\n'
+            fi
+          fi
+
           # --- (5) the git-data rehearsal's ubuntu base pin (#7544) --------------------
           # WHY HERE AND NOT A FOLLOW-THROUGH PROBE. The follow-through substrate is a one-shot
           # CLOSE-CRITERIA tracker: exit 0 means "close the issue". On the first sweep after the

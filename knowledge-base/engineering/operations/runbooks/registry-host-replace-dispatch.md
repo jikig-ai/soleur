@@ -63,7 +63,7 @@ gh api --paginate --slurp "repos/jikig-ai/soleur/issues/N/comments?per_page=100"
 
 | `kind` | Meaning | Next action |
 |---|---|---|
-| `refused` | the read-only preflight declined (its own `::error::` names the predicate) | resolve the predicate (P1 local-cache pulls / P5 log channel), re-fire |
+| `refused` | the read-only preflight declined (its own `::error::` names the predicate) | resolve the predicate (P1 local-cache pulls / P5 log channel / P6 boot asset, see § zot boot image), re-fire |
 | `dispatch-failed` | `gh workflow run` exited non-zero; an apply MAY still have queued | read `apply-web-platform-infra.yml`'s run list before re-firing (double-replace hazard) |
 | `apply-failed` | the replace RAN and did not conclude success; the host may be dark, the volume is preserved | re-dispatch `registry-host-replace` |
 | `unverified` | the apply's conclusion could not be read in the poll window (job stayed green) | read the apply run; the delivering change's follow-through is the authority |
@@ -73,6 +73,46 @@ gh api --paginate --slurp "repos/jikig-ai/soleur/issues/N/comments?per_page=100"
 
 The body's `Delivering:` line names the change(s); `(attribution unproven: …)` means the range
 could not be proven and the named PR is the degraded `github.sha` guess.
+
+## zot boot image (#8714)
+
+Since #8714 step 5.3b-iii the registry host boots zot from a pinned GitHub release asset, not
+from ghcr.io. It denies ghcr.io by name resolution on its first boot. The mechanism is described
+in ADR-096's amendment of 2026-09-28 (part 2). Each boot records a verdict. The
+`SOLEUR_ZOT_DISK` heartbeat ships it as `zot_image_fetch`, next to `zot_image_digest` and
+`ghcr_blocked`:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_ZOT_DISK --limit 5
+```
+
+| `zot_image_fetch` | Meaning | Action |
+|---|---|---|
+| `ok` | the asset matched T, loaded, and its image ID is upstream C or D; zot runs by that ID | none. Expect `zot_image_digest=<D12>` and `ghcr_blocked=1` |
+| `not_run` | the state file is absent: the fetch never ran on this instance | read the replace run's apply log. A host that predates the change reports this until its next replace |
+| `download_failed` | curl could not fetch the asset (after 5 retries) | re-fire the replace (§ Re-fire after a refusal). If it recurs, check the asset URL with `bash scripts/registry-replace-preflight.sh --print-asset` and `curl -sSIL <url>` |
+| `sha_mismatch` | the downloaded bytes are not T; nothing was loaded | do NOT re-publish over it. Compare the asset's API digest with T (P6 does). Re-dispatch `zot-image-mirror.yml` only if the release is absent |
+| `load_failed` / `id_mismatch` | docker could not load it, or it loaded as an image that is neither C nor D | the pins disagree with the asset. Revert the PR that moved them (below) |
+| `config_invalid` | `/etc/default/zot-image` is malformed (a template or render defect) | revert the PR that changed it |
+
+In every refusal zot never starts. The zot liveness heartbeat goes absent, which is the page, and
+`state_status=unknown` follows. Running web containers keep serving; deploys wait.
+
+**Recovery, all workflow-only (no SSH):**
+
+1. **Re-fire the replace.** Use this for a transient `download_failed`. Run
+   `gh workflow run registry-host-replace-dispatch.yml -f reason='zot boot asset fetch retry'`.
+2. **Re-publish a deleted asset.** Run `gh workflow run zot-image-mirror.yml`. It rebuilds from
+   upstream D reproducibly, so P6 goes green once the digest equals T. Then re-fire. A published
+   asset cannot be replaced (immutable releases), and `zot-image-*` releases are never deleted.
+3. **Revert the PR.** Revert the PR that introduced or moved the pins. The dispatcher sees the
+   rendered `user_data` change and replaces the host back onto the previous render. This is the
+   rollback for the change itself.
+
+**P6 refusal.** The preflight refuses a replace when the asset the render names is unpublished,
+missing, ambiguous or carries a digest other than T. It refuses before P3's drain wait, and it
+still gates the manual re-fire arm. Resolve it with step 2 above, or with the bump procedure in
+`apps/web-platform/infra/zot-image.provenance.md`, then re-fire.
 
 ## Reproduce a derivation locally
 
