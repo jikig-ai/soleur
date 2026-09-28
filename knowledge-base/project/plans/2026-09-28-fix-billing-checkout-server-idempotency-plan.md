@@ -15,6 +15,45 @@ requires_cpo_signoff: true
 
 # fix(billing): /api/checkout lacks server-side idempotency — double-subscribe TOCTOU
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28
+**Sections enhanced:** Proposed Solution (marker-hit decision tree), Acceptance
+Criteria (AC5b/AC5c), Dependencies & Risks (deploy ordering, FK lock), plus
+`## Downtime & Cutover` added.
+**Research agents used:** in-process sequential pass — plan-review panel lenses
+(DHH/simplicity, Kieran/correctness, architecture-strategist, spec-flow,
+CPO/CTO named-panel) run by the orchestrating subagent; `Reviewed-Coverage:
+sequential-fallback` — no independent subagent review was spawned (no Task
+surface in this pipeline context). External evidence: Stripe API reference +
+onetimesecret PR #3690 (deterministic-key failure modes).
+
+### Key Improvements (deepen pass)
+
+1. Marker-hit tree gained two correctness arms found by the in-process review:
+   `open`-but-different-tier reclaims via `sessions.expire` instead of reusing a
+   wrong-price session, and retrieve-failure is fail-closed (marker kept — a
+   transient Stripe outage must not unlock a second session).
+2. Double-completion anomaly now asserts the real invariant
+   (`subscriptions.list({customer, status:"active"})` count > 1) — the first
+   draft's subscription-id-mismatch proxy would false-alarm on every legitimate
+   plan-switch checkout.
+3. 409 body carries human-readable `error` plus machine `code` —
+   `billing-section.tsx` renders `data.error` verbatim, so a snake_case slug
+   would reach users.
+
+### New Considerations Discovered
+
+- Stripe `checkout.sessions.expire` / `retrieve` / `subscriptions.list` verified
+  against installed `stripe@^17.7.0` type defs (`SessionsResource.d.ts:2924`,
+  `Sessions.d.ts:80` `client_secret: string | null`, `:277` status enum).
+- `CREATE TABLE … REFERENCES users(id)` takes a brief ShareRowExclusive lock on
+  the hot `users` table — evaluated under `## Downtime & Cutover` (sub-second
+  on a new empty table; NOT VALID dance unnecessary).
+- Cited issues verified live: #2046 CLOSED, #2772 CLOSED, #2036 MERGED, #8904
+  MERGED; `web-platform-release.yml` runs `migrate` + `verify-migrations`
+  before `deploy`.
+
 ## Overview
 
 `POST /api/checkout` creates a Stripe checkout session on every call with no
@@ -386,6 +425,28 @@ in_transit:
     disclosed_as: "not-publicly-claimed"
 ```
 
+## Downtime & Cutover
+
+**Offline-inducing operation:** the only lock-taking DDL is
+`CREATE TABLE … REFERENCES public.users(id)` — Postgres takes a
+ShareRowExclusive lock on the referenced `users` table for the duration of the
+constraint check. On a brand-new empty table the check is sub-second; the lock
+window is bounded by statement time, not data size. No table-rewriting DDL, no
+non-CONCURRENTLY index, no `ADD CONSTRAINT` on an existing hot table, no
+backfill — the migration is `CREATE TABLE` + `ENABLE RLS` + `COMMENT` +
+`DROP` (down), all transaction-safe under the Supabase runner (sibling
+precedent: migration 030's header comment).
+
+**Zero-downtime evaluation:** default satisfied — the change is additive.
+Expand-contract is unnecessary (new table, no existing-column change); a
+`NOT VALID` FK + later `VALIDATE` would matter only if the new table were
+pre-populated, which it is not. The FK's brief referenced-table lock is the
+only residual; at Soleur's `users` write rate it is unmeasurable. Route code
+ships after the migration lands (`web-platform-release.yml` orders `migrate` +
+`verify-migrations` before `deploy`), so there is no window where the code
+references a missing table on the normal path — a rollback that inverts the
+order fails closed (claim insert errors → 500 + Sentry).
+
 ## Domain Review
 
 **Domains relevant:** engineering, legal (assessed in-process — this session is
@@ -476,6 +537,16 @@ path renders `data.error`, which is server text on an existing surface).
   `verify-migrations` before `deploy` in the same pipeline (verified), so the
   table exists before the route code ships. A rollback ordering it backwards
   degrades to claim-insert failures → 500 + Sentry — fail-closed, loud.
+- **Precedent-diff (Phase 4.4):** the claim mechanism follows the repo's
+  canonical insert-first dedup — `processed_stripe_events` (migration 030:
+  service-role-only table, RLS enabled zero policies, PK-claim insert, unique
+  violation short-circuit, delete-on-error via `releaseDedupRow()` at
+  `webhooks/stripe/route.ts:145-160`). This plan's `pending_checkout_sessions`
+  differs by design in exactly two places, both deliberate: the claim is
+  *owned* (the winner must UPDATE the row with `session_id` — 030 rows are
+  write-once tombstones) and the row is *reclaimable* (030 rows persist for
+  the retention window; pending rows are deleted on completion/reclaim). No
+  other precedent-bearing surface is touched.
 - **Vercel/dev parity:** dev and prd are distinct Supabase projects
   (`hr-dev-prd-distinct-supabase-projects`); verify the migration applied in
   both before exercising the race end-to-end.
