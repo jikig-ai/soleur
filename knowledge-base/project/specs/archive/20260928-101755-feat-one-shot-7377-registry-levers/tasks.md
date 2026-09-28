@@ -1,6 +1,6 @@
 ---
 feature: feat-one-shot-7377-registry-levers
-plan: knowledge-base/project/plans/2026-09-28-feat-registry-write-levers-resolved-plan.md
+plan: knowledge-base/project/plans/archive/20260928-101755-2026-09-28-feat-registry-write-levers-resolved-plan.md
 issue: 7377
 lane: single-domain
 ---
