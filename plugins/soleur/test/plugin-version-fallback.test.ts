@@ -115,6 +115,8 @@ describe("plugin version with no manifest sentinel", () => {
       new Response(
         JSON.stringify([
           { tag_name: "zot-image-v2.1.20", prerelease: true, draft: false, body: "infrastructure mirror artifact", published_at: "2026-09-28T01:00:00Z" },
+          // A prerelease with an unrelated tag: the filter is on the PRERELEASE flag, not the tag name.
+          { tag_name: "v9.9.9-rc1", prerelease: true, draft: false, body: "release candidate notes", published_at: "2026-09-28T00:30:00Z" },
           { tag_name: "v3.305.12", prerelease: false, draft: false, body: "real release notes", published_at: "2026-09-28T00:00:00Z" },
         ]),
         { status: 200 },
@@ -124,6 +126,7 @@ describe("plugin version with no manifest sentinel", () => {
     expect(data.changelog.html).toContain("v3.305.12");
     expect(data.changelog.html).not.toContain("zot-image");
     expect(data.changelog.html).not.toContain("infrastructure mirror artifact");
+    expect(data.changelog.html).not.toContain("v9.9.9-rc1");
   });
 
   test("plugin.js yields a usable version when github() returns null (catch arm)", async () => {

@@ -175,6 +175,34 @@ hosts through apply-deploy-pipeline-fix).
 | "mirror into our zot" | The registry cannot bootstrap from itself | Use a GitHub release asset carrying the exact upstream blobs |
 | zot on a non-ghcr registry | project-zot is only on ghcr.io (quay, ECR, Docker Hub, gitlab absent) | Same as above |
 
+## PR 2a Review Revisions [Updated 2026-09-28]
+
+A 5-seat PR-2a review panel applied these changes inline:
+
+- **Immutable releases** (`gh api repos/jikig-ai/soleur/immutable-releases` → enabled). `publish`
+  now works as follows:
+  - it deletes any leftover draft for the tag, creates a DRAFT prerelease, uploads, then publishes
+    `--latest=false`;
+  - a published release without an uploaded asset fails.
+- **Naming.** The tag is `zot-image-<version>-<D12>`, derived once by the builder
+  (`TAG=`/`ASSET=`), so a re-tagged upstream version gets a new tag instead of colliding with an
+  immutable one.
+- **Cosign classifier.** It reads the whole stderr, line-anchored on `^docker: Error response from
+  daemon:`. Docker's pull error repeats the digest twice (~420-450 B, measured), so `tail -c 400`
+  missed the prefix.
+- **Verify.** It refuses non-regular and duplicate members. The upstream owner is fixed to
+  `project-zot`.
+- **Documentation moved into 2a.** 2a changes live behaviour, so the ADR-096 amendment (cosign
+  part), the ADR-087 pointer and the C4 edge (`hetzner -> ghcr` → `hetzner -> sigstore`) ship in
+  2a, not 2b.
+- **Release consumers.** `release-announce` and `commands/help.md` now filter to plugin `v*` tags,
+  excluding drafts and prereleases.
+- **Accepted surfaces.** The public GitHub Releases page lists the prerelease, and repository
+  watchers get GitHub's release email. The title and body name it an infrastructure mirror
+  artifact, not a Soleur release. The docs site, release notes and weekly digest exclude it.
+- **Residual (pre-existing class, not widened).** Repeated `cosign_absent` pages nobody. Standing
+  enforcement is #6129 (WARN→ENFORCE). This PR changes the registry, not the alerting.
+
 ## Plan Review Revisions [Updated 2026-09-28]
 
 A seven-seat panel reviewed the plan: DHH, Kieran, code-simplicity, architecture-strategist,
@@ -519,8 +547,10 @@ reproducing the upstream bytes.
 
 ### Guard 2 — publish idempotency and reproducibility (zot-image-mirror.yml publish + builder)
 
-**Property.** The asset published under `zot-image-<ver>` is byte-identical to the reproducible
-rebuild from upstream D, and an existing asset is never overwritten.
+**Property.** The asset published under `zot-image-<ver>-<D12>` carries exactly upstream D's
+manifest and blobs (verified by content, not by a tar-version-dependent byte compare), and a
+published asset is never replaced. Repository release immutability enforces the second half, so
+publish goes through a draft (create draft → upload → publish).
 
 **Assembly.** The builder's `build` path (the manifest == D check, the per-blob checks and the
 deterministic tar) and the publish job's three arms: create, upload-missing, and
@@ -614,8 +644,8 @@ runs at review time.
 
 ### Pre-merge (PR 2a)
 
-- [ ] AC-A1: `zot-image-oci-archive.test.sh` is green. `build amd64`/`build arm64` locally print
-  T equal to the measurements above.
+- [ ] AC-A1: `zot-image-oci-archive.test.sh` is green. `build` (amd64 only) locally prints T equal
+  to the measurement above, plus `TAG=zot-image-v2.1.20-95a837a0afac`.
 - [ ] AC-A2: `github.js` excludes prereleases; its test row is green.
 - [ ] AC-A3: actionlint is clean. `test` is green on the PR head. The ci-deploy.test.sh cosign
   rows are green, including the gcr.io failure-string classifier rows.
