@@ -248,8 +248,8 @@ amendment) is discharged.
 
 ## Addendum — PR #9096 (#5914): the transitional app arm is deleted
 
-The Residual "The transitional app arm (#5914)" is closed by PR #9096 (host-key step 6 in the LUKS
-cutover runbook). Earlier text in this ADR is not edited.
+The Residual "The transitional app arm (#5914)" closes on the merge of PR #9096 (host-key step 6 in
+the LUKS cutover runbook). Earlier text in this ADR is not edited.
 
 - **What was deleted.** `TOFU_FALLBACK_OPTS` (`StrictHostKeyChecking=accept-new`) and the `null`-pin
   path in `apps/web-platform/server/git-auth.ts`; the `null` return of `resolveGitDataHostKeyPin()`;

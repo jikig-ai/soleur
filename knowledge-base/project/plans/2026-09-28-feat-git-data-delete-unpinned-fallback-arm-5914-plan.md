@@ -858,23 +858,23 @@ one chokepoint `gitDataHostKeyTrust` before their `try`; four resolution sites f
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** `rg -n "TOFU_FALLBACK_OPTS|accept-new" apps/web-platform/server/` prints nothing.
-- [ ] **AC2** `gitWithPrivateKeyAuth` and `sshWithPrivateKeyAuth` declare `hostKeyPin: string`;
+- [x] **AC1** `rg -n "TOFU_FALLBACK_OPTS|accept-new" apps/web-platform/server/` prints nothing.
+- [x] **AC2** `gitWithPrivateKeyAuth` and `sshWithPrivateKeyAuth` declare `hostKeyPin: string`;
   `resolveGitDataHostKeyPin` returns `string`; `tsc --noEmit` passes for `apps/web-platform`.
-- [ ] **AC3** With `GIT_DATA_SSH_HOST_KEY` unset and the flag off, `resolveGitDataHostKeyPin()` throws,
+- [x] **AC3** With `GIT_DATA_SSH_HOST_KEY` unset and the flag off, `resolveGitDataHostKeyPin()` throws,
   and `removeGitDataRepo` (remove key set) returns `unconfigured` with `detail` matching the regex
   `/^pin_absent: /` and never calls the ssh transport, even when run twice, with `pinReports()` still
   empty afterwards; the resolver's message names the flag state (`GIT_DATA_STORE_ENABLED=unset/false`
   here, `=true` in the enabled twin) (vitest, `git-data-host-key-pin.test.ts`).
-- [ ] **AC4** No code path emits `op: "pin_absent_store_disabled"`:
+- [x] **AC4** No code path emits `op: "pin_absent_store_disabled"`:
   `rg -n "pin_absent_store_disabled" apps/web-platform/server` prints nothing.
-- [ ] **AC5** Each helper, called with `null`, `undefined` and `123` (each `as unknown as string`)
+- [x] **AC5** Each helper, called with `null`, `undefined` and `123` (each `as unknown as string`)
   and with a valid pin followed by a trailing comment (which the resolver's pattern rejects),
   rejects with exactly the new guard text `/refusing to dial without a valid host-key pin/` — not the
   looser existing `/host-key pin/i`, which a `TypeError` from `null.trim()` would also satisfy — and
   the `execFile` mock is never called (vitest, `git-auth.test.ts`). The five former `null` call sites
   pass a `makeEd25519Pin()` pin and keep their original assertions.
-- [ ] **AC5b** The file's `beforeEach` also stubs `GIT_DATA_SSH_HOST` to `""` (today it leaks the
+- [x] **AC5b** The file's `beforeEach` also stubs `GIT_DATA_SSH_HOST` to `""` (today it leaks the
   shell's value). At startup with no pin, each row sets all three arming inputs explicitly with
   distinctive synthetic values (unused ones `""`): none set, with `GIT_TRANSPORT_SSH_PRIVATE_KEY` still
   set → no `git_data_host_key_pin` event; all three whitespace-only → no event; each one set alone →
@@ -883,7 +883,7 @@ one chokepoint `gitDataHostKeyTrust` before their `try`; four resolution sites f
   path** (`err` is `null`), and `JSON.stringify(reportSilentFallback.mock.calls)` contains none of the
   synthetic values (vitest, `git-data-host-key-pin.test.ts`). The existing "absent: `git_data_pin=absent`
   at warn" case is armed by that `beforeEach` and now also emits the event; its comment says so.
-- [ ] **AC5c** The Art. 17 erasure report in `account-delete.ts` and both startup ops
+- [x] **AC5c** The Art. 17 erasure report in `account-delete.ts` and both startup ops
   (`pin_absent_at_startup`, `pin_invalid_at_startup`) use the message path
   (`reportSilentFallback(null, { …, message })`), so their `feature`/`op`/`erasure_outcome` tags reach
   Sentry (#8629: an Error-path report is pre-captured by the pino mirror with only
@@ -891,29 +891,29 @@ one chokepoint `gitDataHostKeyTrust` before their `try`; four resolution sites f
   `null` as its first argument with the tags. The parameterised account-delete test that asserts
   `toHaveBeenCalledWith(expect.any(Error), …erasure_outcome…)` changes its first matcher to `null` and
   adds `message: "git-data erasure <status>"`; the outer-catch test keeps `expect.any(Error)`.
-- [ ] **AC6** `tests/scripts/test-no-tofu-ssh.sh` passes with no `git-auth.ts` allow-list entry, and
+- [x] **AC6** `tests/scripts/test-no-tofu-ssh.sh` passes with no `git-auth.ts` allow-list entry, and
   `tests/scripts/test-no-tofu-ssh-mutation.sh` passes with rows 5 and 5b retargeted (both RED for the
   stated reason).
-- [ ] **AC7** The flag precheck's own `TOFU_ARM` predicate reads absent on the real file:
+- [x] **AC7** The flag precheck's own `TOFU_ARM` predicate reads absent on the real file:
   `grep -ciF 'StrictHostKeyChecking=accept-new' apps/web-platform/server/git-auth.ts || true` prints
   `0` (a copy of the probe's `grep -qiF` line, not a run of the probe; `grep -c` exits 1 on zero), and
   `apps/web-platform/infra/git-data-flag-precheck.test.sh` still passes unchanged (`76 passed`).
-- [ ] **AC8** In `scripts/encryption-posture-ledger.json`, the row selected by name —
+- [x] **AC8** In `scripts/encryption-posture-ledger.json`, the row selected by name —
   `jq '.connections[] | select(.connection | startswith("web-1 app container -> git-data sshd"))'` —
   has `in_transit.cert_verification == "on"` and no `in_transit.exception`, and exactly one row
   matches; `python3 scripts/lint-encryption-posture.py` and `bash scripts/lint-encryption-posture.test.sh`
   pass.
-- [ ] **AC9** `model.c4`'s `claude -> gitDataStore` description no longer says "transitional unpinned
+- [x] **AC9** `model.c4`'s `claude -> gitDataStore` description no longer says "transitional unpinned
   fallback"; a new `api -> gitDataStore` edge models the unflagged Art. 17 erasure dial;
   `model.likec4.json` is regenerated; the C4 syntax, render and count-parity suites pass.
-- [ ] **AC10** ADR-237 has a new addendum keyed by PR #9096 and ADR-220 one new amendment-log line;
+- [x] **AC10** ADR-237 has a new addendum keyed by PR #9096 and ADR-220 one new amendment-log line;
   neither loses a line: `git diff --numstat origin/main...HEAD -- <ADR-237 path> <ADR-220 path>`
   prints `0` in the deletions column for both.
-- [ ] **AC11** The runbook ticks steps 2, 3, 5 and 6 with evidence links, leaves step 1 unticked, the
+- [x] **AC11** The runbook ticks steps 2, 3, 5 and 6 with evidence links, leaves step 1 unticked, the
   verdict-map pin-fault row names `pin_absent:` with its post-flip limit, the flag-flip sentence says
   the resolver refuses an absent pin whatever the flag, and steps 5.2 and 6 record the CTO and CLO
   rulings this plan relies on.
-- [ ] **AC12** The register carries the four CLO-drafted markers (PA-36 (g)(14) activation and
+- [x] **AC12** The register carries the four CLO-drafted markers (PA-36 (g)(14) activation and
   residual (b) closure, PA-1 (g)(14), PA-2 (g)(18)) exactly as the CLO agent drafted them, and a CLO
   re-attestation record exists under `knowledge-base/legal/audits/` citing triggers (1) and (2).
 - [ ] **AC13** G1: the step-5 record URL is in the PR body and in the runbook's step-5 tick. If its
@@ -924,6 +924,18 @@ one chokepoint `gitDataHostKeyTrust` before their `try`; four resolution sites f
   since the served build's deploy arm started, each with its timestamp.
 - [ ] **AC15** The PR body contains `Closes #5914` (body, not title) and references #8211 and #7226.
 - [ ] **AC16** Every required check passes by name on the exact head SHA before merge.
+
+**Work-phase deviations (2026-09-28).** (1) `GIT_DATA_HOST_KEY_PIN_RE` moved to a new shared
+module `server/git-data-host-key-pin-shape.ts` instead of being exported from
+`git-data-replication.ts`: that module imports `git-auth.ts`, and `git-data-host-key-pin.test.ts`
+mocks `git-auth.ts` wholesale, so either placement named in Phase 2 would have made a circular
+import or an `undefined` regex under the mock. (2) The erasure report's message is
+`git-data erasure <status>: bare-repo erasure did not complete …` (status first, so each outcome
+groups separately, keeping the human text); AC5c asserts the `^git-data erasure <status>: ` prefix.
+(3) AC12 is **five** markers, not four: the CLO added PA-36 (g)(2), whose "pages through the Art. 17
+alert" sentence #8629 falsifies. (4) Step 5 was executed in this session: record
+#5914 issuecomment-5865758722 (0 events, 0 ids), with a message-text sweep added because the
+tag-only query cannot see Error-path reports (#8629). (5) CLO condition C2 filed as #9121.
 
 ### Post-merge (automated reads by the shipping session; no operator step)
 
