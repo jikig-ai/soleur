@@ -11,18 +11,21 @@ Constraints for the whole PR:
 
 ## Phase 0: Walker extraction (behaviour-preserving)
 
-- [ ] 0.1 Snapshot the pre-extraction `walk(CLOCK)` reach and problems sets, sorted, to a scratch
-      file. Baseline: `watchdog-dispatch-clock.test.ts` has 63 passed.
+- [ ] 0.1 Snapshot the pre-extraction walker's sorted reach and problems sets for the clock entry
+      **and every served function module** (about 71 entries) to scratch files. Baseline:
+      `watchdog-dispatch-clock.test.ts` has 63 passed.
 - [ ] 0.2 Move `resolveSpecifier`, `specifiersOf` and `walk` into
       `apps/web-platform/test/helpers/ts-import-graph.ts`.
-  - [ ] 0.2.1 Inject `{ readFile, exists, appRoot }`, defaulting to the real filesystem and
-        `APP_ROOT`.
-  - [ ] 0.2.2 Add `stopAt?: (file) => boolean`, which records the module but does not descend into
-        it. It defaults to off.
-  - [ ] 0.2.3 Add `elideTypeOnlySpecifiers?: boolean`. It defaults to off.
+  - [ ] 0.2.1 Inject `fs = { readFile, exists, listFiles, appRoot }`. It is **required** on every
+        new helper; only the clock test's legacy call has a real-filesystem default. `rel()`
+        uses `fs.appRoot`.
+  - [ ] 0.2.2 Add `elideTypeOnlySpecifiers?: boolean`, off by default.
+  - [ ] 0.2.3 Add `recordDynamicImportArgs?: boolean`, off by default. It records a non-literal
+        import as `{ file, argText }`.
+  - [ ] 0.2.4 Add no `stopAt`: the walk descends through the definer modules.
 - [ ] 0.3 Point `watchdog-dispatch-clock.test.ts` at the helper, with no assertion change.
-- [ ] 0.4 Re-run the clock test (it must be green) and `diff` the post-extraction reach and
-      problems sets against 0.1 (the diff must be empty). Record both in the PR body.
+- [ ] 0.4 Re-run the clock test (it must be green) and `diff` every post-extraction reach and
+      problems set against 0.1 (all diffs must be empty). Record both in the PR body.
 
 ## Phase 1: RED — the guard suite
 
@@ -43,8 +46,10 @@ Constraints for the whole PR:
   - run mutation rows 1–7 and harness rows H1–H2.
 - [ ] 1.3 Guard 2: portable boundary. It must cover:
   - definer edges from any closure module, including namespace, `require`/`import()` and
-    re-exports;
-  - the closure marker scan;
+    re-exports, with per-specifier `type` skipping;
+  - the closure marker scan, which descends through the definers and exempts only their own
+    source text;
+  - `{ offenders, checkedCount, closureSizes }`, with the anti-vacuity floor inside the helper;
   - the allowlisted-export body scan;
   - type-only elision;
   - mutation rows 1–11 and harness rows H1–H3.
@@ -52,15 +57,19 @@ Constraints for the whole PR:
   - the forbidden set, imported from `WATCHDOG_DISPATCH_TABLE`, plus the verifier list in the test
     file;
   - a scan of `server/inngest/**/*.{ts,mjs}` plus every served closure;
-  - the exact `cron-ux-audit.ts` `botFixturePath` ×3 exemption;
+  - the exact `cron-ux-audit.ts` exemption `{ botFixturePath: 2, botSigninPath: 1 }`;
+  - the directory scan through `fs.listFiles`, with filtering inside the helper;
   - workflow-existence staleness;
   - mutation rows 1–7 and harness rows H1–H2.
 - [ ] 1.5 Guard 4: the serve-URL anchor. It must check:
-  - one `serve` import from `inngest/*`;
+  - one module reaching a `serve` adapter, including namespace, default and `require` forms;
   - the production `SERVE_HOST` literal is `"https://app.soleur.ai"`, checked by AST;
   - `serveHost` references `SERVE_HOST`;
   - mutation rows 1–4 and harness rows H1–H2.
 - [ ] 1.6 At least one RED row per guard asserts that the failure message names the fix.
+- [ ] 1.6a All fixtures are synthesized (synthetic ids and module names). No row copies or mutates a
+      tracked file. The real-tree test and the fixture tests call the same helper, differing only
+      in `fs`.
 - [ ] 1.7 Run `./node_modules/.bin/vitest run test/server/inngest/execution-placement.test.ts`.
       Expect RED, because the leaf is missing.
 
@@ -100,16 +109,34 @@ Constraints for the whole PR:
         with a revision note.
 - [ ] 4.2 `ADR-030-inngest-as-durable-trigger-layer.md`: one amendment-log pointer line.
 - [ ] 4.3 `ADR-248-watchdog-dispatch-clock-runs-in-the-web-server.md`: fix the "via `sdk_url`"
-      wording in the failure-domain row. Nothing else.
+      wording in the failure-domain row, and re-point the "(#7230)" reversal trigger to #9137.
 - [ ] 4.4 `ADR-143-active-active-web-ingress-drain-gated-host-lifecycle.md`: add a placement line to
       the #8611 amendment.
+- [ ] 4.5 `ADR-100-inngest-dedicated-single-host-singleton-control-plane.md`: add a dated one-line
+      note under Decision sub-item 1 saying step fan-out follows `serveHost` +
+      `cloudflare_record.app` + the placement classes, not `--sdk-url`.
+- [ ] 4.6 The ADR-033 amendment also carries:
+  - the P1-2 target constraint (per-class app ids or function-aware ingress);
+  - the `host-affine` stickiness and co-location rule (`CRON_WORKSPACE_ROOT`, deploy lease,
+    `cron-workspace-gc`);
+  - the `volume-bound` definition, which is the sole-copy LUKS holder;
+  - the sanctioned Inngest-scheduled watchers row;
+  - the best-effort wording for `scheduled-prod-version-drift`.
 
 ## Phase 5: C4
 
 - [ ] 5.1 `model.c4`: edit the `inngest -> api` edge prose to name the single step-executing host
-      (web-1) and point to the placement rule, with no counts.
-- [ ] 5.2 Run `test/c4-code-syntax.test.ts`, `test/c4-render.test.ts` and
-      `bash plugins/soleur/test/c4-count-parity.test.sh`.
+      (web-1) and the registration-only `--sdk-url`, and point to the placement rule, with no
+      counts.
+  - Re-source `inngest -> supabase`, `inngest -> github` (ghcr token minter) and
+    `inngest -> doppler` to `api`, each annotated "(Inngest-fired function, executed on web-1)".
+  - Before editing, grep `views.c4` for these edges.
+- [ ] 5.2 Let the lefthook `c4-model-regenerate` step regenerate and re-stage `model.likec4.json`.
+      Never hand-edit it. If the hook is skipped, run `bash scripts/regenerate-c4-model.sh`.
+      Review the `c4-model.md` `## Notes` advisory.
+- [ ] 5.3 Run `test/c4-code-syntax.test.ts`, `test/c4-render.test.ts`,
+      `bash plugins/soleur/test/c4-count-parity.test.sh` and
+      `bash plugins/soleur/test/c4-model-freshness.test.sh`.
 
 ## Phase 6: Verify and ship prep
 

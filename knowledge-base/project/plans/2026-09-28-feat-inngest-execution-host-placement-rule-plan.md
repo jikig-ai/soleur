@@ -17,6 +17,69 @@ lane: cross-domain
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this
 branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28
+
+**Sections enhanced:** 9. These are Research Insights, Proposed Solution (decision constraint and
+class definitions), Architecture Decision (ADR-100 item and C4 re-sourcing), Implementation Phases
+0–2, Files to Edit, Guard Contract (all four guards), Acceptance Criteria, Risks and Deferrals.
+
+**Agents used:**
+
+- `soleur:engineering:review:architecture-strategist`
+- `soleur:engineering:review:test-design-reviewer`
+- a mechanical verify-the-negative and attribution sweep
+- direct SDK source reads of `inngest@3.54.2`
+
+**Halt gates cleared:** 4.6 (User-Brand Impact), 4.7 (Observability, probe verb `grep` allowed),
+4.8 (no PAT shapes) and 4.11 (`lint-guard-contract.py`: 4 entries, green). The 4.5, 4.55, 4.9
+and 4.10 gates are not triggered.
+
+### Key Improvements
+
+1. **The guards now work on the real tree.**
+   - The walker gets a required `fs` seam that includes `listFiles`.
+   - `stopAt` is dropped: the walk descends through the definers, which closes the hole where an
+     allowlisted helper calls an imported pinning module.
+   - Non-literal import arguments are recorded, so the `cron-ux-audit.ts` exemption is exact:
+     `{ botFixturePath: 2, botSigninPath: 1 }`, not "3 × botFixturePath".
+2. **Vacuous and ambient rows were replaced.**
+   - Every fixture is synthesized.
+   - The anti-vacuity floors sit inside the helpers.
+   - Suite-edit rows that could not be executed tests were rewritten as executable ones.
+   - Namespace, `require` and type-only shapes are covered.
+3. **The architecture is coherent across ADRs.**
+   - ADR-100 sub-decision 1 gets a serve-URL note.
+   - ADR-248's #7230 reversal trigger is re-pointed to #9137.
+   - The target constraint is stated: one app id means one serve URL, so placement-aware
+     execution needs per-class app ids or function-aware ingress.
+   - The `volume-bound` definition is tightened to the sole-copy LUKS holder.
+   - The `host-affine` stickiness and clone-root/GC co-location rule is stated.
+4. **The C4 model is honest.** Three edges that attribute function effects to the Inngest server
+   host are re-sourced to `api`. `model.likec4.json` regeneration and `c4-model-freshness` are
+   added to verification.
+
+### New Considerations Discovered
+
+- **Two sanctioned Inngest-scheduled watchers exist:** `cron-inngest-config-drift` and
+  `cron-inngest-cron-watchdog`. The corollary is restated as "a verifier whose own run is the
+  only signal of total loss of its subject must not be executed by that subject", and Guard 3's
+  property is narrowed to match.
+- **`scheduled-prod-version-drift` is also native-`schedule:`-only**, so it is best-effort per
+  #8495.
+- **The encryption-posture ledger misattributes step outputs** to the private `sdk_url` link and
+  does not model the Cloudflare step-call leg. Filed as **#9139**; it is out of scope here.
+- **The SDK registers 72 functions, not 70**, because of two `onFailure` handlers. The `-failure`
+  functions inherit their parent's class.
+- **The verification sweep corrected three claims:**
+  - "every function imports `_cron-shared`": in fact every cron does, and a few event functions do
+    not;
+  - "`cron-bash-allowlist-hook.mjs` is never imported": it is imported via
+    `cron-filing-deny-marker.ts`;
+  - the #4886 "revert" wording.
+  - It also confirmed about 90 other claims, all 15 issue/PR citations, and all 8 rule ids.
+
 ## Overview
 
 The dedicated Inngest host (ADR-100) moved only the **scheduler** off web-1. Every one of the 70
@@ -107,10 +170,12 @@ Merging does cut the standard web-platform release of a behaviourally identical 
 - **Per-file `EXECUTION_HOST` constant in each `cron-*.ts`** → P1. A central manifest keyed by the
   route.ts identifier covers event functions too, and one file can serve two functions
   (`agent-on-spawn-requested.ts` exports two). Carrier chosen in Implementation Phase 1.
-- **Import-closure (module-reachability) classifier** → P2. It is useless today: every served
-  function imports `_cron-shared.ts`, which mixes workspace-root and deploy-lease helpers with
-  generic ones (`postSentryHeartbeat`, `mintInstallationToken`), so reachability marks 100% as
-  pinned. **Call-site** detection replaces it (Guard 2).
+- **Import-closure (module-reachability) classifier** → P2. It is useless today. All but about 5 served functions reach `_cron-shared.ts` (all 55 crons
+  import it directly), and that module mixes workspace-root and deploy-lease helpers with generic
+  ones (`postSentryHeartbeat`, `mintInstallationToken`), so reachability marks about 65 of 70 as
+  pinned. The exceptions, per the deepen-pass sweep, are `cfo-on-payment-failed`,
+  `github-on-event` and `oneshot-gdpr-gate-50d-eval`, which do not reach it even transitively;
+  `workspace-reconcile-on-push` and `agent-on-spawn-requested` do not import it directly. **Call-site** detection replaces it (Guard 2).
 - **Count floor on "portable" functions** → P2. A stored `>= N` floor survives substitution and
   certifies itself. Set identity (Guard 1) replaces it.
 - **Second SDK worker / subset registry / new appId in this PR** → P5 forbids it: it needs host
@@ -137,7 +202,7 @@ role, Sentry and others. They are host-free, not secret-free.
 
 - `apps/web-platform/app/api/inngest/route.ts`: `const SERVE_HOST`, the `serve({ … functions: [ … ] })` array (70 entries).
 - `apps/web-platform/server/inngest/client.ts`: `id: "soleur-runtime"`, the single Inngest app.
-- `apps/web-platform/server/inngest/functions/_cron-shared.ts`: `resolveCronWorkspaceRoot`, `resolveDeployLeasePath`, `deployLeaseAgeMsIfFresh`, `deferDeployOnFinalAttempt`, `warnIfCronWorkspaceLowOnDisk` (the pinning definers). Every function imports this module.
+- `apps/web-platform/server/inngest/functions/_cron-shared.ts`: `resolveCronWorkspaceRoot`, `resolveDeployLeasePath`, `deployLeaseAgeMsIfFresh`, `deferDeployOnFinalAttempt`, `warnIfCronWorkspaceLowOnDisk` (the pinning definers). Every cron imports this module; a few event functions do not.
 - `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts`: `spawnClaudeEval`, `spawnSimple`, `resolveClaudeBin`, `setupEphemeralWorkspace`.
 - `apps/web-platform/infra/dns.tf`: `resource "cloudflare_record" "app"`, whose header says "Single step-executing host is load-bearing". **Read-only for this plan.**
 - `apps/web-platform/server/watchdog-dispatch-table.ts`: `WATCHDOG_DISPATCH_TABLE` (ADR-248 rows: `scheduled-inngest-health.yml`, `scheduled-zot-restart-loop.yml`). It is import-free by design.
@@ -155,6 +220,31 @@ role, Sentry and others. They are host-free, not secret-free.
 - `2026-05-16-adr-amendment-required-when-reversing-…`: the ADR-033 corollary text is corrected in the same PR that re-verifies it.
 - `2026-07-03-dark-launch-pr-must-exclude-operator-prerequisite-infra.md`: this supports scoping infra out entirely rather than shipping inert infra.
 - `2026-06-16-adr-c4-update-is-a-plan-deliverable-not-a-deferred-issue.md`: the ADR amendment and the C4 edge edit are in this PR.
+
+### Inngest SDK facts (verified against the installed `inngest@3.54.2`, deepen pass)
+
+From `apps/web-platform/node_modules/inngest/components/InngestFunction.js`:
+
+```js
+id(prefix) { return [prefix, this.opts.id].filter(Boolean).join("-"); }
+get absoluteId() { return this.id(this.client.id); }          // "<appId>-<fnId>"
+static failureSuffix = "-failure";
+// when onFailure is set:
+const id = `${fn.id}${InngestFunction.failureSuffix}`;         // "<fnId>-failure"
+triggers: [{ event: internalEvents.FunctionFailed,
+             expression: `event.data.function_id == '${fnId}'` }]
+```
+
+These back three claims in the plan:
+
+- **Function identity is app-scoped.** A function moved to a second app id (option (a)) gets a
+  new absolute id.
+- **`onFailure` handlers are separate registered functions.** They bind to their parent by the
+  parent's absolute id, so they must share the parent's host. That is the "inherit the parent's
+  class" rule.
+- **The served count is 72, not 70.** Two functions (`agent-on-spawn-requested`,
+  `cron-gh-pages-cert-reissue`) define `onFailure`, so the SDK registers 72 while route.ts serves
+  70.
 
 ### Functional overlap (Phase 1.5b)
 
@@ -181,7 +271,7 @@ the deferred follow-up and is recorded there as a research item.
 | Execution is pinned to web-1 "by the single `sdk_url` callback" (ADR-033 corollary, ADR-248 failure-domain table) | `sdk_url` is the registration poll (#8611/ADR-243). Steps are called at the registered `serveHost` `https://app.soleur.ai/api/inngest`. That goes through Cloudflare to `cloudflare_record.app`, and `dns.tf` points it only at web-1. | Correct the wording in ADR-033 and ADR-248 in this PR. The amendment names the real binding: route.ts `SERVE_HOST` plus `dns.tf` `cloudflare_record.app`. |
 | "34 of 53 cron functions spawn claude-code" | 70 functions are served (55 `cron-*.ts` plus 15 event functions). 18 spawn Claude via `spawnClaudeEval`; 8 more use ephemeral clones, git or bash spawns. | Replace the count in ADR-033 with a pointer to the manifest. The ADR carries no counts, so there is no parity drift. |
 | `function-registry-count.test.ts` is "the natural home" for the guard | That file is already 329 lines covering a different property (registration and Sentry parity). | The guards go in a sibling file, `execution-placement.test.ts`, and `function-registry-count.test.ts` gets a cross-reference comment next to guard (a). |
-| A "second SDK worker on the inngest host" is option (a) | The Inngest host has no Node runtime and an isolated `soleur-inngest` Doppler project (ADR-100). Same-app-id `--sdk-url`s collapse route-once (ADR-100 Decision 1), so a worker needs a new app id, which means new function IDs. | Option (a) is demoted to a fallback with its constraints written into #9137. The primary target is Phase-3 placement-aware execution. |
+| A "second SDK worker on the inngest host" is option (a) | The Inngest host provisions no Node runtime (`grep -ci node apps/web-platform/infra/cloud-init-inngest.yml` → 0) and has an isolated `soleur-inngest` Doppler project (ADR-100). Same-app-id `--sdk-url`s collapse route-once (ADR-100 Decision 1), so a worker needs a new app id, which means new function IDs. | Option (a) is demoted to a fallback with its constraints written into #9137. The primary target is Phase-3 placement-aware execution. |
 | "The DNS half of single-host execution is unguarded" (planner's first draft) | `apps/web-platform/infra/lb-weight-gate.test.sh` Condition C (C.1a/b/c) already asserts that `cloudflare_record.app` means web-1 only, with exactly one `app` record and no web-2 reference. | Guard 4, the serve-URL anchor, keeps only the app side; the ADR cites Condition C for the DNS side. Condition C is **not edited**, because an edit under `infra/**` fires the production apply workflow on merge. |
 
 ## Problem Statement
@@ -206,7 +296,7 @@ Three things are wrong today, and none of them is "execution is on web-1".
 | Option | Ruling | Why |
 |---|---|---|
 | **(c) keep execution on the one step-executing host (web-1)** | **Adopt now** | Existing mechanisms already deliver most of (a)'s benefits. Anti-circularity is served by the GHA-native schedule and the ADR-248 clock on both web hosts. Restart coupling is absorbed by Inngest retries plus the ADR-078 drain lease. A web-1 outage is a product outage that Better Stack already pages. It also needs no production write. |
-| **Placement-aware execution at the ADR-143 Phase-3 flip** | **Designated target (#9137)** | `portable` functions run on any web host, `host-affine` functions stick to one host, and `volume-bound` functions stay on the `/mnt/data` holder. Losing web-1 then no longer drops portable work, and the singleton control plane is untouched. |
+| **Placement-aware execution at the ADR-143 Phase-3 flip** | **Designated target (#9137)** | `portable` functions run on any web host, `host-affine` functions stick to one host, and `volume-bound` functions stay on the sole-copy LUKS volume holder. Losing web-1 then no longer drops portable work, and the singleton control plane is untouched. |
 | **(a) second SDK worker on the Inngest host** | **Fallback only (#9137)**, for a verifier that must survive the loss of *every* web host | It would put a Node worker and prd secrets on the deliberately minimal singleton control-plane host, turning ADR-100 SEC-H3's *indirect* exposure into direct secret read. It adds a second deploy target and version-skew surface, and a new app id means new function IDs, with a double-fire-or-gap migration. |
 | **(b) separate cron deployable** | **Reject** | It duplicates the build, deploy and version-drift pipelines for small functions. The importability boundary it offers is delivered inside one deployable by the client-free leaf pattern (`cron-manifest.ts`) plus Guard 2. |
 
@@ -215,18 +305,38 @@ scheduled; (2) a new host-state verifier appears that neither the GHA-native sch
 ADR-248 clock can serve; (3) a measured incident in which losing web-1 dropped `portable` work
 with user impact.
 
+**Constraint on the target (deepen pass, architecture review P1-2).** A serve URL belongs to an app
+id, and it is last-writer-wins per app id (ADR-100 finding 1). So a single-app-id deployment cannot
+give `host-affine` or `volume-bound` functions a different URL than `portable` ones.
+
+Placement-aware execution therefore needs one of two things:
+
+- **per-class app ids**, which means new function ids, the same migration cost the table charges
+  against (a); or
+- **an ingress layer that routes a step request by its function id**, for example host affinity
+  on `/api/inngest` keyed by the `fnId` query parameter.
+
+This does not change the ruling, because both costs sit in #9137 and neither is paid here. But the
+amendment must state it so the table stays consistent.
+
 ### The placement rule (three classes)
 
 | Class | Meaning | Future host constraint | Marker (Guard 2 derives `portable` must have none) |
 |---|---|---|---|
 | `portable` | No host-local dependency. It still needs prd secrets: host-free, **not** secret-free. | Any host holding the secrets. | none |
-| `host-affine` | Needs exactly one host with the app image: the Claude spawn (`spawnClaudeEval`, whose single-flight guard is process-local, ADR-243 §2), an ephemeral clone on `CRON_WORKSPACE_ROOT`, the ADR-078 deploy lease, or a child process. | Exactly one app host; sticky. | pinning-definer imports outside the allowlist; `child_process`; volume path or env |
-| `volume-bound` | Touches user workspaces on the sole-copy `/mnt/data` (ADR-119), or reaches `server/workspace-resolver.ts`. | Only the host that mounts the volume. | same as above |
+| `host-affine` | Needs exactly one host with the app image: the Claude spawn (`spawnClaudeEval`, whose single-flight guard is process-local, ADR-243 §2), an ephemeral clone on `CRON_WORKSPACE_ROOT`, the ADR-078 deploy lease, or a child process. | Exactly one app host, **sticky per run**: every step and retry of a run must reach the same process, including within ADR-243's 2 h `SETTLED_TTL_MS`. That host's `CRON_WORKSPACE_ROOT` must be the host-mounted `/mnt/data/workspaces`, so the deploy lease stays visible to `ci-deploy.sh`, and `cron-workspace-gc` must also run there. | pinning-definer imports outside the allowlist; `child_process`; volume path or env |
+| `volume-bound` | Touches user workspaces, meaning it reads `WORKSPACES_ROOT` or reaches `server/workspace.ts`/`server/workspace-resolver.ts`. | Only the host holding the ADR-119 **sole-copy LUKS** workspaces volume, `hcloud_volume.workspaces_luks` (web-1 today). Not merely a host with a `/mnt/data`: `hcloud_volume.workspaces` is `for_each = var.web_hosts`, so every web host has one. | same as above |
 
 - **Ephemeral cron clones are `host-affine`, not `volume-bound`.** They sit on `/mnt/data` for disk
   capacity, not for data (CTO Q2).
 - **`cron-workspace-gc` is `volume-bound`.** It sweeps `/workspaces` directly, which is the user-data
-  volume (#4882, and the #4886 revert).
+  volume (#4882; #4886's `.cron` subdir isolation was later reverted, per the file header).
+  - It is **also** the garbage collector for every `host-affine` clone root.
+  - Three single-host classes cannot express "the GC runs wherever `host-affine` producers run".
+    Moving producers to another host without a per-host GC leaks clones there until the volume
+    fills (the 2026-06-02 ENOSPC freeze), and it hides the deploy lease from `ci-deploy.sh`.
+  - The amendment states this co-location constraint, the gc row's `reason` repeats it, and it is
+    posted to #9137 (per-host GC, the ADR-248 fleet rule, is the likely shape).
 - **Known gaps the guard cannot detect.** Guard 2 cannot see process-local module state (for
   example a `globalThis` single-flight map) or loopback/private-IP HTTP calls. The ADR records both.
   Guard 2 enforces only the `portable` boundary. Over-pinning is safe and is not guarded. The
@@ -271,8 +381,9 @@ move, and it matches the `EXPECTED_CRON_FUNCTIONS` convention.
     `/mnt/data` literals, and the `WORKSPACES_ROOT`/`CRON_WORKSPACE_ROOT` env reads.
 - **Guard 3: anti-circularity.** No served-function closure module, and no non-test `.ts` or
   `.mjs` module under `server/inngest/`, carries a **string literal** containing the stem of a
-  forbidden workflow. The `.mjs` covers `cron-bash-allowlist-hook.mjs`, which is spawned by path
-  and never imported, so no closure reaches it.
+  forbidden workflow. The `.mjs` covers `cron-bash-allowlist-hook.mjs`. It is also imported, via
+  `server/cron-filing-deny-marker.ts` from the substrate, but the directory scan covers it
+  regardless of how it is reached.
   - The forbidden set is `WATCHDOG_DISPATCH_TABLE` (imported, not copied) plus
     `HOST_STATE_VERIFIER_WORKFLOWS` (`workspaces-luks-verify.yml`,
     `scheduled-prod-version-drift.yml`).
@@ -290,8 +401,8 @@ Guard configuration lives in the test file, `test/server/inngest/execution-place
 `PORTABLE_SAFE_SHARED_EXPORTS`, `HOST_STATE_VERIFIER_WORKFLOWS`, and the pure guard helpers that
 take a `readFile` seam. Keeping `HOST_STATE_VERIFIER_WORKFLOWS` out of `server/inngest/` also means
 Guard 3 cannot collide with its own forbidden-stem list (advisor finding). Every mutation-matrix
-row runs as an in-memory synthesized fixture (`cq-test-fixtures-synthesized-only`) as well as
-against the real tree.
+row runs as an in-memory synthesized fixture (`cq-test-fixtures-synthesized-only`). The same
+helpers also run once, unmutated, against the real tree.
 
 **Failure messages name the fix** (CTO devex):
 
@@ -332,7 +443,15 @@ have sibling files with the same number.
        trigger, and whether it survives total loss of its subject. The rows are
        `workspaces-luks-verify` (web-1; GHA `schedule:`, best-effort per #8495, see #9138),
        `scheduled-inngest-health` and `scheduled-zot-restart-loop` (the ADR-248 clock on both web
-       hosts plus a fallback `schedule:`), and `scheduled-prod-version-drift` (GHA-native).
+       hosts plus a fallback `schedule:`; this survives only while at least two web hosts are
+       deployed, per ADR-248 reversal trigger 3), and `scheduled-prod-version-drift` (GHA-native
+       `schedule:` only, best-effort per #8495).
+     - **Sanctioned Inngest-scheduled watchers** (architecture review P1-5):
+       `cron-inngest-config-drift` (dispatches `inngest-config-drift.yml`) and
+       `cron-inngest-cron-watchdog`. They watch Inngest from inside Inngest, which is legitimate
+       because their run is **not** the only signal of the substrate's total loss;
+       `scheduled-inngest-health` covers that. The corollary is stated as: "a verifier whose own
+       run is the only signal of total loss of its subject must not be executed by that subject".
      - It **must not** describe native `schedule:` as reliable.
    - In place, in the corollary sub-bullet: replace "pinned to web-1 by the single `sdk_url`
      callback" and the `sdk_url = …` clause with the serve-URL binding, and replace
@@ -347,11 +466,21 @@ have sibling files with the same number.
 3. `knowledge-base/engineering/architecture/decisions/ADR-248-watchdog-dispatch-clock-runs-in-the-web-server.md`:
    - In the `### Failure domains` row "web-1 app container (also Inngest's execution host, via
      `sdk_url`)", replace `via \`sdk_url\`` with "via the `app.soleur.ai` serve URL".
-   - That is the only change. No "trigger not fired" note: a non-event needs no entry (plan
-     review).
+   - Under `## Reversal triggers`, re-point "Inngest function execution is decoupled from web-1
+     (#7230)" to **#9137**, because this PR closes #7230 while the decoupling itself moves to
+     #9137. No "trigger not fired" note: a non-event needs no entry (plan review).
 4. `knowledge-base/engineering/architecture/decisions/ADR-143-active-active-web-ingress-drain-gated-host-lifecycle.md`:
    add one line to `## Amendment — 2026-09-23 (#8611, ADR-243)`: the Phase-3 flip must honour the
    execution placement classes (ADR-033 amendment, #7230, #9137).
+5. `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md`
+   (architecture review P1-1): add a dated one-line note under Decision sub-item 1 ("Fan-out
+   mechanism — single stable `--sdk-url`, VIP at N>1").
+   - The note says that **step** fan-out is governed by the registered `serveHost` plus
+     `cloudflare_record.app` and the ADR-033 #7230 placement classes, not by `--sdk-url`, which is
+     the registration poll (#8611).
+   - Otherwise a Phase-3 implementer following ADR-100 would put a VIP behind `--sdk-url` and
+     change nothing about where steps run.
+   - The note leaves the rest of ADR-100 unchanged.
 
 ### C4 views
 
@@ -363,13 +492,28 @@ and `spec.c4`.
 - `inngest` (container "Inngest Server", dedicated host), `api` (container "API Routes"),
   `hetzner` (web hosts), `github` (the GHA dispatch target), `inngestPostgres` and `inngestRedis`.
   All are modelled already.
-- No new external actor, system or store. The change adds no relationship.
+- No new external actor, system or store. The change adds no element.
 
-**Relationship changed (description only):**
+**Relationships changed** (architecture review, C4 finding):
 
-- Container view: the `inngest -> api "Invokes function steps at the registered serve URL …"` edge
-  prose gains "every function executes on the one step-executing host, web-1
-  (`cloudflare_record.app`); per-function placement classes: ADR-033 amendment #7230".
+- The `inngest -> api "Invokes function steps at the registered serve URL …"` edge prose gains two
+  statements:
+  - every function executes on the one step-executing host, web-1 (`cloudflare_record.app`), with
+    per-function placement classes defined by the ADR-033 amendment (#7230);
+  - the dedicated host's `--sdk-url` (`http://10.0.1.10:3000/api/inngest`) is the registration
+    poll only, not the step path.
+- **Three mis-sourced edges are re-sourced from `inngest` to `api`.** Each effect is performed by
+  an Inngest **function**, which executes on web-1, not by the Inngest server host. Leaving them on
+  `inngest` contradicts ADR-100's isolated `soleur-inngest` secret set, which the decision table's
+  SEC-H3 argument relies on.
+  - `inngest -> supabase "Email-triage claim/finalize writes (email-on-received)"`;
+  - `inngest -> github "Mints packages:read installation token every 20 min (ADR-088)"`
+    (`cron-ghcr-token-minter`);
+  - `inngest -> doppler "Writes GHCR_READ_TOKEN …"`.
+  - Each moved edge's prose gains "(Inngest-fired function, executed on web-1)". The edge text is
+    otherwise unchanged, including any numbers.
+  - Before editing, `grep -n` `views.c4` for any view that includes these edges by source. After
+    editing, the c4 render test confirms that every view still resolves.
 - The edit adds **no numeric counts**, so it does not move `c4-count-parity`.
 - Validate with `apps/web-platform/test/c4-code-syntax.test.ts`,
   `apps/web-platform/test/c4-render.test.ts` and `bash plugins/soleur/test/c4-count-parity.test.sh`.
@@ -387,22 +531,35 @@ state. The target state is #9137.
   `apps/web-platform/test/server/watchdog-dispatch-clock.test.ts` ("Guard 2 (static half)") into
   `apps/web-platform/test/helpers/ts-import-graph.ts`. Keep the fail-closed semantics: an
   unresolved local specifier or a non-literal dynamic import is a problem.
-- Inject the filesystem as `{ readFile, exists, appRoot }`, defaulting to `readFileSync`,
-  `existsSync` and the real `APP_ROOT`. Today `resolveSpecifier` calls `existsSync` against a
-  hardcoded root and `specifiersOf` calls `readFileSync`. Without the seam, no synthesized
-  mutation row can run (Kieran P0).
-- Add two additive options, both defaulting to today's behaviour so the clock guard is unchanged:
-  - `stopAt?: (file) => boolean`: when the walk reaches a matching module it records it but does
-    not descend into it. Guard 2 needs this for the definer modules.
-  - `elideTypeOnlySpecifiers?: boolean`: treat an import whose every named specifier is
-    `type`-qualified (`import { type X }`) as erased, as TS does. Guard 2 needs this so a
-    type-only import of `workspace-resolver` types does not spuriously pin a function (advisor
-    finding).
+- Inject the filesystem as `fs = { readFile, exists, listFiles, appRoot }` (Kieran P0, test-design
+  P1-4).
+  - The seam is a **required** parameter on every new helper, so a nested call that forgets it
+    fails to type-check rather than silently reading the real tree.
+  - Only the clock test's existing call keeps a default: `readFileSync` / `existsSync` / a real
+    directory listing / `APP_ROOT`.
+  - `rel()` takes `appRoot` from `fs`, so fixture failure messages are readable.
+  - `listFiles` exists so that Guard 3's directory scan and Guard 4's file enumeration do their
+    extension and test-file filtering **inside** the helper. Fixtures exercise that filtering too.
+- Add two additive options. Both are off by default, so the clock guard is unchanged:
+  - `elideTypeOnlySpecifiers?: boolean`: drop an import edge whose every named specifier is
+    `type`-qualified (`import { type X }`), as TS does. This lets a type-only import of
+    `workspace-resolver` types avoid spuriously pinning a function (advisor finding). Guard 2's
+    named-binding check (i) separately skips each individual `type` specifier on a mixed import.
+  - `recordDynamicImportArgs?: boolean`: record a non-literal `import()`/`require()` as
+    `{ file, argText }` instead of the bare `"<non-literal-dynamic-import>"` marker. Guard 3's
+    exemption can then be keyed by argument identifier (test-design P0-1).
+- **No `stopAt`.** An earlier draft stopped the walk at the definer modules, but that left their own
+  imports unscanned (test-design P0-3). The walk now descends through definers. Guard 2 exempts
+  only the definers' **own source text** from its marker scan, and judges what may be imported
+  from them by named binding.
 - Point the clock test at the helper. Its assertions and in-file fixtures stay unchanged.
-- **Equivalence evidence, not just a count.** Before moving anything, write the sorted `walk(CLOCK)`
-  reach set and `problems` to a scratch file. After the move, recompute them through the helper
-  and `diff`; they must be identical. Paste the `diff` result (empty) and the before/after pass
-  counts into the PR body. The plan-time baseline is 63 passed.
+- **Equivalence evidence, not just a count** (advisor; test-design P2-11).
+  - While both walkers exist, run the old and the new walker over the clock entry **and every
+    served function module** (about 71 entries).
+  - Write each sorted reach set and problems list to a scratch file and `diff` them. They must
+    be identical.
+  - Paste the `diff` summary (empty) and the clock test's before/after pass counts into the PR
+    body. The plan-time baseline is 63 passed.
 
 ### Phase 1 (RED): Write the guard suite
 
@@ -426,7 +583,9 @@ state. The target state is #9137.
   throwaway pass, for example a temporary `it.only` that prints JSON. The derived marker set per
   function, not the plan's regex estimate, seeds the rows:
   - no marker → `portable`;
-  - a user-workspace or `workspace-resolver` marker → `volume-bound`;
+  - a `WORKSPACES_ROOT` read, or reaching `server/workspace.ts` or `server/workspace-resolver.ts`
+    → `volume-bound`. The bare `/workspaces` literal is ambiguous, because `CRON_WORKSPACE_ROOT`
+    and `WORKSPACES_ROOT` share the value, so it does not decide this alone;
   - any other marker → `host-affine`.
   Where the plan's tables disagree with the discovery output, the discovery output wins; note
   each divergence in the PR body.
@@ -467,6 +626,7 @@ cd apps/web-platform && ./node_modules/.bin/vitest run \
   test/c4-code-syntax.test.ts test/c4-render.test.ts
 cd apps/web-platform && ./node_modules/.bin/tsc --noEmit   # the leaf and helpers are typed
 bash plugins/soleur/test/c4-count-parity.test.sh           # from the repo root
+bash plugins/soleur/test/c4-model-freshness.test.sh        # regenerated model.likec4.json matches
 npx markdownlint-cli2 <every edited .md>                    # ADRs, plan, tasks
 ```
 
@@ -491,8 +651,14 @@ After that, rely on CI (the required `test` context).
 - `knowledge-base/engineering/architecture/decisions/ADR-030-inngest-as-durable-trigger-layer.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-248-watchdog-dispatch-clock-runs-in-the-web-server.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-143-active-active-web-ingress-drain-gated-host-lifecycle.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md`: the one-line sub-decision-1 note.
 - `knowledge-base/engineering/architecture/diagrams/model.c4`: the `inngest -> api` edge
-  description.
+  description, plus the three re-sourced edges (`-> supabase`, `-> github`, `-> doppler`).
+- `knowledge-base/engineering/architecture/diagrams/model.likec4.json`: **regenerated, never
+  hand-edited**. The lefthook `c4-model-regenerate` step runs `bash scripts/regenerate-c4-model.sh`
+  and re-stages it whenever a `.c4` file is staged. It is a committed product that the web-platform
+  C4 viewer fetches, and `plugins/soleur/test/c4-model-freshness.test.sh` byte-diffs it in CI.
+  Review `c4-model.md`'s `## Notes` for staleness when the hook prints its advisory.
 
 **Explicitly NOT edited:**
 
@@ -530,6 +696,9 @@ After that, rely on CI (the required `test` context).
   Milestone Post-MVP / Later.
 - **#9138**: `workspaces-luks-verify` fires only on native GHA `schedule:`; evaluate ADR-248 clock
   membership. Milestone Post-MVP / Later.
+- **#9139** (found in the deepen pass): `scripts/encryption-posture-ledger.json` attributes step
+  outputs to the private `sdk_url` link and does not model the Cloudflare serve-URL step-call leg.
+  It is out of scope here because this PR edits no ledger, infra or legal surface.
 
 ## User-Brand Impact
 
@@ -590,8 +759,13 @@ discoverability_test:
 ## Guard Contract
 
 All guards live in `apps/web-platform/test/server/inngest/execution-placement.test.ts`. Every row
-below is an executed test case over an in-memory synthesized fixture, fed through the `readFile` /
-`exists` / `appRoot` seam that Phase 0 adds to the walker.
+below is an executed test case over an in-memory **synthesized** fixture. Fixtures use synthetic
+ids and module names, never copies of real files (`cq-test-fixtures-synthesized-only`). They are
+fed through the required `fs = { readFile, exists, listFiles, appRoot }` seam that Phase 0 adds.
+
+Each guard helper is one pure function, and it is called identically by the real-tree test and the
+fixture tests. The only difference is the `fs` passed in, so the two paths cannot diverge. No row
+mutates a tracked file.
 
 ### Guard 1 — Placement manifest covers exactly the served set
 
@@ -628,7 +802,7 @@ inherit their parent's class, and the leaf header says so.
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the `cron-oauth-probe` row from the manifest | RED (missing: cron-oauth-probe, with a row stub) |
+| 1 | Fixture manifest lacks the row for served synthetic id `cron-alpha` (including the degenerate `{}` manifest) | RED (missing: cron-alpha, with a paste-ready row stub) |
 | 2 | Add a row `cron-does-not-exist` | RED (stale row) |
 | 3 | Own dispatch: fixture route.ts whose array contains `...extraFns` (a spread) | RED (non-Identifier element, fail-closed) |
 | 4 | Own dispatch: fixture route.ts that imports `cronFoo` from `@/server/inngest/functions/cron-foo` but omits it from the array | RED (imported-bindings cross-check) |
@@ -640,7 +814,7 @@ inherit their parent's class, and the leaf header says so.
 
 | # | Suite edit / input | Expected |
 |---|---|---|
-| H1 | Suite edit: replace the manifest input with `{}` while keeping the loop | RED (the comparison is set identity, not iteration over manifest keys) |
+| H1 | Must-PASS non-canonical: the served set and the manifest listed in **different orders**, with ids containing digits (`oneshot-4217-x`) | PASS (set identity, order-free) |
 | H2 | Must-PASS non-canonical: a fixture module defining TWO served functions, both configs wrapped `as unknown as Parameters<…>[0]`, one id via a same-file `const` (the `agent-on-spawn-requested.ts` shape), both with rows | PASS |
 
 **Anchor.** The served set is not stored. It is derived at test time from route.ts and
@@ -659,18 +833,23 @@ allowlisted export's own body.
 **Assembly.** For each `portable` row, Guard 1's resolution gives the function's module. From that
 module, the extracted TS-AST walker (`test/helpers/ts-import-graph.ts`) follows every non-type
 static import, `export … from`, `require()` and `import()`. It fails closed on unresolved or
-non-literal specifiers, and it runs with `elideTypeOnlySpecifiers`. It **stops at** the two definer
-modules, `_cron-shared.ts` and `_cron-claude-eval-substrate.ts`.
+non-literal specifiers, and it runs with `elideTypeOnlySpecifiers`. The walk **descends through**
+the two definer modules, `_cron-shared.ts` and `_cron-claude-eval-substrate.ts`, so their own
+imports are scanned too; only the definers' own source text is exempt from the (ii) marker scan.
+The helper returns `{ offenders, checkedCount, closureSizes }`, and the anti-vacuity floor lives
+**inside** the helper: every checked closure must have more than 1 module and reach at least one
+`@/server/*` module, otherwise it is an offender.
 
 There are four chokepoints, and all four are checked:
 
 - **(i) Every edge into a definer, from any module in the closure**, is judged by its named
-  bindings, using the original name (`propertyName`) when aliased.
+  bindings, using the original name (`propertyName`) when aliased. Each individual `type`
+  specifier on a mixed import is skipped.
   - A re-export `export { x } from "./_cron-shared"` counts as importing `x`.
   - A name outside the allowlist is an offender.
   - So is a namespace, default or `export *` import of a definer, or a `require()`/`import()` of
     one.
-- **(ii) Every non-definer module in the closure** is an offender if it:
+- **(ii) Every module in the closure, except the two definers' own source text**, is an offender if it:
   - imports `child_process` or `node:child_process` (static or dynamic);
   - contains a string literal starting with `/workspaces` or `/mnt/data`;
   - has a property access `process.env.WORKSPACES_ROOT` or `process.env.CRON_WORKSPACE_ROOT`.
@@ -681,8 +860,11 @@ There are four chokepoints, and all four are checked:
   - a binding imported from `child_process`;
   - a `/workspaces` or `/mnt/data` literal;
   - a workspace env read.
+  - An identifier bound to an import from another module is not followed here. Because the walk
+    descends through the definers, that module is already scanned by (ii).
   - This runs once per allowlisted name, independent of which function uses it.
-- **(iv) Type-only imports** are erased and skipped.
+- **(iv) Type-only imports** are erased and skipped: whole-clause imports by the walker option,
+  individual specifiers by (i).
 
 **Mutation matrix:**
 
@@ -690,10 +872,10 @@ There are four chokepoints, and all four are checked:
 |---|---|---|
 | 1 | Add `import { spawnClaudeEval } from "./_cron-claude-eval-substrate"` to a portable fixture | RED |
 | 2 | Add `resolveCronWorkspaceRoot` to a portable fixture's `_cron-shared` import | RED (not allowlisted) |
-| 3 | Own dispatch: the fixture resolver returns `"unresolved"` for every `@/` specifier | RED (fail-closed offender). Anti-vacuity: every real portable closure must have more than 1 module and reach at least one `@/server/*` module, and the synthesized positive fixture (row 1) must still be RED |
+| 3 | Own dispatch: the fixture resolver returns `null` ("bare package, skip") for every `@/` specifier, so the walk silently drops edges | RED via the in-helper floor (closure of size 1, no `@/server/*` reached) |
 | 4 | Second member: two portable fixtures, the first clean, the second importing `child_process` through a helper two hops away | RED naming the second |
 | 5 | Alias: `import { resolveCronWorkspaceRoot as r } from "./_cron-shared"` | RED (original name checked) |
-| 6 | Default-deny: add a new export `pinnedHelper()` to a fixture `_cron-shared.ts` and import it from a portable fixture | RED (not allowlisted) |
+| 6 | Allowlisted export imports a pinning helper: fixture `_cron-shared.ts`'s allowlisted `postSentryHeartbeat` calls `runGit()`, imported from `@/server/git-helper`, which imports `node:child_process` | RED via (ii), because the walk descends through the definer (test-design P0-3) |
 | 7 | Namespace: `import * as shared from "./_cron-shared"`, and separately `await import("./_cron-shared")`, in a portable fixture | RED (both) |
 | 8 | `await import("node:child_process")` in a helper that a portable fixture reaches | RED |
 | 9 | A closure module reads `process.env.WORKSPACES_ROOT` | RED |
@@ -704,7 +886,7 @@ There are four chokepoints, and all four are checked:
 
 | # | Suite edit / input | Expected |
 |---|---|---|
-| H1 | Suite edit: filter the real-tree loop on a mistyped class (`"portabel"`) so it checks 0 functions | RED: the suite asserts that the number of portable functions checked equals the number of `portable` rows, and is greater than 0 |
+| H1 | Fixture manifest with **zero** `portable` rows | RED: the helper returns `checkedCount`; the real-tree test asserts `checkedCount === <number of portable rows> > 0`, and this fixture's `checkedCount === 0` trips the same assertion |
 | H2 | Must-PASS non-canonical: a portable fixture importing `{ postSentryHeartbeat as beat, REPO_OWNER, type HandlerArgs }` from `_cron-shared`, and `import { type SpawnResult }` from the substrate | PASS |
 | H3 | Must-PASS: a `host-affine` fixture importing `spawnClaudeEval` (over-pinning is not guarded) | PASS |
 
@@ -718,9 +900,14 @@ state, and private-IP HTTP calls.
 
 ### Guard 3 — Anti-circularity re-verification
 
-**Property.** No Inngest-executed code can name, and therefore dispatch by filename, a workflow
-that watches the scheduling substrate or verifies the execution host. Those workflows are every
-`WATCHDOG_DISPATCH_TABLE` workflow plus `HOST_STATE_VERIFIER_WORKFLOWS`.
+**Property.** No Inngest-executed code can name, and therefore dispatch by filename, an
+**external-only verifier**: a workflow whose own run is the only signal of the total loss of its
+subject, where that subject is Inngest's scheduler or execution host or something they depend on.
+Those workflows are every `WATCHDOG_DISPATCH_TABLE` workflow plus `HOST_STATE_VERIFIER_WORKFLOWS`.
+
+Inngest-scheduled watchers whose subject's total loss is covered elsewhere are **sanctioned** and
+deliberately not in the set. Today these are `cron-inngest-config-drift` → `inngest-config-drift.yml`
+and `cron-inngest-cron-watchdog`; `scheduled-inngest-health` covers total loss.
 
 **Assembly.** The forbidden set is built from two sources:
 
@@ -732,15 +919,22 @@ that watches the scheduling substrate or verifies the execution host. Those work
 Entries are matched by **stem** (the basename minus `.yml`). The scanned set is the union of:
 
 - **(i)** every non-test `.ts` and `.mjs` module under `apps/web-platform/server/inngest/`. The
-  `.mjs` covers `cron-bash-allowlist-hook.mjs`, which is spawned by path and so is in no closure.
-- **(ii)** the transitive closure of every served function, walked **without** stopAt, so a
-  dispatch helper outside `server/inngest/` is covered.
+  `.mjs` covers `cron-bash-allowlist-hook.mjs`, which is spawned by path as a Claude hook and also
+  imported via `server/cron-filing-deny-marker.ts`. The directory scan makes coverage independent
+  of whether the walker resolves the `.mjs` edge.
+- **(ii)** the transitive closure of every served function, so a dispatch helper outside
+  `server/inngest/` is covered.
+
+The directory scan in (i) enumerates files with `fs.listFiles`, and the extension and test-file
+filtering happens inside the helper.
 
 The closure walk is fail-closed. It carries one **exact exemption**:
 
-- `cron-ux-audit.ts` has 3 non-literal `await import(/* turbopackIgnore */ botFixturePath)` calls.
-- The exemption is keyed by file and argument identifier `botFixturePath`, with an exact count of
-  3 and a reason string. Any other non-literal import anywhere is still a problem.
+- `cron-ux-audit.ts` has 3 non-literal `await import(/* turbopackIgnore: true */ …)` calls:
+  2 with `botFixturePath` and 1 with `botSigninPath` (test-design P0-1).
+- The exemption is keyed by file and **per-argument-identifier count**, `{ botFixturePath: 2,
+  botSigninPath: 1 }`, read from `recordDynamicImportArgs`, with a reason string.
+- Any other non-literal import anywhere is still a problem.
 
 Only string-literal nodes count: `StringLiteral`, `NoSubstitutionTemplateLiteral`, and template
 head, middle and tail text. Comments are excluded by the AST. Every forbidden member must exist at
@@ -750,12 +944,12 @@ head, middle and tail text. Comments are excluded by the AST. Every forbidden me
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | In a fixture copy of `cron-main-health-monitor.ts`, set `WORKFLOW_FILE = "workspaces-luks-verify.yml"` | RED |
+| 1 | A synthesized served dispatcher `cron-dispatch-x.ts` with `const WORKFLOW_FILE = "workspaces-luks-verify.yml"` | RED |
 | 2 | Add a fixture helper `server/github/dispatch-luks.ts` containing `"workspaces-luks-verify"` and reached from a served fixture cron | RED (closure coverage outside `server/inngest/`) |
 | 3 | Own dispatch: the forbidden set is empty (a fixture table `[]` plus an empty verifier list) | RED: the forbidden set must be non-empty and every member must resolve to an existing workflow file; the synthesized positive fixture (row 1) must fire |
 | 4 | Second member: add a second row to a fixture `WATCHDOG_DISPATCH_TABLE` (workflow X) and a fixture cron naming X | RED (the set is derived from the table) |
-| 5 | Rename the `HOST_STATE_VERIFIER_WORKFLOWS` member `workspaces-luks-verify.yml` to a non-existent file | RED (stale entry) |
-| 6 | Exemption is exact: add a 4th non-literal `import(botFixturePath)` to the fixture `cron-ux-audit.ts`, or one `import(x)` in another file | RED (both) |
+| 5 | The verifier list names a workflow absent from the fixture repo's `.github/workflows/` (checked through `fs.exists` under the fixture `appRoot`) | RED (stale entry) |
+| 6 | Exemption is exact: in the fixture `cron-ux-audit.ts`, (a) add a 3rd `import(botFixturePath)`, (b) swap one `botSigninPath` for `x`, which keeps the total at 3, or (c) add one `import(x)` in another file | RED (all three) |
 | 7 | A `.mjs` fixture under `server/inngest/` naming a forbidden stem | RED |
 
 **Harness rows:**
@@ -763,7 +957,7 @@ head, middle and tail text. Comments are excluded by the AST. Every forbidden me
 | # | Suite edit / input | Expected |
 |---|---|---|
 | H1 | Must-PASS non-canonical: a cron fixture with a `//` comment and a `/** */` block mentioning `workspaces-luks-verify` | PASS (comments excluded) |
-| H2 | Must-PASS: a test file containing `"scheduled-inngest-health.yml"` | PASS (tests excluded) |
+| H2 | Must-PASS: a `*.test.ts` fixture under `server/inngest/`, listed by `fs.listFiles`, containing `"scheduled-inngest-health.yml"` | PASS (the helper filters test files; the fixture really lists the file, so this row is not vacuous) |
 
 **Anchor.** The watchdog half of the forbidden set is anchored in `server/watchdog-dispatch-table.ts`,
 whose rows `sentry-monitor-iac-parity.test.ts` independently validates (a non-empty `eligibility`
@@ -772,7 +966,10 @@ string per ADR-248). Removing a row there is an ADR-248 change, not a change to 
 Known limitations, recorded in the ADR:
 
 - a name assembled across template parts, such as `` `workspaces-luks-${x}.yml` ``;
-- a dispatch by **numeric workflow id**, where no filename appears at all.
+- a dispatch by **numeric workflow id**, where no filename appears at all;
+- code loaded by a runtime-computed path: the exempted `cron-ux-audit.ts` imports
+  `plugins/soleur/skills/ux-audit/scripts/bot-{fixture,signin}.ts` via
+  `join(getPluginPath(), …)`, which is outside the walked closure.
 
 ### Guard 4 — Single step-executing host (serve-URL anchor)
 
@@ -788,8 +985,10 @@ slimmed replacement for the cut "single registry" guard.
 **Assembly.** The walk covers every non-test `.ts` and `.tsx` file under `apps/web-platform/app/`,
 `apps/web-platform/server/` and `apps/web-platform/lib/`. Using the TS AST, it checks:
 
-- **(i)** the set of modules importing `serve`, aliased or not, from any `inngest/<adapter>`
-  specifier equals {`app/api/inngest/route.ts`};
+- **(i)** the set of modules that reach a `serve` adapter equals {`app/api/inngest/route.ts`}. A
+  module reaches one by importing `serve` from any `inngest/<adapter>` specifier (aliased or
+  not), or by importing the adapter module as a namespace, default or `require()` (value imports
+  only; `import type` is ignored);
 - **(ii)** in route.ts, `const SERVE_HOST` is a conditional whose `NODE_ENV === "production"`
   branch is the **string literal** `"https://app.soleur.ai"`;
 - **(iii)** the `serve({ … })` call's `serveHost` property references `SERVE_HOST`.
@@ -804,13 +1003,14 @@ It fails closed if any of the three is not found.
 | 2 | Own dispatch: rename `SERVE_HOST` (declaration not found) | RED (fail-closed) |
 | 3 | Second member: add a fixture `app/api/inngest-infra/route.ts` with `import { serve as s } from "inngest/express"` | RED |
 | 4 | Replace `serveHost: SERVE_HOST` with `serveHost: process.env.X` | RED |
+| 5 | Namespace bypass: `import * as i from "inngest/next"; i.serve(…)`, and separately `const { serve } = require("inngest/next")`, in a fixture module | RED (both) |
 
 **Harness rows:**
 
 | # | Suite edit / input | Expected |
 |---|---|---|
 | H1 | Must-PASS non-canonical: the production literal reached through a parenthesized conditional `(NODE_ENV === "production" ? "https://app.soleur.ai" : undefined)` | PASS |
-| H2 | Must-PASS: a module with `import type { InngestFunction } from "inngest"` and a comment containing `serve(` | PASS |
+| H2 | Must-PASS: a module with `import type { serve } from "inngest/next"` and a comment containing `serve(` | PASS (type-only import, and a comment) |
 
 **Anchor.** The DNS half is outside this test: `lb-weight-gate.test.sh` Condition C, run by the
 path-filtered `infra-validation.yml`. The serve literal is protected by this AST check plus the
@@ -826,8 +1026,8 @@ The Step 4.5 advisor consult was folded in as well.
 **Applied (mechanical):**
 
 - **R1 (Kieran P0):** the anti-circularity closure walk would never pass on the real tree
-  (`cron-ux-audit.ts`, 3 non-literal `botFixturePath` imports). It now has an exact exemption with
-  mutation row 6.
+  (`cron-ux-audit.ts`, 3 non-literal imports). It now has an exact exemption with mutation row 6.
+  The deepen pass corrected the count to 2 `botFixturePath` plus 1 `botSigninPath`.
 - **R2 (Kieran P0):** Phase 0 injects the `{ readFile, exists, appRoot }` seam. Without it, no
   synthesized row could run.
 - **R3 (Kieran P1):** Guard 1 unwraps `as` / `satisfies` / parenthesized configs, resolves all
@@ -912,10 +1112,13 @@ operator-requested scope. Keeping it follows the operator's direction.
       origin/main), and `grep -c '34 of 53'` returns `0`. The amendment explains the correction
       without re-quoting either phrase.
 - [ ] ADR-030 (`ADR-030-inngest-as-durable-trigger-layer.md`) has the log line. ADR-248's
-      failure-domain row no longer says "via `sdk_url`", and its reversal-trigger section is
-      unchanged. ADR-143's #8611 amendment has the placement line.
-- [ ] The `model.c4` `inngest -> api` edge names the single step-executing host and the placement
-      rule. The c4 syntax and render tests and `c4-count-parity.test.sh` pass.
+      failure-domain row no longer says "via `sdk_url`", and its #7230 reversal trigger points to
+      #9137. ADR-143's #8611 amendment has the placement line. ADR-100's sub-decision 1 carries
+      the serve-URL note.
+- [ ] The `model.c4` `inngest -> api` edge names the single step-executing host, the placement
+      rule and the registration-only role of `--sdk-url`. The three function-effect edges are
+      sourced from `api`, and `grep -cE '^\s*inngest -> (supabase|github|doppler) '` on
+      `model.c4` returns `0`. `model.likec4.json` is regenerated. The c4 syntax and render tests and `c4-count-parity.test.sh` pass.
 - [ ] `git diff --name-only origin/main...HEAD` lists **no** path under `apps/web-platform/infra/`,
       **no** path under `.github/workflows/`, and not `apps/web-platform/app/api/inngest/route.ts`.
 - [ ] The PR body says `Closes #7230` and links #9137 and #9138. Its first line is the
@@ -956,7 +1159,8 @@ so the Product/UX gate is NONE.
   the walker's reach and problems sets for the clock entry are identical to the pre-extraction
   sets.
 - Given the real tree, when Guard 3 walks every served closure, then the only tolerated
-  non-literal dynamic imports are the 3 exempted `botFixturePath` imports in `cron-ux-audit.ts`.
+  non-literal dynamic imports are the exempted `{ botFixturePath: 2, botSigninPath: 1 }` imports in
+  `cron-ux-audit.ts`.
 - Regression: given a future PR adding `cron-foo.ts` to route.ts without a manifest row, then CI
   is red at Guard 1, and the ADR-033 registration checklist names the fix.
 
@@ -965,9 +1169,10 @@ so the Product/UX gate is NONE.
 | Risk | Mitigation |
 |---|---|
 | Guard 2 flags a function the plan classed `portable` | Re-classify it to the tightest class its marker implies (over-pinning is safe). Never widen the allowlist to pass. |
-| Walker extraction subtly changes the clock guard | A reach-set `diff` before and after is an AC, not just a pass count. Every new option (`stopAt`, `elideTypeOnlySpecifiers`, the `readFile`/`exists`/`appRoot` seam) defaults to today's behaviour. |
-| The fail-closed walker cannot pass on the real tree | Measured at plan review: only `cron-ux-audit.ts`'s 3 `botFixturePath` dynamic imports are non-literal. Guard 3 exempts exactly those, and Guard 2 never walks them because that function is `host-affine`. |
+| Walker extraction subtly changes the clock guard | A reach-set `diff` before and after is an AC, not just a pass count. Every new option (`elideTypeOnlySpecifiers`, `recordDynamicImportArgs`, the `fs` seam) defaults to today's behaviour. |
+| The fail-closed walker cannot pass on the real tree | Measured at plan review: only `cron-ux-audit.ts`'s 3 dynamic imports (2 `botFixturePath` and 1 `botSigninPath`) are non-literal. Guard 3 exempts exactly those, and Guard 2 never walks them because that function is `host-affine`. |
 | Guard false-positives slow future cron PRs | Failure messages name the exact fix (add a row, or re-class). The ADR-033 registration checklist gains the step. |
+| The `inngest@4` upgrade (#8628) changes the SDK surface Guards 1 and 4 parse (`inngest/<adapter>` `serve`, `createFunction(config, …)`, `onFailure` → `-failure`) | Guard 1 and Guard 4 fail closed rather than silently passing, so the upgrade PR sees a red suite and updates the extractor. The SDK facts are pinned in `## Research Insights` against 3.54.2. |
 | Two ADRs keep contradictory "via `sdk_url`" prose | Both are corrected in this PR, and an AC greps ADR-033. |
 | Someone "fixes" #7230 later by repointing `sdk_url` | The ADR amendment states the binding explicitly, and Guard 4 plus Condition C trip on any real change. |
 
