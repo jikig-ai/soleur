@@ -54,9 +54,24 @@ describe("migration 144_pending_checkout_sessions", () => {
   it("carries the claim/reuse columns the route writes", () => {
     const code = stripSqlComments(sql);
     expect(code).toMatch(/\bsession_id\s+text\b/i);
-    expect(code).toMatch(/\btarget_tier\s+text\b/i);
+    // target_tier is NOT NULL and domain-pinned: the four PlanTiers plus the
+    // 'legacy' sentinel — an out-of-domain row would make the reuse
+    // predicate unreadable.
+    expect(code).toMatch(
+      /\btarget_tier\s+text\s+NOT\s+NULL\s+CHECK\s*\(\s*target_tier\s+IN\s*\(\s*'solo'\s*,\s*'startup'\s*,\s*'scale'\s*,\s*'enterprise'\s*,\s*'legacy'\s*\)\s*\)/i,
+    );
     expect(code).toMatch(
       /\bcreated_at\s+timestamptz\s+NOT\s+NULL\s+DEFAULT\s+now\s*\(\s*\)/i,
+    );
+  });
+
+  it("schedules the daily 24h retention sweep for stranded markers", () => {
+    const code = stripSqlComments(sql);
+    expect(code).toMatch(
+      /cron\.schedule\(\s*'pending_checkout_sessions_retention'/i,
+    );
+    expect(code).toMatch(
+      /DELETE\s+FROM\s+public\.pending_checkout_sessions\s+WHERE\s+created_at\s*<\s*now\s*\(\s*\)\s*-\s*interval\s*'24 hours'/i,
     );
   });
 
@@ -96,6 +111,13 @@ describe("migration 144_pending_checkout_sessions", () => {
       const code = stripSqlComments(down);
       expect(code).toMatch(
         /DROP\s+TABLE\s+IF\s+EXISTS\s+public\.pending_checkout_sessions\b/i,
+      );
+    });
+
+    it("unschedules the retention cron before dropping", () => {
+      const code = stripSqlComments(down);
+      expect(code).toMatch(
+        /cron\.unschedule\('pending_checkout_sessions_retention'\)/i,
       );
     });
   });

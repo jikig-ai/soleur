@@ -26,6 +26,8 @@ const {
   mockMarkerDelete,
   mockDeleteEq1,
   mockDeleteSelect,
+  deletePredicates,
+  releaseResult,
   mockCaptureException,
   mockCaptureMessage,
   mockLogger,
@@ -50,6 +52,11 @@ const {
   mockMarkerDelete: vi.fn(),
   mockDeleteEq1: vi.fn(),
   mockDeleteSelect: vi.fn(),
+  // One [col, val][] list per delete() call — the fencing predicate multiset.
+  // Tests assert WHICH predicates ran, not just that a delete happened.
+  deletePredicates: [] as [string, unknown][][],
+  // Result for the release-path bare-await terminal (deleteEq2.then).
+  releaseResult: { current: { error: null as null | { code: string } } },
   mockCaptureException: vi.fn(),
   mockCaptureMessage: vi.fn(),
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -75,7 +82,7 @@ vi.mock("@/lib/supabase/service", () => ({
       const deleteEq2 = {
         select: mockDeleteSelect,
         then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
-          Promise.resolve({ error: null }).then(res, rej),
+          Promise.resolve(releaseResult.current).then(res, rej),
       };
       return {
         insert: (row: unknown) => {
@@ -93,17 +100,31 @@ vi.mock("@/lib/supabase/service", () => ({
         },
         delete: () => {
           mockMarkerDelete();
+          // Every predicate on this delete chain lands in its own list so
+          // tests can assert the fencing multiset per mutation.
+          const preds: [string, unknown][] = [];
+          deletePredicates.push(preds);
           return {
-            eq: (...a: unknown[]) => {
-              mockDeleteEq1(...a);
+            eq: (col: string, val: unknown) => {
+              mockDeleteEq1(col, val);
+              preds.push(["eq", col, val] as unknown as [string, unknown]);
               return {
                 // session-reclaim: .eq("session_id", v) — thenable +
                 // .select so release (bare await) and reclaim both work.
-                eq: () => deleteEq2,
+                eq: (c2: string, v2: unknown) => {
+                  preds.push(["eq", c2, v2] as unknown as [string, unknown]);
+                  return deleteEq2;
+                },
                 // stale-null: .is("session_id", null).eq("created_at").select()
-                is: () => ({
-                  eq: () => ({ select: mockDeleteSelect }),
-                }),
+                is: (c2: string, v2: unknown) => {
+                  preds.push(["is", c2, v2] as unknown as [string, unknown]);
+                  return {
+                    eq: (c3: string, v3: unknown) => {
+                      preds.push(["eq", c3, v3] as unknown as [string, unknown]);
+                      return { select: mockDeleteSelect };
+                    },
+                  };
+                },
               };
             },
           };
@@ -192,6 +213,8 @@ function claimSingleUniqueViolation() {
 describe("POST /api/checkout — pending-claim idempotency (#8918)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    deletePredicates.length = 0;
+    releaseResult.current = { error: null };
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
     setupAuthenticatedUser();
     // Default: claim succeeds (own the slot); Stripe create returns a session.
@@ -244,6 +267,7 @@ describe("POST /api/checkout — pending-claim idempotency (#8918)", () => {
       status: "open",
       client_secret: "cs_existing_secret",
       url: null,
+      metadata: { supabase_user_id: USER_ID, target_tier: "startup" },
     });
 
     const res = await POST(makeRequest({ targetTier: "startup" }));
@@ -252,6 +276,42 @@ describe("POST /api/checkout — pending-claim idempotency (#8918)", () => {
     expect(res.status).toBe(200);
     expect(body.clientSecret).toBe("cs_existing_secret");
     expect(mockRetrieveSession).toHaveBeenCalledWith(SESSION_ID);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("marker-hit + open session + same tier but session belongs to a DIFFERENT user: 500 + Sentry, secret never returned", async () => {
+    mockClaimSingle.mockResolvedValue(claimSingleUniqueViolation());
+    mockMarkerMaybeSingle.mockResolvedValue({ data: markerRow(), error: null });
+    mockRetrieveSession.mockResolvedValue({
+      id: SESSION_ID,
+      status: "open",
+      client_secret: "cs_existing_secret",
+      url: null,
+      metadata: { supabase_user_id: "user-other-999" },
+    });
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.clientSecret).toBeUndefined();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("marker-hit + open session + no metadata: fails closed (treated as foreign), secret never returned", async () => {
+    mockClaimSingle.mockResolvedValue(claimSingleUniqueViolation());
+    mockMarkerMaybeSingle.mockResolvedValue({ data: markerRow(), error: null });
+    mockRetrieveSession.mockResolvedValue({
+      id: SESSION_ID,
+      status: "open",
+      client_secret: "cs_existing_secret",
+      url: null,
+      metadata: null,
+    });
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+
+    expect(res.status).toBe(500);
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
@@ -274,16 +334,18 @@ describe("POST /api/checkout — pending-claim idempotency (#8918)", () => {
     expect(mockMarkerDelete).not.toHaveBeenCalled();
   });
 
-  test("marker-hit + complete session: fenced delete, re-claims, creates a NEW session", async () => {
+  test("marker-hit + complete session (old): fenced delete, re-claims, creates a NEW session", async () => {
     mockClaimSingle
       .mockResolvedValueOnce(claimSingleUniqueViolation())
       .mockResolvedValueOnce(claimSingleOk());
     mockMarkerMaybeSingle.mockResolvedValue({ data: markerRow(), error: null });
+    // created > FRESH_COMPLETION_MS ago — a stale completion, reclaimable.
     mockRetrieveSession.mockResolvedValue({
       id: SESSION_ID,
       status: "complete",
       client_secret: null,
       url: null,
+      created: Math.floor(Date.now() / 1000) - 3600,
     });
 
     const res = await POST(makeRequest({ targetTier: "startup" }));
@@ -293,8 +355,38 @@ describe("POST /api/checkout — pending-claim idempotency (#8918)", () => {
     expect(body.clientSecret).toBe("cs_new_secret");
     expect(mockMarkerDelete).toHaveBeenCalledTimes(1);
     expect(mockDeleteEq1).toHaveBeenCalledWith("user_id", USER_ID);
+    // The reclaim fence predicates on BOTH user_id and session_id.
+    expect(deletePredicates[0]).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(["eq", "user_id", USER_ID]),
+        expect.arrayContaining(["eq", "session_id", SESSION_ID]),
+      ]),
+    );
     expect(mockMarkerInsert).toHaveBeenCalledTimes(2);
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("marker-hit + FRESH complete session (webhook-lag window): 409 checkout_completed, NO second session", async () => {
+    mockClaimSingle.mockResolvedValue(claimSingleUniqueViolation());
+    mockMarkerMaybeSingle.mockResolvedValue({ data: markerRow(), error: null });
+    // Session created 60s ago and already complete — the user JUST paid and
+    // the webhook that flips subscription_status hasn't landed. Minting a
+    // replacement session here is the sequential double-charge path.
+    mockRetrieveSession.mockResolvedValue({
+      id: SESSION_ID,
+      status: "complete",
+      client_secret: null,
+      url: null,
+      created: Math.floor(Date.now() / 1000) - 60,
+    });
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe("checkout_completed");
+    expect(mockMarkerDelete).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
   test("marker-hit + expired session: fenced delete, re-claims, creates a NEW session", async () => {
@@ -439,7 +531,9 @@ describe("POST /api/checkout — pending-claim idempotency (#8918)", () => {
     expect(res.status).toBe(500);
     expect(mockExpireSession).toHaveBeenCalledWith(SESSION_ID);
     expect(mockMarkerDelete).toHaveBeenCalledTimes(1);
-    expect(mockCaptureException).toHaveBeenCalled();
+    // {code:"XX000"} is not an Error — reportSilentFallback routes it to
+    // captureMessage with pg_code tagging.
+    expect(mockCaptureMessage).toHaveBeenCalled();
   });
 
   test("session_id UPDATE fenced out (claim reclaimed mid-create): session expired + 409", async () => {
@@ -487,13 +581,171 @@ describe("POST /api/checkout — pending-claim idempotency (#8918)", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    // Fenced delete wins BEFORE the expire call — assert call order.
-    const deleteIdx = mockMarkerDelete.mock.invocationCallOrder[0];
+    // EXPIRE before the fenced delete: an expire failure must leave the
+    // marker intact so the next attempt re-retrieves the session.
     const expireIdx = mockExpireSession.mock.invocationCallOrder[0];
-    expect(deleteIdx).toBeLessThan(expireIdx);
+    const deleteIdx = mockMarkerDelete.mock.invocationCallOrder[0];
+    expect(expireIdx).toBeLessThan(deleteIdx);
     expect(mockExpireSession).toHaveBeenCalledWith(SESSION_ID);
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
     expect(body.clientSecret).toBe("cs_new_secret");
+  });
+
+  test("different-tier reclaim + expire THROWS: 500, marker NOT deleted — session stays tracked, no orphan", async () => {
+    mockClaimSingle.mockResolvedValue(claimSingleUniqueViolation());
+    mockMarkerMaybeSingle.mockResolvedValue({
+      data: markerRow({ target_tier: "scale" }),
+      error: null,
+    });
+    mockRetrieveSession.mockResolvedValue({
+      id: SESSION_ID,
+      status: "open",
+      client_secret: "cs_wrong_tier",
+      url: null,
+    });
+    mockExpireSession.mockRejectedValue(new Error("stripe 503"));
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+
+    expect(res.status).toBe(500);
+    // The marker survives — the next POST re-retrieves and reclaims.
+    expect(mockMarkerDelete).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockCaptureException).toHaveBeenCalled();
+  });
+
+  test("reclaim delete returns an error (not just 0 rows): 500 — do not proceed to a second create", async () => {
+    mockClaimSingle.mockResolvedValue(claimSingleUniqueViolation());
+    mockMarkerMaybeSingle.mockResolvedValue({ data: markerRow(), error: null });
+    mockRetrieveSession.mockResolvedValue({
+      id: SESSION_ID,
+      status: "expired",
+      client_secret: null,
+      url: null,
+    });
+    mockDeleteSelect.mockResolvedValue({
+      data: null,
+      error: { code: "XX000" },
+    });
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+
+    expect(res.status).toBe(500);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("marker-select error on marker-hit: 500 + no create", async () => {
+    mockClaimSingle.mockResolvedValue(claimSingleUniqueViolation());
+    mockMarkerMaybeSingle.mockResolvedValue({
+      data: null,
+      error: { code: "42P01" },
+    });
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+
+    expect(res.status).toBe(500);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("stale-null reclaim delete errors: 500 + Sentry", async () => {
+    mockClaimSingle.mockResolvedValue(claimSingleUniqueViolation());
+    mockMarkerMaybeSingle.mockResolvedValue({
+      data: markerRow({
+        session_id: null,
+        created_at: new Date(Date.now() - 120_000).toISOString(),
+      }),
+      error: null,
+    });
+    mockDeleteSelect.mockResolvedValue({
+      data: null,
+      error: { code: "XX000" },
+    });
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+
+    expect(res.status).toBe(500);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("stale-null reclaim fence predicates on user_id + session_id IS NULL + created_at", async () => {
+    const staleTs = new Date(Date.now() - 120_000).toISOString();
+    mockClaimSingle
+      .mockResolvedValueOnce(claimSingleUniqueViolation())
+      .mockResolvedValueOnce(claimSingleOk());
+    mockMarkerMaybeSingle.mockResolvedValue({
+      data: markerRow({ session_id: null, created_at: staleTs }),
+      error: null,
+    });
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+
+    expect(res.status).toBe(200);
+    expect(deletePredicates[0]).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(["eq", "user_id", USER_ID]),
+        expect.arrayContaining(["is", "session_id", null]),
+        expect.arrayContaining(["eq", "created_at", staleTs]),
+      ]),
+    );
+  });
+
+  test("release-delete after create failure is fenced by created_at (ABA)", async () => {
+    mockCreateSession.mockRejectedValue(new Error("stripe down"));
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+
+    expect(res.status).toBe(500);
+    expect(deletePredicates[0]).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(["eq", "user_id", USER_ID]),
+        expect.arrayContaining(["eq", "created_at", expect.any(String)]),
+      ]),
+    );
+    expect(deletePredicates[0]).toHaveLength(2);
+  });
+
+  test("release-delete error after create failure: still 500, marker left for stale reclaim", async () => {
+    mockCreateSession.mockRejectedValue(new Error("stripe down"));
+    releaseResult.current = { error: { code: "XX000" } };
+
+    const res = await POST(makeRequest({ targetTier: "startup" }));
+
+    expect(res.status).toBe(500);
+    expect(mockCaptureException).toHaveBeenCalled();
+  });
+
+  test("idempotencyKey is fresh per create: two POSTs produce two distinct keys", async () => {
+    await POST(makeRequest({ targetTier: "startup" }));
+    await POST(makeRequest({ targetTier: "scale" }));
+
+    const keyA = mockCreateSession.mock.calls[0][1].idempotencyKey;
+    const keyB = mockCreateSession.mock.calls[1][1].idempotencyKey;
+    expect(keyA).toBeTruthy();
+    expect(keyB).toBeTruthy();
+    expect(keyA).not.toBe(keyB);
+  });
+
+  test("LEGACY sentinel: marker from a no-body request reuses its session on a no-body retry", async () => {
+    vi.stubEnv("STRIPE_PRICE_ID", "price_legacy");
+    mockClaimSingle.mockResolvedValue(claimSingleUniqueViolation());
+    mockMarkerMaybeSingle.mockResolvedValue({
+      data: markerRow({ target_tier: "legacy" }),
+      error: null,
+    });
+    mockRetrieveSession.mockResolvedValue({
+      id: SESSION_ID,
+      status: "open",
+      client_secret: "cs_legacy_secret",
+      url: null,
+      metadata: { supabase_user_id: USER_ID },
+    });
+
+    const res = await POST(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.clientSecret).toBe("cs_legacy_secret");
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
   test("non-23505 claim error: 500 + Sentry", async () => {
@@ -505,7 +757,9 @@ describe("POST /api/checkout — pending-claim idempotency (#8918)", () => {
     const res = await POST(makeRequest({ targetTier: "startup" }));
 
     expect(res.status).toBe(500);
-    expect(mockCaptureException).toHaveBeenCalled();
+    // PostgrestError is not an Error instance — reportSilentFallback routes
+    // it to captureMessage with pg_code tagging.
+    expect(mockCaptureMessage).toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 

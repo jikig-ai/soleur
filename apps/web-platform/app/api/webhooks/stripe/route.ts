@@ -183,6 +183,10 @@ export async function POST(request: Request) {
             { err: markerDelErr, eventId: event.id },
             "Webhook: pending_checkout_sessions marker delete failed — marker self-heals via reclaim paths",
           );
+          Sentry.captureException(markerDelErr, {
+            tags: { feature: "stripe-webhook", op: "marker-delete" },
+            extra: { eventId: event.id },
+          });
         }
       }
 
@@ -249,6 +253,7 @@ export async function POST(request: Request) {
           const { data: activeSubs } = await getStripe().subscriptions.list({
             customer: sessionCustomerId,
             status: "active",
+            limit: 100,
           });
           const createdMs = activeSubs
             .map((s) => s.created * 1000)
@@ -295,6 +300,30 @@ export async function POST(request: Request) {
             "Webhook: multiple-active-subscriptions anomaly check failed — skipped",
           );
         }
+      }
+      break;
+    }
+
+    case "checkout.session.expired": {
+      // #8918 marker hygiene: an abandoned session can never be completed or
+      // reclaimed into a usable state — its marker is pure residue. Delete it
+      // so the user's next checkout claims cleanly (and so the retention
+      // claim on pending_checkout_sessions stays honest for never-returning
+      // users).
+      const expired = event.data.object as Stripe.Checkout.Session;
+      const { error: markerDelErr } = await supabase
+        .from("pending_checkout_sessions")
+        .delete()
+        .eq("session_id", expired.id);
+      if (markerDelErr) {
+        logger.warn(
+          { err: markerDelErr, eventId: event.id },
+          "Webhook: pending_checkout_sessions marker delete on expired failed — marker self-heals via reclaim paths",
+        );
+        Sentry.captureException(markerDelErr, {
+          tags: { feature: "stripe-webhook", op: "marker-delete" },
+          extra: { eventId: event.id },
+        });
       }
       break;
     }

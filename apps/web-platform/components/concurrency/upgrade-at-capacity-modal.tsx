@@ -49,6 +49,9 @@ interface ModalContext {
 export function UpgradeAtCapacityModal() {
   const [state, setState] = useState<ModalState>("idle");
   const [ctx, setCtx] = useState<ModalContext | null>(null);
+  /** Server-supplied error copy for the "error" state — set when the route
+   *  returns a human-readable body (e.g. the 409 in-progress signal). */
+  const [errorBody, setErrorBody] = useState<string | null>(null);
   /** Abort in-flight /api/checkout on unmount or modal close so an orphaned
    *  fetch doesn't setState on a stale component. */
   const abortRef = useRef<AbortController | null>(null);
@@ -100,6 +103,7 @@ export function UpgradeAtCapacityModal() {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    setErrorBody(null);
     setState("loading");
     try {
       const res = await fetch("/api/checkout", {
@@ -115,10 +119,23 @@ export function UpgradeAtCapacityModal() {
         ]),
       });
       if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+          code?: string;
+        } | null;
+        // 409 = a sibling request owns a checkout in flight (or one just
+        // completed) — an expected race, not a failure. Show the server's
+        // copy and let Retry re-join; don't fire the Sentry warn.
+        if (res.status === 409 && body?.error) {
+          setErrorBody(body.error);
+          setState("error");
+          return;
+        }
         Sentry.captureMessage(
           `/api/checkout returned ${res.status} ${res.statusText}`,
           { level: "warning", tags: { feature: "concurrency", op: "upgrade-checkout" } },
         );
+        setErrorBody(body?.error ?? null);
         setState("error");
         return;
       }
@@ -218,7 +235,7 @@ export function UpgradeAtCapacityModal() {
         {state === "error" && (
           <div data-state="error">
             <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{ERROR_COPY.title}</h2>
-            <p className="mt-2 text-sm text-soleur-text-secondary">{ERROR_COPY.body}</p>
+            <p className="mt-2 text-sm text-soleur-text-secondary">{errorBody ?? ERROR_COPY.body}</p>
             <div className="mt-6 flex items-center justify-between">
               <Button
                 variant="gold"

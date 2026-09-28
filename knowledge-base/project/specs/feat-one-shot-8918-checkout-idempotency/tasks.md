@@ -32,7 +32,7 @@ Derived from the finalized plan. Order follows the plan's Implementation Phases.
 
 - 2.1 Keep existing origin/auth/targetTier/already-subscribed checks unchanged
   and upstream of the claim (error paths must not hold a slot)
-- 2.2 Add `createServiceClient()` import; implement claim:
+- 2.2 Add `getServiceClient()` import; implement claim:
   `INSERT INTO pending_checkout_sessions (user_id, target_tier)` —
   success → own the slot; `PG_UNIQUE_VIOLATION` (`@/lib/postgres-errors`) →
   marker-hit path; other error → Sentry + 500
@@ -48,9 +48,9 @@ Derived from the finalized plan. Order follows the plan's Implementation Phases.
       marker → retry claim once
     - `complete`/`expired` → `DELETE` marker → retry claim once
     - retrieve throws → Sentry + 500, marker untouched (fail-closed)
-  - `session_id` null + `created_at` < 60s →
+  - `session_id` null + `created_at` < 90s →
     `409 { error: "Checkout is already starting — please wait a moment.", code: "checkout_in_progress" }`
-  - `session_id` null + `created_at` ≥ 60s → `DELETE` → retry claim once
+  - `session_id` null + `created_at` ≥ 90s → `DELETE` → retry claim once
   - Bounded single retry; the PK arbitrates residual interleavings
 - 2.5 `client_secret` is never persisted — reuse re-reads it from retrieve
 
@@ -65,7 +65,7 @@ Derived from the finalized plan. Order follows the plan's Implementation Phases.
 ## Phase 4 — Tests
 
 - 4.1 Update `apps/web-platform/test/api-checkout.test.ts` —
-  add `createServiceClient` mock; update `mockCreateSession` call assertions to
+  add `getServiceClient` mock; update `mockCreateSession` call assertions to
   cover the `{ idempotencyKey }` options arg (arg-count-exact matching)
 - 4.2 Update `apps/web-platform/test/api-checkout-tiers.test.ts` — same mock +
   options-arg updates
@@ -73,8 +73,8 @@ Derived from the finalized plan. Order follows the plan's Implementation Phases.
   - 23505 → retrieve `open` + same tier → same `client_secret` returned,
     `create` called once
   - retrieve `complete`/`expired` → marker DELETEd, re-claim, new session
-  - null `session_id` < 60s → 409 + `code: "checkout_in_progress"`, no Stripe call
-  - null `session_id` ≥ 60s → reclaim + new session
+  - null `session_id` < 90s → 409 + `code: "checkout_in_progress"`, no Stripe call
+  - null `session_id` ≥ 90s → reclaim + new session
   - `create` throws after claim → marker DELETEd + 5xx
   - retrieve throws → 500 + Sentry, marker NOT deleted
   - `open` + different tier → `sessions.expire` called → new session created

@@ -104,7 +104,7 @@ Route flow (`app/api/checkout/route.ts`, after the existing
 origin/auth/tier/already-subscribed checks):
 
 1. `INSERT INTO pending_checkout_sessions (user_id, target_tier)` via
-   `createServiceClient()` (service-role-only table, RLS enabled zero policies —
+   `getServiceClient()` (service-role-only table, RLS enabled zero policies —
    same posture as migration 030).
    - **Insert succeeds** → this request owns the slot. Call
      `stripe.checkout.sessions.create(params, { idempotencyKey:
@@ -128,12 +128,12 @@ origin/auth/tier/already-subscribed checks):
          500, and do NOT delete the marker — reclaiming on a transient Stripe
          outage would let a second session coexist with the open first, the
          exact defect being fixed.
-     - `session_id` null and `created_at` < 60s old → a sibling request is
+     - `session_id` null and `created_at` < 90s old → a sibling request is
        mid-`create`; return
        `409 { error: "Checkout is already starting — please wait a moment.", code: "checkout_in_progress" }`
        (the body text is user-visible via `billing-section.tsx`'s `data.error`
        render path — snake_case must not reach it).
-     - `session_id` null and `created_at` ≥ 60s old → crashed-claim residue;
+     - `session_id` null and `created_at` ≥ 90s old → crashed-claim residue;
        `DELETE` and retry once.
    - Claim/reclaim is a bounded single retry — the PK constraint arbitrates any
      residual interleaving; a loser simply re-enters the marker-hit path.
@@ -143,15 +143,18 @@ origin/auth/tier/already-subscribed checks):
    common case).
 3. Webhook (`app/api/webhooks/stripe/route.ts`,
    `checkout.session.completed` block): `DELETE FROM pending_checkout_sessions
-   WHERE session_id = <session.id>` for hygiene, plus a **double-completion
+   WHERE session_id = <session.id>` for hygiene (mirrored on
+   `checkout.session.expired`), plus a **double-completion
    anomaly check** that asserts the *invariant*, not a proxy: a legitimate
    plan-switch checkout also produces `session.subscription ≠
    row.stripe_subscription_id` on an `active` row, so subscription-id mismatch
    alone would false-alarm on every upgrade. Instead call
-   `stripe.subscriptions.list({ customer: session.customer, status: "active" })`
-   — `> 1` active subscription on one customer is the real defect —
+   `stripe.subscriptions.list({ customer, status: "active", limit: 100 })` —
+   **two active subscriptions whose `created` timestamps are within
+   `DOUBLE_COMPLETION_PROXIMITY_MS` (15 min)** is the race signature —
    `logger.warn` + `Sentry.captureMessage` (detection, never auto-cancel on a
-   money path).
+   money path). Legit upgrade pairs are created days/months apart and stay
+   silent.
 
 ## Technical Considerations
 
@@ -170,7 +173,7 @@ origin/auth/tier/already-subscribed checks):
 - **NFR:** +1 small Postgres insert per checkout POST (p99 sub-ms at our scale),
   +1 Stripe `sessions.retrieve` only on the race path. No new dependencies.
 - **Security:** `client_secret` is a bearer capability — kept out of at-rest
-  storage; the table is service-role-only behind `createServiceClient()`.
+  storage; the table is service-role-only behind `getServiceClient()`.
 
 ## User-Brand Impact
 
@@ -182,6 +185,34 @@ origin/auth/tier/already-subscribed checks):
   charges created by a second `checkout.session.completed` overwriting
   `users.stripe_subscription_id` while both Stripe subscriptions stay live.
 - **Brand-survival threshold:** `single-user incident`
+
+**Residual modes this diff introduces (review-surfaced, mitigations noted):**
+
+- *Availability widening (accepted):* every new DB/Stripe call is a new 500 on
+  checkout — degraded Supabase ⇒ degraded checkout. The trade is deliberate
+  (fail-closed prevents double-charges) and the migrate→verify→deploy chain
+  keeps the code-before-table window closed.
+- *Webhook-lag re-checkout:* a `complete` Stripe session reclaimed before the
+  `checkout.session.completed` webhook flips `subscription_status` could mint a
+  second completable session — mitigated by `FRESH_COMPLETION_MS` (15 min):
+  fresh completions return 409 `checkout_completed` instead of reclaiming.
+  Residual: a marker already deleted by the webhook re-enters via the
+  active-subscription guard (legacy path); the targetTier path is upgrade-by-
+  design and covered by the anomaly probe.
+- *Modal 409 copy:* `upgrade-at-capacity-modal.tsx` previously discarded the
+  409 body and Sentry-warned on every `!res.ok` — now renders `body.error` and
+  suppresses the warn on the expected-race 409.
+- *Cross-tab tier ping-pong (latent):* different-tier POSTs expire each
+  other's open session — bounded to one open session per user; no client
+  mounts embedded sessions today so the dying-form artifact is theoretical.
+- *Cutover seam (latent, bounded):* sessions created pre-deploy carry no
+  marker; a post-deploy POST mints a second session — bounded by Stripe's
+  ≤24h embedded-session TTL and by the fact no client can complete embedded
+  sessions yet.
+- *Previously-silent failure now visible (favorable):* an authenticated user
+  with no `public.users` row previously could pay and never activate (the
+  webhook's users update matched 0 rows); the claim INSERT now fails closed
+  with FK 23503 → 500, no charge.
 
 Per plan Phase 2.6 Step 3: `requires_cpo_signoff: true` is set in frontmatter.
 CPO-scope assessment was performed in-process during the domain sweep (see
@@ -206,12 +237,12 @@ conditional-agent block.
 - `apps/web-platform/lib/stripe-subscription-statuses.ts` — `active` is in
   `SUBSCRIPTION_UPDATABLE_STATUSES`, so a second completed session overwrites.
 - `apps/web-platform/lib/postgres-errors.ts` — `PG_UNIQUE_VIOLATION = "23505"`.
-- `apps/web-platform/lib/supabase/server.ts` — exports `createServiceClient`
+- `apps/web-platform/lib/supabase/server.ts` — exports `getServiceClient`
   (re-export from `./service`); the webhook already uses it.
 - `apps/web-platform/components/settings/billing-section.tsx:75-106` —
   `usePendingAction` latch shipped in PR #8904 (client-side mitigation only).
 - `apps/web-platform/test/api-checkout.test.ts`, `api-checkout-tiers.test.ts` —
-  existing vitest coverage; mocks will need a `createServiceClient` entry.
+  existing vitest coverage; mocks will need a `getServiceClient` entry.
 
 **Institutional learnings:**
 
@@ -326,14 +357,15 @@ failures (per `cq-silent-fallback-must-mirror-to-sentry`).
 ### Phase 3: Webhook cleanup + anomaly
 
 `app/api/webhooks/stripe/route.ts`: inside `checkout.session.completed`,
-`DELETE` the marker by `session_id`; before the existing users update, log +
-`Sentry.captureMessage` when `session.subscription` ≠ existing
-`stripe_subscription_id` on an already-`active` row.
+`DELETE` the marker by `session_id` (and likewise on
+`checkout.session.expired`); before the existing users update, log +
+`Sentry.captureMessage` when `subscriptions.list` shows ≥2 active subs
+created <15 min apart (`DOUBLE_COMPLETION_PROXIMITY_MS`).
 
 ### Phase 4: Tests
 
 Update `test/api-checkout.test.ts` + `test/api-checkout-tiers.test.ts` (add
-`createServiceClient` mock; assert the `{ idempotencyKey }` options arg —
+`getServiceClient` mock; assert the `{ idempotencyKey }` options arg —
 `toHaveBeenCalledWith` arg-count exactness means the new second arg must be
 asserted, not ignored). New `test/api-checkout-idempotency.test.ts` for the
 race paths; new `test/supabase-migrations/143-pending-checkout-sessions.test.ts`
@@ -386,9 +418,9 @@ failure_modes:
     detection: "Sentry captureException + marker row DELETEd (release path); log line 'checkout create failed — marker released'"
     alert_route: "Sentry issue → ops"
   - mode: "double checkout completion (two live subs)"
-    detection: "Sentry captureMessage 'checkout double-completion anomaly' when session.subscription ≠ users.stripe_subscription_id on active row"
+    detection: "Sentry captureMessage 'checkout multiple-active-subscriptions anomaly' when ≥2 active subs on one customer are created <15 min apart"
     alert_route: "Sentry issue → ops (manual refund/cancel — never auto-mutated)"
-  - mode: "wedged marker (session_id null > 60s)"
+  - mode: "wedged marker (session_id null > 90s)"
     detection: "reclaim path executes; logger.warn on reclaim of stale marker"
     alert_route: "log volume spike visible in web-platform log stream"
 logs:
@@ -412,7 +444,7 @@ at_rest:
     live_verification: "unavailable:provider-managed attestation, no customer-facing toggle"
 in_transit:
   - connection: "web-platform -> Supabase Postgres (marker INSERT/SELECT/UPDATE/DELETE)"
-    enforced_at: "apps/web-platform/lib/supabase/service.ts (createServiceClient — supabase-js HTTPS client)"
+    enforced_at: "apps/web-platform/lib/supabase/service.ts (getServiceClient — supabase-js HTTPS client)"
     tls: "HTTPS/TLS via supabase-js"
     cert_verification: "on"
     does_not_defend: "service-key theft — key is a bearer credential by design"
@@ -461,7 +493,7 @@ decision: a Postgres-PK claim mirrors the proven `processed_stripe_events`
 precedent instead of inventing a third dedup mechanism. New table is additive;
 no ownership/tenancy boundary moves; no ADR warranted — the pattern is already
 the recorded house pattern (migration 030 comments, #2772). Risks: wedged
-markers (mitigated by retrieve-status + 60s null-marker reclaim), and
+markers (mitigated by retrieve-status + 90s null-marker reclaim), and
 second-arg `idempotencyKey` breaking arg-count-exact test assertions (covered
 in Phase 4).
 
@@ -503,7 +535,7 @@ path renders `data.error`, which is server text on an existing surface).
 - [x] AC1: Migration `NNN_pending_checkout_sessions.sql` + `.down.sql` create/drop the table with PK on `user_id`, `ON DELETE CASCADE` FK, RLS enabled with zero policies, LAWFUL_BASIS annotation, and a migration test under `test/supabase-migrations/`.
 - [x] AC2: Two sequential POSTs with a live marker return the SAME checkout session — the second response's `client_secret`/`url` belongs to the session created by the first (covered by a vitest case simulating the 23505 → retrieve → open path).
 - [x] AC3: A marker-hit where retrieve reports `complete` or `expired` deletes the marker, re-claims, and creates a NEW session (vitest case).
-- [x] AC4: A null-`session_id` marker younger than 60s returns `409` with a human-readable `error` string plus `code: "checkout_in_progress"`; older than 60s it is reclaimed (vitest cases).
+- [x] AC4: A null-`session_id` marker younger than 90s returns `409` with a human-readable `error` string plus `code: "checkout_in_progress"`; older than 90s it is reclaimed (vitest cases).
 - [x] AC5: Stripe `create` failure after a won claim deletes the marker before the 5xx (vitest case asserting the DELETE was issued).
 - [x] AC5b: A marker-hit whose `sessions.retrieve` throws returns 500 + Sentry and does NOT delete the marker (vitest case — fail-closed on transient Stripe outage).
 - [x] AC5c: A marker-hit on an `open` session for a DIFFERENT `target_tier` calls `sessions.expire`, deletes the marker, and creates a new session for the requested tier (vitest case — never reuse a wrong-price session).
@@ -525,7 +557,7 @@ path renders `data.error`, which is server text on an existing surface).
 - A second concurrent POST can never reach `sessions.create` while a sibling
   claim is in flight or an open session exists — enforced by PK + code path,
   asserted by the vitest interleaving case.
-- Zero `checkout double-completion anomaly` Sentry events post-deploy.
+- Zero `checkout multiple-active-subscriptions anomaly` Sentry events post-deploy.
 - `pending_checkout_sessions` stays near-empty (rows only while a session is
   open); no wedged markers blocking repeat checkouts.
 

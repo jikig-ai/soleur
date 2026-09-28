@@ -43,6 +43,8 @@ permalink: legal/gdpr-policy/
 
 **Corrected September 23, 2026 (#8532 / #8617).** Section 3.11 previously stated that the plaintext recipient address and body of an outbound email are never stored anywhere on our infrastructure and that no AI provider receives them. Both statements were too broad. Our outbound-email records have never held them. However, the address and body also exist in the agent conversation in which the message is drafted, and the AI provider that runs that conversation processes them. Separately, from June 9, 2026 until this correction, an error raised when a send was refused could include the recipient address. That error reached our server logs, Better Stack and Sentry. An approval notification emailed while the operator was offline could also include the address and the start of the body. Those paths are now fixed. The affected passages have been corrected in place. *(The `Last Updated` date above is deliberately unchanged, for the reason tracked at #7465.)* Classified Tier 1 for the data-protection notice; the Terms of Service were not changed, so `TC_VERSION` remains unchanged.
 
+**Amended:** September 28, 2026 — `pending_checkout_sessions` (migration 144), a per-user pending-checkout claim row for POST /api/checkout server-side idempotency (#8918), is added under the existing Web Platform processing activity: Article 6(1)(b) contract necessity, holding only a Stripe session id, the user's selected tier, and a timestamp; excluded from the Article 15 export (enumerated in the Data Protection Disclosure, Section 5.3(a)), erased via `ON DELETE CASCADE` from `public.users`, and bounded by a daily 24-hour retention sweep. No new processing activity, lawful basis, recipient, sub-processor, or third-country transfer. Ref #8918. Classified Tier 1 for the data-protection notice; the Terms of Service were not changed, so `TC_VERSION` remains unchanged. Output marked draft-requiring-professional-review.
+
 ---
 
 ## 1. Introduction
@@ -564,6 +566,9 @@ Newsletter subscriber email addresses are retained by Buttondown for as long as 
 ### 8.4 Web Platform Data
 
 Web Platform account data (email, hashed password, auth tokens) is retained while the account is active and deleted upon account deletion request. Conversation data (messages and conversation metadata) is retained while the account is active and deleted upon account deletion request (cascade delete via foreign key). Encrypted API keys are deleted with the associated workspace. Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
+
+Pending-checkout **claim rows** (`pending_checkout_sessions`, migration 144) are transient: one row per in-flight checkout, deleted when the Stripe session completes, expires, or is reclaimed, and swept daily past 24 hours (Stripe embedded sessions self-expire by then). Erasure cascades from `public.users`; the table is excluded from the Article 15 export (Data Protection Disclosure, Section 5.3(a)).
+
 
 ### 8.5 Third-Party Retention
 

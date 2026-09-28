@@ -212,6 +212,7 @@ describe("Stripe webhook — subscription lifecycle", () => {
       expect(mockSubsList).toHaveBeenCalledWith({
         customer: CUSTOMER_ID,
         status: "active",
+        limit: 100,
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ customerId: CUSTOMER_ID, activeCount: 2 }),
@@ -271,6 +272,49 @@ describe("Stripe webhook — subscription lifecycle", () => {
         expect.stringContaining("multiple-active-subscriptions anomaly"),
         expect.anything(),
       );
+    });
+
+    test("marker-delete failure is non-fatal: 200 + warn + Sentry mirror (#8918)", async () => {
+      mockMarkerDeleteEq.mockResolvedValue({ error: { code: "XX000" } });
+      const event = makeEvent("checkout.session.completed", {
+        id: "cs_test_done_del_err",
+        customer: CUSTOMER_ID,
+        subscription: SUBSCRIPTION_ID,
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("marker delete failed"),
+      );
+      expect(mockCaptureException).toHaveBeenCalled();
+      // The subscription update still ran — cleanup failure is not the
+      // money path's problem.
+      expect(mockUpdate).toHaveBeenCalled();
+    });
+  });
+
+  describe("checkout.session.expired (#8918)", () => {
+    test("deletes the pending marker so the next checkout claims cleanly", async () => {
+      const event = makeEvent("checkout.session.expired", {
+        id: "cs_test_expired_1",
+        customer: CUSTOMER_ID,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockMarkerDeleteEq).toHaveBeenCalledWith(
+        "session_id",
+        "cs_test_expired_1",
+      );
+      // No users update — there is nothing to activate for an expired session.
+      expect(mockUpdate).not.toHaveBeenCalled();
     });
   });
 
