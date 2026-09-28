@@ -24,11 +24,19 @@ describe("classifyGitDataPinFault", () => {
     ["spawn git ENOENT is not a pin fault", rejection({ code: "ENOENT", syscall: "spawn git" }), "git", null],
     ["ssh 255 + host-key text", rejection({ code: 255, stderr: HOST_KEY_STDERR }), "ssh", "host_key_mismatch"],
     ["ssh 128 + host-key text is the remote's status", rejection({ code: 128, stderr: HOST_KEY_STDERR }), "ssh", null],
+    // The push is never read for host identity: git's 128 is every fatal error, and some
+    // echo the tenant's own bytes (security review F1, #8572).
     [
-      "git 128 + host-key text",
+      "git 128 + host-key text is not read on the push",
       rejection({ code: 128, stderr: `${HOST_KEY_STDERR}\nfatal: Could not read from remote repository.` }),
       "git",
-      "host_key_mismatch",
+      null,
+    ],
+    [
+      "tenant-forged host-key text in a packed-refs fatal",
+      rejection({ code: 128, stderr: "fatal: unexpected line in .git/packed-refs: Host key verification failed" }),
+      "git",
+      null,
     ],
     ["git 255 + host-key text is not git's status", rejection({ code: 255, stderr: HOST_KEY_STDERR }), "git", null],
     ["ssh 255 + auth text", rejection({ code: 255, stderr: "Permission denied (publickey)." }), "ssh", null],

@@ -73,10 +73,11 @@ const WS = "ws-raw-sentinel-8572a";
 const WT = "wt-raw-sentinel-8572b";
 const USER = "user-raw-sentinel-8572c";
 
-async function push() {
+async function push(onLogger?: (logger: typeof import("../server/logger").default) => void) {
   vi.resetModules();
   const { replicateToGitData } = await import("../server/git-data-replication");
   const logger = (await import("../server/logger")).default;
+  onLogger?.(logger);
   // A breadcrumb candidate carrying a raw workspace path, as a session's own logs would.
   logger.warn({ workspacePath: `/workspaces/${WS}/repo` }, "pre-push workspace note");
   return replicateToGitData({ workspacePath: `/workspaces/${WS}`, workspaceId: WS, worktreeId: WT, leaseGeneration: 7, userId: USER }).then(
@@ -110,13 +111,12 @@ function assertOnePinFaultEvent(reason: string, via: "ssh" | "git") {
   expect(message).toBe(
     `git-data replication push pin fault (${reason}): the workspace's objects were NOT replicated to the shared store`,
   );
-  expect(ctx).toMatchObject({
-    level: "error",
-    tags: { feature: "worktree_lease", op: "git_data_replication_push", pin_fault: reason },
-    extra: { via, pinFault: reason, leaseGeneration: 7 },
-  });
-  // Captured inside a fresh isolation scope, after its breadcrumbs were cleared — so the
+  expect(ctx).toMatchObject({ level: "error", extra: { via, pinFault: reason, leaseGeneration: 7 } });
+  // Exact: a tag added to push events only (an erasure outcome, a raw-ish id) must fail here.
+  expect(ctx.tags).toEqual({ feature: "worktree_lease", op: "git_data_replication_push", pin_fault: reason });
+  // Captured inside ONE forked isolation scope, after its breadcrumbs were cleared — so the
   // pre-push breadcrumb carrying the raw path cannot ride this event.
+  expect(sentry.withIsolationScope).toHaveBeenCalledTimes(1);
   const i = sentry.events.indexOf("captureMessage");
   expect(sentry.events.slice(0, i)).toContain("scope:clearBreadcrumbs");
   expect(sentry.events.lastIndexOf("scope:open", i)).toBeLessThan(sentry.events.lastIndexOf("scope:clearBreadcrumbs", i));
@@ -140,17 +140,17 @@ describe("push pin fault — what actually reaches Sentry", () => {
     expect(payload).toContain(hashUserId(WT));
   });
 
-  it("host key not established on the git push: host_key_mismatch via git, no stderr on the event", async () => {
+  it("host key not established on the provision dial: host_key_mismatch via ssh, no stderr on the event", async () => {
     vi.stubEnv("GIT_DATA_SSH_HOST_KEY", makeEd25519Pin());
-    gitTransport.mockRejectedValueOnce(
-      Object.assign(new Error(`Command failed: git push git-data refs/soleur/worktrees/${WT}/heads/*`), {
-        code: 128,
-        stderr: "Host key verification failed.\nfatal: Could not read from remote repository.",
+    sshTransport.mockRejectedValueOnce(
+      Object.assign(new Error(`Command failed: ssh git@10.0.0.9 provision ${WS}`), {
+        code: 255,
+        stderr: "Host key verification failed.",
       }),
     );
     const settled = await push();
     expect(settled).toBeInstanceOf(Error);
-    const payload = assertOnePinFaultEvent("host_key_mismatch", "git");
+    const payload = assertOnePinFaultEvent("host_key_mismatch", "ssh");
     expect(payload).not.toMatch(/verification failed|Command failed/);
     for (const raw of [WS, WT, USER]) expect(payload).not.toContain(raw);
   });
@@ -166,5 +166,40 @@ describe("push pin fault — what actually reaches Sentry", () => {
     );
     expect(tagged).toHaveLength(0);
     expect(sentry.captureException).toHaveBeenCalled();
+  });
+
+  it("a scope that cannot be opened never throws into the push: the original error is rethrown, pino only", async () => {
+    sentry.withIsolationScope.mockImplementationOnce(() => {
+      throw new TypeError("withIsolationScope is not a function");
+    });
+    let errorSpy!: ReturnType<typeof vi.spyOn>;
+    const settled = await push((logger) => {
+      errorSpy = vi.spyOn(logger, "error");
+    });
+    // The resolver's refusal, not the observability failure.
+    expect(settled).toMatchObject({ name: "GitDataHostKeyPinError", reason: "pin_absent" });
+    // Never captured in the ambient scope, whose breadcrumbs hold the raw path.
+    expect(sentry.captureMessage).not.toHaveBeenCalled();
+    expect(sentry.captureException).not.toHaveBeenCalled();
+    const lines = errorSpy.mock.calls.filter((c: unknown[]) => String(c[1]).startsWith("git-data replication push pin fault"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0][0]).toMatchObject({ op: "git_data_replication_push", pinFault: "pin_absent", via: "ssh" });
+    expect(JSON.stringify(lines[0])).not.toContain(USER);
+    errorSpy.mockRestore();
+  });
+
+  it("a report that throws inside the scope is swallowed once, never re-logged", async () => {
+    // reportSilentFallback guards its Sentry calls itself; its pino line is the unguarded step.
+    let errorSpy!: ReturnType<typeof vi.spyOn>;
+    const settled = await push((logger) => {
+      errorSpy = vi.spyOn(logger, "error").mockImplementationOnce(() => {
+        throw new Error("pino transport exploded");
+      });
+    });
+    // The resolver's refusal still reaches the caller, not the observability failure.
+    expect(settled).toMatchObject({ name: "GitDataHostKeyPinError", reason: "pin_absent" });
+    const lines = errorSpy.mock.calls.filter((c: unknown[]) => String(c[1]).startsWith("git-data replication push pin fault"));
+    expect(lines).toHaveLength(1);
+    errorSpy.mockRestore();
   });
 });

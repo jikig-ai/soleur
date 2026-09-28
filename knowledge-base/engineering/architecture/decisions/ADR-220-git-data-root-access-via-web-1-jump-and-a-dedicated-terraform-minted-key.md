@@ -700,7 +700,9 @@ Dated text above is not rewritten.
 
 - **Met on #8572's merge plus a green `apply-sentry-infra.yml` and `web-platform-release.yml`.** The
   `git-data-host-key-pin-fault` rule pages on the `pin_fault` tag (boot and replication-push pin
-  faults), and `art17-erasure-incomplete` now also re-pages per event. The flip check reads the live
-  rule's content (enabled, the exact `in` set, `ActiveMembers`) and the deployed release, not the
-  rule's name. #8211's per-id re-erasure path remains a separate, hard precondition. No earlier entry
+  faults), and `art17-erasure-incomplete` now also re-pages per event on an unresolved issue. The
+  #8211 PR2 flip check (`pin_fault_paging_absent`, not built yet) must read the live rule's content
+  (enabled, the exact `in` set, the issue-owners email falling back to active members) and the
+  deployed release, not the rule's name; until it exists, `scripts/sentry-alert-live-fidelity.sh`'s
+  `sentry_alert live fidelity: PASS` is that read. #8211's per-id re-erasure path remains a separate, hard precondition. No earlier entry
   is edited.

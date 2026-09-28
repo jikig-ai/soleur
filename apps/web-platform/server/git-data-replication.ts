@@ -462,10 +462,6 @@ function scrubErasureDetail(raw: string, workspaceId: string): string {
 /** ssh's own 255 covers both "could not connect" and "you may not in". Only stderr tells them apart. */
 const SSH_AUTH_FAILURE = /permission denied|publickey|too many authentication failures|load key|invalid format/i;
 
-// SSH_HOST_KEY_MISMATCH (host identity failures, checked BEFORE SSH_AUTH_FAILURE on a
-// 255) lives in git-data-pin-fault.ts since #8572, so the push classifier and this
-// erasure path read one constant.
-
 /**
  * (#8094) WHY THIS RETURNS AN OUTCOME INSTEAD OF void.
  *
@@ -788,7 +784,7 @@ export async function replicateToGitData(params: {
     return { status: "replicated" };
   } catch (err) {
     // (#8572) A pin fault (absent or invalid pin, no ssh client, host identity not
-    // established) goes to the message path with the `pin_fault` tag that
+    // established on the provision dial) goes to the message path with the `pin_fault` tag that
     // `sentry_alert.git_data_host_key_pin_fault` pages on. The reason leads the message, so
     // each reason is its own Sentry issue. No stderr and no err.message is sent. Exactly one
     // capture per failure either way: the message path logs `{ err: null }`, so the pino
@@ -805,7 +801,8 @@ export async function replicateToGitData(params: {
           workspaceIdHash: hashUserId(workspaceId),
           worktreeIdHash: hashUserId(worktreeId),
           leaseGeneration,
-          userId,
+          // Hashed here, not at the emit boundary: GitDataPinFaultExtra refuses a raw userId.
+          userIdHash: hashUserId(userId),
           via,
         },
       });

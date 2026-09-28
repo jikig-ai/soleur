@@ -263,13 +263,12 @@ export async function deleteAccount(
       // pino mirror with only `feature=pino-mirror` and the tagged capture is dropped
       // (#8629), so art17_erasure_incomplete — which filters on `feature`/`op` — would
       // never see it. The status (and, for `unconfigured`, the fixed reason word) leads the
-      // message so each fault groups into its own Sentry issue: the alert fires only on
-      // first-seen / reappeared / regression, so a shared issue would let an open
-      // `remove_key_absent` issue hide a later `pin_absent`.
-      // (2026-09-28, #8572) The rule now also re-pages per event: an
-      // `event_frequency_count {1h, 0}` trigger fires on every event, throttled by the
-      // rule's 5-minute per-issue action interval, so an open issue no longer swallows the
-      // next fault. The per-status grouping above still keeps each fault its own issue.
+      // message so each fault groups into its own Sentry issue, and a `remove_key_absent`
+      // issue can never hide a later `pin_absent`. Since #8572 the rule also re-pages per
+      // event (`event_frequency_count {1h, 0}`, throttled by its 5-minute per-issue action
+      // interval), so an open issue no longer swallows the next fault; before, it paged
+      // only on first-seen / reappeared / regression. An archived or ignored issue fires
+      // no trigger at all, so these issues are resolved after the sweep, never archived.
       const reason =
         outcome.status === "unconfigured" ? /^([a-z_]+): /.exec(outcome.detail)?.[1] : undefined;
       reportSilentFallback(null, {

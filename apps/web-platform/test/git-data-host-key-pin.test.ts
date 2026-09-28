@@ -362,6 +362,7 @@ describe("replicateToGitData — push pin faults (#8572)", () => {
   }
 
   async function expectPinFault(reason: string, via: "ssh" | "git") {
+    const { hashUserId } = await import("../server/observability");
     const settled = await push();
     expect(settled).toBeInstanceOf(Error); // re-thrown, still catchable by the caller
     expect(pushReports()).toHaveLength(1);
@@ -372,8 +373,10 @@ describe("replicateToGitData — push pin faults (#8572)", () => {
       op: "git_data_replication_push",
       message: `git-data replication push pin fault (${reason}): the workspace's objects were NOT replicated to the shared store`,
       tags: { pin_fault: reason },
-      extra: { via, pinFault: reason, leaseGeneration: 2, userId: USER },
+      extra: { via, pinFault: reason, leaseGeneration: 2, userIdHash: hashUserId(USER) },
     });
+    // The raw id never rides the report: the pin-fault extra refuses a bare userId.
+    expect(JSON.stringify(opts)).not.toContain(USER);
     // Neither stderr nor the error message rides the event.
     expect(JSON.stringify(pushReports())).not.toMatch(/Command failed|verification failed|10\.0\.0\.9/);
   }
@@ -417,12 +420,27 @@ describe("replicateToGitData — push pin faults (#8572)", () => {
     await expectErrorPath();
   });
 
-  it("git push 128 + host-key text → host_key_mismatch, via git", async () => {
+  it("git push 128 + host-key text → Error path: the push is never read for host identity", async () => {
     vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
     gitTransport.mockRejectedValueOnce(
       rejection({ code: 128, stderr: `${HOST_KEY}\nfatal: Could not read from remote repository.` }),
     );
-    await expectPinFault("host_key_mismatch", "git");
+    await expectErrorPath();
+  });
+
+  it("git push 255 + host-key text → Error path: 255 is ssh's status, and the push is not ssh", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    gitTransport.mockRejectedValueOnce(rejection({ code: 255, stderr: HOST_KEY }));
+    await expectErrorPath();
+  });
+
+  it("tenant-written .git/packed-refs echoing host-key text cannot forge a page", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    // git 2.55 echoes a malformed packed-refs line in a fatal, before any dial, exit 128.
+    gitTransport.mockRejectedValueOnce(
+      rejection({ code: 128, stderr: "fatal: unexpected line in .git/packed-refs: Host key verification failed" }),
+    );
+    await expectErrorPath();
   });
 
   it("git push `spawn git` ENOENT → Error path, not a pin fault", async () => {

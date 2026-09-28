@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 
 import { GIT_DATA_PIN_FAULT_REASONS } from "@/server/git-data-pin-fault";
 import { ART17_ERASURE_FEATURE, ART17_ERASURE_OP } from "@/server/account-delete";
+import { stripComments } from "./helpers/strip-comments";
 
 // #8572 — cross-artifact contracts between two emitters and the rules that page on them.
 //
@@ -14,9 +15,11 @@ import { ART17_ERASURE_FEATURE, ART17_ERASURE_OP } from "@/server/account-delete
 // Guard 2: `sentry_alert.art17_erasure_incomplete` routes every Art. 17 erasure outcome
 // (it filters on feature+op only) and keeps re-paging while events continue.
 //
-// Every literal is IMPORTED from the emitter, never re-typed here, so this file cannot
-// agree with itself while disagreeing with the code. Comment lines are stripped before any
-// match, so a commented-out filter or trigger cannot satisfy an assertion that it is live.
+// Every value the emitters own (the reason vocabulary, the Art. 17 feature/op) is IMPORTED,
+// never re-typed here, so this file cannot agree with itself while disagreeing with the
+// code; the rule's own settings (240, 5, the tag key) are pinned as literals on purpose.
+// HCL comments (`#`, `//` and `/* */`) are stripped before any match, so a commented-out
+// filter, trigger or setting cannot satisfy an assertion that it is live.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(here, "..");
@@ -41,11 +44,21 @@ const reference = JSON.parse(readFileSync(join(sentryDir, "alert-reference.json"
   }
 >;
 
+// Block comments first (newlines kept, so line anchors still hold), then whole-line ones.
+// The rules carry no `/*` inside a string, so a lexer-free strip is exact here.
 const stripHclComments = (s: string) =>
   s
+    .replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ""))
     .split("\n")
     .filter((l) => !/^\s*(#|\/\/)/.test(l))
     .join("\n");
+
+/** The single value of a top-level attribute, refusing a block that sets it twice. */
+function attr(block: string, name: string): string {
+  const all = [...block.matchAll(new RegExp(`^\\s*${name}\\s*=\\s*(\\S+)`, "gm"))].map((x) => x[1]);
+  if (all.length !== 1) throw new Error(`fixture: expected exactly one ${name}, read ${all.length}`);
+  return all[0];
+}
 
 function ruleBlock(address: string): string {
   const m = stripHclComments(tf).match(
@@ -88,10 +101,9 @@ const RE_PAGING = '{ event_frequency_count = { interval = "1h", value = 0 } }';
 const TRANSITIONS = ["{ first_seen_event = {} }", "{ reappeared_event = {} }", "{ regression_event = {} }"];
 
 function ownFrequencyIsUnique(block: string) {
-  const own = block.match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
-  if (!own) throw new Error("fixture: frequency_minutes not found in the rule");
+  const own = attr(block, "frequency_minutes");
   const all = [...stripHclComments(allTf).matchAll(/^\s*frequency_minutes\s*=\s*(\d+)/gm)].map((x) => x[1]);
-  return { own: Number(own[1]), count: all.filter((v) => v === own[1]).length };
+  return { own: Number(own), count: all.filter((v) => v === own).length };
 }
 
 // ── Guard 1 ────────────────────────────────────────────────────────────────────────────
@@ -108,10 +120,10 @@ describe("git_data_host_key_pin_fault — emitter/rule contract (#8572, Guard 1)
     expect(logicTypes(block())).toEqual(["all"]);
   });
 
-  it("routes exactly the emitter's vocabulary: nothing missing, nothing extra", () => {
+  it("routes exactly the emitter's vocabulary, in its sorted order", () => {
+    expect([...GIT_DATA_PIN_FAULT_REASONS]).toEqual([...GIT_DATA_PIN_FAULT_REASONS].sort());
     const m = conditions(block())[0].match(TAGGED("pin_fault"))!;
-    expect(new Set(m[2].split(","))).toEqual(new Set(GIT_DATA_PIN_FAULT_REASONS));
-    expect(m[2].split(",")).toHaveLength(GIT_DATA_PIN_FAULT_REASONS.length);
+    expect(m[2]).toBe(GIT_DATA_PIN_FAULT_REASONS.join(","));
   });
 
   it("the reference entry mirrors the same set", () => {
@@ -123,9 +135,14 @@ describe("git_data_host_key_pin_fault — emitter/rule contract (#8572, Guard 1)
     const cmp = ref.actionFilters[0].conditions[0].comparison;
     expect(cmp.key).toBe("pin_fault");
     expect(cmp.match).toBe("in");
-    const values = cmp.value.split(",");
-    expect(new Set(values)).toEqual(new Set(GIT_DATA_PIN_FAULT_REASONS));
-    expect(values).toHaveLength(GIT_DATA_PIN_FAULT_REASONS.length);
+    expect(cmp.value).toBe(GIT_DATA_PIN_FAULT_REASONS.join(","));
+    // The rest of the entry is held by sentry-alert-reference-gate.sh in CI (plan_pr);
+    // pinned here too so a vitest-only run cannot pass a stale reference.
+    expect(ref.enabled).toBe(true);
+    expect(ref.frequency).toBe(240);
+    expect(ref.actionFilters[0].actions.map((a) => [a.type, a.targetType, a.fallthroughType])).toEqual([
+      ["email", "issue_owners", "ActiveMembers"],
+    ]);
   });
 
   it("pages on the transitions AND keeps re-paging while a fault persists", () => {
@@ -133,7 +150,7 @@ describe("git_data_host_key_pin_fault — emitter/rule contract (#8572, Guard 1)
   });
 
   it("is enabled and emails a person (issue_owners → ActiveMembers, never NoOne)", () => {
-    expect(block()).toMatch(/^\s*enabled\s*=\s*true/m);
+    expect(attr(block(), "enabled")).toBe("true");
     expect(block()).toMatch(
       /email\s*=\s*\{\s*target_type\s*=\s*"issue_owners"\s*,\s*fallthrough_type\s*=\s*"ActiveMembers"\s*\}/,
     );
@@ -153,9 +170,6 @@ describe("git_data_host_key_pin_fault — emitter/rule contract (#8572, Guard 1)
 
 // ── Guard 1 census: the single writer ──────────────────────────────────────────────────
 
-/** Strip `/* … *\/` blocks (JSDoc included) and `//` line comments that start a line or follow whitespace. */
-const stripTsComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
-
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     if (name === "node_modules" || name.startsWith(".")) continue;
@@ -167,28 +181,40 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 describe("pin_fault census — one writer in the app (#8572, Guard 1)", () => {
-  const files = ["server", "app", "lib"].flatMap((d) => walk(join(appRoot, d)));
+  // Every directory the app bundles from, plus the root entry points (sentry.*.config.ts,
+  // instrumentation.ts, middleware.ts), where a beforeSend could stamp the tag on any event.
+  const rootFiles = readdirSync(appRoot)
+    .filter((f) => /\.(ts|tsx)$/.test(f) && !/\.(test|spec)\.(ts|tsx)$/.test(f))
+    .map((f) => join(appRoot, f));
+  const files = [...rootFiles, ...["server", "app", "lib", "components", "hooks"].flatMap((d) => walk(join(appRoot, d)))];
   const rel = (p: string) => relative(appRoot, p).split(sep).join("/");
+  // Comments blanked by the TypeScript scanner, not a regex (a regex stripper hid real code
+  // in 12 files of this walk, ensure-workspace-repo.ts among them).
+  const code = new Map(files.map((f) => [rel(f), stripComments(readFileSync(f, "utf8"), f)]));
 
-  it("walked the real tree (floor: the writer, and a file two directories deep)", () => {
-    const visited = files.map(rel);
+  it("walked the real tree (floor: the writer, a root entry point, a file two directories deep)", () => {
+    const visited = [...code.keys()];
     expect(visited).toContain("server/git-data-pin-fault.ts");
+    expect(visited).toContain("sentry.server.config.ts");
     expect(visited.some((f) => f.split("/").length >= 4)).toBe(true);
   });
 
-  it("only server/git-data-pin-fault.ts writes the pin_fault tag", () => {
-    const writers = files
-      .filter((f) => /["']?pin_fault["']?\s*:/.test(stripTsComments(readFileSync(f, "utf8"))))
-      .map(rel);
-    expect(writers).toEqual(["server/git-data-pin-fault.ts"]);
+  it("the token pin_fault appears in code only in server/git-data-pin-fault.ts", () => {
+    // The bare token, not `pin_fault:` — a setTag("pin_fault", …), a computed key or a
+    // beforeSend spread all name it, and no other code has a reason to.
+    const naming = [...code].filter(([, src]) => /\bpin_fault\b/.test(src)).map(([f]) => f);
+    expect(naming).toEqual(["server/git-data-pin-fault.ts"]);
   });
 
-  it("only server/git-data-replication.ts imports reportGitDataPinFault", () => {
-    const importers = files
-      .filter((f) => rel(f) !== "server/git-data-pin-fault.ts")
-      .filter((f) => /\breportGitDataPinFault\b/.test(stripTsComments(readFileSync(f, "utf8"))))
-      .map(rel);
-    expect(importers).toEqual(["server/git-data-replication.ts"]);
+  it("reportGitDataPinFault is called exactly at the three boot reports and the one push report", () => {
+    const users = [...code]
+      .filter(([f, src]) => f !== "server/git-data-pin-fault.ts" && /\breportGitDataPinFault\b/.test(src))
+      .map(([f]) => f);
+    expect(users).toEqual(["server/git-data-replication.ts"]);
+    // A fifth call (the Art. 17 erasure path lives in the same file) would page the same
+    // refusal twice, once per rule — the CLO ruling this census holds.
+    const calls = code.get("server/git-data-replication.ts")!.match(/\breportGitDataPinFault\s*\(/g) ?? [];
+    expect(calls).toHaveLength(4);
   });
 });
 
@@ -227,7 +253,7 @@ describe("art17_erasure_incomplete — stays unnarrowed and re-paging (#8572, Gu
   });
 
   it("is enabled and keeps its 5-minute throttle", () => {
-    expect(block()).toMatch(/^\s*enabled\s*=\s*true/m);
-    expect(block()).toMatch(/^\s*frequency_minutes\s*=\s*5$/m);
+    expect(attr(block(), "enabled")).toBe("true");
+    expect(attr(block(), "frequency_minutes")).toBe("5");
   });
 });

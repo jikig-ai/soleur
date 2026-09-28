@@ -257,7 +257,7 @@ dispatch. The emitter reaches production only through the merge-triggered `web-p
 | Refactoring `removeGitDataRepo` onto the new classifier | none | The erasure path works and is tested. Rewiring an Art. 17 path "for parity" is risk with no listed property (advisor, DHH and simplicity reviews). Deferred, characterization-first (see Deferrals). |
 | `hostKeyReason` sub-split (`alg` / `unknown` / `changed`) | diagnosis | The cutover precheck's `_access_reason` gives the split on demand, and the runbook routes there. |
 | Stderr `detail` on the push event | diagnosis | Free text: Node's `Command failed:` argv names the worktree id. |
-| Pin-fault classification in `fetchFromGitData` | P1 | The pin, the host and the ssh client are process-wide and fixed for the process's life. The same fault shows on every push and at boot, and both now page. |
+| Pin-fault classification in `fetchFromGitData` | P1 | The pin and the ssh client are process-wide and fixed for the process's life, so an absent or invalid pin, or a missing client, pages at boot. The fetch dials the same host as the next session-end provision dial, which pages a host identity fault. Its own stderr is git's, which a tenant can write into (review: security F1), so it must never be read for host identity. *(Corrected in review: the original reason, "the same fault shows on every push", does not hold for callers that end in no push, such as reconcile-on-push; the boot and provision-dial arms are what cover it.)* |
 | Fixing #8629 fleet-wide | P1 | Out of scope, and it could revive dormant rules. The rule is robust to it: non-pin push failures carry no `pin_fault`. |
 | Two new rules (boot and push) | P1, P2 | One tag, one rule, one name for #8211. |
 | Adding the rule to `assert-byok-rules-exist.sh` `EXPECTED_RULES` | P5 | `sentry-alert-live-fidelity.sh` already checks every `sentry_alert` after each apply and daily. |
@@ -306,7 +306,8 @@ out of the 811-line replication module. There is no import cycle: it imports onl
    `pin_fault` tag in the app.
 
    The call runs inside `Sentry.withIsolationScope((scope) => { scope.clearBreadcrumbs(); … })`, the
-   precedent inventoried in `server/sentry-scrub.ts`. The session-end call sites open no scope of
+   pattern of `server/auto-sync-trigger.ts` (the `server/sentry-scrub.ts` inventory lists only
+   `setUser` sites, so this helper is correctly absent from it). The session-end call sites open no scope of
    their own, so without this the event would carry other sessions' breadcrumbs. Those can hold raw
    workspace paths, and the scrub redacts by key name, not by value (security review).
 
@@ -643,7 +644,10 @@ Review, push, and get CI green by name on the head SHA (including `plan_pr`). Th
   - a typo narrowing rule 1b;
   - a vacuous tag filter;
   - a failed apply;
-  - an emitter that was never deployed.
+  - an emitter that was never deployed;
+  - an Art. 17 issue archived or ignored from the email (Sentry fires no trigger on it, so every
+    later refusal grouping into it is silent). The runbook's step 3 says resolve, never archive;
+    a daily detector is tracked in #9160.
 
   After the #8211 flip, a stale pin also stops every workspace's replication to the shared store
   with no page. A user's latest commits would then exist only on the host-local working tree.
@@ -694,7 +698,7 @@ failure_modes:
     detection: "account-delete erasure report (layer-5 Sentry captureMessage, release-tagged, tags erasure_outcome and erasure_reason) + event_frequency_count on art17_erasure_incomplete; layer-2 pino logger.error -> layer-3 vector -> Better Stack"
     alert_route: "sentry_alert.art17_erasure_incomplete -> operator email (at most once per issue per 5 min)"
   - mode: "the rule is not live, or the emitter is not deployed"
-    detection: "apply-sentry-infra.yml post-apply scripts/sentry-alert-live-fidelity.sh; daily scheduled-sentry-alert-drift.yml against alert-reference.json; web-platform-release.yml run on the merge SHA (Phase 6)"
+    detection: "layer-6 workflow run log: apply-sentry-infra.yml post-apply scripts/sentry-alert-live-fidelity.sh (`sentry_alert live fidelity: PASS`); daily scheduled-sentry-alert-drift.yml against alert-reference.json; web-platform-release.yml run on the merge SHA (Phase 6)"
     alert_route: "failed-apply p1 issue filed by apply-sentry-infra.yml; drift issue filed by the drift workflow"
 logs:
   where: "Sentry issue stream (web-platform); container stdout via pino, shipped to Better Stack at level >= 40 by Vector (app_container_warn_filter)"
@@ -1032,7 +1036,10 @@ page's "will be completed") and on the email volume.
   apply (new rule created, 1b update failed) still leaves 1b paging on first-seen, and the red path
   records it.
 - **The throttle windows.** A resolve followed by a recurrence inside 4 h (pin-fault rule) or 5 min
-  (Art. 17) is silent. The runbook's post-resolve query covers this.
+  (Art. 17) is silent. The runbook covers them with two different queries: the pin-fault query
+  (`has:pin_fault`, last 4 h) for boot and push faults, and, for Art. 17, a pre-resolve event
+  re-list plus the step-3 erasure query run more than 5 minutes after the resolve. The pin-fault
+  query never sees an erasure refusal, which is untagged by design.
 - **Sentry's default high-priority rule** also emails a first-seen error-level event. This already
   happens for every rule in the root.
 - **Only the boot arm can fire before the flip**, and only on an armed container. The #8211 check
