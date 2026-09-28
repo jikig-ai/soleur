@@ -2,7 +2,7 @@
 #
 # Drift guard for the "#9045 the workspaces-LUKS dead-man FIRED" Better Stack Logs alert
 # (apps/web-platform/infra/betterstack-logs-alerts.tf, logtail_exploration_alert.workspaces_luks_deadman_fired).
-# Plan: knowledge-base/project/plans/2026-09-28-fix-luks-deadman-host-canary-disarm-and-snapshot-411798619-release-plan.md
+# Plan: knowledge-base/project/plans/archive/20260928-124245-2026-09-28-fix-luks-deadman-host-canary-disarm-and-snapshot-411798619-release-plan.md
 # (Phase 2 step 6, §Test Scenarios → Other suites → Alert).
 #
 # WHAT THE ALERT IS FOR. The cutover's dead-man (a transient systemd timer armed by
