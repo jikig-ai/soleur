@@ -64,3 +64,13 @@ brainstorm, subagent-prompts, premise-validation, vendor-claims, #9168
 3. `gh issue create --body-file <relative-path>` rejected by the filing gate —
    needed the absolute path. Already recorded:
    `learnings/workflow-patterns/2026-09-25-issue-filing-gate-body-file-needs-absolute-path-in-worktree.md`.
+4. Filed follow-up issue #9186 ("link the status page from a user-facing
+   surface") on the premise that nothing user-facing links to it. The operator
+   corrected: `apps/web-platform/app/(dashboard)/dashboard-shell.tsx` has
+   carried a "Status" nav link to `soleur-ai.betteruptime.com` the whole time —
+   one `git grep -n betteruptime.com -- apps/` would have falsified the
+   premise before the issue was written. Issue closed not-planned.
+   **Prevention:** before filing a "gap" issue asserting an absence, grep the
+   literal subject (the URL, the route, the feature name) across the consumer
+   surfaces — `apps/`, not just the spec corpus. A spec corpus proves a
+   record's absence; the tree proves the feature's.

@@ -69,9 +69,10 @@ Two defect classes:
    heartbeat. Restart requires the full proven signature sustained over ≥3
    consecutive reads.
 4. `supabase/supabase` provider declared in `apps/web-platform/infra/`; project
-   imported; `instance_size = "small"`. `SUPABASE_ACCESS_TOKEN` already exists
-   in Doppler `prd` and `prd_terraform`.
-5. ADR-256 (next free number; 246/247 are gaps) records: Slack-vs-Responder
+   imported pinned to live `instance_size = "micro"` (zero-diff); the
+   `"small"` flip is a follow-up PR applied while the operator watches.
+   `SUPABASE_ACCESS_TOKEN` already exists in Doppler `prd` and `prd_terraform`.
+5. ADR-259 (provisional — 256/257/258 got claimed by siblings during this session; ship gate re-verifies) records: Slack-vs-Responder
    deferral discharge, the bounded auto-restart authorization model + circuit
    breaker, Art. 32(1)(c) rationale (CLO), compute-size rationale, and the
    #7529 Better Stack DPA note.
@@ -92,8 +93,11 @@ Two defect classes:
 - Supabase support response may change the compute story — if support names a
   platform fault class that compute can't fix, Small stays as headroom and the
   ADR records why.
-- (out of scope, follow-up filed) Status page discoverability — nothing
-  user-facing links to `soleur-ai.betteruptime.com`.
+- Status page: already live AND already linked — the dashboard nav carries a
+  "Status" link to `soleur-ai.betteruptime.com`
+  (`apps/web-platform/app/(dashboard)/dashboard-shell.tsx`). An initial
+  discoverability-gap claim + follow-up issue (#9186) were filed on the stale
+  premise and retracted/closed after operator correction.
 
 ## Domain Assessments
 

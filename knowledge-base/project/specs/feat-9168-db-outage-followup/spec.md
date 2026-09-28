@@ -39,13 +39,14 @@ recovery waits on a human even though the failure signature and its remedy
   auto-filed audit issue, and a Sentry heartbeat covering the watchdog itself.
 - **G3.** Compute mitigation landed IaC-compliant: declare the
   `supabase/supabase` provider in `apps/web-platform/infra/`, import the prd
-  project, set `instance_size = "small"` (+$5/mo net over the Pro credit).
+  project pinned to live `instance_size = "micro"` (zero-diff import); the
+  `"small"` flip lands in a follow-up PR (+$5/mo net over the Pro credit).
 - **G4.** A committed Supabase support-ticket draft carrying both incident
   windows, the log signature, restart timestamps, and minimized log excerpts
   (Art. 5(1)(c) — no unbounded Postgres logs); operator submits via dashboard.
 - **G5.** The 2026-09-28 postmortem is written
   (`knowledge-base/engineering/operations/post-mortems/prd-supabase-database-unreachable-2026-09-28-postmortem.md`).
-- **G6.** ADR-256 records: the Slack-vs-Responder decision (expenses.md:46
+- **G6.** ADR-259 records: the Slack-vs-Responder decision (expenses.md:46
   deferral trigger fired; operator chose the $0 path), the bounded auto-restart
   authorization model (express deviation from
   `hr-menu-option-ack-not-prod-write-auth`, per ADR-079/ADR-248 precedent), the
@@ -63,8 +64,9 @@ recovery waits on a human even though the failure signature and its remedy
 - **NG2.** No fleet-wide `push = true` sweep unless the `app_health` measure
   lands; other monitors keep email+Slack.
 - **NG3.** No Supabase Medium-or-larger compute; Small only.
-- **NG4.** No status-page work — `soleur-ai.betteruptime.com` is already live;
-  its discoverability gap (no user-facing link) is a filed follow-up.
+- **NG4.** No status-page work — `soleur-ai.betteruptime.com` is already live
+  and already linked from the dashboard nav
+  (`apps/web-platform/app/(dashboard)/dashboard-shell.tsx`).
 - **NG5.** The watchdog never restarts on ambiguous/probe-unavailable states;
   it is not a general remediation engine.
 - **NG6.** No changes to the 28 Sentry email alert rules or host-level Resend
@@ -77,29 +79,39 @@ recovery waits on a human even though the failure signature and its remedy
   `push = true` (measured — if apply 422s on this plan, revert to email+Slack
   and record the measurement in the ADR/PR body).
 - **FR2.** New scheduled workflow
-  `.github/workflows/scheduled-supabase-watchdog.yml`: every 5 min (schedule
-  lag acknowledged — ADR-248 measured 2–7h drift on `schedule:` alone; evaluate
-  whether the check needs a web-process dispatch heartbeat instead), calls the
-  extracted classifier script, restarts on signature, files/updates a labeled
-  audit issue, emits a Sentry heartbeat.
+  `.github/workflows/scheduled-supabase-watchdog.yml`: primary trigger = an
+  Inngest dispatch cron (the `cron-main-health-monitor.ts` pattern — `schedule:`
+  measured to drift 2–7h, ADR-248, and is kept only as fallback); `concurrency:
+  supabase-watchdog` with `cancel-in-progress: false` as the mutex. Calls the
+  extracted classifier script, restarts on signature+corroboration,
+  files/updates a labeled audit issue, emits a Sentry heartbeat.
 - **FR3.** Classifier script (e.g. `scripts/supabase-watchdog-classify.sh`,
-  unit-tested): input = Management API health JSON; output = `hang-signature`
-  | `healthy` | `ambiguous` | `probe-unavailable`. Restart fires only on
-  `hang-signature` sustained ≥3 consecutive reads (state persisted via artifact
-  or issue label, mirroring the Inngest watchdog pattern).
+  unit-tested): input = Management API health JSON + corroborating signal
+  (app `/health` `supabase` field — the Management API is a single failure
+  surface, so a second independent signal is required before a prod write);
+  output = `hang-signature` | `healthy` | `ambiguous` | `probe-unavailable`.
+  Restart fires only on `hang-signature` sustained ≥3 consecutive reads WITH
+  corroboration (state persisted via artifact or issue label, mirroring the
+  Inngest watchdog pattern).
+- **FR3b.** Dark-launch: the restart write is gated behind `WATCHDOG_ARMED`;
+  the workflow ships detect-only first (audit issue + check-in, zero restart
+  POSTs) and is armed after a validated detection/soak window
+  (`wg-dark-launch-deploy-gates`).
 - **FR4.** Cooldown: ≥N minutes between automated restarts (recommend 30);
   give-up: after K consecutive restart cycles without recovery, stop and page
   (Slack + issue).
 - **FR5.** `supabase/supabase` provider declared; `supabase_project.prd`
-  imported (`import` block + `-target` allowlist entry); `instance_size =
-  "small"`. The apply performs the compute change (~2 min downtime — schedule
-  the apply deliberately).
+  imported (`import` block + `-target` allowlist entry) **pinned to live
+  values incl. `instance_size = "micro"` — zero-diff import in this PR**; the
+  `"small"` flip is a deliberately-sequenced follow-up PR (operator watches
+  the ~2 min resize). Rationale: an import+resize in one apply makes a failed
+  read indistinguishable from a resize diff.
 - **FR6.** Support-ticket draft committed at
   `knowledge-base/engineering/operations/ticket-drafts/supabase-postgres-hang-2026-09-28.md`
   (or similar), minimized logs only.
 - **FR7.** Postmortem file for 2026-09-28 in the post-mortems directory,
   matching the 09-15 template, action items cross-referencing this issue.
-- **FR8.** ADR-256 in `knowledge-base/engineering/architecture/decisions/`.
+- **FR8.** ADR-259 in `knowledge-base/engineering/architecture/decisions/`.
 - **FR9.** Runbook update + `-target` allowlist parity + monitor-count drift
   guards kept green.
 
@@ -136,9 +148,10 @@ recovery waits on a human even though the failure signature and its remedy
   post-merge verification).
 - AC2: Watchdog classifies the documented 09-28 signature as `hang-signature`
   and `probe-unavailable`/partial states as non-restartable (unit tests).
-- AC3: `terraform plan` shows `supabase_project` imported and
-  `instance_size` diff to `small`; apply lands without touching unrelated
-  resources (`-target` discipline).
-- AC4: Postmortem, ticket draft, ADR-256, runbook update committed; issue
+- AC3: `terraform plan` shows `supabase_project` imported pinned to live
+  values (expected "1 to import", zero diff); apply lands without touching
+  unrelated resources (`-target` discipline). The `small` flip is a follow-up
+  PR.
+- AC4: Postmortem, ticket draft, ADR-259, runbook update committed; issue
   #9168 links all artifacts.
 - AC5: No new secrets introduced; `SUPABASE_ACCESS_TOKEN` reuse only.
