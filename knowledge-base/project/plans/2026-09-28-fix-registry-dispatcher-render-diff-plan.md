@@ -214,17 +214,17 @@ helper, the budget script or ADR-169).
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** either (a) a zot/Doppler/server-type change that
+- **If this lands broken, the user experiences:** either (a) a zot/Doppler/server-type change that
 never reaches the registry host — the fix it carries (e.g. the #8714 ghcr.io-free zot source) is
 silently not live, and the next unrelated apply replaces the host by surprise; or (b) a spurious
 registry host replace on an unrelated `variables.tf` merge — a volume-preserving outage window
 (minutes) on the fleet's sole pull path, during which deploys and web-host restarts cannot pull.
 
-**If this leaks, the user's data / workflow / money is exposed via:** no new exposure — the gate
+- **If this leaks, the user's data / workflow / money is exposed via:** no new exposure — the gate
 reads public repo files and the render uses stub credentials; no secret enters the dispatch job
 (the budget script's stubs are length-bounded fakes).
 
-**Brand-survival threshold:** aggregate pattern — a single spurious replace is a short,
+- **Brand-survival threshold:** aggregate pattern — a single spurious replace is a short,
 self-recovering pull-path outage behind the existing preflight; the harm is the repeated pattern.
 
 ## Observability
