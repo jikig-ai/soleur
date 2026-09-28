@@ -123,6 +123,12 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    spike showed the last-writer-wins URL flaps under multi-url. Route-once means multi-url is
    *safe from duplicate execution* (an acceptable fallback), but the VIP is the deterministic
    primary for N>1. This defers the LB cost to when N>1 is actually reached.
+
+   **Note (2026-09-28, #7230):** `--sdk-url` is the registration poll (#8611), not the step
+   path. Where steps run is governed by the registered `serveHost` (`https://app.soleur.ai`)
+   plus `cloudflare_record.app`, and by the execution placement classes in the ADR-033
+   amendment of 2026-09-28 (#7230). A VIP behind `--sdk-url` alone would not change where
+   steps run; placement-aware execution is #9137.
 2. **Hooks stay web-host-resident.** The dedicated host has no app (`rearm` posts to the local
    app's `/api/internal/schedule-reminder`) and no public ingress (the GH runner reaches only
    `deploy.soleur.ai`). Capture/rearm/inventory hooks run on the web host and reach the inngest
