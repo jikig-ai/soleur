@@ -1,0 +1,52 @@
+[Unit]
+# (#9123) THE STANDING RETRY for web-1's boot-time LUKS unlock, and the reason it
+# is its own timer (the git-data shape, #8210).
+#
+# The unit's `Restart=on-failure` budget is 5 attempts over an hour, so a Doppler
+# or DNS outage lasting longer than that leaves the encrypted store CLOSED with
+# no further automatic attempt — docker held by RequiresMountsFor=/mnt/data
+# (data-safe, site down), the covered root-disk inode immutable. This timer is
+# what resumes recovery after the window closes.
+#
+# WHAT A TICK RECOVERS, PRECISELY: A FAILED UNIT, AND ONLY THAT. The service is
+# Type=oneshot with RemainAfterExit=yes, so after a healthy boot it sits
+# active(exited) and a timer tick's `start` job is a NO-OP — ExecStart does not
+# re-run, so a tick against a healthy host costs NOTHING, not even a
+# `cryptsetup status`. Once the unit has FAILED — the restart budget spent
+# against a Doppler or DNS outage — the tick's start re-runs ExecStart, and that
+# is the recovery this timer buys. The case it does NOT cover is a mapper closed
+# AFTER a healthy boot under a still-active unit (a luksClose, a volume detach):
+# nothing re-attempts the reopen there and the daily luks-monitor probe is what
+# notices. That residual is scope-outed in the plan's failure-modes table as the
+# "host up, mapper closed later" row; it is not closed here.
+Description=Standing retry for the workspaces LUKS mapper reopen (#9123)
+Documentation=https://github.com/jikig-ai/soleur/issues/9123
+
+[Timer]
+# 15 minutes is the TICK, not the recovery bound. A tick inside the unit's
+# still-open StartLimitIntervalSec=1h window is refused on an already-failed
+# unit and does nothing (measured on 261 in the git-data review: zero reporter
+# runs for refused starts), so a multi-hour Doppler outage self-heals at the
+# first tick after that hour closes — within ~1h15 of the vendor recovering.
+# The window cannot be shortened below the slow ladder (5x300 + 4x60 s): a
+# shorter one never trips the start limit, so a slow-failing unit would restart
+# forever with no terminal state and no report. OnUnitActiveSec (not OnCalendar)
+# so the clock restarts from the last run rather than firing a thundering burst
+# after a long outage.
+OnUnitActiveSec=15min
+OnBootSec=15min
+RandomizedDelaySec=120
+# NO Persistent=. systemd.timer(5) says the directive "only has an effect on
+# timers configured with OnCalendar=", which this one is not — the git-data
+# timer carries the same measurement verbatim. OnBootSec= above is what
+# actually provides the post-boot tick.
+# COST ON A HOST THAT STAYS BROKEN: a refused tick fires nothing. The first tick
+# after the 1h window closes re-runs a full ladder, which — because the service
+# carries RestartMode=direct — emits ONE fatal at convergence, not one per
+# attempt. About one fatal and ~6 Doppler calls per hour while the store stays
+# closed; Sentry collapses them into one issue (constant message). The right
+# signal for an unresolved fatal; the alternative (silence with the store
+# closed) is the defect #9123 exists to remove.
+
+[Install]
+WantedBy=timers.target

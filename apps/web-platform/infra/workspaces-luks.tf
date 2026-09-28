@@ -414,6 +414,308 @@ resource "terraform_data" "luks_monitor_install" {
   }
 }
 
+# #9123 — make web-1 reboot-safe: deliver the boot-time LUKS unlock (the
+# workspaces-luks-reopen.{sh,service,-failure.service,timer} family, modelled on
+# git-data-luks-reopen.* / #8210), repair the fstab /mnt/data entry so it names
+# /dev/mapper/workspaces with `nofail`, declare the mapper in crypttab
+# (`luks,noauto` — the reopen unit owns the unlock; the systemd-cryptsetup
+# ask-password job must never enter boot ordering on a headless host), and arm
+# the ADR-119 §(e) structural gate (the docker.service.d RequiresMountsFor +
+# After= drop-in and `chattr +i` on the COVERED root-disk /mnt/data inode via a
+# non-recursive bind peek — the mapper is mounted on web-1, so the baked gate's
+# `mountpoint -q` arm can never reach that inode here).
+#
+# Web-1 only, like its siblings (ADR-119 §(d): a fresh host must NOT get these —
+# the fresh-host path is #6931's). The three parts land atomically in this one
+# resource fire: the fstab fix alone would let a reboot mount /mnt/data as a
+# bare root-disk dir and dockerd would resurrect the app over it, writing sole
+# user data unencrypted.
+#
+# The file hashes AND the writer/print locals are the trigger: an edit to any
+# delivered byte re-fires the installer (the luks_monitor_install precedent —
+# deliberately unlike the token installer's token-hash-only trigger).
+# depends_on orders after both monitor installers: the token installer owns the
+# DOPPLER_TOKEN= line the reopen unit consumes, and the monitor installer
+# delivers /usr/local/bin/workspaces-luks-emit.sh, the failure reporter's sole
+# paging channel.
+locals {
+  # Read-only "before" print — provisioner 1 of the installer below, so no later
+  # refusal can suppress it. Same deny-list contract as
+  # local.luks_monitor_forensic_print above: public output only (exact-field
+  # fstab select with redaction arms, crypttab COUNT only, unit states, no
+  # journalctl, no env values), every line guarded so a missing binary or absent
+  # value can neither fail the step nor taint the resource.
+  workspaces_boot_unlock_print = [
+    "echo 'boot-unlock install (#9123): read-only before-print, runs before the exit-17 freeze refusal'",
+    "echo \"boot-unlock before uptime-s=$(uptime -s 2>/dev/null || echo none) reboot-required=$([ -e /var/run/reboot-required ] && echo yes || echo no)\"",
+    "echo \"boot-unlock before fstab /mnt/data=$(awk '$1 !~ /^#/ && $2 == \"/mnt/data\" { n++; d = $1; if (d !~ \"^(/dev/[A-Za-z0-9/_.*-]+|UUID=[0-9a-fA-F-]+|LABEL=[A-Za-z0-9_.-]+)$\") d = \"<redacted-device>\"; t = $3; if (t !~ \"^[A-Za-z0-9._+-]+$\") t = \"<redacted-fstype>\"; nf = \"no\"; bad = 0; k = split(tolower($4), a, \",\"); if (k < 1) bad = 1; for (i = 1; i <= k; i++) { if (a[i] == \"nofail\") nf = \"yes\"; if (a[i] !~ \"^(defaults|nofail|discard|noatime|nodiratime|relatime|ro|rw|auto|noauto|nodev|nosuid|noexec|_netdev|errors=remount-ro|errors=continue|errors=panic|user_xattr|acl|x-systemd[.][a-z0-9-]+(=[a-z0-9._:-]+)?)$\") bad = 1 }; o = bad ? \"<redacted-options>\" : $4; printf \"%s %s %s %s %s %s has_nofail=%s; \", d, $2, t, o, ($5 ~ \"^[0-9]+$\" ? $5 : \"?\"), ($6 ~ \"^[0-9]+$\" ? $6 : \"?\"), nf } END { if (!n) print \"none\" }' /etc/fstab 2>/dev/null || echo none)\"",
+    "echo \"boot-unlock before crypttab-workspaces-lines=$(grep -c '^workspaces' /etc/crypttab 2>/dev/null || true)\"",
+    "echo \"boot-unlock before mapper=$([ -e /dev/mapper/workspaces ] && echo present || echo absent) mnt-data-src=$(findmnt -n -o SOURCE /mnt/data 2>/dev/null || echo none)\"",
+    "echo \"boot-unlock before envfile=$(stat -c '%F %a %U' /etc/default/workspaces-luks-boot 2>/dev/null || echo absent) dropin=$([ -f /etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf ] && echo present || echo absent)\"",
+    "echo \"boot-unlock before deadman-substate=$(systemctl show -p SubState --value workspaces-luks-deadman.timer 2>/dev/null || echo none)\"",
+    "for u in workspaces-luks-reopen.service workspaces-luks-reopen-failure.service workspaces-luks-reopen.timer; do echo \"boot-unlock before $u: $(systemctl show -p LoadState,UnitFileState,ActiveState,SubState,Result --value \"$u\" 2>/dev/null | tr '\\n' ' ' || echo none)\"; done || true",
+  ]
+
+  # The /etc/default/workspaces-luks-boot writer (0600 root; device pin + scoped
+  # config name, NO passphrase and NO token — the reopen unit reads
+  # DOPPLER_TOKEN from the shared /etc/default/luks-monitor as a read-only
+  # consumer). Write-temp-assert-mv shape; distinct refusal codes: 20 symlink,
+  # 21 line count, 22 device-pin line, 23 config-name line, 24 mv. Also carries
+  # the file-delivery mode fixups (0755 script, 0644 units — the file
+  # provisioner lands everything 0644) and the stale root-owned /tmp script
+  # sweep from the sibling.
+  workspaces_boot_unlock_envfile_writer = [
+    "set -e",
+    "[ \"$(systemctl show -p SubState --value workspaces-luks-deadman.timer 2>/dev/null)\" != waiting ] || { echo 'boot-unlock install: a workspaces-luks cutover freeze is live (dead-man armed); refusing to mutate (exit 17)'; exit 17; }",
+    "chmod 0755 /usr/local/bin/workspaces-luks-reopen.sh",
+    "chmod 0644 /etc/systemd/system/workspaces-luks-reopen.service /etc/systemd/system/workspaces-luks-reopen-failure.service /etc/systemd/system/workspaces-luks-reopen.timer",
+    "find /tmp -maxdepth 1 -name 'terraform_*.sh' -user root -mmin +60 -size +0c -delete || true",
+    "umask 077",
+    "f=/etc/default/workspaces-luks-boot",
+    "t=\"$f.boot-unlock.tmp\"",
+    "trap 'rm -f \"$t\"' EXIT",
+    "[ ! -L \"$f\" ] || { echo 'boot-unlock envfile: /etc/default/workspaces-luks-boot is a symlink; refusing'; exit 20; }",
+    "printf 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s\\n' '${hcloud_volume.workspaces_luks.id}' > \"$t\"",
+    "printf 'WORKSPACES_DOPPLER_CONFIG=%s\\n' 'prd_workspaces_luks' >> \"$t\"",
+    "[ \"$(wc -l < \"$t\")\" = 2 ] || { echo 'boot-unlock envfile: writer produced != 2 lines'; exit 21; }",
+    "[ \"$(grep -c '^WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_${hcloud_volume.workspaces_luks.id}$' \"$t\")\" = 1 ] || { echo 'boot-unlock envfile: device-pin line missing or wrong'; exit 22; }",
+    "[ \"$(grep -c '^WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks$' \"$t\")\" = 1 ] || { echo 'boot-unlock envfile: config-name line missing or wrong'; exit 23; }",
+    "chown root:root \"$t\"",
+    "mv \"$t\" \"$f\" || exit 24",
+    "chmod 600 \"$f\"",
+    "echo \"boot-unlock envfile after: $(stat -c '%F %a %U' \"$f\" 2>/dev/null || echo absent) lines=$(wc -l < \"$f\" 2>/dev/null || echo '?')\"",
+  ]
+
+  # The crypttab writer: append-only-if-absent on `^workspaces[[:space:]]`,
+  # then assert exactly one line AND that it is byte-identical to the pinned
+  # by-id `none luks,noauto` line. `noauto` keeps the systemd-cryptsetup
+  # ask-password unit out of boot ordering (the reopen unit owns the unlock);
+  # `none` is the declared manual-recovery handle. A pre-existing divergent
+  # `workspaces` line is refused (exit 32), never silently coexisted with.
+  # Refusal codes: 30 symlink, 31 count, 32 foreign line.
+  workspaces_boot_unlock_crypttab_writer = [
+    "set -e",
+    "[ \"$(systemctl show -p SubState --value workspaces-luks-deadman.timer 2>/dev/null)\" != waiting ] || { echo 'boot-unlock install: a workspaces-luks cutover freeze is live (dead-man armed); refusing to mutate (exit 17)'; exit 17; }",
+    "c=/etc/crypttab",
+    "[ ! -L \"$c\" ] || { echo 'boot-unlock crypttab: /etc/crypttab is a symlink; refusing'; exit 30; }",
+    "[ -e \"$c\" ] || : > \"$c\"",
+    "LINE='workspaces /dev/disk/by-id/scsi-0HC_Volume_${hcloud_volume.workspaces_luks.id} none luks,noauto'",
+    "grep -q '^workspaces[[:space:]]' \"$c\" 2>/dev/null || printf '%s\\n' \"$LINE\" >> \"$c\"",
+    "[ \"$(grep -c '^workspaces[[:space:]]' \"$c\" 2>/dev/null || true)\" = 1 ] || { echo 'boot-unlock crypttab: ^workspaces line count is not exactly one'; exit 31; }",
+    "grep -qxF \"$LINE\" \"$c\" || { echo 'boot-unlock crypttab: the ^workspaces line is not the pinned by-id luks,noauto line; refusing to coexist with a foreign mapping'; exit 32; }",
+    "echo 'boot-unlock crypttab: workspaces-lines=1 canonical=yes'",
+  ]
+
+  # The fstab writer — the highest-severity step in this installer. Idempotent
+  # and fail-closed: backup taken first, EVERY pre-existing non-comment
+  # /mnt/data line commented (not deleted — the literal glob line is preserved
+  # as evidence), exactly one mapper+nofail line appended, and the post-edit
+  # table asserted before mv. Refusal codes: 40 symlink, 41 absent, 42 the
+  # mapper is not the LIVE mount (rewriting fstab to name a device that is not
+  # what /mnt/data currently is would silently change what the next boot
+  # mounts), 43 backup, 44 post-edit count != 1, 45 surviving entry not the
+  # canonical line, 46 mv.
+  workspaces_boot_unlock_fstab_writer = [
+    "set -e",
+    "[ \"$(systemctl show -p SubState --value workspaces-luks-deadman.timer 2>/dev/null)\" != waiting ] || { echo 'boot-unlock install: a workspaces-luks cutover freeze is live (dead-man armed); refusing to mutate (exit 17)'; exit 17; }",
+    "f=/etc/fstab",
+    "t=/etc/fstab.boot-unlock.tmp",
+    "trap 'rm -f \"$t\"' EXIT",
+    "[ ! -L \"$f\" ] || { echo 'boot-unlock fstab: /etc/fstab is a symlink; refusing'; exit 40; }",
+    "[ -f \"$f\" ] || { echo 'boot-unlock fstab: /etc/fstab is absent; refusing'; exit 41; }",
+    "src=$(findmnt -n -o SOURCE /mnt/data 2>/dev/null || true)",
+    "[ \"$src\" = /dev/mapper/workspaces ] || { echo \"boot-unlock fstab: /mnt/data live source is '$${src:-nothing}', not /dev/mapper/workspaces — refusing to point fstab at a device that is not the live mount\"; exit 42; }",
+    "cp -a \"$f\" \"/etc/fstab.boot-unlock-$(date +%Y%m%d%H%M%S).bak\" || { echo 'boot-unlock fstab: backup failed'; exit 43; }",
+    "awk '{ if ($1 !~ /^#/ && $2 == \"/mnt/data\") print \"# boot-unlock-9123-superseded \" $0; else print }' \"$f\" > \"$t\"",
+    "printf '%s\\n' '/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2' >> \"$t\"",
+    "n=$(awk '{ if ($1 !~ /^#/ && $2 == \"/mnt/data\") n++ } END { print n+0 }' \"$t\")",
+    "[ \"$n\" = 1 ] || { echo \"boot-unlock fstab: post-edit /mnt/data entry count is $n, expected exactly 1 — NOT installing, backup retained\"; exit 44; }",
+    "awk '$1 !~ /^#/ && $2 == \"/mnt/data\" { if ($1 == \"/dev/mapper/workspaces\" && $3 == \"ext4\" && $4 ~ /(^|,)nofail(,|$)/) f=1 } END { exit !f }' \"$t\" || { echo 'boot-unlock fstab: the surviving /mnt/data entry is not the mapper nofail line — NOT installing, backup retained'; exit 45; }",
+    "chown root:root \"$t\" && chmod 644 \"$t\"",
+    "mv \"$t\" \"$f\" || { echo 'boot-unlock fstab: mv failed; the original fstab is untouched, backup retained'; exit 46; }",
+    "echo 'boot-unlock fstab: exactly one /mnt/data entry now names /dev/mapper/workspaces (superseded lines commented; backup at /etc/fstab.boot-unlock-*.bak)'",
+  ]
+
+  # The §(e) structural gate: the docker.service.d drop-in carrying BOTH
+  # RequiresMountsFor=/mnt/data and After=workspaces-luks-reopen.service
+  # (docker queues behind the unlock ladder instead of racing the device
+  # timeout — Requires-strength on the CONSUMER, never on the reopen unit
+  # itself), plus `chattr +i` on the COVERED root-disk /mnt/data inode. The
+  # mapper is mounted on web-1, so the inode is reached through a
+  # non-recursive `mount --bind /` peek — never by chattr on the mounted
+  # mapper path (that would mark the mapper's root inode, not the covered
+  # one). Peek order is pinned: bind → mkdir-if-absent → chattr → lsattr
+  # verify → umount. Refusal codes: 50/51 drop-in content, 52 chattr, 53
+  # lsattr verify.
+  workspaces_boot_unlock_gate_writer = [
+    "set -e",
+    "[ \"$(systemctl show -p SubState --value workspaces-luks-deadman.timer 2>/dev/null)\" != waiting ] || { echo 'boot-unlock install: a workspaces-luks cutover freeze is live (dead-man armed); refusing to mutate (exit 17)'; exit 17; }",
+    "mkdir -p /etc/systemd/system/docker.service.d",
+    "d=/etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf",
+    "printf '[Unit]\\nRequiresMountsFor=/mnt/data\\nAfter=workspaces-luks-reopen.service\\n' > \"$d\"",
+    "chown root:root \"$d\" && chmod 644 \"$d\"",
+    "grep -qx 'RequiresMountsFor=/mnt/data' \"$d\" || { echo 'boot-unlock gate: drop-in lacks RequiresMountsFor=/mnt/data'; exit 50; }",
+    "grep -qx 'After=workspaces-luks-reopen.service' \"$d\" || { echo 'boot-unlock gate: drop-in lacks After=workspaces-luks-reopen.service'; exit 51; }",
+    "p=/run/workspaces-boot-unlock-peek",
+    "mkdir -p \"$p\"",
+    "_m=0; _peek_cleanup() { if [ \"$_m\" = 1 ]; then umount \"$p\" 2>/dev/null || true; fi; }; trap _peek_cleanup EXIT",
+    "mount --bind / \"$p\" && _m=1",
+    "[ -d \"$p/mnt/data\" ] || mkdir -p \"$p/mnt/data\"",
+    "chattr +i \"$p/mnt/data\" || { echo 'boot-unlock gate: chattr +i on the covered root-disk /mnt/data inode failed'; exit 52; }",
+    "case \"$(lsattr -d \"$p/mnt/data\" 2>/dev/null | awk '{print $1}')\" in *i*) : ;; *) echo 'boot-unlock gate: lsattr does not show the i flag on the covered inode'; exit 53 ;; esac",
+    "umount \"$p\" && _m=0",
+    "rmdir \"$p\" 2>/dev/null || true",
+    "echo 'boot-unlock gate: docker.service.d drop-in armed (RequiresMountsFor + After); covered root-disk /mnt/data inode is immutable'",
+  ]
+
+  # Arm: daemon-reload (rebuilds mnt-data.mount from the repaired fstab AND
+  # picks up the docker drop-in — docker is NEVER restarted; the drop-in takes
+  # effect at the next docker.service start), enable the service + timer, then
+  # ONE proof run of the reopen service. The mapper is already open on the
+  # live host, so the run takes the noop arm while still exercising
+  # config/key/device/header/identity/target/mount end to end — including a
+  # real `doppler secrets get` under the scoped token. Refusal codes: 60
+  # SubState, 61 Result, 62 ExecMainStatus.
+  workspaces_boot_unlock_arm = [
+    "set -e",
+    "[ \"$(systemctl show -p SubState --value workspaces-luks-deadman.timer 2>/dev/null)\" != waiting ] || { echo 'boot-unlock install: a workspaces-luks cutover freeze is live (dead-man armed); refusing to arm (exit 17)'; exit 17; }",
+    "systemctl daemon-reload",
+    "systemctl enable workspaces-luks-reopen.service",
+    "systemctl is-enabled workspaces-luks-reopen.service",
+    "systemctl enable --now workspaces-luks-reopen.timer",
+    "systemctl is-enabled workspaces-luks-reopen.timer",
+    "systemctl is-active workspaces-luks-reopen.timer",
+    "systemctl start workspaces-luks-reopen.service",
+    "[ \"$(systemctl show -p SubState --value workspaces-luks-reopen.service)\" = exited ] || { echo 'boot-unlock proof run did not converge to SubState=exited'; exit 60; }",
+    "[ \"$(systemctl show -p Result --value workspaces-luks-reopen.service)\" = success ] || { echo 'boot-unlock proof run Result is not success'; exit 61; }",
+    "[ \"$(systemctl show -p ExecMainStatus --value workspaces-luks-reopen.service)\" = 0 ] || { echo 'boot-unlock proof run ExecMainStatus is not 0'; exit 62; }",
+    "systemctl is-active workspaces-luks-reopen.service",
+    "echo 'boot-unlock arm: reopen service + timer enabled, proof run converged active(exited) on the live mapper (noop arm)'",
+  ]
+
+  # Post-state print into the apply log — the same public-output contract as
+  # the before-print (field-selected fstab source + count, crypttab COUNT,
+  # unit states, the drop-in sha, the covered-inode attrs via a second peek,
+  # `systemd-analyze verify` on the delivered units). Every line guarded.
+  workspaces_boot_unlock_post_state = [
+    "echo 'boot-unlock after (post-state print):'",
+    "systemctl list-timers workspaces-luks-reopen.timer --no-pager || true",
+    "for u in workspaces-luks-reopen.service workspaces-luks-reopen-failure.service workspaces-luks-reopen.timer; do systemctl show -p Id,LoadState,UnitFileState,ActiveState,SubState,Result,ExecMainStatus \"$u\" --no-pager || true; done",
+    "echo \"boot-unlock after fstab-mnt-data-lines=$(awk '$1 !~ /^#/ && $2 == \"/mnt/data\" {n++} END {print n+0}' /etc/fstab 2>/dev/null || echo none) source=$(findmnt --fstab -n -o SOURCE /mnt/data 2>/dev/null || echo none)\"",
+    "echo \"boot-unlock after crypttab-workspaces-lines=$(grep -c '^workspaces' /etc/crypttab 2>/dev/null || true)\"",
+    "echo \"boot-unlock after dropin-sha256=$(sha256sum /etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf 2>/dev/null | cut -c1-64 || echo none)\"",
+    "systemctl show -p RequiresMountsFor,After docker.service --no-pager || true",
+    "echo \"boot-unlock after envfile=$(stat -c '%F %a %U' /etc/default/workspaces-luks-boot 2>/dev/null || echo absent)\"",
+    "p=/run/workspaces-boot-unlock-peek-state; mkdir -p \"$p\" 2>/dev/null && mount --bind / \"$p\" 2>/dev/null && echo \"boot-unlock after covered-mnt-data-attrs=$(lsattr -d \"$p/mnt/data\" 2>/dev/null | awk '{print $1}' || echo none)\"; umount \"$p\" 2>/dev/null || true; rmdir \"$p\" 2>/dev/null || true",
+    "systemd-analyze verify workspaces-luks-reopen.service workspaces-luks-reopen-failure.service workspaces-luks-reopen.timer 2>&1 || true",
+    "systemctl show -p What,Where,FragmentPath mnt-data.mount --no-pager || true",
+    "systemctl show -p Id,ActiveState,SubState,Result workspaces-luks-deadman.timer workspaces-luks-deadman.service --no-pager || true",
+    "find /root -maxdepth 1 -name 'tf-boot-unlock-*.sh' -delete || true",
+  ]
+}
+
+resource "terraform_data" "workspaces_boot_unlock_install" {
+  # Token + probe channel first: the reopen unit consumes the DOPPLER_TOKEN=
+  # line (read-only) and the failure reporter needs
+  # /usr/local/bin/workspaces-luks-emit.sh, both delivered by those installs.
+  depends_on = [terraform_data.luks_monitor_token_install, terraform_data.luks_monitor_install]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/workspaces-luks-reopen.sh"),
+    file("${path.module}/workspaces-luks-reopen.service"),
+    file("${path.module}/workspaces-luks-reopen-failure.service"),
+    file("${path.module}/workspaces-luks-reopen.timer"),
+    join("\n", local.workspaces_boot_unlock_print),
+    join("\n", local.workspaces_boot_unlock_envfile_writer),
+    join("\n", local.workspaces_boot_unlock_crypttab_writer),
+    join("\n", local.workspaces_boot_unlock_fstab_writer),
+    join("\n", local.workspaces_boot_unlock_gate_writer),
+    join("\n", local.workspaces_boot_unlock_arm),
+    join("\n", local.workspaces_boot_unlock_post_state),
+  ]))
+
+  lifecycle {
+    # The volume id is interpolated into single-quoted shell printfs writing
+    # root-owned files (crypttab + the env file), so anything that is not bare
+    # digits must never pass — same guard class as the DSN precondition above.
+    precondition {
+      condition     = can(regex("^[0-9]+$", tostring(hcloud_volume.workspaces_luks.id)))
+      error_message = "hcloud_volume.workspaces_luks.id is not bare digits. Refusing to interpolate it into root-owned shell writers on web-1 (crypttab, /etc/default/workspaces-luks-boot)."
+    }
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
+    # Inline scripts upload here instead of world-readable /tmp (the sibling
+    # shape; nothing here carries a secret, but the convention holds).
+    script_path = "/root/tf-boot-unlock-%RAND%.sh"
+  }
+
+  # FIRST: the read-only before-print (local.workspaces_boot_unlock_print). Before
+  # the exit-17 freeze refusal and every other step, so no later failure or live
+  # freeze can suppress the evidence it prints.
+  provisioner "remote-exec" {
+    inline = local.workspaces_boot_unlock_print
+  }
+
+  # The four delivered files: 0755 script (chmodded in the next step), 0644
+  # units. A failure part-way taints the resource; the next apply re-delivers.
+  provisioner "file" {
+    source      = "${path.module}/workspaces-luks-reopen.sh"
+    destination = "/usr/local/bin/workspaces-luks-reopen.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/workspaces-luks-reopen.service"
+    destination = "/etc/systemd/system/workspaces-luks-reopen.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/workspaces-luks-reopen-failure.service"
+    destination = "/etc/systemd/system/workspaces-luks-reopen-failure.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/workspaces-luks-reopen.timer"
+    destination = "/etc/systemd/system/workspaces-luks-reopen.timer"
+  }
+
+  # /etc/default/workspaces-luks-boot (0600 root): the reopen unit's device pin
+  # + scoped Doppler config name. Also fixes delivered-file modes.
+  provisioner "remote-exec" {
+    inline = local.workspaces_boot_unlock_envfile_writer
+  }
+
+  # crypttab: the mapper declared with `none luks,noauto`, append-if-absent.
+  provisioner "remote-exec" {
+    inline = local.workspaces_boot_unlock_crypttab_writer
+  }
+
+  # fstab: comment every non-comment /mnt/data line, append the canonical
+  # mapper line, assert exactly one before mv.
+  provisioner "remote-exec" {
+    inline = local.workspaces_boot_unlock_fstab_writer
+  }
+
+  # §(e) gate: docker.service.d drop-in + chattr +i on the covered inode.
+  provisioner "remote-exec" {
+    inline = local.workspaces_boot_unlock_gate_writer
+  }
+
+  # daemon-reload, enable service + timer, one proof run of the reopen service
+  # (noop arm on the live mapper — safe BECAUSE the mapper is already open).
+  provisioner "remote-exec" {
+    inline = local.workspaces_boot_unlock_arm
+  }
+
+  # Post-state into the apply log (local.workspaces_boot_unlock_post_state).
+  provisioner "remote-exec" {
+    inline = local.workspaces_boot_unlock_post_state
+  }
+}
+
 # #6649 — publish the boot token to a repo-level GitHub Actions secret so the cutover/verify
 # workflows can deliver it host-side (the ONLY credential that reads prd_workspaces_luks; web-1's
 # baked DOPPLER_TOKEN is prd-root-scoped and cannot). Mirrors github_actions_secret.doppler_token_inngest_arm
