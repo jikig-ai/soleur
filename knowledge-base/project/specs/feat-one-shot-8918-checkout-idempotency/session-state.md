@@ -44,3 +44,15 @@ Position: review panel resolved → QA PASS → compound written → ship in pro
 ### Errors this segment
 - `Reviewed-Coverage` initially written mid-body, not a trailer → reset --soft, re-committed as real trailer (gate lesson).
 - `test/api-checkout-idempotency` first run of new tests: 3 failures (ownership check scoped too wide; captureMessage-vs-Exception for PostgrestError; missing STRIPE_PRICE_ID stub in legacy test) — all fixed, 88/88 green.
+
+## 2026-09-28 ship-phase late state (merge-loop)
+
+- PR #9115: READY (undrafted), auto-merge queued under merge-main lock.
+- Reviewed-By-Soleur trailer emitted (f71cb03701) — merge hook required it separate from Reviewed-Coverage.
+- CLO attestation DISCHARGED; audit at knowledge-base/legal/audits/2026-09-counsel-review-8918.md.
+- Deferred operator step filed: #9135 (enable checkout.session.expired on Stripe webhook; playwright-attempt logged the dashboard credential wall).
+- CI fixes landed: FK to_regclass precondition; MD012 blank lines; TOM4 SHAPE_IV classification + DPA shape (iv) enumeration + TOM7 carve-out; lint-legal-registers waiver parity (script + breach-register §Excluded records, count→19).
+- Merge conflict resolved: legal-doc-shas.ts repinned to merged DPD bytes (main's #8872 DPD clause-o + our §5.3(a) edits — clean text merge).
+- rls-fuzz failed once on a pre-existing deadlock flake in conversation-engine-binding test (unrelated; rerun issued).
+- Known recurring CI hot zone: test-scripts shards (registers/TOM4/mutation batteries all keyed to this diff's new table — all now green locally).
+- Remaining: wait CI green → auto-merge fires → post-merge verify (merged files on main, migration-apply step, deploy) → resume prompt → start #9053.
