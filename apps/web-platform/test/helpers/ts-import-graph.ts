@@ -66,12 +66,20 @@ export function realFs(appRoot: string): GraphFs {
       }
     },
     exists: (p) => existsSync(p),
+    // Never follows a symlink (a `..` link would loop), but LISTS it, so a guard that reads the
+    // entry either gets the target's content or an unreadable-path it must fail closed on.
     listFiles: (dir) => {
-      if (!existsSync(dir)) return [];
-      return (readdirSync(dir, { recursive: true, withFileTypes: true }) as import("node:fs").Dirent[])
-        .filter((d) => d.isFile())
-        .map((d) => join(d.parentPath, d.name))
-        .filter((p) => !p.includes("/node_modules/"));
+      const out: string[] = [];
+      const rec = (d: string): void => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          if (e.name === "node_modules") continue;
+          const p = join(d, e.name);
+          if (e.isSymbolicLink() || e.isFile()) out.push(p);
+          else if (e.isDirectory()) rec(p);
+        }
+      };
+      if (existsSync(dir)) rec(dir);
+      return out;
     },
   };
 }
@@ -93,60 +101,138 @@ export function resolveSpecifier(spec: string, fromFile: string, fs: GraphFs): s
   return "unresolved";
 }
 
+// Parses are memoized by path AND source text: fixture filesystems reuse one path with different
+// contents, so a path-only key would hand a guard a stale tree and a silent false pass.
+const PARSE_CACHE = new Map<string, ts.SourceFile>();
+
 export function parseModule(file: string, src: string): ts.SourceFile {
-  return ts.createSourceFile(
+  const hit = PARSE_CACHE.get(file);
+  if (hit && hit.text === src) return hit;
+  const sf = ts.createSourceFile(
     file,
     src,
     ts.ScriptTarget.Latest,
     true,
     file.endsWith(".tsx") ? ts.ScriptKind.TSX : file.endsWith(".ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS,
   );
+  PARSE_CACHE.set(file, sf);
+  return sf;
 }
 
-/** True when a named-import/export clause is erased by TypeScript. */
-function allNamedSpecifiersTypeOnly(n: ts.ImportDeclaration | ts.ExportDeclaration): boolean {
-  if (ts.isImportDeclaration(n)) {
-    const c = n.importClause;
-    if (!c || c.name || !c.namedBindings || !ts.isNamedImports(c.namedBindings)) return false;
-    const els = c.namedBindings.elements;
-    return els.length > 0 && els.every((e) => e.isTypeOnly);
-  }
-  const ec = n.exportClause;
-  if (!ec || !ts.isNamedExports(ec)) return false;
-  return ec.elements.length > 0 && ec.elements.every((e) => e.isTypeOnly);
+export function isImportOrRequireCall(n: ts.Node): n is ts.CallExpression {
+  return (
+    ts.isCallExpression(n) &&
+    (n.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(n.expression) && n.expression.text === "require"))
+  );
+}
+
+export interface EdgeBinding {
+  local: string;
+  imported: string;
+  typeOnly: boolean;
+}
+
+/** One module-loading construct. Every guard reads imports through this one extractor. */
+export interface ModuleEdge {
+  form: "import" | "export" | "import-equals" | "call";
+  /** The literal specifier, or null for a non-literal `import()`/`require()`. */
+  spec: string | null;
+  /** Source text of a non-literal call argument (comments excluded); "" otherwise. */
+  argText: string;
+  pos: number;
+  /** `import type …` / `export type …` — erased as a whole. */
+  typeOnly: boolean;
+  /** `import "x"` with no clause. */
+  sideEffect: boolean;
+  defaultLocal: string | null;
+  /** `import * as x`, `export * as x`, `import x = require()`. */
+  namespaceLocal: string | null;
+  /** `export * from`. */
+  starExport: boolean;
+  named: EdgeBinding[];
+}
+
+const EDGE_CACHE = new WeakMap<ts.SourceFile, ModuleEdge[]>();
+
+export function moduleEdges(sf: ts.SourceFile): ModuleEdge[] {
+  const cached = EDGE_CACHE.get(sf);
+  if (cached) return cached;
+  const out: ModuleEdge[] = [];
+  const base = (form: ModuleEdge["form"], spec: string | null, pos: number): ModuleEdge => ({
+    form,
+    spec,
+    argText: "",
+    pos,
+    typeOnly: false,
+    sideEffect: false,
+    defaultLocal: null,
+    namespaceLocal: null,
+    starExport: false,
+    named: [],
+  });
+  const visit = (n: ts.Node): void => {
+    if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
+      const e = base("import", n.moduleSpecifier.text, n.getStart(sf));
+      const c = n.importClause;
+      e.sideEffect = !c;
+      e.typeOnly = !!c?.isTypeOnly;
+      e.defaultLocal = c?.name?.text ?? null;
+      const nb = c?.namedBindings;
+      if (nb && ts.isNamespaceImport(nb)) e.namespaceLocal = nb.name.text;
+      if (nb && ts.isNamedImports(nb)) {
+        e.named = nb.elements.map((el) => ({ local: el.name.text, imported: (el.propertyName ?? el.name).text, typeOnly: el.isTypeOnly }));
+      }
+      out.push(e);
+    } else if (ts.isExportDeclaration(n) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
+      const e = base("export", n.moduleSpecifier.text, n.getStart(sf));
+      e.typeOnly = n.isTypeOnly;
+      const ec = n.exportClause;
+      e.starExport = !ec;
+      if (ec && ts.isNamespaceExport(ec)) e.namespaceLocal = ec.name.text;
+      if (ec && ts.isNamedExports(ec)) {
+        e.named = ec.elements.map((el) => ({ local: el.name.text, imported: (el.propertyName ?? el.name).text, typeOnly: el.isTypeOnly }));
+      }
+      out.push(e);
+    } else if (
+      ts.isImportEqualsDeclaration(n) &&
+      ts.isExternalModuleReference(n.moduleReference) &&
+      ts.isStringLiteral(n.moduleReference.expression)
+    ) {
+      const e = base("import-equals", n.moduleReference.expression.text, n.getStart(sf));
+      e.namespaceLocal = n.name.text;
+      out.push(e);
+    } else if (isImportOrRequireCall(n)) {
+      const a = n.arguments[0];
+      const literal = a && (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)) ? a.text : null;
+      const e = base("call", literal, n.getStart(sf));
+      if (literal === null) e.argText = a ? a.getText(sf) : "";
+      out.push(e);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  EDGE_CACHE.set(sf, out);
+  return out;
+}
+
+/** True when TypeScript erases the edge: every named specifier is `type`-qualified. */
+function allNamedTypeOnly(e: ModuleEdge): boolean {
+  if (e.defaultLocal || e.namespaceLocal || e.starExport || e.sideEffect) return false;
+  return e.named.length > 0 && e.named.every((b) => b.typeOnly);
 }
 
 export type Specifier = { kind: "literal"; spec: string } | { kind: "non-literal"; argText: string; pos: number };
 
 export function specifiersOf(sf: ts.SourceFile, opts: WalkOptions = {}): Specifier[] {
   const out: Specifier[] = [];
-  const visit = (n: ts.Node): void => {
-    if (
-      (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) &&
-      n.moduleSpecifier &&
-      ts.isStringLiteral(n.moduleSpecifier)
-    ) {
-      const typeOnly = ts.isImportDeclaration(n) ? !!n.importClause?.isTypeOnly : n.isTypeOnly;
-      const elided = !!opts.elideTypeOnlySpecifiers && allNamedSpecifiersTypeOnly(n);
-      if (!typeOnly && !elided) out.push({ kind: "literal", spec: n.moduleSpecifier.text });
-    } else if (
-      ts.isImportEqualsDeclaration(n) &&
-      ts.isExternalModuleReference(n.moduleReference) &&
-      ts.isStringLiteral(n.moduleReference.expression)
-    ) {
-      out.push({ kind: "literal", spec: n.moduleReference.expression.text });
-    } else if (
-      ts.isCallExpression(n) &&
-      (n.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(n.expression) && n.expression.text === "require"))
-    ) {
-      const a = n.arguments[0];
-      if (a && (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a))) out.push({ kind: "literal", spec: a.text });
-      else out.push({ kind: "non-literal", argText: a ? a.getText(sf) : "", pos: n.getStart(sf) });
+  for (const e of moduleEdges(sf)) {
+    if (e.spec === null) {
+      out.push({ kind: "non-literal", argText: e.argText, pos: e.pos });
+      continue;
     }
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
+    if ((e.form === "import" || e.form === "export") && (e.typeOnly || (opts.elideTypeOnlySpecifiers && allNamedTypeOnly(e)))) continue;
+    out.push({ kind: "literal", spec: e.spec });
+  }
   return out;
 }
 
@@ -156,12 +242,13 @@ export interface WalkResult {
   nonLiteral: NonLiteralImport[];
 }
 
-export function walk(entry: string, fs: GraphFs, opts: WalkOptions = {}): WalkResult {
+/** Walk from one entry, or from several at once (their closures unioned, each module visited once). */
+export function walk(entry: string | readonly string[], fs: GraphFs, opts: WalkOptions = {}): WalkResult {
   const resolver = opts.resolver ?? resolveSpecifier;
   const reach = new Set<string>();
   const problems: string[] = [];
   const nonLiteral: NonLiteralImport[] = [];
-  const stack = [entry];
+  const stack = typeof entry === "string" ? [entry] : [...entry];
   while (stack.length) {
     const f = stack.pop()!;
     if (reach.has(f)) continue;

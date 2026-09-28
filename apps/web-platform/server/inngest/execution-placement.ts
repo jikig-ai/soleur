@@ -4,25 +4,33 @@
 // the Inngest server calls steps at the registered serve URL (https://app.soleur.ai/api/inngest),
 // which Cloudflare routes to web-1 only. `--sdk-url` on the dedicated Inngest host is the
 // registration poll, not the step path. This leaf records where each function COULD run, so the
-// ADR-143 Phase-3 flip (placement-aware execution, #9137) has a checked answer:
+// ADR-143 Phase-3 flip (placement-aware execution, #9137) has a checked answer.
 //
-//   portable      no host-local dependency; any host holding the prd secrets.
-//   host-affine   needs exactly one app host, sticky per run: a Claude spawn (process-local
-//                 single-flight, ADR-243 §2), an ephemeral clone on CRON_WORKSPACE_ROOT, the
-//                 ADR-078 deploy lease, or a child process.
-//   volume-bound  touches user workspaces (WORKSPACES_ROOT, server/workspace*.ts): only the host
-//                 holding the ADR-119 sole-copy LUKS workspaces volume (web-1 today).
+// Classify a function by the FIRST rule that matches:
+//   volume-bound  it reads WORKSPACES_ROOT or reaches server/workspace.ts / server/workspace-resolver.ts
+//                 (user workspaces): only the host holding the ADR-119 sole-copy LUKS workspaces
+//                 volume (web-1 today).
+//   host-affine   it spawns Claude or any child process, clones under CRON_WORKSPACE_ROOT, or takes
+//                 the ADR-078 deploy lease: exactly one app host, sticky per run (a Claude spawn's
+//                 single-flight is process-local, ADR-243 §2).
+//   portable      none of the above: any host holding the prd secrets.
 //
 // Keyed by Inngest function id (`createFunction({ id })`), one row per served function. An
 // `onFailure` handler is registered by the SDK as `<id>-failure` and inherits its parent's class;
-// it has no row. test/server/inngest/execution-placement.test.ts enforces this file: Guard 1
-// (exactly the served set), Guard 2 (a `portable` row cannot reach a host-local dependency).
-// When a guard fails, re-class to the tightest class the marker implies; never widen the guard's
-// allowlist to make a row pass.
+// it has no row. test/server/inngest/execution-placement.test.ts enforces two things here: the rows
+// are exactly the served set (Guard 1), and a `portable` row reaches no host-local dependency
+// (Guard 2). The host-affine / volume-bound split is DECLARED and reviewed, not guarded, until the
+// placement-aware registry of #9137 consumes it. Never widen the guard's allowlist to make a row
+// pass; re-class the row instead.
 //
-// This module imports NOTHING — keep it that way. No runtime module imports it today.
+// This module imports NOTHING (the suite asserts it), and no runtime module imports it today.
+// Keep workflow file names out of the reason strings: Guard 3 scans every string under
+// server/inngest/ for the names of Inngest's external verifiers.
 
-export type ExecutionPlacement = "portable" | "host-affine" | "volume-bound";
+/** The placement classes, in rule order. */
+export const EXECUTION_PLACEMENTS = ["volume-bound", "host-affine", "portable"] as const;
+
+export type ExecutionPlacement = (typeof EXECUTION_PLACEMENTS)[number];
 
 export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: ExecutionPlacement; reason: string }>> = {
   "agent-on-spawn-requested": {
@@ -35,7 +43,7 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
   },
   "cfo-on-payment-failed": {
     placement: "volume-bound",
-    reason: "conservative pin: its import closure reaches server/workspace-resolver.ts (WORKSPACES_ROOT); re-audit at the placement-aware registry (#9137)",
+    reason: "conservative pin: reaches server/workspace-resolver.ts only through byok-resolver.ts resolveCurrentWorkspaceId (a Supabase lookup, no filesystem access); moving that helper to a filesystem-free module unpins it (#9137)",
   },
   "cron-action-required-sla": {
     placement: "portable",
@@ -155,7 +163,7 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
   },
   "cron-inngest-cron-watchdog": {
     placement: "portable",
-    reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
+    reason: "host-free, but calls the Inngest host's private API (10.0.1.40:8288): any web host on the private network, not any host with the secrets",
   },
   "cron-kb-template-health": {
     placement: "portable",
@@ -275,7 +283,7 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
   },
   "github-on-event": {
     placement: "volume-bound",
-    reason: "conservative pin: its import closure reaches server/workspace-resolver.ts (WORKSPACES_ROOT); re-audit at the placement-aware registry (#9137)",
+    reason: "conservative pin: reaches server/workspace-resolver.ts only through byok-resolver.ts resolveCurrentWorkspaceId (a Supabase lookup, no filesystem access); moving that helper to a filesystem-free module unpins it (#9137)",
   },
   "oneshot-4650-monitor-close": {
     placement: "portable",
