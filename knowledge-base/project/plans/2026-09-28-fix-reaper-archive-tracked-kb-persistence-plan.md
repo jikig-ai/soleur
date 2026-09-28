@@ -14,6 +14,42 @@ brand_survival_threshold: none
 
 # fix: reaper archives tracked KB files via mv — next session's reset --hard resurrects live copies (stranded spec twins)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28
+**Sections enhanced:** ADR ordinal, citation accuracy, mechanism verification
+**Research agents used:** none (Task sub-agents are unavailable on this harness; the deepen
+phases ran inline per the cloud-mode sequential-fallback rule — halt gates, citation checks,
+and the load-bearing mechanism probe were executed directly rather than claimed from a panel.
+`Reviewed-Coverage: sequential-fallback`)
+
+### Key Improvements
+
+1. **ADR ordinal corrected to ADR-257** — cross-ref scan found ADR-256 already claimed on
+   `origin/feat-one-shot-9089-filing-gate-shell-tokenizer`; main-only scan (max ADR-255) would
+   have collided. Propagated to plan §Architecture Decision, AC8, and tasks.md.
+2. **Scoped-commit mechanism verified live** — a throwaway repo exercise of
+   `git mv` + `git commit -m … -- <paths>` produced `R100` rename records and left a pre-staged
+   unrelated file staged-and-uncommitted (the AC5 property). Verified at 2026-09-28.
+3. **Citation corrections** — #7400's actual title (`fix(kb): exclude merged features' spec.md
+   and plans from INDEX.md (Tier 2)`, OPEN) replaces a looser paraphrase; #8400 re-anchored to
+   the verified in-code `#8400` anchors inside `worktree-manager.sh` (the six `#8400` comment
+   anchors spanning the reap-capability token, `reset --hard`, worktree-less arm, and
+   MAINRESET precondition comments); #9087 verified MERGED with the cited title.
+
+### New Considerations Discovered
+
+- Both archive-timestamp formats exist under `specs/archive/` — compact `YYYYMMDD-HHMMSS-*`
+  (the three twins) and legacy `YYYY-MM-DD-*` — so dedup verification strips both prefixes.
+- `scripts/suite-shard-legs.tsv` + `scripts/lib/test-affected-paths.sh` are required new-suite
+  registration points (glob auto-discovery alone is insufficient — derived edges cannot reach
+  a bash-suite subject; all five sibling git-worktree suites carry declared arrays).
+- Halt gates passed inline: 4.5 (no SSH/connectivity symptoms — hits are negations/test-edge
+  prose), 4.55 (no downtime surface), 4.6 (User-Brand section + `none` threshold + scope-out),
+  4.7 (Observability 5-field, `grep`-verb probe, literal expected output), 4.8 (no PAT shapes),
+  4.9 (no UI surface), 4.10 (no store/connection), 4.11 (`lint-guard-contract.py` green,
+  assembly is the chokepoint structure not a member list).
+
 ## Overview
 
 `cleanup_merged_worktrees` in `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
@@ -155,11 +191,13 @@ probe's twin count drops to 0 and the tracker closes on the next sweep.
   (`SOLEUR_REAP_ARCHIVE_STAGED`) covers it; do **not** `LEFTHOOK=0` — that is a detected bypass
   (`detect_bypass` in `.claude/hooks/lib/incidents.sh`).
 - **ADR-174 interaction.** Spec-dir archival is already superseded in part: INDEX.md exclusion is
-  the de-indexing mechanism for `project/specs/` (#7399, status *Adopting*), and #7400 tracks
-  retiring `archive-kb.sh`'s spec/plan discovery paths. This fix does **not** extend the archival
-  convention's life — it makes the reaper's remaining archive writes safe while #7400 decides their
-  retirement. Plans and brainstorms still depend on archive moves for de-indexing, so the
-  persistence fix is required regardless of the spec-dir direction.
+  the de-indexing mechanism for `project/specs/` (ADR-174, status *Adopting* — with its own
+  Adopt-evaluation criteria tracked separately), and open issue #7400 (`fix(kb): exclude merged
+  features' spec.md and plans from INDEX.md (Tier 2)`) tracks the remaining index-exclusion tier.
+  This fix does **not** extend the archival convention's life — it makes the reaper's remaining
+  archive writes safe while #7400 and ADR-174's Adopt criteria decide the convention's retirement.
+  Plans and brainstorms still depend on archive moves for de-indexing, so the persistence fix is
+  required regardless of the spec-dir direction.
 - **Ordering inside `cleanup_merged_worktrees`.** The branch/committability probe is computed once
   before the reap loop (not per artifact); the MAINRESET block is unchanged — under the new rule it
   never sees reap-produced dirt because none is produced.
@@ -220,10 +258,10 @@ where a commit path exists. The test "would a competent engineer reading only th
 be misled?" answers yes: ADR-195/ADR-250 cover reclamation *ownership* for processes/scratch, not
 KB-artifact persistence across checkout classes.
 
-- **ADR:** create provisional **ADR-256** — "Reaper archive writes persist via the checkout's commit
+- **ADR:** create provisional **ADR-257** — "Reaper archive writes persist via the checkout's commit
   path; deferred on non-committable checkouts" (decision + the (a)/(b) rejected alternatives with
   the ruleset and divergence evidence above). Ordinal is provisional — `soleur:ship`'s ADR-Ordinal
-  Collision Gate re-verifies against `origin/main`; on renumber, sweep `grep -rn 'ADR-256'
+  Collision Gate re-verifies against `origin/main`; on renumber, sweep `grep -rn 'ADR-257'
   knowledge-base/project/{plans,specs}/feat-one-shot-9127-reaper-archive-persistence/` plus this
   plan's AC in the same edit.
 - **C4 views:** **no C4 impact.** Enumerated per the completeness mandate against
@@ -290,7 +328,7 @@ helper is itself the defect class.
 
 - `plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh` — fixture suite per
   the established `mktemp`-repo + `cdx` containment pattern (see `lease-protects-active.test.sh`).
-- `knowledge-base/engineering/architecture/decisions/ADR-256-reaper-archive-persistence-commit-path.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-257-reaper-archive-persistence-commit-path.md`
   — provisional ordinal per the ADR section above.
 
 ## Acceptance Criteria
@@ -316,7 +354,7 @@ helper is itself the defect class.
 - [ ] **AC7** — New suite `reap-archive-persistence.test.sh` registered: auto-discovered by the
   `plugins/soleur/skills/*/test/*.test.sh` glob, a declared-edge array in
   `scripts/lib/test-affected-paths.sh`, and a `scripts/suite-shard-legs.tsv` row.
-- [ ] **AC8** — Provisional `ADR-256-*.md` created; plan AC naming the ordinal stays consistent if
+- [ ] **AC8** — Provisional `ADR-257-*.md` created; plan AC naming the ordinal stays consistent if
   `soleur:ship` renumbers (sweep per the ADR section).
 - [ ] **AC9** — `git-worktree/SKILL.md` documents the persistence rule and both sentinels;
   `description:` frontmatter untouched.
@@ -459,7 +497,9 @@ helper is itself the defect class.
   git state, not mocks.
 - `2026-08-10` kb-archival-convention brainstorm (feat-kb-archival-convention) — archival's real
   benefit is INDEX.md row removal; the spec-dir side is superseded by ADR-174's index exclusion.
-- #8400 (in-code) — MAINRESET's premise reordering; kept untouched.
+- #8400 — closed issue carrying the in-code `#8400` anchor inside the MAINRESET-adjacent
+  merged-branch guarantee block (`worktree-manager.sh`); the same region this fix deliberately
+  leaves untouched.
 
 **External/community.** No community stack/agent overlaps (internal bash/git machinery; the
 functional sibling is the repo's own `archive-kb.sh`). Community-discovery stack scan: no

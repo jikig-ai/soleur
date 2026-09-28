@@ -80,7 +80,7 @@ lines and drifts.
 - [ ] 4.1 `plugins/soleur/skills/git-worktree/SKILL.md`: document the commit-path-gated
       persistence rule + `SOLEUR_REAP_ARCHIVE_{COMMITTED,STAGED,DEFERRED}` markers in the
       reaper sections; body only, `description:` frontmatter untouched.
-- [ ] 4.2 Author `knowledge-base/engineering/architecture/decisions/ADR-256-*.md`
+- [ ] 4.2 Author `knowledge-base/engineering/architecture/decisions/ADR-257-*.md`
       (provisional ordinal — re-verify next-free against `origin/main` at author time and let
       `soleur:ship`'s collision gate re-check; on renumber sweep this plan's ADR section +
       AC8 + this file).
