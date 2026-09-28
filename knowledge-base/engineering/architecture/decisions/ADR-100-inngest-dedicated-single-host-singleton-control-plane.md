@@ -1746,8 +1746,9 @@ addendum flips nothing and closes nothing.
 
 [ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md) moves the dedicated
 host's zot login, isolation check and pull → bootstrap block out of once-per-instance `runcmd` into
-`soleur-inngest-provision.service`, a oneshot that retries every 120 s and is re-started 90 s after
-every boot until a latch is written after `inngest-bootstrap.sh` exits 0. This addendum records what
+`soleur-inngest-provision.service`, a oneshot that retries (120 s at first, backing off to 15
+minutes) and is re-started 90 s after every boot until a latch is written after a non-degraded
+`inngest-bootstrap.sh` success. This addendum records what
 that means for this ADR. It amends no Decision.
 
 - **A new actor.** Each retry re-runs the bootstrap, and the bootstrap restarts `inngest-redis` and
@@ -1759,7 +1760,10 @@ that means for this ADR. It amends no Decision.
   bound expires it emits `provision-fsm-busy` and the attempt retries. Without it, a retry that
   coincided with `op=resume` could restart the server inside the flip's `verify_serving` window and
   drive the FSM to `aborted`, which `op=resume` does not accept and which needs a `/mnt/data` recut
-  to leave. The bootstrap re-enables both timers as before.
+  to leave. The same bounded wait also holds while `/var/lib/inngest-luks-cutover/frozen-active`
+  is non-empty or the flip FSM's host state slot shows `"flag":"flipping"`. The timers come back
+  on both paths: on success the bootstrap re-enables them as before, and on a failed attempt the
+  unit's exit handler restarts every timer that was active when the quiesce stopped it.
 - **`op=resume` runs only after the new host's `bootstrap-done`.** `bootstrap-done` now carries
   `iid=<cloud-init instance-id>`, so the new host's row cannot be confused with a late row from the
   destroyed one (both share `host_name` during a replace). This is runbook order

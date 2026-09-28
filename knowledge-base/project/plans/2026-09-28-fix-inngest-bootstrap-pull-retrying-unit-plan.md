@@ -83,7 +83,7 @@ issue and PR numbers were verified live, and the prescribed labels exist.
    is persistent), per-attempt clearing of the fixed `/tmp` staging names, the extract container
    addressed by the ID `docker create` returns, a counter that cannot wedge, and the retired `/run`
    sentinel forbidden (Guard 8).
-8. **`TimeoutStartSec` derived from step bounds** (about 45 min), not from healthy history.
+8. **`TimeoutStartSec` derived from step bounds** (about 45 min at plan time; raised to 65 min at review once the bootstrap's synchronous `systemctl` waits, the per-attempt NIC wait and the `dpkg` step were counted, see `impl-notes.md` §1.4b), not from healthy history.
 
 ### New Considerations Discovered
 
@@ -424,7 +424,7 @@ Type=oneshot
 RemainAfterExit=yes
 Restart=on-failure
 RestartSec=120
-TimeoutStartSec=45min
+TimeoutStartSec=45min   # plan-time sketch; shipped as 65min (impl-notes.md §1.4b)
 Environment=HOME=/root
 EnvironmentFile=/etc/default/inngest-doppler
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -642,8 +642,8 @@ done
   ```
 
   That reuses the existing script unchanged.
-- The EXIT trap also sends `soleur-boot-emit provision_attempt_failed error "rc=… attempt=N"` to
-  Sentry. Its DSN is baked into `/etc/default/soleur-sentry-dsn` on the root disk, so a failing
+- The EXIT trap also sends `soleur-boot-emit provision_attempt_failed warning "rc=… attempt=N"` to
+  Sentry (level **warning**, corrected at review; the detail later gained `iid=` and `why=<last stage>`). Its DSN is baked into `/etc/default/soleur-sentry-dsn` on the root disk, so a failing
   host is visible in Sentry even when Better Stack is unreachable. This stage has no alert rule;
   see Deferrals.
 
@@ -678,9 +678,12 @@ re-installs units. No new state is reachable.
 
 **Arming residual (SpecFlow P1, acknowledged).** The timer is enabled in the last `runcmd` items,
 directly after the last prerequisite the unit needs: `/etc/default/inngest-server`, the deploy user
-and the probe credential. If an earlier `runcmd` item aborts, for example on a LUKS-stage FATAL,
-the unit is never armed. That host stays dark until a replace, **exactly as today**, and the
-aborting item's own phone-home stage says why.
+and the probe credential. If an earlier `runcmd` item hangs, or cloud-init fails before `runcmd`
+starts, the unit is never armed. That host stays dark until a replace, **exactly as today**.
+(**Corrected at review, PR #9159:** an earlier revision named a LUKS-stage FATAL as the example.
+It is not one: `runcmd` has no top-level errexit and the stage's `exit 1` is inside
+`doppler run … bash -s`, so the later items run, the unit is armed, and the host serves
+SQLite-only without latching.)
 
 Arming earlier would let the unit run on a later reboot without prerequisites that only `runcmd`
 writes (env files, deploy user). That would turn a loud stage FATAL into an endless retry loop
@@ -758,7 +761,7 @@ down. That is pre-existing behavior; the retry only makes it more frequent.
   - Then add the steps that have **no** bound: the inngest binary `curl` (`inngest-bootstrap.sh`
     `:150`) and the apt path in `inngest-redis-bootstrap.sh`. Record each as unbounded.
   - Set `TimeoutStartSec` to the bounded sum plus a margin of at least 10 min for the unbounded
-    steps. Expect about 45 min. Cross-check against historical `pre-bootstrap-run` →
+    steps. Expect about 45 min (review re-derivation: 65 min, impl-notes.md §1.4b). Cross-check against historical `pre-bootstrap-run` →
     `bootstrap-exit-0` deltas read from Better Stack (read-only `BETTERSTACK_QUERY_*`), if the
     credentials are available locally.
   - Record the arithmetic in the PR body and in the unit's comment.
@@ -1058,8 +1061,8 @@ liveness_signal:
     Better Stack Logs source (inngest-boot-phone-home.sh, direct curl): provision-unit-armed,
     provision-attempt-start attempt=N, bootstrap-done, post-boot-health. On Sentry (store API via
     soleur-boot-emit): inngest_zot (info), inngest_pull_fatal (fatal, every missed attempt) and
-    provision_attempt_failed (error, every failed attempt).
-  cadence: per provision attempt (one on a healthy boot; at most one per RestartSec=120 s while failing)
+    provision_attempt_failed (warning, every failed attempt).
+  cadence: per provision attempt (one on a healthy boot; while failing, one per restart delay: 120 s at first, backing off to 15 min via RestartSteps=4 + RestartMaxDelaySec=15min)
   alert_target: Sentry issue alert zot-mirror-fallback-rate (email to issue owners, frequency_minutes=23) on stage=inngest_pull_fatal
   configured_in: apps/web-platform/infra/sentry/issue-alerts.tf (resource sentry_alert.zot_mirror_fallback_rate, unchanged)
 
@@ -1094,9 +1097,12 @@ failure_modes:
   - mode: Better Stack channel dead for the boot (bs-token restage failed during a Doppler outage)
     detection: per-attempt re-stage; while still empty, Sentry provision_attempt_failed carries the attempt
     alert_route: Sentry event stream (baked DSN, no Doppler dependency)
-  - mode: unit never armed (an earlier runcmd item aborted) or armed but never started
-    detection: no provision-unit-armed for the new iid (the aborting item's own stage names why), or provision-unit-armed with no provision-attempt-start within 10 min
-    alert_route: follow-through probe inngest-provision-unit-8562.sh reads FAIL on the daily sweeper
+  - mode: armed but never started
+    detection: provision-unit-armed with no provision-attempt-start for its iid within 10 min
+    alert_route: follow-through probe inngest-provision-unit-8562.sh reads FAIL reason=never-started on the daily sweeper
+  - mode: unit never armed (an earlier runcmd item hung, or cloud-init failed before runcmd)
+    detection: no provision-unit-armed row for the new host; runcmd-entered and the last stage reached show where it stopped
+    alert_route: NONE automated (corrected at review, PR #9159). The probe reads TRANSIENT reason=not-delivered, the same reading as "no replace has run yet", indefinitely. Recorded as a known gap in ADR-257 and the runbook; the delivery-day check reads provision-unit-armed directly
   - mode: an attempt hangs
     detection: TimeoutStartSec SIGTERM -> TERM trap kills the child -> EXIT trap emits provision-attempt-exit-143 within seconds; the next attempt-start carries N+1 (a shutdown-time emit may not leave the host)
     alert_route: Sentry event stream (provision_attempt_failed) + Better Stack Logs
@@ -1798,8 +1804,9 @@ skip loses no RED row.
     with the TERM trap so the attempt reports before SIGKILL.
 - **Collision with an operator `op=resume`** is mitigated by the pre-bootstrap FSM quiesce (T15).
   The `op=resume` G-row is deferred.
-- **Arming residual.** If a `runcmd` item aborts before the arming items, the host stays dark
-  until a replace, exactly as today. It is not widened.
+- **Arming residual.** If a `runcmd` item hangs before the arming items, or cloud-init fails before
+  `runcmd`, the host stays dark until a replace, exactly as today. It is not widened. (A LUKS-stage
+  FATAL does not abort `runcmd`; corrected at review.)
 - **The pending delta blocks `inngest-volume-recut` until delivery.** Disclosed.
 - **A `web-v*` release on merge is unavoidable** for any change under `apps/web-platform/**`.
   Disclosed and recorded in `decision-challenges.md`.

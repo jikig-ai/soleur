@@ -2547,7 +2547,7 @@
 "id": "1wan2ye"
 },
 "1r2iigu": {
-"title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot at info / inngest_pull_fatal at fatal — a zot miss ends the attempt; soleur-inngest-provision.service retries every 120 s until one succeeds (#8562; a host replaced before this change still ends the boot), each failed attempt also emitting provision_attempt_failed at error; renamed from inngest_ghcr_fallback by #8036 1d because no GHCR fallback exists — host_name soleur-inngest) and the private-NIC boot outcome (stage family private_nic_*, #8539) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
+"title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot at info / inngest_pull_fatal at fatal — a zot miss ends the attempt; soleur-inngest-provision.service retries (120 s at first, backing off to 15 min) until one succeeds (#8562; a host replaced before this change still ends the boot), each failed attempt also emitting provision_attempt_failed at warning; renamed from inngest_ghcr_fallback by #8036 1d because no GHCR fallback exists — host_name soleur-inngest) and the private-NIC boot outcome (stage family private_nic_*, #8539) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
 "technology": "HTTPS (Sentry store API, X-Sentry-Auth sentry_version=7)",
 "source": {
 "model": "platform.infra.inngest"
@@ -21064,7 +21064,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \nevery 120 s until one succeeds (#8562; a ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
 2102,
@@ -41563,7 +41563,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \nevery 120 s until one succeeds (#8562; a ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
 2559,
@@ -54505,7 +54505,7 @@
 "id": "vmqxbg",
 "source": "platform.infra.inngest",
 "target": "sentry",
-"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \nevery 120 s until one succeeds (#8562; a ",
+"label": "Fresh-boot bootstrap-pull outcome (stage \ninngest_zot at info / inngest_pull_fatal \nat fatal — a zot miss ends the attempt; \nsoleur-inngest-provision.service retries \n(120 s at first, backing off to 15 min) ",
 "points": [
 [
 1843,

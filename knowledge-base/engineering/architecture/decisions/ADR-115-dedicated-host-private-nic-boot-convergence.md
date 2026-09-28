@@ -432,8 +432,9 @@ an empty dir (404s fleet-wide) while `nic_ok=true`.
 > is narrowed in the template by
 > [ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md). The zot
 > login, isolation check and pull → bootstrap block now run in
-> `soleur-inngest-provision.service`, a unit that retries every 120 s and is started again 90 s
-> after every boot until a latch file, written only after `inngest-bootstrap.sh` exits 0, exists.
+> `soleur-inngest-provision.service`, a unit that retries on the same boot (120 s at first,
+> backing off to 15 minutes) and is started again 90 s after every boot until a latch file,
+> written only after a non-degraded `inngest-bootstrap.sh` success, exists.
 > The once-per-instance premise now holds only for a host that has **provisioned**: a latched
 > host's reboot does not re-provision it. A host born before that change keeps the old behavior
 > until its next replace.

@@ -1646,10 +1646,10 @@ narrowed **in the template** by
 
 - The inngest pull no longer runs in a `runcmd` item. It runs in
   `/usr/local/bin/soleur-inngest-provision`, under `soleur-inngest-provision.service`
-  (`Restart=on-failure`, `RestartSec=120`, `StartLimitIntervalSec=0`). A zot miss still emits
-  `inngest_pull_fatal` at fatal on both channels, now with `attempt=N`, and still fails; what it
-  ends is the **attempt**. The unit retries every 120 s until one attempt succeeds and writes its
-  latch.
+  (`Restart=on-failure`, `StartLimitIntervalSec=0`, a `RestartSec=120` delay that backs off to
+  15 minutes). A zot miss still emits `inngest_pull_fatal` at fatal on both channels, now with
+  `attempt=N`, and still fails; what it ends is the **attempt**. The unit retries until one
+  attempt succeeds and writes its latch.
 - zot stays the sole boot-time read path, and there is still no GHCR fallback behind the miss.
   The `IREF`/`ZIREF` pin-carrier literals and their count of exactly 2 are unchanged.
 - `zot-mirror-fallback-rate` is unchanged. Because every missed attempt is a new event, a host

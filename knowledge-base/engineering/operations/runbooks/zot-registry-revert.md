@@ -68,8 +68,8 @@ private-GHCR path — which, per the banner above, is now a path that fails.
 >
 > **Addendum 2026-09-28 (#8562), inngest half only:** the template retries. Since [ADR-257](../../architecture/decisions/ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md) the
 > dedicated inngest host's zot miss ends one provisioning **attempt** (`inngest_pull_fatal` now
-> carries `attempt=N`), and `soleur-inngest-provision.service` tries again every 120 s. The live
-> host keeps the old behavior until its next replace. The web half is unchanged.
+> carries `attempt=N`), and `soleur-inngest-provision.service` tries again (120 s at first,
+> backing off to 15 minutes). The live host keeps the old behavior until its next replace. The web half is unchanged.
 
 **Historical note (what this paragraph used to say).** It described revert as a safe
 Doppler flag flip because "GHCR remains dual-pushed + break-glass through the entire soak
@@ -273,8 +273,8 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
 > through this note.
 >
 > **Addendum 2026-09-28 (#8562), inngest half only:** "the boot **ended**" is now true only of a
-> host born before #8562. The template retries: the pull runs in a unit that retries every 120 s,
-> so `inngest_pull_fatal attempt=N` is one missed attempt and the host may recover on its own. The
+> host born before #8562. The template retries: the pull runs in a unit that retries (120 s at
+> first, backing off to 15 minutes), so `inngest_pull_fatal attempt=N` is one missed attempt and the host may recover on its own. The
 > live host keeps the old behavior until its next replace.
 
 - **Since #8036 1d (2026-09-24), a fresh-boot page is a failed boot, not a slower one.** Triage:
@@ -286,7 +286,7 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
     missing tag (`build-inngest-bootstrap-image.yml -f mirror_only=true`), then run
     `inngest-host-replace` again.
     (**Addendum 2026-09-28, #8562:** on a host born from the #8562 template, the unit retries
-    every 120 s, so repair zot first and wait for `bootstrap-done` with the same `iid` before
+    (120 s at first, backing off to 15 minutes), so repair zot first and wait for `bootstrap-done` with the same `iid` before
     dispatching another replace; see [`inngest-server.md` § Provision unit (#8562)](./inngest-server.md#provision-unit-8562). The live host keeps the old behavior until its next
     replace.)
     If the event's `host_name` is a WEB host (the colocated block, `web_colocate_inngest=true`),

@@ -19,18 +19,32 @@
 # VERDICTS. Exactly ONE `verdict=…` line goes to STDOUT; every detail line goes to stderr. (The 8539
 # twin prints its verdicts to stderr; preflight Check 10 matches stdout only.)
 #   verdict=PASS                               exit 0  a bootstrap-done carries the armed row's iid
-#   verdict=FAIL reason=never-started          exit 1  armed > 10 min ago, no provision-attempt-start
+#   verdict=FAIL reason=degraded cause=…       exit 1  the only completions for that iid are
+#                                                      bootstrap-done-DEGRADED (served SQLite-only,
+#                                                      no latch): never a PASS
+#   verdict=FAIL reason=never-started cause=…  exit 1  armed > 10 min ago, no provision-attempt-start
 #                                                      for that iid
-#   verdict=FAIL reason=no-bootstrap-done      exit 1  attempts for that iid, none reached
+#   verdict=FAIL reason=no-bootstrap-done cause=…
+#                                              exit 1  attempts for that iid, none reached
 #                                                      bootstrap-done, first attempt > 2 h ago
+#   Every FAIL carries cause=<per-iid counts> of isolation-check-FAILED, inngest_pull_fatal,
+#   provision-fsm-busy and bootstrap-done-DEGRADED, so the verdict line alone names the next read.
 #   verdict=TRANSIENT reason=not-delivered     exit 2  no provision-unit-armed row in the window:
 #                                                      the new template has not reached a host yet
 #   verdict=TRANSIENT reason=in-progress       exit 2  armed, and still inside the 10 min / 2 h
 #                                                      bounds above — no verdict yet
 #   verdict=TRANSIENT reason=probe-fault       exit 3  the question could not be asked: missing
 #                                                      credentials, a failed query, or an armed row
-#                                                      with no iid. A DISTINCT token, so a bad
-#                                                      credential can never match "not-delivered".
+#                                                      whose iid is absent, `unknown`, or the
+#                                                      hostname (the fallback old and new hosts
+#                                                      SHARE, so it cannot tell host lives apart).
+#                                                      A DISTINCT token, so a bad credential can
+#                                                      never match "not-delivered".
+#
+# KNOWN GAP: a host whose runcmd never reaches the arming items (an earlier item hangs, or
+# cloud-init fails before runcmd) emits no provision-unit-armed row, and this probe reads it as
+# TRANSIENT not-delivered — indistinguishable from "no replace has run yet". Only the host's
+# earlier boot stages (runcmd-entered and the stage that stopped) show it.
 #   exit 78                                            refused to run under xtrace with a live
 #                                                      credential set (#7797)
 #
@@ -40,7 +54,9 @@
 # FIELD ISOLATION, not substring matching (same reasoning as inngest-zot-boot-7462.sh and the 8539
 # twin): `--grep` is an unanchored LIKE over a source every host multiplexes into, so every
 # judgement is made on the DECODED object's .marker / .host / .stage / .detail fields. `-R` plus
-# `fromjson?` at both levels, so one malformed line drops only itself.
+# `fromjson?` at both levels, so one malformed line drops only itself. The stage is compared as a
+# WHOLE field: a stage value that is not a single token (e.g. "bootstrap-done 900000001") is
+# dropped, and decoded rows are TAB-separated, so no value can shift into another column.
 #
 # THE `${VAR:?msg}` FORM IS BANNED HERE (scripts/lint-followthrough-varq-ban.sh): under the
 # sweeper's shell it aborts with status 1, which this contract reads as FAIL.
@@ -95,19 +111,20 @@ fi
 
 [[ -x "$QUERY" ]] || probe_fault "query helper not found or not executable at ${QUERY}."
 
-# decode <rows> -> "<epoch> <stage> <iid|->" per matching row, oldest first.
+# decode <rows> -> "<epoch>\t<stage>\t<iid|->" per matching row, oldest first.
 # The inner .dt is the host's own ISO-8601 UTC stamp; the outer warehouse dt is the fallback.
 decode() {
   printf '%s\n' "$1" | jq -R -r --arg m "$MARKER" --arg h "$HOST" '
     fromjson? | select(type == "object") | . as $o
     | (.raw? | fromjson?) | select(type == "object")
     | select(.marker == $m and .host == $h and (.stage | type) == "string")
+    | select(.stage | test("^[A-Za-z0-9_.-]+$"))
     | ((.detail // "") | tostring) as $d
     | ([$d | capture("(^|\\s)iid=(?<iid>[A-Za-z0-9._-]+)") | .iid][0] // "-") as $iid
     | (((.dt // "") | tostring | fromdateiso8601?)
        // (($o.dt // "") | tostring | sub("\\.[0-9]+$"; "") | sub(" "; "T") | (. + "Z") | fromdateiso8601?)
        // empty) as $ts
-    | "\($ts | floor) \(.stage) \($iid)"' 2>/dev/null | sort -n
+    | "\($ts | floor)\t\(.stage)\t\($iid)"' 2>/dev/null | sort -n
 }
 
 # --- 1. the anchor: the newest provision-unit-armed row --------------------------------------------
@@ -116,7 +133,7 @@ qrc=$?
 [[ "$qrc" -eq 0 ]] || probe_fault "the Better Stack query for provision-unit-armed failed (rc=${qrc})." \
   "A revoked connection password and a network fault both land here; neither is a statement about the host."
 
-armed="$(decode "$armed_rows" | awk '$2 == "provision-unit-armed"' | tail -n 1)"
+armed="$(decode "$armed_rows" | awk -F'\t' '$2 == "provision-unit-armed"' | tail -n 1)"
 if [[ -z "$armed" ]]; then
   verdict "TRANSIENT reason=not-delivered"
   {
@@ -126,25 +143,44 @@ if [[ -z "$armed" ]]; then
   } >&2
   exit 2
 fi
-armed_ts="$(printf '%s' "$armed" | awk '{print $1}')"
-iid="$(printf '%s' "$armed" | awk '{print $3}')"
+armed_ts="$(printf '%s' "$armed" | awk -F'\t' '{print $1}')"
+iid="$(printf '%s' "$armed" | awk -F'\t' '{print $3}')"
 if [[ "$iid" == "-" || -z "$iid" ]]; then
   probe_fault "the newest provision-unit-armed row carries no iid= field, so no row can be joined to it." \
     "This is a contract drift in the runcmd arming item, not a host verdict."
 fi
+# The arming item falls back to the hostname, then to `unknown`, when the instance-id is
+# unreadable. Both values are SHARED by every host life, so joining on them could PASS a new host
+# on a destroyed host's bootstrap-done.
+if [[ "$iid" == "unknown" || "$iid" == "$HOST" ]]; then
+  probe_fault "the newest provision-unit-armed row carries iid=${iid}, a fallback every host life shares." \
+    "It cannot tell this host life from the one it replaced, so no verdict is safe."
+fi
 
 # --- 2. the host life's attempts and completions ---------------------------------------------------
-life_rows="$("$QUERY" --since "$WINDOW" --grep provision-attempt-start --grep bootstrap-done --limit "$LIMIT" 2>/dev/null)"
+# `--grep bootstrap-done` also returns bootstrap-done-DEGRADED rows (substring LIKE); the exact
+# stage comparison below tells them apart.
+life_rows="$("$QUERY" --since "$WINDOW" --grep provision-attempt-start --grep bootstrap-done \
+  --grep isolation-check-FAILED --grep inngest_pull_fatal --grep provision-fsm-busy --limit "$LIMIT" 2>/dev/null)"
 qrc=$?
-[[ "$qrc" -eq 0 ]] || probe_fault "the Better Stack query for provision-attempt-start/bootstrap-done failed (rc=${qrc})."
+[[ "$qrc" -eq 0 ]] || probe_fault "the Better Stack query for the host life's stages failed (rc=${qrc})."
 
-life="$(decode "$life_rows" | awk -v i="$iid" '$3 == i')"
-n_done="$(printf '%s\n' "$life" | awk '$2 == "bootstrap-done"' | grep -c . || true)"
-n_attempt="$(printf '%s\n' "$life" | awk '$2 == "provision-attempt-start"' | grep -c . || true)"
-[[ "$n_done" =~ ^[0-9]+$ ]] || n_done=0
-[[ "$n_attempt" =~ ^[0-9]+$ ]] || n_attempt=0
-first_attempt_ts="$(printf '%s\n' "$life" | awk '$2 == "provision-attempt-start" {print $1; exit}')"
+life="$(decode "$life_rows" | awk -F'\t' -v i="$iid" '$3 == i')"
+count_stage() {
+  local n
+  n="$(printf '%s\n' "$life" | awk -F'\t' -v s="$1" '$2 == s' | grep -c . || true)"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  printf '%s' "$n"
+}
+n_done="$(count_stage bootstrap-done)"
+n_degraded="$(count_stage bootstrap-done-DEGRADED)"
+n_attempt="$(count_stage provision-attempt-start)"
+n_iso="$(count_stage isolation-check-FAILED)"
+n_pull="$(count_stage inngest_pull_fatal)"
+n_busy="$(count_stage provision-fsm-busy)"
+first_attempt_ts="$(printf '%s\n' "$life" | awk -F'\t' '$2 == "provision-attempt-start" {print $1; exit}')"
 
+cause="cause=isolation-check-FAILED:${n_iso},inngest_pull_fatal:${n_pull},provision-fsm-busy:${n_busy},bootstrap-done-DEGRADED:${n_degraded}"
 summary="iid=${iid} attempts=${n_attempt} bootstrap_done=${n_done} armed_age_s=$((now - armed_ts))"
 
 if [[ "$n_done" -gt 0 ]]; then
@@ -157,9 +193,20 @@ if [[ "$n_done" -gt 0 ]]; then
   exit 0
 fi
 
+if [[ "$n_degraded" -gt 0 ]]; then
+  verdict "FAIL reason=degraded ${cause}"
+  {
+    echo "  ${summary}"
+    echo "  The bootstrap succeeded only DEGRADED (SQLite-only: Redis inactive or no durable ExecStart), so the unit"
+    echo "  wrote no latch and retries only at the next boot. This is not the accepted state."
+    echo "  Read the inngest-luks-* and post-boot-health stages for the same iid (runbook, Provision unit)."
+  } >&2
+  exit 1
+fi
+
 if [[ "$n_attempt" -eq 0 ]]; then
   if [[ $((now - armed_ts)) -gt "$START_BOUND_S" ]]; then
-    verdict "FAIL reason=never-started"
+    verdict "FAIL reason=never-started ${cause}"
     {
       echo "  ${summary}"
       echo "  The unit was armed more than ${START_BOUND_S} s ago and no attempt ever started for this iid."
@@ -173,7 +220,7 @@ if [[ "$n_attempt" -eq 0 ]]; then
 fi
 
 if [[ $((now - first_attempt_ts)) -gt "$DONE_BOUND_S" ]]; then
-  verdict "FAIL reason=no-bootstrap-done"
+  verdict "FAIL reason=no-bootstrap-done ${cause}"
   {
     echo "  ${summary}"
     echo "  Attempts started more than ${DONE_BOUND_S} s ago and none reached bootstrap-done for this iid."

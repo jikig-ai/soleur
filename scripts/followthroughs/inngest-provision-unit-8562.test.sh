@@ -87,6 +87,8 @@ echo "== inngest-provision-unit-8562.sh exit-code harness =="
 row $((NOW - 3600)) provision-unit-armed "iid=900000001 timer=enabled" > "$WORK/armed-1h.jsonl"
 row $((NOW - 300)) provision-unit-armed "iid=900000001 timer=enabled" > "$WORK/armed-5m.jsonl"
 row $((NOW - 14400)) provision-unit-armed "iid=900000001 timer=enabled" > "$WORK/armed-4h.jsonl"
+# Every FAIL line carries the per-iid cause counts; most cases have none of the four stages.
+C0="cause=isolation-check-FAILED:0,inngest_pull_fatal:0,provision-fsm-busy:0,bootstrap-done-DEGRADED:0"
 
 # --- C1 credentials absent is probe-fault, never not-delivered --------------------------------------
 STDOUT="$(INNGEST_PROVISION_8562_QUERY_BIN="$WORK/stub-query" INNGEST_PROVISION_8562_NOW="$NOW" \
@@ -119,7 +121,7 @@ expect "C5 armed + bootstrap-done with the same iid -> PASS" 0 "verdict=PASS"
   row $((NOW - 88000)) bootstrap-done "iid=800000009";
   row $((NOW - 1000)) bootstrap-done "iid=800000009"; } > "$WORK/old-life.jsonl"
 run "$WORK/armed-two.jsonl" "$WORK/old-life.jsonl"
-expect "C6 newest armed iid wins; an older iid's bootstrap-done (even a late one) -> FAIL never-started" 1 "verdict=FAIL reason=never-started"
+expect "C6 newest armed iid wins; an older iid's bootstrap-done (even a late one) -> FAIL never-started" 1 "verdict=FAIL reason=never-started $C0"
 
 # --- C7 armed recently, nothing started yet -> in-progress --------------------------------------------
 run "$WORK/armed-5m.jsonl" "$WORK/empty.jsonl"
@@ -127,13 +129,13 @@ expect "C7 armed < 10 min ago, no attempt -> TRANSIENT in-progress" 2 "verdict=T
 
 # --- C8 armed long ago, no attempt ever -> FAIL never-started -----------------------------------------
 run "$WORK/armed-1h.jsonl" "$WORK/empty.jsonl"
-expect "C8 armed > 10 min ago, no attempt -> FAIL never-started" 1 "verdict=FAIL reason=never-started"
+expect "C8 armed > 10 min ago, no attempt -> FAIL never-started" 1 "verdict=FAIL reason=never-started $C0"
 
 # --- C9 attempts older than 2 h and no bootstrap-done -> FAIL ---------------------------------------
 { row $((NOW - 14390)) provision-attempt-start "attempt=1 iid=900000001";
   row $((NOW - 600)) provision-attempt-start "attempt=40 iid=900000001"; } > "$WORK/stuck.jsonl"
 run "$WORK/armed-4h.jsonl" "$WORK/stuck.jsonl"
-expect "C9 first attempt > 2 h ago, no bootstrap-done -> FAIL no-bootstrap-done" 1 "verdict=FAIL reason=no-bootstrap-done"
+expect "C9 first attempt > 2 h ago, no bootstrap-done -> FAIL no-bootstrap-done" 1 "verdict=FAIL reason=no-bootstrap-done $C0"
 
 # --- C10 attempts inside the 2 h bound -> in-progress -------------------------------------------------
 { row $((NOW - 3590)) provision-attempt-start "attempt=1 iid=900000001";
@@ -146,13 +148,13 @@ expect "C10 attempts for 1 h, no bootstrap-done -> TRANSIENT in-progress" 2 "ver
   row $((NOW - 100)) post-boot-health "iid=900000001" soleur-inngest SOLEUR_INNGEST_BOOT_STAGE \
       "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done iid=900000001 echoed-in-prose"; } > "$WORK/spoof.jsonl"
 run "$WORK/armed-4h.jsonl" "$WORK/spoof.jsonl"
-expect "C11 stage name in the MESSAGE does not satisfy the .stage anchor" 1 "verdict=FAIL reason=no-bootstrap-done"
+expect "C11 stage name in the MESSAGE does not satisfy the .stage anchor" 1 "verdict=FAIL reason=no-bootstrap-done $C0"
 
 # --- C12 a foreign HOST's rows are ignored (web-1 shares the source) --------------------------------
 { row $((NOW - 14390)) provision-attempt-start "attempt=1 iid=900000001";
   row $((NOW - 100)) bootstrap-done "iid=900000001" soleur-inngest-prd; } > "$WORK/foreign-host.jsonl"
 run "$WORK/armed-4h.jsonl" "$WORK/foreign-host.jsonl"
-expect "C12 a bootstrap-done from another host cannot PASS" 1 "verdict=FAIL reason=no-bootstrap-done"
+expect "C12 a bootstrap-done from another host cannot PASS" 1 "verdict=FAIL reason=no-bootstrap-done $C0"
 row $((NOW - 3600)) provision-unit-armed "iid=900000001" web-1 > "$WORK/armed-foreign.jsonl"
 run "$WORK/armed-foreign.jsonl" "$WORK/good.jsonl"
 expect "C12b an armed row from another host is not delivery" 2 "verdict=TRANSIENT reason=not-delivered"
@@ -161,7 +163,7 @@ expect "C12b an armed row from another host is not delivery" 2 "verdict=TRANSIEN
 { row $((NOW - 14390)) provision-attempt-start "attempt=1 iid=900000001";
   row $((NOW - 100)) bootstrap-done "iid=900000001" soleur-inngest SOLEUR_INNGEST_BOOT_TRACE_LOST; } > "$WORK/foreign-marker.jsonl"
 run "$WORK/armed-4h.jsonl" "$WORK/foreign-marker.jsonl"
-expect "C13 a different marker's row cannot supply bootstrap-done" 1 "verdict=FAIL reason=no-bootstrap-done"
+expect "C13 a different marker's row cannot supply bootstrap-done" 1 "verdict=FAIL reason=no-bootstrap-done $C0"
 
 # --- C14 undecodable rows are dropped, not fatal ------------------------------------------------------
 { echo '{"dt":"2026-09-28 10:00:00","raw":"not-json-at-all"}'; echo 'total garbage'; cat "$WORK/good.jsonl"; } > "$WORK/garbage.jsonl"
@@ -177,13 +179,13 @@ expect "C15 armed row without iid= -> probe-fault, never PASS" 3 "verdict=TRANSI
 { row $((NOW - 3590)) provision-attempt-start "attempt=1 iid=9000000011";
   row $((NOW - 3000)) bootstrap-done "iid=9000000011"; } > "$WORK/prefix.jsonl"
 run "$WORK/armed-1h.jsonl" "$WORK/prefix.jsonl"
-expect "C16 iid=9000000011 is not iid=900000001" 1 "verdict=FAIL reason=never-started"
+expect "C16 iid=9000000011 is not iid=900000001" 1 "verdict=FAIL reason=never-started $C0"
 
 # --- C17 output never carries a row's detail ----------------------------------------------------------
 { row $((NOW - 3590)) provision-attempt-start "attempt=1 iid=900000001";
-  row $((NOW - 3000)) bootstrap-done "iid=900000001 tail=synthetic-secret-looking-10.0.1.40"; } > "$WORK/detail.jsonl"
+  row $((NOW - 3000)) bootstrap-done "iid=900000001 tail=synthetic-tail-10.0.1.40"; } > "$WORK/detail.jsonl"
 run "$WORK/armed-1h.jsonl" "$WORK/detail.jsonl"
-if grep -qE 'tail=|10\.0\.1\.|synthetic-secret' <<<"$STDOUT$(cat "$WORK/stderr")"; then
+if grep -qE 'tail=|10\.0\.1\.|synthetic-tail' <<<"$STDOUT$(cat "$WORK/stderr")"; then
   fail "C17 output leaked a row detail (the sweeper posts this to a PUBLIC issue)"
 else
   pass "C17 output is counts + iid only"
@@ -200,6 +202,50 @@ else
   fail "C18 xtrace refusal — rc=$xrc (want 78) or the credential appeared in the trace"
 fi
 
+# --- C21 the hostname / `unknown` iid fallbacks are SHARED by every host life -> probe-fault -------
+row $((NOW - 3600)) provision-unit-armed "iid=unknown timer=enabled" > "$WORK/armed-unknown.jsonl"
+{ row $((NOW - 3000)) bootstrap-done "attempt=1 iid=unknown"; } > "$WORK/done-unknown.jsonl"
+run "$WORK/armed-unknown.jsonl" "$WORK/done-unknown.jsonl"
+expect "C21 armed iid=unknown -> probe-fault, never PASS on a shared id" 3 "verdict=TRANSIENT reason=probe-fault"
+row $((NOW - 3600)) provision-unit-armed "iid=soleur-inngest timer=enabled" > "$WORK/armed-hostname.jsonl"
+{ row $((NOW - 3000)) bootstrap-done "attempt=1 iid=soleur-inngest"; } > "$WORK/done-hostname.jsonl"
+run "$WORK/armed-hostname.jsonl" "$WORK/done-hostname.jsonl"
+expect "C21b armed iid=<hostname> -> probe-fault, never PASS on a shared id" 3 "verdict=TRANSIENT reason=probe-fault"
+
+# --- C22 a stage field that is not one token never reads as bootstrap-done -----------------------------
+# A whitespace split would read "bootstrap-done 900000001" as stage=bootstrap-done iid=900000001.
+{ row $((NOW - 14390)) provision-attempt-start "attempt=1 iid=900000001";
+  row $((NOW - 100)) "bootstrap-done 900000001" ""; } > "$WORK/forged-stage.jsonl"
+run "$WORK/armed-4h.jsonl" "$WORK/forged-stage.jsonl"
+expect "C22 forged stage 'bootstrap-done <iid>' is dropped -> FAIL, not PASS" 1 "verdict=FAIL reason=no-bootstrap-done $C0"
+# A TAB inside the stage would shift columns in the probe's TAB-separated decode; the single-token
+# stage filter drops it before that can happen.
+{ row $((NOW - 14390)) provision-attempt-start "attempt=1 iid=900000001";
+  row $((NOW - 100)) $'bootstrap-done\t900000001' ""; } > "$WORK/forged-tab.jsonl"
+run "$WORK/armed-4h.jsonl" "$WORK/forged-tab.jsonl"
+expect "C22b forged stage with an embedded TAB is dropped -> FAIL, not PASS" 1 "verdict=FAIL reason=no-bootstrap-done $C0"
+
+# --- C23 a DEGRADED completion is never a PASS ----------------------------------------------------------
+{ row $((NOW - 3590)) provision-attempt-start "attempt=1 iid=900000001";
+  row $((NOW - 3000)) bootstrap-done-DEGRADED "attempt=1 iid=900000001"; } > "$WORK/degraded.jsonl"
+run "$WORK/armed-1h.jsonl" "$WORK/degraded.jsonl"
+expect "C23 only bootstrap-done-DEGRADED -> FAIL degraded" 1 \
+  "verdict=FAIL reason=degraded cause=isolation-check-FAILED:0,inngest_pull_fatal:0,provision-fsm-busy:0,bootstrap-done-DEGRADED:1"
+{ cat "$WORK/degraded.jsonl"; row $((NOW - 60)) bootstrap-done "attempt=2 iid=900000001"; } > "$WORK/degraded-then-done.jsonl"
+run "$WORK/armed-1h.jsonl" "$WORK/degraded-then-done.jsonl"
+expect "C23b a later full bootstrap-done after a degraded one -> PASS" 0 "verdict=PASS"
+
+# --- C24 cause= counts only this iid's rows, per stage --------------------------------------------------
+{ row $((NOW - 14390)) provision-attempt-start "attempt=1 iid=900000001";
+  row $((NOW - 14380)) isolation-check-FAILED "attempt=1 iid=900000001";
+  row $((NOW - 9000)) inngest_pull_fatal "zot miss rc=124 attempt=20 iid=900000001";
+  row $((NOW - 8000)) inngest_pull_fatal "zot miss rc=124 attempt=21 iid=900000001";
+  row $((NOW - 7000)) provision-fsm-busy "units=[x] attempt=22 iid=900000001";
+  row $((NOW - 6000)) inngest_pull_fatal "zot miss rc=124 attempt=3 iid=800000009"; } > "$WORK/causes.jsonl"
+run "$WORK/armed-4h.jsonl" "$WORK/causes.jsonl"
+expect "C24 FAIL cause= carries this iid's per-stage counts only" 1 \
+  "verdict=FAIL reason=no-bootstrap-done cause=isolation-check-FAILED:1,inngest_pull_fatal:2,provision-fsm-busy:1,bootstrap-done-DEGRADED:0"
+
 # --- C19 the banned ${VAR:?} form would turn an unset secret into a daily false-FAIL -----------------
 # Pattern and comment-scoping mirror scripts/lint-followthrough-varq-ban.sh.
 if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$PROBE" | grep -qvE '^[0-9]+:[[:space:]]*#'; then
@@ -210,10 +256,10 @@ fi
 
 # --- C20 anti-vacuity: the harness ran its whole inventory --------------------------------------------
 # EXACT, not >=. A floor that only catches shrinkage still lets a case be silently replaced.
-if [[ "$checks" -ne 20 ]]; then
-  fail "C20 anti-vacuity: expected 20 checks before this one, ran $checks"
+if [[ "$checks" -ne 27 ]]; then
+  fail "C20 anti-vacuity: expected 27 checks before this one, ran $checks"
 else
-  pass "C20 anti-vacuity: full inventory ran (20 checks + this one)"
+  pass "C20 anti-vacuity: full inventory ran (27 checks + this one)"
 fi
 
 echo
