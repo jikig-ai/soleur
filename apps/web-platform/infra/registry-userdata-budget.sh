@@ -26,15 +26,14 @@
 # would require Doppler prd_terraform and would be unrunnable on a fork PR. Stub LENGTHS
 # are what a size check needs, and each stub is a length UPPER BOUND on its real value.
 #
-# Nine of the twelve are byte-identical copies of the real literal, so the bound is exact. The
-# other three were asserted rather than checked until #7299's review: `doppler_token` stubs the
-# config slug as `prd_registry` where the real slug is `prd` (+9 B of slack); `registry_volume_id`
-# is 9 digits, matching every live hcloud volume id in-repo; and the two heartbeat URLs stub a
-# 64-char token, widened from 24 because the real Better Stack token length is NOT derivable from
-# anything in this repo (every in-tree sample is synthetic or redacted) — 64 exceeds any plausible
-# value, so the bound is true by construction instead of by belief. `zot_memory_cap_mb` (4 digits
-# at 8 GB, 5 at 16 GB) and the amd64-only `zot_image` read are exact only while those shapes hold;
-# both are single-byte effects against ~23 kB of headroom.
+# (#7582) Every map value that is a LITERAL in zot-registry.tf (zot_image, doppler_sha256, the
+# two users, the private IP, the ingest URL, the memory reserve) is READ from the .tf, never
+# copied, because registry-host-replace-dispatch.yml renders this script at two SHAs and a stub
+# copy made a bump to that value render identical. What stays stubbed is what an offline render
+# cannot know: the volume id, the Doppler service-token key and the two heartbeat URLs (resource
+# attributes, each a length upper bound on its real value), the cgroup cap's catalog memory
+# (4096 MB, the cpx22 shape) and the arch (amd64). The dispatcher compares registry_server_type
+# by value and those resource blocks by text for exactly that reason.
 # (Technique mirrored from git-data-userdata-budget.sh, which documents it at length.)
 #
 # `zot_image` is NOT stubbed — it is read from zot-registry.tf, because the pin's own
@@ -45,7 +44,7 @@
 # measurement is worse than none.
 #
 # Exit 0 under cap, 1 over, 2 UNMEASURABLE. Exit 2 covers: terraform absent in CI; the zot pin
-# unreadable; the strip declaration absent, duplicated, not a slash-delimited literal, missing
+# unreadable; a read zot-registry.tf literal absent or not in its exact shape (#7582); the strip declaration absent, duplicated, not a slash-delimited literal, missing
 # `(?m)` or missing `^`; the strip not APPLIED at hcloud_server.registry.user_data; the render or
 # base64gzip failing; a stored payload below the 4,000 B plausibility floor; or `#cloud-config`
 # not surviving the strip.
@@ -76,12 +75,55 @@ command -v terraform >/dev/null 2>&1 || {
 # from the .tf so the measurement tracks the real pin rather than a copy that can rot.
 # Anchored on the ASSIGNMENT, like the staleness gate -- an unanchored grep is satisfied by
 # a comment (e.g. a rollback annotation above the locals), which would measure the wrong
-# reference length. Same fact, same parse rule, everywhere.
-ZOT_IMAGE="$(grep -oE '^[[:space:]]*zot_image_amd64[[:space:]]*=[[:space:]]*"ghcr\.io/project-zot/zot-linux-amd64:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}"' "$DIR/zot-registry.tf" | grep -oE 'ghcr\.io[^"]*' | head -1)"
+# reference length.
+#
+# (#7582) PREFIX-AGNOSTIC: the registry host part is not asserted here (the staleness gate owns
+# the pin's provenance). The dispatcher renders the delivery watermark's zot-registry.tf with
+# THIS script, so a pin that moves registry (#8714 5.3b-iii) must still parse on both sides and
+# read as an ordinary render change, not as "unmeasurable".
+ZOT_IMAGE="$(grep -oE '^[[:space:]]*zot_image_amd64[[:space:]]*=[[:space:]]*"[a-z0-9.-]+(:[0-9]+)?/[^"[:space:]]*zot-linux-amd64(:v[0-9]+\.[0-9]+\.[0-9]+)?@sha256:[0-9a-f]{64}"' "$DIR/zot-registry.tf" | grep -oE '"[^"]*"' | tr -d '"' | head -1)"
 [ -n "$ZOT_IMAGE" ] || {
   echo "registry-userdata-budget: could not read local.zot_image_amd64 from zot-registry.tf" >&2
   exit 2
 }
+
+# (#7582) EVERY OTHER zot-registry.tf LITERAL THE TEMPLATE MAP CONSUMES IS READ, NOT COPIED. These
+# were hand-copied stubs; the dispatcher's render diff then could not see a bump to any of them
+# (a doppler_sha256 bump rendered byte-identical), and a PR updating both the .tf value and this
+# copy compared equal. Each read is anchored on its string/number-literal assignment in the
+# locals block (the templatefile map's `x = local.x` lines are not literals, so they never match),
+# and a missing one is UNMEASURABLE (exit 2), never a silent default.
+tf_literal() {  # $1 = local name -> its value, when the literal is the ONLY thing right of `=`
+  # Anchored at BOTH ends: a trailing comment (`x = "a" # was "b"`) or any expression makes the
+  # read fail (empty -> exit 2 below) instead of silently picking a quoted string from the comment.
+  grep -E "^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"[^\"]*\"[[:space:]]*$" "$DIR/zot-registry.tf" | head -1 | sed -E 's/^[^=]*=[[:space:]]*"([^"]*)"[[:space:]]*$/\1/'
+}
+tf_number() {  # $1 = local name -> its integer literal (same both-ends anchoring)
+  grep -oE "^[[:space:]]*$1[[:space:]]*=[[:space:]]*[0-9]+[[:space:]]*$" "$DIR/zot-registry.tf" | head -1 | grep -oE '[0-9]+[[:space:]]*$' | tr -d '[:space:]'
+}
+# doppler_sha256 is `local.registry_arch == "arm64" ? "<arm64>" : "<amd64>"` — matched as that
+# EXACT shape (not "the last quoted string"), so reordering the ternary or appending a comment
+# reads as unmeasurable rather than as the wrong arch's checksum.
+DOPPLER_SHA256="$(grep -E '^[[:space:]]*doppler_sha256[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*==[[:space:]]*"arm64"[[:space:]]*\?[[:space:]]*"[0-9a-f]{64}"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"[[:space:]]*$' "$DIR/zot-registry.tf" | head -1 | sed -E 's/.*:[[:space:]]*"([0-9a-f]{64})"[[:space:]]*$/\1/')"
+ZOT_PULL_USER="$(tf_literal zot_pull_user)"
+ZOT_PUSH_USER="$(tf_literal zot_push_user)"
+PRIVATE_IP="$(tf_literal registry_private_ip)"
+BS_INGEST_URL="$(tf_literal betterstack_logs_ingest_url)"
+HOST_RESERVE_MB="$(tf_number registry_host_reserve_mb)"
+for pair in "doppler_sha256=$DOPPLER_SHA256" "zot_pull_user=$ZOT_PULL_USER" "zot_push_user=$ZOT_PUSH_USER" \
+            "registry_private_ip=$PRIVATE_IP" "betterstack_logs_ingest_url=$BS_INGEST_URL" \
+            "registry_host_reserve_mb=$HOST_RESERVE_MB"; do
+  [ -n "${pair#*=}" ] || {
+    echo "registry-userdata-budget: could not read local.${pair%%=*} from zot-registry.tf" >&2
+    exit 2
+  }
+done
+case "$DOPPLER_SHA256" in *[!0-9a-f]*) echo "registry-userdata-budget: local.doppler_sha256 (amd64) is not hex" >&2; exit 2 ;; esac
+[ "${#DOPPLER_SHA256}" -eq 64 ] || { echo "registry-userdata-budget: local.doppler_sha256 (amd64) is not 64 hex chars" >&2; exit 2; }
+# The cap is `memory_gb * 1024 - reserve` from the LIVE Hetzner catalog, which an offline render
+# cannot read; 4096 MB is the cpx22 shape. A server-type change is caught by the dispatcher's own
+# registry_server_type compare, not by this render.
+ZOT_MEMORY_CAP_MB=$(( 4096 - HOST_RESERVE_MB ))
 
 # The comment strip, EXTRACTED from zot-registry.tf — never restated here. That file declares
 # it ONCE and both consumers (this script and plugins/soleur/test/cloud-init-user-data-size.
@@ -157,12 +199,12 @@ locals {
     registry_volume_id     = "100000003"
     doppler_token          = join(".", ["dp", "st", "prd_registry", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTU"])
     zot_image              = "${ZOT_IMAGE}"
-    zot_pull_user          = "zot-pull"
-    zot_push_user          = "zot-push"
+    zot_pull_user          = "${ZOT_PULL_USER}"
+    zot_push_user          = "${ZOT_PUSH_USER}"
     doppler_arch           = "amd64"
-    doppler_sha256         = "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
-    zot_memory_cap_mb      = 3072
-    private_ip             = "10.0.1.30"
+    doppler_sha256         = "${DOPPLER_SHA256}"
+    zot_memory_cap_mb      = ${ZOT_MEMORY_CAP_MB}
+    private_ip             = "${PRIVATE_IP}"
     # Built by join() rather than written as one literal, mirroring the doppler_token
     # treatment in git-data-userdata-budget.sh. A contiguous
     # uptime.betterstack.com/api/v1/heartbeat/<id> string is a real heartbeat-URL SHAPE, and
@@ -174,7 +216,7 @@ locals {
     # — which is all a size check needs — without putting a matchable literal in the file.
     disk_heartbeat_url     = join("/", ["https://uptime.betterstack.com/api/v1/heartbeat", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
     liveness_heartbeat_url = join("/", ["https://uptime.betterstack.com/api/v1/heartbeat", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
-    betterstack_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"
+    betterstack_ingest_url = "${BS_INGEST_URL}"
   }
 
   registry_rationale_strip = ${STRIP_EXPR}
