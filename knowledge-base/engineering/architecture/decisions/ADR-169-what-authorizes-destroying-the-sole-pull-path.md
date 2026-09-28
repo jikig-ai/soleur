@@ -627,17 +627,19 @@ those bytes offline, with no credentials and no state) instead of comparing the 
 That is the right shape and is not implemented here; it is tracked with the #7556 follow-through
 rather than left implicit in a passing gate.
 
-> **Note 2026-09-28 (#7582):** the residual above is closed. The delta gate now RENDERS the
-> registry user_data at the delivery watermark and at the head (`registry-userdata-budget.sh`,
-> offline, both sides rendered by the head's script) and compares the bytes; `push.paths` wakes it
-> on `cloud-init-registry.yml`, `zot-registry.tf` and `variables.tf`. The budget script now READS
-> every `zot-registry.tf` literal the template map consumes (it had hand-copied `doppler_sha256`,
-> the users, the IP and the ingest URL, so a bump to any of them rendered identical). What the
-> offline render still cannot see is the input derived from the live Hetzner catalog —
-> `registry_server_type` (the cgroup cap and the arch) — so the gate compares that value directly
-> and delivers on any change, on an unreadable value, or on an arm64 (`cax*`) type. An
-> unmeasurable or over-cap HEAD render is now a refusal (the replace's create would fail after
-> its destroy); an unmeasurable WATERMARK render delivers. No decision text changes.
+> **Note 2026-09-28 (#7582):** the residual above is closed for the push arm. The delta gate now
+> RENDERS the registry user_data at the delivery watermark and at the head
+> (`registry-userdata-budget.sh`, offline, both sides rendered by the head's script) and compares
+> the bytes; `push.paths` wakes it on `cloud-init-registry.yml`, `zot-registry.tf` and
+> `variables.tf`. The budget script now READS every `zot-registry.tf` literal the template map
+> consumes (it had hand-copied `doppler_sha256`, the users, the IP and the ingest URL, so a bump
+> to any of them rendered identical). What an offline render must stub is compared directly:
+> `registry_server_type`, `registry_location` and `registry_volume_size` by value, and the map,
+> derivation locals and registry resource blocks in `zot-registry.tf` as comment-stripped text.
+> On the push arm, an unreadable watermark revision and an unmeasurable or over-cap head render
+> are refusals (the replace's create would fail after its destroy); an unmeasurable WATERMARK
+> render delivers. The manual re-fire arm still delivers without rendering. Residual: an input
+> moved out of the three watched files. No decision text changes.
 
 > **Note 2026-09-19 (#8279):** the standing "#7556 verifies the host" pointer above described the #7555 soak only. The dispatcher now records each delivery's verdict on the delivering change's own tracker (the PR that changed the config, or the `tracker` input), and its step summary asserts no enrolment it did not measure — post-replace verification is whatever follow-through the delivering change enrolled. P4 remains absent; its defence above now rests on the delivering change enrolling a boot-line follow-through, which is not enforced — a delivery with none is verified only by the apply's conclusion (the dispatcher's own step summary says so). No decision text changes.
 

@@ -27,7 +27,7 @@ python3 - "$WF" "$TMP" <<'PY' || { echo "  FATAL: could not extract run bodies";
 import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
 steps = {s.get("id"): s for s in d["jobs"]["dispatch-replace"]["steps"]}
-for sid in ("change", "verdict"):
+for sid in ("change", "verdict", "dispatch"):
     open(f"{sys.argv[2]}/{sid}.sh", "w").write(steps[sid]["run"])
 PY
 
@@ -36,6 +36,9 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_LOG"
+# Anchored on argv POSITION: a verdict body quotes a `gh workflow run …` re-fire command, so a
+# substring route would swallow that POST.
+[[ "${1:-} ${2:-}" == "workflow run" ]] && exit 0
 case " $* " in
   *" issue list "*) printf '%s' "${GH_OWNER:-}" ;;
   *" issue create "*) echo "https://github.com/jikig-ai/soleur/issues/4242" ;;
@@ -57,7 +60,7 @@ run_change() {  # env assignments... -> $TMP/out (GITHUB_OUTPUT), $TMP/log
       bash --noprofile --norc -eo pipefail "$TMP/change.sh" > "$TMP/log" 2>&1 ); RC=$?
 }
 out() { sed -n "s/^$1=//p" "$TMP/out"; }
-BASE_ENV=(RENDER_CHANGED= WHY= MERGE_SHA="$A" RUN_URL=https://r RUN_ATTEMPT=1 GATE_OUTCOME=success PREFLIGHT_OUTCOME=success DISPATCH_OUTCOME=success POLL_OUTCOME=success CHANGE_OUTCOME=success APPLY_RUN= APPLY_CONCLUSION= WATERMARK="$B" SUMMARY='PR #8272 (fix: thing <!-- @bob (#8272))' TARGETS=8272 PRS=8272 COMMITS="$A" RANGE=proven RANGE_NOTE= TRACKER=)
+BASE_ENV=(RENDER_CHANGED= GATE_WHY= MERGE_SHA="$A" RUN_URL=https://r RUN_ATTEMPT=1 GATE_OUTCOME=success PREFLIGHT_OUTCOME=success DISPATCH_OUTCOME=success POLL_OUTCOME=success CHANGE_OUTCOME=success APPLY_RUN= APPLY_CONCLUSION= WATERMARK="$B" SUMMARY='PR #8272 (fix: thing <!-- @bob (#8272))' TARGETS=8272 PRS=8272 COMMITS="$A" RANGE=proven RANGE_NOTE= TRACKER=)
 run_verdict() {  # env overrides... -> $TMP/log ; $GH_LOG holds every gh argv (bodies included)
   : > "$GH_LOG"; : > "$TMP/sum"
   env GITHUB_STEP_SUMMARY="$TMP/sum" "${BASE_ENV[@]}" "$@" bash --noprofile --norc -eo pipefail "$TMP/verdict.sh" > "$TMP/log" 2>&1; RC=$?
@@ -77,6 +80,22 @@ GH_COMPARE='{"status":"diverged","total_commits":2,"commits":[]}' run_change EVE
 [[ "$(out targets)" == "7960" && "$(out range)" == "unproven" ]] && pass "C4: manual re-fire + unproven range -> targets are the tracker only" || fail "C4: targets=$(out targets) range=$(out range)"
 GH_COMPARE='{"status":"diverged","total_commits":2,"commits":[]}' run_change EVENT_NAME=push BEFORE="$B" AFTER="$A" TRACKER=
 [[ "$(out targets)" == "8272" ]] && grep -q '::warning::attribution unproven' "$TMP/log" && pass "C5: push + unproven keeps the derived PR and warns" || fail "C5: targets=$(out targets)"
+
+echo "dispatch step"
+run_dispatch() {  # env overrides... -> $GH_LOG holds the `gh workflow run` argv (the reason)
+  : > "$GH_LOG"; : > "$TMP/sum"; : > "$TMP/env"
+  env GITHUB_STEP_SUMMARY="$TMP/sum" GITHUB_ENV="$TMP/env" MERGE_SHA="$A" MANUAL_REASON= COMMITS= RENDER_CHANGED= GATE_WHY= \
+    SUMMARY='the cloud-init-registry.yml user_data at ccccccc (unchanged since the delivery watermark bbbbbbb)' "$@" \
+    bash --noprofile --norc -eo pipefail "$TMP/dispatch.sh" > "$TMP/log" 2>&1; RC=$?
+}
+# (#7582) A delivery decided by a non-template render input has no template commit: the reason
+# must carry what the gate measured, never the helper's "unchanged since the watermark".
+run_dispatch RENDER_CHANGED=true GATE_WHY='rendered user_data differs (render inputs changed: zot-registry.tf)'
+grep -q 'workflow run apply-web-platform-infra.yml' "$GH_LOG" && grep -q 'render inputs changed: zot-registry.tf' "$GH_LOG" && ! grep -q 'unchanged since' "$GH_LOG" && pass "D1: render-only delivery -> the reason names the gate's measurement" || fail "D1: rc=$RC $(head -c 300 "$GH_LOG")"
+# With a template commit in range (e.g. a comment edit beside a digest bump) the gate's
+# measurement is APPENDED, so the digest bump is still named.
+run_dispatch RENDER_CHANGED=true COMMITS="$A" SUMMARY='PR #8272 (docs: comment)' GATE_WHY='rendered user_data differs (render inputs changed: cloud-init-registry.yml, zot-registry.tf)'
+grep -q 'PR #8272' "$GH_LOG" && grep -q '\[gate: rendered user_data differs' "$GH_LOG" && pass "D2: template commit in range -> reason names the PR AND the gate's measurement" || fail "D2: rc=$RC $(head -c 300 "$GH_LOG")"
 
 echo "verdict step"
 run_verdict JOB_STATUS=failure PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped
@@ -99,7 +118,7 @@ grep -q "user_data is unchanged since the delivery watermark ${B:0:7}; this run 
 # V3b (#7582): the gate delivered on a NON-template render input (a zot digest bump in
 # zot-registry.tf), so no commit in range touched the template and `commits=` is empty. That is NOT
 # "unchanged": the render changed, and a refusal leaves it not live.
-run_verdict JOB_STATUS=failure PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped SUMMARY='the cloud-init-registry.yml user_data at ccccccc' TARGETS= PRS= COMMITS= RANGE_NOTE='no commit in range touched x' RENDER_CHANGED=true WHY='rendered user_data differs (render inputs changed: zot-registry.tf)'
+run_verdict JOB_STATUS=failure PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped SUMMARY='the cloud-init-registry.yml user_data at ccccccc' TARGETS= PRS= COMMITS= RANGE_NOTE='no commit in range touched x' RENDER_CHANGED=true GATE_WHY='rendered user_data differs (render inputs changed: zot-registry.tf)'
 if grep -q 'NOT live' "$GH_LOG" && grep -q 'render inputs changed: zot-registry.tf' "$GH_LOG" && ! grep -q 'unchanged since' "$GH_LOG"; then pass "V3b: render changed via a non-template input -> NOT live naming the why, never 'unchanged'"; else fail "V3b: unchanged=$(grep -c 'unchanged since' "$GH_LOG") notlive=$(grep -c 'NOT live' "$GH_LOG")"; fi
 
 GH_OWNER=4100 run_verdict JOB_STATUS=failure PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped TARGETS= PRS= COMMITS=
@@ -147,8 +166,8 @@ fi
 FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
 # A literal bound adjacent to the test, reported by a direct printf + exit 1 (never through the
 # helpers it backstops), so scripts/guard-vacuity-floor.test.sh can construct its mutant.
-if [[ "$PASS" -lt 30 ]]; then
-  printf '  FATAL: anti-vacuity: only %s passes; the floor is 30 (fix the dispatch, do not lower it).\n' "$PASS" >&2
+if [[ "$PASS" -lt 32 ]]; then
+  printf '  FATAL: anti-vacuity: only %s passes; the floor is 32 (fix the dispatch, do not lower it).\n' "$PASS" >&2
   exit 1
 fi
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="

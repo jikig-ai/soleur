@@ -37,7 +37,7 @@ TS_TEST="$REPO_ROOT/plugins/soleur/test/cloud-init-user-data-size.test.ts"
 # EQUALITY, not a floor. A `checks < N` floor cannot distinguish "all arms passed" from "one
 # arm's failure was swallowed" whenever a green run emits exactly N+1 — which is how the first
 # revision shipped (floor 8, green run 9). Adding an arm must move this constant.
-EXPECTED_CHECKS=20
+EXPECTED_CHECKS=22
 
 fails=0
 checks=0
@@ -255,6 +255,13 @@ run_arm "missing doppler_sha256 literal" \
   "grep -vE '^[[:space:]]*doppler_sha256[[:space:]]*=' zot-registry.tf > tf.new && mv tf.new zot-registry.tf" \
   2 \
   "! grep -qE '^[[:space:]]*doppler_sha256[[:space:]]*=' zot-registry.tf"
+
+# (#7582) A literal read must be the ONLY thing right of `=`: a trailing comment carrying a quoted
+# string (`x = "a" # was "b"`) must be unmeasurable, never read as the comment's value.
+run_arm "trailing comment with a quote on a read literal" \
+  "sed -i -E 's|^([[:space:]]*registry_private_ip[[:space:]]*=[[:space:]]*\"10\\.0\\.1\\.30\")[[:space:]]*$|\\1 # was \"10.0.1.31\"|' zot-registry.tf" \
+  2 \
+  "grep -qE 'registry_private_ip = \"10\\.0\\.1\\.30\" # was' zot-registry.tf"
 
 # (#7582) The pin regex is prefix-agnostic: a pin that moves off ghcr.io (#8714 5.3b-iii) must
 # still render (exit 0), so the dispatcher sees it as an ordinary render change on both sides.

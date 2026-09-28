@@ -15,22 +15,30 @@ derivable — one open owner issue carrying `action-required`.
 
 ## What the gate delivers (#7582)
 
-The gate decides on the **rendered** user_data, not the template: it renders
-`registry-userdata-budget.sh` at the delivery watermark and at the head and compares the bytes.
-It wakes on `cloud-init-registry.yml`, `zot-registry.tf` and `variables.tf`; a zot digest bump
-alone delivers, a comment-only edit or an unrelated `variables.tf` edit does not.
-`registry_server_type` (which the offline render cannot see) is compared by value. Reproduce the
-render it compares:
+On a push, the gate decides on the **rendered** user_data, not the template: it renders
+`registry-userdata-budget.sh` at the delivery watermark and at the head (the head's script on
+both sides) and compares the bytes. It wakes on `cloud-init-registry.yml`, `zot-registry.tf`
+and `variables.tf`. A zot digest bump alone delivers; a comment-only or `terraform fmt`-only edit,
+or an unrelated `variables.tf` edit, does not. What the offline render must stub is compared
+directly: `registry_server_type`, `registry_location` and `registry_volume_size` by value (an
+unreadable value, or an arm64 `cax*` type, delivers), and in `zot-registry.tf` the user_data
+map/wrapper, the derivation locals, and the `hcloud_server`/`hcloud_volume`/`doppler_service_token`/
+`betteruptime_heartbeat`/`random_password.zot_*` registry blocks as comment-stripped text.
+Reproduce the render it compares:
 
 ```bash
 bash apps/web-platform/infra/registry-userdata-budget.sh --json /tmp/head-render.yml
 ```
 
-A `gate-failed` verdict can now also mean the head render was unmeasurable or over Hetzner's
-32,768 B cap — the gate's `::error::` says which; fix the render and let the next push (or a
-re-fire) deliver. A delivery decided by a non-template input (e.g. `zot-registry.tf`) names the
-render change in its `Delivering:` line, and — having no template commit to attribute — records
-its verdict on the owner issue.
+A `gate-failed` verdict can now also mean: a watermark revision could not be read (3 attempts),
+or the head render is unmeasurable or over Hetzner's 32,768 B cap — the gate's `::error::` says
+which. These refusals apply on the push arm; a manual re-fire delivers without rendering. A
+delivery decided by a non-template input names what the gate measured in its `Delivering:` line.
+
+**What it still cannot see:** a render input moved out of the three watched files (a new local in
+another `.tf`, a renamed template), the live Hetzner catalog's memory for the server type, and a
+terraform/provider version change that alters `templatefile` output. A change of that kind is
+delivered by a manual re-fire.
 
 ## Re-fire after a refusal
 
