@@ -27,6 +27,6 @@ lane: single-domain
 - [x] 4.3 `sentry-image-freshness-alert-op-contract.test.ts`.
 
 ## 5. Verification
-- [ ] 5.1 Mutation matrix M1-M10 each reddens a row.
+- [x] 5.1 Mutation matrix: control 355/355; M1-M9 (delete, vacuous body, reorder after canary, prefix glob, inspect tag, skip local-cache, fail-open absent, warning level, substring key) each reddened >=1 #6428 row; pristine restore verified.
 - [ ] 5.2 CI green on the PR head (incl. Sentry `plan_pr` reference gate).
 - [ ] 5.3 Post-merge: apply-deploy-pipeline-fix + apply-sentry-infra succeed; a web-1 deploy logs `IMAGE_FRESHNESS: ok` in Better Stack; release served.
