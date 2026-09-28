@@ -3,7 +3,7 @@ title: "Start a new chat from the CRM board to enter a lead"
 type: feature-launch
 publish_date: 2026-09-28
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#9054"
 ---
 
