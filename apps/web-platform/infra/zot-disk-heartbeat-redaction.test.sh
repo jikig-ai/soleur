@@ -48,9 +48,11 @@ USED_assert_field=0
 PHASE=redact
 CASES_REDACT=0
 CASES_POSTURE=0
+CASES_LIVENESS=0
 _bump_cases() {
   CASES=$((CASES + 1))
   if [ "$PHASE" = posture ]; then CASES_POSTURE=$((CASES_POSTURE + 1))
+  elif [ "$PHASE" = liveness ]; then CASES_LIVENESS=$((CASES_LIVENESS + 1))
   else CASES_REDACT=$((CASES_REDACT + 1)); fi
 }
 
@@ -1005,6 +1007,55 @@ assert "P-s all five posture fields precede ' zot_last_err=' in the LINE= assemb
 assert "P-s store_expected_devid is the SINGLE-dollar templatefile variable, not a shell one" \
   "grep -qF 'store_expected_devid=scsi-0HC_Volume_\${registry_volume_id}' <<<\"\$_P_LINE\""
 
+# --- (#7270) liveness_*: the zot-liveness-heartbeat feeder's per-boot counters ----------------
+# PROPERTY. Whatever the tmpfs state file holds (one line: miss ping_fail ok late_ok code ts),
+# each liveness_ field reaches the trusted region as exactly the stored value when it has the
+# writer's shape (a non-negative integer of <= 10 digits with no leading zero; the code is 3
+# digits or `none`, the only tokens zot-liveness-heartbeat.sh writes) and as exactly `-1` otherwise,
+# including when the file is absent. Asserted per field with exact-token equality, so a longer
+# wrong value cannot pass, and every hostile row carries a valid field beside it that must survive.
+PHASE=liveness
+LIV="$TMP/run-soleur-registry/zot-liveness.state"
+LIVENESS_FIELDS="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI_YML" | sed -n '1p' \
+  | grep -oE 'liveness_[a-z_]+=' | sed 's/=$//' | sort -u)"
+LIVENESS_FIELD_N="$(printf '%s\n' "$LIVENESS_FIELDS" | grep -c . || true)"
+[ "$LIVENESS_FIELD_N" -ge 5 ] || { printf '  FATAL: derived only %s liveness_ field(s) from LINE=; the floor is 5, one per field (fix the emitter, do not lower this).\n' "$LIVENESS_FIELD_N" >&2; exit 2; }
+_liveness_in_head() {
+  local f
+  for f in $LIVENESS_FIELDS; do
+    case " $HEAD " in *" $f="*) : ;; *) return 1 ;; esac
+  done
+  return 0
+}
+assert "L-seam the reporter reads the liveness state through the re-rooted fixture path" \
+  "grep -qF '$LIV' '$HB' && ! grep -qF '/run/soleur-registry/zot-liveness.state' '$HB'"
+# _liv_case <label> <state|__ABSENT__> <miss> <pfail> <ok> <late> <code>
+_liv_case() {
+  local label="$1" content="$2"
+  if [ "$content" = __ABSENT__ ]; then rm -f "$LIV"; else printf '%s\n' "$content" > "$LIV"; fi
+  posture_case "L-$label"
+  assert "L-$label | all $LIVENESS_FIELD_N liveness_ fields precede ' zot_last_err='" "_liveness_in_head"
+  assert_field "L-$label" liveness_miss_cum "$3"
+  assert_field "L-$label" liveness_ping_fail_cum "$4"
+  assert_field "L-$label" liveness_ok_cum "$5"
+  assert_field "L-$label" liveness_late_ok_cum "$6"
+  assert_field "L-$label" liveness_last_miss_code "$7"
+}
+_liv_case absent __ABSENT__ -1 -1 -1 -1 -1
+_liv_case valid '3 1 250 2 503 1790000000' 3 1 250 2 503
+_liv_case valid-no-miss-yet '0 0 1 0 none 1790000000' 0 0 1 0 none
+_liv_case code-000 '7 0 9 0 000' 7 0 9 0 000
+# Hostile: a quote, an 11-digit number, a lone backslash, a quoted code. ok_cum stays valid.
+_liv_case hostile '1" 12345678901 7 \ 0"0' -1 -1 7 -1 -1
+_liv_case hostile-code-4-digits '2 0 0 0 1234' 2 0 0 0 -1
+_liv_case code-not-a-number '2 0 0 0 unk' 2 0 0 0 -1
+_liv_case leading-zero '007 0 0 0 none' -1 0 0 0 none
+_liv_case truncated-line '5' 5 -1 -1 -1 -1
+rm -f "$LIV"
+_L_LINE_HEAD="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | sed -n '1p' | sed 's/ zot_last_err=.*//')"
+assert "L-s every liveness_ field sits in the LINE= trusted head (source text, not one row)" \
+  "[ \"\$(grep -oE 'liveness_[a-z_]+=' <<<\"\$_L_LINE_HEAD\" | sort -u | grep -c .)\" -eq '$LIVENESS_FIELD_N' ]"
+
 PHASE=redact
 
 # --- Reject controls for the VERDICT-OWNING wrappers ---------------------------------------
@@ -1015,7 +1066,7 @@ PHASE=redact
 # counters, the transcript and the case tally so the floor stays exact. printf/exit, never through
 # the wrapper under test.
 _c_p0=$PASS; _c_f0=$FAIL; _c_c0=$CASES; _c_v0="$VERDICTS"
-_c_cr0=$CASES_REDACT; _c_cp0=$CASES_POSTURE
+_c_cr0=$CASES_REDACT; _c_cp0=$CASES_POSTURE; _c_cl0=$CASES_LIVENESS
 assert "reject control for assert() (this FAIL line is EXPECTED)" "false"
 assert_emit "reject control for assert_emit() (this FAIL line is EXPECTED)" "$TIER2_BENIGN" absent "pcent="
 # assert_field is EXACT-TOKEN where assert_emit is substring-only, so it needs its own control:
@@ -1037,7 +1088,7 @@ if [[ "$FAIL" -ne $((_c_f0 + 5)) ]]; then
   exit 1
 fi
 PASS=$_c_p0; FAIL=$_c_f0; CASES=$_c_c0; VERDICTS="$_c_v0"
-CASES_REDACT=$_c_cr0; CASES_POSTURE=$_c_cp0
+CASES_REDACT=$_c_cr0; CASES_POSTURE=$_c_cp0; CASES_LIVENESS=$_c_cl0
 
 # --- Row 8 / harness (a): the guard's own dispatch ------------------------------------------
 for _w in assert assert_emit assert_field; do
@@ -1070,9 +1121,15 @@ if [[ "$CASES_POSTURE" -lt "$CASES_POSTURE_MIN" ]]; then
     "$CASES_POSTURE" "$CASES_POSTURE_MIN" >&2
   exit 1
 fi
-if [[ $((CASES_REDACT + CASES_POSTURE)) -ne "$CASES" ]]; then
-  printf '\n[FATAL] conservation: the per-property counters (%s + %s) do not sum to cases (%s).\n' \
-    "$CASES_REDACT" "$CASES_POSTURE" "$CASES" >&2
+CASES_LIVENESS_MIN=92
+if [[ "$CASES_LIVENESS" -lt "$CASES_LIVENESS_MIN" ]]; then
+  printf '\n[FATAL] cardinality (#7270 liveness counters): only %s cases ran (expected >= %s).\n' \
+    "$CASES_LIVENESS" "$CASES_LIVENESS_MIN" >&2
+  exit 1
+fi
+if [[ $((CASES_REDACT + CASES_POSTURE + CASES_LIVENESS)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] conservation: the per-property counters (%s + %s + %s) do not sum to cases (%s).\n' \
+    "$CASES_REDACT" "$CASES_POSTURE" "$CASES_LIVENESS" "$CASES" >&2
   exit 1
 fi
 if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
@@ -1080,8 +1137,8 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   exit 1
 fi
 
-printf '\ncases=%s (redaction=%s posture=%s) pass=%s fail=%s\n' \
-  "$CASES" "$CASES_REDACT" "$CASES_POSTURE" "$PASS" "$FAIL"
+printf '\ncases=%s (redaction=%s posture=%s liveness=%s) pass=%s fail=%s\n' \
+  "$CASES" "$CASES_REDACT" "$CASES_POSTURE" "$CASES_LIVENESS" "$PASS" "$FAIL"
 if [[ "$FAIL" -gt 0 ]]; then
   echo "RESULT: FAIL ($FAIL/$CASES assertions failed)" >&2
   exit 1

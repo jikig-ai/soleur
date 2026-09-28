@@ -989,6 +989,19 @@ write_files:
       if [ -n "$_gh_addrs" ]; then
         if printf '%s\n' "$_gh_addrs" | grep -qvxE '0\.0\.0\.0|::'; then GHCR_BLOCKED=0; else GHCR_BLOCKED=1; fi
       fi
+      # (#7270) liveness_*: the zot-liveness-heartbeat feeder's per-boot counters, which it keeps in
+      # tmpfs after every beat as one line `miss ping_fail ok late_ok code last_ok_ts` (see that
+      # script). Carried here because this row is already token-wrapped and shipped, so the feeder
+      # needs no token and no egress of its own; the counters pair with boot_id, so 5-min deltas
+      # are computed off-box. Each field must have the writer's exact shape (a non-negative integer
+      # of at most 10 digits with no leading zero; the code is 3 digits or `none`), else it is -1,
+      # as is every field when the file is absent. Nothing the file holds reaches the row raw.
+      _m=-1 _f=-1 _o=-1 _l=-1 _c=-1
+      read -r _m _f _o _l _c _ < /run/soleur-registry/zot-liveness.state 2>/dev/null
+      for _v in _m _f _o _l; do
+        case "$${!_v:-}" in '' | *[!0-9]* | 0?* | ???????????*) printf -v "$_v" %s -1 ;; esac
+      done
+      case "$${_c:-}" in [0-9][0-9][0-9] | none) : ;; *) _c=-1 ;; esac
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
       # err_redact_rev (#7960, ADR-211): integer revision of the zot_last_err redaction gate — the
@@ -996,7 +1009,7 @@ write_files:
       # follow-through probe keys delivery proof on it, read from this trusted region. A LITERAL, not
       # a $VAR: this script runs set -u. Bump when the gate changes; never decrement or reuse; never
       # keep the token while removing the gate.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST zot_image_fetch=$ZOT_IMAGE_FETCH zot_image_fetch_rc=$ZOT_IMAGE_FETCH_RC ghcr_blocked=$GHCR_BLOCKED htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS luks_open_arm=$LUKS_OPEN_ARM store_escrow=$STORE_ESCROW store_escrow_age_s=$STORE_ESCROW_AGE_S host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST zot_image_fetch=$ZOT_IMAGE_FETCH zot_image_fetch_rc=$ZOT_IMAGE_FETCH_RC ghcr_blocked=$GHCR_BLOCKED htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM liveness_miss_cum=$_m liveness_ping_fail_cum=$_f liveness_ok_cum=$_o liveness_late_ok_cum=$_l liveness_last_miss_code=$_c store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS luks_open_arm=$LUKS_OPEN_ARM store_escrow=$STORE_ESCROW store_escrow_age_s=$STORE_ESCROW_AGE_S host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -1070,43 +1083,34 @@ write_files:
       # (3) (#7270) Record WHY, off-box, without a new token or egress. Before this the feeder was
       #     silent: a withheld beat left no record anywhere, so a soleur-registry-prd flap could
       #     not be told apart from a Better Stack or egress fault, a stopped timer, or a beat that
-      #     left on time and landed late. Per-boot counters live in tmpfs (reset with boot_id) and
-      #     the 5-min zot-disk-heartbeat ships them as the liveness_* fields of SOLEUR_ZOT_DISK.
-      #       miss_cum      zot did not answer 200/401 (last_miss_code says with what)
-      #       ping_fail_cum zot answered, the beat's own curl failed (the false-positive arm)
-      #       ok_cum        a beat went out; flat across rows = the feeder is not running
-      #       late_ok_cum   a beat went out more than 75s after the previous one (timer margin)
+      #     left on time and landed late. Per-boot counters live in tmpfs (reset with boot_id), as
+      #     ONE line of six space-separated fields, and the 5-min zot-disk-heartbeat ships them as
+      #     the liveness_* fields of SOLEUR_ZOT_DISK:
+      #       m  miss_cum        zot did not answer 200/401 (c says with what)
+      #       f  ping_fail_cum   zot answered, the beat's own curl failed (the false-positive arm)
+      #       o  ok_cum          a beat went out; flat across rows = the feeder is not running
+      #       l  late_ok_cum     a beat went out more than 75s after the previous one (timer margin)
+      #       c  last_miss_code  3 digits, or `none` before the first miss
+      #       t  last_ok_ts      epoch of the last beat (internal: what `l` is measured against)
+      #     A field that is not a plain non-negative integer (<= 10 digits, no leading zero) is
+      #     reset to 0, so a corrupt file restarts the counts rather than breaking the arithmetic.
       #     This runs AFTER the ping, in a subshell, and can neither suppress nor delay the beat
       #     nor change the exit status. No heredoc and no `set -e` here, on purpose.
       (
         S=/run/soleur-registry/zot-liveness.state
         mkdir -p "$${S%/*}" || exit 0
-        rd() { sed -n "s/^$1=\([0-9]\{1,10\}\)$/\1/p" "$S" 2>/dev/null | head -n 1; }
-        miss=$(rd miss_cum); pfail=$(rd ping_fail_cum); okc=$(rd ok_cum); late=$(rd late_ok_cum); last_ok=$(rd last_ok_ts)
-        code=$(sed -n 's/^last_miss_code=\([0-9][0-9][0-9]\)$/\1/p' "$S" 2>/dev/null | head -n 1)
-        [ -n "$miss" ] || miss=0
-        [ -n "$pfail" ] || pfail=0
-        [ -n "$okc" ] || okc=0
-        [ -n "$late" ] || late=0
-        [ -n "$last_ok" ] || last_ok=0
-        [ -n "$code" ] || code=none
-        now=$(date +%s)
-        case "$now" in '' | *[!0-9]*) exit 0 ;; esac
-        case "$PING" in
-          ok)
-            okc=$((10#$okc + 1))
-            if [ "$((10#$last_ok))" -gt 0 ] && [ "$((now - 10#$last_ok))" -gt 75 ]; then late=$((10#$late + 1)); fi
-            last_ok=$now
-            ;;
-          fail) pfail=$((10#$pfail + 1)) ;;
-          *)
-            miss=$((10#$miss + 1))
-            code="$${HTTP_CODE:-000}"
-            case "$code" in [0-9][0-9][0-9]) : ;; *) code=000 ;; esac
-            ;;
+        read -r m f o l c t _ < "$S" 2>/dev/null
+        for v in m f o l t; do
+          case "$${!v:-}" in '' | *[!0-9]* | 0?* | ???????????*) printf -v "$v" %s 0 ;; esac
+        done
+        case "$${c:-}" in [0-9][0-9][0-9] | none) : ;; *) c=none ;; esac
+        n=$(date +%s) || exit 0
+        case $PING in
+          ok) o=$((o + 1)); [ "$t" -gt 0 ] && [ $((n - t)) -gt 75 ] && l=$((l + 1)); t=$n ;;
+          fail) f=$((f + 1)) ;;
+          *) m=$((m + 1)); c=$${HTTP_CODE:-000} ;;
         esac
-        printf 'miss_cum=%s\nping_fail_cum=%s\nok_cum=%s\nlate_ok_cum=%s\nlast_miss_code=%s\nlast_ok_ts=%s\n' \
-          "$miss" "$pfail" "$okc" "$late" "$code" "$last_ok" > "$S.tmp" && mv -f "$S.tmp" "$S"
+        echo "$m $f $o $l $c $t" > "$S.tmp" && mv -f "$S.tmp" "$S"
       ) || true
       # Always exit 0: a failed probe must alarm via ABSENCE (the monitor's own semantics), not
       # via a failed unit that only `systemctl status` on a no-SSH host could ever reveal.

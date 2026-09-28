@@ -273,8 +273,16 @@ assert "T5 the feeder completed (rc != 124 => the probe was -m bounded)" "[[ '$R
 assert "T5 still emitted its ping" "[[ -s '$STUB_EMIT' ]]"
 
 # --- #7270: per-boot counters that say WHY a beat was withheld ---------------------------
+# The state is ONE line: `miss_cum ping_fail_cum ok_cum late_ok_cum last_miss_code last_ok_ts`.
 # st <key> -> the value the feeder stored for <key> ("" when absent).
-st() { sed -n "s/^$1=//p" "$STATE" 2>/dev/null | head -n 1; }
+st() {
+  local i
+  case "$1" in
+    miss_cum) i=1 ;; ping_fail_cum) i=2 ;; ok_cum) i=3 ;;
+    late_ok_cum) i=4 ;; last_miss_code) i=5 ;; last_ok_ts) i=6 ;; *) return 1 ;;
+  esac
+  awk -v i="$i" 'NR == 1 { print $i }' "$STATE" 2>/dev/null
+}
 reset_state() { rm -rf "$STATE_DIR"; mkdir -p "$STATE_DIR"; }
 
 echo ""
@@ -315,7 +323,7 @@ assert "L4 miss_cum still 2 (zot DID answer)" "[[ \"\$(st miss_cum)\" == 2 ]]"
 echo ""
 echo "--- L5: an OK beat more than 75s after the previous OK => late_ok_cum+1; a prompt one does not"
 reset_state
-printf 'miss_cum=0\nping_fail_cum=0\nok_cum=4\nlate_ok_cum=0\nlast_miss_code=none\nlast_ok_ts=%s\n' "$(( $(date +%s) - 100 ))" > "$STATE"
+printf '0 0 4 0 none %s\n' "$(( $(date +%s) - 100 ))" > "$STATE"
 run_feeder 401 401
 assert "L5 late_ok_cum=1 after a 100s gap" "[[ \"\$(st late_ok_cum)\" == 1 ]]"
 assert "L5 ok_cum=5" "[[ \"\$(st ok_cum)\" == 5 ]]"
@@ -325,7 +333,7 @@ assert "L5 last_miss_code keeps the pre-miss token 'none'" "[[ \"\$(st last_miss
 
 echo ""
 echo "--- L6: a corrupt state file => counters restart from 0, and the ping still fires"
-printf 'miss_cum=1 "x\nok_cum=abc\nlast_miss_code=0"0\n' > "$STATE"
+printf '1x "x abc 0"0\n' > "$STATE"
 run_feeder 401 401
 assert "L6 pinged" "[[ -s '$STUB_EMIT' ]]"
 assert "L6 ok_cum=1 (restarted from 0)" "[[ \"\$(st ok_cum)\" == 1 ]]"
