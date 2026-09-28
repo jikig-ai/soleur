@@ -63,7 +63,7 @@ case "$W" in /*/provision-unit-*) : ;; *) die "scratch dir $W is not an absolute
 TIERB_CTR=""
 cleanup() {
   [ -n "$TIERB_CTR" ] && docker rm -f "$TIERB_CTR" >/dev/null 2>&1
-  rm -rf "$W"
+  if [ -n "${PU_KEEP_WORK:-}" ]; then echo "(kept $W)" >&2; else rm -rf "$W"; fi
 }
 trap cleanup EXIT
 
@@ -248,12 +248,16 @@ def cmd_extract(render, out):
 def cmd_rewrite(src, fx, dst, pairs_json):
     body = open(src).read()
     pairs = json.loads(pairs_json)
-    bad = []
-    for a, b in pairs:
-        n = body.count(a)
-        if n == 0:
-            bad.append(a)
-        body = body.replace(a, b.replace("@FX@", fx))
+    table = {a: b.replace("@FX@", fx) for a, b in pairs}
+    hits = {a: 0 for a in table}
+    # ONE simultaneous pass: a sequential replace would rewrite inside an already-substituted
+    # fixture path (the /tmp/ pair matching /var/tmp/<fx>/...), which is a corrupted instrument.
+    rx = re.compile("|".join(re.escape(a) for a in sorted(table, key=len, reverse=True)))
+    def sub(m):
+        hits[m.group(0)] += 1
+        return table[m.group(0)]
+    body = rx.sub(sub, body)
+    bad = [a for a, n in hits.items() if n == 0]
     open(dst, "w").write(body)
     for a in bad:
         print("UNMATCHED=%s" % a)
@@ -310,7 +314,16 @@ def cmd_static(render):
     term = [s for _, s in L if re.match(r"^trap\s+'.*exit 143'\s+(TERM\s+INT|INT\s+TERM|TERM)$", s)]
     chk("G2: a TERM/INT trap exits 143 (dash runs no EXIT trap on an untrapped SIGTERM)", len(term) == 1,
         "found %d" % len(term))
-    first_fallible = min([i for i, s in L if re.search(r"\bdocker\b|\bdoppler\b|inngest-boot-phone-home|\bmkdir\b", s)] or [10**9])
+    top, infn = [], False
+    for i, s in L:  # top-level statements only: a function BODY runs when called, not where defined
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{$", s):
+            infn = True; continue
+        if infn:
+            if s == "}":
+                infn = False
+            continue
+        top.append((i, s))
+    first_fallible = min([i for i, s in top if re.search(r"\bdocker\b|\bdoppler\b|inngest-boot-phone-home|\bmkdir\b", s)] or [10**9])
     chk("G2: the EXIT trap is installed before the first fallible command (docker/doppler/mkdir/emit)",
         len(traps_exit) == 1 and traps_exit[0][0] < first_fallible, "trap line %s, first fallible %s" % (traps_exit[0][0] if traps_exit else None, first_fallible))
 
@@ -759,7 +772,11 @@ if [ "$C0_RC" -ne 0 ]; then
   exit 1
 fi
 echo "  C0: $C0_PASS assertions, all PASS"
-[ "$C0_PASS" -ge 90 ] || { echo "  FAIL: C0 anti-vacuity — only $C0_PASS assertions ran (expected >= 90)"; exit 1; }
+# EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
+# count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
+# the same edit that adds an assertion.
+C0_EXPECTED=94
+[ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
 # systemd-analyze verify over the extracted .service + .timer (Y1 precedent).
@@ -930,7 +947,8 @@ blk = ls[a:e + 1]; del ls[a:e + 1]; put(ls)
 c = one(BOOT_CALL); ls = lines(); w = one("child=\"\"", after=c); ls[w + 1:w + 1] = blk; put(ls); save()'
 row G2-r11 PASS - '
 del_line("UMask=0022"); ins_after("StateDirectory=soleur-inngest-provision", ["UMask=0022"])
-del_line("Type=oneshot"); ins_after("RemainAfterExit=yes", ["Type=oneshot"])
+w = one("- path: /etc/systemd/system/soleur-inngest-provision.service")
+del_line("Type=oneshot", after=w); ins_after("RemainAfterExit=yes", ["Type=oneshot"], after=w)
 z = one("if [ \"$zot_rc\" -eq 0 ]; then"); e = one("else", after=z); ls = lines(); ls[e:e] = [ind(e) + "# arm divider (a comment between the arms)"]; put(ls); save()'
 
 # ---- G3 --------------------------------------------------------------------------------------
@@ -948,7 +966,8 @@ ls = lines(); j = [k for k, l in enumerate(ls) if "inngest-boot-phone-home.sh ne
 ls[j[0]] = ls[j[0]].replace(" || true", ""); put(ls); save()'
 row G3-r6 RED "G3: the latch path sits under /var/lib/soleur-inngest-provision/" '
 rep_line("ConditionPathExists=!/var/lib/soleur-inngest-provision/done", "ConditionPathExists=!/run/soleur-inngest-provision/done")
-rep_line("LATCH=\"$STATE/done\"", "LATCH=/run/soleur-inngest-provision/done"); save()'
+rep_line("LATCH=\"$STATE/done\"", "LATCH=/run/soleur-inngest-provision/done")
+ins_after("mkdir -p \"$STATE\"", ["mkdir -p /run/soleur-inngest-provision"]); save()'
 row G3-r7 RED "G3: exactly one latch write site" '
 ins_before("exit \"$boot_rc\"", ["install -m 0644 /dev/null \"$LATCH\""]); save()'
 row G3-r8 PASS - '
@@ -956,9 +975,9 @@ rep_line(": > \"$LATCH\"", "touch \"$LATCH\""); save()'
 
 # ---- G4 --------------------------------------------------------------------------------------
 row G4-r1 RED "G4: EnvironmentFile=/etc/default/inngest-doppler" '
-del_line("EnvironmentFile=/etc/default/inngest-doppler"); save()'
+w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); del_line("EnvironmentFile=/etc/default/inngest-doppler", after=w); save()'
 row G4-r2 RED "G4: EnvironmentFile=/etc/default/inngest-doppler" '
-rep_line("EnvironmentFile=/etc/default/inngest-doppler", "EnvironmentFile=-/etc/default/inngest-doppler-typo"); save()'
+w = one("- path: /etc/systemd/system/soleur-inngest-provision.service"); rep_line("EnvironmentFile=/etc/default/inngest-doppler", "EnvironmentFile=-/etc/default/inngest-doppler-typo", after=w); save()'
 row G4-r3 RED "G4: no doppler call clears or strips its environment" '
 d = [k for k, l in enumerate(lines()) if l.strip().startswith("DIAG_BOOT=")]; assert len(d) == 1
 ls = lines(); ls[d[0] + 1:d[0] + 1] = [ind(d[0]) + "DIAG2=\"$(env -i doppler secrets get INNGEST_DIAGNOSTIC_BOOT --plain 2>/dev/null || true)\""]; put(ls); save()'
@@ -1203,12 +1222,16 @@ STUB
   reset_state() { X systemctl stop soleur-inngest-provision.service soleur-inngest-provision.timer >/dev/null 2>&1; X systemctl reset-failed soleur-inngest-provision.service >/dev/null 2>&1; XS 'rm -f /var/lib/soleur-inngest-provision/done /var/lib/soleur-inngest-provision/attempts /var/lib/tierb/ctl/*'; }
 
   # ---- T12 + T6: the rendered arming items run after the timer's OnBootSec has elapsed ---------
-  sleep 3
+  # The timer's (drop-in) OnBootSec=2s must already have ELAPSED when the arming runs: that is the
+  # case where `enable --now` would be a hidden second trigger. (docker cp cannot write into the
+  # tmpfs mounts, so every file handed to the container goes under /var/lib/tierb or /etc.)
+  poll 30 'awk "{exit !(\$1 >= 6)}" /proc/uptime'
   mark T12
   printf '%s\n' "set +e" > "$W/tb-arm.sh"; cat "$W/c0/arming.sh" >> "$W/tb-arm.sh"
-  docker cp "$W/tb-arm.sh" "$ctr:/tmp/arm.sh"
-  XS 'echo 0 > /var/lib/tierb/ctl/pull_rc; sh /tmp/arm.sh >/tmp/arm.out 2>&1'
-  poll 20 'test -e /var/lib/soleur-inngest-provision/done' ; sleep 2
+  docker cp "$W/tb-arm.sh" "$ctr:/var/lib/tierb/arm.sh"
+  XS 'echo 0 > /var/lib/tierb/ctl/pull_rc; sh /var/lib/tierb/arm.sh >/var/lib/tierb/arm.out 2>&1'
+  poll 40 '[ "$(systemctl show -p SubState --value soleur-inngest-provision.service)" = exited ]'
+  sleep 2
   x="$(lines_from T12)"
   tb_ok "$( [ "$(printf '%s\n' "$x" | grep -c ' phone provision-attempt-start attempt=1 ')" = 1 ] && [ "$(printf '%s\n' "$x" | grep -c ' phone provision-attempt-start ')" = 1 ] && echo 0 || echo 1)" "T12: exactly one provision-attempt-start attempt=1 after arming (a single first-boot trigger)"
   tb_ok "$( [ "$(X systemctl is-active soleur-inngest-provision.timer)" = inactive ] && [ "$(X systemctl is-enabled soleur-inngest-provision.timer)" = enabled ] && echo 0 || echo 1)" "T12: the timer is enabled but NOT active (armed without --now)"
@@ -1235,7 +1258,7 @@ STUB
   reset_state; mark T15
   XS 'echo 0 > /var/lib/tierb/ctl/pull_rc; : > /var/lib/tierb/ctl/t15'
   X systemctl start --no-block soleur-inngest-provision.service
-  poll 60 'test -e /var/lib/soleur-inngest-provision/done'
+  poll 60 '[ "$(systemctl show -p SubState --value soleur-inngest-provision.service)" = exited ]'
   x="$(lines_from T15)"
   tb_ok "$(printf '%s\n' "$x" | awk '$2 == "flip-end" {f=NR} $2 == "bootstrap" && $3 == "start" {b=NR} END {exit !(f && b && f < b)}' && echo 0 || echo 1)" "T15: the bootstrap starts only after the activating flip step finishes"
   reset_state; X systemctl stop inngest-cutover-flip.service >/dev/null 2>&1; mark T15b
@@ -1252,21 +1275,28 @@ STUB
   XS 'echo 1 > /var/lib/tierb/ctl/pull_rc'
   docker restart "$ctr" >/dev/null
   wait_boot || { echo "  FAIL: T11 container did not come back"; TB_FAIL=$((TB_FAIL + 1)); return; }
+  local t11_up; t11_up="$(date +%s.%N)"
   XS 'printf tok > /run/inngest-bs-logs-token'
   poll 20 "awk 'f; \$2 == \"PHASE\" && \$3 == \"T11a\" {f=1}' $LOGF | grep -q ' phone provision-attempt-exit-1 '"
   x="$(lines_from T11a)"
-  tb_ok "$(printf '%s\n' "$x" | grep -q ' phone provision-attempt-start ' && echo 0 || echo 1)" "T11: after a reboot with no latch the timer starts the unit"
+  local t11_s; t11_s="$(printf '%s\n' "$x" | awk '$2 == "phone" && $3 == "provision-attempt-start" {print $1; exit}')"
+  tb_ok "$( [ -n "$t11_s" ] && awk -v s="$t11_s" -v u="$t11_up" 'BEGIN { exit !((s - u) <= 15) }' && echo 0 || echo 1)" "T11: after a reboot with no latch the timer starts the unit within 15s of multi-user.target (up $t11_up, start ${t11_s:-none})"
+  if ! printf '%s\n' "$x" | grep -q ' phone provision-attempt-start '; then
+    { X systemctl list-jobs --no-pager; X systemctl status --no-pager -n 30 soleur-inngest-provision.service soleur-inngest-provision.timer; X systemd-analyze blame --no-pager 2>/dev/null | head -5; } 2>&1 | sed 's/^/    diag| /'
+  fi
   local st; st="$(X systemctl show -p ActiveState -p SubState --value soleur-inngest-provision.service | tr '\n' ' ')"
   tb_ok "$( [ "$(X systemctl is-active multi-user.target)" = active ] && case "$st" in *activating*|*auto-restart*|*failed*) true ;; *) false ;; esac && echo 0 || echo 1)" "T11: multi-user.target is active while the unit is still retrying (unit: $st) — no [Install] ordering"
   reset_state
 
   # ---- T10: the ladder — two misses then a hit; an injected timer start adds no attempt --------
   mark T10
-  XS 'echo "1 1 0" > /var/lib/tierb/ctl/pull_rc'
+  # Pull outcomes are per `docker pull` CALL and one attempt makes up to 3 tries, so "two failed
+  # attempts, then a success" is six failing pulls and then a served one.
+  XS 'echo "1 1 1 1 1 1 0" > /var/lib/tierb/ctl/pull_rc'
   X systemctl start --no-block soleur-inngest-provision.service
-  poll 20 "awk 'f; \$2 == \"PHASE\" && \$3 == \"T10\" {f=1}' $LOGF | grep -q ' phone provision-attempt-exit-1 '"
+  poll 40 "awk 'f; \$2 == \"PHASE\" && \$3 == \"T10\" {f=1}' $LOGF | grep -q ' phone provision-attempt-exit-1 '"
   X systemctl start soleur-inngest-provision.timer >/dev/null 2>&1
-  poll 60 '[ "$(systemctl show -p SubState --value soleur-inngest-provision.service)" = exited ]'
+  poll 90 '[ "$(systemctl show -p SubState --value soleur-inngest-provision.service)" = exited ]'
   x="$(lines_from T10)"
   local nr; nr="$(X systemctl show -p NRestarts --value soleur-inngest-provision.service)"
   tb_ok "$( [ "$nr" = 2 ] && [ "$(X systemctl show -p ActiveState --value soleur-inngest-provision.service)" = active ] && echo 0 || echo 1)" "T10: NRestarts=2 and active (exited) after two misses (NRestarts=$nr)"
