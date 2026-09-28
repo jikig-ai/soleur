@@ -76,7 +76,9 @@ docker run --rm \
   "$IMG" bash -c '
     set -e
     apt-get update -qq >/dev/null
-    apt-get install -y -qq --no-install-recommends socat curl unzip ca-certificates >/dev/null
+    # openssh-client mirrors the runner stage of the deploy Dockerfile (#5914): it creates
+    # /etc/ssh/ssh_config.d, which makes the SDK emit `--tmpfs /etc/ssh/ssh_config.d`.
+    apt-get install -y -qq --no-install-recommends socat curl unzip ca-certificates openssh-client >/dev/null
     bash /src/scripts/lib/in-image-copy-src.sh /src /build
     cd /build
     npm ci --no-audit --no-fund >/dev/null

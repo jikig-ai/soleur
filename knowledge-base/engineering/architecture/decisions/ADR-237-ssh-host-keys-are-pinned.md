@@ -178,6 +178,8 @@ change compares the fingerprint independently.
   precondition for that flag flip. The cutover precheck's `TOFU_ARM` line is a reminder read from the
   dispatched source tree on every dry run; the enforcing control is the resolver's throw on an absent
   pin while the store flag is on.
+  > **Closed by PR #9096 (#5914):** see the Addendum "PR #9096 (#5914): the transitional app arm is
+  > deleted" below.
 - **A pinned key authenticates the host, not its answers.** A rooted git-data can still answer the
   store probes falsely, so the probes stay bounded and fail-closed.
 
@@ -265,11 +267,21 @@ the LUKS cutover runbook). Earlier text in this ADR is not edited.
 - **New proactive signal.** A web container armed for git-data (remove key, provision key or
   `GIT_DATA_SSH_HOST` set) that boots without a pin emits `op=pin_absent_at_startup`, replacing the
   deleted `pin_absent_store_disabled`. It and `pin_invalid_at_startup` use the message path, so their
-  tags reach Sentry (#8629). Paging on them is #8572's scope.
+  tags reach Sentry (#8629). Paging on them is #8572's scope (extended to these ops by a comment on
+  #8572, 2026-09-28); until then they are pull-only.
+- **The pinned transport needs an ssh client, which the image lacked.** `openssh-client` was absent
+  from the runner image until PR #9096 (`node:22-slim` plus `--no-install-recommends` drops git's
+  Recommends), so every app-side git-data dial failed ENOENT and an erasure read `unreachable`. The
+  PR installs it, classifies a spawn ENOENT as `unconfigured` `ssh_client_absent:`, guards the image
+  with `test/dockerfile-runner-ssh-client.test.ts`, and logs `git_data_ssh_client=present|absent` at
+  startup. `git_data_ssh_client=present` on the deployed build is a precondition of the ADR-220 flag
+  flip.
 - **Rotation is unchanged.** Since step 3 the pin is present, so a host replace still yields
   `host_key_mismatch` until the pin-redeploy follower loads the new pin; the deleted arm only ever ran
-  with the pin absent. This PR changes only the absent-pin case (a fresh create, or the secret deleted
-  outside Terraform), which now fails closed.
+  with the pin absent. This PR changes only the absent-pin case (the secret deleted or recreated
+  outside the replace job, or a new environment; a host create updates the existing secret), which
+  now fails closed. That adopts Alternative A6 (fail closed) now that its only objection, the window
+  before the first replace, is gone.
 - **The residual that remains.** A writer of Doppler `prd` who replaces `GIT_DATA_SSH_HOST_KEY` with
   their own key and holds a private-network position is pinned by the app; only
   `scheduled-terraform-drift.yml` (the secret is Terraform-owned) sees it, after the fact. The other

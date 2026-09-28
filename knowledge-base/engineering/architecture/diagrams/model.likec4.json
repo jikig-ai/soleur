@@ -2723,7 +2723,7 @@
 "id": "1dg6gea"
 },
 "10v5ro8": {
-"title": "Art. 17 erasure of the user's bare repo over the REMOVE key's forced command (git-data-remove.sh), reached from account deletion; NOT gated on GIT_DATA_STORE_ENABLED, so a repo left by a flag-on window is still erased. Host key pinned (ADR-237); an absent or malformed pin returns `unconfigured` without dialing (#5914)",
+"title": "Art. 17 erasure of the user's bare repo over the REMOVE key's forced command (git-data-remove.sh), reached from account deletion (the API route and the agent's account tool, both via server/account-delete.ts); NOT gated on GIT_DATA_STORE_ENABLED, so a repo left by a flag-on window is still erased. Host key pinned (ADR-237); an absent or malformed pin returns `unconfigured` without dialing (#5914)",
 "technology": "SSH over private net",
 "source": {
 "model": "platform.webapp.api"
@@ -17029,7 +17029,7 @@
 "id": "1e417t0",
 "source": "platform.webapp.api",
 "target": "platform.infra.gitDataStore",
-"label": "Art. 17 erasure of the user's bare repo \nover the REMOVE key's forced command \n(git-data-remove.sh), reached from \naccount deletion; NOT gated on \nGIT_DATA_STORE_ENABLED, so a repo left ",
+"label": "Art. 17 erasure of the user's bare repo \nover the REMOVE key's forced command \n(git-data-remove.sh), reached from \naccount deletion (the API route and the \nagent's account tool, both via ",
 "points": [
 [
 4500,
@@ -17123,7 +17123,7 @@
 "labelBBox": {
 "x": 3133,
 "y": 936,
-"width": 290,
+"width": 263,
 "height": 106
 },
 "parent": null,
@@ -17778,23 +17778,23 @@
 1142
 ],
 [
-3080,
-1075
+3067,
+1077
 ],
 [
-3160,
-1120
+3145,
+1119
 ],
 [
-3451,
+3423,
 1082
 ],
 [
-4133,
-992
+4117,
+990
 ],
 [
-4291,
+4279,
 879
 ],
 [
@@ -18541,28 +18541,28 @@
 1142
 ],
 [
-4130,
-1097
+4124,
+1098
 ],
 [
-4219,
-1113
+4211,
+1112
 ],
 [
-4566,
+4552,
 1082
 ],
 [
-4808,
+4799,
 1060
 ],
 [
-5087,
+5084,
 1031
 ],
 [
 5265,
-1013
+1012
 ]
 ],
 "labelBBox": {
@@ -18773,27 +18773,27 @@
 "label": "Injects the web-host boot credential. \nThe LUKS-at-rest passphrase \n(WORKSPACES_LUKS_KEY, ADR-119) is \ndeliberately scoped to a DEDICATED \nprd_workspaces_luks config read by a ",
 "points": [
 [
-5276,
+5275,
 953
 ],
 [
-5099,
-913
+5096,
+914
 ],
 [
-4814,
-854
+4805,
+855
 ],
 [
-4566,
+4552,
 819
 ],
 [
-4027,
-743
+4016,
+744
 ],
 [
-2633,
+2630,
 649
 ],
 [
@@ -18836,27 +18836,27 @@
 "points": [
 [
 5276,
-1014
+1013
 ],
 [
-5098,
+5095,
 1034
 ],
 [
-4813,
+4804,
 1065
 ],
 [
-4566,
+4552,
 1082
 ],
 [
-4382,
+4369,
 1094
 ],
 [
-3075,
-1069
+3073,
+1070
 ],
 [
 2905,
@@ -39543,7 +39543,7 @@
 "id": "901jde",
 "source": "platform.webapp",
 "target": "platform.infra.gitDataStore",
-"label": "Art. 17 erasure of the user's bare repo \nover the REMOVE key's forced command \n(git-data-remove.sh), reached from \naccount deletion; NOT gated on \nGIT_DATA_STORE_ENABLED, so a repo left ",
+"label": "Art. 17 erasure of the user's bare repo \nover the REMOVE key's forced command \n(git-data-remove.sh), reached from \naccount deletion (the API route and the \nagent's account tool, both via ",
 "points": [
 [
 902,
@@ -39601,7 +39601,7 @@
 "labelBBox": {
 "x": 1039,
 "y": 701,
-"width": 290,
+"width": 263,
 "height": 106
 },
 "parent": null,
@@ -55916,36 +55916,36 @@
 "label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated, READ-ONLY root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
 "points": [
 [
-214,
+221,
 180
 ],
 [
-242,
+254,
 237
 ],
 [
-287,
+305,
 308
 ],
 [
-348,
+369,
 350
 ],
 [
-432,
-409
+521,
+451
 ],
 [
-696,
-457
+729,
+488
 ],
 [
 876,
-485
+502
 ]
 ],
 "labelBBox": {
-"x": 349,
+"x": 370,
 "y": 240,
 "width": 284,
 "height": 106
@@ -55963,41 +55963,41 @@
 "id": "901jde",
 "source": "platform.webapp",
 "target": "platform.infra.gitDataStore",
-"label": "Art. 17 erasure of the user's bare repo \nover the REMOVE key's forced command \n(git-data-remove.sh), reached from \naccount deletion; NOT gated on \nGIT_DATA_STORE_ENABLED, so a repo left ",
+"label": "Art. 17 erasure of the user's bare repo \nover the REMOVE key's forced command \n(git-data-remove.sh), reached from \naccount deletion (the API route and the \nagent's account tool, both via ",
 "points": [
 [
-641,
+652,
 180
 ],
 [
-656,
+673,
 234
 ],
 [
-682,
+706,
 303
 ],
 [
-725,
+753,
 350
 ],
 [
-767,
-395
+788,
+386
 ],
 [
-823,
-428
+833,
+416
 ],
 [
 877,
-453
+439
 ]
 ],
 "labelBBox": {
-"x": 726,
+"x": 754,
 "y": 240,
-"width": 290,
+"width": 263,
 "height": 106
 },
 "parent": null,

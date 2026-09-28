@@ -158,7 +158,7 @@ printf 'const MUTATION_OPTS = ["-o", "%s=%s"];\n' "$SHKC" "$AN" >> "$COPY/apps/w
 _row_red "row 5 TOFU literal re-added to git-auth.ts" "apps/web-platform/server/git-auth.ts: 1 unpinned SSH host-key hit(s)"
 
 # Row 5b: a third literal lands on git-data-ownership.test.sh's allow-listed line itself (it
-# carries 2). A per-LINE count stays 1 line; only the per-MATCH count sees 3.
+# carries 2). A per-LINE count stays at 1; only the per-MATCH count sees 3.
 GO="$COPY/apps/web-platform/infra/git-data-ownership.test.sh"
 cp "$GO" "$WORK/go.orig"
 sed -i "s|${UKHF}=/dev/null -o BatchMode|${UKHF}=/dev/null -o ${SHKC}=no -o BatchMode|" "$GO"

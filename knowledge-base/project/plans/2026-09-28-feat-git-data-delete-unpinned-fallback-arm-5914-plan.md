@@ -404,7 +404,7 @@ prediction, not the record; the record reads everything again.
      deleted outright.
    - Add one runtime-guard case per helper: `null as unknown as string` rejects with the guard's
      message and the `execFile` mock is never called. (Types stop a TypeScript caller; this stops a
-     JS or `as any` caller. The existing `""`/whitespace/CR-LF refusals stay as they are.)
+     JS or `as any` caller. [Corrected at review: no `""`/whitespace refusal test existed; only the newline case did. `NON_PINS` now carries `""`, whitespace, `new String(pin)`, a mutating-`toString` object and the resolver's whole bad-shape table.])
    - Delete "git-auth.ts carries the unpinned TOFU literal exactly once (Guard 1 allow-list count)".
      Guard 1 (`test-no-tofu-ssh.sh`) is the one owner of "no accept-new literal in git-auth.ts" once
      the allow-list entry is gone; a second vitest source scan would duplicate it (plan review).
@@ -709,7 +709,7 @@ error_reporting:
 failure_modes:
   - mode: GIT_DATA_SSH_HOST_KEY absent in the running container (deleted outside Terraform, or a container started before a pin loaded)
     detection: at boot, Sentry event feature=git_data_host_key_pin op=pin_absent_at_startup (armed processes only) plus the startup line `git_data_pin=absent`; every erasure returns unconfigured `pin_absent:`; Terraform drift shows a create of doppler_secret.git_data_ssh_host_key
-    alert_route: sentry_alert.art17_erasure_incomplete (email, issue owners -> active members) per refused erasure; scheduled-terraform-drift.yml failure for the secret; the boot event is discoverable in Sentry now and is routed to a page by #8572's rule
+    alert_route: sentry_alert.art17_erasure_incomplete (email, issue owners -> active members) per Sentry issue, i.e. on first-seen / reappeared / regression, not per refused erasure [corrected at review]; resolve the issue after each discharge to re-arm it; scheduled-terraform-drift.yml failure for the secret; the boot event is discoverable in Sentry now and is routed to a page by #8572's rule
   - mode: pin malformed
     detection: startup Sentry event op=pin_invalid_at_startup; erasures return unconfigured `pin_invalid:`
     alert_route: sentry_alert.art17_erasure_incomplete
@@ -851,7 +851,7 @@ one chokepoint `gitDataHostKeyTrust` before their `try`; four resolution sites f
 | 5 | The startup arming predicate reads only `GIT_REMOVE_SSH_PRIVATE_KEY` (the second and third inputs dropped) | the provision-key-only and host-only AC5b rows RED |
 | 6 | The startup event fires whenever the pin is absent (arming check removed) | the unarmed AC5b row RED |
 | 7b | The runtime guard reverted to CR/LF-and-empty only | a new AC5 case with a valid key plus a trailing comment RED |
-| 7 | The runtime guard's `typeof` clause dropped (a `null` then dies in `.trim()` with a `TypeError`) | AC5 RED, because it matches the guard's exact text |
+| 7 | The runtime guard's `typeof` clause dropped | [Corrected at review: `RegExp.test` stringifies, so `null`/`undefined`/`123` still refuse with the guard's text and this row SURVIVED against the original fixtures.] RED only via the mutating-`toString` object row in `NON_PINS`. |
 | 8 | A startup op or the erasure report reverts to the Error path (`new Error(…)` as first argument) | AC5b / AC5c RED |
 
 ## Acceptance Criteria
@@ -931,7 +931,7 @@ module `server/git-data-host-key-pin-shape.ts` instead of being exported from
 mocks `git-auth.ts` wholesale, so either placement named in Phase 2 would have made a circular
 import or an `undefined` regex under the mock. (2) The erasure report's message is
 `git-data erasure <status>: bare-repo erasure did not complete …` (status first, so each outcome
-groups separately, keeping the human text); AC5c asserts the `^git-data erasure <status>: ` prefix.
+groups separately, keeping the human text); AC5c asserts the message starts with `git-data erasure <status>` followed by a colon.
 (3) AC12 is **five** markers, not four: the CLO added PA-36 (g)(2), whose "pages through the Art. 17
 alert" sentence #8629 falsifies. (4) Step 5 was executed in this session: record
 #5914 issuecomment-5865758722 (0 events, 0 ids), with a message-text sweep added because the

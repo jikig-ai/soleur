@@ -32,9 +32,10 @@ function ErasurePendingNotice() {
             repository, which the next sentence then retracts. A reader who stops after
             the first sentence takes away the exact claim this feature exists to prevent.
             Narrowed to the stores the cascade actually confirmed.
-          * "our team has been alerted" — untrue as built. The cascade emits a Sentry
-            exception tagged feature=account-delete op=git-data-bare-repo-erasure, and no
-            rule in infra/sentry/issue-alerts.tf matches either tag, so it pages nobody.
+          * "our team has been alerted" — untrue as built, and still not a per-user
+            promise. Since #5914 the cascade reports on Sentry's message path, so rule 1b
+            (art17_erasure_incomplete) does match — but it pages on the first event of each
+            outcome issue only (first-seen / reappeared / regression), not on every deletion.
             "Recorded as outstanding" is what the code actually guarantees.
         "Contact support and reference this deletion" was also dropped: the user's account
         is gone, they cannot log back in to re-read this, and they hold no case id — the

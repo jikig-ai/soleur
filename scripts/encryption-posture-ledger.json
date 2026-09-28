@@ -542,7 +542,7 @@
     },
     {
       "connection": "web-1 app container -> git-data sshd (Hetzner private network, 10.0.1.20:22)",
-      "enforced_at": "apps/web-platform/server/git-auth.ts gitWithPrivateKeyAuth / sshWithPrivateKeyAuth (hostKeyPin); apps/web-platform/server/git-data-replication.ts resolveGitDataHostKeyPin",
+      "enforced_at": "apps/web-platform/server/git-auth.ts gitDataHostKeyTrust (gitWithPrivateKeyAuth / sshWithPrivateKeyAuth); apps/web-platform/server/git-data-replication.ts resolveGitDataHostKeyPin",
       "in_transit": {
         "tls": "SSH-2 over the Hetzner private network; git-data authenticated by its Terraform-minted ED25519 host key (GIT_DATA_SSH_HOST_KEY), pinned on every dial; an absent or malformed pin refuses. Unpinned fallback arm deleted by PR #9096, #5914; ADR-237 Addendum",
         "cert_verification": "on",
