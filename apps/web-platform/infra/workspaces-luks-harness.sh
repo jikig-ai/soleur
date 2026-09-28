@@ -30,6 +30,15 @@
 #
 # This file is sourced, never executed; it defines functions and two counters and does nothing else.
 
+case "$-" in
+  *x*)
+    if [ -n "${MON_KEY:+x}${WORKSPACES_LUKS_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # --- counters + reporters ----------------------------------------------------
 pass=0
 fail=0
