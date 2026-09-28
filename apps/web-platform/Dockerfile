@@ -95,8 +95,13 @@ RUN npm install -g likec4@1.50.0
 # GHA runner (jq preinstalled) into this image without porting the dependency,
 # so every scheduled post failed with "jq is required but not installed" and
 # routed to a per-post fallback issue (e.g. #4858). Do NOT remove jq.
+# `openssh-client` is load-bearing for git-data (#5914): git-auth.ts spawns `ssh`
+# directly (sshWithPrivateKeyAuth) and via GIT_SSH_COMMAND (gitWithPrivateKeyAuth).
+# git only *Recommends* it, so --no-install-recommends silently drops it and every
+# Art. 17 git-data erasure reads ENOENT. Guarded by test/dockerfile-runner-ssh-client.test.ts
+# and the `git_data_ssh_client=` startup line. Do NOT remove openssh-client.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git bubblewrap socat qpdf jq \
+    ca-certificates git bubblewrap socat qpdf jq openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
