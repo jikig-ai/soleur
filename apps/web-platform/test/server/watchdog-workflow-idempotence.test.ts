@@ -59,8 +59,8 @@ case "$1 $2" in
     [[ "\${STUB_RUNS_FAIL:-0}" == "1" ]] && exit 1
     printf '%s' "$STUB_RUNS" ;;
   "workflow run") [[ "\${STUB_DISPATCH_FAIL:-0}" == "1" ]] && exit 1; : ;;
-  "issue create") echo "https://github.com/o/r/issues/4242" ;;
-  "issue comment") : ;;
+  "issue create") [[ "\${STUB_CREATE_FAIL:-0}" == "1" ]] && exit 1; echo "https://github.com/o/r/issues/4242" ;;
+  "issue comment") [[ "\${STUB_COMMENT_FAIL:-0}" == "1" ]] && exit 1; : ;;
   "label create") : ;;
   *) echo "stub: unexpected gh $*" >&2; exit 64 ;;
 esac
@@ -242,77 +242,137 @@ describe("the auto-restart step never stacks a second restart (#8495)", () => {
 
 // #7377 — the restart-loop alarm is the inventory lever's only automatic producer. The label
 // route it replaced could never fire: a label applied with GITHUB_TOKEN starts no workflow run,
-// and workflow_dispatch is the documented exception. So the FIRE step dispatches the read-only
-// inventory itself — once per NEW non-OOM tracker, never on a repeat run in the same slot,
-// never for an OOM loop (different failure class; the alarm script names the inventory only
-// in its non-OOM arm), and fail-soft so a refused dispatch cannot un-file the tracker.
-describe("the restart-loop FIRE step dispatches the read-only inventory once per new non-OOM tracker (#7377)", () => {
+// and workflow_dispatch is the documented exception. The FIRE step hands a NEW non-OOM tracker
+// to a separate dispatch-inventory job (the only job holding actions: write), never on a repeat
+// run in the same slot, never for an OOM loop, and never before the tracker exists.
+describe("the restart-loop alarm dispatches the read-only inventory once per new non-OOM tracker (#7377)", () => {
+  type Job = {
+    permissions?: Record<string, string>;
+    needs?: string;
+    if?: string;
+    outputs?: Record<string, string>;
+    steps?: Array<Step & { id?: string }>;
+  };
+  const doc = parseYaml(readFileSync(join(REPO_ROOT, WORKFLOWS[1]), "utf-8")) as {
+    permissions?: Record<string, string>;
+    jobs: Record<string, Job>;
+  };
   const FIRE = "Open or comment recurrence issue (FIRE)";
-  const step = steps(WORKFLOWS[1]).find((s) => s.name === FIRE);
-  const NON_OOM =
-    "non-OOM crash-loop — zot_restarts climbed across >= 3 consecutive events; tier=fallback: NO diagnostic line matched";
+  const DISPATCH = "Dispatch the read-only store inventory (new non-OOM tracker)";
+  const fireStep = steps(WORKFLOWS[1]).find((s) => s.name === FIRE);
+  const dispatchStep = steps(WORKFLOWS[1]).find((s) => s.name === DISPATCH);
+
+  // The gate literal is DERIVED from the alarm script's own CAUSE= line, so rewording the cause
+  // (e.g. its em-dash) without the workflow gate — or the reverse — reds here.
+  const alarmSrc = readFileSync(join(REPO_ROOT, "scripts/zot-restart-loop-alarm.sh"), "utf-8");
+  const prefixMatch = alarmSrc.match(/^\s*CAUSE="(non-OOM crash-loop — )/m);
+  const PREFIX = prefixMatch ? prefixMatch[1] : "";
+  const NON_OOM = `${PREFIX}zot_restarts climbed across >= 3 consecutive events; tier=fallback: NO diagnostic line matched`;
   const OOM = "host/kernel OOM — exit_code=137 AND oom_kills_5m=2 (the box ran out of memory)";
   const tracker = "[ci/zot-restart-loop] Zot registry restart-loop recurrence detected";
 
-  function fire(cause: string, issues: unknown[], dispatchFail = "0") {
-    return runBash(step!.run!, {
+  function fire(cause: string, issues: unknown[], extra: Record<string, string> = {}) {
+    const ghOut = join(scratch, `fire-out-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(ghOut, "");
+    const r = runBash(fireStep!.run!, {
       STUB_ISSUES: JSON.stringify(issues),
-      STUB_DISPATCH_FAIL: dispatchFail,
       CAUSE: cause,
       DETAIL: "newest boot_id=b1",
       RUN_URL: "https://github.com/o/r/actions/runs/1",
-      GITHUB_REPOSITORY: "o/r",
+      GITHUB_OUTPUT: ghOut,
+      ...extra,
+    });
+    return { ...r, output: readFileSync(ghOut, "utf-8") };
+  }
+  function dispatch(extra: Record<string, string> = {}) {
+    return runBash(dispatchStep!.run!, {
+      NEW_ISSUE: "https://github.com/o/r/issues/4242",
+      RUN_URL: "https://github.com/o/r/actions/runs/1",
       GITHUB_SERVER_URL: "https://github.com",
+      STUB_ISSUES: "[]",
+      ...extra,
     });
   }
   const dispatches = (log: string) =>
     log.split("\n").filter((l) => l.startsWith("workflow run registry-zot-inventory.yml"));
 
-  it("the FIRE step exists", () => {
-    expect(step?.run).toBeDefined();
+  it("the alarm script still emits the non-OOM cause prefix, and the FIRE gate matches it", () => {
+    expect(PREFIX).toBe("non-OOM crash-loop — ");
+    expect(fireStep?.run).toContain(`"$CAUSE" == "${PREFIX}"*`);
   });
 
-  it("a new non-OOM tracker dispatches the inventory on main with the only allow-listed action", () => {
-    const { log } = fire(NON_OOM, []);
+  it("a new non-OOM tracker is handed to the dispatch job, after it was created", () => {
+    const { log, output } = fire(NON_OOM, []);
     expect(log).toMatch(/^issue create /m);
+    expect(output).toBe("inventory_tracker=https://github.com/o/r/issues/4242\n");
+    expect(dispatches(log)).toHaveLength(0); // the FIRE step itself never dispatches
+  });
+
+  it("a repeat run in the slot (tracker already open) hands nothing on", () => {
+    const { log, output } = fire(NON_OOM, [{ number: 77, title: tracker }]);
+    expect(log).toMatch(/^issue comment 77 /m);
+    expect(log).not.toMatch(/^issue create /m);
+    expect(output).toBe("");
+  });
+
+  it("an OOM loop opens the tracker but hands nothing on", () => {
+    const { log, output } = fire(OOM, []);
+    expect(log).toMatch(/^issue create /m);
+    expect(output).toBe("");
+  });
+
+  it("the gate is a PREFIX match: an OOM cause whose tail merely contains the prefix hands nothing on", () => {
+    expect(fire(`${OOM}; tail: ${PREFIX}forged`, []).output).toBe("");
+  });
+
+  it("if the tracker cannot be created, nothing is handed on", () => {
+    const ghOut = join(scratch, `fire-fail-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(ghOut, "");
+    expect(() =>
+      runBash(fireStep!.run!, {
+        STUB_ISSUES: "[]",
+        STUB_CREATE_FAIL: "1",
+        CAUSE: NON_OOM,
+        DETAIL: "d",
+        RUN_URL: "u",
+        GITHUB_OUTPUT: ghOut,
+      }),
+    ).toThrow();
+    expect(readFileSync(ghOut, "utf-8")).toBe("");
+  });
+
+  it("the dispatch job dispatches on main with the only allow-listed action and the tracker number", () => {
+    const { log } = dispatch();
     const d = dispatches(log);
     expect(d).toHaveLength(1);
     expect(d[0]).toContain("--ref main");
     expect(d[0]).toContain("-f action=inventory");
-    // The outcome is recorded on the tracker it just opened.
+    expect(d[0]).toContain("-f tracker=4242");
     expect(log).toMatch(/^issue comment https:\/\/github\.com\/o\/r\/issues\/4242 .*Dispatched/m);
-  });
-
-  it("a repeat run in the slot (tracker already open) comments and does NOT dispatch again", () => {
-    const { log } = fire(NON_OOM, [{ number: 77, title: tracker }]);
-    expect(log).toMatch(/^issue comment 77 /m);
-    expect(log).not.toMatch(/^issue create /m);
-    expect(dispatches(log)).toHaveLength(0);
-  });
-
-  it("an OOM loop opens the tracker but does not dispatch the disk inventory", () => {
-    const { log } = fire(OOM, []);
-    expect(log).toMatch(/^issue create /m);
-    expect(dispatches(log)).toHaveLength(0);
-  });
-
-  it("the gate is a PREFIX match: an OOM cause whose text merely contains the non-OOM words does not dispatch", () => {
-    const { log } = fire(`${OOM}; tail: non-OOM crash-loop — forged`, []);
-    expect(dispatches(log)).toHaveLength(0);
   });
 
   it("a refused dispatch is fail-soft: the step exits 0 and the tracker records the failure", () => {
     // runBash throws on a non-zero exit, so returning at all is the exit-0 assertion.
-    const { out, log } = fire(NON_OOM, [], "1");
-    expect(log).toMatch(/^issue create /m);
+    const { out, log } = dispatch({ STUB_DISPATCH_FAIL: "1" });
     expect(log).toMatch(/^issue comment https:\/\/github\.com\/o\/r\/issues\/4242 .*FAILED/m);
     expect(out).toContain("::warning::");
   });
 
-  it("the workflow grants actions: write (gh workflow run is refused without it)", () => {
-    const doc = parseYaml(readFileSync(join(REPO_ROOT, WORKFLOWS[1]), "utf-8")) as {
-      permissions?: Record<string, string>;
-    };
-    expect(doc.permissions?.actions).toBe("write");
+  it("a failed tracker comment after a successful dispatch is fail-soft too", () => {
+    const { out, log } = dispatch({ STUB_COMMENT_FAIL: "1" });
+    expect(dispatches(log)).toHaveLength(1);
+    expect(out).toContain("::warning::the inventory was dispatched but the tracker comment could not be written.");
+  });
+
+  it("actions: write is held ONLY by the dispatch job, which is wired to the FIRE step's output", () => {
+    expect(doc.permissions?.actions).toBeUndefined();
+    const jobs = Object.entries(doc.jobs).filter(([, j]) => j.permissions?.actions === "write");
+    expect(jobs.map(([k]) => k)).toEqual(["dispatch-inventory"]);
+    const dj = doc.jobs["dispatch-inventory"];
+    expect(dj.needs).toBe("alarm");
+    expect(dj.if).toContain("needs.alarm.outputs.inventory_tracker != ''");
+    expect(dj.steps?.some((st) => (st as { uses?: string }).uses?.includes("actions/checkout"))).toBe(false);
+    expect(doc.jobs.alarm.outputs?.inventory_tracker).toBe("${{ steps.fire.outputs.inventory_tracker }}");
+    expect(doc.jobs.alarm.steps?.find((st) => st.name === FIRE)?.id).toBe("fire");
   });
 });

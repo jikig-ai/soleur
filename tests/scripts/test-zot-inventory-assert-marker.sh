@@ -258,6 +258,19 @@ rows_encoded "$CONTROL_ROW" "$(schema_marker 'marker_schema=2 ')" "$(mk_marker "
 run_gate "$GATE"
 if [ "$RC" -eq 0 ]; then pass "a schema-1 row still certifies beside a schema-2 row"; else fail "schema-1 beside schema-2 rc=$RC (want 0)" "$(verdict)"; fi
 
+# A schema-2 row beside an INCOMPLETE schema-1 row: the schema-1 row is understood, so its own
+# verdict (enumeration_incomplete, exit 1) is the true one, not "unsupported".
+rows_encoded "$CONTROL_ROW" "$(schema_marker 'marker_schema=2 ')" "$(mk_marker "$RUN_ID" false)" "$CONTROL_ROW"
+run_gate "$GATE"
+if [ "$RC" -eq 1 ]; then pass "schema-2 beside an incomplete schema-1 row exits 1"; else fail "mixed schema rc=$RC (want 1)" "$(verdict)"; fi
+expect_v reason enumeration_incomplete "mixed schema, schema-1 row incomplete"
+
+# ORDER: a schema-2 row with a DARK control is still unsupported (the row was read, so the read
+# path answered); the schema verdict precedes channel_dark.
+rows_encoded "$(schema_marker 'marker_schema=2 ')"
+run_gate "$GATE"
+expect_v reason marker_schema_unsupported "schema-2 row with no control rows"
+
 # PARITY: the reader's expected schema is the emitter's schema. Read both literals from the
 # source rather than hand-copying them, so an emitter bump without a reader update reds here.
 emit_schema="$(sed -nE 's/^readonly MARKER_SCHEMA=([0-9]+)$/\1/p' "${ROOT}/scripts/zot-inventory.sh")"
@@ -315,8 +328,8 @@ else
 fi
 
 total=$((passes + fails))
-if [ "$total" -lt 53 ]; then
-  echo "FAIL: ran only ${total} assertions (<53) — the suite did not execute fully" >&2
+if [ "$total" -lt 56 ]; then
+  echo "FAIL: ran only ${total} assertions (<56) — the suite did not execute fully" >&2
   exit 1
 fi
 

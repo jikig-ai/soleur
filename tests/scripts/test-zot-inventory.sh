@@ -944,6 +944,42 @@ expect_field reason restart_during_sweep "a straddle seen only on the re-poll st
 if [ "$(cat "$END_CALLS" 2>/dev/null)" = "2" ]; then pass "exactly one re-poll after the stale row"
 else fail "sampler calls want 2 got '$(cat "$END_CALLS" 2>/dev/null)'"; fi
 
+# An END row OLDER than START (clock skew, a replayed row) is not a later measurement.
+end_conf "$START_BOOT" 15641 0 "2026-09-28T07:05:02.000000"
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S=0
+expect_field zot_restarts_at_end unknown "an END row older than START is not accepted"
+# An END row with NO sample_at cannot be shown newer, so it is not accepted either.
+end_conf "$START_BOOT" 15641 0 ""
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S=0
+expect_field zot_restarts_at_end unknown "an END row without sample_at is not accepted"
+
+# The production WAIT default is what makes the feature work on a ~2-minute sweep: pin it. A
+# POLL larger than any wait returns on the first stale read and names the budget.
+end_conf "$START_BOOT" 15640 0 "$START_AT"
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S= ZOT_INVENTORY_END_SAMPLE_POLL_S=999
+if grep -qF 'landed within 360s' "$ERR"; then pass "the default END wait is 360 s"
+else fail "the default END wait is not 360 s" "$(grep -F 'no END restart sample' "$ERR" | tail -1)"; fi
+# The re-poll SLEEPS between reads: 1 s polls inside a 2 s budget make at most 3 calls, where a
+# missing sleep spins the query for the whole budget.
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S=2 ZOT_INVENTORY_END_SAMPLE_POLL_S=1
+calls="$(cat "$END_CALLS" 2>/dev/null || echo 0)"
+if [ "$calls" -ge 2 ] && [ "$calls" -le 3 ]; then pass "the re-poll sleeps between reads (calls=$calls)"
+else fail "re-poll made $calls sampler calls in a 2 s budget (want 2..3)"; fi
+# A non-integer knob costs the END sample, never the sweep, and is never evaluated.
+rm -f "$END_SENTINEL"
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S='a[$(touch '"$TMP"'/pwned)]'
+if [ -f "$TMP/pwned" ]; then fail "a non-integer WAIT knob was arithmetic-evaluated"; else pass "a non-integer WAIT knob is not evaluated"; fi
+expect_field zot_restarts_at_end unknown "non-integer END wait knob"
+expect_field outcome ok "a bad END knob never fails the sweep"
+
+# Must-PASS: an unknown START boot, or an END row with no boot_id, is not a boot CHANGE.
+end_conf 0a0b0c0d-1111-2222-3333-444455556666 15640 0 "$FRESH_AT"
+run_end ZOT_DISK_BOOT_ID=
+expect_field outcome ok "no START boot to compare: equal counts are a clean sweep"
+end_conf "" 15640 0 "$FRESH_AT"
+run_end
+expect_field outcome ok "an END row without boot_id and equal counts is a clean sweep"
+
 end_conf "$START_BOOT" 15640 2 "$FRESH_AT"
 run_end
 expect_field zot_restarts_at_end unknown "END sampler transport failure"
@@ -1253,8 +1289,8 @@ fi
 # Minimum-cardinality guard: a silently-empty harness must fail loud.
 # ---------------------------------------------------------------------------------
 total=$((passes + fails))
-if [ "$total" -lt 160 ]; then
-  echo "FAIL: ran only ${total} assertions (<160) — the suite did not execute fully" >&2
+if [ "$total" -lt 184 ]; then
+  echo "FAIL: ran only ${total} assertions (<184) — the suite did not execute fully" >&2
   exit 1
 fi
 

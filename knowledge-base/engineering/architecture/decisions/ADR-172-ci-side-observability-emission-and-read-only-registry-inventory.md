@@ -312,8 +312,9 @@ replace before the LUKS recut darked the sole pull path. Measured on 2026-09-28:
   closed. The live heartbeat reads `store_luks=yes`, `store_mount_src=/dev/mapper/registry`.
 - A provisioning event is now routine. Since the ADR-169 amendment of 2026-08-16 (#7555), a merge
   that changes the rendered `cloud-init-registry.yml` fires `registry-host-replace-dispatch.yml`,
-  which preflights and dispatches a replace that keeps the store volume. Five replaces ran that
-  way (2026-08-16, 09-17, 09-18, 09-20, 09-22); the current boot's `store_mount_devid` equals
+  which preflights and dispatches a replace that keeps the store volume. Five replaces ran
+  through that path (2026-08-16, 09-17, 09-18, 09-20, 09-22): three fired by a merge, two
+  manual re-fires of the same dispatcher; the current boot's `store_mount_devid` equals
   `store_expected_devid`, and `zot_restarts=0`, `pcent=14`.
 - No zot user holds `delete` (`accessControl`: pull `read`; push `read,create,update`), and GC
   plus retention run hourly.
@@ -337,9 +338,11 @@ replace before the LUKS recut darked the sole pull path. Measured on 2026-09-28:
   label (it did not exist in the repo), and nothing could have from inside the alarm, because a
   label applied with `GITHUB_TOKEN` starts no workflow run, while `workflow_dispatch` is the
   documented exception. Measured: 3,540 runs, 0 that did anything. `scheduled-zot-restart-loop.yml`
-  now holds `actions: write` and dispatches `registry-zot-inventory.yml` once per new non-OOM
-  tracker (prefix-matched on the fixed cause literal that begins `non-OOM crash-loop`), fail-soft, with
-  the outcome commented on the tracker.
+  now dispatches `registry-zot-inventory.yml` once per new non-OOM tracker (prefix-matched on
+  the fixed cause literal that begins `non-OOM crash-loop`, which a test pins to the alarm
+  script's own `CAUSE=` line), from a separate `dispatch-inventory` job that is the only holder
+  of `actions: write` and checks nothing out. It is fail-soft, and it passes the tracker number
+  so the inventory run comments its result back onto that tracker as well as onto #7339.
 - **The END restart sample reaches the durable marker.** `zot-inventory.sh` takes its own END
   sample after the enumeration (re-polling until a heartbeat newer than the START row lands,
   bounded at 360 s), so `zot_restarts_at_end` carries a measured value and a restart or host
@@ -369,5 +372,10 @@ replace before the LUKS recut darked the sole pull path. Measured on 2026-09-28:
 - A non-OOM crash-loop gets its store measured without an operator action. An OOM loop does
   not: it is a different failure class, and the enumerator's GETs add load to a memory-starved
   zot.
-- The alarm workflow's token can now dispatch workflows (`actions: write`), the same grant
-  `scheduled-inngest-health.yml` holds for its restart dispatch.
+- One job of the alarm workflow can now dispatch workflows (`actions: write`, which reaches
+  any `workflow_dispatch` workflow in the repo). It is scoped to the dispatch job only, not
+  granted at workflow scope as `scheduled-inngest-health.yml` does for its restart dispatch.
+- An alarm-dispatched sweep runs during an active crash loop, so it will usually end
+  `partial` / `restart_during_sweep` (a red run) with the marker still emitted and read back.
+  That is the correct report, not a fault: the enumeration crossed a restart, and `delta_gb`
+  must be read with that in mind.

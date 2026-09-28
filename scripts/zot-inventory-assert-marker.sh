@@ -236,7 +236,9 @@ if [[ "$MARKER_ROWS" -ge 1 ]]; then
   verdict observed none 0
 fi
 
-if [[ "$SCHEMA_OTHER_ROWS" -ge 1 ]]; then
+# Only when EVERY row for this run is another schema: a schema-1 row beside it is understood,
+# and its own verdict (observed above, or enumeration_incomplete below) is the true one.
+if [[ "$RUN_ID_ROWS" -ge 1 && "$SCHEMA_OTHER_ROWS" -eq "$RUN_ID_ROWS" ]]; then
   echo "zot-inventory-assert-marker: ${SCHEMA_OTHER_ROWS} row(s) for run_id=${RUN_ID} were read back, but none carried marker_schema=${EXPECTED_MARKER_SCHEMA}, the only schema this reader understands (verdict=marker_schema_unsupported). Update this reader alongside the emitter before trusting the result." >&2
   verdict unknown marker_schema_unsupported 3
 fi

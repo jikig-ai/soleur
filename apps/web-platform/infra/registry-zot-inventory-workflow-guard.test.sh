@@ -241,7 +241,7 @@ assert "the job set is exactly {inventory} (a new job must be added to the guard
 echo ""
 echo "--- 3.1 / 3.1a: dispatch surface, permissions, serialisation, pinning ---"
 
-assert "the only dispatch input is a single-value choice {inventory}" \
+assert "the action dispatch input is a single-value choice {inventory} (tracker, #7377, is a validated number)" \
   "[[ \$(probe_wf '$WF' single_choice_input) == 'yes' ]]"
 assert "actions/checkout is SHA-pinned (40-hex), not tag-pinned" \
   "[[ \$(probe_wf '$WF' checkout_pinned) == 'yes' ]]"
@@ -291,11 +291,19 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml")) + glob.glob(os.
         on = {on: None}
     elif isinstance(on, list):
         on = {k: None for k in on}
-    if "issues" not in on:
+    # ANY `labeled` trigger (issues, pull_request, pull_request_target, …), in map or list form.
+    # A bare `on: [issues]` fires on every issue activity type, labeled included.
+    labeled = False
+    for ev, cfg in on.items():
+        types = (cfg or {}).get("types") if isinstance(cfg, dict) else None
+        if (types and "labeled" in types) or (ev == "issues" and not types):
+            labeled = True
+    if not labeled:
         continue
+    # The listener can key the label anywhere in a job — job `if:`, step `if:`, a `contains()`
+    # expression, or a `run:` block — so search the whole serialised jobs map, not one field.
     for name, job in (wf.get("jobs") or {}).items():
-        cond = " ".join(str((job or {}).get("if", "")).split())
-        if "'registry-zot-inventory'" in cond or '"registry-zot-inventory"' in cond:
+        if "zot-inventory" in yaml.safe_dump(job or {}):
             offenders.append(os.path.basename(path) + ":" + name)
 print(",".join(offenders))
 print(scanned)
@@ -309,12 +317,18 @@ probe_alarm() {
 import re, sys, yaml
 wf = yaml.safe_load(open(sys.argv[1])) or {}
 perms = wf.get("permissions") or {}
-steps = [s for j in (wf.get("jobs") or {}).values() for s in (j.get("steps") or [])]
-fire = [s for s in steps if s.get("name") == "Open or comment recurrence issue (FIRE)"]
+jobs = wf.get("jobs") or {}
+dj = jobs.get("dispatch-inventory") or {}
+steps = [s for j in jobs.values() for s in (j.get("steps") or [])]
+fire = [s for s in steps if s.get("name") == "Dispatch the read-only store inventory (new non-OOM tracker)"]
 body = "\n".join(l for l in str(fire[0].get("run", "")).splitlines()
                  if not l.lstrip().startswith("#")) if fire else ""
 checks = {
-    "actions_write": perms.get("actions") == "write",
+    # actions: write is held ONLY by the dispatch job (it can dispatch ANY workflow_dispatch
+    # workflow), never at workflow scope where the checkout + telemetry-parsing job gets it too.
+    "actions_write": (dj.get("permissions") or {}).get("actions") == "write"
+        and perms.get("actions") is None
+        and not any((j.get("permissions") or {}).get("actions") for k, j in jobs.items() if k != "dispatch-inventory"),
     "dispatch_line": bool(re.search(r"(?m)^\s*if gh workflow run registry-zot-inventory\.yml\b.*--ref main\b.*-f action=inventory\b", body)),
 }
 print("yes" if checks[sys.argv[2]] else "no")
@@ -349,12 +363,26 @@ assert "MUTATION: a label listener re-added under another filename is caught" \
   "[[ '$(sed -n 1p <<<"$MUT_SCAN")' == 'renamed-inventory-label-route.yml:go' ]]"
 # must-PASS: a label route for a DIFFERENT label is not this defect (the Inngest watchdog's
 # inngest-desync-restart route has a real App-token producer).
+# More listener shapes the scan must catch, each added alone beside the real workflow set.
+for shape in step_if contains_expr run_text prt; do
+  rm -rf "$TMP/wf-shape"; mkdir -p "$TMP/wf-shape"; cp "$WORKFLOWS_DIR"/*.yml "$TMP/wf-shape/"
+  case "$shape" in
+    step_if) printf '%s\n' 'on:' '  issues:' '    types: [labeled]' 'jobs:' '  go:' '    runs-on: ubuntu-latest' '    steps:' "      - if: github.event.label.name == 'registry-zot-inventory'" '        run: echo hi' ;;
+    contains_expr) printf '%s\n' 'on:' '  issues:' '    types: [labeled]' 'jobs:' '  go:' "    if: contains(github.event.label.name, 'zot-inventory')" '    runs-on: ubuntu-latest' '    steps:' '      - run: echo hi' ;;
+    run_text) printf '%s\n' 'on:' '  issues:' '    types: [labeled]' 'jobs:' '  go:' '    runs-on: ubuntu-latest' '    steps:' '      - run: gh workflow run registry-zot-inventory.yml' ;;
+    prt) printf '%s\n' 'on:' '  pull_request_target:' '    types: [labeled]' 'jobs:' '  go:' "    if: github.event.label.name == 'registry-zot-inventory'" '    runs-on: ubuntu-latest' '    steps:' '      - run: echo hi' ;;
+  esac > "$TMP/wf-shape/shape-$shape.yml"
+  SHAPE_SCAN="$(probe_label_routes "$TMP/wf-shape")"
+  assert "MUTATION: a '$shape' label listener is caught" \
+    "[[ '$(sed -n 1p <<<"$SHAPE_SCAN")' == shape-$shape.yml:go ]]"
+done
+
 assert "must-PASS: the inngest-desync-restart label route is not flagged" \
   "[[ -f '$WORKFLOWS_DIR/inngest-watchdog-restart-dispatch.yml' && '${LABEL_OFFENDERS}' != *inngest-watchdog* ]]"
 
-assert "the restart-loop alarm grants actions: write (gh workflow run is refused without it)" \
+assert "actions: write is held ONLY by the dispatch-inventory job (never at workflow scope)" \
   "[[ \$(probe_alarm '$ALARM_WF' actions_write) == 'yes' ]]"
-assert "the alarm's FIRE step carries a live (non-comment) 'gh workflow run registry-zot-inventory.yml --ref main -f action=inventory'" \
+assert "the dispatch step carries a live (non-comment) 'gh workflow run registry-zot-inventory.yml --ref main -f action=inventory'" \
   "[[ \$(probe_alarm '$ALARM_WF' dispatch_line) == 'yes' ]]"
 # MUTATION: comment the dispatch out; the probe must go red.
 python3 - "$ALARM_WF" "$TMP/alarm-no-dispatch.yml" <<'PY2'
@@ -362,7 +390,7 @@ import sys
 s = open(sys.argv[1]).read()
 old = "if gh workflow run registry-zot-inventory.yml"
 assert s.count(old) == 1
-open(sys.argv[2], "w").write(s.replace(old, "# if gh workflow run registry-zot-inventory.yml").replace("              else\n                echo \"::warning::registry-zot-inventory.yml", "              #else\n                echo \"::warning::registry-zot-inventory.yml"))
+open(sys.argv[2], "w").write(s.replace(old, "# if gh workflow run registry-zot-inventory.yml"))
 PY2
 assert "MUTATION: a commented-out dispatch is rejected" \
   "[[ \$(probe_alarm '$TMP/alarm-no-dispatch.yml' dispatch_line) == 'no' ]]"
@@ -670,7 +698,7 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed ==="
 #
 # A FLOOR, never an equality: `-eq` would turn every legitimately-added assertion into a
 # spurious failure. Raise it in lockstep when assertions are added.
-MIN_ASSERTIONS=59  # 52 before #7377 (label-route asserts swapped for the no-label-route + alarm-producer set)
+MIN_ASSERTIONS=63  # 52 before #7377 (label-route asserts swapped for the no-label-route + alarm-producer set)
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, below the floor of ${MIN_ASSERTIONS}."
   echo "      The suite was truncated or its assert calls were removed. Nothing below this"

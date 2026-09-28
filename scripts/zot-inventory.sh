@@ -532,6 +532,13 @@ take_end_sample() {
     printf 'no END restart sample: BETTERSTACK_QUERY_HOST is unset, so zot_restarts_at_end=unknown and a restart during the sweep cannot be detected in the marker.\n' >&2
     return 0
   fi
+  # Both knobs reach `$(( ))`/`(( ))`, where a non-numeric value is an evaluation (and
+  # `a[$(cmd)]` an execution) rather than a number. Shape-checked before any use; a bad value
+  # costs the END sample, never the sweep.
+  if [[ ! "$END_SAMPLE_WAIT_S" =~ ^[0-9]+$ || ! "$END_SAMPLE_POLL_S" =~ ^[0-9]+$ ]]; then
+    printf 'no END restart sample: ZOT_INVENTORY_END_SAMPLE_WAIT_S / _POLL_S are not non-negative integers, so zot_restarts_at_end=unknown.\n' >&2
+    return 0
+  fi
   local start_at="${ZOT_DISK_SAMPLE_AT:-}" deadline=$((SECONDS + END_SAMPLE_WAIT_S))
   local sample rc end_at end_restarts end_boot
   while :; do
