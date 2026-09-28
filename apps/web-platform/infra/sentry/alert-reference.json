@@ -991,6 +991,47 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "image-freshness-mismatch": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "image-freshness"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 28,
+    "name": "image-freshness-mismatch",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "inbox-action-required-notify-failure": {
     "actionFilters": [
       {

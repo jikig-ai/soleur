@@ -102,7 +102,7 @@ else
   CRED_FILE_STATE=absent
 fi
 
-# Sentry destination pin (#7873 Rule D drawdown). The seven Sentry POSTs below forward
+# Sentry destination pin (#7873 Rule D drawdown). The eight Sentry POSTs below forward
 # SENTRY_PUBLIC_KEY to "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/", and both
 # halves are env-settable. A value outside the shape Sentry issues (measured against Doppler prd,
 # 2026-09-15) is dropped, which disables the best-effort Sentry arm (every site is guarded on
@@ -653,6 +653,102 @@ cosign_verify_event() {
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "IMAGE_VERIFY: Sentry POST failed"
   fi
+}
+
+# image_freshness_event <result> <ref> <expected> <actual> <detail>: loud, no-SSH page when the
+# pre-swap freshness check aborts a web deploy (#6428). Every result it is called with ABORTS the
+# deploy, so every event is level=error; `freshness_result` discriminates the cause in one event:
+#   version_mismatch — the image was built as another version (the stale-but-signed zot image);
+#   version_absent   — the image carries no usable BUILD_VERSION (missing, empty or `dev`);
+#   version_ambiguous — the image config carries more than one BUILD_VERSION entry;
+#   inspect_failed   — `docker inspect` of the ref about to be run failed.
+# <actual> comes from the image config, so it is DISPLAYED only through _freshness_display (a
+# bounded, printable shape) — a control character or an oversized value never reaches journald
+# or the Sentry payload, and cannot E2BIG the logger/jq argv and silence the page.
+# Paged by sentry_alert.image_freshness_mismatch (issue-alerts.tf, op == image-freshness). Tagged
+# host_id so the host is attributable from Sentry alone. Best-effort + env-guarded, mirrors
+# cosign_verify_event. Fail-open under set -e.
+_freshness_display() {
+  if [[ "${1:-}" =~ ^[0-9A-Za-z.+-]{1,64}$ ]]; then printf '%s' "$1"; else printf '<invalid:len=%d>' "${#1}"; fi
+}
+
+image_freshness_event() {
+  local result="$1" ref="$2" expected="$3" actual detail="${5:-}"
+  actual="$( [[ -z "${4:-}" ]] || _freshness_display "$4" )"
+  logger -t "$LOG_TAG" "IMAGE_FRESHNESS_FAIL: result=$result ref=$ref expected=$expected actual=${actual:-<none>} detail=$detail"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg r "$result" --arg ref "$ref" --arg e "$expected" --arg a "$actual" \
+      --arg d "$detail" --arg h "${HOST_ID:-}" \
+      '{message: ("image freshness " + $r + ": deploy of " + $e + " refused, image is " + (if $a == "" then "<no BUILD_VERSION>" else $a end)),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-freshness", freshness_result: $r, host_id: $h},
+        extra: {ref: $ref, expected: $e, actual: $a, detail: $d}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_FRESHNESS: Sentry POST failed"
+  fi
+}
+
+# verify_image_freshness <ref> <tag>: the pre-swap freshness gate (#6428). A zot that serves an OLD
+# but validly signed image for the requested tag passes verify_image_signature — the old image IS
+# validly signed — and before this check nothing noticed until the release workflow's post-deploy
+# /health version check, after the stale container was already serving (and never on web-2, which
+# serves no ingress). The release build bakes `ENV BUILD_VERSION=<next>` into the image it tags
+# `v<next>` (reusable-release.yml → apps/web-platform/Dockerfile), and every deploy caller sends
+# `v<BUILD_VERSION>`, so `BUILD_VERSION == ${tag#v}` holds for every correctly served image: a
+# release, a rollback to an older release, a seccomp same-version reload, a local-cache rescue.
+#
+# <ref> is VERIFIED_REF — the ref the canary and production run next — never "$IMAGE:$TAG", which
+# can be re-pointed after the verify. The value comes from the image's own config, so it is bound
+# to those bytes; it is covered by the cosign signature only when the verify passed (WARN mode also
+# runs an unverified digest, and the tag on inspect_failed).
+#
+# FAILS CLOSED: returns 1 (caller aborts, the OLD container stays live) on a mismatch AND whenever
+# the version cannot be established (inspect failure, no BUILD_VERSION line, empty, or `dev`), and
+# sets the global FRESHNESS_ABORT_REASON to the deploy-state reason: `image_stale_version` for a
+# mismatch, `image_version_unverifiable` otherwise (incl. a config with two BUILD_VERSION entries,
+# where the value the process sees is not decidable from here). Every
+# image zot can serve for a v-tag has carried BUILD_VERSION since 2026-03, so the closed arm costs
+# no legitimate deploy. Emits `IMAGE_FRESHNESS: ok …` on success — the Better Stack liveness marker
+# showing a host actually ran the check (a host still on an older ci-deploy.sh, e.g. web-2 until its
+# next replace per #9151, emits none). The comparison is exact string equality on the WHOLE key.
+verify_image_freshness() {
+  local ref="$1" tag="$2" expected="${2#v}" env_out="" rc=0 actual="" count=0 line
+  FRESHNESS_ABORT_REASON="image_version_unverifiable"
+  # Capture first, THEN parse: a `done < <(docker inspect …)` loop would lose the exit code, and a
+  # failed inspect would read as "no BUILD_VERSION line". `200>&-` closes the FD-200 deploy lock
+  # for this child (#5062). `--type image`: a container sharing the ref's name would otherwise win,
+  # and its Config.Env carries runtime -e/--env-file values, not what the image was built as.
+  env_out="$(docker inspect --type image --format '{{range .Config.Env}}{{println .}}{{end}}' "$ref" 2>/dev/null 200>&-)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    image_freshness_event "inspect_failed" "$ref" "$expected" "" "docker inspect rc=$rc"
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ "$line" == BUILD_VERSION=* ]]; then
+      actual="${line#BUILD_VERSION=}"; count=$((count + 1))
+    fi
+  done <<< "$env_out"
+  if [[ "$count" -gt 1 ]]; then
+    image_freshness_event "version_ambiguous" "$ref" "$expected" "" "the image config carries $count BUILD_VERSION entries"
+    return 1
+  fi
+  if [[ -z "$actual" || "$actual" == "dev" ]]; then
+    image_freshness_event "version_absent" "$ref" "$expected" "$actual" "the image carries no released BUILD_VERSION, so its version cannot be checked against $tag"
+    return 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    FRESHNESS_ABORT_REASON="image_stale_version"
+    image_freshness_event "version_mismatch" "$ref" "$expected" "$actual" "the registry served an image built as another version for $tag (stale-but-signed)"
+    return 1
+  fi
+  FRESHNESS_ABORT_REASON=""
+  logger -t "$LOG_TAG" "IMAGE_FRESHNESS: ok ref=$ref expected=$expected actual=$actual"
+  return 0
 }
 
 # _pull_result_is_auth_denied <stderr-content>: the SINGLE source of truth for
@@ -3258,6 +3354,17 @@ case "$COMPONENT" in
     elif ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
       logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
       final_write_state 1 "cosign_verify_failed"
+      exit 1
+    fi
+
+    # #6428: pre-swap freshness — the image about to run must have been BUILT as the requested
+    # version. Runs on every VERIFIED_REF arm (the verified digest, the WARN-mode tag fallback, and
+    # the local-cache rescue) and
+    # before the plugin seed, the canary and the swap, so a stale-but-signed image never serves.
+    # Fails closed; the OLD container stays live (downtime-safe, like the ENFORCE abort above).
+    if ! verify_image_freshness "$VERIFIED_REF" "$TAG"; then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: image freshness check refused $VERIFIED_REF for $TAG ($FRESHNESS_ABORT_REASON) — keeping previous version"
+      final_write_state 1 "$FRESHNESS_ABORT_REASON"
       exit 1
     fi
 
