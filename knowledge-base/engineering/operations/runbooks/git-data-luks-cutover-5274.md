@@ -361,10 +361,11 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       head descends from the proof-half merge, that merge's deploy arm ended `DEPLOY=success`
       (`deploy-arm.sh find <full merge sha>`, then the arm run's `updatedAt`) before the run's
       `cutover` **job** started (`gh run view <id> --json jobs`), and no `web-platform-release.yml`
-      run overlapped the job
-      (`gh run list --workflow web-platform-release.yml -L 40 --json databaseId,createdAt,updatedAt,status`
-      against the job's `startedAt`/`completedAt`; a queued or in-progress release counts as
-      overlapping). The wait is about when the job ran, not when it was dispatched (CTO ruling
+      deploy arm overlapped the job
+      (`gh run list --workflow web-platform-release.yml --event workflow_run -L 40 --json databaseId,createdAt,updatedAt,status`
+      against the job's `startedAt`/`completedAt`; a queued or in-progress deploy arm counts as
+      overlapping). Only the deploy arm (`workflow_run`) redeploys the host; the push arm only
+      builds, so it cannot move the host under the job. The wait is about when the job ran, not when it was dispatched (CTO ruling
       2026-09-28; first used by #5914 issuecomment-5865758722). The reuse holds only while
       `GIT_DATA_STORE_ENABLED` has never been on, which (c) re-reads. No per-id erasure
       trigger exists today, and none is needed before the first flag flip: the store cannot hold a
