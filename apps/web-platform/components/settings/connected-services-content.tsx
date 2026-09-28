@@ -238,9 +238,12 @@ export function ConnectedServicesContent({ initialServices }: Props) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider }),
     });
-    if (res.ok) {
-      setServices((prev) => prev.filter((s) => s.provider !== provider));
+    if (!res.ok) {
+      // #9053: non-OK used to resolve silently — the row stayed connected-
+      // looking with zero signal. Throw so the card's removeError surfaces it.
+      throw new Error(`remove failed (${res.status})`);
     }
+    setServices((prev) => prev.filter((s) => s.provider !== provider));
   };
 
   // Group providers by category

@@ -49,6 +49,29 @@ describe("ConnectedServicesContent — remove failure surface (#9053)", () => {
     });
   });
 
+  it("a non-OK DELETE releases the button and renders a role=alert error", async () => {
+    // The common failure shape — parent throws on !res.ok post-#9053.
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ConnectedServicesContent
+        initialServices={[
+          { provider: "anthropic", is_valid: true, validated_at: "2026-01-01T00:00:00Z", updated_at: null },
+        ]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/couldn't remove/i);
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByRole("button", { name: /^remove$/i })).toBeEnabled();
+    });
+  });
+
   it("a successful remove clears the card's connected state", async () => {
     fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
