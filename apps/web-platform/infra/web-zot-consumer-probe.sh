@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 set -u
+# Refuse to run under shell tracing while the pull credential is set: `set -x` would write the
+# Basic-auth token into the journal that Vector ships off-box (#7797).
+case "$-" in
+  *x*)
+    if [ -n "${ZOT_PULL_TOKEN:+x}${ZTOK:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 # --- #6438 §1: zot CONSUMER-perspective serviceability probe (the "L3" probe) -----------------
 # Runs ON the web host and verifies it can actually SERVE an image from the zot registry
 # (10.0.1.30:5000) over the private NIC — the gap L1/L2 (#6415/ADR-115) + #6540 (registry self-
@@ -116,7 +126,7 @@ if [ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ]; then
 else
   # NO -f (see header). -u presents Basic auth; -w captures the HTTP code; -m bounds it; a
   # transport failure (unreachable private net) yields the curl default 000.
-  CODE=$(curl -s -u "$ZUSER:$ZTOK" -o /dev/null -w '%{http_code}' -m 10 "http://${ENDPOINT}/v2/${REPO}/tags/list" 2>/dev/null || echo 000)
+  CODE=$(curl --disable --noproxy '*' -s -u "$ZUSER:$ZTOK" -o /dev/null -w '%{http_code}' -m 10 "http://${ENDPOINT}/v2/${REPO}/tags/list" 2>/dev/null || echo 000)
   [ -n "$CODE" ] || CODE=000
   # (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the fallback
   # above appends a second one and CODE is `000000`, which misses the `000)` arm below. Normalize

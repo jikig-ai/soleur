@@ -158,7 +158,7 @@ assert "(e) dead endpoint => exit 0" "[[ '$DEAD_EC' -eq 0 ]]"
 STRIP_U="$TMP/probe-no-u.sh"
 sed 's/ -u "$ZUSER:$ZTOK"//' "$SUT" > "$STRIP_U"
 assert "(b) the -u strip actually removed the auth flag from the probe curl" \
-  "grep -q 'curl -s -o /dev/null -w' '$STRIP_U' && ! grep -q 'curl -s -u' '$STRIP_U'"
+  "grep -q \" -s -o /dev/null -w\" '$STRIP_U' && ! grep -q ' -s -u ' '$STRIP_U'"
 run_probe "$STRIP_U" known/repo
 assert "(b) -u stripped => anonymous => 401 => NO ping" "[[ '$PINGED' == no ]]"
 assert "(b) -u stripped => exit 3 (HARD failure — proves -u is load-bearing)" "[[ '$EC' -eq 3 ]]"
@@ -168,9 +168,9 @@ assert "(b) -u stripped => reports the auth-broke hard failure" "grep -q 'HARD F
 # (curl prints '404' then exits non-zero => `|| echo 000` appends => CODE=404000), so the
 # clean 404 classification is destroyed (proves the ABSENCE of -f is load-bearing).
 FORCE_F="$TMP/probe-force-f.sh"
-sed 's/curl -s -u/curl -sf -u/' "$SUT" > "$FORCE_F"
+sed 's/ -s -u "/ -sf -u "/' "$SUT" > "$FORCE_F"
 assert "(c) the -f injection actually added -f to the probe curl" \
-  "grep -q 'curl -sf -u \"\$ZUSER:\$ZTOK\"' '$FORCE_F'"
+  "grep -q ' -sf -u \"\$ZUSER:\$ZTOK\"' '$FORCE_F'"
 run_probe "$FORCE_F" nonexistent/repo
 assert "(c) -f injected => the 404 classification is DESTROYED (no EMPTY/DETACHED verdict)" \
   "! grep -q 'EMPTY/DETACHED' <<<\"\$OUT\""
