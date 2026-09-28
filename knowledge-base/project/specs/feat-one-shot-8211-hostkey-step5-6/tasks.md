@@ -13,25 +13,30 @@ Plan: `knowledge-base/project/plans/2026-09-28-feat-git-data-delete-unpinned-fal
 
 - [ ] 1.1 `apps/web-platform/test/git-data-host-key-pin.test.ts`: absent pin + flag off throws; erasure
   returns `unconfigured` `pin_absent:` and never dials; reason word updated; startup event rows
-  (unarmed silent; each arming input alone emits one `pin_absent_at_startup`).
+  (unarmed silent; whitespace-only silent; each arming input alone emits exactly one
+  message-path `pin_absent_at_startup` with no leaked values); `beforeEach` stubs
+  `GIT_DATA_SSH_HOST=""`; AC3 asserts the flag state in the message and no pin report.
 - [ ] 1.2 `apps/web-platform/test/git-auth.test.ts`: the five `null` call sites pass a pinned key
-  (the fallback test is deleted); one runtime-guard case per helper (rejects with the guard's message,
-  `execFile` never called); delete the "TOFU literal exactly once" test.
+  (the fallback test is deleted); runtime-guard cases per helper for `null`, `undefined`, `123` and a
+  valid key with a trailing comment (exact guard text, `execFile` never called); delete the "TOFU
+  literal exactly once" test.
 - [ ] 1.3 `apps/web-platform/test/helpers/ssh-host-key-fixture.ts` and
   `apps/web-platform/test/git-data-replication.test.ts`: comment updates.
 - [ ] 1.4 `tests/scripts/test-no-tofu-ssh-mutation.sh`: retarget row 5 (non-allow-listed needle) and
-  row 5b (anchor on `git-data-ownership.test.sh`'s `UserKnownHostsFile` token); confirm row 2's needle.
+  row 5b (anchor on `git-data-ownership.test.sh`'s `UserKnownHostsFile` token; positional
+  precondition: same line count, one matching line, 3 matches on it); confirm row 2's needle.
 - [ ] 1.5 AC5b rows set all three arming inputs explicitly, overriding the file's `beforeEach`.
 
 ## Phase 2: GREEN (one commit)
 
 - [ ] 2.1 `apps/web-platform/server/git-auth.ts`: delete `TOFU_FALLBACK_OPTS`; `hostKeyPin: string`;
-  runtime guard in `gitDataHostKeyTrust`; comments.
+  runtime guard in `gitDataHostKeyTrust` using the exported `GIT_DATA_HOST_KEY_PIN_RE`; comments.
 - [ ] 2.2 `apps/web-platform/server/git-data-replication.ts`: `resolveGitDataHostKeyPin(): string`;
   delete `pinAbsentReported` and `pin_absent_store_disabled`; reason word `pin_absent`;
-  `provisionGitDataRepo` param type; `pin_absent_at_startup` boot event with an inline arming check.
-- [ ] 2.3 `apps/web-platform/server/git-data-client.ts`, `apps/web-platform/server/account-delete.ts`:
-  comment updates.
+  `provisionGitDataRepo` param type; export `GIT_DATA_HOST_KEY_PIN_RE`; `pin_absent_at_startup` boot
+  event (message path, inline arming check); move `pin_invalid_at_startup` to the message path.
+- [ ] 2.3 `apps/web-platform/server/git-data-client.ts`: comment update. `account-delete.ts`: comment
+  update, and move the erasure-outcome report to the message path (#8629; AC5c).
 - [ ] 2.4 `tests/scripts/test-no-tofu-ssh.sh`: delete the `git-auth.ts` allow-list line.
 - [ ] 2.5 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`; run the two vitest files, the two
   no-TOFU suites, and `git-data-flag-precheck.test.sh` unchanged (`76 passed`); AC7's grep prints `0`.
@@ -55,7 +60,8 @@ Plan: `knowledge-base/project/plans/2026-09-28-feat-git-data-delete-unpinned-fal
 
 - [ ] 4.1 Read G1 (newest member-authored step-5 record; 0 erasure events since it), G2 (expected
   fingerprint = Doppler `prd` pin fingerprint = newest startup line per expected host on the served
-  build), G3 (required checks on the head SHA); quote evidence in the PR body; `Closes #5914`.
+  build, plus the count-only shape check of the Doppler pin; no unresolved `erasure_outcome:unconfigured`
+  issue), G3 (required checks on the head SHA); quote evidence in the PR body; `Closes #5914`.
 - [ ] 4.2 At ship Phase 5.5, the CLO writes the re-attestation record under `knowledge-base/legal/audits/`.
 - [ ] 4.3 After merge (Monitor-polled): deploy arm `DEPLOY=success`, served `CONTAINS`, G2 read 3
   again, the three Sentry tag queries return 0; on failure republish and redeploy, never revert.

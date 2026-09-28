@@ -18,6 +18,42 @@ lane: cross-domain
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spec.md` exists for this
 branch; the one-shot pipeline entered planning directly.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28 (after a six-seat plan review and a strong-model consult)
+**Gates:** User-Brand Impact (4.6) pass; Observability (4.7) pass, with the suite-shape match argued
+down; PAT-shape (4.8) none; UI wireframe (4.9) and Downtime (4.55) not triggered; Encryption Posture
+(4.10) present; Guard Contract (4.11) `lint-guard-contract.py` green, 2 entries.
+**Agents used:** soleur:engineering:review:security-sentinel,
+soleur:engineering:review:user-impact-reviewer, soleur:engineering:review:test-design-reviewer,
+soleur:engineering:review:observability-coverage-reviewer, and a mechanical verify-negatives and
+citations pass (43 of about 45 checks confirmed, 0 contradictions). The fan-out was scoped to the
+reviewers relevant to a small security change on the Art. 17 path, not the full agent roster; the
+plan-review panel had already covered simplicity, conventions, architecture and flows.
+
+### Key improvements
+
+1. **Paging really reaches someone.** Open issue #8629: an Error-path `reportSilentFallback` loses its
+   `feature`/`op` tags to the pino mirror's pre-capture, so `art17_erasure_incomplete` cannot match
+   the erasure report today. The erasure report and both startup ops move to the message path
+   (AC5c), and G1 plus the post-merge reads require no unresolved `erasure_outcome:unconfigured`
+   issue, because the rule pages only on first-seen, reappeared or regression.
+2. **The runtime guard is as strict as the resolver** (it reuses the exported
+   `GIT_DATA_HOST_KEY_PIN_RE`), and its tests match the guard's exact text, so a `TypeError` cannot
+   pass for the guard.
+3. **Part A cannot leak ids.** The runbook's own step-3 block prints ids and must not be run as
+   written. The sweep uses the `.context` field path, runs with `jq` stderr suppressed, and uses a
+   positive control that exercises the tag query itself.
+4. **G1 and G2 read the invariant.** G1 re-sweeps from the record's own window end and matches the
+   author by login. G2 adds a count-only shape check of the Doppler pin against the app's pattern.
+5. **The records state the residuals.** These are: a Doppler `prd` writer swapping the pin, the
+   post-flip limit of "discharge as in step 5", and the Art. 12(3) clock on a refused erasure.
+
+### New considerations discovered
+
+- #8629 is a fleet-wide defect. This PR fixes only the emitters it relies on and comments on #8629.
+- The no-TOFU mutation harness runs in about 44 s (34 assertions), and the guard itself in 1.1 s.
+
 ## Overview
 
 This branch continues the #8211 git-data cutover along the runbook's **host-key pinning post-merge
@@ -237,13 +273,13 @@ references are to the runbook's step 5 text on `origin/main`.
 
 | Item | Source | Read (all GET / read-only) |
 |---|---|---|
-| 5.1 sweep | Sentry org `jikigai-eu` | Write the sweep as an **uncommitted** script in the session scratchpad that can print **only counts and Sentry issue ids**, and run it as `doppler run -p soleur -c prd -- bash <scratch>/sweep.sh` so the token never enters argv or the caller's shell (take the host `https://jikigai-eu.sentry.io` and the `SENTRY_ISSUE_RO_TOKEN` choice from `scripts/sentry-issue.sh`, whose header documents both). Issues: `GET /api/0/organizations/jikigai-eu/issues/?query=feature%3Aaccount-delete%20op%3Agit-data-bare-repo-erasure&start=2026-09-22T12:07:01Z&end=<now>`, capturing headers (`curl -D <file>`) and following `rel="next"` while `results="true"`. Events per issue: `GET …/issues/<id>/events/?full=true`, same pagination, filtered in `jq` to `dateCreated` inside the window. Run the positive control first; if the sweep returns 0 while the control returns rows, do **not** debug by printing events — add count-only diagnostics. |
-| 5.1 positive control | Sentry | The same token and host listing any issue in the org over the last 24 h returns ≥1 row, so a zero above is not a broken query (the 2026-09-25 sweep used this control). |
+| 5.1 sweep | Sentry org `jikigai-eu` | Write the sweep as an **uncommitted** script in the session scratchpad that can print **only counts and Sentry issue ids**, and run it as `doppler run -p soleur -c prd -- bash <scratch>/sweep.sh` so the token never enters argv or the caller's shell (take the host `https://jikigai-eu.sentry.io` and the `SENTRY_ISSUE_RO_TOKEN` choice from `scripts/sentry-issue.sh`, whose header documents both). Issues: `GET /api/0/organizations/jikigai-eu/issues/?query=feature%3Aaccount-delete%20op%3Agit-data-bare-repo-erasure&start=2026-09-22T12:07:01Z&end=<now>`, capturing headers (`curl -D <file>`) and following `rel="next"` while `results="true"`. Events per issue: `GET …/issues/<id>/events/?full=true`, same pagination, filtered in `jq` to `dateCreated` inside the window. Run the positive control first; if the sweep returns 0 while the control returns rows, do **not** debug by printing events — add count-only diagnostics. **Never run the runbook's "Store not empty" step-3 block as written**: its final `jq -r … @tsv` prints one id per line. The script runs with `set +x`, sends `jq`/`awk` stderr to `/dev/null` (a `jq` error echoes the value it failed on) and checks exit codes through `PIPESTATUS`; response bodies are streamed, and the only file written is the `-D` header file. |
+| 5.1 positive control | Sentry | Two controls. (1) The same token and host list at least one org issue over the last 24 h (the token and host work). (2) The same two tag keys (`feature:account-delete op:git-data-bare-repo-erasure`) over `statsPeriod=90d`, the tag query itself, which the 2026-09-25 sweep cross-checked. When any events exist, at least one must resolve a repository id (as a count), which proves the field path. |
 | (a) | GitHub Actions | `gh run view 36339208990 --json headBranch,headSha,event,conclusion`; `gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations`; `gh run view 36339208990 --log \| grep -E 'flag=\|TOFU_ARM'`. |
 | (a) eligibility of the existing run | GitHub | The runbook's reason for waiting is "keeps the dry run off a host mid-redeploy", which is about when the **job ran** (21:01:53Z–21:02:28Z per `gh run view 36339208990 --json jobs`), not when it was dispatched. Three reads: (1) `git merge-base --is-ancestor 59745cf049ab24279e1fc26fcc0a579705276972 ab4a07e5e0ab26a84a4b08b61cbe02a99e410acb` succeeds (the proof-half code ran; checked 2026-09-28); (2) `bash plugins/soleur/scripts/deploy-arm.sh find 59745cf049ab24279e1fc26fcc0a579705276972` (full 40-hex SHA — a short one matches nothing, #8135) prints `DEPLOY=success`, and that `ARM=<id>` run's `updatedAt` (`gh run view <id> --json updatedAt`) precedes the job's `startedAt`; (3) list `web-platform-release.yml` runs and confirm none ran across 21:01:53Z–21:02:28Z (`gh run list --workflow web-platform-release.yml -L 40 --json databaseId,createdAt,updatedAt,conclusion`). If a deploy did overlap, record why it cannot yield a false `clear`: the probes read git-data host state through the web-1 jump, so a web-1 redeploy can only fail the run, and (c) is read after the run. `deploy-arm.sh served` answers what production serves **now** and is not evidence about 2026-09-27; it is not used here. |
 | (b) | Better Stack (git-data source `t520508_soleur_git_data_prd_logs`), Hetzner API, GitHub | The runbook's `betterstack-query.sh` SQL with anchor `A` from replace run 36118115758's `boot-trail anchor` line (1790328235, per #8211 issuecomment-5860128868); `GET /v1/servers?name=soleur-git-data` → `.servers[0].created`; `gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch --created '>=2026-09-25T09:23:01Z'` then per run the job-name filter. |
 | (c) | Doppler, Hetzner | `doppler configs logs -p soleur -c prd --number 100 --page N` (flags verified with `doppler configs logs --help` on 2026-09-28) until an entry older than the older volume's `created`; open each diff with `doppler configs logs get`. `GET /v1/volumes?name=soleur-git-data-store` and `?name=soleur-git-data-luks-store` → `.volumes[0].created`. |
-| (d) | Sentry (events from 5.1) | `jq` over the events emitting `<extra.gitDataRepoId>\t<class>` straight into `awk`, which aggregates per id to its worst class and prints **only** the counts. An event with no `gitDataRepoId` is the `deleteAccount` outer-catch arm (`removeGitDataRepo threw`), which only receives throws raised before any dial: the pin resolver's errors are caught inside `removeGitDataRepo`, so the outer catch sees exactly `git-data: refusing unsafe workspace_id` (`assertSafeWorkspaceId`) and `GIT_DATA_SSH_HOST is unset in production` (`resolveGitDataSshHost`). Match those two message prefixes as the `jq` set (never print the message: the first embeds the id). Per the runbook's (d) such events are *host not reached*; record them as a fourth count, "no repository id, host not reached", discharged on the empty-store proof plus that class (CLO, 2026-09-28). An id-less event matching neither prefix is unrecognised and takes the "If an item cannot be read" path. |
+| (d) | Sentry (events from 5.1) | `jq` over the events emitting `<id>\t<class>`, where the id path is the runbook's `.context.gitDataRepoId // .extra.gitDataRepoId` (the events API returns extra data under `.context`), straight into `awk`, which aggregates per id to its worst class and prints **only** the counts. An event with no `gitDataRepoId` is the `deleteAccount` outer-catch arm (`removeGitDataRepo threw`), which only receives throws raised before any dial: the pin resolver's errors are caught inside `removeGitDataRepo`, so the outer catch sees exactly `git-data: refusing unsafe workspace_id` (`assertSafeWorkspaceId`) and `GIT_DATA_SSH_HOST is unset in production` (`resolveGitDataSshHost`). Match those two message prefixes as the `jq` set (never print the message: the first embeds the id). Per the runbook's (d) such events are *host not reached*; record them as a fourth count, "no repository id, host not reached", discharged on the empty-store proof plus that class (CLO, 2026-09-28). An id-less event matching neither prefix is unrecognised and takes the "If an item cannot be read" path. |
 
 The evidence in hand suggests the likely outcome: the 2026-09-25 sweep found 0 issues for
 `op:git-data-bare-repo-erasure` over 90 days, and (b) was read on 2026-09-27 as
@@ -286,12 +322,16 @@ prediction, not the record; the record reads everything again.
   `gh api --paginate repos/jikig-ai/soleur/issues/5914/comments` and keep only those whose body
   **contains** `git-data store Art. 17 discharge (#5914, host-key step 5)` (the runbook's template
   sits in a fenced block, so a pasted record starts with the fence, not the title) **and** whose
-  author is a
-  repository member (`.author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`; this is a public
-  repo). The **newest** such record governs: parse its `proof run:` id and its `outcome:` line.
-  Then re-run the 5.1 sweep, counts only, from that record's `created_at` to now: it must be 0. Any
+  author is an expected login: the repository owner's account or the session's own `gh api user`
+  login (not `author_association`, which reads `NONE` for a GitHub App bot; this is a public repo).
+  The **newest** such record governs: parse its `proof run:` id, its `outcome:` line and the end
+  time on its `Sentry sweep: … to <time>` line. Then re-run the 5.1 sweep, counts only, from **that
+  end time** (the runbook's window ends at the second read, before posting) to now: it must be 0. Any
   event after the record is a new pending erasure under the runbook's "Requests after the window",
-  and needs a new step-5 record before this merge. If the governing record's `outcome:` reads `NOT DISCHARGED` for some
+  and needs a new step-5 record before this merge. Finally, the Sentry issues list for
+  `feature:account-delete op:git-data-bare-repo-erasure erasure_outcome:unconfigured
+  is:unresolved` is empty, so the first post-merge refusal would page (the rule fires on
+  first-seen, reappeared or regression only). If the governing record's `outcome:` reads `NOT DISCHARGED` for some
   ids, step 6 may still merge (CLO, 2026-09-28: deleting the arm destroys no evidence, leaves the
   reads-only retry untouched, and with the pin present strictly improves the safeguard) provided the
   `clo-attestation` issue it names is open with the earliest Art. 12(3) deadline in its title, and
@@ -309,7 +349,12 @@ prediction, not the record; the record reads everything again.
   2. **The pin the merged container will load** — the fingerprint of Doppler `prd`'s
      `GIT_DATA_SSH_HOST_KEY` (a public key), computed without echoing it:
      `doppler secrets get GIT_DATA_SSH_HOST_KEY -p soleur -c prd --plain | ssh-keygen -lf - | awk '{print $2}'`
-     (the runbook's own read). It must equal (1).
+     (the runbook's own read). It must equal (1). `ssh-keygen -lf -` also accepts a trailing
+     comment, key options or a private key, so add a count-only shape check against the app's own
+     pattern: `doppler secrets get GIT_DATA_SSH_HOST_KEY -p soleur -c prd --plain | grep -cE
+     '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$'` prints `1`. (1) and (2) share
+     Terraform as their source; the evidence that the **host** presents this key is the proof run's
+     pinned `role=git-data-auth verdict=ok`.
   3. **The pin production runs** — anchor on the build production serves:
      `bash plugins/soleur/scripts/deploy-arm.sh served "$(git rev-parse origin/main)"` prints
      `BUILD_SHA=<sha>`; `deploy-arm.sh find <that full sha>` prints `ARM=<id> … DEPLOY=success`
@@ -383,7 +428,9 @@ prediction, not the record; the record reads everything again.
      StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null …` line) carries 2 hits. The `sed`
      anchors on that line's `UserKnownHostsFile=/dev/null` token (spelled by concatenation, as the
      harness does) and inserts a third literal there; the needle becomes `expects 2 hit(s) and has 3`.
-     Its `cmp -s` precondition moves with it.
+     Its precondition becomes positional, not just "the file changed": the line count is unchanged,
+     exactly one line of `git-data-ownership.test.sh` matches the guard's patterns, and `grep -o`
+     finds 3 matches on it (a literal landing on a new line would leave per-line counting at 3 too).
    - **Row 2** (empty enumeration) still needs a `expects 1 hit(s) and has 0` line; after the edit,
      `infra-config-gate.test.sh|1|…` supplies it. Keep the needle; confirm it still fires.
    - Update the header matrix table text for rows 5 and 5b.
@@ -402,8 +449,11 @@ leaves a commit lefthook and CI reject and invites "temporarily relax the guard"
    - Delete `TOFU_FALLBACK_OPTS` and its comment block ("The ONE unpinned host-key option in this
      file…").
    - `gitDataHostKeyTrust(hostKeyPin: string)`: first statement is a runtime guard — `if (typeof
-     hostKeyPin !== "string" || hostKeyPin.trim() === "" || /[\r\n]/.test(hostKeyPin)) throw new
+     hostKeyPin !== "string" || !GIT_DATA_HOST_KEY_PIN_RE.test(hostKeyPin)) throw new
      Error("git-data: refusing to dial without a valid host-key pin …")` — then the pinned return.
+     Export `GIT_DATA_HOST_KEY_PIN_RE` from `git-data-replication.ts` (it already carries a
+     `# twin:` note; add `git-auth.ts` to it) so the guard is exactly as strict as the resolver, not
+     just "non-empty, single line".
      It runs before any temp file is written (it already sits above the `try`).
    - `gitWithPrivateKeyAuth(…, hostKeyPin: string, …)` and `sshWithPrivateKeyAuth(…, hostKeyPin:
      string, …)`; rewrite their JSDoc (`@param hostKeyPin` no longer mentions `null`; the "A `null`
@@ -419,9 +469,10 @@ leaves a commit lefthook and CI reject and invites "temporarily relax the guard"
    - `provisionGitDataRepo(workspaceId, preResolvedHostKeyPin?: string)`.
    - `logGitDataHostKeyPinAtStartup`: after the log line, when `s.state === "absent"` and git-data is
      armed (any of `GIT_REMOVE_SSH_PRIVATE_KEY`, `GIT_PROVISION_SSH_PRIVATE_KEY`, `GIT_DATA_SSH_HOST`
-     non-empty after trim), `reportSilentFallback(new Error("git-data host-key pin absent at
-     startup"), { feature: "git_data_host_key_pin", op: "pin_absent_at_startup" })`. Same shape as the
-     existing `pin_invalid_at_startup` branch; still never throws. The three-input check is written
+     non-empty after trim), `reportSilentFallback(null, { feature: "git_data_host_key_pin", op:
+     "pin_absent_at_startup", message: "git-data host-key pin absent at startup" })` — the **message
+     path**, because an Error-path report loses its tags to the pino mirror's pre-capture (#8629).
+     Move the existing `pin_invalid_at_startup` report to the same path. Still never throws. The three-input check is written
      inline (plan review cut a shared helper: `removeGitDataRepo`'s `remove_key_absent` test is
      "remove key absent AND provision key or host set", a different predicate).
    - `removeGitDataRepo`: `let hostKeyPin: string`; reason word `inspect… === "invalid" ? "pin_invalid"
@@ -434,7 +485,14 @@ leaves a commit lefthook and CI reject and invites "temporarily relax the guard"
 3. `apps/web-platform/server/git-data-client.ts` — update the guard comment ("an absent or malformed
    pin throws here, whatever the flag").
 4. `apps/web-platform/server/account-delete.ts` — update the comment block: `pin_invalid |
-   pin_absent — GIT_DATA_SSH_HOST_KEY is malformed or unset (#7226, #5914)`.
+   pin_absent — GIT_DATA_SSH_HOST_KEY is malformed or unset (#7226, #5914)`; and move the erasure
+   report (today `reportSilentFallback(new Error(...), ...)` with the message "git-data erasure
+   STATUS") to the message path (`reportSilentFallback(null, { ..., message })`, same message text).
+   This PR makes `unconfigured` `pin_absent:` the outcome of every deletion when the pin is missing, and
+   the only page for it is `art17_erasure_incomplete`, which filters on `feature`/`op` tags that the
+   Error path loses (#8629, deepen-plan observability review). The fleet-wide fix stays #8629's;
+   comment there that this emitter moved. The outer `catch (err)` report keeps the Error path (a real
+   thrown error), and is noted on #8629 as still affected.
 5. `tests/scripts/test-no-tofu-ssh.sh` — delete the ALLOWLIST line
    `apps/web-platform/server/git-auth.ts|1|TOFU_FALLBACK_OPTS: …`. Nothing else in the guard changes.
 6. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes; every TS2345 it reports on a
@@ -477,7 +535,9 @@ leaves a commit lefthook and CI reject and invites "temporarily relax the guard"
    before this PR read `pin_absent_store_enabled:`; keep that word in the row as history). The row's
    existing remedy ("fix the pin …, then discharge the ids as in host-key step 5") is the sweep path
    that keeps the login page's "will be completed" promise after the pin is restored (CPO C3); make
-   the row say so for `pin_absent:` explicitly, and state its limit: "discharge as in step 5" works
+   the row say so for `pin_absent:` explicitly; count the Art. 12(3) one-month deadline from the first
+   `pin_absent:` event and route such events to a `clo-attestation` issue with that deadline in its
+   title; and state its limit: "discharge as in step 5" works
    only while `GIT_DATA_STORE_ENABLED` has never been on; after the first flip it depends on #8211's
    per-id re-erasure path.
 2. **ADR-237** — append `## Addendum — PR #9096 (#5914): the transitional app arm is deleted`:
@@ -485,7 +545,9 @@ leaves a commit lefthook and CI reject and invites "temporarily relax the guard"
    semantics (absent pin → `unconfigured` `pin_absent`, whatever the flag), the new proactive signal
    (`pin_absent_at_startup` when armed, replacing the deleted `pin_absent_store_disabled`; paging for
    it is #8572's), and that a rotation's stale-pin window is unchanged (`host_key_mismatch` until the
-   pin-redeploy follower loads the new pin). Earlier text is not edited.
+   pin-redeploy follower loads the new pin), and the residual that remains: a writer of Doppler `prd`
+   who swaps `GIT_DATA_SSH_HOST_KEY` and holds a private-network position is pinned by the app, and
+   only `scheduled-terraform-drift.yml` sees it, after the fact. Earlier text is not edited.
 2b. **ADR-220** — one line appended to its amendment log (append-only), keyed by PR #9096: the
    flag-flip precondition "#5914 closed" is met by this PR, and the app's pin resolver now refuses an
    absent pin whatever the flag. No earlier line is edited.
@@ -510,7 +572,7 @@ leaves a commit lefthook and CI reject and invites "temporarily relax the guard"
    (GIT_DATA_SSH_HOST_KEY), pinned on every dial; an absent or malformed pin refuses. Unpinned
    fallback arm deleted by PR #9096, #5914; ADR-237 Addendum" (the dated pointer follows the
    ledger's existing "superseded on web-1 by …" prose); rewrite `does_not_defend` to exactly the
-   three clauses in this plan's Encryption Posture block. `enforced_at` stays. No schema change and
+   four clauses in this plan's Encryption Posture block. `enforced_at` stays. No schema change and
    no `supersedes_note` field (CLO, 2026-09-28: the flip, the ADR-237 addendum and a register marker
    naming this row's flip together satisfy the counsel review's "rewritten in place with Superseded
    markers"). Run `python3 scripts/lint-encryption-posture.py` and
@@ -546,7 +608,8 @@ leaves a commit lefthook and CI reject and invites "temporarily relax the guard"
   newest line `present` with the expected fingerprint); Sentry, via the searchable tags only (`extra`
   is not indexed): `feature:account-delete op:git-data-bare-repo-erasure erasure_outcome:unconfigured`
   and `feature:git_data_host_key_pin op:pin_absent_at_startup` / `op:pin_invalid_at_startup` since
-  the deploy, each 0 (open any hit with `scripts/sentry-issue.sh`). The startup line is the primary
+  the deploy, each 0, and no **unresolved** issue for the first query (open any hit with
+  `scripts/sentry-issue.sh`). The startup line is the primary
   evidence; a zero erasure count may only mean nobody deleted an account.
 - **If a post-merge read fails** (`absent`/`invalid`, a missing host, or a pin-fault event): do
   **not** revert — a revert restores the unpinned arm. Republish the pin (dispatch
@@ -566,7 +629,8 @@ leaves a commit lefthook and CI reject and invites "temporarily relax the guard"
 - `apps/web-platform/server/git-auth.ts`
 - `apps/web-platform/server/git-data-replication.ts`
 - `apps/web-platform/server/git-data-client.ts` (comment only)
-- `apps/web-platform/server/account-delete.ts` (comment only)
+- `apps/web-platform/server/account-delete.ts` (comment; erasure report moved to the message path)
+- `apps/web-platform/test/account-delete.test.ts` (the report's first argument is `null` and its tags are intact)
 - `apps/web-platform/test/git-auth.test.ts`
 - `apps/web-platform/test/git-data-host-key-pin.test.ts`
 - `apps/web-platform/test/git-data-replication.test.ts` (comment only)
@@ -600,7 +664,22 @@ Files to Edit and by basename (`git-auth.ts`, `git-data-replication.ts`, `test-n
   be completed", because `removeGitDataRepo` returns `unconfigured` `pin_absent:` for every
   deletion. That happens if production ever runs this code without a loaded pin (G2 guards the
   merge; a later pin loss is drift). Today the store holds no repository, so no data is left behind,
-  but the notice and an ops page fire per deletion.
+  but every such deleted user sees the notice. **Paging is per Sentry issue, not per deletion**
+  (deepen-plan, user-impact review): `art17_erasure_incomplete` fires on `first_seen`, `reappeared`
+  or `regression`, and every refusal shares the message `git-data erasure unconfigured`, so only the
+  first refusal pages, and none does while that issue sits unresolved. G1 and the post-merge reads
+  therefore also require **no unresolved** Sentry issue for
+  `feature:account-delete op:git-data-bare-repo-erasure erasure_outcome:unconfigured`, so the next
+  refusal pages.
+- **After the first `GIT_DATA_STORE_ENABLED` flip** a `pin_absent` refusal leaves a real repository on
+  the host, and "discharge as in step 5" no longer works (emptiness stops being evidence); re-erasure
+  then depends on #8211's per-id path. This is a flag-flip limit, already one of #8211's own
+  preconditions ("the flip must not happen until a per-id re-erasure path exists"); the runbook's
+  pin-fault row states it.
+- **Art. 12(3) clock on a refused erasure:** before this PR an absent pin still erased (unpinned);
+  now the erasure waits for the pin to be restored and the sweep to run. The runbook's pin-fault row
+  counts the one-month deadline from the first `pin_absent:` event and routes any such event to a
+  `clo-attestation` issue carrying that deadline in its title, as step 5 does for `NOT DISCHARGED`.
 - **If this leaks, the user's data is exposed via:** nothing new. The change removes an exposure: an
   impersonator of `10.0.1.20` on the private network could previously be accepted on first contact
   during an Art. 17 erasure call whenever the pin was absent and the flag off. Remaining vectors are
@@ -647,7 +726,7 @@ logs:
 
 discoverability_test:
   command: bash tests/scripts/test-no-tofu-ssh.sh
-  expected_output: "3 file(s) with hits"
+  expected_output: "all allow-listed at exact counts"
 ```
 
 `discoverability_test.command` note: Guard 1 is the observable property this PR establishes at the
@@ -658,6 +737,11 @@ Check 10's 15 s cap; no credentials, no network, no ssh, and no shell-active cha
 command. The runtime signal (the startup line and Sentry ops) needs prd credentials and is read by
 G2 and the post-merge reads instead.
 
+Deepen-plan Phase 4.7 note: the suite-shape detector matches this command (`tests/`), a deliberate
+over-inclusive proxy. Argued down: `test-no-tofu-ssh.sh` is a single guard scan (one `git ls-files`
+plus six `git grep` arms), not a suite; measured 1.1 s, well inside the 15 s cap. Its mutation
+harness, which is suite-shaped, is not the probe. `probe-verb-gate.sh` accepts the verb (rc 0).
+
 ## Encryption Posture
 
 ```yaml
@@ -667,7 +751,7 @@ in_transit:
     enforced_at: apps/web-platform/server/git-auth.ts gitDataHostKeyTrust (gitWithPrivateKeyAuth, sshWithPrivateKeyAuth); apps/web-platform/server/git-data-replication.ts resolveGitDataHostKeyPin
     tls: SSH-2 over the Hetzner private network; the git-data host is authenticated by its Terraform-minted ED25519 host key (GIT_DATA_SSH_HOST_KEY) on every dial, StrictHostKeyChecking=yes under the alias git-data with -F /dev/null and GlobalKnownHostsFile=/dev/null
     cert_verification: on
-    does_not_defend: a reader of main-root Terraform state (the host private key lives there and in user_data) who also holds a private-network position (#8209); a rooted web-1, which holds the transport, provision and remove keys; a rooted git-data answering falsely under its own key
+    does_not_defend: a reader of main-root Terraform state (the host private key lives there and in user_data) who also holds a private-network position (#8209); a writer of Doppler prd who replaces GIT_DATA_SSH_HOST_KEY with their own key and holds a private-network position (the app then pins the impersonator; detected only after the fact by scheduled-terraform-drift.yml); a rooted web-1, which holds the transport, provision and remove keys; a rooted git-data answering falsely under its own key
     disclosed_as: not-publicly-claimed
 # exception: removed — cert_verification is on after this PR
 ```
@@ -766,6 +850,9 @@ one chokepoint `gitDataHostKeyTrust` before their `try`; four resolution sites f
 | 4 | Reason word reverted to `pin_absent_store_enabled` | `/^pin_absent: /` assertions RED |
 | 5 | The startup arming predicate reads only `GIT_REMOVE_SSH_PRIVATE_KEY` (the second and third inputs dropped) | the provision-key-only and host-only AC5b rows RED |
 | 6 | The startup event fires whenever the pin is absent (arming check removed) | the unarmed AC5b row RED |
+| 7b | The runtime guard reverted to CR/LF-and-empty only | a new AC5 case with a valid key plus a trailing comment RED |
+| 7 | The runtime guard's `typeof` clause dropped (a `null` then dies in `.trim()` with a `TypeError`) | AC5 RED, because it matches the guard's exact text |
+| 8 | A startup op or the erasure report reverts to the Error path (`new Error(…)` as first argument) | AC5b / AC5c RED |
 
 ## Acceptance Criteria
 
@@ -776,23 +863,40 @@ one chokepoint `gitDataHostKeyTrust` before their `try`; four resolution sites f
   `resolveGitDataHostKeyPin` returns `string`; `tsc --noEmit` passes for `apps/web-platform`.
 - [ ] **AC3** With `GIT_DATA_SSH_HOST_KEY` unset and the flag off, `resolveGitDataHostKeyPin()` throws,
   and `removeGitDataRepo` (remove key set) returns `unconfigured` with `detail` matching the regex
-  `/^pin_absent: /` and never calls the ssh transport (vitest, `git-data-host-key-pin.test.ts`).
+  `/^pin_absent: /` and never calls the ssh transport, even when run twice, with `pinReports()` still
+  empty afterwards; the resolver's message names the flag state (`GIT_DATA_STORE_ENABLED=unset/false`
+  here, `=true` in the enabled twin) (vitest, `git-data-host-key-pin.test.ts`).
 - [ ] **AC4** No code path emits `op: "pin_absent_store_disabled"`:
   `rg -n "pin_absent_store_disabled" apps/web-platform/server` prints nothing.
-- [ ] **AC5** Each helper, called with `null as unknown as string`, rejects with the guard's message
-  and the `execFile` mock is never called (vitest, `git-auth.test.ts`); the five former `null` call
-  sites pass a `makeEd25519Pin()` pin and keep their original assertions.
-- [ ] **AC5b** At startup with no pin, each row setting all three arming inputs explicitly
-  (`GIT_REMOVE_SSH_PRIVATE_KEY`, `GIT_PROVISION_SSH_PRIVATE_KEY`, `GIT_DATA_SSH_HOST`, the unused ones
-  to `""`, overriding the file's `beforeEach`): none set → no `git_data_host_key_pin` event; each
-  one set alone → exactly one `op=pin_absent_at_startup` event carrying no key material
-  (vitest, `git-data-host-key-pin.test.ts`). The existing "absent: `git_data_pin=absent` at warn" case
-  is armed by that `beforeEach` and now also emits the event; its comment says so.
+- [ ] **AC5** Each helper, called with `null`, `undefined` and `123` (each `as unknown as string`)
+  and with a valid pin followed by a trailing comment (which the resolver's pattern rejects),
+  rejects with exactly the new guard text `/refusing to dial without a valid host-key pin/` — not the
+  looser existing `/host-key pin/i`, which a `TypeError` from `null.trim()` would also satisfy — and
+  the `execFile` mock is never called (vitest, `git-auth.test.ts`). The five former `null` call sites
+  pass a `makeEd25519Pin()` pin and keep their original assertions.
+- [ ] **AC5b** The file's `beforeEach` also stubs `GIT_DATA_SSH_HOST` to `""` (today it leaks the
+  shell's value). At startup with no pin, each row sets all three arming inputs explicitly with
+  distinctive synthetic values (unused ones `""`): none set, with `GIT_TRANSPORT_SSH_PRIVATE_KEY` still
+  set → no `git_data_host_key_pin` event; all three whitespace-only → no event; each one set alone →
+  exactly one report whose options `toEqual({ feature: "git_data_host_key_pin", op:
+  "pin_absent_at_startup", message: "git-data host-key pin absent at startup" })` on the **message
+  path** (`err` is `null`), and `JSON.stringify(reportSilentFallback.mock.calls)` contains none of the
+  synthetic values (vitest, `git-data-host-key-pin.test.ts`). The existing "absent: `git_data_pin=absent`
+  at warn" case is armed by that `beforeEach` and now also emits the event; its comment says so.
+- [ ] **AC5c** The Art. 17 erasure report in `account-delete.ts` and both startup ops
+  (`pin_absent_at_startup`, `pin_invalid_at_startup`) use the message path
+  (`reportSilentFallback(null, { …, message })`), so their `feature`/`op`/`erasure_outcome` tags reach
+  Sentry (#8629: an Error-path report is pre-captured by the pino mirror with only
+  `feature=pino-mirror`, and the tagged capture is dropped). Tests assert the reporter received
+  `null` as its first argument with the tags. The parameterised account-delete test that asserts
+  `toHaveBeenCalledWith(expect.any(Error), …erasure_outcome…)` changes its first matcher to `null` and
+  adds `message: "git-data erasure <status>"`; the outer-catch test keeps `expect.any(Error)`.
 - [ ] **AC6** `tests/scripts/test-no-tofu-ssh.sh` passes with no `git-auth.ts` allow-list entry, and
   `tests/scripts/test-no-tofu-ssh-mutation.sh` passes with rows 5 and 5b retargeted (both RED for the
   stated reason).
 - [ ] **AC7** The flag precheck's own `TOFU_ARM` predicate reads absent on the real file:
-  `grep -ciF 'StrictHostKeyChecking=accept-new' apps/web-platform/server/git-auth.ts` prints `0`, and
+  `grep -ciF 'StrictHostKeyChecking=accept-new' apps/web-platform/server/git-auth.ts || true` prints
+  `0` (a copy of the probe's `grep -qiF` line, not a run of the probe; `grep -c` exits 1 on zero), and
   `apps/web-platform/infra/git-data-flag-precheck.test.sh` still passes unchanged (`76 passed`).
 - [ ] **AC8** In `scripts/encryption-posture-ledger.json`, the row selected by name —
   `jq '.connections[] | select(.connection | startswith("web-1 app container -> git-data sshd"))'` —
@@ -836,10 +940,11 @@ one chokepoint `gitDataHostKeyTrust` before their `try`; four resolution sites f
 - Given a valid pin, when either helper runs, then its ssh options carry `StrictHostKeyChecking=yes`,
   `HostKeyAlias=git-data`, `-F /dev/null`, `GlobalKnownHostsFile=/dev/null`, and the per-call
   known_hosts holds exactly `git-data <pin>`.
-- Given a pin of `null`/`""`/whitespace passed by an untyped caller, when a helper runs, then it
-  throws before writing any temp file.
-- Given the real tree, when the precheck script runs with `GIT_AUTH_TS_PATH` at the real `git-auth.ts`,
-  then it prints `TOFU_ARM absent` and no warning.
+- Given a pin of `null`/`undefined`/`123` passed by an untyped caller, when a helper runs, then it
+  throws the guard's refusal before any exec (the guard sits above the temp-file writes by code
+  order; the test asserts only "before any exec").
+- Given the real tree, when the precheck's `TOFU_ARM` predicate is applied to the real `git-auth.ts`,
+  then it matches nothing (AC7).
 - Given a re-introduced accept-new literal in `git-auth.ts`, when the no-TOFU guard runs, then it
   fails naming that file.
 - Regression: given store enabled and a valid pin, replication, provision and fetch still pass the pin
