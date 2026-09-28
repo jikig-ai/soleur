@@ -27,6 +27,7 @@ corrections_to_parent_review:
 attests:
   - "knowledge-base/legal/article-30-register.md: the five 2026-09-28 markers named in C1, and nothing else in the register"
   - "scripts/encryption-posture-ledger.json: the `web-1 app container -> git-data sshd` row as changed by 2bd35fdaff (cert_verification on, exception removed, tls pointer to PR #9096 and the ADR-237 addendum, does_not_defend with four clauses)"
+  - "knowledge-base/legal/article-30-register.md, under ## Addendum (2026-09-28, #8572): the three #8572-conditioned PA-36 (g) markers and the `Condition met 2026-09-28 (#8572)` marker after each."
 does_not_attest:
   - "The host-key step 5 Art. 17 discharge record (#5914 issuecomment-5865758722). It is a separate merge precondition (plan gate G1), read by the lead with its re-sweep from 2026-09-28T07:51:53Z. This record neither relies on nor certifies it, and no register marker claims that step 5 discharged anything."
   - "ADR-237's addendum, ADR-220's amendment entry, the runbook, the C4 model and the plan. These are engineering records, relied on for the sequence of events."
@@ -35,6 +36,7 @@ art_33_triggered: false
 art_34_triggered: false
 re_evaluation_triggers: "(1) Any proposal to set GIT_DATA_STORE_ENABLED. Parent trigger (3) is now half met (pin present, arm deleted on merge), but #8211's per-id re-erasure path and #8572's paging still stand, and a flip before both is a hard block. (2) Any `pin_absent:` or `pin_invalid:` erasure outcome, or a `pin_absent_at_startup` event, in prd. The Art. 12(3) clock runs from the first such event, and each one goes to a clo-attestation issue with that deadline in its title (runbook pin-fault row). (3) #8629 is fixed fleet-wide. Re-read the 'stays on the error path' clauses of markers 2 and 5 and O2. (4) O1's follow-up lands. (5) PR #9096 closes unmerged: trigger (2) of the parent review re-opens. (6) Inherited unchanged: parent triggers (4) and (5), and the standing external-counsel triggers (first arms-length data subject, EEA-out transfer, regulated-industry data subject)."
 addendum_2026_09_28_8572: "Fires on the merge of the #8572 PR with a green apply-sentry-infra.yml run and a green web-platform-release.yml run after it, or not at all: supersedes the D4 paging note and the D6 trigger set, HALF-discharges re_evaluation_triggers (1) (#8572 paging met, #8211 per-id re-erasure path still a hard precondition for the first GIT_DATA_STORE_ENABLED flip), and moves trigger (2) from pulled to paged, with the runbook's pull kept for the throttle windows around a resolve. See ## Addendum (2026-09-28, #8572)."
+addendum_2026_09_28_8572_verified: "Condition met 2026-09-28: PR #9150 merged as 7541fb13f124067b971e5a95558b022fbd1b70a9 at 2026-09-28T16:53:15Z; apply-sentry-infra.yml run 36454249853 and the web-platform-release.yml deploy-arm run 36456390256 both concluded success, and the deploy job completed at 2026-09-28T17:15:30Z. The #8572 addendum holds as configuration from then; email path unexercised; #9160 (archived-issue detector) open; the full account-delete pull stays required until a first page is observed delivered. Trigger (1) stays HALF DISCHARGED (#8211 still a hard precondition). See the Verification paragraph at the end of ## Addendum (2026-09-28, #8572)."
 ---
 
 # Counsel re-attestation: #5914 / PR #9096 (the app's unpinned host-key arm is deleted)
@@ -96,6 +98,12 @@ re-review is reserved for the triggers above.
 > on an unresolved issue (an archived or ignored issue fires no trigger), throttled by `frequency_minutes = 5`:
 > at most one email per issue per 5 minutes; refusals inside that window share one email. Its
 > `feature` and `op` filters are unchanged. The rows are not edited. See the addendum at the end of this file.
+
+> **Condition met 2026-09-28 (#8572):** the correction above holds as configuration from 2026-09-28T17:15:30Z
+> (delivery not yet observed). PR #9150
+> merged as `7541fb13f124067b971e5a95558b022fbd1b70a9`; `apply-sentry-infra.yml` run 36454249853 and the
+> `web-platform-release.yml` deploy-arm run 36456390256 both concluded success. The rows and the correction are not
+> edited. The evidence is in "Verification 2026-09-28 (#8572)" at the end of the addendum below.
 
 > **Superseded 2026-09-28 (#5914): O2, as to "stays on the error path" and "it neither reaches `art17_erasure_incomplete`
 > nor matches a tag sweep", and D6, as to "the outer catch is still affected (O2)".** O2 sits in the frontmatter, so its
@@ -207,3 +215,56 @@ verification. Nothing above it is edited.
 
 **Disposition of this addendum: DISCHARGED, on the condition above.** The operator retains an
 optional veto.
+
+**Verification 2026-09-28 (#8572): the condition is met.** This paragraph records the evidence
+that the Condition paragraph above left to a later evidence-only PR. It edits nothing above.
+
+- **Merge.** PR #9150 merged at 2026-09-28T16:53:15Z as
+  `7541fb13f124067b971e5a95558b022fbd1b70a9`.
+- **`apply-sentry-infra.yml`: green.** Run 36454249853
+  (<https://github.com/jikig-ai/soleur/actions/runs/36454249853>), triggered by the push of that
+  commit, concluded success. It printed `Apply complete! Resources: 1 added, 1 changed, 0 destroyed.`,
+  `sentry_alert.git_data_host_key_pin_fault: Creation complete ... [id=1310055]` and
+  `sentry_alert.art17_erasure_incomplete: Modifications complete ... [id=1286903]`. Its live check
+  printed `sentry_alert live fidelity: PASS (all 35 in-scope rules match the committed reference field-for-field)`.
+- **`web-platform-release.yml`: green.** The deploy arm, run 36456390256
+  (<https://github.com/jikig-ai/soleur/actions/runs/36456390256>), concluded success. It ran on main
+  head `5804b7287fa79a5d46ba2c41ebfb0e3235357b37` (#9164), the merge commit's direct child, which
+  changes no file under `apps/web-platform/`, and it served the merge commit's build:
+  `deploy-arm.sh find` printed `MATCH=exact DEPLOY=success CI=success`, and `deploy-arm.sh served`
+  printed `CONTAINS BUILD_SHA=7541fb13f124067b971e5a95558b022fbd1b70a9`. The deploy job completed
+  at 2026-09-28T17:15:30Z. `https://app.soleur.ai/health` then reported status ok, Supabase
+  connected, and build_sha `7541fb13`. The push-triggered release run on the merge commit itself,
+  36454250110 (release job only; deploy skipped), also concluded success.
+- **Boot.** Better Stack: the deployed container (host soleur-web-platform) logged
+  `git_data_pin=present fp=SHA256:4eErmLfOuKM17zzNd+2so+26zojG0tsv9NMVNCuXpCs` and
+  `git_data_ssh_client=present` at 2026-09-28T17:15:26Z.
+- **Sentry, read-only (org `jikigai-eu`, read at 2026-09-28T17:25:19Z).** Tag queries:
+  `has:pin_fault`, `feature:git_data_host_key_pin` and `feature:git_data_ssh_client` over 24 hours
+  returned 0 issues each, and `feature:account-delete` over 90 days, any status, returned 0. Before
+  PR #9096 merged, erasure reports reached Sentry only as `feature=pino-mirror` (#8629), so the tag
+  query is blind before that merge. A message-text sweep over 90 days, any feature including
+  `pino-mirror`, for `git-data erasure`, `removeGitDataRepo`, `git-data-remove`, `bare-repo`,
+  `git-data-bare-repo-erasure` and `GIT_REMOVE_SSH_PRIVATE_KEY` returned 0 issues each. Controls:
+  `is:unresolved` over 24 hours returned 36 issues (the search works), and the message text
+  `image pulled from zot` over 90 days returned 2 (text search works). As of 2026-09-28T17:25:19Z,
+  no Art. 17 issue existed to be archived; #9160 remains the open detector for an archived or ignored
+  one. As of 2026-09-28T17:25:19Z, no event that re-evaluation trigger (2) names appears in those
+  windows. Sentry's 90-day window is the limit of the read.
+- **Not measured.** Neither rule has fired since the apply, so no page was sent, no delivery was
+  observed, and the email path was not exercised. The live-fidelity check compares the live rules'
+  fields with the committed reference; it checks no delivery and sends no test event.
+- **Effect.** The addendum's condition was complete when the deploy job finished at
+  2026-09-28T17:15:30Z. From then the addendum holds as configuration: the three PA-36 (g) #8572
+  markers and the D4/D6 correction in the drift table describe the configuration in production, and
+  the words they supersede are superseded as configuration. This PR places a "Condition met
+  2026-09-28 (#8572)" marker directly after each of the three register markers and one directly
+  after the D4/D6 correction blockquote, whose own text is not edited. Re-evaluation trigger (1)
+  stays HALF DISCHARGED: #8211's per-id re-erasure path is still a hard precondition for the first
+  `GIT_DATA_STORE_ENABLED` flip. Trigger (2) is configured to page from that time (delivery not yet
+  observed). Until a first real page is observed delivered, the runbook's full
+  `feature:account-delete op:git-data-bare-repo-erasure` pull remains required, not only in the
+  throttle windows around a resolve. #9160 (archived-issue detector) is open.
+
+**Disposition after verification, 2026-09-28: unchanged, DISCHARGED; the condition is met, and
+delivery of a page is not yet observed.** The operator retains an optional veto.
