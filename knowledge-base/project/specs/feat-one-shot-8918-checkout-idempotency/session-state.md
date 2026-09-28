@@ -27,3 +27,20 @@
 - `soleur:gdpr-gate` (advisory pass per Phase 2.7 mandate)
 - `scripts/lint-guard-contract.py`, `scripts/precommit-guard.sh` (mechanical gates, clean)
 - Commits: `ecd3fdb` (plan + tasks), `04a9562` (deepened plan) — pushed to `feat-one-shot-8918-checkout-idempotency`
+
+## 2026-09-28 ship-phase state (post-review)
+
+Position: review panel resolved → QA PASS → compound written → ship in progress.
+
+- Branch HEAD: post-rebase on latest origin/main (48987979b3 → rebased d2c30a7d19 + 48987979b3; force-pushed).
+- PR #9115: body written, still draft; CI running on rebased HEAD.
+- Reviewed-Coverage trailer: `degraded 12/13 agents (missing: performance-oracle)` — parses as real trailer.
+- CLO-attestation gate FIRED (legal docs + single-user threshold): counsel-review subagent running, audit target `knowledge-base/legal/audits/2026-09-counsel-review-8918.md`.
+- Review revision landed: expire-before-delete, FRESH_COMPLETION_MS tombstone (409 checkout_completed), checkout.session.expired handler, 24h pg_cron sweep + verify sentinel, reportSilentFallback migration, service-role allowlist entries, modal 409 copy, target_tier CHECK, limit:100 probe, fence-predicate test assertions, legal lockstep (4 docs + mirrors + SHAs).
+- Touched tests: 88/88 green; legal guard tests 43/43 green; mirror-drift ratchet green; typecheck clean; semgrep 0 findings.
+- Remaining: CLO verdict → optional DRAFT-marker step (none needed — no `[DRAFT — pending CLO]` markers added) → `gh pr ready` → wait CI → `gh pr merge` → post-merge verify (merged files + migration apply + deploy) → emit resume prompt → start #9053.
+- Known: `checkout.session.expired` must be enabled in the Stripe webhook subscription for the new case to fire (noted in PR body deploy notes).
+
+### Errors this segment
+- `Reviewed-Coverage` initially written mid-body, not a trailer → reset --soft, re-committed as real trailer (gate lesson).
+- `test/api-checkout-idempotency` first run of new tests: 3 failures (ownership check scoped too wide; captureMessage-vs-Exception for PostgrestError; missing STRIPE_PRICE_ID stub in legacy test) — all fixed, 88/88 green.
