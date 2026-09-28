@@ -86,6 +86,13 @@ sed -i "s|\${liveness_heartbeat_url}|$TEST_HB_URL|g" "$RENDERED"
 # directive scanner rejects the render outright.
 sed -i 's|\$\${|${|g' "$RENDERED"
 sed -i 's|%%{|%{|g' "$RENDERED"
+# (#7270) The per-boot state seam: the feeder keeps its counters in tmpfs under
+# /run/soleur-registry/, re-rooted here the same way the redaction suite re-roots the reporter's
+# reads. Rewritten WITHOUT a trailing slash so the directory the feeder creates moves too.
+STATE_DIR="$TMP/run-soleur-registry"
+STATE="$STATE_DIR/zot-liveness.state"
+sed -i "s|/run/soleur-registry|$STATE_DIR|g" "$RENDERED"
+mkdir -p "$STATE_DIR"
 
 # Charset must be at least as wide as Terraform's own var names (digits included) — a missed
 # digit-bearing var never trips `set -u` inside quotes, so the suite would silently execute a
@@ -93,6 +100,29 @@ sed -i 's|%%{|%{|g' "$RENDERED"
 assert "render left no unrendered TF interpolation" "! grep -qE '\\\$\{[A-Za-z0-9_.]+\}' '$RENDERED'"
 assert "render left no unescaped TF directive" "! grep -qF '%%{' '$RENDERED'"
 assert "rendered feeder is syntactically valid bash" "bash -n '$RENDERED'"
+assert "(#7270) the state seam landed (the feeder now writes under the fixture dir)" \
+  "grep -qF '$STATE_DIR/zot-liveness.state' '$RENDERED' && ! grep -qF '/run/soleur-registry' '$RENDERED'"
+
+# (#7270) RAW-template escaping, asserted on the SOURCE block rather than the sed render above.
+# The render converts every `$${` to `${`, so a bare `${x}` the author forgot to escape survives it
+# as plain bash and passes; Terraform would instead reject it, or silently fill it in when the
+# name matches a real template variable. In the source block the only legal `${` are the two
+# template variables and the `$${` escape; the only legal `%{` is the `%%{` escape.
+RAW_BLOCK="$TMP/feeder.raw"
+awk -v want="  - path: $FEEDER_PATH" '
+  $0 == want { found = 1; next }
+  found && /^    content: \|$/ { incontent = 1; next }
+  incontent { if ($0 ~ /^      / || $0 ~ /^[[:space:]]*$/) { print; next } exit }
+' "$CI" > "$RAW_BLOCK"
+assert "(#7270) raw feeder block extracted (non-empty)" "[[ -s '$RAW_BLOCK' ]]"
+# Scrub the legal forms, then COUNT what remains (a count cannot fold grep's rc 2 into "clean").
+RAW_SCRUBBED="$TMP/feeder.raw.scrubbed"
+sed -e 's/[$][$][{]//g' -e 's/[$][{]private_ip[}]//g' -e 's/[$][{]liveness_heartbeat_url[}]//g' \
+  -e 's/%%[{]//g' "$RAW_BLOCK" > "$RAW_SCRUBBED"
+assert "(#7270) raw template: no \${ except the two template variables and the \$\${ escape" \
+  "[[ \$(grep -cF '\${' '$RAW_SCRUBBED') == 0 ]]"
+assert "(#7270) raw template: no %{ except the %%{ escape" \
+  "[[ \$(grep -cF '%{' '$RAW_SCRUBBED') == 0 ]]"
 chmod +x "$RENDERED"
 
 # --- PATH stubs --------------------------------------------------------------------------
@@ -144,9 +174,25 @@ case "$target" in
   *10.0.1.30:5000*) respond "${STUB_PRIVATE_CODE:-401}" ;;
   *localhost:5000*) respond "${STUB_LOCALHOST_CODE:-401}" ;;
   *127.0.0.1:5000*) respond "${STUB_LOCALHOST_CODE:-401}" ;;
-  *heartbeat*)      printf '%s\n' "$target" >> "$STUB_EMIT"; exit 0 ;;
+  # The ping is RECORDED whether or not it succeeds (it was attempted), and logged to the ORDER
+  # file the mv stub also writes to. STUB_PING_CODE is the HTTP status Better Stack answers the
+  # beat with; `respond` models -f, so a 429 is an exit 22 ONLY while the feeder keeps `-f`
+  # (without it curl exits 0 on a 429 and a rejected beat would count as sent: #7270's
+  # ping_fail_cum arm depends on that flag).
+  *heartbeat*)      printf '%s\n' "$target" >> "$STUB_EMIT"; printf 'PING\n' >> "$STUB_ORDER"
+                    respond "${STUB_PING_CODE:-200}" ;;
 esac
 exit 0
+EOS
+# (#7270) A pass-through `mv` that logs itself to the ORDER file. The feeder's only `mv` is the
+# state write, so `PING` before `MV` in that file proves the state work runs AFTER the ping.
+# (The feeder has no `set -e`, so a merely FAILING state step placed before the ping would not
+# stop it: ordering has to be observed, not inferred from the ping landing.)
+REAL_MV="$(command -v mv)"
+cat > "$BIN/mv" <<EOS
+#!/usr/bin/env bash
+printf 'MV\n' >> "\$STUB_ORDER"
+exec "$REAL_MV" "\$@"
 EOS
 chmod +x "$BIN"/*
 
@@ -161,6 +207,8 @@ run_feeder() {
   STUB_EMIT="$TMP/emit.$$.$RANDOM"
   STUB_PROBES="$TMP/probes.$$.$RANDOM"
   : > "$STUB_EMIT"
+  STUB_ORDER="$TMP/order.$$.$RANDOM"
+  : > "$STUB_ORDER"
   : > "$STUB_PROBES"
   env -i \
     PATH="$BIN:/usr/bin:/bin" \
@@ -169,6 +217,8 @@ run_feeder() {
     STUB_PRIVATE_CODE="$private_code" \
     STUB_LOCALHOST_CODE="$loopback_code" \
     STUB_HANG="${STUB_HANG:-0}" \
+    STUB_ORDER="$STUB_ORDER" \
+    STUB_PING_CODE="${STUB_PING_CODE:-200}" \
     "$TIMEOUT_BIN" 10 bash "$RENDERED" >/dev/null 2>&1
   RUN_RC=$?
 }
@@ -228,6 +278,110 @@ STUB_HANG=0
 assert "T5 the feeder completed (rc != 124 => the probe was -m bounded)" "[[ '$RUN_RC' != '124' ]]"
 assert "T5 still emitted its ping" "[[ -s '$STUB_EMIT' ]]"
 
+# --- #7270: per-boot counters that say WHY a beat was withheld ---------------------------
+# The state is ONE line: `miss_cum ping_fail_cum ok_cum late_ok_cum last_miss_code last_ok_ts`.
+# st <key> -> the value the feeder stored for <key> ("" when absent).
+st() {
+  local i
+  case "$1" in
+    miss_cum) i=1 ;; ping_fail_cum) i=2 ;; ok_cum) i=3 ;;
+    late_ok_cum) i=4 ;; last_miss_code) i=5 ;; last_ok_ts) i=6 ;; *) return 1 ;;
+  esac
+  awk -v i="$i" 'NR == 1 { print $i }' "$STATE" 2>/dev/null
+}
+reset_state() { rm -rf "$STATE_DIR"; mkdir -p "$STATE_DIR"; }
+
+echo ""
+echo "--- L1: zot silent (000) => miss_cum=1, last_miss_code=000, no ping"
+reset_state
+run_feeder 000 000
+assert "L1 no ping" "[[ ! -s '$STUB_EMIT' ]]"
+assert "L1 miss_cum=1" "[[ \"\$(st miss_cum)\" == 1 ]]"
+assert "L1 last_miss_code=000" "[[ \"\$(st last_miss_code)\" == 000 ]]"
+assert "L1 ok_cum=0 and ping_fail_cum=0" "[[ \"\$(st ok_cum)\" == 0 && \"\$(st ping_fail_cum)\" == 0 ]]"
+assert "L1 exit 0" "[[ '$RUN_RC' == 0 ]]"
+
+echo ""
+echo "--- L2: then zot wedged (503) => counters ACCUMULATE, code updates"
+run_feeder 503 503
+assert "L2 miss_cum=2 (read back, not reset)" "[[ \"\$(st miss_cum)\" == 2 ]]"
+assert "L2 last_miss_code=503" "[[ \"\$(st last_miss_code)\" == 503 ]]"
+
+echo ""
+echo "--- L3: zot answers 401, ping OK => ok_cum+1, misses untouched"
+run_feeder 401 401
+assert "L3 pinged" "[[ -s '$STUB_EMIT' ]]"
+assert "L3 ok_cum=1" "[[ \"\$(st ok_cum)\" == 1 ]]"
+assert "L3 miss_cum still 2, code still 503" "[[ \"\$(st miss_cum)\" == 2 && \"\$(st last_miss_code)\" == 503 ]]"
+assert "L3 ping_fail_cum=0" "[[ \"\$(st ping_fail_cum)\" == 0 ]]"
+assert "L3 first OK after boot is never counted late" "[[ \"\$(st late_ok_cum)\" == 0 ]]"
+assert "L3 last_ok_ts recorded as epoch seconds" "[[ \"\$(st last_ok_ts)\" =~ ^[0-9]{9,10}$ ]]"
+
+echo ""
+echo "--- L4: zot answers 401 but Better Stack answers the beat 429 => ping_fail_cum+1, ok_cum unchanged"
+STUB_PING_CODE=429 run_feeder 401 401
+STUB_PING_CODE=200
+assert "L4 the ping was attempted" "[[ -s '$STUB_EMIT' ]]"
+assert "L4 ping_fail_cum=1" "[[ \"\$(st ping_fail_cum)\" == 1 ]]"
+assert "L4 ok_cum still 1" "[[ \"\$(st ok_cum)\" == 1 ]]"
+assert "L4 miss_cum still 2 (zot DID answer)" "[[ \"\$(st miss_cum)\" == 2 ]]"
+assert "L4 a failed beat clears last_ok_ts, so the recovery beat is not counted late" \
+  "[[ \"\$(st last_ok_ts)\" == 0 ]]"
+
+echo ""
+echo "--- L5: an OK beat more than 75s after the previous OK => late_ok_cum+1; a prompt one does not"
+reset_state
+printf '0 0 4 0 none %s\n' "$(( $(date +%s) - 100 ))" > "$STATE"
+run_feeder 401 401
+assert "L5 late_ok_cum=1 after a 100s gap" "[[ \"\$(st late_ok_cum)\" == 1 ]]"
+assert "L5 ok_cum=5" "[[ \"\$(st ok_cum)\" == 5 ]]"
+run_feeder 401 401
+assert "L5 a prompt next beat leaves late_ok_cum=1" "[[ \"\$(st late_ok_cum)\" == 1 ]]"
+assert "L5 last_miss_code keeps the pre-miss token 'none'" "[[ \"\$(st last_miss_code)\" == none ]]"
+# The threshold's edges: 80s is late, 70s is not.
+printf '0 0 4 0 none %s\n' "$(( $(date +%s) - 80 ))" > "$STATE"
+run_feeder 401 401
+assert "L5 an 80s gap counts late" "[[ \"\$(st late_ok_cum)\" == 1 ]]"
+printf '0 0 4 0 none %s\n' "$(( $(date +%s) - 70 ))" > "$STATE"
+run_feeder 401 401
+assert "L5 a 70s gap does not" "[[ \"\$(st late_ok_cum)\" == 0 ]]"
+# A recovery beat after a miss is not late, however old the previous OK is.
+printf '0 0 4 0 none %s\n' "$(( $(date +%s) - 500 ))" > "$STATE"
+run_feeder 000 000
+assert "L5 a miss clears last_ok_ts" "[[ \"\$(st last_ok_ts)\" == 0 ]]"
+run_feeder 401 401
+assert "L5 the recovery beat after a miss is not counted late" "[[ \"\$(st late_ok_cum)\" == 0 ]]"
+
+echo ""
+echo "--- L6: a corrupt state file => counters restart from 0, and the ping still fires"
+printf '1x "x abc 0"0\n' > "$STATE"
+run_feeder 401 401
+assert "L6 pinged" "[[ -s '$STUB_EMIT' ]]"
+assert "L6 ok_cum=1 (restarted from 0)" "[[ \"\$(st ok_cum)\" == 1 ]]"
+assert "L6 miss_cum=0 (the hostile value was discarded)" "[[ \"\$(st miss_cum)\" == 0 ]]"
+assert "L6 last_miss_code=none (the hostile code was discarded)" "[[ \"\$(st last_miss_code)\" == none ]]"
+# A leading zero is octal to $(( )), and `08` is an arithmetic ERROR that would freeze the
+# counters until reboot; the shape check resets it instead.
+printf '08 0 0 0 none 0\n' > "$STATE"
+run_feeder 000 000
+assert "L6 a leading-zero field restarts from 0 (08 -> 0, +1 miss)" "[[ \"\$(st miss_cum)\" == 1 ]]"
+
+echo ""
+echo "--- L7: the state dir cannot be created => the ping still fires, exit 0"
+rm -rf "$STATE_DIR"; : > "$STATE_DIR"
+run_feeder 401 401
+assert "L7 pinged although no state could be written" "[[ -s '$STUB_EMIT' ]]"
+assert "L7 exit 0" "[[ '$RUN_RC' == 0 ]]"
+rm -f "$STATE_DIR"; mkdir -p "$STATE_DIR"
+
+echo ""
+echo "--- L8: the state step runs AFTER the ping (PING precedes MV in the order log)"
+reset_state
+run_feeder 401 401
+assert "L8 both the ping and the state write happened" \
+  "[[ \"\$(grep -c -e PING -e MV '$STUB_ORDER')\" == 2 ]]"
+assert "L8 the ping came first" "[[ \"\$(sed -n 1p '$STUB_ORDER')\" == PING ]]"
+
 # --- STRUCTURAL --------------------------------------------------------------------------
 echo ""
 echo "--- structural assertions"
@@ -275,6 +429,13 @@ assert "timer is enabled in runcmd" \
 # regression on a no-SSH host, so it is asserted rather than trusted to a comment.
 assert "timer pins AccuracySec (systemd defaults to 1min => up to 120s interval vs a 90s deadline)" \
   "grep -qE '^[[:space:]]*AccuracySec=1s[[:space:]]*$' '$CI'"
+# (#7270) The service bounds its own run: a state step that hangs (a FIFO planted at the state
+# path) must cost at most one tick, never wedge every later beat. Scoped to THIS unit's block,
+# and bounded on both sides: above the two 10s curls, below the 60s timer period.
+SVC_BLOCK="$(awk '/^  - path: \/etc\/systemd\/system\/zot-liveness-heartbeat\.service$/{f=1;next} f && /^  - path: /{exit} f' "$CI")"
+SVC_TO="$(sed -n 's/^[[:space:]]*TimeoutStartSec=\([0-9]*\)s[[:space:]]*$/\1/p' <<<"$SVC_BLOCK")"
+assert "the liveness service pins TimeoutStartSec between 20s and 60s (got '$SVC_TO')" \
+  "[[ '$SVC_TO' =~ ^[0-9]+$ ]] && (( SVC_TO > 20 && SVC_TO < 60 ))"
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
