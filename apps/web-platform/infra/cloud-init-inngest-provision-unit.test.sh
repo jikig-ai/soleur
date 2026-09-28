@@ -52,6 +52,20 @@ EXPECTED_MUSTPASS=8
 
 die() { printf 'INSTRUMENT FAULT: %s\n' "$*" >&2; exit 2; }
 
+# Refuses an empty, relative, `..`-bearing, synthetic-fs or root directory before any write or
+# `rm -rf` is pointed at it. Copied BYTE-IDENTICALLY from scripts/ensure-kb-index.test.sh, the
+# canonical body the fixture-dir scanners compare against (plugins/soleur/test/lib/fixture-scan.py).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 for _t in python3 terraform dash jq sha256sum; do
   command -v "$_t" >/dev/null 2>&1 || die "$_t is required (Tier A never skips; the render needs terraform)"
 done
@@ -471,6 +485,8 @@ REWRITE_PAIRS='[["/usr/local/bin/","@FX@/bin/"],["/etc/default/","@FX@/etc/"],["
 # =================================================================================================
 make_stubs() {
   local fx="$1" b="$1/bin"
+  assert_fixture_dir "$fx"
+  assert_fixture_dir "$b"
   mkdir -p "$b"
   cat > "$b/docker" <<STUB
 #!/bin/sh
@@ -509,6 +525,9 @@ BOOT
 esac
 exit 0
 STUB
+  # Re-asserted here: the docker stub's heredoc above defines a function (`ctl() {`), which the
+  # fixture scanner reads as a new function window.
+  assert_fixture_dir "$b"
   cat > "$b/doppler" <<STUB
 #!/bin/sh
 FX='$fx'
@@ -579,6 +598,8 @@ guard_all() {
   local render="$1" gw="$2"
   local dflags="${PU_DASH_FLAGS--u}"
   local fx="$gw/fx" nfail=0 nfault=0
+  assert_fixture_dir "$gw"
+  assert_fixture_dir "$fx"
   rm -rf "$gw"; mkdir -p "$gw" "$fx" || { echo "  FAULT: could not create $gw"; return 2; }
 
   local static_out
@@ -592,6 +613,8 @@ guard_all() {
   _ta() { # _ta <ok 0|1> <name>
     if [ "$1" -eq 0 ]; then echo "  PASS: $2"; else echo "  FAIL: $2"; fi
   }
+  assert_fixture_dir "$gw"
+  assert_fixture_dir "$fx"
   # ---- Tier A dispatch: a render with no substantive script or no env write cannot run Tier A;
   # that is a FAILED property of the render, not an instrument fault.
   if [ "${code_lines:-0}" -lt 40 ] || [ "${envw:-0}" -ne 1 ] || [ ! -s "$gw/zotwrite.sh" ]; then
@@ -629,6 +652,8 @@ guard_all() {
 
   # ---- scenario runner ---------------------------------------------------------------------------
   reset_fx() { # full reset (fresh host) unless $1 = keep
+    assert_fixture_dir "$fx"
+    assert_fixture_dir "$gw"
     if [ "${1:-}" != keep ]; then
       rm -rf "${fx:?}/lib" "${fx:?}/run" "${fx:?}/tmp" "${fx:?}/log" "${fx:?}/ctl" "${fx:?}/calls.log"
       mkdir -p "$fx/lib/cloud/data" "$fx/lib/soleur-inngest-provision" "$fx/run" "$fx/tmp" "$fx/log" "$fx/ctl"
@@ -641,6 +666,8 @@ guard_all() {
   }
   local SC_RC SC_START
   run_sc() { # run_sc <scenario> [dash flags override]
+    assert_fixture_dir "$fx"
+    assert_fixture_dir "$gw"
     local sc="$1" fl="${2-$dflags}"
     SC_START=$(( $(wc -l < "$fx/calls.log" 2>/dev/null || echo 0) + 1 ))
     printf '== %s\n' "$sc" >> "$fx/calls.log"
@@ -661,6 +688,8 @@ guard_all() {
     _ta "$([ "$SC_RC" = "$2" ] && echo 0 || echo 1)" "TA $1: exits $2 (rc=$SC_RC)"
     _ta "$(grep -q 'parameter not set' "$gw/$1.err" && echo 1 || echo 0)" "TA $1: no 'parameter not set' in stderr (the script reads nothing it does not set, G7)"
   }
+  assert_fixture_dir "$fx"
+  assert_fixture_dir "$gw"
   local PULL_RE='^docker (--config [^ ]+ )?(image |container )?pull '
   local LATCHF="$fx/lib/soleur-inngest-provision/done"
 
