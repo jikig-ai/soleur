@@ -45,6 +45,8 @@
 #   unknown        the query did not answer, the ingest POST was rejected, or     3
 #                  the poll budget was below the measured ingest floor
 #   channel_dark   the free positive control returned 0 rows                      2
+#   unknown        (reason=marker_schema_unsupported) a row for this run_id was   3
+#                  read back, but none carried marker_schema=EXPECTED_MARKER_SCHEMA
 #   marker_absent  control is live, and no row carries this run_id with           1
 #                  enumeration_complete=true
 #   observed       a row carries this run_id AND enumeration_complete=true        0
@@ -65,6 +67,15 @@ QUERY="${BETTERSTACK_QUERY_SCRIPT:-$SCRIPT_DIR/betterstack-query.sh}"
 readonly MARKER="SOLEUR_ZOT_INVENTORY"
 readonly CONTROL="SOLEUR_ZOT_DISK"
 readonly VERDICT_NAME="SOLEUR_ZOT_INVENTORY_ASSERT"
+
+# The marker schema this reader was written against (#7377). scripts/zot-inventory.sh stamps
+# `marker_schema=` on every line; until this reader existed nothing consumed it, so the first
+# `marker_schema=2` would have been certified as if it were v1. A row carrying any other value
+# (or none) is SEEN but never counted as a passing observation, and if it is the only row for
+# this run the verdict is `unknown` — the sweep may well have landed, but in a shape this
+# reader does not understand, which is neither a pass nor a measured absence. The suite
+# asserts this literal equals the emitter's `readonly MARKER_SCHEMA=`.
+readonly EXPECTED_MARKER_SCHEMA=1
 
 # The measured POST -> queryable latency. See RULE 3 above for its provenance. It is a
 # constant, not a knob: the budget is expressed as a multiple of it so that any future
@@ -128,6 +139,7 @@ MAX_POLLS=$(( (POLL_BUDGET_S + STEP - 1) / STEP ))
 MARKER_ROWS=0
 CONTROL_ROWS=0
 RUN_ID_ROWS=0
+SCHEMA_OTHER_ROWS=0
 POLLS=0
 TRANSPORT_OK=0
 
@@ -166,7 +178,7 @@ decode() {
 }
 
 poll_once() {  # sets MARKER_ROWS / RUN_ID_ROWS / CONTROL_ROWS; returns 0 if the query answered
-  local raw rc decoded run_rows
+  local raw rc decoded run_rows schema_rows
   raw="$(bash "$QUERY" --no-archive --since "$SINCE" --limit "$LIMIT" \
            --grep "$MARKER" --grep "$CONTROL" 2>/dev/null)"
   rc=$?
@@ -182,11 +194,15 @@ poll_once() {  # sets MARKER_ROWS / RUN_ID_ROWS / CONTROL_ROWS; returns 0 if the
   # producer takes SIGPIPE, and the pipeline reports failure on the very input that matched.
   run_rows="$(printf '%s\n' "$decoded" | grep -E "^${MARKER} run_id=${RUN_ID} " || true)"
   RUN_ID_ROWS="$(printf '%s' "$run_rows" | grep -cE '.' || true)"
-  MARKER_ROWS="$(printf '%s' "$run_rows" | grep -cE '(^| )enumeration_complete=true( |$)' || true)"
+  # Both edges anchored: `marker_schema=10` must not read as schema 1.
+  schema_rows="$(printf '%s' "$run_rows" | grep -E "(^| )marker_schema=${EXPECTED_MARKER_SCHEMA}( |\$)" || true)"
+  SCHEMA_OTHER_ROWS=$(( RUN_ID_ROWS - $(printf '%s' "$schema_rows" | grep -cE '.' || true) ))
+  MARKER_ROWS="$(printf '%s' "$schema_rows" | grep -cE '(^| )enumeration_complete=true( |$)' || true)"
   CONTROL_ROWS="$(printf '%s\n' "$decoded" | grep -cE "^${CONTROL}( |$)" || true)"
   [[ "$RUN_ID_ROWS" =~ ^[0-9]+$ ]] || RUN_ID_ROWS=0
   [[ "$MARKER_ROWS"  =~ ^[0-9]+$ ]] || MARKER_ROWS=0
   [[ "$CONTROL_ROWS" =~ ^[0-9]+$ ]] || CONTROL_ROWS=0
+  [[ "$SCHEMA_OTHER_ROWS" =~ ^[0-9]+$ ]] || SCHEMA_OTHER_ROWS=0
   return 0
 }
 
@@ -218,6 +234,11 @@ if [[ "$MARKER_ROWS" -ge 1 ]]; then
   printf 'the marker for run_id=%s was read back from Better Stack with enumeration_complete=true (marker_rows=%s, control_rows=%s, polls=%s).\n' \
     "$RUN_ID" "$MARKER_ROWS" "$CONTROL_ROWS" "$POLLS"
   verdict observed none 0
+fi
+
+if [[ "$SCHEMA_OTHER_ROWS" -ge 1 ]]; then
+  echo "zot-inventory-assert-marker: ${SCHEMA_OTHER_ROWS} row(s) for run_id=${RUN_ID} were read back, but none carried marker_schema=${EXPECTED_MARKER_SCHEMA}, the only schema this reader understands (verdict=marker_schema_unsupported). Update this reader alongside the emitter before trusting the result." >&2
+  verdict unknown marker_schema_unsupported 3
 fi
 
 if [[ "$TRANSPORT_OK" -eq 0 ]]; then

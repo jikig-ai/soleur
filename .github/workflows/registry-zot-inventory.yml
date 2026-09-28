@@ -287,9 +287,12 @@ jobs:
             printf 'age_s=%s\n'    "$AGE_S"
           } >> "$GITHUB_OUTPUT"
           echo "SOLEUR_ZOT_DISK start sample: fs_size_gb=${FS_SIZE_GB} pcent=${PCENT} zot_restarts=${RESTARTS} boot_id=${BOOT_ID} sample_age_s=${AGE_S} sampled_at=${DT}"
-      # THE SWEEP. scripts/zot-inventory.sh owns ALL registry and telemetry egress and reaches
-      # exactly two destinations: http://127.0.0.1:5000 (this job's bridge) and the pinned
-      # Better Stack ingest URL. It reads its own credentials from Doppler (ZOT_PULL_USER /
+      # THE SWEEP. scripts/zot-inventory.sh owns ALL registry and telemetry egress and its own
+      # curl reaches exactly two destinations: http://127.0.0.1:5000 (this job's bridge) and the
+      # pinned Better Stack ingest URL. Since #7377 it also runs ONE read-only END sample in a
+      # child process (scripts/zot-disk-sample.sh -> betterstack-query.sh, which allow-lists the query
+      # host to *.betterstackdata.com), with the pull and ingest tokens stripped from that
+      # child's environment. It reads its own credentials from Doppler (ZOT_PULL_USER /
       # ZOT_PULL_TOKEN, BETTERSTACK_LOGS_TOKEN) and `::add-mask::`s each immediately — this
       # repository is PUBLIC and `doppler secrets get --plain` values are NOT auto-masked.
       #
@@ -298,33 +301,26 @@ jobs:
       #   ZOT_DISK_FS_SIZE_GB / ZOT_DISK_PCENT / ZOT_DISK_BOOT_ID /
       #   ZOT_DISK_RESTARTS_AT_START / ZOT_DISK_SAMPLE_AGE_S / ZOT_DISK_SAMPLE_AT
       #                                                    — the start sample, exported above.
-      #   BETTERSTACK_QUERY_*                              — PASSED BUT NOT YET CONSUMED. This
-      #                                                      said the script takes its own END
-      #                                                      sample; it does not — grep it for
-      #                                                      BETTERSTACK_QUERY or
-      #                                                      betterstack-query.sh and both
-      #                                                      return zero. So ZOT_RESTARTS_AT_END
-      #                                                      is set by no production caller,
-      #                                                      zot_restarts_at_end ships `unknown`
-      #                                                      on every run, and the enumerator's
-      #                                                      restart_during_sweep arm is
-      #                                                      unreachable outside its tests. The
-      #                                                      straddle IS still detected, at job
-      #                                                      level in the end-sample step below,
-      #                                                      and reaches the issue comment — it
-      #                                                      just never reaches the DURABLE
-      #                                                      marker. Tracked in #7377, not fixed
-      #                                                      here: giving the
-      #                                                      enumerator a network call inside
-      #                                                      its emit path is not a change to
-      #                                                      make late in a review pass. The
-      #                                                      vars stay wired so the follow-up is
-      #                                                      a script change only. The emission
-      #                                                      is inside the script, so the
-      #                                                      workflow's own end sample below
-      #                                                      lands too late to reach the marker;
-      #                                                      it is the JOB-LEVEL straddle check
-      #                                                      and the input to the issue comment.
+      #   BETTERSTACK_QUERY_*                              — CONSUMED BY THE SCRIPT'S OWN END
+      #                                                      SAMPLE (#7377). After the
+      #                                                      enumeration and before it emits,
+      #                                                      the script runs
+      #                                                      scripts/zot-disk-sample.sh (with
+      #                                                      the pull and ingest tokens
+      #                                                      stripped from its environment),
+      #                                                      so zot_restarts_at_end carries a
+      #                                                      real value and a restart or host
+      #                                                      replace during the sweep reaches
+      #                                                      the DURABLE marker as
+      #                                                      reason=restart_during_sweep.
+      #                                                      Until #7377 no caller set
+      #                                                      ZOT_RESTARTS_AT_END and the field
+      #                                                      shipped `unknown` on every run.
+      #                                                      The workflow's own end sample
+      #                                                      below still runs: it lands too
+      #                                                      late for the marker and remains
+      #                                                      the JOB-LEVEL straddle check and
+      #                                                      the input to the issue comment.
       #   MARKER_FILE                                      — where this step captures the
       #                                                      enumerator's STDOUT so
       #                                                      later steps can read it back.

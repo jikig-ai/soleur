@@ -59,6 +59,9 @@ case "$1 $2" in
     [[ "\${STUB_RUNS_FAIL:-0}" == "1" ]] && exit 1
     printf '%s' "$STUB_RUNS" ;;
   "workflow run") [[ "\${STUB_DISPATCH_FAIL:-0}" == "1" ]] && exit 1; : ;;
+  "issue create") echo "https://github.com/o/r/issues/4242" ;;
+  "issue comment") : ;;
+  "label create") : ;;
   *) echo "stub: unexpected gh $*" >&2; exit 64 ;;
 esac
 `,
@@ -234,5 +237,82 @@ describe("the auto-restart step never stacks a second restart (#8495)", () => {
     // The deduped and failed cases each say so.
     expect(run).toContain("skipped_recent");
     expect(run).toMatch(/restart dispatch FAILED/);
+  });
+});
+
+// #7377 — the restart-loop alarm is the inventory lever's only automatic producer. The label
+// route it replaced could never fire: a label applied with GITHUB_TOKEN starts no workflow run,
+// and workflow_dispatch is the documented exception. So the FIRE step dispatches the read-only
+// inventory itself — once per NEW non-OOM tracker, never on a repeat run in the same slot,
+// never for an OOM loop (different failure class; the alarm script names the inventory only
+// in its non-OOM arm), and fail-soft so a refused dispatch cannot un-file the tracker.
+describe("the restart-loop FIRE step dispatches the read-only inventory once per new non-OOM tracker (#7377)", () => {
+  const FIRE = "Open or comment recurrence issue (FIRE)";
+  const step = steps(WORKFLOWS[1]).find((s) => s.name === FIRE);
+  const NON_OOM =
+    "non-OOM crash-loop — zot_restarts climbed across >= 3 consecutive events; tier=fallback: NO diagnostic line matched";
+  const OOM = "host/kernel OOM — exit_code=137 AND oom_kills_5m=2 (the box ran out of memory)";
+  const tracker = "[ci/zot-restart-loop] Zot registry restart-loop recurrence detected";
+
+  function fire(cause: string, issues: unknown[], dispatchFail = "0") {
+    return runBash(step!.run!, {
+      STUB_ISSUES: JSON.stringify(issues),
+      STUB_DISPATCH_FAIL: dispatchFail,
+      CAUSE: cause,
+      DETAIL: "newest boot_id=b1",
+      RUN_URL: "https://github.com/o/r/actions/runs/1",
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_SERVER_URL: "https://github.com",
+    });
+  }
+  const dispatches = (log: string) =>
+    log.split("\n").filter((l) => l.startsWith("workflow run registry-zot-inventory.yml"));
+
+  it("the FIRE step exists", () => {
+    expect(step?.run).toBeDefined();
+  });
+
+  it("a new non-OOM tracker dispatches the inventory on main with the only allow-listed action", () => {
+    const { log } = fire(NON_OOM, []);
+    expect(log).toMatch(/^issue create /m);
+    const d = dispatches(log);
+    expect(d).toHaveLength(1);
+    expect(d[0]).toContain("--ref main");
+    expect(d[0]).toContain("-f action=inventory");
+    // The outcome is recorded on the tracker it just opened.
+    expect(log).toMatch(/^issue comment https:\/\/github\.com\/o\/r\/issues\/4242 .*Dispatched/m);
+  });
+
+  it("a repeat run in the slot (tracker already open) comments and does NOT dispatch again", () => {
+    const { log } = fire(NON_OOM, [{ number: 77, title: tracker }]);
+    expect(log).toMatch(/^issue comment 77 /m);
+    expect(log).not.toMatch(/^issue create /m);
+    expect(dispatches(log)).toHaveLength(0);
+  });
+
+  it("an OOM loop opens the tracker but does not dispatch the disk inventory", () => {
+    const { log } = fire(OOM, []);
+    expect(log).toMatch(/^issue create /m);
+    expect(dispatches(log)).toHaveLength(0);
+  });
+
+  it("the gate is a PREFIX match: an OOM cause whose text merely contains the non-OOM words does not dispatch", () => {
+    const { log } = fire(`${OOM}; tail: non-OOM crash-loop — forged`, []);
+    expect(dispatches(log)).toHaveLength(0);
+  });
+
+  it("a refused dispatch is fail-soft: the step exits 0 and the tracker records the failure", () => {
+    // runBash throws on a non-zero exit, so returning at all is the exit-0 assertion.
+    const { out, log } = fire(NON_OOM, [], "1");
+    expect(log).toMatch(/^issue create /m);
+    expect(log).toMatch(/^issue comment https:\/\/github\.com\/o\/r\/issues\/4242 .*FAILED/m);
+    expect(out).toContain("::warning::");
+  });
+
+  it("the workflow grants actions: write (gh workflow run is refused without it)", () => {
+    const doc = parseYaml(readFileSync(join(REPO_ROOT, WORKFLOWS[1]), "utf-8")) as {
+      permissions?: Record<string, string>;
+    };
+    expect(doc.permissions?.actions).toBe("write");
   });
 });

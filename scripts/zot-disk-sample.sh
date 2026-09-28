@@ -74,7 +74,7 @@ fi
 
 # DECODE BEFORE MATCHING. Better Stack's `raw` column is DOUBLE-encoded JSON, so a bare grep
 # against it silently returns nothing. `-R` + `fromjson?` + `// empty` matches the decoder in
-# zot-inventory-assert-marker.sh and zot-inventory-marker-7278.sh: a mixed source carries rows
+# zot-inventory-assert-marker.sh: a mixed source carries rows
 # this has no business reading, and a hard `fromjson` aborts the whole pipeline on the first
 # one instead of skipping it.
 decode_rc=0

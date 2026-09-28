@@ -20,6 +20,11 @@
 # minimum-cardinality floor was met first (zero recorded calls satisfies every negative
 # assertion, and zero is exactly what a premature exit produces).
 #
+# THE END SAMPLER (#7377) is a child process behind the ZOT_INVENTORY_END_SAMPLE_CMD seam, so
+# its query egress (scripts/betterstack-query.sh, which allow-lists *.betterstackdata.com) is not
+# on this suite's wire. What the suite asserts about it is invocation, argv, the verdict it
+# drives, and that the registry pull token and the ingest bearer are stripped from its env.
+#
 # Run: bash tests/scripts/test-zot-inventory.sh
 set -uo pipefail
 
@@ -853,6 +858,124 @@ expect_field outcome partial "restart straddle"
 expect_field reason restart_during_sweep "restart straddle"
 if [ "$RC" -eq 1 ]; then pass "restart straddle exits 1"; else fail "restart straddle rc=$RC (want 1)"; fi
 
+echo "== #7377 — the enumerator takes its OWN END sample, so restart_during_sweep reaches the marker =="
+# Before #7377 no production caller set ZOT_RESTARTS_AT_END, so the durable marker shipped
+# `zot_restarts_at_end=unknown` on every run and the E8 arm above was reachable only from this
+# suite. These rows drive the arm the way production does: ZOT_RESTARTS_AT_END EMPTY,
+# BETTERSTACK_QUERY_HOST set, and a sampler (the zot-disk-sample.sh contract: key=value lines,
+# exit 0/2/3/4) behind the ZOT_INVENTORY_END_SAMPLE_CMD seam.
+END_SENTINEL="$TMP/end-sample.invoked"
+END_ENVNAMES="$TMP/end-sample.envnames"
+END_ARGV="$TMP/end-sample.argv"
+END_CONF="$TMP/end-sample.conf"
+END_CALLS="$TMP/end-sample.calls"
+# The enumerator runs the sampler under `env -i` with an allow-list, so the fake cannot be
+# configured through the environment: it reads a config file whose path is baked in here.
+# FAKE_AT is a space-separated list of sample_at values, one per successive call (the last
+# repeats), so the freshness re-poll can be driven.
+cat > "$TMP/fake-end-sample.sh" <<SH
+#!/usr/bin/env bash
+. "$END_CONF"
+: > "$END_SENTINEL"
+env | cut -d= -f1 > "$END_ENVNAMES"
+printf '%s\n' "\$*" > "$END_ARGV"
+n=\$(( \$(cat "$END_CALLS" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$END_CALLS"
+[ "\${FAKE_RC:-0}" = 0 ] || { echo "fake sampler: simulated rc=\$FAKE_RC" >&2; exit "\$FAKE_RC"; }
+set -- \$FAKE_AT; at="\$1"; k=1
+for a in "\$@"; do [ "\$k" -le "\$n" ] && at="\$a"; k=\$((k + 1)); done
+printf 'fs_size_gb=59\npcent=100\nboot_id=%s\nzot_restarts=%s\nsample_at=%s\nsample_age_s=30\n' \
+  "\$FAKE_BOOT" "\$FAKE_RESTARTS" "\$at"
+SH
+chmod +x "$TMP/fake-end-sample.sh"
+START_BOOT=6f1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9
+START_AT=2026-09-28T07:10:02.187669
+FRESH_AT=2026-09-28T07:15:02.289139
+end_conf() {  # FAKE_BOOT FAKE_RESTARTS FAKE_RC FAKE_AT
+  printf 'FAKE_BOOT=%q\nFAKE_RESTARTS=%q\nFAKE_RC=%q\nFAKE_AT=%q\n' "$1" "$2" "$3" "$4" > "$END_CONF"
+}
+run_end() {  # extra env assignments; production-shaped defaults for the END sample
+  rm -f "$END_SENTINEL" "$END_ENVNAMES" "$END_ARGV" "$END_CALLS"
+  dedup_fixture
+  run_inv "$INV_RUN" \
+    ZOT_RESTARTS_AT_END= \
+    ZOT_DISK_SAMPLE_AT="$START_AT" \
+    BETTERSTACK_QUERY_HOST=query.example.invalid \
+    BETTERSTACK_QUERY_USERNAME=qu BETTERSTACK_QUERY_PASSWORD=qp \
+    ZOT_INVENTORY_END_SAMPLE_CMD="$TMP/fake-end-sample.sh" \
+    ZOT_INVENTORY_END_SAMPLE_POLL_S=0 ZOT_INVENTORY_END_SAMPLE_WAIT_S=5 \
+    "$@"
+}
+
+end_conf "$START_BOOT" 15640 0 "$FRESH_AT"
+run_end
+expect_field zot_restarts_at_end 15640 "END sample, same boot, same count"
+expect_field outcome ok "END sample, same boot, same count"
+if [ -f "$END_SENTINEL" ]; then pass "the sampler was invoked on a production-shaped run"; else fail "the END sampler was never invoked"; fi
+if grep -qE -- '--since[[:space:]]+30m' "$END_ARGV" 2>/dev/null; then pass "the END sampler is asked for a 30m window"
+else fail "the END sampler was not called with --since 30m" "$(cat "$END_ARGV" 2>/dev/null)"; fi
+
+end_conf "$START_BOOT" 15641 0 "$FRESH_AT"
+run_end
+expect_field zot_restarts_at_end 15641 "END sample, same boot, count climbed"
+expect_field reason restart_during_sweep "END sample, same boot, count climbed"
+if [ "$RC" -eq 1 ]; then pass "a measured straddle exits 1"; else fail "measured straddle rc=$RC (want 1)"; fi
+
+# A replace or reboot mid-sweep resets the per-boot counter, so the counts alone can read
+# "no restart". EQUAL counts on a different boot isolate the boot clause (a 15640 -> 0 row
+# would also fire on the count clause and could not detect the boot clause's removal).
+end_conf 0a0b0c0d-1111-2222-3333-444455556666 15640 0 "$FRESH_AT"
+run_end
+expect_field reason restart_during_sweep "different boot, equal count"
+end_conf 0a0b0c0d-1111-2222-3333-444455556666 0 0 "$FRESH_AT"
+run_end
+expect_field reason restart_during_sweep "different boot, counter reset to 0"
+
+# FRESHNESS. The heartbeat is 5-minutely and a sweep takes ~2 min, so the newest row right
+# after the sweep is often the START row. Re-reading it would be a number with no measurement.
+end_conf "$START_BOOT" 15640 0 "$START_AT"
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S=0
+expect_field zot_restarts_at_end unknown "the only row available is the START row"
+if grep -qF 'no SOLEUR_ZOT_DISK row newer than the START row' "$ERR"; then pass "a stale END row is named as such on stderr"
+else fail "a stale END row was not reported" "$(tail -3 "$ERR")"; fi
+end_conf "$START_BOOT" 15641 0 "$START_AT $FRESH_AT"
+run_end
+expect_field zot_restarts_at_end 15641 "the sampler is re-polled until a row newer than START lands"
+expect_field reason restart_during_sweep "a straddle seen only on the re-poll still reaches the marker"
+if [ "$(cat "$END_CALLS" 2>/dev/null)" = "2" ]; then pass "exactly one re-poll after the stale row"
+else fail "sampler calls want 2 got '$(cat "$END_CALLS" 2>/dev/null)'"; fi
+
+end_conf "$START_BOOT" 15640 2 "$FRESH_AT"
+run_end
+expect_field zot_restarts_at_end unknown "END sampler transport failure"
+expect_field outcome ok "a missing END sample never fails the sweep"
+if [ "$RC" -eq 0 ]; then pass "END sampler failure keeps exit 0"; else fail "END sampler failure rc=$RC (want 0)"; fi
+
+end_conf "$START_BOOT" abc 0 "$FRESH_AT"
+run_end
+expect_field zot_restarts_at_end unknown "END sample with a non-numeric count"
+
+end_conf "$START_BOOT" 15640 0 "$FRESH_AT"
+run_end BETTERSTACK_QUERY_HOST=
+if [ -f "$END_SENTINEL" ]; then fail "the sampler ran with no BETTERSTACK_QUERY_HOST"; else pass "no query host => the sampler is not invoked"; fi
+expect_field zot_restarts_at_end unknown "no query host"
+
+run_end ZOT_RESTARTS_AT_END=15640
+if [ -f "$END_SENTINEL" ]; then fail "the sampler ran although the caller supplied ZOT_RESTARTS_AT_END"; else pass "a caller-supplied ZOT_RESTARTS_AT_END wins (sampler not invoked)"; fi
+expect_field zot_restarts_at_end 15640 "caller-supplied END value"
+
+# ALLOW-LIST: the sampler needs the QUERY credential and nothing else. DOPPLER_TOKEN is in the
+# real step's env (the prd-root service token), so it is planted here too.
+run_end DOPPLER_TOKEN=dp.st.sentinel
+if [ -s "$END_ENVNAMES" ] && grep -qx 'BETTERSTACK_QUERY_HOST' "$END_ENVNAMES" && grep -qx 'BETTERSTACK_QUERY_PASSWORD' "$END_ENVNAMES"; then
+  pass "the sampler receives the BETTERSTACK_QUERY_* credential (positive control for the negatives below)"
+else
+  fail "the sampler environment was not captured or lacks the BETTERSTACK_QUERY_* credential"
+fi
+for tok in ZOT_PULL_TOKEN ZOT_PULL_USER BETTERSTACK_LOGS_TOKEN DOPPLER_TOKEN GITHUB_RUN_ID; do
+  if grep -qx "$tok" "$END_ENVNAMES" 2>/dev/null; then fail "$tok reached the END sampler's environment"
+  else pass "$tok is not in the END sampler's environment"; fi
+done
+
 dedup_fixture
 run_inv "$INV_RUN" ZOT_DISK_SAMPLE_AGE_S=99999
 expect_field outcome degraded "stale disk sample"
@@ -1130,8 +1253,8 @@ fi
 # Minimum-cardinality guard: a silently-empty harness must fail loud.
 # ---------------------------------------------------------------------------------
 total=$((passes + fails))
-if [ "$total" -lt 90 ]; then
-  echo "FAIL: ran only ${total} assertions (<90) — the suite did not execute fully" >&2
+if [ "$total" -lt 160 ]; then
+  echo "FAIL: ran only ${total} assertions (<160) — the suite did not execute fully" >&2
   exit 1
 fi
 

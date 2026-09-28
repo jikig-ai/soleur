@@ -226,6 +226,48 @@ if [ "$RC" -eq 3 ]; then pass "a sub-floor budget yields unknown, not an absence
 expect_v outcome unknown "sub-floor budget"
 expect_v reason below_measured_ingest_floor "sub-floor budget"
 
+echo "== #7377 — marker_schema has a consumer: only schema 1 can be certified =="
+# The reader was written against schema 1. A future marker_schema=2 row may rename or re-mean
+# fields, so certifying it as `observed` would be reading v2 as if it were v1. The verdict is
+# `unknown` (exit 3): nothing was learned about whether the sweep landed in a shape this reader
+# understands, which is neither a pass nor a measured absence.
+schema_marker() {  # $1 = replacement for the `marker_schema=1 ` token ("" drops the field)
+  mk_marker "$RUN_ID" true | sed "s/ marker_schema=1 / ${1}/"
+}
+rows_encoded "$CONTROL_ROW" "$(schema_marker 'marker_schema=2 ')" "$CONTROL_ROW"
+run_gate "$GATE"
+if [ "$RC" -eq 3 ]; then pass "a marker_schema=2 row exits 3 (unknown), not 0"; else fail "marker_schema=2 rc=$RC (want 3)" "$(verdict)"; fi
+expect_v outcome unknown "marker_schema=2"
+expect_v reason marker_schema_unsupported "marker_schema=2"
+expect_v marker_rows 0 "marker_schema=2 is not a passing observation"
+
+rows_encoded "$CONTROL_ROW" "$(schema_marker '')" "$CONTROL_ROW"
+run_gate "$GATE"
+if [ "$RC" -eq 3 ]; then pass "a row with NO marker_schema field exits 3"; else fail "missing marker_schema rc=$RC (want 3)" "$(verdict)"; fi
+expect_v reason marker_schema_unsupported "missing marker_schema"
+
+# Anchoring: `marker_schema=10` contains `marker_schema=1` as a prefix.
+rows_encoded "$CONTROL_ROW" "$(schema_marker 'marker_schema=10 ')" "$CONTROL_ROW"
+run_gate "$GATE"
+if [ "$RC" -eq 3 ]; then pass "marker_schema=10 is not read as schema 1"; else fail "marker_schema=10 rc=$RC (want 3)" "$(verdict)"; fi
+expect_v reason marker_schema_unsupported "marker_schema=10"
+
+# must-PASS: a schema-1 row beside a schema-2 row for the same run still certifies — the
+# schema-1 row is fully understood.
+rows_encoded "$CONTROL_ROW" "$(schema_marker 'marker_schema=2 ')" "$(mk_marker "$RUN_ID" true)"
+run_gate "$GATE"
+if [ "$RC" -eq 0 ]; then pass "a schema-1 row still certifies beside a schema-2 row"; else fail "schema-1 beside schema-2 rc=$RC (want 0)" "$(verdict)"; fi
+
+# PARITY: the reader's expected schema is the emitter's schema. Read both literals from the
+# source rather than hand-copying them, so an emitter bump without a reader update reds here.
+emit_schema="$(sed -nE 's/^readonly MARKER_SCHEMA=([0-9]+)$/\1/p' "${ROOT}/scripts/zot-inventory.sh")"
+read_schema="$(sed -nE 's/^readonly EXPECTED_MARKER_SCHEMA=([0-9]+)$/\1/p' "$GATE")"
+if [ -n "$emit_schema" ] && [ "$emit_schema" = "$read_schema" ]; then
+  pass "reader EXPECTED_MARKER_SCHEMA ($read_schema) equals emitter MARKER_SCHEMA ($emit_schema)"
+else
+  fail "schema literal parity: emitter='$emit_schema' reader='$read_schema'"
+fi
+
 echo "== usage — a non-numeric run_id is refused (E10: the discriminator needs a numeric id) =="
 rows_encoded "$CONTROL_ROW"
 : > "$ARGV"
@@ -273,8 +315,8 @@ else
 fi
 
 total=$((passes + fails))
-if [ "$total" -lt 38 ]; then
-  echo "FAIL: ran only ${total} assertions (<38) — the suite did not execute fully" >&2
+if [ "$total" -lt 53 ]; then
+  echo "FAIL: ran only ${total} assertions (<53) — the suite did not execute fully" >&2
   exit 1
 fi
 
