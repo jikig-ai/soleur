@@ -685,3 +685,13 @@ Dated text above is not rewritten.
   2026-09-21 entry provides; ADR-237 recorded it `accepted` on 2026-09-27.
 - **The frontmatter stays `proposed`,** the least-advanced status, because D2–D3 are `proposed`.
   Dated text above is not rewritten.
+
+### 2026-09-28 (#5914, PR #9096): the app's unpinned git-data arm is deleted
+
+- **The flag-flip precondition "#5914 closed" is met on the merge of PR #9096** (host-key step 6): the app's
+  transitional unpinned fallback arm is deleted, and the pin resolver now refuses an absent pin
+  whatever `GIT_DATA_STORE_ENABLED` says (ADR-237, Addendum PR #9096). From this merge, a
+  `git-data-cutover.yml` dispatch from `main` reads `TOFU_ARM absent`. The other flip preconditions
+  (the pin present in `prd`, #8572 paging, and #8211's per-id re-erasure path, which the LUKS
+  cutover runbook requires before the first flip) stand. No earlier entry is edited, and no status in D5
+  changes.

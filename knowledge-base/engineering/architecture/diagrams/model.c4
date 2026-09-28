@@ -793,7 +793,8 @@ model {
   coordinator -> supabase "Reads worktree lease" { technology "PostgreSQL" }
   api -> sessionStore "Session/replay state" { technology "Redis (TLS)" }
   claude -> sessionStore "Replay buffer + control state" { technology "Redis (TLS)" }
-  claude -> gitDataStore "Bare repo data; worktrees local (TARGET state — the host is born but the store is empty until the LUKS cutover, #5274). Host key pinned via GIT_DATA_SSH_HOST_KEY (ADR-237), loaded at deploy; a transitional unpinned fallback applies only while no pin is published and the store flag is off (#5914)" { technology "git over private net" }
+  claude -> gitDataStore "Bare repo data; worktrees local (TARGET state — the host is born but the store is empty until the LUKS cutover, #5274). Host key pinned via GIT_DATA_SSH_HOST_KEY (ADR-237), loaded at deploy; an absent or malformed pin refuses the dial (#5914)" { technology "git over private net" }
+  api -> gitDataStore "Art. 17 erasure of the user's bare repo over the REMOVE key's forced command (git-data-remove.sh), reached from account deletion (the API route and the agent's account tool, both via server/account-delete.ts); NOT gated on GIT_DATA_STORE_ENABLED, so a repo left by a flag-on window is still erased. Host key pinned (ADR-237); an absent or malformed pin returns `unconfigured` without dialing (#5914)" { technology "SSH over private net" }
   scheduler -> hetzner "Schedules" { technology "Nomad" }
 
   // ---- C4 L3 (Component — Soleur Plugin) — 21 relationships --------------
