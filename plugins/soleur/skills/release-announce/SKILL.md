@@ -19,8 +19,10 @@ description: "This skill should be used when announcing a new release. It parses
 
    ```bash
    # The version already released (latest tag), for the already-exists check in Step 2
-   gh release list --limit 1 --json tagName --jq '.[0].tagName'   # → vX.Y.Z
-   git describe --tags --abbrev=0                                  # offline equivalent
+   # Plugin tags only: this repo also publishes web-v* releases and zot-image-* prereleases (#8714)
+   gh release list --exclude-drafts --exclude-pre-releases --limit 30 --json tagName \
+     --jq '[.[] | select(.tagName | test("^v[0-9]"))][0].tagName'  # → vX.Y.Z
+   git describe --tags --abbrev=0 --match 'v[0-9]*'               # offline equivalent
    ```
 
    If the operator named a version, use that. Otherwise announce the version the operator is releasing now — this skill is the fallback for when `version-bump-and-release.yml` did not create the release, so the tag may not exist yet. Confirm the version with the operator before creating anything; never infer it from a manifest.

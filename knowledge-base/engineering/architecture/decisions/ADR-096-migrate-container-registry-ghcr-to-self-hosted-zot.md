@@ -1675,3 +1675,32 @@ recorded.
   absence from the registry is not read as `registry_drift`.
 - **5.3b-iii and 5.6 are unchanged** (the anonymous `ghcr.io` pulls, the egress allow, and this
   ADR's status flip).
+
+## Amendment 2026-09-28 (#8714 step 5.3b-iii, part 1) — the cosign verifier leaves ghcr.io
+
+This supersedes the cosign half of the 2026-09-24 amendment's "The anonymous `ghcr.io` pulls … are
+unchanged" bullet. The zot half is part 2 (PR 2b of the same step).
+
+- **What moved.** `ci-deploy.sh` `COSIGN_IMAGE` now names
+  `gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870`.
+  That is the Sigstore project's own registry, at the **same manifest digest** as the former
+  `ghcr.io/sigstore/cosign/cosign` ref. Measured 2026-09-28: an anonymous pull under the exact
+  `COSIGN_ANON_CONFIG` (#8036 1a) ran `v3.1.1`, and both refs resolved to one local image ID. The
+  digest pin, not the registry, is the trust anchor, so no verification semantics change.
+- **Why this is not Alternatives row 6.** Row 6 rejects a managed registry for **our own images**.
+  This is a third-party verifier image fetched from its publisher, byte-identical and
+  digest-pinned. No Soleur image moves, and no credential is involved.
+- **The new dependency, stated plainly.** gcr.io becomes a per-deploy dependency of every web host,
+  anonymous and free. It sees the hosts' public IPs (it is Google infrastructure), and it is the
+  domain of Google's deprecated Container Registry product. If it stops serving this image, or
+  rate-limits it, every deploy logs `IMAGE_VERIFY_FAIL result=cosign_absent`. In `warn` mode that
+  deploy proceeds unverified, exactly as a ghcr.io outage did before. The classifier now reads
+  docker's measured pull-error shape for that case. The digest repeats twice, so the old
+  `tail -c 400` read missed it. The WARN→ENFORCE flip (#6129) inherits this dependency. Before
+  flipping, confirm Sigstore still publishes this digest here, or re-source it.
+- **C4.** The last `hetzner -> ghcr` edge is deleted and re-targeted as `hetzner -> sigstore` (an
+  image-distribution edge; verify stays offline). The zot boot image's `zotRegistry -> projectZot`
+  edge is unchanged until part 2.
+- **Also shipped here.** The mirror that part 2 consumes: `zot-image-oci-archive.sh` and
+  `.github/workflows/zot-image-mirror.yml`. They publish the exact upstream zot blobs as the
+  immutable prerelease `zot-image-<version>-<D12>`. No host reads it yet.

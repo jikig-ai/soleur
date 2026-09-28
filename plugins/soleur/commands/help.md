@@ -12,7 +12,7 @@ Display a formatted overview of all available Soleur capabilities. Read the plug
 
 Use the **Read tool** to read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` to get the plugin name, description, and metadata.
 
-**The manifest carries no `version` key** — that is deliberate, not an omission (a constant version string makes `claude plugin update` compare equal and no-op while reporting success, #7471). Do not report a version read from it. If a version is wanted, it comes from the latest GitHub Release tag (`gh release list --limit 1 --json tagName --jq '.[0].tagName'`); if that is unavailable, print no version rather than guessing one.
+**The manifest carries no `version` key** — that is deliberate, not an omission (a constant version string makes `claude plugin update` compare equal and no-op while reporting success, #7471). Do not report a version read from it. If a version is wanted, it comes from the latest plugin release tag (`gh release list --exclude-drafts --exclude-pre-releases --limit 30 --json tagName --jq '[.[] | select(.tagName | test("^v[0-9]"))][0].tagName'` — the repo also publishes `web-v*` and `zot-image-*` releases); if that is unavailable, print no version rather than guessing one.
 
 If `CLAUDE_PLUGIN_ROOT` is not set or the path does not exist, try reading from `plugins/soleur/.claude-plugin/plugin.json` (monorepo checkout) or `~/.claude/plugins/*/soleur/.claude-plugin/plugin.json` (legacy installed path).
 
