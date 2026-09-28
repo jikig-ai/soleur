@@ -277,6 +277,11 @@ web-1 is false until the cutover runs.
 > `SOLEUR_SENTRY_DSN=` line only. No real cutover reached the step that delivers them, so
 > `terraform_data.luks_monitor_install` now does. The mount-gate claim above stands. See the
 > 2026-09-27 addendum.
+>
+> **Superseded 2026-09-28 (#9123):** the mount-gate claim too. The §(e) gate and the boot
+> unlock reach web-1 through `terraform_data.workspaces_boot_unlock_install`, not the cutover
+> channel. See the
+> [2026-09-28 addendum](#addendum-2026-09-28-the-e-mount-gate-and-the-boot-unlock-have-a-terraform-owner-9123).
 
 **Reboot is the sharper edge.** `docker run --restart unless-stopped` means `dockerd` resurrects the
 container on reboot **without ever executing `docker run`** — so a pre-`docker run` gate catches
@@ -1188,9 +1193,122 @@ prints `ExecStart` itself or a journal tail, because a transient unit's journal 
 line into the public Actions log. This is another in-place web-1 change under ADR-154's standing
 exception (re-examined 2026-09-28: `cx33` is available in 0 of 6 datacenters).
 
+> **Qualified 2026-09-28 (#9123):** "available in 0 of 6 datacenters" was the 08:05Z sample.
+> The 21:31Z–21:34Z re-probe for #9123 reads `cx33` **available** in `hel1-dc2` and `fsn1-dc14`
+> — the first ✓ in web-1's DC since 2026-08-01. See the next addendum and ADR-154's #9123 note.
+
 **Reboot hazard.** The fstab finding moved the green-path reboot instruction (C15) to #9123. A
 web-1 restart currently lands in emergency mode, so no reboot is planned until the coupled
 fstab + crypttab + §(e) gate fix ships.
+
+> **Delivered 2026-09-28 (#9123):** the coupled fstab + crypttab + §(e) gate fix is the next
+> addendum. The C15 restart proof itself stays the runbook's separate supervised step — it is
+> unblocked, not performed, by this delivery.
+
+## Addendum (2026-09-28): the §(e) mount gate and the boot unlock have a Terraform owner (#9123)
+
+**What was wrong.** Three coupled boot-path defects made a web-1 restart a site-down event,
+measured in the apply-run prints (run 36340195638; `reboot-required=yes` on run 36425473000),
+not inferred:
+
+1. `/etc/fstab` on web-1 carries the **literal** glob `/dev/disk/by-id/scsi-0HC_Volume_*` — the
+   unexpanded first-boot line of 2026-03-17. systemd-fstab-generator expands no globs and the
+   line has no `nofail`, so `mnt-data.mount` waits on a device that can never appear and
+   `local-fs.target` fails into emergency mode.
+2. `/dev/mapper/workspaces` — the live `/mnt/data` source since the 2026-07-23 cutover — is in
+   neither fstab nor crypttab. Nothing unlocks it at boot: no crypttab line, no key-fetch unit.
+3. §(e)'s structural mount gate never reached web-1. It routed through the cutover channel and
+   no cutover tail ever ran to completion — the same delivery gap that left the monitor units
+   uninstalled for nine weeks (the 2026-09-27 addendum).
+
+The obvious one-line fix — rewrite fstab to `/dev/mapper/workspaces … nofail` alone — is worse
+than the defect: the boot then succeeds with `/mnt/data` as a bare root-disk directory, dockerd
+resurrects the app container over `--restart unless-stopped`, and sole-copy workspaces land on
+the unencrypted root disk. The three parts are coupled and land atomically.
+
+**Decision.** `terraform_data.workspaces_boot_unlock_install` in `workspaces-luks.tf` owns the
+delivery, riding the same CF-Tunnel-SSH apply stage as `terraform_data.luks_monitor_install`
+(the #8706 precedent extended), with `depends_on` on both monitor installers so the token and
+the probe channel land first. In one resource fire it:
+
+1. prints the read-only "before" state (field-selected fstab source, crypttab
+   `^workspaces` count, unit states);
+2. delivers the `workspaces-luks-reopen` family — the phase-tagged reopen script
+   (`config → key → device → header → open → identity → target → mount → identity-mount →
+   emit`), the `Type=oneshot` unit with the bounded restart ladder, the `-failure.service`
+   reporter, and the standing-retry `.timer` — modelled on the `git-data-luks-reopen` family
+   (#8210);
+3. writes `/etc/default/workspaces-luks-boot` (0600 root: the by-id device pin and the Doppler
+   config name — a NEW env file; `/etc/default/luks-monitor`'s two-writer ownership is
+   untouched, the reopen unit reads `DOPPLER_TOKEN` through it and never writes);
+4. appends-if-absent the crypttab line `workspaces
+   /dev/disk/by-id/scsi-0HC_Volume_<hcloud_volume.workspaces_luks.id> none luks,noauto`;
+5. rewrites fstab idempotently to exactly one `/dev/mapper/workspaces /mnt/data ext4
+   defaults,nofail 0 2` line, commenting every superseded line and refusing on a zero- or
+   two-plus-`/mnt/data` post-edit table;
+6. arms the §(e) gate: `docker.service.d/10-workspaces-luks-mount.conf` carrying
+   `RequiresMountsFor=/mnt/data` AND `After=workspaces-luks-reopen.service` (docker queues
+   behind the unlock ladder instead of racing `dev-mapper-workspaces.device`'s timeout), plus
+   `chattr +i` on the **covered** root-disk `/mnt/data` inode through a non-recursive
+   `mount --bind /` peek — the mapper is mounted, so the baked gate's `mountpoint -q`-guarded
+   arm cannot reach that inode on web-1;
+7. daemon-reloads (docker is never restarted — the drop-in takes effect at the next
+   `docker.service` start), enables the units, and runs one proof start of the reopen service,
+   which takes the `noop` arm on the live system — the mapper is already open, so the run
+   exercises config/key/device/header/identity/target/mount end to end without touching the
+   mount;
+8. prints the post-state into the apply log: `findmnt --fstab`, `crypttab-workspaces-lines`,
+   unit states, `lsattr -d` through a second peek, `systemd-analyze verify`.
+
+Every mutating step refuses with the exit-17 convention while `workspaces-luks-deadman.timer`
+reads `SubState=waiting` — the installer and a live cutover are mutually exclusive writers of
+fstab/crypttab. `triggers_replace` hashes every delivered byte (the four files plus the writer
+locals), so host drift re-delivers on the next apply; nothing marks the host done permanently.
+
+**What this changes in §(e).** §(e)'s last standing claim — "the live delivery path for web-1
+is the cutover job's SSH channel" — is superseded for the mount gate too. The gate and the
+unlock reach web-1 through Terraform, as the monitor units did under #8706. The cutover tail
+stays: it installs the same state a future re-cut re-verifies, and it remains the only writer
+*while a cutover owns the freeze* (which is why the exit-17 refusal exists). The bake
+(`soleur-luks-structural-gate`) is unchanged and stays the fresh-host convention; #6931 owns
+the fresh-host boot-unlock path and is deliberately not this work.
+
+**The crypttab divergence is recorded, not reconciled.** The baked gate writes `workspaces
+/dev/disk/by-label/workspaces_luks none luks,nofail`; web-1's line is `workspaces
+/dev/disk/by-id/scsi-0HC_Volume_<id> none luks,noauto`. Two deliberate differences:
+
+- **by-id over by-label** — the repo's volume-pinning convention (#6604), Terraform-interpolated
+  from `hcloud_volume.workspaces_luks.id`. Nothing in the cutover writes a `workspaces_luks`
+  LUKS label, so the by-label spelling would not resolve on web-1 today.
+- **`noauto` over `nofail`** — on web-1 the reopen unit owns the unlock, so the
+  `systemd-cryptsetup@workspaces` ask-password job must not enter boot ordering at all: under
+  `nofail` it would sit in a bounded interactive-timeout window every boot and could race the
+  unit's `luksOpen`. crypttab stays declarative — the declared mapping and the manual-recovery
+  handle — while the unit does the work. The baked `nofail` was written for a host whose unlock
+  half is deferred; when #6931 lands, the baked line should be reconciled to this shape.
+
+**Delivery vs. decision.** The decision is true at merge; the *delivery* is verified
+post-apply — the installer's before/after prints must show the single mapper fstab line,
+`crypttab-workspaces-lines=1`, the units enabled, the peek `lsattr -d` showing `i`, and the
+proof run reporting `noop` — the #8706 print contract extended, plus the unchanged daily
+`workspaces-luks-verify` job. A success-path emit deliberately does NOT page: `op` is hardcoded
+to the sole paging op `workspaces-luks-drift`, so success is a journald row under
+`SyslogIdentifier=workspaces-luks-reopen` (registered in `vector.toml`, re-delivered by
+`terraform_data.journald_persistent`), and only an exhausted restart ladder emits one fatal
+envelope naming the failing phase.
+
+**Deviation from `hr-prod-host-config-change-immutable-redeploy`.** This is a multi-file
+in-place delivery on web-1 over SSH through Terraform — the same class as #8706, resting on
+ADR-154's standing exception. Re-examined the same day
+([ADR-154's #9123 note](./ADR-154-repair-the-credential-channel-not-the-host.md#consequences)):
+the probe reads `cx33` **available** in `hel1-dc2` for the first time since 2026-08-01, so the
+exception's expiry question is live and the immutable-redeploy route is re-weighed on #9123
+before this ships — the plan's own instruction when a probe reads ✓.
+
+**The runbook's C15 step is unblocked, not performed.** `workspaces-luks-cutover-6604.md` §4's
+"Boot-path re-canary (C15)" moved from blocked-on-#9123 to delivered-by-#9123: the proof itself
+is unchanged — one supervised restart, then the read-only verify — and it stays the runbook's
+separate gated step, not a step of this delivery.
 
 ## References
 

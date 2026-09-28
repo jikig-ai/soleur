@@ -99,17 +99,33 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 <!-- lint-infra-ignore start: C15 boot-path re-canary is a deliberately-retained deferred-orchestrator
      operator step — the cutover does NOT auto-reboot (a reboot drops the SSH session mid-run), so the
      one host-reboot is operator-gated by design and cannot be routed through the dispatch. -->
-4. **Boot-path re-canary (C15) — blocked on #9123. Do NOT reboot web-1.** The cutover does NOT
-   auto-reboot (a reboot drops the SSH session mid-run). The boot path is not ready yet:
-   - web-1's `/mnt/data` fstab line is the literal glob `/dev/disk/by-id/scsi-0HC_Volume_*`
-     without `nofail`;
-   - nothing unlocks the mapper at boot;
-   - the §(e) mount gate was never delivered.
+4. **Boot-path re-canary (C15) — delivered by #9123.** The cutover does NOT
+   auto-reboot (a reboot drops the SSH session mid-run), so this step stays operator-gated.
+   The boot path #9123 delivered:
+   - web-1's `/mnt/data` fstab line is `/dev/mapper/workspaces … defaults,nofail` — exactly one
+     entry, the literal glob preserved only as a comment;
+   - `workspaces-luks-reopen.service` unlocks the mapper at boot — the key fetched via
+     `doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks`, piped to
+     `cryptsetup luksOpen --key-file -` — with a bounded restart ladder and the standing
+     `.timer` re-attempting; crypttab declares the same mapping `luks,noauto` as the
+     manual-recovery handle;
+   - the §(e) mount gate is armed: `docker.service.d/10-workspaces-luks-mount.conf` carries
+     `RequiresMountsFor=/mnt/data` + `After=workspaces-luks-reopen.service`, and the covered
+     root-disk `/mnt/data` inode is `chattr +i`.
 
-   A restart very likely lands web-1 in emergency mode, unreachable over SSH. Once #9123's coupled
-   fix ships, the C15 proof is: reboot once, then run the read-only verify below. The run-keyed
-   `CANARY_OK` persisted to the host state file cannot satisfy a fresh post-reboot check; only a new
-   green verify does.
+   The C15 proof is: reboot once, then run the read-only verify below. Before rebooting,
+   confirm the delivery actually landed — the `terraform_data.workspaces_boot_unlock_install`
+   post-state print in the latest `apply-web-platform-infra.yml` run must show the single
+   mapper fstab line, `crypttab-workspaces-lines=1`, the reopen units enabled, the peek
+   `lsattr -d` reporting `i`, and the proof run reporting `noop`. If that print is absent or
+   red, this step is still blocked. The run-keyed `CANARY_OK` persisted to the host state file
+   cannot satisfy a fresh post-reboot check; only a new green verify does.
+
+   > If the unlock fails during the reboot, the expected shape is a DEGRADED boot, not emergency
+   > mode: `nofail` lets `local-fs.target` complete, `RequiresMountsFor` holds `docker.service`
+   > down (site down, data-safe — nothing can write the covered root-disk inode), the restart
+   > ladder retries, and an exhausted ladder pages once via `op=workspaces-luks-drift` naming
+   > the failing phase. That is the failure mode to look for on a bad outcome.
 <!-- lint-infra-ignore end -->
 
 5. **Verify (read-only, no SSH).**
