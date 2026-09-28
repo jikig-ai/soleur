@@ -83,7 +83,12 @@ rendered script under `dash -u` with `env -i` + the executed-write fixture + the
 
 ## 1.4 `TimeoutStartSec` derivation
 
-Bounded steps, from the steps' own bounds (not healthy history):
+**Superseded by the review batch (PR #9159): 45 min did NOT hold; the unit now sets
+`TimeoutStartSec=65min`.** The first derivation below omitted the bootstrap's synchronous
+`systemctl` waits and the two steps the review added (the reboot-path NIC wait and the dpkg
+recovery). The corrected sum follows the original table.
+
+Bounded steps, from the steps' own bounds (not healthy history) — original derivation:
 
 | Step | Bound |
 |---|---|
@@ -105,6 +110,47 @@ inside each `inngest-redact.sh` call. Margin ≥ 10 min → **`TimeoutStartSec=4
 (1,910 s + 790 s = 2,700 s). Better Stack history cross-check: NOT performed (no read-only
 `BETTERSTACK_QUERY_*` credentials in this session's environment). The arithmetic is also in the
 unit's comment in `cloud-init-inngest.yml`.
+
+### 1.4b Corrected derivation (review batch)
+
+| Added or previously missing step | Bound |
+|---|---|
+| reboot-path NIC wait (`soleur-inngest-nic-wait`, only when the address is absent) | 150 s |
+| `timeout 300 dpkg --configure -a` before the bootstrap | 300 s |
+| `inngest-server` restart inside the bootstrap (`TimeoutStopSec=180` + default start 90 s) | 270 s |
+| `inngest-redis` restart (`inngest-redis-bootstrap.sh`: stop 30 s + start 90 s) | 120 s |
+| `vector` restart (stop 30 s + start 90 s) | 120 s |
+| `systemd-journald` restart (default start 90 s) | 90 s |
+| heartbeat oneshot (curl `--max-time 10`) + server-probe oneshot (`TimeoutStartSec=120`) | ~130 s |
+| `docker create` + 13 `docker cp` (local) | ~30 s |
+| ~5 more emits than the first count (the new stages) | ~40 s |
+| **added** | **~1,250 s** |
+
+The `enable --now` of the heartbeat, probe, flip and LUKS-cutover timers are near-instant; the
+bootstrap's own `DRAIN_SLEEP_SEC` + `sleep 2` were already counted.
+
+Bounded sum: ~1,910 s + ~1,250 s − the double-counted ~40 s of emits ≈ **3,220 s (~54 min)**.
+Unbounded steps are unchanged (inngest binary curl, the redis apt path, the isolation
+`doppler run`, the redaction downloads). Margin ≈ 11 min → **`TimeoutStartSec=65min`**
+(3,900 s). The unit comment carries the same arithmetic. The static guard allows 20 min–2 h.
+
+### Retry rate with the back-off (review item 9)
+
+`RestartSec=120`, `RestartSteps=4`, `RestartMaxDelaySec=15min` (systemd ≥ 254; the host runs
+255). systemd interpolates the delay geometrically over the four steps:
+120 s → ~198 s → ~329 s → ~545 s → 900 s, then it stays at 900 s.
+
+| Failure shape | Attempt length | First hour | Backed off |
+|---|---|---|---|
+| fast fail (refused connection, isolation FATAL, env missing) | seconds | the first 4 retries take ~20 min; ~8 attempts in hour one | 3600 / 900 ≈ **4/h** |
+| zot unreachable (60 s login + one 180 s pull timeout, not retried, + readiness and emits) | ~330 s | ~5 in hour one (starts at 0, 450, 979, 1638, 2512 s) | 3600 / (330 + 900) ≈ **3/h** |
+
+The review said "~330 s ≈ 11/h" for the zot case; 11/h is the attempt length alone
+(3600 / 330). With the restart delay it is 3600 / 450 = 8/h at a flat `RestartSec=120`, ~5 in
+the first hour with the back-off, and ~3/h once backed off.
+Paging stays capped by the Sentry rule's 23-minute throttle on one grouped issue either way.
+Tier B disables the back-off with a `RestartSteps=0` drop-in (every retry is 2 s); the
+production ladder is pinned statically (G6 "the restart delay backs off", row G6-r16).
 
 ## Payload (Phase 0.2 / 3.5)
 
@@ -258,3 +304,108 @@ suite was run against that copy, and the worktree template's sha256 was compared
 | place the FSM quiesce after the bootstrap call | RED | TA T4 quiesce order (stop=32 > boot=31) |
 
 Worktree template sha256 `96389d43…0b7f3b` before and after: IDENTICAL.
+
+## Review batch (PR #9159, 11-agent panel on 760504c6e1)
+
+### Template and script changes
+
+1. **Degraded success does not latch.** After `inngest-bootstrap.sh` exits 0 the script requires
+   `systemctl is-active --quiet inngest-redis.service` and the `--postgres-max-open-conns`
+   sentinel in `/etc/systemd/system/inngest-server.service` (the bootstrap's own durable-ExecStart
+   detection sentinel, present only in its `REDIS_READY=1` arm). A requested diagnostic boot
+   (`INNGEST_DIAGNOSTIC_BOOT` in `1|true|TRUE|yes|YES`, the bootstrap's own accepted set, after
+   whitespace stripping) is exempt. Degraded: phone-home `bootstrap-done-DEGRADED`
+   (`why=… attempt=N iid=…`) and Sentry `bootstrap_done_degraded` at `warning`, the diagnostics
+   still run, exit 0, no latch.
+2. **The quiesce records which FSM timers were active** and `on_exit` (rc ≠ 0) starts exactly
+   those again.
+3. **Busy is wider:** either oneshot `activating`, a non-empty
+   `/var/lib/inngest-luks-cutover/frozen-active`, or `"flag":"flipping"` in the flip FSM's host
+   state slot `/var/lock/inngest-cutover-flip.state` (written by `inngest-cutover-flip.sh`
+   `emit_state`, `jq -nc`, so compact JSON). Residual: a frozen-active record that is NEVER
+   cleared would hold every attempt at `provision-fsm-busy`; on a replaced host `/var/lib` is a
+   fresh root disk, so that needs an un-latched host that rebooted mid-LUKS-cutover.
+4. `on_exit` reports first, then cleans up; the container removal is `timeout 15 docker rm -f`.
+5. `last_stage` is set before every phone-home; `provision_attempt_failed` carries
+   `rc=N.attempt=N.why=<stage>.iid=…` (soleur-boot-emit's charset, iid last so a cut drops it).
+6. `iid=` on isolation-check-passed/-FAILED, `inngest_pull_fatal` (Better Stack detail, both arms),
+   pre-bootstrap-run, bootstrap-exit-N and bootstrap-failure-journal.
+7. **Reboot-path NIC check.** `soleur-inngest-nic-wait` was read: it only reads `ip`/`networkctl`
+   state, loops at most 75 × 2 s = 150 s, emits one `private_nic_*` event and always exits 0 —
+   idempotent and bounded, but it never fails. So the script checks for the address first (no
+   call, no emit when present: a healthy attempt does not re-page `web_private_nic_boot_gate`),
+   runs the helper only when absent, re-checks, and on a still-absent address emits
+   `provision-nic-ABSENT` and exits 1.
+8. `timeout 300 dpkg --configure -a` (non-fatal) before the bootstrap.
+9. `RestartSteps=4`, `RestartMaxDelaySec=15min`; rates above. `TimeoutStartSec=65min` (1.4b).
+10. One `STAGED` list drives both the per-attempt `rm -f` loop and the `docker cp` loop.
+11. `inngest-boot-phone-home.sh` passes `Authorization` via `curl -q -K -` on stdin.
+12. Write-time charset guards before the `/etc/default/inngest-doppler` and
+    `/etc/default/soleur-zot-read` writes: each value is read through a QUOTED heredoc (a quote in
+    the value cannot break the check) and refused unless it matches `[A-Za-z0-9._:/-]`; refusal
+    phones home (`inngest-doppler-write-REFUSED` / `zot-read-write-REFUSED`) and `exit 1`s the
+    runcmd shell. The zot pull password is `random_password { special = false }`, so real values
+    pass. The item's previous "failure convention" was none (a bare printf); the stage-then-exit
+    shape follows the surrounding items. Probed: `dp.st.prd.ab'c;$(id)` → REFUSED, rc 1.
+13. Comments corrected: the vector.toml copy (the web host copies by container name, this host by
+    the create ID); the environment check (HOME always comes from `Environment=`); the xtrace
+    refusal (it runs before the trap; its signature is armed-with-no-attempt-start, not a page);
+    the arming residual (a failed item, a LUKS FATAL included, does NOT stop runcmd; the residual
+    is a hang, cloud-init failing before runcmd, or the two new charset guards).
+
+### Suite changes (`cloud-init-inngest-provision-unit.test.sh`)
+
+- Static layer rewritten and widened: write_files paths normalized and aliases refused;
+  drop-ins/shadow copies/`systemctl edit|set-property` of the unit or timer refused (write_files,
+  runcmd, bootcmd); forbidden service directives (`TimeoutSec`, `StartLimitInterval`,
+  `StartLimitBurst`, `RestartPreventExitStatus`, `SuccessExitStatus`, `UnsetEnvironment`,
+  `KillSignal`, `KillMode`, `OnFailure`, `OnSuccess`, `RestartForceExitStatus`, `TimeoutStopSec`,
+  `FinalKillSignal`); the back-off pinned; the timer's `Unit=` and `AccuracySec` pinned; xtrace
+  refused anywhere in the script including heredoc bodies; pull/login matching folds `/usr/bin/docker`,
+  `"docker"` and backslash continuations and counts `docker run|create "$ZIREF"` as a pull; the
+  `timeout 180` literal pinned; exactly one `inngest-bootstrap.sh` invocation, in the script;
+  `bootcmd:` scanned; unit starts counted without the suffix and via `add-wants`; the latch census
+  covers `tee`, `N>`, `2>`, `exec N>`, `mkdir`, `dd of=` and `"$STATE"/done`; heredoc detection
+  ignores `<<` in comments and `$(( ))`; the three iid derivations must be byte-identical; both
+  charset guards present.
+- Tier A: the latch invariant after every scenario; new scenarios TN (NIC absent), TD1/TD2
+  (degraded), TD3 (diagnostic exempt), Q1–Q4 (each busy signal: fsm-busy, exit 1, no bootstrap,
+  the flip timer restarted), Q5 (the not-busy shapes), and T4 now proves the LUKS timer restart;
+  T7 proves the report precedes the bounded cleanup. Control row: 94 → **160** assertions.
+- Rows: 59 → **83** (74 RED + 9 must-PASS). New IDs: G1-r9..r13, G2-r12..r16, G3-r9..r13,
+  G5-r7, G5-r8, G6-r11..r16, G8-r6 (must-PASS: `<<` in a comment and in arithmetic).
+- Tier B: `ip`/NIC-wait stubs, an enabled `inngest-redis.service` stand-in, the fake bootstrap
+  writes a durable-shaped server unit, and a `RestartSteps=0` drop-in. An unbootable container is
+  now a FAIL under CI (still a named skip locally); the ADR-188 apt `arm_skip` is unchanged.
+- Code quality: every verdict-bearing `producer | grep -q` / `| awk … exit` became
+  capture-then-match or a herestring; `SRC`, `nfail` (nothing counted into it — the fault
+  counter is `nfault`) and the unused loop variables were removed; the dead
+  `static_out | grep -q … && return 1; return 1` pair was removed.
+
+### Mutation re-check (source template, sandbox copies; green control first)
+
+| Mutation | Result | Row(s) that also pin it |
+|---|---|---|
+| control (unmutated) | GREEN (C0 160/160) | — |
+| (a) `[ "$rc" -eq 124 ] && : \| tee "$LATCH"` in `on_exit` | RED: G3 latch write-site count; TA T8 latch-iff | G3-r9 |
+| (b) latch written on a degraded success | RED: G3 write-site count; TA TD1/TD2 latch-iff | G3-r10 |
+| (c) `= activating` → `= activatingX` | RED: TA Q1 (exit, busy, restart) | G2-r12 |
+| (d) the provision-fsm-busy `exit 1` removed | RED: TA Q1–Q4 | G2-r13 |
+| (e) luks-cutover dropped from the quiesce loop | RED: TA Q2 | G2-r14 |
+| (f) a runcmd `/usr/bin/docker pull` | RED: G1 runcmd pull (found 1) | G1-r9 |
+| (g) a drop-in under `soleur-inngest-provision.service.d/` | RED: G6 no drop-in | G6-r11 |
+| (h) `set -x` after the refusal | RED: G6 no xtrace anywhere | G6-r12 (G6-r15: in the heredoc) |
+| (i) `TimeoutSec=infinity` | RED: G6 forbidden directives | G6-r13 |
+| (j) `timeout 180` → `timeout 1800` | RED: G1 `timeout 180` pin | G1-r10 |
+| (k) `on_exit` restart of stopped timers removed | RED: TA T4, Q1, Q2 restart rows | G2-r15 |
+
+Worktree template sha256 `7a39177f…734655153` before and after: IDENTICAL.
+
+### Numbers after the review batch
+
+- Payload: stored 19,568 B, headroom 13,200 B (was 18,396 / 14,372). The soft bracket in
+  `cloud-init-user-data-size.test.ts` (20,000) still holds; no raise.
+- Mint dry-run: `result=noop` (`reason=unchanged`, base `vinngest-v1.1.40`).
+- Re-pointed suites: bootstrap 230/230; zot-pull battery 61/61; `inngest-host.test.sh` 83 → 85
+  (STAGED list assigned once + the one copy loop); `inngest-boot-emitter.test.sh` 93 → 95 (the
+  curl stub reads `-K -` stdin; two new rows: the token is not on argv, and it is on stdin).
