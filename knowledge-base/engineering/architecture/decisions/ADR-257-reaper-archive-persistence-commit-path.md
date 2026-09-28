@@ -61,19 +61,35 @@ both `archive_kb_files` call sites) through a single classification:
    payload is left and `SOLEUR_REAP_ARCHIVE_STAGED` is emitted, so the
    session's own commits still carry it; `LEFTHOOK=0` is never used.
 3. **Tracked artifact + non-committable checkout** (`main`/`master`, detached
-   `HEAD`, or the bare root) → **no move at all**. `SOLEUR_REAP_ARCHIVE_DEFERRED
-   slug=<s> reason=<main-checkout|detached|bare>` is emitted and the live files
-   stay in place. No worktree mutation is produced, so nothing exists for a
-   later reset or mirror-sync to asymmetrically revert — the defect is removed
-   at the producer, not patched downstream. Archival defers to the next reap
-   that runs in a committable context (a worktree session), which re-derives
-   the same move from the still-live paths.
+   `HEAD`, unborn HEAD, a merge in progress, or the bare root) → **no move at
+   all**. `SOLEUR_REAP_ARCHIVE_DEFERRED slug=<s> reason=<main-checkout|detached|
+   unborn|merge-in-progress|bare|git-mv-failed|outside-git-root|
+   unsafe-destination>` is emitted and the live files stay in place. No worktree
+   mutation is produced, so nothing exists for a later reset or mirror-sync to
+   asymmetrically revert — the defect is removed at the producer, not patched
+   downstream. Archival defers to a reap that runs in a committable context —
+   and the committable context is specifically a **non-bare** checkout on a
+   feature branch. On the bare-repo dev topology (the primary Soleur
+   environment) even session worktrees resolve `IS_BARE=true` with `GIT_ROOT`
+   at the bare root, so DEFERRED is the permanent steady state there — the
+   spec stays live and the marker plus the follow-through probe keep the
+   population visible. The sanctioned unstick is a manual `git mv` + commit
+   on a non-bare feature-branch checkout (running `archive-kb.sh` on
+   `main`/detached would re-create a staged-but-unpersisted rename — the same
+   defect by hand).
 
-Committability is probed ONCE per run before the reap loop (`IS_BARE` plus
-`rev-parse --abbrev-ref HEAD`); each artifact's tracked-ness is probed per file
-(`ls-files --error-unmatch` on a worktree; `ls-tree HEAD` on the bare root, whose
-on-disk mirror is untracked-from-disk but tracked in HEAD). A failed `git mv`
-never falls back to plain `mv` — that would re-create the unpersisted mutation.
+Committability is probed ONCE per run before the reap loop by
+`_reap_archive_classify` (`IS_BARE`, `rev-parse --abbrev-ref HEAD`, and a
+`MERGE_HEAD` check); `_reap_archive_commit` re-reads `HEAD` at commit time and
+requires equality with the probed branch — a concurrent `git checkout` mid-loop
+degrades to STAGED rather than landing the chore commit on whatever branch is
+current. Each artifact's tracked-ness is probed per file under
+`GIT_LITERAL_PATHSPECS=1` (`ls-files --error-unmatch` on a worktree; `ls-tree
+HEAD` on the bare root, whose on-disk mirror is untracked-from-disk but tracked
+in HEAD), so a committed filename containing `*`, `?`, or `[]` cannot glob-widen
+the probe or the scoped commit. A failed `git mv` never falls back to plain
+`mv` — that would re-create the unpersisted mutation — and emits DEFERRED
+`reason=git-mv-failed` so the arm is observable, not warn-only.
 
 The three stranded spec twins produced before this fix were deduped in the same
 PR by union-merging live-only files into each archive twin (they had diverged;

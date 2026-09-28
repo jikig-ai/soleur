@@ -11,8 +11,9 @@
 # commit path, or is not made at all.
 #   tracked + committable (feature branch) -> `git mv` + a pathspec-scoped
 #     `chore(archive-kb)` commit on the current branch (SOLEUR_REAP_ARCHIVE_COMMITTED)
-#   tracked + non-committable (main/master, detached, bare) -> no move,
-#     SOLEUR_REAP_ARCHIVE_DEFERRED slug=<s> reason=<main-checkout|detached|bare>
+#   tracked + non-committable -> no move, SOLEUR_REAP_ARCHIVE_DEFERRED
+#     reason=<main-checkout|detached|unborn|merge-in-progress|bare|
+#             git-mv-failed|outside-git-root|unsafe-destination>
 #   untracked -> plain `mv`, unchanged (no resurrection mechanism applies)
 #
 # The existing sibling suites cannot see this class: their fixtures are
@@ -246,7 +247,7 @@ fi
 OUT_A="$TMP/a-out.txt"
 run_cleanup "$CLONE_A" "$OUT_A"
 
-if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED' "$OUT_A" && grep -q 'reason=main-checkout' "$OUT_A"; then
+if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED .*reason=main-checkout' "$OUT_A"; then
   pass "A: tracked reap archive on main emits SOLEUR_REAP_ARCHIVE_DEFERRED reason=main-checkout"
 else
   fail "A: no DEFERRED/main-checkout marker (output: $(grep -c 'SOLEUR_' "$OUT_A") SOLEUR lines)"
@@ -445,7 +446,7 @@ fi
 OUT_D="$TMP/d-out.txt"
 run_cleanup_bare "$BARE_D" "$OUT_D"
 
-if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED' "$OUT_D" && grep -q 'reason=bare' "$OUT_D"; then
+if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED .*reason=bare' "$OUT_D"; then
   pass "D: bare-root reap emits DEFERRED reason=bare"
 else
   fail "D: no DEFERRED/bare marker (output: $(grep 'SOLEUR_' "$OUT_D" | head -5))"
@@ -502,6 +503,175 @@ else
 fi
 
 # ===========================================================================
+# FIXTURE F — detached HEAD. AC2 names detached; the HEAD arm must defer.
+# ===========================================================================
+LEASE_ROOT="$TMP/lease-f"; mk_lease_root "$LEASE_ROOT"
+BARE_F="$TMP/f-origin.git"; CLONE_F="$TMP/f-clone"
+build_clone "$BARE_F" "$CLONE_F" tracked
+
+( set -e
+  cdx "$CLONE_F"
+  git checkout --detach HEAD >/dev/null 2>&1
+)
+
+if [[ "$(git -C "$CLONE_F" rev-parse --abbrev-ref HEAD)" == "HEAD" ]]; then
+  pass "F precondition: checkout is detached"
+else
+  fail "F precondition: checkout is not detached"
+fi
+
+OUT_F="$TMP/f-out.txt"
+run_cleanup "$CLONE_F" "$OUT_F"
+
+if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED .*reason=detached' "$OUT_F"; then
+  pass "F: detached checkout emits DEFERRED reason=detached"
+else
+  fail "F: no DEFERRED/detached marker (output: $(grep 'SOLEUR_' "$OUT_F" | head -5))"
+fi
+if spec_live "$CLONE_F" && ! spec_arch "$CLONE_F"; then
+  pass "F: tracked spec dir left live on a detached HEAD"
+else
+  fail "F: tracked spec dir moved on a detached HEAD"
+fi
+
+# ===========================================================================
+# FIXTURE G — committable checkout where `git mv` fails (specs/ parent made
+# read-only). Expect: DEFERRED reason=git-mv-failed for the spec, the tracked
+# plan still commits, and no marker-free partial move.
+# ===========================================================================
+LEASE_ROOT="$TMP/lease-g"; mk_lease_root "$LEASE_ROOT"
+BARE_G="$TMP/g-origin.git"; CLONE_G="$TMP/g-clone"
+build_clone "$BARE_G" "$CLONE_G" tracked
+
+( set -e
+  cdx "$CLONE_G"
+  git checkout -b feat-actor >/dev/null 2>&1
+  # git mv needs write perms on the destination's parent chain; a read-only
+  # specs/ fails every spec move deterministically on any host.
+  chmod a-w knowledge-base/project/specs
+)
+
+OUT_G="$TMP/g-out.txt"
+run_cleanup "$CLONE_G" "$OUT_G"
+# Restore perms before assertions (and so the EXIT trap's rm -rf can clean up).
+chmod -R u+w "$CLONE_G" 2>/dev/null || true
+
+if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED .*reason=git-mv-failed' "$OUT_G"; then
+  pass "G: failed git mv emits DEFERRED reason=git-mv-failed (not a silent warn)"
+else
+  fail "G: no git-mv-failed marker (output: $(grep 'SOLEUR_' "$OUT_G" | head -5))"
+fi
+if spec_live "$CLONE_G" && ! spec_arch "$CLONE_G"; then
+  pass "G: failed git mv left the spec dir live (no partial move, no plain-mv fallback)"
+else
+  fail "G: spec dir moved/archived despite the failed git mv"
+fi
+# The tracked plan file DID move (plans/ stayed writable) — its commit proves
+# the mv-failure arm did not abort the reap loop mid-batch.
+if git -C "$CLONE_G" log --oneline -3 --format=%s feat-actor | grep -q 'chore(archive-kb)'; then
+  pass "G: tracked plan still committed — failed spec move did not abort the reap"
+else
+  fail "G: plan archive commit missing — the mv failure aborted the run"
+fi
+
+# ===========================================================================
+# FIXTURE H — committable branch mid-merge (MERGE_HEAD present). A scoped
+# commit is refused by git mid-merge and the payload would fold into the
+# operator's merge commit — defer instead.
+# ===========================================================================
+LEASE_ROOT="$TMP/lease-h"; mk_lease_root "$LEASE_ROOT"
+BARE_H="$TMP/h-origin.git"; CLONE_H="$TMP/h-clone"
+build_clone "$BARE_H" "$CLONE_H" tracked
+
+( set -e
+  cdx "$CLONE_H"
+  git checkout -b feat-actor >/dev/null 2>&1
+  echo one > conflict.txt
+  git add conflict.txt
+  git commit -m actor-side >/dev/null
+  git checkout -b feat-side main >/dev/null 2>&1
+  echo two > conflict.txt
+  git add conflict.txt
+  git commit -m side >/dev/null
+  git checkout feat-actor >/dev/null 2>&1
+  # Conflicting merge -> MERGE_HEAD present on feat-actor.
+  git merge feat-side >/dev/null 2>&1 || true
+)
+
+if git -C "$CLONE_H" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+   && [[ "$(git -C "$CLONE_H" rev-parse --abbrev-ref HEAD)" == "feat-actor" ]]; then
+  pass "H precondition: merge in progress on a feature branch"
+else
+  fail "H precondition: merge did not produce MERGE_HEAD — vacuous fixture"
+fi
+
+OUT_H="$TMP/h-out.txt"
+run_cleanup "$CLONE_H" "$OUT_H"
+
+if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED .*reason=merge-in-progress' "$OUT_H"; then
+  pass "H: merge-in-progress checkout emits DEFERRED reason=merge-in-progress"
+else
+  fail "H: no merge-in-progress marker (output: $(grep 'SOLEUR_' "$OUT_H" | head -5))"
+fi
+if spec_live "$CLONE_H" && ! spec_arch "$CLONE_H"; then
+  pass "H: tracked spec dir left live mid-merge (payload never folds into a merge commit)"
+else
+  fail "H: tracked spec dir moved mid-merge"
+fi
+if ! git -C "$CLONE_H" log --oneline -3 --format=%s feat-actor | grep -q 'chore(archive-kb)'; then
+  pass "H: no archive commit landed during a merge"
+else
+  fail "H: chore commit landed mid-merge"
+fi
+
+# ===========================================================================
+# FIXTURE I — branch literally named `feat-`: feature_slug strips to EMPTY,
+# which would collapse the plans/brainstorms glob to `*` and sweep every file
+# in the directory. The guard must refuse the batch entirely.
+# ===========================================================================
+LEASE_ROOT="$TMP/lease-i"; mk_lease_root "$LEASE_ROOT"
+BARE_I="$TMP/i-origin.git"; CLONE_I="$TMP/i-clone"
+git init --bare -b main "$BARE_I" >/dev/null
+git clone "$BARE_I" "$CLONE_I" >/dev/null 2>&1
+( set -e
+  cdx "$CLONE_I"
+  git config user.email t@t
+  git config user.name t
+  git config commit.gpgsign false
+  git commit --allow-empty -m seed >/dev/null
+  git checkout -b 'feat-' >/dev/null 2>&1
+  mkdir -p knowledge-base/project/plans
+  echo p > "knowledge-base/project/plans/2026-01-01-feat--plan.md"
+  echo u > "knowledge-base/project/plans/2026-02-02-unrelated-plan.md"
+  git add knowledge-base
+  GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
+    git commit --date "2025-01-01T00:00:00Z" -m "kb artifacts" >/dev/null
+  git checkout main >/dev/null 2>&1
+  git merge --no-ff -m "merge feat-" 'feat-' >/dev/null 2>&1
+  git push origin main 'feat-' >/dev/null 2>&1
+  git checkout -b feat-actor >/dev/null 2>&1
+)
+
+OUT_I="$TMP/i-out.txt"
+run_cleanup "$CLONE_I" "$OUT_I"
+
+if [[ -f "$CLONE_I/knowledge-base/project/plans/2026-02-02-unrelated-plan.md" ]]; then
+  pass "I: unrelated plan file survived — empty slug did not sweep the directory"
+else
+  fail "I: unrelated plan file was swept (empty-slug glob collapse)"
+fi
+if [[ -f "$CLONE_I/knowledge-base/project/plans/2026-01-01-feat--plan.md" ]]; then
+  pass "I: the feat- plan file stayed live too (empty slug refuses the batch)"
+else
+  fail "I: feat- plan file moved — the guard should refuse, not partially move"
+fi
+if ! git -C "$CLONE_I" log --oneline -3 --format=%s feat-actor | grep -q 'chore(archive-kb)'; then
+  pass "I: no archive commit produced for an empty feature slug"
+else
+  fail "I: a chore commit landed for the empty-slug sweep"
+fi
+
+# ===========================================================================
 # Census (guard-matrix row 5): every KB archive move routes through
 # reap_archive_persist. Extract the two caller regions and the helper body;
 # a bare `mv`/`git mv` in a caller region is the defect class reborn.
@@ -522,7 +692,7 @@ if grep -q 'reap_archive_persist' <<<"$_spec_block" && [[ "$(printf '%s\n' "$_sp
 else
   fail "census: spec-dir block moves artifacts without the helper"
 fi
-if grep -q 'mv -- ' <<<"$_helper_body" && grep -q 'mv "' <<<"$_helper_body"; then
+if grep -q 'git -C "$GIT_ROOT" mv -- ' <<<"$_helper_body" && grep -qE '(^|[^[:alnum:]_])mv -- "\$src"' <<<"$_helper_body"; then
   pass "census: the helper owns both move arms (git mv + plain mv)"
 else
   fail "census: reap_archive_persist does not own both move arms"
