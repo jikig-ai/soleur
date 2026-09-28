@@ -1381,7 +1381,7 @@ assert_reason "D45 find -exec: a later action's --label is not the filing's" "na
 assert_reason "D46 gh keeps the LAST --body" "names no user-visible consequence" \
   'gh issue create --title x --body "Mandated-By: wg-x" --body y -m M'
 assert_reason "D47 api body=@file is a body file" "which this gate cannot read" \
-  "gh api $EP -f title=x -F 'body=@/tmp/j Mandated-By: wg-x'"
+  "gh api $EP -f title=x -F 'body=@/nonexistent-soleur/j Mandated-By: wg-x'"
 assert_reason "D48a labels[]= in a create --title is not a label" "names no user-visible consequence" \
   "gh issue create --title 'labels[]=meta/machinery' --body y -m M"
 assert_reason "D48b create -F labels[]= is a body file" "which this gate cannot read" \
@@ -1564,10 +1564,10 @@ assert_reason "R-EMPTYM: an empty --milestone value is not a milestone" "must in
 assert_reason "R-TRUE: substitution TEXT is not body corpus" "names no user-visible consequence" \
   'gh issue create --title x -m M --body "$(true Mandated-By: hr-foo)"'
 assert_reason "R-RAWAT: -f body=@x sends @x literally, it is no body file" "names no user-visible consequence" \
-  "gh api repos/jikig-ai/soleur/issues -f title=x -f 'body=@/tmp/soleur-no-such-body.md'"
+  "gh api repos/jikig-ai/soleur/issues -f title=x -f 'body=@/nonexistent-soleur/no-such-body.md'"
 # ... and the literal it sends IS the body: a Mandated-By: line in it is real.
 assert "R-RAWAT2: the literal -f body=@… text is the corpus gh sends" "<none>" \
-  "gh api repos/jikig-ai/soleur/issues -f title=x -f 'body=@/tmp/j Mandated-By: wg-x'"
+  "gh api repos/jikig-ai/soleur/issues -f title=x -f 'body=@/nonexistent-soleur/j Mandated-By: wg-x'"
 assert_reason "R-COMMA: an api labels[]= value is one label, compared exactly" "names no user-visible consequence" \
   "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=meta/machinery,x'"
 assert_reason "R-VARPATH: a \$-valued --body-file names the expansion, not a relative path" "does not expand" \

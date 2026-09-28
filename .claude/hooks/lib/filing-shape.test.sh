@@ -426,8 +426,8 @@ want_lex "D46 the LAST --body wins" \
   'gh issue create --title x --body "Mandated-By: wg-x" --body y -m M' \
   'F create top head=gh issue create|milestone=1|body=y|vis=1'
 want_lex "D47 api body=@file is a body file" \
-  "gh api $EP -f title=x -F 'body=@/tmp/j Mandated-By: wg-x'" \
-  "F api top head=gh api $EP|bodyfile=/tmp/j Mandated-By: wg-x|vis=1"
+  "gh api $EP -f title=x -F 'body=@/nonexistent-soleur/j Mandated-By: wg-x'" \
+  "F api top head=gh api $EP|bodyfile=/nonexistent-soleur/j Mandated-By: wg-x|vis=1"
 want_lex "D48a labels[]= in a create --title is not a label" \
   "gh issue create --title 'labels[]=meta/machinery' --body y -m M" \
   'F create top head=gh issue create|milestone=1|body=y|vis=1'
