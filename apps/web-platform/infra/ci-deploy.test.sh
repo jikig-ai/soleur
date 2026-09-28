@@ -4420,6 +4420,9 @@ cosign_absent|${_pre}net/http: TLS handshake timeout${_run}
 cosign_absent|${_pre}read tcp 10.0.0.2:4420->142.250.0.1:443: i/o timeout${_run}
 cosign_absent|${_pre}net/http: request canceled (Client.Timeout exceeded while awaiting headers)${_run}
 cosign_absent|${_pre}connect: connection refused (dial tcp 142.250.0.1:443)${_run}
+cosign_absent|${_pre}received unexpected HTTP status: 503 Service Unavailable${_run}
+cosign_absent|${_pre}read tcp 10.0.0.2:4420->142.250.0.1:443: read: connection reset by peer${_run}
+cosign_absent|${_pre}context deadline exceeded${_run}
 cosign_absent|Unable to find image '${_ref}' locally
 unsigned|Error: no matching signatures: no signatures found
 verify_failed|docker: Error response from daemon: failed to create task: OCI runtime create failed: mount /etc/cosign/trusted_root.json: no such file or directory${_run}
@@ -4427,10 +4430,10 @@ verify_failed|Error: GET http://10.0.1.30:5000/v2/: Error response from daemon: 
 CASES
 fi
 TOTAL=$((TOTAL + 1))
-if [[ -z "$T8714_BAD" && "$T8714_N" -eq 10 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-8714-2 a verifier pull failure (DNS/429/TLS/i-o/timeout/dial) is cosign_absent; a non-pull daemon error and a registry-quoted daemon message stay verify_failed"
+if [[ -z "$T8714_BAD" && "$T8714_N" -eq 13 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-8714-2 a verifier pull failure (DNS/429/5xx/TLS/i-o/reset/timeout/deadline/dial) is cosign_absent; a non-pull daemon error and a registry-quoted daemon message stay verify_failed"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-8714-2 classifier (cases run=$T8714_N of 10):${T8714_BAD}"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-8714-2 classifier (cases run=$T8714_N of 13):${T8714_BAD}"
 fi
 unset T8714_DECL T8714_REF T8714_CHAIN T8714_BAD T8714_N _want _tail _got _err _ref _pre _run
 
