@@ -18,6 +18,68 @@ lane: cross-domain
 
 # sentry: page on git-data host-key pin faults
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28.
+
+**Gates run** (all pass):
+
+- 4.5 network-outage: Hypotheses present.
+- 4.6 User-Brand Impact.
+- 4.7 Observability, including the probe verb and Check 10 characters.
+- 4.8 PAT-shape: none.
+- 4.9 UI: no UI surface.
+- 4.10 Encryption Posture.
+- 4.11 Guard Contract (`lint-guard-contract.py` green, 2 entries).
+- 4.55 downtime: not triggered. The rule-1b change is an in-place update, and the release is the
+  routine deploy.
+
+**Agents:** observability-coverage-reviewer, security-sentinel, test-design-reviewer,
+user-impact-reviewer and terraform-architect (provider source read at the pinned v0.15.7), plus the
+round-1 verify-the-negative and post-edit self-audit passes.
+
+**Verified live in this pass:**
+
+- Every cited issue and PR (`gh issue view`).
+- Every cited rule id (`AGENTS.md`).
+- The #8708 attribution (`git log`).
+- The AC4 and AC5 `jq` programs and the AC3 grep, run against real reference entries.
+- The discoverability command, through `probe-verb-gate.sh` (rc 0, no shell-active characters).
+
+### Key Improvements
+
+1. **Breadcrumb sink closed.** `reportGitDataPinFault` captures inside an isolation scope with
+   cleared breadcrumbs, and a real-path test drives `replicateToGitData` with the real
+   `observability` and `logger` modules. The sweep covers the whole payload, with a
+   `hashUserId(WS)` positive control (security and test-design reviews).
+2. **Guards made non-vacuous.** The census strips comments, excludes tests, matches the writer shape
+   and proves it recursed. Guard 2 pins "exactly two conditions under `all`". New mutation rows cover
+   `value = 1`, `interval = "1d"`, `enabled = false`, `logic_type = "none"` and the reference mirror.
+   `ART17_ERASURE_*` constants replace source scraping.
+3. **Typed error hardened.** The constructor builds its own fixed messages, and the classifier also
+   accepts `err.name` (double module load) and validates `reason`.
+4. **Operator path without SSH.** Push recovery is verified through Better Stack's
+   `git_data_pin=present fp=` warn line (the success log line is `info` and never ships).
+   `extra.via` tells a provision failure from a push failure. Layer citations were added to every
+   failure mode.
+5. **Post-merge checks widened.** The Phase 6 Sentry query catches boot events that landed before
+   the rule existed, and checks no issue group is muted. The #8211 check must treat "no pin_fault
+   event" as not-healthy. The re-erasure path is a **hard** flip precondition. On the red path, rule
+   1b's live state is read (a drift dispatch needs the operator's per-step authorization).
+
+### New Considerations Discovered
+
+- The CTO's "any-short across two keys has never run" was false (`zot_mirror_fallback_rate`). The
+  single-tag design stands on other grounds; it is corrected in place.
+- The `pin_fault` tag is advisory. A compromised host can fake `host_key_mismatch` through
+  relayed stderr, and a network attacker can suppress it pre-host-key. Nothing leaks either way,
+  because the pin fails closed.
+- The Terraform provider confirms: only `organization` forces a replace, so adding the 1b trigger is
+  an in-place PUT. `frequency_minutes` is the per-issue interval over all triggers, with no cap. The
+  1b ceiling is about 288 emails a day per persisting issue.
+- Pre-existing: the non-pin push Error path still carries raw ids in `err.message`. Filed as #9154,
+  outside this PR.
+
 ## Overview
 
 Route the git-data host-key pin faults to a human through Sentry issue-alert rules. Today a stale,
@@ -158,7 +220,11 @@ dispatch. The emitter reaches production only through the merge-triggered `web-p
 
 - **CTO:**
   - Put one `pin_fault` tag on the boot and push emits, and route them with a single-condition
-    `all` rule. An `any-short` OR across two tag keys has never run in this root.
+    `all` rule. The reasons: one exported vocabulary feeds both emit sites and the Terraform value
+    list, and op names stay free to change without silently dropping paging. **[Deepen correction
+    2026-09-28]** The CTO also said an `any-short` OR across two tag keys "has never run in this
+    root". That is false: `zot_mirror_fallback_rate` ORs `registry` and `stage`. The decision
+    stands on the two reasons above.
   - The typed resolver error is acceptable. Tighten ssh-absent to `spawn ssh`.
   - Use 4 triggers.
   - Add dated notes to ADR-237 and ADR-220. No new ADR. Change only the C4 count prose.
@@ -211,12 +277,19 @@ out of the 811-line replication module. There is no import cycle: it imports onl
    "ssh_client_absent"] as const` and `export type GitDataPinFault`. The list is sorted, so the
    Terraform `in` string is its `join(",")`.
 2. `export class GitDataHostKeyPinError extends Error` with `readonly reason: "pin_absent" |
-   "pin_invalid"` and `name = "GitDataHostKeyPinError"`.
+   "pin_invalid"` and `name = "GitDataHostKeyPinError"`. The constructor takes **only** `(reason,
+   { storeEnabled: boolean })` and builds the two fixed messages itself, byte-identical to today's
+   resolver strings. No caller can pass text, so the pin value can never reach the message
+   (security review).
 3. The host-key regex `SSH_HOST_KEY_MISMATCH` moves here, exported, byte-identical.
    `git-data-replication.ts` imports it back, so the erasure path uses the same constant unchanged.
 4. `export function classifyGitDataPinFault(err: unknown, via: "ssh" | "git"): GitDataPinFault |
-   null`. It is total: the body sits in `try { … } catch { return null }`. Its arms:
-   - `err instanceof GitDataHostKeyPinError` → `err.reason`.
+   null`. It is total: the body sits in `try { … } catch { return null }`, and the catch carries
+   `// review: swallowed — null falls through to the caller's Error-path report`
+   (`cq-silent-fallback-must-mirror-to-sentry`; nothing is lost). Its arms:
+   - `err instanceof GitDataHostKeyPinError`, **or** `err.name === "GitDataHostKeyPinError"` (a
+     module loaded twice defeats `instanceof`), → `err.reason`, accepted only if it is a member of
+     `GIT_DATA_PIN_FAULT_REASONS`.
    - `code === "ENOENT"` **and** `syscall === "spawn ssh"` → `ssh_client_absent`. `spawn git` does
      not match.
    - `typeof stderr === "string"` **and** `SSH_HOST_KEY_MISMATCH.test(stderr)` **and** the exit
@@ -231,6 +304,16 @@ out of the 811-line replication module. There is no import cycle: it imports onl
    pinFault: reason } })`. The `extra.pinFault` copy exists because the pino line carries `extra`
    but not tags, so Better Stack also sees the reason. This function is the **only** writer of the
    `pin_fault` tag in the app.
+
+   The call runs inside `Sentry.withIsolationScope((scope) => { scope.clearBreadcrumbs(); … })`, the
+   precedent inventoried in `server/sentry-scrub.ts`. The session-end call sites open no scope of
+   their own, so without this the event would carry other sessions' breadcrumbs. Those can hold raw
+   workspace paths, and the scrub redacts by key name, not by value (security review).
+
+   The module header carries the same "MESSAGE PATH ON PURPOSE" note as the precedents
+   `server/anthropic-credit.ts` and `server/spawn-dead-letter.ts`: dedicated module, exported
+   vocabulary constants, one reporting helper. This is the precedent diff; the only deviation is the
+   isolation scope above.
 
 **Edits in `apps/web-platform/server/git-data-replication.ts`:**
 
@@ -248,7 +331,7 @@ out of the 811-line replication module. There is no import cycle: it imports onl
    - `const pinFault = classifyGitDataPinFault(err, via)`.
    - If it is non-null, call `reportGitDataPinFault(pinFault, { feature: "worktree_lease", op:
      "git_data_replication_push", message, extra: { workspaceIdHash, worktreeIdHash,
-     leaseGeneration, userId } })`, where `message` is the template literal
+     leaseGeneration, userId, via } })`, where `message` is the template literal
      "git-data replication push pin fault (<reason>): the workspace's objects were NOT replicated
      to the shared store". The reason leads the message, so each reason is
      its own Sentry issue. No stderr and no `err.message` is sent.
@@ -261,9 +344,15 @@ out of the 811-line replication module. There is no import cycle: it imports onl
    module. The `GitDataHostKeyPinError` its guard now catches is still classified by the unchanged
    `inspectGitDataHostKeyPin()` re-read.
 
-**Edit in `apps/web-platform/server/account-delete.ts`:** append a dated comment under the
-"first-seen / reappeared / regression" comment (anchor `const reason =`) that corrects it, saying
-rule 1b now also re-pages per event (#8572). No code change.
+**Edit in `apps/web-platform/server/account-delete.ts`:**
+
+- Export `ART17_ERASURE_FEATURE = "account-delete"` and `ART17_ERASURE_OP =
+  "git-data-bare-repo-erasure"`, and use them at the two erasure report sites (the outcome report
+  and the throw arm).
+- This is behavior-neutral. It exists so Guard 2 imports the literals instead of scraping one pair
+  out of about 40 `feature: "account-delete"` sites (test-design review).
+- Append a dated comment under the "first-seen / reappeared / regression" comment (anchor `const
+  reason =`) that corrects it: rule 1b now also re-pages per event (#8572).
 
 ### B. Terraform (`apps/web-platform/infra/sentry/issue-alerts.tf`)
 
@@ -316,6 +405,11 @@ rule 1b now also re-pages per event (#8572). No code change.
    - This rule is #8211's `pin_fault_paging_absent` anchor.
    - `SSH_HOST_KEY_MISMATCH` also matches an absent or unwritable known_hosts file under
      `StrictHostKeyChecking=yes`.
+   - The tag is **advisory**. ssh passes remote stderr through, so a compromised host that already
+     holds the pinned key can print a host-key message and fake `host_key_mismatch`. A network
+     attacker can also fail the connection before the host-key check, which stays unclassified.
+     Neither leaks anything, because the pin still fails closed. The remedy is never to re-pin to
+     the key a host presents (the runbook's H4 rule).
 2. **Rule 1b** `art17_erasure_incomplete`:
    - Append `{ event_frequency_count = { interval = "1h", value = 0 } }` to `trigger_conditions`.
      Leave `frequency_minutes = 5`, the filters and the action unchanged.
@@ -327,7 +421,8 @@ rule 1b now also re-pages per event (#8572). No code change.
        unconfigured | unreachable | host_key_mismatch | threw`, and `unconfigured` carries
        `erasure_reason`);
      - records the CLO ruling and the throttle ("at most one email per issue per 5 min, not per
-       refusal");
+       refusal"), with the daily ceiling spelled out: a persistently failing issue can send up to
+       288 emails a day (terraform review);
      - points to the Reconciliation rationale for not tagging erasure events with `pin_fault`.
    - This is an **in-place update**: same address, native triggers only, so the frozen-rules
      tripwire does not fire. #8708 is the precedent for an in-place change to a live rule.
@@ -367,14 +462,23 @@ Runbook `git-data-luks-cutover-5274.md` changes:
     path (spec-flow review).
 - **New push pin-fault row:**
   - Remedy: republish the pin, or re-run `git-data-pin-redeploy.yml`.
-  - Verify: pin-fault events stop, and the `git-data replication push complete` log line returns.
+  - Verify, without SSH: `scripts/betterstack-query.sh --since 30m --grep 'git_data_pin=present fp='`
+    shows the redeployed pin loaded with the expected fingerprint (a warn line, so Vector ships it;
+    the `git-data replication push complete` line is `info` and never reaches Better Stack). Then
+    `scripts/sentry-issue.sh` shows no new `pin_fault:*` event after the next session end.
+  - Diagnose `host_key_mismatch` with `extra.via` (`ssh` = provision dial, `git` = push) and the
+    `git-data-cutover.yml` dry-run precheck, whose `_access_reason` splits `alg` / `unknown` /
+    `changed` without SSH.
   - Catch-up: the replica self-heals at each workspace's next session end, which force-pushes every
     head and tag. Commits in the window exist only on the host until then.
+  - Never re-pin to the key a host presents (repeat the H4 rule). The tag is advisory, and a
+    compromised host can print host-key text.
 - **Host-key rows:** note the known_hosts false-positive class.
 - **Line ~1196 soak query:** append a note that `feature:worktree_lease level:error` now also
   counts push **pin faults**, which were invisible before #8572 (architecture review).
 - **Flag-flip precondition bullet:** append that the #8572 condition is met on this merge **plus**
-  a green `apply-sentry-infra.yml` **and** a green `web-platform-release.yml`.
+  a green `apply-sentry-infra.yml` **and** a green `web-platform-release.yml`. State that #8211's
+  per-id re-erasure path stays a **hard** precondition beside it.
 
 Counsel audit `2026-09-counsel-reattestation-5914.md` changes:
 
@@ -407,41 +511,61 @@ The emitter vocabulary comes first, then the rule that consumes it, then the rec
 
 ### Phase 1 — RED: emitter contract
 
-1. `test/git-data-host-key-pin.test.ts`:
+1. `test/git-data-host-key-pin.test.ts` (mocks `observability` and `logger`, so it asserts the
+   **call arguments** only):
    - Update the three boot `toEqual` assertions (`pin_invalid_at_startup`, `pin_absent_at_startup`,
      `ssh_client_absent_at_startup`) to add `tags: { pin_fault: <reason> }` and `extra: { pinFault:
      <reason> }`. Keep them as `toEqual`; do not loosen them.
+   - Build every transport rejection the way production does:
+     `Object.assign(new Error("Command failed: …"), { code, stderr, syscall })`. A plain object
+     would take the `captureMessage` branch and measure the wrong arm (test-design review).
    - Push, absent pin: exactly one `reportSilentFallback` call. First arg is `null`. `feature:
-     worktree_lease`, `op: git_data_replication_push`, `tags.pin_fault: pin_absent`. The rejection
-     stays catchable.
+     worktree_lease`, `op: git_data_replication_push`, `tags.pin_fault: pin_absent`,
+     `extra.via: "ssh"`. The rejection stays catchable.
    - Push, invalid pin → `pin_invalid`.
    - Provision ssh rejects `{code: "ENOENT", syscall: "spawn ssh"}` → `ssh_client_absent`.
    - Provision ssh rejects `{code: 255, stderr: "Host key verification failed."}` →
-     `host_key_mismatch`.
+     `host_key_mismatch`, `extra.via: "ssh"`.
    - Provision ssh rejects `{code: 128, stderr: "Host key verification failed."}` → **not** a pin
      fault (via ssh, 128 is the remote command's status) → Error path.
    - Git push rejects `{code: 128, stderr: "Host key verification failed.\nfatal: Could not read from
-     remote repository."}` → `host_key_mismatch`.
+     remote repository."}` → `host_key_mismatch`, `extra.via: "git"`.
    - Git push rejects `{code: "ENOENT", syscall: "spawn git"}` → **not** a pin fault: one Error-path
      report, no `pin_fault`.
-   - Fence reject → Error path, unchanged.
-2. New `test/git-data-pin-fault.test.ts`:
-   - A `classifyGitDataPinFault` table covering every arm × `via`.
+   - Fence reject → Error path. `toEqual` the full options object, existing message included, so
+     "unchanged" is asserted rather than assumed.
+2. New `test/git-data-pin-fault.test.ts` (unit; no module mocks):
+   - A `classifyGitDataPinFault` table covering every arm × `via`, including an error whose `name`
+     is `GitDataHostKeyPinError` but which fails `instanceof`, and a forged `reason` outside the
+     vocabulary (→ `null`).
    - `null`, `undefined`, a string, `{}`, and an object whose `stderr` getter throws → `null`, never
      a throw.
-   - **Real-path event test** (Kieran and spec-flow reviews): call the real
-     `reportGitDataPinFault` through the real `observability.ts`, with `@sentry/nextjs`
-     `captureMessage` and `captureException` spied. Assert:
-     - `captureMessage` is called once and `captureException` never;
+   - `GitDataHostKeyPinError`'s two messages equal today's resolver strings byte for byte.
+3. New `test/git-data-pin-fault-event.test.ts`: the **real-path** event test (Kieran, spec-flow and
+   test-design reviews). It is a separate file because the suite above mocks `observability` and
+   `logger`.
+   - Setup:
+     - drive `replicateToGitData` end to end, with `git-auth`, `child_process` and
+       `@/lib/supabase/tenant` mocked;
+     - keep `observability.ts` and `logger.ts` **real**;
+     - mock `@sentry/nextjs` with `vi.mock` (importOriginal spread, plus `captureMessage`,
+       `captureException`, `addBreadcrumb` and a `withIsolationScope` that records
+       `clearBreadcrumbs`);
+     - set `SENTRY_USERID_PEPPER` in `vi.hoisted`.
+   - Before the push, emit a pino `logger.warn` whose payload holds a raw `WS` path (a breadcrumb
+     candidate).
+   - Assert, for an absent-pin push:
+     - `captureMessage` is called exactly once and `captureException` never. The real logger keeps
+       the #8629 double capture observable;
      - `level: "error"`;
-     - `tags.pin_fault` is set;
-     - `scrubSentryEvent` (`server/sentry-scrub.ts`) applied to the built event keeps
-       `tags.pin_fault` intact;
-     - serialising the message, tags, extra and user contains none of the raw `WS`, `WT` or `USER`
-       fixture values (`userId` must arrive as `userIdHash`).
-3. `test/account-delete.test.ts`: the erasure report's `tags` never carries `pin_fault`, for any
-   outcome.
-4. The existing erasure-outcome tests in `test/git-data-replication.test.ts` and
+     - `tags.pin_fault === "pin_absent"`;
+     - `clearBreadcrumbs` ran inside the isolation scope;
+     - serialising the whole captured payload (message, tags, extra, user, scope data) contains
+       none of the raw `WS`, `WT` or `USER` values;
+     - **positive control:** it does contain `hashUserId(WS)`, so the sweep is not vacuous.
+4. `test/account-delete.test.ts`: first assert the erasure report **was** called for each outcome.
+   Then assert its `tags` never carry `pin_fault`. Assert the two call sites use `ART17_ERASURE_OP`.
+5. The existing erasure-outcome tests in `test/git-data-replication.test.ts` and
    `test/git-data-host-key-pin.test.ts` stay **unmodified** and green. This is the no-change net for
    §A.9.
 
@@ -482,8 +606,18 @@ Review, push, and get CI green by name on the head SHA (including `plan_pr`). Th
      - (a) the live `git-data-host-key-pin-fault` projection equals its `alert-reference.json` entry
        (enabled, the exact `in` set, `ActiveMembers`), not only its name;
      - (b) the deployed release SHA contains this merge.
-   - The same comment adds that only the boot arm can fire before the flip, and that
-     post-flip Art. 17 discharge needs #8211's per-id re-erasure path.
+   - The same comment adds:
+     - only the boot arm can fire before the flip;
+     - #8211's per-id re-erasure path is a **hard** flip precondition, beside
+       `pin_fault_paging_absent`. Without it, a post-flip Art. 17 page cannot be discharged
+       (user-impact review);
+     - "no `pin_fault` event" must never count as healthy, because a network attacker can hold
+       every dial before the host-key check (security review). The flip check needs positive
+       replication evidence.
+   - Run one read-only Sentry query covering `pin_fault:*` and the three boot messages since the
+     merge time. A hit that landed before the rule existed (the release restarted containers before
+     the apply) is handled as a page. Also check that none of those issue groups is archived or
+     ignored, since a muted group fires no trigger (user-impact review).
    - Close #8572 with both run URLs.
    - Open the evidence-only PR that appends the dated verification lines (run ids, the fidelity
      PASS line) to the register and the audit, per the #9077 precedent and the CLO ruling.
@@ -493,6 +627,12 @@ Review, push, and get CI green by name on the head SHA (including `plan_pr`). Th
      #8572.
    - Still open the evidence PR, recording "apply/release failed, run X; the superseded sentences
      stand", or the partial state (for example, the rule was created but the 1b update failed).
+   - Read rule 1b's live state before recording it. `sentry-alert-live-fidelity.sh` does not run
+     after a failed apply. The read-only `scheduled-sentry-alert-drift.yml` compares live rules with
+     the committed reference.
+   - A `workflow_dispatch` of that workflow is a production dispatch. It needs the operator's
+     explicit per-step authorization under the #8211 brief. Without it, rely on its next daily run,
+     up to 24 h later, and say so in the evidence PR.
    - Fix forward in a follow-up PR.
 
 ## User-Brand Impact
@@ -542,16 +682,16 @@ error_reporting:
   fail_loud: "Sentry issue titled 'git-data replication push pin fault (<reason>): ...' or 'git-data host-key pin absent at startup' / '... invalid at startup' / 'git-data ssh client absent at startup', tag pin_fault=<reason>; the pino error line carries extra.pinFault=<reason> (tags do not reach pino)"
 failure_modes:
   - mode: "stale or wrong pin after a git-data host replace (push host_key_mismatch)"
-    detection: "classifyGitDataPinFault(err, via) in the replicateToGitData catch -> tag pin_fault=host_key_mismatch"
+    detection: "classifyGitDataPinFault(err, via) in the replicateToGitData catch -> reportGitDataPinFault message path, tag pin_fault=host_key_mismatch, extra.via; layer-5 Sentry captureMessage (release-tagged) + layer-2 pino logger.error carrying extra.pinFault -> layer-3 vector app_container_warn_filter -> Better Stack"
     alert_route: "sentry_alert.git_data_host_key_pin_fault -> operator email"
   - mode: "armed container boots without GIT_DATA_SSH_HOST_KEY or with a malformed one"
-    detection: "logGitDataHostKeyPinAtStartup -> pin_fault=pin_absent or pin_invalid"
+    detection: "logGitDataHostKeyPinAtStartup -> reportGitDataPinFault message path, pin_fault=pin_absent or pin_invalid; layer-5 Sentry captureMessage (release-tagged) + layer-2 pino logger.error carrying extra.pinFault -> layer-3 vector app_container_warn_filter -> Better Stack; plus the Better Stack warn line git_data_pin=absent or git_data_pin=invalid"
     alert_route: "sentry_alert.git_data_host_key_pin_fault -> operator email"
   - mode: "runner image lacks the ssh client"
-    detection: "boot PATH walk and the push's provision spawn ssh ENOENT -> pin_fault=ssh_client_absent"
+    detection: "boot PATH walk and the push's provision spawn ssh ENOENT -> reportGitDataPinFault message path, pin_fault=ssh_client_absent; layer-5 Sentry captureMessage (release-tagged) + layer-2 pino logger.error carrying extra.pinFault -> layer-3 vector app_container_warn_filter -> Better Stack; plus the Better Stack warn line git_data_ssh_client=absent"
     alert_route: "sentry_alert.git_data_host_key_pin_fault -> operator email"
   - mode: "Art. 17 erasure refused while an earlier issue for that outcome is still open"
-    detection: "account-delete erasure report (message path) + event_frequency_count on art17_erasure_incomplete"
+    detection: "account-delete erasure report (layer-5 Sentry captureMessage, release-tagged, tags erasure_outcome and erasure_reason) + event_frequency_count on art17_erasure_incomplete; layer-2 pino logger.error -> layer-3 vector -> Better Stack"
     alert_route: "sentry_alert.art17_erasure_incomplete -> operator email (at most once per issue per 5 min)"
   - mode: "the rule is not live, or the emitter is not deployed"
     detection: "apply-sentry-infra.yml post-apply scripts/sentry-alert-live-fidelity.sh; daily scheduled-sentry-alert-drift.yml against alert-reference.json; web-platform-release.yml run on the merge SHA (Phase 6)"
@@ -560,8 +700,8 @@ logs:
   where: "Sentry issue stream (web-platform); container stdout via pino, shipped to Better Stack at level >= 40 by Vector (app_container_warn_filter)"
   retention: "Sentry org plan event retention; Better Stack source retention per plan"
 discoverability_test:
-  command: "jq -r '.\"git-data-host-key-pin-fault\".triggerConditions[].type' apps/web-platform/infra/sentry/alert-reference.json"
-  expected_output: "event_frequency_count"
+  command: "jq -r '.\"git-data-host-key-pin-fault\".actionFilters[0].conditions[0].comparison.key' apps/web-platform/infra/sentry/alert-reference.json"
+  expected_output: "pin_fault"
 ```
 
 The `plan_pr` reference gate holds the committed `alert-reference.json` equal to the plan before
@@ -600,9 +740,17 @@ the rule routes, and the rule routes exactly that vocabulary: nothing missing, n
 - **Callers:** the three boot reports and the push catch in `server/git-data-replication.ts`.
 - **Consumer:** the single `tagged_event` condition of `sentry_alert.git_data_host_key_pin_fault`,
   plus its `alert-reference.json` entry.
-- **Census:** a recursive walk of `apps/web-platform/{server,app,lib}/**/*.ts(x)`. It requires that
-  the token `pin_fault` appears only in `server/git-data-pin-fault.ts`, and asserts that at least
-  one file was read.
+- **Census:** a recursive walk of `apps/web-platform/{server,app,lib}/**/*.ts(x)`.
+  - It excludes `*.test.*` and `*.spec.*`, and strips `//`, `/* */` and JSDoc comments first.
+  - It matches the **writer shape** `["']?pin_fault["']?\s*:`, and requires that it occurs only in
+    `server/git-data-pin-fault.ts`.
+  - A second check requires that `reportGitDataPinFault` is imported only by
+    `server/git-data-replication.ts`.
+  - Its floor requires that the walk **visited** `server/git-data-pin-fault.ts` and at least one
+    file two directories deep, which proves it recursed.
+- **Reference mirror:** the test also set-compares `alert-reference.json`'s
+  `."git-data-host-key-pin-fault".actionFilters[0].conditions[0].comparison.value` against the
+  constant.
 
 **Mutation matrix:**
 
@@ -610,13 +758,16 @@ the rule routes, and the rule routes exactly that vocabulary: nothing missing, n
 |---|---|---|
 | 1 | Drop `ssh_client_absent` from the rule's `in` value | RED (set-compare with the imported constant) |
 | 2 | Add `unreachable` to the rule's `in` value | RED (the set is not equal) |
-| 3 | `match = "eq"`, or `logic_type = "any-short"` | RED |
+| 3 | `match = "eq"`, or `logic_type = "none"` (not `any-short`, which is equivalent to `all` over one condition), or a second condition added | RED (it asserts `all` and exactly one condition) |
 | 4 | Comment out the condition line | RED (comments are stripped; no filter is found) |
 | 5 | Add `tags: { pin_fault: "pin_absent" }` to the erasure report in `server/account-delete.ts` | RED (census: a second writer, which would double-email) |
-| 6 | Point the census walk at a non-existent root | RED (floor: at least 1 file read) |
+| 6 | Point the census walk at an existing directory with no `.ts` files | RED (floor: `git-data-pin-fault.ts` and a depth-2 file not visited) |
 | 7 | Set `frequency_minutes = 1442`, a value `spawn_agent_dead_letter` already uses | RED (this rule's own value must be unique) |
 | 8 | Change `fallthrough_type` to `NoOne` | RED |
 | 9 | Remove `event_frequency_count` from the rule's triggers | RED |
+| 10 | `event_frequency_count` `value = 1`, or `interval = "1d"` | RED (strict `>` per group: `value = 1` never pages a single event, #8708 learning) |
+| 11 | `enabled = false` | RED |
+| 12 | Drop `ssh_client_absent` from `alert-reference.json`'s `in` value only | RED (reference mirror) |
 
 **Harness rows:**
 
@@ -641,11 +792,12 @@ including `unconfigured` with any `erasure_reason`, and keeps re-paging while ev
   "git-data-bare-repo-erasure", … })` calls in `server/account-delete.ts`, the outcome report and
   the throw arm.
 - **Consumer:** the rule 1b block in `issue-alerts.tf`, plus its reference entry.
-- **The absence the test checks:** **every** `tagged_event` in the block is read in a loop, and
-  only `feature` and `op` may appear.
+- **The absence the test checks:** the block's `conditions` list has **exactly two entries of any
+  kind**, both `tagged_event` on `feature` and `op`, under `logic_type = "all"`. So a non-tag
+  narrowing condition, such as a level filter, also turns it red (test-design review).
 - **The presence the test checks:** `event_frequency_count {1h, 0}` among the triggers.
-- **Literal equality:** the `op` literal is read from both `account-delete.ts` call sites in
-  source and compared to the rule's value.
+- **Literal equality:** `ART17_ERASURE_FEATURE` and `ART17_ERASURE_OP` are imported from
+  `server/account-delete.ts` and compared to the rule's values.
 
 **Mutation matrix:**
 
@@ -653,8 +805,10 @@ including `unconfigured` with any `erasure_reason`, and keeps re-paging while ev
 |---|---|---|
 | 1 | Add `{ tagged_event = { key = "erasure_outcome", match = "in", value = "refused,unauthorized,unreachable" } }` | RED (narrowing) |
 | 2 | Remove `event_frequency_count` from rule 1b | RED |
-| 3 | After the compliant `feature` filter, add a second, narrowing `erasure_reason` filter | RED (the loop reads every condition) |
-| 4 | Change the `op` value to `git-data-erasure` | RED (the source literal differs) |
+| 3 | After the compliant `feature` filter, add a second, narrowing `erasure_reason` filter | RED (exactly two conditions, each checked) |
+| 4 | Change the `op` value to `git-data-erasure` | RED (the imported constant differs) |
+| 5 | Add a non-tag condition (e.g. a `level` filter) | RED (exactly two conditions) |
+| 6 | Rule 1b `event_frequency_count` `value = 1` | RED |
 
 **Harness rows:**
 
@@ -668,7 +822,7 @@ including `unconfigured` with any `erasure_reason`, and keeps re-paging while ev
 ## Files to Edit
 
 - `apps/web-platform/server/git-data-replication.ts`
-- `apps/web-platform/server/account-delete.ts` (dated comment only)
+- `apps/web-platform/server/account-delete.ts` (two exported constants used at the two erasure sites, behavior-neutral; dated comment)
 - `apps/web-platform/infra/sentry/issue-alerts.tf`
 - `apps/web-platform/infra/sentry/alert-reference.json`
 - `apps/web-platform/infra/sentry/README.md`
@@ -686,6 +840,7 @@ including `unconfigured` with any `erasure_reason`, and keeps re-paging while ev
 
 - `apps/web-platform/server/git-data-pin-fault.ts`
 - `apps/web-platform/test/git-data-pin-fault.test.ts`
+- `apps/web-platform/test/git-data-pin-fault-event.test.ts`
 - `apps/web-platform/test/sentry-git-data-pin-fault-alert-op-contract.test.ts`
 
 ## Open Code-Review Overlap
@@ -722,6 +877,9 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
   #8211's post-flip re-erasure path lands. Tracked in **#9152**.
 - **Start the Art. 12(3) one-month clock automatically from the page** (CPO note). Today it starts
   when a `clo-attestation` issue is filed by hand. Tracked in **#9153**.
+- **Pre-existing, found at deepen:** the **non-pin** push failure report (Error path) still carries
+  raw worktree and workspace ids in `err.message` (Node's `Command failed:` argv, and
+  `ensureGitDataRemote`'s message). This PR does not change that path. Tracked in **#9154**.
 
 ## Review & Consult Provenance
 
@@ -752,6 +910,8 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
   - AC7 regex fixed.
   - An `account-delete.ts` comment, rule 1b "Keys on erasure_outcome" and a soak-query note.
   - P3 reworded to the 5-min throttle.
+  - **Deepen pass (2026-09-28):** the observability, security, test-design, user-impact and
+    Terraform reviews (see Enhancement Summary).
   - Taste findings that were not applied are recorded in
     `knowledge-base/project/specs/feat-one-shot-8572-git-data-pin-fault-paging/decision-challenges.md`.
 
@@ -768,18 +928,18 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
   ```
 
 - [ ] AC2: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
-- [ ] AC3: `git grep -n 'pin_fault' -- apps/web-platform/server apps/web-platform/app apps/web-platform/lib` matches only `apps/web-platform/server/git-data-pin-fault.ts`.
-- [ ] AC4: This command prints `git-data-host-key-pin-fault`, `240`, `host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent` and `ActiveMembers`:
+- [ ] AC3: `git grep -nE "[\"']?pin_fault[\"']?[[:space:]]*:" -- apps/web-platform/server apps/web-platform/app apps/web-platform/lib ':!*.test.*'` matches only `apps/web-platform/server/git-data-pin-fault.ts`. Comment mentions are allowed; the contract-test census is the precise check.
+- [ ] AC4: This command prints `git-data-host-key-pin-fault`, `240`, `host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent`, `ActiveMembers` and `1h/0`:
 
   ```bash
-  jq -r '."git-data-host-key-pin-fault" | [.name, .frequency, (.actionFilters[0].conditions[0].comparison.value), .actionFilters[0].actions[0].fallthroughType] | @tsv' \
+  jq -r '."git-data-host-key-pin-fault" | [.name, .frequency, (.actionFilters[0].conditions[0].comparison.value), .actionFilters[0].actions[0].fallthroughType, (.triggerConditions[] | select(.type == "event_frequency_count") | .comparison | "\(.interval)/\(.value)")] | @tsv' \
     apps/web-platform/infra/sentry/alert-reference.json
   ```
 
-- [ ] AC5: This command prints `{"t":["event_frequency_count","first_seen_event","reappeared_event","regression_event"],"k":["feature","op"]}`:
+- [ ] AC5: This command prints `{"t":["event_frequency_count","first_seen_event","reappeared_event","regression_event"],"k":["feature","op"],"f":["1h/0"]}`:
 
   ```bash
-  jq -c '."art17-erasure-incomplete" | {t: ([.triggerConditions[].type] | sort), k: ([.actionFilters[].conditions[].comparison.key] | sort)}' \
+  jq -c '."art17-erasure-incomplete" | {t: ([.triggerConditions[].type] | sort), k: ([.actionFilters[].conditions[].comparison.key] | sort), f: [.triggerConditions[] | select(.type == "event_frequency_count") | .comparison | "\(.interval)/\(.value)"]}' \
     apps/web-platform/infra/sentry/alert-reference.json
   ```
 
