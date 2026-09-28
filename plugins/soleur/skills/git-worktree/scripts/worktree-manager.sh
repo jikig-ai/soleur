@@ -1256,7 +1256,9 @@ ensure_worktree_identity() {
   # which is also the worst one, since `git -C /` walks up to whatever repository contains the
   # filesystem root. The canonical assert_fixture_dir rejects "/" explicitly for the same reason.
   #
-  # Returns 1 rather than aborting: both call sites are `if ! ensure_worktree_identity ...`, and
+  # Returns 1 rather than aborting: every call site arms the result under
+  # `if !`/ `||`-continue (the create-worktree sites and the reap-archive
+  # commit path), and
   # an `exit`/`${var:?}` here would bypass the caller's own red-line message and its `exit 1`.
   case "$worktree_path" in
     "" | "/" | "//" | "/.")
@@ -2467,17 +2469,194 @@ cleanup_worktrees() {
   echo -e "${GREEN}Cleanup complete!${NC}"
 }
 
+# ---------------------------------------------------------------------------
+# Reap archive persistence (#9127, ADR-258)
+#
+# A reaper archive move must have a persistence owner: the move either lands in
+# git history in the same reap run, or it is not made at all. Plain `mv` of a
+# TRACKED artifact produces an unpersisted mutation — nothing commits it — and
+# the next `git reset --hard HEAD` (SOLEUR-GUARD-MAINRESET) or `sync_bare_files`
+# checkout-index restores the tracked half while the untracked archive copy
+# survives, manufacturing a live+archive twin ("stranded spec").
+#
+# One chokepoint: the spec-dir block and both archive_kb_files call sites in
+# cleanup_merged_worktrees route through reap_archive_persist. An archive site
+# added later without it is the defect class reborn.
+# ---------------------------------------------------------------------------
+
+# Per-run classification, computed once per cleanup_merged_worktrees run by
+# _reap_archive_classify (below) and read by every archive site via dynamic
+# scope. A tracked KB artifact may only move where the same run can COMMIT the
+# move — a non-main/master, non-detached, non-merging branch of a non-bare
+# checkout. Everywhere else there is no legal commit path, so tracked
+# artifacts DEFER with a marker rather than become unpersisted mutations.
+# Module-scope state globals are UPPER per file convention (IS_BARE,
+# _SS_LIB_MISSING); lowercase is reserved for locals.
+_REAP_ARCHIVE_COMMITTABLE=false
+_REAP_ARCHIVE_DEFER_REASON=bare
+# The branch _reap_archive_classify probed; _reap_archive_commit re-reads HEAD
+# at commit time and requires equality — a concurrent `git checkout main`
+# between probe and commit would otherwise land the chore commit on main.
+_REAP_ARCHIVE_BRANCH=""
+# Repo-relative paths successfully `git mv`'d in the current reap iteration;
+# _reap_archive_commit consumes them in one scoped commit per reaped branch.
+# The list is reset at the TOP of every reap iteration, so a `continue` placed
+# between an archive site and the commit call cannot leak branch A's paths
+# into branch B's commit.
+_REAP_ARCHIVE_MOVED_PATHS=()
+
+# Is <repo-relative path> tracked on this checkout class?
+# Worktree: ls-files --error-unmatch (the index). Bare root: ls-tree HEAD —
+# the on-disk mirror is untracked-from-disk but tracked in HEAD, which is the
+# property `sync_bare_files` resurrections key on.
+# GIT_LITERAL_PATHSPECS pins every probe to literal matching: git pathspecs
+# glob by default and a committed KB filename may legally contain * ? or [] —
+# a globbing probe/commit would silently widen the scoped-commit contract.
+_reap_archive_tracked() {
+  local rel="$1"
+  if [[ "$IS_BARE" == "true" ]]; then
+    [[ -n "$(GIT_LITERAL_PATHSPECS=1 git -C "$GIT_ROOT" ls-tree HEAD --name-only -- "$rel" 2>/dev/null)" ]]
+  else
+    GIT_LITERAL_PATHSPECS=1 git -C "$GIT_ROOT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1
+  fi
+}
+
+# Single chokepoint for every reap-produced KB archive move.
+# Usage: reap_archive_persist <src> <dst> <slug> <label> <verbose>
+#   src/dst MUST be $GIT_ROOT-prefixed absolute paths; slug is the marker's
+#   slug= field (always the safe_branch, not the file-match slug).
+# Callers MUST invoke it in the same shell — a $(…) capture loses both the
+# SOLEUR_* markers and the _REAP_ARCHIVE_MOVED_PATHS payload.
+# The caller holds the [[ -e dst ]] no-clobber guard. Never falls back from a
+# failed `git mv` to plain `mv` — that would produce the unpersisted mutation
+# this helper exists to prevent; the artifact is left live instead.
+reap_archive_persist() {
+  local src="$1" dst="$2" slug="$3" label="$4" verbose="$5"
+  local rel_src="${src#"$GIT_ROOT"/}" rel_dst="${dst#"$GIT_ROOT"/}"
+  # A src outside GIT_ROOT strips to nothing — the absolute path probes as
+  # untracked and silently takes the plain-mv arm, the unpersisted-move class
+  # this chokepoint owns. Refuse rather than reproduce it.
+  if [[ "$rel_src" == "$src" || "$rel_dst" == "$dst" ]]; then
+    headless_or_stderr warn "reap_archive_persist: $src outside GIT_ROOT — refusing the move"
+    echo "SOLEUR_REAP_ARCHIVE_DEFERRED slug=$(_sanitize_marker_field "$slug") reason=outside-git-root path=$(_sanitize_marker_field "${src##*/}")"
+    return 0
+  fi
+  # A symlink anywhere in dst's chain redirects the write outside the repo;
+  # knowledge-base/ is committable content and git tracks symlinks, so a
+  # merged PR can plant `archive -> /outside`. realpath -m resolves the chain.
+  if [[ "$(realpath -m "$dst" 2>/dev/null)" != "$(realpath -m "$GIT_ROOT" 2>/dev/null)/"* ]]; then
+    headless_or_stderr warn "reap_archive_persist: $rel_dst resolves outside the checkout (symlinked archive dir) — refusing the move"
+    echo "SOLEUR_REAP_ARCHIVE_DEFERRED slug=$(_sanitize_marker_field "$slug") reason=unsafe-destination path=$(_sanitize_marker_field "$rel_src")"
+    return 0
+  fi
+  if _reap_archive_tracked "$rel_src"; then
+    if [[ "$_REAP_ARCHIVE_COMMITTABLE" != "true" ]]; then
+      echo "SOLEUR_REAP_ARCHIVE_DEFERRED slug=$(_sanitize_marker_field "$slug") reason=$(_sanitize_marker_field "$_REAP_ARCHIVE_DEFER_REASON") path=$(_sanitize_marker_field "$rel_src")"
+      return 0
+    fi
+    mkdir -p "$(dirname "$dst")" 2>/dev/null || true
+    local _mv_err
+    if _mv_err=$(git -C "$GIT_ROOT" mv -- "$rel_src" "$rel_dst" 2>&1); then
+      _REAP_ARCHIVE_MOVED_PATHS+=("$rel_src" "$rel_dst")
+      return 0
+    fi
+    headless_or_stderr warn "reap_archive_persist: git mv failed for $rel_src: ${_mv_err:-<no stderr>} — left in place (no unpersisted move is ever made)"
+    echo "SOLEUR_REAP_ARCHIVE_DEFERRED slug=$(_sanitize_marker_field "$slug") reason=git-mv-failed path=$(_sanitize_marker_field "$rel_src")"
+    [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $(basename "$src")${NC}"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dst")" 2>/dev/null || true
+  if ! mv -- "$src" "$dst" 2>/dev/null; then
+    [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $(basename "$src")${NC}"
+  fi
+  # Always rc 0 — this helper's contract is warn-and-continue. A bare `mv`
+  # failure under a non-tty (verbose=false) leaves `[[ ]]&&` at rc 1 and the
+  # function returning 1 would abort cleanup_merged_worktrees mid-loop under
+  # set -e, orphaning any staged renames without a STAGED marker.
+  return 0
+}
+
+# Once-per-run committability classification for the reap loop (#9127).
+# Writes _REAP_ARCHIVE_COMMITTABLE / _REAP_ARCHIVE_DEFER_REASON /
+# _REAP_ARCHIVE_BRANCH. A tracked KB artifact may only move where the same run
+# can COMMIT the move — a non-main/master, non-detached, non-merging branch of
+# a non-bare checkout. On main/master, detached HEAD, an unborn/unreadable
+# HEAD, a merge in progress, or the bare root there is no legal commit path
+# (commits to main are hook-prohibited and unpushed local commits break
+# pull --ff-only; a partial commit mid-merge is refused and would fold the
+# payload into the operator's merge commit), so tracked artifacts DEFER
+# instead of becoming unpersisted mutations.
+_reap_archive_classify() {
+  _REAP_ARCHIVE_COMMITTABLE=false
+  _REAP_ARCHIVE_DEFER_REASON=bare
+  _REAP_ARCHIVE_BRANCH=""
+  if [[ "$IS_BARE" != "true" ]]; then
+    local _reap_branch
+    _reap_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    # A detached HEAD prints the literal `HEAD` (measured); empty is the
+    # unborn/unreadable case — reported distinctly so the marker's reason=
+    # names a measured state (AP-021) rather than conflating the two.
+    case "$_reap_branch" in
+      main|master) _REAP_ARCHIVE_DEFER_REASON=main-checkout ;;
+      HEAD)        _REAP_ARCHIVE_DEFER_REASON=detached ;;
+      "")          _REAP_ARCHIVE_DEFER_REASON=unborn ;;
+      *)
+        if git -C "$GIT_ROOT" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+          _REAP_ARCHIVE_DEFER_REASON=merge-in-progress
+        else
+          _REAP_ARCHIVE_COMMITTABLE=true
+          _REAP_ARCHIVE_BRANCH="$_reap_branch"
+        fi ;;
+    esac
+  fi
+}
+
+# Persist one reaped branch's archive moves — the "persistence owner" of
+# #9127. One pathspec-scoped commit per reaped branch carries the spec dir +
+# brainstorm + plan moves and NOTHING else: the pathspec is what keeps a
+# session's unrelated staged work out of it. GIT_LITERAL_PATHSPECS keeps the
+# pathspec literal — a KB filename may legally contain * ? or [] and a
+# globbing commit would sweep unrelated matching paths into the payload.
+# Re-reads HEAD: classify ran before the loop and a concurrent checkout could
+# have changed the branch underneath us — committing then would land on
+# whatever HEAD now is, including main (the state the deferral exists to
+# prevent). Drift degrades to STAGED: the payload stays in the index for the
+# session's own commits — never LEFTHOOK=0 (a detected bypass).
+_reap_archive_commit() {
+  local slug="$1"
+  (( ${#_REAP_ARCHIVE_MOVED_PATHS[@]} > 0 )) || return 0
+  local cur_branch
+  cur_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [[ "$_REAP_ARCHIVE_COMMITTABLE" == "true" && "$cur_branch" == "$_REAP_ARCHIVE_BRANCH" ]]; then
+    ensure_worktree_identity "$GIT_ROOT" \
+      || headless_or_stderr warn "cleanup-merged: identity wedge before reap archive commit; attempting anyway (a failed commit degrades to STAGED)"
+    if GIT_LITERAL_PATHSPECS=1 git -C "$GIT_ROOT" commit -q -m "chore(archive-kb): persist reap archive for $slug" -- "${_REAP_ARCHIVE_MOVED_PATHS[@]}"; then
+      echo "SOLEUR_REAP_ARCHIVE_COMMITTED slug=$(_sanitize_marker_field "$slug")"
+      return 0
+    fi
+  fi
+  echo "SOLEUR_REAP_ARCHIVE_STAGED slug=$(_sanitize_marker_field "$slug")"
+}
+
 # Archive KB artifact files matching a slug from a flat directory
-# Usage: archive_kb_files <dir> <slug> <label> <verbose> [batch_ts]
+# Usage: archive_kb_files <dir> <slug> <label> <verbose> [batch_ts] [marker_slug]
+#   slug        = the file-name match fragment (prefix-stripped branch slug)
+#   marker_slug = the slug= field on emitted markers — always the reaped
+#                 branch's safe_branch so every SOLEUR_REAP_ARCHIVE_* line for
+#                 one reap joins on the same value (spec dir emits safe_branch).
 archive_kb_files() {
   local dir="$1"
   local slug="$2"
   local label="$3"
   local verbose="$4"
   local batch_ts="${5:-}"
+  local marker_slug="${6:-$2}"
   [[ -d "$dir" ]] || return 0
+  # An empty slug collapses the glob below to "$dir"/* — every file in the
+  # directory would "belong" to one branch. A merged `feat-`/`fix-`/`feature-`
+  # literal branch produces exactly that; refuse rather than sweep the pool.
+  [[ -n "$slug" ]] || return 0
   local archive_dir="$dir/archive"
-  mkdir -p "$archive_dir"
   # One stamp per batch (archive-kb.sh precedent) — every file this call moves
   # shares the reap's timestamp rather than recomputing `date` per file.
   # The caller may pass the reap-wide stamp so spec/plan/brainstorm entries of
@@ -2491,8 +2670,9 @@ archive_kb_files() {
     if [[ -e "$archive_dir/$ts-$fname" ]]; then
       # No-clobber: an existing archive record is never overwritten in place.
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: archive entry exists, keeping both: $ts-$fname${NC}"
-    elif ! mv "$f" "$archive_dir/$ts-$fname" 2>/dev/null; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $fname${NC}"
+    else
+      # Per-file classification — a batch can be mixed tracked/untracked.
+      reap_archive_persist "$f" "$archive_dir/$ts-$fname" "$marker_slug" "$label" "$verbose"
     fi
   done
 }
@@ -3144,9 +3324,18 @@ cleanup_merged_worktrees() {
     fi
   fi
 
+  # Reap-archive persistence classification (#9127, ADR-258): computed ONCE per
+  # run, read by every archive site below via the dynamic-scope globals
+  # _REAP_ARCHIVE_COMMITTABLE / _REAP_ARCHIVE_DEFER_REASON.
+  _reap_archive_classify
+
   local cleaned=()
 
   for branch in $all_stale_branches; do
+    # Per-iteration boundary for the scoped-commit payload — placed at the top
+    # so a `continue` anywhere below cannot leak this branch's staged renames
+    # into the NEXT branch's commit.
+    _REAP_ARCHIVE_MOVED_PATHS=()
     local worktree_path="${branch_to_worktree[$branch]:-}"
     local safe_branch
     # Behavior-identical to the inline `echo … | tr '/' '-'` this replaces —
@@ -3349,12 +3538,11 @@ cleanup_merged_worktrees() {
       archive_name="$reap_ts-$safe_branch"
       archive_path="$archive_dir/$archive_name"
 
-      mkdir -p "$archive_dir"
       if [[ -e "$archive_path" ]]; then
         # No-clobber: an existing archive record is never overwritten in place.
         [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: archive entry exists, keeping spec for $branch${NC}"
-      elif ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
-        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
+      else
+        reap_archive_persist "$spec_dir" "$archive_path" "$safe_branch" "spec" "$verbose"
       fi
     fi
 
@@ -3364,9 +3552,20 @@ cleanup_merged_worktrees() {
     feature_slug="${feature_slug#fix-}"
     feature_slug="${feature_slug#feature-}"
 
-    # Archive brainstorms and plans matching the feature slug
-    archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose" "$reap_ts"
-    archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan" "$verbose" "$reap_ts"
+    # Archive brainstorms and plans matching the feature slug. The sixth arg is
+    # the marker slug — safe_branch, not feature_slug — so every
+    # SOLEUR_REAP_ARCHIVE_* line for one reap joins on the same slug= value
+    # (the spec-dir site emits safe_branch; here it is the file-match slug's
+    # unstripped sibling).
+    archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose" "$reap_ts" "$safe_branch"
+    archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan" "$verbose" "$reap_ts" "$safe_branch"
+
+    # Persist this reaped branch's archive moves — the "persistence owner" of
+    # #9127. MUST sit after all three archive sites above: _reap_archive_commit
+    # drains _REAP_ARCHIVE_MOVED_PATHS into one scoped commit (COMMITTED, or
+    # STAGED on failure/drift — the payload stays in the index for the
+    # session's own commits — never LEFTHOOK=0, a detected bypass).
+    _reap_archive_commit "$safe_branch"
 
     # Remove worktree if exists (use actual path from git, not constructed path)
     if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
