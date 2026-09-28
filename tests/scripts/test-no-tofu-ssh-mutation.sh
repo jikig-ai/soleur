@@ -14,8 +14,10 @@
 #   2    enumeration over an empty tree (0 files scanned)                RED
 #   3    bridge compliant; lower-case `shkc no` in a NEW file            RED
 #   4    ssh_config-form `UKHF /dev/null` in git-data-cutover.yml        RED
-#   5    a second TOFU literal in git-auth.ts (count 2 != 1)             RED
-#   5b   a second TOFU literal appended to the SAME allow-listed line     RED (per-match count)
+#   5    a TOFU literal re-added to git-auth.ts (no allow-list entry     RED
+#        since #5914 deleted the fallback arm)
+#   5b   a third literal on git-data-ownership.test.sh's allow-listed     RED (per-match count)
+#        line (2 compliant hits there already)
 #   6    an allow-list entry for a path with zero hits                   RED
 #   7    keyscan appended into "$KH" in a workflow                       RED
 #   8    quoted space form  -o "SHKC accept-new"                         RED
@@ -150,17 +152,25 @@ _row_red "row 3 lower-case ${SHKC,,} no in a new file" "zz-new-mutation.conf"
 printf '            %s /dev/null\n' "$UKHF" >> "$COPY/.github/workflows/git-data-cutover.yml"
 _row_red "row 4 ssh_config ${UKHF} /dev/null in cutover.yml" "git-data-cutover.yml:"
 
-# Row 5
+# Row 5: #5914 deleted git-auth.ts's fallback arm and its allow-list entry, so ONE literal
+# re-added there is a non-allow-listed hit.
 printf 'const MUTATION_OPTS = ["-o", "%s=%s"];\n' "$SHKC" "$AN" >> "$COPY/apps/web-platform/server/git-auth.ts"
-_row_red "row 5 second TOFU literal in git-auth.ts" "expects 1 hit(s) and has 2"
+_row_red "row 5 TOFU literal re-added to git-auth.ts" "apps/web-platform/server/git-auth.ts: 1 unpinned SSH host-key hit(s)"
 
-# Row 5b: the second literal lands on the allow-listed line itself. A per-LINE count stays 1
-# here; only the per-MATCH count sees it.
-GA="$COPY/apps/web-platform/server/git-auth.ts"
-cp "$GA" "$WORK/ga.orig"
-sed -i "s/\"${SHKC}=${AN}\"\\];/\"${SHKC}=${AN}\", \"-o\", \"${SHKC}=no\"];/" "$GA"
-if cmp -s "$GA" "$WORK/ga.orig"; then _report "row 5b precondition" bad "(allow-listed line not found)"; _restore
-else _row_red "row 5b second literal on the SAME allow-listed line" "expects 1 hit(s) and has 2"; fi
+# Row 5b: a third literal lands on git-data-ownership.test.sh's allow-listed line itself (it
+# carries 2). A per-LINE count stays 1 line; only the per-MATCH count sees 3.
+GO="$COPY/apps/web-platform/infra/git-data-ownership.test.sh"
+cp "$GO" "$WORK/go.orig"
+sed -i "s|${UKHF}=/dev/null -o BatchMode|${UKHF}=/dev/null -o ${SHKC}=no -o BatchMode|" "$GO"
+# Positional precondition, not just "the file changed": same line count, still exactly ONE
+# matching line, and three matches on it (a literal landing on a NEW line fails this).
+go_lines_before="$(wc -l < "$WORK/go.orig")"; go_lines_after="$(wc -l < "$GO")"
+go_hit_lines="$(grep -ciE "${SHKC}|${UKHF}" "$GO" || true)"
+go_hits="$({ grep -oiE "${SHKC}=no|${UKHF}=/dev/null" "$GO" || true; } | wc -l)"
+if cmp -s "$GO" "$WORK/go.orig" || [[ "$go_lines_before" != "$go_lines_after" ]] \
+   || [[ "$go_hit_lines" != 1 ]] || [[ "$go_hits" -ne 3 ]]; then
+  _report "row 5b precondition" bad "(lines ${go_lines_before}->${go_lines_after}, hit lines ${go_hit_lines}, hits ${go_hits})"; _restore
+else _row_red "row 5b third literal on the SAME allow-listed line" "expects 2 hit(s) and has 3"; fi
 
 # Row 6
 sed -i "/^ALLOWLIST=/a apps/web-platform/package.json|1|mutation row 6 (zero hits)" "$GUARD"

@@ -236,9 +236,10 @@ export async function deleteAccount(
       //                  remove_key_absent — the remove key is missing while git-data is
       //                    otherwise armed. Remedy: restore GIT_REMOVE_SSH_PRIVATE_KEY in
       //                    Doppler prd and redeploy.
-      //                  pin_invalid | pin_absent_store_enabled — GIT_DATA_SSH_HOST_KEY is
-      //                    malformed, or unset while the store is enabled (#7226). Remedy:
-      //                    republish the pin (the replace job does) and redeploy.
+      //                  pin_invalid | pin_absent — GIT_DATA_SSH_HOST_KEY is malformed or
+      //                    unset, whatever the store flag says (#7226, #5914). Remedy:
+      //                    republish the pin (the replace job does) and redeploy, then
+      //                    sweep the refused erasures (runbook pin-fault row).
       //   unreachable  — no answer at all; the repo's state is unknown, which is not the
       //                  same as un-erased.
       //   host_key_mismatch — ssh reached a host whose key does not match the pin (#7226).
@@ -246,7 +247,12 @@ export async function deleteAccount(
       //                  pin — redeploy; or the host was re-keyed outside the replace job.
       // Sentry does not index `extra`, so an alert rule cannot key on a value that lives
       // only there — which is why `outcome` moved out of it.
-      reportSilentFallback(new Error(`git-data erasure ${outcome.status}`), {
+      //
+      // MESSAGE path (err === null, #5914): an Error-path report is pre-captured by the
+      // pino mirror with only `feature=pino-mirror` and the tagged capture is dropped
+      // (#8629), so art17_erasure_incomplete — which filters on `feature`/`op` — would
+      // never see it. The status leads the message so each outcome groups separately.
+      reportSilentFallback(null, {
         feature: "account-delete",
         op: "git-data-bare-repo-erasure",
         tags: { erasure_outcome: outcome.status },
@@ -268,7 +274,8 @@ export async function deleteAccount(
           detail: outcome.detail,
         },
         message:
-          "git-data bare-repo erasure did not complete during Art. 17 deletion — the repo may persist on the git-data host",
+          `git-data erasure ${outcome.status}: bare-repo erasure did not complete during ` +
+          "Art. 17 deletion — the repo may persist on the git-data host",
       });
     }
   } catch (err) {

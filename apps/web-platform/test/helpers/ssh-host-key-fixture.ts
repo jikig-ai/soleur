@@ -29,7 +29,8 @@ export function expectedFingerprint(pin: string): string {
 }
 
 /**
- * The unpinned TOFU option, assembled so that no test file carries the literal
- * (Guard 1 counts it in exactly one tracked place: git-auth.ts TOFU_FALLBACK_OPTS).
+ * The unpinned TOFU option, assembled so that no test file carries the literal. The
+ * pinned tests assert its ABSENCE; git-auth.ts carries zero such literals since #5914,
+ * and Guard 1 (tests/scripts/test-no-tofu-ssh.sh) no longer allow-lists that file.
  */
 export const TOFU_OPT = "StrictHostKeyChecking=" + "accept" + "-new";

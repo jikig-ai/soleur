@@ -1,10 +1,10 @@
-// #7226 / #5914 — Guard 5 (the app's git-data transport is pinned whenever a pin exists)
-// and Guard 3 (pin shape), app side. Plan:
-// knowledge-base/project/plans/2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md
+// #7226 / #5914 — Guard 5 (the app's git-data transport is always pinned; an absent or
+// malformed pin refuses, whatever the store flag says) and Guard 3 (pin shape), app side.
+// Plans: knowledge-base/project/plans/2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md
+// and 2026-09-28-feat-git-data-delete-unpinned-fallback-arm-5914-plan.md (host-key step 6).
 //
-// Every test re-imports the module under vi.resetModules() + vi.unstubAllEnvs(): the
-// once-per-process `pin_absent_store_disabled` report is MODULE state, so a shared import
-// would let one test's report satisfy (or break) another's "exactly once" assertion.
+// Every test re-imports the module under vi.resetModules() + vi.unstubAllEnvs(), so no
+// test can inherit another's module state.
 // Keys are generated per run (helpers/ssh-host-key-fixture.ts) — never a real host key.
 
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
@@ -84,6 +84,8 @@ beforeEach(() => {
   vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "remove-key");
   vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", "provision-key");
   vi.stubEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY", "transport-key");
+  // Pinned so the shell's own value never leaks into the arming predicate (AC5b).
+  vi.stubEnv("GIT_DATA_SSH_HOST", "");
 });
 
 afterEach(() => {
@@ -133,15 +135,17 @@ describe("resolveGitDataHostKeyPin — Guard 3 shape + D4 absent semantics", () 
     expect(pinReports()).toHaveLength(0);
   });
 
-  it("absent + store disabled returns null and reports pin_absent_store_disabled ONCE per process", async () => {
+  it("absent + store ENABLED names the flag state `=true`", async () => {
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
     const { resolveGitDataHostKeyPin } = await load();
-    expect(resolveGitDataHostKeyPin()).toBeNull();
-    expect(resolveGitDataHostKeyPin()).toBeNull();
-    expect(pinReports()).toHaveLength(1);
-    expect(pinReports()[0][1]).toMatchObject({
-      feature: "git_data_host_key_pin",
-      op: "pin_absent_store_disabled",
-    });
+    expect(() => resolveGitDataHostKeyPin()).toThrow(/GIT_DATA_STORE_ENABLED=true/);
+  });
+
+  it("absent + store disabled THROWS too (#5914: no unpinned fallback), naming the flag state, with no report", async () => {
+    const { resolveGitDataHostKeyPin } = await load();
+    expect(() => resolveGitDataHostKeyPin()).toThrow(/GIT_DATA_SSH_HOST_KEY is unset/);
+    expect(() => resolveGitDataHostKeyPin()).toThrow(/GIT_DATA_STORE_ENABLED=unset\/false/);
+    expect(pinReports()).toHaveLength(0);
   });
 });
 
@@ -172,18 +176,21 @@ describe("removeGitDataRepo — guarded pin resolution + host_key_mismatch (Guar
     const outcome = await removeGitDataRepo(WS);
     expect(outcome.status).toBe("unconfigured");
     if (outcome.status !== "unconfigured") throw new Error("narrow");
-    expect(outcome.detail).toMatch(/^pin_absent_store_enabled: /);
+    expect(outcome.detail).toMatch(/^pin_absent: /);
     expect(sshTransport).not.toHaveBeenCalled();
   });
 
-  it("store disabled + no pin, run twice: ssh uses the fallback (null) and Sentry gets exactly ONE pin_absent_store_disabled", async () => {
+  it("store disabled + no pin, run twice: `unconfigured` `pin_absent:` both times, never dials, no pin report (#5914)", async () => {
     const { removeGitDataRepo } = await load();
-    await removeGitDataRepo(WS);
-    await removeGitDataRepo(WS);
-    expect(sshTransport).toHaveBeenCalledTimes(2);
-    expect(sshTransport.mock.calls[0][3]).toBeNull();
-    expect(sshTransport.mock.calls[1][3]).toBeNull();
-    expect(pinReports()).toHaveLength(1);
+    for (let i = 0; i < 2; i++) {
+      const outcome = await removeGitDataRepo(WS);
+      expect(outcome.status).toBe("unconfigured");
+      if (outcome.status !== "unconfigured") throw new Error("narrow");
+      expect(outcome.detail).toMatch(/^pin_absent: /);
+      expect(outcome.detail).toMatch(/GIT_DATA_STORE_ENABLED=unset\/false/);
+    }
+    expect(sshTransport).not.toHaveBeenCalled();
+    expect(pinReports()).toHaveLength(0);
   });
 
   it("no remove key and no sibling inputs stays `skipped` without consulting the pin", async () => {
@@ -370,10 +377,11 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
     expect(keygen.split(" ")[1]).toBe(fp);
   });
 
-  it("absent: `git_data_pin=absent` at warn", async () => {
+  it("absent: `git_data_pin=absent` at warn (armed by beforeEach's remove/provision keys, so it also emits the startup event)", async () => {
     const { logGitDataHostKeyPinAtStartup } = await load();
     logGitDataHostKeyPinAtStartup();
     expect(warnMessages()).toEqual(["git_data_pin=absent"]);
+    expect(pinReports()).toHaveLength(1);
   });
 
   it("invalid: `git_data_pin=invalid` at warn, and NEVER throws (startup must not crash)", async () => {
@@ -386,11 +394,14 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
     // An invalid pin is also a Sentry event at boot (it fails every git-data call closed),
     // and the event never carries the value.
     expect(pinReports()).toHaveLength(1);
+    // Message path (err === null): an Error-path report loses its feature/op tags to the
+    // pino mirror's pre-capture (#8629).
+    expect(pinReports()[0][0]).toBeNull();
     expect(pinReports()[0][1]).toEqual({
       feature: "git_data_host_key_pin",
       op: "pin_invalid_at_startup",
+      message: "git-data host-key pin invalid at startup",
     });
-    expect(String((pinReports()[0][0] as Error).message)).toBe("git-data host-key pin invalid at startup");
     expect(JSON.stringify(reportSilentFallback.mock.calls)).not.toContain(PIN.split(" ")[1].slice(0, 30));
   });
 
@@ -417,10 +428,46 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
     }
   });
 
-  it("does not fire the pin_absent Sentry report (startup evidence is the log line, not an event)", async () => {
+  // P7 (#5914): an absent pin now refuses every git-data dial, so a container armed for
+  // git-data that boots without one is an event at boot, before any erasure is refused.
+  // "Armed" = any of the three sibling inputs removeGitDataRepo reads, non-empty after trim.
+  const ARM_INPUTS = ["GIT_REMOVE_SSH_PRIVATE_KEY", "GIT_PROVISION_SSH_PRIVATE_KEY", "GIT_DATA_SSH_HOST"] as const;
+  const SYNTH: Record<(typeof ARM_INPUTS)[number], string> = {
+    GIT_REMOVE_SSH_PRIVATE_KEY: "synthetic-remove-key-7f3a",
+    GIT_PROVISION_SSH_PRIVATE_KEY: "synthetic-provision-key-9c1d",
+    GIT_DATA_SSH_HOST: "10.99.0.77",
+  };
+
+  it("absent + UNARMED (transport key still set): logs the line, emits no event", async () => {
+    for (const k of ARM_INPUTS) vi.stubEnv(k, "");
+    vi.stubEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY", "synthetic-transport-key-2b8e");
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(warnMessages()).toEqual(["git_data_pin=absent"]);
+    expect(pinReports()).toHaveLength(0);
+  });
+
+  it("absent + arming inputs whitespace-only: no event", async () => {
+    for (const k of ARM_INPUTS) vi.stubEnv(k, "   ");
     const { logGitDataHostKeyPinAtStartup } = await load();
     logGitDataHostKeyPinAtStartup();
     expect(pinReports()).toHaveLength(0);
+  });
+
+  it.each(ARM_INPUTS)("absent + armed by %s ALONE: exactly one pin_absent_at_startup on the message path, no key material", async (only) => {
+    for (const k of ARM_INPUTS) vi.stubEnv(k, k === only ? SYNTH[k] : "");
+    const { logGitDataHostKeyPinAtStartup } = await load();
+    logGitDataHostKeyPinAtStartup();
+    expect(warnMessages()).toEqual(["git_data_pin=absent"]);
+    expect(pinReports()).toHaveLength(1);
+    expect(pinReports()[0][0]).toBeNull();
+    expect(pinReports()[0][1]).toEqual({
+      feature: "git_data_host_key_pin",
+      op: "pin_absent_at_startup",
+      message: "git-data host-key pin absent at startup",
+    });
+    const all = JSON.stringify(reportSilentFallback.mock.calls);
+    for (const v of Object.values(SYNTH)) expect(all).not.toContain(v);
   });
 
   // The boot wiring (server/index.ts calls it once) is bound by importing the boot module

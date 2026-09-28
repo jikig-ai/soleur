@@ -345,9 +345,18 @@ describe("deleteAccount", () => {
 
       expect(result.success).toBe(true);
       expect(result.gitDataErasurePending).toBe(true);
+      // Message path (err === null, #5914 / #8629): an Error-path report is pre-captured by
+      // the pino mirror with only `feature=pino-mirror`, so the `feature`/`op`/
+      // `erasure_outcome` tags art17_erasure_incomplete filters on would never arrive.
       expect(mockReportSilentFallback).toHaveBeenCalledWith(
-        expect.any(Error),
-        expect.objectContaining({ tags: expect.objectContaining({ erasure_outcome: status }) }),
+        null,
+        expect.objectContaining({
+          feature: "account-delete",
+          op: "git-data-bare-repo-erasure",
+          tags: expect.objectContaining({ erasure_outcome: status }),
+          // Status first, so each outcome groups into its own Sentry issue.
+          message: expect.stringMatching(new RegExp(`^git-data erasure ${status}: `)),
+        }),
       );
     },
   );

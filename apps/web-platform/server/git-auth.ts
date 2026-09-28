@@ -26,6 +26,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken } from "./github-app";
+import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
 
 const execFileAsync = promisify(execFile);
 
@@ -321,20 +322,14 @@ export async function gitWithInstallationAuth(
 // as GIT_DATA_SSH_HOST_KEY by the birth/replace job, and shape-validated by
 // `resolveGitDataHostKeyPin()` (git-data-replication.ts) before it gets here.
 //
-//   - pin present: the per-call 0600 known_hosts holds exactly `git-data <pin>`,
-//     ssh looks the host up under the alias `git-data` (never the address), and
-//     every other trust source is cut: `-F /dev/null` (no user/system ssh_config)
-//     and GlobalKnownHostsFile=/dev/null. A changed key fails closed.
-//   - pin null: the transitional fallback below, reachable only while the store is
-//     disabled and before the first replace publishes the pin. #5914 deletes it,
-//     and that deletion is a hard precondition for ever setting
-//     GIT_DATA_STORE_ENABLED (see the cutover runbook).
+// The pin is always required. The per-call 0600 known_hosts holds exactly
+// `git-data <pin>`, ssh looks the host up under the alias `git-data` (never the
+// address), and every other trust source is cut: `-F /dev/null` (no user/system
+// ssh_config) and GlobalKnownHostsFile=/dev/null. A changed key fails closed; an
+// absent or malformed pin refuses before any temp file or dial. There is no unpinned
+// arm: #5914 deleted the transitional fallback (ADR-237 Addendum, PR #9096), and
+// Guard 1 (tests/scripts/test-no-tofu-ssh.sh) no longer allow-lists this file.
 // ---------------------------------------------------------------------------
-
-// The ONE unpinned host-key option in this file. Guard 1
-// (tests/scripts/test-no-tofu-ssh.sh) allow-lists git-auth.ts at exactly one hit, so a
-// second copy anywhere in this file turns CI red. Do not inline it elsewhere.
-const TOFU_FALLBACK_OPTS: readonly string[] = ["-o", "StrictHostKeyChecking=accept-new"];
 
 const GIT_DATA_HOST_KEY_ALIAS = "git-data";
 
@@ -357,18 +352,22 @@ const PINNED_HOST_KEY_OPTS: readonly string[] = [
 
 /**
  * The known_hosts body and the host-key ssh options for one git-data invocation.
- * Throws on a pin carrying a line break: the resolver already refuses one, but this is
- * the byte that becomes a known_hosts line, so a second line (e.g. a `@cert-authority *`
- * entry) must be impossible here too, whatever the caller.
+ *
+ * Throws unless the pin is a string of exactly the resolver's shape
+ * ({@link GIT_DATA_HOST_KEY_PIN_RE}). Types stop a TypeScript caller passing `null`; this
+ * stops a JS or `as any` caller, and it is the byte that becomes a known_hosts line, so a
+ * second line (e.g. a `@cert-authority *` entry) or a trailing comment must be impossible
+ * here too, whatever the caller. The `typeof` clause comes first so a non-string refuses
+ * with this message rather than a `TypeError` from a string method.
  */
-function gitDataHostKeyTrust(hostKeyPin: string | null): {
+function gitDataHostKeyTrust(hostKeyPin: string): {
   knownHosts: string;
   sshOpts: readonly string[];
 } {
-  if (hostKeyPin === null) return { knownHosts: "", sshOpts: TOFU_FALLBACK_OPTS };
-  if (/[\r\n]/.test(hostKeyPin) || hostKeyPin.trim() === "") {
+  if (typeof hostKeyPin !== "string" || !GIT_DATA_HOST_KEY_PIN_RE.test(hostKeyPin)) {
     throw new Error(
-      "git-data: refusing a malformed host-key pin (must be one `ssh-ed25519 <base64>` line)",
+      "git-data: refusing to dial without a valid host-key pin (must be one " +
+        "`ssh-ed25519 <base64>` line; GIT_DATA_SSH_HOST_KEY via resolveGitDataHostKeyPin)",
     );
   }
   return {
@@ -391,26 +390,25 @@ function gitDataHostKeyTrust(hostKeyPin: string | null): {
  * Key handling mirrors the askpass discipline:
  *   - the key NEVER appears in argv — it is delivered via `GIT_SSH_COMMAND -i`
  *     pointing at a 0600 temp file, removed in `finally`;
- *   - the git-data host key is PINNED whenever `hostKeyPin` is non-null (#7226,
- *     ADR-237): the per-invocation 0600 known_hosts holds exactly `git-data <pin>`
- *     and ssh verifies strictly under that alias. A host replace no longer defeats
- *     pinning, because the replace job rotates the Terraform-minted key, republishes
- *     the pin and redeploys this app. A `null` pin takes the transitional fallback
- *     arm (see `TOFU_FALLBACK_OPTS`), which #5914 deletes before any store-enable.
+ *   - the git-data host key is ALWAYS PINNED (#7226, ADR-237): the per-invocation
+ *     0600 known_hosts holds exactly `git-data <pin>` and ssh verifies strictly under
+ *     that alias. A host replace no longer defeats pinning, because the replace job
+ *     rotates the Terraform-minted key, republishes the pin and redeploys this app. An
+ *     absent or malformed pin refuses before any dial (#5914 deleted the unpinned arm).
  *     `BatchMode=yes` so a host-key/auth problem fails deterministically instead of
  *     hanging on a prompt.
  *
  * @param args  git subcommand + flags (helper resets are prepended automatically)
  * @param privateKey  the OpenSSH-format private key material (from Doppler)
  * @param hostKeyPin  the git-data `ssh-ed25519 <base64>` pin from
- *   `resolveGitDataHostKeyPin()`, or `null` for the transitional fallback
+ *   `resolveGitDataHostKeyPin()` (required; anything else refuses before any dial)
  * @param opts  cwd + timeout passthrough
  * @returns the stdout Buffer from the git invocation
  */
 export async function gitWithPrivateKeyAuth(
   args: string[],
   privateKey: string,
-  hostKeyPin: string | null,
+  hostKeyPin: string,
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
   const trust = gitDataHostKeyTrust(hostKeyPin);
@@ -485,8 +483,8 @@ export async function gitWithPrivateKeyAuth(
  *
  * Key handling mirrors {@link gitWithPrivateKeyAuth}: the key NEVER appears in
  * argv (delivered via `-i` at a 0600 temp file, removed in `finally`); the host key
- * is pinned under the `git-data` alias whenever `hostKeyPin` is non-null (#7226 —
- * the same trust arm as the git helper, so the two can never diverge);
+ * is always pinned under the `git-data` alias (#7226 — the same trust function as the
+ * git helper, so the two can never diverge);
  * `BatchMode=yes` so an auth/host-key problem fails deterministically instead of
  * hanging. Used by provisioning AND the Art. 17 erasure path (REMOVE key).
  *
@@ -495,7 +493,7 @@ export async function gitWithPrivateKeyAuth(
  *   (the validated `workspace_id` — the forced command ignores the command word)
  * @param privateKey  the OpenSSH-format provision private key (from Doppler)
  * @param hostKeyPin  the git-data `ssh-ed25519 <base64>` pin from
- *   `resolveGitDataHostKeyPin()`, or `null` for the transitional fallback
+ *   `resolveGitDataHostKeyPin()` (required; anything else refuses before any dial)
  * @param opts  cwd + timeout passthrough
  * @returns the stdout Buffer from the ssh invocation
  */
@@ -503,7 +501,7 @@ export async function sshWithPrivateKeyAuth(
   host: string,
   remoteCommand: string,
   privateKey: string,
-  hostKeyPin: string | null,
+  hostKeyPin: string,
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
   const trust = gitDataHostKeyTrust(hostKeyPin);
