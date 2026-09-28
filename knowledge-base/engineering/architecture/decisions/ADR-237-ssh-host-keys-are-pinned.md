@@ -278,6 +278,12 @@ the LUKS cutover runbook). Earlier text in this ADR is not edited.
   > if either fails, "pull-only" above stands. The tag is advisory (host identity is read only from
   > the provision dial's ssh stderr, never from git's, which a tenant can write into), and the pin
   > still fails closed.
+  > **Condition met 2026-09-28 (#8572):** PR #9150 merged as `7541fb13`; apply-sentry-infra run
+  > 36454249853 created the rule (id 1310055) with `sentry_alert live fidelity: PASS`, and the release
+  > serving `7541fb13` finished deploying at 2026-09-28T17:15:30Z (deploy arm 36456390256). The rule is
+  > configured and verified field by field; no pin fault has fired, so email delivery is not yet
+  > observed. Record: `knowledge-base/legal/audits/2026-09-counsel-reattestation-5914.md`,
+  > "Verification 2026-09-28 (#8572)".
 - **The pinned transport needs an ssh client, which the image lacked.** `openssh-client` was absent
   from the runner image until PR #9096 (`node:22-slim` plus `--no-install-recommends` drops git's
   Recommends), so every app-side git-data dial failed ENOENT and an erasure read `unreachable`. The
