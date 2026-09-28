@@ -34,6 +34,7 @@ does_not_attest:
 art_33_triggered: false
 art_34_triggered: false
 re_evaluation_triggers: "(1) Any proposal to set GIT_DATA_STORE_ENABLED. Parent trigger (3) is now half met (pin present, arm deleted on merge), but #8211's per-id re-erasure path and #8572's paging still stand, and a flip before both is a hard block. (2) Any `pin_absent:` or `pin_invalid:` erasure outcome, or a `pin_absent_at_startup` event, in prd. The Art. 12(3) clock runs from the first such event, and each one goes to a clo-attestation issue with that deadline in its title (runbook pin-fault row). (3) #8629 is fixed fleet-wide. Re-read the 'stays on the error path' clauses of markers 2 and 5 and O2. (4) O1's follow-up lands. (5) PR #9096 closes unmerged: trigger (2) of the parent review re-opens. (6) Inherited unchanged: parent triggers (4) and (5), and the standing external-counsel triggers (first arms-length data subject, EEA-out transfer, regulated-industry data subject)."
+addendum_2026_09_28_8572: "Fires on the merge of the #8572 PR with a green apply-sentry-infra.yml run and a green web-platform-release.yml run after it, or not at all: supersedes the D4 paging note and the D6 trigger set, HALF-discharges re_evaluation_triggers (1) (#8572 paging met, #8211 per-id re-erasure path still a hard precondition for the first GIT_DATA_STORE_ENABLED flip), and moves trigger (2) from pulled to paged. See ## Addendum (2026-09-28, #8572)."
 ---
 
 # Counsel re-attestation: #5914 / PR #9096 (the app's unpinned host-key arm is deleted)
@@ -86,6 +87,15 @@ re-review is reserved for the triggers above.
 | D7 | Ledger row flipped | The `web-1 app container -> git-data sshd` row at 2bd35fdaff reads `cert_verification` on with no `exception`; its `tls` and `does_not_defend` text matches the plan's Encryption Posture block | **Holds** |
 | D8 | ADR-237 addendum exists and nothing earlier is edited | The heading "Addendum — PR #9096 (#5914): the transitional app arm is deleted" is present; `git diff --numstat` shows 0 deletions for ADR-237 and ADR-220 | **Holds** (see O3 on tense) |
 
+> **Superseded 2026-09-28 (#8572): D4, as to "Paging for it is #8572, still open", and D6, as to "fires per Sentry issue" and "first seen, reappeared or regression".**
+> Both fire on the merge of the #8572 PR together with a green `apply-sentry-infra.yml` run and a green
+> `web-platform-release.yml` run after it. If either run fails, both rows stand as written. D4: `pin_absent_at_startup`
+> is then paged by `sentry_alert.git_data_host_key_pin_fault`, which matches the `pin_fault` tag that only
+> `reportGitDataPinFault` writes, at most once per issue per 4 hours. D4's claim itself still holds. D6:
+> `sentry_alert.art17_erasure_incomplete` then also triggers on every event (`event_frequency_count {1h, 0}`),
+> throttled by `frequency_minutes = 5`: at most one email per issue per 5 minutes, never one per refusal. Its
+> `feature` and `op` filters are unchanged. The rows are not edited. See the addendum at the end of this file.
+
 ## Processors, recipients, data categories
 
 No new processor, recipient, transfer or category of personal data. The pin is a host public key,
@@ -109,3 +119,58 @@ add a recipient. O1 records the disclosure gap that existed before this PR.
 **DISCHARGED, conditioned on the merge of PR #9096, subject to C1 and C2.** Once both are met, the
 ship Phase 5.5 CLO-Attestation gate for PR #9096 is satisfied. The step-5 discharge record is a
 separate merge precondition (G1) and is not attested here. The operator retains an optional veto.
+
+## Addendum (2026-09-28, #8572)
+
+**Condition.** This addendum fires on the merge of the #8572 PR together with a green
+`apply-sentry-infra.yml` run and a green `web-platform-release.yml` run after that merge. If the PR
+closes unmerged or either run fails, nothing in this addendum holds, and the record above stands as
+written. A later evidence-only PR will append the run ids. This addendum does not claim that
+verification. Nothing above it is edited.
+
+- **What changes.** A new Sentry rule, `git-data-host-key-pin-fault`, matches the `pin_fault` tag
+  (`host_key_mismatch`, `pin_absent`, `pin_invalid`, `ssh_client_absent`). Only
+  `reportGitDataPinFault` writes that tag, on Sentry's message path. The rule covers the three boot
+  reports and a replication push that is refused on the pin. It triggers on first seen, reappeared,
+  regression and every event. It emails issue owners, falling through to active members, at most
+  once per issue per 4 hours (`frequency_minutes = 240`). Before `GIT_DATA_STORE_ENABLED` is set,
+  only the boot reports can fire. Rule `art17-erasure-incomplete` gains the every-event trigger. Its
+  filters are unchanged, and its throttle is `frequency_minutes = 5`. The erasure report is not
+  tagged `pin_fault`, so one refusal sends one email, not two.
+- **Re-evaluation trigger (1): HALF DISCHARGED.** #8572's paging condition is met on the merge and
+  both green runs. #8211's per-id re-erasure path still stands. It is a hard precondition for the
+  first `GIT_DATA_STORE_ENABLED` flip, and a flip before it is a hard block. The
+  `re_evaluation_triggers` value above is not edited. Read it with this addendum.
+- **Re-evaluation trigger (2): paged, not pulled.** Each event the trigger names now reaches the
+  operator by email instead of only by a query. A `pin_absent:` or `pin_invalid:` erasure outcome
+  pages through `art17-erasure-incomplete`, at most once per issue per 5 min and never per refusal.
+  A `pin_absent_at_startup` event pages through `git-data-host-key-pin-fault`, at most once per issue
+  per 4 h. The trigger itself does not change, and neither do the Art. 12(3) clock and the
+  clo-attestation issue routing. The clock still starts by hand from the first event (#9153 would
+  start it automatically). The pull is not retired: a pin fault that recurs within 4 h of a resolve
+  is silent under the 240-minute interval, so the runbook's `pin_fault:*` query still covers that
+  window.
+- **Processors, recipients, data categories.** No new processor, recipient, transfer or data
+  category. Sentry is already a processor for these events. The push report carries only these
+  fields:
+  - hashed workspace and worktree ids;
+  - the lease generation;
+  - the user id, pseudonymised by `reportSilentFallback` (`userIdHash`);
+  - `via` and the fault.
+
+  It sends no stderr and no error message. The capture runs in a fresh isolation scope with
+  breadcrumbs cleared.
+- **Not addressed here (deferred).** Unifying the erasure and push classifiers (#9152). Starting the
+  Art. 12(3) clock automatically (#9153). Raw ids in the non-pin push Error-path message, which is
+  pre-existing and unchanged (#9154). The raw `gitDataRepoId` in the erasure extra, which is O1 and
+  pre-existing (#9121).
+- **Register markers attested.** The three 2026-09-28 (#8572) markers in PA-36 (g), each on the
+  condition above:
+  - in (2), after "...not per refusal.";
+  - in (14), after "...which no alert routes until #8572.";
+  - in (14), after the ledger-flip sentence ending "the transitional app arm is deleted").".
+
+  **APPROVED.** Each quotes the words it supersedes and deletes none.
+
+**Disposition of this addendum: DISCHARGED, on the condition above.** The operator retains an
+optional veto.
