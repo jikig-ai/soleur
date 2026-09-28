@@ -93,7 +93,7 @@ recovery waits on a human even though the failure signature and its remedy
   Restart fires only on `hang-signature` sustained ≥3 consecutive reads WITH
   corroboration (state persisted via artifact or issue label, mirroring the
   Inngest watchdog pattern).
-- **FR3b.** Dark-launch: the restart write is gated behind `WATCHDOG_ARMED`;
+- **FR3b.** Dark-launch: the restart write is gated behind `vars.WATCHDOG_ARMED`;
   the workflow ships detect-only first (audit issue + check-in, zero restart
   POSTs) and is armed after a validated detection/soak window
   (`wg-dark-launch-deploy-gates`).

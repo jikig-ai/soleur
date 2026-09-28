@@ -68,6 +68,16 @@ repo research. Repo-research note that "push may be free-tier-compatible" is
 handled by measuring `push=true` on `app_health` at apply (#7798 precedent) —
 not assumed.
 
+**Dispatch-substrate check (SpecFlow #5):** the Inngest dispatch path is
+DB-independent — verified in-tree: `app/api/inngest/route.ts` serve handler
+authenticates by HMAC `INNGEST_SIGNING_KEY` (env), `mintInstallationToken` /
+`generateInstallationToken` read `GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY`
+from env (Doppler), and Inngest run-state lives on the dedicated host's
+Redis (ADR-100), not Supabase. The web process stays up during this failure
+class (it kept serving `/health` with `supabase:error` through the 09-28
+outage), so an Inngest cron dispatch survives it — no `WATCHDOG_DISPATCH_TABLE`
+eligibility exception needed.
+
 **Open-PR overlap (Phase 1.7.5):** open PRs touching supabase/infra files
 (#9179, #9051, #8820, #8192, #7390) — none touch `uptime-alerts.tf`,
 `watchdog-dispatch-table.ts`, or the files this plan edits. No collision.
@@ -79,16 +89,31 @@ not assumed.
   `concurrency: supabase-watchdog` with `cancel-in-progress: false` (the mutex
   — serializes runs regardless of which host dispatched, per advisor consult),
   `issues: write` permission. Steps: fetch Management API health (3 reads
-  spaced ~60s), run classifier, **dark-launched behind a `WATCHDOG_ARMED`
-  env gate — ships detect-only first** (`wg-dark-launch-deploy-gates`: a new
-  prod-write mechanism is observed on real signals before it acts), then
-  conditionally POST restart, file/update labeled audit issue, Sentry
-  check-in. Dispatch auth is the GitHub App token (`generateInstallationToken`
-  per `hr-github-app-auth-not-pat`), never a PAT.
+  spaced ~60s), corroborate via app `/health`, run classifier,
+  **dark-launched behind a `vars.WATCHDOG_ARMED` repo variable — ships
+  detect-only first** (`wg-dark-launch-deploy-gates`; a repo `var` flips
+  instantly without a merge, unlike an env literal), then conditionally POST
+  restart, file/update labeled audit issue, Sentry check-in. Dispatch auth is
+  the GitHub App token (`generateInstallationToken` per
+  `hr-github-app-auth-not-pat`), never a PAT.
+- Restart-write protocol (SpecFlow findings): the audit issue carries a
+  sentinel comment `<!-- watchdog:restart epoch=… -->` written **at** the
+  restart POST, not on confirmed 2xx — a non-2xx/timeout response is recorded
+  as `attempted` and NEVER retried (the post-restart `COMING_UP` state breaks
+  the signature anyway, giving free idempotency). An absent/unparseable
+  sentinel on a claimed-restart run fails closed: no restart + Sentry error.
+  Give-up counts ATTEMPTS (403/429 retry-forever class), not successful
+  restarts; recovery deadline ≈ COMING_UP window (~6 min) before a cycle
+  counts as failed.
 - `scripts/supabase-watchdog-classify.sh` — pure classifier:
   health-responses + corroborating-signal read → `hang-signature` |
   `healthy` | `ambiguous` | `probe-unavailable`. Bearer-on-stdin transport per
-  `supabase-logs-query.sh`.
+  `supabase-logs-query.sh`. Signature is the EXACT set `{db, auth, rest}
+  UNHEALTHY ∧ pooler = ACTIVE_HEALTHY`; a corroborator that is unreachable
+  (app `/health` down) yields `ambiguous`, never restart — when the CF edge or
+  the app itself is down, a Supabase restart is not the remedy. Extra/unknown
+  service keys (e.g. `storage` UNHEALTHY alongside) also yield `ambiguous` —
+  the classifier names the observed set, not a subset match.
 - `scripts/supabase-watchdog-classify.test.sh` — unit tests incl. the
   `probe-unavailable`-never-restarts case, the missing-corroboration case,
   and the give-up path.
@@ -172,7 +197,7 @@ Carried forward from the brainstorm (`## Domain Assessments`):
 liveness_signal:
   what: Sentry cron check-in from scheduled-supabase-watchdog.yml each run
   cadence: every 5 min (Inngest-dispatched workflow_dispatch; schedule: fallback)
-  alert_target: sentry_cron_monitor (new row in cron-monitors.tf) -> Sentry issue -> email (+ Slack once wired)
+  alert_target: sentry_cron_monitor (new row in cron-monitors.tf) -> Sentry issue -> email (+ Slack once wired); margin ~30 min (5-min cadence + jitter + p90 runner queue ~20 min + ~3-5 min runtime)
   configured_in: apps/web-platform/infra/sentry/cron-monitors.tf
 
 error_reporting:
@@ -253,7 +278,9 @@ the concurrency group is the mutex.
 | 5 | Remove the ≥3-reads sustained check (single read decides) | RED — suite must pin the window, not just the signature |
 | 6 | Classifier exits 0 with an empty/unparseable response | RED-equivalent: exit must be non-zero AND verdict `probe-unavailable` (an exit-0 hang-verdict on garbage is the vacuous arm) |
 | 7 | Cooldown marker says a restart happened <cooldown ago and a second hang is seen | RED — no second restart inside cooldown |
-| 8 | `WATCHDOG_ARMED` unset and signature + corroboration hold | RED on the write path: run must end detect-only (audit issue + check-in, zero restart POST) |
+| 8 | `vars.WATCHDOG_ARMED` unset and signature + corroboration hold | RED on the write path: run must end detect-only (audit issue + check-in, zero restart POST) |
+| 9 | Restart POST returns timeout/5xx after being accepted | RED — attempt recorded, never retried; COMING_UP next-window veto covers the landed case |
+| 10 | Audit-issue sentinel unparseable/absent on a run claiming prior restart | RED — fail-closed (no restart) + Sentry error |
 
 **Anchor.** The classifier's signature table lives in the test file's fixture
 set — an edit weakening the signature AND its fixture in one commit is caught
@@ -378,12 +405,12 @@ The resource block can therefore be written fully concrete, no placeholders.
   signature+corroboration → restart verdict; signature-without-corroboration →
   no restart; pooler-also-unhealthy → no restart; probe-unavailable → never
   restart; mid-window recovery → no restart; cooldown → no second restart;
-  `WATCHDOG_ARMED` unset → detect-only even on a full signature.
+  `vars.WATCHDOG_ARMED` unset → detect-only even on a full signature.
 - [ ] AC3: `scheduled-supabase-watchdog.yml` carries `workflow_dispatch` +
   `schedule:` triggers and `concurrency: supabase-watchdog` with
   `cancel-in-progress: false`; the workflow re-reads the audit issue's last
   restart timestamp before writing; dispatch auth is GitHub App token.
-  Dark-launch: `WATCHDOG_ARMED` unset → zero restart writes, ever.
+  Dark-launch: `vars.WATCHDOG_ARMED` unset → zero restart writes, ever.
 - [ ] AC4: A new Sentry cron monitor covers the watchdog; the runbook's
   "which alarm" table and `apply-web-platform-infra.yml` `-target` allowlist
   are updated; `terraform-target-parity.test.ts` stays green.
@@ -411,7 +438,7 @@ The resource block can therefore be written fully concrete, no placeholders.
   workflow runs, then no restart (ambiguous → audit issue only).
 - Given a Management API 401/timeout, when the workflow runs, then
   `probe-unavailable`, an error check-in, and NO restart call.
-- Given the full signature with `WATCHDOG_ARMED` unset (dark-launch), when the
+- Given the full signature with `vars.WATCHDOG_ARMED` unset (dark-launch), when the
   workflow runs, then detect-only: audit issue + check-in, zero restart POST.
 - Given a restart issued <cooldown ago and the signature re-appears, when the
   workflow runs, then no second restart and the audit issue notes the cooldown.
