@@ -1326,6 +1326,14 @@ if died && has '^EMIT_DRIFT rollback_refused_post_cutover$' && outF 'strand' && 
 else
   no "J1 a post-cutover ROLLBACK=1 was not refused (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
+# J1b — the refusal records what happened (_rollback_refuse): ONE row, outcome=refused_post_cutover
+# mode=rollback, never the false outcome=pre_freeze the EXIT trap used to add.
+if markerF "result=cutover_aborted outcome=refused_post_cutover mode=rollback" && ! markerF 'outcome=pre_freeze' \
+  && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ]; then
+  ok "J1b the post-cutover refusal writes ONE row, outcome=refused_post_cutover mode=rollback (no false pre_freeze)"
+else
+  no "J1b the post-cutover refusal row is wrong: $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|' | cut -c1-240)"
+fi
 # The source flips to the plaintext once rollback() stops the (loaded) timer: the guard reads the
 # mapper, the post-rollback outcome read sees the remount land.
 rb_case "1:uuid-live" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=uuid-live ROLLBACK_ACK_LUKS_WRITES=1 \
@@ -1579,7 +1587,7 @@ echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
 # still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=169
+FREEZE_MIN_PASS=170
 [ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
 harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
 [ "$fail" -eq 0 ]

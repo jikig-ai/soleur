@@ -390,7 +390,8 @@ for pat in \
   "result=fired reason=timer_elapsed" \
   "result=ok reason=plaintext_remounted" \
   "result=fail reason=remount_failed" \
-  "result=fail reason=mapper_close_failed"; do
+  "result=fail reason=mapper_close_failed" \
+  "result=fail reason=refused_plaintext_wiped"; do
   if grep -qF "$DM_PFX $pat" <<<"$DM_SRC"; then
     ok "dead-man FIRE emits marker: $pat"
   else
@@ -415,7 +416,8 @@ for pat in \
   "result=already_disarmed reason=rollback_engaged" \
   'result=cutover_aborted outcome=${outcome}${mode}${abnormal}${detail}' \
   'result=cutover_aborted outcome=${outcome} mode=rollback' \
-  'result=cutover_aborted outcome=refused_plaintext_wiped mode=rollback'; do
+  'result=cutover_aborted outcome=refused_plaintext_wiped mode=rollback' \
+  'result=cutover_aborted outcome=${2} mode=rollback'; do
   if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
   else
@@ -425,11 +427,18 @@ done
 # The closed OUTCOME vocabulary of cleanup() (#9098 B): each value is assigned somewhere, and the
 # abnormal-exit field exists. A renamed outcome would silently orphan the runbook's triage row.
 for o in rolled_back rollback_stacked rollback_remount_failed post_canary_luks_retained post_canary_restart_failed \
-         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted; do
+         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted refused_plaintext_wiped; do
   if grep -qE "(^|[;[:space:]])outcome=${o}([;[:space:]]|\$)" <<<"$DM_SRC"; then
     ok "cleanup() outcome vocabulary carries outcome=$o"
   else
     no "cleanup() outcome=$o is never assigned — its runbook row is orphaned"
+  fi
+done
+for rr in 'rollback_refused_plaintext_wiped refused_plaintext_wiped' 'rollback_refused_post_cutover refused_post_cutover'; do
+  if grep -qE "^[[:space:]]*_rollback_refuse ${rr} \"" <<<"$DM_SRC"; then
+    ok "ROLLBACK-mode refusal '${rr%% *}' goes through _rollback_refuse with outcome=${rr##* } (never a false pre_freeze)"
+  else
+    no "ROLLBACK-mode refusal '${rr%% *}' does not use _rollback_refuse with outcome ${rr##* } — its row would read pre_freeze"
   fi
 done
 if grep -qF 'abnormal=" abnormal_exit=1"' <<<"$DM_SRC"; then

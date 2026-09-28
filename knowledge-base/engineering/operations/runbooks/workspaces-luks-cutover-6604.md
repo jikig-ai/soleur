@@ -357,6 +357,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `wipe_deadman_armed` | No | After it resolves | A cutover dead-man is armed, firing or queued. Let it resolve (≤30 min), run `workspaces-luks-verify.yml`, then re-run the rehearsal. |
    | `wipe_io_cap_unavailable` | No | No | systemd could not apply the 150M `io.max` cap; the zero would run uncapped against the live volume's storage path. Halt and escalate. |
    | `wipe_positive_control_failed` | No | No | The first 4 KiB does not carry the ext4 magic, so the read path cannot be trusted to see the zero. Halt and escalate. |
+   | `wipe_marker_write_failed` | `marker=begun`: No. `marker=wiped`: Yes — zeroed and verified, but no API write | No, until the disk is fixed | The state file on web-1's root disk (`/var/lib/workspaces-luks/state`) could not be written and read back (disk full or read-only). `marker=begun`: nothing was zeroed. `marker=wiped`: the zero completed and verified, `PLAINTEXT_WIPE_BEGUN` still locks ROLLBACK out, and the job made no API write. Halt and escalate: freeing root-disk space needs a shell. Once fixed, re-dispatch D (it resumes on `arm=re_zero`). |
    | `wipe_blkdiscard_failed` | Partially (`PLAINTEXT_WIPE_BEGUN` persisted) | Yes | The zero itself failed. Re-dispatch D; it resumes on `arm=re_zero` and re-runs every identity check. ROLLBACK is now refused permanently (nothing to remount). |
    | `wipe_readback_failed` | Yes — the zero ran, the device is not all-zero | Yes | The O_DIRECT read-back found a non-zero byte (`cmp_rc`/`dd_rc` on the row, the first difference on the evidence row). Re-dispatch D (re-zero); on a repeat, halt and escalate. No API write happened. |
    | `wipe_signature_survived` | Yes — the zero ran | Yes | `blkid` still finds a signature after the zero. Re-dispatch D once; on a repeat, escalate. No API write happened. |
@@ -454,8 +455,12 @@ The rollback restarts the app only when the plaintext volume actually mounted. A
 leaves the app down and pages `rollback_remount_failed`.
 
 **After Sequence step 7 there is no rollback.** Once `PLAINTEXT_WIPE_BEGUN` or `PLAINTEXT_WIPED` is
-persisted on web-1, `rollback=true` refuses before any unmount (`outcome=refused_plaintext_wiped
-mode=rollback`, Sentry `rollback_refused_plaintext_wiped`), with or without the ack.
+persisted on web-1, **or** `/mnt/data` is the mapper while `/dev/disk/by-label/workspaces_plain` is gone
+(a physical check that does not depend on the state file), `rollback=true` refuses before any unmount
+(`outcome=refused_plaintext_wiped mode=rollback`, Sentry `rollback_refused_plaintext_wiped`), with or
+without the ack. The check is the first line of `rollback()` itself, so `cleanup()`'s freeze arm refuses
+the same way (`outcome=refused_plaintext_wiped`), and the dead-man fire string carries its own copy
+(`result=fail reason=refused_plaintext_wiped`).
 
 ## Failure signals (all off-host)
 
@@ -554,7 +559,7 @@ Several reasons can fire in one abort, so the Better Stack outcome row is the au
 | `post_canary_mount_not_mapper` | After a post-canary abort `/mnt/data` was no longer the mapper, so the app and writers were STOPPED. | Run the verify workflow. The only off-host recovery is `rollback=true -f rollback_ack_luks_writes=true` (plaintext, strands LUKS writes); re-mounting the mapper has no dispatch path. Escalate before choosing. |
 | `clean_stray`, `dry_run` | A `clean_stray` or dry run aborted. Nothing was cut over. | Read the run log. |
 | `wipe_aborted` (`mode=wipe`) | A step-7 wipe aborted. `cleanup()` never rolls back or restarts anything for it (the wipe never sets the freeze/canary flags) and shreds any header copy the wipe left on the root disk. A refused wipe REHEARSAL reads `outcome=dry_run mode=wipe`. | Read the `SOLEUR_WORKSPACES_LUKS_WIPE result=refused reason=` row and follow [the step 7 verdict table](#step-7-verdict-table). |
-| `refused_plaintext_wiped` (`mode=rollback`) | A `rollback=true` dispatch after the plaintext wipe began. Nothing was touched. | Do not roll back — there is no plaintext copy. Fix forward on the LUKS volume; `rollback_ack_luks_writes` does not override this. |
+| `refused_plaintext_wiped` (`mode=rollback`, or no `mode` from `cleanup()`'s freeze arm) | A rollback was attempted after the plaintext wipe began (a wipe marker), or with `/mnt/data` on the mapper and the plaintext label gone. `rollback()` refused as its first act: nothing was touched. | Do not roll back — there is no plaintext copy. Fix forward on the LUKS volume; `rollback_ack_luks_writes` does not override this. |
 
 `abnormal_exit=1` on the row means the script was killed (SIGPIPE from a dropped SSH connection,
 TERM or HUP) rather than dying on a check. Treat the outcome the same way, and look for the network
@@ -570,10 +575,11 @@ Other dead-man rows and reasons:
 | `deadman_fired_before_disarm` | A fire raced the host-canary disarm and reverted the mount. The run rolled back before `docker start`. | As above. |
 | `host_canary_workspace_count_mismatch`, `host_canary_baseline_missing` | The mounted copy's workspace count does not match what G3 counted in this run, or G3's count is missing. Rolled back before `docker start`. | Do not re-dispatch blind. Compare the counts in the run log, then file a tracked issue. |
 | `workspace_count_persist_failed` | G3 could not count the copy's workspaces. The run stopped at G3 and rolled back, losslessly. | Read the counter error in the run log; fix, then re-dispatch. |
-| `rollback_refused_post_cutover` | A `rollback=true` dispatch found the cutover had succeeded (or could not read the LUKS header to rule it out), and refused. The row reads `outcome=pre_freeze`; nothing changed. | Only re-dispatch with `-f rollback_ack_luks_writes=true` once the stranded LUKS writes have a reconciliation plan. |
+| `rollback_refused_post_cutover` | A `rollback=true` dispatch found the cutover had succeeded (or could not read the LUKS header to rule it out), and refused. The row reads `outcome=refused_post_cutover mode=rollback`; nothing changed. | Only re-dispatch with `-f rollback_ack_luks_writes=true` once the stranded LUKS writes have a reconciliation plan. |
 | `cutover_aborted_post_canary` (fatal) | Any post-canary abort, including tail failures (`green_run_degraded_queue`, `luks_monitor_timer_enable_failed`), not only an app failure. | Read the outcome row. |
 | `result=not_armed prior=<substate>` | A `rollback=true` dispatch found no timer armed by this run; `prior` is what it stopped. | None, unless `prior=waiting` (a stale armed timer was cancelled). |
 | `result=already_disarmed` | A rollback found this run had already disarmed its timer at the host canary. | None. |
+| `result=fail reason=refused_plaintext_wiped` (dead-man) | A dead-man FIRE found a wipe marker, or the mapper mounted with the plaintext label gone, and exited before any stop/umount/close. The live mount is untouched. | Run the verify workflow; halt and escalate (a dead-man should never be armed on a cut-over host). |
 | Alert `soleur-workspaces-luks-deadman-fired-prd` (`result=fired`) | An unattended dead-man fire stopped the app and remounted plaintext, for example after a SIGKILL of the host script mid-freeze. The alert auto-resolves after 10 quiet minutes; that does not mean anything was reconciled. | Match the fire's time against `gh run list --workflow=workspaces-luks-cutover.yml` to find the run that armed it. Run the verify workflow. Writes made on the LUKS volume **before** the fire are stranded there: reconcile them before any re-cut. |
 
 ### Host-timer liveness alert (#8706)

@@ -328,6 +328,8 @@ done
 #   W_HOLDERS='dm-3'      holder entries under the target's sysfs holders/ dir.
 #   UNSET_DRY_RUN=1       run with DRY_RUN absent from the environment (the script default applies).
 #   SEED_HDRS=1           pre-create the two fixed W5 header paths (as a mid-W5 abort would leave them).
+#   PRE_INV='<shell>'     eval'd after the stubs and BEFORE the invocation (a per-case override of a
+#                         script function, e.g. an unwritable persist_state).
 # Sets CASE_RC, CASE_OUT, CALLS, MARKER_LOG, STATE.
 run_wipe() {
   local invocation="$1"; shift
@@ -355,7 +357,7 @@ run_wipe() {
   [ "$unset_dry" = 1 ] && pre+=(-u DRY_RUN)
   local -a base=(CUTOVER="$CUTOVER" WIPE_STUBS="$WIPE_STUBS" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG"
     W_CASE_DIR="$d" TRIP_DIR="$TRIP_DIR" ALLOW_DIR="$ALLOW_DIR" TGT_BLK="$TGT_BLK" LUKS_BLK="$LUKS_BLK"
-    INVOCATION="$invocation" MAIN_PREFIX="${MAIN_PREFIX:-}" RB_TEXT="${RB_TEXT:-}"
+    INVOCATION="$invocation" MAIN_PREFIX="${MAIN_PREFIX:-}" RB_TEXT="${RB_TEXT:-}" PRE_INV="${PRE_INV:-}"
     WORKSPACES_STATE_DIR="$STATE" WORKSPACES_MOUNT="$d/mnt" WORKSPACES_STAGING="$d/staging"
     CONFIRM_WIPE=1 ROLLBACK=0 CLEAN_STRAY=0
     WORKSPACES_PLAINTEXT_VOLUME_ID="$PIN" WORKSPACES_PLAINTEXT_DEV="$BYID"
@@ -366,6 +368,7 @@ run_wipe() {
       source "$CUTOVER"
       source "$WIPE_STUBS"
       PATH="$TRIP_DIR:$ALLOW_DIR"
+      eval "$PRE_INV"
       eval "$INVOCATION"
     ' 2>&1
   )"
@@ -622,6 +625,21 @@ if refused_ok wipe_blkdiscard_failed && state_has PLAINTEXT_WIPE_BEGUN && ! stat
 else
   no "W10 failed blkdiscard mis-handled (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
+# W10/W12 — the markers are the precondition of Guard 5 (the permanent ROLLBACK lockout) and of the
+# re_zero resume, so an unwritable state file refuses BEFORE the zero (BEGUN) and BEFORE the success row
+# (WIPED). Each is proven by a failing write AND by a write that "succeeds" but does not land (the
+# read-back decides, not persist_state's rc).
+refusal "W10 (Guard 5) PLAINTEXT_WIPE_BEGUN cannot be written (root disk full / read-only)" wipe_marker_write_failed \
+  PRE_INV='persist_state() { return 1; }'
+refusal "W10 (Guard 5) PLAINTEXT_WIPE_BEGUN 'written' but not readable back" wipe_marker_write_failed \
+  PRE_INV='persist_state() { return 0; }'
+run_wipe 'eval "_orig_persist() $(declare -f persist_state | tail -n +2)"; persist_state() { [ "$1" = PLAINTEXT_WIPED ] && return 1; _orig_persist "$@"; }; wipe_plaintext'
+if refused_ok wipe_marker_write_failed && [ "$(zero_calls)" -eq 1 ] && state_has PLAINTEXT_WIPE_BEGUN && ! state_has PLAINTEXT_WIPED \
+  && [ "$(nrows wiped)" -eq 0 ]; then
+  ok "W12 (Guard 5) PLAINTEXT_WIPED cannot be persisted after a verified zero → refused, NO wiped row (so no API delete), BEGUN still locks ROLLBACK out"
+else
+  no "W12 an unpersisted WIPED marker still produced a success row (rc=$CASE_RC wiped=$(nrows wiped)) ${CASE_OUT:0:240}"
+fi
 # W11 — cmp decides; dd's rc never classifies (Guard 3 #3/#4/#5).
 run_wipe 'wipe_plaintext' W_CMP_RC=1 W_DD_RC=141
 w11_row="$(awk -v p="^$WROW result=refused " '$0 ~ p { print; exit }' <<<"$CASE_OUT")"
@@ -791,11 +809,82 @@ g5_case ":;" FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=u-live-1
 ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_plaintext_wiped$' \
   && ok "G5 H1 a ROLLBACK with no wipe markers behaves exactly as before (runs, not refused)" \
   || no "G5 H1 an unmarked ROLLBACK was refused or failed (rc=$CASE_RC) ${CASE_OUT:0:200}"
+# G5b — the PHYSICAL check, independent of the state file (a lost or unreadable state file must not
+# reopen the door): /mnt/data on the mapper and no /dev/disk/by-label/workspaces_plain means there is
+# no plaintext copy to remount, markers or not, ack or not.
+g5_case ":;" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=u-live-1 ROLLBACK_ACK_LUKS_WRITES=1 PLAINTEXT_LABEL_ABSENT=1
+g5_refused && ok "G5b no marker, but /mnt/data is the mapper and the plaintext label is gone → ROLLBACK refused before any umount (the state file is not the only witness)" \
+  || no "G5b a markerless post-wipe ROLLBACK was not refused (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:200}"
+# G5b H1 — the same mapper mount WITH the label present is a pre-wipe host: the acknowledged
+# rollback still runs (the physical check keys on the label, not on the mapper alone).
+g5_case ":;" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=u-live-1 ROLLBACK_ACK_LUKS_WRITES=1 \
+  DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP=/dev/sdz9
+ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_plaintext_wiped$' \
+  && ok "G5b H1 mapper mounted + label present (pre-wipe) + ack → the rollback runs" \
+  || no "G5b H1 a pre-wipe acknowledged rollback was refused (rc=$CASE_RC) ${CASE_OUT:0:200}"
+
+# G5c — the check lives IN rollback(), so every caller is covered, not only ROLLBACK mode: here the
+# cleanup() freeze arm (FREEZE_HELD / FLIP_DONE set, CANARY_OK not) on a post-wipe host.
+g5_cleanup() {  # <seed> [env...]
+  local seed="$1"; shift
+  run_case "$CUTOVER" "$seed DRY_RUN=0; trap cleanup EXIT; die 'synthetic abort mid-freeze'" 'rollback cleanup' \
+    ACTIVE_UNITS="$G5_ACT" CRYPTSETUP_DEV=/dev/sdz7 FINDMNT_MOUNT_SRC="$T_MAPPER" "$@"
+}
+g5c_refused() {
+  died && has '^EMIT_DRIFT rollback_refused_plaintext_wiped$' \
+    && markerF "$DM result=cutover_aborted outcome=refused_plaintext_wiped" \
+    && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ] \
+    && nhas '^umount[[:space:]]' && nhas '^docker stop' && nhas '^cryptsetup close' && nhas '^mount[[:space:]]'
+}
+g5_cleanup "persist_state PLAINTEXT_WIPED '$PIN:1'; FREEZE_HELD=1;"
+g5c_refused && ok "G5c cleanup()'s freeze arm on a WIPED host refuses inside rollback(): no umount/close/stop/mount, outcome=refused_plaintext_wiped" \
+  || no "G5c the cleanup() freeze arm rolled back over a wiped plaintext (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') calls=[$(grep -E '^(umount|mount|docker|cryptsetup) ' "$CALLS" | tr '\n' '|')]"
+g5_cleanup "FLIP_DONE=1;" PLAINTEXT_LABEL_ABSENT=1
+g5c_refused && ok "G5c the cleanup() flip arm with NO marker but the label gone (physical) refuses inside rollback()" \
+  || no "G5c the markerless physical case rolled back (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
+g5_cleanup "FLIP_DONE=1;"
+died && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_plaintext_wiped$' \
+  && ok "G5c H1 the pre-wipe flip arm (label present, no marker) still rolls back exactly as before" \
+  || no "G5c H1 the pre-wipe cleanup rollback was refused (rc=$CASE_RC) ${CASE_OUT:0:200}"
+
+# G5d — the dead-man FIRE string is self-contained (it runs after this script is gone), so it cannot
+# call rollback(): it carries its OWN copy of the same check, evaluated by /bin/sh at fire time before
+# any stop/umount/close. Executed here against recording stubs (not grepped).
+run_case "$CUTOVER" 'DRY_RUN=0 arm_dead_man' 'arm_dead_man'
+G5D_STATE="$STATE/state"
+G5D_FIRE="$(awk '/^systemd-run / { sub(/^.* \/bin\/sh -c /, ""); print; exit }' "$CALLS")"
+G5D_BIN="$WIPE_SCRATCH/g5d-bin"; mkdir -p "$G5D_BIN"
+for b in logger umount mount cryptsetup docker systemctl; do
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" %s "$*" >> "$G5D_LOG"\n' "$b" > "$G5D_BIN/$b"
+done
+printf '#!/bin/sh\nprintf "%%s\\n" "$G5D_SRC"\n' > "$G5D_BIN/findmnt"
+chmod +x "$G5D_BIN"/*
+g5d_fire() {  # <mount source> <state line or empty>
+  G5D_LOG="$WIPE_SCRATCH/g5d.log"; : > "$G5D_LOG"
+  : > "$G5D_STATE"; [ -z "$2" ] || printf '%s\n' "$2" > "$G5D_STATE"
+  env PATH="$G5D_BIN:/usr/bin:/bin" G5D_LOG="$G5D_LOG" G5D_SRC="$1" sh -c "$G5D_FIRE" >/dev/null 2>&1
+}
+if [ -z "$G5D_FIRE" ] || [ -e /dev/disk/by-label/workspaces_plain ]; then
+  no "G5d INSTRUMENT: the fire string was not captured, or this host has /dev/disk/by-label/workspaces_plain (the physical rows would be vacuous)"
+else
+  g5d_fire /dev/sdz9 "PLAINTEXT_WIPE_BEGUN=$PIN:1"
+  grep -qF 'reason=refused_plaintext_wiped' "$G5D_LOG" && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" && ! grep -qE '^docker stop' "$G5D_LOG" \
+    && ok "G5d a dead-man FIRE on a host whose state names a wipe refuses (logged) before any stop/umount/close" \
+    || no "G5d the fire string tore down the mount on a wiped host: $(tr '\n' '|' < "$G5D_LOG" | cut -c1-240)"
+  g5d_fire "$T_MAPPER" ""
+  grep -qF 'reason=refused_plaintext_wiped' "$G5D_LOG" && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" \
+    && ok "G5d a FIRE with no marker, the mapper mounted and the plaintext label gone refuses (physical)" \
+    || no "G5d the markerless physical fire tore down the mount: $(tr '\n' '|' < "$G5D_LOG" | cut -c1-240)"
+  g5d_fire /dev/sdz9 ""
+  grep -qE '^umount ' "$G5D_LOG" && ! grep -qF 'reason=refused_plaintext_wiped' "$G5D_LOG" \
+    && ok "G5d H1 a FIRE mid-freeze (plaintext still mounted, no marker) runs its restore exactly as before" \
+    || no "G5d H1 the pre-wipe fire was refused: $(tr '\n' '|' < "$G5D_LOG" | cut -c1-240)"
+fi
 
 # ============================================================================
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=99
+WIPE_MIN_PASS=110
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]
