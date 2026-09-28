@@ -253,3 +253,15 @@ NEVER CODE! Just research and write the plan.
   - A plan that adds `on: pull_request` to a workflow also owes a `scripts/pr-fanout-ledger.txt` row.
 
   **Why:** #8714/PR #9147. P6 gated only the dispatcher, while three apply jobs could create the registry host unguarded. The fetch "outside `doppler run`" still inherited `DOPPLER_TOKEN`. The missing ledger row reddened CI. See `knowledge-base/project/learnings/2026-09-28-a-replace-gate-on-one-route-and-an-isolation-that-shared-one-shell.md`.
+- **A plan that wraps work in a retrying unit (a systemd `Restart=` oneshot, a timer loop, a queue retry) must state three things as predicates, and each needs a mutation row per exit route.**
+  - The **latch predicate** is the full health predicate, never "exit 0". Latching a degraded success makes permanent exactly the transient failures the loop exists for.
+  - **What each attempt pauses**, restored on every non-success exit. The loop pauses timers, locks and flags to make its attempt safe.
+  - **Every override surface the guards must survive**: drop-ins, alternate binary paths, other boot routes, aliased directives such as `TimeoutSec=` over `TimeoutStartSec=`, and `set -x` after a refusal.
+
+  **Why:** #8562/PR #9159. Review found:
+  - a failure-path `tee "$LATCH"` that three suites passed
+  - a latched degraded bootstrap
+  - FSM timers never restored
+  - five spelling-based guards (the same class as #9134)
+
+  See `knowledge-base/project/learnings/2026-09-28-a-retrying-unit-must-latch-only-full-success-and-undo-what-it-paused.md`.
