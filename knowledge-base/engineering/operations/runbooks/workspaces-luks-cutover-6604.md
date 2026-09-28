@@ -69,9 +69,10 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 3. **Engage the freeze (the one human decision).**
    `gh workflow run workspaces-luks-cutover.yml -f confirm=CUTOVER-WORKSPACES-LUKS -f dry_run=false`
    The `workspaces-luks-cutover` environment reviewer must approve. Window: ≤20 min budget (~10
-   target), ≤2h hard abort. The cutover runs **on web-1** (host-side EXIT trap — DP-6), so an SSH
-   drop mid-freeze still auto-rolls-back to the plaintext mount, and a host-local dead-man timer
-   remounts plaintext if no orchestrator heartbeat lands.
+   target), ≤2h hard abort. The cutover runs **on web-1** (host-side EXIT trap — DP-6). The `ssh`
+   has no pty, so a dropped connection kills the script with SIGPIPE on its next write, and the EXIT
+   trap then rolls back (pre-canary) or rolls forward (post-canary). If the host process dies outright
+   during the freeze, the host-local dead-man timer remounts plaintext after `DEAD_MAN_MIN`.
 
    > **The dead-man guards the freeze window only (#9045).** It is armed before the freeze and
    > disarmed once, at the host-canary pass, BEFORE `docker start`. Before disarming, the host canary
@@ -81,10 +82,11 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    >
    > - **A pre-canary abort** rolls back to plaintext. That is lossless, because nothing has written
    >   to the LUKS volume yet.
-   > - **A post-canary abort** (`app_canary` failed after `docker start`) has nothing armed. It rolls
-   >   FORWARD on the LUKS mount: `cleanup()` restarts the app there and pages
-   >   `cutover_aborted_post_canary`. This is **fix-forward only**; see the triage table under
-   >   [Failure signals](#dead-man-and-abort-triage-9045).
+   > - **A post-canary abort** (any failure after `docker start`, including the cutover's tail) has
+   >   nothing armed. It rolls FORWARD on the LUKS mount: `cleanup()` re-asserts the mapper,
+   >   restarts the app there, and pages `cutover_aborted_post_canary`. If `/mnt/data` is no longer
+   >   the mapper, it stops the app and writers instead. This is **fix-forward only**; see the triage
+   >   table under [Failure signals](#dead-man-and-abort-triage-9045).
    >
    > **Why (history).** On 2026-07-20 (run `29782780158`) the dead-man was still disarmed only after
    > `app_canary`. The cutover landed, aborted on a Cloudflare 521 boot race at `app_canary`, and the
@@ -323,6 +325,12 @@ T0 remount + replay from LUKS", never a total loss.
 but a post-canary abort is fix-forward first: `cleanup()` has already restarted the app on the LUKS
 mount. See [the triage table](#dead-man-and-abort-triage-9045).
 
+The script enforces this. When `/mnt/data` is the mapper and the persisted `CANARY_OK` matches the
+live volume's LUKS UUID, a `rollback=true` dispatch refuses (Sentry `rollback_refused_post_cutover`).
+Add `-f rollback_ack_luks_writes=true` only once the stranded writes have a reconciliation plan.
+The rollback restarts the app only when the plaintext volume actually mounted. A failed remount
+leaves the app down and pages `rollback_remount_failed`.
+
 ## Failure signals (all off-host)
 
 - **Sentry** `feature=workspaces-luks` / `op=workspaces-luks-drift` — the nine discriminating fields
@@ -394,22 +402,45 @@ mount. See [the triage table](#dead-man-and-abort-triage-9045).
 
 ### Dead-man and abort triage (#9045)
 
-Every dead-man and abort marker is a `SOLEUR_WORKSPACES_LUKS_DEADMAN` row on the `luks-monitor`
-tag, and the cutover run log echoes it too. Read it without SSH:
-`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WORKSPACES_LUKS_DEADMAN`.
-The drift reasons below also arrive as Sentry `workspaces-luks-drift` events. They all group into
-one Sentry issue (135268270); **never archive it**, or later reasons stop paging.
+Every abort writes one `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<x>` row on
+the `luks-monitor` tag, and the cutover run log echoes it. **Read that row first**; its `outcome`
+says what `cleanup()` did:
 
-| Signal | What happened | Action | Expected recovery |
-|---|---|---|---|
-| `deadman_already_armed` (`result=arm_refused`) | A dead-man timer was already waiting, or a fire was in progress, when the cutover tried to arm. Nothing was frozen. | Do not re-dispatch while a timer waits. It fires within `DEAD_MAN_MIN` (30 min), and its `result=fired` row shows the outcome. Then read the next verify run and re-dispatch. | ~30-40 min |
-| `deadman_arm_failed` (`result=arm_failed`) | `systemd-run` refused (the `detail=` field carries its first stderr line), or the timer never reached `waiting`. `cleanup()` disarmed; nothing was frozen. | Re-dispatch once: the stale unit was already cleared. On a second failure, file a tracked issue with the `detail=` value. | one re-dispatch |
-| `deadman_disarm_failed`, `deadman_fired_before_disarm` | The disarm at the host canary could not be verified, or the mount had already been reverted. `CANARY_OK` was never set, so `cleanup()` rolled back before `docker start`, losslessly. | Read the `result=cutover_aborted outcome=` row, then confirm the mount with `gh workflow run workspaces-luks-verify.yml`. Re-cut after the cause is understood. | one verify run |
-| `host_canary_workspace_count_mismatch` | The live LUKS mount holds a different workspace count than G3 persisted. The run died before the door, and the rollback is lossless. | Do not re-dispatch blind. Compare the counts in the run log, then file a tracked issue. | investigation |
-| `cutover_aborted_post_canary` (fatal) | The app failed after `docker start` on the LUKS mount. Nothing was armed. `cleanup()` re-asserted the mapper and restarted the app on it. | **Fix-forward only.** The LUKS mount is authoritative. Diagnose the app failure from the run log and Sentry. `rollback=true` would strand every write since `docker start` (ADR-119 §(b)): reconcilable, but never the first move. | fix-forward |
-| `cleanup_mount_not_mapper` | After a post-canary abort, `/mnt/data` was no longer the mapper, so `cleanup()` did NOT restart the app. The app is down. | Run `workspaces-luks-verify.yml` to read the mount state, then decide between re-mounting the mapper and a reconciled rollback. | investigation |
-| `cleanup_docker_start_failed` | The roll-forward could not restart the container. | Read the app container error in the run log, fix it, then restart through the deploy path. | fix-forward |
-| Alert `soleur-workspaces-luks-deadman-fired-prd` (`result=fired`) | An unattended dead-man fire remounted plaintext, for example after a SIGKILL of the host script mid-freeze. | Read the rows around it (query above) to see which run armed it. Run `workspaces-luks-verify.yml`. Any writes made on the LUKS volume after the fire are stranded there: reconcile before any re-cut. | investigation |
+`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WORKSPACES_LUKS_DEADMAN`
+
+The drift reasons (the second column below) reach Sentry only, as `workspaces-luks-drift` events.
+They all group into one Sentry issue (135268270); **never archive it**, or later reasons stop paging.
+Read its latest event with `doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh 135268270 --latest-event`.
+Several reasons can fire in one abort, so the Better Stack outcome row is the authoritative summary.
+
+| `outcome=` | What `cleanup()` did | Action |
+|---|---|---|
+| `pre_freeze` | The run died before the freeze. Nothing changed; no timer was left armed. | Read the `die` line in the run log; fix and re-dispatch. |
+| `arm_aborted` | The timer was created but never reached `waiting`; `cleanup()` disarmed it. Check for a `result=disarm_failed` row: if present, a timer may still be live, so watch for `result=fired` within 30 min before re-dispatching. | Re-dispatch once. |
+| `rolled_back` | A pre-canary abort. The plaintext volume is mounted alone and the mapper is closed. Lossless. | Confirm with `gh workflow run workspaces-luks-verify.yml`, find the cause, re-cut. |
+| `rollback_stacked` | The plaintext mount landed on top of another mount, or the mapper stayed open. | Do not re-dispatch. Run the verify workflow, then file a tracked issue with its output. |
+| `rollback_remount_failed` | The plaintext remount failed. The app was left down on purpose, rather than started on the bare root-disk directory. | Run the verify workflow. Dispatch `rollback=true` once more; if it fails again, escalate. |
+| `post_canary_luks_retained` | A post-canary abort. The app and writers were restarted on the LUKS mount. | **Fix-forward only.** Diagnose the reason (Sentry) from the run log. `rollback=true` would strand every write since `docker start` (ADR-119 §(b)). |
+| `post_canary_restart_failed` | The roll-forward re-asserted the mapper, but `docker start` failed. Its first stderr line is on the `detail=` field. | Fix the container error, then restart through a normal deploy: `gh workflow run web-platform-release.yml`. |
+| `post_canary_mount_not_mapper` | After a post-canary abort `/mnt/data` was no longer the mapper, so the app and writers were STOPPED. | Run the verify workflow. The only off-host recovery is `rollback=true -f rollback_ack_luks_writes=true` (plaintext, strands LUKS writes); re-mounting the mapper has no dispatch path. Escalate before choosing. |
+| `clean_stray`, `dry_run` | A `clean_stray` or dry run aborted. Nothing was cut over. | Read the run log. |
+
+`abnormal_exit=1` on the row means the script was killed (SIGPIPE from a dropped SSH connection,
+TERM or HUP) rather than dying on a check. Treat the outcome the same way, and look for the network
+or runner cause.
+
+Other dead-man rows and reasons:
+
+| Signal | Meaning | Action |
+|---|---|---|
+| `result=arm_refused` / `deadman_already_armed` | A timer was already waiting, or a fire was live, when the cutover tried to arm. Nothing was frozen. | Do not re-dispatch while a timer waits; it fires within 30 min. Read the `result=fired` row, then the next verify run, then re-dispatch. |
+| `result=arm_failed` / `deadman_arm_failed` | `reason=systemd_run_refused`: nothing was created (`detail=` carries `systemd-run`'s first stderr line). `reason=timer_not_waiting`: see `arm_aborted` above. | Re-dispatch once; the stale unit was already cleared. On a second failure, file a tracked issue with the `detail=` value. |
+| `result=disarm_failed` / `deadman_disarm_failed` | `check=a`, `b` or `c` at the host canary: the disarm could not be verified, so the run rolled back before `docker start`. `check=fire_stuck` in a rollback: a fire ran past the wait. | Read the outcome row, run the verify workflow. |
+| `deadman_fired_before_disarm` | A fire raced the host-canary disarm and reverted the mount. The run rolled back before `docker start`. | As above. |
+| `host_canary_workspace_count_mismatch`, `host_canary_baseline_missing` | The mounted copy's workspace count does not match what G3 counted in this run, or G3's count is missing. Rolled back before `docker start`. | Do not re-dispatch blind. Compare the counts in the run log, then file a tracked issue. |
+| `cutover_aborted_post_canary` (fatal) | Any post-canary abort, including tail failures (`green_run_degraded_queue`, `luks_monitor_timer_enable_failed`), not only an app failure. | Read the outcome row. |
+| `result=not_armed prior=<substate>` | A `rollback=true` dispatch found no timer armed by this run; `prior` is what it stopped. | None, unless `prior=waiting` (a stale armed timer was cancelled). |
+| Alert `soleur-workspaces-luks-deadman-fired-prd` (`result=fired`) | An unattended dead-man fire stopped the app and remounted plaintext, for example after a SIGKILL of the host script mid-freeze. The alert auto-resolves after 10 quiet minutes; that does not mean anything was reconciled. | Match the fire's time against `gh run list --workflow=workspaces-luks-cutover.yml` to find the run that armed it. Run the verify workflow. Writes made on the LUKS volume **before** the fire are stranded there: reconcile them before any re-cut. |
 
 ### Host-timer liveness alert (#8706)
 

@@ -19,11 +19,20 @@ the operator.
   matches the live mapper, unless a write-loss override is passed.
 - **Plan's current choice:** the runbook says fix-forward only. It leaves the ADR-119 §(b)
   "reconcilable" rollback available, with its cost stated. No new dispatch guard is added.
+- **Resolved at review (2026-09-28):** adopted. Three review seats (user-impact, data-integrity,
+  structural enumeration) flagged the prose-only guard, so the script now refuses unless
+  `rollback_ack_luks_writes=true` is passed. The "reconcilable" rollback stays available, behind an
+  explicit acknowledgement.
 
 ## 3. A watchdog for a SIGKILL after the host-canary disarm (Taste — spec-flow)
 
 - **Plan's current choice:** accepted residual. An SSH drop sends SIGHUP, and SIGHUP runs the
   EXIT trap.
+- **Corrected at review (2026-09-28):** the premise was false. The workflow's `ssh` has no pty, so
+  an SSH drop delivers SIGPIPE, not SIGHUP. `cleanup()` then took the success exit, because `$?` is
+  the last command's status, or died on its own first write. Both are fixed: `cleanup()` is
+  signal-safe and uses a `RUN_COMPLETE` sentinel. Only SIGKILL remains, and it is still an accepted
+  residual.
 
 ## 4. Name the consumer and retirement condition of the dead-man hardening (Taste — CTO devex)
 

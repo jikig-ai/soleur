@@ -1071,37 +1071,73 @@ intent is reversed: app health is attended, and the dead-man now guards the free
 The mechanics live in `workspaces-cutover.sh`:
 
 - **`arm_dead_man` fails closed and verifies itself.**
-  - It refuses when a timer already reads `SubState=waiting` or a fire is in progress.
+  - It refuses when a timer already reads `SubState=waiting` or a fire is live
+    (`ActiveState` `active`, `activating` or `deactivating`; a running fire is a simple service,
+    so it reads `active`).
   - It clears a stale unit before arming: it stops the timer, then runs `reset-failed` on both units.
-  - It no longer discards `systemd-run`'s error; a failure emits `result=arm_failed`.
+  - It no longer discards `systemd-run`'s error; a refusal emits `result=arm_failed` with the first
+    stderr line, scrubbed, as `detail=`. Every arm failure `die`s, so the freeze never starts behind an
+    unverified backstop.
   - It sets `DEADMAN_ARMED=1` as soon as `systemd-run` returns, then polls for `waiting`.
   - The arm runs BEFORE `FREEZE_HELD=1`, so a failed arm leaves no freeze to unwind.
 - **`disarm_dead_man <reason>` verifies and never `die`s.**
-  - It reads the timer's `LastTriggerUSec` before the stop, and the service `ActiveState` after it.
+  - It reads the timer's `LastTriggerUSec` before the stop, and after the stop the service's
+    `ActiveState` and any queued start `Job`.
   - It checks that the timer is no longer `waiting`.
   - Any failed check emits `result=disarm_failed … check=<a|b|c>`.
   - The reasons are a closed set: `host_canary_passed`, `rollback_engaged`, `arm_aborted`.
-- **The host canary gates the disarm.** Before disarming, it compares the workspace count on the
-  live `$MOUNT` against the `WORKSPACES_COUNT` persisted at G3. After disarming,
-  `findmnt -no SOURCE "$MOUNT"` must still equal the mapper, because a fire that raced the disarm
-  unmounts `$MOUNT`. Either failure dies while `CANARY_OK=0`, so the rollback is still lossless.
-  The `findmnt` re-assert is the real proof. A fired transient timer is unloaded, so its
-  `LastTriggerUSec` reads empty and check (a) only catches a fire in the short window before
-  that. This was measured on systemd 261; see the qualification under the 2026-09-27 review
-  amendments.
-- **`rollback()` handles the dead-man first**, before any unmount, with a bounded wait for a fire
-  already in progress.
-- **`cleanup()` records one outcome on every abort:**
-  `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<rolled_back|rollback_remount_failed|post_canary_luks_retained|arm_aborted|pre_freeze|dry_run>`,
-  on the existing `luks-monitor` tag.
-- **A post-canary abort rolls FORWARD.** `cleanup()` re-asserts the mapper, restarts the app with
-  its exit status checked, and resumes writers. It also pages through the fatal Sentry drift
-  `cutover_aborted_post_canary`. If the mapper re-assert fails, the app stays down and pages; it is
-  never started silently. The runbook makes this path fix-forward only: `rollback=true` after
-  `docker start` strands writes.
+- **The host canary gates the disarm.**
+  - Before disarming, it compares the workspace count on the live `$MOUNT` against the count G3 took
+    in THIS run (an in-process value, never the append-only state file, which carries earlier runs'
+    counts). A missing count fails closed.
+  - This re-proves that the mounted filesystem is the copy G3 counted and that the repoint landed.
+    It is not a plaintext-versus-copy population proof; that proof is G3 against G2, plus C1.
+  - After disarming, `findmnt -no SOURCE "$MOUNT"` must still equal the mapper, because a fire that
+    raced the disarm unmounts `$MOUNT`.
+  - Either failure dies while `CANARY_OK=0`, so the rollback is still lossless.
+  - The `findmnt` re-assert is the real proof. A fired transient timer is unloaded, so its
+    `LastTriggerUSec` reads empty and check (a) only catches a fire in the short window before
+    that. This was measured on systemd 261; see the qualification under the 2026-09-27 review
+    amendments.
+- **`rollback()` stops the timer first, then waits.**
+  - With the dead-man armed it runs the verifying disarm, which stops the timer, so no new fire can
+    start. It then waits, bounded by attempt count, for a fire already in flight to finish, and
+    emits `check=fire_stuck` only if that wait expires.
+  - With nothing armed by this run it records the timer's prior state (`result=not_armed
+    prior=<substate>`). If this run armed and already disarmed, it records `result=already_disarmed`.
+  - It restarts the app only when the plaintext volume is mounted. A failed remount leaves the app
+    down and pages `rollback_remount_failed`, rather than starting it on the bare root-disk directory.
+- **`cleanup()` records one outcome on every abort**, on the existing `luks-monitor` tag:
+  `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<x>`. The values are:
+  - `rolled_back` — one plaintext mount and the mapper closed;
+  - `rollback_stacked` — a mount stacked on another, or the mapper still open (pages);
+  - `rollback_remount_failed` — nothing, or the mapper, is mounted;
+  - `post_canary_luks_retained` — rolled forward and the app restarted;
+  - `post_canary_restart_failed` — rolled forward, but `docker start` failed;
+  - `post_canary_mount_not_mapper` — the mount is no longer the mapper, so the app and writers were
+    stopped;
+  - `arm_aborted`, `pre_freeze`, `clean_stray`, `dry_run`.
+- **`cleanup()` is signal-safe.**
+  - The workflow runs the script over `ssh` without a pty, so a dropped connection does not deliver
+    SIGHUP. The script dies of SIGPIPE on its next write, and bash still runs the EXIT trap.
+  - Two defects made that trap silent, and both are fixed:
+    - `$?` inside the trap is the last command's status, usually 0, so the trap took the success
+      exit. A `RUN_COMPLETE` sentinel, set only at intentional exits, now separates a normal end
+      from a signal death, which is recorded with `abnormal_exit=1`.
+    - The trap's own first `log` raised SIGPIPE again and killed it. It now ignores PIPE, HUP,
+      INT and TERM.
+- **A post-canary abort rolls FORWARD.** `cleanup()` re-asserts the mapper, restarts the app with its
+  exit status checked, and resumes writers. It pages through the fatal Sentry drift
+  `cutover_aborted_post_canary`. If the mapper re-assert fails, it stops the app and the writers, so
+  nothing writes to a mount that is not the mapper. The runbook makes this path fix-forward only.
+- **`ROLLBACK=1` refuses after a successful cutover.** When `/mnt/data` is the mapper and the
+  persisted `CANARY_OK` matches the live volume's LUKS UUID, a rollback dispatch refuses unless the
+  `rollback_ack_luks_writes` input is set. Such a rollback strands every write made since
+  `docker start` on the LUKS volume.
 - **An unattended fire pages.** `logtail_exploration_alert.workspaces_luks_deadman_fired` (ADR-218
   semantics) matches `op=workspaces-luks-deadman result=fired` from `soleur-web-platform`. This
-  closes the #6812 six-hour silence.
+  closes the #6812 six-hour silence. The alert auto-resolves after ten quiet minutes; that does not
+  mean the stranded writes were reconciled.
 
 **Rejected alternatives.**
 
@@ -1112,8 +1148,19 @@ The mechanics live in `workspaces-cutover.sh`:
   across runs, so a stale `CANARY_OK` could suppress a legitimate pre-canary revert.
 - **Clear web-1's failed dead-man unit now through Terraform.** That is a host mutation with no
   functional gain, and it would destroy the evidence before the forensic print reads it.
-- **A watchdog for a SIGKILL after the disarm.** Disproportionate. An SSH drop delivers SIGHUP, and
-  SIGHUP runs the EXIT trap.
+- **A watchdog for a SIGKILL.** Disproportionate. An SSH drop is SIGPIPE, not SIGKILL, and the
+  signal-safe `cleanup()` handles it. Two SIGKILL residuals are accepted:
+  - after the host-canary disarm, where nothing is armed and nothing records an outcome;
+  - mid-`rollback()` after its own disarm, where the app stays down with no backstop.
+
+  Neither loses data: both land before the app serves from the LUKS mount, or on a mount already
+  certified. The uptime monitor pages both.
+
+**Accepted narrowing.** The installer's exit-17 guard keys on the dead-man reading `waiting`, which
+now spans only the freeze, not the whole run. An apply that lands between the host-canary door and
+the cutover's tail passes the guard. It redelivers files the tail also installs, and kicks the monitor
+probe while `app_canary` boots the app. The worst case is a false readyz page during an attended
+cutover. No user data is touched.
 
 **What the dead-man did in July (H1/H2).** The 2026-09-27 state print showed
 `workspaces-luks-deadman.service` `failed` (`Result=exit-code`) and the timer `inactive/dead`.
