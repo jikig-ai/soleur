@@ -22,7 +22,10 @@
 
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
-import { boundedAuthGetUser } from "@/server/request-auth";
+import {
+  boundedAuthGetUser,
+  boundedAuthGetSession,
+} from "@/server/request-auth";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const REAUTH_TTL_MS = 5 * 60 * 1000; // 5 min — issuance-to-consume window
@@ -209,7 +212,10 @@ export async function getActiveSessionId(
   if (!userData?.user) {
     throw new ReauthEventInvalid("not_found");
   }
-  const { data: sessionData } = await supabase.auth.getSession();
+  // Same bound on getSession(): an expired token triggers a remote
+  // /auth/v1/token refresh inside the call — the same unbounded cold-stall
+  // class, on a reauth path. Timeout/throw lands on not_found.
+  const sessionData = await boundedAuthGetSession(supabase);
   const accessToken = sessionData?.session?.access_token;
   if (!accessToken) {
     throw new ReauthEventInvalid("not_found");

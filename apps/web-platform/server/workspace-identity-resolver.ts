@@ -57,6 +57,33 @@ type MaybeSingleChain<T> = {
   maybeSingle: () => Promise<{ data: T | null; error: unknown }>;
 };
 
+// Bounded remote call on a structural postgrest chain (#8978 helper-level
+// sweep): the chain's `.abortSignal()` exists at runtime (postgrest-js) but
+// not on the test-shaped interface, so race instead — timeout resolves to
+// the postgrest error-object shape so every existing `.error || !.data`
+// arm lands on its fail-closed path unchanged.
+const BOUNDED_SELECT_ERROR = {
+  message: "TimeoutError: The operation timed out.",
+  hint: "Request was aborted (timeout or manual cancellation)",
+};
+const boundedRpcTimeoutMs = () =>
+  Math.max(Number(process.env.SOLEUR_RESOLVER_SELECT_TIMEOUT_MS) || 8_000, 1);
+const bounded = <T,>(p: PromiseLike<{ data: T | null; error: unknown }>) =>
+  Promise.race([
+    // Promise.resolve() unwraps the postgrest thenable — its .then() is
+    // PromiseLike-only (no .catch), the same trap middleware.ts documents.
+    Promise.resolve(p).catch(() => ({ data: null, error: BOUNDED_SELECT_ERROR })),
+    new Promise<{ data: null; error: typeof BOUNDED_SELECT_ERROR }>(
+      (resolve) => {
+        const t = setTimeout(
+          () => resolve({ data: null, error: BOUNDED_SELECT_ERROR }),
+          boundedRpcTimeoutMs(),
+        );
+        void t;
+      },
+    ),
+  ]);
+
 export async function resolveWorkspaceIdentityForSettings(
   supabase: AuthClient,
   service: ServiceClient,
@@ -72,10 +99,9 @@ export async function resolveWorkspaceIdentityForSettings(
     organization_id: string | null;
     logo_path: string | null;
   }>;
-  const wsResp = await wsChain
-    .select("organization_id, logo_path")
-    .eq("id", workspaceId)
-    .maybeSingle();
+  const wsResp = await bounded(
+    wsChain.select("organization_id, logo_path").eq("id", workspaceId).maybeSingle(),
+  );
   // No workspace row (also the silent-persistence bug signal) → render nothing
   // rather than a half-populated control.
   if (wsResp.error || !wsResp.data) return null;
@@ -90,10 +116,9 @@ export async function resolveWorkspaceIdentityForSettings(
     const orgChain = service.from("organizations") as MaybeSingleChain<{
       name: string | null;
     }>;
-    const orgResp = await orgChain
-      .select("name")
-      .eq("id", organizationId)
-      .maybeSingle();
+    const orgResp = await bounded(
+      orgChain.select("name").eq("id", organizationId).maybeSingle(),
+    );
     organizationName = orgResp.data?.name ?? null;
 
     const identity: Identity = { userId: user.id, role: "prd", orgId: organizationId, email: null, subscriptionStatus: null };
@@ -103,10 +128,12 @@ export async function resolveWorkspaceIdentityForSettings(
   // Owner gate via the SECURITY DEFINER RPC (GRANT authenticated) — same gate the
   // upload route uses, so the General control's enabled/disabled state matches
   // what the POST will accept (AC8).
-  const ownerRes = await supabase.rpc("is_workspace_owner", {
-    p_workspace_id: workspaceId,
-    p_user_id: user.id,
-  });
+  const ownerRes = await bounded(
+    supabase.rpc("is_workspace_owner", {
+      p_workspace_id: workspaceId,
+      p_user_id: user.id,
+    }),
+  );
   const isOwner = ownerRes.data === true;
 
   return { workspaceId, organizationId, organizationName, isOwner, hasLogo, canRename };

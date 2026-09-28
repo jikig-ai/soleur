@@ -9,7 +9,7 @@
 //     - Body: { password: string }
 //     - Re-verifies the active user's password via
 //       supabase.auth.signInWithPassword(email, password). Email is
-//       sourced from supabase.auth.getUser() so the client cannot
+//       sourced from boundedAuthGetUser() so the client cannot
 //       supply an arbitrary identity.
 //     - On success: issue a reauth event with no authTime (password
 //       path doesn't go through an IdP — AC27 is OAuth-only).
@@ -31,6 +31,10 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { issueReauthEvent } from "@/server/dsar-reauth";
+import {
+  boundedAuthGetUser,
+  boundedAuthGetSession,
+} from "@/server/request-auth";
 
 interface AccessTokenClaims {
   sub?: string;
@@ -59,13 +63,13 @@ export async function POST(request: Request) {
   if (!originValid) return rejectCsrf("dashboard/settings/privacy/reauth", origin);
 
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
+  const userData = await boundedAuthGetUser(supabase);
   if (!userData?.user || !userData.user.email) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const user = userData.user as { id: string; email: string };
 
-  const { data: sessionData } = await supabase.auth.getSession();
+  const sessionData = await boundedAuthGetSession(supabase);
   const session = sessionData?.session;
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

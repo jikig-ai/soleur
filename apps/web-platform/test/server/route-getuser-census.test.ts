@@ -51,39 +51,24 @@ function routeFilesContainingGetUser(): string[] {
   return hits.sort();
 }
 
-// KEEPERS — each entry must carry its reason. Three shapes:
+// The keeper list is EMPTY (ship-advisor close, PR #9034): every former
+// keeper class routes through the bounded helpers instead of a bare
+// `auth.getUser(`:
 //
 //   (a) Rich Supabase user fields the minted header cannot supply
-//       (user_metadata, identities beyond id, etc.) — getUser() stays the
-//       primary verification, same as before.
-//   (b) Email-only consumers migrated to verifiedUserId(req) +
-//       sessionJwtEmailForVerifiedUser(supabase, userId): the remote call
-//       remains ONLY as the fallback when the local session JWT cannot supply
-//       an email claim for the verified id.
-//   (c) A verification that must be FRESH for semantic reasons — the
-//       middleware-minted id verifies the INCOMING session, and these
-//       keepers verify a NEW one (post-exchange) or re-authenticate the
-//       caller as part of a credential challenge.
-const GETUSER_KEEPERS = new Set<string>([
-  // (c) OAuth/magic-link exchange: getUser() verifies the session the code
-  // exchange just MINTED — not the incoming request, which carried no valid
-  // session for middleware to verify. A minted header cannot exist yet.
-  "(auth)/callback/route.ts",
-  // (c) Password re-auth: the endpoint's whole purpose is a fresh credential
-  // challenge (signInWithPassword with the getUser-supplied email); the
-  // minted id identifies the session but the email must come from the
-  // current remote record.
-  "(dashboard)/dashboard/settings/privacy/reauth/route.ts",
-  // (a) GitHub App install: consumes user.user_metadata?.full_name AND
-  // user.email for the onboarding record — richer than the header carries.
-  "api/repo/setup/route.ts",
-  // (a) Invite acceptance consumes user.user_metadata?.full_name AND
-  // user.email (member display name + invitee_email leg).
-  "api/workspace/accept-invite/route.ts",
-  // (a) Consumes user.user_metadata?.full_name AND user.email for the
-  // inviter display + invitee record.
-  "api/workspace/invite-member/route.ts",
-]);
+//       (user_metadata, identities beyond id) — `boundedAuthGetUser` returns
+//       the full remote `User`, bounded onto the same 10 s race class.
+//   (b) Email-only consumers — `verifiedUserId(req)` +
+//       `sessionJwtEmailForVerifiedUser`, bounded remote fallback.
+//   (c) Fresh-verification semantics (post-exchange callback, password
+//       re-auth) — `boundedAuthGetUser`/`boundedAuthGetSession` keep the
+//       remote call FRESH; the bound only replaces an open-ended hang with
+//       the same failure the route already had.
+//
+// A reintroduced direct `auth.getUser(` anywhere in app/** /route.ts is a
+// regression this test fails on — the helpers in server/request-auth.ts are
+// the only sanctioned remote getUser surface.
+const GETUSER_KEEPERS = new Set<string>([]);
 
 describe("route-level supabase.auth.getUser() census (#8926)", () => {
   it("only allowlisted route files still call auth.getUser(", () => {

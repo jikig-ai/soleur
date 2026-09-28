@@ -77,14 +77,11 @@ const authGetUserTimeoutMs = () =>
 // `error: unknown`) are accepted without a cast or signature changes.
 export type BoundedAuthUser = { id: string; email?: string | null };
 
-export async function boundedAuthGetUser(supabase: {
+export async function boundedAuthGetUser<U extends BoundedAuthUser>(supabase: {
   auth: {
-    getUser: () => Promise<{
-      data: { user: BoundedAuthUser | null };
-      error: unknown;
-    }>;
+    getUser: () => Promise<{ data: { user: U | null }; error: unknown }>;
   };
-}): Promise<{ user: BoundedAuthUser | null } | null> {
+}): Promise<{ user: U | null } | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const result = await Promise.race([
     // A REJECTING getUser is also a remote leg failing — collapse it to the
@@ -108,6 +105,37 @@ export async function boundedAuthGetUser(supabase: {
       message: "auth.getuser.bounded_timeout",
       level: "warning",
       data: { op: "auth.getuser.bounded_timeout" },
+    });
+  }
+  return result;
+}
+
+// Same bound for getSession(): on an EXPIRED token `__loadSession()`
+// performs a remote `/auth/v1/token` refresh inside the call — "local"
+// only on the warm path. Returns the session `data` shape or null on
+// timeout/reject so callers land on their existing fail-closed arms.
+export async function boundedAuthGetSession<S = unknown>(supabase: {
+  auth: {
+    getSession: () => Promise<{ data: { session: S | null }; error: unknown }>;
+  };
+}): Promise<{ session: S | null } | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const result = await Promise.race([
+    supabase.auth
+      .getSession()
+      .then((r) => r.data)
+      .catch(() => null),
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), authGetUserTimeoutMs());
+    }),
+  ]);
+  clearTimeout(timer);
+  if (result === null) {
+    Sentry.addBreadcrumb({
+      category: "middleware",
+      message: "auth.getsession.bounded_timeout",
+      level: "warning",
+      data: { op: "auth.getsession.bounded_timeout" },
     });
   }
   return result;
