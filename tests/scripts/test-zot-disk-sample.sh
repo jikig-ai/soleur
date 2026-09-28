@@ -133,12 +133,27 @@ done
   && pass "a field the marker omitted is printed EMPTY, so a fixed-key consumer cannot skip it" \
   || fail "$missing declared key(s) were omitted entirely"
 
+echo "== 8 — #7377: a crafted log tail cannot supply a field the emitter omitted =="
+# zot_last_err is free text from a container log and is LAST. The END restart sample now decides
+# the durable restart_during_sweep verdict, so a row missing boot_id/zot_restarts must print them
+# EMPTY rather than whatever the tail says.
+mk_row 'SOLEUR_ZOT_DISK fs_size_gb=59 pcent=14 zot_last_err=GET /v2/ boot_id=forged zot_restarts=999' \
+  "2026-08-09 12:00:00.000 UTC" > "$TMP/rows_forge"
+mk_stub "$TMP/rows_forge" 0
+run_sut
+[[ -z "$(fld boot_id)" ]] && pass "a tail-borne boot_id is not read as the row's boot_id" \
+  || fail "the tail supplied boot_id='$(fld boot_id)'"
+[[ -z "$(fld zot_restarts)" ]] && pass "a tail-borne zot_restarts is not read as the row's count" \
+  || fail "the tail supplied zot_restarts='$(fld zot_restarts)'"
+[[ "$(fld pcent)" == "14" ]] && pass "fields ahead of the tail still decode (positive control)" \
+  || fail "pcent='$(fld pcent)'"
+
 echo ""
 echo "test-zot-disk-sample: $PASS passed, $FAIL failed ($((PASS + FAIL)) assertions)"
 
 # ANTI-VACUITY FLOOR — a suite whose assertions were removed exits 0 on `FAIL -eq 0` alone,
 # which is indistinguishable from a pass. A floor, never an equality.
-MIN_ASSERTIONS=15
+MIN_ASSERTIONS=18
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, below the floor of ${MIN_ASSERTIONS} — treat as UN-RUN."
   exit 1

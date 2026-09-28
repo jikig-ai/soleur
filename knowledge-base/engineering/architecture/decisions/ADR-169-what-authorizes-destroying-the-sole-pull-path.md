@@ -628,3 +628,7 @@ That is the right shape and is not implemented here; it is tracked with the #755
 rather than left implicit in a passing gate.
 
 > **Note 2026-09-19 (#8279):** the standing "#7556 verifies the host" pointer above described the #7555 soak only. The dispatcher now records each delivery's verdict on the delivering change's own tracker (the PR that changed the config, or the `tracker` input), and its step summary asserts no enrolment it did not measure — post-replace verification is whatever follow-through the delivering change enrolled. P4 remains absent; its defence above now rests on the delivering change enrolling a boot-line follow-through, which is not enforced — a delivery with none is verified only by the apply's conclusion (the dispatcher's own step summary says so). No decision text changes.
+
+> **Note 2026-09-28 (#7377):** this merge-to-replace path is also the ONLY registry config-delivery
+> mechanism by decision: ADR-172's amendment of 2026-09-28 records `push-config` as realized by it,
+> and `restart` / `reclaim` as not built. No in-place lever sits beside it.
