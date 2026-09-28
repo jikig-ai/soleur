@@ -150,3 +150,15 @@ the policy.
   is a policy change and needs its own ADR. The next feature that hits this wall must shrink the payload
   structurally (for example by consolidating repeated verdict/state-file boilerplate), not raise the
   constant again.
+
+## Addendum 2026-09-28 — liveness counters fit under 21,000 without raising it (#7270)
+
+The budget constant is unchanged, as the amendment above requires. #7270 adds per-boot liveness
+counters to the zot liveness feeder and five `liveness_*` fields to `SOLEUR_ZOT_DISK`. The first
+revision measured 21,292 B stored, over the budget. It was shrunk by making the tmpfs state a single
+line of six positional fields (no per-key parsing) and validating the fields in one loop.
+
+- **Measured:** 20,932 B stored (`registry-userdata-budget.sh --json`), up from 20,408 B. Headroom is
+  11,836 B against the 11,768 B floor.
+- **Remaining slack under the constant:** 68 B. The next registry-host addition will trip the gate.
+  Per the amendment above, it must shrink the payload structurally rather than raise the constant.
