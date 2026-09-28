@@ -76,6 +76,16 @@ describe("countFilingDenials", () => {
     expect(r.commands.every((h) => h.length <= 64 + "gh api ".length)).toBe(true);
   });
 
+  // #9089 — gh drops a `#fragment` before routing, so `…/issues#x` is the
+  // create endpoint. The head is cut at `?` OR `#` (shared ISSUES_COLLECTION_RE).
+  it("counts a #fragment endpoint and heads it at the path", () => {
+    const r = countFilingDenials([
+      { tool_name: "Bash", tool_input: { command: "gh api repos/o/r/issues#x -X POST -f title=x" } },
+    ]);
+    expect(r.count).toBe(1);
+    expect(r.commands).toEqual(["gh api repos/o/r/issues"]);
+  });
+
   it("returns 0 on an empty, absent, or malformed array", () => {
     expect(countFilingDenials([]).count).toBe(0);
     expect(countFilingDenials(undefined).count).toBe(0);

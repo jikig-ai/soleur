@@ -123,30 +123,85 @@ export function labelTokenEquals(tokens, label) {
 // Which of the two filing shapes a (dequoted) segment is, or null. ONE
 // predicate, shared with the deny-marker (`cron-filing-deny-marker.ts`
 // imports it) so "what the gate denies" and "what the marker counts" cannot
-// drift. The api form: an issues endpoint token — trailing slash and query
-// string included, since gh routes `…/issues?x=1` and `…/issues/` to the same
-// create and a `$`-anchored match let both through (#8074 review) — plus a
-// POST signal in ANY position: `-X POST`, `--method POST`, `-XPOST`,
-// `--method=POST`, `--input <file>` (gh defaults to POST), or a `title=`
-// field (gh defaults to POST whenever a field is given).
+// drift. ADR-256 binds it to the interactive gate's Perl copy
+// (`.claude/hooks/lib/filing-shape.pl`) through the shared corpus
+// `.claude/hooks/lib/filing-shape-corpus.json`, which BOTH suites run; a
+// change here without a corpus row is a change the other gate never sees.
+// (No corpus READ here: this file is in the Next.js server bundle, #8074.)
+
+// The issues COLLECTION endpoint, and only it. gh drops `?query` and
+// `#fragment` before routing and accepts a trailing slash, so all three reach
+// the create; `$`/`}`/`)` after `issues` is an unexpanded suffix (`issues$QS`,
+// `${EP:-…/issues}`, `$(echo …/issues)`). Sub-resources (`issues/1/labels`),
+// `issues.json`, `ISSUES` and `xrepos/` stay out. `repositories/<id>` is the
+// numeric-id alias gh also routes.
+export const ISSUES_COLLECTION_RE =
+  /(?<![A-Za-z0-9_])(?:repos\/[^/?#\s]+(?:\/[^/?#\s]+)?|repositories\/[0-9]+)\/issues(?:\/?(?:[?#].*)?|[$})][^/]*)$/;
+
+// A repos/…|repositories/… path with a `.`, `..` or `%2e` segment: gh (and
+// the API) normalizes it, so `labels/../issues` IS the issues collection.
+const DOT_SEGMENT_RE =
+  /(?<![A-Za-z0-9_])(?:repos|repositories)\/(?:[^?#\s]*\/)?(?:\.\.?|[^/?#\s]*%2e[^/?#\s]*)(?:[/?#]|$)/i;
+
+// A whole token that is one unexpanded variable: its value is unknowable
+// here, so it leans toward gating.
+const BARE_EXPANSION_RE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^{}]*\})$/;
+
+// V: an optional leading expansion. `$E-X POST` reaches gh as `-X POST` when
+// E is empty, so the prefix must not hide the flag.
+const V = String.raw`(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]*\})?`;
+// `i*`: `-i` is gh api's only boolean short flag, so `-iX`/`-if` are clusters.
+const METHOD_BARE_RE = new RegExp(String.raw`^${V}(?:-i*X|--method)$`);
+// Case-SENSITIVE on the flag (`-x` is not `-X`); only POST's case is folded,
+// on the remainder below.
+const METHOD_ATTACHED_RE = new RegExp(String.raw`^${V}(?:-i*X=?|--method=)(.*)$`);
+const INPUT_RE = new RegExp(String.raw`^${V}--input(?:=|$)`);
+const FIELD_BARE_RE = new RegExp(String.raw`^${V}(?:-i*[fF]|--(?:raw-)?field)$`);
+const TITLE_FIELD_RE = new RegExp(String.raw`^${V}(?:-i*[fF]=?|--field=|--raw-field=)?title=`);
+// Prefix REQUIRED: a bare `$Q` (e.g. `--jq "$Q"`'s value) is not a field.
+const FIELD_EXPANSION_RE = new RegExp(String.raw`^${V}(?:-i*[fF]=?|--field=|--raw-field=)[$\x60]`);
+
+const isExpansionStart = (v) => typeof v === "string" && /^[$\x60]/.test(v);
+
+// Does token i make gh send a POST? gh defaults to POST whenever a field or
+// --input is given, so a `title=` field is as much a signal as `-X POST`; an
+// unexpanded value (`-X $M`, `-f "$T"`) leans toward gating.
+function postSignal(tokens, i) {
+  const t = tokens[i];
+  const next = tokens[i + 1];
+  if (METHOD_BARE_RE.test(t) &&
+      typeof next === "string" && (/^post$/i.test(next) || isExpansionStart(next))) return true;
+  const m = METHOD_ATTACHED_RE.exec(t);
+  if (m && (/^post$/i.test(m[1]) || isExpansionStart(m[1]))) return true;
+  if (INPUT_RE.test(t)) return true;
+  if (FIELD_BARE_RE.test(t) &&
+      typeof next === "string" && (next.startsWith("title=") || isExpansionStart(next))) return true;
+  if (TITLE_FIELD_RE.test(t)) return true;
+  return FIELD_EXPANSION_RE.test(t);
+}
+
+function isIssuesEndpoint(t) {
+  if (ISSUES_COLLECTION_RE.test(t) || BARE_EXPANSION_RE.test(t)) return true;
+  // `"$B/issues"`: an expansion before the tail hides the repos/ prefix.
+  if (/[$\x60]/.test(t) && /(?:^|\/)issues\/?(?:[?#].*)?$/.test(t)) return true;
+  return DOT_SEGMENT_RE.test(t);
+}
+
 export function filingShape(tokens) {
   if (tokens[0] !== "gh") return null;
-  if (tokens[1] === "issue" && tokens[2] === "create") return "create";
-  if (tokens[1] !== "api") return null;
-  const endpoint = tokens.some((t) =>
-    /(^|\/)repos\/[^/?]+\/[^/?]+\/issues\/?(\?[^/]*)?$/.test(t),
-  );
-  if (!endpoint) return null;
-  const post = tokens.some(
-    (t, i) =>
-      ((t === "-X" || t === "--method") && tokens[i + 1] === "POST") ||
-      t === "-XPOST" ||
-      t === "--method=POST" ||
-      t === "--input" ||
-      (/^(-f|--field|--raw-field|-F)$/.test(t) && /^title=/.test(tokens[i + 1] || "")) ||
-      /^(--field=|--raw-field=|-f=)?title=/.test(t),
-  );
-  return post ? "api" : null;
+  // Positionals, skipping a BARE -R/--repo's value (root- or group-level), so
+  // `gh issue -R o/r create` and `gh --repo o/r api …` classify. The attached
+  // forms (-Rx, -R=x, --repo=x) carry their value in the flag token.
+  const pos = [];
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "-R" || t === "--repo") { i++; continue; }
+    if (!t.startsWith("-")) pos.push(t);
+  }
+  if (pos[0] === "issue" && (pos[1] === "create" || pos[1] === "new")) return "create";
+  if (pos[0] !== "api") return null;
+  if (!tokens.some(isIssuesEndpoint)) return null;
+  return tokens.some((_t, i) => postSignal(tokens, i)) ? "api" : null;
 }
 
 export function filingJustificationReason(tokens, readTaxonomy, runReportLabel = null) {
@@ -164,6 +219,12 @@ export function filingJustificationReason(tokens, readTaxonomy, runReportLabel =
   if (shape === null) return null;
   const isCreate = shape === "create";
   const isApiIssue = shape === "api";
+
+  // --input: the body and labels live in a file this gate does not read, and
+  // gh then sends every -f/-F to the QUERY STRING, so a `labels[]=` token here
+  // never reaches the issue. Runs BEFORE exits 0 and 1 for that reason.
+  if (isApiIssue && tokens.some((t) => t === "--input" || t.startsWith("--input=")))
+    return "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f labels[]=meta/machinery. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
 
   // EXIT 0 — the run-report directive (#8076, ADR-216 addendum). The substrate
   // wrote `run-report-label <label>` into THIS spawn's cron-allow.txt for a cron
@@ -675,6 +736,15 @@ export function decide(input, allowPrefixes) {
         if (argReason) return denyDecision(argReason);
         const gitReason = gitVerbReason(tokens);
         if (gitReason) return denyDecision(gitReason);
+        // A measured GET of repos/jikig-ai/soleur/labels/../issues returned
+        // the issues collection: a dot segment escapes a `gh api
+        // repos/jikig-ai/soleur/` allowlist prefix, for filings and for any
+        // other endpoint (#9089, security #11).
+        if (tokens[0] === "gh" && tokens[1] === "api") {
+          const dotted = tokens.find((t) => DOT_SEGMENT_RE.test(t));
+          if (dotted !== undefined)
+            return denyDecision(`gh api path with a dot segment: ${dotted.slice(0, 60)}`);
+        }
         // Match the allowlist against the TOKENIZED (dequoted) command, not the
         // raw segment — otherwise a quoted arg like `gh api 'repos/...'` fails
         // the prefix match against `gh api repos/...` (AC4b single-quote fix).
