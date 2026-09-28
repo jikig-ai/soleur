@@ -214,6 +214,7 @@
 /.github/actions/dispatch-web-redeploy/                 @deruelle
 /apps/web-platform/server/git-auth.ts                   @deruelle
 /apps/web-platform/server/git-data-replication.ts       @deruelle
+/apps/web-platform/server/git-data-host-key-pin-shape.ts @deruelle
 /apps/web-platform/infra/git-data-flag-precheck.sh      @deruelle
 /tests/scripts/lib/git-data-host-replace-gate.sh        @deruelle
 /tests/scripts/lib/git-data-host-birth-gate.sh          @deruelle
