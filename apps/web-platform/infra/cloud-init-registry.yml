@@ -1061,11 +1061,53 @@ write_files:
       HTTP_CODE=$(curl -sS -m 10 -o /dev/null -w '%%{http_code}' "http://${private_ip}:5000/v2/" 2>/dev/null || true)
       # (2) Ping ONLY when zot answered. Absence of this ping IS the alarm — Better Stack pages
       #     when no beat arrives within period(60s) + grace(30s).
+      PING=none
       case "$${HTTP_CODE:-000}" in
         200|401)
-          curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}" || true
+          if curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}"; then PING=ok; else PING=fail; fi
           ;;
       esac
+      # (3) (#7270) Record WHY, off-box, without a new token or egress. Before this the feeder was
+      #     silent: a withheld beat left no record anywhere, so a soleur-registry-prd flap could
+      #     not be told apart from a Better Stack or egress fault, a stopped timer, or a beat that
+      #     left on time and landed late. Per-boot counters live in tmpfs (reset with boot_id) and
+      #     the 5-min zot-disk-heartbeat ships them as the liveness_* fields of SOLEUR_ZOT_DISK.
+      #       miss_cum      zot did not answer 200/401 (last_miss_code says with what)
+      #       ping_fail_cum zot answered, the beat's own curl failed (the false-positive arm)
+      #       ok_cum        a beat went out; flat across rows = the feeder is not running
+      #       late_ok_cum   a beat went out more than 75s after the previous one (timer margin)
+      #     This runs AFTER the ping, in a subshell, and can neither suppress nor delay the beat
+      #     nor change the exit status. No heredoc and no `set -e` here, on purpose.
+      (
+        S=/run/soleur-registry/zot-liveness.state
+        mkdir -p "$${S%/*}" || exit 0
+        rd() { sed -n "s/^$1=\([0-9]\{1,10\}\)$/\1/p" "$S" 2>/dev/null | head -n 1; }
+        miss=$(rd miss_cum); pfail=$(rd ping_fail_cum); okc=$(rd ok_cum); late=$(rd late_ok_cum); last_ok=$(rd last_ok_ts)
+        code=$(sed -n 's/^last_miss_code=\([0-9][0-9][0-9]\)$/\1/p' "$S" 2>/dev/null | head -n 1)
+        [ -n "$miss" ] || miss=0
+        [ -n "$pfail" ] || pfail=0
+        [ -n "$okc" ] || okc=0
+        [ -n "$late" ] || late=0
+        [ -n "$last_ok" ] || last_ok=0
+        [ -n "$code" ] || code=none
+        now=$(date +%s)
+        case "$now" in '' | *[!0-9]*) exit 0 ;; esac
+        case "$PING" in
+          ok)
+            okc=$((10#$okc + 1))
+            if [ "$((10#$last_ok))" -gt 0 ] && [ "$((now - 10#$last_ok))" -gt 75 ]; then late=$((10#$late + 1)); fi
+            last_ok=$now
+            ;;
+          fail) pfail=$((10#$pfail + 1)) ;;
+          *)
+            miss=$((10#$miss + 1))
+            code="$${HTTP_CODE:-000}"
+            case "$code" in [0-9][0-9][0-9]) : ;; *) code=000 ;; esac
+            ;;
+        esac
+        printf 'miss_cum=%s\nping_fail_cum=%s\nok_cum=%s\nlate_ok_cum=%s\nlast_miss_code=%s\nlast_ok_ts=%s\n' \
+          "$miss" "$pfail" "$okc" "$late" "$code" "$last_ok" > "$S.tmp" && mv -f "$S.tmp" "$S"
+      ) || true
       # Always exit 0: a failed probe must alarm via ABSENCE (the monitor's own semantics), not
       # via a failed unit that only `systemctl status` on a no-SSH host could ever reveal.
       exit 0
@@ -1082,6 +1124,7 @@ write_files:
       [Service]
       Type=oneshot
       ExecStart=/usr/local/bin/zot-liveness-heartbeat.sh
+      TimeoutStartSec=45s
     owner: root:root
     permissions: '0644'
 
