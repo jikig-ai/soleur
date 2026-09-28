@@ -72,7 +72,8 @@ to the lexing of the command, with one exception:
 | main's floor sees more filings than the lexer | **deny** — `TOK_MSG` when the cause is the agent's own unbalanced quoting, else "run the filing as a plain top-level command" |
 | exit 2 (unbalanced quote, unterminated substitution, NUL) on a command matching the filing indicator | **deny** with `TOK_MSG` |
 | | *The indicator is computed on the command with quotes and backslashes removed and continuations joined, so `gh issue c''reate` cannot split the word past it.* |
-| any other failure (a tripped bound, a crash, a truncated stream, no perl) on a filing-indicated command | **ask**, as ADR-157 prescribes |
+| a tripped bound, a crash or a truncated stream, on ANY command | **ask**, as ADR-157 prescribes. Not indicator-gated: a defeated lexer's text fallback cannot see a computed word (`$'\x69ssue'`, `is$(:)sue`) that only the lexer decodes, and only pathological input trips a bound |
+| no perl on a filing-indicated command | **ask** |
 | no filing indicator | allow |
 
 The deny arms cover only commands that are filing-shaped, and their repair is never a filing — so

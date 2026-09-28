@@ -698,6 +698,13 @@ if [[ -n "$_fs_cause" || "$_fs_floor_only" == 1 ]]; then
     _fs_src="$(printf '%s' "$COMMAND" | perl -0777 -pe 's/\\\n//g; tr/\x27"\\//d' 2>/dev/null)" \
       || _fs_src="$COMMAND"
     grep -qE '(^|[^A-Za-z0-9_-])gh([^A-Za-z0-9_-].*)?[^A-Za-z0-9_-](issues?|api)([^A-Za-z0-9_-]|$)' <<<"$_fs_src" && _fs_ind=1
+    # A tripped bound or a crash means the lexer was DEFEATED, not that it found
+    # nothing: the text indicator cannot see `$'\x69ssue'` or `is$(:)sue`, which
+    # only the lexer decodes, so an indicator-gated ask here fails open to
+    # 17-deep nesting plus one computed word (ship advisor, PR #9099). Only
+    # pathological input trips these, so ask unconditionally. exit2 (bash
+    # rejects the command too) and noperl (every command) stay indicator-gated.
+    case "$_fs_c" in depth|budget|alarm|records|crash|trunc) _fs_ind=1 ;; esac
   fi
   if [[ "$_fs_floor_only" == 1 || "$_fs_c" == "exit2" && "$_fs_ind" == 1 ]]; then
     emit_incident "guardrails-filing-lexer-failure" "deny" "cause=$_fs_c" ""

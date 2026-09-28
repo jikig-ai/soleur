@@ -1475,7 +1475,8 @@ fs_shim exit2 2 '"E\0exit2\0"';                 fs_row "F-exit2 exit 2 on a \$(â
 fs_shim exit3 3 '"E\0depth\0"';                 fs_row "F-exit3 exit 3 on a \$(â€¦) filing asks" "ask" "$SUB"
 fs_shim exit3k 3 '"E\0budget\0"';               fs_row "F-exit3 kill switch turns the ask into an allow" "<none>" "$SUB" SOLEUR_DISABLE_HOOK_INPUT_ASK=1
 fs_shim exit3b 3 '"E\0alarm\0"';                fs_row "F-exit3-bare exit 3 on a bare create denies (floor)" "deny" 'gh issue create --title x --body y'
-fs_shim nonfiling 3 '"E\0depth\0"';             fs_row "F-nonfiling a failure without the indicator allows" "<none>" 'echo hello world'
+fs_shim nonfiling 2 '"E\0exit2\0"';             fs_row "F-nonfiling an exit-2 failure without the indicator allows" "<none>" 'echo hello world'
+fs_shim nonfilingb 3 '"E\0depth\0"';           fs_row "F-nonfiling-bound a bound trip asks even without the indicator" "ask" 'echo hello world'
 fs_shim trunc 0 '"F\0create\0top\0"';           fs_row "F-trunc a partial record asks" "ask" "$SUB"
 fs_shim empty 0 '""';                           fs_row "F-empty no output at all asks" "ask" "$SUB"
 fs_shim floor 0 '"OK\0"';                       fs_row "F-floor lexer says nothing, floor sees a bare create: deny" "deny" 'gh issue create --title x --body y'
@@ -1595,6 +1596,15 @@ FS_ALLOW_LEXER_INCIDENT=1 assert_reason "R-FLOORMSG: a comment the old detector 
 _deep17='gh issue c'"''"'reate --title x --body y'
 for _ in $(seq 1 17); do _deep17=": \$($_deep17)"; done
 FS_ALLOW_LEXER_INCIDENT=1 assert "R-SPLIT: a bound trip + c''reate is not an allow" "ask" "$_deep17"
+# A computed word only the lexer decodes, plus a bound trip, is not an allow
+# either: a defeated lexer asks unconditionally (ship advisor, PR #9099).
+_nest17='true'
+for _ in $(seq 1 17); do _nest17=": \$($_nest17)"; done
+FS_ALLOW_LEXER_INCIDENT=1 assert "R-ANSIBOUND: \$'\\x69ssue' + a bound trip asks" "ask" \
+  "gh \$'\\x69ssue' create --title x --body-file /tmp/b; $_nest17"
+FS_ALLOW_LEXER_INCIDENT=1 assert "R-EMPTYEXP: is\$(:)sue + a bound trip asks" "ask" \
+  "gh is\$(:)sue create --title x --body-file /tmp/b; $_nest17"
+FS_ALLOW_LEXER_INCIDENT=1 assert "R-BOUNDANY: a bound trip with no filing word still asks" "ask" "$_nest17"
 _padapi="$(printf '/repos/%.0s' $(seq 1 10000))"
 assert "R-PAD: 60 KB of /repos/ padding does not stall the lexer past a \$EP filing" "deny" \
   "gh api -H \"X-Pad: ${_padapi}!\" \"\$EP\" -X POST -f title=x"
@@ -1645,7 +1655,7 @@ rm -rf "$_pc_sb"
 # 300 KiB row and the 12-deep tripwire) = 323, + 32 review-round rows (one
 # per reproduced finding, the R-RAWAT2 counter-row, and decision_of's
 # positive control) = 355.
-MIN_ASSERTIONS=355
+MIN_ASSERTIONS=359
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2
