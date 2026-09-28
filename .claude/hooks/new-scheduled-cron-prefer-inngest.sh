@@ -132,6 +132,8 @@ The project's canonical pattern for scheduled work is Inngest (ADR-033). Existin
 To proceed in Inngest:
   1. Add a new file under apps/web-platform/server/inngest/functions/cron-<name>.ts
   2. Register it in apps/web-platform/app/api/inngest/route.ts
+  3. Complete every row of the ADR-033 Registration checklist (manifest, metadata,
+     registry count, Sentry monitor, execution-placement row, ...)
 
 To override this gate (rare — pure-GH ops like Dependabot, CodeQL, or release-only workflows):
   Add the literal HTML comment

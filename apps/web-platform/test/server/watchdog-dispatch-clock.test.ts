@@ -5,10 +5,9 @@
 // C1-C15 + Guard 2). Every scenario injects its table, so a two-entry table is
 // used only where the second member is the point (C11, C15).
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import ts from "typescript";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 // C12 drives the DEFAULT mint (no `mint` injected) through these two seams, so
@@ -56,6 +55,7 @@ import {
 } from "@/server/watchdog-dispatch-clock";
 import type { WatchdogDispatchEntry } from "@/server/watchdog-dispatch-table";
 import type { WatchdogDispatchMarker } from "@/server/cron-liveness-marker";
+import { realFs, walk as walkGraph } from "../helpers/ts-import-graph";
 
 const TOKEN = "ghs_SECRETINSTALLATIONTOKEN0123456789";
 const DISPATCH_ROUTE =
@@ -937,85 +937,9 @@ describe("C19 table and clock sanity", () => {
 // in the required `test` context. Type-only imports are erased and skipped.
 // ---------------------------------------------------------------------------
 const APP_ROOT = resolve(__dirname, "../..");
-const SOURCE_EXTS = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
-
-function resolveSpecifier(spec: string, fromFile: string): string | null | "unresolved" {
-  let base: string;
-  if (spec.startsWith("@/")) base = join(APP_ROOT, spec.slice(2));
-  else if (spec.startsWith(".")) base = resolve(dirname(fromFile), spec);
-  else return null; // bare package — outside the property
-  const stem = base.replace(/\.(js|mjs|cjs)$/, "");
-  const candidates = [
-    base,
-    ...SOURCE_EXTS.map((e) => `${stem}${e}`),
-    ...SOURCE_EXTS.map((e) => join(base, `index${e}`)),
-  ];
-  for (const cand of candidates) {
-    if (existsSync(cand) && SOURCE_EXTS.some((e) => cand.endsWith(e))) return cand;
-  }
-  return "unresolved";
-}
-
-function specifiersOf(file: string): string[] {
-  const src = readFileSync(file, "utf-8");
-  const sf = ts.createSourceFile(
-    file,
-    src,
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith(".tsx") ? ts.ScriptKind.TSX : file.endsWith(".ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS,
-  );
-  const out: string[] = [];
-  const visit = (n: ts.Node): void => {
-    if (
-      (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) &&
-      n.moduleSpecifier &&
-      ts.isStringLiteral(n.moduleSpecifier)
-    ) {
-      const typeOnly = ts.isImportDeclaration(n) ? !!n.importClause?.isTypeOnly : n.isTypeOnly;
-      if (!typeOnly) out.push(n.moduleSpecifier.text);
-    } else if (
-      ts.isImportEqualsDeclaration(n) &&
-      ts.isExternalModuleReference(n.moduleReference) &&
-      ts.isStringLiteral(n.moduleReference.expression)
-    ) {
-      out.push(n.moduleReference.expression.text);
-    } else if (
-      ts.isCallExpression(n) &&
-      (n.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(n.expression) && n.expression.text === "require"))
-    ) {
-      const a = n.arguments[0];
-      if (a && (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a))) out.push(a.text);
-      else out.push("<non-literal-dynamic-import>");
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
-  return out;
-}
-
-function walk(entry: string): { reach: Set<string>; problems: string[] } {
-  const reach = new Set<string>();
-  const problems: string[] = [];
-  const stack = [entry];
-  while (stack.length) {
-    const f = stack.pop()!;
-    if (reach.has(f)) continue;
-    reach.add(f);
-    for (const spec of specifiersOf(f)) {
-      if (spec === "<non-literal-dynamic-import>") {
-        problems.push(`${f}: non-literal import()/require()`);
-        continue;
-      }
-      const target = resolveSpecifier(spec, f);
-      if (target === "unresolved") problems.push(`${f}: unresolved local specifier ${spec}`);
-      else if (target) stack.push(target);
-    }
-  }
-  return { reach, problems };
-}
-
+// The walker lives in test/helpers/ts-import-graph.ts (#7230 extracted it for a second consumer).
+const GRAPH_FS = realFs(APP_ROOT);
+const walk = (entry: string) => walkGraph(entry, GRAPH_FS);
 const rel = (p: string) => p.slice(APP_ROOT.length + 1);
 
 describe("Guard 2 — the clock never imports the Inngest tree", () => {

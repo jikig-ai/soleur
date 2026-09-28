@@ -146,6 +146,10 @@ drain wait Σ rather than max (e.g. `cron-platform` limit raised, or
 `agent-runtime` heavily used during deploy windows); (e) sustained OOM-kills are
 observed during a drain window (argues for Option 2 independent of host size).
 
+**Addendum — 2026-09-28 (#7230):** Option 2 needs a second step-executor registration, which the
+ADR-033 execution-placement amendment now lints (Guard 4) and ties to one serve URL per app id.
+Reopening Option 2 therefore reopens that amendment too, and routes through #9137.
+
 ## Observability (no-SSH)
 
 `cat-deploy-state.sh` adds `cron_drain_wait_secs` (int) + `cron_drain_timed_out`
