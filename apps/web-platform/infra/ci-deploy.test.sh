@@ -2252,7 +2252,7 @@ create_mock_logger "$T1A6_DIR/bin"
 cat > "$T1A6_DIR/harness.sh" <<'HARNESS'
 set -euo pipefail
 LOG_TAG="ci-deploy"; IMAGE_VERIFY_MODE="warn"; ZOT_REGISTRY_URL=""
-COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
+COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
 COSIGN_TRUSTED_ROOT_HOST="/nonexistent/trusted_root.json"
 COSIGN_IDENTITY_REGEXP='^x$'; COSIGN_OIDC_ISSUER='https://issuer.invalid'
 DEPLOY_DOCKER_CONFIG_DIR="$T1A6_DIR/deploy-cfg"; export DOCKER_CONFIG="$DEPLOY_DOCKER_CONFIG_DIR"
@@ -4367,7 +4367,7 @@ assert_zot_dark_is_terminal
 # CONDITIONALLY added on the zot branch (proven by T-ZOT-1/T-ZOT-2 above, which also assert
 # the trusted-root + identity flags ride BOTH the zot and the GHCR-fallback branch = 4.1).
 TOTAL=$((TOTAL + 1))
-if grep -qF 'ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$DEPLOY_SCRIPT" \
+if grep -qF 'gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$DEPLOY_SCRIPT" \
    && grep -qF 'verify --offline' "$DEPLOY_SCRIPT" \
    && grep -qF -- '--trusted-root=/etc/cosign/trusted_root.json' "$DEPLOY_SCRIPT" \
    && grep -qF 'reusable-release' "$DEPLOY_SCRIPT"; then
@@ -4375,6 +4375,54 @@ if grep -qF 'ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31b
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: cosign trust anchor drifted (Phase 4 continuity)"
 fi
+
+# --- #8714 5.3b-iii: the verifier image is NOT pulled from ghcr.io ---------------------------------
+# The declaration's registry host must not be ghcr.io (5.3b-iii retires that dependency) and the
+# ref must stay digest-pinned. Read from the ONE `readonly COSIGN_IMAGE=` line, anchored at column 0
+# so a comment naming the old ref cannot satisfy it.
+TOTAL=$((TOTAL + 1))
+T8714_DECL="$(grep -E '^readonly COSIGN_IMAGE=' "$DEPLOY_SCRIPT" || true)"
+if [[ "$(printf '%s' "$T8714_DECL" | grep -c . || true)" == 1 ]] \
+   && printf '%s' "$T8714_DECL" | grep -qE '^readonly COSIGN_IMAGE="[a-z0-9.-]+/[^"@]+@sha256:[0-9a-f]{64}"' \
+   && ! printf '%s' "$T8714_DECL" | grep -qE '^readonly COSIGN_IMAGE="ghcr\.io/'; then
+  PASS=$((PASS + 1)); echo "  PASS: T-8714-1 COSIGN_IMAGE is digest-pinned and not on ghcr.io (#8714 5.3b-iii)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-8714-1 COSIGN_IMAGE declaration is on ghcr.io, unpinned, or not exactly one line: [$T8714_DECL]"
+fi
+
+# T-8714-2: a failed verifier-image PULL from gcr.io classifies as cosign_absent, not verify_failed.
+# The classifier is the if/elif chain in verify_image_signature, executed here on its real bytes
+# against the stderr tail of each case. docker prefixes a daemon-side pull error with "Error response
+# from daemon", which cosign's own errors never carry — so a cosign-side network error (fetching the
+# signature from zot) must stay verify_failed (the last row).
+T8714_CHAIN="$(awk '/^  local result="verify_failed" tail$/{f=1} f{print} f&&/^  fi$/{exit}' "$DEPLOY_SCRIPT")"
+T8714_BAD=""
+if [[ "$(printf '%s\n' "$T8714_CHAIN" | grep -c 'result="cosign_absent"' || true)" -lt 1 ]]; then
+  T8714_BAD=" chain-not-extracted"
+else
+  while IFS='|' read -r _want _tail; do
+    _err="$(mktemp)"; printf '%s' "$_tail" > "$_err"
+    _got="$(err="$_err" bash -c "set -uo pipefail; f() { $T8714_CHAIN
+      printf '%s' \"\$result\"; }; f" 2>/dev/null || true)"
+    rm -f "$_err"
+    [[ "$_got" == "$_want" ]] || T8714_BAD="${T8714_BAD} [${_tail:0:60}]->${_got:-<none>}(want ${_want})"
+  done <<'CASES'
+cosign_absent|docker: Error response from daemon: toomanyrequests: quota exceeded.
+cosign_absent|docker: Error response from daemon: Get "https://gcr.io/v2/": dial tcp: lookup gcr.io on 127.0.0.53:53: no such host.
+cosign_absent|docker: Error response from daemon: Get "https://gcr.io/v2/": net/http: TLS handshake timeout.
+cosign_absent|docker: Error response from daemon: Get "https://gcr.io/v2/": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+cosign_absent|Unable to find image 'gcr.io/projectsigstore/cosign@sha256:57c0' locally
+unsigned|Error: no matching signatures: no signatures found
+verify_failed|Error: GET http://10.0.1.30:5000/v2/: dial tcp 10.0.1.30:5000: connect: connection refused
+CASES
+fi
+TOTAL=$((TOTAL + 1))
+if [[ -z "$T8714_BAD" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-8714-2 a gcr.io pull failure (429/DNS/TLS/timeout) is cosign_absent; a cosign-side network error stays verify_failed"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-8714-2 classifier:${T8714_BAD}"
+fi
+unset T8714_DECL T8714_CHAIN T8714_BAD _want _tail _got _err
 
 # #6665: the two properties the inverted sleep-mock default rests on (see create_mock_sleep's
 # header). Both are one-token edits away, so per ADR-139 they are pinned mechanically rather than
@@ -8261,7 +8309,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # rows can be deleted before the one guard that detects truncation notices. The net is +6
 # over a churn of ~38 rows: 15 T-1c-* added, several GHCR-only rows deleted (§1A, #6400
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
-CI_DEPLOY_ASSERT_FLOOR=340
+# #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
+CI_DEPLOY_ASSERT_FLOOR=342
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
