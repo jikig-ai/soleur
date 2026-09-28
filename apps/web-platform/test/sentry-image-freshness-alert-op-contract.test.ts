@@ -14,8 +14,15 @@ import { describe, it, expect } from "vitest";
 // a comment or a sibling rule cannot mask its removal from the rule.
 
 const here = dirname(fileURLToPath(import.meta.url));
-const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
-const ciDeploy = readFileSync(join(here, "../infra/ci-deploy.sh"), "utf8");
+// Whole-line `#` comments are stripped from both artifacts, so a comment naming a literal cannot
+// satisfy an anchor that exists to pin the CODE (cq-assert-anchor-not-bare-token).
+const stripComments = (text: string): string =>
+  text
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+const tf = stripComments(readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8"));
+const ciDeploy = stripComments(readFileSync(join(here, "../infra/ci-deploy.sh"), "utf8"));
 
 function tfBlockFor(resourceName: string): string {
   const decl = `resource "sentry_alert" "${resourceName}"`;
@@ -64,9 +71,9 @@ describe("image_freshness_mismatch alert ↔ ci-deploy.sh image_freshness_event 
     expect(all.length).toBe(1);
   });
 
-  it("the web deploy calls the check on VERIFIED_REF, before the stale-canary cleanup", () => {
+  it("the web deploy calls the check on VERIFIED_REF, before the stale-canary cleanup (code, not comments)", () => {
     const call = ciDeploy.indexOf('if ! verify_image_freshness "$VERIFIED_REF" "$TAG"; then');
-    const canary = ciDeploy.indexOf("# Clean stale canary from previous failed deploy");
+    const canary = ciDeploy.indexOf("docker stop soleur-web-platform-canary");
     expect(call).toBeGreaterThan(-1);
     expect(canary).toBeGreaterThan(call);
   });

@@ -8359,7 +8359,10 @@ run_6428() {
   (
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform $tag"
     MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
-    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    # The plugin mount lives in <workdir> so an abort row can assert the seed never ran: the seed's
+    # `docker create` is redirected to /dev/null by ci-deploy.sh, so its trace marker never reaches
+    # out.txt and cannot witness the ordering on its own.
+    export PLUGIN_MOUNT_DIR="$d/plugin-mount"
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
     export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
@@ -8377,26 +8380,28 @@ run_6428() {
   ) >"$d/out.txt" 2>&1 || rc=$?
   printf '%s\n' "$rc" > "$d/rc"
 }
-# _6428_started <workdir>: 1 when the deploy created or ran ANY app container (plugin seed `create`,
-# canary or production `run`). The cosign verify `run` is answered before the mock's mode case and
-# never traces, so every DOCKER_TRACE:run/create here is an app container.
-_6428_started() { if grep -qE '^DOCKER_TRACE:(run|create)$' "$1/out.txt"; then echo 1; else echo 0; fi; }
+# _6428_started <workdir>: 1 when the deploy touched ANY app container: the canary/production `run`
+# (traced), or the plugin seed (its `docker create` is redirected to /dev/null, so it is witnessed by
+# the plugin mount directory the seed creates and fills). The cosign verify `run` is answered before
+# the mock's mode case and never traces.
+_6428_started() { if grep -qE '^DOCKER_TRACE:(run|create)$' "$1/out.txt" || [[ -e "$1/plugin-mount" ]]; then echo 1; else echo 0; fi; }
 # _6428_event <workdir> <field>: a field of the captured op=image-freshness Sentry event ("" if none).
 _6428_event() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="image-freshness")][0] | if . == null then "" elif $f == "level" then .level else .tags[$f] end' "$1/sentry.txt" 2>/dev/null; }
 # _6428_abort <label> <extra> <expected-reason> <expected-result> [tag]: one row asserting the
 # deploy aborted with <reason>, started NO app container, logged the fail marker and emitted an
 # error event carrying <result>.
 _6428_abort() {
-  local label="$1" extra="$2" want_reason="$3" want_result="$4" tag="${5:-v1.0.0}" d reason _exitc
+  local label="$1" extra="$2" want_reason="$3" want_result="$4" tag="${5:-v1.0.0}" d reason exitc
   TOTAL=$((TOTAL + 1)); d="$(mktemp -d)"
   run_6428 "$d" "$extra" "$tag"
-  read_state_reason_and_exit "$d/ci-deploy.state" reason _exitc
-  if [[ "$(cat "$d/rc")" != "0" && "$reason" == "$want_reason" && "$(_6428_started "$d")" == "0" ]] \
+  read_state_reason_and_exit "$d/ci-deploy.state" reason exitc
+  if [[ "$(cat "$d/rc")" != "0" && "$reason" == "$want_reason" && "$exitc" == "1" && "$(_6428_started "$d")" == "0" ]] \
      && grep -q "IMAGE_FRESHNESS_FAIL: result=$want_result " "$d/logger.txt" \
+     && grep -q "DEPLOY_ABORT: image freshness check refused .* ($want_reason)" "$d/logger.txt" \
      && [[ "$(_6428_event "$d" level)" == "error" && "$(_6428_event "$d" freshness_result)" == "$want_result" ]]; then
     PASS=$((PASS + 1)); echo "  PASS: $label → $reason, no app container, error event freshness_result=$want_result (#6428)"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $label (rc=$(cat "$d/rc") reason=$reason want=$want_reason app_container_started=$(_6428_started "$d") event_level=$(_6428_event "$d" level) event_result=$(_6428_event "$d" freshness_result))"
+    FAIL=$((FAIL + 1)); echo "  FAIL: $label (rc=$(cat "$d/rc") reason=$reason exit_code=$exitc want=$want_reason app_container_started=$(_6428_started "$d") event_level=$(_6428_event "$d" level) event_result=$(_6428_event "$d" freshness_result))"
     printf '        traces: %s\n' "$(grep '^DOCKER_TRACE:' "$d/out.txt" | tr '\n' ' ')"
   fi
   rm -rf "$d"
@@ -8423,6 +8428,13 @@ _6428_abort "F9b decoy X_BUILD_VERSION=1.0.0 and no BUILD_VERSION" \
 # decidable from the config, so it is refused rather than read first-wins.
 _6428_abort "F10 two BUILD_VERSION entries (1.0.0 then 0.9.9)" \
   "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_version_unverifiable version_ambiguous
+# F12: an EMPTY `BUILD_VERSION=` line (present but valueless) is unverifiable, not a mismatch.
+_6428_abort "F12 an empty BUILD_VERSION= line" \
+  "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION= MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+# F13 (the THIRD VERIFIED_REF arm): WARN mode with no resolvable RepoDigest runs the mutable TAG
+# (verify_image_signature's inspect_failed fallback) — the freshness check still reads it and aborts.
+_6428_abort "F13 WARN tag-fallback VERIFIED_REF with an image built as 0.9.9" \
+  "export MOCK_INSPECT_NO_DIGEST=1 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
 _6428_abort "F3a image with no BUILD_VERSION" \
   "export MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
 _6428_abort "F3b image built as dev" \
@@ -8479,7 +8491,7 @@ rm -rf "$T6428"; unset _f2_traces _f4_ref
 TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
 run_6428 "$T6428" "export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:6428ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff MOCK_RUNNING_IMAGE_TAG=v1.0.0"
 read_state_reason_and_exit "$T6428/ci-deploy.state" _f5_reason _f5_exit
-if [[ "$(cat "$T6428/rc")" == "0" && "$_f5_reason" == "ok" && "$(head -1 "$T6428/inspect.txt")" == "sha256:6428ffff"* ]]; then
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f5_reason" == "ok" && "$_f5_exit" == "0" && "$(head -1 "$T6428/inspect.txt")" == "sha256:6428ffff"* ]]; then
   PASS=$((PASS + 1)); echo "  PASS: F5b a same-version local-cache reload of a matching running image reloads, inspecting the running image ID (#6428)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: F5b (rc=$(cat "$T6428/rc") reason=$_f5_reason inspected=$(head -1 "$T6428/inspect.txt"))"
@@ -8491,7 +8503,7 @@ rm -rf "$T6428"; unset _f5_reason _f5_exit
 TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
 run_6428 "$T6428" "export MOCK_IMAGE_BUILD_VERSION=10.20.30" v10.20.30
 read_state_reason_and_exit "$T6428/ci-deploy.state" _f7_reason _f7_exit
-if [[ "$(cat "$T6428/rc")" == "0" && "$_f7_reason" == "ok" ]] \
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f7_reason" == "ok" && "$_f7_exit" == "0" ]] \
    && grep -q 'IMAGE_FRESHNESS: ok ref=.* expected=10.20.30 actual=10.20.30$' "$T6428/logger.txt"; then
   PASS=$((PASS + 1)); echo "  PASS: F7 BUILD_VERSION=10.20.30 for v10.20.30 deploys (#6428)"
 else
@@ -8511,8 +8523,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # over a churn of ~38 rows: 15 T-1c-* added, several GHCR-only rows deleted (§1A, #6400
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
 # #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
-# #6428: raised to 357 with the 15 pre-swap freshness rows (F1-F11).
-CI_DEPLOY_ASSERT_FLOOR=357
+# #6428: raised to 359 with the 17 pre-swap freshness rows (F1-F13).
+CI_DEPLOY_ASSERT_FLOOR=359
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

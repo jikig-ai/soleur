@@ -3358,7 +3358,8 @@ case "$COMPONENT" in
     fi
 
     # #6428: pre-swap freshness — the image about to run must have been BUILT as the requested
-    # version. Runs on BOTH VERIFIED_REF arms (the verified digest and the local-cache rescue) and
+    # version. Runs on every VERIFIED_REF arm (the verified digest, the WARN-mode tag fallback, and
+    # the local-cache rescue) and
     # before the plugin seed, the canary and the swap, so a stale-but-signed image never serves.
     # Fails closed; the OLD container stays live (downtime-safe, like the ENFORCE abort above).
     if ! verify_image_freshness "$VERIFIED_REF" "$TAG"; then
