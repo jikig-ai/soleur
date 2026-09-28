@@ -339,6 +339,119 @@ describe("provisionGitDataRepo / replicateToGitData / fetchFromGitData — pin t
   });
 });
 
+// #8572: a push that fails on the pin reports ONCE on the message path with the `pin_fault`
+// tag the pin-fault rule pages on; any other push failure keeps its Error-path report.
+describe("replicateToGitData — push pin faults (#8572)", () => {
+  beforeEach(() => vi.stubEnv("GIT_DATA_STORE_ENABLED", "true"));
+
+  const pushReports = () =>
+    reportSilentFallback.mock.calls.filter(
+      (c) => (c[1] as { op?: string }).op === "git_data_replication_push",
+    );
+  /** A transport rejection shaped the way execFileAsync builds one: a real Error with fields. */
+  const rejection = (fields: { code?: unknown; stderr?: unknown; syscall?: unknown }) =>
+    Object.assign(new Error("Command failed: ssh -o … git@10.0.0.9"), fields);
+  const HOST_KEY = "Host key verification failed.";
+
+  async function push() {
+    const { replicateToGitData } = await load();
+    return replicateToGitData({ workspacePath: "/tmp/ws", workspaceId: WS, worktreeId: WT, leaseGeneration: 2, userId: USER }).then(
+      () => "resolved" as const,
+      (e: unknown) => e,
+    );
+  }
+
+  async function expectPinFault(reason: string, via: "ssh" | "git") {
+    const settled = await push();
+    expect(settled).toBeInstanceOf(Error); // re-thrown, still catchable by the caller
+    expect(pushReports()).toHaveLength(1);
+    const [err, opts] = pushReports()[0] as [unknown, Record<string, unknown>];
+    expect(err).toBeNull();
+    expect(opts).toMatchObject({
+      feature: "worktree_lease",
+      op: "git_data_replication_push",
+      message: `git-data replication push pin fault (${reason}): the workspace's objects were NOT replicated to the shared store`,
+      tags: { pin_fault: reason },
+      extra: { via, pinFault: reason, leaseGeneration: 2, userId: USER },
+    });
+    // Neither stderr nor the error message rides the event.
+    expect(JSON.stringify(pushReports())).not.toMatch(/Command failed|verification failed|10\.0\.0\.9/);
+  }
+
+  async function expectErrorPath() {
+    const settled = await push();
+    expect(settled).toBeInstanceOf(Error);
+    expect(pushReports()).toHaveLength(1);
+    const [err, opts] = pushReports()[0] as [unknown, Record<string, unknown>];
+    expect(err).toBeInstanceOf(Error);
+    expect(opts).not.toHaveProperty("tags");
+    return opts;
+  }
+
+  it("absent pin → pin_absent, via ssh, nothing dialed", async () => {
+    await expectPinFault("pin_absent", "ssh");
+    expect(sshTransport).not.toHaveBeenCalled();
+    expect(gitTransport).not.toHaveBeenCalled();
+  });
+
+  it("invalid pin → pin_invalid, via ssh", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", "ssh-rsa AAAAB3NzaC1yc2E");
+    await expectPinFault("pin_invalid", "ssh");
+  });
+
+  it("provision `spawn ssh` ENOENT → ssh_client_absent", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    sshTransport.mockRejectedValueOnce(rejection({ code: "ENOENT", syscall: "spawn ssh" }));
+    await expectPinFault("ssh_client_absent", "ssh");
+  });
+
+  it("provision ssh 255 + host-key text → host_key_mismatch, via ssh", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    sshTransport.mockRejectedValueOnce(rejection({ code: 255, stderr: HOST_KEY }));
+    await expectPinFault("host_key_mismatch", "ssh");
+  });
+
+  it("provision ssh 128 + host-key text is the REMOTE command's status → Error path, not a pin fault", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    sshTransport.mockRejectedValueOnce(rejection({ code: 128, stderr: HOST_KEY }));
+    await expectErrorPath();
+  });
+
+  it("git push 128 + host-key text → host_key_mismatch, via git", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    gitTransport.mockRejectedValueOnce(
+      rejection({ code: 128, stderr: `${HOST_KEY}\nfatal: Could not read from remote repository.` }),
+    );
+    await expectPinFault("host_key_mismatch", "git");
+  });
+
+  it("git push `spawn git` ENOENT → Error path, not a pin fault", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    gitTransport.mockRejectedValueOnce(rejection({ code: "ENOENT", syscall: "spawn git" }));
+    await expectErrorPath();
+  });
+
+  it("fence reject → the existing Error-path report, unchanged", async () => {
+    vi.stubEnv("GIT_DATA_SSH_HOST_KEY", PIN);
+    gitTransport.mockRejectedValueOnce(rejection({ code: 1, stderr: "remote: fence: stale lease-gen" }));
+    const opts = await expectErrorPath();
+    const { hashUserId } = await import("../server/observability");
+    expect(opts).toEqual({
+      feature: "worktree_lease",
+      op: "git_data_replication_push",
+      extra: {
+        workspaceIdHash: hashUserId(WS),
+        worktreeIdHash: hashUserId(WT),
+        leaseGeneration: 2,
+        userId: USER,
+      },
+      message:
+        "git-data replication push failed — a fence reject (stale lease-gen) or " +
+        "transport error; the workspace's objects were NOT replicated to the shared store",
+    });
+  });
+});
+
 // Probed at collection time with the REAL execFileSync: this file's vi.mock replaces
 // child_process.execFileSync, so a static import would hit the mock and always "succeed".
 const { execFileSync: realExecFileSync } =
@@ -422,6 +535,9 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
       feature: "git_data_host_key_pin",
       op: "pin_invalid_at_startup",
       message: "git-data host-key pin invalid at startup",
+      // #8572: the tag the pin-fault rule pages on, and its copy for the pino line.
+      tags: { pin_fault: "pin_invalid" },
+      extra: { pinFault: "pin_invalid" },
     });
     expect(JSON.stringify(reportSilentFallback.mock.calls)).not.toContain(PIN.split(" ")[1].slice(0, 30));
   });
@@ -486,6 +602,9 @@ describe("startup pin line (AC16) — logged once at WARN so Vector ships it", (
       feature: "git_data_host_key_pin",
       op: "pin_absent_at_startup",
       message: "git-data host-key pin absent at startup",
+      // #8572: the tag the pin-fault rule pages on, and its copy for the pino line.
+      tags: { pin_fault: "pin_absent" },
+      extra: { pinFault: "pin_absent" },
     });
     const all = JSON.stringify(reportSilentFallback.mock.calls);
     for (const v of Object.values(SYNTH)) expect(all).not.toContain(v);
@@ -527,6 +646,9 @@ describe("startup ssh-client line — git_data_ssh_client=present|absent", () =>
       feature: "git_data_ssh_client",
       op: "ssh_client_absent_at_startup",
       message: "git-data ssh client absent at startup",
+      // #8572: the tag the pin-fault rule pages on, and its copy for the pino line.
+      tags: { pin_fault: "ssh_client_absent" },
+      extra: { pinFault: "ssh_client_absent" },
     });
   });
 
