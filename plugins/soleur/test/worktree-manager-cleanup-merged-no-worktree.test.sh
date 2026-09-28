@@ -350,6 +350,31 @@ run_reaper() {
 local_branch_exists() { fgit -C "$1" show-ref --verify --quiet "refs/heads/$2"; }
 remote_branch_exists() { [[ -n "$(fgit -C "$1" ls-remote --heads origin "$2" 2>/dev/null)" ]]; }
 
+# assert_compact_archive_entry <archive-dir> <select-regex> <want-regex> <row-id> <desc>
+# Existence is required — a format check over an artifact never produced is a
+# vacuous pass. <select-regex> picks the produced member; <want-regex> anchors
+# the produced basename end-to-end (stamp AND fname), so a producer inserting
+# a segment (`$ts-x-$fname`) still goes RED. The contract is shape-only BY
+# SCOPE: #9091's property is the compact form, not the day's value — a
+# field-reordered compact mutant (`date +%d%m%Y`) is deliberately outside
+# this battery (date-value membership trades a guaranteed class for a
+# midnight-boundary flake).
+assert_compact_archive_entry() {
+  local dir="$1" sel="$2" want="$3" id="$4" desc="$5"
+  assert_fixture_dir "$dir"
+  local f b entry=""
+  for f in "$dir"/*; do
+    [[ -e "$f" ]] || continue
+    b="$(basename "$f")"
+    [[ "$b" =~ $sel ]] && entry="$b"
+  done
+  if [[ -n "$entry" && "$entry" =~ $want ]]; then
+    pass "$id: $desc"
+  else
+    fail "$id: $desc missing or not compact-stamped (got: '${entry:-<none>}')"
+  fi
+}
+
 # ===========================================================================================
 # A1 — the canonical case. A merged branch with NO worktree, held by a LIVE lease, must not
 # be deleted locally or on the remote.
@@ -420,6 +445,9 @@ fi
 # clean, last commit far outside the grace window must still be reaped exactly as today.
 # This is what distinguishes "the guard now evaluates every branch" from "the guard now
 # refuses everything", and mutants that blanket-refuse are caught here rather than by A1.
+# A3d–A3g carry a second property: the archive-stamp contract — every produced
+# archive basename in specs/plans/brainstorms begins YYYYMMDD-HHMMSS- (the
+# compact form archive-kb.sh mints), never the dashed legacy form.
 # ===========================================================================================
 echo "A3. worktree-bearing, unleased, clean, old commit -> reaped (no blanket refusal)"
 A3="$TMP/a3"; mk_repo "$A3"
@@ -436,19 +464,25 @@ fgit -C "$A3/clone" worktree add -q "$A3_WT" "feat-a3-reapme"
 # archive_kb_files stamp must hold without the canonical spec-dir member.
 mk_merged_branch "$A3/clone" "feat-a3-planonly"
 # KB fixtures the reap's archive step consumes: the spec dir named for
-# safe_branch, plus plans files named for each feature slug (branch minus
-# feat-). The stamp on each produced archive basename is the property under
-# test — compact YYYYMMDD-HHMMSS, the format archive-kb.sh mints.
+# safe_branch, plus plans/brainstorms files named for each feature slug
+# (branch minus feat-). The stamp on each produced archive basename is the
+# property under test — compact YYYYMMDD-HHMMSS, the format archive-kb.sh
+# mints. The brainstorms member closes the assembly gap the structural-
+# enumeration review seat found: the property names brainstorm/plan files,
+# so all three namespaces are observed, not a representative sample.
 assert_fixture_dir "$A3/clone/knowledge-base/project/specs"
-mkdir -p "$A3/clone/knowledge-base/project/specs/feat-a3-reapme" \
-  || { printf 'FATAL: spec fixture dir failed\n' >&2; exit 2; }
 assert_fixture_dir "$A3/clone/knowledge-base/project/plans"
-mkdir -p "$A3/clone/knowledge-base/project/plans" \
-  || { printf 'FATAL: plans fixture dir failed\n' >&2; exit 2; }
+assert_fixture_dir "$A3/clone/knowledge-base/project/brainstorms"
+mkdir -p "$A3/clone/knowledge-base/project/specs/feat-a3-reapme" \
+         "$A3/clone/knowledge-base/project/plans" \
+         "$A3/clone/knowledge-base/project/brainstorms" \
+  || { printf 'FATAL: KB fixture dirs failed\n' >&2; exit 2; }
 printf 'synthesized fixture plan\n' > "$A3/clone/knowledge-base/project/plans/2026-01-01-a3-reapme-plan.md" \
   || { printf 'FATAL: plans fixture write failed\n' >&2; exit 2; }
 printf 'synthesized fixture plan\n' > "$A3/clone/knowledge-base/project/plans/2026-01-01-a3-planonly-plan.md" \
   || { printf 'FATAL: plans fixture write failed\n' >&2; exit 2; }
+printf 'synthesized fixture brainstorm\n' > "$A3/clone/knowledge-base/project/brainstorms/2026-01-01-a3-planonly-brainstorm.md" \
+  || { printf 'FATAL: brainstorms fixture write failed\n' >&2; exit 2; }
 A3_STATE="$TMP/a3-state"; arm_reaper "$A3_STATE"
 run_reaper "$SCRIPT" "$A3/clone" "$A3_STATE" "$TMP/a3.log"
 
@@ -477,28 +511,23 @@ else
 fi
 # The produced archive names carry the COMPACT stamp archive-kb.sh mints
 # (`date +%Y%m%d-%H%M%S`), not the dashed legacy form the reaper kept
-# reintroducing. Existence is asserted, not only shape — a format check over
-# an artifact never produced is vacuous.
-A3_SPEC_ENTRY="$(ls -1 "$A3/clone/knowledge-base/project/specs/archive" 2>/dev/null | grep -E -- '-feat-a3-reapme$' || true)"
-if [[ -n "$A3_SPEC_ENTRY" && "$A3_SPEC_ENTRY" =~ ^[0-9]{8}-[0-9]{6}-feat-a3-reapme$ ]]; then
-  pass "A3d: the spec-archive entry carries a compact YYYYMMDD-HHMMSS stamp"
-else
-  fail "A3d: spec-archive entry for feat-a3-reapme missing or not compact-stamped (got: '${A3_SPEC_ENTRY:-<none>}')"
-fi
-A3_PLAN_ENTRY="$(ls -1 "$A3/clone/knowledge-base/project/plans/archive" 2>/dev/null | grep -F 'a3-reapme' || true)"
-if [[ -n "$A3_PLAN_ENTRY" && "$A3_PLAN_ENTRY" =~ ^[0-9]{8}-[0-9]{6}- ]]; then
-  pass "A3e: the plans-archive entry carries a compact YYYYMMDD-HHMMSS stamp"
-else
-  fail "A3e: plans-archive entry for a3-reapme missing or not compact-stamped (got: '${A3_PLAN_ENTRY:-<none>}')"
-fi
-# Non-canonical arm: no spec dir existed for feat-a3-planonly, so this row
-# proves archive_kb_files stamps compact independently of the spec-dir member.
-A3_PO_ENTRY="$(ls -1 "$A3/clone/knowledge-base/project/plans/archive" 2>/dev/null | grep -F 'a3-planonly' || true)"
-if [[ -n "$A3_PO_ENTRY" && "$A3_PO_ENTRY" =~ ^[0-9]{8}-[0-9]{6}- ]]; then
-  pass "A3f: a plans-only reap entry is compact-stamped without the spec-dir member"
-else
-  fail "A3f: plans-archive entry for a3-planonly missing or not compact-stamped (got: '${A3_PO_ENTRY:-<none>}')"
-fi
+# producing. Each row is existence-required and end-to-end anchored (stamp
+# AND fname) via assert_compact_archive_entry — see its comment for the
+# shape-only contract scope. A3f/A3g observe the a3-planonly reap, whose
+# branch carries no worktree and no spec dir, proving archive_kb_files is
+# dispatched independently of the spec-dir member.
+assert_compact_archive_entry "$A3/clone/knowledge-base/project/specs/archive" \
+  '-feat-a3-reapme$' '^[0-9]{8}-[0-9]{6}-feat-a3-reapme$' \
+  "A3d" "the spec-archive entry carries a compact stamp"
+assert_compact_archive_entry "$A3/clone/knowledge-base/project/plans/archive" \
+  'a3-reapme' '^[0-9]{8}-[0-9]{6}-2026-01-01-a3-reapme-plan\.md$' \
+  "A3e" "the plans-archive entry carries a compact stamp"
+assert_compact_archive_entry "$A3/clone/knowledge-base/project/plans/archive" \
+  'a3-planonly' '^[0-9]{8}-[0-9]{6}-2026-01-01-a3-planonly-plan\.md$' \
+  "A3f" "a plans-only reap entry is compact-stamped without the spec-dir member"
+assert_compact_archive_entry "$A3/clone/knowledge-base/project/brainstorms/archive" \
+  'a3-planonly' '^[0-9]{8}-[0-9]{6}-2026-01-01-a3-planonly-brainstorm\.md$' \
+  "A3g" "the brainstorms-archive member is compact-stamped"
 
 # ===========================================================================================
 # A4 — must-PASS, second non-canonical input: a slash-bearing branch. `_safe_worktree_name`
@@ -1008,7 +1037,7 @@ printf '  pass: self-test — pass() and fail() both move the counters and the l
 # above is unbound in that slice, so the mutant dies at `set -u` and the floor scores
 # CONSTRUCTION rather than FIRES.
 # ===========================================================================================
-MIN_ASSERTIONS=43
+MIN_ASSERTIONS=47
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions executed, floor is %s — rows were removed or an arm aborted early.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2
