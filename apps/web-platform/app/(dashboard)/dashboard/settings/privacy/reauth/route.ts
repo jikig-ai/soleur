@@ -92,10 +92,29 @@ export async function POST(request: Request) {
     if (typeof body.password !== "string" || body.password.length === 0) {
       return NextResponse.json({ error: "Missing password" }, { status: 400 });
     }
-    const { error: signinErr } = await supabase.auth.signInWithPassword({
-      email: user.email,
-      password: body.password,
-    });
+    // Bounded remote sign-in — the same GoTrue cold-stall class as
+    // getUser (#8978 sweep; counsel C1: the published ~10s reauth bound
+    // claim must cover this leg). Timeout lands on the SAME 401 arm the
+    // route already has for a failed verification — fail-closed either way.
+    let signinErr: unknown;
+    {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        supabase.auth
+          .signInWithPassword({ email: user.email, password: body.password })
+          .then((r) => ({ kind: "done" as const, error: r.error }))
+          .catch(() => ({ kind: "done" as const, error: { message: "bounded_timeout" } })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timer = setTimeout(
+            () => resolve({ kind: "timeout" }),
+            Math.max(Number(process.env.SOLEUR_AUTH_GETUSER_TIMEOUT_MS) || 10_000, 1),
+          );
+        }),
+      ]);
+      clearTimeout(timer);
+      signinErr =
+        outcome.kind === "timeout" ? { message: "bounded_timeout" } : outcome.error;
+    }
     if (signinErr) {
       return NextResponse.json(
         { error: "Password verification failed" },
