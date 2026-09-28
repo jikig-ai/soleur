@@ -57,7 +57,7 @@ run_change() {  # env assignments... -> $TMP/out (GITHUB_OUTPUT), $TMP/log
       bash --noprofile --norc -eo pipefail "$TMP/change.sh" > "$TMP/log" 2>&1 ); RC=$?
 }
 out() { sed -n "s/^$1=//p" "$TMP/out"; }
-BASE_ENV=(MERGE_SHA="$A" RUN_URL=https://r RUN_ATTEMPT=1 GATE_OUTCOME=success PREFLIGHT_OUTCOME=success DISPATCH_OUTCOME=success POLL_OUTCOME=success CHANGE_OUTCOME=success APPLY_RUN= APPLY_CONCLUSION= WATERMARK="$B" SUMMARY='PR #8272 (fix: thing <!-- @bob (#8272))' TARGETS=8272 PRS=8272 COMMITS="$A" RANGE=proven RANGE_NOTE= TRACKER=)
+BASE_ENV=(RENDER_CHANGED= WHY= MERGE_SHA="$A" RUN_URL=https://r RUN_ATTEMPT=1 GATE_OUTCOME=success PREFLIGHT_OUTCOME=success DISPATCH_OUTCOME=success POLL_OUTCOME=success CHANGE_OUTCOME=success APPLY_RUN= APPLY_CONCLUSION= WATERMARK="$B" SUMMARY='PR #8272 (fix: thing <!-- @bob (#8272))' TARGETS=8272 PRS=8272 COMMITS="$A" RANGE=proven RANGE_NOTE= TRACKER=)
 run_verdict() {  # env overrides... -> $TMP/log ; $GH_LOG holds every gh argv (bodies included)
   : > "$GH_LOG"; : > "$TMP/sum"
   env GITHUB_STEP_SUMMARY="$TMP/sum" "${BASE_ENV[@]}" "$@" bash --noprofile --norc -eo pipefail "$TMP/verdict.sh" > "$TMP/log" 2>&1; RC=$?
@@ -95,6 +95,12 @@ grep -q -- '--label action-required' "$GH_LOG" && grep -q 'issue edit .* --add-l
 
 run_verdict JOB_STATUS=failure PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped SUMMARY='the cloud-init-registry.yml user_data at ccccccc' TARGETS= PRS= COMMITS= RANGE_NOTE='no commit in range touched x'
 grep -q "user_data is unchanged since the delivery watermark ${B:0:7}; this run was not applied" "$GH_LOG" && ! grep -q 'are NOT live' "$GH_LOG" && pass "V3: proven range with NO config touch -> 'unchanged' sentence, never NOT live" || fail "V3: sentence wrong"
+
+# V3b (#7582): the gate delivered on a NON-template render input (a zot digest bump in
+# zot-registry.tf), so no commit in range touched the template and `commits=` is empty. That is NOT
+# "unchanged": the render changed, and a refusal leaves it not live.
+run_verdict JOB_STATUS=failure PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped SUMMARY='the cloud-init-registry.yml user_data at ccccccc' TARGETS= PRS= COMMITS= RANGE_NOTE='no commit in range touched x' RENDER_CHANGED=true WHY='rendered user_data differs (render inputs changed: zot-registry.tf)'
+if grep -q 'NOT live' "$GH_LOG" && grep -q 'render inputs changed: zot-registry.tf' "$GH_LOG" && ! grep -q 'unchanged since' "$GH_LOG"; then pass "V3b: render changed via a non-template input -> NOT live naming the why, never 'unchanged'"; else fail "V3b: unchanged=$(grep -c 'unchanged since' "$GH_LOG") notlive=$(grep -c 'NOT live' "$GH_LOG")"; fi
 
 GH_OWNER=4100 run_verdict JOB_STATUS=failure PREFLIGHT_OUTCOME=failure DISPATCH_OUTCOME=skipped POLL_OUTCOME=skipped TARGETS= PRS= COMMITS=
 grep -q 'issues/4100/comments' "$GH_LOG" && ! grep -q 'issue create' "$GH_LOG" && pass "V4: an open owner issue receives the verdict instead of a new issue" || fail "V4: dedupe against the open owner issue failed"

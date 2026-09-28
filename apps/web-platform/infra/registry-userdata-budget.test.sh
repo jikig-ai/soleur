@@ -37,7 +37,7 @@ TS_TEST="$REPO_ROOT/plugins/soleur/test/cloud-init-user-data-size.test.ts"
 # EQUALITY, not a floor. A `checks < N` floor cannot distinguish "all arms passed" from "one
 # arm's failure was swallowed" whenever a green run emits exactly N+1 — which is how the first
 # revision shipped (floor 8, green run 9). Adding an arm must move this constant.
-EXPECTED_CHECKS=16
+EXPECTED_CHECKS=20
 
 fails=0
 checks=0
@@ -247,6 +247,21 @@ run_arm "over-broad strip eats the whole payload" \
   "sed -i 's|registry_rationale_strip = .*|registry_rationale_strip = \"/(?m)^.*\\\\n/\"|' zot-registry.tf" \
   2 \
   "grep -q 'registry_rationale_strip = \"/(?m)\\^\\.\\*' zot-registry.tf"
+
+# (#7582) Every zot-registry.tf literal the template map consumes is READ, never a stub copy — a
+# stub made a doppler_sha256 bump render byte-identical, so the dispatcher's render diff could not
+# see it. A missing literal is unmeasurable, never a silent default.
+run_arm "missing doppler_sha256 literal" \
+  "grep -vE '^[[:space:]]*doppler_sha256[[:space:]]*=' zot-registry.tf > tf.new && mv tf.new zot-registry.tf" \
+  2 \
+  "! grep -qE '^[[:space:]]*doppler_sha256[[:space:]]*=' zot-registry.tf"
+
+# (#7582) The pin regex is prefix-agnostic: a pin that moves off ghcr.io (#8714 5.3b-iii) must
+# still render (exit 0), so the dispatcher sees it as an ordinary render change on both sides.
+run_arm "non-ghcr pin prefix still renders" \
+  "sed -i -E 's|(zot_image_amd64 = \")ghcr\\.io/project-zot/|\\1registry.example.test/mirror/project-zot/|' zot-registry.tf" \
+  0 \
+  "grep -qE 'zot_image_amd64 = \"registry\\.example\\.test/mirror/project-zot/zot-linux-amd64' zot-registry.tf"
 
 # --- non-vacuity ------------------------------------------------------------------------
 if [ "$checks" -ne "$EXPECTED_CHECKS" ]; then

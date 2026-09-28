@@ -13,6 +13,25 @@ tags: [registry, zot, cloud-init, dispatcher, delivery]
 tracked: the delivering PR(s), and/or a `tracker` you name on a re-fire, or — when nothing is
 derivable — one open owner issue carrying `action-required`.
 
+## What the gate delivers (#7582)
+
+The gate decides on the **rendered** user_data, not the template: it renders
+`registry-userdata-budget.sh` at the delivery watermark and at the head and compares the bytes.
+It wakes on `cloud-init-registry.yml`, `zot-registry.tf` and `variables.tf`; a zot digest bump
+alone delivers, a comment-only edit or an unrelated `variables.tf` edit does not.
+`registry_server_type` (which the offline render cannot see) is compared by value. Reproduce the
+render it compares:
+
+```bash
+bash apps/web-platform/infra/registry-userdata-budget.sh --json /tmp/head-render.yml
+```
+
+A `gate-failed` verdict can now also mean the head render was unmeasurable or over Hetzner's
+32,768 B cap — the gate's `::error::` says which; fix the render and let the next push (or a
+re-fire) deliver. A delivery decided by a non-template input (e.g. `zot-registry.tf`) names the
+render change in its `Delivering:` line, and — having no template commit to attribute — records
+its verdict on the owner issue.
+
 ## Re-fire after a refusal
 
 ```bash
@@ -41,7 +60,7 @@ gh api --paginate --slurp "repos/jikig-ai/soleur/issues/N/comments?per_page=100"
 | `apply-failed` | the replace RAN and did not conclude success; the host may be dark, the volume is preserved | re-dispatch `registry-host-replace` |
 | `unverified` | the apply's conclusion could not be read in the poll window (job stayed green) | read the apply run; the delivering change's follow-through is the authority |
 | `cancelled` | the job hit its ceiling; a replace may be in flight | read the run before re-firing |
-| `gate-failed` | the delta gate could not classify the diff (compare API) | read the gate's `::error::`, re-fire |
+| `gate-failed` | the delta gate could not classify the diff (compare API), or the head render is unmeasurable / over the 32,768 B cap (#7582) | read the gate's `::error::`, fix, re-fire |
 | `undetermined` | no step failed yet the job did not succeed (a checkout failure) | read the run |
 
 The body's `Delivering:` line names the change(s); `(attribution unproven: …)` means the range
