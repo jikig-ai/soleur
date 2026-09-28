@@ -13,7 +13,6 @@ import {
   verifiedUserId,
   boundedAuthGetUser,
   sessionJwtEmailForVerifiedUser,
-  boundedAuthGetUser,
 } from "@/server/request-auth";
 import logger from "@/server/logger";
 
