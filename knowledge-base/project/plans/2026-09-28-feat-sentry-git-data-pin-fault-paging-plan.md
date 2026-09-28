@@ -947,7 +947,7 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
     apps/web-platform/infra/sentry/alert-reference.json
   ```
 
-- [ ] AC6: The `apply-sentry-infra.yml` `plan_pr` job is green on the head SHA. Its plan shows **exactly** `1 to add, 1 to change, 0 to destroy`: `sentry_alert.git_data_host_key_pin_fault` is created and `sentry_alert.art17_erasure_incomplete` is updated in place (`~`, never `-/+`). Any other drift in the full-root plan blocks the merge. The reference gate and `sentry-destroy-required` are green.
+- [x] AC6: The `apply-sentry-infra.yml` `plan_pr` job is green on the head SHA. Its plan shows **exactly** `1 to add, 1 to change, 0 to destroy`: `sentry_alert.git_data_host_key_pin_fault` is created and `sentry_alert.art17_erasure_incomplete` is updated in place (`~`, never `-/+`). Any other drift in the full-root plan blocks the merge. The reference gate and `sentry-destroy-required` are green. *(Verified 2026-09-28: `plan_pr` on the final head `9d1a8669`, apply-sentry-infra run 36451228924: `Plan: 1 to add, 1 to change, 0 to destroy.`; `plan_pr` and `sentry-destroy-required` success. The earlier head `5c0e49d9` read the same in run 36443522928.)*
 - [x] AC7: This command prints `0` (append-only: no deleted tokens in dated records):
 
   ```bash
@@ -965,13 +965,13 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
   - The README's `issue-alerts.tf` Terraform-owned figure is M − `S(issue-alerts.tf) | grep -c 'ignore_changes = all'` (expected 33).
   - `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
 - [x] AC9: `git grep -n 'none pages until #8572' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'` returns nothing. The runbook names `git-data-host-key-pin-fault` and has a push pin-fault row.
-- [ ] AC10: The PR body's first line states that the merge mutates production through `apply-sentry-infra.yml` and `web-platform-release.yml`. The body carries `Ref #8572`, not `Closes`, and notes the `GitDataHostKeyPinError` grouping-name change.
-- [ ] AC11: Every required check passes by name on the exact head SHA before the admin merge.
+- [x] AC10: The PR body's first line states that the merge mutates production through `apply-sentry-infra.yml` and `web-platform-release.yml`. The body carries `Ref #8572`, not `Closes`, and notes the `GitDataHostKeyPinError` grouping-name change. *(Verified 2026-09-28: PR #9150 body line 1 states the prod mutation; `Ref #8572`; the `GitDataHostKeyPinError` grouping change is noted.)*
+- [x] AC11: Every required check passes by name on the exact head SHA before the admin merge. *(Verified 2026-09-28: met via auto-merge, not an admin merge — all 26 required checks were success on the final head `9d1a8669` when auto-merge fired.)*
 
 ### Post-merge (automated in `soleur:ship`)
 
-- [ ] AC12: The first successful `apply-sentry-infra.yml` run whose head contains the merge SHA logs the live literal `sentry_alert live fidelity: PASS (all` (not the FIXTURE literal). The first successful `web-platform-release.yml` run for the merge SHA completes. Both run ids are recorded on #8572.
-- [ ] AC13: #8211 carries the Phase 6 comment: the two-part check, boot-only before the flip, and the re-erasure dependency. #8572 is closed with both run URLs.
+- [x] AC12: The first successful `apply-sentry-infra.yml` run whose head contains the merge SHA logs the live literal `sentry_alert live fidelity: PASS (all` (not the FIXTURE literal). The first successful `web-platform-release.yml` run for the merge SHA completes. Both run ids are recorded on #8572. *(Verified 2026-09-28: apply-sentry-infra run 36454249853 (push, on the merge SHA) logged `sentry_alert live fidelity: PASS (all 35 in-scope rules match the committed reference field-for-field)`; the merge-SHA release run 36454250110 built the release (its deploy job skipped by design); the deploy arm 36456390256 (on `5804b728`, the merge's direct child, no `apps/web-platform/` change) read `MATCH=exact DEPLOY=success`, and served `CONTAINS`.)*
+- [x] AC13: #8211 carries the Phase 6 comment: the two-part check, boot-only before the flip, and the re-erasure dependency. #8572 is closed with both run URLs. *(Verified 2026-09-28: #8211 issuecomment-5874980620; #8572 closed with both run URLs.)*
 - [ ] AC14: The evidence-only PR appends the dated verification lines to the register and the audit, and merges. On the red path, it records the failed state instead.
 
 ## Domain Review

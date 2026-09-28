@@ -706,3 +706,9 @@ Dated text above is not rewritten.
   deployed release, not the rule's name; until it exists, `scripts/sentry-alert-live-fidelity.sh`'s
   `sentry_alert live fidelity: PASS` is that read. #8211's per-id re-erasure path remains a separate, hard precondition. No earlier entry
   is edited.
+- **Condition met 2026-09-28 (#8572).** PR #9150 merged as `7541fb13`; apply-sentry-infra run
+  36454249853 read `sentry_alert live fidelity: PASS (all 35 in-scope rules …)`, and the release
+  serving `7541fb13` finished deploying at 2026-09-28T17:15:30Z (deploy arm 36456390256). So the
+  "#8572 paging" precondition holds as configured and verified; email delivery is not yet observed
+  (nothing has fired), and the per-id re-erasure path is still the open hard precondition. Record:
+  `knowledge-base/legal/audits/2026-09-counsel-reattestation-5914.md`, "Verification 2026-09-28 (#8572)".
