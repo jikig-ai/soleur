@@ -1181,8 +1181,13 @@ if [ "$CASE_RC" -ne 0 ] && ! undef && ! outF PAST_KILL && has '^docker start ' \
 else
   no "T42a SIGTERM did not produce a rolled-forward abnormal outcome (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
+# `--default-signal=PIPE` (GNU env, the FIRST run_case env arg so env parses it as an option): a runner
+# that starts this suite with SIGPIPE IGNORED (measured: the CI deploy-script-tests leg) hands that
+# disposition down, and bash cannot reset a signal ignored on entry. The write then fails EPIPE, the
+# script dies through `die` (rc=1, no abnormal_exit), and this case tests the wrong path. Production
+# receives the default disposition from sshd, which is what this row pins.
 run_case "$CUTOVER" 'trap cleanup EXIT; DRY_RUN=0; FREEZE_HELD=1; exec 1> >(:); wait $! 2>/dev/null; log "write into the dead pipe"; printf PAST_PIPE >&2' 'cleanup rollback' \
-  FINDMNT_MOUNT_SRC=/dev/sdz9 ACTIVE_UNITS="$T37_ACT"
+  --default-signal=PIPE FINDMNT_MOUNT_SRC=/dev/sdz9 ACTIVE_UNITS="$T37_ACT"
 if [ "$CASE_RC" -ne 0 ] && ! undef && ! outF PAST_PIPE && has '^umount[[:space:]]' && has '^mount /dev/disk/by-label/workspaces_plain ' \
   && markerF "$DM result=cutover_aborted outcome=rolled_back abnormal_exit=1"; then
   ok "T42b a closed stdout pipe mid-freeze (SIGPIPE) aborts into cleanup, which rolls back and records abnormal_exit=1 despite logging into the dead pipe"
