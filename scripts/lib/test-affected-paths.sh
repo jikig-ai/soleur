@@ -986,6 +986,16 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_REAP_ARCHIVE_PERSISTENCE_TEST_SH_PATHS=(
+  "knowledge-base/project/plans/2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_STALE_LOCK_SWEEP_TEST_SH_PATHS=(
