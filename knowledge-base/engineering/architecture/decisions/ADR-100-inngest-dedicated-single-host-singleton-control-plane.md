@@ -1579,7 +1579,7 @@ instead — effective permission, independent of membership visibility — and h
 `observed authorAssociation=CONTRIBUTOR` next to `would close with verdict=PASS` — the reading and
 its fix in one log), so the CODEOWNERS-derived fallback held in reserve was not needed.
 
-This addendum flips nothing. ADR-100 stays `adopting`; the `accepted` flip is #7230 and the day-7
+This addendum flips nothing. ADR-100 stays `adopting`; the `accepted` flip is #6178 `[corrected 2026-09-28, #7230: this read #7230, which closes with the placement rule and never owned the flip]` and the day-7
 soak reading it depends on is the 2026-09-19 (#6178) addendum above.
 
 ## Addendum — 2026-09-20 (#8079) — `op=registry-probe` becomes three-valued, and the dark-host gate gains a second consumer

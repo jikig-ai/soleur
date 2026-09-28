@@ -29,7 +29,7 @@ Operator confirmed the decision 2026-05-18 during brainstorm Phase 1.2; recorded
 
 - **Option C: Inngest "function-as-CI" — keep claude-code-action, just have Inngest dispatch a GitHub Actions workflow_dispatch.** Inngest function fires on schedule, calls the GitHub API to dispatch the same `claude-code-action`-based workflow that exists today. **Pros:** zero migration of the agent invocation itself; reuses existing battle-tested action. **Cons:** doesn't actually migrate cron off GitHub Actions — defeats the purpose of TR9 entirely (the rationale is replacing GitHub Actions' jitter + lack-of-replay/idempotency with Inngest's). The cron scheduling moves but the execution doesn't; the failure modes the migration is meant to fix (silent failure, replay safety, observability) remain.
   - **Scope note (2026-06-02, terraform-drift migration):** this Option-C rejection is specific to the **agent-loop** crons, whose whole point was to move `claude-code` execution off GHA. For a **credential-heavy infra cron** whose execution *must* stay in an ephemeral runner (e.g. `scheduled-terraform-drift`: terraform binary + R2/AWS/Doppler `prd_terraform` cloud-admin creds that must NOT be parked on the long-lived app host), Option C is the *correct* shape — only goal (a) "kill GHA scheduling jitter" applies; goal (b) "move execution in-process" is actively harmful. See `apps/web-platform/server/inngest/functions/cron-terraform-drift.ts`. Do not mis-cite this rejection as a blanket ban on Inngest→workflow_dispatch.
-  - **Anti-circularity corollary (2026-08-03, #6808 — `workspaces-luks-verify`):** the scope note above says *when* Option C is the right shape. This corollary says when **even Option C is wrong**, and a native GHA `schedule:` is the only correct trigger. **A verifier must not be EXECUTED by the host it verifies.** Be precise about which half: since the #6178 dedicated-host cutover (ADR-100, which explicitly supersedes the #5450 same-host durable-backend framing) the Inngest *scheduler* runs on its own host (`hcloud_server.inngest`, 10.0.1.40), so scheduling is genuinely off web-1. *Execution* is not. Inngest sends every function step to the serve URL the app registers — `serveHost` = `https://app.soleur.ai` in `apps/web-platform/app/api/inngest/route.ts` — and `cloudflare_record.app` resolves that name to **web-1** only, with no failover to web-2 (serving-weight 0, ADR-143 D2). `[corrected 2026-09-28, #7230]` `workspaces-luks-verify` exists to detect that web-1's `/mnt/data` is no longer on the LUKS mapper — up to and including "web-1 is gone". Under Option C the `cron-*.ts` that issued the dispatch would run on the subject itself: if web-1 is down the callback never lands, the function never executes, no `workflow_dispatch` is issued, and the check reports nothing in exactly the failure it was built for — silence, read as health. That is not a jitter or an observability trade-off, it is a circular dependency between a monitor and its target, and no amount of retry or alerting inside the dispatcher can remove it. The test is mechanical: *if the thing being checked fails completely, can the trigger still fire?* Where the answer is no, the trigger must live outside the failure domain — a native `schedule:` (no dependency on web-1) or a third-party scheduler. Note this cuts the opposite way from goal (a): the native trigger accepts GHA scheduling jitter, and its own dropped-run mode is covered one layer further out by the `workspaces-luks-verify` Sentry Crons monitor, because a monitor that cannot report a missed run has the same defect one level up. Applies to any host-state verifier, not only this one. **This corollary is a consequence of a topology, not a law of nature: it binds only because Inngest function EXECUTION is pinned to web-1 by the registered serve URL (`serveHost` = `https://app.soleur.ai`) plus `cloudflare_record.app` resolving to web-1 only. `[corrected 2026-09-28, #7230]` Decoupling execution from web-1 is tracked at #7230 (the placement rule) and #9137 (placement-aware execution) — which functions spawn `claude-code` (I1) or operate on the sole-copy `/mnt/data` LUKS volume (ADR-119) is recorded per function in `apps/web-platform/server/inngest/execution-placement.ts`, and those host-bound functions are why the realistic outcome is a split rather than a move. If that split ever lands, re-derive this corollary against the then-current topology instead of assuming it still holds.**
+  - **Anti-circularity corollary (2026-08-03, #6808 — `workspaces-luks-verify`):** the scope note above says *when* Option C is the right shape. This corollary says when **even Option C is wrong**, and a native GHA `schedule:` is the only correct trigger. **A verifier must not be EXECUTED by the host it verifies.** Be precise about which half: since the #6178 dedicated-host cutover (ADR-100, which explicitly supersedes the #5450 same-host durable-backend framing) the Inngest *scheduler* runs on its own host (`hcloud_server.inngest`, 10.0.1.40), so scheduling is genuinely off web-1. *Execution* is not. Inngest sends every function step to the serve URL the app registers — `serveHost` = `https://app.soleur.ai` in `apps/web-platform/app/api/inngest/route.ts` — and `cloudflare_record.app` resolves that name to **web-1** only, with no failover to web-2 (serving-weight 0, ADR-143 D2). `[corrected 2026-09-28, #7230]` `workspaces-luks-verify` exists to detect that web-1's `/mnt/data` is no longer on the LUKS mapper — up to and including "web-1 is gone". Under Option C the `cron-*.ts` that issued the dispatch would run on the subject itself: if web-1 is down the callback never lands, the function never executes, no `workflow_dispatch` is issued, and the check reports nothing in exactly the failure it was built for — silence, read as health. That is not a jitter or an observability trade-off, it is a circular dependency between a monitor and its target, and no amount of retry or alerting inside the dispatcher can remove it. The test is mechanical: *if the thing being checked fails completely, can the trigger still fire?* Where the answer is no, the trigger must live outside the failure domain — a native `schedule:` (no dependency on web-1) or a third-party scheduler. Note this cuts the opposite way from goal (a): the native trigger accepts GHA scheduling jitter, and its own dropped-run mode is covered one layer further out by the `workspaces-luks-verify` Sentry Crons monitor, because a monitor that cannot report a missed run has the same defect one level up. Applies to any host-state verifier, not only this one. **This corollary is a consequence of a topology, not a law of nature: it binds only because Inngest function EXECUTION is pinned to web-1 by the registered serve URL (`serveHost` = `https://app.soleur.ai`) plus `cloudflare_record.app` resolving to web-1 only. `[corrected 2026-09-28, #7230]` Decoupling execution from web-1 is tracked at #9137 (placement-aware execution; the placement rule itself landed with #7230) — which functions spawn `claude-code` (I1) or operate on the sole-copy `/mnt/data` LUKS volume (ADR-119) is recorded per function in `apps/web-platform/server/inngest/execution-placement.ts`, and those host-bound functions are why the realistic outcome is a split rather than a move. If that split ever lands, re-derive this corollary against the then-current topology instead of assuming it still holds.**
   - **Addendum — 2026-09-24 (#8495):** a native `schedule:` alone measured one run per 2–7 h for the `*/15` Inngest watchdog, so watchers of the scheduling substrate are now dispatched by an in-process web-server clock with `schedule:` as the fallback, under an explicit eligibility rule — see [ADR-248](ADR-248-watchdog-dispatch-clock-runs-in-the-web-server.md).
 
 ## Decision
@@ -161,6 +161,8 @@ Oneshots and event-triggered functions do NOT get `sentry_cron_monitor` resource
 
 ### Registration checklist (a NEW `cron-*` claude-eval function)
 
+Rows 2, 6 and 8 apply to EVERY new served Inngest function (event, oneshot and agent functions too), not only claude-eval crons.
+
 ``[Added 2026-06-30 — #5631. Revised 2026-07-17 — #6589: was eight; the `-target=` allow-list location is gone (full-root apply), leaving seven. Revised 2026-09-28 — #7230: row 8, the execution-placement manifest, makes it eight again.]`` Adding a recurring claude-eval cron touches **eight** gated locations, not the "four" (handler + manifest + metadata + serve route) often cited in PR bodies. Each location below has a CI gate that fails closed; a stale or bot-generated PR that ran before some gate existed will look green until rebased onto current `main`. Mirror the structurally-closest live cron (claude-eval + `safeCommitAndPr` ⇒ `cron-seo-aeo-audit.ts`) signature-for-signature rather than writing the handler from the substrate's prose.
 
 | # | Location | What to add | Gate that catches an omission |
@@ -172,9 +174,9 @@ Oneshots and event-triggered functions do NOT get `sentry_cron_monitor` resource
 | 5 | `server/inngest/functions/_cron-claude-eval-substrate.ts` | `CRON_BASH_ALLOWLISTS` entry (or `TIER2_DEFERRED_CRONS` if deferred) — substrate-contained crons MUST be in exactly one | `cron-containment-classify` |
 | 6 | `test/server/inngest/function-registry-count.test.ts` | Bump the `route.ts functions array` count | `function-registry-count (a)` |
 | 7 | `infra/sentry/cron-monitors.tf` | `sentry_cron_monitor` resource for the slug (declaring it applies it — the full-root apply needs no workflow edit) | `sentry-monitor-iac-parity` + `function-registry-count (c)` |
-| 8 | `server/inngest/execution-placement.ts` | `EXECUTION_PLACEMENT` row with the tightest class the function's markers imply (Guard 2 rejects a wrong `portable`) | `execution-placement.test.ts` Guard 1 |
+| 8 | `server/inngest/execution-placement.ts` | `EXECUTION_PLACEMENT` row, classed by the first matching rule in that file's header (Guard 2 rejects a wrong `portable`) | `execution-placement.test.ts` Guard 1 |
 
-Plus the `cron-tier2-parity` sibling-set sweep (`.github/enforcement-contracts.json`) forces `cron-safe-commit-parity.test.ts` (add to `MIGRATED_PROMPT` for safe-commit crons) and `cron-shared.test.ts` into the same diff whenever `cron-manifest.ts` changes. Validate locally before push: `bunx vitest run test/server/inngest/{function-registry-count,sentry-monitor-iac-parity,cron-containment-classify,cron-safe-commit-parity,cron-shared}.test.ts`.
+Plus the `cron-tier2-parity` sibling-set sweep (`.github/enforcement-contracts.json`) forces `cron-safe-commit-parity.test.ts` (add to `MIGRATED_PROMPT` for safe-commit crons) and `cron-shared.test.ts` into the same diff whenever `cron-manifest.ts` changes. Validate locally before push: `bunx vitest run test/server/inngest/{function-registry-count,sentry-monitor-iac-parity,cron-containment-classify,cron-safe-commit-parity,cron-shared,execution-placement}.test.ts`.
 
 ## Cost Impacts
 
@@ -262,7 +264,7 @@ later split is a data change instead of an audit.
 | **(c) keep execution on the one step-executing host (web-1)** | **Adopt now** | Existing mechanisms already deliver most of (a)'s benefits. Anti-circularity is served by the GHA-native schedule and the ADR-248 clock on both web hosts. Restart coupling is absorbed by Inngest retries plus the ADR-078 drain lease. A web-1 outage is a product outage that Better Stack already pages. It also needs no production write. |
 | **Placement-aware execution at the ADR-143 Phase-3 flip** | **Designated target (#9137)** | `portable` functions run on any web host, `host-affine` functions stick to one host, and `volume-bound` functions stay on the sole-copy LUKS volume holder. Losing web-1 then no longer drops portable work, and the singleton control plane is untouched. |
 | **(a) second SDK worker on the Inngest host** | **Fallback only (#9137)**, for a verifier that must survive the loss of *every* web host | It would put a Node worker and prd secrets on the deliberately minimal singleton control-plane host, turning ADR-100 SEC-H3's *indirect* exposure into direct secret read. It adds a second deploy target and version-skew surface, and a new app id means new function ids, with a double-fire-or-gap migration. |
-| **(b) separate cron deployable** | **Reject** | It duplicates the build, deploy and version-drift pipelines for small functions. The importability boundary it offers is delivered inside one deployable by the client-free leaf pattern (`cron-manifest.ts`) plus the portable-boundary guard. |
+| **(b) separate cron deployable** | **Reject** | It duplicates the build, deploy and version-drift pipelines for small functions. The importability boundary it offers is delivered inside one deployable by the client-free leaf pattern (`cron-manifest.ts`) plus the portable-boundary guard. ADR-078's deferred Option 2 (an isolated cron-worker container) is the same shape and stays deferred on its own criteria; reopening it reopens this row. |
 
 **Constraint on the target.** A serve URL belongs to an app id, and it is last-writer-wins per app
 id (ADR-100 Phase-0 spike finding 1). One app id therefore has one serve URL, and a single-app-id deployment
@@ -300,26 +302,47 @@ as a separate `<id>-failure` function, inherits its parent's class and has no ro
 
 ### Enforcement
 
-The rule is enforced by `apps/web-platform/test/server/inngest/execution-placement.test.ts`; read
-the guards there rather than a copy here. That suite enforces only the `portable` boundary.
-Over-pinning is safe and is not guarded, and the `host-affine`/`volume-bound` split is declared and
-reviewed until a placement-aware registry consumes it (#9137).
+The rule is checked by `apps/web-platform/test/server/inngest/execution-placement.test.ts`; read
+the guards there rather than a copy here. Of the three classes, the suite checks only the
+`portable` boundary (Guard 2) and that every served function has a row (Guard 1). Over-pinning is
+safe and is not guarded, and the `host-affine`/`volume-bound` split is declared and reviewed until
+a placement-aware registry consumes it (#9137). Guards 3 and 4 are regression lints over string
+literals and import edges: they catch a verifier or a second step executor named the ordinary way,
+not a deliberate evasion (see Known gaps).
 
 The Guard 2 allowlist of shared exports a `portable` function may import is seeded from what the
 code imports today, and adding to it is an architecture change, not a test fix.
 
-Single-host execution itself is enforced in two halves. The serve URL half is Guard 4 of that suite
-plus guard (g) of `test/server/inngest/function-registry-count.test.ts`. The DNS half is
+Single-host execution is linted in two halves. The serve URL half is Guard 4 of that suite plus
+guard (g) of `test/server/inngest/function-registry-count.test.ts`. The DNS half is
 `apps/web-platform/infra/lb-weight-gate.test.sh` Condition C, which holds `cloudflare_record.app`
-to web-1. Condition C runs only on changes under `apps/web-platform/infra/**`, which is the only
-place `cloudflare_record.app` can change.
+to web-1. Condition C runs in `infra-validation.yml`, which is path-filtered to infrastructure
+changes, and `cloudflare_record.app` can only change there; a change to `route.ts` alone does not
+run it, which is the case Guard 4 covers. Condition C reads `dns.tf` only, so a Cloudflare origin
+rule or Workers route on `app.soleur.ai` would re-point step traffic unseen (Known gaps).
 
 **Known gaps** the guards cannot detect:
 
 - process-local module state, for example a `globalThis` single-flight map;
-- HTTP calls to a private IP or loopback address;
-- a forbidden workflow named by template-literal assembly, such as `` `workspaces-luks-${x}.yml` ``;
-- a dispatch by numeric workflow id, where no filename appears at all.
+- HTTP calls to a private IP or loopback address (the portable `cron-inngest-cron-watchdog` calls
+  the Inngest host's private API, so it needs a host on the private network);
+- a `process.env` read by a computed key, and a volume path built by concatenation or `path.join`
+  (Guard 2 sees literal keys and literal path prefixes only; generic secret readers use computed
+  keys on nearly every path);
+- top-level side effects in the two pinning-definer modules, which run on import but are not scanned
+  (only their allowlisted exports' bodies are);
+- `postSentryHeartbeat`'s best-effort `/var/lib/inngest/cron-fires` write: host-local, but a
+  debug record only a host-side deploy-state dump reads, so it does not constrain placement;
+- a forbidden workflow named by assembly (template literal, concatenation, `.join`), by its display
+  name, by numeric workflow id, from a data file read at runtime, or by the Claude child at run time
+  through its `gh api` allowlist — Guard 3 matches whole string literals only;
+- code loaded by a runtime-computed path: `cron-ux-audit.ts`'s three non-literal imports of the
+  ux-audit bot scripts are the only exemption, pinned by argument name and count, and the scripts
+  they load are outside the walked closure;
+- a step executor outside `app/`, `server/`, `lib/`, `pages/`, `src/` and the root
+  `middleware`/`instrumentation` files, or loaded through `eval` or a computed specifier;
+- step traffic re-pointed at the edge (a Cloudflare origin rule or Workers route), which neither
+  Guard 4 nor Condition C reads.
 
 ### The corollary, re-derived for today's topology
 

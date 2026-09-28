@@ -2230,7 +2230,7 @@
 },
 "19ydjgm": {
 "title": "Email-triage claim/finalize writes (email-on-received) (Inngest-fired function, executed on web-1)",
-"technology": "PostgreSQL",
+"technology": "HTTPS (supabase-js service client)",
 "source": {
 "model": "platform.webapp.api"
 },

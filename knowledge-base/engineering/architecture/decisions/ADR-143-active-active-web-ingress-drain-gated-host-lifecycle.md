@@ -302,6 +302,6 @@ Giving a second host serving weight for `/api/inngest` step calls reopens ADR-24
 process-local single-flight guard that stops duplicate paid Claude sessions assumes one
 step-executing host).
 
-The Phase-3 flip must also honour the execution placement classes (`portable`, `host-affine`,
+**Addendum — 2026-09-28 (#7230):** the Phase-3 flip must also honour the execution placement classes (`portable`, `host-affine`,
 `volume-bound`) recorded per function in `apps/web-platform/server/inngest/execution-placement.ts`
 (ADR-033 amendment 2026-09-28, #7230; placement-aware execution is #9137).
