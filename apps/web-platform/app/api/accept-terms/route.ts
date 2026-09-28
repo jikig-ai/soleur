@@ -6,6 +6,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { safeReturnTo } from "@/lib/safe-return-to";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import { userHasEffectiveByokKey } from "@/server/byok-resolver";
 import {
@@ -63,11 +64,9 @@ export async function POST(request: Request) {
   if (!valid) return rejectCsrf("api/accept-terms", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -91,19 +90,19 @@ export async function POST(request: Request) {
   // heartbeat for tc_accepted_at.
   const serviceClient = createServiceClient();
   const { error } = await serviceClient.rpc("accept_terms", {
-    p_user_id: user.id,
+    p_user_id: userId,
     p_version: TC_VERSION,
     p_doc_sha: TC_DOCUMENT_SHA,
   });
 
   if (error) {
     Sentry.withIsolationScope(() => {
-      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
       reportSilentFallback(error, {
         feature: "accept-terms",
         op: "record",
         message: "Failed to record acceptance",
-        extra: { userId: user.id },
+        extra: { userId },
       });
     });
     return NextResponse.json(
@@ -112,6 +111,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const redirect = await getRedirectDestination(supabase, user.id, nextHop);
+  const redirect = await getRedirectDestination(supabase, userId, nextHop);
   return NextResponse.json({ ok: true, redirect });
 }

@@ -196,3 +196,55 @@ Review-round extensions on the same amendment (PR #8984 panel):
   on document-level arithmetic since the probe's per-request waterfall
   misread Playwright's `timing()` unit convention at first measurement
   (fixed in the same PR).
+
+## Amendment — 2026-09-27 (#8978 residual cold tiers)
+
+Post-merge probes of the first amendment (#8984) showed the ≤500 ms FCP
+criterion still unmet: cold document TTFB 2.5–43.4 s, driven by unbounded
+remote Supabase legs stalling 20–38 s per call on a cold upstream (Sentry
+span evidence: `check_my_revocation` 26.4–28.5 s; `resolveIdentity`'s
+`users`/`workspace_members` pair 20.7–37.5 s; `auth/v1/user` 3–6 s; no
+queueing gap anywhere — every tier is remote-call latency). This amendment
+extends the decision with three mechanisms.
+
+- **Bounded wait on every Supabase-facing leg.** `check_my_revocation` RPC,
+  the T&C `users` select, and both `resolveIdentity` selects carry
+  `AbortSignal.timeout` bounds (8 s — above the largest observed legitimate
+  cold miss at 6.9 s, below the 20–38 s stall class). postgrest-js settles
+  an abort as an error OBJECT (`{hint: "Request was aborted (timeout or
+  manual cancellation)"}`, never a rejection), so each timeout lands on the
+  leg's PRE-EXISTING arm: revocation grace (positive-only verdict cache
+  untouched), T&C `tcError` fail-closed redirect, identity degrade
+  (role "prd", orgId/subscriptionStatus null). No new verdict semantics were
+  introduced; the timeout is distinguished in telemetry via an
+  abort-shaped-error check (`revocation_gate.rpc_timeout`,
+  `mw_auth.timeout` ops).
+- **`getUser()` bounded — gated arm fired.** The prior amendment deferred an
+  mw-auth bound pending evidence of recurring stalls; the 2026-09-27 probe
+  measured 2.6–4.9 s `mw-auth` on 4 of 6 samples, so the arm fired. gotrue's
+  `getUser()` exposes no `abortSignal` — the bound is a `Promise.race` vs a
+  10 s `setTimeout`. A timeout reclassifies onto the EXISTING `!user` →
+  `/login` redirect arm (verified-identity semantics unchanged); a genuine
+  throw still propagates to 500 as before. The raced loser settles in the
+  background — its `setAll` cookie writes mutate closure state, never an
+  already-returned redirect.
+- **In-flight dedup for revocation misses.** Concurrent cold misses on the
+  same `${jwtSub}:${iat}` cache key shared one RPC each before; a
+  `Map<key, Promise<RevocationOutcome>>` now coalesces them — joiners share
+  the work but apply the positive-only store/arm rules independently, and
+  the entry is deleted on settle so a later cold request re-queries.
+- **Periodic upstream warm-up.** `server/supabase-edge-warmer.ts` issues a
+  bounded `GET <supabase>/rest/v1/` with the anon key every ~18 s from the
+  Node render/server dispatcher — the span data named cold PostgREST
+  compute/transport as the dominant tier, and this is the cheap amortizer.
+  Failure-tolerant by contract (a throwing tick resolves to a warn, never a
+  rejection), `unref`'d, heartbeat-logged every ~6 min. One recorded caveat:
+  middleware's Next-managed fetch dispatcher MAY hold a separate undici pool
+  — the warmer provably covers the render/API path; the per-leg bounds cap
+  the middleware cold remainder either way.
+
+Consequences: the residual 20–38 s document/middleware stalls become bounded
+≤ ~8–10 s degrade-path outcomes; the mount fan-out's N-fold cold-miss
+amplification collapses to one RPC per key; and the warm-up removes the cold
+class itself between requests. The ≤500 ms AC remains a Phase-2 measurement
+target, not a claim this amendment satisfies by construction.

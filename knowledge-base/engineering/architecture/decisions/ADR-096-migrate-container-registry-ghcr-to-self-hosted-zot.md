@@ -1632,3 +1632,75 @@ implies no second inngest replace.
 - **It does not delete the fresh-boot trail's `app_ghcr_*` stages** (`fresh-host-boot-trail.sh`).
   #8651's probe grades that script's output until #8651 closes, so its format must not move first.
   They are now a tripwire that cannot fire.
+
+## Amendment 2026-09-27 (#8714) — 5.4: the GHCR token minter and the host-side GHCR credential plumbing are retired
+
+### Decision
+
+Delete what 5.3b-i left behind with no reader:
+
+- `cron-ghcr-token-minter` (the Inngest function, disabled since July behind
+  `GHCR_MINTER_DISABLED=true`), its test, its route/manifest/metadata entries, and the
+  `ghcr-minter-live-6031` follow-through probe (its tracker closed 2026-07-06; its Sentry monitor
+  was already gone).
+- `ghcr-minter-doppler-token.tf`: `doppler_service_token.ghcr_minter` (a **read/write** `soleur/prd`
+  token) and `doppler_secret.ghcr_minter_doppler_token` (`GHCR_MINTER_DOPPLER_TOKEN`).
+- `ghcr-read-credential.tf`: `doppler_secret.ghcr_read_user` / `.ghcr_read_token`
+  (`GHCR_READ_USER` / the revoked `GHCR_READ_TOKEN`), and `var.ghcr_read_*`.
+
+The per-merge apply destroys the four Doppler objects through the bare `-target` lines kept in
+`apply-web-platform-infra.yml` for that merge (the #9062 precedent), acknowledged with
+`[ack-destroy]`. With the keys gone from `soleur/prd`, the next `ci-deploy.sh` download no longer
+puts them in the app container env, which closes the residual the 5.3b-i bullet "remain until 5.4"
+recorded.
+
+### What this does NOT do
+
+- **It does not remove the four `-target` lines.** They plan the deletes; once applied they plan
+  nothing, and #9080 removes them (with the parity describe and the census `INTENDED_DESTROYS`
+  entries that pin them).
+- **Non-Terraform residue stays (#9080):** `GHCR_MINTER_DISABLED` in Doppler `soleur/prd`, the
+  `prd_ghcr` branch config, `prd_terraform`'s own `GHCR_READ_*` entries if they outlive the root
+  delete, and the App manifest's `packages: read` grant (a manifest-only removal reads as
+  `permission_unexpected_grant` to the drift guard while the live App still has it).
+- **`GHCR_MINTER_DISABLED` is load-bearing until no rollback-eligible image carries the minter.**
+  Every image built before this change still reads it; a canary rollback, `op=rollback` or a revert
+  that brings one back without the flag runs the minter, which pages `GHCR_MINTER_DOPPLER_TOKEN not
+  set` every 20 minutes because that token is destroyed here.
+- **A revert restores code, not credentials.** Re-adding `var.ghcr_read_*` (no default) after the
+  destroy fails every plan of this root if `prd_terraform` no longer carries the values, and
+  re-creates a read/write `prd` service token if it does. Roll back app code only.
+- **The #6178 soak probe keeps the minter in its population** (`RETIRED_IDS` in
+  `scripts/followthroughs/inngest-soak-6178.sh`): its in-window runs are still scanned, and its
+  absence from the registry is not read as `registry_drift`.
+- **5.3b-iii and 5.6 are unchanged** (the anonymous `ghcr.io` pulls, the egress allow, and this
+  ADR's status flip).
+
+## Amendment 2026-09-28 (#8714 step 5.3b-iii, part 1) — the cosign verifier leaves ghcr.io
+
+This supersedes the cosign half of the 2026-09-24 amendment's "The anonymous `ghcr.io` pulls … are
+unchanged" bullet. The zot half is part 2 (PR 2b of the same step).
+
+- **What moved.** `ci-deploy.sh` `COSIGN_IMAGE` now names
+  `gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870`.
+  That is the Sigstore project's own registry, at the **same manifest digest** as the former
+  `ghcr.io/sigstore/cosign/cosign` ref. Measured 2026-09-28: an anonymous pull under the exact
+  `COSIGN_ANON_CONFIG` (#8036 1a) ran `v3.1.1`, and both refs resolved to one local image ID. The
+  digest pin, not the registry, is the trust anchor, so no verification semantics change.
+- **Why this is not Alternatives row 6.** Row 6 rejects a managed registry for **our own images**.
+  This is a third-party verifier image fetched from its publisher, byte-identical and
+  digest-pinned. No Soleur image moves, and no credential is involved.
+- **The new dependency, stated plainly.** gcr.io becomes a per-deploy dependency of every web host,
+  anonymous and free. It sees the hosts' public IPs (it is Google infrastructure), and it is the
+  domain of Google's deprecated Container Registry product. If it stops serving this image, or
+  rate-limits it, every deploy logs `IMAGE_VERIFY_FAIL result=cosign_absent`. In `warn` mode that
+  deploy proceeds unverified, exactly as a ghcr.io outage did before. The classifier now reads
+  docker's measured pull-error shape for that case. The digest repeats twice, so the old
+  `tail -c 400` read missed it. The WARN→ENFORCE flip (#6129) inherits this dependency. Before
+  flipping, confirm Sigstore still publishes this digest here, or re-source it.
+- **C4.** The last `hetzner -> ghcr` edge is deleted and re-targeted as `hetzner -> sigstore` (an
+  image-distribution edge; verify stays offline). The zot boot image's `zotRegistry -> projectZot`
+  edge is unchanged until part 2.
+- **Also shipped here.** The mirror that part 2 consumes: `zot-image-oci-archive.sh` and
+  `.github/workflows/zot-image-mirror.yml`. They publish the exact upstream zot blobs as the
+  immutable prerelease `zot-image-<version>-<D12>`. No host reads it yet.

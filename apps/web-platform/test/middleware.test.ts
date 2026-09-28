@@ -243,7 +243,16 @@ const {
 vi.mock("@supabase/ssr", () => ({
   createServerClient: vi.fn(() => ({
     auth: { getUser: mockGetUser, getSession: mockGetSession },
-    rpc: mockRpc,
+    // rpc() returns a PostgrestFilterBuilder — middleware arms it with
+    // .abortSignal(...). A plain mockResolvedValue() promise has no such
+    // method, so expose the resolved value under abortSignal; a test that
+    // needs the signal honoured returns an object carrying its own.
+    rpc: (...args: unknown[]) => {
+      const r = mockRpc(...args) as { abortSignal?: unknown } | Promise<unknown>;
+      return r && typeof (r as { abortSignal?: unknown }).abortSignal === "function"
+        ? r
+        : { abortSignal: () => r };
+    },
     from: mockFrom,
   })),
 }));
@@ -321,7 +330,13 @@ function seedTcRow(row: { tc_accepted_version: string; subscription_status: stri
   const single = vi.fn().mockResolvedValue(
     "error" in row ? { data: null, error: row.error } : { data: row, error: null },
   );
-  const eq = vi.fn().mockReturnValue({ single });
+  // The bounded select chains `.eq().abortSignal().single()` — abortSignal
+  // returns `this` in real postgrest, modelled here as an object that still
+  // exposes the terminal spy.
+  const eq = vi.fn().mockReturnValue({
+    single,
+    abortSignal: vi.fn(() => ({ single })),
+  });
   const select = vi.fn().mockReturnValue({ eq });
   mockFrom.mockReturnValue({ select });
   return { single, select, eq };

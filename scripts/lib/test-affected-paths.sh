@@ -89,6 +89,9 @@ ALWAYS_ON_SUITES=(
   "scripts/test-all-enumerate-toolchain"
   "scripts/test-all-infra-coverage-notice"
   "scripts/test-all-killed-classification"
+  # #8993/#8940's run-path watchdog + durable-log battery — a runner-SUT
+  # property suite like its killed-classification sibling.
+  "scripts/test-all-orphan-log-retention"
   "scripts/test-all-runtime-ceiling"
   "scripts/test-all-webplat-gate"
   "scripts/test-all-affected"

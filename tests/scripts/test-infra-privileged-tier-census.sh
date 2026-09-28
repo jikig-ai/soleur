@@ -768,16 +768,37 @@ if BASE_ROOT:
             t = open(os.path.join(d, f), encoding="utf-8", errors="replace").read()
             for m, _b in block_bodies(t, RES_OPEN):
                 base_declared[r].add("%s.%s" % (m.group(1), m.group(2)))
+# INTENDED DESTROYS. A resource block deleted ON PURPOSE so the per-merge apply destroys it: a bare
+# `-target=` on an address with no configuration plans its delete (the #9062 precedent). An entry
+# is honoured only when its root's apply still targets it bare (else the delete is never planned
+# and the address orphans under management), and never for the App identity this guard protects
+# (G4f). Entries go stale once the destroy has applied and main no longer declares the address;
+# the follow-up that removes the `-target=` lines removes them here too.
+INTENDED_DESTROYS = {
+    "apps/web-platform/infra": {
+        "doppler_secret.ghcr_read_user": "#8714 ADR-096 5.4",
+        "doppler_secret.ghcr_read_token": "#8714 ADR-096 5.4",
+        "doppler_service_token.ghcr_minter": "#8714 ADR-096 5.4",
+        "doppler_secret.ghcr_minter_doppler_token": "#8714 ADR-096 5.4",
+    },
+}
+G4_PROTECTED = {"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"}
 orphans = []
 for r in GUARD4_ROOTS:
     for a in sorted(base_declared.get(r, set())):
         if a not in declared_addrs[r] and a not in forgotten_addrs[r]:
+            if (a in INTENDED_DESTROYS.get(r, {}) and a not in G4_PROTECTED
+                    and a in root_targets.get(r, set())):
+                continue
             orphans.append("%s %s" % (r, a))
 check("G4c: every `resource` block the base ref declares and HEAD no longer declares is claimed by a "
       "`removed` block — a deleted resource block with none leaves the resource managed with no HCL, "
       "and the next apply plans a plain DESTROY [base .tf files: %d]" % n_base,
       bool(BASE_ROOT) and n_base >= 1 and not orphans,
       ("base unavailable" if not BASE_ROOT else "orphans=%s" % orphans[:8]))
+bad_intended = sorted({a for _r, d in INTENDED_DESTROYS.items() for a in d if a in G4_PROTECTED})
+check("G4f: no INTENDED_DESTROYS entry names the App identity (%s) — that pair may only ever be "
+      "FORGOTTEN, never destroyed" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
 
 if STATE_LIST:
     live = set(open(STATE_LIST, encoding="utf-8", errors="replace").read().split())
@@ -1651,11 +1672,28 @@ if fixture_written g4-5-address-absent-from-state "$MUTDIR/state-list-short.txt"
   fixcensus "$MUTDIR" "$T/mut/g4-5.tsv" "$MUTDIR/state-list-short.txt"
   mutant_red g4-5-address-absent-from-state wf_row "$T/mut/g4-5.tsv" "G4d:"
 fi
+# Row 6 — ACCEPT arm of the intended-destroy allowance (#8714): the base declares a listed address,
+# HEAD deletes it, and the apply still targets it bare. G4c must stay GREEN, or the allowance is
+# unusable and the only way through is a `removed { destroy = false }` that leaves the value live.
+MUTDIR="$(fixcopy g4-6)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-6-intended-destroy-base "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 5 '$a\resource "doppler_secret" "ghcr_read_token" {\n  project = "soleur"\n  config  = "prd"\n  name    = "GHCR_READ_TOKEN"\n}' \
+   && mutate g4-6-intended-destroy-target "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 '/^              -target=doppler_secret\.github_app_private_key \\$/a\              -target=doppler_secret.ghcr_read_token \\'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-6.tsv" ""
+  if wf_row "$T/mut/g4-6.tsv" "G4c:"; then pass "M-g4-6-intended-destroy-targeted: a listed, bare-targeted deletion is ACCEPTED by G4c"
+  else fail "M-g4-6-intended-destroy-targeted: G4c refused a listed, bare-targeted deletion" "$(grep G4c "$T/mut/g4-6.tsv" | cut -c1-240)"; fi
+fi
+# Row 7 — the same listed deletion with NO `-target=` line: the delete is never planned, so G4c RED.
+MUTDIR="$(fixcopy g4-7)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-7-intended-destroy-untargeted "$MUTDIR/base/apps/web-platform/infra/github-app.tf" 5 '$a\resource "doppler_secret" "ghcr_read_token" {\n  project = "soleur"\n  config  = "prd"\n  name    = "GHCR_READ_TOKEN"\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-7.tsv" ""
+  mutant_red g4-7-intended-destroy-untargeted wf_row "$T/mut/g4-7.tsv" "G4c:"
+fi
 }
 
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
 # 26 -> 27 (review W1): M-g1-10-destroy-only-no-environment.
-MUTANT_FLOOR=27
+# 27 -> 30 (#8714): M-g4-6 (two landings) and M-g4-7, the intended-destroy allowance rows.
+MUTANT_FLOOR=30
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -1663,7 +1701,8 @@ fi
 # Assertion FLOOR: live census 16 + harness 7 + mutants 17 x 2 = 57 (exact).
 _ran=$((passes + fails))
 # 80 -> 82 (review W1): M-g1-10's fixture-written row and its RED row. Measured: 82 ran.
-FLOOR=82
+# 82 -> 88 (#8714): live G4f, and M-g4-6/M-g4-7 (3 landings + 2 verdicts). Measured: 88 ran.
+FLOOR=88
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isByokDelegationsEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveCurrentOrganizationId } from "@/server/workspace-resolver";
+import { verifiedUserId } from "@/server/request-auth";
 import { createChildLogger } from "@/server/logger";
 
 const log = createChildLogger("delegations-withdraw");
@@ -18,13 +19,13 @@ export async function POST(request: Request) {
   if (!valid) return rejectCsrf("api/workspace/delegations/withdraw", origin);
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = await verifiedUserId(request);
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const orgId = await resolveCurrentOrganizationId(user.id, supabase);
+  const orgId = await resolveCurrentOrganizationId(userId, supabase);
   if (!orgId) return NextResponse.json({ error: "no_org" }, { status: 403 });
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId , email: null, subscriptionStatus: null };
+  const identity: Identity = { userId, role: "prd", orgId , email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
     // Log the detail server-side (Sentry-reachable via pino) but return a
     // generic message — never leak raw Postgres error text to the client.
     log.error(
-      { err: error, userId: user.id, delegationId: body.delegationId },
+      { err: error, userId, delegationId: body.delegationId },
       "withdraw_byok_delegation_consent RPC failed",
     );
     return NextResponse.json({ error: "withdraw_failed" }, { status: 500 });

@@ -48,8 +48,8 @@
 #     accept two same-named tokens, which nobody has probed.
 #   - Reverting a rename is NOT a rollback: it mints a third token (needs [ack-destroy] again, and
 #     re-fires the installers). To roll forward, rename again with a new date suffix.
-# Rotated 2026-09-24 from web-probes-read (created 2026-07-18; retained web-1 snapshot 411798619 very
-# likely holds it, #8705).
+# Rotated 2026-09-24 from web-probes-read (created 2026-07-18; web-1 snapshot 411798619, retained at
+# the time, very likely held it, #8705) (deleted 2026-09-28, #8734).
 # Verify: bash apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh (prints ROTATED; a
 # Doppler-side verdict only — host delivery is the SSH stage's run log and the probe heartbeats).
 # Pinned by apps/web-platform/infra/web-probes-token-rotation.test.sh.

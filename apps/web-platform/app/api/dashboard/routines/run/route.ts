@@ -10,6 +10,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { runRoutine } from "@/server/routines/run-routine";
 import { readWorkspaceIdFromDb } from "@/server/workspace-resolver";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -18,10 +19,8 @@ export async function POST(request: Request) {
   if (!valid) return rejectCsrf("api/dashboard/routines/run", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -38,7 +37,7 @@ export async function POST(request: Request) {
   const confirmed = body.confirmed === true;
 
   try {
-    const workspaceId = await readWorkspaceIdFromDb(user.id, supabase);
+    const workspaceId = await readWorkspaceIdFromDb(userId, supabase);
     if (!workspaceId) {
       return NextResponse.json({ error: "workspace_unbound" }, { status: 503 });
     }
@@ -48,7 +47,7 @@ export async function POST(request: Request) {
     const result = await runRoutine({
       fnId,
       actorClass: "human",
-      actorId: user.id,
+      actorId: userId,
       confirmed,
       feature: "routines-run-now",
       workspaceId,

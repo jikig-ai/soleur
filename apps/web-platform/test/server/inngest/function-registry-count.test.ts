@@ -80,11 +80,6 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
   // New (never a GHA workflow). Findings alert via reportSilentFallback Sentry
   // issues, not a cron monitor; tf monitor deferred with the TR9 batch (#4476).
   "cron-workspace-sync-health",
-  // #6031 (ADR-088 arm-b) — the GHCR minter cron is DISABLED (App installation
-  // tokens can't pull the private repo-linked packages; pending GitHub support).
-  // Its handler no-ops under GHCR_MINTER_DISABLED=true, so the sentry monitor was
-  // removed; the slug is exempt here until the cron is re-enabled or removed.
-  "scheduled-ghcr-token-minter",
 ]);
 
 const NON_INNGEST_MONITORS = new Set([
@@ -221,11 +216,13 @@ describe("Inngest function registry — drift guards", () => {
     expect(tfMonitors.size).toBeGreaterThan(0);
   });
 
-  // UPDATE this number when adding/removing Inngest functions.
+  // UPDATE this number when adding/removing Inngest functions, and add an EXECUTION_PLACEMENT row
+  // with the tightest class (execution-placement.test.ts, Guard 1; #7230).
   // 68 -> 69: cron-machinery-drain (the weekly issue-flow measurement + drain).
   // 69 -> 70: agentOnSpawnSettle (#8803, settles orphaned leader-loop runs).
+  // 70 -> 69: cron-ghcr-token-minter deleted (#8714, ADR-096 task 5.4).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(70);
+    expect(routeEntries.length).toBe(69);
   });
 
   // An event function is invisible to the cron-glob guards; an unserved settle

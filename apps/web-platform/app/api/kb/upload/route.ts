@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { kbGithubUrlPath } from "@/server/kb-github-path";
@@ -19,6 +19,7 @@ import {
   MAX_AGENT_READABLE_PDF_SIZE,
   isPdfAttachment,
 } from "@/lib/attachment-constants";
+import { verifiedUserId } from "@/server/request-auth";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -56,12 +57,10 @@ export async function POST(request: Request) {
     );
   }
 
-  // Authentication
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  // Authentication — middleware-verified identity (x-soleur-auth-user-id);
+  // absent header falls back to getUser() inside verifiedUserId (fail-closed).
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -75,7 +74,7 @@ export async function POST(request: Request) {
   // CALLER's `users.repo_url`/installation, which is the empty solo row for an
   // invited member uploading to a shared workspace → "No repository connected".
   const serviceClient = createServiceClient();
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     return NextResponse.json(
       { error: access.status === 404 ? "Workspace not found" : "Workspace not ready" },
@@ -86,7 +85,7 @@ export async function POST(request: Request) {
   // kb_files attribution write below all key to ONE membership-resolved id
   // (no divergence under a stale-claim self-heal; no redundant resolution).
   const repoMeta = await resolveActiveWorkspaceRepoMeta(
-    user.id,
+    userId,
     serviceClient,
     access.activeWorkspaceId,
   );
@@ -115,7 +114,7 @@ export async function POST(request: Request) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const errName = err instanceof Error ? err.name : "Unknown";
     logger.error(
-      { event: "kb_upload_formdata_error", errName, errMsg, userId: user?.id },
+      { event: "kb_upload_formdata_error", errName, errMsg, userId },
       "kb/upload: formData parsing failed",
     );
     Sentry.captureException(err);
@@ -247,7 +246,7 @@ export async function POST(request: Request) {
     }
 
     const payloadBuffer = await prepareUploadPayload(file, sanitizedName, {
-      userId: user.id,
+      userId,
       path: filePath,
     });
 
@@ -277,7 +276,7 @@ export async function POST(request: Request) {
       userData.github_installation_id,
       userData.workspace_path,
       logger,
-      { userId: user.id, op: "upload" },
+      { userId, op: "upload" },
     );
     if (!sync.ok) {
       return NextResponse.json(
@@ -304,7 +303,7 @@ export async function POST(request: Request) {
         await serviceClient.from("kb_files").upsert(
           {
             workspace_id: wsId,
-            user_id: user.id,
+            user_id: userId,
             file_path: filePath,
             filename: sanitizedName,
             visibility: "workspace",
@@ -314,13 +313,13 @@ export async function POST(request: Request) {
       }
     } catch (kbFilesErr) {
       logger.warn(
-        { err: kbFilesErr, userId: user.id, path: filePath },
+        { err: kbFilesErr, userId, path: filePath },
         "kb/upload: kb_files INSERT failed (non-fatal)",
       );
     }
 
     logger.info(
-      { event: "kb_upload", userId: user.id, path: filePath },
+      { event: "kb_upload", userId, path: filePath },
       "kb/upload: file uploaded successfully",
     );
 
@@ -345,7 +344,7 @@ export async function POST(request: Request) {
 
     if (isTimeout) {
       logger.error(
-        { err: error, userId: user.id, path: filePath },
+        { err: error, userId, path: filePath },
         "kb/upload: GitHub API connect timeout",
       );
       return NextResponse.json(
@@ -356,7 +355,7 @@ export async function POST(request: Request) {
 
     if (error instanceof GitHubApiError) {
       logger.error(
-        { err: error, userId: user.id, path: filePath },
+        { err: error, userId, path: filePath },
         "kb/upload: GitHub API error",
       );
       return NextResponse.json(
@@ -369,7 +368,7 @@ export async function POST(request: Request) {
     }
 
     logger.error(
-      { err: error, userId: user.id },
+      { err: error, userId },
       "kb/upload: unexpected error",
     );
     return NextResponse.json(

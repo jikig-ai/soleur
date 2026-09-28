@@ -9,19 +9,16 @@
 // broken board.
 
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { getWorkstreamIssueOptions } from "@/server/workstream/get-workstream-issue-options";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+export async function GET(request: Request) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const options = await getWorkstreamIssueOptions(user.id);
+  const options = await getWorkstreamIssueOptions(userId);
   return NextResponse.json(options);
 }

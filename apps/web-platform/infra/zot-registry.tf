@@ -64,6 +64,8 @@ locals {
   # ONE idempotent issue); enforcement is `zot-image-staleness.test.sh` in infra-validation.
   # NOTHING auto-writes these two lines: the cron files an issue, a human opens the CI-gated PR.
   # No bot manages this pin — do not describe one.
+  # DELIVERY: a merged bump reaches the host through registry-host-replace-dispatch.yml, whose gate
+  # renders the user_data at both SHAs and delivers on a byte change (#7582).
   #
   # THE ARCH IN EACH NAME MUST MATCH THE ARCH IN ITS VALUE. `local.zot_image` below selects on
   # registry_arch (amd64 today), so swapping these two values DARKS THE SOLE PULL PATH.
@@ -305,8 +307,9 @@ resource "doppler_service_token" "registry" {
 
 # --- Client/CI-facing secrets: the shared `prd` config ---------------------------------
 # Web hosts (pull) + CI (push) read these from `prd`, their existing runtime/deploy config.
-# TF owns the values → NO ignore_changes (mirrors the ghcr-minter-doppler-token.tf shape, NOT
-# ghcr-read-credential.tf's operator-minted ignore_changes shape).
+# TF owns the values → NO ignore_changes: a Terraform-generated value must reach Doppler in the
+# same apply (unlike an operator-minted value, e.g. resend.tf's resend_receiving_api_key, which
+# carries ignore_changes = [value]).
 resource "doppler_secret" "zot_registry_url" {
   project    = "soleur"
   config     = "prd"
