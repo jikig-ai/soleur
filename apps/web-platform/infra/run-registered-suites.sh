@@ -620,6 +620,12 @@ _SUITE_BOUNDS=(
   # ~2.5x serial so a slow day renders as their own RED, not a leg timeout.
   "apps/web-platform/infra/infra-config-repush-mutation.test.sh=540"
   "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh=540"
+  # #9123: the boot-unlock guard suite re-runs itself once per mutation row
+  # (38 rows), each child executing the writer-arm + stub-PATH runtime arm —
+  # ~253 s serial on the dev box. Under -P4 contention the #8688 measurement
+  # says degraded days run ~2.5x; pin at 600 s so a slow day renders as this
+  # suite's RED, not a leg timeout.
+  "apps/web-platform/infra/workspaces-boot-unlock.test.sh=600"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

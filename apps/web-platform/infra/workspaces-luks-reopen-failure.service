@@ -34,6 +34,11 @@ UMask=0077
 # in a child shell that inherits the same confinement.
 PrivateTmp=yes
 LimitCORE=0
+# Without this the ExecStart basename (`sh`) is the journald tag, so the
+# classification echo would be tagged `sh` and match NO vector include_matches
+# entry — the discriminating failure line would be dark off-box. MUST equal the
+# vector.toml tag.
+SyslogIdentifier=workspaces-luks-reopen
 # The body, in order:
 #  1. action from the phase file the script maintains; `unit` when it never ran.
 #  2. the unit's own verdict tags (Result / ExecMainStatus / ExecMainCode /
