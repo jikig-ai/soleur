@@ -102,7 +102,7 @@ else
   CRED_FILE_STATE=absent
 fi
 
-# Sentry destination pin (#7873 Rule D drawdown). The seven Sentry POSTs below forward
+# Sentry destination pin (#7873 Rule D drawdown). The eight Sentry POSTs below forward
 # SENTRY_PUBLIC_KEY to "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/", and both
 # halves are env-settable. A value outside the shape Sentry issues (measured against Doppler prd,
 # 2026-09-15) is dropped, which disables the best-effort Sentry arm (every site is guarded on
@@ -660,12 +660,21 @@ cosign_verify_event() {
 # deploy, so every event is level=error; `freshness_result` discriminates the cause in one event:
 #   version_mismatch — the image was built as another version (the stale-but-signed zot image);
 #   version_absent   — the image carries no usable BUILD_VERSION (missing, empty or `dev`);
+#   version_ambiguous — the image config carries more than one BUILD_VERSION entry;
 #   inspect_failed   — `docker inspect` of the ref about to be run failed.
+# <actual> comes from the image config, so it is DISPLAYED only through _freshness_display (a
+# bounded, printable shape) — a control character or an oversized value never reaches journald
+# or the Sentry payload, and cannot E2BIG the logger/jq argv and silence the page.
 # Paged by sentry_alert.image_freshness_mismatch (issue-alerts.tf, op == image-freshness). Tagged
 # host_id so the host is attributable from Sentry alone. Best-effort + env-guarded, mirrors
 # cosign_verify_event. Fail-open under set -e.
+_freshness_display() {
+  if [[ "${1:-}" =~ ^[0-9A-Za-z.+-]{1,64}$ ]]; then printf '%s' "$1"; else printf '<invalid:len=%d>' "${#1}"; fi
+}
+
 image_freshness_event() {
-  local result="$1" ref="$2" expected="$3" actual="$4" detail="${5:-}"
+  local result="$1" ref="$2" expected="$3" actual detail="${5:-}"
+  actual="$( [[ -z "${4:-}" ]] || _freshness_display "$4" )"
   logger -t "$LOG_TAG" "IMAGE_FRESHNESS_FAIL: result=$result ref=$ref expected=$expected actual=${actual:-<none>} detail=$detail"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
@@ -701,34 +710,40 @@ image_freshness_event() {
 # FAILS CLOSED: returns 1 (caller aborts, the OLD container stays live) on a mismatch AND whenever
 # the version cannot be established (inspect failure, no BUILD_VERSION line, empty, or `dev`), and
 # sets the global FRESHNESS_ABORT_REASON to the deploy-state reason: `image_stale_version` for a
-# mismatch, `image_version_unverifiable` otherwise. Every
+# mismatch, `image_version_unverifiable` otherwise (incl. a config with two BUILD_VERSION entries,
+# where the value the process sees is not decidable from here). Every
 # image zot can serve for a v-tag has carried BUILD_VERSION since 2026-03, so the closed arm costs
 # no legitimate deploy. Emits `IMAGE_FRESHNESS: ok …` on success — the Better Stack liveness marker
 # showing a host actually ran the check (a host still on an older ci-deploy.sh, e.g. web-2 until its
 # next replace per #9151, emits none). The comparison is exact string equality on the WHOLE key.
 verify_image_freshness() {
-  local ref="$1" tag="$2" expected="${2#v}" env_out="" rc=0 actual="" found=0 line
+  local ref="$1" tag="$2" expected="${2#v}" env_out="" rc=0 actual="" count=0 line
   FRESHNESS_ABORT_REASON="image_version_unverifiable"
   # Capture first, THEN parse: a `done < <(docker inspect …)` loop would lose the exit code, and a
   # failed inspect would read as "no BUILD_VERSION line". `200>&-` closes the FD-200 deploy lock
-  # for this child (#5062).
-  env_out="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$ref" 2>/dev/null 200>&-)" || rc=$?
+  # for this child (#5062). `--type image`: a container sharing the ref's name would otherwise win,
+  # and its Config.Env carries runtime -e/--env-file values, not what the image was built as.
+  env_out="$(docker inspect --type image --format '{{range .Config.Env}}{{println .}}{{end}}' "$ref" 2>/dev/null 200>&-)" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     image_freshness_event "inspect_failed" "$ref" "$expected" "" "docker inspect rc=$rc"
     return 1
   fi
   while IFS= read -r line; do
     if [[ "$line" == BUILD_VERSION=* ]]; then
-      actual="${line#BUILD_VERSION=}"; found=1; break
+      actual="${line#BUILD_VERSION=}"; count=$((count + 1))
     fi
   done <<< "$env_out"
-  if [[ "$found" -eq 0 || -z "$actual" || "$actual" == "dev" ]]; then
+  if [[ "$count" -gt 1 ]]; then
+    image_freshness_event "version_ambiguous" "$ref" "$expected" "" "the image config carries $count BUILD_VERSION entries"
+    return 1
+  fi
+  if [[ -z "$actual" || "$actual" == "dev" ]]; then
     image_freshness_event "version_absent" "$ref" "$expected" "$actual" "the image carries no released BUILD_VERSION, so its version cannot be checked against $tag"
     return 1
   fi
   if [[ "$actual" != "$expected" ]]; then
     FRESHNESS_ABORT_REASON="image_stale_version"
-    image_freshness_event "version_mismatch" "$ref" "$expected" "$actual" "the registry served an image built as $actual for $tag (stale-but-signed)"
+    image_freshness_event "version_mismatch" "$ref" "$expected" "$actual" "the registry served an image built as another version for $tag (stale-but-signed)"
     return 1
   fi
   FRESHNESS_ABORT_REASON=""

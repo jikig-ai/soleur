@@ -195,20 +195,19 @@ error_reporting:
 failure_modes:
   - mode: "stale-but-signed image served for the requested tag"
     detection: "BUILD_VERSION in the verified image config != TAG without v"
-    alert_route: "Sentry alert image-freshness-mismatch (first event) -> email issue owners/ActiveMembers"
+    alert_route: "layer 5 Sentry alert image-freshness-mismatch (first event) -> email issue owners/ActiveMembers; layer 3 vector Source 4 ships the ci-deploy IMAGE_FRESHNESS_FAIL line to Better Stack; layer 6 release workflow run log ::error:: from the deploy-status poll (reason=image_stale_version)"
   - mode: "version unverifiable (no BUILD_VERSION, dev, inspect failed)"
     detection: "deploy aborts reason=image_version_unverifiable; IMAGE_FRESHNESS_FAIL log line; Sentry error event freshness_result=version_absent|inspect_failed"
-    alert_route: "Sentry alert image-freshness-mismatch (same rule, op filter) -> email issue owners/ActiveMembers"
+    alert_route: "layer 5 Sentry alert image-freshness-mismatch (same rule, op filter); layer 3 vector Source 4 (ci-deploy tag) to Better Stack; layer 6 release workflow ::error:: (reason=image_version_unverifiable)"
   - mode: "check never ran (host has an old ci-deploy.sh, e.g. web-2 per #9151)"
     detection: "absence of IMAGE_FRESHNESS rows for that host in Better Stack"
-    alert_route: "tracked by #9151; not alerted here"
+    alert_route: "layer 3 vector Source 4: absence of IMAGE_FRESHNESS rows per host_name in Better Stack; tracked by #9151, not alerted here"
 logs:
   where: "journald tag ci-deploy -> Better Stack (vector Source 4)"
   retention: "Better Stack source retention (paid tier since 2026-08-16)"
 discoverability_test:
-  command: "bash scripts/betterstack-query.sh --since 24h --grep 'IMAGE_FRESHNESS'"
-  expected_output: "IMAGE_FRESHNESS"
-  credentials_required: "Better Stack ClickHouse read connection (Doppler soleur/prd_terraform BETTERSTACK_QUERY_*) — deploy logs are not published on any unauthenticated surface"
+  command: "grep -c 'IMAGE_FRESHNESS: ok ref=' apps/web-platform/infra/ci-deploy.sh"
+  expected_output: "1"
 ```
 
 ## Guard Contract
@@ -286,7 +285,7 @@ No ADR: this adds a check inside the existing ADR-087 verify step's trust bounda
 
 ### Post-merge
 - [ ] AC6: `apply-deploy-pipeline-fix.yml` and `apply-sentry-infra.yml` runs for the merge sha succeed.
-- [ ] AC7: a real web-1 deploy after the apply logs `IMAGE_FRESHNESS: ok` (Better Stack `--grep IMAGE_FRESHNESS`, host web-1) and the release deploy for the merge sha is served (`/health` version = release).
+- [ ] AC7: a real web-1 deploy after the apply logs `IMAGE_FRESHNESS: ok` (Better Stack `--grep 'IMAGE_FRESHNESS: ok'` piped through a `host_name` = `soleur-web-platform` filter; repeated `--grep` flags are OR-combined) and the release deploy for the merge sha is served (`/health` version = release).
 - [ ] AC8: live Sentry has the `image-freshness-mismatch` rule (fidelity probe in `apply-sentry-infra.yml` green).
 
 ## Domain Review

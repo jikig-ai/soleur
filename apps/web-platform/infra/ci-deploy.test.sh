@@ -8354,6 +8354,7 @@ echo "--- #6428 pre-swap image freshness (stale-but-signed image never reaches t
 # Sentry sink, the freshness-inspect recorder, the state file and stdout/stderr pinned in <workdir>.
 run_6428() {
   local d="$1" extra="${2:-}" tag="${3:-v1.0.0}" rc=0
+  assert_fixture_dir "$d"
   : > "$d/logger.txt"; : > "$d/sentry.txt"; : > "$d/inspect.txt"
   (
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform $tag"
@@ -8386,10 +8387,10 @@ _6428_event() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="image-freshness")]
 # deploy aborted with <reason>, started NO app container, logged the fail marker and emitted an
 # error event carrying <result>.
 _6428_abort() {
-  local label="$1" extra="$2" want_reason="$3" want_result="$4" tag="${5:-v1.0.0}" d reason exitc
+  local label="$1" extra="$2" want_reason="$3" want_result="$4" tag="${5:-v1.0.0}" d reason _exitc
   TOTAL=$((TOTAL + 1)); d="$(mktemp -d)"
   run_6428 "$d" "$extra" "$tag"
-  read_state_reason_and_exit "$d/ci-deploy.state" reason exitc
+  read_state_reason_and_exit "$d/ci-deploy.state" reason _exitc
   if [[ "$(cat "$d/rc")" != "0" && "$reason" == "$want_reason" && "$(_6428_started "$d")" == "0" ]] \
      && grep -q "IMAGE_FRESHNESS_FAIL: result=$want_result " "$d/logger.txt" \
      && [[ "$(_6428_event "$d" level)" == "error" && "$(_6428_event "$d" freshness_result)" == "$want_result" ]]; then
@@ -8418,6 +8419,10 @@ _6428_abort "F9a decoy X_BUILD_VERSION=1.0.0 before BUILD_VERSION=0.9.9" \
 _6428_abort "F9b decoy X_BUILD_VERSION=1.0.0 and no BUILD_VERSION" \
   "export MOCK_IMAGE_ENV_EXTRA=X_BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
 # F3: fail CLOSED — a version the check cannot establish aborts rather than deploying unverified.
+# F10: two BUILD_VERSION entries (the matching one FIRST) — the value the process sees is not
+# decidable from the config, so it is refused rather than read first-wins.
+_6428_abort "F10 two BUILD_VERSION entries (1.0.0 then 0.9.9)" \
+  "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_version_unverifiable version_ambiguous
 _6428_abort "F3a image with no BUILD_VERSION" \
   "export MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
 _6428_abort "F3b image built as dev" \
@@ -8429,6 +8434,21 @@ _6428_abort "F3c docker inspect of the verified ref fails" \
 _6428_abort "F5a local-cache rescue whose running image was built as 0.9.9" \
   "export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:6428ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff MOCK_RUNNING_IMAGE_TAG=v1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" \
   image_stale_version version_mismatch
+
+# F11: a hostile BUILD_VERSION (an ANSI escape, a CR) still aborts, and never reaches journald or
+# the Sentry payload raw — both carry the bounded <invalid:len=N> display form instead.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_IMAGE_BUILD_VERSION=\$'0.9.9\\e[31m\\r'"
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f11_reason _f11_exit
+if [[ "$_f11_reason" == "image_stale_version" ]] \
+   && grep -q 'actual=<invalid:len=' "$T6428/logger.txt" \
+   && ! grep -q $'\e' "$T6428/logger.txt" && ! grep -q $'\r' "$T6428/logger.txt" \
+   && [[ "$(jq -rs '[.[] | select(.tags.op=="image-freshness")][0].extra.actual' "$T6428/sentry.txt" 2>/dev/null)" == "<invalid:len="* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F11 a control-character BUILD_VERSION aborts and is displayed only in its bounded form (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F11 (reason=$_f11_reason; logger: $(grep -c IMAGE_FRESHNESS_FAIL "$T6428/logger.txt"))"
+fi
+rm -rf "$T6428"; unset _f11_reason _f11_exit
 
 # F2 (must PASS, the canonical): a release-built image (BUILD_VERSION 1.0.0 for v1.0.0) deploys, the
 # canary docker trace is byte-identical to the canary-success row above, the liveness marker the
@@ -8491,8 +8511,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # over a churn of ~38 rows: 15 T-1c-* added, several GHCR-only rows deleted (§1A, #6400
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
 # #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
-# #6428: raised to 355 with the 13 pre-swap freshness rows (F1-F9).
-CI_DEPLOY_ASSERT_FLOOR=355
+# #6428: raised to 357 with the 15 pre-swap freshness rows (F1-F11).
+CI_DEPLOY_ASSERT_FLOOR=357
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
