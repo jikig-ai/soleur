@@ -18,6 +18,45 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-28
+**Sections enhanced:** Technical Approach §A–§D, Implementation Phases 1/5/6, User-Brand Impact,
+Observability, Guard Contract, Acceptance Criteria; new Downtime & Cutover and Risks & Precedents.
+**Agents used:** security-sentinel, data-integrity-guardian, observability-coverage-reviewer,
+user-impact-reviewer, test-design-reviewer, a verify-the-negative/self-audit pass (on top of the plan
+phase's CTO, CLO, CPO, spec-flow ×2, DHH, Kieran, code-simplicity, architecture-strategist, CTO devex
+and the ADR-083 advisor). The skill's "run every agent" fan-out was narrowed to the reviewers relevant to
+an infra/security plan that had already been through a twelve-agent pass; the narrowing is disclosed
+here rather than implied away.
+
+### Key improvements
+
+1. **"Gone" is only believed when presence was shown with the same token** — a token from another
+   Hetzner project answers `404`/`[]` for a live volume; preflight, the `wipe` job and the forget
+   workflow now prove they can see server 123931471 and volume 106443278 first.
+2. **The off-host header is proven restorable, not just present** — the escrowed passphrase opens the
+   downloaded header, and a fresh `luksHeaderBackup` must equal it (a UUID survives key changes).
+3. **The window pause is enforced, not remembered** — the `wipe` job refuses unless both apply
+   workflows are `disabled_manually` with no queued run, and unless a green same-day
+   `workspaces-luks-verify.yml` run exists.
+4. **No Terraform-state secret can leak from the no-reviewer forget runner** — state is never printed,
+   stored or uploaded; the pin is a constant; identity is checked by exact type/name; `serial`/`lineage`
+   are verified after the removal.
+5. **The stubbed suite cannot reach a real binary or the real prod key** — `PATH` tripwires for
+   `blkdiscard`/`dd`/`doppler`/`aws`, a device-resolution seam, reason-slug census, stub fidelity fixes.
+
+### New considerations discovered
+
+- `ionice` is a no-op under `mq-deadline`/`none`; the zero and read-back are capped with a cgroup
+  `io.max` limit instead.
+- systemd creates one device unit per symlink; W6b now checks every unit sharing the target's
+  `SysFSPath`, and `mnt-data.mount`'s own bindings.
+- After D the LUKS volume is the only copy and has no delete protection; the recut runbook step is
+  marked never-after-step-7 and #6931 gets the protection as a precondition.
+- The success row, the `.env` values and the host output are all shell/workflow-command surfaces:
+  strict row regex plus `ssh` rc, `::stop-commands::`, `.env` re-validation and duplicate-key refusal.
+
 ## Overview
 
 The #6604 soak passed on 2026-09-24 and has re-passed on every daily sweep since. The sweeper still
@@ -221,12 +260,16 @@ steps' `::error::` guidance lists `wipe_aborted`. A refusal raised inside a reus
 on its own (`load_escrow_creds`) surfaces as that `wipe_aborted mode=wipe` row rather than a
 `SOLEUR_WORKSPACES_LUKS_WIPE` row; every refusal `wipe_plaintext()` raises itself emits
 `SOLEUR_WORKSPACES_LUKS_WIPE result=refused reason=<slug>` + `emit_drift <slug>` **before** `die`.
+Row format, built in exactly one place (`emit_wipe`, bare `echo` + `logger -t "$LUKS_LOG_TAG"`, every
+value through `_vscrub`): `SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe
+result=<r> arm=<a> volume_id=<id> [key=value …]` — the field order the workflow's success-row parser
+anchors on.
 
 **Stage 1 — environment (always):**
 
 | # | Check | Refusal reason |
 |---|---|---|
-| W0 | util-linux ≥ 2.36 (`blkdiscard --version`; the `O_EXCL` guarantee depends on it); `aws` already installed — W0 **never** calls `ensure_aws`, which can `apt-get install` on prod web-1; no `blkdiscard` process running (`pgrep -x blkdiscard` — an SSH drop orphans a running zero, and a re-dispatch would race it) | `wipe_tool_missing` / `wipe_in_progress` |
+| W0 | util-linux ≥ 2.36 (`blkdiscard --version`, compared as a full `major.minor` version so 3.x passes; the `O_EXCL` guarantee depends on it); `systemd-run` present; `aws` already installed — W0 **never** calls `ensure_aws`, which can `apt-get install` on prod web-1; no `blkdiscard` process running (`pgrep -x blkdiscard` — an SSH drop orphans a running zero, and a re-dispatch would race it) | `wipe_tool_missing` / `wipe_in_progress` |
 | W1 | inputs well-formed: id `^[0-9]+$`, dev path == `/dev/disk/by-id/scsi-0HC_Volume_${id}` exactly, size `^[0-9]+$` | `wipe_input_invalid` |
 | W2 | `findmnt -no SOURCE /mnt/data` == `$MAPPER` | `wipe_live_mount_not_mapper` |
 
@@ -235,11 +278,11 @@ on its own (`load_escrow_creds`) surfaces as that `wipe_aborted mode=wipe` row r
 
 | Device present? | Signature | Markers for this id | Arm |
 |---|---|---|---|
-| yes | `ext4` | none | **first wipe** → Stage 3 in full, including W9 |
-| yes | any (incl. none, ambivalent) | `PLAINTEXT_WIPE_BEGUN` or `PLAINTEXT_WIPED` | **re-zero** → Stage 3 without W9 (an interrupted zero has already cleared the superblock; zeroing a zeroed device is idempotent) |
-| no | — | `PLAINTEXT_WIPED` | **detached** → `result=already_wiped_detached`, nothing written |
+| yes | `ext4` | none | `arm=first_wipe` → Stage 3 in full, including W9 |
+| yes | `ext4`, none or ambivalent (never `crypto_LUKS` — an interrupted zero of ext4 cannot create a LUKS header, so a LUKS signature here means the wrong device) | `PLAINTEXT_WIPE_BEGUN` or `PLAINTEXT_WIPED` | `arm=re_zero` → Stage 3 without W9 (an interrupted zero has already cleared the superblock; zeroing a zeroed device is idempotent) |
+| no | — | `PLAINTEXT_WIPED` | `arm=detached` → `result=already_wiped_detached`, nothing written |
 | yes | none or ambivalent | none | refuse `wipe_target_blank_unexplained` |
-| yes | `crypto_LUKS` or any non-`ext4` | none | refuse `wipe_target_not_ext4` |
+| yes | `crypto_LUKS` (any markers), or any other non-`ext4` signature without markers | any | refuse `wipe_target_not_ext4` |
 | — | — | markers naming a different id | refuse `wipe_marker_other_volume` |
 | no | — | no `PLAINTEXT_WIPED` | refuse `wipe_target_absent_unexplained` |
 
@@ -251,16 +294,16 @@ writes nothing.
 | # | Check | Refusal reason |
 |---|---|---|
 | W3 | **DP-7**: `read_state CANARY_OK` is `1:<uuid>`; mapper backing device from `cryptsetup status`; `luksUUID(backing) == uuid`; `_same_dev backing $WORKSPACES_LUKS_DEV` | `wipe_canary_ok_absent` / `wipe_header_uuid_mismatch` / `wipe_mapper_not_luks_volume` |
-| W4 | **P3 passphrase**: `key="$(read_key)"`, then `printf '%s' "$key" \| cryptsetup luksOpen --test-passphrase --key-file - <backing>` (the `luks-monitor.sh` form — a piped raw read can carry a trailing newline) | `wipe_escrow_passphrase_mismatch` |
-| W5 | **P3 off-host header**: `load_escrow_creds`; download `workspaces-luks-header-<uuid>.img` to `$STATE_DIR` (0700); its `luksUUID` == uuid; `shred -u`. The daily monitor never downloads this object — only this check proves it restorable | `wipe_header_backup_absent` / `wipe_header_backup_mismatch` |
-| W6 | **P2 identity**: target `-b`; `realpath` and `stat -Lc %t:%T` differ from the backing device's; `/sys/class/block/<kname>/holders/` empty; `findmnt -S <dev>` finds nothing; `blockdev --getsize64` == `WORKSPACES_PLAINTEXT_SIZE_BYTES`; **first-wipe arm only:** filesystem label `blkid -p -s LABEL -o value` == `workspaces_plain` (the label `rollback()` mounts by — the host's own name for the plaintext volume) | `wipe_target_is_mapper_backing` / `wipe_target_held` / `wipe_target_mounted` / `wipe_target_size_mismatch` / `wipe_target_label_mismatch` |
-| W6b | **detach safety**: for each of the target's device units (`dev-disk-by\x2did-scsi\x2d0HC_Volume_<id>.device`, `dev-<kname>.device`), `systemctl show -p LoadState` is `loaded` (an unloaded or misspelled unit lists no dependencies and exits 0), then `systemctl list-dependencies --reverse --plain` shows no `.mount`, `.swap` or `.service`. `mnt-data.mount`'s `What=` is the literal `scsi-0HC_Volume_*` glob (#9123), so comparing it to the target proves nothing; this probe is the measurement | `wipe_target_has_dependents` |
-| W7 | no dead-man is armed: `systemctl is-active workspaces-luks-deadman.timer` ≠ `active` | `wipe_deadman_armed` |
-| W8 | evidence only: `lsblk -D -b -n -o DISC-GRAN,DISC-MAX <dev>` and `/sys/block/<k>/queue/write_zeroes_max_bytes` | — |
+| W4 | **P3 passphrase**: `key="$(read_key)"`, then `printf '%s' "$key" \| cryptsetup luksOpen --test-passphrase --key-file - <backing>` (the `luks-monitor.sh` form — a piped raw read can carry a trailing newline); `key` is kept for W5 and `unset` right after it; W4 and W5 run one after the other, never alongside the zeroing (Argon2 memory cost) | `wipe_escrow_passphrase_mismatch` |
+| W5 | **P3 off-host header is restorable, not merely present**: `load_escrow_creds`; download `workspaces-luks-header-<uuid>.img` to `$STATE_DIR` (0700); its `luksUUID` == uuid; `printf '%s' "$key" \| cryptsetup luksOpen --test-passphrase --key-file - <downloaded file>` (the escrowed passphrase opens the backup's own keyslot); a fresh `cryptsetup luksHeaderBackup <backing>` into `$STATE_DIR` `cmp`s equal to the download (a UUID survives `luksAddKey`/`luksKillSlot`, so a UUID match alone can certify a stale backup); `hdr_bytes` and `hdr_sha256` go on the evidence row. Both files are `shred -u`'d on **every** exit from W5 (local trap plus a `cleanup()` wipe-arm sweep of the two fixed paths) — a header left on the root disk plus a leaked key decrypts every workspace. The daily monitor never downloads this object — only this check proves it restorable | `wipe_header_backup_absent` / `wipe_header_backup_mismatch` / `wipe_header_backup_stale` |
+| W6 | **P2 identity**: target `-b`; `realpath` and `stat -Lc %t:%T` differ from the backing device's; `/sys/class/block/<kname>/holders/` empty; `findmnt -S <dev>` finds nothing; `blockdev --getsize64` == `WORKSPACES_PLAINTEXT_SIZE_BYTES` (bytes, not GiB); `udevadm info --query=property` `ID_SERIAL`/`ID_SCSI_SERIAL` contains `HC_Volume_<id>` (a hypervisor-derived identity that does not depend on the by-id symlink); **first-wipe arm only:** filesystem label `blkid -p -s LABEL -o value` == `workspaces_plain` (the label `rollback()` mounts by — the host's own name for the plaintext volume) | `wipe_target_is_mapper_backing` / `wipe_target_held` / `wipe_target_mounted` / `wipe_target_size_mismatch` / `wipe_target_label_mismatch` |
+| W6b | **detach safety**: for **every** device unit whose `SysFSPath` equals the target's (enumerate `systemctl list-units --all --type=device` + `show -p SysFSPath` — systemd makes one unit per symlink: by-id, by-label, by-uuid, by-path, wwn, diskseq), `systemctl show -p LoadState` is `loaded` (an unloaded or misspelled unit lists no dependencies and exits 0), then `systemctl list-dependencies --reverse --plain` shows no `.mount`, `.swap` or `.service`. `mnt-data.mount`'s `What=` is the literal `scsi-0HC_Volume_*` glob (#9123), so comparing it to the target proves nothing; this probe is the measurement. Also refuse if `systemctl show mnt-data.mount -p BindsTo,Requires,What` names any of those units — a detach would then make systemd stop the live mapper mount | `wipe_target_has_dependents` |
+| W7 | no dead-man is armed or firing: `workspaces-luks-deadman.timer` not `active`, `workspaces-luks-deadman.service` not `active`/`activating`, and no queued job for either | `wipe_deadman_armed` |
+| W8 | evidence only: `lsblk -D -b -n -o DISC-GRAN,DISC-MAX <dev>`, `/sys/block/<k>/queue/write_zeroes_max_bytes`, `/sys/block/<k>/queue/scheduler` | — |
 | W9 | **positive control** (first-wipe arm only): 4096 bytes at offset 0 via `dd iflag=direct` (an unaligned direct read fails `EINVAL`), bytes 1080–1081 == `53 ef`. Evidence field, never a gate: `dumpe2fs -h` last-mount and last-write times (the CLO's check that nothing wrote after the 2026-07-23 cutover) | `wipe_positive_control_failed` |
 | — | `DRY_RUN=1` → one `result=rehearsal_ok` row carrying every measured field; `RUN_COMPLETE=1; exit 0` | — |
-| W10 | `persist_state PLAINTEXT_WIPE_BEGUN "<id>:<epoch>"`; `ionice -c3 blkdiscard -z -v <dev> </dev/null` — never `-f` (stdin from `/dev/null`: util-linux refuses a device carrying a signature when stdin is a terminal) | `wipe_blkdiscard_failed` |
-| W11 | `blockdev --flushbufs <dev>`; `ionice -c3 dd if=<dev> iflag=direct bs=4M status=none \| cmp -n <size> - /dev/zero`, both `PIPESTATUS` values and `cmp`'s stderr captured into plain variables (never `$( )`). `cmp` decides: rc 0 with `dd` rc 0 passes; anything else refuses with one reason carrying `cmp_rc`, `dd_rc` and the scrubbed stderr tail (`cmp` exiting early on a difference makes `dd` fail with EPIPE, so `dd`'s rc alone never classifies) | `wipe_readback_failed` |
+| W10 | `persist_state PLAINTEXT_WIPE_BEGUN "<id>:<epoch>"`; emit `result=begun arm=<arm> volume_id=<id>`; `systemd-run --scope --quiet -p IOWriteBandwidthMax="<dev> 150M" -p IOReadBandwidthMax="<dev> 150M" blkdiscard -z -v <dev> </dev/null` — never `-f` (stdin from `/dev/null`: util-linux refuses a device carrying a signature when stdin is a terminal). The cgroup `io.max` cap, not `ionice`, bounds the impact on the live volume's shared storage path: `ionice` is honoured only by BFQ and virtio-scsi guests usually run `mq-deadline` or `none` (W8 records which) | `wipe_blkdiscard_failed` |
+| W11 | emit `result=readback_start`; `blockdev --flushbufs <dev>`; `systemd-run --scope --quiet -p IOReadBandwidthMax="<dev> 150M" dd if=<dev> iflag=direct bs=4M status=none \| cmp -n <size> - /dev/zero` (never `cmp -l`/`-b`, which print device bytes — user content — into logs), both `PIPESTATUS` values and `cmp`'s stderr captured into plain variables (never `$( )`). `cmp` decides: rc 0 with `dd` rc 0 passes; anything else refuses with one reason carrying `cmp_rc`, `dd_rc` and `cmp`'s first-difference line (`cmp` prints it on **stdout**; captured, `_vscrub`bed, capped at 200 bytes, on a separate evidence row) — `cmp` exiting early on a difference makes `dd` fail with EPIPE or be killed by SIGPIPE, so `dd`'s rc alone never classifies | `wipe_readback_failed` |
 | W12 | `blkid -p` reports no signature; `persist_state PLAINTEXT_WIPED "<id>:<epoch>"`; one row `result=wiped arm=<arm> volume_id=<id> bytes=<size> readback=zero discard_gran=… discard_max=… write_zeroes_max=… last_write=…` | — |
 
 **Post-wipe refusals (P6).** `assert_rollback_not_post_cutover` gains a first check: a non-empty
@@ -279,56 +322,86 @@ Workflow-level `concurrency: web-1-swap` is unchanged: the new `wipe` job touche
 takes the Terraform host group, so no job nests the two groups (the state step lives in its own
 workflow, §C).
 
+**Absence is only evidence when presence was shown with the same token.** A token scoped to a
+different Hetzner project answers `404` and `[]` for a volume that is alive — and after ADR-241's
+operator steps the loader draws its token from a different Doppler source. So every step that reads
+"gone" from the API first proves it can see the project: `GET /servers/123931471` → `200`, name
+`soleur-web-platform`, `volumes` contains `106443278`. Anything other than `200`/`404` on any call is
+an error, never "absent".
+
 - **Inputs:** `wipe_plaintext` (boolean, default `false`; the description names AP-009, the one
   approval, and that `dry_run=true` is the rehearsal); `expected_plaintext_volume_id` (string). The
-  `dry_run` description's "no wipe" wording is updated.
+  `dry_run` description's "no wipe" wording is updated. Every input reaches `run:` only through
+  `env:`, never inline `${{ inputs.* }}`.
 - **`preflight` (ungated, read-only).** Order: (1) mode exclusion first — wipe excludes `rollback`,
   `clean_stray`, `rollback_ack_luks_writes` — so a mixed dispatch is refused before any "untick
   dry_run" hint; (2) `expected_plaintext_volume_id` must match `^[0-9]+$` on a wipe and be **empty** on
-  every other mode; (3) confirm token `WIPE-PLAINTEXT-USER-DATA-AP-009`. Then a read-only API read
-  (`HCLOUD_TOKEN_READONLY`-first, the G1g-sanctioned shape; status codes read with `-w
-  '%{http_code}'`, never `-f`, which turns a 404 into exit 22) classifies `api_state` (job output):
-  - `attached` — the pinned id resolves; name `soleur-web-platform-data`; `server` == the id of the
-    server named `soleur-web-platform`; `format == ext4`; `protection.delete == false`;
-    `linux_device` == the pinned by-id path; id ≠ the `soleur-web-platform-data-luks` id; a name
-    lookup returns exactly this one volume;
+  every other mode; (3) confirm token `WIPE-PLAINTEXT-USER-DATA-AP-009` (a public typo-guard, not an
+  authorization). Then a read-only API read (`HCLOUD_TOKEN_READONLY`-first, the G1g-sanctioned shape;
+  status codes read with `-w '%{http_code}'`, never `-f`, which turns a 404 into exit 22), the
+  presence proof above, and `api_state` (job output, validated against its enum before it is written
+  to `$GITHUB_OUTPUT`; `size_bytes` against `^[0-9]+$`):
+  - `attached` — the pinned id resolves; name `soleur-web-platform-data`; `server` == 123931471;
+    `format == ext4`; `protection.delete == false`; `linux_device` == the pinned by-id path; id ≠ the
+    `soleur-web-platform-data-luks` id; a name lookup returns exactly this one volume;
   - `detached` — the same with `server: null` (no `linux_device` assertion);
-  - `absent` — the pinned id `404`s **and** the name lookup is `[]` → refuse with the remedy "already
-    deleted; dispatch `workspaces-plaintext-forget.yml`";
+  - `absent` — the pinned id `404`s **and** the name lookup is `[]` **and** the presence proof holds →
+    refuse with the remedy "already deleted; dispatch `workspaces-plaintext-forget.yml`";
   - anything else → refuse, naming the mismatching field.
   It writes the approver banner — id, name, size, created, server, the live LUKS id, `api_state` —
-  and exports `size_bytes`.
+  and exports `size_bytes`. API text reaches annotations only as `jq -r '.error.code'` with `%`, CR and
+  LF escaped (`%25`, `%0D`, `%0A`), never the raw body.
 - **`cutover` job:** unchanged for every non-wipe mode; its `environment:` expression stays
   byte-identical (`workspaces-luks-cutover-workflow.test.sh` pins it exactly; `workspaces-luks-header.test.sh`
   H17 reads the **first** `environment:` line in the file, so the new job goes **after** `cutover`).
   A job-level `if:` skips it when `wipe_plaintext && !dry_run`; that test's "no job-level `if:`" row is
   amended to allow exactly that predicate. On a wipe rehearsal it delivers `CONFIRM_WIPE=1 DRY_RUN=1`:
-  its `CONFIRM_WIPE` value is `inputs.wipe_plaintext && inputs.dry_run`, so this job can never
-  deliver a destructive wipe. ADR-119's 2026-07-19 rule ("every destructive mode contributes its own
-  operand" to this expression) is kept by construction — the destructive wipe is not reachable from
-  this job at all — and the addendum says so.
+  its value is `${{ (inputs.wipe_plaintext && inputs.dry_run) && '1' || '0' }}` (a bare boolean would
+  deliver the string `true`, which the script does not read as `1` and would fall through to a cutover
+  rehearsal), so this job can never deliver a destructive wipe. ADR-119's 2026-07-19 rule ("every
+  destructive mode contributes its own operand" to this expression) is kept by construction — the
+  destructive wipe is not reachable from this job at all — and the addendum says so.
+- **`.env` hardening (both delivering jobs).** The host runs `set -a; . .env`, so every value is shell
+  code; the existing comment calls this safe only because every field is metacharacter-free. The step
+  that writes the heredoc re-checks, immediately before writing: id and size `^[0-9]+$`, dev ==
+  `/dev/disk/by-id/scsi-0HC_Volume_${ID}`, and `CONFIRM_WIPE`/`DRY_RUN` ∈ {0,1}; those two are the last
+  lines. The script refuses a `.env` whose key set contains a duplicate.
 - **`wipe` job (new, after `cutover`):** `needs: preflight`; `if: inputs.wipe_plaintext &&
   !inputs.dry_run`; `environment: workspaces-luks-cutover` (**unconditional**: census Guard 1, and the
-  one human approval); `timeout-minutes: 240` (a fixed ceiling committed in PR A — 20 GiB of zeroes
-  without offload plus a 20 GiB direct read fits well inside it; the rehearsal's W8 fields are
-  recorded, and the ceiling is only raised by a later PR if they say otherwise). Steps:
-  1. `infra-credentials` loader; re-`GET` the pinned volume and require `api_state` unchanged since
-     preflight (the approval may have waited hours); then the **write-capability probe** — `PUT
-     /volumes/<id>` with the volume's current `labels` verbatim → `200`. A read-only token `403`s
-     **here, before web-1 is touched**.
+  one human approval); `permissions: { contents: read, actions: read }`; `timeout-minutes: 240` (a
+  fixed ceiling committed in PR A — 20 GiB of zeroes plus a 20 GiB direct read at the 150 MB/s cap is
+  about 2.5 minutes each at full cap, and still well under an hour at a tenth of it; the rehearsal's W8 fields are
+  recorded and the ceiling is only raised by a later PR if they say otherwise). Steps:
+  1. **Preconditions, all before web-1 is touched:** the `infra-credentials` loader; the presence
+     proof; re-`GET` the pinned volume and require `api_state` unchanged since preflight (the approval
+     may have waited hours); the **window pause is real** — `gh api
+     repos/{o}/{r}/actions/workflows/<f>` reports `disabled_manually` for both
+     `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml`, and `gh run list --workflow
+     <f>` shows no `queued`/`waiting`/`pending`/`in_progress` run of either (disabling does not cancel
+     a run already queued); a successful `workspaces-luks-verify.yml` run on `main` within the last
+     24 h whose summary carries `ready=true` (the baseline is a machine precondition, not a
+     reminder); then the **write-capability probe** — `PUT /volumes/<id>` with the volume's current
+     `labels` verbatim → `200`. A read-only token `403`s **here**.
   2. CF-tunnel bridge, bundle ship, 0600 heredoc `.env` (`CONFIRM_WIPE=1 DRY_RUN=0`), run — the same
      shape as `cutover`'s run step, duplicated rather than refactored so the freeze path stays
-     byte-stable. The `ssh` call adds `-o ServerAliveInterval=30 -o ServerAliveCountMax=10`: a silent
-     multi-minute `blkdiscard` must not idle the tunnel into a drop. Output is tee'd; the job requires
-     exactly one `SOLEUR_WORKSPACES_LUKS_WIPE` success row whose `volume_id` equals the pin **and**
-     whose result matches `api_state` (`attached` → `wiped`; `detached` → `already_wiped_detached`);
-     zero rows, two rows, or a mismatch fail the job before any API write. The host step always runs,
-     including on `detached`, so a volume detached by hand without a wipe is refused, never deleted.
-  3. API: if `server != null`, `POST …/actions/detach`, poll `GET /actions/<aid>` every 5 s ≤ 300 s;
-     on timeout with the action still `running`, keep polling that action (never re-POST — a second
-     detach returns `locked`); then `GET` shows `server: null`. `DELETE /volumes/<id>` → `204` (`404`
-     accepted). Final `GET` must be `404`, and `GET /servers/<web-1>` `volumes` must no longer list
-     it. Token masked, never echoed; `curl -sS --max-time 15 -w '%{http_code}'`.
+     byte-stable. `unset HCLOUD_TOKEN` at the top of the bridge and host steps. The `ssh` call adds `-o
+     ServerAliveInterval=30 -o ServerAliveCountMax=10`: a silent multi-minute `blkdiscard` must not idle
+     the tunnel into a drop. The host output is wrapped in `::stop-commands::<random token>` (so no
+     host line can issue a workflow command) and tee'd: `… 2>&1 | tee "$LOG"; rc=${PIPESTATUS[0]}`.
+     Proceed only if `rc == 0` **and** exactly one line of `$LOG` fully matches
+     `^SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=(wiped|already_wiped_detached) arm=[a-z_]+ volume_id=([0-9]+)( [a-z_]+=[^ ]*)*$`
+     with `volume_id` == the pin and the result matching `api_state` (`attached` → `wiped`;
+     `detached` → `already_wiped_detached`). Free text (the `cmp` line, `dumpe2fs` times) rides a
+     separate, CR/LF-stripped evidence row, never the success row. Anything else fails the job before
+     any API write. The host step always runs, including on `detached`, so a volume detached by hand
+     without a wipe is refused, never deleted.
+  3. API: re-check pin ≠ the LUKS id; if `server != null`, `POST …/actions/detach`, poll `GET
+     /actions/<aid>` every 5 s ≤ 300 s; on timeout with the action still `running`, keep polling that
+     action (never re-POST — a second detach returns `locked`); then `GET` shows `server: null`.
+     `DELETE /volumes/<id>` → `204` (`404` accepted only with the presence proof re-run). Final `GET`
+     must be `404`, and `GET /servers/123931471` must be `200` with `volumes == [106443278]`. The token
+     reaches `curl` through `--config -` on stdin, never argv; `curl -sS --max-time 15 -w
+     '%{http_code}'`; errors print the status and `.error.code` only.
   4. Summary: mode `WIPE`, the marker row, the detach action id, the `204`/`404`, and the next step
      (dispatch the forget workflow).
 
@@ -339,19 +412,30 @@ host group (the apply workflows take host then swap; nesting them the other way 
 
 - Workflow-level `concurrency: { group: terraform-apply-web-platform-host, cancel-in-progress: false }`
   — the literal every writer of this lockless R2 state uses.
-- Inputs: `expected_plaintext_volume_id`, `confirm` (`FORGET-RETIRED-PLAINTEXT-VOLUME`).
+- The pin is a **constant**, `PINNED=105149570`, in the workflow file (single-use, deleted in PR B);
+  the `expected_plaintext_volume_id` input must equal it exactly, and `confirm` must equal
+  `FORGET-RETIRED-PLAINTEXT-VOLUME`. Inputs reach `run:` only through `env:`.
 - One job, `environment: infra-privileged` (Tier-B, main-only, **no reviewer**: it only forgets
-  addresses whose object is measured gone), `env: TERRAFORM_VERSION` equal to the apply workflows'.
+  addresses whose object is measured gone), `permissions: { contents: read, actions: read }`,
+  `env: TERRAFORM_VERSION` equal to the apply workflows'. Every step refuses to run under xtrace
+  (`case $- in *x*) exit 78`).
 - Steps: checkout, `setup-terraform`, the `infra-credentials` loader, then the apply job's own
   "Extract backend credentials" and `terraform init -input=false -lockfile=readonly` steps copied
   verbatim (the loader exports no backend config; the bucket is fixed in `main.tf`), then:
-  1. the pinned id `GET` → `404` **and** the name lookup → `[]` (status via `-w '%{http_code}'`);
-  2. `terraform state pull | jq`: `hcloud_server.web["web-1"]` present (positive evidence the right
-     state object loaded), and every present `["web-1"]` workspaces instance's `id` equals the pin —
-     so a typo'd id can never forget a live object;
+  1. the presence proof; the pinned id `GET` → `404` **and** the name lookup → `[]`; the window pause is
+     still real (same check as the `wipe` job).
+  2. Identity, without ever printing or storing state: `terraform state pull` is piped straight into
+     one `jq` program that emits only `serial`, `lineage`, and — selected by exact `.type` and `.name`,
+     never by address prefix (`workspaces_luks` shares the `hcloud_volume.workspaces` prefix) — the
+     `index_key`, `attributes.id` and, for the attachment, `attributes.volume_id` of each `web-1`
+     instance, plus whether `hcloud_server.web["web-1"]` exists. The state holds
+     `random_password.workspaces_luks`; nothing else from it may reach a log, a file or an artifact.
+     Require `hcloud_server.web["web-1"]` present, the volume instance's `id` == the pin, and the
+     attachment's `volume_id` == the pin.
   3. `terraform state rm` each present `["web-1"]` workspaces address (both, one, or none —
-     `already_forgotten`);
-  4. post-`state list` equals the pre-list minus exactly the removed lines.
+     `already_forgotten`).
+  4. Re-pull through the same `jq` filter: `serial` == pre + 1 (or unchanged when nothing was removed),
+     same `lineage`, and `terraform state list` equals the pre-list minus exactly the removed lines.
 - Census: `test-infra-privileged-tier-census.sh`'s `STATE_WRITE` pattern widens to
   `terraform\s+(apply|destroy|state\s+(rm|mv|push))` so this job is classified as a state writer
   (G1h), and `terraform-target-parity.test.ts`'s `TERRAFORM_VERSION` parity covers this workflow.
@@ -369,13 +453,25 @@ on them fired on valid dispatches. A new filter surface would reverse that decis
 to a file 725 bytes under its size cap. Instead, for the window only:
 
 1. Before D: `gh workflow disable apply-web-platform-infra.yml` and
-   `gh workflow disable apply-deploy-pipeline-fix.yml`, recorded in the run log of the session.
+   `gh workflow disable apply-deploy-pipeline-fix.yml`, then wait until neither has a queued or
+   running run (the `wipe` job re-checks both facts and refuses otherwise).
 2. After PR B merges: `gh workflow enable` both, then `gh workflow run apply-web-platform-infra.yml
    -f reason='#6604 post-PR-B apply'` (the default `manual-rerun` arm applies exactly what the skipped
    push apply would have), and confirm it plans no `hcloud_volume.workspaces` / attachment address.
 
-The dispatched arms of `apply-web-platform-infra.yml` are unavailable while it is disabled; the
-runbook says so, and says an operator-local apply must not run in the window.
+Other members of the `terraform-apply-web-platform-host` group are unaffected, but
+`registry-host-replace-dispatch.yml` dispatches `apply-web-platform-infra.yml` and fails while it is
+disabled, and `git-data-pin-redeploy.yml` shares the group; the runbook names both. The dispatched arms
+of `apply-web-platform-infra.yml` are unavailable while it is disabled, and an operator-local apply
+must not run in the window.
+
+**Sole-copy protection after the window (pre-existing gap, made sharper).** After D the LUKS volume
+106443278 is the only copy, and it has neither `prevent_destroy` (deferred to #6931, because it
+collides with the `workspaces-luks-recut` `-replace` escape hatch) nor Hetzner delete protection.
+The recut path's premise ("the live plaintext keeps serving") stops being true at D. Its gate binds to
+a typed id, so an accident needs the LUKS id typed deliberately; still, PR A's runbook marks Sequence
+Step 0 **never after step 7 — it destroys the only copy**, and PR B comments on #6931 to raise
+delete protection for 106443278 to a precondition of that work.
 
 ### E. PR B — convergence (diff prepared before D, evidence filled after)
 
@@ -407,6 +503,7 @@ runbook says so, and says an operator-local apply must not run in the window.
   names `hcloud_volume.workspaces[*]`.
 - `model.c4` `workspacesVolume` description: the backstop is gone.
 - Runbook step 7 marked done with evidence.
+- A comment on #6931 making Hetzner delete protection for volume 106443278 a precondition of that work.
 - PR body: `Closes #6604`, `Closes #6588`; #6897 comment updating item 1 (workspaces web-1 retired;
   web-2 → #6931; `git_data` untouched).
 
@@ -419,12 +516,48 @@ runbook says so, and says an operator-local apply must not run in the window.
    pinned to the measured count.
 2. `workspaces-luks-loopback.test.sh`: small loop devices (e.g. 64 MiB plus an odd tail) with a real
    `mkfs.ext4 -L workspaces_plain`; the real W9→W12 path (control sees `53 ef`; `blkdiscard -z`
-   zeroes; read-back passes); a non-zero byte at a random offset > 1 MiB after zeroing must RED; an
-   interrupted zero (first MiB only, `PLAINTEXT_WIPE_BEGUN` set) must resume on the re-zero arm.
+   zeroes; read-back passes); a non-zero byte at **fixed** offsets (1 MiB + 1, one byte before a 4 MiB
+   boundary, the last byte) after zeroing must RED; an interrupted zero (first MiB only,
+   `PLAINTEXT_WIPE_BEGUN` set) must resume on the re-zero arm; the device size is a multiple of 512
+   bytes but not of 4 MiB. Behavioral `-f` ban: the script's own `blkdiscard` command line run against
+   an open-LUKS loop device and against a mounted loop device must fail `EBUSY` and leave the data
+   intact. Capture real `systemctl list-dependencies --reverse --plain` output here to pin the stub's
+   format; a missing systemd counts as a failure, never a skip.
 3. `workspaces-luks-cutover-workflow.test.sh` (job set `{preflight, cutover, wipe}`; the `cutover`
    predicate; `wipe`'s unconditional environment; the success-row parser), `workspaces-luks-header.test.sh`
    (H17 unchanged and green), a new workflow test for `workspaces-plaintext-forget.yml`, the tier
-   census, and `terraform-target-parity.test.ts`.
+   census, and `terraform-target-parity.test.ts`. Behavior rows for the workflow steps (Guards 4 and
+   6) extract each step's `run:` block by job and step id with `yq`, assert exactly one match (the
+   duplicated delivery block would otherwise collide), and execute it against a `curl` stub that
+   prints what `-w '%{http_code}'` prints and exits 22 under `-f` on a 404.
+
+**Harness requirements (test-design review).** The stubbed suite must not be able to reach a real
+binary or a real secret:
+
+- recording executables that `exit 64` for `blkdiscard`, `dd`, `doppler` and `aws` sit first on
+  `PATH`, so a call that escapes the function stubs fails loudly (without this, `systemd-run …
+  blkdiscard` would start the real `/usr/sbin/blkdiscard`, and `read_key` would fetch the real prod
+  key); `systemd-run` is stubbed as a function that drops its options and runs `"$@"`; a census asserts
+  every command `wipe_plaintext` invokes has a stub; a hygiene row deletes the `blkdiscard` function
+  stub and requires the case to fail through the `PATH` executable;
+- the device path is resolved through a function seam the harness overrides (W1 requires the literal
+  by-id path and `-b` is a builtin, so no fixture could otherwise reach W6); the seam is not settable
+  from the environment, and a census row checks that;
+- stub fidelity: `cryptsetup --test-passphrase` compares stdin byte-for-byte (so the trailing-newline
+  mutant REDs); `luksUUID` answers per path (W3 vs W5); `blkid` answers `-s TYPE` and `-s LABEL`
+  separately and changes once a zeroed flag is set, with real exit codes (0/2/4/8); `systemctl show`
+  answers per exact escaped unit name; `list-dependencies` prints the unit first and dependents
+  indented, as systemd does; `cmp` prints its difference on stdout;
+- a stub that meets an unknown flag writes `STUB_UNKNOWN_FLAG` to `$CALLS` and every case asserts it
+  absent; every RED row asserts its exact `reason=` slug; a census extracts every `reason=` slug from
+  `wipe_plaintext` and requires each in the test file (covering W0 with util-linux 2.35/2.36/3.0 and
+  `pgrep` rc 1 vs ≥2, W2, all W3/W4/W5 reasons plus the header shred on every W5 exit, W6 `findmnt`,
+  W6b unloaded unit, W7, the blank/absent/other-volume arms, W12 with a signature left, `blkid` rc 4
+  with a marker);
+- the rehearsal leaves no `PLAINTEXT_*` marker (catches a `DRY_RUN` return moved to just below
+  `persist_state`); rows that drive `cleanup()` use the `trap cleanup EXIT` invocation shape (T32b);
+- H1 is an instrument check that exits 2 before any verdict when the recorder is broken, like
+  `harness_selftest`.
 
 ### Phase 2 — Script
 
@@ -443,7 +576,11 @@ version-parity coverage. `actionlint` on both workflows.
 - Runbook step 7: the exact commands (rehearsal, pause, dispatch, forget, resume, un-pause), the one
   approval, the merge freeze, and a verdict table with columns *reason → irreversible act done? →
   safe to re-dispatch the same command? → next action*; the job summary prints the runbook anchor for
-  the reason that fired.
+  the reason that fired. There is no webhook verb to unmount, stop a unit or kill a process on web-1,
+  so `wipe_target_mounted`, `wipe_target_held`, `wipe_target_has_dependents` read **halt and
+  escalate** (never "SSH and …"), and `wipe_in_progress` reads "re-dispatch the read-only rehearsal
+  until W0 passes". Sequence Step 0 (the recut) is marked **never after step 7 — it destroys the only
+  copy**.
 - ADR-119 addendum (status stays `adopting`): the mode; the AP-009 basis — *a superseded copy frozen
   at the 2026-07-23 cutover (run 29995956562), which the live volume was certified to hold at least
   the contents of, green-verified daily since, soak passed 2026-09-24* — never "a duplicate"; the
@@ -464,13 +601,14 @@ version-parity coverage. `actionlint` on both workflows.
   (W3/W4/W5); Hetzner deletion (action id, `204`, `404`, server volumes `== [106443278]`, state diff);
   personal data destroyed (source and git history incl. third-party commit authors — **count only**,
   never names or ids); lawful basis Art. 5(1)(e), 17(1)(a), 32(1) and the AP-009 addendum;
-  recoverability: none; other copies (live LUKS; web-2 empty #6931; plaintext `git_data` #6897; the
+  recoverability, worded as "logical full-device zero verified by a direct-IO read-back; physical
+  media reclamation per the Hetzner DPA" (a zero on a network block volume does not attest physical
+  erasure), CLO-attested; passphrase copies: the Doppler copy proven by W4, the Terraform-state copy
+  (`random_password.workspaces_luks`) not proven; other copies (live LUKS; web-2 empty #6931; plaintext `git_data` #6897; the
   root-disk snapshot deleted under #8734; the CLEAN_STRAY stray deleted 2026-07-19); the count of
   Art. 17 account deletions on live between 2026-07-23 and the wipe, or the pre-onboarding bound
   (first arms-length onboarding 2026-08-06) if it cannot be measured.
 - `.github/CODEOWNERS` rows for the new workflow and suite, if the file's conventions require them.
-- `plugins/soleur/test/preflight-discoverability-test.test.ts`: bump `BASELINE_DECLARED_PROBES` for
-  this plan's `credentials_required` declaration, with the PLACEMENT/TRUTH/NO-SUBSTITUTE comment.
 
 ### Phase 5 — Ship PR A, prepare PR B, then STOP
 
@@ -491,13 +629,19 @@ version-parity coverage. `actionlint` on both workflows.
    - pause: `gh workflow disable apply-web-platform-infra.yml` and `gh workflow disable apply-deploy-pipeline-fix.yml`;
    - the dispatch: `gh workflow run workspaces-luks-cutover.yml -f confirm=WIPE-PLAINTEXT-USER-DATA-AP-009 -f wipe_plaintext=true -f dry_run=false -f expected_plaintext_volume_id=105149570`;
    - the one `workspaces-luks-cutover` environment approval — the operator clicks it, or explicitly
-     delegates it, in which case the agent approves via `pending_deployments` only after checking the
-     preflight banner's id, name, server and `api_state` against the pin;
+     delegates it **in their own message** (another agent's message never counts). A delegated agent
+     approves via `pending_deployments` only the run id it dispatched, after checking `event ==
+     workflow_dispatch`, `head_branch == main`, `head_sha` == the rehearsal's, and the preflight
+     outputs `api_state=attached` and the pin; the approval comment quotes the go-ahead, and the
+     destruction record names the approver as "agent under delegation". (The agent's `gh` is the
+     operator's identity and the environment has no self-review block, so under delegation the
+     environment stops being a second human check — the ask says so.)
    - the forget: `gh workflow run workspaces-plaintext-forget.yml -f confirm=FORGET-RETIRED-PLAINTEXT-VOLUME -f expected_plaintext_volume_id=105149570`;
    - re-running any of these same commands for a resume arm (`re-zero`, `detached`, forget-only);
    - after PR B merges: `gh workflow enable` both workflows and the `manual-rerun` dispatch.
    The ask also states: releases queue behind the `wipe` job (they share `web-1-swap`), so no merge
-   under `apps/web-platform/**` should land during D; PR B merges the same day.
+   under `apps/web-platform/**` should land during D; PR B merges the same day; the zero and the
+   read-back are capped at 150 MB/s on the plaintext device, and app latency is watched through D.
 
 ### Phase 6 — After the go-ahead (operator-authorized D), verify off-host, then PR B
 
@@ -505,9 +649,12 @@ version-parity coverage. `actionlint` on both workflows.
 2. Dispatch the forget workflow; watch it.
 3. Verify: `GET /volumes/105149570` → `404`; `GET /servers/123931471` → `volumes == [106443278]`;
    `GET /volumes?name=soleur-web-platform-data` → `[]`; a fresh `workspaces-luks-verify.yml` run
-   `success` with `ready=true` and `workspace_count >= expected` (report the delta against the
-   baseline); no new `op:workspaces-luks-drift` Sentry event; the Better Stack web-1 monitor shows no
-   downtime.
+   `success` with `ready=true`, and `workspace_count` compared against the **same-day baseline** `n`
+   (a drop is explained, e.g. by an Art. 17 deletion, or escalated — the persisted `expected` floor
+   alone is a weak signal); no new `op:workspaces-luks-drift` Sentry event; the Better Stack web-1
+   monitor shows no downtime; `gh workflow run scheduled-prod-version-drift.yml` confirms the image on
+   web-1 matches the latest `apps/web-platform/**` commit on `main` (a release queued behind the `wipe`
+   job may have been replaced while pending — re-dispatch it if so).
 4. Finish PR B (§E), CLO-attested; merge the same day; `gh workflow enable` both; dispatch the
    `manual-rerun` apply; post-merge `scheduled-terraform-drift.yml` green.
 5. Comment evidence on #6604 and #6588; confirm the next sweeper run PASSes and closes #6604.
@@ -530,7 +677,6 @@ version-parity coverage. `actionlint` on both workflows.
 - `knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md` — addendum.
 - `knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md` — D2 note.
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — `github -> hetzner`, `hetzner -> cloudflare`.
-- `plugins/soleur/test/preflight-discoverability-test.test.ts` — `BASELINE_DECLARED_PROBES`.
 - `.github/CODEOWNERS` — only if its conventions cover new workflows/suites.
 
 **PR B**
@@ -616,6 +762,37 @@ Neither edit moves a cardinality in edge prose, but both PRs run
 The addendum is written in PR A describing the target state; the status flip waits for the dispatch
 evidence (PR B). Neither is deferred to a separate issue.
 
+## Downtime & Cutover
+
+**Operation.** A hot detach and delete of an unmounted, unheld volume on web-1 (the sole origin), after
+a full-device zero and read-back of that volume. The serving surface — `/mnt/data` on
+`/dev/mapper/workspaces`, volume 106443278 — is never unmounted, and the app container is never
+stopped.
+
+**Zero-downtime path (the default, and the only path).** Nothing is drained because nothing that serves
+is touched. Per stage:
+
+| Stage | What could take the surface down | Verification before moving on | Rollback |
+|---|---|---|---|
+| Zero + read-back | I/O contention on the shared storage path | 150 MB/s cgroup `io.max` cap; readyz and latency watched through D | Stop the run; nothing to undo (the volume holds no live data) |
+| Detach | A unit bound to the detached device (systemd would stop it) | W6b: no mount/swap/service depends on any of the target's device units, and `mnt-data.mount` binds none of them | None needed — the check runs before the detach |
+| Delete | Deleting the wrong volume | Pin ≠ LUKS id, success row for the pin, presence proof | None — irreversible by design, which is why every check precedes it |
+| Forget + PR B | A push apply re-creating a plaintext volume | Both apply workflows paused and idle; `manual-rerun` after PR B plans no workspaces address | Re-dispatch the forget workflow |
+
+No maintenance window is needed. The only restarts in the whole sequence are the routine container
+releases fired by merging PR A and PR B, the same as any `apps/web-platform/**` merge.
+
+## Risks & Precedents
+
+| Pattern | Precedent in repo | This plan |
+|---|---|---|
+| Serializing a writer of the lockless web-platform state | `apply-web-platform-infra.yml` / `apply-deploy-pipeline-fix.yml` workflow-level `concurrency: terraform-apply-web-platform-host` (the header comment calls it the SOLE serializer) | Same literal, workflow level, and never nested with `web-1-swap` |
+| Reading Terraform state in CI | `apply-sentry-infra.yml` `terraform state pull > "${RUNNER_TEMP}/sentry-state-pre.json"` (a root holding no LUKS secret) | Never written to disk or printed: piped straight into a field-selecting `jq`, because this root's state holds `random_password.workspaces_luks` |
+| A destructive, operator-approved mode on the cutover script | `clean_stray()` (CLEAN_STRAY, AP-009 carve-out): own marker, own typed token, refuses `DRY_RUN=1`, ungated preflight banner | Same shape, with one deliberate difference: the wipe *has* a rehearsal (`DRY_RUN=1` runs every precondition), because its preconditions are the complex part |
+| Binding a destroy to a physical id | `workspaces_luks_recut_gate` (`expected_luks_volume_id`, `luks_id_mismatch`) | `expected_plaintext_volume_id` pinned through preflight, the host by-id path, `ID_SERIAL`, the success row and the forget's state identity |
+| Destruction record | `knowledge-base/legal/audits/inngest-aof-destruction-record.md` (template before the act, completed from the gate's own row) | Same, for a populated volume |
+| Hot-detaching a volume from a running host | No precedent in this repo | Novel — hence W6b's measurement rather than a reasoned claim |
+
 ## Alternative Approaches Considered
 
 | Approach | Why not |
@@ -646,6 +823,17 @@ evidence (PR B). Neither is deferred to a separate issue.
 - **If this leaks, the user's data is exposed via:** a Terraform apply in the delete→PR-B window
   birthing a fresh plaintext volume that a later rebuild could mount (the two push-apply workflows
   are paused for the window).
+- **If this lands broken, the user experiences:** slow or timing-out requests on app.soleur.ai for the
+  length of D, because 20 GiB of zeroes and a 20 GiB read share web-1's storage path with the live
+  volume. Controlled by the 150 MB/s cgroup `io.max` cap (W10/W11) and a latency watch through D.
+- **If this lands broken, the user experiences:** a hotfix release silently not deployed — releases
+  queue behind the `wipe` job on `web-1-swap`, and a third arrival cancels the older pending one.
+  Controlled by the merge freeze and the post-D `scheduled-prod-version-drift.yml` check.
+- **If this leaks, the user's data is exposed via:** a copy of the LUKS header left on web-1's root disk
+  after a W5 refusal (with a leaked key it decrypts every workspace) — shredded on every W5 exit.
+- **If this leaks, the user's data is exposed via:** device bytes printed into the Actions log, Better
+  Stack or Sentry (`cmp -l`/`-b`, an echoed `dd` buffer) — forbidden, and the one `cmp` line is scrubbed
+  and capped.
 - **Brand-survival threshold:** `single-user incident`
 
 **Accepted residual risk (stated, not hidden).** Today the stale 2026-07-23 plaintext copy is, weakly,
@@ -662,8 +850,8 @@ record evidences it.
 
 **A failed run between the host step and the API step leaves users unaffected.** The zeroed volume is
 unmounted and unused; the API steps run only on a proven `wiped` row, and a re-dispatch resumes at the
-right arm (`already_wiped`, `already_wiped_detached`, or the 404 forget-only arm) without re-zeroing
-or touching the live mount.
+right arm (`arm=re_zero`, which re-runs every identity check before zeroing again; `arm=detached`;
+or the forget workflow alone once the volume is deleted) without touching the live mount.
 
 CPO sign-off: **granted with conditions** (Phase 2.5) — the three items above, a same-day
 `workspaces-luks-verify.yml` baseline before the go-ahead (Acceptance Criteria → Dispatch), and a
@@ -672,52 +860,68 @@ rehearsal from the same merged commit with no deploy or cutover run in between.
 
 ## Observability
 
+Layer names follow `hr-observability-layer-citation`: **workflow run log** (layer 6, the synchronous
+signal — host output streams into it, refusal rows print before `die`, `::error::` annotations);
+**vector → Better Stack** (layer 3 — `luks-monitor` is in `include_matches.SYSLOG_IDENTIFIER`,
+Source 4 `host_scripts_journald`, `vector.toml`; live rows from `soleur-web-platform` observed
+2026-09-28); **Sentry** is additive, via `emit_drift` → `sentry_alert.workspaces_luks_drift`
+(`sentry/issue-alerts.tf`), with a crit `SEND_FAILED` row on the vector path if the send fails.
+
 ```yaml
 liveness_signal:
-  what: SOLEUR_WORKSPACES_LUKS_WIPE marker row (result=rehearsal_ok|wiped|already_wiped|already_wiped_detached|refused) on the luks-monitor syslog tag, shipped by Vector to Better Stack; plus the workflow run summary
-  cadence: per dispatch (the mode runs once for real; rehearsals on demand)
-  alert_target: Sentry (feature=workspaces-luks op=workspaces-luks-drift, via emit_drift on every refusal) and the failed-run notification to the dispatcher
-  configured_in: apps/web-platform/infra/workspaces-cutover.sh (emit_wipe, emit_drift) and .github/workflows/workspaces-luks-cutover.yml (summary + job outputs)
+  what: SOLEUR_WORKSPACES_LUKS_WIPE rows (result=rehearsal_ok|begun|readback_start|wiped|already_wiped_detached|refused, with arm=first_wipe|re_zero|detached) written by emit_wipe to stdout and to the luks-monitor syslog tag
+  cadence: per dispatch (once for real; rehearsals on demand)
+  alert_target: the failed-run notification to the dispatcher (workflow run log, layer 6) and, for every refusal, the Sentry issue alert on feature=workspaces-luks op=workspaces-luks-drift
+  configured_in: apps/web-platform/infra/workspaces-cutover.sh (emit_wipe, emit_drift), .github/workflows/workspaces-luks-cutover.yml (row parser + summary), apps/web-platform/infra/vector.toml (luks-monitor tag)
 
 error_reporting:
-  destination: Sentry project of the luks-monitor emitter (workspaces_luks_emit reads the baked SOLEUR_SENTRY_DSN on web-1)
-  fail_loud: result=refused reason=<slug> row printed BEFORE die, a ::error:: annotation naming the reason, and a non-zero job conclusion; the wipe job prints ::error:: on any unexpected API status and the forget workflow on any identity or state-list mismatch
+  destination: Sentry via workspaces_luks_emit (baked SOLEUR_SENTRY_DSN in /etc/default/luks-monitor on web-1), plus the workflow run log
+  fail_loud: a result=refused reason=<slug> row printed BEFORE die, a ::error:: annotation carrying the reason (API errors print only the HTTP status and .error.code), and a non-zero job conclusion
 
 failure_modes:
-  - mode: target identity ambiguous (target is the mapper backing device, held, mounted, wrong size, not ext4)
-    detection: W6 refusal row + Sentry drift event, before any write
-    alert_route: Sentry + failed run
-  - mode: escrow not recoverable at wipe time (passphrase or off-host header)
-    detection: W4/W5 refusal rows
-    alert_route: Sentry + failed run; runbook routes to the header-recovery path, never to the wipe
+  - mode: target identity ambiguous (mapper backing device, held, mounted, wrong size, wrong serial or label, not ext4, dependents)
+    detection: W6/W6b refusal row in the workflow run log (layer 6) and on vector → Better Stack (layer 3), before any write
+    alert_route: failed run to the dispatcher; Sentry workspaces-luks-drift alert
+  - mode: escrow not recoverable at wipe time (passphrase, header absent, mismatched or stale)
+    detection: W4/W5 refusal rows, workflow run log (layer 6) and vector → Better Stack (layer 3)
+    alert_route: failed run; Sentry alert; runbook routes to re-escrowing the header, never to the wipe
   - mode: zeroing did not take (no-op or partial)
-    detection: W11 read-back cmp over every byte, O_DIRECT, after flushbufs
-    alert_route: Sentry wipe_readback_nonzero + failed run; the API steps never run (they need exactly one wiped row)
-  - mode: token lacks write permission (ADR-241 O5 legacy arm)
-    detection: the labels PUT probe returns 403 before the wipe job reaches web-1
-    alert_route: failed wipe job with nothing irreversible done; re-dispatch once the loader exports a write token
-  - mode: the two push-apply workflows left paused after PR B merges (the window never closed)
-    detection: PR B's acceptance criterion reads gh workflow view state == active for both; the next infra merge produces no apply run
-    alert_route: the PR B ship checklist; scheduled-terraform-drift.yml keeps reporting the unapplied change until a manual-rerun
-  - mode: zeroing interrupted (SSH drop, job timeout, cancel) before the wiped row
-    detection: the job fails without a wiped row; the persisted PLAINTEXT_WIPE_BEGUN marker makes the next dispatch resume (arm=interrupted) instead of refusing, and the cleanup() row reads outcome=wipe_aborted mode=wipe
-    alert_route: failed run + Better Stack row; runbook resume table
-  - mode: state forget cancelled or failed after the delete (a newer pending apply replaced it in the concurrency group)
-    detection: the forget run cancelled/failed; the drift job reports +create of the two web-1 addresses and PR B's infra-validation plan fails prevent_destroy
-    alert_route: failed or cancelled run + drift issue; re-dispatch runs the forget-only arm (api_state=absent) with no approval
-  - mode: web-1 serving degraded after the detach
-    detection: workspaces-luks-verify.yml (daily schedule + post-dispatch run) and the luks-monitor heartbeat
-    alert_route: ci/luks-verify issue + ops email (drift/readiness classes)
+    detection: wipe_readback_failed row (cmp_rc, dd_rc) from the W11 full-device O_DIRECT compare, workflow run log (layer 6) and vector → Better Stack (layer 3)
+    alert_route: failed run; Sentry alert; the API steps never run (they need exactly one success row)
+  - mode: zeroing interrupted (SSH drop, job timeout, cancel) before the success row
+    detection: a result=begun row with no result=wiped after it (vector → Better Stack, layer 3), the cleanup() outcome=wipe_aborted mode=wipe row, and the failed run (layer 6); PLAINTEXT_WIPE_BEGUN makes the next dispatch take arm=re_zero
+    alert_route: failed run; runbook resume table
+  - mode: token lacks write permission (ADR-241 O5 legacy arm) or the project is not visible
+    detection: the labels-PUT probe or the presence proof fails in the wipe job before web-1 is touched (workflow run log, layer 6)
+    alert_route: failed run with nothing irreversible done; re-dispatch once the loader exports a write token
+  - mode: detach done, DELETE failed or timed out
+    detection: wipe job step 3 ::error:: with status and .error.code (workflow run log, layer 6)
+    alert_route: failed run; the next dispatch classifies api_state=detached and takes arm=detached
+  - mode: state forget cancelled or failed after the delete (a newer pending apply replaced it in the group)
+    detection: the forget workflow's run log (layer 6); scheduled-terraform-drift.yml reports +create of the two web-1 addresses (its own run log and issue route)
+    alert_route: failed or cancelled run plus the drift issue; re-dispatch the forget workflow
+  - mode: the two push-apply workflows left paused after PR B merges
+    detection: PR B's acceptance criterion reads gh workflow view state == active for both; scheduled-terraform-drift.yml keeps reporting the unapplied change (its run log)
+    alert_route: the PR B ship checklist and the drift issue
+  - mode: web-1 serving degraded during or after D
+    detection: workspaces-luks-verify.yml run log (layer 6, daily schedule plus a post-dispatch run) and the luks-monitor heartbeat on vector → Better Stack (layer 3); the Better Stack uptime monitor
+    alert_route: ci/luks-verify issue plus ops email (drift/readiness classes); uptime alert
 
 logs:
-  where: GitHub Actions run logs (cutover workflow preflight/wipe, forget workflow), web-1 syslog tag luks-monitor -> Vector -> Better Stack source 2457081
+  where: workflow run logs (cutover workflow preflight/wipe, forget workflow); web-1 syslog tag luks-monitor -> vector -> Better Stack source 2457081
   retention: Actions logs 90 days; Better Stack per the source retention plus archive
 
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_WORKSPACES_LUKS_WIPE
-  expected_output: "SOLEUR_WORKSPACES_LUKS_WIPE"
-  credentials_required: "Better Stack Logs query credentials (BETTERSTACK_QUERY_*) — the marker lives only in the host log stream; no unauthenticated endpoint exposes a wipe's outcome"
+  command: grep -c -e 'SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks' apps/web-platform/infra/workspaces-cutover.sh
+  expected_output: "1"
 ```
+
+The discoverability probe proves the emitter exists at the single `emit_wipe` definition (a count other
+than 1 means the row format was duplicated or removed). The live query of the rows themselves —
+`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1d --grep SOLEUR_WORKSPACES_LUKS_WIPE`
+— is a Phase 6 verification step, not the discoverability probe, because it returns nothing until the
+first dispatch. A test extracts every `reason=` and `arm=` token named in this section and asserts each
+one exists in `workspaces-cutover.sh`.
 
 ## Encryption Posture
 
@@ -739,7 +943,7 @@ at_rest:
     live_verification: unavailable:no probe reads web-2's volume contents; tracked #6931
 in_transit:
   - connection: GitHub Actions runner -> api.hetzner.cloud (detach, delete, labels PUT)
-    enforced_at: .github/workflows/workspaces-luks-cutover.yml wipe job API step (curl -fsS https://api.hetzner.cloud/v1/..., no -k)
+    enforced_at: .github/workflows/workspaces-luks-cutover.yml wipe job API step (curl -sS --max-time 15 https://api.hetzner.cloud/v1/..., no -k; status read with -w)
     tls: HTTPS, TLS 1.2+
     cert_verification: on
     does_not_defend: a compromised runner or a leaked HCLOUD_TOKEN, which can delete any project resource
@@ -781,6 +985,8 @@ W3–W7; W6's label check applies to the first-wipe arm.
 | 7 | first-wipe arm with label ≠ `workspaces_plain` | RED `wipe_target_label_mismatch` |
 | 8 | a `.mount` unit in the target device unit's reverse dependencies; and separately an unloaded device unit | RED `wipe_target_has_dependents` (both) |
 | 9 | re-zero arm (`PLAINTEXT_WIPE_BEGUN` set) with the target made the mapper backing device | RED — identity checks run on the re-zero arm too |
+| 9b | re-zero arm with a `crypto_LUKS` signature | RED `wipe_target_not_ext4` |
+| 9c | `ID_SERIAL` of the target does not contain `HC_Volume_<id>` | RED |
 | 10 | a second `blkdiscard` call site added anywhere in the script | RED (census row) |
 | 11 | `blkdiscard -f` or `--force` anywhere | RED |
 | 12 | own dispatch: the mode block deleted so `CONFIRM_WIPE=1` falls through to the L3 cutover | RED (the suite requires a `SOLEUR_WORKSPACES_LUKS_WIPE` row, not merely "no blkdiscard") |
@@ -849,6 +1055,9 @@ environment.
 | 4 | `hcloud_server.web["web-1"]` absent from the pulled state (wrong state object) | RED |
 | 5 | the post-diff removes anything but the web-1 workspaces addresses | RED |
 | 6 | the concurrency group string differs from the apply workflows' literal, or the job loses `infra-privileged` | RED (workflow test / census) |
+| 6b | the presence proof fails (`GET /servers/123931471` ≠ `200`, or its volumes lack 106443278) while the pin `404`s — a token from another project | RED, no `state rm` |
+| 6c | a step prints, tees or uploads `terraform state pull` output, or the `jq` filter selects by address prefix | RED (static row over the workflow text) |
+| 6d | the post-removal `serial` is not pre + 1, or `lineage` changed | RED |
 | 7 | own dispatch: the `state rm` step deleted — the job reports success with state unchanged | RED (post-diff must show the removal, or `already_forgotten` with both addresses absent in the pre-list) |
 | H1 | must-PASS: one of two addresses present, pin `404` | GREEN, removes the one |
 | H2 | must-PASS: both already absent | GREEN `already_forgotten`, no mutation |
@@ -888,6 +1097,10 @@ for the pinned id, matching `api_state`, is observed in the same job.
 | 3 | `api_state=detached` with a `wiped` row, or `attached` with `already_wiped_detached` | RED |
 | 4 | the labels-`PUT` probe moved after the host step (REORDER) | RED (step-order assertion) |
 | 5 | the host step skipped on `detached` | RED — a hand-detached, never-wiped volume must be refused, never deleted |
+| 6 | exactly one success row but `ssh` rc ≠ 0 | RED |
+| 7 | a host line `::add-mask::…` or `::set-output` appears in the tee'd output | inert — the `::stop-commands::` wrap is asserted present |
+| 8 | either apply workflow still `active`, or one has a queued run | RED before web-1 is touched |
+| 9 | no successful `workspaces-luks-verify.yml` run on `main` in the last 24 h | RED before web-1 is touched |
 | H1 | must-PASS: `api_state=detached`, marker present → `already_wiped_detached` → `DELETE` | GREEN |
 
 ## Acceptance Criteria
@@ -912,8 +1125,8 @@ for the pinned id, matching `api_state`, is observed in the same job.
       is empty, and ADR-119's `status:` is unchanged (the sweeper closes #6604 on `accepted`).
 - [ ] `infra-validation`'s web-platform plan shows the same add/change/destroy counts as `main`'s
       baseline on the same day and names no `hcloud_volume(_attachment).workspaces` address.
-- [ ] Runbook step 7, ADR-119 addendum, ADR-241 note, `model.c4` edges, destruction-record template,
-      `BASELINE_DECLARED_PROBES` bump committed; `c4-count-parity`, `c4-code-syntax`, `c4-render` green.
+- [ ] Runbook step 7, ADR-119 addendum, ADR-241 note, `model.c4` edges, destruction-record template
+      committed; `c4-count-parity`, `c4-code-syntax`, `c4-render` green.
 
 ### Dispatch (post-merge, operator-authorized)
 
@@ -928,7 +1141,8 @@ for the pinned id, matching `api_state`, is observed in the same job.
       a post-dispatch `workspaces-luks-verify.yml` run `success` with `ready=true` and
       `workspace_count >= expected`; no new `op:workspaces-luks-drift` Sentry event.
 - [ ] web-1 never restarted or replaced during the dispatch window; the Better Stack web-1 monitor
-      shows no downtime.
+      shows no downtime; `scheduled-prod-version-drift.yml` green after D (no release dropped while
+      queued behind the `wipe` job).
 
 ### PR B (post-dispatch)
 
@@ -952,7 +1166,7 @@ for the pinned id, matching `api_state`, is observed in the same job.
 The CTO's blocking finding — a job-level host group inside a workflow holding `web-1-swap` inverts the
 lock order the apply workflows use and can deadlock — is resolved by moving the state step into its own
 workflow. Also folded: a reverse-dependency detach-safety probe (W6b) in place of the meaningless
-`What=` compare; W0 requires `aws` rather than installing it; `ionice -c3`; the write-token probe
+`What=` compare; W0 requires `aws` rather than installing it; a cgroup `io.max` cap (deepen replaced `ionice`); the write-token probe
 before web-1 is touched. The CTO confirmed nothing in the dispatch restarts web-1 and noted that PR
 merges fire the routine container release (scoped in P8). Its devex pass drove the fixed 240-minute
 timeout, the finite go-ahead command set (including resume re-runs and the approval), the draft PR B
