@@ -191,9 +191,13 @@ describe("Stripe webhook — subscription lifecycle", () => {
       expect(mockMarkerDeleteEq).toHaveBeenCalledWith("session_id", "cs_test_done_1");
     });
 
-    test("double-completion anomaly fires when >1 active subscription on the customer (#8918)", async () => {
+    test("concurrent-completion anomaly fires when 2 active subs were created minutes apart (#8918)", async () => {
+      const now = Math.floor(Date.now() / 1000);
       mockSubsList.mockResolvedValue({
-        data: [{ id: "sub_a" }, { id: "sub_b" }],
+        data: [
+          { id: "sub_a", created: now - 300 },
+          { id: "sub_b", created: now - 240 },
+        ],
       });
       const event = makeEvent("checkout.session.completed", {
         customer: CUSTOMER_ID,
@@ -211,19 +215,48 @@ describe("Stripe webhook — subscription lifecycle", () => {
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ customerId: CUSTOMER_ID, activeCount: 2 }),
-        expect.stringContaining("double-completion anomaly"),
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
       );
       expect(mockCaptureMessage).toHaveBeenCalledWith(
-        expect.stringContaining("double-completion anomaly"),
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
         expect.objectContaining({ level: "warning" }),
       );
     });
 
-    test("single active subscription (incl. legit plan-switch) stays silent (#8918)", async () => {
-      // The session's subscription id differs from the stored one — a legit
-      // plan-switch shape. The invariant is the active-subs COUNT, not id
-      // equality, so no anomaly must fire.
-      mockSubsList.mockResolvedValue({ data: [{ id: "sub_new_tier" }] });
+    test("two active subs created far apart (legit upgrade pair) stays silent (#8918)", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      // A real paid→paid upgrade leaves >1 active too — but its subs were
+      // created days/months apart, so the proximity invariant must not fire.
+      mockSubsList.mockResolvedValue({
+        data: [
+          { id: "sub_old", created: now - 30 * 24 * 3600 },
+          { id: "sub_new", created: now },
+        ],
+      });
+      const event = makeEvent("checkout.session.completed", {
+        customer: CUSTOMER_ID,
+        subscription: "sub_new",
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockCaptureMessage).not.toHaveBeenCalledWith(
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
+        expect.anything(),
+      );
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
+      );
+    });
+
+    test("single active subscription stays silent (#8918)", async () => {
+      mockSubsList.mockResolvedValue({
+        data: [{ id: "sub_new_tier", created: Math.floor(Date.now() / 1000) }],
+      });
       const event = makeEvent("checkout.session.completed", {
         customer: CUSTOMER_ID,
         subscription: "sub_new_tier",
@@ -235,12 +268,8 @@ describe("Stripe webhook — subscription lifecycle", () => {
 
       expect(res.status).toBe(200);
       expect(mockCaptureMessage).not.toHaveBeenCalledWith(
-        expect.stringContaining("double-completion anomaly"),
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
         expect.anything(),
-      );
-      expect(mockLogger.warn).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.stringContaining("double-completion anomaly"),
       );
     });
   });

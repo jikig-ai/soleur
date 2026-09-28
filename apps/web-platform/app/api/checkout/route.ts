@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
+import { getServiceClient } from "@/lib/supabase/service";
 import { getStripe } from "@/lib/stripe";
 import { priceIdForTier } from "@/lib/stripe-price-tier-map";
 import type { PlanTier } from "@/lib/types";
@@ -14,11 +15,18 @@ const VALID_TARGET_TIERS: PlanTier[] = ["solo", "startup", "scale", "enterprise"
 
 // #8918 — a marker with no session_id means a sibling request won the claim
 // and is mid-sessions.create; a marker older than this is crashed-claim
-// residue and reclaimable.
-const STALE_NULL_MARKER_MS = 60_000;
+// residue and reclaimable. The bound must EXCEED stripe-node's default
+// timeout (80s, node_modules/stripe/esm/stripe.core.js) — below it, a
+// slow-but-successful sessions.create could be reclaimed mid-flight.
+const STALE_NULL_MARKER_MS = 90_000;
 // One claim + one retry after a reclaim. The PK arbitrates any residual
 // interleaving — a loser re-enters the marker-hit path rather than failing.
 const MAX_CLAIM_ATTEMPTS = 2;
+
+// Sentinel written into markers for the no-targetTier (legacy signup) path —
+// a real row value must differ from every PlanTier so a "legacy" marker only
+// reuses a "legacy" session.
+const LEGACY_TIER_SENTINEL = "legacy";
 
 function isPlanTier(v: unknown): v is PlanTier {
   return typeof v === "string" && (VALID_TARGET_TIERS as string[]).includes(v);
@@ -139,19 +147,33 @@ export async function POST(request: Request) {
   // per-invocation concurrency: claim via INSERT, and a 23505 routes the
   // loser into the marker-hit path below. All 4xx exits above deliberately
   // run BEFORE the claim so error paths never hold a slot.
-  const resolvedTier = targetTier ?? "legacy";
-  const service = createServiceClient();
+  //
+  // Fencing discipline: every marker mutation predicates on the IDENTITY of
+  // the row observed at SELECT/INSERT time (created_at or session_id), never
+  // on user_id alone. A bare-user_id write lets a stale decision delete or
+  // overwrite a faster sibling's fresh claim — an ABA that reopens the
+  // double-session window this table exists to close. A 0-row fenced write
+  // means the marker changed under us; the loop's next INSERT then 23505s
+  // and re-enters the marker-hit path cleanly.
+  const resolvedTier = targetTier ?? LEGACY_TIER_SENTINEL;
+  const service = getServiceClient();
   const stripe = getStripe();
 
   for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt++) {
-    const { error: claimErr } = await service
+    // .select("created_at") returns the inserted row's timestamp — a free
+    // fencing token (fresh DEFAULT now() per claim) for the UPDATE and the
+    // release-DELETE below.
+    const { data: claim, error: claimErr } = await service
       .from("pending_checkout_sessions")
-      .insert({ user_id: user.id, target_tier: resolvedTier });
+      .insert({ user_id: user.id, target_tier: resolvedTier })
+      .select("created_at")
+      .single();
 
-    if (!claimErr) {
+    if (!claimErr && claim) {
       // Own the slot — create, record, return.
+      let session;
       try {
-        const session = await stripe.checkout.sessions.create(
+        session = await stripe.checkout.sessions.create(
           {
             ...(userData?.stripe_customer_id
               ? { customer: userData.stripe_customer_id }
@@ -170,36 +192,76 @@ export async function POST(request: Request) {
           // response within key retention (stale/completed sessions).
           { idempotencyKey: randomUUID() },
         );
-
-        // Record the session so a racing marker-hit can retrieve it. A
-        // failed UPDATE is logged but not fatal — the marker's null
-        // session_id reclaims itself via the staleness path.
-        const { error: updateErr } = await service
-          .from("pending_checkout_sessions")
-          .update({ session_id: session.id })
-          .eq("user_id", user.id);
-        if (updateErr) {
-          logger.warn(
-            { err: updateErr, userId: user.id },
-            "checkout: marker session_id update failed — marker self-heals via stale-null reclaim",
-          );
-        }
-
-        return NextResponse.json({
-          clientSecret: session.client_secret,
-          // Legacy hosted-page callers still read `url` — keep the field so
-          // old clients don't break. `url` is null on embedded sessions.
-          url: session.url,
-        });
       } catch (err) {
-        // Release the marker before the 5xx so a retry re-enters cleanly
-        // (mirrors releaseDedupRow() in the webhook route).
-        await service
+        // Release OUR claim (fenced — a sibling that already reclaimed this
+        // slot must not have its fresh marker deleted) before the 5xx so a
+        // retry re-enters cleanly. Mirrors releaseDedupRow() in the webhook
+        // route.
+        const { error: releaseErr } = await service
           .from("pending_checkout_sessions")
           .delete()
-          .eq("user_id", user.id);
+          .eq("user_id", user.id)
+          .eq("created_at", claim.created_at);
+        if (releaseErr) {
+          logger.warn(
+            { err: releaseErr, userId: user.id },
+            "checkout: claim release on create failure errored — marker self-heals via stale-null reclaim",
+          );
+        }
         return checkoutError(err, "create-session", { userId: user.id });
       }
+
+      // Record the session so a racing marker-hit can retrieve it, fenced
+      // to our claim's created_at. Two failure shapes:
+      //   error     — record-keeping is broken; expire the unrecorded
+      //               session rather than hand out a live one the table
+      //               can't track, release the claim, 5xx.
+      //   0 rows    — our marker was reclaimed as stale while we were in
+      //               sessions.create (≥ STALE_NULL_MARKER_MS); a sibling
+      //               owns the slot now. Our session is invisible to the
+      //               invariant — expire it and signal in-progress so the
+      //               client retries onto the sibling's session.
+      const { data: updated, error: updateErr } = await service
+        .from("pending_checkout_sessions")
+        .update({ session_id: session.id })
+        .eq("user_id", user.id)
+        .eq("created_at", claim.created_at)
+        .select("user_id");
+
+      if (updateErr || (updated?.length ?? 0) === 0) {
+        try {
+          await stripe.checkout.sessions.expire(session.id);
+        } catch (expireErr) {
+          logger.warn(
+            { err: expireErr, userId: user.id, sessionId: session.id },
+            "checkout: expire of unrecorded session failed — session self-expires per Stripe TTL",
+          );
+        }
+        if (updateErr) {
+          const { error: releaseErr } = await service
+            .from("pending_checkout_sessions")
+            .delete()
+            .eq("user_id", user.id)
+            .eq("created_at", claim.created_at);
+          if (releaseErr) {
+            logger.warn(
+              { err: releaseErr, userId: user.id },
+              "checkout: claim release on update failure errored",
+            );
+          }
+          return checkoutError(updateErr, "session-record", {
+            userId: user.id,
+          });
+        }
+        return checkoutInProgress();
+      }
+
+      return NextResponse.json({
+        clientSecret: session.client_secret,
+        // Legacy hosted-page callers still read `url` — keep the field so
+        // old clients don't break. `url` is null on embedded sessions.
+        url: session.url,
+      });
     }
 
     if (sqlStateFromError(claimErr) !== PG_UNIQUE_VIOLATION) {
@@ -233,7 +295,9 @@ export async function POST(request: Request) {
         return checkoutError(err, "session-retrieve", { userId: user.id });
       }
 
-      if (existing.status === "open" && marker.target_tier === resolvedTier) {
+      const isTerminal = existing.status !== "open";
+
+      if (!isTerminal && marker.target_tier === resolvedTier) {
         if (existing.client_secret) {
           // Join the sibling's session instead of erroring — the second
           // POST gets the same client_secret back.
@@ -247,26 +311,39 @@ export async function POST(request: Request) {
         return checkoutInProgress();
       }
 
-      if (existing.status === "open") {
+      // complete / expired (reclaim) — or open different-tier (expire +
+      // reclaim). The FENCED delete lands BEFORE the Stripe expire: only
+      // the reclaim winner calls expire, so concurrent reclaimers can't
+      // throw "already expired" at each other.
+      const { data: reclaimed, error: delErr } = await service
+        .from("pending_checkout_sessions")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("session_id", marker.session_id)
+        .select("user_id");
+      if (delErr) {
+        // Delete truly failed (not just fenced out) — do not proceed to a
+        // second create with the old marker still live.
+        return checkoutError(delErr, "marker-reclaim", { userId: user.id });
+      }
+      if ((reclaimed?.length ?? 0) === 0) {
+        // Marker changed under us — a sibling owns the reclaim/claim now.
+        continue;
+      }
+      logger.warn(
+        { userId: user.id, sessionId: marker.session_id, status: existing.status },
+        "checkout: reclaiming completed/expired/wrong-tier marker",
+      );
+
+      if (!isTerminal) {
         // Different tier: a wrong-price reuse is worse than no reuse —
-        // expire the stale session before reclaiming the marker.
+        // expire the stale session, then retry the claim once.
         try {
           await stripe.checkout.sessions.expire(marker.session_id);
         } catch (err) {
           return checkoutError(err, "session-expire", { userId: user.id });
         }
       }
-
-      // complete / expired / just-expired-by-us — reclaim the marker and
-      // retry the claim once.
-      logger.warn(
-        { userId: user.id, sessionId: marker.session_id, status: existing.status },
-        "checkout: reclaiming completed/expired marker",
-      );
-      await service
-        .from("pending_checkout_sessions")
-        .delete()
-        .eq("user_id", user.id);
       continue;
     }
 
@@ -276,15 +353,30 @@ export async function POST(request: Request) {
       return checkoutInProgress();
     }
 
-    // Crashed-claim residue — reclaim and retry once.
+    // Crashed-claim residue — fenced reclaim (identity: null session_id +
+    // created_at) and retry once.
     logger.warn(
       { userId: user.id, markerAgeMs },
       "checkout: reclaiming stale null-session marker",
     );
-    await service
+    const { data: reclaimed, error: delErr } = await service
       .from("pending_checkout_sessions")
       .delete()
-      .eq("user_id", user.id);
+      .eq("user_id", user.id)
+      .is("session_id", null)
+      .eq("created_at", marker.created_at)
+      .select("user_id");
+    if (delErr) {
+      logger.warn(
+        { err: delErr, userId: user.id },
+        "checkout: stale-marker reclaim delete errored",
+      );
+      return checkoutError(delErr, "marker-reclaim", { userId: user.id });
+    }
+    if ((reclaimed?.length ?? 0) === 0) {
+      // Marker changed under us — a sibling owns it now.
+      continue;
+    }
   }
 
   // Claim + one reclaim both lost to a sibling — surface the same

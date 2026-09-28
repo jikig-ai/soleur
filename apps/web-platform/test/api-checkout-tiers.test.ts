@@ -5,12 +5,14 @@ process.env.STRIPE_PRICE_ID_STARTUP = "price_startup";
 process.env.STRIPE_PRICE_ID_SCALE = "price_scale";
 process.env.STRIPE_PRICE_ID_ENTERPRISE = "price_enterprise";
 
-const { mockGetUser, mockFrom, mockCreateSession, mockMarkerInsert, mockMarkerUpdateEq } = vi.hoisted(() => ({
+const { mockGetUser, mockFrom, mockCreateSession, mockMarkerInsert, mockClaimSingle, mockMarkerUpdate, mockUpdateSelect } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
   mockCreateSession: vi.fn(),
   mockMarkerInsert: vi.fn(),
-  mockMarkerUpdateEq: vi.fn(),
+  mockClaimSingle: vi.fn(),
+  mockMarkerUpdate: vi.fn(),
+  mockUpdateSelect: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -18,22 +20,43 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser: mockGetUser },
     from: mockFrom,
   })),
+}));
+
+vi.mock("@/lib/supabase/service", () => ({
   // #8918: route claims a pending_checkout_sessions row via service-role.
-  createServiceClient: vi.fn(() => ({
-    from: () => ({
-      insert: mockMarkerInsert,
-      update: () => ({ eq: mockMarkerUpdateEq }),
-      delete: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }),
-      select: () => ({
-        eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }),
-      }),
-    }),
+  getServiceClient: vi.fn(() => ({
+    from: () => {
+      const deleteEq2 = {
+        select: vi.fn().mockResolvedValue({ data: [{ user_id: "user-1" }], error: null }),
+        then: (res: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(res),
+      };
+      return {
+        insert: (row: unknown) => {
+          mockMarkerInsert(row);
+          return { select: () => ({ single: mockClaimSingle }) };
+        },
+        update: (patch: unknown) => {
+          mockMarkerUpdate(patch);
+          return { eq: () => ({ eq: () => ({ select: mockUpdateSelect }) }) };
+        },
+        delete: () => ({ eq: () => ({ eq: () => deleteEq2, is: () => ({ eq: () => ({ select: vi.fn() }) }) }) }),
+        select: () => ({
+          eq: () => ({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+        }),
+      };
+    },
   })),
 }));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
-    checkout: { sessions: { create: mockCreateSession } },
+    checkout: {
+      sessions: {
+        create: mockCreateSession,
+        retrieve: vi.fn(),
+        expire: vi.fn(),
+      },
+    },
   }),
 }));
 
@@ -78,8 +101,14 @@ describe("POST /api/checkout — targetTier", () => {
       url: null,
       status: "open",
     });
-    mockMarkerInsert.mockResolvedValue({ error: null });
-    mockMarkerUpdateEq.mockResolvedValue({ error: null });
+    mockClaimSingle.mockResolvedValue({
+      data: { created_at: new Date().toISOString() },
+      error: null,
+    });
+    mockUpdateSelect.mockResolvedValue({
+      data: [{ user_id: "user-1" }],
+      error: null,
+    });
   });
 
   test("targetTier='startup' resolves to STRIPE_PRICE_ID_STARTUP", async () => {

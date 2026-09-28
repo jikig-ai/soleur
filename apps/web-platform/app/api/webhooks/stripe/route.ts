@@ -69,6 +69,11 @@ function deriveTierFromSubscription(
   return getPriceTier(priceId);
 }
 
+// #8918 — two active subscriptions created closer than this on one customer
+// is the pending-claim race completing twice. Legit upgrades leave the old
+// sub active too, but with created timestamps days/months apart.
+const DOUBLE_COMPLETION_PROXIMITY_MS = 15 * 60 * 1000;
+
 export async function POST(request: Request) {
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
@@ -223,11 +228,18 @@ export async function POST(request: Request) {
         }
       }
 
-      // #8918 double-completion anomaly: >1 active subscription on one
-      // customer is the invariant violation the pending-claim race was
-      // meant to prevent (a subscription-id mismatch alone would
-      // false-alarm on every legit plan-switch). Detection only — never
-      // auto-cancel on the money path.
+      // #8918 double-completion anomaly: two active subscriptions on one
+      // customer created within a short window of each other is the
+      // signature of the pending-claim race completing twice. Detection
+      // only — never auto-cancel on the money path.
+      //
+      // Why proximity, not count: nothing cancels a prior subscription on
+      // upgrade, so a legit paid→paid plan-switch also leaves >1 active —
+      // but its two `created` timestamps are days/months apart. Two subs
+      // created within DOUBLE_COMPLETION_PROXIMITY_MS of each other have
+      // no legitimate path: a second checkout requires either a race the
+      // claim table missed or manual Stripe-side surgery — both worth a
+      // page, not silence.
       const sessionCustomerId =
         typeof session.customer === "string"
           ? session.customer
@@ -238,34 +250,49 @@ export async function POST(request: Request) {
             customer: sessionCustomerId,
             status: "active",
           });
-          if (activeSubs.length > 1) {
+          const createdMs = activeSubs
+            .map((s) => s.created * 1000)
+            .sort((a, b) => a - b);
+          const hasNearDouble = createdMs.some(
+            (t, i) => i > 0 && t - createdMs[i - 1] < DOUBLE_COMPLETION_PROXIMITY_MS,
+          );
+          if (hasNearDouble) {
             logger.warn(
               {
                 customerId: sessionCustomerId,
                 eventId: event.id,
                 activeCount: activeSubs.length,
+                createdGapMs:
+                  createdMs.length > 1
+                    ? Math.min(
+                        ...createdMs.slice(1).map((t, i) => t - createdMs[i]),
+                      )
+                    : null,
               },
-              "checkout double-completion anomaly — multiple active subscriptions on one customer",
+              "checkout multiple-active-subscriptions anomaly — concurrent completions on one customer",
             );
-            Sentry.captureMessage("checkout double-completion anomaly", {
-              level: "warning",
-              tags: {
-                feature: "stripe-webhook",
-                op: "checkout.session.completed",
+            Sentry.captureMessage(
+              "checkout multiple-active-subscriptions anomaly",
+              {
+                level: "warning",
+                tags: {
+                  feature: "stripe-webhook",
+                  op: "checkout.session.completed",
+                },
+                extra: {
+                  customerId: sessionCustomerId,
+                  eventId: event.id,
+                  activeCount: activeSubs.length,
+                },
               },
-              extra: {
-                customerId: sessionCustomerId,
-                eventId: event.id,
-                activeCount: activeSubs.length,
-              },
-            });
+            );
           }
         } catch (err) {
           // Detection-path failure must not 500 the webhook — the money
           // mutation already landed, Stripe redelivery covers the retry.
           logger.warn(
             { err, eventId: event.id },
-            "Webhook: double-completion anomaly check failed — skipped",
+            "Webhook: multiple-active-subscriptions anomaly check failed — skipped",
           );
         }
       }
