@@ -115,6 +115,23 @@ implicit:
 
     **Prevention:** pin provenance to the SHA you measured on (`git rev-parse HEAD` at
     measurement time). The other two were expected gates.
+16. **The ship run hit a DIRTY state.** #9174 landed between my merge-tree check and the queued
+    auto-merge. It raised the same `BASELINE_DECLARED_PROBES` counter and appended to the same
+    `plan-sharp-edges.md` tail. **Prevention:** a counter or append-only list that every plan
+    touches conflicts whenever two such PRs overlap. Resolve by keeping both entries, re-deriving
+    the counter (35 → 36), and re-running the owning suite before pushing.
+17. **The PR's own infra CI caught a repo-global inventory my targeted suites never ran.**
+    `ci-deploy.test.sh` pins every line that can start `inngest-server`, including variable-unit
+    `systemctl start "$…"` forms. The new FSM-timer restore line
+    (`for _t in $_fsm_timers_stopped; do systemctl start "$_t"`) matched it, and the pin went from
+    17 to 18. **Prevention:** this is the file-selected-suite blind spot `work/SKILL.md` already
+    names. When a diff adds any `systemctl start|restart` line under `apps/web-platform/infra/`,
+    run `ci-deploy.test.sh` too, even if the diff never touches `ci-deploy.sh`.
+18. **The required `e2e` check failed on unchanged app code.** 71 tests passed, then the test
+    dev server stopped accepting connections and the remaining 37 read `ERR_CONNECTION_REFUSED`.
+    The next push's fresh CI run passed. **Prevention:** one-off environmental. Classify by the
+    failure's shape (a connection refused on localhost after a partial pass) before touching
+    code, and never on the check name.
 
 ## Related
 
