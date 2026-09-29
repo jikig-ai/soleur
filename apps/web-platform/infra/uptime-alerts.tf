@@ -217,11 +217,16 @@ resource "betteruptime_monitor" "app_health" {
   recovery_period  = 180
   follow_redirects = true
 
-  # Email only, like every sibling: detection time includes reading the inbox.
+  # Email + push. `push = true` is a MEASURED flip scoped to THIS monitor only
+  # (#9168): whether the current Better Stack plan accepts push may 422 or
+  # no-op, measured on this one resource per the #7798 measure-first
+  # convention — if the apply refuses it, revert to `push = false`. The sibling
+  # monitors stay email-only. The 09-15 and 09-28 Supabase outages each paged
+  # an inbox nobody was watching; detection time must not include reading one.
   email = true
   call  = false
   sms   = false
-  push  = false
+  push  = true
 
   team_name = "Your team"
   policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null

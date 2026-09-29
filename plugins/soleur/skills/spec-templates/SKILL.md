@@ -55,6 +55,12 @@ Use this template for feature specifications:
 [Architecture, performance, security considerations]
 ```
 
+For a browser-rendered webapp, the TRs include field Core Web Vitals
+observability per
+[webapp-cwv-observability.md](../plan/references/webapp-cwv-observability.md)
+— Sentry `browserTracingIntegration` + a probe-armed `tracesSampler` when a
+Sentry browser SDK is installed, else the beacon-endpoint fallback it specs.
+
 ## tasks.md Template
 
 Use this template for task tracking:

@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-09-23
+last_updated: 2026-09-28
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: cfo
@@ -251,6 +251,23 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > estimate of it. (3) "its per-run cap is the $10 audit-tier default": at review, n=1 was treated as
 > no data and the audit-tier default was raised to **$15**, so cron-ux-audit's cap is now $15. The
 > ledger's re-measure recipe now excludes `source = cron:cron-ux-audit`.
+>
+> **[2026-09-28 Review note — Supabase compute Micro→Small declared]** Out-of-cycle, against
+> `expenses.md@2026-09-28` (#9168, ADR-260). The prd app project (`soleur-web-platform`,
+> ifsccnjhymdmidffkzhl) is moving Micro → Small compute — **+$5/mo net** (Small ≈$15/mo vs the
+> Micro ~$10/mo absorbed by the Pro credit). **Declared, NOT booked:** the Terraform change in this
+> PR is a zero-diff import pinned to live `instance_size = "micro"`; the `"small"` flip is a
+> deliberately sequenced follow-up apply. Same rule as every phantom row in this document — the
+> delta enters Product COGS when the apply runs, not before. When it lands: Product COGS
+> **354.47 → 359.47** (+1.4%), all-in floor **≥1,294.32 → ≥1,299.32**; no `⌈burn ÷ price⌉`
+> boundary crosses at $49 or $48 (COGS stays **8**, all-in stays **≥27**), and margins move <0.2 pt —
+> so per §4.1 this will be a **line-and-anchor update, not a full re-derivation**. Same ledger
+> note: the Better Stack Responder deferral's trigger ("first incident with user-visible latency
+> from email-only routing") fired on 2026-09-28 (the 09-15 outage was the same risk class —
+> a page that cannot reach a human — but its latency was missing detection, not delivery)
+> and the seat was **still declined**
+> — the $0 Slack path was chosen (ADR-260); the deferred row stands, revisit-if-insufficient. No
+> line item changes.
 
 ## Monthly Burn
 

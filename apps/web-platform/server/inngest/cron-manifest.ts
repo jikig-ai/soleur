@@ -75,6 +75,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-strategy-review",
   "cron-supabase-advisor-scan",
   "cron-supabase-disk-io",
+  "cron-supabase-watchdog-dispatch",
   "cron-terraform-drift",
   "cron-ux-audit",
   "cron-weekly-analytics",

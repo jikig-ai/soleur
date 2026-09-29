@@ -113,6 +113,15 @@ const READ_ONLY_PROBES = [
 // MIGRATED/EXEMPT entry, and it is covered by invariant 1's directory walk.
 // Acknowledged here so the cron-tier2-parity sibling-set sweep sees this
 // dependent when EXPECTED_CRON_FUNCTIONS grows.
+//
+// `cron-supabase-watchdog-dispatch` (#9168) is the same dispatch-hybrid class:
+// it mints a short-lived installation token (narrowed to actions:write +
+// repositories:[soleur]) and POSTs a `workflow_dispatch` to
+// scheduled-supabase-watchdog.yml. The Node dispatcher holds no git, opens no
+// PR and carries NO Supabase credential — the restart's prod write runs in the
+// ephemeral GHA executor. The safe-commit invariant does not apply, it needs no
+// MIGRATED/EXEMPT entry, and it is covered by invariant 1's directory walk.
+// Acknowledged here per the sibling-set convention.
 
 // #6657: cron-gh-pages-cert-reissue is a fifth class — an EVENT-TRIGGERED
 // live-infra remediation. It flips CF DNS proxy state + re-orders the GitHub

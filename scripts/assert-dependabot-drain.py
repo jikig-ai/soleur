@@ -5,7 +5,7 @@ Deterministic and available at merge time -- the Dependabot alert count is a LAG
 mirror of this same fact, so this is the assertion and the API re-query is corroboration.
 
 Thresholds are keyed per MAJOR LINE, not per package. js-yaml and brace-expansion each
-ship two supported majors with SEPARATE advisories (js-yaml 3.15.1 and 4.3.1;
+ship two supported majors with SEPARATE advisories (js-yaml 3.15.2 and 4.3.2;
 brace-expansion 1.1.18, 2.1.4 and 5.0.9), so a single per-package minimum would compare a
 correctly-patched 3.x copy against a 4.x threshold and report a false vulnerability.
 """
@@ -42,6 +42,7 @@ WATCHED_PACKAGES = {
     "hono",
     "ip-address",
     "js-yaml",
+    "liquidjs",
     "nanoid",
     "undici",
 }
@@ -49,8 +50,8 @@ WATCHED_PACKAGES = {
 # (manifest, package, major-line, minimum patched) -- the Phase 3 reconciliation table.
 REQUIRED = [
     ("web-platform", "nanoid", 3, "3.3.18"),
-    ("web-platform", "js-yaml", 3, "3.15.1"),
-    ("web-platform", "js-yaml", 4, "4.3.1"),
+    ("web-platform", "js-yaml", 3, "3.15.2"),
+    ("web-platform", "js-yaml", 4, "4.3.2"),
     ("web-platform", "hono", 4, "4.12.34"),
     ("web-platform", "@hono/node-server", 1, "1.19.15"),
     ("web-platform", "ip-address", 10, "10.5.1"),
@@ -75,8 +76,13 @@ REQUIRED = [
     ("web-platform", "brace-expansion", 2, "2.1.4"),
     ("web-platform", "brace-expansion", 5, "5.0.9"),
     ("web-platform", "@opentelemetry/propagator-jaeger", 2, "2.9.0"),
-    ("root", "js-yaml", 3, "3.15.1"),
-    ("root", "js-yaml", 4, "4.3.1"),
+    ("root", "js-yaml", 3, "3.15.2"),
+    ("root", "js-yaml", 4, "4.3.2"),
+    # liquidjs sits only in the ROOT lockfile, reached via @11ty/eleventy@3.1.5
+    # ("liquidjs": "^10.25.0"). Three HIGH advisories: GHSA-g357 (pop filter,
+    # <=10.27.0), GHSA-m7fp (strip_html infinite loop, >=10.26.0 <=10.27.0), GHSA-4r6h
+    # (join filter, <=10.27.1) -- the strictest first_patched is 10.27.2.
+    ("root", "liquidjs", 10, "10.27.2"),
     ("root", "brace-expansion", 1, "1.1.18"),  # was 1.1.16: GHSA-rgw5-rvv9-x895 covers <1.1.18
     # Major 5 reached the ROOT lockfile in #7927: markdownlint-cli 0.49.1 will not run
     # against brace-expansion 1.x, so package.json carries a SCOPED override giving that
@@ -110,8 +116,9 @@ FLOOR_ANCHORS = {
     ("brace-expansion", 1): "1.1.18",   # GHSA-rgw5-rvv9-x895 (HIGH)
     ("brace-expansion", 2): "2.1.4",    # GHSA-rgw5-rvv9-x895 (HIGH)
     ("brace-expansion", 5): "5.0.9",    # GHSA-rgw5-rvv9-x895 (HIGH)
-    ("js-yaml", 3): "3.15.1",
-    ("js-yaml", 4): "4.3.1",
+    ("js-yaml", 3): "3.15.2",     # GHSA-2883-xcg3-v3hh (HIGH; #7970/#8065)
+    ("js-yaml", 4): "4.3.2",      # GHSA-2883-xcg3-v3hh (HIGH; #7970/#8065)
+    ("liquidjs", 10): "10.27.2",  # GHSA-4r6h (HIGH) strictest of three #8065 advisories
     ("undici", 7): "7.29.0",
     ("nanoid", 3): "3.3.18",
     ("ip-address", 10): "10.5.1",
@@ -216,7 +223,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 20  # main's 17 + the two brace-expansion majors #1327 restored + root line 5 (#7927)
+    MIN_ROWS = 21  # prior 20 + root liquidjs line 10 (#8065)
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -224,7 +231,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 20  # main's 17 + the same two rows + root brace-expansion line 5, all of which resolve
+    MIN_RESOLVED = 21  # prior 20 + root liquidjs line 10, which resolves
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "

@@ -9,8 +9,22 @@
 #
 # WHAT THIS DOES. Adopts this session's whole process tree into
 # `soleur-agent-<pid>.scope` under a shared `soleur-agents.slice`, with a
-# per-session cap and a fleet-wide cap. systemd is the SINGLE WRITER to the
-# cgroup hierarchy: this hook never creates a cgroup directory itself.
+# per-session cap and a fleet-wide cap on BOTH memory and task count, then
+# sweeps any OTHER unadopted agent session (claude, devin, codex) loose in a
+# user scope into its own capped scope — codex fires no .claude hooks, and a
+# pane-restore burst of simultaneous SessionStarts starves the apply flock, so
+# self-adoption alone leaves most panes uncovered. systemd is the SINGLE
+# WRITER to the cgroup hierarchy: this hook never creates a cgroup directory
+# itself.
+#
+# WHY TASKS TOO. On 2026-09-29 a herdr workspace died wholesale: ~20 agent
+# panes shared the terminal scope's pids.max (37984), concurrent pre-commit
+# test runs pushed it over, and the kernel started rejecting forks. Two claude
+# sessions aborted and the herdr server — the pane multiplexer itself — died,
+# taking every session's in-flight work with it. No OOM: the binding limit was
+# task count, which the memory caps below do not touch. A per-scope TasksMax
+# makes the same runaway die ALONE (fork() fails inside its own scope) instead
+# of starving the shared scope.
 #
 # WHAT THIS DOES NOT DO, stated up front: under a cap that runaway dies by
 # SIGSEGV after ~45 s at 2.7 GB (measured at a 3 GB cap) — ugrep does not handle
@@ -57,9 +71,13 @@ readonly SCOPE_MAX_BYTES=7516192768       #  7 GiB — kill; 8.0 GB with baselin
 readonly FLEET_HIGH_BYTES=17179869184     # 16 GiB — clears four concurrent `tsc`
 readonly FLEET_MAX_BYTES=21474836480      # 20 GiB — last resort: three simultaneously-maxed sessions
 
+readonly SCOPE_TASKS_MAX=4096           # per-session pids bound — ~2x an honest vitest burst, ~1/9 of the 37984 terminal-scope ceiling
+readonly FLEET_TASKS_MAX=24576          # adopted-fleet bound — several full sessions, still under the shared parent limit
+
 readonly SLICE_NAME="soleur-agents.slice"
 readonly MAX_TREE=256
 readonly MAX_WALK_HOPS=8
+readonly MAX_SWEEP=8
 
 # ------------------------------------------------------------------ helpers
 
@@ -108,9 +126,9 @@ emit_message() {
 # the per-session ceiling keeps the cap below the 9.5 GB harm point after the
 # ~0.5 GiB non-migrated baseline is added back.
 validate_caps() {
-  local sh=${1:-} sm=${2:-} fh=${3:-} fm=${4:-}
+  local sh=${1:-} sm=${2:-} fh=${3:-} fm=${4:-} st=${5:-} ft=${6:-}
   local v
-  for v in "$sh" "$sm" "$fh" "$fm"; do
+  for v in "$sh" "$sm" "$fh" "$fm" "$st" "$ft"; do
     [[ "$v" =~ ^[0-9]+$ ]] || { printf 'not_numeric:%s' "$v"; return 1; }
   done
   #  3 GiB .. 8 GiB : floor > the 2.45 GB tsc peak; ceiling 8.59 GB < 9.5 GB harm point
@@ -126,6 +144,16 @@ validate_caps() {
   # a fleet that cannot hold two sessions at their own ceiling. The per-level
   # bands encode "is this value sane"; this encodes "do these two levels agree".
   (( fm >= 2 * sm )) || { printf 'fleet_max_below_two_sessions:%s' "$fm"; return 1; }
+  # 2048 .. 12288 : floor clears an agent + MCP + a vitest worker burst; ceiling
+  # stays a third of the terminal scope's measured 37984 ceiling, so a capped
+  # runaway loses its own forks but cannot starve siblings.
+  (( st >= 2048 && st <= 12288 ))   || { printf 'scope_tasks:%s' "$st"; return 1; }
+  # 8192 .. 32768 : floor admits several sessions at their own cap, ceiling stays
+  # under the shared parent limit the 2026-09-29 incident ran into.
+  (( ft >= 8192 && ft <= 32768 ))   || { printf 'fleet_tasks:%s' "$ft"; return 1; }
+  # Same cross-level rule as memory: a fleet bound that cannot hold a few
+  # capped sessions is a denial of the workload, not a bound on a runaway.
+  (( ft >= 4 * st )) || { printf 'fleet_tasks_below_four_sessions:%s' "$ft"; return 1; }
   return 0
 }
 
@@ -167,14 +195,25 @@ read_starttime() {
   printf '%s' "${20}"
 }
 
+# Session agent names. `codex` shares its binary name with the managed
+# app-server daemon — the shared per-user backend every codex session talks to.
+# Adopting THAT would bind every codex session to one session's caps, so the
+# daemon shapes are excluded by cmdline, not by comm.
+_is_agent_comm() {
+  case "$1" in claude|devin|codex) return 0 ;; *) return 1 ;; esac
+}
+_is_agent_daemon() {
+  case "$1" in *app-server*|*code-mode-host*|*" daemon "*) return 0 ;; *) return 1 ;; esac
+}
+
 # Positive identity match, and adopt NOTHING on failure. `readlink /proc/<pid>/exe`
 # returns EMPTY (not an error) for an exited process, so a walk that treats "no
 # match" as "keep walking" and then adopts the last pid examined could put
 # warp-terminal or the login shell under a 7 GiB cap bound to itself.
 # Echoes "<pid> <identity-signal>" on success.
-discover_claude_pid() {
+discover_agent_pid() {
   local pid=${1:-$$} procroot=${2:-/proc}
-  local hops=0 exe comm
+  local hops=0 exe comm cmdline
 
   while (( hops < MAX_WALK_HOPS )); do
     hops=$((hops + 1))
@@ -192,9 +231,18 @@ discover_claude_pid() {
     if [[ -n "${CLAUDE_CODE_EXECPATH:-}" && -n "$exe" && "$exe" == "${CLAUDE_CODE_EXECPATH}" ]]; then
       printf '%s execpath' "$pid"; return 0
     fi
-    if [[ "$comm" == "claude" ]]; then
-      printf '%s comm' "$pid"; return 0
-    fi
+    # The daemon check is codex-scoped: only that binary multiplexes session
+    # and backend roles under one comm, and a devin/claude argv containing the
+    # word "daemon" is a session prompt, not a backend.
+    case "$comm" in
+      claude|devin) printf '%s comm' "$pid"; return 0 ;;
+      codex)
+        cmdline=$(tr '\0' ' ' < "$procroot/$pid/cmdline" 2>/dev/null || true)
+        if ! _is_agent_daemon "$cmdline"; then
+          printf '%s comm' "$pid"; return 0
+        fi
+        ;;
+    esac
 
     pid=$(read_ppid "$pid" "$procroot") || return 1
   done
@@ -239,6 +287,98 @@ collect_descendants() {
     if (( n >= MAX_TREE )); then printf 'TRUNCATED\n'; break; fi
     printf '%s\n' "$pid"; n=$((n + 1))
   done
+}
+
+# Adopt UNADOPTED sibling agent sessions loose in user scopes. Claude sessions
+# self-adopt at SessionStart, but devin/codex sessions never reach this hook's
+# own ancestry walk (codex fires no .claude hooks at all), and simultaneous
+# SessionStarts lose the apply flock — the 2026-09-29 pids.max incident ran
+# entirely through unadopted panes. Every run that reaches this point sweeps
+# the strays its siblings left. Candidates are session-ROOT agent processes —
+# an agent whose parent is also an agent is a descendant (devin acp under a
+# devin TUI), not a root. Best-effort throughout: a swept process that exits
+# mid-adopt costs only itself, and MAX_SWEEP bounds the work per run.
+sweep_unadopted_agents() {
+  local self_pid=$1
+  local d pid comm cmdl root cg ts scope swept=0
+  local -A parent=() is_agent=() roots=()
+
+  for d in /proc/[0-9]*; do
+    pid=${d##*/}
+    comm=$(cat "$d/comm" 2>/dev/null) || continue
+    _is_agent_comm "$comm" || continue
+    if [[ "$comm" == "codex" ]]; then
+      cmdl=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+      _is_agent_daemon "$cmdl" && continue
+    fi
+    parent[$pid]=$(read_ppid "$pid" /proc || echo 0)
+    is_agent[$pid]=1
+  done
+
+  for pid in "${!is_agent[@]}"; do
+    root=$pid
+    while [[ -n "${is_agent[${parent[$root]:-0}]:-}" ]]; do
+      root=${parent[$root]}
+    done
+    roots[$root]=1
+  done
+
+  for pid in "${!roots[@]}"; do
+    (( swept >= MAX_SWEEP )) && break
+    [[ "$pid" == "$self_pid" ]] && continue
+    # A root that is an ANCESTOR of our own agent (devin TUI over devin acp)
+    # would drag self_pid into its new scope on the descendant attach — stealing
+    # it from the scope this run just created. Skip anything above us.
+    local anc=$self_pid ahops=0 is_ancestor=0
+    while (( ahops < MAX_WALK_HOPS * 2 )); do
+      anc=$(read_ppid "$anc" /proc) || break
+      [[ -z "$anc" || "$anc" == "0" ]] && break
+      [[ "$anc" == "$pid" ]] && { is_ancestor=1; break; }
+      ahops=$((ahops + 1))
+    done
+    (( is_ancestor == 1 )) && continue
+    cg=$(cut -d: -f3 < "/proc/$pid/cgroup" 2>/dev/null | head -1)
+    # Only user-slice scopes: already-adopted sessions end soleur-agent-*.scope;
+    # anything not in a .scope (session.slice, service units) is left alone.
+    ts=${cg##*/}
+    case "$cg" in *"/user-"*) ;; *) continue ;; esac
+    [[ "$ts" == soleur-agent-*.scope ]] && continue
+    [[ "$ts" == *.scope ]] || continue
+
+    scope="soleur-agent-${pid}.scope"
+    "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+      org.freedesktop.systemd1.Manager StartTransientUnit "ssa(sv)a(sa(sv))" \
+      "$scope" "fail" 11 \
+      "PIDs" "au" 1 "$pid" \
+      "Slice" "s" "$SLICE_NAME" \
+      "MemoryHigh" "t" "$SCOPE_HIGH_BYTES" \
+      "MemoryMax" "t" "$SCOPE_MAX_BYTES" \
+      "MemorySwapMax" "t" 0 \
+      "TasksMax" "t" "$SCOPE_TASKS_MAX" \
+      "OOMPolicy" "s" "continue" \
+      "Delegate" "b" true \
+      "BindsTo" "as" 1 "$ts" \
+      "After" "as" 1 "$ts" \
+      "Description" "s" "Soleur agent session $pid" \
+      0 \
+      >/dev/null 2>&1 || continue
+
+    local -a stree=()
+    mapfile -t stree < <(collect_descendants "$pid" /proc)
+    for sp in "${stree[@]}"; do
+      [[ "$sp" == "TRUNCATED" || "$sp" == "$pid" ]] && continue
+      [[ -r "/proc/$sp/cgroup" ]] || continue
+      # Do not steal a process already adopted into its own soleur-agent scope
+      # (a sibling's self-adoption landed first) — inter-scope churn gains nothing.
+      local scg; scg=$(cut -d: -f3 < "/proc/$sp/cgroup" 2>/dev/null | head -1)
+      [[ "${scg##*/}" == soleur-agent-*.scope ]] && continue
+      "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+        org.freedesktop.systemd1.Manager AttachProcessesToUnit "ssau" \
+        "$scope" "/" 1 "$sp" >/dev/null 2>&1
+    done
+    swept=$((swept + 1))
+  done
+  printf '%s' "$swept"
 }
 
 # The terminal's own scope, from cgroup membership. Must end in `.scope`; the
@@ -318,9 +458,9 @@ main() {
   local outcome="skipped" reason="" scope="" terminal_scope="" tree_size=0
   local identity_signal="" claude_pid="" msg=""
   local slice_high_before="" slice_max_before=""
-  local scope_high_after="" scope_max_after="" scope_swap_after=""
-  local slice_high_after="" slice_max_after="" slice_swap_after=""
-  local attached=0 tree_truncated="false"
+  local scope_high_after="" scope_max_after="" scope_swap_after="" scope_tasks_after=""
+  local slice_high_after="" slice_max_after="" slice_swap_after="" slice_tasks_after=""
+  local attached=0 tree_truncated="false" swept=0
 
   _log() {
     local rotator
@@ -340,9 +480,11 @@ main() {
         --argjson tree "$tree_size" \
         --argjson sh "$SCOPE_HIGH_BYTES" --argjson sm "$SCOPE_MAX_BYTES" \
         --argjson fh "$FLEET_HIGH_BYTES" --argjson fm "$FLEET_MAX_BYTES" \
+        --argjson st "$SCOPE_TASKS_MAX" --argjson ft "$FLEET_TASKS_MAX" \
         '{schema:1, ts:$ts, pid:(($pid|tonumber?) // null), tree_size:$tree, scope:$scope,
           terminal_scope:$tscope, slice:$slice, scope_high:$sh, scope_max:$sm,
-          slice_high:$fh, slice_max:$fm, slice_high_before:$shb, slice_max_before:$smb,
+          slice_high:$fh, slice_max:$fm, scope_tasks:$st, slice_tasks:$ft,
+          slice_high_before:$shb, slice_max_before:$smb,
           swap_max:0, identity_signal:$sig, outcome:$outcome, reason:$reason}' 2>/dev/null)
     fi
     # An empty $line means the jq filter produced no object (an empty stream from
@@ -393,15 +535,17 @@ main() {
   # fire after an edit, and the person who just edited them is the one who needs
   # to be told.
   local bad
-  if ! bad=$(validate_caps "$SCOPE_HIGH_BYTES" "$SCOPE_MAX_BYTES" "$FLEET_HIGH_BYTES" "$FLEET_MAX_BYTES"); then
+  if ! bad=$(validate_caps "$SCOPE_HIGH_BYTES" "$SCOPE_MAX_BYTES" "$FLEET_HIGH_BYTES" "$FLEET_MAX_BYTES" "$SCOPE_TASKS_MAX" "$FLEET_TASKS_MAX"); then
     outcome="refused"; reason="cap_out_of_range"; _log
     emit_message "Soleur memory backstop: REFUSED to apply — a cap value is outside its validated range (${bad}).
 
-Accepted ranges (bytes):
+Accepted ranges:
   SCOPE_MAX_BYTES   3 GiB .. 8 GiB   (floor above the 2.45 GB tsc peak; ceiling below the 9.5 GB harm point)
   SCOPE_HIGH_BYTES  5 GiB .. < SCOPE_MAX_BYTES
   FLEET_MAX_BYTES  10 GiB .. 24 GiB
   FLEET_HIGH_BYTES 14 GiB .. < FLEET_MAX_BYTES
+  SCOPE_TASKS_MAX  2048 .. 12288
+  FLEET_TASKS_MAX  8192 .. 32768   (and >= 4x SCOPE_TASKS_MAX)
 
 Nothing was applied — this session is UNPROTECTED. To restore the shipped values:
   git checkout -- .claude/hooks/memory-backstop.sh"
@@ -410,7 +554,7 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
 
   # (4) Identity. Adopt nothing without a positive match.
   local found
-  if ! found=$(discover_claude_pid "$$" /proc); then
+  if ! found=$(discover_agent_pid "$$" /proc); then
     reason="claude_pid_not_found"; _log; _maybe_never_worked "$stamp_file" "$log_file"; exit 0
   fi
   claude_pid=${found%% *}
@@ -424,7 +568,7 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
   # PID; `startup` then a fast `/clear`, or overlapping `resume`+`compact`, has
   # both invocations reach SetUnitProperties and re-sweep different trees.
   exec 9>>"$lock_file" 2>/dev/null
-  if ! flock -w 5 -x 9 2>/dev/null; then
+  if ! flock -w 30 -x 9 2>/dev/null; then
     reason="concurrent_apply"; _log; exit 0
   fi
 
@@ -452,10 +596,11 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
   # behaviour changed.
   "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
     org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
-    "$SLICE_NAME" true 4 \
+    "$SLICE_NAME" true 5 \
     "MemoryHigh" "t" "$FLEET_HIGH_BYTES" \
     "MemoryMax" "t" "$FLEET_MAX_BYTES" \
     "MemorySwapMax" "t" 0 \
+    "TasksMax" "t" "$FLEET_TASKS_MAX" \
     "ManagedOOMPreference" "s" "avoid" \
     >/dev/null 2>&1
 
@@ -502,12 +647,13 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
   # cgroup.procs directly, which is #7151's single-writer violation.
   "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
     org.freedesktop.systemd1.Manager StartTransientUnit "ssa(sv)a(sa(sv))" \
-    "$scope" "fail" 10 \
+    "$scope" "fail" 11 \
     "${pid_args[@]}" \
     "Slice" "s" "$SLICE_NAME" \
     "MemoryHigh" "t" "$SCOPE_HIGH_BYTES" \
     "MemoryMax" "t" "$SCOPE_MAX_BYTES" \
     "MemorySwapMax" "t" 0 \
+    "TasksMax" "t" "$SCOPE_TASKS_MAX" \
     "OOMPolicy" "s" "continue" \
     "Delegate" "b" true \
     "BindsTo" "as" 1 "$terminal_scope" \
@@ -536,12 +682,13 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
       reason="pid_reuse_disambiguated"
       "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
         org.freedesktop.systemd1.Manager StartTransientUnit "ssa(sv)a(sa(sv))" \
-        "$scope" "fail" 10 \
+        "$scope" "fail" 11 \
         "${pid_args[@]}" \
         "Slice" "s" "$SLICE_NAME" \
         "MemoryHigh" "t" "$SCOPE_HIGH_BYTES" \
         "MemoryMax" "t" "$SCOPE_MAX_BYTES" \
         "MemorySwapMax" "t" 0 \
+        "TasksMax" "t" "$SCOPE_TASKS_MAX" \
         "OOMPolicy" "s" "continue" \
         "Delegate" "b" true \
         "BindsTo" "as" 1 "$terminal_scope" \
@@ -566,10 +713,11 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
 
       "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
         org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
-        "$scope" true 4 \
+        "$scope" true 5 \
         "MemoryHigh" "t" "$SCOPE_HIGH_BYTES" \
         "MemoryMax" "t" "$SCOPE_MAX_BYTES" \
         "MemorySwapMax" "t" 0 \
+        "TasksMax" "t" "$SCOPE_TASKS_MAX" \
         "OOMPolicy" "s" "continue" \
         >/dev/null 2>&1
 
@@ -594,6 +742,11 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
     fi
   done
 
+  # (7b) Sweep unadopted sibling agents — inside the flock so simultaneous
+  # SessionStarts serialize their sweeps rather than racing StartTransientUnit
+  # on the same stray pid.
+  swept=$(sweep_unadopted_agents "$claude_pid")
+
   # VERIFY, do not assume. Reporting `applied` because a D-Bus call was issued is
   # precisely the #7151 defect — a green signal over an inert guard.
   #
@@ -615,9 +768,11 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
   scope_max_after=$(systemctl --user show "$scope" -p MemoryMax --value 2>/dev/null)
   scope_high_after=$(systemctl --user show "$scope" -p MemoryHigh --value 2>/dev/null)
   scope_swap_after=$(systemctl --user show "$scope" -p MemorySwapMax --value 2>/dev/null)
+  scope_tasks_after=$(systemctl --user show "$scope" -p TasksMax --value 2>/dev/null)
   slice_high_after=$(systemctl --user show "$SLICE_NAME" -p MemoryHigh --value 2>/dev/null)
   slice_max_after=$(systemctl --user show "$SLICE_NAME" -p MemoryMax --value 2>/dev/null)
   slice_swap_after=$(systemctl --user show "$SLICE_NAME" -p MemorySwapMax --value 2>/dev/null)
+  slice_tasks_after=$(systemctl --user show "$SLICE_NAME" -p TasksMax --value 2>/dev/null)
 
   if [[ "${final_cg##*/}" != "$scope" ]]; then
     outcome="failed"
@@ -631,18 +786,19 @@ The scope was requested but this process is not a member of it:
 Nothing else is affected and your session is fine, but a runaway command here is
 not bounded. Details: .claude/.memory-backstop.jsonl"
   elif [[ "$scope_max_after" != "$SCOPE_MAX_BYTES" || "$scope_high_after" != "$SCOPE_HIGH_BYTES" \
-       || "$scope_swap_after" != "0" ]]; then
+       || "$scope_swap_after" != "0" || "$scope_tasks_after" != "$SCOPE_TASKS_MAX" ]]; then
     outcome="failed"
     reason="scope_caps_unverified"
-    msg="Soleur memory backstop: this session's scope exists but its memory limits were NOT applied.
+    msg="Soleur memory backstop: this session's scope exists but its limits were NOT applied.
 
   MemoryMax     expected $(_human_bytes "$SCOPE_MAX_BYTES"), got ${scope_max_after:-<unset>}
   MemoryHigh    expected $(_human_bytes "$SCOPE_HIGH_BYTES"), got ${scope_high_after:-<unset>}
   MemorySwapMax expected 0, got ${scope_swap_after:-<unset>}
+  TasksMax      expected $SCOPE_TASKS_MAX, got ${scope_tasks_after:-<unset>}
 
 A runaway command here is NOT bounded. Details: .claude/.memory-backstop.jsonl"
   elif [[ "$slice_max_after" != "$FLEET_MAX_BYTES" || "$slice_high_after" != "$FLEET_HIGH_BYTES" \
-       || "$slice_swap_after" != "0" ]]; then
+       || "$slice_swap_after" != "0" || "$slice_tasks_after" != "$FLEET_TASKS_MAX" ]]; then
     # This session is capped, but the SHARED bound is not there — so N sessions
     # can still exhaust the box between them, and swap is uncapped at the slice.
     outcome="failed"
@@ -652,6 +808,7 @@ A runaway command here is NOT bounded. Details: .claude/.memory-backstop.jsonl"
   $SLICE_NAME MemoryMax     expected $(_human_bytes "$FLEET_MAX_BYTES"), got ${slice_max_after:-<unset>}
   $SLICE_NAME MemoryHigh    expected $(_human_bytes "$FLEET_HIGH_BYTES"), got ${slice_high_after:-<unset>}
   $SLICE_NAME MemorySwapMax expected 0, got ${slice_swap_after:-<unset>}
+  $SLICE_NAME TasksMax      expected $FLEET_TASKS_MAX, got ${slice_tasks_after:-<unset>}
 
 Each session is still individually bounded, but several sessions together are not.
 On systemd older than 247 this is expected: ManagedOOMPreference is unsupported and
@@ -683,9 +840,10 @@ fails the whole property call. Details: .claude/.memory-backstop.jsonl"
     printf '%s\n' "$(hostname 2>/dev/null || echo host):${SCOPE_MAX_BYTES}:${FLEET_MAX_BYTES}" > "$stamp_file" 2>/dev/null
     emit_message "Soleur memory backstop is active on this machine.
 
-Each agent session now runs in its own memory-capped systemd scope, and all of
-them share a fleet-wide limit — so one runaway command can no longer exhaust
-memory and swap and take down every open session.
+Each agent session now runs in its own systemd scope capped on memory AND task
+count, and all of them share fleet-wide limits — so one runaway command can no
+longer exhaust memory, swap, or the shared fork budget and take down every
+open session.
 
 If a session is stopped unexpectedly you will get a message explaining what hit
 which limit. To stop just one session:      systemctl --user stop soleur-agent-<pid>.scope
@@ -736,16 +894,23 @@ _log_with_counters() {
       --argjson tree "$tree_size" --argjson oom "$cur_oom" --argjson hi "$cur_high" \
       --argjson sh "$SCOPE_HIGH_BYTES" --argjson sm "$SCOPE_MAX_BYTES" \
       --argjson fh "$FLEET_HIGH_BYTES" --argjson fm "$FLEET_MAX_BYTES" \
+      --argjson st "$SCOPE_TASKS_MAX" --argjson ft "$FLEET_TASKS_MAX" \
       --arg sha "$scope_high_after" --arg sma "$scope_max_after" --arg swa "$scope_swap_after" \
+      --arg sta "$scope_tasks_after" \
       --arg fha "$slice_high_after" --arg fma "$slice_max_after" --arg fwa "$slice_swap_after" \
+      --arg fta "$slice_tasks_after" \
       --argjson att "$attached" --argjson trunc "$tree_truncated" \
+      --argjson swept "$swept" \
       '{schema:1, ts:$ts, pid:(($pid|tonumber?) // null), tree_size:$tree, scope:$scope,
         terminal_scope:$tscope, slice:$slice,
         scope_high:$sh, scope_max:$sm, slice_high:$fh, slice_max:$fm,
+        scope_tasks:$st, slice_tasks:$ft,
         scope_high_after:$sha, scope_max_after:$sma, scope_swap_after:$swa,
+        scope_tasks_after:$sta,
         slice_high_after:$fha, slice_max_after:$fma, slice_swap_after:$fwa,
+        slice_tasks_after:$fta,
         slice_high_before:$shb, slice_max_before:$smb,
-        attached:$att, tree_truncated:$trunc,
+        attached:$att, tree_truncated:$trunc, swept:$swept,
         swap_max:0, identity_signal:$sig, outcome:$outcome, reason:$reason,
         last_oom_kill:$oom, last_high:$hi}' 2>/dev/null >> "$log_file"
   fi
@@ -764,8 +929,8 @@ _maybe_never_worked() {
   emit_message "Soleur memory backstop could not identify this agent session, so NO memory cap is in effect here.
 
 This machine has a working systemd user bus, so the backstop should have applied.
-The likely cause is a non-standard Claude Code install (the process identity check
-looks for a claude executable in the ancestry).
+The likely cause is a non-standard agent install (the process identity check
+looks for a claude/devin/codex executable in the ancestry).
 
 Nothing is broken and your session is unaffected — but you are not protected from
 a runaway command exhausting memory. Details: .claude/.memory-backstop.jsonl"
