@@ -15,6 +15,47 @@ brand_survival_threshold: none
 
 # fix(followthroughs): retarget the zot-soak-6122 inngest sample arm onto dedicated-host boot evidence
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-29
+**Sections enhanced:** Proposed Solution, Implementation Phases, Dependencies & Risks
+**Research agents used:** inline orchestrator verification (pipeline context — no Task spawning);
+deepen-plan halt gates 4.6 (User-Brand Impact), 4.7 (Observability), 4.8 (PAT-shape), 4.9 (UI
+wireframe), 4.10 (Encryption Posture), 4.11 (Guard Contract, `lint-guard-contract.py` green) all
+run and pass; Phase 4.4 precedent-diff, 4.45 verify-the-negative, and post-edit self-audit run
+inline.
+
+### Key Improvements
+
+1. **Verify-the-negative pass confirmed the load-bearing premises:** `deploy-inngest-image.yml` is
+   the only file that *sends* the `deploy inngest` verb (the `deploy inngest` strings in
+   `scheduled-inngest-health.yml`, `build-inngest-bootstrap-image.yml`, `cloud-init.yml`,
+   `inngest.tf` are all comments/prose); its `push` job is gated `if: github.event_name ==
+   'workflow_dispatch'` (2026-09-14 push run concluded `skipped`), and its last real dispatch was
+   2026-09-09T12:08:11Z. `restart-inngest-server.yml` sends `restart inngest _ latest` — a restart
+   verb with no pull. `registry_pull_event` fires only inside `pull_image_with_fallback`.
+   `inngest_quiesced_*_refused` is the scheduler-side chokepoint (`ci-deploy.sh`
+   `verify_inngest_quiesced` + `final_write_state`), so even a dispatched deploy refuses.
+2. **NB1/NB3/NB6 spec-derivation pinned to substitution, not append:** the stub curl matches
+   COUNTS_SPEC keys in order, first match wins — a spec that *appends* `$Q_ZOTING=0` after
+   HEALTHY's `$Q_ZOTING=5` still reads 5 and the row never goes RED. The derivation must be bash
+   substitution (`${HEALTHY/$Q_ZOTING=5/$Q_ZOTING=0}`), the same shape `G6_NOEV` uses.
+3. **All live citations verified:** #6122/#6129/#8714/#8651 OPEN, #6500 CLOSED, #8503 OPEN (T1 is
+   literally the `INNGEST_ZOT` denominator), PR #8660 `mergedAt=2026-09-24T03:22:41Z` (the START
+   anchor the script reads live), PR #8488 merged. `scripts/zot-soak-6122-arms` is a real
+   test-all.sh shard leg (suite-shard-legs.tsv leg 1). `semver:patch` and `follow-through` labels
+   exist.
+
+### New Considerations Discovered
+
+- No existing suite row asserts on the `inngest=<n>` output substring — the verdict-line rewording
+  to `inngest-boots=` breaks no current assertion; only `FAIL(insufficient-sample)` is pinned.
+- The existing thin-sample row (~line 319, `Q_ZOTWEB=1`) still reds post-fix but only exercises
+  the *web* leg; the inngest leg's thin-evidence coverage is NB3 (denominator-deleted mutant) —
+  its comment should be re-scoped accordingly in the same test edit.
+- `FAIL(insufficient-sample)`'s "(need >=3 each)" threshold prose must become per-leg (web needs
+  `>=$MIN_SAMPLE`, inngest needs `>=1` boot) — a single shared threshold is now factually wrong.
+
 ## Overview
 
 `scripts/followthroughs/zot-soak-6122.sh` arm (b) requires `ZOT_INNGEST >= MIN_SAMPLE` (3), counted
@@ -55,6 +96,12 @@ is to dispatch deploys into an intentionally quiesced scheduler — the explicit
 - `restart-inngest-server.yml` sends `restart inngest _ latest` — restarts the CURRENT image, no
   pull, no `image-pull` event (grep: no `registry_pull`/`image-pull` in restart/watchdog
   workflows).
+- `build-inngest-bootstrap-image.yml`'s header comment says "the deploy webhook fires: `deploy
+  inngest …`" but its only curl calls are Slack notifications — the comment documents the manual
+  flow, not a sender. Even if it did fire, the chokepoint is the quiesced scheduler's
+  `inngest_quiesced_*_refused`, not the sender list.
+- #8503 (OPEN) records that the `INNGEST_ZOT` denominator itself was a reversible judgment call
+  of PR #8488 (decision T1) — see Dependencies & Risks for the coupling.
 - The dedicated host emits `soleur-boot-emit inngest_zot info` from
   `apps/web-platform/infra/cloud-init-inngest.yml` (~line 1105; `HOST_NAME='soleur-inngest'` ~line
   411), matching the soak's `INNGEST_ZOT` query `stage:"inngest_zot" host_name:"soleur-inngest"`.
@@ -171,12 +218,16 @@ Adopt the issue's preferred direction, in the "make it satisfiable by `INNGEST_Z
    useful value here is 1").
 3. **Keep the leg even though the denominator already FAILs at `INNGEST_ZOT == 0`.** The leg is
    redundant in the current order, deliberately: it keeps every verdict line reporting the inngest
-   evidence, and it survives a hypothetical deletion of the denominator arm (fail-closed
-   redundancy — the suite's own mutation rows test deletions like that).
+   evidence, and it survives a deletion of the denominator arm — a non-hypothetical scenario:
+   open issue #8503 (T1) records that the `INNGEST_ZOT` denominator was itself a reversible
+   judgment call from PR #8488. If T1 is ever reversed, the sample leg is what still refuses a
+   zero-inngest-evidence window.
 4. **Update verdict text** so no line reports a deploy-pull count for inngest: the
    `FAIL(insufficient-sample)` line, the `FAIL(blocked)` line, and the `PASS` line report
    `inngest-boots=$INNGEST_ZOT` (or equivalent wording that names the evidence class) instead of
-   `inngest=$ZOT_INNGEST`.
+   `inngest=$ZOT_INNGEST`. The `insufficient-sample` threshold prose must also become per-leg —
+   `(need >=$MIN_SAMPLE each)` is factually wrong once the floors differ (web `>=$MIN_SAMPLE`
+   deploy-pulls, inngest `>=1` boot).
 5. **Update the file's own documentation:** arm (b)'s header comment, the `(b)` bullet in the
    top-of-file contract, and the `MIN_SAMPLE` comment — each must say the inngest exercise proof is
    the dedicated host's zot-served boot, why the deploy-pull leg retired (#9097, quiesced
@@ -307,12 +358,15 @@ bump, per that file's same-edit convention):
    legacy spec strings in this phase. The unfixed soak still issues the `image:"inngest"` query;
    dropping its COUNTS_SPEC key early makes the stub 500 every HEALTHY-based row → TRANSIENT,
    burying the new rows' semantic REDs. Removal lands in Phase 2's same commit, after GREEN.
-1. **NB1 (accepted evidence — the defect's RED row):** spec derived from HEALTHY with
-   `$Q_ZOTING=0` (zero `image:"inngest"` events — the scenario normal operation now produces),
-   blockers CLOSED/COMPLETED, `inngest_fixed=yes` → must exit 0 PASS. On the unfixed script the
+1. **NB1 (accepted evidence — the defect's RED row):** spec derived from HEALTHY by bash
+   substitution — `${HEALTHY/$Q_ZOTING=5/$Q_ZOTING=0}` — NOT by appending: the stub curl matches
+   COUNTS_SPEC keys in order and first match wins, so an appended `=0` after HEALTHY's `=5` still
+   reads 5 and the row can never RED (the same shape `G6_NOEV` already uses). Zero
+   `image:"inngest"` events is the scenario normal operation now produces; blockers
+   CLOSED/COMPLETED, `inngest_fixed=yes` → must exit 0 PASS. On the unfixed script the
    query is still issued and counts 0 → `FAIL(insufficient-sample)`, the exact verdict being
    fixed. Keeping `$Q_ZOTING=0` (not omitting the key) is what makes the RED a real verdict
-   instead of a stub-500 TRANSIENT.
+   instead of a stub-500 TRANSIENT. NB3 and NB6 derive their specs the same substitution way.
 2. **NB2 (zero evidence):** `G6_NOEV` (soleur-inngest=0) → still exit 1 —
    `FAIL(no-inngest-freshboot-evidence)` at the denominator. Pre-fix this row is already green;
    it is the requirement's baseline pin.
@@ -350,7 +404,10 @@ In `scripts/followthroughs/zot-soak-6122.sh`:
 4. In `scripts/followthroughs/zot-soak-6122.test.sh` (same commit, after GREEN): remove
    `$Q_ZOTING` from `HEALTHY` and the legacy spec strings (~lines 221/301/308/319) — the canonical
    healthy world no longer issues that query. Keep the `Q_ZOTING` constant itself: NB1/NB3/NB6
-   reference it.
+   reference it. In the same edit, re-scope the thin-sample row's comment (~line 316): post-fix it
+   exercises only the *web* leg of the sample arm — the inngest leg's thin-evidence coverage is
+   NB3's denominator-deleted mutant (a `soleur-inngest=0` window on the stock script reds at the
+   denominator before the sample arm is reached).
 5. Re-run the suite — GREEN.
 
 ### Phase 3 — Record and ship
@@ -446,6 +503,12 @@ Contract matrix and the suite's mutation rows.
 
 - Depends on the existing `inngest_zot` emitter (`cloud-init-inngest.yml`) staying live — pinned by
   the op-contract test's emitted-stages legs and the `exact_inngest_query` clause check.
+- **#8503 coupling (recorded, not blocking):** open issue #8503 keeps or reverses PR #8488's two
+  judgment calls; T1 is the `INNGEST_ZOT` denominator itself. This plan assumes T1 stands (the
+  soak keeps requiring dedicated-host evidence) — consistent with the issue's own analysis. If T1
+  is ever reversed (denominator deleted), arm (b)'s new inngest leg still refuses a zero-evidence
+  window — one of the reasons the leg is kept rather than dropped, and exactly what mutation row
+  NB3 pins.
 - Risk: a future operator re-arms START to a window with no host replace → `INNGEST_ZOT=0` → FAIL.
   Same semantics as today's denominator; unchanged by this plan.
 - The change narrows `MIN_SAMPLE`'s meaning to the web leg; an out-of-date operator memory of
