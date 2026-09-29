@@ -532,6 +532,20 @@ locals {
   )
 }
 
+# ── web-2 SSH host-key pin (#9151, ADR-237) ────────────────────────────────────────────────
+# Twin of web_1_ssh_host_key, reading the committed web-2 pin. Only
+# terraform_data.deploy_pipeline_fix_web2's connection block consumes it — the single
+# web-2-dialing resource (#7103-B4's pre-decided shape), reached in CI through the web-1
+# bastion forward (ADR-220). web-2 is cattle: a replaced host changes this key legitimately,
+# so the re-capture path (scripts/capture-web-2-host-key.sh + a PR) is the routine flow —
+# the fail-closed shape matters because a wrong pin is a red apply, never a TOFU bypass.
+locals {
+  web_2_ssh_host_key = regex(
+    "^ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBB[A-Za-z0-9+/]{86}=$", # twin: .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh
+    one([for l in split("\n", replace(file("${path.module}/web-2-ssh-host-key.pub"), "\r", "")) : l if trimspace(l) != "" && !startswith(trimspace(l), "#")]),
+  )
+}
+
 # Merge-time proof that the Terraform path accepts the committed pin (ADR-237 D2). A read-only
 # no-op over the SAME connection as its siblings, re-run whenever the pin OR the Terraform
 # version changes: a Terraform bump can change x/crypto's host-key algorithm preference (plan
