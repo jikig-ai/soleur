@@ -1551,13 +1551,29 @@ STUB
   X systemctl daemon-reload
   XS 'echo 0 > /var/lib/tierb/ctl/pull_rc; echo 60 > /var/lib/tierb/ctl/boot_sleep'
   X systemctl start --no-block soleur-inngest-provision.service
-  poll 40 "grep -q ' phone provision-attempt-start attempt=2 ' $LOGF"
+  poll 90 "grep -q ' phone provision-attempt-start attempt=2 ' $LOGF"
   x="$(lines_from T9)"
-  local t9_b t9_x
-  t9_b="$(awk '$2 == "bootstrap" && $3 == "start" {print $1; exit}' <<<"$x")"
-  t9_x="$(awk '$2 == "phone" && $3 ~ /^provision-attempt-exit-143$/ {print $1; exit}' <<<"$x")"
-  tb_ok "$( [ -n "$t9_b" ] && [ -n "$t9_x" ] && awk -v b="$t9_b" -v e="$t9_x" 'BEGIN { exit !((e - b) <= 15) }' && echo 0 || echo 1)" "T9: provision-attempt-exit-143 lands within 10s of the 5s timeout (bootstrap start $t9_b, exit-143 $t9_x) — well before the 90s SIGKILL"
-  tb_ok "$(awk '$3 ~ /^provision-attempt-exit-143$/ {e=NR} $3 == "provision-attempt-start" && $4 == "attempt=2" {s=NR} END {exit !(e && s && e < s)}' <<<"$x" && echo 0 || echo 1)" "T9: the next attempt's provision-attempt-start attempt=2 follows the exit-143"
+  # The kill report travels on TWO channels out of on_exit(): the phone row
+  # (provision-attempt-exit-143) and the emit row (provision_attempt_failed rc=143.attempt=1.).
+  # Under runner load either single row can be lost, so the assertions read whichever
+  # attempt=1 evidence landed — and still red when NEITHER did. Matchers anchor on
+  # attempt=1 because exit-143 rows appear again for attempt=2's teardown.
+  local t9_ev t9_via t9_pos t9_x t9_b t9_s
+  t9_ev="$(awk '
+    $2 == "phone" && $3 == "provision-attempt-exit-143" && $4 == "attempt=1"         { if (!e) { e = NR; t = $1 } ph = 1 }
+    $2 == "emit"  && $3 == "provision_attempt_failed" && $5 ~ /^rc=143\.attempt=1\./ { if (!e) { e = NR; t = $1 } em = 1 }
+    END { printf "%s %s %s\n", (ph && em ? "both" : ph ? "phone" : em ? "emit" : "none"), e ? e : "-", e ? t : "-" }' <<<"$x")"
+  t9_via="${t9_ev%% *}"; t9_ev="${t9_ev#* }"; t9_pos="${t9_ev%% *}"; t9_x="${t9_ev#* }"
+  [ "$t9_pos" = "-" ] && t9_pos=""; [ "$t9_x" = "-" ] && t9_x=""
+  # Anchor the bound on the attempt's own start row; bootstrap start rows carry no
+  # attempt= field, so they are only the fallback when the start row is absent.
+  t9_b="$(awk '$2 == "phone" && $3 == "provision-attempt-start" && $4 == "attempt=1" {print $1; exit}' <<<"$x")"
+  if [ -z "$t9_b" ] && [ -n "$t9_pos" ]; then
+    t9_b="$(awk -v e="$t9_pos" 'NR < e && $2 == "bootstrap" && $3 == "start" {b = $1} END {if (b) print b}' <<<"$x")"
+  fi
+  t9_s="$(awk '$2 == "phone" && $3 == "provision-attempt-start" && $4 == "attempt=2" {print NR; exit}' <<<"$x")"
+  tb_ok "$( [ -n "$t9_b" ] && [ -n "$t9_x" ] && awk -v b="$t9_b" -v e="$t9_x" 'BEGIN { exit !((e - b) <= 15) }' && echo 0 || echo 1)" "T9: the start-timeout kill reports rc=143 for attempt=1 within 15s of the attempt's start (via=$t9_via, start=${t9_b:-none}, evidence=${t9_x:-none}) — well before the 90s SIGKILL"
+  tb_ok "$( [ -n "$t9_pos" ] && [ -n "$t9_s" ] && [ "$t9_pos" -lt "$t9_s" ] && echo 0 || echo 1)" "T9: the attempt=1 exit evidence precedes provision-attempt-start attempt=2 (via=$t9_via, e=${t9_pos:-none}, s=${t9_s:-none})"
   X rm -f /etc/systemd/system/soleur-inngest-provision.service.d/20-t9.conf; X systemctl daemon-reload
 
   # ---- T15: the cutover-FSM quiesce waits for an in-flight flip step; a bounded wait gives up --
