@@ -92,7 +92,7 @@ get_status() { # -> http_code; body lands in $TMP/status.json
   curl -s --max-time 15 -o "$TMP/status.json" -w '%{http_code}' \
     -X GET -H "X-Signature-256: sha256=${sig}" \
     -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
-    -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+    -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
     "$STATUS_URL" 2>/dev/null || echo "000"
 }
 
@@ -118,7 +118,7 @@ POST_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
   -X POST -H "Content-Type: application/json" \
   -H "X-Signature-256: sha256=${POST_SIG}" \
   -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
-  -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+  -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
   -d "$PAYLOAD" "$DEPLOY_URL" 2>/dev/null || echo "000")"
 if [[ "$POST_CODE" != "202" ]]; then
   echo "::error::dispatch-web-redeploy: POST /hooks/deploy rejected (HTTP ${POST_CODE}). verdict=redeploy_dispatch_rejected"
