@@ -253,7 +253,7 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > ledger's re-measure recipe now excludes `source = cron:cron-ux-audit`.
 >
 > **[2026-09-28 Review note — Supabase compute Micro→Small declared]** Out-of-cycle, against
-> `expenses.md@2026-09-28` (#9168, ADR-259). The prd app project (`soleur-web-platform`,
+> `expenses.md@2026-09-28` (#9168, ADR-260). The prd app project (`soleur-web-platform`,
 > ifsccnjhymdmidffkzhl) is moving Micro → Small compute — **+$5/mo net** (Small ≈$15/mo vs the
 > Micro ~$10/mo absorbed by the Pro credit). **Declared, NOT booked:** the Terraform change in this
 > PR is a zero-diff import pinned to live `instance_size = "micro"`; the `"small"` flip is a
@@ -266,7 +266,7 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > from email-only routing") fired on 2026-09-28 (the 09-15 outage was the same risk class —
 > a page that cannot reach a human — but its latency was missing detection, not delivery)
 > and the seat was **still declined**
-> — the $0 Slack path was chosen (ADR-259); the deferred row stands, revisit-if-insufficient. No
+> — the $0 Slack path was chosen (ADR-260); the deferred row stands, revisit-if-insufficient. No
 > line item changes.
 
 ## Monthly Burn

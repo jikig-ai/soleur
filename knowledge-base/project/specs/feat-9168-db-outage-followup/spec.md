@@ -46,7 +46,7 @@ recovery waits on a human even though the failure signature and its remedy
   (Art. 5(1)(c) — no unbounded Postgres logs); operator submits via dashboard.
 - **G5.** The 2026-09-28 postmortem is written
   (`knowledge-base/engineering/operations/post-mortems/prd-supabase-database-unreachable-2026-09-28-postmortem.md`).
-- **G6.** ADR-259 records: the Slack-vs-Responder decision (expenses.md:46
+- **G6.** ADR-260 records: the Slack-vs-Responder decision (expenses.md:46
   deferral trigger fired; operator chose the $0 path), the bounded auto-restart
   authorization model (express deviation from
   `hr-menu-option-ack-not-prod-write-auth`, per ADR-079/ADR-248 precedent), the
@@ -111,7 +111,7 @@ recovery waits on a human even though the failure signature and its remedy
   (or similar), minimized logs only.
 - **FR7.** Postmortem file for 2026-09-28 in the post-mortems directory,
   matching the 09-15 template, action items cross-referencing this issue.
-- **FR8.** ADR-259 in `knowledge-base/engineering/architecture/decisions/`.
+- **FR8.** ADR-260 in `knowledge-base/engineering/architecture/decisions/`.
 - **FR9.** Runbook update + `-target` allowlist parity + monitor-count drift
   guards kept green.
 
@@ -155,6 +155,6 @@ recovery waits on a human even though the failure signature and its remedy
   values (expected "1 to import", zero diff); apply lands without touching
   unrelated resources (`-target` discipline). The `small` flip is a follow-up
   PR.
-- AC4: Postmortem, ticket draft, ADR-259, runbook update committed; issue
+- AC4: Postmortem, ticket draft, ADR-260, runbook update committed; issue
   #9168 links all artifacts.
 - AC5: No new secrets introduced; `SUPABASE_ACCESS_TOKEN` reuse only.

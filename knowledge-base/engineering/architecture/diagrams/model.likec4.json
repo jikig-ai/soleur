@@ -447,7 +447,7 @@
 "external"
 ],
 "description": {
-"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-259)."
+"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-260)."
 },
 "title": "Slack",
 "kind": "system",
@@ -2167,7 +2167,7 @@
 "id": "t1y07"
 },
 "jaeva6": {
-"title": "Management API health probe + bounded auto-restart (scheduled-supabase-watchdog.yml, #9168): GET /v1/projects/{ref}/health?services=… every ~5 min classifies the proven hang signature ({db,auth,rest} UNHEALTHY ∧ pooler ACTIVE_HEALTHY, sustained ≥3 reads + independent /health corroboration) and — only while the vars.WATCHDOG_ARMED dark-launch gate is set — issues POST /v1/projects/{ref}/restart, a pre-authorized prod-write delegation recorded in ADR-259 (deviation from hr-menu-option-ack-not-prod-write-auth; 30-min cooldown, attempt-counted give-up, audit issue + sentinel, concurrency-group mutex). Bearer-on-stdin transport per supabase-logs-query.sh",
+"title": "Management API health probe + bounded auto-restart (scheduled-supabase-watchdog.yml, #9168): GET /v1/projects/{ref}/health?services=… every ~5 min classifies the proven hang signature ({db,auth,rest} UNHEALTHY ∧ pooler ACTIVE_HEALTHY, sustained ≥3 reads + independent /health corroboration) and — only while the vars.WATCHDOG_ARMED dark-launch gate is set — issues POST /v1/projects/{ref}/restart, a pre-authorized prod-write delegation recorded in ADR-260 (deviation from hr-menu-option-ack-not-prod-write-auth; 30-min cooldown, attempt-counted give-up, audit issue + sentinel, concurrency-group mutex). Bearer-on-stdin transport per supabase-logs-query.sh",
 "technology": "HTTPS (Supabase Management API)",
 "source": {
 "model": "github"
@@ -2595,7 +2595,7 @@
 "id": "1toat1e"
 },
 "19f3omu": {
-"title": "Exceptions + debounced warns via the @sentry/nextjs SDK (sentry.client.config.ts / sentry.server.config.ts / instrumentation.ts, SENTRY_DSN) — the stack-keyed capture shape the issue alerts group on; AND the Inngest-fired crons' end-of-run check-ins (`postSentryHeartbeat` in _cron-shared.ts → /api/{id}/cron/{slug}/{key}/?status=ok|error, bounded retry #5728) that satisfy the 44 Inngest-substrate sentry_cron_monitors",
+"title": "Exceptions + debounced warns via the @sentry/nextjs SDK (sentry.client.config.ts / sentry.server.config.ts / instrumentation.ts, SENTRY_DSN) — the stack-keyed capture shape the issue alerts group on; AND — since #9178/ADR-260 — field Core Web Vitals RUM: sampled pageload/navigation transactions from browserTracingIntegration carrying LCP/CLS/INP/FCP/TTFB measurements (tracesSampler 0.1 real sessions, 1.0 under the soleur.perf-probe marker; the standalone webVitalsIntegration path was rejected — it covers only cls/inp/lcp, never FCP/TTFB), scrubbed by the same beforeSend* PII chain extended to transaction and span payloads; AND the Inngest-fired crons' end-of-run check-ins (`postSentryHeartbeat` in _cron-shared.ts → /api/{id}/cron/{slug}/{key}/?status=ok|error, bounded retry #5728) that satisfy the 44 Inngest-substrate sentry_cron_monitors",
 "technology": "HTTPS (Sentry SDK envelope + cron check-in API)",
 "source": {
 "model": "platform.webapp"
@@ -2683,7 +2683,7 @@
 "id": "uvxnm5"
 },
 "157iwlp": {
-"title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-259: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to the managed recipient still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (the expenses.md deferral trigger fired twice; declined — revisit if Slack proves insufficient). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated",
+"title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-260: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to the managed recipient still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (the expenses.md deferral trigger fired twice; declined — revisit if Slack proves insufficient). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated",
 "technology": "Better Stack monitor/heartbeat → Slack + push + email (+ policy escalation on paid tier)",
 "source": {
 "model": "betterstack"
@@ -3540,7 +3540,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-259)."
+"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-260)."
 },
 "tags": [
 "external"
@@ -9787,7 +9787,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-259)."
+"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-260)."
 },
 "tags": [
 "external"
@@ -15863,7 +15863,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-259)."
+"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-260)."
 },
 "tags": [
 "external"
@@ -26628,7 +26628,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-259)."
+"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-260)."
 },
 "tags": [
 "external"
@@ -33815,7 +33815,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-259)."
+"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-260)."
 },
 "tags": [
 "external"
@@ -34235,7 +34235,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-259)."
+"txt": "Slack workspace — Better Stack incident-alert target (native integration); mobile push to the operator is the primary wake path, email retained as secondary (#9168, ADR-260)."
 },
 "tags": [
 "external"

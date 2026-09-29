@@ -1,5 +1,5 @@
 ---
-title: "ADR-259: DB-outage paging via Slack, and a bounded auto-restart on the proven Supabase hang signature"
+title: "ADR-260: DB-outage paging via Slack, and a bounded auto-restart on the proven Supabase hang signature"
 status: Accepted
 date: 2026-09-28
 supersedes: []
@@ -11,7 +11,7 @@ tags: [observability, better-stack, slack, supabase, auto-restart, prod-write-au
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-259: DB-outage paging via Slack, and a bounded auto-restart on the proven Supabase hang signature
+# ADR-260: DB-outage paging via Slack, and a bounded auto-restart on the proven Supabase hang signature
 
 ## Status
 

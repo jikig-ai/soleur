@@ -21,7 +21,7 @@ restart performed by a human who was never told anything was wrong. This plan
 integration plus a measured `push` flip, and (B) removes the human from the
 recovery path for the proven signature via a bounded auto-restart watchdog,
 plus (C) a Micro→Small compute bump through the `supabase/supabase` Terraform
-provider, a 09-28 postmortem, a drafted Supabase support ticket, and ADR-259.
+provider, a 09-28 postmortem, a drafted Supabase support ticket, and ADR-260.
 
 ## Research Insights
 
@@ -124,7 +124,7 @@ eligibility exception needed.
 - `knowledge-base/engineering/operations/post-mortems/prd-supabase-database-unreachable-2026-09-28-postmortem.md`
 - `knowledge-base/engineering/operations/ticket-drafts/supabase-postgres-hang-recurring-2026-09.md`
   — minimized evidence pack for the operator's dashboard submission.
-- `knowledge-base/engineering/architecture/decisions/ADR-259-*.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-260-*.md`
   (ordinal provisional — ship gate re-verifies next-free).
 - `apps/web-platform/infra/supabase-project.tf` — `import` block +
   `supabase_project.prd` **pinned to all live values, `instance_size =
@@ -336,7 +336,7 @@ Two merges:
 1. **This PR:** provider + import pinned to live `instance_size = "micro"` +
    `push = true` — zero-downtime, expected "1 to import" only.
 2. **Follow-up:** flip `instance_size = "small"` — the ~2 min resize, applied
-   while the operator watches (tracked in #9168 checklist / ADR-259).
+   while the operator watches (tracked in #9168 checklist / ADR-260).
 
 Pre-merge Phase-0 verification — **already measured at plan time**
 (2026-09-28, existing PAT): `GET /v1/projects/ifsccnjhymdmidffkzhl` →
@@ -370,14 +370,14 @@ The resource block can therefore be written fully concrete, no placeholders.
 - Supabase provider: `instance_size` updates PATCH `billing/addons` and
   require Pro (held) + a token whose scope reaches billing addons — proven by
   the pre-merge `GET …/billing/addons` read; if refused, the flip degrades to
-  a documented operator dashboard step recorded in ADR-259.
+  a documented operator dashboard step recorded in ADR-260.
 - `legacy_api_keys_enabled` MUST be pinned to the measured live value (expect
   `true`) — if unset/unpinned the provider's Update can PUT the legacy-keys
   endpoint and disable JWT keys the app uses.
 
 ## Architecture Decision (ADR/C4)
 
-- **ADR:** create **ADR-259** (provisional ordinal — ship gate re-verifies):
+- **ADR:** create **ADR-260** (provisional ordinal — ship gate re-verifies):
   "DB-outage paging via Slack + bounded auto-restart on the proven Supabase
   hang signature" — records the Responder-deferral discharge, the
   pre-authorized prod-write delegation (deviation from
@@ -391,7 +391,7 @@ The resource block can therefore be written fully concrete, no placeholders.
   all three `.c4` files: `slack` element absent (grep); `github`, `supabase`,
   `betterstack`, `founder` present; no `github -> supabase` edge exists despite
   two existing Management-API callers (model gap fixed by this edit).
-- **Sequencing:** ADR-259 is authored in this PR at `status: accepted` for the
+- **Sequencing:** ADR-260 is authored in this PR at `status: accepted` for the
   alerting portion and documents the auto-restart delegation as accepted —
   both ship together.
 
@@ -414,7 +414,7 @@ The resource block can therefore be written fully concrete, no placeholders.
 - [ ] AC4: A new Sentry cron monitor covers the watchdog; the runbook's
   "which alarm" table and `apply-web-platform-infra.yml` `-target` allowlist
   are updated; `terraform-target-parity.test.ts` stays green.
-- [ ] AC5: Postmortem (09-28), ticket draft, and ADR-259 committed; issue
+- [ ] AC5: Postmortem (09-28), ticket draft, and ADR-260 committed; issue
   #9168 references them; model.c4/views.c4 updated with slack + github→supabase
   edges and C4 validation tests pass.
 - [ ] AC6: No new secrets in the repo; `SUPABASE_ACCESS_TOKEN` /
@@ -463,11 +463,11 @@ The resource block can therefore be written fully concrete, no placeholders.
 - Better Stack Slack connect is an operator OAuth step (dashboard) — the
   alerting half's value lands only after it; tracked in the issue checklist.
 - Supabase provider `instance_size` PATCH may need a billing-scope token —
-  fallback is a documented operator dashboard step (recorded in ADR-259, and
+  fallback is a documented operator dashboard step (recorded in ADR-260, and
   the import still lands the project under IaC).
 - The compute apply incurs ~2 min downtime — sequenced as its own `-target`
   apply.
-- ADR-259 ordinal is provisional (ship gate re-verifies).
+- ADR-260 ordinal is provisional (ship gate re-verifies).
 
 ## References & Research
 

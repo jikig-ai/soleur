@@ -1476,7 +1476,7 @@ resource "sentry_cron_monitor" "scheduled_actions_queue_health" {
 }
 
 # Executor liveness for the bounded Supabase Postgres-hang auto-restart
-# watchdog (.github/workflows/scheduled-supabase-watchdog.yml, #9168, ADR-259).
+# watchdog (.github/workflows/scheduled-supabase-watchdog.yml, #9168, ADR-260).
 # Inngest-DISPATCHED every 5 min via
 # apps/web-platform/server/inngest/functions/cron-supabase-watchdog-dispatch.ts
 # (a regular Inngest cron — NOT the watchdog-dispatch-clock: the dispatch path

@@ -72,7 +72,7 @@ Two defect classes:
    imported pinned to live `instance_size = "micro"` (zero-diff); the
    `"small"` flip is a follow-up PR applied while the operator watches.
    `SUPABASE_ACCESS_TOKEN` already exists in Doppler `prd` and `prd_terraform`.
-5. ADR-259 (provisional — 256/257/258 got claimed by siblings during this session; ship gate re-verifies) records: Slack-vs-Responder
+5. ADR-260 (provisional — 256/257/258 got claimed by siblings during this session; ship gate re-verifies) records: Slack-vs-Responder
    deferral discharge, the bounded auto-restart authorization model + circuit
    breaker, Art. 32(1)(c) rationale (CLO), compute-size rationale, and the
    #7529 Better Stack DPA note.

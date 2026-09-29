@@ -29,7 +29,7 @@ before you read this — check for an open issue labeled `supabase-auto-restart`
 Four Better Stack monitors watch `app.soleur.ai`, `soleur.ai` and `www.soleur.ai`. Since
 #9168 alerts reach the operator through the native Slack integration (primary wake path —
 Slack mobile push) AND email; `app_health` additionally carries `push = true` (a measured
-flip — if the vendor refused it on this plan, that revert is recorded in PR #9184 / ADR-259).
+flip — if the vendor refused it on this plan, that revert is recorded in PR #9184 / ADR-260).
 
 | Alert name | URL | Means | Time to detect |
 |---|---|---|---|
@@ -60,7 +60,7 @@ status-code monitor cannot see that, which is why the 2026-09-15 outage paged no
 minutes ([post-mortem](../post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md)).
 On 2026-09-28 the same outage recurred and the monitor DID detect it (+7 min) — but the alert
 routed to email only and nobody was paged ([post-mortem](../post-mortems/prd-supabase-database-unreachable-2026-09-28-postmortem.md)),
-which is why Slack + push are now the delivery path (ADR-259).
+which is why Slack + push are now the delivery path (ADR-260).
 
 The keyword is compact JSON. A change to how `/health` serializes (pretty-printing, a renamed
 field) breaks the match, and
@@ -172,7 +172,7 @@ needs a deploy. Both need explicit operator authorization, as below.
 
 ## Remediate
 
-### The auto-restart watchdog (#9168, ADR-259)
+### The auto-restart watchdog (#9168, ADR-260)
 
 `scheduled-supabase-watchdog.yml` is a bounded, pre-authorized restart path for ONE proven
 signature — an express, recorded deviation from `hr-menu-option-ack-not-prod-write-auth`. It
@@ -342,7 +342,7 @@ non-empty means wired.
 
 ## Related
 
-- [ADR-259](../../architecture/decisions/ADR-259-db-outage-paging-and-bounded-auto-restart.md): Slack paging, the bounded auto-restart delegation, and the Micro→Small compute decision
+- [ADR-260](../../architecture/decisions/ADR-260-db-outage-paging-and-bounded-auto-restart.md): Slack paging, the bounded auto-restart delegation, and the Micro→Small compute decision
 - [ADR-222](../../architecture/decisions/ADR-222-better-stack-database-readiness-pager-and-live-inventory.md): why the alarm reads the body, and the declared-or-reported rule for live Better Stack objects
 - [ADR-204](../../architecture/decisions/ADR-204-redirect-health-moves-to-better-stack-because-sentry-cannot-express-it.md): where monitor 4226366 was first found unmanaged
 - [Post-mortem: prd Supabase database unreachable, 2026-09-28](../post-mortems/prd-supabase-database-unreachable-2026-09-28-postmortem.md)

@@ -1,4 +1,4 @@
-# ── prd Supabase project adoption (#9168, ADR-259) ───────────────────────────
+# ── prd Supabase project adoption (#9168, ADR-260) ───────────────────────────
 #
 # ADOPTED, not created. The prd project (ref ifsccnjhymdmidffkzhl — the same
 # literal dns.tf's supabase_custom_domain CNAME points at) was created by hand

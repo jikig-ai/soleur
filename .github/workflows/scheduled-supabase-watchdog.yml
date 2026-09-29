@@ -73,7 +73,7 @@
 # fires under `if: always()` — a dead workflow pages on the missed check-in
 # within the monitor's margin.
 #
-# Tracks #9168. ADR-259 records the pre-authorized prod-write delegation.
+# Tracks #9168. ADR-260 records the pre-authorized prod-write delegation.
 
 name: "Scheduled: Supabase DB Watchdog"
 
@@ -255,7 +255,7 @@ jobs:
               printf -- '- **Detail:** %s\n' "$DETAIL"
               printf -- '- **First seen:** %s\n' "$NOW"
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
-              printf 'This issue is the audit ledger for the bounded auto-restart watchdog (#9168, ADR-259). Every restart ATTEMPT is recorded here as a `<!-- watchdog:restart epoch=... -->` sentinel comment — written AT the restart POST, never on confirmed 2xx. The watchdog never restarts on ambiguous or probe-unavailable verdicts, never twice inside the 30-min cooldown, and gives up (escalating here) after 3 attempts.\n'
+              printf 'This issue is the audit ledger for the bounded auto-restart watchdog (#9168, ADR-260). Every restart ATTEMPT is recorded here as a `<!-- watchdog:restart epoch=... -->` sentinel comment — written AT the restart POST, never on confirmed 2xx. The watchdog never restarts on ambiguous or probe-unavailable verdicts, never twice inside the 30-min cooldown, and gives up (escalating here) after 3 attempts.\n'
             } > "$BODY_FILE"
             ISSUE_URL="$(gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
               --label "supabase-auto-restart" --label "priority/p1-high" \

@@ -62,7 +62,7 @@ created: 2026-09-28
 - [ ] **4.1** 2026-09-28 postmortem (09-15 template; every action item cites a
       filed issue).
 - [ ] **4.2** Support-ticket draft (minimized evidence; both windows).
-- [ ] **4.3** ADR-259 (provisional ordinal — re-verify next-free at ship).
+- [ ] **4.3** ADR-260 (provisional ordinal — re-verify next-free at ship).
 - [ ] **4.4** `model.c4`/`views.c4`: `slack` element + `betterstack -> slack`,
       `slack -> founder`, `github -> supabase` edges; amend
       `betterstack -> founder` prose; run C4 tests.

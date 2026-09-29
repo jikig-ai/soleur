@@ -640,7 +640,7 @@ If the plan introduces infrastructure that needs to live somewhere — a server,
 
 **Why:** PR-F (#3940) plan baked in "operator installs inngest-cli + systemd unit via SSH" and "operator sets Doppler keys via CLI" as Phase X items. Both violate `hr-all-infrastructure-provisioning-servers`. The rule existed; no plan-time gate consulted it. The cost was a post-merge realisation that the entire operator checklist had to be redone as Terraform. See `knowledge-base/project/learnings/2026-05-18-plan-baked-in-operator-ssh-violated-iac-rule.md`.
 
-Skip silently if the plan introduces no new infrastructure (pure code change against an already-provisioned surface). A plan that only edits files under `apps/<app>/src/` or `apps/<app>/server/` typically skips. A plan that introduces a new service, a new secret, a new vendor, or a new persistent runtime process does not.
+Skip silently if the plan introduces no new infrastructure — a plan that only edits `apps/<app>/src/` or `apps/<app>/server/` files typically skips; one adding a service, secret, vendor, or persistent runtime process does not.
 
 ### 2.9. Observability Quality Gate
 
@@ -693,7 +693,9 @@ condition in this list is unscoped and halts either way.
 - Plan is pure-docs (no Files-to-Edit under code/infra paths above).
 - Plan deletes-only (no new code/infra surface; revert PRs).
 
-**Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours. The plan that introduced it (PR-F #3940) passed every other plan-time gate but had no observability declaration; the operator-blind-zone aggregated across the substrate cascade (#4017 → #4111) until issue #4116 surfaced the gap. Codifying the gate at plan-time prevents the next feature from shipping a dark observability surface.
+**Why:** #4116 — `inngest-heartbeat.service` was silently broken 16+ hours; the introducing plan (PR-F #3940) passed every other gate but declared no observability, and the blind zone aggregated across the substrate cascade (#4017 → #4111) until #4116 surfaced it. Plan-time gating prevents the next dark observability surface.
+
+**Field RUM.** A plan touching a browser-rendered webapp also encodes field Core Web Vitals — recipe: [webapp-cwv-observability.md](./references/webapp-cwv-observability.md).
 
 #### 2.9.1. Soak Follow-Through Enrollment (conditional)
 
