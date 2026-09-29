@@ -90,3 +90,12 @@
 - All 89 check runs on `b712c4d6feee97fe850a1603abb23520c2ac4991` completed: 87 passed, with only `tenant-integration` and `tenant-integration-required` failing on the dev migration-ledger parity check for orphaned `144_codex_auth_mode_rebind.sql`. RLS fuzz passed. An earlier run on head `814c2c2f04b0f2b05c46378c0cd1f40fafa685df` had an RLS test deadlock while dropping `conversations_engine_binding_state_insert`; it did not recur on the current head.
 - The operator said they logged into Slack; that does not verify the Soleur workspace browser session or Codex runtime credentials. Both CLO dispositions remain PENDING, and no provider calls or feature-flag changes occurred.
 - The required session-start `cleanup-merged` ran successfully. A previous sandboxed session could not acquire its cleanup lock because `.git` was read-only; no cleanup occurred then. The root `.mcp.json` hash matches `origin/main:.mcp.json`, so no refresh write was needed.
+
+## Verification as of 2026-09-29 tenant-parity repair
+
+- CI on `d651afc5110e8474d75d8d669631c48fcabe51b6` confirmed the only required failure was tenant-ledger parity: dev has `144_codex_auth_mode_rebind.sql` at blob `be38bcb39d313de4e24ba44f02cdb47aebc3f00b`, absent from the PR tree. All other reported checks passed.
+- Restored that exact migration blob as `144_codex_auth_mode_rebind.sql`; changed `145` to apply only its follow-on schema/function delta and changed `145.down.sql` to restore the `144` schema and function contracts without dropping `144`'s generation columns.
+- Added a Git-blob identity regression and adjusted the SQL extractor for `CREATE OR REPLACE`. Focused tests passed: 2 files, 7 tests, including disposable PostgreSQL tests. Migration immutability lint and `git diff --check` passed. The operator-authorized local affected-suite hook was stopped after running over 20 minutes; rely on fresh CI for the full suite and tenant-integration.
+- Current `origin/main` is `f1d1dc017fb7822a424fd0c7e9e62190013fa8b6`; it has been merged into the feature branch after the repair. The latest repair commit still needs to be pushed.
+- The repair did not write to shared dev or prod. CLO dispositions remain PENDING for both modes; no provider request or feature-flag change occurred.
+- Session errors and recovery are recorded in `knowledge-base/project/learnings/workflow-patterns/2026-09-29-ledgered-migration-repair-starts-from-applied-blob.md`.

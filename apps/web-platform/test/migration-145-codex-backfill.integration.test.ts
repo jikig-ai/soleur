@@ -86,7 +86,7 @@ describe("migration 145 Codex mode SQL on disposable PostgreSQL", () => {
 
     try {
       const migrationSql = readFileSync(migration, "utf8");
-      const functionDefinition = migrationSql.match(/CREATE FUNCTION public\.set_workspace_default_engine\([\s\S]*?^\$\$;/m);
+      const functionDefinition = migrationSql.match(/CREATE(?: OR REPLACE)? FUNCTION public\.set_workspace_default_engine\([\s\S]*?^\$\$;/m);
       expect(functionDefinition, "migration 145 owner rebind RPC").not.toBeNull();
       const rpc = functionDefinition![0].replaceAll("public.", "codex_rpc.");
       const output = runSql(database, `
