@@ -219,20 +219,35 @@ jobs:
           gh label create "supabase-auto-restart" --repo "$GH_REPO" \
             --description "Supabase DB-hang watchdog: bounded auto-restart audit trail (#9168)" \
             --color "B60205" 2>/dev/null || true
+          gh label create "priority/p1-high" --repo "$GH_REPO" \
+            --description "High-priority incident" --color "B60205" 2>/dev/null || true
           ISSUE_TITLE="[watchdog/supabase-db] Supabase database watchdog audit"
           ISSUE_LIST_RC=0
-          ISSUE="$(gh issue list --repo "$GH_REPO" --state open \
-            --label supabase-auto-restart --json number --jq '.[0].number // empty' 2>/dev/null)" || ISSUE_LIST_RC=$?
+          ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open \
+            --label supabase-auto-restart --json number,title 2>/dev/null)" || ISSUE_LIST_RC=$?
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          ISSUE=""
           if [[ "$ISSUE_LIST_RC" != "0" ]]; then
             # A FAILED list read is indistinguishable from "no issue exists" —
             # creating on that basis would split the sentinel ledger across two
             # issues and dilute the attempt count. Fail closed; the next tick
             # retries, and a restart is blocked downstream (issue_ok=false).
             echo "::error::could not LIST the supabase-auto-restart audit issue — treating the ledger as unreadable this run"
-            ISSUE=""
+          else
+            # Uniqueness + title double-key: gh issue list is newest-first and
+            # the sentinel ledger is read from the selected issue — labeling a
+            # NEWER issue (Triage-level action) would silently re-base the
+            # ledger to attempts=0, resetting BOTH the cooldown and give-up.
+            # Anything but exactly one titled issue → fail closed.
+            MATCHES="$(printf '%s' "$ISSUE_LIST" | jq '[.[] | select(.title | contains("watchdog audit"))]')"
+            N_MATCHES="$(printf '%s' "$MATCHES" | jq 'length')"
+            if [[ "$N_MATCHES" == "1" ]]; then
+              ISSUE="$(printf '%s' "$MATCHES" | jq -r '.[0].number')"
+            elif [[ "$N_MATCHES" -gt 1 ]]; then
+              echo "::error::${N_MATCHES} open issues carry supabase-auto-restart — ledger ambiguous, fail-closed (dedupe and re-run)"
+            fi
           fi
-          if [[ -z "$ISSUE" ]]; then
+          if [[ "$ISSUE_LIST_RC" == "0" && -z "$ISSUE" && "$N_MATCHES" == "0" ]]; then
             BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
             {
               printf '## Supabase database watchdog audit\n\n'
@@ -277,8 +292,12 @@ jobs:
           # give-up bound (a restart storm the ledger was written to prevent).
           # Read failure → corrupt=1 → the decision fail-closes.
           COMMENTS_RC=0
+          # Author-filtered: github-actions[bot] writes the sentinels; a guest
+          # comment containing `watchdog:restart` text is noise, not ledger —
+          # without the filter a public comment could forge sentinels (false
+          # give-up/perma-cooldown) or trip corrupt=1 every tick.
           COMMENTS="$(gh api "repos/${GH_REPO}/issues/${ISSUE}/comments" --paginate \
-            --jq '.[].body' 2>/dev/null)" || COMMENTS_RC=$?
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | .body] | .[]' 2>/dev/null)" || COMMENTS_RC=$?
           LEDGER="$(printf '%s\n' "$COMMENTS" | bash "$GITHUB_WORKSPACE/scripts/supabase-watchdog-classify.sh" --ledger 2>/dev/null || true)"
           attempts="$(printf '%s' "$LEDGER" | sed -n 's/^attempts=\([0-9]*\).*/\1/p')"
           last_epoch="$(printf '%s' "$LEDGER" | sed -n 's/.*last_epoch=\([0-9a-z-]*\).*/\1/p')"
@@ -404,8 +423,10 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # Fail-closed like the ledger read: || true would re-post the
+          # escalation comment every tick while the API flakes.
           HAS_ESC=$(gh issue view "$ISSUE" --repo "$GH_REPO" --json labels \
-            --jq '[.labels[].name] | index("watchdog-restarts-exhausted") // empty' 2>/dev/null || true)
+            --jq '[.labels[].name] | index("watchdog-restarts-exhausted") // empty' 2>/dev/null)
           if [[ -z "$HAS_ESC" ]]; then
             gh label create "watchdog-restarts-exhausted" --repo "$GH_REPO" \
               --description "Watchdog gave up after 3 restart attempts — human root-cause needed (#9168)" \
@@ -469,8 +490,15 @@ jobs:
         run: |
           set -uo pipefail
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
-          STALE="$(gh issue list --repo "$GH_REPO" --state open --label supabase-auto-restart \
-            --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          # Same uniqueness + title double-key as the ensure step — closing the
+          # newest labeled issue while an older real ledger stays open would
+          # strand the bounds.
+          STALE=""
+          CANDIDATES="$(gh issue list --repo "$GH_REPO" --state open --label supabase-auto-restart \
+            --json number,title --jq '[.[] | select(.title | contains("watchdog audit"))] | .[].number' 2>/dev/null || true)"
+          COUNT="$(printf '%s\n' "$CANDIDATES" | grep -c . || true)"
+          [[ "$COUNT" == "1" ]] && STALE="$CANDIDATES" \
+            || echo "::warning::${COUNT:-0} titled supabase-auto-restart issues — skipping auto-close (dedupe)"
           if [[ -n "$STALE" ]]; then
             gh issue close "$STALE" --repo "$GH_REPO" \
               --comment "Supabase healthy again at ${NOW} (db/auth/rest/pooler all ACTIVE_HEALTHY across the 3-read window). Auto-closed by ${RUN_URL}." 2>/dev/null \

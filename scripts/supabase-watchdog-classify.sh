@@ -78,9 +78,18 @@ classify_health_read() {
   }
   local db="" auth="" rest="" pooler="" extra_bad=0
   local line n s
+  # Duplicate service names in the response (last-wins otherwise) and out-of-
+  # vocabulary name/status tokens are a malformed observation, not a signature
+  # — defense-in-depth: either shape would let a crafted body hide an extra
+  # unhealthy service behind a later ACTIVE_HEALTHY duplicate.
+  local dup_bad=0
+  declare -A seen=()
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     n="${line%%=*}"; s="${line#*=}"
+    [[ "$n" =~ ^[a-z_]+$ && "$s" =~ ^[A-Z_]+$ ]] || { extra_bad=1; continue; }
+    if [[ -n "${seen[$n]:-}" ]]; then dup_bad=1; fi
+    seen[$n]=1
     case "$n" in
       db)     db="$s" ;;
       auth)   auth="$s" ;;
@@ -91,6 +100,7 @@ classify_health_read() {
       *)      [[ "$s" == "ACTIVE_HEALTHY" ]] || extra_bad=1 ;;
     esac
   done <<< "$pairs"
+  [[ "$dup_bad" -eq 1 ]] && extra_bad=1
   # An observation missing a required key is incomplete, never a signature.
   if [[ -z "$db" || -z "$auth" || -z "$rest" || -z "$pooler" ]]; then
     echo "ambiguous"; return 0
@@ -175,8 +185,8 @@ parse_restart_ledger() {
 # watchdog_decision VERDICT ARMED CORRUPT CLAIMED ATTEMPTS LAST_EPOCH NOW
 #                   [COOLDOWN_SEC=1800] [MAX_ATTEMPTS=3]
 # CLAIMED = the audit issue carries the `watchdog-restart-attempted` label (the
-# claim marker the workflow writes BEFORE the sentinel + POST, so a landed POST
-# whose sentinel write died is still visible).
+# claim marker the workflow writes AFTER the POST, so claimed-with-no-sentinel
+# strictly means a completed attempt whose sentinel was deleted).
 #
 # Order is load-bearing: fail-closed beats everything (an untrustworthy ledger
 # or a claim without a sentinel can never bound a write); detect-only beats the

@@ -263,7 +263,9 @@ Derived view over the authoritative expense ledger at `knowledge-base/operations
 > boundary crosses at $49 or $48 (COGS stays **8**, all-in stays **≥27**), and margins move <0.2 pt —
 > so per §4.1 this will be a **line-and-anchor update, not a full re-derivation**. Same ledger
 > note: the Better Stack Responder deferral's trigger ("first incident with user-visible latency
-> from email-only routing") fired twice (2026-09-15, 2026-09-28) and the seat was **still declined**
+> from email-only routing") fired on 2026-09-28 (the 09-15 outage was the same risk class —
+> a page that cannot reach a human — but its latency was missing detection, not delivery)
+> and the seat was **still declined**
 > — the $0 Slack path was chosen (ADR-259); the deferred row stands, revisit-if-insufficient. No
 > line item changes.
 

@@ -149,7 +149,7 @@ An agent happened to be chasing an unrelated failed deploy job and read `/health
 
 ### What went wrong
 
-- Detection without delivery: `app_health` routes to email only — `call`, `sms` and `push` are false and `policy_id` escalation is gated on an unset `var.betterstack_paid_tier` — so a working alarm produced a notification nobody saw. The `expenses.md` Responder deferral trigger (#3960, "first incident with user-visible latency from email-only routing") has now fired twice.
+- Detection without delivery: `app_health` routes to email only — `call`, `sms` and `push` are false and `policy_id` escalation is gated on an unset `var.betterstack_paid_tier` — so a working alarm produced a notification nobody saw. The `expenses.md` Responder deferral trigger (#3960, "first incident with user-visible latency from email-only routing") fired on 09-28; 09-15 (~89 min unnoticed) was the same risk class — a page that cannot reach a human — though its latency was missing *detection* (the keyword monitor was adopted 09-16), not email-only *delivery*.
 - Recovery still requires a human in the loop even though the signature and its remedy (Management API restart) are proven twice — a page-then-approve loop still waits on a human who may be asleep.
 - An earlier same-day window (10:34Z–10:37Z) fired and self-recovered unnoticed — the recurrence was visible only in retrospect from platform logs.
 

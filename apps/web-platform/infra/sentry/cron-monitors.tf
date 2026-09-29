@@ -1480,10 +1480,11 @@ resource "sentry_cron_monitor" "scheduled_actions_queue_health" {
 # Inngest-DISPATCHED every 5 min via
 # apps/web-platform/server/inngest/functions/cron-supabase-watchdog-dispatch.ts
 # (a regular Inngest cron — NOT the watchdog-dispatch-clock: the dispatch path
-# is DB-independent — App creds + dedicated-host Redis run-state — and the
-# subject is the prd Postgres itself, which survives as a dispatch substrate
-# while it hangs). The workflow's own `*/5` `schedule:` is the documented
-# fallback; the monitor crontab must equal it (the #8450 cadence-parity guard).
+# is independent of the WATCHED project — App creds are env-held and run-state
+# lives on the dedicated host's Redis, whose backing Postgres is a separate
+# Supabase project — so the dispatch fires while soleur-web-platform hangs).
+# The workflow's own `*/5` `schedule:` is the documented fallback; the monitor
+# crontab must equal it (the #8450 cadence-parity guard).
 #
 # 30-min margin = the Inngest-fired cohort convention sized here for the
 # measured runner queue (p90 ~20 min on the clock-dispatched cohort, 2026-09-24
@@ -1496,7 +1497,7 @@ resource "sentry_cron_monitor" "scheduled_supabase_watchdog" {
   name                    = "scheduled-supabase-watchdog"
   schedule                = { crontab = "*/5 * * * *" }
   checkin_margin_minutes  = 30
-  max_runtime_minutes     = 15
+  max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

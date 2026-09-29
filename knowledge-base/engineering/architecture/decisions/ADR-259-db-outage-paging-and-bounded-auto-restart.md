@@ -52,9 +52,12 @@ if the plan refuses). Email stays enabled.
 
 This discharges — by declining again — the `expenses.md` Responder deferral
 (#3960), whose trigger was "first incident with user-visible latency from
-email-only routing". That trigger has now fired **twice** (09-15 paged nobody
-for ~89 min; 09-28 for ~16 min and effectively ~23 min until a responder
-engaged). The operator still declined the $29–34/mo seat: the free-tier Slack
+email-only routing". That trigger fired on **09-28** (~16 min and effectively
+~23 min until a responder engaged); the 09-15 outage (~89 min unnoticed)
+demonstrated the same underlying risk class — a page that cannot reach a
+human — though strictly it predated the keyword monitor's adoption and its
+latency was missing *detection*, not email-only *delivery*. The operator
+still declined the $29–34/mo seat: the free-tier Slack
 path covers the failure mode. **Revisit condition:** if the Slack channel
 proves insufficient (missed alerts, Slack-side outage on an incident), the
 Responder seat is re-evaluated rather than assumed dead.
@@ -119,6 +122,15 @@ closed to detect-only):
 This is compliance-positive under GDPR Art. 32(1)(c) (timely restoration of
 availability), which is why the CLO signed off with the audit-trail and
 circuit-breaker conditions above.
+
+**Credential-custody residual (accepted, tracked).** The watchdog consumes
+`SUPABASE_ACCESS_TOKEN`, an account-scoped Management PAT able to restart and
+manage every Supabase project — an infra-write credential under ADR-241 D1,
+held in Tier A (a repo Actions secret reachable by any workflow file on any
+pushed branch, plus `prd_terraform`). This PR adds an automated prod-write
+consumer of that credential and does not move it. Recorded here as the
+accepted residual; a Tier-B move (e.g. a main-only environment secret) is a
+candidate follow-up, gated on the deploy workflow's access needs.
 
 ### 3. Compute mitigation: Micro → Small, via the `supabase/supabase` provider
 

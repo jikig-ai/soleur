@@ -53,5 +53,10 @@ resource "supabase_project" "prd" {
 
   lifecycle {
     ignore_changes = [database_password]
+    # prevent_destroy like the sibling imports (web-host-birth-environment.tf,
+    # git-data-root-key): the apply workflow's destroy ack is a COUNT, not an
+    # address list — a ForceNew provider diff on this resource would plan a
+    # destroy of the production project under any destroy ack.
+    prevent_destroy = true
   }
 }

@@ -80,6 +80,20 @@ describe("scheduled-supabase-watchdog workflow contract (#9168)", () => {
     expect(src()).toContain("supabase-auto-restart");
   });
 
+  it("double-keys the audit-issue lookup on label AND title, requiring uniqueness", () => {
+    // gh issue list is newest-first — without the title filter + the >1
+    // fail-closed arm, labeling a NEWER issue would silently re-base the
+    // sentinel ledger to attempts=0 and reset the cooldown and give-up.
+    expect(src()).toContain('contains("watchdog audit")');
+    expect(src()).toContain('select(.title | contains("watchdog audit"))]');
+  });
+
+  it("reads the sentinel ledger from github-actions[bot] comments only", () => {
+    // Without the author filter a public/guest comment could forge sentinels
+    // (false give-up/perma-cooldown) or trip corrupt=1 every tick.
+    expect(src()).toContain('select(.user.login == "github-actions[bot]")');
+  });
+
   it("checks into the scheduled-supabase-watchdog Sentry monitor as the terminal step", () => {
     const jobs = doc().jobs ?? {};
     const jobNames = Object.keys(jobs);

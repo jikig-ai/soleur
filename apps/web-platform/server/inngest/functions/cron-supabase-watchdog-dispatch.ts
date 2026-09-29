@@ -21,10 +21,14 @@
  * in-tree: the serve route authenticates by HMAC INNGEST_SIGNING_KEY (env),
  * mintInstallationToken / generateInstallationToken read
  * GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY from env (Doppler), and Inngest
- * run-state lives on the dedicated host's Redis (ADR-100), not Supabase. The
- * web process stays up through this failure class — during the 09-28 hang it
- * kept serving /health with `supabase:error` — so an Inngest cron survives a
- * Postgres hang and needs no WATCHDOG_DISPATCH_TABLE exception.
+ * run-state lives on the dedicated host's Redis (ADR-100) — whose backing
+ * Postgres is soleur-inngest-prd, a SEPARATE Supabase project from the
+ * watched one. The web process stays up through this failure class — during
+ * the 09-28 hang it kept serving /health with `supabase:error` — so an
+ * Inngest cron survives a project-local hang and needs no
+ * WATCHDOG_DISPATCH_TABLE exception. (Residual, accepted: the serve-route
+ * middleware's terminal routine_runs row writes to the WATCHED project —
+ * during a hang that write fails AFTER the dispatch already fired.)
  *
  * HARD NON-GOAL: this function does NOT probe Supabase and holds NO Supabase
  * credential — the Management-API PAT stays in the ephemeral GHA runner. This

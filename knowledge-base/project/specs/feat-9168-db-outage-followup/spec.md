@@ -34,7 +34,7 @@ recovery waits on a human even though the failure signature and its remedy
 - **G2.** A bounded auto-restart watchdog: scheduled GH workflow probes the
   Supabase Management API `health?services=` endpoint and issues
   `POST /v1/projects/{ref}/restart` ONLY on the proven signature —
-  `db`, `auth`, `rest` UNHEALTHY while pooler reports ACTIVE/COMING_UP —
+  `db`, `auth`, `rest` UNHEALTHY while pooler reports ACTIVE_HEALTHY exactly —
   sustained over ≥3 consecutive reads, with a cooldown/dedup window, an
   auto-filed audit issue, and a Sentry heartbeat covering the watchdog itself.
 - **G3.** Compute mitigation landed IaC-compliant: declare the
