@@ -202,6 +202,7 @@
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
 1	apps/web-platform/infra/web-git-data-probe.sh
 2	apps/web-platform/infra/web-zot-consumer-probe.sh
+6	apps/web-platform/infra/workspaces-boot-unlock.test.sh
 9	apps/web-platform/infra/workspaces-cutover.sh
 11	apps/web-platform/infra/workspaces-luks-freeze.test.sh
 1	apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh
