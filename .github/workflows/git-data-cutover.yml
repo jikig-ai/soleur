@@ -198,13 +198,26 @@ jobs:
           [[ "$enabled" == "0" || "$enabled" == "enabled" ]] || \
             fail pin_fault_paging_absent "rule 1310055 reads status=$enabled — enable the pin-fault rule before flipping."
           # d6_replace_stale: the latest git-data replace/rotate run must have applied
-          # successfully AFTER the PR2 payload merge (the hook-at-birth payload rides it).
-          last_ok="$(gh run list --workflow apply-web-platform-infra.yml --branch main \
-                       --event workflow_dispatch --limit 50 \
-                       --json databaseId,conclusion,createdAt,displayTitle 2>/dev/null \
-            | jq -r '[.[] | select(.conclusion=="success" and (.displayTitle|test("git-data-host-(replace|rotate)")))] | (.[0].databaseId // "")' || echo "")"
-          [[ -n "$last_ok" ]] || fail d6_replace_stale "no successful git-data-host-replace|rotate apply on record — dispatch the D6 rotate from main first."
-          echo "d6 replace/rotate stamp: run $last_ok"
+          # successfully (the run record is the stamp) AND carry the rotate marker —
+          # the rotate-confirm step concludes `success` only on a git-data-host-rotate
+          # dispatch, which is the only arm that re-mints GIT_DATA_LUKS_KEY. A plain
+          # replace does not rotate the key, so it cannot discharge D6 on its own.
+          # (displayTitle is the workflow name on dispatch runs — the target is only
+          # visible in the job/step list.)
+          last_ok=""
+          while IFS=$'\t' read -r rid _created; do
+            jobs_json="$(gh run view "$rid" --json jobs 2>/dev/null)" || continue
+            job_ok="$(jq -r '[.jobs[] | select(.name | test("git-data-host-replace|git_data_host_replace"; "i")) | .conclusion] | .[0] // empty' <<<"$jobs_json")"
+            [[ "$job_ok" == "success" ]] || continue
+            rotate_ok="$(jq -r '[.jobs[] | .steps[] | select(.name | test("rotate confirm token"; "i")) | .conclusion] | .[0] // empty' <<<"$jobs_json")"
+            [[ "$rotate_ok" == "success" ]] || continue
+            last_ok="$rid"
+            break
+          done < <(gh run list --workflow apply-web-platform-infra.yml --branch main \
+                     --event workflow_dispatch --limit 40 \
+                     --json databaseId,createdAt --jq '.[] | [.databaseId,.createdAt] | @tsv' 2>/dev/null)
+          [[ -n "$last_ok" ]] || fail d6_replace_stale "no successful git-data-host-rotate run on record — dispatch apply_target=git-data-host-rotate (confirm=ROTATE-GIT-DATA) from main first."
+          echo "d6 rotate stamp: run $last_ok"
           # deploy_in_flight: no web-1-swap member running/queued (a concurrent
           # env-rebaking deploy mid-flip would be an unattributed cutover).
           inflight="$(gh run list --workflow web-platform-release.yml --limit 20 \

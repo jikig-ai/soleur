@@ -662,8 +662,9 @@ and a retained passphrase is not a rotation — while `hcloud_volume.git_data` (
 rollback backstop) stays preserved by omission in both modes. The pin-load is the job's inline
 `pin_load` step (the `git-data-pin-redeploy.yml` follower is retired; ADR-237 addendum
 2026-09-30). "Freshness" for the cutover's `d6_replace_stale` precondition is a completed
-`git-data-host-replace` or `git-data-host-rotate` run whose apply concluded `success` within
-the window the workflow step pins.
+`git-data-host-rotate` run whose apply job concluded `success` AND whose rotate-confirm
+marker step concluded `success` — the rotation proof; a plain `git-data-host-replace`
+cannot discharge D6 because it re-mints no LUKS key.
 
 ### 2026-09-27 (#8211 PR2): the store probes read the LUKS-served store
 
