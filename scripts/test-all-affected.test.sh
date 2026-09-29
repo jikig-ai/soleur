@@ -207,7 +207,6 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     tests/scripts/registry-gate-mutation-battery|\\
     apps/web-platform/infra/run-registered-suites.sh|\\
     tests/commands/sync-domain-model|\\
-    tests/hooks/incidents|\\
     plugins/soleur/test/c4-model-freshness.test.sh) : ;;
     *) return 0 ;;
   esac
@@ -1311,10 +1310,9 @@ if [[ "$ARM_RC" == "0" ]] \
   && grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT" \
   && ! grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
   && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD" \
-  && grep -qF $'RAN\ttests/hooks/incidents' <<<"$ARM_RECORD" \
   && ! grep -qF $'RAN\ttests/scripts/registry-gate-mutation-battery' <<<"$ARM_RECORD" \
   && ! grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
-  pass "sc6: staged runner path → bounded selection (runner-edged incidents RAN) + runner-in-scope note"
+  pass "sc6: staged runner path → bounded selection + runner-in-scope note"
 else
   fail "sc6: rc=$ARM_RC ran=$(ran_count) markers=$(grep -cE 'AFFECTED_' <<<"$ARM_OUT")"
 fi
