@@ -240,8 +240,21 @@ async function githubFetch(
   // Egress pin (CodeQL #234 / #8857): every credential-bearing request goes to
   // api.github.com and only there — covers plumbed `url` params such as
   // postRepoCreate's, not just the `${GITHUB_API}/…` literal call sites
-  // (server/github-url.ts › assertGithubApiAbsoluteUrl).
-  url = assertGithubApiAbsoluteUrl(url);
+  // (server/github-url.ts › assertGithubApiAbsoluteUrl). Refusals mirror to
+  // pino + Sentry so this arm shares the url-refused liveness signal.
+  try {
+    url = assertGithubApiAbsoluteUrl(url);
+  } catch (err) {
+    const refusal = err instanceof Error ? err : new Error(String(err));
+    log.error({ err: refusal.message, url }, "Refused non-GitHub-bound API URL");
+    reportSilentFallback(refusal, {
+      feature: "github-app",
+      op: "url-refused",
+      extra: { url },
+      message: "GitHub API request URL refused by egress guard",
+    });
+    throw refusal;
+  }
   const { timeoutMs, ...rest } = options;
   const response = await fetch(url, {
     ...rest,

@@ -198,8 +198,10 @@ Deliberately NOT done (mechanism-minimality cuts + constraints):
 | raw `fetch` in `githubApiDelete` | `server/github-api.ts` | `${GITHUB_API}${path}` | installation token | yes — `githubApiUrl(path)` |
 | `githubFetch` | `server/github-app.ts` (`fetch(url, …)`) | absolute `${GITHUB_API}/…` at ~15 call sites (`/app/installations/…`, `/orgs/{login}/members/…`, `/repos/{o}/{r}`, `/users/{login}/installation`) | App JWT / installation token | yes — `assertGithubApiAbsoluteUrl(url)` |
 | literal `fetch("https://api.github.com/app")` | `server/github-app.ts` | compile-time constant, no interpolation | App JWT | safe by construction — no tainted input |
-| `server/github/probe-octokit.ts` | octokit client | URL construction inside octokit | token | out of scope — octokit assembles request URLs internally |
-| other `fetch(url)` sinks | `cf-cache-purge.ts`, `token-validators.ts`, `dsar-export.ts`, `server/inngest/*` | vendor-specific (Cloudflare, Anthropic, Resend, Sentry, Doppler) | other tokens | out of scope — different credential boundary; noted so the sweep boundary is explicit |
+| releases-pagination `fetch` | `server/release-notes.ts` + `server/inngest/functions/cron-weekly-release-digest.ts` | `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?…` — origin literal, interpolation is repo constants + `page` | installation token (`_cron-shared.ts › mintInstallationToken`) | yes — `assertGithubApiAbsoluteUrl(…)` wraps the built URL at the call site; both files join the egress census |
+| octokit (`server/github/probe-octokit.ts`, `server/github/app-client.ts`) | octokit client | `octokit.request` accepts absolute URLs and attaches the token to them; the exclusion rests on: all call sites pass literal route templates, endpoint params are percent-encoded, `baseUrl` never overridden | token | out of assembly — defended by call-site convention, not the guard |
+| git-HTTPS lane | `server/git-auth.ts › gitWithInstallationAuth`, `server/workspace.ts › provisionWorkspaceWithRepo` | `GIT_ASKPASS` armed for `git clone <repoUrl>`; `repoUrl` is DB-sourced, host-pinned at the write boundary (`app/api/repo/setup/route.ts` `^https://github\.com/…`) | installation token | out of assembly — different transport and host (`github.com`, not `api.github.com`); named so the boundary is explicit |
+| other `fetch(url)` sinks | `cf-cache-purge.ts`, `token-validators.ts`, `dsar-export.ts`, other `server/inngest/*` | vendor-specific (Cloudflare, Anthropic, Resend, Sentry, Doppler) | other tokens | out of scope — different credential boundary; noted so the sweep boundary is explicit |
 
 ### Interpolated-segment inventory (who can influence `path`)
 
@@ -289,18 +291,26 @@ origin other than `https://api.github.com`, and no `path`/`url` argument can
 traverse outside its caller-intended endpoint prefix via dot-segments or
 authority rebinding.
 
-**Assembly.** Every outbound GitHub API request in the platform flows through
-exactly three chokepoints: `fetchWithRetry` and the raw `fetch` in
-`githubApiDelete` (`apps/web-platform/server/github-api.ts`), and `githubFetch`
-(`apps/web-platform/server/github-app.ts`). All four public wrappers
-(`githubApiGet`, `githubApiGetText`, `githubApiPost`, `githubApiDelete`)
-resolve their `path` through `githubApiUrl` before any fetch; `fetchWithRetry`
-itself re-asserts `assertGithubApiAbsoluteUrl(url)` so the chokepoint holds
-for callers that skip the builder; `githubFetch` asserts the same on its
-absolute URL. The compile-time literal `fetch("https://api.github.com/app")`
-in `github-app.ts` carries no interpolated input and is the single named
-exemption. Octokit (`probe-octokit.ts`) is a separate construction path and is
-explicitly out of assembly.
+**Assembly.** Within the two credential-bearing modules plus the two
+installation-token cron sinks, every outbound GitHub API `fetch` is covered:
+`fetchWithRetry` and the raw `fetch` in `githubApiDelete`
+(`apps/web-platform/server/github-api.ts`), `githubFetch`
+(`apps/web-platform/server/github-app.ts`), and the releases-pagination
+fetches in `server/release-notes.ts` and
+`server/inngest/functions/cron-weekly-release-digest.ts`. All four public
+wrappers (`githubApiGet`, `githubApiGetText`, `githubApiPost`,
+`githubApiDelete`) resolve their `path` through `githubApiUrl` before any
+fetch; `fetchWithRetry` itself re-asserts `assertGithubApiAbsoluteUrl(url)` so
+the chokepoint holds for callers that skip the builder; `githubFetch` asserts
+the same on its absolute URL; the two releases fetches wrap their built URLs
+in `assertGithubApiAbsoluteUrl` at the call site. The compile-time literal
+`fetch("https://api.github.com/app")` in `github-app.ts` is the single named
+exemption. Out of assembly, named as scope boundaries: Octokit
+(`probe-octokit.ts`, `app-client.ts` — all call sites pass literal route
+templates with percent-encoded params and `baseUrl` never overridden) and the
+git-HTTPS lane (`gitWithInstallationAuth` arms `GIT_ASKPASS` for `git clone`,
+host `github.com` pinned at the `repo_url` write boundary — different
+transport, different host).
 
 **Mutation matrix:**
 
@@ -505,8 +515,15 @@ pipeline entry).
 ## Files to Edit
 
 - `apps/web-platform/server/github-api.ts` — route all four wrappers through
-  the URL guard; refusal observability.
-- `apps/web-platform/server/github-app.ts` — assert inside `githubFetch`.
+  the URL guard; refusal observability; `fetchWithRetry` self-assert.
+- `apps/web-platform/server/github-app.ts` — assert inside `githubFetch` with
+  the same refusal mirror.
+- `apps/web-platform/server/release-notes.ts` and
+  `apps/web-platform/server/inngest/functions/cron-weekly-release-digest.ts` —
+  wrap the two releases-pagination fetches (installation-token bearing, found
+  at design-review) in `assertGithubApiAbsoluteUrl`.
+- `apps/web-platform/server/kb-github-path.ts` — export `DOT_SEGMENT` so the
+  guard reuses the one regex definition.
 - `apps/web-platform/test/github-api.test.ts` — wrapper-level guard tests.
 
 ## Files to Create

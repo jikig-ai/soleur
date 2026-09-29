@@ -84,6 +84,16 @@ describe("assertGithubApiAbsoluteUrl", () => {
     expect(() => assertGithubApiAbsoluteUrl(url)).toThrow(/egress denied/);
   });
 
+  test("refusals carry the pinned error code taxonomy", () => {
+    let caught: unknown;
+    try {
+      assertGithubApiAbsoluteUrl("https://evil.example/x");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toMatchObject({ code: "github_api_egress_denied" });
+  });
+
   test.each([
     "https://api.github.com/repos/o/r",
     "https://api.github.com/app/installations?per_page=100",
@@ -94,31 +104,58 @@ describe("assertGithubApiAbsoluteUrl", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Egress census — every `await fetch(` site in the two credential-bearing
-// modules must take a guard-produced `url` identifier, except the one named
-// compile-time literal. A new raw-`${GITHUB_API}` fetch site fails this test.
+// Egress census — every `fetch(` site in the credential-bearing modules must
+// take a guard-produced first argument: the `url` identifier (each enclosing
+// scope asserts it before the call), an inline `assertGithubApiAbsoluteUrl(`,
+// or the one named compile-time literal. A new raw-`${GITHUB_API}` fetch site
+// — or a `fetch(` that escapes `await` (`return fetch(`, `void fetch(`,
+// `.then`-chained) — fails this test.
 // ---------------------------------------------------------------------------
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const FETCH_SITE = /\bawait\s+fetch\(\s*/g;
+// `(?<![\w.])` excludes `mockFetch(`, `fetchWithRetry(` (no paren after
+// `fetch`), and member access like `globalThis.fetch(`.
+const FETCH_SITE = /(?<![\w.])fetch\s*\(/g;
 const NAMED_EXEMPTION = "`https://api.github.com/app`";
+
+// A `//` that is not part of `://` starts a line comment — a `fetch(` inside
+// one is prose, not a call site, and comment text inside a fetch's argument
+// list is not part of its first argument.
+const LINE_COMMENT = /(^|[^:])\/\/.*$/;
+
+function isCommentSite(src: string, index: number): boolean {
+  const lineStart = src.lastIndexOf("\n", index) + 1;
+  return LINE_COMMENT.test(src.slice(lineStart, index));
+}
 
 function fetchSiteHeads(rel: string): string[] {
   const src = readFileSync(join(APP_ROOT, rel), "utf8");
-  return [...src.matchAll(FETCH_SITE)].map((m) =>
-    src.slice(m.index + m[0].length, m.index + m[0].length + 160),
-  );
+  return [...src.matchAll(FETCH_SITE)]
+    .filter((m) => !isCommentSite(src, m.index))
+    .map((m) =>
+      src
+        .slice(m.index + m[0].length, m.index + m[0].length + 160)
+        .split("\n")
+        .map((line) => line.replace(LINE_COMMENT, "$1"))
+        .join("\n")
+        .trimStart(),
+    );
 }
 
 describe("GitHub API egress census", () => {
   test.each([
     ["server/github-api.ts", 2],
     ["server/github-app.ts", 2],
+    ["server/release-notes.ts", 1],
+    ["server/inngest/functions/cron-weekly-release-digest.ts", 1],
   ])("%s: all %i fetch sites take a guarded url", (rel, expectedCount) => {
     const heads = fetchSiteHeads(rel);
     expect(heads.length).toBe(expectedCount);
     for (const head of heads) {
-      const guarded = /^url[,\s)]/.test(head) || head.startsWith(NAMED_EXEMPTION);
+      const guarded =
+        /^url[,\s)]/.test(head) ||
+        head.startsWith("assertGithubApiAbsoluteUrl(") ||
+        head.startsWith(NAMED_EXEMPTION);
       expect(guarded, `${rel} fetch() first arg ${JSON.stringify(head.slice(0, 60))}`).toBe(true);
     }
   });

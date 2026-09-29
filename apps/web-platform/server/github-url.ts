@@ -17,17 +17,13 @@
 // assertCodexEndpoint in server/codex-code-adapter.ts: `new URL` + `https:` +
 // no userinfo + host assertion, never substring matching on the raw string.
 
-import { hasControlChar } from "./kb-github-path";
+import { hasControlChar, DOT_SEGMENT } from "./kb-github-path";
 
 const GITHUB_API_ORIGIN = "https://api.github.com";
 
 // GitHub API paths are far shorter than this; the cap bounds the segment work
 // on attacker-influenced input before any parsing happens.
 const MAX_PATH_LENGTH = 4096;
-
-// A raw segment that is — or percent-decodes to — "." or "..". Refused on the
-// RAW path because WHATWG normalization resolves them before fetch sees them.
-const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
 
 function egressDenied(reason: string): Error {
   return Object.assign(new Error(`GitHub API egress denied: ${reason}`), {
@@ -55,27 +51,6 @@ function assertNoDotSegments(rawPathAndQuery: string): void {
   }
 }
 
-/** Resolve a GitHub API path fragment to an absolute URL bound to
- *  https://api.github.com, or throw. A `path` lacking a leading `/` can rebind
- *  the request authority — that is the forgery this exists to refuse. */
-export function githubApiUrl(path: string): string {
-  if (path.length === 0 || path.length > MAX_PATH_LENGTH) {
-    throw egressDenied("path empty or over-length");
-  }
-  if (!path.startsWith("/") || path.startsWith("//")) {
-    throw egressDenied("path must begin with a single /");
-  }
-  // `\` folds to `/` and `#` truncates the path under WHATWG; neither is
-  // legitimate in an API path.
-  if (path.includes("\\") || path.includes("#") || hasControlChar(path)) {
-    throw egressDenied("path contains unsafe bytes");
-  }
-  assertNoDotSegments(path);
-  const url = new URL(GITHUB_API_ORIGIN + path);
-  assertOrigin(url);
-  return url.href;
-}
-
 /** Assert an already-absolute URL targets https://api.github.com and carries
  *  no userinfo or dot-segments, or throw. For callers (github-app.ts
  *  › githubFetch) that hold a whole URL rather than a path fragment. */
@@ -83,6 +58,8 @@ export function assertGithubApiAbsoluteUrl(rawUrl: string): string {
   if (rawUrl.length === 0 || rawUrl.length > MAX_PATH_LENGTH + GITHUB_API_ORIGIN.length) {
     throw egressDenied("URL empty or over-length");
   }
+  // `\` folds to `/` and `#` truncates the URL under WHATWG; neither is
+  // legitimate in a GitHub API request URL.
   if (rawUrl.includes("\\") || rawUrl.includes("#") || hasControlChar(rawUrl)) {
     throw egressDenied("URL contains unsafe bytes");
   }
@@ -98,4 +75,15 @@ export function assertGithubApiAbsoluteUrl(rawUrl: string): string {
   const pathPortion = rawUrl.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*/, "");
   assertNoDotSegments(pathPortion);
   return url.href;
+}
+
+/** Resolve a GitHub API path fragment to an absolute URL bound to
+ *  https://api.github.com, or throw. A `path` lacking a leading `/` can rebind
+ *  the request authority — the one check assertGithubApiAbsoluteUrl cannot
+ *  perform, since by then the fragment is already concatenated. */
+export function githubApiUrl(path: string): string {
+  if (!path.startsWith("/") || path.startsWith("//")) {
+    throw egressDenied("path must begin with a single /");
+  }
+  return assertGithubApiAbsoluteUrl(GITHUB_API_ORIGIN + path);
 }
