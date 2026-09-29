@@ -9,6 +9,7 @@
     "active": false
   },
   "default_permissions": {
+    "actions": "read",
     "administration": "write",
     "contents": "write",
     "environments": "write",
