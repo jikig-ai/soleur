@@ -482,9 +482,13 @@ describe("checkToken — JSON validation guard", () => {
     // A missing table entry must never silently default to an endpoint —
     // first-arg host check catches the single-arg fetch(url) call form too.
     expect(
-      fetchSpy.mock.calls.every(
-        ([u]: any[]) => !String(u).includes("api.linkedin.com"),
-      ),
+      fetchSpy.mock.calls.every(([u]: any[]) => {
+        try {
+          return new URL(String(u)).host !== "api.linkedin.com";
+        } catch {
+          return true;
+        }
+      }),
     ).toBe(true);
     expect(reportSilentFallbackSpy).toHaveBeenCalled();
   });
