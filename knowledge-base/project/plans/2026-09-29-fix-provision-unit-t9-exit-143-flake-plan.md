@@ -16,6 +16,22 @@ lane: cross-domain
 
 # flake: cloud-init-inngest-provision-unit T9 exit-143 timing assertion misses under CI runner load
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-29
+**Sections enhanced:** Hypotheses (network-outage deep-dive), Technical Considerations (sibling precedent), References (open sibling issue), Observability (probe corrected to a non-suite-shaped command)
+
+### Key Improvements
+
+1. Replaced the `discoverability_test` probe — the original named the `*.test.sh` path and would have hit deepen-plan Phase 4.7's suite-shaped-command reject; the directory-scoped marker grep verifies the same property in ~80 ms.
+2. Verified every cited issue/PR live (#7374 CLOSED, #7376 OPEN, #9159 MERGED, #8562 OPEN, #9126 OPEN) — #7376 turned out to be an OPEN sibling issue on this exact runner-load flake class, not only the diagnostics precedent.
+3. Confirmed by source inspection that `bootstrap start` rows carry no `attempt=` field in either tier (Tier A emit `bootstrap start DOPPLER_PROJECT=… planted=…`; Tier B stub emits the bare form) — the pairing hazard is real, and the `attempt=` anchors are load-bearing.
+4. Sibling precedent for the chosen pattern exists inside the same suite: T11 already bounds a measured event (`timer start within 15 s of multi-user.target`) rather than a fixed slack — the design extends an established idiom.
+
+### New Considerations Discovered
+
+- #7376 (`run-registered-suites.sh` flaky under its default `-P` on a 4-core runner) is open and adjacent; this fix removes one symptom source, not the runner-level load problem it tracks. Cross-reference added — no scope fold-in.
+
 ## Overview
 
 The Tier B systemd-in-Docker exercise T9 in `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` asserts that `provision-attempt-exit-143` lands within a fixed bound after the timeout kill. On loaded CI runners the killed attempt's phone-channel row is absent from the captured call log while its sibling `emit provision_attempt_failed rc=143` row is present, so both T9 rows go red on a suite whose production behavior is correct. The fix re-anchors the assertion on the reporting evidence the design actually guarantees.
@@ -60,6 +76,10 @@ The feature description triggers the network-outage checklist (`timeout`); the r
 2. **L3 — DNS / routing.** Opt-out on the same artifact and reasoning: no resolver or routing step participates in the T9 path; every command the attempt runs between `provision-attempt-start` and the kill is a stubbed local append.
 3. **L7 — TLS / proxy.** Not applicable: no HTTPS endpoint exists in the T9 path.
 4. **L7 — application layer.** Verified: the suite's own teardown dump (the service-equivalent log) shows `emit provision_attempt_failed rc=143.attempt=1` present and `phone provision-attempt-exit-143 attempt=1` absent — the kill and the report chain executed; only one emit's row is missing. The defect is in the test's single-channel read of the evidence, not in the provision script's TERM-trap behavior.
+
+### Network-Outage Deep-Dive
+
+Layer-by-layer verification status (deepen-plan Phase 4.5 re-check): L3 firewall — not applicable, opted out with the artifact citation above (the failing surface is inside a Docker container on an ephemeral runner; no host firewall participates). L3 DNS/routing — same opt-out; the T9 path resolves nothing. L7 TLS/proxy — not applicable, no HTTPS surface in the path. L7 application — verified against the retained artifact's timestamped dump. No gaps remain to close before implementation: the only "connectivity" in play is a synchronous append to a container-local file, and its failure mode (a lost emit) is exactly what the fix tolerates.
 
 ## Research Insights
 
@@ -129,6 +149,7 @@ The provision unit's rendered script (`cloud-init-inngest.yml`) is **unchanged**
 - **dash signal semantics** (why the trap chain behaves this way): `dash` defers a trap until its foreground child exits; the provision script runs the bootstrap as `cmd & child=$!; wait` so the TERM trap is interruptible. The emit loss occurred inside `on_exit`'s foreground stub exec — consistent with a transient exec/write loss under cgroup CPU starvation, not with trap-ordering defects. The fix must not depend on which micro-cause lost the row — dual-channel anchoring is robust to all of them.
 - **`lines_from T9` returns all rows after the T9 mark**, including later-phase rows in the end-of-run dump — but the assertion consumes a *point-in-time* snapshot taken before T15 runs, so cross-phase pollution is impossible at assertion time; the `attempt=` anchors additionally protect against attempt-2 teardown rows already inside the snapshot.
 - **`reset_state` deletes the attempts counter**, so later phases reuse `attempt=1` — one more reason the matchers anchor on `attempt=1` *within this snapshot* rather than on line shape alone.
+- **Sibling precedent (deepen-plan Phase 4.4).** The same suite already bounds a *measured* timestamp rather than fixed slack: T11 asserts the timer-driven unit start lands within 15 s of a captured `multi-user.target` timestamp (`(s - u) <= 15`), and T4/T17 order events by log position (`e < s` on slice row numbers). The T9 rework extends both idioms — measured anchors, position ordering — with attempt-scoped matching. No novel pattern is introduced.
 - **No NFR-register impact** — test-harness change only; no production latency, availability, or security surface moves.
 - **Rule conformance:** assertions anchor on content fields (`attempt=1`, `rc=143`), never bare tokens (`cq-assert-anchor-not-bare-token`); any new comments cite symbol anchors (`on_exit`, `trap … TERM INT`, `tb_ok`), never line numbers (`cq-cite-content-anchor-not-line-number`).
 
@@ -176,8 +197,8 @@ logs:
   retention: "artifact retention-days: 14"
 
 discoverability_test:
-  command: grep -n 'attempt=1' apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh
-  expected_output: "attempt=1"
+  command: grep -rn 'provision-attempt-exit-143' apps/web-platform/infra/
+  expected_output: "provision-attempt-exit-143"
 ```
 
 ## Guard Contract
@@ -248,7 +269,7 @@ None. `gh issue list --label code-review --state open` (87 issues) contains no b
 
 ## References & Research
 
-- Issue: #9195; context: #9123 (closed), #8562; sibling flake: #9126; diagnostics precedent: #7374/#7376
+- Issue: #9195; context: #9123 (closed), #8562; sibling flakes: #9126 (suite-load flake), #7376 (OPEN — `run-registered-suites.sh` flaky under its default `-P` on a 4-core runner: the systemic runner-load surface this issue is one symptom of; this fix removes one assertion-level victim, not the load itself); diagnostics precedent: #7374/#7376
 - Failing runs: 36520108194 (job 109250958452), 36525271493 (job 109266901611, artifact `infra-suite-logs-2` — timestamped call log quoted in Problem Statement)
 - Provision script under test: `apps/web-platform/infra/cloud-init-inngest.yml` (`on_exit()` / `trap … TERM INT` anchors)
 - Learnings: `2026-09-02-i-built-a-host-discriminator-out-of-an-absence-and-fixtured-the-absence.md`, `2026-07-27-a-check-that-cannot-report-is-indistinguishable-from-one-that-passed.md`, `test-failures/2026-09-25-the-flake-was-sigpipe-at-4kib-and-my-fix-leaked-a-pipe-status-through-a-bare-return.md`
