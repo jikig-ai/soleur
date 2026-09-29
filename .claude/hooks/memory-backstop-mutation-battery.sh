@@ -336,7 +336,7 @@ echo "== M8: move MAX_WALK_HOPS — the identity walk's traversal limit (#7854) 
 # reason stated at the top of this file (ADR-161): the battery needs a live user
 # bus and takes ~2 minutes, so it is deliberately not named *.test.sh.
 #
-# Unlike every other row it needs no systemd at all — discover_claude_pid is a
+# Unlike every other row it needs no systemd at all — discover_agent_pid is a
 # pure function over a /proc-shaped directory — so it is a FUNCTION-level arm,
 # sourced in a fresh `bash -c` per mutant (the hook declares MAX_WALK_HOPS
 # readonly; two sources in one shell would abort on the second).
@@ -374,7 +374,7 @@ walk_verdict() { # <hook> <hop>
                  unset CLAUDE_CODE_EXECPATH
                  # shellcheck source=/dev/null
                  source "$1" >/dev/null 2>&1
-                 discover_claude_pid 901 "$2/proc" >/dev/null 2>&1 && echo found || echo notfound' \
+                 discover_agent_pid 901 "$2/proc" >/dev/null 2>&1 && echo found || echo notfound' \
         _ "$hook" "$HOPFX" 2>/dev/null)
   echo "${out:-ERROR}"
 }
