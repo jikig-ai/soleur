@@ -240,7 +240,7 @@ No cross-domain implications detected — a test-harness assertion fix inside on
 - [ ] **AC4** — With the phone stub made to drop `provision-attempt-exit-*` writes (the observed flake shape, Guard-matrix row 4), the suite's T9 rows are green.
 - [ ] **AC5** — With BOTH emit channels suppressed for the killed attempt (row 5), or the TERM trap changed to `exit 1` (row 1), the suite reds on T9 — the fix tolerates channel loss, never evidence absence.
 - [ ] **AC6** — `bash apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` exits 0 locally (docker present) with T9 green; a load run consistent with the SIGPIPE learning's convention (repeated/parallel suite copies) shows no T9 miss.
-- [ ] **AC7** — The diff's code surface is confined to the single test file: `git diff --name-only origin/main...HEAD` shows `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` as the only non-`knowledge-base/` path (planning artifacts — this plan, `specs/<branch>/tasks.md`, and pipeline bookkeeping — are expected and out of the code-scope claim; the merge-base `...` form is required so a sibling merge does not false-red the check).
+- [ ] **AC7** — The diff's code surface is confined to the single test file: `git diff --name-only origin/main...HEAD` shows `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` plus `apps/web-platform/infra/run-registered-suites.sh` (the `_SUITE_BOUNDS` pin added at review) as the only non-`knowledge-base/` paths (planning artifacts — this plan, `specs/<branch>/tasks.md`, and pipeline bookkeeping — are expected and out of the code-scope claim; the merge-base `...` form is required so a sibling merge does not false-red the check).
 
 ## Test Scenarios
 

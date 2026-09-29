@@ -39,3 +39,16 @@ Scope: one file — `apps/web-platform/infra/cloud-init-inngest-provision-unit.t
       load show no T9 miss.
 - [x] 3.4 Confirm AC7: `git diff --name-only origin/main...HEAD` shows the test file as the only
       non-`knowledge-base/` path.
+
+## Phase 4: Review deltas (soleur:review panel)
+
+- [x] 4.1 Generalize the T9 restart witness — any `attempt>=2` row on either channel
+      or a second `bootstrap start` closes the residual single-channel flake on the
+      `provision-attempt-start attempt=2` phone row (4 seats + structural map F6).
+- [x] 4.2 Phase-scope the T9 poll to `PHASE T9` (T10/T11a idiom; structural map F5).
+- [x] 4.3 Pin the suite bound: `cloud-init-inngest-provision-unit.test.sh=540` in
+      `_SUITE_BOUNDS` — nominal ~351 s vs 360 s default leaves no room for the
+      widened poll's failure mode (performance-oracle P2).
+- [x] 4.4 Consolidate the capture into one awk pass + `read` unpack; `d >= 0`
+      lower bound on the interval; anchor-kind diagnostics (`anchor=`,
+      `restart_row=` + kind).
