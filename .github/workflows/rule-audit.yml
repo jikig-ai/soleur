@@ -364,6 +364,199 @@ jobs:
             exit 1
           fi
 
+      # DETECTION half of the inngest CLI pin cadence (#7463 PR-B). Enforcement is
+      # apps/web-platform/infra/inngest-cli-staleness.test.sh on deploy-script-tests
+      # (per-PR, offline, 0 fresh / 10 drift / 2 detector-failure). This step is the
+      # PR-cadence-independent trigger, cloned from `Detect zot pin staleness` — same
+      # two-condition split: (1) offline age/coherence catches "the analysis went stale",
+      # (2) the live upstream poll catches "upstream moved and we are behind". Both are
+      # needed: (2) alone rebuilds a single point of failure (a dead poll reads as
+      # healthy); (1) alone is a fresh-looking sidecar 29 releases behind.
+      #
+      # Advisory only — this NEVER edits the pin. It files one idempotent
+      # `inngest-pin-drift` + `action-required` issue; a human opens the real,
+      # CI-gated PR. The thresholds are DELIBERATELY not "any delta": inngest ships
+      # ~weekly (v1.19.4→v1.45.1 spanned ~4.5 months / 29 stable releases), so
+      # latest-only would mint a permanently-open ticket days after every bump.
+      # File when releases_behind >= 5 OR the pinned release is >= 45 days old.
+      # The same numbers live in inngest-cli.provenance.md — keep them identical.
+      - name: Detect inngest CLI pin drift
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          TF=apps/web-platform/infra/inngest.tf
+          PROV=apps/web-platform/infra/inngest-cli.provenance.md
+          DRIFT=""; PROBLEMS=""; NOTES=""
+
+          # --- (1) offline staleness + coherence --------------------------------------
+          # Assignment-then-$? would ABORT here: a GitHub `run:` block defaults to
+          # `bash -eo pipefail`, so a non-zero command substitution kills the step at that
+          # line and every diagnosis below it never runs.
+          set +e
+          OUT="$(bash apps/web-platform/infra/inngest-cli-staleness.test.sh 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -eq 2 ]; then
+            echo "inngest-cli-staleness.test.sh reported DETECTOR FAILURE (rc=2); failing step." >&2
+            echo "$OUT" >&2
+            exit 2
+          elif [ "$RC" -ne 0 ] && [ "$RC" -ne 10 ]; then
+            echo "inngest-cli-staleness.test.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
+          fi
+          [ "$RC" -eq 10 ] && DRIFT="stale"
+
+          # --- (2) the pinned version --------------------------------------------------
+          # ANCHORED on the assignment, exactly as the offline gate parses it — an
+          # unanchored grep is satisfied by a comment. Two halves of one detector must not
+          # parse the same fact by different rules.
+          set +e
+          PINNED="$(grep -oE '^[[:space:]]*inngest_cli_version[[:space:]]*=[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' "$TF" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          set -e
+          if [ -z "$PINNED" ]; then
+            echo "could not parse the pinned inngest CLI version from $TF (anchored on the assignment); failing step." >&2
+            exit 2
+          fi
+
+          # --- (3) live upstream poll: latest tag, tag-ordered delta, pin age ----------
+          set +e
+          LATEST="$(gh api repos/inngest/inngest/releases/latest --jq .tag_name 2>&1)"
+          API_RC=$?
+          set -e
+          BEHIND=""
+          if [ "$API_RC" -ne 0 ] || [ -z "$LATEST" ] || ! printf '%s' "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # A dead poll must NOT discard an offline verdict we already hold. Record it
+            # and keep going; the non-zero exit at the end still fires the ops email.
+            PROBLEMS="${PROBLEMS}- upstream release poll FAILED (rc=$API_RC); this run cannot tell whether we are behind."$'\n'
+            LATEST="(unavailable)"
+          else
+            # Stable-tag-ordered delta: walk the tag list (paginated until the pin is seen
+            # or the list is exhausted), keep only semver-stable vX.Y.Z, sort -V, count the
+            # distance from PINNED to LATEST. inngest publishes ~weekly; a count-based
+            # threshold needs the ordering, not a name comparison.
+            set +e
+            TAGS="$(gh api --paginate 'repos/inngest/inngest/tags?per_page=100' --jq '.[].name' 2>/dev/null \
+                    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV)"
+            TAGS_RC=$?
+            set -e
+            if [ "$TAGS_RC" -ne 0 ] || [ -z "$TAGS" ]; then
+              PROBLEMS="${PROBLEMS}- could not enumerate inngest release tags; this run cannot measure releases-behind."$'\n'
+            else
+              P_POS="$(printf '%s\n' "$TAGS" | grep -nxF "$PINNED" | cut -d: -f1)"
+              L_POS="$(printf '%s\n' "$TAGS" | grep -nxF "$LATEST" | cut -d: -f1)"
+              if [ -n "$P_POS" ] && [ -n "$L_POS" ]; then
+                BEHIND=$((L_POS - P_POS))
+              else
+                PROBLEMS="${PROBLEMS}- pinned tag \`$PINNED\` or latest \`$LATEST\` absent from the enumerated tag list; releases-behind not measured."$'\n'
+              fi
+            fi
+            # Pinned-release AGE — the second leg of the threshold.
+            set +e
+            PIN_DATE="$(gh api "repos/inngest/inngest/releases/tags/$PINNED" --jq .published_at 2>/dev/null)"
+            PIN_RC=$?
+            set -e
+            AGE_DAYS=""
+            if [ "$PIN_RC" -ne 0 ] || [ -z "$PIN_DATE" ]; then
+              PROBLEMS="${PROBLEMS}- could not read the pinned release's published_at for \`$PINNED\`; age leg not measured."$'\n'
+            else
+              PIN_EPOCH="$(date -d "$PIN_DATE" +%s 2>/dev/null || true)"
+              if [ -n "$PIN_EPOCH" ]; then
+                AGE_DAYS=$(( ($(date +%s) - PIN_EPOCH) / 86400 ))
+              fi
+            fi
+            # Threshold: >= 5 releases behind OR pinned release >= 45 days old.
+            if { [ -n "$BEHIND" ] && [ "$BEHIND" -ge 5 ]; } || { [ -n "$AGE_DAYS" ] && [ "$AGE_DAYS" -ge 45 ]; }; then
+              DRIFT="${DRIFT:+$DRIFT+}behind"
+              NOTES="${NOTES}- pinned \`$PINNED\` vs upstream \`$LATEST\`: releases-behind=${BEHIND:-unmeasured}, release-age-days=${AGE_DAYS:-unmeasured} (threshold: >=5 behind OR >=45 days)."$'\n'
+            fi
+          fi
+
+          # --- (4) tarball existence probe (both arches) --------------------------------
+          # The host downloads inngest_<ver>_linux_<arch>.tar.gz at boot and sha256-verifies
+          # against the committed checksums, so a deleted/replaced asset is a latent outage
+          # that surfaces only at the NEXT host replace or image build. A coherent pin+sidecar
+          # swap passes every offline check — nothing binds the names to upstream ground
+          # truth — so the probe is the only check that sees it.
+          for ARCH in amd64 arm64; do
+            set +e
+            CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I \
+              "https://github.com/inngest/inngest/releases/download/$PINNED/inngest_${PINNED#v}_linux_$ARCH.tar.gz")"
+            PROBE_RC=$?
+            set -e
+            if [ "$PROBE_RC" -ne 0 ] || [ -z "$CODE" ] || [ "$CODE" = "000" ]; then
+              PROBLEMS="${PROBLEMS}- could not probe the $ARCH tarball (network/probe failure); this run cannot rule out a missing asset."$'\n'
+            elif [ "$CODE" = "404" ]; then
+              DRIFT="${DRIFT:+$DRIFT+}missing-$ARCH-tarball"
+              PROBLEMS="${PROBLEMS}- **the pinned $ARCH tarball does not exist upstream (HTTP 404).** Coherent-swap signature: the pin looks internally consistent but the boot asset is gone and the next host replace/image build goes dark. Do NOT apply."$'\n'
+            elif [ "$CODE" != "200" ] && [ "$CODE" != "302" ]; then
+              PROBLEMS="${PROBLEMS}- unexpected HTTP $CODE probing the $ARCH tarball; treat as unverified."$'\n'
+            fi
+          done
+
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ]; then
+            echo "inngest CLI pin is current enough ($PINNED vs $LATEST; behind=${BEHIND:-?}, age=${AGE_DAYS:-?}d), both tarballs resolve, and the offline analysis is coherent+fresh."
+            exit 0
+          fi
+
+          # --- file/update ONE idempotent issue -----------------------------------------
+          # `action-required` is load-bearing: it is the ONLY label the weekly operator
+          # digest reads. gh label create --force is the idempotent path (zot precedent).
+          gh label create inngest-pin-drift --color FBCA04 \
+            --description "the committed inngest CLI pin is stale, behind upstream, or its tarball is unverifiable (#7463)" \
+            --force >/dev/null 2>&1 || true
+          {
+            echo "The pinned self-hosted inngest CLI needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Pinned (\`inngest.tf\`) | \`$PINNED\` |"
+            echo "| Upstream latest | \`$LATEST\` |"
+            echo "| Releases behind | ${BEHIND:-unmeasured} |"
+            echo "| Pinned release age | ${AGE_DAYS:-unmeasured} days |"
+            echo
+            if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
+            if [ -n "$NOTES" ]; then echo "$NOTES"; echo; fi
+            echo "Offline gate output:"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            echo "Remediation — follow \`## Bump procedure\` in"
+            echo "\`$PROV\` (the sidecar is authoritative; it reconciles inngest.tf)"
+            echo "**in that direction**, and read the merge-vs-apply boundary note — the pin"
+            echo "merge is host-inert; the live flip is the operator-gated"
+            echo "\`apply_target=inngest-host-replace\` window tracked in #9224."
+            echo "Agent entry point:"
+            echo
+            echo '```'
+            echo "/soleur:one-shot \"refresh the inngest CLI pin per apps/web-platform/infra/inngest-cli.provenance.md section 'Bump procedure'\""
+            echo '```'
+            echo
+            echo "_Filed automatically by rule-audit.yml inngest-CLI-pin drift detection (#7463)._"
+          } > "$RUNNER_TEMP/inngest-pin-drift-body.md"
+          EXISTING="$(gh issue list --label inngest-pin-drift --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/inngest-pin-drift-body.md"
+            echo "Updated existing inngest-pin-drift issue #$EXISTING."
+          else
+            gh issue create --label inngest-pin-drift --label action-required \
+              --title "inngest-pin-drift: self-hosted CLI pin needs attention" \
+              --body-file "$RUNNER_TEMP/inngest-pin-drift-body.md"
+          fi
+
+          # A probe that could not run is a DETECTOR failure: exit non-zero so the ops
+          # email fires. Drift alone exits 0 — the issue is the channel for that.
+          if [ -n "$PROBLEMS" ]; then
+            echo "one or more probes could not complete; see the filed issue." >&2
+            exit 1
+          fi
+
       - name: Email notification (failure)
         if: failure()
         uses: ./.github/actions/notify-ops-email
