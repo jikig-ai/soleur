@@ -155,8 +155,10 @@ d = sys.argv[1]
 totals = {}   # leg -> summed suite ms
 maxes = {}    # leg -> largest single-suite ms
 for zp in sorted(glob.glob(d + "/*.zip")):
+    # Artifact names are job-index (0-based); print 1-based leg numbers so the
+    # report reads like the matrix names (`test-scripts (k/N)`).
     leg = zp.rsplit("-", 1)[-1].split(".")[0]
-    leg = int(leg) if leg.isdigit() else None
+    leg = int(leg) + 1 if leg.isdigit() else None
     with zipfile.ZipFile(zp) as z:
         try:
             fh = z.open("suite-timings.tsv")

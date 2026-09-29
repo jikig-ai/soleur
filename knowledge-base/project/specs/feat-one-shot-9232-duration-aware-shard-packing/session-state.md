@@ -25,3 +25,10 @@ None — all pre-commit hooks (gitleaks, lint-infra-no-human-steps, markdown-lin
 - Verified: local K=4 pack from committed durations table → SOLEUR_SHARD_MANIFEST enumerate union == full set (519), disjoint legs.
 - PENDING AT SHIP: post `soleur:followthrough` directive comment on #9232 with earliest=<merge ts> to enroll the probe.
 - Affected battery (`test-all.sh --affected`) running in background.
+
+## Review Phase
+- Class: code; design-risk: yes (new durations-table + --legs mechanism).
+- Design-validity verdict (inline + performance-oracle subagent): mechanisms map 1:1 to requirements (durations table = single source for two consumers; src column = prevents estimate-laundering; --legs = arbitrary-K AC; n-mismatch refusal = prevents committed positional degrade). No simpler mechanism satisfies them.
+- performance-oracle (subagent 26a2a602): NO BLOCKING; 4 nits — applied: floor_ms clamped to >=1 (median-of-measured could be 0 → zero-weight pileup), runbook note that --runs counts scanned runs, probe leg label made 1-based. Skipped: --paginate on artifacts-list (per_page=100 >> actual ~11; loud degradation via expected_legs WARN exists).
+- simplicity/architecture/security/pattern/quality seats: subagent spawns repeatedly rate-limited (free-model cap); ran the lenses inline — no additional findings beyond a dead `weights = None` line (removed). Disclosed: inline lenses are lead-authored review, not independent.
+- Remaining seats (git-history, data-integrity, agent-native): nothing in scope (no DB, no agent surface, no history claims beyond ADR citation).

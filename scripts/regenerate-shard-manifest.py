@@ -489,7 +489,6 @@ def main():
                                 r, artifact_re, expected_legs=n_wf,
                                 allow_empty=len(run_ids) > 1)))
         src = "run:" + ",".join(str(r) for r in run_ids)
-        weights = None
 
     if args.durations:
         measured = weights
@@ -517,7 +516,11 @@ def main():
     # never entrenches its own estimate as "measured". A timings-empty
     # invocation produces an all-floor count-balanced manifest with a WARN —
     # strictly better than the die this replaces.
-    floor_ms = median(measured.values()) if measured else DEFAULT_SUITE_MS
+    # The `max(..., 1)` matters: merge_tsv accepts ms=0 rows, so a measured set
+    # that is >50% zero-ms would median to 0, and every floored label would then
+    # carry zero weight — the pile-onto-one-leg degeneracy floor tabling exists
+    # to avoid (oracle review, PR #9233).
+    floor_ms = max(median(measured.values()) if measured else DEFAULT_SUITE_MS, 1)
     timings = dict(measured)
     src_map = {label: "measured" for label in measured}
     floored = 0

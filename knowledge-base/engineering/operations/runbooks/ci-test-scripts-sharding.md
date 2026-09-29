@@ -71,7 +71,8 @@ python3 scripts/regenerate-shard-manifest.py --group heavy --runs 5 --write
 # INFRA (#8736): the infra table lives at apps/web-platform/infra/suite-shard-legs.tsv.
 # Its runs are green infra-validation.yml runs on main (the suite-timings-infra-N
 # artifacts — paths-filtered, so many green runs contribute nothing; --runs
-# skips them), and its registered set is `--enumerate`d by run-registered-suites.sh.
+# skips them). --runs counts SCANNED runs, not contributing ones — for an
+# effective 5-sample median on a sparse group, raise N (e.g. --runs 10).
 python3 scripts/regenerate-shard-manifest.py --group infra --runs 5 --write
 ```
 
