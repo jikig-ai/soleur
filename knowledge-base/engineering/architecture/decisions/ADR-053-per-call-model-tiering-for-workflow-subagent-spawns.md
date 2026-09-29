@@ -91,6 +91,10 @@ funding and different protections, and found a sixth the first draft had no row 
 
 > **Superseded 2026-09-23 (#8611 review):** row 5b's `AUDIT_MODEL = claude-opus-5` is stale —
 > `AUDIT_MODEL` is `claude-opus-5-5` since #8601 (same tier, cheaper on every price axis).
+>
+> **Superseded 2026-09-29 (#9236):** rows 5a and 6 name `claude-sonnet-5` — the execution tier,
+> routers, and CI pins moved to `claude-sonnet-5-5` at the Sonnet 5.5 launch (same tier, same
+> $2/$10 pricing, faster). The tiering judgments are unchanged.
 
 ### A Task spawn is cache-read-dominated — measured, after a first draft asserted the opposite
 

@@ -101,7 +101,7 @@ function uuidv5(name: string, namespace: string): string {
 // `ttl`, so the 5m default applies; the Guard 1 exact-shape test in
 // agent-on-spawn-requested-leader-loop.test.ts pins that.)
 // Verified against https://platform.claude.com/docs/en/about-claude/pricing.md
-// on 2026-07-24.
+// on 2026-07-24; sonnet row re-verified 2026-09-29 at the Sonnet 5.5 launch.
 //
 // VERIFY EACH ROW AGAINST ITS KEY, not against the previous row. The haiku
 // entry carried Haiku *3.5*'s retired table ($0.80/$4/$0.08/$1) under the
@@ -154,13 +154,13 @@ interface ModelPricing {
 // .model` is `AnthropicModelId` (sonnet|haiku), the only value flowing
 // through `MODEL_PRICING[…]`, so opus never reaches this lookup.
 export const MODEL_PRICING: Record<string, ModelPricing> = {
-  // Claude Sonnet 5: $2 input / $10 output / $0.20 cache-read / $2.50 5m cache-write.
-  // These were the "introductory" rates through 2026-08-31; #6942 deliberately
-  // held the row at the scheduled post-intro $3/$15 so it would become correct
-  // on 2026-09-01 without a second edit. That increase was CANCELLED — Anthropic
-  // now states $2/$10 is the standard price and the Sep-1 rise will not occur —
-  // so the row is corrected here (verified 2026-09-03 against
-  // https://platform.claude.com/docs/en/about-claude/pricing.md). Holding $3/$15
+  // Claude Sonnet 5.5: $2 input / $10 output / $0.20 cache-read / $2.50 5m cache-write.
+  // Rates carried over unchanged from Sonnet 5 at the 5.5 launch (2026-09-28;
+  // verified 2026-09-29 against
+  // https://platform.claude.com/docs/en/about-claude/pricing.md and the launch
+  // post, which state Sonnet 5.5 is "priced the same as Sonnet 5"). Sonnet 5's
+  // own history: $2/$10 was "introductory" through 2026-08-31 with a scheduled
+  // rise to $3/$15 on 2026-09-01 that Anthropic CANCELLED. Holding $3/$15
   // over-attributes cost 50%, tripping the BYOK cap early.
   [SONNET_MODEL]: {
     inputPerToken: 2 / 1_000_000,

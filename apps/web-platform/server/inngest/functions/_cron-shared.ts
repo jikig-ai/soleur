@@ -765,7 +765,7 @@ export async function postAnthropicMessage(args: {
     });
   }
 
-  // MEASURED on prd 2026-09-19 with EXECUTION_MODEL = claude-sonnet-5 (since #5849):
+  // MEASURED on prd 2026-09-19 with EXECUTION_MODEL (then Sonnet 5 — #5849; now Sonnet 5.5):
   // position 0 held a thinking block and the structured-output text sat behind it, so
   // the old positional read returned "" while the answer was billed. Take the first
   // TEXT block — selection is an ALLOWLIST, since a `!== "thinking"` denylist returns

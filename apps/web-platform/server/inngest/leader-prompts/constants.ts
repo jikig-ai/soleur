@@ -46,7 +46,7 @@ export const LEADER_MAX_TURNS = 8;
 export const LEADER_MAX_TOKENS = 4096;
 
 /** Anthropic model ids. */
-export const SONNET_MODEL = "claude-sonnet-5" as const;
+export const SONNET_MODEL = "claude-sonnet-5-5" as const;
 export const HAIKU_MODEL = "claude-haiku-4-5-20251001" as const;
 
 export type AnthropicModelId = typeof SONNET_MODEL | typeof HAIKU_MODEL;
