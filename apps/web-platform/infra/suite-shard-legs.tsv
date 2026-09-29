@@ -130,6 +130,7 @@ apps/web-platform/infra/web-hosts-fanout-parity.test.sh	3
 apps/web-platform/infra/web-private-nic-guard.test.sh	3
 apps/web-platform/infra/web-zot-consumer-probe.test.sh	4
 apps/web-platform/infra/webhook-doppler-token-reread.test.sh	4
+apps/web-platform/infra/workspaces-boot-unlock.test.sh	4
 apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh	1
 apps/web-platform/infra/workspaces-luks-freeze.test.sh	1
 apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh	2
