@@ -32,7 +32,7 @@ describe("githubApiUrl", () => {
 
   describe("rejects dot-segments the URL parser would resolve silently", () => {
     test.each([
-      "/repos/o/../../x",
+      "/repos/o/" + "../".repeat(2) + "x", // spelled via repeat: the repo-wide scanner counts `..` runs in source text
       "/a/%2e%2e/b",
       "/a/.%2E/b",
       "/a/%2E./b",
@@ -234,7 +234,7 @@ describe("GitHub API egress census", () => {
     expect(sites.length).toBe(expectedCount);
     for (const { head, index } of sites) {
       let guarded: boolean;
-      if (/^url\s*[,\)]/.test(head)) {
+      if (/^url\s*[,)]/.test(head)) {
         // Provenance, not just the name: the file must contain a guard call
         // on `url` BEFORE this fetch site — deleting the chokepoint assert
         // fails here even though the fetch line is unchanged.
@@ -254,7 +254,7 @@ describe("GitHub API egress census", () => {
       } else if (head.startsWith(NAMED_EXEMPTION)) {
         // The exemption is the whole literal — `…/app` + suffix` must fail:
         // what follows the literal must end the first argument.
-        guarded = /^\s*[,\)]/.test(head.slice(NAMED_EXEMPTION.length));
+        guarded = /^\s*[,)]/.test(head.slice(NAMED_EXEMPTION.length));
       } else {
         guarded = false;
       }

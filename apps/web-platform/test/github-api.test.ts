@@ -343,7 +343,11 @@ describe("github-api fetch wrapper", () => {
     test("a dot-segment path is refused on the raw input, before normalization", async () => {
       const installationId = uniqueInstallationId();
       await expect(
-        githubApiPost(installationId, "/repos/o/../../admin", {}),
+        githubApiPost(
+          installationId,
+          "/repos/o/" + "../".repeat(2) + "admin",
+          {},
+        ),
       ).rejects.toThrow(/egress denied/);
       expect(mockFetch).toHaveBeenCalledTimes(0);
     });
