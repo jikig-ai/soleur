@@ -637,11 +637,23 @@ check("G1i: every \"Extract backend credentials\"-shaped step in a Tier-B job re
 # bucket) gets 403 on it. The workflow's extract step must therefore name the root-key pair first;
 # an `${AWS_ACCESS_KEY_ID:-...}`-first form satisfies G1i while routing the wrong credential.
 _rk_doc, _rk_text = docs.get(os.path.join("workflows", "apply-git-data-root-key.yml"), ({}, ""))
-_rk_extract = [b for b in step_bodies(_rk_doc) if "doppler secrets get AWS_ACCESS_KEY_ID" in b]
+# Comments stripped before matching — the same laundering class g1-g1 was hardened for: a
+# `# prefers ${GIT_DATA_ROOT_STATE_*}` line above a non-compliant body must not satisfy it.
+_rk_extract = [
+    "\n".join(ln for ln in b.split("\n") if not ln.lstrip().startswith("#"))
+    for b in step_bodies(_rk_doc)
+]
+_rk_extract = [b for b in _rk_extract if "doppler secrets get AWS_ACCESS_KEY_ID" in b]
+def _pos(body, needle):
+    # +inf when absent: the ordering chain then fails closed rather than raising ValueError
+    # out of the census entirely (measured: the dropped-pair mutant killed the script before
+    # the row printed, and mutant_red read the dead run as "stayed green").
+    return body.index(needle) if needle in body else 1 << 30
 _rk_order_ok = all(
-    "${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID" in b
-    and b.index("${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID") < b.index("doppler secrets get AWS_ACCESS_KEY_ID")
-    and "${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY" in b
+    _pos(b, "${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID") < _pos(b, "${AWS_ACCESS_KEY_ID")
+    < _pos(b, "doppler secrets get AWS_ACCESS_KEY_ID")
+    and _pos(b, "${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY") < _pos(b, "${AWS_SECRET_ACCESS_KEY")
+    < _pos(b, "doppler secrets get AWS_SECRET_ACCESS_KEY")
     for b in _rk_extract
 )
 check("G1i-rk: apply-git-data-root-key.yml's extract step reads GIT_DATA_ROOT_STATE_AWS_* before "
@@ -938,7 +950,7 @@ check("G5c: the input-validation, interlock and typo-guard steps stay UNCONDITIO
 
 print("\n".join(out))
 PY
-CENSUS_ROWS=20
+CENSUS_ROWS=23  # 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row.
 
 # census_rows <tsv> <err> — reports every row of one census run through pass()/fail().
 census_rows() {
@@ -1612,6 +1624,14 @@ if mutate g1-i3-rootkey-pair-dropped "$MUTDIR/tree/.github/workflows/apply-git-d
   fixcensus "$MUTDIR" "$T/mut/g1-i3.tsv" ""
   mutant_red g1-i3-rootkey-pair-dropped wf_row "$T/mut/g1-i3.tsv" "G1i-rk:"
 fi
+# Row i4 — the REORDER shape review named: the GIT_DATA pair still appears (satisfying presence
+# and the doppler-order limb) but the generic alias wins precedence — the exact O8 defect.
+MUTDIR="$(fixcopy g1-i4)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-i4-rootkey-pair-reordered "$MUTDIR/tree/.github/workflows/apply-git-data-root-key.yml" 4 \
+     's/\$\{GIT_DATA_ROOT_STATE_AWS_(\w+):-\$\{AWS_\1/\$\{AWS_\1:-\$\{GIT_DATA_ROOT_STATE_AWS_\1/g'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-i4.tsv" ""
+  mutant_red g1-i4-rootkey-pair-reordered wf_row "$T/mut/g1-i4.tsv" "G1i-rk:"
+fi
 
 # ── Guard 4 row e ────────────────────────────────────────────────────────────────────
 # Row e1 — DELETE the sentinel guard, leave the rationale comment behind. This is the
@@ -1731,7 +1751,8 @@ fi
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
 # 26 -> 27 (review W1): M-g1-10-destroy-only-no-environment.
 # 27 -> 30 (#8714): M-g4-6 (two landings) and M-g4-7, the intended-destroy allowance rows.
-MUTANT_FLOOR=30
+# 30 -> 32 (#9215): M-g1-i3 and M-g1-i4, the root-key extract-precedence mutants (drop + reorder).
+MUTANT_FLOOR=32
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -1740,7 +1761,8 @@ fi
 _ran=$((passes + fails))
 # 80 -> 82 (review W1): M-g1-10's fixture-written row and its RED row. Measured: 82 ran.
 # 82 -> 88 (#8714): live G4f, and M-g4-6/M-g4-7 (3 landings + 2 verdicts). Measured: 88 ran.
-FLOOR=88
+# 88 -> 93 (#9215): live G1i-rk, and M-g1-i3/M-g1-i4 (2 landings + 2 verdicts). Measured: 93 ran.
+FLOOR=93
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

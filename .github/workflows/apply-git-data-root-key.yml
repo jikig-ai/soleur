@@ -100,10 +100,18 @@ jobs:
             echo "::error::AWS_SECRET_ACCESS_KEY not found (GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY, loader AWS_*, nor Doppler prd_terraform)."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          # Mirror the loader's all-or-none invariant at the point of use: a half-set
+          # GIT_DATA_ROOT_STATE_* env (unreachable via the loader, but this step defends
+          # itself) would build a MIXED credential that fails as an opaque 403.
+          if [[ ( -n "${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID:-}" && -z "${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY:-}" ) || ( -z "${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID:-}" && -n "${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY:-}" ) ]]; then
+            echo "::error::verdict=git_data_root_state_pair_half_set at the extract step — the loader refuses this earlier, so reaching it means the env was constructed another way."; exit 1; fi
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
-          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
-          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # Heredoc delimiter form, not K=V: a newline-bearing value would otherwise inject an
+          # extra assignment line into $GITHUB_ENV (the BASH_ENV class the loader documents).
+          delim="SOLEUR_EOF_$(openssl rand -hex 12)"
+          { printf 'AWS_ACCESS_KEY_ID<<%s\n%s\n%s\n' "$delim" "$KEY_ID" "$delim"
+            printf 'AWS_SECRET_ACCESS_KEY<<%s\n%s\n%s\n' "$delim" "$SECRET" "$delim"; } >> "$GITHUB_ENV"
 
       - name: Terraform init (root-key root, readonly lock)
         working-directory: ${{ env.ROOT_KEY_DIR }}
