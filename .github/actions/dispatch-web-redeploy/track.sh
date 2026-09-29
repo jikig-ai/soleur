@@ -33,11 +33,16 @@
 #   WEBHOOK_DEPLOY_SECRET   HMAC key for both endpoints (caller resolves; never printed)
 #   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET   Cloudflare Access service creds
 #   APP_DOMAIN_BASE         default soleur.ai
-#   WEB_HOST_PRIVATE_IPS    peers CSV (parity-test-pinned literal; empty = single-host,
-#                           which the flip refuses — the fleet must all take the swap)
+#   WEB_HOST_PRIVATE_IPS    peers CSV (parity-test-pinned literal). Empty dispatches a
+#                           single-host swap (the manual lever); the cutover/apply call
+#                           sites always pass the full literal — a one-host redeploy is
+#                           caught downstream by the per-host git_data_store= assertion
+#                           and by ok_peer_fanout_degraded being terminal.
 #   REDEPLOY_POLL_INTERVAL_S  poll interval (default 30)
-#   REDEPLOY_TIMEOUT_S        give-up bound (default 4800 ≥ the ADR-078 cron drain 4200)
-#   REDEploy_DRY_RUN…        (none — the workflow's proof mode never calls this script)
+#   REDEPLOY_TIMEOUT_S        give-up bound (default 4800). Call sites inside bounded
+#                           jobs override it per job budget — pin_load=1200, the
+#                           cutover redeploy=2400, the finalizer=900.
+#   REDEPLOY_DRY_RUN          (none — the workflow's proof mode never calls this script)
 #
 # Exit: 0 confirmed swap (frame ok, start_ts>PRIOR_START, tag==TARGET); 1 terminal
 # failure/timeout; 2 usage; 78 xtrace refusal.
@@ -86,15 +91,20 @@ fi
 echo "running version ${RUNNING_VERSION} → target tag ${TARGET_TAG} (same-image reload, no release)"
 
 # --- Webhook plumbing (HMAC over body; CF-Access) ------------------------------------
+# The GET signature is constant (empty body) — compute once, not per poll iteration.
+GET_SIG="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
 get_status() { # -> http_code; body lands in $TMP/status.json
-  local sig
-  sig="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
   curl -s --max-time 15 -o "$TMP/status.json" -w '%{http_code}' \
-    -X GET -H "X-Signature-256: sha256=${sig}" \
+    -X GET -H "X-Signature-256: sha256=${GET_SIG}" \
     -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
     -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
     "$STATUS_URL" 2>/dev/null || echo "000"
 }
+
+# The status endpoint is remote-controlled bytes: bound every field before it reaches
+# the log (a multi-line reason could smuggle a `::error::`/`::stop-commands::` token at
+# line start — the same class _access_clean exists for).
+_safe() { printf '%s' "$1" | head -n1 | tr -cd '[:print:] ' | cut -c1-120; }
 
 # --- 2. PRIOR_START baseline (fail closed) -------------------------------------------
 HTTP="$(get_status)"
@@ -128,15 +138,17 @@ echo "redeploy dispatched (HTTP 202, peers='${PEERS:-<none>}'); polling for our 
 
 # --- 4. Poll for our frame -----------------------------------------------------------
 start=$SECONDS
+first=1
 while :; do
-  sleep "$INTERVAL"
+  (( SECONDS - start >= TIMEOUT )) && break
+  if [[ "$first" = 1 ]]; then first=0; else sleep "$INTERVAL"; fi
   HTTP="$(get_status)"
   if [[ "$HTTP" != "200" ]]; then
     echo "poll: status HTTP ${HTTP}; retrying."
   else
-    COMPONENT="$(jq -r '.component // ""' "$TMP/status.json" 2>/dev/null || echo "")"
-    FRAME_TAG="$(jq -r '.tag // ""' "$TMP/status.json" 2>/dev/null || echo "")"
-    REASON="$(jq -r '.reason // ""' "$TMP/status.json" 2>/dev/null || echo "")"
+    COMPONENT="$(_safe "$(jq -r '.component // ""' "$TMP/status.json" 2>/dev/null || echo "")")"
+    FRAME_TAG="$(_safe "$(jq -r '.tag // ""' "$TMP/status.json" 2>/dev/null || echo "")")"
+    REASON="$(_safe "$(jq -r '.reason // ""' "$TMP/status.json" 2>/dev/null || echo "")")"
     EXIT_CODE="$(jq -r '.exit_code // -99' "$TMP/status.json" 2>/dev/null || echo -99)"
     START_TS="$(jq -r '.start_ts // 0' "$TMP/status.json" 2>/dev/null || echo 0)"
     [[ "$START_TS" =~ ^[0-9]+$ ]] || START_TS=0
@@ -171,10 +183,7 @@ while :; do
       esac
     fi
   fi
-
-  if (( SECONDS - start >= TIMEOUT )); then
-    echo "::error::dispatch-web-redeploy: no web-platform frame with tag=${TARGET_TAG} and start_ts>${PRIOR_START} concluded ok within ${TIMEOUT}s. verdict=redeploy_timeout"
-    _summary "- Redeploy NOT confirmed within ${TIMEOUT}s (baseline \`${PRIOR_START}\`)."
-    exit 1
-  fi
 done
+echo "::error::dispatch-web-redeploy: no web-platform frame with tag=${TARGET_TAG} and start_ts>${PRIOR_START} concluded ok within ${TIMEOUT}s. verdict=redeploy_timeout"
+_summary "- Redeploy NOT confirmed within ${TIMEOUT}s (baseline \`${PRIOR_START}\`)."
+exit 1

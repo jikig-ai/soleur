@@ -537,7 +537,7 @@ be = next(i for i in range(b + 1, len(lines)) if lines[i].startswith("      - ")
 lines[be:be] = chunk
 open(p, "w").write("\n".join(lines))
 PY
-if mutate precheck-after-bridge "$WF" 26 "python:$T/mut/reorder.py"; then
+if mutate precheck-after-bridge "$WF" 28 "python:$T/mut/reorder.py"; then
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-order.tsv" 2>&1
   mutant_red precheck-after-bridge wf_row "$T/mut/wf-order.tsv" "G1-order:"
 fi

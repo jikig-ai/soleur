@@ -98,7 +98,8 @@
 # answer "mounted, empty", so the bounds stay.
 #
 # Exit codes: 0 clear; 1 internal error (die: the access gate's mktemp failed); 3 access gate;
-# 5 refusal (real mode, store probe, fence probe); 78 xtrace refusal.
+# 5 refusal — all mode/probe verdicts (store probes, fence probe, freeze/unfreeze/probe
+# verbs, mode_invalid, lineage_absent, frozen_*, lock_held, FREEZE_HELD); 78 xtrace refusal.
 set -euo pipefail
 # Every regex below is a byte-class check; a UTF-8 locale would widen [A-Za-z] to letters beyond ASCII.
 export LC_ALL=C
@@ -228,8 +229,9 @@ gd_exec() {
 
 # --- freeze provenance (host-side; the sentinel's only writer/reader) -----------
 # freeze_probe: ONE ssh session answers existence + provenance. Remote exits:
-#   0 absent | 1 present+parseable (answer `writer=<w> at=<n>`) | 2 present+unparseable
-freeze_state=""   # absent|ours|foreign|unattributed|<parse-failure>
+#   0 absent | 2 present+unparseable (frozen_unattributed) | 3 present+UNREADABLE
+#   (frozen_unreadable — an I/O fault, not a provenance verdict)
+freeze_state=""   # absent|ours|foreign|unattributed|unreadable
 freeze_detail=""  # writer + age when parseable
 probe_freeze() {
   local rc=0 qs ql cmd
@@ -237,7 +239,7 @@ probe_freeze() {
   printf -v ql '%q' "$CUTOVER_LINEAGE"
   cmd="fz=$qs; lin=$ql
     if [ ! -e \"\$fz\" ]; then echo absent; exit 0; fi
-    c=\$(head -n 1 \"\$fz\" 2>/dev/null) || exit 2
+    c=\$(head -n 1 \"\$fz\" 2>/dev/null) || exit 3
     w=\$(printf '%s' \"\$c\" | sed -n 's/^writer=\([^ ]*\).*/\1/p')
     a=\$(printf '%s' \"\$c\" | sed -n 's/.* at=\([0-9]*\)$/\1/p')
     [ -n \"\$w\" ] && [ -n \"\$a\" ] || exit 2
@@ -246,6 +248,7 @@ probe_freeze() {
   case "$rc" in
     0) ;;
     2) freeze_state=unattributed; return 0 ;;
+    3) freeze_state=unreadable; return 0 ;;
     *) _store_refuse freeze-state probe_failed "$rc" ;;
   esac
   case "$GD_CAPTURED" in
@@ -557,7 +560,18 @@ refuse_if_store_unverified_or_not_empty() {
     21) reason=marker_absent ;;
     22) reason=marker_mismatch ;;
     24) reason=no_fs_uuid ;;
-    23) _store_refuse store-verified cutover_frozen ;;
+    23)
+      # A held sentinel refuses the proof — EXCEPT a same-lineage one, which only
+      # this run's own earlier attempt could have written (freeze runs strictly
+      # after a passed proof, so a re-run proving again would re-derive nothing).
+      # This is flip resume arm A: `gh run rerun` reuses run_id, hence lineage.
+      probe_freeze
+      if [ "$freeze_state" = "ours" ]; then
+        _store_emit store-verified ok "" resume_same_lineage
+        log "resume arm A: same-lineage freeze from this run's earlier attempt — proof already discharged, resuming"
+        return 0
+      fi
+      _store_refuse store-verified cutover_frozen ;;
     *) _store_refuse store-verified probe_failed "$rc" ;;
   esac
   [ -z "$reason" ] || _store_refuse store-verified store_unverified "" "$reason"
@@ -690,8 +704,10 @@ mode_freeze() {
   [ "$rc" -eq 0 ] || _store_refuse freeze-gc-quiesce probe_failed "$rc"
   case "$GD_CAPTURED" in
     inactive|failed) : ;;
-    # Literal reason word (the RB map emitter census needs it greppable, not constructed).
-    *) _store_refuse freeze-gc-quiesce probe_failed "" gc_active ;;
+    # A completed read returning `active` is a state refusal, not an instrument
+    # failure — its own verdict word (the taxonomy contract: probe_failed is for
+    # reads that could not complete).
+    *) _store_refuse freeze-gc-quiesce gc_active ;;
   esac
   gd_exec 'systemctl stop git-data-gc.timer' || _store_refuse freeze probe_failed "$?"
   _store_emit freeze-gc-stopped ok
@@ -700,17 +716,22 @@ mode_freeze() {
   probe_freeze
   case "$freeze_state" in
     absent) ;;
-    ours) _store_emit freeze ok; log "freeze already held by this lineage (${freeze_detail}) — resume arm A"; return 0 ;;
+    ours) log "freeze already held by this lineage (${freeze_detail}) — resume arm A; sentinel write skipped, purge still runs below" ;;
     foreign) _store_refuse freeze frozen_foreign ;;
     unattributed) _store_refuse freeze frozen_unattributed ;;
+    unreadable) _store_refuse freeze frozen_unreadable ;;
   esac
   # 3. Write `writer=<lineage> at=<epoch>` — both fields host-side so a partial write is
-  #    unparseable (frozen_unattributed), never half-trusted.
-  local qs ql
-  printf -v qs '%q' "$FREEZE_SENTINEL"
-  printf -v ql '%q' "$CUTOVER_LINEAGE"
-  gd_exec "printf 'writer=%s at=%s\n' $ql \"\$(date +%s)\" > $qs" \
-    || _store_refuse freeze-write probe_failed "$?"
+  #    unparseable (frozen_unattributed), never half-trusted. Skipped when the sentinel
+  #    is already ours (resume arm A): the purge below still runs — a freeze that died
+  #    between the write and the purge completes it here, never "re-runs harmlessly".
+  if [ "$freeze_state" != "ours" ]; then
+    local qs ql
+    printf -v qs '%q' "$FREEZE_SENTINEL"
+    printf -v ql '%q' "$CUTOVER_LINEAGE"
+    gd_exec "printf 'writer=%s at=%s\n' $ql \"\$(date +%s)\" > $qs" \
+      || _store_refuse freeze-write probe_failed "$?"
+  fi
   _store_emit freeze ok
   # 4. Purge legacy .<id>.init.lock residue INSIDE the freeze window: count, assert no
   #    flock is held on each (an in-flight provision holds the lock past the sentinel
@@ -719,7 +740,9 @@ mode_freeze() {
   local qd
   printf -v qd '%q' "$OLD_REPOS"
   gd_exec "d=$qd
-    n=\$(find \"\$d\" -mindepth 1 -maxdepth 1 -name '.*.init.lock' ! -name '.init.lock' ! -name '.boot-probe-0.init.lock' -printf . 2>/dev/null | wc -c) || exit 4
+    tf=\$(mktemp) || exit 4
+    find \"\$d\" -mindepth 1 -maxdepth 1 -name '.*.init.lock' ! -name '.init.lock' ! -name '.boot-probe-0.init.lock' -printf . > \"\$tf\" 2>/dev/null || { rm -f \"\$tf\"; exit 4; }
+    n=\$(wc -c < \"\$tf\"); rm -f -- \"\$tf\"
     echo \"purge count=\$n\" >&2
     for f in \"\$d\"/.*.init.lock; do
       [ -e \"\$f\" ] || continue
@@ -744,13 +767,14 @@ mode_unfreeze() {
   probe_freeze
   case "$freeze_state" in
     absent)
+      _store_emit unfreeze ok "" nothing_to_unfreeze
       log "nothing_to_unfreeze — no sentinel at $FREEZE_SENTINEL"
       ;;
     ours)
-      require_lineage
       local qs
       printf -v qs '%q' "$FREEZE_SENTINEL"
       gd_exec "rm -f -- $qs" || {
+        _store_emit unfreeze FREEZE_HELD
         log "FREEZE_HELD: could not clear the sentinel (transport/write failure). This pages: the freeze may still be live and blocks every store verb."
         echo "::error title=git-data-cutover::verdict=FREEZE_HELD"
         exit 5
@@ -759,12 +783,15 @@ mode_unfreeze() {
       ;;
     foreign) _store_refuse unfreeze frozen_foreign ;;
     unattributed) _store_refuse unfreeze frozen_unattributed ;;
+    unreadable) _store_refuse unfreeze frozen_unreadable ;;
   esac
-  gd_exec 'systemctl start git-data-gc.timer' || {
+  if gd_exec 'systemctl start git-data-gc.timer'; then
+    log "unfreeze done (state was: ${freeze_state}); gc.timer restarted"
+  else
     # The store is writable but gc stays stopped — warn, don't fail the unfreeze.
     echo "::warning title=git-data-cutover::gc.timer restart failed — verify it is running"
-  }
-  log "unfreeze done (state was: ${freeze_state}); gc.timer restarted"
+    log "unfreeze done (state was: ${freeze_state}); gc.timer restart FAILED — see the warning"
+  fi
 }
 
 mode_probe() {
@@ -787,9 +814,9 @@ mode_probe() {
     env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" runuser -u git -- /usr/local/bin/git-data-provision.sh || exit 11
     [ -d \"\$repo\" ] || exit 12
     t=\$(mktemp -d) && chown git:git \"\$t\" || exit 13
-    runuser -u git -- sh -c \"cd \\\"\$t\\\" && git init -q && git config user.email cutover@probe && git config user.name probe && git commit -q --allow-empty -m probe && git push --push-option=lease-gen=1 --push-option=worktree-id=cutover-probe \\\"\$repo\\\" HEAD:refs/heads/cutover-probe\" || { rm -rf \"\$t\"; exit 14; }
+    runuser -u git -- sh -c \"cd \\\"\$t\\\" && git init -q && git config user.email cutover@probe && git config user.name probe && git commit -q --allow-empty -m probe && git push --push-option=lease-gen=1 --push-option=worktree-id=cutover-probe \\\"\$repo\\\" HEAD:refs/soleur/worktrees/cutover-probe/probe\" || { rm -rf \"\$t\"; exit 14; }
     rm -rf \"\$t\"
-    git --git-dir=\"\$repo\" rev-parse --verify -q refs/heads/cutover-probe >/dev/null || exit 15
+    git --git-dir=\"\$repo\" rev-parse --verify -q refs/soleur/worktrees/cutover-probe/probe >/dev/null || exit 15
     env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" runuser -u git -- /usr/local/bin/git-data-remove.sh || exit 16
     [ ! -e \"\$repo\" ] || exit 17" || rc=$?
   if [ "$rc" -ne 0 ]; then

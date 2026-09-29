@@ -1528,10 +1528,11 @@ if [ "$RC" = 0 ] && has_store freeze ok && has_store freeze-gc-stopped ok && has
 else fail "MZ-F1: freeze happy path wrong" "$(ctx)"; fi
 
 # MZ-F2: a RUNNING gc.service refuses before the timer stop — the window it must close.
+# verdict=gc_active (a completed read returning a refused state is NOT probe_failed).
 run_mode mz-f2-gcactive freeze SHIM_GC_STATE=active
-if [ "$RC" = 5 ] && has_store freeze-gc-quiesce probe_failed && grep -q 'reason=gc_active' "$OUT" \
+if [ "$RC" = 5 ] && has_store freeze-gc-quiesce gc_active \
    && ! grep -q 'systemctl stop' "$TLF" && ! grep -q "printf 'writer=" "$TLF"; then
-  pass "MZ-F2: gc.service active -> probe_failed reason=gc_active, before the timer stop and the sentinel"
+  pass "MZ-F2: gc.service active -> verdict=gc_active, before the timer stop and the sentinel"
 else fail "MZ-F2: an active gc.service was not refused" "$(ctx)"; fi
 
 # MZ-F3: a sentinel with THIS lineage is resume arm A — idempotent, no write.
@@ -1591,6 +1592,17 @@ if [ "$RC" = 5 ] && grep -qF 'FREEZE_HELD' "$OUT" && grep -qF 'verdict=FREEZE_HE
   pass "MZ-U5: an unwritable sentinel on unfreeze -> FREEZE_HELD (paging verdict)"
 else fail "MZ-U5: a failed sentinel clear did not page" "$(ctx)"; fi
 
+# MZ-U6/F8: an UNREADABLE sentinel is its own verdict — an I/O fault is not a
+# provenance verdict (unattributed) nor an instrument failure (probe_failed).
+run_mode mz-u6-unread unfreeze SHIM_FREEZE=r3
+if [ "$RC" = 5 ] && has_store unfreeze frozen_unreadable && ! grep -q 'rm -f --' "$TLF"; then
+  pass "MZ-U6: an unreadable sentinel on unfreeze -> verdict=frozen_unreadable"
+else fail "MZ-U6: an unreadable sentinel was misclassified" "$(ctx)"; fi
+run_mode mz-f8-unread freeze SHIM_GC_STATE=inactive SHIM_FREEZE=r3
+if [ "$RC" = 5 ] && has_store freeze frozen_unreadable; then
+  pass "MZ-F8: an unreadable sentinel on freeze -> verdict=frozen_unreadable"
+else fail "MZ-F8: an unreadable sentinel was misclassified on freeze" "$(ctx)"; fi
+
 # MZ-P1: the transactional probe — provision + fenced push + remove, zero residue.
 run_mode mz-p1-ok probe SHIM_PROBE=ok
 if [ "$RC" = 0 ] && has_store probe ok && grep -q 'git-data-provision.sh' "$TLF" && grep -q 'git-data-remove.sh' "$TLF" && grep -q 'lease-gen' "$TLF"; then
@@ -1612,6 +1624,15 @@ run_mode mz-p4-residue probe SHIM_PROBE=residue
 if [ "$RC" = 5 ] && has_store probe residue_left; then
   pass "MZ-P4: a repo surviving remove -> verdict=residue_left"
 else fail "MZ-P4: residue was not attributed" "$(ctx)"; fi
+
+# MZ-P9: the probe's push refspec is INSIDE the fence's worktree namespace — the real
+# pre-receive rejects refs/heads/* for any worktree-id, so a `refs/heads/cutover-probe`
+# push can never land (the fence is planted at birth by the same PR; D0 ownership).
+if grep -qF "HEAD:refs/soleur/worktrees/cutover-probe/probe" "$SCRIPT" \
+   && grep -qF "rev-parse --verify -q refs/soleur/worktrees/cutover-probe/probe" "$SCRIPT" \
+   && ! grep -qF "refs/heads/cutover-probe" "$SCRIPT"; then
+  pass "MZ-P9: the probe pushes/verifies refs/soleur/worktrees/cutover-probe/probe — the only namespace the fence admits"
+else fail "MZ-P9: the probe refspec is outside the worktree namespace (the fence would reject it on every real run)"; fi
 
 # MZ-P5: provision failure -> probe_failed reason=provision.
 run_mode mz-p5-provfail probe SHIM_PROBE=provfail
@@ -1646,6 +1667,21 @@ if [ "$RC" = 5 ] && grep -qF 'verdict=mode_invalid' "$OUT" && [ ! -s "$TLF" ]; t
   pass "MZ-V: an unknown MODE -> verdict=mode_invalid, exit 5, nothing dialed"
 else fail "MZ-V: an unknown mode was not refused" "$(ctx)"; fi
 
+# MZ-RA: resume arm A — a proof run whose store session hits a SAME-LINEAGE sentinel
+# (only this run's earlier attempt could have written it) tolerates and continues.
+# SHIM_VERIFY=r23 simulates the remote exit-23 (sentinel present); probe_freeze then
+# answers `ours` via SHIM_FREEZE.
+run_case mz-ra-resume "${KEYED[@]}" MODE=proof SHIM_VERIFY=r23 SHIM_FREEZE=ours CUTOVER_LINEAGE=lin-test-1
+if [ "$RC" = 0 ] && grep -q 'resume_same_lineage' "$OUT" && grep -q 'resume arm A' "$OUT"; then
+  pass "MZ-RA: same-lineage sentinel during proof -> resume_same_lineage, proof passes"
+else fail "MZ-RA: resume arm A did not tolerate the same-lineage sentinel" "$(ctx)"; fi
+# MZ-RB: the foreign-sentinel proof refusal is unchanged — a sentinel some OTHER run
+# wrote still wedges a proof (the reviewer-cited wedge guard).
+run_case mz-rb-foreign "${KEYED[@]}" MODE=proof SHIM_VERIFY=r23 SHIM_FREEZE=foreign CUTOVER_LINEAGE=lin-test-1
+if [ "$RC" = 5 ] && has_store store-verified cutover_frozen; then
+  pass "MZ-RB: foreign sentinel during proof -> verdict=cutover_frozen (still refused)"
+else fail "MZ-RB: a foreign sentinel was tolerated by the proof" "$(ctx)"; fi
+
 # ── WORKFLOW — git-data-cutover.yml (D-6 / AC9 / G6 / G7) ──────────────────────────────
 cat > "$T/wf.py" <<'PY'
 import sys, yaml, json, re
@@ -1665,7 +1701,7 @@ iv = yaml.safe_load(open(iv_path)); ap = yaml.safe_load(open(apply_path))
 on = wf.get(True) or wf.get("on") or {}
 check("WF-on: the only trigger is workflow_dispatch (on: read through the True-key lookup)", isinstance(on, dict) and list(on.keys()) == ["workflow_dispatch"], on if not isinstance(on, dict) else list(on.keys()))
 inputs = ((on.get("workflow_dispatch") or {}).get("inputs") or {}) if isinstance(on, dict) else {}
-check("G7/AC9: workflow_dispatch inputs are exactly {confirm, mode} (PR2: mode selects proof|flip|rollback|unfreeze|redeploy)", sorted(inputs.keys()) == ["confirm", "mode"], sorted(inputs.keys()))
+check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode} (PR2: mode selects proof|flip|rollback|unfreeze|redeploy; lineage is the stranded-sentinel lever for unfreeze)", sorted(inputs.keys()) == ["confirm", "lineage", "mode"], sorted(inputs.keys()))
 check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy",
       sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "rollback", "unfreeze"],
       (inputs.get("mode") or {}).get("options"))
@@ -1714,8 +1750,8 @@ pos = {
     "finalizer": idx(lambda s: s.get("name") and "Finalizer" in s["name"]),
 }
 single = all(len(v) == 1 for v in pos.values())
-order = ["confirm", "checkout", "doppler", "flag_precheck", "secrets_check", "flip_preconditions", "bridge", "key_fetch", "ssh_config", "host_proof", "freeze", "flag_write", "redeploy", "unfreeze", "probe", "teardown", "finalizer"]
-check("D-6: each step exists exactly once, in order confirm < checkout < doppler < flag precheck < secrets check < preconditions < bridge < key fetch < ssh_config < proof < freeze < flag write < redeploy < unfreeze < probe < teardown < finalizer",
+order = ["confirm", "checkout", "doppler", "flag_precheck", "secrets_check", "flip_preconditions", "bridge", "key_fetch", "ssh_config", "host_proof", "freeze", "flag_write", "redeploy", "unfreeze", "probe", "finalizer", "teardown"]
+check("D-6: each step exists exactly once, in order confirm < checkout < doppler < flag precheck < secrets check < preconditions < bridge < key fetch < ssh_config < proof < freeze < flag write < redeploy < unfreeze < probe < finalizer < teardown (the finalizer runs BEFORE the bridge teardown — its unfreeze arm needs the SSH path alive)",
       single and [pos[k][0] for k in order] == sorted(pos[k][0] for k in order), {k: v for k, v in pos.items()})
 def step(k):
     return steps[pos[k][0]] if len(pos[k]) == 1 else {}
@@ -1740,8 +1776,12 @@ check("WF-sshcfg: the ssh_config writer has no env: and is gated to host-touchin
 r = step("host_proof")
 check("WF6: the host-side proof step binds {WEB_HOSTS, GIT_DATA_SSH, MODE=proof, CUTOVER_LINEAGE=cutover-<run_id>}",
       r.get("env") == {"WEB_HOSTS": "${{ env.WEB_HOST_PRIVATE_IP }}", "GIT_DATA_SSH": "ssh -F ${{ runner.temp }}/gd-ssh-config", "MODE": "proof", "CUTOVER_LINEAGE": "cutover-${{ github.run_id }}"}, r.get("env"))
-check("WF10: the proof step runs the script, mode-gated to proof|flip|unfreeze",
-      str(r.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh" and "proof" in str(r.get("if")), (r.get("run"), r.get("if")))
+check("WF10: the proof step runs the script, mode-gated to proof|flip — unfreeze is EXCLUDED (the proof refuses a held sentinel, which is unfreeze's only reason to exist)",
+      str(r.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh"
+      and "proof" in str(r.get("if")) and "'unfreeze'" not in str(r.get("if")), (r.get("run"), r.get("if")))
+uf = step("unfreeze")
+check("WF10b: the unfreeze step accepts the operator lineage override (stranded sentinel recovery) and falls back to this run's lineage",
+      bool(uf) and "inputs.lineage" in json.dumps(uf.get("env") or {}), (uf.get("env") or {}).get("CUTOVER_LINEAGE"))
 td = step("teardown")
 check("WF7: teardown is if: always() and after the script step", td.get("if") == "always()")
 # Step GATING (C7): the content rows above cannot see a step that stops gating. Before the script
@@ -1803,7 +1843,7 @@ check("AC9: DOPPLER_TOKEN_GIT_DATA_FLAG is bound exactly on {flag_write, cutover
 real_modes = re.findall(r"\b(DRY_RUN|CONFIRM_WIPE|dry_run|confirm_wipe)\b", dumped)
 check("G7: no DRY_RUN/CONFIRM_WIPE vocabulary anywhere in the workflow (mode/rollback are real verbs)", not real_modes, sorted(set(real_modes)))
 refs = sorted(set(re.findall(r"inputs\.([A-Za-z0-9_]+)", dumped)))
-check("WF-inputs-refs: only inputs.confirm and inputs.mode are referenced", refs == ["confirm", "mode"], refs)
+check("WF-inputs-refs: only inputs.confirm, inputs.lineage and inputs.mode are referenced", refs == ["confirm", "lineage", "mode"], refs)
 # Pins on the RAW text (the `# v` comment is not in the parse).
 uses = [l.strip() for l in wf_text.splitlines() if re.match(r"^\s*(-\s+)?uses:\s", l)]
 remote = [u for u in uses if not re.search(r"uses:\s+\./", u)]
@@ -2182,7 +2222,7 @@ if mutate g5-raw-capture "$SCRIPT" 1 's#^  \[ -n "\$STORE_SOURCE" \] \|\| _store
   mutant_red g5-raw-capture case_capture_census "$MUTANT"
 fi
 # G7 row 1 — re-add a rollback input.
-if mutate g7-rollback-input "$WF" 2 's#^        type: string$#&\n      rollback:\n        type: boolean#'; then
+if mutate g7-rollback-input "$WF" 2 's#^      confirm:$#&\n      rollback:\n        type: boolean#'; then
   python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-g7.tsv" 2>&1
   mutant_red g7-rollback-input wf_row "$T/mut/wf-g7.tsv" "G7/AC9: workflow_dispatch inputs"
 fi
@@ -2880,7 +2920,7 @@ fi
 # the executed VX and count rows, the MM rows, the fence probe, P1-P4, RB, Guard 5, Guard 7), the
 # bridge export set, the 38 workflow YAML verdicts and the executed workflow steps.
 # Total 481 — exact, not a margin: removing or adding an assertion on purpose costs one edit here.
-FLOOR=481
+FLOOR=487
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

@@ -1,28 +1,27 @@
 # git-data LUKS cutover runbook — #5274 Phase 3 / Sub-PR 3.D / ADR-068
 
-Runbook for the git-data LUKS cutover route. **Today the route is a reviewer-gated, read-only proof.**
-`git-data-cutover.yml` authenticates to root on the git-data host through the ADR-220 web-1 jump, reads
-the state of the store (served by the LUKS mapper, marker bound, not frozen, empty) and the shape of
-its pre-receive fence, and exits. It moves no data, repoints no mount, flips no flag and wipes no
-volume. The real cutover (copy, repoint, flag flip, rollback, old-volume decommission) was removed from
-`git-data-cutover.sh` because it called host mechanisms that do not exist; its rebuild is **#8211**.
-Rationale and residuals: ADR-220 › "Amendment log" › "2026-09-15 (#8189)".
+Runbook for the git-data LUKS cutover route. **Since #8211 PR2 the route runs real modes, not only
+the proof.** `git-data-cutover.yml` takes `mode=proof|flip|rollback|unfreeze|redeploy` (default proof):
+`proof` is the read-only gate (authenticates to root on git-data through the ADR-220 web-1 jump, reads
+the store state and the fence shape, exits); `flip` runs the full window (proof -> freeze -> flag on ->
+same-version webhook redeploy -> per-host `git_data_store=` readback -> unfreeze -> transactional probe
+-> the `GIT_DATA_LUKS_CUTOVER_AT` stamp); `rollback` is flag-off plus the same redeploy (it never
+repoints a mount — the flag-off readback is the rollback); `unfreeze` clears the freeze sentinel
+(own lineage, or a stranded one via the `lineage` input); `redeploy` is the standalone pin-load lever.
+There is no copy or repoint — the store has served the LUKS mapper since boot (ADR-239); the old
+plaintext volume is retained read-only until its wipe decision (#6897/#8571).
 
 **No SSH in this runbook.** Every read below is a workflow annotation, a Better Stack API read or a
 Sentry query. The dispatch itself uses SSH transport off the app host; you never SSH a host to check
 whether it worked (`hr-no-ssh-fallback-in-runbooks`).
 
-## Preconditions for the real cutover (all open — do not book a window)
+## Preconditions for the flip (the workflow enforces them — do not book a window early)
 
-The real cutover does not exist yet. It is blocked on all of:
+The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
 
-- **#8211** — rebuild the real modes on real mechanisms (freeze model, same-version redeploy, rollback
-  split, `web-1-swap` membership, the endpoint guard for the copy). **Split in two.** PR1 (PR #8564,
-  ADR-239) moved the store onto the LUKS mapper at boot and shipped the store assertion. PR2's proof
-  half (ADR-239 amendment 2026-09-27) rebuilt the dry run's store probes for that layout: the
-  read-only dispatch below **is** the `proof`. Still open on #8211: the `flip`, the flag-off-only
-  `rollback`, the same-version redeploy, and the ADR-220 D6 fresh replace with its
-  `GIT_DATA_LUKS_KEY` and volume rotation. See
+- **#8211 PR2 merged** — the real modes on real mechanisms (freeze model, same-version webhook
+  redeploy, flag-off-only `rollback`, `web-1-swap` membership). PR1 (PR #8564, ADR-239) moved the
+  store onto the LUKS mapper at boot and shipped the store assertion. See
   [The LUKS-serving render](#the-luks-serving-render-pr1-of-8211).
 - **#8209** — evict the repo-secret-reachable credentials from `prd_terraform` (its own ADR).
 - **#7226 / #5914** — pin the SSH host keys of web-1 and git-data (ADR-237). Staged; the open items
@@ -94,8 +93,36 @@ The real cutover does not exist yet. It is blocked on all of:
   dry run's fence probe is in place.
 - The legal-activation dependencies on the roadmap row for #5274 (Article 30 PA-36, #8101, #8094).
 
-A dispatch that asks for a real mode refuses with `verdict=real_cutover_unreconciled` (exit 5) before
-any remote call.
+A dispatch on the retired vocabulary (`DRY_RUN`/`ROLLBACK`/`CONFIRM_WIPE`) refuses
+`verdict=real_cutover_unreconciled` (exit 5) before any remote call; `MODE` is the real selector.
+
+### The modes
+
+```bash
+gh workflow run git-data-cutover.yml --ref main -f mode=<MODE> -f confirm=<TOKEN>
+```
+
+| mode | confirm token | what it does |
+|---|---|---|
+| `proof` | `CUTOVER-GIT-DATA` | the read-only gate below; refuses `flag_already_true` under an on flag. |
+| `flip` | `FLIP-GIT-DATA` | preconditions (Tier-B seam, live pin-fault rule, `d6_replace_stale`, no deploy in flight, running image >= emitter floor) -> proof -> freeze -> flag on -> webhook redeploy -> `git_data_store=enabled` per host -> unfreeze -> probe -> `GIT_DATA_LUKS_CUTOVER_AT` stamp. Any post-flag-write failure runs the total-unwind finalizer. |
+| `rollback` | `ROLLBACK-GIT-DATA` | flag off + the same redeploy + `git_data_store=disabled` readback + unfreeze. Never touches a mount or volume. |
+| `unfreeze` | `UNFREEZE-GIT-DATA` | clears a same-lineage sentinel + restarts `git-data-gc.timer`. A STRANDED sentinel (its writing run is dead) needs `-f lineage=cutover-<dead run id>`. Foreign or unattributed sentinels refuse. |
+| `redeploy` | `REDEPLOY-GIT-DATA` | the standalone pin-load/same-version redeploy lever (no flag or host touch). |
+
+### The D6 rotate (dispatch BEFORE the flip)
+
+`d6_replace_stale` requires a completed `git-data-host-rotate` run — a fresh host PLUS a re-minted
+`GIT_DATA_LUKS_KEY`, volume and Doppler secret together (the passphrase can only rotate with a fresh
+volume). Dispatch it off `main`:
+
+```bash
+gh workflow run apply-web-platform-infra.yml --ref main   -f apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA
+```
+
+The rotate's `served_repos=0` precondition reads the latest `stage=boot_complete` emit for
+`host_name=soleur-git-data` out of Better Stack (hot table UNION'd with the s3 archive — the emit is
+once-per-boot) and fails closed when the store cannot be read empty.
 
 ## What the read-only dispatch does
 
@@ -836,7 +863,7 @@ escalate to the CLO rather than rushing G3.
 | **Incident, served device wrong** — the store root is served by something other than the LUKS mapper | `probe=store-on-mapper verdict=store_not_on_mapper` (exit 5) | The ADR-239 render cannot produce this. The wrappers refuse on the same device check, so every erasure is refused: sweep Sentry for the Art. 17 refusals with the query under "Store not empty" (step 3), and escalate to the CLO if an Art. 12(3) deadline is at risk. Read the current instance's boot_complete line and its `stage:bootstrap` events first, then follow "If the fresh host fails a boot check after step 3". Never re-dispatch a replace before that read. |
 | **Wrappers refusing now** — the bootstrap's store marker is missing, or the filesystem has no UUID | `probe=store-verified verdict=store_unverified reason=no_fs_uuid\|marker_absent` (exit 5) | Every provision, erasure and push is refusing on the host. Sweep Sentry for the Art. 17 refusals it opened, with the query under "Store not empty" (step 3), then follow "If the fresh host fails a boot check after step 3". `no_fs_uuid`: the mounted filesystem reports no UUID. `marker_absent`: the marker is missing, empty or not a file; a boot FATAL removes it, so read the boot events. |
 | **Tampering signal** — the marker names another filesystem | `probe=store-verified verdict=store_unverified reason=marker_mismatch` (exit 5) | Every wrapper refuses. With a matching boot FATAL (a mapper reopened on another volume, a writer defect), route as "Wrappers refusing now". With **no** boot FATAL it is a Breach-triage trigger: open an incident first, and do **not** replace the host until the incident releases it: a replace destroys the host and rewrites the marker, which is the evidence. Host-key step 5 resumes only after the incident closes, by its step-5.3 rule. |
-| **Frozen** — the freeze sentinel exists | `probe=store-verified verdict=cutover_frozen` (exit 5) | Since #8211 PR2 the sentinel carries `writer=<lineage> at=<epoch>` provenance and the cutover is its only writer/clearer. A `cutover_frozen` outside a dispatched flip is an incident: provision, remove, the transport wrapper and pre-receive all refuse (gc does not read it). Check the sentinel's writer (`cat /mnt/git-data/.cutover-freeze` on the host via the evidence path); a lineage that is not a live `github.run_id` is a stranded freeze — dispatch `mode=unfreeze` (it clears only a same-lineage sentinel) after confirming the run that wrote it is dead, and escalate a foreign/unattributed sentinel to the CLO, because the Art. 12(3) clock runs. |
+| **Frozen** — the freeze sentinel exists | `probe=store-verified verdict=cutover_frozen` (exit 5) | Since #8211 PR2 the sentinel carries `writer=<lineage> at=<epoch>` provenance and the cutover is its only writer/clearer. A `cutover_frozen` outside a dispatched flip is an incident: provision, remove, the transport wrapper and pre-receive all refuse (gc does not read it). The sentinel's `writer=` names the lineage `cutover-<run_id>` — the Actions run that wrote it (a refused freeze log line already prints it; the writer is also recoverable without SSH by finding the flip run whose `freeze` step last ran: `gh run list --workflow git-data-cutover.yml --limit 20`). If that run is dead, dispatch `mode=unfreeze -f lineage=cutover-<dead run id>` — the lineage input names the sentinel to clear. If the run is only FAILED mid-window, `gh run rerun --failed <run-id>` reuses its lineage (resume arm A tolerates the sentinel). Escalate a foreign/unattributed sentinel to the CLO, because the Art. 12(3) clock runs. |
 | **Store session could not be answered** — the store-verified stage | `probe=store-verified verdict=probe_failed rc=5\|6\|16` (exit 5) | `rc=5`: `findmnt` could not read the store's source or its filesystem UUID; re-dispatch once, a repeat is an incident. `rc=6`: the store source is not the one the first probe read — it changed or something is mounted over it. That is not transient: open an incident, and discharge nothing until it explains the change. `rc=16`: `head` could not read the marker; re-dispatch once, a repeat is an incident. Other `rc` values read as in the last row below. |
 | **Store session could not be answered** — the store-empty stage | `probe=store-empty verdict=probe_failed rc=3\|4\|7\|8\|9\|96` (exit 5) | Every store-verified fact held, then the count could not be taken. `rc=3`: `repositories` is a dangling symlink or not a directory. `rc=7`: it is missing (the bootstrap always creates it). `rc=8`: its containing mount is not the store root, so a second mount is hiding what lies under it. `rc=9`: `readlink`/`stat` could not resolve it. `rc=4`: `find` failed. `rc=96`: the count answer was malformed. None of these is transient and an empty store produces none of them: open an incident, and discharge nothing. |
 | The store holds repositories | `probe=store-empty verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. Since #8211 PR2 this counts every entry under `repositories/` (the bootstrap's `_repo_count` rule), not only `*.git`. |
@@ -844,14 +871,28 @@ escalate to the CLO rather than rushing G3.
 | The pre-receive fence is not intact | `probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent\|hooks_dir_owner\|hook_absent\|hook_owner\|hooks_parent_writable\|hook_not_runnable_by_git\|hooks_path_mismatch\|transport_pin_mismatch\|hooks_wrong_source` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
 | The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
 | A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do — the PR1 variable vocabulary (`DRY_RUN`/`ROLLBACK`/`CONFIRM_WIPE`) is superseded by `MODE`. Dispatch `git-data-cutover.yml` with the `mode` input instead. |
+| Wrong mode/confirm pair, or a `lineage` input on a non-unfreeze mode | the confirm step exits 1 on `confirm token mismatch` / `lineage is only valid with mode=unfreeze` | `confirm` must equal the mode's token exactly; `lineage` is meaningful only under `mode=unfreeze` (it names a stranded sentinel's writer). |
+| Precondition: the #8209 Tier-B seam is not seeded | `verdict=precondition_8209_open` | Set `DOPPLER_TOKEN_INFRA_PRIVILEGED` on the environment (ADR-241 R7), then re-dispatch. |
+| Precondition: the pin-fault Sentry rule is not live | `verdict=pin_fault_paging_absent` | Rule 1310055 unreadable or disabled — the read is live (`SENTRY_ACTIONS_RO_TOKEN`), not inferred. Enable it or fix the token before flipping. |
+| Precondition: no completed `git-data-host-rotate` | `verdict=d6_replace_stale` | Dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` off `main` (above). A plain replace cannot discharge D6 — it re-mints no LUKS key. |
+| Precondition: a web deploy is in flight | `verdict=deploy_in_flight` | Wait for `web-platform-release.yml` to settle; a mid-flip env rebake would be an unattributed cutover. |
+| Precondition: running image below the emitter floor | `verdict=live_image_stale` | `/health` reports a release older than `vars.GIT_DATA_EMITTER_FLOOR` — the `git_data_store=` emitter is not live, so a flip could not prove itself. |
+| A host never reported the flag's new value | `verdict=deploy_assert_failed` | The `git_data_store=<value>` emit never landed in Better Stack within the poll window — the finalizer has already unwound; reconcile the emit path before re-dispatching. |
+| The flag-write seam failed | `verdict=flag_write_credential_absent`, `flag_write_failed`, `flag_write_readback_failed`, `flag_write_value_invalid`, `flag_mode_invalid` (exit 5) | The write seam refused or its read-back disagreed — the flag state is printed in the run's own verdict line; reconcile in `prd` before re-dispatching. `nothing_to_rollback` short-circuits a rollback when the flag is already off. |
+| The redeploy tracker's verdicts | `redeploy_credential_absent`, `redeploy_tool_absent`, `redeploy_tag_unresolved`, `redeploy_status_unreadable`, `redeploy_baseline_unreadable`, `redeploy_dispatch_rejected`, `redeploy_peer_fanout_degraded`, `redeploy_terminal_failure`, `redeploy_timeout` | `track.sh` fails closed: the `/health` tag must resolve, a baseline `start_ts` must exist BEFORE dispatch, `ok_peer_fanout_degraded` means a peer did not swap (mixed fleet — reconcile before proceeding), `redeploy_timeout` is the per-callsite bound. |
+| The finalizer's own unwind failed | `verdict=RECOVERY_FAILED` (pages) | A partial unwind — reconcile flag state in `prd`, `git_data_store=` on both hosts, and the sentinel (unfreeze lever above) before ANY re-dispatch. |
+| Bridge/key/ssh_config setup refused | `verdict=ssh_config_key_absent`, `verdict=ssh_config_path_unsafe`, `verdict=known_hosts_empty`, `verdict=doppler_token_absent`, `verdict=pin_write_failed` | Setup steps failed before any host call; each prints the missing piece. A repeat is a defect in the step, not a transient. |
 | The cutover's `MODE` is not a known verb | `verdict=mode_invalid` (exit 5) | A defect or a stale caller; the verbs are `proof\|freeze\|unfreeze\|probe`. |
 | A write verb ran without its lineage stamp | `verdict=lineage_absent` (exit 5) | `CUTOVER_LINEAGE` was unset or malformed — the workflow stamps `cutover-<run_id>`; an out-of-band invocation must set it explicitly. |
-| Freeze found gc.service mid-run | `probe=freeze-gc-quiesce verdict=probe_failed reason=gc_active` (exit 5) | The one-shot gc was running; the freeze did not write. Wait for `git-data-gc.service` to finish (it is a timer-driven oneshot) and re-dispatch — never `systemctl stop` the service itself mid-flush. |
-| Freeze found a sentinel another run wrote | `probe=freeze verdict=frozen_foreign` (exit 5) | A cutover run from another lineage holds the freeze. Read the sentinel's `writer=` field; if that run is dead, dispatch `mode=unfreeze` under its lineage (the workflow stamps `cutover-<run_id>` of the NEW run, so this needs the sentinel's provenance verified first — see the unfreeze row below). |
+| Freeze found gc.service mid-run | `probe=freeze-gc-quiesce verdict=gc_active` (exit 5) | The one-shot gc was running; the freeze did not write. Wait for `git-data-gc.service` to finish (it is a timer-driven oneshot) and re-dispatch — never `systemctl stop` the service itself mid-flush. |
+| Freeze found a sentinel another run wrote | `probe=freeze verdict=frozen_foreign` (exit 5) | A cutover run from another lineage holds the freeze. The sentinel's `writer=` field names `cutover-<run_id>`; if that run is dead, dispatch `mode=unfreeze -f lineage=cutover-<dead run id>` (the `lineage` input is the declared override — a fresh dispatch otherwise mints its own lineage and can only ever read the sentinel as foreign). If the writing run failed mid-window, `gh run rerun --failed <run-id>` resumes under the SAME lineage. |
 | Freeze found an unparseable sentinel | `probe=freeze verdict=frozen_unattributed` (exit 5) | A sentinel with no `writer=/at=` fields is a host incident — nothing provisioned should write it. Do not remove it by hand; open an incident (Breach-triage trigger) and preserve the file as evidence. |
 | A legacy lock was held mid-purge | `probe=lock-purge verdict=lock_held` (exit 5) | A provision was in flight past the sentinel check — the freeze sentinel is still written, but a `. <id>.init.lock` remained held. The purge stops rather than racing the writer; re-dispatch the mode once the provision lands, or remove the stale lock after confirming no provision holds it. |
 | Unfreeze refuses the sentinel it found | `probe=unfreeze verdict=frozen_foreign` or `probe=unfreeze verdict=frozen_unattributed` (exit 5) | `frozen_foreign`: the writer lineage is not this run's — deliberate; a foreign lineage means another cutover's window. `frozen_unattributed`: the sentinel carried no provenance — a host incident, as in the freeze row. |
-| The sentinel could not be cleared | `verdict=FREEZE_HELD` (exit 5, a paging line — not a summary verdict) | The git-data hop (or the rm) failed while the sentinel may still be live: every store verb is refusing. This pages — verify `rm /mnt/git-data/.cutover-freeze` ran, restart `git-data-gc.timer`, and reconcile before any re-dispatch. |
+| The sentinel exists but cannot be READ | `probe=freeze verdict=frozen_unreadable` or `probe=unfreeze verdict=frozen_unreadable` (exit 5) | The file is present and its read failed — an I/O fault, distinct from `frozen_unattributed` (content present but unparseable). Re-dispatch once; a repeat is a host/filesystem incident on the serving volume. |
+| Proof met a sentinel THIS run wrote | the `store-verified` probe reads `verdict=ok reason=resume_same_lineage` (a notice, not a refusal) | Resume arm A — `gh run rerun` on a flip that died after freezing reuses the run id, so the lineage matches and the (already-discharged) proof is skipped. Normal on a resumed flip only; on any other mode it cannot occur (a sentinel's writer is always a `cutover-<run_id>` that ran freeze). |
+| Unfreeze found nothing | the `unfreeze` probe reads `verdict=ok reason=nothing_to_unfreeze` (a notice) | Convergent no-op — gc.timer is still restarted; nothing was held. |
+| The sentinel could not be cleared | `verdict=FREEZE_HELD` (exit 5, a paging line — not a summary verdict) | The git-data hop (or the rm) failed while the sentinel may still be live: every store verb is refusing. This pages. First retry the clearing lever — re-dispatch `mode=unfreeze` (same lineage if the run is live; `-f lineage=cutover-<id>` when it is dead). A hop that cannot answer at all routes through the `git-data-host-replace` lever only after the incident is open — the sentinel does not survive a replace (the store device is re-created), so a replace is itself a clearing path, gated on served_repos=0. |
 | The transactional probe could not provision | `probe=probe verdict=probe_failed reason=provision` (exit 5) | The provision wrapper refused or failed on a synthetic id post-flip — the provision path is broken under the real store. Read the remove-retry line and the host's provision events; do not re-dispatch the flip. |
 | The transactional probe's push was refused | `probe=probe verdict=fenced_push_failed` (exit 5) | The CAS fence rejected a conforming push (valid `lease-gen`/`worktree-id`), or the push path broke. The store is populated but unfenceable — an incident; the probe's cleanup retry already ran. |
 | The transactional probe could not finish | `probe=probe verdict=probe_failed reason=<repo_absent_after_provision\|scratch\|ref_not_landed>` (exit 5) | `repo_absent_after_provision`: the wrapper claimed success but no repo exists. `scratch`: the temp scratch setup failed. `ref_not_landed`: the push ran but the ref never landed — the fence accepted bytes the repo does not hold. All are host incidents. |

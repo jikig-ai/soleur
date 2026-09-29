@@ -4175,15 +4175,19 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
+          # Same read shape as scripts/lib/git-data-boot-signal-poll.sh — hot window
+          # UNION'd with the s3 archive (the boot emit is once-per-boot; a rotate is
+          # dispatched days later, so remote() alone is empty). host_name carries the
+          # private name 'soleur-git-data'; stage is a JSON kv, not Sentry-search syntax.
           rows="$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
-            "SELECT raw FROM remote(\$BS_TABLE) WHERE JSONExtractString(raw,'host_name') = 'git-data' AND positionCaseInsensitive(raw,'stage:bootstrap') > 0 ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null || true)"
+            "SELECT JSONExtractString(raw,'served_repos') AS served_repos FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1) WHERE JSONExtractString(raw,'stage') = 'boot_complete' AND JSONExtractString(raw,'host_name') = 'soleur-git-data' ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>/dev/null || true)"
           # The LATEST emit decides — an older served_repos=0 must not cover a newer
           # populated reading (rows arrive newest-first, one JSONEachRow object per line).
           latest="$(printf '%s' "$rows" | head -1)"
-          if printf '%s' "$latest" | grep -qE 'served_repos=0([^0-9]|$)'; then
-            echo "rotate precondition ok: latest git-data bootstrap emit reports served_repos=0"
+          if printf '%s' "$latest" | grep -qE '"served_repos":"0"'; then
+            echo "rotate precondition ok: latest git-data boot emit reports served_repos=0"
           elif [ -z "$rows" ]; then
-            echo "::error::rotate precondition UNREADABLE — no stage:bootstrap emit on host_name=git-data in Better Stack (the served_repos=0 field could not be read). Failing closed: an unreadable store is not an empty store. Do NOT re-dispatch until the emit path is verified."
+            echo "::error::rotate precondition UNREADABLE — no stage=boot_complete emit on host_name=soleur-git-data in Better Stack (the served_repos=0 field could not be read). Failing closed: an unreadable store is not an empty store. Do NOT re-dispatch until the emit path is verified."
             exit 1
           else
             echo "::error::rotate precondition REFUSED — the latest git-data bootstrap emit does not carry served_repos=0; the store is populated or the emit predates the field. A rotate destroys the LUKS volume. Empty the store (or wait for the flag-off state) first."
@@ -4489,8 +4493,13 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+          # The webhook swap is minutes; 1200 s bounds the poll well inside the
+          # 50-min job budget — a wedged status read becomes verdict=redeploy_timeout,
+          # never a mid-read runner kill.
+          REDEPLOY_TIMEOUT_S: "1200"
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
           WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
           CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
@@ -6365,8 +6374,13 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+          # The webhook swap is minutes; 1200 s bounds the poll well inside the
+          # 50-min job budget — a wedged status read becomes verdict=redeploy_timeout,
+          # never a mid-read runner kill.
+          REDEPLOY_TIMEOUT_S: "1200"
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
           WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
           CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"

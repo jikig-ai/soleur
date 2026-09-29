@@ -58,6 +58,11 @@ on:
         description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
         required: true
         type: string
+      lineage:
+        description: "unfreeze only: the freeze sentinel's writer lineage to clear (cutover-<dead run id>, read off the dead run's URL or its FREEZE output). Empty = this run's own lineage (the in-window unfreeze of a live flip/rollback)."
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: git-data-state
@@ -90,6 +95,7 @@ jobs:
         env:
           MODE: ${{ inputs.mode }}
           CONFIRM: ${{ inputs.confirm }}
+          LINEAGE: ${{ inputs.lineage }}
         run: |
           set -euo pipefail
           case "$MODE" in
@@ -102,6 +108,12 @@ jobs:
           esac
           if [[ "$CONFIRM" != "$want" ]]; then
             echo "::error::confirm token mismatch — mode $MODE requires exactly $want."
+            exit 1
+          fi
+          # lineage is the stranded-sentinel override; on any other mode it would be
+          # silently ignored — refuse so a mistaken input cannot pretend it applied.
+          if [[ -n "${LINEAGE:-}" && "$MODE" != "unfreeze" ]]; then
+            echo "::error::lineage is only valid with mode=unfreeze (it names the stranded sentinel's writer)."
             exit 1
           fi
           echo "mode=$MODE"
@@ -128,6 +140,7 @@ jobs:
           FLAG_MODE: ${{ steps.confirm.outputs.mode }}
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           bash apps/web-platform/infra/git-data-flag-precheck.sh | tee "$RUNNER_TEMP/precheck.out"
           # surface mode markers for downstream gating
           grep -qF 'resume=arm_b' "$RUNNER_TEMP/precheck.out" && echo "resume=arm_b" >> "$GITHUB_OUTPUT" || true
@@ -148,6 +161,7 @@ jobs:
           MODE: ${{ steps.confirm.outputs.mode }}
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           MODE="${MODE:-proof}"   # test harnesses run the body without the expression env
           if [[ "$DOPPLER_TOKEN_PRESENT" != "true" ]]; then
             echo "::error title=git-data-cutover secrets::verdict=doppler_token_absent"
@@ -182,6 +196,7 @@ jobs:
           GIT_DATA_EMITTER_FLOOR: ${{ vars.GIT_DATA_EMITTER_FLOOR }}
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           fail() { echo "::error title=git-data-cutover preconditions::verdict=$1"; echo "remedy: $2"; exit 1; }
           # #8209 Tier-B seam reachable
           [[ "$INFRA_PRIVILEGED_PRESENT" == "true" ]] || \
@@ -227,7 +242,7 @@ jobs:
           # live_image_stale: /health on the app must report a release at/above the
           # emitter floor (a flip against a pre-emitter image cannot prove itself).
           [[ -n "${GIT_DATA_EMITTER_FLOOR:-}" ]] || fail live_image_stale "vars.GIT_DATA_EMITTER_FLOOR unset — set it to the first release carrying the git_data_store= emitter."
-          running="$(curl -sf --max-time 15 "https://app.${APP_DOMAIN_BASE:-soleur.ai}/health" | jq -r '.version // ""')"
+          running="$(curl -sf --max-time 15 "https://app.${APP_DOMAIN_BASE:-soleur.ai}/health" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")"
           [[ "$running" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail live_image_stale "/health did not answer a semver (got '$running')."
           # semver compare: running >= floor
           ver_le() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]; }
@@ -252,6 +267,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           case "$-" in
             *x*) echo "::error title=git-data-cutover key::refusing to run under xtrace"; exit 78 ;;
           esac
@@ -362,7 +378,12 @@ jobs:
       # --- proof verb (all modes; on flip it is precondition 8 + the proof-before-freeze
       #     ordering: the probe chain proves the store before the freeze writes to it) ---
       - name: Host-side proof (access gate + store probes + fence)
-        if: (steps.confirm.outputs.mode == 'proof' || steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'unfreeze') && steps.flag_precheck.outputs.nothing_to_rollback != '1'
+        # unfreeze is deliberately NOT here: the proof refuses a held sentinel
+        # (cutover_frozen), which would make the unfreeze step unreachable from
+        # the only mode whose purpose is clearing one. Under flip, a same-lineage
+        # sentinel is arm-A resume — the script tolerates it because a freeze can
+        # only exist after a passed proof in this same run.
+        if: (steps.confirm.outputs.mode == 'proof' || steps.confirm.outputs.mode == 'flip') && steps.flag_precheck.outputs.nothing_to_rollback != '1'
         env:
           WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
           GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
@@ -380,8 +401,12 @@ jobs:
           CUTOVER_LINEAGE: cutover-${{ github.run_id }}
         run: |
           set -euo pipefail
-          bash apps/web-platform/infra/git-data-cutover.sh
+          # Mark BEFORE the freeze runs: a freeze that dies after writing the sentinel
+          # (lock_held, transport) still needs the finalizer's unfreeze arm. The marker
+          # means "freeze may have run", not "freeze succeeded" — unfreeze is idempotent
+          # and no-ops on an absent sentinel, so an over-eager marker is safe.
           touch "$RUNNER_TEMP/cutover-progress/freeze_held"
+          bash apps/web-platform/infra/git-data-cutover.sh
 
       # --- the flag write (flip writes true; rollback writes false) -------------------
       - name: Write GIT_DATA_STORE_ENABLED (via the #8573 seam)
@@ -393,9 +418,9 @@ jobs:
           FLAG_WRITE_VALUE: ${{ steps.confirm.outputs.mode == 'flip' && 'true' || 'false' }}
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           bash apps/web-platform/infra/git-data-flag-precheck.sh
           touch "$RUNNER_TEMP/cutover-progress/flag_written"
-          touch "$RUNNER_TEMP/cutover-progress/flag_value_$( [ "$FLAG_WRITE_VALUE" = true ] && echo on || echo off )"
 
       # --- same-version redeploy on both web hosts (flip resume arm B enters here) ----
       - name: Same-version redeploy of the web fleet (/hooks/deploy fan-out)
@@ -404,14 +429,17 @@ jobs:
           MODE: ${{ steps.confirm.outputs.mode }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: ${{ env.WEB_HOST_PRIVATE_IPS }}
+          # The webhook swap is minutes; a 2400 s bound leaves finalizer headroom inside
+          # the 120-min job timeout and converts a wedged poll into a timed verdict.
+          REDEPLOY_TIMEOUT_S: "2400"
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
           WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
           CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
           CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
           bash .github/actions/dispatch-web-redeploy/track.sh
-          touch "$RUNNER_TEMP/cutover-progress/redeploy_done"
 
       # --- per-host git_data_store= readback via Better Stack (host_name keyed) -------
       - name: Per-host git_data_store= assertion (Better Stack)
@@ -421,21 +449,31 @@ jobs:
           EXPECTED: ${{ steps.confirm.outputs.mode == 'flip' && 'enabled' || 'disabled' }}
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          # The emit is batched through Vector — a single-shot read races ingest lag and
+          # a false miss triggers the TOTAL unwind on a healthy flip. Poll each host:
+          # up to ~12 min (12 × 60 s), newest row wins.
           fail=0
           for h in soleur-web-1 soleur-web-2; do
             # JSONExtractString(raw,'host_name') is the proven discriminator shape
             # (betterstack-assert-absence.sh); the hot window covers the just-swapped boot.
-            rows="$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
-              "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 20 MINUTE AND JSONExtractString(raw,'host_name') = '$h' AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null || true)"
-            if printf '%s' "$rows" | grep -qF "git_data_store=${EXPECTED}"; then
-              echo "host $h: git_data_store=${EXPECTED} observed"
-            else
+            seen=0
+            for i in $(seq 1 12); do
+              rows="$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+                "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND JSONExtractString(raw,'host_name') = '$h' AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>/dev/null || true)"
+              if printf '%s' "$rows" | grep -qF "git_data_store=${EXPECTED}"; then
+                echo "host $h: git_data_store=${EXPECTED} observed (attempt $i)"
+                seen=1
+                break
+              fi
+              sleep 60
+            done
+            if [ "$seen" = 0 ]; then
               echo "::error title=git-data-cutover assert::host=$h did not report git_data_store=${EXPECTED} within the readback window"
               fail=1
             fi
           done
           [ "$fail" = 0 ] || { echo "::error::verdict=deploy_assert_failed — a web host never reported git_data_store=${EXPECTED}"; exit 1; }
-          touch "$RUNNER_TEMP/cutover-progress/assert_done"
 
       # --- flip tail: unfreeze + gc restart BEFORE the probe --------------------------
       - name: Unfreeze + gc restart (same lineage only)
@@ -444,7 +482,11 @@ jobs:
           WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
           GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
           MODE: unfreeze
-          CUTOVER_LINEAGE: cutover-${{ github.run_id }}
+          # lineage input clears a STRANDED sentinel: a flip that died mid-window left a
+          # sentinel writing cutover-<that run's id>; this dispatch has a different id, so
+          # without the override the sentinel reads foreign forever. The input is the
+          # declared, attributable recovery (the environment reviewer authorizes it).
+          CUTOVER_LINEAGE: ${{ (steps.confirm.outputs.mode == 'unfreeze' && inputs.lineage != '' && inputs.lineage) || format('cutover-{0}', github.run_id) }}
         run: bash apps/web-platform/infra/git-data-cutover.sh
 
       # --- flip tail: positive replication probe (zero residue) -----------------------
@@ -464,6 +506,7 @@ jobs:
           DOPPLER_TOKEN_GIT_DATA_FLAG: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_FLAG }}
         run: |
           set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           printf '%s' "$at" | DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" \
             doppler secrets set GIT_DATA_LUKS_CUTOVER_AT -p soleur -c prd >/dev/null
@@ -471,34 +514,6 @@ jobs:
           touch "$RUNNER_TEMP/cutover-progress/cutover_at_written"
 
       # --- teardown (bridge + key hygiene), always ------------------------------------
-      - name: Tear down cloudflared SSH bridge
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          if [[ -n "${SERVER_IP:-}" ]]; then
-            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
-              -j REDIRECT --to-ports 2222 2>/dev/null || true
-          fi
-          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
-            kill "$CLOUDFLARED_PID" 2>/dev/null || true
-          fi
-          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
-            shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
-          fi
-          if [[ -f "$RUNNER_TEMP/gd-root-key" ]]; then
-            shred -u "$RUNNER_TEMP/gd-root-key" 2>/dev/null || true
-          fi
-          if [[ -f "$RUNNER_TEMP/gd-ssh-config" ]]; then
-            shred -u "$RUNNER_TEMP/gd-ssh-config" 2>/dev/null || true
-          fi
-          for f in "$RUNNER_TEMP/gd-known-hosts" "$RUNNER_TEMP/git-data.pin"; do
-            if [[ -f "$f" ]]; then
-              chmod u+w "$f" 2>/dev/null || true
-              shred -u "$f" 2>/dev/null || true
-            fi
-          done
-          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
       # --- finalizer: TOTAL unwind on any post-flag-write failure ----------------------
       # Runs on every exit path. When the flag was written but the flip never concluded
@@ -538,22 +553,25 @@ jobs:
               echo "::error::finalizer: flag-off write FAILED — flag state unknown; page on-call"
               unwind_failed=1
             fi
-            if [[ -z "$unwind_failed" || "$unwind_failed" = 0 ]]; then
+            if [[ "$unwind_failed" = 0 ]]; then
               export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
               WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform 2>/dev/null)" || true
               CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform 2>/dev/null)" || true
               CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform 2>/dev/null)" || true
               if [[ -n "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then
-                if bash .github/actions/dispatch-web-redeploy/track.sh; then
+                if REDEPLOY_TIMEOUT_S=900 bash .github/actions/dispatch-web-redeploy/track.sh; then
                   echo "finalizer: off-line redeploy confirmed"
                 else
                   echo "::error::finalizer: unwind redeploy did not confirm — verify git_data_store=disabled per host via Better Stack"
                   unwind_failed=1
                 fi
+              else
+                echo "::error::finalizer: WEBHOOK_DEPLOY_SECRET unreadable — flag-off written but NO redeploy dispatched; the fleet still runs the prior env. Page on-call."
+                unwind_failed=1
               fi
             fi
           fi
-          if [[ -f "$prog/freeze_held" && -n "${GIT_DATA_SSH:-}" ]]; then
+          if [[ -f "$prog/freeze_held" ]]; then
             if MODE=unfreeze CUTOVER_LINEAGE="cutover-${{ github.run_id }}" \
               bash apps/web-platform/infra/git-data-cutover.sh; then
               echo "finalizer: freeze cleared, gc.timer restarted"
@@ -573,6 +591,34 @@ jobs:
           fi
           echo "finalizer: unwind complete."
 
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
+            shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
+          fi
+          if [[ -f "$RUNNER_TEMP/gd-root-key" ]]; then
+            shred -u "$RUNNER_TEMP/gd-root-key" 2>/dev/null || true
+          fi
+          if [[ -f "$RUNNER_TEMP/gd-ssh-config" ]]; then
+            shred -u "$RUNNER_TEMP/gd-ssh-config" 2>/dev/null || true
+          fi
+          for f in "$RUNNER_TEMP/gd-known-hosts" "$RUNNER_TEMP/git-data.pin"; do
+            if [[ -f "$f" ]]; then
+              chmod u+w "$f" 2>/dev/null || true
+              shred -u "$f" 2>/dev/null || true
+            fi
+          done
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
       - name: Run summary
         if: always()
         env:
