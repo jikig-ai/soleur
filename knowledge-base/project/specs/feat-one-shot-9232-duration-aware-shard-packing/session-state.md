@@ -32,3 +32,20 @@ None — all pre-commit hooks (gitleaks, lint-infra-no-human-steps, markdown-lin
 - performance-oracle (subagent 26a2a602): NO BLOCKING; 4 nits — applied: floor_ms clamped to >=1 (median-of-measured could be 0 → zero-weight pileup), runbook note that --runs counts scanned runs, probe leg label made 1-based. Skipped: --paginate on artifacts-list (per_page=100 >> actual ~11; loud degradation via expected_legs WARN exists).
 - simplicity/architecture/security/pattern/quality seats: subagent spawns repeatedly rate-limited (free-model cap); ran the lenses inline — no additional findings beyond a dead `weights = None` line (removed). Disclosed: inline lenses are lead-authored review, not independent.
 - Remaining seats (git-history, data-integrity, agent-native): nothing in scope (no DB, no agent surface, no history claims beyond ADR citation).
+
+## QA Phase
+Test Scenarios are integration-level Given/When/Then prose (no executable
+Browser:/API verify: steps) — per soleur:qa's skip rule, automated QA is
+skipped; coverage is the unit batteries + measured dry-run evidence:
+- median aggregation → fixture J (suite-mid 100/300/900 → 300) GREEN.
+- untimed label floors at floor_ms w/ src=floor → fixture K GREEN.
+- all-floor graceful degrade → fixtures D3/I/O GREEN (WARN, no die).
+- --legs K default-path refusal → fixture L GREEN (exit 2, manifest untouched).
+- --durations repack + SCRIPTS_SHARD=k/4 + SOLEUR_SHARD_MANIFEST enumerate
+  consumption → measured live: union == 519, disjoint legs.
+- floor never launders → fixture N GREEN.
+- partial run (missing leg artifacts) → live infra regen: 3 of 5 green runs
+  had no infra artifacts; WARN + contributed nothing — the allow_empty arm.
+- insertion stability → scripts-shard-manifest.test.sh 49/49 + infra gate +
+  32/32 mutation rows GREEN.
+- Step 2.6 visual-regression gate: skipped (no dashboard/layout files touched).
