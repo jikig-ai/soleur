@@ -72,7 +72,7 @@ readonly NOW_MS=1781784000000        # 2026-06-17T12:00:00Z
 readonly FUTURE_MS=1781870400000     # 2026-06-18T12:00:00Z
 readonly PAST_MS=1780358400000       # 2026-06-01T12:00:00Z
 
-# Build a v1.19.4-shaped eventsV2 page. Args: <hasNextPage> <endCursor> <edges-json>
+# Build a v1.45.1-shaped eventsV2 page. Args: <hasNextPage> <endCursor> <edges-json>
 make_page() {
   local has_next="$1" end_cursor="$2" edges="$3"
   jq -nc --argjson hn "$has_next" --arg ec "$end_cursor" --argjson edges "$edges" \
@@ -97,7 +97,7 @@ make_edge() {
 
 # Build a /v0/gql `functions` query response (#5517). The captured real shape is
 # {"data":{"functions":[{id,name,slug,triggers}]}} — GET /v1/functions is a 404 in
-# inngest v1.19.4, so the projection reads the GraphQL envelope, not a bare array.
+# inngest v1.45.1, so the projection reads the GraphQL envelope, not a bare array.
 make_functions() {  # $1 = JSON array of names
   jq -nc --argjson names "$1" '{data:{functions:[ $names[] | {id:., name:., slug:., triggers:[]} ]}}'
 }
@@ -259,7 +259,7 @@ test_functions_fetch_failure_is_loud() {
 
 # --- Test 10 (#5517): functions projected from the captured /v0/gql functions shape ---
 # The real shape is {"data":{"functions":[{id,name,slug,...}]}} (GET /v1/functions is a
-# 404 in v1.19.4). The projection MUST read .data.functions, and a BARE array (the old
+# 404 in inngest v1.45.1). The projection MUST read .data.functions, and a BARE array (the old
 # wrong assumption) must trip the guard rather than be silently accepted.
 test_functions_from_gql_shape() {
   local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
