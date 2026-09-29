@@ -187,7 +187,7 @@
 1	apps/web-platform/infra/inngest-userdata-budget.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
-2	apps/web-platform/infra/luks-monitor.test.sh
+5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
 2	apps/web-platform/infra/registry-luks.test.sh
