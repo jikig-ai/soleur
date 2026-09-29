@@ -183,6 +183,18 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-machinery-drain")).toBe(false);
   });
 
+  // #9168: cron-supabase-watchdog-dispatch is a dispatch-hybrid (mint token +
+  // workflow_dispatch to scheduled-supabase-watchdog.yml); the restart write
+  // runs in the ephemeral GHA executor, the Node side holds no git, no PR, and
+  // NO Supabase credential. Never Tier-2 deferred: a deferred tick is a missed
+  // 5-min probe of the outage this cron exists to shorten. Asserted here so
+  // the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("supabase-watchdog-dispatch (#9168, dispatch-hybrid) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-supabase-watchdog-dispatch")).toBe(
+      false,
+    );
+  });
+
   // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
   // allow) unblocks the two audit crons whose only denied construct was the
   // Task catch-all.
