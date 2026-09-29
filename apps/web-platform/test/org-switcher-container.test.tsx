@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { SWRConfig } from "swr";
+import type { ReactNode } from "react";
 import { swrConfig } from "@/lib/swr-config";
 import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
 
@@ -47,6 +48,19 @@ import { OrgSwitcherContainer } from "@/components/dashboard/org-switcher-contai
 // RQ2: the switch performs a HARD navigation to /dashboard (window.location
 // .assign), NOT a soft router.push and NOT reload() — see executeSwitch.
 const assignMock = vi.fn();
+
+// #9178 — memberships + active-repo now ride shared SWR keys. Without a
+// provider the global cache is shared across tests, and a clearSwrCache()
+// during one test's committed switch stamps every key's mutation timestamp so
+// the next mount's revalidation dedupes inside the 2s window → the chip stays
+// hidden. A fresh per-render Map gives each test its own cache.
+function freshCache({ children }: { children: ReactNode }) {
+  return (
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      {children}
+    </SWRConfig>
+  );
+}
 
 async function openAndSelectAcme() {
   // open the dropdown
@@ -99,7 +113,7 @@ describe("OrgSwitcherContainer — workspace switch write-path (3.10)", () => {
   });
 
   it("folds the active repo name into the pill face (data plumbing via useActiveRepo)", async () => {
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     const pill = await screen.findByRole("button", {
       name: /switch workspace/i,
     });
@@ -108,7 +122,7 @@ describe("OrgSwitcherContainer — workspace switch write-path (3.10)", () => {
   });
 
   it("collapsed renders the icon-only identity (no pill, no switch chrome) and never the confirm dialog", async () => {
-    render(<OrgSwitcherContainer collapsed />);
+    render(<OrgSwitcherContainer collapsed />, { wrapper: freshCache });
     // icon-only identity from the same data path
     const icon = await screen.findByTestId("workspace-identity-icon");
     expect(icon).toHaveAttribute("title", "jikigai");
@@ -121,7 +135,7 @@ describe("OrgSwitcherContainer — workspace switch write-path (3.10)", () => {
   });
 
   it("selecting a workspace shows a confirm step BEFORE switching (no immediate RPC)", async () => {
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     await openAndSelectAcme();
     // confirm affordance appears, RPC not yet called
     expect(await screen.findByTestId("workspace-switch-confirm")).toBeTruthy();
@@ -129,7 +143,7 @@ describe("OrgSwitcherContainer — workspace switch write-path (3.10)", () => {
   });
 
   it("confirming calls set_current_workspace_id with the target workspaceId, refreshes, HARD-navigates to /dashboard", async () => {
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     await openAndSelectAcme();
     fireEvent.click(await screen.findByRole("button", { name: /^confirm$/i }));
 
@@ -147,7 +161,7 @@ describe("OrgSwitcherContainer — workspace switch write-path (3.10)", () => {
   });
 
   it("cancel aborts the switch — no RPC, no navigation", async () => {
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     await openAndSelectAcme();
     fireEvent.click(await screen.findByRole("button", { name: /cancel/i }));
     expect(screen.queryByTestId("workspace-switch-confirm")).toBeNull();
@@ -157,7 +171,7 @@ describe("OrgSwitcherContainer — workspace switch write-path (3.10)", () => {
 
   it("RPC failure surfaces a failed state with a retry that re-issues the switch (also hard-navigates)", async () => {
     mockRpc.mockResolvedValueOnce({ error: { message: "permission denied" } });
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     await openAndSelectAcme();
     fireEvent.click(await screen.findByRole("button", { name: /^confirm$/i }));
 
@@ -251,7 +265,7 @@ describe("OrgSwitcherContainer — two-phase-commit failure handling (#4917)", (
   // /dashboard and never offers a Cancel that returns to the old workspace.
   it("post-RPC failure (online) force-completes to /dashboard with NO Cancel", async () => {
     mockRefreshSession.mockRejectedValueOnce(new Error("token endpoint 500"));
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     await openAndSelectAcme();
     fireEvent.click(await screen.findByRole("button", { name: /^confirm$/i }));
 
@@ -278,7 +292,7 @@ describe("OrgSwitcherContainer — two-phase-commit failure handling (#4917)", (
   // Cancel safely returns to idle (nothing was committed).
   it("pre-RPC failure preserves Retry + Cancel (regression guard)", async () => {
     mockRpc.mockResolvedValueOnce({ error: { message: "permission denied" } });
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     await openAndSelectAcme();
     fireEvent.click(await screen.findByRole("button", { name: /^confirm$/i }));
 
@@ -298,7 +312,7 @@ describe("OrgSwitcherContainer — two-phase-commit failure handling (#4917)", (
   it("post-RPC failure while offline shows honest 'saved / will finish' copy, NO Cancel", async () => {
     setOnLine(false);
     mockRefreshSession.mockRejectedValueOnce(new Error("Failed to fetch"));
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     await openAndSelectAcme();
     fireEvent.click(await screen.findByRole("button", { name: /^confirm$/i }));
 
@@ -320,7 +334,7 @@ describe("OrgSwitcherContainer — two-phase-commit failure handling (#4917)", (
   it("post-RPC offline retry is bounded and always exposes a Continue affordance", async () => {
     setOnLine(false);
     mockRefreshSession.mockRejectedValue(new Error("Failed to fetch"));
-    render(<OrgSwitcherContainer />);
+    render(<OrgSwitcherContainer />, { wrapper: freshCache });
     await openAndSelectAcme();
     fireEvent.click(await screen.findByRole("button", { name: /^confirm$/i }));
 

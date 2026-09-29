@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
+import type { ReactNode } from "react";
 
 // feat-skip-api-key-onboarding (#4642) — AC6. NoApiKeyBanner self-fetches
 // /api/byok/effective-status and renders ONLY when hasEffectiveKey === false.
@@ -29,10 +31,20 @@ function mockStatus(body: {
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.unstubAllGlobals());
 
+// #9178 — the banner's GET is a shared SWR key now: without a provider the
+// global cache carries one test's payload into the next as keep-last-known
+// data (the "renders nothing on error" row would render the PRIOR test's
+// banner). Fresh Map per render = per-test isolation.
+const freshCache = ({ children }: { children: ReactNode }) => (
+  <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+    {children}
+  </SWRConfig>
+);
+
 describe("NoApiKeyBanner (AC6)", () => {
   it("renders nothing when the user has an effective key", async () => {
     mockStatus({ hasEffectiveKey: true, pendingDelegation: false });
-    const { container } = render(<NoApiKeyBanner />);
+    const { container } = render(<NoApiKeyBanner />, { wrapper: freshCache });
     // Give the self-fetch a tick to resolve; it must stay empty.
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(container.querySelector('[role="region"]')).toBeNull();
@@ -40,7 +52,7 @@ describe("NoApiKeyBanner (AC6)", () => {
 
   it("keyless + no pending grant → add-key CTA to /dashboard/settings/services", async () => {
     mockStatus({ hasEffectiveKey: false, pendingDelegation: false });
-    render(<NoApiKeyBanner />);
+    render(<NoApiKeyBanner />, { wrapper: freshCache });
     const cta = await screen.findByRole("link", { name: /add.*key|settings/i });
     expect(cta.getAttribute("href")).toBe("/dashboard/settings/services");
     expect(screen.getByText(/tasks are disabled/i)).toBeTruthy();
@@ -48,7 +60,7 @@ describe("NoApiKeyBanner (AC6)", () => {
 
   it("keyless + pending grant → accept-grant copy + link to /dashboard/chat (the acceptance surface)", async () => {
     mockStatus({ hasEffectiveKey: false, pendingDelegation: true });
-    render(<NoApiKeyBanner />);
+    render(<NoApiKeyBanner />, { wrapper: freshCache });
     const cta = await screen.findByRole("link", { name: /accept|grant|shared access/i });
     // /dashboard/chat mounts the DelegationBanner → accept-side-letter flow.
     expect(cta.getAttribute("href")).toBe("/dashboard/chat");
@@ -61,7 +73,7 @@ describe("NoApiKeyBanner (AC6)", () => {
       pendingDelegation: false,
       isSharedWorkspaceMember: true,
     });
-    render(<NoApiKeyBanner />);
+    render(<NoApiKeyBanner />, { wrapper: freshCache });
     const cta = await screen.findByRole("link", { name: /add your own key/i });
     expect(cta.getAttribute("href")).toBe("/dashboard/settings/services");
     // Browse-but-can't-run framing — never the solo dead-end copy.
@@ -75,7 +87,7 @@ describe("NoApiKeyBanner (AC6)", () => {
       pendingDelegation: false,
       isSharedWorkspaceMember: false,
     });
-    render(<NoApiKeyBanner />);
+    render(<NoApiKeyBanner />, { wrapper: freshCache });
     expect(await screen.findByText(/tasks are disabled/i)).toBeTruthy();
     expect(screen.getByText(/separate, paid Anthropic account/i)).toBeTruthy();
     expect(screen.queryByText(/browse this workspace/i)).toBeNull();
@@ -83,14 +95,14 @@ describe("NoApiKeyBanner (AC6)", () => {
 
   it("renders nothing when the status fetch fails (safe degradation)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network")));
-    const { container } = render(<NoApiKeyBanner />);
+    const { container } = render(<NoApiKeyBanner />, { wrapper: freshCache });
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(container.querySelector('[role="region"]')).toBeNull();
   });
 
   it("mirrors a non-ok status response to Sentry and stays hidden", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
-    const { container } = render(<NoApiKeyBanner />);
+    const { container } = render(<NoApiKeyBanner />, { wrapper: freshCache });
     await waitFor(() => expect(mockReportSilentFallback).toHaveBeenCalled());
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
       null,

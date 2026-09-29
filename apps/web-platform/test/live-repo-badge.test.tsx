@@ -1,12 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
-import { __resetActiveRepoCoalesceForTests } from "@/hooks/use-active-repo";
+import { SWRConfig } from "swr";
+import type { ReactNode } from "react";
 
 // LiveRepoBadge is now INTERSTITIAL-ONLY: the "Working on: owner/repo" string
 // moved into the workspace pill subtitle (org-switcher.tsx, fed by the shared
 // useActiveRepo hook). This component renders the J5 revocation alert when the
 // API reports fellBackToSolo, else nothing.
+
+// #9178 — the hook rides the shared SWR key now; a fresh per-render provider
+// replaces the module-latch reset, and dedupingInterval: 0 keeps the focus
+// revalidation assertable (the global 2s window would swallow back-to-back
+// focus events fired inside one test).
+function freshCache({ children }: { children: ReactNode }) {
+  return (
+    <SWRConfig
+      value={{
+        provider: () => new Map(),
+        dedupingInterval: 0,
+        focusThrottleInterval: 0,
+      }}
+    >
+      {children}
+    </SWRConfig>
+  );
+}
 
 function mockActiveRepo(payload: Record<string, unknown>) {
   return vi.fn().mockResolvedValue({
@@ -18,7 +37,6 @@ function mockActiveRepo(payload: Record<string, unknown>) {
 describe("LiveRepoBadge — J5 revocation interstitial", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    __resetActiveRepoCoalesceForTests();
   });
 
   it("renders NOTHING on the happy path (repo name now lives in the pill, not here)", async () => {
@@ -44,7 +62,7 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
           }),
       }),
     );
-    const { container } = render(<LiveRepoBadge />);
+    const { container } = render(<LiveRepoBadge />, { wrapper: freshCache });
     // let the poll resolve, then assert no repo badge + no interstitial
     await vi.waitFor(() => expect(pollCommitted).toBe(true), {
       // #5113 — tolerate CPU starvation of the forked worker under
@@ -67,7 +85,7 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
         fellBackToSolo: true,
       }),
     );
-    render(<LiveRepoBadge />);
+    render(<LiveRepoBadge />, { wrapper: freshCache });
     const interstitial = await screen.findByTestId("revocation-interstitial");
     expect(interstitial).toHaveTextContent(/no longer have access/i);
     expect(interstitial).toHaveTextContent(/personal workspace/i);
@@ -106,7 +124,7 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<LiveRepoBadge />);
+    render(<LiveRepoBadge />, { wrapper: freshCache });
     await screen.findByTestId("revocation-interstitial");
 
     // user dismisses the notice — dismissal is an async state commit
@@ -125,7 +143,6 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
     // in-flight latch is always clear; here they fire back-to-back.
     const callsBeforeRegain = fetchMock.mock.calls.length;
     current = team;
-    __resetActiveRepoCoalesceForTests();
     fireEvent.focus(window);
     // Gate on the fetch-mock call count ADVANCING past the pre-focus baseline (a
     // delta, not an absolute ==2: stray mount/focus polls are now harmless but
@@ -149,13 +166,8 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
     expect(screen.queryByTestId("revocation-interstitial")).toBeNull();
 
     // a FRESH revocation (false→true transition) must re-surface the alert.
-    // Reset the latch AFTER the act flush (never before): resetting `inFlight`
-    // while the prior poll's setData(team) continuation is still pending would
-    // let two setData continuations run concurrently with no ordering guarantee
-    // (the coalesce-reset/continuation interleave hazard, #5297).
     const callsBeforeRevoke = fetchMock.mock.calls.length;
     current = solo;
-    __resetActiveRepoCoalesceForTests();
     fireEvent.focus(window);
     await vi.waitFor(
       () =>
@@ -182,7 +194,7 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
         fellBackToSolo: true,
       }),
     );
-    render(<LiveRepoBadge />);
+    render(<LiveRepoBadge />, { wrapper: freshCache });
     // prove the interstitial was present before dismissal, then poll until the
     // async dismissal commit removes it — a bare synchronous check races the
     // re-render under load (vacuous-absence-wait class, #5234/#5113).
@@ -198,7 +210,7 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
 
   it("renders nothing until the first poll resolves (no flash for solo users)", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
-    const { container } = render(<LiveRepoBadge />);
+    const { container } = render(<LiveRepoBadge />, { wrapper: freshCache });
     expect(container).toBeEmptyDOMElement();
   });
 });

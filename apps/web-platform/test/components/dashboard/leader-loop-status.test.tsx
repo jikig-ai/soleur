@@ -7,6 +7,7 @@ import {
   vi,
 } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
 import { userEvent } from "@testing-library/user-event";
 
 // PR-B (#4379) Phase 5.3 — LeaderLoopStatus integration tests.
@@ -103,6 +104,16 @@ afterEach(() => {
   globalThis.fetch = ORIGINAL_FETCH;
 });
 
+// #9178 — the /cost GET is an SWR key now (`swrKeys.todayCost(messageId)`);
+// without a provider the global cache leaks one test's payload (and its 2s
+// dedup stamp) into the next — the badge tests' "Cost: $12.34" render would
+// read an earlier test's {0/0} entry. Fresh Map per render isolates it.
+const freshCache = ({ children }: { children: React.ReactNode }) => (
+  <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+    {children}
+  </SWRConfig>
+);
+
 describe("LeaderLoopStatus — initial render before action_sends row", () => {
   it("renders 'acknowledged_starting' copy when no row exists yet", async () => {
     const channel = buildFakeChannel();
@@ -112,7 +123,7 @@ describe("LeaderLoopStatus — initial render before action_sends row", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       const panel = screen.getByTestId("leader-loop-status");
@@ -141,7 +152,7 @@ describe("LeaderLoopStatus — state-matrix integration (AC11)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       const panel = screen.getByTestId("leader-loop-status");
@@ -171,7 +182,7 @@ describe("LeaderLoopStatus — state-matrix integration (AC11)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       const panel = screen.getByTestId("leader-loop-status");
@@ -201,7 +212,7 @@ describe("LeaderLoopStatus — state-matrix integration (AC11)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       const panel = screen.getByTestId("leader-loop-status");
@@ -233,7 +244,7 @@ describe("LeaderLoopStatus — Resume button (feat-l5-runaway-guard PR-A)", () =
     const { LeaderLoopStatus } = await import(
       "@/components/dashboard/leader-loop-status"
     );
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       expect(
@@ -263,7 +274,7 @@ describe("LeaderLoopStatus — Resume button (feat-l5-runaway-guard PR-A)", () =
     const { LeaderLoopStatus } = await import(
       "@/components/dashboard/leader-loop-status"
     );
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       expect(
@@ -292,7 +303,7 @@ describe("LeaderLoopStatus — Stop button (AC13)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       expect(screen.getByTestId("leader-loop-status").getAttribute("data-state-kind")).toBe(
@@ -351,7 +362,7 @@ describe("LeaderLoopStatus — Undo button (AC14)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       expect(screen.getByLabelText(/Undo agent action/)).toBeInTheDocument();
@@ -397,7 +408,7 @@ describe("LeaderLoopStatus — Undo button (AC14)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       expect(screen.getByLabelText(/Undo agent action/)).toBeInTheDocument();
@@ -436,7 +447,7 @@ describe("LeaderLoopStatus — Undo button (AC14)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       expect(screen.getByLabelText(/Undo agent action/)).toBeInTheDocument();
@@ -477,7 +488,7 @@ describe("LeaderLoopStatus — Cost badge (AC15)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       const badge = screen.getByTestId("cost-badge");
@@ -511,7 +522,7 @@ describe("LeaderLoopStatus — Cost badge (AC15)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       const badge = screen.getByTestId("cost-badge");
@@ -536,7 +547,7 @@ describe("LeaderLoopStatus — Cost badge (AC15)", () => {
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       expect(screen.getByTestId("leader-loop-status")).toBeInTheDocument();
@@ -610,7 +621,7 @@ describe("LeaderLoopStatus — FR3 polling fallback on terminal subscribe status
         "@/components/dashboard/leader-loop-status"
       );
 
-      render(<LeaderLoopStatus messageId="msg-1" />);
+      render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
       // Initial mount: 1 fetchRow + 1 /cost. Let microtasks settle.
       await Promise.resolve();
@@ -649,7 +660,7 @@ describe("LeaderLoopStatus — Realtime UPDATE drives state transitions", () => 
       "@/components/dashboard/leader-loop-status"
     );
 
-    render(<LeaderLoopStatus messageId="msg-1" />);
+    render(<LeaderLoopStatus messageId="msg-1" />, { wrapper: freshCache });
 
     await waitFor(() => {
       expect(screen.getByTestId("leader-loop-status").getAttribute("data-state-kind")).toBe(

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
 import { ConversationNamesSettingsContent } from "@/components/settings/conversation-names-settings";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 
@@ -7,10 +8,16 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 function renderTeamSettings() {
+  // #9178 — the provider's GET is SWR-keyed and post-FCP-deferred by default.
+  // This page is where names are primary content (the real page passes
+  // defer={false}); the fresh per-render cache keeps one test's payload out
+  // of the next.
   return render(
-    <TeamNamesProvider>
-      <ConversationNamesSettingsContent />
-    </TeamNamesProvider>,
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <TeamNamesProvider defer={false}>
+        <ConversationNamesSettingsContent />
+      </TeamNamesProvider>
+    </SWRConfig>,
   );
 }
 

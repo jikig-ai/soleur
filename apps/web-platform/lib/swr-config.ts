@@ -74,6 +74,18 @@ export const swrKeys = {
   dashboardConversationAttention: (repoUrl: string, workspaceId: string) =>
     ["dashboard:conversation-attention-count", repoUrl, workspaceId] as const,
   routinesList: () => ["/api/dashboard/routines"] as const,
+  // Mount-fetch contract (#9178): every mount-time /api/* GET on the dashboard
+  // shell keys here so SWR's per-key in-flight coalescing dedupes across
+  // consumers — a raw fetch() GET on the mount path is a defect (the census
+  // guard test/dashboard-mount-fetch-dedup.test.tsx enforces this).
+  listMemberships: () => ["/api/workspace/list-memberships"] as const,
+  byokEffectiveStatus: () => ["/api/byok/effective-status"] as const,
+  pendingInvites: () => ["/api/workspace/pending-invites"] as const,
+  teamNames: () => ["/api/team-names"] as const,
+  // LeaderLoopStatus cost poll — keyed per messageId; the URL embeds the id so
+  // jsonFetcher works (cf. crmContactDetail convention above).
+  todayCost: (messageId: string) =>
+    [`/api/dashboard/today/${encodeURIComponent(messageId)}/cost`] as const,
   releasesList: () => ["/api/dashboard/releases"] as const,
   workstreamIssues: () => ["/api/workstream/issues"] as const,
   /** Picker options (labels/assignees/milestones) for the edit-fields drawer —

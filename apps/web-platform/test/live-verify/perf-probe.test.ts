@@ -7,8 +7,11 @@ import {
   safePath,
   classifyRequest,
   summarizeColdApi,
+  countDuplicateGets,
+  summarizeDuplicates,
   durationsFromTiming,
   type NavSample,
+  type RequestSample,
 } from "../../scripts/live-verify/perf-probe";
 
 describe("perf-probe durationsFromTiming — Playwright unit convention", () => {
@@ -98,9 +101,12 @@ describe("perf-probe summarizeColdApi", () => {
     docServerTiming: null,
     fcpMs: null,
     lcpMs: null,
+    cls: null,
     domContentLoadedMs: null,
+    duplicates: [],
     requests: apiDurs.map((d) => ({
       path: "/api/dashboard/today",
+      method: "GET",
       kind: "api" as const,
       status: 200,
       durationMs: d,
@@ -127,6 +133,7 @@ describe("perf-probe summarizeColdApi", () => {
     s.requests.push(
       {
         path: "/api/broken",
+        method: "GET",
         kind: "api",
         status: 500,
         durationMs: -1,
@@ -135,6 +142,7 @@ describe("perf-probe summarizeColdApi", () => {
       },
       {
         path: "/dashboard",
+        method: "GET",
         kind: "document",
         status: 200,
         durationMs: 900,
@@ -149,5 +157,95 @@ describe("perf-probe summarizeColdApi", () => {
 
   it("returns [] when no api requests were captured", () => {
     expect(summarizeColdApi([sample([], "cold-1")])).toEqual([]);
+  });
+});
+
+describe("perf-probe countDuplicateGets — same-mount census (#8985)", () => {
+  const req = (
+    path: string,
+    method = "GET",
+    kind: RequestSample["kind"] = "api",
+  ): RequestSample => ({
+    path,
+    method,
+    kind,
+    status: 200,
+    durationMs: 10,
+    ttfbMs: null,
+    serverTiming: null,
+  });
+
+  it("reports GET keys fetched >1 within one navigation, with the count", () => {
+    const out = countDuplicateGets([
+      req("/api/workspace/active-repo"),
+      req("/api/workspace/active-repo"),
+      req("/api/workspace/active-repo"),
+      req("/api/dashboard/today"),
+      req("/api/dashboard/today"),
+      req("/api/inbox"),
+    ]);
+    expect(out).toEqual([
+      { key: "GET /api/workspace/active-repo", count: 3 },
+      { key: "GET /api/dashboard/today", count: 2 },
+    ]);
+  });
+
+  it("skips non-GET methods — a POST+GET pair on one path is not a duplicate", () => {
+    const out = countDuplicateGets([
+      req("/api/x"),
+      req("/api/x", "POST"),
+      req("/api/x", "POST"),
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("counts document GETs — a double document fetch is a duplicate too", () => {
+    const out = countDuplicateGets([
+      req("/dashboard", "GET", "document"),
+      req("/dashboard", "GET", "document"),
+    ]);
+    expect(out).toEqual([{ key: "GET /dashboard", count: 2 }]);
+  });
+
+  it("returns [] when every GET fired once (the P1 met shape)", () => {
+    expect(
+      countDuplicateGets([req("/api/a"), req("/api/b"), req("/api/c")]),
+    ).toEqual([]);
+  });
+});
+
+describe("perf-probe summarizeDuplicates", () => {
+  const sample = (
+    label: string,
+    dups: { key: string; count: number }[],
+  ): NavSample => ({
+    label,
+    docTtfbMs: null,
+    docServerTiming: null,
+    fcpMs: null,
+    lcpMs: null,
+    cls: null,
+    domContentLoadedMs: null,
+    duplicates: dups,
+    requests: [],
+  });
+
+  it("rolls per-sample duplicates into worst count + sample labels", () => {
+    const out = summarizeDuplicates([
+      sample("cold-1", [{ key: "GET /api/a", count: 2 }]),
+      sample("cold-2", [{ key: "GET /api/a", count: 4 }]),
+      sample("warm-sw", [{ key: "GET /api/b", count: 2 }]),
+      sample("cold-3", []),
+    ]);
+    expect(out).toEqual([
+      { key: "GET /api/a", max: 4, samples: ["cold-1", "cold-2"] },
+      { key: "GET /api/b", max: 2, samples: ["warm-sw"] },
+    ]);
+  });
+
+  it("returns [] when no sample carried duplicates", () => {
+    expect(
+      summarizeDuplicates([sample("cold-1", []), sample("warm-sw", [])]),
+    ).toEqual([]);
   });
 });

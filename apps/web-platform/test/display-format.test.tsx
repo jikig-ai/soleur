@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { TeamNamesProvider, useTeamNames } from "@/hooks/use-team-names";
+import { SWRConfig } from "swr";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 const mockFetch = vi.fn();
@@ -26,11 +27,16 @@ function renderWithNames(
     json: () => Promise.resolve({ names, nudgesDismissed: [], namingPromptedAt: null }),
   });
 
+  // #9178 — deferred-by-default provider inside a fresh per-render cache:
+  // defer=false makes the read immediate (the consumer asserts hydrated
+  // values), the fresh Map keeps each test's stubbed payload out of the next.
   return act(async () => {
     render(
-      <TeamNamesProvider>
-        <DisplayConsumer leaderId={leaderId} />
-      </TeamNamesProvider>,
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <TeamNamesProvider defer={false}>
+          <DisplayConsumer leaderId={leaderId} />
+        </TeamNamesProvider>
+      </SWRConfig>,
     );
   });
 }

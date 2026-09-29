@@ -11,6 +11,10 @@ vi.mock("swr", async (importOriginal) => {
   const actual = await importOriginal<typeof import("swr")>();
   return { ...actual, default: (...args: unknown[]) => useSWRMock(...args) };
 });
+// #9178 — the badge defers its key until post-FCP in production; these tests
+// exercise the keyed fetch contract, so pin the gate open.
+vi.mock("@/hooks/use-post-fcp", () => ({ usePostFcp: () => true }));
+
 
 function action(n: number): MergedInboxItem[] {
   return Array.from({ length: n }, (_, i) => ({
