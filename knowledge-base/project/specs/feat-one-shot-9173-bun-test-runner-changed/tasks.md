@@ -19,7 +19,8 @@ Plan: `knowledge-base/project/plans/2026-09-29-fix-bun-test-hook-runner-changed-
 ## Phase 3: Mutation coverage, stanza pin, ADR amendment (write failing arms FIRST)
 
 - [ ] 3.1 `scripts/test-all-affected.test.sh`: add the `SANDBOX_STAGED_NAMES`-class seam at the staged-diff derivation point (same shape as `SANDBOX_DIFF_NAMES`; do NOT reuse `build_census_sandbox()`'s `cp -al`/`ln -sfn` pattern — #8800 write-through hazard).
-- [ ] 3.2 New arms (RED before Phase 1/2 land, GREEN after): staged-only ts on runner-branch → no runner-changed fallback; staged runner+ts → bounded selection + note; staged detection failure → `undecidable-diff`; flag+`--full` / bad enum / non-affected `TEST_GROUP` → `exit 2`; `--affected-scope=branch` accepted.
+- [ ] 3.2 New arms (RED before Phase 1/2 land, GREEN after): staged-only ts on runner-branch → no runner-changed fallback; staged runner+ts → bounded selection + note; staged detection failure → `undecidable-diff`; flag+`--full` / bad enum / non-affected `TEST_GROUP` → `exit 2`; `--affected-scope=branch` accepted; `TEST_GROUP=affected` + flag scopes the heuristic axis.
+- [ ] 3.2b Wiring arm (deepen-plan addition): pin the staged branch's `git diff --cached` invocation at source level (or a real-repo arm) — the `SANDBOX_*` seam substitutes names and cannot observe the git call; assert the branch-only diff sources do not execute under staged scope.
 - [ ] 3.3 Update `plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh` for the new `run:` line (keep the `skip: merge` assertion).
 - [ ] 3.4 Amend `knowledge-base/engineering/architecture/decisions/ADR-242-the-local-gate-defaults-to-affected-suites-and-always-on-ratchets.md`: Decision gains the scope axis + staged-scope `runner-changed` semantics + flag-not-env rationale; Alternatives Considered records options (b)/(c)/(d) with rejection reasons.
 

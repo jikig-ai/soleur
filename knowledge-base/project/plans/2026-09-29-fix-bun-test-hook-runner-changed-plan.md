@@ -14,6 +14,26 @@ brand_survival_threshold: none
 
 # fix: bun-test pre-commit gate selects from the staged set — runner-changed no longer degrades every commit on a runner-diff branch
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-29 · **Sections enhanced:** Proposed Solution (flag-validity precision), Technical Considerations (GIT_* ordering reason, A/M/D granularity, wire-pinning, sibling symptoms), Test Scenarios (wiring arm), Acceptance Criteria (AC5/AC8 sharpened to checkable post-conditions) · **Reviewed-Coverage: sequential-fallback** — this harness exposes no subagent/Task spawn, so the deepen fan-out (skills, learnings, review lenses, halt gates) ran inline and sequentially in one process; no independent review seat is claimed.
+
+**Halt gates passed mechanically:** Phase 4.6 `## User-Brand Impact` present with `threshold: none` and zero sensitive-path matches across Files to Edit; Phase 4.7 `## Observability` present, all five fields populated, `discoverability_test.command` allowlisted and under the 15 s cap; Phase 4.8 PAT-shaped-variable sweep clean; Phase 4.9 no UI surface; Phase 4.10 no persistent store / cross-component connection; Phase 4.11 `lint-guard-contract.py` green (2 guards, all rows).
+
+**Citations verified live:** every `#N` in the plan resolves to the claimed artifact and state (#9136 MERGED PR; #8322/#8940/#7424/#7553 CLOSED issues; #8591/#9034 MERGED PRs; #8800/#8659/#7942 OPEN issues); `cq-write-failing-tests-before` and `hr-weigh-every-decision-against-target-user-impact` resolve as active rule IDs; every `knowledge-base/` path in the plan exists on disk; `lint-infra-no-human-steps` and markdownlint clean on plan + tasks.
+
+### Key Improvements (over the pre-deepen draft)
+
+1. **Flag validity is now axis-precise:** `--affected-scope` is valid on either affected axis (`--affected` / local default / `TEST_GROUP=affected`), rejected under `--full` and non-affected `TEST_GROUP`s — scoping `_diff_names` is equally meaningful to both affected selectors.
+2. **The `GIT_*` unset ordering gained its load-bearing citation:** lefthook injects `GIT_INDEX_FILE`/`GIT_DIR` into hook subprocesses (data-loss class, #7772/#7835); the staged derivation MUST run after test-all.sh's blanket `GIT_*` unset so `git diff --cached` reads the real worktree index.
+3. **New wiring arm required:** the `SANDBOX_STAGED_NAMES` seam substitutes *names*, not the git invocation — a sandbox suite cannot observe whether `--cached` is really called; the suite must also pin the staged branch's `diff --cached` invocation (source-level or real-repo arm).
+4. **Sibling-symptom evidence folded in:** the 2026-09-27 drift-deadlock (census reading a moving `origin/main` tip while 43 staged files block the merge) is a second, independent cost of branch-scoped commit gates that staged scope sidesteps.
+
+### New Considerations Discovered
+
+- A staged **deletion** lands in `_diff_names` via `--name-status` `D` rows and still selects its suites — safe-direction over-selection; parity with branch scope, no special-casing.
+- Adjacent unsolved class (out of scope): `Can't find lefthook in PATH` exits 0 — a silent downgrade of the whole local gate set; staged scope neither fixes nor worsens it.
+
 ## Overview
 
 `lefthook`'s `bun-test` pre-commit hook runs `bash scripts/test-all.sh --affected` whenever a commit stages a `*.{ts,tsx,js,jsx}` file. The affected-selection diff (`_diff_names`) is built from `origin/main...HEAD`, `HEAD`, and the untracked set — a *branch* answer to what is a *commit* question. Once a branch touches `scripts/test-all.sh` or `scripts/lib/test-affected-paths.sh`, the `runner-changed` fallback degrades **every subsequent commit's** hook run to the ~4h full battery, which crosses `TC_RUNTIME_CEILING_S` and makes ts-touching commits unlandable through hooks (measured on #9136: three refused/killed/queued attempts; the commit only landed via a side-branch cherry-pick plus `LEFTHOOK_EXCLUDE` under authorization).
@@ -53,6 +73,11 @@ The bypasses this creates are worse than the defect: `LEFTHOOK_EXCLUDE`/`--no-ve
 - **NFR impacts:** none on production surfaces; developer-latency and gate-integrity properties of local machinery (see `knowledge-base/engineering/architecture/nfr-register.md` classes: reliability of the gate, not a runtime NFR).
 - **Edge cases (SpecFlow pass):** `git commit --amend` → staged set is the amend delta — correct; merge commits → hook already `skip: merge`; partial staging (`git add -p`) → gate sees exactly what is committed — correct; `git commit -a` → tracked modifications are staged — seen; brand-new staged file → `--name-only`/`--name-status` list it — self-edge selects it; empty index under the flag → detection succeeds with an empty set → the existing zero-selected refusal applies (only reachable when nothing is staged, which the hook glob already prevents); flag under `CI=` → declines are bypassed there anyway — inert; flag outside a hook → gates on the caller's index — documented as hook-intended, harmless to a local advisory gate.
 - **Fixture hazard constraint (#8800):** the new sandbox arms must not reuse `build_census_sandbox()`'s `cp -al`/`ln -sfn` pattern for any write-path — arms mutate only the real-copied sandbox runner, never a shared-inode path into the live tree.
+- **Git-env ordering, expanded (deepen):** the ordering invariant above is load-bearing for a named reason — lefthook injects `GIT_INDEX_FILE`/`GIT_DIR`/`GIT_OBJECT_DIRECTORY` into hook subprocesses, so a `git diff --cached` evaluated against hook-inherited env could read lefthook's bookkeeping index instead of the worktree's staged set. Documented class: `knowledge-base/project/learnings/workflow-issues/2026-04-03-lefthook-git-env-var-leak-breaks-tests.md` (2026-09-04 erratum upgrades it to `data_loss`; #7772/#7835) and `knowledge-base/project/learnings/2026-04-03-git-env-var-leak-resolve-git-root-test.md`. The runner's blanket `GIT_*` unset precedes the diff assembly, so post-unset `git diff --cached` rediscovers the real worktree index — the allowlist-free `env | grep '^GIT_'` loop means a future `GIT_*` variable cannot reopen the hole.
+- **A/M/D granularity (deepen):** the staged assembly keeps `--name-status -M` parity — staged deletions (`D` rows) remain in `_diff_names` and select their suites, the same safe-direction over-selection branch scope produces (status letters exist so the selector, not the author, decides which shapes matter — `knowledge-base/project/learnings/2026-04-05-diff-name-status-for-validation-gates.md`).
+- **Pin the wire, not just the names (deepen):** the `SANDBOX_*` seam substitutes the diff's *product*; it cannot observe whether `git diff --cached` is actually invoked under staged scope (fixture-vs-production-shape class, `knowledge-base/project/learnings/2026-09-28-a-fixture-that-never-reaches-the-production-shape.md`; wire-vs-artifact class, `knowledge-base/project/learnings/2026-09-20-every-guard-pinned-the-artifact-and-none-pinned-the-wire.md`). The suite must additionally pin the invocation — a source-level assertion that the staged branch of the diff assembly runs `diff --cached` and skips the `origin/main...HEAD`/`HEAD`/untracked appends, mirroring how existing arms pin branch-scope command shapes.
+- **Sibling symptom, same root cause (deepen):** `knowledge-base/project/learnings/workflow-issues/2026-09-27-a-blocking-gate-diffing-against-moving-main-fails-on-drift-and-staging-then-merging-deadlocks.md` records a second cost of commit-gates answering branch questions — a census guard diffing the *moving* `origin/main` tip red-tagged a commit whose remedy (`git merge`) was blocked by the staged files themselves, behind ~2 h serialized lock waits. Staged scope never consults `origin/main` for selection, removing that drift class from the commit gate; the census's own tip-diff is a separate pre-existing defect, out of scope.
+- **Adjacent silent-downgrade class (out of scope, deepen):** `Can't find lefthook in PATH` exits 0 and silently skips the entire local gate set (`knowledge-base/project/learnings/2026-09-18-my-local-gate-set-shrank-silently-and-ci-caught-what-it-could-not.md`); hook-absence detection is orthogonal to scope selection and deliberately not claimed here.
 
 ## User-Brand Impact
 
@@ -231,6 +256,7 @@ Skipped — the diff touches no regulated-data surface (no schema, migration, au
 - [ ] AC8: Each new sandbox arm is mutation-checked — reverting its targeted line (the staged diff source, the flag parse, the scope conjunct) drives that arm RED. Arms are written and observed failing against the unmodified runner before the runner change lands (`cq-write-failing-tests-before`).
 - [ ] AC9: `git diff --cached` detection failure under staged scope arms `undecidable-diff` → full battery with banner (fail toward coverage).
 - [ ] AC10: No new env var is introduced for scope selection; the staged seam used by tests is `SANDBOX_*`-prefixed and documented beside the existing seams.
+- [ ] AC11: The suite pins the staged-scope invocation itself, not just its product — `diff --cached` is asserted present in the staged branch of the diff assembly, and the branch-only diff sources are asserted unreachable under staged scope.
 
 ## Test Scenarios
 
@@ -241,6 +267,7 @@ Skipped — the diff touches no regulated-data surface (no schema, migration, au
 - Given `--affected-scope=staged` under `TEST_GROUP=scripts`, when parsing completes, then exit 2 — the scope describes only the affected axis.
 - Given a branch-diff-only file (committed earlier, unstaged now), when the hook runs staged scope, then that file does not influence selection.
 - Given a rename staged via `git mv` on a declared edge path, when `--name-status -M` staged form is read, then both source and destination are matchable (rename-source parity).
+- Given the runner source, when the wiring arm runs, then the staged branch of the diff assembly invokes `diff --cached` and the branch-only sources (`origin/main...HEAD`, `HEAD` diff, untracked append) are unreachable under staged scope — the seam substitutes names, so the invocation itself is pinned separately (`2026-09-20-every-guard-pinned-the-artifact-and-none-pinned-the-wire.md`).
 - Given the lefthook stanza, when the merge-skip pin suite runs, then `skip: merge` and the new `run:` line are both asserted.
 
 ## Success Metrics
