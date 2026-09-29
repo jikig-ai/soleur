@@ -112,6 +112,7 @@ plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	7
 plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	7
 plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	2
 plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	7
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	7
 plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
 plugins/soleur/skills/linear-fetch/test/assert-no-linear-telemetry.test.sh	2

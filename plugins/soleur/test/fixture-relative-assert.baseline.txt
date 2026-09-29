@@ -187,7 +187,7 @@
 1	apps/web-platform/infra/inngest-userdata-budget.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
-2	apps/web-platform/infra/luks-monitor.test.sh
+5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
 2	apps/web-platform/infra/registry-luks.test.sh
@@ -202,6 +202,7 @@
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
 1	apps/web-platform/infra/web-git-data-probe.sh
 2	apps/web-platform/infra/web-zot-consumer-probe.sh
+6	apps/web-platform/infra/workspaces-boot-unlock.test.sh
 9	apps/web-platform/infra/workspaces-cutover.sh
 11	apps/web-platform/infra/workspaces-luks-freeze.test.sh
 1	apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh
@@ -282,8 +283,9 @@
 3	plugins/soleur/skills/constraint-scaffold/test/generator.test.sh
 1	plugins/soleur/skills/eval-harness/scripts/gen-models.sh
 2	plugins/soleur/skills/feature-video/scripts/check_deps.sh
-18	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
+20	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
 1	plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh
+1	plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh
 1	plugins/soleur/skills/incident/test/redact-sentinel.test.sh
 1	plugins/soleur/skills/kb-search/scripts/kb-search-cache.sh
 1	plugins/soleur/skills/model-launch-review/scripts/audit-models.sh

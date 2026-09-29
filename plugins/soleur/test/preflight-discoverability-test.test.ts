@@ -2767,7 +2767,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
   // the liveness_* counters ride the registry host's direct POST into the Logs warehouse, which has
   // no unauthenticated read path, and the registry host is deny-all-public. Genuine.
-  // #8562 (2026-09-28): +1 (35 -> 36, after #7262/#7270 took 34 -> 35) for `2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md`.
+  // #8562 (2026-09-28): +1 (35 -> 36, after #7262/#7270 took 34 -> 35) for `2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md` (archived under plans/archive/).
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
   // (a double-quoted scalar). TRUTH: the probe (`scripts/followthroughs/inngest-provision-unit-8562.sh`)
   // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
