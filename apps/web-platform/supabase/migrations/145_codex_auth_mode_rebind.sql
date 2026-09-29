@@ -357,7 +357,7 @@ BEGIN
     RAISE EXCEPTION 'engine run not found' USING ERRCODE = 'P0002';
   END IF;
   SELECT a.* INTO v_attempt FROM public.agent_engine_attempts AS a
-   WHERE a.id = p_attempt_id AND a.run_id = p_run_id FOR SHARE;
+   WHERE a.id = p_attempt_id AND a.run_id = p_run_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'attempt does not belong to binding' USING ERRCODE = '42501';
   END IF;
@@ -372,6 +372,21 @@ BEGIN
   INSERT INTO public.agent_engine_events(run_id, attempt_id, event_id, sequence, payload)
   VALUES (p_run_id, p_attempt_id, 'engine-event-' || v_sequence::text, v_sequence, p_payload)
   RETURNING * INTO v_row;
+  IF p_payload->>'source_type' = 'status'
+     AND p_payload->>'status' IN ('completed','failed','cancelled') THEN
+    IF v_attempt.status IN ('completed','failed','cancelled')
+       AND v_attempt.status IS DISTINCT FROM p_payload->>'status' THEN
+      RAISE EXCEPTION 'terminal engine attempt is immutable' USING ERRCODE = '23P01';
+    END IF;
+    IF v_attempt.status NOT IN ('running','waiting','cancel_requested','completed','failed','cancelled') THEN
+      RAISE EXCEPTION 'invalid terminal engine attempt transition' USING ERRCODE = '23P01';
+    END IF;
+    UPDATE public.agent_engine_attempts AS a SET
+      status = p_payload->>'status',
+      updated_at = now(),
+      terminal_at = COALESCE(a.terminal_at, now())
+      WHERE a.id = p_attempt_id;
+  END IF;
   RETURN v_row;
 END;
 $$;

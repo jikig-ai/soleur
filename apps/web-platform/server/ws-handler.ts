@@ -32,7 +32,7 @@ import {
   startAgentSession,
   sendUserMessage,
   resolveReviewGate,
-  abortSession,
+  abortSession as abortLegacySession,
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
 import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
@@ -381,6 +381,29 @@ export function forceDisconnectForTierChange(
 
 /** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
+const codexTurnAbortControllers = new Map<string, AbortController>();
+
+function codexTurnKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+/** Abort both the legacy runner session and a Codex provider turn, when present. */
+function abortSession(
+  userId: string,
+  conversationId: string,
+  reason?: Parameters<typeof abortLegacySession>[2],
+  leaderId?: string,
+): number {
+  const aborted = abortLegacySession(userId, conversationId, reason, leaderId) ?? 0;
+  const key = codexTurnKey(userId, conversationId);
+  const codexTurn = codexTurnAbortControllers.get(key);
+  if (codexTurn) {
+    codexTurn.abort(reason);
+    codexTurnAbortControllers.delete(key);
+    return aborted + 1;
+  }
+  return aborted;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1222,23 +1245,31 @@ async function dispatchCodexChatTurn(
   }
   const runtime = codexConversationRuntime(userId);
   const serviceRepository = new AgentEnginePersistenceRepository(createServiceClient() as unknown as PersistenceClient);
-  await dispatchCodexConversationToWebSocket({
-    repository: serviceRepository,
-    runtime: runtime.runtime,
-    registry: runtime.registry,
-    conversationId,
-    input: { text: content, attachmentIds: [] },
-    context: { runId, binding, idempotencyKey: clientTurnId, signal: new AbortController().signal },
-    selection: {
-      engineId: "codex", authMode: binding.authMode, operation: "existing-run",
-      workflow: "conversation", dataClass: runtime.dataClass,
-      requiredCapabilities: ["streaming"], now: Date.now(),
-    },
-    evidence: runtime.evidence,
-    leaderId: leaderId ?? "cc_router",
-    workspaceId: owned.workspace_id,
-    send: (message) => sendToClient(userId, message),
-  });
+  const key = codexTurnKey(userId, conversationId);
+  const controller = new AbortController();
+  codexTurnAbortControllers.get(key)?.abort("superseded");
+  codexTurnAbortControllers.set(key, controller);
+  try {
+    await dispatchCodexConversationToWebSocket({
+      repository: serviceRepository,
+      runtime: runtime.runtime,
+      registry: runtime.registry,
+      conversationId,
+      input: { text: content, attachmentIds: [] },
+      context: { runId, binding, idempotencyKey: clientTurnId, signal: controller.signal },
+      selection: {
+        engineId: "codex", authMode: binding.authMode, operation: "existing-run",
+        workflow: "conversation", dataClass: runtime.dataClass,
+        requiredCapabilities: ["streaming"], now: Date.now(),
+      },
+      evidence: runtime.evidence,
+      leaderId: leaderId ?? "cc_router",
+      workspaceId: owned.workspace_id,
+      send: (message) => sendToClient(userId, message),
+    });
+  } finally {
+    if (codexTurnAbortControllers.get(key) === controller) codexTurnAbortControllers.delete(key);
+  }
 }
 
 /**

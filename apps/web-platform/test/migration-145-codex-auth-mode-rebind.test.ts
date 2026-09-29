@@ -82,6 +82,15 @@ describe("migration 145: Codex auth-mode rebinding", () => {
     expect(down).toMatch(/CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*lifecycle append requires service role/);
   });
 
+  it("commits the terminal lifecycle event and attempt status in one RPC", () => {
+    const sql = read("145_codex_auth_mode_rebind.sql");
+    const lifecycle = sql.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+
+    expect(lifecycle).toMatch(/^\s*INSERT INTO public\.agent_engine_events[\s\S]*RETURNING \* INTO v_row/m);
+    expect(lifecycle).toMatch(/^\s*UPDATE public\.agent_engine_attempts AS a[\s\S]*SET status = p_payload->>'status'[\s\S]*terminal_at = COALESCE\(a\.terminal_at, now\(\)\)/m);
+    expect(lifecycle).toMatch(/p_payload->>'status' IN \('completed','failed','cancelled'\)/);
+  });
+
   it("restores the prior owner RPC and schema on rollback", () => {
     const down = read("145_codex_auth_mode_rebind.down.sql");
     expect(down).toMatch(/BEGIN;\s+SET LOCAL lock_timeout = '30s';\s+SET LOCAL statement_timeout = '5min';/);

@@ -76,7 +76,7 @@ describe("AgentEngineSettings", () => {
   it("loads the workspace default and renders future engines as unavailable", async () => {
     const { findByLabelText } = render(<AgentEngineSettings isOwner />);
     const engine = await findByLabelText("Agent engine");
-    expect(engine).toHaveValue("claude-code");
+    await waitFor(() => expect(engine).toHaveValue("claude-code"));
     expect(viewOptionDisabled(engine, "codex")).toBe(true);
   });
 

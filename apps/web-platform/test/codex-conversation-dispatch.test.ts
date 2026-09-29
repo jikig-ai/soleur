@@ -121,10 +121,29 @@ describe("Codex conversation dispatch bridge", () => {
     ]);
     await dispatchCodexConversationToWebSocket(options);
     expect(repository.transitionAttempt.mock.calls).toEqual([
-      ["synthetic-attempt", "running"], ["synthetic-attempt", status],
+      ["synthetic-attempt", "running"],
     ]);
     expect(repository.appendLifecycleEvent).toHaveBeenLastCalledWith("synthetic-run", "synthetic-attempt", { type: "status", status });
     expect(send).toHaveBeenLastCalledWith({ type: "stream_end", leaderId: "cc_router" });
+  });
+
+  it("keeps a persisted terminal outcome when sending its final frame fails", async () => {
+    const { repository, send, options } = turnFixture([
+      { type: "text", text: "Done" }, { type: "status", status: "completed" },
+    ]);
+    const persistedStatuses: string[] = [];
+    repository.appendLifecycleEvent.mockImplementation(async (_runId, _attemptId, payload) => {
+      if (payload.type === "status") persistedStatuses.push(payload.status);
+      return null;
+    });
+    send.mockImplementation((message) => {
+      if (message.type === "stream_end") throw new Error("socket send failed");
+    });
+
+    await expect(dispatchCodexConversationToWebSocket(options)).rejects.toThrow("socket send failed");
+
+    expect(persistedStatuses).toEqual(["running", "completed"]);
+    expect(repository.transitionAttempt.mock.calls).toEqual([["synthetic-attempt", "running"]]);
   });
 
   it.each<{ label: string; payloads: EngineEventPayload[] }>([

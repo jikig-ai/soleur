@@ -97,9 +97,11 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     if (terminalStatus === null) {
       throw Object.assign(new Error("Codex stream ended without a terminal status"), { code: "codex_terminal_missing" });
     }
-    if (typeof attemptId === "string") await options.repository.transitionAttempt?.(attemptId, terminalStatus);
+    // The lifecycle append RPC commits terminal event and attempt status
+    // together. Do not write a second terminal transition after the client
+    // frame is sent: socket delivery is outside the database transaction.
   } catch (error) {
-    if (typeof attemptId === "string") {
+    if (typeof attemptId === "string" && terminalStatus === null) {
       try { await options.repository.transitionAttempt?.(attemptId, "failed"); } catch { /* preserve dispatch error */ }
     }
     throw error;

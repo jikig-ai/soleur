@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import * as credentials from "@/server/codex-credential-provider";
+import * as codexRuntimeModule from "@/server/codex-conversation-runtime";
+import { createEngineRegistry } from "@/server/agent-engine-registry";
 
 const fixture = vi.hoisted(() => ({
   userId: "synthetic-codex-user",
@@ -61,6 +63,7 @@ import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler
 describe("Codex real production handler boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fixture.rpc.mockReset().mockResolvedValue({ data: null, error: null });
     vi.useFakeTimers();
     fixture.from.mockImplementation((table: string) => {
       const chain: Record<string, unknown> = {};
@@ -139,5 +142,58 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.captureException).toHaveBeenCalledWith(expect.objectContaining({
       message: "Codex conversation attachments are not qualified",
     }));
+  });
+
+  it("routes abort_turn through the real handler into the active Codex dispatch signal", async () => {
+    fixture.mode = "api-key";
+    fixture.rpc.mockImplementation(async (name: string) => name === "start_agent_engine_attempt"
+      ? { data: { id: "synthetic-codex-attempt" }, error: null }
+      : { data: null, error: null });
+    const started = vi.fn();
+    let dispatchSignal: AbortSignal | undefined;
+    const adapter = {
+      start: vi.fn(async function* (context: { signal: AbortSignal }) {
+        dispatchSignal = context.signal;
+        started();
+        await new Promise<void>((resolve) => context.signal.addEventListener("abort", () => resolve(), { once: true }));
+        yield { runId: "synthetic-codex-run", eventId: "cancelled-event", sequence: 1, payload: { type: "status", status: "cancelled" } as const };
+      }),
+    };
+    const registry = createEngineRegistry([{
+      id: "codex", version: "codex-v1", transport: "remote", enabledForNewRuns: false, enabledForExistingRuns: true,
+      authModes: ["api-key"], qualifications: [{ authMode: "api-key", adapterVersion: "codex-v1", workflow: "conversation", dataClass: "synthetic", expiresAt: Date.now() + 60_000, evidenceRef: "synthetic-handler-test", capabilities: { streaming: true } }],
+    }]);
+    vi.spyOn(codexRuntimeModule, "codexConversationRuntime").mockReturnValue({
+      runtime: {
+        userId: fixture.userId,
+        transport: {} as never,
+        apiKeyProvider: { mode: "api-key", acquire: vi.fn(), refresh: vi.fn(), logout: vi.fn() },
+        createCodex: () => adapter as never,
+      },
+      registry,
+      dataClass: "synthetic",
+      evidence: {
+        endpoint: "https://api.openai.com/v1", allowedHosts: ["api.openai.com"], acceptedDataClasses: ["synthetic"],
+        vendorDpaStatus: "verified", transferGeography: "scc", deletionSupport: "verified", approvalRequired: false,
+      },
+    });
+
+    const send = vi.fn();
+    sessions.set(fixture.userId, {
+      ws: { readyState: 1, send, close: vi.fn() },
+      conversationId: fixture.conversationId,
+      lastActivity: Date.now(), tcVersionAtHandshake: TC_VERSION,
+      tcRecheckCacheUntil: Date.now() + 1_000_000,
+    } as unknown as ClientSession);
+    const turn = handleMessage(fixture.userId, JSON.stringify({
+      type: "chat", content: "Synthetic cancellation prompt", clientTurnId: "synthetic-cancel-turn",
+    }));
+    await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
+    await handleMessage(fixture.userId, JSON.stringify({ type: "abort_turn", conversationId: fixture.conversationId }));
+    await turn;
+
+    expect(dispatchSignal?.aborted).toBe(true);
+    expect(adapter.start).toHaveBeenCalledOnce();
+    expect(fixture.spawn).not.toHaveBeenCalled();
   });
 });

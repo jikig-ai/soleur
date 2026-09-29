@@ -66,6 +66,30 @@ describe("Codex App Server lifecycle source", () => {
     ]);
   });
 
+  it("interrupts the active provider turn when its dispatch signal is aborted", async () => {
+    const events = createCodexAppServerEventBridge();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+      .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+      .mockResolvedValueOnce({});
+    const connection = {
+      client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
+      events,
+      dispose: vi.fn(async () => undefined),
+    };
+    const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
+    const controller = new AbortController();
+
+    await source.start({ ...context, signal: controller.signal }, { text: "Inspect", attachmentIds: [] }, lease);
+    controller.abort("member-stopped-turn");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+
+    expect(request.mock.calls.map(([rpcRequest]) => rpcRequest.method)).toEqual([
+      "initialize", "thread/start", "turn/start", "turn/interrupt",
+    ]);
+  });
+
   it("routes approval responses, requires a replay thread, and confirms remote erasure", async () => {
     const events = createCodexAppServerEventBridge();
     const request = vi.fn()

@@ -55,4 +55,18 @@ describe("engine observability", () => {
       failureClass: "page_invalid",
     });
   });
+
+  it("accepts cancellation-failure telemetry without provider details", () => {
+    const sink = vi.fn();
+    const observability = createEngineObservability(sink);
+    observability.emit("engine_cancel_failed", {
+      engineId: "codex",
+      failureClass: "interrupt_request_failed",
+    });
+    expect(sink).toHaveBeenCalledWith("engine_cancel_failed", {
+      engineId: "codex",
+      failureClass: "interrupt_request_failed",
+    });
+    expect(sink.mock.calls[0][1]).not.toHaveProperty("error");
+  });
 });
