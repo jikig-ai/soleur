@@ -57,8 +57,9 @@ MAX_AGE_DAYS=60
 # gate whose assertions all silently stop running prints `RESULT: 0 passed, 0 failed`
 # and exits 0 — CI green having checked NOTHING. A FLOOR, not equality: `-eq` would
 # turn every legitimately-added assertion into a spurious failure. Raise it in
-# lockstep when assertions are added; never lower it to make a red run green.
-MIN_ASSERTIONS=19
+# lockstep when assertions are added; never lower it to make a red run green. The
+# MIN_ASSERTIONS binding itself sits adjacent to the check at the bottom of the
+# file — see the note there.
 
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); echo "  PASS: $1"; }
@@ -179,7 +180,7 @@ fi
 csum_urls="$(printf '%s\n' "$cur_section" | grep -oE 'https://github\.com/inngest/inngest/releases/download/v[0-9]+\.[0-9]+\.[0-9]+/checksums\.txt' | sort -u || true)"
 n_csum="$(printf '%s\n' "$csum_urls" | grep -c . || true)"
 if [[ "$n_csum" == "1" ]]; then
-  csum_ver="$(printf '%s\n' "$csum_urls" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')"
+  csum_ver="$(printf '%s\n' "$csum_urls" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true)"
   if [[ "$csum_ver" == "$tf_ver" ]]; then
     pass "sidecar names exactly one checksums.txt and it matches the pinned version ($csum_ver)"
   else
@@ -326,7 +327,11 @@ done
 echo "RESULT: $PASS passed, $FAIL failed"
 
 # Did the assertions actually RUN? A silent drop to zero checks is a DETECTOR failure
-# (2), not a clean bill of health.
+# (2), not a clean bill of health. MIN_ASSERTIONS is RE-BOUND here, adjacent to the
+# check: scripts/guard-vacuity-floor.test.sh slices the floor plus its contiguous
+# assignment bindings into a mutant, so a threshold bound at the top of the file
+# leaves the mutant unbound and scores CONSTRUCTION instead of FIRES.
+MIN_ASSERTIONS=19
 TOTAL=$((PASS + FAIL))
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "  DETECTOR-FAILURE: only $TOTAL assertion(s) ran, expected >= $MIN_ASSERTIONS -- checks were skipped or silently removed; this run proves nothing" >&2
