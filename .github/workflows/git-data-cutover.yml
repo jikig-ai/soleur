@@ -469,7 +469,7 @@ jobs:
             name_in="$(printf "%s" "$names" | tr ' ' '\n' | sed "s/.*/'&'/" | paste -sd, -)"
             seen=0
             for i in $(seq 1 12); do
-              rows="$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+              rows="$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
                 "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND JSONExtractString(raw,'host_name') IN ($name_in) AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>/dev/null || true)"
               if printf '%s' "$rows" | grep -qF "git_data_store=${EXPECTED}"; then
                 echo "host $leg: git_data_store=${EXPECTED} observed (attempt $i)"

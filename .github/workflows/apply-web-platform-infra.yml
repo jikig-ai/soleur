@@ -3962,11 +3962,17 @@ jobs:
       # (#8211 PR2) Rotate-mode typo-guard. Only binds when apply_target is
       # git-data-host-rotate — the plain replace path keeps its current contract.
       - name: Validate dispatch inputs (rotate confirm token)
-        if: inputs.apply_target == 'git-data-host-rotate'
         env:
           CONFIRM_RAW: ${{ inputs.confirm }}
+          APPLY_TARGET: ${{ inputs.apply_target }}
         run: |
           set -euo pipefail
+          # UNCONDITIONAL by census contract (infra-privileged-tier-census G5c): a
+          # gate step may not carry if: — a skipped validation reads as a pass.
+          if [[ "$APPLY_TARGET" != "git-data-host-rotate" ]]; then
+            echo "rotate confirm: n/a (target '$APPLY_TARGET')"
+            exit 0
+          fi
           if [[ "$CONFIRM_RAW" != "ROTATE-GIT-DATA" ]]; then
             echo "::error::confirm must be exactly 'ROTATE-GIT-DATA' (got '${CONFIRM_RAW}'). This target DESTROYS the LUKS store volume and re-mints its passphrase — that is the failure this token exists to make hard to do by accident. It is NOT the authorization — the infra-privileged environment + the gate's rotate arm are."
             exit 1
@@ -4005,7 +4011,7 @@ jobs:
           # shellcheck source=scripts/lib/betterstack-sources.sh
           source scripts/lib/betterstack-sources.sh
           rows="$(BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3" \
-            doppler run -p soleur -c prd_terraform \
+            doppler run --preserve-env -p soleur -c prd_terraform \
               --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
               --no-exit-on-missing-only-secrets \
               -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
