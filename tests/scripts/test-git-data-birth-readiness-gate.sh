@@ -1306,6 +1306,32 @@ _a_inject_binding "$_a17/modules/git-data-userdata/main.tf" \
 '    a17_value = var.betterstack_logs_token'
 _a_hash "A17: a value-form map entry does not trip the canonical-shape gate" "$_a17/ci.yml"
 
+# A18 — INSTRUMENT FAILURE IS NOT A SHAPE VERDICT (#9210). The strict-shape check reads its
+# verdict from a matcher; a matcher that cannot evaluate (rc >= 2) must ABORT with
+# could-not-evaluate wording, never the shape-violation text — misattribution is this
+# incident's whole cost (a transport flake was filed as a fixture-shape defect). PATH-stub
+# `grep` that exits 2 ONLY for the shape-check pattern and passes every other call through,
+# so the function still reaches that predicate on a canonical fixture.
+_a_tree a18; _a18="$_A_TREE"
+_a18_bin="$TMP/a18-stubbin"; mkdir -p "$_a18_bin" \
+  || _a_setup_fail "could not create the A18 stub dir"
+cat > "$_a18_bin/grep" <<'SH'
+#!/usr/bin/env bash
+for _arg in "$@"; do
+  if [[ "$_arg" == 'templatefile\("\$\{path\.module\}/[^"]+"' ]]; then
+    exit 2
+  fi
+done
+exec /usr/bin/grep "$@"
+SH
+chmod +x "$_a18_bin/grep" || _a_setup_fail "could not install the A18 grep stub"
+_a18_out="$(PATH="$_a18_bin:$PATH" bash -c 'source "$1"; shift; git_data_rung2_bound_files "$@"' _ "$GATE" "$_a18/ci.yml" 2>&1)"; _a18_rc=$?
+if [[ "$_a18_rc" -ne 0 && "$_a18_out" == *"could not evaluate"* && "$_a18_out" != *"single-line"* ]]; then
+  pass "A18: a matcher that cannot evaluate (rc>=2) ABORTs as instrument failure, not a shape violation"
+else
+  fail "A18: grep rc>=2 at the shape check must ABORT as instrument failure, not a shape violation" "$_a18_rc" "$_a18_out"
+fi
+
 # MINIMUM-CARDINALITY FLOOR. This suite had none, and it now covers TWO gates: an early
 # `exit`, a helper that silently stopped being called, or a fixture-setup failure would
 # otherwise report "0 failed" — the vacuous green every guard in this file exists to reject.
@@ -2818,7 +2844,55 @@ else
   fail "W1: a workflow references the test seam — ${_w1}" "n/a" ""
 fi
 
+# W2 — NO PIPE-FED `grep -q*` PREDICATE SURVIVES IN THE LIB (#9210). `producer | grep -q`
+# under `set -o pipefail` reads transport as verdict: grep -q closes the pipe on first match,
+# the producer takes EPIPE/SIGPIPE, and pipefail promotes that to a non-zero pipeline even
+# though the pattern matched — the flake that red this suite's S1 on main. The gate's own
+# git_data_authorization_map_gate comment documents the class and the file carried four
+# unconverted sites. The sweep quantifies over the DIRECTORY GLOB so a future sibling lib is
+# covered by construction, and is comment-stripped (the N1b/W1 haystack idiom) because the
+# lib legitimately documents the banned shape in prose.
+_w2=""
+for _w2f in "${ROOT}/tests/scripts/lib"/*.sh; do
+  _w2h="$(sed 's/^[[:space:]]*#.*$//' "$_w2f" \
+          | grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' || true)"
+  if [[ -n "$_w2h" ]]; then
+    _w2+="${_w2f}:"$'\n'"${_w2h}"$'\n'
+  fi
+done
+if [[ -z "$_w2" ]]; then
+  pass "W2: zero pipe-fed \`grep -q*\` predicates under tests/scripts/lib/ — the #9210 flake class cannot drift back"
+else
+  fail "W2: pipe-fed \`grep -q*\` predicate(s) survive under tests/scripts/lib/" "n/a" "$_w2"
+fi
 
+# W2-control — THE PIN MUST BE ABLE TO RED (Guard Contract row 4: a sweep that cannot fire
+# is vacuous). A scratch copy seeded with the banned shape must flag; the two sanctioned
+# forms the pin exists to protect — `grep -q` on a FILE operand and `grep -q` on a herestring
+# — must not, and neither may the banned shape quoted inside a full-line comment.
+_w2c="$TMP/w2-control"; mkdir -p "$_w2c" || _a_setup_fail "could not create the W2-control dir"
+cat > "$_w2c/seeded.sh" <<'SH'
+#!/usr/bin/env bash
+probe() { if ! printf '%s' "$1" | grep -q 'needle'; then return 1; fi; }
+SH
+cat > "$_w2c/sanctioned.sh" <<'SH'
+#!/usr/bin/env bash
+probe() { grep -q 'needle' "$1" && grep -q 'other' <<<"$1"; }
+# The banned shape appears only inside this full-line comment: x | grep -q y — must not flag.
+SH
+_w2c_hits=""
+for _w2f in "$_w2c"/*.sh; do
+  _w2h="$(sed 's/^[[:space:]]*#.*$//' "$_w2f" \
+          | grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q' || true)"
+  if [[ -n "$_w2h" ]]; then
+    _w2c_hits+="${_w2f}:"$'\n'"${_w2h}"$'\n'
+  fi
+done
+if [[ "$_w2c_hits" == *"seeded.sh"* && "$_w2c_hits" != *"sanctioned.sh"* ]]; then
+  pass "W2-control: the pipe-fed detector flags a seeded copy and spares the file/herestring forms"
+else
+  fail "W2-control: the pipe-fed detector must flag the seeded copy and spare sanctioned forms" "n/a" "$_w2c_hits"
+fi
 
 printf '\n(#8010) M — the Guard Contract mutation matrix\n'
 
@@ -3054,7 +3128,17 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #     1  P15      mutation: neutering the replace PASS assertion releases a FAILED replace boot
 #   ----
 #    16
-_FLOOR=252
+# RAISED 252 -> 255 (#9210), ITEMISED — the pipe-fed `grep -q` pin, plus the verdict-vocabulary
+#            arm the incident existed to demand:
+#     1  A18      a matcher rc>=2 at the strict-shape check ABORTs with could-not-evaluate
+#                 wording, never the shape-violation text a transport flake was filed under
+#     1  W2       zero pipe-fed `grep -q*` predicates under tests/scripts/lib/ — the sweep
+#                 quantifies over the directory glob, so a new sibling lib is pinned by
+#                 construction; comment-stripped because the lib documents the banned shape
+#     1  W2-control  the detector flags a seeded copy and spares the file/herestring forms
+#   ----
+#     3
+_FLOOR=255
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
