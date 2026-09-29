@@ -1,4 +1,4 @@
-import type { EngineEvent } from "./agent-engine-contract";
+import type { EngineEvent, EngineEventPayload, EngineRunStatus } from "./agent-engine-contract";
 
 // Supabase PostgREST builders are thenable but are not typed as native
 // Promises. PromiseLike keeps this repository compatible with both builders
@@ -44,26 +44,36 @@ export interface BindRunInput {
   createdBy: string;
 }
 
-function lifecycleMetadata(event: EngineEvent): Record<string, string> {
-  if (event.payload.type === "status") {
+function lifecycleMetadata(payload: EngineEventPayload): Record<string, string> {
+  if (payload.type === "status") {
     return {
       type: "lifecycle",
       source_type: "status",
-      status: event.payload.status,
+      status: payload.status,
     };
   }
-  return { type: "lifecycle", source_type: event.payload.type };
+  return { type: "lifecycle", source_type: payload.type };
 }
 
 export class AgentEnginePersistenceRepository {
   constructor(private readonly client: PersistenceClient) {}
 
-  async setDefaultEngine(workspaceId: string, engineId: string, authMode?: string): Promise<unknown> {
+  async setDefaultEngine(
+    workspaceId: string,
+    engineId: string,
+    authMode?: string,
+    applyToExistingCodexConversations = false,
+    expectedAffectedConversationCount?: number,
+  ): Promise<unknown> {
     const args: Record<string, unknown> = {
       p_workspace_id: workspaceId,
       p_engine_id: engineId,
     };
     if (authMode !== undefined) args.p_auth_mode = authMode;
+    if (applyToExistingCodexConversations) {
+      args.p_apply_to_existing_codex_conversations = true;
+      args.p_expected_affected_count = expectedAffectedConversationCount;
+    }
     const result = await this.client.rpc("set_workspace_default_engine", {
       ...args,
     });
@@ -79,6 +89,24 @@ export class AgentEnginePersistenceRepository {
     return result.data;
   }
 
+  async countCodexConversationRebinds(workspaceId: string, authMode: string): Promise<number> {
+    const result = await this.client.rpc("count_codex_conversation_rebinds", {
+      p_workspace_id: workspaceId,
+      p_auth_mode: authMode,
+    });
+    if (result.error) {
+      const error = result.error as { message: string; code?: string };
+      if (error.code === "42501" || error.message.includes("requires owner")) {
+        throw Object.assign(new Error("Codex conversation count requires owner"), { code: "workspace_owner_required" });
+      }
+      throw new Error(`Codex conversation count failed: ${error.message}`);
+    }
+    if (typeof result.data !== "number" || !Number.isInteger(result.data) || result.data < 0) {
+      throw new Error("Codex conversation count returned invalid data");
+    }
+    return result.data;
+  }
+
   async getDefaultAuthMode(workspaceId: string): Promise<string | null> {
     const result = await this.client.from("workspace_engine_settings")
       .select("default_auth_mode")
@@ -87,6 +115,17 @@ export class AgentEnginePersistenceRepository {
     if (result.error) throw new Error(`workspace default auth mode lookup failed: ${result.error.message}`);
     if (!result.data || typeof result.data !== "object") return null;
     const value = (result.data as { default_auth_mode?: unknown }).default_auth_mode;
+    return typeof value === "string" ? value : null;
+  }
+
+  async getCodexAuthMode(workspaceId: string): Promise<string | null> {
+    const result = await this.client.from("workspace_engine_settings")
+      .select("codex_auth_mode")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+    if (result.error) throw new Error(`Codex auth mode lookup failed: ${result.error.message}`);
+    if (!result.data || typeof result.data !== "object") return null;
+    const value = (result.data as { codex_auth_mode?: unknown }).codex_auth_mode;
     return typeof value === "string" ? value : null;
   }
 
@@ -119,9 +158,63 @@ export class AgentEnginePersistenceRepository {
       p_run_id: event.runId,
       p_event_id: `engine-event-${event.sequence}`,
       p_sequence: event.sequence,
-      p_payload: lifecycleMetadata(event),
+      p_payload: lifecycleMetadata(event.payload),
     });
     if (result.error) throw new Error(`engine event append failed: ${result.error.message}`);
+    return result.data;
+  }
+
+  async startAttempt(runId: string, attemptKey: string): Promise<unknown> {
+    const result = await this.client.rpc("start_agent_engine_attempt", {
+      p_run_id: runId, p_attempt_key: attemptKey,
+    });
+    if (result.error) throw new Error(`engine attempt start failed: ${result.error.message}`);
+    return result.data;
+  }
+
+  async transitionAttempt(attemptId: string, status: EngineRunStatus): Promise<unknown> {
+    const result = await this.client.rpc("transition_agent_engine_attempt", {
+      p_attempt_id: attemptId, p_status: status,
+    });
+    if (result.error) throw new Error(`engine attempt transition failed: ${result.error.message}`);
+    return result.data;
+  }
+
+  async assertAttemptGeneration(attemptId: string): Promise<unknown> {
+    const result = await this.client.rpc("assert_agent_engine_attempt_generation", {
+      p_attempt_id: attemptId,
+    });
+    if (result.error) throw new Error(`engine attempt generation check failed: ${result.error.message}`);
+    return result.data;
+  }
+
+  async appendLifecycleEvent(runId: string, attemptId: string, payload: EngineEventPayload): Promise<unknown> {
+    // Deltas, progress, artifacts, and usage belong to their own output or
+    // protected recovery paths; the member ledger records transitions only.
+    if (payload.type === "text" || payload.type === "progress"
+      || payload.type === "artifact" || payload.type === "usage") return null;
+    const result = await this.client.rpc("append_agent_engine_lifecycle_event", {
+      p_run_id: runId, p_attempt_id: attemptId, p_payload: lifecycleMetadata(payload),
+    });
+    if (result.error) throw new Error(`engine lifecycle event append failed: ${result.error.message}`);
+    return result.data;
+  }
+
+  async saveRecoveryCheckpoint(
+    runId: string,
+    attemptId: string,
+    checkpoint: Record<string, unknown>,
+  ): Promise<unknown> {
+    const result = await this.client.rpc("save_agent_engine_recovery_checkpoint", {
+      p_run_id: runId, p_attempt_id: attemptId, p_checkpoint: checkpoint,
+    });
+    if (result.error) throw new Error(`engine recovery checkpoint save failed: ${result.error.message}`);
+    return result.data;
+  }
+
+  async getRecoveryCheckpoint(runId: string): Promise<unknown> {
+    const result = await this.client.rpc("get_agent_engine_recovery_checkpoint", { p_run_id: runId });
+    if (result.error) throw new Error(`engine recovery checkpoint lookup failed: ${result.error.message}`);
     return result.data;
   }
 

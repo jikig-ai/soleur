@@ -53,6 +53,7 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   claim_repo_clone_lock: (c) => `select claim_repo_clone_lock('${c.wsA}')`,
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
   is_workspace_owner: (c) => `select is_workspace_owner('${c.wsA}', auth.uid())`,
+  count_codex_conversation_rebinds: (c) => `select count_codex_conversation_rebinds('${c.wsA}','api-key')`,
   set_workspace_default_engine: (c) => `select set_workspace_default_engine('${c.wsA}','claude-code','managed')`,
   bind_agent_engine_run: (c) =>
     `select bind_agent_engine_run('${c.wsA}','conversation','${c.convA}',NULL,NULL,'${c.userB}')`,

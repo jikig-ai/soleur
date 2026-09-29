@@ -6,14 +6,15 @@ const mockInsert = vi.fn().mockResolvedValue({ error: null });
 const mockUpdateEq = vi.fn().mockResolvedValue({ error: null });
 const mockUpdate = vi.fn().mockReturnValue({ eq: mockUpdateEq });
 const mockSelectSingle = vi.fn().mockResolvedValue({
-  data: { id: "conv-1", status: "active" },
+  data: { id: "conv-1", status: "active", workspace_id: "ws-mock-workspace-1", repo_url: "https://github.com/acme/repo" },
   error: null,
 });
 // Lazy-evaluated `users.repo_url` lets individual tests simulate a
 // disconnected user (repo_url=null) to exercise the abort path.
 let mockUserRepoUrl: string | null = "https://github.com/acme/repo";
 
-const { mockRpc } = vi.hoisted(() => ({
+const { mockRpc, mockEngine } = vi.hoisted(() => ({
+  mockEngine: { id: "claude-code" },
   mockRpc: vi.fn((name: string, args?: Record<string, unknown>) => Promise.resolve(
     name === "bind_agent_engine_run"
       ? {
@@ -21,7 +22,7 @@ const { mockRpc } = vi.hoisted(() => ({
             binding: {
               workspaceId: String(args?.p_workspace_id ?? "ws-mock-workspace-1"),
               execution: { kind: "conversation", conversationId: String(args?.p_conversation_id ?? "conv-1") },
-              engineId: "claude-code",
+              engineId: mockEngine.id,
               authMode: "managed",
               adapterVersion: "claude-code-v1",
               boundAt: new Date().toISOString(),
@@ -29,6 +30,8 @@ const { mockRpc } = vi.hoisted(() => ({
           },
           error: null,
         }
+      : name === "start_agent_engine_attempt"
+        ? { data: { id: "attempt-1" }, error: null }
       : {
           data: [{ status: "ok", active_count: 1, effective_cap: 2 }],
           error: null,
@@ -75,6 +78,26 @@ vi.mock("@/lib/supabase/service", () => ({
           // branch override .single via mockReturnValueOnce.
           single: vi.fn(async () => ({
             data: { tc_accepted_version: "1.0.0", repo_url: mockUserRepoUrl },
+            error: null,
+          })),
+        };
+        return chain;
+      }
+      if (table === "agent_engine_runs") {
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn(async () => ({
+            data: {
+              id: "run-codex-1",
+              workspace_id: "ws-mock-workspace-1",
+              execution_kind: "conversation",
+              conversation_id: String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
+              engine_id: mockEngine.id,
+              auth_mode: "api-key",
+              adapter_version: mockEngine.id === "codex" ? "codex-v1" : "claude-code-v1",
+              created_at: new Date().toISOString(),
+            },
             error: null,
           })),
         };
@@ -142,6 +165,26 @@ vi.mock("@/lib/supabase/tenant", () => ({
         };
         return chain;
       }
+      if (table === "agent_engine_runs") {
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn(async () => ({
+            data: {
+              id: "run-codex-1",
+              workspace_id: "ws-mock-workspace-1",
+              execution_kind: "conversation",
+              conversation_id: String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
+              engine_id: mockEngine.id,
+              auth_mode: "api-key",
+              adapter_version: mockEngine.id === "codex" ? "codex-v1" : "claude-code-v1",
+              created_at: new Date().toISOString(),
+            },
+            error: null,
+          })),
+        };
+        return chain;
+      }
       const convChain: Record<string, unknown> = {
         insert: mockInsert,
         update: mockUpdate,
@@ -157,7 +200,7 @@ vi.mock("@/lib/supabase/tenant", () => ({
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
 
-vi.mock("./agent-runner", () => ({
+vi.mock("@/server/agent-runner", () => ({
   startAgentSession: vi.fn().mockResolvedValue(undefined),
   sendUserMessage: vi.fn().mockResolvedValue(undefined),
   resolveReviewGate: vi.fn().mockResolvedValue(undefined),
@@ -166,6 +209,33 @@ vi.mock("./agent-runner", () => ({
 
 vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
+}));
+
+vi.mock("@/server/codex-conversation-runtime", () => ({
+  codexConversationRuntime: (userId: string) => ({
+    dataClass: "synthetic",
+    runtime: {
+      userId,
+      transport: {},
+      apiKeyProvider: { mode: "api-key", acquire: vi.fn(), refresh: vi.fn(), logout: vi.fn() },
+      createCodex: () => ({
+        start: async function* (context: { runId: string }) {
+          yield { runId: context.runId, eventId: "e-1", sequence: 1, payload: { type: "status", status: "running" } };
+          yield { runId: context.runId, eventId: "e-2", sequence: 2, payload: { type: "text", text: "Synthetic answer" } };
+          yield { runId: context.runId, eventId: "e-3", sequence: 3, payload: { type: "status", status: "completed" } };
+        },
+      }),
+    },
+    registry: {
+      get: () => ({ id: "codex", enabledForExistingRuns: true }),
+      resolve: () => ({ id: "codex", enabledForExistingRuns: true }),
+    },
+    evidence: {
+      endpoint: "https://api.openai.com/v1", allowedHosts: ["api.openai.com"],
+      acceptedDataClasses: ["synthetic"], vendorDpaStatus: "verified",
+      transferGeography: "scc", deletionSupport: "verified", approvalRequired: false,
+    },
+  }),
 }));
 
 vi.mock("./error-sanitizer", () => ({
@@ -227,6 +297,14 @@ describe("deferred conversation creation", () => {
     vi.clearAllMocks();
     sessions.clear();
     mockUserRepoUrl = "https://github.com/acme/repo";
+    mockEngine.id = "claude-code";
+    mockSelectSingle.mockImplementation(async () => ({
+      data: {
+        id: String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
+        status: "active", workspace_id: "ws-mock-workspace-1", repo_url: mockUserRepoUrl,
+      },
+      error: null,
+    }));
   });
 
   it("start_session does not insert a conversation row", async () => {
@@ -268,6 +346,50 @@ describe("deferred conversation creation", () => {
     // Session should transition from pending to active
     expect(session.conversationId).toBe(started.conversationId);
     expect(session.pending?.id).toBeUndefined();
+  });
+
+  it("routes a Codex-bound first turn without invoking the Claude runner", async () => {
+    mockEngine.id = "codex";
+    const clientTurnId = "c5aefeb4-6362-448c-90eb-7989df852f1a";
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage("user-1", JSON.stringify({ type: "start_session" }));
+    await handleMessage("user-1", JSON.stringify({ type: "chat", content: "Synthetic first turn", clientTurnId }));
+
+    expect(session.conversationId).toBeTruthy();
+    expect(sent.filter((message: any) => message.type === "error")).toEqual([]);
+    expect((await import("@/server/agent-runner")).sendUserMessage).not.toHaveBeenCalled();
+    expect(mockRpc).toHaveBeenCalledWith("append_agent_engine_lifecycle_event", expect.objectContaining({
+      p_run_id: expect.any(String),
+    }));
+    expect(mockRpc).toHaveBeenCalledWith("start_agent_engine_attempt", expect.objectContaining({
+      p_attempt_key: clientTurnId,
+    }));
+    expect(sent.some((message: any) => message.type === "stream")).toBe(true);
+  });
+
+  it("routes a Codex-bound continuation without invoking the Claude runner", async () => {
+    mockEngine.id = "codex";
+    const clientTurnId = "18b2fe21-52aa-4fd3-96ba-7f17b3fc195e";
+    const { session, sent } = createMockSession();
+    session.conversationId = "conv-1";
+    session.routing = { kind: "legacy" };
+    session.contextPath = null;
+    session.sessionId = null;
+    sessions.set("user-1", session);
+
+    await handleMessage("user-1", JSON.stringify({ type: "chat", content: "Synthetic second turn", clientTurnId }));
+
+    expect(sent.filter((message: any) => message.type === "error")).toEqual([]);
+    expect((await import("@/server/agent-runner")).sendUserMessage).not.toHaveBeenCalled();
+    expect(mockRpc).toHaveBeenCalledWith("append_agent_engine_lifecycle_event", expect.objectContaining({
+      p_run_id: "run-codex-1",
+    }));
+    expect(mockRpc).toHaveBeenCalledWith("start_agent_engine_attempt", expect.objectContaining({
+      p_attempt_key: clientTurnId,
+    }));
+    expect(sent.some((message: any) => message.type === "stream")).toBe(true);
   });
 
   it("chat with only @-mention does not create conversation", async () => {

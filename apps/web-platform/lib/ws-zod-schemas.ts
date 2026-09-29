@@ -210,6 +210,7 @@ const chatSchema = z.strictObject({
   type: z.literal("chat"),
   content: z.string(),
   attachments: z.array(attachmentRefSchema).optional(),
+  clientTurnId: z.string().uuid().optional(),
 });
 const startSessionSchema = z.strictObject({
   type: z.literal("start_session"),

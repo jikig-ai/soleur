@@ -286,7 +286,7 @@ export type MessageState = "thinking" | "tool_use" | "streaming" | "done" | "err
 export type WSMessage =
   | { type: "auth"; token: string }
   | { type: "auth_ok" }
-  | { type: "chat"; content: string; attachments?: AttachmentRef[] }
+  | { type: "chat"; content: string; attachments?: AttachmentRef[]; clientTurnId?: string }
   | { type: "start_session"; leaderId?: DomainLeaderId; context?: ConversationContext; resumeByContextPath?: string }
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }

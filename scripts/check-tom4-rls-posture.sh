@@ -198,6 +198,7 @@ if not effective_drops:
 SHAPE_IV = {  # TOM 4 shape (iv): RLS enabled, ZERO policies, Customer Data
     "tc_acceptances", "workspace_member_actions", "dsar_export_audit_pii",
     "tenant_deploy_audit", "denied_jti", "mint_rate_window", "runtime_mint_intent",
+    "agent_engine_attempts", "agent_engine_recovery_checkpoints",
     "pending_checkout_sessions",  # user-keyed checkout claim marker (migration 144)
 }
 # Zero-policy tables that hold no Customer Data. Assertion 4 requires every
@@ -396,11 +397,76 @@ check("17", len(worm_fns) == 20 and len(worm_tables) == 19 and named_in_tom7 <= 
       "corpus has %d functions over %d ledgers; TOM 7 names these that do not "
       "exist: %s" % (len(worm_fns), len(worm_tables), sorted(named_in_tom7 - worm_fns)))
 
+# Replay live trigger attachments as well as function definitions. A function
+# definition alone proves no table is protected: a later DROP TRIGGER can leave
+# the function and this count unchanged. Trigger state is keyed by table/name,
+# matching PostgreSQL's trigger namespace, and replayed in migration statement
+# order so a later DROP or replacement changes the result.
+worm_suffix = re.compile(r'_(?:no_mutate|no_update|no_delete)$', re.I)
+create_trigger = re.compile(
+    r'^\s*CREATE\s+TRIGGER\s+([a-z_][a-z0-9_]*)\s+(.+)$', re.I | re.S)
+drop_trigger = re.compile(
+    r'^\s*DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s+'
+    r'ON\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*$', re.I | re.S)
+live_worm_triggers = {}
+for migration in MIGRATIONS:
+    body = BODY[migration]
+    trigger_events = []
+    for statement in re.finditer(r'[^;]*;', body):
+        statement_body = statement.group(0)[:-1]
+        create_match = create_trigger.match(statement_body)
+        drop_match = drop_trigger.match(statement_body)
+        if create_match:
+            trigger_body = create_match.group(2)
+            table_match = re.search(r'\bON\s+(?:public\.)?([a-z_][a-z0-9_]*)\b', trigger_body, re.I)
+            function_match = re.search(
+                r'\bEXECUTE\s+FUNCTION\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(',
+                trigger_body, re.I)
+            if table_match and function_match:
+                trigger_events.append((statement.start(), 'create', create_match.group(1),
+                                       table_match.group(1), function_match.group(1)))
+        elif drop_match:
+            trigger_events.append((statement.start(), 'drop', drop_match.group(1),
+                                   drop_match.group(2), None))
+    for _, kind, name, table, function in sorted(trigger_events):
+        key = (table.lower(), name.lower())
+        if kind == 'drop':
+            live_worm_triggers.pop(key, None)
+        elif worm_suffix.search(function):
+            live_worm_triggers[key] = (table.lower(), function.lower())
+        else:
+            live_worm_triggers.pop(key, None)
+
+attached_worm_fns = {function for _, function in live_worm_triggers.values()}
+wrong_worm_attachments = sorted(
+    (table, function) for table, function in live_worm_triggers.values()
+    if re.sub(r'_(?:no_mutate|no_update|no_delete)$', '', function) != table)
+missing_worm_attachments = sorted(worm_fns - attached_worm_fns)
+unexpected_worm_attachments = sorted(attached_worm_fns - worm_fns)
+worm_exclusions = {"agent_engine_attempts", "agent_engine_recovery_checkpoints",
+                   "pending_checkout_sessions"}
+excluded_worm_attachments = sorted(
+    (table, function) for table, function in live_worm_triggers.values()
+    if table in worm_exclusions)
+check("24", attached_worm_fns == worm_fns and not wrong_worm_attachments
+      and not excluded_worm_attachments,
+      "every defined WORM function is attached to its matching live ledger trigger",
+      "missing functions: %s; unexpected attachments: %s; mismatched table/function pairs: %s; "
+      "excluded tables with WORM attachments: %s"
+      % (missing_worm_attachments, unexpected_worm_attachments, wrong_worm_attachments,
+         excluded_worm_attachments))
+
+check("18", all(table in dpa_text for table in worm_exclusions)
+      and "outside that WORM set" in dpa_text,
+      "TOM 7 identifies mutable TOM 4 tables outside WORM coverage",
+      "name agent_engine_attempts, agent_engine_recovery_checkpoints, and "
+      "pending_checkout_sessions as outside the WORM set")
+
 # ================================================================= CITATIONS
 cited_migrations = set(re.findall(r'`(\d{3}_[a-z0-9_]+)`', dpa_text))
 on_disk = {os.path.basename(m)[:-4] for m in MIGRATIONS}
 missing18 = sorted(c for c in cited_migrations if c not in on_disk)
-check("18", not missing18,
+check("19", not missing18,
       "every migration filename cited in the DPA template exists on disk",
       "cited but absent: %s" % missing18)
 
@@ -442,14 +508,14 @@ for path in (DPA, REGISTER, DPD, DPD_MIR):
             if EXEMPT.search(window):
                 continue
             bad19.append("%s:%d: %s" % (path, n, mo.group(0)))
-check("19", not bad19,
+check("20", not bad19,
       "no unscoped RLS universal ('every/all/each ... table') in the four legal documents",
       "unscoped universals: %s — scope each to what the migration corpus "
       "creates, or state the shape" % bad19)
 
 # =========== 20. THE REPLAY CARRIES PREDICATES, NOT JUST NAMES (structural)
 carried = sum(1 for t in live for p in live[t] if live[t][p])
-check("20", carried == sum(len(v) for v in live.values()) and carried > 0,
+check("21", carried == sum(len(v) for v in live.values()) and carried > 0,
       "the net-of-drops replay retained a predicate for every live policy (%d)" % carried,
       "some live policies carry no predicate text — assertion 22 cannot run, and "
       "a re-predicate under an unchanged name would pass unnoticed")
@@ -475,7 +541,7 @@ for g in LEGAL_GLOBS:
                              r'no longer|prior text|previously|withdrawn)\b', line, re.I):
                     continue
                 bad21.append("%s:%d: %s" % (path, n, name))
-check("21", not bad21,
+check("22", not bad21,
       "every policy name cited in the legal corpus is live, or is framed as dropped",
       "stale policy citations: %s — a legal document naming a policy the schema "
       "does not carry is the defect this gate exists to stop" % bad21)
@@ -496,7 +562,7 @@ for key, tabs in SHAPES.items():
         if not any(key in p for p in preds.values()):
             bad22.append("%s: live predicate does not mention %s (%s)"
                          % (t, key, sorted(preds)))
-check("22", not bad22,
+check("23", not bad22,
       "every table/predicate pair TOM 4 asserts matches the live predicate text",
       "mismatches: %s — a name may not stay in the instrument once its "
       "predicate has moved" % bad22)
@@ -505,7 +571,7 @@ check("22", not bad22,
 # The floor and the verdict are emitted with sys.stdout.write + an explicit exit
 # code, never through check() — a helper must not be the thing that reports
 # whether the helper ran (ADR-193).
-FLOOR = 22
+FLOOR = 23
 if ASSERTED < FLOOR:
     sys.stderr.write("INSTRUMENT: only %d of %d assertions executed. A partial "
                      "run is not a pass.\n" % (ASSERTED, FLOOR))

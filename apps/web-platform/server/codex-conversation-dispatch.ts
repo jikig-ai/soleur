@@ -1,14 +1,20 @@
 import type { WSMessage } from "@/lib/types";
-import type { EngineInput, EngineRunContext, EngineSelection } from "./agent-engine-contract";
+import type { EngineEvent, EngineInput, EngineRunContext, EngineSelection } from "./agent-engine-contract";
 import { dispatchConversationEngineRun } from "./agent-engine-dispatch";
 import type { ReviewedEngineRegistry } from "./agent-engine-adapter-factory";
 import { createCodexWebEngineFactoriesForBinding, type CodexWebRuntimeOptions } from "./codex-web-runtime";
 import { mapCodexEngineEventToWsMessage } from "./codex-ws-events";
+import { reviewedEngineRegistry } from "./agent-engine-reviewed-definitions";
+import { authorizeEngineDataEgress } from "./agent-engine-data-egress-policy";
 
 interface ConversationBindingRepository {
   getConversationRun(conversationId: string): Promise<unknown>;
   getRun(runId: string): Promise<unknown>;
   appendEvent?(event: unknown): Promise<unknown>;
+  startAttempt?(runId: string, attemptKey: string): Promise<unknown>;
+  assertAttemptGeneration(attemptId: string): Promise<unknown>;
+  transitionAttempt?(attemptId: string, status: "running" | "completed" | "failed" | "cancelled"): Promise<unknown>;
+  appendLifecycleEvent?(runId: string, attemptId: string, payload: EngineEvent["payload"]): Promise<unknown>;
 }
 
 export interface CodexConversationDispatchOptions {
@@ -34,11 +40,38 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
   if (!binding || binding.engineId !== "codex" || typeof binding.authMode !== "string") {
     throw Object.assign(new Error("persisted conversation is not Codex-bound"), { code: "codex_binding_mismatch" });
   }
+  // The production catalog is default-off. Qualification and transfer evidence
+  // must be checked before service-role attempt writes or provider invocation.
+  const registry = options.registry ?? reviewedEngineRegistry;
+  if (!registry.resolve) throw new Error("engine_qualification_unavailable");
+  if (options.selection.engineId !== binding.engineId || options.selection.authMode !== binding.authMode) {
+    throw new Error("Codex dispatch selection does not match persisted binding");
+  }
+  registry.resolve(options.selection);
+  authorizeEngineDataEgress(options.selection, options.evidence);
   const factories = createCodexWebEngineFactoriesForBinding({ ...options.runtime, binding: { engineId: "codex", authMode: binding.authMode } });
   if (!factories.codex) {
     throw Object.assign(new Error("Codex adapter factory is unavailable"), { code: "codex_adapter_unavailable" });
   }
-  for await (const event of dispatchConversationEngineRun({
+  const runId = (persisted as { id?: unknown }).id;
+  if (typeof runId !== "string" || !runId) throw new Error("persisted Codex run id is missing");
+  const attempt = options.repository.startAttempt
+    ? await options.repository.startAttempt(runId, options.context.idempotencyKey)
+    : null;
+  const attemptId = attempt && typeof attempt === "object" && "id" in attempt
+    ? (attempt as { id: unknown }).id : null;
+  if (options.repository.startAttempt && typeof attemptId !== "string") {
+    throw new Error("Codex attempt start returned no id");
+  }
+  try {
+    let terminalStatus: "completed" | "failed" | "cancelled" | null = null;
+    if (typeof attemptId === "string") {
+      // This RPC is the request's acceptance boundary. A settings switch that
+      // committed after the attempt was created makes it stale before transport.
+      await options.repository.assertAttemptGeneration(attemptId);
+      await options.repository.transitionAttempt?.(attemptId, "running");
+    }
+    for await (const event of dispatchConversationEngineRun({
     repository: options.repository,
     factories: { codex: factories.codex },
     conversationId: options.conversationId,
@@ -46,12 +79,28 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     context: options.context,
     registry: options.registry,
     egress: { selection: options.selection, evidence: options.evidence },
-    eventSink: options.repository.appendEvent ? { appendEvent: options.repository.appendEvent.bind(options.repository) } : undefined,
-  })) {
-    options.send(mapCodexEngineEventToWsMessage(event, {
-      leaderId: options.leaderId,
-      conversationId: options.conversationId,
-      workspaceId: options.workspaceId,
-    }));
+      eventSink: typeof attemptId === "string" && options.repository.appendLifecycleEvent
+        ? { appendEvent: (event) => options.repository.appendLifecycleEvent!(runId, attemptId, event.payload) }
+        : options.repository.appendEvent ? { appendEvent: options.repository.appendEvent.bind(options.repository) } : undefined,
+    })) {
+      if (event.payload.type === "status"
+        && (event.payload.status === "completed" || event.payload.status === "failed" || event.payload.status === "cancelled")) {
+        terminalStatus = event.payload.status;
+      }
+      options.send(mapCodexEngineEventToWsMessage(event, {
+        leaderId: options.leaderId,
+        conversationId: options.conversationId,
+        workspaceId: options.workspaceId,
+      }));
+    }
+    if (terminalStatus === null) {
+      throw Object.assign(new Error("Codex stream ended without a terminal status"), { code: "codex_terminal_missing" });
+    }
+    if (typeof attemptId === "string") await options.repository.transitionAttempt?.(attemptId, terminalStatus);
+  } catch (error) {
+    if (typeof attemptId === "string") {
+      try { await options.repository.transitionAttempt?.(attemptId, "failed"); } catch { /* preserve dispatch error */ }
+    }
+    throw error;
   }
 }

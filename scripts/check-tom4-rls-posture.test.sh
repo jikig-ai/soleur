@@ -6,7 +6,7 @@
 #
 # The battery is MUTATION-BASED because that is the only thing that answers the
 # question this gate exists to answer. A guard that has never been driven red is
-# vacuous: 22 assertions passing tells you nothing about whether any of them can
+# vacuous: 23 assertions passing tells you nothing about whether any of them can
 # fail. MB-1..MB-10 each reintroduce one real historical defect (or one that
 # would matter) and require the gate to red on the NAMED assertion, not merely
 # to exit non-zero — a mutation that trips a different assertion has not proven
@@ -95,28 +95,28 @@ run_case() {
 
 # ---------------------------------------------------------------- MB-0: clean
 mb0() { :; }
-run_case "MB-0  unmutated tree passes 22/22" 0 - mb0
+run_case "MB-0  unmutated tree passes 23/23" 0 - mb0
 
 # ------------------------------------ MB-1: the §9 universal, as it shipped
 mb1() {
   perl -0pi -e 's/Row Level Security is enabled on every table the Web Platform.s migration corpus creates in the `public` schema/Per-tenant Row Level Security (RLS) on every database table holding Customer Data/' \
     "$1/knowledge-base/legal/data-processing-agreement-template.md"
 }
-run_case "MB-1  §9 retracted universal restored -> A19" 1 19 mb1
+run_case "MB-1  §9 retracted universal restored -> A20" 1 20 mb1
 
 # ------------------------- MB-2: the register's third phrasing, as it shipped
 mb2() {
   perl -0pi -e 's/Supabase Row-Level Security is enabled on every table the migration corpus creates in the `public` schema/Supabase Row-Level Security on every multi-tenant table; per-`user_id` isolation/' \
     "$1/knowledge-base/legal/article-30-register.md"
 }
-run_case "MB-2  register cross-cutting universal restored -> A19" 1 19 mb2
+run_case "MB-2  register cross-cutting universal restored -> A20" 1 20 mb2
 
 # ---------------------- MB-3: a policy name cited with no dropped-framing
 mb3() {
   printf '\nThe live policy is `scope_grants_owner_select`.\n' \
     >> "$1/knowledge-base/legal/article-30-register.md"
 }
-run_case "MB-3  stale policy citation -> A21" 1 21 mb3
+run_case "MB-3  stale policy citation -> A22" 1 22 mb3
 
 # ------------------------------- MB-4: a shape-(iv) table gains a policy
 mb4() {
@@ -175,6 +175,14 @@ mb10() {
 }
 run_case "MB-10 FORCE-in-a-string-literal does NOT red A2" 0 - mb10
 
+# -- MB-14: a function definition alone does not prove an attached trigger is
+#    live. Dropping the flag_flip_audit attachment leaves the function defined.
+mb14() {
+  printf '\nDROP TRIGGER IF EXISTS trg_flag_flip_audit_no_delete ON public.flag_flip_audit;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-14 WORM trigger attachment dropped while function remains -> A24" 1 24 mb14
+
 # -- MB-11: the gate's own self-test must fire when the replay stops applying
 #    drops. Without this, net-of-drops is vacuous and every predicate the gate
 #    reports may be a superseded one — the exact failure that shipped twice.
@@ -193,6 +201,13 @@ run_neutered_replay() {
 }
 run_neutered_replay
 
+# -- MB-13: new TOM 4 lifecycle tables must remain explicit TOM 7 exclusions.
+mb13() {
+  perl -0pi -e 's/The TOM 4 tables `agent_engine_attempts`.*?daily 24-hour sweep\. //' \
+    "$1/knowledge-base/legal/data-processing-agreement-template.md"
+}
+run_case "MB-13 mutable engine tables remain excluded from TOM 7 WORM claims" 1 18 mb13
+
 # -- MB-12: exit 2 is NOT a pass. A caller that treats non-1 as success would
 #    read a self-test failure as a green gate; assert the two are distinguishable.
 if [[ 2 -ne 0 ]]; then pass "MB-12 exit 2 (no verdict) is distinct from exit 0 (pass)"; else fail "MB-12"; fi
@@ -200,7 +215,7 @@ if [[ 2 -ne 0 ]]; then pass "MB-12 exit 2 (no verdict) is distinct from exit 0 (
 # ------------------------------------------------------------------ verdict
 # Floor and summary emit with printf + an explicit exit, never through the
 # pass()/fail() helpers they backstop (ADR-193).
-FLOOR=13
+FLOOR=15
 TOTAL=$((PASSED + FAILED))
 if [[ $TOTAL -lt $FLOOR ]]; then
   printf 'ASSERTION FLOOR: only %d of %d cases executed. A partial run is not a pass.\n' "$TOTAL" "$FLOOR" >&2

@@ -138,6 +138,56 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     expect(uncovered, `anon-EXECUTE definer fns with no classification: ${uncovered.join(", ")}`).toEqual([]);
   });
 
+  test("an accepted Codex attempt finishes after a mode switch while stale retries and checkpoints fail", async () => {
+    await rolledBackRaw(sql, async (t) => {
+      await t.unsafe("set local role service_role");
+      await t.unsafe("select set_config('request.jwt.claims', $1, true)", ['{"role":"service_role"}']);
+      await t.unsafe("update public.agent_engine_runs set engine_id = 'codex' where id = $1", [ctx.engineRunA]);
+
+      const [accepted] = await t.unsafe("select (public.start_agent_engine_attempt($1, $2)).id as id", [ctx.engineRunA, "accepted-mode-switch"]);
+      const [stale] = await t.unsafe("select (public.start_agent_engine_attempt($1, $2)).id as id", [ctx.engineRunA, "stale-mode-switch"]);
+      await t.unsafe("select public.assert_agent_engine_attempt_generation($1)", [accepted.id]);
+      const [admission] = await t.unsafe("select accepted_at from public.agent_engine_attempts where id = $1", [accepted.id]);
+      expect(admission.accepted_at).not.toBeNull();
+
+      // This generation increment is the database effect of the owner mode switch.
+      await t.unsafe("update public.agent_engine_runs set auth_mode = 'api-key', auth_mode_generation = auth_mode_generation + 1 where id = $1", [ctx.engineRunA]);
+      await t.unsafe("select (public.transition_agent_engine_attempt($1, 'running')).status", [accepted.id]);
+      await t.unsafe("select (public.transition_agent_engine_attempt($1, 'completed')).status", [accepted.id]);
+      await t.unsafe("select (public.append_agent_engine_lifecycle_event($1, $2, $3::jsonb)).attempt_id", [
+        ctx.engineRunA,
+        accepted.id,
+        t.json({ type: "lifecycle", source_type: "status", status: "completed" }),
+      ]);
+
+      const expectStale = async (query: string, values: (string | ReturnType<typeof t.json>)[]) => {
+        await t.unsafe("SAVEPOINT stale_mode_write");
+        let code: string | undefined;
+        try {
+          await t.unsafe(query, values);
+        } catch (error) {
+          code = (error as { code?: string }).code;
+          await t.unsafe("ROLLBACK TO SAVEPOINT stale_mode_write");
+        }
+        await t.unsafe("RELEASE SAVEPOINT stale_mode_write");
+        expect(code).toBe("55000");
+      };
+
+      await expectStale("select public.assert_agent_engine_attempt_generation($1)", [accepted.id]);
+      await expectStale("select public.save_agent_engine_recovery_checkpoint($1, $2, $3::jsonb)", [
+        ctx.engineRunA,
+        accepted.id,
+        t.json({ threadId: "synthetic-thread" }),
+      ]);
+      await expectStale("select (public.transition_agent_engine_attempt($1, 'running')).status", [stale.id]);
+      await expectStale("select (public.append_agent_engine_lifecycle_event($1, $2, $3::jsonb)).attempt_id", [
+        ctx.engineRunA,
+        stale.id,
+        t.json({ type: "lifecycle", source_type: "status", status: "running" }),
+      ]);
+    });
+  });
+
   // AC8 attack cases — each must DENY tenant-B.
   for (const name of Object.keys(ATTACK_SQL)) {
     test(`RPC denial: ${name}`, async () => {

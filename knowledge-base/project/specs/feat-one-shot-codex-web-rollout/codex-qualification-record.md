@@ -24,13 +24,64 @@ The archived 2026-09-14 record contains deterministic fixtures, not live provide
 - PR #8910 merged on 2026-09-26 as `5343659fa71d51b06b93c01b090ad6d9356c373d`. Main CI [36246159162](https://github.com/jikig-ai/soleur/actions/runs/36246159162), release build [36246159326](https://github.com/jikig-ai/soleur/actions/runs/36246159326), and the workflow-run migration and deploy [36246899916](https://github.com/jikig-ai/soleur/actions/runs/36246899916) succeeded. The deployed `/health` endpoint returned HTTP 200 with build `0224ac6b8ee843da75b19dc1abc60a3548130281`, `supabase: connected`, and `sentry: configured`; that build contains the merge. `/login` returned HTTP 200. A read-only production aggregate after migration 142 found one `bound` and 179 `legacy` conversations, with zero persisted conversation runs attached to a nonbound conversation. No conversation content was queried. The deploy's live-verify harness was skipped by its changed-file gate, so these checks establish the binding repair and app liveness, not authenticated Codex Web execution.
 - On 2026-09-26, Flagsmith feature `259236` (`codex-engine`) remained default false with no dev or production cohort segments. Source inspection of the deployed lineage found the Codex dispatch seams, but `ws-handler.ts` and `routines/run-routine.ts` still assert a Claude-only legacy binding on their real execution paths. Neither mode can be qualified through those paths yet. No flag change or provider request was made.
 
+## 2026-09-27 authorized test workspace check
+
+The operator identified the existing **Soleur Workspace** and its owner as
+the authorized synthetic test workspace. A read-only production lookup
+verified that owner relationship and found no valid OpenAI API-key credential
+for the owner. No credential value was read or recorded. The owner email is
+omitted from this public repository. No provider request or flag mutation was
+made. This authorizes the workspace boundary for synthetic tests; it does not
+establish either mode's provider account, managed-account authorization, CLO
+disposition, or a customer-content cohort.
+
+The implementation branch now exercises real WebSocket create, duplicate,
+resume, first-turn, and continuation handler branches in tests. Those tests
+inject a synthetic runtime and do not qualify production runtime composition.
+The production composition currently has no App Server launcher or managed
+credential provider and reports unverified egress evidence, so both live Web
+modes remain unqualified. The routine inventory found no Inngest consumer that
+reads `engine_run_id`; Codex routine dispatch therefore remains rejected.
+Local CLI/App Server smokes remain separate from Web qualification.
+
+The 2026-09-27 draft PR #9051 adds synthetic tests through the real WebSocket
+handler branches and a migration for durable turn attempts and protected
+recovery checkpoints. The focused conversation/persistence/migration/DSAR tests
+passed (58 tests); the complete Web Platform suite passed (15,315 passed, 385
+skipped, 1 todo). A loopback-only local migration probe passed duplicate-key,
+forward-only lifecycle, checkpoint purge, anonymization, and rollback checks.
+These results qualify code and local schema behavior only: no production
+migration, provider request, authenticated Web run, or flag mutation occurred.
+The API-key and managed Web matrices remain pending independently.
+
+## 2026-09-29 code-path and credential recheck
+
+PR #9051 remains draft. A focused local test pass now covers the resumed Codex
+terminal lifecycle, transactional default preservation during auth-mode rebind,
+Codex mode backfill, and a production-composition boundary that rejects both
+auth modes before credentials, database execution writes, process spawn, stream
+output, or Claude fallback. The focused set passed 120 tests across 10 files;
+the two database cases ran against disposable local PostgreSQL databases and
+dropped them after completion. The TOM-4 legal-posture gate passed 24/23
+assertions and its mutation suite passed 15/15, including a removed WORM trigger
+attachment. Dev-ledger parity passed 256/256. These are code and local-database
+checks only; they do not constitute a deployed Web qualification.
+
+A names-only check of the dev_scheduled Doppler configuration found no secret
+names containing `OPENAI` or `CODEX`. This confirms that the runtime credential
+question remains unanswered; no secret values were read. No provider request,
+production write, feature-flag mutation, or customer processing occurred. The
+API-key and managed Web matrices remain independently pending, and each CLO
+disposition remains **PENDING — no authorization**. The feature stays
+default-off and neither mode is eligible for an internal cohort.
+
 ## Live-provider probes
 
 | Mode | Probe | Observed result | Qualification scope |
 |---|---|---|---|
 | Managed ChatGPT | 2026-09-22, local Codex CLI v0.155.1, ephemeral read-only session in a newly created empty `/tmp` directory, with `--ignore-user-config --skip-git-repo-check`. Prompt prohibited tools, files, and secrets. | Process exited 0 and returned exactly `SOLEUR_CODEX_SYNTHETIC_OK`; 2,376 tokens were reported. | **PASS: bounded CLI smoke only.** Account plan, workspace owner, agreement, region, retention settings, and administrator controls remain unknown. This does **not** qualify Soleur Web transport, events/usage, lifecycle, attachments, approvals, cancellation, reconciliation, or erasure. |
 | Managed ChatGPT | 2026-09-23, local Codex App Server v0.156.1, `read-only` sandbox and `never` approvals, empty temporary working directory, synthetic text only. A temporary Codex home contained only the already signed-in local auth file and was deleted after each probe. | Raw JSON-RPC initialize, thread/start, turn/start, thread/read, thread/turns/list, thread/items/list, and thread/delete all returned successfully. The streamed answer matched `SOLEUR_CODEX_APPSERVER_OK`; one usage notification arrived. A read after delete returned `thread not loaded`. A probe through Soleur's actual App Server transport returned exactly `SOLEUR_CODEX_TRANSPORT_OK`, one usage event (14,191 input and 11 output tokens), and running/completed statuses across 10 neutral events. Repeating that probe after the event-ID repair returned the same sentinel, one usage event (14,194 input and 11 output tokens), running/completed statuses, and 10 unique event IDs. | **PASS: local managed App Server and transport smoke.** The delete acknowledgement and subsequent read error do not establish provider-side erasure or retention. Account plan, workspace owner, agreement, region, retention, and administrator controls remain unknown. This does **not** qualify authenticated Soleur Web execution, routine dispatch, attachments, approvals, cancellation, reconciliation, or deployed usage persistence. |
-| API key | Authenticated Web settings are the intended per-user/workspace credential source. | No authorized synthetic test workspace has supplied an OpenAI API key; no provider API request was attempted. A global Soleur credential is neither expected nor required for this mode. | **BLOCKED: test workspace credential unavailable.** Qualify with a key entered by an authorized synthetic workspace through Web settings. |
+| API key | Authenticated Web settings are the intended per-user/workspace credential source. | The authorized synthetic Soleur Workspace has not supplied an OpenAI API key; no provider API request was attempted. A global Soleur credential is neither expected nor required for this mode. | **BLOCKED: test workspace credential unavailable.** Qualify with a key entered by an authorized synthetic workspace through Web settings. |
 
 The first CLI attempt failed because the sandbox could not initialize the in-process App Server on a read-only filesystem. The same bounded request succeeded after an approved unsandboxed invocation. No customer content was included in either attempt. The App Server launcher contract is a CTO-owned technical runtime decision; it is not a reason to require a global customer credential.
 
@@ -51,8 +102,9 @@ exact PR #8507 merged build. A 2026-09-23 health probe returned HTTP 200 with
 `supabase: connected`, and `sentry: configured`; this is liveness evidence for
 the then-current deployed build, not evidence that this protocol repair is deployed.
 No authenticated Codex Web run was attempted because the feature flag remains
-off and neither an API-key test workspace nor an identified managed ChatGPT
-workspace is authorized for this qualification.
+off and the authorized Soleur Workspace currently has no valid API key; managed
+ChatGPT account ownership, agreement, and authorization also remain unverified.
+The 2026-09-27 CLO assessment records both modes as pending with no authorization.
 
 ## Release gates
 

@@ -229,6 +229,18 @@ transfer is permitted while that qualification gate is closed. This is an amendm
 existing Web Platform processing activity and introduces no new sub-processor. The release
 checklist is `knowledge-base/project/specs/feat-pluggable-web-agent-engines/migration-checklist.md`.
 
+### Agent-engine migration 143 amendment (effective only upon merge of PR #9051, 2026-09-27)
+
+Migration 143 would add attempt status/timestamps and a client-provided attempt idempotency
+key (with a server-generated fallback when absent), plus protected JSON recovery checkpoints when populated (objects up to 16 KiB that may contain provider-native recovery
+identifiers), linked to the immutable engine run. The self-serve Article 15 projection includes
+attempt status/timestamps and checkpoint presence/update time, while omitting unique attempt keys and
+checkpoint contents; those categories remain within the email-channel request scope. Account
+erasure purges checkpoint contents but retains attempt/run/event lineage after removing direct
+creator attribution; deleting a bound run cascades attempts, checkpoints, and events. This does
+not add a sub-processor or authorize any Codex transfer. API-key and managed-mode CLO dispositions
+remain pending with no authorization; Codex remains default-off and customer processing blocked.
+
 ## How to Update This Document
 
 - When a DPA is signed, updated, or revoked: update the Vendor DPA Status table

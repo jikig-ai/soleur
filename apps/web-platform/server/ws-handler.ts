@@ -23,7 +23,9 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
-import { assertLegacyConversationEngineBinding, assertLegacyEngineBinding } from "./agent-engine-route-guard";
+import { dispatchCodexConversationToWebSocket } from "./codex-conversation-dispatch";
+import { codexConversationRuntime } from "./codex-conversation-runtime";
+import type { EngineBinding } from "./agent-engine-contract";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
@@ -1120,7 +1122,7 @@ async function createConversation(
           "23505 fallback: context_path diverged; first-writer-wins — second-tab path silently discarded",
         );
       }
-      await assertLegacyConversationEngineBinding(
+      await resolveConversationEngineBinding(
         new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient),
         existingRow.id,
       );
@@ -1138,16 +1140,98 @@ async function createConversation(
     conversationId: id,
     createdBy: userId,
   });
-  // The legacy runner is the only handler currently wired for conversations.
-  // Refuse a future non-Claude default here rather than silently sending that
-  // turn to Claude while Codex qualification/runtime wiring is incomplete.
-  assertLegacyEngineBinding(
+  assertConversationEngineBinding(
     persistedBinding && typeof persistedBinding === "object" && "binding" in persistedBinding
       ? (persistedBinding as { binding: unknown }).binding
       : persistedBinding,
+    id,
+    wsId,
   );
 
   return id;
+}
+
+function assertConversationEngineBinding(value: unknown, conversationId: string, workspaceId?: string): EngineBinding {
+  if (!value || typeof value !== "object") throw new Error("conversation engine binding is invalid");
+  const binding = value as EngineBinding;
+  if (binding.execution?.kind !== "conversation" || binding.execution.conversationId !== conversationId
+    || (workspaceId && binding.workspaceId !== workspaceId)
+    || (binding.engineId !== "claude-code" && binding.engineId !== "codex")) {
+    throw new Error("conversation engine binding does not match the owned workspace");
+  }
+  if (binding.engineId === "codex" && binding.authMode !== "api-key" && binding.authMode !== "managed") {
+    throw new Error("Codex conversation auth mode is invalid");
+  }
+  return binding;
+}
+
+async function resolveConversationEngineBinding(
+  repository: AgentEnginePersistenceRepository,
+  conversationId: string,
+  workspaceId?: string,
+): Promise<EngineBinding | null> {
+  const run = await repository.getConversationRun(conversationId);
+  if (run === null) {
+    if (await repository.getConversationBindingState(conversationId) === "legacy") return null;
+    throw new Error("conversation engine binding is missing");
+  }
+  const binding = run && typeof run === "object" && "binding" in run
+    ? (run as { binding: unknown }).binding : run;
+  return assertConversationEngineBinding(binding, conversationId, workspaceId);
+}
+
+async function dispatchCodexChatTurn(
+  userId: string,
+  conversationId: string,
+  content: string,
+  attachments: unknown,
+  clientTurnId: string,
+  leaderId?: DomainLeaderId,
+): Promise<void> {
+  // An active WS session is not ownership evidence. Recheck the row with the
+  // user's tenant JWT before constructing a service-role repository or writing
+  // an attempt. This also covers the context-path unique-index collision.
+  const tenant = await tenantFor(userId, "handleMessage.chat.codex-owner");
+  if (!tenant) throw new Error("Codex conversation authorization failed");
+  const { data: row, error } = await tenant.from("conversations")
+    .select("id, workspace_id, repo_url")
+    .eq("id", conversationId)
+    .eq("user_id", userId)
+    .single();
+  const currentRepoUrl = await getCurrentRepoUrl(userId);
+  const owned = row as { id?: string; workspace_id?: string; repo_url?: string | null } | null;
+  if (error || owned?.id !== conversationId || !owned.workspace_id || owned.repo_url !== currentRepoUrl) {
+    throw new Error("Codex conversation not found in the current workspace");
+  }
+  const tenantRepository = new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient);
+  const binding = await resolveConversationEngineBinding(tenantRepository, conversationId, owned.workspace_id);
+  if (binding?.engineId !== "codex") throw new Error("Codex conversation binding changed");
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    throw new Error("Codex conversation attachments are not qualified");
+  }
+  const runtime = codexConversationRuntime(userId);
+  const serviceRepository = new AgentEnginePersistenceRepository(createServiceClient() as unknown as PersistenceClient);
+  const persisted = await tenantRepository.getConversationRun(conversationId);
+  const runId = persisted && typeof persisted === "object" && "id" in persisted
+    ? (persisted as { id: unknown }).id : null;
+  if (typeof runId !== "string") throw new Error("Codex conversation run is missing");
+  await dispatchCodexConversationToWebSocket({
+    repository: serviceRepository,
+    runtime: runtime.runtime,
+    registry: runtime.registry,
+    conversationId,
+    input: { text: content, attachmentIds: [] },
+    context: { runId, binding, idempotencyKey: clientTurnId, signal: new AbortController().signal },
+    selection: {
+      engineId: "codex", authMode: binding.authMode, operation: "existing-run",
+      workflow: "conversation", dataClass: runtime.dataClass,
+      requiredCapabilities: ["streaming"], now: Date.now(),
+    },
+    evidence: runtime.evidence,
+    leaderId: leaderId ?? "cc_router",
+    workspaceId: owned.workspace_id,
+    send: (message) => sendToClient(userId, message),
+  });
 }
 
 /**
@@ -1843,7 +1927,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // visibility-sweep-audit: owner-scoped — WS resume creates a session bound to the user's own conversation
           const { data: existing, error: lookupErr } = await tenantResume
             .from("conversations")
-            .select("id, last_active, context_path")
+            .select("id, last_active, context_path, workspace_id")
             .eq("user_id", userId)
             .eq("repo_url", currentRepoUrl)
             .eq("context_path", validResumePath)
@@ -1854,9 +1938,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
           if (!lookupErr && existing) {
             const row = existing as { id: string; last_active: string };
-            await assertLegacyConversationEngineBinding(
+            await resolveConversationEngineBinding(
               new AgentEnginePersistenceRepository(tenantResume as unknown as PersistenceClient),
               row.id,
+              (existing as { workspace_id?: string }).workspace_id,
             );
             const { count: messageCount, error: countErr } = await tenantResume
               .from("messages")
@@ -2087,9 +2172,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           return;
         }
 
-        await assertLegacyConversationEngineBinding(
+        await resolveConversationEngineBinding(
           new AgentEnginePersistenceRepository(tenantResumeConv as unknown as PersistenceClient),
           msg.conversationId,
+          (conv as { workspace_id?: string }).workspace_id,
         );
 
         // FR1 (#5240) — re-align the agent cwd resolver with the
@@ -2398,6 +2484,24 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             "Conversation materialized on first message",
           );
 
+          const tenantBinding = await tenantFor(userId, "handleMessage.chat.new-engine-binding");
+          if (!tenantBinding) throw new Error("conversation engine binding auth probe failed");
+          const newBinding = await resolveConversationEngineBinding(
+            new AgentEnginePersistenceRepository(tenantBinding as unknown as PersistenceClient),
+            resolvedId,
+          );
+          if (newBinding?.engineId === "codex") {
+            await dispatchCodexChatTurn(
+              userId,
+              resolvedId,
+              userContent,
+              msg.attachments,
+              msg.clientTurnId ?? randomUUID(),
+              pendingLeader,
+            );
+            break;
+          }
+
           // Stage 2.12 branch: soleur-go routing bypasses the legacy agent
           // path entirely. The soleur-go runner owns its own Query
           // lifecycle + canUseTool + sandbox.
@@ -2466,10 +2570,20 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       try {
         const tenantEngineBinding = await tenantFor(userId, "handleMessage.chat.engine-binding");
         if (!tenantEngineBinding) throw new Error("conversation engine binding auth probe failed");
-        await assertLegacyConversationEngineBinding(
+        const chatBinding = await resolveConversationEngineBinding(
           new AgentEnginePersistenceRepository(tenantEngineBinding as unknown as PersistenceClient),
           session.conversationId!,
         );
+        if (chatBinding?.engineId === "codex") {
+          await dispatchCodexChatTurn(
+            userId,
+            session.conversationId!,
+            userContent,
+            msg.attachments,
+            msg.clientTurnId ?? randomUUID(),
+          );
+          break;
+        }
         // Stage 2.12 — route each turn via `parseConversationRouting`.
         // Legacy rows (NULL) flow through the existing agent-runner;
         // sentinel + workflow values dispatch to the soleur-go runner.

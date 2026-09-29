@@ -510,6 +510,33 @@ export async function exportSqlTable(
     results.push({ table: "agent_engine_events", spec: DSAR_TABLE_ALLOWLIST.agent_engine_events, rows });
   }
 
+  // -- agent_engine_attempts (migration 143, joined through owned run) --
+  {
+    const { data, error } = await service
+      .from("agent_engine_attempts")
+      .select("id,run_id,status,created_at,updated_at,terminal_at,accepted_at")
+      .in("run_id", engineRunIds);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`agent_engine_attempts read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    results.push({ table: "agent_engine_attempts", spec: DSAR_TABLE_ALLOWLIST.agent_engine_attempts, rows });
+  }
+
+  // -- agent_engine_recovery_checkpoints (migration 143, joined via run) --
+  {
+    const { data, error } = await service
+      .from("agent_engine_recovery_checkpoints")
+      .select("run_id,updated_at")
+      .in("run_id", engineRunIds);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`agent_engine_recovery_checkpoints read failed: ${error.message}`);
+    const rows = ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+      ...row,
+      checkpoint_present: true,
+    }));
+    results.push({ table: "agent_engine_recovery_checkpoints", spec: DSAR_TABLE_ALLOWLIST.agent_engine_recovery_checkpoints, rows });
+  }
+
   // -- api_keys ----------------------------------------------------------
   {
     const { data, error } = await service

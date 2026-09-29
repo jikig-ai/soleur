@@ -1785,18 +1785,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // wiring the reset here covers both paths without per-path branching. No-op
       // when already `live` (the reducer arm short-circuits).
       dispatch({ type: "reset_connection" });
+      const clientTurnId = crypto.randomUUID();
       // Add the user message to local state immediately
       dispatch({
         type: "add_message",
         message: {
-          id: `user-${crypto.randomUUID()}`,
+          id: `user-${clientTurnId}`,
           role: "user",
           content,
           type: "text",
           attachments,
         },
       });
-      send({ type: "chat", content, attachments });
+      send({ type: "chat", content, attachments, clientTurnId });
     },
     [send],
   );

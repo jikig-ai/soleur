@@ -4046,7 +4046,7 @@ set -e
 set_of() { awk -F'\t' -v c="$1" '{ n = split($2, a, ","); for (i = 1; i <= n; i++) if (a[i] == c) print $1 }' <<<"$scan" | LC_ALL=C sort | tr '\n' ' '; }
 got_txn=$(set_of transaction-control); got_nontx=$(set_of non-transactional); got_later=$(set_of later-row-sensitive)
 got_bs=$(set_of backslash); got_unp=$(set_of unparseable)
-# The pinned sets (the stored value of this guard). Measured 2026-09-23 over 95 files:
+# The pinned sets (the stored value of this guard). Measured 2026-09-29 over 102 files:
 # every top-level BEGIN;/COMMIT; on main is ONE wrapping pair, which the writer
 # normalizes away, so no file is transaction-control; 132_drop_unused_indexes.down.sql
 # mentions CONCURRENTLY only in a comment, so no file is non-transactional; the
@@ -4107,6 +4107,8 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 137_byok_cap_breach_audit_row.down.sql
 140_flag_flip_audit_approval_method.down.sql
 141_conversation_engine_binding_state.down.sql
+143_agent_engine_attempts.down.sql
+145_codex_auth_mode_rebind.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \
