@@ -23,7 +23,7 @@ PY
 get() { printf '%s\n' "$out" | sed -n "s/^$1=//p"; }
 assert_eq "merge" "$(get skip)" "bun-test skip is exactly [merge]"
 assert_eq '*.{ts,tsx,js,jsx}' "$(get glob)" "bun-test glob is unchanged"
-assert_eq "TC_QUEUE_TIMEOUT=300 bash scripts/test-all.sh --affected --affected-scope=staged" "$(get run)" "bun-test run uses the staged-scope affected gate (commit-scoped selection, bounded queue — #9173)"
+assert_eq "TC_LOCK_TIMEOUT=300 bash scripts/test-all.sh --affected --affected-scope=staged" "$(get run)" "bun-test run uses the staged-scope affected gate (commit-scoped selection, bounded lock+queue — #9173)"
 assert_eq "bun-test" "$(get skippers)" "bun-test is the only pre-commit command with a skip"
 assert_eq "False" "$(get hook_skip)" "the skip is on the command, not the pre-commit hook"
 print_results 5

@@ -1333,7 +1333,21 @@ fi
 # pins the WIRE, not the artifact (the same real-state technique the infra
 # suite's assembly arm uses): extract the real assembly, evaluate it inside a
 # scratch repo carrying one staged file, one committed-ahead-of-origin file,
-# and one untracked file, and assert the staged blob holds exactly the index.
+# and one untracked file UNDER A RELEVANCE PREFIX (scripts/, so the scoped
+# untracked append would reach it), and assert the staged blob holds exactly
+# the index. The extraction covers the unscoped appends too — a dropped
+# staged guard on ANY append must show up here.
+#
+# TWO HARSHNESS DETAILS, both caught by the architecture seat (#9197):
+# - the eval unsets the runner's full 9-name GIT_* list, not just GIT_DIR:
+#   this suite is always-on, so it runs inside the lefthook bun-test hook
+#   itself — where lefthook injects GIT_INDEX_FILE/GIT_WORK_TREE and the
+#   eval'd `git diff --cached` would read the bookkeeping index instead of
+#   the scratch repo's;
+# - the branch-scope eval is the non-vacuity arm: the same extraction under
+#   unset _AFF_SCOPE MUST show the untracked/branch fixtures, proving the
+#   staged-darkness assertion discriminates rather than measuring an empty
+#   channel.
 cases=$((cases + 1))
 REAL_REPO="$TESTROOT/realstate-staged"
 mkdir -p "$REAL_REPO"
@@ -1347,27 +1361,39 @@ if (
   git update-ref refs/remotes/origin/main HEAD
   echo x > branch-only-fixture.sh
   git add -A && git commit -q -m ahead
+  mkdir -p scripts
   echo y > staged-fixture.test.ts
   git add staged-fixture.test.ts
-  echo z > untracked-fixture.test.ts
+  echo z > scripts/untracked-fixture.test.sh
 ) >/dev/null 2>&1; then
   _staged_asm="$TESTROOT/assembly-staged.sh"
-  awk '/^_diff_detect_ok=0$/,/git ls-files --others/' "$RUNNER" > "$_staged_asm"
+  # Range ends at the _diff_touches comment, covering ALL diff sources —
+  # staged branch, both branch arms, the rename pair, and all three
+  # untracked appends (scoped + both unscoped).
+  awk '/^_diff_detect_ok=0$/,/^# Does this run'"'"'s diff/' "$RUNNER" > "$_staged_asm"
   _asm_gits=$(grep -c 'git ' "$_staged_asm")
-  if ! grep -qF 'diff --cached' "$_staged_asm" || (( _asm_gits < 5 )); then
+  if ! grep -qF 'diff --cached' "$_staged_asm" || (( _asm_gits < 6 )); then
     fail "sc9: assembly extraction missing the staged branch (diff --cached absent or truncated: ${_asm_gits} git lines)"
   else
-    _staged_blob=$(cd "$REAL_REPO" && env -u GIT_DIR bash -c "
+    _git_scrub='GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH'
+    _staged_blob=$(cd "$REAL_REPO" && env $(printf -- '-u %s ' $_git_scrub) bash -c "
       source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
-      _AFF_SCOPE=staged
+      _AFF_SCOPE=staged; _AFFECTED=1; TEST_GROUP=affected
+      $(cat "$_staged_asm")
+      printf '%s' \"\$_diff_names\"" 2>/dev/null || true)
+    _branch_blob=$(cd "$REAL_REPO" && env $(printf -- '-u %s ' $_git_scrub) bash -c "
+      source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
+      _AFFECTED=1; TEST_GROUP=affected
       $(cat "$_staged_asm")
       printf '%s' \"\$_diff_names\"" 2>/dev/null || true)
     if grep -qF 'staged-fixture.test.ts' <<<"$_staged_blob" \
       && ! grep -qF 'branch-only-fixture.sh' <<<"$_staged_blob" \
-      && ! grep -qF 'untracked-fixture.test.ts' <<<"$_staged_blob"; then
-      pass "sc9: staged scope reads the index — branch window and untracked set stay dark"
+      && ! grep -qF 'untracked-fixture.test.sh' <<<"$_staged_blob" \
+      && grep -qF 'branch-only-fixture.sh' <<<"$_branch_blob" \
+      && grep -qF 'untracked-fixture.test.sh' <<<"$_branch_blob"; then
+      pass "sc9: staged scope reads the index — branch window and untracked set dark (branch eval confirms discrimination)"
     else
-      fail "sc9: blob drifted — staged=$(grep -c staged-fixture <<<"$_staged_blob") branch=$(grep -c branch-only <<<"$_staged_blob") untracked=$(grep -c untracked-fixture <<<"$_staged_blob")"
+      fail "sc9: blobs drifted — staged{staged=$(grep -c staged-fixture <<<"$_staged_blob") branch=$(grep -c branch-only <<<"$_staged_blob") untracked=$(grep -c untracked-fixture <<<"$_staged_blob")} branch-eval{branch=$(grep -c branch-only <<<"$_branch_blob") untracked=$(grep -c untracked-fixture <<<"$_branch_blob")}"
     fi
   fi
 else

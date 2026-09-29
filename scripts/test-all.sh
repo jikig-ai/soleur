@@ -1865,10 +1865,16 @@ _diff_names=""
 # the --name-only read; its failure leaves both arms 0, so the
 # undecidable-diff fail-safe fires unchanged.
 #
-# The `git diff --cached` reads sit AFTER this script's blanket `GIT_*` unset
-# near the top of the file: lefthook injects GIT_INDEX_FILE/GIT_DIR into hook
-# subprocesses (data-loss class, #7772/#7835), so post-unset the index reads
-# rediscover the real worktree index — never lefthook's bookkeeping index.
+# The `git diff --cached` reads sit AFTER this script's named `GIT_*` unset
+# list near the top of the file (GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+# GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+# GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH): lefthook injects
+# GIT_INDEX_FILE/GIT_DIR into hook subprocesses (data-loss class,
+# #7772/#7835), so post-unset the index reads rediscover the real worktree
+# index — never lefthook's bookkeeping index. A FUTURE hook-exported `GIT_*`
+# name not on that list would reopen the hole — the list is fixed, not a
+# sweep — so a new lefthook env var is a re-check obligation, not a covered
+# case.
 if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then
   if _diff_out="$(git -c core.quotePath=false diff --cached --name-only 2>/dev/null)"; then
     _diff_head_ok=1
@@ -2720,24 +2726,17 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
     _aff_fallback="index-missing"
   elif [[ "$_diff_detect_ok" == "0" || "$_diff_head_ok" == "0" ]]; then
     _aff_fallback="undecidable-diff"
-  elif grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
-    || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; then
+  elif [[ "${_AFF_SCOPE:-branch}" != "staged" ]] \
+    && { grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
+      || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; }; then
     # The runner and the index are their own SUT: a diff touching either could
-    # be narrowing the very selection this run is about to apply.
-    if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then
-      # Staged scope (#9173): the runner/index paths are in the staged set by
-      # construction — their declared self-edges and the unconditional always-on
-      # runner-SUT battery already select everything this commit can move, so
-      # the fallback stays empty and the bounded edge walk below proceeds. The
-      # full-corpus fallback at a pre-commit gate is the measured
-      # denial-of-commit this flag exists to remove; the note names what the
-      # bounded selection covered instead. Branch scope keeps the fallback
-      # byte-identical.
-      printf 'AFFECTED_RUNNER_IN_SCOPE\treason=runner-changed\n'
-      echo "[affected] staged diff contains a runner/index path — bounded selection via self-edges + always-on battery (no full-corpus fallback under --affected-scope=staged)." >&2
-    else
-      _aff_fallback="runner-changed"
-    fi
+    # be narrowing the very selection this run is about to apply. Under staged
+    # scope this arm is DARK BY CONSTRUCTION (#9173, #9197 review): firing it
+    # here would consume the elif chain and skip the bounded-selection walk
+    # below — leaving _aff_ready=0, which the chokepoint reads as "select
+    # everything" — a SILENT full battery wearing a bounded-selection note.
+    # The staged case is handled inside the walk's else instead.
+    _aff_fallback="runner-changed"
   elif (( ${#ALWAYS_ON_SUITES[@]} < _MIN_ALWAYS_ON_DECLARED )); then
     printf 'AFFECTED_UNRESOLVED\treason=below-floor declared=%d floor=%d\n' \
       "${#ALWAYS_ON_SUITES[@]}" "$_MIN_ALWAYS_ON_DECLARED"
@@ -2747,6 +2746,21 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
     echo "         bash scripts/test-all.sh --full" >&2
     exit 4
   else
+    # Staged scope (#9173): a runner/index path in the STAGED set is covered by
+    # construction — declared self-edges plus the unconditional always-on
+    # runner-SUT battery (which includes this runner's own mutation suite) —
+    # so the bounded edge walk proceeds under a loud note instead of the
+    # full-corpus fallback that made ts commits unlandable inside the hook.
+    # This emit MUST stay inside the walk's else: hoisting it into the elif
+    # ladder consumed the chain and left every registration selecting
+    # (silent full battery — #9197 review P1). The below-floor census refusal
+    # above still precedes it, so a gutted-but-parseable index refuses first.
+    if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
+      && { grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
+        || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; }; then
+      printf 'AFFECTED_RUNNER_IN_SCOPE\treason=runner-changed\n'
+      echo "[affected] staged diff contains a runner/index path — bounded selection via self-edges + always-on battery (no full-corpus fallback under --affected-scope=staged)." >&2
+    fi
     _aff_enum_rc=0
     # `env -u SCRIPTS_SHARD` is load-bearing, not hygiene: under a shard the
     # child's stream would pack only shard-selected records as ordinals 1..k
@@ -2826,10 +2840,13 @@ elif (( _ENUMERATE == 0 )); then
 fi
 # Loud about WHICH diff selected (#9173): a staged-scope run always names its
 # scope beside the MODE line — silent narrowing is the failure class this
-# telemetry exists against. Emitted here so either affected axis (the
-# declared-edge pre-pass above or a group-scoped TEST_GROUP=affected run)
-# carries it exactly once; enumerate modes emit records, not banners.
-if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && (( _ENUMERATE == 0 )); then
+# telemetry exists against. Gated on an axis that consumes the diff (the
+# `_AFFECTED` pre-pass or the TEST_GROUP=affected heuristic), not on
+# _ENUMERATE — `--print-affected-set` receipts must name their scope too. A
+# staged flag under CI/full (`_AFFECTED=0`) prints nothing: the flag is a
+# no-op there and the line would claim a scope no run consulted.
+if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
+  && { (( _AFFECTED == 1 )) || [[ "$TEST_GROUP" == "affected" ]]; }; then
   printf 'AFFECTED_SCOPE\tscope=staged\n'
 fi
 

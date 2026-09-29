@@ -178,15 +178,24 @@ Decisions added by this amendment:
    the local default, or `TEST_GROUP=affected`); combined with `--full`, an
    unknown enum value, or a non-affected `TEST_GROUP` it exits 2. The
    `lefthook` `bun-test` hook invokes `--affected --affected-scope=staged`
-   behind `TC_QUEUE_TIMEOUT=300` — a bounded ticket-queue wait that proceeds
-   with the `LOCK_CONTENDED_PROCEEDING` banner on expiry rather than aborting.
-10. **`runner-changed` is scope-aware.** Under `staged` it resolves to bounded
-    selection — the runner/index paths are in the staged set by construction,
+   behind `TC_LOCK_TIMEOUT=300` — the ticket queue defaults to the lock
+   timeout, so one knob bounds both of tc_acquire's wait stages and on expiry
+   it proceeds with the `LOCK_CONTENDED_PROCEEDING` banner rather than
+   aborting.
+10. **`runner-changed` is scope-aware.** Under `staged` the ladder arm is
+    gated off and the staged runner/index path is detected *inside* the
+    bounded-selection walk — the paths are in the staged set by construction,
     so their declared self-edges plus the unconditional always-on runner-SUT
     battery (which includes `scripts/test-all-affected`, the classifier's own
     mutation suite) cover what the commit can move — announced as
     `AFFECTED_RUNNER_IN_SCOPE reason=runner-changed`, with `_aff_fallback`
-    left empty so the degraded-full refusal re-check does not apply. Branch
+    left empty so the degraded-full refusal re-check does not apply. Emitting
+    the note inside the `else` (not a dedicated `elif` arm) is load-bearing:
+    a dedicated arm consumed the chain, left `_aff_ready=0`, and the
+    chokepoint read that as select-everything — a silent full battery (#9197
+    review, caught by two independent seats). Keeping the staged path in the
+    walk also preserves the below-floor `ALWAYS_ON_SUITES` refusal, which a
+    consumed elif would shadow exactly when a gutted index needs it. Branch
     scope keeps the full-corpus fallback byte-identical. The accepted
     residual: a commit staging a *selector-corrupting* runner edit could
     narrow the selector it runs under — bounded by the runner-SUT battery's
