@@ -105,7 +105,7 @@ gh workflow run git-data-cutover.yml --ref main -f mode=<MODE> -f confirm=<TOKEN
 | mode | confirm token | what it does |
 |---|---|---|
 | `proof` | `CUTOVER-GIT-DATA` | the read-only gate below; refuses `flag_already_true` under an on flag. |
-| `flip` | `FLIP-GIT-DATA` | preconditions (Tier-B seam, live pin-fault rule, `d6_replace_stale`, no deploy in flight, running image >= emitter floor) -> proof -> freeze -> flag on -> webhook redeploy -> `git_data_store=enabled` per host -> unfreeze -> probe -> `GIT_DATA_LUKS_CUTOVER_AT` stamp. Any post-flag-write failure runs the total-unwind finalizer. |
+| `flip` | `FLIP-GIT-DATA` | preconditions (Tier-B seam, live pin-fault rule, `d6_replace_stale`, no deploy in flight, running image >= emitter floor) -> proof -> freeze -> flag on -> webhook redeploy -> `git_data_store=enabled` per host (web-1 matched under either Better Stack `host_name` spelling — `soleur-web-platform` or the live #6616 mislabel `soleur-inngest-prd`) -> unfreeze -> probe -> `GIT_DATA_LUKS_CUTOVER_AT` stamp. Any post-flag-write failure runs the total-unwind finalizer. |
 | `rollback` | `ROLLBACK-GIT-DATA` | flag off + the same redeploy + `git_data_store=disabled` readback + unfreeze. Never touches a mount or volume. |
 | `unfreeze` | `UNFREEZE-GIT-DATA` | clears a same-lineage sentinel + restarts `git-data-gc.timer`. A STRANDED sentinel (its writing run is dead) needs `-f lineage=cutover-<dead run id>`. Foreign or unattributed sentinels refuse. |
 | `redeploy` | `REDEPLOY-GIT-DATA` | the standalone pin-load/same-version redeploy lever (no flag or host touch). |
@@ -121,8 +121,10 @@ gh workflow run apply-web-platform-infra.yml --ref main   -f apply_target=git-da
 ```
 
 The rotate's `served_repos=0` precondition reads the latest `stage=boot_complete` emit for
-`host_name=soleur-git-data` out of Better Stack (hot table UNION'd with the s3 archive — the emit is
-once-per-boot) and fails closed when the store cannot be read empty.
+`host_name=soleur-git-data` out of Better Stack — pinned to the git-data source
+(`t520508_soleur_git_data_prd_logs` UNION'd with the `s3` archive; the emit is once-per-boot, and the
+shared inngest source the reader defaults to answers zero rows for this host) — and fails closed when
+the store cannot be read empty.
 
 ## What the read-only dispatch does
 

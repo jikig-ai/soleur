@@ -41,7 +41,11 @@
 # branch policy); a re-run asks for approval again. Serialization: workflow-level
 # `git-data-state` (never between a replace's plan and apply) AND job-level `web-1-swap`
 # (the flip's fan-out deploy mutates web-1 — a concurrent release must not interleave).
-# timeout-minutes 120 covers the ~80-min drain budget of a fan-out swap inside a flip.
+# timeout-minutes 120 is sized on the swap being minutes, not the retired follower's
+# ~80-min release poll: ~15 setup + ≤40 redeploy (REDEPLOY_TIMEOUT_S=2400) + ≤24 assert
+# (2 hosts × 12 × 60 s) + ~5 tail ≈ 84 min happy path; a failure at the assert's ceiling
+# costs ≤15 unwind + ~2 unfreeze ≈ 96 min. If a fan-out swap is ever observed taking
+# longer, BOTH the bound and this budget need re-deriving.
 
 name: git-data cutover (#5274 / ADR-220 / ADR-239)
 
@@ -454,22 +458,28 @@ jobs:
           # a false miss triggers the TOTAL unwind on a healthy flip. Poll each host:
           # up to ~12 min (12 × 60 s), newest row wins.
           fail=0
-          for h in soleur-web-1 soleur-web-2; do
+          # web-1's Better Stack host_name is 'soleur-web-platform' (server.tf each.key
+          # exception) — but its RUNNING vector still stamps 'soleur-inngest-prd' until the
+          # #6616 recreate lands. `git_data_store=` is web-app-only, so matching either name
+          # is a sound web-1 readback; drop 'soleur-inngest-prd' when #6616 ships.
+          for h in "web-1|soleur-web-platform soleur-inngest-prd" "web-2|soleur-web-2"; do
+            leg="${h%%|*}"; names="${h#*|}"
             # JSONExtractString(raw,'host_name') is the proven discriminator shape
             # (betterstack-assert-absence.sh); the hot window covers the just-swapped boot.
+            name_in="$(printf "%s" "$names" | tr ' ' '\n' | sed "s/.*/'&'/" | paste -sd, -)"
             seen=0
             for i in $(seq 1 12); do
               rows="$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
-                "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND JSONExtractString(raw,'host_name') = '$h' AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>/dev/null || true)"
+                "SELECT raw FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 40 MINUTE AND JSONExtractString(raw,'host_name') IN ($name_in) AND positionCaseInsensitive(raw,'git_data_store=') > 0 ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>/dev/null || true)"
               if printf '%s' "$rows" | grep -qF "git_data_store=${EXPECTED}"; then
-                echo "host $h: git_data_store=${EXPECTED} observed (attempt $i)"
+                echo "host $leg: git_data_store=${EXPECTED} observed (attempt $i)"
                 seen=1
                 break
               fi
               sleep 60
             done
             if [ "$seen" = 0 ]; then
-              echo "::error title=git-data-cutover assert::host=$h did not report git_data_store=${EXPECTED} within the readback window"
+              echo "::error title=git-data-cutover assert::host=$leg did not report git_data_store=${EXPECTED} within the readback window"
               fail=1
             fi
           done
@@ -542,7 +552,14 @@ jobs:
             echo "finalizer: no flag write and no freeze — nothing to unwind."
             exit 0
           fi
-          echo "::warning title=git-data-cutover finalizer::run ended mid-window — unwinding (flag off -> redeploy -> unfreeze -> gc restart)"
+          if [[ "$MODE" == "rollback" && ! -f "$prog/flag_written" ]]; then
+            # Rollback's flag-off is the write — a rollback that reached it left the flag
+            # false (the desired end state); one that died before it holds only a sentinel,
+            # which the unfreeze arm below clears. No spurious mid-window warning.
+            echo "finalizer: rollback needs no flag-off — clearing any held sentinel below."
+          else
+            echo "::warning title=git-data-cutover finalizer::run ended mid-window — unwinding (flag off -> redeploy -> unfreeze -> gc restart)"
+          fi
           unwind_failed=0
           if [[ "$MODE" == "flip" && -f "$prog/flag_written" && -n "${DOPPLER_TOKEN_GIT_DATA_FLAG:-}" ]]; then
             echo "finalizer: writing GIT_DATA_STORE_ENABLED=false"

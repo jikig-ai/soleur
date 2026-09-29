@@ -621,8 +621,8 @@ MUTANT_FLOOR=17  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 20 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 7 + mutants 17 x 2 = 76 (exact).
-FLOOR=76
+# Assertion FLOOR: script cases 30 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 7 + mutants 17 x 2 = 86 (exact).
+FLOOR=86
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

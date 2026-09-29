@@ -2086,6 +2086,18 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     );
   });
 
+  test("the rotate precondition reads the GIT-DATA Better Stack table, not the shared default", () => {
+    // git-data emits to its own source 2734275 (t520508_soleur_git_data_prd_logs); the
+    // betterstack-query.sh default is the shared inngest source, which answers zero rows
+    // for host_name=soleur-git-data forever — the precondition would fail closed every
+    // dispatch. The env pin (BS_TABLE="$BS_GIT_DATA_TABLE") is the anchored contract.
+    expect(gitDataJobBlock).toContain('BS_TABLE="$BS_GIT_DATA_TABLE"');
+    expect(gitDataJobBlock).toContain('BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"');
+    expect(gitDataJobBlock).toContain("JSONExtractString(raw,'stage') = 'boot_complete'");
+    expect(gitDataJobBlock).toContain("JSONExtractString(raw,'host_name') = 'soleur-git-data'");
+    expect(gitDataJobBlock).toContain("--only-secrets");
+  });
+
   test("the rotate arm is conditional on apply_target=git-data-host-rotate", () => {
     // The EXTRA_* additions apply only when the dispatch selected the rotate target —
     // the bash check inside the plan step is what gates them.
