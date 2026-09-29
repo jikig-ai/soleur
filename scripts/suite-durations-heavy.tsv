@@ -1,9 +1,9 @@
 # suite-durations-heavy.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=heavy
-# generated-from-runs=local:H
-# default-weight-ms=600
-# generated-at=2026-09-29T22:19:25Z
+# generated-from-runs=36327508485,36323335326,36257128883,36255831574,36251201056
+# default-weight-ms=379182
+# generated-at=2026-09-29T21:45:14Z
 # generator=regenerate-shard-manifest.py v3
-heavy-a	800	measured
-heavy-b	600	measured
-heavy-c	400	measured
+.github/scripts/test/run-all.sh	33025	measured
+scripts/battery-tag-authorship-mutations	379182	measured
+tests/scripts/registry-gate-mutation-battery	491178	measured

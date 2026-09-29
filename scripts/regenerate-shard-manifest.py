@@ -443,7 +443,16 @@ def main():
         default_durations = DURATIONS
         workflow, key = CI_YML, "shard"
     manifest_path = args.manifest if args.manifest else default_manifest
-    durations_path = args.durations_out if args.durations_out else default_durations
+    if args.durations_out:
+        durations_path = args.durations_out
+    elif os.path.abspath(manifest_path) == os.path.abspath(default_manifest):
+        durations_path = default_durations
+    else:
+        # A redirected --manifest is an isolated emission (fixture, local #8231
+        # pack): its durations table pairs with THAT manifest, never the
+        # committed one — otherwise every --write fixture would clobber the
+        # group's committed suite-durations.tsv.
+        durations_path = manifest_path + ".durations.tsv"
 
     # n_wf is ALWAYS the workflow's declared leg count — the artifact-completeness
     # WARN and the committed-manifest n-pin bind to it. --legs reshapes only the
