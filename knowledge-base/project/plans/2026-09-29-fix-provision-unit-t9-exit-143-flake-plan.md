@@ -166,7 +166,7 @@ None.
 - **If this lands broken, the user experiences:** a still-flaky or silently-weakened Infra Validation leg — engineers (the users of this CI surface) keep seeing red legs on unrelated PRs, or worse, a real start-timeout-reporting regression slips through because the assertion now greens on nothing.
 - **If this leaks, the user's [data / workflow / money] is exposed via:** no exposure vector — the diff is confined to a test harness asserting on a stubbed in-container log; it touches no user data, credential path, or provisioning behavior.
 - **Brand-survival threshold:** `none`
-- `threshold: none, reason: the only file touched is a test harness asserting on stubbed container log rows; the sensitive-path match is the apps/*/infra/ prefix on a *.test.sh, and no runtime infra or user-facing behavior changes`
+- `threshold: none, reason: the files touched are a test harness asserting on stubbed container log rows and a CI suite-bound pin; the sensitive-path match is the apps/*/infra/ prefix on test/runner scripts, and no runtime infra or user-facing behavior changes`
 
 ## Observability
 
