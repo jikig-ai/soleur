@@ -60,6 +60,8 @@ export interface EngineBinding {
   execution: EngineExecution;
   engineId: AgentEngineId;
   authMode: string;
+  /** Persisted fence against credentials selected from an obsolete auth binding. */
+  authModeGeneration?: number;
   adapterVersion: string;
   boundAt: string;
 }

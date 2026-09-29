@@ -179,10 +179,11 @@ describe("AgentEnginePersistenceRepository", () => {
   it("starts and transitions a turn attempt without rebinding the conversation", async () => {
     const supabase = client();
     const repo = new AgentEnginePersistenceRepository(supabase);
-    await repo.startAttempt("binding-1", "turn-42");
+    await repo.startAttempt("binding-1", "turn-42", "api-key", 3);
     await repo.transitionAttempt("attempt-1", "completed");
     expect(supabase.rpc).toHaveBeenNthCalledWith(1, "start_agent_engine_attempt", {
       p_run_id: "binding-1", p_attempt_key: "turn-42",
+      p_expected_auth_mode: "api-key", p_expected_generation: 3,
     });
     expect(supabase.rpc).toHaveBeenNthCalledWith(2, "transition_agent_engine_attempt", {
       p_attempt_id: "attempt-1", p_status: "completed",

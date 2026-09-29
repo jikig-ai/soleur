@@ -22,6 +22,7 @@ function normalizeRun(data: unknown): unknown {
   const execution = row.execution_kind === "conversation"
     ? { kind: "conversation" as const, conversationId: String(row.conversation_id) }
     : { kind: "routine" as const, routineId: String(row.routine_id), routineRunId: String(row.routine_run_id) };
+  const generation = Number(row.auth_mode_generation);
   return {
     id: String(row.id),
     binding: {
@@ -29,6 +30,7 @@ function normalizeRun(data: unknown): unknown {
       execution,
       engineId: String(row.engine_id),
       authMode: String(row.auth_mode),
+      ...(Number.isSafeInteger(generation) ? { authModeGeneration: generation } : {}),
       adapterVersion: String(row.adapter_version),
       boundAt: String(row.created_at),
     },
@@ -164,9 +166,11 @@ export class AgentEnginePersistenceRepository {
     return result.data;
   }
 
-  async startAttempt(runId: string, attemptKey: string): Promise<unknown> {
+  async startAttempt(runId: string, attemptKey: string, expectedAuthMode: string, expectedGeneration: number): Promise<unknown> {
     const result = await this.client.rpc("start_agent_engine_attempt", {
       p_run_id: runId, p_attempt_key: attemptKey,
+      p_expected_auth_mode: expectedAuthMode,
+      p_expected_generation: expectedGeneration,
     });
     if (result.error) throw new Error(`engine attempt start failed: ${result.error.message}`);
     return result.data;

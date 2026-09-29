@@ -184,8 +184,9 @@ $$;
 REVOKE ALL ON FUNCTION public.count_codex_conversation_rebinds(uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.count_codex_conversation_rebinds(uuid, text) TO authenticated;
 
-CREATE OR REPLACE FUNCTION public.start_agent_engine_attempt(
-  p_run_id uuid, p_attempt_key text
+DROP FUNCTION public.start_agent_engine_attempt(uuid, text);
+CREATE FUNCTION public.start_agent_engine_attempt(
+  p_run_id uuid, p_attempt_key text, p_expected_auth_mode text, p_expected_generation bigint
 ) RETURNS public.agent_engine_attempts
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -193,6 +194,7 @@ AS $$
 DECLARE
   v_row public.agent_engine_attempts;
   v_generation bigint;
+  v_auth_mode text;
 BEGIN
   IF auth.role() <> 'service_role' THEN
     RAISE EXCEPTION 'engine attempt requires service role' USING ERRCODE = '42501';
@@ -200,10 +202,14 @@ BEGIN
   IF p_attempt_key IS NULL OR length(p_attempt_key) NOT BETWEEN 1 AND 256 THEN
     RAISE EXCEPTION 'invalid attempt key' USING ERRCODE = '22023';
   END IF;
-  SELECT r.auth_mode_generation INTO v_generation
+  SELECT r.auth_mode_generation, r.auth_mode INTO v_generation, v_auth_mode
     FROM public.agent_engine_runs AS r WHERE r.id = p_run_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'engine run not found' USING ERRCODE = 'P0002';
+  END IF;
+  IF v_generation IS DISTINCT FROM p_expected_generation
+     OR v_auth_mode IS DISTINCT FROM p_expected_auth_mode THEN
+    RAISE EXCEPTION 'Codex conversation binding changed' USING ERRCODE = '55000';
   END IF;
   INSERT INTO public.agent_engine_attempts(run_id, attempt_key, auth_mode_generation)
   VALUES (p_run_id, p_attempt_key, v_generation)
@@ -215,8 +221,8 @@ BEGIN
   RETURN v_row;
 END;
 $$;
-REVOKE ALL ON FUNCTION public.start_agent_engine_attempt(uuid, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.start_agent_engine_attempt(uuid, text) TO service_role;
+REVOKE ALL ON FUNCTION public.start_agent_engine_attempt(uuid, text, text, bigint) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.start_agent_engine_attempt(uuid, text, text, bigint) TO service_role;
 
 CREATE FUNCTION public.assert_agent_engine_attempt_generation(
   p_attempt_id uuid

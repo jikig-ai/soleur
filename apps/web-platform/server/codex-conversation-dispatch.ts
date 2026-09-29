@@ -11,7 +11,7 @@ interface ConversationBindingRepository {
   getConversationRun(conversationId: string): Promise<unknown>;
   getRun(runId: string): Promise<unknown>;
   appendEvent?(event: unknown): Promise<unknown>;
-  startAttempt?(runId: string, attemptKey: string): Promise<unknown>;
+  startAttempt(runId: string, attemptKey: string, expectedAuthMode: string, expectedGeneration: number): Promise<unknown>;
   assertAttemptGeneration(attemptId: string): Promise<unknown>;
   transitionAttempt?(attemptId: string, status: "running" | "completed" | "failed" | "cancelled"): Promise<unknown>;
   appendLifecycleEvent?(runId: string, attemptId: string, payload: EngineEvent["payload"]): Promise<unknown>;
@@ -40,6 +40,10 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
   if (!binding || binding.engineId !== "codex" || typeof binding.authMode !== "string") {
     throw Object.assign(new Error("persisted conversation is not Codex-bound"), { code: "codex_binding_mismatch" });
   }
+  const bindingGeneration = "authModeGeneration" in binding ? binding.authModeGeneration : null;
+  if (typeof bindingGeneration !== "number" || !Number.isSafeInteger(bindingGeneration) || bindingGeneration < 0) {
+    throw Object.assign(new Error("persisted Codex binding generation is invalid"), { code: "codex_binding_generation_invalid" });
+  }
   // The production catalog is default-off. Qualification and transfer evidence
   // must be checked before service-role attempt writes or provider invocation.
   const registry = options.registry ?? reviewedEngineRegistry;
@@ -49,27 +53,23 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
   }
   registry.resolve(options.selection);
   authorizeEngineDataEgress(options.selection, options.evidence);
-  const factories = createCodexWebEngineFactoriesForBinding({ ...options.runtime, binding: { engineId: "codex", authMode: binding.authMode } });
-  if (!factories.codex) {
-    throw Object.assign(new Error("Codex adapter factory is unavailable"), { code: "codex_adapter_unavailable" });
-  }
   const runId = (persisted as { id?: unknown }).id;
   if (typeof runId !== "string" || !runId) throw new Error("persisted Codex run id is missing");
-  const attempt = options.repository.startAttempt
-    ? await options.repository.startAttempt(runId, options.context.idempotencyKey)
-    : null;
+  const attempt = await options.repository.startAttempt(runId, options.context.idempotencyKey, binding.authMode, bindingGeneration);
   const attemptId = attempt && typeof attempt === "object" && "id" in attempt
     ? (attempt as { id: unknown }).id : null;
-  if (options.repository.startAttempt && typeof attemptId !== "string") {
+  if (typeof attemptId !== "string") {
     throw new Error("Codex attempt start returned no id");
   }
   try {
     let terminalStatus: "completed" | "failed" | "cancelled" | null = null;
-    if (typeof attemptId === "string") {
-      // This RPC is the request's acceptance boundary. A settings switch that
-      // committed after the attempt was created makes it stale before transport.
-      await options.repository.assertAttemptGeneration(attemptId);
-      await options.repository.transitionAttempt?.(attemptId, "running");
+    // This RPC is the request's acceptance boundary. A settings switch that
+    // committed after the attempt was created makes it stale before transport.
+    await options.repository.assertAttemptGeneration(attemptId);
+    await options.repository.transitionAttempt?.(attemptId, "running");
+    const factories = createCodexWebEngineFactoriesForBinding({ ...options.runtime, binding: { engineId: "codex", authMode: binding.authMode } });
+    if (!factories.codex) {
+      throw Object.assign(new Error("Codex adapter factory is unavailable"), { code: "codex_adapter_unavailable" });
     }
     for await (const event of dispatchConversationEngineRun({
     repository: options.repository,

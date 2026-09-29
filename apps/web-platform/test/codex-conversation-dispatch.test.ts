@@ -6,7 +6,7 @@ import type { EngineEventPayload } from "@/server/agent-engine-contract";
 function turnFixture(payloads: EngineEventPayload[]) {
   const binding = {
     workspaceId: "synthetic-workspace", execution: { kind: "conversation" as const, conversationId: "synthetic-conversation" },
-    engineId: "codex", authMode: "api-key", adapterVersion: "codex-v1", boundAt: new Date().toISOString(),
+    engineId: "codex", authMode: "api-key", authModeGeneration: 2, adapterVersion: "codex-v1", boundAt: new Date().toISOString(),
   };
   const repository = {
     getConversationRun: vi.fn().mockResolvedValue({ id: "synthetic-run", binding }),
@@ -61,8 +61,8 @@ describe("Codex conversation dispatch bridge", () => {
       logout: async () => undefined,
     };
     const repository = {
-      getConversationRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { workspaceId: "ws-1", execution: { kind: "conversation", conversationId: "conv-1" }, engineId: "codex", authMode: "api-key", adapterVersion: "codex-v1", boundAt: new Date().toISOString() } }),
-      getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { workspaceId: "ws-1", execution: { kind: "conversation", conversationId: "conv-1" }, engineId: "codex", authMode: "api-key", adapterVersion: "codex-v1", boundAt: new Date().toISOString() } }),
+      getConversationRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { workspaceId: "ws-1", execution: { kind: "conversation", conversationId: "conv-1" }, engineId: "codex", authMode: "api-key", authModeGeneration: 2, adapterVersion: "codex-v1", boundAt: new Date().toISOString() } }),
+      getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { workspaceId: "ws-1", execution: { kind: "conversation", conversationId: "conv-1" }, engineId: "codex", authMode: "api-key", authModeGeneration: 2, adapterVersion: "codex-v1", boundAt: new Date().toISOString() } }),
       appendEvent: vi.fn(async (event: unknown) => { events.push(event); }),
       startAttempt: vi.fn().mockResolvedValue({ id: "attempt-1" }),
       assertAttemptGeneration: vi.fn().mockResolvedValue(0),
@@ -85,12 +85,32 @@ describe("Codex conversation dispatch bridge", () => {
       registry,
     });
     expect(repository.getConversationRun).toHaveBeenCalledWith("conv-1");
+    expect(repository.startAttempt).toHaveBeenCalledWith("run-1", "idempotency", "api-key", 2);
     expect(repository.assertAttemptGeneration).toHaveBeenCalledWith("attempt-1");
     expect(events).toHaveLength(2);
     expect(sent).toEqual([
       { type: "stream", content: "hello", partial: true, leaderId: "cc_router" },
       { type: "stream_end", leaderId: "cc_router" },
     ]);
+  });
+
+  it("rejects a stale binding generation before constructing its mode-specific adapter", async () => {
+    const { repository, options } = turnFixture([{ type: "status", status: "completed" }]);
+    const createCodex = vi.fn(() => ({ start: vi.fn() } as never));
+    const readCredentialMode = vi.fn(() => "api-key");
+    const provider = {
+      get mode() { return readCredentialMode(); },
+      acquire: vi.fn(), refresh: vi.fn(), logout: vi.fn(),
+    };
+    options.runtime.createCodex = createCodex;
+    options.runtime.apiKeyProvider = provider as never;
+    repository.startAttempt.mockRejectedValue(Object.assign(new Error("Codex binding changed"), { code: "codex_binding_stale" }));
+
+    await expect(dispatchCodexConversationToWebSocket(options)).rejects.toMatchObject({ code: "codex_binding_stale" });
+    expect(repository.startAttempt).toHaveBeenCalledWith("synthetic-run", "synthetic-turn", "api-key", 2);
+    expect(readCredentialMode).not.toHaveBeenCalled();
+    expect(createCodex).not.toHaveBeenCalled();
+    expect(options.send).not.toHaveBeenCalled();
   });
 
   it.each(["failed", "cancelled", "completed"] as const)("persists the provider's %s terminal outcome", async (status) => {

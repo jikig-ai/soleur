@@ -43,6 +43,7 @@ REVOKE ALL ON FUNCTION public.set_workspace_default_engine(uuid, text, text) FRO
 REVOKE ALL ON FUNCTION public.set_workspace_default_engine(uuid, text, text) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.set_workspace_default_engine(uuid, text, text) TO authenticated;
 
+DROP FUNCTION IF EXISTS public.start_agent_engine_attempt(uuid, text, text, bigint);
 CREATE OR REPLACE FUNCTION public.start_agent_engine_attempt(
   p_run_id uuid, p_attempt_key text
 ) RETURNS public.agent_engine_attempts

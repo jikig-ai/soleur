@@ -39,7 +39,8 @@ describe("migration 145: Codex auth-mode rebinding", () => {
     const sql = read("145_codex_auth_mode_rebind.sql");
     expect(sql).toMatch(/ALTER TABLE public\.agent_engine_runs[\s\S]*ADD COLUMN auth_mode_generation bigint NOT NULL DEFAULT 0/);
     expect(sql).toMatch(/ALTER TABLE public\.agent_engine_attempts[\s\S]*ADD COLUMN auth_mode_generation bigint NOT NULL DEFAULT 0/);
-    expect(sql).toMatch(/start_agent_engine_attempt[\s\S]*auth_mode_generation/);
+    expect(sql).toMatch(/start_agent_engine_attempt\(\s*p_run_id uuid, p_attempt_key text, p_expected_auth_mode text, p_expected_generation bigint[\s\S]*FOR UPDATE[\s\S]*v_generation IS DISTINCT FROM p_expected_generation[\s\S]*v_auth_mode IS DISTINCT FROM p_expected_auth_mode/);
+    expect(sql).toMatch(/REVOKE ALL ON FUNCTION public\.start_agent_engine_attempt\(uuid, text, text, bigint\)[\s\S]*GRANT EXECUTE ON FUNCTION public\.start_agent_engine_attempt\(uuid, text, text, bigint\) TO service_role/);
     expect(sql).toMatch(/assert_agent_engine_attempt_generation[\s\S]*v_attempt_generation IS DISTINCT FROM v_run_generation/);
     expect(sql).toMatch(/p_attempt_id uuid, p_checkpoint jsonb[\s\S]*v_attempt_generation IS DISTINCT FROM v_run_generation/);
     expect(sql).toMatch(/bind_agent_engine_run[\s\S]*FOR SHARE/);
