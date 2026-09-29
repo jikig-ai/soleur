@@ -5,8 +5,8 @@
  * `deps.bashAutonomous === true`):
  *   - AC2: a NON-blocked Bash command returns `allow(...)` with ZERO
  *     `deps.sendToClient({type:"review_gate"})` calls (no raw-command gate
- *     leaks onto the wire — the leak origin at permission-callback.ts:459-460
- *     is never reached).
+ *     leaks onto the wire — the raw-command `review_gate` emit in
+ *     permission-callback.ts is never reached).
  *   - AC3: a BLOCKED command STILL returns `behavior:"deny"` even with the
  *     streaming deps wired (blocklist authoritative regardless of posture).
  * Under the NON-streaming posture (`bashAutonomous` false/undefined):

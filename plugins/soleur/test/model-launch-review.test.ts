@@ -525,7 +525,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
           join(pkg, "package.json"),
           JSON.stringify({ version: installed }),
         );
-        // The bundle: carries opus-5 but NOT sonnet-5, so the tier loop must
+        // The bundle: carries opus-5 but NOT sonnet-5-5, so the tier loop must
         // report one ok and one DRIFT — proving the loop ran at all.
         writeFileSync(join(pkg, "cli.blob"), `\0claude-opus-5\0filler\n`);
       }
@@ -537,7 +537,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     const sameOut = run([], same).stdout;
     expect(sameOut).toContain("(matches the package.json pin)");
     expect(sameOut).toContain("ok      claude-opus-5");
-    // Anchored presence probe: sonnet-5 is genuinely absent from this bundle.
+    // Anchored presence probe: sonnet-5-5 is genuinely absent from this bundle.
     expect(sameOut).toContain("DRIFT   claude-sonnet-5-5");
     rmSync(same, { recursive: true, force: true });
 
@@ -683,7 +683,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     writeFileSync(join(dir, "cron-a.ts"), `export const M = "claude-opus-4-7";\n`);
     writeFileSync(join(dir, "cron-b.ts"), `export const M = "claude-sonnet-4-6";\n`);
     expect(run(["--fix"], root).status).toBe(0);
-    // Per-tier map: opus → opus-5-5, sonnet → sonnet-5 (not a single global target).
+    // Per-tier map: opus → opus-5-5, sonnet → sonnet-5-5 (not a single global target).
     expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toBe(`export const M = "claude-opus-5-5";\n`);
     expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toBe(`export const M = "claude-sonnet-5-5";\n`);
     rmSync(root, { recursive: true, force: true });

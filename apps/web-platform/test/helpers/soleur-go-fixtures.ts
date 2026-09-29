@@ -153,7 +153,7 @@ export function makeUserToolResult(
  * (`type: 'tool_progress'`, carrying `tool_use_id`/`tool_name`/
  * `elapsed_time_seconds`). It flows into `consumeStream` because
  * `includePartialMessages: true` is set in the shared options builder
- * (`agent-runner-query-options.ts:156`). The soleur-go runner re-arms
+ * (`agent-runner-query-options.ts` › `buildAgentQueryOptions`). The soleur-go runner re-arms
  * `state.runaway` off this message (reads no fields — pure re-arm).
  */
 export function makeToolProgress(

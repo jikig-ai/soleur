@@ -14,7 +14,7 @@ description: "This skill should be used when auditing the recurring per-Anthropi
 # Model-launch review
 
 `model-launch-review` runs the recurring per-Anthropic-model-release checklist. Each release
-(Opus 4.6 → 4.7 → 4.8 → Fable 5 → Fable 5.1 → Opus 5.5) recurs the same Anthropic audit; an xAI
+(Opus 4.6 → 4.7 → 4.8 → Fable 5 → Fable 5.1 → Opus 5.5 → Sonnet 5.5) recurs the same Anthropic audit; an xAI
 release adds item 6. This skill **audits** every item,
 **auto-fixes** the one mechanical-bulk item (stale model-ID swaps) into a **CI-gated PR**
 under operator identity, and **flags** the rest for human sign-off. ADR-053 names this skill as

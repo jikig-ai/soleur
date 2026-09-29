@@ -101,7 +101,7 @@ function uuidv5(name: string, namespace: string): string {
 // `ttl`, so the 5m default applies; the Guard 1 exact-shape test in
 // agent-on-spawn-requested-leader-loop.test.ts pins that.)
 // Verified against https://platform.claude.com/docs/en/about-claude/pricing.md
-// on 2026-07-24.
+// on 2026-07-24; sonnet row re-verified 2026-09-29 at the Sonnet 5.5 launch.
 //
 // VERIFY EACH ROW AGAINST ITS KEY, not against the previous row. The haiku
 // entry carried Haiku *3.5*'s retired table ($0.80/$4/$0.08/$1) under the

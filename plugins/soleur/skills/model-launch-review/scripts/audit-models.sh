@@ -95,8 +95,9 @@ autofix_from_re() {
 # So the general invariant is the one stated at the bottom of this comment
 # (selection and rewriting must share one boundary), and dated ids were its
 # standing violation. `claude-fable-5` is what made it unavoidable rather than
-# what created it: it is the first pair whose stale id is a strict PREFIX of its
-# own target, so the mismatch fires on the id that is CURRENT rather than only
+# what created it: it was the first pair whose stale id is a strict PREFIX of
+# its own target (`claude-sonnet-5` and `claude-opus-5` now share that shape),
+# so the mismatch fires on the id that is CURRENT rather than only
 # on a longer variant nobody had written yet. `assert_single_hop` does NOT catch
 # either shape ('claude-fable-5-1' is not itself a source id).
 #
