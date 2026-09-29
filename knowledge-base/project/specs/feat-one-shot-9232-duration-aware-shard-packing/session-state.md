@@ -49,3 +49,20 @@ skipped; coverage is the unit batteries + measured dry-run evidence:
 - insertion stability → scripts-shard-manifest.test.sh 49/49 + infra gate +
   32/32 mutation rows GREEN.
 - Step 2.6 visual-regression gate: skipped (no dashboard/layout files touched).
+
+## CI triage (push 6e58839b01)
+4 legs red on first CI cycle, all diagnosed and fixed in da5f65a3c3:
+- test-scripts 2/7 + 4/7: fixture-relative-assert baseline drifted (new test
+  files add fixture sites — regenerated --write-baseline), exec-bit lint
+  (probe files committed 644 → 755), lint-shell-capture-exit-live S1 (two
+  unguarded grep captures in the new gate arm → || true).
+- shard-totality-mutations 29-42: LEGS-COLOCATE arm pinned -b to hardcoded
+  leg 3; regen put -a on leg 1 → vacuous mutant. Pin now reads -a's current
+  leg from the TSV (re-verified: arm goes RED, 15/15).
+- deploy-script-tests 3/4: luks-monitor broken-pipe + cloud-init T9 timing
+  flakes — contention-class, not diff-caused; will re-score on the next
+  cycle.
+- Also found+fixed pre-push: fixture --write leaked into committed
+  suite-durations.tsv (pairing rule: durations-out now pairs with the
+  EMITTED manifest); shallow-clone broke tombstone census → git fetch
+  --unshallow.
