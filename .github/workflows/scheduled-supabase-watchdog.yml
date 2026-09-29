@@ -40,9 +40,11 @@
 #      non-2xx/timeout POST is recorded `attempted` and NEVER retried in-run
 #      (a landed-but-unconfirmed restart shows COMING_UP next window, which
 #      breaks the signature anyway — free idempotency). A claim label
-#      (`watchdog-restart-attempted`) is written BEFORE the sentinel so a landed
-#      POST whose sentinel write died is still visible: claimed-with-no-valid-
-#      sentinel → fail-closed (no restart + error check-in).
+#      (`watchdog-restart-attempted`) is written AFTER the POST: claimed-with-
+#      no-valid-sentinel can then only mean a completed attempt whose sentinel
+#      was deleted — fail-closed (no restart + error check-in). A failed
+#      sentinel write blocks the POST AND leaves no label, so a transient
+#      comment failure self-heals on the next tick.
 #   5. BOUNDS: cooldown >=30 min between restarts (from the newest sentinel
 #      epoch); give-up after 3 ATTEMPTS on the open audit issue — escalation
 #      comments once and adds the watchdog-restarts-exhausted label.
@@ -218,9 +220,18 @@ jobs:
             --description "Supabase DB-hang watchdog: bounded auto-restart audit trail (#9168)" \
             --color "B60205" 2>/dev/null || true
           ISSUE_TITLE="[watchdog/supabase-db] Supabase database watchdog audit"
+          ISSUE_LIST_RC=0
           ISSUE="$(gh issue list --repo "$GH_REPO" --state open \
-            --label supabase-auto-restart --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+            --label supabase-auto-restart --json number --jq '.[0].number // empty' 2>/dev/null)" || ISSUE_LIST_RC=$?
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          if [[ "$ISSUE_LIST_RC" != "0" ]]; then
+            # A FAILED list read is indistinguishable from "no issue exists" —
+            # creating on that basis would split the sentinel ledger across two
+            # issues and dilute the attempt count. Fail closed; the next tick
+            # retries, and a restart is blocked downstream (issue_ok=false).
+            echo "::error::could not LIST the supabase-auto-restart audit issue — treating the ledger as unreadable this run"
+            ISSUE=""
+          fi
           if [[ -z "$ISSUE" ]]; then
             BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
             {
@@ -260,8 +271,14 @@ jobs:
           ISSUE: ${{ steps.audit.outputs.issue_number }}
         run: |
           set -uo pipefail
+          # A FAILED ledger read is indistinguishable from an EMPTY ledger —
+          # `|| true` would turn a partial GitHub outage into attempts=0 /
+          # last_epoch=none, silently bypassing BOTH the cooldown and the
+          # give-up bound (a restart storm the ledger was written to prevent).
+          # Read failure → corrupt=1 → the decision fail-closes.
+          COMMENTS_RC=0
           COMMENTS="$(gh api "repos/${GH_REPO}/issues/${ISSUE}/comments" --paginate \
-            --jq '.[].body' 2>/dev/null || true)"
+            --jq '.[].body' 2>/dev/null)" || COMMENTS_RC=$?
           LEDGER="$(printf '%s\n' "$COMMENTS" | bash "$GITHUB_WORKSPACE/scripts/supabase-watchdog-classify.sh" --ledger 2>/dev/null || true)"
           attempts="$(printf '%s' "$LEDGER" | sed -n 's/^attempts=\([0-9]*\).*/\1/p')"
           last_epoch="$(printf '%s' "$LEDGER" | sed -n 's/.*last_epoch=\([0-9a-z-]*\).*/\1/p')"
@@ -269,8 +286,13 @@ jobs:
           [[ "$attempts" =~ ^[0-9]+$ ]] || attempts="0"
           [[ "$last_epoch" =~ ^[0-9]{9,11}$|^none$ ]] || last_epoch="none"
           [[ "$corrupt" =~ ^[01]$ ]] || corrupt="1"   # unparseable ledger line → fail closed
+          [[ "$COMMENTS_RC" != "0" ]] && corrupt="1"   # unreadable ledger → fail closed
+          CLAIM_RC=0
           CLAIMED="$(gh issue view "$ISSUE" --repo "$GH_REPO" --json labels \
-            --jq '[.labels[].name] | index("watchdog-restart-attempted") // empty' 2>/dev/null || true)"
+            --jq '[.labels[].name] | index("watchdog-restart-attempted") // empty' 2>/dev/null)" || CLAIM_RC=$?
+          # claimed=0 on a failed read would defeat the claimed-without-sentinel
+          # fail-closed arm — same fail-closed treatment as an unreadable ledger.
+          [[ "$CLAIM_RC" != "0" ]] && corrupt="1"
           [[ -n "$CLAIMED" ]] && claimed="1" || claimed="0"
           echo "ledger: attempts=${attempts} last_epoch=${last_epoch} corrupt=${corrupt} claimed=${claimed}"
           { echo "attempts=${attempts}"; echo "last_epoch=${last_epoch}"
@@ -294,7 +316,7 @@ jobs:
           ACTION="$(bash "$GITHUB_WORKSPACE/scripts/supabase-watchdog-classify.sh" --decide \
             --verdict hang-signature --armed "$armed" --corrupt "$CORRUPT" --claimed "$CLAIMED" \
             --attempts "$ATTEMPTS" --last-epoch "$LAST_EPOCH" --now "$(date -u +%s)" \
-            --cooldown-sec 1800 --max-attempts 3 2>/dev/null || echo fail-closed)"
+            2>/dev/null || echo fail-closed)"
           case "$ACTION" in
             restart|detect-only|cooldown|give-up|fail-closed) ;;
             *) ACTION="fail-closed" ;;   # unrecognised action → never restart
@@ -303,15 +325,20 @@ jobs:
           echo "decision: ${ACTION} (armed=${armed} attempts=${ATTEMPTS} last_epoch=${LAST_EPOCH} corrupt=${CORRUPT} claimed=${CLAIMED})"
           [[ "$ACTION" == "fail-closed" ]] && echo "::error::watchdog decision FAIL-CLOSED — the restart ledger could not bound a write (corrupt=${CORRUPT} claimed=${CLAIMED} attempts=${ATTEMPTS})" || true
 
-      # The restart write. Order is the protocol: claim label, THEN sentinel
-      # comment, THEN the POST — so an attempted-but-unconfirmed restart is
-      # always ledger-visible, and a ledger write failure blocks the POST
-      # outright (a restart the ledger cannot record must not happen).
+      # The restart write. Order is the protocol: sentinel comment, THEN the
+      # POST, THEN the claim label — so an attempted-but-unconfirmed restart is
+      # always ledger-visible, a ledger write failure blocks the POST outright
+      # (a restart the ledger cannot record must not happen), and the label
+      # marks a COMPLETED attempt sequence: claimed-with-no-sentinel means the
+      # sentinel was deleted → fail-closed tamper evidence, while a failed
+      # sentinel write leaves no label and self-heals next tick.
       # The POST is issued ONCE: a non-2xx/timeout is `attempted`, never
       # retried this run.
       - name: Issue bounded restart POST
         id: restart
-        if: steps.decide.outputs.action == 'restart'
+        # always() so the step's OWN verdict on a crashed-decide run is visible
+        # (alarm-issue-filing-guard); decide skipped → action empty → no restart.
+        if: always() && steps.decide.outputs.action == 'restart'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -322,17 +349,9 @@ jobs:
           REF="ifsccnjhymdmidffkzhl"
           NOW_EPOCH="$(date -u +%s)"
 
-          gh label create "watchdog-restart-attempted" --repo "$GH_REPO" \
-            --description "A watchdog restart POST was issued at least once — sentinel ledger should contain it (#9168)" \
-            --color "5319E7" 2>/dev/null || true
-          if ! gh issue edit "$ISSUE" --repo "$GH_REPO" --add-label "watchdog-restart-attempted" 2>/dev/null; then
-            echo "::error::claim label write failed — blocking the restart POST (a restart the ledger cannot record must not happen)"
-            echo "restart_result=blocked-ledger-write" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           if ! gh issue comment "$ISSUE" --repo "$GH_REPO" \
                --body "<!-- watchdog:restart epoch=${NOW_EPOCH} -->" 2>/dev/null; then
-            echo "::error::sentinel write failed — blocking the restart POST"
+            echo "::error::sentinel write failed — blocking the restart POST (no claim label written; the next tick retries clean)"
             echo "restart_result=blocked-ledger-write" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -349,6 +368,17 @@ jobs:
           rc=$?
           set -e
           http="${resp##*$'\n'}"
+
+          # Claim label LAST: it marks a COMPLETED attempt sequence, so
+          # claimed-without-sentinel strictly means a deleted sentinel (the
+          # fail-closed tamper evidence). A label-write failure here is
+          # non-fatal — the sentinel already bounds the attempt.
+          gh label create "watchdog-restart-attempted" --repo "$GH_REPO" \
+            --description "A watchdog restart POST completed at least once — sentinel ledger should contain it (#9168)" \
+            --color "5319E7" 2>/dev/null || true
+          gh issue edit "$ISSUE" --repo "$GH_REPO" --add-label "watchdog-restart-attempted" 2>/dev/null \
+            || echo "::warning::claim label write failed post-POST — sentinel still bounds the attempt"
+
           if [[ "$rc" == "0" && "$http" == 2?? ]]; then
             echo "restart POST accepted (HTTP ${http}) at epoch ${NOW_EPOCH}"
             echo "restart_result=issued" >> "$GITHUB_OUTPUT"
@@ -363,7 +393,9 @@ jobs:
       # Give-up: attempts exhausted — escalate ONCE on the audit issue (label +
       # comment guarded on label absence), never restart again on this issue.
       - name: Escalate exhausted restarts
-        if: steps.decide.outputs.action == 'give-up'
+        # always() for the same reason — an escalation step that silently
+        # skipped after an upstream crash would mask the give-up state.
+        if: always() && steps.decide.outputs.action == 'give-up'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -405,7 +437,12 @@ jobs:
           case "$VERDICT" in
             hang-signature)
               case "$ACTION" in
-                restart)        ACT_TXT="restart POST issued (see sentinel comment; result=${RESTART_RESULT:-unknown})" ;;
+                restart)
+                  if [[ "$RESTART_RESULT" == "blocked-ledger-write" ]]; then
+                    ACT_TXT="restart BLOCKED — sentinel write failed, POST never sent"
+                  else
+                    ACT_TXT="restart POST issued (see sentinel comment; result=${RESTART_RESULT:-unknown})"
+                  fi ;;
                 detect-only)    ACT_TXT="DETECT-ONLY — vars.WATCHDOG_ARMED unset; zero restart writes" ;;
                 cooldown)       ACT_TXT="suppressed by the >=30 min cooldown (see newest sentinel)" ;;
                 give-up)        ACT_TXT="suppressed — restart attempts exhausted (escalated)" ;;

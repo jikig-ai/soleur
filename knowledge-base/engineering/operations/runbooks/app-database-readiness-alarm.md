@@ -194,6 +194,29 @@ runs serialize on the `concurrency: supabase-watchdog` group (`cancel-in-progres
 the watchdog cannot double-restart. A Sentry cron monitor covers the watchdog itself — a dead
 watchdog pages via the missed-check-in margin.
 
+Watchdog operating notes:
+
+- **Signature scope.** The watchdog queries only `db`, `auth`, `rest`, `pooler` — the
+  `services=` filter IS honored by the Management API (verified 2026-09-29: the response
+  contains exactly the requested services). The 09-15 incident additionally showed `storage`
+  UNHEALTHY (it is Postgres-dependent), but storage is deliberately outside the observed set;
+  an extra unhealthy service in the response would classify `ambiguous`, never restart.
+- **`fail-closed` means the ledger could not bound a write.** Causes: unreadable issue
+  comments/labels, an unparseable `watchdog:restart` marker, or the `watchdog-restart-attempted`
+  label present with no parseable sentinel (= a deleted sentinel — tamper evidence). Recovery:
+  fix or delete the offending comment, or remove the label if the sentinel genuinely exists;
+  the next tick re-evaluates. **Never paste the `watchdog:restart` sentinel format into any
+  comment on the audit issue** — a pasted marker reads as a corrupted ledger and fail-closes
+  the watchdog for that incident.
+- **Bounds are per-incident.** Cooldown and the 3-attempt give-up budget are computed from the
+  OPEN audit issue's sentinels. Closing or deleting the issue mid-incident resets both — the
+  auto-close on a confirmed-healthy window is what bounds each incident's ledger.
+- **Give-up already pages.** Exhaustion fires an error check-in + escalation comment, and the
+  same hang keeps `app_health` alerting through Slack/email — no separate page is wired.
+- **Audit comments are per-tick.** A sustained non-healthy verdict posts ~12 comments/hour on
+  the audit issue; accepted noise — the alternative (transition detection) needs last-comment
+  parsing for little gain.
+
 ### A manual restart is still a production write
 
 On 2026-09-15 and 2026-09-28 the database recovered only after a Management API

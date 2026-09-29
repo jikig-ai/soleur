@@ -153,6 +153,8 @@ ALLOWLIST=(
   'apps/web-platform/scripts/dev-ledger-parity.test.sh|2026-09-24|fixtures for the dev-ledger-reconcile.yml absence assertion: JSON name lists containing SUPABASE_ACCESS_TOKEN fed to the extracted step; makes no HTTP call'
   'apps/web-platform/test/server/inngest/cron-supabase-advisor-scan.test.ts|2026-08-26|the guard-of-the-guard: asserts the ABSENCE of SUPABASE_ACCESS_TOKEN and advisors/security in-process'
   'plugins/soleur/test/terraform-target-parity.test.ts|2026-08-26|comment naming the SUPABASE_ACCESS_TOKEN GitHub-secret terraform resource; makes no HTTP call'
+  'apps/web-platform/infra/supabase-project.tf|2026-09-29|imported supabase_project resource (#9168); /v1/projects appears only in a # comment recording the measured live values. The provider block carrying the literal endpoint pin lives in main.tf'
+  'scripts/supabase-watchdog-classify.sh|2026-09-29|pure classifier (#9168): the /v1/projects restart path appears only in a # comment; the script consumes HTTP codes and bodies as arguments and makes no network call'
 )
 
 # ── Assemblies ──────────────────────────────────────────────────────────────────────────

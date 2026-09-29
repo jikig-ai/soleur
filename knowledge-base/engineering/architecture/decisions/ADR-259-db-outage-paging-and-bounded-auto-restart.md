@@ -104,12 +104,15 @@ closed to detect-only):
   an absent or unparseable sentinel on a claimed-restart run fails closed.
 - **Mutex:** runs serialize on `concurrency: supabase-watchdog` with
   `cancel-in-progress: false`, so the watchdog can never double-restart.
-- **Substrate:** GHA workflow (not Inngest cron — the app container
-  deliberately holds no Management API credential); primary dispatch is the
-  web-server watchdog clock (ADR-248 — `schedule:` alone drifts 2–7 h), with
-  `schedule:` as fallback; dispatch auth is a GitHub App token per
-  `hr-github-app-auth-not-pat`. A Sentry cron monitor covers the watchdog
-  itself, so a dead watchdog pages.
+- **Substrate:** GHA workflow is the executor (the app container deliberately
+  holds no Management API credential); primary dispatch is the **Inngest
+  dispatch cron** `cron-supabase-watchdog-dispatch` firing `workflow_dispatch`
+  every 5 min — `schedule:` alone drifts 2–7 h (ADR-248), so the workflow's own
+  `*/5` cron is kept only as fallback. The dispatch path is DB-independent:
+  the Inngest serve route authenticates on env-held signing keys and run-state
+  lives on the dedicated host's Redis, not the Postgres this watchdog watches.
+  Dispatch auth is a GitHub App token per `hr-github-app-auth-not-pat`. A
+  Sentry cron monitor covers the watchdog itself, so a dead watchdog pages.
 - **Worst false-positive cost:** ~6 minutes of restart downtime on a service
   already down — bounded and acceptable against the alternative.
 

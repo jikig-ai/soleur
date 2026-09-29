@@ -256,9 +256,14 @@ main() {
           *) _usage; return 64 ;;
         esac
       done
-      for req in verdict armed corrupt claimed attempts last_epoch now; do
-        if [[ -z "${!req}" ]]; then
-          printf 'supabase-watchdog-classify.sh: --decide requires --%s\n' "$req" >&2
+      # Two parallel arrays, not `${!name}`: indirect expansion resolves a
+      # variable chosen at runtime, which prints its VALUE under `bash -x` —
+      # the credential-leak class lint-shell-trace-credential-refusal guards.
+      local -a req_names=(verdict armed corrupt claimed attempts last_epoch now)
+      local -a req_vals=("$verdict" "$armed" "$corrupt" "$claimed" "$attempts" "$last_epoch" "$now")
+      for ri in "${!req_names[@]}"; do
+        if [[ -z "${req_vals[$ri]}" ]]; then
+          printf 'supabase-watchdog-classify.sh: --decide requires --%s\n' "${req_names[$ri]}" >&2
           _usage; return 64
         fi
       done
