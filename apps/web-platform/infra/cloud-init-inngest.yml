@@ -73,6 +73,10 @@ write_files:
         chain input {
           type filter hook input priority -10; policy accept;
           iif "lo" accept
+          # DELIBERATE: connect-gateway/executor ports 50052/50053 are NOT listed —
+          # unlisted means policy-accept (reachable intra-subnet), not blocked; and
+          # adding them to the {8288,8289} drop set would cut Connect traffic from
+          # the web hosts. Scoping decision tracked in the #7463 follow-through.
           tcp dport { 8288, 8289 } ip saddr { ${web_host_private_ips} } accept
           tcp dport { 8288, 8289 } drop
         }

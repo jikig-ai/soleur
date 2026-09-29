@@ -66,6 +66,14 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    # #9168 — supabase_project.prd adoption (supabase-project.tf); manages
+    # instance_size via the billing/addons PATCH (provider v1.9+). Pinned to
+    # the newest release at least 7 days old at pin time (v1.11.0, released
+    # 2026-09-02); do NOT float on latest.
+    supabase = {
+      source  = "supabase/supabase"
+      version = "~> 1.11"
+    }
   }
   # >= 1.7, not 1.6: seo-config-rules.tf uses `for_each` inside an `import` block,
   # which landed in Terraform 1.7.0 ("import: for_each can now be used to expand the
@@ -214,4 +222,20 @@ provider "cloudflare" {
 provider "cloudflare" {
   alias     = "pages"
   api_token = var.cf_api_token_pages
+}
+
+# #9168 — Supabase Management API provider, declared for the supabase_project.prd
+# adoption (supabase-project.tf). Auth MUST come from the variable, not the
+# provider's SUPABASE_ACCESS_TOKEN env fallback: CI injects only TF_VAR_* via
+# `doppler run --name-transformer tf-var`, so an env-var-only configuration is
+# unauthenticated in the apply job. The variable already exists
+# (variables.tf, sourced from Doppler prd_terraform) — no new sensitive var.
+#
+# `endpoint` is pinned explicitly even though it equals the provider default:
+# SUPABASE_API_ENDPOINT is env-overridable, and the access token is an
+# ACCOUNT-level PAT — a redirected endpoint is credential exfil (the property
+# scripts/lint-supabase-deprecated-endpoints.sh's ARM 2 pins repo-wide).
+provider "supabase" {
+  access_token = var.supabase_access_token
+  endpoint     = "https://api.supabase.com"
 }
