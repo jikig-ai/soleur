@@ -2108,7 +2108,7 @@ fi
 # durability sentinel; the parsers use a substring match but this test + the #5560
 # drift-guard anchor on the flag being first). Conservative fixed values safe for any
 # per-subsystem pool count P ≤ 4 (worst-case total 4×5 = 20 < pool_size 30). NOTE the
-# unit trap (#6258, verified against inngest v1.19.4 cmd/start): --postgres-conn-max-idle-time
+# unit trap (#6258, verified against inngest v1.45.1 cmd/start): --postgres-conn-max-idle-time
 # is an IntFlag in MINUTES (default 5), NOT seconds — so `1` = drain idle conns after 1 min
 # (fast release of the pinned Supavisor session), NOT the plan's mis-labelled "30s".
 DURABLE_FLAGS_FULL=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | sed -n '1p' || true)
