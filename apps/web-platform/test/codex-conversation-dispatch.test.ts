@@ -63,7 +63,12 @@ describe("Codex conversation dispatch bridge", () => {
     const repository = {
       getConversationRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { workspaceId: "ws-1", execution: { kind: "conversation", conversationId: "conv-1" }, engineId: "codex", authMode: "api-key", authModeGeneration: 2, adapterVersion: "codex-v1", boundAt: new Date().toISOString() } }),
       getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { workspaceId: "ws-1", execution: { kind: "conversation", conversationId: "conv-1" }, engineId: "codex", authMode: "api-key", authModeGeneration: 2, adapterVersion: "codex-v1", boundAt: new Date().toISOString() } }),
-      appendEvent: vi.fn(async (event: unknown) => { events.push(event); }),
+      appendLifecycleEvent: vi.fn(async (runId: string, attemptId: string, payload: EngineEventPayload) => {
+        if (payload.type !== "text" && payload.type !== "progress"
+          && payload.type !== "artifact" && payload.type !== "usage") {
+          events.push({ runId, attemptId, payload });
+        }
+      }),
       startAttempt: vi.fn().mockResolvedValue({ id: "attempt-1" }),
       assertAttemptGeneration: vi.fn().mockResolvedValue(0),
       transitionAttempt: vi.fn().mockResolvedValue(null),
@@ -89,7 +94,10 @@ describe("Codex conversation dispatch bridge", () => {
     expect(repository.getRun).not.toHaveBeenCalled();
     expect(repository.startAttempt).toHaveBeenCalledWith("run-1", "idempotency", "api-key", 2);
     expect(repository.assertAttemptGeneration).toHaveBeenCalledWith("attempt-1");
-    expect(events).toHaveLength(2);
+    expect(events).toEqual([{
+      runId: "run-1", attemptId: "attempt-1",
+      payload: { type: "status", status: "completed" },
+    }]);
     expect(sent).toEqual([
       { type: "stream", content: "hello", partial: true, leaderId: "cc_router" },
       { type: "stream_end", leaderId: "cc_router" },

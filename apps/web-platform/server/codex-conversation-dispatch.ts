@@ -10,11 +10,10 @@ import { authorizeEngineDataEgress } from "./agent-engine-data-egress-policy";
 interface ConversationBindingRepository {
   getConversationRun(conversationId: string): Promise<unknown>;
   getRun(runId: string): Promise<unknown>;
-  appendEvent?(event: unknown): Promise<unknown>;
   startAttempt(runId: string, attemptKey: string, expectedAuthMode: string, expectedGeneration: number): Promise<unknown>;
   assertAttemptGeneration(attemptId: string): Promise<unknown>;
-  transitionAttempt?(attemptId: string, status: "running" | "completed" | "failed" | "cancelled"): Promise<unknown>;
-  appendLifecycleEvent?(runId: string, attemptId: string, payload: EngineEvent["payload"]): Promise<unknown>;
+  transitionAttempt(attemptId: string, status: "running" | "completed" | "failed" | "cancelled"): Promise<unknown>;
+  appendLifecycleEvent(runId: string, attemptId: string, payload: EngineEvent["payload"]): Promise<unknown>;
 }
 
 export interface CodexConversationDispatchOptions {
@@ -66,23 +65,21 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     // This RPC is the request's acceptance boundary. A settings switch that
     // committed after the attempt was created makes it stale before transport.
     await options.repository.assertAttemptGeneration(attemptId);
-    await options.repository.transitionAttempt?.(attemptId, "running");
+    await options.repository.transitionAttempt(attemptId, "running");
     const factories = createCodexWebEngineFactoriesForBinding({ ...options.runtime, binding: { engineId: "codex", authMode: binding.authMode } });
     if (!factories.codex) {
       throw Object.assign(new Error("Codex adapter factory is unavailable"), { code: "codex_adapter_unavailable" });
     }
     for await (const event of dispatchConversationEngineRun({
-    repository: options.repository,
-    persistedRun: persisted,
-    factories: { codex: factories.codex },
-    conversationId: options.conversationId,
-    input: options.input,
-    context: options.context,
-    registry,
-    egress: { selection: options.selection, evidence: options.evidence },
-      eventSink: typeof attemptId === "string" && options.repository.appendLifecycleEvent
-        ? { appendEvent: (event) => options.repository.appendLifecycleEvent!(runId, attemptId, event.payload) }
-        : options.repository.appendEvent ? { appendEvent: options.repository.appendEvent.bind(options.repository) } : undefined,
+      repository: options.repository,
+      persistedRun: persisted,
+      factories: { codex: factories.codex },
+      conversationId: options.conversationId,
+      input: options.input,
+      context: options.context,
+      registry,
+      egress: { selection: options.selection, evidence: options.evidence },
+      eventSink: { appendEvent: (event) => options.repository.appendLifecycleEvent(runId, attemptId, event.payload) },
     })) {
       if (event.payload.type === "status"
         && (event.payload.status === "completed" || event.payload.status === "failed" || event.payload.status === "cancelled")) {
@@ -102,7 +99,7 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     // frame is sent: socket delivery is outside the database transaction.
   } catch (error) {
     if (typeof attemptId === "string" && terminalStatus === null) {
-      try { await options.repository.transitionAttempt?.(attemptId, "failed"); } catch { /* preserve dispatch error */ }
+      try { await options.repository.transitionAttempt(attemptId, "failed"); } catch { /* preserve dispatch error */ }
     }
     throw error;
   }
