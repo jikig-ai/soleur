@@ -1419,8 +1419,10 @@ case "$OP" in
     #
     # Same bucketing invariant as op=verify 2.6: group every run by
     # (functionID, floor(startedAt / CRON_PERIOD)); a bucket with >1 run is a
-    # DOUBLE-FIRE. There is no per-tick schedule field in v1.19.4, so the
-    # invariant derives from startedAt alone (ADR-100 Decision 7).
+    # DOUBLE-FIRE. The invariant derives from startedAt alone (ADR-100
+    # Decision 7) — version-agnostic: v1.19.4 exposes no per-tick schedule
+    # field, and while v1.45.1 populates `cronSchedule` on run nodes it reports
+    # the function's schedule, not the tick (#7463 re-spike).
     CRON_PERIOD="${CUTOVER_CRON_PERIOD_SECONDS:-3600}"
     if ! [[ "$CRON_PERIOD" =~ ^[1-9][0-9]*$ ]]; then
       echo "::error::doublefire-probe CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
@@ -2849,17 +2851,21 @@ case "$OP" in
     # { timeField: STARTED_AT, functionIDs } to the dedicated GQL over the private
     # net; P1-12 — the runner cannot reach 10.0.1.40 directly). Bucket every run by
     # (functionID, floor(startedAt / cron_period)); a bucket with >1 run is a
-    # DOUBLE-FIRE. There is NO per-tick schedule field in v1.19.4 — the invariant
-    # is derived from startedAt alone (ADR-100 Decision 7).
+    # DOUBLE-FIRE. The invariant is derived from startedAt alone (ADR-100
+    # Decision 7) — version-agnostic: v1.19.4 exposes no per-tick schedule
+    # field, and while v1.45.1 populates `cronSchedule` on run nodes it reports
+    # the function's schedule, not the tick (#7463 re-spike).
     CRON_PERIOD="${CUTOVER_CRON_PERIOD_SECONDS:-3600}"
     # P2-c CAVEAT + GUARD: ONE global CRON_PERIOD buckets EVERY function. The bucketing
     # is correctness-honest ONLY when every registered cron period ≥ CRON_PERIOD and is
     # hour-aligned to it: a cron firing FASTER than CRON_PERIOD yields >1 legitimate run
     # per bucket → false-positive (blocks verify — SAFE direction), and a real double-fire
-    # straddling a bucket boundary → false-negative (UNSAFE). There is no per-tick schedule
-    # field in v1.19.4 to source per-function periods, so this single-period assumption is
-    # load-bearing. Guard: CRON_PERIOD must be a positive integer; then LOUDLY qualify the
-    # verdict so no one reads "exactly-once VERIFIED" without the assumption.
+    # straddling a bucket boundary → false-negative (UNSAFE). No per-tick schedule field
+    # exists to source per-function periods (v1.19.4 exposes none; v1.45.1's per-run
+    # `cronSchedule` is the function's schedule, not the tick — #7463 re-spike), so
+    # this single-period assumption is load-bearing. Guard: CRON_PERIOD must be a
+    # positive integer; then LOUDLY qualify the verdict so no one reads
+    # "exactly-once VERIFIED" without the assumption.
     if ! [[ "$CRON_PERIOD" =~ ^[1-9][0-9]*$ ]]; then
       echo "::error::2.6 CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
     fi

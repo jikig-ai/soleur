@@ -219,7 +219,7 @@ function orphanedEnvelope(opts: { ts?: number; orig?: unknown } = {}) {
   };
 }
 
-/** The server's `inngest/function.cancelled` shape, as measured on v1.19.4 (no `error`). */
+/** The server's `inngest/function.cancelled` shape, as measured on v1.45.1 (no `error`). */
 function cancelledEnvelope(opts: { elapsedMs?: number | null; orig?: unknown } = {}) {
   const elapsed = opts.elapsedMs === undefined ? 60_000 : opts.elapsedMs;
   return {

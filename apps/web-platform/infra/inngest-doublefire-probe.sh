@@ -11,8 +11,11 @@
 # in the window; the `op=verify` arm does the (functionID, floor(startedAt /
 # cron_period)) exactly-once bucketing (no group > 1 ⇒ no double-fire).
 #
-# There is NO per-tick schedule field in inngest v1.19.4 (ADR-100 Decision 7) — the
-# exactly-once invariant is derived downstream from startedAt, never a tick field.
+# No per-tick schedule field is consulted (ADR-100 Decision 7) — the exactly-once
+# invariant is derived downstream from startedAt alone, which is version-agnostic.
+# (inngest v1.45.1 DOES populate a per-run `cronSchedule` — it was null on v1.19.4 — but it
+# reports the function's schedule, not the tick, so the probe still buckets on
+# startedAt; measured in the #7463 re-spike.)
 # The introspected surface (phase0-empirical-spike.md): RunsFilterV2 =
 # { from: Time!, until: Time, timeField (QUEUED_AT|STARTED_AT|ENDED_AT),
 #   status, functionIDs: [UUID!], appIDs, query }; FunctionRunV2 node carries
@@ -107,7 +110,7 @@ PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-100}"
 FIXTURE_DIR="${INNGEST_DOUBLEFIRE_RUNS_FIXTURE:-}"
 
 # STARTED_AT lower bound. Same 365-day clamp + BusyBox-safe fallback as the sibling
-# inngest scripts (the epoch is rejected by v1.19.4 as an out-of-range Time bound).
+# inngest scripts (the epoch is rejected by inngest v1.45.1 as an out-of-range Time bound).
 # This is only the DEFAULT used when no caller supplies ?from=; the cutover workflow always
 # supplies an anchored bound (see WINDOW POLICY above, which retired the former
 # "never narrowed" rule for this scan).
