@@ -22,8 +22,21 @@
 - Live verifications: `gh issue view 9151/7103`, PR #9156 mergedAt, Hetzner API, Doppler `ADMIN_IPS`, `ssh-keyscan` of web-2, markdownlint, lint-guard-contract.py, lint-encryption-posture.py, code-review overlap sweep
 
 ## Work Phase
-- Status: implementation complete; review/qa/ship pending.
-- Commits: `7ce546a090` (host-key pin + HCL plumbing), `e6cfe30fca` (sibling resource + workflow route + parity surface), docs commit pending.
+- Status: implementation complete; merge pending green checks.
+- Commits: `7ce546a090` (host-key pin + HCL plumbing), `e6cfe30fca` (sibling resource + workflow route + parity surface), `cc3bdb8b57` docs, `26b8079fcb` CI-gate fixes; rebased twice onto origin/main (head now `e7e09078dd`).
+- PR #9212: titled, bodied, `semver:minor`, marked ready. First line answers the merge-mutation question (push:main paths fire apply-deploy-pipeline-fix.yml; delivery IS the deploy).
+
+### CI failures fixed (attempt 1, head cc3bdb8b57)
+- `lint-shell-trace-credential-refusal` + `lint-bot-statuses`: parity script lacked the #7797 xtrace refusal → added the canonical `case "$-"` prologue.
+- `infra-privileged-tier-census` G2a: `doppler run` lacked `--preserve-env` → added.
+- `guard-vacuity-floor` ARM 5c: `web-2-host-key-local.test.sh` was floor-bearing under the deferred `apps/web-platform/infra/` → PROMOTED_FILES per-file promotion (union-merged with main's `inngest-cli-staleness` promotion).
+
+### Flakes proven NOT this PR
+- `deploy-script-tests (3/4)` T9 `provision-attempt-exit-143` missing event row: fails IDENTICALLY on main run 36592456887 — main-side regression window opened by the 7463 inngest CLI pin-bump merge (~14:0xZ, between main's 12:36Z green and 15:07Z first red). Also flaky — passed locally and on my later head.
+- `deploy-script-tests (4/4)` `cloud-init-inngest-bootstrap` pin-vs-tag drift (v1.1.41 pin vs merged `vinngest-v1.1.42` tag): identical on main run 36592456887; tracked by the in-flight #7463 follow-up.
+- `e2e` `/api/team-names` 500s: flake, green on retry.
+- `luks-monitor` broken-pipe printf: flake.
+- Neither failing leg is a required status check (ruleset: `test`, `e2e`, `enforce`, `infra-validate-required`, etc. — deploy-script-tests legs are not listed).
 
 ### Errors / corrections
 - `FLOOR_DESTS`/`FLOOR_BLOCKS` first guessed 79/22; measured reality is 75/23 — floors pinned to measured.
