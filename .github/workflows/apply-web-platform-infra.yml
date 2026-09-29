@@ -4534,12 +4534,13 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           POLL_OUTCOME: ${{ steps.poll.outcome }}
+          PIN_LOAD_OUTCOME: ${{ steps.pin_load.outcome }}
         run: |
           {
             echo "## git-data-host-replace (ADR-103, #6242)"
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
-            echo "**Status:** ${JOB_STATUS} (apply outcome: ${APPLY_OUTCOME}; boot-poll outcome: ${POLL_OUTCOME})"
+            echo "**Status:** ${JOB_STATUS} (apply outcome: ${APPLY_OUTCOME}; boot-poll outcome: ${POLL_OUTCOME}; pin_load outcome: ${PIN_LOAD_OUTCOME})"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
           # (#8178) Same backstop as git_data_host_create: a green apply whose boot poll did
@@ -6403,11 +6404,12 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           POLL_OUTCOME: ${{ steps.poll.outcome }}
+          PIN_LOAD_OUTCOME: ${{ steps.pin_load.outcome }}
         run: |
           {
             echo "## git-data-host-create"
             echo ""
-            echo "- outcome: ${JOB_STATUS} (apply outcome: ${APPLY_OUTCOME}; poll outcome: ${POLL_OUTCOME})"
+            echo "- outcome: ${JOB_STATUS} (apply outcome: ${APPLY_OUTCOME}; poll outcome: ${POLL_OUTCOME}; pin_load outcome: ${PIN_LOAD_OUTCOME})"
             echo "- reason: ${REASON:-n/a}"
             echo ""
             echo "### What a green run gives you — and what it does not"
@@ -6417,8 +6419,7 @@ jobs:
             echo "The APPLY alone does not prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. Since #6982 that gap is closed by the boot-signal poll step above, NOT by the apply: the host emits stage:boot_complete with its four assertions, and this job fails if that signal does not arrive or arrives with any assertion false. If the poll step FAILED with the credentials-absent or unreadable-signal error, you are back to the old state and must verify manually before trusting this birth."
             echo ""
             echo "It does NOT give you:"
-            echo "- a serving store — \`GIT_DATA_STORE_ENABLED\` is still absent from Doppler prd, so the feature stays dark;"
-            echo "- encryption of the live store — every wrapper still mounts the PLAINTEXT /mnt/git-data until the #5274 Phase-3 cutover;"
+            echo "- a serving store — \`GIT_DATA_STORE_ENABLED\` is still absent from Doppler prd, so the feature stays dark (the device-level LUKS mount is already live — the flag is what starts serving from it);"
             echo "- monitoring — \`betteruptime_heartbeat.git_data_prd\` is deliberately OUT of this job's -target set and ships paused;"
             echo "- working transport keys in the running web container — the three private halves land in Doppler prd, but the container bakes its env at \`docker run\`, so they are inert until the next \`ci-deploy\` redeploy."
             echo ""
