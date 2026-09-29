@@ -83,7 +83,7 @@ describe("migration 145: Codex auth-mode rebinding", () => {
   });
 
   it("commits every lifecycle status and its attempt transition in one RPC", () => {
-    const sql = read("147_codex_lifecycle_state_sync.sql");
+    const sql = read("148_codex_lifecycle_lock_order.sql");
     const lifecycle = sql.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     const transition = sql.match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
 
@@ -92,10 +92,8 @@ describe("migration 145: Codex auth-mode rebinding", () => {
     expect(lifecycle).toMatch(/^\s*INSERT INTO public\.agent_engine_events[\s\S]*RETURNING \* INTO v_row/m);
     expect(lifecycle).toMatch(/IF p_payload->>'source_type' = 'status'[\s\S]*p_payload->>'status' IS DISTINCT FROM v_attempt\.status THEN\s+PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
     expect(lifecycle).not.toMatch(/UPDATE public\.agent_engine_attempts AS a SET/);
-    const down = read("147_codex_lifecycle_state_sync.down.sql");
-    expect(down).toMatch(/FOR UPDATE/);
-    expect(down).toMatch(/UPDATE public\.agent_engine_attempts AS a SET[\s\S]*status = p_payload->>'status'/);
-    const priorLifecycle = read("146_codex_terminal_lifecycle.sql").match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+    const down = read("148_codex_lifecycle_lock_order.down.sql");
+    const priorLifecycle = read("147_codex_lifecycle_state_sync.sql").match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     const rollbackLifecycle = down.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     expect(rollbackLifecycle).toBe(priorLifecycle);
     const priorTransition = read("145_codex_auth_mode_rebind.sql").match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
@@ -103,7 +101,7 @@ describe("migration 145: Codex auth-mode rebinding", () => {
     expect(rollbackTransition).toBe(priorTransition);
   });
 
-  it("keeps applied migrations 145 and 146 immutable and puts lifecycle sync in migration 147", () => {
+  it("keeps applied migrations 145 through 147 immutable and puts lock-order sync in migration 148", () => {
     const applied = readFileSync(path.join(root, "145_codex_auth_mode_rebind.sql"));
     const gitBlob = createHash("sha1")
       .update(Buffer.concat([Buffer.from(`blob ${applied.length}\0`), applied]))
@@ -116,7 +114,13 @@ describe("migration 145: Codex auth-mode rebinding", () => {
       .digest("hex");
     expect(lifecycleBlob).toBe("b006fb01c2544addd8035be4314273e14b7526ab");
 
-    const delta = read("147_codex_lifecycle_state_sync.sql");
+    const appliedStateSync = readFileSync(path.join(root, "147_codex_lifecycle_state_sync.sql"));
+    const stateSyncBlob = createHash("sha1")
+      .update(Buffer.concat([Buffer.from(`blob ${appliedStateSync.length}\0`), appliedStateSync]))
+      .digest("hex");
+    expect(stateSyncBlob).toBe("a8cef89ecdc303d3575dae712bd5181af5e0fd67");
+
+    const delta = read("148_codex_lifecycle_lock_order.sql");
     expect(delta).toMatch(/FOR UPDATE/);
     expect(delta).toMatch(/PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
   });
