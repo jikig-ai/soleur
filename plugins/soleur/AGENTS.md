@@ -175,7 +175,7 @@ grep -h 'description:' agents/**/*.md | wc -w
 
 ## Model Selection Policy
 
-Pricing basis, refreshed 2026-09-03 at the Fable 5.1 launch: Fable 5.1 is 2× Opus, **5× Sonnet**, 10× Haiku per MTok. The Sonnet multiple was 3.3× when ADR-053 was written against Sonnet 4.6 ($3/$15); Sonnet 5 bills $2/$10, so the cheap end of the range moved and the Fable-vs-Sonnet gap widened — re-read any tiering judgment that leaned on 3.3×. Fable 5.1 costs the same per token as Fable 5 ($10/$50) and differs only on cache reads, $0.25/MTok vs $1 (0.025× vs 0.1× of base input). That is 4× on the **cache-read line item alone** — output and cache writes are unchanged, and the ADR-083 consult is a cold single-shot spawn per gate with no reused prefix, so its cache reads are ~0 and this does not move Soleur's advisor spend.
+Pricing basis, refreshed 2026-09-03 at the Fable 5.1 launch: Fable 5.1 is 2× Opus, **5× Sonnet**, 10× Haiku per MTok. The Sonnet multiple was 3.3× when ADR-053 was written against Sonnet 4.6 ($3/$15); Sonnet 5.5 bills $2/$10, so the cheap end of the range moved and the Fable-vs-Sonnet gap widened — re-read any tiering judgment that leaned on 3.3×. Fable 5.1 costs the same per token as Fable 5 ($10/$50) and differs only on cache reads, $0.25/MTok vs $1 (0.025× vs 0.1× of base input). That is 4× on the **cache-read line item alone** — output and cache writes are unchanged, and the ADR-083 consult is a cold single-shot spawn per gate with no reused prefix, so its cache reads are ~0 and this does not move Soleur's advisor spend.
 
 Model selection is governed by three tiers (ADR-053; revised 2026-06-10 for the Fable pricing era):
 
