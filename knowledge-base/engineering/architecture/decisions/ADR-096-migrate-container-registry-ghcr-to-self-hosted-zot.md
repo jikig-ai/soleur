@@ -1781,3 +1781,25 @@ for the zot half. The cosign half moved in part 1 (the amendment above).
 - **Status.** 5.3b-iii is complete at template level once this merges. The live proof is the first
   post-replace `SOLEUR_ZOT_DISK` row with a new `boot_id`, `zot_image_fetch=ok` and
   `ghcr_blocked=1`. The ADR stays **Adopting**; 5.6 flips it.
+
+## Amendment 2026-09-29 (#9097) — the soak's inngest exercise evidence is the dedicated host's boot beacon, not a deploy pull
+
+`zot-soak-6122.sh` arm (b) used to require `MIN_SAMPLE` zot-served deploy pulls per image,
+including `registry:"zot" image:"inngest"`. The sole emitter of that event is `ci-deploy.sh
+deploy inngest`, sent only by a manual `deploy-inngest-image.yml` dispatch to the co-located web
+scheduler — quiesced since the 2026-09-15 dedicated-host cutover. The arm could only ever read 0,
+so the soak could never PASS even on a healthy fleet.
+
+Arm (b) is now two-legged: `MIN_SAMPLE` zot-served **web** deploy pulls (unchanged — the rolling
+deploy still emits `image:"web"`), AND `>= 1` dedicated-host `stage:"inngest_zot"
+host_name:"soleur-inngest"` boot event in the window (the already-fetched `INNGEST_ZOT`
+denominator count). The inngest floor is hardcoded at 1 — the dedicated host pulls zot only at
+boot, once per host-replace, so a per-image pull count or a `MIN_SAMPLE` floor would recreate the
+unreachable arm. Vacuity is unchanged: a zero-evidence window still fails at the
+`no-inngest-freshboot-evidence` denominator and again at arm (b), never exits 0, never reads
+TRANSIENT.
+
+This changes what evidence arm (b) samples, not what the soak authorizes: a PASS still requires
+zero watched events, zero retired-name events, both blocker issues closed-as-completed, and —
+before acting on it — the Better Stack corroboration named on the PASS line. 5.6's gate and the
+#6129 flip are unaffected.
