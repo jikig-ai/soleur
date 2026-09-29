@@ -8,7 +8,7 @@ Operating norms: one PR; commit with `LEFTHOOK_EXCLUDE=bun-test,plugin-component
 ## Phase 1 — Failing tests (TDD RED)
 
 - [x] 1.1 In `scripts/followthroughs/zot-soak-6122.test.sh`, add the new rows WITHOUT yet removing `$Q_ZOTING` from `HEALTHY`/legacy specs (removing it first turns every HEALTHY-based row TRANSIENT-red on the unfixed script):
-  - [x] 1.1.1 NB1 accepted-evidence row: HEALTHY-derived spec with `$Q_ZOTING=0` via bash substitution `${HEALTHY/$Q_ZOTING=5/$Q_ZOTING=0}` — NOT append (stub matches keys in order, first match wins; an appended `=0` never reds) — blockers CLOSED/COMPLETED, `inngest_fixed=yes` → expect exit 0 `PASS` (RED pre-fix: unfixed script FAILs `insufficient-sample` on `inngest=0`)
+  - [x] 1.1.1 NB1 accepted-evidence row: spec carries `$Q_ZOTING=0` as the first key matching the inngest URL — shipped as a tail append (`"$HEALTHY;$Q_ZOTING=0"`) since Phase 2 removed `$Q_ZOTING=5` from HEALTHY (a substitution would no-op there; with no earlier matching key the append IS first-match — verified no other HEALTHY key is a substring of that URL) — blockers CLOSED/COMPLETED, `inngest_fixed=yes` → expect exit 0 `PASS` (RED pre-fix: unfixed script FAILs `insufficient-sample` on `inngest=0`)
   - [x] 1.1.2 NB2 zero-evidence row: `G6_NOEV` (soleur-inngest=0) → expect exit 1 `FAIL(no-inngest-freshboot-evidence)` (baseline pin; green pre-fix)
   - [x] 1.1.3 NB3 mutation row: delete the denominator's `if (( INNGEST_ZOT == 0 ))` FAIL block on a soak copy (assignment kept) and run a `G6_NOEV`+`$Q_ZOTING=0` spec → expect exit 1 `FAIL(insufficient-sample)`
   - [x] 1.1.4 NB4 residual-zero (source): `image:"inngest"` absent from comment-stripped soak code lines AND the sample `if` names `INNGEST_ZOT` (RED pre-fix)

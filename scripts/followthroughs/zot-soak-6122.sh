@@ -389,8 +389,8 @@ done
 #         a retired sample operand — comments may name it, no code line may. ---
 ZOT_WEB=$(sentry_count 'feature:supply-chain op:image-pull registry:"zot" image:"web"')
 
-if [[ "$ZOT_WEB" == "TRANSIENT" ]]; then
-  echo "TRANSIENT: Sentry query failed (window $START..$END) — retry next sweep." >&2
+if [[ ! "$ZOT_WEB" =~ ^[0-9]+$ ]]; then
+  echo "TRANSIENT: Sentry query 'web-pull-sample' failed (window $START..$END) — retry next sweep." >&2
   exit 2
 fi
 
@@ -440,7 +440,7 @@ if [[ ! "$APP_ZOT" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 # ⚠ HARDCODED == 0 — do NOT reuse MIN_SAMPLE and do NOT add a knob.
-#   MIN_SAMPLE counts zot-served PULLS PER IMAGE (rolling deploys); this counts fresh HOST
+#   MIN_SAMPLE counts zot-served WEB deploy pulls (rolling deploys); this counts fresh HOST
 #   BOOTS. Different quantities — reusing one threshold across both is a category error.
 #   And a knob's only useful value here is 1: 0 disarms the floor, >1 buys no extra evidence
 #   for the narrow thing this arm proves (the beacon emits and the flip was exercised on the
@@ -456,6 +456,11 @@ fi
 # ── The DEDICATED-HOST denominator (#6500). app_zot above is the WEB host's evidence; nothing
 # above proves the dedicated soleur-inngest host was observed. Same shape, same reasons: guard
 # the string before any arithmetic, hardcoded floor, no knob.
+# ⚠ Producer note (#9097): arm (b) below ALSO consumes this count (`INNGEST_ZOT -lt 1`). If this
+# arm is ever removed, BOTH shapes stay fail-closed — deleting only the `== 0` FAIL block leaves
+# arm (b)'s leg refusing a zero-evidence window (pinned by the suite's NB3 mutant), and deleting
+# the assignment too aborts on `set -u` at arm (b) (exit 1, unbound variable). The NB3 comment
+# and this note are the contract that removal is safe only because both arms refuse.
 # ⚠ HOST-PINNED, while `[freshboot]` stays bare. The colocated inngest block in cloud-init.yml is
 # gated by web_colocate_inngest, not deleted: a web host born with it on would emit inngest_zot
 # and satisfy a bare denominator while the dedicated host never reported — a false PASS on the

@@ -61,6 +61,12 @@ printf '%s\n' "\$url" >> "\${STUB_URL_LOG:-/dev/null}"
 if [[ -n "$fail_url_substr" && "\$url" == *"$fail_url_substr"* ]]; then
   printf '{"detail":"boom"}\nHTTP_STATUS:500'; exit 0
 fi
+# STUB_NODATA (env, #9097 review): HTTP 200 with a body that has no .data array — the one
+# revert this harness could not previously emit (sentry_count's else-error arm). It must drive
+# the soak's TRANSIENT guard, never a counted zero. NO backticks here: this heredoc is unquoted.
+if [[ -n "\${STUB_NODATA:-}" && "\$url" == *"\$STUB_NODATA"* ]]; then
+  printf '{"detail":"ok-but-no-data-array"}\nHTTP_STATUS:200'; exit 0
+fi
 matched=0
 n=0
 IFS=';' read -ra pairs <<< "$counts_spec"
@@ -191,6 +197,7 @@ OLD
         STUB_GH_STATE_WEB="$web_state" STUB_GH_REASON_WEB="$web_reason" \
         STUB_GH_MERGED_AT="${STUB_GH_MERGED_AT-2026-09-24T03:22:41Z}" \
         STUB_URL_LOG="$URL_SINK" STUB_UNMATCHED="$UNMATCHED_SINK" \
+        STUB_NODATA="${STUB_NODATA:-}" \
         "${start_env[@]}" bash "$soak" 2>&1)"; rc=$?
   rm -rf "$d"
   printf '%s|%s' "$rc" "$out"
@@ -838,9 +845,9 @@ g6 "NB2: soleur-inngest=0 -> exit 1 FAIL(no-inngest-freshboot-evidence) at the d
 
 # NB3: delete the denominator's FAIL block on a soak COPY (the INNGEST_ZOT assignment and its
 #      guard stay) — the sample leg must then refuse a zero-evidence window on its own. This is
-#      the arm's redundancy contract: it survives the denominator ever being removed (the T1
-#      judgment call is still an open decision), which would otherwise leave a zero-evidence
-#      window ungated.
+#      the arm's redundancy contract: it survives the denominator ever being removed (#8503's
+#      T1 — whether the denominator itself is kept — is still an open decision), which would
+#      otherwise leave a zero-evidence window ungated.
 NB3_SPEC="$G6_NOEV;$Q_ZOTING=0"
 m_nb3="$(mktemp)"
 sed -e '/^if (( INNGEST_ZOT == 0 )); then$/,/^fi$/d' "$SOAK" > "$m_nb3"
@@ -855,33 +862,75 @@ rm -f "$m_nb3"
 
 # NB4 (residual-zero, source): the retired operand is gone from the EXECUTABLE soak — comment
 #      lines may still name it as retired, so scan the comment-stripped code lines (SOAK_CODE
-#      above). The second half pins that the sample arm's inngest leg reads INNGEST_ZOT, so the
-#      leg cannot be silently dropped (pairs with the NB3 mutant).
-if [[ "$SOAK_CODE" != *'image:"inngest"'* ]]; then
-  pass "NB4a: no code line counts the retired image:\"inngest\" operand (comments may name it)"
+#      above). BOTH spellings are pinned: a re-add as unquoted `image:inngest` is valid Sentry
+#      syntax and would otherwise evade the quoted-literal check. The second half pins that the
+#      sample arm's inngest leg reads INNGEST_ZOT, so the leg cannot be silently dropped (pairs
+#      with the NB3 mutant).
+if [[ "$SOAK_CODE" != *'image:"inngest"'* && "$SOAK_CODE" != *'image:inngest'* ]]; then
+  pass "NB4a: no code line counts the retired image:\"inngest\" operand, quoted or bare (comments may name it)"
 else
-  fail "NB4a: image:\"inngest\" still appears on a soak code line"
+  fail "NB4a: a retired image inngest operand still appears on a soak code line"
 fi
 if grep -qE '^if \[\[ "\$ZOT_WEB" -lt "\$MIN_SAMPLE" \|\| "\$INNGEST_ZOT" -lt 1 \]\]; then$' "$SOAK"; then
   pass "NB4b: the sample arm requires ZOT_WEB >= MIN_SAMPLE AND INNGEST_ZOT >= 1 (hardcoded floor, no knob)"
 else
-  fail "NB4b: the sample arm must read \"\$ZOT_WEB\" -lt \"\$MIN_SAMPLE\" || \"\$INNGEST_ZOT\" -lt 1"
+  fail "NB4b: the sample arm must read \"\$ZOT_WEB\" -lt \"\$MIN_SAMPLE\" || \"\$INNGEST_ZOT\" -lt 1; got: $(grep -nE 'if \[\[.*MIN_SAMPLE' "$SOAK" | head -1)"
 fi
 
 # NB5 (residual-zero, runtime): a PASS run must not issue the retired query at all — the stub
-#      logs every request URL, so assert the encoded operand never left the process.
-g6_row 0 "PASS" "$HEALTHY" CLOSED 200 "" yes COMPLETED >/dev/null
-if grep -q 'image%3A%22inngest%22' "$URL_SINK"; then
-  fail "NB5: the soak still issues the retired image:\"inngest\" query ($(grep -c 'image%3A%22inngest%22' "$URL_SINK") request(s) logged)"
+#      logs every request URL, so assert the encoded operand never left the process. The
+#      POSITIVE CONTROL matters: absence in an empty sink (a run that died before issuing
+#      queries) is not the claim, so the run's PASS verdict and a non-empty sink are checked
+#      before the absence is read as evidence. Both spellings again (unquoted encodes without
+#      the %22s).
+if ! g6_row 0 "PASS" "$HEALTHY" CLOSED 200 "" yes COMPLETED; then
+  fail "NB5 control: the fixture run did not reach PASS ($G6_LAST) — the wire check measured nothing"
+elif [[ ! -s "$URL_SINK" ]]; then
+  fail "NB5 control: the PASS run logged no request URLs — an empty sink makes the absence check vacuous"
+elif grep -qE 'image%3A(%22inngest%22|inngest)' "$URL_SINK"; then
+  fail "NB5: the soak still issues the retired image inngest query ($(grep -cE 'image%3A(%22inngest%22|inngest)' "$URL_SINK") request(s) logged)"
 else
-  pass "NB5: a PASS run issues no image:\"inngest\" query (retired from the wire, not just the verdict)"
+  pass "NB5: a PASS run issues no image inngest query (retired from the wire, not just the verdict)"
 fi
 
 # NB6 (must-PASS, non-canonical): the inngest floor is >=1 boot, not "exactly the fixture's 1" —
-#      more boots than the floor needs must also PASS.
+#      more boots than the floor needs must also PASS. The landed check first: a substitution
+#      that no-ops (the =1 literal leaves HEALTHY) would silently degenerate this row into a
+#      duplicate of NB1 — a green that measures nothing.
 NB6_SPEC="${HEALTHY/host_name%3A%22soleur-inngest%22=1/host_name%3A%22soleur-inngest%22=2};$Q_ZOTING=0"
+if [[ "$NB6_SPEC" == *'host_name%3A%22soleur-inngest%22=2'* ]]; then
+  pass "NB6 control: the soleur-inngest=2 substitution landed (not a vacuous NB1 duplicate)"
+else
+  fail "NB6 control: the =1 -> =2 substitution did not land; NB6 would re-run NB1's fixture"
+fi
 g6 "NB6: soleur-inngest=2 (above the floor) + zero image:\"inngest\" events -> exit 0 PASS" \
   0 "PASS" "$NB6_SPEC" CLOSED 200 "" yes COMPLETED
+
+# NB7 (mutation, the plan's combined row): drop BOTH inngest refusals — the denominator's FAIL
+#      block AND the sample arm's `|| "$INNGEST_ZOT" -lt 1` clause — and a zero-evidence window
+#      must still not reach exit 0. On the combined mutant the run goes green (that is the
+#      vacuity being guarded against), so the row is `mutant killed` — the suite detecting the
+#      unfloored window IS the assertion. NB4b's exact-line pin is the source-level twin.
+g6_mutant "NB7: denominator FAIL block + the -lt 1 clause both removed" \
+  '/^if (( INNGEST_ZOT == 0 )); then$/,/^fi$/d; s/ || "\$INNGEST_ZOT" -lt 1//' \
+  1 "FAIL(insufficient-sample)" "$NB3_SPEC" CLOSED 200 "" yes COMPLETED
+
+# NB8: sentry_count's shape-check arm — HTTP 200 with no .data array must drive TRANSIENT
+#      (exit 2), never a counted zero. The stub emits it via STUB_NODATA; this is the only row
+#      that reaches `else error("no data array")`, so a revert to `else 0` would turn every
+#      malformed 200 into a clean zero on every arm.
+if STUB_NODATA='app_zot' g6_row 2 "'app_zot' failed" "$HEALTHY" CLOSED 200 "" yes COMPLETED; then
+  pass "NB8: a 200 response with no .data array -> exit 2 TRANSIENT, never a counted zero"
+else
+  fail "NB8: a 200-without-.data body must exit 2 TRANSIENT at the app_zot guard; got $G6_LAST"
+fi
+# NB8b (source pin): the shape-check arm exists in the code — the runtime row above is blind to
+#      a revert that never ships the check at all in a form the stub can reach.
+if grep -qF 'else error("no data array")' "$SOAK"; then
+  pass "NB8b: sentry_count's else error(\"no data array\") shape-check arm is present"
+else
+  fail "NB8b: sentry_count lost its no-data-array error arm — a malformed 200 would count as zero"
+fi
 
 # Assertion floor: a deleted row must red. Literal adjacent to its `if` (guard-vacuity-floor).
 # Raised 30 -> 32 in the SAME edit that added the two rows above (a floor left below the count it
@@ -896,7 +945,10 @@ g6 "NB6: soleur-inngest=2 (above the floor) + zero image:\"inngest\" events -> e
 # OV2, OV3 and the OV4 in-suite mutant (5).
 # Raised 70 -> 77 in the SAME edit that added the #9097 rows: +7 = NB1, NB2, the NB3
 # denominator-delete mutant, NB4a, NB4b, NB5 and NB6.
-SOAK_MIN_PASSES=77
+# Raised 77 -> 81 in the SAME edit that resolved the #9097 review findings: +4 = the NB6
+# substitution landed-check, the NB7 combined mutant (denominator FAIL + the -lt 1 clause), the
+# NB8 200-without-.data TRANSIENT row and the NB8b shape-check source pin.
+SOAK_MIN_PASSES=81
 if [[ "$passes" -lt $SOAK_MIN_PASSES ]]; then
   printf 'FATAL: only %s passing assertions ran, expected at least %s — a row was deleted\n' "$passes" "$SOAK_MIN_PASSES" >&2
   exit 1
