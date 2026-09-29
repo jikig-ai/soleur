@@ -4458,6 +4458,10 @@ if want_scripts; then
   # #7226: the web-1 pin capture script (refuses under CI; stubbed keyscan). scripts/*.test.sh is
   # not globbed, so this line is its only registration.
   run_suite "scripts/capture-web-1-host-key" bash scripts/capture-web-1-host-key.test.sh
+  # #9151: the web-2 twin (same hermetic stub harness; cattle-host re-key semantics).
+  run_suite "scripts/capture-web-2-host-key" bash scripts/capture-web-2-host-key.test.sh
+  # #9151: the no-SSH ci-deploy.sh parity read (fixture-driven; no network).
+  run_suite "scripts/check-deploy-script-parity" bash scripts/check-deploy-script-parity.test.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
   run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
   # tests/commands/ is registered by these explicit lines ONLY — there is no glob here, and
