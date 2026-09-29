@@ -2,10 +2,10 @@
 
 Analysis of record for the `inngest_cli_version` / `inngest_cli_sha256` /
 `inngest_cli_sha256_arm64` pins in `inngest.tf`. Read by
-`inngest-cli-staleness.test.sh` (CI gate, per-PR) and by the
+`inngest-cli-staleness.test.sh` (CI gate, per-PR) and — **once PR-B lands** — by the
 `Detect inngest CLI pin drift` poll step in `.github/workflows/rule-audit.yml`
-(detection, 1st + 15th). Mirrors the shape of `zot-image.provenance.md` so the
-sidecars share one parseable format.
+(detection, 1st + 15th; that step does NOT exist yet in this tree). Mirrors the shape
+of `zot-image.provenance.md` so the sidecars share one parseable format.
 
 **inngest-server is the entire background-job substrate.** A wrong pin here does not
 degrade the scheduler — the bootstrap sha256-verify refuses the tarball and the host
@@ -46,19 +46,27 @@ Asserted by staleness check 8; rotate it on every bump.
 | amd64 | `d023b26659275fdbe9348b6518077ce1ea9906a449898e49ddced91bfc6fd757` (v1.19.4) | 2026-09-29 |
 | arm64 | `30a3f01474cb2266c24545cdc83930baeae14232d629c87aeeb8f21118948199` (v1.19.4) | 2026-09-29 |
 
-Recovery procedure: see the plan's `## Rollback`. In short — revert the `inngest.tf`
-locals to the above and rotate THIS section to the pin being rolled back from (a
-naive revert that leaves previous==current reds the gate, deliberately), merge
-(host-inert by `OPERATOR_APPLIED_EXCLUSIONS`), then re-run the apply-window path.
+Recovery procedure: see `## Rollback` in
+`knowledge-base/project/plans/2026-09-29-infra-inngest-cli-pin-bump-freshness-plan.md`.
+In short — revert the `inngest.tf` locals to the above and rotate THIS section to the
+pin being rolled back from (a naive revert that leaves previous==current reds the
+gate, deliberately), merge (host-inert by `OPERATOR_APPLIED_EXCLUSIONS`), then re-run
+the apply-window path. **Verify the rollback candidate boots against the migrated
+schema first** — post-window, Postgres carries migrations the old binary may not
+tolerate (e.g. `000007` dropped `spans.is_deferred`); if unsure, restore the pre-flip
+backup instead of booting v1.19.4 against the new schema.
 
 ## Drift threshold (the poll's trip point — recorded here so the two cannot diverge)
 
-The `rule-audit.yml` poll files the `inngest-pin-drift` issue when the pinned version
-is **`>= 5` stable releases behind `releases/latest` OR the pinned release's upstream
-date is `>= 45` days old**. inngest ships ~weekly, so an any-delta rule would mint a
-permanently-open ticket within days of every bump. The offline `MAX_AGE_DAYS=60` in
-`inngest-cli-staleness.test.sh` (and `inngest-cli-pin-probe.sh`) is the backstop for
-the poll's OWN failure — the two mechanisms are different failures, not redundancy.
+The `rule-audit.yml` poll (**lands in PR-B — absent until then**) files the
+`inngest-pin-drift` issue when the pinned version is **`>= 5` stable releases behind
+`releases/latest` OR the pinned release's upstream date is `>= 45` days old**.
+inngest ships ~weekly, so an any-delta rule would mint a permanently-open ticket
+within days of every bump. PR-B's implementation MUST read these thresholds from this
+section (or assert parity against them) — they are the record of record. The offline
+`MAX_AGE_DAYS=60` in `inngest-cli-staleness.test.sh` (and `inngest-cli-pin-probe.sh`)
+is the backstop for the poll's OWN failure — the two mechanisms are different
+failures, not redundancy.
 
 ## Re-verification table (v1.19.4 → v1.45.1)
 
@@ -83,15 +91,18 @@ evidence in `phase0-respike-evidence.md`. These are **measurements**, not infere
 | `inngest/function.cancelled` + ULID run ids | **HOLDS** |
 | FLUSHALL mandate (PG swap, retained Redis) | **HOLDS** — stale continuation + cron fired against empty PG-B; `{cs}` keys survived |
 | Step-524 alert needles in `betterstack-logs-alerts.tf` | **HOLDS** — all three error texts still in v1.45.1 source |
-| Connect listeners | **CHANGED** — v1.45.1 binds `*:50052`, `*:50053`, `*:8289` wildcard (the `--connect-*-grpc-ip` flags are ADVERTISE, not bind). nftables default-deny gates inbound on the dedicated host; nobody should assume loopback-only |
+| Connect listeners | **UNCHANGED bind set** — v1.19.4 already binds `*:50052`/`*:50053`/`*:8289` wildcard; v1.45.1 only adds the `--connect-*-grpc-ip/-port` ADVERTISE flags (not bind). Exposure note: the host's nftables input chain is `policy accept` with drops only on `:8288`/`:8289` (web-IP-scoped), so the connect ports are reachable intra-subnet on BOTH versions — no new exposure, and no "default-deny" |
 | `--poll-interval` self-heal semantics | **UNCHANGED mechanism** — `cmd/start` never sets `Opts.Poll` on either tag; the loop re-pings only errored apps on both |
-| Goose migrations on `start` | 5 new Postgres migrations — incl. **destructive** `000006_apps_unique_active_name` (force-archive+rename dup app names) and DROPs in 000007/000009/000010. Pre-flip Postgres backup is a precondition of the apply window (follow-through tracker) |
+| Goose migrations on `start` | 5 new Postgres migrations — incl. **destructive** `000006_apps_unique_active_name` (force-archive+rename dup app names) `000007_spans_is_deferred` (DROP COLUMN — data-destroying, not rebuildable like the index DROP+recreates in 000008/000009/000010). Pre-flip Postgres backup is a precondition of the apply window (follow-through tracker) |
 
 ## Version-scoped claim register
 
 The staleness gate's check 7 enforces that `inngest vX.Y.Z` claims in these files name
-the pinned version. The two REQUIRED claim locations (each must carry >=1 claim) are
-`inngest-inventory.sh` and `inngest-doublefire-probe.sh`.
+the pinned version. **The claim phrasing contract is `inngest vX.Y.Z` (or
+`inngest (vX.Y.Z)`)** — alternate phrasings (`inngest-server v…`, `pinned v…`, a bare
+`vX.Y.Z`) are invisible to the regex; write the canonical form when re-stamping. The
+REQUIRED claim locations (each must carry >=1 claim) are `inngest-inventory.sh`,
+`inngest-doublefire-probe.sh`, `inngest-host.tf`, and `betterstack-logs-alerts.tf`.
 
 | Claim | Location | Status |
 |---|---|---|
@@ -99,6 +110,12 @@ the pinned version. The two REQUIRED claim locations (each must carry >=1 claim)
 | Step-524 error-text needles | `betterstack-logs-alerts.tf` | Re-verified vs v1.45.1 source |
 | Idle-time flag is MINUTES | `inngest-bootstrap.sh` | Re-verified vs v1.45.1 `cmd/start` source |
 | `inngest start` host topology | `inngest-host.tf` | Re-stamped |
+| Companion test-file comments (flag units, GQL shapes, 404 route) | `inngest.test.sh`, `inngest-inventory.test.sh`, `inngest-enumerate-reminders.test.sh`, `inngest-doublefire-probe.test.sh`, `inngest-wiped-volume-verify.test.sh` | Re-stamped — in the follower list |
+
+Known-uncovered claim locations: `scripts/cutover-inngest.sh` (outside `infra/`; its
+version claims are dual-version migration records, and it needs BOTH the current pin
+and the on-host version anyway — re-stamp it manually at bump time) and
+`tests/scripts/test-inngest-host-dark-gate.sh` (fixture row, deliberately static).
 
 ## Known coupling
 
@@ -149,16 +166,24 @@ the staleness gate's failure message points at. Do all of it, in order:
    migration census (`pkg/db/postgres/migrations` diff between tags — every
    destructive/cleanup migration gets a named line here and in the follow-through
    tracker, because that is the irreversible half of the apply window).
-6. **Re-stamp `Capture date (UTC)`** and run `bash inngest-cli-staleness.test.sh` —
-   it must exit 0 — and `bash inngest-cli-staleness-mutation.test.sh` — all rows must
-   behave as expected.
+6. **Re-stamp `Capture date (UTC)` + the `Pinned version` header row**, then from
+   repo root run `bash apps/web-platform/infra/inngest-cli-staleness.test.sh` — it
+   must exit 0 — and `bash apps/web-platform/infra/inngest-cli-staleness-mutation.test.sh`
+   — all rows must behave as expected.
 7. **Merge is pipeline-active:** `mint-inngest-bootstrap-tag.yml` auto-fires on the
-   `inngest*` pin change → `vinngest-v*` tag + bootstrap image + ADR-232
-   auto-authored cloud-init pin PR. The LIVE flip needs that auto-PR merged plus an
-   operator-gated dispatch (`deploy inngest` or `inngest-host-replace`) in its own
-   window — after the shared-Postgres concurrency check and a pre-flip Postgres
-   backup, because upstream runs goose migrations on `start` and the delta can
-   contain destructive cleanup migrations.
+   `inngest*` pin change → next `vinngest-v*` tag + bootstrap image + ADR-232
+   auto-authored cloud-init pin PR. The LIVE flip is **`inngest-host-replace` only**
+   (`deploy inngest` posts to the web host, where the inngest arm is quiesced and
+   refuses — the dedicated host has no in-place deploy path; replace is destroy+
+   recreate, minutes of scheduler-dark, and the sleep-drain in inngest-bootstrap.sh
+   does NOT run on that path): merge the auto-PR, enumerate+sign off the FULL pending
+   `user_data` delta in the drift run (the replace applies every accumulated diff,
+   not just the pin), take a pre-flip Postgres backup, verify the shared-Postgres
+   concurrency precondition, then dispatch `inngest-host-replace` in its own window —
+   upstream runs goose migrations on `start` and the delta can contain destructive
+   cleanup migrations. Note the gate's own tier: `deploy-script-tests` is an advisory
+   signal, not a merge-blocking ruleset context — enforcement of last resort is the
+   poll's rc→issue path (PR-B) plus the bootstrap's fail-closed sha256 verify.
 
 Agent entry point:
 

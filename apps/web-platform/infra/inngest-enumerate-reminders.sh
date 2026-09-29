@@ -41,9 +41,10 @@ GQL_URL="${INNGEST_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-50}"
 # receivedAt lower bound (#5492). The client-side occurredAt/raw.ts future filter
 # does the real selection; this only bounds how far back we look for the INGEST
-# (arm) time of a still-armed reminder. The epoch (1970) was WRONG — inngest
-# v1.45.1 rejects it as an out-of-range `Time!` bound, so eventsV2 returned no
-# `.data.eventsV2` → exit 1 → the opaque HTTP 500 that blocked the cutover.
+# (arm) time of a still-armed reminder. The epoch (1970) was WRONG —
+# inngest v1.45.1 rejects it as an out-of-range `Time!` bound, so eventsV2
+# returned no `.data.eventsV2` → exit 1 → the opaque HTTP 500 that blocked the
+# cutover.
 # Default to a 365-day lookback: a recent, inngest-accepted bound that covers any
 # realistic arm→fire horizon (the schedule-reminder route puts NO upper bound on
 # fire_at, so a reminder COULD be armed >365d before firing — for that edge case

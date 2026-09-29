@@ -143,7 +143,11 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    (`:8288/v0/gql`, which the spike confirmed is **unauthenticated** in `start` mode) and Connect
    (`:8289`) are scoped by **host-local nftables on the inngest host's private interface**,
    allowing only the web-host private IPs (`10.0.1.10`/`.11`) and dropping peers (`.20` git-data,
-   `.30` registry); `:8289` binds loopback if Connect is unused. Delivered as a cloud-init
+   `.30` registry); ⚠ CORRECTED (2026-09-30, #7463 review): `:8289` binds wildcard on
+   every tested version (v1.19.4 and v1.45.1), not "loopback if Connect is unused" —
+   and the input chain is `policy accept` with targeted drops, so `:50052`/`:50053`
+   are reachable intra-subnet; the web-IP scoping above covers only 8288/8289.
+   Delivered as a cloud-init
    `write_files` script + a systemd oneshot re-run every boot (a reboot clears nftables), mirroring
    `cron-egress-nftables.sh`.
 4. **Fresh signing/event keys (SEC-H3).** `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` are freshly
@@ -1790,14 +1794,14 @@ with no owner — the gap #7308 named and #7463 fixed. The mechanism now has all
 halves, matching the zot-pin precedent (#7282):
 
 - **Detection** — the `Detect inngest CLI pin drift` step on `.github/workflows/rule-audit.yml`
-  (1st + 15th) computes the tag-ordered release delta and pin age, and files one
-  idempotent issue labeled `inngest-pin-drift` + `action-required` at >= 5 releases
-  or >= 45 days.
+  (1st + 15th — **lands in PR-B; absent until it merges**) computes the tag-ordered
+  release delta and pin age, and files one idempotent issue labeled
+  `inngest-pin-drift` + `action-required` at >= 5 releases or >= 45 days.
 - **Enforcement** — `apps/web-platform/infra/inngest-cli-staleness.test.sh` (offline,
   per-PR, deploy-script-tests): arch-keyed tf<->sidecar coherence, exactly-once pin
   form, single-source checksums.txt, 60-day capture-age backstop, previous-pin
   rollback rows, version-scoped follower-claim register. Mutation battery:
-  `inngest-cli-staleness-mutation.test.sh` (19 cases, incl. the two declared
+  `inngest-cli-staleness-mutation.test.sh` (25 cases, incl. the two declared
   stay-green boundaries: a coherent two-file arch swap and a fully coherent
   rollback are not offline-detectable — the poll is the network half).
 - **Analysis of record** — `apps/web-platform/infra/inngest-cli.provenance.md`
@@ -1817,16 +1821,22 @@ halves, matching the zot-pin precedent (#7282):
 | `runs(filter: RunsFilterV2!)` enumeration + `startedAt` | **HOLDS** — and `cronSchedule` is now POPULATED on run nodes (was null on v1.19.4). Probes still bucket on `startedAt`; the invariant never depended on the field |
 | Postgres swap with retained Redis → FLUSHALL mandate | **HOLDS** — identical replay observed: stale continuation completed against the empty backend, cron fired from the stale Redis schedule |
 | Flag surface the repo passes | **HOLDS** — `start --help` diff is additions-only (`--connect-*-grpc-*`); `--postgres-conn-max-idle-time` is MINUTES per `cmd/start` source at tag, `signkey-prod-` strip still required |
-| `inngest pause` drain verb | **ABSENT on both endpoints** — the `|| warn`-guarded drain call in `inngest-bootstrap.sh` was dead on v1.19.4 too; not an upgrade regression (follow-up filed) |
-| New listeners | **CHANGED** — v1.45.1 binds `*:50052`/`*:50053`/`*:8289` (connect gateway/executor) wildcard; the `--connect-*-grpc-ip` flags are ADVERTISE addresses, not bind. nftables default-deny covers inbound on the dedicated host |
+| `inngest pause` drain verb | **ABSENT on both endpoints** — the `warn`-guarded drain call in `inngest-bootstrap.sh` was dead on v1.19.4 too; not an upgrade regression (follow-up #9219 filed) |
+| Connect listeners | **UNCHANGED bind set, corrected in review** — v1.19.4 already binds `*:50052`/`*:50053`/`*:8289` wildcard (measured both binaries); v1.45.1 only adds the `--connect-*-grpc-ip/-port` ADVERTISE flags. And the host's nftables input chain is `policy accept` with drops on `:8288`/`:8289` only — the connect ports are reachable intra-subnet on BOTH versions. Decision 3's ":8289 binds loopback if Connect is unused" is stale (see correction marker there) |
 
 ### Merge-vs-apply boundary (unchanged)
 
 Merging the pin is host-inert but pipeline-active: `mint-inngest-bootstrap-tag.yml`
-fires on the pin change, mints `vinngest-v1.45.1`, and the ADR-232 bump bot opens the
+fires on the pin change, mints the next `vinngest-v*` tag (its own semver series —
+patch+1 over remote max, NOT the CLI version), and the ADR-232 bump bot opens the
 cloud-init pin PR. The LIVE flip still needs that auto-PR merged plus an
-operator-gated dispatch in its own window — after the shared-Postgres concurrency
-check and a pre-flip Postgres backup, because `start` runs goose migrations and the
-v1.19.4→v1.45.1 delta includes a destructive cleanup migration
-(`000006_apps_unique_active_name`, force-archives duplicate app names) plus index
-DROPs (000007/000009/000010). The follow-through tracker is filed at this PR's merge.
+operator-gated `inngest-host-replace` dispatch in its own window (the only flip
+path — `deploy inngest` posts to the web host where the inngest arm is quiesced and
+refuses; replace is destroy+recreate, i.e. minutes of scheduler-dark, and in-flight
+runs are SIGKILLed at destroy — the in-place drain never runs on that path) — after
+enumerating the FULL pending `user_data` delta, the shared-Postgres concurrency
+check, and a pre-flip Postgres backup, because `start` runs goose migrations and the
+v1.19.4→v1.45.1 delta includes two data-destroying migrations
+(`000006_apps_unique_active_name` force-archives+renames duplicate app names;
+`000007_spans_is_deferred` DROPs the column) plus rebuildable index DROP+recreates
+(000008/000009/000010). The follow-through tracker is filed at this PR's merge.

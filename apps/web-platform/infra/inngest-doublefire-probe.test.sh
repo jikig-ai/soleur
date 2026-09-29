@@ -5,7 +5,7 @@
 # startedAt}...]} on stdout, paginates on pageInfo.hasNextPage, and FAILS LOUD
 # (non-zero + stderr) on a non-array `.data.runs.edges` — never a false-clean
 # "no double-fire". `scheduled_tick` must appear nowhere (does not exist in
-# v1.45.1).
+# inngest v1.45.1).
 #
 # Test seam: INNGEST_DOUBLEFIRE_RUNS_FIXTURE (a dir with page-N.json runs
 # responses) short-circuits the curl. No network, no inngest, no root.

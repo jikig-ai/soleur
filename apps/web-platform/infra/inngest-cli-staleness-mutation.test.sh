@@ -8,7 +8,7 @@
 export TMPDIR="${TMPDIR:-/var/tmp}"   # /tmp is a shared tmpfs; sibling worktrees contend
 set -uo pipefail
 
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 [[ -d "$SRC" ]] || { echo "SETUP-FAIL: no such dir $SRC" >&2; exit 2; }
 
 PRISTINE="$(mktemp -d -t inngestmut-pristine.XXXXXXXX)" || { echo "SETUP-FAIL: mktemp pristine" >&2; exit 2; }
@@ -46,6 +46,23 @@ if [[ "$base_rc" != "0" ]]; then
 fi
 echo "baseline: GREEN (rc=0) — $(grep -oE 'RESULT: .*' "$base_log")"
 rm -f "$base_log"
+
+# Probe contract pins — the liveness probe has no dedicated suite; pin
+# fresh-on-pristine and gate<->probe MAX_AGE_DAYS parity here (a diverged constant
+# makes VERDICT=fresh report against a redder gate).
+probe_out="$(bash "$PRISTINE/inngest-cli-pin-probe.sh" 2>&1)"; probe_rc=$?
+if [[ "$probe_rc" == "0" && "$probe_out" == *"VERDICT=fresh"* ]]; then
+  RED=$((RED+1)); N=$((N+1)); printf '  %-3s %-56s GREEN rc=0 [VERDICT=fresh]\n' "p1" "pin-probe reports fresh on pristine"
+else
+  GREENFAIL=$((GREENFAIL+1)); N=$((N+1)); printf '  %-3s %-56s NOT-AS-EXPECTED (rc=%s)\n' "p1" "pin-probe reports fresh on pristine" "$probe_rc"
+fi
+g_age="$(grep -oE 'MAX_AGE_DAYS=[0-9]+' "$PRISTINE/$GATE" | head -1)"
+p_age="$(grep -oE 'MAX_AGE_DAYS=[0-9]+' "$PRISTINE/inngest-cli-pin-probe.sh" | head -1)"
+if [[ -n "$g_age" && "$g_age" == "$p_age" ]]; then
+  RED=$((RED+1)); N=$((N+1)); printf '  %-3s %-56s GREEN [%s]\n' "p2" "gate/probe MAX_AGE_DAYS parity" "$g_age"
+else
+  GREENFAIL=$((GREENFAIL+1)); N=$((N+1)); printf '  %-3s %-56s NOT-AS-EXPECTED (%s vs %s)\n' "p2" "gate/probe MAX_AGE_DAYS parity" "$g_age" "$p_age"
+fi
 echo
 
 # $1=id $2=desc $3=EXPECTED RC $4=marker the failing check must print $5=mutator
@@ -94,7 +111,7 @@ m_f() { sed -i 's@^\( *\)inngest_cli_version\( *\)=@\1# inngest_cli_version\2=@'
 m_g() { sed -i "s@\*\*$CAPDATE\*\*@**2099-01-01**@" "$1/$PROV"; }                              # future capture date
 m_h() { sed -i "s@\*\*$CAPDATE\*\*@**not-a-date**@" "$1/$PROV"; }                              # unparseable capture date
 m_i() { printf '  inngest_cli_version = "v0.0.1" # second ACTIVE assignment\n' >> "$1/$TF"; }  # decoy that is NOT a comment
-m_j() { sed -i "s|inngest $VER|inngest v0.0.9|" "$1/inngest-inventory.sh"; }                   # stale version claim in follower
+m_j() { sed -i "s|inngest $VER|inngest (v0.0.9)|" "$1/inngest-inventory.sh"; }             # stale claim in PAREN form — proves \(? stays visible
 m_k() { sed -i 's|^pass() {.*|pass() { :; }|; s|^fail() {.*|fail() { :; }|' "$1/$GATE"; }      # pass+fail neutered
 m_l() { rm -f "$1/inngest-bootstrap.sh"; }                                                   # follower file removed
 m_m() { sed -i 's|^fail() {.*|fail() { :; }|' "$1/$GATE"; }                                    # fail() ALONE neutered
@@ -121,18 +138,32 @@ m_o() {
   }' "$1/$PROV"
   sed -i 's#Pinned version | \*\*'"$VER"'\*\*#Pinned version | **'"$PVER"'**#' "$1/$PROV"
   sed -i "s|inngest $VER|inngest $PVER|g; s|inngest ($VER|inngest ($PVER|g" \
+      "$1/$TF" \
       "$1/inngest-bootstrap.sh" "$1/inngest-inventory.sh" "$1/inngest-enumerate-reminders.sh" \
       "$1/inngest-doublefire-probe.sh" "$1/inngest-wiped-volume-verify.sh" "$1/ci-deploy.sh" \
-      "$1/betterstack-logs-alerts.tf" "$1/inngest-host.tf"
+      "$1/betterstack-logs-alerts.tf" "$1/inngest-host.tf" \
+      "$1/inngest.test.sh" "$1/inngest-inventory.test.sh" "$1/inngest-enumerate-reminders.test.sh" \
+      "$1/inngest-doublefire-probe.test.sh" "$1/inngest-wiped-volume-verify.test.sh"
 }
 m_p() { sed -i "s|inngest $VER|inngest version ${VER#v}|g" "$1/inngest-inventory.sh"; }        # claim REWORDED away
 # q: shadowed capture date — a '## Bump log' carrying a SECOND capture-date row must be
 # refused (detector failure), never silently preferred.
 m_q() { printf '\n## Bump log\n\n| Bump | Capture date (UTC) | **%s** |\n' "$CAPDATE" >> "$1/$PROV"; sed -i "0,/\*\*$CAPDATE\*\*/s@\*\*$CAPDATE\*\*@**2025-01-01**@" "$1/$PROV"; }
-m_r() { sed -i "/^| *arm64 *|/d" "$1/$PROV"; }                                                 # arm64 row dropped from sidecar
+m_r() { sed -i '/^## Current pin/,/^## /{/^| *arm64 *|/d}' "$1/$PROV"; }                     # arm64 row dropped from CURRENT pin section only
 # s: downgrade current pin+sidecar to the previous release WITHOUT rotating the previous
 # section — current==previous must read as "no rollback target", not fresh.
 m_s() { sed -i "s|$VER|$PVER|g; s|$AMD|$PAMD|g; s|$ARM|$PARM|g" "$1/$TF" "$1/$PROV"; }
+# t: rollback section deleted outright — must read as drift (the missing-section fail),
+# never as "no previous pin, nothing to check".
+m_t() { sed -i 's|^## Previous known-good pin|## Superseded pin|' "$1/$PROV"; }
+# u: a SECOND checksums.txt URL inside '## Current pin' — breaks the one-manifest rule.
+m_u() { sed -i "/^## Current pin/a | note | see \`https://github.com/inngest/inngest/releases/download/v9.9.9/checksums.txt\` |" "$1/$PROV"; }
+# v: header 'Pinned version' row left stale while the rest of the sidecar updates.
+m_v() { sed -i "s#Pinned version | \*\*$VER#Pinned version | **v0.0.9#" "$1/$PROV"; }
+# w: previous-pin amd64 row pasted into the arm64 row — one arch's rollback target gone.
+m_w() { sed -i '/^## Previous known-good pin/,/^## /{
+    s#^\( *| *arm64 *|[^`]*`\)[0-9a-f]\{64\}#\1'"$PAMD"'#
+  }' "$1/$PROV"; }
 
 echo "mutations (fresh sandbox copy each; expected rc AND the named check are both asserted):"
 run_mutation a "amd64 sha changed in .tf only"                    10 "sidecar amd64 checksum" m_a
@@ -154,6 +185,10 @@ run_mutation p "claim REWORDED so the regex cannot see it"      10 "0 version-sc
 run_mutation q "capture date SHADOWED by a '## Bump log'"        2 "" m_q
 run_mutation r "arm64 row dropped from the sidecar"             10 "sidecar arm64 checksum" m_r
 run_mutation s "downgrade WITHOUT rotating previous-pin"        10 "SAME" m_s
+run_mutation t "'## Previous known-good pin' section renamed"   10 "rollback target" m_t
+run_mutation u "a SECOND checksums.txt URL in Current pin"      10 "expected exactly ONE" m_u
+run_mutation v "header 'Pinned version' row left stale"         10 "header row" m_v
+run_mutation w "prev-pin arm64 row = amd64 sha"                 10 "rollback target" m_w
 
 echo
 echo "RESULT: $RED/$N mutations behaved as expected, $GREENFAIL did not"

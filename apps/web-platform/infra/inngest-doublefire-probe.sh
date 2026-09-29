@@ -13,7 +13,7 @@
 #
 # No per-tick schedule field is consulted (ADR-100 Decision 7) — the exactly-once
 # invariant is derived downstream from startedAt alone, which is version-agnostic.
-# (v1.45.1 DOES populate a per-run `cronSchedule` — it was null on v1.19.4 — but it
+# (inngest v1.45.1 DOES populate a per-run `cronSchedule` — it was null on v1.19.4 — but it
 # reports the function's schedule, not the tick, so the probe still buckets on
 # startedAt; measured in the #7463 re-spike.)
 # The introspected surface (phase0-empirical-spike.md): RunsFilterV2 =

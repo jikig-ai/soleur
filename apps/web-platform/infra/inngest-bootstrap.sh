@@ -6,8 +6,10 @@
 #   - Writes systemd units for inngest-server.service + inngest-heartbeat.{service,timer}.
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
-#   - On version bump, pauses the running server (drains in-flight events),
-#     restarts, resumes.
+#   - On version bump, sleeps DRAIN_SLEEP_SEC then restarts. NOTE: the
+#     `inngest pause`/`resume` calls below are DEAD on every tested version
+#     (v1.19.4 and v1.45.1 both answer "No help topic") — the drain is
+#     sleep-only, in-flight work is killed at restart.
 #
 # Self-hosted Inngest binds 0.0.0.0:8288 (events) + 8289 (connect-gateway).
 # ADR-030's "loopback only" intent — keep Inngest unreachable from the public
@@ -121,9 +123,12 @@ fi
 if [[ -z "$SKIP_BINARY_INSTALL" ]]; then
 
 # Detect in-place version upgrade (existing service running an older version).
-# Pause the server so the in-memory queue drains to the SQLite store before
-# replacing the binary, then resume after restart. Wall-clock downtime per
-# upgrade on loopback-only binding: ~5s.
+# The `pause`/`resume` calls below are a no-op on tested versions (absent on
+# both v1.19.4 and v1.45.1 — re-verified in the #7463 re-spike): the actual drain
+# is the DRAIN_SLEEP_SEC sleep, after which remaining in-flight events are
+# killed with the binary replace. Wall-clock downtime per in-place upgrade: ~5s
+# — and note the dedicated host's flip path is host-REPLACE, where this block
+# never runs at all.
 UPGRADE_FROM=""
 if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
   UPGRADE_FROM=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
@@ -1600,7 +1605,8 @@ UNITEOF
 # sed's replacement string would mangle. The fragments are single-quoted so `$${...}`
 # stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
 # injected env (same $${...} contract as before). The `exec` in the ExecStart keeps
-# inngest as the unit's main PID (Type=simple signal/drain/`inngest pause` semantics).
+# inngest as the unit's main PID (Type=simple; the `inngest pause` drain never
+# engages — the pause call above is a dead call on current versions).
 # #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
 # the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
 # every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
@@ -1679,8 +1685,8 @@ systemctl daemon-reload
 # the same root cause documented there. Combined with the reconcile-always
 # unit write above, an ExecStart-only change is now deploy-reliable even on a
 # same-CLI-version redeploy (SKIP_BINARY_INSTALL path). The upgrade-drain
-# pause above runs before the binary replace; this restart subsumes the start
-# and the resume below runs after.
+# (best-effort; dead call on current versions) above runs before the binary
+# replace; this restart subsumes the start and the resume below runs after.
 systemctl enable inngest-server.service 2>/dev/null || true
 # --- #7228: a REFUSED start must not take the observability stack down with it -------------
 # This was the only unguarded systemctl call in this block, and under `set -euo pipefail` a
@@ -1735,7 +1741,8 @@ if [[ "${DEDICATED_LUKS_CUTOVER:-0}" == "1" ]]; then
   log "LUKS cutover poll timer enabled (#6894)"
 fi
 
-# Resume from upgrade pause (if any).
+# Resume from upgrade pause (if any) — dead call on current versions, kept
+# harmlessly guarded in case a future CLI re-adds it.
 if [[ -n "${UPGRADE_FROM:-}" ]]; then
   sleep 2  # let the new server bind loopback before resume
   "$INSTALL_PATH" resume >/dev/null 2>&1 || log "warn: resume command failed (server is still running)"

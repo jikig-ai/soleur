@@ -3909,8 +3909,10 @@ case "$COMPONENT" in
     fi
     # Inngest server bootstrap (PR-F follow-up, #3960).
     #
-    # No canary: inngest-server binds loopback only (127.0.0.1:8288/8289) so
-    # there is no external traffic to shadow. The bootstrap script's
+    # No canary: inngest-server binds 0.0.0.0:8288/8289 on the dedicated host
+    # (web-IP-scoped by the host's nftables input chain; the connect gRPC ports
+    # are open intra-subnet on both versions) so there is no PUBLIC traffic to
+    # shadow — traffic arrives from web-host producers only. The bootstrap script's
     # `systemctl is-active` + version-file check at /var/lib/inngest/version
     # provides idempotency; a second deploy of the same $TAG is a ~50ms no-op.
     #

@@ -127,23 +127,22 @@ boot). Result on v1.45.1:
 Verdict identical to v1.19.4: **gated `FLUSHALL` + `DBSIZE == 0` before the
 Postgres flip remains mandatory.**
 
-## New-in-v1.4x listeners — CHANGED (wildcard binds, not loopback)
+## Listeners — UNCHANGED bind set; the NEW flags are advertise-only (corrected in review)
 
-v1.45.1 `inngest start` opens three listeners v1.19.4 did not:
+Measured `ss -tln` on BOTH endpoints booted locally: v1.19.4 and v1.45.1 bind the SAME
+three sockets — `*:50052` (connect-gateway gRPC), `*:50053` (connect-executor gRPC),
+`*:8289` (connect-gateway HTTP), plus the `--host`-bound API listener. What v1.45.1
+actually adds is the four `--connect-*-grpc-ip/-port` **advertise** flags ("IP address
+other instances use to reach") — they are NOT bind addresses; the sockets stay
+wildcard on both versions. An earlier draft of this section claimed the listeners
+were new in v1.45.1; that was wrong — the flags are new, the binds are not.
 
-| Port | service | observed bind |
-|---|---|---|
-| 50052 | connect-gateway gRPC | `*:50052` (wildcard) |
-| 50053 | connect-executor gRPC | `*:50053` (wildcard) |
-| 8289 | connect-gateway HTTP | `*:8289` (wildcard) |
-
-The `--connect-*-grpc-ip` flags are **advertise** addresses ("IP address other
-instances use to reach"), NOT bind addresses — defaulting them to 127.0.0.1 does not
-loopback-bind the sockets. A second `inngest start` on the same host errors
-`listen tcp :50053: bind: address already in use`. Exposure on the dedicated host is
-gated by nftables default-deny (inbound) — recorded so nobody assumes the new ports
-are loopback-only; worth an explicit nftables allowance review at the apply window if
-connect workers are ever co-located.
+Exposure: `cloud-init-inngest.yml`'s nftables input chain is `policy accept` with
+targeted drops only on `:8288`/`:8289` (web-IP allowlist + drop). So `:50052`/`:50053`
+are reachable from every private-net peer on BOTH versions — not default-deny, and not
+a new exposure introduced by this bump. ADR-100 Decision 3's ":8289 binds loopback if
+Connect is unused" is likewise stale (it binds wildcard regardless). Correcting the
+posture is tracked; this bump neither widens nor narrows it.
 
 ## Migration census — goose, v1.19.4 → v1.45.1 (`pkg/db/postgres/migrations`)
 

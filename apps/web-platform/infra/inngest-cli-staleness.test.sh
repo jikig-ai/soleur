@@ -10,19 +10,23 @@
 # no gate lets the analysis rot, and a gate with no poll never notices upstream
 # moving.
 #
-# WHY ARCH-KEYED (checks 2/4/5): `local.inngest_arch` selects amd64 vs arm64 via a
+# WHY ARCH-KEYED (checks 3/4/8): `local.inngest_arch` selects amd64 vs arm64 via a
 # ternary on the dedicated host (inngest-host.tf), and the live host is amd64. If
 # the two checksums are SWAPPED — a trivial copy-paste error across a two-row table —
 # the pin stays well-formed and fails only on the unused-today arm arm, or worse on
 # the NEXT cax provision. Both shas come from ONE release `checksums.txt`, so the
-# sidecar records that file's URL as the provenance anchor.
+# sidecar records that file's URL as the provenance anchor. The selector ternary
+# itself is pinned byte-exact by inngest-host.test.sh — deliberately not re-asserted
+# here (the zot sibling carries its own selector check; coverage lives next door).
 #
 # WHAT THESE CHECKS DO AND DO NOT COVER. They catch a swap or incoherence confined
 # to ONE file, a missing sidecar row, a stale capture date, and version-scoped
 # claims that name a version we no longer pin. They CANNOT catch a pin+sidecar
 # edited coherently to a wrong/older release — nothing in the committed file set
-# binds a sha to upstream ground truth. That case is the PR-B poll's job
-# (releases/latest delta + tarball HEAD probe). Do not read these checks as closing
+# binds a sha to upstream ground truth. Bounds on that hole: the PR-B poll catches
+# a coherent ROLLBACK (delta/age), and a same-version sha swap dies at the
+# bootstrap image build's sha256 verify (amd64) or the host's own verify
+# (fail-closed, either arch). Do not read these checks as closing
 # the whole class; they close the half that is closable offline. Deliberately there
 # is NO version floor: a coherent two-file revert to the previous-known-good pin is
 # the SANCTIONED rollback path (see the sidecar's '## Previous known-good pin'), and
@@ -40,7 +44,6 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$DIR/../../.." && pwd)"
 TF="$DIR/inngest.tf"
 PROV="$DIR/inngest-cli.provenance.md"
 
@@ -55,7 +58,7 @@ MAX_AGE_DAYS=60
 # and exits 0 — CI green having checked NOTHING. A FLOOR, not equality: `-eq` would
 # turn every legitimately-added assertion into a spurious failure. Raise it in
 # lockstep when assertions are added; never lower it to make a red run green.
-MIN_ASSERTIONS=14
+MIN_ASSERTIONS=19
 
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); echo "  PASS: $1"; }
@@ -196,6 +199,14 @@ if [[ "$cap_rows" -gt 1 ]]; then
   die_detector "found $cap_rows 'Capture date (UTC)' rows in $PROV -- exactly one is legitimate; a second shadows the freshness attestation"
 fi
 header_table="$(awk '/^\| Field \| Value \|/{f=1} /^## /{f=0} f' "$PROV" 2>/dev/null || true)"
+# The header's 'Pinned version' row is the sidecar's headline field — a bump that
+# forgets it leaves the sidecar internally contradictory while the rest stays green.
+hdr_ver="$(printf '%s\n' "$header_table" | grep -oE 'Pinned version *\| *\*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ -n "$hdr_ver" && "$hdr_ver" == "$tf_ver" ]]; then
+  pass "sidecar 'Pinned version' header row names the pinned version"
+else
+  fail "sidecar 'Pinned version' header row ('$hdr_ver') != pinned $tf_ver -- the headline field was left stale; see '## Bump procedure' in $PROV"
+fi
 capture_date="$(printf '%s\n' "$header_table" | grep -oE 'Capture date \(UTC\) \| \*\*[0-9]{4}-[0-9]{2}-[0-9]{2}\*\*' | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1 || true)"
 if [[ -z "$capture_date" ]]; then
   # DRIFT (10), not detector failure (2): an unparseable date is a defect in a COMMITTED
@@ -225,8 +236,13 @@ fi
 # --- 7. Version-scoped capability claims must name the PINNED version -----------------
 # The defect being fixed is `inngest v1.19.4` hardcoded in prose that outlives the pin.
 # Guard the followers rather than re-sweeping them by hand. The `\(?` is load-bearing:
-# claims are written both `inngest v1.45.1` and `inngest (v1.45.1)`.
+# claims are written both `inngest v1.45.1` and `inngest (v1.45.1)`. THE CANONICAL
+# CLAIM SHAPE is `inngest vX.Y.Z` — phrasings like `inngest-server v…`, `pinned v…`,
+# or a bare `vX.Y.Z` are INVISIBLE to this regex; a follower that silently needs
+# another shape escapes the guard (the review-pass finding), so re-stamping must
+# write the canonical form (the sidecar's claim register says the same).
 followers=(
+  "$DIR/inngest.tf"
   "$DIR/inngest-bootstrap.sh"
   "$DIR/inngest-inventory.sh"
   "$DIR/inngest-enumerate-reminders.sh"
@@ -235,11 +251,17 @@ followers=(
   "$DIR/ci-deploy.sh"
   "$DIR/betterstack-logs-alerts.tf"
   "$DIR/inngest-host.tf"
+  "$DIR/inngest.test.sh"
+  "$DIR/inngest-inventory.test.sh"
+  "$DIR/inngest-enumerate-reminders.test.sh"
+  "$DIR/inngest-doublefire-probe.test.sh"
+  "$DIR/inngest-wiped-volume-verify.test.sh"
 )
 stale_claims=""
 followers_seen=0
 for f in "${followers[@]}"; do
-  # A MISSING follower is a detector failure, not a clean check.
+  # A MISSING follower is drift (10) — a defect in the committed tree (the claim set
+  # is part of what this gate verifies), not an unparseable detector input.
   [[ -f "$f" ]] || { fail "follower file missing: $(basename "$f") -- cannot verify version-scoped claims"; continue; }
   followers_seen=$((followers_seen+1))
   while IFS= read -r hit; do
@@ -250,8 +272,8 @@ for f in "${followers[@]}"; do
 done
 # A follower that still EXISTS but whose claim was reworded yields zero loop iterations
 # and a PASS asserting coverage. Zero claims examined must not read as full coverage:
-# the two locations the sidecar's claim register names MUST each carry >=1 claim.
-required_claim_locations=("$DIR/inngest-inventory.sh" "$DIR/inngest-doublefire-probe.sh")
+# the locations the sidecar's claim register names MUST each carry >=1 claim.
+required_claim_locations=("$DIR/inngest-inventory.sh" "$DIR/inngest-doublefire-probe.sh" "$DIR/inngest-host.tf" "$DIR/betterstack-logs-alerts.tf")
 missing_claims=""
 for f in "${required_claim_locations[@]}"; do
   [[ -f "$f" ]] || continue   # absence already failed above
@@ -281,6 +303,13 @@ prev_sha_for() {
 }
 if [[ -z "$prev_section" ]]; then
   fail "no '## Previous known-good pin' section in $PROV -- the rollback target for BOTH arches does not survive the bump that erases it from inngest.tf"
+else
+  pa="$(prev_sha_for amd64)"; pr_="$(prev_sha_for arm64)"
+  if [[ -n "$pa" && -n "$pr_" && "$pa" != "$pr_" ]]; then
+    pass "previous known-good amd64 and arm64 checksums are distinct"
+  elif [[ -n "$pa" && -n "$pr_" ]]; then
+    fail "previous known-good amd64 and arm64 checksums are IDENTICAL -- one arch's rollback sha was pasted into both rows; the other arch has no rollback target"
+  fi
 fi
 for arch in amd64 arm64; do
   prev_s="$(prev_sha_for "$arch")"

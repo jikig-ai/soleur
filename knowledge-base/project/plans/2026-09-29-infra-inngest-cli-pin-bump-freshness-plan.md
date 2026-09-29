@@ -221,9 +221,9 @@ items were probed against the actual binaries, not inferred:
   `docker inspect`) while its cloud-init **overrides** the image's amd64-only sha with
   the arch-matched template var (`inngest-host.tf:357-358` →
   `cloud-init-inngest.yml:1165-1168`) → `inngest-bootstrap.sh` builds `DOWNLOAD_URL`
-  from version+arch and sha256-verifies on the host → on `deploy inngest` /
-  re-provision it detects the version mismatch and drains/restarts (~5s downtime on
-  loopback, per the runbook's "CLI version bump" section). The web hosts' co-located
+  from version+arch and sha256-verifies on the host → on host-replace/first-boot it
+  installs the new version (review correction: `deploy inngest` cannot reach the
+  dedicated host — see Downtime §2). The web hosts' co-located
   inngest rides the same bootstrap-image env path. `mint-inngest-bootstrap-tag.yml`
   (`paths: apps/web-platform/infra/inngest*`) auto-mints the `vinngest-v*` tag +
   dispatches the build on any image-input change; `bump-cloud-init-pin` (ADR-232)
@@ -612,14 +612,16 @@ ADR-232 + the runbook's "Bootstrap-image release" section):
 `mint-inngest-bootstrap-tag.yml` → `vinngest-v*` tag on main's tip →
 `build-inngest-bootstrap-image.yml` → image pushed to GHCR + zot →
 `bump-cloud-init-pin` opens the cloud-init image-pin PR as `soleur-ai`. The live flip
-then needs, in the operator-scheduled window: that auto-PR merged, plus a
-`deploy inngest` dispatch or `apply_target=inngest-host-replace` — **after** the
-shared-Postgres window the issue describes is clear, since first-boot of the new
-binary runs goose migrations against it. Expected blast radius at the flip: ~5s
-drain/restart on the in-place path (per the runbook) to a full host replace (minutes);
-a goose migration under a dual-version fleet is the one irreversible step — the reason
-the window is separate. The follow-through tracker issue carries this sequence so the
-inert-merge staging cannot strand it.
+then needs, in the operator-scheduled window: that auto-PR merged, plus
+`apply_target=inngest-host-replace` — the ONLY flip path. `deploy inngest` posts to
+the web host (`deploy-inngest-image.yml` → `deploy.soleur.ai`), where the inngest
+arm refuses while the web scheduler is quiesced (`inngest_quiesced_deploy_refused`)
+— it cannot reach the dedicated host. Replace is destroy+recreate: minutes of
+scheduler-dark, in-flight runs SIGKILLed at destroy, then first-boot goose
+migrations — **after** the shared-Postgres window the issue describes is clear, and
+after enumerating the FULL pending `user_data` delta (the replace applies every
+accumulated diff, not just the pin). The follow-through tracker issue carries this
+sequence so the inert-merge staging cannot strand it.
 
 ### Distinctness / drift safeguards
 
@@ -647,15 +649,16 @@ fires; the section follows.
    (54 `cron-*` Inngest functions + oneshot/HTTP-armed reminders).
 2. **Zero-downtime evaluation:** a singleton stateful host cannot do true
    blue-green within one host (the Postgres it serves is the point of the window).
-   The designed lower-downtime path already exists and is the DEFAULT: the
-   `deploy inngest` verb re-runs `inngest-bootstrap.sh`, which detects the version
-   mismatch, drains, restarts, resumes — ~5s of scheduler downtime on loopback per
-   the runbook. The heavier path (`apply_target=inngest-host-replace` → fresh host
-   into existing volumes) is the fallback, not the default — it trades ~minutes of
-   scheduler gap for a clean-slate install and is the right call only if the
-   in-place path corrupts.
-3. **Residual downtime + bounds + sign-off:** residual is seconds on the default
-   path, inside an operator-chosen window — the dispatch is a manual
+   ⚠ REVIEW CORRECTION (#7463 review, user-impact seat): the plan's original DEFAULT
+   (`deploy inngest` → in-place bootstrap, "~5s drain") is NOT available on the
+   dedicated host — that verb targets the web host, whose inngest arm is quiesced and
+   refuses (`inngest_quiesced_deploy_refused`), and the drain it invokes is sleep-only
+   anyway (`inngest pause` is a dead call on both endpoints, measured). The ONLY flip
+   path is `apply_target=inngest-host-replace` → fresh host into existing volumes:
+   ~minutes of scheduler gap, in-flight executions SIGKILLed at destroy (no drain
+   runs on the destroy path), then first-boot goose migrations.
+3. **Residual downtime + bounds + sign-off:** residual is minutes (host replace),
+   inside an operator-chosen window — the dispatch is a manual
    `workflow_dispatch`/verb call, so operator sign-off is structural, not
    ceremonial. The window's OTHER bound is pre-flip: (a) the shared-Postgres
    condition from the issue (no concurrent v1.19.4 + new-version schedulers against
@@ -905,10 +908,14 @@ Branch off main after PR-A merges (the step consumes the gate + sidecar). Add th
       sequence: merge the auto-authored cloud-init pin PR → confirm no concurrent
       v1.19.4+new schedulers share the event store → take a Postgres backup/snapshot
       (upstream auto-runs goose migrations on `start`; the delta contains a
-      destructive cleanup migration class) → dispatch `deploy inngest`
-      (or `apply_target=inngest-host-replace`) → verify via the runbook's no-SSH host-
-      state path (`deploy inngest` `.reason` + `scheduled-inngest-health.yml` green,
-      not SSH) → close #7463. `inngest pause` micro-issue filed.
+      destructive cleanup migration class: `000006_apps_unique_active_name` and
+      `000007_spans_is_deferred` DROP COLUMN) → enumerate + sign off the FULL pending
+      `user_data` delta in the drift run → dispatch `apply_target=inngest-host-replace`
+      (the only flip path — `deploy inngest` is refused by the quiesced web arm) →
+      verify via `scheduled-inngest-health.yml` green → close #7463. Tracker also
+      carries: PR-B merged + its first 1st/15th firing observed, and a connect-port
+      scoping decision (`:50052`/`:50053` reachable intra-subnet — policy-accept
+      chain, present on both versions). `inngest pause` micro-issue filed.
 
 **PR-B:**
 
@@ -956,11 +963,13 @@ with its two checksums — already proven end-to-end against upstream at plan ti
 Layers, cheapest first:
 
 1. **Re-deploy the previous image pin:** revert/merge-back the auto-authored
-   cloud-init pin PR (it converges all four sites idempotently), then `deploy
-   inngest` again — the same drain→restart path reverts the binary in seconds. Goose
-   migrations already applied stay applied; that is why the pre-flip backup exists —
-   if the migration itself broke state, restore the snapshot, then redeploy the old
-   pin.
+   cloud-init pin PR (it converges all four sites idempotently), then
+   `apply_target=inngest-host-replace` — the replace path boots the old pin.
+   Goose migrations already applied stay applied — AND the old binary may not
+   tolerate the migrated schema (`000007` dropped `spans.is_deferred`; verify the
+   rollback candidate boots against it, else restore the snapshot first). That is
+   why the pre-flip backup exists — if the migration itself broke state, restore
+   the snapshot, then replace with the old pin.
 2. **Repo-level pin revert:** `git revert` the `inngest.tf` locals + stub; the mint
    workflow sees the inputs change back and mints a corrective `vinngest-v*` tag the
    same way (idempotent, designed).

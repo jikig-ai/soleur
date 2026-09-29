@@ -487,7 +487,7 @@ locals {
       AND multiSearchAny(JSONExtractString(raw, 'message', 'error'), ['invalid status code: 524', 'error parsing stream: error reading response body', 'Your server reset the connection while we were reading the reply'])
     GROUP BY time
   SQL
-  # The two later needles are the inngest-server v1.45.1 `error` texts for a step STREAM that
+  # The two later needles are the inngest v1.45.1 inngest-server `error` texts for a step STREAM that
   # dropped mid-response, measured in the #8611 spike (streaming-spike.md): S7's network cut and
   # app kill -> "error parsing stream: error reading response body to check for status code:
   # unexpected end of JSON input"; S3's ~20-min drop -> "Your server reset the connection while we

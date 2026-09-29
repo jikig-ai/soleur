@@ -24,12 +24,11 @@
 #   - Variables: 7 → 3 (doppler_token_tf, betterstack_api_token, betterstack_paid_tier).
 
 locals {
-  # Pinned via Phase 0.3 — bump in this PR diff (visibility preserved).
   # Freshness owner (#7463): the analysis of record is inngest-cli.provenance.md
   # (## Bump procedure); enforcement is inngest-cli-staleness.test.sh (per-PR) and
   # detection is the `Detect inngest CLI pin drift` step in rule-audit.yml (1st/15th
-  # poll). Nothing auto-writes this pin — the monitor files an issue and a human
-  # opens the CI-gated PR.
+  # poll — lands with PR-B; absent until then). Nothing auto-writes this pin — the
+  # monitor files an issue and a human opens the CI-gated PR.
   # Source: https://github.com/inngest/inngest/releases/tag/v1.45.1
   inngest_cli_version = "v1.45.1"
   inngest_cli_sha256  = "52c07d837088a6712acd15b8edd4191f961b69884541f468a3c1b9bb4348a4e5"
