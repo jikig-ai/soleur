@@ -157,7 +157,7 @@ function mockLinkedInPerToken(opts: {
 function linkedInFetchUrls(fetchSpy: ReturnType<typeof vi.fn>) {
   return fetchSpy.mock.calls
     .map(([u]: any[]) => String(u))
-    .filter((u: string) => u.startsWith("https://api.linkedin.com/"));
+    .filter((u: string) => new URL(u).host === "api.linkedin.com");
 }
 
 describe("cronLinkedinTokenCheckHandler — both tokens valid", () => {
