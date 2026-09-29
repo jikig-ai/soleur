@@ -439,15 +439,15 @@ steps = ((wf.get("jobs") or {}).get("cutover") or {}).get("steps") or []
 pre = [i for i, s in enumerate(steps) if s.get("id") == "flag_precheck"]
 bridge = [i for i, s in enumerate(steps) if s.get("uses") == "./.github/actions/cf-tunnel-ssh-bridge"]
 key = [i for i, s in enumerate(steps) if s.get("id") == "key_fetch"]
-run = [i for i, s in enumerate(steps) if isinstance(s.get("run"), str) and "git-data-cutover.sh" in s["run"]]
-check("G1-order: exactly one flag precheck step, and it precedes the bridge, the key fetch and the script step",
-      len(pre) == 1 and len(bridge) == 1 and len(key) == 1 and len(run) == 1 and pre[0] < bridge[0] and pre[0] < key[0] and pre[0] < run[0],
+run = [i for i, s in enumerate(steps) if isinstance(s.get("env"), dict) and s["env"].get("MODE") in ("proof", "freeze", "unfreeze", "probe")]
+check("G1-order: exactly one flag precheck step, and it precedes the bridge, the key fetch and every host-side verb step",
+      len(pre) == 1 and len(bridge) == 1 and len(key) == 1 and len(run) == 4 and pre[0] < bridge[0] and pre[0] < key[0] and all(pre[0] < r for r in run),
       (pre, bridge, key, run))
 p = steps[pre[0]] if len(pre) == 1 else {}
-check("G1-step: the precheck step runs the script, with no if: and no continue-on-error",
-      str(p.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-flag-precheck.sh" and "if" not in p and not p.get("continue-on-error"), p)
-check("G1-env: the precheck step binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD}",
-      p.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}"}, p.get("env"))
+check("G1-step: the precheck step runs the script, gated only off redeploy (the mode that never touches git-data), no continue-on-error",
+      "git-data-flag-precheck.sh" in str(p.get("run", "")) and "redeploy" in str(p.get("if")) and not p.get("continue-on-error"), p)
+check("G1-env: the precheck step binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD, FLAG_MODE}",
+      p.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}", "FLAG_MODE": "${{ steps.confirm.outputs.mode }}"}, p.get("env"))
 cfg = [i for i, s in enumerate(steps) if s.get("id") == "ssh_config"]
 pin_users = [s.get("id") or s.get("name") for s in steps if "git-data.pin" in json.dumps(s)]
 check("G1-pin: the pin the precheck writes is read by the ssh_config step, which runs after the precheck and the bridge",
@@ -537,13 +537,13 @@ be = next(i for i in range(b + 1, len(lines)) if lines[i].startswith("      - ")
 lines[be:be] = chunk
 open(p, "w").write("\n".join(lines))
 PY
-if mutate precheck-after-bridge "$WF" 12 "python:$T/mut/reorder.py"; then
+if mutate precheck-after-bridge "$WF" 26 "python:$T/mut/reorder.py"; then
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-order.tsv" 2>&1
   mutant_red precheck-after-bridge wf_row "$T/mut/wf-order.tsv" "G1-order:"
 fi
 # Row 3 — bind DOPPLER_TOKEN_PRD in the script step's env as well.
 # shellcheck disable=SC2016
-if mutate prd-in-script-step "$WF" 1 's#^          GIT_DATA_SSH: ssh -F .*$#&\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}#'; then
+if mutate prd-in-script-step "$WF" 1 's#^          MODE: proof$#&\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}#'; then
   python3 "$T/wf.py" "$MUTANT" "$IV" > "$T/mut/wf-census.tsv" 2>&1
   mutant_red prd-in-script-step wf_row "$T/mut/wf-census.tsv" "G1-census:"
 fi
