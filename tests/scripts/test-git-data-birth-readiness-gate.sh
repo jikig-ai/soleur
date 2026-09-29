@@ -2867,21 +2867,44 @@ W2_PATTERN='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[
 # guard makes this same check for the same reason).
 { grep -E -- "$W2_PATTERN" </dev/null >/dev/null 2>&1; [[ $? -eq 1 ]]; } \
   || { printf '  FATAL: W2_PATTERN does not compile as ERE — the pin scanned nothing.\n' >&2; exit 3; }
-# THE DETECTOR IS SHARED, NOT COPIED. W2 asserts zero hits on the real lib and W2-control
-# asserts THE SAME extraction fires on a seeded copy — an inline duplication lets either
-# side rot while the other keeps passing, and a control validating a detector that no
-# longer ships proves nothing.
-_w2_sweep() {  # <dir> → print "file:line:content" per flagged line
-  local _d="$1" _w2f _w2h
+
+# W2-parity — THE COPY MUST NOT DRIFT FROM THE CANONICAL. W2_PATTERN is byte-identical to
+# the sibling guard's PATTERN by INTENT, not by mechanism: a later widening there (the
+# residual window is tracked in #7005) would leave this fork weaker forever and still
+# green — the exact class the learning file for this very PR records. Byte-compare; when
+# the canonical file or its PATTERN literal cannot be resolved, the pin fails LOUD, never
+# silently "equal".
+_w2_canonical="$(sed -n "s/^PATTERN='\\(.*\\)'\$/\\1/p" "${ROOT}/.claude/hooks/grep-q-pipe-guard.test.sh" | head -1)"
+if [[ -n "$_w2_canonical" && "$W2_PATTERN" == "$_w2_canonical" ]]; then
+  pass "W2-parity: W2_PATTERN is byte-identical to .claude/hooks/grep-q-pipe-guard.test.sh's canonical PATTERN"
+else
+  fail "W2-parity: W2_PATTERN diverged from the canonical PATTERN (or the canonical could not be read)" "n/a" "canonical=${_w2_canonical:-<unresolved>}"
+fi
+
+# THE DETECTOR IS SHARED, NOT COPIED — and its own rc is HONEST. W2 asserts zero hits on
+# the real lib and W2-control asserts THE SAME extraction fires on a seeded copy. The
+# sweep splits its own instrument rc (sed/grep rc >= 2 → rc 2 to the caller) from "no
+# hits" — a `|| true` here would make the pin green on a partially-scanned corpus, the
+# masked-instrument class this PR exists to close, applied to the detector itself.
+_w2_sweep() {  # <dir> → print "file:line:content" per flagged line; rc 2 on instrument failure
+  local _d="$1" _w2f _w2src _w2h _rc=0
   for _w2f in "$_d"/*.sh; do
-    _w2h="$(sed 's/^[[:space:]]*#.*$//' "$_w2f" \
-          | grep -nE "$W2_PATTERN" \
-          | sed "s|^|${_w2f}:|" || true)"
-    [[ -n "$_w2h" ]] && printf '%s\n' "$_w2h"
+    _w2src="$(sed 's/^[[:space:]]*#.*$//' "$_w2f")" || _rc=$?
+    if [[ "$_rc" -lt 2 ]]; then
+      _w2h="$(grep -nE "$W2_PATTERN" <<< "$_w2src")" || _rc=$?
+    fi
+    if [[ "$_rc" -ge 2 ]]; then
+      printf 'W2-SWEEP-INSTRUMENT-FAILURE: %s (rc=%s)\n' "$_w2f" "$_rc" >&2
+      return 2
+    fi
+    [[ -n "$_w2h" ]] && printf '%s\n' "$_w2h" | sed "s|^|${_w2f}:|"
+    _rc=0; _w2h=""
   done
 }
-_w2="$(_w2_sweep "${ROOT}/tests/scripts/lib")"
-if [[ -z "$_w2" ]]; then
+_w2="$(_w2_sweep "${ROOT}/tests/scripts/lib")"; _w2_rc=$?
+if [[ "$_w2_rc" -ge 2 ]]; then
+  fail "W2: the sweep itself could not evaluate — instrument failure, not a measured zero" "$_w2_rc" "$_w2"
+elif [[ -z "$_w2" ]]; then
   pass "W2: zero pipe-fed quiet/early-exit \`grep\` predicates under tests/scripts/lib/ — the #9210 flake class cannot drift back"
 else
   fail "W2: pipe-fed quiet/early-exit \`grep\` predicate(s) survive under tests/scripts/lib/" "n/a" "$_w2"
@@ -2907,8 +2930,8 @@ probe() { grep -q 'needle' "$1" && grep -q 'other' <<<"$1"; }
 fallback() { cmd || grep -q 'x' <<<"$1"; }
 # The banned shape appears only inside this full-line comment: x | grep -q y — must not flag.
 SH
-_w2c_hits="$(_w2_sweep "$_w2c")"
-if [[ "$(grep -c 'seeded\.sh' <<< "$_w2c_hits")" -ge 4 && "$_w2c_hits" != *"sanctioned.sh"* ]]; then
+_w2c_hits="$(_w2_sweep "$_w2c")"; _w2c_rc=$?
+if [[ "$_w2c_rc" -lt 2 && "$(grep -c 'seeded\.sh' <<< "$_w2c_hits")" -ge 4 && "$_w2c_hits" != *"sanctioned.sh"* ]]; then
   pass "W2-control: the detector flags the canonical and widened shapes and spares the file/herestring/||-idiom forms"
 else
   fail "W2-control: the detector must flag all four seeded shapes and spare sanctioned forms" "n/a" "$_w2c_hits"
@@ -3148,17 +3171,21 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #     1  P15      mutation: neutering the replace PASS assertion releases a FAILED replace boot
 #   ----
 #    16
-# RAISED 252 -> 255 (#9210), ITEMISED — the pipe-fed `grep -q` pin, plus the verdict-vocabulary
-#            arm the incident existed to demand:
+# RAISED 252 -> 256 (#9210 + ship-gate advisor consult), ITEMISED — the pipe-fed `grep -q`
+#            pin, plus the verdict-vocabulary arm the incident existed to demand:
 #     1  A18      a matcher rc>=2 at the strict-shape check ABORTs with could-not-evaluate
 #                 wording, never the shape-violation text a transport flake was filed under
-#     1  W2       zero pipe-fed `grep -q*` predicates under tests/scripts/lib/ — the sweep
-#                 quantifies over the directory glob, so a new sibling lib is pinned by
-#                 construction; comment-stripped because the lib documents the banned shape
-#     1  W2-control  the detector flags a seeded copy and spares the file/herestring forms
+#     1  W2       zero pipe-fed quiet/early-exit `grep` predicates under tests/scripts/lib/
+#                 — the sweep quantifies over the directory glob, so a new sibling lib is
+#                 pinned by construction; comment-stripped because the lib documents the
+#                 banned shape
+#     1  W2-parity  W2_PATTERN is byte-identical to the canonical guard's PATTERN — a
+#                 forked detector is a defect introduction, not a test (#9213 advisor)
+#     1  W2-control  the detector flags the canonical and widened seeded shapes and spares
+#                 the file/herestring/||-idiom forms
 #   ----
-#     3
-_FLOOR=255
+#     4
+_FLOOR=256
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
