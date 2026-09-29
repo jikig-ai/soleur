@@ -66,3 +66,22 @@ skipped; coverage is the unit batteries + measured dry-run evidence:
   suite-durations.tsv (pairing rule: durations-out now pairs with the
   EMITTED manifest); shallow-clone broke tombstone census → git fetch
   --unshallow.
+
+## Ship Phase
+- Soak enrollment: #9232 labeled follow-through + directive in body
+  (script=ci-leg-balance-9232.sh, earliest=2026-09-30T00:10:00Z, secrets=GH_TOKEN);
+  PR body switched Closes -> Ref so the probe's PASS auto-closes.
+- CI cycle 2 (merged head): all 7 test-scripts legs PASS with the balanced
+  manifest (legs 10m9s-12m35s, ~2.4min spread vs issue's 6-19min); heavy 3/3
+  PASS; totality-mutations all ranges PASS incl. fixed LEGS-COLOCATE.
+- Infra legs red: (a) vinngest-v1.1.42 pin drift = main-state defect, fix
+  in-flight on chore/7463 PR-B (every in-flight branch inheriting main reds
+  the same suite); (b) luks-monitor printf-EPIPE flake -> filed #9245 per
+  wg-when-tests-fail-and-are-confirmed-pre.
+- Soak-gate hook's `-f` arm resolved the script path in a non-worktree cwd
+  and blocked; enrollment verified via the hook's own predicates -> added
+  the sanctioned gate-override comment to the PR body.
+- Review trailer committed (mode=degraded, 1/3 seats) and pushed c70c7b5845.
+- `gh pr merge --auto` ARMED 2026-09-29T23:35:56Z; required checks all green,
+  mergeStateStatus BLOCKED until the trailer-head cycle completes.
+- Local --affected full battery still running in background.
