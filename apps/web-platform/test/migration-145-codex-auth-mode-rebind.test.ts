@@ -85,7 +85,9 @@ describe("migration 145: Codex auth-mode rebinding", () => {
   it("commits every lifecycle status and its attempt transition in one RPC", () => {
     const sql = read("147_codex_lifecycle_state_sync.sql");
     const lifecycle = sql.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+    const transition = sql.match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
 
+    expect(transition).toMatch(/^\s*SELECT a\.run_id INTO v_run_id[\s\S]*?^\s*SELECT r\.auth_mode_generation INTO v_run_generation[\s\S]*?FROM public\.agent_engine_runs AS r WHERE r\.id = v_run_id FOR UPDATE;[\s\S]*?^\s*SELECT a\.\* INTO v_row[\s\S]*?WHERE a\.id = p_attempt_id AND a\.run_id = v_run_id FOR UPDATE;/m);
     expect(lifecycle).toMatch(/^\s*SELECT r\.auth_mode_generation INTO v_run_generation[\s\S]*?FROM public\.agent_engine_runs AS r WHERE r\.id = p_run_id FOR UPDATE;[\s\S]*?^\s*SELECT a\.\* INTO v_attempt[\s\S]*?WHERE a\.id = p_attempt_id AND a\.run_id = p_run_id FOR UPDATE;/m);
     expect(lifecycle).toMatch(/^\s*INSERT INTO public\.agent_engine_events[\s\S]*RETURNING \* INTO v_row/m);
     expect(lifecycle).toMatch(/IF p_payload->>'source_type' = 'status'[\s\S]*p_payload->>'status' IS DISTINCT FROM v_attempt\.status THEN\s+PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
@@ -96,6 +98,9 @@ describe("migration 145: Codex auth-mode rebinding", () => {
     const priorLifecycle = read("146_codex_terminal_lifecycle.sql").match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     const rollbackLifecycle = down.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     expect(rollbackLifecycle).toBe(priorLifecycle);
+    const priorTransition = read("145_codex_auth_mode_rebind.sql").match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+    const rollbackTransition = down.match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+    expect(rollbackTransition).toBe(priorTransition);
   });
 
   it("keeps applied migrations 145 and 146 immutable and puts lifecycle sync in migration 147", () => {
