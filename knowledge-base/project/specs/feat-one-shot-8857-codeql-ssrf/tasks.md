@@ -29,7 +29,8 @@ Derived from `knowledge-base/project/plans/2026-09-29-sec-codeql-alert-234-serve
 ## 3. Phase 2 — Wire the sinks
 
 - [ ] 3.1 `apps/web-platform/server/github-api.ts`: `githubApiGet`, `githubApiGetText`, `githubApiPost`, `githubApiDelete` each call `githubApiUrl(path)` BEFORE `generateInstallationToken(...)`; on refusal emit `log.error` + `reportSilentFallback` (feature `github-api`, op `url-refused`) and rethrow.
-- [ ] 3.2 `apps/web-platform/server/github-app.ts`: `assertGithubApiAbsoluteUrl(url)` at the top of `githubFetch`.
+- [ ] 3.1a `fetchWithRetry` re-asserts `assertGithubApiAbsoluteUrl(url)` on its own input so the chokepoint is self-enforcing for callers that skip `githubApiUrl`; `handleErrorResponse` keeps receiving raw `path` (display string only).
+- [ ] 3.2 `apps/web-platform/server/github-app.ts`: `assertGithubApiAbsoluteUrl(url)` at the top of `githubFetch` (covers `postRepoCreate`'s plumbed `url` param too).
 - [ ] 3.3 Extend `apps/web-platform/test/github-api.test.ts`: refused `path` → throw with `mockFetch` call count 0 (no token minted).
 
 ## 4. Phase 3 — Verify and close

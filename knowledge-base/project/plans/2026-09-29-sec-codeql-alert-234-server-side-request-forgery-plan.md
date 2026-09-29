@@ -11,6 +11,7 @@ domain: engineering
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
+deepened: 2026-09-29
 ---
 
 # fix(web-platform): pin GitHub API egress to the api.github.com origin (CodeQL #234)
@@ -19,6 +20,55 @@ Ref #8857. CodeQL code-scanning alert #234 (`js/request-forgery`, critical) flag
 `apps/web-platform/server/github-api.ts` — the `fetch(url, …)` inside
 `fetchWithRetry` — because the request URL is `${GITHUB_API}${path}` with `path`
 supplied by callers whose interpolated segments trace to request input.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-09-29
+**Sections enhanced:** 4 (Proposed Solution, Technical Considerations, Research
+Insights, Sharp Edges)
+**Research agents used:** none — pipeline subagent has no Task fan-out; all
+verification ran inline via `gh api`, `gh pr view`, `git log`, and code greps
+(commands shown inline below).
+
+### Key Improvements
+
+1. **Chokepoint self-enforcement.** `fetchWithRetry` now additionally asserts
+   `assertGithubApiAbsoluteUrl(url)` on its own input, so a future caller that
+   forgets `githubApiUrl(path)` still cannot reach `fetch` with an unpinned
+   URL — the last line before egress always asserts.
+2. **`postRepoCreate` shape verified.** `github-app.ts`'s `githubFetch(url)`
+   sink at `postRepoCreate` takes a caller-supplied `url` parameter — the one
+   call-site *shape* that would bypass a `path`-only guard. Verified all
+   `githubFetch` callers (14 sites incl. `postRepoCreate`, fed only by
+   `createRepoForOrg`/`createRepoFromTemplate`) build `${GITHUB_API}/…`
+   literals today; the absolute-URL assertion covers the future deviation.
+3. **Boundary-adjacent fixtures** (per
+   `learnings/best-practices/2026-05-22-parity-tests-must-include-boundary-adjacent-fixtures.md`):
+   the test matrix pins the off-by-one host shapes — suffix host
+   (`api.github.com.evil.example`), userinfo (`api.github.com@evil.example`),
+   scheme-relative (`//evil.example`), encoded dot-segments (`%2e%2e`,
+   `.%2E`) — not just the canonical bad input.
+4. **Precedent-diff recorded** against `assertCodexEndpoint` /
+   `normalizeEndpoint` (see Risks): the guard reuses the repo's existing
+   `new URL` + `https:` + no-userinfo + host check, and adds the two checks
+   the precedents do not need — leading-`/` and raw dot-segment refusal —
+   because the input here is a path fragment, not a whole URL.
+
+### New Considerations Discovered
+
+- CodeQL alert #234 is already `state: fixed` on main (verified live:
+  `gh api repos/jikig-ai/soleur/code-scanning/alerts/234 --jq .state` →
+  `fixed`, `fixed_at: 2026-09-25T14:06:00Z`), resolved when PR #8853
+  (`9279de94fe`) added the `kbGithubUrlPath` sanitizer that broke the taint
+  path. The plan proceeds with the sink guard as durable close + regression
+  lock rather than verify-only.
+- `github-app.ts` already encodes this posture piecemeal (`GITHUB_LOGIN_RE`,
+  `encodeURIComponent` on login/owner segments, and a code comment that
+  "forecloses any `?`/`#`/`..`-in-segment from reshaping the GitHub API
+  path") — the sink assertion unifies it at the boundary.
+- Citations verified live in this pass: PR #2416 MERGED, PR #2421 MERGED,
+  PR #8853 MERGED, PR #8687 MERGED, issue #2368 CLOSED, alert #92 dismissed
+  `false positive` on this same file (earlier instance at line 40).
 
 ## Overview
 
@@ -103,12 +153,19 @@ export function assertGithubApiAbsoluteUrl(url: string): string {
   `githubApiDelete` each resolve `const url = githubApiUrl(path)` **before**
   `generateInstallationToken(...)` — never mint a credential for a request the
   module refuses — and pass `url` (not a raw concat) into `fetchWithRetry` /
-  `fetch`. On refusal: `log.error` + `reportSilentFallback` (feature
-  `github-api`, op `url-refused`) then rethrow; the thrown error is a plain
-  `Error` (it is a programmer/attacker error, not a GitHub response error —
-  `GitHubApiError.statusCode` would misroute it through the 502 path).
+  `fetch`. `fetchWithRetry` **also** asserts `assertGithubApiAbsoluteUrl(url)`
+  on its input, so the chokepoint is self-enforcing for any future caller that
+  skips `githubApiUrl`. On refusal: `log.error` + `reportSilentFallback`
+  (feature `github-api`, op `url-refused`) then rethrow; the thrown error is a
+  plain `Error` (it is a programmer/attacker error, not a GitHub response
+  error — `GitHubApiError.statusCode` would misroute it through the 502 path).
+  `handleErrorResponse` keeps receiving the raw `path` — it is a display
+  string in error text, not a request target.
 - `github-app.ts`: `githubFetch` calls `assertGithubApiAbsoluteUrl(url)` at its
-  top — one assertion covers all ~15 call sites.
+  top — one assertion covers all ~15 call sites, including `postRepoCreate`
+  whose `url` parameter is plumbed from `createRepoForOrg` /
+  `createRepoFromTemplate` (both `${GITHUB_API}/…` literals today — the
+  assertion is what keeps that true under a future caller).
 - The leaf imports only `hasControlChar` from `./kb-github-path` (already
   exported, dependency-free) so both `github-api.ts` and `github-app.ts` can
   consume it without a cycle — the same placement reasoning that put
@@ -237,11 +294,13 @@ exactly three chokepoints: `fetchWithRetry` and the raw `fetch` in
 `githubApiDelete` (`apps/web-platform/server/github-api.ts`), and `githubFetch`
 (`apps/web-platform/server/github-app.ts`). All four public wrappers
 (`githubApiGet`, `githubApiGetText`, `githubApiPost`, `githubApiDelete`)
-resolve their `path` through `githubApiUrl` before any fetch; `githubFetch`
-asserts `assertGithubApiAbsoluteUrl` on its absolute URL. The compile-time
-literal `fetch("https://api.github.com/app")` in `github-app.ts` carries no
-interpolated input and is not a member. Octokit (`probe-octokit.ts`) is a
-separate construction path and is explicitly out of assembly.
+resolve their `path` through `githubApiUrl` before any fetch; `fetchWithRetry`
+itself re-asserts `assertGithubApiAbsoluteUrl(url)` so the chokepoint holds
+for callers that skip the builder; `githubFetch` asserts the same on its
+absolute URL. The compile-time literal `fetch("https://api.github.com/app")`
+in `github-app.ts` carries no interpolated input and is the single named
+exemption. Octokit (`probe-octokit.ts`) is a separate construction path and is
+explicitly out of assembly.
 
 **Mutation matrix:**
 
@@ -506,6 +565,22 @@ pipeline entry).
   count means a shipped caller violates the contract — itself a finding).
 
 ## Dependencies & Risks
+
+### Precedent diff (Phase 4.4 — pattern-bound behavior)
+
+| Aspect | `assertCodexEndpoint` / `normalizeEndpoint` (existing) | `githubApiUrl` (this plan) |
+|---|---|---|
+| Input | whole URL string | path fragment joined to a constant prefix |
+| Host check | caller-supplied `allowedHosts` list on `url.hostname` | fixed `origin === "https://api.github.com"` |
+| Userinfo / scheme | rejects non-`https:` + non-empty user/pass | identical assertions |
+| Dot-segments | not checked (whole-URL callers own their paths) | refused on the raw path (literal + `%2e` forms) — the fragment is attacker-shapeable |
+| Leading-`/` | not applicable | required — a fragment without it can rebind the authority |
+
+Same predicate family, one extra axis for the fragment input. No precedent for
+a path-fragment guard inside the GitHub wrappers themselves; closest is
+`kbGithubUrlPath`, a call-site sanitizer this design complements rather than
+duplicates (it validates the KB file-path segment; the sink guard validates
+the assembled request shape).
 
 - **False-positive refusal**: a legit path shape not in the test corpus gets
   rejected in production. Mitigated by the must-PASS rows enumerated from the
