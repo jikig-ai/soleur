@@ -323,6 +323,53 @@ if [[ -f "$MANIFEST" && -n "${LEG_N:-}" && "$LEG_BAD" -eq 0 ]]; then
   unset _first_n
 fi
 
+# Durations-table coherence (#9232): apps/web-platform/infra/suite-durations.tsv
+# is the committed duration source — CI regen writes it and the #8231 local
+# scheduler re-packs from it offline. Same contract as the plugin-side lint:
+# rows `label<TAB>ms<TAB>src` with src ∈ {measured,floor}, no duplicates, only
+# executable (tracked, non-privileged) labels, and a label set equal to the
+# sibling manifest's — a divergence means one consumer sees weight the other
+# cannot place.
+DURATIONS="$REPO_ROOT/apps/web-platform/infra/suite-durations.tsv"
+if [[ -f "$MANIFEST" && -n "${LEG_N:-}" && "$LEG_BAD" -eq 0 ]]; then
+  if [[ ! -f "$DURATIONS" ]]; then
+    err "suite-durations.tsv absent at ${DURATIONS#$REPO_ROOT/} — the #8231"
+    err "  local scheduler has no duration source. Regenerate:"
+    err "  regenerate-shard-manifest.py --group infra --write"
+    fails=$((fails + 1))
+  else
+    declare -A D_SEEN=()
+    while IFS=$'\t' read -r dl dms dsrc drest; do
+      case "$dl" in "" | "#"*) continue ;; esac
+      if [[ -n "${PRIVILEGED[${dl##*/}]+x}" || -z "${TRACKED_REL[$dl]+x}" ]]; then
+        err "suite-durations.tsv weights '$dl', which is not an executable infra"
+        err "  suite (privileged or untracked) — a stale/dead durations row."
+        err "  Regenerate: regenerate-shard-manifest.py --group infra --write"
+        fails=$((fails + 1))
+      elif [[ -n "$drest" || ! "$dms" =~ ^[0-9]+$ || ( "$dsrc" != "measured" && "$dsrc" != "floor" ) ]]; then
+        err "suite-durations.tsv row for '$dl' is malformed — expected"
+        err "  'label<TAB>ms<TAB>src' with src in {measured,floor}."
+        fails=$((fails + 1))
+      elif [[ -n "${D_SEEN[$dl]+x}" ]]; then
+        err "suite-durations.tsv weights '$dl' twice — a duplicate row."
+        fails=$((fails + 1))
+      fi
+      D_SEEN[$dl]=1
+    done < "$DURATIONS"
+    # Label-set parity with the sibling manifest: either direction of
+    # divergence leaves a consumer without its counterpart.
+    _dur_keys=$(grep -vE '^[[:space:]]*(#|$)' "$DURATIONS" | cut -f1 | LC_ALL=C sort -u)
+    _mf_keys=$(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST" | cut -f1 | LC_ALL=C sort -u)
+    if [[ "$_dur_keys" != "$_mf_keys" ]]; then
+      err "suite-durations.tsv and suite-shard-legs.tsv cover different label"
+      err "  sets — a label has weight in one and no placement in the other."
+      err "  Regenerate: regenerate-shard-manifest.py --group infra --write"
+      fails=$((fails + 1))
+    fi
+    unset _dur_keys _mf_keys
+  fi
+fi
+
 # Iteration order pinned for diff-comparable logs (assoc traversal is
 # hash-order; the runner pins LC_ALL=C for the same reason).
 while IFS= read -r base; do
