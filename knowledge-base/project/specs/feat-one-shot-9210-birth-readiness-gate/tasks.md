@@ -18,7 +18,7 @@ Plan: `knowledge-base/project/plans/2026-09-29-fix-birth-gate-grep-q-pipefail-pl
 
 ## Phase 3: Testing
 
-- [ ] 3.1 Add W2 row (beside W1 ~line 2812): the suite asserts the comment-stripped `grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q'` sweep over `"$ROOT"/tests/scripts/lib/*.sh` is empty. Comment-strip because the lib's own ~line-2260 prose legitimately documents the banned shape.
+- [ ] 3.1 Add W2 row (beside W1 ~line 2812): the suite asserts the comment-stripped `grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q'` sweep over `"$ROOT"/tests/scripts/lib/*.sh` is empty. Comment-strip because the lib's own ~line-2260 prose legitimately documents the banned shape. The row's pass/fail label MUST contain the literal `pipe-fed` — the plan's `discoverability_test` probe (`grep -l pipe-fed …`, Check-10-safe) is keyed on it.
 - [ ] 3.2 Add W2-control row: a synthesized lib copy with a seeded `producer | grep -q` line is flagged by the same extraction (proves the detector fires — Guard Contract row 4); include the must-pass controls: `grep -q pat file` and `grep -q <<<"$x"` forms are NOT flagged.
 - [ ] 3.3 Bump `_FLOOR` 252 → 254 at ~line 3057 and extend the itemised ledger comment; verify whether a `_expect_rows` pin needs adding/updating for the new rows.
 - [ ] 3.4 Deterministic reproducer evidence for the PR: a `≥ ~150 KiB` `_shape_src` (module dir content) ABORTs under the old pipe form and passes under the new herestring form under `set -o pipefail`.

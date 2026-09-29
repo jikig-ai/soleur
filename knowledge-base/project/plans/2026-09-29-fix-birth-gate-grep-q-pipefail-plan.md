@@ -17,6 +17,37 @@ lane: cross-domain
 
 Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-29
+**Sections enhanced:** Observability (added — Phase 4.7 halt fires on any
+non-docs diff), Research Insights (deepen-round gate ledger appended),
+Files to Edit (W-family `_expect_rows` question resolved), Acceptance Criteria
+(absence-grep kept count-oriented per the head-truncation sharp edge).
+**Research agents used:** none spawnable — this harness exposes no
+Task/Skill spawn tool; every conditional gate, the verify-the-negative sweep,
+and the precedent-diff were run inline with shell evidence cited. No
+independent review is claimed.
+
+### Key Improvements
+
+1. `## Observability` added — the gate's own suite ledger IS the observable
+   surface; the `discoverability_test` probe is Check-10-clean (allowlisted
+   `grep` verb, no shell-active bytes, sub-second).
+2. Per-gate verdicts recorded as an auditable trail (see Research Insights →
+   Deepen-plan round).
+3. Precedent-diff resolved positively: the herestring idiom is this file's own
+   documented convention (~line 2260 comment plus five live sites) and four
+   sibling scripts — not novel.
+
+### New Considerations Discovered
+
+- The W2 row's label must carry the literal `pipe-fed` so the Check-10-safe
+  probe (`grep -l pipe-fed …`) keeps working — pinned in tasks.md 3.1.
+- Phase 4.5's keyword trigger matches the `.ssh` path text in the
+  authorized_keys sweep; a false-positive in this context — recorded, no
+  deep-dive spawned.
+
 ## Overview
 
 `tests/scripts/test-git-data-birth-readiness-gate.sh` row S1 (`CLEAN => RELEASED`)
@@ -147,8 +178,8 @@ detector fires on a seeded copy. Floor comment bumps 252 → 254.
   verdict).
 - `tests/scripts/test-git-data-birth-readiness-gate.sh` — add the W2 pin +
   W2-control rows; bump `_FLOOR` (252 → 254) and the floor comment ledger;
-  row-count discipline: new rows go in a fresh family or beside W1 (the W rows
-  carry no `_expect_rows` pin today — verify and pin if one is added).
+  the W family carries no `_expect_rows` pin today (verified — only S/P/R/A/H/F
+  are pinned), so no family pin needs bumping.
 
 ## Files to Create
 
@@ -166,6 +197,45 @@ detector fires on a seeded copy. Floor comment bumps 252 → 254.
   exposure vector — the change restructures a predicate's stdin plumbing in a
   test gate; no secret, credential, or user data path is touched.
 - **Brand-survival threshold:** `none`
+
+## Observability
+
+The deliverable IS a gate — its observable surface is the suite ledger and the
+CI check status it feeds. No new infrastructure; the fields below describe how
+a regression in this change is noticed.
+
+```yaml
+liveness_signal:
+  what: "Required `test` check conclusion + `test-scripts (6/7)` shard on CI runs"
+  cadence: "per-run (every push/PR CI execution)"
+  alert_target: "GitHub commit status; a red shard is auto-filed as a CI-failure issue (the #9210 path)"
+  configured_in: ".github/workflows/ci.yml (test-scripts matrix job, ~line 1027)"
+
+error_reporting:
+  destination: "GitHub Actions job log — the suite prints `=== N passed, M failed ===` and per-row `FAIL <label>`; the gate prints `ABORT — …`"
+  fail_loud: "any FAIL row or non-zero suite exit reds the shard and the PR's required `test` context"
+
+failure_modes:
+  - mode: "a pipe-fed `grep -q` reintroduced under tests/scripts/lib/"
+    detection: "W2 sweep row fails naming the offending file:line"
+    alert_route: "required `test` context red → merge blocked"
+  - mode: "instrument failure misreported as a shape violation (the #9210 class)"
+    detection: "the rc≥2 arm emits a could-not-evaluate ABORT distinct from the shape-violation text"
+    alert_route: "shard reds with an honest-cause message on the first failure"
+
+logs:
+  where: "GitHub Actions job log for `test-scripts (6/7)`"
+  retention: "repo Actions log retention (GitHub default 90 days)"
+
+discoverability_test:
+  command: grep -l pipe-fed tests/scripts/test-git-data-birth-readiness-gate.sh
+  expected_output: test-git-data-birth-readiness-gate.sh
+```
+
+The probe is deliberately label-keyed, not count-keyed: `grep -l` prints the
+filename whenever the W2 row exists, so it survives row-renumbering and
+comment drift. The W2 row's label MUST therefore contain the literal
+`pipe-fed` (tasks.md 3.1 pins this).
 
 ## Guard Contract
 
@@ -403,6 +473,30 @@ the same convention. Learning `2026-09-07-the-guard-i-wrote-died-on-the-case-it-
 **CLAUDE.md conventions.** `set -uo pipefail` suite; `[[ ]]` tests; fail-loud
 to stdout for operator-protection signals; comment anchors by symbol name not
 line number.
+
+**Deepen-plan round (2026-09-29, inline — no spawn-capable tool in this
+harness).** Gate ledger: 4.4 precedent-diff — the herestring idiom is the
+file's own convention (comment ~line 2260 + live sites ~1246/1575/2086/2286/
+2295; sibling precedent `scripts/inngest-liveness-classify.sh:70` et al.), so
+the pattern is NOT novel. 4.45 verify-the-negative — every negative claim
+re-probed: the four-site census `grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*q'`
+over the lib returns exactly 511/1135/2057/2311 (nothing else); attempt-2-green
+verified via `gh api …/jobs`; fixture literal verified by reading
+`_r2_write_module`; `tests/scripts/lib/*.sh` siblings carry zero hits.
+4.5 network-outage trigger matches only the `.ssh` PATH text — not applicable,
+no deep-dive. 4.55 downtime — no serving surface touched. 4.6 PASS (threshold
+`none`, no sensitive-path diff). 4.7 FIRED — non-docs diff → `## Observability`
+authored above. 4.8 PAT sweep clean. 4.9 no UI surface. 4.10 no store or new
+connection. 4.11 `lint-guard-contract.py` green on Guard 1; adequacy read:
+the Assembly quantifies over the directory glob (structure that produces
+members), not today's site list, and the matrix includes a dispatch-mutation
+row, a second-member row, and a must-PASS row. Quality-check sweep: rule-id
+citations in this plan (`hr-weigh-every-decision-against-target-user-impact`,
+`wg-when-tests-fail-and-are-confirmed-pre`, `cq-test-fixtures-synthesized-only`)
+verified live in `AGENTS.md`; label `meta/machinery` verified via the #9217
+filing; issue #7534 verified (CLOSED, bound-files derivation) — it is the issue
+that narrowed admissible `templatefile` shape, which is why "accept multi-line"
+is rejected.
 
 ## Sharp Edges
 
