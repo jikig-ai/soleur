@@ -88,10 +88,16 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}" || {
-            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
-          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}" || {
-            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          # (#8209 O8) This root's backend bucket is the privileged one once the
+          # loader emits git_data_root_state_bucket=soleur-terraform-state-privileged,
+          # and that bucket answers ONLY to the GIT_DATA_ROOT_STATE_* pair the loader
+          # exports. The plain AWS_* pair is scoped to the legacy bucket, so it must
+          # not win precedence here — a HeadObject on the privileged bucket with it
+          # returns 403 and the init fails (measured on the O8 migration run).
+          KEY_ID="${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found (GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID, loader AWS_*, nor Doppler prd_terraform)."; exit 1; }
+          SECRET="${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found (GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY, loader AWS_*, nor Doppler prd_terraform)."; exit 1; }
           if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
           printf '::add-mask::%s\n' "$KEY_ID"

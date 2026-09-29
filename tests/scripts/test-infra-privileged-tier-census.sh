@@ -630,6 +630,26 @@ check("G1i: every \"Extract backend credentials\"-shaped step in a Tier-B job re
       "prd_terraform AWS_* fallback [AC7b; %d such steps]" % n_extract,
       not bad_extract, sorted(set(bad_extract))[:8])
 
+# Root-specificity pin (measured gap, O8 migration run): G1i's alias exemption verifies a Tier-B
+# pair beats prd_terraform, but it cannot see WHICH Tier-B pair a root needs. The root-key root's
+# backend bucket is `soleur-terraform-state-privileged`, which answers only to the loader's
+# GIT_DATA_ROOT_STATE_* pair — the generic AWS_* alias (the TF_STATE_* pair, scoped to the legacy
+# bucket) gets 403 on it. The workflow's extract step must therefore name the root-key pair first;
+# an `${AWS_ACCESS_KEY_ID:-...}`-first form satisfies G1i while routing the wrong credential.
+_rk_doc, _rk_text = docs.get(os.path.join("workflows", "apply-git-data-root-key.yml"), ({}, ""))
+_rk_extract = [b for b in step_bodies(_rk_doc) if "doppler secrets get AWS_ACCESS_KEY_ID" in b]
+_rk_order_ok = all(
+    "${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID" in b
+    and b.index("${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID") < b.index("doppler secrets get AWS_ACCESS_KEY_ID")
+    and "${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY" in b
+    for b in _rk_extract
+)
+check("G1i-rk: apply-git-data-root-key.yml's extract step reads GIT_DATA_ROOT_STATE_AWS_* before "
+      "the AWS_*/prd_terraform fallback (the privileged bucket answers only to that pair) "
+      "[%d extract steps]" % len(_rk_extract),
+      len(_rk_extract) == 1 and _rk_order_ok,
+      "extract_steps=%d order_ok=%s" % (len(_rk_extract), _rk_order_ok))
+
 # ── Guard 2 ────────────────────────────────────────────────────────────────────────
 BASH_CALL = re.compile(r"(?<![\w/-])bash\s+(?!-)([\"']?)([^\s\"';|&)]+)\1")
 
@@ -1067,7 +1087,7 @@ jobs:
           doppler run --preserve-env -p soleur -c prd_terraform -- echo sync
 EOF
 
-cat > "$FIX/tree/.github/workflows/rootkey.yml" <<'EOF'
+cat > "$FIX/tree/.github/workflows/apply-git-data-root-key.yml" <<'EOF'
 name: fixture root key apply
 on: workflow_dispatch
 env:
@@ -1078,6 +1098,15 @@ jobs:
     environment: web-platform-infra-apply
     steps:
       - uses: ./.github/actions/infra-credentials
+      - name: Extract R2 backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEY_ID="${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}}"
+          SECRET="${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}}"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
       - name: Apply the root key root
         working-directory: ${{ env.ROOT_KEY_DIR }}
         env:
@@ -1481,7 +1510,7 @@ fi
 # `git_data_host_replace` as it exists today: it shipped with no environment ON PURPOSE, so the row
 # must red on that job plus a loader, not only on a synthetic one.
 MUTDIR="$(fixcopy g1-8)"; assert_fixture_dir "$MUTDIR"
-if mutate g1-8-environment-deleted "$MUTDIR/tree/.github/workflows/rootkey.yml" 1 '/^    environment: web-platform-infra-apply$/d'; then
+if mutate g1-8-environment-deleted "$MUTDIR/tree/.github/workflows/apply-git-data-root-key.yml" 1 '/^    environment: web-platform-infra-apply$/d'; then
   fixcensus "$MUTDIR" "$T/mut/g1-8.tsv" ""
   mutant_red g1-8-environment-deleted wf_row "$T/mut/g1-8.tsv" "G1b:"
 fi
@@ -1573,6 +1602,15 @@ if mutate g1-i2-alias-wrong-source "$MUTDIR/tree/.github/actions/infra-credentia
      's/TF_STATE_AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)/LEGACY_AWS_\1/'; then
   fixcensus "$MUTDIR" "$T/mut/g1-i2.tsv" ""
   mutant_red g1-i2-alias-wrong-source wf_row "$T/mut/g1-i2.tsv" "G1i-pre:"
+fi
+# Row i3 — the measured O8 regression shape: the root-key root's extract step prefers the
+# GENERIC AWS_* alias (the legacy-bucket pair) over GIT_DATA_ROOT_STATE_AWS_*. G1i alone stays
+# green on this — it counts the alias form as compliant; only the root-specificity row sees it.
+MUTDIR="$(fixcopy g1-i3)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-i3-rootkey-pair-dropped "$MUTDIR/tree/.github/workflows/apply-git-data-root-key.yml" 4 \
+     's/\$\{GIT_DATA_ROOT_STATE_AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY):-//g'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-i3.tsv" ""
+  mutant_red g1-i3-rootkey-pair-dropped wf_row "$T/mut/g1-i3.tsv" "G1i-rk:"
 fi
 
 # ── Guard 4 row e ────────────────────────────────────────────────────────────────────
