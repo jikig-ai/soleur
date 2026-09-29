@@ -466,32 +466,32 @@ skipped); no new infrastructure (IaC gate skipped).
 
 ## Acceptance Criteria
 
-- [ ] `checkToken` resolves its probe endpoint per token name:
+- [x] `checkToken` resolves its probe endpoint per token name:
   `LINKEDIN_ACCESS_TOKEN` → `https://api.linkedin.com/v2/userinfo`;
   `LINKEDIN_ORG_ACCESS_TOKEN` →
   `https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED`.
-- [ ] A `401` on either resolved probe files/comments the token's
+- [x] A `401` on either resolved probe files/comments the token's
   `[Action Required] ...` issue (unchanged); a `403` on either resolved probe
   also files, with the body naming the HTTP code and the wrong-scope meaning;
   other non-2xx stays `unknown`.
-- [ ] A `2xx` org-probe result auto-closes an open
+- [x] A `2xx` org-probe result auto-closes an open
   `... (LINKEDIN_ORG_ACCESS_TOKEN)` issue via the existing dedup path — this
   is the mechanism that resolves #7606.
-- [ ] The generated renewal body names `clientId=78wtm2wu15iikn` for
+- [x] The generated renewal body names `clientId=78wtm2wu15iikn` for
   `LINKEDIN_ACCESS_TOKEN` and `clientId=78s808ujpe6lve` for
   `LINKEDIN_ORG_ACCESS_TOKEN`, with the correct scope list per app.
-- [ ] `bootstrap.sh`: `TOKEN_GENERATOR_URL` is split per app;
+- [x] `bootstrap.sh`: `TOKEN_GENERATOR_URL` is split per app;
   `token_probe`/`token_is_live`/`mint_or_reuse` are endpoint-parameterized;
   `stage_2_org` probes the ACL endpoint as its decisive check (advisory block
   removed); `stage_4_verify` probes each token at its endpoint.
-- [ ] `bash -n bootstrap.sh` clean; `bootstrap.sh --help` still derives
+- [x] `bash -n bootstrap.sh` clean; `bootstrap.sh --help` still derives
   `SOLEUR_BOOTSTRAP_LINKEDIN_ACCESS_TOKEN` / `SOLEUR_BOOTSTRAP_LINKEDIN_ORG_ACCESS_TOKEN`.
-- [ ] Test file updated: per-URL mocks, org-403 filing case, probe-routing
+- [x] Test file updated: per-URL mocks, org-403 filing case, probe-routing
   assertion, new anchors (`organizationalEntityAcls`, `78s808ujpe6lve`),
   bootstrap.sh anchor block; suite GREEN.
-- [ ] Follow-up issue filed for `token-validators.ts` linkedin userinfo probe
+- [x] Follow-up issue filed for `token-validators.ts` linkedin userinfo probe
   (adjacent same-class surface, out of 9181's scope).
-- [ ] `Closes #9181` in the PR body. #7606 is NOT in the PR's closes list —
+- [x] `Closes #9181` in the PR body. #7606 is NOT in the PR's closes list —
   it closes via the deployed cron, not this merge.
 
 ## Test Scenarios
