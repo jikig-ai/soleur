@@ -11,7 +11,7 @@ const h = vi.hoisted(() => {
   return {
     requestSpy: vi.fn(async (..._args: unknown[]) => ({ status: 204 })),
     reportSilentFallbackSpy: vi.fn((..._args: unknown[]) => {}),
-    mintSpy: vi.fn(async () => "fake-installation-token"),
+    mintSpy: vi.fn(async (_opts: unknown) => "fake-installation-token"),
   };
 });
 

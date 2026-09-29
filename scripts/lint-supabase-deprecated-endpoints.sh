@@ -154,6 +154,8 @@ ALLOWLIST=(
   'apps/web-platform/test/server/inngest/cron-supabase-advisor-scan.test.ts|2026-08-26|the guard-of-the-guard: asserts the ABSENCE of SUPABASE_ACCESS_TOKEN and advisors/security in-process'
   'plugins/soleur/test/terraform-target-parity.test.ts|2026-08-26|comment naming the SUPABASE_ACCESS_TOKEN GitHub-secret terraform resource; makes no HTTP call'
   'apps/web-platform/infra/supabase-project.tf|2026-09-29|imported supabase_project resource (#9168); /v1/projects appears only in a # comment recording the measured live values. The provider block carrying the literal endpoint pin lives in main.tf'
+  'apps/web-platform/test/server/inngest/supabase-watchdog-workflow-parity.test.ts|2026-09-29|assertion strings on the workflow file (monitor slug, sentinel literal, SUPABASE_ACCESS_TOKEN env name); makes no HTTP call'
+  'apps/web-platform/test/server/inngest/cron-supabase-watchdog-dispatch.test.ts|2026-09-29|negative-assertion strings (the HARD NON-GOAL test asserts the dispatcher does NOT reference SUPABASE_ACCESS_TOKEN or api.supabase.com); makes no HTTP call'
   'scripts/supabase-watchdog-classify.sh|2026-09-29|pure classifier (#9168): the /v1/projects restart path appears only in a # comment; the script consumes HTTP codes and bodies as arguments and makes no network call'
 )
 
