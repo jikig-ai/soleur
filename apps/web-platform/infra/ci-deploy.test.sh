@@ -4762,6 +4762,12 @@ declare -A QI_PIN_B=(
   # cloud-init-inngest-provision-unit.test.sh G2-r15 ("the failed attempt restarts the flip
   # timer"). Pinned as a change detector.
   [apps/web-platform/infra/cloud-init-inngest.yml]=1
+  # #9123 workspaces-luks-reopen.sh — the web-1 sibling of the #8210 git-data line above:
+  # `systemctl start "$_munit"` where `_munit=$(systemd-escape -p --suffix=mount "$TARGET")`
+  # with TARGET allow-listed to /mnt/data — a `.mount` unit is provably never
+  # inngest-server.service, and web-1 carries no inngest-server unit regardless. Pinned as a
+  # change detector.
+  [apps/web-platform/infra/workspaces-luks-reopen.sh]=1
 )
 QS_REPO="$SCRIPT_DIR/../../.."
 # qi_inventory <regex> <pin-array-name> <label>: sets QI_BAD (appends) and QI_SEEN (hit count).
@@ -4800,10 +4806,12 @@ TOTAL=$((TOTAL + 1))
 # 15 -> 16 at #6894: inngest-luks-cutover.sh's single variable-unit resume (see QI_PIN_B).
 # 16 -> 17 at #8210: git-data-luks-reopen.sh's mount-unit start (see QI_PIN_B).
 # 17 -> 18 at #8562: cloud-init-inngest.yml's FSM-timer restore (see QI_PIN_B).
-if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 18 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 9 files) (Guard 2 #6c)"
+# 18 -> 19 at #9123: workspaces-luks-reopen.sh's mount-unit start (see QI_PIN_B).
+if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 19 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 10 files) (Guard 2 #6c)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 18):${QI_BAD:- <per-file counts match but the total does not>}"
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 19):${QI_BAD:- <per-file counts match but the total does not>}"
 fi
 # Positive control: the inventory regex still MATCHES the flag-bearing forms it claims to cover
 # (a regex that silently matched nothing would pin an empty inventory as green).

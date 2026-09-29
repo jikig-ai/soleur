@@ -1081,8 +1081,9 @@ s = s[:j] + "\n      \"sudo useradd -l -d /usr/local/bin/phantom-useradd.sh svcu
 
 # ── GUARD 2 (#7226, ADR-237): every Terraform connection block pins host_key ─────────────
 # Rows 1-6 of the plan's Guard 2 matrix, each attributed to its own [FAIL] text. Row 3's floor is
-# reached by renaming server.tf's blocks away (ci-ssh-key.tf's block and workspaces-luks.tf's two
-# remain, so the walk reports 3 -- #8632 added the second, #8706 the third). Row 4 edits a DIFFERENT .tf, which only Guard 2's directory walk can see.
+# reached by renaming server.tf's blocks away (ci-ssh-key.tf's block and workspaces-luks.tf's three
+# remain, so the walk reports 4 -- #8632 added the second, #8706 the third, #9123 the fourth
+# (workspaces_boot_unlock_install)). Row 4 edits a DIFFERENT .tf, which only Guard 2's directory walk can see.
 expect_red "G2-1 (host_key deleted from the FIRST block)" server.tf "(host_key x0)" '
 old = "    host_key    = local.web_1_ssh_host_key\n"
 assert old in s
@@ -1096,7 +1097,7 @@ s = s[:i] + s[i + len(old):]
 '
 
 expect_red "G2-3 (floor: the walk stops finding server.tf blocks)" server.tf \
-  "G2: swept only 3 SSH connection blocks" '
+  "G2: swept only 4 SSH connection blocks" '
 assert s.count("  connection {\n") >= 18
 s = s.replace("  connection {\n", "  connexion {\n")
 '
