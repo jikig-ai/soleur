@@ -17,4 +17,3 @@ SHA.
 Read the exact head with `gh pr view <number> --json headRefOid` and pass that
 value unchanged to the REST endpoint. Re-run the query after correcting the
 input; do not interpret the failed request as a CI result.
-

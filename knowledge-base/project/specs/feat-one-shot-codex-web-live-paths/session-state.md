@@ -99,3 +99,11 @@
 - Current `origin/main` is `f1d1dc017fb7822a424fd0c7e9e62190013fa8b6`; it has been merged into the feature branch after the repair. The latest repair commit still needs to be pushed.
 - The repair did not write to shared dev or prod. CLO dispositions remain PENDING for both modes; no provider request or feature-flag change occurred.
 - Session errors and recovery are recorded in `knowledge-base/project/learnings/workflow-patterns/2026-09-29-ledgered-migration-repair-starts-from-applied-blob.md`.
+
+## Verification as of 2026-09-30 continuation
+
+- All PR #9051 checks completed successfully on head `e37a7ab5d11de3e715cfa95d6e83e1e426957d84`, including `tenant-integration`, `tenant-integration-required`, the aggregate `test` check, all script shards, Web Platform shards, build, E2E, and security checks. That green head predates the latest main commit and does not cover the resync below.
+- `origin/main` advanced to `41304fc887` (#9238). A clean merge into the feature worktree produced local head `12852ff7bd0eaa1036f923a3a7a56941715dd12c`; it has not been pushed yet. The PR still points at `e37a7ab5d1` and reports `BEHIND` until the new head is pushed and fresh CI completes.
+- `pencil-setup --auto` exited 1: the CLI was detected, but its headless authentication failed; this Codex session exposes no Pencil MCP tools. The member history-transfer UI and its required wireframe remain blocked. The setup script printed `/home/jean/.local/node_modules/.bin/pencil login`; no credential was read or entered.
+- No review panel or QA has run on the resynced head. PR #9051 remains a draft. Both mode-specific CLO dispositions remain PENDING/no authorization; no provider request or flag change occurred. Do not merge before the review, QA, member history acknowledgment, synthetic qualification and CLO gates are resolved.
+- A diff check caught an extra terminal blank line in the check-run SHA learning. The working copy was corrected; the initial range check was against committed `HEAD`, so use `git diff --check origin/main` for the current working tree and `git diff --cached --check` after staging.
