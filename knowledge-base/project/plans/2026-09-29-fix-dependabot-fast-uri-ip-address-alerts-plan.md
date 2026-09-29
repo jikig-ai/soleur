@@ -55,7 +55,7 @@ explicitly (see Disposition below).
   `^3.0.1`, so the correct landing is `3.1.8` (what Dependabot PR #9192
   resolves); a naive "bump to latest" would fail or force an override.
 - **`npm update` can silently no-op on transitive/peer copies**
-  (2026-04-07 learning), and both targets here are `peer: true` entries — hence
+  (2026-04-07 learning), and the `ip-address` target is a `peer: true` entry — hence
   the Phase-4 assert-floors gate (not the command's exit code) is the proof,
   with a surgical 3-field edit fallback carrying pre-verified integrity hashes.
 - **Supersession beats merging the Dependabot PRs** — #9191+#9192 cover only
@@ -98,10 +98,11 @@ Two packages, resolved to their in-range patched versions:
 
 The 9 alerts map as: 5× HIGH `fast-uri` in `apps/web-platform` — alerts **205**
 (`GHSA-jqff-g426-hqxp`, `>=3.0.0,<3.1.6`), **206** (`GHSA-fph4-wmhf-6fwf`,
-`>=3.0.0,<3.1.6`), **207** (`GHSA-f65p-4m7j-42xc`, `>=3.1.2,<3.1.6`), **208**
+`>=3.1.2,<3.1.6`), **207** (`GHSA-f65p-4m7j-42xc`, `>=3.0.0,<3.1.6`), **208**
 (`GHSA-5jgf-p345-68v8`, `>=3.1.3,<3.1.6`), **235** (`GHSA-qw65-cvwx-89v3`,
 `>=3.0.0,<3.1.7`); 2× MEDIUM `ip-address` in `apps/web-platform` — alerts **233**
-(`GHSA-2vr4-cq9g-pvrc`) and **234** (`GHSA-rpw4-54j3-4h4q`), both `<=10.5.0`
+(`GHSA-2vr4-cq9g-pvrc`, `>=10.2.0,<=10.5.0`) and **234** (`GHSA-rpw4-54j3-4h4q`,
+`<=10.5.0`)
 (SSRF/trust-boundary bypass: `isLinkLocal` range + NAT64 classifier); 2× MEDIUM
 `ip-address` in `pencil-setup/scripts` — alerts **237** and **238**, same GHSAs.
 
@@ -181,10 +182,11 @@ section kept for schema completeness per Phase 2.9 because
   manifests declare `name`); `2026-07-18` precedent plan
   (`plans/2026-07-18-fix-dependabot-undici-jsyaml-lockfile-bumps-plan.md`) —
   same shape, same gate set.
-- **Peer-dep note:** both `fast-uri` and `ip-address` resolve as `peer: true`
-  entries in `apps/web-platform/package-lock.json` (ajv / express-rate-limit
-  peer chains). `npm update <pkg>` updates a named package anywhere in the tree;
-  the Phase 4 assertion is what proves it.
+- **Peer-dep note:** `ip-address` resolves as a `peer: true` entry in
+  `apps/web-platform/package-lock.json` (express-rate-limit peer chain);
+  `fast-uri` is a plain transitive copy (ajv `^3.0.1`). `npm update <pkg>`
+  updates a named package anywhere in the tree; the Phase 4 assertion is what
+  proves it.
 - **Labels verified:** `type/security` and `dependencies` both exist
   (`gh label list`, 2026-09-29).
 - **Verification snippets** — copy-paste for Phase 4:
@@ -255,7 +257,8 @@ npx --yes npm@11 update fast-uri ip-address
 ```
 
 Expected: `node_modules/fast-uri` `3.1.5 → 3.1.8`; `node_modules/ip-address`
-`10.5.0 → 10.7.2`. Both resolve as peer-installed transitive copies; `npm
+`10.5.0 → 10.7.2`. `ip-address` resolves as a peer-installed transitive copy
+(`fast-uri` is a plain transitive); `npm
 update` rewrites the single deduped node for each.
 
 **Fallback (only if `npm update` leaves a node below floor — the
