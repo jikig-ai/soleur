@@ -1,5 +1,5 @@
 ---
-title: "Counsel re-attestation — #8634 / PR #8564 (ADR-239 removes the repoint step: row D5 of the #8189 counsel review is superseded; the PA-36 §(g)(1) / PA-2 §(g)(17) activation test was first met in production on 2026-09-25 — the register-marker flip and this file's breach-register waiver stay OPEN)"
+title: "Counsel re-attestation — #8634 / PR #8564 (ADR-239 removes the repoint step: row D5 of the #8189 counsel review is superseded; the PA-36 §(g)(1) / PA-2 §(g)(17) activation test was first met in production on 2026-09-25 — the PA-36 §(g)(1) / PA-2 §(g)(17) register-marker flip stays OPEN; this file's breach-register waiver pair rides this PR)"
 type: counsel-review
 date: 2026-09-29
 issue: 8634
@@ -11,6 +11,8 @@ brand_survival_threshold: single-user incident
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
 signed_off_at: 2026-09-29
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the operator retains an optional veto)"
+discharged_in_this_pr:
+  - "F3 (listed open at drafting): this file matches the breach register's determination-shaped producer pattern (it cites Art. 33/34), so the carrying PR also lands the required NOT_TRANSCRIBED waiver in BOTH copies — scripts/lint-legal-registers.sh and breach-register.md's §Excluded records table — plus the preamble count restatement (to twenty-seven; the prior 'nineteen' itself stood against twenty-six). The waiver can only ever land with the file — the gate refuses a waiver whose path does not exist — so it was never deferrable. Recording a supersession of a dated attestation assesses no fact pattern and makes no Art. 4(12) determination: same class as the #8189 row's waiver."
 disposition: "DISCHARGED as to the D5-supersession record, with OPEN follow-ups recorded (none blocks this file). Row D5 of 2026-09-counsel-review-8189.md attested 'the repoint is now the real cutover's repoint step (#8211)' — corrected in that review's own C4 to future tense ('the repoint will be a step of the rebuilt cutover (#8211, open), which does not exist yet'). PR #8564 (merged b91dcf219, 2026-09-23) authored ADR-239, which removes the repoint mechanism entirely: the render serves /mnt/git-data from the LUKS mapper /dev/mapper/git-data at birth, with no plaintext/LUKS selector and no runtime repoint, and the serving-device change rides an ordinary git_data_host_replace. D5's forward claim, in both its original and its C4-corrected form, is superseded. The dated parent file is not edited; this file is the correction, which is the append-only convention the issue prescribes and the one PR #8564 already applied inside article-30-register.md. Nothing here is conditioned on a pending merge: the superseding event is a past fact (merge 2026-09-23; ADR-239 flipped to accepted 2026-09-27)."
 blocking_findings: []
 corrections_to_parent_review:
@@ -25,7 +27,6 @@ does_not_attest:
 open_follow_ups_not_blocking:
   - "F1 — article-30-register.md: PA-36 §(g)(1) and PA-2 §(g)(17) still read DRAFTED / NOT-YET-ACTIVE although the activation test they name was first met 2026-09-25. An in-cell Superseded-dated marker flipping them is the next register PR. Understating a live control is the safe direction (precedent: 2026-09-counsel-reattestation-5914.md, activation vs marker lag), so this does not block."
   - "F2 — The same follow-up should supersede, in-cell, the clause inside the 2026-09-15 (#8189) marker that still reads 'the repoint will be a step of the rebuilt cutover (#8211, open)', and re-derive the ledgered plaintext exception #6897 (expires 2026-10-22): its premise — repositories sitting unencrypted on the plaintext volume until a repoint — no longer exists as a serving path."
-  - "F3 — This file matches the breach register's determination-shaped producer pattern (it cites Art. 33/34). It therefore needs the usual NOT_TRANSCRIBED waiver in BOTH copies — scripts/lint-legal-registers.sh and breach-register.md's §Excluded records table — plus the 'nineteen rows' restatement in that section's preamble. Recording a supersession of a dated attestation assesses no fact pattern and makes no Art. 4(12) determination: same class as the #8189 row's waiver."
   - "F4 — Optional: a compliance-posture.md row naming this record (the #8248 O5 precedent: recommended, not conditioned)."
 art_33_triggered: false
 art_34_triggered: false
@@ -129,10 +130,11 @@ is #8634's determination" — the 2026-09-27 amendments). Determination, on the 
   pin-fault paging (#8572). The real modes keep refusing `real_cutover_unreconciled`.
 - **`GIT_DATA_STORE_ENABLED` stays off.** The store is empty; the flag is the sole write gate; a
   flip before #8211's preconditions is a hard block (re-evaluation trigger (1)).
-- **F1–F4** in frontmatter: the PA-36 §(g)(1)/PA-2 §(g)(17) DRAFTED→active marker (the cells now
-  understate a live control — safe direction), superseding the "repoint will be a step" clause
-  inside the 2026-09-15 marker, re-deriving the #6897 exception, and this file's own
-  breach-register waiver pair.
+- **F1, F2 and F4** in frontmatter: the PA-36 §(g)(1)/PA-2 §(g)(17) DRAFTED→active marker (the
+  cells now understate a live control — safe direction), superseding the "repoint will be a step"
+  clause inside the 2026-09-15 marker, and re-deriving the #6897 exception. F3 — this file's own
+  waiver pair — is discharged by this PR, not deferred: the file matches the producer pattern, so
+  the waivers could only ever land with it.
 
 ## Drift table
 
@@ -148,9 +150,13 @@ is #8634's determination" — the 2026-09-27 amendments). Determination, on the 
 
 ## Scope and limit check
 
-- **Append-only respected.** `git diff --stat origin/main...HEAD` touches only this new file.
-  `2026-09-counsel-review-8189.md`, `article-30-register.md` and `breach-register.md` are unmodified
-  in this change; F1–F3 are queued for the follow-up, not silently applied here.
+- **Append-only respected.** `git diff --stat origin/main...HEAD` touches three files: this new
+  file plus its own NOT_TRANSCRIBED waiver pair — `scripts/lint-legal-registers.sh` (array entry)
+  and `breach-register.md` (§Excluded records row + the preamble count restatement). The pair is
+  load-bearing: this file matches the producer pattern, so gate (c) fails without it, and the gate
+  refuses a waiver for a nonexistent path — it could only ever land with the file.
+  `2026-09-counsel-review-8189.md` and `article-30-register.md` are unmodified in this change; F1,
+  F2 and F4 are queued for the follow-up, not silently applied here.
 - **The public surface is not engaged.** No `docs/legal/**` or `plugins/soleur/docs/pages/legal/**`
   path is touched; the five #7387 gates do not fire.
 - **No past-tense claim about an unmerged change.** The superseding merge (2026-09-23) and the
@@ -167,8 +173,8 @@ is #8634's determination" — the 2026-09-27 amendments). Determination, on the 
 `2026-09-counsel-review-8189.md` is complete in this file: D5's forward claim — in its original form
 and in the future tense C4 substituted — is superseded by ADR-239's mechanism (LUKS mapper at birth;
 replace-durable serving; no repoint step anywhere in the design). The delegated Art. 30 activation
-determination is made above (test first met 2026-09-25T09:25:30Z). Follow-ups F1–F4 stay OPEN on the
-record; none blocks this attestation, and the operator retains an optional veto.
+determination is made above (test first met 2026-09-25T09:25:30Z). Follow-ups F1, F2 and F4 stay OPEN on the
+record (F3 discharged by this PR); none blocks this attestation, and the operator retains an optional veto.
 
 ## Verification commands (re-runnable from the worktree)
 
@@ -177,5 +183,5 @@ record; none blocks this attestation, and the operator retains an optional veto.
 - `grep -n 'STORE_DEVICE\|store-verified' apps/web-platform/infra/git-data-remove.sh apps/web-platform/infra/git-data-provision.sh apps/web-platform/infra/git-data-gc.sh apps/web-platform/infra/git-data-transport-wrapper.sh` → the wrapper gates (D3).
 - `grep -n 'real_cutover_unreconciled\|store-on-mapper' apps/web-platform/infra/git-data-cutover.sh` → the read-only proof (D4).
 - `grep -n 'mnt/git-data' apps/web-platform/infra/git-data-luks-reopen.sh` → the single-target refusal (D4).
-- `git status --porcelain` → only this file is added (append-only).
+- `git diff --stat origin/main...HEAD` → this file plus the two waiver copies (append-only on dated records: no dated file is edited).
 - `gh issue view 8634 --json state` → OPEN until the lead closes it on merge; `gh issue view 8211 --json state` → OPEN.

@@ -147,7 +147,7 @@ These files match the CI guard's determination-shaped pattern under
 nothing is silently dropped.
 
 **Two dispositions, and they are not the same claim — and as of 2026-09-04 only one of them is
-live.** All **twenty** rows below are *assessed and outside* the inclusion predicate (the count was last restated 2026-09-29, #8634; earlier revisions read "sixteen" against a table that already held seventeen, and "thirteen" against a table that already held fifteen). An earlier
+live.** All **twenty-seven** rows below are *assessed and outside* the inclusion predicate (the count was last restated 2026-09-29, #8634, against a table then at twenty-six rows plus this entry (the prior "nineteen" itself stood against twenty-six); earlier revisions read "sixteen" against a table that already held seventeen, and "thirteen" against a table that already held fifteen). An earlier
 revision of this paragraph carried a second disposition, **undetermined**, for two Sentry audits
 surfaced when the producer pattern was widened on 2026-09-03. Both were ruled on 2026-09-03 in
 §Rulings on the two waivers recorded as pending, and attested 2026-09-04 at
