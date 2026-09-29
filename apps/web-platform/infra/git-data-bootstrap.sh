@@ -373,7 +373,7 @@ _repo_count() {
   _t="$(find "$1" -mindepth 1 -maxdepth 1 -name repositories -printf '%y' 2>/dev/null)" || return 1
   case "$_t" in
     "") echo 0 ;;
-    d) find "$1/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf x 2>/dev/null | wc -c ;;
+    d) find "$1/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf x 2>/dev/null | wc -c ;;
     *) return 2 ;;
   esac
 }

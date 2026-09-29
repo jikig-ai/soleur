@@ -465,7 +465,7 @@ refuse_if_store_unverified_or_not_empty() {
     '[ -d "$d" ] || exit 3'
     'dr=$(readlink -f "$d") && rr=$(readlink -f "$r") && t=$(stat -c %m "$dr") || exit 9'
     '[ "$t" = "$rr" ] || exit 8'
-    "n=\$(find -H \"\$d\" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf .) || exit 4"
+    "n=\$(find -H \"\$d\" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf .) || exit 4"
     'echo "${#n}"'
   )
   printf -v cmd '%s; ' "${c[@]}"
