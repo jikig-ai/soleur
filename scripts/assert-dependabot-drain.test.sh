@@ -428,7 +428,7 @@ fi
 # an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
 # any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
 # an anti-vacuity floor is attack budget, not padding.
-MIN_ASSERTIONS=24
+MIN_ASSERTIONS=27
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

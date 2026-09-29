@@ -35,7 +35,7 @@ Issue: #8065 · PR: #9223 · Branch: `feat-one-shot-8065-dep-audit-advisories`
   (package,major) across manifests — all four js-yaml rows must move
   together or the anchor check REDs the untouched sibling.)
 - [x] 2.4 Update the `MIN_ROWS`/`MIN_RESOLVED` comments so their row
-  arithmetic reflects 21 rows; the floor VALUES stay `20` (lower bounds).
+  arithmetic reflects 21 rows; both floors ratchet `20` -> `21` (the row count grew by one — the floor IS the count).
 
 ## Phase 3 — Drain-guard test (`scripts/assert-dependabot-drain.test.sh`)
 

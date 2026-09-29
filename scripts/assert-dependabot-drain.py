@@ -80,7 +80,7 @@ REQUIRED = [
     ("root", "js-yaml", 4, "4.3.2"),
     # liquidjs sits only in the ROOT lockfile, reached via @11ty/eleventy@3.1.5
     # ("liquidjs": "^10.25.0"). Three HIGH advisories: GHSA-g357 (pop filter,
-    # <=10.27.0), GHSA-m7fp (strip_html infinite loop, <10.27.1), GHSA-4r6h
+    # <=10.27.0), GHSA-m7fp (strip_html infinite loop, >=10.26.0 <=10.27.0), GHSA-4r6h
     # (join filter, <=10.27.1) -- the strictest first_patched is 10.27.2.
     ("root", "liquidjs", 10, "10.27.2"),
     ("root", "brace-expansion", 1, "1.1.18"),  # was 1.1.16: GHSA-rgw5-rvv9-x895 covers <1.1.18

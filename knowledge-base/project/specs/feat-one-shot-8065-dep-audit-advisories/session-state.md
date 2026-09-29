@@ -25,7 +25,7 @@
   `WATCHED_PACKAGES` + `FLOOR_ANCHORS` entry; js-yaml anchors ratchet to
   `3.15.2`/`4.3.2` (keyed per (pkg,major) across manifests — web-platform
   rows move too). Test file gains a `("liquidjs", 10)` fixture entry and
-  three new anchor-grep specs. `MIN_ROWS`/`MIN_RESOLVED` stay `20`.
+  three new anchor-grep specs. `MIN_ROWS`/`MIN_RESOLVED` ratchet `20` -> `21` (floors track the row count; correction over the plan text).
 - **No Dependabot alerts or PRs to supersede** — `dependabot/alerts` API
   returns `[]`; these advisories came through the npm-audit feed.
 - **Degradation:** this plan ran inside a subagent with no Task-spawn
