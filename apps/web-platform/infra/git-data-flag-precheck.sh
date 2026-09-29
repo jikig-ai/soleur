@@ -44,7 +44,9 @@
 #               (a prior flip died after the write; the workflow routes to redeploy+assert)
 #   rollback -> flag==true is the EXPECTED entry: prints flag=true; flag!=true exits 0 with
 #               verdict-free flag=off + mode=rollback nothing_to_rollback marker
-#   unfreeze -> reads like proof (flag value irrelevant to the sentinel decision)
+#   unfreeze -> flag value is IRRELEVANT to the sentinel decision: a died-mid-window flip
+#               leaves flag==true + freeze held, and unfreeze is exactly that recovery —
+#               so unfreeze never refuses on flag==true (reads like proof, prints the value).
 #
 # WRITE PATH (#8211 PR2 / #8573 seam). When FLAG_WRITE_VALUE is set to `true` or `false`, the
 # step writes GIT_DATA_STORE_ENABLED through the dedicated write credential
@@ -190,13 +192,13 @@ fi
 # on rollback it is the expected entry.
 if [ "$flag" = true ]; then
   case "$FLAG_MODE" in
-    proof|unfreeze) refuse flag_already_true ;;
+    proof) refuse flag_already_true ;;
     flip)
       echo "flag=true resume=arm_b"
       # fall through to the pin/TOFU probes — a resumed flip still needs the pin file
       ;;
-    rollback)
-      echo "flag=true mode=rollback"
+    rollback|unfreeze)
+      echo "flag=true mode=${FLAG_MODE}"
       ;;
   esac
 fi

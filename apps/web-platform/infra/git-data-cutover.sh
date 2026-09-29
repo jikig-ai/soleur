@@ -59,13 +59,21 @@
 # exist on either host, and a second run after a repoint could rsync a store onto itself.
 # #8211 is split in two (ADR-239). PR1 moved the store itself: the git-data render serves the
 # LUKS mapper at /mnt/git-data from boot and the bootstrap plants the fence on it. There is
-# nothing to copy, because the store has never held a repository. PR2's proof half rebuilt the
-# store probes for that layout (ADR-239 amendment 2026-09-27): the DRY_RUN=1 probe chain IS the
-# `proof` the rest of PR2 builds on. The flip, the flag-off-only rollback, the same-version
-# redeploy, the per-host in-container `git_data_store=` startup line and the ADR-220 D6 fresh
-# replace remain on #8211, so a caller that asks for a real mode (DRY_RUN other than 1, ROLLBACK or CONFIRM_WIPE other than 0) is refused with
-# `verdict=real_cutover_unreconciled` (exit 5) BEFORE any remote call.
-# Defaults: DRY_RUN=1, ROLLBACK=0, CONFIRM_WIPE=0 (unset or empty takes the default).
+# nothing to copy, because the store has never held a repository.
+#
+# MODES (#8211 PR2). MODE selects the verb — proof (default), freeze, unfreeze, probe.
+# The flag write and the fleet redeploy are WORKFLOW steps, not script verbs: this script
+# reads no secret store and the webhook credentials never reach it. Host-side mode mapping:
+#   workflow flip     -> precheck(flip) -> preconditions -> MODE=freeze -> flag write ->
+#                        track.sh -> per-host git_data_store= readback -> MODE=unfreeze ->
+#                        MODE=probe -> GIT_DATA_LUKS_CUTOVER_AT
+#   workflow rollback -> precheck(rollback) -> flag write off -> track.sh -> off-line
+#                        readback -> MODE=unfreeze (clears only a same-lineage sentinel)
+#   workflow unfreeze -> MODE=unfreeze
+#   workflow redeploy -> track.sh only (no host-side verb)
+# DRY_RUN/ROLLBACK/CONFIRM_WIPE are the superseded PR1 interface; non-default values are
+# still refused (verdict=real_cutover_unreconciled) so a stale dispatch cannot wedge the
+# new dispatch behind a silent no-op. MODE=proof is what DRY_RUN=1 was.
 #
 # NO DOPPLER. The flag read moved to its own workflow step (git-data-flag-precheck.sh) so the
 # `prd` read token never reaches the process that handles host bytes. This script reads no
@@ -155,11 +163,36 @@ cleanup() {
 trap cleanup EXIT
 
 # ============================================================================
-# refuse_real_modes — a real cutover, rollback or wipe cannot be requested (#8211)
+# MODE dispatch (#8211 PR2) — the host-side verbs the workflow orchestrates
 # ============================================================================
-# One arm per variable, so dropping one is a visible edit. Runs FIRST in main(): the refusal
-# must leave an empty remote timeline. Prints variable NAMES, never their values.
-refuse_real_modes() {
+# MODE selects one host-side verb; the flag write, the fleet redeploy and the flag
+# read-back are WORKFLOW steps (this script reads no secret store — the contract stands).
+#   proof     (default, DRY_RUN=1): the read-only probe chain above.
+#   freeze    assert git-data-gc.service inactive -> stop git-data-gc.timer -> write
+#             $OLD_ROOT/.cutover-freeze with `writer=<lineage> at=<epoch>` provenance ->
+#             purge legacy .<id>.init.lock residue inside the freeze window.
+#   unfreeze  read the sentinel; clear it ONLY when its writer lineage equals
+#             CUTOVER_LINEAGE -> restart gc.timer. Refuses frozen_unattributed (a sentinel
+#             nobody wrote is a host incident, not a cleanup target) and frozen_foreign.
+#   probe     the positive replication probe: provision + fenced push + remove of a
+#             synthetic id (cutover-probe-<lineage>), leaving zero residue.
+# The legacy arm still stands for DRY_RUN!=1/CONFIRM_WIPE!=0 (the wipe is a later PR);
+# ROLLBACK=1 maps to MODE=rollback at the WORKFLOW level, not here.
+MODE="${MODE:-proof}"
+case "$MODE" in
+  proof|freeze|unfreeze|probe) : ;;
+  *) log "REFUSE verdict=mode_invalid mode=${MODE}"
+     echo "::error title=git-data-cutover::verdict=mode_invalid"
+     exit 5 ;;
+esac
+CUTOVER_LINEAGE="${CUTOVER_LINEAGE:-}"
+FREEZE_SENTINEL="${OLD_ROOT}/.cutover-freeze"
+# The sentinel carries parseable provenance — `writer` names the run lineage the
+# workflow stamps (github.run_id) and `at` the host's epoch at write. Writers that
+# cannot stamp both fields refuse before touching the store.
+LINEAGE_RE='^[A-Za-z0-9._-]{1,64}$'
+
+refuse_legacy_modes() {
   local bad=""
   [ "${DRY_RUN:-1}" = 1 ] || bad="${bad} DRY_RUN"
   [ "${ROLLBACK:-0}" = 0 ] || bad="${bad} ROLLBACK"
@@ -167,11 +200,60 @@ refuse_real_modes() {
   [ -n "$bad" ] || return 0
   log "REFUSE verdict=real_cutover_unreconciled vars=${bad# }"
   echo "::error title=git-data-cutover::verdict=real_cutover_unreconciled"
-  log "remedy: this script is a read-only proof. The flip, the rollback and the wipe remain on #8211, rebuilt on real mechanisms; dispatch without DRY_RUN/ROLLBACK/CONFIRM_WIPE."
+  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe); the wipe remains a later PR (#8211)."
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf -- '- REFUSE verdict=real_cutover_unreconciled\n' >> "$GITHUB_STEP_SUMMARY" || true
   fi
   exit 5
+}
+
+# --- gd_exec: one bounded remote WRITE/exec (the write twin of gd_capture) ------
+# gd_exec <remote-cmd>: runs it over GIT_DATA_SSH, bounded like gd_capture (30 s, stdin
+# /dev/null), and returns ssh's own rc. stdout is discarded — a write verb has no answer
+# to accept, and a hostile host's bytes never reach this script's stdout.
+gd_exec() {
+  local rc=0
+  local -a inv
+  read -ra inv <<< "${GIT_DATA_SSH:-}"
+  [ "${#inv[@]}" -gt 0 ] || return 97
+  if [ -z "$CAPTURE_TMP" ]; then CAPTURE_TMP="$(mktemp -d)" || return 95; fi
+  : > "$CAPTURE_TMP/capture.err" || return 95
+  timeout 30 "${inv[@]}" -o BatchMode=yes -o ConnectTimeout=20 "$GIT_DATA_HOST" "$1" \
+    </dev/null >/dev/null 2>"$CAPTURE_TMP/capture.err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _access_stderr "$CAPTURE_TMP/capture.err"
+  fi
+  return "$rc"
+}
+
+# --- freeze provenance (host-side; the sentinel's only writer/reader) -----------
+# freeze_probe: ONE ssh session answers existence + provenance. Remote exits:
+#   0 absent | 1 present+parseable (answer `writer=<w> at=<n>`) | 2 present+unparseable
+freeze_state=""   # absent|ours|foreign|unattributed|<parse-failure>
+freeze_detail=""  # writer + age when parseable
+probe_freeze() {
+  local rc=0 qs ql cmd
+  printf -v qs '%q' "$FREEZE_SENTINEL"
+  printf -v ql '%q' "$CUTOVER_LINEAGE"
+  cmd="fz=$qs; lin=$ql
+    if [ ! -e \"\$fz\" ]; then echo absent; exit 0; fi
+    c=\$(head -n 1 \"\$fz\" 2>/dev/null) || exit 2
+    w=\$(printf '%s' \"\$c\" | sed -n 's/^writer=\([^ ]*\).*/\1/p')
+    a=\$(printf '%s' \"\$c\" | sed -n 's/.* at=\([0-9]*\)$/\1/p')
+    [ -n \"\$w\" ] && [ -n \"\$a\" ] || exit 2
+    if [ \"\$w\" = \"\$lin\" ]; then echo \"ours writer=\$w at=\$a\"; else echo \"foreign writer=\$w at=\$a\"; fi"
+  gd_capture '^(absent|ours writer=[A-Za-z0-9._-]+ at=[0-9]+|foreign writer=[A-Za-z0-9._-]+ at=[0-9]+)$' "$cmd" || rc=$?
+  case "$rc" in
+    0) ;;
+    2) freeze_state=unattributed; return 0 ;;
+    *) _store_refuse freeze-state probe_failed "$rc" ;;
+  esac
+  case "$GD_CAPTURED" in
+    absent) freeze_state=absent ;;
+    ours*)  freeze_state=ours ;;
+    foreign*) freeze_state=foreign ;;
+  esac
+  freeze_detail="${GD_CAPTURED#* }"
 }
 
 # ============================================================================
@@ -579,20 +661,177 @@ refuse_if_fence_not_intact() {
 }
 
 # ============================================================================
+# freeze / unfreeze / probe — the host-side verbs (#8211 PR2)
+# ============================================================================
+# Every write runs through gd_exec (bounded, stdout discarded); every read through
+# probe_freeze/gd_capture. A transport failure on unfreeze is FREEZE_HELD — the sentinel
+# may still be live and unverifiable, which pages, not summarizes.
+
+require_lineage() {
+  [[ "$CUTOVER_LINEAGE" =~ $LINEAGE_RE ]] || {
+    log "REFUSE verdict=lineage_absent — CUTOVER_LINEAGE must be ${LINEAGE_RE} (the workflow stamps github.run_id)"
+    echo "::error title=git-data-cutover::verdict=lineage_absent"
+    exit 5
+  }
+}
+
+mode_freeze() {
+  step "freeze: gc quiesce -> timer stop -> sentinel with provenance -> legacy-lock purge"
+  require_lineage
+  access_gate
+  refuse_if_config_unsafe
+  # 1. gc.service must be INACTIVE — `stop` on the timer does not quiesce an in-flight
+  #    oneshot. Assert before stopping, not after: a running gc mid-freeze is the window
+  #    the freeze exists to close. `is-active` folds every non-active state into one rc,
+  #    so read ActiveState's value: only `inactive`/`failed` is quiesced.
+  local rc=0
+  gd_capture '^(active|activating|deactivating|inactive|failed|unknown)$' \
+    'systemctl show -p ActiveState --value git-data-gc.service' || rc=$?
+  [ "$rc" -eq 0 ] || _store_refuse freeze-gc-quiesce probe_failed "$rc"
+  case "$GD_CAPTURED" in
+    inactive|failed) : ;;
+    # Literal reason word (the RB map emitter census needs it greppable, not constructed).
+    *) _store_refuse freeze-gc-quiesce probe_failed "" gc_active ;;
+  esac
+  gd_exec 'systemctl stop git-data-gc.timer' || _store_refuse freeze probe_failed "$?"
+  _store_emit freeze-gc-stopped ok
+  # 2. Sentinel state first: ours -> idempotent (a resumed flip re-runs freeze harmlessly);
+  #    foreign/unattributed -> refuse.
+  probe_freeze
+  case "$freeze_state" in
+    absent) ;;
+    ours) _store_emit freeze ok; log "freeze already held by this lineage (${freeze_detail}) — resume arm A"; return 0 ;;
+    foreign) _store_refuse freeze frozen_foreign ;;
+    unattributed) _store_refuse freeze frozen_unattributed ;;
+  esac
+  # 3. Write `writer=<lineage> at=<epoch>` — both fields host-side so a partial write is
+  #    unparseable (frozen_unattributed), never half-trusted.
+  local qs ql
+  printf -v qs '%q' "$FREEZE_SENTINEL"
+  printf -v ql '%q' "$CUTOVER_LINEAGE"
+  gd_exec "printf 'writer=%s at=%s\n' $ql \"\$(date +%s)\" > $qs" \
+    || _store_refuse freeze-write probe_failed "$?"
+  _store_emit freeze ok
+  # 4. Purge legacy .<id>.init.lock residue INSIDE the freeze window: count, assert no
+  #    flock is held on each (an in-flight provision holds the lock past the sentinel
+  #    check), then rm. The shared .init.lock and the boot probe's .boot-probe-0.init.lock
+  #    are excluded — the former is live machinery, the latter deliberate residue.
+  local qd
+  printf -v qd '%q' "$OLD_REPOS"
+  gd_exec "d=$qd
+    n=\$(find \"\$d\" -mindepth 1 -maxdepth 1 -name '.*.init.lock' ! -name '.init.lock' ! -name '.boot-probe-0.init.lock' -printf . 2>/dev/null | wc -c) || exit 4
+    echo \"purge count=\$n\" >&2
+    for f in \"\$d\"/.*.init.lock; do
+      [ -e \"\$f\" ] || continue
+      case \"\$(basename \"\$f\")\" in .init.lock|.boot-probe-0.init.lock) continue ;; esac
+      exec 8<\"\$f\"; flock -n 8 || exit 23   # a held lock means an in-flight provision — STOP
+      rm -f -- \"\$f\" || exit 5
+    done" || {
+    rc=$?
+    case "$rc" in
+      23) _store_refuse lock-purge lock_held ;;
+      *) _store_refuse lock-purge probe_failed "$rc" ;;
+    esac
+  }
+  _store_emit lock-purge ok
+  log "freeze held: sentinel at $FREEZE_SENTINEL (writer=$CUTOVER_LINEAGE), gc.timer stopped, legacy lock residue purged"
+}
+
+mode_unfreeze() {
+  step "unfreeze: provenance check -> sentinel clear -> gc.timer restart"
+  access_gate
+  refuse_if_config_unsafe
+  probe_freeze
+  case "$freeze_state" in
+    absent)
+      log "nothing_to_unfreeze — no sentinel at $FREEZE_SENTINEL"
+      ;;
+    ours)
+      require_lineage
+      local qs
+      printf -v qs '%q' "$FREEZE_SENTINEL"
+      gd_exec "rm -f -- $qs" || {
+        log "FREEZE_HELD: could not clear the sentinel (transport/write failure). This pages: the freeze may still be live and blocks every store verb."
+        echo "::error title=git-data-cutover::verdict=FREEZE_HELD"
+        exit 5
+      }
+      _store_emit unfreeze ok
+      ;;
+    foreign) _store_refuse unfreeze frozen_foreign ;;
+    unattributed) _store_refuse unfreeze frozen_unattributed ;;
+  esac
+  gd_exec 'systemctl start git-data-gc.timer' || {
+    # The store is writable but gc stays stopped — warn, don't fail the unfreeze.
+    echo "::warning title=git-data-cutover::gc.timer restart failed — verify it is running"
+  }
+  log "unfreeze done (state was: ${freeze_state}); gc.timer restarted"
+}
+
+mode_probe() {
+  step "probe: transactional provision + fenced push + remove (synthetic id)"
+  require_lineage
+  access_gate
+  refuse_if_config_unsafe
+  # The probe proves the FULL transport contract, not the write alone: provision wrapper
+  # accepts the id, a push under the CAS fence lands a ref, the remove wrapper erases it.
+  # Zero residue is an assertion, not a hope — anything left trips served_repos.
+  local probe_id="cutover-probe-${CUTOVER_LINEAGE}"
+  # probe_id is `cutover-probe-` + the already-LINAGE_RE-validated lineage — always in
+  # the wrapper's id shape, so it needs no separate guard.
+  local qp qd
+  printf -v qp '%q' "$probe_id"
+  printf -v qd '%q' "$OLD_REPOS"
+  local rc=0
+  gd_exec "id=$qp; d=$qd
+    repo=\"\$d/\$id.git\"
+    env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" runuser -u git -- /usr/local/bin/git-data-provision.sh || exit 11
+    [ -d \"\$repo\" ] || exit 12
+    t=\$(mktemp -d) && chown git:git \"\$t\" || exit 13
+    runuser -u git -- sh -c \"cd \\\"\$t\\\" && git init -q && git config user.email cutover@probe && git config user.name probe && git commit -q --allow-empty -m probe && git push --push-option=lease-gen=1 --push-option=worktree-id=cutover-probe \\\"\$repo\\\" HEAD:refs/heads/cutover-probe\" || { rm -rf \"\$t\"; exit 14; }
+    rm -rf \"\$t\"
+    git --git-dir=\"\$repo\" rev-parse --verify -q refs/heads/cutover-probe >/dev/null || exit 15
+    env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" runuser -u git -- /usr/local/bin/git-data-remove.sh || exit 16
+    [ ! -e \"\$repo\" ] || exit 17" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # Zero-residue: try the remove once more (idempotent) before reporting.
+    gd_exec "env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=$qp runuser -u git -- /usr/local/bin/git-data-remove.sh" || true
+    case "$rc" in
+      11) _store_refuse probe probe_failed "" provision ;;
+      12) _store_refuse probe probe_failed "" repo_absent_after_provision ;;
+      13) _store_refuse probe probe_failed "" scratch ;;
+      14) _store_refuse probe fenced_push_failed ;;
+      15) _store_refuse probe probe_failed "" ref_not_landed ;;
+      16) _store_refuse probe remove_failed ;;
+      17) _store_refuse probe residue_left ;;
+      *) _store_refuse probe probe_failed "$rc" ;;
+    esac
+  fi
+  _store_emit probe ok
+  log "probe clear: $probe_id provisioned, a CAS-fenced push landed a ref, and the erasure removed it (zero residue)"
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 main() {
-  refuse_real_modes
+  refuse_legacy_modes
   resolve_roster
-  refuse_if_config_unsafe
-  log "starting git-data read-only proof (access gate, the store probes, then the fence probe; no host is changed)"
-  access_gate
-  refuse_if_unmounted
-  refuse_if_not_on_mapper
-  refuse_if_store_unverified_or_not_empty
-  refuse_if_fence_not_intact
-  log "read-only proof clear: access ok, served by the LUKS mapper, the bootstrap's store marker bound to its filesystem, not frozen, no entry in the repositories directory, fence in place for pushes"
-  echo "::notice title=git-data-cutover store::verdict=clear"
+  case "$MODE" in
+    proof)
+      refuse_if_config_unsafe
+      log "starting git-data read-only proof (access gate, the store probes, then the fence probe; no host is changed)"
+      access_gate
+      refuse_if_unmounted
+      refuse_if_not_on_mapper
+      refuse_if_store_unverified_or_not_empty
+      refuse_if_fence_not_intact
+      log "read-only proof clear: access ok, served by the LUKS mapper, the bootstrap's store marker bound to its filesystem, not frozen, no entry in the repositories directory, fence in place for pushes"
+      echo "::notice title=git-data-cutover store::verdict=clear"
+      ;;
+    freeze)   mode_freeze ;;
+    unfreeze) mode_unfreeze ;;
+    probe)    mode_probe ;;
+  esac
 }
 
 main "$@"

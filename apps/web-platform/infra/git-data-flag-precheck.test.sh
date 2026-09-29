@@ -337,9 +337,9 @@ if case_mode rollback-off false rollback \
   pass "M-rb-off: rollback with flag off -> verdict=nothing_to_rollback, exit 0 (desired state already holds)"
 else fail "M-rb-off: nothing-to-rollback was not reported" "$(detail)"; fi
 if case_mode unfreeze-true true unfreeze \
-  && [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(refusal flag_already_true)" ]; then
-  pass "M-uf-true: unfreeze with flag=true still refuses flag_already_true (it reads like proof)"
-else fail "M-uf-true: unfreeze did not refuse flag=true" "$(detail)"; fi
+  && [ "$RC" = 0 ] && grep -qF 'flag=true mode=unfreeze' "$OUT"; then
+  pass "M-uf-true: unfreeze with flag=true is ACCEPTED (a died-mid-window flip leaves flag on + freeze held — unfreeze is exactly that recovery)"
+else fail "M-uf-true: unfreeze wrongly refused flag=true" "$(detail)"; fi
 if case_mode bogus false bogus \
   && [ "$RC" = 2 ] && grep -qF 'verdict=flag_mode_invalid' "$OUT" && [ ! -s "$DLOG" ]; then
   pass "M-invalid: an unknown FLAG_MODE -> verdict=flag_mode_invalid, exit 2, doppler never called"
