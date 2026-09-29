@@ -73,6 +73,7 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     }
     for await (const event of dispatchConversationEngineRun({
     repository: options.repository,
+    persistedRun: persisted,
     factories: { codex: factories.codex },
     conversationId: options.conversationId,
     input: options.input,
