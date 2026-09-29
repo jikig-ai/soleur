@@ -8,7 +8,8 @@ applies_to:
   - apps/web-platform/infra/uptime-alerts.tf
   - apps/web-platform/server/health.ts
   - apps/web-platform/server/index.ts
-related_issues: [7884]
+  - .github/workflows/scheduled-supabase-watchdog.yml
+related_issues: [7884, 9168]
 ---
 
 # Runbook: the app database readiness alarm fired
@@ -19,12 +20,18 @@ the alarm is recovering or was a flap. `error` means the app cannot read Supabas
 [Diagnose](#diagnose). No output, or a `jq` parse error, means the app itself is not
 answering: that is an app outage, and `soleur app dashboard` should be firing too.
 
+Since #9168 the auto-restart watchdog may already have restarted the Supabase project
+before you read this — check for an open issue labeled `supabase-auto-restart` first
+(`gh issue list --label supabase-auto-restart -L 5`).
+
 ## First: which alarm is this?
 
-Four Better Stack monitors watch `app.soleur.ai`, `soleur.ai` and `www.soleur.ai`. The email
-subject is the only thing that tells them apart in an inbox.
+Four Better Stack monitors watch `app.soleur.ai`, `soleur.ai` and `www.soleur.ai`. Since
+#9168 alerts reach the operator through the native Slack integration (primary wake path —
+Slack mobile push) AND email; `app_health` additionally carries `push = true` (a measured
+flip — if the vendor refused it on this plan, that revert is recorded in PR #9184 / ADR-259).
 
-| Alert name | URL | Means | Time to page |
+| Alert name | URL | Means | Time to detect |
 |---|---|---|---|
 | `soleur app database readiness` | `https://app.soleur.ai/health` | The `/health` body stopped containing `"supabase":"connected"`: the database is unreachable, the REST check took over 2 s, the service-role key was rejected, or the app is not answering at all. | ~6 min (up to 180 s to observe + 180 s confirmation) |
 | `soleur app dashboard` | `https://app.soleur.ai/` | The app is unreachable, TLS-broken or erroring. | ~4 min (up to 180 s + 60 s confirmation) |
@@ -51,6 +58,9 @@ called from `server/index.ts`, with `Cache-Control: no-store`). Only the body ch
 GET of `/rest/v1/users?select=id&limit=1` returns 2xx within 2 s, and to `error` otherwise. A
 status-code monitor cannot see that, which is why the 2026-09-15 outage paged nobody for ~89
 minutes ([post-mortem](../post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md)).
+On 2026-09-28 the same outage recurred and the monitor DID detect it (+7 min) — but the alert
+routed to email only and nobody was paged ([post-mortem](../post-mortems/prd-supabase-database-unreachable-2026-09-28-postmortem.md)),
+which is why Slack + push are now the delivery path (ADR-259).
 
 The keyword is compact JSON. A change to how `/health` serializes (pretty-printing, a renamed
 field) breaks the match, and
@@ -60,6 +70,12 @@ can merge. Rationale: [ADR-222](../../architecture/decisions/ADR-222-better-stac
 ## Diagnose
 
 Every step below is a read. None needs SSH.
+
+0. **Check whether the watchdog already acted.** `gh issue list --label supabase-auto-restart -L 5`:
+   an issue whose comments carry `watchdog:restart` sentinels means the auto-restart watchdog
+   (below) already issued a Management API restart — your job is then verification (step 1 and
+   step 4), not remediation. The restart costs ~6 min of COMING_UP; a `/health` `error` read in
+   that window is expected, not a new incident.
 
 1. **Reproduce.** Read `/health` a few times, 20 s apart:
 
@@ -156,16 +172,50 @@ needs a deploy. Both need explicit operator authorization, as below.
 
 ## Remediate
 
-**A project restart is a production write.** On 2026-09-15 the database recovered only after a
-Management API `POST /v1/projects/{ref}/restart` (about 6 minutes to healthy, with one flap).
-Do not issue it on the strength of this runbook or of a menu choice: it needs the operator's
-explicit authorization for that specific write (`hr-menu-option-ack-not-prod-write-auth`).
-Present the step 3 and step 4 readings, the options (watch, restart, hands-off) and the expected
-recovery time, and wait for a clear go-ahead.
+### The auto-restart watchdog (#9168, ADR-259)
+
+`scheduled-supabase-watchdog.yml` is a bounded, pre-authorized restart path for ONE proven
+signature — an express, recorded deviation from `hr-menu-option-ack-not-prod-write-auth`. It
+probes the Management API health endpoint and issues `POST /v1/projects/{ref}/restart` only when
+ALL of these hold:
+
+- the exact signature `{db, auth, rest} UNHEALTHY ∧ pooler ACTIVE_HEALTHY` on **≥3 consecutive
+  reads** (~60 s apart) — `COMING_UP`, missing keys, extra unhealthy services or a
+  pooler-also-unhealthy read are `ambiguous`, never a restart;
+- an independent corroborator agrees — the app `/health` reports `supabase` non-`connected`;
+- the dark-launch arm is set: `gh variable set WATCHDOG_ARMED --body 1` flips it on (unset =
+  detect-only: audit issue + Sentry check-in, zero restart POSTs);
+- ≥30 min since the last automated restart (cooldown, read from the audit issue's
+  `watchdog:restart` sentinel), and the attempt budget is not exhausted (give-up escalates to a
+  priority issue instead of restarting forever).
+
+Every detection and restart writes or updates a GitHub issue labeled `supabase-auto-restart`;
+runs serialize on the `concurrency: supabase-watchdog` group (`cancel-in-progress: false`), so
+the watchdog cannot double-restart. A Sentry cron monitor covers the watchdog itself — a dead
+watchdog pages via the missed-check-in margin.
+
+### A manual restart is still a production write
+
+On 2026-09-15 and 2026-09-28 the database recovered only after a Management API
+`POST /v1/projects/{ref}/restart` (about 6 minutes to healthy, with one flap on 09-15). If the
+watchdog has NOT acted — signature not sustained, corroborator absent, disarmed, or cooled
+down — do not issue the restart on the strength of this runbook or of a menu choice: it needs
+the operator's explicit authorization for that specific write
+(`hr-menu-option-ack-not-prod-write-auth`). Present the step 3 and step 4 readings, the options
+(watch, restart, hands-off) and the expected recovery time, and wait for a clear go-ahead.
 
 After any remediation, confirm recovery with the TL;DR read on three reads 20 s apart and with
 step 4 showing every service healthy. The Better Stack incident closes by itself after
 `recovery_period` (180 s) of passing checks.
+
+### Recurring without diagnosis — escalate to a ticket
+
+If the hang signature recurs (three occurrences so far: 2026-09-15, 2026-09-28 10:34Z–10:37Z
+self-recovered, 2026-09-28 16:12Z–16:49Z), escalate to Supabase support. A minimized evidence
+pack is committed at
+`../ticket-drafts/supabase-postgres-hang-recurring-2026-09.md` — the operator submits it via the
+dashboard (no ticket API on Pro). Append any new window's timestamps to the draft before
+submitting or re-submitting.
 
 ## The vendor refuses a change to the monitor
 
@@ -240,12 +290,23 @@ Do this:
   `/health` reports `connected`.
 - **A read-only database.** The check is a read, so a database that rejects writes still reports
   `connected`, although users cannot save.
-- **Email latency.** Paging is email only, so the time to act includes reading the inbox.
+- **Alert delivery path.** Slack (native integration) is the primary wake path, with email still
+  on and `push = true` on `app_health` measured at apply. If Slack or the vendor push channel is
+  down, an incident still lands only in an inbox — the same 2026-09-28 gap.
+
+**Delivery-path check (once, operator):** confirm `ops@jikigai.com` accepted the Better Stack
+team invite (re-accept from the invite email if pending) — the Slack path is independent of it,
+but email remains a secondary channel. And confirm the Slack integration is actually connected:
+`GET /api/v2/slack-integrations` on the read-only token returned `{"data":[]}` before #9168 —
+non-empty means wired.
 
 ## Related
 
+- [ADR-259](../../architecture/decisions/ADR-259-db-outage-paging-and-bounded-auto-restart.md): Slack paging, the bounded auto-restart delegation, and the Micro→Small compute decision
 - [ADR-222](../../architecture/decisions/ADR-222-better-stack-database-readiness-pager-and-live-inventory.md): why the alarm reads the body, and the declared-or-reported rule for live Better Stack objects
 - [ADR-204](../../architecture/decisions/ADR-204-redirect-health-moves-to-better-stack-because-sentry-cannot-express-it.md): where monitor 4226366 was first found unmanaged
+- [Post-mortem: prd Supabase database unreachable, 2026-09-28](../post-mortems/prd-supabase-database-unreachable-2026-09-28-postmortem.md)
 - [Post-mortem: prd Supabase database unreachable, 2026-09-15](../post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md)
+- [Ticket draft: recurring Postgres hang](../ticket-drafts/supabase-postgres-hang-recurring-2026-09.md)
 - [www-redirect-alarm.md](www-redirect-alarm.md): the sibling Better Stack alarm runbook
-- Issue [#7884](https://github.com/jikig-ai/soleur/issues/7884)
+- Issues [#7884](https://github.com/jikig-ai/soleur/issues/7884), [#9168](https://github.com/jikig-ai/soleur/issues/9168)

@@ -402,6 +402,7 @@ scripts/ship-merge-mergebase-verdict-8151	7
 scripts/skill-freshness-aggregate	2
 scripts/skill-security-scan-step-body	1
 scripts/suite-exit-class-parity	3
+scripts/supabase-watchdog-classify	3
 scripts/sweep-followthroughs	2
 scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1

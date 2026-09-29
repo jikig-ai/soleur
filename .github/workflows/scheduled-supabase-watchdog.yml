@@ -1,0 +1,455 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override justification: this workflow's `schedule:` is a FALLBACK trigger only
+# — the primary trigger is the Inngest dispatch cron
+# (apps/web-platform/server/inngest/functions/cron-supabase-watchdog-dispatch.ts,
+# */5). The fallback must exist because the dispatch path is deliberately
+# Inngest (DB-independent: App creds + Redis run-state) and a dead scheduler
+# still leaves a drifting watchdog rather than none. This is the
+# dispatch-hybrid shape of scheduled-terraform-drift, not a new GHA-only cron
+# (ADR-033). NOTE: the new-scheduled-cron-prefer-inngest hook regex-scans this
+# file for a bare `schedule:`/`cron:` token even inside comments — the override
+# marker above is what permits the fallback; keep it.
+#
+# Bounded Supabase Postgres-hang auto-restart watchdog (#9168).
+#
+# WHY THIS EXISTS: the prd Postgres hung with an identical signature twice in
+# 13 days (2026-09-15, 2026-09-28 — runbook
+# knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md
+# step 4): Management API reports db, auth, rest ALL UNHEALTHY while the pooler
+# stays ACTIVE_HEALTHY. Both times recovery was a Management-API
+# POST /v1/projects/{ref}/restart, ~6 min to healthy — but only after a human
+# noticed. This workflow removes the human from the proven-signature recovery
+# path, and ONLY that path.
+#
+# SAFETY CONTRACT (Guard 1 — every restart path consumes only this verdict):
+#   1. THREE Management-API health reads ~60 s apart; EVERY read must show the
+#      exact signature {db, auth, rest} = UNHEALTHY AND pooler = ACTIVE_HEALTHY
+#      with no extra unhealthy service. The verdict comes from
+#      scripts/supabase-watchdog-classify.sh — the single chokepoint; a
+#      mid-window COMING_UP or missing key breaks the signature.
+#   2. CORROBORATION: the signature must ALSO be corroborated by an independent
+#      surface — app /health's `supabase` field reporting `error`. Corroborator
+#      unreachable / `connected` / anything else → ambiguous → never restart
+#      (the Management API is a single failure surface).
+#   3. DARK LAUNCH: the restart POST fires only while `vars.WATCHDOG_ARMED == '1'`
+#      (a repo variable — flips instantly, no merge). Unset → detect-only:
+#      audit issue + check-in, zero restart writes, ever.
+#   4. SENTINEL PROTOCOL: the audit issue's comments are the only ledger. At the
+#      restart POST the run writes `<!-- watchdog:restart epoch=<ts> -->` —
+#      BEFORE the POST response is known, and never on confirmed 2xx. A
+#      non-2xx/timeout POST is recorded `attempted` and NEVER retried in-run
+#      (a landed-but-unconfirmed restart shows COMING_UP next window, which
+#      breaks the signature anyway — free idempotency). A claim label
+#      (`watchdog-restart-attempted`) is written BEFORE the sentinel so a landed
+#      POST whose sentinel write died is still visible: claimed-with-no-valid-
+#      sentinel → fail-closed (no restart + error check-in).
+#   5. BOUNDS: cooldown >=30 min between restarts (from the newest sentinel
+#      epoch); give-up after 3 ATTEMPTS on the open audit issue — escalation
+#      comments once and adds the watchdog-restarts-exhausted label.
+#   6. AMBIGUOUS / probe-unavailable NEVER restart. probe-unavailable =
+#      Management API non-200 / unparseable / under-observed — audit issue +
+#      error check-in (a dark watchdog is itself the alert).
+#
+# TRIGGERS. PRIMARY: the Inngest cron dispatch (every 5 min) — GHA `schedule:`
+# measured 2–7 h late (ADR-248), so it is the fallback only. The dispatch cron
+# survives this failure class: the Postgres hang leaves the web process serving
+# /health (with supabase:error) and the Inngest run-state lives on the dedicated
+# host's Redis, not Supabase. `concurrency: supabase-watchdog` with
+# cancel-in-progress: false is the restart mutex — runs serialize regardless of
+# which trigger fired (dispatch + a late fallback tick cannot double-restart).
+#
+# SECURITY POSTURE. SUPABASE_ACCESS_TOKEN arrives via env and is handed to curl
+# on STDIN (`--header @-`), never argv; both curls pin api.supabase.com /
+# app.soleur.ai literally with `--disable --noproxy '*'` (the
+# scripts/supabase-logs-query.sh transport contract). github.token carries only
+# contents:read + issues:write — it files the audit issue and cannot dispatch or
+# write code. Every untrusted value (response bodies, issue text) flows through
+# env vars + strip_log_injection + scrub_pat before any echo/output; no
+# github.event.* input is consumed (no inputs are declared).
+#
+# Liveness: the terminal Sentry check-in (monitor scheduled-supabase-watchdog)
+# fires under `if: always()` — a dead workflow pages on the missed check-in
+# within the monitor's margin.
+#
+# Tracks #9168. ADR-259 records the pre-authorized prod-write delegation.
+
+name: "Scheduled: Supabase DB Watchdog"
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # fallback only — primary is the Inngest dispatch cron
+  workflow_dispatch: {}
+
+concurrency:
+  group: supabase-watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The classifier + ledger helpers are extracted, unit-tested files —
+      # checkout puts them on the runner (scripts/supabase-watchdog-classify.sh,
+      # covered by scripts/supabase-watchdog-classify.test.sh).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # Probe: 3 Management-API health reads ~60 s apart, then the corroborator
+      # (app /health), then the classifier. Outputs: verdict, detail.
+      - name: Probe Supabase health + corroborate
+        id: probe
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-health.yml)
+
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+          # Redact a leaked Supabase account PAT (sbp_…) before any print —
+          # secret masking is substring-only (verbatim from the inngest watchdog).
+          scrub_pat() {
+            printf '%s' "$1" | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g'
+          }
+          sanitize() { scrub_pat "$(strip_log_injection "$1")"; }
+
+          # The prd APPLICATION project (soleur-web-platform) — the literal ref
+          # matches the runbook and dns.tf convention; endpoint pinned to
+          # api.supabase.com with NO env override (an overridable host is a
+          # PAT-exfil-via-redirect seam).
+          REF="ifsccnjhymdmidffkzhl"
+          HEALTH_URL="https://api.supabase.com/v1/projects/${REF}/health?services=db&services=auth&services=rest&services=pooler"
+
+          codes=(); bodies=()
+          if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+            codes=(401 401 401); bodies=('' '' '')
+          else
+            for i in 1 2 3; do
+              set +e
+              resp="$(printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" \
+                | curl --disable --noproxy '*' --silent --show-error \
+                  --request GET \
+                  --url "$HEALTH_URL" \
+                  --header @- \
+                  --max-time 20 \
+                  -w $'\n%{http_code}' \
+                  2>/dev/null)"
+              rc=$?
+              set -e
+              if [[ "$rc" != "0" ]]; then
+                codes+=("000"); bodies+=("")
+              else
+                codes+=("${resp##*$'\n'}"); bodies+=("${resp%$'\n'*}")
+              fi
+              echo "health read ${i}/3: http=${codes[-1]}"
+              [[ "$i" -lt 3 ]] && sleep 60
+            done
+          fi
+
+          # Corroborator: the app's own /health `supabase` field — an
+          # independent surface (the app still answers during this failure
+          # class). Non-200 / unparseable / missing field → the literal token
+          # `unreachable`, which the classifier treats as "no corroboration"
+          # (ambiguous — never restart blind).
+          rm -f /tmp/wd-app-health
+          corr_code=$(curl -s --disable --noproxy '*' --max-time 15 \
+            -o /tmp/wd-app-health -w '%{http_code}' \
+            "https://app.soleur.ai/health" 2>/dev/null || echo "000")
+          corr_body=$(cat /tmp/wd-app-health 2>/dev/null || echo "")
+          CORR="unreachable"
+          if [[ "$corr_code" == "200" ]]; then
+            cfield="$(printf '%s' "$corr_body" | jq -r '.supabase // empty' 2>/dev/null || echo "")"
+            # The /health contract is a closed enum (connected|error); cap the
+            # token so an unexpected value can't smuggle text downstream.
+            case "$cfield" in
+              connected|error) CORR="$cfield" ;;
+              *) CORR="unreachable" ;;
+            esac
+          fi
+          echo "corroborator: app/health http=${corr_code} supabase=${CORR}"
+
+          verdict=""; vrc=0
+          verdict="$(bash "$GITHUB_WORKSPACE/scripts/supabase-watchdog-classify.sh" \
+            --corroborator "$CORR" \
+            --read "${codes[0]}" "${bodies[0]}" \
+            --read "${codes[1]}" "${bodies[1]}" \
+            --read "${codes[2]}" "${bodies[2]}" 2>/dev/null)" || vrc=$?
+          if [[ -z "$verdict" ]]; then
+            # The classifier prints a token on every classified path; an empty
+            # stdout with non-zero rc is its own probe failure (usage error /
+            # crash) — report it as probe-unavailable, never as healthy.
+            verdict="probe-unavailable"
+          fi
+
+          # Untrusted content only: http codes + verdict are controlled tokens;
+          # the summary strings embed no response body (bodies are intentionally
+          # not logged — the health payload carries no secrets, but the detail
+          # channel stays untrusted-by-convention anyway).
+          detail="reads=${codes[0]}/${codes[1]}/${codes[2]} corr=${CORR} classify_rc=${vrc}"
+          detail="$(sanitize "$detail")"
+          { echo "verdict=${verdict}"; echo "detail=${detail}"; } >> "$GITHUB_OUTPUT"
+          case "$verdict" in
+            healthy)          echo "Supabase health verdict: healthy" ;;
+            hang-signature)   echo "::error::Supabase hang signature CONFIRMED over 3 reads + corroborator=${CORR}: ${detail}" ;;
+            ambiguous)        echo "::warning::Supabase watchdog verdict ambiguous — no restart path taken: ${detail}" ;;
+            probe-unavailable) echo "::error::Supabase watchdog probe unavailable — no restart path taken: ${detail}" ;;
+          esac
+
+      # The audit issue is the ledger. Ensure it exists whenever the verdict is
+      # non-healthy so the ledger read and the sentinel write have a target.
+      - name: Ensure audit issue (non-healthy verdicts)
+        id: audit
+        if: always() && (steps.probe.outputs.verdict == 'hang-signature' || steps.probe.outputs.verdict == 'ambiguous' || steps.probe.outputs.verdict == 'probe-unavailable')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+          DETAIL: ${{ steps.probe.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          gh label create "supabase-auto-restart" --repo "$GH_REPO" \
+            --description "Supabase DB-hang watchdog: bounded auto-restart audit trail (#9168)" \
+            --color "B60205" 2>/dev/null || true
+          ISSUE_TITLE="[watchdog/supabase-db] Supabase database watchdog audit"
+          ISSUE="$(gh issue list --repo "$GH_REPO" --state open \
+            --label supabase-auto-restart --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          if [[ -z "$ISSUE" ]]; then
+            BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+            {
+              printf '## Supabase database watchdog audit\n\n'
+              printf -- '- **Verdict:** `%s`\n' "$VERDICT"
+              printf -- '- **Detail:** %s\n' "$DETAIL"
+              printf -- '- **First seen:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf 'This issue is the audit ledger for the bounded auto-restart watchdog (#9168, ADR-259). Every restart ATTEMPT is recorded here as a `<!-- watchdog:restart epoch=... -->` sentinel comment — written AT the restart POST, never on confirmed 2xx. The watchdog never restarts on ambiguous or probe-unavailable verdicts, never twice inside the 30-min cooldown, and gives up (escalating here) after 3 attempts.\n'
+            } > "$BODY_FILE"
+            ISSUE_URL="$(gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "supabase-auto-restart" --label "priority/p1-high" \
+              --body-file "$BODY_FILE" 2>/dev/null || true)"
+            ISSUE="${ISSUE_URL##*/}"; [[ "$ISSUE" =~ ^[0-9]+$ ]] || ISSUE=""
+          fi
+          if [[ -z "$ISSUE" ]]; then
+            # Ledger unavailable: do not fail the run — the decision step treats
+            # a missing issue as a broken ledger and fail-closes any restart.
+            echo "::error::could not find-or-create the supabase-auto-restart audit issue — ledger unreadable this run"
+            { echo "issue_number="; echo "issue_ok=false"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "audit issue: #${ISSUE}"
+            { echo "issue_number=${ISSUE}"; echo "issue_ok=true"; } >> "$GITHUB_OUTPUT"
+          fi
+
+      # Ledger read — ONLY on a confirmed hang-signature (the only verdict that
+      # can reach a write). Reads the audit issue's comments + labels and parses
+      # the sentinel protocol. CLAIMED is true when the issue carries the
+      # watchdog-restart-attempted label: a claimed restart whose sentinel never
+      # landed fails CLOSED downstream.
+      - name: Read restart ledger (sentinel state)
+        id: ledger
+        if: steps.probe.outputs.verdict == 'hang-signature' && steps.audit.outputs.issue_ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.audit.outputs.issue_number }}
+        run: |
+          set -uo pipefail
+          COMMENTS="$(gh api "repos/${GH_REPO}/issues/${ISSUE}/comments" --paginate \
+            --jq '.[].body' 2>/dev/null || true)"
+          LEDGER="$(printf '%s\n' "$COMMENTS" | bash "$GITHUB_WORKSPACE/scripts/supabase-watchdog-classify.sh" --ledger 2>/dev/null || true)"
+          attempts="$(printf '%s' "$LEDGER" | sed -n 's/^attempts=\([0-9]*\).*/\1/p')"
+          last_epoch="$(printf '%s' "$LEDGER" | sed -n 's/.*last_epoch=\([0-9a-z-]*\).*/\1/p')"
+          corrupt="$(printf '%s' "$LEDGER" | sed -n 's/.*corrupt=\([01]\).*/\1/p')"
+          [[ "$attempts" =~ ^[0-9]+$ ]] || attempts="0"
+          [[ "$last_epoch" =~ ^[0-9]{9,11}$|^none$ ]] || last_epoch="none"
+          [[ "$corrupt" =~ ^[01]$ ]] || corrupt="1"   # unparseable ledger line → fail closed
+          CLAIMED="$(gh issue view "$ISSUE" --repo "$GH_REPO" --json labels \
+            --jq '[.labels[].name] | index("watchdog-restart-attempted") // empty' 2>/dev/null || true)"
+          [[ -n "$CLAIMED" ]] && claimed="1" || claimed="0"
+          echo "ledger: attempts=${attempts} last_epoch=${last_epoch} corrupt=${corrupt} claimed=${claimed}"
+          { echo "attempts=${attempts}"; echo "last_epoch=${last_epoch}"
+            echo "corrupt=${corrupt}"; echo "claimed=${claimed}"; } >> "$GITHUB_OUTPUT"
+
+      # The decision is a pure function in the classifier — verdict + armed +
+      # ledger → one action token. vars.WATCHDOG_ARMED is the dark-launch gate:
+      # unset → detect-only (audit issue + check-in, ZERO restart POSTs).
+      - name: Decide restart action
+        id: decide
+        if: steps.probe.outputs.verdict == 'hang-signature' && steps.audit.outputs.issue_ok == 'true'
+        env:
+          WATCHDOG_ARMED: ${{ vars.WATCHDOG_ARMED }}
+          CORRUPT: ${{ steps.ledger.outputs.corrupt }}
+          CLAIMED: ${{ steps.ledger.outputs.claimed }}
+          ATTEMPTS: ${{ steps.ledger.outputs.attempts }}
+          LAST_EPOCH: ${{ steps.ledger.outputs.last_epoch }}
+        run: |
+          set -uo pipefail
+          armed=0; [[ "${WATCHDOG_ARMED:-}" == "1" ]] && armed=1
+          ACTION="$(bash "$GITHUB_WORKSPACE/scripts/supabase-watchdog-classify.sh" --decide \
+            --verdict hang-signature --armed "$armed" --corrupt "$CORRUPT" --claimed "$CLAIMED" \
+            --attempts "$ATTEMPTS" --last-epoch "$LAST_EPOCH" --now "$(date -u +%s)" \
+            --cooldown-sec 1800 --max-attempts 3 2>/dev/null || echo fail-closed)"
+          case "$ACTION" in
+            restart|detect-only|cooldown|give-up|fail-closed) ;;
+            *) ACTION="fail-closed" ;;   # unrecognised action → never restart
+          esac
+          echo "action=${ACTION}" >> "$GITHUB_OUTPUT"
+          echo "decision: ${ACTION} (armed=${armed} attempts=${ATTEMPTS} last_epoch=${LAST_EPOCH} corrupt=${CORRUPT} claimed=${CLAIMED})"
+          [[ "$ACTION" == "fail-closed" ]] && echo "::error::watchdog decision FAIL-CLOSED — the restart ledger could not bound a write (corrupt=${CORRUPT} claimed=${CLAIMED} attempts=${ATTEMPTS})" || true
+
+      # The restart write. Order is the protocol: claim label, THEN sentinel
+      # comment, THEN the POST — so an attempted-but-unconfirmed restart is
+      # always ledger-visible, and a ledger write failure blocks the POST
+      # outright (a restart the ledger cannot record must not happen).
+      # The POST is issued ONCE: a non-2xx/timeout is `attempted`, never
+      # retried this run.
+      - name: Issue bounded restart POST
+        id: restart
+        if: steps.decide.outputs.action == 'restart'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.audit.outputs.issue_number }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -uo pipefail
+          REF="ifsccnjhymdmidffkzhl"
+          NOW_EPOCH="$(date -u +%s)"
+
+          gh label create "watchdog-restart-attempted" --repo "$GH_REPO" \
+            --description "A watchdog restart POST was issued at least once — sentinel ledger should contain it (#9168)" \
+            --color "5319E7" 2>/dev/null || true
+          if ! gh issue edit "$ISSUE" --repo "$GH_REPO" --add-label "watchdog-restart-attempted" 2>/dev/null; then
+            echo "::error::claim label write failed — blocking the restart POST (a restart the ledger cannot record must not happen)"
+            echo "restart_result=blocked-ledger-write" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh issue comment "$ISSUE" --repo "$GH_REPO" \
+               --body "<!-- watchdog:restart epoch=${NOW_EPOCH} -->" 2>/dev/null; then
+            echo "::error::sentinel write failed — blocking the restart POST"
+            echo "restart_result=blocked-ledger-write" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          resp="$(printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" \
+            | curl --disable --noproxy '*' --silent --show-error \
+              --request POST \
+              --url "https://api.supabase.com/v1/projects/${REF}/restart" \
+              --header @- \
+              --max-time 30 \
+              -w $'\n%{http_code}' \
+              2>/dev/null)"
+          rc=$?
+          set -e
+          http="${resp##*$'\n'}"
+          if [[ "$rc" == "0" && "$http" == 2?? ]]; then
+            echo "restart POST accepted (HTTP ${http}) at epoch ${NOW_EPOCH}"
+            echo "restart_result=issued" >> "$GITHUB_OUTPUT"
+          else
+            # attempted, NOT retried: a timed-out POST may have landed — the
+            # sentinel already records the attempt and next window's COMING_UP
+            # state breaks the signature (free idempotency).
+            echo "::warning::restart POST not confirmed (curl_rc=${rc} http=${http}) — recorded as attempted, NOT retried"
+            echo "restart_result=attempted" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Give-up: attempts exhausted — escalate ONCE on the audit issue (label +
+      # comment guarded on label absence), never restart again on this issue.
+      - name: Escalate exhausted restarts
+        if: steps.decide.outputs.action == 'give-up'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.audit.outputs.issue_number }}
+          DETAIL: ${{ steps.probe.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          HAS_ESC=$(gh issue view "$ISSUE" --repo "$GH_REPO" --json labels \
+            --jq '[.labels[].name] | index("watchdog-restarts-exhausted") // empty' 2>/dev/null || true)
+          if [[ -z "$HAS_ESC" ]]; then
+            gh label create "watchdog-restarts-exhausted" --repo "$GH_REPO" \
+              --description "Watchdog gave up after 3 restart attempts — human root-cause needed (#9168)" \
+              --color "B60205" 2>/dev/null || true
+            gh issue edit "$ISSUE" --repo "$GH_REPO" --add-label "watchdog-restarts-exhausted" 2>/dev/null || true
+            gh issue comment "$ISSUE" --repo "$GH_REPO" --body \
+              "🚨 RESTARTS EXHAUSTED — the Postgres-hang signature persisted after 3 restart attempts. Auto-restart is SUPPRESSED on this issue; human root-cause needed (see runbook knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md, step 4+). Detail: ${DETAIL}. Run: ${RUN_URL}" 2>/dev/null \
+              || echo "::warning::could not post the give-up escalation comment"
+          fi
+          echo "::error::watchdog give-up: restart attempts exhausted — human root-cause needed"
+
+      # Audit comment for every non-healthy verdict — the issue carries the
+      # state machine's reasoning (detect-only / cooldown / fail-closed /
+      # restart outcome / ambiguous / probe-unavailable).
+      - name: Comment audit issue
+        if: always() && (steps.probe.outputs.verdict == 'hang-signature' || steps.probe.outputs.verdict == 'ambiguous' || steps.probe.outputs.verdict == 'probe-unavailable') && steps.audit.outputs.issue_ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.audit.outputs.issue_number }}
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+          DETAIL: ${{ steps.probe.outputs.detail }}
+          ACTION: ${{ steps.decide.outputs.action }}
+          RESTART_RESULT: ${{ steps.restart.outputs.restart_result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          case "$VERDICT" in
+            hang-signature)
+              case "$ACTION" in
+                restart)        ACT_TXT="restart POST issued (see sentinel comment; result=${RESTART_RESULT:-unknown})" ;;
+                detect-only)    ACT_TXT="DETECT-ONLY — vars.WATCHDOG_ARMED unset; zero restart writes" ;;
+                cooldown)       ACT_TXT="suppressed by the >=30 min cooldown (see newest sentinel)" ;;
+                give-up)        ACT_TXT="suppressed — restart attempts exhausted (escalated)" ;;
+                fail-closed)    ACT_TXT="FAIL-CLOSED — the sentinel ledger could not bound a write" ;;
+                *)              ACT_TXT="no restart (action=${ACTION:-none})" ;;
+              esac ;;
+            ambiguous)        ACT_TXT="ambiguous verdict — never restarts (partial outage / corroborator missing or disagreeing / unknown shape)" ;;
+            probe-unavailable) ACT_TXT="probe unavailable — never restarts (Management API dark or unparseable)" ;;
+            *)                ACT_TXT="unexpected verdict ${VERDICT}" ;;
+          esac
+          gh issue comment "$ISSUE" --repo "$GH_REPO" --body \
+            "${NOW} — verdict=\`${VERDICT}\` ${ACT_TXT}. Detail: ${DETAIL}. Run: ${RUN_URL}" 2>/dev/null \
+            || echo "::warning::could not comment on audit issue #${ISSUE}"
+
+      # Auto-close on a CONFIRMED healthy verdict only — `steps.probe.outcome`
+      # is load-bearing (#7242 class): a crashed probe writes no output and an
+      # empty verdict must never close the audit issue.
+      - name: Auto-close audit issue (healthy)
+        if: always() && steps.probe.outcome == 'success' && steps.probe.outputs.verdict == 'healthy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE="$(gh issue list --repo "$GH_REPO" --state open --label supabase-auto-restart \
+            --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "Supabase healthy again at ${NOW} (db/auth/rest/pooler all ACTIVE_HEALTHY across the 3-read window). Auto-closed by ${RUN_URL}." 2>/dev/null \
+              || echo "::warning::could not close audit issue #${STALE}"
+          fi
+
+      # Dead-man's switch: posts ok only on a confirmed healthy verdict; every
+      # other outcome — hang detected, ambiguous, probe dark, fail-closed,
+      # watchdog itself crashed — is an error check-in (or a missing one).
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-supabase-watchdog
+          status: ${{ steps.probe.outputs.verdict == 'healthy' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

@@ -1474,3 +1474,30 @@ resource "sentry_cron_monitor" "scheduled_actions_queue_health" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# Executor liveness for the bounded Supabase Postgres-hang auto-restart
+# watchdog (.github/workflows/scheduled-supabase-watchdog.yml, #9168, ADR-259).
+# Inngest-DISPATCHED every 5 min via
+# apps/web-platform/server/inngest/functions/cron-supabase-watchdog-dispatch.ts
+# (a regular Inngest cron — NOT the watchdog-dispatch-clock: the dispatch path
+# is DB-independent — App creds + dedicated-host Redis run-state — and the
+# subject is the prd Postgres itself, which survives as a dispatch substrate
+# while it hangs). The workflow's own `*/5` `schedule:` is the documented
+# fallback; the monitor crontab must equal it (the #8450 cadence-parity guard).
+#
+# 30-min margin = the Inngest-fired cohort convention sized here for the
+# measured runner queue (p90 ~20 min on the clock-dispatched cohort, 2026-09-24
+# measurement) + the ~4-5 min runtime (3 health reads spaced 60 s + issue
+# writes) + dispatch jitter. A dead dispatcher or a probe that never lands
+# still pages inside the hour; a live-but-failing probe posts status=error.
+resource "sentry_cron_monitor" "scheduled_supabase_watchdog" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-supabase-watchdog"
+  schedule                = { crontab = "*/5 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

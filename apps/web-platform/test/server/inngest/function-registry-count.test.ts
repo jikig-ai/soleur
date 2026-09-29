@@ -199,6 +199,12 @@ const NON_INNGEST_MONITORS = new Set([
   // and declares no SENTRY_MONITOR_SLUG; its final sentry-heartbeat step pings the
   // check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
   "scheduled-actions-queue-health",
+  // #9168: GHA-executed (scheduled-supabase-watchdog.yml) — the bounded
+  // Postgres-hang auto-restart watchdog. The cron-supabase-watchdog-dispatch.ts
+  // function only DISPATCHES the workflow (it holds no Supabase PAT) and declares
+  // no SENTRY_MONITOR_SLUG; the workflow's terminal sentry-heartbeat step posts
+  // the check-in. Same class as scheduled-terraform-drift / main-health-monitor.
+  "scheduled-supabase-watchdog",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -221,8 +227,12 @@ describe("Inngest function registry — drift guards", () => {
   // 68 -> 69: cron-machinery-drain (the weekly issue-flow measurement + drain).
   // 69 -> 70: agentOnSpawnSettle (#8803, settles orphaned leader-loop runs).
   // 70 -> 69: cron-ghcr-token-minter deleted (#8714, ADR-096 task 5.4).
+  // 69 -> 70: cron-supabase-watchdog-dispatch (#9168, */5 dispatcher for the
+  // bounded DB-hang restart workflow — dispatch-hybrid, no SENTRY_MONITOR_SLUG;
+  // the GHA executor posts the heartbeat, so its monitor sits in
+  // NON_INNGEST_MONITORS like scheduled-terraform-drift).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(69);
+    expect(routeEntries.length).toBe(70);
   });
 
   // An event function is invisible to the cron-glob guards; an unserved settle
