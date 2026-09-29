@@ -380,7 +380,7 @@ jobs:
       # Advisory only — this NEVER edits the pin. It files one idempotent
       # `inngest-pin-drift` + `action-required` issue; a human opens the real,
       # CI-gated PR. The thresholds are DELIBERATELY not "any delta": inngest ships
-      # ~weekly (v1.19.4→v1.45.1 spanned ~4.5 months / 29 stable releases), so
+      # ~weekly (v1.19.4→v1.45.1 spanned ~4 months / 29 stable releases), so
       # latest-only would mint a permanently-open ticket days after every bump.
       # File when releases_behind >= 5 OR the pinned release is >= 45 days old.
       # The same numbers live in inngest-cli.provenance.md — keep them identical.
@@ -428,48 +428,57 @@ jobs:
           fi
 
           # --- (3) live upstream poll: ONE paginated releases read ----------------------
-          # A single `releases` listing answers all three questions: latest stable tag
-          # (first non-draft, non-prerelease row — GitHub returns newest first), the
-          # releases-behind delta (PINNED's 0-based index in that list — counting
-          # RELEASES, so a tag with no published release cannot inflate the count), and
-          # the pinned release's published_at for the age leg. Index-based counting
-          # also cannot go negative — a tag-order delta can when upstream retracts.
+          # A single `releases` listing answers all three questions: latest stable tag,
+          # the releases-behind delta, and the pinned release's published_at for the age
+          # leg. The jq filter drops drafts, prereleases, and non-semver rows per page;
+          # `sort -V` then reorders by VERSION — the wire order is release-object
+          # created_at desc, NOT version order, so a stable backport (e.g. v1.38.1
+          # shipped after v1.39.0) or a republished pinned tag would otherwise corrupt
+          # both legs. Counting RELEASES, a tag with no published release cannot
+          # inflate the delta, and index-based counting cannot go negative — a
+          # tag-order delta can when upstream retracts.
           set +e
           REL="$(gh api --paginate 'repos/inngest/inngest/releases?per_page=100' \
-                 --jq '.[] | select(.draft|not) | select(.prerelease|not) | [.tag_name, .published_at] | @tsv' 2>/dev/null)"
+                 --jq '.[] | select((.draft|not) and (.prerelease|not) and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | [.tag_name, .published_at] | @tsv' \
+                 2>"$RUNNER_TEMP/inngest-poll.err" | sort -t$'\t' -k1,1Vr)"
           API_RC=$?
           set -e
           LATEST=""; BEHIND=""; PIN_DATE=""
           if [ "$API_RC" -ne 0 ] || [ -z "$REL" ]; then
             # A dead poll must NOT discard an offline verdict we already hold. Record it
             # and keep going; the non-zero exit at the end still fires the ops email.
-            PROBLEMS="${PROBLEMS}- upstream release poll FAILED (rc=$API_RC); this run cannot tell whether we are behind."$'\n'
+            POLL_ERR="$(tail -1 "$RUNNER_TEMP/inngest-poll.err" 2>/dev/null || true)"
+            PROBLEMS="${PROBLEMS}- upstream release poll FAILED (rc=$API_RC${POLL_ERR:+: \`$POLL_ERR\`}); this run cannot tell whether we are behind."$'\n'
             LATEST="(unavailable)"
           else
             LATEST="$(printf '%s\n' "$REL" | head -1 | cut -f1)"
-            if ! printf '%s' "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-              PROBLEMS="${PROBLEMS}- latest stable release tag \`$LATEST\` is not semver; delta unmeasured."$'\n'
+            # 1-based line number of PINNED in the semver-descending stable list, minus
+            # one = count of strictly-newer stable releases.
+            P_LINE="$(printf '%s\n' "$REL" | cut -f1 | grep -nxF "$PINNED" | cut -d: -f1 || true)"
+            if [ -n "$P_LINE" ]; then
+              BEHIND=$((P_LINE - 1))
             else
-              # 1-based line number of PINNED, minus one = count of newer stable releases.
-              P_LINE="$(printf '%s\n' "$REL" | cut -f1 | grep -nxF "$PINNED" | cut -d: -f1 || true)"
-              if [ -n "$P_LINE" ]; then
-                BEHIND=$((P_LINE - 1))
-              else
-                PROBLEMS="${PROBLEMS}- pinned tag \`$PINNED\` absent from the stable release list; releases-behind not measured."$'\n'
-              fi
-              PIN_DATE="$(printf '%s\n' "$REL" | awk -F'\t' -v t="$PINNED" '$1==t {print $2; exit}')"
-              if [ -z "$PIN_DATE" ]; then
-                PROBLEMS="${PROBLEMS}- could not read the pinned release's published_at for \`$PINNED\`; age leg not measured."$'\n'
-              fi
+              PROBLEMS="${PROBLEMS}- pinned tag \`$PINNED\` absent from the stable release list; releases-behind not measured."$'\n'
+            fi
+            PIN_DATE="$(printf '%s\n' "$REL" | awk -F'\t' -v t="$PINNED" '$1==t {print $2; exit}')"
+            if [ -z "$PIN_DATE" ]; then
+              PROBLEMS="${PROBLEMS}- could not read the pinned release's published_at for \`$PINNED\`; age leg not measured."$'\n'
             fi
           fi
           AGE_DAYS=""
           if [ -n "$PIN_DATE" ]; then
-            PIN_EPOCH="$(date -d "$PIN_DATE" +%s 2>/dev/null || true)"
-            if [ -n "$PIN_EPOCH" ]; then
-              AGE_DAYS=$(( ($(date +%s) - PIN_EPOCH) / 86400 ))
+            if ! printf '%s' "$PIN_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'; then
+              # Upstream-shaped string heading for the issue body — do not embed it raw.
+              PROBLEMS="${PROBLEMS}- pinned release published_at is not ISO-shaped; age leg not measured."$'\n'
+              PIN_DATE=""
             else
-              PROBLEMS="${PROBLEMS}- pinned release published_at \`$PIN_DATE\` is unparsable; age leg not measured."$'\n'
+              PIN_EPOCH="$(date -d "$PIN_DATE" +%s 2>/dev/null || true)"
+              if [ -n "$PIN_EPOCH" ]; then
+                AGE_DAYS=$(( ($(date +%s) - PIN_EPOCH) / 86400 ))
+              else
+                PROBLEMS="${PROBLEMS}- pinned release published_at is unparsable; age leg not measured."$'\n'
+                PIN_DATE=""
+              fi
             fi
           fi
           # Threshold: >= 5 releases behind OR pinned release >= 45 days old.
@@ -502,7 +511,7 @@ jobs:
             fi
           done
 
-          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ]; then
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ] && [ -z "$NOTES" ]; then
             echo "inngest CLI pin is current enough ($PINNED vs $LATEST; behind=${BEHIND:-?}, age=${AGE_DAYS:-?}d), both tarballs resolve, and the offline analysis is coherent+fresh."
             exit 0
           fi
@@ -544,8 +553,12 @@ jobs:
             echo
             echo "_Filed automatically by rule-audit.yml inngest-CLI-pin drift detection (#7463)._"
           } > "$RUNNER_TEMP/inngest-pin-drift-body.md"
-          EXISTING="$(gh issue list --label inngest-pin-drift --state open --json number --jq '.[0].number // empty')"
+          EXISTING="$(gh issue list --label inngest-pin-drift --state open --search 'sort:created-asc' --json number --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
+            # Oldest labeled issue is canonical; re-assert the digest label — a stripped
+            # `action-required` would otherwise drop it from the weekly digest while
+            # comments kept landing on it.
+            gh issue edit "$EXISTING" --add-label inngest-pin-drift --add-label action-required >/dev/null 2>&1 || true
             gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/inngest-pin-drift-body.md"
             echo "Updated existing inngest-pin-drift issue #$EXISTING."
           else
