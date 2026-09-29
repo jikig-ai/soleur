@@ -1170,6 +1170,15 @@ async function resolveConversationEngineBinding(
   conversationId: string,
   workspaceId?: string,
 ): Promise<EngineBinding | null> {
+  const resolved = await resolveConversationEngineRun(repository, conversationId, workspaceId);
+  return resolved?.binding ?? null;
+}
+
+async function resolveConversationEngineRun(
+  repository: AgentEnginePersistenceRepository,
+  conversationId: string,
+  workspaceId?: string,
+): Promise<{ run: unknown; binding: EngineBinding | null } | null> {
   const run = await repository.getConversationRun(conversationId);
   if (run === null) {
     if (await repository.getConversationBindingState(conversationId) === "legacy") return null;
@@ -1177,12 +1186,14 @@ async function resolveConversationEngineBinding(
   }
   const binding = run && typeof run === "object" && "binding" in run
     ? (run as { binding: unknown }).binding : run;
-  return assertConversationEngineBinding(binding, conversationId, workspaceId);
+  return { run, binding: assertConversationEngineBinding(binding, conversationId, workspaceId) };
 }
 
 async function dispatchCodexChatTurn(
   userId: string,
   conversationId: string,
+  binding: EngineBinding,
+  runId: string,
   content: string,
   attachments: unknown,
   clientTurnId: string,
@@ -1203,18 +1214,14 @@ async function dispatchCodexChatTurn(
   if (error || owned?.id !== conversationId || !owned.workspace_id || owned.repo_url !== currentRepoUrl) {
     throw new Error("Codex conversation not found in the current workspace");
   }
-  const tenantRepository = new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient);
-  const binding = await resolveConversationEngineBinding(tenantRepository, conversationId, owned.workspace_id);
-  if (binding?.engineId !== "codex") throw new Error("Codex conversation binding changed");
+  if (binding.engineId !== "codex" || binding.workspaceId !== owned.workspace_id) {
+    throw new Error("Codex conversation binding changed");
+  }
   if (Array.isArray(attachments) && attachments.length > 0) {
     throw new Error("Codex conversation attachments are not qualified");
   }
   const runtime = codexConversationRuntime(userId);
   const serviceRepository = new AgentEnginePersistenceRepository(createServiceClient() as unknown as PersistenceClient);
-  const persisted = await tenantRepository.getConversationRun(conversationId);
-  const runId = persisted && typeof persisted === "object" && "id" in persisted
-    ? (persisted as { id: unknown }).id : null;
-  if (typeof runId !== "string") throw new Error("Codex conversation run is missing");
   await dispatchCodexConversationToWebSocket({
     repository: serviceRepository,
     runtime: runtime.runtime,
@@ -2486,14 +2493,20 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
           const tenantBinding = await tenantFor(userId, "handleMessage.chat.new-engine-binding");
           if (!tenantBinding) throw new Error("conversation engine binding auth probe failed");
-          const newBinding = await resolveConversationEngineBinding(
+          const newResolved = await resolveConversationEngineRun(
             new AgentEnginePersistenceRepository(tenantBinding as unknown as PersistenceClient),
             resolvedId,
           );
+          const newBinding = newResolved?.binding ?? null;
           if (newBinding?.engineId === "codex") {
+            const runId = newResolved?.run && typeof newResolved.run === "object" && "id" in newResolved.run
+              ? (newResolved.run as { id: unknown }).id : null;
+            if (typeof runId !== "string") throw new Error("Codex conversation run is missing");
             await dispatchCodexChatTurn(
               userId,
               resolvedId,
+              newBinding,
+              runId,
               userContent,
               msg.attachments,
               msg.clientTurnId ?? randomUUID(),
@@ -2570,14 +2583,20 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       try {
         const tenantEngineBinding = await tenantFor(userId, "handleMessage.chat.engine-binding");
         if (!tenantEngineBinding) throw new Error("conversation engine binding auth probe failed");
-        const chatBinding = await resolveConversationEngineBinding(
+        const chatResolved = await resolveConversationEngineRun(
           new AgentEnginePersistenceRepository(tenantEngineBinding as unknown as PersistenceClient),
           session.conversationId!,
         );
+        const chatBinding = chatResolved?.binding ?? null;
         if (chatBinding?.engineId === "codex") {
+          const runId = chatResolved?.run && typeof chatResolved.run === "object" && "id" in chatResolved.run
+            ? (chatResolved.run as { id: unknown }).id : null;
+          if (typeof runId !== "string") throw new Error("Codex conversation run is missing");
           await dispatchCodexChatTurn(
             userId,
             session.conversationId!,
+            chatBinding,
+            runId,
             userContent,
             msg.attachments,
             msg.clientTurnId ?? randomUUID(),

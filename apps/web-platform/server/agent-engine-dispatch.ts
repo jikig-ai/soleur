@@ -123,6 +123,7 @@ async function* persistAndYieldEvents(
 
 interface DispatchOptions {
   repository: BindingRepository;
+  persistedRun?: unknown;
   adapter: Pick<EngineAdapter, "start">;
   adapterEngineId?: string;
   eventSink?: EventSink;
@@ -134,6 +135,7 @@ interface DispatchOptions {
 
 export async function* dispatchBoundEngineRunFromRegistry(options: {
   repository: BindingRepository;
+  persistedRun?: unknown;
   factories: Readonly<Record<string, EngineAdapterFactory>>;
   registry?: ReviewedEngineRegistry;
   eventSink?: EventSink;
@@ -143,7 +145,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
   input: EngineInput;
   context: EngineRunContext;
 }): AsyncGenerator<EngineEvent> {
-  const persisted = await options.repository.getRun(options.runId);
+  const persisted = options.persistedRun ?? await options.repository.getRun(options.runId);
   if (!persisted || typeof persisted !== "object") throw new Error("persisted engine binding not found");
   assertPersistedRunId(persisted, options.runId);
   const binding = (persisted as { binding?: EngineRunContext["binding"] }).binding ??
@@ -168,6 +170,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
   );
   yield* dispatchBoundEngineRun({
     repository: options.repository,
+    persistedRun: options.persistedRun,
     adapter,
     adapterEngineId: binding.engineId,
     eventSink: options.eventSink,
@@ -181,6 +184,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
 /** Resolve a conversation's immutable binding before selecting any provider adapter. */
 export async function* dispatchConversationEngineRun(options: {
   repository: ConversationBindingRepository;
+  persistedRun?: unknown;
   factories: Readonly<Record<string, EngineAdapterFactory>>;
   registry?: ReviewedEngineRegistry;
   eventSink?: EventSink;
@@ -190,7 +194,7 @@ export async function* dispatchConversationEngineRun(options: {
   input: EngineInput;
   context: EngineRunContext;
 }): AsyncGenerator<EngineEvent> {
-  const persisted = await options.repository.getConversationRun(options.conversationId);
+  const persisted = options.persistedRun ?? await options.repository.getConversationRun(options.conversationId);
   if (!persisted || typeof persisted !== "object") {
     throw new Error("persisted conversation engine binding not found");
   }
@@ -205,6 +209,7 @@ export async function* dispatchConversationEngineRun(options: {
   }
   yield* dispatchBoundEngineRunFromRegistry({
     repository: options.repository,
+    persistedRun: persisted,
     factories: options.factories,
     registry: options.registry,
     eventSink: options.eventSink,
@@ -263,7 +268,7 @@ export async function* dispatchRoutineEngineRun(options: {
 export async function* dispatchBoundEngineRun(
   options: DispatchOptions,
 ): AsyncGenerator<EngineEvent> {
-  const persisted = await options.repository.getRun(options.runId);
+  const persisted = options.persistedRun ?? await options.repository.getRun(options.runId);
   if (!persisted || typeof persisted !== "object") {
     throw new Error("persisted engine binding not found");
   }

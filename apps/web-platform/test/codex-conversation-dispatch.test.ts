@@ -85,6 +85,8 @@ describe("Codex conversation dispatch bridge", () => {
       registry,
     });
     expect(repository.getConversationRun).toHaveBeenCalledWith("conv-1");
+    expect(repository.getConversationRun).toHaveBeenCalledTimes(1);
+    expect(repository.getRun).not.toHaveBeenCalled();
     expect(repository.startAttempt).toHaveBeenCalledWith("run-1", "idempotency", "api-key", 2);
     expect(repository.assertAttemptGeneration).toHaveBeenCalledWith("attempt-1");
     expect(events).toHaveLength(2);

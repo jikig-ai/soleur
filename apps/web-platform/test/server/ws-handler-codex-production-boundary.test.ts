@@ -72,6 +72,7 @@ describe("Codex real production handler boundary", () => {
           id: "synthetic-codex-run", execution_kind: "conversation",
           conversation_id: fixture.conversationId, workspace_id: fixture.workspaceId,
           engine_id: "codex", auth_mode: fixture.mode, adapter_version: "codex-v1",
+          auth_mode_generation: 0,
           created_at: "2026-01-01T00:00:00Z",
         } : {
           id: fixture.conversationId, user_id: fixture.userId,
@@ -128,6 +129,7 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.captureException).toHaveBeenCalledWith(expect.objectContaining({ code: "engine_disabled" }));
     // Confirm the fixture reached binding lookup rather than an earlier auth gate.
     expect(fixture.from).toHaveBeenCalledWith("agent_engine_runs");
+    expect(fixture.from.mock.calls.filter(([table]) => table === "agent_engine_runs")).toHaveLength(2);
   });
 
   it("rejects unqualified attachments before attempts or provider calls", async () => {
