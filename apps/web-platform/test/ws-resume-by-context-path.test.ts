@@ -19,6 +19,7 @@ function codexRun(conversationId: string) {
     workspace_id: "user-1",
     engine_id: "codex",
     auth_mode: "api-key",
+    auth_mode_generation: 7,
     adapter_version: "codex-v1",
     created_at: "2026-09-27T00:00:00Z",
   };
