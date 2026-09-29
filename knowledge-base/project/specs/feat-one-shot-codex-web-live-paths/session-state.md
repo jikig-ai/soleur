@@ -107,3 +107,9 @@
 - `pencil-setup --auto` exited 1: the CLI was detected, but its headless authentication failed; this Codex session exposes no Pencil MCP tools. The member history-transfer UI and its required wireframe remain blocked. The setup script printed `/home/jean/.local/node_modules/.bin/pencil login`; no credential was read or entered.
 - No review panel or QA has run on the resynced head. PR #9051 remains a draft. Both mode-specific CLO dispositions remain PENDING/no authorization; no provider request or flag change occurred. Do not merge before the review, QA, member history acknowledgment, synthetic qualification and CLO gates are resolved.
 - A diff check caught an extra terminal blank line in the check-run SHA learning. The working copy was corrected; the initial range check was against committed `HEAD`, so use `git diff --check origin/main` for the current working tree and `git diff --cached --check` after staging.
+
+## Verification as of 2026-09-30 second main resync
+
+- Current `origin/main` advanced again to `6d27cd17da6934c6c1eb5da2a931167cd56e3250` (#9236) while review preflight was running. It merged cleanly; local feature head is `80599b9279684f5d6553b02939fb3830dd7bf23d` before the documentation commit for this resync.
+- The `e37a7ab5d1` CI result is still green for its exact head, but neither resync merge nor the subsequent documentation commit has fresh CI yet. Fetch and verify main ancestry immediately before push; then review the exact pushed head.
+- The latest review setup has not spawned agents. The Pencil authentication/wireframe blocker and pending CLO/qualification gates above remain unchanged.
