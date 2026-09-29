@@ -1957,6 +1957,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # Sentinel string at the end forces re-creation when the inline remote-exec list itself
 # changes; bump the suffix in lockstep with any inline edit. The host-id entry re-fires on
 # web-2 replacement (cattle), re-delivering the full set post-boot.
+#
+# Scope boundary (named so it does not read as an omission): this resource covers the
+# deploy-pipeline FILE_MAP set only. docker_seccomp_config and apparmor_bwrap_profile stay
+# web-1-only — a seccomp-bwrap.json/apparmor profile merge still leaves web-2 birth-frozen
+# on those files until #7103's wider pass. Same for the CI ssh pubkey: a
+# DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf but not web-2's
+# birth-frozen authorized_keys (recovery: operator ADMIN_IPS append or a web-2 replace —
+# ADR-237 consequence note).
 resource "terraform_data" "deploy_pipeline_fix_web2" {
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),

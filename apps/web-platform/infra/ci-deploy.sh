@@ -2983,8 +2983,12 @@ fi
 # up here as cred_file=present doppler_token=absent.
 _ci_deploy_script_sha=unknown
 if [ -r "${BASH_SOURCE[0]:-/nonexistent}" ]; then
-  _sha_out="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -c1-12)" || _sha_out=""
-  if [ -n "$_sha_out" ]; then _ci_deploy_script_sha="$_sha_out"; fi
+  # Compute the full sha256 once — the 12-char script_sha slices it, and the
+  # DEPLOY_SCRIPT_SHA marker below emits it whole.
+  _ci_deploy_script_sha_full="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -d' ' -f1 || true)"
+  if [ -n "$_ci_deploy_script_sha_full" ]; then
+    _ci_deploy_script_sha="$(printf '%s' "$_ci_deploy_script_sha_full" | cut -c1-12)"
+  fi
 fi
 # `if`, never `[ -n … ] && var=…`: as a bare trailing command the latter exits 1 when the test
 # is false, which under this script's `set -e` aborts the deploy. That exact trap is documented
@@ -3000,9 +3004,8 @@ logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-un
 # the parity anchor, so it is full-length and stable: `DEPLOY_SCRIPT_SHA sha256=<64hex>`
 # or `sha256=unknown` when the source file is unreadable (which also prevents a
 # deploy, making the line unreachable — kept for completeness).
-_ci_deploy_script_sha_full="$(sha256sum "${BASH_SOURCE[0]:-/nonexistent}" 2>/dev/null | cut -d' ' -f1 || true)"
 logger -t "$LOG_TAG" "DEPLOY_SCRIPT_SHA sha256=${_ci_deploy_script_sha_full:-unknown}" 2>/dev/null || true
-unset _sha_out _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
+unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
 
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"

@@ -22,11 +22,19 @@
 #   - AWS_ACCESS_KEY_ID     (R2 backend)
 #   - AWS_SECRET_ACCESS_KEY (R2 backend)
 #
-# Two apply targets (#4829):
+# Five apply targets (the comment's original "two" predates three additions):
 #   - terraform_data.deploy_pipeline_fix — HTTPS-only (#3756): its local-exec
 #     provisioner POSTs base64 file payloads through the CF Tunnel to
 #     /hooks/infra-config; the webhook handler (infra-config-apply.sh) writes them
 #     atomically. No SSH needed for THIS target.
+#   - terraform_data.docker_seccomp_config and terraform_data.apparmor_bwrap_profile
+#     — SSH siblings riding the same bridge (web-1 only, #4829 follow-on).
+#   - terraform_data.deploy_pipeline_fix_web2 — SSH sibling for web-2 (#9151).
+#     It is reached through an `ssh -L 127.0.0.1:2223:<web-2-private>:22` forward
+#     ON the web-1 bastion session plus a second OUTPUT REDIRECT — so a down or
+#     mid-replace web-2 fails this job CLOSED before plan, and `[skip-deploy-fix-apply]`
+#     skips web-1 remediation too. Fail-closed is deliberate: a skipped web-2
+#     silently re-drifts into the #9151 defect.
 #   - terraform_data.infra_config_handler_bootstrap — root SSH (#4827). It
 #     delivers the handler + the infra-config-install escalation helper + the
 #     sudoers grant, which the webhook path cannot self-deliver (chicken-and-egg,
