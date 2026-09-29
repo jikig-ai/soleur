@@ -83,12 +83,27 @@ describe("migration 145: Codex auth-mode rebinding", () => {
   });
 
   it("commits the terminal lifecycle event and attempt status in one RPC", () => {
-    const sql = read("145_codex_auth_mode_rebind.sql");
+    const sql = read("146_codex_terminal_lifecycle.sql");
     const lifecycle = sql.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
 
     expect(lifecycle).toMatch(/^\s*INSERT INTO public\.agent_engine_events[\s\S]*RETURNING \* INTO v_row/m);
     expect(lifecycle).toMatch(/^\s*UPDATE public\.agent_engine_attempts AS a[\s\S]*SET status = p_payload->>'status'[\s\S]*terminal_at = COALESCE\(a\.terminal_at, now\(\)\)/m);
     expect(lifecycle).toMatch(/p_payload->>'status' IN \('completed','failed','cancelled'\)/);
+    const down = read("146_codex_terminal_lifecycle.down.sql");
+    expect(down).toMatch(/FOR SHARE/);
+    expect(down).not.toMatch(/UPDATE public\.agent_engine_attempts AS a[\s\S]*status = p_payload->>'status'/);
+  });
+
+  it("keeps migration 145 immutable and puts terminal outcomes in migration 146", () => {
+    const applied = readFileSync(path.join(root, "145_codex_auth_mode_rebind.sql"));
+    const gitBlob = createHash("sha1")
+      .update(Buffer.concat([Buffer.from(`blob ${applied.length}\0`), applied]))
+      .digest("hex");
+    expect(gitBlob).toBe("18282434482be03df053d014aa94ad0f153a631b");
+
+    const delta = read("146_codex_terminal_lifecycle.sql");
+    expect(delta).toMatch(/FOR UPDATE/);
+    expect(delta).toMatch(/UPDATE public\.agent_engine_attempts AS a[\s\S]*status = p_payload->>'status'/);
   });
 
   it("restores the prior owner RPC and schema on rollback", () => {

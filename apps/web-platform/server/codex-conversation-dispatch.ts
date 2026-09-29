@@ -61,8 +61,8 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
   if (typeof attemptId !== "string") {
     throw new Error("Codex attempt start returned no id");
   }
+  let terminalStatus: "completed" | "failed" | "cancelled" | null = null;
   try {
-    let terminalStatus: "completed" | "failed" | "cancelled" | null = null;
     // This RPC is the request's acceptance boundary. A settings switch that
     // committed after the attempt was created makes it stale before transport.
     await options.repository.assertAttemptGeneration(attemptId);
@@ -78,7 +78,7 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     conversationId: options.conversationId,
     input: options.input,
     context: options.context,
-    registry: options.registry,
+    registry,
     egress: { selection: options.selection, evidence: options.evidence },
       eventSink: typeof attemptId === "string" && options.repository.appendLifecycleEvent
         ? { appendEvent: (event) => options.repository.appendLifecycleEvent!(runId, attemptId, event.payload) }

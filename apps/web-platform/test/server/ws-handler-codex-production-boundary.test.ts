@@ -10,7 +10,7 @@ const fixture = vi.hoisted(() => ({
   workspaceId: "a1b2c3d4-0000-4000-8000-000000000123",
   repoUrl: "https://github.com/example/synthetic-repo.git",
   mode: "api-key" as "api-key" | "managed",
-  rpc: vi.fn(async () => ({ data: null, error: null })),
+  rpc: vi.fn(async (_name: string): Promise<{ data: { id: string } | null; error: null }> => ({ data: null, error: null })),
   from: vi.fn(),
   spawn: vi.fn(() => { throw new Error("Unexpected provider process launch"); }),
   captureException: vi.fn(),
@@ -161,7 +161,7 @@ describe("Codex real production handler boundary", () => {
     };
     const registry = createEngineRegistry([{
       id: "codex", version: "codex-v1", transport: "remote", enabledForNewRuns: false, enabledForExistingRuns: true,
-      authModes: ["api-key"], qualifications: [{ authMode: "api-key", adapterVersion: "codex-v1", workflow: "conversation", dataClass: "synthetic", expiresAt: Date.now() + 60_000, evidenceRef: "synthetic-handler-test", capabilities: { streaming: true } }],
+      authModes: ["api-key"], qualifications: [{ authMode: "api-key", adapterVersion: "codex-v1", workflow: "conversation", dataClass: "synthetic", expiresAt: Date.now() + 60_000, evidenceRef: "synthetic-handler-test", capabilities: { streaming: "verified" } }],
     }]);
     vi.spyOn(codexRuntimeModule, "codexConversationRuntime").mockReturnValue({
       runtime: {

@@ -3,8 +3,21 @@ import { createCodexAppServerEventBridge } from "@/server/codex-app-server-event
 import { createCodexAppServerTransport } from "@/server/codex-code-adapter";
 import { createCodexAppServerLifecycleSource } from "@/server/codex-app-server-lifecycle-source";
 import { createEngineObservability } from "@/server/agent-engine-observability";
+import type { EngineRunContext } from "@/server/agent-engine-contract";
 
-const context = { runId: "run-1" } as never;
+const context: EngineRunContext = {
+  runId: "run-1",
+  binding: {
+    workspaceId: "workspace-1",
+    execution: { kind: "conversation", conversationId: "conversation-1" },
+    engineId: "codex",
+    authMode: "managed",
+    adapterVersion: "codex-v1",
+    boundAt: "2026-01-01T00:00:00Z",
+  },
+  idempotencyKey: "test-turn",
+  signal: new AbortController().signal,
+};
 const lease = { accessToken: "opaque", expiresAt: Date.now() + 60_000 };
 
 describe("Codex App Server lifecycle source", () => {
