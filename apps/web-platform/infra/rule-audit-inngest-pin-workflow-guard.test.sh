@@ -20,8 +20,9 @@
 #     propagates
 #   - the pinned version is parsed ANCHORED on the inngest_cli_version assignment
 #     (an unanchored grep is satisfied by a comment — measured on the zot step)
-#   - the upstream poll reads repos/inngest/inngest/releases/latest AND the tag list
-#     for the releases-behind delta AND the pinned release's published_at for age
+#   - the upstream poll reads repos/inngest/inngest/releases (one paginated call
+#     answers latest stable tag, the index-based releases-behind delta, AND the
+#     pinned release's published_at for the age leg)
 #   - the DRIFT threshold: releases_behind -ge 5 OR pin age -ge 45 days — the SAME
 #     literals the provenance sidecar records, pinned by parity probe below
 #   - both arch tarballs are HEAD-probed (amd64 + arm64)
@@ -104,8 +105,8 @@ out = {
   'rc10-drift'     : '"$RC" -eq 10' in run and 'DRIFT=' in run,
   'rc-passthrough' : 'exit "$RC"' in run,
   'anchored-pin'   : 'inngest_cli_version' in run and 'grep -oE' in run,
-  'poll-latest'    : 'repos/inngest/inngest/releases/latest' in run,
-  'tag-delta'      : 'repos/inngest/inngest/tags' in run and 'sort' in run,
+  'poll-releases'  : 'repos/inngest/inngest/releases?per_page=100' in run,
+  'release-delta'  : 'grep -nxF "$PINNED"' in run and 'BEHIND=' in run,
   'age-leg'        : 'published_at' in run and 'AGE_DAYS' in run,
   'thr-count'      : '[ "$BEHIND" -ge 5 ]' in run,
   'thr-age'        : '[ "$AGE_DAYS" -ge 45 ]' in run,
@@ -133,9 +134,10 @@ assert "offline-gate rc=10 records DRIFT" '[[ "$(probe "$WF" rc10-drift)" == yes
 assert "unexpected gate rc propagates (exit \"\$RC\")" '[[ "$(probe "$WF" rc-passthrough)" == yes ]]'
 assert "pin parse is anchored on the inngest_cli_version assignment" \
   '[[ "$(probe "$WF" anchored-pin)" == yes ]]'
-assert "upstream poll reads releases/latest" '[[ "$(probe "$WF" poll-latest)" == yes ]]'
-assert "releases-behind delta enumerates the tag list (stable-tag ordering)" \
-  '[[ "$(probe "$WF" tag-delta)" == yes ]]'
+assert "upstream poll reads the paginated releases listing" \
+  '[[ "$(probe "$WF" poll-releases)" == yes ]]'
+assert "releases-behind delta locates the pin in the stable-release ordering" \
+  '[[ "$(probe "$WF" release-delta)" == yes ]]'
 assert "pinned-release age leg reads published_at" '[[ "$(probe "$WF" age-leg)" == yes ]]'
 assert "threshold: releases_behind >= 5" '[[ "$(probe "$WF" thr-count)" == yes ]]'
 assert "threshold: pinned release age >= 45 days" '[[ "$(probe "$WF" thr-age)" == yes ]]'
@@ -191,8 +193,12 @@ mut_text() { # mut_text <name> <sed-expr> <check-that-must-flip-to-no>
 mut_text no-step          's/Detect inngest CLI pin drift/Detect REMOVED/'        present
 mut_text no-cancel-guard  's/!cancelled()/success()/'                              not-cancelled
 mut_text no-timeout       '/timeout-minutes: 2/d'                                  timeout
+mut_text no-rc2           's/"\$RC" -eq 2/"$RC" -eq 99/'                           rc2-contract
+mut_text no-rc10          's/"\$RC" -eq 10/"$RC" -eq 99/'                          rc10-drift
+mut_text no-passthrough   's/exit "\$RC"/exit 0/'                                  rc-passthrough
 mut_text unanchored-pin   's/inngest_cli_version/PIN_REMOVED/g'                   anchored-pin
-mut_text no-latest-poll   's|repos/inngest/inngest/releases/latest|repos/REMOVED|g' poll-latest
+mut_text no-releases-poll 's|repos/inngest/inngest/releases|repos/REMOVED|g'      poll-releases
+mut_text no-delta         's/grep -nxF "\$PINNED"/grep -nF "$PINNED"/'             release-delta
 mut_text no-age           's/published_at/PUB_REMOVED/'                            age-leg
 mut_text zero-thr-count   's/\"\$BEHIND\" -ge 5/"$BEHIND" -ge 5000/'            thr-count
 mut_text zero-thr-age     's/\"\$AGE_DAYS\" -ge 45/"$AGE_DAYS" -ge 45000/'      thr-age
@@ -201,12 +207,13 @@ mut_text no-force         's/--force /--no-force-until-idempotence/'            
 mut_text no-digest-label  's/--label action-required//'                             action-required
 mut_text no-upsert        's/gh issue comment/gh issue never-comment/g'            upsert
 mut_text no-problems-exit 's/if \[ -n "\$PROBLEMS" \]/if false/'                problems-exit
+mut_text no-drift-exit    's/            exit 0/            exit 9/'               drift-exit-0
 
 # --- floor ----------------------------------------------------------------------------
 # Bound sits adjacent to the check — scripts/guard-vacuity-floor.test.sh slices the floor
 # plus its contiguous assignment bindings into a mutant, so a threshold bound at the top of
 # the file leaves the mutant unbound and scores CONSTRUCTION instead of FIRES.
-MIN_FLOOR=39
+MIN_FLOOR=44
 TOTAL=$((PASS + FAIL))
 if (( TOTAL < MIN_FLOOR )); then
   echo "  DETECTOR-FAILURE: only $TOTAL assertions ran (floor $MIN_FLOOR) — the suite's own assertions were dropped; this run proves nothing" >&2

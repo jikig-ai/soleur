@@ -26,7 +26,11 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Sized for worst-case serial slack: rule-audit.sh + model-drift + two
+    # 2-minute-bounded pin-drift poll steps. A job timeout marks the running step
+    # `cancelled`, and `if: failure()` does NOT fire on cancellation — an
+    # undersized budget here is the exact silence shape the steps exist to kill.
+    timeout-minutes: 8
 
     steps:
       - name: Checkout repository
@@ -423,57 +427,55 @@ jobs:
             exit 2
           fi
 
-          # --- (3) live upstream poll: latest tag, tag-ordered delta, pin age ----------
+          # --- (3) live upstream poll: ONE paginated releases read ----------------------
+          # A single `releases` listing answers all three questions: latest stable tag
+          # (first non-draft, non-prerelease row — GitHub returns newest first), the
+          # releases-behind delta (PINNED's 0-based index in that list — counting
+          # RELEASES, so a tag with no published release cannot inflate the count), and
+          # the pinned release's published_at for the age leg. Index-based counting
+          # also cannot go negative — a tag-order delta can when upstream retracts.
           set +e
-          LATEST="$(gh api repos/inngest/inngest/releases/latest --jq .tag_name 2>&1)"
+          REL="$(gh api --paginate 'repos/inngest/inngest/releases?per_page=100' \
+                 --jq '.[] | select(.draft|not) | select(.prerelease|not) | [.tag_name, .published_at] | @tsv' 2>/dev/null)"
           API_RC=$?
           set -e
-          BEHIND=""
-          if [ "$API_RC" -ne 0 ] || [ -z "$LATEST" ] || ! printf '%s' "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          LATEST=""; BEHIND=""; PIN_DATE=""
+          if [ "$API_RC" -ne 0 ] || [ -z "$REL" ]; then
             # A dead poll must NOT discard an offline verdict we already hold. Record it
             # and keep going; the non-zero exit at the end still fires the ops email.
             PROBLEMS="${PROBLEMS}- upstream release poll FAILED (rc=$API_RC); this run cannot tell whether we are behind."$'\n'
             LATEST="(unavailable)"
           else
-            # Stable-tag-ordered delta: walk the tag list (paginated until the pin is seen
-            # or the list is exhausted), keep only semver-stable vX.Y.Z, sort -V, count the
-            # distance from PINNED to LATEST. inngest publishes ~weekly; a count-based
-            # threshold needs the ordering, not a name comparison.
-            set +e
-            TAGS="$(gh api --paginate 'repos/inngest/inngest/tags?per_page=100' --jq '.[].name' 2>/dev/null \
-                    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV)"
-            TAGS_RC=$?
-            set -e
-            if [ "$TAGS_RC" -ne 0 ] || [ -z "$TAGS" ]; then
-              PROBLEMS="${PROBLEMS}- could not enumerate inngest release tags; this run cannot measure releases-behind."$'\n'
+            LATEST="$(printf '%s\n' "$REL" | head -1 | cut -f1)"
+            if ! printf '%s' "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              PROBLEMS="${PROBLEMS}- latest stable release tag \`$LATEST\` is not semver; delta unmeasured."$'\n'
             else
-              P_POS="$(printf '%s\n' "$TAGS" | grep -nxF "$PINNED" | cut -d: -f1)"
-              L_POS="$(printf '%s\n' "$TAGS" | grep -nxF "$LATEST" | cut -d: -f1)"
-              if [ -n "$P_POS" ] && [ -n "$L_POS" ]; then
-                BEHIND=$((L_POS - P_POS))
+              # 1-based line number of PINNED, minus one = count of newer stable releases.
+              P_LINE="$(printf '%s\n' "$REL" | cut -f1 | grep -nxF "$PINNED" | cut -d: -f1 || true)"
+              if [ -n "$P_LINE" ]; then
+                BEHIND=$((P_LINE - 1))
               else
-                PROBLEMS="${PROBLEMS}- pinned tag \`$PINNED\` or latest \`$LATEST\` absent from the enumerated tag list; releases-behind not measured."$'\n'
+                PROBLEMS="${PROBLEMS}- pinned tag \`$PINNED\` absent from the stable release list; releases-behind not measured."$'\n'
+              fi
+              PIN_DATE="$(printf '%s\n' "$REL" | awk -F'\t' -v t="$PINNED" '$1==t {print $2; exit}')"
+              if [ -z "$PIN_DATE" ]; then
+                PROBLEMS="${PROBLEMS}- could not read the pinned release's published_at for \`$PINNED\`; age leg not measured."$'\n'
               fi
             fi
-            # Pinned-release AGE — the second leg of the threshold.
-            set +e
-            PIN_DATE="$(gh api "repos/inngest/inngest/releases/tags/$PINNED" --jq .published_at 2>/dev/null)"
-            PIN_RC=$?
-            set -e
-            AGE_DAYS=""
-            if [ "$PIN_RC" -ne 0 ] || [ -z "$PIN_DATE" ]; then
-              PROBLEMS="${PROBLEMS}- could not read the pinned release's published_at for \`$PINNED\`; age leg not measured."$'\n'
+          fi
+          AGE_DAYS=""
+          if [ -n "$PIN_DATE" ]; then
+            PIN_EPOCH="$(date -d "$PIN_DATE" +%s 2>/dev/null || true)"
+            if [ -n "$PIN_EPOCH" ]; then
+              AGE_DAYS=$(( ($(date +%s) - PIN_EPOCH) / 86400 ))
             else
-              PIN_EPOCH="$(date -d "$PIN_DATE" +%s 2>/dev/null || true)"
-              if [ -n "$PIN_EPOCH" ]; then
-                AGE_DAYS=$(( ($(date +%s) - PIN_EPOCH) / 86400 ))
-              fi
+              PROBLEMS="${PROBLEMS}- pinned release published_at \`$PIN_DATE\` is unparsable; age leg not measured."$'\n'
             fi
-            # Threshold: >= 5 releases behind OR pinned release >= 45 days old.
-            if { [ -n "$BEHIND" ] && [ "$BEHIND" -ge 5 ]; } || { [ -n "$AGE_DAYS" ] && [ "$AGE_DAYS" -ge 45 ]; }; then
-              DRIFT="${DRIFT:+$DRIFT+}behind"
-              NOTES="${NOTES}- pinned \`$PINNED\` vs upstream \`$LATEST\`: releases-behind=${BEHIND:-unmeasured}, release-age-days=${AGE_DAYS:-unmeasured} (threshold: >=5 behind OR >=45 days)."$'\n'
-            fi
+          fi
+          # Threshold: >= 5 releases behind OR pinned release >= 45 days old.
+          if { [ -n "$BEHIND" ] && [ "$BEHIND" -ge 5 ]; } || { [ -n "$AGE_DAYS" ] && [ "$AGE_DAYS" -ge 45 ]; }; then
+            DRIFT="${DRIFT:+$DRIFT+}behind"
+            NOTES="${NOTES}- pinned \`$PINNED\` vs upstream \`$LATEST\`: releases-behind=${BEHIND:-unmeasured}, release-age-days=${AGE_DAYS:-unmeasured} (threshold: >=5 behind OR >=45 days)."$'\n'
           fi
 
           # --- (4) tarball existence probe (both arches) --------------------------------
@@ -481,7 +483,9 @@ jobs:
           # against the committed checksums, so a deleted/replaced asset is a latent outage
           # that surfaces only at the NEXT host replace or image build. A coherent pin+sidecar
           # swap passes every offline check — nothing binds the names to upstream ground
-          # truth — so the probe is the only check that sees it.
+          # truth — so the probe is the only scheduled check that sees it. It verifies
+          # EXISTENCE, not hash: a coherent same-version sha swap is bounded by the
+          # bootstrap image build's checksums-file verify, not by this step.
           for ARCH in amd64 arm64; do
             set +e
             CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I \
