@@ -85,7 +85,33 @@ printf '\n=== git-data flag precheck (Guard 1, #8189) ===\n\n'
 cat > "$BIN/doppler" <<'SHIM'
 #!/usr/bin/env bash
 printf 'doppler %s\n' "$*" >> "$DOPPLER_LOG"
-[ "${1:-}" = secrets ] && [ "${2:-}" = get ] || { echo "doppler-shim: unsupported: $*" >&2; exit 64; }
+[ "${1:-}" = secrets ] && { [ "${2:-}" = get ] || [ "${2:-}" = set ]; } || { echo "doppler-shim: unsupported: $*" >&2; exit 64; }
+if [ "${2:-}" = set ]; then
+  # secrets set NAME -p P -c C — value on stdin (the only supported form here; the caller
+  # must never pass a value on argv). SHIM_SET_ERR forces a classified failure;
+  # SHIM_WRITE_STORE redirects the store so the write lands where the case expects.
+  name="${3:-}"; shift 3
+  proj=""; cfg=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -p|--project) proj="${2:-}"; shift 2 ;;
+      -c|--config) cfg="${2:-}"; shift 2 ;;
+      *) echo "doppler-shim: unknown argument $1" >&2; exit 64 ;;
+    esac
+  done
+  [ -n "${DOPPLER_TOKEN:-}" ] || { echo "Doppler Error: you must provide a token" >&2; exit 1; }
+  case "${SHIM_SET_ERR:-}" in
+    auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
+    network) echo "Doppler Error: dial tcp: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
+  esac
+  read -r value
+  d="$DOPPLER_STORE/$proj/$cfg"
+  [ -d "$d" ] || { echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; }
+  printf '%s' "$value" > "$d/$name"
+  # the real CLI prints the whole config on set; the shim prints nothing (the caller
+  # discards stdout anyway — what matters is that nothing the caller needs is on stdout).
+  exit 0
+fi
 name="${3:-}"; shift 3
 plain=0; noexit=0; proj=""; cfg=""
 while [ $# -gt 0 ]; do
@@ -119,6 +145,10 @@ case "$name" in
   DOPPLER_PROJECT) printf '%s' "$proj"; exit 0 ;;
   DOPPLER_CONFIG)  printf '%s' "$cfg"; exit 0 ;;
 esac
+# SHIM_READBACK_DIFFER models a write that "succeeded" but read-back returns another value.
+if [ "$name" = GIT_DATA_STORE_ENABLED ] && [ -n "${SHIM_READBACK_DIFFER:-}" ]; then
+  printf '%s' "$SHIM_READBACK_DIFFER"; exit 0
+fi
 if [ -f "$d/$name" ]; then cat "$d/$name"; exit 0; fi
 # SHIM_IGNORE_FLAG models an argument-blind shim (or a CLI that ignores the flag).
 if [ "$noexit" = 1 ] && [ "${SHIM_IGNORE_FLAG:-0}" != 1 ]; then exit 0; fi
@@ -223,6 +253,34 @@ case_off() { # <label> <value>
   [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "$(ok_out flag=off)" ]
 }
 
+# ── write path + mode-aware read (#8211 PR2) ──────────────────────────────────
+case_write() { # <label> <stored-flag> <write-value> [VAR=value ...]
+  local label="$1" stored="$2" wv="$3"; shift 3
+  run_case "write-$label" "$stored" FLAG_WRITE_VALUE="$wv" "$@"
+}
+if case_write ok ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write \
+  && [ "$(cat "$OUT")" = "flag_write=ok value=true" ] \
+  && [ "$(cat "$DLOG")" = "$(printf 'doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd\ndoppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd')" ] \
+  && [ "$(cat "$T/store-write-ok/soleur/prd/GIT_DATA_STORE_ENABLED")" = "true" ]; then
+  pass "W1: the write path sets the flag through stdin, reads it back with the SAME credential, prints flag_write=ok — and never touches the read probes (exactly 2 doppler calls)"
+else fail "W1: the write path did not write+read-back cleanly" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_write cred-absent ABSENT true \
+  && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_credential_absent' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "W2: FLAG_WRITE_VALUE without DOPPLER_TOKEN_GIT_DATA_FLAG -> verdict=flag_write_credential_absent, exit 5, doppler never called"
+else fail "W2: a write without the #8573 credential was not refused" "$(detail)"; fi
+if case_write bad-value ABSENT yes DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write \
+  && [ "$RC" = 2 ] && grep -qF 'verdict=flag_write_value_invalid' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "W3: a value other than true/false -> verdict=flag_write_value_invalid, exit 2, doppler never called"
+else fail "W3: an invalid write value was not refused" "$(detail)"; fi
+if case_write set-fail ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SHIM_SET_ERR=auth \
+  && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_failed reason=auth_invalid' "$OUT" && ! grep -q 'CANARY' "$OUT"; then
+  pass "W4: a failed set -> verdict=flag_write_failed reason=auth_invalid, exit 5, stderr never printed"
+else fail "W4: a failed set was not refused" "$(detail)"; fi
+if case_write readback-differs ABSENT true DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write SHIM_READBACK_DIFFER=false \
+  && [ "$RC" = 5 ] && grep -qF 'verdict=flag_write_readback_failed reason=value_mismatch' "$OUT"; then
+  pass "W5: a set whose read-back returns another value -> verdict=flag_write_readback_failed reason=value_mismatch, exit 5"
+else fail "W5: a mismatched read-back was not refused" "$(detail)"; fi
+
 if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly the TOFU_ARM line, the pin fingerprint and flag=unset, exit 0"
 else fail "P1: an absent flag was not flag=unset" "$(detail)"; fi
 if [ "$(cat "$DLOG")" = "$ARGV" ]; then pass "P1: doppler is called exactly four times — the flag read, DOPPLER_PROJECT, DOPPLER_CONFIG, then the pin read WITH --no-exit-on-missing-secret, all -p soleur -c prd"
@@ -262,6 +320,30 @@ if case_off space 'true '; then pass "P5b: 'true ' (trailing space) is not true 
 else fail "P5b: 'true ' was not flag=off" "$(detail)"; fi
 if case_off canary 'off-CANARY-5d1e' && ! grep -q 'CANARY' "$OUT"; then pass "P6: the flag value itself is never printed"
 else fail "P6: the flag value was printed" "out=[$(tr '\n' '|' < "$OUT")]"; fi
+# ── mode-aware read (#8211 PR2) ────────────────────────────────────────────────────
+case_mode() { # <label> <flag-value|ABSENT> <mode> — the flag=true mode branch runs BEFORE TOFU/pin
+  run_case "mode-$1" "$2" FLAG_MODE="$3"
+}
+if case_mode flip-true true flip \
+  && [ "$(cat "$OUT")" = "$(printf 'flag=true resume=arm_b\n%s\ngit_data_pin=present fp=%s' "$TOFU_PRESENT" "$PIN_FP")" ] && [ "$RC" = 0 ]; then
+  pass "M-flip-true: flip with flag already true -> flag=true resume=arm_b, exit 0 (NOT a refusal — a prior flip died post-write)"
+else fail "M-flip-true: resume arm B was not reported" "$(detail)"; fi
+if case_mode rollback-true true rollback \
+  && [ "$(cat "$OUT")" = "$(printf 'flag=true mode=rollback\n%s\ngit_data_pin=present fp=%s' "$TOFU_PRESENT" "$PIN_FP")" ] && [ "$RC" = 0 ]; then
+  pass "M-rb-true: rollback with flag=true -> the expected entry, exit 0"
+else fail "M-rb-true: flag=true under rollback was not accepted" "$(detail)"; fi
+if case_mode rollback-off false rollback \
+  && [ "$RC" = 0 ] && grep -qF 'verdict=nothing_to_rollback' "$OUT" && grep -qF 'flag=off' "$OUT"; then
+  pass "M-rb-off: rollback with flag off -> verdict=nothing_to_rollback, exit 0 (desired state already holds)"
+else fail "M-rb-off: nothing-to-rollback was not reported" "$(detail)"; fi
+if case_mode unfreeze-true true unfreeze \
+  && [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(refusal flag_already_true)" ]; then
+  pass "M-uf-true: unfreeze with flag=true still refuses flag_already_true (it reads like proof)"
+else fail "M-uf-true: unfreeze did not refuse flag=true" "$(detail)"; fi
+if case_mode bogus false bogus \
+  && [ "$RC" = 2 ] && grep -qF 'verdict=flag_mode_invalid' "$OUT" && [ ! -s "$DLOG" ]; then
+  pass "M-invalid: an unknown FLAG_MODE -> verdict=flag_mode_invalid, exit 2, doppler never called"
+else fail "M-invalid: an unknown mode was not refused" "$(detail)"; fi
 # ── host-key pin (#7226, plan D3) ─────────────────────────────────────────────────────
 case_pin_ok() { # the pin file holds exactly the key line, read-only (0444); only its fingerprint is printed
   run_case pin-ok false

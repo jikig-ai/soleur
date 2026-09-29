@@ -38,6 +38,27 @@
 # `true` is compared exactly (no case folding, no trimming): the app enables the store only on
 # process.env.GIT_DATA_STORE_ENABLED === "true" (apps/web-platform/server/workspace-resolver.ts).
 #
+# MODE-AWARE READ (#8211 PR2). `FLAG_MODE` (default proof) changes what flag==true means:
+#   proof    -> flag==true refuses verdict=flag_already_true (the store must not be live)
+#   flip     -> flag==true is RESUME ARM B, not an error: prints flag=true resume=arm_b, exit 0
+#               (a prior flip died after the write; the workflow routes to redeploy+assert)
+#   rollback -> flag==true is the EXPECTED entry: prints flag=true; flag!=true exits 0 with
+#               verdict-free flag=off + mode=rollback nothing_to_rollback marker
+#   unfreeze -> reads like proof (flag value irrelevant to the sentinel decision)
+#
+# WRITE PATH (#8211 PR2 / #8573 seam). When FLAG_WRITE_VALUE is set to `true` or `false`, the
+# step writes GIT_DATA_STORE_ENABLED through the dedicated write credential
+# DOPPLER_TOKEN_GIT_DATA_FLAG (read/write on `prd`, environment-bound — never
+# DOPPLER_TOKEN_WRITE, which is prd_terraform-scoped) and NOTHING ELSE in this file's flow
+# runs: write mode returns after the read-back, before the pin/TOFU probes. Absence of the
+# credential refuses verdict=flag_write_credential_absent (exit 5) BEFORE any remote call.
+#   write form  : printf '%s' "$value" | doppler secrets set GIT_DATA_STORE_ENABLED …
+#                 >/dev/null — stdin carries the value (never argv), stdout is discarded
+#                 (doppler prints the whole config on set)
+#   read-back   : the SAME write token re-reads the flag with --no-exit-on-missing-secret and
+#                 must return exactly the written value, else verdict=flag_write_readback_failed
+#   success     : flag_write=ok value=<written>
+#
 # GIT-DATA HOST-KEY PIN (#7226, plan D3). The same step, with the same `prd` token, reads
 # GIT_DATA_SSH_HOST_KEY (published by Terraform when git-data is born or replaced) with the same
 # --no-exit-on-missing-secret semantics, validates its shape, and writes it to
@@ -83,13 +104,6 @@ refuse() { # <verdict-detail>
   exit 5
 }
 
-if [ -z "${DOPPLER_TOKEN:-}" ]; then
-  refuse flag_token_absent
-fi
-
-ERRF="$(mktemp)" || refuse "flag_read_failed reason=unknown rc=95"
-trap 'rm -f "$ERRF"' EXIT
-
 # <stderr-file> -> one fixed word. Matched on doppler's own error text; the text is never printed.
 reason_of() {
   if grep -qiF 'Invalid Auth token' "$1"; then echo auth_invalid
@@ -99,6 +113,54 @@ reason_of() {
   else echo unknown
   fi
 }
+
+FLAG_MODE="${FLAG_MODE:-proof}"
+case "$FLAG_MODE" in
+  proof|flip|rollback|unfreeze) : ;;
+  *) echo "::error title=git-data-flag-precheck::verdict=flag_mode_invalid mode=${FLAG_MODE}"; exit 2 ;;
+esac
+
+# ---- Write path (#8573): returns before the read probes --------------------------
+if [ -n "${FLAG_WRITE_VALUE:-}" ]; then
+  case "$FLAG_WRITE_VALUE" in
+    true|false) : ;;
+    *) echo "::error title=git-data-flag-precheck::verdict=flag_write_value_invalid value=${FLAG_WRITE_VALUE}"; exit 2 ;;
+  esac
+  if [ -z "${DOPPLER_TOKEN_GIT_DATA_FLAG:-}" ]; then
+    echo "::error title=git-data-flag-precheck::verdict=flag_write_credential_absent — DOPPLER_TOKEN_GIT_DATA_FLAG unset; the #8573 write seam is not provisioned. Never substitute DOPPLER_TOKEN_WRITE (prd_terraform-scoped)."
+    echo "[git-data-flag-precheck] verdict=flag_write_credential_absent"
+    exit 5
+  fi
+  ERRF="$(mktemp)" || refuse "flag_write_failed reason=unknown rc=95"
+  trap 'rm -f "$ERRF"' EXIT
+  # stdin carries the value (never argv); stdout discarded (doppler echoes the config).
+  if ! printf '%s' "$FLAG_WRITE_VALUE" | DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" \
+        doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd >/dev/null 2>"$ERRF"; then
+    echo "::error title=git-data-flag-precheck::verdict=flag_write_failed reason=$(reason_of "$ERRF")"
+    echo "[git-data-flag-precheck] verdict=flag_write_failed"
+    exit 5
+  fi
+  # Fail-closed read-back with the same credential — the write is not proven until read.
+  rb="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd 2>"$ERRF")" || {
+    echo "::error title=git-data-flag-precheck::verdict=flag_write_readback_failed reason=$(reason_of "$ERRF")"
+    echo "[git-data-flag-precheck] verdict=flag_write_readback_failed"
+    exit 5
+  }
+  if [ "$rb" != "$FLAG_WRITE_VALUE" ]; then
+    echo "::error title=git-data-flag-precheck::verdict=flag_write_readback_failed reason=value_mismatch"
+    echo "[git-data-flag-precheck] verdict=flag_write_readback_failed reason=value_mismatch"
+    exit 5
+  fi
+  echo "flag_write=ok value=${FLAG_WRITE_VALUE}"
+  exit 0
+fi
+
+if [ -z "${DOPPLER_TOKEN:-}" ]; then
+  refuse flag_token_absent
+fi
+
+ERRF="$(mktemp)" || refuse "flag_read_failed reason=unknown rc=95"
+trap 'rm -f "$ERRF"' EXIT
 
 # read_secret <NAME> <failure-verdict> [extra-flag] -> sets VAL; on a non-zero exit refuses with
 # "<failure-verdict> reason=<word> rc=<n>", so every read in this file classifies its failure the
@@ -123,8 +185,20 @@ if [ "$project" != soleur ] || [ "$config" != prd ]; then
   refuse "flag_read_failed reason=scope_mismatch"
 fi
 
+# Mode-aware flag read (#8211 PR2): flag==true is a refusal only in proof; on flip it is
+# resume arm B (a prior flip died after the write — the workflow re-runs redeploy+assert);
+# on rollback it is the expected entry.
 if [ "$flag" = true ]; then
-  refuse flag_already_true
+  case "$FLAG_MODE" in
+    proof|unfreeze) refuse flag_already_true ;;
+    flip)
+      echo "flag=true resume=arm_b"
+      # fall through to the pin/TOFU probes — a resumed flip still needs the pin file
+      ;;
+    rollback)
+      echo "flag=true mode=rollback"
+      ;;
+  esac
 fi
 
 # --- TOFU_ARM (informational) ---
@@ -171,9 +245,13 @@ esac
 chmod 0444 "$PIN_OUT" || refuse pin_write_failed
 echo "git_data_pin=present fp=${fp}"
 
-if [ -z "$flag" ]; then
-  echo "flag=unset"
-else
-  echo "flag=off"
-fi
+case "$FLAG_MODE:$flag" in
+  *:true) : ;;  # the mode-aware branch above already printed flag=true
+  rollback:*)
+    # rollback on a flag that is not true: nothing to take off. Not a refusal — the desired
+    # post-state (flag off) already holds; the workflow exits 0 on this marker.
+    echo "flag=off mode=rollback verdict=nothing_to_rollback" ;;
+  *:) echo "flag=unset" ;;   # flag empty
+  *) echo "flag=off" ;;
+esac
 exit 0
