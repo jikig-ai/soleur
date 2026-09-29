@@ -87,8 +87,9 @@ resource "tls_private_key" "git_data_host_ssh" {
 }
 
 # (#7226) The pin's SHA256 fingerprint (public; the provider marks it non-sensitive). The birth
-# and replace jobs print it to their run summary after apply; git-data-pin-redeploy.yml points
-# the operator there to compare against the app's `git_data_pin=present fp=` startup line.
+# and replace jobs print it to their run summary after apply so the operator can compare it
+# against the app's `git_data_pin=present fp=` startup line once the inline pin_load step's
+# same-version redeploy lands (#8211 PR2 — the git-data-pin-redeploy.yml follower is retired).
 output "git_data_ssh_host_key_fingerprint" {
   description = "SHA256 fingerprint of the git-data SSH host key (the GIT_DATA_SSH_HOST_KEY pin)."
   value       = tls_private_key.git_data_host_ssh.public_key_fingerprint_sha256
@@ -352,8 +353,8 @@ resource "doppler_secret" "git_data_ssh_host" {
 #     ADDRESS secret above, co-landing with the server is exactly the property wanted here.
 #
 # NO ignore_changes: Terraform owns the value, and it MUST move on every replace. The
-# git-data-pin-redeploy.yml workflow (triggered when the apply workflow's birth or replace run
-# completes) then forces a web release so the app loads it.
+# apply job's pin_load step (#8211 PR2 — the git-data-pin-redeploy.yml follower is retired)
+# then redeploys the RUNNING image via /hooks/deploy, so the app re-reads prd and loads it.
 resource "doppler_secret" "git_data_ssh_host_key" {
   project    = "soleur"
   config     = "prd"

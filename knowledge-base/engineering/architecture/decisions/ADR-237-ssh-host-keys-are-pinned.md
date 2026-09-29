@@ -201,6 +201,38 @@ OpenSSH certificates, and a CA adds a signing key to guard for no property the p
 staged fail-open rollout for the bridge (with the pin file always written, the interim phase checks
 nothing new).
 
+## Addendum — 2026-09-30 (#8211 PR2): the redeploy follower is retired; pin-load moves inline
+
+`git-data-pin-redeploy.yml` and `.github/actions/dispatch-web-redeploy/source-run-gate.sh`
+are deleted. The follower's whole raison d'être — a release-run poll of up to 70 minutes that
+could not sit inside the apply workflow's `terraform-apply-web-platform-host` concurrency
+lock — evaporated when the same-version redeploy moved to the webhook mechanism
+(`/hooks/deploy` + `/hooks/deploy-status` frame poll, minutes not tens of minutes). The
+pin-load is now a `pin_load` step inside the `git_data_host_create` and
+`git_data_host_replace` jobs themselves, gated on the boot poll's `success` — a pin-load
+before boot-complete would redeploy the fleet to trust a key whose host never came up.
+
+What changed semantically:
+
+- The lever is `track.sh` rebuilt: `/health` resolves the running semver tag, the POST is
+  HMAC-signed with `WEBHOOK_DEPLOY_SECRET` over the body, `peers` fans the swap to every
+  web host, and the poll accepts only `reason=ok` on a frame whose `start_ts` is newer than
+  the pre-dispatch baseline. `ok_peer_fanout_degraded` is a FAILURE here (a mixed fleet —
+  the cutover cannot accept what the seccomp precedent tolerated).
+- A red boot poll now leaves the pin published with NO automated re-dispatch — the inline
+  step is `skipped` and the job goes red, which is the paging surface (the follower's
+  `pin_published` email arm is gone with it). The recovery is the standalone lever:
+  `gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY`,
+  which runs the same track.sh without touching the flag or the host.
+- The carried-over-attempt and no-`source_run_id` manual arms are gone with the follower;
+  an operator-local apply in the rung-2 gap loads the pin via the same `mode=redeploy` lever.
+- `terraform-target-parity.test.ts` pins the arm's shape (both jobs, `id: pin_load`, poll-gated,
+  track.sh + prd_terraform creds + the fan-out peers literal) and asserts the deleted files
+  stay deleted.
+
+ADR-220 D6's freshness rule is unchanged; the D6 replace now prefers the new
+`apply_target=git-data-host-rotate` arm when the LUKS key must rotate too (see ADR-220).
+
 ## Addendum — 2026-09-27 (#7226): accepted at post-merge step 4
 
 ADR-237 is `accepted`. The condition in Status is met: `git-data-cutover.yml` run

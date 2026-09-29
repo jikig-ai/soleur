@@ -518,26 +518,36 @@ jobs:
           unwind_failed=0
           if [[ "$MODE" == "flip" && -f "$prog/flag_written" && -n "${DOPPLER_TOKEN_GIT_DATA_FLAG:-}" ]]; then
             echo "finalizer: writing GIT_DATA_STORE_ENABLED=false"
-            printf 'false' | DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" \
-              doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd >/dev/null 2>&1 \
-              && echo "finalizer: flag off" || { echo "::error::finalizer: flag-off write FAILED — flag state unknown; page on-call"; unwind_failed=1; }
+            if printf 'false' | DOPPLER_TOKEN="$DOPPLER_TOKEN_GIT_DATA_FLAG" \
+              doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd >/dev/null 2>&1; then
+              echo "finalizer: flag off"
+            else
+              echo "::error::finalizer: flag-off write FAILED — flag state unknown; page on-call"
+              unwind_failed=1
+            fi
             if [[ -z "$unwind_failed" || "$unwind_failed" = 0 ]]; then
               export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
               WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform 2>/dev/null)" || true
               CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform 2>/dev/null)" || true
               CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform 2>/dev/null)" || true
               if [[ -n "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then
-                bash .github/actions/dispatch-web-redeploy/track.sh \
-                  && echo "finalizer: off-line redeploy confirmed" \
-                  || { echo "::error::finalizer: unwind redeploy did not confirm — verify git_data_store=disabled per host via Better Stack"; unwind_failed=1; }
+                if bash .github/actions/dispatch-web-redeploy/track.sh; then
+                  echo "finalizer: off-line redeploy confirmed"
+                else
+                  echo "::error::finalizer: unwind redeploy did not confirm — verify git_data_store=disabled per host via Better Stack"
+                  unwind_failed=1
+                fi
               fi
             fi
           fi
           if [[ -f "$prog/freeze_held" && -n "${GIT_DATA_SSH:-}" ]]; then
-            MODE=unfreeze CUTOVER_LINEAGE="cutover-${{ github.run_id }}" \
-              bash apps/web-platform/infra/git-data-cutover.sh \
-              && echo "finalizer: freeze cleared, gc.timer restarted" \
-              || { echo "::error::finalizer: unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"; unwind_failed=1; }
+            if MODE=unfreeze CUTOVER_LINEAGE="cutover-${{ github.run_id }}" \
+              bash apps/web-platform/infra/git-data-cutover.sh; then
+              echo "finalizer: freeze cleared, gc.timer restarted"
+            else
+              echo "::error::finalizer: unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
+              unwind_failed=1
+            fi
           fi
           # a rollback that died before its own unfreeze still needs the timer up
           if [[ "$MODE" == "rollback" && ! -f "$prog/cutover_at_written" ]]; then

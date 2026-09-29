@@ -247,7 +247,7 @@ export async function deleteAccount(
       //                  pin_invalid | pin_absent — GIT_DATA_SSH_HOST_KEY is malformed or
       //                    unset, whatever the store flag says (#7226, #5914). Remedy:
       //                    republish the pin (the replace job does), or re-run
-      //                    git-data-pin-redeploy.yml if the secret is present but not loaded,
+      //                    git-data-cutover.yml mode=redeploy if the secret is present but not loaded,
       //                    then sweep the refused erasures (runbook pin-fault row).
       //                  ssh_client_absent — the image has no `ssh` (#5914): ship
       //                    openssh-client in the runner stage, then sweep.

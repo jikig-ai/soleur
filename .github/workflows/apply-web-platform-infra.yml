@@ -254,7 +254,7 @@ on:
         description: >-
           Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
           registry-host-replace | registry-region-migrate | registry-luks-recut |
-          git-data-host-replace | git-data-host-create | workspaces-luks-cutover |
+          git-data-host-replace | git-data-host-rotate | git-data-host-create | workspaces-luks-cutover |
           workspaces-luks-recut | inngest-volume-recut | web-host-create | web-host-replace |
           ci-ssh-token-replace | vector-redeliver | entrypoint-audit.
           DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
@@ -304,6 +304,13 @@ on:
           - registry-region-migrate
           - registry-luks-recut
           - git-data-host-replace
+          # #8211 PR2 / ADR-220 D6 — the ROTATE path: the git-data-host-replace job run
+          # with the LUKS store in scope — hcloud_volume.git_data_luks +
+          # random_password.git_data_luks + doppler_secret.git_data_luks_key all move
+          # together (a new passphrase on a retained volume can never luksOpen). The
+          # ONLY route that may touch the LUKS store; needs `confirm=ROTATE-GIT-DATA` and
+          # refuses unless the served store is measured empty (served_repos=0).
+          - git-data-host-rotate
           - workspaces-luks-cutover
           - workspaces-luks-recut
           # #7695 — the inngest Redis AOF volume recut, plaintext ext4 -> LUKS. The ONE
@@ -4101,7 +4108,9 @@ jobs:
   #   hcloud_firewall_attachment.git_data      (git-data.tf:296 — server_ids update-in-place;
   git_data_host_replace:
     environment: infra-privileged
-    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-replace'
+    # (#8211 PR2) git-data-host-rotate runs THIS job: same host replace plus the LUKS
+    # volume/passphrase/key in the -replace set, gated by the gate's rotate arm.
+    if: github.event_name == 'workflow_dispatch' && (inputs.apply_target == 'git-data-host-replace' || inputs.apply_target == 'git-data-host-rotate')
     runs-on: ubuntu-24.04
     # (#6977) Shared with git_data_host_create so a birth and a replace cannot race the
     # same state. Added to BOTH jobs in the same change deliberately: GitHub does not
@@ -4130,6 +4139,20 @@ jobs:
           # plugins/soleur/test/terraform-target-parity.test.ts.
           fetch-depth: 0
 
+      # (#8211 PR2) Rotate-mode typo-guard. Only binds when apply_target is
+      # git-data-host-rotate — the plain replace path keeps its current contract.
+      - name: Validate dispatch inputs (rotate confirm token)
+        if: inputs.apply_target == 'git-data-host-rotate'
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "ROTATE-GIT-DATA" ]]; then
+            echo "::error::confirm must be exactly 'ROTATE-GIT-DATA' (got '${CONFIRM_RAW}'). This target DESTROYS the LUKS store volume and re-mints its passphrase — that is the failure this token exists to make hard to do by accident. It is NOT the authorization — the infra-privileged environment + the gate's rotate arm are."
+            exit 1
+          fi
+          echo "dispatch validated: ROTATE hcloud_server.git_data + LUKS store"
+
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -4140,6 +4163,32 @@ jobs:
         with:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # (#8211 PR2 / ADR-220 D6) ROTATE PRECONDITION — the store must be measured EMPTY
+      # before the LUKS volume is destroyed. The host is deny-all (no SSH path), so the
+      # reading is the bootstrap emitter's own Better Stack line: the latest stage:bootstrap
+      # emit on host_name=git-data must carry served_repos=0. An unreadable or non-zero
+      # store fails CLOSED — the volume delete is irreversible.
+      - name: Rotate precondition — served store measured empty
+        if: inputs.apply_target == 'git-data-host-rotate'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          rows="$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+            "SELECT raw FROM remote(\$BS_TABLE) WHERE JSONExtractString(raw,'host_name') = 'git-data' AND positionCaseInsensitive(raw,'stage:bootstrap') > 0 ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null || true)"
+          # The LATEST emit decides — an older served_repos=0 must not cover a newer
+          # populated reading (rows arrive newest-first, one JSONEachRow object per line).
+          latest="$(printf '%s' "$rows" | head -1)"
+          if printf '%s' "$latest" | grep -qE 'served_repos=0([^0-9]|$)'; then
+            echo "rotate precondition ok: latest git-data bootstrap emit reports served_repos=0"
+          elif [ -z "$rows" ]; then
+            echo "::error::rotate precondition UNREADABLE — no stage:bootstrap emit on host_name=git-data in Better Stack (the served_repos=0 field could not be read). Failing closed: an unreadable store is not an empty store. Do NOT re-dispatch until the emit path is verified."
+            exit 1
+          else
+            echo "::error::rotate precondition REFUSED — the latest git-data bootstrap emit does not carry served_repos=0; the store is populated or the emit predates the field. A rotate destroys the LUKS volume. Empty the store (or wait for the flag-off state) first."
+            exit 1
+          fi
 
       # (#8210) THE RUNG-2 INTERLOCK ON THE REPLACE ROUTE. Until now only `git_data_host_create`
       # called this gate, so an un-rehearsed cloud-init payload could reach the LIVE git-data
@@ -4253,16 +4302,28 @@ jobs:
           # ends `exit $rc`, so this cannot turn a failed prod plan green — it only restores
           # the annotation that names WHY it failed. The `set -e` after the rc read re-arms.
           set +e
+          GATE_MODE=replace
+          EXTRA_REPLACE=(); EXTRA_TARGET=()
+          if [[ "${{ inputs.apply_target }}" == "git-data-host-rotate" ]]; then
+            # (#8211 PR2 / ADR-220 D6) The rotate set adds the LUKS store trio — volume +
+            # passphrase + published key all move TOGETHER (a partial rotation strands the
+            # at-rest data). The gate's rotate arm grades the plan against that exact set.
+            GATE_MODE=rotate
+            EXTRA_REPLACE+=(-replace='hcloud_volume.git_data_luks' -replace='random_password.git_data_luks')
+            EXTRA_TARGET+=(-target='hcloud_volume.git_data_luks' -target='random_password.git_data_luks' -target='doppler_secret.git_data_luks_key')
+          fi
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -replace='hcloud_server.git_data' \
               -replace='tls_private_key.git_data_host_ssh' \
+              "${EXTRA_REPLACE[@]}" \
               -target='hcloud_server.git_data' \
               -target='hcloud_server_network.git_data' \
               -target='hcloud_volume_attachment.git_data' \
               -target='hcloud_volume_attachment.git_data_luks' \
               -target='hcloud_firewall_attachment.git_data' \
               -target='doppler_secret.git_data_ssh_host_key' \
+              "${EXTRA_TARGET[@]}" \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -4277,8 +4338,12 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-replace-gate.sh"
           # (#8189) The gate's root-key arm compares the resolved root key to this committed anchor.
           export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-root-key.fingerprint"
-          if ! git_data_host_replace_gate tfplan.json; then
-            echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate, or the root-key arm refused it (a git-data-root-key-arm annotation then names the reason and the step log its remedy). Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
+          if ! git_data_host_replace_gate tfplan.json "$GATE_MODE"; then
+            if [[ "$GATE_MODE" = rotate ]]; then
+              echo "::error::git-data-host-rotate destroy-guard ABORTED: the plan is not the exact scoped ROTATE set — host + dependents + LUKS volume/passphrase/key moving together (the plaintext volume hcloud_volume.git_data is still preserved). An incomplete rotation — passphrase without volume, or volume without the key re-publish — is a stranding, not a rotate, and refuses. NO [ack-destroy] bypass on this path."
+            else
+              echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate, or the root-key arm refused it (a git-data-root-key-arm annotation then names the reason and the step log its remedy). Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
+            fi
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
@@ -4380,7 +4445,7 @@ jobs:
             fi
           done
           echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
-          # (#7226) The rotated pin, for git-data-pin-redeploy.yml's comparison.
+          # (#7226) The rotated pin fingerprint — the evidence the boot poll + the pin_load step's redeploy prove.
           fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
           if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
@@ -4408,6 +4473,31 @@ jobs:
           rc=0
           git_data_boot_verify replace 20 30 "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" || rc=$?
           exit "$rc"
+
+      # (#8211 PR2 / ADR-237 D6 amendment) THE PIN-LOAD ARM — inline replacement for the
+      # retired git-data-pin-redeploy.yml follower. A replace re-keys the host and
+      # re-publishes GIT_DATA_SSH_HOST_KEY to Doppler prd, but the running app only re-reads
+      # prd at deploy — until a deploy, every web host's git fetch/push fails host-key
+      # verification. The follower existed only because a release-run poll could not sit
+      # inside the apply lock; the webhook mechanism (track.sh, POST /hooks/deploy +
+      # deploy-status frame poll) is minutes, so the pin-load runs inline now.
+      # Runs ONLY on a verified boot — a pin-load before boot-complete would redeploy the
+      # fleet to trust a key whose host never came up.
+      - name: Load the rotated git-data pin (same-version redeploy)
+        id: pin_load
+        if: ${{ !cancelled() && inputs.plan_only != true && steps.poll.outcome == 'success' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+        run: |
+          set -euo pipefail
+          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
+          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
+          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
+          [[ -n "$CF_ACCESS_CLIENT_SECRET" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
+          [[ -n "$CF_ACCESS_CLIENT_ID" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_ID}"
+          bash .github/actions/dispatch-web-redeploy/track.sh
 
       - name: Post-replace readiness note (non-SSH)
         if: inputs.plan_only != true
@@ -6213,7 +6303,7 @@ jobs:
             exit 1
           fi
           echo "birth applied. A green apply is NOT a green boot — the boot-signal poll below is what decides whether this host actually came up."
-          # (#7226) The published pin, for git-data-pin-redeploy.yml's comparison.
+          # (#7226) The published pin fingerprint — the evidence the boot poll + the pin_load step's redeploy prove.
           fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
           if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
 
@@ -6264,6 +6354,26 @@ jobs:
           rc=0
           git_data_boot_verify birth 20 30 "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" || rc=$?
           exit "$rc"
+
+      # (#8211 PR2) Same pin-load arm as git_data_host_replace — a birth mints the pin too,
+      # and until a deploy reads prd the fleet cannot verify the new host's key. The retired
+      # git-data-pin-redeploy.yml follower did this via a release dispatch; the webhook path
+      # (track.sh) is minutes and runs inline after the verified boot.
+      - name: Load the rotated git-data pin (same-version redeploy)
+        id: pin_load
+        if: ${{ !cancelled() && inputs.plan_only != true && steps.poll.outcome == 'success' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
+        run: |
+          set -euo pipefail
+          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
+          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
+          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
+          [[ -n "$CF_ACCESS_CLIENT_SECRET" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
+          [[ -n "$CF_ACCESS_CLIENT_ID" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_ID}"
+          bash .github/actions/dispatch-web-redeploy/track.sh
 
       - name: Dispatch summary
         if: always()
