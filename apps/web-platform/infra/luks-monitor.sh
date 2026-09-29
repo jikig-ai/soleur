@@ -201,9 +201,21 @@ fi
 # regressed — a re-image, a host-side edit, or a partial apply surfaces on the
 # daily probe long before a reboot does. They ride the same drift emit: a
 # regression here IS workspaces-luks-drift, not a new op.
-WL_FSTAB_MNT_DATA_LINES="$(awk '{ m=$2; sub(/\/+$/,"",m); if ($1 !~ /^#/ && m == "/mnt/data") n++ } END { print n+0 }' /etc/fstab 2>/dev/null || true)"
+# The fstab target file and the peek attrs are seam-overridable ONLY under
+# LUKS_MONITOR_TEST_SEAM (same discipline as WORKSPACES_MAPPER_PATH): nothing in
+# prod sets the seam, and outside it both fall back to the real paths — a stray
+# env var cannot weaken the assert on the live host.
+WL_FSTAB_FILE=/etc/fstab
+WL_PEEK_ATTRS=""
+WL_PEEK_FAIL=0
+if [ "${LUKS_MONITOR_TEST_SEAM:-0}" = "1" ]; then
+  WL_FSTAB_FILE="${WL_FSTAB_FILE_OVERRIDE:-/etc/fstab}"
+  WL_PEEK_ATTRS="${WL_PEEK_ATTRS_OVERRIDE:-}"
+  WL_PEEK_FAIL="${WL_PEEK_FAIL_OVERRIDE:-0}"
+fi
+WL_FSTAB_MNT_DATA_LINES="$(awk '{ m=$2; sub(/\/+$/,"",m); if ($1 !~ /^#/ && m == "/mnt/data") n++ } END { print n+0 }' "$WL_FSTAB_FILE" 2>/dev/null || true)"
 WL_FSTAB_MNT_DATA_LINES="${WL_FSTAB_MNT_DATA_LINES:-unknown}"
-WL_FSTAB_MAPPER_LINE="$(awk '$1 == "/dev/mapper/workspaces" { f=1 } END { print f+0 }' /etc/fstab 2>/dev/null || true)"
+WL_FSTAB_MAPPER_LINE="$(awk '$1 == "/dev/mapper/workspaces" { f=1 } END { print f+0 }' "$WL_FSTAB_FILE" 2>/dev/null || true)"
 WL_FSTAB_MAPPER_LINE="${WL_FSTAB_MAPPER_LINE:-unknown}"
 export WL_FSTAB_MNT_DATA_LINES WL_FSTAB_MAPPER_LINE
 # The mount-point match normalizes trailing slashes on a COPY of $2 — the
@@ -215,16 +227,29 @@ export WL_FSTAB_MNT_DATA_LINES WL_FSTAB_MAPPER_LINE
 # --bind /` peek shape the installer's gate_writer uses — the mapper is mounted
 # on web-1, so `lsattr -d /mnt/data` would see the MAPPER's root inode, not the
 # covered root-disk one.
-WL_COVERED_INODE_IMMUTABLE=unknown
-_lm_peek=/run/luks-monitor-peek
-mkdir -p "$_lm_peek" 2>/dev/null || true
-if mount --bind / "$_lm_peek" 2>/dev/null; then
-  case "$(lsattr -d "$_lm_peek/mnt/data" 2>/dev/null | awk '{print $1}')" in
-    *i*) WL_COVERED_INODE_IMMUTABLE=1 ;;
-    *)   WL_COVERED_INODE_IMMUTABLE=0 ;;
-  esac
-  while mountpoint -q "$_lm_peek" 2>/dev/null; do umount "$_lm_peek" 2>/dev/null || break; done
-  rmdir "$_lm_peek" 2>/dev/null || true
+if [ -n "$WL_PEEK_ATTRS" ] || [ "$WL_PEEK_FAIL" = "1" ]; then
+  # Test seam: the harness models the peek as an attrs string (or a bind
+  # failure); production never reaches this arm.
+  if [ "$WL_PEEK_FAIL" = "1" ]; then
+    WL_COVERED_INODE_IMMUTABLE=unknown
+  else
+    case "$WL_PEEK_ATTRS" in
+      *i*) WL_COVERED_INODE_IMMUTABLE=1 ;;
+      *)   WL_COVERED_INODE_IMMUTABLE=0 ;;
+    esac
+  fi
+else
+  WL_COVERED_INODE_IMMUTABLE=unknown
+  _lm_peek=/run/luks-monitor-peek
+  mkdir -p "$_lm_peek" 2>/dev/null || true
+  if mount --bind / "$_lm_peek" 2>/dev/null; then
+    case "$(lsattr -d "$_lm_peek/mnt/data" 2>/dev/null | awk '{print $1}')" in
+      *i*) WL_COVERED_INODE_IMMUTABLE=1 ;;
+      *)   WL_COVERED_INODE_IMMUTABLE=0 ;;
+    esac
+    while mountpoint -q "$_lm_peek" 2>/dev/null; do umount "$_lm_peek" 2>/dev/null || break; done
+    rmdir "$_lm_peek" 2>/dev/null || true
+  fi
 fi
 export WL_COVERED_INODE_IMMUTABLE
 if [ "$WL_COVERED_INODE_IMMUTABLE" = unknown ]; then
