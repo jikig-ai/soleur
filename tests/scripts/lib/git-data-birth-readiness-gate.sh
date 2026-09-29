@@ -1143,6 +1143,10 @@ _git_data_rung2_fetch() {
         # public. A rejected bearer retries ONCE anonymously rather than reporting a refusal
         # that is really an authorization gap. A rate-limit body is excluded — dropping the
         # bearer makes a rate limit strictly worse.
+        # Deliberately UNSPLIT (unlike the verdict arms): this is a retry heuristic, not a
+        # verdict — a matcher rc >= 2 resolves to "not a rate-limit body" and drops the
+        # bearer once (bounded by _anon_retried), and the de-permissioned direction is the
+        # safe one for an instrument failure.
         local _rl_body
         _rl_body="$(sed '$d' <<< "$_resp")"
         if [[ "$_anon_retried" -eq 0 && ${#_auth[@]} -gt 0 ]] \
@@ -2069,9 +2073,10 @@ git_data_authorization_map_gate() {
   # authorized_keys", not "what the first write_files entry says".
   # CAPTURED STAGE BY STAGE, never `producer | grep -q` in the `if`: under pipefail an early
   # `grep -q` exit EPIPEs the producer, and this arm's non-negated `if` then reads a mid-pipe
-  # death as "no outside references" — the sweep failed OPEN on exactly that (#9210). Each
-  # stage is captured separately because pipefail reports only the RIGHTMOST non-zero member,
-  # so a stage's rc >= 2 (instrument failure) would be masked behind a later stage's rc 1.
+  # death as "no outside references" — the #9210 mechanism, applied to the fail-OPEN arm:
+  # where site 1 false-ABORTed, this sweep would silently skip its HOLD. Each stage is
+  # captured separately because pipefail reports only the RIGHTMOST non-zero member, so a
+  # stage's rc >= 2 (instrument failure) would be masked behind a later stage's rc 1.
   local _ak_outside _ak_rc=0
   _ak_outside="$(grep -nE '/home/git/\.ssh/authorized_keys' "$cloud_init")" || _ak_rc=$?
   if [[ "$_ak_rc" -lt 2 && -n "$_ak_outside" ]]; then
