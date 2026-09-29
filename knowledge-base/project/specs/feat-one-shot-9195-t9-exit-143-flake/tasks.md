@@ -35,7 +35,7 @@ Scope: one file — `apps/web-platform/infra/cloud-init-inngest-provision-unit.t
       `row` battery.
 - [x] 3.2 `bash apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` — full suite
       exits 0 with T9 green (docker required; ~350 s).
-- [ ] 3.3 Load check per the SIGPIPE-flake convention: repeated or parallel suite copies under
+- [x] 3.3 Load check per the SIGPIPE-flake convention: repeated or parallel suite copies under
       load show no T9 miss.
-- [ ] 3.4 Confirm AC7: `git diff --name-only origin/main...HEAD` shows the test file as the only
+- [x] 3.4 Confirm AC7: `git diff --name-only origin/main...HEAD` shows the test file as the only
       non-`knowledge-base/` path.
