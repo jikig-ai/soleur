@@ -2969,7 +2969,8 @@ fi
 # was an already-revoked GHCR read PAT. Note web-2's text does not match either arm in this file
 # even at HEAD, so it is running a ci-deploy.sh that predates main and will not emit this marker
 # at all; that host's stale-script and unprovisioned-ZOT_REGISTRY_URL state is #7103 B4, filed
-# separately and deliberately not widened into this PR.
+# separately and deliberately not widened into this PR. (#9151 later delivered the current
+# script to web-2 through terraform_data.deploy_pipeline_fix_web2 — the B4 follow-through.)
 #
 # Emitted AFTER the credential-read block and BEFORE the flock, so it reports credential state
 # at the point of USE rather than at parse time. Four fields, deliberately not six: `peers` is

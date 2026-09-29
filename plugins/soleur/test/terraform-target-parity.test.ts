@@ -74,7 +74,7 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-const TEST_FLOOR = 238;
+const TEST_FLOOR = 239;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,

@@ -88,23 +88,26 @@ cases=$((cases + 1)); run c6 "$IP $EC\n" "$IP $ED"$'\n'
 if [[ "$RC" -eq 0 ]] && grep -qF "none of type ecdsa-sha2-nistp256" "$S/out.pub"; then ok "C6: a non-ECDSA prior entry is reported as not comparable"
 else no "C6 (rc=$RC) $(<"$S/stderr")"; fi
 
-# Refusals: nothing written.
-refuse() { # <label> <scan-output> [env...]
-  local label="$1" out="$2"; shift 2
+# Refusals: nothing written AND the named arm's token reaches stderr — an earlier-arm
+# failure would produce the same rc+no-file signature while the checked refusal is dead.
+refuse() { # <label> <scan-output> <required-stderr-token> [env...]
+  local label="$1" out="$2" tok="$3"; shift 3
   cases=$((cases + 1))
-  rm -f "$S/out.pub"; : > "$S/known_hosts"
+  rm -f "$S/out.pub"; : > "$S/known_hosts"; : > "$S/stderr"
   env -u CI -u GITHUB_ACTIONS "$@" SSH_KEYSCAN="$S/keyscan" KNOWN_HOSTS="$S/known_hosts" \
-    SCAN_OUT="$out" SCAN_ARGV="$S/argv" bash "$SUT" "$IP" --out "$S/out.pub" >/dev/null 2>&1
+    SCAN_OUT="$out" SCAN_ARGV="$S/argv" bash "$SUT" "$IP" --out "$S/out.pub" >/dev/null 2>"$S/stderr"
   local rc=$?
-  if [[ "$rc" -ne 0 && ! -e "$S/out.pub" ]]; then ok "$label"; else no "$label (rc=$rc, file written: $([[ -e $S/out.pub ]] && echo yes || echo no))"; fi
+  if [[ "$rc" -ne 0 && ! -e "$S/out.pub" ]] && grep -qF "$tok" "$S/stderr"; then
+    ok "$label"
+  else no "$label (rc=$rc, file written: $([[ -e $S/out.pub ]] && echo yes || echo no), stderr: $(<"$S/stderr"))"; fi
 }
-refuse "R1: CI=true refuses (Guard 1 row 7: no keyscan in CI)" "$IP $EC\n" CI=true
-refuse "R2: GITHUB_ACTIONS=true refuses" "$IP $EC\n" GITHUB_ACTIONS=true
-refuse "R3: an empty scan refuses" ""
-refuse "R4: two scanned keys refuse" "$IP $EC\n$IP $EC2\n"
-refuse "R5: an ED25519-only answer refuses (STOP, plan R5)" "$IP $ED\n"
-refuse "R6: an answer for a different host refuses" "198.51.100.9 $EC\n"
-refuse "R7: a malformed key body refuses" "$IP ${EC}xx\n"
+refuse "R1: CI=true refuses (the #7226 no-keyscan-in-CI rule)" "$IP $EC\n" "refusing to run under CI" CI=true
+refuse "R2: GITHUB_ACTIONS=true refuses" "$IP $EC\n" "refusing to run under CI" GITHUB_ACTIONS=true
+refuse "R3: an empty scan refuses" "" "expected exactly one scanned key line"
+refuse "R4: two scanned keys refuse" "$IP $EC\n$IP $EC2\n" "expected exactly one scanned key line"
+refuse "R5: an ED25519-only answer refuses (STOP)" "$IP $ED\n" "not ecdsa-sha2-nistp256"
+refuse "R6: an answer for a different host refuses" "198.51.100.9 $EC\n" "keyscan answered for"
+refuse "R7: a malformed key body refuses" "$IP ${EC}xx\n" "pin writer's shape check"
 
 cases=$((cases + 1))
 rm -f "$S/argv" "$S/out.pub"

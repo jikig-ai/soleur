@@ -33,7 +33,8 @@
 # CF_ACCESS_CLIENT_SECRET (or CI_SSH_ACCESS_TOKEN_ID/SECRET fallback),
 # APP_DOMAIN_BASE (default soleur.ai); (BS): doppler CLI + prd_terraform creds.
 #
-# Exit: 0 parity; 1 drift/missing/transport failure (each named).
+# Exit: 0 parity; 1 drift/missing/transport failure (each named); 2 usage;
+# 78 trace refusal with a live credential set (#7797).
 set -uo pipefail
 
 # (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
@@ -55,14 +56,24 @@ while [[ $# -gt 0 ]]; do
     --self-test) SELFTEST=1; shift ;;
     --status-only) BS_ARM=0; shift ;;
     --bs-only) STATUS_ARM=0; shift ;;
-    --since) SINCE="$2"; shift 2 ;;
-    --limit) LIMIT="$2"; shift 2 ;;
+    --since) [[ $# -ge 2 ]] || { echo "--since needs a value" >&2; exit 2; }; SINCE="$2"; shift 2 ;;
+    --limit) [[ $# -ge 2 ]] || { echo "--limit needs a value" >&2; exit 2; }; LIMIT="$2"; shift 2 ;;
     --allow-missing-bs) ALLOW_MISSING_BS=1; shift ;;
-    --status-json-file) STATUS_JSON_FILE="$2"; shift 2 ;;
-    --bs-rows-file) BS_ROWS_FILE="$2"; shift 2 ;;
-    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --status-json-file) [[ $# -ge 2 ]] || { echo "--status-json-file needs a value" >&2; exit 2; }; STATUS_JSON_FILE="$2"; shift 2 ;;
+    --bs-rows-file) [[ $# -ge 2 ]] || { echo "--bs-rows-file needs a value" >&2; exit 2; }; BS_ROWS_FILE="$2"; shift 2 ;;
+    -h|--help) sed -n '2,37p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
+done
+
+# Fail-closed arg validation: both-arm-off would print PARITY having verified
+# nothing; a fixture path that cannot be read must FATAL, not skip its arm.
+if [[ "$STATUS_ARM" -eq 0 && "$BS_ARM" -eq 0 ]]; then
+  echo "FATAL: no arms enabled (--status-only and --bs-only are alternatives, not additions)" >&2; exit 2
+fi
+for f in "$STATUS_JSON_FILE" "$BS_ROWS_FILE"; do
+  [[ -z "$f" || ( -r "$f" && -s "$f" ) ]] \
+    || { echo "FATAL: fixture file missing or empty: $f" >&2; exit 2; }
 done
 
 # ── DERIVATIONS (shared by self-test and live) ───────────────────────────────────
@@ -113,8 +124,14 @@ fi
 REPO_SHA="$(sha256sum "$ROOT/apps/web-platform/infra/ci-deploy.sh" | cut -d' ' -f1)"
 echo "repo ci-deploy.sh sha256=$REPO_SHA"
 
-mapfile -t HOST_KEYS < <(parse_host_keys "$ROOT/apps/web-platform/infra/variables.tf") \
+# Capture THEN mapfile: a process-substitution producer's rc never reaches
+# mapfile, so `mapfile … < <(failing) || …` is a dead guard and an empty array
+# would silently sweep zero hosts behind a green PARITY.
+host_keys_out="$(parse_host_keys "$ROOT/apps/web-platform/infra/variables.tf")" \
   || { echo "FATAL: could not derive the web host set from var.web_hosts" >&2; exit 1; }
+mapfile -t HOST_KEYS <<<"$host_keys_out"
+[[ ${#HOST_KEYS[@]} -ge 2 ]] \
+  || { echo "FATAL: derived host set has ${#HOST_KEYS[@]} member(s), expected >= 2: $host_keys_out" >&2; exit 1; }
 assert_host_name_mapping_stable "$ROOT/apps/web-platform/infra/server.tf" || exit 1
 
 fail=0
@@ -125,12 +142,19 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
     body="$(<"$STATUS_JSON_FILE")"
   else
     BASE="${APP_DOMAIN_BASE:-soleur.ai}"
+    # The request carries bearer credentials — pin the authority and close the
+    # env channels that subvert egress/TLS (#7873/#7898 shape).
+    [[ "$BASE" =~ ^[a-z0-9.-]+$ ]] \
+      || { echo "FATAL: APP_DOMAIN_BASE is not a plain hostname ($BASE)" >&2; exit 2; }
+    unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS
     : "${WEBHOOK_DEPLOY_SECRET:?required for the web-1 status arm}"
     CF_ID="${CF_ACCESS_CLIENT_ID:-${CI_SSH_ACCESS_TOKEN_ID:-}}"
     CF_SEC="${CF_ACCESS_CLIENT_SECRET:-${CI_SSH_ACCESS_TOKEN_SECRET:-}}"
     : "${CF_ID:?CF Access client id required}" "${CF_SEC:?CF Access secret required}"
     HMAC="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
-    code="$(curl -s -o /tmp/deploy-status-parity.$$ -w '%{http_code}' --max-time 20 \
+    STATUS_TMP="$(mktemp)" || { echo "FATAL: mktemp failed" >&2; exit 1; }
+    code="$(curl -s -o "$STATUS_TMP" -w '%{http_code}' --max-time 20 \
+      --disable --noproxy '*' --proto '=https' \
       -H "X-Signature-256: sha256=${HMAC}" \
       -H "CF-Access-Client-Id: ${CF_ID}" -H "CF-Access-Client-Secret: ${CF_SEC}" \
       "https://deploy.${BASE}/hooks/deploy-status" 2>/dev/null || echo 000)"
@@ -138,11 +162,15 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
       echo "DRIFT(status): /hooks/deploy-status returned HTTP $code — web-1 parity cannot be read" >&2; fail=1
       body=""
     else
-      body="$(</tmp/deploy-status-parity.$$)"
+      body="$(<"$STATUS_TMP")"
     fi
-    rm -f /tmp/deploy-status-parity.$$
+    rm -f "$STATUS_TMP"
   fi
-  if [[ -n "${body:-}" ]]; then
+  if [[ -z "${body:-}" ]]; then
+    # A 200 with an empty body is a transport anomaly, not parity — fail closed
+    # rather than skip the arm.
+    echo "DRIFT(status): /hooks/deploy-status returned an empty body — web-1 parity cannot be read" >&2; fail=1
+  else
     live="$(printf '%s' "$body" | jq -r '.ci_deploy_sha256 // "ABSENT"')"
     hid="$(printf '%s' "$body" | jq -r '.host_id // "?"')"
     if [[ "$live" == "$REPO_SHA" ]]; then
@@ -168,7 +196,8 @@ if [[ "$BS_ARM" -eq 1 ]]; then
   # Newest sha per host_name: decode .raw (double-JSON), sort by dt desc, first per host.
   newest="$(printf '%s\n' "$rows" | jq -Rr '
     fromjson? // empty
-    | {dt: (.dt // ""), raw: (.raw | fromjson? // {})}
+    | {dt: (.dt // ""), raw: (try (.raw | fromjson?) catch {})}
+    | select(.raw | type == "object")
     | {dt: .dt, ident: (.raw.SYSLOG_IDENTIFIER // ""), host: (.raw.host_name // ""), sha: (try ((.raw.message // "") | capture("DEPLOY_SCRIPT_SHA sha256=(?<s>[0-9a-f]{64})") | .s) catch "")}
     # Field-isolate on the emitter, never the message alone (#6475): a CI job that
     # merely PRINTED "DEPLOY_SCRIPT_SHA" would otherwise count as a deploy row.

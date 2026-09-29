@@ -376,12 +376,13 @@ jobs:
           # web-2 PINNED host key — proves the full path (tunnel + bastion +
           # private-net forward + sshd auth + host-key pin) before Terraform plans
           # against it. A failure here is a broken route, not a slow one.
-          ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
+          timeout 30 ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
               -o StrictHostKeyChecking=yes \
               -o HostKeyAlias=web-2 \
               -o UserKnownHostsFile="$RUNNER_TEMP/web-2.known_hosts" \
               -o GlobalKnownHostsFile=/dev/null \
               -o HostKeyAlgorithms=ecdsa-sha2-nistp256 \
+              -o UpdateHostKeys=no \
               -i "$WEB2_KEYFILE" -p 2223 root@127.0.0.1 true \
             || { echo "::error::end-to-end web-2 SSH probe failed — the forward is up but web-2 refused (auth, host key, or sshd config)."; tail -n 50 /tmp/web2-forward.log >&2 || true; exit 1; }
           echo "end-to-end web-2 probe: root@web-2 ($WEB_2_PRIVATE) accepted the CI key and pinned host key"

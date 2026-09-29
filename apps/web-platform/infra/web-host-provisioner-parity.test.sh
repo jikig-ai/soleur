@@ -63,7 +63,7 @@
 #
 # Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
 # loudly rather than report a clean sweep of an empty set. The SWEEP-SIZE floors (FLOOR_RESOURCES
-# 18, FLOOR_DESTS 57, FLOOR_IDENTITY 5, FLOOR_SEEDED 40) are pinned at the EXACT baseline rather
+# 19, FLOOR_DESTS 75, FLOOR_IDENTITY 5, FLOOR_SEEDED 40) are pinned at the EXACT baseline rather
 # than baseline-minus-slack: any slack is a silent-erosion window, and removing a provisioner or a
 # delivered artifact is a Phase-5-class change that should cost a deliberate edit here. The §0
 # PARSE floors keep slack on purpose -- cloud-init.yml and the bake list legitimately shrink as
@@ -290,13 +290,15 @@ else:
 # to the SSH timeout on every merge-triggered apply.
 DIAL_W1 = r'host\s*=\s*hcloud_server\.web\["web-1"\]\.ipv4_address'
 DIAL_W2 = r'host\s*=\s*hcloud_server\.web\["web-2"\]\.ipv4_address'
-fanned = [n for n, b in ssh_resources.items() if re.search(r'^\s*for_each\s*=', b, re.M)]
+# `count` is the other fan-out/kill-switch meta-arg: `count = 0` silently disables the
+# sibling with every row green; `count = 2` doubles the dial. Swept together.
+fanned = [n for n, b in ssh_resources.items() if re.search(r'^\s*(for_each|count)\s*=', b, re.M)]
 unpinned = [n for n, b in ssh_resources.items()
             if not (re.search(DIAL_W1, b) or re.search(DIAL_W2, b))]
 if not fanned and not unpinned:
-    ok(f"1: all {len(ssh_resources)} SSH provisioners pin a committed web host (web-1|web-2), none for_each'd")
+    ok(f"1: all {len(ssh_resources)} SSH provisioners pin a committed web host (web-1|web-2), none for_each'd or count'd")
 else:
-    no(f"1: for_each'd={sorted(fanned)} not-web-1-or-web-2-pinned={sorted(unpinned)}. CI has TWO SSH "
+    no(f"1: fanned(for_each-or-count)={sorted(fanned)} not-web-1-or-web-2-pinned={sorted(unpinned)}. CI has TWO SSH "
        "routes (web-1 direct, web-2 via the web-1 bastion forward) and every resource is bare "
        "-target'ed, so a fan-out or a third host makes every merge-triggered apply dial a host "
        "it cannot reach and hang to the SSH timeout. See ADR-114's load-bearing constraint. If "
@@ -313,18 +315,43 @@ else:
 W2_DIALERS = [n for n, b in ssh_resources.items() if re.search(DIAL_W2, b)]
 w2_bad_key = [n for n in W2_DIALERS
               if not re.search(r'host_key\s*=\s*local\.web_2_ssh_host_key', ssh_resources[n])]
+# Credential-boundary token set, widened at review: a bare `doppler_token` covers
+# var.doppler_token, webhook_doppler_token_env AND the pre-encoded twin
+# soleur_doppler_token_env_b64; `DOPPLER_TOKEN` covers the env spellings.
+# `soleur-doppler-token` keeps the hyphenated .tmpl/path name. `doppler-token`
+# (bare hyphen) would false-positive on the legitimate `10-*-doppler-token.conf`
+# drop-ins, so it is deliberately absent — those files point units AT the
+# credential path; they do not carry the value.
 w2_creds = [n for n in W2_DIALERS if re.search(
-    r'webhook_doppler_token_env|SOLEUR_DOPPLER_TOKEN|soleur-doppler-token|push-infra-config',
+    r'doppler_token|DOPPLER_TOKEN|soleur-doppler-token|push-infra-config',
     ssh_resources[n])]
 w2_named = "deploy_pipeline_fix_web2" in W2_DIALERS
-if w2_named and not w2_bad_key and not w2_creds:
+if w2_named and not w2_bad_key and not w2_creds and len(W2_DIALERS) == 1:
     ok(f"1: web-2 sibling deploy_pipeline_fix_web2 pins local.web_2_ssh_host_key and carries no credential material "
-       f"({len(W2_DIALERS)} web-2 dialer(s))")
+       f"(exactly one web-2 dialer)")
 else:
     no(f"1: web-2 sibling class broken: deploy_pipeline_fix_web2 present={w2_named}, "
-       f"wrong-or-missing web_2 host_key={sorted(w2_bad_key)}, credential-material references={sorted(w2_creds)}. "
-       "The sibling must dial web['web-2'], pin local.web_2_ssh_host_key, and never reference "
-       "webhook_doppler_token_env / SOLEUR_DOPPLER_TOKEN / soleur-doppler-token / push-infra-config.")
+       f"web-2 dialers={sorted(W2_DIALERS)}, wrong-or-missing web_2 host_key={sorted(w2_bad_key)}, "
+       f"credential-material references={sorted(w2_creds)}. "
+       "The sibling must be the ONLY web-2 dialer, must pin local.web_2_ssh_host_key, and must "
+       "never reference the prd credential under any spelling "
+       "(var.doppler_token / webhook_doppler_token_env / soleur_doppler_token_env_b64 / "
+       "SOLEUR_DOPPLER_TOKEN / soleur-doppler-token / push-infra-config).")
+# The webhook channel twin: hooks.json rides the sibling's sanctioned base64 delivery
+# to /etc/webhook/hooks.json, and web-1 legitimately receives it. If the template's
+# argument map gains a doppler/token reference, a rendered credential reaches web-2
+# through a channel the block-level grep cannot see. The arg map itself may not
+# name one. (A `soleur_doppler_token_b64` PAYLOAD KEY inside hooks.json.tmpl is the
+# armed-but-unreachable mapping — a name, not a value; asserted separately.)
+_hooks_args = re.search(r'hooks_json\s*=\s*templatefile\([^,]+,\s*\{(.*?)\}', srv, re.S)
+hooks_injected = bool(_hooks_args and re.search(r'(?i)doppler|token\b',
+                                              re.sub(r'\bwebhook_deploy_secret\b', '',
+                                                     _hooks_args.group(1))))
+if _hooks_args is not None and not hooks_injected:
+    ok("1: hooks.json's templatefile arg map carries no credential reference beyond webhook_deploy_secret")
+else:
+    no(f"1: hooks_json templatefile args gained a credential reference — a rendered value would "
+       f"ride the sanctioned base64 delivery to web-2: {_hooks_args.group(1) if _hooks_args else 'hooks_json local not found'!r}")
 
 # ── §2. Destination sweep: the load-bearing invariant ────────────────────────────────
 # ASYMMETRY (the v2 defect, and the reason this is shaped the way it is). The two halves of
@@ -482,7 +509,7 @@ def _strip_heredoc_bodies(cmd):
 
 def destinations(body):
     """Every absolute path this provisioner delivers. Fail-closed by over-extraction."""
-    out, interpolated, unresolvable = set(), set(), set()
+    out, interpolated, unresolvable, script_args = set(), set(), set(), set()
     # `([^"]*)` not `([^"]+)`: `destination = ""` satisfies neither a 1+-char quoted capture nor
     # the non-quote-initial pattern below, so with `+` it evaded BOTH branches and left the sweep
     # in silence -- the exact class this pair exists to close (review F7, reproduced: guard rc=0).
@@ -505,7 +532,19 @@ def destinations(body):
     # heredoc payload line is not.
     for d in re.findall(r'^[ \t]*destination\s*=\s*([^"\s]\S*)', body, re.M):
         unresolvable.add(d)
-    for arr in re.findall(r'inline\s*=\s*\[(.*?)\n\s*\]', body, re.S):
+    # `script`/`scripts` provisioner args upload-and-run files whose bodies write
+    # arbitrary paths -- the inline sweep cannot see them. None is used in this
+    # fleet today; report them rather than let a new one slip under the sweep
+    # (review enumeration 2a). Reported through their own channel: they are not
+    # `destination =` attributes.
+    for s in re.findall(r'^[ \t]*scripts?\s*=\s*(\S+)', body, re.M):
+        script_args.add(s)
+    # The array terminator tolerates the same-line form `inline = ["a"]`: a `]` is the
+    # real terminator only when a newline, comma or `}` follows (a `]` inside a quoted
+    # string is followed by more string bytes). A trailing single-line inline in the
+    # LAST provisioner previously produced no `\n\s*\]` at all and left the sweep
+    # silently (review enumeration 2b).
+    for arr in re.findall(r'inline\s*=\s*\[(.*?)\](?=\s*[\n,}])', body, re.S):
         for raw in re.findall(r'"((?:[^"\\]|\\.)*)"', arr):
             cmd = _strip_heredoc_bodies(raw.replace('\\n', '\n').replace('\\"', '"'))
             for line in cmd.split('\n'):
@@ -553,7 +592,8 @@ def destinations(body):
                             out.add(path)
     return ({d for d in out if not d.startswith(TRANSIENT) and d.rstrip('/') != ''},
             {d for d in interpolated},
-            unresolvable)
+            unresolvable,
+            script_args)
 
 def _last_path(seg):
     """Last path-like argument of a command -- an absolute literal OR a $VAR/${VAR} token.
@@ -620,7 +660,11 @@ bs_vars = heredoc_scoped_vars(bootstrap)
 
 all_dests = {}
 for name, body in ssh_resources.items():
-    dests, interpolated, unresolvable = destinations(body)
+    dests, interpolated, unresolvable, script_args = destinations(body)
+    for d in sorted(script_args):
+        no(f"2: {name} uses remote-exec `{d.split('=')[0].strip()}` ({d}) -- an uploaded script "
+           "writes arbitrary paths that the destination sweep cannot see. Deliver through `file` "
+           "provisioners + `inline` remote-exec so every destination is swept.")
     for d in dests:
         all_dests.setdefault(d, set()).add(name)
     # The remedy deliberately does NOT offer ALLOWLIST. ALLOWLIST is keyed by the resolved
@@ -896,8 +940,9 @@ main_rc=$?
 # first, so tunnel.tf's prose mention of `connection { host }` is not a block. .tf.json files are
 # parsed as JSON and every `connection` object (or list of objects) at any depth is a block.
 #
-# Floors: at least 19 blocks (18 in server.tf incl. web_1_host_key_probe, 1 in ci-ssh-key.tf)
-# and at least 70 scanned files (79 tracked today). The local must be defined exactly once, from
+# Floors: at least 23 blocks (19 in server.tf incl. web_1_host_key_probe, 1 in
+# ci-ssh-key.tf, 3 in workspaces-luks.tf) and at least 70 scanned files. The local
+# must be defined exactly once, from
 # the committed pin. SOLEUR_TF_REPO overrides the repository root for the mutation battery, which
 # builds a scratch repository whose apps/web-platform/infra IS the SOLEUR_INFRA_DIR sandbox.
 TF_REPO="${SOLEUR_TF_REPO:-$ROOT}"
@@ -1025,7 +1070,7 @@ def is_winrm(b):
     return bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
 
 ssh_blocks = [(loc, b) for loc, b in blocks if not is_winrm(b)]
-FLOOR_BLOCKS = 23  # +1 #9151: terraform_data.deploy_pipeline_fix_web2; 22 = 19 server.tf + ci-ssh-key.tf + 2 workspaces-luks.tf + 1 other root (#8632/#8706/#9151 — measured)
+FLOOR_BLOCKS = 23  # +1 #9151: deploy_pipeline_fix_web2; measured 23 = 19 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123)
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
 else:
@@ -1089,6 +1134,19 @@ if not bad_web2:
 else:
     no("G2: web-2 connection block pins host_key to something other than "
        "local.web_2_ssh_host_key: " + ", ".join(bad_web2))
+
+# Web-2 dialer residence (review enumeration): §1's sibling census reads server.tf
+# only, so a terraform_data dialing web["web-2"] born in another .tf/.tf.json would
+# face host_key rules here but escape the credential-boundary and destination
+# checks entirely. Assert every web-2-dialing connection block lives in
+# apps/web-platform/infra/server.tf; §1 then pins it to the sibling alone.
+w2_elsewhere = [loc for loc, b in ssh_blocks
+                if dials_web_2(b) and not loc.startswith("apps/web-platform/infra/server.tf:")]
+if not w2_elsewhere:
+    ok("G2: every web-2-dialing connection block lives in apps/web-platform/infra/server.tf")
+else:
+    no("G2: web-2-dialing connection block(s) outside server.tf — they escape the "
+       "sibling-class credential/destination checks in §1: " + ", ".join(w2_elsewhere))
 
 # The local is the ONE place the committed pin enters Terraform: defined once, read from the
 # committed file, through one() (exactly one key line) and the anchored ECDSA-P256 regex().

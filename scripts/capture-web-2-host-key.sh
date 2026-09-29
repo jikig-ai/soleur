@@ -15,7 +15,7 @@
 # There is no login: ssh-keyscan only reads the host key the server offers.
 #
 # REFUSES under CI (CI or GITHUB_ACTIONS set): ssh-keyscan in a CI path is TOFU, which is exactly
-# what this pin replaces (Guard 1 row 7). Also refuses when:
+# what this pin replaces (the #7226 no-keyscan-in-CI rule). Also refuses when:
 #   * the keyscan does not return exactly one ecdsa-sha2-nistp256 key (web-2 without an
 #     ECDSA-P256 key breaks Terraform's Go client negotiation -- never a TOFU bypass);
 #   * the operator's known_hosts already holds an ECDSA key for this IP that DIFFERS from the
@@ -81,8 +81,11 @@ WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 # ── 1. scan (stderr carries the banner comments; keep it for the operator) ─────────────────
+# stderr is endpoint-influenced text reaching the operator's terminal: strip C0+DEL AND the
+# Unicode line/paragraph separators (U+2028/U+2029, bytes e2 80 a8/a9) so a hostile banner
+# cannot inject a fake newline.
 "$KEYSCAN" -T 10 -t ecdsa "$IP" > "$WORK/scan" 2> "$WORK/scan.err" \
-  || die "ssh-keyscan failed (exit $?). Is this egress in ADMIN_IPS? $(tr -d '\000-\010\013-\037\177' < "$WORK/scan.err" | tail -3)"
+  || die "ssh-keyscan failed (exit $?). Is this egress in ADMIN_IPS? $(sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g' "$WORK/scan.err" | tr -d '\000-\010\013-\037\177' | tail -3)"
 awk '!/^#/ && NF' "$WORK/scan" > "$WORK/lines"
 n="$(wc -l < "$WORK/lines" | tr -d ' ')"
 [[ "$n" -eq 1 ]] || die "expected exactly one scanned key line, got $n (no answer from $IP:22, or an unexpected response)"
@@ -129,9 +132,10 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$WORK/pin"
 assert_fixture_dir "$OUT"
 mkdir -p "$(dirname "$OUT")"
-cp "$WORK/pin" "$OUT.tmp.$$" && mv -f "$OUT.tmp.$$" "$OUT"
+OUT_TMP="$(mktemp "$(dirname "$OUT")/.pin.XXXXXX")"   # no predictable $$-suffixed write target
+cp "$WORK/pin" "$OUT_TMP" && mv -f "$OUT_TMP" "$OUT"
 
 echo "wrote $OUT"
 echo "  fingerprint: $FP"
 echo "  cross-check: $xcheck"
-echo "Record the fingerprint and the capture vantage in the PR body (AC9), then commit the file."
+echo "Record the fingerprint and the capture vantage in the PR body, then commit the file."

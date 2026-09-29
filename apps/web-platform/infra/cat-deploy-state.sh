@@ -13,11 +13,11 @@ set -euo pipefail
 #   {"exit_code":-3,"reason":"corrupt_state"}   -- state file unparseable
 # Exit-code protocol defined in ci-deploy.sh header (#2205).
 
-# Identify the host that answered this read (#6425). deploy.soleur.ai is a Cloudflare
-# Tunnel hostname and Cloudflare selects a connector per edge colo, so a read of
-# /hooks/deploy-status answers from whichever connector the caller's colo picked —
-# NOT necessarily the host the caller meant. Without this field a wrong-host answer is
-# indistinguishable from a correct one, which is exactly what made #6425 cost 16h.
+# Identify the host that answered this read (#6425). Today the `deploy.` ingress is
+# origin-relative to web-1's private IP (#6594), so every status read already answers
+# from web-1 — the field remains the assertion anchor (AC13): if a future ingress change
+# ever routes the read to a different host, host_id is what makes the wrong answer
+# distinguishable from a correct one, which is exactly what made #6425 cost 16h.
 # Resolved from the Hetzner metadata service (the hcloud_server id — the SAME value
 # terraform knows, so AC13 can assert identity against a TF-known value rather than
 # self-consistency), with /etc/machine-id as a reboot-stable fallback.

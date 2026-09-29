@@ -126,10 +126,43 @@ run --status-json-file "$S/status.json" --bs-rows-file "$S/rows.json"
 if [[ "$RC" -eq 0 ]]; then ok "C9: malformed rows are skipped, valid rows still adjudicated"
 else no "C9: malformed rows (rc=$RC) $(<"$S/err")"; fi
 
+# C10: both arm-selectors off is a usage error — never a vacuous PARITY.
+cases=$((cases + 1))
+run --status-only --bs-only
+if [[ "$RC" -eq 2 && "$(<"$S/err")" == *"no arms enabled"* ]]; then ok "C10: --status-only + --bs-only refuses (exit 2)"
+else no "C10: both-arms-off (rc=$RC) $(<"$S/out") $(<"$S/err")"; fi
+
+# C11: a missing fixture file is FATAL (exit 2), not a skipped arm.
+cases=$((cases + 1))
+run --status-json-file "$S/does-not-exist.json"
+if [[ "$RC" -eq 2 && "$(<"$S/err")" == *"missing or empty"* ]]; then ok "C11: missing --status-json-file refuses (exit 2)"
+else no "C11: missing fixture (rc=$RC) $(<"$S/err")"; fi
+
+# C12: an EMPTY --bs-rows-file is FATAL too (an empty rows file would sweep zero
+# evidence behind whatever the other arm said).
+cases=$((cases + 1))
+mk_status "$REPO_SHA" "hetzner-1"; : > "$S/empty-rows.json"
+run --status-json-file "$S/status.json" --bs-rows-file "$S/empty-rows.json"
+if [[ "$RC" -eq 2 && "$(<"$S/err")" == *"missing or empty"* ]]; then ok "C12: empty --bs-rows-file refuses (exit 2)"
+else no "C12: empty rows fixture (rc=$RC) $(<"$S/err")"; fi
+
+# C13: a .raw that decodes to a NON-OBJECT (number) must not abort the jq stream —
+# rows before AND after it are still adjudicated (the poison row sits between two
+# valid rows, newest for its host is the later one).
+cases=$((cases + 1))
+mk_status "$REPO_SHA" "hetzner-1"; mk_rows
+add_row "soleur-web-platform" "$OLD_SHA"  "ci-deploy" "2026-09-29 09:00:00.000"
+printf '{"dt":"2026-09-29 12:00:00.000","raw":"5"}\n' >> "$S/rows.json"
+add_row "soleur-web-platform" "$REPO_SHA" "ci-deploy" "2026-09-30 10:00:00.000"
+add_row "soleur-web-2"         "$REPO_SHA" "ci-deploy" "2026-09-30 10:01:00.000"
+run --status-json-file "$S/status.json" --bs-rows-file "$S/rows.json"
+if [[ "$RC" -eq 0 ]]; then ok "C13: a non-object .raw is skipped, not a stream abort"
+else no "C13: non-object raw (rc=$RC) $(<"$S/err")"; fi
+
 if (( pass + fail != cases )); then
   printf '[FATAL] accounting: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
 fi
-FLOOR=11
+FLOOR=15
 if (( cases < FLOOR )); then
   printf '[FATAL] anti-vacuity floor: %d cases ran, expected >= %d\n' "$cases" "$FLOOR" >&2; exit 1
 fi
