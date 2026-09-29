@@ -73,6 +73,7 @@ export interface TokenCheckResult {
 // Token-holder-controlled display names can smuggle line separators into
 // log viewers — strip C0/C1 controls, DEL, and Unicode line separators.
 function sanitizeHolder(name: string): string {
+  // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
   return name.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "");
 }
 
