@@ -199,17 +199,18 @@ fi
 # =====================================================================
 # T2 — two-sided cap validation (AC6)
 # =====================================================================
-# validate_caps <scope_high> <scope_max> <fleet_high> <fleet_max>
+# validate_caps <scope_high> <scope_max> <fleet_high> <fleet_max> <scope_tasks> <fleet_tasks>
 GiB() { echo $(( $1 * 1024 * 1024 * 1024 )); }
 OK_SH=$(GiB 6); OK_SM=$(GiB 7); OK_FH=$(GiB 16); OK_FM=$(GiB 20)
+OK_ST=4096; OK_FT=24576
 
-if validate_caps "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" >/dev/null 2>&1; then
+if validate_caps "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT" >/dev/null 2>&1; then
   pass "T2 shipped cap set accepted"
 else
   fail "T2 shipped cap set REJECTED by validate_caps — the hook would refuse on every run"
 fi
 
-t2_reject() { # <label> <sh> <sm> <fh> <fm>
+t2_reject() { # <label> <sh> <sm> <fh> <fm> <st> <ft>
   local label=$1; shift
   if validate_caps "$@" >/dev/null 2>&1; then
     fail "T2 accepted out-of-range case: $label"
@@ -217,22 +218,39 @@ t2_reject() { # <label> <sh> <sm> <fh> <fm>
     pass "T2 rejected $label"
   fi
 }
-t2_reject "scope_max below 3GiB floor"        "$OK_SH" "$(GiB 2)" "$OK_FH" "$OK_FM"
-t2_reject "scope_max above 8GiB ceiling"      "$OK_SH" "$(GiB 9)" "$OK_FH" "$OK_FM"
-t2_reject "scope_high below 5GiB floor"       "$(GiB 4)" "$OK_SM" "$OK_FH" "$OK_FM"
-t2_reject "scope_high >= scope_max"           "$OK_SM" "$OK_SM" "$OK_FH" "$OK_FM"
-t2_reject "fleet_max below 10GiB floor"       "$OK_SH" "$OK_SM" "$OK_FH" "$(GiB 9)"
-t2_reject "fleet_max above 24GiB ceiling"     "$OK_SH" "$OK_SM" "$OK_FH" "$(GiB 25)"
-t2_reject "fleet_high below 14GiB floor"      "$OK_SH" "$OK_SM" "$(GiB 13)" "$OK_FM"
-t2_reject "fleet_high >= fleet_max"           "$OK_SH" "$OK_SM" "$OK_FM" "$OK_FM"
-t2_reject "zero scope_max (the _BYTES=0 kill)" "$OK_SH" "0" "$OK_FH" "$OK_FM"
-t2_reject "non-numeric scope_max"             "$OK_SH" "abc" "$OK_FH" "$OK_FM"
+t2_reject "scope_max below 3GiB floor"        "$OK_SH" "$(GiB 2)" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "scope_max above 8GiB ceiling"      "$OK_SH" "$(GiB 9)" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "scope_high below 5GiB floor"       "$(GiB 4)" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "scope_high >= scope_max"           "$OK_SM" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "fleet_max below 10GiB floor"       "$OK_SH" "$OK_SM" "$OK_FH" "$(GiB 9)" "$OK_ST" "$OK_FT"
+t2_reject "fleet_max above 24GiB ceiling"     "$OK_SH" "$OK_SM" "$OK_FH" "$(GiB 25)" "$OK_ST" "$OK_FT"
+t2_reject "fleet_high below 14GiB floor"      "$OK_SH" "$OK_SM" "$(GiB 13)" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "fleet_high >= fleet_max"           "$OK_SH" "$OK_SM" "$OK_FM" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "zero scope_max (the _BYTES=0 kill)" "$OK_SH" "0" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "non-numeric scope_max"             "$OK_SH" "abc" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "scope_tasks below 2048 floor"      "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "1024" "$OK_FT"
+t2_reject "scope_tasks above 12288 ceiling"   "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "16384" "$OK_FT"
+t2_reject "fleet_tasks below 8192 floor"      "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "4096"
+t2_reject "fleet_tasks above 32768 ceiling"   "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "40000"
+t2_reject "fleet_tasks below 4x scope_tasks"  "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "8192" "16384"
+t2_reject "zero scope_tasks (the task kill)"  "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "0" "$OK_FT"
 
 # The band must not admit the values D1 explicitly rejected as too tight.
-if validate_caps "$(GiB 4)" "$(GiB 6)" "$(GiB 12)" "$OK_FM" >/dev/null 2>&1; then
+if validate_caps "$(GiB 4)" "$(GiB 6)" "$(GiB 12)" "$OK_FM" "$OK_ST" "$OK_FT" >/dev/null 2>&1; then
   fail "T2 band admits the 4GiB scope-high / 12GiB fleet-high values D1 rejected as below routine load"
 else
   pass "T2 band excludes the plan-rejected 4GiB/12GiB values"
+fi
+
+# The TasksMax wiring must reach every systemd call that shapes the scope —
+# a bare "TasksMax" grep is satisfied by the constants block, so anchor on the
+# busctl property-list form `"TasksMax" "t" "$SCOPE_TASKS_MAX"` / `$FLEET_…`.
+_scope_tasks_props=$(grep -c '"TasksMax" "t" "$SCOPE_TASKS_MAX"' "$HOOK")
+_fleet_tasks_props=$(grep -c '"TasksMax" "t" "$FLEET_TASKS_MAX"' "$HOOK")
+if [[ "$_scope_tasks_props" -eq 3 && "$_fleet_tasks_props" -eq 1 ]]; then
+  pass "T2 TasksMax reaches both StartTransientUnit calls, the re-entry refresh, and the fleet slice call"
+else
+  fail "T2 TasksMax property wiring: scope $_scope_tasks_props (want 3), fleet $_fleet_tasks_props (want 1)"
 fi
 
 # =====================================================================
