@@ -25,15 +25,21 @@
 
 locals {
   # Pinned via Phase 0.3 — bump in this PR diff (visibility preserved).
-  # Source: https://github.com/inngest/inngest/releases/tag/v1.19.4
-  inngest_cli_version = "v1.19.4"
-  inngest_cli_sha256  = "d023b26659275fdbe9348b6518077ce1ea9906a449898e49ddced91bfc6fd757"
+  # Freshness owner (#7463): the analysis of record is inngest-cli.provenance.md
+  # (## Bump procedure); enforcement is inngest-cli-staleness.test.sh (per-PR) and
+  # detection is the `Detect inngest CLI pin drift` step in rule-audit.yml (1st/15th
+  # poll). Nothing auto-writes this pin — the monitor files an issue and a human
+  # opens the CI-gated PR.
+  # Source: https://github.com/inngest/inngest/releases/tag/v1.45.1
+  inngest_cli_version = "v1.45.1"
+  inngest_cli_sha256  = "52c07d837088a6712acd15b8edd4191f961b69884541f468a3c1b9bb4348a4e5"
   # #6178: the amd64 SHA above is the default (co-located web host + amd64 dedicated host).
   # The dedicated inngest host is DUAL-ARCH (local.inngest_arch, inngest-host.tf): on an arm64
   # (cax*) type it downloads the linux_arm64 tarball and verifies against the arm64 checksum
-  # below (the amd64 SHA would fail that verify). Both from the same signed checksums.txt v1.19.4:
-  #   https://github.com/inngest/inngest/releases/download/v1.19.4/checksums.txt
-  inngest_cli_sha256_arm64 = "30a3f01474cb2266c24545cdc83930baeae14232d629c87aeeb8f21118948199"
+  # below (the amd64 SHA would fail that verify). Both from the same release-shipped
+  # checksums.txt v1.45.1 (a plain sha256sum manifest, not GPG-signed):
+  #   https://github.com/inngest/inngest/releases/download/v1.45.1/checksums.txt
+  inngest_cli_sha256_arm64 = "58db59dbe39afd7472c7c59bd7cc9f82f5da5810dabdac40b2bde3a8338aa7b5"
 }
 
 # ---------------- Inngest signing/event keys (random) ----------------
@@ -198,7 +204,7 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # and a doppler_secret would clobber the real value on first create (ignore_changes
 # only engages after the resource is in state). Rotation: rotate the project DB
 # password in the Supabase dashboard → re-set INNGEST_POSTGRES_URI in Doppler prd
-# (stdin, never argv). Live-verified: inngest v1.19.4 connects + migrates on :5432
+# (stdin, never argv). Live-verified: inngest v1.45.1 connects + migrates on :5432
 # (runbook § Durable backend, verdict 0.5).
 #
 # SECURITY POSTURE — RLS lockdown (2026-06-29, ADR-030 I8). This project's public

@@ -2700,7 +2700,7 @@ verify_inngest_health() {
   # server's --poll-interval self-heal). Best-effort poll /v0/gql for a
   # re-armed cron trigger; if none appears, log an advisory and STILL succeed
   # (the Sentry cron monitors are the real safety net). GET /v1/functions is an
-  # unregistered 404 in inngest v1.19.4 (#5520); the GraphQL `functions` field
+  # unregistered 404 in inngest v1.45.1 (#5520); the GraphQL `functions` field
   # on /v0/gql returns triggers as {type,value} objects — cron triggers carry
   # type="CRON". Dependency-free substring match on `"type":"CRON"` in the
   # minified GQL response (jq is not a host dependency).

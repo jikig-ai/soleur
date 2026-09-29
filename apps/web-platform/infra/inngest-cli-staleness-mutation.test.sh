@@ -105,9 +105,21 @@ m_n() { sed -i "s|$AMD|__T__|; s|$ARM|$AMD|; s|__T__|$ARM|" "$1/$TF" "$1/$PROV";
 # previous-pin section rotated to the superseded one AND follower claims re-stamped.
 # This is the SANCTIONED rollback path and must stay GREEN offline (plan mutation row 8):
 # only the PR-B upstream poll knows v_prev is not the latest.
+# Section-scoped: an unscoped second pass would re-match the values just written
+# into '## Current pin' (the previous pin's shas are exactly what a rollback writes
+# there), double-swapping it back.
 m_o() {
-  sed -i "s|$VER|$PVER|g; s|$AMD|$PAMD|g; s|$ARM|$PARM|g" "$1/$TF" "$1/$PROV"
-  sed -i "s|$PAMD|$AMD|g; s|$PARM|$ARM|g" "$1/$PROV"          # rotate previous->superseded
+  sed -i "s|$VER|$PVER|g; s|$AMD|$PAMD|g; s|$ARM|$PARM|g" "$1/$TF"
+  sed -i '/^## Current pin/,/^## /{
+    s|'"$VER"'|'"$PVER"'|g
+    s|'"$AMD"'|'"$PAMD"'|g
+    s|'"$ARM"'|'"$PARM"'|g
+  }' "$1/$PROV"
+  sed -i '/^## Previous known-good pin/,/^## /{
+    s|'"$PAMD"'|'"$AMD"'|g
+    s|'"$PARM"'|'"$ARM"'|g
+  }' "$1/$PROV"
+  sed -i 's#Pinned version | \*\*'"$VER"'\*\*#Pinned version | **'"$PVER"'**#' "$1/$PROV"
   sed -i "s|inngest $VER|inngest $PVER|g; s|inngest ($VER|inngest ($PVER|g" \
       "$1/inngest-bootstrap.sh" "$1/inngest-inventory.sh" "$1/inngest-enumerate-reminders.sh" \
       "$1/inngest-doublefire-probe.sh" "$1/inngest-wiped-volume-verify.sh" "$1/ci-deploy.sh" \
@@ -123,25 +135,25 @@ m_r() { sed -i "/^| *arm64 *|/d" "$1/$PROV"; }                                  
 m_s() { sed -i "s|$VER|$PVER|g; s|$AMD|$PAMD|g; s|$ARM|$PARM|g" "$1/$TF" "$1/$PROV"; }
 
 echo "mutations (fresh sandbox copy each; expected rc AND the named check are both asserted):"
-run_mutation a "amd64 sha changed in .tf only"                    10 "sidecar amd64 checksum"
-run_mutation b "version bumped, shas left stale"                10 "sidecar current-pin version"
-run_mutation c "capture date back-dated past MAX_AGE_DAYS"      10 "analysis is"
-run_mutation d "shas swapped in the .tf ONLY"                   10 "sidecar amd64 checksum"
-run_mutation e "one sha pasted into BOTH slots"                 10 "IDENTICAL"
-run_mutation f "the real pin commented out (decoy guard)"       10 "expected exactly 1"
-run_mutation g "capture date in the FUTURE"                     10 "FUTURE"
-run_mutation h "capture date unparseable garbage"               10 "could not parse"
-run_mutation i "a SECOND active version assignment"             10 "expected exactly 1"
-run_mutation j "version-scoped claim reverted"                  10 "name a version we no longer"
-run_mutation k "pass()+fail() neutered (dispatch layer)"         2 ""
-run_mutation l "a follower file removed"                        10 "follower file missing"
-run_mutation m "fail() ALONE neutered (gate cannot redden)"      2 ""
-run_mutation n "coherent BOTH-file arch swap (offline gap)"      0 ""
-run_mutation o "FULLY coherent rollback to previous pin"         0 ""
-run_mutation p "claim REWORDED so the regex cannot see it"      10 "0 version-scoped claims"
-run_mutation q "capture date SHADOWED by a '## Bump log'"        2 ""
-run_mutation r "arm64 row dropped from the sidecar"             10 "sidecar arm64 checksum"
-run_mutation s "downgrade WITHOUT rotating previous-pin"        10 "SAME"
+run_mutation a "amd64 sha changed in .tf only"                    10 "sidecar amd64 checksum" m_a
+run_mutation b "version bumped, shas left stale"                10 "sidecar current-pin version" m_b
+run_mutation c "capture date back-dated past MAX_AGE_DAYS"      10 "analysis is" m_c
+run_mutation d "shas swapped in the .tf ONLY"                   10 "sidecar amd64 checksum" m_d
+run_mutation e "one sha pasted into BOTH slots"                 10 "IDENTICAL" m_e
+run_mutation f "the real pin commented out (decoy guard)"       10 "expected exactly 1" m_f
+run_mutation g "capture date in the FUTURE"                     10 "FUTURE" m_g
+run_mutation h "capture date unparseable garbage"               10 "could not parse" m_h
+run_mutation i "a SECOND active version assignment"             10 "expected exactly 1" m_i
+run_mutation j "version-scoped claim reverted"                  10 "name a version we no longer" m_j
+run_mutation k "pass()+fail() neutered (dispatch layer)"         2 "" m_k
+run_mutation l "a follower file removed"                        10 "follower file missing" m_l
+run_mutation m "fail() ALONE neutered (gate cannot redden)"      2 "" m_m
+run_mutation n "coherent BOTH-file arch swap (offline gap)"      0 "" m_n
+run_mutation o "FULLY coherent rollback to previous pin"         0 "" m_o
+run_mutation p "claim REWORDED so the regex cannot see it"      10 "0 version-scoped claims" m_p
+run_mutation q "capture date SHADOWED by a '## Bump log'"        2 "" m_q
+run_mutation r "arm64 row dropped from the sidecar"             10 "sidecar arm64 checksum" m_r
+run_mutation s "downgrade WITHOUT rotating previous-pin"        10 "SAME" m_s
 
 echo
 echo "RESULT: $RED/$N mutations behaved as expected, $GREENFAIL did not"

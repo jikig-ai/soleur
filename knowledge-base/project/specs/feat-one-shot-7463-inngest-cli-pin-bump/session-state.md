@@ -23,3 +23,14 @@
 
 ### Follow-ups prescribed at PR-A merge time
 - File the `inngest pause` micro-issue and the `action-required`+`follow-through` apply-window tracker.
+
+## Work Phase (PR-A)
+
+- Status: implementation complete locally; pre-commit test-all --affected queue still draining at last check.
+- Phase 0 re-spike: DONE against real v1.45.1 binary + SDK 3.54.2 harness (respike evidence committed). Corrected delta: v1.19.4 = position 30 of 242 stable tags → 29 releases behind. SDK registration needed INNGEST_BASE_URL pointed at the server + matching signing key; server-side `Opts.Poll` is never set in `start` mode on either version (loop re-pings only errored apps).
+- Phase 1 RED→GREEN: gate exits 2 without sidecar; after sidecar landed, 17/0 green; mutation battery 19/19 (incl. 2 declared stay-green boundaries).
+- Phase 2: inngest.tf bumped (v1.45.1 + both arch checksums, one checksums.txt), sidecar written, follower claims re-stamped, userdata-budget stub sha updated.
+- Phase 3: ADR-100 amendment appended; model.c4 gains `inngestReleases` #external + two edges; views.c4 context+containers include lists updated; spec.c4 unchanged (external tag already exists).
+- Harness cleanup: rspike-* containers + node/inngest processes reaped; /var/tmp + /tmp scratch removed.
+- Local verification done: 8 infra suites green, c4-render.test.ts 21 pass, inngest-userdata-budget 19568<32768, terraform fmt clean.
+- No `systemctl start|restart` lines added under infra → ci-deploy.test.sh not required by the repo-global rule.

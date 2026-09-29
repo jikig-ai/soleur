@@ -5,7 +5,7 @@
 # startedAt}...]} on stdout, paginates on pageInfo.hasNextPage, and FAILS LOUD
 # (non-zero + stderr) on a non-array `.data.runs.edges` — never a false-clean
 # "no double-fire". `scheduled_tick` must appear nowhere (does not exist in
-# v1.19.4).
+# v1.45.1).
 #
 # Test seam: INNGEST_DOUBLEFIRE_RUNS_FIXTURE (a dir with page-N.json runs
 # responses) short-circuits the curl. No network, no inngest, no root.
@@ -23,7 +23,7 @@ assert_eq() {
   else echo "  FAIL: $desc"; echo "    expected: $expected"; echo "    actual:   $actual"; FAIL=$((FAIL + 1)); fi
 }
 
-# Build a v1.19.4-shaped runs page.
+# Build a v1.45.1-shaped runs page.
 # Args: <hasNextPage> <endCursor> <edges-json> [<totalCount>]
 #
 # totalCount is the SERVER's count of runs matching the filter across ALL pages — it is
@@ -145,7 +145,7 @@ test_query_shape() {
   if grep -q 'STARTED_AT' "$TARGET"; then echo "  PASS: timeField STARTED_AT present"; PASS=$((PASS + 1));
   else echo "  FAIL: STARTED_AT not referenced"; FAIL=$((FAIL + 1)); fi
   if grep -q 'scheduled_tick' "$TARGET"; then
-    echo "  FAIL: scheduled_tick must appear nowhere (does not exist in v1.19.4)"; FAIL=$((FAIL + 1));
+    echo "  FAIL: scheduled_tick must appear nowhere (does not exist in v1.45.1)"; FAIL=$((FAIL + 1));
   else echo "  PASS: no scheduled_tick reference"; PASS=$((PASS + 1)); fi
 }
 

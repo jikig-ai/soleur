@@ -1339,7 +1339,7 @@ async function persistFailure(
 // throw (five steps have no try/catch, and a synchronous throw lands here too),
 // the `finish` timeout, or an Inngest-level cancel. The Today card would stay on
 // "Working" and nobody would be paged. Inngest reports these through two
-// DIFFERENT signals, measured on our server version (v1.19.4):
+// DIFFERENT signals, measured on our server version (v1.45.1):
 //   - a failure past retries fires `onFailure` (`inngest/function.failed`);
 //   - the finish timeout AND an API/dashboard cancel fire only
 //     `inngest/function.cancelled` — `onFailure` never sees them.
@@ -1368,7 +1368,7 @@ const CANCELLED_EVENT = "inngest/function.cancelled";
 const INVALID_ENVELOPE_MESSAGE = "agent-on-spawn-settle: lifecycle envelope failed validation";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// Inngest run ids are ULIDs (measured on v1.19.4; ADR-251). Required: the settle
+// Inngest run ids are ULIDs (measured on v1.45.1; ADR-251). Required: the settle
 // function's idempotency key is the run id, so a missing one would collapse
 // every such settle onto one key.
 const RUN_ID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -1450,7 +1450,7 @@ export async function agentOnSpawnRequestedOnFailure({ event, step }: OnFailureA
   const data = event.data ?? {};
   const error = asRecord(data.error) ?? {};
   // The failure envelope's own `id` equals the failed run's id (measured on
-  // v1.19.4), so it backs up a missing `data.run_id`.
+  // v1.45.1), so it backs up a missing `data.run_id`.
   const runId = asString(data.run_id) ?? asString(event.id);
   try {
     await step.sendEvent("forward-orphan", {

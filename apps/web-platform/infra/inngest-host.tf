@@ -1,7 +1,7 @@
 # #6178 (ADR-100) — the dedicated single-host Inngest singleton control plane.
 #
 # One dedicated Hetzner host running the self-hosted OSS Inngest server
-# (`inngest start`, pinned v1.19.4) as a systemd unit with host-local Redis (AOF
+# (`inngest start`, pinned v1.45.1) as a systemd unit with host-local Redis (AOF
 # on a block volume) + a Postgres backend, on the existing
 # private network (network.tf) at 10.0.1.40. EXTRACTED from the co-located web
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:

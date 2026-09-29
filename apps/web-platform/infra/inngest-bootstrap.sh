@@ -1510,7 +1510,7 @@ fi
 #   --postgres-conn-max-idle-time 1  close idle conns after 1 MINUTE so they RELEASE their
 #                                 Supavisor session (this is the release lever). ⚠ UNIT TRAP:
 #                                 this IntFlag is MINUTES (default 5), NOT seconds — verified
-#                                 against inngest v1.19.4 cmd/start; the plan's "SECS=30" was
+#                                 against inngest v1.45.1 cmd/start; the plan's "SECS=30" was
 #                                 mis-labelled (30 would mean 30 MINUTES — worse than default).
 # default_pool_size stays 30 (the #5562 30→15 revert is SUPERSEDED — its premise "cap holds
 # total under 15" is falsified by the per-pool model; a 15-slot upstream while inngest bursts

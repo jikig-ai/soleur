@@ -1779,3 +1779,54 @@ that means for this ADR. It amends no Decision.
   reaches the host only at its next `inngest-host-replace` plus `op=resume`, and a provisioned
   host's reboot does not re-provision it. Recovery is never an SSH step or a latch delete;
   re-provisioning is a replace.
+
+## Amendment (2026-09-29, Ref #7463/#7308) — the CLI pin gains a named freshness owner; Phase-0 findings re-spiked against v1.45.1
+
+### CLI pin freshness
+
+The `inngest_cli_version` / `inngest_cli_sha256{,_arm64}` pin in `inngest.tf` sat at
+v1.19.4 for ~4.5 months (29 stable releases behind `releases/latest` at bump time)
+with no owner — the gap #7308 named and #7463 fixed. The mechanism now has all three
+halves, matching the zot-pin precedent (#7282):
+
+- **Detection** — the `Detect inngest CLI pin drift` step on `.github/workflows/rule-audit.yml`
+  (1st + 15th) computes the tag-ordered release delta and pin age, and files one
+  idempotent issue labeled `inngest-pin-drift` + `action-required` at >= 5 releases
+  or >= 45 days.
+- **Enforcement** — `apps/web-platform/infra/inngest-cli-staleness.test.sh` (offline,
+  per-PR, deploy-script-tests): arch-keyed tf<->sidecar coherence, exactly-once pin
+  form, single-source checksums.txt, 60-day capture-age backstop, previous-pin
+  rollback rows, version-scoped follower-claim register. Mutation battery:
+  `inngest-cli-staleness-mutation.test.sh` (19 cases, incl. the two declared
+  stay-green boundaries: a coherent two-file arch swap and a fully coherent
+  rollback are not offline-detectable — the poll is the network half).
+- **Analysis of record** — `apps/web-platform/infra/inngest-cli.provenance.md`
+  (same sidecar shape as `zot-image.provenance.md`), refreshed at every bump by its
+  `## Bump procedure`, which prescribes re-measuring rather than re-wording.
+- **Nothing auto-writes the pin.** The monitor files an issue; a human/agent opens
+  the CI-gated PR. This is deliberate, not an unfinished follow-up: an auto-bump
+  would land a scheduler upgrade without the re-spike the bump procedure requires.
+- Liveness probe for operators: `apps/web-platform/infra/inngest-cli-pin-probe.sh`
+  prints `PINNED=`, `CAPTURE_DATE=`, `VERDICT=` in under a second, offline.
+
+### Phase-0 findings re-spiked against v1.45.1 (evidence: `knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`)
+
+| Finding | Verdict on v1.45.1 |
+|---|---|
+| Route-once fan-out (multi `--sdk-url`, same app id) | **HOLDS** — one app, last-writer URL, 4/4 events on one instance |
+| `runs(filter: RunsFilterV2!)` enumeration + `startedAt` | **HOLDS** — and `cronSchedule` is now POPULATED on run nodes (was null on v1.19.4). Probes still bucket on `startedAt`; the invariant never depended on the field |
+| Postgres swap with retained Redis → FLUSHALL mandate | **HOLDS** — identical replay observed: stale continuation completed against the empty backend, cron fired from the stale Redis schedule |
+| Flag surface the repo passes | **HOLDS** — `start --help` diff is additions-only (`--connect-*-grpc-*`); `--postgres-conn-max-idle-time` is MINUTES per `cmd/start` source at tag, `signkey-prod-` strip still required |
+| `inngest pause` drain verb | **ABSENT on both endpoints** — the `|| warn`-guarded drain call in `inngest-bootstrap.sh` was dead on v1.19.4 too; not an upgrade regression (follow-up filed) |
+| New listeners | **CHANGED** — v1.45.1 binds `*:50052`/`*:50053`/`*:8289` (connect gateway/executor) wildcard; the `--connect-*-grpc-ip` flags are ADVERTISE addresses, not bind. nftables default-deny covers inbound on the dedicated host |
+
+### Merge-vs-apply boundary (unchanged)
+
+Merging the pin is host-inert but pipeline-active: `mint-inngest-bootstrap-tag.yml`
+fires on the pin change, mints `vinngest-v1.45.1`, and the ADR-232 bump bot opens the
+cloud-init pin PR. The LIVE flip still needs that auto-PR merged plus an
+operator-gated dispatch in its own window — after the shared-Postgres concurrency
+check and a pre-flip Postgres backup, because `start` runs goose migrations and the
+v1.19.4→v1.45.1 delta includes a destructive cleanup migration
+(`000006_apps_unique_active_name`, force-archives duplicate app names) plus index
+DROPs (000007/000009/000010). The follow-through tracker is filed at this PR's merge.
