@@ -21,10 +21,10 @@ Derived from `knowledge-base/project/plans/2026-09-29-sec-codeql-alert-234-serve
   - [ ] 2.1.2 Export `assertGithubApiAbsoluteUrl(url: string): string` — same origin/userinfo/dot-segment assertions for absolute-URL callers.
   - [ ] 2.1.3 Throw plain `Error` on refusal (not `GitHubApiError` — a refusal is a programmer/attacker error, not a GitHub response error).
 - [x] 2.2 Create `apps/web-platform/test/github-url.test.ts`:
-  - [ ] 2.2.1 Reject cases: `"@evil.example/x"`, `".evil.example"`, `"evil.example/x"` (no leading slash), `"//evil.example/x"`, `"/repos/o/../../x"`, `"/a/%2e%2e/b"`, `"/a/.%2E/b"`, backslash in path, `#` in path, control char, empty string.
-  - [ ] 2.2.2 Accept cases: `"/repos/o/r/issues"`, `"/graphql"`, `"/repos/o/r/issues?state=open&per_page=50"`, `"/repos/o/r/git/ref/heads/feat/x"` (branch with slash).
-  - [ ] 2.2.3 `assertGithubApiAbsoluteUrl`: reject `"https://evil.example/x"`, `"https://api.github.com@evil.example/x"`, `"https://api.github.com.evil.example/x"`; accept `"https://api.github.com/repos/o/r"`.
-  - [ ] 2.2.4 Egress census: read `server/github-api.ts` + `server/github-app.ts` source, enumerate every `fetch(` site, assert each URL arg is a guard output; the literal `fetch("https://api.github.com/app")` is the single named exemption.
+  - [x] 2.2.1 Reject cases: `"@evil.example/x"`, `".evil.example"`, `"evil.example/x"` (no leading slash), `"//evil.example/x"`, `"/repos/o/../../x"`, `"/a/%2e%2e/b"`, `"/a/.%2E/b"`, backslash in path, `#` in path, control char, empty string.
+  - [x] 2.2.2 Accept cases: `"/repos/o/r/issues"`, `"/graphql"`, `"/repos/o/r/issues?state=open&per_page=50"`, `"/repos/o/r/git/ref/heads/feat/x"` (branch with slash).
+  - [x] 2.2.3 `assertGithubApiAbsoluteUrl`: reject `"https://evil.example/x"`, `"https://api.github.com@evil.example/x"`, `"https://api.github.com.evil.example/x"`; accept `"https://api.github.com/repos/o/r"`.
+  - [x] 2.2.4 Egress census: read `server/github-api.ts` + `server/github-app.ts` source, enumerate every `fetch(` site, assert each URL arg is a guard output; the literal `fetch("https://api.github.com/app")` is the single named exemption.
 
 ## 3. Phase 2 — Wire the sinks
 
@@ -37,6 +37,14 @@ Derived from `knowledge-base/project/plans/2026-09-29-sec-codeql-alert-234-serve
 
 - [x] 4.1 `cd apps/web-platform && npx vitest run test/github-url.test.ts test/github-api.test.ts test/github-api-retry.test.ts` — green.
 - [x] 4.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — clean.
+- [x] 3.4 Review-pass hardening (12-agent panel + design pass):
+  - [x] 3.4.1 `githubApiUrl` composes with `assertGithubApiAbsoluteUrl`; `DOT_SEGMENT` exported from `kb-github-path.ts` (single definition).
+  - [x] 3.4.2 Shared `reportEgressRefusal` + `githubEgressUrl` in `github-url.ts` — every assert site emits the `url-refused` pino+Sentry signal with one `extra.target` key; refused input is control-char-stripped before logging.
+  - [x] 3.4.3 `postRepoCreate` asserts the plumbed `url` BEFORE `generateInstallationToken` (mint-ordering invariant holds on both arms).
+  - [x] 3.4.4 `release-notes.ts` + `cron-weekly-release-digest.ts` releases fetches wrapped in `githubEgressUrl` (were outside guard+census).
+  - [x] 3.4.5 Census hardened: `(?<!\w)fetch\s*\(` (member-access/non-await sites counted), `url` first-arg requires provenance binding, terminator checks kill suffix evasion, open-world membership sweep over server/+app/, octokit literal-route tripwire.
+  - [x] 3.4.6 `c4-writer.ts` + `app/api/kb/file/[...path]/route.ts`: `github_api_egress_denied` → `EGRESS_REFUSED` branch (no opaque-500 sink).
+  - [x] 3.4.7 `createRepoForOrg` orgLogin `encodeURIComponent` (pre-existing nit in touched file).
 - [ ] 4.3 `npx markdownlint-cli2` on changed `.md` files (specific paths only).
 - [ ] 4.4 `gh api repos/jikig-ai/soleur/code-scanning/alerts/234 --jq .state` → record value as PR-body evidence.
 - [ ] 4.5 Ship via `/soleur:ship`: PR body `Closes #8857` + alert-state evidence; labels `type/security`, `domain/engineering`, `app:web-platform` (all three verified via `gh label list`).

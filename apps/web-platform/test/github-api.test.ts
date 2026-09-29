@@ -46,7 +46,9 @@ vi.mock("../server/observability", () => ({
 
 // Import AFTER env and fetch mocking
 import {
+  githubApiDelete,
   githubApiGet,
+  githubApiGetText,
   githubApiPost,
   GitHubApiError,
 } from "../server/github-api";
@@ -321,6 +323,10 @@ describe("github-api fetch wrapper", () => {
   // #8857 / CodeQL alert #234: a path that cannot bind to api.github.com must
   // throw BEFORE generateInstallationToken — a refused request mints nothing.
   describe("egress guard (server/github-url.ts)", () => {
+    beforeEach(() => {
+      mockReportSilentFallback.mockClear();
+    });
+
     test("a non-GitHub-bound path throws before any token mint or fetch", async () => {
       const installationId = uniqueInstallationId();
       await expect(
@@ -339,6 +345,15 @@ describe("github-api fetch wrapper", () => {
       await expect(
         githubApiPost(installationId, "/repos/o/../../admin", {}),
       ).rejects.toThrow(/egress denied/);
+      expect(mockFetch).toHaveBeenCalledTimes(0);
+    });
+
+    test.each([
+      ["githubApiGetText", (id: number) => githubApiGetText(id, "@evil.example/x")],
+      ["githubApiDelete", (id: number) => githubApiDelete(id, "@evil.example/x", {})],
+    ])("%s refuses before minting", async (_name, call) => {
+      const installationId = uniqueInstallationId();
+      await expect(call(installationId)).rejects.toThrow(/egress denied/);
       expect(mockFetch).toHaveBeenCalledTimes(0);
     });
   });

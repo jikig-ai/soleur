@@ -275,11 +275,11 @@ failure_modes:
     detection: "apps/web-platform/test/github-url.test.ts + the github-api.ts egress-census test go red"
     alert_route: "CI failure (vitest)"
 logs:
-  where: "stdout JSON via createChildLogger('github-api') / createChildLogger('github-app'), ingested to Better Stack (ADR-218)"
+  where: "stdout JSON via createChildLogger('github-egress') (all refusal mirrors route through github-url.ts › reportEgressRefusal), ingested to Better Stack (ADR-218)"
   retention: "per Better Stack log retention for the platform source"
 discoverability_test:
-  command: rg -l -e githubApiUrl -e assertGithubApiAbsoluteUrl apps/web-platform/server/github-api.ts apps/web-platform/server/github-app.ts apps/web-platform/server/github-url.ts
-  expected_output: github-api.ts
+  command: rg -l -e githubApiUrl -e assertGithubApiAbsoluteUrl -e githubEgressUrl apps/web-platform/server apps/web-platform/test/github-url.test.ts
+  expected_output: "github-url.ts plus every guarded consumer (github-api.ts, github-app.ts, release-notes.ts, cron-weekly-release-digest.ts) and the test file — `rg -l` lists all matches"
 ```
 
 ## Guard Contract
@@ -318,9 +318,14 @@ transport, different host).
 |---|---|---|
 | 1 | Delete the `url.origin !== GITHUB_API_ORIGIN` comparison in `githubApiUrl` | RED — the `@`-host-rebinding and suffix-host test cases pass a forged URL through |
 | 2 | Reduce `githubApiUrl` to `return GITHUB_API + path` (guard's own dispatch silently neutered — every caller still "uses" it) | RED — every reject-case test fails |
-| 3 | Add a second egress member after a compliant first: a new wrapper (e.g. `githubApiPut`) that calls `fetch(`${GITHUB_API}${path}`)` directly | RED — the egress-census test asserting no `fetch(` argument in `github-api.ts`/`github-app.ts` is a raw `GITHUB_API` template outside `github-url.ts` fails |
+| 3 | Add a second egress member after a compliant first: a new wrapper (e.g. `githubApiPut`) that calls `fetch(`${GITHUB_API}${path}`)` directly | RED — the egress-census first-arg rule rejects a raw template head |
 | 4 | Weaken the dot-segment regex to literal `..` only (drop `%2e` handling) | RED — the `%2e%2e` traversal test escapes `/repos/{o}/{r}` on the normalized URL |
 | 5 | Harness row — must-PASS input differing from canonical: `/repos/o/r/issues?state=open&per_page=50` (query-bearing path) and `/graphql` (non-`repos` prefix) | PASS — proves the guard is not a reject-everything stub |
+| 6 | Delete a chokepoint assert (`url = githubEgressUrl(url, …)` in `fetchWithRetry`/`githubFetch`) while leaving `fetch(url, …)` untouched | RED — the census requires a guard call on `url` before the fetch site in the same file (provenance, not just the name) |
+| 7 | Suffix-evasion first args: `fetch(url + "?x=1")`, `fetch(githubEgressUrl(url) + x)`, `` fetch(`https://api.github.com/app` + x) `` | RED — the first-arg rule requires the guarded value to BE the whole argument (terminator `,`/`)`, whitespace-to-terminator only) |
+| 8 | Member-access or non-`await`ed egress: `await globalThis.fetch(…)` / `return fetch(…)` | RED — `FETCH_SITE` matches every `fetch(` lexeme; member access still must satisfy the first-arg rule; `await` is not required |
+| 9 | New file carrying a credential signal next to `fetch(` (mint + fetch, or `api.github.com` literal + fetch) | RED — the open-world membership sweep fails until the file lands in `GUARDED_FILES` or a named bucket |
+| 10 | `octokit.request` with a non-literal first arg (full URL or variable route) outside the pinned undo-route ternary | RED — the octokit-lane census requires a `"VERB /route"` literal |
 
 **Anchor.** Runtime assertion guard — it compares no stored value, so no
 external anchor applies; the URL grammar itself is the reference.
@@ -331,7 +336,8 @@ external anchor applies; the URL grammar itself is the reference.
 `priority/p0-critical`, `domain/engineering`, `type/security`, no closing PRs),
 `gh api .../code-scanning/alerts/234` (`state: fixed`,
 `fixed_at: 2026-09-25T14:06:00Z`, ref `refs/heads/main`), and the fix commit:
-PR #8853 (`9279de94fe`, merged 2026-09-25 14:06 UTC) added per-segment dir
+PR #8853 (`9279de94fe`, merged 2026-09-25T14:01:59Z — the alert's `fixed_at`
+of 14:06Z is the rescan timestamp, not the merge) added per-segment dir
 validation + percent-encoding on `app/api/kb/c4` routes — the call-site
 sanitizer that broke the taint path. The cited file exists and still carries
 the unguarded sink. A prior `js/request-forgery` alert on this file (#92,
@@ -342,8 +348,12 @@ the issue still wants a durable close, and the sink defect is real.
 
 **Property List (Phase 0.6b).**
 
-- P1: a GitHub credential can never egress to a non-`api.github.com` origin,
-  regardless of caller input.
+- P1: a GitHub credential can never egress to a non-`api.github.com` origin
+  via an in-process `fetch` carrying it, regardless of caller input — the
+  surface is the enumerated fetch sinks in Assembly plus the open-world
+  membership census that keeps it enumerated. (The Octokit, git-HTTPS, and
+  GH_TOKEN-subprocess lanes are named scope boundaries, defended by their own
+  conventions, not by this guard.)
 - P2: a future caller adding a new `path` source cannot silently reopen the
   class — there is a runtime refusal and a test that goes red.
 - P3: issue #8857 closes with verifiable evidence (alert state + test suite).
@@ -486,14 +496,22 @@ pipeline entry).
   `reportSilentFallback` on refusal.
 - `apps/web-platform/server/github-app.ts`: `assertGithubApiAbsoluteUrl(url)`
   at the top of `githubFetch`.
-- Add the egress-census test (in `test/github-url.test.ts`): read the two
-  module sources at test time and enumerate every `fetch(` call site in
-  `server/github-api.ts` and `server/github-app.ts` — a census over the file
-  set, not a pinned name list (per the #8097 sharp edge: one row of the
-  contract must redden when a NEW unclassified fetch site appears). Assert each
-  site's URL argument is a `githubApiUrl`/`assertGithubApiAbsoluteUrl` output,
-  with the compile-time literal `fetch("https://api.github.com/app")` named as
-  the single documented exemption.
+- Add the egress-census test (in `test/github-url.test.ts`), three layers:
+  (a) per-site first-arg rule over every `fetch(` site in the four guarded
+  files (`server/github-api.ts`, `server/github-app.ts`,
+  `server/release-notes.ts`,
+  `server/inngest/functions/cron-weekly-release-digest.ts`) — a `url` first
+  arg must be bound to a guard call earlier in the same file, an inline
+  `githubEgressUrl(`/`assertGithubApiAbsoluteUrl(` must terminate the
+  argument, and the `` `https://api.github.com/app` `` literal is the single
+  named exemption; (b) an open-world membership sweep over `server/` + `app/`
+  — any file co-containing a `fetch(` site and a GitHub-credential signal
+  (origin literal, `GITHUB_API`, token-mint symbols, guard exports) must be
+  in `GUARDED_FILES` or a named bucket (user-OAuth lane, user-PAT validator,
+  unauthenticated probe, mint-but-other-lane), so a NEW credential-bearing
+  file cannot slip past uncategorized; (c) the octokit lane — every
+  `octokit.request(` first arg must be a `"VERB /route"` literal (the
+  undo/route.ts ternary-of-literals is the one pinned exemption).
 - Extend `test/github-api.test.ts` with wrapper-level tests: a refused `path`
   throws before `generateInstallationToken`'s fetch (assert `mockFetch` had
   zero calls — proving no token was minted for a refused request).
@@ -546,8 +564,10 @@ pipeline entry).
   names containing `/`.
 - [ ] A refusal emits `log.error` + `reportSilentFallback` (feature
   `github-api`, op `url-refused`) and no HTTP request is sent.
-- [ ] The egress-census test fails if a new `fetch(` site in `github-api.ts`
-  or `github-app.ts` receives a raw `GITHUB_API`-concatenated string.
+- [ ] The egress-census test fails if a new `fetch(` site in any guarded file
+  receives an unguarded first argument, if a chokepoint assert is deleted
+  (provenance binding), or if a new file co-containing `fetch(` and a GitHub
+  credential signal appears uncategorized (open-world membership sweep).
 - [ ] `cd apps/web-platform && npx vitest run` on the touched test files is
   green; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean.
 - [ ] Post-merge: `gh api repos/jikig-ai/soleur/code-scanning/alerts/234 --jq

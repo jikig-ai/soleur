@@ -13,7 +13,11 @@ import { generateInstallationToken, GitHubApiError } from "./github-app";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { isRetryable, delay, MAX_RETRIES, BASE_DELAY_MS } from "./github-retry";
-import { githubApiUrl, assertGithubApiAbsoluteUrl } from "./github-url";
+import {
+  githubApiUrl,
+  githubEgressUrl,
+  reportEgressRefusal,
+} from "./github-url";
 
 export { GitHubApiError };
 
@@ -29,19 +33,6 @@ const GITHUB_FETCH_TIMEOUT_MS = 15_000;
 // without a circular import (feat-one-shot-concierge-gh-403-self-heal).
 // ---------------------------------------------------------------------------
 
-// Mirror an egress refusal to pino + Sentry so the guard's liveness signal
-// (url-refused events) covers every assertion site, not just the wrappers.
-function reportUrlRefusal(err: unknown, target: string): void {
-  const refusal = err instanceof Error ? err : new Error(String(err));
-  log.error({ err: refusal.message, target }, "Refused non-GitHub-bound API URL");
-  reportSilentFallback(refusal, {
-    feature: "github-api",
-    op: "url-refused",
-    extra: { target },
-    message: "GitHub API request URL refused by egress guard",
-  });
-}
-
 // Resolve a caller-supplied API path to an egress-pinned URL BEFORE any token
 // is minted — never mint a credential for a request the guard refuses
 // (server/github-url.ts › githubApiUrl). The refusal is loud: pino + Sentry,
@@ -51,7 +42,7 @@ function resolveApiUrl(path: string): string {
   try {
     return githubApiUrl(path);
   } catch (err) {
-    reportUrlRefusal(err, path);
+    reportEgressRefusal(err, "github-api", path);
     throw err;
   }
 }
@@ -63,13 +54,9 @@ async function fetchWithRetry(
 ): Promise<Response> {
   // Self-enforcing chokepoint: a future caller that skips githubApiUrl() still
   // cannot reach fetch with an unpinned URL — the last line before egress
-  // always asserts (server/github-url.ts › assertGithubApiAbsoluteUrl).
-  try {
-    url = assertGithubApiAbsoluteUrl(url);
-  } catch (err) {
-    reportUrlRefusal(err, url);
-    throw err;
-  }
+  // always asserts (server/github-url.ts › githubEgressUrl), with the
+  // url-refused mirror so the refusal is never silent.
+  url = githubEgressUrl(url, "github-api");
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     // A caller that has given up (a staging deadline, #8623) gets no further
@@ -229,7 +216,7 @@ export async function githubApiDelete<T = unknown>(
 
   // The assert re-runs at the last line before egress, same invariant as
   // fetchWithRetry — this sink does not pass through it.
-  const response = await fetch(assertGithubApiAbsoluteUrl(url), {
+  const response = await fetch(githubEgressUrl(url, "github-api"), {
     method: "DELETE",
     headers: {
       Authorization: `token ${token}`,

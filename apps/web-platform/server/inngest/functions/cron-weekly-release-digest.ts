@@ -33,7 +33,7 @@ import {
   redactToken,
   type HandlerArgs,
 } from "./_cron-shared";
-import { assertGithubApiAbsoluteUrl } from "@/server/github-url";
+import { githubEgressUrl } from "@/server/github-url";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import {
   sanitizeReleases,
@@ -339,8 +339,9 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
       let truncated = false;
       for (let page = 1; page <= RELEASES_MAX_PAGES; page++) {
         const resp = await fetch(
-          assertGithubApiAbsoluteUrl(
+          githubEgressUrl(
             `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
+            "cron-weekly-release-digest",
           ),
           {
             headers: {

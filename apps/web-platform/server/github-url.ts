@@ -18,12 +18,17 @@
 // no userinfo + host assertion, never substring matching on the raw string.
 
 import { hasControlChar, DOT_SEGMENT } from "./kb-github-path";
+import { createChildLogger } from "./logger";
+import { reportSilentFallback } from "./observability";
+
+const log = createChildLogger("github-egress");
 
 const GITHUB_API_ORIGIN = "https://api.github.com";
 
-// GitHub API paths are far shorter than this; the cap bounds the segment work
-// on attacker-influenced input before any parsing happens.
-const MAX_PATH_LENGTH = 4096;
+// Bounds the whole request URL (scheme + authority + path + query). GitHub
+// API URLs are far shorter; the cap bounds the segment work on
+// attacker-influenced input before any parsing happens.
+const MAX_URL_LENGTH = 4096;
 
 function egressDenied(reason: string): Error {
   return Object.assign(new Error(`GitHub API egress denied: ${reason}`), {
@@ -55,7 +60,7 @@ function assertNoDotSegments(rawPathAndQuery: string): void {
  *  no userinfo or dot-segments, or throw. For callers (github-app.ts
  *  › githubFetch) that hold a whole URL rather than a path fragment. */
 export function assertGithubApiAbsoluteUrl(rawUrl: string): string {
-  if (rawUrl.length === 0 || rawUrl.length > MAX_PATH_LENGTH + GITHUB_API_ORIGIN.length) {
+  if (rawUrl.length === 0 || rawUrl.length > MAX_URL_LENGTH) {
     throw egressDenied("URL empty or over-length");
   }
   // `\` folds to `/` and `#` truncates the URL under WHATWG; neither is
@@ -78,12 +83,54 @@ export function assertGithubApiAbsoluteUrl(rawUrl: string): string {
 }
 
 /** Resolve a GitHub API path fragment to an absolute URL bound to
- *  https://api.github.com, or throw. A `path` lacking a leading `/` can rebind
- *  the request authority — the one check assertGithubApiAbsoluteUrl cannot
- *  perform, since by then the fragment is already concatenated. */
+ *  https://api.github.com, or throw. The leading-`/` check is the one
+ *  assertion that must run BEFORE the fragment is concatenated — after
+ *  concatenation `api.github.compath` is already a mangled authority — so it
+ *  lives here rather than in assertGithubApiAbsoluteUrl. */
 export function githubApiUrl(path: string): string {
   if (!path.startsWith("/") || path.startsWith("//")) {
     throw egressDenied("path must begin with a single /");
   }
   return assertGithubApiAbsoluteUrl(GITHUB_API_ORIGIN + path);
+}
+
+// Refused inputs are the class that can carry line separators — strip
+// control bytes and \u2028 / \u2029 before they land in pino/Sentry fields so
+// a hostile URL can't split a log line (it poisons only its own refusal
+// record either way; credentials never appear in a refused value).
+function sanitizedTarget(raw: string): string {
+  return raw.replace(/[\p{Cc}\u2028\u2029]/gu, "").slice(0, 512);
+}
+
+/** Mirror an egress refusal to pino + Sentry. Every assert call site routes
+ *  through this (directly or via githubEgressUrl) so `op: "url-refused"` is
+ *  the single liveness signal for the whole guard surface — a sudden cluster
+ *  means a caller shape changed or the guard misclassifies a real path. */
+export function reportEgressRefusal(
+  err: unknown,
+  feature: string,
+  target: string,
+): void {
+  const refusal = err instanceof Error ? err : new Error(String(err));
+  log.error(
+    { err: refusal.message, target: sanitizedTarget(target) },
+    "Refused non-GitHub-bound API URL",
+  );
+  reportSilentFallback(refusal, {
+    feature,
+    op: "url-refused",
+    extra: { target: sanitizedTarget(target) },
+    message: "GitHub API request URL refused by egress guard",
+  });
+}
+
+/** assertGithubApiAbsoluteUrl plus the refusal mirror — the form call sites
+ *  should use so a refusal is never silent. Returns the pinned URL. */
+export function githubEgressUrl(rawUrl: string, feature: string): string {
+  try {
+    return assertGithubApiAbsoluteUrl(rawUrl);
+  } catch (err) {
+    reportEgressRefusal(err, feature, rawUrl);
+    throw err;
+  }
 }
