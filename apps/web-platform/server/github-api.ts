@@ -13,12 +13,12 @@ import { generateInstallationToken, GitHubApiError } from "./github-app";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { isRetryable, delay, MAX_RETRIES, BASE_DELAY_MS } from "./github-retry";
+import { githubApiUrl, assertGithubApiAbsoluteUrl } from "./github-url";
 
 export { GitHubApiError };
 
 const log = createChildLogger("github-api");
 
-const GITHUB_API = "https://api.github.com";
 const GITHUB_FETCH_TIMEOUT_MS = 15_000;
 
 // ---------------------------------------------------------------------------
@@ -29,11 +29,36 @@ const GITHUB_FETCH_TIMEOUT_MS = 15_000;
 // without a circular import (feat-one-shot-concierge-gh-403-self-heal).
 // ---------------------------------------------------------------------------
 
+// Resolve a caller-supplied API path to an egress-pinned URL BEFORE any token
+// is minted — never mint a credential for a request the guard refuses
+// (server/github-url.ts › githubApiUrl). The refusal is loud: pino + Sentry,
+// then rethrow as a plain Error (a programmer/attacker error, not a GitHub
+// response error — GitHubApiError.statusCode would misroute it as a 502).
+function resolveApiUrl(path: string): string {
+  try {
+    return githubApiUrl(path);
+  } catch (err) {
+    const refusal = err instanceof Error ? err : new Error(String(err));
+    log.error({ err: refusal.message, path }, "Refused non-GitHub-bound API path");
+    reportSilentFallback(refusal, {
+      feature: "github-api",
+      op: "url-refused",
+      extra: { path },
+      message: "GitHub API request URL refused by egress guard",
+    });
+    throw refusal;
+  }
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
   callerSignal?: AbortSignal,
 ): Promise<Response> {
+  // Self-enforcing chokepoint: a future caller that skips githubApiUrl() still
+  // cannot reach fetch with an unpinned URL — the last line before egress
+  // always asserts (server/github-url.ts › assertGithubApiAbsoluteUrl).
+  url = assertGithubApiAbsoluteUrl(url);
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     // A caller that has given up (a staging deadline, #8623) gets no further
@@ -90,10 +115,11 @@ export async function githubApiGet<T = unknown>(
   path: string,
   opts?: { signal?: AbortSignal },
 ): Promise<T> {
+  const url = resolveApiUrl(path);
   const token = await generateInstallationToken(installationId);
 
   const response = await fetchWithRetry(
-    `${GITHUB_API}${path}`,
+    url,
     {
       headers: {
         Authorization: `token ${token}`,
@@ -119,9 +145,10 @@ export async function githubApiGetText(
   installationId: number,
   path: string,
 ): Promise<string> {
+  const url = resolveApiUrl(path);
   const token = await generateInstallationToken(installationId);
 
-  const response = await fetchWithRetry(`${GITHUB_API}${path}`, {
+  const response = await fetchWithRetry(url, {
     headers: {
       Authorization: `token ${token}`,
       Accept: "application/vnd.github+json",
@@ -150,9 +177,10 @@ export async function githubApiPost<T = unknown>(
     throw new Error("DELETE method is not allowed from cloud agents");
   }
 
+  const url = resolveApiUrl(path);
   const token = await generateInstallationToken(installationId);
 
-  const response = await fetchWithRetry(`${GITHUB_API}${path}`, {
+  const response = await fetchWithRetry(url, {
     method: method.toUpperCase(),
     headers: {
       Authorization: `token ${token}`,
@@ -185,9 +213,10 @@ export async function githubApiDelete<T = unknown>(
   path: string,
   body: Record<string, unknown>,
 ): Promise<T | null> {
+  const url = resolveApiUrl(path);
   const token = await generateInstallationToken(installationId);
 
-  const response = await fetch(`${GITHUB_API}${path}`, {
+  const response = await fetch(url, {
     method: "DELETE",
     headers: {
       Authorization: `token ${token}`,

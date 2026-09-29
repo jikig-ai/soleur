@@ -317,4 +317,29 @@ describe("github-api fetch wrapper", () => {
       expect(mockFetch).toHaveBeenCalledTimes(1); // token only
     });
   });
+
+  // #8857 / CodeQL alert #234: a path that cannot bind to api.github.com must
+  // throw BEFORE generateInstallationToken — a refused request mints nothing.
+  describe("egress guard (server/github-url.ts)", () => {
+    test("a non-GitHub-bound path throws before any token mint or fetch", async () => {
+      const installationId = uniqueInstallationId();
+      await expect(
+        githubApiGet(installationId, "@evil.example/x"),
+      ).rejects.toThrow(/egress denied/);
+      // 0 calls: resolveApiUrl fires before generateInstallationToken's fetch.
+      expect(mockFetch).toHaveBeenCalledTimes(0);
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ feature: "github-api", op: "url-refused" }),
+      );
+    });
+
+    test("a dot-segment path is refused on the raw input, before normalization", async () => {
+      const installationId = uniqueInstallationId();
+      await expect(
+        githubApiPost(installationId, "/repos/o/../../admin", {}),
+      ).rejects.toThrow(/egress denied/);
+      expect(mockFetch).toHaveBeenCalledTimes(0);
+    });
+  });
 });

@@ -14,6 +14,7 @@ import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { readAppId } from "./github/app-private-key";
 import { isRetryable, delay } from "./github-retry";
+import { assertGithubApiAbsoluteUrl } from "./github-url";
 
 const log = createChildLogger("github-app");
 
@@ -236,6 +237,11 @@ async function githubFetch(
   url: string,
   options: RequestInit & { timeoutMs?: number } = {},
 ): Promise<Response> {
+  // Egress pin (CodeQL #234 / #8857): every credential-bearing request goes to
+  // api.github.com and only there — covers plumbed `url` params such as
+  // postRepoCreate's, not just the `${GITHUB_API}/…` literal call sites
+  // (server/github-url.ts › assertGithubApiAbsoluteUrl).
+  url = assertGithubApiAbsoluteUrl(url);
   const { timeoutMs, ...rest } = options;
   const response = await fetch(url, {
     ...rest,
