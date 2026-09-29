@@ -4047,7 +4047,7 @@ set_of() { awk -F'\t' -v c="$1" '{ n = split($2, a, ","); for (i = 1; i <= n; i+
 got_txn=$(set_of transaction-control); got_nontx=$(set_of non-transactional); got_later=$(set_of later-row-sensitive)
 got_bs=$(set_of backslash); got_unp=$(set_of unparseable)
 # The pinned sets (the stored value of this guard). Main's baseline was measured 2026-09-29 over 102 files;
-# this PR's 146/147/148 rollback files are listed below because the guard scans the checkout:
+# the later-row-sensitive set below is measured from the full checkout, including this PR's 146/147/148 down migrations:
 # every top-level BEGIN;/COMMIT; on main is ONE wrapping pair, which the writer
 # normalizes away, so no file is transaction-control; 132_drop_unused_indexes.down.sql
 # mentions CONCURRENTLY only in a comment, so no file is non-transactional; the

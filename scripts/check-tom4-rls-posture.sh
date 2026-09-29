@@ -410,7 +410,14 @@ drop_trigger = re.compile(
     r'ON\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*$', re.I | re.S)
 trigger_state = re.compile(
     r'^\s*ALTER\s+TABLE\s+(?:ONLY\s+)?(?:public\.)?([a-z_][a-z0-9_]*)\s+'
-    r'(ENABLE|DISABLE)\s+TRIGGER\s+([a-z_][a-z0-9_]*|ALL)\s*$', re.I | re.S)
+    r'(ENABLE(?:\s+(?:REPLICA|ALWAYS))?|DISABLE)\s+TRIGGER\s+'
+    r'([a-z_][a-z0-9_]*|ALL|USER)\s*$', re.I | re.S)
+drop_table = re.compile(
+    r'^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?'
+    r'(?:public\.)?([a-z_][a-z0-9_]*)\s*(?:CASCADE|RESTRICT)?\s*$', re.I | re.S)
+drop_function = re.compile(
+    r'^\s*DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?'
+    r'([a-z_][a-z0-9_]*)\s*\([^;]*\)\s*(?:CASCADE|RESTRICT)?\s*$', re.I | re.S)
 live_worm_triggers = {}
 for migration in MIGRATIONS:
     body = BODY[migration]
@@ -420,63 +427,113 @@ for migration in MIGRATIONS:
         create_match = create_trigger.match(statement_body)
         drop_match = drop_trigger.match(statement_body)
         state_match = trigger_state.match(statement_body)
+        table_drop_match = drop_table.match(statement_body)
+        function_drop_match = drop_function.match(statement_body)
         if create_match:
             trigger_body = create_match.group(2)
             table_match = re.search(r'\bON\s+(?:public\.)?([a-z_][a-z0-9_]*)\b', trigger_body, re.I)
             function_match = re.search(
                 r'\bEXECUTE\s+FUNCTION\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(',
                 trigger_body, re.I)
-            if table_match and function_match:
+            event_clause_match = re.search(
+                r'\b(?:BEFORE|AFTER|INSTEAD\s+OF)\s+(.+?)\s+ON\b',
+                trigger_body, re.I | re.S)
+            if table_match and function_match and event_clause_match:
+                event_clause = event_clause_match.group(1)
+                events = frozenset(event.upper() for event in re.findall(
+                    r'\b(INSERT|UPDATE|DELETE|TRUNCATE)\b', event_clause, re.I))
+                covers_all_updates = not re.search(r'\bUPDATE\s+OF\b', event_clause, re.I)
                 trigger_events.append((statement.start(), 'create', create_match.group(1),
-                                       table_match.group(1), function_match.group(1)))
+                                       table_match.group(1), function_match.group(1),
+                                       events, covers_all_updates))
         elif drop_match:
             trigger_events.append((statement.start(), 'drop', drop_match.group(1),
-                                   drop_match.group(2), None))
+                                   drop_match.group(2), None, frozenset(), False))
         elif state_match:
             trigger_events.append((statement.start(), state_match.group(2).lower(),
-                                   state_match.group(3), state_match.group(1), None))
-    for _, kind, name, table, function in sorted(trigger_events):
+                                   state_match.group(3), state_match.group(1), None,
+                                   frozenset(), False))
+        elif table_drop_match:
+            trigger_events.append((statement.start(), 'drop_table', '',
+                                   table_drop_match.group(1), None, frozenset(), False))
+        elif function_drop_match:
+            trigger_events.append((statement.start(), 'drop_function',
+                                   function_drop_match.group(1), '', None,
+                                   frozenset(), False))
+    for _, kind, name, table, function, events, covers_all_updates in sorted(trigger_events):
         key = (table.lower(), name.lower())
         if kind == 'drop':
             live_worm_triggers.pop(key, None)
-        elif kind in ('enable', 'disable'):
-            trigger_keys = [key] if name.lower() != 'all' else [
+        elif kind == 'drop_table':
+            live_worm_triggers = {
+                trigger_key: trigger for trigger_key, trigger in live_worm_triggers.items()
+                if trigger_key[0] != table.lower()}
+        elif kind == 'drop_function':
+            live_worm_triggers = {
+                trigger_key: trigger for trigger_key, trigger in live_worm_triggers.items()
+                if trigger[1] != name.lower()}
+        elif kind.startswith('enable') or kind == 'disable':
+            trigger_keys = [key] if name.lower() not in ('all', 'user') else [
                 existing_key for existing_key in live_worm_triggers
                 if existing_key[0] == table.lower()]
+            enabled_for_application = kind == 'enable' or kind == 'enable always'
             for trigger_key in trigger_keys:
                 if trigger_key in live_worm_triggers:
-                    existing_table, existing_function, _ = live_worm_triggers[trigger_key]
+                    existing_table, existing_function, _, existing_events, existing_update_scope = live_worm_triggers[trigger_key]
                     live_worm_triggers[trigger_key] = (
-                        existing_table, existing_function, kind == 'enable')
+                        existing_table, existing_function, enabled_for_application,
+                        existing_events, existing_update_scope)
         elif worm_suffix.search(function):
-            live_worm_triggers[key] = (table.lower(), function.lower(), True)
+            live_worm_triggers[key] = (table.lower(), function.lower(), True,
+                                       events, covers_all_updates)
         else:
             live_worm_triggers.pop(key, None)
 
 active_worm_triggers = [
-    (table, function) for table, function, enabled in live_worm_triggers.values()
+    (table, function, events, covers_all_updates)
+    for table, function, enabled, events, covers_all_updates in live_worm_triggers.values()
     if enabled]
 disabled_worm_triggers = sorted(
-    (table, function) for table, function, enabled in live_worm_triggers.values()
+    (table, function) for table, function, enabled, _, _ in live_worm_triggers.values()
     if not enabled)
-attached_worm_fns = {function for _, function in active_worm_triggers}
+attached_worm_fns = {function for _, function, _, _ in active_worm_triggers}
 wrong_worm_attachments = sorted(
-    (table, function) for table, function in active_worm_triggers
+    (table, function) for table, function, _, _ in active_worm_triggers
     if re.sub(r'_(?:no_mutate|no_update|no_delete)$', '', function) != table)
 missing_worm_attachments = sorted(worm_fns - attached_worm_fns)
 unexpected_worm_attachments = sorted(attached_worm_fns - worm_fns)
+required_events_by_function = {
+    function: ({'UPDATE', 'DELETE'} if function.lower().endswith('_no_mutate') else
+               {'UPDATE'} if function.lower().endswith('_no_update') else {'DELETE'})
+    for function in worm_fns
+}
+event_coverage = {}
+full_update_coverage = set()
+for _, function, events, covers_all_updates in active_worm_triggers:
+    event_coverage.setdefault(function, set()).update(events)
+    if covers_all_updates and 'UPDATE' in events:
+        full_update_coverage.add(function)
+for function in event_coverage:
+    if function not in full_update_coverage:
+        event_coverage[function].discard('UPDATE')
+missing_worm_events = sorted(
+    (function, sorted(required_events - event_coverage.get(function, set())))
+    for function, required_events in required_events_by_function.items()
+    if required_events - event_coverage.get(function, set()))
 worm_exclusions = {"agent_engine_attempts", "agent_engine_recovery_checkpoints",
                    "pending_checkout_sessions"}
 excluded_worm_attachments = sorted(
-    (table, function) for table, function in active_worm_triggers
+    (table, function) for table, function, _, _ in active_worm_triggers
     if table in worm_exclusions)
 check("24", attached_worm_fns == worm_fns and not wrong_worm_attachments
+      and not missing_worm_events
       and not excluded_worm_attachments and not disabled_worm_triggers,
-      "every defined WORM function has a matching live, enabled ledger trigger",
+      "every defined WORM function has a matching live, enabled trigger for required events",
       "missing functions: %s; unexpected attachments: %s; mismatched table/function pairs: %s; "
-      "excluded tables with WORM attachments: %s; disabled WORM triggers: %s"
+      "missing mutation events: %s; excluded tables with WORM attachments: %s; "
+      "disabled WORM triggers: %s"
       % (missing_worm_attachments, unexpected_worm_attachments, wrong_worm_attachments,
-         excluded_worm_attachments, disabled_worm_triggers))
+         missing_worm_events, excluded_worm_attachments, disabled_worm_triggers))
 
 check("18", all(table in dpa_text for table in worm_exclusions)
       and "outside that WORM set" in dpa_text,

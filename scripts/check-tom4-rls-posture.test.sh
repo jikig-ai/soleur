@@ -191,6 +191,40 @@ mb15() {
 }
 run_case "MB-15 disabled WORM trigger is not live protection -> A24" 1 24 mb15
 
+# -- MB-16: USER applies to every user trigger on the table, including WORM.
+mb16() {
+  printf '\nALTER TABLE public.workspace_member_actions DISABLE TRIGGER USER;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-16 DISABLE TRIGGER USER removes WORM protection -> A24" 1 24 mb16
+
+# -- MB-17: a REPLICA trigger does not fire for ordinary application writes.
+mb17() {
+  printf '\nALTER TABLE public.flag_flip_audit ENABLE REPLICA TRIGGER trg_flag_flip_audit_no_delete;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-17 replica-only WORM trigger does not protect app writes -> A24" 1 24 mb17
+
+# -- MB-18: attachment alone is insufficient if it listens to the wrong event.
+mb18() {
+  printf '\nDROP TRIGGER trg_flag_flip_audit_no_delete ON public.flag_flip_audit;\nCREATE TRIGGER trg_flag_flip_audit_no_delete BEFORE UPDATE ON public.flag_flip_audit FOR EACH ROW EXECUTE FUNCTION public.flag_flip_audit_no_delete();\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-18 WORM attachment must cover the function's mutation event -> A24" 1 24 mb18
+
+# -- MB-19/20: CASCADE DDL removes the live trigger attachment too.
+mb19() {
+  printf '\nDROP TABLE public.flag_flip_audit CASCADE;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-19 DROP TABLE CASCADE removes WORM attachments -> A24" 1 24 mb19
+
+mb20() {
+  printf '\nDROP FUNCTION public.flag_flip_audit_no_delete() CASCADE;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-20 DROP FUNCTION CASCADE removes WORM attachments -> A24" 1 24 mb20
+
 # -- MB-11: the gate's own self-test must fire when the replay stops applying
 #    drops. Without this, net-of-drops is vacuous and every predicate the gate
 #    reports may be a superseded one — the exact failure that shipped twice.
@@ -223,7 +257,7 @@ if [[ 2 -ne 0 ]]; then pass "MB-12 exit 2 (no verdict) is distinct from exit 0 (
 # ------------------------------------------------------------------ verdict
 # Floor and summary emit with printf + an explicit exit, never through the
 # pass()/fail() helpers they backstop (ADR-193).
-FLOOR=15
+FLOOR=20
 TOTAL=$((PASSED + FAILED))
 if [[ $TOTAL -lt $FLOOR ]]; then
   printf 'ASSERTION FLOOR: only %d of %d cases executed. A partial run is not a pass.\n' "$TOTAL" "$FLOOR" >&2
