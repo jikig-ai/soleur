@@ -1926,6 +1926,247 @@ resource "terraform_data" "deploy_pipeline_fix" {
   }
 }
 
+# ── web-2 deploy-pipeline delivery (#9151, #7103-B4 shape, ADR-114 / ADR-220) ────────────
+#
+# THE DEFECT. hcloud_server.web carries ignore_changes = [user_data], so cloud-init writes
+# the deploy-pipeline file set (ci-deploy.sh, webhook.service, hooks.json, the FILE_MAP
+# scripts, the Doppler drop-ins, infra-config-apply/-install, the sudoers grant) exactly
+# ONCE — at birth. terraform_data.deploy_pipeline_fix's re-delivery channel is
+# push-infra-config.sh → https://deploy.<base>/hooks/infra-config, and the `deploy.`
+# tunnel ingress is origin-pinned to web-1 by construction (ADR-114): web-2 therefore
+# runs a birth-frozen copy forever. Measured 2026-09-28 (issue #9151): web-2 pulled cosign
+# from ghcr.io while web-1 had moved to gcr.io, and web-2 never emitted IMAGE_FRESHNESS.
+#
+# THE SHAPE. A second SSH terraform_data sibling — the guarded pattern #7103-B4 pre-decided
+# for #9151 — delivering the SAME non-credential file set, reached in CI through the web-1
+# bastion: apply-deploy-pipeline-fix.yml opens `ssh -L 127.0.0.1:2223:<web-2-private>:22`
+# through the pinned bridge and NAT-redirects web-2's public :22 at it (ADR-220's
+# second-private-host precedent — no new Cloudflare ingress/Access/DNS objects).
+#
+# CARRIER. Only apply-deploy-pipeline-fix.yml may target this resource: it alone opens the
+# forward. apply-web-platform-infra.yml never lists it in -target (its bridge carries no
+# web-2 route); terraform-target-parity.test.ts pins the union.
+#
+# CREDENTIAL BOUNDARY. The full-prd Doppler token is NOT in this set — #7103's constraint,
+# made mechanical by web-host-provisioner-parity.test.sh §1: no reference to
+# webhook_doppler_token_env / SOLEUR_DOPPLER_TOKEN / soleur-doppler-token /
+# push-infra-config may appear in this block. web-2's /etc/default/soleur-doppler-token
+# stays on its birth render; re-delivering it is #7103-B4 scope. The four drop-ins ARE
+# delivered (they only POINT units at the credential file, which exists from birth).
+#
+# Sentinel string at the end forces re-creation when the inline remote-exec list itself
+# changes; bump the suffix in lockstep with any inline edit. The host-id entry re-fires on
+# web-2 replacement (cattle), re-delivering the full set post-boot.
+resource "terraform_data" "deploy_pipeline_fix_web2" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/ci-deploy.sh"),
+    file("${path.module}/ci-deploy-wrapper.sh"),
+    file("${path.module}/webhook.service"),
+    file("${path.module}/cat-deploy-state.sh"),
+    file("${path.module}/canary-bundle-claim-check.sh"),
+    file("${path.module}/deploy-inngest-bootstrap.sudoers"),
+    file("${path.module}/infra-config-apply.sh"),
+    file("${path.module}/infra-config-install.sh"),
+    file("${path.module}/cat-infra-config-state.sh"),
+    file("${path.module}/inngest-enumerate-reminders.sh"),
+    file("${path.module}/inngest-rearm-reminders.sh"),
+    file("${path.module}/inngest-wiped-volume-verify.sh"),
+    file("${path.module}/cat-inngest-verify-state.sh"),
+    file("${path.module}/inngest-inventory.sh"),
+    file("${path.module}/inngest-registry-probe.sh"),
+    file("${path.module}/inngest-doublefire-probe.sh"),
+    file("${path.module}/git-lock-chardevice-sweep.sh"),
+    local.hooks_json,
+    file("${path.module}/10-vector-doppler-token.conf"),
+    file("${path.module}/10-inngest-heartbeat-doppler-token.conf"),
+    file("${path.module}/10-inngest-server-doppler-token.conf"),
+    file("${path.module}/10-inngest-redis-doppler-token.conf"),
+    hcloud_server.web["web-2"].id,
+    file("${path.module}/web-2-ssh-host-key.pub"),
+    "dpf-web2-remote-exec-v1",
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-deploy-pipeline-fix-web2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  # The four drop-in parents may not exist on web-2 (they are running-host deliveries with
+  # no cloud-init writer); a file provisioner cannot create parent directories.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d",
+    ]
+  }
+
+  # ── FILE_MAP members deploy_pipeline_fix pushes to web-1, minus the credential ────────
+  provisioner "file" {
+    source      = "${path.module}/ci-deploy.sh"
+    destination = "/usr/local/bin/ci-deploy.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/ci-deploy-wrapper.sh"
+    destination = "/usr/local/bin/ci-deploy-wrapper.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/webhook.service"
+    destination = "/etc/systemd/system/webhook.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cat-deploy-state.sh"
+    destination = "/usr/local/bin/cat-deploy-state.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/canary-bundle-claim-check.sh"
+    destination = "/usr/local/bin/canary-bundle-claim-check.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cat-infra-config-state.sh"
+    destination = "/usr/local/bin/cat-infra-config-state.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-enumerate-reminders.sh"
+    destination = "/usr/local/bin/inngest-enumerate-reminders.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-rearm-reminders.sh"
+    destination = "/usr/local/bin/inngest-rearm-reminders.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-wiped-volume-verify.sh"
+    destination = "/usr/local/bin/inngest-wiped-volume-verify.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cat-inngest-verify-state.sh"
+    destination = "/usr/local/bin/cat-inngest-verify-state.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-inventory.sh"
+    destination = "/usr/local/bin/inngest-inventory.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/git-lock-chardevice-sweep.sh"
+    destination = "/usr/local/bin/git-lock-chardevice-sweep.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-registry-probe.sh"
+    destination = "/usr/local/bin/inngest-registry-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-doublefire-probe.sh"
+    destination = "/usr/local/bin/inngest-doublefire-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/10-vector-doppler-token.conf"
+    destination = "/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
+  }
+  provisioner "file" {
+    source      = "${path.module}/10-inngest-heartbeat-doppler-token.conf"
+    destination = "/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"
+  }
+  provisioner "file" {
+    source      = "${path.module}/10-inngest-server-doppler-token.conf"
+    destination = "/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf"
+  }
+  provisioner "file" {
+    source      = "${path.module}/10-inngest-redis-doppler-token.conf"
+    destination = "/etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf"
+  }
+
+  # ── The bootstrap resource's three direct deliveries, on web-2's channel ─────────────
+  provisioner "file" {
+    source      = "${path.module}/infra-config-apply.sh"
+    destination = "/usr/local/bin/infra-config-apply.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/infra-config-install.sh"
+    destination = "/usr/local/bin/infra-config-install"
+  }
+  # Staged to a temp path then visudo-validated + installed below; writing it directly
+  # would risk a half-written file in /etc/sudoers.d.
+  provisioner "file" {
+    source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
+    destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      # hooks.json is a templatefile() render (the on-disk file is the .tmpl), delivered
+      # via base64 exactly as the web-1 bridge writes it.
+      "printf '%s' '${base64encode(local.hooks_json)}' | base64 -d > /etc/webhook/hooks.json",
+      # Ownership/permissions, matching the FILE_MAP modes (scripts root:root 0755,
+      # units/confs 0644, hooks.json root:deploy 0640).
+      "chown root:root /usr/local/bin/ci-deploy.sh /usr/local/bin/ci-deploy-wrapper.sh /usr/local/bin/cat-deploy-state.sh /usr/local/bin/canary-bundle-claim-check.sh /usr/local/bin/cat-infra-config-state.sh /usr/local/bin/inngest-enumerate-reminders.sh /usr/local/bin/inngest-rearm-reminders.sh /usr/local/bin/inngest-wiped-volume-verify.sh /usr/local/bin/cat-inngest-verify-state.sh /usr/local/bin/inngest-inventory.sh /usr/local/bin/git-lock-chardevice-sweep.sh /usr/local/bin/inngest-registry-probe.sh /usr/local/bin/inngest-doublefire-probe.sh /usr/local/bin/infra-config-apply.sh /usr/local/bin/infra-config-install",
+      "chmod 0755 /usr/local/bin/ci-deploy.sh /usr/local/bin/ci-deploy-wrapper.sh /usr/local/bin/cat-deploy-state.sh /usr/local/bin/canary-bundle-claim-check.sh /usr/local/bin/cat-infra-config-state.sh /usr/local/bin/inngest-enumerate-reminders.sh /usr/local/bin/inngest-rearm-reminders.sh /usr/local/bin/inngest-wiped-volume-verify.sh /usr/local/bin/cat-inngest-verify-state.sh /usr/local/bin/inngest-inventory.sh /usr/local/bin/git-lock-chardevice-sweep.sh /usr/local/bin/inngest-registry-probe.sh /usr/local/bin/inngest-doublefire-probe.sh /usr/local/bin/infra-config-apply.sh /usr/local/bin/infra-config-install",
+      "chown root:root /etc/systemd/system/webhook.service /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf",
+      "chmod 0644 /etc/systemd/system/webhook.service /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf",
+      "chown root:deploy /etc/webhook/hooks.json",
+      "chmod 0640 /etc/webhook/hooks.json",
+      "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
+      "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
+      "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
+      # Content assertions: every delivered byte is verified against the same
+      # filesha256() Terraform evaluated at plan time, so a truncated or
+      # mid-edit scp fails the provisioner instead of latching silent drift.
+      "[ \"$(sha256sum /usr/local/bin/ci-deploy.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/ci-deploy.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/ci-deploy-wrapper.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/ci-deploy-wrapper.sh")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/webhook.service | cut -d' ' -f1)\" = \"${filesha256("${path.module}/webhook.service")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cat-deploy-state.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cat-deploy-state.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/canary-bundle-claim-check.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/canary-bundle-claim-check.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cat-infra-config-state.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cat-infra-config-state.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-enumerate-reminders.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-enumerate-reminders.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-rearm-reminders.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-rearm-reminders.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-wiped-volume-verify.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-wiped-volume-verify.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cat-inngest-verify-state.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cat-inngest-verify-state.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-inventory.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-inventory.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/git-lock-chardevice-sweep.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/git-lock-chardevice-sweep.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-registry-probe.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-registry-probe.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-doublefire-probe.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-doublefire-probe.sh")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf | cut -d' ' -f1)\" = \"${filesha256("${path.module}/10-vector-doppler-token.conf")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf | cut -d' ' -f1)\" = \"${filesha256("${path.module}/10-inngest-heartbeat-doppler-token.conf")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf | cut -d' ' -f1)\" = \"${filesha256("${path.module}/10-inngest-server-doppler-token.conf")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf | cut -d' ' -f1)\" = \"${filesha256("${path.module}/10-inngest-redis-doppler-token.conf")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/infra-config-apply.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/infra-config-apply.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/infra-config-install | cut -d' ' -f1)\" = \"${filesha256("${path.module}/infra-config-install.sh")}\" ]",
+      "[ \"$(sha256sum /etc/webhook/hooks.json | cut -d' ' -f1)\" = \"${sha256(local.hooks_json)}\" ]",
+      "[ \"$(sha256sum /etc/sudoers.d/deploy-inngest-bootstrap | cut -d' ' -f1)\" = \"${filesha256("${path.module}/deploy-inngest-bootstrap.sudoers")}\" ]",
+      # The sudoers grant landed and parses — same four alias assertions as the web-1 bridge.
+      "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
+      "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
+      "grep -q DROPIN_TRY_RESTART /etc/sudoers.d/deploy-inngest-bootstrap",
+      "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #7220 AC4 shape — resolve the REAL policy for deploy, not just the text.
+      "sudo -n -l -U deploy >/dev/null 2>&1 || { echo 'FATAL: sudo -l -U list mode is unavailable on this host (sudo-rs?) — the policy probe cannot run. This is NOT a denial; the grant may be fine.' >&2; exit 1; }",
+      "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
+      # Drop-in adoption: LoadState-guarded, one explicit line per unit.
+      "if [ \"$(systemctl show -p LoadState --value vector.service)\" = loaded ]; then systemctl show -p DropInPaths vector.service | grep -q 'doppler-token.conf' || { echo 'FATAL: vector.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-redis.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-redis.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-redis.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      # hooks.json re-registers the status hook + the state-reporter key.
+      "grep -q infra-config-status /etc/webhook/hooks.json",
+      "grep -q cat_infra_config_state_sh_b64 /etc/webhook/hooks.json",
+      # try-restart, not restart: an inactive unit is left alone and the is-active
+      # assertion below then reports the pre-existing outage rather than starting a
+      # webhook whose absence might be deliberate (the downtime assessment for a
+      # running webhook is sub-second; the assert catches a dead one).
+      "systemctl try-restart webhook",
+      "test \"$(systemctl is-active webhook)\" = 'active'",
+    ]
+  }
+}
+
 # Deploy custom seccomp profile for per-container use (#1557, #1569).
 # Enables bubblewrap sandbox inside containers by allowing CLONE_NEWUSER.
 # ci-deploy.sh applies the profile via --security-opt seccomp=<path>;

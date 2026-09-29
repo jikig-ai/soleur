@@ -104,7 +104,8 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // collectSshProvisioned(), so a narrowed set silently narrows the guard too.
 // Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
 // #8706: raised 17 -> 18 for terraform_data.luks_monitor_install (workspaces-luks.tf).
-const MIN_SSH_PROVISIONED = 18;
+// #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 19;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -223,6 +224,8 @@ function extractWorkflowInvariants(workflowText: string): {
 
 let sshProvisioned: string[];
 let coveredUnion: Set<string>;
+let webPlatformTargets: Set<string>;
+let deployPipelineFixTargets: Set<string>;
 
 beforeAll(() => {
   expect(existsSync(INFRA_DIR)).toBe(true);
@@ -231,10 +234,10 @@ beforeAll(() => {
 
   sshProvisioned = collectSshProvisioned();
 
-  const webPlatformTargets = extractTargets(
+  webPlatformTargets = extractTargets(
     readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"),
   );
-  const deployPipelineFixTargets = extractTargets(
+  deployPipelineFixTargets = extractTargets(
     readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8"),
   );
   coveredUnion = new Set<string>([
@@ -272,6 +275,18 @@ describe("terraform -target parity — current state is covered", () => {
 
   test("deploy_pipeline_fix (local-exec, no connection block) is NOT counted", () => {
     expect(sshProvisioned).not.toContain("deploy_pipeline_fix");
+  });
+
+  // #9151 — apply-deploy-pipeline-fix.yml is the web-2 sibling's SOLE carrier: it
+  // alone opens the bastion `ssh -L` forward + second OUTPUT REDIRECT that makes
+  // hcloud_server.web["web-2"].ipv4_address routable for Terraform's Go SSH
+  // client. A -target line in apply-web-platform-infra.yml (whose bridge carries
+  // no web-2 route) would hang that run to the SSH timeout — the same class as
+  // for_each over var.web_hosts (#7000), one hop further out.
+  test("deploy_pipeline_fix_web2 is targeted ONLY by apply-deploy-pipeline-fix.yml (#9151)", () => {
+    expect(sshProvisioned).toContain("deploy_pipeline_fix_web2");
+    expect(deployPipelineFixTargets.has("deploy_pipeline_fix_web2")).toBe(true);
+    expect(webPlatformTargets.has("deploy_pipeline_fix_web2")).toBe(false);
   });
 });
 

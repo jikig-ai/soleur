@@ -63,6 +63,14 @@ resolve_host_id() {
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
 
+# #9151 — ci_deploy_sha256: the live sha256 of /usr/local/bin/ci-deploy.sh, so the
+# deploy-status body carries which script bytes the host serves TODAY (the parity
+# anchor for scripts/check-deploy-script-parity.sh). Same empty-string contract as
+# HOST_ID: an ABSENT field reads as an old script, an empty one as a read failure.
+# CI_DEPLOY_SH_PATH exists for the test harness only — production never sets it.
+CI_DEPLOY_SHA256="$(sha256sum "${CI_DEPLOY_SH_PATH:-/usr/local/bin/ci-deploy.sh}" 2>/dev/null | cut -d' ' -f1 || true)"
+readonly CI_DEPLOY_SHA256
+
 # Best-effort: systemctl may be unavailable in non-systemd contexts (local
 # tests, containers). `systemctl is-active` prints a canonical state word to
 # stdout and exits non-zero for inactive/failed; the `|| true` swallows the
@@ -708,6 +716,7 @@ jq -nc \
   --arg sps "$SECCOMP_PROFILE_SHA256" \
   --argjson sl "$SECCOMP_LIVE" \
   --arg hid "$HOST_ID" \
+  --arg cds "$CI_DEPLOY_SHA256" \
   --arg rs "$INNGEST_REDIS_STATUS" \
   --arg rj "$INNGEST_REDIS_JOURNAL_TAIL" \
   --arg rr "$INNGEST_REDIS_RESULT" \
@@ -717,7 +726,7 @@ jq -nc \
   --arg rb "$INNGEST_REDIS_BINARY" \
   --arg rts "$INNGEST_REDIS_TAIL_STATUS" \
   --arg vci "$VECTOR_CONFIG_IDENTITY" \
-  '$base + $cr + $cd + $sl + {host_id: $hid, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
+  '$base + $cr + $cd + $sl + {host_id: $hid, ci_deploy_sha256: $cds, sandbox_canary: $sc, seccomp_profile_sha256: $sps, journald_storage: $js, services: (($base.services // {}) + {
     inngest_heartbeat: $hb,
     inngest_heartbeat_journal_tail: $hbj,
     inngest_heartbeat_dark_arm: $hbd,

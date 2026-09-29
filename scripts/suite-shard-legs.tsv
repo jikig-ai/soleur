@@ -259,12 +259,14 @@ scripts/betterstack-ingest-parity	1
 scripts/board/set-board-status	1
 scripts/bwrap-probe-selfreport-8016	6
 scripts/capture-web-1-host-key	1
+scripts/capture-web-2-host-key	1
 scripts/cf-tunnel-liveness-gate-mutations	4
 scripts/check-cloudflare-token-drift	6
 scripts/check-pa-22-live	1
 scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	7
 scripts/check-tom4-rls-posture-live	1
+scripts/check-deploy-script-parity	1
 scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/classify-workflow-transitions	2
 scripts/compound-promote	6

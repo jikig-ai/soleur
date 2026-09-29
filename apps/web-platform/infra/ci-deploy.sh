@@ -2992,7 +2992,17 @@ fi
 _dt_state=absent
 if [ -n "${DOPPLER_TOKEN:-}" ]; then _dt_state=present; fi
 logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-unset} script_sha=${_ci_deploy_script_sha} cred_file=${CRED_FILE_STATE} doppler_token=${_dt_state}" 2>/dev/null || true
-unset _sha_out _dt_state _ci_deploy_script_sha
+# #9151 — DEPLOY_SCRIPT_SHA: the full sha256 of THIS script's bytes on THIS host,
+# emitted once per invocation so Better Stack rows prove which ci-deploy.sh each
+# web host actually runs. scripts/check-deploy-script-parity.sh compares the
+# newest row per host_name against the repo sha — the no-SSH parity read. The
+# INVOCATION line keeps its 12-char script_sha (closed format); this marker is
+# the parity anchor, so it is full-length and stable: `DEPLOY_SCRIPT_SHA sha256=<64hex>`
+# or `sha256=unknown` when the source file is unreadable (which also prevents a
+# deploy, making the line unreachable — kept for completeness).
+_ci_deploy_script_sha_full="$(sha256sum "${BASH_SOURCE[0]:-/nonexistent}" 2>/dev/null | cut -d' ' -f1 || true)"
+logger -t "$LOG_TAG" "DEPLOY_SCRIPT_SHA sha256=${_ci_deploy_script_sha_full:-unknown}" 2>/dev/null || true
+unset _sha_out _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
 
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
