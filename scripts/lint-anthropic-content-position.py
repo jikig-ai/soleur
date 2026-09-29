@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refuse a reader that selects an Anthropic content block by POSITION (#8392).
 
-A model swap changes response block ORDERING: `claude-sonnet-5` has run adaptive
+A model swap changes response block ORDERING: `claude-sonnet-5-5` has run adaptive
 thinking by default since #5849, so the first block is a thinking block and the
 text follows it. Every reader that indexed a fixed position silently returned ""
 for ten weeks while the model answer was billed and discarded.

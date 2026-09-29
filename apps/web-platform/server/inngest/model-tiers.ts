@@ -33,7 +33,7 @@
 // digest.ts` self-identifies as never-downgrade-shaped; its sonnet pin is
 // preserved via EXECUTION_MODEL and its rationale comment stays in place.
 //
-// Mixed alias/dated convention (do NOT normalize): `claude-sonnet-5` and
+// Mixed alias/dated convention (do NOT normalize): `claude-sonnet-5-5` and
 // `claude-opus-5-5` are aliases (alias == dated, no separate dated ID),
 // while `claude-haiku-4-5-20251001` (imported transitively via constants)
 // is the dated form. A future cleanup must preserve the dated haiku literal

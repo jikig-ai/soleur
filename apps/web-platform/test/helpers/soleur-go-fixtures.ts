@@ -53,7 +53,7 @@ export function makeAssistant(
     message: {
       id: partial.uuid ?? "msg_1",
       role: "assistant",
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-5-5",
       stop_reason: null,
       stop_sequence: null,
       type: "message",
@@ -199,7 +199,7 @@ function queryControlStubs(): Omit<
   "close" | typeof Symbol.asyncIterator | "next" | "return" | "throw"
 > {
   return {
-    interrupt: vi.fn(async () => {}),
+    interrupt: vi.fn(async () => undefined),
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     setMaxThinkingTokens: vi.fn(async () => {}),

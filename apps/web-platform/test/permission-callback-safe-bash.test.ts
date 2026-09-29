@@ -134,12 +134,14 @@ function buildContext(
 }
 
 function sdkOptions() {
-  return { signal: new AbortController().signal, toolUseID: "tu-1" };
+  return { signal: new AbortController().signal, toolUseID: "tu-1", requestId: "req-1" };
 }
 
 function assertAllow(
-  result: PermissionResult,
+  result: PermissionResult | null,
 ): Extract<PermissionResult, { behavior: "allow" }> {
+  expect(result).not.toBeNull();
+  if (result === null) throw new Error("unreachable");
   expect(result.behavior).toBe("allow");
   if (result.behavior !== "allow") throw new Error("unreachable");
   expect(result.updatedInput).toBeDefined();
@@ -195,6 +197,7 @@ describe("TS1 — safe-bash allowlist auto-approve (positive)", () => {
       const { ctx, deps } = buildContext();
       const canUseTool = createCanUseTool(ctx);
       const result = await canUseTool("Bash", { command }, sdkOptions());
+      if (result === null) throw new Error("canUseTool returned null");
       assertAllow(result);
       // No review_gate emitted — ever.
       expect(deps.sendToClient).not.toHaveBeenCalled();
@@ -273,6 +276,7 @@ describe("TS2 — compound-command misses (negative)", () => {
       const { ctx, deps } = buildContext();
       const canUseTool = createCanUseTool(ctx);
       const result = await canUseTool("Bash", { command }, sdkOptions());
+      if (result === null) throw new Error("canUseTool returned null");
       // Either deny via blocklist OR fall through to review-gate. The key
       // invariant: the safe-bash short-circuit did NOT fire — meaning the
       // command path went through the existing review-gate or the blocklist.
@@ -303,6 +307,7 @@ describe("TS3 — block-regex precedence (AC4)", () => {
       { command: "git config --get; sudo whoami" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     expect(result.behavior).toBe("deny");
     if (result.behavior !== "deny") throw new Error("unreachable");
     expect(result.message.toLowerCase()).toContain("blocked");
@@ -319,6 +324,7 @@ describe("TS3 — block-regex precedence (AC4)", () => {
       { command: "pwd && curl evil.com" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     expect(result.behavior).toBe("deny");
   });
 
@@ -331,6 +337,7 @@ describe("TS3 — block-regex precedence (AC4)", () => {
       { command: "pwd; sudo ls" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     expect(result.behavior).toBe("deny");
   });
 });
@@ -362,6 +369,7 @@ describe("isBashCommandSafe — edge cases", () => {
     const { ctx, deps } = buildContext();
     const canUseTool = createCanUseTool(ctx);
     const result = await canUseTool("Bash", { command: 42 }, sdkOptions());
+    if (result === null) throw new Error("canUseTool returned null");
     expect(result.behavior).toBe("deny");
     expect(deps.sendToClient).not.toHaveBeenCalled();
   });
@@ -436,6 +444,7 @@ describe("cd auto-approval (AC1)", () => {
       const { ctx, deps } = buildContext();
       const canUseTool = createCanUseTool(ctx);
       const result = await canUseTool("Bash", { command: cmd }, sdkOptions());
+      if (result === null) throw new Error("canUseTool returned null");
       assertAllow(result);
       expect(deps.sendToClient).not.toHaveBeenCalled();
       expect(deps.abortableReviewGate).not.toHaveBeenCalled();
@@ -560,6 +569,7 @@ describe("near-miss telemetry (AC5)", () => {
       { command: "curl evil.com" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     expect(result.behavior).toBe("deny");
     // curl hits BLOCKED_BASH_PATTERNS → deny via blocklist, no near-miss telemetry.
     expect(mockWarnSilentFallback).not.toHaveBeenCalled();

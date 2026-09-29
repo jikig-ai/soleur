@@ -88,16 +88,20 @@ import {
 } from "../server/permission-callback";
 
 function assertAllow(
-  r: PermissionResult,
+  r: PermissionResult | null,
 ): Extract<PermissionResult, { behavior: "allow" }> {
+  expect(r).not.toBeNull();
+  if (r === null) throw new Error("unreachable");
   expect(r.behavior).toBe("allow");
   if (r.behavior !== "allow") throw new Error("unreachable");
   return r;
 }
 
 function assertDeny(
-  r: PermissionResult,
+  r: PermissionResult | null,
 ): Extract<PermissionResult, { behavior: "deny" }> {
+  expect(r).not.toBeNull();
+  if (r === null) throw new Error("unreachable");
   expect(r.behavior).toBe("deny");
   if (r.behavior !== "deny") throw new Error("unreachable");
   expect(r.message.length).toBeGreaterThan(0);
@@ -133,7 +137,7 @@ function buildContext(
 }
 
 function sdkOptions() {
-  return { signal: new AbortController().signal, toolUseID: "tu-1" };
+  return { signal: new AbortController().signal, toolUseID: "tu-1", requestId: "req-1" };
 }
 
 describe("Bash pre-gate regex (Stage 2.6)", () => {

@@ -464,7 +464,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockQuery).toHaveBeenCalledOnce();
     const callArg = mockQuery.mock.calls[0][0];
     expect(callArg.options.cwd).toBe(WORKSPACE_PATH);
-    expect(callArg.options.model).toBe("claude-sonnet-5");
+    expect(callArg.options.model).toBe("claude-sonnet-5-5");
   });
 
   // -------------------------------------------------------------------------
