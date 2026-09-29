@@ -8,7 +8,7 @@ Issue: #8065 · PR: #9223 · Branch: `feat-one-shot-8065-dep-audit-advisories`
 
 ## Phase 1 — Lockfile bump (root)
 
-- [ ] 1.1 From the worktree root, run `npx --yes npm@11 update liquidjs`.
+- [x] 1.1 From the worktree root, run `npx --yes npm@11 update liquidjs`.
   Expected: `node_modules/liquidjs` `10.27.0 → 10.29.0` (floor `>= 10.27.2`,
   inside `@11ty/eleventy`'s `^10.25.0`). No other package's entries change;
   lockfile `"name"` stays `"soleur"`.
@@ -25,41 +25,41 @@ Issue: #8065 · PR: #9223 · Branch: `feat-one-shot-8065-dep-audit-advisories`
 
 ## Phase 2 — Drain-guard ratchet (`scripts/assert-dependabot-drain.py`)
 
-- [ ] 2.1 `REQUIRED`: ratchet the four js-yaml rows — `("web-platform",
+- [x] 2.1 `REQUIRED`: ratchet the four js-yaml rows — `("web-platform",
   "js-yaml", 3)` → `"3.15.2"`, `("web-platform", "js-yaml", 4)` → `"4.3.2"`,
   `("root", "js-yaml", 3)` → `"3.15.2"`, `("root", "js-yaml", 4)` →
   `"4.3.2"` — and add `("root", "liquidjs", 10, "10.27.2")`.
-- [ ] 2.2 `WATCHED_PACKAGES`: add `"liquidjs"`.
-- [ ] 2.3 `FLOOR_ANCHORS`: `("js-yaml", 3)` → `"3.15.2"`, `("js-yaml", 4)` →
+- [x] 2.2 `WATCHED_PACKAGES`: add `"liquidjs"`.
+- [x] 2.3 `FLOOR_ANCHORS`: `("js-yaml", 3)` → `"3.15.2"`, `("js-yaml", 4)` →
   `"4.3.2"`, add `("liquidjs", 10): "10.27.2"`. (Anchors key per
   (package,major) across manifests — all four js-yaml rows must move
   together or the anchor check REDs the untouched sibling.)
-- [ ] 2.4 Update the `MIN_ROWS`/`MIN_RESOLVED` comments so their row
+- [x] 2.4 Update the `MIN_ROWS`/`MIN_RESOLVED` comments so their row
   arithmetic reflects 21 rows; the floor VALUES stay `20` (lower bounds).
 
 ## Phase 3 — Drain-guard test (`scripts/assert-dependabot-drain.test.sh`)
 
-- [ ] 3.1 `build_fixture`: add `("liquidjs", 10)` to the `rt` fixture package
+- [x] 3.1 `build_fixture`: add `("liquidjs", 10)` to the `rt` fixture package
   list so the new REQUIRED row resolves rather than printing `(absent)`.
-- [ ] 3.2 Extend the FLOOR_ANCHORS source-grep `spec` list with
+- [x] 3.2 Extend the FLOOR_ANCHORS source-grep `spec` list with
   `"js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2"`.
 
 ## Phase 4 — Verify
 
-- [ ] 4.1 `npx --yes npm@11 ci --ignore-scripts` (integrity-validated install).
-- [ ] 4.2 `npm audit --json` on root → `total: 0` (js-yaml absent because
+- [x] 4.1 `npx --yes npm@11 ci --ignore-scripts` (integrity-validated install).
+- [x] 4.2 `npm audit --json` on root → `total: 0` (js-yaml absent because
   `4.3.2`/`3.15.2` are at GHSA-2883's patched versions; liquidjs absent
   because `>= 10.27.2`). Any residual → document the upstream constraint in
   the PR body per the issue AC.
-- [ ] 4.3 `npm run docs:build` succeeds (exercises eleventy + liquidjs).
-- [ ] 4.4 `python3 scripts/assert-dependabot-drain.py` → 21 rows, all OK.
-- [ ] 4.5 `bash scripts/assert-dependabot-drain.test.sh` → all assertions pass.
-- [ ] 4.6 Assert-floors `node -e` probe (plan §Research Insights) prints `OK`.
-- [ ] 4.7 Idempotency, post-commit or before/after on the regenerated file:
+- [x] 4.3 `npm run docs:build` succeeds (exercises eleventy + liquidjs).
+- [x] 4.4 `python3 scripts/assert-dependabot-drain.py` → 21 rows, all OK.
+- [x] 4.5 `bash scripts/assert-dependabot-drain.test.sh` → all assertions pass.
+- [x] 4.6 Assert-floors `node -e` probe (plan §Research Insights) prints `OK`.
+- [x] 4.7 Idempotency, post-commit or before/after on the regenerated file:
   `npx --yes npm@11 install --package-lock-only` leaves `git diff` clean.
-- [ ] 4.8 `git diff --quiet origin/main...HEAD -- '**/package.json'` and
+- [x] 4.8 `git diff --quiet origin/main...HEAD -- '**/package.json'` and
   `git status --short -- '**/package.json'` — both empty (unless 1.3 fired).
-- [ ] 4.9 Root checks: `bash scripts/test-all.sh` locally, or record that the
+- [x] 4.9 Root checks: `bash scripts/test-all.sh` locally, or record that the
   required `test` CI context is the backstop (precedent: #9198 deferred the
   battery under machine contention — PR body records which ran).
 

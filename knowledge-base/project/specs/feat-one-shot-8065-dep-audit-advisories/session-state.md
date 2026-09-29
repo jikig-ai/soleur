@@ -54,3 +54,13 @@
 
 - `soleur:plan` (this session, subagent context — fan-outs run inline per
   the degradation note in the plan's Domain Review section)
+
+
+## Work Phase
+
+- Status: complete. `liquidjs` 10.27.0 → 10.29.0 in root `package-lock.json` (lockfile-only; `npx --yes npm@11 update liquidjs`).
+- js-yaml needed no bump — PR #7970 already resolved 3.15.2/4.3.2 on all manifests; the drain-guard floors lagged (3.15.1/4.3.1) and were ratcheted here.
+- `assert-dependabot-drain.py`: js-yaml floors → 3.15.2/4.3.2 in REQUIRED + FLOOR_ANCHORS; new `("root","liquidjs",10,"10.27.2")` row + anchor + WATCHED_PACKAGES entry; MIN_ROWS/MIN_RESOLVED 20→21.
+- Test fixture: `("liquidjs", 10)` added to root fixture; anchor source-grep specs extended to js-yaml:3/4 + liquidjs:10; floor-message expectations 20→21.
+- Verify: `npm ci --ignore-scripts` clean; `npm audit --json` → total 0; `npm run docs:build` green (66 files, liquidjs exercised); drain guard 21/21 OK; test.sh 27/27; floors probe OK; `npm@11 install --package-lock-only` idempotent; no `package.json` diff vs origin/main.
+- `test-all.sh` battery deferred to the required `test` CI context per operator direction (precedent #9198).

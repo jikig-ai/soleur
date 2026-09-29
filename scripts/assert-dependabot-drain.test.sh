@@ -104,7 +104,7 @@ w["node_modules/next"] = {"version": "16.3.1"}
 if extra:
     w.update(json.loads(extra))
 
-rt = pkgs([("js-yaml", 3), ("brace-expansion", 1)])
+rt = pkgs([("js-yaml", 3), ("brace-expansion", 1), ("liquidjs", 10)])
 rt["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
 # The markdown linter pinned by #7927 will not run against brace-expansion 1.x, so its
 # subtree gets a SCOPED ^5.0.8 override while the root keeps its ^1.1.16 Dependabot
@@ -193,7 +193,7 @@ fi
 # per the cross-file-drift convention (work/SKILL.md): the first version used `head -1`,
 # and a shadowing `MIN_ROWS = 0` added later inside main() was reported "[ok] MIN_ROWS is
 # 19" while the effective floor was 0.
-for spec in "MIN_ROWS:20" "MIN_RESOLVED:20" "MIN_LOCKS:4"; do
+for spec in "MIN_ROWS:21" "MIN_RESOLVED:21" "MIN_LOCKS:4"; do
   name="${spec%%:*}"; floor="${spec##*:}"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *${name} = [0-9]+" "$GUARD" || true)"
@@ -219,7 +219,7 @@ done
 
 # The anchors are the floor under the CVE thresholds. Source-grepped here so that lowering
 # a threshold AND its anchor together is a three-file edit rather than a two-line one.
-for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9"; do
+for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2"; do
   IFS=: read -r pkg major want <<< "$spec"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *\(\"${pkg}\", ${major}\): \"[0-9.]+\"," "$GUARD" || true)"
@@ -293,7 +293,7 @@ sys.stdout.write(s.replace(
     chr(34) + "chalk" + chr(34) + ", 4, " + chr(34) + "4.999.0" + chr(34), 1))
 '
 
-mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 20" '
+mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 21" '
 import re, sys
 s = sys.stdin.read()
 sys.stdout.write(re.sub(
@@ -301,7 +301,7 @@ sys.stdout.write(re.sub(
     "", s, flags=re.M))
 '
 
-mutate "a row renamed to a nonexistent package REDs" "below the RESOLVED-ROW floor of 20" '
+mutate "a row renamed to a nonexistent package REDs" "below the RESOLVED-ROW floor of 21" '
 import sys
 s = sys.stdin.read()
 sys.stdout.write(s.replace(chr(34) + "nanoid" + chr(34) + ", 3",
