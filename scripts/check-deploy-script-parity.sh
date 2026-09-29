@@ -36,6 +36,17 @@
 # Exit: 0 parity; 1 drift/missing/transport failure (each named).
 set -uo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output.
+case "$-" in
+  *x*)
+    if [ -n "${CF_ACCESS_CLIENT_SECRET:+x}${CI_SSH_ACCESS_TOKEN_SECRET:+x}${WEBHOOK_DEPLOY_SECRET:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SELFTEST=0; STATUS_ARM=1; BS_ARM=1; SINCE="7d"; LIMIT=500; ALLOW_MISSING_BS=0
 STATUS_JSON_FILE=""; BS_ROWS_FILE=""
@@ -150,7 +161,7 @@ if [[ "$BS_ARM" -eq 1 ]]; then
     rows="$(<"$BS_ROWS_FILE")"
   else
     command -v doppler >/dev/null || { echo "FATAL: BS arm needs doppler (or --bs-rows-file)" >&2; exit 1; }
-    rows="$(doppler run -p soleur -c prd_terraform -- bash "$ROOT/scripts/betterstack-query.sh" \
+    rows="$(doppler run --preserve-env -p soleur -c prd_terraform -- bash "$ROOT/scripts/betterstack-query.sh" \
       --since "$SINCE" --grep DEPLOY_SCRIPT_SHA --limit "$LIMIT" 2>/dev/null)" \
       || { echo "FATAL: betterstack-query.sh failed under doppler" >&2; exit 1; }
   fi
