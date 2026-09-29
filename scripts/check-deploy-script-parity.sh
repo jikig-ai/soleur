@@ -153,6 +153,7 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
     : "${CF_ID:?CF Access client id required}" "${CF_SEC:?CF Access secret required}"
     HMAC="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
     STATUS_TMP="$(mktemp)" || { echo "FATAL: mktemp failed" >&2; exit 1; }
+    trap 'rm -f "$STATUS_TMP"' EXIT
     code="$(curl -s -o "$STATUS_TMP" -w '%{http_code}' --max-time 20 \
       --disable --noproxy '*' --proto '=https' \
       -H "X-Signature-256: sha256=${HMAC}" \
