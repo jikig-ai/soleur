@@ -70,6 +70,7 @@ import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stal
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
 import { cronSupabaseAdvisorScan } from "@/server/inngest/functions/cron-supabase-advisor-scan";
 import { cronSupabaseDiskIo } from "@/server/inngest/functions/cron-supabase-disk-io";
+import { cronSupabaseWatchdogDispatch } from "@/server/inngest/functions/cron-supabase-watchdog-dispatch";
 import { cronTerraformDrift } from "@/server/inngest/functions/cron-terraform-drift";
 import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
@@ -182,6 +183,7 @@ const handlers = serve({
     cronStrategyReview,
     cronSupabaseAdvisorScan,
     cronSupabaseDiskIo,
+    cronSupabaseWatchdogDispatch,
     cronTerraformDrift,
     cronUxAudit,
     cronWeeklyAnalytics,

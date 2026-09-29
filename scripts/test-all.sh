@@ -4696,6 +4696,15 @@ if want_scripts; then
   # with fixtures padded past the 64 KiB pipe buffer so the SIGPIPE race the
   # probe was losing matches to is actually reachable (#7574).
   run_suite "scripts/followthroughs/t5-skip-persistence-bound-7510" bash scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
+  # #9168: the Supabase Postgres-hang restart classifier — the single verdict
+  # chokepoint for scheduled-supabase-watchdog.yml (signature + corroboration +
+  # sentinel-ledger restart gate). Explicit run_suite — scripts/*.test.sh is
+  # covered by no glob here. Registered LAST in the block deliberately: the
+  # positional (non-manifest) shard fallback keys leg membership on
+  # registration ordinal, so an end-of-block insert is the only insertion that
+  # shifts no existing suite's parity (scripts/test-all-affected.test.sh s1/s2
+  # measured ran=0 when a mid-block insert flipped leg assignment).
+  run_suite "scripts/supabase-watchdog-classify" bash scripts/supabase-watchdog-classify.test.sh
 fi
 
 # Named bun-test entries — bun shard.

@@ -41,7 +41,11 @@
 locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
-  cron_monitor_alert_unrouted = {}
+  cron_monitor_alert_unrouted = {
+    # Created in the #9168 PR; per the two-PR rule it can only be routed in
+    # monitor_ids after its first apply gives the detector a real id.
+    scheduled_supabase_watchdog = "route after first apply (#9168)"
+  }
 }
 
 resource "sentry_alert" "cron_monitor_failure" {

@@ -196,20 +196,38 @@ else
   pass "T3 no test-injection seam shapes present"
 fi
 
+# The sibling sweep is what covers sessions this hook never hears from (codex
+# fires no .claude hooks) plus the concurrent_apply losers — assert the
+# function survives, on its name as called from main.
+if declare -F sweep_unadopted_agents >/dev/null 2>&1 && grep -q 'sweep_unadopted_agents "$claude_pid"' "$HOOK"; then
+  pass "T3 sibling sweep exists and is invoked from main"
+else
+  fail "T3 sweep_unadopted_agents missing or not wired into main"
+fi
+
+# The apply flock serializes simultaneous SessionStarts; at -w 5 a pane-restore
+# burst of ~5 sessions starves all but the first into concurrent_apply skips.
+if grep -q 'flock -w 30 -x 9' "$HOOK"; then
+  pass "T3 apply flock wait is 30s — enough serialized busctl work for a restore burst"
+else
+  fail "T3 apply flock is not -w 30 (pane-restore bursts fall through to concurrent_apply)"
+fi
+
 # =====================================================================
 # T2 — two-sided cap validation (AC6)
 # =====================================================================
-# validate_caps <scope_high> <scope_max> <fleet_high> <fleet_max>
+# validate_caps <scope_high> <scope_max> <fleet_high> <fleet_max> <scope_tasks> <fleet_tasks>
 GiB() { echo $(( $1 * 1024 * 1024 * 1024 )); }
 OK_SH=$(GiB 6); OK_SM=$(GiB 7); OK_FH=$(GiB 16); OK_FM=$(GiB 20)
+OK_ST=4096; OK_FT=24576
 
-if validate_caps "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" >/dev/null 2>&1; then
+if validate_caps "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT" >/dev/null 2>&1; then
   pass "T2 shipped cap set accepted"
 else
   fail "T2 shipped cap set REJECTED by validate_caps — the hook would refuse on every run"
 fi
 
-t2_reject() { # <label> <sh> <sm> <fh> <fm>
+t2_reject() { # <label> <sh> <sm> <fh> <fm> <st> <ft>
   local label=$1; shift
   if validate_caps "$@" >/dev/null 2>&1; then
     fail "T2 accepted out-of-range case: $label"
@@ -217,22 +235,39 @@ t2_reject() { # <label> <sh> <sm> <fh> <fm>
     pass "T2 rejected $label"
   fi
 }
-t2_reject "scope_max below 3GiB floor"        "$OK_SH" "$(GiB 2)" "$OK_FH" "$OK_FM"
-t2_reject "scope_max above 8GiB ceiling"      "$OK_SH" "$(GiB 9)" "$OK_FH" "$OK_FM"
-t2_reject "scope_high below 5GiB floor"       "$(GiB 4)" "$OK_SM" "$OK_FH" "$OK_FM"
-t2_reject "scope_high >= scope_max"           "$OK_SM" "$OK_SM" "$OK_FH" "$OK_FM"
-t2_reject "fleet_max below 10GiB floor"       "$OK_SH" "$OK_SM" "$OK_FH" "$(GiB 9)"
-t2_reject "fleet_max above 24GiB ceiling"     "$OK_SH" "$OK_SM" "$OK_FH" "$(GiB 25)"
-t2_reject "fleet_high below 14GiB floor"      "$OK_SH" "$OK_SM" "$(GiB 13)" "$OK_FM"
-t2_reject "fleet_high >= fleet_max"           "$OK_SH" "$OK_SM" "$OK_FM" "$OK_FM"
-t2_reject "zero scope_max (the _BYTES=0 kill)" "$OK_SH" "0" "$OK_FH" "$OK_FM"
-t2_reject "non-numeric scope_max"             "$OK_SH" "abc" "$OK_FH" "$OK_FM"
+t2_reject "scope_max below 3GiB floor"        "$OK_SH" "$(GiB 2)" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "scope_max above 8GiB ceiling"      "$OK_SH" "$(GiB 9)" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "scope_high below 5GiB floor"       "$(GiB 4)" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "scope_high >= scope_max"           "$OK_SM" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "fleet_max below 10GiB floor"       "$OK_SH" "$OK_SM" "$OK_FH" "$(GiB 9)" "$OK_ST" "$OK_FT"
+t2_reject "fleet_max above 24GiB ceiling"     "$OK_SH" "$OK_SM" "$OK_FH" "$(GiB 25)" "$OK_ST" "$OK_FT"
+t2_reject "fleet_high below 14GiB floor"      "$OK_SH" "$OK_SM" "$(GiB 13)" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "fleet_high >= fleet_max"           "$OK_SH" "$OK_SM" "$OK_FM" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "zero scope_max (the _BYTES=0 kill)" "$OK_SH" "0" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "non-numeric scope_max"             "$OK_SH" "abc" "$OK_FH" "$OK_FM" "$OK_ST" "$OK_FT"
+t2_reject "scope_tasks below 2048 floor"      "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "1024" "$OK_FT"
+t2_reject "scope_tasks above 12288 ceiling"   "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "16384" "$OK_FT"
+t2_reject "fleet_tasks below 8192 floor"      "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "4096"
+t2_reject "fleet_tasks above 32768 ceiling"   "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "$OK_ST" "40000"
+t2_reject "fleet_tasks below 4x scope_tasks"  "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "8192" "16384"
+t2_reject "zero scope_tasks (the task kill)"  "$OK_SH" "$OK_SM" "$OK_FH" "$OK_FM" "0" "$OK_FT"
 
 # The band must not admit the values D1 explicitly rejected as too tight.
-if validate_caps "$(GiB 4)" "$(GiB 6)" "$(GiB 12)" "$OK_FM" >/dev/null 2>&1; then
+if validate_caps "$(GiB 4)" "$(GiB 6)" "$(GiB 12)" "$OK_FM" "$OK_ST" "$OK_FT" >/dev/null 2>&1; then
   fail "T2 band admits the 4GiB scope-high / 12GiB fleet-high values D1 rejected as below routine load"
 else
   pass "T2 band excludes the plan-rejected 4GiB/12GiB values"
+fi
+
+# The TasksMax wiring must reach every systemd call that shapes the scope —
+# a bare "TasksMax" grep is satisfied by the constants block, so anchor on the
+# busctl property-list form `"TasksMax" "t" "$SCOPE_TASKS_MAX"` / `$FLEET_…`.
+_scope_tasks_props=$(grep -c '"TasksMax" "t" "$SCOPE_TASKS_MAX"' "$HOOK")
+_fleet_tasks_props=$(grep -c '"TasksMax" "t" "$FLEET_TASKS_MAX"' "$HOOK")
+if [[ "$_scope_tasks_props" -eq 4 && "$_fleet_tasks_props" -eq 1 ]]; then
+  pass "T2 TasksMax reaches both StartTransientUnit calls, the re-entry refresh, the sibling sweep, and the fleet slice call"
+else
+  fail "T2 TasksMax property wiring: scope $_scope_tasks_props (want 4), fleet $_fleet_tasks_props (want 1)"
 fi
 
 # =====================================================================
@@ -282,30 +317,64 @@ printf 'Name:\tclaude\nPid:\t400\nPPid:\t100\n' > "$fx/proc/400/status"
 ln -sf "$fx/exe/claude/versions/2.1.220" "$fx/proc/500/exe"
 printf 'Name:\tnode\nPid:\t500\nPPid:\t100\n' > "$fx/proc/500/status"
 
-got=$(discover_claude_pid 400 "$fx/proc" 2>/dev/null || true)
+got=$(discover_agent_pid 400 "$fx/proc" 2>/dev/null || true)
 if [[ "$got" == "400 comm" ]]; then
   pass "T5 positive: comm==claude is accepted and the matching signal is reported"
 else
   fail "T5 positive comm branch returned '$got', expected '400 comm'"
 fi
 
-got=$(discover_claude_pid 500 "$fx/proc" 2>/dev/null || true)
+got=$(discover_agent_pid 500 "$fx/proc" 2>/dev/null || true)
 if [[ "$got" == "500 exe" ]]; then
   pass "T5 positive: exe under */claude/versions/* is accepted and reported"
 else
   fail "T5 positive exe branch returned '$got', expected '500 exe'"
 fi
 
+# devin and codex sessions are adoptable agents too — devin reads .claude
+# hooks, and the sibling sweep covers the rest. Both match on comm.
+mkdir -p "$fx/proc/600" "$fx/proc/700" "$fx/proc/800"
+printf 'devin\n' > "$fx/proc/600/comm"
+printf 'devin\0acp\0' > "$fx/proc/600/cmdline"
+printf 'Name:\tdevin\nPid:\t600\nPPid:\t100\n' > "$fx/proc/600/status"
+printf 'codex\n' > "$fx/proc/700/comm"
+printf 'codex\0resume\0abc\0' > "$fx/proc/700/cmdline"
+printf 'Name:\tcodex\nPid:\t700\nPPid:\t100\n' > "$fx/proc/700/status"
+
+got=$(discover_agent_pid 600 "$fx/proc" 2>/dev/null || true)
+if [[ "$got" == "600 comm" ]]; then
+  pass "T5 positive: comm==devin is accepted"
+else
+  fail "T5 devin comm branch returned '$got', expected '600 comm'"
+fi
+got=$(discover_agent_pid 700 "$fx/proc" 2>/dev/null || true)
+if [[ "$got" == "700 comm" ]]; then
+  pass "T5 positive: comm==codex is accepted"
+else
+  fail "T5 codex comm branch returned '$got', expected '700 comm'"
+fi
+
+# `codex app-server` is the shared daemon, NOT a session — adopting it would
+# put every codex session's backend under one session's cap.
+printf 'codex\n' > "$fx/proc/800/comm"
+printf 'codex\0app-server\0--listen\0unix://\0' > "$fx/proc/800/cmdline"
+printf 'Name:\tcodex\nPid:\t800\nPPid:\t100\n' > "$fx/proc/800/status"
+if out=$(discover_agent_pid 800 "$fx/proc" 2>/dev/null); then
+  fail "T5 discover_agent_pid adopted the codex app-server daemon (returned '$out') — daemon shapes must be refused"
+else
+  pass "T5 codex app-server daemon refused — the shared backend is never a session"
+fi
+
 # A /proc with no claude anywhere in the ancestry must adopt NOTHING.
-if out=$(discover_claude_pid 300 "$fx/proc" 2>/dev/null); then
-  fail "T5 discover_claude_pid succeeded on a fixture with no verifiable claude exe (returned '$out') — must adopt nothing on no positive match"
+if out=$(discover_agent_pid 300 "$fx/proc" 2>/dev/null); then
+  fail "T5 discover_agent_pid succeeded on a fixture with no verifiable claude exe (returned '$out') — must adopt nothing on no positive match"
 else
   pass "T5 no positive identity match ⇒ adopt nothing (not 'keep walking')"
 fi
 
 for bad in 0 1; do
-  if discover_claude_pid "$bad" "$fx/proc" >/dev/null 2>&1; then
-    fail "T5 discover_claude_pid accepted PID $bad"
+  if discover_agent_pid "$bad" "$fx/proc" >/dev/null 2>&1; then
+    fail "T5 discover_agent_pid accepted PID $bad"
   else
     pass "T5 PID $bad rejected"
   fi
@@ -345,14 +414,14 @@ else
 fi
 
 printf 'claude\n' > "$hopfx/proc/909/comm"   # hop 9 counting the leaf as hop 1
-if _out=$(discover_claude_pid 901 "$hopfx/proc" 2>/dev/null); then
+if _out=$(discover_agent_pid 901 "$hopfx/proc" 2>/dev/null); then
   fail "T5b claude at hop 9 was ADOPTED (returned '$_out') — the walk ran past MAX_WALK_HOPS=$MAX_WALK_HOPS"
 else
   pass "T5b claude at hop 9 is NOT reached — MAX_WALK_HOPS=$MAX_WALK_HOPS is a boundary, not a suggestion"
 fi
 printf 'sh\n' > "$hopfx/proc/909/comm"
 printf 'claude\n' > "$hopfx/proc/908/comm"   # hop 8 — the last hop the walk may examine
-got=$(discover_claude_pid 901 "$hopfx/proc" 2>/dev/null || true)
+got=$(discover_agent_pid 901 "$hopfx/proc" 2>/dev/null || true)
 if [[ "$got" == "908 comm" ]]; then
   pass "T5b claude at hop 8 IS reached (returned '$got') — the walk uses its whole budget"
 else
@@ -373,13 +442,13 @@ printf 'sh\n' > "$hopfx/proc/908/comm"
 mkdir -p "$hopfx/bin"
 cp /bin/true "$hopfx/bin/node" 2>/dev/null || printf '#!/bin/sh\nexit 0\n' > "$hopfx/bin/node"
 ln -sf "$hopfx/bin/node" "$hopfx/proc/903/exe"
-got=$( export CLAUDE_CODE_EXECPATH="$hopfx/bin/node"; discover_claude_pid 901 "$hopfx/proc" 2>/dev/null || true )
+got=$( export CLAUDE_CODE_EXECPATH="$hopfx/bin/node"; discover_agent_pid 901 "$hopfx/proc" 2>/dev/null || true )
 if [[ "$got" == "903 execpath" ]]; then
   pass "T5b execpath predicate: a generic-interpreter CLAUDE_CODE_EXECPATH DOES adopt a plain node ancestor (returned '$got') — the hazard, reproduced"
 else
   fail "T5b execpath predicate returned '$got', expected '903 execpath' — the predicate the e2e arm's unset defends against has changed shape"
 fi
-if ( unset CLAUDE_CODE_EXECPATH; discover_claude_pid 901 "$hopfx/proc" >/dev/null 2>&1 ); then
+if ( unset CLAUDE_CODE_EXECPATH; discover_agent_pid 901 "$hopfx/proc" >/dev/null 2>&1 ); then
   fail "T5b NEGATIVE: with CLAUDE_CODE_EXECPATH unset the node ancestor was STILL adopted — unsetting it in the e2e invocation buys nothing"
 else
   pass "T5b NEGATIVE: with CLAUDE_CODE_EXECPATH unset the same node ancestor is not adopted"
