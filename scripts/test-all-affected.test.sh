@@ -24,7 +24,11 @@
 #   RAN record + rc=0). The chokepoint, the classifier, the pre-pass and the
 #   refusal arms all stay live; only the suite payload is stubbed. The affected
 #   declarations lib is copied beside the sandbox runner except in the arm that
-#   asserts its absence.
+#   asserts its absence. A fifth seam, SANDBOX_STAGED_NAMES (#9173), ships inline
+#   inside the runner's staged-scope branch rather than being injected — a
+#   post-assembly substitution cannot prove the branch diff sources stayed dark
+#   under `--affected-scope=staged`, so the staged arms substitute the index
+#   read at its own derivation point.
 #
 # WHY A SANDBOX AT ALL. Asserting "suite X was not selected" requires a controlled
 # diff; the real worktree's diff is whatever this branch happens to touch. The
@@ -1197,13 +1201,186 @@ else
   fail "z8: rc=${_ng_rc:-0} out=$(tail -3 <<<"$_out" | tr '\n' ' ')"
 fi
 
+# --- Rows sc: --affected-scope=staged (#9173) ---------------------------------
+# The pre-commit gate's unit of work is the COMMIT: under staged scope the
+# selection diff is the index (`git diff --cached`), the branch window is
+# dark, and a staged runner/index path resolves to BOUNDED selection (self-
+# edges + the unconditional always-on battery) under a loud note — never the
+# full-corpus fallback that made ts commits unlandable on runner-diff
+# branches. Branch scope keeps byte-identical behavior; rows a-z8 above are
+# the regression net for that.
+
+# sc1-sc3: flag mis-combinations exit 2 — the scope describes only the
+# affected axes, so a --full ask, an unknown enum, or a non-affected
+# TEST_GROUP must refuse rather than silently scope nothing.
+cases=$((cases + 1))
+rc=0
+env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --affected-scope=staged --full >/dev/null 2>&1 || rc=$?
+if [[ "$rc" == "2" ]]; then
+  pass "sc1: --affected-scope with --full exits 2"
+else
+  fail "sc1: --affected-scope=staged --full rc=$rc, expected 2"
+fi
+
+cases=$((cases + 1))
+rc=0
+env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --affected --affected-scope=bogus >/dev/null 2>&1 || rc=$?
+if [[ "$rc" == "2" ]]; then
+  pass "sc2: unknown --affected-scope value exits 2"
+else
+  fail "sc2: --affected-scope=bogus rc=$rc, expected 2"
+fi
+
+cases=$((cases + 1))
+rc=0
+env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --affected-scope=staged scripts >/dev/null 2>&1 || rc=$?
+if [[ "$rc" == "2" ]]; then
+  pass "sc3: --affected-scope under a non-affected TEST_GROUP exits 2"
+else
+  fail "sc3: --affected-scope=staged scripts rc=$rc, expected 2"
+fi
+
+# sc4: `--affected-scope=branch` is the default spelled out — accepted, runs.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=.github/workflows/tenant-integration.yml' \
+  -- --affected --affected-scope=branch
+if [[ "$ARM_RC" == "0" ]] && grep -qF 'MODE=affected' <<<"$ARM_OUT"; then
+  pass "sc4: --affected-scope=branch accepted (identical to default)"
+else
+  fail "sc4: rc=$ARM_RC out=$(tail -3 <<<"$ARM_OUT" | tr '\n' ' ')"
+fi
+
+# sc5: the commit-scope gate. Staged set = two ts test files — the run must
+# select their edged suites plus always-on ratchets, print the scope line,
+# and fire NEITHER the full-corpus fallback NOR the runner-scope note (no
+# runner/index path is staged). Two staged paths also pin that a second
+# staged file is unioned, not shadowed (Guard 1 row 3).
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  $'SANDBOX_STAGED_NAMES=tests/commands/test-sync-domain-model.sh\nplugins/soleur/test/c4-model-freshness.test.sh' \
+  -- --affected --affected-scope=staged
+if [[ "$ARM_RC" == "0" ]] \
+  && grep -qF 'AFFECTED_SCOPE' <<<"$ARM_OUT" \
+  && grep -qF 'scope=staged' <<<"$ARM_OUT" \
+  && grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\tplugins/soleur/test/c4-model-freshness.test.sh' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD" \
+  && ! grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
+  && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
+  pass "sc5: staged ts selects edged+always-on — no fallback, no runner-scope note"
+else
+  fail "sc5: rc=$ARM_RC ran=$(ran_count) markers=$(grep -cE 'AFFECTED_' <<<"$ARM_OUT")"
+fi
+
+# sc6: a staged runner/index path resolves to BOUNDED selection under a loud
+# note — the runner's own always-on battery still runs, unedged suites still
+# decline, and _aff_fallback stays empty so the run never degrades to the
+# full corpus.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_STAGED_NAMES=scripts/test-all.sh' \
+  -- --affected --affected-scope=staged
+if [[ "$ARM_RC" == "0" ]] \
+  && grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT" \
+  && ! grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
+  && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD" \
+  && ! grep -qF $'RAN\ttests/scripts/registry-gate-mutation-battery' <<<"$ARM_RECORD" \
+  && ! grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+  pass "sc6: staged runner path → bounded selection + runner-in-scope note"
+else
+  fail "sc6: rc=$ARM_RC ran=$(ran_count) markers=$(grep -cE 'AFFECTED_' <<<"$ARM_OUT")"
+fi
+
+# sc7: a staged-diff detection failure still degrades to the full battery —
+# the fail-safe direction is unchanged under staged scope.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_STAGED_NAMES=tests/commands/test-sync-domain-model.sh' \
+  'SANDBOX_DETECT_OK=0' \
+  -- --affected --affected-scope=staged
+_rc=$ARM_RC; _ran=$(ran_count)
+_decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n "$ARM_SB") )) \
+  && grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
+  && grep -qF 'undecidable-diff' <<<"$ARM_OUT" \
+  && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
+  pass "sc7: staged-diff detection failure degrades to full (undecidable-diff)"
+else
+  fail "sc7: rc=$_rc ran=${_ran} decl=${_decl} runnable=$(runnable_n "$ARM_SB")"
+fi
+
+# sc8: TEST_GROUP=affected (the heuristic axis) scopes its diff the same way
+# — the flag is valid on either affected axis.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_STAGED_NAMES=tests/commands/test-sync-domain-model.sh' \
+  'TEST_GROUP=affected' \
+  -- --affected-scope=staged
+if [[ "$ARM_RC" == "0" ]] \
+  && grep -qF 'AFFECTED_SCOPE' <<<"$ARM_OUT" \
+  && grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+  pass "sc8: TEST_GROUP=affected + staged flag scopes the heuristic axis"
+else
+  fail "sc8: rc=$ARM_RC ran=$(ran_count) out=$(tail -3 <<<"$ARM_OUT" | tr '\n' ' ')"
+fi
+
+# --- sc9: the staged branch of the assembly really reads the INDEX ---------
+# The SANDBOX_* seams substitute names, never the invocation — so this arm
+# pins the WIRE, not the artifact (the same real-state technique the infra
+# suite's assembly arm uses): extract the real assembly, evaluate it inside a
+# scratch repo carrying one staged file, one committed-ahead-of-origin file,
+# and one untracked file, and assert the staged blob holds exactly the index.
+cases=$((cases + 1))
+REAL_REPO="$TESTROOT/realstate-staged"
+mkdir -p "$REAL_REPO"
+if (
+  set -e
+  cd "$REAL_REPO"
+  git init -q -b main .
+  git config user.email t@t; git config user.name t
+  echo base > base.txt
+  git add -A && git commit -q -m base
+  git update-ref refs/remotes/origin/main HEAD
+  echo x > branch-only-fixture.sh
+  git add -A && git commit -q -m ahead
+  echo y > staged-fixture.test.ts
+  git add staged-fixture.test.ts
+  echo z > untracked-fixture.test.ts
+) >/dev/null 2>&1; then
+  _staged_asm="$TESTROOT/assembly-staged.sh"
+  awk '/^_diff_detect_ok=0$/,/git ls-files --others/' "$RUNNER" > "$_staged_asm"
+  _asm_gits=$(grep -c 'git ' "$_staged_asm")
+  if ! grep -qF 'diff --cached' "$_staged_asm" || (( _asm_gits < 5 )); then
+    fail "sc9: assembly extraction missing the staged branch (diff --cached absent or truncated: ${_asm_gits} git lines)"
+  else
+    _staged_blob=$(cd "$REAL_REPO" && env -u GIT_DIR bash -c "
+      source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
+      _AFF_SCOPE=staged
+      $(cat "$_staged_asm")
+      printf '%s' \"\$_diff_names\"" 2>/dev/null || true)
+    if grep -qF 'staged-fixture.test.ts' <<<"$_staged_blob" \
+      && ! grep -qF 'branch-only-fixture.sh' <<<"$_staged_blob" \
+      && ! grep -qF 'untracked-fixture.test.ts' <<<"$_staged_blob"; then
+      pass "sc9: staged scope reads the index — branch window and untracked set stay dark"
+    else
+      fail "sc9: blob drifted — staged=$(grep -c staged-fixture <<<"$_staged_blob") branch=$(grep -c branch-only <<<"$_staged_blob") untracked=$(grep -c untracked-fixture <<<"$_staged_blob")"
+    fi
+  fi
+else
+  fail "sc9: real-state scratch repo could not be built"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=43
+MIN_CASES=52
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
