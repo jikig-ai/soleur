@@ -4248,6 +4248,10 @@ if want_scripts; then
   # (exit 0 would auto-close the issue). Explicit run_suite —
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
+  # #9178 CWV field-RUM followthrough (cwv-field-rum-9178.sh): Sentry
+  # transaction rows carry measurements.{lcp,fcp,cls,inp,ttfb}. Explicit
+  # run_suite — scripts/followthroughs/ is covered by no glob here.
+  run_suite "scripts/cwv-field-rum-9178" bash scripts/followthroughs/cwv-field-rum-9178.test.sh
   # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
   # logic behind scheduled-actions-queue-health.yml — live queue depth +
   # delivered-vs-entitled concurrency + median live queued age ->

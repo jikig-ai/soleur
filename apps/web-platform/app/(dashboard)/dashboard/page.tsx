@@ -61,13 +61,10 @@ interface PathStat {
 // ADR-067: the dashboard derives foundation-card completion only from a KNOWN
 // set of KB paths, so it fetches /api/dashboard/foundation-status (a targeted
 // stat) instead of the whole-KB-tree walk (/api/kb/tree buildTree()) that used
-// to gate first paint. It caches under its OWN key (NOT swrKeys.kbTree(), whose
-// richer payload + distinct error mapping would cross-contaminate this
-// consumer). Per-route instant warm render still holds.
-const DASHBOARD_FOUNDATION_STATUS_KEY = [
-  "/api/dashboard/foundation-status",
-  "dashboard",
-] as const;
+// to gate first paint. It caches under swrKeys.dashboardFoundationStatus()
+// (NOT swrKeys.kbTree(), whose richer payload + distinct error mapping would
+// cross-contaminate this consumer). Per-route instant warm render still holds.
+const DASHBOARD_FOUNDATION_STATUS_KEY = swrKeys.dashboardFoundationStatus();
 
 // Carries the dashboard's foundation-status error states through SWR's single
 // error channel (503 → "provisioning", everything else → "error"; 401 →
