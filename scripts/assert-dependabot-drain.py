@@ -53,8 +53,8 @@ REQUIRED = [
     ("web-platform", "js-yaml", 4, "4.3.1"),
     ("web-platform", "hono", 4, "4.12.34"),
     ("web-platform", "@hono/node-server", 1, "1.19.15"),
-    ("web-platform", "ip-address", 10, "10.3.1"),
-    ("web-platform", "fast-uri", 3, "3.1.5"),
+    ("web-platform", "ip-address", 10, "10.5.1"),
+    ("web-platform", "fast-uri", 3, "3.1.7"),
     ("web-platform", "undici", 7, "7.29.0"),
     # Three rows, not one: #1327 removed the blanket `brace-expansion` override, so
     # web-platform legitimately resolves this package on major lines 1, 2 and 5 again
@@ -89,8 +89,8 @@ REQUIRED = [
     ("root", "brace-expansion", 5, "5.0.9"),
     ("pencil-setup", "hono", 4, "4.12.34"),
     ("pencil-setup", "@hono/node-server", 1, "1.19.15"),
-    ("pencil-setup", "ip-address", 10, "10.3.1"),
-    ("pencil-setup", "fast-uri", 3, "3.1.5"),
+    ("pencil-setup", "ip-address", 10, "10.5.1"),
+    ("pencil-setup", "fast-uri", 3, "3.1.7"),
 ]
 
 # THE FLOOR UNDER THE FLOOR. The structural check in main() asserts a row's minimum sits
@@ -114,8 +114,8 @@ FLOOR_ANCHORS = {
     ("js-yaml", 4): "4.3.1",
     ("undici", 7): "7.29.0",
     ("nanoid", 3): "3.3.18",
-    ("ip-address", 10): "10.3.1",
-    ("fast-uri", 3): "3.1.5",
+    ("ip-address", 10): "10.5.1",
+    ("fast-uri", 3): "3.1.7",
     ("hono", 4): "4.12.34",
     ("@hono/node-server", 1): "1.19.15",
     ("@opentelemetry/propagator-jaeger", 2): "2.9.0",

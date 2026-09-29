@@ -342,6 +342,7 @@
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
+1	scripts/followthroughs/cwv-field-rum-9178.sh
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
 1	scripts/followthroughs/inngest-luks-cutover-6894.sh

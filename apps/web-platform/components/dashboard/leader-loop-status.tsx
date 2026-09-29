@@ -26,11 +26,13 @@
 // caller threads the artifact URL through).
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import useSWR from "swr";
 
 import { AcknowledgedPill } from "@/components/dashboard/acknowledged-pill";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
 import { createClient } from "@/lib/supabase/client";
+import { swrKeys } from "@/lib/swr-config";
 import { reportSilentFallback } from "@/lib/client-observability";
 import {
   deriveTodayCardState,
@@ -89,12 +91,35 @@ function isTerminalSubscribeStatus(status: string): boolean {
   );
 }
 
+// #9178 mount-fetch contract — the cost GET rides an SWR key so duplicate
+// mounts of this card coalesce. The fetcher throws on non-2xx so SWR retains
+// the last-known cost (the former `if (res.ok) setCost` keep-last-known arm);
+// `onError` carries the Sentry mirror the catch block used to.
+async function fetchTodayCost(key: readonly [string, ...unknown[]]): Promise<CostJson> {
+  const res = await fetch(key[0]);
+  if (!res.ok) throw new Error(`today-cost ${res.status}`);
+  return (await res.json()) as CostJson;
+}
+
 export function LeaderLoopStatus({
   messageId,
   initialArtifactUrl,
 }: LeaderLoopStatusProps) {
   const [row, setRow] = useState<TodayCardActionSendInput | null>(null);
-  const [cost, setCost] = useState<CostJson | null>(null);
+  const { data: cost, mutate: refreshCostSwr } = useSWR<CostJson>(
+    swrKeys.todayCost(messageId),
+    fetchTodayCost,
+    {
+      onError: (err) =>
+        // Cost refresh is best-effort; server-side enforces the actual
+        // ceiling. Mirror to Sentry per cq-silent-fallback-must-mirror-to-
+        // sentry so a sustained /cost outage during a real spawn is visible.
+        reportSilentFallback(err, {
+          feature: "leader-loop-status",
+          op: "refresh-cost",
+        }),
+    },
+  );
   const [optimisticStopping, setOptimisticStopping] = useState(false);
   const [undoState, setUndoState] = useState<UndoState>({ kind: "idle" });
   const [cancelError, setCancelError] = useState<string | null>(null);
@@ -124,23 +149,11 @@ export function LeaderLoopStatus({
     }
   }, [messageId]);
 
+  // Pull a fresh cost read through the shared SWR key (mount fetch is SWR's
+  // own; poll ticks and Realtime UPDATEs revalidate through here).
   const refreshCost = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/dashboard/today/${messageId}/cost`);
-      if (res.ok) {
-        const json = (await res.json()) as CostJson;
-        setCost(json);
-      }
-    } catch (err) {
-      // Cost refresh is best-effort; server-side enforces the actual
-      // ceiling. Mirror to Sentry per cq-silent-fallback-must-mirror-to-
-      // sentry so a sustained /cost outage during a real spawn is visible.
-      reportSilentFallback(err, {
-        feature: "leader-loop-status",
-        op: "refresh-cost",
-      });
-    }
-  }, [messageId]);
+    await refreshCostSwr();
+  }, [refreshCostSwr]);
 
   fetchRowRef.current = fetchRow;
   refreshCostRef.current = refreshCost;
@@ -165,7 +178,8 @@ export function LeaderLoopStatus({
     }
 
     fetchRow();
-    refreshCost();
+    // No refreshCost() here — useSWR issues the mount fetch itself; a bound
+    // mutate bypasses dedupingInterval and would double-fire at mount.
 
     const supabase = createClient();
     const channel = supabase
