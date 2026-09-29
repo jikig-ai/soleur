@@ -92,6 +92,9 @@ describe("migration 145: Codex auth-mode rebinding", () => {
     const down = read("147_codex_lifecycle_state_sync.down.sql");
     expect(down).toMatch(/FOR UPDATE/);
     expect(down).toMatch(/UPDATE public\.agent_engine_attempts AS a SET[\s\S]*status = p_payload->>'status'/);
+    const priorLifecycle = read("146_codex_terminal_lifecycle.sql").match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+    const rollbackLifecycle = down.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+    expect(rollbackLifecycle).toBe(priorLifecycle);
   });
 
   it("keeps applied migrations 145 and 146 immutable and puts lifecycle sync in migration 147", () => {
