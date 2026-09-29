@@ -83,27 +83,33 @@ describe("migration 145: Codex auth-mode rebinding", () => {
   });
 
   it("commits every lifecycle status and its attempt transition in one RPC", () => {
-    const sql = read("146_codex_terminal_lifecycle.sql");
+    const sql = read("147_codex_lifecycle_state_sync.sql");
     const lifecycle = sql.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
 
     expect(lifecycle).toMatch(/^\s*INSERT INTO public\.agent_engine_events[\s\S]*RETURNING \* INTO v_row/m);
     expect(lifecycle).toMatch(/IF p_payload->>'source_type' = 'status'[\s\S]*p_payload->>'status' IS DISTINCT FROM v_attempt\.status THEN\s+PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
     expect(lifecycle).not.toMatch(/UPDATE public\.agent_engine_attempts AS a SET/);
-    const down = read("146_codex_terminal_lifecycle.down.sql");
-    expect(down).toMatch(/FOR SHARE/);
-    expect(down).not.toMatch(/UPDATE public\.agent_engine_attempts AS a[\s\S]*status = p_payload->>'status'/);
+    const down = read("147_codex_lifecycle_state_sync.down.sql");
+    expect(down).toMatch(/FOR UPDATE/);
+    expect(down).toMatch(/UPDATE public\.agent_engine_attempts AS a SET[\s\S]*status = p_payload->>'status'/);
   });
 
-  it("keeps migration 145 immutable and puts terminal outcomes in migration 146", () => {
+  it("keeps applied migrations 145 and 146 immutable and puts lifecycle sync in migration 147", () => {
     const applied = readFileSync(path.join(root, "145_codex_auth_mode_rebind.sql"));
     const gitBlob = createHash("sha1")
       .update(Buffer.concat([Buffer.from(`blob ${applied.length}\0`), applied]))
       .digest("hex");
     expect(gitBlob).toBe("18282434482be03df053d014aa94ad0f153a631b");
 
-    const delta = read("146_codex_terminal_lifecycle.sql");
+    const appliedLifecycle = readFileSync(path.join(root, "146_codex_terminal_lifecycle.sql"));
+    const lifecycleBlob = createHash("sha1")
+      .update(Buffer.concat([Buffer.from(`blob ${appliedLifecycle.length}\0`), appliedLifecycle]))
+      .digest("hex");
+    expect(lifecycleBlob).toBe("b006fb01c2544addd8035be4314273e14b7526ab");
+
+    const delta = read("147_codex_lifecycle_state_sync.sql");
     expect(delta).toMatch(/FOR UPDATE/);
-    expect(delta).toMatch(/UPDATE public\.agent_engine_attempts AS a[\s\S]*status = p_payload->>'status'/);
+    expect(delta).toMatch(/PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
   });
 
   it("restores the prior owner RPC and schema on rollback", () => {

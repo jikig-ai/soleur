@@ -1,5 +1,5 @@
--- 146_codex_terminal_lifecycle.sql
--- Persist terminal lifecycle events and attempt status in the same transaction.
+-- 147_codex_lifecycle_state_sync.down.sql
+-- Restore migration 146 lifecycle status behavior.
 BEGIN;
 SET LOCAL lock_timeout = '30s';
 SET LOCAL statement_timeout = '5min';

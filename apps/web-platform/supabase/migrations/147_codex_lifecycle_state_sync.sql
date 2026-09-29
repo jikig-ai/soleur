@@ -1,5 +1,5 @@
--- 146_codex_terminal_lifecycle.sql
--- Persist terminal lifecycle events and attempt status in the same transaction.
+-- 147_codex_lifecycle_state_sync.sql
+-- Persist lifecycle events and attempt status in the same transaction.
 BEGIN;
 SET LOCAL lock_timeout = '30s';
 SET LOCAL statement_timeout = '5min';
@@ -31,15 +31,15 @@ BEGIN
      OR (p_payload->>'source_type' <> 'status' AND p_payload ? 'status') THEN
     RAISE EXCEPTION 'event payload is not bounded lifecycle metadata' USING ERRCODE = '22023';
   END IF;
-  SELECT r.auth_mode_generation INTO v_run_generation
-    FROM public.agent_engine_runs AS r WHERE r.id = p_run_id FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'engine run not found' USING ERRCODE = 'P0002';
-  END IF;
   SELECT a.* INTO v_attempt FROM public.agent_engine_attempts AS a
    WHERE a.id = p_attempt_id AND a.run_id = p_run_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'attempt does not belong to binding' USING ERRCODE = '42501';
+  END IF;
+  SELECT r.auth_mode_generation INTO v_run_generation
+    FROM public.agent_engine_runs AS r WHERE r.id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'engine run not found' USING ERRCODE = 'P0002';
   END IF;
   IF v_attempt.accepted_at IS NULL
      AND v_attempt.auth_mode_generation IS DISTINCT FROM v_run_generation
@@ -53,19 +53,11 @@ BEGIN
   VALUES (p_run_id, p_attempt_id, 'engine-event-' || v_sequence::text, v_sequence, p_payload)
   RETURNING * INTO v_row;
   IF p_payload->>'source_type' = 'status'
-     AND p_payload->>'status' IN ('completed','failed','cancelled') THEN
-    IF v_attempt.status IN ('completed','failed','cancelled')
-       AND v_attempt.status IS DISTINCT FROM p_payload->>'status' THEN
-      RAISE EXCEPTION 'terminal engine attempt is immutable' USING ERRCODE = '23P01';
-    END IF;
-    IF v_attempt.status NOT IN ('running','waiting','cancel_requested','completed','failed','cancelled') THEN
-      RAISE EXCEPTION 'invalid terminal engine attempt transition' USING ERRCODE = '23P01';
-    END IF;
-    UPDATE public.agent_engine_attempts AS a SET
-      status = p_payload->>'status',
-      updated_at = now(),
-      terminal_at = COALESCE(a.terminal_at, now())
-      WHERE a.id = p_attempt_id;
+     AND p_payload->>'status' IS DISTINCT FROM v_attempt.status THEN
+    -- Reuse the attempt state machine in this transaction, so lifecycle rows
+    -- and current status advance together for running, waiting, cancellation,
+    -- and terminal outcomes.
+    PERFORM public.transition_agent_engine_attempt(p_attempt_id, p_payload->>'status');
   END IF;
   RETURN v_row;
 END;
