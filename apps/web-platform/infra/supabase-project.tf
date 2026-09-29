@@ -34,9 +34,11 @@
 # The `import {}` block is ONE-TIME (ADR-222 convention — the same shape the
 # #8216 monitor import used in uptime-alerts.tf before it was removed): once
 # the per-merge apply reports "1 to import" and the read-back passes, delete
-# the block in the follow-up PR. Kept past adoption it is not inert — a
-# vendor-side deletion of the project would make every untargeted plan
-# re-attempt the import against a missing object and abort (the drift
+# the block in the follow-up PR — the Micro→Small flip PR touches this file
+# anyway, so deleting it THERE is the carried plan (the flip PR must delete
+# the block, not just change instance_size). Kept past adoption it is not
+# inert — a vendor-side deletion of the project would make every untargeted
+# plan re-attempt the import against a missing object and abort (the drift
 # detector's plan is untargeted).
 import {
   to = supabase_project.prd
@@ -44,12 +46,15 @@ import {
 }
 
 resource "supabase_project" "prd" {
-  organization_id         = "vttwegzidmuaiefjlysl"
-  name                    = "soleur-web-platform"
-  region                  = "eu-west-1"
-  database_password       = "unmanaged-9168" # gitleaks:allow # issue:#9168 placeholder literal, never applied (lifecycle.ignore_changes)
-  instance_size           = "micro"          # pin LIVE; "small" flip is a follow-up PR
-  legacy_api_keys_enabled = true             # measured GET /api-keys/legacy
+  organization_id   = "vttwegzidmuaiefjlysl"
+  name              = "soleur-web-platform"
+  region            = "eu-west-1"
+  database_password = "unmanaged-9168" # gitleaks:allow # issue:#9168 placeholder literal, never applied (lifecycle.ignore_changes)
+  instance_size     = "micro"          # pin LIVE; "small" flip is a follow-up PR
+  # legacy_api_keys_enabled is DEPRECATED in provider ~> 1.11 — Update PUTs
+  # /api-keys/legacy on any diff. If Supabase force-migrates projects off
+  # legacy keys, the pin may need manual removal rather than an apply.
+  legacy_api_keys_enabled = true # measured GET /api-keys/legacy
 
   lifecycle {
     ignore_changes = [database_password]

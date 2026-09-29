@@ -94,6 +94,55 @@ describe("scheduled-supabase-watchdog workflow contract (#9168)", () => {
     expect(src()).toContain('select(.user.login == "github-actions[bot]")');
   });
 
+  it("writes the sentinel BEFORE the restart POST and the claim label AFTER it", () => {
+    // The protocol order is load-bearing: sentinel → POST → label. Within the
+    // restart step's run block, the sentinel write must precede the POST and
+    // the label must follow it — a reorder silently loses tamper evidence.
+    const s = src();
+    const step = s.slice(s.indexOf("id: restart"));
+    const iSentinel = step.indexOf("watchdog:restart epoch=");
+    const iPost = step.indexOf("/v1/projects/${REF}/restart");
+    const iLabel = step.indexOf('add-label "watchdog-restart-attempted"');
+    expect(iSentinel).toBeGreaterThan(-1);
+    expect(iPost).toBeGreaterThan(-1);
+    expect(iLabel).toBeGreaterThan(-1);
+    expect(iSentinel).toBeLessThan(iPost);
+    expect(iPost).toBeLessThan(iLabel);
+    expect(step).toContain("blocked-ledger-write");
+  });
+
+  it("plumbs the REAL probe verdict into --decide (not a re-asserted literal)", () => {
+    // A hardcoded `--verdict hang-signature` would leave the step `if:` as the
+    // ONLY signature gate; plumbing the probe output means a loosened `if:`
+    // can never turn an ambiguous run into a restart.
+    expect(src()).toContain("--verdict \"$VERDICT\"");
+    expect(src()).toContain("VERDICT: ${{ steps.probe.outputs.verdict }}");
+  });
+
+  it("gates restart-capable steps on hang-signature + a healthy ledger", () => {
+    const jobs = doc().jobs as Record<string, { steps?: { id?: string; if?: string }[] }>;
+    const steps = (jobs.watchdog?.steps ?? []).filter((s) => s.id);
+    const byId = new Map(steps.map((s) => [s.id, s]));
+    for (const id of ["ledger", "decide"]) {
+      expect(byId.get(id)?.if ?? "").toContain("hang-signature");
+      expect(byId.get(id)?.if ?? "").toContain("issue_ok == 'true'");
+    }
+    expect(byId.get("restart")?.if).toBe(
+      "always() && steps.decide.outputs.action == 'restart'",
+    );
+    expect(byId.get("audit")?.if ?? "").toContain("always()");
+  });
+
+  it("fails closed on ledger READ failures, not just corrupt content", () => {
+    // `|| true` on the comments/labels reads would make a partial GitHub
+    // outage indistinguishable from an empty ledger — silently resetting the
+    // cooldown and give-up bounds.
+    expect(src()).toContain('COMMENTS_RC=$?');
+    expect(src()).toContain('CLAIM_RC=$?');
+    expect(src()).toContain('corrupt="1"');
+    expect(src()).toContain('EDITED_SENTINELS');
+  });
+
   it("checks into the scheduled-supabase-watchdog Sentry monitor as the terminal step", () => {
     const jobs = doc().jobs ?? {};
     const jobNames = Object.keys(jobs);

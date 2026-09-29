@@ -139,8 +139,11 @@ recovery waits on a human even though the failure signature and its remedy
 2. Submit the committed support-ticket draft via the Supabase dashboard.
 3. Confirm the `ops@jikigai.com` Better Stack invite was accepted (re-accept if
    pending).
-4. Complete the Small compute upgrade apply if it requires a window (est. ~2
-   min downtime).
+4. Arm the watchdog after the detect-only soak looks clean:
+   `gh variable set WATCHDOG_ARMED --body 1` (runbook documents the disarm for
+   planned maintenance).
+5. Complete the Small compute upgrade apply if it requires a window (est. ~2
+   min downtime — disarm the watchdog first, per the runbook).
 
 ## Acceptance Criteria
 

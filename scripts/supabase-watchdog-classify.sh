@@ -73,7 +73,17 @@ classify_health_read() {
     echo "probe-unavailable"; return 0
   fi
   local pairs
-  pairs="$(printf '%s' "$body" | jq -r '.[] | select(type == "object") | "\(.name // "?")=\(.status // "?")"' 2>/dev/null)" || {
+  # Field vocabulary is validated INSIDE jq on the raw values — a `\n` or `=`
+  # inside a crafted name/status would otherwise split into multiple emitted
+  # lines that each pass a post-split check (field-injection). @@BAD@@ is a
+  # deliberate non-vocabulary token: it lands in the `*)` arm → extra_bad.
+  pairs="$(printf '%s' "$body" | jq -r \
+    'if all(.[]; type == "object")
+     then .[] | if (.name | type == "string") and (.name | test("^[a-z_]+$"))
+                 and (.status | type == "string") and (.status | test("^[A-Z_]+$"))
+                 then "\(.name)=\(.status)"
+                 else "@@BAD@@" end
+     else "@@BAD@@" end' 2>/dev/null)" || {
     echo "probe-unavailable"; return 0
   }
   local db="" auth="" rest="" pooler="" extra_bad=0
@@ -171,7 +181,9 @@ parse_restart_ledger() {
     if [[ "$marker" =~ ^\<!--[[:space:]]*watchdog:restart[[:space:]]+epoch=([0-9]{9,11})[[:space:]]*--\>$ ]]; then
       attempts=$((attempts + 1))
       e="${BASH_REMATCH[1]}"
-      if [[ "$last_epoch" == "none" ]] || (( e > last_epoch )); then
+      # `10#$e` base-pins the comparison: a 0-prefixed epoch containing 8/9
+      # would error inside (( )) and silently lose the last_epoch max.
+      if [[ "$last_epoch" == "none" ]] || (( 10#$e > 10#$last_epoch )); then
         last_epoch="$e"
       fi
     else
@@ -197,6 +209,10 @@ watchdog_decision() {
   local verdict="$1" armed="$2" corrupt="$3" claimed="$4" attempts="$5" \
         last_epoch="$6" now="$7"
   local cooldown_sec="${8:-1800}" max_attempts="${9:-3}"
+  # Base-pin the epoch once: a 0-prefixed value containing 8/9 aborts (( ))
+  # arithmetic under -u with no output — failing LOUD to the caller's rescue
+  # path is fine, but normalizing keeps the function pure on valid input.
+  [[ "$last_epoch" =~ ^[0-9]+$ ]] && last_epoch="$((10#$last_epoch))"
   if [[ "$verdict" != "hang-signature" ]]; then
     echo "no-action"; return 0
   fi
@@ -208,6 +224,13 @@ watchdog_decision() {
   fi
   if (( attempts >= max_attempts )); then
     echo "give-up"; return 0
+  fi
+  # A far-FUTURE epoch (edited/forged sentinel, or clock skew past tolerance)
+  # would make `now - last_epoch` negative and yield a silent PERMANENT
+  # cooldown — the bound can't be weakened by it, but the watchdog would never
+  # restart again with no signal. Fail closed loudly instead.
+  if [[ "$last_epoch" =~ ^[0-9]+$ ]] && (( last_epoch > now + 300 )); then
+    echo "fail-closed"; return 0
   fi
   if [[ "$last_epoch" =~ ^[0-9]+$ ]] && (( now - last_epoch < cooldown_sec )); then
     echo "cooldown"; return 0
@@ -253,19 +276,31 @@ main() {
       shift
       local verdict="" armed="" corrupt="" claimed="" attempts="" last_epoch="" now="" cooldown="" maxa=""
       while (( $# )); do
+        # `shift 2` on a value-less flag fails WITHOUT shifting (the script runs
+        # without -e) — bare `shift 2` here is an infinite loop, not an error.
         case "$1" in
-          --verdict)       verdict="${2:-}"; shift 2 ;;
-          --armed)         armed="${2:-}"; shift 2 ;;
-          --corrupt)       corrupt="${2:-}"; shift 2 ;;
-          --claimed)       claimed="${2:-}"; shift 2 ;;
-          --attempts)      attempts="${2:-}"; shift 2 ;;
-          --last-epoch)    last_epoch="${2:-}"; shift 2 ;;
-          --now)           now="${2:-}"; shift 2 ;;
-          --cooldown-sec)  cooldown="${2:-}"; shift 2 ;;
-          --max-attempts)  maxa="${2:-}"; shift 2 ;;
+          --verdict)       verdict="${2:-}";      shift 2 || { _usage; return 64; } ;;
+          --armed)         armed="${2:-}";        shift 2 || { _usage; return 64; } ;;
+          --corrupt)       corrupt="${2:-}";      shift 2 || { _usage; return 64; } ;;
+          --claimed)       claimed="${2:-}";      shift 2 || { _usage; return 64; } ;;
+          --attempts)      attempts="${2:-}";     shift 2 || { _usage; return 64; } ;;
+          --last-epoch)    last_epoch="${2:-}";   shift 2 || { _usage; return 64; } ;;
+          --now)           now="${2:-}";          shift 2 || { _usage; return 64; } ;;
+          --cooldown-sec)  cooldown="${2:-}";     shift 2 || { _usage; return 64; } ;;
+          --max-attempts)  maxa="${2:-}";         shift 2 || { _usage; return 64; } ;;
           *) _usage; return 64 ;;
         esac
       done
+      # Vocabulary checks BEFORE the required-arg pass: a value-shaped typo
+      # (`--claimed --now 5`) must die here, not flow into `(( ))` arithmetic
+      # where strings coerce and `a[$(...)]` can evaluate.
+      for pair in "armed:$armed" "corrupt:$corrupt" "claimed:$claimed"; do
+        [[ "${pair#*:}" =~ ^[01]$ ]] || { _usage; return 64; }
+      done
+      for pair in "attempts:$attempts" "now:$now" "cooldown:${cooldown:-0}" "maxa:${maxa:-0}"; do
+        [[ "${pair#*:}" =~ ^[0-9]+$ ]] || { _usage; return 64; }
+      done
+      [[ "$last_epoch" =~ ^[0-9]+$|^none$ ]] || { _usage; return 64; }
       # Two parallel arrays, not `${!name}`: indirect expansion resolves a
       # variable chosen at runtime, which prints its VALUE under `bash -x` —
       # the credential-leak class lint-shell-trace-credential-refusal guards.
@@ -297,7 +332,8 @@ main() {
   local -a codes=() bodies=()
   while (( $# )); do
     case "$1" in
-      --corroborator) corr="${2:-unreachable}"; shift 2 ;;
+      # Same bare-shift infinite-loop guard as --decide.
+      --corroborator) corr="${2:-unreachable}"; shift 2 || { _usage; return 64; } ;;
       --read)
         if (( $# < 3 )); then _usage; return 64; fi
         codes+=("$2"); bodies+=("$3"); shift 3 ;;

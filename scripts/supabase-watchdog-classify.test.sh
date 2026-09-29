@@ -206,10 +206,86 @@ assert_eq "no-action on probe-unavailable" "no-action" \
   "$(watchdog_decision probe-unavailable 1 0 0 0 none "$NOW")"
 assert_eq "detect-only is reported even when armed=0 with a stale ledger entry" "detect-only" \
   "$(watchdog_decision hang-signature 0 0 1 1 1799997000 "$NOW")"
+# fail-closed BEATS detect-only (order is load-bearing: an unarmed watchdog
+# still surfaces a corrupt/claimed ledger as the defect it is, not silence).
+assert_eq "corrupt=1 + armed=0 → fail-closed (beats detect-only)" "fail-closed" \
+  "$(watchdog_decision hang-signature 0 1 0 0 none "$NOW")"
+assert_eq "claimed-without-sentinel + armed=0 → fail-closed (beats detect-only)" "fail-closed" \
+  "$(watchdog_decision hang-signature 0 0 1 0 none "$NOW")"
+# far-FUTURE epoch (edited/forged sentinel or clock skew past tolerance) →
+# fail-closed, never a silent permanent cooldown.
+assert_eq "last_epoch in the future → fail-closed (no silent perma-cooldown)" "fail-closed" \
+  "$(watchdog_decision hang-signature 1 0 1 1 99999999999 "$NOW")"
+# Cooldown boundary — strict <: exactly 1800s since last attempt → restart.
+assert_eq "cooldown boundary: diff==1799 → cooldown" "cooldown" \
+  "$(watchdog_decision hang-signature 1 0 1 1 $((NOW - 1799)) "$NOW")"
+assert_eq "cooldown boundary: diff==1800 → restart" "restart" \
+  "$(watchdog_decision hang-signature 1 0 1 1 $((NOW - 1800)) "$NOW")"
+assert_eq "attempts=2 (< 3 give-up) → restart" "restart" \
+  "$(watchdog_decision hang-signature 1 0 1 2 1799990000 "$NOW")"
+
+# --- hardening: duplicates, malformed tokens, crafted bodies ----------------
+# A DUPLICATED service name is a malformed observation (last-wins would let a
+# second ACTIVE_HEALTHY hide an earlier UNHEALTHY).
+DUP_DB='[{"name":"db","status":"UNHEALTHY"},{"name":"db","status":"ACTIVE_HEALTHY"},{"name":"auth","status":"UNHEALTHY"},{"name":"rest","status":"UNHEALTHY"},{"name":"pooler","status":"ACTIVE_HEALTHY"}]'
+assert_eq "duplicate service name (db twice) → ambiguous" "ambiguous" \
+  "$(classify_health_read 200 "$DUP_DB")"
+assert_eq "duplicate extra service hiding UNHEALTHY behind ACTIVE_HEALTHY → ambiguous" "ambiguous" \
+  "$(classify_health_read 200 '[{"name":"db","status":"UNHEALTHY"},{"name":"auth","status":"UNHEALTHY"},{"name":"rest","status":"UNHEALTHY"},{"name":"pooler","status":"ACTIVE_HEALTHY"},{"name":"storage","status":"UNHEALTHY"},{"name":"storage","status":"ACTIVE_HEALTHY"}]')"
+# Out-of-vocabulary name/status tokens (lowercase status, digit name, missing
+# fields, non-object element) — every malformed shape is ambiguous, and the
+# jq-side validation holds the line BEFORE the pairs are emitted as lines.
+assert_eq "lowercase status vocabulary → ambiguous" "ambiguous" \
+  "$(classify_health_read 200 '[{"name":"db","status":"unhealthy"},{"name":"auth","status":"UNHEALTHY"},{"name":"rest","status":"UNHEALTHY"},{"name":"pooler","status":"ACTIVE_HEALTHY"}]')"
+assert_eq "non-lowercase service name → ambiguous" "ambiguous" \
+  "$(classify_health_read 200 '[{"name":"DB","status":"UNHEALTHY"},{"name":"auth","status":"UNHEALTHY"},{"name":"rest","status":"UNHEALTHY"},{"name":"pooler","status":"ACTIVE_HEALTHY"}]')"
+assert_eq "service element missing .name → ambiguous" "ambiguous" \
+  "$(classify_health_read 200 '[{"status":"UNHEALTHY"},{"name":"db","status":"UNHEALTHY"},{"name":"auth","status":"UNHEALTHY"},{"name":"rest","status":"UNHEALTHY"},{"name":"pooler","status":"ACTIVE_HEALTHY"}]')"
+assert_eq "non-object array element → ambiguous" "ambiguous" \
+  "$(classify_health_read 200 '[{"name":"db","status":"UNHEALTHY"},"x",{"name":"auth","status":"UNHEALTHY"},{"name":"rest","status":"UNHEALTHY"},{"name":"pooler","status":"ACTIVE_HEALTHY"}]')"
+assert_eq "field-injection: newline inside status → ambiguous (not a smuggled read)" "ambiguous" \
+  "$(classify_health_read 200 '[{"name":"pooler","status":"ACTIVE_HEALTHY\ndb=UNHEALTHY"},{"name":"auth","status":"UNHEALTHY"},{"name":"rest","status":"UNHEALTHY"},{"name":"db","status":"UNHEALTHY"}]')"
+
+# --- ledger edge cases --------------------------------------------------------
+# An 8- or 12-digit epoch violates the strict marker regex → corrupt, not
+# silent mis-parse.
+assert_eq "ledger: 8-digit epoch → corrupt=1" "attempts=0 last_epoch=none corrupt=1" \
+  "$(printf '%b' '<!-- watchdog:restart epoch=99999999 -->\n' | parse_restart_ledger)"
+assert_eq "ledger: 12-digit epoch → corrupt=1" "attempts=0 last_epoch=none corrupt=1" \
+  "$(printf '%b' '<!-- watchdog:restart epoch=999999999999 -->\n' | parse_restart_ledger)"
+# A 0-prefixed epoch containing 8/9 must not silently lose the last_epoch max
+# (octal arithmetic error inside (( ))). 10# pins base-10.
+assert_eq "ledger: octal-looking epoch is counted and ordered" "attempts=2 last_epoch=0799999000 corrupt=0" \
+  "$(printf '%b' '<!-- watchdog:restart epoch=0799999000 -->\n<!-- watchdog:restart epoch=0799998000 -->\n' | parse_restart_ledger)"
+# "01799999400" is 11 digits (regex-legal), 0-prefixed, contains 8/9 — the
+# normalization must make it read as 1799999400 (600 s ago) → cooldown, not a
+# bash base error dying mid-function into an unbounded restart.
+assert_eq "decide: octal-looking last_epoch normalizes via 10# → cooldown" "cooldown" \
+  "$(watchdog_decision hang-signature 1 0 1 1 01799999400 "$NOW")"
+
+# --- CLI: usage-error exits and mode coverage ---------------------------------
+assert_eq "CLI --decide happy path → restart" "0|restart" \
+  "$(cli --decide --verdict hang-signature --armed 1 --corrupt 0 --claimed 0 --attempts 0 --last-epoch none --now "$NOW")"
+assert_eq "CLI --decide missing required flag → exit 64" "64|" \
+  "$(cli --decide --verdict hang-signature --armed 1)"
+assert_eq "CLI --decide bare flag (no value) → exit 64, not a hang" "64|" \
+  "$(cli --decide --verdict hang-signature --armed 1 --corrupt 0 --claimed 0 --attempts 0 --last-epoch none --now)"
+assert_eq "CLI --decide non-numeric attempts → exit 64" "64|" \
+  "$(cli --decide --verdict hang-signature --armed 1 --corrupt 0 --claimed 0 --attempts abc --last-epoch none --now "$NOW")"
+assert_eq "CLI --decide flag-shaped value → exit 64" "64|" \
+  "$(cli --decide --verdict hang-signature --armed 1 --corrupt 0 --claimed --now --attempts 0 --last-epoch none --now "$NOW")"
+assert_eq "CLI classify bare --corroborator → exit 64, not a hang" "64|" \
+  "$(cli --corroborator)"
+assert_eq "CLI --read with a code but no body → exit 64" "64|" \
+  "$(cli --corroborator error --read 200 "$SIG" --read 200)"
+ledger_rc=0
+ledger_out="$(printf '%b' "$LEDGER_ONE" | bash "$SCRIPT" --ledger 2>/dev/null)" || ledger_rc=$?
+assert_eq "CLI --ledger mode parses stdin" "0|attempts=1 last_epoch=1799999000 corrupt=0" \
+  "${ledger_rc}|${ledger_out}"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Exact assertion floor: a deleted or skipped row changes the dispatched count.
-readonly EXPECTED_ASSERTIONS=53
+readonly EXPECTED_ASSERTIONS=78
 if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
   printf '  FAIL: dispatched %s assertions, expected exactly %s — a row was added, removed or skipped\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
   exit 1

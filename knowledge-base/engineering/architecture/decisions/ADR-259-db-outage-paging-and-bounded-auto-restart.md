@@ -117,7 +117,16 @@ closed to detect-only):
   Dispatch auth is a GitHub App token per `hr-github-app-auth-not-pat`. A
   Sentry cron monitor covers the watchdog itself, so a dead watchdog pages.
 - **Worst false-positive cost:** ~6 minutes of restart downtime on a service
-  already down — bounded and acceptable against the alternative.
+  whose app-facing data plane is already failing — the corroborator
+  guarantees `/health` reports `supabase: error`, so the priced misfire is a
+  double-fault (control-plane mis-report AND a non-DB corroborator failure,
+  e.g. a rotated service-role key) landing inside a ~3-min window. A restart
+  also aborts in-flight/uncommitted transactions (rolled back, not corrupted)
+  — acceptable precisely because the proven signature's Postgres is already
+  not serving, which is why the corroborator is load-bearing. The residual
+  maintenance-window case (an operator flipping compute while armed) is
+  handled procedurally: disarm before the Small apply, re-arm after.
+  Bounded and acceptable against the alternative.
 
 This is compliance-positive under GDPR Art. 32(1)(c) (timely restoration of
 availability), which is why the CLO signed off with the audit-trail and

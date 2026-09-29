@@ -216,6 +216,23 @@ Watchdog operating notes:
 - **Audit comments are per-tick.** A sustained non-healthy verdict posts ~12 comments/hour on
   the audit issue; accepted noise — the alternative (transition detection) needs last-comment
   parsing for little gain.
+- **Verdict vocabulary** lives in `scripts/supabase-watchdog-classify.sh` (the header comment
+  names every verdict and action token); audit comments embed a self-describing action line.
+- **Force an evaluation now** instead of waiting for the next 5-min tick:
+  `gh workflow run scheduled-supabase-watchdog.yml`. To read the arm state:
+  `gh variable get WATCHDOG_ARMED`; to read the ledger:
+  `gh issue view <audit-issue#> --comments`.
+- **Restart while armed.** Every automated restart shows as a ~6-min incident on the public
+  status page (the corroborator already had it red — intended transparency, not a monitoring
+  defect), and aborts any in-flight writes racing a possible self-recovery — priced into the
+  ADR's bound.
+- **Planned maintenance.** Before the Micro→Small compute apply (or any Supabase control-plane
+  operation on this project) disarm first: `gh variable set WATCHDOG_ARMED --body 0`, re-arm
+  after — transient UNHEALTHY during the resize could otherwise stack a restart on top of a
+  vendor operation.
+- **Management API dark.** If `probe-unavailable` persists, the Management API itself is down —
+  the manual-restart path below is unreachable; use the Supabase dashboard's Restart button
+  after operator authorization, and treat the dark watchdog as its own incident.
 
 ### A manual restart is still a production write
 

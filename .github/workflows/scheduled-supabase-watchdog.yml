@@ -107,7 +107,7 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-health.yml)
 
           strip_log_injection() {
@@ -223,7 +223,7 @@ jobs:
             --description "High-priority incident" --color "B60205" 2>/dev/null || true
           ISSUE_TITLE="[watchdog/supabase-db] Supabase database watchdog audit"
           ISSUE_LIST_RC=0
-          ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open \
+          ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open --limit 100 \
             --label supabase-auto-restart --json number,title 2>/dev/null)" || ISSUE_LIST_RC=$?
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           ISSUE=""
@@ -296,8 +296,14 @@ jobs:
           # comment containing `watchdog:restart` text is noise, not ledger —
           # without the filter a public comment could forge sentinels (false
           # give-up/perma-cooldown) or trip corrupt=1 every tick.
-          COMMENTS="$(gh api "repos/${GH_REPO}/issues/${ISSUE}/comments" --paginate \
-            --jq '[.[] | select(.user.login == "github-actions[bot]") | .body] | .[]' 2>/dev/null)" || COMMENTS_RC=$?
+          # updated_at != created_at on a sentinel-carrying comment means an
+          # EDITED sentinel — rewriting an epoch bypasses the cooldown, so the
+          # edit is treated as ledger corruption (fail-closed).
+          COMMENTS_JSON="$(gh api "repos/${GH_REPO}/issues/${ISSUE}/comments" --paginate \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | {body, created_at, updated_at}]' 2>/dev/null)" || COMMENTS_RC=$?
+          COMMENTS="$(printf '%s' "$COMMENTS_JSON" | jq -r '.[].body' 2>/dev/null || true)"
+          EDITED_SENTINELS="$(printf '%s' "$COMMENTS_JSON" | jq \
+            '[.[] | select(.body | test("watchdog:restart")) | select(.updated_at != .created_at)] | length' 2>/dev/null || echo 1)"
           LEDGER="$(printf '%s\n' "$COMMENTS" | bash "$GITHUB_WORKSPACE/scripts/supabase-watchdog-classify.sh" --ledger 2>/dev/null || true)"
           attempts="$(printf '%s' "$LEDGER" | sed -n 's/^attempts=\([0-9]*\).*/\1/p')"
           last_epoch="$(printf '%s' "$LEDGER" | sed -n 's/.*last_epoch=\([0-9a-z-]*\).*/\1/p')"
@@ -306,6 +312,7 @@ jobs:
           [[ "$last_epoch" =~ ^[0-9]{9,11}$|^none$ ]] || last_epoch="none"
           [[ "$corrupt" =~ ^[01]$ ]] || corrupt="1"   # unparseable ledger line → fail closed
           [[ "$COMMENTS_RC" != "0" ]] && corrupt="1"   # unreadable ledger → fail closed
+          [[ "${EDITED_SENTINELS:-1}" != "0" ]] && corrupt="1"   # edited sentinel → fail closed
           CLAIM_RC=0
           CLAIMED="$(gh issue view "$ISSUE" --repo "$GH_REPO" --json labels \
             --jq '[.labels[].name] | index("watchdog-restart-attempted") // empty' 2>/dev/null)" || CLAIM_RC=$?
@@ -324,6 +331,7 @@ jobs:
         id: decide
         if: steps.probe.outputs.verdict == 'hang-signature' && steps.audit.outputs.issue_ok == 'true'
         env:
+          VERDICT: ${{ steps.probe.outputs.verdict }}
           WATCHDOG_ARMED: ${{ vars.WATCHDOG_ARMED }}
           CORRUPT: ${{ steps.ledger.outputs.corrupt }}
           CLAIMED: ${{ steps.ledger.outputs.claimed }}
@@ -332,8 +340,11 @@ jobs:
         run: |
           set -uo pipefail
           armed=0; [[ "${WATCHDOG_ARMED:-}" == "1" ]] && armed=1
+          # The REAL verdict is plumbed, not re-asserted — a loosened step `if:`
+          # alone can never turn an ambiguous/probe-unavailable run into a
+          # restart (the classifier re-checks the signature itself).
           ACTION="$(bash "$GITHUB_WORKSPACE/scripts/supabase-watchdog-classify.sh" --decide \
-            --verdict hang-signature --armed "$armed" --corrupt "$CORRUPT" --claimed "$CLAIMED" \
+            --verdict "$VERDICT" --armed "$armed" --corrupt "$CORRUPT" --claimed "$CLAIMED" \
             --attempts "$ATTEMPTS" --last-epoch "$LAST_EPOCH" --now "$(date -u +%s)" \
             2>/dev/null || echo fail-closed)"
           case "$ACTION" in
@@ -423,11 +434,15 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          # Fail-closed like the ledger read: || true would re-post the
-          # escalation comment every tick while the API flakes.
+          # Fail-closed like the ledger read: a failed labels lookup must NOT
+          # produce an empty HAS_ESC — || true would re-post the escalation
+          # comment every tick while the API flakes.
+          HAS_ESC_RC=0
           HAS_ESC=$(gh issue view "$ISSUE" --repo "$GH_REPO" --json labels \
-            --jq '[.labels[].name] | index("watchdog-restarts-exhausted") // empty' 2>/dev/null)
-          if [[ -z "$HAS_ESC" ]]; then
+            --jq '[.labels[].name] | index("watchdog-restarts-exhausted") // empty' 2>/dev/null) || HAS_ESC_RC=$?
+          if [[ "$HAS_ESC_RC" != "0" ]]; then
+            echo "::warning::could not read issue labels — deferring escalation to the next tick"
+          elif [[ -z "$HAS_ESC" ]]; then
             gh label create "watchdog-restarts-exhausted" --repo "$GH_REPO" \
               --description "Watchdog gave up after 3 restart attempts — human root-cause needed (#9168)" \
               --color "B60205" 2>/dev/null || true
@@ -494,7 +509,7 @@ jobs:
           # newest labeled issue while an older real ledger stays open would
           # strand the bounds.
           STALE=""
-          CANDIDATES="$(gh issue list --repo "$GH_REPO" --state open --label supabase-auto-restart \
+          CANDIDATES="$(gh issue list --repo "$GH_REPO" --state open --limit 100 --label supabase-auto-restart \
             --json number,title --jq '[.[] | select(.title | contains("watchdog audit"))] | .[].number' 2>/dev/null || true)"
           COUNT="$(printf '%s\n' "$CANDIDATES" | grep -c . || true)"
           [[ "$COUNT" == "1" ]] && STALE="$CANDIDATES" \

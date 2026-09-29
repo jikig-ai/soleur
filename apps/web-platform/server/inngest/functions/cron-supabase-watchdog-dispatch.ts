@@ -42,8 +42,11 @@
  *  - End-to-end liveness: if the dispatch never reaches the runner, no GHA
  *    heartbeat arrives and the `scheduled-supabase-watchdog` Sentry monitor
  *    goes red within its 30-min margin.
- *  - Dispatch error path: a token-mint / Octokit failure is reported loudly to
- *    the Sentry issues stream via `reportSilentFallback` (token redacted).
+ *  - Dispatch error path: an Octokit failure inside `dispatch-workflow` is
+ *    reported loudly to the Sentry issues stream via `reportSilentFallback`
+ *    (token redacted). A TOKEN-MINT failure is outside the try — it
+ *    propagates, exhausts `retries: 1`, and is captured by the Inngest
+ *    sentry-correlation middleware instead, tagged `inngest.fn_id`.
  */
 import { inngest } from "@/server/inngest/client";
 import {
@@ -122,7 +125,13 @@ export const cronSupabaseWatchdogDispatch = inngest.createFunction(
     id: "cron-supabase-watchdog-dispatch",
     concurrency: [
       { scope: "fn", limit: 1 },
-      { scope: "account", key: '"cron-platform"', limit: 1 },
+      // Deliberately NOT the shared `"cron-platform"` account lane: that lane
+      // serializes against ~75 crons including the claude-eval cohort's 50-min
+      // holds — a hang starting inside a hold would wait past the Sentry
+      // monitor's 30-min margin, paging a false "watchdog dead" AND delaying
+      // detection beyond the outage this function exists to shorten. A
+      // ~2-5 s token-mint + POST needs no host-protection lane.
+      { scope: "account", key: '"cron-dispatch"', limit: 1 },
     ],
     retries: 1,
   },

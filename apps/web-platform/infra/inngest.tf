@@ -279,8 +279,9 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # probe) against inngest's worst-case TOTAL footprint (INNGEST_CLIENT_CAP = P × per-pool
 # cap 5 ≤ 20) — independent of whatever default_pool_size is set to.
 #
-# WHY a comment and not a TF resource: no Supabase provider is declared in
-# main.tf, and this pooler attribute lives on the OUT-OF-BAND inngest project
+# WHY a comment and not a TF resource: the `supabase` provider declared in
+# main.tf (#9168) manages ONLY `soleur-web-platform` — this pooler attribute
+# lives on the OUT-OF-BAND inngest project
 # (ref pigsfuxruiopinouvjwy, see the INNGEST_POSTGRES_URI paragraph above) that
 # Terraform never minted. Codifying one pooler attribute would require adding a
 # whole provider for an out-of-band project — disproportionate. Mirrors the

@@ -49,7 +49,7 @@ Order of events (load-bearing: the redaction sentinel scans this table; the Acto
 | agent | ~16:12Z | Postgres logs stop mid-stream; `db` goes UNHEALTHY. Incident start. |
 | agent | 16:19:09Z | Better Stack `app_health` keyword monitor (id 4226366) opens an incident — the keyword `"supabase":"connected"` stopped matching `/health`. Detection worked; the incident routes to email only, so no human is paged. |
 | agent | ~16:35Z | Agent notices `/health` `supabase: error` while chasing an unrelated failed deploy job and begins diagnosis. |
-| agent | ~16:37Z | Management API health read: `db`, `auth`, `rest` UNHEALTHY; `pooler` ACTIVE_HEALTHY — the 09-15 signature exactly. |
+| agent | ~16:37Z | Management API health read: `db`, `auth`, `rest` UNHEALTHY; `pooler` ACTIVE_HEALTHY — the 09-15 signature modulo `storage` (also unhealthy on 09-15, which is Postgres-dependent; the watchdog deliberately observes only db/auth/rest/pooler). |
 | agent-with-ack | ~16:43:32Z | With operator authorization, Management API `POST /v1/projects/ifsccnjhymdmidffkzhl/restart` issued; the project goes to restarting. |
 | agent | ~16:48:49Z | Management API reports services healthy again. |
 | agent | ~16:49:25Z | app.soleur.ai `/health` reads `supabase: connected`. Recovered. |
