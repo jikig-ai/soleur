@@ -9,85 +9,7 @@
 # plugins/soleur/test/workflow-file-size.test.ts gates this file at 490,000. Put new rationale
 # prose in knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md.
 #
-# This workflow IS the canonical boundary for `hr-all-infrastructure-provisioning-servers`
-# for the `apps/web-platform/infra/` root (matches the precedent set by
-# `apply-sentry-infra.yml` for `apps/web-platform/infra/sentry/` and
-# `apply-github-infra.yml` for `infra/github/`).
-#
-# Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
-#   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
-#      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
-#   2. `-target=`-scoped apply, split into TWO applies (#4844):
-#      (a) the main saved-`tfplan` apply covers the non-SSH resources (a derived
-#          allow-list; the count is not restated here because it rots);
-#      (b) a SEPARATE token-gated SSH apply, run AFTER the post-apply token sync
-#          and behind the CF Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge),
-#          covers EVERY SSH-provisioned `terraform_data.*` resource in server.tf.
-#          The set is derived, never restated here: an enumeration in prose rots
-#          silently as the set grows (#7539 shipped four such stale counts).
-#          plugins/soleur/test/terraform-target-parity.test.ts is the authority --
-#          it derives the set from server.tf and fails when one is targeted
-#          before the bridge. The GitHub runner egress IP is not in
-#          `var.admin_ips`, so the bridge (not a direct :22 dial) is the access
-#          path. Before #4844 the SSH-provisioned set silently drifted: excluded here
-#          with no apply path, and apply-deploy-pipeline-fix.yml only `-target`s
-#          deploy_pipeline_fix + infra_config_handler_bootstrap (its header's old
-#          "those 7 land via apply-deploy-pipeline-fix.yml" claim was never true).
-#      `hcloud_server.web`, `hcloud_volume.workspaces`,
-#      `hcloud_volume_attachment.workspaces`, and `hcloud_ssh_key.default` remain
-#      excluded — managed by initial-apply + drift detector, not per-PR.
-#      `terraform_data.root_authorized_keys` (ci-ssh-key.tf) is ALSO excluded:
-#      it stays operator-local (firewall chicken-and-egg — it is what authorizes
-#      the CI key the bridge itself uses), re-firing via `triggers_replace` from a
-#      future operator-local `terraform apply -replace=tls_private_key.ci_ssh`.
-#
-# Destroy-guard shape: copies `apply-github-infra.yml` (post-#3903) — numeric-regex
-# validation of `destroy_count` + `set -e` re-enable after `rc=$?` capture.
-# `apply-sentry-infra.yml` is the structural template but its destroy-guard pattern
-# is vulnerable to the empty-string bypass class flagged in
-# `2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
-#
-# Authorization model: the PR merge is the human authorization BY CONVENTION
-# (`hr-menu-option-ack-not-prod-write-auth`) — not by enforcement; see the
-# CORRECTED block below. PR #4220 dropped the `environment:` reviewer-click
-# gate after measuring its real-world cost (apply runs sitting in `waiting`
-# for up to 13h, blocking sibling applies via the concurrency group).
-#
-# CORRECTED 2026-09-20 (#8296): this block used to name "the merge-time gate
-# (CODEOWNERS on `.github/workflows/` + branch protection on `main`)" as the
-# load-bearing control. That claim was false FROM ITS INTRODUCTION: PR #4220
-# wrote it on 2026-05-21, five days after the status-check rulesets were
-# terraform-adopted (2026-05-16) with no review rule. What actually gates
-# `main`, measured: no branch protection (the protection endpoint 404s), and
-# three active rulesets carrying NO `pull_request` rule — "CI Required" and
-# "CLA Required" are `required_status_checks` (both DECLARED in this repo at
-# `infra/github/ruleset-ci-required.tf` / `ruleset-cla-required.tf`, ADR-032;
-# a `pull_request` rule would be added THERE, not in the UI), and "Force Push
-# Prevention" is `deletion` + `non_fast_forward` (hand-managed, not in IaC).
-# `.github/CODEOWNERS` is present, but with no rule requiring code-owner
-# review it assigns reviewers and blocks nothing. So status checks gate this
-# workflow; a human review does not. The residual, stated precisely rather
-# than as "nothing forbids a direct push": a `required_status_checks` rule
-# DOES reject a direct push of a commit that has not passed the checks, so
-# what reaches `main` without a PR is (i) a fast-forward push of a commit
-# already green on a side branch, (ii) an OrganizationAdmin / RepositoryRole 5
-# bypass actor, (iii) the CLA bot's `always` bypass on the CLA ruleset. Note
-# also that `deploy-script-tests` — the infra-validation job that runs the
-# LUKS alert drift guard — is NOT a required context, so a PR that reverts
-# that guard's subject with the guard red is mergeable (#6480, open).
-#
-# Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
-# commit message to skip auto-apply for that merge.
-#
-# Destroy acknowledgement: include `[ack-destroy]` on its own line in the merge
-# commit message to acknowledge planned destroys (otherwise apply halts).
-#
-# Manual escape hatch: `workflow_dispatch` is kept for re-runs after a transient
-# failure or for ad-hoc applies (still target-scoped to the allow-list below).
-#
-# Untrusted-input handling: HEAD_MSG and REASON are routed through env vars
-# (never interpolated directly into `run:` blocks) per the github.blog
-# workflow-injection guidance. All action references are SHA-pinned.
+# Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §file header
 
 name: Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)
 
@@ -446,65 +368,13 @@ jobs:
       (github.event_name == 'push' || inputs.apply_target == 'manual-rerun')
     runs-on: ubuntu-24.04
     # BUDGET, RE-DERIVED (#7587, corrected #7657). The retired line here read
-    # "~0.6 min/resource × ~70 targets = ~42 min worst-case cold-cache". It was an estimate, never
-    # a measurement, and it contradicted the ladder below by 22x — one sentence said the pre-gate
-    # window could be 2520 s while the next sized the job on a 111 s pre-gate. Measured instead,
-    # over the 42 most recent merge (push) applies that reached the ARM step (2026-08-20, method
-    # and per-run table in measurements.md §0.3(b)): the whole `apply` JOB ran 11–350 s, max
-    # 5.8 min. A genuinely cold-cache build of this root is a `web_host_create` / `*_host_replace`
-    # DISPATCH job, not this one — an attended rebuild with its own budget — so the merge-path
-    # population is steady-state by construction and the estimate has nothing left to describe.
-    #
-    # 15 → 41 (#7587, #7657). The 15 was never a measured constraint: its stated justification was
-    # "the operator-tolerance ceiling that matches `apply-deploy-pipeline-fix.yml`", and that
-    # sibling's own apply job is `timeout-minutes: 90`. It was an unverified paraphrase, and the
-    # entire "the ARM gate's deadline sum must be truncated to fit" framing rested on treating
-    # 900 s as fixed.
-    #
-    # The replacement is a two-part inequality, every term measured or derived from the shipped
-    # script, and both asserted by the `the ARM gate's deadlines fit its job` describe in
-    # `plugins/soleur/test/terraform-target-parity.test.ts` — which parses the deadlines, the poll
-    # interval and the curl ceiling OUT of `apps/web-platform/infra/arm-heartbeats.sh` rather than
-    # restating them here:
-    #
+    # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply (test-anchored lines kept below)
     #   (1) arm_step_timeout ≥ Σ over call sites of
     #       (deadline_i + poll_interval + (3 + rollback_attempts) × curl_max_time)
     #       → 2100 ≥ (200+440+200+440+200+30) + 6 × 85 = 1510 + 510 = 2020      ✓ slack 80 s
     #   (2) job_timeout − arm_step_timeout ≥ max(pre-gate) + post-gate budget
     #       → 2460 − 2100 = 360 ≥ 111 + 180 = 291                               ✓ slack 69 s
-    #
-    # TERM (1) IS ADDITIVE, and that is the correction. `Σ × 1.1` applied a multiplier to overhead
-    # that is per CALL SITE: each `arm_one` spends four `curl --max-time 15` round-trips the
-    # `elapsed` accounting never sees (pre-loop GET, unpause PATCH, the final iteration's own GET)
-    # plus one poll interval of loop overshoot plus the rollback, which retries once (#7658 E8) —
-    # 85 s, whatever the deadline.
-    # Under the old shape the step ceiling broke at ≥9 s of vendor round-trip; measured by running
-    # the shipped script under its own PATH stubs, six arms at 15 s/round-trip cost 2020 s against
-    # a 1860 s ceiling. The header of `arm-heartbeats.sh` derives the 70.
-    # Σ is over EVERY call site, not the five reachable on today's merge path — a call site that
-    # is absent from tfstate today is still a call site, and the ceiling has to hold when it is not.
-    #
-    # TERM (2) BUDGETS WHAT RUNS AFTER THE GATE, which the old form did not: it reserved only the
-    # pre-gate window, leaving 129 s for the re-pause sweep, the bridge teardown and the post-apply
-    # summary combined. The sweep is the LAST-CHANCE rollback and it runs precisely when the ARM
-    # step was cut — i.e. when the least budget remains — so a sweep cancelled with the job
-    # relocates #7587's shape one rung up the ladder. post-gate budget = sweep 6 × `--max-time 15`
-    # (90 s) + its `timeout 30` Doppler mint + 60 s for the two remaining `always()` steps, and the
-    # sweep now carries its own `timeout-minutes: 3`.
-    # 111 s is the MAXIMUM pre-gate (job start → ARM step start) over those same 42 runs, not a
-    # p95 — the earlier "p95 = 111" was a max-of-6 mislabelled. Observed 8–111 s; nearest-rank p95
-    # at n = 42 is 81 s. The ladder uses the max deliberately.
-    #
-    # The ladder is 2020 (work) < 2100 (step ceiling) < 2460 (job ceiling) — a job ceiling above,
-    # an in-script bound strictly below, which is the shape this file's two mutex-holding dispatch
-    # jobs already document. The cost is the fleet-wide apply mutex: the `concurrency` group is
-    # WORKFLOW-level, so the run-level worst case is the SUM across every job that can execute on
-    # a push, chained by `needs:` — preflight 1 + apply 41 + notify-apply-failure 5 = 47 min.
-    # (`preflight` was uncounted in the earlier "40 min" claim, which was also 41.) Measured before
-    # relying on it (2026-08-20, 80 completed runs of the shared group over 35 days): observed
-    # queue depth never exceeded 1, the longest run took 23.7 min, and the sibling that shares this
-    # mutex already runs a 90-minute apply. Priced honestly: the worst case for an emergency
-    # dispatch issued while a merge apply is in flight is now a 47-minute wait.
+    #   Mutex sum (three push-chain jobs): preflight 1 + apply 41 + notify-apply-failure 5 = 47 min.
     timeout-minutes: 41
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
     # reviewer click was duplicative friction on top of the PR-merge gate,
@@ -2555,32 +2425,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── registry-host scoped -replace (dispatch-only; re-run cloud-init; ADR-096) ─
-  # Selected by `-f apply_target=registry-host-replace`. zot-registry.tf resources are
-  # OPERATOR_APPLIED_EXCLUSIONS (CTO ruling 2026-07-06) — deliberately NOT in the per-PR
-  # `-target=` allow-list, and the per-PR path bridges over SSH to the EXISTING web host so
-  # it cannot reprovision the registry host at all. This scoped -replace is the sanctioned
-  # non-SSH reprovision path (mirrors inngest_host_replace / ADR-100): it re-runs the
-  # registry cloud-init (installs the zot-disk-heartbeat cron + storage.retention) and
-  # applies any pending storage-volume resize, WITHOUT destroying the zot OCI store.
-  #
-  # 6-target scope (server + its 3 id-referencing dependents + the storage volume + the isolated
-  # Better Stack Logs token secret):
-  #   hcloud_server.registry             (-replace: force a fresh cloud-init boot)
-  #   hcloud_server_network.registry     (network.tf — server_id ForceNew → replace; else the
-  #                                        new host has no private NIC 10.0.1.30 for web pulls)
-  #   hcloud_volume_attachment.registry  (zot-registry.tf — server_id ForceNew → replace)
-  #   hcloud_firewall_attachment.registry (server_ids update-in-place — else it keeps the old
-  #                                        server id; it lands after first boot, ADR-145)
-  #   hcloud_volume.registry             (in-scope so the storage volume's pending size update
-  #                                        can ride in; the gate PRESERVES it — size-update-only,
-  #                                        NEVER delete/forget/replace)
-  #   doppler_secret.registry_betterstack_logs_token (#6244 — MUST ride the SAME dispatch: the
-  #                                        amended boot guard now expects a 3rd admitted secret
-  #                                        (BETTERSTACK_LOGS_TOKEN); without it the guard FATALs
-  #                                        and zot never launches. A pure-create on first apply,
-  #                                        no-op thereafter — the gate admits it in its allow-set.)
-  # The sourced registry_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan
-  # JSON and ABORTS unless the plan is EXACTLY this scoped recreate with the store preserved.
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §inngest_volume_recut/registry-host scoped -replace
   registry_host_replace:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-host-replace'
@@ -3408,33 +3253,7 @@ jobs:
           ZOT_PUSH_USER: ${{ steps.throwaway.outputs.throwaway_user }}
           ZOT_PUSH_TOKEN: ${{ steps.throwaway.outputs.throwaway_pass }}
         # WHAT AUTHORIZES A RECUT (#7277). A recut is authorized only when CI has just proven,
-        # by executing it, that every image reference production depends on can be
-        # re-materialised into an EMPTY registry from GHCR — a source that survives the destroy.
-        #
-        # This REPLACES the 2026-07-30 premise rather than repairing it. That gate authorized a
-        # destroy on "GHCR covers the empty-store window", which #7071 retracted: the host->GHCR
-        # read PAT is revoked (401) and the minter is disabled (403 DENIED). The new criterion
-        # never claims the window is covered. It claims the window is ENDED, by a restore that
-        # has just succeeded in rehearsal and is then executed for real by the chained
-        # `registry_store_restore` job.
-        #
-        # THE INDEPENDENCE CRITERION: a gate on an irreversible destroy may not depend on the
-        # component whose failure motivates it. This gate depends on GHCR-read-from-CI, which is
-        # not that component — the release pipeline's failing half is the PUSH into prod zot,
-        # while its GHCR-read half demonstrably works.
-        #
-        # WHY IT STILL MUST NOT RUN WHEN THE STORE IS ALREADY GONE — and note the reason is NOT
-        # the old one. The previous justification was that the gate would abort on
-        # `ghcr-fallback` events the incomplete recut itself produced. That reason is now
-        # FALSIFIED BY THE GATE CHANGE (not by the emitter): this gate reads no Sentry signal, no
-        # zot health, and no fallback events at all. The skip remains correct for a different and
-        # simpler reason — once the volume is already destroyed there is nothing left to
-        # authorise. The verdict authorises a DESTROY; on the resume arm the destroy has already
-        # happened, and the only way out is forward.
-        #
-        # Note what does NOT skip: the PREPARE steps above are unconditional, so the resume arm
-        # still derives an inventory and still gets the chained restore. That is the arm that
-        # most needs one.
+        # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §registry_pull_path_gate
         run: |
           set -euo pipefail
           # Same derivation as PREPARE, re-run over the same committed source rather than
@@ -5396,29 +5215,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6969 (ADR-148): the web-host REPLACE path -------------------------------
-  # The sibling web-host-birth-gate.sh named but nobody had built: a scoped -replace of
-  # an EXISTING hcloud_server.web, generic over var.web_hosts keys.
-  #
-  # WHY IT CANNOT BE web-host-create. That job is additive-only and its gate demands
-  # EXACTLY ONE create with ZERO destroys. A host already in state plans zero creates, so
-  # the birth gate correctly aborts ("the host already exists — a no-op the gate must not
-  # rubber-stamp"). Widening it would dissolve the birth/replace distinction that makes its
-  # destroy arm meaningful: a `["delete","create"]` reads as one create to a naive counter
-  # while destroying a live host. Hence a sibling job with an inverted gate of its own.
-  #
-  # WEB-1 IS REFUSED, by the sourced gate and again by the input validation below. It is not
-  # "web-2 with a bigger blast radius": hcloud_volume_attachment.workspaces_luks.server_id is
-  # hardcoded to it (ForceNew), cloudflare_record.app is pinned to its ipv4_address, and all
-  # 15 web-1-pinned terraform_data SSH provisioners would be left un-run against a dead IP.
-  # DECISIVELY, and invisible to any plan-shaped gate: /mnt/data pins by-id to the PLAINTEXT
-  # hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded, and nothing
-  # on a fresh boot opens the mapper (guest-side unlock deferred to #6931) — so a rebuilt
-  # web-1 would serve every worktree rolled back to 2026-07-23. See
-  # tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
-  #
-  # A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather
-  # than advisory: Hetzner's entire cx and cax lines were orderable in 0 of 3 EU DCs on
-  # 2026-07-26 (#6966), and a stock miss after the destroy strands the fleet (#6393/#6400).
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §web_host_create/web-host replace path
   web_host_replace:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-host-replace'
     runs-on: ubuntu-24.04
@@ -5822,38 +5619,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------
-  # The retrospective half of #6767 (the prospective half is the "Pre-apply
-  # entrypoint gate" STEP in the `apply` job above). This job enumerates every
-  # declared cloudflare_ruleset's LIVE phase entrypoint and reports rule counts,
-  # so a rule already lost (historical clobber) or drifted is surfaced ONCE to
-  # #6767 as the system-of-record (hr-no-dashboard-eyeball-pull-data-yourself).
-  #
-  # STRICTLY READ-ONLY. There is NO `terraform apply` in this job (asserted by
-  # tests/scripts/test-preapply-entrypoint-gate.sh D2). It runs
-  # preapply-entrypoint-gate.sh --audit --live (GETs only) and posts a comment.
-  #
-  # Its `if:` is mutually exclusive with the `apply` job's guard (the apply job
-  # runs only on push OR apply_target==manual-rerun), and it uses its OWN
-  # concurrency group — NOT `terraform-apply-web-platform-host` — so an audit
-  # never serializes behind / delays a real apply.
-  #
-  # issues:write via a GitHub App installation token (hr-github-app-auth-not-pat;
-  # the default job token is contents:read only, so `gh issue comment` would
-  # silently fail without the elevated permission + App auth).
-  # ── CPO condition C2 (#8009): what a green boot does NOT mean ────────────────────────
-  #
-  # THIS JOB HAS NO `environment:` AND THAT IS THE ENTIRE POINT (D6).
-  #
-  # The approver approves BLIND. `git_data_host_create` carries the environment gate, so it
-  # sits in `Waiting` and renders NOTHING until someone clicks Approve — which means every
-  # word of disclosure written inside that job arrives AFTER the decision it was supposed to
-  # inform. A PR body has a readership of one review; the runbook is read by whoever thinks
-  # to open it. At the moment of approval the operator sees a bare "Approve deployment"
-  # button and nothing else.
-  #
-  # So the disclosure runs in a PRECEDING, UN-GATED job. By the time the approval is pending,
-  # the run summary page already carries these three statements. Without it the approval is
-  # ceremonial and "one human clicking twice" is the real control.
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §web_host_replace
   git_data_birth_disclosure:
     name: What a green git-data boot does NOT mean (read before approving)
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-create'
