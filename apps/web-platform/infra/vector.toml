@@ -252,6 +252,13 @@ include_matches.SYSLOG_IDENTIFIER = [
   # (workspaces-luks-soak-6604.sh) has no channel to read — a dead probe would look identical to a
   # healthy silent one. Exact-value match: the units set SyslogIdentifier=luks-monitor / logger -t.
   "luks-monitor",
+  # #9123: the boot-unlock family (workspaces-luks-reopen.{service,-failure.service} +
+  # the reopen script's `logger -t workspaces-luks-reopen` success row). The unit sets
+  # SyslogIdentifier=workspaces-luks-reopen; the script's success line and both units'
+  # stderr (phase-name die() output, the reporter's classification echo) ride this tag.
+  # Event-driven only — a healthy host emits ~1 line per boot; a broken one emits one
+  # fatal per exhausted ladder per hour after the start-limit window closes.
+  "workspaces-luks-reopen",
   # #6438 §1/§3 + #6548: the three web-host consumer/guard oneshot probes (web-*.service,
   # for_each var.web_hosts). Each declares SyslogIdentifier= (retagging the ExecStart basename
   # `bash`) so its fault-CLASSIFICATION stderr reaches Better Stack off-box, not SSH-only: the
