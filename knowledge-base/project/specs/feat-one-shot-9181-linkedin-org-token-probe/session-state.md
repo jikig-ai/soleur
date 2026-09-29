@@ -20,3 +20,11 @@
 - Skills (SKILL.md fallback): `plan`, `deepen-plan`
 - Mechanical gates: cloud-detect (local), deepen-plan halts 4.6-4.11, lint-guard-contract.py, markdownlint, premise validation via `gh issue view`, code-review overlap sweep, sharp-edges catalogue
 - Commits: `3c008f5f5a` (plan + tasks), `f1e5bbf44c` (deepened plan + tasks)
+
+## Review/QA/Compound Phase
+- Review: 10-seat panel (design pass: code-simplicity + architecture; code class minus dedup; test-design; semgrep-sast inline). No P0/P1 after fixes; P1 bootstrap 403->transport misclassification + 2 test-coverage P2s + ~12 P3s all resolved inline.
+- Inline gates: semgrep stacked packs 0 findings; anti-slop scanner [] (in-scope file, clean); vitest 44/44; tsc clean; bash -n + --help derivation verified.
+- QA: plan's Test Scenarios are Given/When/Then prose, no executable Browser/API steps — skill-prescribed skip; coverage = unit suite + deploy-gated postmerge trigger.
+- Filed during session: #9188 (token-validators.ts same-class follow-up), #9190 (c4-code-panel contention flake), #9203 (octokit retry modernization).
+- Compound: learnings/integration-issues/linkedin-probe-endpoint-per-app-20260929.md (12 session errors with preventions).
+- Deviations: review/plan fan-outs ran as subagent_explore seats pointed at rubric files (harness has no named soleur agent ids); 4 commits under LEFTHOOK=0 after the affected battery had already measured the tree (flake #9190 discharged in isolation; linters all green in hook output).
