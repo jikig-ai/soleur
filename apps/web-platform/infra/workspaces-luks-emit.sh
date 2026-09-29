@@ -28,6 +28,10 @@
 # The nine discriminating fields (read from the WL_* environment the caller exports):
 #   device_type mount_source mapper_present luks_open_result header_uuid_match
 #   cryptsetup_unit_result doppler_reachable mountpoint_ok host reason
+# plus the nine #6807 readiness/probe fields, plus three #9123 delivery-state
+# fields (fstab_mnt_data_lines fstab_mapper_line covered_inode_immutable) —
+# all additive and `unknown`-defaulted, so a caller that sets none of them emits
+# the same envelope shape.
 #
 # Usage:  WL_REASON=<slug> WL_DEVICE_TYPE=... [WL_LEVEL=fatal|warning] \
 #           bash workspaces-luks-emit.sh
@@ -319,15 +323,17 @@ workspaces_luks_emit() {
 
     # feature/op are the sentry_issue_alert filter keys (DP-8). The nine fields discriminate the
     # failure modes; every value is scrubbed of JSON-structural bytes.
-    # #6807 adds nine READINESS/PROBE fields after the original nine. Additive and defaulted, so an
-    # existing caller that sets none of them emits `unknown` and its envelope shape is unchanged.
+    # #6807 adds nine READINESS/PROBE fields after the original nine, and #9123 three
+    # DELIVERY-STATE fields after those (fstab_mnt_data_lines, fstab_mapper_line,
+    # covered_inode_immutable). Additive and defaulted, so an existing caller that sets
+    # none of them emits `unknown` and its envelope shape is unchanged.
     # The `op` is NOT parameterized: sentry_issue_alert.workspaces_luks_drift
     # (issue-alerts.tf:1704-1740) matches `filter_match="all"` on op EQUAL workspaces-luks-drift and
     # is the SOLE PAGING op of the nine this feature emits. A distinct readiness op would page
     # nobody and would be invisible to the wipe gate (workspaces-luks-soak-6604.sh). De-conflation
     # lives in `reason` + these fields + the exit code, never in a new op.
     # Integers only for the counts — workspace directory NAMES are user-identifying.
-    body=$(printf '{"message":"workspaces LUKS at-rest drift","level":"%s","logger":"luks-monitor","tags":{"feature":"workspaces-luks","op":"workspaces-luks-drift","device_type":"%s","mount_source":"%s","mapper_present":"%s","luks_open_result":"%s","header_uuid_match":"%s","cryptsetup_unit_result":"%s","doppler_reachable":"%s","mountpoint_ok":"%s","host":"%s","reason":"%s","readyz_writable":"%s","readyz_populated":"%s","readyz_capacity":"%s","workspace_count":"%s","workspace_count_expected":"%s","probe_last_code":"%s","probe_attempts":"%s","probe_elapsed_s":"%s","probe_class":"%s"}}' \
+    body=$(printf '{"message":"workspaces LUKS at-rest drift","level":"%s","logger":"luks-monitor","tags":{"feature":"workspaces-luks","op":"workspaces-luks-drift","device_type":"%s","mount_source":"%s","mapper_present":"%s","luks_open_result":"%s","header_uuid_match":"%s","cryptsetup_unit_result":"%s","doppler_reachable":"%s","mountpoint_ok":"%s","host":"%s","reason":"%s","readyz_writable":"%s","readyz_populated":"%s","readyz_capacity":"%s","workspace_count":"%s","workspace_count_expected":"%s","probe_last_code":"%s","probe_attempts":"%s","probe_elapsed_s":"%s","probe_class":"%s","fstab_mnt_data_lines":"%s","fstab_mapper_line":"%s","covered_inode_immutable":"%s"}}' \
       "$level" \
       "$(_wl_scrub "${WL_DEVICE_TYPE:-unknown}")" \
       "$(_wl_scrub "${WL_MOUNT_SOURCE:-unknown}")" \
@@ -347,7 +353,10 @@ workspaces_luks_emit() {
       "$(_wl_scrub "${WL_PROBE_LAST_CODE:-unknown}")" \
       "$(_wl_scrub "${WL_PROBE_ATTEMPTS:-unknown}")" \
       "$(_wl_scrub "${WL_PROBE_ELAPSED_S:-unknown}")" \
-      "$(_wl_scrub "${WL_PROBE_CLASS:-unknown}")")
+      "$(_wl_scrub "${WL_PROBE_CLASS:-unknown}")" \
+      "$(_wl_scrub "${WL_FSTAB_MNT_DATA_LINES:-unknown}")" \
+      "$(_wl_scrub "${WL_FSTAB_MAPPER_LINE:-unknown}")" \
+      "$(_wl_scrub "${WL_COVERED_INODE_IMMUTABLE:-unknown}")")
 
     curl -m 10 --retry 3 -sf -X POST "https://$shost/api/$proj/store/" \
       -H 'Content-Type: application/json' \

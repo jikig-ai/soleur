@@ -2758,14 +2758,17 @@ if [ "$DRY_RUN" != "1" ]; then
   # Fail loud if the timer did not arm (a silently-missing unit would leave the daily probe dark; the
   # `install … || true` above swallows delivery errors deliberately, so assert the end state here).
   systemctl is-enabled luks-monitor.timer >/dev/null 2>&1 || { emit_drift luks_monitor_timer_enable_failed; die "luks-monitor.timer failed to enable — the daily at-rest probe would not run (C15/ADR-119 §(e))"; }
-  # Boot path (C15) — BLOCKED, do not reboot (#9123). The C15 plan was "reboot web-1 once, then
-  # re-verify", but measured on 2026-09-27: web-1's /mnt/data fstab line is the literal glob
-  # /dev/disk/by-id/scsi-0HC_Volume_* (no nofail), there is no boot-time unlock for the mapper, and
-  # the ADR-119 §(e) mount gate was never delivered. A reboot would send web-1 to emergency mode and
-  # take every user's workspace offline until a console repair. The coupled boot-path fix is #9123.
+  # Boot path (C15) — delivered by #9123; the supervised restart stays operator-gated.
+  # terraform_data.workspaces_boot_unlock_install (workspaces-luks.tf) delivered the coupled
+  # fix: fstab names /dev/mapper/workspaces with nofail, workspaces-luks-reopen.service unlocks
+  # the mapper at boot (key via `doppler secrets get … --config prd_workspaces_luks`), crypttab
+  # declares the mapping `luks,noauto`, and the ADR-119 §(e) gate is armed (the docker.service.d
+  # RequiresMountsFor + After= drop-in, `chattr +i` on the covered root-disk inode). The C15
+  # proof — one reboot, then the read-only verify — is the runbook's separate supervised step
+  # (workspaces-luks-cutover-6604.md §4), not a step of this run.
   # The run-keyed CANARY_OK is still persisted to $STATE_FILE with the header UUID (above), so a
-  # pre-reboot value cannot satisfy a post-reboot check once that fix lands.
-  log "cutover green. Do NOT reboot web-1 to prove the boot path: a reboot currently takes the site down (fstab/boot-unlock hazard, #9123). Run workspaces-luks-verify.yml for the read-only re-assert."
+  # pre-reboot value cannot satisfy a post-reboot check.
+  log "cutover green. The boot path is delivered (#9123) — the C15 reboot proof is the runbook's separate supervised step. Run workspaces-luks-verify.yml for the read-only re-assert."
 fi
 
 step "cutover body complete (DRY_RUN=$DRY_RUN). The WIPE/converge is a SEPARATE environment-gated dispatch (DP-4)."

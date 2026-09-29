@@ -765,17 +765,36 @@ printf 'df %s\n' "$*" >> "$CALLS"
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 41 59 %s /mnt\n' "${MON_DF_USE-41%}"
 STUB
   chmod +x "$d"/bin/*
+
+  # #9123 — the probe's delivered-state asserts read /etc/fstab and run a real
+  # bind-mount peek, neither of which a fixture can fabricate. Under the probe's
+  # LUKS_MONITOR_TEST_SEAM they read WL_FSTAB_FILE_OVERRIDE + WL_PEEK_*_OVERRIDE
+  # instead; mon_run seeds the HEALTHY defaults below, and a fixture that wants
+  # the failing arm rewrites $d/fstab or sets MON_PEEK_ATTRS / MON_PEEK_FAIL.
+  cat > "$d/fstab" <<'FSTAB'
+/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2
+FSTAB
+  # Clear the peek knobs so a fixture's failing arm cannot leak into the next case.
+  MON_PEEK_ATTRS=""; MON_PEEK_FAIL=""
 }
 
 # mon_run [env assignments...] — execute the prepared probe. Re-runnable against the same fixture,
 # so a case can assert on a baseline of 2 and then re-run with a baseline of 8 without rebuilding.
 mon_run() {
   local d="$MON_DIR"
+  # MON_PEEK_* are HARNESS vars (set on the call line or before it), not env
+  # assignments inside env's argv — `env A=1` does not make A visible to the
+  # shell expanding the rest of that same env line.
+  local _peek_attrs="${MON_PEEK_ATTRS:----------------e------i---}"
+  local _peek_fail="${MON_PEEK_FAIL:-0}"
   MON_OUT="$(
     env "$@" \
       PATH="$d/bin:$PATH" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" FAKE_MAPPER="$d/fake-mapper" \
       WORKSPACES_MOUNT="$MNT" WORKSPACES_MAPPER_PATH="$d/fake-mapper" LUKS_MONITOR_TEST_SEAM=1 \
       WORKSPACES_STATE_DIR="$STATE" LUKS_MONITOR_WORKSPACES_DIR="$WSDIR" \
+      WL_FSTAB_FILE_OVERRIDE="$d/fstab" \
+      WL_PEEK_ATTRS_OVERRIDE="$_peek_attrs" \
+      WL_PEEK_FAIL_OVERRIDE="$_peek_fail" \
     bash "$MON_PROBE" 2>&1
   )"
   MON_RC=$?
