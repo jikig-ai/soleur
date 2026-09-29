@@ -6,7 +6,7 @@
 #
 # The battery is MUTATION-BASED because that is the only thing that answers the
 # question this gate exists to answer. A guard that has never been driven red is
-# vacuous: 23 assertions passing tells you nothing about whether any of them can
+# vacuous: 24 assertions passing tells you nothing about whether any of them can
 # fail. MB-1..MB-10 each reintroduce one real historical defect (or one that
 # would matter) and require the gate to red on the NAMED assertion, not merely
 # to exit non-zero — a mutation that trips a different assertion has not proven
@@ -95,7 +95,7 @@ run_case() {
 
 # ---------------------------------------------------------------- MB-0: clean
 mb0() { :; }
-run_case "MB-0  unmutated tree passes 23/23" 0 - mb0
+run_case "MB-0  unmutated tree passes 24/24" 0 - mb0
 
 # ------------------------------------ MB-1: the §9 universal, as it shipped
 mb1() {
@@ -182,6 +182,14 @@ mb14() {
     >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
 }
 run_case "MB-14 WORM trigger attachment dropped while function remains -> A24" 1 24 mb14
+
+# -- MB-15: trigger attachment exists but is disabled. A name-only replay must
+#    not describe it as live protection.
+mb15() {
+  printf '\nALTER TABLE public.workspace_member_actions DISABLE TRIGGER workspace_member_actions_no_update;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-15 disabled WORM trigger is not live protection -> A24" 1 24 mb15
 
 # -- MB-11: the gate's own self-test must fire when the replay stops applying
 #    drops. Without this, net-of-drops is vacuous and every predicate the gate

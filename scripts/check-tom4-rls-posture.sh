@@ -408,6 +408,9 @@ create_trigger = re.compile(
 drop_trigger = re.compile(
     r'^\s*DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s+'
     r'ON\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*$', re.I | re.S)
+trigger_state = re.compile(
+    r'^\s*ALTER\s+TABLE\s+(?:ONLY\s+)?(?:public\.)?([a-z_][a-z0-9_]*)\s+'
+    r'(ENABLE|DISABLE)\s+TRIGGER\s+([a-z_][a-z0-9_]*|ALL)\s*$', re.I | re.S)
 live_worm_triggers = {}
 for migration in MIGRATIONS:
     body = BODY[migration]
@@ -416,6 +419,7 @@ for migration in MIGRATIONS:
         statement_body = statement.group(0)[:-1]
         create_match = create_trigger.match(statement_body)
         drop_match = drop_trigger.match(statement_body)
+        state_match = trigger_state.match(statement_body)
         if create_match:
             trigger_body = create_match.group(2)
             table_match = re.search(r'\bON\s+(?:public\.)?([a-z_][a-z0-9_]*)\b', trigger_body, re.I)
@@ -428,33 +432,51 @@ for migration in MIGRATIONS:
         elif drop_match:
             trigger_events.append((statement.start(), 'drop', drop_match.group(1),
                                    drop_match.group(2), None))
+        elif state_match:
+            trigger_events.append((statement.start(), state_match.group(2).lower(),
+                                   state_match.group(3), state_match.group(1), None))
     for _, kind, name, table, function in sorted(trigger_events):
         key = (table.lower(), name.lower())
         if kind == 'drop':
             live_worm_triggers.pop(key, None)
+        elif kind in ('enable', 'disable'):
+            trigger_keys = [key] if name.lower() != 'all' else [
+                existing_key for existing_key in live_worm_triggers
+                if existing_key[0] == table.lower()]
+            for trigger_key in trigger_keys:
+                if trigger_key in live_worm_triggers:
+                    existing_table, existing_function, _ = live_worm_triggers[trigger_key]
+                    live_worm_triggers[trigger_key] = (
+                        existing_table, existing_function, kind == 'enable')
         elif worm_suffix.search(function):
-            live_worm_triggers[key] = (table.lower(), function.lower())
+            live_worm_triggers[key] = (table.lower(), function.lower(), True)
         else:
             live_worm_triggers.pop(key, None)
 
-attached_worm_fns = {function for _, function in live_worm_triggers.values()}
+active_worm_triggers = [
+    (table, function) for table, function, enabled in live_worm_triggers.values()
+    if enabled]
+disabled_worm_triggers = sorted(
+    (table, function) for table, function, enabled in live_worm_triggers.values()
+    if not enabled)
+attached_worm_fns = {function for _, function in active_worm_triggers}
 wrong_worm_attachments = sorted(
-    (table, function) for table, function in live_worm_triggers.values()
+    (table, function) for table, function in active_worm_triggers
     if re.sub(r'_(?:no_mutate|no_update|no_delete)$', '', function) != table)
 missing_worm_attachments = sorted(worm_fns - attached_worm_fns)
 unexpected_worm_attachments = sorted(attached_worm_fns - worm_fns)
 worm_exclusions = {"agent_engine_attempts", "agent_engine_recovery_checkpoints",
                    "pending_checkout_sessions"}
 excluded_worm_attachments = sorted(
-    (table, function) for table, function in live_worm_triggers.values()
+    (table, function) for table, function in active_worm_triggers
     if table in worm_exclusions)
 check("24", attached_worm_fns == worm_fns and not wrong_worm_attachments
-      and not excluded_worm_attachments,
-      "every defined WORM function is attached to its matching live ledger trigger",
+      and not excluded_worm_attachments and not disabled_worm_triggers,
+      "every defined WORM function has a matching live, enabled ledger trigger",
       "missing functions: %s; unexpected attachments: %s; mismatched table/function pairs: %s; "
-      "excluded tables with WORM attachments: %s"
+      "excluded tables with WORM attachments: %s; disabled WORM triggers: %s"
       % (missing_worm_attachments, unexpected_worm_attachments, wrong_worm_attachments,
-         excluded_worm_attachments))
+         excluded_worm_attachments, disabled_worm_triggers))
 
 check("18", all(table in dpa_text for table in worm_exclusions)
       and "outside that WORM set" in dpa_text,
@@ -571,7 +593,7 @@ check("23", not bad22,
 # The floor and the verdict are emitted with sys.stdout.write + an explicit exit
 # code, never through check() — a helper must not be the thing that reports
 # whether the helper ran (ADR-193).
-FLOOR = 23
+FLOOR = 24
 if ASSERTED < FLOOR:
     sys.stderr.write("INSTRUMENT: only %d of %d assertions executed. A partial "
                      "run is not a pass.\n" % (ASSERTED, FLOOR))

@@ -74,3 +74,16 @@ new binding.
   because Pencil MCP is unavailable in this session.
 - **User impact:** One uncovered member-history transfer vector was found; the member-level
   acknowledgment above is the planned mitigation.
+
+### Agent-native surface — workspace auth-mode mutation (UI/API only)
+
+**Finding:** The owner auth-mode and rebind controls have no matching agent tool. This action
+changes credential routing and history-transfer behavior for every affected Codex conversation
+in the workspace.
+
+**Disposition:** Keep this mutation on the authenticated owner settings route, with its explicit
+affected-count and provider/billing confirmation. An agent tool would add a second path for a
+workspace-wide credential-routing change without improving the member's required acknowledgment
+or qualification gates. Agent-native parity is therefore intentionally deferred until a scoped,
+owner-authorized confirmation contract exists; Codex execution remains disabled for ordinary
+traffic.
