@@ -14,6 +14,23 @@ lane: cross-domain
 
 # fix: memory-backstop version-independent hook resolution
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-29 (inline deepen — this run executes inside a pipeline subagent with no Task/Workflow spawn capability; all deepen-plan halt gates were executed mechanically and the fan-out lenses were applied as inline verification passes)
+
+**Gates run (all PASS):** 4.6 user-brand (section present, `none` threshold, zero sensitive-path matches), 4.7 observability (5-field block, allowlisted `bash` probe verb, literal `resolved=` expected output), 4.8 PAT regex (no hits), 4.9 UI-wireframe (no UI-surface files — skip), 4.10 encryption (evaluated — the managed path carries executable code, not a data store; the ledger pre-exists; no new cross-component connection — skip), 4.11 guard contract (`lint-guard-contract.py` green, 3 entries), 4.4 precedent-diff (flock idiom precedent: `agent-token-tee.sh:179`, already cited by the hook at :85; atomic tmp+mv publish precedent: `scripts/lib/scratch-root.sh`, `scripts/ensure-doppler.sh`).
+
+**Corrections applied by the deepen pass:**
+
+1. `_repo_root()` needs NO change — it already prefers `CLAUDE_PROJECT_DIR` (`memory-backstop.sh:87-90`); the plan originally claimed it required a patch. AC5 now *pins* the existing behavior.
+2. Publish needed a TOCTOU clause: concurrent SessionStarts could both publish, so the install is serialized under `flock` with an in-lock revision re-check (macOS lacks `flock` → `command -v` guard + pre-`mv` re-check, residual race self-heals).
+3. `devin-dispositions.tsv:111` was cited as evidence the hook "fires-then-exits under Devin" — that row predates #9231's multi-agent adoption, so the plan now relies on the directly-verified `.devin/config.json` absence instead.
+
+### New Considerations Discovered
+
+- Plugin caches verified live: `~/.claude/plugins/cache/<mkt>/<plugin>/<ver>/hooks/` and `~/.local/share/devin/cli/plugins/cache/<slug>/<ver>/hooks/`. A plugin installed from a *local-path* marketplace source may not appear under `plugins/cache` — that gap is covered by the managed path, not the glob (recorded in Risks).
+- Nothing outside the hook itself + README consumes `.memory-backstop.jsonl` and no test pins `schema:1` — the `schema:2` bump is free (verified: zero grep hits for `schema` in the test file/battery, zero external readers).
+
 ## Overview
 
 `.claude/settings.json` invokes `"$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-backstop.sh` — the copy inside whichever checkout or worktree the session runs in. A merged protection upgrade therefore only reaches sessions launched from a checkout containing it; sessions resumed from stale branches run the stale hook. On 2026-09-29 a third herdr crash was demonstrated from exactly this shape: sessions resumed into a stale branch's hook were adopted with the default `TasksMax=37984`, and a detached `gh api` storm inside an unadopted devin pane re-saturated the terminal scope's `pids.max` at 22:53:47. Updating the Soleur plugin cannot help today because the plugin does not ship the hook and the plugin cache is not on the exec path.
@@ -59,7 +76,7 @@ Four cooperating mechanisms, ordered by which property each buys (see Research I
 
 **M4 — Wiring + guards**:
 
-- `.claude/settings.json` SessionStart entry → `bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-backstop-resolve.sh`. This is the ONLY registry that binds the backstop — verified: `.devin/config.json` SessionStart binds rules-loader/supabase-loopback-warn/ensure-kb-index only (dispositions.tsv:111 records backstop as "fires-then-exits under Devin"), `.codex/config.toml` binds only `session-rules-loader.sh`. Devin/codex sessions are covered by the sweep, and now by sweep-repair.
+- `.claude/settings.json` SessionStart entry → `bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-backstop-resolve.sh`. This is the ONLY registry that binds the backstop — verified directly: `.devin/config.json` SessionStart binds rules-loader/supabase-loopback-warn/ensure-kb-index only and `.codex/config.toml` binds only `session-rules-loader.sh`. (Do not cite `devin-dispositions.tsv:111`'s "fires-then-exits under Devin" row as evidence — it predates #9231's multi-agent adoption and may be stale; the config-file absence is the live fact.) Devin/codex sessions are covered by the sweep, and now by sweep-repair.
 - `scripts/check-backstop-revision.sh` (new) + a path-gated step in `.github/workflows/pr-quality-guards.yml` (mirroring its existing `changed_files`/`git diff --name-only "${diff_base}"...HEAD` pattern at ~line 614): when the PR diff touches `.claude/hooks/memory-backstop.sh`, the `BACKSTOP_REVISION=` line must differ vs merge-base (`git merge-base origin/${{ github.base_ref }} HEAD`, with `git fetch` of the base ref as the workflow already does). Capture the per-file diff to a tempfile before grepping it — the pipe-into-`grep -q` form misfires under `set -e`/pipe-buffering interactions (sharp-edges: `#3550` tempfile-shape learning).
 - `plugins/soleur/test/backstop-parity.test.ts` (new): byte-equality of vendored copy vs repo hook, `BACKSTOP_REVISION` marker present, and `settings.json` SessionStart binds the resolver not the hook directly (Guards 2+3).
 - `.claude/hooks/README.md`: resolution-order section, managed path, ledger schema:2 fields.
@@ -301,7 +318,8 @@ ADR-261 is authored in this PR in `accepted` state — the decision is true on m
 
 - **Shim cannot self-upgrade.** A stale checkout keeps its stale resolver; only the *hook* it selects is version-independent. Accepted: the resolver contract (candidate set + revision ordering + publish) is deliberately tiny and stable; ADR-261 records this limit.
 - **`BACKSTOP_REVISION` is human discipline.** Guard 1 makes a missing bump a CI failure; a bumped-but-wrong ordering is impossible to produce silently (integer compare).
-- **Plugin-cache glob fragility.** If the cache layout changes, the glob matches nothing and the managed/checkout paths still resolve — degrade, not failure.
+- **Plugin-cache glob fragility.** If the cache layout changes, the glob matches nothing and the managed/checkout paths still resolve — degrade, not failure. A plugin installed from a *local-path* marketplace source (`.claude-plugin/marketplace.json` pointing at `./plugins/soleur`) may not appear under `plugins/cache` at all; the managed path covers that shape, so the glob is supplementary, never load-bearing.
+- **Precedent base for the shim's primitives** (Phase 4.4 precedent-diff): the `flock -w N -x 9` serialize-with-timeout idiom is already the repo's pattern (`agent-token-tee.sh:179`; the hook itself cites it at `:85`); atomic tmp+`mv` publish matches `scripts/lib/scratch-root.sh`/`scripts/ensure-doppler.sh` conventions. The shim adds no novel pattern.
 - **Managed-path trust.** Same-uid writable, same class as the checkout copy — no new privilege boundary; recorded in the ADR.
 - **Repair blast radius.** `repair_stale_scopes` writes runtime caps to `soleur-agent-*.scope` units only — the units this system owns; it never touches foreign units (guard: name filter) and never writes persistent config (busctl `SetUnitProperties ... true`).
 
