@@ -199,6 +199,9 @@ OLD
 # Query substrings that identify each signal in the request URL (percent-encoded by the soak,
 # so match on the stage NAME which survives encoding).
 Q_ZOTWEB='image%3A%22web%22'
+# Retired soak operand (#9097): the fixed script never issues the image:"inngest" query, so no
+# canonical spec carries it. Kept for the NB rows, which append it at =0 so a revert that
+# re-issues the query reads a semantic FAIL(insufficient-sample), not a stub-500 TRANSIENT.
 Q_ZOTING='image%3A%22inngest%22'
 # The web fresh-boot fatal arm (#8036 1d): `stage:"pull" level:fatal`, OUTSIDE FAIL_QUERIES.
 # `%22pull%22` occurs in no other query (op:image-pull is unquoted), so this key is unambiguous.
@@ -212,13 +215,13 @@ Q_WEBFATAL='stage%3A%22pull%22'
 # name occurs in no other query, so a plain name key is unambiguous. Appended to every spec that
 # reaches that arm — without them the stub 500s and the row reads TRANSIENT instead of its verdict.
 RETIRED0="app_ghcr_fallback=0;app_ghcr_served=0;inngest_ghcr_fallback=0"
-HEALTHY="host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5;$RETIRED0"
+HEALTHY="host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$RETIRED0"
 
 echo "== AC7: the arms return the right exit codes =="
 
 # 1. Dark beacon: zero fallbacks, sample fine, but NO zot-served fresh boot.
 #    MUST be exit 1 (FAIL) — never 0, never 2. This is the whole denominator.
-r="$(run_soak "zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=0;$Q_ZOTWEB=5;$Q_ZOTING=5;$RETIRED0" CLOSED)"
+r="$(run_soak "zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=0;$Q_ZOTWEB=5;$RETIRED0" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"no-freshboot-evidence"* ]]; then
   pass "dark beacon (app_zot=0, no fallbacks) -> exit 1 FAIL(no-freshboot-evidence)"
@@ -298,14 +301,14 @@ fi
 # 4. A real FAIL_QUERIES event still FAILs, and the per-signal breakdown still prints (the arm the
 #    denominator must not have displaced — an operator hitting a real event needs it). One row per
 #    member (#8036 1d), so a breakdown that drops either name reds its own row.
-r="$(run_soak "inngest_pull_fatal=2;zot-gate-degraded=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5;$RETIRED0" CLOSED)"
+r="$(run_soak "inngest_pull_fatal=2;zot-gate-degraded=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$RETIRED0" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == FAIL:* && "$out" == *"inngest-pull-fatal=2"* && "$out" == *"gate-degraded=0"* ]]; then
   pass "inngest_pull_fatal>0 -> exit 1 FAIL with per-signal breakdown incl. inngest-pull-fatal"
 else
   fail "inngest-pull-fatal must exit 1 and print the breakdown; got rc=$rc out=$out"
 fi
-r="$(run_soak "zot-gate-degraded=1;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$Q_ZOTING=5;$RETIRED0" CLOSED)"
+r="$(run_soak "zot-gate-degraded=1;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=5;$RETIRED0" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == FAIL:* && "$out" == *"gate-degraded=1"* && "$out" == *"inngest-pull-fatal=0"* ]]; then
   pass "zot-gate-degraded>0 -> exit 1 FAIL with per-signal breakdown incl. gate-degraded"
@@ -313,10 +316,13 @@ else
   fail "gate-degraded must exit 1 and print the breakdown; got rc=$rc out=$out"
 fi
 
-# 4b. The insufficient-sample arm. It carries 8 lines of "MUST keep exit 1 — do NOT 'fix' it to
-#     TRANSIENT" and had NO test: it is the ONLY detector for the #6437 Sentry-dark mode, so a
-#     well-meaning refactor to exit 2 would silently disarm it. One run_soak proves it.
-r="$(run_soak "host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=1;$Q_ZOTING=5;$RETIRED0" CLOSED)"
+# 4b. The insufficient-sample arm's WEB leg. It carries 8 lines of "MUST keep exit 1 — do NOT
+#     'fix' it to TRANSIENT" and had NO test: it is the ONLY detector for the #6437 Sentry-dark
+#     mode, so a well-meaning refactor to exit 2 would silently disarm it. One run_soak proves
+#     it. Since #9097 the inngest leg is a dedicated-host BOOT floor (INNGEST_ZOT >= 1), not a
+#     pull count — a soleur-inngest=0 window reds at the denominator arm before this one is
+#     reached, so the inngest leg's thin-evidence coverage lives in the NB3 mutant instead.
+r="$(run_soak "host_name%3A%22soleur-inngest%22=1;zot-gate-degraded=0;inngest_pull_fatal=0;$Q_WEBFATAL=0;app_zot=3;$Q_ZOTWEB=1;$RETIRED0" CLOSED)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"FAIL(insufficient-sample)"* ]]; then
   pass "thin zot sample -> exit 1 FAIL(insufficient-sample) (the only #6437 detector)"
@@ -805,6 +811,78 @@ else
   fail "#8036 1c/1d: retired operand(s) on a soak code line:${retired_hits:- <none>} (or a survivor missing / code scan vacuous)"
 fi
 
+echo "== #9097: the inngest sample leg is the dedicated-host boot beacon, not a deploy pull =="
+
+# Since the 2026-09-15 dedicated-host cutover the only `deploy inngest` sender
+# (deploy-inngest-image.yml, dispatch-only, to the quiesced web scheduler) cannot emit
+# `op:image-pull registry:"zot" image:"inngest"` — the old `ZOT_INNGEST` leg could only ever
+# read 0, so the soak could never PASS. The leg is re-sourced onto INNGEST_ZOT (the
+# already-fetched stage:"inngest_zot" host_name:"soleur-inngest" count) with a HARDCODED floor
+# of 1: the dedicated host pulls zot only at boot, one boot per host-replace, so >=MIN_SAMPLE
+# would recreate the very unreachable arm being retired.
+
+# NB1: the accepted evidence is a dedicated-host zot-served BOOT, not a deploy pull. A window
+#      with zero image:"inngest" events — what normal operation now produces — must PASS.
+#      The =0 key must be the FIRST COUNTS_SPEC key to match the inngest URL: the stub
+#      matches in order, first match wins. HEALTHY no longer carries the operand, so a tail
+#      append is safe — no earlier key is a substring of that URL (the only other image%3A
+#      operand is web). The key's PRESENCE matters: on a revert that re-issues the query, =0
+#      yields the semantic FAIL(insufficient-sample), not a stub-500 TRANSIENT.
+NB1_SPEC="$HEALTHY;$Q_ZOTING=0"
+g6 "NB1: soleur-inngest=1 + zero image:\"inngest\" events -> exit 0 PASS" \
+  0 "PASS" "$NB1_SPEC" CLOSED 200 "" yes COMPLETED
+
+# NB2 (baseline pin): a zero-evidence window still fails at the denominator.
+g6 "NB2: soleur-inngest=0 -> exit 1 FAIL(no-inngest-freshboot-evidence) at the denominator" \
+  1 "no-inngest-freshboot-evidence" "$G6_NOEV" CLOSED 200 "" yes COMPLETED
+
+# NB3: delete the denominator's FAIL block on a soak COPY (the INNGEST_ZOT assignment and its
+#      guard stay) — the sample leg must then refuse a zero-evidence window on its own. This is
+#      the arm's redundancy contract: it survives the denominator ever being removed (the T1
+#      judgment call is still an open decision), which would otherwise leave a zero-evidence
+#      window ungated.
+NB3_SPEC="$G6_NOEV;$Q_ZOTING=0"
+m_nb3="$(mktemp)"
+sed -e '/^if (( INNGEST_ZOT == 0 )); then$/,/^fi$/d' "$SOAK" > "$m_nb3"
+if cmp -s "$SOAK" "$m_nb3"; then
+  fail "NB3 — HARNESS ABORT: the denominator-delete mutation did not land"
+elif SOAK_UNDER_TEST="$m_nb3" g6_row 1 "FAIL(insufficient-sample)" "$NB3_SPEC" CLOSED 200 "" yes COMPLETED; then
+  pass "NB3: denominator-deleted mutant still exit 1 FAIL(insufficient-sample) on soleur-inngest=0"
+else
+  fail "NB3: with the denominator arm deleted, soleur-inngest=0 must still exit 1 FAIL(insufficient-sample); got $G6_LAST"
+fi
+rm -f "$m_nb3"
+
+# NB4 (residual-zero, source): the retired operand is gone from the EXECUTABLE soak — comment
+#      lines may still name it as retired, so scan the comment-stripped code lines (SOAK_CODE
+#      above). The second half pins that the sample arm's inngest leg reads INNGEST_ZOT, so the
+#      leg cannot be silently dropped (pairs with the NB3 mutant).
+if [[ "$SOAK_CODE" != *'image:"inngest"'* ]]; then
+  pass "NB4a: no code line counts the retired image:\"inngest\" operand (comments may name it)"
+else
+  fail "NB4a: image:\"inngest\" still appears on a soak code line"
+fi
+if grep -qE '^if \[\[ "\$ZOT_WEB" -lt "\$MIN_SAMPLE" \|\| "\$INNGEST_ZOT" -lt 1 \]\]; then$' "$SOAK"; then
+  pass "NB4b: the sample arm requires ZOT_WEB >= MIN_SAMPLE AND INNGEST_ZOT >= 1 (hardcoded floor, no knob)"
+else
+  fail "NB4b: the sample arm must read \"\$ZOT_WEB\" -lt \"\$MIN_SAMPLE\" || \"\$INNGEST_ZOT\" -lt 1"
+fi
+
+# NB5 (residual-zero, runtime): a PASS run must not issue the retired query at all — the stub
+#      logs every request URL, so assert the encoded operand never left the process.
+g6_row 0 "PASS" "$HEALTHY" CLOSED 200 "" yes COMPLETED >/dev/null
+if grep -q 'image%3A%22inngest%22' "$URL_SINK"; then
+  fail "NB5: the soak still issues the retired image:\"inngest\" query ($(grep -c 'image%3A%22inngest%22' "$URL_SINK") request(s) logged)"
+else
+  pass "NB5: a PASS run issues no image:\"inngest\" query (retired from the wire, not just the verdict)"
+fi
+
+# NB6 (must-PASS, non-canonical): the inngest floor is >=1 boot, not "exactly the fixture's 1" —
+#      more boots than the floor needs must also PASS.
+NB6_SPEC="${HEALTHY/host_name%3A%22soleur-inngest%22=1/host_name%3A%22soleur-inngest%22=2};$Q_ZOTING=0"
+g6 "NB6: soleur-inngest=2 (above the floor) + zero image:\"inngest\" events -> exit 0 PASS" \
+  0 "PASS" "$NB6_SPEC" CLOSED 200 "" yes COMPLETED
+
 # Assertion floor: a deleted row must red. Literal adjacent to its `if` (guard-vacuity-floor).
 # Raised 30 -> 32 in the SAME edit that added the two rows above (a floor left below the count it
 # measures is slack, and slack in a floor is how many rows can be deleted before it notices).
@@ -816,7 +894,9 @@ fi
 # Raised 55 -> 70 in the SAME edit that added the RETIRED-NAMES arm and the START-override note:
 # +15 = RN1a-c and their breakdown rows (6), RN2-RN5 (4, RN5 an in-suite mutant), OV1, OV1',
 # OV2, OV3 and the OV4 in-suite mutant (5).
-SOAK_MIN_PASSES=70
+# Raised 70 -> 77 in the SAME edit that added the #9097 rows: +7 = NB1, NB2, the NB3
+# denominator-delete mutant, NB4a, NB4b, NB5 and NB6.
+SOAK_MIN_PASSES=77
 if [[ "$passes" -lt $SOAK_MIN_PASSES ]]; then
   printf 'FATAL: only %s passing assertions ran, expected at least %s — a row was deleted\n' "$passes" "$SOAK_MIN_PASSES" >&2
   exit 1

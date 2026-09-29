@@ -249,8 +249,8 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   // queries then match zero events FOREVER.
   //
   // That is a silent false-PASS route on an irreversible action, and unlike the registry:
-  // queries there is no canary: registry: shares its feature/op prefix with the ZOT_WEB/
-  // ZOT_INNGEST sample queries, so a broken prefix drives the sample to 0 and FAILs the soak.
+  // queries there is no canary: registry: shares its feature/op prefix with the ZOT_WEB
+  // sample query, so a broken prefix drives the sample to 0 and FAILs the soak.
   // The stage: queries have no such self-validation, so the key is pinned here instead.
   it("both boot emitters tag with the literal key `stage` (the soak's bare stage: queries depend on it)", () => {
     // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail,...}; since #8036 1d it carries
