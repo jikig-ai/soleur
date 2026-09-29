@@ -10,7 +10,7 @@ related_adrs: [ADR-031, ADR-067, ADR-253]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-258: Field Core Web Vitals land in Sentry via `browserTracingIntegration` pageload transactions, not a standalone vitals path or a first-party beacon
+# ADR-259: Field Core Web Vitals land in Sentry via `browserTracingIntegration` pageload transactions, not a standalone vitals path or a first-party beacon
 
 ## Status
 

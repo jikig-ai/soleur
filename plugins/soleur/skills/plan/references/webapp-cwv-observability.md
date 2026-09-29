@@ -137,7 +137,7 @@ first-party beacon endpoint:
 
 ## References
 
-- Decision record: `knowledge-base/engineering/architecture/decisions/ADR-258-field-rum-cwv-via-sentry-webvitals.md`
+- Decision record: `knowledge-base/engineering/architecture/decisions/ADR-259-field-rum-cwv-via-sentry-webvitals.md`
 - Installed-SDK source of truth: `apps/web-platform/node_modules/@sentry/browser/build/npm/esm/dev/integrations/webVitals.js` (`setup()`)
 - Client config this recipe was extracted from: `apps/web-platform/sentry.client.config.ts`
 - Mount-path defect class it pairs with: `apps/web-platform/test/dashboard-mount-fetch-dedup.test.tsx` (census guard; ADR-067 amendment 2026-09-28)
