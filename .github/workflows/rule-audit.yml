@@ -553,7 +553,7 @@ jobs:
             echo
             echo "_Filed automatically by rule-audit.yml inngest-CLI-pin drift detection (#7463)._"
           } > "$RUNNER_TEMP/inngest-pin-drift-body.md"
-          EXISTING="$(gh issue list --label inngest-pin-drift --state open --search 'sort:created-asc' --json number --jq '.[0].number // empty')"
+          EXISTING="$(gh issue list --label inngest-pin-drift --state open --search 'sort:created-asc' --limit 100 --json number --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
             # Oldest labeled issue is canonical; re-assert the digest label — a stripped
             # `action-required` would otherwise drop it from the weekly digest while
