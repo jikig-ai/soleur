@@ -17,6 +17,45 @@ lane: cross-domain
 
 Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-29
+**Sections enhanced:** User-Brand Impact (scope-out bullet corrected to cover
+BOTH `apps/web-platform/infra/*.tsv` matches, not just the durations table),
+Proposed Solution (the floor degrade now names BOTH `die` sites it replaces;
+input-source precedence replaces the earlier mutual-exclusion claim, matching
+`main()`'s provenance-pairing convention), Technical Considerations
+(`expected_legs` must stay bound to the workflow N under `--legs`;
+`fetch_timings_from_dir` fixture-shape note), Research Insights (deepen-round
+gate ledger + four more learnings applied), References (the `8006` probe is
+retired — live precedent is `deploy-script-tests-legs-8736.sh`).
+**Research agents used:** none spawnable — this harness exposes no Task/Skill
+spawn tool; every conditional halt below was run inline with shell evidence
+cited. `Reviewed-Coverage: sequential-fallback` — no independent review is
+claimed.
+
+### Key Improvements
+
+1. The n-mismatch commit-shape is refused at write time, not merely linted —
+   a `K != N` manifest committed silently degrades every leg to positional.
+2. `src=floor` provenance in the durations table stops a floor estimate from
+   ever being re-aggregated as a measurement.
+3. The `#8231` consumption surface needs zero `test-all.sh` machinery:
+   `--durations` + `--legs` + `--manifest` emit a table the existing
+   `SOLEUR_SHARD_MANIFEST`/`SCRIPTS_SHARD` seams already consume.
+
+### New Considerations Discovered
+
+- The all-floor degrade replaces two distinct `die` sites in `main()`
+  (~lines 322, 336), not one — an implementation that converts only the
+  first still dies on the disjoint-labels shape.
+- `fetch_timings_from_dir` only applies its artifact-name filter to
+  CI-named subdirs; the battery must cover both the filtered and
+  merge-whole fixture shapes.
+- `apps/web-platform/infra/suite-shard-legs.tsv` (regenerated) is itself a
+  sensitive-path-regex match (`apps/[^/]+/infra/`), not just the new
+  durations file — the scope-out bullet was corrected accordingly.
+
 ## Overview
 
 The `test-scripts` CI legs consume a committed label→leg manifest produced
@@ -82,9 +121,12 @@ uniformly — the generator already multiplexes `--group light|heavy|infra`):
    every run's timings is tabled at `floor_ms` = median of the group's
    measured labels, or the fixed constant `DEFAULT_SUITE_MS = 60000` when no
    label measured at all (all-floor degrade: WARN, still writes — a
-   count-balanced packing is strictly better than a die). Floor rows are
-   marked `src=floor` in the durations table so a later aggregation never
-   entrenches its own estimate as "measured".
+   count-balanced packing is strictly better than a die). This replaces TWO
+   `die` sites in `main()`, not one: `no usable suite timings` (~line 322)
+   and `no timed label is a registered {group} suite` (~line 336) — both
+   become WARN-and-floor. Floor rows are marked `src=floor` in the durations
+   table so a later aggregation never entrenches its own estimate as
+   "measured".
 3. **Arbitrary-K emission.** `--legs K` overrides the workflow-derived n for
    the emitted table. Refusal: `--write` to the group's *default committed
    manifest* with `K != workflow N` exits 2 — a committed n-mismatch silently
@@ -99,11 +141,13 @@ uniformly — the generator already multiplexes `--group light|heavy|infra`):
    `label<TAB>ms<TAB>src` (`src` ∈ `measured|floor`), label-sorted, with the
    same `#`-comment provenance header discipline (`# group=`,
    `# generated-from-runs=<csv>`, `# default-weight-ms=<v>`). `--durations
-   <path>` reads the table instead of fetching (mutually exclusive with
-   `--run`/`--runs`/`--timings-dir`); `--durations-out <path>` redirects the
-   write for fixtures. This is the "one duration source, two consumers" the
-   issue demands: CI regen writes it, #8231's scheduler re-packs from it
-   offline.
+   <path>` reads the table instead of fetching; `--durations-out <path>`
+   redirects the write for fixtures. Input-source precedence mirrors the
+   file's existing pairing rule (`main()` ~line 355 — provenance stamps
+   whichever source actually fed): `--durations` > `--timings-dir` >
+   gh (`--run`/`--runs`), never a silent mix. This is the "one duration
+   source, two consumers" the issue demands: CI regen writes it, #8231's
+   scheduler re-packs from it offline.
 5. **`#8231` consumption contract (documentation + a generator-side test, no
    `test-all.sh` machinery changes):**
 
@@ -158,7 +202,19 @@ uniformly — the generator already multiplexes `--group light|heavy|infra`):
 - **`--timings-dir` becomes repeatable** (`action="append"`): each directory
   is one run's artifact set; a single dir keeps today's single-run semantics.
   This is the seam the unit battery drives multi-run fixtures through without
-  `gh`.
+  `gh`. Fixture note: `fetch_timings_from_dir`'s `artifact_re` filter only
+  engages on CI-named nested dirs (`suite-timings-scripts-*`); fixture dirs
+  named that way exercise the filtered path, arbitrary names exercise the
+  merge-whole path — the battery should cover both.
+- **`expected_legs` under `--legs`:** the per-run artifact-completeness WARN
+  must compare against the workflow's declared leg count (the producer side
+  that actually uploads `suite-timings-scripts-*`), not the overridden K —
+  `--legs` reshapes the packing, never the artifact set.
+- **Precedence, not mutual exclusion.** `main()`'s existing convention
+  (~line 355) is a pairing rule with honest provenance (`--run` +
+  `--timings-dir` → dir wins, provenance says `local:`). The new sources slot
+  into the same chain — `--durations` > `--timings-dir`(s) > gh — rather
+  than introducing a second flag-combination dialect.
 - **Portability:** the generator is stock python3 — already a regen
   prerequisite on dev hosts; the `#8231` recipe adds no new binary deps.
 - **Determinism:** same inputs → identical data rows (ties break on label
@@ -238,10 +294,12 @@ uniformly — the generator already multiplexes `--group light|heavy|infra`):
   exposure vector — durations are suite labels and millisecond counts of the
   repo's own test corpus, already derivable from public CI logs.
 - **Brand-survival threshold:** `none`
-- `threshold: none, reason:` the only sensitive-path-regex match is
-  `apps/web-platform/infra/suite-durations.tsv` — a generated label→weight
-  TSV with no credentials, no provisioning input, and no user data; its
-  sibling manifest already lives in that directory under the same contract.
+- `threshold: none, reason:` the only sensitive-path-regex matches are the
+  two `apps/web-platform/infra/*.tsv` rows (the regenerated
+  `suite-shard-legs.tsv` and the new `suite-durations.tsv`) — generated
+  label→weight tables with no credentials, no provisioning input, and no
+  user data; the manifest sibling already lives in that directory under the
+  same contract.
 
 ## Observability
 
@@ -501,7 +559,9 @@ durations-table blocks (Guard Contract 2); bump `MIN_CASES`.
 ### Phase 2 — generator implementation (GREEN)
 
 2.1 Input layer: `green_main_runs()`, `--runs N`, repeatable `--timings-dir`,
-`--durations`/`--durations-out`, mutual-exclusion arg validation.
+`--durations`/`--durations-out`, source-precedence chain
+(`--durations` > `--timings-dir` > gh) with honest provenance per `main()`'s
+pairing rule; `expected_legs` WARN stays bound to the workflow's declared N.
 2.2 Aggregation + floor: per-label median across runs, `floor_ms` derivation,
 `src` provenance, all-floor WARN-degrade.
 2.3 Emission: `--legs K`, default-path n-mismatch refusal, durations-table
@@ -631,8 +691,21 @@ carve-out; regenerate-and-read-the-predicted-table before judging K);
 durations tables); `2026-09-26-ci-orphan-suite-rows-split-brainstorm.md`
 (the -a/-b split that explains the untabled-heavy-suite class);
 #8006's own deferred analysis (the sticky-LPT + offline-manifest mechanism
-this extends; its soak-probe precedent `ci-leg-durations-8006.sh` shapes the
-followthrough here).
+this extends; its soak-probe `ci-leg-durations-8006.sh` — retired with its
+tracker — shapes the followthrough here, and
+`deploy-script-tests-legs-8736.sh` supplies the live precedent for the probe's
+exit contract and retirement comment). Deepen-round additions:
+`2026-05-12-ci-test-job-speedup-replan-and-validation-mechanics.md` (five
+precondition-drift findings killed a prior CI-shard plan — the reason every
+count and flag name above is measured, not assumed);
+`2026-08-06-read-the-generated-artifact-not-the-generators-spec.md` (the
+dry-run-evidence AC reads the produced tables, never the flag spec);
+`2026-08-17-the-artifact-that-proves-a-refusal-happened-could-not-be-written.md`
+(the `--write` refusal exits 2 BEFORE writing — the exit code + stderr line
+IS the refusal artifact; nothing partial is committed);
+`2026-07-28-my-ac-verified-four-paths-while-ci-verified-five.md` (the
+touched-shard run in Phase 5 derives its suite set from `git grep` over the
+changed files' consumers, not from memory).
 
 **CLAUDE.md conventions.** Constitution: fail-closed over fail-open (the
 `--write` n-mismatch refusal), generated artifacts get deterministic sorted
@@ -682,3 +755,48 @@ constraint for the local consumer), #7454 (umbrella), #8006/ADR-238/ADR-240
   `scripts/followthroughs/` convention + `scheduled-followthrough-sweeper.yml`.
 - No external documentation needed — all mechanics are repo-internal;
   Phase 1.6 external research deliberately skipped (strong local context).
+
+**Deepen-plan round (2026-09-29, inline — no spawn-capable tool in this
+harness).** Gate ledger: 4.4 precedent-diff — the committed-artifact header
+shape follows ADR-235's canonical form (the manifest's own `#`-comment
+provenance block is the precedent, mirrored by the durations tables); the
+file-write precedent is `main()`'s plain `open(path, "w")` (~line 360) — no
+`os.replace`/fsync precedent exists in `scripts/*.py` (verified by grep), so
+the durations writer mirrors the manifest writer and torn writes are caught
+by the same lint the manifests already face; the soak-probe precedent is
+`deploy-script-tests-legs-8736.sh` (exit contract copied verbatim). The
+scheduled-work check does not fire — the followthrough rides the existing
+`sweep-followthroughs` infrastructure, no new trigger. 4.45
+verify-the-negative — re-probed: "no timing floor" → `grep -n 'floor|DEFAULT'
+scripts/regenerate-shard-manifest.py` returns zero; "untabled labels
+hash-fall" → `_shard_selects`'s manifest-miss arm is the `cksum` path;
+"MIN_CASES=20/25" verified at the named anchors; `latest_green_main_run`
+exists at line 88 (multi-run sibling `green_main_runs` is a NEW symbol —
+the plan says so); `ci-leg-durations-8006.sh` is absent under
+`scripts/followthroughs/` — re-marked retired, live precedent named instead.
+Post-edit self-audit: the only dropped claim was mutual-exclusion →
+precedence; every other occurrence was swept (Proposed Solution + tasks.md
+both updated). 4.5 network-outage — zero trigger-pattern matches in
+Overview/Problem sections (grep rc=1). 4.55 downtime — no serving surface,
+no reboot/DDL/router class in the Files lists. 4.6 PASS — section present,
+threshold `none`, sensitive-path matches enumerated as the two
+`apps/web-platform/infra/*.tsv` paths and covered by the scope-out bullet.
+4.7 PASS — all five fields populated, non-placeholder; probe verb `python3`
+is Check-10-allowlisted, no SSH, `--help` returns in <1 s,
+`expected_output: durations` is a literal. 4.8 PAT sweep clean (the
+`secrets=GH_TOKEN` directive token is a sweeper contract name, not a
+PAT-shaped variable or literal). 4.9 no UI surface — the Files lists match
+zero globs in `ui-surface-terms.md`. 4.10 no store class or new connection —
+committed TSVs are not a volume/bucket/queue and `gh api` is an existing
+call pattern. 4.11 `python3 scripts/lint-guard-contract.py` → green, 2 guard
+entries; adequacy read: Guard 1's assembly is the generator pipeline +
+chokepoint (`assign()`), not a member list; Guard 2's assembly binds to the
+registered-set enumeration, not a name list; both matrices carry a
+dispatch/vacuity row and a second-member or must-PASS row. Quality checks:
+flag spellings (`--runs`/`--legs`/`--durations`/`--durations-out`) and
+artifact names (`suite-durations{,-heavy}.tsv`,
+`apps/web-platform/infra/suite-durations.tsv`, `ci-leg-balance-9232`)
+grep-verified consistent across Proposed Solution, Guard Contract, ACs, Test
+Scenarios, and tasks.md; rule-id citations (`cq-test-fixtures-synthesized-
+only`, `cq-write-failing-tests-before`, `hr-observability-as-plan-quality-
+gate`) verified live in AGENTS.md.

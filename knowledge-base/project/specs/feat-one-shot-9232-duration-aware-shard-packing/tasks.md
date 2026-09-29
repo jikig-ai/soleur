@@ -22,7 +22,10 @@ Issue: #9232 — duration-aware shard packing (extends ADR-240's sticky-LPT gene
 
 - [ ] 2.1 `scripts/regenerate-shard-manifest.py` input layer: `green_main_runs()`,
       `--runs N` (default 5), repeatable `--timings-dir` (one run per dir),
-      `--durations`/`--durations-out`, mutual-exclusion validation.
+      `--durations`/`--durations-out`, source precedence `--durations` >
+      `--timings-dir` > gh with honest provenance (mirrors `main()`'s
+      pairing rule at ~line 355); `expected_legs` WARN stays bound to the
+      workflow's declared N, never the `--legs` override.
 - [ ] 2.2 Aggregation + floor: per-label median across runs (mean of two
       middles for even N); `floor_ms` = median-of-measured else
       `DEFAULT_SUITE_MS = 60000`; `src` provenance; all-floor WARN-degrade
