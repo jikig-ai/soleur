@@ -4,29 +4,29 @@ Derived from `knowledge-base/project/plans/2026-09-29-fix-dependabot-fast-uri-ip
 
 ## Phase 1 — Bump `apps/web-platform/package-lock.json` (npm@11)
 
-- [ ] 1.1 `cd apps/web-platform && npx --yes npm@11 update fast-uri ip-address`
-- [ ] 1.2 Verify resolved versions: `node_modules/fast-uri` = `3.1.8` (≥3.1.7), `node_modules/ip-address` = `10.7.2` (≥10.5.1) in `apps/web-platform/package-lock.json`
-- [ ] 1.3 If `npm update` silently no-ops (peer-installed copies), apply the surgical 3-field entry edit (version/resolved/integrity) using the verified hashes in the plan's Phase 1 fallback, then validate with `npx --yes npm@11 ci --ignore-scripts`
+- [x] 1.1 `cd apps/web-platform && npx --yes npm@11 update fast-uri ip-address`
+- [x] 1.2 Verify resolved versions: `node_modules/fast-uri` = `3.1.8` (≥3.1.7), `node_modules/ip-address` = `10.7.2` (≥10.5.1) in `apps/web-platform/package-lock.json`
+- [x] 1.3 If `npm update` silently no-ops (peer-installed copies), apply the surgical 3-field entry edit (version/resolved/integrity) using the verified hashes in the plan's Phase 1 fallback, then validate with `npx --yes npm@11 ci --ignore-scripts`
 
 ## Phase 2 — Bump `plugins/soleur/skills/pencil-setup/scripts/package-lock.json` (npm@11)
 
-- [ ] 2.1 `cd plugins/soleur/skills/pencil-setup/scripts && npx --yes npm@11 update ip-address`
-- [ ] 2.2 Verify `node_modules/ip-address` = `10.7.2` (≥10.5.1); `fast-uri` remains ≥3.1.7 (currently 3.1.8)
+- [x] 2.1 `cd plugins/soleur/skills/pencil-setup/scripts && npx --yes npm@11 update ip-address`
+- [x] 2.2 Verify `node_modules/ip-address` = `10.7.2` (≥10.5.1); `fast-uri` remains ≥3.1.7 (currently 3.1.8)
 
 ## Phase 3 — Verify (prod-fidelity install + tests)
 
-- [ ] 3.1 `cd apps/web-platform && npx --yes npm@11 ci --ignore-scripts`
-- [ ] 3.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
-- [ ] 3.3 `cd apps/web-platform && ./node_modules/.bin/vitest run`
-- [ ] 3.4 `cd plugins/soleur/skills/pencil-setup/scripts && npx --yes npm@11 ci --ignore-scripts`
-- [ ] 3.5 `bash scripts/test-all.sh`
-- [ ] 3.6 Confirm no `package.json` modified: `git status --short -- '**/package.json'` → empty
+- [x] 3.1 `cd apps/web-platform && npx --yes npm@11 ci --ignore-scripts`
+- [x] 3.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
+- [x] 3.3 `cd apps/web-platform && ./node_modules/.bin/vitest run`
+- [x] 3.4 `cd plugins/soleur/skills/pencil-setup/scripts && npx --yes npm@11 ci --ignore-scripts`
+- [ ] 3.5 `bash scripts/test-all.sh` — SKIPPED per operator direction; deferred to CI
+- [x] 3.6 Confirm no `package.json` modified: `git status --short -- '**/package.json'` → empty
 
 ## Phase 4 — Assert resolution + lockfile-sync idempotency
 
-- [ ] 4.1 Run the plan's assert-floors node script against both lockfiles → both print `OK`
-- [ ] 4.2 `npx --yes npm@11 install --package-lock-only` in each touched dir → `git diff --exit-code` clean
-- [ ] 4.3 Map each resolved version ≥ Dependabot `first_patched_version` (fast-uri 3.1.8 ≥ 3.1.7; ip-address 10.7.2 ≥ 10.5.1)
+- [x] 4.1 Run the plan's assert-floors node script against both lockfiles → both print `OK`
+- [x] 4.2 `npx --yes npm@11 install --package-lock-only` in each touched dir → `git diff --exit-code` clean
+- [x] 4.3 Map each resolved version ≥ Dependabot `first_patched_version` (fast-uri 3.1.8 ≥ 3.1.7; ip-address 10.7.2 ≥ 10.5.1)
 
 ## Phase 5 — Ship ONE security PR
 
