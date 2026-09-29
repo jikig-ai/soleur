@@ -1,12 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import useSWR from "swr";
+import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { warnSilentFallback } from "@/lib/client-observability";
 
 // ADR-044 (#4543): the active-workspace repo, kept truthful by run-time
-// revalidation (poll on mount + window focus), NOT a realtime subscription. The
-// active-repo endpoint reads workspaces-only (never users.repo_url) and
-// self-heals J5 (access revocation) by resetting the claim to the personal
-// workspace; consumers surface that via the `fellBackToSolo` signal.
+// revalidation (mount + window focus + the while-`cloning` poll), NOT a
+// realtime subscription. The active-repo endpoint reads workspaces-only (never
+// users.repo_url) and self-heals J5 (access revocation) by resetting the claim
+// to the personal workspace; consumers surface that via the `fellBackToSolo`
+// signal.
 //
 // Extracted from live-repo-badge.tsx so BOTH the workspace pill (via
 // OrgSwitcherContainer, which renders the repo as a subtitle) AND LiveRepoBadge
@@ -15,11 +18,22 @@ import { useCallback, useEffect, useState } from "react";
 // (nav-single-mount.test.ts) tracks component imports, and a hook is outside
 // its scope.
 //
-// Fetch coalescing (module-level `inFlight`): the band mounts TWICE (CSS-
-// exclusive mobile + rail), and each band now has two consumers of this hook,
-// so a naive per-instance fetch would fire up to 4 concurrent GETs — and 4
-// racing J5 corrective writes — on every mount/focus. All concurrent callers
-// share one in-flight request; the latch self-clears when it settles.
+// #9178 mount-fetch contract (ADR-067 amendment): this rides the SHARED SWR
+// key `swrKeys.workspaceActiveRepo()` — the same key useConversations,
+// dashboard/page.tsx and conversations-nav-badge read — so SWR's per-key
+// in-flight coalescing + dedupingInterval own dedup across EVERY consumer. The
+// former module-level `inFlight` latch only joined raw-fetch callers and was
+// blind to the SWR channel, so the same endpoint fired x3-4 per mount.
+//
+// Semantics preserved from the raw-fetch implementation:
+// - keep-last-known on transient failure: jsonFetcher THROWS on non-2xx, so
+//   SWR retains the last `data` and routes the failure to `error` (ignored
+//   here — callers read `data` only).
+// - mount fetch + focus revalidation: revalidateOnMount + the global
+//   `revalidateOnFocus` in swrConfig replace the explicit focus listener.
+// - #5394 cloning poll: `refreshInterval` re-evaluates on every data write, so
+//   it polls every 2 s while repoStatus === "cloning" and self-stops on
+//   ready/error/not_connected.
 
 export interface ActiveRepo {
   workspaceId: string;
@@ -29,60 +43,26 @@ export interface ActiveRepo {
   fellBackToSolo: boolean;
 }
 
-let inFlight: Promise<ActiveRepo | null> | null = null;
-
-async function fetchActiveRepoCoalesced(): Promise<ActiveRepo | null> {
-  if (inFlight) return inFlight;
-  inFlight = (async () => {
-    try {
-      const res = await fetch("/api/workspace/active-repo");
-      if (!res.ok) return null; // transient — caller keeps last-known, no flash
-      return (await res.json()) as ActiveRepo;
-    } catch {
-      return null; // network blip — caller keeps last-known
-    } finally {
-      inFlight = null;
-    }
-  })();
-  return inFlight;
-}
-
-// Test-only: clear the coalescing latch between tests so a deliberately
-// never-resolving fetch stub in one test cannot poison the next.
-export function __resetActiveRepoCoalesceForTests(): void {
-  inFlight = null;
-}
-
 export function useActiveRepo(): { data: ActiveRepo | null } {
-  const [data, setData] = useState<ActiveRepo | null>(null);
-
-  const poll = useCallback(async () => {
-    const next = await fetchActiveRepoCoalesced();
-    if (next) setData(next); // keep last-known on transient null
-  }, []);
-
-  useEffect(() => {
-    poll();
-    const onFocus = () => poll();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [poll]);
-
-  // #5394 — while the repo is `cloning`, poll every 2s so the chat composer
-  // auto-transitions to ready (or error) WITHOUT a manual refresh (AC4). The
-  // interval is keyed on `repoStatus`: it starts only while cloning and the
-  // effect cleanup clears it the moment the status leaves cloning (ready /
-  // error / not_connected) — self-stopping, no fetch after settle. Cleared on
-  // unmount too. The module-level `inFlight` latch keeps this coalesced with the
-  // mount+focus revalidation (no fetch multiplication with the nav badge).
-  const repoStatus = data?.repoStatus;
-  useEffect(() => {
-    if (repoStatus !== "cloning") return;
-    const id = setInterval(() => {
-      poll();
-    }, 2_000);
-    return () => clearInterval(id);
-  }, [repoStatus, poll]);
-
-  return { data };
+  const { data } = useSWR<ActiveRepo>(
+    swrKeys.workspaceActiveRepo(),
+    jsonFetcher<ActiveRepo>,
+    {
+      // 2.1 s sits just outside the 2 s dedupingInterval so a timer tick
+      // landing inside the dedup window can't stretch the effective cadence
+      // toward ~4 s.
+      refreshInterval: (latest) =>
+        latest?.repoStatus === "cloning" ? 2_100 : 0,
+      // Mirror persistent endpoint failures — every sibling mount-key
+      // migration reports through warnSilentFallback (bounded by
+      // errorRetryCount, so an outage emits ~4 events per mount, not one per
+      // retry forever).
+      onError: (err) =>
+        warnSilentFallback(err, {
+          feature: "active-repo",
+          op: "mount-fetch",
+        }),
+    },
+  );
+  return { data: data ?? null };
 }

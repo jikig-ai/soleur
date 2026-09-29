@@ -3,6 +3,12 @@
 **Refs:** #7404 (LINKEDIN_ACCESS_TOKEN, opened 2026-08-10), #7606
 (LINKEDIN_ORG_ACCESS_TOKEN, opened 2026-08-17)
 
+> **Update (PR #9183, #9181):** the Community app (`clientId 78s808ujpe6lve`)
+> has no `openid`, so the org token can never pass `/v2/userinfo`. The cron and
+> `bootstrap.sh` below now probe it via `organizationalEntityAcls` and mint it
+> under the Community app's generator URL; this spec's per-token scope lists
+> and single-generator instructions are the historical record only.
+
 ## Context
 
 `cron-linkedin-token-check` (weekly, Monday 11:00 UTC) calls

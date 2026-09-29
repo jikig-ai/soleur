@@ -972,7 +972,7 @@ formula and regenerate `model.likec4.json`. `plugins/soleur/test/c4-count-parity
 
 - [x] AC12: The first successful `apply-sentry-infra.yml` run whose head contains the merge SHA logs the live literal `sentry_alert live fidelity: PASS (all` (not the FIXTURE literal). The first successful `web-platform-release.yml` run for the merge SHA completes. Both run ids are recorded on #8572. *(Verified 2026-09-28: apply-sentry-infra run 36454249853 (push, on the merge SHA) logged `sentry_alert live fidelity: PASS (all 35 in-scope rules match the committed reference field-for-field)`; the merge-SHA release run 36454250110 built the release (its deploy job skipped by design); the deploy arm 36456390256 (on `5804b728`, the merge's direct child, no `apps/web-platform/` change) read `MATCH=exact DEPLOY=success`, and served `CONTAINS`.)*
 - [x] AC13: #8211 carries the Phase 6 comment: the two-part check, boot-only before the flip, and the re-erasure dependency. #8572 is closed with both run URLs. *(Verified 2026-09-28: #8211 issuecomment-5874980620; #8572 closed with both run URLs.)*
-- [ ] AC14: The evidence-only PR appends the dated verification lines to the register and the audit, and merges. On the red path, it records the failed state instead.
+- [x] AC14: The evidence-only PR appends the dated verification lines to the register and the audit, and merges. On the red path, it records the failed state instead. *(Verified 2026-09-29: evidence PR #9171 merged as `43d3afb521`, appending the dated "condition met" lines to `article-30-register.md`, `audits/2026-09-counsel-reattestation-5914.md`, ADR-220 and ADR-237.)*
 
 ## Domain Review
 
