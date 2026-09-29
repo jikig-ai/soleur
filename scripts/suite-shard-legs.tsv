@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=7
-# generated-from-run=36628648785
-# generated-from-runs=36628648785,36622276627,36611277013,36610629530,36604990368
-# default-weight-ms=888
-# generated-at=2026-09-29T21:44:51Z
+# generated-from-run=36492013313
+# generated-from-runs=36492013313,36476887867,36469193442,36464531216,36454249929
+# default-weight-ms=824
+# generated-at=2026-09-29T21:56:29Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --runs 5 --write
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -21,9 +21,9 @@
 .claude/hooks/git-commit-secret-scan.test.sh	4
 .claude/hooks/grep-q-pipe-guard.test.sh	6
 .claude/hooks/grep-rewrite.test.sh	5
-.claude/hooks/guardrails.test.sh	2
+.claude/hooks/guardrails.test.sh	5
 .claude/hooks/hook-input-contract.test.sh	4
-.claude/hooks/hook-suite-dep-unresolved.test.sh	7
+.claude/hooks/hook-suite-dep-unresolved.test.sh	3
 .claude/hooks/hook-tool-kind.test.sh	6
 .claude/hooks/hookeventname-coverage.test.sh	6
 .claude/hooks/iac-plan-write-guard.test.sh	3
@@ -45,7 +45,7 @@
 .claude/hooks/pre-merge-auto-close-scan.test.sh	6
 .claude/hooks/pre-merge-rebase-headless.test.sh	4
 .claude/hooks/pre-merge-rebase-parity.test.sh	1
-.claude/hooks/pre-merge-rebase.test.sh	5
+.claude/hooks/pre-merge-rebase.test.sh	7
 .claude/hooks/prod-write-defer-gate.test.sh	5
 .claude/hooks/rule-incident-marker-capture.test.sh	1
 .claude/hooks/security_reminder_hook.test.sh	6
@@ -71,7 +71,7 @@ apps/cla-evidence/scripts/upload-bypass.test.sh	2
 apps/cla-evidence/scripts/upload-evidence.test.sh	7
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	3
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	2
-apps/web-platform/scripts/dev-ledger-parity.test.sh	4
+apps/web-platform/scripts/dev-ledger-parity.test.sh	1
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	5
 apps/web-platform/scripts/lib/no-cross-context-import.test.sh	3
 apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh	1
@@ -100,7 +100,7 @@ plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	7
 plugins/soleur/skills/community/test/github-community.test.sh	2
 plugins/soleur/skills/compound/test/phase-16.test.sh	2
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	5
-plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	1
+plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	5
 plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	2
 plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	7
 plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	2
@@ -217,12 +217,12 @@ plugins/soleur/test/reusable-release-caller-permissions.test.sh	2
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	6
 plugins/soleur/test/reusable-release-idempotency.test.sh	1
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	3
-plugins/soleur/test/roadmap-reconcile.test.sh	1
+plugins/soleur/test/roadmap-reconcile.test.sh	3
 plugins/soleur/test/schedule-skill-once.test.sh	5
 plugins/soleur/test/scripts-shard-manifest.test.sh	4
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	6
 plugins/soleur/test/scripts-shard-totality.test.sh	7
-plugins/soleur/test/session-state.test.sh	2
+plugins/soleur/test/session-state.test.sh	7
 plugins/soleur/test/ship-battery-owed.test.sh	3
 plugins/soleur/test/ship-followthrough-directive.test.sh	7
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	6
@@ -243,7 +243,7 @@ plugins/soleur/test/workflow-run-deploy-invariants.test.sh	3
 plugins/soleur/test/worktree-manager-atomic-config.test.sh	7
 plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh	4
 plugins/soleur/test/worktree-manager-bare-sync.test.sh	1
-plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh	2
+plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh	3
 plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh	4
 plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh	2
 plugins/soleur/test/worktree-manager-hook-deps.test.sh	2
@@ -274,6 +274,7 @@ scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	7
 scripts/check-tom4-rls-posture-live	1
 scripts/ci-deploy-sentry-post-fail-6475	6
+scripts/ci-leg-balance-9232	3
 scripts/classify-workflow-transitions	5
 scripts/compound-promote	6
 scripts/compound-promote-outcome-8281	3
@@ -395,7 +396,7 @@ scripts/orphan-process-reaper-mutations	4
 scripts/plugin-delivery-canary	1
 scripts/plugin-legacy-resolver-probe	3
 scripts/probe-legal-corpus-truth-live	1
-scripts/prod-version-drift-check	6
+scripts/prod-version-drift-check	4
 scripts/raise-tmp-tmpfs-ceiling	6
 scripts/registry-luks-live-8386	7
 scripts/rename-guard	6
@@ -424,7 +425,7 @@ scripts/test-all-group-affected	6
 scripts/test-all-infra-coverage-notice	6
 scripts/test-all-killed-classification	5
 scripts/test-all-orphan-log-retention	5
-scripts/test-all-runtime-ceiling	6
+scripts/test-all-runtime-ceiling	3
 scripts/test-all-webplat-gate	4
 scripts/test-contention	7
 scripts/tmpfs-guard	2
@@ -459,15 +460,15 @@ tests/scripts/destroy-guard-regex-parity	2
 tests/scripts/destroy-guard-sentry-scope-guard	2
 tests/scripts/dev-suite-mutex	2
 tests/scripts/dev-suite-mutex-wiring	5
-tests/scripts/dispatch-web-redeploy	7
+tests/scripts/dispatch-web-redeploy	1
 tests/scripts/eu-location-allowset-parity	1
 tests/scripts/git-data-birth-readiness-gate	6
 tests/scripts/git-data-boot-signal-poll	6
 tests/scripts/git-data-host-birth-gate	3
 tests/scripts/git-data-host-replace-gate	4
 tests/scripts/git-data-root-key-arm	5
-tests/scripts/git-data-root-token-census	4
-tests/scripts/git-data-rung2-evidence-capture	7
+tests/scripts/git-data-root-token-census	2
+tests/scripts/git-data-rung2-evidence-capture	6
 tests/scripts/git-data-rung2-plan-shape	7
 tests/scripts/host-image-coherence-preflight	5
 tests/scripts/infra-privileged-tier-census	2
@@ -480,7 +481,7 @@ tests/scripts/lint-rule-bodies	6
 tests/scripts/lint-rule-ids	1
 tests/scripts/main-duplicate-skip	5
 tests/scripts/no-tofu-ssh	2
-tests/scripts/no-tofu-ssh-mutation	7
+tests/scripts/no-tofu-ssh-mutation	5
 tests/scripts/plan-gate-preamble	4
 tests/scripts/preapply-entrypoint-gate	1
 tests/scripts/registry-d10-workflow-wiring	4

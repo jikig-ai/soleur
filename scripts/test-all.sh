@@ -4124,6 +4124,14 @@ if want_scripts; then
   # qualifies ONLY when all six jobs (4 legs + fixed + done) are present, green, and
   # measured — a skipped leg is unmeasurable and fail-closed, never a green leg.
   run_suite "scripts/deploy-script-tests-legs-8736" bash scripts/followthroughs/deploy-script-tests-legs-8736.test.sh
+  # #9232: exit-code harness for the test-scripts leg-balance soak probe (the
+  # "every leg ~within 2x of the mean suite-time total" AC). Registered explicitly
+  # (orphan-suite class above). Its exit code is the closure of #9232 (0 closes;
+  # 1 = a qualifying run carried a breaching leg; 2 = NOT YET — under-sampled or
+  # every run non-qualifying; 3 = gh failed). A run qualifies ONLY when all N
+  # light legs uploaded their timing artifact — a leg that died pre-upload is
+  # unmeasurable and fail-closed, never a green leg.
+  run_suite "scripts/ci-leg-balance-9232" bash scripts/followthroughs/ci-leg-balance-9232.test.sh
   # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
   # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
   # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
