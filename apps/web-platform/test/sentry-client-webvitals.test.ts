@@ -33,11 +33,11 @@ vi.mock("@sentry/nextjs", () => ({
 // Synthesized fake JWT (3 base64url segments, "eyJ"-prefixed). Same shape used
 // by `sentry-client-jwt-scrub.test.ts` fixtures.
 const FAKE_JWT =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSJ9.synthesized-signature-for-webvitals-test"; // gitleaks:allow # synthesized
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSJ9.synthesized-signature-for-webvitals-test"; // gitleaks:allow issue:#9178 synthesized fixture
 // Opaque (non-JWT-shaped) secret — the shape-driven query/path sanitize is
 // what catches it, never the substring scrub.
-const OPAQUE_SECRET = "pk_sk_opaque_secret_0123456789abcdef"; // gitleaks:allow # synthesized
-const INVITE_TOKEN = "invite-token-AbCdEf012345"; // gitleaks:allow # synthesized
+const OPAQUE_SECRET = "pk_sk_opaque_secret_0123456789abcdef"; // gitleaks:allow issue:#9178 synthesized fixture
+const INVITE_TOKEN = "invite-token-AbCdEf012345"; // gitleaks:allow issue:#9178 synthesized fixture
 
 interface ClientInitOptions {
   integrations?: unknown;
