@@ -31,8 +31,8 @@ Operating norms: one PR; commit with `LEFTHOOK_EXCLUDE=bun-test,plugin-component
 
 - [x] 3.1 Append `## Amendment 2026-09-29 (#9097)` to `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md` (evidence retarget; soak still gates 5.6)
 - [x] 3.2 Comment-only fix in `apps/web-platform/test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` (~lines 252-253): the remark citing `ZOT_INNGEST` sample queries must not name a removed variable (optionally run `cd apps/web-platform && bun test test/sentry-zot-mirror-fallback-alert-op-contract.test.ts` if machine tolerates)
-- [ ] 3.3 `gh issue comment 6122` recording the arm retarget (agent-run; no operator step)
-- [ ] 3.4 Open the PR: `Closes #9097` in the body (never the title), `## Changelog` section; verify ACs against the diff
+- [x] 3.3 `gh issue comment 6122` recording the arm retarget (agent-run; no operator step)
+- [x] 3.4 Open the PR: `Closes #9097` in the body (never the title), `## Changelog` section; verify ACs against the diff
 
 ## Testing gates
 
