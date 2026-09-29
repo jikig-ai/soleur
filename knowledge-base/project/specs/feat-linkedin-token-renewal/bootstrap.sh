@@ -284,18 +284,31 @@ bound() {
 # otherwise carry it for up to 15s per call.
 token_probe() {
   local tok="$1" url="$2" response code rc=0
+  # Local charset gate: a quote or line break in $tok would terminate the
+  # quoted --config string and inject arbitrary curl directives — refuse
+  # before the header is ever composed.
+  if [[ "$tok" == *'"'* || "$tok" == *$'\n'* || "$tok" == *$'\r'* ]]; then
+    printf 'rejected malformed'; return
+  fi
   response="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" | \
     curl --disable --noproxy '*' -s -m 15 --config - \
       -w '\n%{http_code}' \
       "$url" 2>/dev/null)" || rc=$?
   if [[ $rc -ne 0 ]]; then printf 'transport'; return; fi
   code="$(printf '%s' "$response" | tail -1)"
-  if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then printf 'live';
+  if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
+    # A 2xx must carry a JSON body — a TLS-inspecting proxy's 200-HTML is a
+    # transport condition, not proof the token works (cron parity).
+    if printf '%s' "$response" | head -n -1 | grep -q '{'; then printf 'live';
+    else printf 'transport'; fi
   elif [[ "$code" == 401 || "$code" == 403 ]]; then printf 'rejected %s' "$code";
   else printf 'transport'; fi
 }
 
 token_is_live() { [[ "$(token_probe "$1" "$2")" == live ]]; }
+
+# probe_endpoint_name <url> — last path segment ("userinfo", "organizationalEntityAcls")
+probe_endpoint_name() { local p="${1%%\?*}"; printf '%s' "${p##*/}"; }
 
 # token_fingerprint <value> — first 16 hex of sha256. Binds the gh-write marker
 # to the VALUE written: a stale marker from a previous token can never skip a
@@ -377,17 +390,20 @@ mint_or_reuse() {
   probe="$(token_probe "$tok" "$probe_url")"
   case "$probe" in
     live)
-      local ep="${probe_url%%\?*}"; ep="${ep##*/}"
-      soleur_op_green "  live check passed (LinkedIn ${ep} 2xx)." ;;
+      soleur_op_green "  live check passed (LinkedIn $(probe_endpoint_name "$probe_url") 2xx)." ;;
     rejected*)
       local http="${probe##* }"
       printf 'SOLEUR_BOOTSTRAP_TOKEN_REJECTED name=%s http=%s\n' "$name" "$http"
-      if [[ "$http" == 403 ]]; then
-        soleur_op_red "  ${name} is alive but cannot authorize its probe (403) — mint a new"
-        soleur_op_red "  token under the app named above and select every scope it offers."
-      else
-        soleur_op_red "  ${name} was rejected by LinkedIn ($http) — mint a different token."
-      fi
+      case "$http" in
+        403)
+          soleur_op_red "  ${name} is alive but cannot authorize its probe (403) — mint a new"
+          soleur_op_red "  token under the app named above and select every scope it offers." ;;
+        malformed)
+          soleur_op_red "  ${name} contains characters that cannot form an HTTP header"
+          soleur_op_red "  (quote or line break) — re-copy the token and re-run." ;;
+        *)
+          soleur_op_red "  ${name} was rejected by LinkedIn ($http) — mint a different token." ;;
+      esac
       [[ -n "$from_skip" ]] && soleur_op_red "  (this value came from ${skipvar} — fix or unset it and re-run)"
       return 1 ;;
     *)
@@ -599,9 +615,9 @@ stage_4_verify() {
     case "$name" in
       LINKEDIN_ACCESS_TOKEN) probe_url="$LINKEDIN_USERINFO" ;;
       LINKEDIN_ORG_ACCESS_TOKEN) probe_url="$LINKEDIN_ORG_ACLS" ;;
-      *) printf 'SOLEUR_BOOTSTRAP_VERIFY_FAILED %s (no probe configured)\n' "$name"; failed=1; continue ;;
+      *) printf 'SOLEUR_BOOTSTRAP_VERIFY_FAILED name=%s store=none (no probe configured)\n' "$name"; failed=1; continue ;;
     esac
-    ep="${probe_url%%\?*}"; ep="${ep##*/}"
+    ep="$(probe_endpoint_name "$probe_url")"
     cur="$(doppler_token "$name")"
     if [[ -n "$cur" ]] && token_is_live "$cur" "$probe_url"; then
       soleur_op_green "  ${name}: live in Doppler soleur/prd (${ep} 2xx)"

@@ -272,7 +272,7 @@ describe("cronLinkedinTokenCheckHandler — expired token (401)", () => {
     const creates = octokitRequestSpy.mock.calls.filter(
       ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
     );
-    expect(comments.length).toBeGreaterThanOrEqual(2);
+    expect(comments.length).toBe(2);
     expect(creates.length).toBe(0);
   });
 });
@@ -378,6 +378,67 @@ describe("cronLinkedinTokenCheckHandler — org token wrong-scope (403)", () => 
     expect(body).toContain("403");
     expect(body).toContain("clientId=78s808ujpe6lve");
   });
+
+  it("comments (HTTP 403) on an existing org issue instead of creating a duplicate", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string, args: any) => {
+      if (route === "GET /search/issues") {
+        return String(args?.q).includes("LINKEDIN_ORG_ACCESS_TOKEN")
+          ? { data: { items: [{ number: 7606 }] } }
+          : { data: { items: [] } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/installation")
+        return { data: { id: 12345 } };
+      return { data: {} };
+    });
+
+    const fetchSpy = mockLinkedInPerToken({
+      orgAcls: () => new Response("ACCESS_DENIED", { status: 403 }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { cronLinkedinTokenCheckHandler } = await importHandler();
+    const step = makeStep();
+    await cronLinkedinTokenCheckHandler({ step, logger });
+
+    const comments = octokitRequestSpy.mock.calls.filter(
+      ([route, args]: any[]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments" &&
+        args?.issue_number === 7606,
+    );
+    expect(comments.length).toBe(1);
+    expect(String(comments[0]![1].body)).toContain("(HTTP 403)");
+    expect(
+      octokitRequestSpy.mock.calls.filter(
+        ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
+      ).length,
+    ).toBe(0);
+  });
+});
+
+describe("cronLinkedinTokenCheckHandler — transport/vendor non-2xx", () => {
+  it.each([429, 500])(
+    "a %i on the org probe returns unknown and files nothing",
+    async (status) => {
+      const fetchSpy = mockLinkedInPerToken({
+        orgAcls: () => new Response("", { status }),
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const { cronLinkedinTokenCheckHandler } = await importHandler();
+      const step = makeStep();
+      const out = await cronLinkedinTokenCheckHandler({ step, logger });
+
+      expect(out.results[1].status).toBe("unknown");
+      expect(out.results[1].httpStatus).toBe(status);
+      expect(out.results[1].reason).toBe("http");
+      // Vendor conditions must not file spurious issues.
+      expect(
+        octokitRequestSpy.mock.calls.filter(
+          ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
+        ).length,
+      ).toBe(0);
+    },
+  );
 });
 
 describe("checkToken — JSON validation guard", () => {
@@ -417,11 +478,14 @@ describe("checkToken — JSON validation guard", () => {
       mockOctokit,
     );
     expect(result.status).toBe("unknown");
-    // A missing table entry must never silently default to an endpoint.
-    expect(fetchSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining("api.linkedin.com"),
-      expect.anything(),
-    );
+    expect(result.reason).toBe("no-probe-configured");
+    // A missing table entry must never silently default to an endpoint —
+    // first-arg host check catches the single-arg fetch(url) call form too.
+    expect(
+      fetchSpy.mock.calls.every(
+        ([u]: any[]) => !String(u).includes("api.linkedin.com"),
+      ),
+    ).toBe(true);
     expect(reportSilentFallbackSpy).toHaveBeenCalled();
   });
 });
@@ -541,5 +605,35 @@ describe("bootstrap.sh source anchors (per-token probe parity)", () => {
     expect(BOOTSTRAP_SOURCE).toMatch(
       /mint_or_reuse "LINKEDIN_ORG_ACCESS_TOKEN"[^|]*\$LINKEDIN_ORG_ACLS[^|]*\|\| return 1/,
     );
+  });
+
+  it("stage_1 routes the personal token through LINKEDIN_USERINFO", () => {
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /mint_or_reuse "LINKEDIN_ACCESS_TOKEN"[^|]*\$LINKEDIN_USERINFO[^|]*\|\| return 1/,
+    );
+  });
+
+  it("persist_token rechecks each token at its own endpoint", () => {
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /persist_token "LINKEDIN_ACCESS_TOKEN" "\$MINTED_TOKEN" "\$LINKEDIN_USERINFO"/,
+    );
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /persist_token "LINKEDIN_ORG_ACCESS_TOKEN" "\$MINTED_TOKEN" "\$LINKEDIN_ORG_ACLS"/,
+    );
+  });
+
+  it("stage_4_verify dispatches the org token to LINKEDIN_ORG_ACLS", () => {
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /LINKEDIN_ORG_ACCESS_TOKEN\) probe_url="\$LINKEDIN_ORG_ACLS"/,
+    );
+  });
+
+  it("keeps each SOLEUR_BOOTSTRAP_* skip-var on its mint_or_reuse first line (usage() grep derivation)", () => {
+    for (const line of [
+      'mint_or_reuse "LINKEDIN_ACCESS_TOKEN" SOLEUR_BOOTSTRAP_LINKEDIN_ACCESS_TOKEN',
+      'mint_or_reuse "LINKEDIN_ORG_ACCESS_TOKEN" SOLEUR_BOOTSTRAP_LINKEDIN_ORG_ACCESS_TOKEN',
+    ]) {
+      expect(BOOTSTRAP_SOURCE).toContain(line);
+    }
   });
 });
