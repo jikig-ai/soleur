@@ -222,7 +222,7 @@ What changed semantically:
 - A red boot poll now leaves the pin published with NO automated re-dispatch — the inline
   step is `skipped` and the job goes red, which is the paging surface (the follower's
   `pin_published` email arm is gone with it). The recovery is the standalone lever:
-  `gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY`,
+  `gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY-GIT-DATA`,
   which runs the same track.sh without touching the flag or the host.
 - The carried-over-attempt and no-`source_run_id` manual arms are gone with the follower;
   an operator-local apply in the rung-2 gap loads the pin via the same `mode=redeploy` lever.
