@@ -82,13 +82,13 @@ describe("migration 145: Codex auth-mode rebinding", () => {
     expect(down).toMatch(/CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*lifecycle append requires service role/);
   });
 
-  it("commits the terminal lifecycle event and attempt status in one RPC", () => {
+  it("commits every lifecycle status and its attempt transition in one RPC", () => {
     const sql = read("146_codex_terminal_lifecycle.sql");
     const lifecycle = sql.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
 
     expect(lifecycle).toMatch(/^\s*INSERT INTO public\.agent_engine_events[\s\S]*RETURNING \* INTO v_row/m);
-    expect(lifecycle).toMatch(/^\s*UPDATE public\.agent_engine_attempts AS a[\s\S]*SET status = p_payload->>'status'[\s\S]*terminal_at = COALESCE\(a\.terminal_at, now\(\)\)/m);
-    expect(lifecycle).toMatch(/p_payload->>'status' IN \('completed','failed','cancelled'\)/);
+    expect(lifecycle).toMatch(/IF p_payload->>'source_type' = 'status'[\s\S]*p_payload->>'status' IS DISTINCT FROM v_attempt\.status THEN\s+PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
+    expect(lifecycle).not.toMatch(/UPDATE public\.agent_engine_attempts AS a SET/);
     const down = read("146_codex_terminal_lifecycle.down.sql");
     expect(down).toMatch(/FOR SHARE/);
     expect(down).not.toMatch(/UPDATE public\.agent_engine_attempts AS a[\s\S]*status = p_payload->>'status'/);

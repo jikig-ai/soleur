@@ -162,6 +162,16 @@ describe("Codex conversation dispatch bridge", () => {
   ])("fails closed when the provider ends without a terminal status ($label)", async ({ payloads }) => {
     const { repository, options } = turnFixture(payloads);
     await expect(dispatchCodexConversationToWebSocket(options)).rejects.toMatchObject({ code: "codex_terminal_missing" });
+    expect(repository.transitionAttempt.mock.calls).toEqual([["synthetic-attempt", "running"]]);
+    expect(repository.appendLifecycleEvent).toHaveBeenLastCalledWith(
+      "synthetic-run", "synthetic-attempt", { type: "status", status: "failed" },
+    );
+  });
+
+  it("falls back to the attempt transition if failure-event persistence fails", async () => {
+    const { repository, options } = turnFixture([]);
+    repository.appendLifecycleEvent.mockRejectedValueOnce(new Error("failure event RPC unavailable"));
+    await expect(dispatchCodexConversationToWebSocket(options)).rejects.toMatchObject({ code: "codex_terminal_missing" });
     expect(repository.transitionAttempt.mock.calls).toEqual([
       ["synthetic-attempt", "running"], ["synthetic-attempt", "failed"],
     ]);

@@ -99,7 +99,11 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     // frame is sent: socket delivery is outside the database transaction.
   } catch (error) {
     if (typeof attemptId === "string" && terminalStatus === null) {
-      try { await options.repository.transitionAttempt(attemptId, "failed"); } catch { /* preserve dispatch error */ }
+      try {
+        await options.repository.appendLifecycleEvent(runId, attemptId, { type: "status", status: "failed" });
+      } catch {
+        try { await options.repository.transitionAttempt(attemptId, "failed"); } catch { /* preserve dispatch error */ }
+      }
     }
     throw error;
   }
