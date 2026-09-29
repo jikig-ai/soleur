@@ -4066,6 +4066,12 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #9237: exit-code harness for the watchdog-arm soak probe. Registered
+  # explicitly (orphan-suite class above). The probe is notify-only (never 0/1);
+  # its arms drive whether the sweeper reports NOT YET / CANNOT ESTABLISH /
+  # ACTION REQUIRED correctly — a vacuous or mis-routed verdict would either
+  # stall the arm silently or cry wolf daily.
+  run_suite "scripts/watchdog-arm-soak-9237" bash scripts/followthroughs/watchdog-arm-soak-9237.test.sh
   # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
   # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
   # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides
