@@ -11,9 +11,11 @@
 #              (HCL-decoded), the workflow -target= line, and the vector.toml tag.
 #   WRITERS  — the five mutating locals are HCL-DECODED and EXECUTED under sh against a
 #              stub PATH + a scratch filesystem tree: exit-17 freeze refusal, the fstab
-#              exactly-one rule, the crypttab canonical line, the env-file shape, the
-#              chattr-via-peek ordering (bind → chattr → lsattr verify → umount; never
-#              chattr on the mounted path), and the arm step's enable/proof ordering.
+#              exactly-one rule (trailing-slash normalized), the crypttab canonical line
+#              (whitespace-tolerant foreign detection), the env-file shape, the
+#              chattr-via-peek ordering (bind `|| exit 54` → symlink refusal → st_dev
+#              assert → chattr → lsattr verify → umount loop; never chattr on the
+#              mounted path), and the arm step's enable/420 s-bounded proof ordering.
 #   RUNTIME  — the reopen script runs under a stub PATH (cryptsetup/findmnt/mountpoint/
 #              systemctl/blockdev/realpath/doppler/logger/workspaces_luks_emit append
 #              "<phase>|<stub>|<argv>" to calls.log): phase order, phase-file rows, the
@@ -87,13 +89,33 @@ assert_fixture_dir "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 export WBU_SCRATCH="$SCRATCH"
 
-# Drop comment lines so a static row can never be satisfied (or tripped) by prose.
-# `#!` survives the strip on purpose.
-strip() { grep -vE '^[[:space:]]*#([^!]|$)' "$1"; }
+# Drop comment lines AND ` #`-style inline trailers that sit outside quotes: a
+# substring grep must never be satisfied by commented text (test-design review —
+# the old grep-only strip left `code # trailer` lines whole). `#!` survives on
+# purpose (a leading `#` whose next char is `!` after an all-blank prefix), and a
+# `#` inside single/double quotes is data (the script's `see #7797` literal).
+strip() {
+  awk '{
+    out=""; dq=0; sq=0; cut=0
+    for (i=1; i<=length($0); i++) {
+      ch=substr($0,i,1)
+      if (ch=="\"" && !sq && (i==1 || substr($0,i-1,1)!="\\")) { dq=!dq; out=out ch; continue }
+      if (ch==sprintf("%c",39) && !dq && (i==1 || substr($0,i-1,1)!="\\")) { sq=!sq; out=out ch; continue }
+      if (ch=="#" && !dq && !sq) {
+        nxt=(i<length($0)?substr($0,i+1,1):"")
+        prv=(i>1?substr($0,i-1,1):"")
+        if (nxt=="!" && (i==1 || out ~ /^[ \t]*$/)) { out=out ch; continue }
+        if (i==1 || prv ~ /[ \t]/) { cut=1; break }
+      }
+      out=out ch
+    }
+    if (cut) sub(/[ \t]+$/,"",out)
+    if (out != "" || $0 !~ /^[ \t]*#/) print out
+  }' "$1"
+}
 
 VOLID=777001
 PIN_DEV="/dev/disk/by-id/scsi-0HC_Volume_$VOLID"
-MAPPER=/dev/mapper/workspaces
 
 # ==================================================================================
 # PHASE A — decode the .tf block: resolve the writer/print locals, emit verdicts.
@@ -247,13 +269,15 @@ if res:
                 "file:/etc/systemd/system/workspaces-luks-reopen.service",
                 "file:/etc/systemd/system/workspaces-luks-reopen-failure.service",
                 "file:/etc/systemd/system/workspaces-luks-reopen.timer",
-                "exec:workspaces_boot_unlock_envfile_writer",
                 "exec:workspaces_boot_unlock_crypttab_writer",
-                "exec:workspaces_boot_unlock_fstab_writer",
+                "exec:workspaces_boot_unlock_envfile_writer",
                 "exec:workspaces_boot_unlock_gate_writer",
+                "exec:workspaces_boot_unlock_fstab_writer",
                 "exec:workspaces_boot_unlock_arm",
                 "exec:workspaces_boot_unlock_post_state"]
-    check("TF9 provisioner order is print -> files -> envfile -> crypttab -> fstab -> gate -> arm -> post-state",
+    # PINNED (#9123 review): crypttab first so an exit-32 refusal leaves the OLD
+    # pin pair; gate BEFORE fstab so a mid-window abort stays fail-closed.
+    check("TF9 provisioner order is print -> files -> crypttab -> envfile -> gate -> fstab -> arm -> post-state",
           seq == want_seq, seq)
     check("TF10 the before-print carries no freeze refusal (it must run even under a live freeze)",
           bool(DEC.get("workspaces_boot_unlock_print"))
@@ -297,8 +321,8 @@ ct = DEC.get("workspaces_boot_unlock_crypttab_writer", [])
 ct_txt = "\n".join(ct)
 check("TF18 crypttab line is the pinned by-id `none luks,noauto` (noauto keeps ask-password out of boot ordering)",
       any(c == "LINE='workspaces /dev/disk/by-id/scsi-0HC_Volume_%s none luks,noauto'" % VOLID for c in ct))
-check("TF19 crypttab writer is append-if-absent on ^workspaces, then asserts exactly-one AND canonical",
-      any(re.search(r"grep -q '\^workspaces\[\[:space:\]\]' \"\$c\".*\|\| printf '%s\\n' \"\$LINE\" >> \"\$c\"", c) for c in ct)
+check("TF19 crypttab writer is append-if-absent on ^[[:space:]]*workspaces[[:space:]] (leading whitespace IS live crypttab syntax), then asserts exactly-one AND canonical",
+      any(re.search(r"grep -q '\^\[\[:space:\]\]\*workspaces\[\[:space:\]\]' \"\$c\".*\|\| printf '%s\\n' \"\$LINE\" >> \"\$c\"", c) for c in ct)
       and any('= 1 ] ||' in c and "exit 31" in c for c in ct)
       and any('grep -qxF "$LINE"' in c and "exit 32" in c for c in ct))
 check("TF20 the crypttab line never carries `nofail` (a generated ask-password job would race the reopen unit)",
@@ -309,13 +333,17 @@ check("TF21 fstab writer refuses symlink (40), absent (41), live-source-not-mapp
       any("-L" in c and "exit 40" in c for c in fs)
       and any(re.match(r'\[ -f "\$f" \]', c) and "exit 41" in c for c in fs)
       and any('= /dev/mapper/workspaces' in c and "exit 42" in c for c in fs))
-check("TF22 fstab writer backups BEFORE the edit, comments every non-comment /mnt/data line, appends the canonical mapper+nofail line",
+check("TF22 fstab writer backups BEFORE the edit, comments every non-comment /mnt/data line (trailing-slash normalized on a COPY of $2), appends the canonical mapper+nofail line",
       any("cp -a" in c and ".bak" in c for c in fs)
       and any('boot-unlock-9123-superseded' in c for c in fs)
+      and any('sub(/\\/+$/' in c and 'm == "/mnt/data"' in c for c in fs)
       and any("/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2" in c and "printf" in c for c in fs))
-check("TF23 fstab writer asserts exactly-one (exit 44) and the surviving entry is mapper+ext4+nofail (exit 45) BEFORE mv (exit 46)",
+check("TF23 fstab writer asserts exactly-one (exit 44), the surviving entry is mapper+ext4+nofail (exit 45), the +1 line-count delta (exit 46) and the split chown (exit 47) all BEFORE mv (exit 46)",
       any('"$n" = 1' in c for c in fs) and any("exit 44" in c for c in fs)
       and any("nofail" in c and "exit 45" in c for c in fs)
+      and any('"$n2" = "$((o + 1))"' in c and "exit 46" in c for c in fs)
+      and any('chown root:root "$t"' in c and "exit 47" in c for c in fs)
+      and any('chmod 644 "$t"' == c for c in fs)
       and any('mv "$t" "$f"' in c and "exit 46" in c for c in fs))
 if fs:
     def idx_of(pred, xs):
@@ -327,36 +355,50 @@ if fs:
     i_awk = idx_of(lambda c: "boot-unlock-9123-superseded" in c, fs)
     i_app = idx_of(lambda c: "defaults,nofail" in c and "printf" in c, fs)
     i_n = idx_of(lambda c: "exit 44" in c, fs)
+    i_ch = idx_of(lambda c: 'chown root:root "$t"' in c, fs)
     i_mv = idx_of(lambda c: 'mv "$t" "$f"' in c, fs)
-    check("TF24 fstab write order: backup < comment < append < count-assert < mv",
-          None not in (i_cp, i_awk, i_app, i_n, i_mv) and i_cp < i_awk < i_app < i_n < i_mv,
-          (i_cp, i_awk, i_app, i_n, i_mv))
+    check("TF24 fstab write order: backup < comment < append < count-assert < chown < mv",
+          None not in (i_cp, i_awk, i_app, i_n, i_ch, i_mv)
+          and i_cp < i_awk < i_app < i_n < i_ch < i_mv,
+          (i_cp, i_awk, i_app, i_n, i_ch, i_mv))
 
 gw = DEC.get("workspaces_boot_unlock_gate_writer", [])
 check("TF25 the docker drop-in carries BOTH RequiresMountsFor=/mnt/data and After=workspaces-luks-reopen.service",
       any("RequiresMountsFor=/mnt/data" in c and "After=workspaces-luks-reopen.service" in c for c in gw))
 check("TF26 the drop-in contents are asserted after write (exit 50/51)",
       any("exit 50" in c for c in gw) and any("exit 51" in c for c in gw))
+check("TF26b the peek refuses a failed bind (`||` exit 54 — NEVER `&& flag`, which is errexit-immune), a symlink target (exit 55) and a non-rootfs peek (st_dev assert, exit 56)",
+      any('mount --bind / "$p"' in c and "||" in c and "exit 54" in c for c in gw)
+      and any('[ -L "$p/mnt/data" ]' in c and "exit 55" in c for c in gw)
+      and any('stat -c %d "$p"' in c and 'stat -c %d /' in c and "exit 56" in c for c in gw))
+check("TF26c the peek umount is a `while mountpoint -q` loop (a busy first umount retries), with a residue warning after",
+      any('while mountpoint -q "$p"; do umount "$p"' in c and "trap" not in c for c in gw)
+      and any('mountpoint -q "$p"' in c and "WARNING" in c for c in gw),
+      [c for c in gw if "umount" in c or "mountpoint" in c])
 check("TF27 chattr +i is applied ONLY through the bind peek (\"$p/mnt/data\") — never the mounted /mnt/data",
       any('chattr +i "$p/mnt/data"' in c for c in gw)
       and not any(re.search(r'chattr\s[^;]*/mnt/data', c) and 'chattr +i "$p/mnt/data"' not in c for c in gw),
       [c for c in gw if "chattr" in c])
 if gw:
     i_bind = idx_of(lambda c: 'mount --bind / "$p"' in c, gw)
+    i_sym = idx_of(lambda c: '[ -L "$p/mnt/data" ]' in c, gw)
+    i_dev = idx_of(lambda c: 'stat -c %d "$p"' in c, gw)
     i_mk = idx_of(lambda c: '"$p/mnt/data"' in c and "mkdir" in c, gw)
     i_ch = idx_of(lambda c: "chattr +i" in c, gw)
     i_ls = idx_of(lambda c: "lsattr -d" in c, gw)
-    i_um = idx_of(lambda c: 'umount "$p"' in c and "_peek_cleanup" not in c, gw)
-    check("TF28 peek order is bind < mkdir < chattr < lsattr-verify < umount",
-          None not in (i_bind, i_mk, i_ch, i_ls, i_um) and i_bind < i_mk < i_ch < i_ls < i_um,
-          (i_bind, i_mk, i_ch, i_ls, i_um))
+    i_um = idx_of(lambda c: 'while mountpoint -q "$p"; do umount "$p"' in c and "trap" not in c, gw)
+    check("TF28 peek order is bind < symlink-refusal < st_dev-assert < mkdir < chattr < lsattr-verify < umount-loop",
+          None not in (i_bind, i_sym, i_dev, i_mk, i_ch, i_ls, i_um)
+          and i_bind < i_sym < i_dev < i_mk < i_ch < i_ls < i_um,
+          (i_bind, i_sym, i_dev, i_mk, i_ch, i_ls, i_um))
 
 ar = DEC.get("workspaces_boot_unlock_arm", [])
-check("TF29 arm = daemon-reload, enable+is-enabled service, enable --now timer, proof start, then SubState/Result/ExecMainStatus asserts",
+check("TF29 arm = daemon-reload, enable+is-enabled service, enable --now timer, a `timeout 420`-BOUNDED proof start (exit 63 on client-window non-convergence — killing the dbus client never kills the unit-side ladder), then SubState/Result/ExecMainStatus asserts",
       any(c == "systemctl daemon-reload" for c in ar)
       and any(c == "systemctl enable workspaces-luks-reopen.service" for c in ar)
       and any(c == "systemctl enable --now workspaces-luks-reopen.timer" for c in ar)
-      and any(c == "systemctl start workspaces-luks-reopen.service" for c in ar)
+      and any("timeout 420 systemctl start workspaces-luks-reopen.service" in c
+              and "||" in c and "exit 63" in c for c in ar)
       and any("SubState" in c and "exited" in c and "exit 60" in c for c in ar)
       and any("Result" in c and "success" in c and "exit 61" in c for c in ar)
       and any("ExecMainStatus" in c and "exit 62" in c for c in ar))
@@ -383,6 +425,11 @@ def guarded(c):
         return True
     if re.match(r'^for .+; do .*\|\| true; done\s*(\|\|\s*true)?$', c):
         return True
+    # An if/else whose arms are pure prints: the condition (assignment/command
+    # substitution + test) is errexit-immune and neither arm can fail the step —
+    # the post-state peek-residue assert is this shape.
+    if re.match(r'^if .+; then (echo|printf) .+; else (echo|printf) .+; fi\s*(\|\|\s*true)?$', c):
+        return True
     if ";" in c:
         clauses = [x.strip() for x in c.split(";") if x.strip()]
         if clauses and all(re.search(r'\|\|\s*true$', x) or "&&" in x
@@ -396,12 +443,21 @@ def guarded(c):
     return False
 
 APPROVED = [
-    re.compile(r"awk '\$1 !~ /\^#/ && \$2 == \"/mnt/data\"[^']*' /etc/fstab[^\"]*"),
-    re.compile(r"grep -c '\^workspaces' /etc/crypttab"),
+    # The ONLY sanctioned fstab read: a field-scoped awk select on mount point
+    # == "/mnt/data" (either the bare $2 form or the trailing-slash-normalized
+    # `m` copy the post-state print uses). `cat /etc/fstab` never qualifies.
+    re.compile(r"awk '[^']* == \"/mnt/data\"[^']*' /etc/fstab[^\"]*"),
+    # crypttab is reported as a COUNT only, over the whitespace-tolerant anchor
+    # (leading whitespace is live crypttab syntax).
+    re.compile(r"grep -c '\^\[\[:space:\]\]\*workspaces\[\[:space:\]\]' /etc/crypttab"),
     re.compile(r"systemctl show -p [A-Za-z,]+ docker\.service"),
     re.compile(r"sha256sum /etc/systemd/system/docker\.service\.d/10-workspaces-luks-mount\.conf"),
     re.compile(r"stat -c '%F %a %U' /etc/default/workspaces-luks-boot"),
     re.compile(r"systemd-analyze verify [a-z.\t -]*"),
+    # Sanctioned self-cleanup (the ONE write a print step may perform): deletes
+    # only this installer's own uploaded remote-exec payloads — /root's
+    # tf-boot-unlock-*.sh is the script_path shape pinned by TF6.
+    re.compile(r"find /root -maxdepth 1 -name 'tf-boot-unlock-\*\.sh' -delete \|\| true"),
 ]
 FORBIDDEN = [
     ("journalctl", re.compile(r'\bjournalctl\b')),
@@ -413,6 +469,14 @@ FORBIDDEN = [
     ("/etc/default/luks-monitor at all", re.compile(r'/etc/default/luks-monitor\b')),
     ("apt-config", re.compile(r'\bapt-config\b')),
     ("docker mutation", re.compile(r'\bdocker\s+(?:stop|restart|kill|rm|inspect)\b|\bsystemctl\b[^;|&]*\b(start|restart|stop|disable|mask|kill|try-restart|reload-or-restart)\b[^;|&]*\bdocker\b')),
+    # The print steps must be READ-ONLY in fact, not just in name: no shell
+    # write/mutation verb may appear anywhere in a print line (review finding —
+    # the old deny list only looked at WHAT was read, not whether the step
+    # wrote). Two sanctioned exceptions exist ABOVE in APPROVED: the /run peek
+    # housekeeping (mkdir/rmdir/mount/umount — transient) and the single
+    # `find /root -name 'tf-boot-unlock-*.sh' -delete` self-cleanup of the
+    # installer's own uploaded payloads. Anything else matching this pattern REDs.
+    ("write verb", re.compile(r'\b(?:rm|mv|cp|tee)\s|\bsed\s+-i\b|>>|-delete\b')),
 ]
 for lname in ("workspaces_boot_unlock_print", "workspaces_boot_unlock_post_state"):
     L = DEC.get(lname, [])
@@ -428,7 +492,7 @@ for lname in ("workspaces_boot_unlock_print", "workspaces_boot_unlock_post_state
         for label, rx in FORBIDDEN:
             if rx.search(residue):
                 leaks.append("[%s] %s" % (label, c[:100]))
-    check("P-%s no forbidden diagnostic reaches the public log (journalctl, bare show, raw fstab/crypttab/env, docker mutation)" % lname,
+    check("P-%s no forbidden diagnostic or write verb reaches the public log (journalctl, bare show, raw fstab/crypttab/env, docker mutation, rm/mv/cp/tee/sed -i/>>/-delete)" % lname,
           not leaks, leaks)
     check("P-%s the print references no var./sensitive value and no live interpolation (output stays visible)" % lname,
           bool(LOCALS.get(lname)) and not any(("${" in c.replace("$${", "") or "%{" in c.replace("%%{", "") or re.search(r'\bvar\.', c))
@@ -437,8 +501,8 @@ for lname in ("workspaces_boot_unlock_print", "workspaces_boot_unlock_post_state
 bp = DEC.get("workspaces_boot_unlock_print", [])
 check("P1 the before-print reads fstab /mnt/data only through the exact-field redacted select, and has_nofail is printed",
       any('awk \'$1 !~ /^#/ && $2 == "/mnt/data"' in c and "<redacted-device>" in c and "<redacted-options>" in c and "has_nofail=" in c for c in bp))
-check("P2 the before-print reports crypttab as a COUNT of ^workspaces, mapper presence, live source, deadman substate",
-      any("grep -c '^workspaces' /etc/crypttab" in c for c in bp)
+check("P2 the before-print reports crypttab as a COUNT on the whitespace-tolerant anchor, mapper presence, live source, deadman substate",
+      any("grep -c '^[[:space:]]*workspaces[[:space:]]' /etc/crypttab" in c for c in bp)
       and any("/dev/mapper/workspaces" in c for c in bp)
       and any("workspaces-luks-deadman.timer" in c for c in bp))
 check("P3 the before-print shows every delivered unit's state",
@@ -451,10 +515,12 @@ check("P4 the post-state re-reads fstab count + crypttab count + dropin sha256 +
       and any("systemctl show -p Id,LoadState,UnitFileState,ActiveState,SubState,Result" in c for c in ps))
 check("P5 the post-state re-proves the covered inode via a SECOND peek (lsattr -d under a fresh bind)",
       any("workspaces-boot-unlock-peek-state" in c and "mount --bind" in c and "lsattr -d" in c for c in ps))
+check("P5b the post-state asserts peek-residue via a findmnt TARGET scan (a leftover bind is reported, never silent)",
+      any('peek-residue=' in c and "findmnt -n -o TARGET" in c for c in ps))
 check("P6 the post-state runs systemd-analyze verify on the three delivered units",
       any("systemd-analyze verify workspaces-luks-reopen.service workspaces-luks-reopen-failure.service workspaces-luks-reopen.timer" in c for c in ps))
-check("P7 the post-state shows RequiresMountsFor/After on docker.service (the gate, read-only)",
-      any(re.search(r'systemctl show -p RequiresMountsFor,After docker\.service', c) for c in ps))
+check("P7 the post-state shows RequiresMountsFor/After AND the Restart/StartLimit* policy on docker.service (the gate + the fails-then-retries evidence, read-only)",
+      any(re.search(r'systemctl show -p RequiresMountsFor,After,Restart,StartLimitBurst,StartLimitIntervalSec docker\.service', c) for c in ps))
 
 # Change-detector pins — the public apply log carries ONLY the security-reviewed bytes.
 # Regenerate: read the actual= detail of the PIN rows after a deliberate print edit.
@@ -539,9 +605,29 @@ ok "$(grep -qF 'workspaces-luks-emit.sh is absent or unreadable' "$SCRIPT_BODY" 
 ok "$(grep -qF 'logger -t workspaces-luks-reopen --' "$SCRIPT_BODY"; echo $?)" "S22 the success row is logger -t workspaces-luks-reopen (journald-only)"
 n=$(grep -cE '\bworkspaces_luks_emit\b' "$SCRIPT_BODY" || true)
 ok "$([ "$n" -eq 0 ]; echo $?)" "S23 the script NEVER calls workspaces_luks_emit — emit is the reporter's alone ($n)"
-ok "$(grep -qF 'if [ "$ACTION" != noop ]' "$SCRIPT_BODY"; echo $?)" "S24 the emit phase is gated on ACTION != noop"
+# The emit-channel structural check is UNCONDITIONAL (hoisted out of the noop
+# gate: the installer's noop proof run also certifies the reporter's paging
+# channel). Pin the topology: docker-gate `if` < its `fi` < `[ -r "$EMIT" ]` <
+# the emit-logger `if` — i.e. the check sits between the two ACTION gates, at
+# top level, on every arm.
+_ng=$(grep -cF 'if [ "$ACTION" != noop ]' "$SCRIPT_BODY" || true)
+_dg=$(grep -nF 'if [ "$ACTION" != noop ]' "$SCRIPT_BODY" | cut -d: -f1 | head -1)
+_lg=$(grep -nF 'if [ "$ACTION" != noop ]' "$SCRIPT_BODY" | cut -d: -f1 | tail -1)
+_em=$(grep -nF '[ -r "$EMIT" ]' "$SCRIPT_BODY" | cut -d: -f1 | head -1)
+_fi=$(awk -v L="${_em:-0}" 'NR<L && /^fi[[:space:]]*$/ {g=NR} END{print g+0}' "$SCRIPT_BODY")
+ok "$([ "$_ng" -eq 2 ] && [ -n "$_em" ] && [ "$_dg" -lt "$_fi" ] && [ "$_fi" -lt "$_em" ] && [ "$_em" -lt "$_lg" ]; echo $?)" \
+  "S24 the emit-channel assert is UNCONDITIONAL — docker-gate < fi < [ -r EMIT ] < logger-gate (ng=$_ng dg=$_dg fi=$_fi em=$_em lg=$_lg)"
 n=$(grep -cE 'RuntimeDirectory|ExecStart|EnvironmentFile' "$SCRIPT_BODY" || true)
 ok "$([ "$n" -eq 0 ]; echo $?)" "S25 the script carries no unit directives (script-vs-unit separation: $n)"
+# The ONE sanctioned docker command: `systemctl start docker.service`, the
+# first line of the ACTION!=noop recovery arm (a dependency-failed docker does
+# not re-queue once /mnt/data mounts). Any OTHER docker invocation — or the
+# same one outside that arm — must RED here.
+n=$(grep -oF 'docker.service' "$SCRIPT_BODY" | wc -l)
+_dk=$(grep -nxF '  systemctl start docker.service 2>>"$LOG" \' "$SCRIPT_BODY" | cut -d: -f1)
+_dg=$(awk -v L="${_dk:-0}" 'NR<L && /^if \[ "\$ACTION" != noop \]; then$/ {g=NR} END{print g+0}' "$SCRIPT_BODY")
+ok "$([ "$n" -eq 2 ] && [ -n "$_dk" ] && [ "$_dg" -gt 0 ] && [ "$((_dk - _dg))" -eq 1 ]; echo $?)" \
+  "S26 docker appears exactly twice — 'systemctl start docker.service' as the first line of an ACTION!=noop arm plus its nonfatal logger (any other docker call REDs; mentions=$n start=${_dk:-?} gate=${_dg:-0})"
 
 # ==================================================================================
 # STATIC — the reopen unit
@@ -603,7 +689,11 @@ ok "$(grep -qF 'boot_unlock_failed:' "$REP_BODY"; echo $?)" "R11 reason slug is 
 ok "$(grep -qF 'WL_LEVEL=fatal' "$REP_BODY"; echo $?)" "R12 emit level is fatal"
 ok "$(grep -qF 'timeout 90' "$REP_BODY"; echo $?)" "R13 the emit leg is timeout-bounded (a hang must not eat TimeoutStartSec)"
 ok "$(grep -qF 'timeout 15' "$REP_BODY"; echo $?)" "R14 the doppler_reachable probe is timeout-bounded"
-ok "$(grep -qF 'doppler secrets get WORKSPACES_LUKS_KEY --plain' "$REP_BODY"; echo $?)" "R15 the reachability probe uses the R9 form (secrets get --plain)"
+ok "$(grep -qF 'doppler secrets --only-names --config' "$REP_BODY"; echo $?)" "R15 the reachability probe is the NON-SECRET 'doppler secrets --only-names --config <scoped>' form (names listing proves reachability+scope; no value transits the probe)"
+n=$(grep -c 'secrets get' "$REP_BODY" || true)
+ok "$([ "$n" -eq 0 ]; echo $?)" "R15b the probe reads NO secret value — no 'secrets get' anywhere in the reporter ($n)"
+ok "$(grep -qF 'sed "s/[[:cntrl:]]//g' "$REP_BODY" && grep -qF 'grep -iE "doppler error|unable to|failed|fatal|error" | tail -n 4' "$REP_BODY"; echo $?)" \
+  "R15c the log tail ANSI-strips, then keyword-filters, then tail -n 4 (a raw tail would ship ANSI junk and noise)"
 n=$(grep -cE 'doppler run|secrets download' "$REP_BODY" || true)
 ok "$([ "$n" -eq 0 ]; echo $?)" "R16 no doppler run/download in the reporter ($n)"
 for t in WL_MAPPER_PRESENT WL_CRYPTSETUP_UNIT_RESULT WL_MOUNTPOINT_OK WL_MOUNT_SOURCE WL_DOPPLER_REACHABLE WL_LUKS_OPEN_RESULT WL_REASON; do
@@ -646,14 +736,23 @@ ok "$([ "$n" -eq 1 ]; echo $?)" "V1 vector.toml include_matches.SYSLOG_IDENTIFIE
 ok "$(printf '%s\n' "$VEC_BLOCK" | grep -q '"luks-monitor"'; echo $?)" "V2 the same list still carries the sibling luks-monitor tag (extraction sanity)"
 
 # systemd-analyze verify (present on systemd hosts; a failure here is a verdict, not a skip).
+# The verify rc is checked SEPARATELY from the filtered output — a nonzero rc with
+# only exempted noise still counts, and an absent binary emits an explicit [skip].
 if command -v systemd-analyze >/dev/null 2>&1; then
   assert_fixture_dir "$SCRATCH"
   mkdir -p "$SCRATCH/units"
   cp "${WBU_UNIT:?}" "${WBU_REPORTER:?}" "${WBU_TIMER:?}" "${SCRATCH:?}/units/"
-  _saout=$(cd "$SCRATCH/units" && systemd-analyze verify ./*.service ./*.timer 2>&1 \
-    | grep -vE 'Command /usr/local/bin/[a-z0-9-]+\.[a-z]+ is not executable' || true)
-  n=$(printf '%s\n' "$_saout" | grep -cE 'workspaces-luks-reopen[^:]*\.(service|timer):' || true)
-  ok "$([ "$n" -eq 0 ]; echo $?)" "Y1 systemd-analyze verify is clean over the three units (exec-path presence exempted: host-dependent, pinned statically by U19)" "$_saout"
+  _saout=$(cd "$SCRATCH/units" && systemd-analyze verify ./*.service ./*.timer 2>&1); _sarc=$?
+  _saflt=$(printf '%s\n' "$_saout" | grep -vE 'Command /usr/local/bin/[a-z0-9-]+\.[a-z]+ is not executable' || true)
+  n=$(printf '%s\n' "$_saflt" | grep -cE 'workspaces-luks-reopen[^:]*\.(service|timer):' || true)
+  # rc is checked SEPARATELY from the filtered output: clean means every
+  # diagnostic line was exempted (host-dependent exec-path presence) AND rc is
+  # not a crash (>=128). A nonzero rc carrying ONLY exempted lines still passes —
+  # the exemption is the reviewed shape; anything else is a verdict.
+  ok "$([ "$n" -eq 0 ] && [ -z "$(printf '%s' "$_saflt" | tr -d '[:space:]')" ] && [ "$_sarc" -lt 128 ]; echo $?)" \
+    "Y1 systemd-analyze verify clean over the three units (rc=$_sarc; exec-path presence warnings exempted: host-dependent, pinned statically by U19)" "rc=$_sarc ${_saout:0:400}"
+else
+  printf '[skip] Y1 systemd-analyze absent on this host — the U/T static rows still pin the unit shape\n'
 fi
 
 # ==================================================================================
@@ -678,19 +777,58 @@ if [ "$1" = show ]; then
   exit 0
 fi
 rc=$(cat "$FX/systemctl_rc" 2>/dev/null || echo 0)
+if [ "$1" = start ] && [ -f "$FX/systemctl_rc_start" ]; then rc=$(cat "$FX/systemctl_rc_start"); fi
 exit "$rc"
 EOF
 wstub findmnt <<'EOF'
+# `findmnt -n -o TARGET <glob>` answers the peek-residue scan from $FX/peek_residue
+# (absent/empty -> none); everything else is a SOURCE query -> $FX/live_source.
+for a in "$@"; do
+  [ "$a" = TARGET ] && { cat "$FX/peek_residue" 2>/dev/null; exit; }
+done
 cat "$FX/live_source" 2>/dev/null || echo /dev/mapper/workspaces; exit 0
 EOF
 wstub mount <<'EOF'
 # `mount --bind / <peek>` makes the root tree visible under the peek — simulate by
-# materialising the covered dir the writer then chattrs.
-if [ "$1" = "--bind" ]; then mkdir -p "$3/mnt/data"; exit 0; fi
+# materialising the covered dir the writer then chattrs, UNLESS it already exists
+# (a planted symlink is evidence for the writer's -L refusal, never followed).
+# $FX/mount_rc fails the bind (the exit-54 arm); a success drops .bind-mounted,
+# the flag the mountpoint stub reads.
+if [ "$1" = "--bind" ]; then
+  rc=$(cat "$FX/mount_rc" 2>/dev/null || echo 0)
+  [ "$rc" -ne 0 ] && { echo "mount: bind $2 -> $3 failed" >&2; exit "$rc"; }
+  [ -e "$3/mnt/data" ] || [ -L "$3/mnt/data" ] || mkdir -p "$3/mnt/data"
+  : > "$3/.bind-mounted"
+  exit 0
+fi
 exit 0
 EOF
+wstub mountpoint <<'EOF'
+# `mountpoint -q <dir>`: "mounted" iff the mount stub left its .bind-mounted flag.
+d="${@: -1}"
+[ -f "$d/.bind-mounted" ] && exit 0
+exit 32
+EOF
+wstub stat <<'EOF'
+# `stat -c %d <path>` (the gate's peek-vs-root device-identity assert) is knobbed:
+# $FX/dev_root / $FX/dev_peek override; default equal (the bind "landed"). Every
+# other format falls through to the real stat.
+if [ "$1" = "-c" ] && [ "$2" = "%d" ]; then
+  case "$3" in
+    /) v=$(cat "$FX/dev_root" 2>/dev/null) ;;
+    *) v=$(cat "$FX/dev_peek" 2>/dev/null) ;;
+  esac
+  printf '%s\n' "${v:-42}"
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+EOF
 wstub umount <<'EOF'
-exit 0
+# A successful umount clears the bind flag so the writer's `while mountpoint -q`
+# loop terminates; a failed one keeps it (the loop's `|| break` then escapes).
+rc=$(cat "$FX/umount_rc" 2>/dev/null || echo 0)
+[ "$rc" -eq 0 ] && rm -f "$1/.bind-mounted"
+exit "$rc"
 EOF
 wstub chattr <<'EOF'
 rc=$(cat "$FX/chattr_rc" 2>/dev/null || echo 0)
@@ -702,7 +840,8 @@ if [ -f "$FX/no_i" ]; then printf -- '--------------e----- %s\n' "${@: -1}"; els
 exit 0
 EOF
 wstub chown <<'EOF'
-exit 0
+rc=$(cat "$FX/chown_rc" 2>/dev/null || echo 0)
+exit "$rc"
 EOF
 wstub systemd-analyze <<'EOF'
 exit 0
@@ -760,10 +899,13 @@ run_writer() {  # $1 = local name; reads $WFX; returns the body's rc
   rewrite_body "$SCRATCH/dec/$1.sh" "$WFX"
   ( env -i PATH="$SCRATCH/wbin:/usr/bin:/bin" HOME="$WFX" FX="$WFX" sh "$WFX/body.sh" > "$WFX/out" 2> "$WFX/err" )
 }
-fstab_counts() { awk '$1 !~ /^#/ && $2 == "/mnt/data" {n++} END {print n+0}' "$1"; }
+# The writer's own normalized matcher: trailing slashes on a COPY of $2, so a
+# `/mnt/data/` line counts as the same mount point.
+fstab_counts() { awk '{ m=$2; sub(/\/+$/,"",m); if ($1 !~ /^#/ && m == "/mnt/data") n++ } END {print n+0}' "$1"; }
 
 # --- exit-17 freeze refusal: EVERY mutating local refuses under a live dead-man ---------
-for _loc in envfile_writer crypttab_writer fstab_writer gate_writer arm; do
+# (listed in the pinned apply order: crypttab -> envfile -> gate -> fstab -> arm)
+for _loc in crypttab_writer envfile_writer gate_writer fstab_writer arm; do
   new_wfixture "freeze-$_loc"; echo waiting > "$WFX/deadman_substate"
   run_writer "workspaces_boot_unlock_$_loc"; _rc=$?
   ok "$([ "$_rc" -eq 17 ]; echo $?)" "W-freeze[$_loc] refuses exit 17 while workspaces-luks-deadman.timer is SubState=waiting (rc=$_rc)" "$(head -3 "$WFX/err" "$WFX/out" 2>/dev/null)"
@@ -797,7 +939,11 @@ ok "$([ "$_rc" -eq 0 ]; echo $?)" "W-crypttab absent file -> created + appended 
 ok "$(grep -qxF "workspaces $PIN_DEV none luks,noauto" "$WFX/crypttab"; echo $?)" "W-crypttab the canonical by-id none luks,noauto line was appended"
 new_wfixture crypttab-idem; printf 'workspaces %s none luks,noauto\nother UUID=x none luks\n' "$PIN_DEV" > "$WFX/crypttab"
 run_writer workspaces_boot_unlock_crypttab_writer; _rc=$?
-ok "$([ "$_rc" -eq 0 ] && [ "$(grep -c '^workspaces' "$WFX/crypttab")" -eq 1 ]; echo $?)" "W-crypttab idempotent: still exactly one ^workspaces line (rc=$_rc)"
+ok "$([ "$_rc" -eq 0 ] && [ "$(grep -c '^[[:space:]]*workspaces[[:space:]]' "$WFX/crypttab")" -eq 1 ]; echo $?)" "W-crypttab idempotent: still exactly one workspaces line (rc=$_rc)"
+new_wfixture crypttab-indented; printf '  workspaces %s none luks,noauto\n' "$PIN_DEV" > "$WFX/crypttab"
+run_writer workspaces_boot_unlock_crypttab_writer; _rc=$?
+ok "$([ "$_rc" -eq 32 ] && [ "$(grep -c . "$WFX/crypttab")" -eq 1 ]; echo $?)" \
+  "W-crypttab an INDENTED workspaces mapping is detected as foreign and refused exit 32 — never shadowed by a second line (rc=$_rc)"
 new_wfixture crypttab-foreign; printf 'workspaces /dev/disk/by-label/workspaces_luks none luks,nofail\n' > "$WFX/crypttab"
 run_writer workspaces_boot_unlock_crypttab_writer; _rc=$?
 ok "$([ "$_rc" -eq 32 ]; echo $?)" "W-crypttab a foreign ^workspaces line is refused exit 32 — never coexisted with (rc=$_rc)"
@@ -823,6 +969,14 @@ ok "$(ls "$WFX"/fstab.boot-unlock-*.bak >/dev/null 2>&1; echo $?)" "W-fstab a ba
 new_wfixture fstab-two; printf '/dev/sdx /mnt/data ext4 defaults 0 2\n/dev/sdy /mnt/data ext4 nofail 0 2\n' > "$WFX/fstab"
 run_writer workspaces_boot_unlock_fstab_writer; _rc=$?
 ok "$([ "$_rc" -eq 0 ] && [ "$(fstab_counts "$WFX/fstab")" -eq 1 ]; echo $?)" "W-fstab two pre-existing /mnt/data lines collapse to exactly one (rc=$_rc)"
+new_wfixture fstab-trailslash; printf '/dev/sdx /mnt/data/ ext4 defaults 0 2\nUUID=root / ext4 defaults 0 1\n' > "$WFX/fstab"
+run_writer workspaces_boot_unlock_fstab_writer; _rc=$?
+ok "$([ "$_rc" -eq 0 ]; echo $?)" "W-fstab a trailing-slash '/mnt/data/' line is normalized into the comment step (rc=$_rc)" "$(tail -3 "$WFX/err")"
+ok "$(grep -qF '# boot-unlock-9123-superseded /dev/sdx /mnt/data/ ext4' "$WFX/fstab"; echo $?)" "W-fstab the superseded trailing-slash line is preserved COMMENTED, byte-exact (the / stayed)"
+ok "$([ "$(fstab_counts "$WFX/fstab")" -eq 1 ] && [ "$(wc -l < "$WFX/fstab")" -eq 3 ]; echo $?)" "W-fstab the rewrite is exactly +1 lines and one non-comment /mnt/data entry survives"
+new_wfixture fstab-chownfail; printf 'x\n' > "$WFX/fstab"; echo 1 > "$WFX/chown_rc"
+run_writer workspaces_boot_unlock_fstab_writer; _rc=$?
+ok "$([ "$_rc" -eq 47 ]; echo $?)" "W-fstab a chown failure refuses exit 47 — split from chmod precisely so an && cannot errexit-immune it (rc=$_rc)" "$(tail -3 "$WFX/err")"
 new_wfixture fstab-absent; rm -f "$WFX/fstab"
 run_writer workspaces_boot_unlock_fstab_writer; _rc=$?
 ok "$([ "$_rc" -eq 41 ]; echo $?)" "W-fstab absent fstab refused exit 41 (rc=$_rc)"
@@ -861,6 +1015,21 @@ ok "$([ "$_rc" -eq 53 ]; echo $?)" "W-gate lsattr without the i flag refuses exi
 new_wfixture gate-chattrfail; echo 1 > "$WFX/chattr_rc"
 run_writer workspaces_boot_unlock_gate_writer; _rc=$?
 ok "$([ "$_rc" -eq 52 ]; echo $?)" "W-gate a failing chattr refuses exit 52 (rc=$_rc)"
+# THE review defect: `mount --bind ... && _m=1` was errexit-immune — a failed bind
+# fell through and chattr'ed the bare scratch dir while printing success. The fix
+# is `|| { exit 54; }`. Pin both sides: rc 54 AND chattr never ran.
+new_wfixture gate-bindfail; echo 1 > "$WFX/mount_rc"
+run_writer workspaces_boot_unlock_gate_writer; _rc=$?
+ok "$([ "$_rc" -eq 54 ]; echo $?)" "W-gate a failed bind peek refuses exit 54 before anything mutates through it (rc=$_rc)" "$(tail -3 "$WFX/err")"
+ok "$([ "$(grep -c 'chattr|' "$WFX/calls.log")" -eq 0 ]; echo $?)" "W-gate the failed bind NEVER reached chattr (the defect shape: chattr on the unverified scratch dir)" "$(cat "$WFX/calls.log")"
+new_wfixture gate-symlink; mkdir -p "$WFX/peek/mnt"; ln -s "$WFX/victim" "$WFX/peek/mnt/data"
+run_writer workspaces_boot_unlock_gate_writer; _rc=$?
+ok "$([ "$_rc" -eq 55 ]; echo $?)" "W-gate a symlink peek target refuses exit 55 — chattr must never follow a link (rc=$_rc)"
+ok "$([ "$(grep -c 'chattr|' "$WFX/calls.log")" -eq 0 ]; echo $?)" "W-gate the symlink refusal never reached chattr"
+new_wfixture gate-stdev; echo 43 > "$WFX/dev_peek"
+run_writer workspaces_boot_unlock_gate_writer; _rc=$?
+ok "$([ "$_rc" -eq 56 ]; echo $?)" "W-gate a peek whose st_dev is not the root fs refuses exit 56 (rc=$_rc)"
+ok "$([ "$(grep -c 'chattr|' "$WFX/calls.log")" -eq 0 ]; echo $?)" "W-gate the st_dev refusal never reached chattr"
 
 # --- arm writer ----------------------------------------------------------------------
 new_wfixture arm-ok
@@ -880,6 +1049,13 @@ ok "$([ "$_rc" -eq 61 ]; echo $?)" "W-arm Result != success refuses exit 61 (rc=
 new_wfixture arm-badstatus; echo 7 > "$WFX/reopen_execstatus"
 run_writer workspaces_boot_unlock_arm; _rc=$?
 ok "$([ "$_rc" -eq 62 ]; echo $?)" "W-arm ExecMainStatus != 0 refuses exit 62 (rc=$_rc)"
+new_wfixture arm-sysctlfail; echo 1 > "$WFX/systemctl_rc"
+run_writer workspaces_boot_unlock_arm; _rc=$?
+ok "$([ "$_rc" -ne 0 ]; echo $?)" "W-arm a failing systemctl (daemon-reload) exits non-zero under set -e (rc=$_rc)"
+new_wfixture arm-prooftimeout; echo 1 > "$WFX/systemctl_rc_start"
+run_writer workspaces_boot_unlock_arm; _rc=$?
+ok "$([ "$_rc" -eq 63 ]; echo $?)" "W-arm a proof start that fails inside the 420 s timeout exits 63 — the client window non-convergence arm (rc=$_rc)" "$(tail -3 "$WFX/err")"
+ok "$(grep -q 'systemctl|show -p SubState,Result,ExecMainStatus workspaces-luks-reopen.service' "$WFX/calls.log"; echo $?)" "W-arm the exit-63 arm dumps the unit's state before refusing"
 
 # --- the print locals run clean under a populated fixture --------------------------------
 new_wfixture print-ok; printf '%s' "$FSTAB_GLOB" > "$WFX/fstab"; printf 'workspaces %s none luks,noauto\n' "$PIN_DEV" > "$WFX/crypttab"
@@ -894,7 +1070,14 @@ run_writer workspaces_boot_unlock_post_state; _rc=$?
 ok "$([ "$_rc" -eq 0 ]; echo $?)" "W-print[after] exits 0 (rc=$_rc)" "$(tail -3 "$WFX/err")"
 ok "$(grep -q 'fstab-mnt-data-lines=1' "$WFX/out" && grep -q 'crypttab-workspaces-lines=1' "$WFX/out" && grep -q 'covered-mnt-data-attrs=' "$WFX/out"; echo $?)" \
   "W-print[after] prints fstab=1, crypttab=1 and the second-peek lsattr row" "$(tail -5 "$WFX/out")"
+ok "$(grep -q 'peek-residue=none' "$WFX/out"; echo $?)" "W-print[after] reports peek-residue=none when no leftover bind exists" "$(tail -5 "$WFX/out")"
 ok "$([ "$(grep -cE '^(cryptsetup|doppler|journalctl|docker|curl)\|' "$WFX/calls.log")" -eq 0 ]; echo $?)" "W-print[after] invoked no forbidden tool"
+new_wfixture print-residue; printf '/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2\n' > "$WFX/fstab"; printf 'workspaces %s none luks,noauto\n' "$PIN_DEV" > "$WFX/crypttab"
+printf 'WORKSPACES_LUKS_DEV=x\n' > "$WFX/envfile"; mkdir -p "$WFX/systemd/docker.service.d"; printf '[Unit]\nRequiresMountsFor=/mnt/data\nAfter=workspaces-luks-reopen.service\n' > "$WFX/systemd/docker.service.d/10-workspaces-luks-mount.conf"
+printf '%s\n' "$WFX/peek" > "$WFX/peek_residue"
+run_writer workspaces_boot_unlock_post_state; _rc=$?
+ok "$([ "$_rc" -eq 0 ]; echo $?)" "W-print[residue] exits 0 — residue is reported, the print never fails the apply (rc=$_rc)"
+ok "$(grep -q 'peek-residue=PRESENT' "$WFX/out"; echo $?)" "W-print[residue] a leftover peek bind is reported as peek-residue=PRESENT (rc=$_rc)" "$(tail -5 "$WFX/out")"
 
 # ==================================================================================
 # RUNTIME — the reopen script under a stub PATH
@@ -924,6 +1107,8 @@ case "$1" in
     [ "$rc" -ne 0 ] && { echo "No key available with this passphrase." >&2; exit "$rc"; }
     echo 1 > "$FX/mapper_open"; exit 0 ;;
   status)
+    rc=$(cat "$FX/status_rc" 2>/dev/null || echo 0)
+    [ "$rc" -ne 0 ] && { echo "cryptsetup status $2 failed (rc=$rc)" >&2; exit "$rc"; }
     if [ -f "$FX/mapper_open" ]; then printf '/dev/mapper/%s is active.\n  type:    LUKS2\n  device:  %s\n' "$2" "$(cat "$FX/status_device" 2>/dev/null || echo "$STUB_DEV")"; exit 0
     else echo "Device $2 is not active." >&2; exit 4; fi ;;
   luksFormat) echo "FORMAT MUST NEVER RUN" >&2; exit 99 ;;
@@ -973,6 +1158,7 @@ case "$mode" in
   hang) exec /bin/sleep 200 ;;
 esac
 if [ "$1" = "secrets" ] && [ "$2" = "get" ]; then cat "$FX/doppler_key" 2>/dev/null || echo "stub-wluks-key-0000"; exit 0; fi
+if [ "$1" = "secrets" ] && [ "$2" = "--only-names" ]; then printf 'WORKSPACES_LUKS_KEY\n'; exit 0; fi
 echo "unexpected doppler $*" >&2; exit 98
 EOF
 mkstub logger <<'EOF'
@@ -1034,6 +1220,9 @@ run_script() {
 action_file() { head -n1 "$RUNDIR/action" 2>/dev/null | sed 's/^action=//'; }
 calls_of() { grep -F -- "$1" "$FX/calls.log" || true; }
 order_ok() {
+  # Totality: an EMPTY or missing calls.log is "no instrumented call ever ran" —
+  # that is a failed instrument, not a vacuously-ordered one. Answer 0 (bad).
+  [ -s "$FX/calls.log" ] || { echo 0; return; }
   local prev=-1 idx t
   while IFS='|' read -r t _ _; do
     [ "$t" = "none" ] && { echo 0; return; }
@@ -1045,7 +1234,13 @@ order_ok() {
   echo 1
 }
 last_tag() { tail -n1 "$FX/calls.log" | cut -d'|' -f1; }
-key_absent() { ! grep -arqF --exclude=key_seen -- "stub-wluks-key-0000" "$FX" "$RUNDIR" 2>/dev/null; echo $?; }
+key_absent() {
+  # Totality: the predicate may only pass over a fixture that actually ran the
+  # instrumented surface — an empty calls.log means nothing was recorded, and
+  # "the key appears nowhere" must not be read off a run that never happened.
+  [ -d "$FX" ] && [ -d "$RUNDIR" ] && [ -s "$FX/calls.log" ] || { echo 1; return; }
+  ! grep -arqF --exclude=key_seen -- "stub-wluks-key-0000" "$FX" "$RUNDIR" 2>/dev/null; echo $?
+}
 
 # --- Scenario 1: closed mapper, target unmounted -> reopened ----------------------------------
 new_fixture s1
@@ -1078,11 +1273,18 @@ new_fixture s2; touch "$FX/mapper_open" "$FX/mounted"
 run_script; rc=$?
 ok "$([ "$rc" -eq 0 ]; echo $?)" "R2 noop exits 0 (rc=$rc)" "$(cat "$FX/stderr")"
 ok "$([ "$(calls_of "|cryptsetup|luksOpen" | wc -l)" -eq 0 ]; echo $?)" "R2 no luksOpen"
-ok "$([ "$(calls_of "|systemctl|" | grep -c ' start ')" -eq 0 ]; echo $?)" "R2 no systemctl start"
+ok "$([ "$(calls_of "|systemctl|" | grep -c 'systemctl|start ')" -eq 0 ]; echo $?)" "R2 no systemctl start"
 ok "$([ ! -s "$FX/emit.log" ]; echo $?)" "R2 AC9: no emit on the noop path"
 ok "$([ "$(calls_of "|logger|" | wc -l)" -eq 0 ]; echo $?)" "R2 noop is FULLY silent — not even the logger success row"
 ok "$([ ! -e "$RUNDIR/action" ]; echo $?)" "R2 phase file removed"
 ok "$(grep -q '^identity|realpath|' "$FX/calls.log"; echo $?)" "R2 device identity asserted on the noop path too"
+
+# --- Scenario 2e: noop + unreadable emit helper -> exit 3 (the channel check is
+# unconditional now — the noop proof run certifies the reporter's emit channel) ----
+new_fixture s2e; touch "$FX/mapper_open" "$FX/mounted"; chmod 000 "$FX/workspaces-luks-emit.sh"
+run_script; rc=$?
+ok "$([ "$rc" -eq 3 ]; echo $?)" "R2e noop + unreadable emit helper exits 3 — the emit-channel assert runs on EVERY arm, noop included (rc=$rc)"
+ok "$([ "$(action_file)" = emit ]; echo $?)" "R2e the phase file names emit (got '$(action_file)')"
 
 # --- Scenario 3: open, unmounted -> mounted ------------------------------------------------------
 new_fixture s3; touch "$FX/mapper_open"
@@ -1136,6 +1338,7 @@ key-empty|echo empty > "$FX/doppler_mode"|key|WORKSPACES_LUKS_KEY is empty
 device|touch "$FX/device_absent"|device|absent
 header|echo 1 > "$FX/isluks_rc"|header|rc=1
 open|echo 2 > "$FX/luksopen_rc"|open|passphrase
+open-status|echo 1 > "$FX/status_rc"|open|rc=1
 open-sigterm|touch "$FX/luksopen_kill"|open|
 identity|touch "$FX/mapper_open"; echo /dev/sdz > "$FX/status_device"|identity|/dev/sdz
 target-none|: > "$FX/fstab_targets"|target|expected exactly one
@@ -1158,7 +1361,13 @@ while IFS='|' read -r name setup phase needle; do
   ok "$([ "$(action_file)" = "$phase" ]; echo $?)" "F[$name] action file names phase '$phase'" "got '$(action_file)'; calls: $(tr '\n' ';' < "$FX/calls.log")"
   ok "$([ "$(grep -cE '\|(luksFormat|luksErase|mkfs|wipefs|blkdiscard)' "$FX/calls.log")" -eq 0 ]; echo $?)" "F[$name] luksFormat/mkfs/wipefs never called"
   ok "$([ "$(grep -cE '\|doppler\|(run|secrets download)' "$FX/calls.log")" -eq 0 ]; echo $?)" "F[$name] no doppler run/download on the failure path"
-  ok "$(key_absent)" "F[$name] the passphrase is in no artifact the reporter could ship" "$(grep -arlF --exclude=key_seen -- 'stub-wluks-key-0000' "$FX" "$RUNDIR" 2>/dev/null)"
+  if [ -s "$FX/calls.log" ]; then
+    ok "$(key_absent)" "F[$name] the passphrase is in no artifact the reporter could ship" "$(grep -arlF --exclude=key_seen -- 'stub-wluks-key-0000' "$FX" "$RUNDIR" 2>/dev/null)"
+  else
+    # Died before ANY instrumented call (the config-phase fixtures): the passphrase
+    # was never fetched, so the honest assertion is that key_seen cannot exist.
+    ok "$([ ! -e "$FX/key_seen" ]; echo $?)" "F[$name] died before any instrumented call — the passphrase was never fetched (no key_seen)"
+  fi
   if [ "$phase" = emit ]; then
     ok "$([ "$rc" -eq 3 ]; echo $?)" "F[$name] the emit refusal is exit 3 (RestartPreventExitStatus pairing)"
   else
@@ -1166,6 +1375,11 @@ while IFS='|' read -r name setup phase needle; do
   fi
   if [ -n "$needle" ]; then
     ok "$(grep -qF -- "$needle" "$RUNDIR/log" 2>/dev/null || grep -qF -- "$needle" "$FX/stderr"; echo $?)" "F[$name] log/stderr carries '$needle'" "log: $(cat "$RUNDIR/log" 2>/dev/null)"
+  fi
+  if [ "$name" = open-status ]; then
+    # The open arm is exactly `-eq 4` — a non-4 status rc must die BEFORE any
+    # luksOpen attempt (`-ne 0` would retry-open on a real error).
+    ok "$([ "$(calls_of "|cryptsetup|luksOpen" | wc -l)" -eq 0 ]; echo $?)" "F[$name] a non-4 status rc dies BEFORE any luksOpen attempt"
   fi
   lt=$(last_tag); [ -z "$lt" ] && lt="$phase"
   li=$(printf '%s\n' "$PHASES" | grep -nx -- "$lt" | cut -d: -f1); pi=$(printf '%s\n' "$PHASES" | grep -nx -- "$phase" | cut -d: -f1)
@@ -1208,12 +1422,37 @@ printf 'action=mount\n' > "$RUNDIR/action"; rm -f "$SCRATCH/bin/workspaces-luks-
 ok "$(grep -q 'SOLEUR_WORKSPACES_LUKS_SEND_FAILED' "$FX/calls.log"; echo $?)" "REP-emitabsent a missing emit helper still mirrors SEND_FAILED" "$(cat "$FX/rep.out")"
 write_emit_stub   # restore the emit stub for any later consumer
 
+# --- A HUNG emit leg: the `timeout 90` bound (rewritten to 3 s here) must reach
+# the SEND_FAILED mirror instead of eating the unit's TimeoutStartSec -----------
+new_fixture r-emithang; rep_body
+printf 'action=open\n' > "$RUNDIR/action"; echo exit-code > "$FX/result"; echo 1 > "$FX/exec_status"; echo 1 > "$FX/exec_code"; echo 0 > "$FX/nrestarts"
+echo hang > "$FX/emit_mode"; rep_run
+ok "$([ "$(grep -c '^EMIT ' "$FX/emit.log")" -eq 1 ]; echo $?)" "REP-emithang the emit was entered (one EMIT row) before hanging"
+ok "$(grep -q 'SOLEUR_WORKSPACES_LUKS_SEND_FAILED' "$FX/calls.log"; echo $?)" "REP-emithang a HUNG emit leg is bounded and mirrors SEND_FAILED" "$(cat "$FX/rep.out")"
+rm -f "$FX/emit_mode"
+
+# --- A HUNG doppler reachability probe: bounded to dr=false ---------------------
+new_fixture r-dophang; rep_body
+printf 'action=config\n' > "$RUNDIR/action"; echo exit-code > "$FX/result"; echo 1 > "$FX/exec_status"; echo 1 > "$FX/exec_code"; echo 0 > "$FX/nrestarts"
+touch "$FX/devmap"; echo hang > "$FX/doppler_mode"; rep_run
+ok "$([ "$(grep -c '^EMIT ' "$FX/emit.log")" -eq 1 ]; echo $?)" "REP-dophang the emit still fired"
+ok "$(grep -q 'dr=false' "$FX/emit.log"; echo $?)" "REP-dophang a HUNG doppler probe is bounded to dr=false by the 15 s timeout" "$(cat "$FX/emit.log")"
+
+# --- The log tail: ANSI-stripped, keyword-filtered, last-4 — evidence shape -----
+new_fixture r-logtail; rep_body
+printf 'action=header\n' > "$RUNDIR/action"; echo exit-code > "$FX/result"; echo 1 > "$FX/exec_status"; echo 1 > "$FX/exec_code"; echo 0 > "$FX/nrestarts"
+printf 'plain noise line\n\033[31mdoppler error: token expired\033[0m\nmore noise\n' > "$RUNDIR/log"
+touch "$FX/devmap"; rep_run
+ok "$(grep -q 'doppler error: token expired' "$FX/rep.out"; echo $?)" "REP-logtail the keyword-matched log line reaches stderr" "$(cat "$FX/rep.out")"
+ok "$(! grep -q "$(printf '\033')" "$FX/rep.out"; echo $?)" "REP-logtail ANSI control bytes are stripped before the tail"
+ok "$(! grep -q 'noise' "$FX/rep.out"; echo $?)" "REP-logtail non-matching lines are filtered out" "$(cat "$FX/rep.out")"
+
 # ==================================================================================
 # Print-sha pins (change-detector, the luks_monitor_forensic_print precedent): the public
 # apply log carries ONLY the security-reviewed bytes.
 # ==================================================================================
-WBU_BEFORE_PRINT_SHA256="fa93e287f0e127ed612027dd90d91b5eb7dea1586c189f5a7c3c45a94f5c9051"
-WBU_POST_STATE_SHA256="429fff168f141443cfc28cb5561b70ef426df1d3c27ee3754e332de14cd3e1f6"
+WBU_BEFORE_PRINT_SHA256="d88dccae3c8643f370788904b23711f8ffb8225b9e9b767470f115686902bafd"
+WBU_POST_STATE_SHA256="6538c3aebe8b4fb2ab57ab1674710ccb3de1207b6b9a6e34bc9af2e014e5910d"
 ok "$([ "$WORKSPACES_BOOT_UNLOCK_PRINT_SHA256" = "$WBU_BEFORE_PRINT_SHA256" ]; echo $?)" \
   "PIN the decoded before-print is byte-identical to the security-reviewed version" \
   "actual=$WORKSPACES_BOOT_UNLOCK_PRINT_SHA256 — an edit needs a security re-review and a pin update"
@@ -1270,6 +1509,11 @@ PY
       if [ "$(grep -F '[FAIL]' "$log" | grep -cF -- "$exp" || true)" -eq 0 ]; then
         no "mutation $label: rc 1 but not through the named check [$exp]"; return
       fi
+      # ONLY rows (the luks-monitor-install.test.sh mechanism): the named check must be
+      # the SOLE failure — it proves no other row sees the edit.
+      if [[ -n "${EXPECT_ONLY[$key]:-}" ]] && [[ "$(grep -c '^\[FAIL\]' "$log")" -ne 1 ]]; then
+        no "mutation $label: [$exp] failed, but so did other rows (want it to be the only [FAIL])"; return
+      fi
     fi
     ok 0 "mutation $label -> rc $got${exp:+ via [$exp]}"
   }
@@ -1278,16 +1522,24 @@ PY
     [MT-4]="no doppler invocation" [MT-5]="comments every non-comment" [MT-6]="exactly-one"
     [MT-7]="pinned by-id" [MT-8]="never carries" [MT-9]="ONLY through the bind peek"
     [MT-10]="systemd-analyze verify" [MT-11]="never restarted" [MT-12]="trigger operand"
-    [MT-13]="NO token" [MT-14]="provisioner order"
+    [MT-13]="NO token" [MT-14]="provisioner order" [MT-15]="INDENTED"
+    [MT-16]="proof start" [MT-17]="exit 54" [MT-18]="exit 55" [MT-19]="exit 56"
     [MS-1]="secrets get WORKSPACES_LUKS_KEY" [MS-2]="unset after the open" [MS-3]="exit 3"
     [MS-4]="NEVER calls workspaces_luks_emit" [MS-5]="identity" [MS-6]="exactly /mnt/data"
-    [MS-7]="never calls mount" [MU-1]="OnFailure=" [MU-2]="RestartMode=direct"
+    [MS-7]="never calls mount" [MS-8]="open-status" [MS-9]="R2e"
+    [MS-10]="no systemctl start" [MS-11]="docker appears exactly twice"
+    [MU-1]="OnFailure=" [MU-2]="RestartMode=direct"
     [MU-3]="RestartPreventExitStatus=3" [MU-4]="installer's own env file" [MU-5]="NO RequiresMountsFor"
     [MU-6]="SyslogIdentifier=workspaces-luks-reopen" [MR-1]="timeout-bounded" [MR-2]="fatal"
     [MTI-1]="OnUnitActiveSec=15min" [MWF-1]="exactly once" [MV-1]="exactly once"
     [MP-1]="guarded" [MP-2]="forbidden diagnostic" [MP-3]="byte-identical" [MP-4]="byte-identical"
     [MH-1]="provisioner order"
   )
+  # Rows whose named check must be the ONLY failure — the edit is invisible to
+  # every other row (the luks-monitor-install.test.sh EXPECT_ONLY mechanism).
+  # MP-3 qualifies (print-line swap hits the sha pin alone); MP-4 does NOT —
+  # its rename trips the pin AND P4 AND the after-print fixture.
+  declare -A EXPECT_ONLY=([MP-3]=1)
   T="$WBU_LUKS_TF"; S="$WBU_SCRIPT"; UU="$WBU_UNIT"; RU="$WBU_REPORTER"; TI="$WBU_TIMER"; W="$WBU_WF"; V="$WBU_VECTOR"
 
   # ── .tf / writer mutations ──
@@ -1337,8 +1589,28 @@ X
 s.replace('    "printf \'WORKSPACES_DOPPLER_CONFIG=%s\\\\n\' \'prd_workspaces_luks\' >> \\"$t\\"",', '    "printf \'WORKSPACES_DOPPLER_CONFIG=%s\\\\n\' \'prd_workspaces_luks\' >> \\"$t\\"",\n    "printf \'DOPPLER_TOKEN=x\\\\n\' >> \\"$t\\"",', 1)
 X
 )"
-  mutate "MT-14 the fstab writer runs BEFORE the envfile writer" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
-s.replace('inline = local.workspaces_boot_unlock_envfile_writer', 'inline = local.__WBU_SWAP__', 1).replace('inline = local.workspaces_boot_unlock_fstab_writer', 'inline = local.workspaces_boot_unlock_envfile_writer', 1).replace('inline = local.__WBU_SWAP__', 'inline = local.workspaces_boot_unlock_fstab_writer', 1)
+  mutate "MT-14 the fstab writer runs BEFORE the gate writer (the fail-closed order inverted)" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
+s.replace('inline = local.workspaces_boot_unlock_gate_writer', 'inline = local.__WBU_SWAP__', 1).replace('inline = local.workspaces_boot_unlock_fstab_writer', 'inline = local.workspaces_boot_unlock_gate_writer', 1).replace('inline = local.__WBU_SWAP__', 'inline = local.workspaces_boot_unlock_fstab_writer', 1)
+X
+)"
+  mutate "MT-15 the whitespace-tolerant crypttab anchor narrowed back to ^workspaces" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
+s.replace("^[[:space:]]*workspaces[[:space:]]", "^workspaces[[:space:]]")
+X
+)"
+  mutate "MT-16 the proof start's client-side timeout-420 bound dropped" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
+s.replace('timeout 420 systemctl start', 'systemctl start', 1)
+X
+)"
+  mutate "MT-17 the bind refusal weakened to an && chain (failed bind falls through to chattr — the review defect)" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
+s.replace('mount --bind / \\"$p\\" || { echo', 'mount --bind / \\"$p\\" && { echo', 1)
+X
+)"
+  mutate "MT-18 the peek symlink refusal dropped" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
+re.sub(r'(?m)^.*exit 55.*\n', '', s, 1)
+X
+)"
+  mutate "MT-19 the peek st_dev device-identity assert dropped" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
+re.sub(r'(?m)^.*exit 56.*\n', '', s, 1)
 X
 )"
 
@@ -1353,6 +1625,27 @@ X
   mutate "MS-5 the identity assert neutered (any backing device passes)" 1 WBU_SCRIPT "$S" "s.replace('[ \"\$_rb\" = \"\$_rd\" ]', '[ -n \"\$_rb\" ]', 1)"
   mutate "MS-6 the target allowlist accepts any mountpoint" 1 WBU_SCRIPT "$S" "s.replace('/mnt/data) : ;;', '/mnt/anywhere) : ;;', 1)"
   mutate "MS-7 the script mounts the mapper directly" 1 WBU_SCRIPT "$S" "s.replace('systemctl start \"\$_munit\"', 'mount \"\$DEV\" \"\$TARGET\"', 1)"
+  # The open-phase status check is `-eq 4` (rc 4 = "not active" -> open) with a
+  # catch-all die on every OTHER nonzero rc. `-ne 0` would retry-open on a real
+  # error — the dead-arm class the status_rc fixture closes.
+  mutate "MS-8 the cryptsetup-status arm flipped from -eq 4 to -ne 0 (any error opens)" 1 WBU_SCRIPT "$S" "$(cat <<'X'
+s.replace('elif [ "$_st" -eq 4 ]; then', 'elif [ "$_st" -ne 0 ]; then', 1)
+X
+)"
+  # The emit-channel assert must run on the noop arm too — re-gating it under
+  # ACTION!=noop is EXACTLY the regression the unconditional check fixes.
+  mutate "MS-9 the emit-channel check re-gated under ACTION!=noop (noop skips it)" 1 WBU_SCRIPT "$S" "$(cat <<'X'
+s.replace('[ -r "$EMIT" ]', '[ -r "$EMIT" ] || [ "$ACTION" = noop ]', 1)
+X
+)"
+  mutate "MS-10 the docker recovery kick ungated (runs on the noop arm too)" 1 WBU_SCRIPT "$S" "$(cat <<'X'
+s.replace('if [ "$ACTION" != noop ]; then\n  systemctl start docker.service', 'if true; then\n  systemctl start docker.service', 1)
+X
+)"
+  mutate "MS-11 a second docker call planted next to the sanctioned one" 1 WBU_SCRIPT "$S" "$(cat <<'X'
+s.replace('systemctl start docker.service 2>>"$LOG"', 'systemctl start docker.service 2>>"$LOG"; systemctl restart docker.service', 1)
+X
+)"
 
   # ── unit / reporter / timer / workflow / vector mutations ──
   mutate "MU-1 OnFailure dropped" 1 WBU_UNIT "$UU" "re.sub(r'(?m)^OnFailure=.*\n', '', s, 1)"
@@ -1380,7 +1673,7 @@ X
 (lambda L: s.replace(L[0] + '\n' + L[1], L[1] + '\n' + L[0], 1))(s[s.find('workspaces_boot_unlock_print = ['):].splitlines()[1:3])
 X
 )"
-  mutate "MP-4 a post-state line edited (only the pin sees it)" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
+  mutate "MP-4 a post-state tag renamed (triangulated: the pin + P4 + the after-print fixture all see it)" 1 WBU_LUKS_TF "$T" "$(cat <<'X'
 s.replace('fstab-mnt-data-lines', 'fstab-lines', 1)
 X
 )"
@@ -1393,7 +1686,7 @@ s.replace('"umask 077",\n    "f=/etc/default/workspaces-luks-boot",', '"umask 07
 X
 )"
 
-  MUT_ROWS_EXPECTED=38
+  MUT_ROWS_EXPECTED=47
   if [[ "$mut_rows" -ne "$MUT_ROWS_EXPECTED" ]]; then
     printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"
     exit 1
@@ -1403,11 +1696,11 @@ fi
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # Anti-vacuity floor. The threshold sits on the line directly above its `if`. It is EXACT:
-# 486 is the measured inner-run (WBU_MUTANT=1) assertion count, and the outer run
+# 538 is the measured inner-run (WBU_MUTANT=1) assertion count, and the outer run
 # adds the MUT_ROWS_EXPECTED mutation rows, so deleting any one check, not only a whole block,
 # trips it. Adding a check means raising the floor here.
 _wbu_mut_floor="${WBU_MUTANT:+0}"
-MIN_ASSERTIONS=$((486 + ${_wbu_mut_floor:-38}))
+MIN_ASSERTIONS=$((538 + ${_wbu_mut_floor:-47}))
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1
