@@ -231,12 +231,18 @@ discover_agent_pid() {
     if [[ -n "${CLAUDE_CODE_EXECPATH:-}" && -n "$exe" && "$exe" == "${CLAUDE_CODE_EXECPATH}" ]]; then
       printf '%s execpath' "$pid"; return 0
     fi
-    if _is_agent_comm "$comm"; then
-      cmdline=$(tr '\0' ' ' < "$procroot/$pid/cmdline" 2>/dev/null || true)
-      if ! _is_agent_daemon "$cmdline"; then
-        printf '%s comm' "$pid"; return 0
-      fi
-    fi
+    # The daemon check is codex-scoped: only that binary multiplexes session
+    # and backend roles under one comm, and a devin/claude argv containing the
+    # word "daemon" is a session prompt, not a backend.
+    case "$comm" in
+      claude|devin) printf '%s comm' "$pid"; return 0 ;;
+      codex)
+        cmdline=$(tr '\0' ' ' < "$procroot/$pid/cmdline" 2>/dev/null || true)
+        if ! _is_agent_daemon "$cmdline"; then
+          printf '%s comm' "$pid"; return 0
+        fi
+        ;;
+    esac
 
     pid=$(read_ppid "$pid" "$procroot") || return 1
   done
@@ -301,8 +307,10 @@ sweep_unadopted_agents() {
     pid=${d##*/}
     comm=$(cat "$d/comm" 2>/dev/null) || continue
     _is_agent_comm "$comm" || continue
-    cmdl=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
-    _is_agent_daemon "$cmdl" && continue
+    if [[ "$comm" == "codex" ]]; then
+      cmdl=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+      _is_agent_daemon "$cmdl" && continue
+    fi
     parent[$pid]=$(read_ppid "$pid" /proc || echo 0)
     is_agent[$pid]=1
   done
