@@ -16,3 +16,19 @@
 
 ### Components Invoked
 - soleur:go routing (one-shot), worktree-manager create/draft-pr (PR #9179), plan, deepen-plan
+
+## Work Phase
+- Status: complete
+- Commits: eb794463 (deliverables), 694b0eb2 (guard suite 524/524 + census fix), 934dc80f (records: ADR-119/ADR-154, runbook §4, model.c4)
+- Note: first work subagent returned empty (only merged main) — recovered by decomposing into scoped sequential passes.
+
+## Review Phase
+- Status: complete — DESIGN SOUND (code-simplicity + architecture), 9-seat panel, no P1s.
+- Fix pass: 00e7748d (18 code items: peek errexit guard, provisioner reorder, bounded proof run, docker recovery, probe fields, docs) + 831b600b (suite updates 585/585, 9 new mutation rows, + luks-monitor-install 199/199).
+- CTO ruling (architectural fork): cx33 restored in hel1-dc2 → ADR-154 exception expiry; verdict = ship in-place (hybrid); recorded on #9123; follow-up #9187 filed; probe noted on #6730/#7103.
+
+## QA Phase
+- Status: skipped per skill contract — Test Scenarios are prose-only (no Browser:/API verify: steps); behavioural coverage is the guard suite; live verification is post-merge apply prints (AC11).
+
+## Compound Phase
+- Learning filed: knowledge-base/project/learnings/workflow-patterns/2026-09-29-oversized-subagent-scope-returns-empty-and-the-guard-arming-statement-was-errexit-immune.md
