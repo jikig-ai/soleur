@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSWRConfig } from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { createClient } from "@/lib/supabase/client";
-import { clearSwrCache } from "@/lib/swr-config";
+import { clearSwrCache, jsonFetcher, swrKeys } from "@/lib/swr-config";
 import { OrgSwitcher } from "@/components/dashboard/org-switcher";
 import { Button } from "@/components/ui/button";
 import { useActiveRepo } from "@/hooks/use-active-repo";
@@ -60,7 +60,34 @@ export function OrgSwitcherContainer({
    *  this is the fix for the band's former remount-on-collapse bug (ADR-047). */
   collapsed?: boolean;
 } = {}) {
-  const [memberships, setMemberships] = useState<OrgMembershipSummary[] | null>(null);
+  // #9178 mount-fetch contract: memberships ride the shared SWR key so the two
+  // (CSS-exclusive) band mounts coalesce into ONE flight via dedupingInterval.
+  // Keep-last-known on error is free — SWR retains `data` across revalidation
+  // failures; a first-load error maps to [] so the chip stays hidden (the
+  // former catch fell back to [] only on first load, never blanking a
+  // populated switcher).
+  const {
+    data: membershipsData,
+    error: membershipsError,
+    mutate: mutateMemberships,
+  } = useSWR(
+    swrKeys.listMemberships(),
+    jsonFetcher<{ memberships: OrgMembershipSummary[] }>,
+  );
+  // Last-known latch: executeSwitch's clearSwrCache() deliberately sets EVERY
+  // key to undefined at the RPC-commit boundary — including this one — but the
+  // switch chrome must NOT unmount mid-flow (the offline post-RPC park state
+  // renders from this component; the former local-state memberships survived
+  // the clear). Memberships are principal-scoped, not workspace-scoped, so
+  // keeping them through the park window leaks no tenant content.
+  const lastKnownMemberships = useRef<OrgMembershipSummary[] | null>(null);
+  if (membershipsData?.memberships) {
+    lastKnownMemberships.current = membershipsData.memberships;
+  }
+  const memberships =
+    membershipsData?.memberships ??
+    lastKnownMemberships.current ??
+    (membershipsError ? [] : null);
   const [pending, setPending] = useState<OrgMembershipSummary | null>(null);
   const [status, setStatus] = useState<SwitchStatus>("idle");
   // Counts post-RPC refresh re-attempts while offline (bounded by
@@ -75,38 +102,13 @@ export function OrgSwitcherContainer({
   // workspace-switch commit boundary (ADR-067 GAP B) — see executeSwitch.
   const { mutate } = useSWRConfig();
 
-  // Liveness latch so a refetch resolving after unmount never sets state.
-  const mountedRef = useRef(true);
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const loadMemberships = useCallback(() => {
-    fetch("/api/workspace/list-memberships")
-      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
-      .then((json: { memberships: OrgMembershipSummary[] }) => {
-        if (mountedRef.current) setMemberships(json.memberships);
-      })
-      .catch(() => {
-        // Silent failure — the chip stays hidden. No Sentry breadcrumb: a
-        // transient 5xx would otherwise alarm on every page load for solo users.
-        // Keep last-known on a refetch (never blank a populated switcher); fall
-        // to [] only on the very first load so the chip stays hidden.
-        if (mountedRef.current) setMemberships((prev) => prev ?? []);
-      });
-  }, []);
-
-  useEffect(() => {
-    loadMemberships();
-    // A same-tab logo upload/removal nudges a memberships refetch so the
-    // switcher reflects the new logo without a full reload (H1, AC4).
-    const onLogoChange = () => loadMemberships();
+    // A same-tab logo upload/removal revalidates memberships so the switcher
+    // reflects the new logo without a full reload (H1, AC4).
+    const onLogoChange = () => void mutateMemberships();
     window.addEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onLogoChange);
     return () => window.removeEventListener(WORKSPACE_LOGO_CHANGED_EVENT, onLogoChange);
-  }, [loadMemberships]);
+  }, [mutateMemberships]);
 
   // Step 1: a row click arms the confirm step (confirm-then-switch). The target
   // is resolved to a full membership so we have the workspaceId for the RPC.
