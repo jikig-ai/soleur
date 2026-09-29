@@ -61,3 +61,21 @@ The elevated retry acquired them successfully. Full-file legal patch output and
 a piped diff preview were truncated; focused hunks and captured comparisons
 resolved the tooling errors. Mirror comparisons must use current main's
 baseline, since the merge can reduce inherited drift.
+
+On 2026-09-29, a PostgreSQL integration test passed `JSON.stringify(object)` as a
+text bind parameter and then cast it to `jsonb`; PostgreSQL correctly produced a
+JSON string scalar, which a bounded-object validator rejected. Use the postgres.js
+`sql.json(object)` encoder when binding JSON and casting to `jsonb`, then verify
+`jsonb_typeof` through the same driver path.
+
+The rename guard scans merge commits against their first parent, so a feature
+branch can keep triggering on an unrelated rename imported by an old main-sync
+merge even after main itself contains that rename. When the PR diff has no such
+rename, rebase or flatten the feature changes onto current main before adding an
+allowlist override; preserve the actual net diff and rerun the guard.
+
+On 2026-09-29, the full affected pre-commit battery exceeded 50 minutes and one
+full run exposed only an outdated synthetic terminal-event fixture. After the
+user approved relying on CI, rerun the focused changed suites and ordinary
+pre-commit checks, exclude only the long `bun-test` hook, and require the PR CI
+suite to pass before considering the work verified.

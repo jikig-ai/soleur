@@ -29,6 +29,12 @@
 - The TOM-4 mutation test first removed one trigger where a second trigger shared the same WORM function, so the gate correctly remained green. The mutation now drops a uniquely attached function and proves assertion 24 fails.
 - Pencil format validation is unresolved: installed `@pencil.dev/cli@0.2.9` does not read the committed format 2.18 wireframe. Installing `@pen.dev/cli@0.3.9` failed during `sharp` setup (`Please add node-addon-api`), and the retry ended after repeated tar `Unknown system error -122` errors. No wireframe or screenshot was changed.
 - One read-only discovery command ended with a dangling `&&` and returned shell syntax error; it was rerun successfully without the extra operator. An attempted fixture cleanup command using `rm -rf` was rejected by the shell command guard; no files were removed by that attempt.
+- The resumed `test/ws-resume-by-context-path.test.ts` synthetic Codex stream failed the new terminal-status contract; the fixture now emits `completed`, and its full 14-test file passes.
+- The first refreshed CI RLS run rejected a lifecycle object because the test supplied `JSON.stringify(...)` as a text parameter, which PostgreSQL cast to a JSON string scalar. Replaced it with `t.json(...)`; a local driver probe confirms `jsonb_typeof` is now `object`, and the refreshed CI RLS job passes.
+- The rename guard detected a historical mainline rename inside an old merge commit. The feature branch was collapsed onto the latest main tree as one reviewable feature commit, removing that unrelated merge history; the refreshed rename-guard job passes.
+- The affected local `bun-test` hook was explicitly excluded after the full run exceeded 50 minutes and the user approved relying on CI. Focused Codex tests, typecheck, server build, and all other applicable pre-commit hooks passed; required CI remains the full-suite gate.
+- A search included a nonexistent `apps/web-platform/app/api/routines` path; the repository search reported that path absent. The current `runRoutine()` callers were then enumerated from existing server and dashboard route paths.
+- One `apply_patch` hunk for the learning file omitted a `+` prefix and was rejected without changing the file; the patch was reread and applied correctly.
 
 ## Verification as of 2026-09-27
 
@@ -56,7 +62,9 @@
 
 - Current focused Codex/legal Vitest set: 10 files passed, 120 tests passed, including two disposable-local-PostgreSQL migration/RPC cases and the exact production-composition fail-closed boundary tests. The database cases dropped both test databases.
 - TOM-4 posture gate: 24/23 assertions passed; mutation suite 15/15 passed, including the dropped-trigger attachment regression and explicit mutable-table WORM exclusions.
-- Codex rebinding-focused Vitest: 4 files/43 tests passed. Dev-ledger parity: 256/256. `git diff --check` passes.
-- Main advanced to `ec5b2fcede99602edfee43961d77e4dd5677fb10`; this branch has not yet reconciled that update. The branch remains draft PR #9051, with current pushed head `89f7eaf6556f0cee74ed15fbfa0cbfc6981eba3d`.
+- Codex rebinding-focused Vitest: 4 files/43 tests passed. After main sync, the focused 10-file Codex handler/persistence/migration set exited 0, and the resumed-WebSocket file passed 14/14. Dev-ledger parity: 256/256. `tsc --noEmit`, server build, and `git diff --check` pass.
+- Current `origin/main` is `a6a37540a0629994a861387f7b615d7232df2534`. The pushed feature branch is based on it with one feature commit, `d34b678aea`; PR #9051 remains draft. Refreshed CI is running, including RLS fuzz and the rename guard.
+- The refreshed CI run on `d34b678aea` passes both RLS fuzz and rename guard. The wider CI matrix remains in progress; Web Platform shards, tenant integration and CodeQL have not all completed.
 - Doppler dev_scheduled names-only check found no secret names containing OPENAI or CODEX. No API key or managed credential was available, no provider request was made, no feature flag changed, and both CLO dispositions remain PENDING/no authorization.
-- The verified work closes reviewed persistence, terminal-attempt, auth-mode UI state, WORM disclosure/provenance and migration lock-budget findings. Full current-main suite, review trailer, UI screenshot QA, production composition, eligible routine consumer, both-mode synthetic Web qualification and CLO dispositions remain incomplete.
+- The verified work closes reviewed persistence, terminal-attempt, auth-mode UI state, WORM disclosure/provenance and migration lock-budget findings. `runRoutine()` still rejects non-Claude persisted bindings, and no scheduled Inngest consumer reads `engine_run_id`; the scheduled crons have specialized Claude behavior and none is an eligible Codex routine. Do not synthesize routine semantics.
+- Review, the review trailer, screenshot QA, production runtime composition, a qualifying routine consumer, separate API-key/managed Web matrices, and mode-specific CLO dispositions remain incomplete. The feature stays default-off; no flag or customer-processing state has changed.
