@@ -270,15 +270,18 @@ bound() {
   if command -v timeout >/dev/null 2>&1; then timeout 60 "$@"; else "$@"; fi
 }
 
-# token_probe <value> <url> -> live | rejected | transport
+# token_probe <value> <url> -> live | rejected <code> | transport
 # The same per-token probe the weekly cron runs (userinfo for the personal
 # token, organizationalEntityAcls for the org token — the Community app has no
 # openid, so userinfo can never pass for it). Three states because the failure
-# arms below prescribe different remedies: `rejected` means mint again,
-# `transport` means the token may be fine and the network/proxy is the suspect —
-# conflating them sends a founder behind a TLS-inspecting proxy through a
-# needless re-mint loop. The Bearer header travels via `--config -` (stdin), not
-# argv — `/proc/<pid>/cmdline` would otherwise carry it for up to 15s per call.
+# arms below prescribe different remedies: `rejected` means mint again (401 =
+# expired; 403 = alive but minted under the wrong app or without the scopes the
+# endpoint requires — the code travels with the verdict so the remedy can name
+# the measured cause), `transport` means the token may be fine and the
+# network/proxy is the suspect — conflating them sends a founder behind a
+# TLS-inspecting proxy through a needless re-mint loop. The Bearer header
+# travels via `--config -` (stdin), not argv — `/proc/<pid>/cmdline` would
+# otherwise carry it for up to 15s per call.
 token_probe() {
   local tok="$1" url="$2" response code rc=0
   response="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" | \
@@ -288,7 +291,7 @@ token_probe() {
   if [[ $rc -ne 0 ]]; then printf 'transport'; return; fi
   code="$(printf '%s' "$response" | tail -1)"
   if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then printf 'live';
-  elif [[ "$code" == 401 ]]; then printf 'rejected';
+  elif [[ "$code" == 401 || "$code" == 403 ]]; then printf 'rejected %s' "$code";
   else printf 'transport'; fi
 }
 
@@ -376,9 +379,15 @@ mint_or_reuse() {
     live)
       local ep="${probe_url%%\?*}"; ep="${ep##*/}"
       soleur_op_green "  live check passed (LinkedIn ${ep} 2xx)." ;;
-    rejected)
-      printf 'SOLEUR_BOOTSTRAP_TOKEN_REJECTED name=%s http=401\n' "$name"
-      soleur_op_red "  ${name} was rejected by LinkedIn (401) — mint a different token."
+    rejected*)
+      local http="${probe##* }"
+      printf 'SOLEUR_BOOTSTRAP_TOKEN_REJECTED name=%s http=%s\n' "$name" "$http"
+      if [[ "$http" == 403 ]]; then
+        soleur_op_red "  ${name} is alive but cannot authorize its probe (403) — mint a new"
+        soleur_op_red "  token under the app named above and select every scope it offers."
+      else
+        soleur_op_red "  ${name} was rejected by LinkedIn ($http) — mint a different token."
+      fi
       [[ -n "$from_skip" ]] && soleur_op_red "  (this value came from ${skipvar} — fix or unset it and re-run)"
       return 1 ;;
     *)
@@ -457,8 +466,10 @@ stage_1_personal() {
 
 stage_2_org() {
   # The decisive probe IS the org-capability endpoint — the Community app has
-  # no openid, so userinfo could never prove this token, and an ACL 2xx proves
-  # liveness AND w_organization_social/rw_organization_admin scope in one call.
+  # no openid, so userinfo could never prove this token. An ACL 2xx proves
+  # liveness + rw_organization_admin (the probe's own requirement); the
+  # w_organization_social posting scope rides on the "select all scopes"
+  # instruction above.
   mint_or_reuse "LINKEDIN_ORG_ACCESS_TOKEN" SOLEUR_BOOTSTRAP_LINKEDIN_ORG_ACCESS_TOKEN \
     "all scopes the Community app offers — w_organization_social (org posting) and rw_organization_admin (the probe's own requirement) are mandatory" \
     "$TOKEN_GENERATOR_URL_ORG" "$LINKEDIN_ORG_ACLS" || return 1
@@ -582,9 +593,13 @@ stage_4_verify() {
   gh_listed="$(bound gh secret list -R "$GH_REPO" 2>/dev/null || true)"
 
   for name in LINKEDIN_ACCESS_TOKEN LINKEDIN_ORG_ACCESS_TOKEN; do
+    # Enumerated, not defaulted — a name added to the loop without a probe arm
+    # must fail the stage, never silently probe userinfo (the defect class the
+    # cron's TOKEN_PROBES table exists to remove).
     case "$name" in
+      LINKEDIN_ACCESS_TOKEN) probe_url="$LINKEDIN_USERINFO" ;;
       LINKEDIN_ORG_ACCESS_TOKEN) probe_url="$LINKEDIN_ORG_ACLS" ;;
-      *) probe_url="$LINKEDIN_USERINFO" ;;
+      *) printf 'SOLEUR_BOOTSTRAP_VERIFY_FAILED %s (no probe configured)\n' "$name"; failed=1; continue ;;
     esac
     ep="${probe_url%%\?*}"; ep="${ep##*/}"
     cur="$(doppler_token "$name")"

@@ -474,6 +474,7 @@ describe("handler source anchors", () => {
     ],
     ['clientId: "78wtm2wu15iikn"', "Soleur app clientId (personal token probe table entry)"],
     ['clientId: "78s808ujpe6lve"', "Soleur Community app clientId (org token probe table entry)"],
+    ["rw_organization_admin", "org-token scope guidance in the renewal runbook body"],
     ["postSentryHeartbeat", "Sentry cron monitor heartbeat"],
     ["reportSilentFallback", "error reporting"],
     ["mintInstallationToken", "GH installation token minting"],
@@ -518,8 +519,15 @@ describe("bootstrap.sh source anchors (per-token probe parity)", () => {
       'LINKEDIN_ORG_ACLS="https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED"',
       "org ACL probe constant",
     ],
+    ["rw_organization_admin", "org-scope guidance (the ACL probe's own requirement)"],
   ])("contains %s (%s)", (anchor) => {
     expect(BOOTSTRAP_SOURCE).toContain(anchor);
+  });
+
+  it("token_probe classifies 403 as rejected-with-code, not transport (cron 403 contract parity)", () => {
+    expect(BOOTSTRAP_SOURCE).toContain('"$code" == 401 || "$code" == 403');
+    expect(BOOTSTRAP_SOURCE).toContain("printf 'rejected %s'");
+    expect(BOOTSTRAP_SOURCE).toMatch(/rejected\*\)/);
   });
 
   it("token_probe is endpoint-parameterized (value + url)", () => {

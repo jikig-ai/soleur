@@ -106,6 +106,9 @@ export async function checkToken(
     return { status: "unknown", tokenName };
   }
 
+  // Deliberately shared for 401 AND 403: one title per token keeps the
+  // file/comment/auto-close lifecycle single-threaded — a "correct the title
+  // for 403" edit would split the dedup key and strand auto-close.
   const issueTitle = `[Action Required] LinkedIn OAuth token has expired (${tokenName})`;
 
   // HTTP 401 → expired/invalid. HTTP 403 → the token is alive but cannot
