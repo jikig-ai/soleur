@@ -13,8 +13,9 @@ const mockSelectSingle = vi.fn().mockResolvedValue({
 // disconnected user (repo_url=null) to exercise the abort path.
 let mockUserRepoUrl: string | null = "https://github.com/acme/repo";
 
-const { mockRpc, mockEngine } = vi.hoisted(() => ({
+const { mockRpc, mockEngine, mockStartAttemptError } = vi.hoisted(() => ({
   mockEngine: { id: "claude-code" },
+  mockStartAttemptError: { message: null as string | null },
   mockRpc: vi.fn((name: string, args?: Record<string, unknown>) => Promise.resolve(
     name === "bind_agent_engine_run"
       ? {
@@ -31,7 +32,9 @@ const { mockRpc, mockEngine } = vi.hoisted(() => ({
           error: null,
         }
       : name === "start_agent_engine_attempt"
-        ? { data: { id: "attempt-1" }, error: null }
+        ? mockStartAttemptError.message
+          ? { data: null, error: { message: mockStartAttemptError.message } }
+          : { data: { id: "attempt-1" }, error: null }
       : {
           data: [{ status: "ok", active_count: 1, effective_cap: 2 }],
           error: null,
@@ -95,6 +98,7 @@ vi.mock("@/lib/supabase/service", () => ({
               conversation_id: String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
               engine_id: mockEngine.id,
               auth_mode: "api-key",
+              auth_mode_generation: 7,
               adapter_version: mockEngine.id === "codex" ? "codex-v1" : "claude-code-v1",
               created_at: new Date().toISOString(),
             },
@@ -296,6 +300,7 @@ describe("deferred conversation creation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessions.clear();
+    mockStartAttemptError.message = null;
     mockUserRepoUrl = "https://github.com/acme/repo";
     mockEngine.id = "claude-code";
     mockSelectSingle.mockImplementation(async () => ({
@@ -365,6 +370,8 @@ describe("deferred conversation creation", () => {
     }));
     expect(mockRpc).toHaveBeenCalledWith("start_agent_engine_attempt", expect.objectContaining({
       p_attempt_key: clientTurnId,
+      p_expected_auth_mode: "api-key",
+      p_expected_generation: 7,
     }));
     expect(sent.some((message: any) => message.type === "stream")).toBe(true);
   });
@@ -388,8 +395,33 @@ describe("deferred conversation creation", () => {
     }));
     expect(mockRpc).toHaveBeenCalledWith("start_agent_engine_attempt", expect.objectContaining({
       p_attempt_key: clientTurnId,
+      p_expected_auth_mode: "api-key",
+      p_expected_generation: 7,
     }));
     expect(sent.some((message: any) => message.type === "stream")).toBe(true);
+  });
+
+  it("does not stream a Codex turn when the persisted auth generation changed", async () => {
+    mockEngine.id = "codex";
+    mockStartAttemptError.message = "auth mode generation changed";
+    const clientTurnId = "3e8af712-5aa3-4a68-b741-0758c9e8ee8e";
+    const { session, sent } = createMockSession();
+    session.conversationId = "conv-1";
+    session.routing = { kind: "legacy" };
+    session.contextPath = null;
+    session.sessionId = null;
+    sessions.set("user-1", session);
+
+    await handleMessage("user-1", JSON.stringify({ type: "chat", content: "Stale generation", clientTurnId }));
+
+    expect(mockRpc).toHaveBeenCalledWith("start_agent_engine_attempt", expect.objectContaining({
+      p_attempt_key: clientTurnId,
+      p_expected_auth_mode: "api-key",
+      p_expected_generation: 7,
+    }));
+    expect(sent.some((message: any) => message.type === "error")).toBe(true);
+    expect(sent.some((message: any) => message.type === "stream")).toBe(false);
+    expect((await import("@/server/agent-runner")).sendUserMessage).not.toHaveBeenCalled();
   });
 
   it("chat with only @-mention does not create conversation", async () => {
