@@ -39,14 +39,23 @@ org `jikigai-eu` on the DE ingest cluster).
    perf probe fully sample its own runs while real sessions stay cheap:
 
    ```ts
-   tracesSampler: () =>
-     localStorage.getItem("soleur.perf-probe") === "1" ? 1.0 : 0.1,
+   tracesSampler: () => {
+     // Storage getters can throw where cookies are disabled — the
+     // floor (0.1) must be the failure mode, never an exception.
+     try {
+       return sessionStorage.getItem("soleur.perf-probe") === "1"
+         ? 1.0
+         : 0.1;
+     } catch {
+       return 0.1;
+     }
+   },
    ```
 
-   The probe marker MUST be client-side state (`localStorage` /
-   `sessionStorage`), armed via `page.addInitScript` **before**
-   navigation. A header marker does not work: `tracesSampler` receives
-   no request headers in the browser.
+   The probe marker MUST be client-side state (`sessionStorage` —
+   tab-scoped so it never outlives the probe session), armed via
+   `page.addInitScript` **before** navigation. A header marker does
+   not work: `tracesSampler` receives no request headers in the browser.
 3. **Extend the scrub boundary to the new event classes.** Transaction
    and span payloads bypass `beforeSend`. Reuse the same scrub helpers
    (`scrubJwtFromEvent` / `stripUserContextFromEvent` / `stripPiiFromRecord`
@@ -55,6 +64,14 @@ org `jikigai-eu` on the DE ingest cluster).
    (`options.d.ts`). `sendDefaultPii` stays unset. Add a test asserting a
    captured transaction/vital payload carries no `user` id, email, or IP
    after the scrub chain.
+   Tracing also makes `request.url`/`request.query_string`/transaction
+   names live — a substring scrub alone is insufficient: pageload URLs
+   carry bearer-token tails (`/invite/<token>`, `/shared/<token>`) that
+   are not JWT- or email-shaped. Port or share the server-side URL
+   sanitizer (`lib/sentry-url-sanitize.ts` here: strip query/hash, reduce
+   token-path prefixes, delete `query_string`, reduce transaction names)
+   and wire `beforeBreadcrumb` — navigation `from`/`to` data attaches to
+   every envelope. (This gap was the #9180 review P1.)
 
 ### The standalone-`webVitalsIntegration` caveat
 

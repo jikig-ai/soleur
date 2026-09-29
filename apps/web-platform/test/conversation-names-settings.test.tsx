@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { SWRConfig } from "swr";
 import { ConversationNamesSettingsContent } from "@/components/settings/conversation-names-settings";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -13,11 +13,11 @@ function renderTeamSettings() {
   // defer={false}); the fresh per-render cache keeps one test's payload out
   // of the next.
   return render(
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+    <SwrTestProvider>
       <TeamNamesProvider defer={false}>
         <ConversationNamesSettingsContent />
       </TeamNamesProvider>
-    </SWRConfig>,
+    </SwrTestProvider>,
   );
 }
 

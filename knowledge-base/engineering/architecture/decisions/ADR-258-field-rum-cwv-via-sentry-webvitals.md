@@ -53,7 +53,7 @@ against `@sentry/browser` 10.59.0 source
    LCP/CLS/INP/FCP/TTFB as measurements into the existing Sentry edge (the EU/DE
    ingest endpoint, ADR-031 — no new vendor, no new store, no new Terraform).
 2. **`tracesSampler` replaces `tracesSampleRate`, armed by a client-side probe
-   marker.** The sampler returns `1.0` when `localStorage.getItem("soleur.perf-probe")
+   marker.** The sampler returns `1.0` when `sessionStorage.getItem("soleur.perf-probe")
    === "1"` — `perf-probe.ts` arms it via `page.addInitScript` before navigation,
    because a browser-side sampler receives no request headers — and `0.1`
    otherwise. The 10% real-session rate is enough volume for p50/p75 vitals

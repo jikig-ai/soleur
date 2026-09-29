@@ -2,6 +2,7 @@
 
 import useSWR from "swr";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { warnSilentFallback } from "@/lib/client-observability";
 
 // ADR-044 (#4543): the active-workspace repo, kept truthful by run-time
 // revalidation (mount + window focus + the while-`cloning` poll), NOT a
@@ -47,8 +48,20 @@ export function useActiveRepo(): { data: ActiveRepo | null } {
     swrKeys.workspaceActiveRepo(),
     jsonFetcher<ActiveRepo>,
     {
+      // 2.1 s sits just outside the 2 s dedupingInterval so a timer tick
+      // landing inside the dedup window can't stretch the effective cadence
+      // toward ~4 s.
       refreshInterval: (latest) =>
-        latest?.repoStatus === "cloning" ? 2_000 : 0,
+        latest?.repoStatus === "cloning" ? 2_100 : 0,
+      // Mirror persistent endpoint failures — every sibling mount-key
+      // migration reports through warnSilentFallback (bounded by
+      // errorRetryCount, so an outage emits ~4 events per mount, not one per
+      // retry forever).
+      onError: (err) =>
+        warnSilentFallback(err, {
+          feature: "active-repo",
+          op: "mount-fetch",
+        }),
     },
   );
   return { data: data ?? null };

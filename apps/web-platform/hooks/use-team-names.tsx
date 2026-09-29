@@ -136,15 +136,22 @@ export function TeamNamesProvider({
     }
 
     try {
-      await fetch("/api/team-names", {
+      const res = await fetch("/api/team-names", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ leaderId, name: trimmed }),
       });
+      if (!res.ok) throw new Error(`team-names PUT ${res.status}`);
+      // Revalidate the shared SWR key so the shell provider (mounted in the
+      // dashboard shell) and any focus revalidation converge on server truth
+      // rather than carrying the pre-write entry until the next revalidation.
+      void revalidate();
     } catch (err) {
       console.error("[team-names] save error:", err);
+      setError(err instanceof Error ? err.message : "Failed to save");
+      void revalidate(); // re-seed server truth over the optimistic overlay
     }
-  }, []);
+  }, [revalidate]);
 
   const dismissNudge = useCallback(async (leaderId: string) => {
     setNudgesDismissed((prev) =>
@@ -152,15 +159,18 @@ export function TeamNamesProvider({
     );
 
     try {
-      await fetch("/api/team-names", {
+      const res = await fetch("/api/team-names", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ leaderId }),
       });
+      if (!res.ok) throw new Error(`team-names PATCH ${res.status}`);
+      void revalidate();
     } catch (err) {
       console.error("[team-names] dismiss error:", err);
+      void revalidate();
     }
-  }, []);
+  }, [revalidate]);
 
   const getDisplayName = useCallback(
     (leaderId: DomainLeaderId): string => {
@@ -200,15 +210,19 @@ export function TeamNamesProvider({
     });
 
     try {
-      await fetch("/api/team-names", {
+      const res = await fetch("/api/team-names", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ leaderId, iconPath: path }),
       });
+      if (!res.ok) throw new Error(`team-names icon PUT ${res.status}`);
+      void revalidate();
     } catch (err) {
       console.error("[team-names] icon save error:", err);
+      setError(err instanceof Error ? err.message : "Failed to save");
+      void revalidate();
     }
-  }, []);
+  }, [revalidate]);
 
   return (
     <TeamNamesContext.Provider value={{

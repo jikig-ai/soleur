@@ -47,7 +47,11 @@
 #   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
 #   Mirrors dashboard-cold-tiers-8978.sh / reconcile-ff-only-sentry-4977.sh.
 #
-# Tracker directive (goes in the ship PR body, followed by the `follow-through` label):
+# Tracker directive (goes in the #9178 ISSUE body — the sweeper enumerates
+# `gh issue list --label follow-through`, never PR bodies — plus the
+# `follow-through` label on that issue. The ship PR references the issue with
+# `Ref`/`Tracks`, not `Closes`: a merge that auto-closes #9178 before this
+# probe can PASS makes the PASS-close arm unreachable):
 #   <!-- soleur:followthrough script=scripts/followthroughs/cwv-field-rum-9178.sh earliest=<deploy+1d ISO> secrets=SENTRY_ACTIONS_RO_TOKEN -->
 
 set -uo pipefail
@@ -117,7 +121,7 @@ if [[ "$HTTP_STATUS" != "200" ]]; then
   exit 2
 fi
 
-read -r ROWS PAGELOADS VITALS < <(printf '%s' "$BODY" | jq -r '
+read -r ROWS PAGELOADS VITALS PAGELOAD_VITALS < <(printf '%s' "$BODY" | jq -r '
   (if type == "array" then . else .data end) as $d
   | if ($d | type) != "array" then error("no data array") else
       [ ($d | length),
@@ -127,18 +131,28 @@ read -r ROWS PAGELOADS VITALS < <(printf '%s' "$BODY" | jq -r '
             (."measurements.fcp"  != null) or
             (."measurements.cls"  != null) or
             (."measurements.inp"  != null) or
+            (."measurements.ttfb" != null))] | length),
+        # The PASS denominator is vital-bearing PAGELOADS — fcp/ttfb exist on
+        # pageload transactions only, and cls/lcp/inp can ride navigations,
+        # so a window of dark pageloads + vital-bearing navigations must NOT
+        # PASS while the wiring this probe verifies stays unproven.
+        ([$d[] | select(."transaction.op" == "pageload") | select(
+            (."measurements.lcp"  != null) or
+            (."measurements.fcp"  != null) or
+            (."measurements.cls"  != null) or
+            (."measurements.inp"  != null) or
             (."measurements.ttfb" != null))] | length)
       ] | @tsv
     end' 2>/dev/null)
 
-if ! [[ "${ROWS:-}" =~ ^[0-9]+$ && "${PAGELOADS:-}" =~ ^[0-9]+$ && "${VITALS:-}" =~ ^[0-9]+$ ]]; then
+if ! [[ "${ROWS:-}" =~ ^[0-9]+$ && "${PAGELOADS:-}" =~ ^[0-9]+$ && "${VITALS:-}" =~ ^[0-9]+$ && "${PAGELOAD_VITALS:-}" =~ ^[0-9]+$ ]]; then
   echo "TRANSIENT: could not grade the Sentry response (window $START..$END)" >&2
   printf '%s\n' "$BODY" | head -c 500 >&2
   exit 2
 fi
 
-if [[ "$VITALS" -gt 0 ]]; then
-  echo "PASS: $VITALS vital-bearing /dashboard transaction(s) since $START ($ROWS row(s), $PAGELOADS pageload) — field RUM is landing (#9178)"
+if [[ "$PAGELOAD_VITALS" -gt 0 ]]; then
+  echo "PASS: $PAGELOAD_VITALS vital-bearing /dashboard pageload transaction(s) since $START ($ROWS row(s), $PAGELOADS pageload, $VITALS vital-bearing overall) — field RUM is landing (#9178)"
   printf '%s\n' "$BODY" | jq -r '(if type == "array" then . else .data end)[] | select((."measurements.lcp" != null) or (."measurements.fcp" != null) or (."measurements.cls" != null) or (."measurements.inp" != null) or (."measurements.ttfb" != null)) | "  - \(."transaction.op") \(."title") @ \(.timestamp) lcp=\(."measurements.lcp" // "-") fcp=\(."measurements.fcp" // "-")"' | head -10
   exit 0
 fi

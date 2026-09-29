@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { LiveRepoBadge } from "@/components/dashboard/live-repo-badge";
-import { SWRConfig } from "swr";
 import type { ReactNode } from "react";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // LiveRepoBadge is now INTERSTITIAL-ONLY: the "Working on: owner/repo" string
 // moved into the workspace pill subtitle (org-switcher.tsx, fed by the shared
@@ -13,26 +13,16 @@ import type { ReactNode } from "react";
 // replaces the module-latch reset, and dedupingInterval: 0 keeps the focus
 // revalidation assertable (the global 2s window would swallow back-to-back
 // focus events fired inside one test).
-function freshCache({ children }: { children: ReactNode }) {
-  return (
-    <SWRConfig
-      value={{
-        provider: () => new Map(),
-        dedupingInterval: 0,
-        focusThrottleInterval: 0,
-      }}
-    >
-      {children}
-    </SWRConfig>
-  );
-}
-
 function mockActiveRepo(payload: Record<string, unknown>) {
   return vi.fn().mockResolvedValue({
     ok: true,
     json: () => Promise.resolve(payload),
   });
 }
+
+const freshCache = ({ children }: { children: ReactNode }) => (
+  <SwrTestProvider value={{ focusThrottleInterval: 0 }}>{children}</SwrTestProvider>
+);
 
 describe("LiveRepoBadge — J5 revocation interstitial", () => {
   beforeEach(() => {
@@ -138,9 +128,11 @@ describe("LiveRepoBadge — J5 revocation interstitial", () => {
     );
 
     // regained access (fellBackToSolo:false) — stays hidden, no re-arm. Advance
-    // the phase to `team` and force a fresh focus poll. Reset the coalescing
-    // latch first: in production distinct focus events are seconds apart so the
-    // in-flight latch is always clear; here they fire back-to-back.
+    // the phase to `team` and force a fresh focus poll. The SWR-migrated dedup
+    // mechanism is `focusThrottleInterval`/`dedupingInterval` (both 0 in this
+    // wrapper): in production focus events are seconds apart so consecutive
+    // revalidations always land outside the throttle window; here they fire
+    // back-to-back and would be suppressed without the zeroed intervals.
     const callsBeforeRegain = fetchMock.mock.calls.length;
     current = team;
     fireEvent.focus(window);

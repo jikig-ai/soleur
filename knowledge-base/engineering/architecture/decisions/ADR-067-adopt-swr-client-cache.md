@@ -284,16 +284,20 @@ consumers.
 with a `swrKeys.*` tuple.** A raw `fetch()` GET on the mount path is the defect
 class — enforced by the census guard
 `apps/web-platform/test/dashboard-mount-fetch-dedup.test.tsx`, whose protected
-population is derived (every GET fired during a `/dashboard` navigation, per the
-perf probe's `requests[]`), not the hand-list of consumers that existed when the
-census was written. New mount-path reads add a `swrKeys` entry; they do not add
-a `fetch`.
+population is the shell's mount-rendered module set (the three entry modules
+plus every component/hook directory the shell mounts each navigation,
+enumerated in the guard's header — a static approximation; runtime duplicates
+the probe's `requests[]` census is the dynamic backstop). New mount-path reads
+add a `swrKeys` entry; they do not add a `fetch`.
 
 **`usePostFcp` + `null`-key gating is the sanctioned deferral mechanism.**
-`hooks/use-post-fcp.ts` flips after first paint (`requestIdleCallback`,
-`setTimeout(0)` fallback); non-critical SWR consumers pass a `null` key until
-then, so deferred surfaces still render last-known/cached state instantly while
-no fetch contends with first paint. Above-the-fold keys stay ungated.
+`hooks/use-post-fcp.ts` flips after the first paint opportunity
+(`requestIdleCallback` bounded by `{timeout}` so a saturated main thread
+cannot starve the gate; `requestAnimationFrame → setTimeout` fallback on
+rIC-less engines — neither arm observes a real FCP entry; the contract is
+"after first render + one paint opportunity"). Non-critical SWR consumers
+pass a `null` key until then, so no fetch contends with first paint.
+Above-the-fold keys stay ungated.
 
 ### Consequences
 
@@ -301,6 +305,11 @@ no fetch contends with first paint. Above-the-fold keys stay ungated.
   mount-path read, because they all share the one cache `clearSwrCache` evicts —
   the amendment *strengthens* the load-bearing safeguard this ADR exists around.
 - Same-mount duplicate GETs collapse to zero on a warm `/dashboard` navigation
-  (probe `duplicates` table is the observable).
+  (probe `duplicates` table is the observable; designed poll repeats report on
+  the `expectedRepeats` channel so a regressed fan-out stays observable).
+- The contract extends to non-`/api/*` transports where the same fan-out
+  exists: `swrKeys.onboardingState()` keys the PostgREST users-row read
+  shared by `dashboard/page.tsx` + `tour-provider.tsx` (sentinel key, no URL
+  shape — a raw second transport was the reviewed `#9180` gap).
 - Deferral changes fetch *timing*, never cache scope; a gated key that fires
   post-paint still lands in the same per-key entry under the same clear rules.

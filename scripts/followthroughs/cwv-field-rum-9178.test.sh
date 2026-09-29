@@ -130,13 +130,21 @@ expect "zero rows -> NOT YET" 2 "NOT YET: zero /dashboard pageload"
 run_probe "$WORK/f4" > "$WORK/rc"
 expect "navigation-only rows -> NOT YET (never FAIL)" 2 "NOT YET"
 
-# 5 — PASS: a navigation row WITH a vital still proves the pipeline lands.
+# 5 — NOT YET: a vital-bearing NAVIGATION alone proves nothing — nav rows
+#    legitimately carry cls/inp/lcp but never fcp/ttfb, and the pageload
+#    wiring this probe verifies would stay unproven (the masking arm).
 printf '{"data":[%s]}\n' "$(row navigation '"measurements.inp":96')" > "$WORK/f5"
 run_probe "$WORK/f5" > "$WORK/rc"
-expect "vital-bearing navigation row -> PASS" 0 "PASS: 1 vital-bearing"
+expect "vital-bearing navigation only -> NOT YET (unproven pageload)" 2 "NOT YET"
 
-# 6 — PASS mixed window: vital-less pageloads plus ONE vital-bearing row still
-#    close PASS (the numerator is "any vital-bearing", not "all").
+# 5b — FAIL: dark pageload + vital-bearing navigation — the vital-bearing
+#     nav must not rescue the verdict (pageload denominator, not any-row).
+printf '{"data":[%s,%s]}\n' "$(row pageload)" "$(row navigation '"measurements.inp":96')" > "$WORK/f5b"
+run_probe "$WORK/f5b" > "$WORK/rc"
+expect "dark pageload + vital nav -> FAIL" 1 "FAIL: 1 /dashboard pageload"
+
+# 6 — PASS mixed window: vital-less pageloads plus ONE vital-bearing PAYLOAD
+#    still close PASS (the numerator is "any vital-bearing pageload", not all).
 printf '{"data":[%s,%s]}\n' "$(row pageload)" "$(row pageload '"measurements.fcp":540')" > "$WORK/f6"
 run_probe "$WORK/f6" > "$WORK/rc"
 expect "one vital-bearing among vital-less -> PASS" 0 "PASS: 1 vital-bearing"

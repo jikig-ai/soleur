@@ -8,7 +8,10 @@ import {
   classifyRequest,
   summarizeColdApi,
   countDuplicateGets,
+  countExpectedRepeats,
+  dupKeyFor,
   summarizeDuplicates,
+  summarizeExpectedRepeats,
   durationsFromTiming,
   type NavSample,
   type RequestSample,
@@ -104,8 +107,10 @@ describe("perf-probe summarizeColdApi", () => {
     cls: null,
     domContentLoadedMs: null,
     duplicates: [],
+    expectedRepeats: [],
     requests: apiDurs.map((d) => ({
       path: "/api/dashboard/today",
+      dupKey: "k-today",
       method: "GET",
       kind: "api" as const,
       status: 200,
@@ -133,6 +138,7 @@ describe("perf-probe summarizeColdApi", () => {
     s.requests.push(
       {
         path: "/api/broken",
+        dupKey: "k-broken",
         method: "GET",
         kind: "api",
         status: 500,
@@ -142,6 +148,7 @@ describe("perf-probe summarizeColdApi", () => {
       },
       {
         path: "/dashboard",
+        dupKey: "k-doc",
         method: "GET",
         kind: "document",
         status: 200,
@@ -165,8 +172,10 @@ describe("perf-probe countDuplicateGets — same-mount census (#8985)", () => {
     path: string,
     method = "GET",
     kind: RequestSample["kind"] = "api",
+    rawUrl?: string,
   ): RequestSample => ({
     path,
+    dupKey: dupKeyFor(method, rawUrl ?? `https://app.soleur.ai${path}`),
     method,
     kind,
     status: 200,
@@ -185,9 +194,19 @@ describe("perf-probe countDuplicateGets — same-mount census (#8985)", () => {
       req("/api/inbox"),
     ]);
     expect(out).toEqual([
-      { key: "GET /api/workspace/active-repo", count: 3 },
       { key: "GET /api/dashboard/today", count: 2 },
     ]);
+    // /api/workspace/active-repo is a designed repeat (2s cloning poll) —
+    // excluded from `duplicates` by EXPECTED_REPEAT_GET_PATHS but still
+    // REPORTED on the informational channel (a regressed fan-out on the
+    // headline path stays observable).
+    expect(
+      countExpectedRepeats([
+        req("/api/workspace/active-repo"),
+        req("/api/workspace/active-repo"),
+        req("/api/workspace/active-repo"),
+      ]),
+    ).toEqual([{ key: "GET /api/workspace/active-repo", count: 3 }]);
   });
 
   it("skips non-GET methods — a POST+GET pair on one path is not a duplicate", () => {
@@ -212,6 +231,46 @@ describe("perf-probe countDuplicateGets — same-mount census (#8985)", () => {
       countDuplicateGets([req("/api/a"), req("/api/b"), req("/api/c")]),
     ).toEqual([]);
   });
+
+  it("does NOT merge two distinct parameterized GETs the emit path collapses (#9180)", () => {
+    // safePath collapses UUID tails to `<id>` — keyed on `path`, two LeaderLoopStatus
+    // cost cards fetching different messageIds read as a false duplicate.
+    const uuidA = "11111111-2222-3333-4444-555555555555";
+    const uuidB = "66666666-7777-8888-9999-000000000000";
+    const out = countDuplicateGets([
+      req(
+        "/api/dashboard/today/<id>/cost",
+        "GET",
+        "api",
+        `https://app.soleur.ai/api/dashboard/today/${uuidA}/cost`,
+      ),
+      req(
+        "/api/dashboard/today/<id>/cost",
+        "GET",
+        "api",
+        `https://app.soleur.ai/api/dashboard/today/${uuidB}/cost`,
+      ),
+      // Control: the same URL twice still counts.
+      req(
+        "/api/dashboard/today/<id>/cost",
+        "GET",
+        "api",
+        `https://app.soleur.ai/api/dashboard/today/${uuidA}/cost`,
+      ),
+    ]);
+    expect(out).toEqual([{ key: "GET /api/dashboard/today/<id>/cost", count: 2 }]);
+  });
+
+  it("separates query-param-name variants; same-name repeats still count", () => {
+    const out = countDuplicateGets([
+      req("/api/inbox", "GET", "api", "https://app.soleur.ai/api/inbox?status=a"),
+      req("/api/inbox", "GET", "api", "https://app.soleur.ai/api/inbox?status=b"),
+      req("/api/inbox", "GET", "api", "https://app.soleur.ai/api/inbox?cursor=x"),
+    ]);
+    // Different query param NAMES are different request shapes — `status` (2) is
+    // the real duplicate; `cursor` is distinct.
+    expect(out).toEqual([{ key: "GET /api/inbox", count: 2 }]);
+  });
 });
 
 describe("perf-probe summarizeDuplicates", () => {
@@ -227,6 +286,7 @@ describe("perf-probe summarizeDuplicates", () => {
     cls: null,
     domContentLoadedMs: null,
     duplicates: dups,
+    expectedRepeats: [],
     requests: [],
   });
 

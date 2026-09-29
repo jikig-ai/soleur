@@ -1,5 +1,9 @@
 import * as Sentry from "@sentry/nextjs";
 import { PII_KEY_RE } from "@/lib/client-observability";
+import {
+  reduceTransactionName,
+  sanitizeRequestUrl,
+} from "@/lib/sentry-url-sanitize";
 
 // Strip sensitive substrings (JWTs, email addresses) from any string field on
 // the event before transport. Two leak vectors this closes:
@@ -58,28 +62,28 @@ export function scrubJwtFromEvent<T extends Sentry.Event>(event: T): T {
     event.message = scrubSensitive(event.message);
   }
   // Transaction envelopes (#9178): the transaction name and request fields
-  // are string fields on the event — same substring contract as `message`.
-  // Pageload `request.url` carries the full document URL including query
-  // string; `cookies` values can hold `eyJ…`-shaped session payloads.
+  // are string fields on the event. Two layers, same contract as the
+  // server-side `sanitizeRequestForSentry` (server/sentry-scrub.ts):
+  // (1) shape-driven URL/token reduction — pageload `request.url` carries the
+  //   full document URL including query string (OAuth `code` params,
+  //   implicit-flow `access_token` hash fragments) and the path tail can be
+  //   a bearer credential (`/invite/<token>` stays valid for days); the
+  //   transaction name carries the same tail for unrouted requests; and
+  //   `request.query_string` is deleted outright (substring scrubbing it
+  //   value-by-value misses non-JWT-shaped secrets).
+  // (2) JWT/email substring scrub — `cookies` values and headers can hold
+  //   `eyJ…`-shaped session payloads.
   if (event.transaction) {
-    event.transaction = scrubSensitive(event.transaction);
+    event.transaction = reduceTransactionName(
+      scrubSensitive(event.transaction) ?? event.transaction,
+    );
   }
   if (event.request) {
     const req = event.request;
     if (typeof req.url === "string") {
-      req.url = scrubSensitive(req.url);
+      req.url = scrubSensitive(sanitizeRequestUrl(req.url)) ?? req.url;
     }
-    if (typeof req.query_string === "string") {
-      req.query_string = scrubSensitive(req.query_string);
-    } else if (Array.isArray(req.query_string)) {
-      req.query_string = req.query_string.map(
-        ([k, v]) => [k, scrubSensitive(v) ?? v] as [string, string],
-      );
-    } else if (req.query_string) {
-      for (const [k, v] of Object.entries(req.query_string)) {
-        req.query_string[k] = scrubSensitive(v) ?? v;
-      }
-    }
+    delete req.query_string;
     for (const rec of [req.headers, req.cookies]) {
       if (!rec) continue;
       for (const k of Object.keys(rec)) {
@@ -88,6 +92,12 @@ export function scrubJwtFromEvent<T extends Sentry.Event>(event: T): T {
           rec[k] = scrubSensitive(v) ?? v;
         }
       }
+    }
+    // `request.data` arrives as either a record (handled by
+    // `stripUserContextFromEvent`'s PII-key walk) or a raw string — an
+    // unparsed POST body can carry credentials verbatim.
+    if (typeof req.data === "string") {
+      req.data = scrubSensitive(req.data) ?? req.data;
     }
   }
   if (event.exception?.values) {
@@ -122,6 +132,53 @@ function stripPiiFromRecord(
   for (const k of Object.keys(rec)) {
     if (PII_KEY_RE.test(k)) {
       delete rec[k];
+    }
+  }
+}
+
+// Breadcrumbs attach to every event (errors AND sampled transactions), and
+// navigation breadcrumbs' `data.from`/`data.to` carry raw URLs — a pageload
+// through `/invite/<token>` leaves the bearer tail in every subsequent
+// envelope's breadcrumb trail. `message` gets substring scrub; `from`/`to`
+// get the shared token-path reduction (both raw paths and full URLs — the
+// reducer works on any string containing the prefix).
+export function scrubSentryClientBreadcrumb<T extends Sentry.Breadcrumb>(
+  bc: T,
+): T {
+  if (typeof bc.message === "string") {
+    bc.message = reduceTransactionName(scrubSensitive(bc.message) ?? bc.message);
+  }
+  const data = bc.data as Record<string, unknown> | undefined;
+  if (data) {
+    // Parity with the server's `scrubSentryBreadcrumb` (scrubRecursive over
+    // every string in the payload): any string-bearing data key — not just
+    // navigation `from`/`to` — can carry a credential tail (a breadcrumb
+    // added by app code, or nested record values).
+    scrubBreadcrumbValue(data);
+    stripPiiFromRecord(data);
+  }
+  return bc;
+}
+
+/** Deep-walk breadcrumb data scrubbing every string leaf (JWT/email
+ * substring + token-path reduction), mutating in place. */
+function scrubBreadcrumbValue(v: unknown): void {
+  if (typeof v === "string") return; // callers scrub strings at the key site
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) {
+      if (typeof v[i] === "string") {
+        v[i] = reduceTransactionName(scrubSensitive(v[i] as string) ?? v[i]);
+      } else scrubBreadcrumbValue(v[i]);
+    }
+    return;
+  }
+  if (v && typeof v === "object") {
+    const rec = v as Record<string, unknown>;
+    for (const k of Object.keys(rec)) {
+      const item = rec[k];
+      if (typeof item === "string") {
+        rec[k] = reduceTransactionName(scrubSensitive(item) ?? item);
+      } else scrubBreadcrumbValue(item);
     }
   }
 }
@@ -226,7 +283,7 @@ Sentry.init({
   integrations: browserTracing ? [browserTracing] : [],
   // Header-scoped sampling is not possible client-side — a `tracesSampler`
   // receives no request headers — so the perf probe arms a storage marker
-  // instead (`localStorage["soleur.perf-probe"] = "1"` via page.addInitScript
+  // instead (`sessionStorage["soleur.perf-probe"] = "1"` via page.addInitScript
   // before navigation; client-side equivalent of the server's `x-perf-probe`
   // arm). Probe runs sample at 1.0; real sessions pay the 0.1 floor (NFR4 —
   // no fallback may exceed 0.1). Storage getters can throw where cookies are
@@ -234,8 +291,8 @@ Sentry.init({
   tracesSampler: () => {
     try {
       if (
-        typeof localStorage !== "undefined" &&
-        localStorage.getItem("soleur.perf-probe") === "1"
+        typeof sessionStorage !== "undefined" &&
+        sessionStorage.getItem("soleur.perf-probe") === "1"
       ) {
         return 1;
       }
@@ -263,5 +320,11 @@ Sentry.init({
   // Standalone/streamed span payloads bypass both event-level callbacks.
   beforeSendSpan(span) {
     return scrubSpanPayload(span);
+  },
+  // Breadcrumbs bypass all three envelope callbacks — navigation `from`/`to`
+  // URLs reach every event attached to them (server wires the equivalent
+  // `scrubSentryBreadcrumb` in sentry.server.config.ts).
+  beforeBreadcrumb(bc) {
+    return scrubSentryClientBreadcrumb(bc);
   },
 });

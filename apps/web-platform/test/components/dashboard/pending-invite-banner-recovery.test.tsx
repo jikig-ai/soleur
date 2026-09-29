@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { SWRConfig } from "swr";
-import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
+import { SwrTestProvider } from "../../helpers/swr-wrapper";
 
 // feat-invite-accept-membership-byok (#4715), Phase 7 / spec-flow J3.
 // PendingInviteBannerRecovery self-fetches /api/workspace/pending-invites and
@@ -59,16 +58,10 @@ afterEach(() => vi.unstubAllGlobals());
 // #9178 — the invite GET is a shared SWR key now; without a provider the
 // global cache leaks one test's stub into the next, and the 2s dedup window
 // suppresses the mount fetch the test then waits on. Fresh Map per render.
-const freshCache = ({ children }: { children: ReactNode }) => (
-  <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-    {children}
-  </SWRConfig>
-);
-
 describe("PendingInviteBannerRecovery (#4715 J3)", () => {
   it("shows the banner for a pending-invite user on /dashboard", async () => {
     mockFetchInvites([INVITE]);
-    render(<PendingInviteBannerRecovery />, { wrapper: freshCache });
+    render(<PendingInviteBannerRecovery />, { wrapper: SwrTestProvider });
     expect(await screen.findByText(/invited you to join/i)).toBeTruthy();
     expect(screen.getByText("Dana")).toBeTruthy();
     expect(screen.getByText("Acme")).toBeTruthy();
@@ -77,7 +70,7 @@ describe("PendingInviteBannerRecovery (#4715 J3)", () => {
   it("renders nothing and never fetches on /dashboard/chat (server mount owns it)", async () => {
     mockPathname.value = "/dashboard/chat/abc";
     mockFetchInvites([INVITE]);
-    const { container } = render(<PendingInviteBannerRecovery />, { wrapper: freshCache });
+    const { container } = render(<PendingInviteBannerRecovery />, { wrapper: SwrTestProvider });
     // Give any stray effect a tick; it must stay empty and skip the fetch.
     await new Promise((r) => setTimeout(r, 10));
     expect(container.firstChild).toBeNull();
@@ -93,7 +86,7 @@ describe("PendingInviteBannerRecovery (#4715 J3)", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
 
-    render(<PendingInviteBannerRecovery />, { wrapper: freshCache });
+    render(<PendingInviteBannerRecovery />, { wrapper: SwrTestProvider });
     const acceptBtn = await screen.findByRole("button", { name: /^accept$/i });
     await userEvent.click(acceptBtn);
 
@@ -108,7 +101,7 @@ describe("PendingInviteBannerRecovery (#4715 J3)", () => {
 
   it("renders nothing when there are no pending invites", async () => {
     mockFetchInvites([]);
-    const { container } = render(<PendingInviteBannerRecovery />, { wrapper: freshCache });
+    const { container } = render(<PendingInviteBannerRecovery />, { wrapper: SwrTestProvider });
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(container.firstChild).toBeNull();
   });

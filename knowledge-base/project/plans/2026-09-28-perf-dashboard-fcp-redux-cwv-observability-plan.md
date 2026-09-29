@@ -33,7 +33,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 ### New Considerations Discovered
 
-- Client-side `tracesSampler` cannot see `x-perf-probe` headers — the probe arms a `localStorage` marker instead (`soleur.perf-probe`), set via `page.addInitScript` before navigation.
+- Client-side `tracesSampler` cannot see `x-perf-probe` headers — the probe arms a `sessionStorage` marker instead (`soleur.perf-probe`), set via `page.addInitScript` before navigation.
 - New event classes (transactions, spans) bypass the existing `beforeSend` scrub — `beforeSendTransaction` + `beforeSendSpan` must reuse the same helpers, asserted across all three sinks.
 - UX gate satisfied by the committed `dashboard-load-states.pen` (Phase 4.9 verifier passes: the file is tracked and referenced) — this change adds no new visual state; the work phase extends that `.pen` only if the fixed deferred set needs a depicted state it lacks.
 
@@ -60,7 +60,7 @@ Meanwhile every perf claim is backed only by the synthetic `perf-probe.ts` (lab,
 1. **Mount-fetch contract (amends ADR-067).** Every mount-time `/api/*` GET in the dashboard shell goes through `useSWR` with a `swrKeys.*` tuple — raw `fetch()` GETs on the mount path are the defect class. SWR's per-key in-flight coalescing + `dedupingInterval` collapse duplicates *across* consumers, which the per-hook `inFlight` latch cannot do (it is blind to the SWR channel and to sequential mounts after the latch clears).
 2. **Post-FCP deferral primitive.** A new `hooks/use-post-fcp.ts` (boolean that flips after first paint via `requestIdleCallback` with a `setTimeout` fallback) gates non-critical SWR keys to `null` until after paint — applied to nav-badge counts, releases, team-names, and other non-above-the-fold fetches. Above-fold content keys (today, conversations, inbox badge on the inbox route) stay ungated.
 3. **Middleware-auth: verify-only.** ADR-253's 2026-09-26 amendment already rejected a `getUser` verdict cache by measurement; revocation/T&C positive-verdict caches (30 s, allow-direction-only) are already live, and the in-flight joiner already dedupes concurrent misses. This plan adds NO auth caching — it asserts the existing joiner covers every `/api/*` mount request and records the constraint.
-4. **Field RUM.** `Sentry.browserTracingIntegration()` in `sentry.client.config.ts` (it auto-registers `webVitalsIntegration`) with a `tracesSampler`: `1.0` when the probe marker is present (the probe arms it via `localStorage`/`sessionStorage` before navigation — `tracesSampler` receives no request headers client-side), `0.1` otherwise. `sendDefaultPii` stays unset; the existing scrub chain extends to `beforeSendTransaction` and `beforeSendSpan` (both exist on the installed SDK — `options.d.ts`), asserted by a test that a transaction/vital payload carries no user identifier — the same boundary the `no-raw-id` learning (#8719/PR #8794) prescribes.
+4. **Field RUM.** `Sentry.browserTracingIntegration()` in `sentry.client.config.ts` (it auto-registers `webVitalsIntegration`) with a `tracesSampler`: `1.0` when the probe marker is present (the probe arms it via `sessionStorage` before navigation — `tracesSampler` receives no request headers client-side), `0.1` otherwise. `sendDefaultPii` stays unset; the existing scrub chain extends to `beforeSendTransaction` and `beforeSendSpan` (both exist on the installed SDK — `options.d.ts`), asserted by a test that a transaction/vital payload carries no user identifier — the same boundary the `no-raw-id` learning (#8719/PR #8794) prescribes.
 5. **Skill encoding.** `plugins/soleur/skills/plan/references/webapp-cwv-observability.md` recipe + pointer lines at plan Phase 2.9 and in `spec-templates`, so the next Soleur-generated webapp gets the wiring in its plan rather than as a retrofit.
 
 ## Technical Approach
@@ -85,7 +85,7 @@ Meanwhile every perf claim is backed only by the synthetic `perf-probe.ts` (lab,
 
 #### Phase 2: Field RUM + verification
 
-- `sentry.client.config.ts`: add `Sentry.browserTracingIntegration()` to `integrations` and a `tracesSampler` — `1.0` when `localStorage.getItem("soleur.perf-probe") === "1"` (the probe sets it before navigation, client-side equivalent of the server `x-perf-probe` arm), `0.1` otherwise; `tracesSampleRate` is removed in favor of the sampler; `sendDefaultPii` stays unset.
+- `sentry.client.config.ts`: add `Sentry.browserTracingIntegration()` to `integrations` and a `tracesSampler` — `1.0` when `sessionStorage.getItem("soleur.perf-probe") === "1"` (the probe sets it before navigation, client-side equivalent of the server `x-perf-probe` arm), `0.1` otherwise; `tracesSampleRate` is removed in favor of the sampler; `sendDefaultPii` stays unset.
 - Extend the scrub boundary: `beforeSendTransaction` + `beforeSendSpan` reusing `scrubJwtFromEvent`/`stripUserContextFromEvent`/`stripPiiFromRecord` (transaction events and span payloads are new classes that bypass `beforeSend`).
 - `perf-probe.ts`: set the probe marker (`page.addInitScript` / context storage) before navigations so probe runs sample at 1.0.
 - Unit test: client config wires `browserTracingIntegration` + sampler arms at 1.0 under the marker and 0.1 otherwise; a captured transaction/vital payload contains no `user`/PII fields after the scrub chain.
@@ -236,7 +236,7 @@ discoverability_test:
 ### Follow-Through Enrollment
 
 - `scripts/followthroughs/cwv-field-rum-9178.sh` — exit 0 when Sentry shows ≥1 web-vitals event for `/dashboard` sessions in the post-deploy window; `start=` pinned strictly after deploy; mirrors `scripts/followthroughs/reconcile-ff-only-sentry-4977.sh` shape.
-- Tracker: `<!-- soleur:followthrough script=scripts/followthroughs/cwv-field-rum-9178.sh earliest=<deploy+1d> secrets=SENTRY_AUTH_TOKEN,SENTRY_ORG -->` + `follow-through` label on the ship PR's tracking surface; confirm `secrets=` names already wired in `.github/workflows/scheduled-followthrough-sweeper.yml` (the existing dashboard-cold-tiers script's token set is the reference).
+- Tracker: `<!-- soleur:followthrough script=scripts/followthroughs/cwv-field-rum-9178.sh earliest=<deploy+1d> secrets=SENTRY_ACTIONS_RO_TOKEN -->` + `follow-through` label on the **issue** body (#9178 — the sweeper enumerates issues, never PR bodies); confirm `secrets=` names already wired in `.github/workflows/scheduled-followthrough-sweeper.yml` (the existing dashboard-cold-tiers script's token set is the reference).
 - The pre-existing `scripts/followthroughs/dashboard-cold-tiers-8978.sh` stays armed unchanged — this plan does not retire it.
 
 ## Encryption Posture
@@ -431,7 +431,7 @@ Single engineer/agent session; no new vendors, secrets, or infra. Sentry ingest 
 ## Files to Edit
 
 - `apps/web-platform/lib/swr-config.ts` — new `swrKeys` entries (`listMemberships`, `byokEffectiveStatus`, `pendingInvites`, `teamNames`); dedup/deferral option review.
-- `apps/web-platform/hooks/use-active-repo.ts` — re-implement on `useSWR(swrKeys.workspaceActiveRepo())`; preserve poll/fallback semantics; keep `__resetActiveRepoCoalesceForTests` equivalent.
+- `apps/web-platform/hooks/use-active-repo.ts` — re-implement on `useSWR(swrKeys.workspaceActiveRepo())`; preserve poll/fallback semantics; SWR's key coalescing supersedes the hand-rolled `inFlight` latch (dropped — no `__resetActiveRepoCoalesceForTests` equivalent needed).
 - `apps/web-platform/components/dashboard/org-switcher-container.tsx` — memberships via shared key + `mutate` on `WORKSPACE_LOGO_CHANGED_EVENT`.
 - `apps/web-platform/components/dashboard/no-api-key-banner.tsx` — byok effective-status via shared key.
 - `apps/web-platform/components/dashboard/pending-invite-banner-recovery.tsx` — pending-invites via shared key.
@@ -439,7 +439,7 @@ Single engineer/agent session; no new vendors, secrets, or infra. Sentry ingest 
 - `apps/web-platform/app/(dashboard)/dashboard/page.tsx` — census-driven dedup/deferral adjustments to `DASHBOARD_FOUNDATION_STATUS_KEY`/`dashboardToday` consumers.
 - `apps/web-platform/app/(dashboard)/dashboard-shell.tsx` — deferral gating for nav-badge mounts if census requires.
 - `apps/web-platform/components/dashboard/{inbox-nav-badge,conversations-nav-badge,workstream-nav-badge,releases-nav-badge}.tsx` — deferral gating (as needed per census).
-- `apps/web-platform/sentry.client.config.ts` — `webVitalsIntegration`; span-level scrub boundary if exposed.
+- `apps/web-platform/sentry.client.config.ts` — `browserTracingIntegration` + `tracesSampler`; transaction/span/breadcrumb scrub boundary (see §Sharp Edges — the standalone `webVitalsIntegration` path is SDK-rejected).
 - `apps/web-platform/scripts/live-verify/perf-probe.ts` — duplicate census + vitals capture.
 - `apps/web-platform/test/use-active-repo-poll.test.tsx` — port to SWR implementation.
 - `plugins/soleur/skills/plan/SKILL.md` — one pointer line at Phase 2.9 (body, not `description:`).

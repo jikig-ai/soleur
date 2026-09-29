@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 // tuple so SWR's per-key in-flight coalescing + `dedupingInterval` own dedup.
 // A raw `fetch()` GET on the mount path is the defect class — it cannot join
 // an SWR flight and produced the observed same-mount duplicate fan-out
-// (active-repo x3-4, foundation-status x3, memberships/inbox/today x2).
+// (active-repo x3-4, foundation-status x3, memberships/inbox/today/byok x2).
 //
 // This is a CENSUS, not a hand list: the mount-surface set is enumerated
 // structurally from the filesystem, every `fetch("/api/"` call site inside it
@@ -19,17 +19,44 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url))); // apps/web-platform
 
 // The mount-surface set (plan Guard Contract "Assembly"): the three shell
-// entry modules + every components/dashboard/** and hooks/** module reachable
-// at mount, plus the key registry. Route-primary content pages under
-// app/(dashboard)/dashboard/*/ are excluded — their GETs fire on that route
-// only and are not part of the every-navigation mount burst.
+// entry modules + every component/hook module the shell mounts at every
+// dashboard navigation (structural enumeration, #9180 review), plus the key
+// registry. Route-primary content pages under app/(dashboard)/dashboard/*/
+// are excluded — their GETs fire on that route only and are not part of the
+// every-navigation mount burst.
+//
+// Enumerated exclusions (deliberate, not accidental):
+// - components/command-palette — contains a LEGITIMATELY LAZY literal GET
+//   (drill-in `fetch("/api/kb/tree")`); the classifier cannot express
+//   "lazy GET", so the dir is out-of-window and a mount-fired GET added
+//   there would evade the guard (known gap, accepted).
+// - lib/** — PostgREST transports (supabase-js .from/.rpc) have no `fetch(`
+//   token and are invisible to this census regardless; lib fetch sites are
+//   POST-only today (push-subscription, analytics-client, upload-*).
+// - <img src="/api/..."> mounts (leader-avatar, workspace-identity-tile) —
+//   browser transport, no `fetch(` token, invisible by construction.
 const SCAN_FILES = [
   "app/(dashboard)/layout.tsx",
   "app/(dashboard)/dashboard-shell.tsx",
   "app/(dashboard)/dashboard/page.tsx",
   "lib/swr-config.ts",
 ];
-const SCAN_DIRS = ["components/dashboard", "hooks"];
+const SCAN_DIRS = [
+  "components/dashboard",
+  "hooks",
+  // Mount-rendered siblings of components/dashboard (enumeration #9180):
+  // every one of these is rendered by dashboard-shell.tsx at every nav.
+  "components/auth",
+  "components/chat",
+  "components/feature-flags",
+  "components/inbox",
+  "components/pwa",
+  "components/releases",
+  "components/support",
+  "components/theme",
+  "components/tour",
+  "components/ui",
+];
 
 function walk(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -259,6 +286,34 @@ describe("dashboard mount-fetch dedup census (ADR-067 contract, #9178)", () => {
   it("mutation matrix: explicit non-GET calls classify as mutations, not violations", () => {
     const mutations = results.filter((r) => r.kind === "mutation");
     expect(mutations.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// Accepted-evasion boundaries (#9180 review): these patterns silently evade
+// the census today. The tests pin them so the boundary is explicit — a
+// future parser upgrade (e.g. a real AST walk) SHOULD flip these.
+describe("census accepted boundaries (documented gaps, #9180)", () => {
+  it("fetch(<variable>) is invisible — no literal /api/ first arg", () => {
+    const src = `
+      const url = "/api/evade";
+      fetch(url);
+    `;
+    // No FetchSite is produced at all — the evasion is SILENT, not classified.
+    expect(censusMountFetches(src, "x.ts")).toEqual([]);
+  });
+
+  it("a named fetcher invoked outside useSWR still classifies swr-fetcher", () => {
+    const src = `
+      async function load() { const r = await fetch("/api/x"); return r.json(); }
+      function C() {
+        useSWR(["/api/x"], load);
+        useEffect(() => { void load(); }, []);  // the parallel channel — invisible
+      }
+    `;
+    const sites = censusMountFetches(src, "x.ts");
+    // Documented gap: the fetch inside load() is classified by fetcher-name
+    // wiring, so a mount-path direct call cannot flag it.
+    expect(sites).toEqual([{ file: "x.ts", line: 2, kind: "swr-fetcher" }]);
   });
 });
 

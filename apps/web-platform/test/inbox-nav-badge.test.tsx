@@ -12,8 +12,12 @@ vi.mock("swr", async (importOriginal) => {
   return { ...actual, default: (...args: unknown[]) => useSWRMock(...args) };
 });
 // #9178 — the badge defers its key until post-FCP in production; these tests
-// exercise the keyed fetch contract, so pin the gate open.
-vi.mock("@/hooks/use-post-fcp", () => ({ usePostFcp: () => true }));
+// exercise the keyed fetch contract, so pin the gate open by default (the
+// null-key direction gets its own row).
+const usePostFcpMock = vi.fn(() => true);
+vi.mock("@/hooks/use-post-fcp", () => ({ usePostFcp: () => usePostFcpMock() }));
+const usePathnameMock = vi.fn(() => "/dashboard");
+vi.mock("next/navigation", () => ({ usePathname: () => usePathnameMock() }));
 
 
 function action(n: number): MergedInboxItem[] {
@@ -73,6 +77,22 @@ async function renderBadge(collapsed = false) {
 describe("InboxNavBadge (outstanding action_required)", () => {
   it("keys the SAME shared SWR tuple the Inbox Active tab uses (dedup)", async () => {
     useSWRMock.mockReturnValue({ data: action(2), error: undefined });
+    await renderBadge();
+    const { swrKeys } = await import("@/lib/swr-config");
+    expect(useSWRMock.mock.calls[0]![0]).toEqual(swrKeys.inbox("active"));
+  });
+
+  it("pre-FCP on a non-inbox route passes a NULL key (deferral arm, #9178)", async () => {
+    usePostFcpMock.mockReturnValueOnce(false);
+    useSWRMock.mockReturnValue({ data: action(1), error: undefined });
+    await renderBadge();
+    expect(useSWRMock.mock.calls[0]![0]).toBeNull();
+  });
+
+  it("pre-FCP ON the inbox route still keys (route-primary exemption)", async () => {
+    usePostFcpMock.mockReturnValueOnce(false);
+    usePathnameMock.mockReturnValueOnce("/dashboard/inbox");
+    useSWRMock.mockReturnValue({ data: action(1), error: undefined });
     await renderBadge();
     const { swrKeys } = await import("@/lib/swr-config");
     expect(useSWRMock.mock.calls[0]![0]).toEqual(swrKeys.inbox("active"));

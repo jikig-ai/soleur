@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
-import useSWR, { SWRConfig } from "swr";
+import useSWR from "swr";
 import type { ReactNode } from "react";
 import { useActiveRepo } from "@/hooks/use-active-repo";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // #5394 AC4 controller — the while-`cloning` 2s poll that auto-transitions the
 // chat composer to ready WITHOUT a manual refresh. Fake timers are the faithful
@@ -17,20 +18,6 @@ import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 // The coalescing property the latch enforced is now SWR's own per-key in-flight
 // join — asserted by the two-consumers test below.
 
-function freshCache({ children }: { children: ReactNode }) {
-  return (
-    <SWRConfig
-      value={{
-        provider: () => new Map(),
-        dedupingInterval: 0,
-        focusThrottleInterval: 0,
-      }}
-    >
-      {children}
-    </SWRConfig>
-  );
-}
-
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -38,6 +25,10 @@ function jsonResponse(body: unknown): Response {
     // biome-ignore lint/suspicious/noExplicitAny: minimal Response stub
   } as any;
 }
+
+const freshCache = ({ children }: { children: ReactNode }) => (
+  <SwrTestProvider value={{ focusThrottleInterval: 0 }}>{children}</SwrTestProvider>
+);
 
 describe("useActiveRepo — while-cloning poll (#5394)", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
@@ -68,13 +59,19 @@ describe("useActiveRepo — while-cloning poll (#5394)", () => {
     await vi.waitFor(() => expect(result.current.data?.repoStatus).toBe("cloning"));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-    // Tick 2s → poll #2 (still cloning).
+    // Floor pin: the interval must sit OUTSIDE the 2s dedup window — at
+    // 2000ms there must be no tick yet (#9180 review: a 2000ms interval
+    // inside the window could stretch the effective cadence toward ~4s).
     await vi.advanceTimersByTimeAsync(2000);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // Tick 2.1s → poll #2 (still cloning).
+    await vi.advanceTimersByTimeAsync(150);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(result.current.data?.repoStatus).toBe("cloning");
 
-    // Tick 2s → poll #3 returns ready → composer auto-transitions.
-    await vi.advanceTimersByTimeAsync(2000);
+    // Tick → poll #3 returns ready → composer auto-transitions.
+    await vi.advanceTimersByTimeAsync(2100);
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     await vi.waitFor(() => expect(result.current.data?.repoStatus).toBe("ready"));
 
@@ -95,7 +92,7 @@ describe("useActiveRepo — while-cloning poll (#5394)", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     // Tick 2s → poll #2 returns error → refreshInterval re-evaluates to 0.
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(2100);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     await vi.waitFor(() => expect(result.current.data?.repoStatus).toBe("error"));
 
