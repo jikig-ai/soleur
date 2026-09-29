@@ -31,15 +31,15 @@ BEGIN
      OR (p_payload->>'source_type' <> 'status' AND p_payload ? 'status') THEN
     RAISE EXCEPTION 'event payload is not bounded lifecycle metadata' USING ERRCODE = '22023';
   END IF;
-  SELECT a.* INTO v_attempt FROM public.agent_engine_attempts AS a
-   WHERE a.id = p_attempt_id AND a.run_id = p_run_id FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'attempt does not belong to binding' USING ERRCODE = '42501';
-  END IF;
   SELECT r.auth_mode_generation INTO v_run_generation
     FROM public.agent_engine_runs AS r WHERE r.id = p_run_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'engine run not found' USING ERRCODE = 'P0002';
+  END IF;
+  SELECT a.* INTO v_attempt FROM public.agent_engine_attempts AS a
+   WHERE a.id = p_attempt_id AND a.run_id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'attempt does not belong to binding' USING ERRCODE = '42501';
   END IF;
   IF v_attempt.accepted_at IS NULL
      AND v_attempt.auth_mode_generation IS DISTINCT FROM v_run_generation
