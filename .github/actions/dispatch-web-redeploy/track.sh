@@ -47,10 +47,10 @@
 # Exit: 0 confirmed swap (frame ok, start_ts>PRIOR_START, tag==TARGET); 1 terminal
 # failure/timeout; 2 usage; 78 xtrace refusal.
 set -euo pipefail
-export LC_ALL=C
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential (WEBHOOK_DEPLOY_SECRET) and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
+export LC_ALL=C
 
 APP_DOMAIN_BASE="${APP_DOMAIN_BASE:-soleur.ai}"
 PEERS="${WEB_HOST_PRIVATE_IPS:-}"
@@ -94,7 +94,7 @@ echo "running version ${RUNNING_VERSION} → target tag ${TARGET_TAG} (same-imag
 # The GET signature is constant (empty body) — compute once, not per poll iteration.
 GET_SIG="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
 get_status() { # -> http_code; body lands in $TMP/status.json
-  curl -s --max-time 15 -o "$TMP/status.json" -w '%{http_code}' \
+  curl --disable --noproxy '*' -s --max-time 15 -o "$TMP/status.json" -w '%{http_code}' \
     -X GET -H "X-Signature-256: sha256=${GET_SIG}" \
     -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
     -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
@@ -124,7 +124,7 @@ echo "baseline start_ts=${PRIOR_START}"
 PAYLOAD="$(jq -cn --arg cmd "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform ${TARGET_TAG}" --arg peers "$PEERS" \
            'if $peers == "" then {command:$cmd} else {command:$cmd, peers:$peers} end')"
 POST_SIG="$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
-POST_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+POST_CODE="$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
   -X POST -H "Content-Type: application/json" \
   -H "X-Signature-256: sha256=${POST_SIG}" \
   -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
