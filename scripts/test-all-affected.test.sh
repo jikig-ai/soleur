@@ -1408,8 +1408,15 @@ if (
   # staged branch, both branch arms, the rename pair, and all three
   # untracked appends (scoped + both unscoped).
   awk '/^_diff_detect_ok=0$/,/^# Does this run'"'"'s diff/' "$RUNNER" > "$_staged_asm"
+  # Env-read pin (#9197 security seat): the shipped runner must contain NO
+  # `${SANDBOX_STAGED_NAMES+x}` read — the seam exists only in sandbox copies
+  # (build_sandbox §1b). Anchored on the +x expansion form, not the bare name,
+  # because the shipped staged branch's comment documents the anchor in
+  # prose — a bare-token grep would match the comment and pin nothing.
   _asm_gits=$(grep -c 'git ' "$_staged_asm")
-  if ! grep -qF 'diff --cached' "$_staged_asm" || (( _asm_gits < 6 )); then
+  if grep -qF 'SANDBOX_STAGED_NAMES+x' "$RUNNER"; then
+    fail "sc9: SANDBOX_STAGED_NAMES env-read found in the shipped runner — the seam must be injected, never shipped"
+  elif ! grep -qF 'diff --cached' "$_staged_asm" || (( _asm_gits < 6 )); then
     fail "sc9: assembly extraction missing the staged branch (diff --cached absent or truncated: ${_asm_gits} git lines)"
   else
     _staged_eval=$(cd "$REAL_REPO" && (
