@@ -358,8 +358,8 @@ if [[ -f "$MANIFEST" && -n "${LEG_N:-}" && "$LEG_BAD" -eq 0 ]]; then
     done < "$DURATIONS"
     # Label-set parity with the sibling manifest: either direction of
     # divergence leaves a consumer without its counterpart.
-    _dur_keys=$(grep -vE '^[[:space:]]*(#|$)' "$DURATIONS" | cut -f1 | LC_ALL=C sort -u)
-    _mf_keys=$(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST" | cut -f1 | LC_ALL=C sort -u)
+    _dur_keys=$(grep -vE '^[[:space:]]*(#|$)' "$DURATIONS" | cut -f1 | LC_ALL=C sort -u || true)
+    _mf_keys=$(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST" | cut -f1 | LC_ALL=C sort -u || true)
     if [[ "$_dur_keys" != "$_mf_keys" ]]; then
       err "suite-durations.tsv and suite-shard-legs.tsv cover different label"
       err "  sets — a label has weight in one and no placement in the other."
