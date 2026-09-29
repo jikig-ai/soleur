@@ -147,7 +147,7 @@ These files match the CI guard's determination-shaped pattern under
 nothing is silently dropped.
 
 **Two dispositions, and they are not the same claim — and as of 2026-09-04 only one of them is
-live.** All **nineteen** rows below are *assessed and outside* the inclusion predicate (the count was last restated 2026-09-28, #8918; earlier revisions read "sixteen" against a table that already held seventeen, and "thirteen" against a table that already held fifteen). An earlier
+live.** All **twenty** rows below are *assessed and outside* the inclusion predicate (the count was last restated 2026-09-29, #8634; earlier revisions read "sixteen" against a table that already held seventeen, and "thirteen" against a table that already held fifteen). An earlier
 revision of this paragraph carried a second disposition, **undetermined**, for two Sentry audits
 surfaced when the producer pattern was widened on 2026-09-03. Both were ruled on 2026-09-03 in
 §Rulings on the two waivers recorded as pending, and attested 2026-09-04 at
@@ -187,6 +187,7 @@ as the standing rule for the next row. The machine-readable waiver list lives in
 | `knowledge-base/legal/audits/2026-09-counsel-review-8754.md` | Not a determination: the **ship Phase 5.5 counsel review (CLO-agent attestation) of the #8754 inngest cloud-firewall records** (PR #8831). The determination it attests is indexed separately as this register's 2026-09-25 row (`knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`). |
 | `knowledge-base/legal/audits/2026-09-counsel-review-8918.md` | Not a determination: the **counsel review (CLO-agent attestation) of the #8918 `pending_checkout_sessions` legal lockstep** (migration 144 + the four legal docs, DSAR exclusion, PA-3 markers, PR #9115). Its Art. 33/34 mentions record that **no** trigger exists — a transient operational claim-table introduction destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same disposition as the #8043, #8189 and #5274 rows above: assessed and outside the inclusion predicate (#8918). |
 | `knowledge-base/legal/audits/2026-09-counsel-review-9034.md` | Not a determination: the **ship Phase 5.5 counsel review (CLO-agent attestation) of the #8978 / PR #9034 legal-doc lockstep amendments** (the bounded DSAR re-authentication technical-behavior note across the three published docs, their mirrors and `compliance-posture.md`). Its Art. 33/34 mentions are the frontmatter recording that **no** trigger exists — a documentation-and-timeout change destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the `2026-09-counsel-review-8043`, `-8189`, `-8159`, `-8205`, `-8248`, `-7226` and `-5274` rows above; citing #8978. |
+| `knowledge-base/legal/audits/2026-09-counsel-reattestation-8634.md` | Not a determination: the CLO re-attestation discharging #8634 — it records that row D5 of `2026-09-counsel-review-8189.md`'s forward claim was superseded by ADR-239. Its Art. 33/34 mentions are the frontmatter fields recording that NO trigger exists — recording a supersession of a dated attestation assesses no fact pattern and makes no Art. 4(12) determination (#8634) |
 
 ## Register maintenance
 
