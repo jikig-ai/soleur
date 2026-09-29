@@ -13,7 +13,7 @@ Plan: `knowledge-base/project/plans/2026-09-29-fix-bun-test-hook-runner-changed-
 ## Phase 2: Scope-aware runner-changed + hook wiring
 
 - [x] 2.1 In the affected pre-pass, give the `runner-changed` arm a scope conjunct: `branch` → existing full-battery fallback unchanged; `staged` → leave `_aff_fallback` empty, emit the scoped runner-in-scope note (e.g. `AFFECTED_RUNNER_IN_SCOPE reason=runner-changed`), proceed with normal edge selection.
-- [x] 2.2 `lefthook.yml` `bun-test` stanza: `run:` becomes `TC_QUEUE_TIMEOUT=300 bash scripts/test-all.sh --affected --affected-scope=staged`; update the stanza comment to state the commit-scope contract (staged diff; bounded queue via `LOCK_CONTENDED_PROCEEDING`; CI is the authoritative full net). Keep `skip: merge` and the `*.{ts,tsx,js,jsx}` glob byte-stable.
+- [x] 2.2 `lefthook.yml` `bun-test` stanza: `run:` becomes `TC_LOCK_TIMEOUT=300 bash scripts/test-all.sh --affected --affected-scope=staged`; update the stanza comment to state the commit-scope contract (staged diff; bounded queue via `LOCK_CONTENDED_PROCEEDING`; CI is the authoritative full net). Keep `skip: merge` and the `*.{ts,tsx,js,jsx}` glob byte-stable.
 - [x] 2.3 Verify on a scratch branch: `test-all.sh` in the branch diff + staged `*.test.ts` → `MODE=affected` + `AFFECTED_SCOPE scope=staged`, no `AFFECTED_FALLBACK`.
 
 ## Phase 3: Mutation coverage, stanza pin, ADR amendment (write failing arms FIRST)

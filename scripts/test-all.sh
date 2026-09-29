@@ -996,6 +996,7 @@ if (( _AFF_SCOPE_REQ == 1 )); then
   esac
   if (( _FULL_REQ == 1 )); then
     echo "ERROR: --affected-scope cannot be combined with --full — the whole battery consults no diff." >&2
+    echo "       Valid invocations: --affected [--affected-scope=branch|staged] or TEST_GROUP=affected." >&2
     exit 2
   fi
   if [[ "$TEST_GROUP" != "all" && "$TEST_GROUP" != "affected" ]]; then
@@ -1884,15 +1885,14 @@ ${_diff_out}"
   fi
   _diff_names="${_diff_names}
 $(git -c core.quotePath=false diff --cached --name-status -M 2>/dev/null || true)"
-  # SANDBOX_STAGED_NAMES — the staged-scope twin of the SANDBOX_DIFF_NAMES seam
-  # test-all-affected.test.sh injects post-assembly. It ships INLINE inside
-  # this branch by design: a post-assembly substitution cannot prove the
-  # branch sources below stayed dark under staged scope, because a leak would
-  # land ON TOP of the substituted set. A supplied staged set stands in for a
-  # successful index read, so the detection arms set to 1 with it; a real
-  # `git diff --cached` failure still degrades via SANDBOX_DETECT_OK.
-  [[ -n "${SANDBOX_STAGED_NAMES+x}" ]] \
-    && { _diff_names="$SANDBOX_STAGED_NAMES"; _diff_detect_ok=1; _diff_head_ok=1; }
+  # The SANDBOX_STAGED_NAMES seam is INJECTED HERE by
+  # test-all-affected.test.sh's build_sandbox — never shipped inline (#9197
+  # security seat: an env-readable substitution in production is the first
+  # SANDBOX_* seam that could narrow a real run's diff). Intra-branch
+  # placement is still required: a post-assembly substitution cannot prove
+  # the branch sources below stayed dark, because a leak would land ON TOP
+  # of the substituted set. The anchor is the `diff --cached --name-status`
+  # line above — the injection asserts exactly one.
 fi
 if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
   _diff_head_ok=1
@@ -1957,6 +1957,12 @@ if (( _AFFECTED == 1 )); then
 $(git ls-files --others --exclude-standard 2>/dev/null || true)"
   fi
 fi
+# The TEST_GROUP=affected append below carries the same nested scope guard as
+# the _AFFECTED block above — and the guard MUST stay nested in the same
+# shape: test-all-group-affected.test.sh's A7 arm pins `git ls-files` at
+# exactly opener+3 via grep -A3, so ANY line inserted inside this block
+# (including a comment) pushes the command past the pin. If the layout must
+# change, change the sibling pin with it.
 if [[ "$TEST_GROUP" == "affected" ]]; then
   if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
   _diff_names="${_diff_names}
@@ -2720,15 +2726,24 @@ _MIN_ALWAYS_ON_DECLARED=100
 # classifier's `group` rung selects it unconditionally. The nested enumerate
 # would buy nothing but a second ~440-registration walk.
 if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
+  # Runner/index membership, computed ONCE for both consumers — the
+  # branch-scope ladder arm and the staged-scope in-walk note — so the two
+  # sites cannot drift and a third runner-critical path updates one place.
+  # NOT _diff_touches: its unconditional bypasses (FORCE_ALL / _FULL_GATE /
+  # CI) are a policy verdict, not membership — `CI=1 --affected` would report
+  # runner-changed on a diff containing no such path.
+  _aff_runner_in_diff=0
+  if grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
+    || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; then
+    _aff_runner_in_diff=1
+  fi
   if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then
     _aff_fallback="force-all"
   elif (( _AFF_LIB_OK == 0 )); then
     _aff_fallback="index-missing"
   elif [[ "$_diff_detect_ok" == "0" || "$_diff_head_ok" == "0" ]]; then
     _aff_fallback="undecidable-diff"
-  elif [[ "${_AFF_SCOPE:-branch}" != "staged" ]] \
-    && { grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
-      || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; }; then
+  elif [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && (( _aff_runner_in_diff == 1 )); then
     # The runner and the index are their own SUT: a diff touching either could
     # be narrowing the very selection this run is about to apply. Under staged
     # scope this arm is DARK BY CONSTRUCTION (#9173, #9197 review): firing it
@@ -2740,6 +2755,10 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
   elif (( ${#ALWAYS_ON_SUITES[@]} < _MIN_ALWAYS_ON_DECLARED )); then
     printf 'AFFECTED_UNRESOLVED\treason=below-floor declared=%d floor=%d\n' \
       "${#ALWAYS_ON_SUITES[@]}" "$_MIN_ALWAYS_ON_DECLARED"
+    # Refusal-path scope provenance (#9197 review): a refused staged run must
+    # still name which diff it consulted — the refusal exits before the
+    # scope line below fires.
+    [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && printf 'AFFECTED_SCOPE\tscope=staged\n'
     echo "ERROR: refusing affected-gate run — ALWAYS_ON_SUITES declares" >&2
     echo "       ${#ALWAYS_ON_SUITES[@]} suites, below the ${_MIN_ALWAYS_ON_DECLARED} floor." >&2
     echo "       The declarations lib looks gutted; run the whole battery instead:" >&2
@@ -2755,9 +2774,7 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
     # ladder consumed the chain and left every registration selecting
     # (silent full battery — #9197 review P1). The below-floor census refusal
     # above still precedes it, so a gutted-but-parseable index refuses first.
-    if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
-      && { grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
-        || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; }; then
+    if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && (( _aff_runner_in_diff == 1 )); then
       printf 'AFFECTED_RUNNER_IN_SCOPE\treason=runner-changed\n'
       echo "[affected] staged diff contains a runner/index path — bounded selection via self-edges + always-on battery (no full-corpus fallback under --affected-scope=staged)." >&2
     fi
@@ -2810,6 +2827,9 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
         # reachable selection is empty would exit green having executed
         # nothing — the zero-coverage shape the shard guard already refuses.
         printf 'AFFECTED_UNRESOLVED\treason=zero-selected\n'
+        # Refusal-path scope provenance — an empty selection under staged
+        # scope is a different diagnosis from an empty branch diff; name it.
+        [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && printf 'AFFECTED_SCOPE\tscope=staged\n'
         echo "ERROR: refusing affected-gate run — the diff selects ZERO of the" >&2
         echo "       ${_aff_ordinal} reachable registrations. That is not a green gate; it is" >&2
         echo "       no gate. Run the whole battery:" >&2
@@ -2846,7 +2866,7 @@ fi
 # staged flag under CI/full (`_AFFECTED=0`) prints nothing: the flag is a
 # no-op there and the line would claim a scope no run consulted.
 if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
-  && { (( _AFFECTED == 1 )) || [[ "$TEST_GROUP" == "affected" ]]; }; then
+  && { (( _AFFECTED == 1 || _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" == "affected" ]]; }; then
   printf 'AFFECTED_SCOPE\tscope=staged\n'
 fi
 
