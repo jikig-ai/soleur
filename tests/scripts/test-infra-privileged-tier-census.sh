@@ -630,6 +630,38 @@ check("G1i: every \"Extract backend credentials\"-shaped step in a Tier-B job re
       "prd_terraform AWS_* fallback [AC7b; %d such steps]" % n_extract,
       not bad_extract, sorted(set(bad_extract))[:8])
 
+# Root-specificity pin (measured gap, O8 migration run): G1i's alias exemption verifies a Tier-B
+# pair beats prd_terraform, but it cannot see WHICH Tier-B pair a root needs. The root-key root's
+# backend bucket is `soleur-terraform-state-privileged`, which answers only to the loader's
+# GIT_DATA_ROOT_STATE_* pair — the generic AWS_* alias (the TF_STATE_* pair, scoped to the legacy
+# bucket) gets 403 on it. The workflow's extract step must therefore name the root-key pair first;
+# an `${AWS_ACCESS_KEY_ID:-...}`-first form satisfies G1i while routing the wrong credential.
+_rk_doc, _rk_text = docs.get(os.path.join("workflows", "apply-git-data-root-key.yml"), ({}, ""))
+# Comments stripped before matching — the same laundering class g1-g1 was hardened for: a
+# `# prefers ${GIT_DATA_ROOT_STATE_*}` line above a non-compliant body must not satisfy it.
+_rk_extract = [
+    "\n".join(ln for ln in b.split("\n") if not ln.lstrip().startswith("#"))
+    for b in step_bodies(_rk_doc)
+]
+_rk_extract = [b for b in _rk_extract if "doppler secrets get AWS_ACCESS_KEY_ID" in b]
+def _pos(body, needle):
+    # +inf when absent: the ordering chain then fails closed rather than raising ValueError
+    # out of the census entirely (measured: the dropped-pair mutant killed the script before
+    # the row printed, and mutant_red read the dead run as "stayed green").
+    return body.index(needle) if needle in body else 1 << 30
+_rk_order_ok = all(
+    _pos(b, "${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID") < _pos(b, "${AWS_ACCESS_KEY_ID")
+    < _pos(b, "doppler secrets get AWS_ACCESS_KEY_ID")
+    and _pos(b, "${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY") < _pos(b, "${AWS_SECRET_ACCESS_KEY")
+    < _pos(b, "doppler secrets get AWS_SECRET_ACCESS_KEY")
+    for b in _rk_extract
+)
+check("G1i-rk: apply-git-data-root-key.yml's extract step reads GIT_DATA_ROOT_STATE_AWS_* before "
+      "the AWS_*/prd_terraform fallback (the privileged bucket answers only to that pair) "
+      "[%d extract steps]" % len(_rk_extract),
+      len(_rk_extract) == 1 and _rk_order_ok,
+      "extract_steps=%d order_ok=%s" % (len(_rk_extract), _rk_order_ok))
+
 # ── Guard 2 ────────────────────────────────────────────────────────────────────────
 BASH_CALL = re.compile(r"(?<![\w/-])bash\s+(?!-)([\"']?)([^\s\"';|&)]+)\1")
 
@@ -918,7 +950,7 @@ check("G5c: the input-validation, interlock and typo-guard steps stay UNCONDITIO
 
 print("\n".join(out))
 PY
-CENSUS_ROWS=20
+CENSUS_ROWS=23  # 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row.
 
 # census_rows <tsv> <err> — reports every row of one census run through pass()/fail().
 census_rows() {
@@ -1067,7 +1099,7 @@ jobs:
           doppler run --preserve-env -p soleur -c prd_terraform -- echo sync
 EOF
 
-cat > "$FIX/tree/.github/workflows/rootkey.yml" <<'EOF'
+cat > "$FIX/tree/.github/workflows/apply-git-data-root-key.yml" <<'EOF'
 name: fixture root key apply
 on: workflow_dispatch
 env:
@@ -1078,6 +1110,15 @@ jobs:
     environment: web-platform-infra-apply
     steps:
       - uses: ./.github/actions/infra-credentials
+      - name: Extract R2 backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEY_ID="${GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)}}"
+          SECRET="${GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)}}"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
       - name: Apply the root key root
         working-directory: ${{ env.ROOT_KEY_DIR }}
         env:
@@ -1481,7 +1522,7 @@ fi
 # `git_data_host_replace` as it exists today: it shipped with no environment ON PURPOSE, so the row
 # must red on that job plus a loader, not only on a synthetic one.
 MUTDIR="$(fixcopy g1-8)"; assert_fixture_dir "$MUTDIR"
-if mutate g1-8-environment-deleted "$MUTDIR/tree/.github/workflows/rootkey.yml" 1 '/^    environment: web-platform-infra-apply$/d'; then
+if mutate g1-8-environment-deleted "$MUTDIR/tree/.github/workflows/apply-git-data-root-key.yml" 1 '/^    environment: web-platform-infra-apply$/d'; then
   fixcensus "$MUTDIR" "$T/mut/g1-8.tsv" ""
   mutant_red g1-8-environment-deleted wf_row "$T/mut/g1-8.tsv" "G1b:"
 fi
@@ -1573,6 +1614,23 @@ if mutate g1-i2-alias-wrong-source "$MUTDIR/tree/.github/actions/infra-credentia
      's/TF_STATE_AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)/LEGACY_AWS_\1/'; then
   fixcensus "$MUTDIR" "$T/mut/g1-i2.tsv" ""
   mutant_red g1-i2-alias-wrong-source wf_row "$T/mut/g1-i2.tsv" "G1i-pre:"
+fi
+# Row i3 — the measured O8 regression shape: the root-key root's extract step prefers the
+# GENERIC AWS_* alias (the legacy-bucket pair) over GIT_DATA_ROOT_STATE_AWS_*. G1i alone stays
+# green on this — it counts the alias form as compliant; only the root-specificity row sees it.
+MUTDIR="$(fixcopy g1-i3)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-i3-rootkey-pair-dropped "$MUTDIR/tree/.github/workflows/apply-git-data-root-key.yml" 4 \
+     's/\$\{GIT_DATA_ROOT_STATE_AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY):-//g'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-i3.tsv" ""
+  mutant_red g1-i3-rootkey-pair-dropped wf_row "$T/mut/g1-i3.tsv" "G1i-rk:"
+fi
+# Row i4 — the REORDER shape review named: the GIT_DATA pair still appears (satisfying presence
+# and the doppler-order limb) but the generic alias wins precedence — the exact O8 defect.
+MUTDIR="$(fixcopy g1-i4)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-i4-rootkey-pair-reordered "$MUTDIR/tree/.github/workflows/apply-git-data-root-key.yml" 4 \
+     's/\$\{GIT_DATA_ROOT_STATE_AWS_(\w+):-\$\{AWS_\1/\$\{AWS_\1:-\$\{GIT_DATA_ROOT_STATE_AWS_\1/g'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-i4.tsv" ""
+  mutant_red g1-i4-rootkey-pair-reordered wf_row "$T/mut/g1-i4.tsv" "G1i-rk:"
 fi
 
 # ── Guard 4 row e ────────────────────────────────────────────────────────────────────
@@ -1693,7 +1751,8 @@ fi
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
 # 26 -> 27 (review W1): M-g1-10-destroy-only-no-environment.
 # 27 -> 30 (#8714): M-g4-6 (two landings) and M-g4-7, the intended-destroy allowance rows.
-MUTANT_FLOOR=30
+# 30 -> 32 (#9215): M-g1-i3 and M-g1-i4, the root-key extract-precedence mutants (drop + reorder).
+MUTANT_FLOOR=32
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -1702,7 +1761,8 @@ fi
 _ran=$((passes + fails))
 # 80 -> 82 (review W1): M-g1-10's fixture-written row and its RED row. Measured: 82 ran.
 # 82 -> 88 (#8714): live G4f, and M-g4-6/M-g4-7 (3 landings + 2 verdicts). Measured: 88 ran.
-FLOOR=88
+# 88 -> 93 (#9215): live G1i-rk, and M-g1-i3/M-g1-i4 (2 landings + 2 verdicts). Measured: 93 ran.
+FLOOR=93
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
