@@ -11,6 +11,21 @@ brand_survival_threshold: none
 
 ## Overview
 
+**Deepened:** 2026-09-29 via `deepen-plan` (sequential fallback — no Task
+fan-out in this harness; halt gates 4.5–4.11 executed mechanically, all green;
+verify-the-negative and self-review passes run inline). Key deepen findings:
+(1) `apply-deploy-pipeline-fix.yml` deliberately excludes `server.tf` from
+`paths:` (R13 comment) — the sibling still applies because the diff touches
+`ci-deploy.sh`/`cat-deploy-state.sh`, both listed; (2)
+`apply-web-platform-infra.yml` fires on `infra/**` and must never `-target`
+the sibling — recorded under Phase 3/NFR5; (3) `triggers_replace` needs the
+sentinel convention (`terraform_data` cannot see provisioner-body drift) and
+must exclude `local.webhook_doppler_token_env`; (4) the credential-exclusion
+became a mechanical assertion inside the provisioner-parity guard (Guard 2,
+mutation row 6); (5) Downtime & Cutover assessed — `try-restart webhook` on a
+weight-0 standby is the nearest downtime-class op, with a named casualty class
+(dropped one-shot `deploy-peer` POST, self-reporting via the parity check).
+
 web-2 (`hcloud_server.web["web-2"]`, server 167390740, born 2026-09-25) receives
 `/usr/local/bin/ci-deploy.sh` exactly once, from its birth cloud-init, because
 `hcloud_server.web` carries `ignore_changes = [user_data]` and the re-delivery
@@ -254,7 +269,14 @@ Stack emission; the apply workflow's verify step runs it.
 - `triggers_replace`: `sha256(join(",", [...]))` over `file()` of every
   delivered repo file, `local.hooks_json`, `hcloud_server.web["web-2"].id`
   (the fresh-host/cattle-replacement re-fire — `docker_seccomp_config`
-  precedent), and `file("web-2-ssh-host-key.pub")` (re-key re-fire). The
+  precedent), `file("web-2-ssh-host-key.pub")` (re-key re-fire), and a
+  **sentinel string** bumped whenever the inline `remote-exec` list changes
+  (`terraform_data` does not detect provisioner-body drift — the convention
+  `deploy_pipeline_fix`'s header documents). Exclusions vs. web-1's hash:
+  `local.webhook_doppler_token_env` (the token is not delivered — a rotation
+  must NOT re-fire web-2 delivery, because nothing the sibling carries changes;
+  the web-1 push re-fires to deliver the token itself), and
+  `push-infra-config.sh` (runner-side only; never lands on a host). The
   pin-file hash means `web-2-ssh-host-key.pub` must join the
   `apply-deploy-pipeline-fix.yml` `paths:` list and TRIGGER_FILES so a re-key
   fires the apply (lockstep asserted by `ship-deploy-pipeline-fix-gate.test.ts`
@@ -448,6 +470,40 @@ Stack emission; the apply workflow's verify step runs it.
    after repeated auth failures — the forward must authenticate cleanly or not
    retry-storm (Risk R5). [verified by config read + issue evidence]
 
+### Network-Outage Deep-Dive (deepen-plan 4.5 — fired on SSH trigger)
+
+Layer-by-layer verification status for the new CI→web-2 leg:
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall (public path, operator keyscan) | VERIFIED | egress `82.67.29.121` ∈ `ADMIN_IPS` (Doppler `prd_terraform`, 2026-09-29); `ssh-keyscan 204.168.189.200` returned ECDSA-P256 |
+| L3 DNS/routing | VERIFIED | no new DNS needed — the leg rides the existing `ssh.` ingress to web-1, then the private net (web-2 NIC live at 10.0.1.11, Hetzner API 2026-09-29) |
+| L7 TLS/proxy (CI path) | VERIFIED | existing CF Access `ssh` app + `ci_ssh` service token authenticate the bridge; the `-L` session inherits them (no new Access object) |
+| L7 application | VERIFIED-BY-PRECEDENT | web-1's sshd already answers direct-tcpip forwards for the ADR-220 git-data channel (`-W 10.0.1.20:22`, "Transport LIVE, measured", C4 model, accepted 2026-09-27); web-2 sshd on private NIC confirmed by config + webhook liveness evidence |
+| Work-time belts | PENDING | `command -v ssh` on the runner (ubuntu-latest ships openssh-client — not currently used by the bridge, which runs cloudflared only); `sshd -T` `allowtcpforwarding` read via the pinned channel before first apply |
+
+No gap requires a new production surface before implementation; the one
+unverified-by-measurement item (web-1 `AllowTcpForwarding`) has a live
+precedent and a work-time probe with a named fallback (`ssh-web-2.` ingress).
+
+## Downtime & Cutover (deepen-plan 4.55 — assessed)
+
+**Nearest downtime-class operation:** `systemctl try-restart webhook` on
+web-2 inside the sibling's remote-exec. web-2 is a serving-weight-0 standby
+outside the app A record — no user traffic transits it, so no user-facing
+surface goes offline. The one in-flight casualty class is a `deploy-peer`
+POST from web-1 arriving during the bounce window: `fan_out_to_peers` is
+one-shot (logs accept/not-accepted, no retry), so a dropped call leaves web-2
+on its previous deploy until the next deploy — a degraded, self-reporting
+state (the parity assertion then reads drift, exactly what it exists for).
+Zero-downtime alternatives evaluated: (a) restart-free delivery — rejected,
+the new `hooks.json` only takes effect on listener start, and deferring
+activation recreates the "delivered but inert" defect class (#7103 R2);
+(b) ordering the restart last with `is-active` assertion + a bounded
+`systemctl is-failed` rollback report — adopted. Residual downtime: none on
+any user-serving surface; ~sub-second listener gap on web-2's :9000 with a
+named failure mode. No maintenance window or operator sign-off needed.
+
 ## Files to Create
 
 - `apps/web-platform/infra/web-2-ssh-host-key.pub` — committed ECDSA-P256 pin
@@ -629,7 +685,11 @@ block in `apps/web-platform/infra/*.tf` (the chokepoint — new provisioners
 cannot bypass it) and every destination write vs. the fresh-boot path. The
 sibling class rule: a resource whose connection dials `web["web-2"]` must set
 `host_key = local.web_2_ssh_host_key`; all others dialing `web["web-1"]` keep
-`local.web_1_ssh_host_key`; ALLOWED_HOST_KEYS gains exactly one member.
+`local.web_1_ssh_host_key`; ALLOWED_HOST_KEYS gains exactly one member. The
+same sweep gains a credential-exclusion assertion over the sibling's block
+text — no `webhook_doppler_token_env`, `SOLEUR_DOPPLER_TOKEN`, or
+`soleur-doppler-token` reference may appear in a `web["web-2"]`-dialing
+resource (the #7103 constraint made mechanical).
 
 **Mutation matrix:**
 
@@ -640,6 +700,7 @@ sibling class rule: a resource whose connection dials `web["web-2"]` must set
 | 3 | Second `connection` block added to the sibling (or a second web-2 sibling without pin) | RED — per-block census, not totals |
 | 4 | FLOOR_RESOURCES left at 18 while the sibling exists | RED — floor proves the census ran over the new member |
 | 5 | Harness: mutation battery adds "sibling present but unpinned" and "sibling pinned to web-1 key" rows | both must drive RED — recorded in web-host-provisioner-parity-mutation.test.sh |
+| 6 | Sibling gains any reference to `webhook_doppler_token_env` / `SOLEUR_DOPPLER_TOKEN` / the token env-file path | RED — the credential-exclusion is a checked invariant of this resource class, not a review-time convention |
 
 ## Infrastructure (IaC)
 

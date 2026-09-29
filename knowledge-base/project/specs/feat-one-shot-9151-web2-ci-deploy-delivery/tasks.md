@@ -33,7 +33,9 @@ Plan: `knowledge-base/project/plans/2026-09-29-fix-web-2-ci-deploy-delivery-plan
       `systemctl try-restart webhook` + `is-active` assertion
 - [ ] `triggers_replace = sha256(join(",", [...]))` over all delivered files +
       `local.hooks_json` + `hcloud_server.web["web-2"].id` +
-      `file("web-2-ssh-host-key.pub")`
+      `file("web-2-ssh-host-key.pub")` + a sentinel string bumped on any inline
+      remote-exec edit. EXCLUDE `local.webhook_doppler_token_env` and
+      `push-infra-config.sh` (token not delivered; push script is runner-side)
 - [ ] Comment block at the resource: `apply-deploy-pipeline-fix.yml` is its
       sole carrier (apply-web-platform-infra's bridge has no web-2 forward)
 
@@ -81,8 +83,12 @@ Plan: `knowledge-base/project/plans/2026-09-29-fix-web-2-ci-deploy-delivery-plan
       resources pin `local.web_2_ssh_host_key`), FLOOR_RESOURCES 18→19,
       FLOOR_DESTS bump, ALLOWED_HOST_KEYS extension, dials-web-2 counterpart
       rule
+- [ ] `web-host-provisioner-parity.test.sh` gains a credential-exclusion scan
+      over web-2-dialing blocks: no `webhook_doppler_token_env` /
+      `SOLEUR_DOPPLER_TOKEN` / `soleur-doppler-token` reference
 - [ ] `web-host-provisioner-parity-mutation.test.sh`: new rows — sibling
-      unpinned, sibling pinned to web-1 key, sibling repointed to web-1 host
+      unpinned, sibling pinned to web-1 key, sibling repointed to web-1 host,
+      sibling referencing the token env
 - [ ] Check `ship-deploy-pipeline-fix-gate.test.ts` triggers_replace sweep
       scope; comment/document either way
 - [ ] ADR-114 addendum (one-SSHable-host constraint lifted for web-2 via the
