@@ -15,3 +15,13 @@ None — all pre-commit hooks (gitleaks, lint-infra-no-human-steps, markdown-lin
 
 ### Components Invoked
 `soleur:plan` (in-process read of SKILL.md + references), `soleur:deepen-plan` (in-process read of SKILL.md + all 4.x gates inline), `scripts/markdown-lint.sh` (in-scope-exempt), `python3 scripts/lint-guard-contract.py` (green), `gh` (issue/PR/artifact verification), lefthook pre-commit hooks via `git commit`/`git push`.
+
+## Work Phase (in progress)
+- RED: `regenerate-shard-manifest.test.sh` fixtures D3/I/J/K/L/M/N/O + MIN_CASES=40; `scripts-shard-manifest.test.sh` durations block (light+heavy) + MIN_CASES=45; `test-infra-suite-registration.sh` durations coherence arm + mutations M28–M30 (MIN_ASSERTS=31).
+- GREEN: generator v3 — `green_main_runs()` via `gh run list` (the REST runs-list endpoint 404s under `gh api -f` because -f flips to POST; artifacts endpoint unaffected), `--runs N` (default 5), repeatable `--timings-dir`, `--durations`/`--durations-out`, `--legs K`, median aggregation, floor tabling with src=measured|floor, all-floor WARN-degrade, committed-manifest n-mismatch refusal.
+- Regenerated: light 519 rows (spread 21s across 7 legs), heavy 3, infra 154 (3 of 5 recent green runs had no infra artifacts — paths-filtered; multi-run aggregation carried the gap + floored 10).
+- Probe: `scripts/followthroughs/ci-leg-balance-9232.sh` + stub-gh fixture harness, 9/9 arms green, registered in test-all.sh (single hunk).
+- Docs: ci.yml positional-era comment replaced, runbook Regeneration section rewritten, ADR-240 amendment appended, consumption-contract comment posted on #8231.
+- Verified: local K=4 pack from committed durations table → SOLEUR_SHARD_MANIFEST enumerate union == full set (519), disjoint legs.
+- PENDING AT SHIP: post `soleur:followthrough` directive comment on #9232 with earliest=<merge ts> to enroll the probe.
+- Affected battery (`test-all.sh --affected`) running in background.
