@@ -2341,32 +2341,33 @@ resource "sentry_alert" "image_freshness_mismatch" {
 # ── Inngest host provisioning failure, non-pull (#9176) ───────────────────────
 # The dedicated inngest host's soleur-inngest-provision unit (ADR-257) reports through
 # soleur-boot-emit (cloud-init-inngest.yml), which tags each event stage/detail/host_id/host_name.
-# Its on_exit trap emits stage=provision_attempt_failed at warning for EVERY non-zero exit, with
-# detail `rc=<rc>.attempt=<n>.why=<last_stage>.iid=<iid>`. So the isolation-check FATAL,
-# provision-fsm-busy, a bootstrap exit, an unnamed arm and a TimeoutStartSec kill all arrive as
-# this one stage, told apart by why=. A degraded bootstrap (SQLite-only, no latch, not retried
-# until the next boot) emits stage=bootstrap_done_degraded at warning; it is paged too.
+# Once its on_exit trap is armed, every non-zero exit emits stage=provision_attempt_failed at
+# warning with detail `rc=<rc>.attempt=<n>.why=<last_stage>.iid=<iid>` (the earlier xtrace refusal
+# and a SIGKILL emit nothing). So the isolation-check FATAL, provision-fsm-busy, a bootstrap exit,
+# an unnamed arm and a TimeoutStartSec kill all arrive as this one stage, told apart by why=. A
+# degraded bootstrap (SQLite-only, no latch, not retried until the next boot) emits
+# stage=bootstrap_done_degraded at warning once per boot; it is paged too.
 #
-# logic_type = "all" is load-bearing. Every boot stage of every host shares ONE issue group
-# (WEB-PLATFORM-4S), and the nc row alone passes for any event whose detail lacks the string, so
-# under "any" this rule would page on every boot (inngest_zot, private_nic_ok, web-host stages).
+# logic_type = "all" is load-bearing. Every web and inngest host boot stage shares ONE issue group
+# (WEB-PLATFORM-4S, "soleur-cloud-init boot stage"), and the nc row alone passes for any event whose
+# detail lacks the string, so under "any" this rule would page on every boot.
 #
 # A pull miss is excluded: both pull-fatal arms set last_stage=inngest_pull_fatal and emit
 # stage=inngest_pull_fatal (paged by zot_mirror_fallback_rate) before exiting, so on_exit's
-# `why=inngest_pull_fatal` event would page the same group a second time. nc is a case-insensitive
-# SUBSTRING match: keep pull-fatal stage names distinct from any stage that must page.
+# `why=inngest_pull_fatal` event would page the same group a second time. Emitted is not delivered
+# (soleur-boot-emit has no retry; a lost POST shows as sentry-emit-FAILED in Better Stack). nc is a
+# case-insensitive SUBSTRING match: keep pull-fatal stage names distinct from any stage that must
+# page.
 #
-# value = 0 pages on the first event (see zot_mirror_fallback_rate). Never mute WEB-PLATFORM-4S to
-# quiet this rule: that silences every boot stage of every host. Raise frequency_minutes or set
-# enabled = false here instead. frequency_minutes = 120: a persistently failing unit retries
-# without limit (ADR-257 measured ~26 events/h at first, ~4/h once backed off), so this re-pages
-# at most every 2 h; the first failure pages at once. Distinct from every other rule in the root
-# (the op-contract test enforces it), which avoids Sentry POST-time duplicate dedup.
-#
-# Known one-off benign pages: rc=143 from a shutdown or reboot mid-attempt on an unlatched host,
-# and a single transient failure the next retry heals; why=/attempt= make both self-evident.
-# Arms dark: the unit reaches the live host only with the next inngest-host-replace (ADR-257
-# §Status). Events carry rc, attempt, a stage name and the instance id — no user content.
+# value = 0 pages on the first event (see zot_mirror_fallback_rate). frequency_minutes = 120: the
+# unit retries without limit (~8 attempts in the first hour, ~4/h once backed off — the comment on
+# soleur-inngest-provision.service), so this re-pages at most every 2 h. The throttle is per issue
+# group and shared by both stages: a once-per-boot degraded event arriving within 2 h of a failure
+# page is suppressed and never re-emitted (runbook covers the read). Distinct from every other
+# rule's frequency in the root (the op-contract test enforces it), which avoids Sentry POST-time
+# duplicate dedup. Arms dark until the next inngest-host-replace delivers the unit (ADR-257
+# §Status). Reading and quieting a page: runbook inngest-server.md § "Reading an
+# inngest-provision-failure page".
 resource "sentry_alert" "inngest_provision_failure" {
   organization      = var.sentry_org
   name              = "inngest-provision-failure"

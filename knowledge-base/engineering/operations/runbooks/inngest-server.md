@@ -293,17 +293,18 @@ runs. The readers for provision stages are the follow-through probe and the quer
 | `provision-unit-armed iid=…` (Better Stack) | `runcmd` enabled the timer and started the unit. Once per host life. |
 | `provision-attempt-start attempt=N` (Better Stack) | Attempt N began. N counts every attempt since the host was born (the counter is on the root disk). |
 | `provision-env-MISSING keys=…` (Better Stack) | The env file exists but lacks a required key. The attempt ends before any Doppler call. |
+| `provision-nic-ABSENT ip=…` (Better Stack) | The private NIC was still absent after the NIC wait; the attempt ended and retries. |
 | `isolation-check-FAILED` (Better Stack) | The Doppler boot credential failed the isolation self-check; the attempt ended before any pull. |
 | `zot-creds-EMPTY` / `zot-login-FAILED` (Better Stack) | No baked zot credential, or the zot login was refused. The pull that follows misses. |
 | `inngest_pull_fatal` with `attempt=N` (Sentry, fatal, paged; Better Stack) | This attempt's zot pull missed. One missed attempt, not a dead host. |
 | `provision-fsm-busy` (Better Stack) | A flip or LUKS-cutover step was still running after the 300 s quiesce bound; the attempt ended and retries. |
-| `bootstrap-exit-<rc>` (Better Stack) | The bootstrap exited `rc`; its detail carries the output tail. `rc != 0` ends the attempt. |
+| `bootstrap-exit-<rc>` (Better Stack) | The bootstrap exited `rc`; its detail carries the output tail. `rc != 0` is followed by `bootstrap-failure-journal` and ends the attempt. |
 | `bootstrap-failure-journal` (Better Stack) | Written after a failed bootstrap: the failed units and the `inngest-server` journal for that attempt. |
 | `provision-attempt-exit-<rc>` (Better Stack) | Attempt ended with `rc` (`143` = killed at `TimeoutStartSec` or at shutdown). |
 | `provision_attempt_failed` (Sentry, warning, **paged** by `inngest-provision-failure`, #9176) | Same failure, on the channel that does not depend on Doppler. Its detail carries `rc=`, `attempt=`, `iid=` and `why=<last stage>`. `why=inngest_pull_fatal` is excluded from that rule: the pull miss already paged through `zot-mirror-fallback-rate`. |
 | `sentry-emit-FAILED stage=… rc=…` (Better Stack) | The Sentry POST for that stage failed; read the stage from Better Stack instead. |
 | `SOLEUR_INNGEST_BOOT_TRACE_LOST` (journald tag `inngest-boot-phone-home`) | The Better Stack channel was dead for that stage (token file missing or empty, or the POST failed). It leaves the host only once Vector runs, i.e. after a bootstrap; until then the Sentry rows are the trace. |
-| `bootstrap-done-DEGRADED why=… iid=…` (Better Stack); `bootstrap_done_degraded` (Sentry, warning, **paged** by `inngest-provision-failure`) | The bootstrap exited 0 but the host serves SQLite-only (`why=` is `.redis-inactive` and/or `.no-durable-execstart`). **No latch**; the next boot retries. Not a PASS. |
+| `bootstrap-done-DEGRADED why=… iid=…` (Better Stack); `bootstrap_done_degraded` (Sentry, warning, **paged** by `inngest-provision-failure`, but see the throttle note in [§ Reading an `inngest-provision-failure` page](#reading-an-inngest-provision-failure-page-9176)) | The bootstrap exited 0 but the host serves SQLite-only (`why=` is `.redis-inactive` and/or `.no-durable-execstart`). **No latch**; the next boot retries. Not a PASS. |
 | `bootstrap-done iid=…` (Better Stack) | Full success; the latch is written. This is the recovery signal. |
 
 Signatures that have no stage of their own:
@@ -392,30 +393,6 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3
       | "\(.dt) \(.detail)"' | sort
 ```
 
-### Reading an `inngest-provision-failure` page (#9176)
-
-The email subject is the shared boot-stage group title ("soleur-cloud-init boot stage"), the same
-as a pull-miss page. Tell them apart by the rule name and the `stage` / `detail` tags. Map `why=`
-to the next read:
-
-| `why=` / `stage` | Next read |
-| --- | --- |
-| `isolation-check-FAILED`, `provision-env-MISSING` | The matching rows in [§ Stages](#stages). |
-| `provision-fsm-busy` | The FSM state, via `scripts/inngest-host-state.sh` or `inngest-host-state.yml` (see "Repeating `provision-fsm-busy`" above). |
-| `bootstrap-exit-<rc>`, `bootstrap-failure-journal` | That attempt's `bootstrap-failure-journal` detail (recipe above). |
-| `rc=143` | A kill at `TimeoutStartSec` or at shutdown. Benign if the next attempt succeeds. |
-| `stage=bootstrap_done_degraded` | The `why=` names the missing piece (`.redis-inactive`, `.no-durable-execstart`). It pages once per boot and never re-pages: treat it as open until `bootstrap-done` appears for the same `iid`. |
-| any other `why=` | The attempt died after that stage. Read that attempt's rows in `life.txt`. |
-
-- **The rule re-pages at most every 2 hours per issue group.** A benign page (`rc=143`, or a
-  forged event, since the DSN is semi-public) can therefore hide a real failure for up to 2 h.
-  Corroborate with the Better Stack `provision-attempt-exit-<rc>` rows, which need a Doppler-held
-  token to write.
-- **To quiet it, change the rule in Terraform** (`sentry_alert.inngest_provision_failure`): raise
-  `frequency_minutes`, or set `enabled = false`, and regenerate `alert-reference.json` in the same
-  PR. Do not disable it in the Sentry UI (the daily drift job reports a live `DISABLED` as a
-  fault), and never mute `WEB-PLATFORM-4S`: that group carries every boot stage of every host.
-
 **The delivery probe is the same reading, automated.**
 `doppler run -p soleur -c prd_terraform -- scripts/followthroughs/inngest-provision-unit-8562.sh`
 prints one `verdict=` line on stdout:
@@ -440,6 +417,43 @@ the armed row directly (the first query above); if it is missing, the host's `ru
 the last stage it reached show where `runcmd` stopped. A LUKS-stage FATAL is **not** this case:
 `runcmd` has no top-level errexit, so the unit is armed and the host ends at
 `bootstrap-done-DEGRADED`.
+
+### Reading an `inngest-provision-failure` page (#9176)
+
+The email subject is the shared boot-stage group title ("soleur-cloud-init boot stage", issue
+`WEB-PLATFORM-4S`), the same as a pull-miss page. Tell them apart by the rule name and the
+`stage` / `detail` tags. A page whose issue is NOT `WEB-PLATFORM-4S` did not come from the host
+emitter: treat it as forged (the DSN is semi-public). Map the page to the next read, top row first:
+
+| `stage` / `why=` | Next read |
+| --- | --- |
+| `stage=bootstrap_done_degraded` | The `why=` names the missing piece (`.redis-inactive`, `.no-durable-execstart`). Emitted once per boot, never re-emitted: treat it as open until `bootstrap-done` appears for the same `iid`. |
+| `rc=143` | A kill. If the attempt ran about 65 minutes (`provision-attempt-start` to `provision-attempt-exit-143` in `life.txt`), a step hung at `TimeoutStartSec`: read the `why=` row below. If it was short, it was a shutdown or reboot. |
+| `isolation-check-FAILED`, `provision-env-MISSING`, `provision-nic-ABSENT` | The matching rows in [§ Stages](#stages). This stage is the failure itself. |
+| `provision-fsm-busy` | The FSM state, via `scripts/inngest-host-state.sh` or `inngest-host-state.yml` (see "Repeating `provision-fsm-busy`" above). |
+| `bootstrap-failure-journal` | That attempt's `bootstrap-failure-journal` detail (recipe above). |
+| `bootstrap-exit-0` | The bootstrap succeeded but writing the latch failed (root disk). Read `life.txt`. |
+| any other `why=` | The attempt died at or after that stage. Read that attempt's rows in `life.txt`. |
+
+- **After ANY page from this rule, confirm `bootstrap-done` (not `bootstrap-done-DEGRADED`) for the
+  same `iid`.** The rule re-pages at most every 2 hours per issue group, and that throttle is
+  shared by both stages. A degraded bootstrap that lands within 2 h of a failure page (the common
+  sequence: one attempt fails, the next ends degraded) is suppressed, and the degraded state is not
+  re-emitted until the next boot, so it stays silent indefinitely. The #8562 delivery probe below
+  reads it as `FAIL reason=degraded`, but only while that follow-through is open.
+- **A benign or forged page can hide a real failure.** For a retrying failure the window is up to
+  2 h; for a degraded bootstrap it is until the next boot. Corroborate with the Better Stack
+  `provision-attempt-exit-<rc>` rows, which need a Doppler-held token to write.
+- **Not paged by any rule:** a unit that never armed or never started (see the signatures above),
+  a SIGKILL or power loss, a Sentry POST that failed (`sentry-emit-FAILED` in Better Stack), and a
+  bootstrap that exits 0 while broken in ways the degraded check does not test (a refused server
+  start, a missing Vector, missing flip or LUKS-cutover assets). Read these from `life.txt`.
+- **To quiet it, change the rule in Terraform** (`sentry_alert.inngest_provision_failure`): raise
+  `frequency_minutes`, or set `enabled = false`, and regenerate `alert-reference.json` in the same
+  PR (the `sentry-alert-reference-expected-<run>` artifact, see the Sentry root
+  [README § Drift detection](../../../../apps/web-platform/infra/sentry/README.md#drift-detection)).
+  Do not disable it in the Sentry UI (the daily drift job reports a live `DISABLED` as a fault),
+  and never mute `WEB-PLATFORM-4S`: that group carries every web and inngest host boot stage.
 
 ### Replace triggers
 

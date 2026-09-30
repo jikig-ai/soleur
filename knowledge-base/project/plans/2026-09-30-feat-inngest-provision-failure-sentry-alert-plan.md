@@ -597,11 +597,10 @@ deferral, and this closes it. The amendment is a plan task (Phase 3.2), not a fo
 All three files (`model.c4`, `views.c4`, `spec.c4`) are in scope. The actors, systems and
 relationships involved are already modeled: the operator (`founder`), `sentry`, the inngest host
 (`inngest`), `betterstack`, the `inngest -> sentry` boot-emitter edge and the `sentry -> founder`
-paging edge. No element or relationship is added, and no `view include` changes. Two descriptions
-become false or incomplete and are fixed in Phase 3.3: the `sentry -> founder` count ("34 of the 36"
-→ "35 of the 37") and the `inngest -> sentry` edge's "each failed attempt also emitting
-provision_attempt_failed at warning" (add "paged by inngest-provision-failure, as is
-bootstrap_done_degraded"). `c4-count-parity.test.sh` and `c4-model-freshness.test.sh` must be green
+paging edge. No element or relationship is added, and no `view include` changes. One description
+becomes false and is fixed in Phase 3.3: the `sentry -> founder` count ("34 of the 36" → "35 of the
+37"). The `inngest -> sentry` edge describes emission only, makes no paging claim, and is left
+unchanged (the append was cut in plan review). `c4-count-parity.test.sh` and `c4-model-freshness.test.sh` must be green
 after `scripts/regenerate-c4-model.sh`.
 
 ### Sequencing
@@ -707,3 +706,23 @@ paging rule plus docs). No user-facing surface, no copy, no pricing or legal imp
 - `alert-reference.json` conditions are in the projection's canonical `sort_by(tostring)` order
   (`detail` before `stage`), not `.tf` order.
 - Never mute `WEB-PLATFORM-4S` to quiet this rule. That group carries every boot stage of every host.
+
+## Review Amendments (2026-09-30)
+
+The 10-agent review superseded four claims above; the shipped artifacts carry the corrected form.
+
+- **P2, Phase 3.1 "pages once per boot", and the Observability row's "(pages once per boot)":** a
+  degraded bootstrap pages only if this rule has not paged in the prior 2 h. The throttle is per
+  rule per issue group and shared by both stages, and the degraded stage is never re-emitted, so
+  the common fail-then-degraded sequence suppresses it until the next boot. The runbook now tells
+  the operator to confirm `bootstrap-done` for the same `iid` after any page. The structural fix (a
+  second rule) exceeds the one-rule production write authorized for this PR and is recorded as
+  DC-2 in `decision-challenges.md`.
+- **"ADR-257 measured about 26 events an hour":** ADR-257 estimates it. The unit's own comment
+  derives ~8 attempts in the first hour and ~4/h backed off; the rule comment cites that.
+- **The guard test:** T1–T8 as planned pinned only what must be present. Review showed an extra
+  AND-ed condition, a second action filter, `enabled = false`, a dropped action and several
+  emit-call spellings all left it green. The shipped test also pins absence (exactly two
+  conditions, one filter, one action, the full reference entry, every emit call's shape, a
+  directory-derived `.tf` list, and every infra file for stray stage names); a 28-row battery
+  covers the reviewers' mutations.
