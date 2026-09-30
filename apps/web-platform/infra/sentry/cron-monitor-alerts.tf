@@ -41,7 +41,9 @@
 locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
-  cron_monitor_alert_unrouted = {}
+  cron_monitor_alert_unrouted = {
+    scheduled_gh_pages_cert_state = "disabled, its producer function is deleted; the monitor is deleted in a follow-up PR per the two-PR rule (#9304)"
+  }
 }
 
 resource "sentry_alert" "cron_monitor_failure" {
@@ -77,7 +79,6 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_devin_docs_drift.id,
     sentry_cron_monitor.scheduled_domain_model_drift.id,
     sentry_cron_monitor.scheduled_follow_through.id,
-    sentry_cron_monitor.scheduled_gh_pages_cert_state.id,
     sentry_cron_monitor.scheduled_github_app_drift_guard.id,
     sentry_cron_monitor.scheduled_growth_audit.id,
     sentry_cron_monitor.scheduled_growth_execution.id,

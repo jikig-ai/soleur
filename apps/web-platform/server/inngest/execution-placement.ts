@@ -137,10 +137,6 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
   },
-  "cron-gh-pages-cert-state": {
-    placement: "portable",
-    reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
-  },
   "cron-github-app-drift-guard": {
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",

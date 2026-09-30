@@ -54,7 +54,10 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          arts=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --jq '[.artifacts[].name]')
+          # --paginate, no --jq (gh applies --jq per page); jq -s slurps the
+          # concatenated page objects. First-page-only truncation would read as
+          # "no recovery artifact" and silently skip a real patch.
+          arts=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" | jq -s '[.[].artifacts[].name]')
           recovery=$(jq '[.[] | select(startswith("fix-constraints-patch-"))] | length' <<<"$arts")
           giveup=$(jq '[.[] | select(startswith("fix-constraints-giveup-"))] | length' <<<"$arts")
           echo "recovery=${recovery}" >> "$GITHUB_OUTPUT"

@@ -167,7 +167,9 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
   // #6657: cron-gh-pages-cert-reissue is an event-triggered live-infra
   // remediation (no schedule, no git, no PR) — never Tier-2 deferred. Asserted
   // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
-  // grows with a new event-triggered cron.
+  // grows with a new event-triggered cron. The poll cron that used to sit beside
+  // it (`cron-gh-pages-cert-state`) was deleted in #9303; it never had an entry in
+  // this file, so the EXPECTED_CRON_FUNCTIONS shrink needs no assertion change.
   it("gh-pages-cert-reissue (#6657, event-triggered) is NOT in the deferred set", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-gh-pages-cert-reissue")).toBe(false);
   });

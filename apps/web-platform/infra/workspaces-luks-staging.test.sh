@@ -882,7 +882,11 @@ script_case() {  # <script> <findmnt-source> [env assignments...]
   done
   printf '#!/usr/bin/env bash\nprintf "findmnt %%s\\n" "$*" >> "$CALLS"\nprintf "%%s\\n" "$FINDMNT_SRC"\n' > "$d/bin/findmnt"
   printf '#!/usr/bin/env bash\nprintf "doppler %%s\\n" "$*" >> "$CALLS"\nprintf "test-passphrase\\n"\n' > "$d/bin/doppler"
-  printf '#!/usr/bin/env bash\nprintf "cryptsetup %%s\\n" "$*" >> "$CALLS"\ncase "$*" in *luksFormat*) exit "${LUKSFORMAT_RC:-0}";; *luksOpen*) exit "${LUKSOPEN_RC:-0}";; esac\nexit 0\n' > "$d/bin/cryptsetup"
+  # cryptsetup: drain stdin iff argv carries `--key-file -` (either spelling) — real
+  # cryptsetup reads stdin exactly then, and a stub that exits unread races the
+  # producer into EPIPE under pipefail (#9245). The captured bytes land in
+  # $CALLS.key-seen so the suite can assert delivery on the wire, not just the ask.
+  printf '#!/usr/bin/env bash\nprintf "cryptsetup %%s\\n" "$*" >> "$CALLS"\ncase " $* " in *" --key-file - "*|*" --key-file=- "*) { [ ! -t 0 ] && cat >"$CALLS.key-seen"; } 2>/dev/null || true;; esac\ncase "$*" in *luksFormat*) exit "${LUKSFORMAT_RC:-0}";; *luksOpen*) exit "${LUKSOPEN_RC:-0}";; esac\nexit 0\n' > "$d/bin/cryptsetup"
   chmod +x "$d/bin"/*
   SCRIPT_OUT="$(
     env "$@" CALLS="$SCRIPT_CALLS" FINDMNT_SRC="$fmsrc" \
@@ -943,6 +947,14 @@ if grep -qE 'cryptsetup luksOpen' "$SCRIPT_CALLS" && ! grep -qF 'staging_mapper_
   ok "Tloc luksOpen ran and the abort is NOT attributed to the absent mapper it caused"
 else
   no "Tloc the failed open is reported one layer downstream — the operator chases the wrong failure"
+fi
+# Tlod — WIRE assert, sibling of luks-monitor's t1b (#9245): the argv grep above proves
+# luksOpen was ASKED; this proves the piped key ARRIVED. The stub captures stdin to
+# $CALLS.key-seen; a stub that exits unread leaves it absent → deterministic RED.
+if [ "$(cat "${SCRIPT_CALLS}.key-seen" 2>/dev/null)" = "test-passphrase" ]; then
+  ok "Tlod the luksOpen passphrase reached cryptsetup on the wire (key-seen == what doppler served)"
+else
+  no "Tlod the piped key never arrived — stdin undrained (captured: $(cat "${SCRIPT_CALLS}.key-seen" 2>/dev/null || echo '<absent>'))"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1478,6 +1490,6 @@ echo "workspaces-luks-staging.test.sh: $pass passed, $fail failed"
 # ever exceeds the real count the failure is loud and one line to fix.
 # #9098 D1: set to the MEASURED count (not a round number with headroom), and enforced through
 # harness_floor (printf + exit 1), never through no().
-STAGING_MIN_ASSERTIONS=162
+STAGING_MIN_ASSERTIONS=163
 harness_floor workspaces-luks-staging.test.sh "$STAGING_MIN_ASSERTIONS"
 [ "$fail" -eq 0 ]
