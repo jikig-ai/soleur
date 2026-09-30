@@ -268,6 +268,14 @@ mb27() {
 }
 run_case "MB-27 quoted WORM trigger drop fails closed -> A24" 1 24 mb27
 
+# -- MB-28: conditional application triggers outside the WORM function family
+#    are unrelated to TOM 7 event coverage and must not poison the corpus scan.
+mb28() {
+  printf '\nCREATE TRIGGER conversations_release_slot_on_archive BEFORE UPDATE ON public.conversations FOR EACH ROW WHEN (OLD.archived_at IS NULL AND NEW.archived_at IS NOT NULL) EXECUTE FUNCTION public.release_slot_on_conversation_archive();\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-28 unrelated conditional trigger does not affect WORM coverage -> A24" 0 - mb28
+
 # -- MB-11: the gate's own self-test must fire when the replay stops applying
 #    drops. Without this, net-of-drops is vacuous and every predicate the gate
 #    reports may be a superseded one — the exact failure that shipped twice.
@@ -300,7 +308,7 @@ if [[ 2 -ne 0 ]]; then pass "MB-12 exit 2 (no verdict) is distinct from exit 0 (
 # ------------------------------------------------------------------ verdict
 # Floor and summary emit with printf + an explicit exit, never through the
 # pass()/fail() helpers they backstop (ADR-193).
-FLOOR=27
+FLOOR=28
 TOTAL=$((PASSED + FAILED))
 if [[ $TOTAL -lt $FLOOR ]]; then
   printf 'ASSERTION FLOOR: only %d of %d cases executed. A partial run is not a pass.\n' "$TOTAL" "$FLOOR" >&2

@@ -445,7 +445,8 @@ for migration in MIGRATIONS:
                 events = frozenset(event.upper() for event in re.findall(
                     r'\b(INSERT|UPDATE|DELETE|TRUNCATE)\b', event_clause, re.I))
                 covers_all_updates = not re.search(r'\bUPDATE\s+OF\b', event_clause, re.I)
-                if re.search(r'\bWHEN\s*\(', trigger_body, re.I | re.S):
+                if (worm_suffix.search(function_match.group(1))
+                        and re.search(r'\bWHEN\s*\(', trigger_body, re.I | re.S)):
                     # A conditional trigger does not prove that every matching
                     # mutation is blocked; treating its event list as universal
                     # coverage would let WHEN (false) satisfy TOM 7.
@@ -529,14 +530,8 @@ required_events_by_function = {
     for function in worm_fns
 }
 event_coverage = {}
-full_update_coverage = set()
 for _, function, events, covers_all_updates in active_worm_triggers:
     event_coverage.setdefault(function, set()).update(events)
-    if covers_all_updates and 'UPDATE' in events:
-        full_update_coverage.add(function)
-for function in event_coverage:
-    if function not in full_update_coverage:
-        event_coverage[function].discard('UPDATE')
 missing_worm_events = sorted(
     (function, sorted(required_events - event_coverage.get(function, set())))
     for function, required_events in required_events_by_function.items()

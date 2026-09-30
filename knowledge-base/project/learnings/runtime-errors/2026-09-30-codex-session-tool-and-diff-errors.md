@@ -37,3 +37,13 @@ authorization to rely on CI; it was interrupted and rerun with only the
 narrowly for the boolean acknowledgment response; its result type was widened.
 The GitHub job-log endpoint returned plain text despite the `logs` suffix, so
 the download needed `file` inspection before treating it as an archive.
+
+Two resumed-session probes repeated those shape mistakes: the embedded-Python
+extractor searched for a double-quoted heredoc marker and failed before
+compiling anything, and one `exec_command` omitted the worktree argument and
+read the project root on a different branch. Use a regex over the exact
+single-quoted heredoc marker, and always pass the feature worktree as the
+command's `workdir`; a failed lookup is not evidence that a file is absent.
+An attempted learning-file patch copied context from a different learning and
+was rejected without a write; re-read the target tail and patch its exact
+content rather than borrowing nearby prose.
