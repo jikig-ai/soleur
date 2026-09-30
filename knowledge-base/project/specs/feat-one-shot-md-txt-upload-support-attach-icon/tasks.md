@@ -4,7 +4,7 @@ Plan: `knowledge-base/project/plans/2026-09-30-fix-md-txt-upload-support-and-att
 
 ## Phase 0: Reproduce and baseline
 
-- [ ] 0.1 Reproduce missing paperclip/send icons in a real browser (dashboard first-run + conversation); record computed padding, button width, svg bounding box
+- [x] 0.1 (real Chromium via e2e: pre-fix attach svg width 0) Reproduce missing paperclip/send icons in a real browser (dashboard first-run + conversation); record computed padding, button width, svg bounding box
 - [x] 0.2 Confirm compiled-CSS ordering with `@tailwindcss/node`; record how many census sites are wrong today
 - [x] 0.3 `git grep -n "px-6\|py-3" apps/web-platform/test` for bare-token Button class assertions
 - [x] 0.4 File tracking issue on Phase 4 milestone; add roadmap row extending 3.19/3.20; file the deferral issues listed under the plan's Non-Goals
@@ -49,7 +49,7 @@ Plan: `knowledge-base/project/plans/2026-09-30-fix-md-txt-upload-support-and-att
 
 - [x] 6.1 `globals.css`: `.soleur-btn` + `.soleur-btn-pad` in `@layer components`
 - [x] 6.2 `button.tsx`: emit `soleur-btn` always, `soleur-btn-pad` only when not icon-only; locality comment
-- [ ] 6.3 Census (multi-line aware) + PR-body table; scripted visual QA vs `fff36b6172^`
+- [ ] 6.3 (census done; NOT run: scripted visual QA of every census site vs the pre-ADR-255 baseline) Census (multi-line aware) + PR-body table; scripted visual QA vs `fff36b6172^`
 - [x] 6.4 `support-launcher.tsx` stale workaround sweep; hit-area classes on `error-card`, `pending-invite-banner`, `runtime-explainer-banner`, `select-project-state`
 - [x] 6.6 Declare `@tailwindcss/node` devDependency + lockfile (`npx --yes npm@11 install`)
 - [x] 6.5 `components/ui/README.md` paragraph + ADR-255 addendum
@@ -58,5 +58,5 @@ Plan: `knowledge-base/project/plans/2026-09-30-fix-md-txt-upload-support-and-att
 
 - [x] 7.1 `./node_modules/.bin/tsc --noEmit` from `apps/web-platform`
 - [x] 7.2 vitest (touched files, then component + unit projects); `scripts/check-button-primitive-sweep.sh`
-- [ ] 7.3 Playwright e2e (authenticated project) + before/after screenshots at 1440px and 390px
-- [ ] 7.4 Real `.md` attach -> send -> agent lists `<uuid>.md`; document iOS/Android picker check
+- [x] 7.3 (6/6 e2e pass; before/after captured at both widths) Playwright e2e (authenticated project) + before/after screenshots at 1440px and 390px
+- [ ] 7.4 (NOT done: needs a live Anthropic key + Supabase; .md/.txt staging verified in real Chromium; iOS/Android pickers unchecked) Real `.md` attach -> send -> agent lists `<uuid>.md`; document iOS/Android picker check
