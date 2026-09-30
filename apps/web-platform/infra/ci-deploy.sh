@@ -3008,6 +3008,35 @@ logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-un
 logger -t "$LOG_TAG" "DEPLOY_SCRIPT_SHA sha256=${_ci_deploy_script_sha_full:-unknown}" 2>/dev/null || true
 unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
 
+# #9169 — GHCR_DENY: is this host's ghcr.io hosts-file deny in force? Same semantics as the
+# registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
+# sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
+# (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
+# in server.tf proves pkg-containers.githubusercontent.com too. Fail-open: the probe is bounded by
+# `timeout 5` and can never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
+# (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.
+_ghcr_blocked_state() {
+  local addrs=""
+  if command -v timeout >/dev/null 2>&1; then
+    addrs=$(timeout 5 getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u) || addrs=""
+  else
+    addrs=$(getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u) || addrs=""
+  fi
+  # A herestring, not `printf | grep -q`: under this script's pipefail an early grep exit could
+  # turn a match into a non-zero pipeline status.
+  if [ -z "$addrs" ]; then
+    echo unknown
+  elif grep -qvxE '0\.0\.0\.0|::' <<<"$addrs"; then
+    echo 0
+  else
+    echo 1
+  fi
+}
+_ghcr_blocked=$(_ghcr_blocked_state 2>/dev/null) || _ghcr_blocked=unknown
+case "$_ghcr_blocked" in 1 | 0 | unknown) ;; *) _ghcr_blocked=unknown ;; esac
+logger -t "$LOG_TAG" "GHCR_DENY ghcr_blocked=$_ghcr_blocked" 2>/dev/null || true
+unset _ghcr_blocked
+
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
 flock -n 200 || {
