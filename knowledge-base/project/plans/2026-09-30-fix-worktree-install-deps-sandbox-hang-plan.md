@@ -13,6 +13,24 @@ lane: cross-domain
 
 # fix: worktree-manager create/feature hangs indefinitely on dependency install when the package registry is unreachable
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30
+**Sections enhanced:** Hypotheses (4.5 deep-dive), Proposed Solution (timeout array shape + rc 124/137 semantics + probe-before-banner ordering), Acceptance Criteria (vitest runner correction), References (verified commands).
+
+### Key Improvements
+
+1. Corrected the timeout mechanism to the repo's canonical bash-3.2-safe array shape (`install_to=()` + `${install_to[@]+"${install_to[@]}"}`, `.claude/hooks/git-commit-secret-scan.sh:151-154`) — a bare binary-name string would have reintroduced the missing-tool class the fix exists to solve on stock macOS.
+2. Pinned bound-expiry exit semantics: `timeout` reports **124** on TERM expiry and **137** when `-k` escalates to SIGKILL — a 124-only check would misclassify kill-escalated timeouts as ordinary failures.
+3. Corrected the verification command for the telemetry suite: `apps/web-platform` runs **vitest**, and `bunfig.toml` `pathIgnorePatterns = ["**"]` makes `bun test` inert in that package — `bun test` would have reported "filter did not match" on a green suite.
+4. Probe ordering: the registry probe fires BEFORE the `Installing dependencies (…)` banner, so a skipped arm never prints a started-then-skipped pair.
+
+### New Considerations Discovered
+
+- The sentinel drift guard (`git-lock-marker-telemetry.test.ts` :261-384) mechanically enumerates `SOLEUR_*` sentinels from skill scripts AND SKILL.md prose — the `MARKER_RE` edit is a hard dependency of both the script change and its documentation.
+- The bash 4+ `declare -A`/`local -A` memoization idiom is already used in the script (:2693, :3274), so the per-host probe cache needs no portability fallback beyond what the file already assumes.
+- Two open `code-review` scope-outs touch this file/class (#8496 acknowledge, #8659 fold-in-as-authoring-guidance for the new suite's trap ordering).
+
 ## Overview
 
 `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` runs `install_deps` unconditionally inside `create`/`feature` with no timeout and no opt-out. In a network-restricted sandbox that denies egress to `registry.npmjs.org:443` (the #9269 incident: Devin cloud egress deny, ~100 retries until the caller killed the process), the package manager retries until the caller kills it, halting the pipeline and leaving a worktree with no installed dependencies.
@@ -35,6 +53,17 @@ Phase 1.4 trigger fired (the feature description contains `unreachable`, `timeou
 - **L3 — DNS/routing:** VERIFIED-not-applicable-by-evidence. The sandbox denied the TCP connect; DNS resolution succeeded or was bypassed by the sandbox policy. Either way the observable symptom (connection denied) is upstream of DNS correctness. Not verified independently — the issue's denial log is the artifact.
 - **L7 — TLS/proxy:** NOT VERIFIED and correctly out of scope. The connection never reached the handshake; TLS config cannot be implicated.
 - **L7 — application:** VERIFIED as the defect under repair: the package manager's retry-until-success behavior is the application layer; it was reached and it looped.
+
+### Network-Outage Deep-Dive (deepen-plan 4.5 — fired on `unreachable`/`timeout` triggers)
+
+Layer-by-layer verification status for the plan's own mechanism, not the incident (the incident's layers are above):
+
+- **L3 firewall/egress:** the plan's runtime probe IS the L3 check — `curl --proto '=https' --connect-timeout 5 --max-time 8` against the resolved registry host. Verified locally: rc=0/`http_code=200` on healthy egress (2026-09-30). A denied egress yields a fast nonzero rc and the `reason=registry-unreachable` marker names the host — the diagnostic the issue asked for.
+- **L3 DNS/routing:** deliberately out of probe scope — a DNS failure surfaces as the same curl rc!=0 and the same marker (the host is still correctly named as unreachable-from-here; DNS-vs-deny discrimination is an operator diagnostic the marker enables, not one the script must resolve).
+- **L7 TLS/proxy:** `--proto '=https'` + cert verification on; a TLS-layer failure also yields rc!=0 → the arm skips with the host named. The probe never authenticates (public registry metadata GET, no credentials on the wire).
+- **L7 application:** the package managers' own retry behavior stays untouched — the plan wraps it (bounded) rather than reconfigures it; no package-manager flags change.
+
+Gap note: a registry that accepts TCP+TLS but stalls mid-response still passes the probe — covered by the `install_to` bound (P1), which is why both layers ship together.
 
 ## Research Insights
 
@@ -97,6 +126,7 @@ Edit `install_deps()` in place so the three behaviors are properties of the chok
    - `_install_registry_host <dir> <runtime>` — resolves the host each arm actually installs from: `npm` → `npm --prefix "$dir" config get registry 2>/dev/null` (respects project `.npmrc` under prefix + user config — the registry npm will really use); `bun` → `registry=` in `$dir/bunfig.toml`, else `$dir/.npmrc`, else `$worktree_path/.npmrc`, else default; `yarn` → `.yarnrc` `registry` else `registry.yarnpkg.com`. Defaults: `registry.npmjs.org` (npm, bun), `registry.yarnpkg.com` (yarn). Host extraction strips scheme, userinfo, port, path (`${u#*://}` → `${h##*@}` → `${h%%:*}` → `${h%%/*}`), then `_sanitize_marker_field` for marker safety.
    - `_registry_reachable <host>` — memoized per host (`declare -A`), `command -v curl` gate (absent → return 0, the timeout still bounds), then `curl --proto '=https' --connect-timeout "${SOLEUR_WORKTREE_REGISTRY_PROBE_SECS:-5}" --max-time "${SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS:-8}" -sS -o /dev/null "https://$host/"` — rc-based (any HTTP response, even 4xx, proves reachability; `-f` deliberately absent). `deploy-arm.sh:155` is the in-repo `--proto '=https'` precedent.
    - On probe failure per arm: `echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=<sanitized> arm=<label>"` + `headless_or_stderr warn` naming the host and the recovery action for that arm; skip the arm's command; continue.
+   - **Ordering:** the probe runs BEFORE the arm's `Installing dependencies (…)` banner is printed — a skipped arm must never emit a started-then-skipped pair (the banner claims work began; the skip says it did not).
 
 3. **Command-level timeout (P1).** Use the repo's canonical timeout-resolution shape — an ARRAY, not a binary-name string, per `.claude/hooks/git-commit-secret-scan.sh:151-154`: `install_to=(); if command -v timeout >/dev/null 2>&1; then install_to=(timeout -k 15 "${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}"); elif command -v gtimeout >/dev/null 2>&1; then install_to=(gtimeout -k 15 …); fi` and invoke via `${install_to[@]+"${install_to[@]}"}` — bash 3.2 (stock macOS `/bin/bash`) treats an EMPTY array as unbound under `set -u`, and this script runs `set -euo pipefail` (:29), so the `${a[@]+…}` expansion is load-bearing, not style. `-k 15` sends KILL after the TERM grace so a TERM-ignoring child still dies. Wrap both invocations: `install_output=$({ ${install_to[@]+"${install_to[@]}"} "${cmd[@]}"; } 2>&1)`. **Exit semantics (verified against the hook's own comment at :157-160):** `timeout` reports **124** when the bound expires via TERM and **137** when the bound escalated to SIGKILL — the timeout arm MUST accept `rc -eq 124 || rc -eq 137`; a 124-only check silently misclassifies kill-escalated timeouts as ordinary install failures. On a bound hit: `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=<label> secs=<n>` + warn naming the arm and the recovery action; continue (warn-and-continue). Other nonzero rc: existing `install failed` warn path unchanged. Empty `install_to` (no timeout binary — macOS without coreutils) → run unwrapped with a once-per-call `headless_or_stderr warn` that the bound is unavailable (the preflight still covers the reported incident class).
 
