@@ -1123,7 +1123,9 @@ Inngest CLI version is pinned in `apps/web-platform/infra/inngest.tf` `locals` b
    ([§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify)):
    annotated tag → build → cloud-init pin bump → `workflow_dispatch` deploy →
    verify. On deploy, `inngest-bootstrap.sh` detects the version mismatch,
-   pauses → drains → restarts → resumes (~5s downtime on loopback).
+   waits a `DRAIN_SLEEP_SEC` settle delay, replaces the binary and restarts the
+   unit. Nothing pauses, drains or resumes (no such CLI verb exists, #9219);
+   in-flight work is killed at the restart.
 
 ## Bootstrap-image release (tag → build → deploy → verify)
 

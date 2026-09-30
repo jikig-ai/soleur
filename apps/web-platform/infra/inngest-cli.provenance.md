@@ -81,7 +81,7 @@ evidence in `phase0-respike-evidence.md`. These are **measurements**, not infere
 | `--postgres-conn-max-lifetime` unit (not passed; recorded) | **MINUTES** (`devserver.go:203`) |
 | `--postgres-max-open-conns` durable-backend sentinel | **HOLDS**; v1.45.1 adds `>1` and `idle<=open` validation — repo's `5`/`2` pass |
 | `signkey-prod-` strip required | **HOLDS** — prefixed key rejected `must be hex string`, bare hex boots |
-| `inngest pause` drain verb | **ABSENT on BOTH endpoints** — pre-existing dead call (`inngest-bootstrap.sh` `|| warn` path); follow-up issue, not an upgrade regression |
+| `inngest pause` drain verb | **ABSENT on BOTH endpoints** — pre-existing dead call (`inngest-bootstrap.sh` `\|\| warn` path), not an upgrade regression. The calls were removed (#9219); the upgrade path is a settle delay with no drain |
 | Route-once fan-out (multi `--sdk-url`, same app id) | **HOLDS** — 4/4 events on last-writer URL, 0 on sibling |
 | `runs(filter: RunsFilterV2!)` + `startedAt`/`queuedAt` | **HOLDS** |
 | `scheduled_tick` absent; `eventName` null | **HOLDS** |
