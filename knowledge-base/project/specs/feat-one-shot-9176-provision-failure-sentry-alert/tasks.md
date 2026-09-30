@@ -7,7 +7,9 @@ Plan: `knowledge-base/project/plans/2026-09-30-feat-inngest-provision-failure-se
 - [ ] 1.1 Create `apps/web-platform/test/sentry-inngest-provision-failure-alert-op-contract.test.ts`,
   modeled on `sentry-image-freshness-alert-op-contract.test.ts`. The file carries rows T1–T8 from
   the plan.
-- [ ] 1.2 Run it on the unchanged tree and confirm it is RED (T1: resource absent).
+- [ ] 1.2 Keep the test app-local. It reads only `../infra/...`, so do NOT add it to
+  `REPO_WIDE_SUITES`.
+- [ ] 1.3 Run it on the unchanged tree and confirm it is RED (T1: resource absent).
 
 ## Phase 2: Core Implementation (GREEN)
 
@@ -26,9 +28,15 @@ Plan: `knowledge-base/project/plans/2026-09-30-feat-inngest-provision-failure-se
 
 - [ ] 3.1 Runbook `inngest-server.md`:
   - Update the stage-table rows.
-  - Add an `inngest-provision-failure` page-reading block, with a `why=` map, read commands for
-    both stages, the note that a degraded host pages once, the throttle masking window, and the
-    quiet lever.
+  - Add an `inngest-provision-failure` page-reading block, with:
+    - a `why=` map, including a catch-all row for any other stage;
+    - read commands for both stages;
+    - the note that a degraded host pages once;
+    - the throttle masking window;
+    - the quiet lever. Change it only through Terraform (`enabled = false` plus reference regen),
+      never in the UI.
+  - Add stage rows for `bootstrap-exit-<rc>` and `bootstrap-failure-journal`, plus a `life.txt`
+    recipe variant that prints `.detail`.
 - [ ] 3.2 ADR-257: add in-place `Superseded 2026-09-30 (#9176)` pointers under Decision 5 and under
   the "Non-pull failures do not page" consequence.
 - [ ] 3.3 In `model.c4`, change "34 of the 36" to "35 of the 37", then run

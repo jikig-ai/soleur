@@ -14,6 +14,36 @@ brand_survival_threshold: aggregate pattern
 
 # infra(inngest): Sentry alert for non-pull provision-unit failures
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30. The run was kept proportionate to a one-resource change.
+**Agents:** an observability-coverage reviewer and a verify-the-negative claims sweep (standard
+tier), on top of plan-review (DHH, Kieran, code-simplicity, CTO) and the Phase 4.5 advisor consult.
+**Halt gates passed:** 4.6 user-brand (aggregate pattern), 4.7 observability (Check 10 verb `grep`,
+literal `2`), 4.8 PAT (no hits), 4.10 encryption posture, and 4.11 guard contract (`lint-guard-contract.py`
+green, structural assembly). 4.5, 4.55 and 4.9 did not trigger.
+
+### Key improvements
+
+1. The observability layer citations are corrected. The host emitter and the phone-home are direct
+   channels, not layers 1–6, so they are named as such. Layer 6 is cited only for the
+   workflow-run and drift paths. The missing "apply rejects or drops the rule" mode is added, and so
+   is the residual cron-monitor backstop.
+2. The runbook plan now matches the real tooling. Disabling goes through Terraform, not the UI
+   (drift treats a live DISABLED as a fault). There is a catch-all `why=` row, and the
+   `bootstrap-failure-journal` rows plus a `.detail` read recipe are added.
+3. The test's vitest classification is pinned: app-local, not `REPO_WIDE_SUITES`.
+4. All 12 load-bearing repo claims were verified by the sweep (file:line), including the pull-fatal
+   emit counts, `nc`-free root, projection-jq sorting and `--arg side live`, README/C4/ADR/runbook
+   anchors, and tool existence.
+
+### New considerations discovered
+
+- The `discoverability_test` is a declaration probe only. A richer `jq` probe would trip Check 10's
+  `|` reject.
+- If both host channels fail before Vector exists, the only off-host signal is the cron monitors'
+  missed check-ins.
+
 ## Overview
 
 The dedicated inngest host's provisioning unit (`soleur-inngest-provision`, ADR-257, #8562/PR #9159)
@@ -310,6 +340,13 @@ both `issue-alerts.tf` and `cloud-init-inngest.yml`. Scope the emitter to the
 The `alert-reference.json` entry is NOT re-asserted here: the `plan_pr` reference gate is the
 authority for it, and the daily drift job holds it equal to live Sentry.
 
+The test reads only `../infra/...` files inside `apps/web-platform`, so it is app-local: it runs in
+the `unit` vitest project (`include: ["test/**/*.test.ts", …]`) and is gated on diffs that touch
+`apps/web-platform/` (this one does, and so does any future emitter or rule edit). It must NOT be
+added to `REPO_WIDE_SUITES`, because `test/repo-wide-containment.test.ts` recomputes membership from
+each file's `..` depth and would flag it (the sibling image-freshness and pin-fault tests are
+likewise absent from that list).
+
 Run it on the unchanged tree and confirm RED (T1 fails).
 
 ### Phase 2: The rule + registries (GREEN)
@@ -349,8 +386,13 @@ append after the #8572 clause: "; #9176 added `inngest_provision_failure`, takin
   the rule name and the `stage`/`detail` tags. Map each `why=` value to its existing SSH-free next
   step: `isolation-check-FAILED` and `provision-env-MISSING` → the existing rows; `provision-fsm-busy`
   → read FSM state with `inngest-host-state.yml`; `bootstrap-exit-*` / `bootstrap-failure-journal` →
-  the Better Stack `bootstrap-failure-journal` row for that `iid`; `rc=143` → a kill at
-  `TimeoutStartSec` or at shutdown (benign if the next attempt succeeds).
+  the Better Stack `bootstrap-failure-journal` phone-home row for that `iid` (add stage-table rows for
+  `bootstrap-exit-<rc>` and `bootstrap-failure-journal`, plus a variant of the existing
+  `betterstack-query.sh … life.txt` recipe that prints `.detail` for that stage, since today's recipe
+  prints only `.stage`); `rc=143` → a kill at `TimeoutStartSec` or at shutdown (benign if the next
+  attempt succeeds); **any other `why=`** (`provision-nic-ABSENT`, `pre-zot-pull`,
+  `pre-bootstrap-run`, `flip-assets-*`, `isolation-check-passed`, `provision-attempt-start`) → the
+  attempt died after that stage; read that attempt's rows in `life.txt`.
 - Read commands for BOTH stages:
   `scripts/sentry-issue.sh --host-events soleur-inngest --stage provision_attempt_failed` and
   `--stage bootstrap_done_degraded`.
@@ -359,8 +401,10 @@ append after the #8572 clause: "; #9176 added `inngest_provision_failure`, takin
 - The 120-min throttle is per shared issue group, so a benign page (for example `rc=143`, or a
   forged event from the semi-public DSN) can hide a real failure for up to 2 h. Corroborate with
   the Better Stack `provision-attempt-exit-<rc>` row.
-- The sanctioned quiet lever is the RULE (raise `frequency_minutes` in Terraform, or disable it,
-  which the daily drift job will then report as expected drift). Never mute `WEB-PLATFORM-4S`.
+- The sanctioned quiet lever is the RULE, changed in Terraform: raise `frequency_minutes`, or set
+  `enabled = false`, and regenerate `alert-reference.json` in the same PR. Never disable it in the
+  Sentry UI (the daily drift job treats a live `DISABLED` as a fault and asks for re-enable), and
+  never mute `WEB-PLATFORM-4S`.
 
 3.2 ADR-257: add in-place `> **Superseded 2026-09-30 (#9176):** …` pointer lines under Decision 5
 ("its alert rule is a tracked deferral") and under the Consequences bullet "Non-pull failures do not
@@ -430,19 +474,22 @@ error_reporting:
 failure_modes:
   - mode: "non-pull provision attempt failure (isolation check, env/NIC missing, FSM busy, bootstrap exit, unnamed arm, TimeoutStartSec kill)"
     detection: "stage=provision_attempt_failed with detail why=<last_stage> (not inngest_pull_fatal)"
-    alert_route: "layer 5 Sentry alert inngest-provision-failure -> email issue_owners/ActiveMembers; layer 3 Better Stack phone-home provision-attempt-exit-<rc> row; layer 6 scripts/followthroughs/inngest-provision-unit-8562.sh verdict (delivery replace only)"
+    alert_route: "not a numbered layer (1-6 are app/Vector/webhook surfaces; layer 3 Vector is not installed until the bootstrap succeeds): direct host emitter soleur-boot-emit -> Sentry store API -> Sentry alert inngest-provision-failure -> email issue_owners/ActiveMembers; corroborated by the direct Better Stack phone-home curl row provision-attempt-exit-<rc>"
   - mode: "degraded bootstrap (SQLite-only, no latch)"
     detection: "stage=bootstrap_done_degraded, detail why=.redis-inactive and/or .no-durable-execstart"
-    alert_route: "layer 5 Sentry alert inngest-provision-failure; layer 3 Better Stack bootstrap-done-DEGRADED row"
+    alert_route: "not a numbered layer: direct host emitter soleur-boot-emit -> Sentry alert inngest-provision-failure (pages once per boot); corroborated by the direct Better Stack phone-home row bootstrap-done-DEGRADED"
   - mode: "pull miss"
     detection: "stage=inngest_pull_fatal (fatal) plus provision_attempt_failed why=inngest_pull_fatal"
-    alert_route: "layer 5 Sentry alert zot-mirror-fallback-rate (unchanged); excluded from inngest-provision-failure by detail nc"
+    alert_route: "not a numbered layer: direct host emitter -> Sentry alert zot-mirror-fallback-rate (unchanged); excluded from inngest-provision-failure by detail nc"
+  - mode: "apply rejects or drops the rule (e.g. nc refused by the API, rule never created)"
+    detection: "red apply-sentry-infra.yml run for the merge SHA (its if: failure() issue filer fires); scheduled-sentry-alert-drift.yml reports DELETED or RENAMED for a reference name missing live; AC-post-2 projection diff"
+    alert_route: "layer 6 (workflow run log) + the filed GitHub issue"
   - mode: "rule drifts, is disabled, or loses a filter in Sentry"
-    detection: "scheduled-sentry-alert-drift.yml compares live /workflows/ to alert-reference.json; apply-sentry-infra.yml post-apply fidelity"
-    alert_route: "layer 6 GitHub Actions drift workflow files an issue (existing path)"
+    detection: "scheduled-sentry-alert-drift.yml compares live /workflows/ to alert-reference.json (DISABLED is reported as a live fault); apply-sentry-infra.yml post-apply fidelity"
+    alert_route: "layer 6 (workflow run log) + the drift workflow's filed issue"
   - mode: "Sentry POST from the host fails"
     detection: "soleur-boot-emit phones home sentry-emit-FAILED stage=<stage> rc=<rc>"
-    alert_route: "layer 3 Better Stack phone-home row (no page; runbook reads Better Stack instead)"
+    alert_route: "not a numbered layer: direct Better Stack phone-home row (no page). Residual: if the phone-home ALSO fails before Vector exists, SOLEUR_INNGEST_BOOT_TRACE_LOST never leaves the host; the off-host backstop is the missed check-ins on the Sentry cron monitors (cron-monitors.tf) for the scheduled jobs the dark host stops running"
 logs:
   where: "Sentry events (tags stage/detail/host_id/host_name/region) in project web-platform; Better Stack inngest boot-trace source"
   retention: "Sentry plan event retention (90 days queried 2026-09-30); Better Stack source retention"
@@ -450,6 +497,11 @@ discoverability_test:
   command: "grep -c inngest-provision-failure apps/web-platform/infra/sentry/alert-reference.json"
   expected_output: "2"
 ```
+
+The probe proves the rule is declared in the live-bound reference (the key line plus the `name`
+line), not that it is enabled with frequency 120. A `jq` projection would check more, but its `|`
+fails preflight Check 10's byte-level shell-active reject. `enabled`/`frequency` are covered by the
+reference gate, the daily drift job and AC-post-2.
 
 ## Guard Contract
 
