@@ -77,6 +77,7 @@ LIVE_LABELS=(
   T11-bindsto-reap T12-fleet-two-sessions T13-managed-oom-pref
   T14-kill-mechanism T15-idempotency T15-terminal-scope-stable
   T18-documented-kill-path AC18-reentry-resweep T20-repair-stale-scope
+  T21-reentry-converge
 )
 declare -A LIVE_SEEN=()
 live_mark() { LIVE_SEEN["$1"]=1; }
@@ -91,6 +92,14 @@ TMPDIRS=()
 
 teardown() {
   local u p d
+  # Best-effort restore of T21's degrade: a suite killed between the degrade
+  # and the converging run would otherwise leave this session's real scope at
+  # TasksMax=37984 until the next hook pass healed it.
+  if [[ -n "${t21_degraded_scope:-}" ]] && command -v busctl >/dev/null 2>&1; then
+    busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+      org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
+      "$t21_degraded_scope" true 1 "TasksMax" "t" "${SCOPE_TASKS_MAX:-4096}" >/dev/null 2>&1
+  fi
   for u in "${SCOPES[@]:-}"; do [[ -n "$u" ]] && systemctl --user stop "$u" >/dev/null 2>&1; done
   systemctl --user stop "$TEST_SLICE" >/dev/null 2>&1
   systemctl --user stop "soleurtest.slice" >/dev/null 2>&1
@@ -291,6 +300,74 @@ if [[ "$_scope_tasks_props" -eq 5 && "$_fleet_tasks_props" -eq 1 ]]; then
   pass "T2 TasksMax reaches both StartTransientUnit calls, the re-entry refresh, the sibling sweep, the stale-scope repair, and the fleet slice call"
 else
   fail "T2 TasksMax property wiring: scope $_scope_tasks_props (want 5), fleet $_fleet_tasks_props (want 1)"
+fi
+
+# T21 (static) — the re-entry refresh's SetUnitProperties must carry ONLY the
+# four runtime-settable caps. The call is all-or-nothing, so one creation-only
+# member (OOMPolicy on scopes — measured rejected on systemd 261 — or any
+# other the array admits) silently disables the whole refresh: the #9246
+# defect shape. Whitelist the four caps rather than blacklist OOMPolicy — a
+# DIFFERENT non-runtime member (BindsTo, say) must red this too. The re-entry
+# call is uniquely the "$scope"-targeted SetUnitProperties (the slice calls
+# target "$SLICE_NAME"/"soleur.slice", the repair call "$u"), and an empty
+# extraction is a FAIL — a pin that cannot find its call must not pass
+# vacuously.
+# Full-line comments are stripped first: a comment carrying call tokens must
+# neither satisfy the extraction nor inflate the member census — prose is not
+# code (cq-assert-anchor-not-bare-token's clause applied to the consumer side).
+_hook_code=$(grep -v '^[[:space:]]*#' "$HOOK")
+# Extraction emits a @@BLOCK@@ sentinel per "$scope"-targeted block so the pin
+# can also assert SINGLETON — a second refresh call would merge silently into
+# one buffer otherwise (a whitelisted-only duplicate would green undetected).
+_reentry_blocks=$(printf '%s\n' "$_hook_code" | awk '
+  /SetUnitProperties/ { inblk=1; buf=$0 "\n"; next }
+  inblk { buf = buf $0 "\n" }
+  inblk && />\/dev\/null 2>&1/ {
+    if (buf ~ /"\$scope" true/) printf "%s@@BLOCK@@\n", buf
+    inblk=0; buf=""
+  }')
+_reentry_n=$(printf '%s' "$_reentry_blocks" | grep -c '@@BLOCK@@')
+_reentry_block=${_reentry_blocks//@@BLOCK@@/}
+if [[ "$_reentry_n" != "1" ]]; then
+  fail "T21 re-entry call-shape pin: \"\$scope\"-targeted SetUnitProperties block count=$_reentry_n (want exactly 1 — 0 means the pin cannot find its call, >1 means a second refresh rides unobserved)"
+else
+  # Normalise for judgement: strip continuation backslashes, squeeze ALL
+  # whitespace (incl. newlines) to single spaces, and fold single quotes to
+  # double — so a member spelled `"X"  "s"`, `'X' 's'`, or split across the
+  # line-join is judged by one grammar. Members supplied by EXPANSION
+  # (${extra[@]} and friends) are invisible to any static pin by construction;
+  # the T21 live arm and M11 cover that axis at runtime.
+  _reentry_norm=$(printf '%s' "$_reentry_block" | tr -d '\\' | tr -s '[:space:]' ' ' | sed "s/'/\"/g")
+  _reentry_props=$(printf '%s' "$_reentry_norm" | grep -oE '"[A-Z][A-Za-z0-9]+" "[a-z]+"' | grep -oE '^"[A-Z][A-Za-z0-9]+"' | tr -d '"' | sort)
+  # The want-set is restated in repair_eval_scope's call and in the readback
+  # -p list too — adding a fifth runtime cap means updating all three; the pin
+  # whitelists so ANY non-runtime member (OOMPolicy, BindsTo, ...) reds.
+  _reentry_want=$'MemoryHigh\nMemoryMax\nMemorySwapMax\nTasksMax'
+  if printf '%s' "$_reentry_norm" | grep -qE '"\$scope" true 4( |$)' \
+     && [[ "$_reentry_props" == "$_reentry_want" && "$_reentry_block" != *OOMPolicy* ]]; then
+    pass "T21 re-entry SetUnitProperties carries exactly the four runtime-settable caps (\"\$scope\" true 4)"
+  else
+    fail "T21 re-entry call shape drifted — want one \"\$scope\" true 4 call with {MemoryHigh,MemoryMax,MemorySwapMax,TasksMax} and no OOMPolicy anywhere in the block, got:
+$(printf '%s\n' "$_reentry_block")"
+  fi
+fi
+# OOMPolicy's only legitimate sites are the three StartTransientUnit creation
+# calls (sweep, main, pid-reuse) — it is creation-only on scopes. Assert it
+# PER SITE, not by file-wide count: a census of literal lines is satisfied by
+# comment text or by two members sharing one call while a third loses it.
+_create_blocks=$(printf '%s\n' "$_hook_code" | awk '
+  /StartTransientUnit/ { inblk=1; buf=$0 "\n"; next }
+  inblk { buf = buf $0 "\n" }
+  inblk && />\/dev\/null 2>&1/ { printf "%s@@BLOCK@@\n", buf; inblk=0; buf="" }')
+_create_n=$(printf '%s' "$_create_blocks" | grep -c '@@BLOCK@@')
+_oom_sites=$(printf '%s' "$_create_blocks" | awk 'BEGIN{RS="@@BLOCK@@"} /OOMPolicy/{n++} END{print n+0}')
+# Occurrence census over the normalised code stream (quotes folded, whitespace
+# squeezed): catches a member written in a non-canonical spelling.
+_oom_total=$(printf '%s' "$_hook_code" | tr -d '\\' | tr -s '[:space:]' ' ' | sed "s/'/\"/g" | grep -o '"OOMPolicy" "s" "continue"' | wc -l)
+if [[ "$_create_n" == "3" && "$_oom_sites" == "3" && "$_oom_total" == "3" ]]; then
+  pass "T21 OOMPolicy stays at exactly the three StartTransientUnit creation sites (calls=$_create_n carrying=$_oom_sites occurrences=$_oom_total)"
+else
+  fail "T21 OOMPolicy site drift: $_create_n creation call(s), $_oom_sites carrying the member, $_oom_total occurrence(s) (want 3/3/3 — sweep/main/pid-reuse)"
 fi
 
 # =====================================================================
@@ -1461,9 +1538,59 @@ $(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
 
     bindsto_before=$(sysd_prop "$scope_name" BindsTo)
     ts_before=$(tail -1 "$E2E_LOG" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
+    # T21 — degrade the scope's TasksMax BEFORE this scheduled re-entry run, so
+    # the run must actually CONVERGE a drifted cap, not merely not-crash:
+    # the refresh's stated purpose is "a changed cap lands without a session
+    # restart". 37984 is the terminal-scope ceiling the constants comment
+    # names — strictly a RAISE of the bound while set (the incident's own
+    # stale shape), never a MemoryMax-style lower that could throttle this
+    # suite. Runtime-only; the re-entry run below must restore $SCOPE_TASKS_MAX.
+    # t21_ln0 indexes the NEW line by position — tail -1 would silently re-read
+    # the previous run's verdict if this run never emitted (the stale-read
+    # class the battery's M11 arm names explicitly).
+    t21_ln0=$(wc -l < "$E2E_LOG" 2>/dev/null || echo 0)
+    busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+      org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
+      "$scope_name" true 1 "TasksMax" "t" 37984 >/dev/null 2>&1
+    t21_degraded=$(sysd_prop "$scope_name" TasksMax)
+    t21_degraded_scope=$scope_name   # teardown() restores this best-effort
     run_real_hook
     bindsto_after=$(sysd_prop "$scope_name" BindsTo)
-    ts_after=$(tail -1 "$E2E_LOG" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
+    t21_line=$(sed -n "$((t21_ln0 + 1))p" "$E2E_LOG" 2>/dev/null)
+    ts_after=$(printf '%s' "$t21_line" | jq -r '.terminal_scope // ""' 2>/dev/null)
+    t21_tm=$(sysd_prop "$scope_name" TasksMax)
+    t21_outcome=$(printf '%s' "$t21_line" | jq -r '.outcome // ""' 2>/dev/null)
+    t21_reason=$(printf '%s' "$t21_line" | jq -r '.reason // ""' 2>/dev/null)
+    t21_rrc=$(printf '%s' "$t21_line" | jq -r '.refresh_rc // ""' 2>/dev/null)
+    t21_repaired=$(printf '%s' "$t21_line" | jq -r '.repaired // ""' 2>/dev/null)
+    # Restore the degrade NOW if the run left it standing — a suite killed
+    # between degrade and here would otherwise leave the session's scope at
+    # the unbounded-pids shape until some later hook run healed it.
+    [[ "$t21_tm" == "37984" ]] && \
+      busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+        org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
+        "$scope_name" true 1 "TasksMax" "t" "$SCOPE_TASKS_MAX" >/dev/null 2>&1
+    # DISCRIMINATOR: `refresh_rc` — the ledgered rc of the re-entry
+    # SetUnitProperties call ITSELF. A refresh carrying a creation-only
+    # property (#9246's OOMPolicy) is rejected all-or-nothing on systemd >=261
+    # and lands refresh_rc=1, whatever TasksMax or the outcome field say —
+    # repair_stale_scopes heals the degraded cap in the SAME pass, and a
+    # foreign stale scope inflating `.repaired` (a fleet-wide counter, not a
+    # per-scope verdict) can neither fake nor invalidate this field. An
+    # external session healing the degrade mid-window still leaves
+    # refresh_rc=0 on a working hook: the call was accepted, which is the
+    # property being pinned. (`repaired` is diagnostic-only here.)
+    if [[ -z "$t21_line" ]]; then
+      fail "T21 re-entry run emitted no new ledger line (count was $t21_ln0) — reading a stale line would report the previous run's verdict"
+    elif [[ "$t21_outcome" != "applied" || "$t21_reason" != "ok_refreshed" ]]; then
+      skip "T21-reentry-converge" "re-entry run landed outcome=${t21_outcome:-<none>} reason=${t21_reason:-<none>} — the refresh arm is only measured on ok_refreshed (pid_reuse_disambiguated recreates the scope instead)"
+    elif [[ "$t21_degraded" == "37984" && "$t21_tm" == "$SCOPE_TASKS_MAX" && "$t21_rrc" == "0" ]]; then
+      live_mark T21-reentry-converge
+      pass "T21 re-entry refresh converged a degraded TasksMax 37984 -> $SCOPE_TASKS_MAX (refresh_rc=0, outcome=$t21_outcome repaired=$t21_repaired)"
+    else
+      live_mark T21-reentry-converge
+      fail "T21 re-entry refresh did not converge the scope itself: degraded=$t21_degraded TasksMax-after=$t21_tm refresh_rc=${t21_rrc:-<absent>} outcome=$t21_outcome reason=$t21_reason repaired=$t21_repaired — #9246's rejected call is masked by repair_stale_scopes unless the refresh's own rc is asserted"
+    fi
 
     if [[ "$parked" == "yes" ]]; then
       late_after=$(cut -d: -f3 < "/proc/$LATE/cgroup" 2>/dev/null)
@@ -1500,7 +1627,7 @@ $(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
     fi
   else
     for t in T8-adoption T9-tree-adoption T9-grandchild T15-idempotency \
-             T15-terminal-scope-stable AC18-reentry-resweep; do
+             T15-terminal-scope-stable AC18-reentry-resweep T21-reentry-converge; do
       skip "$t" "the hook itself declined: outcome='${outcome:-<no log line>}' reason='${reason:-}' — run this suite STANDALONE to exercise the adoption arm; the hook runs one process deeper than this suite, so at lefthook depth claude sits outside its ${MAX_WALK_HOPS}-hop limit"
     done
   fi
@@ -1567,6 +1694,13 @@ $(diff "$before/snap.mem" "$after/snap.mem" | grep -E '^[<>]' | grep -vE '/soleu
     fail "T20/AC7 could not create the stale-caps test scope $RSCOPE"
   fi
 fi
+
+# Static-side analogue of the live-arm ledger below: LIVE_LABELS reconciles
+# live tests, but nothing noticed a DELETED static pin — a drift guard that is
+# itself deleted greens. The T21 pin carries the `_reentry_block` sentinel.
+grep -q '_reentry_block' "$0" \
+  && pass "T21 static re-entry pin present in the suite (self-check)" \
+  || fail "T21 static re-entry pin is gone — its deletion must red the suite, not pass silently"
 
 # Reconcile the ledger on EVERY path. A label that was neither run nor skipped
 # means the test was deleted (or its live_mark was), which is exactly the case
