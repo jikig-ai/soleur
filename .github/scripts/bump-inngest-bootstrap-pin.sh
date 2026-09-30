@@ -176,7 +176,7 @@ done
 [[ "$SIGNED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || die args "--signed-digest must be sha256:<64 hex> (got '${SIGNED_DIGEST:-<empty>}')"
 [[ "$SIGNED_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
-  || die args "--signed-commit must be a 40-hex commit (got '${SIGNED_COMMIT:-<empty>}'). A workflow copy that predates #8747 does not pass it, which means vinngest-${SIGNED_TAG} was cut on a branch forked before the fix and may be off main. Unless main pins it today, delete it (git push origin :refs/tags/vinngest-${SIGNED_TAG}; git tag -d vinngest-${SIGNED_TAG}), then tag a NEW version on main's squash-merge commit, then dispatch the build once from main (gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<new tag>)."
+  || die args "--signed-commit must be a 40-hex commit (got '${SIGNED_COMMIT:-<empty>}'). Every copy of the workflow since #8747 passes it (and the bump job runs only main's copy), so a missing value means a manual or foreign invocation — or, historically, a tag cut on a branch forked before #8747, which may be off main. Unless main pins it today, delete it (git push origin :refs/tags/vinngest-${SIGNED_TAG}; git tag -d vinngest-${SIGNED_TAG}), then tag a NEW version on main's squash-merge commit, then dispatch the build once from main (gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<new tag>)."
 case "$MIRROR_STATUS" in
   ok|degraded|"") : ;;
   *) die args "--mirror-status must be ok|degraded|'' (got '$MIRROR_STATUS')" ;;
@@ -416,9 +416,9 @@ if [[ -n "$remote_tip" ]]; then
     *)  human_tip=1 ;;
   esac
   if [[ "$human_tip" == "1" ]]; then
-    echo "::warning::branch-has-manual-commits: ${BRANCH} remote tip is not authored by ${BOT_NAME} (login='${tip_author:-<none>}') — push skipped. Reconcile: close the PR and delete the branch, then dispatch the build once from main with mirror_only=true (gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-${TARGET} -f mirror_only=true). Every ${TARGET} run re-skips while such a tip stands; the AC6 drift guard stays red meanwhile (main-health-monitor escalates to a ci/main-broken issue)."
+    echo "::warning::branch-has-manual-commits: ${BRANCH} remote tip is not authored by ${BOT_NAME} (login='${tip_author:-<none>}') — push skipped. Reconcile: close the PR and delete the branch (git push origin --delete ${BRANCH}), then dispatch the build once from main with mirror_only=true (gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-${TARGET} -f mirror_only=true); the PR it opens is HELD (a mirror_only run never arms auto-merge), so review it and merge with gh pr merge <n> --squash. Every ${TARGET} run re-skips while such a tip stands; the AC6 drift guard stays red meanwhile (main-health-monitor escalates to a ci/main-broken issue)."
     emit_result skipped
-    summary "### inngest-bootstrap pin bump"$'\n\n'"**branch-has-manual-commits** — \`${BRANCH}\` carries a tip not authored by \`${BOT_NAME}\`; push skipped. Reconcile: close the PR and delete the branch, then dispatch the build once from main with \`mirror_only=true\` — every \`${TARGET}\` run re-skips while such a tip stands."
+    summary "### inngest-bootstrap pin bump"$'\n\n'"**branch-has-manual-commits** — \`${BRANCH}\` carries a tip not authored by \`${BOT_NAME}\`; push skipped. Reconcile: close the PR and delete the branch (\`git push origin --delete ${BRANCH}\`), then dispatch the build once from main with \`mirror_only=true\`; the PR it opens is held, so review it and merge with \`gh pr merge <n> --squash\` — every \`${TARGET}\` run re-skips while such a tip stands."
     exit 0
   fi
   lease="--force-with-lease=refs/heads/${BRANCH}:${remote_tip}"
@@ -434,7 +434,7 @@ git -C "$REPO_DIR" push "$lease" "$PUSH_URL" "HEAD:refs/heads/${BRANCH}" \
 # cli/cli#10945), so an unfiltered .[0] could select a fork PR with a colliding
 # branch name and arm `gh pr merge --auto` on it.
 if ! PR_LIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
-    --json url,number,author,isCrossRepository 2>/dev/null); then
+    --json url,number,author,isCrossRepository,autoMergeRequest 2>/dev/null); then
   echo "::warning::gh pr list for ${BRANCH} failed — proceeding as if no open PR exists"
   PR_LIST='[]'
 fi
@@ -444,6 +444,11 @@ PR_URL=$(jq -r --arg bot "$BOT_PR_LOGIN" \
 PR_NUM=$(jq -r --arg bot "$BOT_PR_LOGIN" \
   '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].number // ""' \
   <<<"$PR_LIST" 2>/dev/null || true)
+# Whether auto-merge is ALREADY armed on the reused PR (an earlier full build armed it).
+# A mirror_only run must not feed an armed PR, so this is read, never assumed (#9262).
+PR_ARMED=$(jq -r --arg bot "$BOT_PR_LOGIN" \
+  '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].autoMergeRequest // null | if . == null then "no" else "yes" end' \
+  <<<"$PR_LIST" 2>/dev/null || echo unknown)
 
 if [[ -n "$PR_URL" && -n "$PR_NUM" ]]; then
   gh pr comment "$PR_NUM" --repo "$REPO" \
@@ -482,13 +487,16 @@ else
     # once through the SAME same-repo/bot filter before calling it fatal — a
     # hidden collision is recoverable, an unfiltered retry is not.
     PR_LIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
-      --json url,number,author,isCrossRepository 2>/dev/null || echo '[]')
+      --json url,number,author,isCrossRepository,autoMergeRequest 2>/dev/null || echo '[]')
     PR_URL=$(jq -r --arg bot "$BOT_PR_LOGIN" \
       '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].url // ""' \
       <<<"$PR_LIST" 2>/dev/null || true)
     PR_NUM=$(jq -r --arg bot "$BOT_PR_LOGIN" \
       '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].number // ""' \
       <<<"$PR_LIST" 2>/dev/null || true)
+    PR_ARMED=$(jq -r --arg bot "$BOT_PR_LOGIN" \
+      '[.[] | select((.isCrossRepository | not) and (.author.login == $bot))][0].autoMergeRequest // null | if . == null then "no" else "yes" end' \
+      <<<"$PR_LIST" 2>/dev/null || echo unknown)
     [[ -n "$PR_URL" && -n "$PR_NUM" ]] \
       || die pr "gh pr create failed for ${BRANCH} and the filtered re-list found no same-repo bot PR"
     RESULT_KIND=existing
@@ -529,6 +537,25 @@ while IFS='|' read -r n oid; do
 done < <(jq -r --arg b "$BRANCH" \
   '.[] | select(.headRefName != null) | select(.headRefName | startswith("soleur/inngest-pin-")) | select(.headRefName != $b) | "\(.number)|\(.headRefOid)"' \
   <<<"$OPEN_PRS" 2>/dev/null)
+
+# --- mirror_only: never feed an ALREADY-ARMED PR (#9262) ----------------------
+# "Never arms" is not enough on the `existing` path: a PR an earlier full build armed
+# stays armed across this run's push (GitHub keeps auto-merge for a writer's push), so
+# the PR would merge on a commit a mirror_only run produced. Disarm it, and refuse when
+# the armed state cannot be read or the disarm fails: fail-closed, never "probably held".
+if [[ "$MIRROR_ONLY" == "true" && "$RESULT_KIND" == "existing" && -n "$PR_NUM" ]]; then
+  case "${PR_ARMED:-unknown}" in
+    no) : ;;
+    yes)
+      gh pr merge "$PR_NUM" --repo "$REPO" --disable-auto \
+        || die pr "mirror_only run reused PR ${PR_NUM}, which has auto-merge armed, and gh pr merge --disable-auto failed — the PR could merge on a mirror_only commit; disable auto-merge on ${PR_URL} by hand before anything else"
+      echo "disarmed auto-merge on ${PR_URL} (mirror_only run)" ;;
+    *) die pr "mirror_only run reused PR ${PR_NUM} but could not read whether auto-merge is armed (autoMergeRequest unreadable) — refusing rather than risk feeding an armed PR" ;;
+  esac
+  gh pr comment "$PR_NUM" --repo "$REPO" \
+    --body "Auto-merge withheld: this refresh came from a mirror_only backfill, which cannot attest provenance (it skips the build's ancestry refusal, and the signature covers whatever the tag resolves to). Confirm \`${RESOLVED}\` was built from commit \`${TARGET_COMMIT}\`, then merge by hand." \
+    || echo "::warning::mirror_only hold comment on PR ${PR_NUM} failed"
+fi
 
 # --- merge: arm auto-merge iff the zot mirror attests THIS target -------------
 # mirror_status attests the tag THIS run published (SIGNED_TAG). When the run

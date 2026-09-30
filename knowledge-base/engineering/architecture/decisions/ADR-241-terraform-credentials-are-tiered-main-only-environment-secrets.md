@@ -218,11 +218,17 @@ replacement first.
   > (`apps/web-platform/infra/github-infra-app-manifest.json`) carries `pull_requests: write` and
   > `actions: write` for them: the pin bump opens and auto-merges a PR, and the auto-mint dispatches
   > the build. Its permissions are therefore **no longer purely derived from the resource types
-  > Terraform manages**. The two added scopes are dominated by the `administration:write` and
-  > `contents:write` the App already holds, and each consumer requests a scoped token
-  > (`{"contents":"write","pull_requests":"write"}` or `{"actions":"write"}` on `soleur`), which the
-  > composite's exact-grant check enforces. No API changes a live App's permissions, so the widening
-  > is #8209 runbook step O4c.
+  > Terraform manages**. The widening applies to **every unscoped token minted from this App**, not
+  > only to the two new consumers: that includes the Terraform provider's `app_auth` tokens in every
+  > Tier-B root (`apps/web-platform/infra/main.tf`, `infra/github`), which now carry `actions:write`
+  > and `pull_requests:write` too. The two new consumers each request a scoped token
+  > (`{"contents":"write","pull_requests":"write"}` or `{"actions":"write"}` on `soleur`), and the
+  > composite's exact-grant check bounds only them. `actions:write` (dispatch and re-run workflows)
+  > and `pull_requests:write` (open, review and merge PRs) are new capabilities, not implied by the
+  > `administration:write` or `contents:write` the App already holds. The blast radius is
+  > comparable, because `administration:write` already allows ruleset and repository
+  > administration. No API changes a live App's permissions, so the widening is #8209 runbook step
+  > O4c.
 - **Board sync does not use it.** `board-status-sync.yml` runs on `pull_request`/`issues`, stays
   Tier A, and mints from its own least-privilege App, `soleur-board`
   (`organization_projects:write` plus the read scopes its GraphQL queries need), whose key lives in
@@ -640,16 +646,15 @@ The pin bump (`build-inngest-bootstrap-image.yml::bump-cloud-init-pin`) and the 
 (`mint-inngest-bootstrap-tag.yml::mint`) minted the `soleur-ai` App token from `soleur/prd_terraform`
 through a repository secret, with no `environment:`. O10's sentinel would have failed both, so O10
 was held on them. They now declare `environment: infra-privileged` and mint the `soleur-infra` App
-token from `soleur-infra-privileged/prd` (ADR-232, amended the same day).
+token from `soleur-infra-privileged/prd` (ADR-232, amended the same day). The dated notes in D2 and
+D5 and the D5 Statuses row carry the decision text.
 
-- **D2 note added:** `infra-privileged` serves the two consumers.
-- **D5 amended:** `soleur-infra` carries `pull_requests:write` and `actions:write` for them, so its
-  permissions are no longer purely Terraform-derived. The Statuses row for D5 gains O4c's evidence.
 - **Census:** G4e's floor moves from 4 to 3, because the renamed composite no longer reads
   `GITHUB_APP_PRIVATE_KEY`. G1b/G1c pick up both jobs through their reference to
   `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED`; no row is added.
 - **Runbook:** the new step O4c (widen the live App and prove the consumers on Tier B) precedes O10;
-  the chain is #9262 merge → O4c → O10 → #8609 R-step 1.
+  the chain is #9262 merge → O4c → O10 → O13's `DOPPLER_TOKEN_TF` rotation → #8609 R-step 1
+  (the runbook's §Runtime App key gates R-step 1 on both).
 - **Exposure, stated plainly:** both jobs hold `DOPPLER_TOKEN_INFRA_PRIVILEGED`, which reads the
   **whole** Tier-B project. Since #8609 PR-A (#9263) that project also holds
   `GITHUB_APP_RUNTIME_DOPPLER_TOKEN` (D10), so these two unattended jobs can read the path to the

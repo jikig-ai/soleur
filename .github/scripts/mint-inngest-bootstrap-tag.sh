@@ -25,9 +25,9 @@
 # suffixed or not.
 #
 # CREDENTIALS. Two, never together:
-#   --tag      reads MINT_TAG_TOKEN (the job's GITHUB_TOKEN). A tag created by
-#              GITHUB_TOKEN fires no `push: tags` build — the event suppression is
-#              WANTED, so exactly one build runs (the dispatch below).
+#   --tag      reads MINT_TAG_TOKEN (the job's GITHUB_TOKEN; the App token is scoped
+#              to actions:write only). The build workflow has no `push: tags` trigger
+#              (#9262), so exactly one build runs: the dispatch below.
 #   --dispatch reads MINT_DISPATCH_TOKEN (the soleur-infra App installation token,
 #              scoped to actions:write on soleur; minted before the tag step so a
 #              credential failure publishes nothing, and revoked after the POST).

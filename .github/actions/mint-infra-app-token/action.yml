@@ -107,19 +107,26 @@ runs:
           --argjson iss "$APP_ID" \
           --argjson iat "$((now - 60))" \
           --argjson exp "$((now + 540))" \
-          '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+          '{iss: $iss, iat: $iat, exp: $exp}' | b64url) || {
+          echo "::error::mint-infra-app-token: could not build the App-JWT payload (is GITHUB_INFRA_APP_ID numeric?)."; exit 1; }
         unsigned="${header}.${payload}"
-        signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
+        signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url) || {
+          echo "::error::mint-infra-app-token: signing the App-JWT failed."; exit 1; }
+        # The SIGNATURE is the part that can come back empty; the joined JWT never can.
+        [[ -n "$signature" && -n "$payload" ]] || { echo "::error::mint-infra-app-token: App-JWT mint produced an empty payload or signature."; exit 1; }
         JWT="${unsigned}.${signature}"
-        [[ -n "$JWT" ]] || { echo "::error::mint-infra-app-token: App-JWT mint produced empty output."; exit 1; }
         echo "::add-mask::$JWT"
 
+        curl_rc=0
         INSTALL_RESP=$(curl -sS --max-time 30 -X POST \
           -d "$scope_body" \
           -H "Authorization: Bearer $JWT" \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
+          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens") || curl_rc=$?
+        if (( curl_rc != 0 )); then
+          echo "::error::mint-infra-app-token: the installation-token exchange did not complete (curl rc=${curl_rc}: transport failure or timeout)."; exit 1
+        fi
         INSTALL_TOKEN=$(jq -r '.token // empty' <<<"$INSTALL_RESP" 2>/dev/null || true)
         if [[ -z "$INSTALL_TOKEN" ]]; then
           # GitHub's own refusal text names the missing permission. Vendor text is
@@ -133,18 +140,27 @@ runs:
           exit 1
         fi
         echo "::add-mask::$INSTALL_TOKEN"
-        # Exact-grant check (#4326): the response must grant exactly the request.
-        # GitHub may add metadata:read on its own, and nothing else is accepted.
-        jq -e --argjson want "$SCOPE_PERMISSIONS" \
-          '(.permissions | type) == "object" and (.permissions | del(.metadata)) == $want
+        # A refused grant still ISSUED a token; revoke it (best effort) rather than let
+        # it live out its hour.
+        revoke() {
+          curl -sS --max-time 10 -X DELETE \
+            -H "Authorization: Bearer $INSTALL_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/installation/token" >/dev/null 2>&1 || true
+        }
+        # Exact-grant check (#4326): the response must grant exactly what was SENT
+        # ($scope_body, the one normalized value), plus the implicit metadata:read.
+        jq -e --argjson body "$scope_body" \
+          '(.permissions | type) == "object" and (.permissions | del(.metadata)) == $body.permissions
            and ((.permissions.metadata // "read") == "read")' <<<"$INSTALL_RESP" >/dev/null || {
+          revoke
           echo "::error::mint-infra-app-token: the granted permissions $(jq -c '.permissions // null' <<<"$INSTALL_RESP") differ from the requested ${SCOPE_PERMISSIONS} (plus metadata:read); refusing to hand out the token."; exit 1; }
-        jq -e --arg repos "$SCOPE_REPOSITORIES" '
+        jq -e --argjson body "$scope_body" '
           .repository_selection == "selected"
-          and ([.repositories[]?.name] | sort)
-              == ($repos | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | sort)' \
+          and ([.repositories[]?.name] | sort) == ($body.repositories | sort)' \
           <<<"$INSTALL_RESP" >/dev/null || {
-          echo "::error::mint-infra-app-token: the token is not limited to the requested repositories (${SCOPE_REPOSITORIES}); got repository_selection=$(jq -r '.repository_selection // "none"' <<<"$INSTALL_RESP"); refusing to hand out the token."; exit 1; }
+          revoke
+          echo "::error::mint-infra-app-token: the token is not limited to the requested repositories (${SCOPE_REPOSITORIES}); got repository_selection=$(jq -c '.repository_selection // "none"' <<<"$INSTALL_RESP"); refusing to hand out the token."; exit 1; }
         # Per-run evidence (runbook infra-credential-tiers-8209.md step O4c): which
         # App, which installation, which scope. No secret in it.
         echo "::notice title=app-token::app=soleur-infra installation=${INSTALLATION_ID} permissions=$(jq -cS '.permissions' <<<"$INSTALL_RESP")"

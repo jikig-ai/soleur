@@ -1,8 +1,7 @@
 # ADR-232: The `vinngest-v*` publish workflow authors its own cloud-init pin-bump PRs, authenticated as the `soleur-infra` App — never `GITHUB_TOKEN` for the PR write, never a direct push to main
 
-> **Title amended 2026-09-30 (#9262):** it read "authenticated as the `soleur-ai` App" until
-> #9262 moved the pin bump and the build dispatch to the `soleur-infra` App on the main-only
-> `infra-privileged` environment. See the Amendment dated 2026-09-30 (#9262) below.
+> **Title amended 2026-09-30 (#9262):** it read "authenticated as the `soleur-ai` App"; see the
+> Amendment dated 2026-09-30 (#9262).
 
 - **Date:** 2026-09-19
 
@@ -88,7 +87,7 @@ expected-by-construction, and cannot downgrade the pin.
 governs the bump job's own writes and the publish path of a hand-pushed tag. The
 §8 tag write uses the mint job's `GITHUB_TOKEN` on purpose, because its event
 suppression keeps the tag's `push: tags` run silent.) The mint lives in the composite action
-`.github/actions/mint-soleur-ai-app-token` (renamed `mint-infra-app-token` in #9262; RS256 over `GITHUB_APP_ID` +
+`.github/actions/mint-soleur-ai-app-token` (since renamed `mint-infra-app-token` and re-sourced in #9262; see the Superseded block below; RS256 over `GITHUB_APP_ID` +
 `GITHUB_APP_PRIVATE_KEY` from Doppler `soleur/prd_terraform`, POST to
 `/app/installations/<id>/access_tokens`, emitted as a masked step output) —
 extracted when this job would have become the fourth copy of the inline
@@ -112,26 +111,19 @@ credential-bearing push URL the same way xtrace would.
 > PAT.** The bump job declares `environment: infra-privileged` (ADR-241 D2: `main`-only branch
 > policy, no reviewers) and mints through `.github/actions/mint-infra-app-token`, the composite
 > renamed in #9262. The composite has one identity and one source, neither of them an input: it reads
-> `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY` with
-> `doppler secrets get <NAME> --plain --project soleur-infra-privileged --config prd` (project and
-> config fixed in argv), using the environment secret `DOPPLER_TOKEN_INFRA_PRIVILEGED`. Its four
-> inputs — `doppler-token`, `installation-id`, `permissions`, `repositories` — are each required
-> non-empty and checked in shell before any Doppler read, because an unscoped token of this App
-> would carry `administration:write` and `secrets:write`. The bump requests installation `166065653`,
-> `{"contents":"write","pull_requests":"write"}`, repository `soleur`; the `soleur-ai` mint it
-> replaces was unscoped. The composite keeps the PEM masking, the `openssl rsa -check`, the JWT
-> recipe and the exact-grant check (granted permissions must equal the request plus
-> `metadata:read`, and the repository selection must equal the request). It no longer refuses the
-> `EVICTED_SEE_ADR_241` sentinel, because it never reads `prd_terraform`. On a failed exchange it
-> prints GitHub's `.message` with every control character (CR and LF included), U+2028/U+2029 and
-> DEL turned into spaces and colon runs collapsed to one, never the token or
-> JWT; on success it emits `::notice title=app-token::app=soleur-infra installation=<id>
-> permissions=<granted>`. **Scope:** this governs the bump job's writes and the §8 dispatch. There
-> is no longer a publish path for a hand-pushed tag, because the build has no `push: tags` trigger
-> (A5, adopted in #9262). The §8 tag write still uses the mint job's `GITHUB_TOKEN`
-> (`contents: write`): with no tag trigger its event suppression no longer changes what builds, and
-> the App token stays scoped to `actions:write`. The `packages: read` GHCR login and the `set -x`
-> refusal are unchanged.
+> `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY` from `soleur-infra-privileged/prd`
+> (project and config fixed in argv) with the environment secret `DOPPLER_TOKEN_INFRA_PRIVILEGED`.
+> All four inputs (`doppler-token`, `installation-id`, `permissions`, `repositories`) are required,
+> because an unscoped token of this App would carry `administration:write` and `secrets:write`.
+> The bump requests installation `166065653`, `{"contents":"write","pull_requests":"write"}`,
+> repository `soleur`; the `soleur-ai` mint it replaces was unscoped. The composite keeps the
+> exact-grant check (granted permissions must equal the request plus `metadata:read`, and the
+> repository selection must equal the request) and no longer refuses the `EVICTED_SEE_ADR_241`
+> sentinel, because it never reads `prd_terraform`. Failure and success output: a sanitized
+> `.message`; the `app-token` notice (see `action.yml`). **Scope:** this governs the bump job's
+> writes and the §8 dispatch. The hand-pushed-tag publish path is gone and the §8 tag write keeps
+> `GITHUB_TOKEN`; see the Amendment dated 2026-09-30 (#9262). The `packages: read` GHCR login and
+> the `set -x` refusal are unchanged.
 
 **4. The bump is a PR authored by `soleur-ai[bot]`, never a direct push to
 main.** Branch `soleur/inngest-pin-vX.Y.Z`, commit identity
@@ -167,13 +159,18 @@ Otherwise the PR gets a hold comment naming the verification needed. The
 merge-arm itself is a warning, not a fatal — a PR left open is recoverable,
 a failed run that hid the PR is not.
 
-> **Amended 2026-09-30 (#9262):** a `mirror_only` build never arms auto-merge. The workflow binds
-> `MIRROR_ONLY: ${{ inputs.mirror_only }}` and passes `--mirror-only "$MIRROR_ONLY"` to the bump; when it is `true` the script opens or
-> updates the PR held, with a body line saying a `mirror_only` backfill cannot attest provenance.
-> The build's cosign step signs whatever digest the tag names at signing time, and `mirror_only`
-> skips the build's ancestry refusal, so a digest pushed to the tag by branch-run YAML could
-> otherwise be signed and auto-merged under `main`'s identity. A held `mirror_only` PR is merged by
-> a human after review.
+> **Amended 2026-09-30 (#9262):** a `mirror_only` build never arms auto-merge, and disarms one an
+> earlier run armed. The workflow passes `--mirror-only "$MIRROR_ONLY"` (bound from
+> `inputs.mirror_only`) to the bump. When it is `true`: a **new** PR opens held, with a body line
+> and a hold comment saying a `mirror_only` backfill cannot attest provenance; an **existing** PR
+> for the target is reused, its branch refreshed, and its body keeps its original text. The script
+> reads that PR's `autoMergeRequest`. If an earlier full build armed auto-merge, it runs
+> `gh pr merge <n> --disable-auto`; if that fails, or the armed state cannot be read, it dies at
+> stage `pr`. It then posts the hold comment on the existing PR too. The build's cosign step signs
+> whatever digest the tag names at signing time, and `mirror_only` skips the build's ancestry
+> refusal, so a digest pushed to the tag by branch-run YAML could otherwise be signed and
+> auto-merged under `main`'s identity. A held `mirror_only` PR is merged by a human after review:
+> `gh pr merge <n> --squash`.
 
 **6. Idempotent and fail-closed.** All four pins already at target+digest →
 `result=noop`, no branch, no commit, no PR. Malformed arguments or a
@@ -224,11 +221,9 @@ those 14 plus `v1.1.14` and `v1.1.24`).
   runs `main`'s copy of the job definition instead. The threat model is
   accident, not a hostile branch.
 
-  > **Superseded 2026-09-30 (#9262), as to the hand-pushed-tag caveat:** there is no tag-ref run
-  > any more. The build's only trigger is `workflow_dispatch`, and the bump job declares
-  > `environment: infra-privileged`, whose deployment-branch policy admits `main` only, so GitHub
-  > refuses the bump job in a run dispatched from any other ref. Every bump that runs therefore
-  > runs `main`'s copy of both the job definition and the script.
+  > **Superseded 2026-09-30 (#9262):** there is no tag-ref run, and `infra-privileged` refuses the
+  > bump job outside `main`, so every bump runs `main`'s job definition and script; see the
+  > Amendment dated 2026-09-30 (#9262).
 - **The bump is bound to the built commit.** The build job records the commit
   it checked out (`outputs.commit`), and the bump requires it as
   `--signed-commit`. When the signed tag is the target, the tag must still
@@ -254,11 +249,8 @@ those 14 plus `v1.1.14` and `v1.1.24`).
   That branch can still build an image. It is not auto-pinned, because the
   bump never selects it, but it is not inert: see Residuals.
 
-  > **Superseded 2026-09-30 (#9262), as to "A tag push runs the tagged commit's YAML":** the
-  > build has no `push: tags` trigger, so a tag push starts nothing. A build runs the YAML of the
-  > ref it was dispatched from. The build job declares no environment, so a dispatch from a branch
-  > still runs that branch's build job; its bump job is refused by `infra-privileged`'s `main`
-  > policy.
+  > **Superseded 2026-09-30 (#9262):** a tag push starts nothing, and a branch dispatch runs that
+  > branch's build job while its bump job is refused; see the Amendment dated 2026-09-30 (#9262).
 - **`mirror_only` is not refused.** It builds nothing and cannot move a
   digest. Refusing it would permanently strand the legacy off-main versions
   from zot backfill, a rollback path. The bump still judges the target
@@ -327,10 +319,8 @@ no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
   nothing. Once the ref POST has been attempted, any later fatal still reports
   the name with `tag_state=unknown`, because the ref may exist.
 
-  > **Superseded 2026-09-30 (#9262), as to the Tag bullet's rationale:** "the tag's
-  > `push: tags` trigger stays silent" no longer applies: there is no tag trigger (A5, adopted in
-  > #9262), so the image builds exactly once whoever creates the tag. The tag is still created with
-  > the job's `GITHUB_TOKEN`, because the job's App token is scoped to `actions:write` only.
+  > **Superseded 2026-09-30 (#9262):** with no tag trigger the image builds exactly once whoever
+  > creates the tag; see the Amendment dated 2026-09-30 (#9262).
 - **Dispatch.** `build-inngest-bootstrap-image.yml` is dispatched from `main`
   with `inputs.ref=<tag>`, once and never retried: a retry after a lost 2xx
   could start a second build and move the digest. The credential is the
@@ -343,13 +333,9 @@ no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
   is the "dispatch the build from main" shape §7 names as the one compatible
   with #8209.
 
-  > **Superseded 2026-09-30 (#9262), as to the Dispatch credential:** the credential is the
-  > `soleur-infra` App installation token (installation `166065653`), minted by
-  > `.github/actions/mint-infra-app-token` from `soleur-infra-privileged/prd` with the environment
-  > secret `DOPPLER_TOKEN_INFRA_PRIVILEGED`, scoped to `{"actions":"write"}` on `soleur`. The `mint`
-  > job declares `environment: infra-privileged` and keeps `if: github.ref == 'refs/heads/main'` as
-  > the accident gate. Every credential step still runs after `Decide` and before `Create tag`, so a
-  > missing `actions:write` on the App fails at the App step and nothing is tagged.
+  > **Superseded 2026-09-30 (#9262):** the credential is the `soleur-infra` App token, minted in
+  > the `mint` job on `infra-privileged` (still before the tag step); see the Amendment dated
+  > 2026-09-30 (#9262).
 - **Failures** are stage-named (`args|ancestry|resolve|decide|allocate|tag|dispatch`)
   and post to Slack. A failed dispatch prints the one agent-runnable recovery,
   `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`,
@@ -364,9 +350,8 @@ no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
     no build run exists for the tag and dispatch it once,
     `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`.
 
-    > **Superseded 2026-09-30 (#9262), as to R1's "Before/After #8209":** #9262 removed
-    > `push: tags`, so the two-step fallback (hand-tag, confirm no build run exists, dispatch
-    > once from `main`) is the only fallback. A hand-pushed tag builds nothing on its own.
+    > **Superseded 2026-09-30 (#9262):** the post-#8209 two-step fallback is now the only one;
+    > see the Amendment dated 2026-09-30 (#9262).
   - **R6:** a future tag ruleset on `vinngest-v*` needs a bypass for the
     GitHub Actions integration.
   - **R8:** a `vinngest-v*` tag cut on a PR-branch commit is refused by the
@@ -394,8 +379,8 @@ no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
     `inngest-pin-bump` group keeps one pending job, so the surviving bump can
     target the newer tag with signed≠target). Recovery is a digest-preserving
     `mirror_only` dispatch of the max tag (runbook recovery table).
-    **Amended 2026-09-30 (#9262):** that dispatch now leaves the PR held, because a
-    `mirror_only` bump never arms auto-merge (§5); a human merges it after review.
+    **Amended 2026-09-30 (#9262):** that dispatch leaves the PR held (§5); review it, then
+    `gh pr merge <n> --squash`.
 - **Depends on strict ancestry (#8798).** A content-equality rule would
   re-admit in-PR tags, and with them a second publish of the same content.
 - **Naming constraint (#8781).** A pre-merge candidate build must not use
@@ -407,11 +392,8 @@ no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
   Removing `push: tags` from the build (alternative A5 below) is a
   prerequisite of #8209.
 
-  > **Superseded 2026-09-30 (#9262):** `push: tags` is removed (A5 adopted in #9262), and both
-  > the bump job and the mint job are bound to `infra-privileged`. A hand-pushed tag starts
-  > nothing. The manual fallback is `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`,
-  > or, for R1 only, hand-tag and then — after confirming no build run exists for the tag —
-  > `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once.
+  > **Superseded 2026-09-30 (#9262):** #9262 is the change this bullet anticipated, and the
+  > post-#8209 fallbacks it names are now current; see the Amendment dated 2026-09-30 (#9262).
 - **Prerequisite before Guard A becomes required (#9081).** After a
   carrier-changing merge, `main`'s Guard A is red until the mint, build and
   bump land, and every PR based on that `main` inherits the red. That drift is
@@ -433,7 +415,7 @@ no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
 |---|---|
 | Tag-triggered sibling workflow (`on: push tags: vinngest-v*`) | Re-derives tag/digest the build job already has; races the image push it must follow |
 | Scheduled reconciler cron | Reintroduces a bounded drift window — the class being eliminated — and adds an always-on surface for a publish-cadence event |
-| `GITHUB_TOKEN` writes | Token-authored pushes fire no `pull_request` events; the PR would never run required checks and could never merge. **Scoped to the PR write (#4326):** for the §8 tag write the same event suppression is WANTED, because it keeps the tag's `push: tags` run silent. **Superseded 2026-09-30 (#9262):** with `push: tags` removed the suppression no longer matters to the tag; the tag write keeps `GITHUB_TOKEN` because the App token is scoped to `actions:write`. The PR-write reason is unchanged. |
+| `GITHUB_TOKEN` writes | Token-authored pushes fire no `pull_request` events; the PR would never run required checks and could never merge. **Scoped to the PR write (#4326):** for the §8 tag write the same event suppression is WANTED, because it keeps the tag's `push: tags` run silent. **Superseded 2026-09-30 (#9262)** as to the tag write; see the Amendment dated 2026-09-30 (#9262). The PR-write reason stands. |
 | PAT | Personal credential, repo-wide reach, no installation boundary — ruled out by hr-github-app-auth-not-pat |
 | Direct push to `main` | Bypasses required review/checks for a credential class (the App token) that exists precisely so writes stay auditable |
 | Bump to the triggering tag | Older-tag backfill would silently downgrade the pin; semver-max recompute is the only target the AC6 guard also accepts |
@@ -442,11 +424,11 @@ no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
 | Bump PR waits for (or is blocked by) the source PR (#8747) | No machine-readable link from a tag to "its" PR exists, and a wait adds a polling surface. Ancestry decides the same property from git alone. |
 | Target = semver-max over `git tag --merged HEAD` now (#8747) | **Adopted 2026-09-27 (#8782).** Rejected on 2026-09-24 only because it then resolved to `v1.1.25` (every newer tag was off main), which would have opened a downgrade PR; safe once `main` re-anchored on the on-main `v1.1.40`. |
 | Anchor on `git tag --merged origin/main` instead of `HEAD` (#8782) | The writer's `HEAD` already is `main`. In PR CI a tag on the PR's own commit is visible to that PR and to branches descending from it, which is intended (AC6's `#8747:` diagnostic tells the author to delete it; `deploy-script-tests` is advisory). A stale local `origin/main` would mis-select, and one pipeline for writer and checker is simpler. **Re-evaluate when #6766/#6480 makes `deploy-script-tests` required:** a required AC6 would then block stacked PRs on another PR's tag, and the checker should move to `origin/${GITHUB_BASE_REF:-main}`. That move, together with a Guard A exemption for a PR's own carrier change, is tracked as the named prerequisite #9081 (§8 closes only the `main`-side window). |
-| §8: create the tag with the App token and let `push: tags` build it (#4326) | Works, but the run executes on the TAG ref, which #8209's main-only environment would refuse. **Moot since 2026-09-30 (#9262):** `push: tags` is removed, so no tag starts a build. |
-| §8: App-token tag AND a dispatch | The App-created tag fires `push: tags` too, so the tag builds twice and the second build moves the GHCR digest. **Superseded 2026-09-30 (#9262):** with `push: tags` removed the double build cannot happen; the tag stays on `GITHUB_TOKEN` because the `soleur-infra` token is scoped to `actions:write` only. |
+| §8: create the tag with the App token and let `push: tags` build it (#4326) | Works, but the run executes on the TAG ref, which #8209's main-only environment would refuse. **Moot since 2026-09-30 (#9262):** no tag starts a build; see the Amendment dated 2026-09-30 (#9262). |
+| §8: App-token tag AND a dispatch | The App-created tag fires `push: tags` too, so the tag builds twice and the second build moves the GHCR digest. **Superseded 2026-09-30 (#9262):** the double build cannot happen; see the Amendment dated 2026-09-30 (#9262). |
 | §8: `GITHUB_TOKEN` for both the tag and the dispatch | Mechanically sufficient (`workflow_dispatch` is exempt from the suppression). Not adopted because the operator's direction names the App token; recorded as decision challenge DC1 on the PR. The switch is mechanical: drop the App mint and give the job `actions: write`. |
 | §8: skip auto-minted tags inside the build's push path by actor, then dispatch | Adds a gate keyed on an undocumented actor format; one more failure surface. |
-| §8: remove `push: tags` and dispatch every build (A5) | Changes the manual release flow; belongs with #8209, which must retire tag-ref bump runs anyway. **Adopted 2026-09-30 (#9262):** `workflow_dispatch` is the build's only trigger, and every build is dispatched from `main` (the auto-mint, or the runbook's one-line dispatch). It was the prerequisite for binding the bump job to `infra-privileged`. The build job's resolver keeps its dead `push` arm. |
+| §8: remove `push: tags` and dispatch every build (A5) | Changes the manual release flow; belongs with #8209, which must retire tag-ref bump runs anyway. **Adopted 2026-09-30 (#9262):** `workflow_dispatch` is the build's only trigger; see the Amendment dated 2026-09-30 (#9262). |
 | §8: detect change by push diff (`before..after`) | Loses events: a replaced pending run, the >3,000-file paths skip, a failed run. Tag-vs-HEAD self-heals any failure before the tag stage. |
 | §8: carriers only, not pins or recipe | An `inngest_cli_version` or `alpine` bump would merge and never ship; Guard A sees neither. |
 | §8: whole-file diff of `inngest.tf`, `vector.tf` and the build workflow | Every unrelated Terraform or comment edit would mint a release and open a bump PR. |
@@ -484,13 +466,7 @@ no human step. `.github/workflows/mint-inngest-bootstrap-tag.yml` drives
   created with `GITHUB_TOKEN`, and a build dispatch by the App scoped to
   `actions:write` on `soleur`.
   **Superseded 2026-09-30 (#9262):** neither the pin bump nor the dispatch uses the `soleur-ai`
-  App (installation 122213433) any more, so both leave the `soleur-ai` surface this bullet
-  describes. They mint as the `soleur-infra` App (installation 166065653) from
-  `soleur-infra-privileged/prd` on the main-only `infra-privileged` environment, each token scoped
-  on `soleur`: `contents` + `pull_requests` write for the bump, `actions:write` for the dispatch.
-  The build dispatch is by the `soleur-infra` App. That App's committed manifest gains
-  `actions: write` and `pull_requests: write` for these two consumers (ADR-241 D5); the live App is
-  widened by #8209 runbook step O4c.
+  App any more; see the Amendment dated 2026-09-30 (#9262).
 - **The human tag was a second content review, and §8 removes it (#4326).**
   Ancestry, the revision label and the mirror gate check where a tag sits,
   not what the image contains. After §8, anything merged to `main` that
@@ -570,33 +546,39 @@ The pin bump and the auto-mint's build dispatch move from the Tier-A `soleur-ai`
 App on the main-only `infra-privileged` environment, as ADR-241 D5 and the #8209 plan already
 directed. Before this change, #8209 step O10 (setting `GITHUB_APP_PRIVATE_KEY` in `prd_terraform` to
 `EVICTED_SEE_ADR_241`) would have failed every pin bump and every auto-mint, because the shared
-composite refused that sentinel; O10 was held on it. What changed:
+composite refused that sentinel; O10 was held on it. The inline dated markers above point here; this
+is the one place the rationale is stated.
 
-- **Title**, now naming the `soleur-infra` App. The previous wording is quoted under it.
-- **§3**: the composite is renamed `.github/actions/mint-infra-app-token` and reads a fixed
-  identity from a fixed Tier-B source (`--project soleur-infra-privileged --config prd` in argv).
-  All four inputs are required, the bump's token is scoped, the sentinel refusal is dropped (the
-  composite never reads `prd_terraform`), and it emits the `app-token` notice on success and GitHub's
-  sanitized message on failure. The scope parenthetical loses the hand-pushed-tag publish path.
-- **§4**: the bump authors as `soleur-infra[bot] <335404629+…>`; the PR-author filters match
-  `app/soleur-infra` (a pre-existing mismatch, fixed); `soleur-infra[bot]` joins the CLA allowlist.
-- **§5**: a `mirror_only` build never arms auto-merge.
-- **§7**: the hand-pushed tag-ref caveat and "A tag push runs the tagged commit's YAML" are
-  superseded; a bump runs only from `main`.
-- **§8**: the Tag bullet's rationale ("`push: tags` trigger stays silent") no longer applies; the
-  Dispatch bullet's credential is the `soleur-infra` token scoped to `actions:write`; residuals R1
-  and R12 and the "After #8209" bullet are updated.
-- **Alternatives**: A5 (remove `push: tags`) is adopted; the `GITHUB_TOKEN` writes row and the two
-  App-token-tag rows are marked moot or superseded.
-- **Consequences**: the `soleur-ai` write-surface bullet (installation 122213433, "dispatch by the
-  App") is superseded.
+- **Identity and source.** Both jobs declare `environment: infra-privileged` (ADR-241 D2: `main`-only
+  branch policy, no reviewers) and mint the `soleur-infra` App (installation `166065653`) through
+  `.github/actions/mint-infra-app-token`, which reads the App's key from `soleur-infra-privileged/prd`
+  with the environment secret `DOPPLER_TOKEN_INFRA_PRIVILEGED`. Each token is scoped on `soleur`:
+  `{"contents":"write","pull_requests":"write"}` for the bump, `{"actions":"write"}` for the dispatch.
+  The `mint` job keeps `if: github.ref == 'refs/heads/main'` as the accident gate; the environment is
+  the boundary. Its credential steps still run after `Decide` and before `Create tag`.
+- **`push: tags` is removed (A5 adopted).** `infra-privileged` refuses a tag-ref run, and §7 forbids
+  a tag-pattern deployment policy, so the build's only trigger is `workflow_dispatch`. A hand-pushed
+  tag starts nothing: it is published by one dispatch, after confirming no build run exists for it,
+  which makes R1's two-step fallback the only one. The auto-mint and the runbook dispatch from
+  `main`. A dispatch from another ref runs that ref's build job (it declares no environment), but
+  `infra-privileged` refuses its bump job, so every bump that runs uses `main`'s job definition and
+  script.
+- **The tag write keeps `GITHUB_TOKEN`.** With no tag trigger its event suppression no longer changes
+  what builds, and the App token is scoped to `actions:write`, which cannot write a tag.
+- **`mirror_only` never arms auto-merge** and disarms one an earlier run armed (§5).
+- **Grant widening.** The `soleur-infra` App's committed manifest
+  (`apps/web-platform/infra/github-infra-app-manifest.json`) gains `actions: write` and
+  `pull_requests: write` (ADR-241 D5). No API can change a live App's permissions, so the live
+  widening is #8209 runbook step **O4c**, which precedes O10. Until O4c is done both jobs fail at the
+  mint step, before any tag, push or PR.
+- **Evidence (plan AC15, runbook O4c).** The bump path: one `main`-dispatched build whose
+  `bump-cloud-init-pin` job concludes `success`
+  (`gh run view <id> -R jikig-ai/soleur --json jobs --jq '.jobs[]|select(.name=="bump-cloud-init-pin")|.conclusion'`)
+  with the `app-token` notice naming `app=soleur-infra installation=166065653` in its log. The mint
+  path: the merge-triggered mint run concludes `success` on the merge SHA
+  (`gh run list -R jikig-ai/soleur --workflow mint-inngest-bootstrap-tag.yml --event push --branch main -L1 --json headSha,conclusion`),
+  which proves the job is admitted; its token path is proven by the next real auto-mint's notice.
 
-The `soleur-infra` App's committed manifest (`apps/web-platform/infra/github-infra-app-manifest.json`)
-gains `actions: write` and `pull_requests: write`. No API can change a live App's permissions, so
-the live widening is #8209 runbook step **O4c**, which precedes O10. Until O4c is done both jobs fail
-at the mint step, before any tag, push or PR. The runtime property (both consumers green on Tier B)
-becomes true at O4c, whose evidence is one `main`-dispatched build whose `bump-cloud-init-pin` job is
-green under `infra-privileged` with the `app-token` notice naming `app=soleur-infra` (plan AC15).
 The Status stays Provisional. Every superseded sentence above is kept, with a dated marker next to
 it.
 
@@ -648,15 +630,10 @@ Plan: `knowledge-base/project/plans/2026-09-30-infra-retier-pin-bump-and-automin
   sort, the re-read order, the mode compare and the verify `ls-remote` fatal.
   **Pending:** AC14, the first live mint.
   **Amended 2026-09-30 (#9262):** the composite under test is
-  `.github/actions/mint-infra-app-token/action.yml`. Its `comp:*` rows pin the refusal of each
-  empty input before any Doppler call, the exact Doppler argv (`GITHUB_INFRA_APP_ID` /
-  `GITHUB_INFRA_APP_PRIVATE_KEY`, `--project soleur-infra-privileged --config prd`), the
-  exact-grant refusal, the sanitized failure message and the `app-token` notice (plan AC4). The mint
-  job's exact rows pin `environment: infra-privileged`, the Tier-B token, installation `166065653`
-  and `{"actions":"write"}` (plan AC2). `test-bump-inngest-bootstrap-pin.sh` adds the
-  `soleur-infra[bot]` identity rows, the `app/soleur-infra` author-filter rows and
-  `g1.mirror-only-held` (plan AC5). **Pending:** plan AC15, the first green Tier-B bump (runbook
-  O4c).
+  `.github/actions/mint-infra-app-token/action.yml`; see its `comp.*` rows and the mint job's exact
+  rows in this suite (plan AC2, AC4), and the `soleur-infra[bot]`, `app/soleur-infra` and
+  `g1.mirror-only-*` rows in `test-bump-inngest-bootstrap-pin.sh` (plan AC5). **Pending:** plan
+  AC15, the first green Tier-B bump (runbook O4c).
 - `.github/scripts/test/run-all.sh` — suite registered; Bash-only by
   construction for the required merge-group path.
 - `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — AC6 selects

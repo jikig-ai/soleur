@@ -83,7 +83,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=583   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=596   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1351,7 +1351,10 @@ for rid in ("tag-token-isolated", "dispatch-token-isolated", "app-token-isolated
 # may name the Tier-A secrets.DOPPLER_TOKEN (the lookahead spares *_INFRA_PRIVILEGED).
 minters = [s for s in steps if str(s.get("uses", "")).endswith("mint-infra-app-token")]
 (ok if len(minters) == 1 else bad)("one-minter", "expected exactly one mint-infra-app-token step, found %d%s" % (len(minters), AUTH))
-(bad if re.search(r"secrets\.DOPPLER_TOKEN(?![A-Za-z0-9_])", yaml.safe_dump(job)) else ok)("no-tier-a", "the mint job references the Tier-A secrets.DOPPLER_TOKEN; it holds only DOPPLER_TOKEN_INFRA_PRIVILEGED (#9262)" + AUTH)
+# Scans the job AND the workflow-level env/defaults (a workflow `env:` reaches every
+# step), and both the dotted and the bracket spelling of the secret.
+TIER_A_RE = r"secrets(\.DOPPLER_TOKEN|\[\s*['\"]+DOPPLER_TOKEN['\"]+\s*\])(?![A-Za-z0-9_])"
+(bad if re.search(TIER_A_RE, yaml.safe_dump({"job": job, "env": doc.get("env"), "defaults": doc.get("defaults")})) else ok)("no-tier-a", "the mint job (or the workflow-level env/defaults) references the Tier-A secrets.DOPPLER_TOKEN; it holds only DOPPLER_TOKEN_INFRA_PRIVILEGED (#9262)" + AUTH)
 (bad if re.search(r"secrets\.[A-Za-z0-9_]*PAT\b|\b[A-Z0-9_]*_PAT\b", raw) else ok)("no-pat", "a PAT-named secret is referenced (hr-github-app-auth-not-pat)")
 si, sl = find(lambda s: str(s.get("name", "")).startswith("Post to Slack"))
 (ok if si == len(steps) - 1 and str(sl.get("if", "")).strip() == "failure() || cancelled()" and sl.get("continue-on-error") is True else bad)("slack-on-failure", "the LAST step is the Slack step, if: failure() || cancelled(), continue-on-error: true" + AUTH)
@@ -1434,6 +1437,8 @@ g3_mut g3.w12-app-continue-on-error 'mwf' '        uses: ./.github/actions/mint-
 g3_mut g3.w13-app-tier-a-token 'mwf' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' 'doppler-token: ${{ secrets.DOPPLER_TOKEN }}'
 g3_mut g3.w14-env-not-tier-b 'mwf' '    environment: infra-privileged' '    environment: production'
 g3_mut g3.w15-no-env 'mwf' $'    environment: infra-privileged\n' ''
+g3_mut g3.w17-workflow-env-tier-a 'mwf' $'\npermissions:\n  contents: read\n' $'\nenv:\n  LEAK: ${{ secrets.DOPPLER_TOKEN }}\npermissions:\n  contents: read\n'
+g3_mut g3.w18-bracket-tier-a 'mwf' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
 g3_mut g3.w16-second-minter 'mwf' $'          repositories: soleur\n' $'          repositories: soleur\n      - name: Second mint\n        id: app2\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"actions":"write"}\'\n          repositories: soleur\n'
 
 # H2 (must-PASS, non-canonical): the {name: ...} mapping form of the environment is
@@ -1496,6 +1501,10 @@ STUB
 cat > "$CBIN/curl" <<'STUB'
 #!/usr/bin/env bash
 { printf -- '--call--\n'; printf '%s\n' "$@"; } >> "${CURL_LOG:?unset}"
+# CURL_FAIL=<rc>: the exchange POST dies at the transport layer (timeout/DNS).
+[[ -n "${CURL_FAIL:-}" && " $* " == *" POST "* ]] && { echo "curl: (28) Operation timed out" >&2; exit "$CURL_FAIL"; }
+# The revoke DELETE prints nothing.
+[[ " $* " == *" DELETE "* ]] && exit 0
 if [[ -n "${CURL_RESP:-}" ]]; then printf '%s' "$CURL_RESP"
 else printf '%s' '{"token":"fixture-installation-credential"}'; fi
 STUB
@@ -1504,7 +1513,7 @@ chmod +x "$CBIN/doppler" "$CBIN/curl"
 run_comp() {
   CLOG="$CDIR/$1.curl"; COUT="$CDIR/$1.out"; DLOG="$CDIR/$1.doppler"; : > "$CLOG"; : > "$COUT"; : > "$DLOG"
   CRC=0
-  env -u SCOPE_PERMISSIONS -u SCOPE_REPOSITORIES -u CURL_RESP -u DOPPLER_PROJECT -u DOPPLER_CONFIG \
+  env -u SCOPE_PERMISSIONS -u SCOPE_REPOSITORIES -u CURL_RESP -u DOPPLER_PROJECT -u DOPPLER_CONFIG ${CURL_FAIL:+CURL_FAIL="$CURL_FAIL"} \
     ${4:+CURL_RESP="$4"} PATH="$CBIN:$PATH" CURL_LOG="$CLOG" DOPPLER_LOG="$DLOG" \
     DOPPLER_TOKEN="${5-fixture}" INSTALLATION_ID="${6-166065653}" \
     SCOPE_PERMISSIONS="$2" SCOPE_REPOSITORIES="$3" RUNNER_TEMP="$CDIR" GITHUB_OUTPUT="$COUT" \
@@ -1523,6 +1532,7 @@ a_eq 'comp.scoped:rc' "$CRC" 0
 a_eq 'comp.scoped:body' "$(data_arg)" '{"repositories":["soleur"],"permissions":{"actions":"write"}}'
 a_eq 'comp.scoped:token-out' "$(cat "$COUT")" 'token=fixture-installation-credential'
 a_eq 'comp.scoped:one-call' "$(calls)" 1
+a_eq 'comp.scoped:not-revoked' "$(grep -cx 'https://api.github.com/installation/token' "$CLOG" || true)" 0
 # The token call is bounded, on every path.
 a_eq 'comp.scoped:max-time' "$(awk 'f {print; exit} $0 == "--max-time" {f=1}' "$CLOG")" 30
 # The source is fixed: exactly these two reads, project and config in argv.
@@ -1535,12 +1545,15 @@ run_comp scope-wider '{"actions":"write"}' soleur '{"token":"fixture-installatio
 a_eq 'comp.scope-mismatch:refused' "$(refused)" yes
 a_eq 'comp.scope-mismatch:no-token-out' "$(cat "$COUT")" ''
 a_eq 'comp.scope-mismatch:named' "$(grep -c 'differ from the requested' "$CDIR/scope-wider.stdout" || true)" 1
+# A refused grant still ISSUED a token: it is revoked (DELETE /installation/token).
+a_eq 'comp.scope-mismatch:revoked' "$(grep -cx 'https://api.github.com/installation/token' "$CLOG" || true)" 1
 run_comp scope-narrower '{"contents":"write","pull_requests":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"contents":"write","metadata":"read"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
 a_eq 'comp.scope-narrower:refused' "$(refused)" yes
 a_eq 'comp.scope-narrower:no-token-out' "$(cat "$COUT")" ''
 run_comp scope-all-repos '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","metadata":"read"},"repository_selection":"all"}'
 a_eq 'comp.selection-all:refused' "$(refused)" yes
 a_eq 'comp.selection-all:no-token-out' "$(cat "$COUT")" ''
+a_eq 'comp.selection-all:revoked' "$(grep -cx 'https://api.github.com/installation/token' "$CLOG" || true)" 1
 # Mandatory inputs (#9262). Composite `required: true` is not enforced by the runner,
 # and an UNSCOPED token of this App carries administration:write and secrets:write,
 # so every empty input is refused before any Doppler read or network call. The two
@@ -1567,14 +1580,24 @@ a_eq 'comp.bad-json:refused' "$(refused)" yes
 a_eq 'comp.bad-json:no-call' "$(calls)" 0
 run_comp non-object '["actions"]' soleur
 a_eq 'comp.non-object:refused' "$(refused)" yes
-# A failed exchange names GitHub's refusal, with CR/LF/U+2028/::  stripped so vendor
+# A failed exchange names GitHub's refusal, with every control character (CR/LF,
+# DEL, C1 NEL) and U+2028/U+2029 turned into spaces and colon runs collapsed, so vendor
 # text cannot open a second workflow command (the fixture tries to forge one).
-run_comp exchange-refused '{"actions":"write"}' soleur '{"message":"Resource not accessible\r\n::notice title=forged::x ::warning::y","documentation_url":"https://docs.github.test"}'
+run_comp exchange-refused '{"actions":"write"}' soleur '{"message":"Resource not accessible\r\n::notice title=forged::x\u2028::warning::y\u2029::error::z\u007f\u0085::debug::w","documentation_url":"https://docs.github.test"}'
 a_eq 'comp.exchange-refused:refused' "$(refused)" yes
 a_eq 'comp.exchange-refused:names-message' "$(grep -c '^::error::.*Resource not accessible' "$CDIR/exchange-refused.stdout" || true)" 1
 a_eq 'comp.exchange-refused:no-forged-command' "$(grep -cE '^::(notice|warning)' "$CDIR/exchange-refused.stdout" || true)" 0
 a_eq 'comp.exchange-refused:no-double-colon' "$(grep '^::error::' "$CDIR/exchange-refused.stdout" | sed 's/^::error:://' | grep -c '::' || true)" 0
 a_eq 'comp.exchange-refused:no-token-out' "$(cat "$COUT")" ''
+# The whole vendor message stays on ONE line: every separator became a space.
+a_eq 'comp.exchange-refused:one-line' "$(grep -c 'Resource not accessible' "$CDIR/exchange-refused.stdout" || true)" 1
+a_eq 'comp.exchange-refused:tail-kept' "$(grep -c 'Resource not accessible.*debug:w' "$CDIR/exchange-refused.stdout" || true)" 1
+a_eq 'comp.exchange-refused:no-forged-anything' "$(grep -cE '^::(notice|warning|debug)|^::error::[^m]' "$CDIR/exchange-refused.stdout" || true)" 0
+# A transport failure (curl rc 28) is annotated, never a bare errexit with only curl's stderr.
+CURL_FAIL=28 run_comp transport-fail '{"actions":"write"}' soleur "$R_OK"
+a_eq 'comp.transport-fail:refused' "$(refused)" yes
+a_eq 'comp.transport-fail:annotated' "$(grep -c '^::error::mint-infra-app-token: the installation-token exchange did not complete (curl rc=28' "$CDIR/transport-fail.stdout" || true)" 1
+a_eq 'comp.transport-fail:no-token-out' "$(cat "$COUT")" ''
 # Mutation (plan Guard Contract row 8): the composite's project argv moved to the
 # Tier-A `soleur` project must turn the scoped row RED — the stub refuses it.
 comp_mut="$CDIR/action.mut-project.yml"

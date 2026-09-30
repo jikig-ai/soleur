@@ -64,7 +64,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=544   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=567   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -252,15 +252,20 @@ pr_json() { # emit one PR object from a state line
   local xr=false al='app/soleur-infra'
   if [[ "$fl" == *fork* ]]; then xr=true; al='fork-user'; fi
   if [[ "$fl" =~ author=([^,]+) ]]; then al="${BASH_REMATCH[1]}"; fi
+  # |armed flag: auto-merge already enabled on this PR (gh reports autoMergeRequest
+  # as an object when armed, null otherwise).
+  local am=null
+  [[ "$fl" == *armed* ]] && am='{"enabledAt":"2026-09-30T00:00:00Z","mergeMethod":"SQUASH"}'
+
   # |nullhead flag: GitHub emits headRefName:null for PRs whose head repo or
   # branch was deleted — the supersede jq must skip, not throw mid-pipe.
   if [[ "$fl" == *nullhead* ]]; then
-    printf '{"number":%s,"headRefName":null,"url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"}}' \
-      "$n" "$u" "$o" "$s" "$xr" "$al"
+    printf '{"number":%s,"headRefName":null,"url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"},"autoMergeRequest":%s}' \
+      "$n" "$u" "$o" "$s" "$xr" "$al" "$am"
     return
   fi
-  printf '{"number":%s,"headRefName":"%s","url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"}}' \
-    "$n" "$h" "$u" "$o" "$s" "$xr" "$al"
+  printf '{"number":%s,"headRefName":"%s","url":"%s","headRefOid":"%s","state":"%s","isCrossRepository":%s,"author":{"login":"%s"},"autoMergeRequest":%s}' \
+    "$n" "$h" "$u" "$o" "$s" "$xr" "$al" "$am"
 }
 
 case "$sub" in
@@ -290,6 +295,12 @@ case "$sub" in
     [[ "${MOCK_GH_CREATE_COLLIDE:-0}" == "1" ]] \
       && { echo "a pull request for branch already exists" >&2; exit 1; }
     head="$(flag --head)"; title="$(flag --title)"
+    # GitHub refuses a second OPEN same-repo PR for one head branch; a fork PR with a
+    # colliding branch name does not block (different head repository).
+    while IFS='|' read -r xn xh xu xo xs xfl; do
+      [[ "$xs" == open && "$xh" == "$head" && "$xfl" != *fork* ]] \
+        && { echo "a pull request for branch \"$head\" already exists" >&2; exit 1; }
+    done < "$MOCK_GH_PRS"
     n=$(( $(wc -l < "$MOCK_GH_PRS" 2>/dev/null || echo 0) + 1 ))
     url="https://github.test/mock/pull/$n"
     oid=$(git --git-dir="${MOCK_ORIGIN:?unset}" rev-parse "refs/heads/$head" 2>/dev/null || echo "0")
@@ -297,6 +308,10 @@ case "$sub" in
     printf '%s\n' "$url"
     ;;
   "pr comment"|"pr merge")
+    if [[ "$sub" == "pr merge" && " $* " == *" --disable-auto "* ]]; then
+      [[ "${MOCK_GH_DISABLE_FAIL:-0}" == "1" ]] && { echo "disable auto-merge failed" >&2; exit 1; }
+      exit 0
+    fi
     [[ "$sub" == "pr merge" && "${MOCK_GH_MERGE_FAIL:-0}" == "1" ]] && { echo "merge arm failed" >&2; exit 1; }
     exit 0
     ;;
@@ -642,7 +657,9 @@ assert_result 'g1.humantip:result' skipped
 assert_out_has 'g1.humantip:marker' 'branch-has-manual-commits'
 # The recovery is an action a human can take (#9262) — never "reset the tip to a
 # bot commit", which no human can author.
-assert_out_has 'g1.humantip:recovery' 'close the PR and delete the branch, then dispatch the build once from main with mirror_only=true'
+assert_out_has 'g1.humantip:recovery' 'dispatch the build once from main with mirror_only=true'
+assert_out_has 'g1.humantip:recovery-delete' 'git push origin --delete soleur/inngest-pin-v1.1.38'
+assert_out_has 'g1.humantip:recovery-held' 'the PR it opens is HELD'
 assert_gh_not_called 'g1.humantip:no-pr' 'gh pr '
 # The human tip must still be the remote tip (not clobbered).
 [[ $(git --git-dir="$F_ORIGIN" log -1 --format='%ae' 'soleur/inngest-pin-v1.1.38') == 'human@example.test' ]] \
@@ -753,7 +770,10 @@ assert_gh_called 'g1.collide:relist' 'gh pr list .*--head soleur/inngest-pin-v1.
 # never BOT_NAME: before #9262 it compared against `soleur-ai[bot]` and the
 # reuse path never matched in production. A same-repo PR for the branch authored
 # by the LEGACY App or by a human is NOT reused (it is not this identity's PR):
-# the run falls through to `gh pr create`.
+# the run falls through to `gh pr create`, which GitHub refuses for a second open
+# same-repo PR on one head (the stub models that), the filtered re-list finds no
+# soleur-infra PR, and the run dies at stage `pr` — loud, never a hijack of a PR
+# someone else authored.
 # ---------------------------------------------------------------------------
 for who in 'app/soleur-ai:legacy-app' 'fixture-human:human'; do
   login="${who%%:*}"; lbl="${who##*:}"
@@ -766,9 +786,11 @@ for who in 'app/soleur-ai:legacy-app' 'fixture-human:human'; do
   printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|author=%s\n' \
     "$(git -C "$F_REPO" rev-parse HEAD)" "$login" >> "$MOCK_GH_PRS"
   run_bump "author-$lbl" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-  assert_rc     "g1.author-$lbl:exit" 0
-  assert_result "g1.author-$lbl:result" opened
-  assert_gh_called     "g1.author-$lbl:creates" 'gh pr create '
+  [[ "$LAST_RC" != 0 ]] && pass "g1.author-$lbl:nonzero" || fail "g1.author-$lbl:nonzero" "a foreign-authored PR on the bot branch was accepted"
+  assert_result  "g1.author-$lbl:result" error
+  assert_out_has "g1.author-$lbl:stage" '::error::pr:'
+  assert_out_has "g1.author-$lbl:names-filter" 'found no same-repo bot PR'
+  assert_gh_called     "g1.author-$lbl:tried-create" 'gh pr create '
   assert_gh_not_called "g1.author-$lbl:not-reused" 'gh pr (comment|merge) 9 '
 done
 
@@ -825,6 +847,43 @@ run_bump mirror-only-existing --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --
 assert_result        'g1.mirror-only-existing:result' existing
 assert_gh_called     'g1.mirror-only-existing:reused' 'gh pr comment 9 '
 assert_gh_not_called 'g1.mirror-only-existing:no-merge' 'gh pr merge '
+assert_gh_called     'g1.mirror-only-existing:hold-comment' 'gh pr comment 9 .*mirror_only backfill'
+# An earlier full build ARMED auto-merge on the reused PR: a mirror_only run must
+# disarm it (GitHub keeps auto-merge across a writer's push), and a failed disarm is
+# fatal — the PR could otherwise merge on a mirror_only commit (#9262 review).
+for arm in 'ok:0' 'fail:1'; do
+  lbl="mirror-only-armed-${arm%%:*}"; dfail="${arm##*:}"
+  new_fixture_repo "$lbl"
+  write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+  fixture_commit "pins at v1.1.37"
+  seed_tag vinngest-v1.1.38
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+  printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|armed\n' "$(git -C "$F_REPO" rev-parse HEAD)" >> "$MOCK_GH_PRS"
+  MOCK_GH_DISABLE_FAIL="$dfail" run_bump "$lbl" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only true
+  assert_gh_called     "g1.$lbl:disarms" 'gh pr merge 9 --repo [^ ]+ --disable-auto'
+  assert_gh_not_called "g1.$lbl:never-arms" 'gh pr merge .*--auto --squash'
+  if [[ "$dfail" == 0 ]]; then
+    assert_rc     "g1.$lbl:exit" 0
+    assert_result "g1.$lbl:result" existing
+  else
+    [[ "$LAST_RC" != 0 ]] && pass "g1.$lbl:nonzero" || fail "g1.$lbl:nonzero" "a failed disarm was tolerated"
+    assert_result  "g1.$lbl:result" error
+    assert_out_has "g1.$lbl:stage" '::error::pr:'
+  fi
+done
+# The unarmed full-build path does NOT call --disable-auto (the disarm is scoped to
+# mirror_only): a plain re-run of an armed PR keeps its arm.
+new_fixture_repo armed-full-build
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|armed\n' "$(git -C "$F_REPO" rev-parse HEAD)" >> "$MOCK_GH_PRS"
+run_bump armed-full-build --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_result        'g1.armed-full-build:result' existing
+assert_gh_not_called 'g1.armed-full-build:no-disarm' 'disable-auto'
 run_bump mirror-only-bad --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only yes
 [[ "$LAST_RC" != 0 ]] && pass 'g1.mirror-only-bad:nonzero' || fail 'g1.mirror-only-bad:nonzero' "--mirror-only yes accepted"
 assert_out_has 'g1.mirror-only-bad:stage' '::error::args:'
@@ -1928,7 +1987,8 @@ emit("S18:bump-mint-exact", *exact(mstep, {"id": "mint", "uses": "./.github/acti
               "permissions": '{"contents":"write","pull_requests":"write"}', "repositories": "soleur"}}))
 minters = [s for s in bsteps if str(s.get("uses", "")).endswith("mint-infra-app-token")]
 emit("S19:bump-one-minter", len(minters) == 1, f"{len(minters)} mint-infra-app-token step(s)")
-emit("S20:bump-no-tier-a", not re.search(r"secrets\.DOPPLER_TOKEN(?![A-Za-z0-9_])", yaml.safe_dump(bump)), "the bump job names the Tier-A secrets.DOPPLER_TOKEN")
+TIER_A_RE = r"secrets(\.DOPPLER_TOKEN|\[\s*['\"]+DOPPLER_TOKEN['\"]+\s*\])(?![A-Za-z0-9_])"
+emit("S20:bump-no-tier-a", not re.search(TIER_A_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")})), "the bump job (or the workflow-level env/defaults) names the Tier-A secrets.DOPPLER_TOKEN")
 on = doc.get("on", doc.get(True))
 if isinstance(on, str): on_keys = {on}
 elif isinstance(on, list): on_keys = set(on)
@@ -1990,6 +2050,8 @@ shape_mut perms-widened 'S18' $'permissions: \'{"contents":"write","pull_request
 shape_mut mint-continue-on-error 'S18' $'        id: mint\n' $'        id: mint\n        continue-on-error: true\n'
 shape_mut tag-trigger-readded 'S21' $'\non:\n' $'\non:\n  push:\n    tags:\n      - \'vinngest-v*.*.*\'\n'
 shape_mut second-minter 'S19,S20' $'          repositories: soleur\n' $'          repositories: soleur\n\n      - name: Second mint\n        id: mint2\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"contents":"write"}\'\n          repositories: soleur\n'
+shape_mut workflow-env-tier-a 'S20' $'\npermissions:\n' $'\nenv:\n  LEAK: ${{ secrets.DOPPLER_TOKEN }}\npermissions:\n'
+shape_mut bracket-tier-a 'S20' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
 shape_mut mirror-only-dropped 'S22' ' \'$'\n''            --mirror-only "$MIRROR_ONLY"' ''
 # H1: point the job lookup at a name that does not exist — S15 must RED rather
 # than the exact rows passing vacuously on an empty dict.
@@ -2321,6 +2383,14 @@ for lit in "BOT_NAME='soleur-infra[bot]'" "BOT_EMAIL='335404629+soleur-infra[bot
   if [[ -f "$SCRIPT" ]] && grep -qF -- "$lit" "$SCRIPT"; then pass "g2.script:$lit"
   else fail "g2.script:$lit" "script lacks identity literal: $lit"; fi
 done
+# The bot identity must be on the CLA allowlist, or every pin PR it authors is stuck on
+# CLA Required: derive BOT_NAME from the script and require it as a MEMBER of cla.yml's
+# allowlist value (two files, one identity, #9262).
+CLA_YML="$REPO_ROOT/.github/workflows/cla.yml"
+bot_name=$(sed -n "s/^BOT_NAME='\\([^']*\\)'\$/\\1/p" "$SCRIPT" | head -1)
+cla_list=$(sed -n 's/^[[:space:]]*allowlist:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$CLA_YML" | head -1)
+if [[ -n "$bot_name" && -n "$cla_list" && ",${cla_list}," == *",${bot_name},"* ]]; then pass 'g2.script:bot-on-cla-allowlist'
+else fail 'g2.script:bot-on-cla-allowlist' "BOT_NAME='${bot_name:-<unparsed>}' is not a member of cla.yml allowlist '${cla_list:-<unparsed>}'"; fi
 
 # Verdict-helper self-test (#8782 review): assert_excluded and assert_refused
 # decide their rows' verdicts, so a neuter inside either (a check replaced by a

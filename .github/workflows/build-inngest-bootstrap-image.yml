@@ -3,7 +3,9 @@ name: Build inngest-bootstrap OCI image
 # dispatched from (every auto-mint dispatch is from main, #4326).
 run-name: Build inngest-bootstrap ${{ inputs.ref || github.ref_name }}
 
-# Triggered ONLY by workflow_dispatch, from main. Since #4326 (ADR-232 §8) the first
+# Triggered ONLY by workflow_dispatch (the auto-mint and the runbook dispatch from main;
+# a dispatch from another ref runs that ref's build job, but infra-privileged refuses
+# its bump job). Since #4326 (ADR-232 §8) the first
 # publish of a tag is a DISPATCH from main: mint-inngest-bootstrap-tag.yml cuts the
 # tag and dispatches this workflow with inputs.ref=<tag>. Since #9262 there is no
 # `push: tags` trigger (ADR-232 alternative A5): the bump-cloud-init-pin job holds
@@ -139,8 +141,8 @@ jobs:
           INPUTS_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          # Discriminate on the event name (NOT inputs.ref emptiness) so a
-          # future stale/defaulted dispatch input can't misroute the push path.
+          # Discriminate on the event name (NOT inputs.ref emptiness). The non-dispatch
+          # arm is the pre-#9262 tag-push path, unreachable with dispatch the only trigger.
           if [[ "$GH_EVENT" == "workflow_dispatch" ]]; then
             src="$INPUTS_REF"
           else
@@ -521,9 +523,10 @@ jobs:
       #           required pin and has no unsigned arm.
       #   IS NOT -- a provenance claim any consumer verifies. ci-deploy.sh pins
       #           COSIGN_IDENTITY_REGEXP to `reusable-release.yml@(refs/heads/main|refs/tags/v[0-9].+)`;
-      #           this signature's Fulcio subject is this file at the ref the RUN executed on: a
-      #           `vinngest-` tag for a hand-pushed tag, and `refs/heads/main` for a dispatched build
-      #           (every auto-minted tag's first publish, #4326), whatever tag it publishes. Neither
+      #           this signature's Fulcio subject is this file at the ref the RUN executed on:
+      #           `refs/heads/main` for a main-dispatched build (every auto-mint and runbook
+      #           dispatch; the only trigger since #9262), the branch ref for a branch dispatch,
+      #           whatever tag it publishes. Neither
       #           matches the workflow-name half of that regexp. And the inngest deploy branch does
       #           not call verify_image_signature at all -- measured, zero occurrences.
       #
@@ -724,7 +727,7 @@ jobs:
             # there is no build to be "UNAFFECTED", and "backfill needed" describes a run
             # whose entire purpose WAS the backfill.
             if [ "${MIRROR_ONLY:-false}" = "true" ]; then
-              echo "::error::mirror_only backfill FAILED for ${IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — zot does not serve the GHCR digest. DO NOT PIN until this is green. Re-run: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true"
+              echo "::error::mirror_only backfill FAILED for ${IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — zot does not serve the GHCR digest. DO NOT PIN until this is green. Re-run: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-${TAG} -f mirror_only=true"
               echo "❌ mirror_only backfill FAILED for \`${IMAGE}:${TAG}\` (reason=\`${reason}\` rc=${rc}) — zot does not serve the GHCR digest; do not pin." >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
@@ -759,7 +762,7 @@ jobs:
             # a tag zot does not serve fails the NEXT inngest fresh boot at inngest_pull_fatal and
             # leaves the sole scheduler dark. The message says so: backfill before any
             # inngest-host-replace pinned to this tag.
-            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build + GHCR push unaffected, but hosts pull ONLY from zot: an inngest fresh boot pinned to this tag will fail (inngest_pull_fatal). Backfill BEFORE any inngest-host-replace: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity).${_ptr}"
+            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build + GHCR push unaffected, but hosts pull ONLY from zot: an inngest fresh boot pinned to this tag will fail (inngest_pull_fatal). Backfill BEFORE any inngest-host-replace: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity).${_ptr}"
             echo "⚠️ zot mirror degraded for \`${TAG}\` (reason=\`${reason}\` rc=${rc}) — GHCR push unaffected; hosts pull only from zot, so backfill before any inngest-host-replace pinned to this tag." >> "$GITHUB_STEP_SUMMARY"
             # On the BUILD path the mirror is secondary, so exit 0 and let the release stand.
             exit 0
