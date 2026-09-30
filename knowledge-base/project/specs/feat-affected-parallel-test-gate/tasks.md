@@ -9,11 +9,11 @@ Every task is test-first: write the failing test or fixture, see it red, then ch
 
 ### 1. Anchor directory edges
 
-- [ ] 1.1 Write failing rows in `scripts/test-all-affected.test.sh`: KB-only diff with "test" in the path selects none of the five `test`-edge suites; `test/x-community.test.ts` selects them; `apps/web-platform/test/z.ts` selects its own suite and not the root `test/` suites
-- [ ] 1.2 Run `git grep -n '_diff_touches\|_affected_add_edge' scripts/ plugins/soleur/scripts/` and review every call site
-- [ ] 1.3 Normalize directory tokens to trailing-`/` prefixes in `_affected_add_edge`; match directory edges as line-start prefixes and file edges as exact lines in `_diff_touches`
-- [ ] 1.4 Sweep every declared edge array for edges that relied on substring matching
-- [ ] 1.5 Run the before/after selection diff over the last 30 first-parent commits on `origin/main`; justify every dropped suite as a false positive; record it in `knowledge-base/project/specs/feat-affected-parallel-test-gate/edge-anchoring-corpus.md`
+- [x] 1.1 Write failing rows in `scripts/test-all-affected.test.sh`: KB-only diff with "test" in the path selects none of the five `test`-edge suites; `test/x-community.test.ts` selects them; `apps/web-platform/test/z.ts` selects its own suite and not the root `test/` suites
+- [x] 1.2 Run `git grep -n '_diff_touches\|_affected_add_edge' scripts/ plugins/soleur/scripts/` and review every call site
+- [x] 1.3 Normalize directory tokens to trailing-`/` prefixes in `_affected_add_edge`; match directory edges as line-start prefixes and file edges as exact lines in `_diff_touches`
+- [x] 1.4 Sweep every declared edge array for edges that relied on substring matching
+- [x] 1.5 Run the before/after selection diff over the last 30 first-parent commits on `origin/main`; justify every dropped suite as a false positive; record it in `knowledge-base/project/specs/feat-affected-parallel-test-gate/edge-anchoring-corpus.md`
 
 ### 2. Always-on audit
 

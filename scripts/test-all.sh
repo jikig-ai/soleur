@@ -1979,6 +1979,25 @@ fi
 # pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
 # still writing (SIGPIPE 141), which would make the condition evaluate FALSE despite the match —
 # a fail-open whose likelihood scales with diff size. A herestring has no producer to kill.
+# Newline constant for the anchored edge matcher below. A variable rather than an
+# inline $'\n' so each mutation-battery row rewrites ONE plain line of it.
+_NL=$'\n'
+
+# Anchored edge match (#9307). `_affected_add_edge` mints `^`-prefixed edges:
+# `^dir/` is a path PREFIX (a diff line that STARTS with dir/), `^file` an EXACT
+# line. The legacy substring match let the bare command word `test` in
+# `bun test <file>` -- which resolves to the repo-root test/ directory -- select
+# its suite for any diff path that merely CONTAINED "test", a knowledge-base-only
+# diff included. Edges without the `^` mark (the relevance arrays, which reach
+# `_diff_touches` directly) keep the substring semantics.
+_diff_edge_hit() {
+  local e="$1" _n="${_NL}${_diff_names}${_NL}"
+  case "$e" in
+    */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
+    *)  [[ "$_n" == *"${_NL}${e}${_NL}"* ]] ;;
+  esac
+}
+
 _diff_touches() {
   # The two bypasses are UNCONDITIONAL early returns, not flags consulted later.
   #
@@ -2008,11 +2027,18 @@ _diff_touches() {
   if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
   local p
   for p in "$@"; do
-    # `[[ == ]]` with the operand quoted is a literal substring match — the
-    # same semantics as the fixed-string grep it replaces, minus one fork +
-    # herestring per edge per registration (the affected pre-pass calls this
-    # ~440 times against multi-element edge sets).
-    if [[ "$_diff_names" == *"$p"* ]]; then return 0; fi
+    case "$p" in
+      \^*)
+        if _diff_edge_hit "${p#^}"; then return 0; fi
+        ;;
+      *)
+        # `[[ == ]]` with the operand quoted is a literal substring match — the
+        # same semantics as the fixed-string grep it replaces, minus one fork +
+        # herestring per edge per registration (the affected pre-pass calls this
+        # ~440 times against multi-element edge sets).
+        if [[ "$_diff_names" == *"$p"* ]]; then return 0; fi
+        ;;
+    esac
   done
   return 1
 }
@@ -2071,11 +2097,21 @@ _affected_resolve_edges() {
 # Append an edge if it resolves inside the repo and is not already present.
 # `[[ -e ]]` is the whole test: argv words, `-c` payload tokens and resolved
 # source/import paths are all filtered through it, so garbage never lands in
-# the edge set and a DIRECTORY entry acts as a prefix edge under the substring
-# match _diff_touches uses.
+# the edge set. A surviving edge is stored ANCHORED (#9307): `^dir/` for a
+# directory (a path prefix), `^file` for a file (an exact line) -- see
+# _diff_edge_hit. Anything rooted at `.`/`..` keeps the legacy unanchored form:
+# `.` names the whole tree, and an anchored `^./` could never match a diff line,
+# which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
   local _p="$1"
   [[ -n "$_p" && -e "$_p" ]] || return 0
+  case "$_p" in
+    .|..|./*|../*) ;;
+    *)
+      if [[ -d "$_p" ]]; then _p="${_p%/}/"; fi
+      _p="^$_p"
+      ;;
+  esac
   _affected_in_list "$_p" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} && return 0
   _AC_EDGES+=("$_p")
 }
@@ -2373,7 +2409,7 @@ _affected_derive() {
     if (( _PRINT_AFFECTED == 1 )); then
       local _e _ns=0
       for _e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do
-        [[ "$_e" == "$_suite_file" ]] || { _ns=1; break; }
+        [[ "${_e#^}" == "$_suite_file" ]] || { _ns=1; break; }
       done
       if (( _ns == 1 )); then _AC_SUITE_FILE="$_suite_file"; return 0; fi
     fi
@@ -2392,7 +2428,7 @@ _affected_derive() {
         _affected_file_edges "$_f"
         local _i _new
         for (( _i=_pre_n; _i<${#_AC_EDGES[@]}; _i++ )); do
-          _new="${_AC_EDGES[$_i]}"
+          _new="${_AC_EDGES[$_i]#^}"
           if [[ -f "$_new" ]] && ! _affected_in_list "$_new" "${_seen[@]+"${_seen[@]}"}"; then
             _seen+=("$_new"); _next+=("$_new")
           fi
@@ -2464,7 +2500,7 @@ _affected_classify() {
   if [[ -n "${_AC_SUITE_FILE:-}" ]]; then
     local _e _nonself=0
     for _e in "${_AC_EDGES[@]}"; do
-      [[ "$_e" == "$_AC_SUITE_FILE" ]] || { _nonself=1; break; }
+      [[ "${_e#^}" == "$_AC_SUITE_FILE" ]] || { _nonself=1; break; }
     done
     (( _nonself == 0 )) && _AC_CLASS="unclassified"
   fi

@@ -34,6 +34,11 @@
 #
 # AN ENTRY IS A PATH OR A DIRECTORY PREFIX. A trailing "/" denotes a directory
 # prefix match; anything else is a literal path. Keep entries repo-relative.
+# Matching is ANCHORED (#9307): a directory entry selects a suite only when a
+# diff path STARTS with it, a file entry only when a diff path EQUALS it, and a
+# directory written without the trailing "/" is normalised to one. So `test/`
+# does not match `apps/web-platform/test/x.ts` or `specs/feat-x-test-y/spec.md`.
+# Entries rooted at `.` or `..` keep the legacy substring match.
 #
 # BASH 3.2. No `declare -A`. The runner indexes selection by registration
 # ORDINAL and resolves per-label arrays by name (`eval`/indirection idiom).

@@ -207,7 +207,8 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     tests/scripts/registry-gate-mutation-battery|\\
     apps/web-platform/infra/run-registered-suites.sh|\\
     tests/commands/sync-domain-model|\\
-    plugins/soleur/test/c4-model-freshness.test.sh) : ;;
+    plugins/soleur/test/c4-model-freshness.test.sh|\\
+    test/x-community|plugins/soleur) : ;;
     *) return 0 ;;
   esac
 ''', 1)
@@ -232,6 +233,21 @@ run_arm() {
     ARM_RC=97; ARM_OUT=""; ARM_RECORD=""; return 1
   }
   local rc=0
+  # Mutation hook (#9307 Guard 3): SANDBOX_MUT_OLD/SANDBOX_MUT_NEW replace ONE
+  # exact line of the sandbox copy, and a mutation that did not land is rc 98
+  # — a mutant that does not land reports the BASELINE, which reads as a pass.
+  if [[ -n "${SANDBOX_MUT_OLD:-}" ]]; then
+    SB="$sb" python3 - <<'PY' || { ARM_RC=98; ARM_OUT="mutation did not land"; ARM_RECORD=""; return 1; }
+import os, sys
+p = os.environ["SB"]
+s = open(p).read()
+old = os.environ["SANDBOX_MUT_OLD"]
+new = os.environ["SANDBOX_MUT_NEW"]
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, new, 1))
+PY
+  fi
   ( cd "$REPO_ROOT" && env $ENV_SCRUB \
       SOLEUR_DISABLE_SESSION_STATE=1 SANDBOX_RECORD="$rec_f" \
       TEST_TIMING_LOG="$TESTROOT/timing-$cases.tsv" \
@@ -1471,13 +1487,148 @@ else
   fail "sc9: real-state scratch repo could not be built"
 fi
 
+# --- Rows t1-t6 + m1-m3: anchored edges (#9307, Guard 3) ---------------------------
+# A derived edge that is a DIRECTORY is a path PREFIX, matched at the start of a
+# diff line; a FILE edge is an exact line. The bare command word `test` in
+# `bun test <file>` resolves to the repo-root `test/` directory, and as a
+# substring it selected every suite carrying it for any diff path that merely
+# CONTAINED "test" — a knowledge-base-only diff included. `test/x-community`
+# (argv `bun test test/x-community.test.ts`) and `plugins/soleur`
+# (`bun test plugins/soleur/`) are the two sandbox labels that carry it.
+#
+# t1: a path that merely contains "test" (a spec directory named *-test-*) must
+#     not select a root-`test/` suite.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/project/specs/feat-x-test-y/spec.md' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] \
+  && ! grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD" \
+  && ! grep -qF $'RAN\tplugins/soleur' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD"; then
+  pass "t1: a path merely containing 'test' selects no root test/ suite (always-on still ran)"
+else
+  fail "t1: rc=$_rc ran=$(ran_count) — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# t2: positive control — the suite's own file selects it.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD"; then
+  pass "t2: test/x-community.test.ts selects test/x-community"
+else
+  fail "t2: rc=$_rc ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# t3: a NESTED test/ directory is not the root test/ directory.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=apps/web-platform/test/z.ts' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] \
+  && ! grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD"; then
+  pass "t3: apps/web-platform/test/z.ts does not select the root test/ suite"
+else
+  fail "t3: rc=$_rc ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# t4: a real directory edge still selects on a path under it.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=plugins/soleur/skills/x/SKILL.md' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && grep -qF $'RAN\tplugins/soleur' <<<"$ARM_RECORD"; then
+  pass "t4: a path under plugins/soleur/ selects the plugins/soleur suite"
+else
+  fail "t4: rc=$_rc ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# t5: a directory edge is a prefix of the diff line, not a fragment of it.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/plugins/soleur/notes.md' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] \
+  && ! grep -qF $'RAN\tplugins/soleur' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD"; then
+  pass "t5: knowledge-base/plugins/soleur/notes.md does not select plugins/soleur"
+else
+  fail "t5: rc=$_rc ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# t6: a second diff line is still matched after a non-matching first line.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  $'SANDBOX_DIFF_NAMES=knowledge-base/a.md\ntest/x-community.test.ts' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD"; then
+  pass "t6: the second diff line selects the suite after a non-matching first line"
+else
+  fail "t6: rc=$_rc ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# m1-m3: each mutant rewrites ONE line of the sandbox runner and must be
+# DETECTED — the row's scenario must produce the verdict the un-mutated runner
+# would have failed. A mutation that did not land is rc 98 and fails the row.
+#
+# m1: directory edges revert to the legacy SLASH-LESS substring match (the bare
+#     word `test`) — t1's scenario must now select the root test/ suite, the
+#     false positive this change removes.
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='    */) [[ "$_n" == *"${_NL}${e}"* ]] ;;' \
+SANDBOX_MUT_NEW='    */) [[ "$_n" == *"${e%/}"* ]] ;;' \
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/project/specs/feat-x-test-y/spec.md' \
+  -- --affected
+if [[ "$ARM_RC" != "98" ]] && grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD"; then
+  pass "m1: substring-match mutant selects the root test/ suite on a spec path (t1 detects it)"
+else
+  fail "m1: rc=$ARM_RC — $ARM_OUT"
+fi
+
+# m2: the anchored branch never matches (the guard's own dispatch is dead) —
+#     t2's positive scenario must now fail to select.
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='        if _diff_edge_hit "${p#^}"; then return 0; fi' \
+SANDBOX_MUT_NEW='        if false; then return 0; fi' \
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
+  -- --affected
+if [[ "$ARM_RC" != "98" ]] && ! grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD"; then
+  pass "m2: dead-dispatch mutant fails to select test/x-community (t2 detects it)"
+else
+  fail "m2: rc=$ARM_RC — $ARM_OUT"
+fi
+
+# m3: only the FIRST diff line is considered — t6's scenario must now miss.
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='  local e="$1" _n="${_NL}${_diff_names}${_NL}"' \
+SANDBOX_MUT_NEW='  local e="$1" _n="${_NL}${_diff_names%%${_NL}*}${_NL}"' \
+SANDBOX_LIB=with-lib run_arm \
+  $'SANDBOX_DIFF_NAMES=knowledge-base/a.md\ntest/x-community.test.ts' \
+  -- --affected
+if [[ "$ARM_RC" != "98" ]] && ! grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD"; then
+  pass "m3: first-line-only mutant misses the second diff line (t6 detects it)"
+else
+  fail "m3: rc=$ARM_RC — $ARM_OUT"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=52
+MIN_CASES=61
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
