@@ -2199,7 +2199,7 @@ INNGEST_VERBS_USED=$(grep -oE '(\$INSTALL_PATH|\$\{INSTALL_PATH\}|/usr/local/bin
 INNGEST_VERBS_UNMEASURED=$(grep -vE "$INNGEST_VERB_ALLOWLIST_RE" <<<"$INNGEST_VERBS_USED" || true)
 INNGEST_HAS_START=$(grep -cx start <<<"$INNGEST_VERBS_USED" || true)
 assert "bootstrap invokes only measured inngest-cli verbs (allowlist: start, version) — no pause/resume (#9219) (got: $(tr '\n' ' ' <<<"$INNGEST_VERBS_USED"); unmeasured: $(tr '\n' ' ' <<<"$INNGEST_VERBS_UNMEASURED"))" \
-  "[[ \"\$INNGEST_HAS_START\" == 1 && -z \"\$INNGEST_VERBS_UNMEASURED\" ]]"
+  "[[ '$INNGEST_HAS_START' == 1 && -z '$INNGEST_VERBS_UNMEASURED' ]]"
 
 # --- Durable backend assets (#5450) ---
 echo ""
