@@ -78,11 +78,18 @@ readonly LOG_TAG="ci-deploy"
 # drifted, or webhook.service's ProtectSystem view differs from the delivering context). Those
 # route to different fixes, so collapsing them into one "no credential" value would discard the
 # discriminator at exactly the moment it is needed.
+#
+# #8609 (plan §3.1): GITHUB_APP_DOPPLER_TOKEN, the read token for the isolated soleur-github-app
+# project, is read here too but is NEVER exported — the container and every child process must not
+# see it; only overlay_github_app_key hands it to one `doppler` call. Reset and un-exported first,
+# so an inherited value can neither be used nor leak.
+GITHUB_APP_DOPPLER_TOKEN=""
+export -n GITHUB_APP_DOPPLER_TOKEN
 CRED_FILE_STATE=present
 if [ -r /etc/default/soleur-doppler-token ]; then
   while IFS='=' read -r _cred_k _cred_v; do
     case "$_cred_k" in
-      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
+      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY|GITHUB_APP_DOPPLER_TOKEN)
         # Skip an empty value rather than blanking a working one. `EnvironmentFile=-` tolerates
         # ABSENT and UNREADABLE but NOT empty-valued, and the installer's shape check accepts a
         # bare `KEY=` (measured), so this is the layer that actually holds that line.
@@ -428,10 +435,16 @@ write_state() {
     logger -t "$LOG_TAG" "write_state: mktemp failed for STATE_FILE=$STATE_FILE"
     return 0
   }
+  # #8609: the GitHub App key fields ride only a deploy that reached the overlay (an ABSENT key =
+  # never ran, the cat-deploy-state convention). Every value is a closed enum this script sets.
+  local gak=""
+  if [[ -n "${GITHUB_APP_KEY_FETCH:-}" ]]; then
+    gak=",\"github_app_key_source\":\"${GITHUB_APP_KEY_SOURCE:-}\",\"github_app_key_fetch\":\"${GITHUB_APP_KEY_FETCH}\",\"github_app_key_probe\":\"${GITHUB_APP_KEY_PROBE:-}\""
+  fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -2357,7 +2370,7 @@ verify_image_signature() {
     printf '%s' "$image_tag" # fail-open: run the tag (WARN); ENFORCE aborts below
     rm -f "$err" 2>/dev/null || true
     [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
-    return 0
+    return 3 # WARN fail-open: runnable but NOT verified (#8609 — no GitHub App key for it)
   fi
   # Verify via the pinned cosign container (ADR-087 Design B′). The app image is a
   # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
@@ -2474,7 +2487,9 @@ verify_image_signature() {
   rm -f "$err" 2>/dev/null || true
   _cosign_anon_cleanup "$anon_dir"
   [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
-  return 0
+  # 3, not 0: the digest is immutable but its signature did NOT verify, so a digest-shaped ref alone
+  # cannot tell the caller "signed" — the #8609 overlay hands the App key only on rc 0.
+  return 3
 }
 
 # run_faithful_sandbox_canary: NON-BLOCKING dark-launch (#5875 / ADR-079). Runs
@@ -2608,6 +2623,129 @@ resolve_env_file() {
   echo "$doppler_output" > "$tmpenv"
   echo "$tmpenv"
   return 0
+}
+
+# >>> github-app-key-overlay >>>
+# Byte-identical in ci-deploy.sh and soleur-host-bootstrap.sh (inside soleur-doppler-download);
+# ci-deploy.test.sh Guard 7 compares the two. POSIX sh, because the boot copy runs under dash.
+# Contract (#8609): knowledge-base/project/plans/
+# 2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md §3.2-§3.4. Each file
+# defines its own github_app_key_emit <classification> <level> [detail]; detail is numeric k=v
+# only — never Doppler stderr, key or token bytes.
+#
+# overlay_github_app_key <env-file> <verified-ref>: <verified-ref> is EMPTY unless the caller proved
+# the image it is about to run (a sha256 ref). Rewrites <env-file> in place (no new file, so the
+# caller's cleanup still covers every secret byte), sets GITHUB_APP_KEY_SOURCE and
+# GITHUB_APP_KEY_FETCH, and returns 1 only on the runtime-hijack refusal.
+overlay_github_app_key() {
+  GITHUB_APP_KEY_SOURCE=prd
+  GITHUB_APP_KEY_FETCH=no_token
+  if grep -qE '^(NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|LD_PRELOAD|SSL_CERT_FILE|SSL_CERT_DIR|HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy)=' "$1"; then
+    GITHUB_APP_KEY_FETCH=env_hijack
+    github_app_key_emit env_hijack error
+    return 1
+  fi
+  if [ -z "${GITHUB_APP_DOPPLER_TOKEN:-}" ]; then
+    github_app_key_emit no_token info
+    return 0
+  fi
+  case "${2:-}" in
+    *sha256:*) ;;
+    *)
+      GITHUB_APP_KEY_FETCH=unverified_image
+      github_app_key_emit unverified_image error
+      return 0
+      ;;
+  esac
+  _gak_rc=0
+  _gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout -k 5 20 doppler secrets download --no-file --format docker --project soleur-github-app --config prd 2>/dev/null) || _gak_rc=$?
+  _gak_n=$(printf '%s\n' "$_gak_dl" | grep -cE '^GITHUB_APP_PRIVATE_KEY=.') || _gak_n=0
+  if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=failed
+    github_app_key_emit fetch_failed error "rc=$_gak_rc key_lines=$_gak_n len=${#_gak_dl}"
+    unset _gak_dl
+    return 0
+  fi
+  _gak_line=$(printf '%s\n' "$_gak_dl" | grep -E '^GITHUB_APP_PRIVATE_KEY=.')
+  _gak_rest=$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' "$1") || _gak_rest=
+  if ! printf '%s\n%s\n' "$_gak_rest" "$_gak_line" > "$1"; then
+    GITHUB_APP_KEY_FETCH=failed
+    github_app_key_emit merge_failed error
+    unset _gak_dl _gak_line _gak_rest
+    return 0
+  fi
+  GITHUB_APP_KEY_SOURCE=isolated
+  GITHUB_APP_KEY_FETCH=ok
+  github_app_key_emit ok info "len=${#_gak_line}"
+  unset _gak_dl _gak_line _gak_rest
+  return 0
+}
+
+# github_app_key_present <env-file>: exactly one GITHUB_APP_PRIVATE_KEY line, neither empty nor the
+# eviction sentinel — the no-network half of the key check.
+github_app_key_present() {
+  [ "$(grep -c '^GITHUB_APP_PRIVATE_KEY=' "$1" 2>/dev/null)" = 1 ] || return 1
+  ! grep -qxE 'GITHUB_APP_PRIVATE_KEY=(EVICTED_SEE_ADR_241)?' "$1"
+}
+# <<< github-app-key-overlay <<<
+
+# github_app_key_emit <classification> <level> [detail]: ci-deploy.sh's half of the shared overlay
+# block's emitter contract (the boot path defines its own). journald always; a Sentry event
+# (feature=ci-deploy, op=github-app-key) for warning/error. Best-effort, fail-open under set -e.
+github_app_key_emit() {
+  local cls="$1" level="$2" detail="${3:-}" payload
+  logger -t "$LOG_TAG" "GITHUB_APP_KEY: class=$cls level=$level${detail:+ $detail}" || true
+  [[ "$level" == info ]] && return 0
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    payload="$(jq -nc --arg c "$cls" --arg l "$level" --arg d "$detail" --arg t "${TAG:-}" \
+      '{message: ("github app key " + $c), level: $l, platform: "other", logger: "ci-deploy",
+        tags: {feature: "ci-deploy", op: "github-app-key", classification: $c},
+        extra: {detail: $d, tag: $t}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "GITHUB_APP_KEY: Sentry POST failed" || true
+  fi
+  return 0
+}
+
+readonly GITHUB_APP_KEY_PROBE_MJS=/app/scripts/github-app-key-probe.mjs
+
+# github_app_key_canary_check: the key check before the swap (#8609 plan §3.3), run against the
+# CANARY container. Presence first (no network), then acceptance: the baked probe signs an App JWT
+# from the canary's own env and calls GET /app. Returns 1 with CANARY_FAIL_REASON set to refuse
+# promotion — the existing rollback arm then keeps the running container serving. `transport`
+# (GitHub unreachable or rate-limited) promotes with a warning; a hotfix must not wait on GitHub.
+github_app_key_canary_check() {
+  local out rc=0 ctx="source=${GITHUB_APP_KEY_SOURCE:-} fetch=${GITHUB_APP_KEY_FETCH:-}"
+  if ! github_app_key_present "$ENV_FILE"; then
+    GITHUB_APP_KEY_PROBE=missing
+    github_app_key_emit key_missing error "$ctx"
+    CANARY_FAIL_REASON="github_app_key_missing"
+    return 1
+  fi
+  # `sh -c '[ -f … ] || exit 127'`: `node <absent file>` exits 1, the rejected class, and an image
+  # older than the probe must read as absent (127) instead. stderr is discarded, never forwarded.
+  out="$(docker exec soleur-web-platform-canary sh -c '[ -f "$1" ] || exit 127; exec node "$1"' \
+    github-app-key-probe "$GITHUB_APP_KEY_PROBE_MJS" 2>/dev/null)" || rc=$?
+  # Anchored over the WHOLE output: exactly one line from the enum, or no verdict at all.
+  if [[ "$out" =~ ^github_app_key_probe=(ok|rejected|transport)$ ]]; then
+    GITHUB_APP_KEY_PROBE="${BASH_REMATCH[1]}"
+  elif (( rc == 127 )); then
+    GITHUB_APP_KEY_PROBE=absent
+  else
+    GITHUB_APP_KEY_PROBE=rejected
+  fi
+  case "$GITHUB_APP_KEY_PROBE" in
+    ok)        github_app_key_emit probe_ok info "$ctx rc=$rc"; return 0 ;;
+    transport) github_app_key_emit probe_transport warning "$ctx rc=$rc"; return 0 ;;
+    absent)    github_app_key_emit probe_absent info "$ctx rc=$rc"; return 0 ;;
+  esac
+  github_app_key_emit probe_rejected error "$ctx rc=$rc"
+  CANARY_FAIL_REASON="github_app_key_rejected"
+  return 1
 }
 
 # Verify inngest-server is healthy after restart (#4538), with an ADVISORY
@@ -3363,12 +3501,24 @@ case "$COMPONENT" in
     # reused_local_reload cosign breadcrumb (verify_result=reused_local_reload) was already emitted inside
     # pull_image_with_fallback (an intentional amendment to the ADR-087 cosign contract,
     # never the warn-mode fail-open).
+    #
+    # #8609 (plan §3.2 step 2): GITHUB_APP_KEY_REF is the ref the overlay may hand the App key to —
+    # VERIFIED_REF on a verified (rc 0) or local-cache arm, EMPTY on a WARN fail-open (rc 3), whose
+    # digest-shaped ref does not mean "signed".
+    GITHUB_APP_KEY_REF=""
     if [[ -n "${LOCAL_CACHE_VERIFIED_REF:-}" ]]; then
       VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"
-    elif ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
-      logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
-      final_write_state 1 "cosign_verify_failed"
-      exit 1
+      GITHUB_APP_KEY_REF="$VERIFIED_REF"
+    else
+      VERIFY_RC=0
+      VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")" || VERIFY_RC=$?
+      if (( VERIFY_RC == 0 )); then
+        GITHUB_APP_KEY_REF="$VERIFIED_REF"
+      elif (( VERIFY_RC != 3 )); then
+        logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
+        final_write_state 1 "cosign_verify_failed"
+        exit 1
+      fi
     fi
 
     # #6428: pre-swap freshness — the image about to run must have been BUILT as the requested
@@ -3457,6 +3607,16 @@ case "$COMPONENT" in
     # Replacing the trap entirely would lose the "unhandled" reason capture.
     # shellcheck disable=SC2064
     trap 'rc=$?; rm -f "$ENV_FILE"; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
+
+    # #8609 (plan §3.2): overlay the isolated GitHub App key in THIS shell — resolve_env_file runs
+    # in a $(…) subshell, so nothing it set would reach deploy state. After the trap above, so the
+    # cleanup already covers the file the overlay rewrites.
+    GITHUB_APP_KEY_PROBE=not_run
+    if ! overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF"; then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the prd env carries a runtime-hijack variable (GitHub App key overlay refused) — keeping previous version"
+      final_write_state 1 "github_app_key_env_hijack"
+      exit 1
+    fi
 
     # Compose NODE_OPTIONS by APPENDING our heap cap to any operator-set value
     # in the Doppler env-file (#5417 review). `-e NODE_OPTIONS=...` on docker run
@@ -3723,6 +3883,11 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
+    fi
+
+    # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.
+    if [[ "$CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check; then
+      CANARY_HEALTHY=false
     fi
 
     if [[ "$CANARY_HEALTHY" == "true" ]]; then

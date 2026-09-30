@@ -4,3 +4,6 @@ DOPPLER_TOKEN=${doppler_token}
 SENTRY_INGEST_DOMAIN=${sentry_ingest_domain}
 SENTRY_PROJECT_ID=${sentry_project_id}
 SENTRY_PUBLIC_KEY=${sentry_public_key}
+%{ if github_app_doppler_token != "" ~}
+GITHUB_APP_DOPPLER_TOKEN=${github_app_doppler_token}
+%{ endif ~}

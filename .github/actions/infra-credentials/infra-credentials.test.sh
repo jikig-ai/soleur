@@ -86,7 +86,7 @@ if body is None:
 # Refuse a truncated extraction. A program that parses and answers is worse than an
 # absent one: it produces a verdict about the SUT from an instrument that is broken.
 for marker in ("PRIV_BUCKET=", "META_FILTER=", "git_data_root_state_pair_half_set",
-               "privileged_source_missing", "MIN_EXPORTED="):
+               "privileged_source_missing", "MIN_EXPORTED=", "GAR_NAME="):
     if marker not in body:
         print(f"EXTRACTION LOST A DEFINING CONSTRUCT: {marker!r}", file=sys.stderr)
         sys.exit(3)
@@ -154,7 +154,7 @@ REAL_OPENSSL="$(command -v openssl)"
 #
 # Runs the extracted body under the RUNNER's shell, not ours.
 run_loader() {
-  local infra="$1" legacy="$2" migrated="$3" payload_json="$4" download_rc="${5:-0}"
+  local infra="$1" legacy="$2" migrated="$3" payload_json="$4" download_rc="${5:-0}" optin="${6:-false}"
   local case_dir; case_dir="$(mktemp -d "$WORK/case.XXXXXXXX")"
   assert_fixture_dir "$case_dir"
   printf '%s' "$payload_json" > "$case_dir/payload.json"
@@ -169,6 +169,7 @@ run_loader() {
     DP_INFRA="$infra" \
     DP_LEGACY="$legacy" \
     GIT_DATA_ROOT_STATE_MIGRATED="$migrated" \
+    GITHUB_APP_RUNTIME_OPT_IN="$optin" \
     STUB_CALLS="$case_dir/calls" \
     STUB_PAYLOAD="$case_dir/payload.json" \
     STUB_DOWNLOAD_RC="$download_rc" \
@@ -510,6 +511,83 @@ grep -q 'secrets get HCLOUD_TOKEN' "$LOADER_DIR/calls" \
   || pass "row1e: tier_b arm makes no prd_terraform Hetzner read"
 
 # ======================================================================
+# GUARD 8 (#8609) — the loader ALWAYS exports the runtime App key's read-token name.
+#
+# PROPERTY. In every job that runs this loader, TF_VAR_github_app_runtime_doppler_token in
+# $GITHUB_ENV comes from soleur-infra-privileged (and only on opt-in) or is EMPTY -- never from
+# `prd_terraform`. The job's later `doppler run --preserve-env -c prd_terraform --name-transformer
+# tf-var` keeps a name the environment DEFINES (even empty) and injects one it does not, so the
+# row that matters is "is the name defined?", not "is it non-empty?". `effective_tfvar` models
+# exactly that precedence over the file this loader wrote: the last definition in $GITHUB_ENV if
+# there is one (Actions applies them in order), else the value a `DOPPLER_TOKEN_WRITE` holder
+# planted in `prd_terraform`. The vendor side of the precedence is row 9 (real CLI).
+# ======================================================================
+env_last() { # <name> — the LAST value $GITHUB_ENV assigns to <name>; prints nothing and returns 1 if none
+  awk -v k="$1" '
+    pending != "" { if ($0 == pending) { pending = ""; if (cur == k) { val = body; found = 1 } } else { body = (nb++ ? body "\n" : "") $0 }; next }
+    /^[A-Za-z_][A-Za-z0-9_]*<[<]/ { cur = $0; sub(/<[<].*/, "", cur); pending = $0; sub(/^[^<]*<[<]/, "", pending); body = ""; nb = 0; next }
+    /^[A-Za-z_][A-Za-z0-9_]*=/ { cur = $0; sub(/=.*/, "", cur); if (cur == k) { val = $0; sub(/^[^=]*=/, "", val); found = 1 } }
+    END { if (found) { printf "%s", val; exit 0 } exit 1 }
+  ' "$LOADER_DIR/github_env"
+}
+PLANTED="planted-by-a-prd_terraform-writer"
+effective_tfvar() { env_last TF_VAR_github_app_runtime_doppler_token || printf '%s' "$PLANTED"; }
+# Synthesized, split across concatenation so no contiguous token-shaped literal sits in source.
+GAR_FIXTURE="dp.st.""FIXTURE-GAR-not-a-real-token-8609"
+gar_payload() { "$REAL_JQ" -n --arg pem "$PEM" --arg gar "$GAR_FIXTURE" \
+  '{HCLOUD_TOKEN: "hcloud-fixture", GITHUB_INFRA_APP_PRIVATE_KEY: $pem, GITHUB_APP_RUNTIME_DOPPLER_TOKEN: $gar}'; }
+
+# ROW 8.1 — Tier-B arm, the project holds NO token, prd_terraform holds a planted one.
+run_loader "dp.st.TIERB-FIXTURE" "" "" "$(full_payload)"
+[[ "$LOADER_RC" -eq 0 ]] && pass "8.1: tier_b arm without the token exits 0" || fail "8.1: rc=$LOADER_RC"
+if env_last TF_VAR_github_app_runtime_doppler_token >/dev/null && [[ -z "$(env_last TF_VAR_github_app_runtime_doppler_token)" ]]; then
+  pass "8.1: tier_b arm with no token DEFINES TF_VAR_github_app_runtime_doppler_token as empty"
+else
+  fail "8.1: tier_b arm left TF_VAR_github_app_runtime_doppler_token undefined or non-empty — a prd_terraform plant would win under --preserve-env"
+fi
+[[ "$(effective_tfvar)" != "$PLANTED" ]] && pass "8.1: the planted prd_terraform value cannot reach the job" \
+  || fail "8.1: the job would run with the prd_terraform-planted token"
+
+# ROW 8.2 — ORDER. The legacy arm returns early (`exit 0`), so an export placed after it
+# never runs for a legacy job -- which is the arm prd_terraform actually serves.
+run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+if env_last TF_VAR_github_app_runtime_doppler_token >/dev/null && [[ "$(effective_tfvar)" != "$PLANTED" ]]; then
+  pass "8.2: the legacy arm also defines the name (the export precedes the arm split)"
+else
+  fail "8.2: the legacy arm leaves the name undefined — the unconditional export runs after the legacy arm's early exit"
+fi
+env_last GITHUB_APP_RUNTIME_DOPPLER_TOKEN >/dev/null \
+  && pass "8.2: the plain name is defined too (a doppler run WITHOUT the tf-var transformer cannot supply it either)" \
+  || fail "8.2: GITHUB_APP_RUNTIME_DOPPLER_TOKEN left undefined in the legacy arm"
+
+# ROW 8.p — Must-PASS: an opted-in job with the token in the project gets that value, masked.
+run_loader "dp.st.TIERB-FIXTURE" "" "" "$(gar_payload)" 0 true
+[[ "$LOADER_RC" -eq 0 ]] && pass "8.p: opted-in tier_b run exits 0" || fail "8.p: rc=$LOADER_RC stderr=$(head -c 300 "$LOADER_DIR/stderr")"
+[[ "$(effective_tfvar)" == "$GAR_FIXTURE" ]] && pass "8.p: TF_VAR_github_app_runtime_doppler_token carries the Tier-B value" \
+  || fail "8.p: the opted-in job does not get the Tier-B token"
+grep -qxF -- "::add-mask::$GAR_FIXTURE" "$LOADER_DIR/stdout" && pass "8.p: the value is masked" \
+  || fail "8.p: the token value was never ::add-mask::ed"
+[[ "$(grep -cF -- "$GAR_FIXTURE" "$LOADER_DIR/stdout")" -eq 1 ]] && pass "8.p: the value appears in the log only inside its mask line" \
+  || fail "8.p: the token value is printed outside ::add-mask::"
+said "github_app_runtime_token=delivered" && pass "8.p: names the state (delivered)" || fail "8.p: no delivered state word"
+
+# ROW 8.3 — SECOND MEMBER: the token and unrelated keys together; the special-casing of the
+# token must not stop the generic export of everything else.
+env_has "HCLOUD_TOKEN" && env_has "TF_VAR_hcloud_token" \
+  && pass "8.3: a second, unrelated key is still exported beside the token" \
+  || fail "8.3: only the token was exported — the special case ended the generic loop"
+env_has "TF_VAR_github_infra_app_private_key" && pass "8.3: every other member is exported (the PEM too)" \
+  || fail "8.3: a later member of the project was dropped"
+
+# ROW 8.4 — NOT opted in: the token is in the project and the job still gets "".
+run_loader "dp.st.TIERB-FIXTURE" "" "" "$(gar_payload)"
+[[ -z "$(effective_tfvar)" ]] && env_last TF_VAR_github_app_runtime_doppler_token >/dev/null \
+  && pass "8.4: a job that did not opt in gets the name EMPTY (reach narrowed to the delivering jobs)" \
+  || fail "8.4: a non-opted-in job received the token"
+env_has "TF_VAR_hcloud_token" && pass "8.4: withholding the token withholds nothing else" || fail "8.4: other keys dropped"
+said "github_app_runtime_token=withheld" && pass "8.4: names the state (withheld)" || fail "8.4: no withheld state word"
+
+# ======================================================================
 # ROW 9 — the --preserve-env SENTINEL. This is the executable proof of the precedence
 # property Guard 2 asserts statically: without the flag, a value planted in a
 # Tier-A-writable config SHADOWS the loader's value, which is exactly the substitution
@@ -581,13 +659,14 @@ if [[ "${#FAILURES[@]}" -gt 0 ]]; then
   printf '  - %s\n' "${FAILURES[@]}"
 fi
 
+# 55 -> 70 (#8609): Guard 8 rows 8.1, 8.2, 8.p, 8.3, 8.4 (15 assertions). Measured: 70 ran.
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`. The subtrahend was
 # `SELFTEST_PASSES`, bound ~200 lines up at the instrument self-test -- and a name bound
 # further up is UNBOUND in the mutant slice, so the mutant dies at `set -u` and the floor
 # scores CONSTRUCTION FAILURE rather than FIRES. The literal is safe because the self-test
 # already asserts `PASSES == 1` at that point and aborts otherwise.
 SELFTEST_PASSES=1
-MIN_ASSERTIONS=55
+MIN_ASSERTIONS=70
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s real assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$MIN_ASSERTIONS" >&2

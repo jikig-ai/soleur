@@ -564,6 +564,22 @@ variable "doppler_token" {
   # so the never-attempt property that made this worth having is preserved.
 }
 
+# #8609 / ADR-241 D10 — the web host's read token for the isolated `soleur-github-app` project
+# (github-app-runtime-project.tf). Rendered as one conditional line into soleur-doppler-token.tmpl.
+# autonomy-considered: operator-mint (ADR-241 D3: this root's state is Tier-A readable, so a
+# doppler_service_token minted here would be branch-readable; the operator mints it into Tier-B
+# `soleur-infra-privileged` instead, runbook step R2). Supplied as a real value ONLY to jobs that
+# opt in through the infra-credentials loader's `github-app-runtime-token` input; every other job
+# gets "". Default "" keeps every plan working before R2 and renders the credential file
+# byte-identical to its pre-#8609 content. NO `validation` block, for the reason on
+# `variable "doppler_token"` above: the shape gate is local.github_app_token_shape_ok (server.tf).
+variable "github_app_runtime_doppler_token" {
+  description = "Read-only Doppler service token for soleur-github-app/prd (#8609). Tier B, operator-minted; empty until runbook step R2."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "sentry_dsn" {
   description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. ENFORCED as of #6730 (ADR-145): the web-host-create dispatch asserts this non-empty in Doppler prd_terraform BEFORE any create, and fails closed on an unreadable secret as well as an empty one (ADR-128 R1). The web-host-replace dispatch (#6969, ADR-148) carries the same assertion, where it matters MORE: a replace destroys the existing host first, so an empty DSN means the replacement boots dark with nothing to fall back to. Between #6575 (which deleted the web-2-recreate job that used to assert it) and #6730 nothing enforced it; the operator pinned-image chain in the host_creates HALT still carries the check for the break-glass path, where nothing else does."
   type        = string

@@ -93,11 +93,39 @@ locals {
 
   doppler_token_shape_ok = nonsensitive(can(regex("^dp\\.(st|sa|pt|ct)\\.[A-Za-z0-9._-]+$", var.doppler_token)))
 
+  # --- #8609 / ADR-241 D10: the web host's read token for the isolated soleur-github-app project ---
+  #
+  # ONE CONDITIONAL LINE in the template above, not a separate file: the render already feeds
+  # fresh-host cloud-init (hcloud provider 1.63.0 keeps only a hash of user_data in state — census
+  # row G6l pins that version) and deploy_pipeline_fix's hash-only trigger + SOLEUR_DOPPLER_TOKEN_B64
+  # push to web-1, and the installer already admits any KEY=VALUE line in /etc/default/*. A separate
+  # file would need new FILE_MAP/hooks/installer entries (each re-fires infra_config_handler_bootstrap
+  # on web-1) and could not be removed without SSH. The `~` strip markers make an EMPTY variable
+  # render the file byte-identical to its pre-#8609 content, so rollback is "set the Tier-B value
+  # empty and re-push" — no SSH.
+  #
+  # The line is NOT exported to the container: ci-deploy.sh reads it into a local and overlays exactly
+  # one name (GITHUB_APP_PRIVATE_KEY) from the isolated project (Phase 3 of the #8609 plan).
+  #
+  # SHAPE GATE ON THE RENDER, NOT ON ONE CONSUMER: the same string feeds both delivery paths, so the
+  # precondition sits on BOTH terraform_data.deploy_pipeline_fix and hcloud_server.web. Empty is
+  # allowed until PR-B flips local.github_app_key_isolated to true; after that no plan, local apply
+  # or host create can render a keyless credential file. Service tokens only (`dp.st.`, R2 mints one);
+  # the class excludes whitespace, CR, '#' and '=' for the same EnvironmentFile reason as
+  # doppler_token_shape_ok. nonsensitive() is applied to the boolean, never to the token (census
+  # row G6c admits exactly this nonsensitive(can(regex(...))) form).
+  github_app_key_isolated = false
+  github_app_token_shape_ok = nonsensitive(can(regex(
+    local.github_app_key_isolated ? "^dp\\.st\\.[A-Za-z0-9._-]{20,}$" : "^(dp\\.st\\.[A-Za-z0-9._-]{20,})?$",
+    var.github_app_runtime_doppler_token,
+  )))
+
   webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
-    doppler_token        = var.doppler_token
-    sentry_ingest_domain = local.sentry_dsn_parts.host
-    sentry_project_id    = local.sentry_dsn_parts.project
-    sentry_public_key    = local.sentry_dsn_parts.key
+    doppler_token            = var.doppler_token
+    sentry_ingest_domain     = local.sentry_dsn_parts.host
+    sentry_project_id        = local.sentry_dsn_parts.project
+    sentry_public_key        = local.sentry_dsn_parts.key
+    github_app_doppler_token = var.github_app_runtime_doppler_token
   })
 
   # Fresh-host bootstrap assets baked into var.image_name and extracted by cloud-init.yml
@@ -500,6 +528,13 @@ resource "hcloud_server" "web" {
   # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-143 + moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
+
+    # #8609 — a fresh host's cloud-init carries the same credential render as deploy_pipeline_fix;
+    # rationale at local.github_app_token_shape_ok.
+    precondition {
+      condition     = local.github_app_token_shape_ok
+      error_message = "github_app_runtime_doppler_token (Tier B, soleur-infra-privileged GITHUB_APP_RUNTIME_DOPPLER_TOKEN) must be empty or a Doppler service token matching ^dp.st.[A-Za-z0-9._-]{20,}$ with no newline, and non-empty once local.github_app_key_isolated is true (#8609). A fresh web host would otherwise boot with a malformed or missing key-read line. The value is deliberately NOT shown: it is a live credential."
+    }
   }
 
   labels = {
@@ -1754,6 +1789,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
     precondition {
       condition     = local.doppler_token_shape_ok
       error_message = "doppler_token must be a Doppler token matching ^dp.(st|sa|pt|ct).[A-Za-z0-9._-]+$ with no whitespace, CR, '#' or '=' — it is rendered into a systemd EnvironmentFile on a host that cannot be replaced, and a malformed value bricks the deploy channel (#7095). The offending value is deliberately NOT shown: it is a live credential."
+    }
+    # #8609 — the same gate hcloud_server.web carries; rationale at local.github_app_token_shape_ok.
+    precondition {
+      condition     = local.github_app_token_shape_ok
+      error_message = "github_app_runtime_doppler_token (Tier B, soleur-infra-privileged GITHUB_APP_RUNTIME_DOPPLER_TOKEN) must be empty or a Doppler service token matching ^dp.st.[A-Za-z0-9._-]{20,}$ with no newline (write it with tr -d '\\n', runbook R2), and non-empty once local.github_app_key_isolated is true (#8609). The value is deliberately NOT shown: it is a live credential."
     }
   }
 
