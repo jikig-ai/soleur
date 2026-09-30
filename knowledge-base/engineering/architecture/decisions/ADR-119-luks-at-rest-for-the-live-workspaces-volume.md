@@ -1362,7 +1362,7 @@ Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
 - **The one property.** `blkdiscard -z` runs on exactly one device, the pinned volume, never the device
   backing `/dev/mapper/workspaces`. The pin (`expected_plaintext_volume_id`) is bound through preflight's
   API classification, the host's by-id path (W1), path + major:minor + holders + mount + size +
-  hypervisor `ID_SERIAL` + the cutover's recorded plaintext mount source `PLAINTEXT_DEV` (W6; the label
+  hypervisor `ID_SERIAL` + the cutover's recorded plaintext mount source `PLAINTEXT_DEV` (W6, first wipe only; the label
   premise was false — no artifact labels the retained plaintext, corrected 2026-09-30), every systemd
   device unit sharing the
   target's `SysFSPath` (W6b), the success row the job parses, and the forget's state identity.
@@ -1386,10 +1386,13 @@ Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
   such a volume was remounted read-write since and may hold writes that exist nowhere else. As evidence
   (never a refusal) the rehearsal lists the workspace names on the unmounted plaintext (read-only
   `debugfs`) that the live mount lacks (`plaintext_only=`); the approver's ask accounts for each.
-- **Post-wipe rollback is refused permanently** (`outcome=refused_plaintext_wiped`), with or without the
-  ack, on either of two witnesses: a persisted wipe marker, or `/mnt/data` on the mapper with the
-  recorded `PLAINTEXT_DEV` invalid, resolving to the mapper, or no longer ext4 (a lost record reads as
-  gone: it refuses). The check is the first
+- **Post-wipe rollback is refused permanently**, with or without the ack, on either of two witnesses: a
+  persisted wipe marker (`outcome=refused_plaintext_wiped`, the only proof of a wipe), or `/mnt/data`
+  on the mapper with the recorded `PLAINTEXT_DEV` not an intact restore source: invalid, resolving to
+  the mapper, not a block device, or not ext4 (`outcome=refused_plaintext_record_gone`, its own slug:
+  with no marker it is drift or a detach, never a wipe; a lost record reads as gone: it refuses). One
+  predicate, `_plaintext_record_status`, decides "intact" for this check, the dead-man arm and the
+  rollback remount (corrected 2026-09-30, PR #9286 review). The check is the first
   line of `rollback()` itself, so every caller is covered, and the dead-man fire string carries its own
   self-contained copy. Arming a dead-man stays unreachable on a cut-over host: `prepare_staging_target`
   refuses it first.

@@ -107,6 +107,8 @@ _wipe_dev_path() {
 }
 _wipe_sysfs_block() { printf '%s' "$W_CASE_DIR/sysfs"; }
 _wipe_cgroup_root() { printf '%s' "$W_CASE_DIR/cgroup"; }
+# The fixed-path blkid seam answers the blkid STUB above (a real /usr/bin/blkid would read a real device).
+_plaintext_blkid_bin() { printf '%s' blkid; }
 
 command() {
   if [ "${1:-}" = -v ] && [ -n "${W_TOOL_ABSENT:-}" ] && [ "${2:-}" = "$W_TOOL_ABSENT" ]; then return 1; fi
@@ -267,6 +269,10 @@ blkid() {
       [ -n "${W_BLKID_RC:-}" ] && return "$W_BLKID_RC"
       [ -n "${W_TYPE-ext4}" ] || return 2
       printf '%s\n' "${W_TYPE-ext4}"; return 0 ;;
+    UUID)
+      # The plaintext's ext4 UUID (rehearsal evidence, read through the fixed-path blkid seam).
+      [ -n "${W_FS_UUID-3f1e2d4c-5b6a-4798-8a9b-0c1d2e3f4a5b}" ] || return 2
+      printf '%s\n' "${W_FS_UUID-3f1e2d4c-5b6a-4798-8a9b-0c1d2e3f4a5b}"; return 0 ;;
     LABEL)
       # An UNLABELLED ext4 prints nothing with rc 0 (measured, util-linux 2.42.3): web-1's retained
       # plaintext carries no label (no artifact ever wrote one), so that is the default here.
@@ -631,7 +637,7 @@ fi
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1
 P2_ROW="$(wrow rehearsal_ok first_wipe)"
 p2_fields=1; p2_missing=""
-for f in "uuid=$UUID_LIVE" "hdr_sha256=" "hdr_bytes=" "label=none plaintext_dev=$TGT_BLK " "dependents=0" "holders=0" "device_units=2" \
+for f in "uuid=$UUID_LIVE" "hdr_sha256=" "hdr_bytes=" "label=none plaintext_dev=$TGT_BLK plaintext_fs_uuid=3f1e2d4c-5b6a-4798-8a9b-0c1d2e3f4a5b " "dependents=0" "holders=0" "device_units=2" \
   "discard_gran=4096" "write_zeroes_max=33554432" "scheduler=mq-deadline" "magic=53ef" "size=$SIZE" \
   "io_max=8:32_rbps=150000000_wbps=150000000_riops=max_wiops=max" "plaintext_only=0"; do
   [[ "$P2_ROW" == *" $f"* ]] || { p2_fields=0; p2_missing="$p2_missing $f"; }
@@ -821,8 +827,15 @@ g1_refused() {  # <label> <expected recorded=> <expected recorded_real=> [run_wi
 # G1-P1 — the PRODUCTION reproduction: an UNLABELLED ext4 (W_LABEL= explicit) whose device is the recorded
 # plaintext reaches rehearsal_ok, carrying label=none as evidence next to the record it was bound to.
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 W_LABEL=
-g1_rehearsed "G1-P1 an unlabelled plaintext (the web-1 shape) bound to its recorded PLAINTEXT_DEV rehearses: label=none plaintext_dev=<record>" \
-  "label=none plaintext_dev=$TGT_BLK"
+g1_rehearsed "G1-P1 an unlabelled plaintext (the web-1 shape) bound to its recorded PLAINTEXT_DEV rehearses: label=none plaintext_dev=<record> plaintext_fs_uuid=<ext4 UUID>" \
+  "label=none plaintext_dev=$TGT_BLK plaintext_fs_uuid=3f1e2d4c-5b6a-4798-8a9b-0c1d2e3f4a5b"
+# G1-U — plaintext_fs_uuid= is the pre-reboot content anchor the runbook's remedy binds to: it is read off
+# the TARGET (not the record), and a filesystem with no UUID reads `none`, never an empty field.
+run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 W_FS_UUID=
+g1_rehearsed "G1-U a target whose blkid UUID is empty rehearses with plaintext_fs_uuid=none" "plaintext_dev=$TGT_BLK plaintext_fs_uuid=none"
+hasF "blkid -p -s UUID -o value $TGT_REAL" \
+  && ok "G1-U2 plaintext_fs_uuid is probed on the resolved target ($TGT_REAL) with blkid -p -s UUID -o value" \
+  || no "G1-U2 the fs-UUID probe did not read the resolved target: $(grep -F 'blkid ' "$CALLS" | tr '\n' '|' | cut -c1-240)"
 # G1-P2 (must-PASS, non-canonical) — the record is an ALIAS of the target: the bind compares resolved paths.
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=$G1_ALIAS"
 g1_rehearsed "G1-P2 a record that is a non-canonical alias of the target ($G1_ALIAS) still binds (readlink -f on both sides)" \
@@ -1434,6 +1447,6 @@ fi
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=173
+WIPE_MIN_PASS=175
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]

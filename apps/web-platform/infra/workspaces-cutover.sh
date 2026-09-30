@@ -2708,7 +2708,7 @@ wipe_plaintext() {
   local tool ver maj min prc src begun wiped m dev sig brc canary c_uuid backing breal live_uuid key
   local hkey dl_uuid hdr_bytes hdr_sha real tmm bmm kname sys got props label gran dmax wz sched magic
   local last_mount last_write sig2 brc2 mk devnum cgroot iorc lw_epoch frozen e2 aerr arc aclass zrc
-  local plain_ls live_ls plain_only n_only nm pdev
+  local plain_ls live_ls plain_only n_only nm pdev fsuuid bb
   WIPE_ARM="none"; WIPE_DEVICE_UNITS=0
   step "CONFIRM_WIPE — retire the retained plaintext volume ${id:-<unset>} (runbook step 7; dry_run=${DRY_RUN})"
 
@@ -2879,8 +2879,13 @@ wipe_plaintext() {
   # resume arm is not bound here — the BEGUN marker and the serial already bind it. Hidden assumption:
   # wherever this binding does not apply (the resume arm, or a future relaxed binding), the pin + serial
   # are sufficient only while web-1 has ONE attached ext4 HC volume.
-  label="n/a"; pdev="n/a"
+  label="n/a"; pdev="n/a"; fsuuid="n/a"
   if [ "$WIPE_ARM" = first_wipe ]; then
+    # The target's ext4 UUID, through the fixed-path blkid: rehearsal EVIDENCE captured off-host before
+    # any reboot — the content anchor a fix-forward could bind the first wipe to if a reboot ever renames
+    # the recorded kernel name (runbook step 7 verdict row). Never a gate here.
+    bb="$(_plaintext_blkid_bin)"
+    fsuuid="$({ [ -n "$bb" ] && "$bb" -p -s UUID -o value "$real" 2>/dev/null; } || true)"; fsuuid="${fsuuid:-none}"
     # PATH `blkid` on purpose: the label is evidence on the row, never a gate and never baked into a fire,
     # so it does not need the fixed-path _plaintext_blkid_bin.
     label="$(blkid -p -s LABEL -o value "$real" 2>/dev/null || true)"; label="${label:-none}"   # observed evidence only
@@ -2964,7 +2969,7 @@ wipe_plaintext() {
 
   if [ "$DRY_RUN" = "1" ]; then
     emit_wipe rehearsal_ok "$WIPE_ARM" "uuid=$live_uuid" "target=$real" "backing=$breal" "size=$size" "serial=ok" \
-      "label=$label" "plaintext_dev=$pdev" "holders=0" "dependents=0" "device_units=${WIPE_DEVICE_UNITS}" "hdr_bytes=$hdr_bytes" "hdr_sha256=${hdr_sha:-unknown}" \
+      "label=$label" "plaintext_dev=$pdev" "plaintext_fs_uuid=$fsuuid" "holders=0" "dependents=0" "device_units=${WIPE_DEVICE_UNITS}" "hdr_bytes=$hdr_bytes" "hdr_sha256=${hdr_sha:-unknown}" \
       "discard_gran=${gran:-unknown}" "discard_max=${dmax:-unknown}" "write_zeroes_max=$wz" "scheduler=${sched:-unknown}" "magic=$magic" \
       "io_max=${WIPE_IOMAX:-absent}" "plaintext_only=${WIPE_PLAINTEXT_ONLY}"
     log "(dry-run) every wipe precondition passed for volume $id (arm=${WIPE_ARM}); nothing was written"

@@ -133,6 +133,13 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    red, this step is still blocked. The run-keyed `CANARY_OK` persisted to the host state file
    cannot satisfy a fresh post-reboot check; only a new green verify does.
 
+   If step 7 (the wipe) has not run yet, the reboot can invalidate the recorded `PLAINTEXT_DEV`: it
+   is a kernel name, and a reboot may rename it (DC-3 in
+   `knowledge-base/project/specs/feat-one-shot-6604-wipe-plaintext-identity/decision-challenges.md`;
+   the plan leaves this ordering to the operator). Run the read-only step 7b rehearsal **before**
+   rebooting: its `rehearsal_ok` row puts `plaintext_dev=` and `plaintext_fs_uuid=` (and
+   `target=`, `serial=ok`) off-host as pre-reboot evidence, which is what a fix-forward would bind to.
+
    > If the unlock fails during the reboot, the expected shape is a DEGRADED boot, not emergency
    > mode: `nofail` lets `local-fs.target` complete, `RequiresMountsFor` holds `docker.service`
    > down (site down, data-safe — nothing can write the covered root-disk inode), the restart
@@ -308,7 +315,8 @@ forever — which the escrow proof + off-host header backup exist to prevent.
       `gh workflow run workspaces-luks-cutover.yml -f confirm=WIPE-PLAINTEXT-USER-DATA-AP-009 -f wipe_plaintext=true -f expected_plaintext_volume_id=105149570`
       It must print ONE `SOLEUR_WORKSPACES_LUKS_WIPE … result=rehearsal_ok arm=first_wipe
       volume_id=105149570` row carrying `uuid=`, `label=<observed; none on web-1>`,
-      `plaintext_dev=<as printed; must resolve to target=>`, `dependents=0`,
+      `plaintext_dev=<as printed; must resolve to target=>`,
+      `plaintext_fs_uuid=<the target's ext4 UUID; evidence, never a gate>`, `dependents=0`,
       `hdr_sha256=`, the `discard_*` / `write_zeroes_max` / `scheduler` fields, `magic=53ef`,
       `io_max=<maj:min>_rbps=150000000_wbps=150000000_…` (the cap, read back inside a real scope) and
       `plaintext_only=<n>`, plus the `SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE … field=last_write` row and
@@ -436,7 +444,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `wipe_target_mounted` | No | No | The device is mounted somewhere. Halt and escalate. | End the pause (above) |
    | `wipe_target_size_mismatch` | No | No | The device size is not the API's size for the pin. Halt and escalate. | End the pause (above) |
    | `wipe_target_serial_mismatch` | No | No | udev's `ID_SERIAL` does not name `HC_Volume_<pin>`. Halt and escalate. | End the pause (above) |
-   | `wipe_target_not_recorded_plaintext` | No | No | The first-wipe target is not the device this cutover recorded as the plaintext's mount source. Compare `target=` with `recorded=`/`recorded_real=`: `none` = the record is missing or invalid; a different device = kernel-name drift after a reboot (then `rollback()`'s and the dead-man's remount source is stale too — do not dispatch `rollback=true` or a cutover either). Nothing was written. Do NOT append `PLAINTEXT_DEV=` to the state file on the host: the record is evidence of what the cutover took the copy from, and a hand-written value is not. Halt and escalate; the remedy is a reviewed fix-forward PR (a serial-anchored record step), not a host edit. | End the pause (above) |
+   | `wipe_target_not_recorded_plaintext` | No | No | The first-wipe target is not the device this cutover recorded as the plaintext's mount source. Compare `target=` with `recorded=`/`recorded_real=`: `none` = the record is missing or invalid; a different device = kernel-name drift after a reboot (then `rollback()`'s and the dead-man's remount source is stale too — do not dispatch `rollback=true` or a cutover either). Nothing was written. Do NOT append `PLAINTEXT_DEV=` to the state file on the host: the record is evidence of what the cutover took the copy from, and a hand-written value is not. Halt and escalate; the remedy is a reviewed fix-forward PR, not a host edit. That PR has two honest options. (1) Bind the first wipe to the pre-reboot `plaintext_fs_uuid=` from a `rehearsal_ok` row captured before the rename, as a workflow constant like `PLAINTEXT_VOLUME_ID`. (2) Relax this binding and rest on the pin, the serial and W9 provenance. A serial "record" written after the fact is only the pin again, not a new witness. | End the pause (above) |
    | `wipe_target_has_dependents` | No | No | A `.mount`/`.swap`/`.service` depends on one of the target's device units, a unit is unloaded/inactive, none maps to the target, or the live mount unit binds one — a detach would stop it. Halt and escalate. | End the pause (above) |
    | `wipe_deadman_armed` | No | No | A cutover dead-man is armed, firing or queued on a cut-over host. **Halt and escalate — do not let it fire.** Since the 2026-09-30 fix-forward a fire on this host *restores*: before any wipe, no wipe marker exists and the recorded `PLAINTEXT_DEV` still reads as an intact ext4, so the fire unmounts the live LUKS copy and remounts the stale 2026-07-23 plaintext over `/mnt/data`, hiding every write since. This W7 refusal is therefore the only protection (arming is unreachable on a cut-over host — S6). | End the pause (above) |
    | `wipe_io_cap_unavailable` | No (from W8), or No with `PLAINTEXT_WIPE_BEGUN` persisted (from the zero's own scope, `gate_rc=97`) | Rehearsal only | The scope's own `io.max` does not carry `rbps=wbps=150000000` for the target's MAJ:MIN (`io_max=` on the row is what it read; `absent` means the io controller is not enabled on the scope's path — systemd starts such a scope uncapped with rc 0). The zero would run uncapped against the live volume's storage path. Halt and escalate. | End the pause (above) |

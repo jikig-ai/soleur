@@ -1582,11 +1582,13 @@ if [ "$CASE_RC" -eq 0 ] && [ -n "$(wout_row rehearsal_ok first_wipe)" ] && grep 
 else
   no "LW1a real rehearsal wrong (rc=$CASE_RC magic=$(dev_magic "$WP_DEV")): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-400)"
 fi
-# --- LW-P1: the same rehearsal row, on an UNLABELLED real ext4, is bound to the recorded device --------
-if grep -qE "result=rehearsal_ok arm=first_wipe .* label=none plaintext_dev=${WP_DEV}( |\$)" "$CASE_OUT"; then
-  ok "LW-P1 an unlabelled real ext4 loop bound to its recorded PLAINTEXT_DEV rehearses: label=none plaintext_dev=$WP_DEV (real blkid LABEL reads nothing)"
+# --- LW-P1: the same rehearsal row, on an UNLABELLED real ext4, is bound to the recorded device, and
+# carries the real ext4 UUID (plaintext_fs_uuid=, the pre-reboot content anchor) --------------------
+LWP1_UUID="$(blkid -p -s UUID -o value "$WP_DEV" 2>/dev/null)"
+if [ -n "$LWP1_UUID" ] && grep -qE "result=rehearsal_ok arm=first_wipe .* label=none plaintext_dev=${WP_DEV} plaintext_fs_uuid=${LWP1_UUID}( |\$)" "$CASE_OUT"; then
+  ok "LW-P1 an unlabelled real ext4 loop bound to its recorded PLAINTEXT_DEV rehearses: label=none plaintext_dev=$WP_DEV plaintext_fs_uuid=$LWP1_UUID (real blkid)"
 else
-  no "LW-P1 the real rehearsal row lacks label=none plaintext_dev=$WP_DEV: $(grep -oE 'result=[a-z_]+ .*' "$CASE_OUT" | head -1 | cut -c1-300)"
+  no "LW-P1 the real rehearsal row lacks label=none plaintext_dev=$WP_DEV plaintext_fs_uuid=${LWP1_UUID:-<blkid read none>}: $(grep -oE 'result=[a-z_]+ .*' "$CASE_OUT" | head -1 | cut -c1-300)"
 fi
 # --- LW8: the io.max cap was IN FORCE in a real scope, read back by the in-scope gate ---------------
 LW8_DEVNUM="$(tr -d '[:space:]' < "/sys/class/block/$(basename "$(readlink -f "$WP_DEV")")/dev")"
