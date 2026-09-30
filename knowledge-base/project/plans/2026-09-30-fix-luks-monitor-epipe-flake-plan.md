@@ -18,6 +18,53 @@ lane: cross-domain
 Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed; no
 spec.md exists for this branch — the one-shot path enters at plan).
 
+## Enhancement Summary (deepen-plan, 2026-09-30)
+
+**Reviewed-Coverage: sequential-fallback** — this harness exposes no
+subagent spawn (no Task/Skill tool), so the deepen fan-out ran inline in a
+single process: every halt gate executed mechanically, the round-1
+verify-the-negative sweep ran as greps, and the review lenses ran
+lead-authored (disclosed — not independent review).
+
+- Phase 4.4 precedent-diff — PASS, side-by-side recorded in Dependencies &
+  Risks (the `--paginate`|`jq -s` shape and the stdin-draining stub are both
+  canonical repo forms).
+- Phase 4.5 network-outage — triggered only by a *learning filename*
+  containing "unreachable"; no SSH/connectivity hypothesis and no
+  provisioner-driving Terraform in the diff → pass-through, no deep-dive.
+- Phase 4.55 downtime — no trigger (no host/migration/deploy-mechanics
+  change; the release-pipeline merge trigger is recorded under Risks).
+- Phase 4.6 user-brand — PASS (`threshold: none` + scope-out bullet).
+- Phase 4.7 observability — PASS (5 fields; verb `grep` allowlisted; no
+  shell metachars; literal `expected_output`; <15 s command).
+- Phase 4.8 PAT shapes — PASS (no `var.*_token`/`ghp_`/`github_pat_`).
+- Phase 4.9 UI wireframe — SKIP (no UI-surface file).
+- Phase 4.10 encryption posture — SKIP (no store/connection trigger).
+- Phase 4.11 guard contract — PASS (`lint-guard-contract.py`: 2 guard
+  entries green; assemblies name the chokepoint + census procedure, not
+  just today's member list).
+- Round-1 verify-the-negative — every `never`/`cannot`/`does-not` claim in
+  the plan was re-verified by grep during this pass (stub never-reads at
+  `workspaces-luks-harness.sh`, `gh_api`/`--paginate` flag tolerance at
+  `ci-leg-balance-9232.test.sh:62`, luks-monitor.sh untouched by the edit
+  list, active rule-ID citations).
+- Quality-check sweep — no SHA/tag citations; no label-creating ACs; no
+  AC grep scopes over the plan/tasks dir; bash strict-mode traps checked
+  (the wire assert is a string compare, not an arithmetic catch).
+
+### Key Improvements from deepen
+
+1. `discoverability_test.command` rewritten shell-free (sharp-edge Check 10
+   reject: `|`/`;`/`&`/`<`/`>`/`$` byte-level) — `bash -c '…&&…'` →
+   `grep -rF -e … -e … <dirs>`.
+2. Merge-blast-radius answer recorded: the diff's paths sit inside
+   `web-platform-release.yml`'s `push: branches:[main]` filter → merge fires
+   the standard release pipeline; no diff-authored resource change.
+3. Precedent-diff block added (Phase 4.4) for both patterned mechanisms.
+4. `sentry-last-applied-sha.sh` no-suite caveat + verification route made
+   explicit; sloppy "suite if one exists" replaced with the real suite list
+   (`tests/scripts/test-main-duplicate-skip.sh`, `parity.test.sh` paths).
+
 ## Overview
 
 `deploy-script-tests` flakes red on `luks-monitor` with
@@ -256,8 +303,10 @@ piped to `jq -s` to slurp the concatenated page objects, then flatten.
   real cryptsetup does with `--key-file -`. A `head -c` bound would close
   early on oversized input and reintroduce the race on a different axis.
   `[ ! -t 0 ]` is the only guard needed: in the failing pipelines stdin is
-  never a tty; in CI the inherited stdin is `/dev/null` (instant EOF), and
-  interactive suite runs keep terminal stdin out of the drain.
+  never a tty; in CI the inherited stdin is non-tty (typically `/dev/null`
+  — instant EOF; the drain is correct either way since a pipe is the only
+  stdin that carries bytes here), and interactive suite runs keep terminal
+  stdin out of the drain.
 - **`--paginate` termination.** `gh api --paginate` follows `Link: rel=next`
   until exhausted — bounded by `total_count`. The Python loop terminates on
   `len(chunk) < 100` OR `len(arts) >= total_count`, so an API regression
@@ -522,6 +571,26 @@ No other open scope-out touches `workspaces-luks-harness.sh`,
   created or mutated by the diff itself. `fix-constraints-stage-b.yml` runs
   only on `workflow_run` after a Stage-A success; its edit changes a read
   path inside the privileged consumer, exercised on the next real trigger.
+- **Precedent-diff (deepen Phase 4.4).** Both patterned mechanisms are
+  canonical repo forms — deltas side-by-side:
+
+  ```text
+  precedent: actions-queue-health.sh:152           this plan (release.yml ~620):
+    gh api --paginate ".../jobs" \                   gh_api --paginate ".../artifacts?per_page=100" \
+      | jq -s '[.[].jobs[]|select(...)] | length'      | jq -s '[.[].artifacts[]|select(...)|{id,expired}]' \
+    || { echo UNKNOWN; exit 2; }                       || fail_closed "..." "github_api_unavailable"
+
+  precedent: inngest-luks-cutover.test.sh:190       this plan (harness bin/cryptsetup):
+    luksOpen) _k="$(cat)"; [verify; exit rc]          luksOpen) { [ ! -t 0 ] && cat >"$CALLS.escrow-stdin"; } \
+                                                            2>/dev/null || true; exit "${MON_ESCROW_RC:-0}"
+  ```
+
+  Deltas: `gh_api` wraps the call in 3-attempt retry/`timeout 20` (precedent
+  exits 2 on transport failure — the plan's `fail_closed` arm is the same
+  fail-loud direction). The drain adds `[ ! -t 0 ]` (siblings don't guard
+  because they only ever run piped; the harness stub can also be invoked by
+  non-piped callers) and captures to a file for the wire assert instead of
+  verifying inline — same drain semantics, different assertion site.
 - **Risk: a drained stub masks a real "cryptsetup never reads" defect.**
   Mitigation: the wire assert pins *delivery*, and the rc knob
   (`MON_ESCROW_RC`) still drives the failure arm — a stub can drain AND
