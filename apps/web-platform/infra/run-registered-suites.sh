@@ -608,7 +608,10 @@ _SUITE_BOUNDS=(
   "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh=600"
   "apps/web-platform/infra/git-data-cutover-access.test.sh=600"
   "apps/web-platform/infra/git-data-ownership.test.sh=300"
-  "apps/web-platform/infra/ci-deploy.test.sh=180"
+  # #8609: the Guard 7 mutation rows took the suite from ~360 to 485 assertions. At 180 s it was
+  # bound-killed mid-run (rc=124 at 180 s, run 36730312987) while green; measured 385 s serial on a
+  # contended local host. 540 s matches the other mutation-heavy suites below and fits the 15-min leg.
+  "apps/web-platform/infra/ci-deploy.test.sh=540"
   "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
   "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
   "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
