@@ -240,7 +240,7 @@ logs:
   where: Sentry project soleur-web-platform (org jikigai-eu) for watchdog and drift events; GitHub Actions run logs for apply and gate output
   retention: per the Sentry plan and GitHub Actions retention settings (no change from today)
 discoverability_test:
-  command: grep -c -e "monitor deleted in follow-up (#9304)" apps/web-platform/infra/sentry/cron-monitor-alerts.tf
+  command: grep -c -e "deleted in a follow-up PR per the two-PR rule (#9304)" apps/web-platform/infra/sentry/cron-monitor-alerts.tf
   expected_output: 1
 ```
 
@@ -333,20 +333,20 @@ Execute the PR B list. Before pushing: the PR plan (plan_pr job output) must sho
 
 ### PR A (this branch) — before merge
 
-- [ ] `git ls-files apps/web-platform | xargs grep -l "gh-pages-cert-state\|gh_pages_cert_state\|GhPagesCertState"` returns exactly these six files and no other: `infra/sentry/cron-monitors.tf` (resource and its rewritten comment, until PR B), `infra/sentry/cron-monitor-alerts.tf` (the unrouted entry), `infra/uptime-alerts.tf` (dated comment), `server/inngest/functions/cron-gh-pages-cert-reissue.ts` (untouched comment), `server/inngest/functions/cron-inngest-cron-watchdog.ts` (historical comment) and `test/server/inngest/function-registry-count.test.ts` (the temporary exemption).
-- [ ] `git diff origin/main --stat -- apps/web-platform/server/inngest/functions/cron-gh-pages-cert-reissue.ts apps/web-platform/server/cert-reissue-marker.ts` is empty.
-- [ ] `route.ts` `functions` array has 69 entries; `function-registry-count.test.ts` (a) asserts 69; the set (b)-(e), `execution-placement` Guard 1, `routine-metadata-parity`, `cron-inngest-cron-watchdog`, `oneshot-4650-monitor-close` are green.
-- [ ] `sentry-monitor-iac-parity.test.ts` and `sentry-cron-monitor-routing-parity.test.ts` green; the routing test shows the label only in `cron_monitor_alert_unrouted`, with a `(#9304)` reason.
-- [ ] `alert-reference.json` diff is exactly one removed detector id, produced from the CI artifact; the PR's alert-reference gate is green.
+- [x] `git ls-files apps/web-platform | xargs grep -l "gh-pages-cert-state\|gh_pages_cert_state\|GhPagesCertState"` returns exactly these six files and no other: `infra/sentry/cron-monitors.tf` (resource and its rewritten comment, until PR B), `infra/sentry/cron-monitor-alerts.tf` (the unrouted entry), `infra/uptime-alerts.tf` (dated comment), `server/inngest/functions/cron-gh-pages-cert-reissue.ts` (untouched comment), `server/inngest/functions/cron-inngest-cron-watchdog.ts` (historical comment) and `test/server/inngest/function-registry-count.test.ts` (the temporary exemption). **Amended 2026-09-30 (QA, literal run):** the command returns SEVEN files, not six. The seventh is `server/inngest/functions/oneshot-4650-monitor-close.ts`, where a comment deliberately names the deleted third target; it is a historical note, not a live reference.
+- [x] `git diff origin/main --stat -- apps/web-platform/server/inngest/functions/cron-gh-pages-cert-reissue.ts apps/web-platform/server/cert-reissue-marker.ts` is empty.
+- [x] `route.ts` `functions` array has 69 entries; `function-registry-count.test.ts` (a) asserts 69; the set (b)-(e), `execution-placement` Guard 1, `routine-metadata-parity`, `cron-inngest-cron-watchdog`, `oneshot-4650-monitor-close` are green. Verified by running: 10 files / 498 tests green after the review fixes (incl. the new `(c3)` stale-exemption guard).
+- [x] `sentry-monitor-iac-parity.test.ts` and `sentry-cron-monitor-routing-parity.test.ts` green; the routing test shows the label only in `cron_monitor_alert_unrouted`, with a `(#9304)` reason.
+- [x] `alert-reference.json` diff is exactly one removed detector id, produced from the CI artifact; the PR's alert-reference gate is green. Verified: `git diff --numstat` is 0 added / 1 removed.
 - [ ] `plan_pr` reports `destroy_count` 0 (`sentry destroy gate: PASS (plan destroys nothing)`) and the `sentry-destroy-required` check is green.
-- [ ] `bash plugins/soleur/test/c4-count-parity.test.sh` green (counts unchanged in PR A: monitor still declared), `c4-code-syntax` and `c4-render` tests green, `model.likec4.json` regenerated and consistent.
-- [ ] ADR-194 addendum present, dated 2026-09-30, naming PR B and #9304 and stating the #7799 conditions do not apply.
+- [x] `bash plugins/soleur/test/c4-count-parity.test.sh` green (counts unchanged in PR A: monitor still declared), `c4-code-syntax` and `c4-render` tests green, `model.likec4.json` regenerated and consistent.
+- [x] ADR-194 addendum present, dated 2026-09-30, naming PR B and #9304 and stating the #7799 conditions do not apply.
 - [ ] PR body's first line states the production effect (web-platform deploy + one in-place Sentry alert update, zero destroys); it contains `Ref #9304` and `Closes #7711`; no `Closes #9304`.
 
 ### PR A — after merge (automated by `soleur:postmerge`, no operator step)
 
 - [ ] `apply-sentry-infra.yml` run on `main` for the merge commit is green (`gh run list -w apply-sentry-infra.yml -L 3`).
-- [ ] The post-deploy registry-vs-population result (empty, or the one missing UUID) is posted as a comment on #9304 before PR B starts; PR B lands before `SOAK_STALE` (2026-10-06 in `inngest-soak-6178.sh`) whenever the result is non-empty.
+- [ ] The post-deploy registry-vs-population result (empty, or the one missing UUID) is posted as a comment on #9304 before PR B starts; PR B lands before `SOAK_STALE` (2026-10-06 in `inngest-soak-6178.sh`) whenever the result is non-empty. **Superseded 2026-09-30 (review):** not needed. At `35b9f088c1` the deleted function had no cron trigger and exactly 52 function files did, equal to `POPULATION_SIZE=52`, so its UUID is not in the soak population; recorded on #9304.
 - [ ] The watchdog's next tick shows no MISSING/UNPLANNED defect for the manifest.
 
 ### PR B (tracker #9304; verified when that PR is opened)
