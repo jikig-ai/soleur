@@ -82,6 +82,10 @@ trap teardown EXIT INT TERM HUP
 
 # One scratch root for the whole suite; per-case subtrees hang off it.
 FX="$(mktemp -d -t membackstop-resolve.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+# Canonicalize once: the shim resolves the checkout candidate via cd -P/pwd -P,
+# and under macOS mktemp roots traverse a symlink (/var -> /private/var) —
+# comparing canonical output to the raw path would false-RED there.
+FX="$(cd -P "$FX" && pwd -P)"
 TMPDIRS+=("$FX")
 assert_fixture_dir "$FX"
 
@@ -184,6 +188,7 @@ printf '#!/usr/bin/env bash\necho no marker here\n' > "$RV/none.sh"
 printf '#!/usr/bin/env bash\nBACKSTOP_REVISION=abc\n' > "$RV/nonnum.sh"
 printf '#!/usr/bin/env bash\nBACKSTOP_REVISION=\n' > "$RV/empty.sh"
 printf '#!/usr/bin/env bash\nBACKSTOP_REVISION=3\nBACKSTOP_REVISION=9\n' > "$RV/two.sh"
+printf '#!/usr/bin/env bash\n# BACKSTOP_REVISION=99 — a decoy comment must not parse\n' > "$RV/comment.sh"
 mkdir -p "$RV/adir"
 
 check_rev() {  # <path> <want> <label>
@@ -201,6 +206,7 @@ check_rev "$RV/none.sh"   0  "absent marker"
 check_rev "$RV/nonnum.sh" 0  "non-numeric marker"
 check_rev "$RV/empty.sh"  0  "empty marker"
 check_rev "$RV/two.sh"    3  "first of two markers wins (grep -m1)"
+check_rev "$RV/comment.sh" 0 "commented marker decoy does not parse (line-anchored regex)"
 check_rev "$RV/missing.sh" 0 "missing file"
 check_rev "$RV/adir"      0  "directory is not a candidate"
 
@@ -250,17 +256,49 @@ fi
 
 # Both plugin caches appear after the managed path, each existing glob match
 # contributing exactly one line.
-mk_candidate "$E/home/.claude/plugins/cache/mkt/plug/1.0.0/hooks" 5
-mk_candidate "$E/home/.local/share/devin/cli/plugins/cache/slug/0.0.0/hooks" 7
+mk_candidate "$E/home/.claude/plugins/cache/mkt/soleur/1.0.0/hooks" 5
+mk_candidate "$E/home/.local/share/devin/cli/plugins/cache/soleur-slug/0.0.0/hooks" 7
 enum_out=$(HOME="$E/home" XDG_DATA_HOME="$E/xdg" \
   bash -c 'source "$1"; enumerate_candidates' _ "$E/checkout/memory-backstop-resolve.sh" 2>/dev/null)
 enum_want="${enum_want}
-$E/home/.claude/plugins/cache/mkt/plug/1.0.0/hooks/memory-backstop.sh
-$E/home/.local/share/devin/cli/plugins/cache/slug/0.0.0/hooks/memory-backstop.sh"
+$E/home/.claude/plugins/cache/mkt/soleur/1.0.0/hooks/memory-backstop.sh
+$E/home/.local/share/devin/cli/plugins/cache/soleur-slug/0.0.0/hooks/memory-backstop.sh"
 if [[ "$enum_out" == "$enum_want" ]]; then
   pass "T3 both plugin-cache glob families enumerate after the managed path"
 else
   fail "T3 plugin-cache enumeration mismatch: got $(printf '%s' "$enum_out" | tr '\n' '|')"
+fi
+
+# Anchor check: a namesake file under a NON-soleur cache path is NOT a
+# candidate — the caches are plugin-namespaced, and a foreign plugin's
+# identically-named file must never enter selection (PR #9241 review). A
+# rev-99 file at a matching shape but foreign path must be invisible.
+mk_candidate "$E/home/.claude/plugins/cache/mkt/otherplug/9.9.9/hooks" 99
+mk_candidate "$E/home/.local/share/devin/cli/plugins/cache/foreignslug/9.9.9/hooks" 99
+enum_out=$(HOME="$E/home" XDG_DATA_HOME="$E/xdg" \
+  bash -c 'source "$1"; enumerate_candidates' _ "$E/checkout/memory-backstop-resolve.sh" 2>/dev/null)
+if [[ "$enum_out" == "$enum_want" ]]; then
+  pass "T3 non-soleur cache paths are not enumerated (foreign namesakes excluded)"
+else
+  fail "T3 a non-soleur namesake leaked into candidates: $(printf '%s' "$enum_out" | tr '\n' '|')"
+fi
+
+# Ancestor-trap: when the fixture's scratch root itself contains "soleur"
+# (CI runs under soleur-run.*), a full-path match would admit EVERY cache
+# entry. The check must compare the path AFTER the cache root only.
+A="$FX/soleur-tainted/enum"; mkdir -p "$A/checkout" "$A/home" "$A/xdg"
+stage_shim "$A/checkout"
+mk_candidate "$A/home/.claude/plugins/cache/mkt/otherplug/9.9.9/hooks" 99
+mk_candidate "$A/home/.claude/plugins/cache/mkt/soleur/1.0.0/hooks" 7
+mk_candidate "$A/home/.local/share/devin/cli/plugins/cache/foreignslug/9.9.9/hooks" 99
+mk_candidate "$A/home/.local/share/devin/cli/plugins/cache/soleur-slug/0.0.0/hooks" 5
+a_out=$(HOME="$A/home" XDG_DATA_HOME="$A/xdg" \
+  bash -c 'source "$1"; enumerate_candidates' _ "$A/checkout/memory-backstop-resolve.sh" 2>/dev/null)
+if [[ "$a_out" != *otherplug* && "$a_out" != *foreignslug* \
+   && "$a_out" == *soleur/1.0.0* && "$a_out" == *soleur-slug* ]]; then
+  pass "T3 a *soleur* ancestor dir does not admit foreign plugins (check is post-cache-root)"
+else
+  fail "T3 ancestor-trap leak: $(printf '%s' "$a_out" | tr '\n' '|')"
 fi
 
 # XDG_DATA_HOME empty falls back to $HOME/.local/share; both unset leaves only
@@ -292,13 +330,13 @@ expect_exec "$A/xdg/soleur/hooks/memory-backstop.sh" 3 "T4 managed rev3 beats ch
 B="$FX/sel-b"; mkdir -p "$B/checkout" "$B/home" "$B/xdg"
 stage_shim "$B/checkout"; mk_candidate "$B/checkout" 1
 mk_candidate "$B/xdg/soleur/hooks" 3
-mk_candidate "$B/home/.claude/plugins/cache/mkt/plug/2.0.0/hooks" 5
+mk_candidate "$B/home/.claude/plugins/cache/mkt/soleur/2.0.0/hooks" 5
 run_case "$B/checkout/memory-backstop-resolve.sh" "$B/home" "$B/xdg"
-expect_exec "$B/home/.claude/plugins/cache/mkt/plug/2.0.0/hooks/memory-backstop.sh" 5 \
+expect_exec "$B/home/.claude/plugins/cache/mkt/soleur/2.0.0/hooks/memory-backstop.sh" 5 \
   "T4 plugin-cache rev5 beats managed rev3 and checkout rev1"
 if [[ -f "$B/xdg/soleur/hooks/memory-backstop.sh" ]] \
    && cmp -s "$B/xdg/soleur/hooks/memory-backstop.sh" \
-             "$B/home/.claude/plugins/cache/mkt/plug/2.0.0/hooks/memory-backstop.sh"; then
+             "$B/home/.claude/plugins/cache/mkt/soleur/2.0.0/hooks/memory-backstop.sh"; then
   pass "T4 winner self-published to the managed path"
 else
   fail "T4 managed path was not populated with the winning copy"
@@ -331,7 +369,7 @@ fi
 D="$FX/sel-d"; mkdir -p "$D/checkout" "$D/home" "$D/xdg"
 stage_shim "$D/checkout"; mk_candidate "$D/checkout" 1
 mk_candidate "$D/xdg/soleur/hooks" 4
-mk_candidate "$D/home/.local/share/devin/cli/plugins/cache/slug/0.0.0/hooks" 4
+mk_candidate "$D/home/.local/share/devin/cli/plugins/cache/soleur-slug/0.0.0/hooks" 4
 run_case "$D/checkout/memory-backstop-resolve.sh" "$D/home" "$D/xdg"
 expect_exec "$D/xdg/soleur/hooks/memory-backstop.sh" 4 \
   "T4 managed wins the tie over a plugin-cache copy at the same revision"
@@ -343,16 +381,35 @@ stage_shim "$G/checkout"; mk_candidate "$G/checkout" 2
 # Poisoned managed copy: valid marker, invalid syntax (truncated mid-write).
 printf '#!/usr/bin/env bash\nBACKSTOP_REVISION=9\necho "unterminated\n' \
   > "$G/xdg/soleur/hooks/memory-backstop.sh"
-mk_candidate "$G/home/.local/share/devin/cli/plugins/cache/slug/0.0.0/hooks" 5
+mk_candidate "$G/home/.local/share/devin/cli/plugins/cache/soleur-slug/0.0.0/hooks" 5
 run_case "$G/checkout/memory-backstop-resolve.sh" "$G/home" "$G/xdg"
-expect_exec "$G/home/.local/share/devin/cli/plugins/cache/slug/0.0.0/hooks/memory-backstop.sh" 5 \
+expect_exec "$G/home/.local/share/devin/cli/plugins/cache/soleur-slug/0.0.0/hooks/memory-backstop.sh" 5 \
   "T4 a bash -n-failing rev9 demotes to the devin-cache rev5"
-# Demotion must not "repair" the managed copy — it stays demoted every run.
+# A bash -n-BROKEN managed copy counts as revision 0 for the publish
+# predicate (publish_managed_rev): it can never exec, so it must not veto
+# publishes — the working rev5 winner replaces it outright. A marker-reading
+# veto here would starve every future publish on the host (PR #9241 review).
 if grep -q 'unterminated' "$G/xdg/soleur/hooks/memory-backstop.sh"; then
-  pass "T4 the poisoned managed copy was left in place (winner rev5 < managed rev9 — no publish)"
+  fail "T4 the syntax-broken managed copy vetoed the publish — it should have been replaced"
 else
-  fail "T4 the strictly-older winner overwrote the newer managed copy"
+  pass "T4 the syntax-broken managed copy was replaced by the working winner"
 fi
+
+# Multi-demotion: TWO broken candidates ahead of the working one. A while→if
+# refactor would demote once and exec nothing (or exec the second broken
+# copy) — invisible to single-demotion arms.
+G2="$FX/sel-g2"; mkdir -p "$G2/checkout" "$G2/home" "$G2/xdg/soleur/hooks"
+stage_shim "$G2/checkout"; mk_candidate "$G2/checkout" 5
+printf '#!/usr/bin/env bash\nBACKSTOP_REVISION=9\necho "unterminated\n' \
+  > "$G2/xdg/soleur/hooks/memory-backstop.sh"
+printf '#!/usr/bin/env bash\nBACKSTOP_REVISION=8\necho "unterminated\n' \
+  > "$G2/home/.local/share/devin/cli/plugins/cache/soleur-slug/hooks.tmp"
+mkdir -p "$G2/home/.local/share/devin/cli/plugins/cache/soleur-slug/9.9.9/hooks"
+mv "$G2/home/.local/share/devin/cli/plugins/cache/soleur-slug/hooks.tmp" \
+   "$G2/home/.local/share/devin/cli/plugins/cache/soleur-slug/9.9.9/hooks/memory-backstop.sh"
+run_case "$G2/checkout/memory-backstop-resolve.sh" "$G2/home" "$G2/xdg"
+expect_exec "$G2/checkout/memory-backstop.sh" 5 \
+  "T4 two broken higher-rev candidates both demote to the working rev5"
 
 # =============================================== T5: publish semantics
 # Atomicity contract: install -m 0755 to a tmp sibling, then mv; the managed
@@ -435,10 +492,16 @@ if grep -q '\.publish\.lock' "$SHIM" && grep -q 'command -v flock' "$SHIM"; then
 else
   fail "T5 publish lacks the flock/.publish.lock serialization"
 fi
-if [[ "$(grep -c 'candidate_revision "\$managed"' "$SHIM")" -ge 2 ]]; then
-  pass "T5 the managed revision is re-read at publish time (in-lock re-check)"
+# Ordering, not count: a `publish_managed_rev` call AFTER the `flock -w` line
+# is the in-lock re-read — a count of two would also pass if both calls sat
+# outside the lock.
+flock_ln=$(grep -n 'flock -w ' "$SHIM" | head -1 | cut -d: -f1)
+inlock_ln=$(grep -n 'publish_managed_rev "\$managed"' "$SHIM" \
+  | awk -F: -v l="${flock_ln:-0}" '$1 > l {print $1}' | head -1)
+if [[ -n "${flock_ln:-}" && -n "${inlock_ln:-}" ]]; then
+  pass "T5 the managed revision is re-read INSIDE the publish lock (line $inlock_ln after flock at $flock_ln)"
 else
-  fail "T5 no publish-time re-read of the managed revision — TOCTOU re-check missing"
+  fail "T5 no publish-time re-read inside the lock — TOCTOU re-check missing"
 fi
 
 # An unwritable publish target must not block exec.
@@ -513,6 +576,14 @@ if [[ "$M_RC" == 0 && "$M_OUT" == *"executed_from="* ]]; then
 else
   fail "T6 minimal PATH: rc=$M_RC out: ${M_OUT:0:200}"
 fi
+# The no-flock branch's EFFECT, not just its exit: the rev2 checkout is
+# strictly newer than the absent managed copy, so the unlocked publish must
+# have installed it.
+if cmp -s "$M/xdg/soleur/hooks/memory-backstop.sh" "$M/checkout/memory-backstop.sh"; then
+  pass "T6 no-flock publish path still installs the managed copy"
+else
+  fail "T6 no-flock publish did not land the managed copy"
+fi
 # Same minimal PATH, total failure — exercises the no-jq printf fallback.
 M2="$FX/minenv-fail"; mkdir -p "$M2/checkout" "$M2/home" "$M2/xdg"
 stage_shim "$M2/checkout"
@@ -529,8 +600,8 @@ fi
 R="$FX/print"; mkdir -p "$R/checkout" "$R/home" "$R/xdg"
 stage_shim "$R/checkout"; mk_candidate "$R/checkout" 4
 run_case "$R/checkout/memory-backstop-resolve.sh" "$R/home" "$R/xdg" --print-resolution
-if [[ "$RES_RC" == 0 && "$RES_OUT" =~ ^resolved=.+\ revision=[0-9]+$ ]]; then
-  pass "T7 --print-resolution emits 'resolved=<path> revision=<n>'"
+if [[ "$RES_RC" == 0 && "$RES_OUT" =~ ^resolved=.+\ revision=[0-9]+\ managed=.+\ managed_rev=[0-9-]+$ ]]; then
+  pass "T7 --print-resolution emits 'resolved=<path> revision=<n> managed=<path> managed_rev=<n>'"
 else
   fail "T7 --print-resolution shape: rc=$RES_RC out: ${RES_OUT:0:200}"
 fi
@@ -557,7 +628,7 @@ PR="$FX/print-real"; mkdir -p "$PR/home" "$PR/xdg"
 PR_OUT=$(HOME="$PR/home" XDG_DATA_HOME="$PR/xdg" \
   bash "$SHIM" --print-resolution </dev/null 2>&1)
 PR_RC=$?
-if [[ "$PR_RC" == 0 && "$PR_OUT" =~ ^resolved=.*/\.claude/hooks/memory-backstop\.sh\ revision=[0-9]+$ ]]; then
+if [[ "$PR_RC" == 0 && "$PR_OUT" =~ ^resolved=.*/\.claude/hooks/memory-backstop\.sh\ revision=[0-9]+\ managed= ]]; then
   pass "T7 real shim --print-resolution resolves the checkout copy read-only"
 else
   fail "T7 real-shim probe: rc=$PR_RC out: ${PR_OUT:0:200}"

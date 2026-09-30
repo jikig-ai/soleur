@@ -436,12 +436,14 @@ echo "== M9: strip BACKSTOP_REVISION — a copy the resolver cannot order (#9239
 # what is exercised. This arm drives the resolver's own parse, not a literal
 # grep-assertion, so a stripped marker is detected the way the resolver would
 # detect it.
+# Drive the resolver's own parse — candidate_revision() in
+# memory-backstop-resolve.sh is the canonical marker read (the shim's main is
+# BASH_SOURCE-guarded, so sourcing it is side-effect-free). A reimplemented
+# grep here would measure a stale parser if the resolver's pattern changed.
+# shellcheck source=.claude/hooks/memory-backstop-resolve.sh
+source "$REPO/.claude/hooks/memory-backstop-resolve.sh"
 rev_of() { # <hook-file> -> revision integer; absent/non-numeric parses as 0
-  local m
-  m=$(grep -m1 -oE 'BACKSTOP_REVISION=[0-9]+' "$1" 2>/dev/null || true)
-  m=${m#BACKSTOP_REVISION=}
-  [[ "$m" =~ ^[0-9]+$ ]] || m=0
-  printf '%s' "$m"
+  candidate_revision "$1"
 }
 # Positive control: the shipped hook must carry a parseable nonzero marker —
 # without one this arm measures nothing.

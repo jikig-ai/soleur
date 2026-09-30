@@ -111,6 +111,34 @@ describe("Guard 2 — vendored plugin copy stays byte-equal to the repo hook", (
       `memory-backstop must stay unregistered in hooks.json (payload-only delivery); found: ${registered}`,
     ).toEqual([]);
   });
+
+  test("vendored lib/log-rotation.sh exists and is byte-identical to .claude/hooks/lib/log-rotation.sh", () => {
+    // The hook sources $(dirname BASH_SOURCE)/lib/log-rotation.sh
+    // opportunistically — a plugin-cache winner without the sibling runs with
+    // NO ledger rotation (unbounded .memory-backstop.jsonl growth), and the
+    // resolver's publish_carry_lib can only carry a file that exists next to
+    // the winner. Absence is a violation, not a skip (PR #9241 review).
+    const vendoredLib = join(
+      REPO_ROOT,
+      "plugins",
+      "soleur",
+      "hooks",
+      "lib",
+      "log-rotation.sh",
+    );
+    const repoLib = join(REPO_ROOT, ".claude", "hooks", "lib", "log-rotation.sh");
+    expect(
+      existsSync(vendoredLib),
+      "vendored lib/log-rotation.sh missing — vendor it: " +
+        "cp .claude/hooks/lib/log-rotation.sh plugins/soleur/hooks/lib/",
+    ).toBe(true);
+    if (existsSync(vendoredLib)) {
+      expect(
+        readFileSync(vendoredLib).equals(readFileSync(repoLib)),
+        "vendored log-rotation.sh drifted from .claude/hooks/lib/ — re-vendor with `cp`",
+      ).toBe(true);
+    }
+  });
 });
 
 describe("Guard 3 — settings.json SessionStart binds the resolver, never the hook", () => {
@@ -124,13 +152,24 @@ describe("Guard 3 — settings.json SessionStart binds the resolver, never the h
     expect(Array.isArray(groups) && groups.length > 0).toBe(true);
   });
 
-  test("a SessionStart command invokes memory-backstop-resolve.sh", () => {
-    const commands = eventCommands(settingsText, "SessionStart");
-    const resolvers = commands.filter((c) => c.includes("memory-backstop-resolve.sh"));
+  test("a LIVE-matcher SessionStart command invokes memory-backstop-resolve.sh", () => {
+    // Matcher-aware: a resolver entry parked under a dead matcher (e.g.
+    // `"matcher": "never"`) must NOT satisfy this guard — it would parse as
+    // wired while never firing (PR #9241 review). The command must also be
+    // bash-prefixed (mode-bit immunity, #7151), not merely name the file.
+    const registry = JSON.parse(settingsText);
+    const groups: HookGroup[] = registry?.hooks?.SessionStart ?? [];
+    const SOURCES = ["startup", "resume", "clear", "compact"];
+    const live = groups.filter((g) =>
+      SOURCES.every((s) => (g.matcher ?? "").split("|").includes(s)),
+    );
+    const liveCommands = live.flatMap((g) => (g.hooks ?? []).map((h) => h.command ?? ""));
+    const resolvers = liveCommands.filter((c) => /\bbash\s.*memory-backstop-resolve\.sh/.test(c));
     expect(
       resolvers.length,
-      "no SessionStart command invokes memory-backstop-resolve.sh — the backstop " +
-        "entry is missing entirely, or was never re-pointed at the resolver (#9239)",
+      "no SessionStart command under a live (startup|resume|clear|compact-covering) matcher " +
+        "bash-invokes memory-backstop-resolve.sh — the backstop entry is missing, dead-matchered, " +
+        "or never re-pointed at the resolver (#9239)",
     ).toBeGreaterThanOrEqual(1);
   });
 

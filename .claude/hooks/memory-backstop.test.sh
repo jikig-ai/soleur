@@ -543,7 +543,8 @@ run_hook_isolated() { # <logdir> [env assignments...] -> writes log, echoes exit
   # no_bus case failed on an environment fact rather than a defect — the same
   # class as #7854, one file over. The `-u` is applied before the caller's own
   # assignments, so the case that DOES test the kill switch still sets it.
-  ( cd "$PWD" && env -u SOLEUR_DISABLE_MEMORY_BACKSTOP "$@" CLAUDE_PROJECT_DIR="$ld" \
+  ( cd "$PWD" && env -u SOLEUR_DISABLE_MEMORY_BACKSTOP -u SOLEUR_BACKSTOP_RESOLVED_FROM \
+      "$@" CLAUDE_PROJECT_DIR="$ld" \
       "$PWD/$HOOK" </dev/null >"$ld/stdout" 2>"$ld/stderr" )
   rc=$?
   echo "$rc"
@@ -794,18 +795,41 @@ else
 
   cat > "$rs/bin/systemctl" <<EOF
 #!/usr/bin/env bash
-# argv-aware stub. \$1=--user \$2=verb \$3=unit. 'show' serves per-scope
-# fixture caps; 'list-units' serves the enumeration fixture; anything else
-# fails loudly rather than answer a shape the hook must not emit.
-printf '%s\n' "\$*" >> "$rs/systemctl.calls"
-if [[ "\$1" == "--user" && "\$2" == "show" && -n "\$3" ]]; then
-  if [[ -f "$rs/show/\$3" ]]; then cat "$rs/show/\$3"; exit 0; fi
-  exit 1
+# argv-aware stub. 'show' takes MULTIPLE unit names plus -p flags (the hook
+# batches readback — PR #9241 perf fix) and emits blank-line-separated blocks
+# keyed on Id, one per unit — the systemd 261 multi-name shape. Only the
+# requested -p keys are emitted per unit, so a dropped -p flag is detectable
+# (a fixture returning all keys regardless would hide the drop). One
+# 'show <unit>' calls-log line per queried unit so per-scope assertions stay
+# readable. 'list-units' serves the enumeration fixture; anything else fails
+# loudly rather than answer a shape the hook must not emit.
+if [[ "\$1" == "--user" && "\$2" == "show" ]]; then
+  shift 2; rc=0; skip=0
+  want_props=""
+  for a in "\$@"; do
+    if (( skip )); then want_props="\$want_props \$a"; skip=0; continue; fi
+    case "\$a" in
+      -p) skip=1 ;;
+      -*) ;;
+      *) printf 'show %s\n' "\$a" >> "$rs/systemctl.calls"
+         if [[ -f "$rs/show/\$a" ]]; then
+           printf 'Id=%s\n' "\$a"
+           for wp in \$want_props; do grep -E "^\$wp=" "$rs/show/\$a"; done
+         else
+           printf 'Id=%s\n' "\$a"
+           printf 'LoadState=not-found\n'
+           rc=1
+         fi
+         printf '\n' ;;
+    esac
+  done
+  exit \$rc
 fi
 if [[ "\$1" == "--user" && "\$2" == "list-units" ]]; then
   cat "$rs/units-listed.txt" 2>/dev/null || true
   exit 0
 fi
+printf '%s\n' "\$*" >> "$rs/systemctl.calls"
 exit 1
 EOF
   cat > "$rs/bin/busctl" <<EOF
@@ -898,13 +922,16 @@ $(grep 'SetUnitProperties' "$rs/busctl.calls" 2>/dev/null)"
   soleur-agent-current.scope   loaded active running   soleur-agent current
   soleur-agent-stale2.scope    loaded active running   soleur-agent stale2
 ● soleur-agent-dead.scope      loaded failed failed    soleur-agent dead
+* soleur-agent-star.scope      loaded failed failed    soleur-agent star-marker variant
 EOF
   repaired_enum=$(PATH="$rs/bin:$PATH" repair_stale_scopes 2>/dev/null)
   if [[ "$repaired_enum" == "1" ]] && grep -q 'soleur-agent-stale2.scope' "$rs/busctl.calls" \
      && ! grep -q 'soleur-agent-current.scope' "$rs/busctl.calls" \
      && grep -q 'show soleur-agent-dead.scope' "$rs/systemctl.calls" \
-     && ! grep -q 'soleur-agent-dead.scope' "$rs/busctl.calls"; then
-    pass "AC7 the live enumeration path parses list-units rows (marker column + lead padding) and repairs only stale scopes"
+     && grep -q 'show soleur-agent-star.scope' "$rs/systemctl.calls" \
+     && ! grep -q 'soleur-agent-dead.scope' "$rs/busctl.calls" \
+     && ! grep -q 'soleur-agent-star.scope' "$rs/busctl.calls"; then
+    pass "AC7 the live enumeration path parses list-units rows (both marker columns + lead padding) and repairs only stale scopes"
   else
     fail "AC7 enumeration arm: repaired=$repaired_enum calls=$(cat "$rs/busctl.calls" 2>/dev/null) shows=$(cat "$rs/systemctl.calls" 2>/dev/null)"
   fi
@@ -1530,7 +1557,8 @@ $(diff "$before/snap.mem" "$after/snap.mem" | grep -E '^[<>]' | grep -vE '/soleu
     if [[ "$r_tm" == "$SCOPE_TASKS_MAX" && "$r_mm" == "$SCOPE_MAX_BYTES" \
        && "$r_mh" == "$SCOPE_HIGH_BYTES" && "$r_sw" == "0" \
        && "$r_oom" == "continue" && "$r_bt" == "$r_bt0" \
-       && "${r_cg##*/}" == "$RSCOPE" ]]; then
+       && "${r_cg##*/}" == "$RSCOPE" ]] \
+       && [[ "$repaired_live" =~ ^[0-9]+$ && "$repaired_live" -ge 1 ]]; then
       pass "T20/AC7 stale-caps scope repaired in place (TasksMax $r_tm0 -> $r_tm, caps converged, BindsTo untouched, membership kept; repaired=$repaired_live)"
     else
       fail "T20/AC7 stale-caps repair readback: TasksMax=$r_tm MemoryMax=$r_mm MemoryHigh=$r_mh SwapMax=$r_sw OOMPolicy=$r_oom BindsTo='$r_bt' cg='${r_cg##*/}' (repaired=$repaired_live)"

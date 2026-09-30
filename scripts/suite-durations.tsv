@@ -266,6 +266,7 @@ scripts/bwrap-probe-selfreport-8016	213	measured
 scripts/capture-web-1-host-key	346	measured
 scripts/capture-web-2-host-key	579	measured
 scripts/cf-tunnel-liveness-gate-mutations	163457	measured
+scripts/check-backstop-revision	837	floor
 scripts/check-cloudflare-token-drift	22415	measured
 scripts/check-deploy-script-parity	550	measured
 scripts/check-pa-22-live	12	measured

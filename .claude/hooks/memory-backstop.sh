@@ -71,7 +71,7 @@
 # copy. CONTRACT: bump on EVERY behavioural change to this file — an un-bumped
 # edit is invisible to resolution, never self-publishes to the managed path,
 # and fails scripts/check-backstop-revision.sh in CI.
-readonly BACKSTOP_REVISION=1
+readonly BACKSTOP_REVISION=2
 
 # All four cap values live here so raising one is a one-token change. They are
 # re-validated against a two-sided band on every run (see validate_caps): a
@@ -422,13 +422,40 @@ sweep_unadopted_agents() {
 # Prints the number of scopes repaired. Per-scope failures are logged on
 # stderr — the harness-discarded channel, still visible when run by hand — and
 # are never fatal: a scope that refuses repair costs only its own cap.
+# Per-scope repair decision, extracted so repair_stale_scopes' batched
+# readback parser stays flat. Returns 0 only when a SetUnitProperties repair
+# was issued AND succeeded — busctl failures are logged on stderr and never
+# counted.
+repair_eval_scope() {  # <unit> <tasksmax> <memmax> <memhigh> <swapmax>
+  local u="$1" tm="$2" mm="$3" mh="$4" ms="$5"
+  # Empty readback: the scope vanished between enumeration and show. Treating
+  # empty as "stale" would SetUnitProperties a nonexistent unit — which loads
+  # it INACTIVE (per the readback comment in main): a resurrected husk, not a
+  # repair.
+  [[ -n "$tm$mm$mh$ms" ]] || return 1
+  [[ "$tm" == "$SCOPE_TASKS_MAX" && "$mm" == "$SCOPE_MAX_BYTES" \
+     && "$mh" == "$SCOPE_HIGH_BYTES" && "$ms" == "0" ]] && return 1
+  ${TO[@]+"${TO[@]}"} busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+    org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
+    "$u" true 4 \
+    "MemoryHigh" "t" "$SCOPE_HIGH_BYTES" \
+    "MemoryMax" "t" "$SCOPE_MAX_BYTES" \
+    "MemorySwapMax" "t" 0 \
+    "TasksMax" "t" "$SCOPE_TASKS_MAX" \
+    >/dev/null 2>&1 \
+    || { printf 'memory-backstop: repair of %s failed\n' "$(_sanitize "$u")" >&2; return 1; }
+  return 0
+}
+
 repair_stale_scopes() {
   local units_file=${1:-}
   local -a units=()
   local u repaired=0 checked=0
 
   if [[ -n "$units_file" ]]; then
-    mapfile -t units < "$units_file" 2>/dev/null || units=()
+    # mapfile is bash >=4 — a read loop keeps the file bash-3.2-safe like the
+    # rest of this hook (the macOS path runs on 3.2).
+    while IFS= read -r u; do units+=("$u"); done < "$units_file" 2>/dev/null || units=()
   else
     # --no-legend drops the header/footer, but the two-column STATE MARKER
     # field still leads every row: blank on healthy units, ● or * on failed
@@ -440,44 +467,48 @@ repair_stale_scopes() {
       _line=${_line#● }; _line=${_line#\* }
       u=${_line%% *}
       [[ "$u" == soleur-agent-*.scope ]] && units+=("$u")
-    done < <(systemctl --user list-units --no-legend --no-pager 'soleur-agent-*.scope' 2>/dev/null)
+    done < <(${TO[@]+"${TO[@]}"} systemctl --user list-units --no-legend --no-pager 'soleur-agent-*.scope' 2>/dev/null)
   fi
 
-  # `${arr[@]+"${arr[@]}"}`: `"${arr[@]}"` on an EMPTY array trips `set -u` on
-  # bash 3.2 — this file runs wherever a checkout runs.
-  for u in ${units[@]+"${units[@]}"}; do
+  # `"${arr[@]+"${arr[@]}"}"` whole-quoted: bare `"${arr[@]}"` on an EMPTY
+  # array trips `set -u` on bash 3.2, and an unquoted outer expansion would
+  # word-split elements — this file runs wherever a checkout runs.
+  local -a target=()
+  for u in "${units[@]+"${units[@]}"}"; do
     (( checked >= MAX_REPAIR )) && break
     [[ "$u" == soleur-agent-*.scope ]] || continue   # owned units only — never a foreign scope
     checked=$((checked + 1))
-    local tm="" mm="" mh="" ms="" k v
-    while IFS='=' read -r k v; do
-      case "$k" in
-        TasksMax)      tm=$v ;;
-        MemoryMax)     mm=$v ;;
-        MemoryHigh)    mh=$v ;;
-        MemorySwapMax) ms=$v ;;
-      esac
-    done < <(systemctl --user show "$u" -p TasksMax -p MemoryMax -p MemoryHigh -p MemorySwapMax 2>/dev/null)
-    # Empty readback: the scope vanished between enumeration and show. Treating
-    # empty as "stale" would SetUnitProperties a nonexistent unit — which loads
-    # it INACTIVE (per the readback comment in main): a resurrected husk, not a
-    # repair.
-    [[ -z "$tm$mm$mh$ms" ]] && continue
-    if [[ "$tm" == "$SCOPE_TASKS_MAX" && "$mm" == "$SCOPE_MAX_BYTES" \
-       && "$mh" == "$SCOPE_HIGH_BYTES" && "$ms" == "0" ]]; then
+    target+=("$u")
+  done
+  (( ${#target[@]} == 0 )) && { printf '%s' 0; return 0; }
+
+  # ONE batched readback, not a per-scope call loop: `systemctl show` accepts
+  # multiple unit names and emits blank-line-separated blocks keyed on Id —
+  # measured 166ms → ~50ms for a converged 16-scope fleet, and it halves the
+  # flock hold time under concurrent SessionStarts (PR #9241 review).
+  # `${TO[@]+...}` is the same timeout-wrapper discipline the busctl calls
+  # carry: a wedged sd-bus must not stall SessionStart.
+  local cur="" tm="" mm="" mh="" ms="" k v
+  while IFS='=' read -r k v; do
+    if [[ -z "$k" ]]; then
+      if [[ -n "$cur" ]]; then
+        repair_eval_scope "$cur" "$tm" "$mm" "$mh" "$ms" && repaired=$((repaired + 1))
+        cur=""; tm=""; mm=""; mh=""; ms=""
+      fi
       continue
     fi
-    "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
-      org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
-      "$u" true 4 \
-      "MemoryHigh" "t" "$SCOPE_HIGH_BYTES" \
-      "MemoryMax" "t" "$SCOPE_MAX_BYTES" \
-      "MemorySwapMax" "t" 0 \
-      "TasksMax" "t" "$SCOPE_TASKS_MAX" \
-      >/dev/null 2>&1 \
-      || { printf 'memory-backstop: repair of %s failed\n' "$(_sanitize "$u")" >&2; continue; }
-    repaired=$((repaired + 1))
-  done
+    case "$k" in
+      Id)            cur=$v ;;
+      TasksMax)      tm=$v ;;
+      MemoryMax)     mm=$v ;;
+      MemoryHigh)    mh=$v ;;
+      MemorySwapMax) ms=$v ;;
+    esac
+  done < <(${TO[@]+"${TO[@]}"} systemctl --user show \
+             -p Id -p TasksMax -p MemoryMax -p MemoryHigh -p MemorySwapMax \
+             -- "${target[@]}" 2>/dev/null)
+  # The last block ends at EOF without a trailing blank line.
+  [[ -n "$cur" ]] && { repair_eval_scope "$cur" "$tm" "$mm" "$mh" "$ms" && repaired=$((repaired + 1)); :; }
   printf '%s' "$repaired"
 }
 
@@ -595,7 +626,13 @@ main() {
     # a `?`-suppressed conversion, say). Writing it would append a blank line and
     # the sink would look present-but-useless, so fall back to a minimal record
     # that always has the two fields any reader needs.
-    [[ -z "$line" ]] && line="{\"schema\":2,\"ts\":\"$ts\",\"outcome\":\"$outcome\",\"reason\":\"$reason\",\"backstop_revision\":$BACKSTOP_REVISION,\"resolved_from\":\"${SOLEUR_BACKSTOP_RESOLVED_FROM:-}\",\"repaired\":${repaired:-0},\"log_degraded\":true}"
+    # printf fallback builds JSON by hand — strip \ and " (quoting) and
+    # control chars (a newline would tear the JSONL line in two), matching
+    # resolver_emit's fallback (memory-backstop-resolve.sh).
+    local rfrom_sanitized="${SOLEUR_BACKSTOP_RESOLVED_FROM:-}"
+    rfrom_sanitized="${rfrom_sanitized//\\/}"; rfrom_sanitized="${rfrom_sanitized//\"/}"
+    rfrom_sanitized="${rfrom_sanitized//[[:cntrl:]]/}"
+    [[ -z "$line" ]] && line="{\"schema\":2,\"ts\":\"$ts\",\"outcome\":\"$outcome\",\"reason\":\"$reason\",\"backstop_revision\":$BACKSTOP_REVISION,\"resolved_from\":\"$rfrom_sanitized\",\"repaired\":${repaired:-0},\"log_degraded\":true}"
     printf '%s\n' "$line" >> "$log_file" 2>/dev/null
   }
 

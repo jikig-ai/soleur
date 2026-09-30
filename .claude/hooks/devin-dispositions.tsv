@@ -108,7 +108,7 @@ claude-settings	.claude/hooks/pencil-collapse-guard.sh	PostToolUse	mcp__pencil__
 # matcher:"" — moved to .devin/config.json. settings.json keeps its Claude
 # semantics unchanged (each fires there on matching sources).
 claude-settings	.claude/hooks/session-rules-loader.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
-claude-settings	.claude/hooks/memory-backstop-resolve.sh	SessionStart	startup|resume|clear|compact	n/a	matcher-dead + no-claude-ancestor	settings.json binds the resolver since #9239 — it picks the newest installed copy and execs it; the hook still requires a `claude` process ancestor (discover_claude_pid), so fires-then-exits under Devin is unchanged (dispatch-true but functionally void); resolver publish side effect is the delivery channel (ADR-261)
+claude-settings	.claude/hooks/memory-backstop-resolve.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	settings.json binds the resolver since #9239 — it picks the newest installed copy and execs it (ADR-261); bound in .devin/config.json for Devin coverage — the hook adopts under Devin (discover_agent_pid accepts claude|devin|codex since #9231), and Devin sessions are the incident's own crash class
 claude-settings	.claude/hooks/supabase-loopback-warn.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 claude-settings	scripts/ensure-kb-index.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 #

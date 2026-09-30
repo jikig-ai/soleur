@@ -854,27 +854,70 @@ from a fixed candidate set, in precedence order:
 4. `~/.local/share/devin/cli/plugins/cache/*/*/hooks/memory-backstop.sh` — the
    Devin plugin cache (glob)
 
+Plugin-cache candidates must additionally sit under a path component
+containing `soleur` — a *foreign* plugin shipping a namesake
+`hooks/memory-backstop.sh` is ignored no matter what marker it carries
+(disabled-but-cached plugin entries can outlive enablement, so the glob alone
+is wider than the trust model intends).
+
 Each candidate is ordered by its `BACKSTOP_REVISION=<n>` marker, read with
 `grep` — never `source`d, because a candidate's text is unverified code
-(ADR-156 posture applied to hook bodies). The highest revision wins; a missing
-or non-numeric marker counts as revision 0, and **ties resolve to the checkout
-copy** so a local uncommitted edit wins over an equally-versioned installed
-one. A winner that fails `bash -n` is demoted to the next candidate.
+(ADR-156 posture applied to hook bodies). The pattern is line-anchored
+(`^[[:space:]]*(readonly )?BACKSTOP_REVISION=<digits>`) so a `#`-commented
+decoy line cannot inflate a candidate's revision. The highest revision wins;
+a missing or non-numeric marker counts as revision 0, and **ties resolve to
+the checkout copy** so a local uncommitted edit wins over an equally-versioned
+installed one. A winner that fails `bash -n` is demoted to the next candidate.
+
+The marker is a **trusted ordering signal, not an authenticity check** — every
+candidate is a same-uid-writable file, so marker forgery is already inside the
+trust model. It does no more than order copies.
+
+**Managed-path trust.** The managed candidate and the publish destination are
+both refused when the `${XDG_DATA_HOME:-$HOME/.local/share}/soleur/` tree is
+owned by another uid; a dir we own gets group/other-writability stripped
+(idempotent `chmod go-w`, never a grant — a deliberately read-only dir stays
+read-only). This is the only path that can escape the same-uid trust model —
+`XDG_DATA_HOME` is env-steerable, so a foreign-writable data home could plant
+the file every session then execs.
 
 **Self-publish.** When the winner is not the managed copy and its revision is
 strictly newer than the managed copy's, the shim atomically installs it to the
 managed path (`install -m 0755` to a `tmp` sibling, then `mv`) **before**
 exec'ing it — a hook that crashes still leaves the upgrade installed, so one
 fresh session upgrades the whole host. Concurrent SessionStarts serialize the
-install under `flock` with an in-lock revision re-check. `bash
+install under `flock` with an in-lock revision re-check. A `bash -n`-broken
+managed copy counts as revision 0 for the publish comparison, so corruption in
+the managed file starves nothing. `bash
 .claude/hooks/memory-backstop-resolve.sh --print-resolution` reports
-`resolved=<path> revision=<n>` read-only — no publish, no exec.
+`resolved=<path> revision=<n> managed=<path> managed_rev=<n>` read-only — no
+publish, no exec.
+
+Two publish-side consequences worth knowing:
+
+- **An unmerged experiment self-publishes.** Bumping `BACKSTOP_REVISION` in a
+  local checkout or open PR makes that copy win and install host-wide until a
+  newer marker ships — the same self-heal channel, pointed at unreviewed code.
+  Revert by deleting the managed file (`rm -f
+  "${XDG_DATA_HOME:-~/.local/share}/soleur/hooks/memory-backstop.sh"`), which
+  returns the next session to the remaining candidates.
+- **Rollback is fix-forward only.** A released bad revision self-publishes and
+  keeps winning over older copies everywhere. There is no down-revision path:
+  recovery means shipping a *higher* revision (revert-with-bump) or setting
+  `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` meanwhile.
+
+**Managed-path lifecycle.** `soleur/` under the data home (hook, `lib/`, and
+`.publish.lock`) is permanent host state with no uninstall story — deleting
+the directory returns resolution to checkout+caches harmlessly, and it is
+recreated on the next publish-worthy session.
 
 **Revision-bump contract.** `BACKSTOP_REVISION` is the only ordering signal,
-so every behavioral change to `memory-backstop.sh` must bump it: an un-bumped
-local edit *loses* resolution to a newer installed copy on the same host, and
-`scripts/check-backstop-revision.sh` makes an un-bumped PR change a required
-CI failure. The vendored payload copy
+so every behavioral change to `memory-backstop.sh` must bump it — *strictly
+increase* it: the resolver compares with `>`, so a same-or-lower marker is
+undeliverable. `scripts/check-backstop-revision.sh` enforces the bump as a
+required CI failure and also watches `lib/log-rotation.sh` (part of the
+executed protection tree; it carries no marker of its own, so a lib edit must
+ride a hook bump). The vendored payload copy
 (`plugins/soleur/hooks/memory-backstop.sh` — shipped so `claude plugin
 update` reaches the plugin-cache candidates) is pinned byte-equal to the repo
 hook by `plugins/soleur/test/backstop-parity.test.ts`, which also pins this
@@ -893,6 +936,17 @@ from the current constants is converged in place via `busctl
 SetUnitProperties ... true` (runtime-only — never persistent config, never
 re-derived `BindsTo`). A scope adopted under old caps is repaired by the next
 SessionStart on the host, no restart required.
+
+Consequence, stated plainly: **repair clamps deliberate operator raises too.**
+A per-session `systemctl --user set-property --runtime soleur-agent-*.scope
+MemoryMax=infinity` (the documented remedy below) survives only until the next
+SessionStart anywhere on the host re-converges that scope. The hook cannot
+today distinguish "stale caps" from "deliberately raised caps" — if you need a
+lasting raise, re-run the set-property after any intervening session start.
+`OOMPolicy` is *not* in the repair set: systemd 261 rejects it on scopes
+(creation-only) and `SetUnitProperties` is all-or-nothing, so including it
+would drop the four caps with it (a pre-existing defect in the re-entry
+refresh path is tracked as #9246).
 
 ### If a session gets stopped
 

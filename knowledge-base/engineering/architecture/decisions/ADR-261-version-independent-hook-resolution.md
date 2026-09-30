@@ -52,7 +52,7 @@ The dispatch boundary moves from checkout-pinned to **newest-installed**:
 1. **A stable resolver shim becomes the settings.json entry point.**
    `.claude/settings.json` binds `bash
    "$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-backstop-resolve.sh` — a thin
-   (~120-line), rarely-changing shim invoked through `bash` for mode-bit
+   (~330-line), rarely-changing shim invoked through `bash` for mode-bit
    immunity (the #7151 EACCES defect). The shim is the one component that
    cannot self-upgrade — a stale checkout keeps its stale resolver — so its
    contract is deliberately minimal and stable: a fixed candidate set and a
@@ -65,7 +65,10 @@ The dispatch boundary moves from checkout-pinned to **newest-installed**:
    to hook bodies).
 3. **Candidate precedence:** the checkout copy, then the managed path
    `${XDG_DATA_HOME:-$HOME/.local/share}/soleur/hooks/`, then both plugin
-   caches (`~/.claude/plugins/cache/*/…`, `~/.local/share/devin/cli/plugins/cache/*/…`).
+   caches (`~/.claude/plugins/cache/*/…`, `~/.local/share/devin/cli/plugins/cache/*/…`;
+   cache candidates are further narrowed to paths containing a `soleur`
+   component — the caches are plugin-namespaced, and a foreign plugin's
+   namesake file must not be selectable).
    Highest revision wins; ties prefer the checkout copy so an in-progress
    local edit is never silently overridden.
 4. **Self-publish converges the host on one fresh session.** When the winner
@@ -78,7 +81,13 @@ The dispatch boundary moves from checkout-pinned to **newest-installed**:
    differ from current constants receives a runtime-only
    `SetUnitProperties` — bounded (`MAX_REPAIR=32`), per-scope non-fatal, and
    never touching `BindsTo` (the kill-switch preservation the re-entry branch
-   documents). Any new-version SessionStart on the host converges every
+   documents). The readback is one batched `systemctl --user show` over all
+   candidate names (blank-line-separated blocks keyed on `Id`), not a
+   per-scope call loop — measured ~170 ms → ~50 ms on a 16-scope fleet inside
+   the flock. `OOMPolicy` is deliberately excluded from the repair set:
+   systemd 261 rejects it on scopes (creation-only), and `SetUnitProperties`
+   is all-or-nothing, so carrying it would drop the four caps with it.
+   Any new-version SessionStart on the host converges every
    stale-adopted scope, no restart required.
 6. **The ledger becomes the evidence channel.** Schema `1` → `2` adds
    `backstop_revision`, `resolved_from`, and `repaired`, so "a stale copy
@@ -91,8 +100,10 @@ The dispatch boundary moves from checkout-pinned to **newest-installed**:
    hosts whose checkouts are all stale.
 8. **Guard 1 makes the discipline mechanical.** `scripts/check-backstop-revision.sh`
    (wired into `pr-quality-guards.yml`, self-skipping with an explicit `NO-OP`
-   verdict when the hook is untouched) fails any PR that edits the hook
-   without changing its `BACKSTOP_REVISION=` line.
+   verdict when nothing watched changes) fails any PR that edits the hook —
+   or the sourced `lib/log-rotation.sh` — without *strictly increasing*
+   `BACKSTOP_REVISION`: the resolver orders by `>`, so a same-or-lower marker
+   merges green yet is undeliverable.
 
 ## Alternatives considered
 
@@ -124,7 +135,26 @@ The dispatch boundary moves from checkout-pinned to **newest-installed**:
   forces at PR time.
 - New trust surface: `${XDG_DATA_HOME}/soleur/hooks/` is same-uid writable —
   the identical trust class as the checkout copy today. A planted newer
-  revision confers no privilege the planter did not already have.
+  revision confers no privilege the planter did not already have. The one
+  cross-uid exposure is a steered/foreign-writable data home, so both
+  enumeration and publish refuse a foreign-owned `soleur/` tree and strip
+  group/other writability from owned ones.
+- **Rollback is fix-forward only.** A released-but-bad revision self-publishes
+  and permanently outranks older copies. Recovery is shipping a higher
+  revision (revert-with-bump) or `SOLEUR_DISABLE_MEMORY_BACKSTOP=1`; there is
+  no down-revision channel.
+- **Unmerged code can self-publish.** A locally-bumped checkout copy wins and
+  installs host-wide by design (the tie-break exists for dev flow). The
+  managed file is deletable to re-anchor (`rm
+  ${XDG_DATA_HOME:-~/.local/share}/soleur/hooks/memory-backstop.sh`).
+- **Repair clamps deliberate operator raises.** `repair_stale_scopes` cannot
+  distinguish "stale caps" from a deliberate `set-property --runtime` raise —
+  a raised scope is re-converged at the next SessionStart on the host.
+  Documented in `.claude/hooks/README.md`; a future design could tag
+  hook-managed caps and skip untagged divergence.
+- The managed tree (`hook` + carried `lib/*.sh` + `.publish.lock`) persists
+  indefinitely; there is no uninstall step — removing the directory is a safe
+  reset, and it is recreated only when a strictly-newer winner publishes.
 
 ## Verification
 

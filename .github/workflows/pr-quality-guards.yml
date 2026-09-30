@@ -679,9 +679,10 @@ jobs:
           echo "All four required legal docs are updated. Gate passes."
 
       # Guard 1 of #9239: when the merge-base diff touches
-      # .claude/hooks/memory-backstop.sh, its BACKSTOP_REVISION marker must
-      # differ — the resolver orders installed copies by it, so an un-bumped
-      # change is undeliverable to stale-checkout sessions. Runs
+      # .claude/hooks/memory-backstop.sh (or the sourced lib/log-rotation.sh),
+      # the BACKSTOP_REVISION marker must STRICTLY INCREASE — the resolver
+      # orders installed copies by `>`, so a same-or-lower bump is
+      # undeliverable to stale-checkout sessions. Runs
       # UNCONDITIONALLY (no path filter — a deleted filter can never darken
       # the gate); the script self-skips with an explicit NO-OP verdict when
       # the hook is untouched, and does its own `git fetch` of the base ref.
