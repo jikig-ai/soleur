@@ -640,13 +640,13 @@ Panel: DHH, Kieran and code-simplicity reviewers, plus the CTO on the devex lens
 
 ### Pre-merge
 
-- [ ] AC1: the new op-contract vitest is RED on the base tree (T1: resource absent) and GREEN
+- [x] AC1: the new op-contract vitest is RED on the base tree (T1: resource absent) and GREEN
   after Phase 2 (`cd apps/web-platform && npx vitest run test/sentry-inngest-provision-failure-alert-op-contract.test.ts`).
-- [ ] AC2: mutations M1–M8 and H1/H3 each redden the named row, and H2 stays green (run locally
+- [x] AC2: mutations M1–M8 and H1/H3 each redden the named row, and H2 stays green (run locally
   during work; not recorded in the PR body).
-- [ ] AC3: T25 green: `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` reports the T25
+- [x] AC3: T25 green: `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` reports the T25
   block passing with README ``**38 `sentry_alert` rules**`` / `(38 alert rules total)`.
-- [ ] AC4: `terraform fmt -check` clean and `terraform validate` (`init -backend=false`) green on
+- [x] AC4: `terraform fmt -check` clean and `terraform validate` (`init -backend=false`) green on
   `apps/web-platform/infra/sentry`.
 - [ ] AC5: CI `plan_pr` in `apply-sentry-infra.yml` green. The reference gate passes, the CREATE gate
   lists exactly `sentry_alert.inngest_provision_failure`, and the destroy count is 0.
