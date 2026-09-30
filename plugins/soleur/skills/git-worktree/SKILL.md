@@ -118,6 +118,16 @@ Pass `--update-local-main` (as a global flag, before `create`) to additionally f
 bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" --update-local-main create feature-login
 ```
 
+**Dependency install (bounded, skippable):**
+
+After copying `.env` files, `create`/`feature` install dependencies at the root and for each `apps/*/` package (bun/npm/yarn by lockfile). Two guards keep this from hanging a pipeline on a restricted host:
+
+- **Opt-out:** `--no-install` (global flag) or `SOLEUR_WORKTREE_SKIP_INSTALL=1` skips every install arm and prints `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out`. The worktree is still created and usable; run installs inside it later.
+- **Reachability preflight + timeout:** each arm probes its resolved registry endpoint (`curl`, bounded, on the scheme the registry actually uses — `http://` private registries included) and skips fast with `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=<host> endpoint=<endpoint>` when unreachable; a stalled install is killed after `SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS` (default 300) and reported as `reason=timeout`. Probe bounds: `SOLEUR_WORKTREE_REGISTRY_PROBE_SECS` (connect, default 5) / `SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS` (total, default 8).
+- **Other non-success arms also mark stdout:** `reason=failed rc=<n>` (ordinary nonzero install), `reason=tool-missing runtime=<rt>` (lockfile present but package manager absent), `reason=no-lockfile` (package.json with no recognized lockfile). When the host lacks `timeout`/`gtimeout`, installs run unbounded and `SOLEUR_WORKTREE_INSTALL_UNBOUNDED` is printed once.
+
+All skips and failures warn-and-continue: worktree creation exits 0 and the worktree stays on disk.
+
 ### `list` or `ls`
 
 Lists all available worktrees with their branches and current status.
