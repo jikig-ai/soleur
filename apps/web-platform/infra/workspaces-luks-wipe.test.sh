@@ -774,6 +774,17 @@ run_wipe '[ -e "$STATE_DIR/wipe-header-download.img" ] && [ -e "$STATE_DIR/wipe-
 died && outF HDRS_SEEDED && hdrs_gone && markerF "outcome=wipe_aborted mode=wipe" \
   && ok "W5 cleanup() sweeps both fixed header paths on a wipe abort" \
   || no "W5 cleanup() left a header copy on the root disk (rc=$CASE_RC)"
+# W5-L (#9286 review, struct S-1) — the header sweep never shreds THROUGH a symlink: `shred -u link`
+# overwrites the link's TARGET (a device, if one were planted), so a symlinked header path is unlinked and
+# its target left byte-identical, with no shred call on it at all.
+run_wipe 'ln -s "$W_CASE_DIR/victim" "$STATE_DIR/wipe-header-download.img"; _wipe_shred_hdrs; echo SWEPT' \
+  PRE_INV='printf keep > "$W_CASE_DIR/victim"'
+if ran && outF SWEPT && [ ! -L "$STATE/wipe-header-download.img" ] && [ ! -e "$STATE/wipe-header-download.img" ] \
+  && [ "$(cat "$WIPE_SCRATCH/case-$CASE_N/victim" 2>/dev/null)" = keep ] && nhas '^shred .*wipe-header-download'; then
+  ok "W5-L a symlinked header path is unlinked, never shredded through: its target is untouched and no shred ran on it"
+else
+  no "W5-L the header sweep followed a symlink (rc=$CASE_RC link=$([ -L "$STATE/wipe-header-download.img" ] && echo present || echo gone) victim=[$(cat "$WIPE_SCRATCH/case-$CASE_N/victim" 2>/dev/null)] shred=[$(grep -F 'shred ' "$CALLS" | tr '\n' '|')])"
+fi
 
 refusal "W6 (Guard 1 #1) the mapper's backing device IS the target" wipe_target_is_mapper_backing "W_BACKING=$TGT_BLK" "WORKSPACES_LUKS_DEV=$TGT_BLK"
 refusal "W6 (Guard 1 #2) same major:minor through a different path" wipe_target_is_mapper_backing W_BACKING_MAJMIN=8:32
@@ -1447,6 +1458,6 @@ fi
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=175
+WIPE_MIN_PASS=176
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]

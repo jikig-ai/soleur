@@ -2631,7 +2631,10 @@ _wipe_refuse() {
 _wipe_shred_hdrs() {
   local f
   for f in "$WIPE_HDR_DL" "$WIPE_HDR_FRESH"; do
-    [ -e "$f" ] || continue
+    # Never shred THROUGH a symlink: `shred -u link` overwrites the link's TARGET (a device, if one were
+    # planted) and only then unlinks the link. Unlink it, leave its target alone.
+    [ -L "$f" ] && { rm -f -- "$f"; continue; }
+    [ -f "$f" ] || continue
     shred -u "$f" 2>/dev/null || rm -f "$f"
   done
   return 0
