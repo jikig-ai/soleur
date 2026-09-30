@@ -206,6 +206,9 @@ async function streamIssuesFeed(
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
+      // Hint buffering middleboxes (nginx/CF) to pass frames through —
+      // keepalives cover the proxies that honor Cache-Control; this is the rest.
+      "X-Accel-Buffering": "no",
       // One URL, two representations — prevent a shared cache/proxy from
       // serving a cached arm to the wrong negotiator.
       Vary: "Accept",
