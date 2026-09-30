@@ -131,6 +131,12 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.lastError?.message).toContain(account);
     expect(result.current.lastError?.message).toContain("then resend");
 
+    serverSend({
+      type: "codex_history_transfer_required", conversationId: "conv-history-ack",
+      authModeGeneration: 2, authMode, clientTurnId: chats[1].clientTurnId,
+    });
+    expect(result.current.messages[1]).toEqual(expect.objectContaining({ content: "A separate turn", delivery: "unsent" }));
+
     wsInstance?.send.mockClear();
     act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2));
     expect(result.current.lastError?.code).toBe("codex_history_transfer_required");
@@ -151,6 +157,14 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     });
     expect(result.current.messages).toHaveLength(2);
     expect(result.current.messages[0]).not.toHaveProperty("delivery");
+    expect(result.current.messages[1]).toEqual(expect.objectContaining({ content: "A separate turn", delivery: "retryable" }));
+    act(() => result.current.resendMessage(result.current.messages[1] as Extract<typeof result.current.messages[number], { type: "text" }>));
+    const allExplicitRetries = (wsInstance?.send.mock.calls ?? []).map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat");
+    expect(allExplicitRetries).toHaveLength(2);
+    expect(allExplicitRetries[1]).toEqual({
+      type: "chat", content: "A separate turn", attachments: undefined, clientTurnId: chats[1].clientTurnId,
+    });
+    expect(result.current.messages[1]).not.toHaveProperty("delivery");
   });
 
   it("ignores another conversation's required notice even when its turn ID matches a local message", async () => {

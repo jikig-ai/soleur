@@ -600,12 +600,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // Mirror of `realConversationId` for the `abort()` callback so a stale
   // closure cannot send the wrong conversationId on the wire.
   const realConversationIdRef = useRef<string | null>(null);
-  const pendingCodexHistoryTurnRef = useRef<{
+  const pendingCodexHistoryTurnsRef = useRef(new Map<string, {
     conversationId: string;
     authModeGeneration: number;
-    clientTurnId: string;
     acknowledged: boolean;
-  } | null>(null);
+  }>());
   // #5290 false-positive fix — mirror of `sessionKind` for the `auth_ok`
   // reconnect closure. That handler lives in the `connect` useCallback whose
   // dep array excludes `sessionKind`, so the useState would be captured STALE
@@ -1018,12 +1017,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "codex_history_transfer_required": {
           if (msg.conversationId !== realConversationIdRef.current) break;
           if (msg.clientTurnId) {
-            pendingCodexHistoryTurnRef.current = {
+            pendingCodexHistoryTurnsRef.current.set(msg.clientTurnId, {
               conversationId: msg.conversationId,
               authModeGeneration: msg.authModeGeneration,
-              clientTurnId: msg.clientTurnId,
               acknowledged: false,
-            };
+            });
             dispatch({ type: "set_message_delivery", clientTurnId: msg.clientTurnId, delivery: "unsent" });
           }
           const billingNotice = msg.authMode === "api-key"
@@ -1052,11 +1050,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "codex_history_transfer_acknowledged": {
           if (msg.conversationId !== realConversationIdRef.current) break;
-          const heldTurn = pendingCodexHistoryTurnRef.current;
-          if (heldTurn?.conversationId === msg.conversationId
-            && heldTurn.authModeGeneration === msg.authModeGeneration) {
-            heldTurn.acknowledged = true;
-            dispatch({ type: "set_message_delivery", clientTurnId: heldTurn.clientTurnId, delivery: "retryable" });
+          for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
+            if (heldTurn.conversationId === msg.conversationId
+              && heldTurn.authModeGeneration === msg.authModeGeneration) {
+              heldTurn.acknowledged = true;
+              dispatch({ type: "set_message_delivery", clientTurnId, delivery: "retryable" });
+            }
           }
           setLastError((current) => current?.code === "codex_history_transfer_required"
             && current.conversationId === msg.conversationId
@@ -1254,10 +1253,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "session_started": {
           if (msg.conversationId) {
-            const heldTurn = pendingCodexHistoryTurnRef.current;
-            if (heldTurn && heldTurn.conversationId !== msg.conversationId) {
-              dispatch({ type: "set_message_delivery", clientTurnId: heldTurn.clientTurnId, delivery: "unsent" });
-              pendingCodexHistoryTurnRef.current = null;
+            for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
+              if (heldTurn.conversationId !== msg.conversationId) {
+                dispatch({ type: "set_message_delivery", clientTurnId, delivery: "unsent" });
+                pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
+              }
             }
             setLastError((current) => current?.code === "codex_history_transfer_required"
               && current.conversationId !== msg.conversationId ? null : current);
@@ -1293,10 +1293,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_resumed": {
-          const heldTurn = pendingCodexHistoryTurnRef.current;
-          if (heldTurn && heldTurn.conversationId !== msg.conversationId) {
-            dispatch({ type: "set_message_delivery", clientTurnId: heldTurn.clientTurnId, delivery: "unsent" });
-            pendingCodexHistoryTurnRef.current = null;
+          for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
+            if (heldTurn.conversationId !== msg.conversationId) {
+              dispatch({ type: "set_message_delivery", clientTurnId, delivery: "unsent" });
+              pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
+            }
           }
           setLastError((current) => current?.code === "codex_history_transfer_required"
             && current.conversationId !== msg.conversationId ? null : current);
@@ -1909,20 +1910,21 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   const resendMessage = useCallback(
     (message: Extract<ChatMessage, { type: "text" }>) => {
-      const heldTurn = pendingCodexHistoryTurnRef.current;
+      const clientTurnId = message.id.startsWith("user-") ? message.id.slice("user-".length) : "";
+      const heldTurn = pendingCodexHistoryTurnsRef.current.get(clientTurnId);
       if (status !== "connected" || message.role !== "user" || message.delivery !== "retryable"
         || !heldTurn?.acknowledged || heldTurn.conversationId !== realConversationIdRef.current
-        || message.id !== `user-${heldTurn.clientTurnId}`) return;
+        || !clientTurnId) return;
 
       dispatch({ type: "reset_connection" });
-      dispatch({ type: "set_message_delivery", clientTurnId: heldTurn.clientTurnId, delivery: undefined });
+      dispatch({ type: "set_message_delivery", clientTurnId, delivery: undefined });
       send({
         type: "chat",
         content: message.content,
         attachments: message.attachments,
-        clientTurnId: heldTurn.clientTurnId,
+        clientTurnId,
       });
-      pendingCodexHistoryTurnRef.current = null;
+      pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
     },
     [send, status],
   );
