@@ -643,13 +643,15 @@ describe("WorkstreamBoard", () => {
   // --- Progressive SSE feed ---------------------------------------------------
   //
   // The board's fetcher negotiates Accept: text/event-stream and commits each
-  // `issues`/`statuses` frame into the shared SWR cache entry while the stream
-  // is still open. These tests drive a controlled ReadableStream so mid-feed
-  // state is observable (AC3/AC7/AC8/AC9/AC10).
+  // `issues` frame into the shared SWR cache entry while the stream is still
+  // open (a reconcile arrives as a plain `issues` frame carrying full cards).
+  // These tests drive a controlled ReadableStream so mid-feed state is
+  // observable (AC3/AC7/AC8/AC9/AC10).
 
   it("renders cards after the FIRST issues frame while the stream is still open (AC3)", async () => {
     const ctl = sseControlled();
-    global.fetch = vi.fn().mockResolvedValue(ctl.res) as unknown as typeof fetch;
+    const fetchMock = vi.fn().mockResolvedValue(ctl.res);
+    global.fetch = fetchMock as unknown as typeof fetch;
     render(<Wrapped />);
 
     ctl.push(META);
@@ -678,6 +680,11 @@ describe("WorkstreamBoard", () => {
     await waitFor(() =>
       expect(refresh.getAttribute("aria-busy")).toBeNull(),
     );
+    // Progressive commits must not re-fire the fetcher (revalidate:false) —
+    // exactly one upstream request for the whole feed.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // …and the happy path never showed the refresh-failed banner.
+    expect(screen.queryByText(/couldn.?t refresh/i)).toBeNull();
   });
 
   it("?issue=N deep-link shows loading until the issue's page arrives, then renders it (AC8)", async () => {
@@ -723,6 +730,28 @@ describe("WorkstreamBoard", () => {
     await waitFor(() =>
       expect(screen.getByText("Issue not found")).toBeTruthy(),
     );
+  });
+
+  it("?issue=N unresolved after a mid-feed ERROR shows 'couldn't load' — never 'not found' (F1)", async () => {
+    mockIssue = "9999";
+    const ctl = sseControlled();
+    global.fetch = vi.fn().mockResolvedValue(ctl.res) as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    ctl.push({ type: "issues", issues: [issue({ id: "1" })] });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Loading issue")).toBeTruthy(),
+    );
+
+    // The feed dies before issue 9999's page — a truncated set must not claim
+    // "Issue not found" (it may live on a page that never streamed).
+    ctl.push({ type: "error", code: "workstream_query_error" });
+    ctl.close();
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.?t load this issue/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText("Issue not found")).toBeNull();
   });
 
   it("a mid-stream error frame keeps the partial board + shows the refresh-failed banner (AC7)", async () => {

@@ -685,3 +685,50 @@ Net +1 — Closing 0 / Filing 1 (one entry resolved inline at work time):
   precedent: ADR-113.
 - Learnings: `2026-04-13-websocket-cumulative-vs-delta-streaming-fix.md`,
   `2026-06-26-swr-refresh-failed-keep-stale-data-use-error-and-data.md`.
+
+## Review-Round Amendments (post-panel — applied in cc714019's review-fix commit)
+
+The review panel (12 seats) changed the shipped shape; superseded plan text is
+kept above for provenance:
+
+1. **`statuses` frame folded into `issues`.** The reconcile now emits a plain
+   `issues` frame carrying the FULL re-mapped cards for pre-map emissions whose
+   column/`live` changed — the client's upsert is already whole-object, so the
+   minimal `{id,status,live}` encoding was dead vocabulary that would silently
+   miss any future boardStatus-dependent field. `WorkstreamStatusOverride` /
+   `applyStatusOverrides` / the `statuses` union member are deleted.
+2. **Board meta rides `ctx`.** `resolveWorkstreamBoardMeta` (a second
+   repo-URL DB read, degrade-blind, post-headers throwable, a read→write
+   import) is gone; `resolveBoardReadContext` computes `{onKanbanOrg,
+   projectWritable}` as a pure function of the parsed owner + env. Both arms +
+   `workstream_issues_list` now share ONE repo resolution (TOCTOU dead).
+3. **The `done` commit is authoritative.** SWR's mutation-overlap rule discards
+   the fetcher's resolved value whenever a mid-fetch `mutate` landed — i.e.
+   EVERY progressive feed — so the final committed product must be the
+   canonical accumulator ∪ locally-pending ids (`mergeFinalIssues`):
+   non-numeric `SOLAA-N*` temps + `markLocallyWrittenIssueId` (create acks)
+   + `markInflightWriteId` (in-flight optimistic patches; prevents a stale
+   streamed copy snapping a user's move/edit back mid-feed). Ghosts (upstream
+   deletes, closed-window churn) now prune at `done` — AC4 holds.
+4. **Disconnect/cap propagation.** `request.signal` + `ReadableStream.cancel()`
+   + the 90s cap all set an `aborted` flag → `StreamAbortedError` inside
+   `onBatch` stops the ~30-call upstream walk on a dead socket. The cap also
+   emits the error frame + `log.warn` + `reportSilentFallback` (a cap-hit is a
+   degraded condition, previously invisible to Sentry).
+5. **Client stall watchdog.** `fetchWorkstreamIssuesFeed` rejects a read that
+   stalls >45s (`opts.stallMs` for tests) — a half-open transport can't leave
+   `isValidating` spinning past the server cap.
+6. **Truncated-feed honesty widened.** Deep-linked `?issue=N` on a failed feed
+   now renders a distinct "Couldn't load this issue" (`loadFailed` on
+   `IssueDetailSheet`), and `NoResults` is suppressed while `isValidating` —
+   a partial set can never claim absence.
+7. **Nav badge partial-suppression.** Mid-stream commits carry `partial:true`;
+   `WorkstreamNavBadge` holds its last complete snapshot so the attention count
+   never renders a streamed subset.
+8. **Headers.** `Vary: Accept` on both arms (one URL, two representations);
+   `Connection: keep-alive` dropped (vestigial under HTTP/2).
+9. **`IssueCard` memoized** — per-frame commits re-render only cards whose
+   issue object changed.
+10. **Board meta surfaced to agents** — `workstream_issues_list` returns
+    `{issues, board}` so an agent knows label-driven moves snap back on the
+    kanban org (`onKanbanOrg && !projectWritable`).

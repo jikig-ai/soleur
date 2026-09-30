@@ -33,13 +33,6 @@ vi.mock("@/server/github-app", () => ({
   getAppSlug: (...a: unknown[]) => getAppSlug(...a),
 }));
 
-const resolveWorkstreamBoardMeta = vi.fn();
-vi.mock("@/server/workstream/mutate-workstream-issue", async (io) => ({
-  ...(await io<typeof import("@/server/workstream/mutate-workstream-issue")>()),
-  resolveWorkstreamBoardMeta: (...a: unknown[]) =>
-    resolveWorkstreamBoardMeta(...a),
-}));
-
 import {
   getWorkstreamIssues,
   resolveBoardReadContext,
@@ -72,10 +65,6 @@ beforeEach(() => {
   listRepoIssues.mockResolvedValue([]);
   fetchBoardStatusMap.mockResolvedValue(new Map());
   getAppSlug.mockResolvedValue("soleur-ai");
-  resolveWorkstreamBoardMeta.mockResolvedValue({
-    onKanbanOrg: false,
-    projectWritable: false,
-  });
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -225,9 +214,11 @@ describe("getWorkstreamIssues", () => {
 // --- Progressive feed (streamWorkstreamIssues) -------------------------------
 //
 // The streamed accessor emits delta frames: meta → issues* (one per upstream
-// REST page) → [statuses?] (one reconcile, ONLY for already-emitted issues whose
-// column changed once board precedence lands) → done. A mid-loop failure emits
-// `error` then rethrows. Degradation semantics are unchanged: resolution throws
+// REST page, plus ONE reconcile `issues` frame carrying the full re-mapped
+// cards for already-emitted issues whose column/`live` changed once board
+// precedence lands) → done. A mid-loop failure emits `error` then rethrows;
+// an aborted consumer (isAborted) stops the upstream walk silently.
+// Degradation semantics are unchanged: resolution throws
 // WorkstreamDegradedError BEFORE the stream exists (route maps it to a real
 // 502, never an SSE body).
 
@@ -260,6 +251,16 @@ describe("resolveBoardReadContext", () => {
     readCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: false });
     const ctx = await resolveBoardReadContext("u1");
     expect(ctx.kind).toBe("empty");
+    expect(ctx.board).toEqual({ onKanbanOrg: false, projectWritable: false });
+  });
+
+  it("computes board meta from the resolved owner + env (single repo read)", async () => {
+    vi.stubEnv("SOLEUR_KANBAN_ORG", "acme");
+    vi.stubEnv("SOLEUR_KANBAN_PROJECT_WRITABLE", "1");
+    const ctx = await resolveBoardReadContext("u1");
+    expect(ctx.board).toEqual({ onKanbanOrg: true, projectWritable: true });
+    // One repo-URL resolution — meta rides ctx, no second DB read.
+    expect(readCurrentRepoUrlResult).toHaveBeenCalledTimes(1);
   });
 
   it("throws WorkstreamDegradedError when installation is unresolvable", async () => {
@@ -319,7 +320,7 @@ describe("streamWorkstreamIssues", () => {
     expect(events.at(-1)).toEqual({ type: "done", openTruncated: true });
   });
 
-  it("emits a single statuses frame listing ONLY already-emitted issues whose column changed (AC5)", async () => {
+  it("emits ONE reconcile `issues` frame with the full re-mapped card for ONLY already-emitted issues that changed (AC5)", async () => {
     vi.stubEnv("SOLEUR_KANBAN_ORG", "acme");
     vi.stubEnv("SOLEUR_KANBAN_PROJECT_NUMBER", "2");
     let resolveMap!: (m: Map<number, string>) => void;
@@ -341,14 +342,69 @@ describe("streamWorkstreamIssues", () => {
     );
     const events = await streamFor();
     const types = events.map((e) => e.type);
-    expect(types).toEqual(["meta", "issues", "statuses", "issues", "done"]);
-    const statuses = events.find((e) => e.type === "statuses");
-    // Only the pre-map emission reconciles; the late page needed no override.
-    expect(statuses?.overrides).toEqual([
-      { id: "1", status: "in_review", live: false },
+    expect(types).toEqual(["meta", "issues", "issues", "issues", "done"]);
+    const frames = events.filter((e) => e.type === "issues");
+    // The reconcile frame carries the FULL re-mapped card (whole-object upsert).
+    expect(frames[1].issues).toEqual([
+      expect.objectContaining({ id: "1", status: "in_review" }),
     ]);
-    const lateFrame = events.filter((e) => e.type === "issues").at(-1);
-    expect(lateFrame?.issues[0].status).toBe("pending");
+    // The late page needed no reconcile — it emitted with board status inline.
+    expect(frames[2].issues[0].status).toBe("pending");
+  });
+
+  it("still flushes the reconcile before done when the map lands after the last page", async () => {
+    vi.stubEnv("SOLEUR_KANBAN_ORG", "acme");
+    vi.stubEnv("SOLEUR_KANBAN_PROJECT_NUMBER", "2");
+    let resolveMap!: (m: Map<number, string>) => void;
+    fetchBoardStatusMap.mockImplementation(
+      () => new Promise<Map<number, string>>((r) => (resolveMap = r)),
+    );
+    const early = rawIssue({ number: 1, labels: ["domain/engineering"] });
+    listRepoIssues.mockImplementation(
+      async (
+        _id: number,
+        _o: string,
+        _r: string,
+        hooks?: { onBatch?: (items: BoardIssueInput[]) => void },
+      ) => {
+        hooks?.onBatch?.([early]);
+        // The map lands only AFTER the page loop returns — the post-loop
+        // `await boardPromise` is what pins reconcile-before-done.
+        setTimeout(() => resolveMap(new Map([[1, "In review"]])), 0);
+        return [early];
+      },
+    );
+    const events = await streamFor();
+    const types = events.map((e) => e.type);
+    expect(types).toEqual(["meta", "issues", "issues", "done"]);
+    expect(events[2]).toEqual({
+      type: "issues",
+      issues: [expect.objectContaining({ id: "1", status: "in_review" })],
+    });
+  });
+
+  it("stops the upstream walk silently when the consumer aborted (no error frame, no throw)", async () => {
+    let aborted = false;
+    listRepoIssues.mockImplementation(
+      async (
+        _id: number,
+        _o: string,
+        _r: string,
+        hooks?: { onBatch?: (items: BoardIssueInput[]) => void },
+      ) => {
+        hooks?.onBatch?.([rawIssue({ number: 1 })]);
+        aborted = true; // consumer went away mid-feed
+        hooks?.onBatch?.([rawIssue({ number: 2 })]); // fires the abort check
+        return [];
+      },
+    );
+    const ctx = await resolveBoardReadContext("u1");
+    const { events, emit } = collect();
+    await expect(
+      streamWorkstreamIssues(ctx, emit, () => aborted),
+    ).resolves.toBeUndefined();
+    // Only the pre-abort batch emitted; no error frame, no done.
+    expect(events.map((e) => e.type)).toEqual(["meta", "issues"]);
   });
 
   it("emits error then rethrows when the page loop fails mid-feed", async () => {

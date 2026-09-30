@@ -27,7 +27,7 @@ import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import {
-  getWorkstreamIssues,
+  collectWorkstreamIssues,
   resolveBoardReadContext,
   streamWorkstreamIssues,
   type BoardReadContext,
@@ -36,10 +36,7 @@ import {
   formatWorkstreamSseFrame,
   type WorkstreamFeedEvent,
 } from "@/lib/workstream-feed";
-import {
-  createWorkstreamIssue,
-  resolveWorkstreamBoardMeta,
-} from "@/server/workstream/mutate-workstream-issue";
+import { createWorkstreamIssue } from "@/server/workstream/mutate-workstream-issue";
 import {
   checkWorkstreamWriteRate,
   classifyWriteError,
@@ -50,8 +47,12 @@ import {
   WorkstreamDegradedError,
   type WorkstreamStatus,
 } from "@/lib/workstream";
+import { reportSilentFallback } from "@/server/observability";
+import { createChildLogger } from "@/server/logger";
 
 export const dynamic = "force-dynamic";
+
+const log = createChildLogger("workstream-issues-route");
 
 // Hard cap on the SSE feed — mirrors SUPPORT_TURN_MAX_MS's backstop role: a
 // wedged upstream or a buffering middlebox must not pin the connection (and
@@ -68,15 +69,19 @@ export async function GET(request: Request) {
   // Response so a degrade still answers a real 502 JSON — pre-stream failures
   // never masquerade as an open stream (empty-vs-throw contract).
   if ((request.headers.get("accept") ?? "").includes("text/event-stream")) {
-    return streamIssuesFeed(userId);
+    return streamIssuesFeed(request, userId);
   }
 
   try {
-    const [issues, board] = await Promise.all([
-      getWorkstreamIssues(userId),
-      resolveWorkstreamBoardMeta(userId),
-    ]);
-    return NextResponse.json({ issues, board });
+    // One shared resolution: ctx carries the board meta (a pure function of the
+    // parsed owner + env vars), so the JSON arm no longer re-reads repo_url a
+    // second time and meta can never diverge from the issues' repo.
+    const ctx = await resolveBoardReadContext(userId);
+    const issues = await collectWorkstreamIssues(ctx);
+    return NextResponse.json(
+      { issues, board: ctx.board },
+      { headers: { Vary: "Accept" } },
+    );
   } catch (e) {
     // A WorkstreamDegradedError already mirrored to Sentry at the degrade source
     // (mirror-precedes-throw) — skip re-capture to avoid a double event. Genuine
@@ -92,7 +97,10 @@ export async function GET(request: Request) {
 }
 
 /** The negotiated progressive feed (delta frames; see lib/workstream-feed). */
-async function streamIssuesFeed(userId: string): Promise<Response> {
+async function streamIssuesFeed(
+  request: Request,
+  userId: string,
+): Promise<Response> {
   let ctx: BoardReadContext;
   try {
     ctx = await resolveBoardReadContext(userId);
@@ -102,9 +110,17 @@ async function streamIssuesFeed(userId: string): Promise<Response> {
     }
     return NextResponse.json(
       { error: "workstream_query_error" },
-      { status: 502 },
+      { status: 502, headers: { Vary: "Accept" } },
     );
   }
+
+  // Disconnect/cap propagation: without this, a client abort or the cap would
+  // leave the accessor burning the remaining ~30 sequential GitHub calls on a
+  // dead socket, billed to the shared installation token.
+  let aborted = false;
+  request.signal.addEventListener("abort", () => {
+    aborted = true;
+  });
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -116,15 +132,42 @@ async function streamIssuesFeed(userId: string): Promise<Response> {
           controller.enqueue(encoder.encode(formatWorkstreamSseFrame(event)));
         } catch {
           closed = true;
+          aborted = true; // enqueue threw → the consumer is gone
         }
       };
 
-      // Cap backstop: emit an honest terminal frame, then close — the client's
-      // done-absent EOF rule turns this into the loud error path, never a
-      // silently-complete board.
+      // Cap backstop: emit an honest terminal frame, stop the upstream loop
+      // (aborted), close — the client's done-absent EOF rule turns this into
+      // the loud error path, never a silently-complete board.
+      // SSE comment keepalives — a wedged upstream page can legitimately take
+      // ~48 s (fetchWithRetry budget); without these the client's 60 s stall
+      // watchdog could kill a healthy-but-slow feed. The parser drops
+      // non-`data:` parts, so keepalives are zero-contract-cost.
+      const keepalive = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(": ka\n\n"));
+        } catch {
+          closed = true;
+          aborted = true;
+        }
+      }, 15_000);
+
       const capTimer = setTimeout(() => {
+        aborted = true;
         enqueue({ type: "error", code: "workstream_feed_timeout" });
         closed = true;
+        log.warn(
+          { userId, capMs: WORKSTREAM_FEED_MAX_MS },
+          "workstream feed capped — upstream chain exceeded the feed budget",
+        );
+        // Mirror (cq-silent-fallback): a cap-hit is a degraded condition the
+        // pino warn alone would hide from Sentry.
+        reportSilentFallback(new Error("workstream feed cap hit"), {
+          feature: "workstream",
+          op: "feed-cap",
+          extra: { userId, capMs: WORKSTREAM_FEED_MAX_MS },
+        });
         try {
           controller.close();
         } catch {
@@ -134,9 +177,8 @@ async function streamIssuesFeed(userId: string): Promise<Response> {
 
       try {
         // The accessor emits the terminal `error` frame itself before
-        // rethrowing; the catch here is the route-level Sentry capture (skipped
-        // for WorkstreamDegradedError — already mirrored at its source).
-        await streamWorkstreamIssues(ctx, enqueue);
+        // rethrowing; StreamAbortedError returns silently (consumer gone).
+        await streamWorkstreamIssues(ctx, enqueue, () => aborted);
       } catch (err) {
         if (!(err instanceof WorkstreamDegradedError)) {
           Sentry.captureException(err, {
@@ -145,6 +187,7 @@ async function streamIssuesFeed(userId: string): Promise<Response> {
         }
       } finally {
         clearTimeout(capTimer);
+        clearInterval(keepalive);
         closed = true;
         try {
           controller.close();
@@ -153,13 +196,19 @@ async function streamIssuesFeed(userId: string): Promise<Response> {
         }
       }
     },
+    cancel() {
+      // The consumer went away — stop the upstream page walk.
+      aborted = true;
+    },
   });
 
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
+      // One URL, two representations — prevent a shared cache/proxy from
+      // serving a cached arm to the wrong negotiator.
+      Vary: "Accept",
     },
   });
 }

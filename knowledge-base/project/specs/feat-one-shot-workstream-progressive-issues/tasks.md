@@ -94,3 +94,35 @@ before the route arm (2.x), which lands before the client wiring (3.x).
       MobileBoard sheet-gating resolved INLINE — `IssueDetailSheet` is owned
       once by `WorkstreamBoard`; `MobileBoard` renders none of its own.
 - [x] 4.5 `next build` clean.
+
+## Phase 5 — Review round (post-panel fixes)
+
+Panel: 12 seats (design-validity: code-simplicity + architecture + perf-oracle;
+panel: pattern-recognition, security-sentinel, agent-native, code-quality,
+test-design, user-impact, semgrep; git-history + data-integrity retried after a
+model rate-limit). The vocabulary in §1–§4 above predates these fixes — see the
+plan's "Review-Round Amendments" for the shipped shape.
+
+- [x] 5.1 Fold `statuses` frame → `issues` upsert (delete
+      `WorkstreamStatusOverride`/`applyStatusOverrides`); reconcile emits full
+      re-mapped cards.
+- [x] 5.2 `resolveBoardReadContext` computes `board` meta inline (kills the
+      second `getCurrentRepoUrl` read, the meta-vs-issues TOCTOU, the
+      degrade-blind path, and the read→write import); JSON arm + agent tool
+      share the same ctx (`collectWorkstreamIssues` extracted).
+- [x] 5.3 Authoritative `done` commit (`mergeFinalIssues` + `pendingRealIds` +
+      `inflightWriteIds`) — survives SWR's mutation-overlap discard; prunes
+      ghosts, keeps local writes.
+- [x] 5.4 Abort propagation: `request.signal` + `cancel()` + cap →
+      `StreamAbortedError` stops the upstream walk; cap also `log.warn` +
+      `reportSilentFallback`.
+- [x] 5.5 Client stall watchdog (45s) + `reader.cancel()` on throw.
+- [x] 5.6 `IssueDetailSheet.loadFailed` for truncated-feed deep links;
+      `NoResults` gated on `!isValidating`; badge holds last-complete snapshot
+      (`partial` flag); `openTruncated` banner.
+- [x] 5.7 `Vary: Accept` both arms; `Connection: keep-alive` dropped;
+      `IssueCard` memoized; `workstream_issues_list` returns `{issues, board}`.
+- [x] 5.8 Tests: hooks contract against mocked `githubApiGet`
+      (`github-read-tools.workstream.test.ts`), post-loop reconcile flush,
+      abort-stops-walk, cap timeout frame, `mergeFinalIssues` pending/ghost
+      semantics, fetch-called-once pin, loadFailed sheet test.
