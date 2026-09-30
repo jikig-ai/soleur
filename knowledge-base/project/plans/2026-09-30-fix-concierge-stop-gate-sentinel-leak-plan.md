@@ -15,6 +15,28 @@ brand_survival_threshold: aggregate pattern
 Spec lacks a valid `lane:` (no `specs/feat-one-shot-crm-lead-stop-gate-leak/spec.md` exists) — defaulted to
 `cross-domain` (fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30
+**Sections enhanced:** Research Insights, Cut List, Phase 1 (verification), Phase 2 (ordering), Sharp Edges
+**Research agents used:** repo-research-analyst, learnings-researcher (plan phase); dhh-rails-reviewer, kieran-rails-reviewer,
+code-simplicity-reviewer, cto (plan-review, findings already folded in); this pass added SDK-typings verification,
+gate halts 4.6/4.7/4.8/4.9/4.11 (all pass), rule-ID / issue-number / hook-population live checks.
+
+### Key improvements
+1. Root-cause claim 1 (the web runtime executes plugin hooks) is now backed by the SDK's own typings, verbatim,
+   rather than by inference from the incident (see *Deepen-pass evidence*).
+2. A rejected-alternative was found that the plan had not considered and that looks attractive: the SDK
+   `disableAllHooks` setting — recorded in the Cut List with the reason it cannot be used.
+3. Phase 2 gained an ordering constraint (`recordAssistantBlock` must run before the strip) that protects the
+   runaway-watchdog re-arm.
+
+### New considerations discovered
+- The SDK offers `get_hooks_listing` and `includeHookEvents` as in-surface probes for which hooks fire; not
+  adopted in product code (volume/scope) but named as the QA method for Phase 1 step 4.
+- The Phase 1 unit tests prove the hook honours the variable and that `buildAgentEnv` sets it; they cannot prove
+  the CLI forwards `options.env` to hook children. That stays a measured QA step, not an assumption.
+
 ## Overview
 
 In the web Concierge, the user typed "I want to enter a new CRM lead". The agent composed the intake question
@@ -98,10 +120,43 @@ plan corrects. No ADR rejects an env opt-out for plugin hooks.
   lifecycle bar after every cc turn; a `stream_end`-scoped client idle transition buys P3 without that -> CUT.
 - Server-side "accumulate instead of replace" text semantics -> changes W8 for every multi-block turn, far
   beyond this bug; markup-only blocks are dropped instead -> CUT.
+- SDK `disableAllHooks` (a `Settings` key, sdk.d.ts ~7105: "Disable all hooks and statusLine execution: the hooks
+  defined in settings files and by installed plugins") -> all-or-nothing: it would also disable the plugin's
+  `PreToolUse` security guard `browser-snapshot-credential-guard.sh` (`hooks.json` `PreToolUse[0]`), trading a
+  leak for a lost guard; the per-hook env opt-out disables exactly one hook -> CUT.
 - A new ADR -> the decision extends ADR-093's boundary (what the platform-deployed plugin may execute in web
   sessions); amend ADR-093 rather than mint an ordinal -> CUT (amendment instead).
 - `soleur:engineering:discovery:functional-discovery` overlap check -> internal first-party runtime defect, no
   registry-equivalent capability to compare; skipped deliberately.
+
+**Deepen-pass evidence (verified live 2026-09-30, SDK 0.3.284 pinned in `apps/web-platform/package.json`).**
+
+```text
+# apps/web-platform/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts
+5529  export declare type SdkPluginConfig = {
+5539     * When true, the engine loads skills/hooks/agents/commands from this plugin but does NOT read its .mcp.json ...
+        (the `skipMcpDiscovery` doc — by contrast a plain { type:'local', path } binding loads the plugin's hooks)
+2229-2238  settingSources?: ... 'user' | 'project' | 'local' ... Pass `[]` to disable filesystem settings (SDK isolation mode).
+        (filesystem settings only — plugin hooks.json is not a settings source)
+1638-1644  env?: "Environment variables for the Claude Code process. When set, this value REPLACES the subprocess
+           environment entirely — it is not merged with process.env."
+```
+
+```text
+$ jq '[.hooks.Stop[].hooks[].command]' plugins/soleur/hooks/hooks.json
+[ ".../hooks/stop-hook.sh", ".../hooks/browser-cleanup-hook.sh", ".../hooks/unkept-promise-hook.sh" ]   # 3 Stop hooks
+$ grep -nE "^MIN_(INVOCATIONS|SUT_RUNS|EXPECT_ROWS|ASSERTIONS)=" plugins/soleur/test/unkept-promise-hook.test.sh
+367:MIN_INVOCATIONS=51  370:MIN_SUT_RUNS=51  395:MIN_EXPECT_ROWS=51  404:MIN_ASSERTIONS=62
+$ git grep -n "state.events.onTextTurnEnd" -- apps/web-platform/server
+apps/web-platform/server/soleur-go-runner.ts:2395   # exactly one call site (handleResultMessage)
+```
+
+`SdkPluginConfig`'s `skipMcpDiscovery` doc is the only place the typings name hooks as part of a plugin load;
+combined with the incident itself (the hook demonstrably ran) it is sufficient for root-cause claim 1. The
+`env` doc says the value goes to "the Claude Code process"; hook commands are that process's children, which is
+the standard CLI behaviour — but no typing sentence states it for hooks, so Phase 1 step 4 stays a measurement.
+Live ID checks: rule IDs cited in this plan all exist as active rules; issues #3243, #3242, #3374, #3280, #9281
+are OPEN and #9281 is the `browser-cleanup-hook.sh` filing.
 
 **Institutional learnings applied** (`knowledge-base/project/learnings/`):
 `2026-05-04-cc-soleur-go-cutover-dropped-document-context-and-stream-end.md` (the cc path already lost a
@@ -494,6 +549,7 @@ gates do not fire.
   Phase 3 into dispatching it from `stream_end`.
 - The unkept-promise suite counts hook executions through a hook-written stderr marker; a new row that spawns
   the hook outside `verdict()` must also append to `SOLEUR_HOOK_TRACE` or the conservation check trips.
+- `recordAssistantBlock(state, "text", null)` (soleur-go-runner.ts, first statement of the text arm) MUST stay ahead of the strip: it re-arms the per-block runaway watchdog, and a markup-only block is still evidence the model is alive. Skipping `onText` must not skip the re-arm.
 - The strip must run before the chapter-prefix logic in `handleAssistantMessage`, otherwise a markup-only block
   would consume `prefixEmitted` and drop the routing prefix from the next real block.
 

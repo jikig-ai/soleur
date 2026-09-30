@@ -8,13 +8,14 @@ Every code task starts with its failing test (cq-write-failing-tests-before). Co
 - 1.2 RED: test/agent-env.test.ts — buildAgentEnv sets SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1 for api_key and oauth, and an ambient "0" cannot override it
 - 1.3 GREEN: early exit in plugins/soleur/hooks/unkept-promise-hook.sh after the SOLEUR_HOOK_TRACE line and before the jq fail-open; header residual + trade-off + ordering comment
 - 1.4 GREEN: SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK in AGENT_ENV_OVERRIDES (server/agent-env.ts)
-- 1.5 Verify env inheritance on a dev dispatch during soleur:qa (Debug stream: one assistant text, no second <stop> message); if the hook still fires, re-plan
+- 1.5 Verify env inheritance on a dev dispatch during soleur:qa (method: Debug stream, or the SDK get_hooks_listing control request / includeHookEvents to see whether the Stop hook ran) (Debug stream: one assistant text, no second <stop> message); if the hook still fires, re-plan
 
 ## 2. Defence in depth — gate markup never renders
 - 2.1 RED: test/stop-gate-markup.test.ts (table: markup-only, embedded, case/attribute, unterminated, multi-tag, lookalike <stopwatch>)
 - 2.2 RED: test/soleur-go-runner-stop-gate.test.ts (list, stop-tag, result -> onText once with the list; embedded markup stripped; markup-only first block -> no onText; later prose block still replaces = accepted limit)
 - 2.3 RED: dispatcher test — markup-only turn persists no empty assistant row
 - 2.4 GREEN: server/stop-gate-markup.ts; call in handleAssistantMessage (before chapter-prefix logic); warnSilentFallback op stop-gate-markup-stripped (no body); guard empty save in cc-dispatcher onTextTurnEnd
+- 2.4b Ordering: keep recordAssistantBlock(state, "text", null) ahead of the strip (watchdog re-arm) — a markup-only block must still re-arm
 - 2.5 Sweep write sites; record legacy agent-runner as acknowledged residual
 
 ## 3. Turn ends cleanly on the client
