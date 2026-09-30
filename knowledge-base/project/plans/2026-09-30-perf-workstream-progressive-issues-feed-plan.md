@@ -564,6 +564,12 @@ review provide the substantive passes)
 **Skipped specialists:** ux-design-lead (no new UI surface — reuses the existing
 columns/skeleton/spinner), copywriter (no new copy)
 **Pencil available:** N/A
+**Explicit override (UI-surface gate):** the sole UI-surface file touched is
+`components/workstream/workstream-board.tsx`. The change alters *when* existing
+elements render (progressive SWR commits of the same card components + sheet
+`notFound`/`loading` gating), never *what* renders — zero new/changed visual
+surface, no layout or style delta, no new components. A `.pen` wireframe would
+pin already-shipped pixels; override recorded for `workstream-board.tsx` only.
 
 #### Findings
 
@@ -627,20 +633,19 @@ recorded in the route's header comment.
 
 ## Deferral Tracking
 
-Two follow-ups to file as GitHub issues at work time (labels `domain/engineering`
-and `type/feature` — both verified via `gh label list` at plan time; milestone
-`Phase 4: Validate + Scale`, the internal-tooling milestone per
-`knowledge-base/product/roadmap.md` §Current State):
+Net +1 — Closing 0 / Filing 1 (one entry resolved inline at work time):
 
-1. **Upstream parallel page fan-out.** Once `Link: …rel="last"` is read off page
-   1, pages 2..N are independent and could fetch ~5-wide, emitting `issues`
-   frames out of order (client upsert is order-agnostic). Re-evaluate if the
-   streamed feed still ends >3 s on the dogfood repo, and mind GitHub secondary
-   rate limits.
-2. **`notFound`/`loading` audit of `MobileBoard`.** The mobile single-column path
-   consumes the same `filtered` array; confirm its sheet gating inherits the
-   `!isValidating` fix identically (it shares `IssueDetailSheet`, so likely free —
-   verify at work time rather than assume).
+1. **Upstream parallel page fan-out — FILED as #9282** (`type/feature`,
+   `deferred-automation`, `domain/engineering`, milestone `Phase 4: Validate +
+   Scale`). Once `Link: …rel="last"` is read off page 1, pages 2..N are
+   independent and could fetch ~5-wide, emitting `issues` frames out of order
+   (client upsert is order-agnostic). Re-evaluate if the streamed feed still
+   ends >3 s on the dogfood repo, and mind GitHub secondary rate limits.
+2. **`notFound`/`loading` audit of `MobileBoard` — RESOLVED INLINE, not filed.**
+   `IssueDetailSheet` is instantiated exactly once inside `WorkstreamBoard`;
+   `MobileBoard` consumes the same `filtered` array + `onOpen` and renders no
+   sheet of its own, so the `!isValidating` gating fix covers the mobile path
+   identically (verified at work time per `wg-defer-only-after-inline-triage`).
 
 ## Sharp Edges
 

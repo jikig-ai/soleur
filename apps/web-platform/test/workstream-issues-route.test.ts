@@ -24,8 +24,12 @@ vi.mock("@/server/workstream/mutate-workstream-issue", async (io) => ({
 }));
 
 const getWorkstreamIssues = vi.fn();
+const resolveBoardReadContext = vi.fn();
+const streamWorkstreamIssues = vi.fn();
 vi.mock("@/server/workstream/get-workstream-issues", () => ({
   getWorkstreamIssues: (...a: unknown[]) => getWorkstreamIssues(...a),
+  resolveBoardReadContext: (...a: unknown[]) => resolveBoardReadContext(...a),
+  streamWorkstreamIssues: (...a: unknown[]) => streamWorkstreamIssues(...a),
 }));
 
 const captureException = vi.fn();
@@ -59,6 +63,24 @@ beforeEach(() => {
     projectWritable: false,
   });
   getWorkstreamIssues.mockResolvedValue([]);
+  resolveBoardReadContext.mockResolvedValue({
+    kind: "ok",
+    userId: "user-9",
+    owner: "acme",
+    repo: "widgets",
+    installationId: 123,
+    botSlug: "soleur-ai",
+  });
+  streamWorkstreamIssues.mockImplementation(
+    async (_ctx: unknown, emit: (e: unknown) => void) => {
+      emit({
+        type: "meta",
+        board: { onKanbanOrg: false, projectWritable: false },
+      });
+      emit({ type: "issues", issues: [{ id: "1", title: "Streamed card" }] });
+      emit({ type: "done", openTruncated: false });
+    },
+  );
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -184,5 +206,99 @@ describe("GET /api/workstream/issues", () => {
     expect(json.error).toBe("workstream_query_error");
     // Already mirrored at the degrade source — the route must NOT re-capture.
     expect(captureException).not.toHaveBeenCalled();
+  });
+});
+
+// --- SSE arm (Accept: text/event-stream) -------------------------------------
+//
+// The progressive feed: the same route streams delta frames when the client
+// negotiates `text/event-stream`. Pre-stream failures (auth, resolution
+// degrades) keep REAL status codes — a degrade never answers with an SSE body.
+// Mid-stream failures arrive as a terminal `error` frame + a Sentry capture.
+
+function sseRequest(accept = "text/event-stream"): Request {
+  return new Request("http://localhost/api/workstream/issues", {
+    headers: { accept },
+  });
+}
+
+async function readSseBody(res: Response): Promise<string> {
+  expect(res.body).not.toBeNull();
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let out = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out += decoder.decode(value, { stream: true });
+  }
+  return out;
+}
+
+describe("GET /api/workstream/issues — SSE arm", () => {
+  it("streams meta → issues → done frames when Accept negotiates SSE (AC1)", async () => {
+    const res = await GET(sseRequest());
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    expect(res.headers.get("cache-control")).toContain("no-transform");
+    const body = await readSseBody(res);
+    const { parseWorkstreamSseChunks } = await import("@/lib/workstream-feed");
+    const { events } = parseWorkstreamSseChunks(body);
+    expect(events.map((e) => e.type)).toEqual(["meta", "issues", "done"]);
+    expect(streamWorkstreamIssues).toHaveBeenCalledTimes(1);
+    // The bulk accessor is NOT consulted on the SSE arm.
+    expect(getWorkstreamIssues).not.toHaveBeenCalled();
+  });
+
+  it("401s an unauthenticated SSE request (no stream is opened)", async () => {
+    getUser.mockResolvedValue({ data: { user: null } });
+    const res = await GET(sseRequest());
+    expect(res.status).toBe(401);
+    expect(resolveBoardReadContext).not.toHaveBeenCalled();
+  });
+
+  it("502s with JSON when resolution degrades BEFORE the stream opens (AC2)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    resolveBoardReadContext.mockRejectedValue(
+      new WorkstreamDegradedError("workstream read degraded"),
+    );
+    const res = await GET(sseRequest());
+    expect(res.status).toBe(502);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toBe("workstream_query_error");
+    // Degrade already mirrored at its source — no route re-capture.
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("emits an error frame + captures when the feed throws mid-stream (AC7)", async () => {
+    streamWorkstreamIssues.mockImplementation(
+      async (_ctx: unknown, emit: (e: unknown) => void) => {
+        emit({ type: "meta", board: { onKanbanOrg: false, projectWritable: false } });
+        emit({ type: "issues", issues: [{ id: "1" }] });
+        emit({ type: "error", code: "workstream_query_error" });
+        throw new Error("GitHub API 403");
+      },
+    );
+    const res = await GET(sseRequest());
+    expect(res.status).toBe(200); // status was committed before the failure
+    const body = await readSseBody(res);
+    const { parseWorkstreamSseChunks } = await import("@/lib/workstream-feed");
+    const { events } = parseWorkstreamSseChunks(body);
+    expect(events.map((e) => e.type)).toEqual(["meta", "issues", "error"]);
+    expect(captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: { surface: "workstream-issues" } }),
+    );
+  });
+
+  it("a plain Accept keeps the bulk JSON arm", async () => {
+    getWorkstreamIssues.mockResolvedValue([{ id: "1" }]);
+    const res = await GET(new Request("http://localhost/test"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const json = (await res.json()) as { issues: unknown[] };
+    expect(json.issues).toHaveLength(1);
+    expect(streamWorkstreamIssues).not.toHaveBeenCalled();
   });
 });

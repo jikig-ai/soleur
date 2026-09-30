@@ -33,7 +33,19 @@ vi.mock("@/server/github-app", () => ({
   getAppSlug: (...a: unknown[]) => getAppSlug(...a),
 }));
 
-import { getWorkstreamIssues } from "@/server/workstream/get-workstream-issues";
+const resolveWorkstreamBoardMeta = vi.fn();
+vi.mock("@/server/workstream/mutate-workstream-issue", async (io) => ({
+  ...(await io<typeof import("@/server/workstream/mutate-workstream-issue")>()),
+  resolveWorkstreamBoardMeta: (...a: unknown[]) =>
+    resolveWorkstreamBoardMeta(...a),
+}));
+
+import {
+  getWorkstreamIssues,
+  resolveBoardReadContext,
+  streamWorkstreamIssues,
+} from "@/server/workstream/get-workstream-issues";
+import type { WorkstreamFeedEvent } from "@/lib/workstream-feed";
 
 function rawIssue(over: Partial<BoardIssueInput> = {}): BoardIssueInput {
   return {
@@ -60,6 +72,10 @@ beforeEach(() => {
   listRepoIssues.mockResolvedValue([]);
   fetchBoardStatusMap.mockResolvedValue(new Map());
   getAppSlug.mockResolvedValue("soleur-ai");
+  resolveWorkstreamBoardMeta.mockResolvedValue({
+    onKanbanOrg: false,
+    projectWritable: false,
+  });
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -203,5 +219,154 @@ describe("getWorkstreamIssues", () => {
         op: "workstream-botslug-degrade",
       }),
     );
+  });
+});
+
+// --- Progressive feed (streamWorkstreamIssues) -------------------------------
+//
+// The streamed accessor emits delta frames: meta → issues* (one per upstream
+// REST page) → [statuses?] (one reconcile, ONLY for already-emitted issues whose
+// column changed once board precedence lands) → done. A mid-loop failure emits
+// `error` then rethrows. Degradation semantics are unchanged: resolution throws
+// WorkstreamDegradedError BEFORE the stream exists (route maps it to a real
+// 502, never an SSE body).
+
+function collect(): { events: WorkstreamFeedEvent[]; emit: (e: WorkstreamFeedEvent) => void } {
+  const events: WorkstreamFeedEvent[] = [];
+  return { events, emit: (e) => events.push(e) };
+}
+
+async function streamFor(userId = "u1") {
+  const ctx = await resolveBoardReadContext(userId);
+  const { events, emit } = collect();
+  await streamWorkstreamIssues(ctx, emit);
+  return events;
+}
+
+describe("resolveBoardReadContext", () => {
+  it("throws WorkstreamDegradedError on a degraded repo-url read (before any stream)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    readCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: true });
+    await expect(resolveBoardReadContext("u1")).rejects.toBeInstanceOf(
+      WorkstreamDegradedError,
+    );
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: "workstream", op: "repo-unresolved" }),
+    );
+  });
+
+  it("returns kind:empty when no repo is connected", async () => {
+    readCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: false });
+    const ctx = await resolveBoardReadContext("u1");
+    expect(ctx.kind).toBe("empty");
+  });
+
+  it("throws WorkstreamDegradedError when installation is unresolvable", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    resolveEffectiveInstallationId.mockResolvedValue(null);
+    await expect(resolveBoardReadContext("u1")).rejects.toBeInstanceOf(
+      WorkstreamDegradedError,
+    );
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: "workstream", op: "no-installation" }),
+    );
+  });
+});
+
+describe("streamWorkstreamIssues", () => {
+  it("emits meta → issues per page → done, one frame per non-empty page", async () => {
+    const page1 = [rawIssue({ number: 1 }), rawIssue({ number: 2 })];
+    const page2 = [rawIssue({ number: 3 })];
+    listRepoIssues.mockImplementation(
+      async (_id: number, _o: string, _r: string, hooks?: { onBatch?: (items: BoardIssueInput[]) => void }) => {
+        hooks?.onBatch?.(page1);
+        hooks?.onBatch?.([]); // all-PR page → no frame
+        hooks?.onBatch?.(page2);
+        return [...page1, ...page2];
+      },
+    );
+    const events = await streamFor();
+    const types = events.map((e) => e.type);
+    expect(types).toEqual(["meta", "issues", "issues", "done"]);
+    expect(events[0]).toEqual({
+      type: "meta",
+      board: { onKanbanOrg: false, projectWritable: false },
+    });
+    const frames = events.filter((e) => e.type === "issues");
+    expect(frames[0].issues.map((i) => i.id)).toEqual(["1", "2"]);
+    expect(frames[1].issues.map((i) => i.id)).toEqual(["3"]);
+    expect(events.at(-1)).toEqual({ type: "done", openTruncated: false });
+  });
+
+  it("emits meta + done only for an honest-empty board (no repo connected)", async () => {
+    readCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: false });
+    const events = await streamFor();
+    expect(events.map((e) => e.type)).toEqual(["meta", "done"]);
+    expect(listRepoIssues).not.toHaveBeenCalled();
+  });
+
+  it("propagates the open-page-cap flag into done.openTruncated", async () => {
+    listRepoIssues.mockImplementation(
+      async (_id: number, _o: string, _r: string, hooks?: { onBatch?: (i: BoardIssueInput[]) => void; onOpenTruncated?: () => void }) => {
+        hooks?.onBatch?.([rawIssue({ number: 1 })]);
+        hooks?.onOpenTruncated?.();
+        return [rawIssue({ number: 1 })];
+      },
+    );
+    const events = await streamFor();
+    expect(events.at(-1)).toEqual({ type: "done", openTruncated: true });
+  });
+
+  it("emits a single statuses frame listing ONLY already-emitted issues whose column changed (AC5)", async () => {
+    vi.stubEnv("SOLEUR_KANBAN_ORG", "acme");
+    vi.stubEnv("SOLEUR_KANBAN_PROJECT_NUMBER", "2");
+    let resolveMap!: (m: Map<number, string>) => void;
+    fetchBoardStatusMap.mockImplementation(
+      () => new Promise<Map<number, string>>((r) => (resolveMap = r)),
+    );
+    const early = rawIssue({ number: 1, labels: ["domain/engineering"] }); // label → backlog
+    const late = rawIssue({ number: 2, labels: ["domain/engineering"] });
+    listRepoIssues.mockImplementation(
+      async (_id: number, _o: string, _r: string, hooks?: { onBatch?: (items: BoardIssueInput[]) => void }) => {
+        hooks?.onBatch?.([early]); // emitted BEFORE the map lands → backlog
+        resolveMap(new Map([[1, "In review"], [2, "Pending"]]));
+        // A macrotask yield flushes the readBoardStatuses → reconcile microtask
+        // chain, mirroring the real network-await gap between upstream pages.
+        await new Promise((r) => setTimeout(r, 0));
+        hooks?.onBatch?.([late]); // emitted AFTER → carries board status inline
+        return [early, late];
+      },
+    );
+    const events = await streamFor();
+    const types = events.map((e) => e.type);
+    expect(types).toEqual(["meta", "issues", "statuses", "issues", "done"]);
+    const statuses = events.find((e) => e.type === "statuses");
+    // Only the pre-map emission reconciles; the late page needed no override.
+    expect(statuses?.overrides).toEqual([
+      { id: "1", status: "in_review", live: false },
+    ]);
+    const lateFrame = events.filter((e) => e.type === "issues").at(-1);
+    expect(lateFrame?.issues[0].status).toBe("pending");
+  });
+
+  it("emits error then rethrows when the page loop fails mid-feed", async () => {
+    listRepoIssues.mockImplementation(
+      async (_id: number, _o: string, _r: string, hooks?: { onBatch?: (items: BoardIssueInput[]) => void }) => {
+        hooks?.onBatch?.([rawIssue({ number: 1 })]);
+        throw new Error("GitHub API 403");
+      },
+    );
+    const ctx = await resolveBoardReadContext("u1");
+    const { events, emit } = collect();
+    await expect(streamWorkstreamIssues(ctx, emit)).rejects.toThrow(
+      "GitHub API 403",
+    );
+    expect(events.map((e) => e.type)).toEqual(["meta", "issues", "error"]);
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      code: "workstream_query_error",
+    });
   });
 });

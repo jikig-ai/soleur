@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import {
   COLUMNS,
   deriveFilterOptions,
@@ -29,7 +29,12 @@ import {
   type WorkstreamIssue,
   type WorkstreamStatus,
 } from "@/lib/workstream";
-import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { swrKeys } from "@/lib/swr-config";
+import {
+  fetchWorkstreamIssuesFeed,
+  mergeStreamedIssues,
+  type WorkstreamIssuesResponse,
+} from "@/lib/workstream-feed";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Button } from "@/components/ui/button";
@@ -52,11 +57,7 @@ import {
   type PatchIssueBody,
 } from "./workstream-writes";
 
-interface BoardMeta {
-  onKanbanOrg: boolean;
-  projectWritable: boolean;
-}
-type IssuesResponse = { issues: WorkstreamIssue[]; board?: BoardMeta };
+type IssuesResponse = WorkstreamIssuesResponse;
 
 const COLLAPSED_STORAGE_KEY = "workstream:collapsed-columns-v2";
 
@@ -135,9 +136,26 @@ export function WorkstreamBoard() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  const { mutate: scopedMutate } = useSWRConfig();
+  // Progressive feed: the fetcher negotiates `Accept: text/event-stream` and
+  // commits each streamed batch into THIS cache entry as upstream pages land —
+  // columns fill gradually instead of swapping skeleton→full-board in one shot.
+  // The resolved value is the same `{issues, board}` the bulk JSON arm returns,
+  // so the nav badge (jsonFetcher on the same key) and every write reconciler
+  // are untouched.
   const { data, error, mutate, isValidating } = useSWR<IssuesResponse>(
     swrKeys.workstreamIssues(),
-    jsonFetcher,
+    (key) =>
+      fetchWorkstreamIssuesFeed(key, (partial) => {
+        // revalidate: false — the open stream IS the revalidation in flight;
+        // mergeStreamedIssues' upsert preserves optimistic SOLAA-N* temps.
+        void scopedMutate(
+          swrKeys.workstreamIssues(),
+          (cur: IssuesResponse | undefined) =>
+            mergeStreamedIssues(cur, partial),
+          { revalidate: false },
+        );
+      }),
   );
   const issues = data?.issues;
   const board = data?.board;
@@ -620,8 +638,18 @@ export function WorkstreamBoard() {
       <IssueDetailSheet
         open={activeId != null}
         issue={selected}
-        loading={activeId != null && issues == null && !error}
-        notFound={activeId != null && issues != null && selected == null}
+        // A deep-linked issue may arrive on a LATE page of the streamed feed —
+        // stay in `loading` while the feed is open (isValidating), never flash
+        // notFound mid-stream; notFound is honest only once `done` landed.
+        loading={
+          activeId != null &&
+          selected == null &&
+          (issues == null || isValidating) &&
+          !error
+        }
+        notFound={
+          activeId != null && !isValidating && issues != null && selected == null
+        }
         readOnly={readOnly}
         boardPrecedence={boardPrecedence}
         onKanbanOrg={Boolean(board?.onKanbanOrg)}

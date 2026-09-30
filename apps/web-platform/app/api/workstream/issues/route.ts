@@ -8,6 +8,16 @@
 // The accessor returns [] for no connected repo / no installation (honest empty
 // board) and THROWS on a GitHub API failure → 502 (never empty-as-success).
 //
+// GET has two response shapes negotiated by `Accept`:
+//   - `text/event-stream` (the board's streaming fetcher): an SSE feed of delta
+//     frames — meta → issues* (one per upstream REST page) → statuses? →
+//     done|error — so the board fills progressively instead of waiting out the
+//     whole upstream page chain (ADR-113 transport precedent, cf. /api/support).
+//   - anything else (nav badge's jsonFetcher, curl, out-of-tree readers): the
+//     unchanged bulk `{issues, board}` JSON.
+// Resolution degrades run BEFORE the stream is constructed either way, so a
+// 502/401 is always a real status code — never an SSE skeleton.
+//
 // POST creates a real GitHub issue through the shared audited write accessor
 // (ADR-109). owner/repo/installation + initiatorLogin resolve SERVER-SIDE from
 // the active workspace — the request body carries only { title, body?, status? };
@@ -16,7 +26,16 @@
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { getWorkstreamIssues } from "@/server/workstream/get-workstream-issues";
+import {
+  getWorkstreamIssues,
+  resolveBoardReadContext,
+  streamWorkstreamIssues,
+  type BoardReadContext,
+} from "@/server/workstream/get-workstream-issues";
+import {
+  formatWorkstreamSseFrame,
+  type WorkstreamFeedEvent,
+} from "@/lib/workstream-feed";
 import {
   createWorkstreamIssue,
   resolveWorkstreamBoardMeta,
@@ -34,11 +53,24 @@ import {
 
 export const dynamic = "force-dynamic";
 
+// Hard cap on the SSE feed — mirrors SUPPORT_TURN_MAX_MS's backstop role: a
+// wedged upstream or a buffering middlebox must not pin the connection (and
+// its server resources) open indefinitely.
+const WORKSTREAM_FEED_MAX_MS = 90_000;
+
 export async function GET(request: Request) {
   const userId = await verifiedUserId(request);
   if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  // The SSE arm runs the shared resolution preamble BEFORE constructing the
+  // Response so a degrade still answers a real 502 JSON — pre-stream failures
+  // never masquerade as an open stream (empty-vs-throw contract).
+  if ((request.headers.get("accept") ?? "").includes("text/event-stream")) {
+    return streamIssuesFeed(userId);
+  }
+
   try {
     const [issues, board] = await Promise.all([
       getWorkstreamIssues(userId),
@@ -57,6 +89,79 @@ export async function GET(request: Request) {
       { status: 502 },
     );
   }
+}
+
+/** The negotiated progressive feed (delta frames; see lib/workstream-feed). */
+async function streamIssuesFeed(userId: string): Promise<Response> {
+  let ctx: BoardReadContext;
+  try {
+    ctx = await resolveBoardReadContext(userId);
+  } catch (e) {
+    if (!(e instanceof WorkstreamDegradedError)) {
+      Sentry.captureException(e, { tags: { surface: "workstream-issues" } });
+    }
+    return NextResponse.json(
+      { error: "workstream_query_error" },
+      { status: 502 },
+    );
+  }
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const enqueue = (event: WorkstreamFeedEvent): void => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(formatWorkstreamSseFrame(event)));
+        } catch {
+          closed = true;
+        }
+      };
+
+      // Cap backstop: emit an honest terminal frame, then close — the client's
+      // done-absent EOF rule turns this into the loud error path, never a
+      // silently-complete board.
+      const capTimer = setTimeout(() => {
+        enqueue({ type: "error", code: "workstream_feed_timeout" });
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      }, WORKSTREAM_FEED_MAX_MS);
+
+      try {
+        // The accessor emits the terminal `error` frame itself before
+        // rethrowing; the catch here is the route-level Sentry capture (skipped
+        // for WorkstreamDegradedError — already mirrored at its source).
+        await streamWorkstreamIssues(ctx, enqueue);
+      } catch (err) {
+        if (!(err instanceof WorkstreamDegradedError)) {
+          Sentry.captureException(err, {
+            tags: { surface: "workstream-issues" },
+          });
+        }
+      } finally {
+        clearTimeout(capTimer);
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
 }
 
 export async function POST(req: Request) {

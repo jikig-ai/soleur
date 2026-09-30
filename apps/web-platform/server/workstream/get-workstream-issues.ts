@@ -27,14 +27,20 @@
 import {
   githubIssueToWorkstreamIssue,
   WorkstreamDegradedError,
+  type BoardIssueInput,
   type WorkstreamIssue,
 } from "@/lib/workstream";
+import {
+  type WorkstreamFeedEvent,
+  type WorkstreamStatusOverride,
+} from "@/lib/workstream-feed";
 import { getAppSlug } from "@/server/github-app";
 import { readCurrentRepoUrlResult } from "@/server/current-repo-url";
 import { parseConnectedRepo } from "@/server/github-repo-parse";
 import { resolveInstallationId } from "@/server/resolve-installation-id";
 import { resolveEffectiveInstallationId } from "@/server/cc-effective-installation";
 import { fetchBoardStatusMap, listRepoIssues } from "@/server/github-read-tools";
+import { resolveWorkstreamBoardMeta } from "@/server/workstream/mutate-workstream-issue";
 import { reportSilentFallback } from "@/server/observability";
 import { createChildLogger } from "@/server/logger";
 
@@ -92,14 +98,30 @@ async function readBoardStatuses(
   }
 }
 
+/** The resolved read preamble — everything a board read needs before any issue
+ *  bytes can flow. `kind:"empty"` is the honest-empty arm (no repo connected);
+ *  `kind:"ok"` carries the connected repo's coordinates + the bot slug. */
+export type BoardReadContext =
+  | { kind: "empty"; userId: string }
+  | {
+      kind: "ok";
+      userId: string;
+      owner: string;
+      repo: string;
+      installationId: number;
+      botSlug: string | null;
+    };
+
 /**
- * Read the active workspace's connected-repo issues, mapped to the board model.
- * owner/repo + installation derive ONLY from the server-resolved active
- * workspace (ADR-044) — never request input — so there is no cross-tenant read.
+ * Resolve the shared read preamble for BOTH the bulk accessor and the streamed
+ * feed. Throws WorkstreamDegradedError (mirror-precedes-throw, verbatim) on
+ * every degraded path — callers that stream MUST run this BEFORE opening the
+ * response body so a degrade still answers a real status code, not an SSE
+ * skeleton.
  */
-export async function getWorkstreamIssues(
+export async function resolveBoardReadContext(
   userId: string,
-): Promise<WorkstreamIssue[]> {
+): Promise<BoardReadContext> {
   const { url: repoUrl, degraded } = await readCurrentRepoUrlResult(userId);
   if (degraded) {
     // P2: the current repo couldn't be resolved due to a TRANSIENT failure
@@ -120,7 +142,7 @@ export async function getWorkstreamIssues(
     );
   }
   const parsed = parseConnectedRepo(repoUrl);
-  if (!parsed) return []; // honest empty: no repo connected
+  if (!parsed) return { kind: "empty", userId }; // honest empty: no repo connected
 
   const stored = await resolveInstallationId(userId);
   const installationId = await resolveEffectiveInstallationId({
@@ -143,29 +165,58 @@ export async function getWorkstreamIssues(
     );
   }
 
+  // Bot slug for creator attribution (Soleur-bot detection). Degrade-safe: a null
+  // slug renders every author as a plain human (no throw, mirrored to Sentry).
+  const botSlug = await resolveBotSlug();
+
+  return {
+    kind: "ok",
+    userId,
+    owner: parsed.owner,
+    repo: parsed.repo,
+    installationId,
+    botSlug,
+  };
+}
+
+/** Map one board input to a card, applying the Project Status when a map has
+ *  landed (ADR-097 precedence); falls back to label/state derivation. */
+function mapBoardIssue(
+  input: BoardIssueInput,
+  boardMap: Map<number, string> | null | undefined,
+  botSlug: string | null,
+): WorkstreamIssue {
+  return githubIssueToWorkstreamIssue(
+    boardMap ? { ...input, boardStatus: boardMap.get(input.number) } : input,
+    botSlug,
+  );
+}
+
+/**
+ * Read the active workspace's connected-repo issues, mapped to the board model.
+ * owner/repo + installation derive ONLY from the server-resolved active
+ * workspace (ADR-044) — never request input — so there is no cross-tenant read.
+ */
+export async function getWorkstreamIssues(
+  userId: string,
+): Promise<WorkstreamIssue[]> {
+  const ctx = await resolveBoardReadContext(userId);
+  if (ctx.kind === "empty") return [];
+
   // Throws on any GitHub API failure (404/403/5xx) — caller surfaces 502/isError.
-  const raw = await listRepoIssues(installationId, parsed.owner, parsed.repo);
+  const raw = await listRepoIssues(ctx.installationId, ctx.owner, ctx.repo);
 
   // Phase 2 (ADR-097): prefer the canonical Project v2 board Status. Degrade-safe
   // — a null map (unconfigured / not the board org / read failed) leaves each
   // issue to label/state derivation, so the tab never breaks on a board hiccup.
   const boardStatuses = await readBoardStatuses(
-    installationId,
-    parsed.owner,
-    parsed.repo,
+    ctx.installationId,
+    ctx.owner,
+    ctx.repo,
   );
 
-  // Bot slug for creator attribution (Soleur-bot detection). Degrade-safe: a null
-  // slug renders every author as a plain human (no throw, mirrored to Sentry).
-  const botSlug = await resolveBotSlug();
-
   const issues = raw.map((input) =>
-    githubIssueToWorkstreamIssue(
-      boardStatuses
-        ? { ...input, boardStatus: boardStatuses.get(input.number) }
-        : input,
-      botSlug,
-    ),
+    mapBoardIssue(input, boardStatuses, ctx.botSlug),
   );
 
   // Liveness signal (NET-NEW — this function had no success-path log). Cosmetic
@@ -182,4 +233,106 @@ export async function getWorkstreamIssues(
   );
 
   return issues;
+}
+
+/**
+ * Progressive variant of the board read for the SSE arm: emits one `issues`
+ * frame per upstream REST page as it resolves (delta with upsert-by-id on the
+ * client — never a cumulative snapshot), so the first cards paint after ~1
+ * upstream page instead of the whole 23+10-call chain.
+ *
+ * The Project v2 Status read runs in PARALLEL — gating the feed behind its up
+ * to-10 sequential GraphQL pages would reproduce the stall for exactly the org
+ * where board precedence applies. When the map lands mid-feed, ONE `statuses`
+ * frame reconciles only the already-emitted issues whose column/`live` changed;
+ * pages emitted after it lands carry the board status inline. A null map
+ * (unconfigured / read degraded) reconciles nothing — label derivation stands.
+ *
+ * Failure semantics: `ctx` is PRE-resolved by the caller so resolution degrades
+ * still answer real status codes; a throw inside the page loop emits `error`
+ * then rethrows for the route's Sentry capture.
+ */
+export async function streamWorkstreamIssues(
+  ctx: BoardReadContext,
+  emit: (event: WorkstreamFeedEvent) => void,
+): Promise<void> {
+  const startedAt = Date.now();
+  let frames = 0;
+  let issueCount = 0;
+  const send = (event: WorkstreamFeedEvent) => {
+    frames += 1;
+    emit(event);
+  };
+  // Stream-summary liveness signal — perception-path metric riding the same
+  // pino → Better Stack channel as the bulk "workstream board read" log.
+  const logSummary = (openTruncated: boolean) =>
+    log.info(
+      { frames, issueCount, durationMs: Date.now() - startedAt, openTruncated },
+      "workstream feed streamed",
+    );
+
+  const board = await resolveWorkstreamBoardMeta(ctx.userId);
+  send({ type: "meta", board });
+  if (ctx.kind === "empty") {
+    send({ type: "done", openTruncated: false });
+    logSummary(false);
+    return;
+  }
+
+  let openTruncated = false;
+  // Inputs emitted while the board map was still pending — the reconcile set.
+  const emittedPreMap: BoardIssueInput[] = [];
+  let boardMap: Map<number, string> | null | undefined;
+  try {
+    const boardPromise = readBoardStatuses(
+      ctx.installationId,
+      ctx.owner,
+      ctx.repo,
+    ).then((m) => {
+      boardMap = m;
+      if (!m) return; // degraded/unconfigured — label derivation stands
+      const overrides: WorkstreamStatusOverride[] = [];
+      for (const input of emittedPreMap) {
+        const prev = mapBoardIssue(input, null, ctx.botSlug);
+        const next = mapBoardIssue(input, m, ctx.botSlug);
+        if (
+          next.status !== prev.status ||
+          Boolean(next.live) !== Boolean(prev.live)
+        ) {
+          overrides.push({
+            id: next.id,
+            status: next.status,
+            live: Boolean(next.live),
+          });
+        }
+      }
+      if (overrides.length > 0) send({ type: "statuses", overrides });
+    });
+
+    await listRepoIssues(ctx.installationId, ctx.owner, ctx.repo, {
+      onBatch: (items) => {
+        const mapLanded = boardMap !== undefined;
+        const issues = items.map((input) =>
+          mapBoardIssue(input, mapLanded ? boardMap : null, ctx.botSlug),
+        );
+        if (issues.length === 0) return; // all-PR page — nothing to emit
+        send({ type: "issues", issues });
+        issueCount += issues.length;
+        if (!mapLanded) emittedPreMap.push(...items);
+      },
+      onOpenTruncated: () => {
+        openTruncated = true;
+      },
+    });
+
+    // Flushes the reconcile when the map lands after the last page (every
+    // emitted input was pre-map) — statuses precede done by construction.
+    await boardPromise;
+    send({ type: "done", openTruncated });
+  } catch (err) {
+    send({ type: "error", code: "workstream_query_error" });
+    throw err;
+  }
+
+  logSummary(openTruncated);
 }
