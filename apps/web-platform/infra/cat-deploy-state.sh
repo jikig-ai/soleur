@@ -673,6 +673,49 @@ fi
 # read both so `inactive` alone is never re-read as a deploy failure (#4896).
 HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
+# #7308 — inngest_server_version: the INSTALLED inngest binary's self-reported
+# version, so /hooks/deploy-status answers "which binary is live on this host"
+# by measurement, not by bootstrap-pin inference. Two deliberate non-features,
+# both measured dead on production before this shipped lean:
+#   1. No /proc/<MainPID>/exe resolution — inngest-server's ExecStart is
+#      `doppler run -- bash -c '… exec /usr/local/bin/inngest start …'`, so the
+#      unit's MainPID is the doppler wrapper (doppler forks; exec happens in its
+#      child), and same-UID non-descendant exe readlinks are denied under
+#      kernel.yama.ptrace_scope=1 anyway.
+#   2. No ExecStart path= parse — the structured token is /usr/bin/doppler, and
+#      `doppler version` is not a registered subcommand, so that leg could only
+#      emit "" or (worse, if the CLI ever grows one) doppler's own version.
+# The installed binary is the honest measured object: the bootstrap pins it by
+# version+sha256 and prod host changes ride the immutable-redeploy rule, so
+# installed≈running outside a seconds-wide replace window.
+# Sentinel contract (HOST_ID/CI_DEPLOY_SHA256): ABSENT field = old script;
+# failure states emit the discriminating tokens below, never a bare "".
+# `inngest version` prints a bare token (e.g. `1.45.1-abc1234` — no `v` prefix);
+# output is sanitized to the version charset and byte-capped before it enters
+# the response body.
+_isv_bin() {
+  # $1 = candidate binary path; emits its sanitized `version` token or nothing.
+  # MUST return 0 unconditionally: the result is captured in $() assignments
+  # under `set -e` — a nonzero last-command status would abort the whole hook.
+  local out
+  [[ -n "${1:-}" && -f "$1" && -x "$1" ]] || return 0
+  out="$(timeout -k 1 5 "$1" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[-0-9A-Za-z.]*' | head -1 | head -c 64 || true)"
+  if [[ -n "$out" ]]; then printf '%s' "$out"; fi
+}
+# Discriminating sentinels (the inngest_redis_binary convention, not bare ""):
+# `absent` (no binary), `unknown-no-timeout`, `version-unreadable` (ran but no
+# token). ABSENT key = old script.
+# INNGEST_SERVER_BIN exists for the test harness only — production never sets it.
+_isv="${INNGEST_SERVER_BIN:-/usr/local/bin/inngest}"
+if ! command -v timeout >/dev/null 2>&1; then
+  INNGEST_SERVER_VERSION="unknown-no-timeout"
+elif [[ ! -f "$_isv" || ! -x "$_isv" ]]; then
+  INNGEST_SERVER_VERSION="absent"
+else
+  INNGEST_SERVER_VERSION="$(_isv_bin "$_isv")"
+  [[ -n "$INNGEST_SERVER_VERSION" ]] || INNGEST_SERVER_VERSION="version-unreadable"
+fi
+readonly INNGEST_SERVER_VERSION
 VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
 # #5159 follow-up 2: surface the inngest-server's OWN journal tail (its
@@ -705,6 +748,7 @@ jq -nc \
   --arg hbd "$HEARTBEAT_DARK_ARM" \
   --arg hbt "$HEARTBEAT_TIMER_STATUS" \
   --arg is "$INNGEST_SERVER_STATUS" \
+  --arg isv "$INNGEST_SERVER_VERSION" \
   --arg vs "$VECTOR_STATUS" \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
   --arg ij "$INNGEST_JOURNAL_TAIL" \
@@ -732,6 +776,7 @@ jq -nc \
     inngest_heartbeat_dark_arm: $hbd,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
+    inngest_server_version: $isv,
     vector: $vs,
     vector_journal_tail: $vj,
     inngest_journal_tail: $ij,
