@@ -673,3 +673,23 @@ asset P6 would refuse. The same `--check-asset` runs on rule-audit's cron. There
 replaced asset is named as a latent outage before the next replace, not at it. `zot-image-*` releases
 are never deleted, and a deleted one cannot be re-created under its tag (immutable releases). Recovery
 is workflow-only: `runbooks/registry-host-replace-dispatch.md` § "zot boot image (#8714)".
+
+## Amendment 2026-09-30 — cosign verification enforces by default (#6129); this decision is re-signed
+
+§"The `IMAGE_VERIFY_MODE=warn` dependency" said a flip to `enforce` needs this decision re-signed.
+The flip happened: `ci-deploy.sh` now defaults to `IMAGE_VERIFY_MODE=enforce`. The operator
+authorized it on 2026-09-30, after accepting the #6122 zot soak verdict (#6122 closed as completed).
+
+The decision stands unchanged, because it never relied on the tolerance. The restore has no
+unsigned arm. It copies each image's `sha256-<hex>` signature tag and fails if the tag can't be
+read back. A copied Sigstore v0.3 bundle binds to the digest, so it verifies unchanged at a zot ref.
+
+What changes is the failure mode, **for the web-platform image**, which is the only image
+`ci-deploy.sh` verifies. Before, a restored app image whose signature did not verify was deployed
+with a warning. Now it fails verification: the deploy keeps the old container running and emits
+`IMAGE_VERIFY_FAIL` plus the `cosign_verify_event` Sentry event. That turns the path
+§"Named residuals" worried about (an app image altered on GHCR, then restored) from a warning into
+a refusal. The restored inngest bootstrap image is not covered. Nothing verifies its signature; its
+boot pins a digest instead (see `cloud-init-inngest.yml`, #6617 / #7410, and the ADR-096 amendment
+of the same date). The cost is availability: a restore that loses a signature blocks releases until it is
+re-copied. It no longer runs unverified bits.

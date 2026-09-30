@@ -79,13 +79,14 @@ else
 fi
 
 # ── AC1 (B): cosign ENFORCE is not on the fresh-boot path (documentation guard) ──
-# The default is warn; no repo site sets enforce outside a test; cosign verify is
-# absent from cloud-init. (A regression that wired enforce into cloud-init would
+# Since #6129 ci-deploy.sh defaults to enforce: a failed verify keeps the OLD container live on a
+# running host. The fresh-boot path must stay free of cosign verify, because there is no old
+# container to fall back to there. (A regression that wired enforce into cloud-init would
 # reintroduce the exact silent-abort class this PR investigates.)
-if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DIR/ci-deploy.sh"; then
-  ok "AC1: IMAGE_VERIFY_MODE default is warn (cosign ENFORCE not live)"
+if grep -qE 'IMAGE_VERIFY_MODE:-enforce' "$DIR/ci-deploy.sh"; then
+  ok "AC1: IMAGE_VERIFY_MODE default is enforce in ci-deploy.sh only (#6129)"
 else
-  no "AC1: expected IMAGE_VERIFY_MODE:-warn default in ci-deploy.sh"
+  no "AC1: expected IMAGE_VERIFY_MODE:-enforce default in ci-deploy.sh (#6129)"
 fi
 # #6122: match a cosign INVOCATION, not the word in a comment. cloud-init.yml's
 # daemon.json block documents "cosign digest-pinning is the integrity guard, not TLS"
