@@ -15,6 +15,38 @@ lane: cross-domain
 
 # Evict the soleur-ai runtime App key from branch-reachable Doppler `prd` (#8609, ADR-241 R1)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30
+**Sections enhanced:** 14 (Architecture, Phases 0/2/3/4/5, Operator Sequence, Non-Goals,
+Observability, Guard Contract, IaC apply path, Downtime & Cutover (new), Acceptance Criteria,
+Risks, Test Scenarios)
+**Agents used:** security-sentinel, deployment-verification-agent, observability-coverage-reviewer,
+user-impact-reviewer, test-design-reviewer, a verify-the-negative/citation pass, institutional
+learnings; earlier in planning: repo-research-analyst, learnings-researcher, functional-discovery,
+CTO (fork + devex), CLO, CPO, advisor consult, DHH, Kieran, code-simplicity, architecture-strategist,
+spec-flow-analyzer.
+
+### Key improvements
+
+1. **The key is handed only to signed images.** A branch could otherwise ship its own image through
+   the branch-readable deploy channel and receive the key; the overlay now requires a `@sha256:`
+   `$VERIFIED_REF` from the pinned release identity.
+2. **R1 is gated on `DOPPLER_TOKEN_TF` leaving branch reach** (#8209 O10 + O13), and the old key is
+   parked where the host cannot read it.
+3. **The canary proves GitHub accepts the key** (`GET /app`, slug and id) before promotion, with a
+   probe contract that cannot false-reject on clock skew or rate limits.
+4. **web-2 is observable without SSH** (per-outcome boot stages + alert rules) and its SSH host key is
+   re-pinned (R5b) before `prd` loses the key.
+5. **Guards rebuilt from the design:** 16 census rows, 25 overlay/canary rows, 4 loader rows.
+
+### New considerations discovered
+
+- The branch-reachable deploy channel exposes every `prd` secret, not only this key (#6129).
+- The single-line carrier makes rollback SSH-free; a separate file would not.
+- The locked hcloud provider (1.63.0) stores `user_data` as a hash — the state-residency argument
+  rests on that version, and G6l pins it.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -29,8 +61,8 @@ installations (two belong to third-party users) and holds `administration:write`
 **The mechanism (CTO-ratified, see Domain Review):**
 
 1. **Move the key out of the `soleur` project.** A new Doppler **project**, `soleur-github-app`
-   (config `prd`), holds `GITHUB_APP_PRIVATE_KEY` (plus, from R0 to R7 only, the parked old key
-   `GITHUB_APP_PRIVATE_KEY_RETIRED` used for the final `401` probe). No `prd` or `prd_*` reader can
+   (config `prd`), holds `GITHUB_APP_PRIVATE_KEY` (plus, from R0 to R7 only and in a branch config the host
+   cannot read, the parked old key `GITHUB_APP_PRIVATE_KEY_RETIRED` used for the final `401` probe). No `prd` or `prd_*` reader can
    see it, whatever branch config is added later.
 2. **Rotate at the same time.** A **new** App key is generated straight into that project and never
    touches `prd`. The old key — every copy of which was branch-reachable, and which Doppler keeps in
@@ -236,7 +268,8 @@ Doppler soleur/prd  (root)                     Doppler soleur/prd  (root)
      reader, any branch
                                                Doppler soleur-github-app/prd  (NEW PROJECT)
                                                  GITHUB_APP_PRIVATE_KEY           (NEW key, rotated)
-                                                 GITHUB_APP_PRIVATE_KEY_RETIRED   (old key, R0 -> R7 only)
+                                                 (branch config prd_retired: GITHUB_APP_PRIVATE_KEY_RETIRED,
+                                                  the old key, R0 -> R7 only; invisible to the host token)
                                                     ^ read-only service token "web-host-github-app-read"
                                                Doppler soleur-infra-privileged/prd (Tier B)
                                                  GITHUB_APP_RUNTIME_DOPPLER_TOKEN
@@ -286,7 +319,11 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
     not the value. `terraform_data.deploy_pipeline_fix.triggers_replace` is a `sha256`. So the token
     never reaches Tier-A-readable state through either path. Re-check the lockfile version at work
     time; a provider bump that drops the hashing invalidates this design.
-0.4 **Canary network path.** Confirm the canary container can reach `api.github.com` (the app already
+0.4 **Signature-verify health.** Read the image-verify verdicts of the recent releases (deploy state
+    and the `cosign_verify_event` Sentry events): if any `main` release fell back to a tag in warn
+    mode, fix that first — after R6 an unverified image gets no key and the canary refuses it, so a
+    flaky verify path would block releases.
+0.5 **Canary network path.** Confirm the canary container can reach `api.github.com` (the app already
     calls it; confirm the canary is not on a narrower egress rule) — `apps/web-platform/infra/cron-egress-allowlist.txt`
     and the canary `docker run` flags in `ci-deploy.sh`.
 
@@ -326,43 +363,96 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
     passes the variable into the `templatefile()` call of `local.webhook_doppler_token_env`. Nothing
     else in the delivery chain changes: the rendered file already feeds cloud-init (fresh hosts), the
     `deploy_pipeline_fix` trigger hash and `SOLEUR_DOPPLER_TOKEN_B64` (web-1), and the installer
-    already admits `/etc/default/soleur-doppler-token`. **Do not edit `infra-config-apply.sh`,
-    `infra-config-install.sh` or `hooks.json.tmpl`**: any of them re-fires
+    already admits `/etc/default/soleur-doppler-token` (`infra-config-install.sh` dest map; its
+    `/etc/default/*` shape gate accepts any `KEY=VALUE` line). **Do not edit any input of
+    `terraform_data.infra_config_handler_bootstrap`** — `infra-config-apply.sh`,
+    `infra-config-install.sh`, `deploy-inngest-bootstrap.sudoers`, `cat-infra-config-state.sh`,
+    `hooks.json.tmpl`: any of them re-fires
     `terraform_data.infra_config_handler_bootstrap`'s root remote-exec on web-1 at merge, and the
     single-line carrier needs none of them.
-2.5 `server.tf` `terraform_data.deploy_pipeline_fix`: add a `precondition` — the variable is empty
-    **or** matches `^dp\.st\.[A-Za-z0-9._-]{20,}$`; the error message never contains the value.
-    Rollback is SSH-free by construction: an empty variable plus a re-push re-renders the file
-    without the line.
+2.5 **Shape gate on the render, not on one consumer.** The same render feeds fresh-host cloud-init
+    and the `deploy_pipeline_fix` push, so the check is a local
+    (`local.github_app_token_shape_ok = nonsensitive(can(regex(...)))`, the `doppler_token_shape_ok`
+    precedent in `server.tf`) consumed by a `precondition` on **both** `terraform_data.deploy_pipeline_fix`
+    and `hcloud_server.web`: the variable is empty **or** matches `^dp\.st\.[A-Za-z0-9._-]{20,}$`
+    (no newline — the Tier-B value is written with `tr -d '\n'`, R2); the error message never
+    contains the value. Census row G6c must admit this exact `nonsensitive(can(regex(...)))` form.
+    A committed `local.github_app_key_isolated` (default `false`) adds "and non-empty" to the gate;
+    **PR-B flips it to `true`**, after which no Tier-A plan, operator-local apply or host create can
+    render a keyless credential file (deployment + user-impact + spec-flow reviews). Rollback before
+    PR-B stays SSH-free: an empty variable plus a re-push re-renders the file without the line.
 2.6 `.github/actions/infra-credentials/action.yml`: **always export**
-    `TF_VAR_github_app_runtime_doppler_token` into `$GITHUB_ENV` (empty when the Tier-B project has no
-    such key), so the `prd_terraform` legacy arm — writable by `DOPPLER_TOKEN_WRITE` until #8209 O11 —
-    can never supply it under `--preserve-env` (architecture review P1-2). Census row G6f.
+    `TF_VAR_github_app_runtime_doppler_token` into `$GITHUB_ENV`, so the `prd_terraform` legacy arm —
+    writable by `DOPPLER_TOKEN_WRITE` until #8209 O11 — can never supply it under `--preserve-env`
+    (architecture review P1-2). The real value goes only to jobs that opt in through a new loader
+    input (`github-app-runtime-token: true` — the `apply-deploy-pipeline-fix.yml` apply job and the
+    `web-host-create`/`web-host-replace` jobs); every other Tier-B job gets `""`, which narrows the
+    token's reach from all seven Tier-B workflows to the two that deliver it (security review P2-5).
+    Pin the loader's Doppler CLI version (it installs `latest` today) so `--preserve-env` semantics
+    cannot drift. Guard 8.
 2.7 `terraform_data.deploy_pipeline_fix_web2`: **unchanged** (web-2's credentials stay
     birth-frozen, #7103-B4; web-2 gets the line only through R5's replace).
+2.8 In the same `.tf` file, a branch config `prd_retired` of `soleur-github-app` (provider resource
+    `doppler_branch_config`; confirm the name against the pinned DopplerHQ provider) — the parking
+    place for the old key between R0 and R7. The host's read token is scoped to the `prd` root
+    config and cannot read a branch config, so the parked key never reaches the host (security
+    review P2-1).
+2.9 `apps/web-platform/infra/sentry/issue-alerts.tf` + `alert-reference.json`: one `sentry_alert`
+    on the non-ok `github_app_key_*` boot stages (or those stages added to
+    `web_terminal_boot_fatal`), and one on `feature=ci-deploy op=github-app-key`. `soleur-boot-emit`
+    sends every stage under one message, so without a stage-filtered rule the new events land in an
+    always-open issue and page nobody (observability review P1-1).
 
 #### Phase 3 — Host: overlay, key-source record, canary probe
 
 3.1 `apps/web-platform/infra/ci-deploy.sh`: add `GITHUB_APP_DOPPLER_TOKEN` to the key allowlist of
     the existing guarded `while IFS='=' read` loop over `/etc/default/soleur-doppler-token`. Read it
-    into a local variable; **do not export it** (the container must never see it).
+    into a local variable; **do not add it to the `export DOPPLER_TOKEN SENTRY_…` line** that follows
+    the loop (the container and child processes must never see it).
 3.2 **Overlay in the parent shell.** `ENV_FILE=$(resolve_env_file)` runs in a subshell, so nothing it
     sets reaches the caller (Kieran P0-2). Add `overlay_github_app_key "$ENV_FILE"`, called by the
-    parent right after that line:
-    - **Token present:** `DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" doppler secrets download
-      --no-file --format docker --project soleur-github-app --config prd`, keep **only** lines
-      matching `^GITHUB_APP_PRIVATE_KEY=` (anchored, so `GITHUB_APP_PRIVATE_KEY_RETIRED=` never
-      passes), drop every `^GITHUB_APP_PRIVATE_KEY=` line from the `prd` output, append the isolated
-      one. Isolated wins by construction. `GITHUB_APP_KEY_SOURCE=isolated`.
-    - **Token present, fetch fails or yields no key line:** keep what `prd` supplied,
-      `GITHUB_APP_KEY_SOURCE=prd`, and emit a Sentry **error** with `reason=fetch_failed`. Not
-      fatal here: before R6 the `prd` key is still valid, so this degrades to today and is loud;
-      after R6 `prd` has no key and the next check refuses. One rule, both states.
-    - **Token absent:** keep the `prd` value, `GITHUB_APP_KEY_SOURCE=prd`, log it (no Sentry: it is
-      the expected pre-R3 state, not a fallback — spec-flow P2-11).
-    - The source value is written to deploy state (`cat-deploy-state.sh` prints
-      `github_app_key_source=`). No fingerprint is computed on the host (review cut: `source=isolated`
-      already proves the R1 key, which is the only key the project ever holds under that name).
+    parent right after that line, in this order:
+    1. **Runtime-hijack denylist (security review P1-a).** Refuse (`github_app_key_env_hijack`) if the
+       `prd` output carries any of `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`,
+       `NODE_TLS_REJECT_UNAUTHORIZED`, `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` (either case),
+       `LD_PRELOAD`, `SSL_CERT_FILE`, `SSL_CERT_DIR`. Measured 2026-09-30: `soleur/prd` holds 0 of
+       these among its 132 names (names only), so the refusal breaks nothing today; it stops a `prd`
+       writer from turning the key's own process into an exfiltration channel.
+    2. **Signed image only (security review P0).** The key is handed only to an image whose cosign
+       signature verified — against the pinned `COSIGN_IDENTITY_REGEXP`
+       (`reusable-release.yml@refs/heads/main|refs/tags/v…`) — for the **exact digest** being run,
+       whatever the global `IMAGE_VERIFY_MODE` (still `warn`, #6129). The existing contract makes
+       this cheap: `verify_image_signature` echoes the verified `repo@sha256:…` digest on success
+       and the bare tag on a warn-mode fail-open, and the local-cache reuse arm sets a digest ref
+       too, so the overlay's condition is "`$VERIFIED_REF` is a `@sha256:` ref and is the ref the
+       canary and the swap run". The deploy webhook secret and
+       the registry push credentials are branch-readable today, so without this a branch could ship
+       its own image and receive the key. Unverified digest → no isolated fetch,
+       `github_app_key_fetch=unverified_image`, Sentry error; after R6 the canary then refuses
+       (`github_app_key_missing`). Key-scoped enforcement, independent of the #6129 flip.
+    3. **Token present:** `DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" doppler secrets download
+       --no-file --format docker --project soleur-github-app --config prd`, keep **only** lines
+       matching `^GITHUB_APP_PRIVATE_KEY=` (anchored), drop **every** `^GITHUB_APP_PRIVATE_KEY=` line
+       from the `prd` output, append the isolated one. Isolated wins by construction. The download
+       is held in a shell variable and merged into `$ENV_FILE` in place — **no new temp file**, so the
+       existing cleanup trap over `$ENV_FILE` still covers every secret byte (learning
+       `security-issues/canary-crash-leaks-env-file-ci-deploy-20260406.md`).
+       `github_app_key_source=isolated`, `github_app_key_fetch=ok`.
+    4. **Token present, fetch fails or yields no key line:** keep what `prd` supplied,
+       `github_app_key_source=prd`, `github_app_key_fetch=failed`, and emit a Sentry **error**
+       (`op=github-app-key`, a classification and a length only — never Doppler stderr, which the
+       ci-deploy curl emitter does not redact). Not fatal here: before R6 the `prd` key is still
+       valid, so this degrades to today and is loud; after R6 `prd` has no key and the canary
+       refuses. One rule, both states.
+    5. **Token absent:** keep the `prd` value, `github_app_key_source=prd`,
+       `github_app_key_fetch=no_token`, log it (no Sentry: the expected pre-R3 state).
+    - The overlay calls `github_app_key_emit <classification>`, a function **each file defines for
+      itself** (ci-deploy's curl emitter; the boot path's `soleur-boot-emit`), so the shared block
+      never fails silently or aborts under `set -e` on the boot side (observability review P1-3).
+    - Deploy state gains `github_app_key_source`, `github_app_key_fetch` and `github_app_key_probe`;
+      `cat-deploy-state.sh` prints them. The release workflow's deploy-status reader raises
+      `::warning::` when `github_app_key_fetch` is not `ok` or `no_token`, so a pre-R6 fetch failure
+      is visible in the run, not only asynchronously. No fingerprint is computed on the host.
 3.3 **Key check before the swap, in the canary stage.** Two layers, both before promotion, both
     leaving the running container serving on failure:
     - **Presence (no network):** the env-file holds exactly one `^GITHUB_APP_PRIVATE_KEY=` line and
@@ -371,40 +461,53 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
       /app/scripts/github-app-key-probe.mjs` — a new standalone script (`node:crypto` RS256 +
       `fetch`, no app imports), copied into the image exactly as `scripts/sandbox-canary.mjs` is
       (`apps/web-platform/Dockerfile`, the `COPY --from=builder /app/scripts/sandbox-canary.mjs`
-      line) and run the way `ci-deploy.sh` already runs that canary. It signs an App JWT with the
-      canary's own `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`, applying the same `\n` unescape as
-      `server/github/app-private-key.ts` `normalizeAppPrivateKey()` (a parity test pins the two), and
-      calls `GET /app`. `200` with
-      `slug == "soleur-ai"` passes; `401`/`403`/`404` or any other slug fails with
-      `CANARY_FAIL_REASON=github_app_key_rejected`; a transport error or `5xx` emits a Sentry warning
-      and passes (a GitHub outage must not block deploys). Script absent (an image older than PR-A)
-      → skip with a log line. This catches a wrong-but-valid PEM (the dev key, the `prd_terraform`
-      key, a planted token's key) that a shape check would wave through (spec-flow P0-1,
-      architecture P1-2, Kieran P1-7).
+      line) and run the way `ci-deploy.sh` already runs that canary. Contract (security review
+      P2-4): JWT `iat = now - 60`, `exp = now + 300` (never GitHub's 600 s ceiling, which 401s
+      intermittently under clock skew — learning
+      `bug-fixes/2026-05-28-github-app-jwt-exp-at-600s-ceiling-causes-intermittent-401.md`),
+      `iss = String(GITHUB_APP_ID)`, base64url without padding; the `\n` unescape of
+      `server/github/app-private-key.ts` `normalizeAppPrivateKey()` (a parity test pins the two);
+      a hard-coded `https://api.github.com/app` with no proxy and `AbortSignal.timeout(10_000)`; the
+      key is read from the container's own env, never passed with `docker exec -e`. It prints
+      **exactly one** line from a fixed enum — `github_app_key_probe=ok|rejected|transport` — and never
+      the JWT, headers, body or stderr; `ci-deploy.sh` parses it with an anchored regex.
+      Verdicts: `200` with `slug == "soleur-ai"` **and** `id == GITHUB_APP_ID` → `ok`; `401`, `404`,
+      a `403` without rate-limit headers, or any other slug/id → `rejected` →
+      `CANARY_FAIL_REASON=github_app_key_rejected`; a transport error, timeout, `5xx`, `429`, or a
+      `403` carrying rate-limit headers → `transport` → Sentry warning and promote (a GitHub outage
+      or secondary rate limit must not block a hotfix deploy — user-impact review F4). Exit code
+      127 (script absent, an image older than PR-A) → skip with a log line; any other non-zero with
+      no verdict line → `rejected`.
     - Register the probe in `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`
       per its "Adding a new probe" section.
 3.4 **Boot path** (`apps/web-platform/infra/soleur-host-bootstrap.sh` `soleur-doppler-download`, used
     by `cloud-init.yml` before the first `docker run`): the same overlay as a **byte-identical block
-    between sentinel markers** in both files (CTO devex review: byte equality, not a fuzzy
-    normalised comparison), pinned by Guard 7 row 7.6. After `docker run`, run the same probe via
-    `docker exec soleur-web-platform` and emit its verdict and `github_app_key_source` with the host
-    name through the existing `soleur-boot-emit` channel (Sentry + Better Stack) — this is how R5/R7
-    read web-2 without SSH (spec-flow P0-2). A rejected key at boot emits at `fatal`.
+    between sentinel markers** in both files (CTO devex review), pinned by Guard 7 rows 7.6–7.6c.
+    After `docker run`, run the same probe via `docker exec soleur-web-platform` and emit one
+    `soleur-boot-emit` stage per outcome — `github_app_key_ok`, `_rejected`, `_missing`,
+    `_transport`, `_probe_absent`, `_exec_failed` — with
+    `source=<isolated|prd> fetch=<ok|failed|no_token|unverified_image> probe=<verdict>` written to
+    `/run/soleur-stage-detail.d/<stage>` (the emitter's sanitized, ≤ 180-byte detail channel), plus a
+    `logger -t` line under an allowlisted tag so Better Stack also carries it (`soleur-boot-emit`
+    itself posts to Sentry only). This is how R5/R7 read web-2 without SSH:
+    `scripts/sentry-issue.sh --host-events web-2 --stage github_app_key_ok` — a missing `ok` event
+    counts as a fail, because the emitter exits silently on an empty DSN.
     Two copies rather than one shared file: `soleur-host-bootstrap.sh` is baked into the image and
     hash-checked via `local.host_scripts_content_hash`, while `ci-deploy.sh` is pushed through the
     FILE_MAP; a shared file would need both channels plus `DEPLOY_PIPELINE_FIX_TRIGGERS`.
 3.5 New `apps/web-platform/scripts/github-app-key-status.sh` (≤ 30 lines, discoverability): signs a
     GET to `/hooks/deploy-status` the way `scripts/inngest-host-state.sh` does and prints only the
-    `github_app_key_source=` line.
+    `github_app_key_source=`, `github_app_key_fetch=` and `github_app_key_probe=` lines.
 
 #### Phase 4 — Records (PR-A)
 
 4.1 **ADR-241** via `soleur:architecture`: ADR-241 has **no** `## Amendment log` yet — create it with a
     dated 2026-09-30 (#8609) entry. Add **D10 — the runtime App key lives in `soleur-github-app`**
     (mechanism; rotation on the move; A11's "immutable redeploy" superseded for web-1 by the
-    Terraform-declared credential push until #6730 closes; residuals: host/container/unit-env and
-    Hetzner-metadata exposure, the loader exporting the token to every Tier-B job,
-    `DOPPLER_TOKEN_TF` and workplace admins). Add a **D10 row to the Statuses table**
+    Terraform-declared credential push until #6730 closes; the key is handed only to signed images;
+    residuals: host/container/unit-env and Hetzner-metadata exposure for hosts born after R2, the
+    branch-reachable deploy channel for every other `prd` secret (#6129), the two opt-in Tier-B
+    jobs that carry the token, `DOPPLER_TOKEN_TF` and workplace admins). Add a **D10 row to the Statuses table**
     (`adopting` → `accepted` when R7/R8 pass). D9 R1 → "CLOSING — mechanism merged; closes when the
     old key's JWT gets `401`, the App lists exactly one key, and the project lists exactly one
     token after #8209 O13". New D9 row **R8** (webhook/client secrets). Annotate A11 "superseded by
@@ -451,14 +554,17 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
 5.1 ADR-241: D2 → `accepted` and D10 → `accepted` in the Statuses table, the PR body stating why (R1
     closed with the measured probes; R7 closed at O5b); R1 → "CLOSED <date>"; frontmatter `status:`
     recomputed as the least-advanced decision; a dated Amendment-log entry.
-5.2 ADR-220: a dated Amendment-log entry recording that the #8209 limb of D2–D3 is satisfied (the row
-    still waits on #7226/ADR-237 and #8211).
+5.2 ADR-220: a dated Amendment-log entry recording that the #8209 limb of D2–D3 is satisfied. Re-read
+    the row's other limbs at PR-B time rather than restating them: #7226 is already CLOSED (ADR-237's
+    status decides that limb) and #8211 is open.
 5.3 Runbook, `compliance-posture.md` (R1 CLOSED on the old-key deletion date), the assessment's
     closure addendum, and the Article-30 register (Cross-Cutting "Secrets management" and PA-12
     §(g)(3)) — all through the CLO agent, append-only on dated records. Sweep `knowledge-base/legal/`
     for the R1 nouns (`runtime key`, `R1`, `#8609`, `GITHUB_APP_PRIVATE_KEY`, `NOMINAL`) so no
     future-tense sentence about the mechanism survives the flip.
-5.4 `Closes #8609` in the PR body (not the title).
+5.4 `server.tf`: flip `local.github_app_key_isolated = true`, so the shape gate also refuses an empty
+    token — no plan, local apply or host create can render a keyless credential file from here on.
+5.5 `Closes #8609` in the PR body (not the title).
 
 ### Operator Sequence (R0–R8) — the canonical copy moves to the runbook in PR-A
 
@@ -475,16 +581,18 @@ R0 may run before the gate.
 <!-- lint-infra-ignore start: GitHub exposes no API to list, generate or delete an App private key; these rows name the one gated page action each and automate everything around it -->
 | Step | What | Mechanism | Verification (pass condition) | Rollback |
 |---|---|---|---|---|
-| R0 | **Key inventory (K0) and park the old key.** Read every private-key row on the App settings page (fingerprint, added date). Pipe `soleur/prd` `GITHUB_APP_PRIVATE_KEY` straight into `doppler secrets set GITHUB_APP_PRIVATE_KEY_RETIRED -p soleur-github-app -c prd --silent >/dev/null` (no file on disk). Compute the DER-SHA-256 fingerprints of the `prd` and `prd_terraform` values in memory | Playwright read of the App page; Doppler CLI; `openssl pkey -pubout -outform DER \| openssl dgst -sha256 -binary \| base64` | Every row maps to a holder. **Stop** if the `prd` and `prd_terraform` fingerprints are equal (the two configs would not hold distinct keys) or if a row is unmapped (breach triage) | delete the parked name |
+| R0 | **Key inventory (K0) and park the old key.** Read every private-key row on the App settings page (fingerprint, added date) and record R0's installation-id set from `GET /app/installations`. Pipe `soleur/prd` `GITHUB_APP_PRIVATE_KEY` straight into `doppler secrets set GITHUB_APP_PRIVATE_KEY_RETIRED -p soleur-github-app -c prd_retired --silent >/dev/null` (no file on disk; the host's `prd`-scoped token cannot read `prd_retired`). Compute the DER-SHA-256 fingerprints of the `prd` and `prd_terraform` values in memory | Playwright read of the App page; Doppler CLI; `openssl pkey -pubout -outform DER \| openssl dgst -sha256 -binary \| base64` | Every row maps to a holder. **Stop** if the `prd` and `prd_terraform` fingerprints are equal, or a row is unmapped (breach triage) | delete the parked name |
 | R0b | **Evidence limbs K1–K3 (CLO, read-only).** Non-`main` run census naming a `prd`-reading token (ids/counts only), Doppler access-log retention and entries for `soleur/prd*`, org audit log for `soleur-ai[bot]` admin actions | `gh api` + Doppler CLI activity logs | Recorded in the new assessment; `API-UNAVAILABLE` is INCONCLUSIVE, not clean | n/a |
-| R1 | **New key into the isolated project** (after the gate). Generate a key on the App page (the gated click), then `doppler secrets set GITHUB_APP_PRIVATE_KEY -p soleur-github-app -c prd --silent < "$PEM" >/dev/null`; `shred -u "$PEM"` (an EXIT trap shreds on abort) | Playwright to the click; Doppler CLI | The fingerprint of the value read back from Doppler equals the new row's fingerprint on the App page; a JWT signed with it gets `200` from `GET /app` with `slug=soleur-ai` | delete the new row + the secret |
-| R2 | **Read token into Tier B.** `doppler configs tokens create web-host-github-app-read -p soleur-github-app -c prd --access read --plain \| doppler secrets set GITHUB_APP_RUNTIME_DOPPLER_TOKEN -p soleur-infra-privileged -c prd --silent >/dev/null` | Doppler CLI, piped | With the stored value: the key it reads has R1's fingerprint (prints `equal`), and a read of `soleur/prd` with it is refused (not `200`) | revoke the token; delete the Tier-B name |
-| R3 | **Deliver to web-1.** `gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason=8609-github-app-token` | Tier-B job, `environment: infra-privileged` | Run green; the infra-config state shows `/etc/default/soleur-doppler-token` delivered with a new content hash | set the Tier-B name empty and re-dispatch: the file re-renders without the line (SSH-free) |
-| R4 | **Ship on the new key.** `gh workflow run web-platform-release.yml --ref main -f bump_type=patch` | release → `ci-deploy.sh` | `github-app-key-status.sh` prints `github_app_key_source=isolated`; the canary probe passed (deploy state); `cron/github-app-drift-guard.manual-trigger` via `soleur:trigger-cron` clean; `cron/oauth-probe.manual-trigger` clean; `GET /app/installations` with the new key lists three installations; one installation-token mint on `jikig-ai` | R3 rollback + release (source falls back to `prd`, still valid) |
-| R5 | **Replace standby web-2 from `main`.** Preconditions: the `latest` web image was built after PR-A merged (R4's release); cpx22 in stock in hel1. `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=web-host-replace -f web_host_key=web-2 -f confirm=REPLACE-web-2 -f reason=8609-github-app-token` | Tier-B job, reviewer-gated `web-platform-infra-apply` | web-2's boot emit (Sentry/Better Stack, host `web-2`) shows `github_app_key_source=isolated` and probe `ok`; private NIC reachable per the immutable-redeploy learning | web-2 is cattle; re-replace |
-| R6 | **Evict from `prd`.** Pre-check AC-R6a, then `doppler secrets delete GITHUB_APP_PRIVATE_KEY -p soleur -c prd --yes >/dev/null` | Doppler CLI | Every `prd`/`prd_*` config in `apps/web-platform/infra/doppler-config-inventory.txt` returns not-found, except `prd_terraform` (its own sentinel/override, #8209); raw `prd` values hold no `${soleur-github-app.` reference (count only); Doppler syncs on `prd` listed; a fresh release is `isolated` and the R4 probes pass | restore a key to `prd` from the isolated project — this **burns** the new key (it is branch-readable again): restart at R1 with a fresh key; PR-B may not cite a burned key |
-| R7 | **Kill the old key at GitHub.** Preconditions: a release **other than R4's** has shipped on `isolated`; web-1 (deploy state) and web-2 (boot emit) both report `isolated` + probe `ok` after R6; the row's fingerprint equals R0's `prd` fingerprint, **differs** from R1's, and **differs** from R0's `prd_terraform` fingerprint. Delete that row (the gated click) | Playwright to the click | A JWT from the new key → `200` (`slug=soleur-ai`); a JWT from `GITHUB_APP_PRIVATE_KEY_RETIRED` → `401`; then delete the parked name; drift-guard clean; the Sentry per-installation mint-failure query stays quiet for 1 h | **none** — a wrong delete disconnects every user. Short recovery: generate a key → `doppler secrets set` into the isolated project → release (R3 is not needed; the token is unchanged) |
-| R8 | **Gate for PR-B** (after #8209 O13's App-key delete) | Playwright read; Doppler CLI/API | The App lists exactly one key, equal to R1's fingerprint; `doppler configs tokens -p soleur-github-app -c prd --json \| jq -r '.[].name'` prints exactly `web-host-github-app-read`; the project's member list holds no service account or group | n/a |
+| R0c | **Cross-project reference probe (security review P1-b).** On two **disposable** Doppler projects, test whether a config-scoped read/write service token can store a `${<other-project>.<config>.<KEY>}` reference and read it back **resolved** | Doppler CLI on scratch projects, deleted afterwards | If it resolves: a reference count over every branch-writable `soleur` config joins R6 and the drift job before R1. If it does not: recorded, no further step | delete the scratch projects |
+| R1 | **New key into the isolated project** (after the gate). Generate a key on the App page (the gated click; Playwright's download directory on `$XDG_RUNTIME_DIR` tmpfs under `umask 077`), then `doppler secrets set GITHUB_APP_PRIVATE_KEY -p soleur-github-app -c prd --silent < "$PEM" >/dev/null`; `rm -f "$PEM"` and clear the browser's download history (an EXIT trap removes it on abort; `shred` is not relied on — it is not reliable on copy-on-write filesystems or SSDs) | Playwright to the click; Doppler CLI | The fingerprint of the value read back from Doppler equals the new row's fingerprint on the App page; a JWT signed with it gets `200` from `GET /app` with `slug=soleur-ai` and `id=3261325` | delete the new row + the secret |
+| R2 | **Read token into Tier B.** Under `set -o pipefail`: `doppler configs tokens create web-host-github-app-read -p soleur-github-app -c prd --access read --plain \| tr -d '\n' \| doppler secrets set GITHUB_APP_RUNTIME_DOPPLER_TOKEN -p soleur-infra-privileged -c prd --silent >/dev/null`; if the set fails, revoke the just-minted token | Doppler CLI, piped | With the stored value passed through the environment (never `--token`, never shell history): the key it reads has R1's fingerprint (prints `equal`), and a read of `soleur/prd` with it is refused | revoke the token; delete the Tier-B name |
+| R3 | **Deliver to web-1.** `gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason=8609-github-app-token` | Tier-B job, `environment: infra-privileged` | Run `success` (not `cancelled` — the shared `terraform-apply-web-platform-host` concurrency group keeps only the newest pending run); its log shows the loader at `source=tier_b`; web-1's infra-config state shows `/etc/default/soleur-doppler-token` with a **changed** digest | set the Tier-B name empty and re-dispatch: the file re-renders without the line (SSH-free) |
+| R4 | **Ship on the new key.** `gh workflow run web-platform-release.yml --ref main -f bump_type=patch` | release → `ci-deploy.sh` | `github-app-key-status.sh` prints `github_app_key_source=isolated`, `github_app_key_fetch=ok`, `github_app_key_probe=ok`; `cron/github-app-drift-guard.manual-trigger` via `soleur:trigger-cron` clean; `cron/oauth-probe.manual-trigger` clean; `GET /app/installations` with the new key returns a **superset** of R0's installation ids; one installation-token mint on `jikig-ai` | R3 rollback + release (falls back to the still-valid `prd` key); list failed webhook deliveries for the window (`GET /app/hook/deliveries`) and redeliver them (`POST /app/hook/deliveries/{id}/attempts`) |
+| R5 | **Replace standby web-2 from `main`.** Preconditions: web-1 healthy and serving, web-2 not in the traffic path; the image the replace pins (by default web-1's running tag, read from `/health` — input `image_tag`) is R4's release or later **and** its baked host-scripts hash equals `local.host_scripts_content_hash` on `main`; cpx22 in stock in hel1. `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=web-host-replace -f web_host_key=web-2 -f confirm=REPLACE-web-2 -f reason=8609-github-app-token` | Tier-B job, reviewer-gated `web-platform-infra-apply` | `scripts/sentry-issue.sh --host-events web-2 --stage github_app_key_ok` returns an event from after the replace (absence is a fail); private NIC reachable per the immutable-redeploy learning | web-2 is cattle; re-replace |
+| R5b | **Re-pin web-2's SSH host key** (deployment review). A replaced web-2 presents a new host key, and `deploy_pipeline_fix_web2` trusts only the committed pin, so every later `apply-deploy-pipeline-fix` run — web-1's leg included — fails closed until it is re-captured. Run `scripts/capture-web-2-host-key.sh <web-2-ipv4>` (egress in `var.admin_ips`; `soleur:admin-ip-refresh` first if not), commit the pin file in a PR, merge | `scripts/capture-web-2-host-key.sh` + PR | The next `apply-deploy-pipeline-fix` run's web-2 leg is green. **R5b precedes R6** | re-capture |
+| R6 | **Evict from `prd`.** Preconditions: AC-R6a and AC-R6b hold; `github-app-key-status.sh` read **immediately before** prints `isolated`/`ok` (an operator-local or legacy-arm apply between R3 and R6 would silently strip the line); web-2's latest boot event is `github_app_key_ok`. Then `doppler secrets delete GITHUB_APP_PRIVATE_KEY -p soleur -c prd --yes >/dev/null` | Doppler CLI | Every `prd`/`prd_*` config in `apps/web-platform/infra/doppler-config-inventory.txt` returns not-found, except `prd_terraform` (its own sentinel/override, #8209); raw `prd` values hold no `${soleur-github-app.` reference (count only; extended per R0c); Doppler syncs/integrations on `prd` listed; a fresh release is `isolated`/`ok` and the R4 probes pass | restore a key to `prd` from the isolated project — this **burns** the new key (branch-readable again): restart at R1 with a fresh key; PR-B may not cite a burned key |
+| R7 | **Kill the old key at GitHub.** Preconditions: a release **other than R4's** has shipped on `isolated`; web-1 (deploy state) and web-2 (boot event) both report `isolated` + `ok` after R6; the row's fingerprint equals R0's `prd` fingerprint, **differs** from R1's, and **differs** from R0's `prd_terraform` fingerprint. Delete that row (the gated click) | Playwright to the click | A JWT from the new key → `200` (`slug=soleur-ai`); a JWT from `GITHUB_APP_PRIVATE_KEY_RETIRED` (read from `prd_retired`) → `401`; then delete the parked name; drift-guard clean; for 1 h the Sentry per-installation mint-failure query **and** agent-run failures on git push / PR steps stay quiet | **none** — a wrong delete disconnects every user. Short recovery: generate a key → `doppler secrets set` into the isolated project → release (R3 is not needed; the token is unchanged) → redeliver failed webhook deliveries for the window |
+| R8 | **Gate for PR-B** (after #8209 O13's App-key delete) | Playwright read; Doppler CLI/API | The App lists exactly one key, equal to R1's fingerprint; `doppler configs tokens -p soleur-github-app -c prd --json \| jq -r '.[].name'` prints exactly `web-host-github-app-read`; the project's members hold no service account or group; no Doppler integration, sync or webhook is attached to the project | n/a |
 <!-- lint-infra-ignore end -->
 
 **Automation status of the App-page steps (R0, R1, R7, R8):** GitHub has no REST endpoint to list,
@@ -497,7 +605,7 @@ server is unreachable (it was during this planning session), the fallback is the
 the page, reading the fingerprints into the script's prompt, and making the single click.
 
 Order: R0 before R1 and R7 (a delete destroys the "added" date); R0b's K1 before the 90-day Actions
-retention; the gate before R1; R1 → R2 → R3 → R4 → R5 → R6 → R7 strictly; R8 before PR-B.
+retention; the gate before R1; R0c before R1; R1 → R2 → R3 → R4 → R5 → R5b → R6 → R7 strictly; R8 before PR-B.
 Installation tokens minted before R7 are expected to stay valid until their ~1 h expiry; R7's 1-hour
 mint-failure watch is what confirms it rather than assumes it.
 
@@ -526,9 +634,18 @@ mint-failure watch is what confirms it rather than assumes it.
   secret is minted by `random_id.github_webhook_secret` in branch-readable web-platform state
   (`github-app.tf`), so moving its Doppler copy closes nothing until its minting moves. ADR-241 D9 R8.
 - **Host, container or metadata-endpoint compromise.** The PEM stays in the web container's env, the
-  token in the web host's credential file (loaded by eight units) and in web `user_data` (served to
-  host processes by the Hetzner metadata endpoint; an SSRF in the app could reach it). Same class as
-  today's full-`prd` token; recorded in D10; the metadata drop is deferral issue 4.6(b).
+  token in the web host's credential file (loaded by eight units) and — for hosts **born after R2**
+  only — in web `user_data`, which the Hetzner metadata endpoint serves to host processes (an SSRF in
+  the app could reach it). web-1's `user_data` is birth-frozen (`ignore_changes = [user_data]`), so
+  it never carries the new token; its metadata today carries the full-`prd` token, which reads the
+  key — so this plan narrows web-1's metadata exposure. Recorded in D10; the web-host metadata drop
+  is deferral issue 4.6(b), and **web-2 is not promoted to serving traffic until that drop exists**
+  (security review P1-c).
+- **The branch-reachable deploy channel itself.** The deploy webhook secret, the CF Access pair and
+  the registry push credentials are readable from branches, so a branch can ship an image to web-1
+  today — with every `prd` secret. This plan closes that path **for the App key** (the signed-image
+  condition in Phase 3.2); the general fix is the WARN→ENFORCE flip tracked by #6129, which the
+  work phase comments on with this finding.
 - **App permission reduction** (Alternative 3).
 
 ## User-Brand Impact
@@ -557,28 +674,31 @@ mint-failure watch is what confirms it rather than assumes it.
 
 ```yaml
 liveness_signal:
-  what: "scheduled-github-app-drift-guard Sentry cron monitor (cron-github-app-drift-guard.ts mints an App JWT from the serving container's GITHUB_APP_PRIVATE_KEY and calls GET /app plus the installation-grant diff); per-deploy canary probe verdict; per-boot soleur-boot-emit verdict carrying the host name"
-  cadence: "drift-guard: its existing cron schedule; canary: every release; boot emit: every host boot"
-  alert_target: "Sentry issue alerts (org jikigai-eu) on the drift-guard monitor and on the host emitter; failed release workflow email for a refused canary"
-  configured_in: "apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts (SENTRY_MONITOR_SLUG); apps/web-platform/infra/ci-deploy.sh canary stage; apps/web-platform/infra/soleur-host-bootstrap.sh soleur-boot-emit"
+  what: "scheduled-github-app-drift-guard Sentry cron monitor (cron-github-app-drift-guard.ts, SENTRY_MONITOR_SLUG, alert in apps/web-platform/infra/sentry/cron-monitor-alerts.tf) mints an App JWT from the serving container's key and calls GET /app; per-release deploy-state fields github_app_key_source and github_app_key_fetch; per-boot soleur-boot-emit stages github_app_key_ok / _rejected / _missing / _transport / _probe_absent / _exec_failed carrying host_name"
+  cadence: "drift-guard: its existing cron schedule; deploy-state: every release on web-1; boot stages: every web-host boot (web-2 after R5)"
+  alert_target: "Sentry (org jikigai-eu): the drift-guard cron-monitor alert; a new sentry_alert on the non-ok github_app_key_* boot stages (or those stages added to web_terminal_boot_fatal); a new sentry_alert on feature=ci-deploy op=github-app-key; the release workflow's ::error:: reason= line and failed-run email"
+  configured_in: "apps/web-platform/infra/sentry/issue-alerts.tf + alert-reference.json (new rules); apps/web-platform/infra/ci-deploy.sh (canary stage + overlay emitter); apps/web-platform/infra/soleur-host-bootstrap.sh (soleur-boot-emit stages); apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts"
 error_reporting:
-  destination: "Sentry web-platform project for app-side mint failures; the host emitter (SENTRY_INGEST_DOMAIN/PROJECT_ID/PUBLIC_KEY baked in /etc/default/soleur-doppler-token) for deploy/boot failures"
-  fail_loud: "canary CANARY_FAIL_REASON github_app_key_missing or github_app_key_rejected (release fails, old container keeps serving); Sentry error reason=fetch_failed when the token is present but the isolated fetch fails; boot emit at fatal on a rejected key"
+  destination: "Sentry web-platform project. Host side: ci-deploy.sh's curl emitter (feature=ci-deploy, op=github-app-key) and soleur-boot-emit (stage=github_app_key_*), both carrying a classification and a length only — never Doppler stderr, never key or token bytes"
+  fail_loud: "release workflow prints ::error:: ci-deploy.sh exited ... reason=github_app_key_missing or reason=github_app_key_rejected and the old container keeps serving; a fetch failure before R6 ships green but deploy-state carries github_app_key_fetch=failed and the release workflow raises ::warning:: plus a Sentry event op=github-app-key"
 failure_modes:
   - mode: "token present but the isolated fetch fails (revoked/mistyped token, Doppler down)"
-    detection: "Sentry error reason=fetch_failed from the host emitter + deploy state github_app_key_source=prd; after R6 the same failure also trips the canary (github_app_key_missing)"
-    alert_route: "Sentry issue; after R6 also the failed release email"
+    detection: "layer vector (ci-deploy journald, tag ci-deploy) + layer workflow run log (deploy-status github_app_key_fetch=failed, ::warning::) + layer Sentry (op=github-app-key rule); after R6 the canary also refuses (github_app_key_missing)"
+    alert_route: "Sentry issue alert (new rule); after R6 the failed release email"
   - mode: "a wrong but well-formed key reaches the env (dev key, prd_terraform key, a planted token's key)"
-    detection: "canary probe GET /app returns 401/403 or a slug other than soleur-ai -> github_app_key_rejected"
-    alert_route: "failed release workflow email + Sentry"
+    detection: "layer workflow run log: ::error:: reason=github_app_key_rejected from the canary probe (GET /app 401/403-without-rate-limit-headers/404 or slug other than soleur-ai)"
+    alert_route: "failed release workflow email + Sentry op=github-app-key"
+  - mode: "probe could not reach GitHub (transport error, 5xx, 429, 403 with rate-limit headers)"
+    detection: "layer Sentry: op=github-app-key level=warning; deploy-state github_app_key_probe=transport"
+    alert_route: "Sentry issue (warning); no deploy block"
   - mode: "serving container on a key GitHub no longer accepts (wrong key deleted at R7)"
-    detection: "scheduled-github-app-drift-guard app_jwt 401 + per-installation mint-failure events"
-    alert_route: "Sentry issue alert"
+    detection: "layer Sentry monitor / sentry-correlation: scheduled-github-app-drift-guard failure mode github_app_401, plus per-installation mint-failure events"
+    alert_route: "Sentry cron-monitor alert"
   - mode: "a fresh or replaced web host boots without an accepted key"
-    detection: "soleur-boot-emit at fatal with host name and probe verdict"
-    alert_route: "Sentry issue"
+    detection: "layer Sentry: soleur-boot-emit stage github_app_key_rejected / _missing / _exec_failed with host_name, caught by the new boot-stage rule; readable without SSH via scripts/sentry-issue.sh --host-events <host> --stage github_app_key_ok (a missing ok event counts as a fail, because the emitter exits silently on an empty DSN)"
+    alert_route: "Sentry issue alert (new boot-stage rule)"
 logs:
-  where: "journald on the web hosts shipped by vector to Better Stack (ci-deploy.sh LOG_TAG, soleur-boot-emit); GitHub Actions logs for the Tier-B jobs"
+  where: "journald on the web hosts shipped by vector to Better Stack (ci-deploy.sh LOG_TAG; the boot path also writes a logger -t line under an allowlisted tag), GitHub Actions logs for release and Tier-B jobs"
   retention: "Better Stack source retention; Actions logs 90 days"
 discoverability_test:
   command: "bash apps/web-platform/scripts/github-app-key-status.sh"
@@ -626,65 +746,111 @@ exception:
 
 ## Guard Contract
 
-### Guard 6 — runtime App key confinement (census)
+### Guard 6 — runtime App key confinement (static census)
 
 **Property.** No branch-reachable surface — a repository secret, a Tier-A Doppler config, a
-Terraform resource or data source whose state Tier A reads, a non-Tier-B job, or a plan artifact —
-can carry the `soleur-github-app` read token, mint one, or read the new project.
+Terraform resource, data source or attribute whose state Tier A reads, a non-Tier-B job (directly,
+through a script it runs, or through another job's outputs), or a plan artifact — can carry the
+`soleur-github-app` read token, mint one, or read the new project.
 
 **Assembly.** Every file matched by the census's existing walk (`.github/workflows/*.y*ml`,
 `.github/actions/**/action.yml`, every `*.tf` under `apps/web-platform/infra/` and its nested roots,
 `infra/github/*.tf`) plus the scripts those jobs invoke through one level of `bash <repo-path>`
-indirection. Chokepoints, each a separate row family: (1) the token's names —
-`GITHUB_APP_RUNTIME_DOPPLER_TOKEN`, `TF_VAR_github_app_runtime_doppler_token`,
-`var.github_app_runtime_doppler_token`; (2) the project literal `soleur-github-app` and the address
-`doppler_project.github_app_runtime`; (3) Terraform constructs that put a value in state
-(`doppler_service_token`, `doppler_secret`, `data "doppler_secret"`, `data "doppler_secrets"`,
-`output`, `nonsensitive(`); (4) Doppler writes of the token name and token mints on the project; (5)
-the loader's unconditional export of the token name; (6) `actions/upload-artifact` in a Tier-B job.
+indirection, plus `apps/web-platform/infra/.terraform.lock.hcl`. Chokepoints, each a separate row
+family: (1) the token's names — `GITHUB_APP_RUNTIME_DOPPLER_TOKEN`,
+`TF_VAR_github_app_runtime_doppler_token`, `var.github_app_runtime_doppler_token`; (2) the project
+literal `soleur-github-app` and `doppler_project.github_app_runtime`; (3) Terraform constructs that
+put a value in state (`doppler_service_token`, `doppler_secret`, `data "doppler_secret"`,
+`data "doppler_secrets"`, `output`, `nonsensitive(`, a `terraform_data` `input` or an unhashed
+`triggers_replace` naming the variable); (4) Doppler writes of the token name and token mints on
+the project; (5) job `outputs:` and `needs.*.outputs` flows; (6) `actions/upload-artifact` in a
+Tier-B job; (7) the locked hcloud provider version the state-hashing fact rests on. The loader's
+runtime export is not statically observable and lives in Guard 8.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| G6a | A job with no `environment:` (or a `pull_request` job) references `TF_VAR_github_app_runtime_doppler_token` after a compliant Tier-B job in the same file | RED |
-| G6b | A workflow or script runs `doppler secrets set GITHUB_APP_RUNTIME_DOPPLER_TOKEN` against any `-p soleur` config (not only `prd_terraform`) | RED |
-| G6c | Any root declares `doppler_service_token`, `doppler_secret`, `data "doppler_secret"` or `data "doppler_secrets"` on `soleur-github-app` / `doppler_project.github_app_runtime`, or an `output`/`nonsensitive(var.github_app_runtime_doppler_token)` | RED |
+| G6a | After a compliant Tier-B job, a second job with no `environment:` (or on `pull_request`) references `TF_VAR_github_app_runtime_doppler_token` | RED |
+| G6a2 | A Tier-A job runs `bash scripts/x.sh`, and `scripts/x.sh` references the token name | RED |
+| G6a3 | A Tier-B job exposes the token through `outputs:` and a non-Tier-B job reads it via `needs.<job>.outputs` | RED |
+| G6b | A workflow or script writes `GITHUB_APP_RUNTIME_DOPPLER_TOKEN` (a `doppler secrets set` of that name) into any `-p soleur` config | RED |
+| G6c | Any root declares `doppler_service_token`, `doppler_secret`, `data "doppler_secret"` or `data "doppler_secrets"` on the new project, or an `output`/`nonsensitive(var.github_app_runtime_doppler_token)` | RED |
+| G6c2 | A `terraform_data` gains `input = var.github_app_runtime_doppler_token`, or `triggers_replace` names the variable without `sha256(...)` | RED |
 | G6d | A workflow or script runs `doppler configs tokens create` with `-p soleur-github-app` | RED |
-| G6e | A Tier-B job adds `actions/upload-artifact` with a `tfplan` path | RED |
-| G6f | The loader stops exporting `TF_VAR_github_app_runtime_doppler_token` when the Tier-B project lacks it (reorder: export moved after the legacy-arm fallback) | RED |
-| G6g | Dispatch: point the census at an input tree with zero workflow files | RED ("0 checked" is a failure) |
-| G6h | Harness: replace a row function with one that always passes | RED (instrument self-test) |
-| G6p | Must-PASS: the edited `apply-deploy-pipeline-fix.yml` with the token used only inside the loader-driven Tier-B job, steps in a different order from the canonical | PASS |
+| G6e | A Tier-B job adds `actions/upload-artifact` with `tfplan` as its second path, or a `**` glob that covers it | RED |
+| G6m | A Tier-B job sets `TF_LOG` (trace logs can carry provisioner environment, i.e. `SOLEUR_DOPPLER_TOKEN_B64`) | RED |
+| G6n | Any tracked file writes a Doppler reference string `${soleur-github-app.` | RED |
+| G6l | `.terraform.lock.hcl` moves the hcloud provider off the version whose `user_data` hashing was measured (1.63.0) without the census pin being updated in the same diff | RED |
+| G6g | Dispatch: an input tree with zero workflow files — the failing row reported is a **G6** row, not only G1a | RED |
+| G6g2 | Dispatch: an empty `.tf` set — a G6c row reports 0 files and reds | RED |
+| G6h | Harness: delete one G6 mutant from the suite → the MUTANT FLOOR fails | RED |
+| G6h2 | Harness: the control TSV is missing a named G6 row id (presence of each id, not a count) | RED |
+| G6p | Must-PASS: the post-PR-A live tree — `server.tf`'s `templatefile()` argument and the `deploy_pipeline_fix` precondition both use the variable, the `sha256(...)` trigger form, and the loader-driven Tier-B job with steps reordered from the canonical | PASS |
 
-### Guard 7 — the deploy overlay and canary key check (ci-deploy.test.sh)
+### Guard 7 — the deploy overlay and canary key check (`ci-deploy.test.sh`)
 
 **Property.** A container is promoted only with exactly one `GITHUB_APP_PRIVATE_KEY`, taken from
 `soleur-github-app` whenever the token is present and the fetch succeeds, and only after GitHub has
-accepted that key for `slug=soleur-ai` (or the check could not reach GitHub).
+accepted that key for `slug=soleur-ai` in the **canary** container (or the check could not reach
+GitHub); the token itself never reaches the container or the process environment.
 
 **Assembly.** Two env-file assembly sites — `ci-deploy.sh` (overlay in the parent shell after
 `ENV_FILE=$(resolve_env_file)`) and the boot path in `soleur-host-bootstrap.sh` (before the first
-`docker run`) — the sentinel-bounded overlay block both carry, and the canary promotion point in
-`ci-deploy.sh`. Every overlay row runs against both sites; row 7.6 pins their byte equality.
+`docker run`) — the sentinel-bounded overlay block both carry, each file's own definition of the
+emitter that block calls, and the canary promotion point in `ci-deploy.sh`. The harness feeds the
+credential file by the existing path-rewrite of the hard-coded `/etc/default/soleur-doppler-token`,
+and the `doppler` stub returns **different key values per `--project`** and logs every call with the
+`DOPPLER_TOKEN` it saw; the docker mock records the environment it was given. A boot-site driver is
+added (none exists today).
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 7.1 | Overlay appends the isolated line but does not drop the `prd` line (two key lines) | RED |
-| 7.2 | Overlay filter unanchored, so `GITHUB_APP_PRIVATE_KEY_RETIRED=` also passes (a second name leaks in) | RED |
+| 7.0 | Precondition row: with the token present, the doppler call log holds exactly one `--project soleur-github-app --config prd` call made with `DOPPLER_TOKEN` equal to the app token (without it every token-present row is vacuous) | RED if absent |
+| 7.1 | Overlay appends the isolated line but does not drop the `prd` line | RED |
+| 7.1b | The `prd` output holds the key line twice and the overlay drops only the first | RED |
+| 7.2 | Overlay filter unanchored, so `GITHUB_APP_PRIVATE_KEY_RETIRED=` also passes | RED |
+| 7.2b | Overlay fetches `--project soleur` instead: the env-file holds the `prd` value, not the isolated one | RED |
 | 7.3 | Token present, isolated fetch fails, `prd` holds no key; the canary still promotes | RED |
 | 7.4 | Stub returns `EVICTED_SEE_ADR_241` for the key; presence check passes | RED |
 | 7.5 | Reorder: overlay runs before the `prd` download (prd wins) | RED |
+| 7.5b | Boot path: the overlay block moved after the first `docker run` | RED |
 | 7.6 | The boot-path sentinel block differs by one byte from the ci-deploy block | RED |
-| 7.7 | The token value is written into the container env-file | RED |
+| 7.6b | Sentinel markers removed from both files, or duplicated in one (7.6 would compare empty to empty) | RED |
+| 7.6c | One file lacks its own definition of the emitter the shared block calls | RED |
+| 7.7 | The token value is written into the container env-file, or exported into the process env seen by the docker mock | RED |
 | 7.8 | Overlay moved back inside `resolve_env_file` (subshell): deploy state never records `isolated` | RED |
 | 7.9 | Probe stub returns `401` (wrong key); the canary promotes | RED |
 | 7.10 | Probe stub returns `200` with `slug=other-app`; the canary promotes | RED |
-| 7.11 | Must-PASS: token absent, `prd` holds a valid PEM, probe `200 soleur-ai` → promotes with `source=prd`, no Sentry event | PASS |
-| 7.12 | Must-PASS: token present, both projects hold keys, escaped-`\n` PEM, probe `200 soleur-ai` → isolated wins, one line, promotes | PASS |
-| 7.13 | Must-PASS: probe transport error → promotes with a Sentry warning | PASS |
+| 7.11 | The probe runs after promotion (docker trace order), or in `soleur-web-platform` instead of the canary container | RED |
+| 7.12 | The probe exits 1 with no verdict and is treated as "script absent"; the canary promotes | RED |
+| 7.13 | Dispatch: only one assembly site exercised | RED |
+| 7.14 | Token present but `$VERIFIED_REF` is a bare tag (warn-mode fail-open, unsigned image): the env-file still receives the isolated key | RED |
+| 7.15 | The `prd` output carries `NODE_OPTIONS` (or another denylisted name) and the deploy promotes | RED |
+| 7.p1 | Must-PASS: token absent, `prd` holds a valid PEM, probe `200 soleur-ai` → promotes, `source=prd fetch=no_token`, no Sentry event | PASS |
+| 7.p2 | Must-PASS: token present, both projects hold keys, escaped-`\n` PEM, probe `200 soleur-ai` → the isolated value wins, one line, promotes | PASS |
+| 7.p3 | Must-PASS: probe transport error, `5xx`, `429`, or `403` carrying rate-limit headers → promotes with a Sentry warning | PASS |
+| 7.p4 | Must-PASS: probe script genuinely absent (rc 127, older image) → skip with a log line, promotes | PASS |
+
+### Guard 8 — the loader always exports the token name (`infra-credentials.test.sh`)
+
+**Property.** In every Tier-B job, `TF_VAR_github_app_runtime_doppler_token` in `$GITHUB_ENV` comes
+from `soleur-infra-privileged` or is empty — never from `prd_terraform`.
+
+**Assembly.** The single export site in `.github/actions/infra-credentials/action.yml` (the loop that
+lowercases each Tier-B key into `TF_VAR_*`) and its legacy arm; the existing
+`.github/actions/infra-credentials/infra-credentials.test.sh` harness with its Doppler stubs.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 8.1 | The Tier-B stub has no token and the `prd_terraform` stub plants `TF_VAR_github_app_runtime_doppler_token=planted`; `$GITHUB_ENV` does not hold the name with an empty value | RED |
+| 8.2 | Reorder: the unconditional export moved after the legacy-arm fallback | RED |
+| 8.3 | Second member: the Tier-B project holds the token and a second unrelated key; only the first is exported | RED |
+| 8.p | Must-PASS: the Tier-B project holds the token → `$GITHUB_ENV` carries that value, masked | PASS |
 
 ## Infrastructure (IaC)
 
@@ -708,9 +874,12 @@ time from each workflow's `on.push.paths` and `-target=` list. Expected: (1)
 `apply-web-platform-infra.yml`'s push apply creates the empty `soleur-github-app` project and its
 `prd` environment; (2) `apply-deploy-pipeline-fix.yml` re-delivers the changed `ci-deploy.sh` (and any
 other FILE_MAP script whose bytes changed) to web-1, with the Tier-B variable still empty so the
-credential file is byte-identical; (3) `web-platform-release.yml` fires if the diff touches its
-`paths:` (the new probe script and Dockerfile line do), shipping an image whose canary runs the new
-probe against the **current** `prd` key. `infra_config_handler_bootstrap` does not re-fire, because
+credential file is byte-identical — **and** pushes the same scripts to web-2 over the SSH bridge
+(`terraform_data.deploy_pipeline_fix_web2`, whose `triggers_replace` includes `ci-deploy.sh` and
+`cat-deploy-state.sh`; no credential file rides that push); (3) `web-platform-release.yml` fires (its `on.push.paths` includes `apps/web-platform/**`), shipping
+an image whose canary runs the new probe against the **current** `prd` key. (2) and (3) race; either
+order is safe in the legacy state, because the old `ci-deploy.sh` ignores the new script and the new
+one probes a key the pre-merge check proved. `infra_config_handler_bootstrap` does not re-fire, because
 Phase 2.4 edits none of its inputs. All are safe in the legacy state by construction; the merge
 click is their authorization. **Pre-merge check:** fire `cron/github-app-drift-guard.manual-trigger`
 (per-command go-ahead) — a clean run proves the current `prd` key parses and is accepted, so the new
@@ -731,6 +900,46 @@ control stays).
 Doppler Developer plan: projects and read service tokens are available; service-account identities
 and OIDC are not (ADR-241 A1). GitHub: App private keys can only be listed, generated and deleted on
 the App settings page.
+
+## Downtime & Cutover
+
+**Offline-inducing operations in scope:** (1) R5's `web_host_replace` of **web-2** — a destroy-then-create
+of an `hcloud_server`; (2) every release in R4/R6/R7 swaps the web-1 container.
+
+**Zero-downtime path (default):**
+
+- **web-2 is a non-serving standby** (cattle, ADR-143): no user traffic routes to it, so its
+  destroy-then-create takes nothing offline. The residual risk is the standby itself being absent for
+  the replace window — if web-1 failed during that window there would be no warm standby, which is
+  the same exposure the standby has during any replace. Bounded: R5 is dispatched only after a
+  cpx22-in-hel1 stock check, and a failed create leaves web-1 serving untouched.
+- **web-1 is never replaced** (#6730: no automated web-1 birth path). The credential line reaches it
+  through the Terraform-declared push (`deploy_pipeline_fix`), which writes a file and restarts
+  nothing that serves users; the container only picks the key up at the next release.
+- **Releases** use the existing canary-then-promote swap in `ci-deploy.sh`; the new key checks run in
+  the canary stage **before** promotion, so a refused key never displaces the serving container.
+- **The key rotation itself is zero-downtime by construction:** GitHub keeps several App keys valid at
+  once, so the new key is live before the old one is deleted (R7), and installation tokens already
+  minted stay valid until their ~1 h expiry (watched for an hour after R7).
+
+**Residual downtime accepted:** none planned. The only no-rollback step (R7) is guarded by the
+fingerprint preconditions and both hosts proven on `isolated`.
+
+### Network-Outage Deep-Dive (resource-shape trigger)
+
+This plan diagnoses no outage; the gate fires because the merge and R3 apply
+`terraform_data.deploy_pipeline_fix_web2`, whose `remote-exec`/`file` provisioners reach web-2 over SSH
+(its triggers include `ci-deploy.sh`, which PR-A edits). Layer status for that dependency:
+
+- **L3 firewall:** the CI path does not depend on an operator egress IP. It rides the Cloudflare
+  Tunnel SSH route to web-1 (CF Access service token) and a forward to web-2's private address
+  (`apply-deploy-pipeline-fix.yml` header). Verification at work time: that workflow's last green run
+  on `main` before the PR-A merge.
+- **L3 DNS/routing:** the `ssh.` tunnel hostname and the private 10.0.1.0/24 route — same evidence.
+- **L7 TLS/proxy:** Cloudflare Access in front of the tunnel — same evidence.
+- **L7 application:** `sshd` on web-1/web-2 — only if the three layers above are green and the push
+  still fails; if the push fails at handshake, follow the checklist order
+  (`plugins/soleur/skills/plan/references/plan-network-outage-checklist.md`) before any sshd hypothesis.
 
 ## Architecture Decision (ADR/C4)
 
@@ -776,6 +985,10 @@ probes.
 - `apps/web-platform/infra/ci-deploy.test.sh`, `cat-deploy-state.test.sh`, `web-host-provisioner-parity.test.sh`
 - `apps/web-platform/Dockerfile` (copy the probe script, as `scripts/sandbox-canary.mjs` is)
 - `plugins/soleur/test/cloud-init-user-data-size.test.ts` (fixture gains the variable)
+- `apps/web-platform/infra/sentry/issue-alerts.tf`, `apps/web-platform/infra/sentry/alert-reference.json` (the two new alert rules)
+- `.github/actions/infra-credentials/infra-credentials.test.sh` (Guard 8)
+- the release workflow's deploy-status reader (`.github/workflows/reusable-release.yml` or `web-platform-release.yml`, wherever `reason=` is parsed today) — the `::warning::` on `github_app_key_fetch`
+- R5b's follow-up PR: `apps/web-platform/infra/web-2-ssh-host-key.pub`
 - `plugins/soleur/test/preflight-discoverability-test.test.ts` (`BASELINE_DECLARED_PROBES` +1)
 - `.github/actions/infra-credentials/action.yml` (unconditional export of the token name)
 - `.github/workflows/apply-web-platform-infra.yml` (`-target=` list) plus every suite asserting that list
@@ -817,7 +1030,11 @@ probes.
 | Wrong-but-valid key reaches the env (planted token, dev key) | High | Canary `GET /app` + slug check before promotion; loader always exports the token name so the `prd_terraform` arm cannot supply it |
 | web-2 serves a killed key | Medium | R5 before R6; R7 precondition reads web-2's boot emit |
 | `user_data` budget overflow | Medium | Phase 0.1 measurement; comment lines move to `server.tf` |
-| Merge-time canary refuses the current key | Medium | Pre-merge drift-guard trigger; transport errors pass with a warning |
+| Merge-time canary refuses the current key | Medium | Pre-merge drift-guard trigger + slug/id check; transport, `429` and rate-limited `403` pass with a warning |
+| A branch ships its own image and receives the key | High | Key handed only to a `@sha256:` `$VERIFIED_REF` signed by `reusable-release.yml` on `main`/tags (Phase 3.2 step 2); general fix #6129 |
+| Flaky signature verification blocks releases after R6 | Medium | Phase 0.4 measures the verify path first; before R6 an unverified image degrades to the `prd` key |
+| A `prd` writer injects `NODE_OPTIONS`/proxy/CA settings into the key's process | Medium | Overlay denylist refuses them (0 present today, measured) |
+| web-2's pinned SSH host key goes stale after R5, failing every later deploy-pipeline push | High | R5b re-pins before R6 |
 | Overlay order wrong / subshell loses the source | Low | Guard 7 rows 7.5 and 7.8 |
 | Doppler cross-project reference from `prd` | Low | R6 raw-value count check |
 | `doppler secrets set/delete` dump a config to the terminal | Medium | `>/dev/null` on every set/delete (a PreToolUse hook blocks either without it) |
@@ -837,7 +1054,8 @@ probes.
       against `WEB_GZIP_BUDGET`, and the render carries the `GITHUB_APP_DOPPLER_TOKEN=` line.
 - [ ] AC4 — Guard 6 rows G6a–G6p and the instrument self-test behave as tabulated; suite green on the
       PR head.
-- [ ] AC5 — Guard 7 rows 7.1–7.13 behave as tabulated against both assembly sites.
+- [ ] AC5 — Guard 7 rows 7.0–7.15 and 7.p1–7.p4 behave as tabulated against both assembly sites,
+      and Guard 8 rows 8.1–8.p behave as tabulated in `infra-credentials.test.sh`.
 - [ ] AC6 — `terraform validate` and the PR plan job green; the PR plan shows no replace of any
       `hcloud_server`.
 - [ ] AC7 — ADR-241 carries a new `## Amendment log` section with a dated entry, D10, a D10 row in the
@@ -857,7 +1075,15 @@ probes.
       PLACEMENT / TRUTH / NO-SUBSTITUTE comment; `apps/web-platform/scripts/github-app-key-status.sh`
       exists in PR-A's tree and prints only the `github_app_key_source=` line.
 - [ ] AC14 — The PR body's first line states the production mutations the merge triggers (Apply
-      path); the pre-merge drift-guard trigger ran clean (per-command go-ahead).
+      path, including the SSH push to web-2). Before merge (deployment review): the drift-guard
+      trigger ran clean (per-command go-ahead); `gh api apps/soleur-ai` returns `slug=soleur-ai`,
+      `id=3261325`, and `prd`'s `GITHUB_APP_ID` equals `3261325` (compared, not printed); the last
+      `apply-deploy-pipeline-fix` run on `main` is green; the PR plan shows exactly three creates (the
+      project, its `prd` environment and the `prd_retired` branch config), replaces only
+      `deploy_pipeline_fix` and `deploy_pipeline_fix_web2`, and no `hcloud_server`; no other infra
+      PR is queued in the same window; web-1's credential-file digest is recorded. After merge: both
+      apply runs are `success` (not `cancelled`), the credential-file digest is unchanged, and the
+      release's deploy state reads `source=prd`, `probe=ok`.
 - [ ] AC15 — Required checks green **by name on the exact head SHA**; PR-A merges by auto-merge
       (workflow edits → UNTRUSTED-CI).
 
@@ -868,14 +1094,21 @@ probes.
 - [ ] AC-R2 — The stored Tier-B token reads a key whose fingerprint equals R1's (`equal`) and is
       refused on `soleur/prd`.
 - [ ] AC-R4 — `bash apps/web-platform/scripts/github-app-key-status.sh` prints
-      `github_app_key_source=isolated`; drift-guard and oauth-probe clean; `GET /app/installations`
-      lists 3.
-- [ ] AC-R5 — web-2's boot emit reports `isolated` and probe `ok`.
+      `github_app_key_source=isolated`, `github_app_key_fetch=ok`, `github_app_key_probe=ok`;
+      drift-guard and oauth-probe clean; `GET /app/installations` returns a superset of R0's ids.
+- [ ] AC-R5 — `scripts/sentry-issue.sh --host-events web-2 --stage github_app_key_ok` returns an
+      event from after the replace.
+- [ ] AC-R5b — web-2's host-key pin is re-captured and merged; the next `apply-deploy-pipeline-fix`
+      run's web-2 leg is green.
 - [ ] AC-R6a — Before the delete: every repo reader of `GITHUB_APP_PRIVATE_KEY` is listed with the
       Doppler config its step, job or action input resolves to (today:
       `.github/actions/mint-soleur-ai-app-token/action.yml`, `board-status-sync.yml`,
       `apply-github-infra.yml`, `apply-web-platform-infra.yml`, all `prd_terraform`), and none
       resolves to `prd` (Kieran P1-5: a same-line `-c prd` grep would miss all four shapes).
+- [ ] AC-R6b — Every writer of `soleur/prd` is listed the same way (repo secrets, workflow steps,
+      Terraform `doppler_secret` resources on `config = "prd"` and the variables that feed them),
+      each with its tier; no Tier-A writer can set a denylisted runtime-hijack name without the
+      overlay refusing it (security review P1-a).
 - [ ] AC-R6 — Every `prd`/`prd_*` config in `doppler-config-inventory.txt` returns not-found for the
       key (except `prd_terraform`'s own override); a fresh release still `isolated`.
 - [ ] AC-R7 — New-key JWT `200` from `GET /app`; retired-key JWT `401`; the parked name deleted;
@@ -958,6 +1191,11 @@ to the two third-party installers is a trust decision, not a duty — DC-1.
   `main`'s byte for byte.
 - Given a malformed token value, when `terraform plan` runs in a Tier-B job, then the precondition
   fails without printing the value.
+- Given a token and an image whose signature did not verify (warn-mode tag fallback), when ci-deploy
+  runs, then no isolated key is fetched, `github_app_key_fetch=unverified_image`, and after R6 the
+  canary refuses.
+- Given `NODE_OPTIONS` in the `prd` output, when ci-deploy runs, then it refuses with
+  `github_app_key_env_hijack` and the running container is untouched.
 - Given a workflow on `pull_request` naming the Tier-B token, when the census runs, then it is red.
 
 ### Integration Verification (for `soleur:qa`)
@@ -995,11 +1233,37 @@ the Step 4.5 advisor consult. Applied as Mechanical unless noted:
 
 Not applied: DHH's "drop the discoverability wrapper and ratchet bump" (Taste — the wrapper is the
 only local, SSH-free read of the key source, which `hr-observability-as-plan-quality-gate` requires;
-kept at ≤ 30 lines). Spec-flow's "refuse host create/replace when the token is empty after R6" (the
-boot emit's fatal verdict already makes that failure loud; a repo-variable gate adds a mechanism for
-a state only a deliberate Tier-B deletion produces).
+kept at ≤ 30 lines). Spec-flow's repo-variable form of "refuse host create/replace when the token is empty" — superseded
+in the deepen round by the committed `local.github_app_key_isolated` flag that PR-B flips (Phase 2.5),
+which covers the same case without a second source of truth.
+
+### Deepen round (2026-09-30)
+
+Seven further seats: security-sentinel, deployment-verification, observability-coverage,
+user-impact, test-design, a verify-the-negative/citation pass, and the institutional-learnings sweep.
+
+| Finding | Seat | Change |
+|---|---|---|
+| A branch can ship its own image to web-1 (branch-readable deploy webhook secret, CF Access pair, registry push credentials; `IMAGE_VERIFY_MODE=warn`) and would receive the key | security P0 | Key handed only to a `@sha256:` `$VERIFIED_REF` (Phase 3.2 step 2); Phase 0.4 verify-health check; #6129 commented |
+| `prd` writers could inject `NODE_OPTIONS`/proxy/CA settings into the key's process | security P1-a | Overlay denylist (0 of 132 names present, measured); AC-R6b lists `prd` writers |
+| Doppler cross-project references might resolve for a `prd_terraform` reader | security P1-b | R0c scratch-project probe; G6n |
+| Metadata endpoint serves `user_data` to the app | security P1-c | web-1 unaffected (birth-frozen); web-2 not promoted to serving until the drop exists |
+| Parked old key downloaded by the host; PEM on disk; pipe without `pipefail`; probe contract; loader over-exposure; precondition on one consumer only; `TF_LOG` | security P2 | `prd_retired` branch config; tmpfs download dir; R2 pipeline hardened; probe contract in 3.3; opt-in loader input; shape gate on both consumers; G6m |
+| Replaced web-2 presents a new SSH host key; every later push fails closed | deployment | R5b |
+| Shared concurrency group can cancel a merge run; image hash must match; stale line between R3 and R6 | deployment | R3 `success` check; R5 hash precondition; R6 fresh read; pre/post-merge checks in AC14 |
+| New boot/ci-deploy events page nobody; web-2 verdict encoding; emitter per file; fetch field; layer citations | observability | Phase 2.9 alert rules; per-outcome boot stages; `github_app_key_emit`; `github_app_key_fetch`; Observability block rewritten |
+| Webhook redelivery; installations superset; rate-limit `403`/`429` blocking hotfixes; agent-run watch | user-impact | R4/R7 redelivery; AC-R4 superset; probe verdicts; R7 watch |
+| Vacuous token-present rows; stub cannot tell projects apart; G6f untestable statically; missing reorder/second-member/dispatch rows | test-design | Guard 6/7 rebuilt, Guard 8 added |
+| `infra_config_handler_bootstrap` input list incomplete; merge also pushes to web-2 over SSH; #7226 closed | verify pass | Apply path and 5.2 corrected |
+| JWT `exp` at 600 s 401s under skew; canary temp env-file leak | learnings | Probe `exp = now + 300`; no new temp file |
 
 ## Sharp Edges
+
+- deepen-plan Phase 4.8's PAT regex matches `var.doppler_token` and
+  `var.github_app_runtime_doppler_token`. Both are **Doppler service tokens** (`dp.st.` shape,
+  enforced by preconditions), not GitHub credentials; GitHub identity in this plan is App auth
+  throughout (`hr-github-app-auth-not-pat` holds). Disposition recorded 2026-09-30; the variable
+  name is kept because the loader derives it mechanically from the Tier-B key name.
 
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the
   threshold fails `deepen-plan` Phase 4.6.
