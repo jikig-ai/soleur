@@ -85,10 +85,23 @@ export async function POST(request: Request) {
   // Every other extension is signed for DOWNLOAD (`Content-Disposition:
   // attachment`), so a markdown/text attachment is never rendered on the
   // storage origin and an unrecognised suffix fails closed.
-  const inline = INLINE_ATTACHMENT_EXTENSIONS.has(fileExtension(body.storagePath));
-  const { data, error } = await service.storage
-    .from("chat-attachments")
-    .createSignedUrl(body.storagePath, 3_600); // 1 hour expiry
+  const ext = fileExtension(body.storagePath);
+  const bucket = service.storage.from("chat-attachments");
+  let inline = INLINE_ATTACHMENT_EXTENSIONS.has(ext);
+  if (inline) {
+    // The suffix is client-chosen and so is the stored Content-Type (own-folder
+    // INSERT policy; the bucket has no allowed_mime_types), so a `.pdf` path can
+    // hold text/html. Serve inline only when the STORED type agrees with the
+    // suffix; anything else, or a lookup failure, is a forced download.
+    const { data: info } = await bucket.info(body.storagePath);
+    const stored = String(
+      (info as { contentType?: string; content_type?: string } | null)?.contentType ??
+        (info as { content_type?: string } | null)?.content_type ??
+        "",
+    ).toLowerCase();
+    inline = ext === "pdf" ? stored === "application/pdf" : stored.startsWith("image/");
+  }
+  const { data, error } = await bucket.createSignedUrl(body.storagePath, 3_600); // 1 hour expiry
 
   if (error || !data) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });

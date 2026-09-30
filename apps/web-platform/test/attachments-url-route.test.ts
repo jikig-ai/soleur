@@ -5,15 +5,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // Supabase host so it passes CSP img-src (same class as the workspace-logo
 // proxy, #4996→#5012).
 
-const { mockGetUser, mockCreateSignedUrl } = vi.hoisted(() => ({
+const { mockGetUser, mockCreateSignedUrl, mockInfo } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockCreateSignedUrl: vi.fn(),
+  mockInfo: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({ auth: { getUser: mockGetUser } })),
   createServiceClient: vi.fn(() => ({
-    storage: { from: () => ({ createSignedUrl: mockCreateSignedUrl }) },
+    storage: { from: () => ({ createSignedUrl: mockCreateSignedUrl, info: mockInfo }) },
     // .from("conversations")… is only reached for the cross-user branch; the
     // happy-path test uses an own-folder storagePath so it is never called.
     from: () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: null }) }) }) }),
@@ -41,6 +42,12 @@ const req = (storagePath: string, filename?: string) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetUser.mockResolvedValue({ data: { user: { id: USER } } });
+  // Default: the stored Content-Type agrees with the suffix (what presign mints).
+  mockInfo.mockImplementation(async (path: string) => {
+    const ext = path.split(".").pop();
+    const contentType = ext === "pdf" ? "application/pdf" : `image/${ext}`;
+    return { data: { contentType }, error: null };
+  });
   mockCreateSignedUrl.mockResolvedValue({
     data: {
       signedUrl:
@@ -87,6 +94,37 @@ describe("POST /api/attachments/url — inline vs download", () => {
       );
     },
   );
+
+  it("does not spend a Storage lookup on downloads (only inline candidates are verified)", async () => {
+    await download(`${USER}/conv/uuid.md`, "a.md");
+    expect(mockInfo).not.toHaveBeenCalled();
+  });
+
+  describe("the STORED type must agree with an inline suffix", () => {
+    it.each([
+      ["png", "text/html"],
+      ["jpeg", "application/pdf"],
+      ["webp", ""],
+      ["pdf", "text/html"],
+      ["pdf", "image/png"],
+      ["pdf", "application/octet-stream"],
+    ])("a .%s path holding %j is a forced download", async (ext, stored) => {
+      mockInfo.mockResolvedValue({ data: { contentType: stored }, error: null });
+      expect(await download(`${USER}/conv/uuid.${ext}`, `x.${ext}`)).toBe(`x.${ext}`);
+    });
+
+    it("accepts the snake_case field name the SDK types declare", async () => {
+      mockInfo.mockResolvedValue({ data: { content_type: "image/png" }, error: null });
+      expect(await download(`${USER}/conv/uuid.png`, "x.png")).toBeNull();
+    });
+
+    it("fails closed to a download when the lookup errors or returns nothing", async () => {
+      mockInfo.mockResolvedValue({ data: null, error: { message: "Object not found" } });
+      expect(await download(`${USER}/conv/uuid.png`, "x.png")).toBe("x.png");
+      mockInfo.mockResolvedValue({ data: null, error: null });
+      expect(await download(`${USER}/conv/uuid.pdf`, "x.pdf")).toBe("x.pdf");
+    });
+  });
 
   it("an extension-less path is also a forced download", async () => {
     expect(await download(`${USER}/conv/uuid`, "notes")).toBe("notes");
