@@ -2,6 +2,7 @@
 
 import React, { memo } from "react";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { Button } from "@/components/ui/button";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LEADER_COLORS } from "@/components/chat/leader-colors";
@@ -247,7 +248,7 @@ export const MessageBubble = memo(function MessageBubble({
             </p>
           )}
           {isUser && delivery === "retryable" && onResend && (
-            <button
+            <Button
               type="button"
               onClick={onResend}
               disabled={resendDisabled}
@@ -255,7 +256,7 @@ export const MessageBubble = memo(function MessageBubble({
               aria-label="Resend message"
             >
               Resend
-            </button>
+            </Button>
           )}
         </div>
       </div>

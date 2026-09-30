@@ -13,9 +13,10 @@ const mockSelectSingle = vi.fn().mockResolvedValue({
 // disconnected user (repo_url=null) to exercise the abort path.
 let mockUserRepoUrl: string | null = "https://github.com/acme/repo";
 
-const { mockRpc, mockEngine, mockStartAttemptError } = vi.hoisted(() => ({
+const { mockRpc, mockEngine, mockStartAttemptError, mockDispatchSoleurGo } = vi.hoisted(() => ({
   mockEngine: { id: "claude-code" },
   mockStartAttemptError: { message: null as string | null },
+  mockDispatchSoleurGo: vi.fn().mockResolvedValue(undefined),
   mockRpc: vi.fn((name: string, args?: Record<string, unknown>) => Promise.resolve(
     name === "bind_agent_engine_run"
       ? {
@@ -36,6 +37,8 @@ const { mockRpc, mockEngine, mockStartAttemptError } = vi.hoisted(() => ({
         ? mockStartAttemptError.message
           ? { data: null, error: { message: mockStartAttemptError.message } }
           : { data: { id: "attempt-1" }, error: null }
+      : name === "codex_history_transfer_acknowledged"
+        ? { data: true, error: null }
       : {
           data: [{ status: "ok", active_count: 1, effective_cap: 2 }],
           error: null,
@@ -182,6 +185,7 @@ vi.mock("@/lib/supabase/tenant", () => ({
               conversation_id: String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
               engine_id: mockEngine.id,
               auth_mode: "api-key",
+              auth_mode_generation: 7,
               adapter_version: mockEngine.id === "codex" ? "codex-v1" : "claude-code-v1",
               created_at: new Date().toISOString(),
             },
@@ -212,8 +216,19 @@ vi.mock("@/server/agent-runner", () => ({
   abortSession: vi.fn(),
 }));
 
+vi.mock("@/server/cc-dispatcher", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/cc-dispatcher")>();
+  return {
+    ...actual,
+    dispatchSoleurGo: mockDispatchSoleurGo,
+    hasActiveCcQuery: () => false,
+    resolveConciergeDocumentContext: async () => ({}),
+  };
+});
+
 vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
+  addBreadcrumb: vi.fn(),
 }));
 
 vi.mock("@/server/codex-conversation-runtime", () => ({
@@ -353,8 +368,14 @@ describe("deferred conversation creation", () => {
     // Session should transition from pending to active
     expect(session.conversationId).toBe(started.conversationId);
     expect(session.pending?.id).toBeUndefined();
-    expect((await import("@/server/agent-runner")).sendUserMessage)
-      .toHaveBeenCalledWith("user-1", started.conversationId, "Set up Stripe webhooks", undefined, undefined);
+    expect(mockDispatchSoleurGo).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "user-1",
+      conversationId: started.conversationId,
+      userMessage: "Set up Stripe webhooks",
+      currentRouting: { kind: "soleur_go_pending" },
+      sessionId: null,
+    }));
+    expect((await import("@/server/agent-runner")).sendUserMessage).not.toHaveBeenCalled();
     expect(sent).not.toContainEqual(expect.objectContaining({ type: "error" }));
   });
 
@@ -370,6 +391,11 @@ describe("deferred conversation creation", () => {
     expect(session.conversationId).toBeTruthy();
     expect(sent.filter((message: any) => message.type === "error")).toEqual([]);
     expect((await import("@/server/agent-runner")).sendUserMessage).not.toHaveBeenCalled();
+    expect(mockDispatchSoleurGo).not.toHaveBeenCalled();
+    expect(mockRpc).toHaveBeenCalledWith("codex_history_transfer_acknowledged", {
+      p_conversation_id: session.conversationId,
+      p_auth_mode_generation: 7,
+    });
     expect(mockRpc).toHaveBeenCalledWith("append_agent_engine_lifecycle_event", expect.objectContaining({
       p_run_id: expect.any(String),
     }));
@@ -395,6 +421,11 @@ describe("deferred conversation creation", () => {
 
     expect(sent.filter((message: any) => message.type === "error")).toEqual([]);
     expect((await import("@/server/agent-runner")).sendUserMessage).not.toHaveBeenCalled();
+    expect(mockDispatchSoleurGo).not.toHaveBeenCalled();
+    expect(mockRpc).toHaveBeenCalledWith("codex_history_transfer_acknowledged", {
+      p_conversation_id: "conv-1",
+      p_auth_mode_generation: 7,
+    });
     expect(mockRpc).toHaveBeenCalledWith("append_agent_engine_lifecycle_event", expect.objectContaining({
       p_run_id: "run-codex-1",
     }));

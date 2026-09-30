@@ -49,7 +49,8 @@ describe("migration 149 acknowledgment RPCs on disposable PostgreSQL", () => {
         ownsContainer = true;
         let ready = false;
         for (let attempt = 0; attempt < 90; attempt += 1) {
-          const probe = docker(["exec", container, "pg_isready", "-U", "postgres"]);
+          // Wait for the final server, not the socket-only initialization server.
+          const probe = docker(["exec", container, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]);
           if (probe.status === 0) {
             ready = true;
             break;

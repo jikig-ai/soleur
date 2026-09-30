@@ -151,7 +151,9 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     ownsContainer = true;
     let ready = false;
     for (let attempt = 0; attempt < 90; attempt += 1) {
-      const probe = docker(["exec", container, "pg_isready", "-U", dbUser]);
+      // The image's temporary initialization server accepts socket probes,
+      // then shuts down. TCP becomes available only on the final server.
+      const probe = docker(["exec", container, "pg_isready", "-h", "127.0.0.1", "-U", dbUser]);
       if (probe.status === 0) {
         ready = true;
         break;

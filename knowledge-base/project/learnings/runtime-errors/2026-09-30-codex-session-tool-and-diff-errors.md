@@ -147,3 +147,18 @@ inspection through the approved escalated path; the same command succeeded
 outside the sandbox and confirmed the stored Pencil session was active.
 
 The Codex continuation began from the main checkout instead of the named PR worktree. `cleanup-merged` printed read-only lock errors and skipped cleanup; it did not alter worktrees. Resolve and verify the requested worktree explicitly before reading feature files. A sandboxed GitHub CLI request then failed with `error connecting to api.github.com`; retry network-dependent reads with the approved escalated path rather than treating the missing response as PR state. A direct lookup also used a nonexistent spec-local CLO packet path; the canonical packet lives under `knowledge-base/project/specs/feat-one-shot-codex-web-rollout/`. For slow typechecks, capture output and the final exit marker; an empty early poll is not a verdict. The first completed typecheck caught stale reducer/UI fixture types, which were fixed before the successful rerun.
+
+The next CI run caught plain-function mock types, a native resend button outside
+the shared primitive, socket-readiness probes accepting PostgreSQL's temporary
+initialization server, and stale dispatch/refusal-set expectations. Use
+`vi.mocked` for typed spies, the shared Button, TCP readiness for disposable
+PostgreSQL, the real dispatch contract, and reviewed exact migration sets.
+CI-only validation means these corrections still require a fresh CI verdict.
+
+The QA browser launched headlessly and was invisible to the operator. For an
+interactive sign-in, use both `--session codex9051` (daemon isolation) and
+`--session-name codex9051` (saved-state identity), plus `--headed` at launch.
+Verify the visible window before asking for sign-in. The first sandboxed launch
+could not write its runtime socket; the approved retry succeeded. Hyprland's
+dispatcher help calls returned general usage instead of a focus API; use the
+measured workspace location without guessing a legacy dispatch command.
