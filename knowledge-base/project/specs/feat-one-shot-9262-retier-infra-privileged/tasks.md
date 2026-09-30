@@ -91,9 +91,11 @@ auto-merge.
 
 ## Phase 6: Ship
 
-- [ ] 6.1 PR #9301 body: first line = merge side effects; `Closes #9262`, `Refs #8209`; render
+- [x] 6.1 PR #9301 body: first line = merge side effects; `Closes #9262`, `Refs #8209`; render
   `decision-challenges.md`; a merge-time checklist as commands (no queued/in-progress run of either
   workflow; AC5's two commands).
-- [ ] 6.2 File deferral issues: Art. 30 PA-12 wording (legal), narrower Doppler source (security;
-  re-evaluate at #9263 merge), build-job supply-chain gaps (security, p1).
-- [ ] 6.3 Mark ready; no admin-merge, no auto-merge; stop.
+- [x] 6.2 File deferral issues: Art. 30 PA-12 wording (legal), narrower Doppler source (security;
+  re-evaluate at #9263 merge), build-job supply-chain gaps (security, p1). Done as: PA-12 wording
+  folded into the O4c tracker #9320; narrower source #9321; supply-chain gaps commented onto the
+  existing #8780 rather than a new issue; decision challenges #9322.
+- [x] 6.3 Mark ready; no admin-merge, no auto-merge; stop.
