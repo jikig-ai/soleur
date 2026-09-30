@@ -10,7 +10,10 @@
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
-import { getWorkstreamIssues } from "@/server/workstream/get-workstream-issues";
+import {
+  collectWorkstreamIssues,
+  resolveBoardReadContext,
+} from "@/server/workstream/get-workstream-issues";
 import { getWorkstreamIssueOptions } from "@/server/workstream/get-workstream-issue-options";
 import {
   createWorkstreamIssue,
@@ -89,19 +92,27 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
       tool(
         "workstream_issues_list",
         "List the Workstream board issues (the kanban the user sees) for the " +
-          "active workspace's connected GitHub repo. Returns { issues: [...] }; " +
-          "each entry carries: id (the repo issue number as a string, e.g. " +
+          "active workspace's connected GitHub repo. Returns { issues: [...], " +
+          "board: { onKanbanOrg, projectWritable } }; " +
+          "each issues entry carries: id (the repo issue number as a string, e.g. " +
           "'5652'), title, description, status (backlog|ready|in_progress|" +
           "in_review|blocked|pending|done), priority (urgent|high|medium|low|" +
           "none), assigneeRole (a leader role id like 'cto'/'coo', or null), an " +
           "optional `user` (the first assignee: { name, initials }), an optional " +
-          "`live` flag, and createdAt/updatedAt. Empty when no repo is " +
-          "connected. Read-only.",
+          "`live` flag, and createdAt/updatedAt. `board.onKanbanOrg === true` " +
+          "means the org Project board wins over labels on read — and when " +
+          "projectWritable is false, a set_status to a non-done column will " +
+          "SNAP BACK on the next refresh (the label→board mirror needs a grant " +
+          "that is not yet installed), so prefer pending/done moves or warn the " +
+          "user. Empty issues when no repo is connected. Read-only.",
         {},
         async () => {
           try {
-            const issues = await getWorkstreamIssues(userId);
-            return textResponse({ issues });
+            // Board meta rides the SAME repo resolution as the issue fetch —
+            // no second repo-URL read, and meta can never diverge from issues.
+            const ctx = await resolveBoardReadContext(userId);
+            const issues = await collectWorkstreamIssues(ctx);
+            return textResponse({ issues, board: ctx.board });
           } catch (err) {
             return textResponse(
               {

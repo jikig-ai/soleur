@@ -101,6 +101,10 @@ export const swrKeys = {
   dashboardFoundationStatus: () =>
     ["/api/dashboard/foundation-status", "dashboard"] as const,
   releasesList: () => ["/api/dashboard/releases"] as const,
+  // The board's fetcher negotiates `Accept: text/event-stream` (progressive
+  // delta frames, lib/workstream-feed.ts); other consumers — the nav badge's
+  // jsonFetcher — get the unchanged bulk JSON. Both resolve `{issues, board}`
+  // so one shared entry feeds every reader.
   workstreamIssues: () => ["/api/workstream/issues"] as const,
   /** Picker options (labels/assignees/milestones) for the edit-fields drawer —
    *  fetched lazily (key gated to null until an editor opens). */

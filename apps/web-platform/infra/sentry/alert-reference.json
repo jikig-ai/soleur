@@ -1236,6 +1236,47 @@
     ],
     "triggerLogicType": "single"
   },
+  "inngest-provision-degraded": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "bootstrap_done_degraded"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 34,
+    "name": "inngest-provision-degraded",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "inngest-provision-failure": {
     "actionFilters": [
       {
@@ -1259,8 +1300,8 @@
           {
             "comparison": {
               "key": "stage",
-              "match": "in",
-              "value": "bootstrap_done_degraded,provision_attempt_failed"
+              "match": "eq",
+              "value": "provision_attempt_failed"
             },
             "type": "tagged_event"
           }
