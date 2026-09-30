@@ -241,6 +241,15 @@ creator attribution; deleting a bound run cascades attempts, checkpoints, and ev
 not add a sub-processor or authorize any Codex transfer. API-key and managed-mode CLO dispositions
 remain pending with no authorization; Codex remains default-off and customer processing blocked.
 
+### Agent-engine migration 149 amendment (effective only upon merge of PR #9051, 2026-09-30)
+
+Migration 149 adds a content-free Codex history-transfer acknowledgment keyed by member,
+conversation, auth-mode generation, and current membership epoch. The record is included in
+the member's Article 15 export and purged when the generation or membership epoch changes,
+or when the account or conversation is deleted. Its provisional Art. 6(1)(b) basis requires
+CLO validation. It introduces no processor and does not authorize Codex customer processing;
+both mode-specific CLO dispositions remain pending and the customer flag remains off.
+
 ## How to Update This Document
 
 - When a DPA is signed, updated, or revoked: update the Vendor DPA Status table

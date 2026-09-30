@@ -537,6 +537,23 @@ export async function exportSqlTable(
     results.push({ table: "agent_engine_recovery_checkpoints", spec: DSAR_TABLE_ALLOWLIST.agent_engine_recovery_checkpoints, rows });
   }
 
+  // -- Codex history-transfer acknowledgments (migration 149) ----------
+  {
+    const { data, error } = await service
+      .from("codex_history_transfer_acknowledgments")
+      .select("conversation_id,member_user_id,auth_mode_generation,workspace_member_created_at,acknowledged_at")
+      .eq("member_user_id", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`codex_history_transfer_acknowledgments read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "codex_history_transfer_acknowledgments", { ownerField: "member_user_id" });
+    results.push({
+      table: "codex_history_transfer_acknowledgments",
+      spec: DSAR_TABLE_ALLOWLIST.codex_history_transfer_acknowledgments,
+      rows,
+    });
+  }
+
   // -- api_keys ----------------------------------------------------------
   {
     const { data, error } = await service

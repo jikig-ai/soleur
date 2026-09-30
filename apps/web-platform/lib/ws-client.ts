@@ -55,6 +55,8 @@ export type StreamState = "idle" | "streaming" | "stopping";
 export interface WebSocketError {
   code: string;
   message: string;
+  conversationId?: string;
+  authModeGeneration?: number;
   action?: {
     label: string;
     href: string;
@@ -92,6 +94,7 @@ interface UseWebSocketReturn {
   startSession: (optsOrLeaderId?: StartSessionOptions | DomainLeaderId, context?: ConversationContext) => void;
   resumeSession: (conversationId: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
+  acknowledgeCodexHistoryTransfer: (conversationId: string, authModeGeneration: number) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   /** feat-bash-autonomous-default-on: client→server ack for the first-run
    *  autonomous-mode disclosure soft-gate. Selection is "Got it" /
@@ -978,8 +981,27 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "codex_history_transfer_required": {
           setLastError({
             code: "codex_history_transfer_required",
-            message: "This conversation changed Codex accounts. Acknowledge the history transfer before continuing.",
+            message: "This conversation's stored history may be sent to the selected Codex account. Acknowledge before retrying your message.",
+            conversationId: msg.conversationId,
+            authModeGeneration: msg.authModeGeneration,
           });
+          break;
+        }
+
+        case "codex_history_transfer_acknowledge": {
+          reportSilentFallback(new Error("client-only acknowledgment frame received from server"), {
+            feature: "codex-history-transfer",
+            op: "unexpected-client-frame",
+          });
+          break;
+        }
+
+        case "codex_history_transfer_acknowledged": {
+          setLastError((current) => current?.code === "codex_history_transfer_required"
+            && current.conversationId === msg.conversationId
+            && current.authModeGeneration === msg.authModeGeneration
+            ? null
+            : current);
           break;
         }
 
@@ -1810,6 +1832,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
+  const acknowledgeCodexHistoryTransfer = useCallback(
+    (targetConversationId: string, authModeGeneration: number) => {
+      send({
+        type: "codex_history_transfer_acknowledge",
+        conversationId: targetConversationId,
+        authModeGeneration,
+      });
+    },
+    [send],
+  );
+
   const sendReviewGateResponse = useCallback(
     (gateId: string, selection: string) => {
       send({ type: "review_gate_response", gateId, selection });
@@ -1918,6 +1951,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     startSession,
     resumeSession,
     sendMessage,
+    acknowledgeCodexHistoryTransfer,
     sendReviewGateResponse,
     sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,

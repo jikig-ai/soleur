@@ -222,6 +222,11 @@ const resumeSessionSchema = z.strictObject({
   type: z.literal("resume_session"),
   conversationId: z.string(),
 });
+const codexHistoryTransferAcknowledgeSchema = z.strictObject({
+  type: z.literal("codex_history_transfer_acknowledge"),
+  conversationId: conversationIdSchema,
+  authModeGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
 // feat-stream-since-disconnect (#5273) — client→server transient-reconnect
 // reattach control frame. `ackSeq` is the highest `seq` the client already
 // rendered (server clamps a negative/huge value; absent ⇒ replay whole tail).
@@ -378,6 +383,11 @@ const codexHistoryTransferRequiredSchema = z.strictObject({
   conversationId: conversationIdSchema,
   authModeGeneration: z.number().int().nonnegative(),
 });
+const codexHistoryTransferAcknowledgedSchema = z.strictObject({
+  type: z.literal("codex_history_transfer_acknowledged"),
+  conversationId: conversationIdSchema,
+  authModeGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),
   conversationId: z.string(),
@@ -493,6 +503,8 @@ const errorSchema = z.strictObject({
       "too_many_files",
       "interactive_prompt_rejected",
       "image_paste_lost",
+      "codex_history_transfer_acknowledgment_failed",
+      "codex_history_transfer_acknowledgment_rejected",
       // #5394 — Concierge dispatch blocked because the active workspace repo
       // setup errored (repo_status === "error"). Client renders the reconnect
       // CTA. The cloning block carries no errorCode.
@@ -619,6 +631,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   chatSchema,
   startSessionSchema,
   resumeSessionSchema,
+  codexHistoryTransferAcknowledgeSchema,
   resumeStreamSchema,
   streamReplaySchema,
   closeConversationSchema,
@@ -638,6 +651,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   autonomousDisclosureSchema,
   autonomousPostureSchema,
   codexHistoryTransferRequiredSchema,
+  codexHistoryTransferAcknowledgedSchema,
   sessionStartedSchema,
   sessionResumedSchema,
   sessionEndedSchema,

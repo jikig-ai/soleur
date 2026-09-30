@@ -73,3 +73,18 @@ acknowledgment query. Keep synthetic Codex dispatch fixtures explicit about
 the recorded acknowledgment; the fail-closed production check is working as
 intended. Tenant-integration uses the same broad Vitest batch, so this one
 fixture correction can resolve both CI failures.
+
+Immediately after pushing the correction, `gh pr checks --watch` briefly
+reported that no checks existed because GitHub had not published the new
+workflow statuses yet. Confirm the PR head and `gh run list` for the branch,
+then retry the watcher once the runs appear; the new CI was active and did
+not need a manual rerun.
+
+During the durable-ack continuation, `bun run typecheck` was invoked at the
+repository root, which has no such script; run `npm run typecheck` from
+`apps/web-platform`. Two migration probes also carried a root-relative path
+while already inside `apps/web-platform`, and a later gate call named the app's
+lint script from the repository root. Check `pwd` against the script's owning
+package before invoking it. The PR-diff form of the FK-precondition lint skips
+an untracked migration, so run the explicit-file form while a migration is
+still uncommitted; it caught missing `to_regclass` checks for both FK targets.

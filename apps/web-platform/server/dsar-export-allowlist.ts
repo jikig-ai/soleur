@@ -81,6 +81,9 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
     article: "15",
     joinVia: { parentTable: "agent_engine_runs", parentJoinColumn: "run_id" },
   },
+  // Member acknowledgment is controller-generated Art. 15 data, scoped to
+  // the authenticated member and excluded from portability (Art. 20).
+  codex_history_transfer_acknowledgments: { ownerField: "member_user_id", article: "15" },
 
   // BYOK encrypted credentials (Art. 15: encrypted ciphertext returned
   // base64-encoded; the user provided the underlying key, hence 15+20).

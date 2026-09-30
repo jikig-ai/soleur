@@ -88,6 +88,8 @@ This is the canonical Register of Processing Activities maintained by **Jikigai*
 
 ---
 
+**Migration 149 amendment (PR #9051; effective only upon merge):** The Codex account-change safeguard adds a content-free, per-member acknowledgment record containing a conversation reference, auth-mode generation, membership epoch, and timestamp. Purpose — require the active workspace member to acknowledge before conversation history can be sent to a newly selected Codex account. Basis — provisional Article 6(1)(b) candidate, pending CLO validation. The record appears in that member's Article 15 export, not Article 20 portability, and is deleted when its generation or membership epoch changes, the account is erased, or the conversation is deleted. No new processor or provider transfer is introduced; API-key and managed-mode CLO dispositions remain pending and Codex customer processing remains blocked.
+
 ## Processing Activity 3 — Subscription & Billing
 
 | Art. 30(1) limb | Entry |

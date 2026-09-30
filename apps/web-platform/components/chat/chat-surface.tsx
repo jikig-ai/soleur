@@ -218,6 +218,7 @@ export function ChatSurface({
     startSession,
     resumeSession,
     sendMessage,
+    acknowledgeCodexHistoryTransfer,
     sendReviewGateResponse,
     sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,
@@ -886,10 +887,16 @@ export function ChatSurface({
               <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
             ) : (
               <ErrorCard
-                title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
+                title={lastError.code === "codex_history_transfer_required" ? "Codex account changed" : lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
                 message={lastError.message}
-                onRetry={lastError.code !== "key_invalid" && lastError.code !== "subscription_limit" ? reconnect : undefined}
+                onRetry={lastError.code !== "key_invalid" && lastError.code !== "subscription_limit" && lastError.code !== "codex_history_transfer_required" ? reconnect : undefined}
                 retryLabel="Reconnect"
+                confirmLabel="Acknowledge and continue"
+                onConfirm={lastError.code === "codex_history_transfer_required"
+                  && lastError.conversationId
+                  && lastError.authModeGeneration !== undefined
+                  ? () => acknowledgeCodexHistoryTransfer(lastError.conversationId!, lastError.authModeGeneration!)
+                  : undefined}
                 action={lastError.action}
                 onDismiss={() => setDismissedErrorKey(activeErrorKey)}
               />

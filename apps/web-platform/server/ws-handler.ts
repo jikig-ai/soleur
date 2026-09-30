@@ -1581,6 +1581,7 @@ const TC_RECHECK_MESSAGE_TYPES = new Set([
   "start_session",
   "resume_session",
   "chat",
+  "codex_history_transfer_acknowledge",
   "interactive_prompt_response",
   "review_gate_response",
 ]);
@@ -2785,6 +2786,67 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // review_gate_response: resolve a pending review gate in the agent
     // ------------------------------------------------------------------
     // ------------------------------------------------------------------
+    // Codex history-transfer acknowledgment: record the active socket
+    // member's explicit acknowledgment through the tenant-scoped RPC.
+    // ------------------------------------------------------------------
+    case "codex_history_transfer_acknowledge": {
+      if (
+        session.conversationId !== msg.conversationId
+        || !Number.isSafeInteger(msg.authModeGeneration)
+        || msg.authModeGeneration <= 0
+      ) {
+        sendToClient(userId, {
+          type: "error",
+          message: "This Codex history acknowledgment is no longer current. Reopen the conversation and review the notice again.",
+          errorCode: "codex_history_transfer_acknowledgment_rejected",
+        });
+        break;
+      }
+
+      const tenant = await tenantFor(userId, "handleMessage.codex-history-transfer-ack");
+      if (!tenant) {
+        sendToClient(userId, {
+          type: "error",
+          message: "The Codex history acknowledgment could not be recorded. Please reconnect and try again.",
+          errorCode: "codex_history_transfer_acknowledgment_failed",
+        });
+        break;
+      }
+
+      try {
+        const { data, error } = await tenant.rpc("record_codex_history_transfer_acknowledgment", {
+          p_conversation_id: msg.conversationId,
+          p_auth_mode_generation: msg.authModeGeneration,
+        });
+        if (error) throw error;
+        if (data !== true) {
+          sendToClient(userId, {
+            type: "error",
+            message: "The Codex account changed while you were reviewing this notice. Reopen the conversation and review the latest notice.",
+            errorCode: "codex_history_transfer_acknowledgment_rejected",
+          });
+          break;
+        }
+        sendToClient(userId, {
+          type: "codex_history_transfer_acknowledged",
+          conversationId: msg.conversationId,
+          authModeGeneration: msg.authModeGeneration,
+        });
+      } catch (error) {
+        reportSilentFallback(error, {
+          feature: "codex-history-transfer",
+          op: "record-member-acknowledgment",
+        });
+        sendToClient(userId, {
+          type: "error",
+          message: "The Codex history acknowledgment could not be recorded. Please reconnect and try again.",
+          errorCode: "codex_history_transfer_acknowledgment_failed",
+        });
+      }
+      break;
+    }
+
+    // ------------------------------------------------------------------
     // abort_turn: user-initiated Stop. Broadcast-aborts every leader's
     // session for the conversation so multi-leader dispatch can't leak
     // a hidden BYOK-burning session past the click (TR3 / G3, plan
@@ -3013,6 +3075,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "fanout_truncated":
     case "context_reset":
     case "codex_history_transfer_required":
+    case "codex_history_transfer_acknowledged":
     case "c4_diagram_saved": // #8739 — Concierge diagram-save notice (server→client only)
     case "upgrade_pending":
     case "interactive_prompt":

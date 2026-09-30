@@ -165,6 +165,8 @@ export type WSErrorCode =
   // image bytes were never attached. Client renders a non-blocking
   // banner asking the user to re-attach the image directly.
   | "image_paste_lost"
+  | "codex_history_transfer_acknowledgment_failed"
+  | "codex_history_transfer_acknowledgment_rejected"
   // #5394 — Concierge dispatch blocked because the active workspace's repo
   // setup `error`'d (repo_status === "error"). Client renders the reconnect
   // CTA to Settings → Repository. The `cloning` block carries NO errorCode
@@ -290,6 +292,7 @@ export type WSMessage =
   | { type: "start_session"; leaderId?: DomainLeaderId; context?: ConversationContext; resumeByContextPath?: string }
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
+  | { type: "codex_history_transfer_acknowledge"; conversationId: string; authModeGeneration: number }
   | { type: "review_gate_response"; gateId: string; selection: string }
   // feat-bash-autonomous-default-on — first-run consent soft-gate response
   // (client→server). `selection` is "Got it" / "Keep autonomous on" /
@@ -405,6 +408,7 @@ export type WSMessage =
   // credential resolution until this resuming member has acknowledged the
   // active provider account for the current binding generation.
   | { type: "codex_history_transfer_required"; conversationId: string; authModeGeneration: number }
+  | { type: "codex_history_transfer_acknowledged"; conversationId: string; authModeGeneration: number }
   // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
   // persistent chip (server→client). `autonomous` is the SERVER truth
   // `bashAutonomous && ackAt != null` — i.e. "Auto-run on" only when the toggle

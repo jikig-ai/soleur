@@ -172,6 +172,35 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.spawn).not.toHaveBeenCalled();
   });
 
+  it("records the active member's acknowledgment for the exact conversation generation", async () => {
+    fixture.rpc.mockResolvedValue({ data: true, error: null });
+    const send = vi.fn();
+    sessions.set(fixture.userId, {
+      ws: { readyState: 1, send, close: vi.fn() },
+      conversationId: fixture.conversationId,
+      lastActivity: Date.now(), tcVersionAtHandshake: TC_VERSION,
+      tcRecheckCacheUntil: Date.now() + 1_000_000,
+    } as unknown as ClientSession);
+
+    await handleMessage(fixture.userId, JSON.stringify({
+      type: "codex_history_transfer_acknowledge",
+      conversationId: fixture.conversationId,
+      authModeGeneration: 1,
+    }));
+
+    expect(fixture.rpc).toHaveBeenCalledWith("record_codex_history_transfer_acknowledgment", {
+      p_conversation_id: fixture.conversationId,
+      p_auth_mode_generation: 1,
+    });
+    expect(send.mock.calls.map(([value]) => JSON.parse(value as string))).toContainEqual({
+      type: "codex_history_transfer_acknowledged",
+      conversationId: fixture.conversationId,
+      authModeGeneration: 1,
+    });
+    expect(fixture.from).not.toHaveBeenCalledWith("messages");
+    expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+
   it("routes abort_turn through the real handler into the active Codex dispatch signal", async () => {
     fixture.mode = "api-key";
     fixture.rpc.mockImplementation(async (name: string) => name === "start_agent_engine_attempt"
