@@ -1,9 +1,9 @@
 ---
 title: "Background work now declares where it is allowed to run"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-10-01
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#9134"
 issue_reference: "#7230"
 ---
