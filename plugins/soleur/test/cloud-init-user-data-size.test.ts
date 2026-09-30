@@ -164,7 +164,12 @@ const HETZNER_CAP = 32_768;
 // its `timeout 180`); the CI figure is taken as local + 32 B (the zlib delta recorded above, local
 // is the LOWER one), so ~23,392. 23,580 restores the same ~184 B headroom over that and stays
 // ~9.2 KB below HETZNER_CAP. If CI reds on the first run, re-derive from its failure line.
-const WEB_GZIP_BUDGET = 23_580;
+//
+// #9169 RAISE: the ghcr.io hosts-file deny (a byte copy of the registry's runcmd entry, as runcmd[1])
+// took the local render to 23,584 B, 4 B over. Same derivation as the lower above: CI ~= local + 32
+// = ~23,616; 23,800 restores ~184 B of headroom and stays ~9.0 KB below HETZNER_CAP. If CI reds,
+// re-derive from its failure line.
+const WEB_GZIP_BUDGET = 23_800;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
