@@ -104,6 +104,7 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_strategy_review.id,
     sentry_cron_monitor.scheduled_supabase_advisor_scan.id,
     sentry_cron_monitor.scheduled_supabase_disk_io.id,
+    sentry_cron_monitor.scheduled_supabase_watchdog.id,
     sentry_cron_monitor.scheduled_terraform_drift.id,
     sentry_cron_monitor.scheduled_ux_audit.id,
     sentry_cron_monitor.scheduled_weekly_analytics.id,

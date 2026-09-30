@@ -183,6 +183,18 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-machinery-drain")).toBe(false);
   });
 
+  // #9168: cron-supabase-watchdog-dispatch is a dispatch-hybrid (mint token +
+  // workflow_dispatch to scheduled-supabase-watchdog.yml); the restart write
+  // runs in the ephemeral GHA executor, the Node side holds no git, no PR, and
+  // NO Supabase credential. Never Tier-2 deferred: a deferred tick is a missed
+  // 5-min probe of the outage this cron exists to shorten. Asserted here so
+  // the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("supabase-watchdog-dispatch (#9168, dispatch-hybrid) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-supabase-watchdog-dispatch")).toBe(
+      false,
+    );
+  });
+
   // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
   // allow) unblocks the two audit crons whose only denied construct was the
   // Task catch-all.
@@ -894,7 +906,7 @@ describe("mintInstallationToken (least-privilege cron token)", () => {
 // tests pin the transport contract: request headers + body, return shape,
 // non-ok throw, optional timeout wiring, optional output_config passthrough.
 describe("postAnthropicMessage (shared Anthropic transport)", () => {
-  const ANY_MODEL = "claude-sonnet-5";
+  const ANY_MODEL = "claude-sonnet-5-5";
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   function okResponse(body: unknown) {
@@ -918,7 +930,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
       okResponse({
         content: [{ type: "text", text: "ok" }],
         stop_reason: "end_turn",
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-5-5",
         usage: {
           input_tokens: 12,
           output_tokens: 3,
@@ -939,7 +951,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     expect(emitClaudeCostMarkerSpy).toHaveBeenCalledTimes(1);
     expect(emitClaudeCostMarkerSpy.mock.calls[0][0]).toMatchObject({
       source: "cron:cron-compound-promote",
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-5-5",
       input_tokens: 12,
       output_tokens: 3,
       cache_read_input_tokens: 4,
@@ -995,7 +1007,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     expect(sent).not.toHaveProperty("output_config");
   });
 
-  // #8392 — EXECUTION_MODEL has been claude-sonnet-5 since #5849, and Sonnet 5 runs
+  // #8392 — EXECUTION_MODEL has been a Sonnet since #5849 (5.5 today), and Sonnet runs
   // adaptive thinking when `thinking` is omitted, so content[0] is a thinking block
   // (display "omitted" → `thinking: ""`) and the structured-output text follows it.
   it("#8392 — returns the first TEXT block when a thinking block precedes it", async () => {
@@ -1438,7 +1450,7 @@ describe("AnthropicApiError (widened transport, #5674)", () => {
     );
     const err = await postAnthropicMessage({
       apiKey: "sk-ant-" + "synthetic",
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-5-5",
       maxTokens: 1,
       messages: [{ role: "user", content: "ping" }],
     }).catch((e: unknown) => e);
@@ -1454,7 +1466,7 @@ describe("AnthropicApiError (widened transport, #5674)", () => {
     await expect(
       postAnthropicMessage({
         apiKey: "sk-ant-" + "synthetic",
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-5-5",
         maxTokens: 1,
         messages: [{ role: "user", content: "x" }],
       }),

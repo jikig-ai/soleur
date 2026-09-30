@@ -3,6 +3,16 @@ output "server_ip" {
   value       = hcloud_server.web["web-1"].ipv4_address
 }
 
+output "web_2_server_ip" {
+  description = "Public IPv4 address of the web-2 standby host (#9151). apply-deploy-pipeline-fix.yml NAT-redirects this address's :22 through the web-1 bastion forward for the deploy_pipeline_fix_web2 sibling."
+  value       = hcloud_server.web["web-2"].ipv4_address
+}
+
+output "web_2_private_ip" {
+  description = "Private IPv4 of web-2 on the 10.0.1.0/24 net — the ssh -L forward target through the web-1 bastion (#9151)."
+  value       = var.web_hosts["web-2"].private_ip
+}
+
 output "ssh_command" {
   description = "SSH command to connect to the server"
   value       = "ssh root@${hcloud_server.web["web-1"].ipv4_address}"

@@ -7,6 +7,7 @@
 // are fed by ONE request (free dedup) and can never disagree.
 
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { usePostFcp } from "@/hooks/use-post-fcp";
 import { isClosed, type WorkstreamIssue } from "@/lib/workstream";
 import {
   NavCountBadge,
@@ -28,8 +29,10 @@ export function isWorkstreamAttentionItem(i: WorkstreamIssue): boolean {
 }
 
 export function WorkstreamNavBadge({ collapsed }: { collapsed: boolean }) {
+  // #9178 — non-critical chrome: defer the count fetch past first paint.
+  const postFcp = usePostFcp();
   const count = useNavAttentionCount(
-    swrKeys.workstreamIssues(),
+    postFcp ? swrKeys.workstreamIssues() : null,
     jsonFetcher<IssuesResponse>,
     (data) => (data.issues ?? []).filter(isWorkstreamAttentionItem).length,
     "workstream-nav-badge",

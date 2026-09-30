@@ -242,11 +242,25 @@ const GIT_DATA_FLOOR = 3_000;
 // the floor is set below that and the budget well under the cap. This host is `count`-gated
 // (local.grok_dogfood_enabled) and usually absent from the plan — which is exactly why a size
 // defect here would sit unnoticed until someone enabled it.
-const REGISTRY_GZIP_BUDGET = 20_000;
+// (#8714 5.3b-iii, ADR-185 amendment 2026-09-28) 20_000 -> 21_000. The registry host now carries the
+// zot boot-image fetch-and-verify step; measured 20,408 B stored (terraform base64gzip,
+// registry-userdata-budget.sh), so this leaves 592 B of slack (a ~1.5 KB re-inlining still trips it)
+// and ~11.8 KB below HETZNER_CAP. The 8,000 B headroom POLICY is unchanged; above 24,767 is a policy
+// change needing its own ADR.
+// (#7270, ADR-185 addendum 2026-09-28) the zot liveness feeder's per-boot counters and five
+// liveness_* fields on SOLEUR_ZOT_DISK fit without raising the constant: measured 20,932 B stored,
+// so the slack above is now 68 B. The next registry-host addition needs a structural shrink.
+const REGISTRY_GZIP_BUDGET = 21_000;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
 const GROK_DOGFOOD_GZIP_FLOOR = 500;
-const INNGEST_GZIP_BUDGET = 18_000;
+// #8562 (2026-09-28): 18_000 -> 20_000. The first-boot provision path moved out of runcmd into a
+// latched, retrying systemd unit (a ~200-line write_files script + .service + .timer), which this
+// model measures at 18,072 B. The byte-authoritative terraform measurement is 18,396 B stored /
+// 14,372 B headroom under the 32,768 B cap (inngest-userdata-budget.sh, the CI gate). This is the
+// early-warning bracket, not the cap: it keeps ~1.6 KB of warning margin, the same margin the
+// 18_000 bracket left over the pre-#8562 16,400 B, and matches REGISTRY_GZIP_BUDGET.
+const INNGEST_GZIP_BUDGET = 20_000;
 const INNGEST_GZIP_FLOOR = 4_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";

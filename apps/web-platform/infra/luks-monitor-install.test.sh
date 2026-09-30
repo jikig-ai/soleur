@@ -889,11 +889,23 @@ for p in tf_files:
                 if k == "remote-exec" and any("/etc/default/luks-monitor" in c for c in inline_raw(b)):
                     hit = True
                 # Any script the block ships or runs: a file provisioner's source, or a remote-exec
-                # script / scripts entry, read from disk.
+                # script / scripts entry, read from disk. WRITER-vs-READER (#9123): the census
+                # quantifies over WRITES, and an `EnvironmentFile=[-]/etc/default/luks-monitor`
+                # line in a shipped unit is systemd READING the file at unit start — a
+                # read-only consumer (workspaces-luks-reopen.service and -failure.service both
+                # carry it; terraform_data.workspaces_boot_unlock_install ships them). Only a
+                # line that IS just the declaration is exempted — a line with anything else on it
+                # (`EnvironmentFile=-/etc/default/luks-monitor; echo x >> ...`) still hits. Every
+                # other non-comment mention stays a hit too: the token helper's ENVF= anchor,
+                # the emit helper's `. /etc/default/luks-monitor`, redirects, sed -i, tee, mv.
+                READER_LINE = re.compile(r'^[ \t]*EnvironmentFile=-?/etc/default/luks-monitor[ \t]*$')
                 for sm in re.finditer(r'(?:source|script)\s*=\s*"\$\{path\.(?:module|root)\}/([^"]+)"|"\$\{path\.(?:module|root)\}/([^"]+)"', b):
                     rel = sm.group(1) or sm.group(2)
                     sp = os.path.join(os.path.dirname(p), rel)
-                    if os.path.isfile(sp) and re.search(r'(?m)^[^#]*/etc/default/luks-monitor', open(sp, errors="replace").read()):
+                    if os.path.isfile(sp) and any(
+                        re.match(r'[^#]*/etc/default/luks-monitor', l)
+                        and READER_LINE.match(l) is None
+                        for l in open(sp, errors="replace").read().splitlines()):
                         hit = True
             if hit:
                 writers.add(name)
@@ -1130,7 +1142,7 @@ PY
     [G3-1]="token-only file" [G3-2]="second run is idempotent" [G3-3]="BORN 0600"
     [G3-4]="symlink at the path" [G3-5]="only the DSN line changes" [G3-6]="read error on the file"
     [G3-7]="planted temp-file symlink" [G3-8]="precondition rejects quotes" [G3-9]="env-file writers are exactly"
-    [G3-10]="chowned root:root" [G3-11]="env-file writers are exactly"
+    [G3-10]="chowned root:root" [G3-11]="env-file writers are exactly" [G3-12]="READS the env file"
     [G4-1]="every referenced local is hashed" [G4-2]="precedes the exit-17 freeze-refusal"
     [G4-3]="resolves to lines" [G4-4]="every referenced local is hashed" [G4-5]="counts-only forms"
     [G4-6]="forbidden diagnostic" [G4-7]="forbidden diagnostic" [G4-8]="forbidden diagnostic"
@@ -1263,6 +1275,16 @@ X
     destination = "/etc/default/luks-monitor"
   }
 }' .tf
+  # #9123 — the reader side of the census distinction: a resource that ships a unit READING
+  # the env file via EnvironmentFile= is a consumer, NOT a writer (the boot-unlock installer's
+  # shape). Must PASS — if the READER_LINE exemption is lost, this resource trips the census.
+  printf '[Service]\nEnvironmentFile=-/etc/default/luks-monitor\n' > "$MUT/consumer-reader.service"
+  extra "G3-12 a resource shipping a unit that READS the env file via EnvironmentFile (consumer)" 0 LMI_EXTRA_TF 'resource "terraform_data" "reader_only" {
+  provisioner "file" {
+    source      = "${path.module}/consumer-reader.service"
+    destination = "/etc/systemd/system/reader-only.service"
+  }
+}' .tf
   mutate "G3-H1 the scratch-path rewrite cannot land (instrument)" 2 LMI_LUKS_TF "$T" "s.replace('\"f=/etc/default/luks-monitor\",', '\"f=\\\\\"/etc/default/luks-monitor\\\\\"\",', 1)"
   mutate "G3-H2 the writer split differently across inline entries (must PASS)" 0 LMI_LUKS_TF "$T" "s.replace('      \"umask 077\",\n      \"f=/etc/default/luks-monitor\",\n', '      \"umask 077; f=/etc/default/luks-monitor\",\n', 1)"
   # Guard 4 (#9045) — the forensic print. Every row edits a COPY of workspaces-luks.tf; a "forbidden"
@@ -1334,8 +1356,8 @@ X
   mutate "G4-27 apt-config proxy key appended (no deny row sees it; only the pin)" 1 LMI_LUKS_TF "$T" "s.replace('apt-config shell AR Unattended-Upgrade::Automatic-Reboot 2>', 'apt-config shell AR Unattended-Upgrade::Automatic-Reboot P Acquire::http::Proxy 2>', 1)"
   mutate "G4-P1 the dead-man unit renamed in workspaces-cutover.sh only" 1 LMI_CUTOVER_SH "$LMI_CUTOVER_SH" "re.sub(r'--unit=workspaces-luks-deadman\\b', '--unit=workspaces-luks-deadman-v2', s, 1)"
   mutate "G4-P2 the state print names another dead-man service" 1 LMI_LUKS_TF "$T" "s.replace('workspaces-luks-deadman.timer workspaces-luks-deadman.service --no-pager', 'workspaces-luks-deadman.timer workspaces-luks-deadman-old.service --no-pager', 1)"
-  # A deleted row must not pass silently: 20 Guard 1 + 17 Guard 2 + 13 Guard 3 + 30 Guard 4 rows.
-  MUT_ROWS_EXPECTED=80
+  # A deleted row must not pass silently: 20 Guard 1 + 17 Guard 2 + 14 Guard 3 + 30 Guard 4 rows.
+  MUT_ROWS_EXPECTED=81
   if [[ "$mut_rows" -ne "$MUT_ROWS_EXPECTED" ]]; then
     printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"
     exit 1
@@ -1345,11 +1367,11 @@ fi
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # Anti-vacuity floor. The threshold sits on the line directly above its `if`. It is EXACT: 118 is the
-# measured inner-run (LMI_MUTANT=1) assertion count, and the outer run adds the 80 mutation rows
+# measured inner-run (LMI_MUTANT=1) assertion count, and the outer run adds the 81 mutation rows
 # (MUT_ROWS_EXPECTED), so deleting any one check, not only a whole block, trips it. Adding a check
 # means raising 118 here.
 _lmi_mut_floor="${LMI_MUTANT:+0}"
-MIN_ASSERTIONS=$((118 + ${_lmi_mut_floor:-80}))
+MIN_ASSERTIONS=$((118 + ${_lmi_mut_floor:-81}))
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1

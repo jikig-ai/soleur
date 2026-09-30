@@ -241,6 +241,10 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
   },
+  "cron-supabase-watchdog-dispatch": {
+    placement: "portable",
+    reason: "host-free: mints an actions:write-scoped App token and POSTs a workflow_dispatch; deliberately DB-independent so it survives the Postgres hang it dispatches against (#9168)",
+  },
   "cron-terraform-drift": {
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",

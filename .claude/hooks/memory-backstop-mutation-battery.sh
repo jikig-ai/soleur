@@ -159,34 +159,46 @@ mutated_or_die() { grep -qF "$2" "$1" || { echo "SETUP FAIL: mutation did not la
 # M2a OOMPolicy=stop on the scope — systemd then stops the WHOLE scope on any
 # OOM, killing claude itself. (Note: `continue` is the measured DEFAULT for a
 # transient scope on systemd 259, so OMITTING the property is not observable;
-# mis-setting it to the dangerous value is.)
+# mis-setting it to the dangerous value is.) `/g` is load-bearing: the literal
+# also leads the sibling sweep's StartTransientUnit, and a first-match-only
+# substitution mutates THAT call — leaving the adopted scope's own property
+# untouched and reporting SURVIVED over an unmutated adoption path. Measured
+# 2026-09-30: the pre-/g form survived on this battery (#7208-class gap).
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"OOMPolicy" "s" "continue"/"OOMPolicy" "s" "stop"/' "$h"
+perl -0pi -e 's/"OOMPolicy" "s" "continue"/"OOMPolicy" "s" "stop"/g' "$h"
 mutated_or_die "$h" '"OOMPolicy" "s" "stop"'
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 report "M2a-OOMPolicy-stop" "T8/AC8 OOMPolicy readback" "continue" "$(systemctl --user show "$SC" -p OOMPolicy --value 2>/dev/null)"
 teardown_synthetic "$W"
 
-# M2b scope MemorySwapMax unset — anchored on the following OOMPolicy line so it
-# targets the SCOPE call, not the slice call (whose next line is ManagedOOMPreference).
+# M2b scope MemorySwapMax uncapped — anchored on the FOLLOWING
+# `"TasksMax" "t" "$SCOPE_TASKS_MAX"` line so it targets the scope-level calls,
+# not the slice call (whose next line is `"TasksMax" "t" "$FLEET_TASKS_MAX"`).
+# `/g` because the property repeats across the sweep, both StartTransientUnit
+# calls, the re-entry refresh and the repair call — all scope-level.
+# (The pre-#9230 anchor on `"OOMPolicy"` next-line silently stopped matching
+# when TasksMax was inserted between them — the battery exited SETUP FAIL.)
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"MemorySwapMax" "t" 0 \\\n(\s*)"OOMPolicy"/"MemorySwapMax" "t" 18446744073709551615 \\\n$1"OOMPolicy"/' "$h"
+perl -0pi -e 's/"MemorySwapMax" "t" 0( \\\n[ \t]*"TasksMax" "t" "\$SCOPE_TASKS_MAX")/"MemorySwapMax" "t" 18446744073709551615$1/g' "$h"
 mutated_or_die "$h" '"MemorySwapMax" "t" 18446744073709551615'
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 report "M2b-scope-swap-uncapped" "T8/AC5 memory.swap.max readback" "0" "$(scope_file "$W" memory.swap.max)"
 teardown_synthetic "$W"
 
-# M2c scope MemoryHigh mis-set
+# M2c scope MemoryHigh mis-set — `/g` for the same reason as M2a: the literal
+# repeats in the sweep call, and a first-match-only substitution mutates that
+# one and reports SURVIVED over an intact adoption path.
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"MemoryHigh" "t" "\$SCOPE_HIGH_BYTES"/"MemoryHigh" "t" 3221225472/' "$h"
+perl -0pi -e 's/"MemoryHigh" "t" "\$SCOPE_HIGH_BYTES"/"MemoryHigh" "t" 3221225472/g' "$h"
 mutated_or_die "$h" '"MemoryHigh" "t" 3221225472'
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 report "M2c-scope-high-wrong" "T8 memory.high readback" "6442450944" "$(scope_file "$W" memory.high)"
 teardown_synthetic "$W"
 
-# M2d scope MemoryMax mis-set — the cap that actually terminates a runaway
+# M2d scope MemoryMax mis-set — the cap that actually terminates a runaway;
+# same `/g` first-match repair as M2c.
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"MemoryMax" "t" "\$SCOPE_MAX_BYTES"/"MemoryMax" "t" 3221225472/' "$h"
+perl -0pi -e 's/"MemoryMax" "t" "\$SCOPE_MAX_BYTES"/"MemoryMax" "t" 3221225472/g' "$h"
 mutated_or_die "$h" '"MemoryMax" "t" 3221225472'
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 report "M2d-scope-max-wrong" "T8 memory.max readback" "7516192768" "$(scope_file "$W" memory.max)"
@@ -211,9 +223,14 @@ echo
 # ---------------------------------------------------------------- M3
 echo "== M3: drop BindsTo/After — the terminal's kill switch =="
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"\$scope" "fail" 10/"\$scope" "fail" 8/;
-             s/^\s*"BindsTo" "as" 1 "\$terminal_scope" \\\n//m;
-             s/^\s*"After" "as" 1 "\$terminal_scope" \\\n//m' "$h"
+# Both StartTransientUnit scope calls carry BindsTo/After on $terminal_scope
+# (main + pid-reuse branch); drop them in BOTH (`/mg`) and decrement the arity
+# from 11 to 9. The pre-#9230 form targeted `fail 10` — an arity the file no
+# longer carries, so the mutant changed nothing and SURVIVED. There is still
+# no mutated_or_die-style guard here; the report line is the check.
+perl -0pi -e 's/"\$scope" "fail" 11/"\$scope" "fail" 9/g;
+             s/^\s*"BindsTo" "as" 1 "\$terminal_scope" \\\n//mg;
+             s/^\s*"After" "as" 1 "\$terminal_scope" \\\n//mg' "$h"
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 got_bt=$(systemctl --user show "$SC" -p BindsTo --value 2>/dev/null)
 if [[ -z "$got_bt" ]]; then
@@ -249,8 +266,11 @@ echo
 echo "== M5: drop runtime=true — permanently mutates the operator's systemd config =="
 ctl_before=$(find "$CTL" -type f 2>/dev/null | sort | sha256sum)
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"\$SLICE_NAME" true 4/"\$SLICE_NAME" false 4/' "$h"
-grep -q '"\$SLICE_NAME" false 4' "$h" || { echo "SETUP FAIL: M5 mutation did not land" >&2; exit 2; }
+# `true 5`: the slice call carries five properties (TasksMax and
+# ManagedOOMPreference postdate the `true 4` anchor this line was written
+# against — the stale arity silently stopped matching, SETUP FAIL).
+perl -0pi -e 's/"\$SLICE_NAME" true 5/"\$SLICE_NAME" false 5/' "$h"
+grep -q '"\$SLICE_NAME" false 5' "$h" || { echo "SETUP FAIL: M5 mutation did not land" >&2; exit 2; }
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 ctl_after=$(find "$CTL" -type f 2>/dev/null | sort | sha256sum)
 report "M5-drop-runtime-true" "T10/AC7 user.control byte-identical" "$ctl_before" "$ctl_after"
@@ -336,7 +356,7 @@ echo "== M8: move MAX_WALK_HOPS — the identity walk's traversal limit (#7854) 
 # reason stated at the top of this file (ADR-161): the battery needs a live user
 # bus and takes ~2 minutes, so it is deliberately not named *.test.sh.
 #
-# Unlike every other row it needs no systemd at all — discover_claude_pid is a
+# Unlike every other row it needs no systemd at all — discover_agent_pid is a
 # pure function over a /proc-shaped directory — so it is a FUNCTION-level arm,
 # sourced in a fresh `bash -c` per mutant (the hook declares MAX_WALK_HOPS
 # readonly; two sources in one shell would abort on the second).
@@ -374,7 +394,7 @@ walk_verdict() { # <hook> <hop>
                  unset CLAUDE_CODE_EXECPATH
                  # shellcheck source=/dev/null
                  source "$1" >/dev/null 2>&1
-                 discover_claude_pid 901 "$2/proc" >/dev/null 2>&1 && echo found || echo notfound' \
+                 discover_agent_pid 901 "$2/proc" >/dev/null 2>&1 && echo found || echo notfound' \
         _ "$hook" "$HOPFX" 2>/dev/null)
   echo "${out:-ERROR}"
 }
@@ -405,6 +425,111 @@ perl -0pi -e 's/^readonly MAX_WALK_HOPS=8$/readonly MAX_WALK_HOPS=7/m' "$h"
 mutated_or_die "$h" 'readonly MAX_WALK_HOPS=7'
 report "M8b-walk-hops-7" "T5b hop-8 case (synthetic /proc)" "found" "$(walk_verdict "$h" 8)"
 rm -rf "$HOPFX"
+echo
+
+# ---------------------------------------------------------------- M9
+echo "== M9: strip BACKSTOP_REVISION — a copy the resolver cannot order (#9239) =="
+# The resolver reads the marker by `grep -m1 -oE 'BACKSTOP_REVISION=[0-9]+'`,
+# never by sourcing the candidate (ADR-156 — hook bodies are untrusted input to
+# the resolver). A copy with no marker parses as revision 0 and loses every
+# ordering contest, so "marker absent" is self-revealing — IF the parse path is
+# what is exercised. This arm drives the resolver's own parse, not a literal
+# grep-assertion, so a stripped marker is detected the way the resolver would
+# detect it.
+# Drive the resolver's own parse — candidate_revision() in
+# memory-backstop-resolve.sh is the canonical marker read (the shim's main is
+# BASH_SOURCE-guarded, so sourcing it is side-effect-free). A reimplemented
+# grep here would measure a stale parser if the resolver's pattern changed.
+# shellcheck source=.claude/hooks/memory-backstop-resolve.sh
+source "$REPO/.claude/hooks/memory-backstop-resolve.sh"
+rev_of() { # <hook-file> -> revision integer; absent/non-numeric parses as 0
+  candidate_revision "$1"
+}
+# Positive control: the shipped hook must carry a parseable nonzero marker —
+# without one this arm measures nothing.
+b_rev=$(rev_of "$REAL_HOOK")
+if [[ "$b_rev" -lt 1 ]]; then
+  echo "SETUP FAIL: $REAL_HOOK has no parseable BACKSTOP_REVISION (got '$b_rev')" >&2
+  exit 2
+fi
+echo "  positive control OK: BACKSTOP_REVISION=$b_rev parses on the real hook"
+h=$(mk_mutant) || exit 2
+perl -0pi -e 's/^readonly BACKSTOP_REVISION=[0-9]+\n//m' "$h"
+if grep -qE 'BACKSTOP_REVISION=[0-9]+' "$h"; then
+  echo "SETUP FAIL: M9 mutation did not land" >&2
+  exit 2
+fi
+m9=$(rev_of "$h")
+report "M9-strip-backstop-revision" "resolver revision parse is nonzero" "nonzero" \
+  "$( (( m9 >= 1 )) && echo nonzero || echo zero )"
+echo
+
+# ---------------------------------------------------------------- M10
+echo "== M10: drop TasksMax from repair_stale_scopes' SetUnitProperties (#9239) =="
+# REPAIR-VERIFY. A scope adopted under stale caps must be converged to the
+# current constants by the NEXT hook run on the host — the behavioural claim
+# the TasksMax drop mutates. Both arms create an identically-miscapped
+# soleur-agent-*.scope (TasksMax unset, 256 MiB memory caps) BEFORE the
+# synthetic session's hook runs; the baseline MUST repair it, proving the arm
+# measures something, and the mutant must not.
+mk_stale_scope() { # <scope> <pid>
+  busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+    org.freedesktop.systemd1.Manager StartTransientUnit "ssa(sv)a(sa(sv))" \
+    "$1" "fail" 5 \
+    "PIDs" "au" 1 "$2" \
+    "Slice" "s" "soleur-agents.slice" \
+    "MemoryHigh" "t" 268435456 \
+    "MemoryMax" "t" 268435456 \
+    "OOMPolicy" "s" "continue" \
+    0 >/dev/null 2>&1
+}
+
+for arm in baseline mutant; do
+  h=$(mk_mutant) || exit 2
+  if [[ "$arm" == mutant ]]; then
+    # Drop ONLY the repair call's TasksMax property and its arity: the repair
+    # call is the sole `"$u"`-targeted SetUnitProperties, and its TasksMax line
+    # is the only one directly followed by the `>/dev/null 2>&1 \` + `|| {`
+    # failure-continuation terminator.
+    perl -0pi -e 's/"\$u" true 4/"\$u" true 3/;
+                  s/[ \t]*"TasksMax" "t" "\$SCOPE_TASKS_MAX" \\\n(?=[ \t]*>\/dev\/null 2>&1 \\\n[ \t]*\|\| \{)//' "$h"
+    mutated_or_die "$h" '"$u" true 3'
+    _m10_n=$(grep -c '"TasksMax" "t" "$SCOPE_TASKS_MAX"' "$h")
+    [[ "$_m10_n" == "4" ]] \
+      || { echo "SETUP FAIL: M10 did not isolate the repair call (TasksMax props=$_m10_n, want 4)" >&2; exit 2; }
+    bash -n "$h" || { echo "SETUP FAIL: M10 mutant does not parse" >&2; exit 2; }
+  fi
+  STALE="soleur-agent-battery-$$-$arm.scope"
+  sleep 300 & SPID=$!
+  echo "$SPID" >> "$FC/.wrappers"
+  if ! mk_stale_scope "$STALE" "$SPID"; then
+    echo "SETUP FAIL: could not create $STALE" >&2
+    exit 2
+  fi
+  IFS='|' read -r W PD SC < <(run_synthetic "$h")
+  # The synthetic run's repair pass converges the stale scope inside the same
+  # run, AFTER StartTransientUnit — poll the readback rather than the wrapper's
+  # membership, which is satisfied earlier.
+  tm=""
+  for _ in $(seq 1 60); do
+    tm=$(systemctl --user show "$STALE" -p TasksMax --value 2>/dev/null)
+    [[ "$tm" == "4096" ]] && break
+    sleep 0.1
+  done
+  systemctl --user stop "$STALE" >/dev/null 2>&1
+  kill -9 "$SPID" 2>/dev/null
+  teardown_synthetic "$W"
+  if [[ "$arm" == baseline ]]; then
+    if [[ "$tm" == "4096" ]]; then
+      echo "  (M10 baseline: stale scope converged to TasksMax=4096)"
+    else
+      echo "SETUP FAIL: unmutated hook did not repair the stale scope (TasksMax='$tm') — the mutant verdict below would be meaningless" >&2
+      exit 2
+    fi
+  else
+    report "M10-repair-drops-TasksMax" "stale-scope TasksMax converged by repair" "4096" "$tm"
+  fi
+done
 echo
 
 echo "killed=$killed survived=$survived"

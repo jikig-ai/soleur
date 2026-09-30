@@ -672,6 +672,35 @@ if [[ "${1:-}" == "image" && "${2:-}" == "inspect" ]]; then
   exit 1
 fi
 
+# #6428: `docker inspect --format '{{range .Config.Env}}…' <ref>` — the pre-swap freshness read of
+# the web image's baked BUILD_VERSION. Answered BEFORE the mode case, like the verify handlers, so
+# the trace-mode order rows do not gain an `inspect`. Scoped to non-inngest refs: the inngest
+# branch's own `.Config.Env` inspect keeps falling through to the mode case exactly as before.
+# Default BUILD_VERSION = the deploy tag without its `v` (a release-built image is self-consistent,
+# which is the realistic default). MOCK_IMAGE_BUILD_VERSION overrides it; `${VAR+x}` so an
+# explicitly EMPTY value means "the image has no BUILD_VERSION line". MOCK_IMAGE_INSPECT_FAIL=1
+# fails the inspect. MOCK_FRESHNESS_INSPECT_FILE records the inspected ref (the LAST argument), so
+# a row can assert the check read the verified digest and not the mutable tag.
+if [[ "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" != *inngest* ]]; then
+  [[ -n "${MOCK_FRESHNESS_INSPECT_FILE:-}" ]] && printf '%s\n' "${!#}" >> "$MOCK_FRESHNESS_INSPECT_FILE"
+  if [[ "${MOCK_IMAGE_INSPECT_FAIL:-}" == "1" ]]; then
+    printf 'Error: No such object: %s\n' "${!#}" >&2
+    exit 1
+  fi
+  if [[ -n "${MOCK_IMAGE_BUILD_VERSION+x}" ]]; then
+    _bv="$MOCK_IMAGE_BUILD_VERSION"
+  else
+    _bv="${SSH_ORIGINAL_COMMAND##* }"; _bv="${_bv#v}"
+  fi
+  printf 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n'
+  # MOCK_IMAGE_ENV_EXTRA: extra env lines printed BEFORE BUILD_VERSION (a decoy such as
+  # X_BUILD_VERSION=… kills a parse that matches the key as a substring instead of the whole key).
+  [[ -n "${MOCK_IMAGE_ENV_EXTRA:-}" ]] && printf '%s\n' "$MOCK_IMAGE_ENV_EXTRA"
+  [[ -n "$_bv" ]] && printf 'BUILD_VERSION=%s\n' "$_bv"
+  printf 'BUILD_SHA=0000000000000000000000000000000000000000\n'
+  exit 0
+fi
+
 case "$mode" in
   trace)
     # `ps` is read by the ADR-027 pre-run assertion; the script greps stdout
@@ -4725,6 +4754,20 @@ declare -A QI_PIN_B=(
   # is not started by it" and "with no record … a disabled unit is still not started".
   [apps/web-platform/infra/inngest-luks-cutover.sh]=1
   [apps/web-platform/infra/git-data-luks-reopen.sh]=1
+  # #8562 cloud-init-inngest.yml — ONE variable-unit start, in soleur-inngest-provision's on_exit.
+  # It restores the cutover-FSM timers the provision attempt paused. `_fsm_timers_stopped` is
+  # built only from the literal list `inngest-cutover-flip.timer inngest-luks-cutover.timer`, and
+  # only from those that were `active` before the stop. So the variable is provably never
+  # inngest-server, and it never starts a timer that was not already running. Behavioural row:
+  # cloud-init-inngest-provision-unit.test.sh G2-r15 ("the failed attempt restarts the flip
+  # timer"). Pinned as a change detector.
+  [apps/web-platform/infra/cloud-init-inngest.yml]=1
+  # #9123 workspaces-luks-reopen.sh — the web-1 sibling of the #8210 git-data line above:
+  # `systemctl start "$_munit"` where `_munit=$(systemd-escape -p --suffix=mount "$TARGET")`
+  # with TARGET allow-listed to /mnt/data — a `.mount` unit is provably never
+  # inngest-server.service, and web-1 carries no inngest-server unit regardless. Pinned as a
+  # change detector.
+  [apps/web-platform/infra/workspaces-luks-reopen.sh]=1
 )
 QS_REPO="$SCRIPT_DIR/../../.."
 # qi_inventory <regex> <pin-array-name> <label>: sets QI_BAD (appends) and QI_SEEN (hit count).
@@ -4762,10 +4805,13 @@ qi_inventory "$QI_RE_B" QI_PIN_B "variable-unit"
 TOTAL=$((TOTAL + 1))
 # 15 -> 16 at #6894: inngest-luks-cutover.sh's single variable-unit resume (see QI_PIN_B).
 # 16 -> 17 at #8210: git-data-luks-reopen.sh's mount-unit start (see QI_PIN_B).
-if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 17 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 8 files) (Guard 2 #6c)"
+# 17 -> 18 at #8562: cloud-init-inngest.yml's FSM-timer restore (see QI_PIN_B).
+# 18 -> 19 at #9123: workspaces-luks-reopen.sh's mount-unit start (see QI_PIN_B).
+if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 19 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 10 files) (Guard 2 #6c)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 17):${QI_BAD:- <per-file counts match but the total does not>}"
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 19):${QI_BAD:- <per-file counts match but the total does not>}"
 fi
 # Positive control: the inventory regex still MATCHES the flag-bearing forms it claims to cover
 # (a regex that silently matched nothing would pin an empty inventory as green).
@@ -7449,6 +7495,30 @@ else
 fi
 unset _sha_field
 
+# --- #9151: DEPLOY_SCRIPT_SHA — the full-sha parity anchor ---
+# The INVOCATION marker's script_sha is a stable-format 12-char value; parity needs
+# the FULL sha256 of the executed script so scripts/check-deploy-script-parity.sh can
+# compare a Better Stack row against the repo bytes. Same capture harness: the
+# credential-path rewrite means the emitted sha must equal the sha of the EXECUTED
+# copy, not of the on-disk DEPLOY_SCRIPT — proving the value is measured, not canned.
+TOTAL=$((TOTAL + 1))
+_cap=$(mktemp -t shacap.XXXXXX); _cred=$(mktemp -t credfile.XXXXXX); _script=$(mktemp -t cideploy.XXXXXX)
+sed "s#/etc/default/soleur-doppler-token#$_cred#g" "$DEPLOY_SCRIPT" > "$_script"
+_want=$(sha256sum "$_script" | cut -d' ' -f1)
+rm -f "$_cred"
+(
+  export MOCK_LOGGER_CAPTURE_FILE="$_cap"
+  DEPLOY_SCRIPT="$_script"
+  run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 || true
+)
+_got=$(grep -h 'DEPLOY_SCRIPT_SHA' "$_cap" 2>/dev/null | grep -oE 'sha256=[0-9a-f]{64}' | head -1 | cut -d= -f2)
+if [[ "$_got" == "$_want" && -n "$_want" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: DEPLOY_SCRIPT_SHA is the sha256 of the executed script bytes"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: DEPLOY_SCRIPT_SHA — expected sha256=$_want, got '${_got:-<none emitted>}'"
+fi
+rm -f "$_cap" "$_cred" "$_script"; unset _cap _cred _script _want _got
+
 # hooks.json.tmpl: both deploy hooks must carry a DISTINCT SOLEUR_DEPLOY_HOOK_ID. Two hooks
 # sharing one id would emit a clean-looking marker that discriminates nothing — the precise
 # failure this whole marker exists to prevent.
@@ -8311,6 +8381,177 @@ else
 fi
 rm -rf "$T1C15"; unset T1C15 _1c15_reason _1c15_exit _1c15_lc
 
+echo "--- #6428 pre-swap image freshness (stale-but-signed image never reaches the canary) ---"
+# A zot that serves an OLD but validly signed image for the requested tag passes the cosign verify
+# (the old image IS validly signed). The only property that tells the two apart is the version the
+# image was BUILT as: the release bakes ENV BUILD_VERSION=<next> into the image it tags v<next>. The
+# check reads it from VERIFIED_REF and aborts before the plugin seed, the canary and the swap. It
+# fails CLOSED: a version it cannot establish (no BUILD_VERSION, `dev`, inspect failure) aborts too.
+# Every row runs in trace mode so the "never reached the canary" half of the property is observed
+# on the docker call stream itself: a check moved AFTER the canary run (a reorder, not a delete)
+# still ends image_stale_version, and only the absent `run`/`create` markers catch it.
+#
+# run_6428 <workdir> [extra] [tag]: one traced deploy (default v1.0.0) with the journald sink, the
+# Sentry sink, the freshness-inspect recorder, the state file and stdout/stderr pinned in <workdir>.
+run_6428() {
+  local d="$1" extra="${2:-}" tag="${3:-v1.0.0}" rc=0
+  assert_fixture_dir "$d"
+  : > "$d/logger.txt"; : > "$d/sentry.txt"; : > "$d/inspect.txt"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform $tag"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    # The plugin mount lives in <workdir> so an abort row can assert the seed never ran: the seed's
+    # `docker create` is redirected to /dev/null by ci-deploy.sh, so its trace marker never reaches
+    # out.txt and cannot witness the ordering on its own.
+    export PLUGIN_MOUNT_DIR="$d/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$d/ci-deploy.state"
+    export MOCK_DOCKER_MODE="trace"
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"
+    export MOCK_SENTRY_CAPTURE_FILE="$d/sentry.txt"
+    export MOCK_FRESHNESS_INSPECT_FILE="$d/inspect.txt"
+    eval "$extra"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT"
+  ) >"$d/out.txt" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+# _6428_started <workdir>: 1 when the deploy touched ANY app container: the canary/production `run`
+# (traced), or the plugin seed (its `docker create` is redirected to /dev/null, so it is witnessed by
+# the plugin mount directory the seed creates and fills). The cosign verify `run` is answered before
+# the mock's mode case and never traces.
+_6428_started() { if grep -qE '^DOCKER_TRACE:(run|create)$' "$1/out.txt" || [[ -e "$1/plugin-mount" ]]; then echo 1; else echo 0; fi; }
+# _6428_event <workdir> <field>: a field of the captured op=image-freshness Sentry event ("" if none).
+_6428_event() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="image-freshness")][0] | if . == null then "" elif $f == "level" then .level else .tags[$f] end' "$1/sentry.txt" 2>/dev/null; }
+# _6428_abort <label> <extra> <expected-reason> <expected-result> [tag]: one row asserting the
+# deploy aborted with <reason>, started NO app container, logged the fail marker and emitted an
+# error event carrying <result>.
+_6428_abort() {
+  local label="$1" extra="$2" want_reason="$3" want_result="$4" tag="${5:-v1.0.0}" d reason exitc
+  TOTAL=$((TOTAL + 1)); d="$(mktemp -d)"
+  run_6428 "$d" "$extra" "$tag"
+  read_state_reason_and_exit "$d/ci-deploy.state" reason exitc
+  if [[ "$(cat "$d/rc")" != "0" && "$reason" == "$want_reason" && "$exitc" == "1" && "$(_6428_started "$d")" == "0" ]] \
+     && grep -q "IMAGE_FRESHNESS_FAIL: result=$want_result " "$d/logger.txt" \
+     && grep -q "DEPLOY_ABORT: image freshness check refused .* ($want_reason)" "$d/logger.txt" \
+     && [[ "$(_6428_event "$d" level)" == "error" && "$(_6428_event "$d" freshness_result)" == "$want_result" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $label → $reason, no app container, error event freshness_result=$want_result (#6428)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $label (rc=$(cat "$d/rc") reason=$reason exit_code=$exitc want=$want_reason app_container_started=$(_6428_started "$d") event_level=$(_6428_event "$d" level) event_result=$(_6428_event "$d" freshness_result))"
+    printf '        traces: %s\n' "$(grep '^DOCKER_TRACE:' "$d/out.txt" | tr '\n' ' ')"
+  fi
+  rm -rf "$d"
+}
+
+# F1 (the RED fixture): the image zot served for v1.0.0 was built as 0.9.9. Before #6428 this
+# deploy verified the (valid) signature and went on to the canary and the swap.
+_6428_abort "F1 an image built as 0.9.9 served for v1.0.0" \
+  "export MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+# F8: exact comparison, not a prefix/suffix/substring one (a `$expected*` or `*$expected` glob, or an
+# unanchored grep, would pass these).
+_6428_abort "F8a BUILD_VERSION 1.0.00 for v1.0.0 (prefix)" \
+  "export MOCK_IMAGE_BUILD_VERSION=1.0.00" image_stale_version version_mismatch
+_6428_abort "F8b BUILD_VERSION 11.0.0 for v1.0.0 (suffix)" \
+  "export MOCK_IMAGE_BUILD_VERSION=11.0.0" image_stale_version version_mismatch
+# F9: the key is matched WHOLE — a decoy X_BUILD_VERSION=1.0.0 printed first must not be read as
+# the image's version (a `*BUILD_VERSION=*` parse would take it and pass).
+_6428_abort "F9a decoy X_BUILD_VERSION=1.0.0 before BUILD_VERSION=0.9.9" \
+  "export MOCK_IMAGE_ENV_EXTRA=X_BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+_6428_abort "F9b decoy X_BUILD_VERSION=1.0.0 and no BUILD_VERSION" \
+  "export MOCK_IMAGE_ENV_EXTRA=X_BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+# F3: fail CLOSED — a version the check cannot establish aborts rather than deploying unverified.
+# F10: two BUILD_VERSION entries (the matching one FIRST) — the value the process sees is not
+# decidable from the config, so it is refused rather than read first-wins.
+_6428_abort "F10 two BUILD_VERSION entries (1.0.0 then 0.9.9)" \
+  "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_version_unverifiable version_ambiguous
+# F12: an EMPTY `BUILD_VERSION=` line (present but valueless) is unverifiable, not a mismatch.
+_6428_abort "F12 an empty BUILD_VERSION= line" \
+  "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION= MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+# F13 (the THIRD VERIFIED_REF arm): WARN mode with no resolvable RepoDigest runs the mutable TAG
+# (verify_image_signature's inspect_failed fallback) — the freshness check still reads it and aborts.
+_6428_abort "F13 WARN tag-fallback VERIFIED_REF with an image built as 0.9.9" \
+  "export MOCK_INSPECT_NO_DIGEST=1 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+_6428_abort "F3a image with no BUILD_VERSION" \
+  "export MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+_6428_abort "F3b image built as dev" \
+  "export MOCK_IMAGE_BUILD_VERSION=dev" image_version_unverifiable version_absent
+_6428_abort "F3c docker inspect of the verified ref fails" \
+  "export MOCK_IMAGE_INSPECT_FAIL=1" image_version_unverifiable inspect_failed
+# F5 (the SECOND member of the VERIFIED_REF assembly): the local-cache rescue arm (zot misses, the
+# running container's image is reused for a same-version reload) is checked like the verified arm.
+_6428_abort "F5a local-cache rescue whose running image was built as 0.9.9" \
+  "export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:6428ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff MOCK_RUNNING_IMAGE_TAG=v1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" \
+  image_stale_version version_mismatch
+
+# F11: a hostile BUILD_VERSION (an ANSI escape, a CR) still aborts, and never reaches journald or
+# the Sentry payload raw — both carry the bounded <invalid:len=N> display form instead.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_IMAGE_BUILD_VERSION=\$'0.9.9\\e[31m\\r'"
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f11_reason _f11_exit
+if [[ "$_f11_reason" == "image_stale_version" ]] \
+   && grep -q 'actual=<invalid:len=' "$T6428/logger.txt" \
+   && ! grep -q $'\e' "$T6428/logger.txt" && ! grep -q $'\r' "$T6428/logger.txt" \
+   && [[ "$(jq -rs '[.[] | select(.tags.op=="image-freshness")][0].extra.actual' "$T6428/sentry.txt" 2>/dev/null)" == "<invalid:len="* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F11 a control-character BUILD_VERSION aborts and is displayed only in its bounded form (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F11 (reason=$_f11_reason; logger: $(grep -c IMAGE_FRESHNESS_FAIL "$T6428/logger.txt"))"
+fi
+rm -rf "$T6428"; unset _f11_reason _f11_exit
+
+# F2 (must PASS, the canonical): a release-built image (BUILD_VERSION 1.0.0 for v1.0.0) deploys, the
+# canary docker trace is byte-identical to the canary-success row above, the liveness marker the
+# post-merge evidence greps for is written, and no freshness event is emitted.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428"
+_f2_traces=$(sed -n 's/^DOCKER_TRACE://p' "$T6428/out.txt" | tr '\n' '|' | sed 's/|$//')
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f2_traces" == "image|pull|stop|rm|run|exec|stop|rm|stop|rm|ps|run" ]] \
+   && grep -q 'IMAGE_FRESHNESS: ok ref=.* expected=1.0.0 actual=1.0.0$' "$T6428/logger.txt" \
+   && [[ -z "$(_6428_event "$T6428" level)" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F2 a self-consistent image deploys with the unchanged canary trace and logs IMAGE_FRESHNESS: ok, no freshness event (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F2 (rc=$(cat "$T6428/rc") traces=$_f2_traces ok_marker=$(grep -c 'IMAGE_FRESHNESS: ok ' "$T6428/logger.txt"))"
+fi
+# F4 (same run): the check read the VERIFIED DIGEST, not the mutable tag — the mock answers every
+# non-inngest ref the same way, so only the recorded ref tells VERIFIED_REF from $IMAGE:$TAG.
+TOTAL=$((TOTAL + 1))
+_f4_ref="$(head -1 "$T6428/inspect.txt")"
+if [[ "$(wc -l < "$T6428/inspect.txt")" -eq 1 && "$_f4_ref" == *"/jikig-ai/soleur-web-platform@sha256:"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F4 the freshness check inspects the verified digest ($_f4_ref), exactly once (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F4 inspected refs: $(tr '\n' ' ' < "$T6428/inspect.txt")"
+fi
+rm -rf "$T6428"; unset _f2_traces _f4_ref
+
+# F5b (must PASS): a same-version local-cache reload of a running image built as 1.0.0 reloads, and
+# the ref inspected is the running image ID (the rescue arm, not a digest).
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:6428ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff MOCK_RUNNING_IMAGE_TAG=v1.0.0"
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f5_reason _f5_exit
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f5_reason" == "ok" && "$_f5_exit" == "0" && "$(head -1 "$T6428/inspect.txt")" == "sha256:6428ffff"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F5b a same-version local-cache reload of a matching running image reloads, inspecting the running image ID (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F5b (rc=$(cat "$T6428/rc") reason=$_f5_reason inspected=$(head -1 "$T6428/inspect.txt"))"
+fi
+rm -rf "$T6428"; unset _f5_reason _f5_exit
+
+# F7 (must PASS, NOT the canonical): a different release (v10.20.30) with its version pinned
+# explicitly — a guard that rejects everything, or one hard-wired to the canonical v1.0.0, fails here.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_IMAGE_BUILD_VERSION=10.20.30" v10.20.30
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f7_reason _f7_exit
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f7_reason" == "ok" && "$_f7_exit" == "0" ]] \
+   && grep -q 'IMAGE_FRESHNESS: ok ref=.* expected=10.20.30 actual=10.20.30$' "$T6428/logger.txt"; then
+  PASS=$((PASS + 1)); echo "  PASS: F7 BUILD_VERSION=10.20.30 for v10.20.30 deploys (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F7 (rc=$(cat "$T6428/rc") reason=$_f7_reason)"
+fi
+rm -rf "$T6428"; unset T6428 _f7_reason _f7_exit
+
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # Assertion-count floor (#8077 review): a suite that silently narrows (a block skipped, a loop that
@@ -8323,7 +8564,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # over a churn of ~38 rows: 15 T-1c-* added, several GHCR-only rows deleted (§1A, #6400
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
 # #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
-CI_DEPLOY_ASSERT_FLOOR=342
+# #6428: raised to 359 with the 17 pre-swap freshness rows (F1-F13).
+CI_DEPLOY_ASSERT_FLOOR=359
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

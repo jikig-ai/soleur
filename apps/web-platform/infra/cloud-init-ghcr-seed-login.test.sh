@@ -28,8 +28,11 @@ _qgrep() { grep "$@" >/dev/null; }
 #      only from "$REF" — $IMAGE_REF only after IMAGE_REF="$REF"; $IREF only as a `docker create`
 #      after IREF="$ZIREF", never pulled), and no endpoint/registry map value naming ghcr.io. Runs
 #      on SOURCE bytes with comment lines stripped (in rendered bytes, IMAGE_REF='${image_name}'
-#      becomes a ghcr.io literal, so it is a named exemption, like the IREF= pin carrier; the
-#      registry host's run of the upstream '${zot_image}' is the one other, value-bound exemption).
+#      becomes a ghcr.io literal, so it is a named exemption, like the IREF= pin carrier). The
+#      registry host has NO ghcr exemption since #8714 5.3b-iii: it runs zot only by the image ID
+#      zot-image-fetch.sh verified ("$ZOT_IMAGE_ID", read from /run/soleur/zot-image-id), and its only
+#      ghcr.io code lines are the name-resolution DENY and the heartbeat's probe of it, each matched
+#      as a whole line.
 #      A narrower literal rule covers every local.host_script_files member + inngest-bootstrap.sh:
 #      no `docker login ghcr.io`, no pull/create/run of a ghcr.io/jikig-ai/ literal.
 
@@ -260,7 +263,6 @@ def resolve(text, defs, seen, depth=0):
 KEY_RE = re.compile(r"^\s*(ghcr_read_\w+)\s*=", re.M)
 ENTRY_RE = re.compile(r"^\s*(\w+)\s*=\s*(.+?)\s*$", re.M)
 derived, dmaps, nmaps = [], [], 0
-zot_image_ok = {}
 for tf in tfs:
     for rel, body in maps(open(os.path.join(root, tf)).read()):
         nmaps += 1
@@ -278,9 +280,6 @@ for tf in tfs:
             # (M1) a registry / endpoint value never names GHCR (literal, or through a local)
             if re.search(r"endpoint|registry", key) and "ghcr.io" in resolve(val, defs, set()):
                 out.append("VIOL %s tf-endpoint[%s->%s] %s" % (tf, key, tpl, val))
-            if key == "zot_image":
-                r = resolve(val, defs, set())
-                zot_image_ok[tpl] = "jikig-ai" not in r and "ghcr.io/" in r
 out += ["DERIVED " + t for t in derived] + ["DERIVED_MAP %s:%s" % p for p in dmaps]
 
 FORBIDDEN = ["ghcr_read_", "soleur-ghcr-read", "app_ghcr_", "inngest_ghcr_fallback", "echo '${image_name}'"]
@@ -288,6 +287,14 @@ ASSIGN_RE = re.compile(r"(?<![A-Za-z0-9_$])(IREF|IMAGE_REF|ZIREF|REF)=(\"[^\"]*\
 PIN_RE = re.compile(r"^\s*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}\s*(#.*)?$")
 IMAGE_NAME_OK = re.compile(r"^\s*IMAGE_REF='\$\{image_name\}'\s*$")
 GHCR_OK_TOKENS = ("in ghcr.io/*@sha256:*)", "IMAGE_REF#ghcr.io/}")
+# (#8714 5.3b-iii) the registry host's ghcr.io DENY and the heartbeat's probe of it: whole-line
+# matches, and only in cloud-init-registry.yml. Anything else naming ghcr.io there is a VIOL.
+REGISTRY_DENY_LINES = {
+    "for h in ghcr.io pkg-containers.githubusercontent.com; do",
+    "_gh_addrs=$(getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u)",
+}
+# zot runs by "$ZOT_IMAGE_ID" only where that variable is read from the verified hand-off file.
+ZOT_ID_ASSIGN = re.compile(r'^\s*ZOT_IMAGE_ID="\$\(head -1 /run/soleur/zot-image-id 2>/dev/null \|\| true\)"\s*$', re.M)
 ZOT_REF_VALUES = re.compile(r'^("\$ZEP/.*|)$')
 ZOT_ZIREF_VALUES = re.compile(r'^"\$(ZURL|ZOT_EP)/.*')
 WRITER_RE = re.compile(r"(?:>>?|\btee\s+(?:-a\s+)?)\s*/run/soleur-image-ref(?![\w.-])")
@@ -313,6 +320,8 @@ for f in derived + extras:
         # (5) ghcr.io on a code line only as the IREF= pin carrier or the seed case pattern
         if PIN_RE.match(line):
             pins += 1
+        elif f == "cloud-init-registry.yml" and s in REGISTRY_DENY_LINES:
+            pass
         else:
             rest = line
             for t in GHCR_OK_TOKENS:
@@ -356,10 +365,10 @@ for f in derived + extras:
                 continue
             if a == '"$IMAGE_REF"' and last.get("IMAGE_REF") == '"$REF"':
                 continue
-            # NAMED EXEMPTION: the registry host cannot pull zot from zot. Its `docker run` of the
-            # upstream zot image is allowed only while that map value resolves to a digest-pinned
-            # third-party GHCR ref and never to a jikig-ai one.
-            if a == "'${zot_image}'" and verb == "run" and zot_image_ok.get(f):
+            # The registry host runs zot by the image ID its boot fetch verified against the pinned
+            # release asset (#8714 5.3b-iii) -- never by a registry ref, so no pull can occur.
+            if (a == '"$ZOT_IMAGE_ID"' and verb == "run" and f == "cloud-init-registry.yml"
+                    and len(ZOT_ID_ASSIGN.findall(open(p).read())) == 1):
                 continue
             out.append("VIOL %s pull-src[%s:%s] %s" % (f, verb, a, s))
     # (6) the bump bot's contract: an inngest-bearing template carries exactly 2 refs (whole file,
@@ -575,14 +584,21 @@ mrow "15 docker login ghcr.io added to ci-deploy.sh (a local.host_script_files m
 # 15b: a pull of a ghcr.io/jikig-ai/ literal in a host script, behind a global flag
 printf 'docker --config /tmp/c pull ghcr.io/jikig-ai/soleur-web-platform:latest\n' >> "$SB/disk-monitor.sh"
 mrow "15b docker --config … pull ghcr.io/jikig-ai/… added to disk-monitor.sh" disk-monitor.sh
-# 16: the registry host's zot-image exemption is value-bound, not name-bound
-py_sub zot-registry.tf '    zot_image     = local.zot_image' '    zot_image     = "ghcr.io/jikig-ai/soleur-web-platform:latest"'
-mrow "16 the registry map's zot_image repointed at a ghcr.io/jikig-ai/ ref (exemption revoked)" zot-registry.tf
+# 16: (#8714 5.3b-iii) the registry host has no ghcr exemption left: its launch reverting to the
+# templated upstream ref is a pull source like any other
+py_sub cloud-init-registry.yml '      "$ZOT_IMAGE_ID" serve /etc/zot/config.json' "      '\${zot_image}' serve /etc/zot/config.json"
+mrow "16 the registry launch reverts to '\${zot_image}' (the pre-mirror ghcr.io pull)" cloud-init-registry.yml
+# 16b: "$ZOT_IMAGE_ID" is admitted only while it is read from the verified hand-off file
+py_sub cloud-init-registry.yml 'ZOT_IMAGE_ID="$(head -1 /run/soleur/zot-image-id 2>/dev/null || true)"' 'ZOT_IMAGE_ID="ghcr.io/project-zot/zot-linux-amd64:v2.1.20"'
+mrow "16b ZOT_IMAGE_ID assigned a ghcr.io ref instead of the verified hand-off" cloud-init-registry.yml
+# 16c: a ghcr.io line in the registry template that is not the deny or its probe
+py_sub cloud-init-registry.yml '      for h in ghcr.io pkg-containers.githubusercontent.com; do' '      for h in ghcr.io pkg-containers.githubusercontent.com; do docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20 || true; done; for h in x; do'
+mrow "16c a ghcr.io pull appended to the deny line in cloud-init-registry.yml" cloud-init-registry.yml
 
-# Floor at the MEASURED count (45, PR #8708 review; the suite had 26 rows and no floor before): rows are derived from the file set, so a
+# Floor at the MEASURED count (45, PR #8708 review; 47 after #8714 5.3b-iii replaced row 16 with 16/16b/16c; the suite had 26 rows and no floor before): rows are derived from the file set, so a
 # derivation that silently matched less would also shrink the row count. Reported with printf +
 # exit DIRECTLY, never through ok()/no() -- the floor polices those.
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=47
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

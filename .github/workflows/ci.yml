@@ -1035,12 +1035,16 @@ jobs:
     # suite — no K splits it; the suite split is deferred, tracked in #8864;
     # the duration-aware manifest keeps assignment balanced as suites drift).
     #
-    # Positional sharding means leg membership is an ORDINAL ACCIDENT — adding
-    # or renaming one suite re-rolls every leg, so no K table in this file can
-    # outlive a registration change. Before touching K, re-derive per-suite
-    # durations from this run's own `suite-timings-*` artifacts and re-simulate
-    # the actual round-robin under C collation; the method, the measured
-    # tables, and the runner-availability data live in
+    # Leg membership is NOT positional: `scripts/suite-shard-legs.tsv` pins each
+    # label to a leg via the duration-aware sticky-LPT generator, packed from
+    # the MEDIAN of the last N green runs' `suite-timings-*` artifacts (#9232).
+    # Untabled labels (added since the last regen) hash-fallback at runtime;
+    # untimed-but-registered labels table at the floor weight. Before touching
+    # K, simulate the pack offline instead of re-deriving round-robin by hand:
+    # `python3 scripts/regenerate-shard-manifest.py --legs <K>` dry-run prints
+    # predicted per-leg totals (writing K != this matrix's N to the committed
+    # manifest is refused); then regen + change K in the same PR. The measured
+    # tables and the runner-availability data live in
     # knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
     strategy:
       fail-fast: false

@@ -243,6 +243,58 @@ else
   no "a missing inventory baseline did not fail closed (rc=$MON_RC): ${MON_OUT:0:300}"
 fi
 
+# (o2)–(o6) #9123 DELIVERED-STATE asserts — the daily probe re-checks what the boot-unlock
+# installer left behind (fstab exactly-one-mapper, the §(e) covered-inode flag). The harness
+# seeds a canonical fixture fstab + healthy peek attrs in mon_prepare/mon_run; each failing arm
+# below rewrites the fixture or sets MON_PEEK_*. Every reason must exit 1 via emit_and_die
+# (at-rest drift class in the verify workflow's classifier).
+mon_prepare "$PROBE"
+: > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mnt_data_lines'; then
+  ok "fstab with zero /mnt/data entries -> fstab_mnt_data_lines (rc=1, drift)"
+else
+  no "empty fstab did not fail fstab_mnt_data_lines (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+printf '/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2\n/dev/mapper/workspaces /mnt/data ext4 ro 0 2\n' > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mnt_data_lines'; then
+  ok "fstab with TWO /mnt/data entries -> fstab_mnt_data_lines (exactly-one assert)"
+else
+  no "duplicate fstab line did not fail fstab_mnt_data_lines (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+printf '/dev/disk/by-label/WRONG /mnt/data ext4 defaults,nofail 0 2\n' > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mapper_line_missing'; then
+  ok "a non-mapper /mnt/data fstab line -> fstab_mapper_line_missing (rc=1, drift)"
+else
+  no "wrong-source fstab did not fail fstab_mapper_line_missing (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+MON_PEEK_FAIL=1 mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'covered_inode_peek_failed'; then
+  ok "peek bind failure -> covered_inode_peek_failed (probe-integrity, proves nothing)"
+else
+  no "a failed peek did not fail covered_inode_peek_failed (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+MON_PEEK_ATTRS='---------------e------' mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'covered_inode_not_immutable'; then
+  ok "covered inode WITHOUT +i -> covered_inode_not_immutable (rc=1, drift)"
+else
+  no "non-immutable covered inode did not fail covered_inode_not_immutable (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+# Positive control for the new asserts: the default fixture fstab + healthy attrs keep the
+# probe green — run_monitor_case "$PROBE" (no flags) in (m) above already proves the healthy
+# arm end-to-end through them.
+
 # (p)(q)(r) INVENTORY, on ONE fixture exercised three ways. The fixture carries exactly the four
 # things session-metrics.ts excludes, plus a stray regular file: an unfiltered `ls | wc -l` reads 6
 # here and would certify a real shrink green, which is the whole reason parity is load-bearing.

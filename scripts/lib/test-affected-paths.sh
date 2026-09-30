@@ -989,6 +989,16 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_REAP_ARCHIVE_PERSISTENCE_TEST_SH_PATHS=(
+  "knowledge-base/project/plans/2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_STALE_LOCK_SWEEP_TEST_SH_PATHS=(
@@ -1115,14 +1125,13 @@ AFFECTED_TESTS_SCRIPTS_NO_TOFU_SSH_MUTATION_PATHS=(
   "tests/scripts/test-no-tofu-ssh-mutation.sh"
 )
 
-# tests/scripts/dispatch-web-redeploy — Guard 7 (#7226/ADR-237) exercises the
-# track.sh action and the redeploy job it serves; declared from the repo paths
-# its suite file names.
+# tests/scripts/dispatch-web-redeploy — exercises track.sh, the webhook
+# same-version redeploy lever (#8211 PR2); the follower workflow is retired.
 AFFECTED_TESTS_SCRIPTS_DISPATCH_WEB_REDEPLOY_PATHS=(
   ".github/actions/dispatch-web-redeploy/"
-  ".github/workflows/git-data-pin-redeploy.yml"
+  ".github/workflows/git-data-cutover.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"
-  "tests/scripts/fixtures/gh-run-view-36325677861-attempt2-jobs-startedAt.json"
   "tests/scripts/test-dispatch-web-redeploy.sh"
 )
 

@@ -101,17 +101,49 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 <!-- lint-infra-ignore start: C15 boot-path re-canary is a deliberately-retained deferred-orchestrator
      operator step — the cutover does NOT auto-reboot (a reboot drops the SSH session mid-run), so the
      one host-reboot is operator-gated by design and cannot be routed through the dispatch. -->
-4. **Boot-path re-canary (C15) — blocked on #9123. Do NOT reboot web-1.** The cutover does NOT
-   auto-reboot (a reboot drops the SSH session mid-run). The boot path is not ready yet:
-   - web-1's `/mnt/data` fstab line is the literal glob `/dev/disk/by-id/scsi-0HC_Volume_*`
-     without `nofail`;
-   - nothing unlocks the mapper at boot;
-   - the §(e) mount gate was never delivered.
+4. **Boot-path re-canary (C15) — delivered by #9123.** The cutover does NOT
+   auto-reboot (a reboot drops the SSH session mid-run), so this step stays operator-gated.
+   The boot path #9123 delivered:
+   - web-1's `/mnt/data` fstab line is `/dev/mapper/workspaces … defaults,nofail` — exactly one
+     entry, the literal glob preserved only as a comment;
+   - `workspaces-luks-reopen.service` unlocks the mapper at boot — the key fetched via
+     `doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks`, piped to
+     `cryptsetup luksOpen --key-file -` — with a bounded restart ladder and the standing
+     `.timer` re-attempting; crypttab declares the same mapping `luks,noauto` as the
+     manual-recovery handle;
+   - the §(e) mount gate is armed: `docker.service.d/10-workspaces-luks-mount.conf` carries
+     `RequiresMountsFor=/mnt/data` + `After=workspaces-luks-reopen.service`, and the covered
+     root-disk `/mnt/data` inode is `chattr +i`.
 
-   A restart very likely lands web-1 in emergency mode, unreachable over SSH. Once #9123's coupled
-   fix ships, the C15 proof is: reboot once, then run the read-only verify below. The run-keyed
-   `CANARY_OK` persisted to the host state file cannot satisfy a fresh post-reboot check; only a new
-   green verify does.
+   **Refusal → recovery map** (the installer's mutating steps refuse with distinct exit
+   codes; what each code means for your next move):
+
+   | Apply step exit | Cause | Recovery |
+   | --- | --- | --- |
+   | `17` | A live cutover freeze is armed (`workspaces-luks-deadman.timer` `SubState=waiting`) | **Self-heals.** The resource taints; the next apply re-fires it once the freeze clears |
+   | `32` | `/etc/crypttab` has a foreign (whitespace-anchored, non-canonical) `workspaces` mapping | **Host reconciliation.** Comment the foreign `^[[:space:]]*workspaces` line, append the pinned by-id line `workspaces /dev/disk/by-id/scsi-0HC_Volume_<volume-id> none luks,noauto`, re-apply |
+   | `42` | `/mnt/data`'s live source is not `/dev/mapper/workspaces` | **Host reconciliation.** The writer refuses to point fstab at a device that is not the live mount — reconcile the mount first, then re-apply |
+   | `54` / `55` / `56` | The covered-inode bind peek failed / peek target is a symlink / peek is not on the root fs | **Host reconciliation.** Inspect `/run/workspaces-boot-unlock-peek` and `/mnt/data` on the host, clear the anomaly, re-apply |
+
+   The C15 proof is: reboot once, then run the read-only verify below. Before rebooting,
+   confirm the delivery actually landed — the `terraform_data.workspaces_boot_unlock_install`
+   post-state print in the latest `apply-web-platform-infra.yml` run must show the single
+   mapper fstab line, `crypttab-workspaces-lines=1`, the reopen units enabled, the peek
+   `lsattr -d` reporting `i`, and the proof run reporting `noop`. If that print is absent or
+   red, this step is still blocked. The run-keyed `CANARY_OK` persisted to the host state file
+   cannot satisfy a fresh post-reboot check; only a new green verify does.
+
+   > If the unlock fails during the reboot, the expected shape is a DEGRADED boot, not emergency
+   > mode: `nofail` lets `local-fs.target` complete, `RequiresMountsFor` holds `docker.service`
+   > down (site down, data-safe — nothing can write the covered root-disk inode), the restart
+   > ladder retries, and an exhausted ladder pages once via `op=workspaces-luks-drift` naming
+   > the failing phase. That is the failure mode to look for on a bad outcome.
+   >
+   > On a RECOVERED boot — the standing timer later remounts the mapper — the site does not
+   > come back on its own: a dependency-failed `docker.service` does not re-queue once
+   > `RequiresMountsFor` is satisfied, so `systemctl start docker.service` may be needed.
+   > Since the review-fix pass the reopen script self-issues exactly that start on its real
+   > (non-noop) arm — the manual step above is the fallback if that kick itself fails.
 <!-- lint-infra-ignore end -->
 
 5. **Verify (read-only, no SSH).**
@@ -206,6 +238,10 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `rc=1` `cryptsetup_status_missing` | `unavailable` | The mapper node exists and IS serving the mount, but `cryptsetup status` failed | **Tooling/parse fault, not plaintext.** Reached only after mountpoint, mount-source and mapper-node checks all passed, so at-rest encryption is in effect. Check `cryptsetup` on the host |
    | `rc=1` `mapper_device_link_missing` | `unavailable` | `cryptsetup status` succeeded but its `device:` line did not parse | **Parse fault, not data loss.** Same reasoning as above |
    | `rc=1` `doppler_unreachable` | `unavailable` | The host could not read `WORKSPACES_LUKS_KEY` from Doppler | Probe-integrity: the escrow assert never ran. Check the boot token's `prd_workspaces_luks` scope |
+   | `rc=1` `fstab_mnt_data_lines` | `drift` | `/etc/fstab` does not carry exactly one non-comment `/mnt/data` entry (a count ≠ 1 — e.g. the pre-#9123 literal-glob line) | **Encryption is in effect NOW but not durable** — the next boot mounts a wrong source, nothing, or fails into emergency mode, and sole-copy writes can land plaintext on the root disk. Reconcile fstab to the canonical `/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2` line per §Boot-unlock delivery (or re-fire `workspaces_boot_unlock_install`) before any reboot |
+   | `rc=1` `fstab_mapper_line_missing` | `drift` | No non-comment fstab line names `/dev/mapper/workspaces` | Same durable-encryption verdict as above — the boot path has no mapper pin even if the mount count reads right |
+   | `rc=1` `covered_inode_peek_failed` | `unavailable` | The probe's `mount --bind /` peek could not be established, so `lsattr` on the covered root-disk `/mnt/data` inode could not be read | **Probe-integrity, not a finding** — nothing was proven about the §(e) gate. Check mount/permission state on the host and re-dispatch |
+   | `rc=1` `covered_inode_not_immutable` | `drift` | The covered root-disk `/mnt/data` inode lacks `+i` (peek succeeded, flag absent) | The ADR-119 §(e) tripwire regressed — a degraded boot lets dockerd write sole-copy data plaintext to the root disk. Re-fire `workspaces_boot_unlock_install` (its gate_writer re-arms the flag) before any reboot |
    | `rc=3` `heartbeat_url_absent` | `unavailable` | Every at-rest assert PASSED, but `WORKSPACES_LUKS_HEARTBEAT_URL` could not be read, so the dead-probe heartbeat was not pushed | **Alerting-path fault, NOT data loss** — the volume is fine; what broke is the probe's ability to report, which is what makes a dead probe indistinguishable from a healthy one (#6808). Confirm `doppler_secret.workspaces_luks_heartbeat_url` is applied and the boot token still reads `prd_workspaces_luks`. Never run a data-recovery procedure for this |
    | `rc=3` `heartbeat_push_failed` | `unavailable` | The URL was present but all 3 push attempts to Better Stack failed | **Alerting-path fault, NOT data loss.** Egress or Better Stack outage. The heartbeat will also miss on its own (period 86400 + 1h grace), so expect a dead-probe alert to follow; re-dispatch once egress is healthy |
    | `app_health_structural` | `readiness` | `/health` returned a structural code (307/401/403/404/405/525/526) after the full retry budget | **Routing/endpoint regression the operator can act on.** Not data loss. Check the custom server and the CF route |

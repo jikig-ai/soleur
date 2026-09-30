@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface VisibilityToggleProps {
   conversationId: string;
@@ -17,15 +18,15 @@ export function VisibilityToggle({
   onToggle,
 }: VisibilityToggleProps) {
   const [visibility, setVisibility] = useState(currentVisibility);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => setVisibility(currentVisibility), [currentVisibility]);
 
-  const toggle = useCallback(async () => {
-    if (!isOwner || loading) return;
+  // asyncFn never throws: the rpc failure is handled inside so raw PostgREST
+  // text never replaces the curated message on the local error surface.
+  const { run: toggle, pending: loading } = usePendingAction(async () => {
+    if (!isOwner) return;
     const next = visibility === "private" ? "workspace" : "private";
-    setLoading(true);
     setError(null);
     try {
       const supabase = createClient();
@@ -38,10 +39,8 @@ export function VisibilityToggle({
       onToggle?.(next);
     } catch {
       setError("Failed to update visibility");
-    } finally {
-      setLoading(false);
     }
-  }, [conversationId, visibility, isOwner, loading, onToggle]);
+  });
 
   if (!isOwner) return null;
 

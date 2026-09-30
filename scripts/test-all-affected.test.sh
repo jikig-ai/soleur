@@ -24,7 +24,14 @@
 #   RAN record + rc=0). The chokepoint, the classifier, the pre-pass and the
 #   refusal arms all stay live; only the suite payload is stubbed. The affected
 #   declarations lib is copied beside the sandbox runner except in the arm that
-#   asserts its absence.
+#   asserts its absence. A fifth seam, SANDBOX_STAGED_NAMES (#9173), is
+#   injected by build_sandbox INSIDE the runner's staged-scope branch
+#   (anchored on the `diff --cached --name-status` line) — the placement is
+#   intra-branch by design, since a post-assembly substitution cannot prove
+#   the branch diff sources stayed dark under `--affected-scope=staged`: a
+#   leak would land ON TOP of the substituted set. It is injected, never
+#   shipped: an env-readable seam in the production runner is the only
+#   SANDBOX_* hook that could NARROW a real run's diff.
 #
 # WHY A SANDBOX AT ALL. Asserting "suite X was not selected" requires a controlled
 # diff; the real worktree's diff is whatever this branch happens to touch. The
@@ -108,7 +115,7 @@ PASS=$_self_pass; FAIL=$_self_fail; cases=0
 # (every edge suite selects -> rows f/q red), SOLEUR_SUBAGENT/SOLEUR_ALLOW_FULL_GATE
 # move the refusal arms, FORCE_ALL preempts the asserted fallback reason, and
 # TEST_TIMING_LOG would write synthetic skip rows into the operator's real log.
-ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S -u SECONDS"
+ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S -u SECONDS -u SANDBOX_STAGED_NAMES"
 
 # ---------------------------------------------------------------------------
 # Sandbox builder. $1 = sandbox runner path; $2 = "with-lib" | "no-lib".
@@ -141,12 +148,27 @@ old = '_diff_touches() {'
 assert s.count(old) == 1, f"expected exactly one '{old}', found {s.count(old)}"
 s = s.replace(old, (
     '[[ -n "${SANDBOX_DIFF_NAMES+x}" ]] && _diff_names="$SANDBOX_DIFF_NAMES"\n'
-    '[[ -n "${SANDBOX_LIVE_UNTRACKED:-}" ]] && _diff_names="${_diff_names}\n$(git ls-files --others --exclude-standard 2>/dev/null)"\n'
+    '[[ -n "${SANDBOX_LIVE_UNTRACKED:-}" && "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_names="${_diff_names}\n$(git ls-files --others --exclude-standard 2>/dev/null)"\n'
     '[[ -n "${SANDBOX_DETECT_OK:-}" ]] && _diff_detect_ok="$SANDBOX_DETECT_OK"\n'
     '[[ -n "${SANDBOX_HEAD_OK:-}" ]] && _diff_head_ok="$SANDBOX_HEAD_OK"\n'
     '[[ -n "${SANDBOX_PREFIXES+x}" ]] && TEST_RELEVANCE_PREFIXES=($SANDBOX_PREFIXES)\n'
     + old
 ), 1)
+
+# 1b. Staged-scope seam. Injected INSIDE the staged branch — anchored on the
+#     `diff --cached --name-status` line — so a sandboxed runner substitutes
+#     the index read at its own derivation point. Intra-branch placement is
+#     load-bearing: a post-assembly substitution cannot prove the branch
+#     sources below stayed dark under staged scope, because a leak would land
+#     ON TOP of the substituted set (sc5/sc6 rely on that). A supplied staged
+#     set stands in for a successful index read, so both detection arms set;
+#     a real failure path is exercised through SANDBOX_DETECT_OK instead.
+#     Never shipped inline — the shipped staged branch documents the anchor.
+staged_anchor = '$(git -c core.quotePath=false diff --cached --name-status -M 2>/dev/null || true)"'
+assert s.count(staged_anchor) == 1, f"expected exactly one staged -M anchor, found {s.count(staged_anchor)}"
+s = s.replace(staged_anchor, staged_anchor + '''
+  [[ -n "${SANDBOX_STAGED_NAMES+x}" ]] \\
+    && { _diff_names="$SANDBOX_STAGED_NAMES"; _diff_detect_ok=1; _diff_head_ok=1; }''', 1)
 
 # 2. Execution stub: the suite payload never runs. The chokepoint, classifier
 #    and accounting stay live; only `"$@"` is replaced with a RAN record.
@@ -1197,13 +1219,265 @@ else
   fail "z8: rc=${_ng_rc:-0} out=$(tail -3 <<<"$_out" | tr '\n' ' ')"
 fi
 
+# --- Rows sc: --affected-scope=staged (#9173) ---------------------------------
+# The pre-commit gate's unit of work is the COMMIT: under staged scope the
+# selection diff is the index (`git diff --cached`), the branch window is
+# dark, and a staged runner/index path resolves to BOUNDED selection (self-
+# edges + the unconditional always-on battery) under a loud note — never the
+# full-corpus fallback that made ts commits unlandable on runner-diff
+# branches. Branch scope keeps byte-identical behavior; rows a-z8 above are
+# the regression net for that.
+
+# sc1-sc3: flag mis-combinations exit 2 — the scope describes only the
+# affected axes, so a --full ask, an unknown enum, or a non-affected
+# TEST_GROUP must refuse rather than silently scope nothing.
+cases=$((cases + 1))
+rc=0
+_out=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --affected-scope=staged --full 2>&1) || rc=$?
+# The token assertion matters as much as rc=2: an unrecognized flag ALSO
+# exits 2 (it lands as a positional and dies on TEST_GROUP validation), so a
+# bare-rc arm passes vacuously if the flag were never implemented — the
+# scope-specific message is what pins the validation block itself.
+if [[ "$rc" == "2" ]] && grep -qF 'cannot be combined with --full' <<<"$_out"; then
+  pass "sc1: --affected-scope with --full exits 2 (scope-named error)"
+else
+  fail "sc1: --affected-scope=staged --full rc=$rc out=$(tail -2 <<<"$_out" | tr '\n' ' ')"
+fi
+
+cases=$((cases + 1))
+rc=0
+_out=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --affected --affected-scope=bogus 2>&1) || rc=$?
+if [[ "$rc" == "2" ]] && grep -qF 'must be one of: branch, staged' <<<"$_out"; then
+  pass "sc2: unknown --affected-scope value exits 2 (enum error)"
+else
+  fail "sc2: --affected-scope=bogus rc=$rc out=$(tail -2 <<<"$_out" | tr '\n' ' ')"
+fi
+
+cases=$((cases + 1))
+rc=0
+_out=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --affected-scope=staged scripts 2>&1) || rc=$?
+if [[ "$rc" == "2" ]] && grep -qF 'different axis' <<<"$_out"; then
+  pass "sc3: --affected-scope under a non-affected TEST_GROUP exits 2 (axis error)"
+else
+  fail "sc3: --affected-scope=staged scripts rc=$rc out=$(tail -2 <<<"$_out" | tr '\n' ' ')"
+fi
+
+# sc4: `--affected-scope=branch` is the default spelled out — accepted, runs.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=.github/workflows/tenant-integration.yml' \
+  -- --affected --affected-scope=branch
+if [[ "$ARM_RC" == "0" ]] && grep -qF 'MODE=affected' <<<"$ARM_OUT"; then
+  pass "sc4: --affected-scope=branch accepted (identical to default)"
+else
+  fail "sc4: rc=$ARM_RC out=$(tail -3 <<<"$ARM_OUT" | tr '\n' ' ')"
+fi
+
+# sc5: the commit-scope gate. Staged set = two ts test files — the run must
+# select their edged suites plus always-on ratchets, print the scope line,
+# and fire NEITHER the full-corpus fallback NOR the runner-scope note (no
+# runner/index path is staged). Two staged paths also pin that a second
+# staged file is unioned, not shadowed (Guard 1 row 3).
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  $'SANDBOX_STAGED_NAMES=tests/commands/test-sync-domain-model.sh\nplugins/soleur/test/c4-model-freshness.test.sh' \
+  -- --affected --affected-scope=staged
+if [[ "$ARM_RC" == "0" ]] \
+  && grep -qF 'AFFECTED_SCOPE' <<<"$ARM_OUT" \
+  && grep -qF 'scope=staged' <<<"$ARM_OUT" \
+  && grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\tplugins/soleur/test/c4-model-freshness.test.sh' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD" \
+  && ! grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
+  && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
+  pass "sc5: staged ts selects edged+always-on — no fallback, no runner-scope note"
+else
+  fail "sc5: rc=$ARM_RC ran=$(ran_count) markers=$(grep -cE 'AFFECTED_' <<<"$ARM_OUT")"
+fi
+
+# sc6: a staged runner/index path resolves to BOUNDED selection under a loud
+# note — the runner's own always-on battery still runs, unedged suites still
+# decline, and _aff_fallback stays empty so the run never degrades to the
+# full corpus.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_STAGED_NAMES=scripts/test-all.sh' \
+  -- --affected --affected-scope=staged
+if [[ "$ARM_RC" == "0" ]] \
+  && grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT" \
+  && ! grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
+  && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD" \
+  && ! grep -qF $'RAN\ttests/scripts/registry-gate-mutation-battery' <<<"$ARM_RECORD" \
+  && ! grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+  pass "sc6: staged runner path → bounded selection + runner-in-scope note"
+else
+  fail "sc6: rc=$ARM_RC ran=$(ran_count) markers=$(grep -cE 'AFFECTED_' <<<"$ARM_OUT")"
+fi
+
+# sc7: a staged-diff detection failure still degrades to the full battery —
+# the fail-safe direction is unchanged under staged scope.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_STAGED_NAMES=tests/commands/test-sync-domain-model.sh' \
+  'SANDBOX_DETECT_OK=0' \
+  -- --affected --affected-scope=staged
+_rc=$ARM_RC; _ran=$(ran_count)
+_decl=$(grep -c "^\\[skip\\]" <<<"$ARM_OUT" | tr -d " ")
+if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n "$ARM_SB") )) \
+  && grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
+  && grep -qF 'undecidable-diff' <<<"$ARM_OUT" \
+  && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
+  pass "sc7: staged-diff detection failure degrades to full (undecidable-diff)"
+else
+  fail "sc7: rc=$_rc ran=${_ran} decl=${_decl} runnable=$(runnable_n "$ARM_SB")"
+fi
+
+# sc8: TEST_GROUP=affected (the heuristic axis) scopes its diff the same way
+# — the flag is valid on either affected axis.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_STAGED_NAMES=tests/commands/test-sync-domain-model.sh' \
+  'TEST_GROUP=affected' \
+  -- --affected-scope=staged
+if [[ "$ARM_RC" == "0" ]] \
+  && grep -qF 'AFFECTED_SCOPE' <<<"$ARM_OUT" \
+  && grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+  pass "sc8: TEST_GROUP=affected + staged flag scopes the heuristic axis"
+else
+  fail "sc8: rc=$ARM_RC ran=$(ran_count) out=$(tail -3 <<<"$ARM_OUT" | tr '\n' ' ')"
+fi
+
+# --- sc9: the staged branch of the assembly really reads the INDEX ---------
+# The SANDBOX_* seams substitute names, never the invocation — so this arm
+# pins the WIRE, not the artifact (the same real-state technique the infra
+# suite's assembly arm uses): extract the real assembly, evaluate it inside a
+# scratch repo carrying one staged file, one committed-ahead-of-origin file,
+# and one untracked file UNDER A RELEVANCE PREFIX (scripts/, so the scoped
+# untracked append would reach it), and assert the staged blob holds exactly
+# the index. The extraction covers the unscoped appends too — a dropped
+# staged guard on ANY append must show up here.
+#
+# TWO HARSHNESS DETAILS, both caught by the architecture seat (#9197):
+# - the eval unsets the runner's full 9-name GIT_* list, not just GIT_DIR:
+#   this suite is always-on, so it runs inside the lefthook bun-test hook
+#   itself — where lefthook injects GIT_INDEX_FILE/GIT_WORK_TREE and the
+#   eval'd `git diff --cached` would read the bookkeeping index instead of
+#   the scratch repo's;
+# - the branch-scope eval is the non-vacuity arm: the same extraction under
+#   unset _AFF_SCOPE MUST show the untracked/branch fixtures, proving the
+#   staged-darkness assertion discriminates rather than measuring an empty
+#   channel.
+cases=$((cases + 1))
+REAL_REPO="$TESTROOT/realstate-staged"
+mkdir -p "$REAL_REPO"
+# The fixture BUILD unset the whole GIT_* prefix before any git op — this
+# suite is always-on, so it runs inside the very lefthook hook that injects
+# GIT_INDEX_FILE/GIT_WORK_TREE/GIT_DIR. Under that env an unscrubbed
+# `git add`/`git commit`/`git update-ref` inside the scratch repo lands on
+# the LIVE index and refs (data-loss class #7772/#7835 — 16 stray commits
+# measured on a live branch). The prefix sweep (${!GIT_@}) is used instead
+# of the runner's named 9-name list because a named list went stale within
+# a day in a prior incident — same reason the eval's scrub was widened.
+if (
+  set -e
+  for _v in "${!GIT_@}"; do unset "$_v"; done
+  cd "$REAL_REPO"
+  git init -q -b main .
+  git config user.email t@t; git config user.name t
+  echo base > base.txt
+  mkdir -p scripts
+  echo tracked > scripts/tracked-unstaged-fixture.sh
+  echo torename > to-rename-fixture.sh
+  git add -A && git commit -q -m base
+  git update-ref refs/remotes/origin/main HEAD
+  echo x > branch-only-fixture.sh
+  git add -A && git commit -q -m ahead
+  echo y > staged-fixture.test.ts
+  git add staged-fixture.test.ts
+  git mv to-rename-fixture.sh renamed-fixture.sh
+  echo more >> scripts/tracked-unstaged-fixture.sh   # tracked, modified, UNSTAGED
+  echo z > scripts/untracked-fixture.test.sh         # untracked, relevance-prefixed
+) >/dev/null 2>&1; then
+  _staged_asm="$TESTROOT/assembly-staged.sh"
+  # Range ends at the _diff_touches comment, covering ALL diff sources —
+  # staged branch, both branch arms, the rename pair, and all three
+  # untracked appends (scoped + both unscoped).
+  awk '/^_diff_detect_ok=0$/,/^# Does this run'"'"'s diff/' "$RUNNER" > "$_staged_asm"
+  # Env-read pin (#9197 security seat): the shipped runner must contain NO
+  # `${SANDBOX_STAGED_NAMES+x}` read — the seam exists only in sandbox copies
+  # (build_sandbox §1b). Anchored on the +x expansion form, not the bare name,
+  # because the shipped staged branch's comment documents the anchor in
+  # prose — a bare-token grep would match the comment and pin nothing.
+  _asm_gits=$(grep -c 'git ' "$_staged_asm")
+  if grep -qF 'SANDBOX_STAGED_NAMES+x' "$RUNNER"; then
+    fail "sc9: SANDBOX_STAGED_NAMES env-read found in the shipped runner — the seam must be injected, never shipped"
+  elif ! grep -qF 'diff --cached' "$_staged_asm" || (( _asm_gits < 6 )); then
+    fail "sc9: assembly extraction missing the staged branch (diff --cached absent or truncated: ${_asm_gits} git lines)"
+  else
+    _staged_eval=$(cd "$REAL_REPO" && (
+      for _v in "${!GIT_@}"; do unset "$_v"; done
+      bash -c "
+        source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
+        _AFF_SCOPE=staged; _AFFECTED=1; TEST_GROUP=affected
+        $(cat "$_staged_asm")
+        printf '%s\nDETECT=%s HEAD=%s\n' \"\$_diff_names\" \"\$_diff_detect_ok\" \"\$_diff_head_ok\""
+    ) 2>/dev/null || true)
+    _branch_eval=$(cd "$REAL_REPO" && (
+      for _v in "${!GIT_@}"; do unset "$_v"; done
+      bash -c "
+        source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
+        _AFFECTED=1; TEST_GROUP=affected
+        $(cat "$_staged_asm")
+        printf '%s\nDETECT=%s HEAD=%s\n' \"\$_diff_names\" \"\$_diff_detect_ok\" \"\$_diff_head_ok\""
+    ) 2>/dev/null || true)
+    # Detection-failure wiring: eval the same extraction in a non-repo dir —
+    # `git diff --cached` fails, so a correctly-wired staged branch leaves
+    # BOTH detection arms 0 (the undecidable-diff fail-safe direction).
+    # _AFFECTED/TEST_GROUP are bound (to their non-affected values), not left
+    # unset: SHELLOPTS exports `nounset` into every `bash -c` child, and the
+    # extracted range contains `(( _AFFECTED == 1 ))` — an unbound read aborts
+    # the child BEFORE the printf and this leg would measure an empty string.
+    _norepo_eval=$(cd "$TESTROOT" && (
+      for _v in "${!GIT_@}"; do unset "$_v"; done
+      bash -c "
+        source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
+        _AFF_SCOPE=staged; _AFFECTED=0; TEST_GROUP=all
+        $(cat "$_staged_asm")
+        printf 'DETECT=%s HEAD=%s\n' \"\$_diff_detect_ok\" \"\$_diff_head_ok\""
+    ) 2>/dev/null || true)
+    # The `to-rename-fixture.sh` assert pins the rename SOURCE, not only the
+    # destination: `--name-only` alone emits `renamed-fixture.sh`; only the
+    # `--name-status -M` append under staged scope carries the R100 old path.
+    if grep -qF 'staged-fixture.test.ts' <<<"$_staged_eval" \
+      && grep -qF 'renamed-fixture.sh' <<<"$_staged_eval" \
+      && grep -qF 'to-rename-fixture.sh' <<<"$_staged_eval" \
+      && ! grep -qF 'branch-only-fixture.sh' <<<"$_staged_eval" \
+      && ! grep -qF 'tracked-unstaged-fixture.sh' <<<"$_staged_eval" \
+      && ! grep -qF 'untracked-fixture.test.sh' <<<"$_staged_eval" \
+      && grep -qF 'branch-only-fixture.sh' <<<"$_branch_eval" \
+      && grep -qF 'tracked-unstaged-fixture.sh' <<<"$_branch_eval" \
+      && grep -qF 'untracked-fixture.test.sh' <<<"$_branch_eval" \
+      && grep -qF 'DETECT=1 HEAD=1' <<<"$_staged_eval" \
+      && grep -qF 'DETECT=0 HEAD=0' <<<"$_norepo_eval"; then
+      pass "sc9: staged scope reads the index — branch window, unstaged mods, and untracked set dark; rename rows + detection wiring verified"
+    else
+      fail "sc9: blobs drifted — staged{staged=$(grep -c staged-fixture <<<"$_staged_eval") rename=$(grep -c renamed-fixture <<<"$_staged_eval") branch=$(grep -c branch-only <<<"$_staged_eval") unstaged=$(grep -c tracked-unstaged <<<"$_staged_eval") untracked=$(grep -c untracked-fixture <<<"$_staged_eval") det=$(grep -o 'DETECT=[0-9] HEAD=[0-9]' <<<"$_staged_eval" | head -1)} branch-eval{branch=$(grep -c branch-only <<<"$_branch_eval") unstaged=$(grep -c tracked-unstaged <<<"$_branch_eval") untracked=$(grep -c untracked-fixture <<<"$_branch_eval")} norepo{$(grep -o 'DETECT=[0-9] HEAD=[0-9]' <<<"$_norepo_eval" | head -1)}"
+    fi
+  fi
+else
+  fail "sc9: real-state scratch repo could not be built"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=43
+MIN_CASES=52
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2

@@ -37,7 +37,7 @@
 # difference between a gate people run and one they skip.
 #
 # TOOLING DEPENDENCY, recorded here because this is the auto-glob site (#7068).
-# FIVE registered suites consume docker — two as a whole-suite requirement, three
+# SIX registered suites consume docker — two as a whole-suite requirement, four
 # for a docker-dependent arm that declines cleanly when the daemon is absent:
 #   - cloud-init-plugin-seed.test.sh    builds a small busybox fixture image (~2-4s in CI)
 #   - git-data-runcmd-rehearsal.test.sh 8 `docker run --rm` invocations from 6 source sites
@@ -52,16 +52,20 @@
 #   - zot-config-deadlines.test.sh      digest acceptance pair — `docker run` zot verify +
 #                                       negative control; the static relations and S4
 #                                       battery need no docker
+#   - cloud-init-inngest-provision-unit.test.sh  Tier B: systemd 255 as PID 1 in a
+#                                       privileged ubuntu:24.04 container (#8562); Tier A
+#                                       and the static rows need no docker
 #
-# On a non-CI host all five exit 0 when docker is missing or unreachable — the
-# first two skip the suite outright; the other three print a SKIP verdict and
-# count the declined assertions (`SKIP runtime arm` / `=== Skipped:`). Under CI
-# four of the five fail closed on the same absence (the CI arm inside each gate);
+# On a non-CI host all six exit 0 when docker is missing or unreachable — the
+# first two skip the suite outright; the other four print a SKIP verdict and
+# count the declined assertions (`SKIP runtime arm` / `=== Skipped:`; the
+# provision-unit suite names its Tier B skip). Under CI
+# five of the six fail closed on the same absence (the CI arm inside each gate);
 # only plugin-seed skips unconditionally, relying on the workflow assert step
 # ordered before it below. The skip is NOT visible
 # through this runner: the executor below captures each suite's output to a per-run log dir and
-# prints `PASS`, so a docker-less laptop reports PASS for all five — for the first two while
-# neither asserts anything (~50-65s of coverage, silently absent), and for the three partial
+# prints `PASS`, so a docker-less laptop reports PASS for all six — for the first two while
+# neither asserts anything (~50-65s of coverage, silently absent), and for the four partial
 # declines while their docker arms never adjudicate. (An earlier version of this paragraph
 # called it a "visible SKIP", which was false in the one file where it mattered most.)
 #
@@ -78,9 +82,11 @@
 # That is deliberate for local DX, and it is why CI does NOT rely on the skip:
 # infra-validation.yml has a separate `docker info` assertion step that reds the job when the
 # daemon is absent, rather than letting any suite pass vacuously. That step must stay
-# ORDERED BEFORE all five consumers — today it precedes plugin-seed, and
-# git-data-runcmd-rehearsal, git-data-cutover-access, git-data-ownership, and
-# zot-config-deadlines are all later in the same job, so all five are covered. That ordering
+# ORDERED BEFORE all six consumers — today it precedes plugin-seed, and
+# git-data-runcmd-rehearsal, git-data-cutover-access, git-data-ownership,
+# zot-config-deadlines and cloud-init-inngest-provision-unit (all glob-derived, run by the
+# "Run registered infra suites" leg step that follows the assert) are later in the same job, so
+# all six are covered. That ordering
 # is the invariant; it is not self-evident from either step. If you are debugging why a
 # docker-dependent regression reproduced in CI but not locally, this is the reason.
 #
@@ -614,6 +620,19 @@ _SUITE_BOUNDS=(
   # ~2.5x serial so a slow day renders as their own RED, not a leg timeout.
   "apps/web-platform/infra/infra-config-repush-mutation.test.sh=540"
   "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh=540"
+  # #9195: nominally ~351 s — already ~97.5% of the 360 s default — and T9's
+  # restart-witness poll (up to 90 s) lands inside it on starved-runner days,
+  # so a bound-kill would replace the diagnostic red (and the teardown dump)
+  # with a bare timeout. Pin at 540 per the two-suite precedent above.
+  "apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh=540"
+  # #9123: the boot-unlock guard suite re-runs itself once per mutation row
+  # (47 rows), each child executing the writer-arm + stub-PATH runtime arm —
+  # ~253 s serial on the dev box. Under -P4 contention the #8688 measurement
+  # says degraded days run ~2.5x, which is ~633 s — and a measured ship-battery
+  # run under three concurrent worktree runs cut it off at the 700 s pin with
+  # every row still passing, so pin at 900; a slow day renders as this
+  # suite's RED, not a leg timeout.
+  "apps/web-platform/infra/workspaces-boot-unlock.test.sh=900"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

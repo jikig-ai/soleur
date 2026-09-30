@@ -102,7 +102,7 @@ else
   CRED_FILE_STATE=absent
 fi
 
-# Sentry destination pin (#7873 Rule D drawdown). The seven Sentry POSTs below forward
+# Sentry destination pin (#7873 Rule D drawdown). The eight Sentry POSTs below forward
 # SENTRY_PUBLIC_KEY to "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/", and both
 # halves are env-settable. A value outside the shape Sentry issues (measured against Doppler prd,
 # 2026-09-15) is dropped, which disables the best-effort Sentry arm (every site is guarded on
@@ -653,6 +653,102 @@ cosign_verify_event() {
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "IMAGE_VERIFY: Sentry POST failed"
   fi
+}
+
+# image_freshness_event <result> <ref> <expected> <actual> <detail>: loud, no-SSH page when the
+# pre-swap freshness check aborts a web deploy (#6428). Every result it is called with ABORTS the
+# deploy, so every event is level=error; `freshness_result` discriminates the cause in one event:
+#   version_mismatch — the image was built as another version (the stale-but-signed zot image);
+#   version_absent   — the image carries no usable BUILD_VERSION (missing, empty or `dev`);
+#   version_ambiguous — the image config carries more than one BUILD_VERSION entry;
+#   inspect_failed   — `docker inspect` of the ref about to be run failed.
+# <actual> comes from the image config, so it is DISPLAYED only through _freshness_display (a
+# bounded, printable shape) — a control character or an oversized value never reaches journald
+# or the Sentry payload, and cannot E2BIG the logger/jq argv and silence the page.
+# Paged by sentry_alert.image_freshness_mismatch (issue-alerts.tf, op == image-freshness). Tagged
+# host_id so the host is attributable from Sentry alone. Best-effort + env-guarded, mirrors
+# cosign_verify_event. Fail-open under set -e.
+_freshness_display() {
+  if [[ "${1:-}" =~ ^[0-9A-Za-z.+-]{1,64}$ ]]; then printf '%s' "$1"; else printf '<invalid:len=%d>' "${#1}"; fi
+}
+
+image_freshness_event() {
+  local result="$1" ref="$2" expected="$3" actual detail="${5:-}"
+  actual="$( [[ -z "${4:-}" ]] || _freshness_display "$4" )"
+  logger -t "$LOG_TAG" "IMAGE_FRESHNESS_FAIL: result=$result ref=$ref expected=$expected actual=${actual:-<none>} detail=$detail"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg r "$result" --arg ref "$ref" --arg e "$expected" --arg a "$actual" \
+      --arg d "$detail" --arg h "${HOST_ID:-}" \
+      '{message: ("image freshness " + $r + ": deploy of " + $e + " refused, image is " + (if $a == "" then "<no BUILD_VERSION>" else $a end)),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-freshness", freshness_result: $r, host_id: $h},
+        extra: {ref: $ref, expected: $e, actual: $a, detail: $d}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_FRESHNESS: Sentry POST failed"
+  fi
+}
+
+# verify_image_freshness <ref> <tag>: the pre-swap freshness gate (#6428). A zot that serves an OLD
+# but validly signed image for the requested tag passes verify_image_signature — the old image IS
+# validly signed — and before this check nothing noticed until the release workflow's post-deploy
+# /health version check, after the stale container was already serving (and never on web-2, which
+# serves no ingress). The release build bakes `ENV BUILD_VERSION=<next>` into the image it tags
+# `v<next>` (reusable-release.yml → apps/web-platform/Dockerfile), and every deploy caller sends
+# `v<BUILD_VERSION>`, so `BUILD_VERSION == ${tag#v}` holds for every correctly served image: a
+# release, a rollback to an older release, a seccomp same-version reload, a local-cache rescue.
+#
+# <ref> is VERIFIED_REF — the ref the canary and production run next — never "$IMAGE:$TAG", which
+# can be re-pointed after the verify. The value comes from the image's own config, so it is bound
+# to those bytes; it is covered by the cosign signature only when the verify passed (WARN mode also
+# runs an unverified digest, and the tag on inspect_failed).
+#
+# FAILS CLOSED: returns 1 (caller aborts, the OLD container stays live) on a mismatch AND whenever
+# the version cannot be established (inspect failure, no BUILD_VERSION line, empty, or `dev`), and
+# sets the global FRESHNESS_ABORT_REASON to the deploy-state reason: `image_stale_version` for a
+# mismatch, `image_version_unverifiable` otherwise (incl. a config with two BUILD_VERSION entries,
+# where the value the process sees is not decidable from here). Every
+# image zot can serve for a v-tag has carried BUILD_VERSION since 2026-03, so the closed arm costs
+# no legitimate deploy. Emits `IMAGE_FRESHNESS: ok …` on success — the Better Stack liveness marker
+# showing a host actually ran the check (a host still on an older ci-deploy.sh, e.g. web-2 until its
+# next replace per #9151, emits none). The comparison is exact string equality on the WHOLE key.
+verify_image_freshness() {
+  local ref="$1" tag="$2" expected="${2#v}" env_out="" rc=0 actual="" count=0 line
+  FRESHNESS_ABORT_REASON="image_version_unverifiable"
+  # Capture first, THEN parse: a `done < <(docker inspect …)` loop would lose the exit code, and a
+  # failed inspect would read as "no BUILD_VERSION line". `200>&-` closes the FD-200 deploy lock
+  # for this child (#5062). `--type image`: a container sharing the ref's name would otherwise win,
+  # and its Config.Env carries runtime -e/--env-file values, not what the image was built as.
+  env_out="$(docker inspect --type image --format '{{range .Config.Env}}{{println .}}{{end}}' "$ref" 2>/dev/null 200>&-)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    image_freshness_event "inspect_failed" "$ref" "$expected" "" "docker inspect rc=$rc"
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ "$line" == BUILD_VERSION=* ]]; then
+      actual="${line#BUILD_VERSION=}"; count=$((count + 1))
+    fi
+  done <<< "$env_out"
+  if [[ "$count" -gt 1 ]]; then
+    image_freshness_event "version_ambiguous" "$ref" "$expected" "" "the image config carries $count BUILD_VERSION entries"
+    return 1
+  fi
+  if [[ -z "$actual" || "$actual" == "dev" ]]; then
+    image_freshness_event "version_absent" "$ref" "$expected" "$actual" "the image carries no released BUILD_VERSION, so its version cannot be checked against $tag"
+    return 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    FRESHNESS_ABORT_REASON="image_stale_version"
+    image_freshness_event "version_mismatch" "$ref" "$expected" "$actual" "the registry served an image built as another version for $tag (stale-but-signed)"
+    return 1
+  fi
+  FRESHNESS_ABORT_REASON=""
+  logger -t "$LOG_TAG" "IMAGE_FRESHNESS: ok ref=$ref expected=$expected actual=$actual"
+  return 0
 }
 
 # _pull_result_is_auth_denied <stderr-content>: the SINGLE source of truth for
@@ -2604,7 +2700,7 @@ verify_inngest_health() {
   # server's --poll-interval self-heal). Best-effort poll /v0/gql for a
   # re-armed cron trigger; if none appears, log an advisory and STILL succeed
   # (the Sentry cron monitors are the real safety net). GET /v1/functions is an
-  # unregistered 404 in inngest v1.19.4 (#5520); the GraphQL `functions` field
+  # unregistered 404 in inngest v1.45.1 (#5520); the GraphQL `functions` field
   # on /v0/gql returns triggers as {type,value} objects — cron triggers carry
   # type="CRON". Dependency-free substring match on `"type":"CRON"` in the
   # minified GQL response (jq is not a host dependency).
@@ -2873,7 +2969,8 @@ fi
 # was an already-revoked GHCR read PAT. Note web-2's text does not match either arm in this file
 # even at HEAD, so it is running a ci-deploy.sh that predates main and will not emit this marker
 # at all; that host's stale-script and unprovisioned-ZOT_REGISTRY_URL state is #7103 B4, filed
-# separately and deliberately not widened into this PR.
+# separately and deliberately not widened into this PR. (#9151 later delivered the current
+# script to web-2 through terraform_data.deploy_pipeline_fix_web2 — the B4 follow-through.)
 #
 # Emitted AFTER the credential-read block and BEFORE the flock, so it reports credential state
 # at the point of USE rather than at parse time. Four fields, deliberately not six: `peers` is
@@ -2887,8 +2984,12 @@ fi
 # up here as cred_file=present doppler_token=absent.
 _ci_deploy_script_sha=unknown
 if [ -r "${BASH_SOURCE[0]:-/nonexistent}" ]; then
-  _sha_out="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -c1-12)" || _sha_out=""
-  if [ -n "$_sha_out" ]; then _ci_deploy_script_sha="$_sha_out"; fi
+  # Compute the full sha256 once — the 12-char script_sha slices it, and the
+  # DEPLOY_SCRIPT_SHA marker below emits it whole.
+  _ci_deploy_script_sha_full="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -d' ' -f1 || true)"
+  if [ -n "$_ci_deploy_script_sha_full" ]; then
+    _ci_deploy_script_sha="$(printf '%s' "$_ci_deploy_script_sha_full" | cut -c1-12)"
+  fi
 fi
 # `if`, never `[ -n … ] && var=…`: as a bare trailing command the latter exits 1 when the test
 # is false, which under this script's `set -e` aborts the deploy. That exact trap is documented
@@ -2896,7 +2997,16 @@ fi
 _dt_state=absent
 if [ -n "${DOPPLER_TOKEN:-}" ]; then _dt_state=present; fi
 logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-unset} script_sha=${_ci_deploy_script_sha} cred_file=${CRED_FILE_STATE} doppler_token=${_dt_state}" 2>/dev/null || true
-unset _sha_out _dt_state _ci_deploy_script_sha
+# #9151 — DEPLOY_SCRIPT_SHA: the full sha256 of THIS script's bytes on THIS host,
+# emitted once per invocation so Better Stack rows prove which ci-deploy.sh each
+# web host actually runs. scripts/check-deploy-script-parity.sh compares the
+# newest row per host_name against the repo sha — the no-SSH parity read. The
+# INVOCATION line keeps its 12-char script_sha (closed format); this marker is
+# the parity anchor, so it is full-length and stable: `DEPLOY_SCRIPT_SHA sha256=<64hex>`
+# or `sha256=unknown` when the source file is unreadable (which also prevents a
+# deploy, making the line unreachable — kept for completeness).
+logger -t "$LOG_TAG" "DEPLOY_SCRIPT_SHA sha256=${_ci_deploy_script_sha_full:-unknown}" 2>/dev/null || true
+unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
 
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
@@ -3258,6 +3368,17 @@ case "$COMPONENT" in
     elif ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
       logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
       final_write_state 1 "cosign_verify_failed"
+      exit 1
+    fi
+
+    # #6428: pre-swap freshness — the image about to run must have been BUILT as the requested
+    # version. Runs on every VERIFIED_REF arm (the verified digest, the WARN-mode tag fallback, and
+    # the local-cache rescue) and
+    # before the plugin seed, the canary and the swap, so a stale-but-signed image never serves.
+    # Fails closed; the OLD container stays live (downtime-safe, like the ENFORCE abort above).
+    if ! verify_image_freshness "$VERIFIED_REF" "$TAG"; then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: image freshness check refused $VERIFIED_REF for $TAG ($FRESHNESS_ABORT_REASON) — keeping previous version"
+      final_write_state 1 "$FRESHNESS_ABORT_REASON"
       exit 1
     fi
 
@@ -3802,8 +3923,10 @@ case "$COMPONENT" in
     fi
     # Inngest server bootstrap (PR-F follow-up, #3960).
     #
-    # No canary: inngest-server binds loopback only (127.0.0.1:8288/8289) so
-    # there is no external traffic to shadow. The bootstrap script's
+    # No canary: inngest-server binds 0.0.0.0:8288/8289 on the dedicated host
+    # (web-IP-scoped by the host's nftables input chain; the connect gRPC ports
+    # are open intra-subnet on both versions) so there is no PUBLIC traffic to
+    # shadow — traffic arrives from web-host producers only. The bootstrap script's
     # `systemctl is-active` + version-file check at /var/lib/inngest/version
     # provides idempotency; a second deploy of the same $TAG is a ~50ms no-op.
     #

@@ -274,6 +274,77 @@ else
   fi
 fi
 
+# --- durations tables (suite-durations{,-heavy}.tsv, #9232) -------------------
+#
+# The committed durations tables are the single duration source both consumers
+# read: CI regen writes them on --write, and the #8231 local parallel scheduler
+# re-packs them at an arbitrary worker count with zero gh calls. The contract:
+# rows are `label<TAB>ms<TAB>src` with src ∈ {measured,floor}, label-sorted, the
+# label set EXACTLY equals the sibling manifest's (a label in one and not the
+# other means one consumer sees weight the other cannot place), and every label
+# is registered — a phantom durations row is the same stale-subset drift class
+# the manifest ⊆ lint exists to catch.
+#
+# check_durations <table> <manifest> <registered-sorted-file> <name>
+check_durations() {
+  local dur=$1 mf=$2 ref=$3 name=$4
+  local data dlabels mlabels
+  if [[ ! -f "$dur" ]]; then
+    check fail "$name durations table absent: $dur — #8231's local scheduler has no duration source. Regenerate: $REGEN"
+    return
+  fi
+  check pass "$name durations table exists"
+  for key in group generated-from-runs default-weight-ms; do
+    if grep -q "^# ${key}=" "$dur"; then
+      check pass "$name durations provenance '# ${key}=' present"
+    else
+      check fail "$name durations table missing '# ${key}=' — provenance is what makes a stale table diagnosable. Regenerate: $REGEN"
+    fi
+  done
+  data="$(grep -vE '^[[:space:]]*(#|$)' "$dur" || true)"
+  if [[ -z "$data" ]]; then
+    check fail "$name durations table has zero data rows. Regenerate: $REGEN"
+    return
+  fi
+  local bad=0
+  while IFS=$'\t' read -r _lbl _ms _src _rest; do
+    [[ -z "$_lbl" ]] && continue
+    if [[ -n "$_rest" || ! "$_ms" =~ ^[0123456789]+$ || ( "$_src" != "measured" && "$_src" != "floor" ) ]]; then
+      check fail "$name durations malformed row: '$_lbl' — expected 'label<TAB>ms<TAB>src' with src in {measured,floor}"
+      bad=$(( bad + 1 ))
+    fi
+  done <<< "$data"
+  if (( bad == 0 )); then
+    check pass "every $name durations row is 'label<TAB>ms<TAB>src' with src in the enum"
+  fi
+  dlabels="$(printf '%s\n' "$data" | cut -f1 | sort -u)"
+  mlabels="$(grep -vE '^[[:space:]]*(#|$)' "$mf" | cut -f1 | sort -u || true)"
+  if [[ "$(comm -3 <(printf '%s\n' "$dlabels") <(printf '%s\n' "$mlabels") | tr '\n' ' ')" == "" ]]; then
+    check pass "$name durations keys == manifest keys — the two consumers see the same label set"
+  else
+    check fail "$name durations/manifest label sets diverge — a label has weight in one and no placement in the other. Regenerate: $REGEN"
+  fi
+  local phantoms
+  phantoms="$(comm -23 <(printf '%s\n' "$dlabels") "$ref" | tr '\n' ' ')"
+  if [[ -z "$phantoms" ]]; then
+    check pass "every $name durations label is a registered suite"
+  else
+    check fail "phantom $name durations label(s): $phantoms. Regenerate: $REGEN"
+  fi
+  if printf '%s\n' "$data" | cut -f1 | LC_ALL=C sort -c 2>/dev/null; then
+    check pass "$name durations rows are label-sorted"
+  else
+    check fail "$name durations rows are not label-sorted — ADR-235 requires deterministic sorted generated output. Regenerate: $REGEN"
+  fi
+}
+
+check_durations "$REPO_ROOT/scripts/suite-durations.tsv" "$MANIFEST" \
+  "${TMPDIR:-/tmp}/ssm-registered.$$" "light"
+if [[ -f "$MANIFEST_HEAVY" ]]; then
+  check_durations "$REPO_ROOT/scripts/suite-durations-heavy.tsv" "$MANIFEST_HEAVY" \
+    "${TMPDIR:-/tmp}/ssm-registered-heavy.$$" "heavy"
+fi
+
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
 # Ordered BEFORE the floor — a neutered helper deflates the verdict counters, and this
 # reports "a verdict was discarded" rather than the misleading "rows were deleted".
@@ -288,7 +359,7 @@ fi
 # printf + exit, NEVER through fail() — the helper this floor backstops is the thing
 # one edit disarms. MIN_CASES sits on the line directly above its `if` so
 # guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=25
+MIN_CASES=45
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d check(s) ran, expected >= %d. The suite did not run to completion.\n' "$cases" "$MIN_CASES" >&2
   exit 1

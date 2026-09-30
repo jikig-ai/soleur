@@ -643,9 +643,28 @@ entry records what changes in them.
   re-asserted before the volume is replaced. PR1 builds none of it. Until that rotation runs,
   `erased` on the Art. 17 path means **unlinked**: the blocks stay readable to a holder of the LUKS
   key.
+
 - **Unchanged.** D1a, D1b, D2, D3, D4 and D5 are untouched. The access path, the dedicated root key
   and the read credential are the same; ADR-239 changes what the host serves, not how CI reaches
   root on it.
+
+### 2026-09-30 (#8211 PR2): D6 has a route — `git-data-host-rotate`
+
+The pending-PR2 sentence above is discharged: D6's combined rotation is `apply_target=
+git-data-host-rotate` in `apply-web-platform-infra.yml` — the `git_data_host_replace` job run
+with `confirm=ROTATE-GIT-DATA`, a `served_repos=0` Better Stack precondition (the host is
+deny-all; the latest `stage:bootstrap` emit on `host_name=git-data` must read empty — an
+unreadable store fails closed, not open), and the `-replace` set extended by
+`hcloud_volume.git_data_luks` + `random_password.git_data_luks` +
+`doppler_secret.git_data_luks_key`. The `git_data_host_replace_gate` gained a `rotate` arm that
+requires the trio to move TOGETHER — a passphrase without a fresh volume can never `luksOpen`,
+and a retained passphrase is not a rotation — while `hcloud_volume.git_data` (the plaintext
+rollback backstop) stays preserved by omission in both modes. The pin-load is the job's inline
+`pin_load` step (the `git-data-pin-redeploy.yml` follower is retired; ADR-237 addendum
+2026-09-30). "Freshness" for the cutover's `d6_replace_stale` precondition is a completed
+`git-data-host-rotate` run whose apply job concluded `success` AND whose rotate-confirm
+marker step concluded `success` — the rotation proof; a plain `git-data-host-replace`
+cannot discharge D6 because it re-mints no LUKS key.
 
 ### 2026-09-27 (#8211 PR2): the store probes read the LUKS-served store
 
@@ -695,3 +714,20 @@ Dated text above is not rewritten.
   (the pin present in `prd`, #8572 paging, and #8211's per-id re-erasure path, which the LUKS
   cutover runbook requires before the first flip) stand. No earlier entry is edited, and no status in D5
   changes.
+
+### 2026-09-28 (#8572): the "#8572 paging" flip precondition
+
+- **Met on #8572's merge plus a green `apply-sentry-infra.yml` and `web-platform-release.yml`.** The
+  `git-data-host-key-pin-fault` rule pages on the `pin_fault` tag (boot and replication-push pin
+  faults), and `art17-erasure-incomplete` now also re-pages per event on an unresolved issue. The
+  #8211 PR2 flip check (`pin_fault_paging_absent`, not built yet) must read the live rule's content
+  (enabled, the exact `in` set, the issue-owners email falling back to active members) and the
+  deployed release, not the rule's name; until it exists, `scripts/sentry-alert-live-fidelity.sh`'s
+  `sentry_alert live fidelity: PASS` is that read. #8211's per-id re-erasure path remains a separate, hard precondition. No earlier entry
+  is edited.
+- **Condition met 2026-09-28 (#8572).** PR #9150 merged as `7541fb13`; apply-sentry-infra run
+  36454249853 read `sentry_alert live fidelity: PASS (all 35 in-scope rules …)`, and the release
+  serving `7541fb13` finished deploying at 2026-09-28T17:15:30Z (deploy arm 36456390256). So the
+  "#8572 paging" precondition holds as configured and verified; email delivery is not yet observed
+  (nothing has fired), and the per-id re-erasure path is still the open hard precondition. Record:
+  `knowledge-base/legal/audits/2026-09-counsel-reattestation-5914.md`, "Verification 2026-09-28 (#8572)".
