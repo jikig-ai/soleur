@@ -1292,10 +1292,14 @@ g5d_fire() {  # <mount source> <state line or empty> <blkid TYPE or empty>
 }
 g5d_log() { tr '\n' '|' < "$G5D_LOG" | cut -c1-300; }
 g5d_arm "$TGT_BLK"
-if [ -z "$G5D_FIRE" ] || ! grep -qF "$G5D_BIN/blkid" <<<"$G5D_FIRE" || ! sh -n -c "$G5D_FIRE" 2>/dev/null; then
-  no "G5d INSTRUMENT: the fire string was not captured, does not carry the baked blkid, or is not valid /bin/sh (the physical rows would be vacuous) — ${G5D_FIRE:0:160}"
+if [ -z "$G5D_FIRE" ] || ! sh -n -c "$G5D_FIRE" 2>/dev/null; then
+  no "G5d INSTRUMENT: the fire string was not captured or is not valid /bin/sh (every fire row below would be vacuous) — ${G5D_FIRE:0:160}"
 else
-  ok "G5d the captured fire string parses under sh -n and bakes the fixed-path blkid"
+  # The behavioural rows below run whatever the fire contains, so a fire that lost its physical test
+  # (or the whole guard) goes RED on the row that exercises it, not only here.
+  grep -qF "$G5D_BIN/blkid -p -s TYPE -o value $TGT_BLK" <<<"$G5D_FIRE" \
+    && ok "G5d the captured fire string parses under sh -n and bakes the fixed-path blkid against the recorded device" \
+    || no "G5d the fire does not bake the arm-time blkid path against the recorded device — ${G5D_FIRE:0:200}"
   g5d_fire /dev/sdz9 "PLAINTEXT_WIPE_BEGUN=$PIN:1" ext4
   grep -qF 'reason=refused_plaintext_wiped why=marker' "$G5D_LOG" && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" && ! grep -qE '^docker stop' "$G5D_LOG" \
     && ok "G5d-R1 a dead-man FIRE on a host whose state names a wipe refuses (why=marker) before any stop/umount/close" \
