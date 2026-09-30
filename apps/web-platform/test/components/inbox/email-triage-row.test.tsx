@@ -257,19 +257,18 @@ describe("EmailTriageRow — action error surfacing (N5)", () => {
     render(<EmailTriageRow item={makeStatutoryItem()} onChanged={onChanged} />);
 
     fireEvent.click(screen.getByLabelText("Acknowledge email"));
-    expect(
-      await screen.findByText("Couldn't acknowledge — try again."),
-    ).toBeInTheDocument();
+    // Same selector proves presence here and absence below, so the absence
+    // wait cannot pass vacuously on a role change.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't acknowledge — try again.",
+    );
 
     // Default mock (200) takes over for the retry.
     fireEvent.click(screen.getByLabelText("Acknowledge email"));
-
-    // Positive anchor: the retry reached the success path.
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
 
-    // onChanged fires before the transition that clears the alert commits
-    // (setActionError(null) is in the async transition's sync prefix), so wait
-    // on the effect. Non-vacuous: the alert was proven present above (#9126).
+    // onChanged fires before the alert clears (the clear commits with the async
+    // transition), so wait on the effect instead of asserting absence at once (#9126).
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 });
