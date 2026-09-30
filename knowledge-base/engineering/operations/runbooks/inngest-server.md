@@ -541,6 +541,7 @@ Fields this runbook uses (all under `.services`):
 | Field | Answers |
 |---|---|
 | `inngest_server`, `inngest_redis` | unit states (see the caveat below) |
+| `inngest_server_version` | the **installed** `/usr/local/bin/inngest` self-reported version (`1.45.1-<sha>`; `#7308` — empty = no resolvable binary; the doppler wrap + yama ptrace scope make a running-process read dead, so this is installed≈running under the immutable-redeploy rule) |
 | `inngest_journal_tail`, `inngest_redis_journal_tail`, `inngest_heartbeat_journal_tail` | the unit's own stderr, scrubbed |
 | `inngest_redis_result` | `Result`/`ExecMainStatus`/**`NRestarts`**/`ActiveEnterTimestamp`/`LoadState`/`ActiveState`/**`SyslogIdentifier`** |
 | `inngest_redis_dropin` | the drop-ins systemd has actually **loaded** (basenames; empty = none merged) |

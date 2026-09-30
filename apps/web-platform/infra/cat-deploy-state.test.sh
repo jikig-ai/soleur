@@ -712,104 +712,77 @@ assert "tail_status reports no-journalctl rather than a bare empty string" \
 rm -rf "$REDIS_MOCK" "$BARE_PATH_DIR"
 
 # --- #7308: services.inngest_server_version ----------------------------------
-# The field must answer "which binary version is live here" by MEASUREMENT.
-# Three-resolution order under test: /proc/<MainPID>/exe (the running process,
-# ground truth) > ExecStart path= token > installed-binary fallback
-# (INNGEST_SERVER_BIN seam — /usr/local/bin/inngest in production).
+# The field reports the INSTALLED binary's self-reported version (the doppler
+# wrap + yama ptrace scope make a running-process read structurally dead — see
+# the comment block in cat-deploy-state.sh). Sentinel contract under test:
+# key always present; discriminating tokens (absent/version-unreadable/
+# unknown-no-timeout), never a bare "".
 ISV_DIR=$(mktemp -d)
-mkdir -p "$ISV_DIR/bin" "$ISV_DIR/proc/4242"
-# Stub binary: only the `version` subcommand succeeds.
+mkdir -p "$ISV_DIR/bin"
+# Stub binaries: bare token, prose-embedded token, ANSI garbage, and a hang.
 cat > "$ISV_DIR/bin/inngest" << 'MOCK'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "version" ]]; then echo "1.45.1-testsha"; exit 0; fi
 exit 1
 MOCK
-chmod +x "$ISV_DIR/bin/inngest"
-ln -s "$ISV_DIR/bin/inngest" "$ISV_DIR/proc/4242/exe"
-# Garbage-emitting variant: `version` prints ANSI junk, no semver token.
+cat > "$ISV_DIR/bin/inngest-prose" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "version" ]]; then echo "inngest version 1.45.1"; exit 0; fi
+exit 1
+MOCK
 cat > "$ISV_DIR/bin/inngest-bad" << 'MOCK'
 #!/usr/bin/env bash
 printf '\033[31mgarbage-no-version\033[0m\n'
 MOCK
-chmod +x "$ISV_DIR/bin/inngest-bad"
-# systemctl stub: answers is-active/show(MinPID|ExecStart) from env; all other
-# property reads degrade to empty (the script's own sentinels cover those).
-cat > "$ISV_DIR/systemctl" << 'MOCK'
+cat > "$ISV_DIR/bin/inngest-hang" << 'MOCK'
 #!/usr/bin/env bash
-case "$1" in
-  is-active) echo "${MOCK_ISV_ACTIVE:-active}"; exit 0 ;;
-  show)
-    if [[ "$*" == *MainPID* ]]; then echo "${MOCK_ISV_PID:-0}"; exit 0; fi
-    if [[ "$*" == *ExecStart* ]]; then echo "${MOCK_ISV_EXECSTART:-}"; exit 0; fi
-    exit 0
-    ;;
-  is-enabled) exit 0 ;;
-esac
-exit 0
+sleep 30
 MOCK
-chmod +x "$ISV_DIR/systemctl"
+chmod +x "$ISV_DIR/bin/inngest" "$ISV_DIR/bin/inngest-prose" "$ISV_DIR/bin/inngest-bad" "$ISV_DIR/bin/inngest-hang"
+# An executable DIRECTORY is not a binary (-f guard, not just -x).
+mkdir -p "$ISV_DIR/bin/inngest-dir"
 
-# Leg 1: a RUNNING process wins over ExecStart and the fallback — the exe link
-# resolves to the stub even when the other legs would answer differently.
-ISV_OUT=$(PATH="$ISV_DIR:$PATH" \
-  INNGEST_PROC_ROOT="$ISV_DIR/proc" MOCK_ISV_PID=4242 \
-  MOCK_ISV_EXECSTART="{ path=$ISV_DIR/bin/inngest-bad ; argv[]=$ISV_DIR/bin/inngest-bad start ; }" \
-  INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-bad" \
-  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
-assert "inngest_server_version resolves the RUNNING process's exe binary first" \
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_server_version emits the installed binary's version token" \
   "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '1.45.1-testsha' ]]"
 
-# Leg 2: service inactive (MainPID=0) -> the systemd>=248 structured ExecStart
-# `path=` token is resolved.
-ISV_OUT=$(PATH="$ISV_DIR:$PATH" \
-  MOCK_ISV_PID=0 \
-  MOCK_ISV_EXECSTART="{ path=$ISV_DIR/bin/inngest ; argv[]=$ISV_DIR/bin/inngest start --sqlite-dir /var/lib/inngest ; }" \
-  INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-bad" \
-  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
-assert "inngest_server_version falls to the ExecStart path= token when the unit is stopped" \
-  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '1.45.1-testsha' ]]"
+# grep -oE extracts the semver token out of prose — the whole stdout must NOT
+# pass through (a bare-capture regression would emit 'inngest version 1.45.1').
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-prose"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_server_version extracts the semver token out of surrounding prose" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '1.45.1' ]]"
 
-# Leg 2b: a raw (pre-structured) ExecStart line — no `path=` token — resolves via
-# first-token + prefix-strip.
-ISV_OUT=$(PATH="$ISV_DIR:$PATH" \
-  MOCK_ISV_PID=0 \
-  MOCK_ISV_EXECSTART="-$ISV_DIR/bin/inngest start" \
-  INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-bad" \
-  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
-assert "inngest_server_version parses a raw ExecStart line (systemd prefix char stripped)" \
-  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '1.45.1-testsha' ]]"
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/definitely-absent"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_server_version reports 'absent' (not absent-key, not bare empty) when no binary" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == 'absent' ]] && printf '%s' '$ISV_OUT' | jq -e '.services | has(\"inngest_server_version\")' >/dev/null"
 
-# Leg 3: no systemd answer at all -> the installed-binary fallback (seam).
-ISV_OUT=$(PATH="$ISV_DIR:$PATH" \
-  MOCK_ISV_PID=0 MOCK_ISV_EXECSTART="" \
-  INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest" \
-  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
-assert "inngest_server_version falls to the installed binary when systemd has no answer" \
-  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '1.45.1-testsha' ]]"
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-dir"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_server_version refuses an executable DIRECTORY (the -f guard)" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == 'absent' ]]"
 
-# Sentinel: nothing resolvable -> EMPTY string, never an absent key.
-ISV_OUT=$(PATH="$ISV_DIR:$PATH" \
-  MOCK_ISV_PID=0 MOCK_ISV_EXECSTART="" \
-  INNGEST_SERVER_BIN="$ISV_DIR/bin/definitely-absent" \
-  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
-assert "inngest_server_version is present-but-empty when no binary resolves" \
-  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '' ]] && printf '%s' '$ISV_OUT' | jq -e '.services | has(\"inngest_server_version\")' >/dev/null"
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-bad"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "garbage version output yields 'version-unreadable', not raw text" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == 'version-unreadable' ]]"
 
-# Sentinel presence on the no_prior_deploy path too.
-ISV_ND=$(PATH="$ISV_DIR:$PATH" MOCK_ISV_PID=0 MOCK_ISV_EXECSTART="" \
-  INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest" \
-  CI_DEPLOY_STATE="$TMP/nonexistent2.state" bash "$TARGET")
-assert "inngest_server_version present even under no_prior_deploy sentinel" \
+# A hung binary cannot wedge the hook (timeout -k 1 5 — SIGTERM then SIGKILL).
+_isv_t0=$(date +%s)
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-hang"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+_isv_t1=$(date +%s)
+assert "a hung 'version' invocation is killed by the timeout bound" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == 'version-unreadable' ]] && (( $_isv_t1 - $_isv_t0 < 20 ))"
+
+# Presence on every payload class (absent key would read as 'old script').
+ISV_ND=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest"   CI_DEPLOY_STATE="$TMP/nonexistent2.state" bash "$TARGET")
+printf 'not-json{' > "$TMP/bad.state"
+ISV_CB=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest"   CI_DEPLOY_STATE="$TMP/bad.state" bash "$TARGET")
+assert "inngest_server_version present under no_prior_deploy sentinel" \
   "printf '%s' '$ISV_ND' | jq -e '.services | has(\"inngest_server_version\")' >/dev/null"
-
-# Sanitization: a binary emitting non-version junk must not leak prose into the
-# HTTP response body.
-ISV_OUT=$(PATH="$ISV_DIR:$PATH" \
-  MOCK_ISV_PID=0 MOCK_ISV_EXECSTART="" \
-  INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-bad" \
-  CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
-assert "garbage version output sanitizes to empty, not raw text" \
-  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '' ]]"
+assert "inngest_server_version present under corrupt_state sentinel" \
+  "printf '%s' '$ISV_CB' | jq -e '.services | has(\"inngest_server_version\")' >/dev/null"
+# And the measured value survives the no_prior_deploy path too (the probe is
+# state-independent).
+assert "no_prior_deploy still carries the measured version" \
+  "[[ \$(printf '%s' '$ISV_ND' | jq -r '.services.inngest_server_version') == '1.45.1-testsha' ]]"
 
 rm -rf "$ISV_DIR"
 

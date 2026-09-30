@@ -1,7 +1,7 @@
 ---
 issue: 7308
 branch: feat/7308-inngest-running-version-surface
-status: planned
+status: implemented
 ---
 
 # #7308 remainder — surface the running inngest version on `/hooks/deploy-status`
@@ -21,23 +21,28 @@ adnanh/webhook per `hooks.json.tmpl`) is the named home: it already reports
 `host_id`, `ci_deploy_sha256`, `seccomp_profile_sha256`, `vector_config_identity`,
 and `services.inngest_server` (the unit state — but not what the binary IS).
 
-## Key design facts (researched)
+## Key design facts (researched + review-corrected)
 
-- The hook script is host-relative: `hooks.json.tmpl` is installed on every
-  webhook-bearing host, and `host_id` already disambiguates the answerer. So one
-  script change makes the field available on web-1 (quiesced arm — still a valid
-  "which binary did the fleet push here" answer) AND on the dedicated inngest host
-  (the real running server). No second surface needed.
-- The binary lives at `/usr/local/bin/inngest` (cloud-init/bootstrap install path;
-  `inngest-server.service` ExecStart points at it). `inngest version` prints a bare
-  token, e.g. `1.19.4-2c8385ba8` (verified on the real binary — NO `v` prefix; the
-  tf pin is `v1.45.1`-shaped, consumers normalize).
-- "Running version" > "installed version": prefer the binary the *running process*
-  is executing — `/proc/<MainPID>/exe` — then fall back to the ExecStart-resolved
-  path, then to `/usr/local/bin/inngest`. Ordering matters: ExecStart could name a
-  different binary than the installed one; the live process is ground truth.
-- Sentinel contract (existing convention, must hold): an ABSENT field = old script;
-  an EMPTY string = read failure. Never omit the key on failure.
+- Reachability: the public `/hooks` ingress terminates on web-1
+  (`scripts/inngest-host-state.sh`'s measured note); the dedicated host serves the
+  same hooks.json only over the private path the cutover machinery uses. So the
+  field answers per-host: web-1 = the quiesced arm's installed pin; the inngest
+  host = its installed pin, reachable through the internal channel.
+- **Running-process resolution is structurally dead** (verified, review finding):
+  `inngest-server.service`'s ExecStart is `doppler run -- bash -c '… exec
+  /usr/local/bin/inngest start …'` — `doppler run` forks, so `MainPID` = doppler,
+  `ExecStart.path=` = /usr/bin/doppler, and `doppler version` is not a registered
+  subcommand; and same-UID non-descendant `/proc/<pid>/exe` readlinks are denied
+  under `kernel.yama.ptrace_scope=1` (verified on this host). The shipped field is
+  therefore the **installed** binary's self-reported version — honest semantics:
+  bootstrap pins it by version+sha256 and immutable-redeploy keeps
+  installed≈running outside a seconds-wide replace window.
+- `inngest version` prints a bare token, e.g. `1.19.4-2c8385ba8` (verified on the
+  real binary — NO `v` prefix; the tf pin is `v1.45.1`-shaped, consumers
+  normalize).
+- Sentinel contract: an ABSENT field = old script; failures emit the
+  discriminating tokens `absent` / `unknown-no-timeout` / `version-unreadable`
+  (the `inngest_redis_binary` convention).
 - `set -euo pipefail` — every probe must be `|| true`-guarded like its siblings.
 - The emitted token goes into an HTTP response body → sanitize to
   `^[0-9A-Za-z.-]+$` (version charset) before embedding; emit `""` on mismatch.
@@ -49,37 +54,14 @@ and `services.inngest_server` (the unit state — but not what the binary IS).
 
 ## Change
 
-`apps/web-platform/infra/cat-deploy-state.sh` — one new resolver + one emitted key:
+`apps/web-platform/infra/cat-deploy-state.sh` — one helper + one emitted key
+(see the file's own comment block for the dead-leg analysis):
 
 ```bash
-# #7308 — inngest_server_version: the version of the binary the inngest-server
-# unit is ACTUALLY running (or would run), so /hooks/deploy-status answers
-# "which version is live here" by measurement, not by bootstrap-pin inference.
-# Resolution order: the running process's exe link (ground truth while active),
-# then the ExecStart path, then the installed-binary default. Empty = read
-# failure; absent = old script (same contract as HOST_ID / CI_DEPLOY_SHA256).
-INNGEST_SERVER_VERSION=""
-_isv_bin() {
-  # $1 = candidate binary path; emits its `version` token if executable+sane.
-  local out
-  [[ -x "$1" ]] || return 0
-  out="$(timeout 5 "$1" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[-0-9A-Za-z.]*' | head -1 || true)"
-  [[ -n "$out" ]] && printf '%s' "$out"
-}
-_isv_pid="$(systemctl show -p MainPID --value inngest-server.service 2>/dev/null || true)"
-if [[ "${_isv_pid:-0}" =~ ^[0-9]+$ && "$_isv_pid" -gt 0 ]]; then
-  INNGEST_SERVER_VERSION="$(_isv_bin "$(readlink -f "/proc/$_isv_pid/exe" 2>/dev/null || true)")"
-fi
-if [[ -z "$INNGEST_SERVER_VERSION" ]]; then
-  _isv_es="$(systemctl show -p ExecStart --value inngest-server.service 2>/dev/null || true)"
-  # systemd>=248 structured form: `{ path=/x ; argv[]=... }` — take the path= token;
-  # older/raw form: first token of the command line (strip systemd prefix chars).
-  _isv_path="$(grep -oE 'path=[^ ;]+' <<<"$_isv_es" | head -1 | cut -d= -f2 || true)"
-  [[ -z "$_isv_path" ]] && _isv_path="$(awk '{print $1}' <<<"$_isv_es" | sed 's/^[-!+@]*//' || true)"
-  [[ -n "$_isv_path" ]] && INNGEST_SERVER_VERSION="$(_isv_bin "$_isv_path")"
-fi
-[[ -z "$INNGEST_SERVER_VERSION" ]] && INNGEST_SERVER_VERSION="$(_isv_bin "${INNGEST_SERVER_BIN:-/usr/local/bin/inngest}")"
-readonly INNGEST_SERVER_VERSION
+INNGEST_SERVER_VERSION="version-unreadable"  # discriminating sentinels below
+_isv_bin() { … timeout -k 1 5 <bin> version | grep -oE '<semver>' | head -c 64 … }
+INNGEST_SERVER_VERSION="$(_isv_bin "${INNGEST_SERVER_BIN:-/usr/local/bin/inngest}")"
+# tokens: absent / unknown-no-timeout / version-unreadable; absent KEY = old script
 ```
 
 emitted inside `services` next to `inngest_server`:
@@ -88,25 +70,23 @@ emitted inside `services` next to `inngest_server`:
 inngest_server_version: $isv,
 ```
 
-Test seams: `INNGEST_SERVER_BIN` (binary override — mirrors `CI_DEPLOY_SH_PATH`
-"test harness only" convention); `systemctl`/`timeout` are PATH-stubbed in tests
-(existing suite precedent for `systemctl`/`docker` mocks).
+Test seam: `INNGEST_SERVER_BIN` (binary override — mirrors the
+`CI_DEPLOY_SH_PATH` "test harness only" convention). No systemd seam needed —
+the shipped design deliberately does not consult systemctl.
 
 ## Tests — `apps/web-platform/infra/cat-deploy-state.test.sh`
 
-New rows:
+New rows (as shipped — all in `cat-deploy-state.test.sh`):
 
-1. Field present in all three payloads (`no_prior_deploy`, `corrupt_state`, OK).
-2. Stub binary `version` → emitted value (PATH-stub `inngest`, ExecStart unset →
-   falls through to `INNGEST_SERVER_BIN`/`/usr/local/bin` seam).
-3. MainPID>0 → `/proc/<pid>/exe` path is used (systemctl stub returns a PID whose
-   exe resolves to the stub).
-4. Service inactive (MainPID=0) → ExecStart `path=` resolution used.
-5. Missing/非-executable binary → `""` (sentinel, not absent).
-6. Garbage/binary output (e.g. `inngest version` printing ANSI/junk) → sanitized
-   to `""` or the clean token; never raw prose in the JSON body.
-7. The `version` invocation is `timeout`-bounded (a hung binary can't wedge the
-   hook — webhook returns cmd output; a hang = non-200).
+1. Installed binary stub → emits its `version` token.
+2. Prose-embedded token (`inngest version 1.45.1`) → extracts `1.45.1` (a
+   whole-output regression must not pass).
+3. Binary absent → `absent` AND key present.
+4. Executable directory → `absent` (the `-f` guard, not just `-x`).
+5. Garbage/ANSI output → `version-unreadable`, never raw text in the body.
+6. Hung binary → killed by `timeout -k 1 5`, `version-unreadable` (<20s).
+7. Presence under `no_prior_deploy` AND `corrupt_state`; measured value survives
+   the sentinel merge.
 
 ## Guard/parity pins
 

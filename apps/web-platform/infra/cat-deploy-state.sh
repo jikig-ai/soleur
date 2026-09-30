@@ -673,45 +673,47 @@ fi
 # read both so `inactive` alone is never re-read as a deploy failure (#4896).
 HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
-# #7308 — inngest_server_version: the version of the binary the inngest-server
-# unit is ACTUALLY running (or would run), so /hooks/deploy-status answers
-# "which version is live here" by measurement, not by bootstrap-pin inference.
-# Resolution order: the running process's /proc/<MainPID>/exe link (ground truth
-# while active), then the ExecStart path, then the installed-binary default.
-# Same sentinel contract as HOST_ID/CI_DEPLOY_SHA256: ABSENT field = old script,
-# EMPTY string = read failure. `inngest version` prints a bare token
-# (e.g. `1.45.1-abc1234` — no `v` prefix); output is sanitized to the version
-# charset before it enters the response body.
-INNGEST_SERVER_VERSION=""
+# #7308 — inngest_server_version: the INSTALLED inngest binary's self-reported
+# version, so /hooks/deploy-status answers "which binary is live on this host"
+# by measurement, not by bootstrap-pin inference. Two deliberate non-features,
+# both measured dead on production before this shipped lean:
+#   1. No /proc/<MainPID>/exe resolution — inngest-server's ExecStart is
+#      `doppler run -- bash -c '… exec /usr/local/bin/inngest start …'`, so the
+#      unit's MainPID is the doppler wrapper (doppler forks; exec happens in its
+#      child), and same-UID non-descendant exe readlinks are denied under
+#      kernel.yama.ptrace_scope=1 anyway.
+#   2. No ExecStart path= parse — the structured token is /usr/bin/doppler, and
+#      `doppler version` is not a registered subcommand, so that leg could only
+#      emit "" or (worse, if the CLI ever grows one) doppler's own version.
+# The installed binary is the honest measured object: the bootstrap pins it by
+# version+sha256 and prod host changes ride the immutable-redeploy rule, so
+# installed≈running outside a seconds-wide replace window.
+# Sentinel contract (HOST_ID/CI_DEPLOY_SHA256): ABSENT field = old script;
+# failure states emit the discriminating tokens below, never a bare "".
+# `inngest version` prints a bare token (e.g. `1.45.1-abc1234` — no `v` prefix);
+# output is sanitized to the version charset and byte-capped before it enters
+# the response body.
 _isv_bin() {
   # $1 = candidate binary path; emits its sanitized `version` token or nothing.
   # MUST return 0 unconditionally: the result is captured in $() assignments
   # under `set -e` — a nonzero last-command status would abort the whole hook.
   local out
-  [[ -n "${1:-}" && -x "$1" ]] || return 0
-  out="$(timeout 5 "$1" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[-0-9A-Za-z.]*' | head -1 || true)"
+  [[ -n "${1:-}" && -f "$1" && -x "$1" ]] || return 0
+  out="$(timeout -k 1 5 "$1" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[-0-9A-Za-z.]*' | head -1 | head -c 64 || true)"
   if [[ -n "$out" ]]; then printf '%s' "$out"; fi
 }
-_isv_pid="$(systemctl show -p MainPID --value inngest-server.service 2>/dev/null || true)"
-if [[ "${_isv_pid:-0}" =~ ^[0-9]+$ ]] && [[ "$_isv_pid" -gt 0 ]]; then
-  # INNGEST_PROC_ROOT exists for the test harness only — production never sets it.
-  INNGEST_SERVER_VERSION="$(_isv_bin "$(readlink -f "${INNGEST_PROC_ROOT:-/proc}/$_isv_pid/exe" 2>/dev/null || true)")"
-fi
-if [[ -z "$INNGEST_SERVER_VERSION" ]]; then
-  _isv_es="$(systemctl show -p ExecStart --value inngest-server.service 2>/dev/null || true)"
-  # systemd>=248 structured form: `{ path=/x ; argv[]=... ; }` — take the path=
-  # token; older/raw form: first whitespace token with systemd prefix chars
-  # (`-`, `!`, `+`, `@`) stripped.
-  _isv_path="$(grep -oE 'path=[^ ;]+' <<<"$_isv_es" | head -1 | cut -d= -f2 || true)"
-  if [[ -z "$_isv_path" ]]; then
-    _isv_path="$(awk '{print $1}' <<<"$_isv_es" | sed 's/^[-!+@]*//' || true)"
-  fi
-  if [[ -n "$_isv_path" ]]; then
-    INNGEST_SERVER_VERSION="$(_isv_bin "$_isv_path")"
-  fi
-fi
-if [[ -z "$INNGEST_SERVER_VERSION" ]]; then
-  INNGEST_SERVER_VERSION="$(_isv_bin "${INNGEST_SERVER_BIN:-/usr/local/bin/inngest}")"
+# Discriminating sentinels (the inngest_redis_binary convention, not bare ""):
+# `absent` (no binary), `unknown-no-timeout`, `version-unreadable` (ran but no
+# token). ABSENT key = old script.
+# INNGEST_SERVER_BIN exists for the test harness only — production never sets it.
+_isv="${INNGEST_SERVER_BIN:-/usr/local/bin/inngest}"
+if ! command -v timeout >/dev/null 2>&1; then
+  INNGEST_SERVER_VERSION="unknown-no-timeout"
+elif [[ ! -f "$_isv" || ! -x "$_isv" ]]; then
+  INNGEST_SERVER_VERSION="absent"
+else
+  INNGEST_SERVER_VERSION="$(_isv_bin "$_isv")"
+  [[ -n "$INNGEST_SERVER_VERSION" ]] || INNGEST_SERVER_VERSION="version-unreadable"
 fi
 readonly INNGEST_SERVER_VERSION
 VECTOR_STATUS="$(service_status vector.service)"
