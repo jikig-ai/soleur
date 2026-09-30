@@ -463,11 +463,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "set_message_delivery":
       return {
         ...state,
-        messages: state.messages.map((message) =>
-          message.type === "text" && message.role === "user" && message.id === `user-${action.clientTurnId}`
-            ? { ...message, delivery: action.delivery }
-            : message,
-        ),
+        messages: state.messages.map((message) => {
+          if (message.type !== "text" || message.role !== "user" || message.id !== `user-${action.clientTurnId}`) return message;
+          if (action.delivery === undefined) {
+            const updated = { ...message };
+            delete updated.delivery;
+            return updated;
+          }
+          return { ...message, delivery: action.delivery };
+        }),
       };
     case "filter_prepend": {
       const existingIds = new Set(state.messages.map(m => m.id));

@@ -223,6 +223,7 @@ describe("Codex real production handler boundary", () => {
         await new Promise<void>((resolve) => context.signal.addEventListener("abort", () => resolve(), { once: true }));
         yield { runId: "synthetic-codex-run", eventId: "cancelled-event", sequence: 1, payload: { type: "status", status: "cancelled" } as const };
       }),
+      dispose: vi.fn().mockResolvedValue(undefined),
     };
     const registry = createEngineRegistry([{
       id: "codex", version: "codex-v1", transport: "remote", enabledForNewRuns: false, enabledForExistingRuns: true,

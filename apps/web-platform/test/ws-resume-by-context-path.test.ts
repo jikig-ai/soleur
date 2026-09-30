@@ -44,7 +44,7 @@ vi.mock("@/server/codex-conversation-runtime", () => ({
         yield { runId: context.runId, eventId: "e-1", sequence: 1, payload: { type: "status", status: "running" } };
         yield { runId: context.runId, eventId: "e-2", sequence: 2, payload: { type: "text", text: "synthetic answer" } };
         yield { runId: context.runId, eventId: "e-3", sequence: 3, payload: { type: "status", status: "completed" } };
-      } }),
+      }, dispose: async () => undefined }),
     },
     registry: { get: () => ({ id: "codex", enabledForExistingRuns: true }), resolve: () => ({ id: "codex", enabledForExistingRuns: true }) },
     evidence: { endpoint: "https://api.openai.com/v1", allowedHosts: ["api.openai.com"], acceptedDataClasses: ["synthetic"], vendorDpaStatus: "verified", transferGeography: "scc", deletionSupport: "verified", approvalRequired: false },

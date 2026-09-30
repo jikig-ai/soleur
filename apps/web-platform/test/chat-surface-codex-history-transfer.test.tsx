@@ -40,6 +40,9 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     expect(screen.getByText(/OpenAI will receive/)).toBeVisible();
     expect(screen.getByText("Please continue this draft")).toBeVisible();
     expect(screen.getByText("Message not sent")).toBeVisible();
+    wsReturn.sendMessage.mockClear();
+    wsReturn.resendMessage.mockClear();
+    wsReturn.resumeSession.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Acknowledge history transfer" }));
     expect(wsReturn.acknowledgeCodexHistoryTransfer).toHaveBeenCalledWith("test-id", 2);
     expect(wsReturn.sendMessage).not.toHaveBeenCalled();

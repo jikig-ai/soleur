@@ -22,6 +22,7 @@ function turnFixture(payloads: EngineEventPayload[]) {
         yield { runId: "synthetic-run", eventId: `synthetic-event-${index}`, sequence: index + 1, payload };
       }
     }),
+    dispose: vi.fn().mockResolvedValue(undefined),
   };
   const send = vi.fn();
   const options: Parameters<typeof dispatchCodexConversationToWebSocket>[0] = {
@@ -53,6 +54,7 @@ describe("Codex conversation dispatch bridge", () => {
         yield { runId: "run-1", eventId: "e-1", sequence: 1, payload: { type: "text", text: "hello" } as const };
         yield { runId: "run-1", eventId: "e-2", sequence: 2, payload: { type: "status", status: "completed" } as const };
       }),
+      dispose: vi.fn().mockResolvedValue(undefined),
     };
     const provider = {
       mode: "api-key" as const,

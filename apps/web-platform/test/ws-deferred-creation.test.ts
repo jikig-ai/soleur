@@ -229,6 +229,7 @@ vi.mock("@/server/codex-conversation-runtime", () => ({
           yield { runId: context.runId, eventId: "e-2", sequence: 2, payload: { type: "text", text: "Synthetic answer" } };
           yield { runId: context.runId, eventId: "e-3", sequence: 3, payload: { type: "status", status: "completed" } };
         },
+        dispose: async () => undefined,
       }),
     },
     registry: {
