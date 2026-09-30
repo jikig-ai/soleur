@@ -379,6 +379,13 @@ run_case() {
       }
       cryptsetup() {
         rec "cryptsetup $*"
+        # Drain stdin before any verdict arm when the call feeds the key on a pipe
+        # (--key-file -, either spelling): real cryptsetup reads it, and a stub
+        # that exits unread races the producer into EPIPE under pipefail (#9245).
+        # Gated on the FLAG, not the verb — a piped call without it must EPIPE
+        # exactly as the real binary would. First statement after rec so every
+        # arm drains; [ ! -t 0 ] keeps unpiped stdin untouched.
+        case " $* " in *" --key-file - "*|*" --key-file=- "*) { [ ! -t 0 ] && cat >/dev/null; } 2>/dev/null || true ;; esac
         if [ "${1:-}" = "status" ] && [ -n "${CRYPTSETUP_DEV:-}" ]; then
           printf "  type:    LUKS2\n  device:  %s\n" "$CRYPTSETUP_DEV"
         fi
@@ -659,6 +666,8 @@ run_case() {
 # functions.
 #
 # Sets: MON_RC, MON_OUT, CALLS (argv log), MNT, WSDIR (the workspaces root, pre-created empty).
+# Stub side-file: ${CALLS}.escrow-stdin captures the bytes a SUT pipes into
+# `cryptsetup ... --key-file -` — the wire assert in luks-monitor.test.sh reads it.
 #
 # Knobs (all optional):
 #   MON_MOUNT_SRC     findmnt -no SOURCE $MOUNT      (default: the fake mapper path — healthy)
@@ -715,6 +724,18 @@ STUB
   cat > "$d/bin/cryptsetup" <<'STUB'
 #!/usr/bin/env bash
 printf 'cryptsetup %s\n' "$*" >> "$CALLS"
+# Drain stdin the way real cryptsetup does — iff argv asks for it via
+# --key-file - (either spelling). Gated on the flag rather than the verb so a
+# future piped verb (luksFormat, open --type luks) is covered, and a piped call
+# WITHOUT the flag EPIPEs exactly as the real binary would. A stub that exits
+# unread races the producer's write (EPIPE under pipefail = a fake
+# escrow_passphrase_mismatch, #9245); the capture file is what the suite's wire
+# assert reads, and [ ! -t 0 ] keeps an unpiped interactive stdin out of the
+# drain.
+case " $* " in
+  *" --key-file - "*|*" --key-file=- "*)
+    { [ ! -t 0 ] && cat >"${CALLS}.escrow-stdin"; } 2>/dev/null || true ;;
+esac
 case "$1" in
   status)  printf '  type:    LUKS2\n  device:  %s\n' "${MON_REAL_DEV-$FAKE_MAPPER}" ;;
   luksUUID) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
