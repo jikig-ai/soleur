@@ -148,7 +148,11 @@ fi
 readonly COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
 readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@(refs/heads/main|refs/tags/v[0-9].+)$'
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
-readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-enforce}" # enforce (default since #6129, after the #6122 zot soak) | warn (override only)
+IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-enforce}" # enforce (default since #6129, after the #6122 zot soak) | warn (override only)
+# #6129: fail CLOSED on anything but the two known values. The consumers test `== "enforce"`, so a
+# typo such as `ENFORCE` or `enfrce` would otherwise run in warn mode without a word.
+case "$IMAGE_VERIFY_MODE" in enforce|warn) ;; *) IMAGE_VERIFY_MODE=enforce ;; esac
+readonly IMAGE_VERIFY_MODE
 # SOLEUR-DEBT(#6005): cosign `--offline` is deprecated (removed in cosign v4). It is
 # inert under the pinned SHA (v3.1.1). Upgrade trigger: the next COSIGN_IMAGE SHA
 # bump — migrate to the `--bundle`+`--trusted-root` new-bundle-format path (verify
@@ -2437,16 +2441,31 @@ verify_image_signature() {
   # host, and the classifier below reads stderr, so an unrelated verify failure on a first pull
   # would read as `cosign_absent`. Real pull errors still print. `200>&-` closes the FD-200 deploy
   # lock for this child (#5062): its implicit pull can hang like any other.
-  if "${verify_env[@]}" docker run --rm --network host --quiet \
-       --user "$cosign_user" -e "DOCKER_CONFIG=$cosign_cfg_dir" \
-       -v "$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro" \
-       -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
-       "$COSIGN_IMAGE" verify --offline \
-       ${zot_insecure:+--allow-insecure-registry} \
-       --trusted-root=/etc/cosign/trusted_root.json \
-       --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
-       --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
-       "$repo_digest" >/dev/null 2>"$err" 200>&-; then
+  # #6129: under ENFORCE a verify failure fails the release, and `docker image prune -af` removes the
+  # verifier image before every deploy, so each verify re-pulls $COSIGN_IMAGE from gcr.io. A
+  # daemon-side pull failure (the transient network/rate-limit class the cosign_absent classifier
+  # below matches) gets ONE retry. A cosign-side failure (unsigned, wrong identity, bad signature)
+  # is never retried.
+  local _v_attempt _v_ok=0
+  for _v_attempt in 1 2; do
+    if "${verify_env[@]}" docker run --rm --network host --quiet \
+         --user "$cosign_user" -e "DOCKER_CONFIG=$cosign_cfg_dir" \
+         -v "$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro" \
+         -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
+         "$COSIGN_IMAGE" verify --offline \
+         ${zot_insecure:+--allow-insecure-registry} \
+         --trusted-root=/etc/cosign/trusted_root.json \
+         --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
+         --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
+         "$repo_digest" >/dev/null 2>"$err" 200>&-; then
+      _v_ok=1; break
+    fi
+    [[ "$_v_attempt" == "1" ]] || break
+    grep -qiE '^docker: Error response from daemon: .*(toomanyrequests|received unexpected HTTP status: 5[0-9][0-9]|no such host|dial tcp|i/o timeout|connection reset by peer|TLS handshake timeout|Client\.Timeout|context deadline exceeded)' "$err" 2>/dev/null || break
+    logger -t "$LOG_TAG" "IMAGE_VERIFY_RETRY: verifier image pull failed; retrying once (#6129)"
+    sleep 5
+  done
+  if [[ "$_v_ok" == "1" ]]; then
     logger -t "$LOG_TAG" "IMAGE_VERIFY: ok ref=$repo_digest"
     printf '%s' "$repo_digest" # run the VERIFIED digest (TOCTOU-safe)
     rm -f "$err" 2>/dev/null || true

@@ -406,6 +406,14 @@ if [[ "${1:-}" == "run" ]]; then
           printf 'CANARY_VISIBLE_AT_VERIFY:%s\n' "$_seen" >> "$MOCK_COSIGN_ARGS_FILE"
         fi
       fi
+      # #6129: count verify attempts, and simulate a daemon-side verifier-image PULL failure —
+      # every time (MOCK_COSIGN_PULL_FAIL=always) or only on the first attempt (=once).
+      if [[ -n "${MOCK_COSIGN_ATTEMPTS_FILE:-}" ]]; then echo x >> "$MOCK_COSIGN_ATTEMPTS_FILE"; fi
+      if [[ "${MOCK_COSIGN_PULL_FAIL:-}" == "always" \
+            || ( "${MOCK_COSIGN_PULL_FAIL:-}" == "once" && "$(wc -l < "${MOCK_COSIGN_ATTEMPTS_FILE:-/dev/null}" 2>/dev/null)" -le 1 ) ]]; then
+        echo "docker: Error response from daemon: Get \"https://gcr.io/v2/\": dial tcp 142.250.0.1:443: i/o timeout" >&2
+        exit 125
+      fi
       if [[ "${MOCK_COSIGN_VERIFY_FAIL:-}" == "1" ]]; then
         echo "Error: no matching signatures found" >&2
         exit 1
@@ -2011,6 +2019,30 @@ assert_verify_enforce_blocks() {
 }
 assert_verify_enforce_blocks
 
+# #6129: ENFORCE is the DEFAULT (no IMAGE_VERIFY_MODE set), a transient verifier-image pull failure
+# is retried ONCE and the deploy proceeds, a persistent one blocks after exactly 2 attempts, a
+# cosign-side failure is never retried, and an unknown mode value fails CLOSED.
+assert_verify_6129() {
+  local label="$1" envs="$2" want_ok="$3" want_attempts="$4" want_reason="$5"
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit sf af reason exitc attempts
+  sf=$(mktemp); af=$(mktemp)
+  output=$(unset IMAGE_VERIFY_MODE; eval "export $envs"; export MOCK_COSIGN_ATTEMPTS_FILE="$af" CI_DEPLOY_STATE="$sf"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  read_state_reason_and_exit "$sf" reason exitc
+  attempts="$(wc -l < "$af" | tr -d ' ')"
+  rm -f "$sf" "$af"
+  if { [[ "$want_ok" == 1 && "$actual_exit" -eq 0 ]] || [[ "$want_ok" == 0 && "$actual_exit" -ne 0 && "$reason" == "$want_reason" ]]; } \
+     && [[ "$attempts" == "$want_attempts" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #6129 $label (exit=$actual_exit attempts=$attempts${reason:+ reason=$reason})"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #6129 $label (exit=$actual_exit attempts=$attempts reason=$reason; want ok=$want_ok attempts=$want_attempts)"; echo "        output: $output"
+  fi
+}
+assert_verify_6129 "default mode blocks a signature failure, no retry" "MOCK_COSIGN_VERIFY_FAIL=1" 0 1 cosign_verify_failed
+assert_verify_6129 "transient verifier pull failure retried once, deploy proceeds" "MOCK_COSIGN_PULL_FAIL=once" 1 2 ""
+assert_verify_6129 "persistent verifier pull failure blocks after 2 attempts" "MOCK_COSIGN_PULL_FAIL=always" 0 2 cosign_verify_failed
+assert_verify_6129 "unknown mode value (ENFORCE) fails closed" "IMAGE_VERIFY_MODE=ENFORCE MOCK_COSIGN_VERIFY_FAIL=1" 0 1 cosign_verify_failed
+
 # --- #6005 Design B′: cosign invocation shape + SENTRY-before-verify ordering -----
 # The verify `docker run` MUST run `--network host` (host-egress .sig fetch, ADR-087),
 # mount the deploy docker config :ro (private-pull auth) and the pinned trusted root
@@ -2381,8 +2413,9 @@ assert_no_ghcr_allowlist_widening
 # AC (#6129): the default is ENFORCE, flipped after the #6122 zot soak passed. warn is an
 # explicit override only; a revert to a warn default must red here.
 TOTAL=$((TOTAL + 1))
-if grep -qE '^readonly IMAGE_VERIFY_MODE="\$\{IMAGE_VERIFY_MODE:-enforce\}"' "$DEPLOY_SCRIPT"; then
-  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is 'enforce' (#6129)"
+if grep -qE '^IMAGE_VERIFY_MODE="\$\{IMAGE_VERIFY_MODE:-enforce\}"' "$DEPLOY_SCRIPT" \
+   && grep -qE '^case "\$IMAGE_VERIFY_MODE" in enforce\|warn\) ;; \*\) IMAGE_VERIFY_MODE=enforce ;; esac$' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is 'enforce' and an unknown value fails closed (#6129)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: IMAGE_VERIFY_MODE default must be 'enforce' (#6129)"
 fi
@@ -8631,7 +8664,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
 # #6428: raised to 359 with the 17 pre-swap freshness rows (F1-F13).
 # #9169: raised to 364 (measured) with the 4 GHCR_DENY rows.
-CI_DEPLOY_ASSERT_FLOOR=365
+CI_DEPLOY_ASSERT_FLOOR=369
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
