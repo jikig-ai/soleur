@@ -42,7 +42,9 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
 - **5.3b-iii is done at template level** (2026-09-28, #8714): the cosign verifier pulls from gcr.io
   (part 1), and the registry host boots zot from a pinned release asset with ghcr.io denied
   (part 2). See the two "Amendment 2026-09-28 (#8714 step 5.3b-iii, …)" sections. 5.4 is done
-  (#9071).
+  (#9071). The web hosts deny ghcr.io as well (2026-09-30, #9169; see "Amendment 2026-09-30
+  (#9169)"); bridge-network containers and the `docker.pkg.github.com` alias are the remaining
+  gaps (#9275).
 
 This ADR flips to **accepted** (task 5.6) when 5.3b-iii and 5.4 are also complete (5.3b-i is done).
 
@@ -1776,6 +1778,12 @@ for the zot half. The cosign half moved in part 1 (the amendment above).
   from it any more (cosign moved in part 1; app images come from zot), and a web-host deny is a
   tracked follow-up. The C4 edge `zotRegistry -> projectZot` becomes `zotRegistry -> github`
   (the asset fetch) plus `github -> projectZot` (the mirror workflow's build).
+
+  > **Superseded 2026-09-30 (#9169):** the web hosts now deny ghcr.io too (see "Amendment
+  > 2026-09-30 (#9169)"). The container-allowlist sentence above is true by NAME only: the CIDR
+  > half (`cron-egress-allowlist-cidr.txt`) admits `140.82.112.0/20` and `185.199.108.0/22`,
+  > which contain ghcr.io and pkg-containers.githubusercontent.com, so bridge-network containers
+  > can reach GHCR (#9275).
 - **amd64 only.** A precondition on `hcloud_server.registry` refuses an arm64 `registry_server_type`,
   because no arm64 asset is mirrored. `zot_image_arm64` stays as the upstream record.
 - **Status.** 5.3b-iii is complete at template level once this merges. The live proof is the first
@@ -1803,3 +1811,58 @@ This changes what evidence arm (b) samples, not what the soak authorizes: a PASS
 zero watched events, zero retired-name events, both blocker issues closed-as-completed, and —
 before acting on it — the Better Stack corroboration named on the PASS line. 5.6's gate and the
 #6129 flip are unaffected.
+
+## Amendment 2026-09-30 (#9169) — the web hosts deny ghcr.io
+
+The registry host's deny (part 2 above) now covers both web hosts, with the same text and the same
+`ghcr_blocked` semantics.
+
+- **Three copies, one text.** The registry's runcmd entry (copy R) is copied byte for byte into
+  `cloud-init.yml` as runcmd[1], right after the #6090 trap arm (copy A: fresh and replaced
+  hosts), and into `server.tf` `local.ghcr_deny_sh` (copy B: the running hosts).
+  `web-ghcr-deny.test.sh` asserts all three are identical on both `web_tunnel_connector` render
+  arms, and the G1 census admits the deny line only as part of a whole entry equal to it.
+- **Delivery route: an in-place Terraform re-provision, not a replace.** web-1 cannot be replaced:
+  ADR-148 refuses it by name (§"web-1 is refused by name"), and a `-replace` also destroys first
+  on a server type with no guaranteed stock. web-1 gets the deny from
+  `terraform_data.zot_consumer_probe_install` (`apply-web-platform-infra.yml`); web-2 from
+  `terraform_data.deploy_pipeline_fix_web2` (`apply-deploy-pipeline-fix.yml`). web-2 could be
+  replaced under ADR-148, and a replace would add one thing: a live boot proof of copy A. It was
+  declined because copy A is proven offline by `web-ghcr-deny.test.sh` and a replace adds a
+  destroy-first host cycle; copy A's first live boot is the next web-host replace. Both resources hash the deny and its assertion in `triggers_replace` and
+  run them in a separate, last, secret-free `remote-exec` block: a sensitive value in a
+  provisioner's config hides its output, and a failed run leaves its script in `/root`. The web-1
+  route retires with active-active Phase 5 (ADR-143); copy A is the end state.
+- **Apply-time proof.** `local.ghcr_deny_assert_sh` requires both names to resolve, and only to
+  `0.0.0.0` / `::`. Otherwise it prints `FATAL: … (#9169). Route back: …` and fails the apply. An
+  unresolvable name fails it too.
+- **Per-release field, not a heartbeat.** No periodic web heartbeat reaches both running hosts.
+  `ci-deploy.sh` is the one host script `apply-deploy-pipeline-fix.yml` delivers to both hosts
+  (web-1 through the `deploy_pipeline_fix` webhook push, web-2 through `deploy_pipeline_fix_web2`;
+  on web-1 the marker and the deny therefore arrive through different workflows), so it logs
+  `GHCR_DENY ghcr_blocked=<1|0|unknown>` after `DEPLOY_SCRIPT_SHA` on every invocation. The
+  classifier matches the registry's, probes `ghcr.io` only, and fails open (`timeout 5`). The
+  evidence is as old as the last release. `pkg-containers.githubusercontent.com` is proven at
+  apply time only.
+- **Scope.** Host processes and host-network containers are covered: dockerd pulls, and the cosign
+  verifier, which runs `--network host` and so reads the host's `/etc/hosts`. Bridge-network
+  containers (the app, agent sandboxes) are NOT covered: they resolve through DNS, and the container
+  CIDR allowlist admits GitHub's frontend ranges. The `docker.pkg.github.com` alias is not denied
+  either, because adding it means editing `cloud-init-registry.yml`, which forces a registry-host
+  replace. Both are #9275. This is an accident guard on name resolution, not an egress control:
+  an IP literal, a client that bypasses NSS (DoH, `dig @…`), a `--network host` container created
+  before the deny, or a root edit of `/etc/hosts` all get past it. Two narrower gaps are accepted
+  as well: the idempotency grep keys on the `0.0.0.0` line only, so a hand-deleted `::` line is not
+  restored (changing that means editing copy R); and a `hcloud server rebuild` re-runs the host's
+  creation-time `user_data` without re-firing either route. Nothing alerts on a later
+  `ghcr_blocked=0`; that regression check is tracked with #9275.
+- **Loopback.** A connect to `0.0.0.0` or `::` reaches the local host on Linux, just as
+  `127.0.0.1` would: HTTPS on :443 fails fast (a connect was refused in 0 ms, measured with `curl`
+  on 2026-09-30), while plain HTTP on :80 reaches the web host's own app. No registry client talks
+  plain HTTP to ghcr.io, because ghcr.io is not in dockerd's `insecure-registries`. `127.0.0.1` is
+  still avoided, because dockerd treats every `127.0.0.0/8` registry as insecure by default and
+  would then accept a plain-HTTP answer; `0.0.0.0` is outside that range, and it keeps registry
+  parity.
+- **Live proof.** Green post-merge runs of both apply workflows, then the first release after them
+  logs `GHCR_DENY ghcr_blocked=1` from `soleur-web-platform` and `soleur-web-2` next to
+  `IMAGE_VERIFY: ok`. The ADR stays **Adopting**; 5.6 flips it.
