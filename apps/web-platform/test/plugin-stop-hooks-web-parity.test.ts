@@ -53,14 +53,14 @@ function stopHookBasenames(): string[] {
 const scratch = mkdtempSync(join(tmpdir(), "stop-hook-parity-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-function cleanGitEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
+function cleanGitEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
   return env;
 }
 const REPO = join(scratch, "ws");
 spawnSync("mkdir", ["-p", REPO]);
-spawnSync("git", ["init", "-q", REPO], { env: cleanGitEnv() });
+spawnSync("git", ["init", "-q", REPO], { env: cleanGitEnv() as unknown as NodeJS.ProcessEnv });
 
 // Per-script spawn and SUT-marker counts. Only hooks that write the trace marker
 // (`unkept-promise-hook.sh`) can be counted; `stop-hook.sh` writes none, so its
@@ -68,12 +68,12 @@ spawnSync("git", ["init", "-q", REPO], { env: cleanGitEnv() });
 const spawnsBy: Record<string, number> = {};
 const ranBy: Record<string, number> = {};
 
-function runHook(script: string, message: string, env: NodeJS.ProcessEnv): { blocked: boolean; rc: number | null } {
+function runHook(script: string, message: string, env: Record<string, string | undefined>): { blocked: boolean; rc: number | null } {
   spawnsBy[script] = (spawnsBy[script] ?? 0) + 1;
   const r = spawnSync("bash", [join(HOOKS_DIR, script)], {
     cwd: REPO,
     input: JSON.stringify({ last_assistant_message: message, stop_hook_active: false, session_id: "parity" }),
-    env: { ...env, SOLEUR_HOOK_TRACE: "1" },
+    env: { ...env, SOLEUR_HOOK_TRACE: "1" } as unknown as NodeJS.ProcessEnv,
     encoding: "utf8",
     timeout: 20_000,
   });
@@ -89,7 +89,7 @@ function runHook(script: string, message: string, env: NodeJS.ProcessEnv): { blo
 
 // What the platform really hands the agent process, and the bare baseline.
 const WEB_ENV = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
-const BASE_ENV: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
+const BASE_ENV: Record<string, string | undefined> = { PATH: process.env.PATH, HOME: process.env.HOME };
 
 describe("plugin Stop hooks are classified for the web runtime", () => {
   it("has bash and jq (hard failure, never a skip)", () => {
