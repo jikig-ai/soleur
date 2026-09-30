@@ -623,7 +623,7 @@
 },
 "technology": "Next.js API",
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
 },
 "title": "API Routes",
 "kind": "container",
@@ -14369,7 +14369,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -36781,7 +36781,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -43927,7 +43927,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -44253,7 +44253,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook self-disables via SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK from buildAgentEnv, other plugin hooks have no web override yet (ADR-093 amendment 2026-09-30; #9289)."
 },
 "tags": [],
 "notation": "Container",
