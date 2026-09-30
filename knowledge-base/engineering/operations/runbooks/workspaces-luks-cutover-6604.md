@@ -307,13 +307,20 @@ forever — which the escrow proof + off-host header backup exist to prevent.
       commit with no deploy or cutover run in between:
       `gh workflow run workspaces-luks-cutover.yml -f confirm=WIPE-PLAINTEXT-USER-DATA-AP-009 -f wipe_plaintext=true -f expected_plaintext_volume_id=105149570`
       It must print ONE `SOLEUR_WORKSPACES_LUKS_WIPE … result=rehearsal_ok arm=first_wipe
-      volume_id=105149570` row carrying `uuid=`, `label=workspaces_plain`, `dependents=0`,
+      volume_id=105149570` row carrying `uuid=`, `label=<observed; none on web-1>`,
+      `plaintext_dev=<as printed; must resolve to target=>`, `dependents=0`,
       `hdr_sha256=`, the `discard_*` / `write_zeroes_max` / `scheduler` fields, `magic=53ef`,
       `io_max=<maj:min>_rbps=150000000_wbps=150000000_…` (the cap, read back inside a real scope) and
       `plaintext_only=<n>`, plus the `SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE … field=last_write` row and
       one `field=plaintext_only_name detail=<workspace id>` evidence row per workspace the unmounted
       plaintext holds that the live mount does not. The run summary repeats `plaintext_only` and
       `io_max`. The preflight step summary is the approver's banner (`api_state`, size, server).
+      `label=` is observed evidence only (no artifact ever labelled the retained plaintext); the
+      identity W6 binds to is `plaintext_dev=`, the mount source the 2026-07-23 cutover recorded. If
+      web-1 rebooted after 2026-07-23 (for example the C15 proof reboot), that record may name another
+      device, and the rehearsal refuses `wipe_target_not_recorded_plaintext` (verdict table below).
+      Read and record `plaintext_only=` and every `plaintext_only_name` row **before** the destructive
+      dispatch is authorised (unchanged policy, restated).
    c. **The ask.** Quote the rehearsal row + run id, the baseline `<n>`, and the accepted residual (the
       LUKS volume becomes the only copy); link the draft PR B. Name everything below. The ask must show
       **`plaintext_only=0`**, or name each `plaintext_only_name` workspace id and account for it (an
@@ -429,7 +436,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `wipe_target_mounted` | No | No | The device is mounted somewhere. Halt and escalate. | End the pause (above) |
    | `wipe_target_size_mismatch` | No | No | The device size is not the API's size for the pin. Halt and escalate. | End the pause (above) |
    | `wipe_target_serial_mismatch` | No | No | udev's `ID_SERIAL` does not name `HC_Volume_<pin>`. Halt and escalate. | End the pause (above) |
-   | `wipe_target_label_mismatch` | No | No | The first-wipe target is not labelled `workspaces_plain`. Halt and escalate. | End the pause (above) |
+   | `wipe_target_not_recorded_plaintext` | No | No | The first-wipe target is not the device this cutover recorded as the plaintext's mount source. Compare `target=` with `recorded=`/`recorded_real=`: `none` = the record is missing or invalid; a different device = kernel-name drift after a reboot (then `rollback()`'s and the dead-man's remount source is stale too — do not dispatch `rollback=true` or a cutover either). Nothing was written. Do NOT append `PLAINTEXT_DEV=` to the state file on the host: the record is evidence of what the cutover took the copy from, and a hand-written value is not. Halt and escalate; the remedy is a reviewed fix-forward PR (a serial-anchored record step), not a host edit. | End the pause (above) |
    | `wipe_target_has_dependents` | No | No | A `.mount`/`.swap`/`.service` depends on one of the target's device units, a unit is unloaded/inactive, none maps to the target, or the live mount unit binds one — a detach would stop it. Halt and escalate. | End the pause (above) |
    | `wipe_deadman_armed` | No | No | A cutover dead-man is armed, firing or queued on a cut-over host. **Halt and escalate — do not let it fire**: its fire command would remount the stale 2026-07-23 plaintext over `/mnt/data` and serve every user the old copy (the fire now refuses when it finds a wipe marker or the plaintext label gone, but on this host neither holds yet). | End the pause (above) |
    | `wipe_io_cap_unavailable` | No (from W8), or No with `PLAINTEXT_WIPE_BEGUN` persisted (from the zero's own scope, `gate_rc=97`) | Rehearsal only | The scope's own `io.max` does not carry `rbps=wbps=150000000` for the target's MAJ:MIN (`io_max=` on the row is what it read; `absent` means the io controller is not enabled on the scope's path — systemd starts such a scope uncapped with rc 0). The zero would run uncapped against the live volume's storage path. Halt and escalate. | End the pause (above) |

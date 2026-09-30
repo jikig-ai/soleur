@@ -269,8 +269,10 @@ blkid() {
       [ -n "${W_TYPE-ext4}" ] || return 2
       printf '%s\n' "${W_TYPE-ext4}"; return 0 ;;
     LABEL)
-      [ -n "${W_LABEL-workspaces_plain}" ] || return 2
-      printf '%s\n' "${W_LABEL-workspaces_plain}"; return 0 ;;
+      # An UNLABELLED ext4 prints nothing with rc 0 (measured, util-linux 2.42.3): web-1's retained
+      # plaintext carries no label (no artifact ever wrote one), so that is the default here.
+      [ -n "${W_LABEL-}" ] || return 0
+      printf '%s\n' "$W_LABEL"; return 0 ;;
     *) unk blkid "-s ${3:-}"; return 64 ;;
   esac
 }
@@ -285,7 +287,7 @@ lsblk() {
 dumpe2fs() {
   rec "dumpe2fs $*"
   [ "${1:-}" = -h ] && [ "$(devkind "${2:-}")" = tgt ] || { unk dumpe2fs "$*"; return 64; }
-  printf 'Filesystem volume name:   workspaces_plain\nLast mount time:          %s\nLast write time:          %s\n' \
+  printf 'Filesystem volume name:   <none>\nLast mount time:          %s\nLast write time:          %s\n' \
     "${W_LAST_MOUNT-Thu Jul 23 09:30:00 2026}" "${W_LAST_WRITE-Thu Jul 23 09:40:30 2026}"
 }
 # debugfs — the READ-ONLY listing of the unmounted plaintext's /workspaces. The real one exits 0 even
@@ -437,7 +439,9 @@ for b in tr sed cut head tail grep awk cat od date mktemp basename dirname readl
 done
 
 # run_wipe <invocation> [VAR=value ...]
-#   SEED_STATE='K=V;K=V'  written to the state file BEFORE the run (default: CANARY_OK=1:u-live-1).
+#   SEED_STATE='K=V;K=V'  written to the state file BEFORE the run (default: CANARY_OK=1:u-live-1 plus
+#                         PLAINTEXT_DEV=$TGT_BLK, the plaintext mount source the cutover recorded — W6
+#                         binds the first-wipe target to it). A SEED_STATE replaces BOTH lines.
 #   W_HOLDERS='dm-3'      holder entries under the target's sysfs holders/ dir.
 #   UNSET_DRY_RUN=1       run with DRY_RUN absent from the environment (the script default applies).
 #   SEED_HDRS=1           pre-create the two fixed W5 header paths (as a mid-W5 abort would leave them).
@@ -469,7 +473,7 @@ run_wipe() {
       *) envs+=("$k") ;;
     esac
   done
-  [ "$seeded" = 1 ] || printf 'CANARY_OK=1:%s\n' "$UUID_LIVE" > "$STATE/state"
+  [ "$seeded" = 1 ] || printf 'CANARY_OK=1:%s\nPLAINTEXT_DEV=%s\n' "$UUID_LIVE" "$TGT_BLK" > "$STATE/state"
   for h in $live; do mkdir -p "$d/mnt/workspaces/$h"; done
   local -a pre=(env)
   [ "$unset_dry" = 1 ] && pre+=(-u DRY_RUN)
@@ -628,7 +632,7 @@ fi
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1
 P2_ROW="$(wrow rehearsal_ok first_wipe)"
 p2_fields=1; p2_missing=""
-for f in "uuid=$UUID_LIVE" "hdr_sha256=" "hdr_bytes=" "label=workspaces_plain" "dependents=0" "holders=0" "device_units=2" \
+for f in "uuid=$UUID_LIVE" "hdr_sha256=" "hdr_bytes=" "label=none plaintext_dev=$TGT_BLK " "dependents=0" "holders=0" "device_units=2" \
   "discard_gran=4096" "write_zeroes_max=33554432" "scheduler=mq-deadline" "magic=53ef" "size=$SIZE" \
   "io_max=8:32_rbps=150000000_wbps=150000000_riops=max_wiops=max" "plaintext_only=0"; do
   [[ "$P2_ROW" == *" $f"* ]] || { p2_fields=0; p2_missing="$p2_missing $f"; }
@@ -782,7 +786,83 @@ refusal "W6 the target is mounted somewhere (findmnt -S)" wipe_target_mounted W_
 refusal "W6 (Guard 1 #5) size off by one GiB" wipe_target_size_mismatch W_SIZE=22548578304
 refusal "W6 (Guard 1 #9c) ID_SERIAL does not name HC_Volume_<id>" wipe_target_serial_mismatch W_SERIAL=0HC_Volume_106443278
 refusal "W6 ID_SERIAL naming a LONGER id that merely starts with the pin" wipe_target_serial_mismatch W_SERIAL=0HC_Volume_1051495701
-refusal "W6 (Guard 1 #7) first-wipe label is not workspaces_plain" wipe_target_label_mismatch W_LABEL=other
+# --- G1 (Guard 1, #6604 fix-forward) — W6 binds the first-wipe target to the plaintext mount source the
+# cutover RECORDED (PLAINTEXT_DEV, the last line wins), never to a filesystem label: no artifact ever
+# labelled web-1's retained plaintext, and the 2026-09-30 rehearsal refused label=none on exactly that
+# premise. The label is observed EVIDENCE on the row, never a gate.
+LUKS_REAL_T="$(readlink -f -- "$LUKS_BLK")"
+# A NON-CANONICAL /dev alias of the target (G1-P2): a real udev symlink when the host has one
+# (/dev/block/<MAJ:MIN>), else a `/./` path — both resolve to the target only through readlink -f.
+G1_ALIAS="/dev/block/$(tr -d '[:space:]' < "/sys/class/block/$TGT_KNAME/dev" 2>/dev/null)"
+if [ ! -L "$G1_ALIAS" ] || [ "$(readlink -f -- "$G1_ALIAS")" != "$TGT_REAL" ]; then G1_ALIAS="/dev/./$TGT_KNAME"; fi
+[ "$(readlink -f -- "$G1_ALIAS")" = "$TGT_REAL" ] && [ "$G1_ALIAS" != "$TGT_REAL" ] \
+  || { printf 'INSTRUMENT FAIL - no non-canonical /dev alias of %s (got %s)\n' "$TGT_REAL" "$G1_ALIAS"; exit 2; }
+g1_rehearsed() {  # <label> <expected exact fragment of the rehearsal_ok row>
+  local r; r="$(wrow rehearsal_ok first_wipe)"
+  if ran && [ -n "$r" ] && [[ "$r " == *" $2 "* ]] && [ "$(zero_calls)" -eq 0 ] && nounk && [ "$(nrows refused)" -eq 0 ]; then
+    ok "$1"
+  else
+    no "$1 (rc=$CASE_RC want=[$2] row=[${r:0:260}]) $(grep -E 'result=refused|^DIE' <<<"$CASE_OUT" | tr '\n' '|' | cut -c1-260)"
+  fi
+}
+g1_refused() {  # <label> <expected recorded=> <expected recorded_real=> [run_wipe args...]
+  local label="$1" rec_want="$2" real_want="$3" r; shift 3
+  run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 "$@"
+  r="$(awk -v p="^$WROW result=refused arm=first_wipe " '$0 ~ p { print; exit }' <<<"$CASE_OUT")"
+  if refused_ok wipe_target_not_recorded_plaintext && [ "$(zero_calls)" -eq 0 ] && ! outF WIPE_RETURNED \
+    && ! state_has PLAINTEXT_WIPE_BEGUN && hdrs_gone \
+    && [[ "$r " == *" target=$TGT_REAL recorded=$rec_want recorded_real=$real_want "* ]]; then
+    ok "$label → refused wipe_target_not_recorded_plaintext (target=/recorded=/recorded_real= evidence, no BEGUN, headers shredded)"
+  else
+    no "$label → want wipe_target_not_recorded_plaintext recorded=$rec_want recorded_real=$real_want (rc=$CASE_RC unk=[$(unkdump)]) row=[${r:0:300}] $(grep -E '^DIE' <<<"$CASE_OUT" | cut -c1-200)"
+  fi
+}
+# G1-P1 — the PRODUCTION reproduction: an UNLABELLED ext4 (W_LABEL= explicit) whose device is the recorded
+# plaintext reaches rehearsal_ok, carrying label=none as evidence next to the record it was bound to.
+run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 W_LABEL=
+g1_rehearsed "G1-P1 an unlabelled plaintext (the web-1 shape) bound to its recorded PLAINTEXT_DEV rehearses: label=none plaintext_dev=<record>" \
+  "label=none plaintext_dev=$TGT_BLK"
+# G1-P2 (must-PASS, non-canonical) — the record is an ALIAS of the target: the bind compares resolved paths.
+run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=$G1_ALIAS"
+g1_rehearsed "G1-P2 a record that is a non-canonical alias of the target ($G1_ALIAS) still binds (readlink -f on both sides)" \
+  "plaintext_dev=$G1_ALIAS"
+# G1-H2 (must-PASS) — the label is evidence only: a DIFFERENT label with a matching record rehearses.
+run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 W_LABEL=other
+g1_rehearsed "G1-H2 a first-wipe target labelled 'other' with a matching record rehearses — the label is evidence, never a gate" \
+  "label=other plaintext_dev=$TGT_BLK"
+g1_refused "G1-R1 no PLAINTEXT_DEV recorded" none none "SEED_STATE=CANARY_OK=1:$UUID_LIVE"
+g1_refused "G1-R2 the record names ANOTHER device (kernel-name drift onto the LUKS backing; the serial still passes)" \
+  "$LUKS_BLK" "$LUKS_REAL_T" "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=$LUKS_BLK"
+g1_refused "G1-R3 the LAST record wins (target first, then the LUKS backing)" \
+  "$LUKS_BLK" "$LUKS_REAL_T" "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=$TGT_BLK;PLAINTEXT_DEV=$LUKS_BLK"
+g1_refused "G1-R4 an option-shaped record (-o)" -o none "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=-o"
+# G1-R5 — the validator is load-bearing at W6, not only the compare: a record that RESOLVES to the target
+# but is not a canonical-charset /dev path (`//`) is refused, never bound.
+G1_SLASH="${TGT_REAL/#\/dev\//\/dev\/\/}"
+g1_refused "G1-R5 a record with '//' that resolves to the target is refused by the validator" \
+  "$G1_SLASH" none "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=$G1_SLASH"
+# G1-H3 — the resume arm is NOT bound (the marker and the serial bind it): a WRONG record re-zeroes.
+run_wipe 'wipe_plaintext; echo WIPE_RETURNED' "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_WIPE_BEGUN=$PIN:1759000000;PLAINTEXT_DEV=$LUKS_BLK" W_TYPE=
+[ -n "$(wrow wiped re_zero)" ] && ran && [ "$(zero_calls)" -eq 1 ] && hasF "blkdiscard -z -v $TGT_REAL" && nounk \
+  && ok "G1-H3 re_zero with a WRONG record still resumes (the binding is first_wipe-only)" \
+  || no "G1-H3 re_zero was stranded by the record binding (rc=$CASE_RC) $(grep -E 'result=refused|^DIE' <<<"$CASE_OUT" | tr '\n' '|' | cut -c1-240)"
+# G1-W (writer -> reader) — the ONE writer of the record W6 binds to is the cutover's rollback-rehearsal
+# step: it persists `findmnt -no SOURCE $MOUNT` (the plaintext's mount source, pre-repoint). Run the
+# REAL block (extracted, not copied) in the harness world with no seeded record: the LAST state line must
+# be that mount source, and read_state (W6's reader) must return it.
+REH_TEXT="$(awk '/^step "rollback rehearsal/{f=1} f{print} f && /^fi$/{exit}' "$CUTOVER")"
+if [ -z "$REH_TEXT" ] || ! grep -qF 'persist_state PLAINTEXT_DEV' <<<"$REH_TEXT"; then
+  no "G1-W INSTRUMENT: the rollback-rehearsal block (the PLAINTEXT_DEV writer) could not be extracted"
+else
+  run_case "$CUTOVER" 'DRY_RUN=0; eval "$REH_TEXT"; echo "READ=$(read_state PLAINTEXT_DEV)"' 'persist_state read_state' \
+    REH_TEXT="$REH_TEXT" PLAINTEXT_DEV_UNSEEDED=1 FINDMNT_MOUNT_SRC=/dev/sdzX MKDIR_RC=0
+  if ran && [ "$(tail -n1 "$STATE/state" 2>/dev/null)" = "PLAINTEXT_DEV=/dev/sdzX" ] && outF "READ=/dev/sdzX" \
+    && [ "$(grep -c '^PLAINTEXT_DEV=' "$STATE/state" 2>/dev/null)" -eq 1 ]; then
+    ok "G1-W the rollback-rehearsal step persists the plaintext mount source as the LAST PLAINTEXT_DEV line, and read_state returns it"
+  else
+    no "G1-W the writer did not record the mount source (rc=$CASE_RC last=[$(tail -n1 "$STATE/state" 2>/dev/null)]) ${CASE_OUT:0:200}"
+  fi
+fi
 refusal "W6 (Guard 1 #9) re_zero arm with the target made the mapper's backing device" wipe_target_is_mapper_backing \
   "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_WIPE_BEGUN=$PIN:1" W_TYPE= "W_BACKING=$TGT_BLK" "WORKSPACES_LUKS_DEV=$TGT_BLK"
 refusal "W6b (Guard 1 #8) a .mount unit in a target device unit's reverse dependencies" wipe_target_has_dependents W_REVDEP=mnt-data.mount
@@ -1186,6 +1266,6 @@ fi
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=143
+WIPE_MIN_PASS=152
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]

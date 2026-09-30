@@ -801,6 +801,17 @@ assert_host_canary_population() {
   log "host canary population OK — $MOUNT/workspaces holds $got workspace(s) (= the G3 count of this run)"
 }
 
+# _plaintext_dev_valid <v> — syntax only: an absolute /dev path of [A-Za-z0-9/_.:-] with no `..`/`//`.
+# Every reader of the recorded PLAINTEXT_DEV calls this first: the value is baked unquoted into the
+# root dead-man fire and passed to mount/blkid, so a leading `-`, a non-device or NFS-shaped string,
+# or a quote must never reach them. Pure: reads nothing but its argument.
+_plaintext_dev_valid() {
+  local LC_ALL=C d="${1:-}"
+  case "$d" in /dev/?*) ;; *) return 1 ;; esac
+  case "$d" in *[!A-Za-z0-9/_.:-]*|*..*|*//*) return 1 ;; esac
+  return 0
+}
+
 # _plaintext_label_present — the PHYSICAL witness that a plaintext copy still exists to remount: the
 # by-label link udev keeps for the retained volume. A zeroed volume carries no label and a deleted one
 # no device, so the link is gone in both cases. A SEAM (the suites override it): it reads no
@@ -2583,7 +2594,7 @@ wipe_plaintext() {
   local tool ver maj min prc src begun wiped m dev sig brc canary c_uuid backing breal live_uuid key
   local hkey dl_uuid hdr_bytes hdr_sha real tmm bmm kname sys got props label gran dmax wz sched magic
   local last_mount last_write sig2 brc2 mk devnum cgroot iorc lw_epoch frozen e2 aerr arc aclass zrc
-  local plain_ls live_ls plain_only n_only nm
+  local plain_ls live_ls plain_only n_only nm pdev
   WIPE_ARM="none"; WIPE_DEVICE_UNITS=0
   step "CONFIRM_WIPE — retire the retained plaintext volume ${id:-<unset>} (runbook step 7; dry_run=${DRY_RUN})"
 
@@ -2747,14 +2758,24 @@ wipe_plaintext() {
   props="$(udevadm info --query=property --name="$real" 2>/dev/null || true)"
   grep -Eq "^(ID_SERIAL|ID_SCSI_SERIAL)=.*HC_Volume_${id}([^0-9]|\$)" <<<"$props" \
     || _wipe_refuse wipe_target_serial_mismatch "udev's ID_SERIAL/ID_SCSI_SERIAL for $real does not name HC_Volume_${id} (the hypervisor identity, independent of the by-id symlink)"
-  label="n/a"
+  # W6 (first wipe only) — the target must be the device THIS cutover recorded as the plaintext's mount
+  # source (PLAINTEXT_DEV, the last line wins; its only writer is the rollback-rehearsal step), compared
+  # resolved on both sides. Identity is that record, never a filesystem label: no artifact ever labelled
+  # the retained plaintext (ADR-119, corrected 2026-09-30), so the label is observed evidence only. The
+  # resume arm is not bound here — the BEGUN marker and the serial already bind it.
+  label="n/a"; pdev="n/a"
   if [ "$WIPE_ARM" = first_wipe ]; then
-    label="$(blkid -p -s LABEL -o value "$real" 2>/dev/null || true)"
-    [ "$label" = "$PLAINTEXT_LABEL" ] || _wipe_refuse wipe_target_label_mismatch "the first-wipe target is labelled '${label:-<none>}', not $PLAINTEXT_LABEL (the label rollback() mounts by)" "label=${label:-none}"
+    label="$(blkid -p -s LABEL -o value "$real" 2>/dev/null || true)"; label="${label:-none}"   # observed evidence only
+    pdev="$(read_state PLAINTEXT_DEV)"
+    { _plaintext_dev_valid "$pdev" && [ "$(readlink -f -- "$pdev" 2>/dev/null)" = "$real" ]; } \
+      || _wipe_refuse wipe_target_not_recorded_plaintext \
+        "the target resolves to '$real', but the plaintext mount source this cutover recorded (PLAINTEXT_DEV) is '$(_vscrub "${pdev:-<unrecorded>}")' — the zero may only hit the device the cutover itself took the copy from" \
+        "target=$real" "recorded=${pdev:-none}" "recorded_real=$({ _plaintext_dev_valid "$pdev" && readlink -f -- "$pdev" 2>/dev/null; } || echo none)"
   fi
   # W6b — detach safety (see _wipe_assert_no_dependents).
   _wipe_assert_no_dependents "$real"
-  # W7 — no dead-man armed, firing, or queued (its fire command remounts the plaintext by label).
+  # W7 — no dead-man armed, firing, or queued (its fire command remounts the plaintext by its recorded
+  # PLAINTEXT_DEV).
   [ "$(_dm_prop timer ActiveState)" != active ] || _wipe_refuse wipe_deadman_armed "the workspaces-luks dead-man timer is active"
   if _deadman_fire_live; then _wipe_refuse wipe_deadman_armed "a dead-man fire is ${DM_FIRE_STATE}"; fi
   [ -z "$(_dm_prop service Job)$(_dm_prop timer Job)" ] || _wipe_refuse wipe_deadman_armed "a dead-man job is queued"
@@ -2825,7 +2846,7 @@ wipe_plaintext() {
 
   if [ "$DRY_RUN" = "1" ]; then
     emit_wipe rehearsal_ok "$WIPE_ARM" "uuid=$live_uuid" "target=$real" "backing=$breal" "size=$size" "serial=ok" \
-      "label=$label" "holders=0" "dependents=0" "device_units=${WIPE_DEVICE_UNITS}" "hdr_bytes=$hdr_bytes" "hdr_sha256=${hdr_sha:-unknown}" \
+      "label=$label" "plaintext_dev=$pdev" "holders=0" "dependents=0" "device_units=${WIPE_DEVICE_UNITS}" "hdr_bytes=$hdr_bytes" "hdr_sha256=${hdr_sha:-unknown}" \
       "discard_gran=${gran:-unknown}" "discard_max=${dmax:-unknown}" "write_zeroes_max=$wz" "scheduler=${sched:-unknown}" "magic=$magic" \
       "io_max=${WIPE_IOMAX:-absent}" "plaintext_only=${WIPE_PLAINTEXT_ONLY}"
     log "(dry-run) every wipe precondition passed for volume $id (arm=${WIPE_ARM}); nothing was written"
