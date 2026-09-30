@@ -14,6 +14,49 @@ lane: cross-domain
 
 # fix(infra): remove dead inngest pause/resume calls from the bootstrap upgrade drain
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30. The fan-out was proportionate, not all-agents, because this is a
+p3 dead-code removal of about 6 lines.
+
+- **Gates:** 4.6 User-Brand Impact, 4.7 Observability (probe-verb gate rc=0), 4.8 no PAT
+  shapes, and 4.11 `lint-guard-contract.py` all passed. These were not applicable: 4.5
+  network-outage, 4.55 downtime, 4.9 UI and 4.10 encryption (no new store or connection).
+- **Agents:**
+  - a verify-the-negative and self-audit pass
+  - `observability-coverage-reviewer`
+  - `test-design-reviewer`
+  - `git-history-analyzer` (attribution claims)
+
+### Key improvements
+
+1. **The observability claim was corrected.** The success-path bootstrap log lines never leave
+   the host: `ci-deploy.sh` redirects the bootstrap's stderr to
+   `/tmp/inngest-bootstrap-stderr.log`. Only a failure tail reaches Better Stack and
+   deploy-status. The block now says so, and cites layer 6 (workflow run log) and layer 3
+   (Vector).
+2. **The guard floor was hardened.** It went from "non-empty" to "`start` must be found".
+   After the edit, both surviving verbs come from the literal-path spelling, so a non-empty
+   check could not detect a broken `INSTALL_PATH` branch. Rows 5 (heredoc literal path) and 6
+   (unquoted variable) were added. All rows were re-validated.
+3. **The mutation-run procedure is now concrete.** Copy `infra/`, run an instrument control,
+   and read the guard's own PASS/FAIL line rather than the suite exit code.
+4. **Six negative claims were confirmed by grep:**
+   - no `.tf` coupling
+   - no other test asserts the removed lines
+   - the provenance sidecar and the test are not image carriers
+   - `DRAIN_SLEEP_SEC` has no setter
+   - no alert is keyed on the removed log strings
+   - the staleness suites do not parse the edited provenance row
+
+   One stale rationale in the Cut List was fixed.
+5. **Attribution was verified live** (`gh`, `git log -S`):
+   - The pause call came from commit `8e170b7eec` (#3960).
+   - The "resume still present" assertion came from `d844b41d48` (#4652, R2).
+   - The dead-call annotation came from `1cf0a76aa0` in PR #9201.
+   - `vinngest-v1.1.43` is merged into a freshly fetched `origin/main`. The worktree's local
+     `main` ref is stale at `v1.1.25`, so compare against `origin/main`, never local `main`.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -73,9 +116,9 @@ No stale premise.
 - `pause --help` capability gate → would buy "engage pause if a future CLI adds it". That is not
   in the property list. No pinned version has the verb, the exit code is unmeasured (a vacuous
   gate is likely), and auto-engaging a server-global freeze is the ADR-078-rejected hazard. **Cut.**
-- Removing `DRAIN_SLEEP_SEC` entirely → changes timing semantics and removes an install-time env
-  interface. That is not asked for (the issue says "document the drain as sleep-only"). **Cut.**
-  It is recorded in Alternatives.
+- Removing `DRAIN_SLEEP_SEC` entirely → changes upgrade timing. That is not asked for (the issue
+  says "document the drain as sleep-only"), even though nothing sets the variable. **Cut.** It is
+  recorded in Alternatives and in `decision-challenges.md`.
 - Scanning every infra script for unmeasured verbs → P1 is scoped to the bootstrap, the only
   file with CLI-verb calls beyond `start` in unit strings (grep of `apps/web-platform/infra`,
   `scripts`, `.github`: other hits are test fixtures for `start`). **Cut.**
@@ -209,8 +252,11 @@ BOOTSTRAP_CODE_LINES=$(grep -vE '^[[:space:]]*#' "$BOOTSTRAP_SH" || true)
 INNGEST_VERBS_USED=$(grep -oE '(\$INSTALL_PATH|\$\{INSTALL_PATH\}|/usr/local/bin/inngest)"?[[:space:]]+[A-Za-z][A-Za-z0-9_-]*' <<<"$BOOTSTRAP_CODE_LINES" \
   | awk '{print $NF}' | sort -u || true)
 INNGEST_VERBS_UNMEASURED=$(grep -vE "$INNGEST_VERB_ALLOWLIST_RE" <<<"$INNGEST_VERBS_USED" || true)
-assert "bootstrap invokes only measured inngest-cli verbs (allowlist: start, version; add one only with a provenance measurement) — no pause/resume (#9219) (got: $(tr '\n' ' ' <<<"$INNGEST_VERBS_USED"))" \
-  "[[ -n \"\$INNGEST_VERBS_USED\" && -z \"\$INNGEST_VERBS_UNMEASURED\" ]]"
+# Floor: `start` (the ExecStart verb) must be found. The server cannot run without it, so it
+# survives any legitimate refactor, and a broken extractor cannot pass.
+INNGEST_HAS_START=$(grep -cx start <<<"$INNGEST_VERBS_USED" || true)
+assert "bootstrap invokes only measured inngest-cli verbs (allowlist: start, version; add one only with a provenance measurement) — no pause/resume (#9219) (got: $(tr '\n' ' ' <<<"$INNGEST_VERBS_USED"); unmeasured: $(tr '\n' ' ' <<<"$INNGEST_VERBS_UNMEASURED"))" \
+  "[[ \"\$INNGEST_HAS_START\" == 1 && -z \"\$INNGEST_VERBS_UNMEASURED\" ]]"
 ```
 
 (Measured on the pre-edit file, the extractor returns exactly `pause`, `resume`, `start`,
@@ -218,17 +264,23 @@ assert "bootstrap invokes only measured inngest-cli verbs (allowlist: start, ver
 found verbs at call time because `assert` prints only the unexpanded condition. That was a
 CTO and Kieran finding, and it mirrors how Guard A prints `drifted:`.)
 
-**Pre-validated at plan time (2026-09-30).** The sketch was run as a standalone script under
-`set -euo pipefail`:
+**Pre-validated at plan time (2026-09-30, deepen pass).** The final sketch was run as a
+standalone script under `set -euo pipefail`:
 
 | Input | Result |
 |---|---|
-| Current bootstrap | FAIL, `unmeasured: pause resume` |
-| Bootstrap with the two dead lines deleted | PASS |
-| Empty file (row 2) | FAIL |
-| `${INSTALL_PATH} resume` appended (row 3) | FAIL, `unmeasured: resume` |
-| Comment line appended (row 4) | PASS |
+| Current bootstrap | FAIL (`unmeasured: pause resume`) |
+| Two dead lines deleted | PASS |
+| Row 1 (re-added `pause`) | FAIL (`unmeasured: pause`) |
+| Row 2 (empty file) | FAIL (floor) |
+| Row 3 (`${INSTALL_PATH} resume`) | FAIL |
+| Row 4 (comment line) | PASS |
+| Row 5 (heredoc `/usr/local/bin/inngest pause`) | FAIL |
+| Row 6 (unquoted `$INSTALL_PATH resume`) | FAIL |
+| Added `"$VECTOR_INSTALL_PATH" validate` | PASS |
 
+The last row refutes a test-design-reviewer P2 that the regex false-matches
+`$VECTOR_INSTALL_PATH`. The substring `$INSTALL_PATH` does not occur in `$VECTOR_INSTALL_PATH`.
 The work phase re-runs these against the real edit.
 
 ### 3. `apps/web-platform/infra/inngest-cli.provenance.md` (matches the `inngest*` path filter but is not `cp`-staged, so the mint decision is unaffected)
@@ -311,30 +363,36 @@ No host or Terraform resource is mutated by this diff. The PR body's first line 
 
 ```yaml
 liveness_signal:
-  what: "the bootstrap's own `[inngest-bootstrap] upgrade detected: … settle delay …` and `upgrade complete: …` stderr lines on an in-place CLI upgrade, captured in the deploy run's journald stream and shipped by Vector to Better Stack Logs (existing pipeline, unchanged)"
-  cadence: "per in-place CLI-version upgrade (rare; only when inngest_cli_version changes and the host is upgraded in place)"
-  alert_target: "existing: ci-deploy inngest-step failure surfaces in the deploy workflow run + Better Stack; no new alert"
-  configured_in: "apps/web-platform/infra/inngest-bootstrap.sh (log lines); apps/web-platform/infra/vector.toml (shipping)"
+  what: "none off-host on the SUCCESS path, accepted. The bootstrap's log() writes to stderr, and ci-deploy.sh's inngest) arm redirects it to the host-local file /tmp/inngest-bootstrap-stderr.log. So the upgrade detected (settle delay) and upgrade complete lines never reach journald, Vector or Better Stack. This path fires only on a rare in-place CLI-version upgrade, and this change removes lines rather than adding a signal. The off-host signal is the deploy outcome itself (see failure_modes), which is unchanged."
+  cadence: "per deploy (the deploy-status outcome); the success-path lines are host-local only"
+  alert_target: "existing deploy failure path only: deploy-inngest-image.yml run log + Better Stack ci-deploy FAILED line; no new alert"
+  configured_in: "apps/web-platform/infra/ci-deploy.sh (inngest) arm: BOOTSTRAP_STDERR capture, final_write_state, logger -t ci-deploy); apps/web-platform/infra/vector.toml (Source 4 ci-deploy tag allowlist)"
 error_reporting:
-  destination: "unchanged — ci-deploy.sh inngest) step exit status + Better Stack Logs; bootstrap phone-home emitters for REFUSED starts are untouched"
-  fail_loud: "a bootstrap abort fails the deploy's inngest step (non-zero exit); the removed lines only ever emitted a misleading `warn: pause/resume command failed` and never gated anything"
+  destination: "layer 6 workflow run log (deploy-inngest-image.yml polls /hooks/deploy-status and prints reason=inngest_bootstrap_failed:<stderr_tail>) + layer 3 Vector to Better Stack (logger -t ci-deploy FAILED line with stderr_tail); both unchanged by this diff"
+  fail_loud: "a bootstrap abort exits non-zero, so ci-deploy writes final_write_state 1 inngest_bootstrap_failed:<last 600 bytes of stderr>. The removed lines only ever emitted a misleading warn: pause/resume command failed and never gated anything."
 failure_modes:
   - mode: "bootstrap syntax/logic regression from the edit aborts the in-place deploy"
-    detection: "CI: bash -n + shellcheck + inngest.test.sh + cloud-init-inngest suites on the PR; at runtime, the deploy workflow's inngest step fails non-zero"
-    alert_route: "PR checks (pre-merge); deploy workflow failure + Better Stack (runtime)"
+    detection: "pre-merge: CI workflow run log (bash -n, shellcheck, inngest.test.sh, cloud-init-inngest suites). Runtime: layer 6 deploy-inngest-image.yml run log (reason=inngest_bootstrap_failed:<stderr_tail>) and layer 3 Vector ci-deploy FAILED line in Better Stack"
+    alert_route: "PR checks (pre-merge); deploy workflow failure + Better Stack ci-deploy FAILED line (runtime)"
   - mode: "an unmeasured inngest-cli verb is reintroduced"
-    detection: "inngest.test.sh verb-allowlist assertion goes RED (Guard 1)"
+    detection: "CI workflow run log: the inngest.test.sh verb-allowlist assertion prints FAIL with the found verbs (Guard 1)"
     alert_route: "PR check deploy-script-tests"
   - mode: "post-merge auto-mint or bump fails, so the fix never reaches the image pin"
-    detection: "mint-inngest-bootstrap-tag.yml stage-named ::error:: + Slack; main's AC6/Guard A stays red and main-health-monitor files ci/main-broken"
+    detection: "CI workflow run log: mint-inngest-bootstrap-tag.yml stage-named ::error:: + Slack; main's AC6/Guard A stays red and main-health-monitor files ci/main-broken"
     alert_route: "Slack releases channel + ci/main-broken issue"
 logs:
-  where: "Better Stack Logs (journald via Vector) for the deploy host; GitHub Actions logs for the mint/build/bump runs"
-  retention: "Better Stack plan retention; GitHub Actions default 90 days"
+  where: "success-path bootstrap lines: host-local /tmp/inngest-bootstrap-stderr.log only (overwritten per deploy). Failure tail: deploy-status payload + Better Stack via Vector (ci-deploy tag). Mint/build/bump: GitHub Actions logs."
+  retention: "host-local file until the next deploy; Better Stack plan retention; GitHub Actions default 90 days"
 discoverability_test:
   command: grep -oF 'settle delay before binary replace' apps/web-platform/infra/inngest-bootstrap.sh
   expected_output: "settle delay before binary replace"
 ```
+
+The discoverability probe checks the source. The honest runtime answer is that the success
+lines are host-local. Adding a `logger -t ci-deploy "INNGEST_UPGRADE: …"` line in `ci-deploy.sh`
+was considered and declined: it would add a new signal to a file this PR explicitly does not
+touch, for a rare path whose failure is already visible off-host (observability-coverage-reviewer,
+deepen pass).
 
 ## Guard Contract
 
@@ -373,16 +431,27 @@ SELF-TEST already covers a neutered `assert`):
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Re-add `"$INSTALL_PATH" pause >/dev/null 2>&1 \|\| true` inside the upgrade block | RED |
-| 2 | Guard's own dispatch: run the block against an empty file so `INNGEST_VERBS_USED` is empty | RED (non-empty floor) |
+| 2 | Guard's own dispatch: run the block against an empty file so `INNGEST_VERBS_USED` is empty | RED (`start` floor) |
 | 3 | Second member after a compliant first: keep `/usr/local/bin/inngest version` and add `${INSTALL_PATH} resume` on a later line | RED |
 | 4 | Harness must-PASS: add a *comment* line `# "$INSTALL_PATH" pause was removed (#9219)` | PASS (comment lines are stripped) |
+| 5 | Literal-path spelling with a forbidden verb, inside a heredoc: `/usr/local/bin/inngest pause` | RED |
+| 6 | Unquoted variable spelling: `$INSTALL_PATH resume` | RED |
 
 **Anchor.** The allowlist regex lives in the same file as the assertion, so one diff can widen
 both. The backstop is its comment: a new verb requires a measurement in
 `inngest-cli.provenance.md`, and review sees the edit. This is consistency, not integrity, and
 that is adequate for an honest-mistake threat.
 
-Run the rows by hand in the work phase against a scratch copy. Do not commit them as a battery.
+Run the rows by hand in the work phase. Do not commit them as a battery:
+
+1. Copy the whole `apps/web-platform/infra/` directory to scratch. `BOOTSTRAP_SH` is derived
+   from the suite's own `SCRIPT_DIR`, and about 50 other rows read it.
+2. Run the unmutated copy first and confirm it exits 0. That is the instrument control.
+3. Apply each mutation to the copy's `inngest-bootstrap.sh` and run the copy's `inngest.test.sh`.
+4. Read the verdict from the specific `PASS:`/`FAIL: bootstrap invokes only measured
+   inngest-cli verbs` line, never from the suite exit code. Row 2 reddens many unrelated rows.
+
+(test-design-reviewer, deepen pass)
 After the edit, only rows 1 and 3 exercise the `INSTALL_PATH` branch. No `$INSTALL_PATH`-spelled
 call remains, so breaking that regex token alone would not redden anything.
 
@@ -393,7 +462,7 @@ Panel: `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`
 
 **Applied (mechanical):**
 
-- The guard went from exact set identity to subset plus a non-empty floor, and it prints the
+- The guard went from exact set identity to subset plus a `start` floor (deepen pass), and it prints the
   found verbs.
 - The mutation matrix went from 8 rows to 4. Row 2 lost its vacuous "break the token" option.
 - The single-line-extractor blind spots are now listed.
@@ -438,7 +507,7 @@ Panel: `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`
   returns nothing. If it does return a line, `ci-deploy.test.sh` becomes mandatory.
 - [ ] AC6: `inngest.test.sh` no longer contains the "upgrade-drain resume command still present"
   assertion. It contains the #9219 verb-allowlist assertion, which passes on the edited
-  bootstrap. Mutation rows 1–3 were each observed RED and row 4 PASS.
+  bootstrap. Mutation rows 1, 2, 3, 5 and 6 were each observed FAIL and row 4 PASS, read from the guard's own line on a scratch copy of `infra/`.
 - [ ] AC7: targeted ratchets pass locally:
   - `bash apps/web-platform/infra/inngest.test.sh`
   - `bash apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh`
@@ -463,7 +532,7 @@ Panel: `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`
 - Given the edited bootstrap, when `inngest.test.sh` runs, then the allowlist assertion passes.
   The extracted verbs are `start` and `version`.
 - Given a scratch copy with `"$INSTALL_PATH" pause` re-added, when the suite runs against it,
-  then the allowlist assertion is RED. The same holds for matrix rows 2 and 3.
+  then the allowlist assertion is RED. The same holds for matrix rows 2, 3, 5 and 6.
 - Given a comment line mentioning `"$INSTALL_PATH" pause`, when the suite runs, then it still
   passes (matrix row 4).
 - Given an in-place upgrade (the service is active and the version file differs), when the

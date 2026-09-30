@@ -13,7 +13,7 @@ Plan: `knowledge-base/project/plans/2026-09-30-fix-inngest-bootstrap-dead-pause-
 
 - [ ] 2.1 Test first (RED): in `apps/web-platform/infra/inngest.test.sh`, replace the "upgrade-drain resume
   command still present" assertion with the #9219 verb-allowlist guard (subset plus a
-  non-empty floor, found verbs printed in the description). Run the suite. The guard must be RED
+  `start` floor, with the found and unmeasured verbs printed in the description). Run the suite. The guard must be RED
   on the unedited bootstrap (`pause` and `resume` unmeasured).
 - [ ] 2.2 `inngest-bootstrap.sh`: delete the `"$INSTALL_PATH" pause … || log warn` line. Keep
   `sleep "$DRAIN_SLEEP_SEC"`, drop its inline "drain to SQLite" comment, and reword the log line
@@ -31,8 +31,12 @@ Plan: `knowledge-base/project/plans/2026-09-30-fix-inngest-bootstrap-dead-pause-
   - the resume-block comment
 
   Leave the Postgres idle-drain prose alone. Add no systemd start/restart line.
-- [ ] 2.5 GREEN: re-run `inngest.test.sh`, which should be all green. Run mutation rows 1–4 by
-  hand on scratch copies: rows 1–3 RED, row 4 PASS.
+- [ ] 2.5 GREEN: re-run `inngest.test.sh`, which should be all green. Then run mutation rows 1–6
+  by hand:
+  - copy all of `apps/web-platform/infra/` to scratch
+  - run the unmutated copy first; it must exit 0
+  - mutate the copy's bootstrap and read the verdict from the guard's own PASS/FAIL line
+  - expected: rows 1, 2, 3, 5 and 6 FAIL; row 4 PASS
 - [ ] 2.6 `apps/web-platform/infra/inngest-cli.provenance.md`: amend the "`inngest pause` drain
   verb" verdict tail to say the calls were removed and the path is a settle delay with no drain
   (#9219). Keep the measurement.
@@ -61,5 +65,6 @@ Plan: `knowledge-base/project/plans/2026-09-30-fix-inngest-bootstrap-dead-pause-
   - the expected Guard A red
   - the automatic mint → bump chain
   - the mutation-row results
+  - the note that success-path upgrade log lines are host-local only (no new signal)
 - [ ] 3.6 Merge gate: every `CI Required` check is green. The only `deploy-script-tests` FAIL
   line is Guard A naming `inngest-bootstrap.sh`. Push no tags, dispatch nothing, apply nothing.
