@@ -1142,6 +1142,55 @@
     ],
     "triggerLogicType": "single"
   },
+  "image-verify-failed": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "image-verify"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "verify_result",
+              "match": "nc",
+              "value": "reused_local_reload"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 33,
+    "name": "image-verify-failed",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "inbox-action-required-notify-failure": {
     "actionFilters": [
       {

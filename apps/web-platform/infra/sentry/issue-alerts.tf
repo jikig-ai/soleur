@@ -2433,6 +2433,52 @@ resource "sentry_alert" "image_freshness_mismatch" {
   }
 }
 
+# ── Cosign image-signature verify failure (#6129) ─────────────────────────────
+# ci-deploy.sh's verify_image_signature emits cosign_verify_event (op=image-verify, tags
+# verify_result + mode) on every verify failure: unsigned, wrong_identity, verify_failed,
+# rekor_unreachable, inspect_failed, cosign_absent. Under ENFORCE (the default from #6129, PR #9308) each
+# such event is a REFUSED web deploy: the old container stays live, but the release does not reach
+# that host. A web-1 refusal also reds the release run. A web-2 refusal is otherwise SILENT (the peer
+# fan-out does not wait on web-2's verdict), which would leave the standby on the previous version.
+# This rule is the page for both.
+#
+# EXCLUDED: verify_result=reused_local_reload. It rides the same op as a deliberate breadcrumb (the
+# #6512 same-version local-cache reload reuses the already-verified running image), and paging on
+# it would be noise. `nc`, the operator the inngest-provision-failure rule already uses, keeps the
+# exclusion to a single substring.
+#
+# value = 0 pages on the FIRST event of a group. Distinct frequency_minutes = 33 avoids Sentry
+# POST-time exact-duplicate dedup (taken: 5,10-32,60-63,120,240,1440-1442). Events carry the
+# image ref, the verify result and a stderr tail from cosign, with no user content.
+resource "sentry_alert" "image_verify_failed" {
+  organization      = var.sentry_org
+  name              = "image-verify-failed"
+  enabled           = true
+  frequency_minutes = 33
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "op", match = "eq", value = "image-verify" } },
+        { tagged_event = { key = "verify_result", match = "nc", value = "reused_local_reload" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── Inngest host provisioning failure, non-pull (#9176) ───────────────────────
 # The dedicated inngest host's soleur-inngest-provision unit (ADR-257) reports through
 # soleur-boot-emit (cloud-init-inngest.yml), which tags each event stage/detail/host_id/host_name.
