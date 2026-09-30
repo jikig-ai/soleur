@@ -339,6 +339,29 @@ AFFECTED_TEST_PRE_MERGE_REBASE_PATHS=(
   "test/pre-merge-rebase.test.ts"
   "scripts/lib/test-affected-paths.sh"
 )
+# The other root `test/` bun suites (#9307). Their only derived edge used to be the
+# bare `test` command word of `bun test <file>`, which resolved to the repo-root
+# test/ directory and MASKED that they carried no real edge at all: they selected
+# only when a diff path happened to contain "test", and not when their SUT changed.
+AFFECTED_TEST_X_COMMUNITY_PATHS=(
+  "plugins/soleur/skills/community/scripts/"
+  "test/x-community.test.ts"
+  "test/helpers/test-handle-response.sh"
+  "test/helpers/test-check-metrics-anomaly.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_TEST_LINKEDIN_COMMUNITY_PATHS=(
+  "plugins/soleur/skills/community/scripts/"
+  "test/linkedin-community.test.ts"
+  "test/helpers/test-handle-response-linkedin.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_TEST_CONTENT_PUBLISHER_PATHS=(
+  "scripts/content-publisher.sh"
+  "test/content-publisher.test.ts"
+  "test/helpers/"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "plugins/soleur/skills/incident/scripts/redact-sentinel.sh"
   "plugins/soleur/skills/incident/scripts/redact-engine.py"

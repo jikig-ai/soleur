@@ -26,9 +26,9 @@ Every task is test-first: write the failing test or fixture, see it red, then ch
 
 ### 3. Selection observability
 
-- [ ] 3.1 Write a failing test asserting the exact expected selected set on a synthesized diff via `--print-selection`
-- [ ] 3.2 Add `--print-selection` next to `--print-affected-set`, reusing the pre-pass that decides execution; emit `AFFECTED_SELECTED` per label and one `AFFECTED_SUMMARY`
-- [ ] 3.3 Print the `AFFECTED_SUMMARY` line at the start of every affected run
+- [x] 3.1 Write a failing test asserting the exact expected selected set on a synthesized diff via `--print-selection`
+- [x] 3.2 Add `--print-selection` next to `--print-affected-set`, reusing the pre-pass that decides execution; emit `AFFECTED_SELECTED` per label and one `AFFECTED_SUMMARY`
+- [x] 3.3 Print the `AFFECTED_SUMMARY` line at the start of every affected run
 - [ ] 3.4 Confirm `--print-affected-set` output is unchanged against the merge-base for the same registration set
 
 ### 4. Dropped-consumer ratchet (Guard 2) and Guard 3 mutation battery

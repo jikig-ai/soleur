@@ -1576,21 +1576,37 @@ else
   fail "t6: rc=$_rc ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
 
+# t7: a runner SUBCOMMAND is not an operand. `bun test <file>` must not mint the
+#     repo-root test/ directory as an edge: a diff that touches some OTHER file
+#     under test/ selects neither test/x-community nor plugins/soleur.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=test/some-unrelated.test.ts' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] \
+  && ! grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD" \
+  && ! grep -qF $'RAN\tplugins/soleur' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD"; then
+  pass "t7: a path under test/ that no suite names selects no bun-test suite (subcommand is not an edge)"
+else
+  fail "t7: rc=$_rc ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
 # m1-m3: each mutant rewrites ONE line of the sandbox runner and must be
 # DETECTED — the row's scenario must produce the verdict the un-mutated runner
 # would have failed. A mutation that did not land is rc 98 and fails the row.
 #
-# m1: directory edges revert to the legacy SLASH-LESS substring match (the bare
-#     word `test`) — t1's scenario must now select the root test/ suite, the
-#     false positive this change removes.
+# m1: directory edges revert to the legacy SLASH-LESS substring match — t5's
+#     scenario must now select plugins/soleur, the false positive anchoring removes.
 cases=$((cases + 1))
 SANDBOX_MUT_OLD='    */) [[ "$_n" == *"${_NL}${e}"* ]] ;;' \
 SANDBOX_MUT_NEW='    */) [[ "$_n" == *"${e%/}"* ]] ;;' \
 SANDBOX_LIB=with-lib run_arm \
-  'SANDBOX_DIFF_NAMES=knowledge-base/project/specs/feat-x-test-y/spec.md' \
+  'SANDBOX_DIFF_NAMES=knowledge-base/plugins/soleur/notes.md' \
   -- --affected
-if [[ "$ARM_RC" != "98" ]] && grep -qF $'RAN\ttest/x-community' <<<"$ARM_RECORD"; then
-  pass "m1: substring-match mutant selects the root test/ suite on a spec path (t1 detects it)"
+if [[ "$ARM_RC" != "98" ]] && grep -qF $'RAN\tplugins/soleur' <<<"$ARM_RECORD"; then
+  pass "m1: substring-match mutant selects plugins/soleur on knowledge-base/plugins/soleur/ (t5 detects it)"
 else
   fail "m1: rc=$ARM_RC — $ARM_OUT"
 fi
@@ -1622,13 +1638,131 @@ else
   fail "m3: rc=$ARM_RC — $ARM_OUT"
 fi
 
+# m5: the subcommand skip never fires — t7's scenario must now select the
+#     bun-test suites through the resurrected bare `test` edge.
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")' \
+SANDBOX_MUT_NEW='      "bun NEVER"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")' \
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=test/some-unrelated.test.ts' \
+  -- --affected
+if [[ "$ARM_RC" != "98" ]] && grep -qF $'RAN\tplugins/soleur' <<<"$ARM_RECORD"; then
+  pass "m5: dead-skip mutant selects plugins/soleur via the bare test edge (t7 detects it)"
+else
+  fail "m5: rc=$ARM_RC — $ARM_OUT"
+fi
+
+# --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
+# `--print-affected-set` prints each registration's CLASS and ignores the diff; it
+# was read as a selection once and reported 306 "selected" for a diff that selects
+# ~150. `--print-selection` runs the SAME pre-pass a real run applies and prints
+# what THIS diff selects, without running a suite.
+#
+# p1: rows and summary for a forced diff. Sandbox corpus = 6 runnable labels.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
+  -- --print-selection
+_rc=$ARM_RC
+_sel_yes=$(awk -F'\t' '$1=="AFFECTED_SELECTED" && $3=="1"{print $2}' <<<"$ARM_OUT" | sort | tr '\n' ' ')
+_sum=$(awk -F'\t|[[:space:]]' '$1=="AFFECTED_SUMMARY"' <<<"$ARM_OUT" | head -1)
+if [[ "$_rc" == "0" ]] \
+  && [[ "$_sel_yes" == "scripts/lint-dual-lockfile test/x-community " ]] \
+  && grep -qF $'AFFECTED_SELECTED\tplugins/soleur\t0' <<<"$ARM_OUT" \
+  && grep -qF 'selected=2 of=6 always_on=1 edge=1 fallback=none' <<<"$_sum" \
+  && [[ "$(ran_count)" == "0" ]]; then
+  pass "p1: --print-selection prints the exact selected set + summary and runs nothing"
+else
+  fail "p1: rc=$_rc selected='${_sel_yes}' summary='${_sum}' ran=$(ran_count)"
+fi
+
+# p2: the print and the run cannot diverge — the suites a real `--affected` run
+#     executes for the same diff are exactly the rows printed as selected=1.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
+  -- --affected
+_rc=$ARM_RC
+_ran_set=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | sort | tr '\n' ' ')
+if [[ "$_rc" == "0" && "$_ran_set" == "$_sel_yes" && -n "$_sel_yes" ]]; then
+  pass "p2: the printed selected set equals the set a real --affected run executes"
+else
+  fail "p2: rc=$_rc ran='${_ran_set}' printed='${_sel_yes}'"
+fi
+
+# p3: a degraded run names its fallback instead of inventing a selection.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DETECT_OK=0' 'SANDBOX_DIFF_NAMES=' \
+  -- --print-selection
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] \
+  && grep -qF 'AFFECTED_SUMMARY' <<<"$ARM_OUT" \
+  && grep -qF 'fallback=undecidable-diff' <<<"$ARM_OUT" \
+  && ! grep -qF $'AFFECTED_SELECTED\t' <<<"$ARM_OUT"; then
+  pass "p3: undecidable-diff prints a fallback summary and no per-suite rows"
+else
+  fail "p3: rc=$_rc — $(grep -c AFFECTED_ <<<"$ARM_OUT") AFFECTED_ lines"
+fi
+
+# p4: an executing affected run states its selection on stdout too.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
+  -- --affected
+if [[ "$ARM_RC" == "0" ]] && grep -qF 'AFFECTED_SUMMARY' <<<"$ARM_OUT" \
+  && grep -qF 'selected=2 of=6' <<<"$ARM_OUT"; then
+  pass "p4: a real --affected run prints the AFFECTED_SUMMARY line"
+else
+  fail "p4: rc=$ARM_RC summary lines=$(grep -c AFFECTED_SUMMARY <<<"$ARM_OUT")"
+fi
+
+# p5: --print-selection is an affected-axis flag — it refuses the combinations
+#     where no pre-pass runs.
+cases=$((cases + 1))
+_p5a=0; env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-selection --full >/dev/null 2>&1 || _p5a=$?
+_p5b=0; env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-selection webplat >/dev/null 2>&1 || _p5b=$?
+if [[ "$_p5a" == "2" && "$_p5b" == "2" ]]; then
+  pass "p5: --print-selection exits 2 with --full and with a non-all TEST_GROUP"
+else
+  fail "p5: --full rc=$_p5a, webplat rc=$_p5b, expected 2/2"
+fi
+
+# p6: --print-affected-set stays class-only — no selection records leak into it.
+cases=$((cases + 1))
+_p6=$(cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  SOLEUR_ENUM_DEADLINE_S=900 bash "$RUNNER" --affected --print-affected-set 2>/dev/null) || true
+if grep -qF $'AFFECTED_CLASS\t' <<<"$_p6" \
+  && ! grep -qF 'AFFECTED_SELECTED' <<<"$_p6" && ! grep -qF 'AFFECTED_SUMMARY' <<<"$_p6"; then
+  pass "p6: --print-affected-set emits classes only (no AFFECTED_SELECTED / AFFECTED_SUMMARY)"
+else
+  fail "p6: class lines=$(grep -c AFFECTED_CLASS <<<"$_p6") selected=$(grep -c AFFECTED_SELECTED <<<"$_p6") summary=$(grep -c AFFECTED_SUMMARY <<<"$_p6")"
+fi
+
+# m4: the pre-pass selects everything (the decline bit is neutered) — p1's
+#     `plugins/soleur 0` row must now read 1, proving the printed bit is the
+#     pre-pass's own and not a recomputation.
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='              _aff_sel[$_aff_ordinal]=0' \
+SANDBOX_MUT_NEW='              _aff_sel[$_aff_ordinal]=1' \
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
+  -- --print-selection
+if [[ "$ARM_RC" != "98" ]] && grep -qF $'AFFECTED_SELECTED\tplugins/soleur\t1' <<<"$ARM_OUT"; then
+  pass "m4: a select-everything pre-pass mutant flips the printed bit (p1 detects it)"
+else
+  fail "m4: rc=$ARM_RC — $(grep -c AFFECTED_SELECTED <<<"$ARM_OUT") rows"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=61
+MIN_CASES=70
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2

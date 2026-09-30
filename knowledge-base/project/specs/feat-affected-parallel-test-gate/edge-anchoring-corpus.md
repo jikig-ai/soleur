@@ -55,3 +55,17 @@ git log --first-parent --name-only --format='@@%H' -30 origin/main > corpus.txt
 
 The committed regression rows for this behavior are `t1`-`t6` and mutants `m1`-`m3` in
 `scripts/test-all-affected.test.sh`.
+
+## Follow-up found while proving the `test/` rows (same PR)
+
+Anchoring alone still left `^test/` as an edge of the five `bun test <file>` suites, so any diff
+under root `test/` selected all five. The word is the runner's SUBCOMMAND, not an operand, so
+`_affected_derive` now skips `test` after `bun|npm|pnpm|yarn|go|cargo` (rows t7 / m5).
+
+Removing it exposed that three of the five (`test/x-community`, `test/linkedin-community`,
+`test/content-publisher`) had no real edge at all: the bogus edge had been making them look
+classified while selecting them only when a diff path happened to contain "test", and NOT when their
+SUT changed. They now declare their SUT (`plugins/soleur/skills/community/scripts/`,
+`scripts/content-publisher.sh`, their helpers) in `scripts/lib/test-affected-paths.sh`;
+`test/pre-merge-rebase` already declared its hook, and `plugins/soleur` keeps its own
+`^plugins/soleur/` edge. `bash scripts/lint-orphan-test-suites.sh` reports 580 covered, 0 orphaned.

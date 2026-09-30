@@ -217,6 +217,9 @@ _EMIT_COMMANDS=0
 #              or measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
 # --print-affected-set   Enumerate-shaped plumbing: walks every registration and
 #              emits AFFECTED_CLASS\t<label>\t<class> receipts, runs nothing.
+# --print-selection      The diff-aware counterpart (#9307): runs the pre-pass a real
+#              --affected run applies and prints AFFECTED_SELECTED\t<label>\t0|1
+#              per runnable suite plus one AFFECTED_SUMMARY, running nothing.
 #
 # Parsed as a WHILE-LOOP over leading flags, replacing the $1-only if/elif that
 # predated the mode flags — `--enumerate-commands --affected scripts` composes.
@@ -225,6 +228,10 @@ _EMIT_COMMANDS=0
 _AFFECTED_REQ=0        # --affected (or --print-affected-set) named explicitly
 _FULL_REQ=0            # --full named explicitly
 _PRINT_AFFECTED=0
+# --print-selection (#9307): run the affected pre-pass and print what THIS diff
+# selects (AFFECTED_SELECTED per runnable suite + one AFFECTED_SUMMARY), running
+# no suite. --print-affected-set prints CLASSES and ignores the diff.
+_PRINT_SELECTION=0
 # --affected-scope=branch|staged (#9173): which diff the affected axis selects
 # on. `staged` swaps the selection window to the index (`git diff --cached`) —
 # the pre-commit hook's unit of work is the commit, not the branch. Valid only
@@ -285,6 +292,10 @@ while [[ "${1:-}" == --* ]]; do
     --full)
       _FULL_REQ=1
       ;;
+    --print-selection)
+      _PRINT_SELECTION=1
+      _AFFECTED_REQ=1
+      ;;
     --print-affected-set)
       # Plumbing, not an early exit: it RAISES enumerate so the walk below emits
       # receipts without running a suite, and terminates at the enumerate exit.
@@ -303,6 +314,9 @@ Modes (local default is --affected; CI always runs the full battery):
   --full                the whole battery. Refused under SOLEUR_SUBAGENT=1 or
                         measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
   --print-affected-set  emit AFFECTED_CLASS receipts per registration; runs nothing.
+  --print-selection     print what THIS diff selects (AFFECTED_SELECTED per suite +
+                        AFFECTED_SUMMARY); runs nothing. --print-affected-set prints
+                        classes and ignores the diff.
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
   --enumerate           emit the leg's assigned registration labels; runs nothing.
@@ -979,6 +993,13 @@ if [[ "$TEST_GROUP" == "affected" ]] \
   exit 2
 fi
 
+# --print-selection reports the affected pre-pass, which exists only for
+# TEST_GROUP=all and never alongside the class-only enumerate plumbing.
+if (( _PRINT_SELECTION == 1 )) && { (( _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" != "all" ]]; }; then
+  echo "ERROR: --print-selection needs TEST_GROUP=all and cannot combine with --print-affected-set." >&2
+  exit 2
+fi
+
 # --affected-scope names WHICH diff an affected axis selects on (#9173). It is
 # meaningful only where an affected axis consumes _diff_names — `--affected`
 # (explicit or the local default) and `TEST_GROUP=affected` — so the three
@@ -1347,6 +1368,7 @@ _aff_ready=0
 _aff_fallback=""
 _aff_sel=()
 _aff_label=()
+_aff_cls=()
 
 # --- Shard selection at the registration chokepoint (#7902, #8006) ---------------------------
 #
@@ -2338,6 +2360,13 @@ _affected_derive() {
         done
         ;;
     esac
+    # A runner SUBCOMMAND is not an operand (#9307): the word `test` in
+    # `bun test <file>` would resolve to the repo-root test/ directory and mint an
+    # edge that selects every `bun test` suite for any diff under it.
+    case "$_prev $_tok" in
+      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")
+        _prev="$_tok"; continue ;;
+    esac
     _prev="$_tok"
     case "$_tok" in
       /*)
@@ -2848,6 +2877,7 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
             [[ "$_aff_line" == SUITE_COMMAND$'\t'* ]] || continue
             _aff_cmd_records=$(( _aff_cmd_records + 1 ))
             _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            _aff_cls[$_aff_ordinal]="$_AC_CLASS"
             if [[ "$_AC_CLASS" == edge:* && ${#_AC_EDGES[@]} -gt 0 ]] \
               && ! _diff_touches ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; then
               _aff_sel[$_aff_ordinal]=0
@@ -2904,6 +2934,38 @@ fi
 if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
   && { (( _AFFECTED == 1 || _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" == "affected" ]]; }; then
   printf 'AFFECTED_SCOPE\tscope=staged\n'
+fi
+
+# Selection report (#9307). The pre-pass above is the ONLY place a selection bit
+# is decided, so this reads those bits rather than recomputing them: what is
+# printed is what the dispatch walk applies. Every real affected run states its
+# selection on stdout; --print-selection additionally prints one row per
+# runnable suite and stops here, running nothing. A degraded run has no
+# per-suite bits (the whole battery runs), so it says so instead of inventing a
+# selection.
+if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
+  if (( _aff_ready == 1 )); then
+    _aff_n_always=0
+    _aff_n_edge=0
+    for (( _aff_i=1; _aff_i<=_aff_ordinal; _aff_i++ )); do
+      # A DECLINED (relevance) record carries no selection bit: no row for it.
+      [[ -n "${_aff_sel[$_aff_i]:-}" ]] || continue
+      if (( _PRINT_SELECTION == 1 )); then
+        printf 'AFFECTED_SELECTED\t%s\t%s\n' "${_aff_label[$_aff_i]}" "${_aff_sel[$_aff_i]}"
+      fi
+      if [[ "${_aff_sel[$_aff_i]}" == "1" ]]; then
+        case "${_aff_cls[$_aff_i]:-}" in
+          always_on) _aff_n_always=$(( _aff_n_always + 1 )) ;;
+          edge:*)    _aff_n_edge=$(( _aff_n_edge + 1 )) ;;
+        esac
+      fi
+    done
+    printf 'AFFECTED_SUMMARY selected=%d of=%d always_on=%d edge=%d fallback=none\n' \
+      "$_aff_selected" "$_aff_cmd_records" "$_aff_n_always" "$_aff_n_edge"
+  elif [[ -n "$_aff_fallback" ]]; then
+    printf 'AFFECTED_SUMMARY selected=all of=all always_on=all edge=all fallback=%s\n' "$_aff_fallback"
+  fi
+  if (( _PRINT_SELECTION == 1 )); then exit 0; fi
 fi
 
 # WHY THE want_infra CONJUNCT IS LOAD-BEARING. These notices used to key on `_infra_in_diff`
