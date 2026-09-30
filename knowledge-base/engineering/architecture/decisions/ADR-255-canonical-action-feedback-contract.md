@@ -99,3 +99,11 @@ covers SWR revalidation only, not route transitions.
   never lock open.
 - `/api/checkout` idempotency is server-deferred to #8918; the client latch
   is the mitigation in the interim.
+
+## Addendum (2026-09-30): Button base box lives in `@layer components`
+
+**Context.** The primitive emitted its box (`inline-flex items-center justify-center gap-2 rounded-lg px-6 py-3 text-sm font-medium`) as ordinary Tailwind utilities ahead of the caller's `className`. Same-cascade-layer utilities resolve by emit order, not by class order, so a caller's `px-3`/`flex`/`rounded-md` could lose to the base, and icon-only buttons that passed only a size (`h-[36px] w-[36px]`, e.g. the chat composer attach/send buttons) were padded by 48px inside a 36px border-box, collapsing the icon to zero width. This contradicts this ADR's documented contract that `className` merges with variant classes; it restores that contract rather than changing the decision.
+
+**Decision.** Move the base box to `.soleur-btn` and the text-button padding to `.soleur-btn-pad`, both in `app/globals.css` under `@layer components` (layer order `theme, base, components, utilities`), so any caller utility wins deterministically. The primitive emits `soleur-btn` always and `soleur-btn-pad` only when it has a text child (`!iconOnly`); icon-only buttons carry no padding and pass their own size. A layer move alone would not have fixed the composer (its buttons pass no padding class), hence the split. Guards: `test/components/button-classes.test.tsx` (denylist of base-box utilities the primitive must never emit, icon-only vs text classes) and `test/components/button-layer.test.ts` (compiles `globals.css` with `@tailwindcss/node` and asserts layer membership on the postcss AST, with a control fixture proving it can go red); the layout gate is the Playwright bounding-box e2e.
+
+**Alternatives rejected.** `tailwind-merge`/`twMerge`: adds a dependency, misclassifies the custom `text-soleur-*` tokens against `text-sm`, cannot merge arbitrary values, and puts JS on every render for a problem CSS layers solve. Per-site `!p-0` overrides: drift on the next Button use. A `size="icon"` variant: the primitive already derives `iconOnly` from `hasTextChild`. Not covered: variant-vs-caller conflicts (`bg-*`, gold's inline `style` background) still race, because variant classes remain ordinary utilities.
