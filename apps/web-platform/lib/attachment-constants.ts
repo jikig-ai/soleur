@@ -139,6 +139,17 @@ export function resolveAttachmentContentType(opts: {
   return null;
 }
 
+/**
+ * Strict lowercase 8-4-4-4-12 hex shape for a conversation id that is about to
+ * be interpolated into a storage path (`${userId}/${conversationId}/...`).
+ * Structural, not v4-only (fixtures use non-v4 hex ids). Lowercase-only: the
+ * DB `eq` on a uuid column normalises case while the storage path and the
+ * attachment pipeline's `${userId}/${conversationId}/` prefix check are
+ * case-sensitive. Loosening this is a path-traversal change, not a style one.
+ */
+export const CONVERSATION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024; // 20 MB
 
 export const MAX_ATTACHMENTS_PER_MESSAGE = 5;

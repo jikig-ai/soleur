@@ -8,6 +8,7 @@ import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
 import {
   ATTACHMENT_EXTENSION_BY_TYPE,
+  CONVERSATION_ID_RE,
   MAX_AGENT_READABLE_PDF_SIZE,
   MAX_ATTACHMENT_SIZE,
   isPdfAttachment,
@@ -71,23 +72,45 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "file_too_large" }, { status: 400 });
   }
 
+  // Shape check BEFORE any DB call. `conversationId` is interpolated into the
+  // storage path below, and `conversations.id` is a uuid column, so a non-uuid
+  // (`"new"`, `../x`) would be a Postgres 22P02 error rather than an empty
+  // result. No match -> 404 with no lookup and no storage call.
+  //
+  // Contract: a 404 here no longer proves the conversation exists. A fresh
+  // conversation has no row until its first `chat` message (deferred creation),
+  // so this shape check plus the attachment pipeline's
+  // `${userId}/${conversationId}/` prefix check (unchanged) are the gate.
+  if (!CONVERSATION_ID_RE.test(conversationId)) {
+    return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
+  }
+
   // Verify conversation read-eligibility (own OR workspace co-member).
   // Mirrors mig 068 storage.objects SELECT policy: own-folder branch OR
   // is_attachment_path_workspace_member via conversations.workspace_id.
   // Inline lookup (no shared TS helper file — DHH P0-2 + code-simplicity
   // P0-1 + architecture P1-1 convergence per plan §Phase 3).
   const service = createServiceClient();
-  const { data: conversation } = await service
+  const { data: conversation, error: lookupErr } = await service
     .from("conversations")
     .select("id, user_id, workspace_id")
     .eq("id", conversationId)
-    .single();
+    .maybeSingle();
 
-  if (!conversation) {
-    return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
+  // A real DB error must NOT fall through to the tolerant (no-row) branch.
+  if (lookupErr) {
+    reportSilentFallback(lookupErr, {
+      feature: "attachments",
+      op: "presign-lookup",
+      extra: { userId, conversationId },
+    });
+    return NextResponse.json({ error: "upload_failed" }, { status: 500 });
   }
 
-  if (conversation.user_id !== userId) {
+  // No row is the expected state for a fresh conversation: the path stays
+  // caller-prefixed (`${userId}/...`), so it can only write into the caller's
+  // own folder. An existing row still goes through the membership check.
+  if (conversation && conversation.user_id !== userId) {
     const { data: isMember, error: memberErr } = await service.rpc("is_workspace_member", {
       p_workspace_id: conversation.workspace_id,
       p_user_id: userId,

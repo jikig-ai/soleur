@@ -37,6 +37,8 @@ import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { ERR_ATTACHMENT_NOT_FOUND, ERR_UNSUPPORTED_FILE_TYPE } from "./error-messages";
+import { resolveAttachmentContentType } from "@/lib/attachment-constants";
 import { createChildLogger } from "./logger";
 import {
   connectionThrottle,
@@ -2336,12 +2338,34 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       // Materialize pending conversation on first real message
       if (!session.conversationId && session.pending) {
         const stripped = userContent.replace(/@\w+\s*/g, "").trim();
-        if (!stripped) {
+        // `attachments: []` is truthy: test the length, never `!msg.attachments`.
+        if (!stripped && (msg.attachments?.length ?? 0) === 0) {
           sendToClient(userId, {
             type: "error",
             message: "Please include a message along with the @-mention.",
           });
           return;
+        }
+        // Attachments-only first message (#9297): validate every ref BEFORE
+        // createConversation so a forged path cannot create an empty
+        // conversation before the attachment pipeline rejects it.
+        if (!stripped) {
+          const refPrefix = `${userId}/${session.pending.id}/`;
+          let refError: string | undefined;
+          for (const a of msg.attachments ?? []) {
+            if (!a.storagePath.startsWith(refPrefix) || a.storagePath.includes("..")) {
+              refError = ERR_ATTACHMENT_NOT_FOUND;
+              break;
+            }
+            if (!resolveAttachmentContentType({ contentType: a.contentType, filename: a.filename })) {
+              refError = ERR_UNSUPPORTED_FILE_TYPE;
+              break;
+            }
+          }
+          if (refError) {
+            sendToClient(userId, { type: "error", message: sanitizeErrorForClient(new Error(refError)) });
+            return;
+          }
         }
 
         try {
@@ -2379,6 +2403,17 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
           );
+          // Two-tab context_path fallback: the row id differs from the pending
+          // id the client uploaded under, so the pipeline prefix check will
+          // fail closed. Make that now-reachable failure countable.
+          if (resolvedId !== pendingId && (msg.attachments?.length ?? 0) > 0) {
+            reportSilentFallback(null, {
+              feature: "attachments",
+              op: "attachments-pending-id-diverged",
+              message: "first-message attachments uploaded under a pending id that diverged from the resolved conversation id",
+              extra: { userId, pendingId, resolvedId, attachmentCount: msg.attachments?.length },
+            });
+          }
           session.conversationId = resolvedId;
           session.pending = undefined;
           // Seed the routing cache so chat-case on subsequent turns
