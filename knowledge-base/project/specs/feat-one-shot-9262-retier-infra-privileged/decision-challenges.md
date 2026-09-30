@@ -70,3 +70,13 @@ default in every row; nothing here was applied against it.
   code on a main-only environment; every other Tier-B job's loader already writes all Tier-B keys to
   `$GITHUB_ENV`, so a guard here would hold these two jobs to a stricter standard than the repo
   applies anywhere else. The structural fix is the narrower Doppler source (a Deferral in the plan).
+
+## DC-6 — Arm pin-bump auto-merge only for the auto-mint's own dispatches (not adopted)
+
+- **Class:** taste (security review P1, deferred with the build-job supply-chain issue).
+- **Today (kept):** any `main` dispatch of the build (by any repo writer) reaches the Tier-B bump job
+  (`infra-privileged` has no reviewers) and may arm auto-merge when the provenance checks pass. This PR
+  only withholds auto-merge for `mirror_only` runs.
+- **Alternative:** arm auto-merge only when `github.triggering_actor` is the auto-mint App, so a
+  human re-publish always needs a manual merge. Tighter, but changes the operator's re-publish flow;
+  belongs with the tracked build-job supply-chain fix.

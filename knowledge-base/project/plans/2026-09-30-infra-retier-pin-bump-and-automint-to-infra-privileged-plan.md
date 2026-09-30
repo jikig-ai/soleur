@@ -16,6 +16,44 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30
+**Sections enhanced:** Overview (merge side effects), Proposed Solution §1/§2/§4, Implementation
+Phases 0/6/8, Operator Sequence O4c, Observability, Guard Contract, User-Brand Impact, Deferrals,
+Acceptance Criteria, Test Scenarios, Risks.
+**Agents used:** security-sentinel, architecture-strategist, spec-flow-analyzer,
+test-design-reviewer, observability-coverage-reviewer, a verify-the-negative sweep (all 8 negative
+claims confirmed), plus the earlier plan-review panel (DHH, Kieran, code-simplicity), CTO, CLO and
+the scoped advisor consult. All deepen-plan halt gates (4.6 user-brand, 4.7 observability, 4.8 PAT,
+4.11 guard contract) pass; 4.5/4.55/4.9/4.10 do not trigger.
+
+### Key Improvements
+
+1. The composite reads Doppler with explicit `--project soleur-infra-privileged --config prd` in
+   argv, so a Tier-A (config-bound) token is refused by Doppler itself, and the test stub can
+   assert the project it was asked for (the env-var form was unobservable by the harness).
+2. Merge-time preconditions: no queued/in-progress run of either workflow (in-flight runs would load
+   the deleted composite path) and no open `soleur/inngest-pin-*` branch or PR (AC5 moved from
+   "ready" time to merge time).
+3. O4c probe made precise (preconditions, the writes it performs, read-only verification by API)
+   and the O10 verify cell re-targeted at a post-eviction re-probe.
+4. A `mirror_only` build never arms auto-merge on the pin PR (the build re-signs whatever the tag
+   resolves to; security review P0), with the pre-existing build-job supply-chain issues filed as a
+   tracked security deferral rather than widened into this PR.
+5. Test rows made falsifiable: key-set check that tolerates `name`/`timeout-minutes`, a
+   one-composite-step-per-job count row, a job-wide Tier-A token regex, a PR-author stub flag, and a
+   bump-side mutation harness.
+
+### New Considerations Discovered
+
+- Sibling PR #9263 stores `GITHUB_APP_RUNTIME_DOPPLER_TOKEN` in `soleur-infra-privileged/prd`; once
+  it merges, the whole-project token these two jobs hold can read the path to the soleur-ai runtime
+  key. Stated in User-Brand Impact; the narrower-source deferral now triggers on #9263's merge.
+- `web-platform-release` (fired by this merge) cuts a `web-v` release and swaps containers on web-1 —
+  a routine deploy, but a host write, so the merge-side-effects line says so.
+- The `gh pr list` author filter has never matched an App author (`app/<slug>`); fixed here.
+
 ## Overview
 
 Two GitHub Actions jobs still mint a GitHub App installation token from the Tier-A Doppler config
@@ -42,16 +80,18 @@ No production write happens in this PR's pipeline. The one step that lives outsi
 (widening the `soleur-infra` App's permissions, which no API can do) is added to the canonical #8209
 Operator Sequence as step **O4c**, ahead of O10.
 
-**Does merging this PR alone mutate production? Yes, through four push-triggered workflows, none of
-which writes a credential or a host:** (1) `web-platform-release.yml` (path `apps/web-platform/**`,
-reached by the CLA allowlist test and the App manifest) runs a routine release with no application-code change;
+**Does merging this PR alone mutate production? Yes, through four push-triggered workflows; none
+writes a credential:** (1) `web-platform-release.yml` (path `apps/web-platform/**`, reached by the CLA
+allowlist test and the App manifest) cuts a routine `web-v` release whose `workflow_run` deploy swaps
+the containers on web-1, with no application-code change;
 (2) `apply-web-platform-infra.yml` (path `apps/web-platform/infra/**`, reached by the App manifest)
 runs its push apply — the manifest is read by no Terraform file (`git grep app-manifest -- '*.tf'`
 finds only comments), so the plan is expected to be empty, exactly as PR #9202's manifest-only merge
 applied green on 2026-09-29; (3) `mint-inngest-bootstrap-tag.yml` (its `paths:` list both edited
 workflows) runs once, decides `noop` (no carrier, pin or Dockerfile-heredoc change), and so performs
 no credential step — its only effect is the first live admission of the job to `infra-privileged`
-from `main`; (4) `infra-validation.yml` push checks. This sentence becomes the PR body's first line.
+from `main`; (4) `infra-validation.yml` push checks. Unfiltered workflows (`ci.yml`, secret scan)
+also run and only read. This paragraph becomes the PR body's first line.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -209,9 +249,14 @@ the gate. The diff adds no systemd start/restart line under `apps/web-platform/i
 
 `git mv .github/actions/mint-soleur-ai-app-token .github/actions/mint-infra-app-token`, then:
 
-- Reads **literal** `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY` from Doppler project
-  `soleur-infra-privileged`, config `prd` (fixed in the action, not inputs — the composite has one
-  identity and one source).
+- Reads **literal** `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY` with the project and
+  config in **argv** — `doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project
+  soleur-infra-privileged --config prd` — never through `DOPPLER_PROJECT`/`DOPPLER_CONFIG` env
+  (deepen: a Doppler service token is bound to one config, so a Tier-A `prd_terraform` token asked
+  for this project is refused by Doppler itself, even if someone later copied the names into a
+  Tier-A config; and argv is what the test stub can observe — the harness sets those env vars
+  itself, so an env-var form would let a composite reverted to `soleur` pass). The composite has one
+  identity and one source; neither is an input.
 - Inputs: `doppler-token` (required), `installation-id` (required), `permissions` (required,
   non-empty JSON object), `repositories` (required, non-empty). Composite `required: true` is not
   enforced by the runner, so each is checked in shell before any Doppler read; an empty
@@ -222,8 +267,9 @@ the gate. The diff adds no systemd start/restart line under `apps/web-platform/i
   the request).
 - Drops: the `EVICTED_SEE_ADR_241` refusal (the composite never reads `prd_terraform`); census G4e's
   population loses this site.
-- New: on a failed exchange, print GitHub's `.message` (never the token or JWT); no runbook pointer
-  (it would go stale once O4c is done — plan review). On success, emit
+- New: on a failed exchange, print GitHub's `.message` (never the token or JWT), first stripping CR,
+  LF, U+2028/U+2029, DEL and `::` so vendor text cannot forge a second workflow command (security
+  review); no runbook pointer (it would go stale once O4c is done — plan review). On success, emit
   `::notice title=app-token::app=soleur-infra installation=<id> permissions=<granted>` — the per-run
   evidence O4c verifies.
 
@@ -252,6 +298,16 @@ the gate. The diff adds no systemd start/restart line under `apps/web-platform/i
   ```
 
   Today's mint is **unscoped** (full soleur-ai grant); scoping is mandatory on the infra App.
+- The bump step gains `--mirror-only "${{ inputs.mirror_only }}"` (normalized to `true`/`false` in the
+  script) and the script **never arms auto-merge** when it is `true`: it opens or updates the PR held,
+  with a body line saying a `mirror_only` backfill cannot attest provenance (deepen, security P0: the
+  build's cosign step re-resolves `crane digest $IMAGE:$TAG` and signs whatever the tag points at, and
+  `mirror_only` skips the ancestry refusal, so a digest pushed to the tag by branch-run YAML could
+  otherwise be signed and auto-merged under `main`'s identity). The remaining build-job supply-chain
+  gaps are pre-existing and filed as a security deferral (Deferrals).
+- Comments that become false are edited (the header's "Triggered on `vinngest-vX.Y.Z` tag pushes",
+  the resolver comment "a tag push runs the copy in the TAGGED commit"); code outside the `on:` block
+  and the bump job is not touched.
 
 ### 3. `mint-inngest-bootstrap-tag.yml`
 
@@ -277,14 +333,20 @@ the gate. The diff adds no systemd start/restart line under `apps/web-platform/i
   every pin PR lists as `app/soleur-ai`). So the "reuse the open PR" path has never matched in
   production — a re-run for the same target falls to `gh pr create`, which fails on the existing
   branch PR, and the filtered re-list finds nothing, ending `die pr`. The test stub's `pr_json` emits
-  `soleur-ai[bot]`, which hid it. Add `BOT_PR_LOGIN='app/soleur-infra'` for those filters (accept
-  both `app/soleur-infra` and `soleur-infra[bot]`), and make the stub emit the `app/…` form.
+  `soleur-ai[bot]`, which hid it. Add `BOT_PR_LOGIN='app/soleur-infra'` for those filters (only that
+  form — `gh` never reports `<slug>[bot]` there; measured live: `{"is_bot":true,"login":"app/soleur-ai"}`),
+  and make the stub emit the `app/…` form.
 - If a `soleur-ai[bot]` pin branch exists at switch time (AC5 says it will not), the script's
   `branch-has-manual-commits` path prints a `::warning::` and exits 0: the job is green and nothing
-  posts to Slack. What surfaces it is the AC6 drift guard staying red on `main`, which the
+  posts to Slack. What surfaces it is the pin drift guard staying red on `main`, which the
   main-health monitor escalates to a `ci/main-broken` issue (the warning text says so).
-- User-facing strings that say "reset the tip to a soleur-ai[bot] commit" become identity-neutral
-  (derived from `BOT_NAME`); the header comment names the renamed composite.
+- User-facing strings that say "reset the tip to a soleur-ai[bot] commit" become an action a human
+  can take: "close the PR and delete the branch, then dispatch the build once from `main` with
+  `mirror_only=true`" (spec-flow); the header comment names the renamed composite.
+- The two `die` messages that still promise "that tag push runs its own publish and bump" (the
+  `--signed-commit` argument check and the "pin above every merged tag" refusal) become "then
+  dispatch the build once from `main`" — true after `push: tags` is removed (spec-flow).
+- New `--mirror-only <true|false|''>` argument (see §2): when `true`, auto-merge is never armed.
 
 ### 5. Identity plumbing
 
@@ -313,46 +375,68 @@ the gate. The diff adds no systemd start/restart line under `apps/web-platform/i
 
 **Phase 0 — RED first (tests before code).**
 
+Shared helpers (deepen, test-design review), used by both suites: `norm_env(job)` returns the
+environment name for either the scalar or the `{name: …}` mapping form (as the census's `env_arms`
+does); `keyset_ok(step, want)` is `set(step) - {"name", "timeout-minutes"} == {k for k, v in want.items() if v is not None}`
+(the live steps carry `name` and `timeout-minutes`, and `exact()`'s `want` uses `None` for "absent",
+so a naive `set(step) == set(want)` is RED on the correct tree); `one_minter(job)` asserts exactly one
+step whose `uses` ends in `mint-infra-app-token` (`find()` returns the first match, so an exact row
+alone cannot see a second minter); `no_tier_a(job)` asserts `not re.search(r"secrets\.DOPPLER_TOKEN(?![A-Za-z0-9_])", yaml.safe_dump(job))`.
+
 1. `test-bump-inngest-bootstrap-pin.sh` Guard 2, in the parsed jobs-dict block
    (`bump = jobs.get("bump-cloud-init-pin")`), using the mint suite's exact-dict pattern (plan review:
-   one structural row per step instead of several text greps): `environment == "infra-privileged"`;
+   one structural row per step instead of several text greps): `norm_env(bump) == "infra-privileged"`;
    the verify step is exactly `{env: {DOPPLER_TOKEN_CHECK: "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}"}}`
    plus its unchanged `run`; the mint step is exactly `{id: mint, uses: ./.github/actions/mint-infra-app-token,
    with: {doppler-token: "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", installation-id: "166065653",
-   permissions: '{"contents":"write","pull_requests":"write"}', repositories: soleur}}`. Retire the text
-   rows these replace (`g2.bump:doppler-token-verify`, `g2.bump:mint-action`, `g2.bump:installation-id`).
-   Each exact-dict row also asserts the step's **key set** (`set(step) == set(want)`), because the
-   mint suite's `exact()` compares only the keys it lists and an extra `continue-on-error:` or `env:`
-   would otherwise pass (plan review). Add `g2.bump-job:parsed` (the jobs-dict lookup found the job),
-   since `g2.bump-job:exists` guards only the text slice. Add a trigger row over the parsed `on:`
-   mapping: keys are exactly `["workflow_dispatch"]`. Update the composite rows: `ACTION=` → the
-   renamed path; `g2.action:doppler-config` `prd_terraform` → `soleur-infra-privileged`;
-   `g2.action:app-id` → `GITHUB_INFRA_APP_ID`; `g2.action:app-key` → `GITHUB_INFRA_APP_PRIVATE_KEY`.
+   permissions: '{"contents":"write","pull_requests":"write"}', repositories: soleur}}`; both also pass
+   `keyset_ok`; plus `one_minter(bump)` and `no_tier_a(bump)`. The bump step's `run` passes
+   `--mirror-only`. Retire the text rows these replace (`g2.bump:doppler-token-verify`,
+   `g2.bump:mint-action`, `g2.bump:installation-id`). Add `g2.bump-job:parsed` (the jobs-dict lookup
+   found the job), since `g2.bump-job:exists` guards only the text slice. Add an `S`-prefixed trigger
+   row (the g2b loop drops other key shapes) asserting `set(norm(on)) == {"workflow_dispatch"}` where
+   `on = doc.get("on", doc.get(True))` and `norm` handles the string, list and mapping forms (copy the
+   mint suite's handling); never `"push" not in on`, which passes when the lookup misses. Update the
+   composite rows: `ACTION=` → the renamed path; `g2.action:doppler-config` `prd_terraform` →
+   `--project soleur-infra-privileged`; `g2.action:app-id` → `GITHUB_INFRA_APP_ID`;
+   `g2.action:app-key` → `GITHUB_INFRA_APP_PRIVATE_KEY`.
+   **Bump-side mutation harness** (none exists today): copy the workflow to a temp file, apply each
+   Guard 1 mutation scoped to the `bump-cloud-init-pin` block, require a clean run on the unmodified
+   copy first, then require the named row RED — the same shape as the mint suite's `g3_mut`.
 2. Same suite, identity: the commit-identity rows and the `BOT_EMAIL` fixture constants expect
-   `soleur-infra[bot]` / `335404629+soleur-infra[bot]@users.noreply.github.com`; the bot-tip,
-   PR-author and supersede fixtures push/author as the new bot; the human-tip rows stay
-   RED-on-human; update the literal sweep at the `for lit in 'soleur-ai[bot]' …` row to the new
-   constants. The `pr_json` stub emits the `app/<slug>` author form; new row `g1.reuse-app-author`
-   (an open same-repo PR whose author lists as `app/soleur-infra` is reused, not recreated). Raise
-   `MIN_ASSERTIONS` to the new green count.
+   `soleur-infra[bot]` / `335404629+soleur-infra[bot]@users.noreply.github.com`; the bot-tip and
+   supersede fixtures push/author as the new bot; the human-tip rows stay RED-on-human; update the
+   literal sweep at the `for lit in 'soleur-ai[bot]' …` row to the new constants. The `pr_json` stub
+   emits the `app/<slug>` author form (switching it alone turns `g1.existing` and `g1.collide` RED on
+   the unfixed script — that is the regression proof) and gains an `|author=<login>` flag, so the
+   author check is tested separately from `isCrossRepository`: new rows assert a same-repo PR authored
+   by `app/soleur-ai` and one by a human are **not** reused. New row `g1.mirror-only-held`: with
+   `--mirror-only true`, a would-arm run leaves auto-merge unarmed and says why in the PR body. The
+   reworded recovery messages are asserted by their new text. Raise `MIN_ASSERTIONS` to the new green
+   count.
 3. `test-mint-inngest-bootstrap-tag.sh`: `COMPOSITE=` → the renamed path; the verify-step finder
    (matched by step name) follows the renamed step `Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present`;
-   `exact()` gains the same key-set assertion as the bump rows; any row pinning the script's
-   "soleur-ai App token" wording follows the script comment/message edit; Guard 3
+   `exact()` gains the `keyset_ok` half; `one_minter(mint)` and `no_tier_a(mint)` rows; any row pinning
+   the script's "soleur-ai App token" wording follows the script edit; Guard 3
    `exact("doppler-check", …)` expects `DOPPLER_TOKEN_INFRA_PRIVILEGED`; the App-step finder keys on
    `endswith("mint-infra-app-token")` and `exact("app", …)` expects the new `with:` mapping; new job
-   row `environment == "infra-privileged"` and `if` unchanged. `comp:*` behavioural rows: empty
-   `doppler-token`, `installation-id`, `permissions` or `repositories` each fatal with no Doppler
-   call; Doppler is asked for exactly `GITHUB_INFRA_APP_ID` / `GITHUB_INFRA_APP_PRIVATE_KEY` with
-   project `soleur-infra-privileged`, config `prd` (assert on the mocked `doppler` argv/env); a grant
-   wider or narrower than the request is refused; a failed exchange prints GitHub's `.message`; a
-   success prints the `app-token` notice. Existing rows that encode the old optional-scope contract
-   flip deliberately: `comp.default:*` (empty permissions and repositories → unscoped mint, rc 0) and
-   `comp.repos-only:*` (empty permissions) now assert refusal with no curl call; `comp.default:unchecked`
-   is retired with them. Remove any row that asserted the sentinel refusal inside the composite.
-   Raise `MIN_ASSERTIONS`.
+   row `norm_env(mint) == "infra-privileged"` and `if` unchanged. `comp:*` harness changes first:
+   `run_comp` takes the token, installation id, permissions and repositories as parameters (they are
+   hardcoded today, so the empty-input rows cannot be written without this), runs the block under
+   `env -u DOPPLER_PROJECT -u DOPPLER_CONFIG`, and the `doppler` stub appends its argv to a
+   `DOPPLER_LOG` and exits 1 unless the argv carries exactly `--project soleur-infra-privileged
+   --config prd`. Then the rows: each empty required input is fatal with zero `DOPPLER_LOG` lines and
+   zero curl calls; Doppler is asked for exactly `GITHUB_INFRA_APP_ID` and
+   `GITHUB_INFRA_APP_PRIVATE_KEY` with that project/config; a grant wider or narrower than the request
+   is refused; a failed exchange prints GitHub's `.message` with CR/LF and `::` stripped (fixture
+   message containing `\n::notice::`); a success prints the `app-token` notice. Existing rows that
+   encode the old optional-scope contract flip deliberately: `comp.default:*` (empty permissions and
+   repositories → unscoped mint, rc 0) and `comp.repos-only:*` (empty permissions) now assert refusal
+   with no curl call; `comp.default:unchecked` is retired with them. Remove any row that asserted the
+   sentinel refusal inside the composite. Add a `g3_mut` row that changes the composite's project to
+   `soleur` and requires the argv row RED. Raise `MIN_ASSERTIONS`.
 4. Census: G4e floor 4 → 3 with its dated rationale; confirm the live `IPT_TIERB=` list now names
-   both jobs and G1b/G1c stay green. `CENSUS_ROWS` unchanged (23).
+   both jobs and G1b/G1c stay green. `CENSUS_ROWS` unchanged by this PR.
 5. `allowlist.test.ts`: expected set includes `soleur-infra[bot]`.
 
 Run each suite and confirm the new rows are RED for the right reason before Phase 1.
@@ -371,24 +455,33 @@ files (not on the composite — actionlint validates workflows only).
 
 **Phase 6 — recorded architecture and runbooks.**
 
-1. ADR-232 amendment (dated 2026-09-30, #9262): §1 title and §3/§4 — the pin bump authenticates as
-   the `soleur-infra` App from the Tier-B project on the `infra-privileged` environment through
-   `.github/actions/mint-infra-app-token`, and authors as `soleur-infra[bot]` (PR-author filters match
-   the `app/soleur-infra` form). §8 — the dispatch credential is the `soleur-infra`
-   App token scoped to `actions:write`. "After #8209" — `push: tags` is removed (A5 adopted in
-   #9262); a hand-pushed tag starts nothing; the manual fallback is
-   `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`, or hand-tag then
-   `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once. Alternatives
-   row A5 marked adopted.
-2. ADR-241 amendment: D5 — `soleur-infra` also carries `pull_requests:write` and `actions:write`
-   for the two App-token consumers of the inngest release path; its permissions are no longer purely
-   "derived from the resource types Terraform manages", and the sentence says so. Statuses table
-   unchanged (D5 stays `adopting`).
-3. C4 `model.c4` edge `github -> soleurMarketplace`: replace the pin-bump/dispatch identity prose
+1. ADR-232 amendment (dated 2026-09-30, #9262). Sections, each enumerated by the architecture
+   review against the ADR text: the **H1 title** ("authenticated as the `soleur-ai` App" → the
+   `soleur-infra` App); §3 heading and body, including its scope parenthetical ("the publish path of a
+   hand-pushed tag", "keeps the tag's `push: tags` run silent"); §4 commit identity (`soleur-infra[bot]
+   <335404629+…>`; PR-author filters match `app/soleur-infra`); §7's hand-pushed tag-ref caveat and
+   the build-refusal line "A tag push runs the tagged commit's YAML"; §8's Tag bullet rationale
+   ("`push: tags` trigger stays silent" → there is no tag trigger) and Dispatch bullet (the
+   `soleur-infra` App token scoped to `actions:write`); Residual R1's "Before/After #8209" text;
+   "After #8209" (`push: tags` removed — A5 adopted in #9262; a hand-pushed tag starts nothing; the
+   manual fallback is `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`, or hand-tag then
+   `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once); the Alternatives
+   rows "`GITHUB_TOKEN` writes", "create the tag with the App token and let `push: tags` build it",
+   "App-token tag AND a dispatch" and A5 (adopted); the Consequences bullet on the `soleur-ai` write
+   surface (installation 122213433, "dispatch by the App"); the Verification section's composite path;
+   and a note that a `mirror_only` build never arms auto-merge.
+2. ADR-241 amendment: D2 — the list of what `infra-privileged` serves gains the auto-mint and the pin
+   bump. D5 — `soleur-infra` also carries `pull_requests:write` and `actions:write` for those two
+   consumers; its permissions are no longer purely "derived from the resource types Terraform
+   manages", and the sentence says so. Statuses table: D5's flip condition gains "and O4c's evidence
+   (AC15)", so D5 cannot reach `accepted` without the new scopes ever being exercised.
+3. C4 `model.c4`: edge `github -> soleurMarketplace` — replace the pin-bump/dispatch identity prose
    (soleur-ai, `prd_terraform`, installation 122213433, `soleur-ai[bot]`, the composite's old path,
-   "gains name inputs", "dispatches the build from main as the soleur-ai App") with the shipped shape
-   (soleur-infra from `soleur-infra-privileged/prd` on `infra-privileged`, installation 166065653,
-   scoped tokens, `soleur-infra[bot]`, the renamed composite, `push: tags` removed). Regenerate
+   "gains name inputs", "dispatches the build from main as the soleur-ai App", and "both App-token
+   fallbacks refuse … `legacy_app_key_evicted`", which the composite no longer does) with the shipped
+   shape, and edit its `technology` string ("not the soleur-ai App token"). Edge `github -> doppler` —
+   it says Tier-B values load only through `infra-credentials` and that `infra-privileged` serves
+   apply and drift; add the composite's single-key read and the two new consumers. Regenerate
    `model.likec4.json` with `bash plugins/soleur/scripts/render-c4-model.sh` (likec4@1.50.0, the
    CI-pinned version) and run `plugins/soleur/test/c4-model-freshness.test.sh`,
    `plugins/soleur/test/c4-count-parity.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts`,
@@ -396,11 +489,16 @@ files (not on the composite — actionlint validates workflows only).
 4. `infra-credential-tiers-8209.md`: Group 4 rows for both jobs (environment `infra-privileged`,
    credential `DOPPLER_TOKEN_INFRA_PRIVILEGED` → `mint-infra-app-token`, scoped tokens, triggers:
    build now `workflow_dispatch` only); remove both from the "declare no `environment:`" list; add
-   Operator Sequence row **O4c** (below); add "O4c precedes O10" to Order constraints and O4c to
-   O10's precondition list, naming exactly what O4c proves (the bump job's scoped mint on Tier B
-   from `main`; `actions:write` by the installations read, end-to-end only at the first real
-   auto-mint); note that O13's App-key delete concerns only the `soleur-ai` key `prd_terraform` held
-   and is unaffected by this PR.
+   both workflows to the "`infra-privileged` … referenced by" list; add Operator Sequence row **O4c**
+   (below), annotated "added by #9262" because the section header says it is verbatim from the
+   2026-09-22 plan; add "O4c precedes O10" to Order constraints and "#9262 merged, O4c" to O10's
+   precondition list; replace O10's verify limb "the pin bump [is] green" (it tests nothing unless a
+   build happens to run) with "re-run O4c's `mirror_only` probe after the sentinel is set; its bump
+   job is green with the `app-token` notice"; add the chain "#9262 merge → O4c → O10 → #8609 R-step 1"
+   (#9263 gates R-step 1 on O10); note that O13's App-key delete concerns only the `soleur-ai` key
+   `prd_terraform` held and is unaffected by this PR, and that a new token in
+   `soleur-infra-privileged` (#9263's) must be reconciled with O13(c)'s exactly-`gha-infra-privileged`
+   check.
 5. `inngest-server.md` §Bootstrap-image release: the hand-tag block's "Today this fires … through
    `push: tags` … Once #8209 removes `push: tags`" becomes present tense: a hand-pushed tag starts
    nothing; confirm no build run exists, then dispatch once. The #8747 recovery block ("That push
@@ -410,6 +508,7 @@ files (not on the composite — actionlint validates workflows only).
    composite left the population in #9262; G4e floor 3).
 7. `.github/scripts/mint-inngest-bootstrap-tag.sh`: the credential-contract comment and the
    `missing-credential` message say "soleur-ai App token" → "soleur-infra App token" (wording only).
+   The two workflow step names that say "Mint soleur-ai App token" are renamed with them.
 
 **Phase 7 — targeted verification** (CI is the gate; run only the suites this diff touches):
 `bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh`,
@@ -427,7 +526,14 @@ the AC11 residual sweeps.
 
 **Phase 8 — ship.** Mark PR #9301 ready with `Closes #9262` and `Refs #8209` in the body; the body's
 first line is the merge-side-effects answer from the Overview; UNTRUSTED-CI (workflow edits): no
-admin-merge, no auto-merge queued; leave for operator review and stop.
+admin-merge, no auto-merge queued; leave for operator review and stop. The PR body carries a
+**merge-time checklist as commands** (the PR may wait days for review, so a ready-time check goes
+stale — spec-flow): `gh run list -R jikig-ai/soleur --workflow build-inngest-bootstrap-image.yml
+--status in_progress` and `--status queued` (and the same for `mint-inngest-bootstrap-tag.yml`) print
+nothing, because an in-flight run's bump or mint job checks out `main` after the merge and would load
+the deleted composite path ("action not found"; "re-run failed jobs" replays the old YAML and fails
+again — recovery is a `mirror_only=true` dispatch from `main`, never a rebuild, which would move the
+digest); and the AC5 commands print nothing / `0`.
 
 ## Files to Edit
 
@@ -465,7 +571,7 @@ admin-merge, no auto-merge queued; leave for operator review and stop.
 | Copy the `prd` runtime soleur-ai key into Tier B | Already branch-reachable (R1); a copy adds no protection and silently breaks the pin bump when R1 rotates the runtime key |
 | Dispatch the build with the mint job's `GITHUB_TOKEN` (`actions: write`), no App at all | Mechanically sufficient (ADR-232 DC1) and would avoid granting the infra App `actions:write`, but the recorded direction names the App token; kept as a taste item in decision-challenges.md |
 | Admit tag-ref runs to `infra-privileged` via a `vinngest-v*` tag policy | Forbidden by ADR-232 §7: runs branch-written YAML with Tier-B secrets before any ancestry check |
-| Keep `push: tags` and let the bump job be refused on tag pushes | A hand-pushed tag would publish an image, then the run goes red at the environment gate with no Slack (the failure step is inside the refused job), leaving `main`'s AC6 drift guard red |
+| Keep `push: tags` and let the bump job be refused on tag pushes | A hand-pushed tag would publish an image, then the run goes red at the environment gate with no Slack (the failure step is inside the refused job), leaving `main`'s pin drift guard red |
 | Keep the composite name and add a closed `app:` enum with a legacy `soleur-ai` arm | The legacy arm has no consumer and would exist only to hold census G4e's literal floor at 4 (advisor consult) |
 | Free-form `app-id-name` / `private-key-name` inputs (the literal #8209 wording) | Admits any name and still drops the composite out of G4e's literal population; a single fixed identity is simpler and fails closed |
 | A `dry_run` input on the build workflow | A `mirror_only` dispatch already exercises the bump job on `main` with no push/PR |
@@ -511,7 +617,7 @@ failure mode above).
 
 | # | Step | Exact command(s) | Verify (read-only) | Rollback |
 |---|---|---|---|---|
-| O4c | Widen the `soleur-infra` App to the committed manifest (adds `actions: write`, `pull_requests: write`) and accept the change on the jikig-ai installation; then prove the re-tiered consumers on Tier B. Preconditions: O1, O3. **Recommended before merging #9262** (merging first is safe — releases fail at the mint step with nothing published until this step is done) | App settings → Permissions (Actions: Read and write; Pull requests: Read and write) → Save; org → Installed GitHub Apps → soleur-infra → accept. After #9262 merges: `gh workflow run build-inngest-bootstrap-image.yml -R jikig-ai/soleur --ref main -f ref=<current max vinngest tag> -f mirror_only=true` | `gh api /orgs/jikig-ai/installations --jq '.installations[]\|select(.app_slug=="soleur-infra")\|.permissions'` shows `actions:"write"` and `pull_requests:"write"`; the dispatched run's `bump-cloud-init-pin` job is green, ran under environment `infra-privileged`, and its log carries the `app-token` notice `app=soleur-infra installation=166065653` (the pin is already at max, so the bump ends `result=noop` after minting). The mint job's Tier-B path is proven on the next qualifying push to `main` by the same notice | Revert the two permissions in App settings; the jobs then fail at the mint step with nothing published. Code rollback **before O10** is `git revert` of #9262. **After O10** a revert points the jobs back at the evicted key, so recovery is fix-forward: restore the App permissions, or rotate the `soleur-infra` key in `soleur-infra-privileged/prd` |
+| O4c | Widen the `soleur-infra` App to the committed manifest (adds `actions: write`, `pull_requests: write`) and accept the change on the jikig-ai installation; then prove the re-tiered consumers on Tier B. Preconditions: O1, O3. **Recommended before merging #9262** (merging first is safe — releases fail at the mint step with nothing published until this step is done). Probe precondition: the semver-max `vinngest-v*` tag merged into `main` equals the cloud-init pin (`git fetch --tags origin && bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run` prints `result=noop`, and the pin drift guard is green), otherwise the probe opens a real pin PR | App settings → Permissions (Actions: Read and write; Pull requests: Read and write) → Save; org → Installed GitHub Apps → soleur-infra → accept (`automation-status: UNVERIFIED` — Playwright route in §Apply path). After #9262 merges: `gh workflow run build-inngest-bootstrap-image.yml -R jikig-ai/soleur --ref main -f ref=<current max vinngest tag> -f mirror_only=true`. **Writes it performs:** a digest-preserving crane re-copy of the existing GHCR manifest to zot (idempotent), a cosign signature on that digest, and a deployment record on `infra-privileged`; no PR (pin already at max; `--mirror-only` would hold one anyway) | `gh api /orgs/jikig-ai/installations --jq '.installations[]\|select(.app_slug=="soleur-infra")\|.permissions'` shows `actions:"write"` and `pull_requests:"write"`; `gh run view <id> -R jikig-ai/soleur --log \| grep 'app=soleur-infra installation=166065653'` finds the `app-token` notice in the `bump-cloud-init-pin` job; `gh api 'repos/jikig-ai/soleur/deployments?environment=infra-privileged&per_page=1' --jq '.[0].ref'` prints `main`; the bump ends `result=noop`. If the build job goes red for a zot/tunnel reason the bump is skipped and the probe proved nothing — re-run after the registry is healthy. The mint job's Tier-B path is proven by the merge-triggered mint run's admission (deployment record) and, end to end, by the next real auto-mint's notice | Revert the two permissions in App settings; the jobs then fail at the mint step with nothing published. Code rollback: `git revert` of #9262 works until O10, and between O10 and O13 only together with O10's own rollback (drop the `prd_terraform` override); after O13 it is fix-forward only (restore the App permissions, or rotate the `soleur-infra` key in `soleur-infra-privileged/prd` — which every Tier-B Terraform root also uses). If the App token path is dead, the pin fallback is a pin PR written by a human (a human author passes CLA) |
 
 ## Architecture Decision (ADR/C4)
 
@@ -554,20 +660,29 @@ verification, so no status flips here.
 liveness_signal:
   what: "Each auto-mint and each pin bump is a GitHub Actions run; on success the mint composite emits a ::notice titled app-token naming app=soleur-infra and the installation id, and the bump job summary carries result=noop|opened|existing"
   cadence: "per qualifying push to main (mint) and per dispatched build (bump)"
-  alert_target: "Slack #releases via SLACK_RELEASES_WEBHOOK_URL (both jobs' existing failure steps), plus the AC6 drift guard (deploy-script-tests) on main"
+  alert_target: "Slack #releases via SLACK_RELEASES_WEBHOOK_URL (both jobs' existing failure steps), plus the pin drift guard (deploy-script-tests) on main"
   configured_in: ".github/workflows/mint-inngest-bootstrap-tag.yml (step Post to Slack (auto-mint failure)); .github/workflows/build-inngest-bootstrap-image.yml (step Post to Slack (pin-bump failure)); .github/actions/mint-infra-app-token/action.yml (the app-token notice)"
 
 error_reporting:
   destination: "GitHub Actions run annotations + Slack #releases; no Sentry surface (CI-only code path)"
-  fail_loud: "::error:: from the composite naming GitHub's refusal message or the grant mismatch (and runbook step O4c on a permission refusal); the job fails and the Slack step posts"
+  fail_loud: "::error:: from the composite naming GitHub's refusal message (sanitized) or the grant mismatch, in the workflow run log; the job fails and its Slack failure step posts"
 
 failure_modes:
   - mode: "soleur-infra App lacks actions:write or pull_requests:write (O4c not done)"
     detection: "mint step fails with the composite ::error:: carrying GitHub's permission message before any tag/push/PR"
     alert_route: "Slack #releases (existing failure steps)"
-  - mode: "a non-main dispatch or hand-pushed tag reaches the bump job"
-    detection: "GitHub refuses the infra-privileged environment (branch policy main only); the run shows the job as failed; a hand-pushed tag starts no run at all after push: tags is removed"
-    alert_route: "GitHub Actions run status; AC6 drift guard stays red on main until a main dispatch bumps the pin"
+  - mode: "a non-main dispatch reaches the bump job, or a hand-pushed tag is never built"
+    detection: "workflow run log: GitHub refuses the infra-privileged environment (branch policy main only) before any step runs, so the job's own Slack step cannot fire; a hand-pushed tag starts no run at all after push: tags is removed"
+    alert_route: "pin drift guard red on main (deploy-script-tests, run by main-health-monitor, which escalates to a ci/main-broken issue); recovery is one dispatch from main"
+  - mode: "the environment refuses a main run (deployment policy or environment drifted or deleted)"
+    detection: "scheduled-terraform-drift.yml drift-check plans github_repository_environment.infra_privileged and its main policy and reports the drift; the merge-triggered mint run of this PR is the first live admission check (deployment record on infra-privileged)"
+    alert_route: "the drift-check's existing alerting; for the mint job specifically a refused run is otherwise silent (no tag, so AC6 stays green) — the drift-check is the detection layer"
+  - mode: "exact-grant mismatch (GitHub granted more or less than the request)"
+    detection: "composite ::error:: 'differ from the requested' in the workflow run log; no token output"
+    alert_route: "Slack #releases (the job's failure step)"
+  - mode: "a legacy or human-tipped soleur/inngest-pin-* branch at identity-switch time"
+    detection: "bump script ::warning:: branch-has-manual-commits in the workflow run log; the job exits 0"
+    alert_route: "pin drift guard red on main, then main-health-monitor, then a ci/main-broken issue (no Slack: the job is green)"
   - mode: "DOPPLER_TOKEN_INFRA_PRIVILEGED missing or revoked"
     detection: "the Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present step fails, or the composite's Doppler read fails with a named ::error::"
     alert_route: "Slack #releases"
@@ -580,7 +695,7 @@ logs:
   retention: "90 days (GitHub Actions default log retention)"
 
 discoverability_test:
-  command: "curl -fsS --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/build-inngest-bootstrap-image.yml/runs?per_page=1"
+  command: "curl -fsS --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/mint-inngest-bootstrap-tag.yml/runs?per_page=1"
   expected_output: "success"
 ```
 
@@ -596,8 +711,11 @@ exact scoped permission set on `repositories: soleur`, and the build workflow's 
 **Assembly.** Two suites, one per workflow, both reading the PyYAML-parsed job (the chokepoint is the
 parsed mapping, not a text slice): `test-bump-inngest-bootstrap-pin.sh` Guard 2 (jobs-dict block) and
 `test-mint-inngest-bootstrap-tag.sh` Guard 3 each compare the verify and mint steps to an **exact**
-dict **and** its key set, so an extra key, a second token or a widened value is a different step. The trigger row reads the parsed `on:` mapping (PyYAML maps bare `on` to `True`; the
-existing mirror-only suite already handles both keys).
+dict **and** its key set (`keyset_ok`), with job-wide `one_minter` and `no_tier_a` rows, so an extra
+key, a second minter, a second token or a widened value is a different job. The trigger row reads the
+parsed `on:` mapping via `doc.get("on", doc.get(True))` (PyYAML maps bare `on` to `True`) and
+normalizes string/list/mapping forms. The composite's own contract is pinned by the `comp:*` rows
+through the `doppler` stub's argv log.
 
 **Mutation matrix:**
 
@@ -607,20 +725,25 @@ existing mirror-only suite already handles both keys).
 | 2 | mint job `with.doppler-token` → `${{ secrets.DOPPLER_TOKEN }}` | `app-exact` RED |
 | 3 | bump `permissions` widened to add `"administration":"write"` | bump mint-step exact row RED |
 | 4 | re-add `push: tags: ['vinngest-v*.*.*']` to the build workflow | trigger row RED |
-| 5 | add a second, otherwise-compliant mint step to the bump job that passes `secrets.DOPPLER_TOKEN` (a second member after a compliant first) | bump mint-step exact row RED (the finder must assert exactly one composite step per job, not stop at the first) |
+| 5 | add a second, otherwise-compliant mint step to the bump job that passes `secrets.DOPPLER_TOKEN` (a second member after a compliant first) | `one_minter(bump)` and `no_tier_a(bump)` RED (the exact row alone stays green — `find()` returns the first match) |
 | 6 | mint job `environment` moved to a non-Tier-B name (`production`) | job-env row RED (and census G1c RED) |
-| 8 | add `continue-on-error: true` to the mint job's App step | `app-exact` RED (key-set half) |
+| 7 | add `continue-on-error: true` to the mint job's App step | `app-exact` RED (key-set half) |
+| 8 | change the composite's Doppler project argv to `soleur` | composite argv row RED (the stub exits 1 on any other project) |
+| 9 | drop `--mirror-only` from the bump step, or make the script arm auto-merge under it | `g1.mirror-only-held` RED |
 
 **Harness rows.**
 
 - H1: point the jobs-dict lookup at a job name that does not exist — the new `g2.bump-job:parsed`
   row and the `MIN_ASSERTIONS` floor go RED rather than the exact rows passing vacuously on an empty
   dict.
-- H1b: drop the key-set half of `exact()` — mutation row 8 (below) must then stay green, proving the
+- H1b: drop the key-set half of `exact()` — mutation row 7 (above) must then stay green, proving the
   half is load-bearing; restore it.
+- H1c: before any bump-side mutation, the unmodified workflow copy must run clean through the new
+  bump-side harness (instrument control); a mutation applied to a copy that was already red proves
+  nothing.
 - H2 (must-PASS, non-canonical): environment written in mapping form
-  `environment: {name: infra-privileged}` passes the job-env row (it normalizes both forms, as the
-  census's `env_arms` does).
+  `environment: {name: infra-privileged}` passes the job-env row, because every env row goes through
+  `norm_env` (as the census's `env_arms` does).
 
 **Anchor.** Same-repo constants, so one diff can edit both the workflow and its pin; the anchors
 outside the commit are operator review of UNTRUSTED-CI paths (no auto-merge), the census (an
@@ -637,7 +760,12 @@ independent suite whose G1b/G1c assert the environment set), and O4c's live evid
   Tier B since O2) gaining `pull_requests:write` and `actions:write` on `soleur` / `soleur-marketplace`.
   Its existing `administration:write` + `contents:write` already dominate those scopes, so the
   exposure class does not change; the change *removes* a branch-reachable App-key consumer path
-  (`prd_terraform` via a repo secret).
+  (`prd_terraform` via a repo secret). One widening to state plainly (architecture review): the two
+  jobs hold `DOPPLER_TOKEN_INFRA_PRIVILEGED`, which reads the **whole** Tier-B project; once sibling
+  PR #9263 stores `GITHUB_APP_RUNTIME_DOPPLER_TOKEN` there, these jobs can read the path to the
+  soleur-ai runtime key without naming it. Bounded by the main-only boundary (still nominal until
+  #8609 R1 closes); the structural fix is the narrower-source deferral, now triggered by #9263's
+  merge.
 - **Brand-survival threshold:** `none`
 - `threshold: none, reason: CI-only credential re-tiering that moves two jobs from a branch-reachable to a main-only credential; no user data path, and the widened App scopes are dominated by scopes the same Tier-B key already holds.`
 
@@ -658,6 +786,16 @@ independent suite whose G1b/G1c assert the environment set), and O4c's live evid
   build resolver's dead `push` arm (byte-parity-tested inline logic; only comments that become false
   are edited). Surfaced, not applied: code-simplicity's `GITHUB_TOKEN` dispatch (User-Challenge,
   DC-2); step-scoping guard rows (taste, DC-5).
+- Deepen-plan (2026-09-30): security-sentinel (P0 `mirror_only` re-sign → `--mirror-only` withholds
+  auto-merge, rest deferred as pre-existing; argv project binding; message sanitizing),
+  architecture-strategist (#9263 exposure note; O10 verify limb; runbook/ADR/C4 completeness),
+  spec-flow-analyzer (in-flight runs and AC5 at merge time; stale `die` messages; O4c preconditions
+  and writes; rollback nuance; the web-1 deploy), test-design-reviewer (key-set formula,
+  `one_minter`/`no_tier_a`, argv-observable stub, trigger normalization, PR-author stub flag,
+  bump-side harness), observability-coverage-reviewer (refusal and grant-mismatch failure modes;
+  environment drift detected by the drift-check; probe moved to the mint workflow), verify-the-negative
+  sweep (8/8 confirmed). Not adopted: a separate notifier job for environment refusals (the mirror-only
+  suite forbids a third build job; policy drift is already caught by `scheduled-terraform-drift.yml`).
 - The named CEO/design/devex panel was not re-spawned: no UI surface, no product/market language, and
   the CTO devex pass had already run in Phase 2.5 on the same plan.
 
@@ -720,7 +858,20 @@ effect at O4c.
   only `GITHUB_INFRA_APP_ID` / `GITHUB_INFRA_APP_PRIVATE_KEY`, so the unattended jobs stop holding a
   token that can read the whole Tier-B project. Needs a new Doppler container plus an operator-minted
   read token (a new operator step), so it is not folded into the O10 critical path. Tracking issue to
-  be filed at ship (`domain/engineering`, `type/security`), blocked-by #8209, re-evaluate after O13.
+  be filed at ship (`domain/engineering`, `type/security`), blocked-by #8209; re-evaluate when #9263
+  merges (it adds `GITHUB_APP_RUNTIME_DOPPLER_TOKEN` to the same project — architecture review).
+- Pre-existing build-job supply-chain gaps in `build-inngest-bootstrap-image.yml` (security review;
+  not introduced by this PR, and GHCR retirement — ADR-096 5.3–5.5 — is out of scope): the cosign step
+  signs the digest re-resolved from the tag rather than the digest the build pushed; a branch-run
+  build job (workflow-level `packages: write`, `DOPPLER_TOKEN_PRD`, `id-token: write`) can push to an
+  existing tag; `uses: ./.github/actions/…` composites in the build job resolve from the checked-out
+  tag tree, so an off-main tag's composite runs in a `main`-ref run under `mirror_only`; and any repo
+  writer's `main` dispatch is admitted to the Tier-B bump job (no reviewers). This PR's mitigation is
+  `--mirror-only` withholding auto-merge. Tracking issue to be filed at ship (`type/security`,
+  `domain/engineering`, `priority/p1-high`) naming the fixes proposed in review: sign the push-captured
+  digest, `cosign verify --certificate-identity …@refs/heads/main` in the bump job, check out the tag
+  tree to a subpath so `./` composites come from `main`, and consider arming auto-merge only when
+  `github.triggering_actor` is the auto-mint App.
 
 ## Acceptance Criteria
 
@@ -743,21 +894,27 @@ effect at O4c.
   the merge-triggered mint run mints nothing (measured on the pre-change tree 2026-09-30:
   `base=v1.1.44 reason=unchanged result=noop`).
 - [ ] AC4 — the renamed composite refuses an empty `doppler-token`, `installation-id`,
-  `permissions` or `repositories` before any Doppler call; asks Doppler for exactly
-  `GITHUB_INFRA_APP_ID` / `GITHUB_INFRA_APP_PRIVATE_KEY` in `soleur-infra-privileged`/`prd`; refuses a
-  grant that differs from the request; prints GitHub's message on a failed exchange; prints the
-  `app-token` notice on success (`comp:*` rows in `test-mint-inngest-bootstrap-tag.sh`).
+  `permissions` or `repositories` before any Doppler call (zero `DOPPLER_LOG` lines); asks Doppler
+  for exactly `GITHUB_INFRA_APP_ID` / `GITHUB_INFRA_APP_PRIVATE_KEY` with `--project
+  soleur-infra-privileged --config prd` in argv (the stub refuses anything else, with
+  `DOPPLER_PROJECT`/`DOPPLER_CONFIG` unset); refuses a grant that differs from the request; prints
+  GitHub's message with CR/LF/`::` stripped on a failed exchange; prints the `app-token` notice on
+  success (`comp:*` rows in `test-mint-inngest-bootstrap-tag.sh`).
 - [ ] AC5 — `bump-inngest-bootstrap-pin.sh` authors as `soleur-infra[bot]
   <335404629+soleur-infra[bot]@users.noreply.github.com>`, reuses an open pin PR whose author lists as
-  `app/soleur-infra` (row `g1.reuse-app-author`), and still never force-pushes a human tip (identity
-  rows in `test-bump-inngest-bootstrap-pin.sh`). Immediately before the PR is
-  marked ready, `git ls-remote --heads origin 'soleur/inngest-pin-*'` prints nothing and
-  `gh pr list --state open --search "head:soleur/inngest-pin" --json number --jq length` prints `0`
-  (no legacy-authored pin branch the in-place switch would treat as human).
+  `app/soleur-infra` and does not reuse one authored by `app/soleur-ai` or a human (the
+  `|author=` stub rows), never arms auto-merge under `--mirror-only true` (`g1.mirror-only-held`),
+  and still never force-pushes a human tip (identity
+  rows in `test-bump-inngest-bootstrap-pin.sh`). **At merge time** (a merge-time checklist command
+  in the PR body, not a ready-time check — the PR may wait days for review), `git ls-remote --heads
+  origin 'soleur/inngest-pin-*'` prints nothing and `gh pr list --state open --search
+  "head:soleur/inngest-pin" --json number --jq length` prints `0` (no legacy-authored pin branch the
+  in-place switch would treat as human); if one exists, close the PR and delete the branch first.
 - [ ] AC6 — `bash tests/scripts/test-infra-privileged-tier-census.sh` is green; its stderr
   `IPT_TIERB=` line names both `build-inngest-bootstrap-image.yml::bump-cloud-init-pin` and
   `mint-inngest-bootstrap-tag.yml::mint`; G4e reports `[3 reading steps]` against floor 3 with the
-  dated rationale; `CENSUS_ROWS` is still 23.
+  dated rationale; `CENSUS_ROWS` is unchanged by this PR (sibling #9263 raises it; re-measure after
+  any rebase).
 - [ ] AC7 — `github-infra-app-manifest.json` `default_permissions` include `"actions": "write"` and
   `"pull_requests": "write"` (`jq -r '.default_permissions.actions, .default_permissions.pull_requests' apps/web-platform/infra/github-infra-app-manifest.json`
   prints `write` twice).
@@ -771,7 +928,8 @@ effect at O4c.
   `environment:`" list; `inngest-server.md` hand-tag block is present tense;
   `apply-web-platform-infra-job-rationale.md` says three consumers.
 - [ ] AC11 — the residual sweep `git grep -n "mint-soleur-ai-app-token" -- .github apps tests scripts plugins`
-  prints nothing (docs may say "renamed from"); `git grep -n "mint-soleur-ai-app-token" -- knowledge-base/engineering`
+  prints nothing (docs may say "renamed from"); `git grep -n "runs its own publish" -- .github` prints
+  nothing; `git grep -n "mint-soleur-ai-app-token" -- knowledge-base/engineering`
   hits only lines that also contain `renamed`; `grep -n -E 'secrets\.DOPPLER_TOKEN([^_A-Za-z0-9]|$)' .github/workflows/build-inngest-bootstrap-image.yml .github/workflows/mint-inngest-bootstrap-tag.yml`
   prints nothing.
 - [ ] AC12 — workflow-file-size gate green; `actionlint` clean on the two workflows;
@@ -805,10 +963,15 @@ effect at O4c.
 5. A hand-pushed `vinngest-v*` tag: no run starts; the runbook's dispatch-once line publishes it.
 6. A legacy `soleur-ai[bot]` pin branch exists at switch time (AC5 says it will not): the bump prints
    a `branch-has-manual-commits` warning and exits 0 (job green, no Slack); it never overwrites the
-   branch, and the AC6 drift guard stays red on `main` until the branch is deleted (main-health
+   branch, and the pin drift guard stays red on `main` until the branch is deleted (main-health
    monitor escalation).
 9. Same-target re-run with an open pin PR (author listed as `app/soleur-infra`): the bump comments on
    and reuses it instead of dying at `gh pr create` (the pre-existing bug this PR fixes).
+10. A `mirror_only` dispatch whose target needs a bump: the PR opens held, never auto-merged, and its
+    body says a backfill cannot attest provenance.
+11. A build dispatched before this PR merges whose bump job starts after it: "action not found" on
+    the deleted composite path; recovery is a `mirror_only=true` dispatch from `main` (the merge-time
+    checklist makes this case not arise).
 7. After O10 (sentinel in `prd_terraform`): both jobs unaffected (they no longer read it).
 8. The merge of this PR itself: the mint workflow's push run is admitted to `infra-privileged`,
    decides `noop`, runs no credential step.
@@ -831,6 +994,9 @@ effect at O4c.
   rationale; the three inline readers stay under G4e.
 - **`environment:` creates a deployment record per run** (every qualifying push's mint job). Same as
   the existing push-apply jobs on `infra-privileged`; no reviewer, so no wait.
+- **In-flight runs at merge time load the deleted composite path.** Both jobs check out `main`, so a
+  run dispatched before the merge fails after it; the merge-time checklist (Phase 8) requires no
+  queued or in-progress run of either workflow.
 - **Sibling PR #9263 (#8609 PR-A, open draft) edits five of the same files:** ADR-241, `model.c4`,
   `model.likec4.json`, `infra-credential-tiers-8209.md` and the census. Whichever merges second
   rebases; `model.likec4.json` is always regenerated after the rebase, never hand-merged, and the
