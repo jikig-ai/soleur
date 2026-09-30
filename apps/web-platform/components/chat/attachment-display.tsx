@@ -78,7 +78,7 @@ function useAttachmentUrl(
     return () => {
       cancelled = true;
     };
-  }, [storagePath, retryNonce]);
+  }, [storagePath, filename, retryNonce]);
 
   const retry = () => {
     urlCache.delete(storagePath);
