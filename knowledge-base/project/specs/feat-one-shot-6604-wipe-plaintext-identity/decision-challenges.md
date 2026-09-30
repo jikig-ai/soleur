@@ -30,3 +30,16 @@ case below. Each is surfaced here for `ship` to render into the PR body and file
 - **The trade-off:** rebooting first proves boot-time unlock while the plaintext backstop still
   exists. Wiping first keeps the recorded identity valid.
 - **Status:** the plan does not choose. The operator sequences it.
+
+## DC-4 (User-Challenge) — refuse a rollback whose remount source is invalid, even off the mapper?
+
+- **Stated direction (task brief):** the Guard 5 physical witness is scoped to "the mapper is live AND
+  the recorded plaintext is not intact".
+- **Challenge (user-impact-reviewer, deepen):** a second `ROLLBACK=1` with `$MOUNT` already on the
+  plaintext can reach `rollback()` with a *valid but drifted* record. `rollback()` unmounts the live
+  plaintext before its remount fails, and every workspace goes offline (`rollback_remount_failed`).
+  The proposed remedy is a pre-umount remount-source check, requiring the record to be ext4 and not
+  the mapper, regardless of the mount source.
+- **Plan:** not implemented, because it widens the stated predicate. Invalid records are never mounted
+  (the validator), and the gap is pre-existing: the record fallback predates this PR.
+- **Cost of adopting it:** one precondition in `rollback()` plus two rows.
