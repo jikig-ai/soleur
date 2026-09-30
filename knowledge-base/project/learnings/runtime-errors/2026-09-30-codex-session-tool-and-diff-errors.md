@@ -109,3 +109,8 @@ The next CI run passed that assertion and caught the privacy-policy SHA omitted
 from `legal-doc-shas.ts`. Every non-T&C canonical legal edit requires its hash
 refresh in the same PR; check `tc-document-sha-guard` after legal edits and
 record the document tier and CLO status in the PR description.
+
+RLS fuzz then found the two new authenticated Codex acknowledgment RPCs missing
+from its `ATTACK_SQL` classification. Add real cross-tenant cases and a valid
+Codex binding plus positive acknowledgment fixture; a missing-record `false`
+alone would make these denial checks vacuous.

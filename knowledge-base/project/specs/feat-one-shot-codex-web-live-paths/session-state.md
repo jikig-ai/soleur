@@ -155,3 +155,8 @@
 - Pushed head `6165a3d30c21f707e78a6886dfb4328c3674db5d` merges current main `2f64e7459ae6ec7b21ae9e91e16fae0cd40026c8`; PR #9051 remains draft. Fresh CI exposed one `test-bun` failure in `fullsuite-merge-gate.test.ts`: the skill edit had removed a guarded prescription's exact text anchor. The remaining test matrix and tenant-integration were still running at the time of this note.
 - Pushed correction `bc77a93d76169fc8b0e7aacaa0dd67d558ae56ce` restored the wording and kept the CI-only hook reference on that same line; `test-bun` passed on this head. The same CI run then found the privacy-policy SHA stale because the canonical legal disclosure changed. The matching hash is now updated locally and must be pushed for fresh CI.
 - No app test suite was run locally. CLO, design QA, and both runtime qualification gates remain pending.
+
+## Verification as of 2026-09-30 RLS coverage correction
+
+- Pushed head `741646679c` refreshes the canonical privacy-policy SHA. CI on the superseded `bc77a93d` head passed `test-bun` and failed `tc-document-sha-guard` as expected; the RLS/authz-fuzz run independently found the new `record_codex_history_transfer_acknowledgment` and `codex_history_transfer_acknowledged` RPCs missing from the authenticated SECURITY DEFINER classification.
+- Local test changes add both RPCs as tenant-B-versus-tenant-A attacks and seed a real A-owned Codex binding and acknowledgment with an owner positive control, avoiding a vacuous `false` from a missing row. These changes have not been run locally. They need a commit, push, and fresh CI; no shared database was changed.

@@ -225,6 +225,23 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     expect(await readAsA(`select resolve_workspace_installation_id('${ctx.wsA}')`), "A must resolve its own installation id").not.toBeNull();
   });
 
+  test("Codex history acknowledgment RPCs positively resolve A's seeded member acknowledgment", async () => {
+    const values = await rolledBackRaw(sql, async (t) => {
+      await t`set local role authenticated`;
+      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [buildAuthenticatedClaims({ sub: ctx.userA })]);
+      const [recorded] = await t.unsafe(
+        "select public.record_codex_history_transfer_acknowledgment($1::uuid, $2::bigint) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA],
+      );
+      const [acknowledged] = await t.unsafe(
+        "select public.codex_history_transfer_acknowledged($1::uuid, $2::bigint) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA],
+      );
+      return [recorded.value, acknowledged.value];
+    });
+    expect(values, "fixture must prove both RPCs accept A's valid current-generation acknowledgment").toEqual([true, true]);
+  });
+
   // authorize_template bespoke attack (#6307 Item 2). founder-scoped write: the
   // generic driveDenied is WRONG (B writing B's OWN row returns a non-null id
   // legally). The real security property: a founder must not be able to BACK a

@@ -54,6 +54,10 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
   is_workspace_owner: (c) => `select is_workspace_owner('${c.wsA}', auth.uid())`,
   count_codex_conversation_rebinds: (c) => `select count_codex_conversation_rebinds('${c.wsA}','api-key')`,
+  record_codex_history_transfer_acknowledgment: (c) =>
+    `select record_codex_history_transfer_acknowledgment('${c.convA}',${c.engineAuthModeGenerationA})`,
+  codex_history_transfer_acknowledged: (c) =>
+    `select codex_history_transfer_acknowledged('${c.convA}',${c.engineAuthModeGenerationA})`,
   set_workspace_default_engine: (c) => `select set_workspace_default_engine('${c.wsA}','claude-code','managed')`,
   bind_agent_engine_run: (c) =>
     `select bind_agent_engine_run('${c.wsA}','conversation','${c.convA}',NULL,NULL,'${c.userB}')`,
