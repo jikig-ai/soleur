@@ -1596,10 +1596,10 @@ else
   no "LW8 the rehearsal's io.max read-back is missing or wrong for $LW8_DEVNUM: $(grep -oE ' io_max=[^ ]*' "$CASE_OUT" | head -1) $(grep -E 'io_cap' "$CASE_OUT" | head -1 | cut -c1-200)"
 fi
 # --- LW-P2: the REAL _plaintext_gone (real blkid, real mapper) reads an intact recorded plaintext ------
-LW_GONE='_plaintext_gone; echo "gone_rc=$? why=$PLAINTEXT_GONE_WHY type=$PLAINTEXT_DEV_TYPE"'
+LW_GONE='_plaintext_gone; echo "gone_rc=$? why=$PLAINTEXT_GONE_WHY status=$PLAINTEXT_RECORD_STATUS"'
 seed_state
 run_wipe_real "$LW_GONE"
-if grep -qE '^gone_rc=1 why= type=ext4$' "$CASE_OUT"; then
+if grep -qE '^gone_rc=1 why= status=ok$' "$CASE_OUT"; then
   ok "LW-P2 real devices: mapper mounted + the recorded plaintext loop intact (real blkid TYPE=ext4) → NOT gone (rollback stays possible)"
 else
   no "LW-P2 the real witness misread an intact recorded plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
@@ -1634,7 +1634,7 @@ done
 # --- LW-P3: after the REAL zero, the recorded device reads no filesystem → gone (no marker needed) -----
 seed_state
 run_wipe_real "$LW_GONE"
-if grep -qE '^gone_rc=0 why=plaintext_dev_gone type=$' "$CASE_OUT"; then
+if grep -qE '^gone_rc=0 why=plaintext_dev_gone status=none$' "$CASE_OUT"; then
   ok "LW-P3 real devices: the recorded plaintext zeroed (real blkid finds nothing), no marker → gone, why=plaintext_dev_gone"
 else
   no "LW-P3 the real witness did not read a zeroed recorded plaintext as gone: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
@@ -1643,7 +1643,7 @@ fi
 LWP4_DM="$(readlink -f "$MAPPER")"
 seed_state "PLAINTEXT_DEV=$LWP4_DM"
 run_wipe_real "$LW_GONE"
-if [ "$LWP4_DM" != "$MAPPER" ] && grep -qE '^gone_rc=0 why=plaintext_dev_gone type=invalid$' "$CASE_OUT"; then
+if [ "$LWP4_DM" != "$MAPPER" ] && grep -qE '^gone_rc=0 why=plaintext_dev_gone status=is_mapper$' "$CASE_OUT"; then
   ok "LW-P4 real devices: a record naming the mapper's own node ($LWP4_DM, a real ext4) is refused by the mapper-identity clause, not trusted as an intact plaintext"
 else
   no "LW-P4 a record naming the live mapper node ($LWP4_DM) was read as an intact plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"

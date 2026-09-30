@@ -806,7 +806,9 @@ g1_rehearsed() {  # <label> <expected exact fragment of the rehearsal_ok row>
 }
 g1_refused() {  # <label> <expected recorded=> <expected recorded_real=> [run_wipe args...]
   local label="$1" rec_want="$2" real_want="$3" r; shift 3
-  run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 "$@"
+  # W_LABEL=workspaces_plain: every refusal row carries the label the retired gate wanted, so a label gate
+  # re-introduced anywhere cannot be what makes these refuse (F-10).
+  run_wipe 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1 W_LABEL=workspaces_plain "$@"
   r="$(awk -v p="^$WROW result=refused arm=first_wipe " '$0 ~ p { print; exit }' <<<"$CASE_OUT")"
   if refused_ok wipe_target_not_recorded_plaintext && [ "$(zero_calls)" -eq 0 ] && ! outF WIPE_RETURNED \
     && ! state_has PLAINTEXT_WIPE_BEGUN && hdrs_gone \
@@ -840,6 +842,16 @@ g1_refused "G1-R4 an option-shaped record (-o)" -o none "SEED_STATE=CANARY_OK=1:
 G1_SLASH="${TGT_REAL/#\/dev\//\/dev\/\/}"
 g1_refused "G1-R5 a record with '//' that resolves to the target is refused by the validator" \
   "$G1_SLASH" none "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=$G1_SLASH"
+# G1-R6 — the `..` clause on its own: a record that climbs out and back (`/dev/../dev/<kname>`) RESOLVES
+# to the target, so only the validator refuses it.
+G1_DOTDOT="${TGT_REAL/#\/dev\//\/dev\/..\/dev\/}"
+g1_refused "G1-R6 a record with '..' that resolves to the target is refused by the validator" \
+  "$G1_DOTDOT" none "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=$G1_DOTDOT"
+# G1-R7 — the charset clause on its own: `recorded_real=` is computed only for a VALID record, so a `;`
+# record reads recorded_real=none only while the charset clause stands.
+# (SEED_STATE splits on `;`, so the record is appended by PRE_INV; the last line wins.)
+g1_refused "G1-R7 a record carrying ';' is refused, and never resolved (recorded_real=none)" \
+  "$TGT_REAL;x" none "PRE_INV=persist_state PLAINTEXT_DEV '$TGT_REAL;x'"
 # G1-H3 — the resume arm is NOT bound (the marker and the serial bind it): a WRONG record re-zeroes.
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_WIPE_BEGUN=$PIN:1759000000;PLAINTEXT_DEV=$LUKS_BLK" W_TYPE=
 [ -n "$(wrow wiped re_zero)" ] && ran && [ "$(zero_calls)" -eq 1 ] && hasF "blkdiscard -z -v $TGT_REAL" && nounk \
@@ -1112,6 +1124,56 @@ seam_n="$(grep -cE "$SEAM_RE" "$CUTOVER" || true)"
 [ "$seam_n" -eq 6 ] && [ -z "$seam_env" ] \
   && ok "S5 the device, sysfs, cgroup, frozen-at, blkid-path and plaintext-type seams read no variable but their own argument (not env-settable)" \
   || no "S5 a seam reads an environment variable or is missing (defs=$seam_n want 6, vars=[$seam_env])"
+# F6 — the REAL probe functions (never the harness seams): only the blkid PATH seam is replaced, by a
+# stub that records its argv and exits with a chosen rc. The rc is kept (rc 0 → the TYPE, or `none` when
+# empty; rc 2 → `none`; anything else → `blkid_error_<rc>`), the argv is exactly `-p -s TYPE -o value
+# <dev>`, a missing blkid reads `blkid_absent`, and a node that is not a block device reads `absent`
+# (both through _plaintext_dev_type and through the composed _plaintext_record_status).
+F6_BLKID="$WIPE_SCRATCH/f6-blkid"; F6_ARGV="$WIPE_SCRATCH/f6-argv"
+cat > "$F6_BLKID" <<'F6_STUB'
+#!/bin/sh
+printf '%s\n' "$*" > "$F6_ARGV"
+[ -z "$F6_OUT" ] || printf '%s\n' "$F6_OUT"
+exit "$F6_RC"
+F6_STUB
+chmod +x "$F6_BLKID"
+f6() {  # <fn> <arg> <stub stdout> <stub rc> [bin override: '' = the stub, - = none]
+  : > "$F6_ARGV"
+  env -u PLAINTEXT_DEV_FSTYPE F6_ARGV="$F6_ARGV" F6_OUT="$3" F6_RC="$4" F6_BIN="${5:-$F6_BLKID}" F6_FN="$1" F6_ARG="$2" \
+    bash -c 'source "$1" >/dev/null 2>&1
+      _plaintext_blkid_bin() { [ "$F6_BIN" = - ] || printf "%s" "$F6_BIN"; }
+      "$F6_FN" "$F6_ARG"' _ "$CUTOVER" 2>/dev/null
+}
+f6_bad=""
+for f6c in "ext4|0|ext4" "|2|none" "|0|none" "|4|blkid_error_4" "crypto_LUKS|0|crypto_LUKS" "|8|blkid_error_8"; do
+  IFS='|' read -r f6_out f6_rc f6_want <<<"$f6c"
+  f6_got="$(f6 _plaintext_blkid_type /dev/sdz9 "$f6_out" "$f6_rc")"
+  [ "$f6_got" = "$f6_want" ] && [ "$(cat "$F6_ARGV")" = "-p -s TYPE -o value /dev/sdz9" ] \
+    || f6_bad="$f6_bad [out=${f6_out:-empty} rc=$f6_rc got=$f6_got want=$f6_want argv=$(cat "$F6_ARGV")]"
+done
+f6_got="$(f6 _plaintext_blkid_type /dev/sdz9 ext4 0 -)"; [ "$f6_got" = blkid_absent ] || f6_bad="$f6_bad [no-bin got=$f6_got]"
+f6_file="$WIPE_SCRATCH/f6-regular"; : > "$f6_file"
+for f6a in /dev/null "$f6_file" /dev/sdz_no_such_node; do
+  f6_got="$(f6 _plaintext_dev_type "$f6a" ext4 0)"; [ "$f6_got" = absent ] && [ ! -s "$F6_ARGV" ] || f6_bad="$f6_bad [dev_type $f6a got=$f6_got]"
+done
+f6_got="$(f6 _plaintext_record_status /dev/null ext4 0)"; [ "$f6_got" = absent ] || f6_bad="$f6_bad [status /dev/null got=$f6_got]"
+f6_got="$(f6 _plaintext_record_status '/dev/sdz9;x' ext4 0)"; [ "$f6_got" = invalid ] || f6_bad="$f6_bad [status invalid got=$f6_got]"
+[ -z "$f6_bad" ] \
+  && ok "F6 the real blkid probe keeps the rc (TYPE / none / blkid_error_<rc> / blkid_absent) with argv '-p -s TYPE -o value <dev>', and a non-block node reads absent without running blkid" \
+  || no "F6 the real probe mapping is wrong:$f6_bad"
+# F7 — the real _plaintext_blkid_bin in a clean shell with a FAKE blkid first on PATH: it must answer a
+# fixed root-owned path, never the PATH hit (the fire bakes this path into an unattended root command).
+F7_DIR="$WIPE_SCRATCH/f7-path"; mkdir -p "$F7_DIR"; printf '#!/bin/sh\nexit 0\n' > "$F7_DIR/blkid"; chmod +x "$F7_DIR/blkid"
+f7_got="$(env PATH="$F7_DIR:$PATH" bash -c 'source "$1" >/dev/null 2>&1; blkid() { :; }; _plaintext_blkid_bin' _ "$CUTOVER" 2>/dev/null)"
+[[ "$f7_got" =~ ^(/usr/sbin|/sbin|/usr/bin|/bin)/blkid$ ]] \
+  && ok "F7 _plaintext_blkid_bin answers a fixed root-owned path ($f7_got), not a PATH-first fake or a shell function" \
+  || no "F7 _plaintext_blkid_bin answered [$f7_got] (want one of /usr/sbin|/sbin|/usr/bin|/bin + /blkid; this host has: $(ls /usr/sbin/blkid /sbin/blkid /usr/bin/blkid /bin/blkid 2>/dev/null | tr '\n' ' '))"
+# F11 — the main body records the plaintext mount source BEFORE it arms the dead-man (the arm refuses
+# without a record, and the fire bakes it).
+f11_rec="$(grep -n 'persist_state PLAINTEXT_DEV' "$CUTOVER" | head -1 | cut -d: -f1)"; f11_arm="$(grep -n '^arm_dead_man$' "$CUTOVER" | head -1 | cut -d: -f1)"
+[ -n "$f11_rec" ] && [ -n "$f11_arm" ] && [ "$f11_rec" -lt "$f11_arm" ] \
+  && ok "F11 the main body persists PLAINTEXT_DEV (line $f11_rec) before it arms the dead-man (line $f11_arm)" \
+  || no "F11 PLAINTEXT_DEV is not persisted before the main-body arm (record line=${f11_rec:-none} arm line=${f11_arm:-none})"
 # arm_dead_man reachability — the plan asked whether any dispatch can still reach arm_dead_man on a
 # post-cutover host. It cannot: the main body runs prepare_staging_target (which refuses
 # staging_already_cutover when $MOUNT is the mapper) BEFORE arm_dead_man, and the wipe needs
@@ -1171,9 +1233,10 @@ g5_case() {  # <seed lines> [env...]
   run_case "$CUTOVER" "$seed trap cleanup EXIT; eval \"\$RB_TEXT\"" 'rollback cleanup assert_rollback_not_post_cutover' \
     ROLLBACK=1 RB_TEXT="$RB_TEXT" ACTIVE_UNITS="$G5_ACT" CRYPTSETUP_DEV=/dev/sdz7 "$@"
 }
-g5_refused() {
-  died && has '^EMIT_DRIFT rollback_refused_plaintext_wiped$' \
-    && markerF "$DM result=cutover_aborted outcome=refused_plaintext_wiped mode=rollback" \
+g5_refused() {  # [drift slug] [outcome] — default: the marker refusal (a wipe began)
+  local slug="${1:-rollback_refused_plaintext_wiped}" oc="${2:-refused_plaintext_wiped}"
+  died && has "^EMIT_DRIFT ${slug}\$" \
+    && markerF "$DM result=cutover_aborted outcome=${oc} mode=rollback" \
     && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ] \
     && nhas '^umount[[:space:]]' && nhas '^docker stop' && nhas '^cryptsetup close'
 }
@@ -1181,8 +1244,9 @@ g5_case "persist_state PLAINTEXT_WIPE_BEGUN '$PIN:1';" FINDMNT_MOUNT_SRC=/dev/sd
 g5_refused && ok "G5 #1/#2 a BEGUN-only state refuses ROLLBACK=1 even with ROLLBACK_ACK_LUKS_WRITES=1 — before any umount/close/stop" \
   || no "G5 BEGUN-only ROLLBACK not refused (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:200}"
 g5_case "persist_state PLAINTEXT_WIPED '$PIN:1'; persist_state CANARY_OK 1:u-live-1;" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=u-live-1
-g5_refused && outF "rollback_ack_luks_writes does not override this" && markerF "outcome=refused_plaintext_wiped mode=rollback why=marker " \
-  && ok "G5 a WIPED completed cutover refuses ROLLBACK=1 as refused_plaintext_wiped (why=marker) FIRST, never as post_cutover (#4: never a false pre_freeze)" \
+g5_refused && outF "rollback_ack_luks_writes does not override this" && outF "a plaintext wipe began" \
+  && grep -qE "outcome=refused_plaintext_wiped mode=rollback why=marker\$" "$MARKER_LOG" && ! markerF 'recorded=' \
+  && ok "G5 a WIPED completed cutover refuses ROLLBACK=1 as refused_plaintext_wiped (why=marker, no recorded= fields: the marker arm never probed the record) FIRST, never as post_cutover (#4: never a false pre_freeze)" \
   || no "G5 WIPED ROLLBACK not refused (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
 g5_case ":;" FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=u-live-1
 ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_plaintext_wiped$' \
@@ -1191,32 +1255,61 @@ ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_plaintext_
 # G5b — the PHYSICAL check, independent of the wipe markers: /mnt/data on the mapper and the RECORDED
 # plaintext device (PLAINTEXT_DEV, the device rollback() remounts) not an intact ext4 means there is no
 # copy to remount, ack or not. Device-based: nothing here depends on a /dev/disk/by-label link. Each
-# refusal must say WHICH (why=) and what the record read (recorded=/recorded_type=), in the run log and
-# on the off-host outcome row, so a stale record is never read as a wipe.
-g5b_refused() {  # <recorded> <recorded_type>
-  g5_refused && outF "(plaintext_dev_gone)" && outF "recorded_type=$2" \
-    && markerF "$DM result=cutover_aborted outcome=refused_plaintext_wiped mode=rollback why=plaintext_dev_gone recorded=$1 recorded_type=$2"
+# refusal must say WHICH (why=) and what the record read (recorded=/recorded_status=), in the run log and
+# on the off-host outcome row, under its OWN slug (rollback_refused_plaintext_record_gone): no marker
+# exists, so this is never a wipe — the sentence says so.
+g5b_refused() {  # <recorded> <recorded_status>
+  g5_refused rollback_refused_plaintext_record_gone refused_plaintext_record_gone && outF "(plaintext_dev_gone)" \
+    && outF "recorded_status=$2" && outF "NOT a wipe" && nhas '^EMIT_DRIFT rollback_refused_plaintext_wiped$' \
+    && markerF "$DM result=cutover_aborted outcome=refused_plaintext_record_gone mode=rollback why=plaintext_dev_gone recorded=$1 recorded_status=$2"
 }
 G5B_ENV=(FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=u-live-1 ROLLBACK_ACK_LUKS_WRITES=1)
 g5_case ":;" "${G5B_ENV[@]}" PLAINTEXT_DEV_FSTYPE=
-g5b_refused /dev/sdz9 none && ok "G5b-R1 mapper mounted + the recorded plaintext reads no filesystem (zeroed) → refused before any umount, why=plaintext_dev_gone recorded_type=none" \
+g5b_refused /dev/sdz9 none && ok "G5b-R1 mapper mounted + the recorded plaintext reads no filesystem signature → refused before any umount, why=plaintext_dev_gone recorded_status=none" \
   || no "G5b-R1 a zeroed recorded plaintext did not refuse (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:240}"
 g5_case ":;" "${G5B_ENV[@]}" PLAINTEXT_DEV_FSTYPE=crypto_LUKS
-g5b_refused /dev/sdz9 crypto_LUKS && ok "G5b-D the record names a crypto_LUKS device (a stale record, drift) → refused, recorded_type=crypto_LUKS tells drift from a wipe" \
+g5b_refused /dev/sdz9 crypto_LUKS && ok "G5b-D the record names a crypto_LUKS device (a stale record, drift) → refused, recorded_status=crypto_LUKS tells drift from a wipe" \
   || no "G5b-D a drifted record did not refuse (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
-g5_case ":;" "${G5B_ENV[@]}" PLAINTEXT_DEV_FSTYPE=blkid_unavailable
-g5b_refused /dev/sdz9 blkid_unavailable && ok "G5b-B blkid unavailable (cannot tell) → refused, recorded_type=blkid_unavailable" \
+g5_case ":;" "${G5B_ENV[@]}" BLKID_ABSENT=1
+g5b_refused /dev/sdz9 blkid_absent && ok "G5b-B no blkid at a fixed path (cannot tell) → refused, recorded_status=blkid_absent (the one name for it)" \
   || no "G5b-B an unreadable type did not refuse (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
 g5_case ":;" "${G5B_ENV[@]}" PLAINTEXT_DEV_UNSEEDED=1
-g5b_refused none invalid && ok "G5b-U no PLAINTEXT_DEV recorded (a lost state file) → refused, recorded=none recorded_type=invalid (fail-closed)" \
+g5b_refused none invalid && ok "G5b-U no PLAINTEXT_DEV recorded (a lost state file) → refused, recorded=none recorded_status=invalid (fail-closed)" \
   || no "G5b-U an unrecorded plaintext did not refuse (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
 g5_case "persist_state PLAINTEXT_DEV $T_MAPPER;" "${G5B_ENV[@]}"
-g5b_refused "$T_MAPPER" invalid && ok "G5b-M the record IS the mapper (reads ext4, but it is the live copy) → refused, recorded_type=invalid" \
+g5b_refused "$T_MAPPER" is_mapper && ok "G5b-M the record IS the mapper (reads ext4, but it is the live copy) → refused, recorded_status=is_mapper" \
   || no "G5b-M a record naming the mapper did not refuse (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
+# G5b-M2 — an ALIAS of the mapper (a `/./` spelling; readlink -f resolves it) is the live copy too.
+G5_MAP_ALIAS="${T_MAPPER%/*}/./${T_MAPPER##*/}"
+g5_case "persist_state PLAINTEXT_DEV $G5_MAP_ALIAS;" "${G5B_ENV[@]}"
+g5b_refused "$G5_MAP_ALIAS" is_mapper && ok "G5b-M2 a record that is an ALIAS of the mapper ($G5_MAP_ALIAS) → refused, recorded_status=is_mapper" \
+  || no "G5b-M2 a mapper-alias record did not refuse as is_mapper (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
+# G5b-A — the recorded node is not a block device (a vanished kernel name after a reboot): absent, never
+# conflated with a zeroed device (none).
+g5_case ":;" "${G5B_ENV[@]}" PLAINTEXT_DEV_FSTYPE=absent
+g5b_refused /dev/sdz9 absent && ok "G5b-A the recorded node is not a block device → refused, recorded_status=absent (drift or detach, not zeroed)" \
+  || no "G5b-A an absent recorded node did not refuse as absent (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
 g5_case "persist_state PLAINTEXT_DEV -o;" "${G5B_ENV[@]}"
 g5b_refused -o invalid && ! hasF "SEAM _plaintext_dev_type -o" \
   && ok "G5b-V an option-shaped record (-o, the seam says ext4) → refused by the validator, never probed" \
   || no "G5b-V an option-shaped record did not refuse (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
+# G5b-V2/V3 — the validator's charset and `..` clauses, each on its own (the seam says ext4, so only the
+# validator can refuse these): a `;` inside a /dev path, and a /dev path that climbs out with `..`.
+for g5v in '/dev/sdz9;logger' '/dev/../tmp/x'; do
+  g5_case "persist_state PLAINTEXT_DEV '$g5v';" "${G5B_ENV[@]}"
+  g5b_refused "$g5v" invalid && ! hasF "SEAM _plaintext_dev_type $g5v" \
+    && ok "G5b-V an unsafe record ($g5v) → refused by the validator (recorded_status=invalid), never probed" \
+    || no "G5b-V an unsafe record ($g5v) did not refuse as invalid (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
+done
+# G5b-F8 — the physical witness needs BOTH conjuncts: with $MOUNT on the plaintext (pre-flip) a record that
+# reads no filesystem is NOT "gone" (the mount gate), and the same record with the mapper mounted is.
+for g5m in "/dev/sdz9:1:" "$T_MAPPER:0:plaintext_dev_gone"; do
+  IFS=: read -r g5m_src g5m_rc g5m_why <<<"$g5m"
+  run_case "$CUTOVER" '_plaintext_gone; echo "GONE_RC=$? WHY=$PLAINTEXT_GONE_WHY"' '_plaintext_gone' FINDMNT_MOUNT_SRC="$g5m_src" PLAINTEXT_DEV_FSTYPE=
+  grep -qxF "GONE_RC=$g5m_rc WHY=$g5m_why" <<<"$CASE_OUT" \
+    && ok "G5b-F8 _plaintext_gone with the mount on ${g5m_src} and an empty recorded fs → rc=$g5m_rc why=[${g5m_why}]" \
+    || no "G5b-F8 _plaintext_gone mount conjunct wrong for ${g5m_src} (want rc=$g5m_rc why=[${g5m_why}]) ${CASE_OUT:0:200}"
+done
 # G5b-H1 — the pre-wipe web-1 shape: mapper mounted, the recorded plaintext intact → the acknowledged
 # rollback runs, it probed the RECORDED device (not an empty or other key), and remounts that device.
 g5_case ":;" "${G5B_ENV[@]}" DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP=/dev/sdz9
@@ -1232,19 +1325,21 @@ g5_cleanup() {  # <seed> [env...]
   run_case "$CUTOVER" "$seed DRY_RUN=0; trap cleanup EXIT; die 'synthetic abort mid-freeze'" 'rollback cleanup' \
     ACTIVE_UNITS="$G5_ACT" CRYPTSETUP_DEV=/dev/sdz7 FINDMNT_MOUNT_SRC="$T_MAPPER" "$@"
 }
-g5c_refused() {
-  died && has '^EMIT_DRIFT rollback_refused_plaintext_wiped$' \
-    && markerF "$DM result=cutover_aborted outcome=refused_plaintext_wiped" \
+g5c_refused() {  # [drift slug] [outcome]
+  local slug="${1:-rollback_refused_plaintext_wiped}" oc="${2:-refused_plaintext_wiped}"
+  died && has "^EMIT_DRIFT ${slug}\$" \
+    && markerF "$DM result=cutover_aborted outcome=${oc}" \
     && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ] \
     && nhas '^umount[[:space:]]' && nhas '^docker stop' && nhas '^cryptsetup close' && nhas '^mount[[:space:]]'
 }
 g5_cleanup "persist_state PLAINTEXT_WIPED '$PIN:1'; FREEZE_HELD=1;"
-g5c_refused && markerF "outcome=refused_plaintext_wiped why=marker " \
+g5c_refused && grep -qE "outcome=refused_plaintext_wiped why=marker\$" "$MARKER_LOG" \
   && ok "G5c cleanup()'s freeze arm on a WIPED host refuses inside rollback(): no umount/close/stop/mount, outcome=refused_plaintext_wiped why=marker" \
   || no "G5c the cleanup() freeze arm rolled back over a wiped plaintext (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') calls=[$(grep -E '^(umount|mount|docker|cryptsetup) ' "$CALLS" | tr '\n' '|')]"
 g5_cleanup "FLIP_DONE=1;" PLAINTEXT_DEV_FSTYPE=
-g5c_refused && markerF "outcome=refused_plaintext_wiped why=plaintext_dev_gone recorded=/dev/sdz9 recorded_type=none" \
-  && ok "G5c the cleanup() flip arm with NO marker but the recorded plaintext zeroed (physical) refuses inside rollback(), the outcome row carrying why=/recorded=/recorded_type=" \
+g5c_refused rollback_refused_plaintext_record_gone refused_plaintext_record_gone \
+  && markerF "outcome=refused_plaintext_record_gone why=plaintext_dev_gone recorded=/dev/sdz9 recorded_status=none" \
+  && ok "G5c the cleanup() flip arm with NO marker but the recorded plaintext unreadable (physical) refuses inside rollback() as refused_plaintext_record_gone, the outcome row carrying why=/recorded=/recorded_status=" \
   || no "G5c the markerless physical case rolled back (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|')"
 g5_cleanup "FLIP_DONE=1;"
 died && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_plaintext_wiped$' && has '^mount /dev/sdz9[[:space:]]' \
@@ -1305,29 +1400,40 @@ else
     && ok "G5d-R1 a dead-man FIRE on a host whose state names a wipe refuses (why=marker) before any stop/umount/close" \
     || no "G5d-R1 the fire string tore down the mount on a wiped host: $(g5d_log)"
   g5d_fire "$T_MAPPER" "" ""
-  grep -qF "reason=refused_plaintext_wiped why=plaintext_dev_gone recorded=$TGT_BLK recorded_type=none" "$G5D_LOG" \
+  grep -qF "reason=refused_plaintext_record_gone why=plaintext_dev_gone recorded=$TGT_BLK recorded_status=none" "$G5D_LOG" \
     && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" && ! grep -qE '^docker stop' "$G5D_LOG" && ! grep -qF -- '-unexpected' "$G5D_LOG" \
-    && ok "G5d-R2 a FIRE with no marker, the mapper mounted and the recorded plaintext zeroed refuses (why=plaintext_dev_gone recorded_type=none)" \
+    && ok "G5d-R2 a FIRE with no marker, the mapper mounted and the recorded plaintext zeroed refuses (reason=refused_plaintext_record_gone recorded_status=none)" \
     || no "G5d-R2 the markerless physical fire tore down the mount: $(g5d_log)"
   g5d_fire "$T_MAPPER" "" crypto_LUKS
-  grep -qF "why=plaintext_dev_gone recorded=$TGT_BLK recorded_type=crypto_LUKS" "$G5D_LOG" && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" \
+  grep -qF "reason=refused_plaintext_record_gone why=plaintext_dev_gone recorded=$TGT_BLK recorded_status=crypto_LUKS" "$G5D_LOG" && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" \
     && ok "G5d-D a FIRE whose recorded device now reads crypto_LUKS (drift) refuses and says so" \
     || no "G5d-D a drifted-record fire tore down the mount: $(g5d_log)"
   g5d_fire "$T_MAPPER" "" ext4
   grep -qE "^mount $TGT_BLK $G5D_MNT\$" "$G5D_LOG" && grep -qF "result=ok reason=plaintext_remounted mount_source=$TGT_BLK" "$G5D_LOG" \
-    && grep -qxF "blkid -p -s TYPE -o value $TGT_BLK" "$G5D_LOG" && ! grep -qF -- '-unexpected' "$G5D_LOG" && ! grep -qF refused_plaintext_wiped "$G5D_LOG" \
+    && grep -qxF "blkid -p -s TYPE -o value $TGT_BLK" "$G5D_LOG" && ! grep -qF -- '-unexpected' "$G5D_LOG" && ! grep -qF refused_plaintext "$G5D_LOG" \
     && ok "G5d-H2 the pre-wipe web-1 shape (mapper mounted, recorded plaintext intact ext4) RESTORES: mount <record> <mnt>, result=ok mount_source=<record>, blkid probed the record" \
     || no "G5d-H2 the intact-record fire did not restore the recorded device: $(g5d_log)"
   g5d_fire /dev/sdz9 "" ext4
   grep -qE '^umount ' "$G5D_LOG" && ! grep -qF 'reason=refused_plaintext_wiped' "$G5D_LOG" && grep -qE "^mount $TGT_BLK " "$G5D_LOG" \
     && ok "G5d-H1 a FIRE mid-freeze (plaintext still mounted, no marker) runs its restore exactly as before" \
     || no "G5d-H1 the pre-wipe fire was refused: $(g5d_log)"
+  # G5d-F8 — the fire's physical witness is gated on the mapper being mounted: mid-freeze (plaintext still
+  # mounted) a record that reads NO filesystem still restores — the mount conjunct, not the type alone.
+  g5d_fire /dev/sdz9 "" ""
+  grep -qE "^mount $TGT_BLK $G5D_MNT\$" "$G5D_LOG" && ! grep -qF refused_plaintext "$G5D_LOG" \
+    && ok "G5d-F8 a FIRE with the plaintext still mounted restores even when the record reads no filesystem (the mapper conjunct)" \
+    || no "G5d-F8 the fire refused (or did not mount) with the plaintext still mounted: $(g5d_log)"
+  # G5d-S — the fire carries a SUBSET of _plaintext_record_status (marker; mapper mounted AND recorded not
+  # ext4); validity, -b and not-the-mapper are proven at arm time. Pin the ext4 clause literally.
+  grep -qF "= ${T_MAPPER} ] && [ \"\$t\" != ext4 ]" <<<"$G5D_FIRE" \
+    && ok "G5d-S the fire's physical witness is exactly (mapper mounted AND recorded TYPE != ext4)" \
+    || no "G5d-S the fire's ext4 clause changed — ${G5D_FIRE:0:300}"
 fi
 
 # ============================================================================
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=160
+WIPE_MIN_PASS=173
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]

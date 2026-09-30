@@ -550,22 +550,40 @@ leaves the app down and pages `rollback_remount_failed`. An acknowledged **pre-w
 remounts the plaintext read-write, so W9 then refuses the step-7 wipe
 (`wipe_plaintext_written_after_cutover`) until those writes are reconciled.
 
-**After Sequence step 7 there is no rollback.** `rollback=true` refuses before any unmount
-(`outcome=refused_plaintext_wiped mode=rollback`, Sentry `rollback_refused_plaintext_wiped`), with or
-without the ack, when either witness holds:
+**After Sequence step 7 there is no rollback.** `rollback=true` refuses before any unmount, with or
+without the ack, when either witness holds. The two witnesses page under different slugs, because only
+the first one is a wipe:
 
-- `why=marker`: `PLAINTEXT_WIPE_BEGUN` or `PLAINTEXT_WIPED` is persisted on web-1. The wipe began, so
-  the copy may be partly or wholly zeroed. Recovery is a re-dispatch of the wipe (it resumes on
-  `arm=re_zero`), never a rollback.
-- `why=plaintext_dev_gone`: `/mnt/data` is the mapper and the plaintext device the cutover recorded
-  (`PLAINTEXT_DEV`, the device a rollback remounts) is not an intact ext4. Read `recorded_type=` on
-  the row: `none` = zeroed or absent; `crypto_LUKS` or another type = a stale record (kernel-name
-  drift), not a wipe — escalate; `blkid_unavailable` or `invalid` (no record, an unsafe record, or
-  one naming the mapper itself) = cannot tell — escalate.
+- `why=marker` (`outcome=refused_plaintext_wiped mode=rollback`, Sentry
+  `rollback_refused_plaintext_wiped`): `PLAINTEXT_WIPE_BEGUN` or `PLAINTEXT_WIPED` is persisted on
+  web-1. The wipe began, so the copy may be partly or wholly zeroed. Recovery is a re-dispatch of the
+  wipe (it resumes on `arm=re_zero`), never a rollback. This is the **only** refusal that proves a
+  wipe: the wipe persists `PLAINTEXT_WIPE_BEGUN` and reads it back before any zero.
+- `why=plaintext_dev_gone` (`outcome=refused_plaintext_record_gone mode=rollback`, Sentry
+  `rollback_refused_plaintext_record_gone`): `/mnt/data` is the mapper and the plaintext device the
+  cutover recorded (`PLAINTEXT_DEV`, the device a rollback remounts) is not an intact ext4. No wipe
+  marker exists, so this is **never** a wipe, whatever `recorded_status=` says: the record drifted
+  (a kernel-name rename after a reboot), the volume was detached, or the probe failed. The intact
+  plaintext may still be attached under another name. **Halt and escalate on every value.**
+  `recorded_status=` narrows the cause: `absent` (the recorded node is no block device: a rename or a
+  detach), `none` (no filesystem signature: another device such as the partitioned root disk, or an
+  ambivalent probe), `crypto_LUKS` or another type (the record now names another volume),
+  `is_mapper` (the record names the live mapper), `invalid` (no record, or an unsafe one),
+  `blkid_absent` / `blkid_error_<rc>` (the probe itself failed).
 
 The check is the first line of `rollback()` itself, so `cleanup()`'s freeze arm refuses the same way
-(`outcome=refused_plaintext_wiped` plus `why=`/`recorded=`/`recorded_type=`), and the dead-man fire
-string carries its own copy (`result=fail reason=refused_plaintext_wiped why=…`).
+(the same two outcomes, the row carrying `why=`, plus `recorded=`/`recorded_status=` under
+`why=plaintext_dev_gone` only), and the dead-man fire string carries its own subset
+(`result=fail reason=refused_plaintext_wiped why=marker`, or
+`result=fail reason=refused_plaintext_record_gone why=plaintext_dev_gone recorded=<dev> recorded_status=<type>`).
+**A refusal from `cleanup()` (a row with no `mode=`) or from a dead-man fire during a cutover leaves the
+app and the writers DOWN** on a LUKS copy that has not passed the host canary: the freeze already
+stopped them, and the refusal restarts nothing. Run the verify workflow and escalate at once; the
+users stay offline until this is resolved.
+
+Off the mapper (for example `/mnt/data` still on the plaintext, or empty), a `rollback()` remounts the
+record only when it reads as an intact restore source. Otherwise it mounts nothing, leaves the app
+down, and its `rollback_remount_failed` row carries `recorded=`/`recorded_status=`.
 
 ## Failure signals (all off-host)
 
@@ -658,13 +676,14 @@ Several reasons can fire in one abort, so the Better Stack outcome row is the au
 | `arm_aborted` | The timer was created but never reached `waiting`; `cleanup()` disarmed it. Check for a `result=disarm_failed` row: if present, a timer may still be live, so watch for `result=fired` within 30 min before re-dispatching. | Re-dispatch once. |
 | `rolled_back` | A pre-canary abort. The plaintext volume is mounted alone and the mapper is closed. Lossless. | Confirm with `gh workflow run workspaces-luks-verify.yml`, find the cause, re-cut. |
 | `rollback_stacked` | The plaintext mount landed on top of another mount, or the mapper stayed open. | Do not re-dispatch. Run the verify workflow, then file a tracked issue with its output. |
-| `rollback_remount_failed` | The plaintext remount failed. The app was left down on purpose, rather than started on the bare root-disk directory. | Run the verify workflow. Dispatch `rollback=true` once more; if it fails again, escalate. |
+| `rollback_remount_failed` | The plaintext remount failed, or was not attempted. The app was left down on purpose, rather than started on the bare root-disk directory. The row carries `recorded=<PLAINTEXT_DEV> recorded_status=<status>`: `ok` means the record was an intact ext4 and the `mount` itself failed; any other value means nothing was mounted because the record is not an intact restore source (read the values as in the `refused_plaintext_record_gone` row below). | Run the verify workflow. `recorded_status=ok`: dispatch `rollback=true` once more; if it fails again, escalate. Any other `recorded_status=`: do NOT re-dispatch (the record will not change); halt and escalate. |
 | `post_canary_luks_retained` | A post-canary abort. The app and writers were restarted on the LUKS mount. | **Fix-forward only.** Diagnose the reason (Sentry) from the run log. `rollback=true` would strand every write since `docker start` (ADR-119 §(b)). |
 | `post_canary_restart_failed` | The roll-forward re-asserted the mapper, but `docker start` failed. Its first stderr line is on the `detail=` field. | Fix the container error, then restart through a normal deploy: `gh workflow run web-platform-release.yml`. |
 | `post_canary_mount_not_mapper` | After a post-canary abort `/mnt/data` was no longer the mapper, so the app and writers were STOPPED. | Run the verify workflow. The only off-host recovery is `rollback=true -f rollback_ack_luks_writes=true` (plaintext, strands LUKS writes); re-mounting the mapper has no dispatch path. Escalate before choosing. |
 | `clean_stray`, `dry_run` | A `clean_stray` or dry run aborted. Nothing was cut over. | Read the run log. |
 | `wipe_aborted` (`mode=wipe`) | A step-7 wipe aborted. `cleanup()` never rolls back or restarts anything for it (the wipe never sets the freeze/canary flags) and shreds any header copy the wipe left on the root disk. A refused wipe REHEARSAL reads `outcome=dry_run mode=wipe`. | Read the `SOLEUR_WORKSPACES_LUKS_WIPE result=refused reason=` row and follow [the step 7 verdict table](#step-7-verdict-table). |
-| `refused_plaintext_wiped` (`mode=rollback`, or no `mode` from `cleanup()`'s freeze arm) | A rollback was attempted with no intact recorded plaintext to remount. `why=marker`: the wipe began (the copy may be partly or wholly zeroed). `why=plaintext_dev_gone`: `/mnt/data` is the mapper and the recorded `PLAINTEXT_DEV` is not an intact ext4 — read `recorded_type=` (`none` = zeroed or absent; `crypto_LUKS`/other = a stale record, not a wipe; `blkid_unavailable`/`invalid` = cannot tell). `rollback()` refused as its first act: nothing was touched. | Do not roll back. `why=marker`: fix forward on the LUKS volume; re-dispatch the wipe (it resumes on `arm=re_zero`). Any other `recorded_type=` than `none`: halt and escalate (drift or an unreadable record). `rollback_ack_luks_writes` does not override this. |
+| `refused_plaintext_wiped` (`why=marker`; `mode=rollback`, or no `mode` from `cleanup()`'s freeze arm) | A rollback was attempted after the wipe began (`PLAINTEXT_WIPE_BEGUN`/`PLAINTEXT_WIPED` persisted); the copy may be partly or wholly zeroed. `rollback()` refused as its first act: nothing was touched. With no `mode=` (from `cleanup()`), the app and the writers are DOWN on a LUKS copy that has not passed the host canary. | Do not roll back. Fix forward on the LUKS volume; re-dispatch the wipe (it resumes on `arm=re_zero`). With no `mode=`: run the verify workflow and escalate at once, the users are offline. `rollback_ack_luks_writes` does not override this. |
+| `refused_plaintext_record_gone` (`why=plaintext_dev_gone`; `mode=rollback`, or no `mode` from `cleanup()`'s freeze arm) | `/mnt/data` is the mapper and the recorded `PLAINTEXT_DEV` is not an intact ext4, with NO wipe marker: this is never a wipe. `recorded=` is the record; `recorded_status=` is what it read (`absent`, `none`, `crypto_LUKS` or another type, `is_mapper`, `invalid`, `blkid_absent`, `blkid_error_<rc>`; see the Rollback section). The intact plaintext may still be attached under another kernel name. `rollback()` refused as its first act: nothing was touched. With no `mode=` (from `cleanup()`), the app and the writers are DOWN on a LUKS copy that has not passed the host canary. | **Halt and escalate on every `recorded_status=`** (drift, a detach or a failed probe). Do not append `PLAINTEXT_DEV=` on the host. With no `mode=`: run the verify workflow first, the users are offline. `rollback_ack_luks_writes` does not override this. |
 
 `abnormal_exit=1` on the row means the script was killed (SIGPIPE from a dropped SSH connection,
 TERM or HUP) rather than dying on a check. Treat the outcome the same way, and look for the network
@@ -674,9 +693,9 @@ Other dead-man rows and reasons:
 
 | Signal | Meaning | Action |
 |---|---|---|
-| `result=arm_refused` / `deadman_already_armed` | A timer was already waiting, or a fire was live, when the cutover tried to arm. Nothing was frozen. | Do not re-dispatch while a timer waits; it fires within 30 min. Read the `result=fired` row, then the next verify run, then re-dispatch. |
-| `result=arm_refused reason=plaintext_dev_unrecorded` / `deadman_arm_failed` | The arm found no restorable recorded plaintext: `detail=` is `blkid_absent` (no blkid at a fixed root-owned path), `record_invalid:<value>` (no `PLAINTEXT_DEV`, or an unsafe one), `record_is_mapper:<dev>` or `record_not_ext4:<dev>`. A dead-man armed then would unmount `/mnt/data` and restore nothing. Nothing was frozen. | Halt and escalate with the `detail=` value; do not re-dispatch the cutover until the record is explained. |
-| `result=arm_failed` / `deadman_arm_failed` | `reason=systemd_run_refused`: nothing was created (`detail=` carries `systemd-run`'s first stderr line). `reason=timer_not_waiting`: see `arm_aborted` above. | Re-dispatch once; the stale unit was already cleared. On a second failure, file a tracked issue with the `detail=` value. |
+| `result=arm_refused reason=already_armed` or `reason=fire_in_progress` / `deadman_already_armed` | A timer was already waiting, or a fire was live, when the cutover tried to arm. Nothing was frozen. | Do not re-dispatch while a timer waits; it fires within 30 min. Read the `result=fired` row, then the next verify run, then re-dispatch. |
+| `result=arm_refused reason=plaintext_dev_unrestorable` / `deadman_arm_failed` | The arm found no restorable recorded plaintext. `detail=<status>:<record>` names what the record read: `invalid:<value>` (no `PLAINTEXT_DEV`, or an unsafe one), `is_mapper:<dev>`, `absent:<dev>`, `none:<dev>`, `<fstype>:<dev>`, `blkid_absent:<dev>` or `blkid_error_<rc>:<dev>`. A dead-man armed then would unmount `/mnt/data` and restore nothing. Nothing was frozen. | **Not** "re-dispatch once": the record will not change, so a re-dispatch refuses the same way. Halt and escalate with the `detail=` value; do not re-dispatch the cutover until the record is explained. |
+| `result=arm_failed reason=systemd_run_refused` or `reason=timer_not_waiting` / `deadman_arm_failed` | `reason=systemd_run_refused`: nothing was created (`detail=` carries `systemd-run`'s first stderr line). `reason=timer_not_waiting`: see `arm_aborted` above. | Re-dispatch once (these two reasons only); the stale unit was already cleared. On a second failure, file a tracked issue with the `detail=` value. |
 | `result=disarm_failed` / `deadman_disarm_failed` | `check=a`, `b` or `c` at the host canary: the disarm could not be verified, so the run rolled back before `docker start`. `check=fire_stuck` in a rollback: a fire ran past the wait. | Read the outcome row, run the verify workflow. |
 | `deadman_fired_before_disarm` | A fire raced the host-canary disarm and reverted the mount. The run rolled back before `docker start`. | As above. |
 | `host_canary_workspace_count_mismatch`, `host_canary_baseline_missing` | The mounted copy's workspace count does not match what G3 counted in this run, or G3's count is missing. Rolled back before `docker start`. | Do not re-dispatch blind. Compare the counts in the run log, then file a tracked issue. |
@@ -685,7 +704,7 @@ Other dead-man rows and reasons:
 | `cutover_aborted_post_canary` (fatal) | Any post-canary abort, including tail failures (`green_run_degraded_queue`, `luks_monitor_timer_enable_failed`), not only an app failure. | Read the outcome row. |
 | `result=not_armed prior=<substate>` | A `rollback=true` dispatch found no timer armed by this run; `prior` is what it stopped. | None, unless `prior=waiting` (a stale armed timer was cancelled). |
 | `result=already_disarmed` | A rollback found this run had already disarmed its timer at the host canary. | None. |
-| `result=fail reason=refused_plaintext_wiped` (dead-man) | A dead-man FIRE found a wipe marker (`why=marker`), or the mapper mounted with the recorded plaintext device no longer an intact ext4 (`why=plaintext_dev_gone recorded=<dev> recorded_type=<type>`; read it as in the `refused_plaintext_wiped` row above), and exited before any stop/umount/close. The live mount is untouched. A fire that restores logs `result=ok reason=plaintext_remounted mount_source=<dev>`. | Run the verify workflow; halt and escalate (a dead-man should never be armed on a cut-over host). |
+| `result=fail reason=refused_plaintext_wiped` (dead-man, `why=marker`) or `result=fail reason=refused_plaintext_record_gone` (dead-man, `why=plaintext_dev_gone recorded=<dev> recorded_status=<type>`) | A dead-man FIRE found a wipe marker, or the mapper mounted with the recorded plaintext device no longer reading ext4 (read `recorded_status=` as in the `refused_plaintext_record_gone` row above: never a wipe), and exited before any stop/umount/close. The live mount is untouched. A fire that restores logs `result=ok reason=plaintext_remounted mount_source=<dev>`. **A fire during a cutover leaves the app and the writers DOWN**: the freeze stopped them, the refusal restarts nothing, and the LUKS copy has not passed the host canary. | Run the verify workflow; halt and escalate at once (users stay offline until this is resolved). After the host canary a dead-man should never be armed on a cut-over host. |
 | Alert `soleur-workspaces-luks-deadman-fired-prd` (`result=fired`) | An unattended dead-man fire stopped the app and remounted plaintext, for example after a SIGKILL of the host script mid-freeze. The alert auto-resolves after 10 quiet minutes; that does not mean anything was reconciled. | Match the fire's time against `gh run list --workflow=workspaces-luks-cutover.yml` to find the run that armed it. Run the verify workflow. Writes made on the LUKS volume **before** the fire are stranded there: reconcile them before any re-cut. |
 
 ### Host-timer liveness alert (#8706)

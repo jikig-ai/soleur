@@ -172,11 +172,12 @@ harness_blockdev_other() {
 #   CRYPTSETUP_UUID           what `cryptsetup luksUUID` prints (default EMPTY: rc 1, nothing printed)
 #   READLINK_RC=<n>           force `readlink`'s exit status (the naive _same_dev fails OPEN here)
 #   READLINK_EMPTY=1          readlink exits 0 but prints NOTHING (the other fail-open half)
-#   PLAINTEXT_DEV_FSTYPE      what the _plaintext_dev_type seam reports for the recorded plaintext
-#                             device (default `ext4` = an intact plaintext; empty = zeroed or absent;
-#                             `crypto_LUKS` = a stale record naming the LUKS volume; `blkid_unavailable`).
-#                             NOT named PLAINTEXT_DEV_TYPE: that is the script global _plaintext_gone
-#                             sets, and sourcing the script would clobber a knob of the same name.
+#   PLAINTEXT_DEV_FSTYPE      what the _plaintext_dev_type seam (the physical probe under
+#                             _plaintext_record_status) reports for the recorded plaintext device:
+#                             default `ext4` = an intact plaintext; `none` (or empty) = no filesystem
+#                             signature; `absent` = not a block device; `crypto_LUKS` = a stale record
+#                             naming the LUKS volume; `blkid_error_<rc>`. The REAL probe's rc mapping is
+#                             exercised by the wipe suite's F6 row, not here.
 #   PLAINTEXT_DEV_UNSEEDED=1  skip the default record. Every case otherwise starts with
 #                             PLAINTEXT_DEV=/dev/sdz9 in its state file (the cutover's rollback
 #                             rehearsal records the plaintext mount source; reads are last-wins, so an
@@ -184,7 +185,8 @@ harness_blockdev_other() {
 #                             no case depends on a /dev/disk/by-label link.
 #   BLKID_BIN_PATH            what the _plaintext_blkid_bin seam prints (default `blkid`); the dead-man
 #                             fire bakes it, so a suite that executes the fire points it at a stub.
-#                             BLKID_ABSENT=1 (above) makes the seam print nothing.
+#                             BLKID_ABSENT=1 (above) makes the seam print nothing, and the
+#                             _plaintext_dev_type seam answer `blkid_absent` (as production does).
 #
 # Dead-man unit model (#9045). `systemctl show|stop|reset-failed` and `systemd-run` answer PER UNIT
 # for workspaces-luks-deadman.{timer,service} (a bare `workspaces-luks-deadman` is the service,
@@ -628,10 +630,16 @@ run_case() {
         if [ "${1:-}" = "-v" ] && [ -n "${TOOL_ABSENT:-}" ] && [ "${2:-}" = "${TOOL_ABSENT}" ]; then return 1; fi
         builtin command "$@"
       }
-      # #6604 step 7 — the recorded-plaintext seams. Production probes the recorded device with a
-      # blkid from a fixed root-owned path list; here the seam records its ARGUMENT (so a wrong key or
-      # an empty argument is visible) and answers PLAINTEXT_DEV_FSTYPE (default ext4 = intact).
-      _plaintext_dev_type() { rec "SEAM _plaintext_dev_type ${1:-}"; [ -n "${1:-}" ] || return 0; printf "%s" "${PLAINTEXT_DEV_FSTYPE-ext4}"; }
+      # #6604 step 7 — the recorded-plaintext seams. Production probes the recorded device ([ -b ], then
+      # a blkid from a fixed root-owned path list); here the seam records its ARGUMENT (so a wrong key or
+      # an empty argument is visible) and answers PLAINTEXT_DEV_FSTYPE (default ext4 = intact). The
+      # composing _plaintext_record_status (validity, the mapper alias check, ok-vs-not) stays REAL.
+      _plaintext_dev_type() {
+        rec "SEAM _plaintext_dev_type ${1:-}"
+        [ -n "${1:-}" ] || { printf absent; return 0; }
+        [ "${BLKID_ABSENT:-}" = "1" ] && { printf blkid_absent; return 0; }
+        printf "%s" "${PLAINTEXT_DEV_FSTYPE-ext4}"
+      }
       _plaintext_blkid_bin() { [ "${BLKID_ABSENT:-}" = "1" ] && return 0; printf "%s" "${BLKID_BIN_PATH:-blkid}"; }
       for f in ${REQUIRE_FNS:-}; do
         declare -F "$f" >/dev/null || { echo "HARNESS_UNDEFINED:$f"; exit 97; }

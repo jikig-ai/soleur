@@ -758,8 +758,9 @@ t30_rfs="$(idx '^systemctl reset-failed .*workspaces-luks-deadman\.service')"
 t30_run="$(idx '^systemd-run ')"
 if ran && outF 'ARMED=1' && [ -n "$t30_stop" ] && [ -n "$t30_rft" ] && [ -n "$t30_rfs" ] && [ -n "$t30_run" ] \
   && [ "$t30_stop" -lt "$t30_run" ] && [ "$t30_rft" -lt "$t30_run" ] && [ "$t30_rfs" -lt "$t30_run" ] \
-  && has '^systemd-run .*--description=' && markerF "$DM result=armed reason=freeze_engaged deadline_min=30"; then
-  ok "T30 arm: stale units cleared (stop tolerates exit 5, reset-failed both) BEFORE systemd-run --description=, verified waiting, result=armed"
+  && has '^systemd-run .*--description=' && markerF "$DM result=armed reason=freeze_engaged deadline_min=30" \
+  && hasF "SEAM _plaintext_dev_type /dev/sdz9"; then
+  ok "T30 arm: stale units cleared (stop tolerates exit 5, reset-failed both) BEFORE systemd-run --description=, verified waiting, result=armed; the record probe asked about the RECORDED device"
 else
   no "T30 arm happy path wrong (rc=$CASE_RC stop=$t30_stop rf.timer=$t30_rft rf.service=$t30_rfs run=$t30_run) ${CASE_OUT:0:240}"
 fi
@@ -846,18 +847,23 @@ for t33 in "already_armed DEADMAN_TIMER_SUBSTATES=waiting" "fire_in_progress DEA
     no "T33 arm did not refuse a live dead-man ($t33_reason, ${t33_knob#*=}, rc=$CASE_RC) ${CASE_OUT:0:240}"
   fi
 done
-# A1–A6 (#6604 fix-forward) — the arm REFUSES a backstop that could restore nothing. The fire unmounts
-# $MOUNT and remounts the recorded PLAINTEXT_DEV; with no valid, non-mapper, ext4 record (or no blkid at a
-# fixed path to test it at fire time) it would take the live copy offline and mount nothing. Pre-freeze:
-# dies before any stop of the dead-man unit and before systemd-run (the T33 shape).
-for a in "record_invalid:empty PLAINTEXT_DEV_UNSEEDED=1" "record_invalid:x;logger REC=x;logger INJECTED" \
-         "record_is_mapper:/dev/mapper/workspaces REC=/dev/mapper/workspaces" "blkid_absent BLKID_ABSENT=1" \
-         "record_not_ext4:/dev/sdz9 PLAINTEXT_DEV_FSTYPE=crypto_LUKS" "record_invalid:-o REC=-o"; do
+# A1–A11 (#6604 fix-forward) — the arm REFUSES a backstop that could restore nothing. The fire unmounts
+# $MOUNT and remounts the recorded PLAINTEXT_DEV; unless _plaintext_record_status reads `ok` (valid, a
+# block device, not the mapper, ext4 — and a blkid at a fixed path to re-test it at fire time) it would
+# take the live copy offline and mount nothing. Pre-freeze: dies before any stop of the dead-man unit and
+# before systemd-run (the T33 shape). `detail=<status>:<record>` names what the record read.
+for a in "invalid:empty PLAINTEXT_DEV_UNSEEDED=1" "invalid:x;logger REC=x;logger INJECTED" \
+         "is_mapper:/dev/mapper/workspaces REC=/dev/mapper/workspaces" "blkid_absent:/dev/sdz9 BLKID_ABSENT=1" \
+         "crypto_LUKS:/dev/sdz9 PLAINTEXT_DEV_FSTYPE=crypto_LUKS" "invalid:-o REC=-o" \
+         "invalid:/dev/sdz9;logger REC=/dev/sdz9;logger" "invalid:/dev/../tmp/x REC=/dev/../tmp/x" \
+         "is_mapper:/dev/mapper/./workspaces REC=/dev/mapper/./workspaces" "absent:/dev/sdz9 PLAINTEXT_DEV_FSTYPE=absent" \
+         "none:/dev/sdz9 PLAINTEXT_DEV_FSTYPE=none"; do
   a_n=$((${a_n:-0} + 1)); a_detail="${a%% *}"; a_knob="${a#* }"; a_pre=":;"
   case "$a_knob" in REC=*) a_pre="persist_state PLAINTEXT_DEV '${a_knob#REC=}';"; a_knob="A_NOOP=1" ;; esac
   run_case "$CUTOVER" "$a_pre DRY_RUN=0; arm_dead_man; echo PAST_ARM" 'arm_dead_man' "$a_knob" WORKSPACES_MAPPER_NAME=workspaces
-  if died && markerF "$DM result=arm_refused reason=plaintext_dev_unrecorded detail=$a_detail" && has '^EMIT_DRIFT deadman_arm_failed$' \
-    && ! outF PAST_ARM && nhas '^systemd-run ' && nhas '^systemctl stop workspaces-luks-deadman' && outF 'DIE:'; then
+  if died && markerF "$DM result=arm_refused reason=plaintext_dev_unrestorable detail=$a_detail" && has '^EMIT_DRIFT deadman_arm_failed$' \
+    && ! outF PAST_ARM && nhas '^systemd-run ' && nhas '^systemctl stop workspaces-luks-deadman' && outF 'DIE:' \
+    && outF "unmount $MNT " && ! outF '$MOUNT'; then
     ok "A${a_n} arm refuses with no restorable record ($a_detail): dies pre-freeze, no dead-man stop, no systemd-run, drift deadman_arm_failed"
   else
     no "A${a_n} arm did not refuse ($a_detail, rc=$CASE_RC) $(grep -F 'op=workspaces-luks-deadman' "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:200}"
@@ -1040,6 +1046,23 @@ for t35e in "MOUNTPOINT_RC=1:/dev/sdz9:down" "MOUNTPOINT_RC=0:$T_MAPPER:down" "M
     no "T35e rollback restart gate wrong for ${t35e_mp} source=[${t35e_src:-empty}] want=$t35e_want (rc=$CASE_RC) ${CASE_OUT:0:200}"
   fi
 done
+# T35f — rollback()'s remount mounts the record ONLY when _plaintext_record_status reads `ok` (#6604
+# review): Guard 5's physical arm probes only while $MOUNT is the mapper, so off the mapper (here the
+# plaintext, which reads empty once the timer stop lands) the mount site gates itself. An invalid or
+# non-ext4 record mounts NOTHING, the app stays down, and the run log names recorded=/recorded_status=.
+for t35f in "-o:invalid:ext4" "/dev/sdz9:crypto_LUKS:crypto_LUKS" "/dev/sdz9:absent:absent"; do
+  IFS=: read -r t35f_rec t35f_st t35f_fs <<<"$t35f"
+  run_case "$CUTOVER" "persist_state PLAINTEXT_DEV '$t35f_rec'; DRY_RUN=0; rollback" 'rollback' FINDMNT_MOUNT_SRC=/dev/sdz9 \
+    DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP= PLAINTEXT_DEV_FSTYPE="$t35f_fs" \
+    ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+  if ran && has '^umount[[:space:]]' && nhas '^mount[[:space:]]' && nhas '^docker start ' && has '^EMIT_DRIFT rollback_remount_failed$' \
+    && outF "recorded=$t35f_rec recorded_status=$t35f_st"; then
+    ok "T35f rollback() off the mapper with a record reading $t35f_st ($t35f_rec) mounts NOTHING and leaves the app DOWN, naming recorded_status=$t35f_st"
+  else
+    no "T35f rollback() mounted or restarted on a non-ok record ($t35f_rec, $t35f_st; rc=$CASE_RC) calls=[$(grep -E '^(mount|docker) ' "$CALLS" | tr '\n' '|')] ${CASE_OUT:0:200}"
+  fi
+done
+
 # T40 — the host-canary POPULATION assert (#9098 E): the workspace count on the LIVE mount must equal
 # the IN-PROCESS G3 count ($WS_INVENTORY) — never read_state, whose file is append-only across runs,
 # so an earlier run's WORKSPACES_COUNT could stand in for this run's. Every failure dies before any
@@ -1390,6 +1413,15 @@ if died && has '^umount[[:space:]]' && has '^EMIT_DRIFT rollback_remount_failed$
 else
   no "J7 a failed-remount ROLLBACK=1 went green or mis-recorded (rc=$CASE_RC): $(grep -F 'cutover_aborted' "$MARKER_LOG" | tr '\n' '|')"
 fi
+# J7b — the same outcome row names WHY nothing was remounted when the record was not an intact restore
+# source: recorded=/recorded_status= ride the rollback_remount_failed row (Better Stack, no SSH).
+rb_case "none" FINDMNT_MOUNT_SRC=/dev/sdz9 DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP= PLAINTEXT_DEV_FSTYPE=crypto_LUKS
+if died && nhas '^mount[[:space:]]' && markerF "$DM result=cutover_aborted outcome=rollback_remount_failed mode=rollback recorded=/dev/sdz9 recorded_status=crypto_LUKS" \
+  && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ]; then
+  ok "J7b a ROLLBACK=1 whose record reads crypto_LUKS mounts nothing; its ONE rollback_remount_failed row carries recorded=/dev/sdz9 recorded_status=crypto_LUKS"
+else
+  no "J7b the non-ok-record ROLLBACK=1 mounted or mis-recorded (rc=$CASE_RC): $(grep -F 'cutover_aborted' "$MARKER_LOG" | tr '\n' '|')"
+fi
 # J8 — the plaintext remounted but the mapper is STILL OPEN (a close that failed EBUSY): a decrypted
 # copy is live, so the rollback is not clean either — rollback_stacked, non-zero.
 run_case "$CUTOVER" "MAPPER=\"\$WORKSPACES_STAGING\"; persist_state CANARY_OK '1:uuid-live'; trap cleanup EXIT; eval \"\$RB_TEXT\"" \
@@ -1604,7 +1636,7 @@ echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
 # still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=176
+FREEZE_MIN_PASS=185
 [ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
 harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
 [ "$fail" -eq 0 ]
