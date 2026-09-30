@@ -596,4 +596,85 @@ describe("ChatInput — attachments", () => {
       expect(tokens).toContain("p-0");
     });
   });
+  describe("while an attachment send is in flight", () => {
+    function primeHangingUpload() {
+      const mockXhr = {
+        open: vi.fn(),
+        setRequestHeader: vi.fn(),
+        send: vi.fn(),
+        abort: vi.fn(),
+        upload: { onprogress: null as null | ((e: Partial<ProgressEvent>) => void) },
+        onload: null as null | (() => void),
+        onerror: null as null | (() => void),
+        onabort: null as null | (() => void),
+        status: 200,
+      };
+      vi.stubGlobal("XMLHttpRequest", vi.fn(function () { return mockXhr; }));
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          uploadUrl: "https://storage.supabase.co/upload/signed/abc",
+          storagePath: "user-1/conv-1/uuid.md",
+        }),
+      });
+      return mockXhr;
+    }
+
+    async function startSend() {
+      const mockXhr = primeHangingUpload();
+      const onSend = vi.fn();
+      setup({ onSend, conversationId: "conv-1" });
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File(["# a"], "a.md", { type: "" })] } });
+      await screen.findByTestId("attachment-preview");
+      await userEvent.type(screen.getByRole("textbox"), "hi");
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(mockXhr.send).toHaveBeenCalled());
+      return { mockXhr, onSend };
+    }
+
+    it("ignores a drop until the upload settles", async () => {
+      const { mockXhr } = await startSend();
+      const before = screen.queryAllByTestId("attachment-preview").length;
+
+      const zone = document.querySelector("div.relative") as HTMLElement;
+      fireEvent.drop(zone, {
+        dataTransfer: { files: [new File(["# b"], "b.md", { type: "" })] },
+      });
+
+      expect(screen.queryAllByTestId("attachment-preview")).toHaveLength(before);
+      mockXhr.onload?.();
+    });
+
+    it("ignores a pasted file until the upload settles", async () => {
+      const { mockXhr } = await startSend();
+      const before = screen.queryAllByTestId("attachment-preview").length;
+
+      fireEvent.paste(screen.getByRole("textbox"), {
+        clipboardData: {
+          files: [new File(["# c"], "c.md", { type: "" })],
+          getData: () => "",
+        },
+      });
+
+      expect(screen.queryAllByTestId("attachment-preview")).toHaveLength(before);
+      mockXhr.onload?.();
+    });
+
+    it("returns focus to the textarea once the send finishes", async () => {
+      const { mockXhr, onSend } = await startSend();
+      // Browsers drop focus from a control that becomes disabled; happy-dom
+      // does not model that, so park focus elsewhere and assert it is GIVEN BACK.
+      const parking = document.createElement("input");
+      document.body.appendChild(parking);
+      parking.focus();
+      expect(document.activeElement).toBe(parking);
+
+      mockXhr.onload?.();
+      await waitFor(() => expect(onSend).toHaveBeenCalled());
+      const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
+      await waitFor(() => expect(document.activeElement).toBe(textarea));
+      parking.remove();
+    });
+  });
 });

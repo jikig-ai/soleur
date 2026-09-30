@@ -71,6 +71,24 @@ describe("validateFiles — markdown / plain text", () => {
   });
 });
 
+describe("validateFiles — several rejections in one batch", () => {
+  it("names every skipped file instead of only the last", () => {
+    const { valid, error } = validateFiles(
+      [file("a.exe", "application/octet-stream"), file("ok.md", ""), file("b.py", "text/plain")],
+      0,
+    );
+    expect(valid).toHaveLength(1);
+    expect(error).toMatch(/^2 files skipped:/);
+    expect(error).toContain('"a.exe" is not a supported file type.');
+    expect(error).toContain('"b.py" is not a supported file type.');
+  });
+
+  it("keeps the single-file message unchanged", () => {
+    const { error } = validateFiles([file("a.exe", "application/octet-stream")], 0);
+    expect(error).toBe('"a.exe" is not a supported file type.');
+  });
+});
+
 describe("validateFiles — unchanged behavior", () => {
   it("still accepts images and PDFs by reported type", () => {
     const { valid, error } = validateFiles(

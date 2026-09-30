@@ -28,11 +28,11 @@ export function validateFiles(
 ): { valid: File[]; error?: string } {
   const fileArray = Array.from(files);
   const valid: File[] = [];
-  let error: string | undefined;
+  const errors: string[] = [];
 
   for (const file of fileArray) {
     if (currentCount + valid.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-      error = `Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`;
+      errors.push(`Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
       break;
     }
     const resolved = resolveAttachmentContentType({
@@ -40,11 +40,11 @@ export function validateFiles(
       filename: file.name,
     });
     if (!resolved) {
-      error = `"${file.name}" is not a supported file type.`;
+      errors.push(`"${file.name}" is not a supported file type.`);
       continue;
     }
     if (file.size === 0) {
-      error = `"${file.name}" is empty.`;
+      errors.push(`"${file.name}" is empty.`);
       continue;
     }
     // Closes #3332: PDFs are bounded by Anthropic's request-size ceiling
@@ -53,11 +53,13 @@ export function validateFiles(
       isPdfAttachment({ contentType: resolved, filename: file.name }) &&
       file.size > MAX_AGENT_READABLE_PDF_SIZE
     ) {
-      error = `"${file.name}" exceeds the ${PDF_LIMIT_MB} MB PDF size limit (Anthropic API request-size ceiling after base64 encoding).`;
+      errors.push(
+        `"${file.name}" exceeds the ${PDF_LIMIT_MB} MB PDF size limit (Anthropic API request-size ceiling after base64 encoding).`,
+      );
       continue;
     }
     if (file.size > MAX_ATTACHMENT_SIZE) {
-      error = `"${file.name}" exceeds the ${ATTACHMENT_LIMIT_MB} MB size limit.`;
+      errors.push(`"${file.name}" exceeds the ${ATTACHMENT_LIMIT_MB} MB size limit.`);
       continue;
     }
     valid.push(
@@ -70,5 +72,13 @@ export function validateFiles(
     );
   }
 
+  // One rejection keeps its own message; several are aggregated so the user
+  // sees every skipped file, not just the last one.
+  const error =
+    errors.length === 0
+      ? undefined
+      : errors.length === 1
+        ? errors[0]
+        : `${errors.length} files skipped: ${errors.join(" ")}`;
   return { valid, error };
 }

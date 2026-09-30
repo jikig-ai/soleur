@@ -501,11 +501,14 @@ export function ChatInput({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragOver(false);
+      // Ignore drops while a send is uploading: handleSubmit is uploading the
+      // staged set, so a late file would sit outside that send.
+      if (isUploading) return;
       if (e.dataTransfer.files.length > 0) {
         validateAndAddFiles(e.dataTransfer.files);
       }
     },
-    [validateAndAddFiles],
+    [validateAndAddFiles, isUploading],
   );
 
   // Clipboard paste handler
@@ -514,6 +517,7 @@ export function ChatInput({
       const files = e.clipboardData.files;
       if (files.length > 0) {
         e.preventDefault();
+        if (isUploading) return; // same reason as handleDrop
         validateAndAddFiles(files);
         return;
       }
@@ -535,8 +539,16 @@ export function ChatInput({
         }
       }
     },
-    [validateAndAddFiles],
+    [validateAndAddFiles, isUploading],
   );
+
+  // The textarea is disabled while a send uploads, which drops focus; give it
+  // back when the upload settles so the user can keep typing.
+  const wasUploadingRef = useRef(false);
+  useEffect(() => {
+    if (wasUploadingRef.current && !isUploading) textareaRef.current?.focus();
+    wasUploadingRef.current = isUploading;
+  }, [isUploading]);
 
   return (
     <div
