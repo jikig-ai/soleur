@@ -4,11 +4,11 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.join(
   __dirname,
-  "../supabase/migrations/153_email_triage_statutory_archive_guard.sql",
+  "../supabase/migrations/145_email_triage_statutory_archive_guard.sql",
 );
 const DOWN_PATH = path.join(
   __dirname,
-  "../supabase/migrations/153_email_triage_statutory_archive_guard.down.sql",
+  "../supabase/migrations/145_email_triage_statutory_archive_guard.down.sql",
 );
 const MIGRATION_111_PATH = path.join(
   __dirname,
@@ -39,7 +39,7 @@ function functionBody(source: string): string {
   return m[0];
 }
 
-describe("mig 153: statutory archive pin on set_email_triage_status", () => {
+describe("mig 145: statutory archive pin on set_email_triage_status", () => {
   it("re-creates the function", () => {
     expect(sql).toContain(
       "CREATE OR REPLACE FUNCTION public.set_email_triage_status(p_id uuid, p_status text)",

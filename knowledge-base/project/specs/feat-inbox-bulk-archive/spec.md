@@ -91,7 +91,7 @@ Cancel / Archive. No "Delete/Remove/Clear/Dismiss" verbs; no undo promises.
 lives in `server/` and loops `set_inbox_item_state` /
 `set_email_triage_status` per id. Server re-derives eligibility per id —
 including `statutory_class IS NULL` for email ids — because the client
-selection may be stale and the email RPC has no statutory check (mig 153 in
+selection may be stale and the email RPC has no statutory check (mig 145 in
 this PR adds the DB-level pin as belt-and-suspenders).
 
 Response: `{results: [{id, kind, outcome}]}` with
@@ -117,7 +117,7 @@ and the confirmation dialog for FR1–FR4.
 
 No new RPC, no signature change to `set_inbox_item_state`
 (`test/migration-122-inbox-item.test.ts` regex-pins it). One migration ships:
-`153_email_triage_statutory_archive_guard.sql` re-creates
+`145_email_triage_statutory_archive_guard.sql` re-creates
 `set_email_triage_status` adding a statutory pin (`archived` rejected when
 `statutory_class IS NOT NULL`, `ERRCODE='P0001'`) — resolved at plan time when
 the deferral gate classed it inline-sized. The bulk handler calls the existing

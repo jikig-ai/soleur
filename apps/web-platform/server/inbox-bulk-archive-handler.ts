@@ -14,7 +14,7 @@
  * (statutory email, un-acted action_required, acknowledged, already-archived)
  * returns `guarded` + reason and the RPC is NEVER invoked for it. A P0001
  * from the RPC then unambiguously means `conflict` (the row became ineligible
- * between prefetch and dispatch — or an unclassified guard fired). mig 153
+ * between prefetch and dispatch — or an unclassified guard fired). mig 145
  * additionally pins statutory rows at the DB level.
  *
  * Soft deadline: sequential per-id RPCs in one request risk outliving the

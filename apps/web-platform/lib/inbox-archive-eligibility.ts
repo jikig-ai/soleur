@@ -67,7 +67,7 @@ export function unkey(key: string): BulkItemRef {
 }
 
 /** Email rows (email_triage_items). Mirrors `set_email_triage_status`:
- * transitions only from `new`; statutory rows are never archivable (mig 153). */
+ * transitions only from `new`; statutory rows are never archivable (mig 145). */
 export function emailRowEligibility(row: {
   status: string;
   statutory_class: string | null;

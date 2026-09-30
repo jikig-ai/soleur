@@ -1,4 +1,4 @@
--- Verify 153_email_triage_statutory_archive_guard.sql (#9284).
+-- Verify 145_email_triage_statutory_archive_guard.sql (#9284).
 --
 -- Contract: every row returns `check_name` + `bad`. Any `bad > 0` row fails CI
 -- verify-migrations (run-verify.sh parses tab-separated (check_name TEXT,
