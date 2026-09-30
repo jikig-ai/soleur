@@ -31,7 +31,7 @@ export const ALLOWED_ATTACHMENT_TYPES = new Set([
  */
 export const ATTACHMENT_EXTENSION_BY_TYPE: Record<string, string> = {
   "image/png": "png",
-  "image/jpeg": "jpg",
+  "image/jpeg": "jpeg",
   "image/gif": "gif",
   "image/webp": "webp",
   "application/pdf": "pdf",

@@ -16,6 +16,10 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
 import { validateFiles } from "@/lib/validate-files";
+import {
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_EXTENSION_BY_TYPE,
+} from "@/lib/attachment-constants";
 import { setPendingFiles } from "@/lib/pending-attachments";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -304,7 +308,9 @@ export default function DashboardPage() {
     (files: FileList | File[]) => {
       const { valid, error } = validateFiles(files, firstRunAttachments.length);
 
-      if (error) setAttachError(error);
+      // The rejection message must survive a mixed batch: clearing it whenever
+      // any file was valid hid the reason the other file(s) were dropped.
+      setAttachError(error ?? null);
       if (valid.length > 0) {
         setFirstRunAttachments((prev) => [
           ...prev,
@@ -314,7 +320,6 @@ export default function DashboardPage() {
             preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
           })),
         ]);
-        setAttachError(null);
       }
     },
     [firstRunAttachments.length],
@@ -515,6 +520,7 @@ export default function DashboardPage() {
               {firstRunAttachments.map((att) => (
                 <div
                   key={att.id}
+                  title={att.file.name}
                   className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
                 >
                   {att.preview ? (
@@ -523,6 +529,15 @@ export default function DashboardPage() {
                       alt=""
                       className="h-8 w-8 rounded object-cover"
                     />
+                  ) : att.file.type.startsWith("text/") ? (
+                    // Text-only label for md/txt (intake canonicalizes file.type,
+                    // so this is the extension of the resolved type).
+                    <span
+                      data-testid="first-run-attachment-label"
+                      className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary"
+                    >
+                      {ATTACHMENT_EXTENSION_BY_TYPE[att.file.type]?.toUpperCase() ?? "FILE"}
+                    </span>
                   ) : (
                     <svg className="h-4 w-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
@@ -570,7 +585,7 @@ export default function DashboardPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+              accept={ATTACHMENT_ACCEPT}
               multiple
               className="hidden"
               onChange={(e) => {

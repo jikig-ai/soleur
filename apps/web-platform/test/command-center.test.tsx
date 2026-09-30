@@ -542,6 +542,75 @@ describe("Command Center", () => {
       });
     });
 
+    it("accepts a .md the browser reports with an empty type and labels it MD", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      expect((fileInput.getAttribute("accept") ?? "").split(",")).toEqual(
+        expect.arrayContaining([".md", ".txt"]),
+      );
+
+      const mdFile = new File(["# notes"], "onboarding-notes.md", { type: "" });
+      fireEvent.change(fileInput, { target: { files: [mdFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("onboarding-notes.md")).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/not a supported file type/)).not.toBeInTheDocument();
+      expect(screen.getByTestId("first-run-attachment-label")).toHaveTextContent("MD");
+    });
+
+    it("keeps the rejection message when a batch mixes a valid and an invalid file", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: {
+          files: [
+            new File(["# notes"], "ok.md", { type: "" }),
+            new File(["bad"], "malware.exe", { type: "application/octet-stream" }),
+          ],
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("ok.md")).toBeInTheDocument();
+      });
+      expect(screen.getByText(/"malware.exe" is not a supported file type/)).toBeInTheDocument();
+    });
+
+    it("rejects a 0-byte .md as empty", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File([""], "empty.md", { type: "" })] } });
+
+      await waitFor(() => {
+        expect(screen.getByText('"empty.md" is empty.')).toBeInTheDocument();
+      });
+    });
+
     it("removes attachment when X button is clicked", async () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"

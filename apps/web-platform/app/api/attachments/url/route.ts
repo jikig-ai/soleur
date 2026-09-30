@@ -4,8 +4,26 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
 import { verifiedUserId } from "@/server/request-auth";
 import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
+import { fileExtension } from "@/lib/attachment-constants";
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
+
+// Extensions rendered inline as <img> (attachment-display.tsx). Everything
+// else (pdf, md, txt) is a file chip and is signed for DOWNLOAD only.
+const INLINE_IMAGE_EXTENSIONS = new Set(["png", "jpeg", "jpg", "gif", "webp"]);
+
+// Filename for Content-Disposition: strip path separators, quotes and
+// control/line-separator characters, cap the length.
+function downloadName(raw: unknown, storagePath: string): string {
+  const candidate =
+    typeof raw === "string" && raw.trim() !== ""
+      ? raw
+      : storagePath.slice(storagePath.lastIndexOf("/") + 1);
+  return candidate
+    // eslint-disable-next-line no-control-regex
+    .replace(/[/\\"\x00-\x1f\x7f\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b\ufeff]/g, "_")
+    .slice(0, 255);
+}
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -66,9 +84,16 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data, error } = await service.storage
-    .from("chat-attachments")
-    .createSignedUrl(body.storagePath, 3_600); // 1 hour expiry
+  // Non-image types are signed with `download`, which forces
+  // `Content-Disposition: attachment`: a markdown/text/PDF attachment is never
+  // rendered inline on the storage origin, and the chip saves under its real
+  // filename instead of `<uuid>.<ext>`.
+  const bucket = service.storage.from("chat-attachments");
+  const { data, error } = INLINE_IMAGE_EXTENSIONS.has(fileExtension(body.storagePath))
+    ? await bucket.createSignedUrl(body.storagePath, 3_600) // 1 hour expiry
+    : await bucket.createSignedUrl(body.storagePath, 3_600, {
+        download: downloadName(body.filename, body.storagePath),
+      });
 
   if (error || !data) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
