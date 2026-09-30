@@ -132,7 +132,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // decision — the bug they exist to prevent was an INVISIBLE mutation, so the
 // marker is the observability contract, not an error.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_SKIPPED\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // MIRRORED-NOT-PAGED (#9269): SOLEUR_WORKTREE_INSTALL_SKIPPED. Emitted by
 // worktree-manager.sh's install_deps when a dependency-install arm is skipped
@@ -140,7 +140,10 @@ const MARKER_RE =
 // reason=registry-unreachable (the bounded preflight found the resolved
 // registry host unreachable — the sandbox-egress-deny class that used to hang
 // the pipeline on the package manager's own retries), or reason=timeout (the
-// per-arm bound expired). None is a wedge: worktree creation still completes
+// per-arm bound expired), reason=failed (ordinary nonzero install), plus
+// reason=tool-missing / reason=no-lockfile on the preflight-free arms; the
+// sibling SOLEUR_WORKTREE_INSTALL_UNBOUNDED marks arms that ran with no
+// timeout binary at all. None is a wedge: worktree creation still completes
 // and the worktree is usable — installs are re-runnable inside it. The marker
 // exists because a hung install previously read as a stalled pipeline with no
 // diagnostic naming the cause.

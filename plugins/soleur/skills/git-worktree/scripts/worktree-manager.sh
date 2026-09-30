@@ -176,12 +176,33 @@ fi
 # The `${install_to[@]+"${install_to[@]}"}` expansion at the use site is
 # load-bearing: bash 3.2 treats an EMPTY array as unbound under `set -u`
 # (git-commit-secret-scan.sh precedent).
+# A non-numeric SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS would make timeout(1)
+# exit 125 — misreported as an install failure — so the value is validated
+# once here and the marker's secs= field reads the validated form.
+INSTALL_TIMEOUT_SECS="${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}"
+[[ "$INSTALL_TIMEOUT_SECS" =~ ^[0-9]+$ ]] || INSTALL_TIMEOUT_SECS=300
 install_to=()
+# Same bound for the per-arm `npm config get registry` resolution — a wedged
+# npm (dead $HOME mount, stalled version-manager shim) would otherwise be the
+# one unbounded child inside the bounding path. Short bound: config reads are
+# local, never network.
+pm_probe_to=()
 if command -v timeout >/dev/null 2>&1; then
-  install_to=(timeout -k 15 "${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}")
+  install_to=(timeout -k 15 "$INSTALL_TIMEOUT_SECS")
+  pm_probe_to=(timeout -k 5 10)
 elif command -v gtimeout >/dev/null 2>&1; then
-  install_to=(gtimeout -k 15 "${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}")
+  install_to=(gtimeout -k 15 "$INSTALL_TIMEOUT_SECS")
+  pm_probe_to=(gtimeout -k 5 10)
 fi
+
+# Probe bounds, validated the same way — a non-numeric value makes curl error
+# (reads as registry-unreachable — fail-closed but mislabeled), and a 0
+# --max-time DISABLES the total bound, reintroducing the stall this bounds.
+REGISTRY_PROBE_SECS="${SOLEUR_WORKTREE_REGISTRY_PROBE_SECS:-5}"
+REGISTRY_PROBE_MAX_SECS="${SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS:-8}"
+[[ "$REGISTRY_PROBE_SECS" =~ ^[0-9]+$ ]] || REGISTRY_PROBE_SECS=5
+[[ "$REGISTRY_PROBE_MAX_SECS" =~ ^[0-9]+$ ]] || REGISTRY_PROBE_MAX_SECS=8
+[[ "$REGISTRY_PROBE_MAX_SECS" -gt 0 ]] || REGISTRY_PROBE_MAX_SECS=8
 
 # Get repo root and detect bare repo (single subprocess for both)
 # IS_BARE: true when the parent/root repo is bare (affects fetch strategy, file sync)
@@ -1686,34 +1707,71 @@ copy_env_files() {
 # a hard timeout on the install itself, and a shared opt-out — while preserving
 # warn-and-continue so worktree creation still completes.
 
-# Resolve the registry endpoint (host[:port]) an install arm actually installs
-# from. npm goes through `npm config get registry` so a project .npmrc under
+# npm `config get` answers are process-static when the arm dir carries no
+# project .npmrc — memoize so N npm-lock app dirs cost one ~1s spawn, not N.
+# Same space-separated "key=value" shape as _REGISTRY_PROBE_MEMO.
+_NPMREG_MEMO=" "
+
+# Resolve the registry endpoint (scheme://host[:port]) an install arm actually
+# installs from. npm goes through `npm config get registry` (bounded by
+# pm_probe_to — a wedged npm is local-but-hangable) so a project .npmrc under
 # --prefix and user-level config are honored; bun reads bunfig.toml's
 # `registry=` then .npmrc (arm dir, then the worktree root); yarn reads
-# .yarnrc. Scheme, userinfo and path are stripped; the PORT is kept — a
-# port-bearing private registry probed without it would misreport unreachable.
+# .yarnrc. The SCHEME is kept so the probe measures what the install will
+# actually use (an http:// private registry probed over https reads falsely
+# unreachable); userinfo, path, query and fragment are stripped — a repo-
+# controlled .npmrc with `registry=https://h.example/?x=${TOKEN}` must not ride
+# its expansion into either the probe URL or the marker's host= field. The
+# PORT is kept — a port-bearing private registry probed without it would
+# misreport unreachable. Known blind spots (all bounded by the install
+# timeout): scoped `@scope:registry=` config, .yarnrc.yml (berry)
+# `npmRegistryServer`, and .npmrc proxy settings the probe doesn't consult.
 _install_registry_host() {
-  local dir="$1" runtime="$2" wt_root="${3:-$dir}"
+  local dir="$1" runtime="$2"
+  local wt_root="${3:-$dir}"
   local url=""
   case "$runtime" in
     npm)
-      url="$(npm --prefix "$dir" config get registry 2>/dev/null || true)"
+      local npm_key="shared"
+      [[ -f "$dir/.npmrc" ]] && npm_key="$dir"
+      npm_key="npm:$(_sanitize_marker_field "$npm_key")"
+      case "$_NPMREG_MEMO" in
+        *" $npm_key="*)
+          url="${_NPMREG_MEMO#*" $npm_key="}"
+          url="${url%% *}"
+          ;;
+        *)
+          url="$( { ${pm_probe_to[@]+"${pm_probe_to[@]}"} npm --prefix "$dir" config get registry; } 2>/dev/null || true)"
+          # Values can't contain whitespace in practice; truncate defensively
+          # so a malformed answer can't split the memo's space delimiter.
+          _NPMREG_MEMO+="$npm_key=${url%%[[:space:]]*} "
+          ;;
+      esac
       ;;
     bun)
+      # tail -1, not head -1: tail consumes all input so sed never dies on
+      # SIGPIPE (rc 141 under pipefail), and .npmrc duplicate-key semantics
+      # are last-wins, which tail models for free.
       if [[ -f "$dir/bunfig.toml" ]]; then
-        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$dir/bunfig.toml" | head -1)"
+        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$dir/bunfig.toml" | tail -1)"
       fi
       if [[ -z "$url" && -f "$dir/.npmrc" ]]; then
-        url="$(sed -n 's/^registry[[:space:]]*=[[:space:]]*//p' "$dir/.npmrc" | head -1)"
+        url="$(sed -n 's/^registry[[:space:]]*=[[:space:]]*//p' "$dir/.npmrc" | tail -1)"
+      fi
+      if [[ -z "$url" && "$dir" != "$wt_root" && -f "$wt_root/bunfig.toml" ]]; then
+        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$wt_root/bunfig.toml" | tail -1)"
       fi
       if [[ -z "$url" && "$dir" != "$wt_root" && -f "$wt_root/.npmrc" ]]; then
-        url="$(sed -n 's/^registry[[:space:]]*=[[:space:]]*//p' "$wt_root/.npmrc" | head -1)"
+        url="$(sed -n 's/^registry[[:space:]]*=[[:space:]]*//p' "$wt_root/.npmrc" | tail -1)"
       fi
       ;;
     yarn)
       if [[ -f "$dir/.yarnrc" ]]; then
-        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*"\{0,1\}\([^"[:space:]]*\)".*/\1/p' "$dir/.yarnrc" | head -1)"
+        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*"\{0,1\}\([^"[:space:]]*\)".*/\1/p' "$dir/.yarnrc" | tail -1)"
       fi
+      ;;
+    *)
+      headless_or_stderr warn "install_deps: unknown runtime '$runtime' — probing the default npm registry"
       ;;
   esac
   if [[ -z "$url" ]]; then
@@ -1723,10 +1781,13 @@ _install_registry_host() {
       url="https://registry.npmjs.org"
     fi
   fi
-  local h="${url#*://}"
+  local scheme="${url%%://*}" h="${url#*://}"
   h="${h##*@}"
-  h="${h%%/*}"
-  printf '%s' "$h"
+  h="${h%%[/?#]*}"
+  case "$scheme" in
+    http|https) printf '%s://%s' "$scheme" "$h" ;;
+    *)          printf 'https://%s' "$h" ;;
+  esac
 }
 
 # Per-endpoint reachability memo, a space-separated "host=rc" string rather
@@ -1736,9 +1797,11 @@ _REGISTRY_PROBE_MEMO=" "
 
 # Bounded preflight: any HTTP response (even 4xx) proves reachability, so `-f`
 # is deliberately absent. No credentials on the wire — an unauthenticated GET
-# to the registry endpoint the install was already going to contact. A missing
-# curl returns 0: an absent probe tool must not read as a denied registry —
-# the timeout wrap still bounds the arm.
+# to the registry endpoint the install was already going to contact, on the
+# scheme that endpoint actually uses (`--proto '=<scheme>'` pins it — http is
+# only probed when the resolved registry is itself http). A missing curl
+# returns 0: an absent probe tool must not read as a denied registry — the
+# timeout wrap still bounds the arm.
 _registry_reachable() {
   local target="$1" key rest rc=0
   key="$(_sanitize_marker_field "$target")"
@@ -1749,10 +1812,11 @@ _registry_reachable() {
       ;;
   esac
   if command -v curl >/dev/null 2>&1; then
-    curl --proto '=https' \
-      --connect-timeout "${SOLEUR_WORKTREE_REGISTRY_PROBE_SECS:-5}" \
-      --max-time "${SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS:-8}" \
-      -sS -o /dev/null "https://$target/" >/dev/null 2>&1 || rc=$?
+    local scheme="${target%%://*}"
+    curl --proto "=$scheme" \
+      --connect-timeout "$REGISTRY_PROBE_SECS" \
+      --max-time "$REGISTRY_PROBE_MAX_SECS" \
+      -sS -o /dev/null "$target/" >/dev/null 2>&1 || rc=$?
   fi
   _REGISTRY_PROBE_MEMO+="$key=$rc "
   return "$rc"
@@ -1769,22 +1833,37 @@ _run_install() {
   local label="$1" runtime="$2" dir="$3" wt_root="$4" banner="$5" ok_msg="$6" fail_msg="$7"
   shift 7
 
-  local target
+  local target safe_target
   target="$(_install_registry_host "$dir" "$runtime" "$wt_root")"
+  # One sanitized form for both channels — a multi-line `npm config` answer or a
+  # crafted .npmrc must not inject extra lines into the headless log either.
+  # `target` keeps scheme://host[:port]; the marker field flattens `:`/`/` to
+  # `_` by _sanitize_marker_field's allowlist (documented transform).
+  safe_target="$(_sanitize_marker_field "$target")"
+  # The bare host separately — `host=` names the machine, `endpoint=` keeps
+  # scheme+port (sanitized: `:`/`/` flatten to `_`).
+  local safe_host
+  safe_host="${target#*://}"; safe_host="${safe_host%%:*}"; safe_host="${safe_host%%/*}"
+  safe_host="$(_sanitize_marker_field "$safe_host")"
   if ! _registry_reachable "$target"; then
-    echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=$(_sanitize_marker_field "$target") arm=$(_sanitize_marker_field "$label")"
-    headless_or_stderr warn "install skipped for $label — registry $target is unreachable from here (egress denied or offline); run installs inside the worktree when network permits"
+    echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=$safe_host endpoint=$safe_target arm=$(_sanitize_marker_field "$label")"
+    headless_or_stderr warn "install skipped for $label — registry $safe_target is unreachable from here (egress denied or offline); run installs inside the worktree when network permits"
     return 0
   fi
 
   echo -e "${BLUE}${banner}${NC}"
-  local out="" rc=0
+  local out="" rc=0 bound=0
   if [[ ${#install_to[@]} -gt 0 ]]; then
+    bound=1
     out="$( { ${install_to[@]+"${install_to[@]}"} "$@"; } 2>&1 )" || rc=$?
   else
     if [[ "${_INSTALL_BOUND_WARNED:-}" != "1" ]]; then
       _INSTALL_BOUND_WARNED=1
-      headless_or_stderr warn "no timeout/gtimeout binary on this host — installs run unbounded (the registry preflight still applies)"
+      # stdout-visible: in headless mode stderr diverts to a per-PID logfile,
+      # and with curl also absent the original unbounded-hang class recurs —
+      # the marker is the only stream an orchestrator reliably sees.
+      echo "SOLEUR_WORKTREE_INSTALL_UNBOUNDED arm=$(_sanitize_marker_field "$label")"
+      headless_or_stderr warn "no timeout/gtimeout binary on this host — installs run unbounded (the registry preflight still applies, but only while curl exists)"
     fi
     out="$( "$@" 2>&1 )" || rc=$?
   fi
@@ -1793,14 +1872,24 @@ _run_install() {
     0)
       echo -e "  ${GREEN}${ok_msg}${NC}"
       ;;
-    124|137)
-      echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=$(_sanitize_marker_field "$label") secs=${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}"
-      headless_or_stderr warn "install for $label exceeded ${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}s and was killed — re-run it inside the worktree"
-      echo "  $out" >&2
-      ;;
     *)
-      echo -e "  ${YELLOW}Warning: ${fail_msg}${NC}" >&2
-      echo "  $out" >&2
+      if [[ "$bound" == 1 ]] && { [[ "$rc" == 124 ]] || [[ "$rc" == 137 ]]; }; then
+        # timeout(1): 124 = TERM expiry, 137 = -k escalated to SIGKILL — both
+        # are "the bound hit", never "the install failed". A 124/137 arriving
+        # on the unbounded fallback path is a natural child exit, so it falls
+        # through to the ordinary failure branch. Residual: on the bounded
+        # path a child naturally exiting 124/137 (e.g. OOM-killed) is still
+        # reported reason=timeout — timeout(1) can't distinguish them.
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=$(_sanitize_marker_field "$label") secs=$INSTALL_TIMEOUT_SECS"
+        headless_or_stderr warn "install for $label exceeded ${INSTALL_TIMEOUT_SECS}s and was killed — re-run it inside the worktree (rm -rf node_modules first if a partial tree was left)"
+        echo "  $out" >&2
+      else
+        # warn-and-continue, but stdout-marked too — an every-arm-failed run
+        # is otherwise stdout-indistinguishable from a healthy install.
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=failed arm=$(_sanitize_marker_field "$label") rc=$rc"
+        echo -e "  ${YELLOW}Warning: ${fail_msg}${NC}" >&2
+        echo "  $out" >&2
+      fi
       ;;
   esac
   return 0
@@ -1812,7 +1901,9 @@ install_deps() {
 
   # Opt-out gate (#9269): skips BOTH install blocks; the hook-dep enumeration
   # below still runs unconditionally so the resulting state is reported
-  # honestly — including "hook dep missing" when nothing was installed.
+  # honestly — including "hook dep missing" when nothing was installed. A
+  # future THIRD install site must live inside a `SKIP_INSTALL != true` gate
+  # too — opting out is meaningless if a new arm bypasses the check.
   if [[ "$SKIP_INSTALL" == true ]]; then
     echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out"
     headless_or_stderr warn "dependency install skipped (--no-install / SOLEUR_WORKTREE_SKIP_INSTALL=1); run installs inside the worktree when needed"
@@ -1838,6 +1929,7 @@ install_deps() {
         root_install_cmd=(bun install --frozen-lockfile --cwd "$worktree_path") # lint-workflow-install-sites: allow-bun
         root_runtime="bun"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=bun arm=root-bun"
         echo -e "  ${YELLOW}Warning: root has a bun lockfile but bun not found -- install manually${NC}" >&2
       fi
     elif [[ -f "$worktree_path/package-lock.json" ]]; then
@@ -1850,9 +1942,11 @@ install_deps() {
         root_install_cmd=(npm ci --ignore-scripts --prefix "$worktree_path")
         root_runtime="npm"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=npm arm=root-npm"
         echo -e "  ${YELLOW}Warning: root has package-lock.json but npm not found -- install manually${NC}" >&2
       fi
     else
+      echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=no-lockfile arm=root"
       echo -e "  ${YELLOW}Warning: root package.json has no recognized lockfile -- skip${NC}" >&2
     fi
 
@@ -1887,6 +1981,7 @@ install_deps() {
         install_cmd=(bun install --frozen-lockfile --cwd "$app_dir") # lint-workflow-install-sites: allow-bun
         app_runtime="bun"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=bun arm=$(_sanitize_marker_field "app-$app_name")"
         echo -e "  ${YELLOW}Warning: $app_name has bun lockfile but bun not found -- skip${NC}" >&2
         continue
       fi
@@ -1895,6 +1990,7 @@ install_deps() {
         install_cmd=(npm ci --ignore-scripts --prefix "$app_dir")
         app_runtime="npm"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=npm arm=$(_sanitize_marker_field "app-$app_name")"
         echo -e "  ${YELLOW}Warning: $app_name has package-lock.json but npm not found -- skip${NC}" >&2
         continue
       fi
@@ -1903,10 +1999,12 @@ install_deps() {
         install_cmd=(yarn install --frozen-lockfile --cwd "$app_dir")
         app_runtime="yarn"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=yarn arm=$(_sanitize_marker_field "app-$app_name")"
         echo -e "  ${YELLOW}Warning: $app_name has yarn.lock but yarn not found -- skip${NC}" >&2
         continue
       fi
     else
+      echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=no-lockfile arm=$(_sanitize_marker_field "app-$app_name")"
       echo -e "  ${YELLOW}Warning: $app_name has package.json but no lockfile -- skip${NC}" >&2
       continue
     fi
@@ -4290,11 +4388,17 @@ Global Flags:
                                       Every install arm is also bounded: a registry
                                       reachability probe skips an arm fast and names
                                       the blocked host, and a per-arm timeout kills
-                                      a stalled install (SOLEUR_WORKTREE_INSTALL_-
-                                      TIMEOUT_SECS, default 300; probe bounds via
-                                      SOLEUR_WORKTREE_REGISTRY_PROBE_SECS=5 /
-                                      _MAX_SECS=8). Skips print
-                                      SOLEUR_WORKTREE_INSTALL_SKIPPED on stdout.
+                                      a stalled install. Env knobs (optional):
+                                      install bound
+                                      SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS
+                                      (default 300s); probe bounds
+                                      SOLEUR_WORKTREE_REGISTRY_PROBE_SECS (5)
+                                      and
+                                      SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS
+                                      (8). Skips print marker
+                                      SOLEUR_WORKTREE_INSTALL_SKIPPED (plus
+                                      SOLEUR_WORKTREE_INSTALL_UNBOUNDED when
+                                      no timeout binary exists) on stdout.
 
 Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)

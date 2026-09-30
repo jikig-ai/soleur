@@ -100,8 +100,8 @@ new_repo() {
 
 # npm stub. Handles the registry-config probe (`npm --prefix <dir> config get
 # registry` -> the URL the host resolver expects), logs every other invocation
-# to $NPM_STUB_LOG so arms can assert "npm ci never ran", and sleeps when
-# NPM_STUB_SLEEP is set (timeout arm).
+# to $STUB_CMD_LOG so arms can assert "npm ci never ran", and sleeps when
+# STUB_CMD_SLEEP is set (timeout arm).
 make_npm_stub() {
   local dir="$1"
   assert_fixture_dir "$dir"
@@ -117,11 +117,11 @@ for ((i=1; i<=$#; i++)); do
     exit 0
   fi
 done
-printf '%s\n' "$*" >> "${NPM_STUB_LOG:?}"
-if [[ -n "${NPM_STUB_SLEEP:-}" ]]; then
-  sleep "$NPM_STUB_SLEEP"
+printf '%s\n' "$*" >> "${STUB_CMD_LOG:?}"
+if [[ -n "${STUB_CMD_SLEEP:-}" ]]; then
+  sleep "$STUB_CMD_SLEEP"
 fi
-exit "${NPM_STUB_RC:-0}"
+exit "${STUB_CMD_RC:-0}"
 EOF
   chmod +x "$dir/npm"
 }
@@ -145,16 +145,16 @@ EOF
 run_wt() {
   local tag="$1" stub_dir="$2" rc=0
   shift 2
-  ( cd "$REPO" && PATH="$stub_dir:$PATH" NPM_STUB_LOG="$TEST_DIR/npm-$tag.log" \
+  ( cd "$REPO" && PATH="$stub_dir:$PATH" STUB_CMD_LOG="$TEST_DIR/stub-$tag.log" \
       CURL_STUB_LOG="$TEST_DIR/curl-$tag.log" \
       env "$@" ) >"$TEST_DIR/$tag.out" 2>"$TEST_DIR/$tag.err" || rc=$?
   printf '%s' "$rc"
 }
 
-npm_ci_count() {
+stub_ci_count() {
   local tag="$1"
-  if [[ -f "$TEST_DIR/npm-$tag.log" ]]; then
-    grep -c 'ci --ignore-scripts' "$TEST_DIR/npm-$tag.log" || true
+  if [[ -f "$TEST_DIR/stub-$tag.log" ]]; then
+    grep -c 'ci --ignore-scripts' "$TEST_DIR/stub-$tag.log" || true
   else
     echo 0
   fi
@@ -171,12 +171,12 @@ OUT="$(cat "$TEST_DIR/b1.out")"; ERR="$(cat "$TEST_DIR/b1.err")"
 assert_eq "0" "$RC" "create exits 0 under opt-out (log: $TEST_DIR/b1.err)"
 assert_contains "$OUT" "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out" \
   "stdout carries the opt-out marker"
-assert_eq "0" "$(npm_ci_count b1)" "npm ci never invoked under opt-out"
+assert_eq "0" "$(stub_ci_count b1)" "the install never invoked under opt-out"
 assert_eq "0" "$([[ -f "$TEST_DIR/curl-b1.log" ]] && wc -l < "$TEST_DIR/curl-b1.log" || echo 0)" \
   "registry probe never ran under opt-out"
 assert_eq "true" "$([[ -d "$REPO/.worktrees/feat-b1" ]] && echo true || echo false)" \
   "worktree still created under opt-out"
-assert_contains "$ERR" "hook dep" "hook-dep enumeration still reports state under opt-out"
+assert_contains "$ERR" "hook dep missing" "hook-dep enumeration still reports state under opt-out"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -190,7 +190,7 @@ OUT="$(cat "$TEST_DIR/b2.out")"
 assert_eq "0" "$RC" "create exits 0 under --no-install (log: $TEST_DIR/b2.err)"
 assert_contains "$OUT" "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out" \
   "flag feeds the same opt-out gate"
-assert_eq "0" "$(npm_ci_count b2)" "npm ci never invoked under --no-install"
+assert_eq "0" "$(stub_ci_count b2)" "the install never invoked under --no-install"
 assert_eq "true" "$([[ -d "$REPO/.worktrees/feat-b2" ]] && echo true || echo false)" \
   "worktree still created under --no-install"
 echo ""
@@ -209,7 +209,13 @@ assert_contains "$OUT" "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreacha
 assert_contains "$OUT" "host=registry.npmjs.org" "the marker names the blocked host"
 assert_eq "2" "$(grep -c 'SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable' <<< "$OUT")" \
   "both arms (root + apps/demo) report the skip"
-assert_eq "0" "$(npm_ci_count b3)" "npm ci never invoked when its registry is unreachable"
+assert_eq "0" "$(stub_ci_count b3)" "the install never invoked when its registry is unreachable"
+assert_eq "1" "$(wc -l < "$TEST_DIR/curl-b3.log" | tr -d ' ')" \
+  "probe memoized: two npm arms share one curl probe"
+assert_contains "$(cat "$TEST_DIR/curl-b3.log")" "--max-time" \
+  "the probe carries its bound flags (a bare curl would reintroduce the stall)"
+assert_eq "false" "$([[ "$OUT" == *"Installing dependencies"* ]] && echo true || echo false)" \
+  "skipped arms never emit a started-then-skipped banner pair"
 assert_contains "$ERR" "registry.npmjs.org" "stderr warn names the blocked host"
 assert_eq "true" "$([[ -d "$REPO/.worktrees/feat-b3" ]] && echo true || echo false)" \
   "worktree still created with unreachable registry"
@@ -223,7 +229,7 @@ if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; th
   REPO=$(new_repo repo-b4)
   STUB_B4="$TEST_DIR/stub-b4"; make_npm_stub "$STUB_B4"; make_curl_stub "$STUB_B4"
   START=$SECONDS
-  RC=$(run_wt b4 "$STUB_B4" NPM_STUB_SLEEP=60 SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS=2 \
+  RC=$(run_wt b4 "$STUB_B4" STUB_CMD_SLEEP=60 SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS=2 \
        bash "$SCRIPT" --yes create feat-b4 main)
   ELAPSED=$((SECONDS - START))
   OUT="$(cat "$TEST_DIR/b4.out")"; ERR="$(cat "$TEST_DIR/b4.err")"
@@ -232,12 +238,15 @@ if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; th
     "two 60s installs bounded by a 2s timeout finished in ${ELAPSED}s (<40s ceiling)"
   assert_contains "$OUT" "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout" \
     "stdout carries the timeout marker"
+  assert_eq "2" "$(grep -c 'SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout' <<< "$OUT")" \
+    "both timed-out arms report (not one collapsed marker)"
   assert_eq "true" "$([[ -d "$REPO/.worktrees/feat-b4" ]] && echo true || echo false)" \
     "worktree still created when installs time out"
   echo ""
 else
   echo "B4: SKIPPED — no timeout/gtimeout binary on this host (the unbounded"
   echo "    fallback arm is the documented no-boundary case)"
+  SKIPPED=$((SKIPPED + 1))
   echo ""
 fi
 
@@ -250,7 +259,7 @@ STUB_B5="$TEST_DIR/stub-b5"; make_npm_stub "$STUB_B5"; make_curl_stub "$STUB_B5"
 RC=$(run_wt b5 "$STUB_B5" SOLEUR_WORKTREE_SKIP_INSTALL=0 bash "$SCRIPT" --yes create feat-b5 main)
 OUT="$(cat "$TEST_DIR/b5.out")"
 assert_eq "0" "$RC" "create exits 0 (log: $TEST_DIR/b5.err)"
-assert_eq "2" "$(npm_ci_count b5)" "npm ci ran for root + apps/demo"
+assert_eq "2" "$(stub_ci_count b5)" "the install ran for root + apps/demo"
 assert_contains "$OUT" "Dependencies installed" "happy path unaffected by a non-1 env value"
 assert_eq "false" "$([[ "$OUT" == *"reason=opt-out"* ]] && echo true || echo false)" \
   "no opt-out marker for a non-1 env value"
@@ -267,7 +276,7 @@ OUT="$(cat "$TEST_DIR/b6.out")"
 assert_eq "0" "$RC" "feature exits 0 under opt-out (log: $TEST_DIR/b6.err)"
 assert_contains "$OUT" "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out" \
   "feature path emits the opt-out marker"
-assert_eq "0" "$(npm_ci_count b6)" "npm ci never invoked on the feature path"
+assert_eq "0" "$(stub_ci_count b6)" "the install never invoked on the feature path"
 assert_eq "true" "$([[ -d "$REPO/.worktrees/feat-b6-widget" ]] && echo true || echo false)" \
   "feature worktree created under opt-out"
 echo ""
@@ -282,11 +291,66 @@ STUB_B7="$TEST_DIR/stub-b7"; make_npm_stub "$STUB_B7"; make_curl_stub "$STUB_B7"
 RC=$(run_wt b7 "$STUB_B7" bash "$SCRIPT" --yes create feat-b7 main)
 OUT="$(cat "$TEST_DIR/b7.out")"
 assert_eq "0" "$RC" "create exits 0 (log: $TEST_DIR/b7.err)"
-assert_eq "2" "$(npm_ci_count b7)" "npm ci ran for root + apps/demo"
+assert_eq "2" "$(stub_ci_count b7)" "the install ran for root + apps/demo"
 assert_contains "$OUT" "Dependencies installed" "root arm reports success verbatim"
 assert_contains "$OUT" "demo dependencies installed" "apps arm reports success verbatim"
 assert_eq "false" "$([[ "$OUT" == *"SOLEUR_WORKTREE_INSTALL_SKIPPED"* ]] && echo true || echo false)" \
   "no skip marker on the happy path"
 echo ""
 
-print_results 30
+# ---------------------------------------------------------------------------
+# B8 — bun arm host resolution: a bunfig.toml registry override must drive the
+#      probed endpoint (the sed-parser path the npm arm can't exercise).
+# ---------------------------------------------------------------------------
+echo "B8: bun arm probes the bunfig.toml registry override"
+REPO=$(new_repo repo-b8)
+rm -f "$REPO/package-lock.json" "$REPO/apps/demo/package-lock.json"
+printf '{\n  "lockfileVersion": 1\n}\n' > "$REPO/bun.lock"
+printf '{\n  "lockfileVersion": 1\n}\n' > "$REPO/apps/demo/bun.lock"
+printf '[install]\nregistry = "https://npm.internal.example:4873/mirror"\n' \
+  > "$REPO/apps/demo/bunfig.toml"
+# worktree add checks out the COMMITTED tree — the lockfile swap must land in a
+# commit or install_deps sees the seeded package-lock.json files instead.
+git -C "$REPO" add -A && git -C "$REPO" commit -q -m "bun-lockfile fixture"
+STUB_B8="$TEST_DIR/stub-b8"; make_curl_stub "$STUB_B8"
+cat > "$STUB_B8/bun" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${STUB_CMD_LOG:?}"
+exit 0
+EOF
+chmod +x "$STUB_B8/bun"
+RC=$(run_wt b8 "$STUB_B8" bash "$SCRIPT" --yes create feat-b8 main)
+OUT="$(cat "$TEST_DIR/b8.out")"
+CURL_LOG="$(cat "$TEST_DIR/curl-b8.log")"
+assert_eq "0" "$RC" "create exits 0 on the bun path (log: $TEST_DIR/b8.err)"
+assert_contains "$CURL_LOG" "https://registry.npmjs.org/" \
+  "root arm probes the default npm registry (no bunfig at root)"
+assert_contains "$CURL_LOG" "https://npm.internal.example:4873/" \
+  "apps/demo arm probes the bunfig.toml registry override, port preserved"
+assert_eq "2" "$(grep -c 'install --frozen-lockfile --cwd' "$TEST_DIR/stub-b8.log")" \
+  "bun install ran for root + apps/demo"
+assert_contains "$OUT" "demo dependencies installed" "bun app arm reports success"
+echo ""
+
+# ---------------------------------------------------------------------------
+# B9 — ordinary install failure: warn-and-continue plus a reason=failed marker
+#      (an every-arm-failed run must not be stdout-indistinguishable from a
+#      healthy install).
+# ---------------------------------------------------------------------------
+echo "B9: ordinary install failure is marked and non-fatal"
+REPO=$(new_repo repo-b9)
+STUB_B9="$TEST_DIR/stub-b9"; make_npm_stub "$STUB_B9"; make_curl_stub "$STUB_B9"
+RC=$(run_wt b9 "$STUB_B9" STUB_CMD_RC=3 bash "$SCRIPT" --yes create feat-b9 main)
+OUT="$(cat "$TEST_DIR/b9.out")"; ERR="$(cat "$TEST_DIR/b9.err")"
+assert_eq "0" "$RC" "create exits 0 when installs fail (log: $TEST_DIR/b9.err)"
+assert_eq "2" "$(stub_ci_count b9)" "the install ran for root + apps/demo"
+assert_eq "2" "$(grep -c 'SOLEUR_WORKTREE_INSTALL_SKIPPED reason=failed' <<< "$OUT")" \
+  "each failed arm emits reason=failed on stdout"
+assert_contains "$ERR" "install failed" "the pre-existing warn path is preserved"
+assert_eq "false" "$([[ "$OUT" == *"Dependencies installed"* ]] && echo true || echo false)" \
+  "no false success report"
+assert_eq "true" "$([[ -d "$REPO/.worktrees/feat-b9" ]] && echo true || echo false)" \
+  "worktree still created when installs fail"
+echo ""
+
+print_results 43

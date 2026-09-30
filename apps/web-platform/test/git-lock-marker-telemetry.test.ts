@@ -140,9 +140,13 @@ describe("extractGitLockMarkers", () => {
   // completes and the worktree is usable in every arm, so it must never page.
   test("mirrors SOLEUR_WORKTREE_INSTALL_SKIPPED arms without paging", () => {
     const lines = [
-      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=registry.npmjs.org arm=root-npm",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=registry.npmjs.org endpoint=https___registry.npmjs.org arm=root-npm",
       "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=app-web-platform secs=300",
       "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=failed arm=app-demo rc=3",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=bun arm=app-demo",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=no-lockfile arm=root",
+      "SOLEUR_WORKTREE_INSTALL_UNBOUNDED arm=root-npm",
     ];
     for (const line of lines) {
       expect(extractGitLockMarkers(line).length, `${line} must be mirrored`).toBe(1);
