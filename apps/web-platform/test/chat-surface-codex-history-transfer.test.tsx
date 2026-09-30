@@ -35,7 +35,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
 
   it("sends the explicit acknowledgment for the displayed conversation generation", async () => {
     const { ChatSurface } = await import("@/components/chat/chat-surface");
-    render(<ChatSurface variant="full" conversationId="test-id" />);
+    const view = render(<ChatSurface variant="full" conversationId="test-id" />);
 
     expect(screen.getByText(/OpenAI will receive/)).toBeVisible();
     expect(screen.getByText("Please continue this draft")).toBeVisible();
@@ -43,7 +43,15 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     fireEvent.click(screen.getByRole("button", { name: "Acknowledge history transfer" }));
     expect(wsReturn.acknowledgeCodexHistoryTransfer).toHaveBeenCalledWith("test-id", 2);
     expect(wsReturn.sendMessage).not.toHaveBeenCalled();
+    expect(wsReturn.resendMessage).not.toHaveBeenCalled();
     expect(wsReturn.resumeSession).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Acknowledge history transfer" })).toBeVisible();
+
+    const heldMessage = wsReturn.messages[0];
+    if (heldMessage.type !== "text") throw new Error("expected held user text message");
+    heldMessage.delivery = "retryable";
+    view.rerender(<ChatSurface variant="full" conversationId="test-id" />);
+    fireEvent.click(screen.getByRole("button", { name: "Resend message" }));
+    expect(wsReturn.resendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: "Please continue this draft", delivery: "retryable" }));
   });
 });

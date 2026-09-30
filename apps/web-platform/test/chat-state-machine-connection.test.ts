@@ -28,7 +28,7 @@ describe("unsent optimistic user turns", () => {
         { id: "user-turn-2", type: "text", role: "user", content: "Other message" },
       ],
     };
-    const next = chatReducer(state, { type: "mark_message_unsent", clientTurnId: "turn-1" });
+    const next = chatReducer(state, { type: "set_message_delivery", clientTurnId: "turn-1", delivery: "unsent" });
     expect(next.messages[0]).toEqual({ ...state.messages[0], delivery: "unsent" });
     expect(next.messages[1]).toBe(state.messages[1]);
     expect(state.messages[0]).not.toHaveProperty("delivery");
@@ -41,7 +41,7 @@ describe("unsent optimistic user turns", () => {
       ...emptyState(),
       messages: [{ id: "user-turn-1", type: "text", role: "user", content: "Keep this state" }],
     };
-    expect(chatReducer(state, { type: "mark_message_unsent", clientTurnId: "unknown-turn" }).messages)
+    expect(chatReducer(state, { type: "set_message_delivery", clientTurnId: "unknown-turn", delivery: "unsent" }).messages)
       .toEqual(state.messages);
   });
 });

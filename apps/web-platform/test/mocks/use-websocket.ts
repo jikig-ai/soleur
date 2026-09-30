@@ -29,6 +29,7 @@ export function createWebSocketMock(
     startSession: vi.fn(),
     resumeSession: vi.fn(),
     sendMessage: vi.fn(),
+    resendMessage: vi.fn(),
     acknowledgeCodexHistoryTransfer: vi.fn(),
     sendReviewGateResponse: vi.fn(),
     sendAutonomousDisclosureResponse: vi.fn(),

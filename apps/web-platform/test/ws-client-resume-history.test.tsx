@@ -139,8 +139,18 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     }]);
     serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
     expect(result.current.lastError).toBeNull();
-    expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "Keep this original draft", attachments, delivery: "unsent" }));
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "Keep this original draft", attachments, delivery: "retryable" }));
     expect(wsInstance?.send).toHaveBeenCalledTimes(1);
+
+    const retainedMessage = result.current.messages[0];
+    act(() => result.current.resendMessage(retainedMessage as Extract<typeof retainedMessage, { type: "text" }>));
+    const resentChats = (wsInstance?.send.mock.calls ?? []).map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat");
+    expect(resentChats).toHaveLength(1);
+    expect(resentChats[0]).toEqual({
+      type: "chat", content: "Keep this original draft", attachments, clientTurnId: chats[0].clientTurnId,
+    });
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0]).not.toHaveProperty("delivery");
   });
 
   it("ignores another conversation's required notice even when its turn ID matches a local message", async () => {

@@ -110,10 +110,14 @@ export const MessageBubble = memo(function MessageBubble({
   usage,
   commandBlocks,
   delivery,
+  onResend,
+  resendDisabled = false,
 }: {
   role: "user" | "assistant";
   content: string;
-  delivery?: "unsent";
+  delivery?: "unsent" | "retryable";
+  onResend?: () => void;
+  resendDisabled?: boolean;
   leaderId?: DomainLeaderId;
   showFullTitle?: boolean;
   messageState?: MessageState;
@@ -241,6 +245,17 @@ export const MessageBubble = memo(function MessageBubble({
             <p role="status" aria-live="polite" className="mt-2 text-xs text-amber-400">
               Message not sent
             </p>
+          )}
+          {isUser && delivery === "retryable" && onResend && (
+            <button
+              type="button"
+              onClick={onResend}
+              disabled={resendDisabled}
+              className="mt-2 rounded-md border border-soleur-border-default px-3 py-1 text-xs font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-soleur-accent"
+              aria-label="Resend message"
+            >
+              Resend
+            </button>
           )}
         </div>
       </div>

@@ -140,3 +140,5 @@ in CI; integration tests should provision and remove their own disposable CI
 container. A helper assertion with `git check-ignore -v` can return success on
 a negation rule; use `git check-ignore -q` when checking whether a capture is
 ignored.
+
+The Codex continuation began from the main checkout instead of the named PR worktree. `cleanup-merged` printed read-only lock errors and skipped cleanup; it did not alter worktrees. Resolve and verify the requested worktree explicitly before reading feature files. A sandboxed GitHub CLI request then failed with `error connecting to api.github.com`; retry network-dependent reads with the approved escalated path rather than treating the missing response as PR state. A direct lookup also used a nonexistent spec-local CLO packet path; the canonical packet lives under `knowledge-base/project/specs/feat-one-shot-codex-web-rollout/`. For slow typechecks, capture output and the final exit marker; an empty early poll is not a verdict. The first completed typecheck caught stale reducer/UI fixture types, which were fixed before the successful rerun.

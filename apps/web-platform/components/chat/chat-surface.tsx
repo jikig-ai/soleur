@@ -218,6 +218,7 @@ export function ChatSurface({
     startSession,
     resumeSession,
     sendMessage,
+    resendMessage,
     acknowledgeCodexHistoryTransfer,
     sendReviewGateResponse,
     sendAutonomousDisclosureResponse,
@@ -954,6 +955,8 @@ export function ChatSurface({
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
                       delivery={msg.delivery}
+                      onResend={msg.delivery === "retryable" ? () => resendMessage(msg) : undefined}
+                      resendDisabled={status !== "connected"}
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}

@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 
 // Mock client observability so formatAssistantText's fallthrough path (invoked
 // on every render) does not attempt to initialize Sentry in the component
@@ -26,6 +26,17 @@ describe("MessageBubble retry + error render (FR5 #2861)", () => {
 
   test("does not label ordinary user messages as unsent", () => {
     const view = render(<MessageBubble role="user" content="Already sent" />);
+    expect(view.queryByText("Message not sent")).toBeNull();
+  });
+
+  test("shows an explicit resend action only for an acknowledged held turn", () => {
+    const onResend = vi.fn();
+    const view = render(
+      <MessageBubble role="user" content="Keep this draft" delivery="retryable" onResend={onResend} />,
+    );
+
+    fireEvent.click(view.getByRole("button", { name: "Resend message" }));
+    expect(onResend).toHaveBeenCalledOnce();
     expect(view.queryByText("Message not sent")).toBeNull();
   });
 
