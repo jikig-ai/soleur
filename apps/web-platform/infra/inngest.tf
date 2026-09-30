@@ -27,7 +27,7 @@ locals {
   # Freshness owner (#7463): the analysis of record is inngest-cli.provenance.md
   # (## Bump procedure); enforcement is inngest-cli-staleness.test.sh (per-PR) and
   # detection is the `Detect inngest CLI pin drift` step in rule-audit.yml (1st/15th
-  # poll — lands with PR-B; absent until then). Nothing auto-writes this pin — the
+  # poll — added by #7463 PR-B). Nothing auto-writes this pin — the
   # monitor files an issue and a human opens the CI-gated PR.
   # Source: https://github.com/inngest/inngest/releases/tag/v1.45.1
   inngest_cli_version = "v1.45.1"
