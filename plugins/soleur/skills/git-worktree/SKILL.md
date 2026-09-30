@@ -118,6 +118,15 @@ Pass `--update-local-main` (as a global flag, before `create`) to additionally f
 bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" --update-local-main create feature-login
 ```
 
+**Dependency install (bounded, skippable):**
+
+After copying `.env` files, `create`/`feature` install dependencies at the root and for each `apps/*/` package (bun/npm/yarn by lockfile). Two guards keep this from hanging a pipeline on a restricted host:
+
+- **Opt-out:** `--no-install` (global flag) or `SOLEUR_WORKTREE_SKIP_INSTALL=1` skips every install arm and prints `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out`. The worktree is still created and usable; run installs inside it later.
+- **Reachability preflight + timeout:** each arm probes its resolved registry host (`curl --proto '=https'`, bounded) and skips fast with `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=<host>` when unreachable; a stalled install is killed after `SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS` (default 300) and reported as `reason=timeout`. Probe bounds: `SOLEUR_WORKTREE_REGISTRY_PROBE_SECS` (connect, default 5) / `SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS` (total, default 8).
+
+All skips and failures warn-and-continue: worktree creation exits 0 and the worktree stays on disk.
+
 ### `list` or `ls`
 
 Lists all available worktrees with their branches and current status.

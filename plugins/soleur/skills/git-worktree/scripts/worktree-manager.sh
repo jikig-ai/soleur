@@ -155,6 +155,34 @@ YES_FLAG=false
 # `create` no longer fails when a sibling worktree holds <from> checked out (#3741).
 UPDATE_LOCAL_MAIN=false
 
+# Dependency-install opt-out (#9269). `create`/`feature` run install_deps
+# unconditionally; on a host where the package registry is egress-denied or
+# where deps are provisioned another way that wastes the per-arm bound for
+# nothing. Env form follows the `=="1"` convention of
+# SOLEUR_DISABLE_SESSION_STATE — a set-but-0 value does NOT opt out. The
+# --no-install global flag (parsed at file tail) sets the same variable.
+SKIP_INSTALL=false
+if [[ "${SOLEUR_WORKTREE_SKIP_INSTALL:-}" == "1" ]]; then
+  SKIP_INSTALL=true
+fi
+
+# Bounded-install prefix (#9269). Every install arm in install_deps dispatches
+# through _run_install, which wraps the package manager in this array so a
+# stalled or retrying install can never hang the pipeline indefinitely.
+# `timeout` reports 124 on TERM expiry and 137 when -k escalates to SIGKILL —
+# _run_install accepts both. Empty when the host has neither binary (stock
+# macOS without coreutils) — the registry preflight still bounds the reported
+# incident class, and _run_install warns once that the bound is unavailable.
+# The `${install_to[@]+"${install_to[@]}"}` expansion at the use site is
+# load-bearing: bash 3.2 treats an EMPTY array as unbound under `set -u`
+# (git-commit-secret-scan.sh precedent).
+install_to=()
+if command -v timeout >/dev/null 2>&1; then
+  install_to=(timeout -k 15 "${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}")
+elif command -v gtimeout >/dev/null 2>&1; then
+  install_to=(gtimeout -k 15 "${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}")
+fi
+
 # Get repo root and detect bare repo (single subprocess for both)
 # IS_BARE: true when the parent/root repo is bare (affects fetch strategy, file sync)
 # IS_IN_WORKTREE: true when running from inside a worktree (has a working tree)
@@ -1649,9 +1677,146 @@ copy_env_files() {
   echo -e "  ${GREEN}✓ Copied $copied environment file(s)${NC}"
 }
 
+# --- Install-arm helpers (#9269) ---------------------------------------------
+# install_deps used to run each package manager unbounded and undiagnosed: a
+# denied egress turned `bun install`/`npm ci` into an open-ended retry that
+# read as a stalled pipeline (the #9269 incident: ~100 deny-log lines for
+# registry.npmjs.org:443 until the caller killed the process). These helpers
+# give every arm a bounded reachability preflight that names the blocked host,
+# a hard timeout on the install itself, and a shared opt-out — while preserving
+# warn-and-continue so worktree creation still completes.
+
+# Resolve the registry endpoint (host[:port]) an install arm actually installs
+# from. npm goes through `npm config get registry` so a project .npmrc under
+# --prefix and user-level config are honored; bun reads bunfig.toml's
+# `registry=` then .npmrc (arm dir, then the worktree root); yarn reads
+# .yarnrc. Scheme, userinfo and path are stripped; the PORT is kept — a
+# port-bearing private registry probed without it would misreport unreachable.
+_install_registry_host() {
+  local dir="$1" runtime="$2" wt_root="${3:-$dir}"
+  local url=""
+  case "$runtime" in
+    npm)
+      url="$(npm --prefix "$dir" config get registry 2>/dev/null || true)"
+      ;;
+    bun)
+      if [[ -f "$dir/bunfig.toml" ]]; then
+        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$dir/bunfig.toml" | head -1)"
+      fi
+      if [[ -z "$url" && -f "$dir/.npmrc" ]]; then
+        url="$(sed -n 's/^registry[[:space:]]*=[[:space:]]*//p' "$dir/.npmrc" | head -1)"
+      fi
+      if [[ -z "$url" && "$dir" != "$wt_root" && -f "$wt_root/.npmrc" ]]; then
+        url="$(sed -n 's/^registry[[:space:]]*=[[:space:]]*//p' "$wt_root/.npmrc" | head -1)"
+      fi
+      ;;
+    yarn)
+      if [[ -f "$dir/.yarnrc" ]]; then
+        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*"\{0,1\}\([^"[:space:]]*\)".*/\1/p' "$dir/.yarnrc" | head -1)"
+      fi
+      ;;
+  esac
+  if [[ -z "$url" ]]; then
+    if [[ "$runtime" == "yarn" ]]; then
+      url="https://registry.yarnpkg.com"
+    else
+      url="https://registry.npmjs.org"
+    fi
+  fi
+  local h="${url#*://}"
+  h="${h##*@}"
+  h="${h%%/*}"
+  printf '%s' "$h"
+}
+
+# Per-endpoint reachability memo, a space-separated "host=rc" string rather
+# than declare -A so it survives bash 3.2 (stock macOS), which lacks
+# associative arrays. Keys pass through _sanitize_marker_field.
+_REGISTRY_PROBE_MEMO=" "
+
+# Bounded preflight: any HTTP response (even 4xx) proves reachability, so `-f`
+# is deliberately absent. No credentials on the wire — an unauthenticated GET
+# to the registry endpoint the install was already going to contact. A missing
+# curl returns 0: an absent probe tool must not read as a denied registry —
+# the timeout wrap still bounds the arm.
+_registry_reachable() {
+  local target="$1" key rest rc=0
+  key="$(_sanitize_marker_field "$target")"
+  case "$_REGISTRY_PROBE_MEMO" in
+    *" $key="*)
+      rest="${_REGISTRY_PROBE_MEMO#*" $key="}"
+      return "${rest%% *}"
+      ;;
+  esac
+  if command -v curl >/dev/null 2>&1; then
+    curl --proto '=https' \
+      --connect-timeout "${SOLEUR_WORKTREE_REGISTRY_PROBE_SECS:-5}" \
+      --max-time "${SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS:-8}" \
+      -sS -o /dev/null "https://$target/" >/dev/null 2>&1 || rc=$?
+  fi
+  _REGISTRY_PROBE_MEMO+="$key=$rc "
+  return "$rc"
+}
+
+# Run one install arm under the #9269 contract: registry preflight (skip +
+# marker when unreachable), the `install_to` timeout wrap (marker when the
+# bound expires — 124 on TERM, 137 on -k SIGKILL escalation, both are "the
+# bound hit", never "the install failed"), and the pre-existing
+# warn-and-continue on any other nonzero rc. The caller's banner prints ONLY
+# after the probe passes — a skipped arm must never emit a started-then-skipped
+# pair. Always returns 0: install failure must never abort worktree creation.
+_run_install() {
+  local label="$1" runtime="$2" dir="$3" wt_root="$4" banner="$5" ok_msg="$6" fail_msg="$7"
+  shift 7
+
+  local target
+  target="$(_install_registry_host "$dir" "$runtime" "$wt_root")"
+  if ! _registry_reachable "$target"; then
+    echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=$(_sanitize_marker_field "$target") arm=$(_sanitize_marker_field "$label")"
+    headless_or_stderr warn "install skipped for $label — registry $target is unreachable from here (egress denied or offline); run installs inside the worktree when network permits"
+    return 0
+  fi
+
+  echo -e "${BLUE}${banner}${NC}"
+  local out="" rc=0
+  if [[ ${#install_to[@]} -gt 0 ]]; then
+    out="$( { ${install_to[@]+"${install_to[@]}"} "$@"; } 2>&1 )" || rc=$?
+  else
+    if [[ "${_INSTALL_BOUND_WARNED:-}" != "1" ]]; then
+      _INSTALL_BOUND_WARNED=1
+      headless_or_stderr warn "no timeout/gtimeout binary on this host — installs run unbounded (the registry preflight still applies)"
+    fi
+    out="$( "$@" 2>&1 )" || rc=$?
+  fi
+
+  case "$rc" in
+    0)
+      echo -e "  ${GREEN}${ok_msg}${NC}"
+      ;;
+    124|137)
+      echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=$(_sanitize_marker_field "$label") secs=${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}"
+      headless_or_stderr warn "install for $label exceeded ${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}s and was killed — re-run it inside the worktree"
+      echo "  $out" >&2
+      ;;
+    *)
+      echo -e "  ${YELLOW}Warning: ${fail_msg}${NC}" >&2
+      echo "  $out" >&2
+      ;;
+  esac
+  return 0
+}
+
 # Install dependencies in a newly created worktree
 install_deps() {
   local worktree_path="$1"
+
+  # Opt-out gate (#9269): skips BOTH install blocks; the hook-dep enumeration
+  # below still runs unconditionally so the resulting state is reported
+  # honestly — including "hook dep missing" when nothing was installed.
+  if [[ "$SKIP_INSTALL" == true ]]; then
+    echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out"
+    headless_or_stderr warn "dependency install skipped (--no-install / SOLEUR_WORKTREE_SKIP_INSTALL=1); run installs inside the worktree when needed"
+  fi
 
   # --- Root-level dependency install ---
   # Lockfile-detecting, mirroring the per-app branch below. The root branch used to
@@ -1660,7 +1825,7 @@ install_deps() {
   # /ship would print "Warning: bun install failed" and ship with no root node_modules
   # -- breaking `bun test plugins/soleur/` and the pre-push hook on every fresh
   # worktree, including any follow-up to the change that deleted the lockfile.
-  if [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_modules" ]]; then
+  if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_modules" ]]; then
     local -a root_install_cmd=()
     local root_runtime=""
     if [[ -f "$worktree_path/bun.lockb" ]] || [[ -f "$worktree_path/bun.lock" ]]; then
@@ -1692,14 +1857,11 @@ install_deps() {
     fi
 
     if [[ ${#root_install_cmd[@]} -gt 0 ]]; then
-      echo -e "${BLUE}Installing dependencies (${root_runtime})...${NC}"
-      local install_output
-      if install_output=$("${root_install_cmd[@]}" 2>&1); then
-        echo -e "  ${GREEN}Dependencies installed${NC}"
-      else
-        echo -e "  ${YELLOW}Warning: ${root_runtime} install failed -- run manually in the worktree${NC}" >&2
-        echo "  $install_output" >&2
-      fi
+      _run_install "root-$root_runtime" "$root_runtime" "$worktree_path" "$worktree_path" \
+        "Installing dependencies (${root_runtime})..." \
+        "Dependencies installed" \
+        "${root_runtime} install failed -- run manually in the worktree" \
+        "${root_install_cmd[@]}"
     fi
   fi
 
@@ -1707,6 +1869,7 @@ install_deps() {
   # Scan apps/*/ for package.json files and install per-directory.
   # Follows the same null-glob-safe pattern as copy_env_files().
   local app_dir
+  if [[ "$SKIP_INSTALL" != true ]]; then
   for app_dir in "$worktree_path"/apps/*/; do
     [[ -d "$app_dir" ]] || continue
     [[ -f "$app_dir/package.json" ]] || continue
@@ -1716,11 +1879,13 @@ install_deps() {
     app_name=$(basename "$app_dir")
 
     local -a install_cmd=()
+    local app_runtime=""
     if [[ -f "$app_dir/bun.lockb" ]] || [[ -f "$app_dir/bun.lock" ]]; then
       if command -v bun &>/dev/null; then
         # Same tenant-lockfile dispatch as the
         # root branch above; reached only when the app directory carries a bun lockfile.
         install_cmd=(bun install --frozen-lockfile --cwd "$app_dir") # lint-workflow-install-sites: allow-bun
+        app_runtime="bun"
       else
         echo -e "  ${YELLOW}Warning: $app_name has bun lockfile but bun not found -- skip${NC}" >&2
         continue
@@ -1728,6 +1893,7 @@ install_deps() {
     elif [[ -f "$app_dir/package-lock.json" ]]; then
       if command -v npm &>/dev/null; then
         install_cmd=(npm ci --ignore-scripts --prefix "$app_dir")
+        app_runtime="npm"
       else
         echo -e "  ${YELLOW}Warning: $app_name has package-lock.json but npm not found -- skip${NC}" >&2
         continue
@@ -1735,6 +1901,7 @@ install_deps() {
     elif [[ -f "$app_dir/yarn.lock" ]]; then
       if command -v yarn &>/dev/null; then
         install_cmd=(yarn install --frozen-lockfile --cwd "$app_dir")
+        app_runtime="yarn"
       else
         echo -e "  ${YELLOW}Warning: $app_name has yarn.lock but yarn not found -- skip${NC}" >&2
         continue
@@ -1744,15 +1911,13 @@ install_deps() {
       continue
     fi
 
-    echo -e "${BLUE}Installing dependencies for $app_name...${NC}"
-    local app_install_output
-    if app_install_output=$("${install_cmd[@]}" 2>&1); then
-      echo -e "  ${GREEN}$app_name dependencies installed${NC}"
-    else
-      echo -e "  ${YELLOW}Warning: $app_name install failed -- run manually${NC}" >&2
-      echo "  $app_install_output" >&2
-    fi
+    _run_install "app-$app_name" "$app_runtime" "$app_dir" "$worktree_path" \
+      "Installing dependencies for $app_name..." \
+      "$app_name dependencies installed" \
+      "$app_name install failed -- run manually" \
+      "${install_cmd[@]}"
   done
+  fi
 
   # --- Hook-required binary enumeration ---
   # The pre-commit hooks resolve their pinned binaries from the worktree's OWN
@@ -4118,6 +4283,18 @@ Global Flags:
                                       tracking ref is updated; local <from> is never
                                       mutated. Bypasses the local-main lock contention
                                       class of failures (#3741).
+  --no-install                        (create/feature only) Skip dependency install
+                                      entirely — for hosts where deps are provisioned
+                                      another way or the registry is unreachable.
+                                      Same effect as SOLEUR_WORKTREE_SKIP_INSTALL=1.
+                                      Every install arm is also bounded: a registry
+                                      reachability probe skips an arm fast and names
+                                      the blocked host, and a per-arm timeout kills
+                                      a stalled install (SOLEUR_WORKTREE_INSTALL_-
+                                      TIMEOUT_SECS, default 300; probe bounds via
+                                      SOLEUR_WORKTREE_REGISTRY_PROBE_SECS=5 /
+                                      _MAX_SECS=8). Skips print
+                                      SOLEUR_WORKTREE_INSTALL_SKIPPED on stdout.
 
 Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
@@ -4177,6 +4354,8 @@ for arg in "$@"; do
     YES_FLAG=true
   elif [[ "$arg" == "--update-local-main" ]]; then
     UPDATE_LOCAL_MAIN=true
+  elif [[ "$arg" == "--no-install" ]]; then
+    SKIP_INSTALL=true
   else
     args+=("$arg")
   fi

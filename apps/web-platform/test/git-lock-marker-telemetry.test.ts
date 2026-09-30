@@ -136,6 +136,20 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(MASK_SKIP)[0]?.wedged).toBe(false);
   });
 
+  // #9269 — install_deps skip marker. Warn-and-continue by contract: creation
+  // completes and the worktree is usable in every arm, so it must never page.
+  test("mirrors SOLEUR_WORKTREE_INSTALL_SKIPPED arms without paging", () => {
+    const lines = [
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=registry.npmjs.org arm=root-npm",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=app-web-platform secs=300",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out",
+    ];
+    for (const line of lines) {
+      expect(extractGitLockMarkers(line).length, `${line} must be mirrored`).toBe(1);
+      expect(extractGitLockMarkers(line)[0]?.wedged, `${line} must not page`).toBe(false);
+    }
+  });
+
   // #7394 — the bare-config polarity markers. Classification is by `branch=`, not by
   // marker name, because one name covers both a recoverable and an unrecoverable outcome.
   test("mirrors both SOLEUR_GIT_BARE_POISON branches without paging (the run proceeded)", () => {
