@@ -41,11 +41,7 @@
 locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
-  cron_monitor_alert_unrouted = {
-    # Created in the #9168 PR; per the two-PR rule it can only be routed in
-    # monitor_ids after its first apply gives the detector a real id.
-    scheduled_supabase_watchdog = "route after first apply (#9168)"
-  }
+  cron_monitor_alert_unrouted = {}
 }
 
 resource "sentry_alert" "cron_monitor_failure" {
@@ -108,6 +104,7 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_strategy_review.id,
     sentry_cron_monitor.scheduled_supabase_advisor_scan.id,
     sentry_cron_monitor.scheduled_supabase_disk_io.id,
+    sentry_cron_monitor.scheduled_supabase_watchdog.id,
     sentry_cron_monitor.scheduled_terraform_drift.id,
     sentry_cron_monitor.scheduled_ux_audit.id,
     sentry_cron_monitor.scheduled_weekly_analytics.id,

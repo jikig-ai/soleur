@@ -2052,7 +2052,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
     // Thread-shape guard for #3250 — drop `resume:` when the persisted
     // SDK session ends on `assistant`. Domain leaders default to
-    // `claude-sonnet-5`, which 400s on assistant-terminated threads.
+    // `claude-sonnet-5-5`, which 400s on assistant-terminated threads.
     // Helper-shared with the cc-soleur-go path (`cc-dispatcher.ts`).
     const {
       safeResumeSessionId,
