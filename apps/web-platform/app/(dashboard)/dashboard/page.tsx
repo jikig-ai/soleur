@@ -395,7 +395,7 @@ export default function DashboardPage() {
       setSendSubmitting(true);
       completeOnboarding();
 
-      // Store pending files for the chat page to upload after conversation creation
+      // Store pending files for the chat page to upload before its single first send
       if (firstRunAttachments.length > 0) {
         setPendingFiles(firstRunAttachments.map((a) => a.file));
         // Revoke preview URLs — the files are now in the singleton
@@ -415,6 +415,8 @@ export default function DashboardPage() {
 
       const params = new URLSearchParams();
       if (message) params.set("msg", message);
+      // First-run marker: the chat page consumes staged files only with fr=1.
+      if (firstRunAttachments.length > 0) params.set("fr", "1");
       router.push(`/dashboard/chat/new?${params.toString()}`);
     },
     [router, completeOnboarding, firstRunAttachments],

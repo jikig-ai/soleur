@@ -18,9 +18,9 @@ import {
   CONVERSATION_CREATED_EVENT,
 } from "@/hooks/use-conversations";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
-import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
+import { getPendingFiles, clearPendingFiles, setPendingFiles } from "@/lib/pending-attachments";
 import { uploadPendingFiles } from "@/lib/upload-attachments";
-import * as Sentry from "@sentry/nextjs";
+import { runFirstRunSend } from "@/lib/first-run-send";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import { StatusIndicator } from "@/components/chat/status-indicator";
@@ -279,7 +279,6 @@ export function ChatSurface({
   }, [connection.resumedAt, connection.phase]);
 
   const [sessionStarted, setSessionStarted] = useState(false);
-  const [initialMsgSent, setInitialMsgSent] = useState(false);
   const [sessionStartTimeout, setSessionStartTimeout] = useState(false);
   const [dismissedErrorKey, setDismissedErrorKey] = useState<string | null>(null);
   const [sessionTimeoutDismissed, setSessionTimeoutDismissed] = useState(false);
@@ -575,48 +574,63 @@ export function ChatSurface({
     return () => document.removeEventListener("keydown", handler);
   }, [streamState, abort]);
 
+  // First-run send (Command Center -> /dashboard/chat/new?msg=..&fr=1): upload
+  // staged files FIRST, then send ONE message (see lib/first-run-send.ts).
+  // `fr=1` is the only signal that the module-global pending-file store belongs
+  // to THIS navigation; without it a later "New conversation" click inside the
+  // store TTL would upload and send those files into an unrelated chat.
+  const frParam = searchParams.get("fr");
+  const MAX_FIRST_RUN_RETRIES = 1; // one re-arm under a new session, then the text-only final attempt
+  const unmountedRef = useRef(false);
+  const firstRun = useRef({ started: false, retries: 0, msg: null as string | null, rearm: false });
+  const [firstRunBusy, setFirstRunBusy] = useState(false);
+  const liveRef = useRef({ conversationId: realConversationId, connected: status === "connected", sessionConfirmed });
+  liveRef.current = { conversationId: realConversationId, connected: status === "connected", sessionConfirmed };
   useEffect(() => {
-    if (sessionConfirmed && msgParam && !initialMsgSent) {
-      sendMessage(msgParam);
-      setInitialMsgSent(true);
-      router.replace(pathname, { scroll: false });
-    }
-  }, [sessionConfirmed, msgParam, initialMsgSent, sendMessage, router, pathname]);
-
-  const [pendingFilesHandled, setPendingFilesHandled] = useState(false);
+    unmountedRef.current = false; // StrictMode re-mounts after a simulated unmount
+    return () => {
+      unmountedRef.current = true;
+      liveRef.current = { conversationId: null, connected: false, sessionConfirmed: false }; // unmount = dead
+    };
+  }, []);
   useEffect(() => {
-    if (!initialMsgSent || pendingFilesHandled || !realConversationId) return;
-
-    const files = getPendingFiles();
-    if (files.length === 0) {
-      clearPendingFiles();
-      setPendingFilesHandled(true);
-      return;
-    }
-
-    setPendingFilesHandled(true);
-    clearPendingFiles();
-
-    (async () => {
-      try {
-        const uploaded = await uploadPendingFiles(files, realConversationId);
-        if (uploaded.length > 0) {
-          sendMessage("", uploaded);
+    const fr = firstRun.current;
+    if (fr.started || !sessionConfirmed) return;
+    const msg = msgParam ?? fr.msg;
+    const filesEligible =
+      (frParam === "1" || fr.rearm) && conversationId === "new" && variant === "full" && !resumedFrom;
+    const files = filesEligible ? getPendingFiles() : [];
+    if (!msg && files.length === 0) return;
+    if (files.length > 0 && !realConversationId) return; // wait; the msg-only path must not wait
+    fr.started = true;
+    if (files.length > 0) clearPendingFiles();
+    if (msgParam || frParam) router.replace(pathname, { scroll: false });
+    if (files.length > 0) setFirstRunBusy(true); // the msg-only send is synchronous
+    void runFirstRunSend({
+      msgParam: msg,
+      files,
+      conversationId: realConversationId,
+      getLive: () => liveRef.current,
+      upload: uploadPendingFiles,
+      send: sendMessage,
+      final: fr.retries >= MAX_FIRST_RUN_RETRIES,
+    })
+      .then(({ retry }) => {
+        if (unmountedRef.current) return;
+        if (retry && fr.retries < MAX_FIRST_RUN_RETRIES) {
+          fr.retries += 1;
+          fr.started = false;
+          fr.rearm = true;
+          fr.msg = msg;
+          if (files.length) setPendingFiles(files);
         }
-      } catch (err) {
-        // Defense-in-depth: uploadPendingFiles already catches per-file
-        // failures internally. This outer catch only fires on a batch-level
-        // failure (e.g., sendMessage throws). Re-wrap so Sentry does not
-        // ingest any signed-URL tokens embedded in XHR error messages.
-        const original = err instanceof Error ? err.message : String(err);
-        const sanitized = new Error(
-          `[kb-chat] pending-files batch failed (original message length ${original.length})`,
-        );
-        console.warn("[kb-chat] pending upload failed (batch)", { err: sanitized });
-        Sentry.captureException(sanitized);
-      }
-    })();
-  }, [initialMsgSent, pendingFilesHandled, realConversationId, sendMessage]);
+      })
+      .finally(() => {
+        if (!unmountedRef.current) setFirstRunBusy(false);
+      });
+    // `firstRunBusy` re-runs this effect after a re-arm: the session may
+    // already have re-confirmed while the upload was in flight.
+  }, [sessionConfirmed, msgParam, frParam, realConversationId, conversationId, variant, resumedFrom, sendMessage, router, pathname, firstRunBusy]);
 
   useEffect(() => {
     if (!sessionStarted || sessionConfirmed) return;
@@ -1261,7 +1275,15 @@ export function ChatSurface({
           />
           <ChatInput
             onSend={handleSend}
-            conversationId={conversationId}
+            // The route id "new" is not a real conversation: presign would 404.
+            // Until the session is confirmed there is no id to attach under, so
+            // pass null (attachments unavailable). `sessionConfirmed` matters:
+            // a reconnect leaves realConversationId on the dead pending id.
+            conversationId={
+              conversationId === "new"
+                ? (sessionConfirmed ? realConversationId : null)
+                : (realConversationId ?? conversationId)
+            }
             onAtTrigger={(query, pos) => {
               setAtQuery(query);
               setAtPosition(pos);
@@ -1269,7 +1291,7 @@ export function ChatSurface({
             }}
             onAtDismiss={() => setAtVisible(false)}
             atMentionVisible={atVisible}
-            disabled={status !== "connected"}
+            disabled={status !== "connected" || firstRunBusy}
             workflowEnded={workflowEnded}
             placeholder={
               status === "connected"
