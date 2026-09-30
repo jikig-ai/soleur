@@ -222,7 +222,7 @@ named devex seat `soleur:engineering:cto`. Mechanical findings applied:
   in `ci-deploy.test.sh`; a classifier-agreement table across the three "only the sinkhole"
   implementations (CTO devex); a Phase-5 retirement message in Guard 2's failures (CTO devex).
 - **Taste / User-Challenge** items are persisted to
-  `knowledge-base/project/specs/feat-one-shot-9169-web-host-ghcr-deny/decision-challenges.md`.
+  `knowledge-base/project/specs/archive/20260930-144202-feat-one-shot-9169-web-host-ghcr-deny/decision-challenges.md`.
 
 ## Problem Statement
 
@@ -233,8 +233,8 @@ CIDR half, `cron-egress-allowlist-cidr.txt`, admits `140.82.112.0/20` and `185.1
 contain ghcr.io and pkg-containers.githubusercontent.com, so bridge containers CAN reach GHCR; tracked
 as #9275), so the step is realised as an **enforced, observed per-host deny**. The registry host got it in PR #9147 (live:
 `ghcr_blocked=1`). The two web hosts still resolve `ghcr.io`: nothing on them pulls from it any
-more, but that is a claim, not an enforced and observed fact. A ghcr.io outage or compromise can
-still reach anything on a web host that resolves the name — most importantly a future regression
+more, but that is a claim, not an enforced and observed fact. If ghcr.io is unavailable or
+compromised, that can still reach anything on a web host that resolves the name — most importantly a future regression
 that re-points the cosign verifier (the gate on every app release) back at ghcr.io.
 
 ## Proposed Solution
@@ -434,7 +434,7 @@ is stated in the ADR amendment, not left implicit.
 - 2.2 Verify `scripts/check-deploy-script-parity.sh` and every other `DEPLOY_SCRIPT_SHA` /
   `IMAGE_VERIFY` consumer is untouched (`git grep -n 'DEPLOY_SCRIPT_SHA\|IMAGE_VERIFY' -- scripts
   apps .github`), because the new line is a separate marker. Before writing the marker, `git grep`
-  for any closed list of allowed `ci-deploy` logger markers (in `ci-deploy.test.sh`, soak scripts,
+  for any closed list of allowed `ci-deploy` logger markers (in `ci-deploy.test.sh`, the `scripts/followthroughs/` probes,
   Better Stack alert predicates) and extend it if one exists.
 - 2.3 Fix the stale comment at the cosign verify site (`ci-deploy.sh`, the block beginning "Verify via
   the pinned cosign container (ADR-087 Design B′). The app image is a PRIVATE GHCR package") so it no
@@ -469,7 +469,7 @@ is stated in the ADR amendment, not left implicit.
 | New dedicated `terraform_data.ghcr_deny` per host | Adds `-target` lines in two workflows, a Guard-1 bridge-stage classification and parity-floor bumps, and buys no property the two existing root routes do not. |
 | Put the deny inside `infra-config-install.sh` (the webhook root helper) | Widens a deliberately narrow sudo boundary (the deploy user can invoke it with any args) to `/etc/hosts`; rejected on security grounds. |
 | Put the web-1 deny in `infra_config_handler_bootstrap` (web-2 sibling's natural twin) | It is the break-glass lever the workflow's recovery text names; a failing assertion there would break the documented way back, and a re-fire restarts `webhook.service`. |
-| Append `ghcr_blocked=` to the `DEPLOY_SCRIPT_SHA` or `IMAGE_VERIFY: ok` line | Those lines are parsed by `check-deploy-script-parity.sh` and the soak scripts; a separate marker leaves every existing parser byte-stable. |
+| Append `ghcr_blocked=` to the `DEPLOY_SCRIPT_SHA` or `IMAGE_VERIFY: ok` line | Those lines are parsed by `check-deploy-script-parity.sh`, `cosign-verify-live-8037.sh` and `ghcr-read-retired-8036.sh`; a separate marker leaves every existing parser byte-stable. |
 | Better Stack alert on `ghcr_blocked=0` | Registry precedent shipped no alert; cut (see Cut List). |
 
 ## Non-Goals
