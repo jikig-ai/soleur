@@ -120,6 +120,12 @@ describe("ChatSurface first-run attachments", () => {
     mockStartSession.mockReset();
     mockUpload.mockReset();
     mockReplace.mockReset();
+    // Reflect router.replace like the real router: the first-run params leave the
+    // URL, so a re-arm must still deliver the text from its own memory.
+    mockReplace.mockImplementation(() => {
+      mockSearchParams.delete("msg");
+      mockSearchParams.delete("fr");
+    });
     mockFetch.mockReset();
     mockFetch.mockImplementation(async (url: string) => {
       if (typeof url === "string" && url.includes("/api/attachments/presign")) {
@@ -181,6 +187,60 @@ describe("ChatSurface first-run attachments", () => {
       expect(mockUpload).toHaveBeenCalledTimes(1);
       expect(mockSendMessage).toHaveBeenCalledTimes(1);
       expect(mockSendMessage).toHaveBeenCalledWith("", [refFor(f, REAL_A)]);
+    });
+
+    it("files only: the fr=1 marker is stripped from the URL", async () => {
+      const f = mdFile();
+      setPendingFiles([f]);
+      mockSearchParams.set("fr", "1");
+      mockUpload.mockResolvedValueOnce([refFor(f, REAL_A)]);
+
+      render(surface());
+      await settle();
+
+      expect(mockReplace).toHaveBeenCalledTimes(1);
+      expect(mockReplace).toHaveBeenCalledWith("/dashboard/chat/new", { scroll: false });
+    });
+
+    it("files wait for a real conversation id: no upload, files stay staged, then ONE upload once the id arrives", async () => {
+      const f = mdFile();
+      setPendingFiles([f]);
+      mockSearchParams.set("fr", "1");
+      wsReturn = ws({ realConversationId: null });
+      mockUpload.mockResolvedValueOnce([refFor(f, REAL_A)]);
+
+      const { rerender } = render(surface());
+      await settle();
+      expect(mockUpload).not.toHaveBeenCalled();
+      expect(getPendingFiles()).toEqual([f]);
+      expect(mockSendMessage).not.toHaveBeenCalled();
+
+      wsReturn = ws({ realConversationId: REAL_A });
+      rerender(surface());
+      await settle();
+      expect(mockUpload).toHaveBeenCalledTimes(1);
+      expect(mockUpload).toHaveBeenCalledWith([f], REAL_A);
+      expect(mockSendMessage).toHaveBeenCalledWith("", [refFor(f, REAL_A)]);
+    });
+
+    it("a plain session start (no msg, no files) sends nothing and never disables the composer", async () => {
+      render(surface());
+      expect(screen.getByPlaceholderText(/follow up or ask another question/i)).not.toBeDisabled();
+      await settle();
+      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(mockReplace).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText(/follow up or ask another question/i)).not.toBeDisabled();
+    });
+
+    it("message-only first run never flashes the composer disabled", async () => {
+      mockSearchParams.set("msg", "hi");
+      render(surface());
+      // Checked BEFORE any await: a busy flag set around the synchronous send
+      // would still be visible here.
+      expect(screen.getByPlaceholderText(/follow up or ask another question/i)).not.toBeDisabled();
+      await settle();
+      expect(mockSendMessage.mock.calls).toEqual([["hi"]]);
+      expect(screen.getByPlaceholderText(/follow up or ask another question/i)).not.toBeDisabled();
     });
 
     it("msg only (no files): sends exactly ONE message without waiting for an id", async () => {
@@ -281,7 +341,38 @@ describe("ChatSurface first-run attachments", () => {
   });
 
   describe("live-state wiring and re-arm", () => {
-    it("liveRef: socket drops during the upload -> nothing is sent into the dead socket", async () => {
+    async function dropDuringUpload(change: Parameters<typeof ws>[0]) {
+      const f = mdFile();
+      setPendingFiles([f]);
+      mockSearchParams.set("msg", "hi");
+      mockSearchParams.set("fr", "1");
+      const d = deferredUpload();
+      mockUpload.mockReturnValueOnce(d.promise).mockResolvedValue([]);
+
+      const { rerender } = render(surface());
+      await settle();
+      expect(mockUpload).toHaveBeenCalledTimes(1);
+
+      // Mutating wsReturn alone does not re-render, so rerender explicitly.
+      wsReturn = ws(change);
+      rerender(surface());
+      await act(async () => {
+        d.resolve([refFor(f, REAL_A)]);
+      });
+      await settle();
+    }
+
+    it("liveRef: ONLY the socket status drops during the upload -> nothing is sent into the dead socket", async () => {
+      await dropDuringUpload({ status: "disconnected" });
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+
+    it("liveRef: ONLY sessionConfirmed resets during the upload -> nothing is sent", async () => {
+      await dropDuringUpload({ sessionConfirmed: false });
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+
+    it("unmount during the upload -> nothing is sent and the files are NOT re-staged", async () => {
       const f = mdFile();
       setPendingFiles([f]);
       mockSearchParams.set("msg", "hi");
@@ -289,20 +380,19 @@ describe("ChatSurface first-run attachments", () => {
       const d = deferredUpload();
       mockUpload.mockReturnValueOnce(d.promise);
 
-      const { rerender } = render(surface());
+      const { unmount } = render(surface());
       await settle();
       expect(mockUpload).toHaveBeenCalledTimes(1);
 
-      // A reconnect: status down and sessionConfirmed reset. Mutating wsReturn
-      // alone does not re-render, so rerender explicitly.
-      wsReturn = ws({ status: "disconnected", sessionConfirmed: false });
-      rerender(surface());
+      unmount();
       await act(async () => {
         d.resolve([refFor(f, REAL_A)]);
       });
       await settle();
 
       expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(mockUpload).toHaveBeenCalledTimes(1);
+      expect(getPendingFiles()).toEqual([]);
     });
 
     it("re-arm: new session during the upload -> re-uploads ONCE under the new id, then one send", async () => {
@@ -339,10 +429,10 @@ describe("ChatSurface first-run attachments", () => {
       expect(mockSendMessage).toHaveBeenCalledWith("hi", [refFor(f, REAL_B)]);
     });
 
-    it("re-arm gives up after ONE retry (no third upload, no send)", async () => {
+    async function exhaustRetryBudget(lastChange: Parameters<typeof ws>[0], msg: string | null) {
       const f = mdFile();
       setPendingFiles([f]);
-      mockSearchParams.set("msg", "hi");
+      if (msg) mockSearchParams.set("msg", msg);
       mockSearchParams.set("fr", "1");
       const d1 = deferredUpload();
       const d2 = deferredUpload();
@@ -359,14 +449,29 @@ describe("ChatSurface first-run attachments", () => {
       await settle();
       expect(mockUpload).toHaveBeenCalledTimes(2);
 
-      wsReturn = ws({ realConversationId: REAL_C });
+      wsReturn = ws(lastChange);
       rerender(surface());
       await act(async () => {
         d2.resolve([refFor(f, REAL_B)]);
       });
       await settle();
 
+      // Never a third upload.
       expect(mockUpload).toHaveBeenCalledTimes(2);
+    }
+
+    it("retry budget exhausted, live session connected+confirmed: the TEXT is still sent (text only), never the stale refs", async () => {
+      await exhaustRetryBudget({ realConversationId: REAL_C }, "hi");
+      expect(mockSendMessage.mock.calls).toEqual([["hi"]]);
+    });
+
+    it("retry budget exhausted, socket dead: nothing is sent", async () => {
+      await exhaustRetryBudget({ realConversationId: REAL_C, status: "disconnected" }, "hi");
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+
+    it("retry budget exhausted, files only (no text): nothing is sent", async () => {
+      await exhaustRetryBudget({ realConversationId: REAL_C }, null);
       expect(mockSendMessage).not.toHaveBeenCalled();
     });
   });
@@ -408,7 +513,7 @@ describe("ChatSurface first-run attachments", () => {
       }
     });
 
-    it("existing conversation route: presign carries realConversationId ?? route id", async () => {
+    it("existing conversation route: presign carries the route id when the socket has no real id", async () => {
       wsReturn = ws({ realConversationId: null });
       render(surface({ conversationId: "abc" }));
       await settle();

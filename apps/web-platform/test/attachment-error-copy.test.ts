@@ -1,16 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { attachmentErrorCopy } from "@/lib/attachment-error-copy";
-
-// Every error code `app/api/attachments/presign/route.ts` can return.
-const PRESIGN_CODES = [
-  "invalid_request",
-  "unauthorized",
-  "unsupported_file_type",
-  "file_too_large",
-  "conversation_not_found",
-  "not_a_workspace_member",
-  "upload_failed",
-] as const;
+import { PRESIGN_ERROR_CODES, MAX_ATTACHMENT_SIZE } from "@/lib/attachment-constants";
 
 const SPECIFIC_CODES = [
   "file_too_large",
@@ -23,7 +13,7 @@ const SPECIFIC_CODES = [
 const GENERIC = "Upload failed. Check your connection and try again.";
 
 describe("attachmentErrorCopy", () => {
-  it.each(PRESIGN_CODES)("maps %s to human copy, never the raw code", (code) => {
+  it.each(PRESIGN_ERROR_CODES)("maps %s to human copy, never the raw code", (code) => {
     const copy = attachmentErrorCopy(code);
     expect(copy.length).toBeGreaterThan(0);
     expect(copy).not.toBe(code);
@@ -48,7 +38,7 @@ describe("attachmentErrorCopy", () => {
   });
 
   it("names the limit and the supported types where relevant", () => {
-    expect(attachmentErrorCopy("file_too_large")).toContain("20 MB");
+    expect(attachmentErrorCopy("file_too_large")).toContain(`${MAX_ATTACHMENT_SIZE / 1024 / 1024} MB`);
     expect(attachmentErrorCopy("unsupported_file_type")).toContain(".md");
   });
 });

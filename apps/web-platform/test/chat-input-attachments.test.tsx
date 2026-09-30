@@ -776,7 +776,27 @@ describe("ChatInput — attachments", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    it("characterization (passes pre-fix): dragover and drop default are prevented even when unavailable", () => {
+    it("transition null -> real id (session_started): a drop after the rerender stages a tile", async () => {
+      const { rerender } = setup({ conversationId: null });
+      const zone = () => document.querySelector("div.relative") as HTMLElement;
+      fireEvent.drop(zone(), { dataTransfer: { files: [md()] } });
+      expect(await screen.findByRole("alert")).toHaveTextContent(UNAVAILABLE_COPY);
+
+      rerender(<ChatInput {...defaultProps} conversationId={REAL_ID} />);
+      fireEvent.drop(zone(), { dataTransfer: { files: [md()] } });
+      expect(await screen.findByTestId("attachment-preview")).toHaveTextContent("a.md");
+    });
+
+    it("transition real id -> null (reconnect): a drop after the rerender is rejected", async () => {
+      const { rerender } = setup({ conversationId: REAL_ID });
+      rerender(<ChatInput {...defaultProps} conversationId={null} />);
+      const zone = document.querySelector("div.relative") as HTMLElement;
+      fireEvent.drop(zone, { dataTransfer: { files: [md()] } });
+      expect(await screen.findByRole("alert")).toHaveTextContent(UNAVAILABLE_COPY);
+      expect(screen.queryAllByTestId("attachment-preview")).toHaveLength(0);
+    });
+
+    it("characterization: dragover and drop default are prevented even when unavailable", () => {
       setup({ conversationId: null });
       const zone = document.querySelector("div.relative") as HTMLElement;
       // fireEvent returns false when preventDefault() was called.
@@ -810,7 +830,7 @@ describe("ChatInput — attachments", () => {
       await userEvent.click(screen.getByLabelText("Send message"));
     }
 
-    it("characterization (passes pre-fix): the presign body carries the conversationId prop", async () => {
+    it("characterization: the presign body carries the conversationId prop", async () => {
       primeXhr();
       mockFetch.mockResolvedValueOnce({ ok: false, status: 404, json: () => Promise.resolve({ error: "conversation_not_found" }) });
       await stageAndSend({ conversationId: REAL_ID });
@@ -835,6 +855,38 @@ describe("ChatInput — attachments", () => {
       const tile = await screen.findByTestId("attachment-preview");
       await waitFor(() => expect(tile).toHaveTextContent(copy));
       expect(tile).not.toHaveTextContent(code);
+    });
+
+    it("a staged file is presigned under the CURRENT id after the id changes (reconnect), not the id at staging time", async () => {
+      primeXhr();
+      const OTHER_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c99";
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404, json: () => Promise.resolve({ error: "conversation_not_found" }) });
+      const { rerender } = setup({ conversationId: REAL_ID });
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File(["# a"], "a.md", { type: "" })] } });
+      await screen.findByTestId("attachment-preview");
+
+      rerender(<ChatInput {...defaultProps} conversationId={OTHER_ID} />);
+      await userEvent.click(screen.getByLabelText("Send message"));
+      await waitFor(() => expect(mockFetch).toHaveBeenCalled());
+      expect(JSON.parse(mockFetch.mock.calls[0]![1].body as string).conversationId).toBe(OTHER_ID);
+    });
+
+    it("send while attachments became unavailable (id -> null): nothing presigned or sent, files stay staged, availability message shown", async () => {
+      primeXhr();
+      const onSend = vi.fn();
+      const { rerender } = setup({ conversationId: REAL_ID, onSend });
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File(["# a"], "a.md", { type: "" })] } });
+      await screen.findByTestId("attachment-preview");
+
+      rerender(<ChatInput {...defaultProps} onSend={onSend} conversationId={null} />);
+      await userEvent.click(screen.getByLabelText("Send message"));
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+      expect(screen.getAllByTestId("attachment-preview")).toHaveLength(1);
+      expect(await screen.findByRole("alert")).toHaveTextContent(UNAVAILABLE_COPY);
     });
 
     it("a presign failure with an unparsable body falls back to the generic copy", async () => {

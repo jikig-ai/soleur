@@ -577,11 +577,19 @@ export function ChatSurface({
   // to THIS navigation; without it a later "New conversation" click inside the
   // store TTL would upload and send those files into an unrelated chat.
   const frParam = searchParams.get("fr");
+  const MAX_FIRST_RUN_RETRIES = 1; // one re-arm under a new session, then the text-only final attempt
+  const unmountedRef = useRef(false);
   const firstRun = useRef({ started: false, retries: 0, msg: null as string | null, rearm: false });
   const [firstRunBusy, setFirstRunBusy] = useState(false);
   const liveRef = useRef({ conversationId: realConversationId, connected: status === "connected", sessionConfirmed });
   liveRef.current = { conversationId: realConversationId, connected: status === "connected", sessionConfirmed };
-  useEffect(() => () => { liveRef.current = { conversationId: null, connected: false, sessionConfirmed: false }; }, []); // unmount = dead
+  useEffect(() => {
+    unmountedRef.current = false; // StrictMode re-mounts after a simulated unmount
+    return () => {
+      unmountedRef.current = true;
+      liveRef.current = { conversationId: null, connected: false, sessionConfirmed: false }; // unmount = dead
+    };
+  }, []);
   useEffect(() => {
     const fr = firstRun.current;
     if (fr.started || !sessionConfirmed) return;
@@ -593,8 +601,8 @@ export function ChatSurface({
     if (files.length > 0 && !realConversationId) return; // wait; the msg-only path must not wait
     fr.started = true;
     if (files.length > 0) clearPendingFiles();
-    if (msgParam) router.replace(pathname, { scroll: false });
-    setFirstRunBusy(true);
+    if (msgParam || frParam) router.replace(pathname, { scroll: false });
+    if (files.length > 0) setFirstRunBusy(true); // the msg-only send is synchronous
     void runFirstRunSend({
       msgParam: msg,
       files,
@@ -602,16 +610,21 @@ export function ChatSurface({
       getLive: () => liveRef.current,
       upload: uploadPendingFiles,
       send: sendMessage,
+      final: fr.retries >= MAX_FIRST_RUN_RETRIES,
     })
       .then(({ retry }) => {
-        if (retry && fr.retries++ < 1) {
+        if (unmountedRef.current) return;
+        if (retry && fr.retries < MAX_FIRST_RUN_RETRIES) {
+          fr.retries += 1;
           fr.started = false;
           fr.rearm = true;
           fr.msg = msg;
           if (files.length) setPendingFiles(files);
         }
       })
-      .finally(() => setFirstRunBusy(false));
+      .finally(() => {
+        if (!unmountedRef.current) setFirstRunBusy(false);
+      });
     // `firstRunBusy` re-runs this effect after a re-arm: the session may
     // already have re-confirmed while the upload was in flight.
   }, [sessionConfirmed, msgParam, frParam, realConversationId, conversationId, variant, resumedFrom, sendMessage, router, pathname, firstRunBusy]);

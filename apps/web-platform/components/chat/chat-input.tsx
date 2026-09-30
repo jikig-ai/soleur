@@ -415,11 +415,18 @@ export function ChatInput({
           r.status === "fulfilled" && r.value !== null,
       )
       .map((r) => r.value);
-  }, [attachments]);
+  }, [attachments, conversationId]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
     if (!trimmed && attachments.length === 0) return;
+
+    // Never presign against a null id (e.g. the socket reconnected after the
+    // files were staged): keep them staged and say why.
+    if (attachments.length > 0 && attachmentsUnavailable) {
+      setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+      return;
+    }
 
     let sent = false;
     if (attachments.length > 0) {
@@ -446,7 +453,7 @@ export function ChatInput({
       setValue("");
       onAtDismiss();
     }
-  }, [value, attachments, onSend, onAtDismiss, uploadAttachments]);
+  }, [value, attachments, attachmentsUnavailable, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

@@ -12,6 +12,7 @@ import { runFirstRunSend } from "@/lib/first-run-send";
 
 const REAL_ID = "0a1b2c3d-0000-4000-8000-00000000abcd";
 
+type UploadOpts = { signal?: AbortSignal; onUploaded?: (ref: AttachmentRef) => void };
 type Live = { conversationId: string | null; connected: boolean; sessionConfirmed: boolean };
 
 function makeFile(name: string): File {
@@ -36,7 +37,7 @@ function setup(over: { live?: Partial<Live> } = {}) {
     ...over.live,
   };
   const getLive = vi.fn(() => live);
-  const upload = vi.fn(async (files: File[], _id: string): Promise<AttachmentRef[]> => {
+  const upload = vi.fn(async (files: File[], _id: string, _opts?: UploadOpts): Promise<AttachmentRef[]> => {
     log.push("upload");
     return files.map(refFor);
   });
@@ -74,7 +75,11 @@ describe("runFirstRunSend", () => {
       send: h.send,
     });
     expect(h.upload).toHaveBeenCalledTimes(1);
-    expect(h.upload).toHaveBeenCalledWith([f], REAL_ID);
+    expect(h.upload).toHaveBeenCalledWith(
+      [f],
+      REAL_ID,
+      expect.objectContaining({ signal: expect.any(AbortSignal), onUploaded: expect.any(Function) }),
+    );
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(h.send).toHaveBeenCalledWith("", [refFor(f)]);
     expect(res).toEqual({ sent: true, retry: false });
@@ -142,7 +147,8 @@ describe("runFirstRunSend", () => {
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(h.send.mock.calls[0]).toEqual(["hi"]);
     expect(res).toEqual({ sent: true, retry: false });
-    expect(ops()).toContain("first-run-upload-failed");
+    expect(ops()).toEqual(["first-run-batch-failed"]);
+    expect(callFor("first-run-batch-failed")![1].extra).toEqual({ attempted: 1, uploaded: 0 });
   });
 
   it("all uploads fail + no message -> nothing sent", async () => {
@@ -158,7 +164,7 @@ describe("runFirstRunSend", () => {
     });
     expect(h.send).not.toHaveBeenCalled();
     expect(res.sent).toBe(false);
-    expect(ops()).toContain("first-run-upload-failed");
+    expect(ops()).toEqual(["first-run-batch-failed"]);
   });
 
   it("stale-id window (connected, sessionConfirmed=false, id unchanged) -> not ready, retry, no send", async () => {
@@ -238,11 +244,11 @@ describe("runFirstRunSend", () => {
     });
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(h.send).toHaveBeenCalledWith("hi", [refFor(files[0]), refFor(files[1])]);
-    const c = callFor("first-run-upload-failed");
+    const c = callFor("first-run-upload-partial");
     expect(c).toBeDefined();
-    expect(JSON.stringify(c![1].extra)).toMatch(/3/);
-    expect(JSON.stringify(c![1].extra)).toMatch(/2/);
+    expect(c![1].extra).toEqual({ attempted: 3, uploaded: 2 });
     expect(c![1].feature).toBe("kb-chat");
+    expect(ops()).toEqual(["first-run-upload-partial"]);
   });
 
   it("upload never resolves -> deadline fires, text-only send, timeout captured", async () => {
@@ -260,7 +266,12 @@ describe("runFirstRunSend", () => {
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(h.send.mock.calls[0]).toEqual(["hi"]);
     expect(res.sent).toBe(true);
-    expect(ops()).toContain("first-run-upload-timeout");
+    expect(ops()).toEqual(["first-run-upload-timeout"]);
+    expect(callFor("first-run-upload-timeout")![1].extra).toEqual({
+      attempted: 1,
+      uploaded: 0,
+      deadlineMs: 20,
+    });
   });
 
   it("upload throws -> same as all-fail, never rejects, counts captured", async () => {
@@ -276,9 +287,9 @@ describe("runFirstRunSend", () => {
     });
     expect(h.send.mock.calls).toEqual([["hi"]]);
     expect(res.sent).toBe(true);
-    const c = callFor("first-run-upload-failed");
+    const c = callFor("first-run-batch-failed");
     expect(c).toBeDefined();
-    expect(JSON.stringify(c![1].extra)).toMatch(/2/);
+    expect(c![1].extra).toEqual({ attempted: 2, uploaded: 0 });
   });
 
   it("does not leak signed-URL tokens to Sentry (only message length)", async () => {
@@ -297,7 +308,7 @@ describe("runFirstRunSend", () => {
       const flat = `${err instanceof Error ? err.message : JSON.stringify(err)}|${JSON.stringify(opts)}`;
       expect(flat).not.toContain("SECRET");
     }
-    const c = callFor("first-run-upload-failed");
+    const c = callFor("first-run-batch-failed");
     expect(String((c![0] as Error).message)).toMatch(/length \d+/);
   });
 
@@ -316,5 +327,255 @@ describe("runFirstRunSend", () => {
     });
     expect(res.sent).toBe(false);
     expect(mockReport).toHaveBeenCalled();
+  });
+  it("default deadline is 45_000 ms (no deadlineMs passed)", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = setup();
+      h.upload.mockImplementationOnce(() => new Promise<AttachmentRef[]>(() => {}));
+      let done = false;
+      const p = runFirstRunSend({
+        msgParam: "hi",
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+      }).then((r) => {
+        done = true;
+        return r;
+      });
+      await vi.advanceTimersByTimeAsync(44_999);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await p;
+      expect(done).toBe(true);
+      expect(callFor("first-run-upload-timeout")![1].extra).toMatchObject({ deadlineMs: 45_000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a rejection that lands AFTER the deadline is not an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const h = setup();
+      let rejectLate!: (e: Error) => void;
+      h.upload.mockImplementationOnce(
+        () => new Promise<AttachmentRef[]>((_, rej) => (rejectLate = rej)),
+      );
+      await runFirstRunSend({
+        msgParam: "hi",
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+        deadlineMs: 10,
+      });
+      rejectLate(new Error("late boom"));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("uploads under the CAPTURED id, not whatever getLive reports at upload time", async () => {
+    const OTHER = "ffffffff-0000-4000-8000-000000000000";
+    const h = setup({ live: { conversationId: OTHER } });
+    h.upload.mockImplementationOnce(async (files: File[]) => {
+      // The session settles onto the captured id only by the time the upload ends.
+      h.live.conversationId = REAL_ID;
+      return files.map(refFor);
+    });
+    const f = makeFile("a.md");
+    const res = await runFirstRunSend({
+      msgParam: "hi",
+      files: [f],
+      conversationId: REAL_ID,
+      getLive: h.getLive,
+      upload: h.upload,
+      send: h.send,
+    });
+    expect(h.upload.mock.calls[0]![1]).toBe(REAL_ID);
+    expect(h.send).toHaveBeenCalledWith("hi", [refFor(f)]);
+    expect(res).toEqual({ sent: true, retry: false });
+  });
+
+  it("files but no conversation id (defensive) -> no upload, no send, dropped captured, retry", async () => {
+    const h = setup();
+    const res = await runFirstRunSend({
+      msgParam: "hi",
+      files: [makeFile("a.md")],
+      conversationId: null,
+      getLive: h.getLive,
+      upload: h.upload,
+      send: h.send,
+    });
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+    expect(res).toEqual({ sent: false, retry: true });
+    expect(callFor("first-run-send-dropped")![1].extra).toEqual({ attempted: 1 });
+  });
+
+  describe("partial salvage and cancellation", () => {
+    it("deadline: already-uploaded refs are SALVAGED and sent, and the signal is aborted", async () => {
+      const h = setup();
+      const files = [makeFile("a.md"), makeFile("b.md")];
+      let seen: AbortSignal | undefined;
+      h.upload.mockImplementationOnce((_f: File[], _id: string, opts?: UploadOpts) => {
+        seen = opts?.signal;
+        opts?.onUploaded?.(refFor(files[0]!));
+        return new Promise<AttachmentRef[]>(() => {}); // second file hangs forever
+      });
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files,
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+        deadlineMs: 20,
+      });
+      expect(seen?.aborted).toBe(true);
+      expect(h.send.mock.calls).toEqual([["hi", [refFor(files[0]!)]]]);
+      expect(res).toEqual({ sent: true, retry: false });
+      expect(ops()).toEqual(["first-run-upload-timeout"]);
+      expect(callFor("first-run-upload-timeout")![1].extra).toEqual({
+        attempted: 2,
+        uploaded: 1,
+        deadlineMs: 20,
+      });
+    });
+
+    it("the signal is NOT aborted when the upload finishes in time", async () => {
+      const h = setup();
+      let seen: AbortSignal | undefined;
+      h.upload.mockImplementationOnce(async (f: File[], _id: string, opts?: UploadOpts) => {
+        seen = opts?.signal;
+        return f.map(refFor);
+      });
+      await runFirstRunSend({
+        msgParam: "hi",
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+      });
+      expect(seen?.aborted).toBe(false);
+    });
+
+    it("upload rejects after some files finished -> salvaged refs still sent, captured as partial", async () => {
+      const h = setup();
+      const files = [makeFile("a.md"), makeFile("b.md")];
+      h.upload.mockImplementationOnce(async (_f: File[], _id: string, opts?: UploadOpts) => {
+        opts?.onUploaded?.(refFor(files[0]!));
+        throw new Error("boom");
+      });
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files,
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+      });
+      expect(h.send.mock.calls).toEqual([["hi", [refFor(files[0]!)]]]);
+      expect(res).toEqual({ sent: true, retry: false });
+      expect(ops()).toEqual(["first-run-upload-partial"]);
+      expect(callFor("first-run-upload-partial")![1].extra).toEqual({ attempted: 2, uploaded: 1 });
+    });
+
+    it("files-only + deadline with nothing uploaded -> nothing sent, timeout captured, no retry", async () => {
+      const h = setup();
+      h.upload.mockImplementationOnce(() => new Promise<AttachmentRef[]>(() => {}));
+      const res = await runFirstRunSend({
+        msgParam: null,
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+        deadlineMs: 10,
+      });
+      expect(h.send).not.toHaveBeenCalled();
+      expect(res).toEqual({ sent: false, retry: false });
+      expect(ops()).toEqual(["first-run-upload-timeout"]);
+    });
+  });
+
+  describe("final attempt (retry budget exhausted)", () => {
+    const OTHER = "ffffffff-0000-4000-8000-000000000000";
+    const run = (h: ReturnType<typeof setup>, over: { msgParam?: string | null } = {}) =>
+      runFirstRunSend({
+        msgParam: over.msgParam === undefined ? "hi" : over.msgParam,
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+        final: true,
+      });
+
+    it("live session is connected+confirmed under a NEW id -> text-only send(msg), files dropped and captured", async () => {
+      const h = setup({ live: { conversationId: OTHER } });
+      const res = await run(h);
+      expect(h.send.mock.calls).toEqual([["hi"]]);
+      expect(res).toEqual({ sent: true, retry: false });
+      const c = callFor("first-run-send-dropped");
+      expect(c).toBeDefined();
+      expect(c![1].extra).toMatchObject({ attempted: 1, uploaded: 1, idChanged: true, final: true });
+    });
+
+    it("dead socket -> never sends, dropped captured, no retry", async () => {
+      const h = setup({ live: { conversationId: OTHER, connected: false } });
+      const res = await run(h);
+      expect(h.send).not.toHaveBeenCalled();
+      expect(res).toEqual({ sent: false, retry: false });
+      expect(ops()).toEqual(["first-run-send-dropped"]);
+    });
+
+    it("socket up but session not confirmed -> never sends", async () => {
+      const h = setup({ live: { sessionConfirmed: false } });
+      const res = await run(h);
+      expect(h.send).not.toHaveBeenCalled();
+      expect(res).toEqual({ sent: false, retry: false });
+    });
+
+    it("no message text -> nothing to fall back to, nothing sent", async () => {
+      const h = setup({ live: { conversationId: OTHER } });
+      const res = await run(h, { msgParam: null });
+      expect(h.send).not.toHaveBeenCalled();
+      expect(res).toEqual({ sent: false, retry: false });
+      expect(ops()).toEqual(["first-run-send-dropped"]);
+    });
+
+    it("ready on the final attempt -> normal send with refs (fallback not taken)", async () => {
+      const h = setup();
+      const res = await run(h);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      expect(h.send.mock.calls[0]![1]).toHaveLength(1);
+      expect(res).toEqual({ sent: true, retry: false });
+      expect(ops()).toEqual([]);
+    });
+
+    it("NOT final: the same id-changed state still asks for a retry and sends nothing", async () => {
+      const h = setup({ live: { conversationId: OTHER } });
+      const res = await runFirstRunSend({
+        msgParam: "hi",
+        files: [makeFile("a.md")],
+        conversationId: REAL_ID,
+        getLive: h.getLive,
+        upload: h.upload,
+        send: h.send,
+        final: false,
+      });
+      expect(h.send).not.toHaveBeenCalled();
+      expect(res).toEqual({ sent: false, retry: true });
+    });
   });
 });
