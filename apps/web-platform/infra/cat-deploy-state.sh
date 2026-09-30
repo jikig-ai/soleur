@@ -673,6 +673,47 @@ fi
 # read both so `inactive` alone is never re-read as a deploy failure (#4896).
 HEARTBEAT_TIMER_STATUS="$(service_status inngest-heartbeat.timer)"
 INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
+# #7308 — inngest_server_version: the version of the binary the inngest-server
+# unit is ACTUALLY running (or would run), so /hooks/deploy-status answers
+# "which version is live here" by measurement, not by bootstrap-pin inference.
+# Resolution order: the running process's /proc/<MainPID>/exe link (ground truth
+# while active), then the ExecStart path, then the installed-binary default.
+# Same sentinel contract as HOST_ID/CI_DEPLOY_SHA256: ABSENT field = old script,
+# EMPTY string = read failure. `inngest version` prints a bare token
+# (e.g. `1.45.1-abc1234` — no `v` prefix); output is sanitized to the version
+# charset before it enters the response body.
+INNGEST_SERVER_VERSION=""
+_isv_bin() {
+  # $1 = candidate binary path; emits its sanitized `version` token or nothing.
+  # MUST return 0 unconditionally: the result is captured in $() assignments
+  # under `set -e` — a nonzero last-command status would abort the whole hook.
+  local out
+  [[ -n "${1:-}" && -x "$1" ]] || return 0
+  out="$(timeout 5 "$1" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[-0-9A-Za-z.]*' | head -1 || true)"
+  if [[ -n "$out" ]]; then printf '%s' "$out"; fi
+}
+_isv_pid="$(systemctl show -p MainPID --value inngest-server.service 2>/dev/null || true)"
+if [[ "${_isv_pid:-0}" =~ ^[0-9]+$ ]] && [[ "$_isv_pid" -gt 0 ]]; then
+  # INNGEST_PROC_ROOT exists for the test harness only — production never sets it.
+  INNGEST_SERVER_VERSION="$(_isv_bin "$(readlink -f "${INNGEST_PROC_ROOT:-/proc}/$_isv_pid/exe" 2>/dev/null || true)")"
+fi
+if [[ -z "$INNGEST_SERVER_VERSION" ]]; then
+  _isv_es="$(systemctl show -p ExecStart --value inngest-server.service 2>/dev/null || true)"
+  # systemd>=248 structured form: `{ path=/x ; argv[]=... ; }` — take the path=
+  # token; older/raw form: first whitespace token with systemd prefix chars
+  # (`-`, `!`, `+`, `@`) stripped.
+  _isv_path="$(grep -oE 'path=[^ ;]+' <<<"$_isv_es" | head -1 | cut -d= -f2 || true)"
+  if [[ -z "$_isv_path" ]]; then
+    _isv_path="$(awk '{print $1}' <<<"$_isv_es" | sed 's/^[-!+@]*//' || true)"
+  fi
+  if [[ -n "$_isv_path" ]]; then
+    INNGEST_SERVER_VERSION="$(_isv_bin "$_isv_path")"
+  fi
+fi
+if [[ -z "$INNGEST_SERVER_VERSION" ]]; then
+  INNGEST_SERVER_VERSION="$(_isv_bin "${INNGEST_SERVER_BIN:-/usr/local/bin/inngest}")"
+fi
+readonly INNGEST_SERVER_VERSION
 VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
 # #5159 follow-up 2: surface the inngest-server's OWN journal tail (its
@@ -705,6 +746,7 @@ jq -nc \
   --arg hbd "$HEARTBEAT_DARK_ARM" \
   --arg hbt "$HEARTBEAT_TIMER_STATUS" \
   --arg is "$INNGEST_SERVER_STATUS" \
+  --arg isv "$INNGEST_SERVER_VERSION" \
   --arg vs "$VECTOR_STATUS" \
   --arg vj "$VECTOR_JOURNAL_TAIL" \
   --arg ij "$INNGEST_JOURNAL_TAIL" \
@@ -732,6 +774,7 @@ jq -nc \
     inngest_heartbeat_dark_arm: $hbd,
     inngest_heartbeat_timer: $hbt,
     inngest_server: $is,
+    inngest_server_version: $isv,
     vector: $vs,
     vector_journal_tail: $vj,
     inngest_journal_tail: $ij,
