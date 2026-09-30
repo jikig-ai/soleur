@@ -148,7 +148,7 @@ fi
 readonly COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
 readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@(refs/heads/main|refs/tags/v[0-9].+)$'
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
-readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enforce (soak-gated fast-follow)
+readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-enforce}" # enforce (default since #6129, after the #6122 zot soak) | warn (override only)
 # SOLEUR-DEBT(#6005): cosign `--offline` is deprecated (removed in cosign v4). It is
 # inert under the pinned SHA (v3.1.1). Upgrade trigger: the next COSIGN_IMAGE SHA
 # bump — migrate to the `--bundle`+`--trusted-root` new-bundle-format path (verify
