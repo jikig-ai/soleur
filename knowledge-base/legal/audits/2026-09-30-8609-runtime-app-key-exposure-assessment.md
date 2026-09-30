@@ -303,3 +303,25 @@ This record is **append-only**. A limb result, a changed disposition, a notice d
 correction is added as a dated addendum below. The addendum cites the text it annotates and amends
 nothing above it, and a superseded sentence gets a `> **Superseded <date> (#N): …**` marker beneath
 it. Code and records are cited by function, constant, section or anchor name, never by line number.
+
+## Addendum — 2026-09-30 (#8609): K0 key inventory, key rows read
+
+Annotates §K0 — the App key inventory. It was run early in the work phase, before PR-A merged, as a read with no write. The operator cleared GitHub's sudo-mode re-authentication in the Playwright browser. The page read and the fingerprint mapping were automated.
+
+The App settings page for `soleur-ai` (App id 3261325) lists **exactly two** private-key rows. Both were added by the owner account:
+
+| Row | Fingerprint (DER SHA-256, as GitHub displays it) | Added (UTC) | Holder |
+|---|---|---|---|
+| 1 | `SHA256:4Nc74Yt5ve8cmAWBIUXK6i0/KkUOZC6UVofadZ4/XNY=` | 2026-05-25T14:09:31Z | Doppler `soleur/prd_terraform` `GITHUB_APP_PRIVATE_KEY`, the #8209 O13 delete target |
+| 2 | `SHA256:grkwzCZXCbn+yJ2aXNsw9uDtGdTW9dgpEM2+DrNwJNM=` | 2026-05-29T15:15:46Z | Doppler `soleur/prd` `GITHUB_APP_PRIVATE_KEY`, the runtime key and the #8609 R7 delete target |
+
+**Method.** The holder mapping was computed by piping each Doppler value through `openssl pkey -pubout -outform DER | openssl dgst -sha256 -binary | base64`. No key value was printed or written anywhere.
+
+**Result.**
+
+- Every row maps to a holder, so the "row that maps to no holder" stop does not fire.
+- The `prd` and `prd_terraform` fingerprints differ, so R0's equality stop does not fire.
+- This gives the exposure window a lower bound: the runtime key cannot have existed before **2026-05-29T15:15:46Z** (§The exposure window).
+- The `prd_terraform` key's added date, **2026-05-25T14:09:31Z**, is now recorded. That also serves the #8209 record, whose O13 deletes that row.
+
+**Still open under K0:** R0's installation-id set, read from `GET /app/installations`. It is recorded at R0. This addendum does not close K0.
