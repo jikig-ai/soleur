@@ -4001,22 +4001,14 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
-          # Same read shape as scripts/lib/git-data-boot-signal-poll.sh — hot window
-          # UNION'd with the s3 archive (the boot emit is once-per-boot; a rotate is
-          # dispatched days later, so remote() alone is empty). The table pins come from
-          # betterstack-sources.sh — git-data emits to its OWN source 2734275, so the
-          # reader's shared-inngest default would answer zero rows from this host forever.
-          # `--only-secrets` keeps a stray BS_TABLE key in prd_terraform from re-pointing
-          # the read back at the shared table.
-          # shellcheck source=scripts/lib/betterstack-sources.sh
-          source scripts/lib/betterstack-sources.sh
-          rows="$(BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3" \
-            doppler run --preserve-env -p soleur -c prd_terraform \
-              --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
-              --no-exit-on-missing-only-secrets \
-              -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
-              bash scripts/betterstack-query.sh \
-            "SELECT JSONExtractString(raw,'served_repos') AS served_repos FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1) WHERE JSONExtractString(raw,'stage') = 'boot_complete' AND JSONExtractString(raw,'host_name') = 'soleur-git-data' ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" 2>/dev/null || true)"
+          # The read lives in scripts/lib/git-data-boot-signal-poll.sh —
+          # git_data_served_empty_read pins the GIT-DATA tables (its own source 2734275,
+          # hot UNION archive; the shared inngest default would answer zero rows from
+          # this host forever) and --only-secrets keeps a stray BS_TABLE key in
+          # prd_terraform from re-pointing the read.
+          # shellcheck source=scripts/lib/git-data-boot-signal-poll.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/git-data-boot-signal-poll.sh"
+          rows="$(git_data_served_empty_read "$RUNNER_TEMP/served-empty.out" "$RUNNER_TEMP/served-empty.err" && cat "$RUNNER_TEMP/served-empty.out" 2>/dev/null || true)"
           # The LATEST emit decides — an older served_repos=0 must not cover a newer
           # populated reading (rows arrive newest-first, one JSONEachRow object per line).
           latest="$(printf '%s' "$rows" | head -1)"

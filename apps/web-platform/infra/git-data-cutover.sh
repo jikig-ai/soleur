@@ -749,13 +749,12 @@ mode_freeze() {
       case \"\$(basename \"\$f\")\" in .init.lock|.boot-probe-0.init.lock) continue ;; esac
       exec 8<\"\$f\"; flock -n 8 || exit 23   # a held lock means an in-flight provision — STOP
       rm -f -- \"\$f\" || exit 5
-    done" || {
-    rc=$?
-    case "$rc" in
-      23) _store_refuse lock-purge lock_held ;;
-      *) _store_refuse lock-purge probe_failed "$rc" ;;
-    esac
-  }
+    done" || rc=$?
+  case "${rc:-0}" in
+    0) : ;;
+    23) _store_refuse lock-purge lock_held ;;
+    *) _store_refuse lock-purge probe_failed "$rc" ;;
+  esac
   _store_emit lock-purge ok
   log "freeze held: sentinel at $FREEZE_SENTINEL (writer=$CUTOVER_LINEAGE), gc.timer stopped, legacy lock residue purged"
 }

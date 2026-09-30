@@ -2091,11 +2091,18 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     // betterstack-query.sh default is the shared inngest source, which answers zero rows
     // for host_name=soleur-git-data forever — the precondition would fail closed every
     // dispatch. The env pin (BS_TABLE="$BS_GIT_DATA_TABLE") is the anchored contract.
-    expect(gitDataJobBlock).toContain('BS_TABLE="$BS_GIT_DATA_TABLE"');
-    expect(gitDataJobBlock).toContain('BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"');
-    expect(gitDataJobBlock).toContain("JSONExtractString(raw,'stage') = 'boot_complete'");
-    expect(gitDataJobBlock).toContain("JSONExtractString(raw,'host_name') = 'soleur-git-data'");
-    expect(gitDataJobBlock).toContain("--only-secrets");
+    // The read itself lives in scripts/lib/git-data-boot-signal-poll.sh —
+    // git_data_served_empty_read pins the table/env there; the step must call it.
+    expect(gitDataJobBlock).toContain("git_data_served_empty_read");
+    const libSrc = readFileSync(
+      resolve(REPO_ROOT, "scripts/lib/git-data-boot-signal-poll.sh"),
+      "utf8",
+    );
+    expect(libSrc).toContain('BS_TABLE="$BS_GIT_DATA_TABLE"');
+    expect(libSrc).toContain('BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"');
+    expect(libSrc).toContain("JSONExtractString(raw,'stage') = 'boot_complete'");
+    expect(libSrc).toContain("JSONExtractString(raw,'host_name') = 'soleur-git-data'");
+    expect(libSrc).toContain("--only-secrets");
   });
 
   test("the rotate arm is conditional on apply_target=git-data-host-rotate", () => {
