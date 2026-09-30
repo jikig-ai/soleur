@@ -620,6 +620,11 @@ _SUITE_BOUNDS=(
   # ~2.5x serial so a slow day renders as their own RED, not a leg timeout.
   "apps/web-platform/infra/infra-config-repush-mutation.test.sh=540"
   "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh=540"
+  # #9195: nominally ~351 s — already ~97.5% of the 360 s default — and T9's
+  # restart-witness poll (up to 90 s) lands inside it on starved-runner days,
+  # so a bound-kill would replace the diagnostic red (and the teardown dump)
+  # with a bare timeout. Pin at 540 per the two-suite precedent above.
+  "apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh=540"
   # #9123: the boot-unlock guard suite re-runs itself once per mutation row
   # (47 rows), each child executing the writer-arm + stub-PATH runtime arm —
   # ~253 s serial on the dev box. Under -P4 contention the #8688 measurement

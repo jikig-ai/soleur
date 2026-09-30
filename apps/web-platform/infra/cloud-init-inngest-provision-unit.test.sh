@@ -1551,13 +1551,43 @@ STUB
   X systemctl daemon-reload
   XS 'echo 0 > /var/lib/tierb/ctl/pull_rc; echo 60 > /var/lib/tierb/ctl/boot_sleep'
   X systemctl start --no-block soleur-inngest-provision.service
-  poll 40 "grep -q ' phone provision-attempt-start attempt=2 ' $LOGF"
+  # Restart witness: any attempt>=2 row on either channel, or a SECOND bootstrap
+  # start (provision-attempt-start is phone-only — the same loss-prone channel as
+  # the exit evidence — so a lost start row must not stall the wait while the
+  # restart's own bootstrap/exit rows are already in the log). Phase-scoped.
+  poll 90 "awk 'f; \$2==\"PHASE\" && \$3==\"T9\" {f=1}' $LOGF | awk '\$2==\"bootstrap\" && \$3==\"start\" {b++} \$2==\"phone\" && \$3 ~ /^provision-attempt-(start|exit)-[0-9]+\$/ && \$4 ~ /^attempt=[0-9]+\$/ && \$4 != \"attempt=1\" {n=1} \$2==\"emit\" && \$3==\"provision_attempt_failed\" && \$5 ~ /attempt=[0-9]+\./ && \$5 !~ /attempt=1\./ {n=1} END {exit !(n || b >= 2)}'"
   x="$(lines_from T9)"
-  local t9_b t9_x
-  t9_b="$(awk '$2 == "bootstrap" && $3 == "start" {print $1; exit}' <<<"$x")"
-  t9_x="$(awk '$2 == "phone" && $3 ~ /^provision-attempt-exit-143$/ {print $1; exit}' <<<"$x")"
-  tb_ok "$( [ -n "$t9_b" ] && [ -n "$t9_x" ] && awk -v b="$t9_b" -v e="$t9_x" 'BEGIN { exit !((e - b) <= 15) }' && echo 0 || echo 1)" "T9: provision-attempt-exit-143 lands within 10s of the 5s timeout (bootstrap start $t9_b, exit-143 $t9_x) — well before the 90s SIGKILL"
-  tb_ok "$(awk '$3 ~ /^provision-attempt-exit-143$/ {e=NR} $3 == "provision-attempt-start" && $4 == "attempt=2" {s=NR} END {exit !(e && s && e < s)}' <<<"$x" && echo 0 || echo 1)" "T9: the next attempt's provision-attempt-start attempt=2 follows the exit-143"
+  # The kill report travels on TWO channels out of on_exit(): the phone row
+  # (provision-attempt-exit-143) and the emit row (provision_attempt_failed, whose
+  # $5 is the fixed-shape `rc=…` detail). Under runner load either single row can
+  # be lost, so the assertions read whichever attempt=1 evidence landed — and still
+  # red when NEITHER did. Matchers anchor on attempt=1 because exit-143 rows appear
+  # again for attempt>=2 (its own 5s kill, or a later phase's teardown).
+  local t9_via t9_pos t9_x t9_b t9_bk t9_s t9_sk
+  {
+    IFS= read -r t9_via; IFS= read -r t9_pos; IFS= read -r t9_x
+    IFS= read -r t9_b;  IFS= read -r t9_bk
+    IFS= read -r t9_s;  IFS= read -r t9_sk
+  } <<< "$(awk '
+    $2 == "bootstrap" && $3 == "start"                                                  { bs = $1 }
+    $2 == "phone" && $3 == "provision-attempt-start" && $4 == "attempt=1" && t1 == ""   { t1 = $1 }
+    $2 == "phone" && $3 == "provision-attempt-start" && $4 ~ /^attempt=[0-9]+$/ && $4 != "attempt=1" && s == "" { s = NR }
+    $2 == "phone" && $3 == "provision-attempt-exit-143" && $4 == "attempt=1"            { if (e == "") { e = NR; t = $1; fb = bs } ph = 1 }
+    $2 == "emit"  && $3 == "provision_attempt_failed" && $5 ~ /^rc=143\.attempt=1\./    { if (e == "") { e = NR; t = $1; fb = bs } em = 1 }
+    e != "" && NR > e && s2 == "" && $2 == "bootstrap" && $3 == "start"                 { s2 = NR }
+    e != "" && NR > e && s2 == "" && $2 == "phone" && $3 ~ /^provision-attempt-(start|exit)-[0-9]+$/ && $4 ~ /^attempt=[0-9]+$/ && $4 != "attempt=1" { s2 = NR }
+    e != "" && NR > e && s2 == "" && $2 == "emit" && $3 == "provision_attempt_failed" && $5 ~ /attempt=[0-9]+\./ && $5 !~ /attempt=1\./ { s2 = NR }
+    END {
+      print (ph && em ? "both" : ph ? "phone" : em ? "emit" : "none")
+      print e
+      print t
+      print (t1 != "" ? t1 : (e != "" && fb != "" ? fb : ""))
+      print (t1 != "" ? "attempt-start" : (e != "" && fb != "" ? "bootstrap" : ""))
+      print (s != "" ? s : s2)
+      print (s != "" ? "attempt-start" : (s2 != "" ? "restart-evidence" : ""))
+    }' <<<"$x")"
+  tb_ok "$( [ -n "$t9_b" ] && [ -n "$t9_x" ] && awk -v b="$t9_b" -v e="$t9_x" 'BEGIN { d = e - b; exit !(d >= 0 && d <= 15) }' && echo 0 || echo 1)" "T9: the start-timeout kill reports rc=143 for attempt=1 within 15s of the attempt's start (via=$t9_via, anchor=${t9_bk:-none}@${t9_b:-none}, evidence=${t9_x:-none}) — well before the 90s SIGKILL"
+  tb_ok "$( [ -n "$t9_pos" ] && [ -n "$t9_s" ] && [ "$t9_pos" -lt "$t9_s" ] && echo 0 || echo 1)" "T9: the attempt=1 exit evidence precedes the next attempt's evidence (via=$t9_via, evidence_row=${t9_pos:-none}, restart_row=${t9_s:-none}/${t9_sk:-none})"
   X rm -f /etc/systemd/system/soleur-inngest-provision.service.d/20-t9.conf; X systemctl daemon-reload
 
   # ---- T15: the cutover-FSM quiesce waits for an in-flight flip step; a bounded wait gives up --
