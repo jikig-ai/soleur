@@ -2,16 +2,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { User } from "@supabase/supabase-js";
 
 const rpc = vi.fn();
-const inboxRows: unknown[] = [];
-const emailRows: unknown[] = [];
+const inboxRows: { id: string }[] = [];
+const emailRows: { id: string }[] = [];
+const inCalls: { table: string; ids: string[] }[] = [];
+let prefetchError: { code: string } | null = null;
 
-// Minimal supabase builder mock: .select(...).in("id", ids) → { data, error }
+// Supabase builder mock — .in() HONORS its id slice (query-driven, not
+// seed-driven: a handler that queried the wrong ids fails these tests).
 const from = vi.fn((table: string) => ({
   select: () => ({
-    in: async (_col: string, _ids: string[]) => ({
-      data: table === "inbox_item" ? inboxRows : emailRows,
-      error: null,
-    }),
+    in: async (_col: string, ids: string[]) => {
+      inCalls.push({ table, ids: [...ids] });
+      if (prefetchError) return { data: null, error: prefetchError };
+      const source = table === "inbox_item" ? inboxRows : emailRows;
+      return { data: source.filter((r) => ids.includes(r.id)), error: null };
+    },
   }),
 }));
 
@@ -77,6 +82,8 @@ beforeEach(() => {
   reportSilentFallback.mockReset();
   inboxRows.length = 0;
   emailRows.length = 0;
+  inCalls.length = 0;
+  prefetchError = null;
 });
 
 describe("request validation", () => {
@@ -282,6 +289,79 @@ describe("dispatch + outcome mapping", () => {
       "archived",
       "guarded",
       "not_found",
+    ]);
+    expect(rpc).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("prefetch chunking + failure", () => {
+  it("chunks the id prefetch at 100 ids per .in() call", async () => {
+    const ids = Array.from({ length: 150 }, (_, i) =>
+      `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    );
+    for (const id of ids) seedInboxRow(id);
+    rpc.mockResolvedValue({ error: null });
+    const res = await inboxBulkArchiveHandler(
+      req({ items: ids.map((id) => ({ kind: "inbox", id })) }),
+      USER,
+    );
+    expect(res.status).toBe(200);
+    const inboxCalls = inCalls.filter((c) => c.table === "inbox_item");
+    expect(inboxCalls.map((c) => c.ids.length)).toEqual([100, 50]);
+    const body = await outcomes(res);
+    expect(body.results).toHaveLength(150);
+    expect(body.results.every((r) => r.outcome === "archived")).toBe(true);
+  });
+
+  it("prefetch error → 500 + Sentry mirror", async () => {
+    prefetchError = { code: "XX000" };
+    const res = await inboxBulkArchiveHandler(
+      req({ items: [{ kind: "inbox", id: U1 }] }),
+      USER,
+    );
+    expect(res.status).toBe(500);
+    expect(reportSilentFallback).toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("empty items array → 400", async () => {
+    const res = await inboxBulkArchiveHandler(req({ items: [] }), USER);
+    expect(res.status).toBe(400);
+    expect(from).not.toHaveBeenCalled();
+  });
+});
+
+describe("soft deadline", () => {
+  it("flushes remaining items as error when the loop exceeds the deadline", async () => {
+    seedInboxRow(U1);
+    seedInboxRow(U2);
+    seedInboxRow(U3);
+    const base = Date.now();
+    const now = vi.spyOn(Date, "now");
+    // First iteration within budget; the deadline trips after the first
+    // dispatch — remaining items flush as error without further RPC calls.
+    now
+      .mockReturnValueOnce(base) // deadline computation
+      .mockReturnValueOnce(base) // item 1 check
+      .mockReturnValue(base + 61_000); // all later checks → expired
+    rpc.mockResolvedValue({ error: null });
+    const res = await inboxBulkArchiveHandler(
+      req({
+        items: [
+          { kind: "inbox", id: U1 },
+          { kind: "inbox", id: U2 },
+          { kind: "inbox", id: U3 },
+        ],
+      }),
+      USER,
+    );
+    now.mockRestore();
+    expect(res.status).toBe(200);
+    const body = await outcomes(res);
+    expect(body.results.map((r) => r.outcome)).toEqual([
+      "archived",
+      "error",
+      "error",
     ]);
     expect(rpc).toHaveBeenCalledTimes(1);
   });

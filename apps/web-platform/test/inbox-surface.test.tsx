@@ -284,7 +284,7 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
     await waitFor(() => expect(screen.getByText("Good to know item")).toBeTruthy());
 
     // Row checkboxes only — the "Select all" strips carry a different label.
-    const boxes = screen.getAllByRole("checkbox", { name: /^Select (item|email)$/ });
+    const boxes = screen.getAllByRole("checkbox", { name: /^Select: / });
     const enabled = boxes.filter((b) => !(b as HTMLInputElement).disabled);
     const disabled = boxes.filter((b) => (b as HTMLInputElement).disabled);
     expect(enabled.length).toBe(1);
@@ -301,7 +301,7 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
     render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
 
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "Select item" })[0]);
+    fireEvent.click(screen.getAllByRole("checkbox", { name: /^Select: / })[0]);
     expect(screen.getByText("1 selected")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Archive 1 selected/ })).toBeTruthy();
 
@@ -325,7 +325,7 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
     // GOOD TO KNOW strip: two archivable rows.
     fireEvent.click(strips[1]);
     expect(screen.getByText("2 selected")).toBeTruthy();
-    const boxes = screen.getAllByRole("checkbox", { name: "Select item" });
+    const boxes = screen.getAllByRole("checkbox", { name: /^Select: / });
     // Render order: [Guarded (disabled), Info one, Info two].
     expect((boxes[0] as HTMLInputElement).checked).toBe(false);
     expect((boxes[1] as HTMLInputElement).checked).toBe(true);
@@ -339,7 +339,7 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
     ]) as unknown as typeof fetch;
     render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "Select item" })[0]);
+    fireEvent.click(screen.getAllByRole("checkbox", { name: /^Select: / })[0]);
     const strip = screen.getAllByRole("checkbox", { name: "Select all" })[0] as HTMLInputElement;
     expect(strip.indeterminate).toBe(true);
   });
@@ -359,7 +359,7 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
 
     render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
-    const boxes = screen.getAllByRole("checkbox", { name: "Select item" });
+    const boxes = screen.getAllByRole("checkbox", { name: /^Select: / });
     fireEvent.click(boxes[0]);
     fireEvent.click(boxes[1]);
     fireEvent.click(screen.getByRole("button", { name: /Archive 2 selected/ }));
@@ -375,6 +375,12 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
       { kind: "inbox", id: a.id },
       { kind: "inbox", id: b.id },
     ]);
+
+    // While pending, every dismiss vector is inert — Escape leaves the modal open.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByText(/Archive 2 items\?/)).toBeTruthy();
+    // And it doesn't clear the selection either.
+    expect(screen.getByText("2 selected")).toBeTruthy();
 
     resolveBulk!({
       ok: true,
@@ -404,7 +410,7 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
 
     render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("Ok")).toBeTruthy());
-    for (const b of screen.getAllByRole("checkbox", { name: "Select item" })) {
+    for (const b of screen.getAllByRole("checkbox", { name: /^Select: / })) {
       fireEvent.click(b);
     }
     fireEvent.click(screen.getByRole("button", { name: /Archive 2 selected/ }));
@@ -415,13 +421,17 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
       expect(status).toContain("Archived 1.");
       expect(status).toContain("1 can't be archived until handled.");
     });
+    // Residual selection: the non-archived (guarded) id stays selected.
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    const guardedBox = screen.getAllByRole("checkbox", { name: /^Select: / })[0] as HTMLInputElement;
+    expect(guardedBox.checked).toBe(true);
   });
 
   it("Escape clears the selection when no dialog is open", async () => {
     global.fetch = mockFetchOnce([mergedInbox({ title: "A" })]) as unknown as typeof fetch;
     render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select item" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Select: / }));
     expect(screen.getByText("1 selected")).toBeTruthy();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByText("1 selected")).toBeNull();
@@ -435,5 +445,59 @@ describe("InboxSurface — bulk archive selection (#9284)", () => {
     render(<Wrapped />);
     await waitFor(() => expect(screen.getByText("Old")).toBeTruthy());
     expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("429 response shows its own copy and closes the modal", async () => {
+    const a = mergedInbox({ title: "A" });
+    global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("bulk-archive")) {
+        return { ok: false, status: 429, json: async () => ({}) };
+      }
+      return { ok: true, json: async () => ({ items: [a] }) };
+    }) as unknown as typeof fetch;
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Select: / }));
+    fireEvent.click(screen.getByRole("button", { name: /Archive 1 selected/ }));
+    await waitFor(() => screen.getByText(/Archive 1 items\?/));
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain(
+        "Too many actions — wait a moment",
+      ),
+    );
+    // Modal closed — the result line is visible, not occluded.
+    expect(screen.queryByText(/Archive 1 items\?/)).toBeNull();
+  });
+
+  it("a thrown fetch reports an error rather than failing silently", async () => {
+    const a = mergedInbox({ title: "A" });
+    global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("bulk-archive")) throw new Error("network down");
+      return { ok: true, json: async () => ({ items: [a] }) };
+    }) as unknown as typeof fetch;
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Select: / }));
+    fireEvent.click(screen.getByRole("button", { name: /Archive 1 selected/ }));
+    await waitFor(() => screen.getByText(/Archive 1 items\?/));
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain(
+        "Something went wrong",
+      ),
+    );
+  });
+
+  it("Select all toggles off when every archivable row is already selected", async () => {
+    global.fetch = mockFetchOnce([mergedInbox({ title: "A" })]) as unknown as typeof fetch;
+    render(<Wrapped />);
+    await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
+    // Only one section has rows here → one strip.
+    const strip = screen.getAllByRole("checkbox", { name: "Select all" })[0];
+    fireEvent.click(strip);
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    fireEvent.click(strip);
+    expect(screen.queryByText("1 selected")).toBeNull();
   });
 });

@@ -14,14 +14,14 @@
  * (statutory email, un-acted action_required, acknowledged, already-archived)
  * returns `guarded` + reason and the RPC is NEVER invoked for it. A P0001
  * from the RPC then unambiguously means `conflict` (the row became ineligible
- * between prefetch and dispatch — or an unclassified guard fired). mig 145
+ * between prefetch and dispatch — or an unclassified guard fired). mig 153
  * additionally pins statutory rows at the DB level.
  *
- * Soft deadline: sequential per-id RPCs in one request risk exceeding the
- * edge response window on a cold path (~60 s). On expiry the remaining ids
- * flush as `error` — the response always lands; partial application is
- * reported honestly (archived rows stay archived on retry; retries are
- * idempotent).
+ * Soft deadline: sequential per-id RPCs in one request risk outliving the
+ * client's pending watchdog (30 s). On expiry the remaining ids flush as
+ * `error` — the response always lands before the UI re-enables Archive;
+ * partial application is reported honestly (archived rows stay archived on
+ * retry; retries are idempotent).
  *
  * Responses:
  *   200 { results: [{id, kind, outcome, reason?}] } — always one entry per
@@ -41,6 +41,8 @@ import {
   keyOf,
   type ArchiveEligibilityReason,
   type BulkItemRef,
+  type BulkItemResult,
+  type BulkOutcome,
 } from "@/lib/inbox-archive-eligibility";
 
 const UUID_PATTERN =
@@ -50,15 +52,15 @@ const MAX_ITEMS = 200;
 /** PostgREST `in` filter rides the request line — 200 UUIDs ≈ 7.4 KB; chunked
  * to keep headroom under typical ~8 KB ingress limits. */
 const PREFETCH_CHUNK = 100;
-/** Soft deadline inside the dispatch loop (edge window ~100 s; cold PostgREST
- * legs measured 20-38 s). */
-const SOFT_DEADLINE_MS = 60_000;
+/** Soft deadline inside the dispatch loop. Must land under the client-side
+ * PENDING_WATCHDOG_MS (30 s) so the response arrives before the watchdog
+ * re-enables the Archive button — a retry racing a still-mutating zombie
+ * would let the zombie's residual-selection write clobber the new run's.
+ * ~30-60 ms/RPC covers the 200-item cap; a cold leg (20-38 s) overflows to
+ * honest `error` outcomes instead. */
+const SOFT_DEADLINE_MS = 25_000;
 
-type Outcome = "archived" | "guarded" | "not_found" | "conflict" | "error";
-interface ItemResult extends BulkItemRef {
-  outcome: Outcome;
-  reason?: ArchiveEligibilityReason;
-}
+const MAX_BODY_BYTES = 65_536; // 200 {kind,id} entries ≈ 15 KB; bound req.json()
 
 function parseItems(
   body: unknown,
@@ -78,10 +80,13 @@ function parseItems(
     ) {
       return { error: "each item needs {kind: inbox|email, id: uuid}" };
     }
-    const key = keyOf({ kind, id });
+    // Normalize case — the regex is /i but keyOf is case-sensitive; a
+    // case-variant duplicate would double-dispatch the same row.
+    const ref: BulkItemRef = { kind, id: id.toLowerCase() };
+    const key = keyOf(ref);
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({ kind, id });
+    items.push(ref);
   }
   return { items };
 }
@@ -105,6 +110,10 @@ async function fetchRows<T extends { id: string }>(
 }
 
 export async function inboxBulkArchiveHandler(req: Request, user: VerifiedUser) {
+  const declaredBytes = Number(req.headers.get("content-length") ?? 0);
+  if (declaredBytes > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  }
   const body = await req.json().catch(() => null);
   const parsed = parseItems(body);
   if ("error" in parsed) {
@@ -117,85 +126,99 @@ export async function inboxBulkArchiveHandler(req: Request, user: VerifiedUser) 
   const inboxIds = items.filter((i) => i.kind === "inbox").map((i) => i.id);
   const emailIds = items.filter((i) => i.kind === "email").map((i) => i.id);
 
-  const inbox = await fetchRows<{
-    id: string;
-    severity: string;
-    acted_at: string | null;
-    status: string;
-  }>(supabase, "inbox_item", "id, severity, acted_at, status", inboxIds);
-  if ("error" in inbox) {
-    reportSilentFallback(inbox.error, {
-      feature: "inbox",
-      op: "bulk-archive",
-      message: "inbox_item prefetch failed",
-      extra: { userId: user.id },
-    });
-    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+  // Independent fetches — parallel, not serial (the cold-path latency is
+  // inside the same 25 s soft deadline the dispatch loop budgets).
+  const [inbox, emails] = await Promise.all([
+    fetchRows<{
+      id: string;
+      severity: string;
+      acted_at: string | null;
+      status: string;
+    }>(supabase, "inbox_item", "id, severity, acted_at, status", inboxIds),
+    fetchRows<{
+      id: string;
+      status: string;
+      statutory_class: string | null;
+    }>(
+      supabase,
+      "email_triage_items",
+      "id, status, statutory_class",
+      emailIds,
+    ),
+  ]);
+  for (const res of [inbox, emails]) {
+    if ("error" in res) {
+      reportSilentFallback(res.error, {
+        feature: "inbox",
+        op: "bulk-archive",
+        message: "bulk-archive prefetch failed",
+        extra: { userId: user.id },
+      });
+    }
   }
-  const emails = await fetchRows<{
-    id: string;
-    status: string;
-    statutory_class: string | null;
-  }>(
-    supabase,
-    "email_triage_items",
-    "id, status, statutory_class",
-    emailIds,
-  );
-  if ("error" in emails) {
-    reportSilentFallback(emails.error, {
-      feature: "inbox",
-      op: "bulk-archive",
-      message: "email_triage_items prefetch failed",
-      extra: { userId: user.id },
-    });
+  if ("error" in inbox || "error" in emails) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 
-  const results: ItemResult[] = [];
+  const KIND = {
+    inbox: {
+      rows: inbox.rows,
+      eligible: inboxRowEligibility as (r: unknown) => ArchiveEligibilityReason,
+      rpc: (id: string) =>
+        supabase.rpc("set_inbox_item_state", { p_id: id, p_action: "archived" }),
+    },
+    email: {
+      rows: emails.rows,
+      eligible: emailRowEligibility as (r: unknown) => ArchiveEligibilityReason,
+      rpc: (id: string) =>
+        supabase.rpc("set_email_triage_status", { p_id: id, p_status: "archived" }),
+    },
+  } as const;
+
+  const results: BulkItemResult[] = [];
   const deadline = Date.now() + SOFT_DEADLINE_MS;
-  let timedOut = false;
 
   for (const item of items) {
-    let reason: ArchiveEligibilityReason | null;
-    if (item.kind === "inbox") {
-      const row = inbox.rows.get(item.id);
-      reason = row === undefined ? null : inboxRowEligibility(row);
-    } else {
-      const row = emails.rows.get(item.id);
-      reason = row === undefined ? null : emailRowEligibility(row);
-    }
-
-    if (reason === null) {
+    const k = KIND[item.kind];
+    const row = k.rows.get(item.id);
+    if (row === undefined) {
       // RLS-invisible (foreign workspace, missing) — no oracle.
       results.push({ ...item, outcome: "not_found" });
       continue;
     }
+    const reason = k.eligible(row);
     if (reason !== "ok") {
       results.push({ ...item, outcome: "guarded", reason });
       continue;
     }
 
-    if (timedOut || Date.now() >= deadline) {
-      timedOut = true;
+    if (Date.now() >= deadline) {
+      // Soft deadline tripped — the response still lands before the client's
+      // pending watchdog releases the Archive button; retries are safe.
+      // Mirrored once per flush so a chronically slow path pages someone.
+      reportSilentFallback(new Error("bulk-archive soft deadline"), {
+        feature: "inbox",
+        op: "bulk-archive",
+        message: "soft deadline flushed remaining items",
+        extra: { userId: user.id, remaining: items.length - results.length },
+      });
       results.push({ ...item, outcome: "error" });
       continue;
     }
 
-    const { error } =
-      item.kind === "inbox"
-        ? await supabase.rpc("set_inbox_item_state", {
-            p_id: item.id,
-            p_action: "archived",
-          })
-        : await supabase.rpc("set_email_triage_status", {
-            p_id: item.id,
-            p_status: "archived",
-          });
+    const { error } = await k.rpc(item.id);
 
     if (!error) {
       results.push({ ...item, outcome: "archived" });
-    } else if (error.code === "42501") {
+    } else if (
+      error.code === "42501" &&
+      // Both RPCs raise 42501 for auth.uid() IS NULL ("authenticated callers
+      // only") as well as missing/foreign rows ("not authorized"). A dropped
+      // session mid-batch must not read as "already handled" — that's an
+      // error, not not_found. (Single-id routes keep the 404 collapse; bulk
+      // amplifies it into a whole-batch false report.)
+      !/authenticated callers only/i.test(error.message ?? "")
+    ) {
       results.push({ ...item, outcome: "not_found" });
     } else if (error.code === "P0001") {
       results.push({ ...item, outcome: "conflict" });

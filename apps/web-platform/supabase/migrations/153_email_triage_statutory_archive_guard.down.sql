@@ -1,5 +1,5 @@
--- 145_email_triage_statutory_archive_guard.down.sql
--- Reverts mig 145: restores set_email_triage_status to the mig-111 body
+-- 153_email_triage_statutory_archive_guard.down.sql
+-- Reverts mig 153: restores set_email_triage_status to the mig-111 body
 -- (workspace-OWNER authz) verbatim — NOT the mig-102 user_id-pinned ancestor
 -- (that would silently revert 111's re-auth).
 

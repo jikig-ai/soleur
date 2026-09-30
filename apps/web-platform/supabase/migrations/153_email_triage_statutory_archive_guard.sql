@@ -52,7 +52,7 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
-  -- mig 145: statutory rows are never archivable — they are pinned in
+  -- mig 153: statutory rows are never archivable — they are pinned in
   -- NEEDS YOU until handled (acknowledge). The UI hides the button; this is
   -- the DB pin behind it (feat-inbox-bulk-archive / #9284).
   IF p_status = 'archived' AND v_row.statutory_class IS NOT NULL THEN
@@ -79,7 +79,7 @@ GRANT EXECUTE ON FUNCTION public.set_email_triage_status(uuid, text)
 COMMENT ON FUNCTION public.set_email_triage_status(uuid, text) IS
   'Workspace-OWNER-pinned (mig 111; was user_id-pinned) one-way status '
   'transition for email_triage_items: only new -> acknowledged|archived. '
-  'mig 145: statutory rows (statutory_class IS NOT NULL) are never '
+  'mig 153: statutory rows (statutory_class IS NOT NULL) are never '
   'archivable — the pin behind the UI-hidden archive affordance. '
   'Authorizes any Owner of the row''s workspace via '
   'is_email_triage_workspace_owner. Same error for missing+foreign row '

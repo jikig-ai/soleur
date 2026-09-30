@@ -37,8 +37,10 @@ import { swrKeys } from "@/lib/swr-config";
 import {
   archiveEligibility,
   keyOf,
+  unkey,
   REASON_COPY,
   type BulkItemRef,
+  type BulkItemResult,
 } from "@/lib/inbox-archive-eligibility";
 import {
   partitionForDisplay,
@@ -90,23 +92,30 @@ function SelectableRow({
 }) {
   const reason = archiveEligibility(item);
   const archivable = reason === "ok";
+  const reasonId = useId();
+  const rowLabel =
+    item.kind === "email" ? item.email.subject : item.inbox.title;
   return (
     <div className="flex items-start gap-2">
-      <div className="flex w-4 shrink-0 flex-col items-center pt-4">
+      {/* 44px effective hit area — a label so the padding itself toggles. */}
+      <label className="-ml-3 -mr-2 flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center has-[:disabled]:cursor-not-allowed">
         <input
           type="checkbox"
-          aria-label={`Select ${item.kind === "email" ? "email" : "item"}`}
+          aria-label={`Select: ${rowLabel}`}
+          aria-describedby={archivable ? undefined : reasonId}
           disabled={!archivable}
-          title={archivable ? undefined : REASON_COPY[reason]}
           checked={checked}
           onChange={() => onToggle(item)}
           className="h-4 w-4 accent-soleur-accent-gold disabled:opacity-40"
         />
-      </div>
+      </label>
       <div className="min-w-0 flex-1">
         <Row item={item} onChanged={onChanged} />
         {!archivable && (
-          <p className="mt-0.5 px-1 text-[11px] text-soleur-text-secondary">
+          <p
+            id={reasonId}
+            className="mt-0.5 px-1 text-[11px] text-soleur-text-secondary"
+          >
             {REASON_COPY[reason]}
           </p>
         )}
@@ -178,26 +187,37 @@ function EmptyState({
   );
 }
 
-type BulkOutcome = "archived" | "guarded" | "not_found" | "conflict" | "error";
-interface BulkResult extends BulkItemRef {
-  outcome: BulkOutcome;
-  reason?: string;
-}
-
 /** Split result copy — archived vs guarded vs handled-elsewhere vs failed,
  * never lumped into one count (honest partial-failure copy per spec). */
-function resultLine(results: BulkResult[]): string {
-  const c = { archived: 0, guarded: 0, handled: 0, error: 0 };
+function resultLine(results: BulkItemResult[]): string {
+  const c = {
+    archived: 0,
+    needsAction: 0,
+    statutory: 0,
+    handled: 0,
+    gone: 0,
+    changed: 0,
+    error: 0,
+  };
   for (const r of results) {
     if (r.outcome === "archived") c.archived++;
-    else if (r.outcome === "guarded") c.guarded++;
     else if (r.outcome === "error") c.error++;
-    else c.handled++;
+    else if (r.outcome === "conflict") c.changed++;
+    else if (r.outcome === "not_found") c.gone++;
+    else if (r.reason === "needs_action") c.needsAction++;
+    else if (r.reason === "statutory") c.statutory++;
+    else c.handled++; // guarded already_acknowledged / already_archived
   }
   const parts: string[] = [];
   if (c.archived) parts.push(`Archived ${c.archived}.`);
-  if (c.guarded) parts.push(`${c.guarded} can't be archived until handled.`);
-  if (c.handled) parts.push(`${c.handled} were already handled elsewhere.`);
+  if (c.needsAction)
+    parts.push(`${c.needsAction} can't be archived until handled.`);
+  if (c.statutory)
+    parts.push(`${c.statutory} must stay visible for compliance.`);
+  if (c.handled) parts.push(`${c.handled} were already handled.`);
+  if (c.gone) parts.push(`${c.gone} are no longer in your inbox.`);
+  if (c.changed)
+    parts.push(`${c.changed} changed while archiving — review them.`);
   if (c.error)
     parts.push(
       `${c.error} failed — try again (some items may already have been archived).`,
@@ -238,19 +258,6 @@ export function InboxSurface() {
   const resultRef = useRef<HTMLParagraphElement>(null);
   const titleId = useId();
 
-  // Escape clears the selection — gated on the confirm dialog being closed
-  // (ResponsiveModal handles its own Esc; don't let one keystroke do both).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !confirmOpen) {
-        setResult(null);
-        clear();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [confirmOpen, clear]);
-
   // The next USER selection change supersedes the previous result line.
   const userToggle = useCallback(
     (ref: BulkItemRef) => {
@@ -271,40 +278,71 @@ export function InboxSurface() {
     clear();
   }, [clear]);
 
+  // Escape clears the selection — gated on the confirm dialog being closed
+  // (ResponsiveModal handles its own Esc; don't let one keystroke do both).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !confirmOpen) userClear();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [confirmOpen, userClear]);
+
   const bulkArchive = usePendingAction(async () => {
-    const items = [...selected].map((key) => {
-      const idx = key.indexOf(":");
-      return { kind: key.slice(0, idx) as "inbox" | "email", id: key.slice(idx + 1) };
-    });
-    const res = await fetch("/api/inbox/bulk-archive", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ items }),
-    });
-    if (res.status === 429) {
-      setResult("Too many actions — wait a moment and try again.");
-      return;
-    }
-    if (!res.ok) {
+    const refs = [...selected].map(unkey);
+    try {
+      const res = await fetch("/api/inbox/bulk-archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ items: refs }),
+      });
+      if (res.status === 429) {
+        setResult("Too many actions — wait a moment and try again.");
+      } else if (!res.ok) {
+        setResult("Something went wrong — try again.");
+      } else {
+        const { results } = (await res.json()) as {
+          results: BulkItemResult[];
+        };
+        // Residual selection derived from RESULTS (not the click-time
+        // `selected` snapshot — a mid-flight refetch may have pruned keys;
+        // re-adding them would check boxes on now-disabled rows).
+        setKeys(
+          results.filter((r) => r.outcome !== "archived").map(keyOf),
+        );
+        setResult(resultLine(results));
+        // Refresh the active list AND any cached archived list (the nav
+        // badge shares swrKeys.inbox("active")).
+        void globalMutate(swrKeys.inbox("active"));
+        void globalMutate(swrKeys.inbox("archived"));
+      }
+    } catch {
+      // Network drop / malformed body — never leave the modal open with no
+      // visible signal (usePendingAction's .error is not user-visible).
       setResult("Something went wrong — try again.");
-      return;
     }
-    const { results } = (await res.json()) as { results: BulkResult[] };
-    const archivedKeys = new Set(
-      results.filter((r) => r.outcome === "archived").map(keyOf),
-    );
-    // Residual selection: non-archived ids stay selected so the set that
-    // still needs attention is self-identifying after the refetch.
-    setKeys([...selected].filter((k) => !archivedKeys.has(k)));
+    // Close on EVERY outcome: a result line rendered behind an open
+    // aria-modal is occluded for sighted users and inert for AT.
     setConfirmOpen(false);
-    setResult(resultLine(results));
-    // Refresh the active list AND any cached archived list (the nav badge
-    // shares swrKeys.inbox("active")).
-    void globalMutate(swrKeys.inbox("active"));
-    void globalMutate(swrKeys.inbox("archived"));
-    // Move focus to the outcome so it's announced + discoverable.
     requestAnimationFrame(() => resultRef.current?.focus());
   });
+
+  // A refetch prune can empty the selection while the confirm dialog is
+  // open — "Archive 0 items?" is meaningless; close it.
+  useEffect(() => {
+    if (confirmOpen && selected.size === 0) setConfirmOpen(false);
+  }, [confirmOpen, selected.size]);
+
+  // Selection is an Active-tab concept — switching to Archived drops it
+  // (the hook skips pruning on `undefined`, so without this the bulk bar
+  // and confirm would operate on a tab with no checkboxes).
+  useEffect(() => {
+    if (archived) {
+      setResult(null);
+      setConfirmOpen(false);
+      clear();
+    }
+  }, [archived, clear]);
 
   const part = items ? partitionForDisplay(items) : null;
 
@@ -394,7 +432,8 @@ export function InboxSurface() {
             Archive {selected.size} items?
           </h2>
           <p className="mb-5 text-sm text-soleur-text-secondary">
-            They'll stay in the Archived tab — nothing is deleted.
+            They'll stay in the Archived tab — nothing is deleted. You can't
+            undo this yet.
           </p>
           <div className="flex justify-end gap-2">
             <Button

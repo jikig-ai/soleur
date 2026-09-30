@@ -6,12 +6,12 @@
 - [x] 1.2 Create `lib/inbox-archive-eligibility.ts` — `keyOf({kind,id})` helper (the `kind:id` format contract) + `archiveEligibility(row) → reason code`. Pure module, no server imports (client+server shared — `inbox-severity.ts` precedent).
 - [x] 1.3 GREEN phase-1 tests.
 
-## Phase 2: DB statutory pin (migration 145)
+## Phase 2: DB statutory pin (mig 153)
 
-- [x] 2.1 Write `test/migration-145-email-triage-statutory-archive-guard.test.ts` — up-file contains the `CREATE OR REPLACE`, the statutory clause, `ERRCODE='P0001'`, `is_email_triage_workspace_owner`, `SET search_path = public, pg_temp`; down-file restores the mig-111 body verbatim (NOT 102 — different authz pin).
-- [x] 2.2 Create `supabase/migrations/145_email_triage_statutory_archive_guard.sql`: copy mig-111's `set_email_triage_status` body verbatim; insert after the `status <> 'new'` check and before `SET LOCAL`: `IF p_status = 'archived' AND v_row.statutory_class IS NOT NULL THEN RAISE EXCEPTION 'set_email_triage_status: statutory rows are never archived' USING ERRCODE='P0001';` Refresh the `COMMENT ON FUNCTION` to document the pin; keep the REVOKE/GRANT block.
-- [x] 2.3 Create `145_email_triage_statutory_archive_guard.down.sql` restoring the mig-111 body (workspace-owner pin) verbatim.
-- [x] 2.4 Re-check ordinal 145 against freshly-fetched `origin/main` immediately before merge (ordinal drift is live — duplicate 141 exists).
+- [x] 2.1 Write `test/migration-153-email-triage-statutory-archive-guard.test.ts` — up-file contains the `CREATE OR REPLACE`, the statutory clause, `ERRCODE='P0001'`, `is_email_triage_workspace_owner`, `SET search_path = public, pg_temp`; down-file restores the mig-111 body verbatim (NOT 102 — different authz pin).
+- [x] 2.2 Create `supabase/migrations/153_email_triage_statutory_archive_guard.sql`: copy mig-111's `set_email_triage_status` body verbatim; insert after the `status <> 'new'` check and before `SET LOCAL`: `IF p_status = 'archived' AND v_row.statutory_class IS NOT NULL THEN RAISE EXCEPTION 'set_email_triage_status: statutory rows are never archived' USING ERRCODE='P0001';` Refresh the `COMMENT ON FUNCTION` to document the pin; keep the REVOKE/GRANT block.
+- [x] 2.3 Create `153_email_triage_statutory_archive_guard.down.sql` restoring the mig-111 body (workspace-owner pin) verbatim.
+- [x] 2.4 Re-check ordinals against freshly-fetched `origin/main` + sibling worktrees — codex branch claimed 145-152, so this PR ships **153** (statutory pin) and **154** (idempotent re-archive on `set_inbox_item_state`, added per review: `archived` on an already-archived row early-returns instead of clobbering `archived_at`).
 
 ## Phase 3: Bulk archive endpoint
 

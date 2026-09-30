@@ -17,6 +17,7 @@ import { usePendingRouter } from "@/hooks/use-pending-router";
 import { usePendingAction } from "@/hooks/use-pending-action";
 import { Button } from "@/components/ui/button";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
+import { inboxRowEligibility } from "@/lib/inbox-archive-eligibility";
 import { relativeTime } from "@/lib/relative-time";
 import {
   buildInboxDeepLink,
@@ -54,7 +55,15 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
   const isArchived = item.status === "archived";
   // An action_required item must be acted before it can be archived (mirrors
   // the RPC archive-guard — a misclick must never lose a decision).
-  const canArchive = !isActionRequired || isActed;
+  // Shared predicate (lib/inbox-archive-eligibility) — the SAME rule the
+  // bulk-archive checkbox + server classifier use: archive-guard applies
+  // only to un-acted action_required rows.
+  const canArchive =
+    inboxRowEligibility({
+      severity: item.severity,
+      acted_at: item.acted_at,
+      status: item.status,
+    }) === "ok";
 
   const href = buildInboxDeepLink(item.source, item.source_ref);
   const navigable = href !== null && !isArchived;
