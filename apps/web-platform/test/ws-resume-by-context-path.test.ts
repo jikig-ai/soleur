@@ -28,9 +28,11 @@ function codexRun(conversationId: string) {
 const mockMaybeSingle = vi.fn(() => Promise.resolve(conversationLookupResult));
 const mockCountQuery = vi.fn(() => Promise.resolve(messageCountResult));
 const { mockRpc } = vi.hoisted(() => ({
-  mockRpc: vi.fn(async (name: string) => name === "start_agent_engine_attempt"
-    ? { data: { id: "attempt-1" }, error: null }
-    : { data: [{ status: "ok", active_count: 1, effective_cap: 2 }], error: null }),
+  mockRpc: vi.fn(async (name: string) => name === "codex_history_transfer_acknowledged"
+    ? { data: true, error: null }
+    : name === "start_agent_engine_attempt"
+      ? { data: { id: "attempt-1" }, error: null }
+      : { data: [{ status: "ok", active_count: 1, effective_cap: 2 }], error: null }),
 }));
 
 vi.mock("@/server/codex-conversation-runtime", () => ({

@@ -65,3 +65,11 @@ following abort assertion because that test file's mutable `generation` fixture
 was left at 1. Reset provider mode and generation in `beforeEach`; adjacent
 real-handler tests share the hoisted fixture even though Vitest creates fresh
 test functions.
+
+The following CI run reached `ws-resume-by-context-path.test.ts` and failed its
+Codex context-path collision case: its synthetic run uses auth-mode generation
+7, but the shared RPC mock did not return `true` for the new per-member
+acknowledgment query. Keep synthetic Codex dispatch fixtures explicit about
+the recorded acknowledgment; the fail-closed production check is working as
+intended. Tenant-integration uses the same broad Vitest batch, so this one
+fixture correction can resolve both CI failures.
