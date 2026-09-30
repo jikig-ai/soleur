@@ -1,4 +1,4 @@
-# Learning: a docs-only diff selects 306 suites, and "make the gate affected + parallel" was already half shipped
+# Learning: `--print-affected-set` prints classes, not the diff's selection, and "make the gate affected + parallel" was already half shipped
 
 ## Problem
 
@@ -8,13 +8,13 @@ A parallel session reported the pre-ship gate "over-selected 229 mostly unrelate
 
 Re-derived the premise before scoping:
 
-- `bash scripts/test-all.sh --print-affected-set` on a branch whose diff vs `origin/main` was 3 archived markdown files selected **306** registrations (139 `edge:derived`, 49 `edge:declared`, 115 `always_on`), with no `AFFECTED_FALLBACK`. The over-selection comes from broad edges on docs-only changes, not from the always-on floor (145 entries).
+- **Correction (same session):** `bash scripts/test-all.sh --print-affected-set` prints each registration's CLASS, not what the diff selects (`_affected_emit_receipt`, `scripts/test-all.sh:2477-2481`, never reads the diff). I first read its 306 lines as "306 selected" — wrong. Selection for a KB-only diff is the 145-entry always-on floor plus ~5 edge suites, all via one false-positive edge (bare `test` token from `bun test <file>`, substring-matched at `:2015`).
 - The plugin ships no test gate at all: `work` / `ship` / `review` call the repo-local `scripts/test-all.sh`, so Soleur users' repos get neither selection nor parallelism. That is the real user-facing gap.
 - Scoped the work into three tracked PRs (repo over-selection fix, plugin-generic gate, #8231 parallel scheduler) under #9307.
 
 ## Key Insight
 
-Two claims hide inside "make the gate affected-only": whether the *mechanism* exists (it does, in the Soleur repo) and whether the *user* has it (they do not). Measure the selection on a trivially small diff before assuming the mechanism works; a markdown-only diff that selects 300 suites is a falsifiable, cheap probe of "affected" quality.
+Two claims hide inside "make the gate affected-only": whether the *mechanism* exists (it does, in the Soleur repo) and whether the *user* has it (they do not). Measuring selection on a trivially small diff is a cheap probe of "affected" quality — but only if the tool's output actually describes the selection. A per-registration classification receipt looks like a selection and is not; read the code that produces an output before quoting it as a measurement.
 
 ## Session Errors
 

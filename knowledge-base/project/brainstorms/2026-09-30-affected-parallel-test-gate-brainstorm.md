@@ -12,14 +12,14 @@ status: brainstorm-complete
 
 A parallel session reported its pre-ship gate "ran serially on a contended machine and over-selected 229 mostly unrelated suites" (>30 min; the relevant vitest projects had already passed; the operator stopped it and let CI be the authoritative gate). Three tracked deliverables, in order:
 
-1. **Soleur-repo over-selection fix.** Docs-only / knowledge-base-only diffs must stop pulling ~190 suites.
+1. **Soleur-repo over-selection fix.** Remove the false-positive `test` substring edge, move knowledge-base-only readers out of the always-on set into declared subtree edges, and make the selection observable (a receipt that shows what the current diff selects, not just classes). [Reframed during planning; the original "docs-only diffs pull ~190 suites" reading was a misread receipt.]
 2. **Plugin-generic gate.** A plugin-shipped, stack-detecting script that `work` / `ship` / `review` call in any repo: native affected selection + native parallel workers, a repo-level override file, a budget that defers to CI, and a printed "ran X of N, skipped Y" report.
 3. **Unblock #8231** (parallel scheduler for the Soleur bash runner), gated on its green-baseline precondition.
 
 ## Verified Findings (premise probe)
 
 - **Already shipped:** ADR-242 (accepted 2026-09-18, amended 2026-09-29) makes local `scripts/test-all.sh` default to `--affected` = diff-derived suites + `ALWAYS_ON_SUITES` ratchets, falling back to FULL on `runner-changed` / `undecidable-diff` / `index-missing` / `force-all`. So "avoid unrelated suites" is not greenfield for the Soleur repo.
-- **Measured on this branch (2026-09-30):** diff vs `origin/main` is 3 archived markdown files (+1 untracked post-mortem). `bash scripts/test-all.sh --print-affected-set` still selects **306** registrations: 139 `edge:derived`, 49 `edge:declared`, 115 `always_on`. No fallback banner fired. The over-selection is broad edges from docs-only changes, not the always-on floor. (Re-derived; the `ALWAYS_ON_SUITES` array has 145 entries — one research agent's "547" was a wrong count.)
+- **Measured on this branch (2026-09-30), corrected during planning:** `bash scripts/test-all.sh --print-affected-set` prints each registration's CLASS (`edge:derived` / `edge:declared` / `always_on`), NOT what the diff selects — `_affected_emit_receipt` (`scripts/test-all.sh:2477-2481`) never reads `_diff_names`; the diff is applied later by the pre-pass (`:2814-2819`, `_diff_touches`). An earlier version of this bullet read the receipt as a selection ("306 selected") and was wrong. Measured selection for a knowledge-base-only diff: **145 `always_on` (always selected) plus ~5 edge suites**, all 5 via one false-positive edge: the bare `test` token from `bun test <file>` becomes a substring edge (`_affected_derive` catch-all `:2328-2333`, matched by `_diff_touches` `:2015`) that hits any diff path containing "test". 18 suites with slow edge walks were unmeasured. The `ALWAYS_ON_SUITES` array has 145 entries (one research agent's "547" was a wrong count).
 - **Local execution is serial by design.** `test-all.sh` has no local parallelism flags. In-script `xargs -P` was rejected in the #3672 brainstorm (module-level `process.env.WORKSPACES_ROOT`, repo-root `_site/` rebuild races, port collisions). #8322's spec reframed parallelism to CI/`--full`; #8231 is open, `priority/p3-low`, blocked on a green-baseline precondition (its Phase 0 measured a ~3.2x ceiling). ADR-133's advisory lock serializes sibling worktrees but proceeds on timeout.
 - **The plugin ships no test gate.** `work` / `ship` / `review` / `grok-pre-push-gate.sh` all call the repo-local `scripts/test-all.sh`. Soleur users' repos have no equivalent, and no `--changed` / `--related` / `--findRelatedTests` guidance exists under `plugins/soleur`. No prior art for project-agnostic selection.
 
@@ -68,7 +68,7 @@ No legal implications on telemetry, third-party licensing (invoking user-install
 ## Open Questions
 
 - Which fallback arm fired in the reporter's 229-suite session (its `AFFECTED_FALLBACK` / `AFFECTED_SCOPE` lines are the deciding evidence)? On this branch no fallback fired.
-- Which edges make a knowledge-base-only diff select ~188 suites (`edge:derived` / `edge:declared`)? Likely a `knowledge-base/**` consumer edge; confirm in plan.
+- [Resolved in planning] The edge question: no KB-consumer edge over-selects; the observed selection was the always-on floor (145) plus the `test` substring edge (5). The reporter's 229 is still unexplained (their diff is unknown).
 - Budget defaults (seconds / suite count) and the override file's name and schema.
 - Whether cloud workspaces (which clone the user's repo) are in scope alongside the self-hosted CLI plugin.
 - Acceptable escape rate to CI per 100 ships, and a measured baseline from a non-Soleur repo (none exists).
@@ -77,4 +77,4 @@ No legal implications on telemetry, third-party licensing (invoking user-install
 ## Session Errors
 
 - A research agent reported `ALWAYS_ON_SUITES` = 547 entries; re-derived as 145 (`awk` over the array and `source` + `${#ALWAYS_ON_SUITES[@]}` agree).
-- The first `--print-affected-set` run was truncated by `head -400`; re-run to a file for the true 306.
+- I read `--print-affected-set` receipts (class per registration) as the diff's selection and told the operator "306 selected". Corrected in planning from a research agent's harness plus a direct read of `test-all.sh:2477-2481` and `:2814-2819`: selection for a KB-only diff is ~150. Prevention: before quoting a tool's output as a measurement, confirm what the output describes (class vs. selection) by reading the code that produces it.
