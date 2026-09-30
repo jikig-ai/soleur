@@ -76,7 +76,7 @@ LIVE_LABELS=(
   T8-adoption T9-tree-adoption T9-grandchild T10-ac7-sweep
   T11-bindsto-reap T12-fleet-two-sessions T13-managed-oom-pref
   T14-kill-mechanism T15-idempotency T15-terminal-scope-stable
-  T18-documented-kill-path AC18-reentry-resweep
+  T18-documented-kill-path AC18-reentry-resweep T20-repair-stale-scope
 )
 declare -A LIVE_SEEN=()
 live_mark() { LIVE_SEEN["$1"]=1; }
@@ -125,6 +125,24 @@ newtmp() {
   esac
   TMPDIRS+=("$__d")
   printf -v "$__var" '%s' "$__d"
+}
+
+# The body below is a COPY. The canonical definition lives in
+# plugins/soleur/test/test-helpers.sh; plugins/soleur/test/fixture-dir-operand-assert.test.sh
+# asserts this copy is byte-equal to it. Do not reword it in one file only. #7652
+# Added for the #9239 arms: it guards every NEW fixture root so the new writes
+# are provably absolute to the relative-operand scanner — without adding rows to
+# a baseline that is pinned row-by-row. The pre-existing newtmp roots above are
+# deliberately left as the baseline recorded them.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
 }
 
 echo "memory-backstop: hook contract, fail-open branches, tree adoption, cap enforcement"
@@ -180,11 +198,16 @@ else
   fail "T3 sourcing $HOOK did not expose main/validate_caps as functions"
 fi
 
-# The only SOLEUR_* variable the hook may read is the documented kill switch.
+# The only SOLEUR_* variable the hook may read is the documented kill switch,
+# plus SOLEUR_BACKSTOP_RESOLVED_FROM — the resolver's ledger-attribution channel
+# (#9239). It is read defensively into the resolved_from log field only: a
+# forged value can mislabel one ledger line, never change what the hook does,
+# so it is not an injection seam.
 soleur_vars=$(grep -oE 'SOLEUR_[A-Z0-9_]+' "$HOOK" | sort -u)
-unexpected=$(printf '%s\n' "$soleur_vars" | grep -vx 'SOLEUR_DISABLE_MEMORY_BACKSTOP' || true)
+unexpected=$(printf '%s\n' "$soleur_vars" \
+  | grep -vxE 'SOLEUR_DISABLE_MEMORY_BACKSTOP|SOLEUR_BACKSTOP_RESOLVED_FROM' || true)
 if [[ -z "$unexpected" ]]; then
-  pass "T3 SOLEUR_DISABLE_MEMORY_BACKSTOP is the only SOLEUR_* variable read"
+  pass "T3 only the kill switch and the resolver's attribution variable are read"
 else
   fail "T3 hook reads unexpected SOLEUR_* variable(s): $(printf '%s' "$unexpected" | tr '\n' ' ')"
 fi
@@ -264,10 +287,10 @@ fi
 # busctl property-list form `"TasksMax" "t" "$SCOPE_TASKS_MAX"` / `$FLEET_…`.
 _scope_tasks_props=$(grep -c '"TasksMax" "t" "$SCOPE_TASKS_MAX"' "$HOOK")
 _fleet_tasks_props=$(grep -c '"TasksMax" "t" "$FLEET_TASKS_MAX"' "$HOOK")
-if [[ "$_scope_tasks_props" -eq 4 && "$_fleet_tasks_props" -eq 1 ]]; then
-  pass "T2 TasksMax reaches both StartTransientUnit calls, the re-entry refresh, the sibling sweep, and the fleet slice call"
+if [[ "$_scope_tasks_props" -eq 5 && "$_fleet_tasks_props" -eq 1 ]]; then
+  pass "T2 TasksMax reaches both StartTransientUnit calls, the re-entry refresh, the sibling sweep, the stale-scope repair, and the fleet slice call"
 else
-  fail "T2 TasksMax property wiring: scope $_scope_tasks_props (want 4), fleet $_fleet_tasks_props (want 1)"
+  fail "T2 TasksMax property wiring: scope $_scope_tasks_props (want 5), fleet $_fleet_tasks_props (want 1)"
 fi
 
 # =====================================================================
@@ -623,13 +646,22 @@ fi
 # Guards the TEST, not the kernel: `bash <hook>` ignores the mode bit, and that
 # fallback is exactly how #7151's 26 green assertions sat on a hook that could
 # not run.
-cmd=$(jq -r '.hooks.SessionStart[]?.hooks[]?.command' "$SETTINGS" 2>/dev/null | grep -F 'memory-backstop.sh' | head -1 || true)
+# `memory-backstop` matches both the direct binding (memory-backstop.sh) and
+# the post-#9239 resolver binding (memory-backstop-resolve.sh) — this arm must
+# hold under either wiring. The resolver command is `bash <path>` (mode-bit
+# immunity by design, #7151), so the command string is run via `bash -c`, which
+# executes it faithfully either way. HOME and XDG_DATA_HOME are sandboxed so a
+# resolver run can neither see real plugin caches nor publish outside the
+# fixture.
+cmd=$(jq -r '.hooks.SessionStart[]?.hooks[]?.command' "$SETTINGS" 2>/dev/null | grep -F 'memory-backstop' | head -1 || true)
 if [[ -n "$cmd" ]]; then
   resolved=${cmd//\"\$CLAUDE_PROJECT_DIR\"/$PWD}
   resolved=${resolved//\$CLAUDE_PROJECT_DIR/$PWD}
   newtmp ld3 || exit 2
-  mkdir -p "$ld3/.claude/hooks" "$ld3/runtime"
-  if env CLAUDE_PROJECT_DIR="$ld3" XDG_RUNTIME_DIR="$ld3/runtime" "$resolved" </dev/null >/dev/null 2>&1; then
+  mkdir -p "$ld3/.claude/hooks" "$ld3/runtime" "$ld3/xdg" "$ld3/home"
+  if env CLAUDE_PROJECT_DIR="$ld3" XDG_RUNTIME_DIR="$ld3/runtime" \
+       XDG_DATA_HOME="$ld3/xdg" HOME="$ld3/home" \
+       bash -c "$resolved" </dev/null >/dev/null 2>&1; then
     pass "AC2 hook runs via the settings.json command string (direct exec, no interpreter)"
   else
     fail "AC2 direct exec of the settings.json command string failed: $resolved"
@@ -659,6 +691,237 @@ else
     fail "AC2 a 0644 copy still executed — harness is not honouring the mode bit"
   else
     pass "AC2 a 0644 copy fails to exec (harness honours the mode bit)"
+  fi
+fi
+
+# =====================================================================
+# AC5 — _repo_root's CLAUDE_PROJECT_DIR preference under a managed-path exec
+# (#9239 M2). The resolver execs whichever hook copy won — a managed copy under
+# ~/.local/share/soleur/hooks/ or a plugin cache — while the ledger, lock and
+# stamp must still land under the SESSION's project dir. _repo_root already
+# prefers a non-empty CLAUDE_PROJECT_DIR (memory-backstop.sh:~87); this arm
+# pins that pre-existing behaviour so the arrangement is contractual, not
+# incidental. Fixture, not live: the no-bus decline path is enough — the ledger
+# write happens before any bus call.
+# =====================================================================
+newtmp mgd || exit 2
+assert_fixture_dir "$mgd"
+mkdir -p "$mgd/soleur/hooks" "$mgd/proj/.claude" "$mgd/runtime" "$mgd/home"
+cp "$HOOK" "$mgd/soleur/hooks/memory-backstop.sh" || exit 2
+( cd "$PWD" && env -u SOLEUR_DISABLE_MEMORY_BACKSTOP -u CLAUDE_CODE_EXECPATH \
+    HOME="$mgd/home" CLAUDE_PROJECT_DIR="$mgd/proj" XDG_RUNTIME_DIR="$mgd/runtime" \
+    bash "$mgd/soleur/hooks/memory-backstop.sh" </dev/null >"$mgd/stdout" 2>"$mgd/stderr" )
+ac5_rc=$?
+ac5_line=$(tail -1 "$mgd/proj/.claude/.memory-backstop.jsonl" 2>/dev/null || true)
+if [[ "$ac5_rc" == "0" && -n "$ac5_line" ]]; then
+  pass "AC5 a hook copy exec'd from a managed path writes the ledger under CLAUDE_PROJECT_DIR"
+else
+  fail "AC5 managed-path exec wrote no ledger line under the project dir (rc=$ac5_rc)"
+fi
+if [[ ! -e "$mgd/soleur/.claude/.memory-backstop.jsonl" && ! -e "$mgd/.claude/.memory-backstop.jsonl" ]]; then
+  pass "AC5 no ledger was written beside the managed copy — the env preference held"
+else
+  fail "AC5 a ledger leaked beside the managed copy: $(find "$mgd" -name '*.memory-backstop*' | tr '\n' ' ')"
+fi
+# The same preference at function level: verbatim dir, canonicalized; and the
+# BASH_SOURCE-derived fallback when the variable is unset.
+ac5_root=$(CLAUDE_PROJECT_DIR="$mgd/proj" _repo_root)
+if [[ "$ac5_root" == "$(cd -P "$mgd/proj" && pwd -P)" ]]; then
+  pass "AC5 _repo_root prefers a non-empty CLAUDE_PROJECT_DIR"
+else
+  fail "AC5 _repo_root returned '$ac5_root' for CLAUDE_PROJECT_DIR=$mgd/proj"
+fi
+ac5_root2=$(unset CLAUDE_PROJECT_DIR; _repo_root)
+if [[ "$ac5_root2" == "$(pwd -P)" ]]; then
+  pass "AC5 _repo_root falls back to the copy's own checkout when CLAUDE_PROJECT_DIR is unset"
+else
+  fail "AC5 _repo_root fallback returned '$ac5_root2', expected $(pwd -P)"
+fi
+
+# =====================================================================
+# AC6 — ledger schema:2 (#9239 M2). Every line carries backstop_revision,
+# resolved_from and repaired — INCLUDING decline paths: the issue's own
+# evidence was a line missing the fields a reader needed, so schema:1's
+# silent-absence failure shape is exactly what must not survive.
+# =====================================================================
+bsr=$(grep -m1 -oE 'BACKSTOP_REVISION=[0-9]+' "$HOOK" 2>/dev/null | cut -d= -f2)
+[[ "$bsr" =~ ^[0-9]+$ ]] || bsr=0
+if [[ "$bsr" -ge 1 ]]; then
+  pass "AC6 the hook carries a parseable nonzero BACKSTOP_REVISION marker ($bsr)"
+else
+  fail "AC6 BACKSTOP_REVISION marker missing or non-numeric in $HOOK (parsed '$bsr')"
+fi
+schema_line=$(tail -1 "$ld2/.claude/.memory-backstop.jsonl" 2>/dev/null || true)
+if printf '%s' "$schema_line" | jq -e --argjson bsr "$bsr" \
+    '.schema == 2 and .backstop_revision == $bsr
+     and has("resolved_from") and .resolved_from == ""
+     and has("repaired") and .repaired == 0' >/dev/null 2>&1; then
+  pass "AC6 a decline-path line carries schema:2 + backstop_revision + resolved_from + repaired"
+else
+  fail "AC6 decline line lacks schema:2 fields: ${schema_line:-<no line>}"
+fi
+
+# resolved_from records the resolver's attribution when exported — the field
+# that makes "a stale copy ran" evidence rather than inference.
+newtmp ld4 || exit 2
+assert_fixture_dir "$ld4"
+mkdir -p "$ld4/.claude/hooks" "$ld4/runtime"
+rc=$(run_hook_isolated "$ld4" XDG_RUNTIME_DIR="$ld4/runtime" \
+     SOLEUR_BACKSTOP_RESOLVED_FROM="/managed/hooks/memory-backstop.sh")
+logline=$(tail -1 "$ld4/.claude/.memory-backstop.jsonl" 2>/dev/null || true)
+if [[ "$rc" == "0" ]] && printf '%s' "$logline" | jq -e --argjson bsr "$bsr" \
+    '.schema == 2 and .resolved_from == "/managed/hooks/memory-backstop.sh"
+     and .backstop_revision == $bsr and .repaired == 0' >/dev/null 2>&1; then
+  pass "AC6 resolved_from carries the resolver's attribution when exported"
+else
+  fail "AC6 resolved_from missing under resolver env (rc=$rc): ${logline:-<no line>}"
+fi
+
+# =====================================================================
+# AC7 (fixture half) — repair_stale_scopes (#9239 M2): converge
+# soleur-agent-*.scope units whose caps differ from the shipped constants —
+# runtime-only, never BindsTo, bounded by MAX_REPAIR, per-scope failures
+# logged and never fatal. The unit list is an injectable PATH ARGUMENT (the
+# suite's no-env-seam convention); systemctl/busctl are argv-aware stubs on
+# PATH so a wrong-flag call cannot read as success (#6775's blind-stub class).
+# =====================================================================
+if ! declare -F repair_stale_scopes >/dev/null 2>&1; then
+  fail "AC7 repair_stale_scopes is not defined by the hook (it must run inside the flock after sweep_unadopted_agents)"
+else
+  newtmp rs || exit 2
+  assert_fixture_dir "$rs"
+  mkdir -p "$rs/bin" "$rs/show"
+
+  cat > "$rs/bin/systemctl" <<EOF
+#!/usr/bin/env bash
+# argv-aware stub. \$1=--user \$2=verb \$3=unit. 'show' serves per-scope
+# fixture caps; 'list-units' serves the enumeration fixture; anything else
+# fails loudly rather than answer a shape the hook must not emit.
+printf '%s\n' "\$*" >> "$rs/systemctl.calls"
+if [[ "\$1" == "--user" && "\$2" == "show" && -n "\$3" ]]; then
+  if [[ -f "$rs/show/\$3" ]]; then cat "$rs/show/\$3"; exit 0; fi
+  exit 1
+fi
+if [[ "\$1" == "--user" && "\$2" == "list-units" ]]; then
+  cat "$rs/units-listed.txt" 2>/dev/null || true
+  exit 0
+fi
+exit 1
+EOF
+  cat > "$rs/bin/busctl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$rs/busctl.calls"
+# One scope name is wired to fail: a per-scope repair failure must be logged
+# and must not be fatal.
+if [[ "\$*" == *soleur-agent-failbus.scope* ]]; then exit 1; fi
+exit 0
+EOF
+  chmod +x "$rs/bin/systemctl" "$rs/bin/busctl"
+
+  # Per-scope show fixtures, keyed by unit name.
+  printf 'TasksMax=%s\nMemoryMax=%s\nMemoryHigh=%s\nMemorySwapMax=0\n' \
+    "$SCOPE_TASKS_MAX" "$SCOPE_MAX_BYTES" "$SCOPE_HIGH_BYTES" \
+    > "$rs/show/soleur-agent-current.scope"          # already at constants — untouched
+  for stale in stale failbus stale2; do
+    printf 'TasksMax=37984\nMemoryMax=infinity\nMemoryHigh=infinity\nMemorySwapMax=0\n' \
+      > "$rs/show/soleur-agent-$stale.scope"          # the incident shape: TasksMax=37984
+  done
+  # soleur-agent-vanished.scope deliberately has NO show file — systemctl show
+  # fails, modelling a scope that exited between enumeration and readback.
+
+  cat > "$rs/units.txt" <<EOF
+soleur-agent-current.scope
+soleur-agent-stale.scope
+soleur-agent-failbus.scope
+soleur-agent-vanished.scope
+foreign-unit.scope
+EOF
+
+  # repair_stale_scopes prefixes busctl with "${TO[@]}" like the rest of the
+  # hook. `command` is a portable no-op prefix for a direct suite call —
+  # `timeout` does not exist on every host this suite runs on.
+  # shellcheck disable=SC2034  # consumed inside the sourced hook function via dynamic scope
+  TO=(command)
+  repaired_fx=$(PATH="$rs/bin:$PATH" repair_stale_scopes "$rs/units.txt" 2>"$rs/repair.err")
+  sp_calls=$(grep -c 'SetUnitProperties' "$rs/busctl.calls" 2>/dev/null || true)
+  if [[ "$sp_calls" == "2" ]] \
+    && grep -q 'SetUnitProperties.*soleur-agent-stale\.scope' "$rs/busctl.calls" \
+    && grep -q 'SetUnitProperties.*soleur-agent-failbus\.scope' "$rs/busctl.calls" \
+    && ! grep 'SetUnitProperties' "$rs/busctl.calls" \
+         | grep -qE 'soleur-agent-(current|vanished)\.scope|foreign-unit\.scope'; then
+    pass "AC7 SetUnitProperties fires ONLY on cap-mismatched owned scopes (stale + failbus; current/vanished/foreign untouched)"
+  else
+    fail "AC7 repair fan-out wrong ($sp_calls SetUnitProperties calls):
+$(cat "$rs/busctl.calls" 2>/dev/null)"
+  fi
+  if [[ "$repaired_fx" == "1" ]]; then
+    pass "AC7 repaired count is 1 — the busctl-failed scope is attempted but not counted"
+  else
+    fail "AC7 repaired=$repaired_fx, expected 1 (stale converged; failbus attempted, uncounted)"
+  fi
+  if ! grep -q 'show foreign-unit.scope' "$rs/systemctl.calls" 2>/dev/null; then
+    pass "AC7 the soleur-agent-* name filter drops foreign units before any property readback"
+  else
+    fail "AC7 a foreign unit was inspected — the owned-units filter did not hold"
+  fi
+  # The repair call must be runtime=true and carry the four cap properties —
+  # and must NOT carry OOMPolicy: on scopes it is creation-only, and because
+  # SetUnitProperties is all-or-nothing a rejected OOMPolicy drops the four
+  # caps with it (measured on systemd 261 — the hook's own comment).
+  if grep 'SetUnitProperties' "$rs/busctl.calls" | grep -q 'true 4' \
+    && grep 'SetUnitProperties' "$rs/busctl.calls" | grep -q "TasksMax t $SCOPE_TASKS_MAX" \
+    && grep 'SetUnitProperties' "$rs/busctl.calls" | grep -q "MemoryMax t $SCOPE_MAX_BYTES" \
+    && ! grep 'SetUnitProperties' "$rs/busctl.calls" | grep -q 'OOMPolicy'; then
+    pass "AC7 repair call is runtime=true carrying the four caps and no OOMPolicy (creation-only on scopes)"
+  else
+    fail "AC7 repair call shape wrong:
+$(grep 'SetUnitProperties' "$rs/busctl.calls" 2>/dev/null)"
+  fi
+  if ! grep -q 'BindsTo' "$rs/busctl.calls" 2>/dev/null; then
+    pass "AC7 repair never writes BindsTo — the kill switch is preserved"
+  else
+    fail "AC7 repair wrote BindsTo — the kill-switch-destruction class the re-entry branch documents"
+  fi
+  if grep -q 'soleur-agent-failbus' "$rs/repair.err" 2>/dev/null; then
+    pass "AC7 a per-scope repair failure is logged (stderr) and non-fatal"
+  else
+    fail "AC7 the failed per-scope repair was not logged: $(cat "$rs/repair.err" 2>/dev/null)"
+  fi
+
+  # The enumeration path itself: no-arg call reads the stubbed list-units —
+  # field-1 parse under the REAL row shape: --no-legend still leads every row
+  # with a two-column state-marker field (blank when healthy, ● when failed) —
+  # verified against systemd 261. A fixture without it reads field 1 clean and
+  # the arm proves nothing about the real output.
+  : > "$rs/busctl.calls"; : > "$rs/systemctl.calls"
+  cat > "$rs/units-listed.txt" <<EOF
+  soleur-agent-current.scope   loaded active running   soleur-agent current
+  soleur-agent-stale2.scope    loaded active running   soleur-agent stale2
+● soleur-agent-dead.scope      loaded failed failed    soleur-agent dead
+EOF
+  repaired_enum=$(PATH="$rs/bin:$PATH" repair_stale_scopes 2>/dev/null)
+  if [[ "$repaired_enum" == "1" ]] && grep -q 'soleur-agent-stale2.scope' "$rs/busctl.calls" \
+     && ! grep -q 'soleur-agent-current.scope' "$rs/busctl.calls" \
+     && grep -q 'show soleur-agent-dead.scope' "$rs/systemctl.calls" \
+     && ! grep -q 'soleur-agent-dead.scope' "$rs/busctl.calls"; then
+    pass "AC7 the live enumeration path parses list-units rows (marker column + lead padding) and repairs only stale scopes"
+  else
+    fail "AC7 enumeration arm: repaired=$repaired_enum calls=$(cat "$rs/busctl.calls" 2>/dev/null) shows=$(cat "$rs/systemctl.calls" 2>/dev/null)"
+  fi
+
+  # Bound: with more stale candidates than MAX_REPAIR the loop stops.
+  : > "$rs/busctl.calls"; : > "$rs/units-many.txt"
+  for i in $(seq 1 40); do
+    s="soleur-agent-stalemany-$i.scope"
+    printf '%s\n' "$s" >> "$rs/units-many.txt"
+    printf 'TasksMax=37984\nMemoryMax=infinity\nMemoryHigh=infinity\nMemorySwapMax=0\n' > "$rs/show/$s"
+  done
+  repaired_many=$(PATH="$rs/bin:$PATH" repair_stale_scopes "$rs/units-many.txt" 2>/dev/null)
+  n_many=$(grep -c 'SetUnitProperties' "$rs/busctl.calls" 2>/dev/null || true)
+  if [[ "$repaired_many" == "$MAX_REPAIR" && "$n_many" == "$MAX_REPAIR" ]]; then
+    pass "AC7 repair is bounded at MAX_REPAIR=$MAX_REPAIR per run"
+  else
+    fail "AC7 repair bound: repaired=$repaired_many calls=$n_many (want $MAX_REPAIR)"
   fi
 fi
 
@@ -1042,6 +1305,15 @@ time.sleep(300)
     else
       fail "T8 hook logged outcome=applied but scope='$scope_name' pid='$cpid' — every readback below would silently read an empty path"
     fi
+    # AC6 on the APPLIED path: schema:2 fields must be present here too, not
+    # only on decline lines — the sweep-repair count is ledgered as `repaired`.
+    if printf '%s' "$logline" | jq -e \
+        '.schema == 2 and (.backstop_revision | type) == "number" and .backstop_revision >= 1
+         and has("resolved_from") and has("repaired") and .repaired >= 0' >/dev/null 2>&1; then
+      pass "AC6 the applied line carries schema:2 fields (backstop_revision, resolved_from, repaired)"
+    else
+      fail "AC6 applied line missing schema:2 fields: $logline"
+    fi
     # DERIVE the scope's cgroup path from the adopted process rather than
     # constructing it from the slice names: constructing it encodes an assumption
     # about the hierarchy that, if wrong, makes every readback below silently
@@ -1227,6 +1499,44 @@ $(diff "$before/snap.mem" "$after/snap.mem" | grep -E '^[<>]' | grep -vE '/soleu
     pass "T10/AC7 ~/.config/systemd/user.control/ byte-identical (runtime=true, no persistent operator-config mutation)"
   else
     fail "T10/AC7 ~/.config/systemd/user.control/ CHANGED — a persistent drop-in was written (runtime=true was dropped)"
+  fi
+
+  live_mark T20-repair-stale-scope
+  # ---- T20 / AC7 live: a scope adopted under STALE caps is converged in place
+  # by repair_stale_scopes — runtime-only, BindsTo untouched, membership kept.
+  # The unit is NAMED to match the real enumerator (soleur-agent-*.scope), so
+  # the no-arg live enumeration reaches it; it is stopped explicitly below and
+  # registered in SCOPES for the trap (its name is outside the soleurtest-*
+  # cleanup pattern). Placed after the e2e snapshots so its cgroup files can
+  # never pollute the T10/AC7 before/after diff.
+  sleep 300 & RPID=$!; SPAWNED+=("$RPID")
+  RSCOPE="soleur-agent-testunit-$$.scope"
+  # shellcheck disable=SC2034  # consumed inside the sourced hook function via dynamic scope
+  TO=(command)  # repair_stale_scopes uses the same "${TO[@]}" busctl prefix main does
+  if start_test_scope "$RSCOPE" "$TEST_SLICE" "$RPID" && wait_in_scope "$RSCOPE" "$RPID"; then
+    r_tm0=$(sysd_prop "$RSCOPE" TasksMax)
+    r_bt0=$(sysd_prop "$RSCOPE" BindsTo)
+    # start_test_scope sets 256 MiB caps and no TasksMax — stale vs the shipped
+    # constants by construction, so the live enumerator must find and fix it.
+    repaired_live=$(repair_stale_scopes 2>/dev/null)
+    r_tm=$(sysd_prop "$RSCOPE" TasksMax)
+    r_mm=$(sysd_prop "$RSCOPE" MemoryMax)
+    r_mh=$(sysd_prop "$RSCOPE" MemoryHigh)
+    r_sw=$(sysd_prop "$RSCOPE" MemorySwapMax)
+    r_oom=$(sysd_prop "$RSCOPE" OOMPolicy)
+    r_bt=$(sysd_prop "$RSCOPE" BindsTo)
+    r_cg=$(cg_of "$RPID")
+    systemctl --user stop "$RSCOPE" >/dev/null 2>&1
+    if [[ "$r_tm" == "$SCOPE_TASKS_MAX" && "$r_mm" == "$SCOPE_MAX_BYTES" \
+       && "$r_mh" == "$SCOPE_HIGH_BYTES" && "$r_sw" == "0" \
+       && "$r_oom" == "continue" && "$r_bt" == "$r_bt0" \
+       && "${r_cg##*/}" == "$RSCOPE" ]]; then
+      pass "T20/AC7 stale-caps scope repaired in place (TasksMax $r_tm0 -> $r_tm, caps converged, BindsTo untouched, membership kept; repaired=$repaired_live)"
+    else
+      fail "T20/AC7 stale-caps repair readback: TasksMax=$r_tm MemoryMax=$r_mm MemoryHigh=$r_mh SwapMax=$r_sw OOMPolicy=$r_oom BindsTo='$r_bt' cg='${r_cg##*/}' (repaired=$repaired_live)"
+    fi
+  else
+    fail "T20/AC7 could not create the stale-caps test scope $RSCOPE"
   fi
 fi
 

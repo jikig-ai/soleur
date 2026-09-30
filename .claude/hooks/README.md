@@ -838,6 +838,62 @@ is logged with a machine-readable `reason` (`disabled`, `no_busctl`, `no_bus`,
 `concurrent_apply`, `adoption_unverified`). On a machine with no per-user systemd
 bus (CI, Docker, macOS) it does nothing at all.
 
+### Resolution order (#9239)
+
+`.claude/settings.json` does **not** exec the hook file directly. It invokes
+`bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-backstop-resolve.sh` — a thin
+resolver shim, `bash`-prefixed for mode-bit immunity (the #7151 `EACCES`
+defect). The shim selects the newest installed copy of `memory-backstop.sh`
+from a fixed candidate set, in precedence order:
+
+1. `<checkout>/.claude/hooks/memory-backstop.sh` — the session's own checkout
+2. `${XDG_DATA_HOME:-~/.local/share}/soleur/hooks/memory-backstop.sh` — the
+   managed path, written by the shim itself (see below)
+3. `~/.claude/plugins/cache/*/*/*/hooks/memory-backstop.sh` — the Claude
+   plugin cache (glob; every installed version)
+4. `~/.local/share/devin/cli/plugins/cache/*/*/hooks/memory-backstop.sh` — the
+   Devin plugin cache (glob)
+
+Each candidate is ordered by its `BACKSTOP_REVISION=<n>` marker, read with
+`grep` — never `source`d, because a candidate's text is unverified code
+(ADR-156 posture applied to hook bodies). The highest revision wins; a missing
+or non-numeric marker counts as revision 0, and **ties resolve to the checkout
+copy** so a local uncommitted edit wins over an equally-versioned installed
+one. A winner that fails `bash -n` is demoted to the next candidate.
+
+**Self-publish.** When the winner is not the managed copy and its revision is
+strictly newer than the managed copy's, the shim atomically installs it to the
+managed path (`install -m 0755` to a `tmp` sibling, then `mv`) **before**
+exec'ing it — a hook that crashes still leaves the upgrade installed, so one
+fresh session upgrades the whole host. Concurrent SessionStarts serialize the
+install under `flock` with an in-lock revision re-check. `bash
+.claude/hooks/memory-backstop-resolve.sh --print-resolution` reports
+`resolved=<path> revision=<n>` read-only — no publish, no exec.
+
+**Revision-bump contract.** `BACKSTOP_REVISION` is the only ordering signal,
+so every behavioral change to `memory-backstop.sh` must bump it: an un-bumped
+local edit *loses* resolution to a newer installed copy on the same host, and
+`scripts/check-backstop-revision.sh` makes an un-bumped PR change a required
+CI failure. The vendored payload copy
+(`plugins/soleur/hooks/memory-backstop.sh` — shipped so `claude plugin
+update` reaches the plugin-cache candidates) is pinned byte-equal to the repo
+hook by `plugins/soleur/test/backstop-parity.test.ts`, which also pins this
+wiring (Guard 3).
+
+**Ledger schema 2.** Ledger lines in `.claude/.memory-backstop.jsonl` carry
+three fields beyond schema 1: `backstop_revision` (the running copy's marker),
+`resolved_from` (the path the resolver selected; empty when the hook was run
+directly), and `repaired` (count from `repair_stale_scopes`). The fields are
+explicit so "a stale copy ran" is evidence, not inference — schema-1 lines
+(missing them) identify a checkout too old to carry the shim.
+
+**Stale-scope repair.** `repair_stale_scopes` runs inside the hook's flock on
+every SessionStart: any `soleur-agent-*.scope` unit whose runtime caps differ
+from the current constants is converged in place via `busctl
+SetUnitProperties ... true` (runtime-only — never persistent config, never
+re-derived `BindsTo`). A scope adopted under old caps is repaired by the next
+SessionStart on the host, no restart required.
+
 ### If a session gets stopped
 
 Remedies are listed **narrowest first** — the last one is fleet-wide and the
