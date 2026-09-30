@@ -69,46 +69,84 @@ describe("POST /api/attachments/url — CSP host rewrite", () => {
   });
 });
 
-describe("POST /api/attachments/url — forced download for non-image types", () => {
-  it.each([
-    ["md", "2026-01-01-notes.md"],
-    ["txt", "notes.txt"],
-    ["pdf", "report.pdf"],
-  ])("a .%s path is signed with { download: <filename> }", async (ext, filename) => {
-    const res = await POST(req(`${USER}/conv/uuid.${ext}`, filename));
+describe("POST /api/attachments/url — inline vs download", () => {
+  const download = async (storagePath: string, filename?: string) => {
+    const res = await POST(req(storagePath, filename));
     expect(res.status).toBe(200);
-    // Content-Disposition: attachment — the storage origin never renders the
-    // file inline, and the chip downloads as its real name, not <uuid>.<ext>.
-    expect(mockCreateSignedUrl).toHaveBeenCalledWith(
-      `${USER}/conv/uuid.${ext}`,
-      3_600,
-      { download: filename },
-    );
-  });
+    const { url } = (await res.json()) as { url: string };
+    return new URL(url).searchParams.get("download");
+  };
 
-  it.each(["png", "jpeg", "gif", "webp"])(
-    "a .%s path is signed WITHOUT a download option (rendered as <img>)",
+  // Default-deny: inline is the short allowlist (images + PDF); everything
+  // else, including an unrecognised or missing suffix, is a forced download.
+  it.each(["md", "txt", "html", "svg", "bin", "js"])(
+    "a .%s path is signed for DOWNLOAD under the given filename",
     async (ext) => {
-      const res = await POST(req(`${USER}/conv/uuid.${ext}`, `x.${ext}`));
-      expect(res.status).toBe(200);
-      expect(mockCreateSignedUrl).toHaveBeenCalledTimes(1);
-      expect(mockCreateSignedUrl.mock.calls[0]).toHaveLength(2);
+      expect(await download(`${USER}/conv/uuid.${ext}`, `report.${ext}`)).toBe(
+        `report.${ext}`,
+      );
     },
   );
 
-  it("falls back to the path basename when no filename is sent", async () => {
-    await POST(req(`${USER}/conv/uuid.md`));
-    expect(mockCreateSignedUrl).toHaveBeenCalledWith(
-      `${USER}/conv/uuid.md`,
-      3_600,
-      { download: "uuid.md" },
-    );
+  it("an extension-less path is also a forced download", async () => {
+    expect(await download(`${USER}/conv/uuid`, "notes")).toBe("notes");
   });
 
-  it("strips separators, quotes and control characters from the download name", async () => {
-    await POST(req(`${USER}/conv/uuid.md`, 'a/b\\c"d\ne\u0085f.md'));
-    const opts = mockCreateSignedUrl.mock.calls[0]![2] as { download: string };
-    expect(opts.download).not.toMatch(/[/\\"\n\u0085]/);
-    expect(opts.download.endsWith(".md")).toBe(true);
+  it.each(["png", "jpeg", "gif", "webp", "pdf"])(
+    "a .%s path is served inline (no download parameter)",
+    async (ext) => {
+      expect(await download(`${USER}/conv/uuid.${ext}`, `x.${ext}`)).toBeNull();
+    },
+  );
+
+  it("signs with the plain two-argument createSignedUrl (download is added to the URL)", async () => {
+    await POST(req(`${USER}/conv/uuid.md`, "a.md"));
+    expect(mockCreateSignedUrl).toHaveBeenCalledWith(`${USER}/conv/uuid.md`, 3_600);
+    expect(mockCreateSignedUrl.mock.calls[0]).toHaveLength(2);
+  });
+
+  it("falls back to the path basename when no filename is sent", async () => {
+    expect(await download(`${USER}/conv/uuid.md`)).toBe("uuid.md");
+  });
+
+  it.each(["Q&A #1 + notes = final ? v2;.md", "R&D plan.md", "todo #2.txt", "a+b.md"])(
+    "keeps %j intact: & # + = ? ; are percent-encoded, not query syntax",
+    async (name) => {
+      const res = await POST(req(`${USER}/conv/uuid.md`, name));
+      const { url } = (await res.json()) as { url: string };
+      const parsed = new URL(url);
+      expect(parsed.searchParams.get("download")).toBe(name);
+      // The original signature parameter must not be shadowed or duplicated.
+      expect(parsed.searchParams.getAll("token")).toEqual(["abc"]);
+    },
+  );
+
+  const cp = (n: number) => String.fromCharCode(n);
+  it.each([
+    ["path separator", "a/b.md"],
+    ["backslash", "a" + cp(0x5c) + "b.md"],
+    ["quote", 'a"b.md'],
+    ["LF", "a" + cp(0x0a) + "b.md"],
+    ["DEL", "a" + cp(0x7f) + "b.md"],
+    ["NEL", "a" + cp(0x85) + "b.md"],
+    ["LS", "a" + cp(0x2028) + "b.md"],
+    ["PS", "a" + cp(0x2029) + "b.md"],
+    ["RLO", "a" + cp(0x202e) + "b.md"],
+    ["RLI", "a" + cp(0x2067) + "b.md"],
+    ["LRM", "a" + cp(0x200e) + "b.md"],
+    ["RLM", "a" + cp(0x200f) + "b.md"],
+    ["ZWNJ", "a" + cp(0x200c) + "b.md"],
+    ["ALM", "a" + cp(0x061c) + "b.md"],
+    ["ZWSP", "a" + cp(0x200b) + "b.md"],
+    ["word joiner", "a" + cp(0x2060) + "b.md"],
+    ["BOM", "a" + cp(0xfeff) + "b.md"],
+  ])("neutralises %s in the download name", async (_label, name) => {
+    const got = await download(`${USER}/conv/uuid.md`, name);
+    expect(got).toBe("a_b.md");
+  });
+
+  it("caps the download name at 255 characters", async () => {
+    const got = await download(`${USER}/conv/uuid.md`, "a".repeat(400) + ".md");
+    expect(got!.length).toBe(255);
   });
 });

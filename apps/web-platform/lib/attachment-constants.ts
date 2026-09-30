@@ -7,27 +7,9 @@
  */
 
 /**
- * CANONICAL content types an attachment may carry once it has passed
- * `resolveAttachmentContentType`. Never test a browser-reported `file.type`
- * against this set directly: browsers report `.md` as "", `text/markdown`,
- * `application/octet-stream` and more, so the resolver decides the canonical
- * type and every surface (client validator, presign, attachment pipeline)
- * goes through it.
- */
-export const ALLOWED_ATTACHMENT_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-  "text/markdown",
-  "text/plain",
-]);
-
-/**
  * The one MIME -> file-extension map (storage path suffix, on-disk name, and
- * the preview tile label). Keyed by canonical type; a parity test pins it to
- * `ALLOWED_ATTACHMENT_TYPES`.
+ * the preview tile label), keyed by CANONICAL type. Every other table in this
+ * module is DERIVED from it, so adding a type here is the whole change.
  */
 export const ATTACHMENT_EXTENSION_BY_TYPE: Record<string, string> = {
   "image/png": "png",
@@ -40,6 +22,42 @@ export const ATTACHMENT_EXTENSION_BY_TYPE: Record<string, string> = {
 };
 
 /**
+ * CANONICAL content types an attachment may carry once it has passed
+ * `resolveAttachmentContentType`. Never test a browser-reported `file.type`
+ * against this set directly: browsers report `.md` as "", `text/markdown`,
+ * `application/octet-stream` and more, so the resolver decides the canonical
+ * type and every surface (client validator, presign, attachment pipeline)
+ * goes through it.
+ */
+export const ALLOWED_ATTACHMENT_TYPES: ReadonlySet<string> = new Set(
+  Object.keys(ATTACHMENT_EXTENSION_BY_TYPE),
+);
+
+/** Text types the EXTENSION decides (the browser-reported type is unreliable). */
+const TEXT_ATTACHMENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  md: "text/markdown",
+  txt: "text/plain",
+};
+
+/** Types decided by the reported MIME alone: everything that is not text. */
+const BINARY_ATTACHMENT_TYPES: ReadonlySet<string> = new Set(
+  [...ALLOWED_ATTACHMENT_TYPES].filter(
+    (type) => !Object.values(TEXT_ATTACHMENT_TYPE_BY_EXTENSION).includes(type),
+  ),
+);
+
+/**
+ * Storage-path extensions rendered inline (`<img>` thumbnails, the PDF viewer).
+ * Every other extension is signed for DOWNLOAD only, so an unrecognised suffix
+ * fails closed to `Content-Disposition: attachment`.
+ */
+export const INLINE_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set(
+  [...ALLOWED_ATTACHMENT_TYPES]
+    .filter((type) => type.startsWith("image/") || type === "application/pdf")
+    .map((type) => ATTACHMENT_EXTENSION_BY_TYPE[type]),
+);
+
+/**
  * `accept=` for the chat / first-run pickers. Explicit rather than derived from
  * the allowlist: `text/plain` in `accept` would make pickers offer every
  * `.log`/`.py` only for the resolver to reject it.
@@ -47,18 +65,25 @@ export const ATTACHMENT_EXTENSION_BY_TYPE: Record<string, string> = {
 export const ATTACHMENT_ACCEPT =
   "image/png,image/jpeg,image/gif,image/webp,application/pdf,text/markdown,.md,.txt";
 
-const BINARY_ATTACHMENT_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-]);
+/** Preview-tile label for a (canonical) attachment type: "MD", "TXT", "PDF"... */
+export function attachmentTileLabel(canonicalType: string): string {
+  return ATTACHMENT_EXTENSION_BY_TYPE[canonicalType]?.toUpperCase() ?? "FILE";
+}
 
-const TEXT_ATTACHMENT_TYPE_BY_EXTENSION: Record<string, string> = {
-  md: "text/markdown",
-  txt: "text/plain",
-};
+/**
+ * Neutralise a client-supplied filename before it is stored, shown to the
+ * agent or used as a download name: path separators, C0 controls + DEL,
+ * Unicode line separators (U+2028/U+2029, NEL), bidi controls and marks,
+ * zero-width characters and the BOM, so a crafted name cannot smuggle a
+ * forged extra line into the model context or reorder itself visually.
+ * Escape sequences only (cq-regex-unicode-separators-escape-only).
+ */
+export function sanitizeAttachmentFilename(name: string, maxLength = 255): string {
+  return String(name ?? "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[/\\\x00-\x1f\x7f\u0085\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g, "_")
+    .slice(0, maxLength);
+}
 
 /**
  * Lowercased text after the LAST dot of the basename, or "" when there is none

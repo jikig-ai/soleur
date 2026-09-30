@@ -3,8 +3,11 @@ import {
   ALLOWED_ATTACHMENT_TYPES,
   ATTACHMENT_ACCEPT,
   ATTACHMENT_EXTENSION_BY_TYPE,
+  INLINE_ATTACHMENT_EXTENSIONS,
+  attachmentTileLabel,
   fileExtension,
   resolveAttachmentContentType,
+  sanitizeAttachmentFilename,
 } from "@/lib/attachment-constants";
 
 const resolve = (contentType: string, filename: string) =>
@@ -16,6 +19,9 @@ describe("fileExtension", () => {
     ["NOTES.MD", "md"],
     ["a.b.c.txt", "txt"],
     ["dir/sub.name/file.md", "md"],
+    // The extension belongs to the BASENAME, not to an earlier path segment.
+    ["v1.md/README", ""],
+    ["dir.txt" + String.fromCharCode(92) + "notes", ""],
   ])("%s -> %s", (name, ext) => {
     expect(fileExtension(name)).toBe(ext);
   });
@@ -81,6 +87,8 @@ describe("resolveAttachmentContentType — rejections", () => {
     ["application/x-msdownload", "evil.md"],
     ["text/html", "x.md"],
     ["text/html", "x.txt"],
+    ["text/html;charset=utf-8", "x.md"],
+    ["Text/HTML; charset=UTF-8", "x.txt"],
     ["text/plain", "x.py"],
     ["text/plain", "notes"],
     ["text/plain", "md"],
@@ -147,5 +155,58 @@ describe("ATTACHMENT_ACCEPT", () => {
     expect(parts).toContain("application/pdf");
     // text/plain would make the picker offer every .log/.py only to reject it.
     expect(parts).not.toContain("text/plain");
+  });
+});
+
+describe("derived tables cannot drift from the extension map", () => {
+  it("every type the resolver can return is in the allowlist AND has an extension", () => {
+    const reported = ["", "application/octet-stream", "text/plain", "text/markdown", "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"];
+    const names = ["a.md", "a.txt", "a.png", "a.pdf", "a.bin", "a"];
+    const seen = new Set<string>();
+    for (const type of reported) {
+      for (const name of names) {
+        const out = resolveAttachmentContentType({ contentType: type, filename: name });
+        if (out === null) continue;
+        seen.add(out);
+        expect(ALLOWED_ATTACHMENT_TYPES.has(out)).toBe(true);
+        expect(ATTACHMENT_EXTENSION_BY_TYPE[out]).toMatch(/^[a-z0-9]+$/);
+      }
+    }
+    // Anti-vacuity: the sweep actually reached every allowed type.
+    expect([...seen].sort()).toEqual([...ALLOWED_ATTACHMENT_TYPES].sort());
+  });
+
+  it("inline extensions are exactly the image types plus PDF (default-deny for the rest)", () => {
+    expect([...INLINE_ATTACHMENT_EXTENSIONS].sort()).toEqual(["gif", "jpeg", "pdf", "png", "webp"]);
+    for (const ext of ["md", "txt", "html", "svg", "bin", ""]) {
+      expect(INLINE_ATTACHMENT_EXTENSIONS.has(ext)).toBe(false);
+    }
+  });
+
+  it("tile labels come from the map and fall back to FILE", () => {
+    expect(attachmentTileLabel("text/markdown")).toBe("MD");
+    expect(attachmentTileLabel("text/plain")).toBe("TXT");
+    expect(attachmentTileLabel("application/pdf")).toBe("PDF");
+    expect(attachmentTileLabel("application/x-unknown")).toBe("FILE");
+  });
+});
+
+describe("sanitizeAttachmentFilename", () => {
+  const cp = (n: number) => String.fromCharCode(n);
+  it.each([
+    0x2f, 0x5c, 0x00, 0x1f, 0x7f, 0x85, 0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f,
+    0x2028, 0x2029, 0x202a, 0x202e, 0x2060, 0x2066, 0x2069, 0xfeff,
+  ])("replaces U+%s with an underscore", (code) => {
+    expect(sanitizeAttachmentFilename("a" + cp(code) + "b.md")).toBe("a_b.md");
+  });
+
+  it("keeps ordinary names, dots, spaces and non-ASCII letters", () => {
+    expect(sanitizeAttachmentFilename("2026-01-01 Notes (v2) é.md")).toBe("2026-01-01 Notes (v2) é.md");
+  });
+
+  it("caps the length and coerces non-strings without throwing", () => {
+    expect(sanitizeAttachmentFilename("a".repeat(400)).length).toBe(255);
+    expect(sanitizeAttachmentFilename("a".repeat(400), 10).length).toBe(10);
+    expect(sanitizeAttachmentFilename(undefined as unknown as string)).toBe("");
   });
 });

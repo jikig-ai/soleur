@@ -4,25 +4,22 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
 import { verifiedUserId } from "@/server/request-auth";
 import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
-import { fileExtension } from "@/lib/attachment-constants";
+import {
+  INLINE_ATTACHMENT_EXTENSIONS,
+  fileExtension,
+  sanitizeAttachmentFilename,
+} from "@/lib/attachment-constants";
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
-// Extensions rendered inline as <img> (attachment-display.tsx). Everything
-// else (pdf, md, txt) is a file chip and is signed for DOWNLOAD only.
-const INLINE_IMAGE_EXTENSIONS = new Set(["png", "jpeg", "jpg", "gif", "webp"]);
-
-// Filename for Content-Disposition: strip path separators, quotes and
-// control/line-separator characters, cap the length.
+// Filename for Content-Disposition: the shared sanitizer plus quotes (the
+// header value is quoted), falling back to the path basename.
 function downloadName(raw: unknown, storagePath: string): string {
   const candidate =
     typeof raw === "string" && raw.trim() !== ""
       ? raw
       : storagePath.slice(storagePath.lastIndexOf("/") + 1);
-  return candidate
-    // eslint-disable-next-line no-control-regex
-    .replace(/[/\\"\x00-\x1f\x7f\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b\ufeff]/g, "_")
-    .slice(0, 255);
+  return sanitizeAttachmentFilename(candidate).replace(/"/g, "_");
 }
 
 export async function POST(request: Request) {
@@ -84,16 +81,14 @@ export async function POST(request: Request) {
     }
   }
 
-  // Non-image types are signed with `download`, which forces
-  // `Content-Disposition: attachment`: a markdown/text/PDF attachment is never
-  // rendered inline on the storage origin, and the chip saves under its real
-  // filename instead of `<uuid>.<ext>`.
-  const bucket = service.storage.from("chat-attachments");
-  const { data, error } = INLINE_IMAGE_EXTENSIONS.has(fileExtension(body.storagePath))
-    ? await bucket.createSignedUrl(body.storagePath, 3_600) // 1 hour expiry
-    : await bucket.createSignedUrl(body.storagePath, 3_600, {
-        download: downloadName(body.filename, body.storagePath),
-      });
+  // Only images (thumbnails) and PDFs (the browser viewer) are rendered inline.
+  // Every other extension is signed for DOWNLOAD (`Content-Disposition:
+  // attachment`), so a markdown/text attachment is never rendered on the
+  // storage origin and an unrecognised suffix fails closed.
+  const inline = INLINE_ATTACHMENT_EXTENSIONS.has(fileExtension(body.storagePath));
+  const { data, error } = await service.storage
+    .from("chat-attachments")
+    .createSignedUrl(body.storagePath, 3_600); // 1 hour expiry
 
   if (error || !data) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
@@ -103,5 +98,14 @@ export async function POST(request: Request) {
   // service client signs against the raw SUPABASE_URL host, which CSP img-src
   // (built from NEXT_PUBLIC_SUPABASE_URL) blocks → broken preview. Rewrite to
   // the public host so it passes CSP. Same class as the workspace-logo proxy.
-  return NextResponse.json({ url: toPublicStorageUrl(data.signedUrl) });
+  const publicUrl = toPublicStorageUrl(data.signedUrl);
+  if (inline) return NextResponse.json({ url: publicUrl });
+
+  // Set `download` ourselves rather than via createSignedUrl's option: that
+  // option concatenates the name into the query string and only runs
+  // `encodeURI`, which leaves `&`, `#` and `+` raw, so "Q&A #1.md" would save as
+  // "Q". searchParams.set percent-encodes every one of them.
+  const downloadUrl = new URL(publicUrl);
+  downloadUrl.searchParams.set("download", downloadName(body.filename, body.storagePath));
+  return NextResponse.json({ url: downloadUrl.toString() });
 }

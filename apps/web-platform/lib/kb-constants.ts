@@ -44,8 +44,14 @@ export const KB_RESERVED_UPLOAD_FILENAMES: ReadonlySet<string> = new Set([
   "claude.md",
   "claude.local.md",
   "agents.md",
+  "agents.override.md",
+  "agent.md",
   "gemini.md",
+  "qwen.md",
+  "crush.md",
+  "warp.md",
   "skill.md",
+  "copilot-instructions.md",
 ]);
 
 export function isReservedKbUploadFilename(name: string): boolean {
@@ -54,7 +60,8 @@ export function isReservedKbUploadFilename(name: string): boolean {
 
 /**
  * Text-native extensions that searchKb scans byte-by-byte for content matches.
- * Subset of upload extensions plus .md (native KB content).
+ * All of these are also upload extensions (`md` since KB uploads accept
+ * markdown); `md` is native KB content too.
  */
 export const KB_TEXT_EXTENSIONS = ["md", "txt", "csv"] as const;
 

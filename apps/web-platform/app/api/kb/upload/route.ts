@@ -250,6 +250,17 @@ export async function POST(request: Request) {
     );
   }
 
+  // The KB PATCH/DELETE endpoints refuse to modify markdown (authored docs are
+  // edited elsewhere), so an upload must not be a way around that: a markdown
+  // file may be CREATED here, never REPLACED. No `sha` is honoured for it, and
+  // an existing file is a plain conflict with no overwrite offered.
+  if (ext === "md" && sha) {
+    return NextResponse.json(
+      { error: "Markdown files cannot be replaced through upload" },
+      { status: 400 },
+    );
+  }
+
   try {
     // If no sha provided, check if file exists (duplicate detection)
     if (!sha) {
@@ -258,6 +269,17 @@ export async function POST(request: Request) {
           userData.github_installation_id,
           `/repos/${owner}/${repo}/contents/${urlFilePath}`,
         );
+        // Markdown: refuse without offering an overwrite (no sha in the body).
+        if (ext === "md") {
+          return NextResponse.json(
+            {
+              error: "A markdown file with this name already exists",
+              code: "DUPLICATE_PROTECTED",
+              path: filePath,
+            },
+            { status: 409 },
+          );
+        }
         // File exists — return 409 with sha for client to use for overwrite
         return NextResponse.json(
           {

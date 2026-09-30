@@ -18,7 +18,7 @@ import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
 import { validateFiles } from "@/lib/validate-files";
 import {
   ATTACHMENT_ACCEPT,
-  ATTACHMENT_EXTENSION_BY_TYPE,
+  attachmentTileLabel,
 } from "@/lib/attachment-constants";
 import { setPendingFiles } from "@/lib/pending-attachments";
 import type { ConversationStatus } from "@/lib/types";
@@ -306,6 +306,9 @@ export default function DashboardPage() {
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
+      // Once the message is submitted the staged set has been handed to the
+      // chat page (setPendingFiles); a file added after that would be dropped.
+      if (sendSubmittingRef.current) return;
       const { valid, error } = validateFiles(files, firstRunAttachments.length);
 
       // The rejection message must survive a mixed batch: clearing it whenever
@@ -536,7 +539,7 @@ export default function DashboardPage() {
                       data-testid="first-run-attachment-label"
                       className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary"
                     >
-                      {ATTACHMENT_EXTENSION_BY_TYPE[att.file.type]?.toUpperCase() ?? "FILE"}
+                      {attachmentTileLabel(att.file.type)}
                     </span>
                   ) : (
                     <svg className="h-4 w-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -562,7 +565,7 @@ export default function DashboardPage() {
 
           {/* Error message */}
           {attachError && (
-            <p className="mb-2 text-xs text-red-400">{attachError}</p>
+            <p role="alert" className="mb-2 text-xs text-red-400">{attachError}</p>
           )}
 
           {/* Unified input box: the paperclip + send controls live *inside* one

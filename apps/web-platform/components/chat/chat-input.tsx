@@ -12,7 +12,7 @@ import type { StreamState } from "@/lib/ws-client";
 import { validateFiles } from "@/lib/validate-files";
 import {
   ATTACHMENT_ACCEPT,
-  ATTACHMENT_EXTENSION_BY_TYPE,
+  attachmentTileLabel,
 } from "@/lib/attachment-constants";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
 import { safeSession } from "@/lib/safe-session";
@@ -583,7 +583,7 @@ export function ChatInput({
               ) : (
                 <div className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary">
                   {/* intake canonicalizes file.type (validateFiles), so this label is the extension of the resolved type */}
-                  {ATTACHMENT_EXTENSION_BY_TYPE[att.file.type]?.toUpperCase() ?? "FILE"}
+                  {attachmentTileLabel(att.file.type)}
                 </div>
               )}
               <div className="flex flex-col">

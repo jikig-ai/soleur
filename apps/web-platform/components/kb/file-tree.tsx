@@ -150,6 +150,9 @@ function TreeItem({
           ? (body as { sha: string }).sha : undefined;
         if (sha409) {
           setUploadState({ status: "duplicate", filename: file.name, sha: sha409, file, targetDir });
+        } else if (typeof body === "object" && body && (body as { code?: string }).code === "DUPLICATE_PROTECTED") {
+          // Markdown is never replaced through upload: show the server's reason.
+          setUploadState({ status: "error", message: (body as { error?: string }).error || "A markdown file with this name already exists" });
         } else {
           setUploadState({ status: "error", message: "File already exists but server response was malformed" });
         }

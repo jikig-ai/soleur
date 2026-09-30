@@ -356,14 +356,19 @@ describe("POST /api/attachments/presign", () => {
       expect(mockCreateSignedUploadUrl).not.toHaveBeenCalled();
     });
 
-    test("PDF size cap is derived from the resolved type, not the raw body", async () => {
+    test("a .pdf typed octet-stream is still rejected (the resolver does not widen PDFs)", async () => {
       primeSuccess();
       const res = await POST(
-        makeRequest({
-          contentType: "application/pdf",
-          filename: "big.pdf",
-          sizeBytes: 25 * 1024 * 1024,
-        }),
+        makeRequest({ contentType: "application/octet-stream", filename: "doc.pdf" }),
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("unsupported_file_type");
+    });
+
+    test("a .md typed text/html with a charset parameter is rejected", async () => {
+      primeSuccess();
+      const res = await POST(
+        makeRequest({ contentType: "text/html;charset=utf-8", filename: "x.md" }),
       );
       expect(res.status).toBe(400);
     });

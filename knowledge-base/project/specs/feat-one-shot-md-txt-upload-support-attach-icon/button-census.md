@@ -28,7 +28,7 @@ Pre-ADR-255 baseline read with `git show fff36b6172^:<path>`. Each now carries a
 
 ## Unresolved / follow-ups
 
-- `app/(dashboard)/dashboard/page.tsx:532` icon-only Button is `h-5 w-5` (20px), below the 24px WCAG 2.5.8 minimum; this first-run attachment-chip remove control was a bare-glyph native button pre-ADR-255 (no size class), so it is not a regression; raising it is a separate a11y follow-up in a file owned by another workstream.
+- `app/(dashboard)/dashboard/page.tsx:532` icon-only Button is `h-5 w-5` (20px), below the 24px WCAG 2.5.8 minimum; this first-run attachment-chip remove control was a bare-glyph native button pre-ADR-255 (no size class), so it is not a regression; it was raised to `h-6 w-6` (24px) during review, so the line number below is the merge-base line, not HEAD's.
 - Dynamic `className={expr}` with no string literal (1 site): tokens cannot be resolved statically; listed as unscanned.
 - Sites with no `className` at all (47) get the primitive default; text buttons keep `px-6 py-3`, none of them is icon-only (verified by the scan).
 

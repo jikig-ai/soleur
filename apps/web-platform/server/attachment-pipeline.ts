@@ -33,6 +33,7 @@ import type { AttachmentRef } from "@/lib/types";
 import {
   ATTACHMENT_EXTENSION_BY_TYPE,
   resolveAttachmentContentType,
+  sanitizeAttachmentFilename,
 } from "@/lib/attachment-constants";
 import {
   ERR_ATTACHMENT_NOT_FOUND,
@@ -116,19 +117,11 @@ export async function persistAndDownloadAttachments(
       throw new Error(ERR_ATTACHMENT_NOT_FOUND);
     }
     att.contentType = resolved;
-    // Sanitize filename:
-    //   - strip path separators (defense against shell/SQL injection
-    //     downstream paths)
-    //   - strip C0 controls + DEL + Unicode line separators (U+2028/U+2029),
-    //     NEL (U+0085), bidi controls (U+202A-202E, U+2066-2069), ZWSP and
-    //     BOM so a crafted filename cannot smuggle a forged "another attached
-    //     file" line into the `attachmentContext` text block we feed to
-    //     the LLM
-    //   - cap length at 255 to bound LLM-prompt growth
-    att.filename = att.filename
-      // eslint-disable-next-line no-control-regex
-      .replace(/[/\\\x00-\x1f\x7f\u0085\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b\ufeff]/g, "_")
-      .slice(0, 255);
+    // Sanitize filename (separators, controls, line separators, bidi and
+    // zero-width characters, 255 cap): a crafted name cannot smuggle a forged
+    // "another attached file" line into the `attachmentContext` text block we
+    // feed to the LLM. See `sanitizeAttachmentFilename`.
+    att.filename = sanitizeAttachmentFilename(att.filename);
   }
 
   const attachmentRows = attachments.map((att) => ({
@@ -198,7 +191,8 @@ export async function persistAndDownloadAttachments(
         return null;
       }
 
-      const ext = ATTACHMENT_EXTENSION_BY_TYPE[att.contentType] || "bin";
+      // att.contentType was resolved (and written back) in the validation loop above.
+      const ext = ATTACHMENT_EXTENSION_BY_TYPE[att.contentType];
       const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
       await writeFile(localPath, Buffer.from(await fileData.arrayBuffer()));
       return `- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`;

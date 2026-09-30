@@ -288,14 +288,18 @@ describe("FileTree upload", () => {
       expect(xhr.open).not.toHaveBeenCalled();
     });
 
-    it("shows the 409 replace dialog naming a .md that collides with an authored doc", async () => {
-      mockXhr(409, { error: "File already exists", code: "DUPLICATE", sha: "authored", path: "assets/readme.md" });
+    it("a .md that collides with an authored doc shows the server's reason and NO Replace button", async () => {
+      mockXhr(409, {
+        error: "A markdown file with this name already exists",
+        code: "DUPLICATE_PROTECTED",
+        path: "assets/readme.md",
+      });
       renderFileTree();
       pick(new File(["# mine"], "readme.md", { type: "text/markdown" }));
       await waitFor(() => {
-        expect(screen.getByText(/readme\.md.*already exists\. Replace\?/)).toBeDefined();
+        expect(screen.getByText("A markdown file with this name already exists")).toBeDefined();
       });
-      expect(screen.getByText("Replace")).toBeDefined();
+      expect(screen.queryByText("Replace")).toBeNull();
     });
   });
 });

@@ -55,10 +55,10 @@ export async function POST(request: Request) {
 
   // Validate file size
   // Closes #3332: PDFs are bounded by the agent-readable cap (24 MB raw)
-  // alongside the generic 20 MB attachment cap. Note that an unsupported
-  // Content-Type is already rejected above, but isPdfAttachment branches on
-  // filename extension too — this hardens the cap if ALLOWED_ATTACHMENT_TYPES
-  // is later widened to include octet-stream-with-extension.
+  // alongside the generic 20 MB attachment cap. `contentType` is the RESOLVED
+  // type (see above), so the PDF branch keys on the type the server decided,
+  // not on the client's reported value; `isPdfAttachment` also honours a `.pdf`
+  // filename as a second signal.
   // Number.isFinite catches NaN/Infinity from a coerced sizeBytes.
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
     return NextResponse.json({ error: "file_too_large" }, { status: 400 });

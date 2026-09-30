@@ -31,6 +31,16 @@ describe("AttachmentDisplay — file chips", () => {
     expect(screen.queryByText("0 KB")).toBeNull();
   });
 
+  it.each([
+    [0, "<1 KB"],
+    [1023, "<1 KB"],
+    [1024, "1 KB"],
+    [1025, "1 KB"],
+  ])("labels %i bytes as %s (the 1 KB boundary)", async (sizeBytes, label) => {
+    render(<AttachmentDisplay attachments={[att({ sizeBytes })]} />);
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
   it("still rounds larger files to KB", async () => {
     render(<AttachmentDisplay attachments={[att({ sizeBytes: 5 * 1024 })]} />);
     expect(await screen.findByText("5 KB")).toBeInTheDocument();

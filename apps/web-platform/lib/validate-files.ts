@@ -13,7 +13,8 @@ const ATTACHMENT_LIMIT_MB = Math.round(MAX_ATTACHMENT_SIZE / 1024 / 1024);
  * Validate files against attachment constraints (type, size, count).
  * Shared between the Command Center first-run form and ChatInput.
  *
- * Returns valid files and an optional error message for the first rejected file.
+ * Returns valid files and an optional error message: the single message when one
+ * file was rejected, or an aggregate naming every skipped file.
  *
  * Intake is the one place the browser-reported `file.type` is interpreted:
  * browsers report `.md` as "", `text/markdown`, `application/octet-stream` and

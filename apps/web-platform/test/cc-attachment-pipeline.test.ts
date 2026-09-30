@@ -536,6 +536,26 @@ describe("persistAndDownloadAttachments — markdown / plain-text", () => {
     expect(writeFileMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["image/png", "shot.png", "shot.bin"],
+    ["application/pdf", "doc.pdf", "doc.md"],
+    ["image/jpeg", "a.jpeg", "a.png"],
+  ])("binds the stored suffix for NON-text types too (%s named %s stored as %s)", async (contentType, filename, stored) => {
+    const supabase = makeSupabaseMock({ workspacePath: "/workspace/u1", download: okDownload });
+    await expect(
+      persistAndDownloadAttachments({
+        supabase: supabase.client as never,
+        userId,
+        conversationId,
+        messageId,
+        attachments: [
+          makeAttachment({ filename, contentType, storagePath: `${userId}/${conversationId}/${stored}` }),
+        ],
+      }),
+    ).rejects.toThrow(/Attachment not found/);
+    expect(supabase.insertCalls).toHaveLength(0);
+  });
+
   it("resolves the type from the RAW filename before the 255-char truncation", async () => {
     const supabase = makeSupabaseMock({ workspacePath: "/workspace/u1", download: okDownload });
     const longName = `${"a".repeat(300)}.md`;

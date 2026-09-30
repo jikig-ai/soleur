@@ -840,7 +840,12 @@ describe("POST /api/kb/upload", () => {
       "GEMINI.md",
       "skill.md",
       "SKILL.MD",
-    ])("refuses reserved instruction file %s with 400", async (name) => {
+      "AGENTS.override.md",
+      "AGENT.md",
+      "QWEN.md",
+      "copilot-instructions.md",
+      "CLAUDE" + String.fromCharCode(0) + ".md",
+    ])("refuses reserved instruction file %j with 400", async (name) => {
       setupFullMocks();
       const res = await upload(md(name));
       expect(res.status).toBe(400);
@@ -876,7 +881,7 @@ describe("POST /api/kb/upload", () => {
       }
     });
 
-    test("a duplicate .md still returns the 409 DUPLICATE shape naming the path", async () => {
+    test("an existing .md is a protected conflict: 409 with NO sha, so no overwrite is offered", async () => {
       setupFullMocks();
       mockGithubApiGet.mockResolvedValue({
         sha: "authored-sha",
@@ -887,11 +892,37 @@ describe("POST /api/kb/upload", () => {
       expect(res.status).toBe(409);
       const body = await res.json();
       expect(body).toMatchObject({
-        code: "DUPLICATE",
-        sha: "authored-sha",
+        code: "DUPLICATE_PROTECTED",
         path: "knowledge-base/uploads/onboarding-notes.md",
       });
+      expect(body).not.toHaveProperty("sha");
       expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test("a .md upload carrying a sha (an overwrite attempt) is refused with 400 before any GitHub call", async () => {
+      setupFullMocks();
+      const fd = createFormData(md("vision.md"), "overview");
+      fd.append("sha", "authored-sha");
+      const res = await POST(createRequest(fd, "https://app.soleur.ai"));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/cannot be replaced/i);
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test("a duplicate NON-markdown upload still offers the overwrite (409 DUPLICATE with sha)", async () => {
+      setupFullMocks();
+      mockGithubApiGet.mockResolvedValue({ sha: "txt-sha", name: "a.txt", path: "knowledge-base/uploads/a.txt" });
+      const res = await upload(md("a.txt", 8, "text/plain"));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: "DUPLICATE", sha: "txt-sha" });
+    });
+
+    test("only a markdown extension is lowercased (Photo.PNG keeps its stored name)", async () => {
+      setupFullMocks();
+      const res = await upload(new File([new Uint8Array(8)], "Photo.PNG", { type: "image/png" }));
+      expect(res.status).toBe(201);
+      expect((await res.json()).path).toBe("knowledge-base/uploads/Photo.PNG");
     });
 
     test(".exe still returns 415", async () => {

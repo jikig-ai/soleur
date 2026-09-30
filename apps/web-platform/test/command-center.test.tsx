@@ -567,6 +567,30 @@ describe("Command Center", () => {
       expect(screen.getByTestId("first-run-attachment-label")).toHaveTextContent("MD");
     });
 
+    it("labels a .txt TXT, titles the tile with the filename, and announces rejections as an alert", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File(["notes"], "plain-notes.txt", { type: "text/plain" })] } });
+      await waitFor(() => {
+        expect(screen.getByText("plain-notes.txt")).toBeInTheDocument();
+      });
+      expect(screen.getByTestId("first-run-attachment-label")).toHaveTextContent("TXT");
+      expect(screen.getByText("plain-notes.txt").closest("[title]")).toHaveAttribute("title", "plain-notes.txt");
+
+      fireEvent.change(fileInput, { target: { files: [new File(["bad"], "malware.exe", { type: "application/x-executable" })] } });
+      await waitFor(() => {
+        expect(screen.getByRole("alert")).toHaveTextContent(/not a supported file type/);
+      });
+    });
+
     it("keeps the rejection message when a batch mixes a valid and an invalid file", async () => {
       const { default: DashboardPage } = await import(
         "@/app/(dashboard)/dashboard/page"
@@ -634,6 +658,25 @@ describe("Command Center", () => {
       await waitFor(() => {
         expect(screen.queryByText("doc.pdf")).not.toBeInTheDocument();
       });
+    });
+
+    it("ignores files added after the message was submitted (they would miss the pending-files snapshot)", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("What are you building?")).toBeInTheDocument();
+      });
+
+      const input = screen.getByPlaceholderText("What are you building?");
+      fireEvent.change(input, { target: { value: "A SaaS for cats" } });
+      fireEvent.submit(input.closest("form")!);
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File(["late"], "late-notes.md", { type: "" })] } });
+      expect(screen.queryByText("late-notes.md")).not.toBeInTheDocument();
     });
 
     it("navigates to chat/new on submit with text", async () => {
