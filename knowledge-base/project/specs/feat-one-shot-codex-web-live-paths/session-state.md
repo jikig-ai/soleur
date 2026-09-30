@@ -153,4 +153,5 @@
 ## Verification as of 2026-09-30 CI correction
 
 - Pushed head `6165a3d30c21f707e78a6886dfb4328c3674db5d` merges current main `2f64e7459ae6ec7b21ae9e91e16fae0cd40026c8`; PR #9051 remains draft. Fresh CI exposed one `test-bun` failure in `fullsuite-merge-gate.test.ts`: the skill edit had removed a guarded prescription's exact text anchor. The remaining test matrix and tenant-integration were still running at the time of this note.
-- Local correction restores the wording and keeps the CI-only hook reference on that same line. No app test suite was run locally. Fresh CI is required on the corrected push; CLO, design QA, and both runtime qualification gates remain pending.
+- Pushed correction `bc77a93d76169fc8b0e7aacaa0dd67d558ae56ce` restored the wording and kept the CI-only hook reference on that same line; `test-bun` passed on this head. The same CI run then found the privacy-policy SHA stale because the canonical legal disclosure changed. The matching hash is now updated locally and must be pushed for fresh CI.
+- No app test suite was run locally. CLO, design QA, and both runtime qualification gates remain pending.

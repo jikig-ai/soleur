@@ -104,3 +104,8 @@ CI caught that the compacted work-skill sentence had also removed an exact
 prescription anchor asserted by `fullsuite-merge-gate.test.ts`. When editing
 that guidance, preserve the asserted wording and its nearby full-suite pointer;
 the CI-only hook reference can be linked from the same sentence.
+
+The next CI run passed that assertion and caught the privacy-policy SHA omitted
+from `legal-doc-shas.ts`. Every non-T&C canonical legal edit requires its hash
+refresh in the same PR; check `tc-document-sha-guard` after legal edits and
+record the document tier and CLO status in the PR description.
