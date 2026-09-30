@@ -205,6 +205,11 @@ const NON_INNGEST_MONITORS = new Set([
   // no SENTRY_MONITOR_SLUG; the workflow's terminal sentry-heartbeat step posts
   // the check-in. Same class as scheduled-terraform-drift / main-health-monitor.
   "scheduled-supabase-watchdog",
+  // TEMPORARY (#9304): the cron-gh-pages-cert-state function was deleted (its GitHub Pages
+  // origin cert is abandoned, ADR-194), but the Sentry two-PR rule (#8630) forbids unrouting
+  // and deleting a monitor in one apply, so the disabled monitor survives one PR with no
+  // handler slug. Remove this entry in the PR that deletes the monitor (#9304).
+  "scheduled-gh-pages-cert-state",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -231,8 +236,9 @@ describe("Inngest function registry — drift guards", () => {
   // bounded DB-hang restart workflow — dispatch-hybrid, no SENTRY_MONITOR_SLUG;
   // the GHA executor posts the heartbeat, so its monitor sits in
   // NON_INNGEST_MONITORS like scheduled-terraform-drift).
+  // 70 -> 69: cron-gh-pages-cert-state deleted (ADR-194: the origin cert it polled is abandoned).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(70);
+    expect(routeEntries.length).toBe(69);
   });
 
   // An event function is invisible to the cron-glob guards; an unserved settle
