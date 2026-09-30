@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-30-feat-inngest-provision-degraded-sentry-alert-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260930-190358-2026-09-30-feat-inngest-provision-degraded-sentry-alert-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 

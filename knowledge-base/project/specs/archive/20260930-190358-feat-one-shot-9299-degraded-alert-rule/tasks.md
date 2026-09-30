@@ -3,7 +3,7 @@ feature: feat-one-shot-9299-degraded-alert-rule
 issue: 9299
 pr: 9302
 lane: single-domain
-plan: knowledge-base/project/plans/2026-09-30-feat-inngest-provision-degraded-sentry-alert-plan.md
+plan: knowledge-base/project/plans/archive/20260930-190358-2026-09-30-feat-inngest-provision-degraded-sentry-alert-plan.md
 ---
 
 # Tasks — own Sentry alert rule for degraded inngest bootstraps (#9299)

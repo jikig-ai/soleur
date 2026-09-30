@@ -408,7 +408,7 @@ locally. Admin merge is authorized once CI is green; the diff touches no workflo
 ## Files to Create
 
 - None in the product tree. Planning artifacts: this plan,
-  `knowledge-base/project/specs/feat-one-shot-9299-degraded-alert-rule/{tasks.md,decision-challenges.md}`.
+  `knowledge-base/project/specs/archive/20260930-190358-feat-one-shot-9299-degraded-alert-rule/{tasks.md,decision-challenges.md}`.
 
 ## Open Code-Review Overlap
 
