@@ -284,7 +284,7 @@ The leading comment block (house style: a `# ── … (#9176) ──` banner) 
 - **D1: one rule, `stage in` + `detail nc`, `all`.** This is the minimum filter that covers P1–P4
   (see the Cut List).
 - **D2: include `bootstrap_done_degraded`.** This is a taste decision and goes to
-  `knowledge-base/project/specs/feat-one-shot-9176-provision-failure-sentry-alert/decision-challenges.md`.
+  `knowledge-base/project/specs/archive/20260930-160430-feat-one-shot-9176-provision-failure-sentry-alert/decision-challenges.md`.
   Rationale: the degraded state persists until a reboot nobody schedules, and it is the same "host
   did not reach durable shape" class. To reverse it, drop one list member.
 - **D3: `frequency_minutes = 120`**, unused both in the root and live.
@@ -435,8 +435,8 @@ Admin-merge on green (no workflow files are edited). Post-merge ACs follow below
 ## Files to Create
 
 - `apps/web-platform/test/sentry-inngest-provision-failure-alert-op-contract.test.ts`
-- `knowledge-base/project/specs/feat-one-shot-9176-provision-failure-sentry-alert/tasks.md`
-- `knowledge-base/project/specs/feat-one-shot-9176-provision-failure-sentry-alert/decision-challenges.md` (D2)
+- `knowledge-base/project/specs/archive/20260930-160430-feat-one-shot-9176-provision-failure-sentry-alert/tasks.md`
+- `knowledge-base/project/specs/archive/20260930-160430-feat-one-shot-9176-provision-failure-sentry-alert/decision-challenges.md` (D2)
 
 The diff adds no systemd unit state-change line under `apps/web-platform/infra/`, so
 `ci-deploy.test.sh` is not required. No `.github/workflows/*` file is edited.

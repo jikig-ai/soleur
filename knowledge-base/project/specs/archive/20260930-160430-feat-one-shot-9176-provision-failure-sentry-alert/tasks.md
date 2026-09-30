@@ -1,6 +1,6 @@
 # Tasks: inngest-provision-failure Sentry alert (#9176)
 
-Plan: `knowledge-base/project/plans/2026-09-30-feat-inngest-provision-failure-sentry-alert-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260930-160430-2026-09-30-feat-inngest-provision-failure-sentry-alert-plan.md`
 
 ## Phase 1: Setup (RED)
 
