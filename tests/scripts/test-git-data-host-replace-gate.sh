@@ -455,6 +455,88 @@ else
   echo "SKIP (loud): HK13 terraform absent — the first-rotation premise is not re-measured here" >&2
 fi
 
+# ── ROTATE mode (#8211 PR2 / ADR-220 D6 — apply_target=git-data-host-rotate) ───────────
+# The ONLY path permitted to touch the LUKS store: volume + passphrase + key move together
+# (a new passphrase on a retained volume can never luksOpen). Plaintext volume stays
+# preserved; every replace invariant still applies.
+ROT_VOL="$(rc_obj 'hcloud_volume.git_data_luks' '"delete","create"')"
+ROT_PW="$(rc_obj 'random_password.git_data_luks' '"delete","create"')"
+ROT_KEY="$(rc_obj 'doppler_secret.git_data_luks_key' '"update"')"
+ROT_PASS_SET="${PASS_SET},${ROT_VOL},${ROT_PW},${ROT_KEY}"
+
+# R1: the full rotate plan passes in mode=rotate.
+write_plan "${ROT_PASS_SET}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null; then
+  pass "R1 rotate: host+deps+LUKS volume/passphrase/key all move -> PASS"
+else
+  fail "R1 rotate: the exact scoped rotate plan was refused"
+fi
+
+# R2 (must-RED): the same plan in mode=replace still refuses — the preserve backstops stand.
+write_plan "${ROT_PASS_SET}"
+if git_data_host_replace_gate "$TMP/plan.json" >/dev/null 2>&1; then
+  fail "R2 rotate-plan-as-replace: a LUKS-touching plan PASSED as a plain replace"
+else
+  pass "R2 rotate-plan-as-replace: mode=replace still refuses a LUKS rotation"
+fi
+
+# R3 (must-RED): rotate missing the passphrase re-mint -> ABORT (new volume + old key).
+write_plan "${PASS_SET},${ROT_VOL},${ROT_KEY}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R3 rotate-no-passphrase: a rotate without the passphrase re-mint PASSED"
+else
+  pass "R3 rotate-no-passphrase: a rotation missing the passphrase re-mint refuses"
+fi
+
+# R4 (must-RED): rotate missing the key re-publish -> ABORT.
+write_plan "${PASS_SET},${ROT_VOL},${ROT_PW}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R4 rotate-no-key: a rotate without the doppler_secret re-publish PASSED"
+else
+  pass "R4 rotate-no-key: a rotation missing the key re-publish refuses"
+fi
+
+# R5 (must-RED): rotate that ALSO destroys the plaintext volume -> ABORT (still preserved).
+PL_VOL="$(rc_obj 'hcloud_volume.git_data' '"delete","create"')"
+write_plan "${ROT_PASS_SET},${PL_VOL}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R5 rotate+plaintext-destroy: the plaintext store was touched in rotate mode"
+else
+  pass "R5 rotate+plaintext-destroy: the plaintext volume stays preserved in rotate"
+fi
+
+# R6 (must-RED): rotate missing the volume replace -> ABORT (passphrase-only is a stranding).
+write_plan "${PASS_SET},${ROT_PW},${ROT_KEY}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R6 rotate-no-volume: a passphrase re-mint without the volume replace PASSED"
+else
+  pass "R6 rotate-no-volume: key rotation without the fresh volume refuses"
+fi
+
+# R7 (must-RED): rotate missing the server replace -> ABORT (a bare LUKS rotate is not the D6 set).
+write_plan "${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET},${ROT_VOL},${ROT_PW},${ROT_KEY}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R7 rotate-no-server: a rotate that keeps the host PASSED"
+else
+  pass "R7 rotate-no-server: the rotate still requires the host replace"
+fi
+
+# R8 (must-RED): a bogus mode is a wiring fault — refuse, never default to a permissive arm.
+write_plan "${ROT_PASS_SET}"
+if git_data_host_replace_gate "$TMP/plan.json" bogus >/dev/null 2>&1; then
+  fail "R8 bogus-mode: an unknown mode PASSED"
+else
+  pass "R8 bogus-mode: an unknown mode refuses"
+fi
+
+# R9: rotate with an out-of-scope change still aborts (the allow-set extension is closed).
+write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.other' '"create"')"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R9 rotate-oos: an out-of-scope change passed the rotate arm"
+else
+  pass "R9 rotate-oos: out_of_scope still binds in rotate mode"
+fi
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -472,11 +554,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 46 ]]; then
+if [[ "$_ran" -lt 55 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 46 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 46)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
 fi
 
 echo ""

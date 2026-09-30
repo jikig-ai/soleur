@@ -655,9 +655,10 @@ write_files:
     owner: root:root
     permissions: '0644'
 
-  # Fail-closed placeholder pre-receive — staged to /tmp; the bootstrap installs it
-  # onto the volume at /mnt/git-data/hooks/pre-receive and wires core.hooksPath.
-  - path: /tmp/git-data-pre-receive-placeholder.sh
+  # The REAL CAS-fence pre-receive (#8211 PR2 — hook-at-birth) — staged to /tmp; the
+  # bootstrap installs it onto the volume at /mnt/git-data/hooks/pre-receive and wires
+  # core.hooksPath. Fail-closed by construction: it rejects every non-CAS-conforming push.
+  - path: /tmp/git-data-pre-receive.sh
     content: |
       ${indent(6, git_data_pre_receive_placeholder)}
     owner: root:root

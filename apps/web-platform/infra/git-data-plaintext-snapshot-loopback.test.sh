@@ -463,7 +463,7 @@ oracle_count() {
   mkdir -p "$mnt" || instrument "oracle: mkdir failed"
   mount -o rw "$oloop" "$mnt" || instrument "oracle: the rw mount (a real replay) of $1 failed"
   CLEAN_MOUNTS+=("$mnt")
-  ORACLE_N="$(find "$mnt/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found 2>/dev/null | wc -l)"
+  ORACLE_N="$(find "$mnt/repositories" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found 2>/dev/null | wc -l)"
   umount "$mnt" || instrument "oracle: umount failed"
   detach "$oloop"
   rm -f "$copy"

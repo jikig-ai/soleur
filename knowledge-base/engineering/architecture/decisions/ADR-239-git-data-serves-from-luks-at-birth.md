@@ -285,6 +285,36 @@ docs PR, which reads the current instance's `boot_complete`.
 
 Dated text above is not rewritten; the Status paragraph keeps the rule this amendment records as met.
 
+## Amendment 2026-09-30 — PR2 implementation: freeze writer, lock migration, real-hook delivery
+
+The forward-coupling sentence in the 2026-09-27 amendment is resolved and the remaining PR2 items
+landed:
+
+- **The freeze sentinel gained a writer.** `MODE=freeze` writes `/mnt/git-data/.cutover-freeze`
+  carrying `writer=<lineage> at=<epoch>` provenance (the lineage's `^[A-Za-z0-9._-]{1,64}$` shape,
+  `CUTOVER_LINEAGE`=`cutover-<run_id>`), only after `git-data-gc.service` is measured quiesced
+  (`systemctl show`, not `is-active`) and `git-data-gc.timer` is stopped. `MODE=unfreeze` clears
+  ONLY a same-lineage sentinel — a foreign or unparseable sentinel refuses (`frozen_foreign` /
+  `frozen_unattributed` in the runbook verdict map), because a sentinel that no live run wrote is a
+  host incident, not cleanup. The proof still refuses `cutover_frozen`, so the flip orders proof
+  BEFORE freeze; inside the window the store verbs refuse, which is the freeze's whole function.
+- **`FREEZE_HELD` pages.** A sentinel that cannot be cleared (hop down mid-unfreeze) emits a
+  dedicated paging line rather than folding into a summary verdict — a stranded freeze bricks the
+  erasure path.
+- **#9066's legacy-lock residue is bound to the freeze window.** The `. <id>.init.lock` files
+  (which carry `auth.users.id` on the store) are purged inside `MODE=freeze`, excluding the new
+  shared `.init.lock` name and the bootstrap's `.boot-probe-0.init.lock`; a held lock refuses
+  (`lock_held`) rather than racing an in-flight provision.
+- **The real fence hook delivers at birth.** `git-data-pre-receive.sh` (the CAS-fencing hook) is
+  bound into the cloud-init payload and installed root-owned from a staged file — the reject-all
+  placeholder is superseded (kept for fixtures only), and every host born after this lands fences
+  from first boot. ADR-149's git-UID-channel prohibition is preserved: delivery is the
+  root-side cloud-init path, never a git-shell channel.
+- **The transactional probe (`MODE=probe`) closes the flip.** Provision → CAS-fenced push →
+  ref-landed → remove → zero-residue assert, each failure mode with its own verdict
+  (`fenced_push_failed`, `remove_failed`, `residue_left`, `probe_failed reason=provision|scratch|
+  repo_absent_after_provision|ref_not_landed`).
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-git-data-cutover-real-modes-plan.md`

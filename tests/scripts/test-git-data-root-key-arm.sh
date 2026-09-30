@@ -408,7 +408,9 @@ for job, gate in JOBS.items():
     steps = (wf["jobs"].get(job) or {}).get("steps")
     if not isinstance(steps, list):
         bad.append(f"{job}: no steps"); continue
-    call_re = re.compile(r"^(\s*)if ! " + re.escape(gate) + r" tfplan\.json; then$")
+    # The replace gate takes a mode argument since the D6 rotate arm (#8211 PR2);
+    # the birth gate does not. The call pattern admits the optional mode operand.
+    call_re = re.compile(r"^(\s*)if ! " + re.escape(gate) + r" tfplan\.json( \"\$GATE_MODE\")?; then$")
     hits = [st for st in steps if isinstance(st, dict) and isinstance(st.get("run"), str)
             and any(call_re.match(l) for l in st["run"].split("\n"))]
     if len(hits) != 1:
@@ -455,7 +457,7 @@ L = open(src).read().split("\n")
 start = next(i for i, l in enumerate(L) if l == f"  {job}:")
 end = next((i for i in range(start + 1, len(L)) if re.match(r"^  [A-Za-z0-9_-]+:$", L[i])), len(L))
 exp = [i for i in range(start, end) if L[i].lstrip().startswith("export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE=")]
-call = [i for i in range(start, end) if re.match(r"^\s*if ! git_data_host_(replace|birth)_gate tfplan\.json; then$", L[i])]
+call = [i for i in range(start, end) if re.match(r"^\s*if ! git_data_host_(replace|birth)_gate tfplan\.json( \"\$GATE_MODE\")?; then$", L[i])]
 assert len(exp) == 1 and len(call) == 1
 e, c = exp[0], call[0]
 indent = L[e][: len(L[e]) - len(L[e].lstrip())]
