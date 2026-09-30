@@ -123,8 +123,11 @@ while IFS=$'\t' read -r id created; do
   # This run's light-leg timing artifacts. Only runs where EVERY leg uploaded
   # qualify — a leg that died before its feed write leaves its suites
   # unmeasured, and summing a partial set manufactures a false lopsided read.
-  ARTS="$(gh api "repos/$REPO/actions/runs/$id/artifacts?per_page=100" \
-          --jq '[.artifacts[] | select(.name | test("^suite-timings-scripts-[0-9]+$")) | {id: .id, name: .name}]')" \
+  # --paginate with NO --jq: gh applies --jq PER PAGE, so a >100-artifact run
+  # would otherwise truncate silently — a page boundary then reads as a dead
+  # leg and the run drops out of the sample (actions-queue-health.sh shape).
+  ARTS="$(gh api --paginate "repos/$REPO/actions/runs/$id/artifacts?per_page=100" \
+          | jq -s '[.[].artifacts[] | select(.name | test("^suite-timings-scripts-[0-9]+$")) | {id: .id, name: .name}]')" \
     || { echo "CANNOT ESTABLISH: artifacts list for run $id unreadable" >&2; exit 3; }
   narts="$(printf '%s' "$ARTS" | jq 'length')"
   [ "$narts" -eq "$EXPECTED" ] || continue
