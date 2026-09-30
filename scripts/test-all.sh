@@ -4462,6 +4462,10 @@ if want_scripts; then
   run_suite "scripts/capture-web-2-host-key" bash scripts/capture-web-2-host-key.test.sh
   # #9151: the no-SSH ci-deploy.sh parity read (fixture-driven; no network).
   run_suite "scripts/check-deploy-script-parity" bash scripts/check-deploy-script-parity.test.sh
+  # #9239 Guard 1: the revision-bump gate's own fixture matrix (synthetic
+  # origin/clone per arm — untouched/introduced/bumped/same/decreased/removed/
+  # decoy-comment/lib-only-watched/BASE_REF override).
+  run_suite "scripts/check-backstop-revision" bash scripts/check-backstop-revision.test.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
   run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
   # tests/commands/ is registered by these explicit lines ONLY — there is no glob here, and
