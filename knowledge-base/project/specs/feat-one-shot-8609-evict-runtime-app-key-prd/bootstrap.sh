@@ -938,30 +938,70 @@ stage_r2() {
 # =============================================================================
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r3() {
-  local pre post run concl logs
+  # The deploy_pipeline_fix trigger hashes the KEYLESS render plus a committed generation literal, so
+  # a bare dispatch replaces nothing: delivery (and every re-delivery or roll-back) is a one-line PR
+  # bumping "github_app_runtime_token_generation=N" in server.tf. Its merge fires the opted-in
+  # apply-deploy-pipeline-fix push (server.tf is in that workflow's paths filter).
+  local pr state merged_at run pre post logs gen branch wt tf=apps/web-platform/infra/server.tf
+  pr="$(env_get "$(K R3_PR)")"
   pre="$(env_get "$(K R3_PRE_DIGEST)")"
-  run="$(env_get "$(K R3_RUN)")"
-  post="$(credential_file_digest)"
-  if [[ -n "$run" && "$(run_conclusion "$run")" == "success" && -n "$post" && "$post" != "$pre" ]]; then
-    soleur_op_yellow "  already satisfied: run ${run} delivered a changed credential file"
-    return 0
+  if [[ -n "$pr" ]]; then
+    state="$(gh pr view "$pr" -R "$REPO" --json state --jq .state 2>/dev/null || true)"
+    if [[ "$state" != "MERGED" ]]; then
+      soleur_op_yellow "  generation PR #${pr} is ${state:-unknown} — merge it, then re-run."
+      return 1
+    fi
+    merged_at="$(gh pr view "$pr" -R "$REPO" --json mergedAt --jq .mergedAt)"
+    run="$(gh run list -R "$REPO" --workflow apply-deploy-pipeline-fix.yml --branch main --limit 10 --json databaseId,createdAt,status,conclusion \
+          --jq "[.[] | select(.createdAt >= \"${merged_at}\")] | first | select(. != null) | \"\(.databaseId) \(.status) \(.conclusion)\"" 2>/dev/null || true)"
+    if [[ -z "$run" ]]; then
+      soleur_op_yellow "  no apply-deploy-pipeline-fix run after PR #${pr}'s merge yet — re-run shortly."
+      return 1
+    fi
+    if [[ "$run" != *" completed "* ]]; then
+      soleur_op_yellow "  apply-deploy-pipeline-fix run ${run%% *} is still running — re-run after it finishes."
+      return 1
+    fi
+    soleur_op_env_upsert "$ENV_FILE" "$(K R3_RUN)" "${run%% *}"
+    logs="$(gh run view "${run%% *}" -R "$REPO" --log 2>/dev/null | grep -c 'source=tier_b' || true)"
+    post="$(credential_file_digest)"
+    check "run ${run%% *} after the generation merge concluded success" "$([[ "${run##* }" == "success" ]]; echo $?)"
+    check "its log shows the loader at source=tier_b" "$([[ "${logs:-0}" -gt 0 ]]; echo $?)"
+    check "web-1's /etc/default/soleur-doppler-token digest changed" "$([[ -n "$post" && -n "$pre" && "$post" != "$pre" ]]; echo $?)"
+    stage_verdict
+    return
   fi
-  [[ -n "$post" ]] || { soleur_op_red "  cannot read web-1's infra-config state (/hooks/infra-config-status)"; return 1; }
-  [[ -n "$pre" ]] || { soleur_op_env_upsert "$ENV_FILE" "$(K R3_PRE_DIGEST)" "$post"; pre="$post"; }
-  impact "if the push breaks the credential file, web-1's next deploy or restart cannot read its config — the running site keeps serving." \
-         "set ${TIER_B_NAME} empty and re-dispatch: the file re-renders without the line (no SSH)."
-  show_cmd "gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason=8609-github-app-token"
-  soleur_op_ack_or_die "  Dispatch the push to web-1? Type 'yes': "
-  mark_changed "apply-deploy-pipeline-fix was dispatched"
-  dispatch_and_watch run apply-deploy-pipeline-fix.yml -f reason=8609-github-app-token
-  soleur_op_env_upsert "$ENV_FILE" "$(K R3_RUN)" "$run"
-  concl="$(run_conclusion "$run")"
-  logs="$(gh run view "$run" -R "$REPO" --log 2>/dev/null | grep -c 'source=tier_b' || true)"
   post="$(credential_file_digest)"
-  check "run ${run} concluded success (not cancelled: the shared concurrency group keeps only the newest pending run)" "$([[ "$concl" == "success" ]]; echo $?)"
-  check "its log shows the loader at source=tier_b" "$([[ "${logs:-0}" -gt 0 ]]; echo $?)"
-  check "web-1's /etc/default/soleur-doppler-token digest changed" "$([[ -n "$post" && "$post" != "$pre" ]]; echo $?)"
-  stage_verdict
+  [[ -n "$post" ]] || { soleur_op_red "  cannot read web-1's infra-config state (/hooks/infra-config-status)"; return 1; }
+  soleur_op_env_upsert "$ENV_FILE" "$(K R3_PRE_DIGEST)" "$post"
+  gen="$(git -C "$REPO_ROOT" show origin/main:"$tf" 2>/dev/null | sed -n 's/^[[:space:]]*"github_app_runtime_token_generation=\([0-9][0-9]*\)",[[:space:]]*$/\1/p' | head -1)"
+  [[ "$gen" =~ ^[0-9]+$ ]] || { soleur_op_red "  cannot read github_app_runtime_token_generation from origin/main:${tf}"; return 1; }
+  impact "if the push breaks the credential file, web-1's next deploy or restart cannot read its config — the running site keeps serving." \
+         "set ${TIER_B_NAME} empty and bump the generation again: the file re-renders without the line (no SSH)."
+  branch="ops-8609-github-app-token-gen-$((gen + 1))"
+  show_cmd "bump github_app_runtime_token_generation ${gen} -> $((gen + 1)) in ${tf} on ${branch}; gh pr create (its merge fires the opted-in apply-deploy-pipeline-fix push)"
+  soleur_op_ack_or_die "  Open the generation PR? Type 'yes': "
+  mark_changed "a generation branch was pushed and a PR opened"
+  wt="$(mktemp -d)/r3"
+  ( cd "$REPO_ROOT" && git fetch -q origin main && git worktree add -q -b "$branch" "$wt" origin/main ) || return 1
+  (
+    trap '( cd "$REPO_ROOT" && git worktree remove --force "$wt" ) >/dev/null 2>&1 || true' EXIT
+    cd "$wt"
+    sed -i "s/\"github_app_runtime_token_generation=${gen}\",/\"github_app_runtime_token_generation=$((gen + 1))\",/" "$tf"
+    [[ "$(grep -c "\"github_app_runtime_token_generation=$((gen + 1))\"," "$tf")" == "1" ]] || exit 1
+    git add "$tf"
+    git commit -q -m "chore(8609): deliver the soleur-github-app read token to web-1 (generation $((gen + 1)))" -m "Ref #8609"
+    git push -q -u origin "$branch"
+    gh pr create -R "$REPO" --base main --head "$branch" --title "chore(8609): github_app_runtime_token_generation $((gen + 1)) (R-step 3)" \
+      --body "Ref #8609 — runbook §Runtime App key (#8609) R-step 3. Generated by the #8609 bootstrap script. Merging fires apply-deploy-pipeline-fix, which pushes the credential file with the Tier-B token to web-1." >/dev/null
+  ) || { soleur_op_red "  could not open the generation PR"; return 1; }
+  pr="$(gh pr list -R "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
+  check "generation PR opened" "$([[ -n "$pr" ]]; echo $?)"
+  stage_verdict || return 1
+  soleur_op_env_upsert "$ENV_FILE" "$(K R3_PR)" "$pr"
+  soleur_op_yellow "  Generation PR #${pr} is open. The stop below is expected: merge it, then re-run —"
+  soleur_op_yellow "  this stage then verifies the push-triggered apply-deploy-pipeline-fix run."
+  return 1
 }
 
 # =============================================================================

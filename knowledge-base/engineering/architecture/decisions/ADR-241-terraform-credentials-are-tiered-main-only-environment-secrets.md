@@ -374,12 +374,16 @@ Tier-A-readable state (D3). The loader always exports its `TF_VAR_` name and fil
 jobs that opt in, so the `prd_terraform` legacy arm cannot supply it under `--preserve-env` (D6). It
 reaches the host as one conditional line of the existing `soleur-doppler-token.tmpl` render; an
 empty variable renders byte-identical content. That render feeds cloud-init for fresh hosts and the
-hash-bound `terraform_data.deploy_pipeline_fix` push to the running web-1 (#7095). The value never
-reaches Tier-A-readable state, because the locked `hcloud` provider (1.63.0) stores `user_data` as
-a hash and the push trigger is a `sha256`. A provider bump that drops that hashing invalidates this
+`terraform_data.deploy_pipeline_fix` push to the running web-1 (#7095). That push's trigger hashes
+the KEYLESS render plus a committed `"github_app_runtime_token_generation=N"` literal, so every plan
+context (Tier-A PR plan, the drift job, the push apply, the opted-in applies) computes the same
+trigger whether or not it holds the token; delivery, re-delivery and roll-back are each a one-line
+PR bumping N. The value never reaches Tier-A-readable state, because the locked `hcloud` provider
+(1.63.0) stores `user_data` as a hash and the token travels only in the provisioner's
+`environment {}`. A provider bump that drops that hashing invalidates this
 paragraph.
 
-**A11's "immutable redeploy" is superseded for web-1** by that Terraform-declared, hash-bound
+**A11's "immutable redeploy" is superseded for web-1** by that Terraform-declared, generation-bumped
 credential push, until #6730 gives web-1 an automated replace path. The push shares its source with
 cloud-init and is not an SSH or rescue edit, so `hr-prod-host-config-change-immutable-redeploy`
 holds. web-2, whose credentials are birth-frozen, gets the line only through an immutable
