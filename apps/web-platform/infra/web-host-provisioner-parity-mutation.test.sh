@@ -330,7 +330,7 @@ fi
 
 # ── §1: resource enumeration and host-pinning ────────────────────────────────────────
 expect_red "M1 (§1 floor: a provisioner deleted)" server.tf \
-  "1: swept only 17 SSH-connected" '
+  "1: swept only 18 SSH-connected" '
 import re
 m = re.search(r"resource \"terraform_data\" \"orphan_reaper_install\" \{", s)
 assert m, "anchor missing"
@@ -339,20 +339,96 @@ s = s[:m.start()] + s[end+1:]
 '
 
 expect_red "M2 (§1: fanned out over var.web_hosts -- the #7000 change)" server.tf \
-  "for_each'd=['disk_monitor_install']" '
+  "fanned(for_each-or-count)=['disk_monitor_install']" '
 old = "resource \"terraform_data\" \"disk_monitor_install\" {"
 assert old in s
 s = s.replace(old, old + "\n  for_each = var.web_hosts", 1)
+'
+
+# The OTHER fan-out/kill-switch meta-arg: `count = 0` silently disables the sibling with
+# every row green (review enumeration 3i). Swept together with for_each.
+expect_red "M2b (§1: count = 0 silently disables the web-2 sibling)" server.tf \
+  "fanned(for_each-or-count)=['deploy_pipeline_fix_web2']" '
+old = "resource \"terraform_data\" \"deploy_pipeline_fix_web2\" {"
+assert old in s
+s = s.replace(old, old + "\n  count = 0", 1)
 '
 
 # §1 has TWO clauses -- `fanned` (M2) and `unpinned`. Nothing covered `unpinned`, so it was
 # deletable. This is the shape it exists for: the host is repointed away from web-1 WITHOUT a
 # for_each, so the fan-out check does not fire and only the pin check can catch it.
 expect_red "M3 (§1: host repointed off web-1 without for_each)" server.tf \
-  "not-web-1-pinned=" '
+  "not-web-1-or-web-2-pinned=" '
 old = "    host        = hcloud_server.web[\"web-1\"].ipv4_address\n    user        = \"root\"\n    private_key = var.ci_ssh_private_key         # null in operator-local context"
 assert old in s
 s = s.replace(old, "    host        = local.web1_ip\n    user        = \"root\"\n    private_key = var.ci_ssh_private_key         # null in operator-local context", 1)
+'
+
+# ── #9151: the web-2 sibling class (§1's second host clause + the credential boundary) ────
+# Repointing the sibling's dial to web-1 removes it from W2_DIALERS, so the presence check
+# (deploy_pipeline_fix_web2 present=) fires -- the class rule, not the pin check.
+expect_red "M4a (§1: web-2 sibling repointed to web-1)" server.tf \
+  "deploy_pipeline_fix_web2 present=False" '
+old = "    host        = hcloud_server.web[\"web-2\"].ipv4_address"
+assert old in s
+s = s.replace(old, "    host        = hcloud_server.web[\"web-1\"].ipv4_address", 1)
+'
+
+# Credential material in the sibling body: a copy-pasted bootstrap carries
+# webhook_doppler_token_env, and only the credential-exclusion check sees it.
+expect_red "M4b (§1: credential material injected into the web-2 sibling)" server.tf \
+  "credential-material references" '
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+assert old in s
+s = s.replace(old, "    local.webhook_doppler_token_env,\n" + old, 1)
+'
+
+# The RAW variable spelling (review enumeration 1g): the four-token list named
+# `webhook_doppler_token_env` but not `var.doppler_token` itself — the widened
+# `doppler_token|DOPPLER_TOKEN` set must catch it.
+expect_red "M4c (§1: raw var.doppler_token injected into the web-2 sibling)" server.tf \
+  "credential-material references" '
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+assert old in s
+s = s.replace(old, "    var.doppler_token,\n" + old, 1)
+'
+
+# The pre-encoded twin spelling (review enumeration 1h): `local.soleur_doppler_token_env_b64`
+# is base64'd credential material spelled with underscores, invisible to a
+# `webhook_doppler_token_env`-only grep.
+expect_red "M4d (§1: soleur_doppler_token_env_b64 injected into the web-2 sibling)" server.tf \
+  "credential-material references" '
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+assert old in s
+s = s.replace(old, "    local.soleur_doppler_token_env_b64,\n" + old, 1)
+'
+
+# The hooks.json channel (review enumeration 1j): the sibling delivers local.hooks_json
+# verbatim, so a credential reference added to its templatefile arg map rides a
+# SANCTIONED delivery — the block-level grep cannot see it.
+expect_red "M4e (§1: credential arg injected into hooks_json templatefile)" server.tf \
+  "templatefile args gained a credential reference" '
+old = "hooks_json = templatefile(\"${path.module}/hooks.json.tmpl\", {\n    webhook_deploy_secret = var.webhook_deploy_secret\n  })"
+assert old in s
+s = s.replace(old, "hooks_json = templatefile(\"${path.module}/hooks.json.tmpl\", {\n    webhook_deploy_secret = var.webhook_deploy_secret\n    doppler_token = var.doppler_token\n  })", 1)
+'
+
+# `script`/`scripts` remote-exec args (review enumeration 2a): an uploaded script writes
+# arbitrary paths the inline sweep cannot see — reported, never swept.
+expect_red "M4f (§2: a remote-exec scripts= arg is unprovable, not skippable)" server.tf \
+  "uses remote-exec" '
+old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
+assert old in s
+s = s.replace(old, "  provisioner \"remote-exec\" {\n    scripts = [\"${path.module}/web-probe-envwrite.sh\"]\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
+'
+
+# A same-line `inline = ["..."]` (review enumeration 2b): the old `\n\s*\]` terminator
+# missed single-line arrays entirely.
+expect_red "M4g (§2: single-line inline array is still swept)" server.tf \
+  "/etc/soleur/singleline-inline.conf is written by" '
+old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
+assert old in s
+s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
 # Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
@@ -746,7 +822,7 @@ s = s.replace(a, a + """
 # not fail loudly -- the guard still goes red, just via a different message -- so the battery
 # reports "red but NOT via <expected>" and the mutation stops being attributed to this floor.
 expect_red "M30 (§2 floor: one delivered artifact removed)" server.tf \
-  "2: swept only 58 destinations" '
+  "2: swept only 74 destinations" '
 blk = """  provisioner "file" {
     source      = "${path.module}/cron-egress-alarm@.service"
     destination = "/etc/systemd/system/cron-egress-alarm@.service"
@@ -844,7 +920,7 @@ s = s.replace(old, ins + old, 1)
 # -- the exact "clean sweep of nothing" the new floor exists to name. §2 co-fires with fifteen
 # uncovered destinations, which is inherent: §3 quantifies over an intersection §2 also owns.
 expect_red "M35 (§3 floor: the seed-baked check quietly stops checking anything)" soleur-host-bootstrap.sh \
-  "3: the seed-baked check ran over only 23" '
+  "3: the seed-baked check ran over only 27" '
 old = "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/system/$f\""
 assert old in s
 s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/units.d/$f\"", 1)
@@ -1098,8 +1174,28 @@ s = s[:i] + s[i + len(old):]
 
 expect_red "G2-3 (floor: the walk stops finding server.tf blocks)" server.tf \
   "G2: swept only 4 SSH connection blocks" '
-assert s.count("  connection {\n") >= 18
+assert s.count("  connection {\n") >= 19
 s = s.replace("  connection {\n", "  connexion {\n")
+'
+
+# A web-2 DIALER born outside server.tf (review enumeration 1k/2h): G2's host_key rules
+# would keep it pinned, but §1's sibling-class credential/destination checks are
+# server.tf-scoped — the residence rule fires instead.
+expect_red "G2-18 (a web-2-dialing connection block in a DIFFERENT .tf)" tunnel.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_phantom_web2" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-2"].ipv4_address
+    user = "root"
+    host_key = local.web_2_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
 '
 
 expect_red "G2-4 (a new connection block without host_key in a DIFFERENT .tf)" tunnel.tf \
@@ -1195,6 +1291,35 @@ j = s.index(key, i)
 s = s[:j] + "    host_key    = var.ci_ssh_private_key\n" + s[j + len(key):]
 '
 
+# ── #9151 web-2 rows: the sibling's own pin rules, mutation-proven like the web-1 set ────
+expect_red "G2-15 (web-2 sibling connection without host_key)" server.tf "(host_key x0)" '
+old = "    host_key    = local.web_2_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "", 1)
+'
+
+expect_red "G2-16 (web-2 block pins the web-1 local -- the cross-host swap)" server.tf \
+  "G2: web-2 connection block pins host_key to something other than" '
+old = "    host_key    = local.web_2_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "    host_key    = local.web_1_ssh_host_key\n", 1)
+'
+
+expect_red "G2-17 (web_2 local loses one(): a second key line would slip through)" server.tf \
+  "local.web_2_ssh_host_key (apps/web-platform/infra/server.tf:" '
+i = s.index("web_2_ssh_host_key = regex(")
+j = s.index("one([for l in split(", i)
+s = s[:j] + "element([for l in split(" + s[j + len("one([for l in split("):]
+k = s.index("startswith(trimspace(l), \"#\")]),\n  )", j)
+s = s[:k] + "startswith(trimspace(l), \"#\")], 0),\n  )" + s[k + len("startswith(trimspace(l), \"#\")]),\n  )"):]
+'
+
+expect_green "G2-C4 (a comment-only edit inside the web-2 sibling is not a violation)" server.tf '
+i = s.index("resource \"terraform_data\" \"deploy_pipeline_fix_web2\" {")
+j = s.index("\n  triggers_replace", i)
+s = s[:j] + "  # benign comment added by the mutation battery\n" + s[j:]
+'
+
 # .tf.json: a NEW file (so it is created and removed inline, not through restore()).
 G2_JSON="$SANDBOX/zz-g2.tf.json"
 _g2_json_row() { # <label> <json> <expect: red|green> <anchor>
@@ -1265,7 +1390,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=44
+FLOOR=57  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2

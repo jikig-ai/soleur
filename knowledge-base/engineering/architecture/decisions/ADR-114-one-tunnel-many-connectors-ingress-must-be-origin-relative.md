@@ -499,6 +499,22 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > that `warm_standby`'s three `web-2` `-target`s had been no-ops since #6538 was the tracking item
 > #6575 closed by deleting them.
 
+> **Amendment (2026-09-29, #9151 — the "one SSHable host" reading of I2 gets a second member,
+> reached THROUGH web-1, and the tunnel model is untouched).** The origin-relative `ssh.`
+> ingress still terminates on web-1 alone — no new ingress rule, no new Access app, no new
+> service token, no cloudflared on web-2. What changed is a *runner-side* forward inside
+> `apply-deploy-pipeline-fix.yml`: after the shared bridge opens its `access tcp` listener to
+> web-1's sshd, the workflow opens `ssh -L 127.0.0.1:2223:<web-2-private>:22` THROUGH that
+> pinned bastion session and adds a second `iptables -t nat OUTPUT` rule so Terraform's Go
+> SSH client reaches `hcloud_server.web["web-2"].ipv4_address` transparently — the ADR-220
+> second-private-host pattern one hop earlier. The new `terraform_data.deploy_pipeline_fix_web2`
+> is the only consumer; the provisioner-parity guard keeps every SSH resource pinned to a
+> committed host ({web-1, web-2}), permits no `for_each`, and requires the web-2 block to
+> carry `local.web_2_ssh_host_key` (ADR-237's second committed pin). I1 is unaffected
+> (web-2 still runs no connector); I2's constraint holds in exactly the same form it always
+> did — the *route* is origin-relative to web-1, and the bastion hop is a property of the
+> caller's session, not of the tunnel.
+
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
 Two shapes are on the table: **(a)** per-host private-net-relative ingress (`ssh-web-1.` →
