@@ -2341,7 +2341,7 @@ resource "sentry_alert" "image_freshness_mismatch" {
 # ── Cosign image-signature verify failure (#6129) ─────────────────────────────
 # ci-deploy.sh's verify_image_signature emits cosign_verify_event (op=image-verify, tags
 # verify_result + mode) on every verify failure: unsigned, wrong_identity, verify_failed,
-# rekor_unreachable, inspect_failed, cosign_absent. Since #6129 the default mode is ENFORCE, so each
+# rekor_unreachable, inspect_failed, cosign_absent. Under ENFORCE (the default from #6129, PR #9308) each
 # such event is a REFUSED web deploy: the old container stays live, but the release does not reach
 # that host. A web-1 refusal also reds the release run. A web-2 refusal is otherwise SILENT (the peer
 # fan-out does not wait on web-2's verdict), which would leave the standby on the previous version.
