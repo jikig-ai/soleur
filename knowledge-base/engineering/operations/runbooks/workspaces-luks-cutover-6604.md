@@ -272,21 +272,35 @@ forever — which the escrow proof + off-host header backup exist to prevent.
       `gh workflow run workspaces-luks-cutover.yml -f confirm=WIPE-PLAINTEXT-USER-DATA-AP-009 -f wipe_plaintext=true -f expected_plaintext_volume_id=105149570`
       It must print ONE `SOLEUR_WORKSPACES_LUKS_WIPE … result=rehearsal_ok arm=first_wipe
       volume_id=105149570` row carrying `uuid=`, `label=workspaces_plain`, `dependents=0`,
-      `hdr_sha256=`, the `discard_*` / `write_zeroes_max` / `scheduler` fields and `magic=53ef`, plus
-      the `SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE … field=last_write` row. The preflight step summary is
-      the approver's banner (`api_state`, size, server).
+      `hdr_sha256=`, the `discard_*` / `write_zeroes_max` / `scheduler` fields, `magic=53ef`,
+      `io_max=<maj:min>_rbps=157286400_wbps=157286400_…` (the cap, read back inside a real scope) and
+      `plaintext_only=<n>`, plus the `SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE … field=last_write` row and
+      one `field=plaintext_only_name detail=<workspace id>` evidence row per workspace the unmounted
+      plaintext holds that the live mount does not. The run summary repeats `plaintext_only` and
+      `io_max`. The preflight step summary is the approver's banner (`api_state`, size, server).
    c. **The ask.** Quote the rehearsal row + run id, the baseline `<n>`, and the accepted residual (the
-      LUKS volume becomes the only copy); link the draft PR B. Name everything below. The ask also
-      says: releases queue behind the `wipe` job on `web-1-swap` (so **no merge under
-      `apps/web-platform/**` lands during D**), PR B merges the same day, and the zero + read-back
+      LUKS volume becomes the only copy); link the draft PR B. Name everything below. The ask must show
+      **`plaintext_only=0`**, or name each `plaintext_only_name` workspace id and account for it (an
+      Art. 17 deletion made since 2026-07-23 is expected there; anything else is a workspace the LUKS
+      copy lost — halt). `plaintext_only=unknown` is a halt too. The ask also says: releases queue
+      behind the `wipe` job on `web-1-swap` — **from the dispatch, including the whole approval wait**,
+      because the workflow takes that lock at preflight — so **no merge under `apps/web-platform/**`
+      lands during D**; the approval has a **30-minute deadline**, after which the run is cancelled with
+      `gh run cancel <run-id>` (never left pending); PR B merges the same day; and the zero + read-back
       are capped at 150 MB/s on the plaintext device while app latency is watched.
    d. **Pause the two push-apply workflows** (a push apply in the window would plan `+create` of a
       fresh plaintext volume through `-target` transitivity):
       `gh workflow disable apply-web-platform-infra.yml` and
       `gh workflow disable apply-deploy-pipeline-fix.yml`, then wait until neither has a queued or
-      running run (the `wipe` job re-checks both and refuses otherwise). While paused,
-      `registry-host-replace-dispatch.yml` (it dispatches `apply-web-platform-infra.yml`) fails and
-      `git-data-pin-redeploy.yml` shares the host group; run neither, and **no operator-local apply**.
+      running run (the `wipe` job re-checks both before the host step, again before the detach, and
+      again before the DELETE, and refuses otherwise). While paused,
+      `registry-host-replace-dispatch.yml` (it dispatches `apply-web-platform-infra.yml`) fails, and
+      `git-data-pin-redeploy.yml` only follows apply runs (none fire while paused) and runs no
+      Terraform; run neither, and **no operator-local apply**. From the delete until PR B's
+      `manual-rerun`, `scheduled-terraform-drift.yml` reports `+create` of
+      `hcloud_volume.workspaces["web-1"]` and `hcloud_volume_attachment.workspaces["web-1"]` (and its
+      issue text suggests `terraform apply`): **that drift is expected — do not act on it, and never
+      apply locally**; PR B closes it.
    e. **The dispatch (D):**
       `gh workflow run workspaces-luks-cutover.yml -f confirm=WIPE-PLAINTEXT-USER-DATA-AP-009 -f wipe_plaintext=true -f dry_run=false -f expected_plaintext_volume_id=105149570`
       then the ONE `workspaces-luks-cutover` approval. The operator clicks it, or delegates it **in
@@ -298,8 +312,9 @@ forever — which the escrow proof + off-host header backup exist to prevent.
       being a second human check — the ask says so). Arm a watch until it concludes.
    f. **The forget:**
       `gh workflow run workspaces-plaintext-forget.yml -f confirm=FORGET-RETIRED-PLAINTEXT-VOLUME -f expected_plaintext_volume_id=105149570`
-      (serialized with every apply on `terraform-apply-web-platform-host`; if a newer pending apply
-      replaced it in the group, re-dispatch it).
+      (serialized with every apply on `terraform-apply-web-platform-host`; a re-dispatch is
+      idempotent — it reports `already_forgotten` once state is clean). Record its run id and its
+      `forgot=` output (`2`, or `0` with `already_forgotten`): PR B cites both.
    g. **Verify off-host:** `GET /v1/volumes/105149570` → `404`; `GET /v1/servers/123931471` →
       `volumes == [106443278]`; `GET /v1/volumes?name=soleur-web-platform-data` → `[]`; a fresh
       `workspaces-luks-verify.yml` run `success` with `ready=true` and `workspace_count` compared
@@ -308,19 +323,40 @@ forever — which the escrow proof + off-host header backup exist to prevent.
       `gh workflow run scheduled-prod-version-drift.yml` (a release queued behind the `wipe` job may
       have been replaced while pending — re-dispatch it if so);
       `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1d --grep SOLEUR_WORKSPACES_LUKS_WIPE`.
-   h. **PR B, the same day** (the `for_each` narrowing in `server.tf`, deletion of the forget workflow,
-      the ledger row re-scope, the destruction record, ADR-119 `accepted`, the CLO-attested legal
-      register sweep). After it merges: `gh workflow enable apply-web-platform-infra.yml`,
+   h. **PR B, the same day** (the `for_each` narrowing in `server.tf`, deletion of the forget workflow
+      and the single-use wipe code, the ledger row re-scope, the destruction record, ADR-119
+      `accepted`, the CLO-attested legal register sweep). PR B's draft `infra-validation` plan is red
+      until f has run (state still holds `["web-1"]`, so the narrowed `for_each` plans a refused
+      destroy): **after f, re-run PR B's `infra-validation`** and merge only on that green run. After it
+      merges: `gh workflow enable apply-web-platform-infra.yml`,
       `gh workflow enable apply-deploy-pipeline-fix.yml`, then
       `gh workflow run apply-web-platform-infra.yml -f reason='#6604 post-PR-B apply'` (the default
-      `manual-rerun` arm) and confirm it plans no `hcloud_volume(_attachment).workspaces` address.
-      Keep the paused window to hours — never overnight.
+      `manual-rerun` arm) and confirm it plans no `hcloud_volume(_attachment).workspaces` address. If
+      `git log <pause-sha>..main -- <apply-deploy-pipeline-fix.yml's paths>` is non-empty (a host
+      deploy-pipeline change merged while paused — `manual-rerun` never applies it), also
+      `gh workflow run apply-deploy-pipeline-fix.yml`. Keep the paused window to hours — never
+      overnight.
 
    Re-running any of b, e or f with the same inputs is the resume path: the host mode resumes on
    `arm=re_zero` (a zero interrupted after `result=begun`) or reports `arm=detached` (zeroed and
    detached, delete pending), and the forget reports `already_forgotten` once state is clean.
 
    #### Step 7 verdict table
+
+   **Ending the pause when you halt before a delete.** Every host refusal below, and every job-level
+   failure marked *End the pause* in the next table, happens **before any delete**: the pause then
+   protects nothing while it blocks every infra and host-pipeline apply. Unless D is re-dispatched
+   within the hour, end it (the run summary prints the same commands whenever `delete_issued` is not
+   `true`):
+
+   ```bash
+   gh workflow enable apply-web-platform-infra.yml
+   gh workflow enable apply-deploy-pipeline-fix.yml
+   gh workflow run apply-web-platform-infra.yml -f reason='#6604 wipe halted before the delete'
+   gh workflow run apply-deploy-pipeline-fix.yml   # only if its paths changed while paused
+   ```
+
+   Re-pause (d) before re-dispatching D.
 
    Every host refusal prints `SOLEUR_WORKSPACES_LUKS_WIPE … result=refused arm=<arm> volume_id=<id>
    reason=<slug>` to the run log and the `luks-monitor` tag BEFORE the run dies, and the same slug
@@ -334,56 +370,64 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    (an SSH drop, a cancel or the timeout) pages `wipe_aborted`, and its outcome row carries `begun=1`
    when the zero had started.
 
-   | `reason=` | Irreversible act done? | Safe to re-dispatch the same command? | Next action |
-   |---|---|---|---|
-   | `wipe_tool_missing` | No | No | A required tool is absent (`tool=`), util-linux < 2.36, or `pgrep` errored. This mode installs nothing (not even `aws`), and web-1 cannot be rebuilt or rebooted to gain one (it is LUKS-pinned). **Halt and escalate** to the infra owner with the `tool=` field; there is no automated path. |
-   | `wipe_in_progress` | Possibly (an orphaned zero is running) | Rehearsal only | A `blkdiscard` is already running (an SSH drop orphaned it). Re-dispatch the read-only rehearsal (b) until W0 passes, then re-dispatch D; it resumes on `arm=re_zero`. |
-   | `wipe_input_invalid` | No | After fixing the inputs | The pin, by-id path, size or LUKS path is malformed, or `DRY_RUN`/`CONFIRM_WIPE` is not exactly `0` or `1` (`detail=mode_flag`). Re-read preflight's banner; re-dispatch with the correct pin. |
-   | `wipe_live_mount_not_mapper` | No | No | `/mnt/data` is not the LUKS mapper — this is not a cut-over host. Run `workspaces-luks-verify.yml`; halt and escalate. |
-   | `wipe_marker_other_volume` | No | No | A persisted wipe marker names another volume id. Halt and escalate: the pin or the host state is wrong. |
-   | `wipe_target_absent_unexplained` | No | No | The pinned device is not on web-1 and no `PLAINTEXT_WIPED` marker explains it (detached by hand without a wipe?). Halt and escalate; **never** delete it by API unwiped. |
-   | `wipe_target_blank_unexplained` | No | No | The device has no filesystem signature and no marker explains it. Halt and escalate. |
-   | `wipe_target_not_ext4` | No | No | The device carries `crypto_LUKS` (the live volume's shape) or another non-ext4 signature. Halt and escalate — this is the wrong device. |
-   | `wipe_blkid_probe_failed` | No | Yes, once | `blkid -p` errored; a failed probe is not an answer. Re-dispatch once; on a repeat, escalate. |
-   | `wipe_canary_ok_absent` | No | No | No persisted `CANARY_OK=1:<uuid>` on web-1 — the cutover this retires is not on record. Halt and escalate. |
-   | `wipe_header_uuid_mismatch` | No | No | The live header UUID is not the persisted `CANARY_OK` UUID. Halt and escalate: the mapper may be backed by a re-formatted volume. |
-   | `wipe_mapper_not_luks_volume` | No | No | The mapper is backed by a device other than the LUKS volume `106443278`. Halt and escalate. |
-   | `wipe_escrow_passphrase_mismatch` | No | After re-escrow | The Doppler passphrase does not open the live header (or is unreadable). **Never wipe while the sole copy is unrecoverable**: fix the escrow (ADR-119 §(c)) and re-run the rehearsal. |
-   | `wipe_header_backup_absent` | No | After the fix `class=` names | The off-host header object for this UUID did not download. The row carries `aws_rc=` and `class=` (never aws's text). `class=not_found` or `empty_object`: re-escrow the header, then re-run the rehearsal. `class=access_denied`: the escrow read credential is wrong or revoked — fix it (re-escrowing would fail the same way). `class=network`: re-run the rehearsal; on a repeat, escalate. `class=other`: escalate. |
-   | `wipe_header_backup_mismatch` | No | After re-escrow | The escrowed header's UUID differs, or the passphrase does not open its keyslot. Re-escrow, then the rehearsal. |
-   | `wipe_header_backup_stale` | No | After re-escrow | The escrowed header differs from a fresh backup of the live one (same UUID, different keyslots), or the fresh backup failed. Re-escrow, then the rehearsal. |
-   | `wipe_target_is_mapper_backing` | No | No | The target resolves to the device backing the live mapper (path or major:minor). **Halt and escalate — this is the one refusal that stands between the zero and every user's data.** |
-   | `wipe_target_held` | No | No | Something (dm/md) holds the device. Halt and escalate. |
-   | `wipe_target_mounted` | No | No | The device is mounted somewhere. Halt and escalate. |
-   | `wipe_target_size_mismatch` | No | No | The device size is not the API's size for the pin. Halt and escalate. |
-   | `wipe_target_serial_mismatch` | No | No | udev's `ID_SERIAL` does not name `HC_Volume_<pin>`. Halt and escalate. |
-   | `wipe_target_label_mismatch` | No | No | The first-wipe target is not labelled `workspaces_plain`. Halt and escalate. |
-   | `wipe_target_has_dependents` | No | No | A `.mount`/`.swap`/`.service` depends on one of the target's device units, a unit is unloaded/inactive, none maps to the target, or the live mount unit binds one — a detach would stop it. Halt and escalate. |
-   | `wipe_deadman_armed` | No | No | A cutover dead-man is armed, firing or queued on a cut-over host. **Halt and escalate — do not let it fire**: its fire command would remount the stale 2026-07-23 plaintext over `/mnt/data` and serve every user the old copy (the fire now refuses when it finds a wipe marker or the plaintext label gone, but on this host neither holds yet). |
-   | `wipe_io_cap_unavailable` | No (from W8), or No with `PLAINTEXT_WIPE_BEGUN` persisted (from the zero's own scope, `gate_rc=97`) | Rehearsal only | The scope's own `io.max` does not carry `rbps=wbps=157286400` for the target's MAJ:MIN (`io_max=` on the row is what it read; `absent` means the io controller is not enabled on the scope's path — systemd starts such a scope uncapped with rc 0). The zero would run uncapped against the live volume's storage path. Halt and escalate. |
-   | `wipe_target_changed` | No | No | At the act, the by-id link no longer resolves to the device W6 measured, or that device no longer carries `HC_Volume_<pin>`: a volume was detached or attached between the checks and the zero. Nothing was zeroed and no marker was written. Halt and escalate; re-run the rehearsal only once the attachment is understood. |
-   | `wipe_plaintext_written_after_cutover` | No | No | The plaintext's superblock `Last write time` is later than the 2026-07-23 cutover froze it (`2026-07-23T09:45:00Z`; run 29995956562's host step ended 09:40:41Z), or unreadable (`detail=unparseable`). Something remounted it read-write since, so it may hold writes that exist on no other volume. **Halt and escalate**; never wipe until those writes are reconciled. The `field=last_write` evidence row carries the time. |
-   | `wipe_positive_control_failed` | No | No | The first 4 KiB does not carry the ext4 magic, so the read path cannot be trusted to see the zero. Halt and escalate. |
-   | `wipe_marker_write_failed` | `marker=begun`: No. `marker=wiped`: Yes — zeroed and verified, but no API write | No, until the disk is fixed | The state file on web-1's root disk (`/var/lib/workspaces-luks/state`) could not be written and read back (disk full or read-only). `marker=begun`: nothing was zeroed. `marker=wiped`: the zero completed and verified, `PLAINTEXT_WIPE_BEGUN` still locks ROLLBACK out, and the job made no API write. Halt and escalate: freeing root-disk space needs a shell. Once fixed, re-dispatch D (it resumes on `arm=re_zero`). |
-   | `wipe_blkdiscard_failed` | Partially (`PLAINTEXT_WIPE_BEGUN` persisted) | Yes | The zero itself failed (`rc=` on the row). Re-dispatch D; it resumes on `arm=re_zero` and re-runs every identity check. ROLLBACK is now refused permanently (nothing to remount). |
-   | `wipe_readback_failed` | Yes — the zero ran, the device is not all-zero | Yes | The O_DIRECT read-back found a non-zero byte (`cmp_rc`/`dd_rc` on the row, the first difference on the evidence row). Re-dispatch D (re-zero); on a repeat, halt and escalate. No API write happened. |
-   | `wipe_signature_survived` | Yes — the zero ran | Yes | `blkid` still finds a signature after the zero. Re-dispatch D once; on a repeat, escalate. No API write happened. |
+   | `reason=` | Irreversible act done? | Safe to re-dispatch the same command? | Next action | If you halt here |
+   |---|---|---|---|---|
+   | `wipe_tool_missing` | No | No | A required tool is absent (`tool=`), util-linux < 2.36, or `pgrep` errored. This mode installs nothing (not even `aws`), and web-1 cannot be rebuilt or rebooted to gain one (it is LUKS-pinned). **Halt and escalate** to the infra owner with the `tool=` field; there is no automated path. | End the pause (above) |
+   | `wipe_in_progress` | Possibly (an orphaned zero is running) | Rehearsal only | A `blkdiscard` is already running (an SSH drop orphaned it). Re-dispatch the read-only rehearsal (b) until W0 passes, then re-dispatch D; it resumes on `arm=re_zero`. | End the pause (above) |
+   | `wipe_input_invalid` | No | After fixing the inputs | The pin, by-id path, size or LUKS path is malformed, or `DRY_RUN`/`CONFIRM_WIPE` is not exactly `0` or `1` (`detail=mode_flag`). Re-read preflight's banner; re-dispatch with the correct pin. | End the pause (above) |
+   | `wipe_live_mount_not_mapper` | No | No | `/mnt/data` is not the LUKS mapper — this is not a cut-over host. Run `workspaces-luks-verify.yml`; halt and escalate. | End the pause (above) |
+   | `wipe_marker_other_volume` | No | No | A persisted wipe marker names another volume id. Halt and escalate: the pin or the host state is wrong. | End the pause (above) |
+   | `wipe_target_absent_unexplained` | No | No | The pinned device is not on web-1 and no `PLAINTEXT_WIPED` marker explains it (detached by hand without a wipe?). Halt and escalate; **never** delete it by API unwiped. | End the pause (above) |
+   | `wipe_target_blank_unexplained` | No | No | The device has no filesystem signature and no marker explains it. Halt and escalate. | End the pause (above) |
+   | `wipe_target_not_ext4` | No | No | The device carries `crypto_LUKS` (the live volume's shape) or another non-ext4 signature. Halt and escalate — this is the wrong device. | End the pause (above) |
+   | `wipe_blkid_probe_failed` | No | Yes, once | `blkid -p` errored; a failed probe is not an answer. Re-dispatch once; on a repeat, escalate. | End the pause (above) |
+   | `wipe_canary_ok_absent` | No | No | No persisted `CANARY_OK=1:<uuid>` on web-1 — the cutover this retires is not on record. Halt and escalate. | End the pause (above) |
+   | `wipe_header_uuid_mismatch` | No | No | The live header UUID is not the persisted `CANARY_OK` UUID. Halt and escalate: the mapper may be backed by a re-formatted volume. | End the pause (above) |
+   | `wipe_mapper_not_luks_volume` | No | No | The mapper is backed by a device other than the LUKS volume `106443278`. Halt and escalate. | End the pause (above) |
+   | `wipe_escrow_passphrase_mismatch` | No | After re-escrow | The Doppler passphrase does not open the live header (or is unreadable). **Never wipe while the sole copy is unrecoverable**: fix the escrow (ADR-119 §(c)) and re-run the rehearsal. | End the pause (above) |
+   | `wipe_header_backup_absent` | No | After the fix `class=` names | The off-host header object for this UUID did not download. The row carries `aws_rc=` and `class=` (never aws's text). `class=not_found` or `empty_object`: re-escrow the header, then re-run the rehearsal. `class=access_denied`: the escrow read credential is wrong or revoked — fix it (re-escrowing would fail the same way). `class=network`: re-run the rehearsal; on a repeat, escalate. `class=other`: escalate. | End the pause (above) |
+   | `wipe_header_backup_mismatch` | No | After re-escrow | The escrowed header's UUID differs, or the passphrase does not open its keyslot. Re-escrow, then the rehearsal. | End the pause (above) |
+   | `wipe_header_backup_stale` | No | After re-escrow | The escrowed header differs from a fresh backup of the live one (same UUID, different keyslots), or the fresh backup failed. Re-escrow, then the rehearsal. | End the pause (above) |
+   | `wipe_target_is_mapper_backing` | No | No | The target resolves to the device backing the live mapper (path or major:minor). **Halt and escalate — this is the one refusal that stands between the zero and every user's data.** | End the pause (above) |
+   | `wipe_target_held` | No | No | Something (dm/md) holds the device. Halt and escalate. | End the pause (above) |
+   | `wipe_target_mounted` | No | No | The device is mounted somewhere. Halt and escalate. | End the pause (above) |
+   | `wipe_target_size_mismatch` | No | No | The device size is not the API's size for the pin. Halt and escalate. | End the pause (above) |
+   | `wipe_target_serial_mismatch` | No | No | udev's `ID_SERIAL` does not name `HC_Volume_<pin>`. Halt and escalate. | End the pause (above) |
+   | `wipe_target_label_mismatch` | No | No | The first-wipe target is not labelled `workspaces_plain`. Halt and escalate. | End the pause (above) |
+   | `wipe_target_has_dependents` | No | No | A `.mount`/`.swap`/`.service` depends on one of the target's device units, a unit is unloaded/inactive, none maps to the target, or the live mount unit binds one — a detach would stop it. Halt and escalate. | End the pause (above) |
+   | `wipe_deadman_armed` | No | No | A cutover dead-man is armed, firing or queued on a cut-over host. **Halt and escalate — do not let it fire**: its fire command would remount the stale 2026-07-23 plaintext over `/mnt/data` and serve every user the old copy (the fire now refuses when it finds a wipe marker or the plaintext label gone, but on this host neither holds yet). | End the pause (above) |
+   | `wipe_io_cap_unavailable` | No (from W8), or No with `PLAINTEXT_WIPE_BEGUN` persisted (from the zero's own scope, `gate_rc=97`) | Rehearsal only | The scope's own `io.max` does not carry `rbps=wbps=157286400` for the target's MAJ:MIN (`io_max=` on the row is what it read; `absent` means the io controller is not enabled on the scope's path — systemd starts such a scope uncapped with rc 0). The zero would run uncapped against the live volume's storage path. Halt and escalate. | End the pause (above) |
+   | `wipe_target_changed` | No | No | At the act, the by-id link no longer resolves to the device W6 measured, or that device no longer carries `HC_Volume_<pin>`: a volume was detached or attached between the checks and the zero. Nothing was zeroed and no marker was written. Halt and escalate; re-run the rehearsal only once the attachment is understood. | End the pause (above) |
+   | `wipe_plaintext_written_after_cutover` | No | No | The plaintext's superblock `Last write time` is later than the 2026-07-23 cutover froze it (`2026-07-23T09:45:00Z`; run 29995956562's host step ended 09:40:41Z), or unreadable (`detail=unparseable`). Something remounted it read-write since, so it may hold writes that exist on no other volume. **Halt and escalate**; never wipe until those writes are reconciled. The `field=last_write` evidence row carries the time. | End the pause (above) |
+   | `wipe_positive_control_failed` | No | No | The first 4 KiB does not carry the ext4 magic, so the read path cannot be trusted to see the zero. Halt and escalate. | End the pause (above) |
+   | `wipe_marker_write_failed` | `marker=begun`: No. `marker=wiped`: Yes — zeroed and verified, but no API write | No, until the disk is fixed | The state file on web-1's root disk (`/var/lib/workspaces-luks/state`) could not be written and read back (disk full or read-only). `marker=begun`: nothing was zeroed. `marker=wiped`: the zero completed and verified, `PLAINTEXT_WIPE_BEGUN` still locks ROLLBACK out, and the job made no API write. Halt and escalate: freeing root-disk space needs a shell. Once fixed, re-dispatch D (it resumes on `arm=re_zero`). | End the pause (above) |
+   | `wipe_blkdiscard_failed` | Partially (`PLAINTEXT_WIPE_BEGUN` persisted) | Yes | The zero itself failed (`rc=` on the row). Re-dispatch D; it resumes on `arm=re_zero` and re-runs every identity check. ROLLBACK is now refused permanently (nothing to remount). | End the pause (above) |
+   | `wipe_readback_failed` | Yes — the zero ran, the device is not all-zero | Yes | The O_DIRECT read-back found a non-zero byte (`cmp_rc`/`dd_rc` on the row, the first difference on the evidence row). Re-dispatch D (re-zero); on a repeat, halt and escalate. No API write happened. | End the pause (above) |
+   | `wipe_signature_survived` | Yes — the zero ran | Yes | `blkid` still finds a signature after the zero. Re-dispatch D once; on a repeat, escalate. No API write happened. | End the pause (above) |
 
-   Job-level failures (no `reason=` row):
+   Job-level failures (no `reason=` row; the run's `::error::` annotation, step outputs and summary carry
+   `reason=`/`outcome=` whenever the host printed them):
 
-   | Symptom | Irreversible act done? | Safe to re-dispatch? | Next action |
-   |---|---|---|---|
-   | preflight refuses `already deleted … dispatch workspaces-plaintext-forget.yml` | Yes (earlier run) | — | Run f. |
-   | preflight / `wipe` presence proof fails | No | After fixing the token | The token cannot see web-1 (another project, or ADR-241 loader drift). Fix the credential source. |
-   | `wipe` pre: `api_state changed since preflight` | No | Yes | Re-dispatch so the approver sees the current state. |
-   | `wipe` pre: an apply workflow not `disabled_manually`, or a queued run | No | Yes, after d | Complete d. |
-   | `wipe` pre: no verify run in 24 h / no `ready=true` | No | Yes, after a | Complete a. |
-   | `wipe` pre: write-capability probe (labels `PUT`) not `200` | No | After fixing the token | The loader exported a read-only token (ADR-241 O5). Supply a write token; nothing was done. |
-   | `wipe` host: not exactly one success row / wrong id / result ≠ `api_state` / ssh rc ≠ 0 | Possibly — read the rows | Yes | Read the `SOLEUR_WORKSPACES_LUKS_WIPE` rows in the log; re-dispatch D (resume arms). No API write happened. |
-   | `wipe` api: detach action `error`, or `DELETE` not `204`/`404` | Zero done; volume attached or detached | Yes | Re-dispatch D: preflight classifies `detached` and the host step reports `arm=detached`, then the API step deletes. |
-   | `wipe` api: volume still answers after delete, or server volumes ≠ `[106443278]` | Delete issued | — | Re-read with the GETs in g; escalate if the server still lists `105149570`. |
-   | forget: pin still `200`, name lookup non-empty, or state identity mismatch | No state change | Yes, once the cause is fixed | The volume is not gone or the state is not the expected object. Never `state rm` by hand. |
-   | forget: serial/lineage/list post-check fails | State was written | — | Halt and escalate with the run log (it prints no state content). |
+   | Symptom | Irreversible act done? | Safe to re-dispatch? | Next action | If you halt here |
+   |---|---|---|---|---|
+   | preflight refuses `already deleted … dispatch workspaces-plaintext-forget.yml` | Yes (earlier run) | — | Run f. | No — the volume is gone: continue with f and PR B. |
+   | preflight: `expected_plaintext_volume_id must equal the constant pin` / `not the constant` (any step) | No | After fixing the input | The pin must be exactly `105149570`. | End the pause (above) |
+   | preflight / `wipe` presence proof fails | No | After fixing the token | The token cannot see web-1 (another project, or ADR-241 loader drift). Fix the credential source. | End the pause (above) |
+   | `wipe` pre: `api_state changed since preflight` | No | Yes | Re-dispatch so the approver sees the current state. | End the pause (above) |
+   | `wipe` pre: an apply workflow not `disabled_manually`, or a queued run | No | Yes, after d | Complete d. | — (the pause is not in place) |
+   | `wipe` pre: no successful verify run on main in 24 h / no host-emitted `ready=true` line / `workspace_count` below its baseline | No | Yes, after a | Complete a. A shrunken `workspace_count` is a halt: read the verify run and escalate. | End the pause (above) |
+   | `wipe` pre: write-capability probe (labels `PUT`) not `200` | No | After fixing the token | The loader exported a read-only token (ADR-241 O5). Supply a write token; nothing was done. | End the pause (above) |
+   | `wipe` host: boot token `carries characters a Doppler token never has` | No | After re-minting | The `WORKSPACES_LUKS_BOOT_TOKEN` secret is malformed (it is written into a sourced `.env`). Re-publish it with the DEFAULT apply. | End the pause (above) |
+   | `wipe` host: `did not return a …/wl-cutover.XXXXXX bundle dir` | No — nothing ran | No | web-1 answered `mktemp` with something else (a second line would have injected into `GITHUB_ENV`). Halt and escalate: treat web-1's root shell as suspect. | End the pause (above) |
+   | `wipe` host: `bundle upload to web-1 failed — nothing ran` | No | Yes | A tunnel blip during the upload. Re-dispatch D. | End the pause (above) |
+   | `wipe` host: not exactly one success row / wrong id / result ≠ `api_state` / ssh rc ≠ 0 | Possibly — read the rows | Yes | Read `reason=`/`outcome=` on the annotation (or the `SOLEUR_WORKSPACES_LUKS_WIPE` rows); re-dispatch D (resume arms). No API write happened. | End the pause (above) |
+   | `wipe` api: an apply workflow re-enabled (before the detach, or before the DELETE) | Zero done; maybe detached, not deleted | Yes, after d | Someone lifted the pause mid-run. Re-pause (d), then re-dispatch D (it resumes on the detached or attached arm). | — (re-pause) |
+   | `wipe` api: detach action `error` | Zero done; the volume is normally **still attached** | Yes | Re-dispatch D: preflight classifies `attached`, the host takes `arm=re_zero` (it re-zeroes and re-reads the whole device at the cap — expected, not a runaway second wipe), then the API step retries the detach and deletes. | End the pause (above) |
+   | `wipe` api: `DELETE` not `204`/`404` after a successful detach | Zero done; detached, not deleted | Yes | Re-dispatch D: preflight classifies `detached`, the host reports `arm=detached`, then the API step deletes. | End the pause (above) |
+   | `wipe` api: volume still answers after delete, or server volumes ≠ `[106443278]` | Delete issued | — | Re-read with the GETs in g; escalate if the server still lists `105149570`. | No — a delete was issued: continue with g, then f. |
+   | `wipe` post: `wipe_post_api_mount_not_mapper` / `wipe_post_api_readyz_failed` (`reason=` on the step output; Sentry `op:workspaces-luks-drift`) | The API step acted | No | After the detach/delete, `/mnt/data` is no longer the mapper, or the app no longer answers readyz: users are affected. Run `workspaces-luks-verify.yml` now and escalate; never `rollback=true` (it is refused, and there is no plaintext copy). | Depends on `delete_issued` in the summary. |
+   | forget: pin still `200`, name lookup non-empty, or state identity mismatch | No state change | Yes, once the cause is fixed | The volume is not gone or the state is not the expected object. Never `state rm` by hand. | No — keep the pause until PR B. |
+   | forget: serial/lineage/list post-check fails | State was written | — | Halt and escalate with the run log (it prints no state content). | No — keep the pause until PR B. |
 
    ROLLBACK after this step is refused permanently (`outcome=refused_plaintext_wiped mode=rollback`):
    there is no plaintext copy to remount. **Sequence Step 0 is never run after step 7.**

@@ -112,7 +112,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 | **Lawful basis** | Art. 5(1)(e) storage limitation, Art. 17(1)(a) (the retained copy defeats every erasure made since the cutover), Art. 32(1) (the plaintext copy is the exposure the LUKS migration exists to close). AP-009 deviation recorded in the ADR-119 addendum of 2026-09-28: a superseded copy frozen at the 2026-07-23 cutover. |
 | **Recoverability** | *(CLO-attested)* Logical full-device zero verified by a direct-IO read-back; physical media reclamation per the Hetzner DPA. A zero on a network block volume does not attest physical erasure. |
 | **Passphrase copies** | Doppler `prd_workspaces_luks` (proven by W4); Terraform state `random_password.workspaces_luks` (not proven by this act). |
-| **Other copies of workspace data** | The live LUKS volume `106443278` (now the only copy); web-2's plaintext volume (empty, serving-weight 0, #6931); the plaintext `git_data` volume (#6897); the web-1 root-disk snapshot deleted under #8734; the CLEAN_STRAY root-disk stray deleted 2026-07-19. |
+| **Other copies of workspace data** | The live LUKS volume `106443278` (the only copy after the wipe); web-2's plaintext volume (empty, serving-weight 0, #6931); the plaintext `git_data` volume (#6897); the web-1 root-disk snapshot deleted under #8734; the CLEAN_STRAY root-disk stray deleted 2026-07-19. |
 
 ## Completion checklist
 

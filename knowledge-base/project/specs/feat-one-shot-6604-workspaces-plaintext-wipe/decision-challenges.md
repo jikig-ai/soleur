@@ -19,12 +19,14 @@ the API delete") already point this way; this records the second PR explicitly.
 ## Taste (plan-review, DHH vs code-simplicity/CTO): pause the push-apply workflows instead of a create-guard
 
 **Finding.** Between the delete and PR B, every push apply would plan `+create` of a fresh plaintext
-volume. A new destroy-guard surface would reverse #6919/T55 and needs an edit to a file 725 bytes under
-its size cap.
+volume. A new destroy-guard surface would reverse #6919/T55 and needs an edit to a file a few hundred
+bytes under its size cap.
 
 **Chosen.** `gh workflow disable` both push-apply workflows for the window (named in the go-ahead),
 re-enable and `manual-rerun` after PR B. Cost: infra merges in the window stay unapplied until the
-rerun, and the dispatched apply arms are unavailable.
+rerun, and the dispatched apply arms are unavailable. The `manual-rerun` arm re-applies only
+`apply-web-platform-infra.yml`'s targets: a merge to `apply-deploy-pipeline-fix.yml`'s `paths:` in the
+window is **not** covered by it and needs its own dispatch after PR B (runbook step h).
 
 **Re-evaluate when:** the window cannot be kept to hours, or a second retirement needs the same window.
 

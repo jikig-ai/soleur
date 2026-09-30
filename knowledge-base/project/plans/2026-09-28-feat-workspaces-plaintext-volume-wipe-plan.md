@@ -152,10 +152,12 @@ routine container release, as every `apps/web-platform/**` merge does.) The live
 - **`moved` into a singleton + `removed`** → dead on arrival (targeted plans error; reproduced).
 - **A new destroy-guard surface counting workspace-volume creates** (plan review) → P5 for the
   delete→PR-B window; a two-workflow pause buys the same property without reversing #6919/T55 or
-  touching a file 725 bytes under its size cap.
-- **A keepalive ticker, a timed 1 GiB read, an enumerated W0 binary list, a `PLAINTEXT_DEV`
-  cross-check** (plan review) → covered respectively by `ServerAliveInterval`, a fixed 240-minute
-  timeout, natural pre-write failure, and the filesystem label `workspaces_plain`.
+  touching a file a few hundred bytes under its size cap.
+- **A keepalive ticker, a timed 1 GiB read, a `PLAINTEXT_DEV` cross-check** (plan review) → covered
+  respectively by `ServerAliveInterval`, a fixed 240-minute timeout, and the filesystem label
+  `workspaces_plain`. (The enumerated W0 tool list was cut here, then restored at implementation:
+  "natural pre-write failure" does not hold for tools first used after the zero, such as `cmp` and
+  `debugfs`, so W0 checks them up front and refuses `wipe_tool_missing`.)
 - **A `data "hcloud_volumes"`-driven `for_each`** → still needs the `state rm` for `-refresh=false`
   plans and leaves a permanent API read in every plan.
 
@@ -450,7 +452,7 @@ forget, state) does not. Every push apply of this root reaches `hcloud_volume.wo
 `hcloud_volume.workspaces[each.key]`) and would plan `+create` of a fresh plaintext volume — and the
 shared destroy-guard deliberately stopped counting volume creates in #6919 (test T55), because a halt
 on them fired on valid dispatches. A new filter surface would reverse that decision and add an edit
-to a file 725 bytes under its size cap. Instead, for the window only:
+to a file a few hundred bytes under its size cap. Instead, for the window only:
 
 1. Before D: `gh workflow disable apply-web-platform-infra.yml` and
    `gh workflow disable apply-deploy-pipeline-fix.yml`, then wait until neither has a queued or
@@ -458,10 +460,14 @@ to a file 725 bytes under its size cap. Instead, for the window only:
 2. After PR B merges: `gh workflow enable` both, then `gh workflow run apply-web-platform-infra.yml
    -f reason='#6604 post-PR-B apply'` (the default `manual-rerun` arm applies exactly what the skipped
    push apply would have), and confirm it plans no `hcloud_volume.workspaces` / attachment address.
+   If `git log <pause-sha>..main` touches any of `apply-deploy-pipeline-fix.yml`'s `paths:`, also
+   `gh workflow run apply-deploy-pipeline-fix.yml`: the `manual-rerun` arm does not apply those, so a
+   merge to them in the window would otherwise stay unapplied.
 
 Other members of the `terraform-apply-web-platform-host` group are unaffected, but
 `registry-host-replace-dispatch.yml` dispatches `apply-web-platform-infra.yml` and fails while it is
-disabled, and `git-data-pin-redeploy.yml` shares the group; the runbook names both. The dispatched arms
+disabled, and `git-data-pin-redeploy.yml` only follows `apply-web-platform-infra.yml` runs (none fire
+while it is paused) and runs no Terraform; the runbook names both. The dispatched arms
 of `apply-web-platform-infra.yml` are unavailable while it is disabled, and an operator-local apply
 must not run in the window.
 
@@ -503,7 +509,14 @@ delete protection for 106443278 to a precondition of that work.
   names `hcloud_volume.workspaces[*]`.
 - `model.c4` `workspacesVolume` description: the backstop is gone.
 - Runbook step 7 marked done with evidence.
-- A comment on #6931 making Hetzner delete protection for volume 106443278 a precondition of that work.
+- A comment on #6931 making Hetzner delete protection for volume 106443278 a precondition of that work,
+  and either `delete_protection = true` on `hcloud_volume.workspaces_luks` in this PR or a
+  `workspaces-luks-recut` gate refusal of volume 106443278 — whichever does not collide with the recut
+  escape hatch (decided when PR B is drafted, recorded in its body).
+- Remove the single-use wipe code (~1,900 lines): the `CONFIRM_WIPE` mode, `wipe_plaintext()` and its
+  helpers, the `wipe` job and its preflight/rehearsal wiring, `workspaces-luks-wipe.test.sh`, and loopback
+  Session W. **Keep** the `PLAINTEXT_WIPE_*` / physical-witness refusal at the top of `rollback()` and in
+  the dead-man fire string, with their tests: they are what keeps ROLLBACK refused forever.
 - PR body: `Closes #6604`, `Closes #6588`; #6897 comment updating item 1 (workspaces web-1 retired;
   web-2 → #6931; `git_data` untouched).
 
@@ -639,8 +652,9 @@ version-parity coverage. `actionlint` on both workflows.
    - the forget: `gh workflow run workspaces-plaintext-forget.yml -f confirm=FORGET-RETIRED-PLAINTEXT-VOLUME -f expected_plaintext_volume_id=105149570`;
    - re-running any of these same commands for a resume arm (`re-zero`, `detached`, forget-only);
    - after PR B merges: `gh workflow enable` both workflows and the `manual-rerun` dispatch.
-   The ask also states: releases queue behind the `wipe` job (they share `web-1-swap`), so no merge
-   under `apps/web-platform/**` should land during D; PR B merges the same day; the zero and the
+   The ask also states: releases queue behind the `wipe` job (they share `web-1-swap`, held from
+   preflight through the approval wait), so no merge under `apps/web-platform/**` should land during D;
+   the approval has a 30-minute deadline, after which the run is cancelled (`gh run cancel <run-id>`); PR B merges the same day; the zero and the
    read-back are capped at 150 MB/s on the plaintext device, and app latency is watched through D.
 
 ### Phase 6 — After the go-ahead (operator-authorized D), verify off-host, then PR B
@@ -655,8 +669,11 @@ version-parity coverage. `actionlint` on both workflows.
    monitor shows no downtime; `gh workflow run scheduled-prod-version-drift.yml` confirms the image on
    web-1 matches the latest `apps/web-platform/**` commit on `main` (a release queued behind the `wipe`
    job may have been replaced while pending — re-dispatch it if so).
-4. Finish PR B (§E), CLO-attested; merge the same day; `gh workflow enable` both; dispatch the
-   `manual-rerun` apply; post-merge `scheduled-terraform-drift.yml` green.
+4. After step 2's forget, re-run PR B's `infra-validation` (its draft plan is red until the state no
+   longer holds `["web-1"]`) and merge only on that green run. Finish PR B (§E), CLO-attested; merge the
+   same day; `gh workflow enable` both; dispatch the `manual-rerun` apply (plus
+   `apply-deploy-pipeline-fix.yml` if its paths changed while paused, §D); post-merge
+   `scheduled-terraform-drift.yml` green.
 5. Comment evidence on #6604 and #6588; confirm the next sweeper run PASSes and closes #6604.
 
 ## Files to Edit
@@ -834,6 +851,12 @@ releases fired by merging PR A and PR B, the same as any `apps/web-platform/**` 
 - **If this leaks, the user's data is exposed via:** device bytes printed into the Actions log, Better
   Stack or Sentry (`cmp -l`/`-b`, an echoed `dd` buffer) — forbidden, and the one `cmp` line is scrubbed
   and capped.
+- **If this leaks, the user's data is exposed via:** the forget workflow's `terraform state pull`, whose
+  state holds `random_password.workspaces_luks` (the LUKS passphrase) — piped straight into a
+  field-selecting `jq`, never written to disk, printed, tee'd or uploaded (Guard 4 row 6c).
+- **If this lands broken, the user experiences:** a brief app restart on web-1 when merging PR A or PR B
+  fires the routine container release (`web-platform-release.yml`), the same as any
+  `apps/web-platform/**` merge — named in the go-ahead ask.
 - **Brand-survival threshold:** `single-user incident`
 
 **Accepted residual risk (stated, not hidden).** Today the stale 2026-07-23 plaintext copy is, weakly,
@@ -1149,7 +1172,9 @@ for the pinned id, matching `api_state`, is observed in the same job.
 - [ ] `infra-validation`'s web-platform plan shows `main`'s baseline counts and no workspaces address
       for web-1; after merge, both apply workflows re-enabled (`gh workflow view … --json state` →
       `active`), the `manual-rerun` apply plans no `hcloud_volume(_attachment).workspaces` address,
-      `scheduled-terraform-drift.yml` green, and `GET /volumes?name=soleur-web-platform-data` → `[]`.
+      `scheduled-terraform-drift.yml` green, and `GET /volumes?name=soleur-web-platform-data` → `[]`;
+      `apply-deploy-pipeline-fix.yml` dispatched and green if `git log <pause-sha>..main` touched its
+      `paths:` during the pause.
 - [ ] `lint-encryption-posture.py` green with the re-scoped row.
 - [ ] Destruction record complete, then ADR-119 `status: accepted`; legal-register sweep
       CLO-attested.
