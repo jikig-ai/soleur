@@ -80,5 +80,6 @@ feeds it. A branch fed by nothing is covered only by the fixture you write for i
     Prevention: close a waiting turn with the stop tag, not a forward-looking sentence.
 
 ## Tags
+
 category: test-failures
 module: apps/web-platform/infra
