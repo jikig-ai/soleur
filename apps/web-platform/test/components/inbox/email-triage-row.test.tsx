@@ -263,8 +263,14 @@ describe("EmailTriageRow — action error surfacing (N5)", () => {
 
     // Default mock (200) takes over for the retry.
     fireEvent.click(screen.getByLabelText("Acknowledge email"));
+
+    // Positive anchor: the retry reached the success path.
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole("alert")).toBeNull();
+
+    // onChanged fires before the transition that clears the alert commits
+    // (setActionError(null) is in the async transition's sync prefix), so wait
+    // on the effect. Non-vacuous: the alert was proven present above (#9126).
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 });
 

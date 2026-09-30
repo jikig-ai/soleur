@@ -128,13 +128,13 @@ Append an "Insight 7" to `knowledge-base/project/learnings/test-failures/2026-06
 
 ### Pre-merge (PR)
 
-- [ ] AC1: the retry test in `apps/web-platform/test/components/inbox/email-triage-row.test.tsx` contains, after the second click, a `waitFor` on `onChanged` (called once) followed by a **separate** `waitFor(() => expect(screen.queryByRole("alert")).toBeNull())`; the un-waited `expect(screen.queryByRole("alert")).toBeNull()` at the end of that case is gone. The working-tree diff (`git diff --stat origin/main -- apps/web-platform`) lists only the test file.
-- [ ] AC2: the isolated file passes: `cd apps/web-platform && npx vitest run --project component test/components/inbox/email-triage-row.test.tsx` -> all tests pass.
-- [ ] AC3 (deterministic gate, P2): a scratch mutation that removes `setActionError(null)` from `asyncFn` in `components/inbox/email-triage-row.tsx` makes the retry test FAIL (absence wait times out showing the `<p role="alert">`); after reverting, `git diff -- apps/web-platform/components` is empty. This is the merge-gating proof that the assertion still guards the behavior.
+- [x] AC1: the retry test in `apps/web-platform/test/components/inbox/email-triage-row.test.tsx` contains, after the second click, a `waitFor` on `onChanged` (called once) followed by a **separate** `waitFor(() => expect(screen.queryByRole("alert")).toBeNull())`; the un-waited `expect(screen.queryByRole("alert")).toBeNull()` at the end of that case is gone. The working-tree diff (`git diff --stat origin/main -- apps/web-platform`) lists only the test file.
+- [x] AC2: the isolated file passes: `cd apps/web-platform && npx vitest run --project component test/components/inbox/email-triage-row.test.tsx` -> all tests pass.
+- [x] AC3 (deterministic gate, P2): a scratch mutation that removes `setActionError(null)` from `asyncFn` in `components/inbox/email-triage-row.tsx` makes the retry test FAIL (absence wait times out showing the `<p role="alert">`); after reverting, `git diff -- apps/web-platform/components` is empty. This is the merge-gating proof that the assertion still guards the behavior.
 
 ### Verification evidence (non-gating, recorded in the PR body)
 
-- [ ] E1: Phase 1 baseline and post-fix results from the CPU-burner harness: 40 busy-loop `sh -c 'while :; do :; done'` burners under `timeout`, PIDs captured from `$!` and killed individually (a PreToolUse hook blocks the full-command-line form of pkill), looping `npx vitest run --project component <file> -t "retry after"`. Report pre-fix failures/runs and post-fix failures/runs with **>= 20 post-fix runs** (at a ~20% pre-fix rate, 20 clean runs leave ~1% odds of a still-broken test passing). Host- and load-dependent, hence evidence and not a merge gate; the deterministic gate is AC3 plus the source-level root cause.
+- [x] E1: Phase 1 baseline and post-fix results from the CPU-burner harness: 40 busy-loop `sh -c 'while :; do :; done'` burners under `timeout`, PIDs captured from `$!` and killed individually (a PreToolUse hook blocks the full-command-line form of pkill), looping `npx vitest run --project component <file> -t "retry after"`. Report pre-fix failures/runs and post-fix failures/runs with **>= 20 post-fix runs** (at a ~20% pre-fix rate, 20 clean runs leave ~1% odds of a still-broken test passing). Host- and load-dependent, hence evidence and not a merge gate; the deterministic gate is AC3 plus the source-level root cause.
 - [ ] E2: PR body contains `Closes #9126` (ship-phase concern).
 
 ### Post-merge (operator)
