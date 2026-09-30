@@ -1237,11 +1237,11 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    git push origin vinngest-v1.1.16
    ```
 
-   Today this fires `build-inngest-bootstrap-image.yml` through `push: tags` → builds +
-   SHA-verifies + pushes the image. It does NOT deploy. **Once #8209 removes `push: tags`**, a
-   hand-pushed tag starts nothing: confirm no build run exists for it (below), then dispatch it
-   once with `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`
-   (ADR-232 §8, R1).
+   A hand-pushed tag starts nothing: `build-inngest-bootstrap-image.yml` has no `push: tags`
+   trigger (removed by #9262, ADR-232 A5), so every build is dispatched from `main`. Confirm no
+   build run exists for the tag (below), then dispatch it once:
+   `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` (ADR-232 §8, R1).
+   That run builds, SHA-verifies and pushes the image. It does NOT deploy.
 
    **Confirming no build run exists for a tag** (required before ANY manual dispatch — a
    second build of one tag moves its digest). Build runs are titled
@@ -1272,7 +1272,10 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    git push origin vinngest-v1.1.17
    ```
 
-   That push runs its own publish and bump; do not re-run the failed run. The deletion is
+   That push starts nothing (no `push: tags` trigger since #9262). Confirm no build run exists
+   for the new tag (above), then dispatch the build once from `main`:
+   `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-v1.1.17`. Do not
+   re-run the failed run. The deletion is
    **required**, not hygiene: AC6 of `cloud-init-inngest-bootstrap.test.sh` and the bump
    take the semver-max over tags merged into `main` (ADR-232 §7), so while the tag is off
    `main` it reds only the PR carrying its commit (and branches built on it) — but the
@@ -1318,7 +1321,7 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    | `::error::tag:` WITH `tag_state=unknown` (`verify-failed`, `ls-remote-failed` at verify, an `http-*` from the ref POST), or a ref POST / verify hang killed at the step timeout (no `::error::` line; the name was recorded before the POST); Slack says the tag MAY exist | The ref POST was attempted, so the tag may exist even though the step failed. Check `git ls-remote --tags origin refs/tags/<tag> 'refs/tags/<tag>^{}'`. **Absent:** re-run the mint. **Present and peeling to the commit the run logged:** confirm no build run exists for it (above), then dispatch exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. **Present but peeling elsewhere:** do not dispatch; delete it per ADR-232 §7 only when no build run exists for it, then re-run the mint. Never reuse the name. |
    | `::error::dispatch:` | The tag exists and is the merged max. Confirm no build run exists for it (above), then run the line the step printed, exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. Never delete or reuse the tag. `reason=ls-remote-failed` means the origin was unreachable, not that the tag is missing. |
    | The build or the bump failed after a successful dispatch | Re-run that build run (it posts its own Slack). |
-   | R12: a bump PR held with signed ≠ target after two auto-mints in flight | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max-tag> -f mirror_only=true` (digest-preserving; the bump re-arms auto-merge). |
+   | R12: a bump PR held with signed ≠ target after two auto-mints in flight | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max-tag> -f mirror_only=true` (digest-preserving). Since #9262 a `mirror_only` bump never arms auto-merge: it updates the PR and leaves it held, with a body line saying a `mirror_only` backfill cannot attest provenance. Review the held PR, then merge it (`gh pr merge <n> --squash`). |
    | A later run ends `result=noop` with `::notice::base=<tag>`, but that tag has no build run | An earlier dispatch was lost. Confirm no build run exists for it (above), then run `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once. |
    | R8: `base=` names a tag that reached `main` through a merge commit and has no image | Delete that tag per ADR-232 §7 (it is off-main content), then re-run the mint. |
 
@@ -1332,10 +1335,10 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    AC6 reds `main` while it stands (main-health-monitor files `ci/main-broken`), and the
    next publish's bump moves the pin back up. A *rebuild* of an off-main tag is refused.
 2. **The pin bump is authored automatically** by the publish workflow's
-   `bump-cloud-init-pin` job (ADR-232): a `soleur-ai[bot]` PR on `soleur/inngest-pin-vX.Y.Z`
+   `bump-cloud-init-pin` job (ADR-232): a `soleur-infra[bot]` PR (`soleur-ai[bot]` before #9262) on `soleur/inngest-pin-vX.Y.Z`
    with auto-merge armed when this run's zot mirror reports `ok` and the image carries an
    `org.opencontainers.image.revision` label naming the tag's commit (unlabelled legacy images
-   are opened held). The detail below is the **manual fallback**, for when that job fails (it
+   are opened held, and since #9262 so is every `mirror_only` run's PR). The detail below is the **manual fallback**, for when that job fails (it
    posts to Slack) or holds the PR. **Never use it after a refusal at stage `args`,
    `ancestry`, or `resolve`** — a hand-written pin fixes none of them:
    - `args`: a workflow copy from before #8747 (the tag is likely off `main`).
