@@ -46,6 +46,13 @@ For a workspace whose **connected repo ships its own committed `plugins/soleur/`
 | **Non-colliding workspace symlink `<workspace>/.soleur-plugin` → deployed**, point the SDK there (#6117's proposed direction) | Still routes the SDK load through a symlink in the untrusted workspace dir (a malicious repo can pre-create it). Its only claimed advantage — "`/app/shared` is not sandbox-accessible" — is refuted: the sandbox binds the entire root read-only, and `getPluginPath()` is already the boot-validated path. |
 | **Document-only the ignored `pluginPath` arg** (no runtime guard) | A comment does not stop a future dev from wiring a workspace-derived path into `plugins:`. The loaded-gun `assertTrustedPluginPath` converts that regression into a loud production failure. |
 | **Regenerate the ADR-079 canary fixture as part of this change** (the original request's framing) | A no-op: the fixture is produced without `plugins:`/`--setenv` in the projection, so neither the plugin-path change nor `CLAUDE_PLUGIN_ROOT` injection can alter it. Retained only as a defensive contingency. |
+| **Widen or re-tune `unkept-promise-hook.sh` regexes** so a question list stops matching (2026-09-30) | Buys the one phrasing only; the hook's own header (KNOWN RESIDUALS 0/1) states widening cannot be complete. The env opt-out covers every phrasing. |
+| **Reword `CRM_LEAD_DIRECTIVE`** to avoid closing on "I'll show you a review" (2026-09-30) | Prompt-tuning around a hook that must not run in web sessions; leaves every other Concierge closing exposed. |
+| **Emit `session_ended{turn_complete}` from the cc path** (2026-09-30) | `clear_streams` also resets `workflow` and `spawnIndex`, blanking the sticky workflow bar after every cc turn; a `stream_end`-scoped client idle transition ends the turn without that. |
+| **Accumulate text instead of replacing per block (W8)** (2026-09-30) | Changes multi-block semantics for every turn, far beyond this defect; markup-only blocks are dropped at the runner instead. |
+| **SDK `disableAllHooks`** (2026-09-30) | All-or-nothing: it would also disable the plugin's `PreToolUse` security guard `browser-snapshot-credential-guard.sh`, trading a leak for a lost guard. The per-hook env opt-out disables exactly one hook. |
+| **Exclude hooks at the SDK plugin binding** (a web-only `hooks.json` or a filtered plugin copy) (2026-09-30) | Per-hook exclusion needs a second hooks file or a filtered plugin copy; deferred pending a spike on whether the SDK exposes a hook filter. |
+| **One `SOLEUR_RUNTIME=web-concierge` tag read by operator-CLI hooks** (2026-09-30) | Better long-term shape than one variable per hook, and recorded as a follow-up; per-hook variables were kept now because they also serve as operator kill switches, mirroring `SOLEUR_DISABLE_COMPACTION_HOOKS`. |
 
 ## Amendments
 
@@ -90,3 +97,18 @@ This premise spans all ~28 anchored sites (Slices B + C + Slice D) plus the SDK/
 - **`assertTrustedPluginPath` is lexical, not mount-verifying.** It checks the `/app/`-prefix of the (path-resolved) string; it does **not** stat the mount. A `/app/<attacker-writable>` path would pass — but controlling `args.pluginPath` at all requires a code change (both factories source it from `getPluginPath()`), so this is a defense-in-depth boundary, not the primary control.
 
 The previous "holds by construction" guarantee (which rested on the invariant never being violated) is now an enforced precondition on link 1.
+
+### 2026-09-30 — plugin command hooks execute in web sessions; operator-CLI-only hooks self-disable via a platform env override (`SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK`)
+
+The plugin binding (`plugins:[{type:"local"}]`) loads the platform-deployed plugin's `hooks.json`, not only its skills and agents. `settingSources:[]` blocks `.claude/settings.json` hooks; it does **not** exclude the plugin's own command hooks. This was not recorded above and the C4 `api` container said the opposite.
+
+**Incident.** In the web Concierge, `unkept-promise-hook.sh` (a `Stop` hook written for the operator CLI) blocked a CRM question list whose closing sentence read "I'll show you a review before saving…". Its block reason told the model to write `<stop>OPERATOR-GATE: …</stop>`; that second assistant message replaced the list in the chat bubble (text is replaced per block, W8) and the chat then stayed on "Still working…" because the cc path never returns the client to idle.
+
+**Decision.**
+
+- Operator-CLI-only plugin hooks read a `SOLEUR_DISABLE_*` variable and exit early. `buildAgentEnv` sets `SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1` through `AGENT_ENV_OVERRIDES` (not the allowlist), so an ambient value cannot re-enable it. `buildAgentQueryOptions` is the single env chokepoint for the legacy runner and the cc runner.
+- The runner drops `<stop>…</stop>` markup from each assistant text block (`server/stop-gate-markup.ts`) and reports it as a body-free Sentry warning (`op:stop-gate-markup-stripped`), so the markup never reaches a user-visible surface whichever layer produces it. The legacy `agent-runner.ts` receives cumulative partials character by character, so complete-tag stripping there is unsound without buffering; it relies on the opt-out and is recorded as an acknowledged residual.
+- A cc turn returns the client to idle on `stream_end` for the cc router (`chatReducer`), without touching `workflow`/`spawnIndex`.
+- `test/plugin-stop-hooks-web-parity.test.ts` derives the `Stop` hook population from `hooks.json` and requires each hook to be `web-safe`, `web-disabled` or `deferred` with an issue number. The scope is the `Stop` event only, because it is the one event that can force an extra model turn and rewrite the visible reply; `SessionStart`, `PreCompact` and `PreToolUse` command hooks are not classified by it (tracked separately).
+
+**Accepted trade-off.** Web sessions no longer run the unkept-promise guard. The hook's own header says it matters more for non-technical users, but its block reason speaks operator vocabulary a chat user must never see; the unkept-promise class in web is left to the Concierge system prompt. `browser-cleanup-hook.sh` (also a `Stop` hook, so also running in web sessions) is registered `deferred` under #9281 because whether its host-level Chrome match can reach another tenant's process is unverified.
