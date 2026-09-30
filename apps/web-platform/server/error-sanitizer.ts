@@ -49,7 +49,7 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
   [ERR_FILE_TOO_LARGE]:
     "The file exceeds the 20 MB size limit. Please choose a smaller file.",
   [ERR_UNSUPPORTED_FILE_TYPE]:
-    "This file type is not supported. Please upload an image (PNG, JPEG, GIF, WebP) or PDF.",
+    "This file type is not supported. Please upload an image (PNG, JPEG, GIF, WebP), a PDF, or a Markdown (.md) or text (.txt) file.",
   [ERR_UPLOAD_FAILED]:
     "The file upload failed. Please try again.",
   [ERR_ATTACHMENT_NOT_FOUND]:

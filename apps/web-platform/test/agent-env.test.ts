@@ -50,6 +50,9 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   DISABLE_AUTOUPDATER: "1",
   DISABLE_TELEMETRY: "1",
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+  // Plugin Stop hook `unkept-promise-hook.sh` is operator-CLI vocabulary; the web
+  // Concierge loads the plugin's hooks.json, so it must opt out (ADR-093 amendment).
+  SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
 };
 
 describe("buildAgentEnv", () => {
@@ -107,6 +110,15 @@ describe("buildAgentEnv", () => {
     for (const [key, value] of Object.entries(EXPECTED_OVERRIDES)) {
       expect(env[key]).toBe(value);
     }
+  });
+
+  test("operator-only Stop hook opt-out is set for both schemes and an ambient value cannot override it", () => {
+    // Rides AGENT_ENV_OVERRIDES, not the allowlist: an ambient "0" must lose.
+    vi.stubEnv("SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK", "0");
+    const apiKeyEnv = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+    const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
+    expect(apiKeyEnv.SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK).toBe("1");
+    expect(oauthEnv.SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK).toBe("1");
   });
 
   test("omits allowlisted vars not present in process.env", () => {

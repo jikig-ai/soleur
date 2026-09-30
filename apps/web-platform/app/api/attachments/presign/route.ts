@@ -7,22 +7,12 @@ import { verifiedUserId } from "@/server/request-auth";
 import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
 import {
-  ALLOWED_ATTACHMENT_TYPES,
+  ATTACHMENT_EXTENSION_BY_TYPE,
   MAX_AGENT_READABLE_PDF_SIZE,
   MAX_ATTACHMENT_SIZE,
   isPdfAttachment,
+  resolveAttachmentContentType,
 } from "@/lib/attachment-constants";
-
-function getExtension(contentType: string): string {
-  const map: Record<string, string> = {
-    "image/png": "png",
-    "image/jpeg": "jpeg",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "application/pdf": "pdf",
-  };
-  return map[contentType] || "bin";
-}
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -48,19 +38,27 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid_request" }, { status: 400 });
   }
 
-  const { filename, contentType, sizeBytes, conversationId } = body;
+  const { filename, sizeBytes, conversationId } = body;
 
-  // Validate file type
-  if (!ALLOWED_ATTACHMENT_TYPES.has(contentType)) {
+  // Validate file type. The server re-resolves the canonical type from the
+  // (filename, reported type) pair: the client is untrusted, and cached old
+  // clients still send the raw browser-reported `file.type` (which is "" or
+  // application/octet-stream for a .md). Everything below — the PDF cap and
+  // the storage-path extension — derives from the RESOLVED type.
+  const contentType = resolveAttachmentContentType({
+    contentType: body.contentType,
+    filename,
+  });
+  if (!contentType) {
     return NextResponse.json({ error: "unsupported_file_type" }, { status: 400 });
   }
 
   // Validate file size
   // Closes #3332: PDFs are bounded by the agent-readable cap (24 MB raw)
-  // alongside the generic 20 MB attachment cap. Note that an unsupported
-  // Content-Type is already rejected above, but isPdfAttachment branches on
-  // filename extension too — this hardens the cap if ALLOWED_ATTACHMENT_TYPES
-  // is later widened to include octet-stream-with-extension.
+  // alongside the generic 20 MB attachment cap. `contentType` is the RESOLVED
+  // type (see above), so the PDF branch keys on the type the server decided,
+  // not on the client's reported value; `isPdfAttachment` also honours a `.pdf`
+  // filename as a second signal.
   // Number.isFinite catches NaN/Infinity from a coerced sizeBytes.
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
     return NextResponse.json({ error: "file_too_large" }, { status: 400 });
@@ -106,7 +104,7 @@ export async function POST(request: Request) {
   }
 
   // Generate storage path
-  const ext = getExtension(contentType);
+  const ext = ATTACHMENT_EXTENSION_BY_TYPE[contentType];
   const storagePath = `${userId}/${conversationId}/${randomUUID()}.${ext}`;
 
   // Create signed upload URL

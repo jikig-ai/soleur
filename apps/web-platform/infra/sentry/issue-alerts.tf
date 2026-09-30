@@ -1836,6 +1836,101 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
   }
 }
 
+# #8609 / ADR-241 D10 — the web host's runtime GitHub App key, checked at boot and at deploy.
+#
+# BOOT (web_host_github_app_key_boot). After the first `docker run`, soleur-host-bootstrap.sh runs
+# the canary key probe (`GET /app`, slug soleur-ai) in the serving container and emits ONE
+# soleur-boot-emit stage per outcome: `github_app_key_ok` or one of the six below. A SEPARATE
+# rule, not six more stages on web_terminal_boot_fatal above: the boot is not aborted (the
+# container is already up), so folding them into "terminal-boot-fatal" would page a degraded key
+# as a dead host and teach the reader to discount that rule — the web_private_nic_boot_gate
+# precedent. Without a stage-filtered rule these events land in the shared, always-open
+# "soleur-cloud-init boot stage" group and page nobody (observability review P1-1).
+# `value = 0` pages the first event: every condition is a NON-ok emit (`github_app_key_ok` is
+# deliberately absent), the same failure-only precedent as web_terminal_boot_fatal.
+# `_transport` is included although it does not block a deploy: at boot it means the host could
+# not prove its key at all, and R5/R7 read web-2's key state from exactly these events.
+# `_ok_fallback` (warning) is a key GitHub ACCEPTED that did not come from the isolated project
+# (source != isolated: the prd copy, before R6). It is NOT an ok for R5/R6, which read only
+# `github_app_key_ok`; paging it keeps a fallback boot from passing silently. Expected on every
+# web host boot until R3 delivers the read token, so a page then is informational.
+#
+# DEPLOY (ci_deploy_github_app_key). ci-deploy.sh's curl emitter sends feature=ci-deploy
+# op=github-app-key for every classification at warning or error (a classification and a length
+# only, never Doppler stderr): env_hijack (a refused runtime-hijack name in prd; deploy ABORT),
+# unverified_image (unsigned or wrong identity; no key handed out), fetch_failed and merge_failed
+# (the isolated-project read or the env-file overlay), key_missing and probe_rejected (canary
+# refusal), probe_transport (warning: GitHub unreachable or rate-limited; promotes) and
+# probe_absent (warning: the image has no probe, so acceptance went unchecked; promotes — the same
+# level the boot rule pages on). The info classes (no_token, the pre-R3 state; ok; probe_ok;
+# verified_ref_unrecorded) are journald-only and never reach Sentry, so every event here is
+# non-ok. The rule matches the op, not a class list, so a new emitter class pages unedited.
+#
+# Distinct `frequency_minutes` 29 and 32 avoid Sentry POST-time exact-duplicate dedup (both unused).
+# Judge severity by the event's host_name / level, not by the rule name. Runbook:
+# infra-credential-tiers-8209.md, "Runtime App key (#8609)".
+resource "sentry_alert" "web_host_github_app_key_boot" {
+  organization      = var.sentry_org
+  name              = "web-host-github-app-key-boot"
+  enabled           = true
+  frequency_minutes = 29
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "any-short"
+      conditions = [
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_rejected" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_missing" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_transport" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_probe_absent" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_exec_failed" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_ok_fallback" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+resource "sentry_alert" "ci_deploy_github_app_key" {
+  organization      = var.sentry_org
+  name              = "ci-deploy-github-app-key"
+  enabled           = true
+  frequency_minutes = 32
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "ci-deploy" } },
+        { tagged_event = { key = "op", match = "eq", value = "github-app-key" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-workspace-sync-health.ts: a daily probe that
 # emits `feature=workspace-sync-health` events via reportSilentFallback for both
 # user-actionable findings (op ∈ {ready-null-installation, stale-sync-failed,
@@ -2326,6 +2421,65 @@ resource "sentry_alert" "image_freshness_mismatch" {
       logic_type = "all"
       conditions = [
         { tagged_event = { key = "op", match = "eq", value = "image-freshness" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── Inngest host provisioning failure, non-pull (#9176) ───────────────────────
+# The dedicated inngest host's soleur-inngest-provision unit (ADR-257) reports through
+# soleur-boot-emit (cloud-init-inngest.yml), which tags each event stage/detail/host_id/host_name.
+# Once its on_exit trap is armed, every non-zero exit emits stage=provision_attempt_failed at
+# warning with detail `rc=<rc>.attempt=<n>.why=<last_stage>.iid=<iid>` (the earlier xtrace refusal
+# and a SIGKILL emit nothing). So the isolation-check FATAL, provision-fsm-busy, a bootstrap exit,
+# an unnamed arm and a TimeoutStartSec kill all arrive as this one stage, told apart by why=. A
+# degraded bootstrap (SQLite-only, no latch, not retried until the next boot) emits
+# stage=bootstrap_done_degraded at warning once per boot; it is paged too.
+#
+# logic_type = "all" is load-bearing. Every web and inngest host boot stage shares ONE issue group
+# (WEB-PLATFORM-4S, "soleur-cloud-init boot stage"), and the nc row alone passes for any event whose
+# detail lacks the string, so under "any" this rule would page on every boot.
+#
+# A pull miss is excluded: both pull-fatal arms set last_stage=inngest_pull_fatal and emit
+# stage=inngest_pull_fatal (paged by zot_mirror_fallback_rate) before exiting, so on_exit's
+# `why=inngest_pull_fatal` event would page the same group a second time. Emitted is not delivered
+# (soleur-boot-emit has no retry; a lost POST shows as sentry-emit-FAILED in Better Stack). nc is a
+# case-insensitive SUBSTRING match: keep pull-fatal stage names distinct from any stage that must
+# page.
+#
+# value = 0 pages on the first event (see zot_mirror_fallback_rate). frequency_minutes = 120: the
+# unit retries without limit (~8 attempts in the first hour, ~4/h once backed off — the comment on
+# soleur-inngest-provision.service), so this re-pages at most every 2 h. The throttle is per issue
+# group and shared by both stages: a once-per-boot degraded event arriving within 2 h of a failure
+# page is suppressed and never re-emitted (runbook covers the read). Distinct from every other
+# rule's frequency in the root (the op-contract test enforces it), which avoids Sentry POST-time
+# duplicate dedup. Arms dark until the next inngest-host-replace delivers the unit (ADR-257
+# §Status). Reading and quieting a page: runbook inngest-server.md § "Reading an
+# inngest-provision-failure page".
+resource "sentry_alert" "inngest_provision_failure" {
+  organization      = var.sentry_org
+  name              = "inngest-provision-failure"
+  enabled           = true
+  frequency_minutes = 120
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "stage", match = "in", value = "bootstrap_done_degraded,provision_attempt_failed" } },
+        { tagged_event = { key = "detail", match = "nc", value = "why=inngest_pull_fatal" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
