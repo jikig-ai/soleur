@@ -542,8 +542,15 @@ T0 remount + replay from LUKS", never a total loss.
 but a post-canary abort is fix-forward first: `cleanup()` has already restarted the app on the LUKS
 mount. See [the triage table](#dead-man-and-abort-triage-9045).
 
-The script enforces this. When `/mnt/data` is the mapper and the persisted `CANARY_OK` matches the
-live volume's LUKS UUID, a `rollback=true` dispatch refuses (Sentry `rollback_refused_post_cutover`).
+The script enforces this. When the persisted `CANARY_OK` matches the live volume's LUKS UUID, a
+`rollback=true` dispatch refuses (Sentry `rollback_refused_post_cutover`), **whatever `/mnt/data` is
+mounted on now**. That includes a reboot whose boot unlock failed (`/mnt/data` empty, the mapper
+closed, so the header cannot be read: it fails closed) and a plaintext mount left by an earlier
+rollback. The row carries `mount_src=` (what `/mnt/data` was on). Only a different live header, a
+later re-format, is not this cutover. Before the 2026-09-30 review the check keyed on "the mapper is
+mounted", so an unacked rollback after a failed boot unlock would have served the 2026-07-23 copy and
+stranded every LUKS write; this closes that residual, which sat next to DC-4 (a drifted remount
+source), and the record-status gate below closes the remount half of it.
 Add `-f rollback_ack_luks_writes=true` only once the stranded writes have a reconciliation plan.
 The rollback restarts the app only when the plaintext volume actually mounted. A failed remount
 leaves the app down and pages `rollback_remount_failed`. An acknowledged **pre-wipe** `rollback=true`
@@ -700,7 +707,7 @@ Other dead-man rows and reasons:
 | `deadman_fired_before_disarm` | A fire raced the host-canary disarm and reverted the mount. The run rolled back before `docker start`. | As above. |
 | `host_canary_workspace_count_mismatch`, `host_canary_baseline_missing` | The mounted copy's workspace count does not match what G3 counted in this run, or G3's count is missing. Rolled back before `docker start`. | Do not re-dispatch blind. Compare the counts in the run log, then file a tracked issue. |
 | `workspace_count_persist_failed` | G3 could not count the copy's workspaces. The run stopped at G3 and rolled back, losslessly. | Read the counter error in the run log; fix, then re-dispatch. |
-| `rollback_refused_post_cutover` | A `rollback=true` dispatch found the cutover had succeeded (or could not read the LUKS header to rule it out), and refused. The row reads `outcome=refused_post_cutover mode=rollback`; nothing changed. | Only re-dispatch with `-f rollback_ack_luks_writes=true` once the stranded LUKS writes have a reconciliation plan. |
+| `rollback_refused_post_cutover` | A `rollback=true` dispatch found the cutover had succeeded (or could not read the LUKS header to rule it out), and refused. This holds whatever `/mnt/data` is mounted on: the row reads `outcome=refused_post_cutover mode=rollback mount_src=<source or none>`. `mount_src=none` after a reboot means the boot unlock failed. Nothing changed. | Only re-dispatch with `-f rollback_ack_luks_writes=true` once the stranded LUKS writes have a reconciliation plan. |
 | `cutover_aborted_post_canary` (fatal) | Any post-canary abort, including tail failures (`green_run_degraded_queue`, `luks_monitor_timer_enable_failed`), not only an app failure. | Read the outcome row. |
 | `result=not_armed prior=<substate>` | A `rollback=true` dispatch found no timer armed by this run; `prior` is what it stopped. | None, unless `prior=waiting` (a stale armed timer was cancelled). |
 | `result=already_disarmed` | A rollback found this run had already disarmed its timer at the host canary. | None. |

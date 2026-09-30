@@ -1383,11 +1383,27 @@ if ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_post_cu
 else
   no "J2 the acknowledged post-cutover rollback did not run cleanly (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
-rb_case "1:uuid-live" FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live
-if ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_post_cutover$'; then
-  ok "J3 ROLLBACK=1 on a host NOT cut over (mount is the plaintext) runs without the ack"
+# J3/J3b/J3c — a persisted CANARY_OK for the live header means the cutover COMPLETED, whatever /mnt/data
+# is mounted on NOW (#9286 review): after a reboot whose boot unlock failed (/mnt/data empty) or with the
+# plaintext already remounted, an unacked ROLLBACK=1 would serve the 2026-07-23 copy and strand every
+# LUKS write. So the ack is required off the mapper too: refused before any umount/mount/start, the row
+# naming the mount source it saw; the same dispatch WITH the ack proceeds.
+for j3 in "J3:/dev/sdz9:uuid-live" "J3c::"; do
+  IFS=: read -r j3_id j3_src j3_uuid <<<"$j3"
+  rb_case "1:uuid-live" FINDMNT_MOUNT_SRC="$j3_src" CRYPTSETUP_UUID="$j3_uuid"
+  if died && has '^EMIT_DRIFT rollback_refused_post_cutover$' && outF 'strand' && nhas '^umount[[:space:]]' \
+    && nhas '^mount[[:space:]]' && nhas '^docker (stop|start) ' \
+    && markerF "$DM result=cutover_aborted outcome=refused_post_cutover mode=rollback mount_src=${j3_src:-none}"; then
+    ok "$j3_id a persisted CANARY_OK with /mnt/data on [${j3_src:-nothing}] (not the mapper) still refuses an unacked ROLLBACK=1 (mount_src=${j3_src:-none})"
+  else
+    no "$j3_id an unacked post-cutover ROLLBACK=1 off the mapper ([${j3_src:-nothing}]) was not refused (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:200}"
+  fi
+done
+rb_case "1:uuid-live" FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live ROLLBACK_ACK_LUKS_WRITES=1
+if ran && has '^umount[[:space:]]' && has '^mount /dev/sdz9[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_post_cutover$'; then
+  ok "J3b the same off-mapper post-cutover ROLLBACK=1 WITH the ack runs (umount, remount the record)"
 else
-  no "J3 a not-cut-over rollback was refused (rc=$CASE_RC) ${CASE_OUT:0:240}"
+  no "J3b an acknowledged off-mapper post-cutover rollback was refused or did not remount (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
 rb_case "1:uuid-old" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=uuid-new \
   DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP=/dev/sdz9
@@ -1423,10 +1439,12 @@ else
   no "J7b the non-ok-record ROLLBACK=1 mounted or mis-recorded (rc=$CASE_RC): $(grep -F 'cutover_aborted' "$MARKER_LOG" | tr '\n' '|')"
 fi
 # J8 — the plaintext remounted but the mapper is STILL OPEN (a close that failed EBUSY): a decrypted
-# copy is live, so the rollback is not clean either — rollback_stacked, non-zero.
+# copy is live, so the rollback is not clean either — rollback_stacked, non-zero. (Acknowledged: a
+# persisted CANARY_OK for the live header requires the ack whatever the mount source — J3.)
 run_case "$CUTOVER" "MAPPER=\"\$WORKSPACES_STAGING\"; persist_state CANARY_OK '1:uuid-live'; trap cleanup EXIT; eval \"\$RB_TEXT\"" \
   'rollback cleanup assert_rollback_not_post_cutover' \
-  ROLLBACK=1 RB_TEXT="$RB_TEXT" ACTIVE_UNITS="$T37_ACT" CRYPTSETUP_DEV=/dev/sdz7 FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live
+  ROLLBACK=1 RB_TEXT="$RB_TEXT" ACTIVE_UNITS="$T37_ACT" CRYPTSETUP_DEV=/dev/sdz7 FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live \
+  ROLLBACK_ACK_LUKS_WRITES=1
 if died && markerF "$DM result=cutover_aborted outcome=rollback_stacked mode=rollback" && has '^EMIT_DRIFT rollback_stacked$'; then
   ok "J8 a ROLLBACK=1 that leaves the mapper open exits non-zero with outcome=rollback_stacked mode=rollback"
 else
@@ -1636,7 +1654,7 @@ echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
 # still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=185
+FREEZE_MIN_PASS=187
 [ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
 harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
 [ "$fail" -eq 0 ]

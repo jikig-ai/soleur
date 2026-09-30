@@ -1003,17 +1003,20 @@ rollback() {
 
 # assert_rollback_not_post_cutover — #9098 J. A ROLLBACK=1 dispatch after a SUCCESSFUL cutover
 # remounts the plaintext copy frozen at the cutover and strands, on the LUKS volume, every write users
-# made since docker start — the #6812 stranding, by hand. So refuse it when $MOUNT is exactly the
-# mapper AND the persisted run-keyed CANARY_OK=1:<uuid> names the header now backing that mapper,
-# unless the operator acknowledges the stranding (ROLLBACK_ACK_LUKS_WRITES=1, the workflow's
-# rollback_ack_luks_writes input). FAIL-CLOSED on an unreadable live header UUID while the mapper is
-# mounted and a CANARY_OK is persisted: "cannot tell" is not "not cut over", and the ack is the override.
-# A different header (a later re-format) or a plaintext mount is not this cutover and proceeds.
+# made since docker start — the #6812 stranding, by hand. So refuse it when the persisted run-keyed
+# CANARY_OK=1:<uuid> names the header now backing the mapper, WHATEVER $MOUNT is mounted on right now
+# (#9286 review: a reboot whose boot unlock failed leaves /mnt/data empty, and a plaintext mount after
+# an earlier rollback is still a completed cutover — keying on "the mapper is mounted" let an unacked
+# rollback serve the 2026-07-23 copy), unless the operator acknowledges the stranding
+# (ROLLBACK_ACK_LUKS_WRITES=1, the workflow's rollback_ack_luks_writes input). FAIL-CLOSED on an
+# unreadable live header UUID (a closed mapper included) while a CANARY_OK is persisted: "cannot tell"
+# is not "not cut over", and the ack is the override. Only a DIFFERENT live header (a later re-format)
+# is not this cutover and proceeds.
 # The key is the HEADER, not the run: STATE_FILE is append-only and read_state returns the LAST
 # CANARY_OK, so a later cutover that reuses the same header and dies before its own canary is refused
 # too, and the refusal text then overstates the stranding. That is fail-closed; the ack is the override.
 assert_rollback_not_post_cutover() {
-  local src persisted p_uuid mapper_dev live_uuid=""
+  local src persisted p_uuid mapper_dev live_uuid="" m
   # #6604 step 7 — FIRST, before any other probe: once the plaintext copy is gone (a wipe marker, or the
   # mapper mounted with the recorded PLAINTEXT_DEV not `ok`) there is nothing to remount. rollback()
   # carries the same check as its own first line (it covers every caller); this copy runs it BEFORE the
@@ -1027,7 +1030,6 @@ assert_rollback_not_post_cutover() {
     _rollback_refuse rollback_refused_plaintext_record_gone refused_plaintext_record_gone "$(_plaintext_gone_msg). Unmounting $MAPPER would take every workspace offline; rollback_ack_luks_writes does not override this." "$(_plaintext_gone_fields)"
   fi
   src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
-  [ "$src" = "$MAPPER" ] || return 0
   persisted="$(read_state CANARY_OK)"
   case "$persisted" in 1:*) ;; *) return 0 ;; esac
   p_uuid="${persisted#1:}"
@@ -1035,10 +1037,11 @@ assert_rollback_not_post_cutover() {
   [ -n "$mapper_dev" ] && live_uuid="$(cryptsetup luksUUID "$mapper_dev" 2>/dev/null || true)"
   if [ -n "$live_uuid" ] && [ -n "$p_uuid" ] && [ "$live_uuid" != "$p_uuid" ]; then return 0; fi
   if [ "${ROLLBACK_ACK_LUKS_WRITES:-0}" = "1" ]; then
-    log "WARN: ROLLBACK_ACK_LUKS_WRITES=1 — rolling back a COMPLETED cutover (mount=$MAPPER, header $(_vscrub "${live_uuid:-<unreadable>}")); every write since docker start stays on the LUKS volume and must be reconciled by hand"
+    log "WARN: ROLLBACK_ACK_LUKS_WRITES=1 — rolling back a COMPLETED cutover (mount=$(_vscrub "${src:-none}"), header $(_vscrub "${live_uuid:-<unreadable>}")); every write since docker start stays on the LUKS volume and must be reconciled by hand"
     return 0
   fi
-  _rollback_refuse rollback_refused_post_cutover refused_post_cutover "ROLLBACK refused: $MOUNT is the LUKS mapper and the persisted CANARY_OK ($(_vscrub "$persisted")) matches the live header ($(_vscrub "${live_uuid:-<unreadable>}")) — this cutover COMPLETED. Rolling back now would remount the plaintext frozen at the cutover and strand every write made on the LUKS volume since docker start. Fix forward instead; to roll back anyway, re-dispatch with rollback_ack_luks_writes=true (ROLLBACK_ACK_LUKS_WRITES=1) and reconcile the stranded writes by hand."
+  m="$(_deadman_detail "${src:-none}")"
+  _rollback_refuse rollback_refused_post_cutover refused_post_cutover "ROLLBACK refused: the persisted CANARY_OK ($(_vscrub "$persisted")) matches the live header ($(_vscrub "${live_uuid:-<unreadable>}")) — this cutover COMPLETED ($MOUNT is on '$(_vscrub "${src:-nothing}")' now). Rolling back now would remount the plaintext frozen at the cutover and strand every write made on the LUKS volume since docker start. Fix forward instead; to roll back anyway, re-dispatch with rollback_ack_luks_writes=true (ROLLBACK_ACK_LUKS_WRITES=1) and reconcile the stranded writes by hand." " mount_src=${m// /_}"
 }
 
 # _rollback_refuse <drift slug> <outcome> <message> [row fields] — the ONE shape of a ROLLBACK-mode

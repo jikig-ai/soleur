@@ -1136,12 +1136,15 @@ The mechanics live in `workspaces-cutover.sh`:
   exit status checked, and resumes writers. It pages through the fatal Sentry drift
   `cutover_aborted_post_canary`. If the mapper re-assert fails, it stops the app and the writers, so
   nothing writes to a mount that is not the mapper. The runbook makes this path fix-forward only.
-- **`ROLLBACK=1` refuses after a successful cutover.** When `/mnt/data` is the mapper and the
-  persisted `CANARY_OK` matches the live volume's LUKS UUID, a rollback dispatch refuses unless the
-  `rollback_ack_luks_writes` input is set. Such a rollback strands every write made since
-  `docker start` on the LUKS volume. It also refuses, with the same override, when the mapper is
-  mounted and `CANARY_OK` is persisted but the live header UUID cannot be read or the persisted
-  UUID is empty: an unmeasurable match fails closed. A refusal records `outcome=pre_freeze`.
+- **`ROLLBACK=1` refuses after a successful cutover.** When the persisted `CANARY_OK` matches the
+  live volume's LUKS UUID, a rollback dispatch refuses unless the `rollback_ack_luks_writes` input
+  is set. Such a rollback strands every write made since `docker start` on the LUKS volume. It also
+  refuses, with the same override, when `CANARY_OK` is persisted but the live header UUID cannot be
+  read (a closed mapper included) or the persisted UUID is empty: an unmeasurable match fails closed.
+  A refusal records `outcome=refused_post_cutover mode=rollback mount_src=<source>`. (Corrected
+  2026-09-30, PR #9286 review: the check no longer requires `/mnt/data` to be on the mapper. Keyed on
+  the mount, an unacked rollback after a failed boot unlock, with `/mnt/data` empty, would have
+  served the stale plaintext.)
 - **An unattended fire pages.** `logtail_exploration_alert.workspaces_luks_deadman_fired` (ADR-218
   semantics) matches `op=workspaces-luks-deadman result=fired` from `soleur-web-platform`. This
   closes the #6812 six-hour silence. The alert auto-resolves after ten quiet minutes; that does not
