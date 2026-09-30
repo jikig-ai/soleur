@@ -201,6 +201,9 @@ COPY --from=builder /app/dist/server ./dist/server
 # bwrap) with no runtime TypeScript/SDK dependency. The fixture is version-
 # consistent with this image's SDK because both are baked at build time.
 COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
+# GitHub App key acceptance probe (#8609): ci-deploy.sh `docker exec`s it in the canary before the
+# swap and the boot path in the booted container. Standalone node:crypto + fetch, like the canary.
+COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
 
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)

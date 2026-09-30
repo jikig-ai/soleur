@@ -476,6 +476,55 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "ci-deploy-github-app-key": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "ci-deploy"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "github-app-key"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 32,
+    "name": "ci-deploy-github-app-key",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "container-restart-burst": {
     "actionFilters": [
       {
@@ -1748,6 +1797,87 @@
       }
     ],
     "triggerLogicType": "any-short"
+  },
+  "web-host-github-app-key-boot": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_exec_failed"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_missing"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_ok_fallback"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_probe_absent"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_rejected"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_transport"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 29,
+    "name": "web-host-github-app-key-boot",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
   },
   "web-host-private-nic-boot-gate": {
     "actionFilters": [
