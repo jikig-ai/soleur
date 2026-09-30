@@ -186,6 +186,31 @@ describe("handleConversationMessages — observability + auth + ownership", () =
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
+  it("hides a pre-fix markup-only assistant row and strips an embedded stop-gate span on read", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
+    mockFrom
+      .mockReturnValueOnce(mockQueryChain(conversationRow))
+      .mockReturnValueOnce(
+        mockQueryChain([
+          { id: "m-1", role: "user", content: "I want to enter a new CRM lead", leader_id: null, created_at: "t1" },
+          { id: "m-2", role: "assistant", content: "<stop>OPERATOR-GATE: I need the lead's details.</stop>", leader_id: "cc_router", created_at: "t2" },
+          { id: "m-3", role: "assistant", content: "Here you go.\n\n<stop>BLOCKED: x</stop>", leader_id: "cc_router", created_at: "t3" },
+          { id: "m-4", role: "user", content: "<stop>OPERATOR-GATE: user typed this</stop>", leader_id: null, created_at: "t4" },
+        ]),
+      );
+
+    const { handleConversationMessages } = await import("@/server/api-messages");
+    const res = makeRes();
+    await handleConversationMessages(makeReq("Bearer ok"), res, "conv-1");
+
+    expect(res._status).toBe(200);
+    const body = JSON.parse(res._body);
+    expect(body.messages.map((m: { id: string }) => m.id)).toEqual(["m-1", "m-3", "m-4"]);
+    expect(body.messages[1].content).toBe("Here you go.");
+    // User rows are never rewritten.
+    expect(body.messages[2].content).toContain("OPERATOR-GATE");
+  });
+
   it("returns 200 with empty messages — adds H1-diagnostic Sentry breadcrumb", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
     mockFrom

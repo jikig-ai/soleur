@@ -2359,18 +2359,18 @@ verify_image_signature() {
     [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
     return 0
   fi
-  # Verify via the pinned cosign container (ADR-087 Design B′). The app image is a
-  # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
-  # through the host's unrestricted egress (no ghcr.io in the container allowlist),
-  # and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
+  # Verify via the pinned cosign container (ADR-087 Design B′). Since #8036 1c the image
+  # and its OCI-attached .sig are served by zot on the private net (no host-side GHCR
+  # pull remains): `--network host` routes the .sig fetch through the host network, so
+  # the verifier also resolves names through the host's /etc/hosts (where #9169 denies
+  # ghcr.io), and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
   # zot_gate_and_login) is mounted :ro so cosign can authenticate that fetch.
   # Trust is the locally-pinned trusted_root.json (mounted :ro) with `--offline`, so
   # no live Fulcio/Rekor/TUF egress is needed. `docker pull` of the image does NOT
-  # pull the .sig referrer, so the fetch (host egress) is still required.
+  # pull the .sig referrer, so the .sig fetch from zot is still required.
   # Edge B (#6122): a zot-pulled digest lives on plain-HTTP zot on the private net, so
-  # the .sig referrer fetch needs --allow-insecure-registry. When the pull fell back to
-  # GHCR the digest is a ghcr.io ref and the flag stays off — image+auth+sig move
-  # together. The zot auths entry was written into $GHCR_DOCKER_CONFIG by
+  # the .sig referrer fetch needs --allow-insecure-registry (off for any digest not on zot).
+  # The zot auths entry was written into $GHCR_DOCKER_CONFIG by
   # zot_gate_and_login, so the mounted :ro config authenticates the fetch — PROVIDED cosign
   # reads it. #8037: the pinned image runs as uid 65532 (home /home/nonroot) and sets neither
   # HOME nor DOCKER_CONFIG, so the original `/root/.docker/config.json` mount was never read and
@@ -3007,6 +3007,32 @@ logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-un
 # deploy, making the line unreachable — kept for completeness).
 logger -t "$LOG_TAG" "DEPLOY_SCRIPT_SHA sha256=${_ci_deploy_script_sha_full:-unknown}" 2>/dev/null || true
 unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
+
+# #9169 — GHCR_DENY: is this host's ghcr.io hosts-file deny in force? Same semantics as the
+# registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
+# sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
+# (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
+# in server.tf proves pkg-containers.githubusercontent.com too. Fail-open: the probe is bounded by
+# `timeout 5` (this script already needs coreutils timeout; a missing one reads `unknown`) and can
+# never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
+# (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.
+_ghcr_blocked_state() {
+  local addrs=""
+  addrs=$(timeout 5 getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u) || addrs=""
+  # A herestring, not `printf | grep -q`: under this script's pipefail an early grep exit could
+  # turn a match into a non-zero pipeline status.
+  if [ -z "$addrs" ]; then
+    echo unknown
+  elif grep -qvxE '0\.0\.0\.0|::' <<<"$addrs"; then
+    echo 0
+  else
+    echo 1
+  fi
+}
+_ghcr_blocked=$(_ghcr_blocked_state 2>/dev/null) || _ghcr_blocked=unknown
+case "$_ghcr_blocked" in 1 | 0 | unknown) ;; *) _ghcr_blocked=unknown ;; esac
+logger -t "$LOG_TAG" "GHCR_DENY ghcr_blocked=$_ghcr_blocked" 2>/dev/null || true
+unset _ghcr_blocked
 
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"

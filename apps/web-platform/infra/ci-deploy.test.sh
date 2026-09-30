@@ -76,6 +76,25 @@ MOCK
   chmod +x "$1/logger"
 }
 
+# #9169: ci-deploy.sh's GHCR_DENY probe runs `getent ahosts ghcr.io` on EVERY invocation. Installed
+# by default so no test ever does a real lookup (which could stall up to its 5 s bound on a
+# no-network runner). MOCK_GETENT_MODE: sink (default) | routable | unresolvable (exit 2) | hang.
+# Refuses any other argv (exit 64) so a changed probe query cannot pass against this fixture.
+create_mock_getent() {
+  cat > "$1/getent" << 'MOCK'
+#!/bin/bash
+[[ "$*" == "ahosts ghcr.io" ]] || { echo "getent mock: unexpected argv: $*" >&2; exit 64; }
+case "${MOCK_GETENT_MODE:-sink}" in
+  sink) printf '0.0.0.0         STREAM ghcr.io\n0.0.0.0         DGRAM\n::              STREAM\n' ;;
+  routable) printf '140.82.121.34   STREAM ghcr.io\n' ;;
+  unresolvable) exit 2 ;;
+  hang) exec /bin/sleep 30 ;;  # absolute: the default sleep mock returns at once
+esac
+exit 0
+MOCK
+  chmod +x "$1/getent"
+}
+
 create_mock_sudo() {
   cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
@@ -1090,6 +1109,7 @@ create_base_mocks() {
     export MOCK_ZOT_CONFIGURED=1
   fi
   create_mock_logger "$mock_dir"
+  create_mock_getent "$mock_dir"
   create_docker_mock "$mock_dir"
   create_curl_mock "$mock_dir"
   create_mock_sudo "$mock_dir"
@@ -7519,6 +7539,48 @@ else
 fi
 rm -f "$_cap" "$_cred" "$_script"; unset _cap _cred _script _want _got
 
+# --- #9169: GHCR_DENY — the per-release ghcr_blocked field, fail-open ---
+# _gd_run <getent mode>: one real deploy invocation with the logger captured; sets _GD_RC, _GD_CAP
+# (the captured journald lines) and _GD_SECS (wall clock).
+_gd_run() {
+  local cap _s
+  cap=$(mktemp -t gdcap.XXXXXX)
+  _s=$(date +%s)
+  _GD_RC=0
+  (
+    export MOCK_LOGGER_CAPTURE_FILE="$cap" MOCK_GETENT_MODE="$1"
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1
+  ) || _GD_RC=$?
+  _GD_SECS=$(( $(date +%s) - _s ))
+  _GD_CAP=$(cat "$cap"); rm -f "$cap"
+}
+_gd_row() {  # <ok 0|1> <description>
+  TOTAL=$((TOTAL + 1))
+  if [[ "$1" == 1 ]]; then PASS=$((PASS + 1)); echo "  PASS: $2"; else FAIL=$((FAIL + 1)); echo "  FAIL: $2"; fi
+}
+_gd_count() { grep -cE "$1" <<<"$_GD_CAP" || true; }
+_gd_run sink
+_GD_BASE_RC=$_GD_RC
+_ok=0
+if [[ "$(_gd_count '^-t ci-deploy DEPLOY_SCRIPT_SHA ')" == 1 && "$(_gd_count 'GHCR_DENY')" == 1 \
+  && "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=1$')" == 1 ]]; then
+  _sha_ln=$(grep -nE 'DEPLOY_SCRIPT_SHA ' <<<"$_GD_CAP" | cut -d: -f1)
+  _gd_ln=$(grep -nE 'GHCR_DENY ' <<<"$_GD_CAP" | cut -d: -f1)
+  [[ "$_gd_ln" -eq $((_sha_ln + 1)) ]] && _ok=1
+fi
+_gd_row "$_ok" "GHCR_DENY: sinkhole-only -> exactly one 'GHCR_DENY ghcr_blocked=1', right after the one DEPLOY_SCRIPT_SHA"
+_gd_run routable
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=0$')" == 1 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: a routable address -> ghcr_blocked=0"
+_gd_run unresolvable
+_after=$(sed -n '/GHCR_DENY/,$p' <<<"$_GD_CAP" | grep -vc 'GHCR_DENY' || true)
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_after" -gt 0 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: NXDOMAIN (getent exit 2) under set -euo pipefail -> ghcr_blocked=unknown, deploy continues (rc $_GD_RC == baseline $_GD_BASE_RC, $_after later lines)"
+_gd_run hang
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_GD_SECS" -le 10 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: a hanging getent is bounded by timeout 5 -> ghcr_blocked=unknown, rc unchanged (${_GD_SECS}s)"
+unset -f _gd_run _gd_row _gd_count; unset _GD_RC _GD_CAP _GD_SECS _GD_BASE_RC _ok _sha_ln _gd_ln _after
+
 # hooks.json.tmpl: both deploy hooks must carry a DISTINCT SOLEUR_DEPLOY_HOOK_ID. Two hooks
 # sharing one id would emit a clean-looking marker that discriminates nothing — the precise
 # failure this whole marker exists to prevent.
@@ -8565,7 +8627,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
 # #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
 # #6428: raised to 359 with the 17 pre-swap freshness rows (F1-F13).
-CI_DEPLOY_ASSERT_FLOOR=359
+# #9169: raised to 364 (measured) with the 4 GHCR_DENY rows.
+CI_DEPLOY_ASSERT_FLOOR=364
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
