@@ -591,7 +591,7 @@ main() {
   local slice_high_before="" slice_max_before=""
   local scope_high_after="" scope_max_after="" scope_swap_after="" scope_tasks_after=""
   local slice_high_after="" slice_max_after="" slice_swap_after="" slice_tasks_after=""
-  local attached=0 tree_truncated="false" swept=0 repaired=0
+  local attached=0 tree_truncated="false" swept=0 repaired=0 refresh_rc=""
 
   _log() {
     local rotator
@@ -615,11 +615,13 @@ main() {
         --argjson bsr "$BACKSTOP_REVISION" \
         --arg rfrom "${SOLEUR_BACKSTOP_RESOLVED_FROM:-}" \
         --argjson rep "${repaired:-0}" \
+        --argjson rrc "${refresh_rc:-null}" \
         '{schema:2, ts:$ts, pid:(($pid|tonumber?) // null), tree_size:$tree, scope:$scope,
           terminal_scope:$tscope, slice:$slice, scope_high:$sh, scope_max:$sm,
           slice_high:$fh, slice_max:$fm, scope_tasks:$st, slice_tasks:$ft,
           slice_high_before:$shb, slice_max_before:$smb,
           backstop_revision:$bsr, resolved_from:$rfrom, repaired:$rep,
+          refresh_rc:$rrc,
           swap_max:0, identity_signal:$sig, outcome:$outcome, reason:$reason}' 2>/dev/null)
     fi
     # An empty $line means the jq filter produced no object (an empty stream from
@@ -632,7 +634,7 @@ main() {
     local rfrom_sanitized="${SOLEUR_BACKSTOP_RESOLVED_FROM:-}"
     rfrom_sanitized="${rfrom_sanitized//\\/}"; rfrom_sanitized="${rfrom_sanitized//\"/}"
     rfrom_sanitized="${rfrom_sanitized//[[:cntrl:]]/}"
-    [[ -z "$line" ]] && line="{\"schema\":2,\"ts\":\"$ts\",\"outcome\":\"$outcome\",\"reason\":\"$reason\",\"backstop_revision\":$BACKSTOP_REVISION,\"resolved_from\":\"$rfrom_sanitized\",\"repaired\":${repaired:-0},\"log_degraded\":true}"
+    [[ -z "$line" ]] && line="{\"schema\":2,\"ts\":\"$ts\",\"outcome\":\"$outcome\",\"reason\":\"$reason\",\"backstop_revision\":$BACKSTOP_REVISION,\"resolved_from\":\"$rfrom_sanitized\",\"repaired\":${repaired:-0},\"refresh_rc\":null,\"log_degraded\":true}"
     printf '%s\n' "$line" >> "$log_file" 2>/dev/null
   }
 
@@ -867,6 +869,13 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
         "MemorySwapMax" "t" 0 \
         "TasksMax" "t" "$SCOPE_TASKS_MAX" \
         >/dev/null 2>&1
+      # Ledgered as refresh_rc: the rejection signature of #9246 — an
+      # all-or-nothing call carrying a creation-only property fails HERE,
+      # while the TasksMax readback can still be healed green by
+      # repair_stale_scopes in the same pass. (rc alone cannot prove the cap
+      # landed — see the readback rationale below; it proves the call was not
+      # REJECTED.)
+      refresh_rc=$?
 
     fi
   fi
@@ -1059,6 +1068,7 @@ _log_with_counters() {
       --argjson bsr "$BACKSTOP_REVISION" \
       --arg rfrom "${SOLEUR_BACKSTOP_RESOLVED_FROM:-}" \
       --argjson rep "${repaired:-0}" \
+      --argjson rrc "${refresh_rc:-null}" \
       '{schema:2, ts:$ts, pid:(($pid|tonumber?) // null), tree_size:$tree, scope:$scope,
         terminal_scope:$tscope, slice:$slice,
         scope_high:$sh, scope_max:$sm, slice_high:$fh, slice_max:$fm,
@@ -1069,6 +1079,7 @@ _log_with_counters() {
         slice_tasks_after:$fta,
         slice_high_before:$shb, slice_max_before:$smb,
         backstop_revision:$bsr, resolved_from:$rfrom, repaired:$rep,
+        refresh_rc:$rrc,
         attached:$att, tree_truncated:$trunc, swept:$swept,
         swap_max:0, identity_signal:$sig, outcome:$outcome, reason:$reason,
         last_oom_kill:$oom, last_high:$hi}' 2>/dev/null >> "$log_file"
