@@ -100,6 +100,10 @@ key.
   `curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health` returns 200.
 - **No page is not proof of health.** `betteruptime_monitor.app` probes the `app.soleur.ai`
   A-record, which *is* web-1 — on a dead web-1 it reddens only once the host is already dark.
+- **A web-2 birth/rebirth rotates its sshd host key.** `terraform_data.deploy_pipeline_fix_web2`
+  (#9151) then fails closed at its pinned `host_key` — re-capture with
+  `scripts/capture-web-2-host-key.sh <new-ip>` and land `web-2-ssh-host-key.pub` in a PR
+  (ADR-237; `web-host-replace.md` carries the same note).
 
 ## Break-glass: operator-local apply
 

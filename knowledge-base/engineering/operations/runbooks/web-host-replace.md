@@ -35,9 +35,10 @@ not merely higher-stakes; it is topologically different:
   at-rest store boots **unattached** while the host reports healthy.
 - `cloudflare_record.app.content` is web-1's `ipv4_address`. Replace it without re-pointing
   the record and `app.soleur.ai` resolves to a destroyed host.
-- All **15** `terraform_data.*` SSH provisioners in `server.tf` pin `connection.host` to
-  web-1 — including the seccomp and AppArmor sandbox controls. `-target` is upstream-only, so
-  none is pulled into the plan and all 15 would be left un-run against a dead IP.
+- The **web-1** `terraform_data.*` SSH provisioners in `server.tf` (the bulk of the
+  fleet) pin `connection.host` to web-1 — including the seccomp and AppArmor sandbox
+  controls. `-target` is upstream-only, so none is pulled into the plan and they would
+  be left un-run against a dead IP.
 - Decisively: `/mnt/data` pins **by-id** to `hcloud_volume.workspaces[key]`, which on web-1 is
   the **plaintext** volume the 2026-07-23 LUKS cutover **superseded**. Nothing on a fresh boot
   opens the LUKS mapper (crypttab keyfile is `none`; the guest-side unlock path is deferred to
@@ -126,11 +127,17 @@ catastrophe rather than saying "an address you did not authorize changed".
 The `-target` set is upstream-only, so nothing downstream of the server rides along. Two
 consequences worth knowing before you dispatch:
 
-- **All 15 `terraform_data.*` SSH provisioners** (disk monitor, resource monitor, fail2ban
+- **The web-1 `terraform_data.*` SSH provisioners** (disk monitor, resource monitor, fail2ban
   tuning, persistent journald, seccomp/AppArmor profiles, cron egress firewall, orphan reaper,
   …) hardcode
   `connection.host` to **web-1**. They never applied to any other host, so a non-web-1
-  replace neither loses nor needs them.
+  replace neither loses nor needs them. The ONE exception is
+  `terraform_data.deploy_pipeline_fix_web2` (#9151): it dials web-2 and its
+  `hcloud_server.web["web-2"].id` trigger re-fires delivery post-replace — but a replace
+  also rotates web-2's sshd host key, so the next `apply-deploy-pipeline-fix.yml` run
+  fails closed at the end-to-end probe until `scripts/capture-web-2-host-key.sh <ip>`
+  re-captures `web-2-ssh-host-key.pub` (runbook: `git-data-luks-cutover-5274.md` §
+  "Re-capturing web-2's host key"; ADR-237 consequence note).
 - **Better Stack heartbeats** for the host already exist and are not targeted. If they are
   still `paused`, they are armed by the measure-then-arm step in the `apply` job at the next
   merge-to-main infra apply — the same as after a birth.

@@ -139,6 +139,22 @@ Terraform SSH client negotiates ECDSA-P256.
 - **A web-1 rebuild is a re-capture.** When #6931 makes web-1 replaceable, every strict consumer fails
   closed with `reason=changed` until a re-capture PR lands. Terraform-minted keys for web hosts are
   a deferred follow-up.
+- **web-2 took the step-3 shape, not step 1 (#9151).** Strictly, web-2 is re-provisionable cattle and
+  would sit under step 1's Terraform-minted-ED25519 arm — but minting changes `user_data`, which
+  `hcloud_server.web` ignores, so the minted pin could never reach the *current* web-2 without a
+  replace either. The committed-pin form was the same size and reuses the reviewed shape: a
+  committed `apps/web-platform/infra/web-2-ssh-host-key.pub` (same header-plus-one-line format,
+  captured outside Cloudflare by `scripts/capture-web-2-host-key.sh` from an `ADMIN_IPS` vantage),
+  shape-pinned by `local.web_2_ssh_host_key` and consumed by
+  `terraform_data.deploy_pipeline_fix_web2`'s `connection.host_key`. Two deltas from web-1's shape:
+  (a) web-2 re-keys are **routine** — every cattle replace rotates the key, and the pin's place in
+  `triggers_replace` plus its `paths:` entry in `apply-deploy-pipeline-fix.yml` makes the apply
+  itself the re-capture probe (fail closed until the re-capture PR lands); and (b) no
+  `web_1_host_key_probe` twin was added — the sibling IS the probe. Separately recorded: a CI-key
+  (`DEPLOY_SSH_PRIVATE_KEY`) rotation orphans web-2's bastion route, because web-2's
+  `authorized_keys` is birth-frozen and no resource re-delivers the pubkey to a live web-2 — the
+  apply then reds at the end-to-end probe, and recovery is operator `ADMIN_IPS` append or a web-2
+  replace.
 - **A full revert is never the rollback.** It would restore trust-on-first-use on every path; fixes go
   forward.
 

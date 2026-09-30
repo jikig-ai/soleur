@@ -1143,6 +1143,23 @@ wrong (H4 cause (a)).
 Never source a pin from `ssh-keyscan` in a CI path, and never loosen host-key checking to get a run
 through.
 
+## Re-capturing web-2's host key (#9151)
+
+web-2 is cattle — replacement legitimately changes its host key, and unlike web-1 there is no
+replace gate to wait for. Its pin is `apps/web-platform/infra/web-2-ssh-host-key.pub`, same shape
+as web-1's (header lines + exactly one `ecdsa-sha2-nistp256` line), consumed ONLY by
+`terraform_data.deploy_pipeline_fix_web2` and `local.web_2_ssh_host_key`.
+
+1. From a machine whose egress IP is in `ADMIN_IPS`, run
+   `scripts/capture-web-2-host-key.sh <web-2 public IPv4>` (web-2's public :22 — never through
+   Cloudflare, never from CI). It scans directly, fingerprints, cross-checks your known_hosts, and
+   rewrites the pin file atomically.
+2. Open a PR with the new file; the body names the capture vantage, UTC date, and fingerprint.
+3. After merge, the `web-2-ssh-host-key.pub` path entry in `apply-deploy-pipeline-fix.yml`
+   auto-fires the apply: the bastion forward + `deploy_pipeline_fix_web2` re-dial web-2 against
+   the new pin. A green run is the second observation; a host-key failure is a re-capture PR or
+   breach triage, never a loosened check (ADR-237).
+
 ## What users see
 
 ### During a replace

@@ -58,7 +58,7 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # install is the fallback path. Since #8603
 # test/server/inngest/claude-cli-pin-knows-models.test.ts enforces that the two
 # pins agree and that the installed bundle knows every tier model id.
-RUN npm install -g @anthropic-ai/claude-code@2.1.280
+RUN npm install -g @anthropic-ai/claude-code@2.1.284
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
 # Global install (NOT a package.json dep) — same pattern as the line above —
