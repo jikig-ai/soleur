@@ -470,31 +470,31 @@ entries are spawned WITH `buildAgentEnv`'s real env (imported, not re-typed). `d
 
 ### Functional
 
-- [ ] Piping the incident's CRM question-list closing into `unkept-promise-hook.sh` with
+- [x] Piping the incident's CRM question-list closing into `unkept-promise-hook.sh` with
   `SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1` produces no `decision:block`; without the var it still blocks
   (`bash plugins/soleur/test/unkept-promise-hook.test.sh` green, floors raised).
-- [ ] `buildAgentEnv` always sets `SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1` regardless of ambient env
+- [x] `buildAgentEnv` always sets `SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1` regardless of ambient env
   (`agent-env.ts` `AGENT_ENV_OVERRIDES`; `test/agent-env.test.ts`).
-- [ ] Given assistant(list), assistant(`<stop>OPERATOR-GATE...</stop>`), result, the runner calls `onText` once
+- [x] Given assistant(list), assistant(`<stop>OPERATOR-GATE...</stop>`), result, the runner calls `onText` once
   with the list and never with `<stop` (`soleur-go-runner.ts` `handleAssistantMessage`;
   `test/soleur-go-runner-stop-gate.test.ts`), and the persisted row text is the list.
-- [ ] `stripStopGateMarkup` passes its table including unterminated, multi-tag, case and attribute variants and
+- [x] `stripStopGateMarkup` passes its table including unterminated, multi-tag, case and attribute variants and
   the `<stopwatch>` non-match (`test/stop-gate-markup.test.ts`).
-- [ ] After a cc turn's `stream` + `stream_end`, `streamState` is `"idle"`, `workflow`/`spawnIndex` unchanged,
+- [x] After a cc turn's `stream` + `stream_end`, `streamState` is `"idle"`, `workflow`/`spawnIndex` unchanged,
   and `"stopping"` is preserved (`lib/ws-client.ts` `chatReducer`; `test/chat-reducer.test.ts`,
   `test/cc-turn-end-wire.test.ts`), or Phase 3's stop condition was followed and the plan's root-cause item 4
   updated.
-- [ ] `test/plugin-stop-hooks-web-parity.test.ts` passes; the PR body attests each of the six mutation-matrix
+- [x] `test/plugin-stop-hooks-web-parity.test.ts` passes; the PR body attests each of the six mutation-matrix
   rows was demonstrated RED against a scratch copy (an attestation, not a CI check).
 
 ### Non-functional / quality gates
 
-- [ ] Sentry event `op:stop-gate-markup-stripped` carries no message body (assert the `extra` keys in the runner
+- [x] Sentry event `op:stop-gate-markup-stripped` carries no message body (assert the `extra` keys in the runner
   test).
-- [ ] ADR-093 amended (Amendment + Alternatives rows); `model.c4` `api` description corrected; the three C4
+- [x] ADR-093 amended (Amendment + Alternatives rows); `model.c4` `api` description corrected; the three C4
   tests are green.
-- [ ] `stop-hook.sh` is registered `web-safe` and spawned in a temp git repo; `browser-cleanup-hook.sh` is registered `deferred` citing #9281 (filed 2026-09-30).
-- [ ] `tsc --noEmit`, `npx vitest run` for the touched files, and `bash plugins/soleur/test/c4-count-parity.test.sh`
+- [x] `stop-hook.sh` is registered `web-safe` and spawned in a temp git repo; `browser-cleanup-hook.sh` is registered `deferred` citing #9281 (filed 2026-09-30).
+- [x] `tsc --noEmit`, `npx vitest run` for the touched files, and `bash plugins/soleur/test/c4-count-parity.test.sh`
   are green. PR body uses `Closes` only if an issue is opened for this bug (none cited today).
 
 ## Test Scenarios

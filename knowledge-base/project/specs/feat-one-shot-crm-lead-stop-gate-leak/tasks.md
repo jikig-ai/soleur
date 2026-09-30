@@ -34,3 +34,10 @@ Every code task starts with its failing test (cq-write-failing-tests-before). Co
 - 5.2 Fix model.c4 api container description; run c4-code-syntax, c4-render, plugins/soleur/test/c4-count-parity.test.sh
 - 5.3 File follow-up issues (non-Stop hooks classification; SOLEUR_RUNTIME axis), each with Mandated-By: wg-when-deferring-a-capability-create-a
 - 5.4 tsc --noEmit, vitest for touched files, bash plugins/soleur/test/unkept-promise-hook.test.sh
+
+## Work-phase status (2026-09-30)
+- Phases 1-5 implemented and committed; 1.5 (hook env inheritance on a real dev dispatch) is a soleur:qa measurement and stays open until QA.
+- 2.3 dropped: the dispatcher already drops empty-text turns (`saveAssistantMessage` returns on empty text, pinned by `cc-dispatcher.test.ts` T2), so the plan's premise that a markup-only turn persists an empty row was stale. No dispatcher change.
+- 3.0: no existing Send-returns-after-stream_end assertion; 3.1 wire test was RED (`streaming`), so the stop condition did not apply. The tool_use -> stream_end -> stream reducer row was not added (`onTextTurnEnd` fires once per turn).
+- 4.2: six mutation rows demonstrated RED on the committed tree, control green before and after (`/var/tmp/p4-mut.sh` run; attest in the PR body).
+- 5.3: the two follow-ups were consolidated into one tracker, #9289 (net-flow rule); #9281 was filed at plan time.
