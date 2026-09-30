@@ -266,3 +266,6 @@ NEVER CODE! Just research and write the plan.
   - five spelling-based guards (the same class as #9134)
 
   See `knowledge-base/project/learnings/2026-09-28-a-retrying-unit-must-latch-only-full-success-and-undo-what-it-paused.md`.
+- **Every on-host identity a guard reads (a filesystem label, a UUID, a device path, a unit, a marker file) must cite the repo artifact that WRITES it.** If no writer exists, the guard asserts a premise, not a fact. Fixtures built from the same premise pass by construction, so the plan must name a read-only rehearsal against the real host as the falsifier, run before the PR that depends on it is called done. Prefer binding to a witness the automation itself recorded (e.g. a mount SOURCE persisted at cutover) over a property nothing set.
+
+  **Why:** #6604/PR #9163 → #9286. The wipe's identity check and the rollback's "plaintext gone" witness both keyed on the ext4 label `workspaces_plain`, which no artifact ever wrote. 160 suite rows and a 10-seat review were green; the prod read-only rehearsal refused `label=none`, and the same premise had silently disarmed every pre-wipe rollback. See `knowledge-base/project/learnings/2026-09-30-the-wipe-guard-read-a-label-no-artifact-ever-wrote.md`.
