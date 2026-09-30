@@ -403,11 +403,16 @@ admits a `refs/tags/v…` arm. The pin holds on **every hand-off arm**:
   overlay's verified ref;
 - **the local-cache arm** — the reused image is re-verified by its digest, or overlaid with an empty
   ref, which means no key;
-- **boot** — the key goes only to the digest `ci-deploy.sh` last verified, recorded root-only on the
-  host; any other image reference boots keyless (`unverified_image`, in Sentry).
+- **boot** — the key goes only to the digest `ci-deploy.sh` last verified with the pinned identity,
+  recorded 0600 by the `deploy` user on the host's persistent volume
+  (`/mnt/data/github-app-key-verified-ref` — `webhook.service` runs `ci-deploy.sh` as `deploy` under
+  `ProtectSystem=strict`, so a root-only path is unwritable, and the volume survives a host replace);
+  any other image reference boots keyless (`unverified_image`, in Sentry).
 
 The overlay refuses a `prd` env that carries a runtime-hijack name, by **prefix class** rather than
-by a list of names: `NODE_*` except `NODE_ENV`, `LD_*`, `GLIBC_*`, `GIT_*`, `BASH_*`, `ENV`, `PATH`,
+by a list of names: `NODE_*` except `NODE_ENV`, `LD_*`, `GLIBC_*`, `GIT_*` except the app's own
+`GIT_(DATA|PROVISION|REMOVE|TRANSPORT)_*` names (six in `prd`; git reads none of those prefixes),
+`BASH_*`, `ENV`, `PATH`,
 `SHELL`, `HOME`, `TMPDIR`, `SSL_*`, `OPENSSL_*`, `CURL_*`, `*_PROXY`/`*_proxy`,
 `NPM_CONFIG_*`/`npm_config_*`, `PYTHON*` and `PERL*`. A collision fails safe: the `prd` key before
 eviction, a refused canary after. Before promotion, the canary proves GitHub accepts the key

@@ -429,7 +429,7 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
        the registry push credentials are branch-readable today, so without this a branch could ship
        its own image and receive the key. Unverified digest → no isolated fetch,
        `github_app_key_fetch=unverified_image`, Sentry error; after R6 the canary then refuses
-       (`github_app_key_missing`). Key-scoped enforcement, independent of the #6129 flip.
+       (`canary_github_app_key_missing`). Key-scoped enforcement, independent of the #6129 flip.
     3. **Token present:** `DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" doppler secrets download
        --no-file --format docker --project soleur-github-app --config prd`, keep **only** lines
        matching `^GITHUB_APP_PRIVATE_KEY=` (anchored), drop **every** `^GITHUB_APP_PRIVATE_KEY=` line
@@ -456,7 +456,7 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
 3.3 **Key check before the swap, in the canary stage.** Two layers, both before promotion, both
     leaving the running container serving on failure:
     - **Presence (no network):** the env-file holds exactly one `^GITHUB_APP_PRIVATE_KEY=` line and
-      its value is not `EVICTED_SEE_ADR_241`; else `CANARY_FAIL_REASON=github_app_key_missing`.
+      its value is not `EVICTED_SEE_ADR_241`; else `CANARY_FAIL_REASON=canary_github_app_key_missing`.
     - **Acceptance (the invariant, not a proxy):** `docker exec soleur-web-platform-canary node
       /app/scripts/github-app-key-probe.mjs` — a new standalone script (`node:crypto` RS256 +
       `fetch`, no app imports), copied into the image exactly as `scripts/sandbox-canary.mjs` is
@@ -473,7 +473,7 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
       the JWT, headers, body or stderr; `ci-deploy.sh` parses it with an anchored regex.
       Verdicts: `200` with `slug == "soleur-ai"` **and** `id == GITHUB_APP_ID` → `ok`; `401`, `404`,
       a `403` without rate-limit headers, or any other slug/id → `rejected` →
-      `CANARY_FAIL_REASON=github_app_key_rejected`; a transport error, timeout, `5xx`, `429`, or a
+      `CANARY_FAIL_REASON=canary_github_app_key_rejected`; a transport error, timeout, `5xx`, `429`, or a
       `403` carrying rate-limit headers → `transport` → Sentry warning and promote (a GitHub outage
       or secondary rate limit must not block a hotfix deploy — user-impact review F4). Exit code
       127 (script absent, an image older than PR-A) → skip with a log line; any other non-zero with
@@ -636,7 +636,7 @@ proceed under Playwright.
   inbound GitHub webhooks for their installation are rejected. Worst case (R7 deletes the wrong
   key): every connected user at once, with no rollback, until a new key is generated and released.
 - **If this lands broken (partial), the user experiences:** a release refuses at the canary
-  (`github_app_key_missing` / `github_app_key_rejected`) and the previous release keeps serving —
+  (`canary_github_app_key_missing` / `canary_github_app_key_rejected`) and the previous release keeps serving —
   users see a stale release, not an outage. A failover to a web-2 that R5 did not replace would
   serve a key R7 has killed.
 - **If this leaks, the user's data and workflow are exposed via:** the read token for
@@ -661,13 +661,13 @@ liveness_signal:
   configured_in: "apps/web-platform/infra/sentry/issue-alerts.tf + alert-reference.json (new rules); apps/web-platform/infra/ci-deploy.sh (canary stage + overlay emitter); apps/web-platform/infra/soleur-host-bootstrap.sh (soleur-boot-emit stages); apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts"
 error_reporting:
   destination: "Sentry web-platform project. Host side: ci-deploy.sh's curl emitter (feature=ci-deploy, op=github-app-key) and soleur-boot-emit (stage=github_app_key_*), both carrying a classification and a length only — never Doppler stderr, never key or token bytes"
-  fail_loud: "release workflow prints ::error:: ci-deploy.sh exited ... reason=github_app_key_missing or reason=github_app_key_rejected and the old container keeps serving; a fetch failure before R6 ships green but deploy-state carries github_app_key_fetch=failed and the release workflow raises ::warning:: plus a Sentry event op=github-app-key"
+  fail_loud: "release workflow prints ::error:: ci-deploy.sh exited ... reason=canary_github_app_key_missing or reason=canary_github_app_key_rejected and the old container keeps serving; a fetch failure before R6 ships green but deploy-state carries github_app_key_fetch=failed and the release workflow raises ::warning:: plus a Sentry event op=github-app-key"
 failure_modes:
   - mode: "token present but the isolated fetch fails (revoked/mistyped token, Doppler down)"
     detection: "layer vector (ci-deploy journald, tag ci-deploy) + layer workflow run log (deploy-status github_app_key_fetch=failed, ::warning::) + layer Sentry (op=github-app-key rule); after R6 the canary also refuses (github_app_key_missing)"
     alert_route: "Sentry issue alert (new rule); after R6 the failed release email"
   - mode: "a wrong but well-formed key reaches the env (dev key, prd_terraform key, a planted token's key)"
-    detection: "layer workflow run log: ::error:: reason=github_app_key_rejected from the canary probe (GET /app 401/403-without-rate-limit-headers/404 or slug other than soleur-ai)"
+    detection: "layer workflow run log: ::error:: reason=canary_github_app_key_rejected from the canary probe (GET /app 401/403-without-rate-limit-headers/404 or slug other than soleur-ai)"
     alert_route: "failed release workflow email + Sentry op=github-app-key"
   - mode: "probe could not reach GitHub (transport error, 5xx, 429, 403 with rate-limit headers)"
     detection: "layer vector (ci-deploy.sh `logger -t ci-deploy` line `GITHUB_APP_KEY: class=probe_transport level=warning`, shipped by the host_scripts_journald source to Better Stack) + layer webhook response (/hooks/deploy-status github_app_key_probe=transport) + the Sentry op=github-app-key warning event"
@@ -1184,9 +1184,9 @@ to the two third-party installers is a trust decision, not a duty — DC-1.
 - Given a token, a failing isolated fetch and a valid `prd` key, when ci-deploy runs, then it promotes
   on the `prd` key with `source=prd` and a Sentry error `reason=fetch_failed`.
 - Given a token, a failing isolated fetch and no `prd` key (post-R6), when ci-deploy runs, then the
-  canary fails `github_app_key_missing` and the running container is untouched.
+  canary fails `canary_github_app_key_missing` and the running container is untouched.
 - Given a key GitHub rejects (or a different App's key), when the canary probe runs, then the canary
-  fails `github_app_key_rejected` and the running container is untouched.
+  fails `canary_github_app_key_rejected` and the running container is untouched.
 - Given the variable empty, when the web-platform root renders, then the credential file equals
   `main`'s byte for byte.
 - Given a malformed token value, when `terraform plan` runs in a Tier-B job, then the precondition

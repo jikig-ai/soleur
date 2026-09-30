@@ -643,6 +643,7 @@ if _cp="$(cli_pin_parity "$ACTION_YML" "$CLOUD_INIT")"; then
 else
   fail "8.7: the loader's Doppler CLI pin drifted from cloud-init doppler_dl ($_cp)"
 fi
+assert_fixture_dir "$WORK"
 sed -E 's/(DOPPLER_CLI_SHA256: ")[0-9a-f]/\1f/' "$ACTION_YML" > "$WORK/action.mut.yml"
 if ! cmp -s "$ACTION_YML" "$WORK/action.mut.yml" && ! cli_pin_parity "$WORK/action.mut.yml" "$CLOUD_INIT" >/dev/null; then
   pass "8.7: a one-character sha256 drift in the loader pin goes RED (mutation measured)"
