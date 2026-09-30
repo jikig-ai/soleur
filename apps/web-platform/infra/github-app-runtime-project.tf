@@ -13,7 +13,8 @@
 # it from. The operator puts the key in and mints the host's read token by hand (runbook
 # infra-credential-tiers-8209.md, "Runtime App key (#8609)"); the token reaches this root
 # only as the Tier-B variable `github_app_runtime_doppler_token`, and only as a hash in
-# state. Census Guard 6 (tests/scripts/test-infra-privileged-tier-census.sh) enforces all of
+# state (hcloud's user_data hash; the deploy_pipeline_fix trigger hashes the KEYLESS render,
+# so no plan context sees the token, census row G6o). Census Guard 6 (tests/scripts/test-infra-privileged-tier-census.sh) enforces all of
 # this. Same carrier shape as infra-privileged-environment.tf.
 #
 # Every resource here is in the push apply's `-target=` list (apply-web-platform-infra.yml).

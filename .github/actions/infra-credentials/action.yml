@@ -158,6 +158,13 @@ runs:
           printf 'TF_VAR_%s<<%s\n%s\n%s\n' "github_app_runtime_doppler_token" "$d" "$1" "$d" >> "$GITHUB_ENV"
         }
         export_gar ""
+        # The NON-secret twin: "is this the delivering job?". server.tf requires a non-empty token
+        # only where this is true (after PR-B), so non-opted-in plans never fail on the isolation
+        # flag. Exported in every job, like the token name, so a prd_terraform plant cannot win.
+        # Keyed on the opt-in alone: an opted-in job whose Tier-B value is absent still says
+        # "true", which is exactly the job whose plan must fail after PR-B. Guard 8 row 8.6.
+        if [[ "${GITHUB_APP_RUNTIME_OPT_IN:-false}" == "true" ]]; then gar_delivered=true; else gar_delivered=false; fi
+        printf 'TF_VAR_github_app_runtime_token_delivered=%s\n' "$gar_delivered" >> "$GITHUB_ENV"
 
         # ---- Arm 1: legacy ---------------------------------------------------
         #

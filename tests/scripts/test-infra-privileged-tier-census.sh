@@ -959,7 +959,11 @@ check("G5c: the input-validation, interlock and typo-guard steps stay UNCONDITIO
 # `administration:write` on this repo and write access on every connected user's installation.
 # The loader's RUNTIME export (the name is always defined, empty unless the job opted in) is not
 # statically observable; it is Guard 8, .github/actions/infra-credentials/infra-credentials.test.sh.
-G6_NAME = re.compile(r"github[_-]app[_-]runtime[_-](?:doppler[_-])?token", re.I)
+# Every spelling of the one credential: the CI/Tier-B names (GITHUB_APP_RUNTIME_DOPPLER_TOKEN,
+# TF_VAR_github_app_runtime_doppler_token, the loader input github-app-runtime-token) AND the
+# host-side ones (GITHUB_APP_DOPPLER_TOKEN in the credential file, github_app_doppler_token in the
+# template). Not bare `github_app_token`: that is the minted-installation-token family.
+G6_NAME = re.compile(r"github[_-]app[_-](?:runtime[_-](?:doppler[_-])?|doppler[_-])token", re.I)
 G6_PROJECT_LIT = re.compile(r'"soleur-github-app"')
 G6_PROJECT_ADDR = re.compile(r"\bdoppler_(?:project\.github_app_runtime|environment\.github_app_runtime_prd|config\.github_app_runtime_[A-Za-z0-9_]+)\b")
 G6_VAR = "var.github_app_runtime_doppler_token"
@@ -1222,7 +1226,10 @@ check("G6m: no Tier-B job sets TF_LOG (trace logs carry provisioner environments
       not g6_bad_m, sorted(set(g6_bad_m))[:5])
 
 # G6n -- no Doppler cross-project reference to the new project is written anywhere CI or a host
-# renders from (R0c: if references resolve, a `prd` writer could otherwise re-export the key).
+# renders from. Doppler may resolve such a reference, and then a `prd` writer could re-export the key
+# into a branch-readable config. This is the static half; the live half is the operator bootstrap's
+# xproj_ref_count (every `soleur` config, counted at R1 and again at R6), which replaced the
+# dropped R0c scratch-project probe.
 G6_XREF = re.compile(r"\$\$?\{\s*soleur-github-app\.")
 g6_scan = [(rel, g6_code(t)) for rel, (_d, t) in sorted(docs.items())] + g6_tf + \
           [(w, g6_code(b)) for w, b in g6_bodies]
@@ -1248,9 +1255,134 @@ check("G6l: the locked hcloud provider is %s, the version measured to store user
       "(the token rides in web user_data) [locked: %s]" % (G6_HCLOUD_PIN, g6_ver or "<unreadable>"),
       g6_ver == G6_HCLOUD_PIN, "lock=%s" % g6_ver)
 
+# G6o -- every plan context computes the same plan: no plan-visible attribute depends on an input
+# that differs between the opted-in jobs and every other one (the token, which is "" outside the
+# three opt-in jobs, and the delivering-job flag). Otherwise the Tier-A PR plan, the drift job and
+# the push apply plan a change the opted-in apply undoes -- after R3, a deploy_pipeline_fix replace
+# on every drift run (user-impact P1). A context-varying input may appear only in a lifecycle block
+# (a precondition), a provisioner (not in the plan), or an attribute the resource ignore_changes.
+# Unlike G6c's state taint, NOTHING is admitted here: a boolean about the token varies too.
+G6_CTX_SEEDS = {G6_VAR, "var.github_app_runtime_token_delivered"}
+MODULE_OPEN = re.compile(r'^module\s+"([A-Za-z0-9_-]+)"\s*\{', re.M)
+g6_ctx = set(G6_CTX_SEEDS)
+while True:
+    grown = {"local." + n for n, e in g6_locals if "local." + n not in g6_ctx and g6_refs_any(e, g6_ctx)}
+    if not grown:
+        break
+    g6_ctx |= grown
+g6_bad_o, g6_n_ign = [], 0
+for rel, t in g6_tf:
+    blocks = [("resource", m, b) for m, b in block_bodies(t, RES_OPEN)] + \
+             [("data", m, b) for m, b in block_bodies(t, DATA_OPEN)] + \
+             [("module", m, b) for m, b in block_bodies(t, MODULE_OPEN)]
+    for kind, m, b in blocks:
+        addr = "%s.%s" % (m.group(1), m.group(2)) if kind != "module" else "module.%s" % m.group(1)
+        ign = set()
+        if kind == "resource":
+            for im in re.finditer(r"\bignore_changes\s*=\s*\[([^\]]*)\]", b):
+                ign |= {x.strip() for x in im.group(1).split(",") if x.strip()}
+        for an, ae in g6_attrs(b):
+            if not g6_refs_any(ae, g6_ctx):
+                continue
+            if an in ign:
+                g6_n_ign += 1
+                continue
+            g6_bad_o.append("%s %s %s.%s" % (rel, kind, addr, an))
+check("G6o: no plan-visible attribute (resource, data or module) depends on the token or the delivering-job "
+      "flag, so every plan context (Tier-A PR plan, drift job, push apply, opted-in apply) computes the same "
+      "deploy_pipeline_fix trigger [%d context-varying names, %d ignore_changes-exempt uses]" % (len(g6_ctx), g6_n_ign),
+      len(g6_tf) >= 1 and not g6_bad_o, sorted(set(g6_bad_o))[:5])
+
+# G6q -- the EXACT set of jobs that opt in to the token. G6a's population check is `>= 1`, so a
+# dropped opt-in (web-1 would render the line empty forever) or a fourth one stayed green.
+G6_OPTIN_EXPECTED = ({"workflows/apply-deploy-pipeline-fix.yml::apply",
+                      "workflows/apply-web-platform-infra.yml::web_host_create",
+                      "workflows/apply-web-platform-infra.yml::web_host_replace"}
+                     if CHECK_GIT else {"workflows/tierb-apply.yml::apply"})
+g6_optin = set()
+for j in jobs:
+    for s in j.steps:
+        if "infra-credentials" in str(s.get("uses") or "") and \
+           str((s.get("with") or {}).get("github-app-runtime-token", "")).strip().lower() == "true":
+            g6_optin.add(j.id)
+check("G6q: exactly the delivering jobs opt in to the token (github-app-runtime-token: true) [%d opted in, %d expected]"
+      % (len(g6_optin), len(G6_OPTIN_EXPECTED)), g6_optin == G6_OPTIN_EXPECTED,
+      "missing=%s extra=%s" % (sorted(G6_OPTIN_EXPECTED - g6_optin), sorted(g6_optin - G6_OPTIN_EXPECTED)))
+
+# G6s -- the verifier-side identity pin on the verify whose rc 0 hands out the key (CTO ruling (b)).
+# Every cosign verify inside ci-deploy.sh's verify_image_signature carries
+# --certificate-github-workflow-ref=refs/heads/main and --certificate-github-workflow-repository=
+# jikig-ai/soleur (the CALLER's run, which a branch cannot forge), and its identity regexp has no
+# `refs/tags` arm. `"$NAME"` operands resolve to the file's single assignment of NAME.
+G6S_REL = os.path.join("apps", "web-platform", "infra", "ci-deploy.sh")
+G6S_WANT = {"--certificate-github-workflow-ref": "refs/heads/main",
+            "--certificate-github-workflow-repository": "jikig-ai/soleur"}
+g6s_path = os.path.join(REPO, G6S_REL)
+g6s_bad, g6s_calls = [], 0
+if os.path.isfile(g6s_path):
+    g6s_text = open(g6s_path, encoding="utf-8", errors="replace").read()
+    g6s_fm = re.search(r"^verify_image_signature\(\)\s*\{\n(.*?)^\}", g6s_text, re.M | re.S)
+    def g6s_val(raw):
+        v = raw.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]
+        vm = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", v)
+        if not vm:
+            return v
+        defs = re.findall(r"^\s*(?:readonly\s+|local\s+|declare\s+-r\s+)?%s=(\S+)" % vm.group(1), g6s_text, re.M)
+        if len(defs) != 1:
+            return "\x00%d assignments of %s\x00" % (len(defs), vm.group(1))
+        return g6s_val(defs[0])
+    if not g6s_fm:
+        g6s_bad.append("no verify_image_signature() function")
+    else:
+        for ln in g6s_fm.group(1).replace("\\\n", " ").split("\n"):
+            if "#" in ln.split("--certificate", 1)[0] or "--certificate-identity" not in ln:
+                continue
+            g6s_calls += 1
+            flags = {fm.group(1): g6s_val(fm.group(2)) for fm in
+                     re.finditer(r"(--certificate-[a-z-]+)=(\"[^\"]*\"|'[^']*'|\S+)", ln)}
+            for f, want in G6S_WANT.items():
+                if flags.get(f) != want:
+                    g6s_bad.append("%s=%r (want %s)" % (f, flags.get(f), want))
+            idv = flags.get("--certificate-identity-regexp", flags.get("--certificate-identity", ""))
+            if not idv or "refs/tags" in idv or "\x00" in idv:
+                g6s_bad.append("identity=%r (must resolve, with no refs/tags arm)" % idv[:120])
+else:
+    g6s_bad.append("%s not found" % G6S_REL)
+check("G6s: every cosign verify in ci-deploy.sh verify_image_signature (the key decision) pins the caller's "
+      "workflow ref to refs/heads/main and the repository to jikig-ai/soleur, with no refs/tags identity arm "
+      "[%d verify calls]" % g6s_calls, g6s_calls >= 1 and not g6s_bad, g6s_bad[:5])
+
+# G6u -- every systemd unit or drop-in that loads the web host's credential file unsets the
+# key-read name (CTO ruling (f)). `UnsetEnvironment=` applies after EnvironmentFile=, so inngest,
+# redis, vector and the monitors keep DOPPLER_TOKEN and never hold GITHUB_APP_DOPPLER_TOKEN. Only
+# ci-deploy.sh (webhook.service loads no such file; it parses it) and the boot download need it.
+G6U_LOAD = re.compile(r"^\s*EnvironmentFile=-?/etc/default/soleur-doppler-token\s*$", re.M)
+G6U_UNSET = re.compile(r"^\s*UnsetEnvironment=(?:.*\s)?GITHUB_APP_DOPPLER_TOKEN(?:\s.*)?$", re.M)
+g6u_loaders, g6u_bad = [], []
+for base in [os.path.join(REPO, "apps", a, "infra") for a in
+             (sorted(os.listdir(os.path.join(REPO, "apps"))) if os.path.isdir(os.path.join(REPO, "apps")) else [])]:
+    if not os.path.isdir(base):
+        continue
+    for f in sorted(os.listdir(base)):
+        fp = os.path.join(base, f)
+        if not os.path.isfile(fp) or ".test." in f or f.endswith((".md", ".awk")):
+            continue
+        body = open(fp, encoding="utf-8", errors="replace").read()
+        if G6U_LOAD.search(body):
+            g6u_loaders.append(f)
+            if not G6U_UNSET.search(body):
+                g6u_bad.append(f)
+check("G6u: every unit or drop-in that loads /etc/default/soleur-doppler-token also has "
+      "UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN [%d loaders]" % len(g6u_loaders),
+      (len(g6u_loaders) >= (8 if CHECK_GIT else 1)) and not g6u_bad, "loaders=%d missing=%s" % (len(g6u_loaders), g6u_bad[:8]))
+
 print("\n".join(out))
 PY
-CENSUS_ROWS=34  # 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+CENSUS_ROWS=38  # 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+# 34 -> 38 (#8609 review): G6o (plan-context invariance), G6q (exact opt-in set), G6s (cosign
+# caller-ref pin), G6u (UnsetEnvironment sweep).
 
 # census_rows <tsv> <err> — reports every row of one census run through pass()/fail().
 census_rows() {
@@ -1674,8 +1806,10 @@ resource "github_actions_secret" "doppler_token_git_data_root" {
 }
 EOF
 
-# Guard 6 (#8609): the isolated project, the render that carries its read token (shape gate +
-# hash-only trigger, the post-PR-A server.tf shape), and the provider lock the state-residency
+# Guard 6 (#8609): the isolated project, the render that carries its read token (shape gate keyed
+# on the delivering-job flag, a trigger over the KEYLESS render + the committed generation, an
+# ignore_changes'd user_data, the keyless-push guard: the post-review server.tf shape), the key
+# decision's cosign verify, one credential-file loader, and the provider lock the state-residency
 # fact rests on. Without these the G6 rows could only ever show their empty-population branch.
 cat > "$FIX/tree/apps/web-platform/infra/github-app-runtime-project.tf" <<'EOF'
 resource "doppler_project" "github_app_runtime" {
@@ -1700,15 +1834,34 @@ variable "github_app_runtime_doppler_token" {
   sensitive = true
   default   = ""
 }
+variable "github_app_runtime_token_delivered" {
+  type    = bool
+  default = false
+}
 locals {
   github_app_key_isolated = false
   github_app_token_shape_ok = nonsensitive(can(regex(
-    local.github_app_key_isolated ? "^dp\\.st\\.[A-Za-z0-9._-]{20,}$" : "^(dp\\.st\\.[A-Za-z0-9._-]{20,})?$",
+    local.github_app_key_isolated && var.github_app_runtime_token_delivered ? "^dp\\.st\\.[A-Za-z0-9._-]{20,}$" : "^(dp\\.st\\.[A-Za-z0-9._-]{20,})?$",
     var.github_app_runtime_doppler_token,
   )))
+  webhook_doppler_token_env_keyless = templatefile("${path.module}/soleur-doppler-token.tmpl", {
+    github_app_doppler_token = ""
+  })
   webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
     github_app_doppler_token = var.github_app_runtime_doppler_token
   })
+  github_app_render_keyed = nonsensitive(can(regex("(?m)^GITHUB_APP_DOPPLER_TOKEN=.", local.webhook_doppler_token_env)))
+}
+resource "hcloud_server" "web" {
+  name      = "web-1"
+  user_data = base64encode(local.webhook_doppler_token_env)
+  lifecycle {
+    ignore_changes = [user_data, ssh_keys]
+    precondition {
+      condition     = local.github_app_token_shape_ok
+      error_message = "the value is not shown"
+    }
+  }
 }
 resource "terraform_data" "deploy_pipeline_fix" {
   lifecycle {
@@ -1718,8 +1871,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
     }
   }
   triggers_replace = sha256(join(",", [
-    local.webhook_doppler_token_env,
+    local.webhook_doppler_token_env_keyless,
+    "github_app_runtime_token_generation=0",
   ]))
+  provisioner "local-exec" {
+    command = local.github_app_key_isolated && !local.github_app_render_keyed ? "exit 1" : "true"
+  }
   provisioner "local-exec" {
     command = "true"
     environment = {
@@ -1727,6 +1884,33 @@ resource "terraform_data" "deploy_pipeline_fix" {
     }
   }
 }
+EOF
+
+# G6s: the key decision's cosign verify, pinned on the caller's run (post-review ci-deploy.sh shape).
+cat > "$FIX/tree/apps/web-platform/infra/ci-deploy.sh" <<'EOF'
+#!/usr/bin/env bash
+readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@refs/heads/main$'
+readonly COSIGN_WORKFLOW_REF="refs/heads/main"
+readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/soleur"
+verify_image_signature() {
+  if docker run --rm "$COSIGN_IMAGE" verify --offline \
+       --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
+       --certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF" \
+       --certificate-github-workflow-repository="$COSIGN_WORKFLOW_REPOSITORY" \
+       --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
+       "$repo_digest" >/dev/null; then
+    printf '%s' "$repo_digest"
+    return 0
+  fi
+  return 3
+}
+EOF
+
+# G6u: one unit that loads the web host's credential file, and unsets the key-read name.
+cat > "$FIX/tree/apps/web-platform/infra/10-vector-doppler-token.conf" <<'EOF'
+[Service]
+EnvironmentFile=-/etc/default/soleur-doppler-token
+UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN
 EOF
 
 cat > "$FIX/tree/apps/web-platform/infra/.terraform.lock.hcl" <<'EOF'
@@ -2202,7 +2386,9 @@ if mutate g6c2-input "$MUTDIR/tree/apps/web-platform/infra/server.tf" 1 '/^resou
   mutant_red g6c2-input wf_row "$T/mut/g6c2-input.tsv" "G6c2:"
 fi
 MUTDIR="$(fixcopy g6c2-trig)"; assert_fixture_dir "$MUTDIR"
-if mutate g6c2-unhashed-trigger "$MUTDIR/tree/apps/web-platform/infra/server.tf" 2 's/^  triggers_replace = sha256\(join/  triggers_replace = (join/'; then
+# (The compliant trigger hashes the KEYLESS render, so the mutant also swaps in the delivered one:
+# unhashing a trigger that never names the token stores nothing -- G6o covers the hashed form.)
+if mutate g6c2-unhashed-trigger "$MUTDIR/tree/apps/web-platform/infra/server.tf" 4 's/^  triggers_replace = sha256\(join/  triggers_replace = (join/; s/^    local\.webhook_doppler_token_env_keyless,$/    local.webhook_doppler_token_env,/'; then
   fixcensus "$MUTDIR" "$T/mut/g6c2-trig.tsv" ""
   mutant_red g6c2-unhashed-trigger wf_row "$T/mut/g6c2-trig.tsv" "G6c2:"
 fi
@@ -2230,20 +2416,92 @@ if mutate g6m-tf-log "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 2 '/^    e
   fixcensus "$MUTDIR" "$T/mut/g6m.tsv" ""
   mutant_red g6m-tf-log wf_row "$T/mut/g6m.tsv" "G6m:"
 fi
-# Row n — a Doppler cross-project reference to the new project. (G6h deletes THIS block from a
-# copy of the suite to prove the mutant floor notices a lost G6 row; keep the markers.)
-# >>> G6H-TARGET
+# Row n — a Doppler cross-project reference to the new project.
 MUTDIR="$(fixcopy g6n)"; assert_fixture_dir "$MUTDIR"
 if mutate g6n-cross-project-reference "$MUTDIR/tree/.github/workflows/tiera.yml" 1 '$a\          doppler secrets set K='"'"'${soleur-github-app.prd.GITHUB_APP_PRIVATE_KEY}'"'"' -p soleur -c prd_terraform --silent >/dev/null'; then
   fixcensus "$MUTDIR" "$T/mut/g6n.tsv" ""
   mutant_red g6n-cross-project-reference wf_row "$T/mut/g6n.tsv" "G6n:"
 fi
-# <<< G6H-TARGET
 # Row l — the hcloud provider moved off the measured version without the census pin moving.
 MUTDIR="$(fixcopy g6l)"; assert_fixture_dir "$MUTDIR"
 if mutate g6l-provider-bump "$MUTDIR/tree/apps/web-platform/infra/.terraform.lock.hcl" 2 's/^  version     = "1\.63\.0"$/  version     = "1.64.0"/'; then
   fixcensus "$MUTDIR" "$T/mut/g6l.tsv" ""
   mutant_red g6l-provider-bump wf_row "$T/mut/g6l.tsv" "G6l:"
+fi
+# Row b, host spelling (test-design F9) — the same write under the name the HOST file uses. The
+# pre-review G6_NAME matched only the CI spellings, so this stayed green.
+MUTDIR="$(fixcopy g6b-host)"; assert_fixture_dir "$MUTDIR"
+if mutate g6b-host-spelling "$MUTDIR/tree/.github/workflows/tiera.yml" 1 '$a\          printf %s "$V" | doppler secrets set GITHUB_APP_DOPPLER_TOKEN -p soleur -c prd --silent >/dev/null'; then
+  fixcensus "$MUTDIR" "$T/mut/g6b-host.tsv" ""
+  mutant_red g6b-host-spelling wf_row "$T/mut/g6b-host.tsv" "G6b:"
+fi
+# Row c, TWO hops (test-design F15) — a local of a local of the variable, then an output. A taint
+# pass cut to one iteration taints the render but not this alias, and the row stays green.
+MUTDIR="$(fixcopy g6c-2hop)"; assert_fixture_dir "$MUTDIR"
+printf 'locals {\n  g6_hop = local.webhook_doppler_token_env\n}\noutput "leak" {\n  value     = local.g6_hop\n  sensitive = true\n}\n' > "$MUTDIR/tree/apps/web-platform/infra/zz-g6.tf"
+if fixture_written g6c-two-hop-output "$MUTDIR/tree/apps/web-platform/infra/zz-g6.tf"; then
+  fixcensus "$MUTDIR" "$T/mut/g6c-2hop.tsv" ""
+  mutant_red g6c-two-hop-output wf_row "$T/mut/g6c-2hop.tsv" "G6c:"
+fi
+# Row o — the pre-review trigger: the DELIVERED render, hashed. G6c2 admits it (sha256-wrapped, so
+# no token in state), but the value differs between the opted-in apply and every other plan.
+MUTDIR="$(fixcopy g6o-render)"; assert_fixture_dir "$MUTDIR"
+if mutate g6o-trigger-hashes-delivered-render "$MUTDIR/tree/apps/web-platform/infra/server.tf" 2 's/^    local\.webhook_doppler_token_env_keyless,$/    local.webhook_doppler_token_env,/'; then
+  fixcensus "$MUTDIR" "$T/mut/g6o-render.tsv" ""
+  mutant_red g6o-trigger-hashes-delivered-render wf_row "$T/mut/g6o-render.tsv" "G6o:"
+  if wf_row "$T/mut/g6o-render.tsv" "G6c2:"; then
+    pass "M-g6o-trigger-hashes-delivered-render: G6c2 stays green on it (so G6o is the only row that sees it)"
+  else
+    fail "M-g6o-trigger-hashes-delivered-render: G6c2 also red — the G6o row is not what this mutant measures"
+  fi
+fi
+# Row o — the non-secret delivering flag is context-varying too.
+MUTDIR="$(fixcopy g6o-flag)"; assert_fixture_dir "$MUTDIR"
+if mutate g6o-trigger-reads-delivered-flag "$MUTDIR/tree/apps/web-platform/infra/server.tf" 1 '/^    local\.webhook_doppler_token_env_keyless,$/a\    tostring(var.github_app_runtime_token_delivered),'; then
+  fixcensus "$MUTDIR" "$T/mut/g6o-flag.tsv" ""
+  mutant_red g6o-trigger-reads-delivered-flag wf_row "$T/mut/g6o-flag.tsv" "G6o:"
+fi
+# Row o — the ignore_changes exemption is per attribute: drop user_data from it and the render
+# plans a user_data change on every host in every non-opted-in plan.
+MUTDIR="$(fixcopy g6o-ign)"; assert_fixture_dir "$MUTDIR"
+if mutate g6o-ignore-changes-dropped "$MUTDIR/tree/apps/web-platform/infra/server.tf" 2 's/^    ignore_changes = \[user_data, ssh_keys\]$/    ignore_changes = [ssh_keys]/'; then
+  fixcensus "$MUTDIR" "$T/mut/g6o-ign.tsv" ""
+  mutant_red g6o-ignore-changes-dropped wf_row "$T/mut/g6o-ign.tsv" "G6o:"
+fi
+# Row q — the delivering job loses its opt-in (web-1 would render the line empty forever), and a
+# fourth job gains one.
+MUTDIR="$(fixcopy g6q-drop)"; assert_fixture_dir "$MUTDIR"
+if mutate g6q-opt-in-dropped "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 '/^          github-app-runtime-token: true$/d'; then
+  fixcensus "$MUTDIR" "$T/mut/g6q-drop.tsv" ""
+  mutant_red g6q-opt-in-dropped wf_row "$T/mut/g6q-drop.tsv" "G6q:"
+fi
+MUTDIR="$(fixcopy g6q-extra)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  extra:\n    runs-on: ubuntu-24.04\n    environment: infra-privileged\n    steps:\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          github-app-runtime-token: true\n' > "$MUTDIR/tree/.github/workflows/zz-g6q.yml"
+if fixture_written g6q-fourth-opt-in "$MUTDIR/tree/.github/workflows/zz-g6q.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g6q-extra.tsv" ""
+  mutant_red g6q-fourth-opt-in wf_row "$T/mut/g6q-extra.tsv" "G6q:"
+fi
+# Row s — the caller-ref pin dropped; the tag arm restored; the repository value resolved and wrong.
+MUTDIR="$(fixcopy g6s-ref)"; assert_fixture_dir "$MUTDIR"
+if mutate g6s-workflow-ref-flag-dropped "$MUTDIR/tree/apps/web-platform/infra/ci-deploy.sh" 1 '/--certificate-github-workflow-ref=/d'; then
+  fixcensus "$MUTDIR" "$T/mut/g6s-ref.tsv" ""
+  mutant_red g6s-workflow-ref-flag-dropped wf_row "$T/mut/g6s-ref.tsv" "G6s:"
+fi
+MUTDIR="$(fixcopy g6s-tag)"; assert_fixture_dir "$MUTDIR"
+if mutate g6s-identity-tag-arm "$MUTDIR/tree/apps/web-platform/infra/ci-deploy.sh" 2 "s/@refs\\/heads\\/main\\$'\$/@(refs\\/heads\\/main|refs\\/tags\\/v[0-9].+)\$'/"; then
+  fixcensus "$MUTDIR" "$T/mut/g6s-tag.tsv" ""
+  mutant_red g6s-identity-tag-arm wf_row "$T/mut/g6s-tag.tsv" "G6s:"
+fi
+MUTDIR="$(fixcopy g6s-repo)"; assert_fixture_dir "$MUTDIR"
+if mutate g6s-repository-value "$MUTDIR/tree/apps/web-platform/infra/ci-deploy.sh" 2 's/^readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai\/soleur"$/readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai\/soleur-fork"/'; then
+  fixcensus "$MUTDIR" "$T/mut/g6s-repo.tsv" ""
+  mutant_red g6s-repository-value wf_row "$T/mut/g6s-repo.tsv" "G6s:"
+fi
+# Row u — a credential-file loader without the unset.
+MUTDIR="$(fixcopy g6u)"; assert_fixture_dir "$MUTDIR"
+if mutate g6u-unset-dropped "$MUTDIR/tree/apps/web-platform/infra/10-vector-doppler-token.conf" 1 '/^UnsetEnvironment=/d'; then
+  fixcensus "$MUTDIR" "$T/mut/g6u.tsv" ""
+  mutant_red g6u-unset-dropped wf_row "$T/mut/g6u.tsv" "G6u:"
 fi
 # Row p — MUST-PASS: the delivering Tier-B job with its steps reordered from the canonical (the
 # two steps after the loader swapped, the opt-in key first). A census keyed on step position
@@ -2264,7 +2522,7 @@ if ! diff -q "$FIX/tree/.github/workflows/tierb-apply.yml" "$MUTDIR/tree/.github
   MUTANTS_RUN=$((MUTANTS_RUN + 1))
   pass "M-g6p-reordered: the delivering job's steps and loader keys reordered (md5 $(md5sum < "$MUTDIR/tree/.github/workflows/tierb-apply.yml" | cut -c1-8))"
   fixcensus "$MUTDIR" "$T/mut/g6p.tsv" ""
-  if awk -F'\t' 'index($2, "G6") == 1 { n++; if ($1 != "ok") bad = 1 } END { exit (n >= 11 && !bad) ? 0 : 1 }' "$T/mut/g6p.tsv"; then
+  if awk -F'\t' 'index($2, "G6") == 1 { n++; if ($1 != "ok") bad = 1 } END { exit (n >= 15 && !bad) ? 0 : 1 }' "$T/mut/g6p.tsv"; then
     pass "M-g6p-reordered: every G6 row stays GREEN on a correct job in a non-canonical order"
   else
     fail "M-g6p-reordered: a G6 row reds a compliant reordered job" "$(awk -F'\t' 'index($2, "G6") == 1 && $1 != "ok"' "$T/mut/g6p.tsv" | cut -c1-240)"
@@ -2274,7 +2532,7 @@ else
 fi
 # G6h2 — PRESENCE of every named G6 row (a count floor cannot tell a renamed or dropped row from
 # a duplicated one). Positive on the live and control TSVs, negative on a control with one removed.
-G6_ROW_IDS="G6a G6a2 G6a3 G6b G6c G6c2 G6d G6e G6m G6n G6l"
+G6_ROW_IDS="G6a G6a2 G6a3 G6b G6c G6c2 G6d G6e G6m G6n G6l G6o G6q G6s G6u"
 g6_present() { local id; for id in $G6_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
 if g6_present "$T/live.tsv" && g6_present "$T/control.tsv"; then
   pass "G6h2: every named G6 row id ($G6_ROW_IDS) is present in the live and the control census"
@@ -2290,40 +2548,24 @@ else
 fi
 }
 
-# ── G6h — the MUTANT FLOOR notices a lost Guard 6 mutant ─────────────────────────────────
-# A copy of this suite with the G6n block (between its G6H-TARGET markers) deleted must exit
-# through the mutant floor, one short of this run's count. Run over the SAME input tree through
-# the seams; IPT_G6H_NESTED stops the copy from recursing into this block.
-if [ -z "${IPT_G6H_NESTED:-}" ]; then
-  _g6h="$T/g6h"; assert_fixture_dir "$_g6h"
-  mkdir -p "$_g6h" || { printf 'FAIL SETUP: g6h mkdir\n' >&2; exit 1; }
-  awk '/^# >>> G6H-TARGET$/ { skip = 1; next } /^# <<< G6H-TARGET$/ { skip = 0; next } !skip' \
-    "$DIR/$(basename "${BASH_SOURCE[0]}")" > "$_g6h/census.sh"
-  if [ "$(grep -c '^if mutate g6n-' "$_g6h/census.sh")" -eq 0 ] && [ "$(grep -c '^if mutate g6l-' "$_g6h/census.sh")" -eq 1 ]; then
-    pass "G6h: the G6n mutant block (and only it) was deleted from a copy of the suite"
-    _g6h_rc=0
-    IPT_G6H_NESTED=1 IPT_GITHUB_DIR="$GHDIR" IPT_REPO_ROOT="$REPODIR" IPT_BASE_REF="$BASE_REF" IPT_STATE_LIST="$STATE_LIST" \
-      bash "$_g6h/census.sh" > "$_g6h/out" 2> "$_g6h/err" || _g6h_rc=$?
-    if [ "$_g6h_rc" -ne 0 ] && grep -qF "FAIL MUTANT FLOOR: only $((MUTANTS_RUN - 1)) mutants executed" "$_g6h/err"; then
-      pass "G6h: that copy exits through the MUTANT FLOOR, one mutant short ($((MUTANTS_RUN - 1)) of $MUTANTS_RUN)"
-    else
-      fail "G6h: deleting a G6 mutant did not trip the mutant floor" "rc=$_g6h_rc $(head -c 300 "$_g6h/err")"
-    fi
-  else
-    fail "G6h: the G6H-TARGET block deletion did not land"
-  fi
-fi
-
 # ── FLOOR + LEDGER (ADR-193: printf + exit, never through pass()/fail()) ─────────────
 # 26 -> 27 (review W1): M-g1-10-destroy-only-no-environment.
 # 27 -> 30 (#8714): M-g4-6 (two landings) and M-g4-7, the intended-destroy allowance rows.
 # 30 -> 32 (#9215): M-g1-i3 and M-g1-i4, the root-key extract-precedence mutants (drop + reorder).
 # 32 -> 52 (#8609): Guard 6 — 19 fixture landings (g6a..g6l, g6p) + the g6h2 TSV truncation.
-# 52 -> 53 (merge with #6604 step 7): M-g1-11, which main added without raising this floor. EXACT,
-# not a lower bound: G6h asserts a copy missing one G6 mutant stops here at 52.
-MUTANT_FLOOR=53
+# 52 -> 53 (merge with #6604 step 7): M-g1-11, which main added without raising this floor.
+# 53 -> 64 (#8609 review): g6b-host, g6c-2hop, g6o x3, g6q x2, g6s x3, g6u (11 landings).
+# EXACT, split into a `-lt` floor and a `-gt` ceiling (no slack). The ceiling replaces the nested
+# G6h self-run (review: simplicity P2, patterns P3-4): with equality enforced here, deleting ANY
+# mutant trips this line by construction, not only the one G6h deleted; and a mutant added without
+# raising the number names its real cause instead of reding G6h.
+MUTANT_FLOOR=64
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
+  exit 1
+fi
+if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
+  printf 'FAIL MUTANT FLOOR: %s mutants executed but MUTANT_FLOOR is %s — it is exact; raise it to %s.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" "$MUTANTS_RUN" >&2
   exit 1
 fi
 # Assertion FLOOR: live census 16 + harness 7 + mutants 17 x 2 = 57 (exact).
@@ -2334,7 +2576,9 @@ _ran=$((passes + fails))
 # 93 -> 95 (#6604 step 7): M-g1-11, the state-rm-only writer (1 landing + 1 verdict). Measured: 95 ran.
 # 95 -> 150 (#8609): live G6a..G6l (11), G6g/G6g2 (2), 20 G6 landings + 18 G6 verdicts + G6p's
 # must-pass (1), G6h2 presence (1), G6h (2). Measured: 150 ran.
-FLOOR=150
+# 150 -> 175 (#8609 review): live G6o/G6q/G6s/G6u (4), 11 landings + 11 verdicts, the g6o-render
+# G6c2-stays-green control (1), minus the deleted G6h (2). Measured: 175 ran.
+FLOOR=175
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

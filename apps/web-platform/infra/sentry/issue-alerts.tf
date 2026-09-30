@@ -1838,10 +1838,10 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
 
 # #8609 / ADR-241 D10 — the web host's runtime GitHub App key, checked at boot and at deploy.
 #
-# BOOT (github_app_key_boot). After the first `docker run`, soleur-host-bootstrap.sh runs the
-# canary key probe (`GET /app`, slug soleur-ai) in the serving container and emits ONE
-# soleur-boot-emit stage per outcome: `github_app_key_ok` or one of the five below. A SEPARATE
-# rule, not five more stages on web_terminal_boot_fatal above: the boot is not aborted (the
+# BOOT (web_host_github_app_key_boot). After the first `docker run`, soleur-host-bootstrap.sh runs
+# the canary key probe (`GET /app`, slug soleur-ai) in the serving container and emits ONE
+# soleur-boot-emit stage per outcome: `github_app_key_ok` or one of the six below. A SEPARATE
+# rule, not six more stages on web_terminal_boot_fatal above: the boot is not aborted (the
 # container is already up), so folding them into "terminal-boot-fatal" would page a degraded key
 # as a dead host and teach the reader to discount that rule — the web_private_nic_boot_gate
 # precedent. Without a stage-filtered rule these events land in the shared, always-open
@@ -1850,16 +1850,26 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
 # deliberately absent), the same failure-only precedent as web_terminal_boot_fatal.
 # `_transport` is included although it does not block a deploy: at boot it means the host could
 # not prove its key at all, and R5/R7 read web-2's key state from exactly these events.
+# `_ok_fallback` (warning) is a key GitHub ACCEPTED that did not come from the isolated project
+# (source != isolated: the prd copy, before R6). It is NOT an ok for R5/R6, which read only
+# `github_app_key_ok`; paging it keeps a fallback boot from passing silently. Expected on every
+# web host boot until R3 delivers the read token, so a page then is informational.
 #
-# DEPLOY (github_app_key_deploy). ci-deploy.sh's curl emitter sends feature=ci-deploy
-# op=github-app-key on an isolated-project fetch failure, an unsigned image refused the key, or a
-# canary probe verdict of rejected/transport (a classification and a length only, never Doppler
-# stderr). `no_token` (the pre-R3 state) emits nothing, so every event on this op is non-ok.
+# DEPLOY (ci_deploy_github_app_key). ci-deploy.sh's curl emitter sends feature=ci-deploy
+# op=github-app-key for every classification at warning or error (a classification and a length
+# only, never Doppler stderr): env_hijack (a refused runtime-hijack name in prd; deploy ABORT),
+# unverified_image (unsigned or wrong identity; no key handed out), fetch_failed and merge_failed
+# (the isolated-project read or the env-file overlay), key_missing and probe_rejected (canary
+# refusal), probe_transport (warning: GitHub unreachable or rate-limited; promotes) and
+# probe_absent (warning: the image has no probe, so acceptance went unchecked; promotes — the same
+# level the boot rule pages on). The info classes (no_token, the pre-R3 state; ok; probe_ok;
+# verified_ref_unrecorded) are journald-only and never reach Sentry, so every event here is
+# non-ok. The rule matches the op, not a class list, so a new emitter class pages unedited.
 #
 # Distinct `frequency_minutes` 29 and 32 avoid Sentry POST-time exact-duplicate dedup (both unused).
 # Judge severity by the event's host_name / level, not by the rule name. Runbook:
 # infra-credential-tiers-8209.md, "Runtime App key (#8609)".
-resource "sentry_alert" "github_app_key_boot" {
+resource "sentry_alert" "web_host_github_app_key_boot" {
   organization      = var.sentry_org
   name              = "web-host-github-app-key-boot"
   enabled           = true
@@ -1879,6 +1889,7 @@ resource "sentry_alert" "github_app_key_boot" {
         { tagged_event = { key = "stage", match = "eq", value = "github_app_key_transport" } },
         { tagged_event = { key = "stage", match = "eq", value = "github_app_key_probe_absent" } },
         { tagged_event = { key = "stage", match = "eq", value = "github_app_key_exec_failed" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_ok_fallback" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
@@ -1891,7 +1902,7 @@ resource "sentry_alert" "github_app_key_boot" {
   }
 }
 
-resource "sentry_alert" "github_app_key_deploy" {
+resource "sentry_alert" "ci_deploy_github_app_key" {
   organization      = var.sentry_org
   name              = "ci-deploy-github-app-key"
   enabled           = true

@@ -949,6 +949,43 @@ describe("#8609 GITHUB_APP_DOPPLER_TOKEN line (soleur-doppler-token.tmpl)", () =
     expect(direct).toEqual([]);
     expect(viaRender.map(([k]) => k)).toEqual(["soleur_doppler_token_env_b64"]);
   });
+
+  // The Terraform end of the wire (test-design F6). Both ends were pinned (the template line above,
+  // ci-deploy.sh's reader in Guard 7) but not the map entry between them: `= ""` in place of the
+  // variable left every suite green while the host never received the line. Two renders of the one
+  // template exist: the DELIVERED one (user_data + the push environment) must pass the variable,
+  // and the KEYLESS one (the deploy_pipeline_fix trigger, census row G6o) must pass "" and be
+  // otherwise identical, so the trigger hashes exactly "the delivered file minus the key line".
+  function localTmplMap(localName: string): Record<string, string> {
+    const re = new RegExp(`^[ \\t]*${localName}[ \\t]*=[ \\t]*templatefile\\("\\$\\{path\\.module\\}/soleur-doppler-token\\.tmpl",\\s*\\{`, "m");
+    const m = re.exec(serverTf);
+    if (m === null) throw new Error(`local.${localName} = templatefile(".../soleur-doppler-token.tmpl", {...}) not found`);
+    let i = m.index + m[0].length;
+    const start = i;
+    for (let depth = 1; i < serverTf.length && depth > 0; i++) {
+      if (serverTf[i] === "{") depth++;
+      else if (serverTf[i] === "}") depth--;
+    }
+    return parseVarMap(serverTf.slice(start, i - 1));
+  }
+
+  test("F6: the DELIVERED render passes var.github_app_runtime_doppler_token under the template's own directive name", () => {
+    const tmpl = readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8");
+    const directive = /%\{ if ([a-zA-Z0-9_]+) != "" ~\}/.exec(tmpl);
+    expect(directive?.[1]).toBe("github_app_doppler_token");
+    expect(localTmplMap("webhook_doppler_token_env")[directive![1]]).toBe("var.github_app_runtime_doppler_token");
+    expect(serverTf).toMatch(/^\s*SOLEUR_DOPPLER_TOKEN_B64\s*=\s*base64encode\(local\.webhook_doppler_token_env\)\s*$/m);
+  });
+
+  test("F6: the KEYLESS render passes \"\" and is otherwise the delivered render, key for key", () => {
+    const delivered = localTmplMap("webhook_doppler_token_env");
+    const keyless = localTmplMap("webhook_doppler_token_env_keyless");
+    expect(keyless.github_app_doppler_token).toBe('""');
+    const { github_app_doppler_token: _d, ...restDelivered } = delivered;
+    const { github_app_doppler_token: _k, ...restKeyless } = keyless;
+    expect(Object.keys(restDelivered).length).toBeGreaterThanOrEqual(4);
+    expect(restKeyless).toEqual(restDelivered);
+  });
 });
 
 describe("rendered user_data size (Hetzner 32,768 B cap)", () => {

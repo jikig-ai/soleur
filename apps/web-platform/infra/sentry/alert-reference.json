@@ -1740,6 +1740,14 @@
             "comparison": {
               "key": "stage",
               "match": "eq",
+              "value": "github_app_key_ok_fallback"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
               "value": "github_app_key_probe_absent"
             },
             "type": "tagged_event"
