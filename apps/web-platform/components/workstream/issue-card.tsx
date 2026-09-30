@@ -5,11 +5,15 @@
 // (Addendum item 5), and a quiet "Live" marker (Addendum item 4 — green dot +
 // green text, NO fill) for active seeded cards.
 
+import { memo } from "react";
 import { isLive, type WorkstreamIssue } from "@/lib/workstream";
 import { AssigneeChip, CreatorChip, UserAvatar } from "./assignee-chip";
 import { PriorityPill } from "./priority-pill";
 
-export function IssueCard({
+// memoized: the progressive SSE feed commits up to ~23 cache updates per load
+// and each commit builds a new issues ARRAY but only new objects for streamed
+// ids — unchanged cards keep their reference and skip the re-render.
+export const IssueCard = memo(function IssueCard({
   issue,
   onOpen,
 }: {
@@ -52,4 +56,4 @@ export function IssueCard({
       </div>
     </button>
   );
-}
+});
