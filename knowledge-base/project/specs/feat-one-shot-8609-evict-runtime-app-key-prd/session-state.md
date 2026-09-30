@@ -25,3 +25,8 @@
   - Plan review: DHH, Kieran, simplicity, architecture, spec-flow.
   - Deepen: security-sentinel, deployment-verification, observability-coverage, user-impact, test-design.
   - Research: repo-research, learnings-research, functional-discovery.
+
+## Work Phase (in progress, 2026-09-30)
+- Committed: legal records (77e73569a3), records slice (218b1c848b), WIP checkpoint of the host + terraform slices after a session restart (7c5d4af30a — to be squashed before ship).
+- Deferral issues filed: #9277 (R8, webhook/client secrets), #9278 (web-host metadata drop); simplicity reviewer CONCUR on both, DISSENT on consolidating them.
+- App-settings-page steps R0/R1/R7/R8: playwright-attempt: not reached — Playwright MCP server CONNECTION_CLOSED in both sessions (attempted-blocked-on-tool, not operator-only). These are post-merge steps; the bootstrap script's fallback applies, and the attempt must be retried in a session where the Playwright MCP connects, before R0 runs.
