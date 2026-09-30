@@ -2779,7 +2779,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
   // the per-host GHCR_DENY rows are ci-deploy journald lines that land only in the Logs warehouse,
   // which has no unauthenticated read path, and a host's /etc/hosts has no remote probe. Genuine.
-  const BASELINE_DECLARED_PROBES = 37;
+  // #8609 (2026-09-30): +1 (37 -> 38, after #9169 took 36 -> 37) for `2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`apps/web-platform/scripts/github-app-key-status.sh`)
+  // signs a GET to the HMAC-gated `/hooks/deploy-status` with WEBHOOK_DEPLOY_SECRET plus the CF Access
+  // pair (Doppler soleur/prd_terraform). NO SUBSTITUTE: which key source a production host runs must
+  // not be disclosed by any unauthenticated endpoint, and deploy state has no other read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 38;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
