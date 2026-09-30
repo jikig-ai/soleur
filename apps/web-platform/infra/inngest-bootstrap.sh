@@ -1604,9 +1604,12 @@ UNITEOF
 # the fragments contain `/`, `&`, and the literal `$${...}` Doppler token, all of which
 # sed's replacement string would mangle. The fragments are single-quoted so `$${...}`
 # stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
-# injected env (same $${...} contract as before). The `exec` in the ExecStart keeps
-# inngest as the unit's main PID (Type=simple; the `inngest pause` drain never
-# engages — the pause call above is a dead call on current versions).
+# injected env (same $${...} contract as before). NOTE the `exec` inside the bash -c
+# payload does NOT make inngest the unit's main PID — `doppler run` forks the bash
+# child and stays the MainPID itself (signal-forwarding supervisor), which is why
+# /proc/<MainPID>/exe resolves to doppler, not inngest. (Type=simple; the
+# `inngest pause` drain never engages — the pause call above is a dead call on
+# current versions).
 # #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
 # the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
 # every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
