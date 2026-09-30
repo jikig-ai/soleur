@@ -161,3 +161,10 @@
 - Pushed head `741646679c` refreshes the canonical privacy-policy SHA. CI on the superseded `bc77a93d` head passed `test-bun` and failed `tc-document-sha-guard` as expected; the RLS/authz-fuzz run independently found the new `record_codex_history_transfer_acknowledgment` and `codex_history_transfer_acknowledged` RPCs missing from the authenticated SECURITY DEFINER classification.
 - Local test changes add both RPCs as tenant-B-versus-tenant-A attacks and seed a real A-owned Codex binding and acknowledgment with an owner positive control, avoiding a vacuous `false` from a missing row. These changes have not been run locally. They need a commit, push, and fresh CI; no shared database was changed.
 - CI on `7bd3d16ce8` then failed while seeding that fixture because engine runs default to generation `0`, which acknowledgments reject. The fixture now explicitly inserts generation `1`; fresh CI is required to verify it.
+
+## Verification as of 2026-09-30 WebSocket-type guard correction
+
+- CI on pushed head `5e238a4b62370e35104cb0cc959b27050aa8c4a5` failed `test-webplat (2/2)` because the exact `KNOWN_WS_MESSAGE_TYPES` expectation did not include the three newly added Codex history-transfer acknowledgment lifecycle messages. The expected set now includes those three types; no Web Platform tests were run locally per the operator's CI-only validation authorization.
+- The same pushed head's `tenant-integration` and `tenant-integration-required` both completed successfully, including dev migration apply and tenant-isolation tests. The shared dev-suite mutex was released cleanly.
+- Current `origin/main` `c7bcf48d8077d1a3c29088ab63e4accdc1e3f0d7` was merged after the tenant run into local feature head `0374e42e3c2972d98cfdef8d7f4f3e1c4d406e8a`. PR #9051 remains draft and needs a push plus fresh CI for both this main sync and the WebSocket guard correction.
+- API-key and managed CLO dispositions remain PENDING/no authorization. Screenshot design QA, independent review/QA, and separate API-key/managed Web runtime qualification remain incomplete. No provider request, feature-flag change, or shared database write occurred.

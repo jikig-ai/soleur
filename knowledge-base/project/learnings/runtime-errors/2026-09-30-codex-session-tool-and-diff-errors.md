@@ -118,3 +118,9 @@ alone would make these denial checks vacuous.
 The first real fixture exposed that `agent_engine_runs` defaults its auth-mode
 generation to zero, which the acknowledgment table correctly rejects. Seed a
 positive generation explicitly before inserting the acknowledgment.
+
+The Codex lifecycle added three WebSocket message types, but CI's exact
+`KNOWN_WS_MESSAGE_TYPES` guard did not include them. When adding a wire message,
+update `apps/web-platform/test/ws-known-types-guard.test.ts` alongside the
+shared wire schema and handlers; this guard intentionally rejects both missing
+and stale entries.
