@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-30-fix-concierge-stop-gate-sentinel-leak-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260930-145106-2026-09-30-fix-concierge-stop-gate-sentinel-leak-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 

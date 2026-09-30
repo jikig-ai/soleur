@@ -1,6 +1,6 @@
 # Tasks — fix: Concierge stop-gate sentinel leak
 
-Plan: knowledge-base/project/plans/2026-09-30-fix-concierge-stop-gate-sentinel-leak-plan.md
+Plan: knowledge-base/project/plans/archive/20260930-145106-2026-09-30-fix-concierge-stop-gate-sentinel-leak-plan.md
 Every code task starts with its failing test (cq-write-failing-tests-before). Commands run from apps/web-platform/ unless noted.
 
 ## 1. Root cause — web runtime must not run the operator guard

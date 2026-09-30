@@ -1,6 +1,6 @@
 # Decision challenges — plan review (2026-09-30)
 
-Plan: knowledge-base/project/plans/2026-09-30-fix-concierge-stop-gate-sentinel-leak-plan.md
+Plan: knowledge-base/project/plans/archive/20260930-145106-2026-09-30-fix-concierge-stop-gate-sentinel-leak-plan.md
 Shipped on the planner's defaults; each item below is a Taste or User-Challenge finding from the review panel.
 
 1. **User-Challenge — cut Phase 2 (`stripStopGateMarkup` + runner call + Sentry op).**
