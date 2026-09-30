@@ -204,10 +204,10 @@ _ln_id="$(grep -nE '^id "\$GIT_USER" >/dev/null 2>&1 \|\| \{' <<< "$BOOT_CODE" |
 _ln_sh="$(grep -nE '^_git_shell="\$\(getent passwd "\$GIT_USER" \| cut -d: -f7\)"' <<< "$BOOT_CODE" | head -1 | cut -d: -f1)"
 if [ -n "$_ln_id" ] && [ -n "$_ln_sh" ] && [ "$_ln_id" -lt "$_ln_sh" ]; then pass "S7b: the login-shell readback (line $_ln_sh) follows the 'user absent' FATAL guard (line $_ln_id)"
 else fail "S7b: the shell readback is not downstream of the id guard (id=$_ln_id shell=$_ln_sh) — an absent account dies silently under pipefail"; fi
-# S7c — the placeholder fence is installed only from a ROOT-owned staged file (/tmp is sticky
+# S7c — the fence hook is installed only from a ROOT-owned staged file (/tmp is sticky
 # and world-writable; a git-uid file there would become the root:root 0755 fence on a re-run).
-if grep -qE '^[[:space:]]*\[\[ "\$\(stat -c %U "\$PLACEHOLDER_STAGED"\)" == root \]\] \|\| \{' <<< "$BOOT_CODE"; then pass "S7c: the staged placeholder must be root-owned before it is installed as the fence"
-else fail "S7c: nothing asserts the staged placeholder in /tmp is root-owned before install"; fi
+if grep -qE '^[[:space:]]*\[\[ "\$\(stat -c %U "\$FENCE_STAGED"\)" == root \]\] \|\| \{' <<< "$BOOT_CODE"; then pass "S7c: the staged fence hook must be root-owned before it is installed as the fence"
+else fail "S7c: nothing asserts the staged fence hook in /tmp is root-owned before install"; fi
 
 # S8 — the four defaults of the store's mount root and hook directory AGREE across the writer
 # of record (the bootstrap) and the three forced-command wrappers (#8052 review: every wrapper

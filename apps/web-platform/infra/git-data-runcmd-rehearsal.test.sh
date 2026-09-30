@@ -582,7 +582,7 @@ EXPECTED_PATHS = {
     "git_data_luks_reopen_service":     "/etc/systemd/system/git-data-luks-reopen.service",
     "git_data_luks_reopen_failure_service": "/etc/systemd/system/git-data-luks-reopen-failure.service",
     "git_data_luks_reopen_timer":       "/etc/systemd/system/git-data-luks-reopen.timer",
-    "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive-placeholder.sh",
+    "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive.sh",
 }
 
 # An absolute floor, NOT a self-derived one. The first rewrite of this check derived the

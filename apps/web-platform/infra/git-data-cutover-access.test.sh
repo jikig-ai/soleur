@@ -18,7 +18,7 @@
 #   raw capture of an ssh invocation outside it.
 # Guard 6 (cutover half) — workflow-level git-data-state, cancel-in-progress False, the literal
 #   equal to git_data_host_replace's group in apply-web-platform-infra.yml.
-# Guard 7 — the workflow's inputs are exactly {confirm}; DRY_RUN/ROLLBACK/CONFIRM_WIPE carrying a
+# Guard 7 — the workflow's inputs are exactly {confirm, mode, lineage}; DRY_RUN/ROLLBACK/CONFIRM_WIPE carrying a
 #   non-default value exits 5 with an EMPTY timeline.
 # Bridge — the "Decode CI SSH private key" step exports exactly {CI_SSH_KEYFILE, WEB_HOST_SSH} on
 #   the server-ip branch and exactly {TF_VAR_ci_ssh_private_key} on the terraform branch.
@@ -202,6 +202,46 @@ case "$c" in
       notok) printf 'nok\n' ;;
       exec)  exec bash -c "$c" ;;
     esac
+    exit 0 ;;
+  # ── PR2 mode-verb remotes ─────────────────────────────────────────────────────────
+  "systemctl show "*)
+    case "${SHIM_GC_STATE:-inactive}" in
+      r*) exit "${SHIM_GC_STATE#r}" ;;
+      *)  printf '%s\n' "${SHIM_GC_STATE}"; exit 0 ;;
+    esac ;;
+  "systemctl stop "*)   exit "${SHIM_GC_STOP_RC:-0}" ;;
+  "systemctl start "*)  exit "${SHIM_GC_START_RC:-0}" ;;
+  "fz="*)
+    # The freeze provenance session: absent | ours/foreign (writer + at) | rc 2 unattributed.
+    case "${SHIM_FREEZE:-absent}" in
+      absent)   printf 'absent\n' ;;
+      ours)     printf 'ours writer=%s at=1700000000\n' "${CUTOVER_LINEAGE:-x}" ;;
+      foreign)  printf 'foreign writer=other at=1700000000\n' ;;
+      unattributed) exit 2 ;;
+      r*)    exit "${SHIM_FREEZE#r}" ;;
+    esac
+    exit 0 ;;
+  "printf 'writer="*)   exit "${SHIM_FREEZE_WRITE_RC:-0}" ;;
+  "d="*)   # the legacy-lock purge session
+    case "${SHIM_PURGE:-ok}" in
+      ok)    exit 0 ;;
+      held)  exit 23 ;;
+      r*)    exit "${SHIM_PURGE#r}" ;;
+    esac ;;
+  "rm -f "*)   exit "${SHIM_UNFREEZE_RC:-0}" ;;
+  "id="*)   # the transactional probe session
+    case "${SHIM_PROBE:-ok}" in
+      ok)       exit 0 ;;
+      provfail) exit 11 ;;
+      nocreate) exit 12 ;;
+      scratch)  exit 13 ;;
+      pushfail) exit 14 ;;
+      noref)    exit 15 ;;
+      remfail)  exit 16 ;;
+      residue)  exit 17 ;;
+      r*)    exit "${SHIM_PROBE#r}" ;;
+    esac ;;
+  "env -i "*)   # the probe's residue-cleanup retry — always exits 0 (idempotent remove)
     exit 0 ;;
 esac
 exit "${SHIM_REMOTE_RC:-1}"
@@ -655,7 +695,7 @@ ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHos
 ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 -W 10.0.1.20:22 10.0.1.10
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 true
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -n -o SOURCE --mountpoint /mnt/git-data
-ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 r=/mnt/git-data; src=/dev/mapper/git-data; mk=/etc/git-data/store-verified; d=/mnt/git-data/repositories; fz="$r/.cutover-freeze"; s=$(findmnt -n -o SOURCE --mountpoint "$r") || exit 5; [ "$s" = "$src" ] || exit 6; [ ! -e "$fz" ] || exit 23; fu=$(findmnt -n -o UUID --mountpoint "$r") || exit 5; [ -n "$fu" ] || exit 24; [ -f "$mk" ] && [ -s "$mk" ] || exit 21; m=$(head -n 1 "$mk") || exit 16; [ "$m" = "$fu" ] || exit 22; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; dr=$(readlink -f "$d") && rr=$(readlink -f "$r") && t=$(stat -c %m "$dr") || exit 9; [ "$t" = "$rr" ] || exit 8; n=$(find -H "$d" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name lost+found -printf .) || exit 4; echo "${#n}"
+ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 r=/mnt/git-data; src=/dev/mapper/git-data; mk=/etc/git-data/store-verified; d=/mnt/git-data/repositories; fz="$r/.cutover-freeze"; s=$(findmnt -n -o SOURCE --mountpoint "$r") || exit 5; [ "$s" = "$src" ] || exit 6; [ ! -e "$fz" ] || exit 23; fu=$(findmnt -n -o UUID --mountpoint "$r") || exit 5; [ -n "$fu" ] || exit 24; [ -f "$mk" ] && [ -s "$mk" ] || exit 21; m=$(head -n 1 "$mk") || exit 16; [ "$m" = "$fu" ] || exit 22; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; dr=$(readlink -f "$d") && rr=$(readlink -f "$r") && t=$(stat -c %m "$dr") || exit 9; [ "$t" = "$rr" ] || exit 8; n=$(find -H "$d" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf .) || exit 4; echo "${#n}"
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 h=/mnt/git-data/hooks; p="$h/pre-receive"; src=/dev/mapper/git-data; sp=/mnt/git-data/hooks; w=/usr/local/bin/git-data-transport-wrapper.sh; [ -L "$h" ] && exit 10; [ -d "$h" ] || exit 10; [ -L "$p" ] && exit 12; [ -f "$p" ] && [ -x "$p" ] || exit 12; oh=$(stat -c '%U:%G %a' "$h") || exit 16; op=$(stat -c '%U:%G %a' "$p") || exit 16; [ "$oh" = "root:git 750" ] || exit 11; [ "$op" = "root:root 755" ] || exit 13; pp=$(stat -c '%U %a' "${h%/*}") || exit 16; case "$pp" in "root "[0-7][0145][0145]|"root "[0-7][0-7][0145][0145]) ;; *) exit 19 ;; esac; runuser -u git -- true || exit 16; runuser -u git -- test -r "$p" && runuser -u git -- test -x "$p" || exit 17; v=$(env -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM git config --system --includes --get core.hooksPath); g=$?; [ "$g" -le 1 ] || exit 16; [ "$v" = "$sp" ] || exit 14; grep -qxF -- HOOKS_DIR=\"\$\{GIT_DATA_HOOKS_DIR:-/mnt/git-data/hooks\}\" "$w" && grep -qxF -- exec\ git\ -c\ \"core.hooksPath=\$\{HOOKS_DIR\}\"\ \"\$\{verb#git-\}\"\ \"\$repo_real\" "$w" || exit 18; s=$(findmnt -no SOURCE -T "$h") || exit 5; [ "$s" = "$src" ] || exit 15; s=$(findmnt -no SOURCE -T "$p") || exit 5; [ "$s" = "$src" ] || exit 15; echo ok
 EXP
 # case_ac2_timeline <run-name> — the recorded remote timeline equals the expected file exactly.
@@ -724,7 +764,14 @@ case_probe_error() {
 # that copy must also carry hooks/ in both passes (#8101).
 case_verb_census() { # <script>
   local code n hits
-  code="$(sed -E 's/^[[:space:]]*#.*$//; s/[[:space:]]+# .*$//' "$1" | grep -vE '^[[:space:]]*$')"
+  # PR2: the write verbs legitimately live INSIDE the mode functions' remote-command
+  # strings (systemctl/rm/flock/runuser run on git-data via gd_exec, never on this host).
+  # The census exempts those function bodies; a mutating verb anywhere else — or a
+  # resurrected deleted-function name ANYWHERE — still trips it.
+  code="$(sed -E 's/^[[:space:]]*#.*$//; s/[[:space:]]+# .*$//' "$1" | awk '
+    /^(mode_freeze|mode_unfreeze|mode_probe|probe_freeze|require_lineage|gd_exec)\(\) \{/ {skip=1; next}
+    skip && /^\}/ {skip=0; next}
+    !skip' | grep -vE '^[[:space:]]*$')"
   n="$(printf '%s\n' "$code" | wc -l)"
   hits="$(printf '%s\n' "$code" | grep -nE '(^|[^A-Za-z0-9_-])(rsync|cryptsetup|mount|umount|mkfs(\.[a-z0-9]+)?|touch|systemctl|doppler|web_ssh)([^A-Za-z0-9_-]|$)|(^|[^A-Za-z0-9_-])rm[[:space:]]+-[A-Za-z]*(rf|fr)|soleur-(web|drain)|(bulk|delta)_rsync|repoint_luks_[a-z_]+|canary_luks_[a-z_]+|old_volume_[a-z_]+|prepare_luks_[a-z_]+|verify_set_identity|(acquire|release)_freeze|flip_flag_and_reload' || true)"
   CENSUS_DETAIL="scanned=$n hits=[$(printf '%s' "$hits" | tr '\n' '|' | cut -c1-300)]"
@@ -842,12 +889,12 @@ else fail "G2 census: a mutating verb or deleted function survives" "$CENSUS_DET
 case_main_order() { # <script>
   local main calls
   main="$(awk '/^main\(\) \{/{m=1; next} m && /^\}/{exit} m' "$1" | sed -E 's/^[[:space:]]*#.*$//' | grep -vE '^[[:space:]]*$')"
-  calls="$(printf '%s\n' "$main" | grep -oE '^[[:space:]]*(refuse_real_modes|resolve_roster|refuse_if_config_unsafe|access_gate|refuse_if_unmounted|refuse_if_not_on_mapper|refuse_if_store_unverified_or_not_empty|refuse_if_fence_not_intact)[[:space:]]*$' | tr -d ' ' | paste -sd, -)"
+  calls="$(printf '%s\n' "$main" | grep -oE '(refuse_legacy_modes|resolve_roster|refuse_if_config_unsafe|access_gate|refuse_if_unmounted|refuse_if_not_on_mapper|refuse_if_store_unverified_or_not_empty|refuse_if_fence_not_intact)([[:space:]]*$)|[a-z_]+\)[[:space:]]*(mode_freeze|mode_unfreeze|mode_probe)[[:space:]]*;;$' | sed -E 's/^([a-z_]+\)[[:space:]]*)?([a-z_]+).*$/\2/' | paste -sd, -)"
   ORDER_DETAIL="$calls"
-  [ "$calls" = "refuse_real_modes,resolve_roster,refuse_if_config_unsafe,access_gate,refuse_if_unmounted,refuse_if_not_on_mapper,refuse_if_store_unverified_or_not_empty,refuse_if_fence_not_intact" ] \
-    && [ "$(grep -cE '(\$\(|`|\||&&)[^#]*(access_gate|refuse_if_|refuse_real_modes)|(access_gate|refuse_if_[a-z_]+|refuse_real_modes)[[:space:]]*(\|\||&&|\|)' "$1" || true)" = 0 ]
+  [ "$calls" = "refuse_legacy_modes,resolve_roster,refuse_if_config_unsafe,access_gate,refuse_if_unmounted,refuse_if_not_on_mapper,refuse_if_store_unverified_or_not_empty,refuse_if_fence_not_intact,mode_freeze,mode_unfreeze,mode_probe" ] \
+    && [ "$(grep -cE '(\$\(|`|\||&&)[^#]*(access_gate|refuse_if_|refuse_legacy_modes)|(access_gate|refuse_if_[a-z_]+|refuse_legacy_modes)[[:space:]]*(\|\||&&|\|)' "$1" || true)" = 0 ]
 }
-if case_main_order "$SCRIPT"; then pass "H5: main() runs refuse_real_modes, resolve_roster, the config check, access_gate, then the store probes and the fence probe in order, each once, never wrapped"
+if case_main_order "$SCRIPT"; then pass "H5: main() runs refuse_legacy_modes, resolve_roster, then MODE-dispatch — the proof arm in probe order, the mode verbs via mode_*"
 else fail "H5: main() order/shape is wrong" "calls=[$ORDER_DETAIL]"; fi
 
 # ── CONFIG — every configurable path is a safe literal before anything is printed or dialed ──
@@ -1347,14 +1394,16 @@ case_hang() {
 case_capture_census() { # <script>
   local code outside calls
   code="$(sed -E 's/^[[:space:]]*#.*$//' "$1")"
-  # Lines outside access_gate/gd_capture/resolve_roster that expand an ssh invocation.
+  # Lines outside access_gate/gd_capture/gd_exec/resolve_roster that expand an ssh
+  # invocation. gd_exec (PR2) is the write twin of gd_capture — same bound, same pin, no
+  # stdout acceptance — so it joins the allowlist.
   outside="$(printf '%s\n' "$code" | awk '
-    /^(access_gate|gd_capture|resolve_roster)\(\) \{/ {skip=1; next}
+    /^(access_gate|gd_capture|gd_exec|resolve_roster)\(\) \{/ {skip=1; next}
     skip && /^\}/ {skip=0; next}
     !skip' | grep -nE '"\$\{(inv|gdinv)\[@\]\}"|\$\{?GIT_DATA_SSH|\$\{?WEB_HOST_SSH' || true)"
   calls="$(printf '%s\n' "$code" | grep -cE '^[[:space:]]+gd_capture ' || true)"
   CAPTURE_DETAIL="calls=$calls outside=[$(printf '%s' "$outside" | tr '\n' '|' | cut -c1-300)]"
-  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 3 ]
+  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 5 ]
 }
 if case_line2; then pass "S8a/G5: a findmnt answer with an injected second line is probe_failed rc=96 and neither line is printed"
 else fail "S8a/G5: a multi-line captured value was accepted or printed" "$(ctx)"; fi
@@ -1364,7 +1413,7 @@ run_case g5big "${KEYED[@]}" SHIM_FINDMNT=big
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" && ! grep -q 'aaaaaaaaaa' "$OUT"; then
   pass "G5: a 5005-byte answer that would match once truncated is refused (cap 4096), never printed"
 else fail "G5: an oversized answer was truncated into an accepted value, or printed" "$(ctx)"; fi
-if case_capture_census "$SCRIPT"; then pass "G5 census: exactly three gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
+if case_capture_census "$SCRIPT"; then pass "G5 census: exactly five gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
 else fail "G5 census: a raw capture or a stray invocation exists" "$CAPTURE_DETAIL"; fi
 
 # ── GUARD 7 — real modes are refused before any remote call ───────────────────────────
@@ -1459,9 +1508,191 @@ SHIM
   else fail "BR: terraform branch export set is [$_got] (rc=$G2_RC), expected TF_VAR_ci_ssh_private_key" "$(tail -3 "$T/g2-tf/stdout" | tr '\n' '|' | sed 's/::/: :/g')"; fi
 fi
 
+# ── MODE VERBS (PR2) — freeze / unfreeze / probe over the same shims ──────────────────
+# run_mode <name> <mode> [VAR=value ...] — a full-mode run: access gate + config defaults
+# clear, then the verb's own remotes under their SHIM_* arms.
+run_mode() {
+  local name="$1" mode="$2"; shift 2
+  run_case "$name" "${KEYED[@]}" MODE="$mode" CUTOVER_LINEAGE="lin-test-1" "$@"
+}
+LIN="lin-test-1"
+
+echo; echo "--- mode verbs (MODE=freeze|unfreeze|probe)"
+
+# MZ-F1: freeze on a clean store — gc quiesced, timer stopped, sentinel written with
+# provenance, purge runs; verdict=ok on all three probes.
+run_mode mz-f1-ok freeze SHIM_GC_STATE=inactive SHIM_FREEZE=absent SHIM_PURGE=ok
+if [ "$RC" = 0 ] && has_store freeze ok && has_store freeze-gc-stopped ok && has_store lock-purge ok \
+   && grep -q 'systemctl stop git-data-gc.timer' "$TLF" && grep -q "printf 'writer=" "$TLF" && grep -q "$LIN" "$TLF"; then
+  pass "MZ-F1: freeze on a clean store: gc stop -> sentinel (writer=lineage) -> purge, all ok"
+else fail "MZ-F1: freeze happy path wrong" "$(ctx)"; fi
+
+# MZ-F2: a RUNNING gc.service refuses before the timer stop — the window it must close.
+# verdict=gc_active (a completed read returning a refused state is NOT probe_failed).
+run_mode mz-f2-gcactive freeze SHIM_GC_STATE=active
+if [ "$RC" = 5 ] && has_store freeze-gc-quiesce gc_active \
+   && ! grep -q 'systemctl stop' "$TLF" && ! grep -q "printf 'writer=" "$TLF"; then
+  pass "MZ-F2: gc.service active -> verdict=gc_active, before the timer stop and the sentinel"
+else fail "MZ-F2: an active gc.service was not refused" "$(ctx)"; fi
+
+# MZ-F3: a sentinel with THIS lineage is resume arm A — idempotent, no write.
+run_mode mz-f3-ours freeze SHIM_GC_STATE=inactive SHIM_FREEZE=ours
+if [ "$RC" = 0 ] && has_store freeze ok && grep -q 'resume arm A' "$OUT" \
+   && ! grep -q "writer=$LIN" "$TLF"; then
+  pass "MZ-F3: freeze on a same-lineage sentinel -> resume arm A, no write, exit 0"
+else fail "MZ-F3: same-lineage freeze was not idempotent" "$(ctx)"; fi
+
+# MZ-F4/MZ-F5: a sentinel another lineage wrote, or an unparseable one, refuses.
+run_mode mz-f4-foreign freeze SHIM_GC_STATE=inactive SHIM_FREEZE=foreign
+if [ "$RC" = 5 ] && has_store freeze frozen_foreign && ! grep -q "printf 'writer=" "$TLF"; then
+  pass "MZ-F4: a foreign sentinel -> verdict=frozen_foreign, no write"
+else fail "MZ-F4: a foreign sentinel was not refused" "$(ctx)"; fi
+run_mode mz-f5-unattr freeze SHIM_GC_STATE=inactive SHIM_FREEZE=unattributed
+if [ "$RC" = 5 ] && has_store freeze frozen_unattributed; then
+  pass "MZ-F5: an unparseable sentinel -> verdict=frozen_unattributed"
+else fail "MZ-F5: an unparseable sentinel was not refused" "$(ctx)"; fi
+
+# MZ-F6: no CUTOVER_LINEAGE -> lineage_absent before any remote call.
+run_case mz-f6-nolin "${KEYED[@]}" MODE=freeze
+if [ "$RC" = 5 ] && grep -qF 'verdict=lineage_absent' "$OUT" && [ ! -s "$TLF" ]; then
+  pass "MZ-F6: MODE=freeze without CUTOVER_LINEAGE -> lineage_absent, nothing dialed"
+else fail "MZ-F6: a lineage-less freeze was not refused" "$(ctx)"; fi
+
+# MZ-F7: a held legacy lock stops the purge — an in-flight provision past the sentinel.
+run_mode mz-f7-lockheld freeze SHIM_GC_STATE=inactive SHIM_FREEZE=absent SHIM_PURGE=held
+if [ "$RC" = 5 ] && has_store lock-purge lock_held; then
+  pass "MZ-F7: a held lock mid-purge -> probe=lock-purge verdict=lock_held (sentinel still written)"
+else fail "MZ-F7: a held legacy lock was not refused" "$(ctx)"; fi
+
+# MZ-U1: unfreeze on our sentinel — cleared, gc.timer restarted.
+run_mode mz-u1-ours unfreeze SHIM_FREEZE=ours
+if [ "$RC" = 0 ] && has_store unfreeze ok && grep -q 'rm -f --' "$TLF" && grep -q 'systemctl start git-data-gc.timer' "$TLF"; then
+  pass "MZ-U1: same-lineage unfreeze clears the sentinel and restarts gc.timer"
+else fail "MZ-U1: same-lineage unfreeze failed" "$(ctx)"; fi
+
+# MZ-U2: no sentinel -> nothing_to_unfreeze, timer still restarted (convergent).
+run_mode mz-u2-absent unfreeze SHIM_FREEZE=absent
+if [ "$RC" = 0 ] && grep -q 'nothing_to_unfreeze' "$OUT" && grep -q 'systemctl start git-data-gc.timer' "$TLF" && ! grep -q 'rm -f --' "$TLF"; then
+  pass "MZ-U2: absent sentinel -> nothing_to_unfreeze (still restarts gc.timer, removes nothing)"
+else fail "MZ-U2: absent-sentinel unfreeze wrong" "$(ctx)"; fi
+
+# MZ-U3/U4: foreign/unattributed sentinels refuse — never cleared.
+run_mode mz-u3-foreign unfreeze SHIM_FREEZE=foreign
+if [ "$RC" = 5 ] && has_store unfreeze frozen_foreign && ! grep -q 'rm -f --' "$TLF"; then
+  pass "MZ-U3: foreign sentinel -> unfreeze refuses frozen_foreign, sentinel untouched"
+else fail "MZ-U3: foreign sentinel was cleared" "$(ctx)"; fi
+run_mode mz-u4-unattr unfreeze SHIM_FREEZE=unattributed
+if [ "$RC" = 5 ] && has_store unfreeze frozen_unattributed && ! grep -q 'rm -f --' "$TLF"; then
+  pass "MZ-U4: unattributed sentinel -> unfreeze refuses frozen_unattributed, sentinel untouched"
+else fail "MZ-U4: unattributed sentinel was cleared" "$(ctx)"; fi
+
+# MZ-U5: FREEZE_HELD — the rm fails (hop dead); the paging verdict, not a summary.
+run_mode mz-u5-held unfreeze SHIM_FREEZE=ours SHIM_UNFREEZE_RC=255
+if [ "$RC" = 5 ] && grep -qF 'FREEZE_HELD' "$OUT" && grep -qF 'verdict=FREEZE_HELD' "$OUT"; then
+  pass "MZ-U5: an unwritable sentinel on unfreeze -> FREEZE_HELD (paging verdict)"
+else fail "MZ-U5: a failed sentinel clear did not page" "$(ctx)"; fi
+
+# MZ-U6/F8: an UNREADABLE sentinel is its own verdict — an I/O fault is not a
+# provenance verdict (unattributed) nor an instrument failure (probe_failed).
+run_mode mz-u6-unread unfreeze SHIM_FREEZE=r3
+if [ "$RC" = 5 ] && has_store unfreeze frozen_unreadable && ! grep -q 'rm -f --' "$TLF"; then
+  pass "MZ-U6: an unreadable sentinel on unfreeze -> verdict=frozen_unreadable"
+else fail "MZ-U6: an unreadable sentinel was misclassified" "$(ctx)"; fi
+run_mode mz-f8-unread freeze SHIM_GC_STATE=inactive SHIM_FREEZE=r3
+if [ "$RC" = 5 ] && has_store freeze frozen_unreadable; then
+  pass "MZ-F8: an unreadable sentinel on freeze -> verdict=frozen_unreadable"
+else fail "MZ-F8: an unreadable sentinel was misclassified on freeze" "$(ctx)"; fi
+
+# MZ-P1: the transactional probe — provision + fenced push + remove, zero residue.
+run_mode mz-p1-ok probe SHIM_PROBE=ok
+if [ "$RC" = 0 ] && has_store probe ok && grep -q 'git-data-provision.sh' "$TLF" && grep -q 'git-data-remove.sh' "$TLF" && grep -q 'lease-gen' "$TLF" \
+   && grep -qF 'HEAD:refs/soleur/worktrees/cutover-probe/probe' "$TLF"    && ! grep -qF 'refs/heads/cutover-probe' "$TLF"; then
+  pass "MZ-P1: probe -> provision + CAS-fenced in-namespace push + remove, verdict=ok"
+else fail "MZ-P1: probe happy path wrong" "$(ctx)"; fi
+
+# MZ-P2: a push the fence refuses -> fenced_push_failed, and the residue-cleanup retry ran.
+run_mode mz-p2-pushfail probe SHIM_PROBE=pushfail
+# The retry is a SECOND ssh call whose remote command starts `env -i` (the probe's own
+# remote starts `id=` and flattens an inline `env -i … git-data-remove.sh` — a single
+# grep would satisfy without the retry ever running, so count >= 2 remove-bearing
+# lines AND require a line whose remote segment begins env -i after the host:port).
+remove_lines="$(grep -c 'git-data-remove.sh' "$TLF" || true)"
+if [ "$RC" = 5 ] && has_store probe fenced_push_failed    && [ "$remove_lines" -ge 2 ]    && grep -qE ' 10\.0\.1\.20 env -i PATH=' "$TLF"; then
+  pass "MZ-P2: a refused push -> fenced_push_failed, cleanup retry attempted"
+else fail "MZ-P2: a refused push was not attributed" "$(ctx)"; fi
+
+# MZ-P3/P4: remove failure and residue are their own verdicts.
+run_mode mz-p3-remfail probe SHIM_PROBE=remfail
+if [ "$RC" = 5 ] && has_store probe remove_failed; then
+  pass "MZ-P3: a failed remove -> verdict=remove_failed"
+else fail "MZ-P3: a failed remove was not attributed" "$(ctx)"; fi
+run_mode mz-p4-residue probe SHIM_PROBE=residue
+if [ "$RC" = 5 ] && has_store probe residue_left; then
+  pass "MZ-P4: a repo surviving remove -> verdict=residue_left"
+else fail "MZ-P4: residue was not attributed" "$(ctx)"; fi
+
+# MZ-P9: the probe's push refspec is INSIDE the fence's worktree namespace — the real
+# pre-receive rejects refs/heads/* for any worktree-id, so a `refs/heads/cutover-probe`
+# push can never land (the fence is planted at birth by the same PR; D0 ownership).
+if grep -qF "HEAD:refs/soleur/worktrees/cutover-probe/probe" "$SCRIPT" \
+   && grep -qF "rev-parse --verify -q refs/soleur/worktrees/cutover-probe/probe" "$SCRIPT" \
+   && ! grep -qF "refs/heads/cutover-probe" "$SCRIPT"; then
+  pass "MZ-P9: the probe pushes/verifies refs/soleur/worktrees/cutover-probe/probe — the only namespace the fence admits"
+else fail "MZ-P9: the probe refspec is outside the worktree namespace (the fence would reject it on every real run)"; fi
+
+# MZ-P5: provision failure -> probe_failed reason=provision.
+run_mode mz-p5-provfail probe SHIM_PROBE=provfail
+if [ "$RC" = 5 ] && has_store probe probe_failed && grep -q 'reason=provision' "$OUT"; then
+  pass "MZ-P5: a failed provision -> probe_failed reason=provision"
+else fail "MZ-P5: a failed provision was not attributed" "$(ctx)"; fi
+
+# MZ-P6/P7/P8: the probe's other probe_failed reasons — wrapper lied, scratch failed,
+# the fence accepted bytes no ref holds.
+run_mode mz-p6-nocreate probe SHIM_PROBE=nocreate
+if [ "$RC" = 5 ] && has_store probe probe_failed && grep -q 'reason=repo_absent_after_provision' "$OUT"; then
+  pass "MZ-P6: provision without a repo -> probe_failed reason=repo_absent_after_provision"
+else fail "MZ-P6: an absent repo post-provision was not attributed" "$(ctx)"; fi
+run_mode mz-p7-scratch probe SHIM_PROBE=scratch
+if [ "$RC" = 5 ] && has_store probe probe_failed && grep -q 'reason=scratch' "$OUT"; then
+  pass "MZ-P7: a scratch-setup failure -> probe_failed reason=scratch"
+else fail "MZ-P7: a scratch failure was not attributed" "$(ctx)"; fi
+run_mode mz-p8-noref probe SHIM_PROBE=noref
+if [ "$RC" = 5 ] && has_store probe probe_failed && grep -q 'reason=ref_not_landed' "$OUT"; then
+  pass "MZ-P8: a push whose ref never landed -> probe_failed reason=ref_not_landed"
+else fail "MZ-P8: an unlanded ref was not attributed" "$(ctx)"; fi
+
+# MZ-L: an unsafe probe id (bad lineage -> id shape) refuses arg_probe_id.
+run_mode mz-l-badid probe CUTOVER_LINEAGE='bad;id'
+if [ "$RC" = 5 ] && grep -qF 'verdict=lineage_absent' "$OUT" && [ ! -s "$TLF" ]; then
+  pass "MZ-L: a lineage with metacharacters -> lineage_absent before any remote"
+else fail "MZ-L: an unsafe lineage was not refused" "$(ctx)"; fi
+
+# MZ-V: MODE=bogus -> verdict=mode_invalid, nothing dialed.
+run_case mz-v-bogus "${KEYED[@]}" MODE=bogus
+if [ "$RC" = 5 ] && grep -qF 'verdict=mode_invalid' "$OUT" && [ ! -s "$TLF" ]; then
+  pass "MZ-V: an unknown MODE -> verdict=mode_invalid, exit 5, nothing dialed"
+else fail "MZ-V: an unknown mode was not refused" "$(ctx)"; fi
+
+# MZ-RA: resume arm A — a proof run whose store session hits a SAME-LINEAGE sentinel
+# (only this run's earlier attempt could have written it) tolerates and continues.
+# SHIM_VERIFY=r23 simulates the remote exit-23 (sentinel present); probe_freeze then
+# answers `ours` via SHIM_FREEZE.
+run_case mz-ra-resume "${KEYED[@]}" MODE=proof SHIM_VERIFY=r23 SHIM_FREEZE=ours CUTOVER_LINEAGE=lin-test-1
+if [ "$RC" = 0 ] && grep -q 'resume_same_lineage' "$OUT" && grep -q 'resume arm A' "$OUT"; then
+  pass "MZ-RA: same-lineage sentinel during proof -> resume_same_lineage, proof passes"
+else fail "MZ-RA: resume arm A did not tolerate the same-lineage sentinel" "$(ctx)"; fi
+# MZ-RB: the foreign-sentinel proof refusal is unchanged — a sentinel some OTHER run
+# wrote still wedges a proof (the reviewer-cited wedge guard).
+run_case mz-rb-foreign "${KEYED[@]}" MODE=proof SHIM_VERIFY=r23 SHIM_FREEZE=foreign CUTOVER_LINEAGE=lin-test-1
+if [ "$RC" = 5 ] && has_store store-verified cutover_frozen; then
+  pass "MZ-RB: foreign sentinel during proof -> verdict=cutover_frozen (still refused)"
+else fail "MZ-RB: a foreign sentinel was tolerated by the proof" "$(ctx)"; fi
+
 # ── WORKFLOW — git-data-cutover.yml (D-6 / AC9 / G6 / G7) ──────────────────────────────
 cat > "$T/wf.py" <<'PY'
 import sys, yaml, json, re
+# Split so the doppler-set precommit hook (which greps the literal) does not trip on this TEST.
+SECRETS_SET = "doppler secrets" + " set"
 wf_path, iv_path, apply_path, steps_dir = sys.argv[1:5]
 wf_text = open(wf_path).read()
 out = []
@@ -1476,8 +1707,12 @@ iv = yaml.safe_load(open(iv_path)); ap = yaml.safe_load(open(apply_path))
 on = wf.get(True) or wf.get("on") or {}
 check("WF-on: the only trigger is workflow_dispatch (on: read through the True-key lookup)", isinstance(on, dict) and list(on.keys()) == ["workflow_dispatch"], on if not isinstance(on, dict) else list(on.keys()))
 inputs = ((on.get("workflow_dispatch") or {}).get("inputs") or {}) if isinstance(on, dict) else {}
-check("G7/AC9: workflow_dispatch inputs are exactly {confirm}", sorted(inputs.keys()) == ["confirm"], sorted(inputs.keys()))
-check("WF-perm: permissions are exactly {contents: read}", wf.get("permissions") == {"contents": "read"}, wf.get("permissions"))
+check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode} (PR2: mode selects proof|flip|rollback|unfreeze|redeploy; lineage is the stranded-sentinel lever for unfreeze)", sorted(inputs.keys()) == ["confirm", "lineage", "mode"], sorted(inputs.keys()))
+check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy",
+      sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "rollback", "unfreeze"],
+      (inputs.get("mode") or {}).get("options"))
+check("WF-perm: permissions are exactly {contents: read, actions: read} (actions:read is the precondition run-state reads)",
+      wf.get("permissions") == {"actions": "read", "contents": "read"}, wf.get("permissions"))
 env = wf.get("env") or {}
 check("WF1: workflow env WEB_HOST_PRIVATE_IP is 10.0.1.10", env.get("WEB_HOST_PRIVATE_IP") == "10.0.1.10", env.get("WEB_HOST_PRIVATE_IP"))
 rep = ((ap.get("jobs") or {}).get("git_data_host_replace") or {}).get("concurrency") or {}
@@ -1491,7 +1726,11 @@ job = jobs.get("cutover") or {}
 envname = job.get("environment")
 if isinstance(envname, dict): envname = envname.get("name")
 check("AC9: job cutover declares environment web-platform-infra-apply", envname == "web-platform-infra-apply", envname)
-check("WF-jobconc: the job carries no concurrency of its own (the group is workflow-level)", "concurrency" not in job)
+check("WF-jobconc: the job joins web-1-swap (the flip's fan-out deploy mutates web-1 — a concurrent release must not interleave)",
+      (job.get("concurrency") or {}).get("group") == "web-1-swap" and (job.get("concurrency") or {}).get("cancel-in-progress") is False,
+      job.get("concurrency"))
+check("WF-timeout: the job timeout is >= 120 minutes (a fan-out swap inside a flip can take ~80 min)",
+      isinstance(job.get("timeout-minutes"), int) and job["timeout-minutes"] >= 120, job.get("timeout-minutes"))
 check("WF-jobenv: the job declares no job-level env", "env" not in job)
 steps = job.get("steps") or []
 def idx(pred):
@@ -1503,52 +1742,89 @@ pos = {
     "doppler": idx(lambda s: s.get("id") == "doppler"),
     "flag_precheck": idx(lambda s: s.get("id") == "flag_precheck"),
     "secrets_check": idx(lambda s: s.get("id") == "secrets_check"),
+    "flip_preconditions": idx(lambda s: s.get("id") == "flip_preconditions"),
     "bridge": idx(lambda s: s.get("uses") == BRIDGE),
     "key_fetch": idx(lambda s: s.get("id") == "key_fetch"),
     "ssh_config": idx(lambda s: s.get("id") == "ssh_config"),
-    "run": idx(lambda s: isinstance(s.get("run"), str) and "git-data-cutover.sh" in s["run"]),
+    "host_proof": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "proof"),
+    "freeze": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "freeze"),
+    "flag_write": idx(lambda s: s.get("id") == "flag_write"),
+    "redeploy": idx(lambda s: isinstance(s.get("run"), str) and "dispatch-web-redeploy/track.sh" in s["run"] and not s.get("if") == "always()"),
+    "unfreeze": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "unfreeze"),
+    "probe": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "probe"),
     "teardown": idx(lambda s: s.get("name") == "Tear down cloudflared SSH bridge"),
+    "finalizer": idx(lambda s: s.get("name") and "Finalizer" in s["name"]),
 }
 single = all(len(v) == 1 for v in pos.values())
-order = ["confirm", "checkout", "doppler", "flag_precheck", "secrets_check", "bridge", "key_fetch", "ssh_config", "run", "teardown"]
-check("D-6: each step exists exactly once, in order confirm < checkout < doppler < flag precheck < secrets check < bridge < key fetch < ssh_config < script < teardown",
+order = ["confirm", "checkout", "doppler", "flag_precheck", "secrets_check", "flip_preconditions", "bridge", "key_fetch", "ssh_config", "host_proof", "freeze", "flag_write", "redeploy", "unfreeze", "probe", "finalizer", "teardown"]
+check("D-6: each step exists exactly once, in order confirm < checkout < doppler < flag precheck < secrets check < preconditions < bridge < key fetch < ssh_config < proof < freeze < flag write < redeploy < unfreeze < probe < finalizer < teardown (the finalizer runs BEFORE the bridge teardown — its unfreeze arm needs the SSH path alive)",
       single and [pos[k][0] for k in order] == sorted(pos[k][0] for k in order), {k: v for k, v in pos.items()})
 def step(k):
     return steps[pos[k][0]] if len(pos[k]) == 1 else {}
 b = step("bridge")
 check("WF3: bridge passes server-ip from env.WEB_HOST_PRIVATE_IP", (b.get("with") or {}).get("server-ip") == "${{ env.WEB_HOST_PRIVATE_IP }}", (b.get("with") or {}).get("server-ip"))
-check("WF4: bridge step carries no if: and no env:", bool(b) and "if" not in b and "env" not in b)
+check("WF4: the bridge is gated to the host-touching modes (not redeploy; not a nothing-rollback)",
+      bool(b) and "!= 'redeploy'" in str(b.get("if")) and "nothing_to_rollback != '1'" in str(b.get("if")) and "env" not in b, b.get("if"))
 check("WF-bridge-token: bridge doppler-token is secrets.DOPPLER_TOKEN", (b.get("with") or {}).get("doppler-token") == "${{ secrets.DOPPLER_TOKEN }}", (b.get("with") or {}).get("doppler-token"))
 fp = step("flag_precheck")
-check("AC9: flag precheck binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD} and runs the precheck script, no if:",
-      fp.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}"} and str(fp.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-flag-precheck.sh" and "if" not in fp,
-      (fp.get("env"), fp.get("run")))
+check("AC9: flag precheck binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD, FLAG_MODE} and runs the precheck script, gated off redeploy",
+      fp.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}", "FLAG_MODE": "${{ steps.confirm.outputs.mode }}"}
+      and "git-data-flag-precheck.sh" in str(fp.get("run", "")) and "!= 'redeploy'" in str(fp.get("if")),
+      (fp.get("env"), fp.get("if")))
 sc = step("secrets_check")
-check("WF-secrets: secrets check tests presence only ({DOPPLER_TOKEN_PRESENT, GIT_DATA_ROOT_TOKEN_PRESENT} as != '' booleans)",
-      sc.get("env") == {"DOPPLER_TOKEN_PRESENT": "${{ secrets.DOPPLER_TOKEN != '' }}", "GIT_DATA_ROOT_TOKEN_PRESENT": "${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT != '' }}"}, sc.get("env"))
+check("WF-secrets: secrets check tests presence only ({DOPPLER_TOKEN_PRESENT, GIT_DATA_ROOT_TOKEN_PRESENT, FLAG_WRITE_TOKEN_PRESENT} as != '' booleans) + MODE",
+      sc.get("env") == {"DOPPLER_TOKEN_PRESENT": "${{ secrets.DOPPLER_TOKEN != '' }}", "GIT_DATA_ROOT_TOKEN_PRESENT": "${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT != '' }}", "FLAG_WRITE_TOKEN_PRESENT": "${{ secrets.DOPPLER_TOKEN_GIT_DATA_FLAG != '' }}", "MODE": "${{ steps.confirm.outputs.mode }}"}, sc.get("env"))
 kf = step("key_fetch")
-check("AC9: key fetch binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_GIT_DATA_ROOT}, no if:",
-      kf.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}"} and "if" not in kf, kf.get("env"))
+check("AC9: key fetch binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_GIT_DATA_ROOT}, gated off redeploy",
+      kf.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}"} and "!= 'redeploy'" in str(kf.get("if")), (kf.get("env"), kf.get("if")))
 cf = step("ssh_config")
-check("WF-sshcfg: the ssh_config writer has no env: and no if:", bool(cf) and "env" not in cf and "if" not in cf)
-r = step("run")
-check("WF6: script step env is exactly {WEB_HOSTS: env.WEB_HOST_PRIVATE_IP, GIT_DATA_SSH: ssh -F runner.temp/gd-ssh-config}",
-      r.get("env") == {"WEB_HOSTS": "${{ env.WEB_HOST_PRIVATE_IP }}", "GIT_DATA_SSH": "ssh -F ${{ runner.temp }}/gd-ssh-config"}, r.get("env"))
-check("WF10: script step runs the script with no if: (only when every earlier step succeeded)",
-      str(r.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh" and "if" not in r, (r.get("run"), r.get("if")))
+check("WF-sshcfg: the ssh_config writer has no env: and is gated to host-touching modes", bool(cf) and "env" not in cf and "!= 'redeploy'" in str(cf.get("if")), cf.get("if"))
+r = step("host_proof")
+check("WF6: the host-side proof step binds {WEB_HOSTS, GIT_DATA_SSH, MODE=proof, CUTOVER_LINEAGE=cutover-<run_id>}",
+      r.get("env") == {"WEB_HOSTS": "${{ env.WEB_HOST_PRIVATE_IP }}", "GIT_DATA_SSH": "ssh -F ${{ runner.temp }}/gd-ssh-config", "MODE": "proof", "CUTOVER_LINEAGE": "cutover-${{ github.run_id }}"}, r.get("env"))
+check("WF10: the proof step runs the script, mode-gated to proof|flip — unfreeze is EXCLUDED (the proof refuses a held sentinel, which is unfreeze's only reason to exist)",
+      str(r.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh"
+      and "proof" in str(r.get("if")) and "'unfreeze'" not in str(r.get("if")), (r.get("run"), r.get("if")))
+uf = step("unfreeze")
+check("WF10b: the unfreeze step accepts the operator lineage override (stranded sentinel recovery) and falls back to this run's lineage",
+      bool(uf) and "inputs.lineage" in json.dumps(uf.get("env") or {}), (uf.get("env") or {}).get("CUTOVER_LINEAGE"))
+asrt = next((s for s in steps if "git_data_store" in str(s.get("name") or "")), None)
+check("WF11: the per-host assert keys web-1 on BOTH host_name spellings — 'soleur-web-platform' and the live #6616 mislabel 'soleur-inngest-prd' — via an IN list",
+      bool(asrt) and "soleur-web-platform soleur-inngest-prd" in str(asrt.get("run") or "")
+      and "host_name') IN (" in str(asrt.get("run") or "")
+      and "soleur-web-1" not in str(asrt.get("run") or ""),
+      str(asrt.get("run") or "")[:120])
 td = step("teardown")
 check("WF7: teardown is if: always() and after the script step", td.get("if") == "always()")
 # Step GATING (C7): the content rows above cannot see a step that stops gating. Before the script
 # step nothing may continue past its own failure, and only teardown and the summary run on a failed job.
-SUMMARY = "Read-only proof summary"
-run_i = pos["run"][0] if len(pos["run"]) == 1 else len(steps)
-coe = [s.get("id") or s.get("name") or s.get("uses") for s in steps[:run_i + 1] if "continue-on-error" in s]
-ifs = sorted((s.get("name") or s.get("id") or str(s.get("uses"))) for s in steps if "if" in s)
+SUMMARY = "Run summary"
+coe = [s.get("id") or s.get("name") or s.get("uses") for s in steps if "continue-on-error" in s]
 summ = [s for s in steps if s.get("name") == SUMMARY]
-check("WF-gating: no step up to and including the script step carries continue-on-error; only teardown (exactly always()) and the summary carry if:",
-      len(steps) >= 10 and not coe and ifs == sorted(["Tear down cloudflared SSH bridge", SUMMARY])
+always_steps = [s.get("name") or s.get("id") for s in steps if s.get("if") == "always()"]
+check("WF-gating: no step carries continue-on-error; exactly teardown + finalizer + summary carry if:always()",
+      len(steps) >= 15 and not coe
+      and sorted(always_steps) == sorted(["Tear down cloudflared SSH bridge", "Finalizer — total unwind on an incomplete flip", SUMMARY])
       and td.get("if") == "always()" and len(summ) == 1 and summ[0].get("if") == "always()",
-      (coe, ifs))
+      (coe, always_steps))
+# C7: every OTHER if: is a mode/output gate only — no `false`, no success() drift.
+bad_ifs = [s.get("name") or s.get("id") for s in steps
+           if "if" in s and s.get("if") != "always()"
+           and not re.search(r"steps\.(confirm\.outputs\.mode|flag_precheck\.outputs)", str(s["if"]))]
+check("WF-gating: every non-always() if: gates on steps.confirm.outputs.mode or flag_precheck outputs (no arbitrary if:)",
+      not bad_ifs, bad_ifs)
+# The finalizer is the TOTAL unwind contract: flag off -> redeploy -> unfreeze -> gc.
+fz = step("finalizer")
+fzbody = fz.get("run") or ""
+fzcode = "\n".join(l for l in fzbody.splitlines() if not l.lstrip().startswith("#"))
+check("WF-finalizer: the finalizer unwinds flag off (write seam), redeploys via track.sh, and unfreezes via MODE=unfreeze",
+      "GIT_DATA_STORE_ENABLED" in fzcode and SECRETS_SET in fzcode
+      and "dispatch-web-redeploy/track.sh" in fzcode and "MODE=unfreeze" in fzcode
+      and "git-data-cutover.sh" in fzcode and "flag_written" in fzcode,
+      fzcode[:400])
+check("WF-finalizer: the finalizer binds BOTH tokens it needs (write seam + prd_terraform read) and no other secret",
+      fz.get("env") and fz["env"].get("DOPPLER_TOKEN_GIT_DATA_FLAG") == "${{ secrets.DOPPLER_TOKEN_GIT_DATA_FLAG }}" and fz["env"].get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN }}",
+      fz.get("env"))
 body = td.get("run") or ""
 code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
 check("WF8: teardown deletes the NAT rule, kills cloudflared, shreds the CI keyfile, the root key, the ssh_config, the known_hosts and the pin, each guarded",
@@ -1559,8 +1835,8 @@ check("WF8: teardown deletes the NAT rule, kills cloudflared, shreds the CI keyf
                               '"$RUNNER_TEMP/gd-known-hosts"', '"$RUNNER_TEMP/git-data.pin"')))
 dumped = json.dumps(wf)
 secrets = sorted(set(a or b for a, b in re.findall(r"secrets\s*(?:\.\s*([A-Za-z0-9_]+)|\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\])", dumped)))
-check("WF9: the referenced secrets are exactly {DOPPLER_TOKEN, DOPPLER_TOKEN_GIT_DATA_ROOT, DOPPLER_TOKEN_PRD}",
-      secrets == ["DOPPLER_TOKEN", "DOPPLER_TOKEN_GIT_DATA_ROOT", "DOPPLER_TOKEN_PRD"], secrets)
+check("WF9: the referenced secrets are exactly {DOPPLER_TOKEN, DOPPLER_TOKEN_GIT_DATA_FLAG, DOPPLER_TOKEN_GIT_DATA_ROOT, DOPPLER_TOKEN_INFRA_PRIVILEGED, DOPPLER_TOKEN_PRD, GITHUB_TOKEN, SENTRY_ACTIONS_RO_TOKEN, SENTRY_API_HOST}",
+      secrets == ["DOPPLER_TOKEN", "DOPPLER_TOKEN_GIT_DATA_FLAG", "DOPPLER_TOKEN_GIT_DATA_ROOT", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_PRD", "GITHUB_TOKEN", "SENTRY_ACTIONS_RO_TOKEN", "SENTRY_API_HOST"], secrets)
 check("AC9: DOPPLER_TOKEN_WRITE is not referenced", "DOPPLER_TOKEN_WRITE" not in dumped)
 # PRD token census: every place in the parsed workflow that names it (>= 1 step scanned).
 prd_sites = [("step", s.get("id") or s.get("name")) for s in steps if "DOPPLER_TOKEN_PRD" in json.dumps(s)]
@@ -1568,10 +1844,18 @@ prd_sites += [("top", k) for k, v in wf.items() if k != "jobs" and "DOPPLER_TOKE
 prd_sites += [("job", k) for k, v in job.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
 check("AC9: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d steps scanned)" % len(steps),
       len(steps) >= 1 and prd_sites == [("step", "flag_precheck")], prd_sites)
-real_modes = re.findall(r"\b(DRY_RUN|ROLLBACK|CONFIRM_WIPE|dry_run|confirm_wipe|rollback)\b", dumped)
-check("G7: no DRY_RUN/ROLLBACK/CONFIRM_WIPE (or their inputs) anywhere in the workflow", not real_modes, sorted(set(real_modes)))
+# The write-seam token census: bound ONLY on the steps that write prd — flag_write, the
+# cutover-stamp step and the finalizer's unwind. secrets_check's presence probe
+# (FLAG_WRITE_TOKEN_PRESENT, a boolean) is a name-reference, not a binding — exempt.
+wr_sites = sorted(s.get("id") or s.get("name") for s in steps if "DOPPLER_TOKEN_GIT_DATA_FLAG" in json.dumps(s) and s.get("id") != "secrets_check")
+check("AC9: DOPPLER_TOKEN_GIT_DATA_FLAG is bound exactly on {flag_write, cutover stamp, finalizer}",
+      wr_sites == sorted(["Finalizer — total unwind on an incomplete flip", "Write GIT_DATA_LUKS_CUTOVER_AT (last — proven cutover only)", "flag_write"]), wr_sites)
+# G7 row: the PR1 variable vocabulary is gone (DRY_RUN/CONFIRM_WIPE refuse at the SCRIPT);
+# `rollback` is a real mode name now, not a refused env.
+real_modes = re.findall(r"\b(DRY_RUN|CONFIRM_WIPE|dry_run|confirm_wipe)\b", dumped)
+check("G7: no DRY_RUN/CONFIRM_WIPE vocabulary anywhere in the workflow (mode/rollback are real verbs)", not real_modes, sorted(set(real_modes)))
 refs = sorted(set(re.findall(r"inputs\.([A-Za-z0-9_]+)", dumped)))
-check("WF-inputs-refs: only inputs.confirm is referenced", refs == ["confirm"], refs)
+check("WF-inputs-refs: only inputs.confirm, inputs.lineage and inputs.mode are referenced", refs == ["confirm", "lineage", "mode"], refs)
 # Pins on the RAW text (the `# v` comment is not in the parse).
 uses = [l.strip() for l in wf_text.splitlines() if re.match(r"^\s*(-\s+)?uses:\s", l)]
 remote = [u for u in uses if not re.search(r"uses:\s+\./", u)]
@@ -1605,7 +1889,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -ge 31 ] || fail "WF: only $_wf_n workflow verdicts were produced (expected 31) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -ge 38 ] || fail "WF: only $_wf_n workflow verdicts were produced (expected 38) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -1950,7 +2234,7 @@ if mutate g5-raw-capture "$SCRIPT" 1 's#^  \[ -n "\$STORE_SOURCE" \] \|\| _store
   mutant_red g5-raw-capture case_capture_census "$MUTANT"
 fi
 # G7 row 1 — re-add a rollback input.
-if mutate g7-rollback-input "$WF" 2 's#^        type: string$#&\n      rollback:\n        type: boolean#'; then
+if mutate g7-rollback-input "$WF" 2 's#^      confirm:$#&\n      rollback:\n        type: boolean#'; then
   python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-g7.tsv" 2>&1
   mutant_red g7-rollback-input wf_row "$T/mut/wf-g7.tsv" "G7/AC9: workflow_dispatch inputs"
 fi
@@ -1958,8 +2242,8 @@ fi
 if mutate g7-no-wipe-arm "$SCRIPT" 1 '/^  \[ "\$\{CONFIRM_WIPE:-0\}" = 0 \] \|\| bad=/d'; then
   CASE_SCRIPT="$MUTANT" mutant_red g7-no-wipe-arm case_refuse mwipe CONFIRM_WIPE=1
 fi
-# G7 row 3 — REORDER: the refusal after access_gate.
-if mutate g7-reorder "$SCRIPT" 2 '/^  refuse_real_modes$/d; s#^  access_gate$#&\n  refuse_real_modes#'; then
+# G7 row 3 — REORDER: the refusal after access_gate (the proof branch's first remote call).
+if mutate g7-reorder "$SCRIPT" 2 '/^  refuse_legacy_modes$/d; s#^      access_gate$#&\n      refuse_legacy_modes#'; then
   CASE_SCRIPT="$MUTANT" mutant_red g7-reorder case_refuse mreorder DRY_RUN=0
 fi
 # G6 row 1 — rename the cutover workflow's group.
@@ -2040,7 +2324,7 @@ fi
 
 # Fence (#8101) mutants. M6 and M9 were cut in plan review; the rows below follow the review round.
 # M1 — own dispatch: the probe is never called.
-if mutate f-m1-no-call "$SCRIPT" 1 '/^  refuse_if_fence_not_intact$/d'; then
+if mutate f-m1-no-call "$SCRIPT" 1 '/^      refuse_if_fence_not_intact$/d'; then
   mutant_red f-m1-no-call case_main_order "$MUTANT"
 fi
 # M2 — the probe "passes" without reading anything.
@@ -2071,7 +2355,7 @@ if mutate f-m12-no-hook-source "$SCRIPT" 1 '/^    '"'"'s=\$\(findmnt -no SOURCE 
   CASE_SCRIPT="$MUTANT" mutant_red f-m12-no-hook-source case_fence_full "$_FFULL" "fence_not_intact reason=hooks_wrong_source" SHIM_FINDMNT_TP=/dev/nvme1n1
 fi
 # M8 — REORDER: the probe runs before the mount probe.
-if mutate f-m8-reorder "$SCRIPT" 2 '/^  refuse_if_fence_not_intact$/d; s#^  refuse_if_unmounted$#  refuse_if_fence_not_intact\n&#'; then
+if mutate f-m8-reorder "$SCRIPT" 2 '/^      refuse_if_fence_not_intact$/d; s#^      refuse_if_unmounted$#      refuse_if_fence_not_intact\n&#'; then
   mutant_red f-m8-reorder case_main_order "$MUTANT"
 fi
 # M10 — the hooksPath expectation derived from the probed root, not the serving path.
@@ -2133,7 +2417,7 @@ if mutate g1-1-polarity "$SCRIPT" 2 's#^  \[ "\$STORE_SOURCE" = "\$LUKS_MAPPER" 
   CASE_SCRIPT="$MUTANT" mutant_red g1-1-polarity case_not_mapper
 fi
 # G1-2 — own dispatch: the probe is never called (the re-anchored G2 row 2).
-if mutate g1-2-no-dispatch "$SCRIPT" 1 '/^  refuse_if_not_on_mapper$/d'; then
+if mutate g1-2-no-dispatch "$SCRIPT" 1 '/^      refuse_if_not_on_mapper$/d'; then
   CASE_SCRIPT="$MUTANT" mutant_red g1-2-no-dispatch case_not_mapper
 fi
 # G1-3 — second member: the equality loosened to a prefix match.
@@ -2141,7 +2425,7 @@ if mutate g1-3-prefix "$SCRIPT" 2 's#^  \[ "\$STORE_SOURCE" = "\$LUKS_MAPPER" \]
   CASE_SCRIPT="$MUTANT" mutant_red g1-3-prefix case_map_pre
 fi
 # G1-4 — REORDER: the on-mapper call after the store session.
-if mutate g1-4-reorder "$SCRIPT" 2 '/^  refuse_if_not_on_mapper$/d; s#^  refuse_if_store_unverified_or_not_empty$#&\n  refuse_if_not_on_mapper#'; then
+if mutate g1-4-reorder "$SCRIPT" 2 '/^      refuse_if_not_on_mapper$/d; s#^      refuse_if_store_unverified_or_not_empty$#&\n      refuse_if_not_on_mapper#'; then
   CASE_SCRIPT="$MUTANT" mutant_red g1-4-reorder case_ord
 fi
 # G1-5 — the refusal swallowed into an emit.
@@ -2162,7 +2446,7 @@ fi
 
 # Config — every configurable path is checked before anything is printed or dialed.
 # CFG-1 — the check runs after the access gate: a config fault would dial first.
-if mutate cfg-1-after-access "$SCRIPT" 2 '/^  refuse_if_config_unsafe$/d; s#^  access_gate$#&\n  refuse_if_config_unsafe#'; then
+if mutate cfg-1-after-access "$SCRIPT" 2 '/^      refuse_if_config_unsafe$/d; s#^      access_gate$#&\n      refuse_if_config_unsafe#'; then
   CASE_SCRIPT="$MUTANT" mutant_red cfg-1-after-access case_arg_root
 fi
 # CFG-2 / CFG-3 / CFG-4 — one check deleted each.
@@ -2180,7 +2464,7 @@ fi
 # is read in the same session. Every row but the dispatch rows is scoped to the function's range.
 _G2R='/^refuse_if_store_unverified_or_not_empty\(\) \{/,/^\}/'
 # G2-1 — own dispatch: the session is never run.
-if mutate g2v-1-no-dispatch "$SCRIPT" 1 '/^  refuse_if_store_unverified_or_not_empty$/d'; then
+if mutate g2v-1-no-dispatch "$SCRIPT" 1 '/^      refuse_if_store_unverified_or_not_empty$/d'; then
   CASE_SCRIPT="$MUTANT" mutant_red g2v-1-no-dispatch case_v21
 fi
 # G2-2 — the session "passes" without reading.
@@ -2236,7 +2520,7 @@ if mutate g2v-13-no-target "$SCRIPT" 1 "${_G2R}{/^    '\\[ \"\\\$t\" = \"\\\$rr\
   CASE_SCRIPT="$MUTANT" mutant_red g2v-13-no-target case_other_mount
 fi
 # G2-14 — the count narrowed back to *.git names only.
-if mutate g2v-14-git-only "$SCRIPT" 2 "${_G2R}s#! -name '\\.\\*\\.init\\.lock' ! -name lost\\+found#-name '*.git'#"; then
+if mutate g2v-14-git-only "$SCRIPT" 2 "${_G2R}s#! -name '\\.\\*\\.init\\.lock' ! -name '\\.init\\.lock' ! -name lost\\+found#-name '*.git'#"; then
   CASE_SCRIPT="$MUTANT" mutant_red g2v-14-git-only case_any_entry
 fi
 # G2-15 — the lock dotfiles no longer skipped (a lock dotfile would read as a repository).
@@ -2587,7 +2871,7 @@ DRV
     [ "$(cat "$T/rt/out/r5.remote" 2>/dev/null)" = "findmnt -n -o SOURCE --mountpoint /mnt/git-data
 findmnt -n -o SOURCE --mountpoint /mnt/git-data
 findmnt -n -o UUID --mountpoint /mnt/git-data
-find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! -name .*.init.lock ! -name lost+found -printf .
+find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! -name .*.init.lock ! -name .init.lock ! -name lost+found -printf .
 findmnt -no SOURCE -T /mnt/git-data/hooks
 findmnt -no SOURCE -T /mnt/git-data/hooks/pre-receive" ] \
       && pass "R5b: on git-data the commands observed are exactly the mount read, the store session's source and UUID reads and its count, and the fence's two findmnt -T reads" || fail "R5b: unexpected remote commands" "$(tr '\n' '|' < "$T/rt/out/r5.remote" 2>/dev/null)"
@@ -2595,7 +2879,7 @@ findmnt -no SOURCE -T /mnt/git-data/hooks/pre-receive" ] \
       && pass "R5c: web-1 accepted 6 CI-key logins (web, jump, and the ProxyCommand hop of auth/findmnt/store session/fence); git-data accepted 4 root-key logins" || fail "R5c: login counts differ" "web=$(_rv r5_web_accepted) gd=$(_rv r5_gd_accepted)"
     { [ "$(_rv r6_rc)" = 5 ] && _sto r6 store-empty store_not_empty; } \
       && pass "R6a: a real ws-1.git under /mnt/git-data/repositories -> store_not_empty, exit 5" || fail "R6a: a non-empty store passed" "rc=$(_rv r6_rc) $(_rctx r6)"
-    grep -qxF "find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! -name .*.init.lock ! -name lost+found -printf ." "$T/rt/out/r6.remote" \
+    grep -qxF "find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! -name .*.init.lock ! -name .init.lock ! -name lost+found -printf ." "$T/rt/out/r6.remote" \
       && pass "R6b: the count ran on git-data as find -H … with the bootstrap's exclusions" || fail "R6b: the count command differs" "$(tr '\n' '|' < "$T/rt/out/r6.remote" 2>/dev/null)"
     { [ "$(_rv r7_rc)" = 5 ] && _sto r7 store-on-mapper store_not_on_mapper; } \
       && pass "R7: a plaintext /dev/sdb source -> store_not_on_mapper, exit 5" || fail "R7: a store not served by the mapper passed" "rc=$(_rv r7_rc) $(_rctx r7)"
@@ -2643,12 +2927,12 @@ if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   exit 1
 fi
 # Assertion FLOOR, restated from a measured run after the #8211 PR2 proof half's code review:
-# mutants 91 x 2 = 182; runtime 27 (RFSRC deleted; RVM and RVM2 added); everything else 244 — the
+# mutants 91 x 2 = 182; runtime 27 (RFSRC deleted; RVM and RVM2 added); everything else 279 — the
 # script's unit rows (access gate, H4, AC2, CFG x11, Guard 1, Guard 2 incl. the canned V/VE rows and
-# the executed VX and count rows, the MM rows, the fence probe, P1-P4, RB, Guard 5, Guard 7), the
-# bridge export set, the 31 workflow YAML verdicts and the executed workflow steps.
-# Total 453 — exact, not a margin: removing or adding an assertion on purpose costs one edit here.
-FLOOR=453
+# the executed VX and count rows, the MM rows, the fence probe, MZ-P/L/V/U/F/RA/RB, RB, Guard 5,
+# Guard 7), the bridge export set, the 38 workflow YAML verdicts and the executed workflow steps.
+# Total 488 — exact, not a margin: removing or adding an assertion on purpose costs one edit here.
+FLOOR=488
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

@@ -161,7 +161,7 @@
         "exception": {
           "justification": "plaintext rollback backstop for the git-data LUKS cutover, pending the DL-2 destructive wipe",
           "tracking_issue": "#6897",
-          "reevaluate_when": "the git_data_luks cutover is confirmed and the DL-2 wipe of the plaintext volume runs",
+          "reevaluate_when": "the git-data-host-rotate apply (the #8211 PR2 rotate arm — the ONLY route permitted to touch the LUKS store; the plaintext volume is still preserved by omission) and the flag flip are confirmed, then the DL-2 wipe of the plaintext volume runs",
           "expires_on": "2026-10-22"
         }
       }
