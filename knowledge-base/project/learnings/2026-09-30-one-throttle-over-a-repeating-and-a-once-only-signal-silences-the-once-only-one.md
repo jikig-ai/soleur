@@ -99,6 +99,13 @@ thing, so count them.
     already covers this. It was not applied to the rule comment because the comment was copied from
     the plan.
 
+## Update 2026-09-30 (#9299)
+
+The split recorded as DC-2 landed. `bootstrap_done_degraded` now pages through its own rule,
+`inngest-provision-degraded` (33-minute throttle), and `inngest-provision-failure` pages
+`provision_attempt_failed` only. The runbook's shared-throttle caveat is gone. The body above is
+left as written on the day.
+
 ## Tags
 
 category: integration-issues

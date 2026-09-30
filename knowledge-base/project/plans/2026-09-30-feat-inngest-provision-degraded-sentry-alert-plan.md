@@ -622,24 +622,28 @@ Not applied, and why:
 
 ### Pre-merge
 
-- [ ] AC1: the extended op-contract vitest is RED on the base `.tf` (T1b: resource absent; T3:
+- [x] AC1: the extended op-contract vitest is RED on the base `.tf` (T1b: resource absent; T3:
   failure stage row is a two-member `in`) and GREEN after Phase 2
   (`cd apps/web-platform && npx vitest run test/sentry-inngest-provision-alerts-op-contract.test.ts`).
-- [ ] AC2: the PR body's test notes record the mutation tally: M1, M2, M3, M5, M6, M10, M11, H1 and
+- [x] AC2: the PR body's test notes record the mutation tally: M1, M2, M3, M5, M6, M10, M11, H1 and
   H1b each reddened the named row, and H2 stayed green.
-- [ ] AC3: T25 green: `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` passes its T25
+- [x] AC3: T25 green: `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` passes its T25
   block with README ``**39 `sentry_alert` rules**`` and `(39 alert rules total)`.
-- [ ] AC4: `terraform fmt -check` clean and `terraform validate` (`init -backend=false`) green on
+- [x] AC4: `terraform fmt -check` clean and `terraform validate` (`init -backend=false`) green on
   `apps/web-platform/infra/sentry`.
 - [ ] AC5: no open PR other than this one adds `frequency_minutes = 33` at ship time (root-wide
   uniqueness on the branch is T7b).
 - [ ] AC6: CI `plan_pr` in `apply-sentry-infra.yml` green: reference gate passes, the CREATE gate
   lists exactly `sentry_alert.inngest_provision_degraded`, the plan shows 1 add / 1 change /
   0 destroy.
-- [ ] AC7: C4 tests green after regeneration (`c4-model-freshness`, `c4-count-parity`,
+- [x] AC7: C4 tests green after regeneration (`c4-model-freshness`, `c4-count-parity`,
   `c4-code-syntax`, `c4-render`), and `grep -c "36 of the 38" knowledge-base/engineering/architecture/diagrams/model.c4` prints `1`.
-- [ ] AC8: no stale single-rule prose remains:
-  `git grep -n "shared by both stages\|one 2 h throttle covers both stages\|it is paged too" -- apps/web-platform/infra/sentry knowledge-base/engineering` prints nothing.
+- [x] AC8: no stale single-rule prose remains:
+  `git grep -n "shared by both stages\|one 2 h throttle covers both stages\|it is paged too" -- apps/web-platform/infra/sentry knowledge-base/engineering` prints only the two
+  ADR-257 lines inside the dated `Superseded 2026-09-30 (#9176)` pointers, each followed by a
+  `Superseded 2026-09-30 (#9299)` pointer. **Amended at work (2026-09-30):** a dated record is
+  append-only (work skill rule, #7309), so Phase 3.2 appends the #9299 pointer under each #9176
+  blockquote instead of rewriting it.
 - [ ] AC9: the PR body's first line states the production effect (one create + one in-place update
   via `apply-sentry-infra.yml`, nothing else); the body has `Closes #9299`, says it resolves the
   archived #9176 DC-2, and carries this PR's decision challenges. The diff touches no workflow file:

@@ -29,3 +29,27 @@ The operator chose the second Sentry alert rule on #9299 ("let's go with a secon
 - soleur:plan-review: DHH, Kieran, code-simplicity, CTO
 - soleur:deepen-plan: observability-coverage-reviewer, test-design-reviewer, a verify sweep
 - lints: markdownlint-cli2, lint-infra-no-human-steps.py
+
+## Work Phase
+- Status: complete (commit e4d3c4c7f0 for rules/reference/README/test; docs commit follows)
+- RED on base `.tf`: 7 failed / 6 passed (T1b, T2b, T3, T4b, T4c, T7b, T8). GREEN: 13/13.
+- T25: 65 passed, 0 failed. `terraform fmt -check` clean; `validate` green (init -backend=false, scratch copy).
+- C4: c4-count-parity, c4-model-freshness green; c4-code-syntax + c4-render 35/35.
+
+### Mutation tally (control 13/13 green; every mutation confirmed landed; pristine restore verified)
+| Row | Result |
+| --- | --- |
+| M1 rename degraded label | RED: T1b, T2b, T3, T7b, T8 |
+| M2 re-bundle failure `in` | RED: T3 |
+| M3 degraded value typo | RED: T3 |
+| M5 extra warning emit | RED: T3 |
+| M6 degraded freq 120 | RED: T7, T7b |
+| M10 stage in cloud-init.yml | RED: T8 |
+| M11 environment on degraded | RED: T1b |
+| H1 `#`-commented stage row | RED: T2b, T3, T8 |
+| H1b `//`-commented stage row | RED: T2b, T3, T8 |
+| H2 block reorder + field order swap | GREEN 13/13 (as required) |
+
+### Decisions (work)
+- ADR-257: appended `Superseded 2026-09-30 (#9299)` pointers under both #9176 blockquotes instead of rewriting them (dated records are append-only). AC8 amended in the plan to match.
+- Degraded-rule comment states the detail's real shape (`why=<reasons>.attempt=<n>.iid=<iid>`), not "only the two reasons", after reading cloud-init-inngest.yml.
