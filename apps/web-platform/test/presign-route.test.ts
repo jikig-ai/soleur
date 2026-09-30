@@ -199,6 +199,10 @@ describe("POST /api/attachments/presign", () => {
       ["a valid uuid with a traversal suffix", `${TEST_CONVERSATION_ID}/../other`],
       ["a valid uuid with a trailing char", `${TEST_CONVERSATION_ID}x`],
       ["a valid uuid with a leading char", `x${TEST_CONVERSATION_ID}`],
+      // Right length (36) but wrong grouping: `[0-9a-f-]{36}` would admit these.
+      ["a 36-char wrong-grouping id", "0123456789abcdef-0123456789abcdef-0123"],
+      ["a 36-char all-dash-free hex id", "0123456789abcdef0123456789abcdef0123"],
+      ["a 32-hex id with no dashes", "0123456789abcdef0123456789abcdef"],
     ])("%s -> 404 conversation_not_found with NO lookup and NO storage call", async (_label, id) => {
       setupAuthenticatedUser();
       setupNoConversationRow();

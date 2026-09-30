@@ -38,6 +38,7 @@ import {
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import {
+  ERR_ATTACHMENT_NOT_FOUND,
   ERR_WORKSPACE_NOT_PROVISIONED,
   ERR_CONVERSATION_NOT_FOUND,
   ERR_NO_ACTIVE_SESSION,
@@ -2990,6 +2991,10 @@ export async function sendUserMessage(
       attachments,
     });
     attachmentContext = result.attachmentContext;
+    if (!attachmentContext && !content.trim()) {
+      // Attachments-only turn where every download failed: nothing to send.
+      throw new Error(ERR_ATTACHMENT_NOT_FOUND);
+    }
   }
 
   // Check for an in-memory session with a captured session_id

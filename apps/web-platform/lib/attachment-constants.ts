@@ -150,6 +150,23 @@ export function resolveAttachmentContentType(opts: {
 export const CONVERSATION_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * Every `error` code `/api/attachments/presign` can return. The route types
+ * its responses against this tuple and the client tile copy
+ * (`lib/attachment-error-copy.ts`) is a `Record` over it, so a new code is a
+ * compile error until it has human copy.
+ */
+export const PRESIGN_ERROR_CODES = [
+  "unauthorized",
+  "invalid_request",
+  "unsupported_file_type",
+  "file_too_large",
+  "conversation_not_found",
+  "not_a_workspace_member",
+  "upload_failed",
+] as const;
+export type PresignErrorCode = (typeof PRESIGN_ERROR_CODES)[number];
+
 export const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024; // 20 MB
 
 export const MAX_ATTACHMENTS_PER_MESSAGE = 5;

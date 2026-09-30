@@ -366,6 +366,38 @@ describe("pending-session first message: attachments-only (#9297 D2)", () => {
       expectRejected(sent, session, /not supported/i);
     });
 
+    it("a SIBLING-folder prefix (`<pending>x/`) is rejected (trailing slash is part of the prefix)", async () => {
+      const { session, sent } = createPendingSession();
+      await sendChat("", [att(`${USER_ID}/${PENDING_ID}x/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      expectRejected(sent, session, /attachment could not be found/i);
+    });
+
+    it("pre-validation also applies under LEGACY routing (no pending routing)", async () => {
+      const { session, sent } = createPendingSession({ routing: undefined });
+      await sendChat("", [att(`user-2/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      expectRejected(sent, session, /attachment could not be found/i);
+      expect(mockStartAgentSession).not.toHaveBeenCalled();
+    });
+
+    it("an extension-mismatched ref (right prefix + type, wrong suffix) is rejected BEFORE createConversation", async () => {
+      const { session, sent } = createPendingSession();
+      await sendChat("", [att(`${USER_ID}/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.png`)]);
+      expectRejected(sent, session, /attachment could not be found/i);
+    });
+
+    it("text PRESENT + a forged ref creates no conversation row and no message (reconnect re-mint)", async () => {
+      const { session, sent } = createPendingSession();
+      await sendChat("hello", [att(`${USER_ID}/${OTHER_CONV_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      expectRejected(sent, session, /attachment could not be found/i);
+    });
+
+    it("text PRESENT + a bad ref AFTER a good one rejects the whole message under LEGACY routing too", async () => {
+      const { session, sent } = createPendingSession({ routing: undefined });
+      await sendChat("hello", [validAtt(), att(`${USER_ID}/${PENDING_ID}/../x/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      expectRejected(sent, session, /attachment could not be found/i);
+      expect(mockStartAgentSession).not.toHaveBeenCalled();
+    });
+
     it("one bad ref among good ones rejects the whole message", async () => {
       const { session, sent } = createPendingSession();
       await sendChat("", [validAtt(), att(`user-2/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
@@ -392,31 +424,47 @@ describe("pending-session first message: attachments-only (#9297 D2)", () => {
       };
     }
 
-    it("resolvedId !== pendingId with attachments is captured as attachments-pending-id-diverged", async () => {
-      const { session } = createPendingSession({ contextPath: CONTEXT_PATH });
+    const divergedCalls = () =>
+      mockReportSilentFallback.mock.calls.filter(
+        (c) => (c[1] as { op?: string } | undefined)?.op === "attachments-pending-id-diverged",
+      );
+
+    it("resolvedId !== pendingId with attachments is captured AND fails closed (error frame, no dispatch, no message insert)", async () => {
+      const { session, sent } = createPendingSession({ contextPath: CONTEXT_PATH });
       forceContextPathConflict();
 
       await sendChat("", [validAtt()]);
 
-      // Sanity: the fallback really resolved to the OTHER row.
-      expect(session.conversationId).toBe(OTHER_CONV_ID);
-      expect(mockReportSilentFallback).toHaveBeenCalledWith(
-        null,
-        expect.objectContaining({ op: "attachments-pending-id-diverged" }),
+      expect(divergedCalls()).toHaveLength(1);
+      expect(divergedCalls()[0]![0]).toBeNull();
+      expect(divergedCalls()[0]![1]).toEqual(
+        expect.objectContaining({
+          extra: expect.objectContaining({
+            pendingId: PENDING_ID,
+            resolvedId: OTHER_CONV_ID,
+            attachmentCount: 1,
+          }),
+        }),
       );
+      const errors = errorFrames(sent);
+      expect(errors).toHaveLength(1);
+      expect(String(errors[0]!.message)).toMatch(/attachment could not be found/i);
+      // Only the (conflicting) conversations insert ran: no messages insert.
+      expect(mockInsert).toHaveBeenCalledTimes(1);
+      expect(mockDispatchSoleurGo).not.toHaveBeenCalled();
+      expect(mockSendUserMessage).not.toHaveBeenCalled();
+      expect(mockStartAgentSession).not.toHaveBeenCalled();
     });
 
-    it("resolvedId !== pendingId WITHOUT attachments is not captured", async () => {
+    it("resolvedId !== pendingId WITHOUT attachments is not captured and still proceeds", async () => {
       const { session } = createPendingSession({ contextPath: CONTEXT_PATH });
       forceContextPathConflict();
 
       await sendChat("hello");
 
       expect(session.conversationId).toBe(OTHER_CONV_ID);
-      expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ op: "attachments-pending-id-diverged" }),
-      );
+      expect(divergedCalls()).toHaveLength(0);
+      expect(mockDispatchSoleurGo).toHaveBeenCalledTimes(1);
     });
 
     it("resolvedId === pendingId with attachments is not captured", async () => {
@@ -424,10 +472,8 @@ describe("pending-session first message: attachments-only (#9297 D2)", () => {
 
       await sendChat("", [validAtt()]);
 
-      expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ op: "attachments-pending-id-diverged" }),
-      );
+      expect(divergedCalls()).toHaveLength(0);
+      expect(mockDispatchSoleurGo).toHaveBeenCalledTimes(1);
     });
   });
 });

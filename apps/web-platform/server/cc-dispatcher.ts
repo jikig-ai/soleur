@@ -163,7 +163,7 @@ import {
   resolveWorktreeId,
   type WorktreeLeaseHandle,
 } from "./worktree-write-lease";
-import { ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
+import { ERR_ATTACHMENT_NOT_FOUND, ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
 // ADR-044 PR-1 — dispatch-boundary not-ready states (transient db-error +
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
@@ -3394,6 +3394,9 @@ export async function dispatchSoleurGo(
     });
     if (attachmentContext) {
       userMessage = `${rawUserMessage}\n\n${attachmentContext}`;
+    } else if (!rawUserMessage.trim()) {
+      // Attachments-only turn where every download failed: nothing to send.
+      throw new Error(ERR_ATTACHMENT_NOT_FOUND);
     }
   }
 

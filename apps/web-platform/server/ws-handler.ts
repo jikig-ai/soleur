@@ -37,8 +37,8 @@ import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
-import { ERR_ATTACHMENT_NOT_FOUND, ERR_UNSUPPORTED_FILE_TYPE } from "./error-messages";
-import { resolveAttachmentContentType } from "@/lib/attachment-constants";
+import { ERR_ATTACHMENT_NOT_FOUND } from "./error-messages";
+import { validateAttachmentRef } from "./attachment-pipeline";
 import { createChildLogger } from "./logger";
 import {
   connectionThrottle,
@@ -2346,24 +2346,18 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           });
           return;
         }
-        // Attachments-only first message (#9297): validate every ref BEFORE
-        // createConversation so a forged path cannot create an empty
-        // conversation before the attachment pipeline rejects it.
-        if (!stripped) {
-          const refPrefix = `${userId}/${session.pending.id}/`;
-          let refError: string | undefined;
-          for (const a of msg.attachments ?? []) {
-            if (!a.storagePath.startsWith(refPrefix) || a.storagePath.includes("..")) {
-              refError = ERR_ATTACHMENT_NOT_FOUND;
-              break;
+        // First message with ANY attachments (#9297): validate every ref BEFORE
+        // createConversation, text or not. A forged/stale ref (e.g. uploaded
+        // under a pending id a reconnect has since re-minted) must not create
+        // the conversation row or the user message before the attachment
+        // pipeline rejects it.
+        if ((msg.attachments?.length ?? 0) > 0) {
+          try {
+            for (const a of msg.attachments ?? []) {
+              validateAttachmentRef(a, userId, session.pending.id);
             }
-            if (!resolveAttachmentContentType({ contentType: a.contentType, filename: a.filename })) {
-              refError = ERR_UNSUPPORTED_FILE_TYPE;
-              break;
-            }
-          }
-          if (refError) {
-            sendToClient(userId, { type: "error", message: sanitizeErrorForClient(new Error(refError)) });
+          } catch (refErr) {
+            sendToClient(userId, { type: "error", message: sanitizeErrorForClient(refErr) });
             return;
           }
         }
@@ -2404,8 +2398,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             pendingContext?.type === "support" ? "support" : "command_center",
           );
           // Two-tab context_path fallback: the row id differs from the pending
-          // id the client uploaded under, so the pipeline prefix check will
-          // fail closed. Make that now-reachable failure countable.
+          // id the client uploaded under, so the pipeline prefix check would
+          // fail closed AFTER the user message row was appended to the other
+          // tab's conversation. Fail closed here instead: countable, and no
+          // empty user message. Session state is left untouched (still pending).
           if (resolvedId !== pendingId && (msg.attachments?.length ?? 0) > 0) {
             reportSilentFallback(null, {
               feature: "attachments",
@@ -2413,6 +2409,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               message: "first-message attachments uploaded under a pending id that diverged from the resolved conversation id",
               extra: { userId, pendingId, resolvedId, attachmentCount: msg.attachments?.length },
             });
+            sendToClient(userId, {
+              type: "error",
+              message: sanitizeErrorForClient(new Error(ERR_ATTACHMENT_NOT_FOUND)),
+            });
+            return;
           }
           session.conversationId = resolvedId;
           session.pending = undefined;
