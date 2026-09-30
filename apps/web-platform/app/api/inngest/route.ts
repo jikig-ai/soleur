@@ -22,11 +22,13 @@ import { detachFromConsumerCancel, streamRequestInfo } from "@/server/inngest/st
 import { agentOnSpawnRequested, agentOnSpawnSettle } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
+import { cronActionsQueueHealthDispatch } from "@/server/inngest/functions/cron-actions-queue-health-dispatch";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
 import { slaIssueProcess } from "@/server/inngest/functions/sla-issue-process";
 import { cronAnthropicCostReport } from "@/server/inngest/functions/cron-anthropic-cost-report";
 import { cronAnthropicCreditProbe } from "@/server/inngest/functions/cron-anthropic-credit-probe";
 import { cronArchitectureDiagramSync } from "@/server/inngest/functions/cron-architecture-diagram-sync";
+import { cronBotPrReaper } from "@/server/inngest/functions/cron-bot-pr-reaper";
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
 import { cronCampaignCalendar } from "@/server/inngest/functions/cron-campaign-calendar";
 import { cronCloudTaskHeartbeat } from "@/server/inngest/functions/cron-cloud-task-heartbeat";
@@ -134,11 +136,13 @@ const handlers = serve({
     agentOnSpawnSettle,
     cfoOnPaymentFailed,
     cronActionRequiredSla,
+    cronActionsQueueHealthDispatch,
     slaIssueProcess,
     cronAgentNativeAudit,
     cronAnthropicCostReport,
     cronAnthropicCreditProbe,
     cronArchitectureDiagramSync,
+    cronBotPrReaper,
     cronBugFixer,
     cronCampaignCalendar,
     cronCloudTaskHeartbeat,

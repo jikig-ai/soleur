@@ -42,6 +42,11 @@ locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
   cron_monitor_alert_unrouted = {
+    # #9274 — created in this PR (two-PR rule): the sweep itself pages via
+    # Sentry issue-alert delivery (failure_issue_threshold=1 → issue → the
+    # issue-alert rule), so it is deliberately not in monitor_ids; a future PR
+    # may route it once the loop is measured.
+    scheduled_bot_pr_reaper       = "issue-alert delivery covers a new monitor pending a routing decision (#9274)"
     scheduled_gh_pages_cert_state = "disabled, its producer function is deleted; the monitor is deleted in a follow-up PR per the two-PR rule (#9304)"
   }
 }

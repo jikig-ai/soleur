@@ -36,7 +36,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **60 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **61 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
@@ -162,7 +162,7 @@ named after the latter.
 
 This section previously read "the 8 `sentry_cron_monitor` resources do not
 exist in Sentry yet" and described the first apply creating them. True at
-authoring, actively misleading now: the root declares **60** of them, all live
+authoring, actively misleading now: the root declares **61** of them, all live
 once `apply-sentry-infra.yml` runs for the latest additions,
 and the audit's Class D machinery exists precisely *because* live monitors can
 outrun the `.tf` that declares them — a monitor Terraform never declared is

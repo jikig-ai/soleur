@@ -55,6 +55,10 @@ const PORTABLE_SAFE_SHARED_EXPORTS: ReadonlySet<string> = new Set([
   "ANTHROPIC_CREDIT_EXHAUSTED_RE",
   "AUDIT_SELF_REPORT_BODY_PREFIX",
   "ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS",
+  // #9274: pure Octokit + REPO_* constants — no host-local dependency. The
+  // first portable caller is cron-bot-pr-reaper (the prior caller,
+  // cron-content-publisher, was already host-affine so it never needed this).
+  "ensureDedupIssue",
   // Not imported by a portable function directly, but reached by the bodies of the allowlisted
   // helpers above (chokepoint iii): three Sentry DSN validation regexes and a redacting formatter.
   "SENTRY_DOMAIN_RE",

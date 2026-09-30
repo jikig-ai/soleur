@@ -943,8 +943,25 @@ export async function verifyScheduledIssueCreated(args: {
   label: string;
   sinceIso: string;
   octokit?: Awaited<ReturnType<typeof createProbeOctokit>>;
+  // #9272 — the label-filtered issues LIST view can lag a just-created issue
+  // by a few seconds (index lag), so a single point-in-time read false-reds a
+  // healthy producer — and the persistence gate then discards the run's real
+  // artifacts. The read is retried on a bounded budget (default 3 × ~12 s ≈
+  // 24 s, once per day per cron — trivial). Retry covers the EMPTY-read race
+  // only: a thrown request still propagates on the first attempt so
+  // `verify-output-failed` keeps its contract.
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  feature?: string;
 }): Promise<boolean> {
-  const { label, sinceIso, octokit } = args;
+  const {
+    label,
+    sinceIso,
+    octokit,
+    maxAttempts = 3,
+    retryDelayMs = 12_000,
+    feature = "cron",
+  } = args;
   const sinceMs = new Date(sinceIso).getTime();
   if (Number.isNaN(sinceMs)) {
     // A NaN lower bound makes every `>=` comparison false and would silently
@@ -955,45 +972,73 @@ export async function verifyScheduledIssueCreated(args: {
   }
 
   const client = octokit ?? (await createProbeOctokit());
-  const res = await client.request("GET /repos/{owner}/{repo}/issues", {
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    labels: label,
-    state: "all",
-    // `since` filters by updated_at server-side (create OR comment in window).
-    since: sinceIso,
-    sort: "updated",
-    direction: "desc",
-    // 30, not 5: the 12:00Z run-report sweeper bumps updated_at on up to 25
-    // same-label issues per fire (#8076), and every one of those is refused
-    // below as closed — a producer retry verifying after the sweep must still
-    // find its own issue on page 1.
-    per_page: 30,
-    headers: { "X-GitHub-Api-Version": "2022-11-28" },
-  });
+  for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt++) {
+    const res = await client.request("GET /repos/{owner}/{repo}/issues", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      labels: label,
+      state: "all",
+      // `since` filters by updated_at server-side (create OR comment in window).
+      since: sinceIso,
+      sort: "updated",
+      direction: "desc",
+      // 30, not 5: the 12:00Z run-report sweeper bumps updated_at on up to 25
+      // same-label issues per fire (#8076), and every one of those is refused
+      // below as closed — a producer retry verifying after the sweep must still
+      // find its own issue on page 1.
+      per_page: 30,
+      headers: { "X-GitHub-Api-Version": "2022-11-28" },
+    });
 
-  // Belt-and-suspenders client-side guard (the server `since` is inclusive and
-  // authoritative; this defends against a stub/mock that ignores `since`).
-  //
-  // #8076 — a CLOSED issue whose updated_at moved into the window is NOT
-  // producer output: the run-report sweeper (cron-stale-deferred-scope-outs,
-  // daily 12:00Z) closes old SUCCESS run-reports, and a close bumps
-  // updated_at, so inside a verify-caller's retry window (seo-aeo-audit fires
-  // Mon 11:00Z) the old updated_at-only guard would have committed a run that
-  // filed nothing. Credit: created in-window (whatever its state now), or
-  // updated in-window while still open (campaign-calendar's comment-bump).
-  // `state` absent (a stub) reads as open, so the guard only ever narrows.
-  const issues = res.data as Array<{
-    updated_at: string;
-    created_at?: string;
-    state?: string;
-  }>;
-  return issues.some((issue) => {
-    const createdMs = issue.created_at ? new Date(issue.created_at).getTime() : NaN;
-    if (createdMs >= sinceMs) return true;
-    const updatedMs = new Date(issue.updated_at).getTime();
-    return updatedMs >= sinceMs && issue.state !== "closed";
-  });
+    // Belt-and-suspenders client-side guard (the server `since` is inclusive
+    // and authoritative; this defends against a stub/mock that ignores
+    // `since`).
+    //
+    // #8076 — a CLOSED issue whose updated_at moved into the window is NOT
+    // producer output: the run-report sweeper (cron-stale-deferred-scope-outs,
+    // daily 12:00Z) closes old SUCCESS run-reports, and a close bumps
+    // updated_at, so inside a verify-caller's retry window (seo-aeo-audit fires
+    // Mon 11:00Z) the old updated_at-only guard would have committed a run that
+    // filed nothing. Credit: created in-window (whatever its state now), or
+    // updated in-window while still open (campaign-calendar's comment-bump).
+    // `state` absent (a stub) reads as open, so the guard only ever narrows.
+    const issues = res.data as Array<{
+      updated_at: string;
+      created_at?: string;
+      state?: string;
+    }>;
+    const found = issues.some((issue) => {
+      const createdMs = issue.created_at
+        ? new Date(issue.created_at).getTime()
+        : NaN;
+      if (createdMs >= sinceMs) return true;
+      const updatedMs = new Date(issue.updated_at).getTime();
+      return updatedMs >= sinceMs && issue.state !== "closed";
+    });
+    if (found) {
+      if (attempt > 1) {
+        // Non-paging warn: the list-view lag that required the retry stays
+        // measurable without claiming the run failed.
+        warnSilentFallback(
+          new Error(
+            `${feature} "${label}" issue not visible until verify attempt ${attempt} (list-index lag)`,
+          ),
+          {
+            feature,
+            op: "scheduled-output-late-visible",
+            message:
+              "Scheduled producer output became list-visible only on a verify retry",
+            extra: { fn: feature, label, sinceIso, attempt },
+          },
+        );
+      }
+      return true;
+    }
+    if (attempt < Math.max(1, maxAttempts)) {
+      await sleep(retryDelayMs);
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1359,6 +1404,10 @@ export async function resolveOutputAwareOk(args: {
   // scheduled-output-missing extra makes a turn-exhaustion exit self-diagnosing
   // without SSH (app stdout is not shipped to the log warehouse). #4773.
   stdoutTail?: string;
+  // #9272 — passthrough to verifyScheduledIssueCreated's bounded retry; tests
+  // inject `verifyRetryDelayMs: 0` so the empty-read path does not sleep.
+  verifyMaxAttempts?: number;
+  verifyRetryDelayMs?: number;
 }): Promise<boolean> {
   const {
     spawnOk,
@@ -1369,6 +1418,8 @@ export async function resolveOutputAwareOk(args: {
     stderrTail,
     exitCode,
     stdoutTail,
+    verifyMaxAttempts,
+    verifyRetryDelayMs,
   } = args;
 
   let issueCreated: boolean;
@@ -1377,6 +1428,9 @@ export async function resolveOutputAwareOk(args: {
       label,
       sinceIso: runStartedAt,
       octokit,
+      feature: cronName,
+      maxAttempts: verifyMaxAttempts,
+      retryDelayMs: verifyRetryDelayMs,
     });
   } catch (err) {
     reportSilentFallback(err, {

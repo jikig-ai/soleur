@@ -1,11 +1,15 @@
 # <!-- gate-override: new-scheduled-cron-prefer-inngest -->
-# Override justification: this monitor watches GitHub Actions itself — it must
-# NOT depend on the Inngest dispatch chain. Firing it via an inngest cron would
-# add the prod inngest server as a liveness dependency (the #5542 crash-loop
-# showed inngest can be dark for hours) and would still land the executor in
-# the very runner queue being measured. A `schedule:` trigger + Sentry
-# heartbeat is self-referentially correct: if the runner pool is so starved
-# that THIS monitor cannot get a runner, the missed check-in pages.
+# Override justification: this file keeps a `schedule:` trigger because the
+# monitor watches GitHub Actions itself — the schedule stays as a FALLBACK
+# clock so the probe still fires (reduced cadence) during an Inngest-substrate
+# outage. The PRIMARY trigger is `cron-actions-queue-health-dispatch` (Inngest
+# → workflow_dispatch), added in #9273: GHA `schedule:` delivery was measured
+# degrading to ~4 fires/day under org load, and every deferred slot registered
+# a `missed` check-in (~47 pages/day) while the probe's verdict was HEALTHY —
+# deferral is not starvation. The dispatch only POSTs workflow_dispatch (no
+# runner needed to FIRE); the executor still lands in the measured runner
+# queue, preserving the self-referential starvation signal: if the pool is so
+# starved the probe cannot get a runner, the missed check-in pages.
 #
 # Scheduled GitHub Actions queue-health monitor (#8450 incident).
 #

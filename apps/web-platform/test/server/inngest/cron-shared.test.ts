@@ -311,6 +311,7 @@ describe("verifyScheduledIssueCreated", () => {
       label: "scheduled-roadmap-review",
       sinceIso: RUN_START,
       octokit,
+      retryDelayMs: 0, // #9272 — keep the bounded-retry sleeps out of the test clock
     });
     expect(result).toBe(false);
   });
@@ -347,6 +348,7 @@ describe("verifyScheduledIssueCreated", () => {
       label: "scheduled-seo-aeo-audit",
       sinceIso: RUN_START,
       octokit,
+      retryDelayMs: 0,
     });
     expect(result).toBe(false);
   });
@@ -407,6 +409,7 @@ describe("verifyScheduledIssueCreated", () => {
       label: "scheduled-competitive-analysis",
       sinceIso: RUN_START,
       octokit,
+      retryDelayMs: 0,
     });
     expect(result).toBe(false);
   });
@@ -442,6 +445,106 @@ describe("verifyScheduledIssueCreated", () => {
         octokit,
       }),
     ).rejects.toThrow(/invalid sinceIso/);
+  });
+
+  // #9272 — the issues-list view can lag a just-created issue by a few
+  // seconds (label-filtered index), so a single point-in-time read false-reds
+  // a healthy producer AND the persistence gate then discards the run's real
+  // artifacts. The helper retries the empty read on a bounded budget; a read
+  // that recovers on attempt >1 emits a non-paging warn so the lag stays
+  // measurable.
+  it("#9272: an empty first read that resolves on retry returns true and emits scheduled-output-late-visible", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{ updated_at: "2026-05-31T09:30:08.000Z" }],
+      });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      feature: "cron-community-monitor",
+    });
+    expect(result).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(warnSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    const [, ctx] = warnSilentFallbackSpy.mock.calls[0];
+    expect(ctx).toMatchObject({
+      feature: "cron-community-monitor",
+      op: "scheduled-output-late-visible",
+    });
+  });
+
+  it("#9272: all-empty reads return false after exactly maxAttempts requests with no warn (true-absence path unchanged)", async () => {
+    const request = vi.fn().mockResolvedValue({ data: [] });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      maxAttempts: 3,
+      feature: "cron-community-monitor",
+    });
+    expect(result).toBe(false);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: a populated first read makes exactly one request and emits no warn", async () => {
+    const octokit = octokitReturning([
+      { updated_at: "2026-05-31T10:00:00.000Z" },
+    ]);
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+    });
+    expect(result).toBe(true);
+    expect(octokit.request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: a thrown request propagates immediately — the retry covers empty reads only, preserving verify-output-failed upstream", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("GitHub 503"));
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    await expect(
+      verifyScheduledIssueCreated({
+        label: "scheduled-community-monitor",
+        sinceIso: RUN_START,
+        octokit,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toThrow("GitHub 503");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: maxAttempts: 1 preserves the single-read contract for callers that opt out", async () => {
+    const request = vi.fn().mockResolvedValue({ data: [] });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      maxAttempts: 1,
+    });
+    expect(result).toBe(false);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -523,6 +626,7 @@ describe("resolveOutputAwareOk", () => {
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
     });
     expect(ok).toBe(false);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -539,6 +643,7 @@ describe("resolveOutputAwareOk", () => {
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
     });
     expect(ok).toBe(false);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -1485,6 +1590,7 @@ describe("resolveOutputAwareOk — F1 retrofit (scheduled-output-missing extra i
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
       stdoutTail: `max-turns. leaked ${SYNTH_SK_ANT} here`,
       stderrTail: `boom ${SYNTH_GHS}`,
       exitCode: 0,

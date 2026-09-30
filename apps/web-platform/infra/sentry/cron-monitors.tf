@@ -1405,9 +1405,11 @@ resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
 
 # Liveness for the GitHub Actions queue-health monitor
 # (.github/workflows/scheduled-actions-queue-health.yml, on.schedule
-# "*/30 * * * *"). #8450 incident class: on 2026-09-22 the org sat ~90 minutes
-# at ~206 queued runs with ~8-10 jobs executing against a 60-job Team
-# entitlement — runner under-assignment — and nothing paged.
+# "*/30 * * * *" as FALLBACK + Inngest dispatch-primary via
+# cron-actions-queue-health-dispatch, #9273). #8450 incident class: on
+# 2026-09-22 the org sat ~90 minutes at ~206 queued runs with ~8-10 jobs
+# executing against a 60-job Team entitlement — runner under-assignment — and
+# nothing paged.
 #
 # TWO failure signals land here. (1) A ?status=error heartbeat = the probe ran
 # and returned UNDER_ASSIGNED (deep+old queue with delivered concurrency below
@@ -1416,23 +1418,48 @@ resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
 # itself cannot get a runner, absence pages — the only mechanism that can
 # detect a total-assignment outage.
 #
-# GHA-scheduled (NOT Inngest-dispatched) by design: an inngest cron would add
-# the prod inngest server as a liveness dependency (#5542 showed it can be
-# dark for hours) and would still land the executor in the queue being
-# measured. checkin_margin_minutes = 30 == the */30 interval (the
-# scheduled_inngest_health margin==interval precedent): a run up to one
-# interval late still checks in, while a genuinely starved monitor pages once
-# the window closes. max_runtime_minutes = 5 matches the job's
-# timeout-minutes. Slug MUST match the workflow's `monitor-slug`
-# (parity-asserted by
+# #9273 — the monitor was GHA-scheduled-only and paged on GitHub's schedule
+# DEFERRAL (measured ~4 fires/day under org load → ~47 missed-checkin
+# pages/day while the probe read HEALTHY whenever it landed). Deferral is not
+# starvation, so the primary trigger is now the Inngest dispatch cron: the
+# dispatch needs no runner to FIRE, and the executor still lands in the
+# measured queue (self-reference preserved). `schedule:` stays byte-identical
+# as the fallback clock (the #8450 cadence-parity guard keys on it).
+#
+# checkin_margin_minutes = 60 covers ~2× the measured dispatch-primary
+# delivery: p90 ~20 min runner-queue wait on the dispatched cohort
+# (2026-09-24, see QUEUE_ALLOWANCE_MINUTES in sentry-monitor-iac-parity.test.ts)
+# + ~5 min runtime + jitter. A run that never lands (both triggers failed, or
+# true starvation) still pages once the window closes.
+# max_runtime_minutes = 5 matches the job's timeout-minutes. Slug MUST match
+# the workflow's `monitor-slug` (parity-asserted by
 # apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts).
 resource "sentry_cron_monitor" "scheduled_actions_queue_health" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-actions-queue-health"
   schedule                = { crontab = "*/30 * * * *" }
-  checkin_margin_minutes  = 30
+  checkin_margin_minutes  = 60
   max_runtime_minutes     = 5
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Liveness for cron-bot-pr-reaper (#9274) — the every-2-hours sweep that
+# update-branches armed soleur-ai[bot] PRs stuck `mergeable_state: "behind"`
+# so auto-merge can fire, and files a [ci/bot-pr-reaper] action-required issue
+# for states update-branch cannot fix. Inngest-fired (pure REST sweep — no GHA
+# executor), so margin follows the Inngest-fired cohort convention: 30 min
+# over the */2h interval covers scheduler jitter plus a transient Inngest
+# retry; a dead reaper pages inside ~2.5 h.
+resource "sentry_cron_monitor" "scheduled_bot_pr_reaper" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-bot-pr-reaper"
+  schedule                = { crontab = "17 */2 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
