@@ -876,6 +876,15 @@ g1_refused "G1-R6 a record with '..' that resolves to the target is refused by t
 # (SEED_STATE splits on `;`, so the record is appended by PRE_INV; the last line wins.)
 g1_refused "G1-R7 a record carrying ';' is refused, and never resolved (recorded_real=none)" \
   "$TGT_REAL;x" none "PRE_INV=persist_state PLAINTEXT_DEV '$TGT_REAL;x'"
+# G1-R8 (F-1) — the binding runs on the LIVE arm too (DRY_RUN=0), not only in the rehearsal: a mismatched
+# record refuses before any blkdiscard or BEGUN marker.
+run_wipe 'wipe_plaintext; echo WIPE_RETURNED' "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_DEV=$LUKS_BLK" W_LABEL=workspaces_plain
+if refused_ok wipe_target_not_recorded_plaintext && [ "$(zero_calls)" -eq 0 ] && ! outF WIPE_RETURNED && ! state_has PLAINTEXT_WIPE_BEGUN \
+  && [ -z "$(wrow wiped first_wipe)" ]; then
+  ok "G1-R8 a LIVE (DRY_RUN=0) first wipe with a mismatched record refuses wipe_target_not_recorded_plaintext before any zero or BEGUN"
+else
+  no "G1-R8 the live arm was not bound to the record (rc=$CASE_RC zero=$(zero_calls) begun=$(state_has PLAINTEXT_WIPE_BEGUN && echo y || echo n)) $(grep -E 'result=|^DIE' <<<"$CASE_OUT" | tr '\n' '|' | cut -c1-240)"
+fi
 # G1-H3 — the resume arm is NOT bound (the marker and the serial bind it): a WRONG record re-zeroes.
 run_wipe 'wipe_plaintext; echo WIPE_RETURNED' "SEED_STATE=CANARY_OK=1:$UUID_LIVE;PLAINTEXT_WIPE_BEGUN=$PIN:1759000000;PLAINTEXT_DEV=$LUKS_BLK" W_TYPE=
 [ -n "$(wrow wiped re_zero)" ] && ran && [ "$(zero_calls)" -eq 1 ] && hasF "blkdiscard -z -v $TGT_REAL" && nounk \
@@ -1458,6 +1467,6 @@ fi
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=176
+WIPE_MIN_PASS=177
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]
