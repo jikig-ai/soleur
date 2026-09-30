@@ -2359,18 +2359,18 @@ verify_image_signature() {
     [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
     return 0
   fi
-  # Verify via the pinned cosign container (ADR-087 Design B′). The app image is a
-  # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
-  # through the host's unrestricted egress (no ghcr.io in the container allowlist),
-  # and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
+  # Verify via the pinned cosign container (ADR-087 Design B′). Since #8036 1c the image
+  # and its OCI-attached .sig are served by zot on the private net (no host-side GHCR
+  # pull remains): `--network host` routes the .sig fetch through the host network, so
+  # the verifier also resolves names through the host's /etc/hosts (where #9169 denies
+  # ghcr.io), and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
   # zot_gate_and_login) is mounted :ro so cosign can authenticate that fetch.
   # Trust is the locally-pinned trusted_root.json (mounted :ro) with `--offline`, so
   # no live Fulcio/Rekor/TUF egress is needed. `docker pull` of the image does NOT
   # pull the .sig referrer, so the fetch (host egress) is still required.
   # Edge B (#6122): a zot-pulled digest lives on plain-HTTP zot on the private net, so
-  # the .sig referrer fetch needs --allow-insecure-registry. When the pull fell back to
-  # GHCR the digest is a ghcr.io ref and the flag stays off — image+auth+sig move
-  # together. The zot auths entry was written into $GHCR_DOCKER_CONFIG by
+  # the .sig referrer fetch needs --allow-insecure-registry (off for any digest not on zot).
+  # The zot auths entry was written into $GHCR_DOCKER_CONFIG by
   # zot_gate_and_login, so the mounted :ro config authenticates the fetch — PROVIDED cosign
   # reads it. #8037: the pinned image runs as uid 65532 (home /home/nonroot) and sets neither
   # HOME nor DOCKER_CONFIG, so the original `/root/.docker/config.json` mount was never read and
