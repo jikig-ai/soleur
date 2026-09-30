@@ -2391,9 +2391,9 @@ resource "sentry_alert" "inngest_provision_failure" {
     },
   ]
 
-  # Apply-order only (#9299): narrow this rule after the degraded rule exists, never before. A
-  # failed create then skips this update, so the degraded stage is never left paged by nothing.
-  # Safe to drop once both rules are live.
+  # Records the coupling (#9299): this rule is correct only while the degraded rule exists, so
+  # Terraform narrows it after that rule is created and skips the narrowing if the create fails
+  # (the degraded stage is never left paged by nothing). Keep it; the op-contract test pins it.
   depends_on = [sentry_alert.inngest_provision_degraded]
 
   lifecycle {
@@ -2402,26 +2402,28 @@ resource "sentry_alert" "inngest_provision_failure" {
 }
 
 # ── Inngest host provisioning degraded (#9299) ────────────────────────────────
-# A soleur-inngest-provision bootstrap that exits 0 while the host serves SQLite-only emits
+# A soleur-inngest-provision bootstrap that exits 0 without its durable store emits
 # stage=bootstrap_done_degraded at warning, once per boot, with detail
 # `why=<reasons>.attempt=<n>.iid=<iid>`, the reasons being .redis-inactive and/or
-# .no-durable-execstart. There is no latch, so nothing retries it until the
-# next boot, and the event is never re-emitted.
+# .no-durable-execstart. There is no latch, so nothing retries it until the next boot, and the
+# event is not re-emitted before then.
 #
 # A separate rule because Sentry throttles per rule per issue group and every boot stage shares
-# WEB-PLATFORM-4S: when #9176 paged both stages from one rule, a provision_attempt_failed page
-# consumed the 2 h window and the degraded event that usually follows it minutes later was
-# suppressed for good. This rule has its own throttle state.
+# WEB-PLATFORM-4S: under #9176's single rule, a provision_attempt_failed page consumed the 2 h
+# window, so the degraded event that usually follows it minutes later would be suppressed until
+# the next boot. This rule has its own throttle state.
 #
-# No detail nc row: the degraded detail carries only those reasons, the attempt and the iid, so it
-# cannot contain why=inngest_pull_fatal. logic_type = "all" is still written, uniform with the sibling; it keeps
-# the rule safe if a second row is ever added (under "any" a lone nc-style row pages every boot
-# stage). value = 0 pages on the first event; not first_seen_event, see git_data_boot_warning.
+# No detail nc row: the degraded detail carries only those reasons, the attempt and the iid, so
+# it cannot contain why=inngest_pull_fatal. logic_type = "all" is still written, uniform with the
+# sibling; it keeps the rule safe if a second row is ever added (under "any" a lone nc-style row
+# pages every boot stage). value = 0 pages on the first event; not first_seen_event, see
+# git_data_boot_warning.
 #
 # frequency_minutes = 33: distinct from every other rule in the root (the op-contract test
 # enforces it; POST-time dedup keys on action shape + filter match + frequency, and this rule's
-# action and logic match the sibling's). Short because the signal does not repeat, which bounds how
-# long a forged degraded event from the semi-public DSN can mask a real one. Arms dark until the
+# action and logic match the sibling's). Short because the signal does not repeat: it bounds, per
+# forged event from the semi-public DSN, the window in which a real degraded event is suppressed
+# (a suppressed real event stays silent until the next boot). Arms dark until the
 # next inngest-host-replace delivers the unit (ADR-257 §Status). Reading a page: runbook
 # inngest-server.md § "Reading an inngest-provision-degraded page".
 resource "sentry_alert" "inngest_provision_degraded" {

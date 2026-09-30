@@ -247,8 +247,8 @@ The zot login, the isolation self-check and the pull → bootstrap block no long
 cloud-init `runcmd`. They run in `/usr/local/bin/soleur-inngest-provision`, under
 `soleur-inngest-provision.service`, which retries without limit until one attempt succeeds. The
 delay between attempts starts at 120 s and backs off to 15 minutes (`RestartSteps=4`,
-`RestartMaxDelaySec=15min`): about 26 fast failures an hour at first, about 4 an hour once backed
-off. A full success writes a latch, and the latch switches the unit off for the rest of the host's
+`RestartMaxDelaySec=15min`): about 8 attempts in the first hour, about 4 an hour once backed
+off (corrected 2026-09-30 from "about 26 fast failures", #9299). A full success writes a latch, and the latch switches the unit off for the rest of the host's
 life. `runcmd` only arms the unit; a boot timer starts it again 90 s after any later boot of a host
 that has not latched yet.
 
@@ -461,21 +461,41 @@ emitter: treat it as forged (the DSN is semi-public). Map the page to the next r
 
 ### Reading an `inngest-provision-degraded` page (#9299)
 
-The bootstrap exited 0 but the host serves jobs from SQLite only, so a restart can drop scheduled
-work. The `why=` names the missing piece: `.redis-inactive` (the `inngest-redis` unit is not
-active) and/or `.no-durable-execstart` (the server unit lacks the durable Postgres flags). The
-event is emitted **once per boot and never re-emitted**, and there is no latch, so nothing retries
-until the next boot: treat the page as open until `bootstrap-done` appears for the same `iid`
-(recipes in [§ Reading a page](#reading-a-page)). The #8562 delivery probe reads the same state as
-`FAIL reason=degraded` while that follow-through is open.
+The bootstrap exited 0 but the host is not running on its durable store, so a restart can drop
+scheduled work. The `why=` names the missing piece: `.redis-inactive` (the `inngest-redis` unit is
+not active) and/or `.no-durable-execstart` (the installed `inngest-server` unit lacks
+`--postgres-max-open-conns`, the durable-ExecStart sentinel, or could not be read). The event is
+emitted **once per boot and not re-emitted before the next one**, and there is no latch, so
+nothing retries until the next boot: treat the page as open until `bootstrap-done` appears for the
+host's current `iid` (recipes in [§ Reading a page](#reading-a-page)). The #8562 delivery probe
+reads the same state as `FAIL reason=degraded` while that follow-through is open.
 
 - **Same subject as a failure page.** Both rules page `WEB-PLATFORM-4S`; read the rule name or the
   `stage` tag. A degraded page minutes after a failure page is the next attempt ending degraded,
   not a duplicate.
-- **A forged degraded event can mask a real one for up to 33 minutes** (the DSN is semi-public).
-  Corroborate with the Better Stack `bootstrap-done-DEGRADED` row for the same `iid`.
+- **A forged degraded event can hide a real one.** The DSN is semi-public, and a page whose issue
+  is NOT `WEB-PLATFORM-4S` is forged. Each forged event opens a 33-minute window, and a real
+  degraded event that arrives inside it is suppressed and, since it is not re-emitted, stays silent
+  until the next boot; a forger repeating every 33 minutes keeps that window open. A forged page
+  also carries a forged `iid`, so do not corroborate on the page's own `iid`: read the host's
+  current `iid` from its newest `provision-unit-armed` row (recipe in
+  [§ Reading a page](#reading-a-page)) and check that life for `bootstrap-done` or
+  `bootstrap-done-DEGRADED`.
 - **A lost POST is not paged.** If the Sentry POST failed, Better Stack carries
-  `sentry-emit-FAILED stage=bootstrap_done_degraded` and nothing pages on it.
+  `sentry-emit-FAILED stage=bootstrap_done_degraded` and nothing pages on it. That row's detail has
+  no `iid=`, so the `iid`-filtered recipes miss it; read it by stage and match its time against the
+  attempt times in `life.txt`:
+
+  ```sh
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30d \
+    --grep sentry-emit-FAILED --limit 200 \
+    | jq -R -r 'fromjson? | .raw? | fromjson?
+        | select(.marker == "SOLEUR_INNGEST_BOOT_STAGE" and .host == "soleur-inngest"
+                 and .stage == "sentry-emit-FAILED")
+        | select((.detail // "") | test("(^|\\s)stage=bootstrap_done_degraded(\\s|$)"))
+        | "\(.dt) \(.detail)"' | sort
+  ```
+
 - **To quiet it**, see the Terraform note at the end of the section above.
 
 ### Replace triggers

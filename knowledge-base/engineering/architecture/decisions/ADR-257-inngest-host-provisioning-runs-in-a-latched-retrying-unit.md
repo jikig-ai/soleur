@@ -150,6 +150,12 @@ edge at all, not that the host lacks a reboot.
   throttle window. The runbook
   (`inngest-server.md` § "Provision unit (#8562)") explains `attempt=N` and says to wait for
   `bootstrap-done` with the same `iid` before deciding to replace.
+
+  > **Corrected 2026-09-30 (#9299):** "about 26 `provision_attempt_failed` events an hour at
+  > first" overstates the rate. `RestartSec=120`, `RestartSteps=4` and `RestartMaxDelaySec=15min`
+  > give about 8 attempts in the first hour, as the unit's own comment in `cloud-init-inngest.yml`
+  > says.
+
 - **Better Stack row volume rises on a failing host,** highest in the first few attempts and
   falling as the delay backs off to 15 minutes. Each attempt makes at most about 6 Doppler reads.
 - **Singleton guarantee (ADR-100).** A self-recovered host never starts serving on its own

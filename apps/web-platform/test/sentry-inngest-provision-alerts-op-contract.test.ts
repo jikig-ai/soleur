@@ -20,10 +20,11 @@ import { describe, it, expect } from "vitest";
 // A rename on either side — the emitter's stage literal or `detail` format, or a rule's filter
 // value — would dark a page while the emitter's own suite (which reads the emitted line, not the
 // rule) stays green. This binds the two sides, requires the two rules to partition the emitted
-// warning stages, and pins what must be ABSENT as well as present: one extra AND-ed condition, a
-// second action filter, a disabled rule, a dropped action or a create-time `environment` each
-// silence or widen a page. Whole-line comments (`#` and `//`) are stripped, so a literal in a
-// comment cannot satisfy an anchor that pins code.
+// warning stages (and each stage to have exactly one emit site in the whole file), and pins what
+// must be ABSENT as well as present by comparing whole shapes: the multiset of row kinds (so an
+// extra condition, trigger or action of ANY kind reds) and the list of top-level attributes (so a
+// `count`, `environment` or dropped `depends_on`/`lifecycle` reds). HCL comments (`#`, `//`,
+// `/* */`) are stripped, so a literal in a comment cannot satisfy an anchor that pins code.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const stripComments = (text: string): string =>
@@ -32,16 +33,18 @@ const stripComments = (text: string): string =>
     .filter((l) => !/^\s*(#|\/\/)/.test(l))
     .join("\n");
 const read = (rel: string): string => stripComments(readFileSync(join(here, rel), "utf8"));
+// HCL block comments. Applied to .tf only: in the YAML a shell `/*` glob would be eaten.
+const readTf = (rel: string): string => read(rel).replace(/\/\*[\s\S]*?\*\//g, "");
 
 const INFRA = join(here, "../infra");
 const SENTRY_DIR = join(INFRA, "sentry");
-const tf = read("../infra/sentry/issue-alerts.tf");
+const tf = readTf("../infra/sentry/issue-alerts.tf");
 const inngestInit = read("../infra/cloud-init-inngest.yml");
 // Every .tf in the Sentry root, for the frequency-uniqueness rows (Sentry dedups on action shape +
 // filter match + frequency, so two rules at one frequency can collapse at POST time).
 const sentryRoot = readdirSync(SENTRY_DIR)
   .filter((f) => f.endsWith(".tf"))
-  .map((f) => read(`../infra/sentry/${f}`))
+  .map((f) => readTf(`../infra/sentry/${f}`))
   .join("\n");
 const reference = JSON.parse(readFileSync(join(SENTRY_DIR, "alert-reference.json"), "utf8"));
 
@@ -49,8 +52,8 @@ function tfBlockFor(resourceName: string): string {
   const decl = `resource "sentry_alert" "${resourceName}"`;
   const start = tf.indexOf(decl);
   if (start === -1) return "";
-  const next = tf.indexOf("\nresource ", start + decl.length);
-  return tf.slice(start, next === -1 ? undefined : next);
+  const end = tf.indexOf("\n}\n", start + decl.length);
+  return tf.slice(start, end === -1 ? undefined : end + 2);
 }
 
 const PROVISION_PATH = "path: /usr/local/bin/soleur-inngest-provision\n";
@@ -78,12 +81,27 @@ function taggedEvents(block: string): Array<Record<string, string>> {
 const WELL_FORMED_EMIT = /(?:^|[\s;&|(])soleur-boot-emit ([A-Za-z0-9_-]+) (info|warning|fatal)(?:\s|$)/;
 
 const MONITOR_BINDING = /^\s*monitor_ids\s*=\s*\[data\.sentry_project_issue_stream_monitor\.web_platform\.id\]\s*$/m;
+// Whole-line anchors: a trailing comment on another line cannot satisfy them.
 const EMAIL_ACTION =
-  /email\s*=\s*\{\s*target_type\s*=\s*"issue_owners",\s*fallthrough_type\s*=\s*"ActiveMembers"\s*\}/;
-const FIRST_EVENT_TRIGGER = /event_frequency_count\s*=\s*\{\s*interval\s*=\s*"1h",\s*value\s*=\s*0\s*\}/;
-// An `environment` set in the block binds the rule at CREATE time, before `ignore_changes` applies,
-// and the reference projection omits the field, so no other gate sees it.
-const ENVIRONMENT_LINE = /^\s*environment\s*=/m;
+  /^\s*\{\s*email\s*=\s*\{\s*target_type\s*=\s*"issue_owners",\s*fallthrough_type\s*=\s*"ActiveMembers"\s*\}\s*\},?\s*$/m;
+const FIRST_EVENT_TRIGGER =
+  /^\s*\{\s*event_frequency_count\s*=\s*\{\s*interval\s*=\s*"1h",\s*value\s*=\s*0\s*\}\s*\},?\s*$/m;
+// Every `{ <kind> = {` row (conditions, triggers, actions), as a sorted multiset.
+const rowKinds = (block: string): string[] => [...block.matchAll(/\{\s*(\w+)\s*=\s*\{/g)].map((m) => m[1]).sort();
+// Top-level attributes and nested blocks of a resource, as a sorted list (duplicates kept). An
+// `environment` set here binds the rule at CREATE time, before `ignore_changes` applies, and the
+// reference projection omits it; `count`/`for_each` can remove the rule; neither is seen elsewhere.
+const topLevel = (block: string): string[] => [...block.matchAll(/^ {2}(\w+)\s*(?:=|\{)/gm)].map((m) => m[1]).sort();
+const RULE_SHAPE = [
+  "action_filters",
+  "enabled",
+  "frequency_minutes",
+  "lifecycle",
+  "monitor_ids",
+  "name",
+  "organization",
+  "trigger_conditions",
+];
 const EMAIL_REF_ACTION = {
   fallthroughType: "ActiveMembers",
   targetIdentifier: null,
@@ -101,41 +119,42 @@ describe("inngest provision alerts ↔ soleur-inngest-provision emitter contract
   const ref = reference["inngest-provision-failure"];
   const degradedRef = reference["inngest-provision-degraded"];
 
-  it("T1: declares exactly one enabled failure resource and exactly one provision script", () => {
+  it("T1: declares exactly one enabled failure resource, of the exact top-level shape, ordered after the degraded rule; and exactly one provision script", () => {
     expect(count(tf, 'resource "sentry_alert" "inngest_provision_failure"')).toBe(1);
     expect(block).toMatch(/^\s*name\s*=\s*"inngest-provision-failure"\s*$/m);
     expect(block).toMatch(/^\s*enabled\s*=\s*true\s*$/m);
     expect(block).toMatch(MONITOR_BINDING);
-    expect(block).not.toMatch(ENVIRONMENT_LINE);
+    expect(topLevel(block)).toEqual([...RULE_SHAPE, "depends_on"].sort());
+    expect(block).toMatch(/^\s*depends_on\s*=\s*\[sentry_alert\.inngest_provision_degraded\]\s*$/m);
     expect(count(inngestInit, PROVISION_PATH)).toBe(1);
     expect(provision).toContain("on_exit() {");
   });
 
-  it("T1b: declares exactly one enabled degraded resource, with no create-time environment", () => {
+  it("T1b: declares exactly one enabled degraded resource, of the exact top-level shape (no environment, count or depends_on)", () => {
     expect(count(tf, 'resource "sentry_alert" "inngest_provision_degraded"')).toBe(1);
     expect(degraded).toMatch(/^\s*name\s*=\s*"inngest-provision-degraded"\s*$/m);
     expect(degraded).toMatch(/^\s*enabled\s*=\s*true\s*$/m);
     expect(degraded).toMatch(MONITOR_BINDING);
-    expect(degraded).not.toMatch(ENVIRONMENT_LINE);
+    expect(topLevel(degraded)).toEqual(RULE_SHAPE);
   });
 
-  it("T2: failure rule has exactly one action filter, and it ANDs its conditions (under `any` the nc row alone matches every boot stage)", () => {
+  it("T2: failure rule has exactly one action filter, exactly these rows of any kind, and it ANDs its conditions (under `any` the nc row alone matches every boot stage)", () => {
     expect(block.match(/^\s*logic_type\s*=/gm) ?? []).toHaveLength(1);
     expect(block).toMatch(/^\s*logic_type\s*=\s*"all"\s*$/m);
+    expect(rowKinds(block)).toEqual(["email", "event_frequency_count", "tagged_event", "tagged_event"]);
     expect(rows).toHaveLength(2);
-    expect(block.match(/\{\s*email\s*=\s*\{/g) ?? []).toHaveLength(1);
     expect(block).toMatch(EMAIL_ACTION);
   });
 
-  it("T2b: degraded rule has exactly one action filter with exactly one condition row", () => {
+  it("T2b: degraded rule has exactly one action filter and exactly these rows of any kind (one condition)", () => {
     expect(degraded.match(/^\s*logic_type\s*=/gm) ?? []).toHaveLength(1);
     expect(degraded).toMatch(/^\s*logic_type\s*=\s*"all"\s*$/m);
+    expect(rowKinds(degraded)).toEqual(["email", "event_frequency_count", "tagged_event"]);
     expect(degradedRows).toHaveLength(1);
-    expect(degraded.match(/\{\s*email\s*=\s*\{/g) ?? []).toHaveLength(1);
     expect(degraded).toMatch(EMAIL_ACTION);
   });
 
-  it("T3: every provision-block emit is attributable, and the two rules partition its literal warning stages", () => {
+  it("T3: every provision-block emit is attributable, the two rules partition its literal warning stages, and each has one emit site", () => {
     const calls = provision.split("\n").filter((l) => l.includes("soleur-boot-emit"));
     const unattributable = calls.filter((l) => !WELL_FORMED_EMIT.test(l));
     expect(unattributable).toEqual([]);
@@ -153,6 +172,13 @@ describe("inngest provision alerts ↔ soleur-inngest-provision emitter contract
     // One equality: the emitted set is non-empty, every emitted warning stage is paged, and the two
     // rules are disjoint (a shared stage would appear twice on the left).
     expect([failureStage[0].value, degradedStage[0].value].sort()).toEqual([...emitted].sort());
+
+    // Each paged stage has exactly one emit site, and no literal outside the provision block (another
+    // script in this file emitting it, or a second emit, would share the rule's throttle window).
+    for (const s of [failureStage[0].value, degradedStage[0].value]) {
+      expect(count(provision, `soleur-boot-emit ${s} `), s).toBe(1);
+      expect(count(inngestInit, s), s).toBe(count(provision, s));
+    }
   });
 
   it("T4: pull misses are excluded by detail not-contains why=inngest_pull_fatal", () => {
@@ -237,7 +263,8 @@ describe("inngest provision alerts ↔ soleur-inngest-provision emitter contract
         f !== "cloud-init-inngest.yml" &&
         !f.startsWith("sentry/") &&
         !f.endsWith(".test.sh") &&
-        !f.includes("node_modules"),
+        !f.includes("node_modules") &&
+        !f.split("/").includes(".terraform"),
     );
     expect(others.length).toBeGreaterThan(20);
     const offenders: string[] = [];
@@ -245,8 +272,9 @@ describe("inngest provision alerts ↔ soleur-inngest-provision emitter contract
       let text: string;
       try {
         text = readFileSync(join(INFRA, f), "utf8");
-      } catch {
-        continue; // a directory entry
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EISDIR") continue; // a directory entry
+        throw e;
       }
       for (const s of stages) if (text.includes(s)) offenders.push(`${f}: ${s}`);
     }

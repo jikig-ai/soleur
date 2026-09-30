@@ -372,6 +372,8 @@ because the failure rule's stage row is still a two-member `in`.
    `sentry_alert.inngest_provision_degraded` (`inngest-provision-degraded`), so each stage has its
    own throttle. Anchor each replacement on a leading newline plus the exact indent and `>` so the 3-space copy cannot match inside
    the 4-space one. Single space after `>` (MD027). Status stays `adopting`.
+   **As shipped:** the #9299 wording was appended as a `Superseded 2026-09-30 (#9299)` pointer
+   under each #9176 blockquote instead of replacing it (dated records are append-only); see AC8.
 3. **C4** `knowledge-base/engineering/architecture/diagrams/model.c4`, `sentry -> founder` edge:
    "35 of the 37" -> "36 of the 38". Then `bash scripts/regenerate-c4-model.sh` to refresh
    `model.likec4.json`.
