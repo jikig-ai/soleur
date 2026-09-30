@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **37 `sentry_alert` rules** (37 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428. 35 are
-  fully Terraform-owned (34 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **38 `sentry_alert` rules** (38 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176. 36 are
+  fully Terraform-owned (35 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
@@ -108,7 +108,7 @@ migrating one — the only entry here whose +1 is a new rule, not a type change.
 and #8451 adopted the last two as frozen `sentry_alert`, so the root declares 32
 and 0. #8505 then added `anthropic_credit_exhausted`, a new rule, taking it to 33; #8630 added
 `cron_monitor_failure` in `cron-monitor-alerts.tf`, taking the root to 34; and #8719 added
-`spawn_agent_dead_letter`, taking it to 35; #6428 added `image_freshness_mismatch`, taking it to 36; #8572 added `git_data_host_key_pin_fault`, taking it to 37. The current count
+`spawn_agent_dead_letter`, taking it to 35; #6428 added `image_freshness_mismatch`, taking it to 36; #8572 added `git_data_host_key_pin_fault`, taking it to 37; #9176 added `inngest_provision_failure`, taking it to 38. The current count
 is at the top of this file, pinned by T25.)
 Historical note, kept because this count has been wrong twice: this paragraph
 said **2** until 2026-09-06 (#7826) while line 5 of this same file

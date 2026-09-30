@@ -1299,10 +1299,11 @@ t43_bad() {  # <text> -> count of `exit 0` lines not preceded (same or previous 
 t43_n="$(grep -cE '(^|[;[:space:]])exit 0([[:space:]]|;|$)' "$T25BODY.main" || true)"
 t43_real="$(t43_bad "$t41_main")"
 t43_ctl="$(t43_bad "$(printf '%s\n' 'if x; then' '  rollback' '  exit 0' 'fi')")"
-if [ "$t43_n" -eq 3 ] && [ "$t43_real" -eq 0 ] && [ "$t43_ctl" -eq 1 ]; then
-  ok "T43 all 3 intentional exit-0 paths (ROLLBACK end, CLEAN_STRAY end, the normal/dry-run end) set RUN_COMPLETE=1 (control caught)"
+# #6604 step 7 took this 3 -> 4: the CONFIRM_WIPE mode block ends `RUN_COMPLETE=1; exit 0` too.
+if [ "$t43_n" -eq 4 ] && [ "$t43_real" -eq 0 ] && [ "$t43_ctl" -eq 1 ]; then
+  ok "T43 all 4 intentional exit-0 paths (ROLLBACK end, CLEAN_STRAY end, CONFIRM_WIPE end, the normal/dry-run end) set RUN_COMPLETE=1 (control caught)"
 else
-  no "T43 exit-0 paths: count=$t43_n (want 3) missing RUN_COMPLETE=$t43_real (want 0) control=$t43_ctl (want 1)"
+  no "T43 exit-0 paths: count=$t43_n (want 4) missing RUN_COMPLETE=$t43_real (want 0) control=$t43_ctl (want 1)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1324,6 +1325,14 @@ if died && has '^EMIT_DRIFT rollback_refused_post_cutover$' && outF 'strand' && 
   ok "J1 ROLLBACK=1 on a cut-over host (mount = mapper, persisted CANARY_OK uuid = live header) is REFUSED before any umount"
 else
   no "J1 a post-cutover ROLLBACK=1 was not refused (rc=$CASE_RC) ${CASE_OUT:0:240}"
+fi
+# J1b — the refusal records what happened (_rollback_refuse): ONE row, outcome=refused_post_cutover
+# mode=rollback, never the false outcome=pre_freeze the EXIT trap used to add.
+if markerF "result=cutover_aborted outcome=refused_post_cutover mode=rollback" && ! markerF 'outcome=pre_freeze' \
+  && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ]; then
+  ok "J1b the post-cutover refusal writes ONE row, outcome=refused_post_cutover mode=rollback (no false pre_freeze)"
+else
+  no "J1b the post-cutover refusal row is wrong: $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|' | cut -c1-240)"
 fi
 # The source flips to the plaintext once rollback() stops the (loaded) timer: the guard reads the
 # mapper, the post-rollback outcome read sees the remount land.
@@ -1578,7 +1587,7 @@ echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
 # still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=169
+FREEZE_MIN_PASS=170
 [ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
 harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
 [ "$fail" -eq 0 ]

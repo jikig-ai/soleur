@@ -58,6 +58,28 @@ describe("uploadPendingFiles", () => {
     fetchSpy.mockRestore();
   });
 
+  it("a .md staged via validateFiles (Concierge / first-run path) presigns and uploads as text/markdown", async () => {
+    // The first-run composer stages files through validateFiles, which
+    // canonicalizes a browser-reported "" type; uploadPendingFiles then reads
+    // `file.type` unchanged, so the canonical type reaches presign + the PUT.
+    const raw = new File(["# notes"], "onboarding-notes.md", { type: "" });
+    const { valid } = validateFiles([raw], 0);
+    expect(valid).toHaveLength(1);
+
+    fetchSpy.mockResolvedValueOnce(fakePresignOk(valid[0]!));
+    const refs = await uploadPendingFiles(valid, "conv-1");
+
+    const presignBody = JSON.parse(fetchSpy.mock.calls[0]![1].body as string);
+    expect(presignBody.contentType).toBe("text/markdown");
+    expect(mockUpload).toHaveBeenCalledWith(
+      expect.any(String),
+      valid[0],
+      "text/markdown",
+      expect.any(Function),
+    );
+    expect(refs[0]).toMatchObject({ filename: "onboarding-notes.md", contentType: "text/markdown" });
+  });
+
   it("presigns and uploads each file, returning AttachmentRefs in order", async () => {
     const fileA = new File(["a".repeat(10)], "a.png", { type: "image/png" });
     const fileB = new File(["b".repeat(20)], "b.pdf", { type: "application/pdf" });
