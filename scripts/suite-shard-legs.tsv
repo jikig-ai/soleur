@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=7
-# generated-from-run=36638686100
-# generated-from-runs=36638686100,36637105563,36633888382,36633714968,36632290972
-# default-weight-ms=841
-# generated-at=2026-09-29T23:04:21Z
+# generated-from-run=36646934899
+# generated-from-runs=36646934899,36646627704,36638686100,36637105563,36633888382
+# default-weight-ms=837
+# generated-at=2026-09-30T00:14:38Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --runs 5 --write
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -71,7 +71,7 @@ apps/cla-evidence/scripts/upload-bypass.test.sh	2
 apps/cla-evidence/scripts/upload-evidence.test.sh	7
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	3
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	2
-apps/web-platform/scripts/dev-ledger-parity.test.sh	5
+apps/web-platform/scripts/dev-ledger-parity.test.sh	2
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	5
 apps/web-platform/scripts/lib/no-cross-context-import.test.sh	3
 apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh	1
@@ -90,7 +90,7 @@ plugins/soleur/scripts/admin-merge-ready.test.sh	3
 plugins/soleur/scripts/alpha-metrics.test.sh	5
 plugins/soleur/scripts/emit-decision.test.sh	5
 plugins/soleur/scripts/precommit-guard.test.sh	2
-plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	5
+plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	2
 plugins/soleur/scripts/sync-pr-behind.test.sh	7
 plugins/soleur/scripts/taste-profile-update.test.sh	3
 plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	7
@@ -269,12 +269,12 @@ scripts/bwrap-probe-selfreport-8016	6
 scripts/capture-web-1-host-key	1
 scripts/capture-web-2-host-key	1
 scripts/cf-tunnel-liveness-gate-mutations	4
-scripts/check-cloudflare-token-drift	6
+scripts/check-cloudflare-token-drift	4
+scripts/check-deploy-script-parity	1
 scripts/check-pa-22-live	1
 scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	7
 scripts/check-tom4-rls-posture-live	1
-scripts/check-deploy-script-parity	1
 scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/ci-leg-balance-9232	3
 scripts/classify-workflow-transitions	5
@@ -301,7 +301,7 @@ scripts/extract-api-spend	3
 scripts/follow-through-closure-guard	7
 scripts/followthrough-exec-bit	4
 scripts/followthrough-predicate-parity	6
-scripts/followthrough-varq-ban	7
+scripts/followthrough-varq-ban	1
 scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/t5-skip-persistence-bound-7510	1
 scripts/generate-kb-index-live	7
@@ -422,12 +422,12 @@ scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1
 scripts/test-all-affected	3
 scripts/test-all-capacity-signal	4
-scripts/test-all-enumerate-toolchain	4
+scripts/test-all-enumerate-toolchain	5
 scripts/test-all-group-affected	6
 scripts/test-all-infra-coverage-notice	2
 scripts/test-all-killed-classification	5
 scripts/test-all-orphan-log-retention	5
-scripts/test-all-runtime-ceiling	7
+scripts/test-all-runtime-ceiling	6
 scripts/test-all-webplat-gate	4
 scripts/test-contention	7
 scripts/tmpfs-guard	2
@@ -461,7 +461,7 @@ tests/scripts/destroy-guard-counter-sentry	7
 tests/scripts/destroy-guard-counter-web-platform	5
 tests/scripts/destroy-guard-regex-parity	2
 tests/scripts/destroy-guard-sentry-scope-guard	2
-tests/scripts/dev-suite-mutex	2
+tests/scripts/dev-suite-mutex	7
 tests/scripts/dev-suite-mutex-wiring	5
 tests/scripts/dispatch-web-redeploy	1
 tests/scripts/eu-location-allowset-parity	1
@@ -484,7 +484,7 @@ tests/scripts/lint-rule-bodies	6
 tests/scripts/lint-rule-ids	1
 tests/scripts/main-duplicate-skip	5
 tests/scripts/no-tofu-ssh	2
-tests/scripts/no-tofu-ssh-mutation	2
+tests/scripts/no-tofu-ssh-mutation	7
 tests/scripts/plan-gate-preamble	4
 tests/scripts/preapply-entrypoint-gate	1
 tests/scripts/registry-d10-workflow-wiring	4
