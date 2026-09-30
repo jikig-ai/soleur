@@ -1122,8 +1122,15 @@ Inngest CLI version is pinned in `apps/web-platform/infra/inngest.tf` `locals` b
    inngest-cli version) via the canonical flow below
    ([§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify)):
    annotated tag → build → cloud-init pin bump → `workflow_dispatch` deploy →
-   verify. On deploy, `inngest-bootstrap.sh` detects the version mismatch,
-   pauses → drains → restarts → resumes (~5s downtime on loopback).
+   verify. The dedicated host's live flip is `inngest-host-replace` (destroy +
+   recreate); `inngest-bootstrap.sh`'s in-place upgrade block never runs there —
+   see `apps/web-platform/infra/inngest-cli.provenance.md` § Bump procedure, step 7. Only
+   an in-place redeploy of an already-running server enters that block: it waits a
+   `DRAIN_SLEEP_SEC` settle delay, replaces the binary and restarts the unit.
+   Nothing pauses, drains or resumes (no such CLI verb exists, #9219); in-flight
+   step dispatches are interrupted at the restart. The success-path `upgrade …`
+   log lines stay on the host, so confirm an upgrade through the release verify
+   step, not by searching Better Stack.
 
 ## Bootstrap-image release (tag → build → deploy → verify)
 
