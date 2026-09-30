@@ -53,3 +53,28 @@ The operator chose the second Sentry alert rule on #9299 ("let's go with a secon
 ### Decisions (work)
 - ADR-257: appended `Superseded 2026-09-30 (#9299)` pointers under both #9176 blockquotes instead of rewriting them (dated records are append-only). AC8 amended in the plan to match.
 - Degraded-rule comment states the detail's real shape (`why=<reasons>.attempt=<n>.iid=<iid>`), not "only the two reasons", after reading cloud-init-inngest.yml.
+
+## Review Phase
+- Panel (10/10 returned, report-only at 3195d89649): security, test-design, architecture, pattern, code-quality, git-history, data-integrity, performance, agent-native, semgrep-sast (0 findings, 142 rules on 2 files).
+- Findings: 0 P1 / 3 P2 / ~12 P3. All fixed inline in dbdb4fc66d except the wontfix items below; filed as scope-out: 0.
+- Structural-cause roll-up: every test-design survivor was one gap. The absence claims covered only the kinds in the author's head (tagged rows, #/// comments, email actions, the provision block). Fixed by pinning whole multisets and shapes.
+- Wontfix: folding the T1/T1b, T2/T2b and T7/T7b pairs into `describe.each` (the row ids are the plan's and the mutation ledger's, and folding renumbers them); the repeated "a second email is not a duplicate" point (each runbook section is a landing point).
+- Coordination: posted on #9263 that whichever merges second must re-count README and the C4 `sentry -> founder` text.
+
+### Mutation battery after the fixes (control 13/13; every row landed; pristine restore verified)
+| Row | Result |
+| --- | --- |
+| M1, M2, M3, M5, M6, M10, M11, H1, H1b | RED as before |
+| X1 level row on degraded / X2 on failure | RED: T2b / T2 |
+| X3 count = 0 | RED: T1b |
+| X4 /* */-hidden enabled = true | RED: T1b |
+| X5 depends_on dropped | RED: T1 |
+| X6 trailing-comment trigger | RED: T2b, T7b |
+| X7 NIC script emits provision_attempt_failed | RED: T3 |
+| X8 second bootstrap_done_degraded emit in on_exit | RED: T3 |
+| X10 one-line extra action filter | RED: T2b |
+| X11 extra first_seen_event trigger | RED: T2b |
+| X12 lifecycle dropped | RED: T1b |
+| X13 locals block after the resource | RED: T1b |
+| H2 reorder + field swap | GREEN (as required) |
+- X9 (emit wrapped in `if false`) cannot be seen by a static test; `cloud-init-inngest-provision-unit.test.sh` row TD1 reds on it (test-design seat).
