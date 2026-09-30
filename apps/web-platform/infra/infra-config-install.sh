@@ -230,7 +230,10 @@ fi
 # is safe from `deploy`, because it is not.
 #
 # The permitted grammar is deliberately the NARROWEST that admits the payload we actually ship:
-# blank, comment, a bare [Service] header, Environment= and EnvironmentFile=. A directive
+# blank, comment, a bare [Service] header, Environment=, EnvironmentFile=, and the ONE exact line
+# `UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN` (#8609: every loader of the credential file must drop
+# the App read token; census G6u). It is a literal, anchored at end of line, so it admits no other
+# name, no suffix, no empty unset and no trailing-backslash continuation. A directive
 # outside it is rejected by name rather than silently dropped. Note this is a per-PHYSICAL-line
 # check while systemd parses LOGICAL lines (a trailing backslash continues), and that asymmetry
 # is safe in the only direction that matters: a continuation can merge permitted lines into one
@@ -254,7 +257,7 @@ fi
 # `grep -c` reads ALL input (no early close), so this cannot SIGPIPE the producer the way
 # `| grep -q` would under `set -o pipefail` — same reason as the env-file gate above.
 if [[ "$dest_canonical" == /etc/systemd/system/*.service.d/*.conf ]]; then
-  dropin_bad_lines="$(grep -cvE '^[[:space:]]*($|#|;|\[Service\][[:space:]]*$|Environment=|EnvironmentFile=)' "$tmp" || true)"
+  dropin_bad_lines="$(grep -cvE '^[[:space:]]*($|#|;|\[Service\][[:space:]]*$|Environment=|EnvironmentFile=|UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN[[:space:]]*$)' "$tmp" || true)"
   [[ "$dropin_bad_lines" == "0" ]] || reject "dropin_shape:bad_lines=$dropin_bad_lines"
 fi
 
