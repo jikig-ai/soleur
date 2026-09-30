@@ -22,6 +22,9 @@ locals {
 
   # --- local.webhook_doppler_token_env — the full rationale for soleur-doppler-token.tmpl ---
   #
+  # #8609: the .tmpl carries NO comment lines at all any more (its two-line pointer header moved
+  # here) — the web render had ~28 B of CI headroom once #9169's ghcr deny and the token line landed.
+  #
   # THE PROSE LIVES HERE, NOT IN THE .tmpl, AND THAT IS DELIBERATE. The rendered file is injected
   # verbatim into cloud-init `user_data`, which is base64gzip'd against a hard 32,768-byte Hetzner
   # cap. A comment in the template is therefore not free — the first draft carried ~3.8 KB of
@@ -915,7 +918,36 @@ resource "terraform_data" "private_nic_guard_install" {
   }
 }
 
+# #9169 — the ghcr.io hosts-file deny for the RUNNING web hosts (ADR-096 amendment 2026-09-30).
+# ghcr_deny_sh is a byte copy of the registry's runcmd entry (cloud-init-registry.yml) and of the
+# web cloud-init runcmd[1] entry that covers fresh/replaced hosts; web-ghcr-deny.test.sh asserts all
+# three are identical and that both consumers below hash AND run these locals in a dedicated,
+# secret-free, last remote-exec block. Consumers: zot_consumer_probe_install (web-1) and
+# deploy_pipeline_fix_web2 (web-2). The assertion is the POSITIVE form (non-empty AND only the
+# sinkhole), so an unresolvable name cannot pass vacuously. No dollar-brace or percent-brace in
+# either heredoc: both must render literally.
+locals {
+  ghcr_deny_sh        = <<-EOT
+    for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
+      [ -f "$f" ] || continue
+      for h in ghcr.io pkg-containers.githubusercontent.com; do
+        grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
+      done
+    done
+  EOT
+  ghcr_deny_assert_sh = <<-EOT
+    for h in ghcr.io pkg-containers.githubusercontent.com; do
+      a=$(timeout 10 getent ahosts "$h" | awk '{print $1}' | sort -u)
+      if [ -z "$a" ] || printf '%s\n' "$a" | grep -qvxE '0\.0\.0\.0|::'; then
+        echo "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run rerun --failed." >&2
+        exit 1
+      fi
+    done
+  EOT
+}
+
 # §1 zot consumer serviceability probe.
+# Also carries the ghcr.io hosts-file deny for web-1 (#9169; web-ghcr-deny.test.sh).
 resource "terraform_data" "zot_consumer_probe_install" {
   # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
   depends_on = [terraform_data.journald_persistent]
@@ -928,6 +960,8 @@ resource "terraform_data" "zot_consumer_probe_install" {
     local.zot_probe_repo,
     # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
+    local.ghcr_deny_sh,
+    local.ghcr_deny_assert_sh,
   ]))
 
   connection {
@@ -966,6 +1000,16 @@ resource "terraform_data" "zot_consumer_probe_install" {
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
       "systemctl list-timers web-zot-consumer-probe.timer --no-pager",
+    ]
+  }
+  # #9169 ghcr.io deny: its own LAST block, secret-free. A sensitive value in a provisioner's config
+  # suppresses all of its output (the FATAL would be hidden) and a failed run leaves its script in
+  # /root; running after the token block also means a deny failure never blocks the probe delivery.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      local.ghcr_deny_sh,
+      local.ghcr_deny_assert_sh,
     ]
   }
 }
@@ -2043,11 +2087,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # delivered (they only POINT units at the credential file, which exists from birth).
 #
 # Sentinel string at the end forces re-creation when the inline remote-exec list itself
-# changes; bump the suffix in lockstep with any inline edit. The host-id entry re-fires on
+# changes; bump the suffix in lockstep with any inline edit. (#9169 added no bump: its two
+# new triggers_replace elements move the hash by themselves.) The host-id entry re-fires on
 # web-2 replacement (cattle), re-delivering the full set post-boot.
 #
 # Scope boundary (named so it does not read as an omission): this resource covers the
-# deploy-pipeline FILE_MAP set only. docker_seccomp_config and apparmor_bwrap_profile stay
+# deploy-pipeline FILE_MAP set, plus ONE non-file duty: the #9169 ghcr.io hosts-file
+# deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
+# web-ghcr-deny.test.sh). docker_seccomp_config and apparmor_bwrap_profile stay
 # web-1-only — a seccomp-bwrap.json/apparmor profile merge still leaves web-2 birth-frozen
 # on those files until #7103's wider pass. Same for the CI ssh pubkey: a
 # DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf but not web-2's
@@ -2078,6 +2125,8 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     file("${path.module}/10-inngest-server-doppler-token.conf"),
     file("${path.module}/10-inngest-redis-doppler-token.conf"),
     hcloud_server.web["web-2"].id,
+    local.ghcr_deny_sh,
+    local.ghcr_deny_assert_sh,
     file("${path.module}/web-2-ssh-host-key.pub"),
     "dpf-web2-remote-exec-v1",
   ]))
@@ -2259,6 +2308,16 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       # running webhook is sub-second; the assert catches a dead one).
       "systemctl try-restart webhook",
       "test \"$(systemctl is-active webhook)\" = 'active'",
+    ]
+  }
+  # #9169 ghcr.io deny: LAST and secret-free (the block above references local.hooks_json, whose
+  # sensitive webhook secret would suppress this block's FATAL), and after the webhook restart so a
+  # deny failure can never leave the new hooks.json / webhook.service unloaded.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      local.ghcr_deny_sh,
+      local.ghcr_deny_assert_sh,
     ]
   }
 }

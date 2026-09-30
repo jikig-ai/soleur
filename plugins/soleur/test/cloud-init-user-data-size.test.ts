@@ -169,10 +169,15 @@ const HETZNER_CAP = 32_768;
 // #8609 (Phase 0.1) — NOT raised. The credential file gained one conditional line carrying a 60-char
 // service token, modeled with real entropy (GITHUB_APP_TOKEN_FIXTURE). Measured locally
 // 2026-09-30: 23,352 B with the token empty -> 23,504 B with it set (+152 B), under 23,580 by 76 B
-// (~44 B after the recorded +32 B CI zlib delta). THIN: the next addition to the web render should
-// first move the two comment lines of soleur-doppler-token.tmpl into server.tf (the plan's fallback,
-// ~150 B of prose that rides in user_data verbatim) rather than raise this.
-const WEB_GZIP_BUDGET = 23_580;
+// (~44 B after the recorded +32 B CI zlib delta). After merging #9169 (budget -> 23,800 below) the
+// token render measured 23,740 B (~28 B of CI headroom), so the plan's fallback was applied: the
+// two comment lines of soleur-doppler-token.tmpl moved into server.tf. Measured 23,436 B locally
+// (~23,468 CI), ~330 B under 23,800.
+// #9169 RAISE: the ghcr.io hosts-file deny (a byte copy of the registry's runcmd entry, as runcmd[1])
+// took the local render to 23,584 B, 4 B over. Same derivation as the lower above: CI ~= local + 32
+// = ~23,616; 23,800 restores ~184 B of headroom and stays ~9.0 KB below HETZNER_CAP. If CI reds,
+// re-derive from its failure line.
+const WEB_GZIP_BUDGET = 23_800;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
