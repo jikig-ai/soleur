@@ -212,6 +212,7 @@ import {
   unregisterSession,
   getSession,
   forEachSessionForConversation,
+  hasLiveAgentLoop,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
 import { classifySandboxStartupError } from "./sandbox-startup-classifier";
@@ -839,6 +840,23 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
     // per-row, not cross-row.
     await Promise.allSettled(
       candidates.map(async (conv) => {
+        // #9270 review P1 — live-loop guard BEFORE the status flip. The
+        // RPC's `s.id IS NULL` arm selects rows with NO slot row — but a
+        // resume/follow-up turn is slotless BY DESIGN (`acquireSlot` runs
+        // on start_session only; `touchSlot` is UPDATE-only), so a live
+        // resumed/follow-up turn is a guaranteed false-positive candidate
+        // once status='active' — and for the legacy lineage this path
+        // abortSession()s a running turn mid-flight. SQL cannot see
+        // in-process liveness; hasLiveAgentLoop (cc runner probe +
+        // legacy activeSessions) is the no-false-reap discriminator
+        // ws-handler's dead-socket reap already uses.
+        if (hasLiveAgentLoop(conv.user_id, conv.id)) {
+          log.info(
+            { userId: conv.user_id, conversationId: conv.id },
+            "stuck-active reap skipped: live agent loop",
+          );
+          return;
+        }
         // #3463: race-window guard. The candidate set was computed
         // ≤300s ago (the reaper poll cadence); the candidate's session may have completed cleanly
         // (result branch wrote `waiting_for_user`) in the interval
@@ -2997,6 +3015,29 @@ export async function sendUserMessage(
     }
   }
 
+  // Turn-start status flip (rail-live-status fix, PR #9270): a follow-up
+  // `chat` message on an existing `completed`/`waiting_for_user`/`failed`
+  // conversation IS new activity, but nothing upstream flipped the row back
+  // to `active` — the conversations rail rendered the stale terminal badge
+  // for the whole run. The flip is invoked at each dispatch boundary below —
+  // after `loadConversationHistory`, the last awaited throw-eligible step —
+  // so a persistence/mint failure leaves the row at its previous honest value
+  // (same narrow-window contract as dispatchSoleurGo's flip; a stale-active
+  // row here would idle in the rail for the reaper window). `expectMatch:
+  // true` mirrors the probe→update deletion race to Sentry without aborting
+  // the turn — status is display-only, the session must proceed regardless.
+  const markTurnStarted = () =>
+    updateConversationFor(
+      userId,
+      conversationId,
+      { status: "active", last_active: new Date().toISOString() },
+      {
+        feature: "agent-runner",
+        op: "turn-start-active",
+        expectMatch: true,
+      },
+    );
+
   // Check for an in-memory session with a captured session_id
   const activeSession = getSession(userId, conversationId);
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
@@ -3061,6 +3102,10 @@ export async function sendUserMessage(
   // routeMessage hits Anthropic with the plaintext apiKey; the lease
   // bounds the in-process heap window for that call too.
   if (!conv.domain_leader) {
+    // Turn-start flip BEFORE the routing try so the branch's own
+    // `handleSessionError` catch reverts it (guarded `failed` via
+    // updateConversationStatusIfActive) on any lease/route failure.
+    await markTurnStarted();
     try {
       // Sentinel sweep site #2 (#4232 PR-A). Routing-side BYOK fetch;
       // workspace resolved against the caller's ACTIVE workspace inside
@@ -3104,6 +3149,7 @@ export async function sendUserMessage(
 
   // Legacy single-leader flow (conversation has explicit domain_leader)
   if (resumeSessionId) {
+    await markTurnStarted();
     // Try SDK resume first; fall back to message replay if it fails
     startAgentSession(
       userId,
@@ -3139,8 +3185,12 @@ export async function sendUserMessage(
       ).catch(handleSessionError);
     });
   } else {
-    // No session to resume — first turn or history-only replay
+    // No session to resume — first turn or history-only replay. The flip is
+    // AFTER loadConversationHistory (the last awaited throw-eligible step in
+    // this branch) — a mint/history failure leaves status untouched instead
+    // of falsely `active`.
     const history = await loadConversationHistory(userId, conversationId);
+    await markTurnStarted();
     const prompt = history.length > 0
       ? buildReplayPrompt(history, augmentedContent)
       : augmentedContent;

@@ -321,6 +321,54 @@ describe("startStuckActiveReaper (AC2/AC5)", () => {
     }
   });
 
+  test("a slotless candidate with a LIVE in-process loop is skipped (no flip, no release, no abort)", async () => {
+    // #9270 review P1: resume/follow-up turns never re-acquire a
+    // `user_concurrency_slots` row (acquireSlot is start_session-only and
+    // touchSlot is UPDATE-only), so a live resumed turn matches the RPC's
+    // `s.id IS NULL` arm unconditionally — before this guard the reaper
+    // would flip the row to 'failed' and abortSession() it mid-run.
+    // hasLiveAgentLoop (cross-lineage: legacy registry + cc probe) is the
+    // no-false-reap discriminator ws-handler's dead-socket reap already
+    // uses; the probe registration path is what cc-dispatcher itself uses.
+    const { registerLiveLoopProbe } = await import(
+      "../server/agent-session-registry"
+    );
+    const live = { id: "conv-live-loop", user_id: "user-A" };
+    const dead = { id: "conv-truly-dead", user_id: "user-B" };
+    // Conversation-scoped probe (mirrors hasActiveCcQuery's signature) —
+    // registration persists for the file's lifetime, so scope the probe to
+    // the one conversation id to keep sibling tests unaffected.
+    registerLiveLoopProbe((conversationId) => conversationId === live.id);
+
+    const { statusUpdates } = setupSupabaseMockForReaper({
+      candidates: [live, dead],
+    });
+    const abortSessionSpy = vi.spyOn(agentRunnerMod, "abortSession");
+
+    timer = startStuckActiveReaper();
+    await vi.advanceTimersByTimeAsync(301_000);
+    if (timer) clearInterval(timer);
+    timer = undefined;
+    await vi.runOnlyPendingTimersAsync();
+
+    // The live candidate is untouched — no status write, no release, no
+    // abort (SQL cannot see in-process liveness; the probe must skip it).
+    expect(statusUpdates.find((u) => u.conversationId === live.id)).toBeUndefined();
+    expect(mockReleaseSlot).not.toHaveBeenCalledWith(live.user_id, live.id);
+    expect(
+      abortSessionSpy.mock.calls.find((c) => c[1] === live.id),
+    ).toBeUndefined();
+
+    // The genuinely-dead candidate reaps normally — the guard narrows,
+    // it does not blanket-disable.
+    expect(statusUpdates).toContainEqual({
+      conversationId: dead.id,
+      userId: dead.user_id,
+      status: "failed",
+    });
+    expect(mockReleaseSlot).toHaveBeenCalledWith(dead.user_id, dead.id);
+  });
+
   test("RPC error → reportSilentFallback fires; reaper does NOT throw", async () => {
     setupSupabaseMockForReaper({
       candidates: [],
