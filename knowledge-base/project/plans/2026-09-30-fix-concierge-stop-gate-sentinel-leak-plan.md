@@ -484,6 +484,7 @@ entries are spawned WITH `buildAgentEnv`'s real env (imported, not re-typed). `d
   and `"stopping"` is preserved (`lib/ws-client.ts` `chatReducer`; `test/chat-reducer.test.ts`,
   `test/cc-turn-end-wire.test.ts`), or Phase 3's stop condition was followed and the plan's root-cause item 4
   updated.
+  > **Superseded 2026-09-30 (review round):** "`stopping` is preserved" no longer holds. `abort_turn` never reaches a live cc turn, so `stopping` is released on a drained cc `stream_end`; see the addendum below.
 - [x] `test/plugin-stop-hooks-web-parity.test.ts` passes; the PR body attests each of the six mutation-matrix
   rows was demonstrated RED against a scratch copy (an attestation, not a CI check).
 
@@ -494,6 +495,7 @@ entries are spawned WITH `buildAgentEnv`'s real env (imported, not re-typed). `d
 - [x] ADR-093 amended (Amendment + Alternatives rows); `model.c4` `api` description corrected; the three C4
   tests are green.
 - [x] `stop-hook.sh` is registered `web-safe` and spawned in a temp git repo; `browser-cleanup-hook.sh` is registered `deferred` citing #9281 (filed 2026-09-30).
+  > **Superseded 2026-09-30 (review round):** `stop-hook.sh` is registered `deferred` under #9289 (it reads repo-controlled ralph state files in a web session); the `web-safe` class was removed from the registry.
 - [x] `tsc --noEmit`, `npx vitest run` for the touched files, and `bash plugins/soleur/test/c4-count-parity.test.sh`
   are green. PR body uses `Closes` only if an issue is opened for this bug (none cited today).
 
@@ -564,3 +566,13 @@ gates do not fire.
   `components/chat/chat-surface.tsx` (live-narration slot)
 - ADR-093, `knowledge-base/engineering/architecture/diagrams/model.c4`
 - Evidence screenshot: `/tmp/claude-1000/-data-git-repositories-jikig-ai-soleur/55923a7f-7fd9-4618-bb76-2d4332e1b386/images/1.png`
+
+## Addendum — 2026-09-30 (review round)
+
+The 11-seat review panel changed these plan positions; each was verified before the change.
+
+- **Strip scope.** `stripStopGateMarkup` matches only the hook's sentinel (`<stop>` then `OPERATOR-GATE|BLOCKED`) with a linear scanner. Phase 2's "attribute and case variants" table is superseded: attribute forms are not matched (SVG `<stop offset=…/>` answers), and the lazy-regex version was quadratic (1-30 s stalls at 100-200 KB).
+- **Stopping.** Phase 3 row "`stopping` stays `stopping`" is superseded: a cc `stream_end` releases it, because a Stop on a cc conversation aborts nothing (`abort_turn` only reaches `activeSessions`).
+- **Guard Contract classes.** The registry has two classes, `web-disabled` and `deferred`. Mutation rows 5 and 6 (which relabel to `web-safe`) no longer apply; the review round re-drove nine rows over the changed guards instead. `stop-hook.sh` moved from `web-safe` to `deferred` (#9289).
+- **Read side.** Added `api-messages.ts` filtering of pre-fix `<stop>` assistant rows, which the plan did not cover.
+- **Ownership claim.** The plan's "the unkept-promise class in web is left to the Concierge system prompt" was false: no web prompt carries that rule. Tracked in #9289.
