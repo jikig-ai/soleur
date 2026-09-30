@@ -378,6 +378,14 @@ runcmd:
     # landed bootcmd_start (below) with NO runcmd_start brackets the death to the packages:/config
     # phase; neither landing points at no-egress / a pre-network death → needs host console.
     _emit "soleur-cloud-init boot stage" runcmd_start info
+  # #9169: ghcr.io deny, byte copy of the registry entry (web-ghcr-deny.test.sh). 0.0.0.0/::, never 127.0.0.1.
+  - |
+    for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
+      [ -f "$f" ] || continue
+      for h in ghcr.io pkg-containers.githubusercontent.com; do
+        grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
+      done
+    done
   # #8651/#6438: converge a late-attached private NIC via the #8539 fallback .network above (ADR-123 amendment 2026-09-23).
   - networkctl reload || { printf 'gate=reload' > /run/soleur-stage-detail; _emit "soleur-cloud-init boot stage" private_nic_probe_fault warning; }
 
