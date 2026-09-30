@@ -284,18 +284,18 @@ ADR-261 is authored in this PR in `accepted` state — the decision is true on m
 
 ## Acceptance Criteria
 
-- [ ] AC1: `.claude/settings.json` SessionStart invokes `memory-backstop-resolve.sh`; no registry binds `memory-backstop.sh` directly (asserted by Guard 3; verified `.devin`/`.codex` never did).
-- [ ] AC2: Given fixture candidates with revisions checkout=1, managed=3, resolver execs managed; managed=3 + plugin=5 → execs plugin copy; equal revisions → execs checkout; newest candidate failing `bash -n` → falls to next. All asserted in `memory-backstop-resolve.test.sh`.
-- [ ] AC3: Running the resolver when checkout revision > managed revision atomically installs checkout → `${XDG_DATA_HOME:-~/.local/share}/soleur/hooks/` (mode 0755, `lib/log-rotation.sh` carried when present) BEFORE exec; a second stale-checkout run resolves the managed copy.
-- [ ] AC4: `plugins/soleur/hooks/memory-backstop.sh` is byte-equal to the repo hook and unregistered in `hooks.json`; `backstop-parity.test.ts` enforces both.
-- [ ] AC5: `memory-backstop.sh` exec'd from a managed path writes `.claude/.memory-backstop.jsonl` under `$CLAUDE_PROJECT_DIR`, not under the managed dir — a fixture test pins `_repo_root`'s pre-existing env preference (`memory-backstop.sh:87`).
-- [ ] AC6: Ledger lines carry `schema:2`, `backstop_revision`, `resolved_from`, `repaired`; README documents the fields.
-- [ ] AC7: `repair_stale_scopes` issues `SetUnitProperties` (runtime) only on `soleur-agent-*.scope` units whose caps differ from current constants — never touches BindsTo — and a deliberately-miscapped `soleurtest-*` scope is repaired in the live arm.
-- [ ] AC8: `check-backstop-revision.sh` fails a synthetic diff that edits the hook without bumping `BACKSTOP_REVISION`, and the workflow step runs it (Guard 1 matrix green).
-- [ ] AC9: Resolver exits 0 on: no candidates beyond checkout, unreadable managed dir, unwritable publish target, absent `HOME` fallbacks — never blocks SessionStart.
-- [ ] AC10: `memory-backstop.test.sh` and `memory-backstop-mutation-battery.sh` stay green (existing arms preserved; `live_mark` placement for new live arms follows #8008's emission-vs-reachability guidance).
-- [ ] AC11: ADR-261 committed; `model.c4` description updated; c4 tests pass.
-- [ ] AC12: `bash -n` and the repo's shell-lint gates pass on the shim, and `bun test`/`test-all` plugin suites pass with the vendored file present (no component-census regression).
+- [x] AC1: `.claude/settings.json` SessionStart invokes `memory-backstop-resolve.sh`; no registry binds `memory-backstop.sh` directly (asserted by Guard 3; verified `.devin`/`.codex` never did).
+- [x] AC2: Given fixture candidates with revisions checkout=1, managed=3, resolver execs managed; managed=3 + plugin=5 → execs plugin copy; equal revisions → execs checkout; newest candidate failing `bash -n` → falls to next. All asserted in `memory-backstop-resolve.test.sh`.
+- [x] AC3: Running the resolver when checkout revision > managed revision atomically installs checkout → `${XDG_DATA_HOME:-~/.local/share}/soleur/hooks/` (mode 0755, `lib/log-rotation.sh` carried when present) BEFORE exec; a second stale-checkout run resolves the managed copy.
+- [x] AC4: `plugins/soleur/hooks/memory-backstop.sh` is byte-equal to the repo hook and unregistered in `hooks.json`; `backstop-parity.test.ts` enforces both.
+- [x] AC5: `memory-backstop.sh` exec'd from a managed path writes `.claude/.memory-backstop.jsonl` under `$CLAUDE_PROJECT_DIR`, not under the managed dir — a fixture test pins `_repo_root`'s pre-existing env preference (`memory-backstop.sh:87`).
+- [x] AC6: Ledger lines carry `schema:2`, `backstop_revision`, `resolved_from`, `repaired`; README documents the fields.
+- [x] AC7: `repair_stale_scopes` issues `SetUnitProperties` (runtime) only on `soleur-agent-*.scope` units whose caps differ from current constants — never touches BindsTo — and a deliberately-miscapped `soleurtest-*` scope is repaired in the live arm.
+- [x] AC8: `check-backstop-revision.sh` fails a synthetic diff that edits the hook without bumping `BACKSTOP_REVISION`, and the workflow step runs it (Guard 1 matrix green).
+- [x] AC9: Resolver exits 0 on: no candidates beyond checkout, unreadable managed dir, unwritable publish target, absent `HOME` fallbacks — never blocks SessionStart.
+- [x] AC10: `memory-backstop.test.sh` and `memory-backstop-mutation-battery.sh` stay green (existing arms preserved; `live_mark` placement for new live arms follows #8008's emission-vs-reachability guidance).
+- [x] AC11: ADR-261 committed; `model.c4` description updated; c4 tests pass.
+- [x] AC12: `bash -n` and the repo's shell-lint gates pass on the shim, and `bun test`/`test-all` plugin suites pass with the vendored file present (no component-census regression).
 
 ## Test Scenarios
 
