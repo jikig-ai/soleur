@@ -487,6 +487,14 @@ if [[ "${1:-}" == "run" ]]; then
           printf 'CANARY_VISIBLE_AT_VERIFY:%s\n' "$_seen" >> "$MOCK_COSIGN_ARGS_FILE"
         fi
       fi
+      # #6129: count verify attempts, and simulate a daemon-side verifier-image PULL failure —
+      # every time (MOCK_COSIGN_PULL_FAIL=always) or only on the first attempt (=once).
+      if [[ -n "${MOCK_COSIGN_ATTEMPTS_FILE:-}" ]]; then echo x >> "$MOCK_COSIGN_ATTEMPTS_FILE"; fi
+      if [[ "${MOCK_COSIGN_PULL_FAIL:-}" == "always" \
+            || ( "${MOCK_COSIGN_PULL_FAIL:-}" == "once" && "$(wc -l < "${MOCK_COSIGN_ATTEMPTS_FILE:-/dev/null}" 2>/dev/null)" -le 1 ) ]]; then
+        echo "docker: Error response from daemon: Get \"https://gcr.io/v2/\": dial tcp 142.250.0.1:443: i/o timeout" >&2
+        exit 125
+      fi
       if [[ "${MOCK_COSIGN_VERIFY_FAIL:-}" == "1" ]]; then
         echo "Error: no matching signatures found" >&2
         exit 1
@@ -2071,15 +2079,15 @@ assert_doppler_success() {
 
 assert_doppler_success
 
-# --- #5933 Item 4: image signature verify (WARN default; ENFORCE gate) ---------
-# WARN mode (default) must NEVER block a healthy deploy on a verify failure —
+# --- #5933 Item 4: image signature verify (ENFORCE default since #6129; WARN override) ---
+# WARN mode (explicit IMAGE_VERIFY_MODE=warn override) must NEVER block a healthy deploy on a verify failure —
 # these two pass IDENTICALLY with or without the gate, so the ENFORCE test below
 # is what proves the gate is actually load-bearing (WARN and ENFORCE diverge on
 # the SAME MOCK_COSIGN_VERIFY_FAIL input).
 assert_verify_warn_does_not_block() {
   TOTAL=$((TOTAL + 1))
   local output actual_exit
-  output=$(export MOCK_COSIGN_VERIFY_FAIL=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  output=$(export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
   if [[ "$actual_exit" -eq 0 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: WARN cosign verify FAIL does not block the deploy (#5933 Item 4)"
   else
@@ -2091,7 +2099,7 @@ assert_verify_warn_does_not_block
 assert_inspect_warn_does_not_block() {
   TOTAL=$((TOTAL + 1))
   local output actual_exit
-  output=$(export MOCK_INSPECT_NO_DIGEST=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  output=$(export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
   if [[ "$actual_exit" -eq 0 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: WARN inspect_failed (no RepoDigest) does not block the deploy (#5933 Item 4)"
   else
@@ -2116,6 +2124,30 @@ assert_verify_enforce_blocks() {
   fi
 }
 assert_verify_enforce_blocks
+
+# #6129: ENFORCE is the DEFAULT (no IMAGE_VERIFY_MODE set), a transient verifier-image pull failure
+# is retried ONCE and the deploy proceeds, a persistent one blocks after exactly 2 attempts, a
+# cosign-side failure is never retried, and an unknown mode value fails CLOSED.
+assert_verify_6129() {
+  local label="$1" envs="$2" want_ok="$3" want_attempts="$4" want_reason="$5"
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit sf af reason exitc attempts
+  sf=$(mktemp); af=$(mktemp)
+  output=$(unset IMAGE_VERIFY_MODE; eval "export $envs"; export MOCK_COSIGN_ATTEMPTS_FILE="$af" CI_DEPLOY_STATE="$sf"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  read_state_reason_and_exit "$sf" reason exitc
+  attempts="$(wc -l < "$af" | tr -d ' ')"
+  rm -f "$sf" "$af"
+  if { [[ "$want_ok" == 1 && "$actual_exit" -eq 0 ]] || [[ "$want_ok" == 0 && "$actual_exit" -ne 0 && "$reason" == "$want_reason" ]]; } \
+     && [[ "$attempts" == "$want_attempts" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #6129 $label (exit=$actual_exit attempts=$attempts${reason:+ reason=$reason})"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #6129 $label (exit=$actual_exit attempts=$attempts reason=$reason; want ok=$want_ok attempts=$want_attempts)"; echo "        output: $output"
+  fi
+}
+assert_verify_6129 "default mode blocks a signature failure, no retry" "MOCK_COSIGN_VERIFY_FAIL=1" 0 1 cosign_verify_failed
+assert_verify_6129 "transient verifier pull failure retried once, deploy proceeds" "MOCK_COSIGN_PULL_FAIL=once" 1 2 ""
+assert_verify_6129 "persistent verifier pull failure blocks after 2 attempts" "MOCK_COSIGN_PULL_FAIL=always" 0 2 cosign_verify_failed
+assert_verify_6129 "unknown mode value (ENFORCE) fails closed" "IMAGE_VERIFY_MODE=ENFORCE MOCK_COSIGN_VERIFY_FAIL=1" 0 1 cosign_verify_failed
 
 # --- #6005 Design B′: cosign invocation shape + SENTRY-before-verify ordering -----
 # The verify `docker run` MUST run `--network host` (host-egress .sig fetch, ADR-087),
@@ -2297,14 +2329,14 @@ rm -rf "$T1A_DIR"
 # T-1a-4: the anonymous dir is removed after BOTH the verify-ok and the verify-fail arms. The
 # recorded path is the one the mock saw at verify time, so this is the dir actually used.
 assert_anon_dir_removed() {
-  local label="$1" extra="$2" d dc
+  local label="$1" extra="$2" want_rc="${3:-0}" d dc
   TOTAL=$((TOTAL + 1))
   d="$(mktemp -d)"
   seed_canary_deploy_cfg "$d"
   run_cosign_anon_capture "$d" "$extra"
   dc="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$d/cosign.args" | sed -n '1p')"
   if [[ -n "$dc" && "$dc" == /* && "$dc" != "$d/deploy-cfg" && ! -e "$dc" \
-        && -f "$d/deploy-cfg/config.json" && "$(cat "$d/rc")" == "0" ]]; then
+        && -f "$d/deploy-cfg/config.json" && "$(cat "$d/rc")" == "$want_rc" ]]; then
     PASS=$((PASS + 1)); echo "  PASS: T-1a-4 anonymous verifier config dir removed after the $label arm; deploy config untouched (#8036 1a)"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-4 anonymous dir after the $label arm (dc=$dc exists=$([[ -e "$dc" ]] && echo y || echo n) rc=$(cat "$d/rc"))"
@@ -2312,7 +2344,9 @@ assert_anon_dir_removed() {
   rm -rf "$d"
 }
 assert_anon_dir_removed "verify-ok" ""
-assert_anon_dir_removed "verify-fail" "export MOCK_COSIGN_VERIFY_FAIL=1"
+assert_anon_dir_removed "verify-fail" "export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1"
+# #6129: ENFORCE is the default, so its verify-fail arm (deploy exits 1) must clean up too.
+assert_anon_dir_removed "verify-fail (enforce default)" "export MOCK_COSIGN_VERIFY_FAIL=1" 1
 
 # T-1a-5a: the primary `mktemp -d` fails (the named seam, NOT a mktemp stub — ci-deploy.sh calls
 # mktemp ~20 times). The fallback dir is recreated (a PRE-SEEDED one holding a real-looking auth is
@@ -2488,12 +2522,14 @@ assert_no_ghcr_allowlist_widening() {
 }
 assert_no_ghcr_allowlist_widening
 
-# AC: the ENFORCE flip stays OUT OF SCOPE — the default MUST remain warn.
+# AC (#6129): the default is ENFORCE, flipped after the #6122 zot soak passed. warn is an
+# explicit override only; a revert to a warn default must red here.
 TOTAL=$((TOTAL + 1))
-if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DEPLOY_SCRIPT"; then
-  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is still 'warn' (no ENFORCE flip) (#6005)"
+if grep -qE '^IMAGE_VERIFY_MODE="\$\{IMAGE_VERIFY_MODE:-enforce\}"' "$DEPLOY_SCRIPT" \
+   && grep -qE '^case "\$IMAGE_VERIFY_MODE" in enforce\|warn\) ;; \*\) IMAGE_VERIFY_MODE=enforce ;; esac$' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is 'enforce' and an unknown value fails closed (#6129)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: IMAGE_VERIFY_MODE default must remain 'warn' — ENFORCE flip is out of scope (#6005)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: IMAGE_VERIFY_MODE default must be 'enforce' (#6129)"
 fi
 
 echo ""
@@ -8649,7 +8685,7 @@ _6428_abort "F12 an empty BUILD_VERSION= line" \
 # F13 (the THIRD VERIFIED_REF arm): WARN mode with no resolvable RepoDigest runs the mutable TAG
 # (verify_image_signature's inspect_failed fallback) — the freshness check still reads it and aborts.
 _6428_abort "F13 WARN tag-fallback VERIFIED_REF with an image built as 0.9.9" \
-  "export MOCK_INSPECT_NO_DIGEST=1 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+  "export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
 _6428_abort "F3a image with no BUILD_VERSION" \
   "export MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
 _6428_abort "F3b image built as dev" \
@@ -9180,11 +9216,14 @@ declare -A GAK_SCN=(
   [rejected]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT=\$'github_app_key_probe=rejected reason=http_401\\n' MOCK_GAK_PROBE_RC=1"
   [planted]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT=\$'github_app_key_probe=rejected reason=http_401\\n' MOCK_GAK_PROBE_RC=1 MOCK_GAK_PLANTED_NODE=1"
   [noverdict]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT='' MOCK_GAK_PROBE_RC=1"
-  [unverified]="yes|$GAK_FIX/prd.env|export MOCK_INSPECT_NO_DIGEST=1"
-  [cosignfail]="yes|$GAK_FIX/prd.env|export MOCK_COSIGN_VERIFY_FAIL=1"
-  [sigtag]="yes|$GAK_FIX/prd.env|export MOCK_COSIGN_SAN_REF=refs/tags/v9.9.9 MOCK_COSIGN_WF_REF=refs/tags/v9.9.9"
-  [sigbranch]="yes|$GAK_FIX/prd.env|export MOCK_COSIGN_WF_REF=refs/heads/feat-branch"
-  [sigfork]="yes|$GAK_FIX/prd.env|export MOCK_COSIGN_WF_REPO=evil-fork/soleur"
+  # #6129: ENFORCE is the default, so an unverified or wrongly-signed image never reaches the key
+  # handoff at all. These five scenarios test the WARN fail-open override, where the image DOES
+  # run, and so must pin IMAGE_VERIFY_MODE=warn explicitly.
+  [unverified]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1"
+  [cosignfail]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1"
+  [sigtag]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_SAN_REF=refs/tags/v9.9.9 MOCK_COSIGN_WF_REF=refs/tags/v9.9.9"
+  [sigbranch]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_WF_REF=refs/heads/feat-branch"
+  [sigfork]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_WF_REPO=evil-fork/soleur"
   [cache]="yes|$GAK_FIX/prd.env|export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:$(printf '6%.0s' {1..64}) MOCK_RUNNING_IMAGE_TAG=v1.0.0"
   [norec]="yes|$GAK_FIX/prd.env|rm -f \"\$SOLEUR_GAK_VERIFIED_REF_FILE\""
   [tagref]="yes|$GAK_FIX/prd.env|printf '%s' 'ghcr.io/jikig-ai/soleur-web-platform:v1.0.0' > \"\$SOLEUR_IMAGE_REF_FILE\"; printf '%s\\n' 'ghcr.io/jikig-ai/soleur-web-platform:v1.0.0' > \"\$SOLEUR_GAK_VERIFIED_REF_FILE\""
@@ -9737,7 +9776,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # (per-class hijack refusals, the main-pinned identity, the boot verified-digest record, the cache
 # arm, atomic merge, retry, the boot ok/ok_no_token/ok_fallback split, the row machinery self-test).
 # Measured: 481 ran. Merged with #9169's 4 GHCR_DENY rows: 485 ran. The floor is that count.
-CI_DEPLOY_ASSERT_FLOOR=485
+# #6129: raised 485 -> 490 with the ENFORCE-default rows (4 #6129 verify rows + the T-1a-4 enforce arm).
+CI_DEPLOY_ASSERT_FLOOR=490
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
