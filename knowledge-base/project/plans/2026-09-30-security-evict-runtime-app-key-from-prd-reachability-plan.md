@@ -549,7 +549,10 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
     `origin/main`'s value at work time, with a PLACEMENT / TRUTH / NO-SUBSTITUTE comment (this plan
     declares `credentials_required`).
 
-#### Phase 5 — PR-B (after R7 and R8)
+#### Phase 5 — PR-B (after R7 and R8, and closure gates G1–G4)
+
+Not opened until G1 (#9294 closed), G2 (#9295 closed) and G3 (the live key born after both closures,
+or R-step 9 run) are evidenced with links, and G4 (R-step 8) passes. See AC-G1–AC-G4.
 
 5.1 ADR-241: D2 → `accepted` and D10 → `accepted` in the Statuses table, the PR body stating why (R1
     closed with the measured probes; R7 closed at O5b); R1 → "CLOSED <date>"; frontmatter `status:`
@@ -667,19 +670,19 @@ failure_modes:
     detection: "layer workflow run log: ::error:: reason=github_app_key_rejected from the canary probe (GET /app 401/403-without-rate-limit-headers/404 or slug other than soleur-ai)"
     alert_route: "failed release workflow email + Sentry op=github-app-key"
   - mode: "probe could not reach GitHub (transport error, 5xx, 429, 403 with rate-limit headers)"
-    detection: "layer Sentry: op=github-app-key level=warning; deploy-state github_app_key_probe=transport"
+    detection: "layer vector (ci-deploy.sh `logger -t ci-deploy` line `GITHUB_APP_KEY: class=probe_transport level=warning`, shipped by the host_scripts_journald source to Better Stack) + layer webhook response (/hooks/deploy-status github_app_key_probe=transport) + the Sentry op=github-app-key warning event"
     alert_route: "Sentry issue (warning); no deploy block"
   - mode: "serving container on a key GitHub no longer accepts (wrong key deleted at R7)"
     detection: "layer Sentry monitor / sentry-correlation: scheduled-github-app-drift-guard failure mode github_app_401, plus per-installation mint-failure events"
     alert_route: "Sentry cron-monitor alert"
   - mode: "a fresh or replaced web host boots without an accepted key"
-    detection: "layer Sentry: soleur-boot-emit stage github_app_key_rejected / _missing / _exec_failed with host_name, caught by the new boot-stage rule; readable without SSH via scripts/sentry-issue.sh --host-events <host> --stage github_app_key_ok (a missing ok event counts as a fail, because the emitter exits silently on an empty DSN)"
+    detection: "layer vector (the boot check's `logger -t ci-deploy` line `GITHUB_APP_KEY_BOOT: stage=github_app_key_<stage> source=… fetch=…`, written whatever the DSN and read with `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep GITHUB_APP_KEY_BOOT`) + the soleur-boot-emit Sentry event (stage github_app_key_ok_fallback / _rejected / _missing / _transport / _probe_absent / _exec_failed with host_name, caught by the boot-stage rule), readable without SSH via `doppler run -p soleur -c prd -- scripts/sentry-issue.sh --host-events soleur-web-2 --stage <stage>`; only the NEWEST stage being github_app_key_ok passes (a missing ok event counts as a fail, because the emitter exits silently on an empty DSN)"
     alert_route: "Sentry issue alert (new boot-stage rule)"
 logs:
   where: "journald on the web hosts shipped by vector to Better Stack (ci-deploy.sh LOG_TAG; the boot path also writes a logger -t line under an allowlisted tag), GitHub Actions logs for release and Tier-B jobs"
   retention: "Better Stack source retention; Actions logs 90 days"
 discoverability_test:
-  command: "bash apps/web-platform/scripts/github-app-key-status.sh"
+  command: "doppler run -p soleur -c prd_terraform -- bash apps/web-platform/scripts/github-app-key-status.sh"
   expected_output: "github_app_key_source=isolated"
   credentials_required: "Doppler soleur/prd_terraform read (WEBHOOK_DEPLOY_SECRET for the HMAC plus the CF Access pair) — /hooks/deploy-status is HMAC-gated by design, and no unauthenticated endpoint may disclose which key source a production host runs"
 ```
@@ -997,7 +1000,8 @@ probes.
   `DOPPLER_TOKEN_TF` rotation.
 - **PR-B (the D2 flip, `Closes #8609`):** R7 done **and** R8 — which needs #8209 O13's App-key delete,
   so the `prd_terraform` soleur-ai key is dead too. Until then the issue's first acceptance bullet
-  is not met.
+  is not met. **Also gates G1–G4** (AC-G1–AC-G4): #9294 and #9295 closed, and the live key born after
+  both closures or rotated by R-step 9.
 
 ## Risk Analysis & Mitigation
 
@@ -1056,8 +1060,10 @@ probes.
       path, including the SSH push to web-2). Before merge (deployment review): the drift-guard
       trigger ran clean (per-command go-ahead); `gh api apps/soleur-ai` returns `slug=soleur-ai`,
       `id=3261325`, and `prd`'s `GITHUB_APP_ID` equals `3261325` (compared, not printed); the last
-      `apply-deploy-pipeline-fix` run on `main` is green; the PR plan shows exactly three creates (the
-      project, its `prd` environment and the `prd_retired` branch config), replaces only
+      `apply-deploy-pipeline-fix` run on `main` is green; the PR plan shows exactly three creates —
+      `doppler_project.github_app_runtime`, `doppler_environment.github_app_runtime_prd` and
+      `doppler_config.github_app_runtime_prd_retired` (the `prd_retired` branch config; the provider
+      has no `doppler_branch_config`) — replaces only
       `deploy_pipeline_fix` and `deploy_pipeline_fix_web2`, and no `hcloud_server`; no other infra
       PR is queued in the same window; web-1's credential-file digest is recorded. After merge: both
       apply runs are `success` (not `cancelled`), the credential-file digest is unchanged, and the
@@ -1071,11 +1077,16 @@ probes.
       old key is parked as `GITHUB_APP_PRIVATE_KEY_RETIRED`.
 - [ ] AC-R2 — The stored Tier-B token reads a key whose fingerprint equals R1's (`equal`) and is
       refused on `soleur/prd`.
-- [ ] AC-R4 — `bash apps/web-platform/scripts/github-app-key-status.sh` prints
-      `github_app_key_source=isolated`, `github_app_key_fetch=ok`, `github_app_key_probe=ok`;
-      drift-guard and oauth-probe clean; `GET /app/installations` returns a superset of R0's ids.
-- [ ] AC-R5 — `scripts/sentry-issue.sh --host-events web-2 --stage github_app_key_ok` returns an
-      event from after the replace.
+- [ ] AC-R4 — `doppler run -p soleur -c prd_terraform -- bash apps/web-platform/scripts/github-app-key-status.sh`
+      prints `github_app_key_source=isolated`, `github_app_key_fetch=ok`, `github_app_key_probe=ok`
+      with `exit_code=0`, `component=web-platform` and `tag=v<the /health version>` (exit 3 or 6 is
+      UNREADABLE, not a verdict); drift-guard and oauth-probe clean, meaning zero Sentry error events
+      for `feature:cron-github-app-drift-guard` and `feature:cron-oauth-probe` in the run window;
+      `GET /app/installations` returns a superset of R0's ids.
+- [ ] AC-R5 — The newest `github_app_key_*` boot stage for `soleur-web-2` after the replace is
+      `github_app_key_ok` (`doppler run -p soleur -c prd -- scripts/sentry-issue.sh --host-events
+      soleur-web-2 --stage <stage> --start … --end …`, one read per stage); `github_app_key_ok_fallback`
+      (the prd fallback key) fails; Better Stack `GITHUB_APP_KEY_BOOT` is the fallback read.
 - [ ] AC-R5b — web-2's host-key pin is re-captured and merged; the next `apply-deploy-pipeline-fix`
       run's web-2 leg is green.
 - [ ] AC-R6a — Before the delete: every repo reader of `GITHUB_APP_PRIVATE_KEY` is listed with the
@@ -1090,12 +1101,23 @@ probes.
 - [ ] AC-R6 — Every `prd`/`prd_*` config in `doppler-config-inventory.txt` returns not-found for the
       key (except `prd_terraform`'s own override); a fresh release still `isolated`.
 - [ ] AC-R7 — New-key JWT `200` from `GET /app`; retired-key JWT `401`; the parked name deleted;
-      drift-guard clean; mint-failure query quiet for 1 h.
+      drift-guard clean; zero Sentry events for `feature:github-app op:generate-installation-token`
+      over [the delete, +1 h].
 
 ### PR-B
 
-- [ ] AC-B1 — R8: exactly one App key (R1's fingerprint); exactly one project token
-      (`web-host-github-app-read`); no service account or group on the project.
+PR-B is **not opened** until closure gates G1–G3 are evidenced with links in its body (CTO ruling
+2026-09-30; runbook §Runtime App key (#8609) "Closure gates G1–G4"):
+
+- [ ] AC-G1 — #9294 closed: the deploy channel (`WEBHOOK_DEPLOY_SECRET` and the CF Access client pair)
+      is out of branch reach (Tier B) and rotated.
+- [ ] AC-G2 — #9295 closed: no branch-nameable token can write `soleur/prd`.
+- [ ] AC-G3 — The live key's birth time is later than both closure times, or the runbook's R-step 9
+      (closure rotation) rotated the key and the read token and the previous key gets `401`.
+- [ ] AC-G4 — AC-B1 below (runbook R-step 8).
+- [ ] AC-B1 — R8: exactly one App key (R1's fingerprint, or R-step 9's); exactly one project token
+      (`web-host-github-app-read`) and none on `prd_retired`; no service account or group on the
+      project; no Doppler webhook or sync on it (Doppler API; unreadable is INCONCLUSIVE, not a pass).
 - [ ] AC-B2 — ADR-241 D2 and D10 `accepted` with the PR body stating why; R1 `CLOSED <date>`;
       ADR-220 Amendment-log entry; `compliance-posture.md` R1 CLOSED; the legal sweep finds no
       future-tense R1 sentence; body carries `Closes #8609`.

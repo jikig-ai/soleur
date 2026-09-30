@@ -188,14 +188,21 @@ fi
 
 # --- terminal outcome --------------------------------------------------------
 # ONE trap. On a non-zero exit inside a stage it tells the founder which stage
-# stopped, that nothing else was changed, and the one command that resumes —
+# stopped, whether anything was changed, and the one command that resumes —
 # and it settles the stage in the ledger as `failed` with the exit code, so the
 # ledger can say something other than "ok" (review P2-12). A library refusal
 # (INPUT_REQUIRED, ABORTED) has already printed its own marker and sentence and
 # written its `run_halt` line before this fires; the trap adds the stage context.
+#
+# #8609 (data-integrity F1): "Nothing else was changed" is also FALSE once a stage
+# has passed a class-2 ack — a secret was set, a workflow was dispatched, a PEM
+# was kept. Every stage calls `mark_changed <what>` right after each ack, before
+# the write, and the trap names what may have changed instead of denying it.
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 CURRENT_STAGE_INDEX=0
 CURRENT_STAGE_NAME=""
+STAGE_CHANGED=""
+mark_changed() { STAGE_CHANGED="${STAGE_CHANGED:+${STAGE_CHANGED}; }$1"; }
 on_exit() {
   local rc=$?
   [[ "$rc" -ne 0 && "$CURRENT_STAGE_INDEX" -gt 0 ]] || return 0
@@ -207,6 +214,9 @@ on_exit() {
   if [[ -n "${SOLEUR_OP_WRITE_MAY_HAVE_LANDED:-}" ]]; then
     printf 'Stopped during stage %s (%s). A credential may already have been written — check it and revoke it if you did not mean to. Run: bash %s — already-done steps are skipped.\n' \
       "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" "$SCRIPT_PATH"
+  elif [[ -n "$STAGE_CHANGED" ]]; then
+    printf 'Stopped during stage %s (%s) AFTER it may have changed production: %s. Read the lines above before re-running. Run: bash %s — already-done steps are skipped.\n' \
+      "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" "$STAGE_CHANGED" "$SCRIPT_PATH"
   else
     printf 'Stopped during stage %s (%s). Nothing else was changed. Run: bash %s — already-done steps are skipped.\n' \
       "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" "$SCRIPT_PATH"
@@ -218,30 +228,32 @@ trap on_exit EXIT
 # run_stage <index> <name> <function>
 #   Begin/settle around every stage, and the context the EXIT trap reports.
 run_stage() {
-  CURRENT_STAGE_INDEX="$1"; CURRENT_STAGE_NAME="$2"
+  CURRENT_STAGE_INDEX="$1"; CURRENT_STAGE_NAME="$2"; STAGE_CHANGED=""
   soleur_op_stage_begin "$1" "$2"
   "$3"
   soleur_op_stage_end "$1" "$2" ok 0
-  CURRENT_STAGE_INDEX=0; CURRENT_STAGE_NAME=""
+  CURRENT_STAGE_INDEX=0; CURRENT_STAGE_NAME=""; STAGE_CHANGED=""
 }
 
 # =============================================================================
-# STAGES — #8609 R0–R8.
+# STAGES — #8609 R0–R9.
 #
 # Feature: #8609 (ADR-241 D10) — evict the soleur-ai runtime App key from branch-reachable
 # Doppler `prd` into the isolated project `soleur-github-app`, rotating it on the way.
 #
 # CANONICAL SEQUENCE: knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
-# §"Runtime App key (#8609)" (the R0–R8 table, its gate and its order). This script is the
+# §"Runtime App key (#8609)" (the R-step table, its gates and its order). This script is the
 # runnable form hr-multi-step-post-merge-bootstrap-script requires; it does not restate the
-# runbook's reasoning — read the row for any stage before typing `yes`.
+# runbook's reasoning — read the row for any stage before typing `yes`. Stage names here are the
+# runbook's R-steps ("R-step 7"), NOT ADR-241's residuals R1–R8.
 #
 # Shape of every stage: precondition ("already satisfied?", read from the vendor), one line on
 # what users would notice if the step fails and what the rollback is, the exact command, a
 # per-command `yes` (class 2, no skip variable), then PASS/FAIL checks. Read-only stages
 # (R0b, the gate, R8) run without an ack. No stage prints a secret value: every
 # `doppler secrets set`/`delete` ends `>/dev/null`, and keys/tokens move only through pipes,
-# process substitution or a child's environment.
+# process substitution or a child's environment. An UNREADABLE or INCONCLUSIVE read is never a
+# PASS.
 #
 # Needs, on the operator's machine: doppler (logged in with access to soleur,
 # soleur-github-app, soleur-infra-privileged), gh (authenticated as a repo admin), jq, curl,
@@ -258,6 +270,19 @@ TIER_B_PROJECT="soleur-infra-privileged"
 TIER_B_NAME="GITHUB_APP_RUNTIME_DOPPLER_TOKEN"
 RUNBOOK="knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
 DEPLOY_BASE="soleur.ai"
+# server.tf names each web host `soleur-${each.key}`; Sentry's host_name tag and the Hetzner
+# server name both carry that value, never the bare map key (review agent-native F2).
+WEB2_HOST="soleur-web-2"
+# ADR-241 D10 closure gates (CTO ruling §2): G1 = the deploy channel out of branch reach and
+# rotated; G2 = no branch-nameable token can write soleur/prd. R9 compares the live key's birth
+# with their closure times (G3).
+G1_ISSUE="9294"
+G2_ISSUE="9295"
+# scripts/sentry-issue.sh PINNED_PROJECT_ID (the web-platform project).
+SENTRY_PROJECT_ID="4511404943671376"
+# R9 re-runs R3–R5b as the closure rotation; ROT prefixes the .env keys those stages record so
+# the one-time move's values are never overwritten. Empty outside R9.
+ROT=""
 
 # --- small helpers -------------------------------------------------------------
 
@@ -265,6 +290,8 @@ env_get() { # <KEY> -> the recorded non-secret value, or empty
   [[ -f "$ENV_FILE" ]] || return 0
   { grep -a "^$1=" "$ENV_FILE" || true; } | tail -1 | cut -d= -f2-
 }
+
+K() { printf '%s%s' "$ROT" "$1"; } # <KEY> -> the .env key for this rotation
 
 impact() { # <what users notice if it fails> <rollback>
   soleur_op_yellow "  If this fails: $1"
@@ -283,6 +310,18 @@ stage_verdict() { # returns 1 when any check in the stage failed
 }
 
 now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+later() { # <time A> <time B> -> 0 when A is strictly after B (epoch compare; an unparseable time is never later)
+  local a b
+  a="$(date -u -d "$1" +%s 2>/dev/null)" || return 1
+  b="$(date -u -d "$2" +%s 2>/dev/null)" || b=0
+  [[ "$a" -gt "$b" ]]
+}
+# The window form scripts/sentry-issue.sh accepts (YYYY-MM-DDTHH:MM:SS, no zone suffix, UTC).
+sentry_ts() { # [<ISO>] [<+seconds>] -> that instant (default now) plus the offset
+  local s
+  if [[ -n "${1:-}" ]]; then s="$(date -u -d "$1" +%s)"; else s="$(date -u +%s)"; fi
+  date -u -d "@$((s + ${2:-0}))" '+%Y-%m-%dT%H:%M:%S'
+}
 
 # A PEM may be stored with escaped \n (the app's normalizeAppPrivateKey() unescapes it too).
 pem_unescape() { awk '{ gsub(/\\n/, "\n"); print }'; }
@@ -298,6 +337,9 @@ fp_of_secret() { # <project> <config> <name> -> fingerprint or empty
   [[ "$out" == "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=" ]] && out=""
   printf '%s' "$out"
 }
+
+# The key R2's token must read now: R9's once the closure rotation stored one, else R1's.
+expected_live_fp() { local f; f="$(env_get R9_FP)"; printf '%s' "${f:-$(env_get R1_FP)}"; }
 
 normalize_fp() { tr -d ' \t' | sed 's/^SHA256://'; }
 
@@ -368,7 +410,7 @@ app_settings_url() {
   printf '%s' "${url:-https://github.com/organizations/jikig-ai/settings/apps/${APP_SLUG}}"
 }
 
-# Reads that need a prd_terraform credential run as children of `doppler run`, so the
+# Reads that need a prd_terraform or prd credential run as children of `doppler run`, so the
 # credential lives only in the child's environment. The bodies are exported functions so they
 # keep ordinary quoting; headers go to curl on stdin, never argv.
 _hook_get() { # <hook> <out-file> <base> -> HTTP code (HMAC + CF Access, the deploy-status recipe)
@@ -383,9 +425,78 @@ _hetzner_get() { # <api path> -> body (the Tier-A read-only Hetzner token)
   printf 'Authorization: Bearer %s\n' "$HCLOUD_TOKEN_READONLY" \
     | curl --disable --noproxy '*' --proto '=https' -sS --max-time 15 -H @- "https://api.hetzner.cloud/v1/$1"
 }
-export -f _hook_get _hetzner_get
+# _sentry_count <query> <start> <end> <project-id> -> the event count on HTTP 200, else nothing.
+# The org discover endpoint scripts/sentry-issue.sh reads, with its read-only token; that script
+# has no tag-query mode, so the count read lives here (review agent-native F7/F8).
+_sentry_count() {
+  local body code
+  body="$(mktemp)"
+  code="$(printf 'Authorization: Bearer %s\n' "${SENTRY_ISSUE_RO_TOKEN:-}" \
+    | curl --disable --noproxy '*' --proto '=https' -sS --max-time 30 -G -o "$body" -w '%{http_code}' -H @- \
+      --data-urlencode "project=$4" --data-urlencode "start=$2" --data-urlencode "end=$3" \
+      --data-urlencode 'field=count()' --data-urlencode "query=$1" \
+      'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/' 2>/dev/null)" || code="000"
+  if [[ "$code" == "200" ]]; then jq -r '.data[0]["count()"] // empty' "$body" 2>/dev/null || true; fi
+  rm -f "$body"
+}
+export -f _hook_get _hetzner_get _sentry_count
 signed_hook_get() { doppler run -p soleur -c prd_terraform -- bash -c '_hook_get "$@"' _ "$1" "$2" "$DEPLOY_BASE"; }
 hetzner_get() { doppler run -p soleur -c prd_terraform -- bash -c '_hetzner_get "$1"' _ "$1"; }
+
+sentry_count() { # <query> <start> <end> -> a count, or UNREADABLE (never 0 on a failed read)
+  local n
+  n="$(doppler run -p soleur -c prd -- bash -c '_sentry_count "$1" "$2" "$3" "$4"' _ "$1" "$2" "$3" "$SENTRY_PROJECT_ID" 2>/dev/null)" || n=""
+  if [[ "$n" =~ ^[0-9]+$ ]]; then printf '%s' "$n"; else printf 'UNREADABLE'; fi
+}
+
+zero_events_check() { # <label> <sentry query> <start> <end>
+  local n
+  n="$(sentry_count "$2" "$3" "$4")"
+  check "$1 — Sentry \`$2\` over [$3, $4]: ${n} event(s) (UNREADABLE is not a pass)" "$([[ "$n" == "0" ]]; echo $?)"
+}
+
+# doppler_api_get <path?query> <out-file> -> HTTP code. The CLI's own login token, on curl's stdin.
+doppler_api_get() {
+  doppler configure get token --plain 2>/dev/null | { read -r t; printf 'Authorization: Bearer %s\n' "$t"; } \
+    | curl --disable --noproxy '*' --proto '=https' -sS --max-time 15 -o "$2" -w '%{http_code}' -H @- \
+      "https://api.doppler.com$1" 2>/dev/null
+}
+
+# doppler_attachments <project> <config|*> -> "webhooks=<n> syncs=<n>"; a half that cannot be read,
+# or whose shape is not the documented one, prints INCONCLUSIVE (review agent-native F10).
+doppler_attachments() {
+  local body code wh="" sy=""
+  body="$(mktemp)"
+  code="$(doppler_api_get "/v3/webhooks?project=$1" "$body")" || code="000"
+  [[ "$code" == "200" ]] && wh="$(jq -r 'if (.webhooks | type) == "array" then (.webhooks | length) else empty end' "$body" 2>/dev/null)"
+  code="$(doppler_api_get "/v3/integrations" "$body")" || code="000"
+  [[ "$code" == "200" ]] && sy="$(jq -r --arg p "$1" --arg c "$2" '
+    if (.integrations | type) != "array" then empty
+    elif ([.integrations[] | .syncs[]? | select((.project | type) != "string")] | length) > 0 then empty
+    else ([.integrations[] | .syncs[]? | select(.project == $p and ($c == "*" or .config == $c))] | length) end' "$body" 2>/dev/null)"
+  rm -f "$body"
+  [[ "$wh" =~ ^[0-9]+$ ]] || wh="INCONCLUSIVE"
+  [[ "$sy" =~ ^[0-9]+$ ]] || sy="INCONCLUSIVE"
+  printf 'webhooks=%s syncs=%s' "$wh" "$sy"
+}
+
+# Raw values in EVERY config of the branch-writable `soleur` project that reference the isolated
+# project. Replaces R0c's scratch-project probe (review simplicity 5a): the count runs at R1 and
+# R6 whether or not Doppler resolves cross-project references, so the probe's answer no longer
+# decides anything. Prints the total, or UNREADABLE:<config>. The raw values go straight into
+# jq, which prints only a count.
+xproj_ref_count() {
+  local cfgs c n total=0
+  cfgs="$(doppler configs -p soleur --json 2>/dev/null | jq -r '.[].name' 2>/dev/null)" || cfgs=""
+  [[ -n "$cfgs" ]] || { printf 'UNREADABLE:config-list'; return 0; }
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    n="$(doppler secrets -p soleur -c "$c" --raw --json 2>/dev/null | jq --arg p "\${${APP_PROJECT}." '[.. | strings | select(contains($p))] | length' 2>/dev/null)" || n=""
+    [[ "$n" =~ ^[0-9]+$ ]] || { printf 'UNREADABLE:%s' "$c"; return 0; }
+    total=$((total + n))
+  done <<<"$cfgs"
+  printf '%s' "$total"
+}
 
 credential_file_digest() { # web-1's /etc/default/soleur-doppler-token sha256, from infra-config state
   local body code
@@ -397,20 +508,77 @@ credential_file_digest() { # web-1's /etc/default/soleur-doppler-token sha256, f
   rm -f "$body"
 }
 
-key_status() { # the three github_app_key_* lines from web-1's deploy state (AC-R4)
-  bash "$REPO_ROOT/apps/web-platform/scripts/github-app-key-status.sh" 2>/dev/null | grep -E '^github_app_key_(source|fetch|probe)=' || true
+# web-1's deploy state (AC-R4), read under the prd_terraform credentials the status script
+# requires (review agent-native F1). Prints its lines, or `UNREADABLE rc=<n>`: exit 3 (credentials
+# not injected) and 6 (the read failed) are never a verdict.
+key_status() {
+  local out rc=0
+  out="$(doppler run -p soleur -c prd_terraform -- bash "$REPO_ROOT/apps/web-platform/scripts/github-app-key-status.sh" 2>/dev/null)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then printf 'UNREADABLE rc=%s\n' "$rc"; return 0; fi
+  printf '%s\n' "$out" | grep -E '^(github_app_key_(source|fetch|probe)|tag|exit_code|reason|component)=' || true
 }
 
-key_status_is() { # <source> <fetch> <probe>
-  local s; s="$(key_status)"
-  grep -qx "github_app_key_source=$1" <<<"$s" && grep -qx "github_app_key_fetch=$2" <<<"$s" && grep -qx "github_app_key_probe=$3" <<<"$s"
+live_version() { # the version /health reports, or empty
+  curl --disable --noproxy '*' --proto '=https' -sf --max-time 10 "https://app.${DEPLOY_BASE}/health" 2>/dev/null \
+    | jq -r '.version // empty' 2>/dev/null || true
 }
 
-web2_key_ok_since() { # <ISO start> -> 0 when web-2 emitted github_app_key_ok after it
-  local n
-  n="$(doppler run -p soleur -c prd -- bash "$REPO_ROOT/scripts/sentry-issue.sh" --host-events web-2 \
-        --stage github_app_key_ok --start "$1" --end "$(now_iso)" 2>/dev/null | jq -r '.data | length' 2>/dev/null)" || n=0
-  [[ "${n:-0}" =~ ^[0-9]+$ && "${n:-0}" -gt 0 ]]
+# key_status_is <source> <fetch> <probe> -> 0 match, 1 mismatch, 2 unreadable. The state must also
+# belong to the release now serving (data-integrity F6, user-impact F8): exit_code=0,
+# component=web-platform and tag=v<the /health version>. KEY_STATUS_SEEN keeps what was read.
+KEY_STATUS_SEEN=""
+key_status_is() {
+  local s ver
+  s="$(key_status)"
+  KEY_STATUS_SEEN="$(printf '%s' "$s" | tr '\n' ' ')"
+  [[ "$s" != UNREADABLE* ]] || return 2
+  ver="$(live_version)"
+  [[ -n "$ver" ]] || { KEY_STATUS_SEEN="${KEY_STATUS_SEEN}(/health version UNREADABLE)"; return 2; }
+  KEY_STATUS_SEEN="${KEY_STATUS_SEEN}(serving v${ver})"
+  grep -qx "github_app_key_source=$1" <<<"$s" && grep -qx "github_app_key_fetch=$2" <<<"$s" \
+    && grep -qx "github_app_key_probe=$3" <<<"$s" && grep -qx 'exit_code=0' <<<"$s" \
+    && grep -qx 'component=web-platform' <<<"$s" && grep -qx "tag=v${ver}" <<<"$s" && return 0
+  return 1
+}
+
+key_check() { # <label> — one check row for "web-1 serves on isolated/ok/ok"; UNREADABLE is named
+  local rc=0
+  key_status_is isolated ok ok || rc=$?
+  case "$rc" in
+    0) check "$1" 0 ;;
+    2) check "$1 — UNREADABLE, not a verdict: ${KEY_STATUS_SEEN}" 1 ;;
+    *) check "$1 — read: ${KEY_STATUS_SEEN}" 1 ;;
+  esac
+}
+
+# web-2's NEWEST github_app_key_* boot stage since <ISO>: prints the stage suffix, `none`, or
+# `UNREADABLE rc=<n>` (sentry-issue.sh exits 77/78 on a token-scope problem and 1 on a failed read;
+# none of those is "absent", review agent-native F2). `ok` means the isolated key was accepted;
+# the prd fallback is its own stage, `ok_fallback`, so it can never pass (observability P1).
+WEB2_STAGES="ok ok_fallback rejected missing transport probe_absent exec_failed"
+web2_latest_stage() {
+  local since end s out rc ts best="" best_ts=""
+  [[ -n "${1:-}" ]] || { printf 'none'; return 0; }
+  since="$(sentry_ts "$1")"; end="$(sentry_ts)"
+  for s in $WEB2_STAGES; do
+    rc=0
+    out="$(doppler run -p soleur -c prd -- bash "$REPO_ROOT/scripts/sentry-issue.sh" --host-events "$WEB2_HOST" \
+          --stage "github_app_key_${s}" --start "$since" --end "$end" 2>/dev/null)" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then printf 'UNREADABLE rc=%s' "$rc"; return 0; fi
+    ts="$(printf '%s' "$out" | jq -r '.data[0].timestamp // empty' 2>/dev/null)" || ts=""
+    if [[ -n "$ts" ]] && { [[ -z "$best_ts" ]] || later "$ts" "$best_ts"; }; then best_ts="$ts"; best="$s"; fi
+  done
+  printf '%s' "${best:-none}"
+}
+
+web2_check() { # <label> <since ISO>
+  local latest
+  latest="$(web2_latest_stage "$2")"
+  check "$1 (latest since $2: ${latest})" "$([[ "$latest" == "ok" ]]; echo $?)"
+  if [[ "$latest" != "ok" ]]; then
+    echo "  Fallback read (journald via Vector, every stage incl. the source=/fetch= detail):"
+    echo "    doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep GITHUB_APP_KEY_BOOT   # rows with host_name=${WEB2_HOST}"
+  fi
 }
 
 run_conclusion() { gh run view "$1" -R "$REPO" --json conclusion --jq .conclusion 2>/dev/null || true; }
@@ -437,22 +605,182 @@ trigger_cron() { # <event> -> 0 when the trigger was accepted
   bash "$REPO_ROOT/plugins/soleur/skills/trigger-cron/scripts/trigger.sh" --event "$1" >/dev/null 2>&1
 }
 
+# crons_clean — fire the drift guard and the OAuth probe, wait for them, then require ZERO
+# error/fatal events from each in the window (review agent-native F7). A trigger that was only
+# accepted is not a clean run. Zero errors does not prove the run happened; the drift guard's own
+# Sentry cron monitor pages on a missed check-in.
+# shellcheck disable=SC2319 # check() takes the condition's own status by design
+crons_clean() {
+  local t0
+  t0="$(sentry_ts "" -60)"
+  check "cron/github-app-drift-guard.manual-trigger accepted" "$(trigger_cron cron/github-app-drift-guard.manual-trigger; echo $?)"
+  check "cron/oauth-probe.manual-trigger accepted" "$(trigger_cron cron/oauth-probe.manual-trigger; echo $?)"
+  echo "  waiting 5 minutes for both runs to report..."
+  sleep 300
+  zero_events_check "the drift guard reported no error" 'feature:cron-github-app-drift-guard level:[error,fatal]' "$t0" "$(sentry_ts)"
+  zero_events_check "the OAuth probe reported no error" 'feature:cron-oauth-probe level:[error,fatal]' "$t0" "$(sentry_ts)"
+}
+
+token_slugs() { # slugs of the tokens named READ_TOKEN_NAME on the isolated project's prd config
+  doppler configs tokens -p "$APP_PROJECT" -c prd --json 2>/dev/null \
+    | jq -r --arg n "$READ_TOKEN_NAME" '.[] | select(.name == $n) | .slug' 2>/dev/null || true
+}
+
+issue_closed_at() { # <number> -> closedAt when the issue is CLOSED, else empty
+  gh issue view "$1" -R "$REPO" --json state,closedAt --jq 'select(.state == "CLOSED") | .closedAt' 2>/dev/null || true
+}
+
+# park_key <src project> <src config> <expected fp> — pipe the live key into prd_retired (the
+# host's prd-scoped token cannot read it), then prove it by fingerprint.
+# shellcheck disable=SC2319 # check() takes the condition's own status by design
+park_key() {
+  show_cmd "doppler secrets get GITHUB_APP_PRIVATE_KEY -p $1 -c $2 --plain | doppler secrets set GITHUB_APP_PRIVATE_KEY_RETIRED -p ${APP_PROJECT} -c ${RETIRED_CONFIG} --silent >/dev/null"
+  soleur_op_ack_or_die "  Park the current key now? Type 'yes': "
+  mark_changed "the current key was copied to ${APP_PROJECT}/${RETIRED_CONFIG}"
+  doppler secrets get GITHUB_APP_PRIVATE_KEY -p "$1" -c "$2" --plain \
+    | doppler secrets set GITHUB_APP_PRIVATE_KEY_RETIRED -p "$APP_PROJECT" -c "$RETIRED_CONFIG" --silent >/dev/null
+  check "the parked key's fingerprint equals the key it was copied from" \
+    "$([[ "$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)" == "$3" ]]; echo $?)"
+}
+
+# store_new_key <attempt .env key> <fingerprint it must differ from>... — the gated generate
+# click, then the store. THE PEM IS DELETED ONLY AFTER the Doppler read-back fingerprint equals the
+# file's AND a JWT from the stored value gets 200 from GET /app (data-integrity F1, security P3-5):
+# GitHub never shows a private key twice, so on any failure the file stays (tmpfs, 0600) and the
+# stage prints how to resume or abandon. Sets NEW_KEY_FP on success.
+NEW_KEY_FP=""
+# shellcheck disable=SC2319 # check() takes the condition's own status by design
+store_new_key() {
+  local marker="$1" pem_path pem_fp page_fp new_fp refs f clash=0 set_rc=0
+  shift
+  NEW_KEY_FP=""
+  if [[ -z "$(env_get "$marker")" ]]; then
+    echo "  Generate a private key on the App page (the gated click). Save the download under \$XDG_RUNTIME_DIR (tmpfs)."
+    soleur_op_open_url "$(app_settings_url)"
+    soleur_op_env_upsert "$ENV_FILE" "$marker" "$(now_iso)"
+  else
+    soleur_op_yellow "  A previous run reached the generate click at $(env_get "$marker"). Reuse that download if it still exists"
+    soleur_op_yellow "  (a failed store keeps it); otherwise delete that extra row on the App page and run: bash ${SCRIPT_PATH} --reset ${marker}"
+  fi
+  if [[ "$marker" == "R1_ATTEMPTED" ]]; then
+    soleur_op_value SOLEUR_BOOTSTRAP_R1_PEM_PATH "  Path of the downloaded .pem: " pem_path
+  else
+    soleur_op_value SOLEUR_BOOTSTRAP_R9_PEM_PATH "  Path of the downloaded .pem: " pem_path
+  fi
+  [[ -f "$pem_path" ]] || { soleur_op_red "  no file at ${pem_path}"; return 1; }
+  if [[ "$(stat -f -c %T "$(dirname "$pem_path")" 2>/dev/null)" != "tmpfs" ]]; then
+    soleur_op_red "  ${pem_path} is not on tmpfs — move it under \$XDG_RUNTIME_DIR and re-run (the runbook's R1 row says why)."
+    return 1
+  fi
+  chmod 600 -- "$pem_path"
+  pem_fp="$(fp_from_stdin <"$pem_path")" || pem_fp=""
+  printf '  downloaded key fingerprint: SHA256:%s\n' "${pem_fp:-<not a key>}"
+  if [[ "$marker" == "R1_ATTEMPTED" ]]; then
+    soleur_op_value SOLEUR_BOOTSTRAP_R1_PAGE_FP "  Fingerprint of the NEW row on the App page: " page_fp
+  else
+    soleur_op_value SOLEUR_BOOTSTRAP_R9_PAGE_FP "  Fingerprint of the NEW row on the App page: " page_fp
+  fi
+  page_fp="$(printf '%s' "$page_fp" | normalize_fp)"
+  for f in "$@"; do [[ -n "$f" && "$pem_fp" == "$f" ]] && clash=1; done
+  refs="$(xproj_ref_count)"
+  check "the file is a private key" "$([[ -n "$pem_fp" ]]; echo $?)"
+  check "the file matches the new row on the App page" "$([[ "$pem_fp" == "$page_fp" ]]; echo $?)"
+  check "the new key differs from every key it replaces ($# compared)" "$clash"
+  check "no raw value in any soleur config references \${${APP_PROJECT}. (count: ${refs})" "$([[ "$refs" == "0" ]]; echo $?)"
+  stage_verdict || return 1
+
+  show_cmd "doppler secrets set GITHUB_APP_PRIVATE_KEY -p ${APP_PROJECT} -c prd --silent < \"\$PEM\" >/dev/null   # \$PEM is removed only after the read-back and GET /app pass"
+  soleur_op_ack_or_die "  Store the new key in ${APP_PROJECT}/prd? Type 'yes': "
+  mark_changed "a new key may have been written to ${APP_PROJECT}/prd (the PEM is kept until it verifies)"
+  doppler secrets set GITHUB_APP_PRIVATE_KEY -p "$APP_PROJECT" -c prd --silent <"$pem_path" >/dev/null || set_rc=$?
+  new_fp="$(fp_of_secret "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
+  check "the Doppler write returned 0 (rc ${set_rc})" "$([[ "$set_rc" -eq 0 ]]; echo $?)"
+  check "the value read back from Doppler has the downloaded key's fingerprint" "$([[ -n "$new_fp" && "$new_fp" == "$pem_fp" ]]; echo $?)"
+  check "a JWT from it gets 200 from GET /app with slug=${APP_SLUG} id=${APP_ID}" "$(app_accepts "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY; echo $?)"
+  if ! stage_verdict; then
+    soleur_op_red "  The PEM is KEPT at ${pem_path} (tmpfs, mode 0600). It is the only copy of the new row's key; GitHub never shows it again."
+    soleur_op_red "  Fix the cause and re-run with the same path: this stage stores it again and deletes it only once both checks pass."
+    soleur_op_red "  To abandon it instead: delete that row on the App page, rm -f the file, and run: bash ${SCRIPT_PATH} --reset ${marker}"
+    return 1
+  fi
+  rm -f -- "$pem_path"
+  check "the PEM file is gone" "$([[ ! -e "$pem_path" ]]; echo $?)"
+  echo "  Clear the browser's download history for that file."
+  stage_verdict || return 1
+  NEW_KEY_FP="$new_fp"
+}
+
+# retire_old_row <old fp> <live fp> <.env key for the delete time> — the gated delete click at
+# GitHub, proved by a 200 from the live key and a 401 from the parked one. NO ROLLBACK.
+# shellcheck disable=SC2319 # check() takes the condition's own status by design
+retire_old_row() {
+  local row_fp code
+  impact "if the WRONG row is deleted, every connected user loses GitHub access at once." \
+         "NONE. Short recovery: generate a key -> doppler secrets set into ${APP_PROJECT}/prd -> release (R-step 3 not needed) -> redeliver failed webhooks for the window."
+  soleur_op_open_url "$(app_settings_url)"
+  printf '  DELETE exactly SHA256:%s — KEEP SHA256:%s\n' "$1" "$2"
+  if [[ "$3" == "R7_DELETED_AT" ]]; then
+    soleur_op_value SOLEUR_BOOTSTRAP_R7_ROW_FP "  Fingerprint of the row you will delete: " row_fp
+  else
+    soleur_op_value SOLEUR_BOOTSTRAP_R9_ROW_FP "  Fingerprint of the row you will delete: " row_fp
+  fi
+  row_fp="$(printf '%s' "$row_fp" | normalize_fp)"
+  check "that row is the key being retired (SHA256:$1)" "$([[ -n "$1" && "$row_fp" == "$1" ]]; echo $?)"
+  check "that row is NOT the live key" "$([[ "$row_fp" != "$2" ]]; echo $?)"
+  check "that row is NOT the prd_terraform key (#8209 O13 owns it)" "$([[ "$row_fp" != "$(env_get R0_PRDTF_FP)" ]]; echo $?)"
+  stage_verdict || return 1
+  show_cmd "App settings -> Private keys -> Delete the row SHA256:${row_fp} (the gated click; no API exists)"
+  soleur_op_ack_or_die "  Delete exactly that row now? There is no rollback. Type 'yes': "
+  mark_changed "an App private-key row may have been deleted at GitHub"
+  if [[ "$3" == "R7_DELETED_AT" ]]; then
+    soleur_op_barrier SOLEUR_BOOTSTRAP_SKIP_R7_DELETE_BARRIER "  Row deleted? Type 'yes': "
+  else
+    soleur_op_barrier SOLEUR_BOOTSTRAP_SKIP_R9_DELETE_BARRIER "  Row deleted? Type 'yes': "
+  fi
+  code="$(app_probe "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
+  check "a JWT from the live key gets 200 (slug=${APP_SLUG}) — ${code}" "$([[ "$code" == "200 ${APP_SLUG} ${APP_ID}" ]]; echo $?)"
+  code="$(app_probe "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)"
+  check "a JWT from the parked key gets 401 — ${code%% *}" "$([[ "${code%% *}" == "401" ]]; echo $?)"
+  if ! stage_verdict; then
+    soleur_op_red "  A 401 from BOTH keys means the live key was deleted: page now and run the short recovery above."
+    return 1
+  fi
+  soleur_op_env_upsert "$ENV_FILE" "$3" "$(now_iso)"
+}
+
+# shellcheck disable=SC2319 # check() takes the condition's own status by design
+delete_parked() {
+  if [[ -z "$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)" ]]; then
+    soleur_op_yellow "  the parked name is already gone"
+    return 0
+  fi
+  impact "users notice nothing — the parked copy is dead at GitHub." "none needed."
+  show_cmd "doppler secrets delete GITHUB_APP_PRIVATE_KEY_RETIRED -p ${APP_PROJECT} -c ${RETIRED_CONFIG} --yes >/dev/null"
+  soleur_op_ack_or_die "  Delete the parked old key? Type 'yes': "
+  mark_changed "the parked key may have been deleted"
+  doppler secrets delete GITHUB_APP_PRIVATE_KEY_RETIRED -p "$APP_PROJECT" -c "$RETIRED_CONFIG" --yes >/dev/null
+  check "the parked name is gone" "$([[ -z "$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)" ]]; echo $?)"
+}
+
 # =============================================================================
 # R0 — key inventory (K0) and park the old key
 # =============================================================================
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r0() {
   local prd_fp tf_fp parked_fp page_fps fp ids
-  prd_fp="$(fp_of_secret soleur prd GITHUB_APP_PRIVATE_KEY)"
   parked_fp="$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)"
-  if [[ -n "$parked_fp" && "$parked_fp" == "$(env_get R0_PRD_FP)" && -n "$(env_get R0_INSTALLATION_IDS)" ]]; then
-    soleur_op_yellow "  already satisfied: the old key is parked in ${APP_PROJECT}/${RETIRED_CONFIG} and R0's inventory is recorded"
+  # Done once the inventory is recorded and the park either still holds R0's key or R-step 7
+  # has since deleted it (without the second arm every re-run after R-step 7 stopped here).
+  if [[ -n "$(env_get R0_PRD_FP)" && -n "$(env_get R0_INSTALLATION_IDS)" ]] \
+    && [[ "$parked_fp" == "$(env_get R0_PRD_FP)" || -n "$(env_get R7_DELETED_AT)" ]]; then
+    soleur_op_yellow "  already satisfied: R0's inventory is recorded and the old key was parked"
     return 0
   fi
   impact "users notice nothing — this only reads the App page and copies the current key where the web host cannot read it." \
          "delete GITHUB_APP_PRIVATE_KEY_RETIRED from ${APP_PROJECT}/${RETIRED_CONFIG}."
 
-  [[ -n "$prd_fp" ]] || { soleur_op_red "  no key in soleur/prd — R0 must run before R6; see the runbook"; return 1; }
+  prd_fp="$(fp_of_secret soleur prd GITHUB_APP_PRIVATE_KEY)"
+  [[ -n "$prd_fp" ]] || { soleur_op_red "  no key in soleur/prd — R0 parks from soleur/prd only for the one-time move; after R-step 6 a rotation parks from ${APP_PROJECT}/prd (R9 / runbook §Routine rotation)"; return 1; }
   tf_fp="$(fp_of_secret soleur prd_terraform GITHUB_APP_PRIVATE_KEY)"
   printf '  prd key fingerprint:           SHA256:%s\n' "$prd_fp"
   printf '  prd_terraform key fingerprint: SHA256:%s\n' "${tf_fp:-<none or sentinel>}"
@@ -478,13 +806,7 @@ stage_r0() {
   stage_verdict || return 1
   printf '  installation ids: %s\n' "$ids"
 
-  show_cmd "doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd --plain | doppler secrets set GITHUB_APP_PRIVATE_KEY_RETIRED -p ${APP_PROJECT} -c ${RETIRED_CONFIG} --silent >/dev/null"
-  soleur_op_ack_or_die "  Park the current key now? Type 'yes': "
-  doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd --plain \
-    | doppler secrets set GITHUB_APP_PRIVATE_KEY_RETIRED -p "$APP_PROJECT" -c "$RETIRED_CONFIG" --silent >/dev/null
-
-  parked_fp="$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)"
-  check "the parked key's fingerprint equals the prd key's" "$([[ "$parked_fp" == "$prd_fp" ]]; echo $?)"
+  park_key soleur prd "$prd_fp"
   stage_verdict || return 1
   soleur_op_env_upsert "$ENV_FILE" R0_PRD_FP "$prd_fp"
   soleur_op_env_upsert "$ENV_FILE" R0_PRDTF_FP "${tf_fp:-none}"
@@ -521,47 +843,6 @@ stage_r0b() {
 }
 
 # =============================================================================
-# R0c — cross-project reference probe on two disposable projects
-# =============================================================================
-R0C_A="soleur-8609-refprobe-a"
-R0C_B="soleur-8609-refprobe-b"
-r0c_cleanup() {
-  doppler projects delete "$R0C_A" --yes >/dev/null 2>&1 || true
-  doppler projects delete "$R0C_B" --yes >/dev/null 2>&1 || true
-}
-# shellcheck disable=SC2319 # check() takes the condition's own status by design
-stage_r0c() {
-  if [[ -n "$(env_get R0C_RESULT)" ]] && ! doppler projects get "$R0C_A" >/dev/null 2>&1; then
-    soleur_op_yellow "  already satisfied: R0C_RESULT=$(env_get R0C_RESULT)"
-    return 0
-  fi
-  impact "users notice nothing — it touches only two throwaway projects." "delete ${R0C_A} and ${R0C_B} (this stage does it on every exit path)."
-  show_cmd "doppler projects create ${R0C_A}; doppler projects create ${R0C_B}; set PROBE in ${R0C_A}/dev; with a read/write service token on ${R0C_B}/dev set REF='\${${R0C_A}.dev.PROBE}' and read it back; delete both projects"
-  soleur_op_ack_or_die "  Create the two scratch projects and run the probe? Type 'yes': "
-  local result
-  result="$(
-    set -euo pipefail
-    trap r0c_cleanup EXIT
-    doppler projects create "$R0C_A" >/dev/null
-    doppler projects create "$R0C_B" >/dev/null
-    printf 'probe-8609' | doppler secrets set PROBE -p "$R0C_A" -c dev --silent >/dev/null
-    t="$(doppler configs tokens create refprobe -p "$R0C_B" -c dev --access read/write --plain)"
-    if printf '${%s.dev.PROBE}' "$R0C_A" | DOPPLER_TOKEN="$t" doppler secrets set REF -p "$R0C_B" -c dev --silent >/dev/null 2>&1 \
-      && [[ "$(DOPPLER_TOKEN="$t" doppler secrets get REF -p "$R0C_B" -c dev --plain 2>/dev/null)" == "probe-8609" ]]; then
-      echo RESOLVES
-    else
-      echo DOES_NOT_RESOLVE
-    fi
-    unset t
-  )" || { soleur_op_red "  the probe could not run (project create or token mint failed)"; return 1; }
-  printf '  result: %s\n' "$result"
-  check "both scratch projects deleted" "$(! doppler projects get "$R0C_A" >/dev/null 2>&1 && ! doppler projects get "$R0C_B" >/dev/null 2>&1; echo $?)"
-  stage_verdict || return 1
-  [[ "$result" == "RESOLVES" ]] && soleur_op_red "  References resolve: R6's reference count must cover every branch-writable soleur config before R1 (runbook R0c)."
-  soleur_op_env_upsert "$ENV_FILE" R0C_RESULT "$result"
-}
-
-# =============================================================================
 # Gate before R1 — #8209 O10 and O13's DOPPLER_TOKEN_TF rotation
 # =============================================================================
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
@@ -580,53 +861,32 @@ stage_gate() {
 # =============================================================================
 # R1 — the new key, generated straight into the isolated project
 # =============================================================================
-# shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r1() {
-  local new_fp pem_path pem_fp page_fp
+  local new_fp probe
+  doppler secrets -p "$APP_PROJECT" -c prd --only-names >/dev/null 2>&1 \
+    || { soleur_op_red "  cannot list ${APP_PROJECT}/prd — an unreadable project is not 'no key yet'; fix the Doppler login and re-run."; return 1; }
   new_fp="$(fp_of_secret "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
-  if [[ -n "$new_fp" && "$new_fp" != "$(env_get R0_PRD_FP)" ]] && app_accepts "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY; then
-    soleur_op_yellow "  already satisfied: ${APP_PROJECT}/prd holds a new key GitHub accepts (SHA256:${new_fp})"
-    soleur_op_env_upsert "$ENV_FILE" R1_FP "$new_fp"
-    return 0
+  if [[ -n "$new_fp" && "$new_fp" != "$(env_get R0_PRD_FP)" ]]; then
+    probe="$(app_probe "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
+    case "$probe" in
+      "200 ${APP_SLUG} ${APP_ID}")
+        soleur_op_yellow "  already satisfied: ${APP_PROJECT}/prd holds a new key GitHub accepts (SHA256:${new_fp})"
+        [[ -n "$(env_get R1_FP)" ]] || soleur_op_env_upsert "$ENV_FILE" R1_FP "$new_fp"
+        return 0 ;;
+      401\ *)
+        soleur_op_yellow "  ${APP_PROJECT}/prd holds a key GitHub rejects (401) — a new one is generated below." ;;
+      *)
+        # data-integrity F9: a timeout, a 5xx or another App's 200 is not "not done". Generating
+        # again here would add a live row and overwrite the stored key.
+        soleur_op_red "  GET /app gave no verdict for the key already in ${APP_PROJECT}/prd (${probe}). That is not 'not done' — re-run when GitHub answers."
+        return 1 ;;
+    esac
   fi
   impact "users notice nothing yet — the new key is not served until R4." "delete the new row on the App page and the secret in ${APP_PROJECT}/prd."
-  if [[ -z "$(env_get R1_ATTEMPTED)" ]]; then
-    echo "  Generate a private key on the App page (the gated click). Save the download under \$XDG_RUNTIME_DIR (tmpfs)."
-    soleur_op_open_url "$(app_settings_url)"
-    soleur_op_env_upsert "$ENV_FILE" R1_ATTEMPTED "$(now_iso)"
-  else
-    soleur_op_yellow "  A previous run reached the generate click at $(env_get R1_ATTEMPTED). Reuse that download if it still exists;"
-    soleur_op_yellow "  otherwise delete that extra row on the App page and run: bash ${SCRIPT_PATH} --reset R1_ATTEMPTED"
-  fi
-  soleur_op_value SOLEUR_BOOTSTRAP_R1_PEM_PATH "  Path of the downloaded .pem: " pem_path
-  [[ -f "$pem_path" ]] || { soleur_op_red "  no file at ${pem_path}"; return 1; }
-  if [[ "$(stat -f -c %T "$(dirname "$pem_path")" 2>/dev/null)" != "tmpfs" ]]; then
-    soleur_op_red "  ${pem_path} is not on tmpfs — move it under \$XDG_RUNTIME_DIR and re-run (the runbook's R1 row says why)."
-    return 1
-  fi
-  pem_fp="$(fp_from_stdin <"$pem_path")" || pem_fp=""
-  printf '  downloaded key fingerprint: SHA256:%s\n' "${pem_fp:-<not a key>}"
-  soleur_op_value SOLEUR_BOOTSTRAP_R1_PAGE_FP "  Fingerprint of the NEW row on the App page: " page_fp
-  page_fp="$(printf '%s' "$page_fp" | normalize_fp)"
-  check "the file is a private key" "$([[ -n "$pem_fp" ]]; echo $?)"
-  check "the file matches the new row on the App page" "$([[ "$pem_fp" == "$page_fp" ]]; echo $?)"
-  check "the new key differs from the old prd key and the prd_terraform key" "$([[ "$pem_fp" != "$(env_get R0_PRD_FP)" && "$pem_fp" != "$(env_get R0_PRDTF_FP)" ]]; echo $?)"
-  stage_verdict || return 1
-
-  show_cmd "doppler secrets set GITHUB_APP_PRIVATE_KEY -p ${APP_PROJECT} -c prd --silent < \"\$PEM\" >/dev/null; rm -f \"\$PEM\""
-  soleur_op_ack_or_die "  Store the new key in ${APP_PROJECT}/prd and delete the file? Type 'yes': "
-  (
-    trap 'rm -f -- "$pem_path"' EXIT
-    doppler secrets set GITHUB_APP_PRIVATE_KEY -p "$APP_PROJECT" -c prd --silent <"$pem_path" >/dev/null
-  )
-  echo "  Clear the browser's download history for that file."
-
-  new_fp="$(fp_of_secret "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
-  check "the PEM file is gone" "$([[ ! -e "$pem_path" ]]; echo $?)"
-  check "the value read back from Doppler has the new row's fingerprint" "$([[ "$new_fp" == "$pem_fp" ]]; echo $?)"
-  check "a JWT from it gets 200 from GET /app with slug=${APP_SLUG} id=${APP_ID}" "$(app_accepts "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY; echo $?)"
-  stage_verdict || return 1
-  soleur_op_env_upsert "$ENV_FILE" R1_FP "$new_fp"
+  store_new_key R1_ATTEMPTED "$(env_get R0_PRD_FP)" "$(env_get R0_PRDTF_FP)"
+  soleur_op_env_upsert "$ENV_FILE" R1_FP "$NEW_KEY_FP"
+  # G3 (R9) compares this with the closure times of G1/G2.
+  soleur_op_env_upsert "$ENV_FILE" R1_BORN_AT "$(now_iso)"
   soleur_op_env_reset "$ENV_FILE" R1_ATTEMPTED
 }
 
@@ -634,35 +894,37 @@ stage_r1() {
 # R2 — the host's read token, into Tier B only
 # =============================================================================
 r2_verify() { # prints the two checks; the token travels only in a child's environment
-  local tok read_fp refused=1
+  local tok read_fp refused=1 want
+  want="$(expected_live_fp)"
   tok="$(doppler secrets get "$TIER_B_NAME" -p "$TIER_B_PROJECT" -c prd --plain 2>/dev/null)" || tok=""
   [[ -n "$tok" ]] || { check "${TIER_B_NAME} is set in ${TIER_B_PROJECT}/prd" 1; return 0; }
   read_fp="$(DOPPLER_TOKEN="$tok" doppler secrets get GITHUB_APP_PRIVATE_KEY -p "$APP_PROJECT" -c prd --plain 2>/dev/null | fp_from_stdin)" || read_fp=""
   DOPPLER_TOKEN="$tok" doppler secrets get GITHUB_APP_ID -p soleur -c prd --plain >/dev/null 2>&1 || refused=0
   unset tok
-  printf '  key read with the stored token vs R1: %s\n' "$([[ -n "$read_fp" && "$read_fp" == "$(env_get R1_FP)" ]] && echo equal || echo DIFFERENT)"
-  check "the stored token reads R1's key" "$([[ -n "$read_fp" && "$read_fp" == "$(env_get R1_FP)" ]]; echo $?)"
+  printf '  key read with the stored token vs the live key: %s\n' "$([[ -n "$read_fp" && "$read_fp" == "$want" ]] && echo equal || echo DIFFERENT)"
+  check "the stored token reads the live key" "$([[ -n "$read_fp" && "$read_fp" == "$want" ]]; echo $?)"
   check "the stored token is refused on soleur/prd" "$refused"
 }
 stage_r2() {
   if doppler secrets get "$TIER_B_NAME" -p "$TIER_B_PROJECT" -c prd --plain >/dev/null 2>&1; then
     r2_verify
-    if stage_verdict; then soleur_op_yellow "  already satisfied: the Tier-B token is stored and reads R1's key"; return 0; fi
+    if stage_verdict; then soleur_op_yellow "  already satisfied: the Tier-B token is stored and reads the live key"; return 0; fi
     soleur_op_red "  ${TIER_B_NAME} exists but does not verify — revoke it and delete the name (runbook R2 rollback), then re-run."
     return 1
   fi
   local existing
-  existing="$(doppler configs tokens -p "$APP_PROJECT" -c prd --json 2>/dev/null | jq -r --arg n "$READ_TOKEN_NAME" '[.[] | select(.name == $n)] | length')" || existing=""
+  existing="$(token_slugs | grep -c . || true)"
   [[ "$existing" == "0" ]] || { soleur_op_red "  ${APP_PROJECT}/prd already has ${existing:-unknown} token(s) named ${READ_TOKEN_NAME} with no Tier-B copy — inspect and revoke before minting."; return 1; }
 
   impact "users notice nothing — the token is stored but not yet delivered to a host." \
          "revoke ${READ_TOKEN_NAME} in ${APP_PROJECT}/prd and delete ${TIER_B_NAME} from ${TIER_B_PROJECT}/prd."
   show_cmd "doppler configs tokens create ${READ_TOKEN_NAME} -p ${APP_PROJECT} -c prd --access read --plain | tr -d '\\n' | doppler secrets set ${TIER_B_NAME} -p ${TIER_B_PROJECT} -c prd --silent >/dev/null"
   soleur_op_ack_or_die "  Mint the read token and store it in Tier B? Type 'yes': "
+  mark_changed "a read token may have been minted on ${APP_PROJECT}/prd and stored in Tier B"
   if ! doppler configs tokens create "$READ_TOKEN_NAME" -p "$APP_PROJECT" -c prd --access read --plain \
       | tr -d '\n' | doppler secrets set "$TIER_B_NAME" -p "$TIER_B_PROJECT" -c prd --silent >/dev/null; then
     local slug
-    slug="$(doppler configs tokens -p "$APP_PROJECT" -c prd --json 2>/dev/null | jq -r --arg n "$READ_TOKEN_NAME" '.[] | select(.name == $n) | .slug')" || slug=""
+    slug="$(token_slugs | head -1)"
     [[ -n "$slug" ]] && doppler configs tokens revoke "$slug" -p "$APP_PROJECT" -c prd >/dev/null 2>&1 || true
     soleur_op_red "  the set failed; the just-minted token was revoked (slug ${slug:-none found})."
     return 1
@@ -677,21 +939,22 @@ stage_r2() {
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r3() {
   local pre post run concl logs
-  pre="$(env_get R3_PRE_DIGEST)"
-  run="$(env_get R3_RUN)"
+  pre="$(env_get "$(K R3_PRE_DIGEST)")"
+  run="$(env_get "$(K R3_RUN)")"
   post="$(credential_file_digest)"
   if [[ -n "$run" && "$(run_conclusion "$run")" == "success" && -n "$post" && "$post" != "$pre" ]]; then
     soleur_op_yellow "  already satisfied: run ${run} delivered a changed credential file"
     return 0
   fi
   [[ -n "$post" ]] || { soleur_op_red "  cannot read web-1's infra-config state (/hooks/infra-config-status)"; return 1; }
-  [[ -n "$pre" ]] || { soleur_op_env_upsert "$ENV_FILE" R3_PRE_DIGEST "$post"; pre="$post"; }
+  [[ -n "$pre" ]] || { soleur_op_env_upsert "$ENV_FILE" "$(K R3_PRE_DIGEST)" "$post"; pre="$post"; }
   impact "if the push breaks the credential file, web-1's next deploy or restart cannot read its config — the running site keeps serving." \
          "set ${TIER_B_NAME} empty and re-dispatch: the file re-renders without the line (no SSH)."
   show_cmd "gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason=8609-github-app-token"
   soleur_op_ack_or_die "  Dispatch the push to web-1? Type 'yes': "
+  mark_changed "apply-deploy-pipeline-fix was dispatched"
   dispatch_and_watch run apply-deploy-pipeline-fix.yml -f reason=8609-github-app-token
-  soleur_op_env_upsert "$ENV_FILE" R3_RUN "$run"
+  soleur_op_env_upsert "$ENV_FILE" "$(K R3_RUN)" "$run"
   concl="$(run_conclusion "$run")"
   logs="$(gh run view "$run" -R "$REPO" --log 2>/dev/null | grep -c 'source=tier_b' || true)"
   post="$(credential_file_digest)"
@@ -707,9 +970,7 @@ stage_r3() {
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 r4_checks() {
   local now_ids r0_ids missing jid body code
-  check "deploy state: source=isolated fetch=ok probe=ok" "$(key_status_is isolated ok ok; echo $?)"
-  check "cron/github-app-drift-guard.manual-trigger accepted" "$(trigger_cron cron/github-app-drift-guard.manual-trigger; echo $?)"
-  check "cron/oauth-probe.manual-trigger accepted" "$(trigger_cron cron/oauth-probe.manual-trigger; echo $?)"
+  key_check "deploy state: source=isolated fetch=ok probe=ok, exit_code=0, tag = the serving release"
   now_ids="$(installation_ids "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
   r0_ids="$(env_get R0_INSTALLATION_IDS)"
   missing="$(comm -23 <(tr ',' '\n' <<<"$r0_ids" | sort) <(tr ',' '\n' <<<"$now_ids" | sort) | wc -l | tr -d ' ')"
@@ -718,12 +979,12 @@ r4_checks() {
   body=/dev/null
   code="$( [[ -n "$jid" ]] && gh_app_call "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY POST "/app/installations/${jid}/access_tokens" "$body" || echo 000)"
   check "an installation-token mint on jikig-ai succeeds (HTTP ${code})" "$([[ "$code" == "201" ]]; echo $?)"
-  echo "  The two cron probes report in Sentry; a drift-guard failure pages through its cron monitor."
+  crons_clean
 }
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r4() {
   local run concl
-  run="$(env_get R4_RELEASE_RUN)"
+  run="$(env_get "$(K R4_RELEASE_RUN)")"
   if [[ -n "$run" && "$(run_conclusion "$run")" == "success" ]] && key_status_is isolated ok ok; then
     soleur_op_yellow "  already satisfied: release run ${run} shipped on the isolated key"
     return 0
@@ -732,8 +993,9 @@ stage_r4() {
          "the R3 rollback plus a release (falls back to the still-valid prd key); redeliver failed webhook deliveries for the window (GET /app/hook/deliveries, POST .../attempts)."
   show_cmd "gh workflow run web-platform-release.yml --ref main -f bump_type=patch"
   soleur_op_ack_or_die "  Dispatch the release? Type 'yes': "
+  mark_changed "a production release was dispatched"
   dispatch_and_watch run web-platform-release.yml -f bump_type=patch
-  soleur_op_env_upsert "$ENV_FILE" R4_RELEASE_RUN "$run"
+  soleur_op_env_upsert "$ENV_FILE" "$(K R4_RELEASE_RUN)" "$run"
   concl="$(run_conclusion "$run")"
   check "release run ${run} concluded success" "$([[ "$concl" == "success" ]]; echo $?)"
   r4_checks
@@ -751,14 +1013,14 @@ cpx22_in_stock() {
 }
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r5() {
-  local since run concl env_id
-  since="$(env_get R5_DISPATCHED_AT)"
-  if [[ -n "$since" ]] && web2_key_ok_since "$since"; then
-    soleur_op_yellow "  already satisfied: web-2 emitted github_app_key_ok after its replace at ${since}"
+  local since run concl env_id latest
+  since="$(env_get "$(K R5_DISPATCHED_AT)")"
+  if [[ -n "$since" && "$(web2_latest_stage "$since")" == "ok" ]]; then
+    soleur_op_yellow "  already satisfied: web-2's latest boot stage since its replace at ${since} is github_app_key_ok"
     return 0
   fi
   check "web-1 is healthy (https://app.${DEPLOY_BASE}/health)" "$([[ "$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 10 "https://app.${DEPLOY_BASE}/health" || echo 000)" == "200" ]]; echo $?)"
-  check "web-1 serves on the isolated key (R4 done)" "$(key_status_is isolated ok ok; echo $?)"
+  key_check "web-1 serves on the isolated key (R4 done)"
   check "cpx22 is in stock in hel1-dc2" "$(cpx22_in_stock; echo $?)"
   stage_verdict || return 1
   echo "  The replace job runs the host-image coherence preflight itself (baked host-scripts hash vs main)."
@@ -766,8 +1028,9 @@ stage_r5() {
          "web-2 is cattle: re-dispatch the replace."
   show_cmd "gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=web-host-replace -f web_host_key=web-2 -f confirm=REPLACE-web-2 -f reason=8609-github-app-token"
   soleur_op_ack_or_die "  Dispatch the web-2 replace? Type 'yes': "
+  mark_changed "the web-2 replace was dispatched"
   since="$(now_iso)"
-  soleur_op_env_upsert "$ENV_FILE" R5_DISPATCHED_AT "$since"
+  soleur_op_env_upsert "$ENV_FILE" "$(K R5_DISPATCHED_AT)" "$since"
   gh workflow run apply-web-platform-infra.yml -R "$REPO" --ref main -f apply_target=web-host-replace \
     -f web_host_key=web-2 -f confirm=REPLACE-web-2 -f reason=8609-github-app-token >/dev/null
   for _ in $(seq 1 36); do
@@ -776,7 +1039,7 @@ stage_r5() {
     [[ -n "$run" ]] && break; sleep 5
   done
   [[ -n "$run" ]] || { soleur_op_red "  the replace run did not appear"; return 1; }
-  soleur_op_env_upsert "$ENV_FILE" R5_RUN "$run"
+  soleur_op_env_upsert "$ENV_FILE" "$(K R5_RUN)" "$run"
   printf '  run: https://github.com/%s/actions/runs/%s\n' "$REPO" "$run"
   for _ in $(seq 1 36); do
     env_id="$(gh api "repos/${REPO}/actions/runs/${run}/pending_deployments" --jq '.[] | select(.environment.name == "web-platform-infra-apply") | .environment.id' 2>/dev/null || true)"
@@ -791,8 +1054,12 @@ stage_r5() {
   gh run watch "$run" -R "$REPO" --exit-status >/dev/null 2>&1 || true
   concl="$(run_conclusion "$run")"
   check "replace run ${run} concluded success" "$([[ "$concl" == "success" ]]; echo $?)"
-  for _ in $(seq 1 30); do web2_key_ok_since "$since" && break; sleep 20; done
-  check "web-2 emitted github_app_key_ok after the replace (absence is a fail)" "$(web2_key_ok_since "$since"; echo $?)"
+  for _ in $(seq 1 30); do
+    latest="$(web2_latest_stage "$since")"
+    [[ "$latest" == "none" ]] || break
+    sleep 20
+  done
+  web2_check "web-2's latest github_app_key_* boot stage is github_app_key_ok (the isolated key; absence is a fail)" "$since"
   stage_verdict
 }
 
@@ -803,7 +1070,7 @@ PIN_FILE="apps/web-platform/infra/web-2-ssh-host-key.pub"
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r5b() {
   local pr state merged_at run ip branch wt
-  pr="$(env_get R5B_PR)"
+  pr="$(env_get "$(K R5B_PR)")"
   if [[ -n "$pr" ]]; then
     state="$(gh pr view "$pr" -R "$REPO" --json state --jq .state 2>/dev/null || true)"
     if [[ "$state" != "MERGED" ]]; then
@@ -824,18 +1091,20 @@ stage_r5b() {
     impact "until the pin is re-captured every deploy-pipeline push fails closed — releases still ship." "re-capture."
     show_cmd "gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason=8609-web-2-host-key-repin"
     soleur_op_ack_or_die "  No green apply-deploy-pipeline-fix run after the merge yet. Dispatch one to prove the web-2 leg? Type 'yes': "
+    mark_changed "apply-deploy-pipeline-fix was dispatched"
     dispatch_and_watch run apply-deploy-pipeline-fix.yml -f reason=8609-web-2-host-key-repin
     check "apply-deploy-pipeline-fix run ${run} (web-2 leg included) concluded success" "$([[ "$(run_conclusion "$run")" == "success" ]]; echo $?)"
     stage_verdict
     return
   fi
-  ip="$(hetzner_get 'servers?name=web-2' 2>/dev/null | jq -r '.servers[0].public_net.ipv4.ip // empty')" || ip=""
-  [[ "$ip" =~ ^[0-9.]+$ ]] || { soleur_op_red "  could not resolve web-2's public IPv4 from Hetzner"; return 1; }
+  ip="$(hetzner_get "servers?name=${WEB2_HOST}" 2>/dev/null | jq -r '.servers[0].public_net.ipv4.ip // empty')" || ip=""
+  [[ "$ip" =~ ^[0-9.]+$ ]] || { soleur_op_red "  could not resolve ${WEB2_HOST}'s public IPv4 from Hetzner"; return 1; }
   impact "until the pin is re-captured every deploy-pipeline push, web-1's leg included, fails closed — releases still ship." \
          "re-capture; the old pin file is in git history."
-  branch="ops-8609-web-2-host-key"
+  branch="ops-8609-web-2-host-key${ROT:+-r9}"
   show_cmd "bash scripts/capture-web-2-host-key.sh ${ip}; commit ${PIN_FILE} on ${branch}; gh pr create"
   soleur_op_ack_or_die "  Capture web-2's host key and open the pin PR? Type 'yes': "
+  mark_changed "a pin branch was pushed and a PR opened"
   wt="$(mktemp -d)/r5b"
   ( cd "$REPO_ROOT" && git fetch -q origin main && git worktree add -q -b "$branch" "$wt" origin/main ) || return 1
   (
@@ -851,7 +1120,7 @@ stage_r5b() {
   pr="$(gh pr list -R "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
   check "pin PR opened" "$([[ -n "$pr" ]]; echo $?)"
   stage_verdict || return 1
-  soleur_op_env_upsert "$ENV_FILE" R5B_PR "$pr"
+  soleur_op_env_upsert "$ENV_FILE" "$(K R5B_PR)" "$pr"
   soleur_op_yellow "  Pin PR #${pr} is open. The stop below is expected: merge the PR, then re-run —"
   soleur_op_yellow "  this stage then proves the next apply-deploy-pipeline-fix run's web-2 leg."
   return 1
@@ -862,7 +1131,7 @@ stage_r5b() {
 # =============================================================================
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 r6_checks() {
-  local c left=0 refs run
+  local c left=0 refs
   while IFS= read -r c; do
     [[ "$c" == prd || "$c" == prd_* ]] || continue
     [[ "$c" == prd_terraform ]] && continue
@@ -871,10 +1140,9 @@ r6_checks() {
     fi
   done < <(grep -vE '^\s*(#|$)' "$REPO_ROOT/apps/web-platform/infra/doppler-config-inventory.txt")
   check "every prd/prd_* config in the inventory (except prd_terraform) returns not-found" "$([[ "$left" -eq 0 ]]; echo $?)"
-  # Raw (unresolved) values go straight into jq, which prints only a count.
-  refs="$(doppler secrets -p soleur -c prd --raw --json 2>/dev/null | jq --arg p "\${${APP_PROJECT}." '[.. | strings | select(contains($p))] | length' 2>/dev/null)" || refs=""
-  printf '  raw prd values referencing ${%s.: %s\n' "$APP_PROJECT" "${refs:-unreadable}"
-  check "no raw prd value references the isolated project" "$([[ "$refs" == "0" ]]; echo $?)"
+  refs="$(xproj_ref_count)"
+  check "no raw value in ANY soleur config references \${${APP_PROJECT}. (count: ${refs})" "$([[ "$refs" == "0" ]]; echo $?)"
+  printf '  Doppler attachments on soleur/prd (listed, not gated): %s\n' "$(doppler_attachments soleur prd)"
 }
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r6() {
@@ -887,14 +1155,16 @@ stage_r6() {
   if doppler secrets get GITHUB_APP_PRIVATE_KEY -p soleur -c prd --plain >/dev/null 2>&1; then
     echo "  Preconditions (runbook R6): AC-R6a/AC-R6b recorded; the key status read immediately before; web-2 on the isolated key."
     soleur_op_barrier SOLEUR_BOOTSTRAP_SKIP_R6_READERS_BARRIER "  AC-R6a (no reader resolves to prd) and AC-R6b (prd writers listed) are recorded on #8609? Type 'yes': "
-    check "web-1 deploy state reads isolated/ok/ok right now" "$(key_status_is isolated ok ok; echo $?)"
-    check "web-2's latest boot emitted github_app_key_ok (since R5)" "$(web2_key_ok_since "$(env_get R5_DISPATCHED_AT)"; echo $?)"
+    key_check "web-1 deploy state reads isolated/ok/ok for the serving release right now"
+    web2_check "web-2's latest boot stage since R5 is github_app_key_ok" "$(env_get R5_DISPATCHED_AT)"
     check "R5b is done (pin PR recorded)" "$([[ -n "$(env_get R5B_PR)" ]]; echo $?)"
     stage_verdict || return 1
     impact "if a reader still depends on the prd key it fails loudly; the web hosts already run the isolated key, so users notice nothing." \
            "restoring a key to prd BURNS the new key (it is branch-readable again): restart at R1 with a fresh key."
+    soleur_op_yellow "  Accepted consequence: after this, rolling back to an image signed only from a tag gets NO key — the canary refuses and the running release keeps serving."
     show_cmd "doppler secrets delete GITHUB_APP_PRIVATE_KEY -p soleur -c prd --yes >/dev/null"
     soleur_op_ack_or_die "  Delete the key from soleur/prd? Type 'yes': "
+    mark_changed "the key may have been deleted from soleur/prd"
     doppler secrets delete GITHUB_APP_PRIVATE_KEY -p soleur -c prd --yes >/dev/null
   fi
   r6_checks
@@ -902,6 +1172,7 @@ stage_r6() {
   impact "a release that cannot fetch the isolated key now refuses at the canary and the previous release keeps serving." "as R4."
   show_cmd "gh workflow run web-platform-release.yml --ref main -f bump_type=patch"
   soleur_op_ack_or_die "  Dispatch a fresh release to prove the post-eviction state? Type 'yes': "
+  mark_changed "a production release was dispatched"
   dispatch_and_watch run web-platform-release.yml -f bump_type=patch
   soleur_op_env_upsert "$ENV_FILE" R6_RELEASE_RUN "$run"
   concl="$(run_conclusion "$run")"
@@ -915,76 +1186,61 @@ stage_r6() {
 # =============================================================================
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_r7() {
-  local retired_fp row_fp code
+  local retired_fp
   retired_fp="$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)"
-  if [[ -z "$retired_fp" && -n "$(env_get R7_DELETED_AT)" ]]; then
-    soleur_op_yellow "  already satisfied: the old row was deleted at $(env_get R7_DELETED_AT) and the parked name is gone"
+  # R9 re-uses the park for its own retired key, so "done" means R0's key is no longer parked.
+  if [[ -n "$(env_get R7_DELETED_AT)" && "$retired_fp" != "$(env_get R0_PRD_FP)" ]]; then
+    soleur_op_yellow "  already satisfied: the old row was deleted at $(env_get R7_DELETED_AT) and R0's key is no longer parked"
     return 0
   fi
   if [[ -z "$(env_get R7_DELETED_AT)" ]]; then
     check "a release other than R4's shipped on the isolated key" "$([[ -n "$(env_get R6_RELEASE_RUN)" && "$(env_get R6_RELEASE_RUN)" != "$(env_get R4_RELEASE_RUN)" && "$(run_conclusion "$(env_get R6_RELEASE_RUN)")" == "success" ]]; echo $?)"
-    check "web-1 reads isolated/ok/ok now" "$(key_status_is isolated ok ok; echo $?)"
-    check "web-2 reports github_app_key_ok since R5" "$(web2_key_ok_since "$(env_get R5_DISPATCHED_AT)"; echo $?)"
+    key_check "web-1 reads isolated/ok/ok for the serving release now"
+    web2_check "web-2's latest boot stage since R5 is github_app_key_ok" "$(env_get R5_DISPATCHED_AT)"
     check "the parked key is R0's prd key" "$([[ -n "$retired_fp" && "$retired_fp" == "$(env_get R0_PRD_FP)" ]]; echo $?)"
     check "the parked key differs from R1's and from prd_terraform's" "$([[ "$retired_fp" != "$(env_get R1_FP)" && "$retired_fp" != "$(env_get R0_PRDTF_FP)" ]]; echo $?)"
     stage_verdict || return 1
-    impact "if the WRONG row is deleted, every connected user loses GitHub access at once." \
-           "NONE. Short recovery: generate a key -> doppler secrets set into ${APP_PROJECT}/prd -> release (R3 not needed) -> redeliver failed webhooks for the window."
-    soleur_op_open_url "$(app_settings_url)"
-    soleur_op_value SOLEUR_BOOTSTRAP_R7_ROW_FP "  Fingerprint of the row you will delete: " row_fp
-    row_fp="$(printf '%s' "$row_fp" | normalize_fp)"
-    check "that row is R0's prd key (SHA256:$(env_get R0_PRD_FP))" "$([[ "$row_fp" == "$(env_get R0_PRD_FP)" ]]; echo $?)"
-    check "that row is NOT R1's new key" "$([[ "$row_fp" != "$(env_get R1_FP)" ]]; echo $?)"
-    check "that row is NOT the prd_terraform key (#8209 O13 owns it)" "$([[ "$row_fp" != "$(env_get R0_PRDTF_FP)" ]]; echo $?)"
-    stage_verdict || return 1
-    show_cmd "App settings -> Private keys -> Delete the row SHA256:${row_fp} (the gated click; no API exists)"
-    soleur_op_ack_or_die "  Delete exactly that row now? There is no rollback. Type 'yes': "
-    soleur_op_barrier SOLEUR_BOOTSTRAP_SKIP_R7_DELETE_BARRIER "  Row deleted? Type 'yes': "
-    code="$(app_probe "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
-    check "a JWT from the new key gets 200 (slug=${APP_SLUG}) — ${code}" "$([[ "$code" == "200 ${APP_SLUG} ${APP_ID}" ]]; echo $?)"
-    code="$(app_probe "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)"
-    check "a JWT from the retired key gets 401 — ${code%% *}" "$([[ "${code%% *}" == "401" ]]; echo $?)"
-    if ! stage_verdict; then
-      soleur_op_red "  A 401 from BOTH keys means the new key was deleted: page now and run the short recovery above."
-      return 1
-    fi
-    soleur_op_env_upsert "$ENV_FILE" R7_DELETED_AT "$(now_iso)"
+    retire_old_row "$(env_get R0_PRD_FP)" "$(env_get R1_FP)" R7_DELETED_AT
   fi
-  impact "users notice nothing — the parked copy is dead at GitHub." "none needed."
-  show_cmd "doppler secrets delete GITHUB_APP_PRIVATE_KEY_RETIRED -p ${APP_PROJECT} -c ${RETIRED_CONFIG} --yes >/dev/null"
-  soleur_op_ack_or_die "  Delete the parked old key? Type 'yes': "
-  doppler secrets delete GITHUB_APP_PRIVATE_KEY_RETIRED -p "$APP_PROJECT" -c "$RETIRED_CONFIG" --yes >/dev/null
-  check "the parked name is gone" "$([[ -z "$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)" ]]; echo $?)"
-  check "cron/github-app-drift-guard.manual-trigger accepted" "$(trigger_cron cron/github-app-drift-guard.manual-trigger; echo $?)"
-  echo "  1-hour watch: until $(date -u -d "$(env_get R7_DELETED_AT) + 1 hour" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo 'one hour after the delete') the Sentry per-installation mint-failure query and agent-run git push / PR failures must stay quiet (runbook R7). R8 refuses to run before then."
+  delete_parked
+  crons_clean
+  echo "  1-hour watch: R8 refuses to run before $(sentry_ts "$(env_get R7_DELETED_AT)" 3600)Z, then requires zero"
+  echo "  feature:github-app op:generate-installation-token events in [delete, +1h] (every agent git push/PR mints through it)."
   stage_verdict
 }
 
 # =============================================================================
-# R8 — the gate for the follow-up PR (after #8209 O13's App-key delete)
+# R8 — gate G4 for the follow-up PR (after #8209 O13's App-key delete)
 # =============================================================================
+# r8_checks <expected live fp> <delete time ISO> <R8|R9> — the 1-hour mint-failure watch, then the
+# key/token/member/attachment census.
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
-stage_r8() {
-  local deleted page_fps n=0 fp tokens members code body
-  deleted="$(env_get R7_DELETED_AT)"
-  if [[ -n "$deleted" ]] && [[ "$(date -u +%s)" -lt $(( $(date -u -d "$deleted" +%s 2>/dev/null || echo 0) + 3600 )) ]]; then
-    soleur_op_yellow "  R7's 1-hour watch has not elapsed — re-run after it."
+r8_checks() {
+  local page_fps n=0 fp tokens members code body att wh sy retired_tokens
+  [[ -n "$2" ]] || { soleur_op_red "  no delete time recorded — run the retire step first"; return 1; }
+  if [[ "$(date -u +%s)" -lt $(( $(date -u -d "$2" +%s) + 3600 )) ]]; then
+    soleur_op_yellow "  the 1-hour watch after the delete at $2 has not elapsed — re-run after $(sentry_ts "$2" 3600)Z."
     return 1
   fi
-  impact "nothing changes here; it decides whether ADR-241 D2/D10 may flip." "none needed."
+  zero_events_check "no installation-token mint failed in the hour after the delete" \
+    'feature:github-app op:generate-installation-token' "$(sentry_ts "$2")" "$(sentry_ts "$2" 3600)"
   soleur_op_open_url "$(app_settings_url)"
-  soleur_op_value SOLEUR_BOOTSTRAP_R8_APP_PAGE_FPS "  Paste every fingerprint on the App page, comma-separated: " page_fps
+  if [[ "$3" == "R8" ]]; then
+    soleur_op_value SOLEUR_BOOTSTRAP_R8_APP_PAGE_FPS "  Paste every fingerprint on the App page, comma-separated: " page_fps
+  else
+    soleur_op_value SOLEUR_BOOTSTRAP_R9_APP_PAGE_FPS "  Paste every fingerprint on the App page, comma-separated: " page_fps
+  fi
   while IFS= read -r fp; do
     fp="$(printf '%s' "$fp" | normalize_fp)"; [[ -n "$fp" ]] || continue
-    n=$((n + 1)); [[ "$fp" == "$(env_get R1_FP)" ]] || n=$((n + 100))
+    n=$((n + 1)); [[ "$fp" == "$1" ]] || n=$((n + 100))
   done < <(printf '%s\n' "$page_fps" | tr ',' '\n')
-  check "the App lists exactly one key, R1's (needs #8209 O13's App-key delete)" "$([[ "$n" -eq 1 ]]; echo $?)"
+  check "the App lists exactly one key, the live one SHA256:$1 (needs #8209 O13's App-key delete)" "$([[ "$n" -eq 1 ]]; echo $?)"
   tokens="$(doppler configs tokens -p "$APP_PROJECT" -c prd --json 2>/dev/null | jq -r '.[].name' 2>/dev/null || true)"
   check "${APP_PROJECT}/prd lists exactly one token, ${READ_TOKEN_NAME}" "$([[ "$tokens" == "$READ_TOKEN_NAME" ]]; echo $?)"
+  retired_tokens="$(doppler configs tokens -p "$APP_PROJECT" -c "$RETIRED_CONFIG" --json 2>/dev/null | jq -r 'length' 2>/dev/null || true)"
+  check "${APP_PROJECT}/${RETIRED_CONFIG} has no service token (${retired_tokens:-unreadable})" "$([[ "$retired_tokens" == "0" ]]; echo $?)"
   body="$(mktemp)"
-  code="$(doppler configure get token --plain 2>/dev/null | { read -r t; printf 'Authorization: Bearer %s\n' "$t"; } \
-    | curl --disable --noproxy '*' --proto '=https' -sS --max-time 15 -o "$body" -w '%{http_code}' -H @- \
-      "https://api.doppler.com/v3/projects/project/members?project=${APP_PROJECT}" 2>/dev/null)" || code="000"
+  code="$(doppler_api_get "/v3/projects/project/members?project=${APP_PROJECT}" "$body")" || code="000"
   if [[ "$code" == "200" ]]; then
     members="$(jq -r '[.members[]? | select(.type != "workplace_user")] | length' "$body")"
     check "no service account or group is a member of ${APP_PROJECT}" "$([[ "$members" == "0" ]]; echo $?)"
@@ -992,8 +1248,144 @@ stage_r8() {
     check "project members readable (HTTP ${code}) — INCONCLUSIVE is not a pass" 1
   fi
   rm -f "$body"
+  att="$(doppler_attachments "$APP_PROJECT" '*')"
+  wh="${att%% *}"; wh="${wh#webhooks=}"; sy="${att##*syncs=}"
+  check "no Doppler webhook is attached to ${APP_PROJECT} (webhooks=${wh})" "$([[ "$wh" == "0" ]]; echo $?)"
+  check "no Doppler sync/integration reads ${APP_PROJECT} (syncs=${sy})" "$([[ "$sy" == "0" ]]; echo $?)"
+}
+stage_r8() {
+  if [[ -n "$(env_get R9_PREV_FP)" && -z "$(env_get R9_DONE)" ]]; then
+    soleur_op_yellow "  R9's closure rotation is in progress; R9 re-runs these checks against its key when it finishes."
+    return 0
+  fi
+  impact "nothing changes here; it decides gate G4 for the follow-up PR." "none needed."
+  r8_checks "$(expected_live_fp)" "$(env_get R7_DELETED_AT)" R8
   stage_verdict || return 1
-  soleur_op_green "  R8 passes: the follow-up PR may flip ADR-241 D2 and D10 and close #8609."
+  soleur_op_green "  R8 passes (gate G4). PR-B also needs G1 #${G1_ISSUE}, G2 #${G2_ISSUE} and G3 (R9)."
+}
+
+# =============================================================================
+# R9 — closure rotation (CTO ruling §2, gate G3). A key that existed while a branch-reachable
+# path to it was open is treated as taken: if the live key was born before BOTH G1 and G2
+# closed, mint one more key (and one more read token, which could read it) and retire the
+# previous one with a 401 proof. Skipped when the live key was born after both closed.
+# =============================================================================
+r9_rotate_token() {
+  local old new slug
+  [[ -z "$(env_get R9_TOKEN_MINTED)" ]] || return 0
+  old="$(token_slugs)"
+  [[ -n "$old" && "$(grep -c . <<<"$old")" == "1" ]] \
+    || { soleur_op_red "  expected exactly one ${READ_TOKEN_NAME} token before the rotation; found $(grep -c . <<<"$old")"; return 1; }
+  soleur_op_env_upsert "$ENV_FILE" R9_TOKEN_OLD_SLUG "$old"
+  impact "users notice nothing — the hosts keep the old token until R9's push and web-2 replace." \
+         "revoke the new slug; the old token keeps working until it is revoked at the end of R9."
+  show_cmd "doppler configs tokens create ${READ_TOKEN_NAME} -p ${APP_PROJECT} -c prd --access read --plain | tr -d '\\n' | doppler secrets set ${TIER_B_NAME} -p ${TIER_B_PROJECT} -c prd --silent >/dev/null"
+  soleur_op_ack_or_die "  Mint a second read token (new before old is revoked) and store it in Tier B? Type 'yes': "
+  mark_changed "a second read token may have been minted and stored in Tier B"
+  if ! doppler configs tokens create "$READ_TOKEN_NAME" -p "$APP_PROJECT" -c prd --access read --plain \
+      | tr -d '\n' | doppler secrets set "$TIER_B_NAME" -p "$TIER_B_PROJECT" -c prd --silent >/dev/null; then
+    new="$(token_slugs | grep -vx -- "$old" | head -1 || true)"
+    [[ -n "$new" ]] && doppler configs tokens revoke "$new" -p "$APP_PROJECT" -c prd >/dev/null 2>&1 || true
+    soleur_op_red "  the set failed; the just-minted token was revoked (slug ${new:-none found}). Tier B still holds the old token."
+    return 1
+  fi
+  r2_verify
+  stage_verdict || return 1
+  soleur_op_env_upsert "$ENV_FILE" R9_TOKEN_MINTED "$(now_iso)"
+}
+# shellcheck disable=SC2319 # check() takes the condition's own status by design
+r9_revoke_old_token() {
+  local old slugs
+  old="$(env_get R9_TOKEN_OLD_SLUG)"
+  slugs="$(token_slugs)"
+  if [[ -z "$old" ]] || ! grep -qx -- "$old" <<<"$slugs"; then soleur_op_yellow "  the old read token is already revoked"; return 0; fi
+  check "exactly two ${READ_TOKEN_NAME} tokens exist (the old one and R9's)" "$([[ "$(grep -c . <<<"$slugs")" == "2" ]]; echo $?)"
+  r2_verify
+  stage_verdict || return 1
+  show_cmd "doppler configs tokens revoke ${old} -p ${APP_PROJECT} -c prd"
+  soleur_op_ack_or_die "  Revoke the old read token (slug ${old})? Type 'yes': "
+  mark_changed "the old read token may have been revoked"
+  doppler configs tokens revoke "$old" -p "$APP_PROJECT" -c prd >/dev/null
+  check "the old slug is gone" "$(! token_slugs | grep -qx -- "$old"; echo $?)"
+  r2_verify
+  stage_verdict
+}
+# shellcheck disable=SC2319 # check() takes the condition's own status by design
+stage_r9() {
+  local g1 g2 gate born live cur retired_fp
+  if [[ -n "$(env_get R9_DONE)" ]]; then
+    soleur_op_yellow "  already satisfied: $(env_get R9_DONE)"
+    return 0
+  fi
+  g1="$(issue_closed_at "$G1_ISSUE")"; g2="$(issue_closed_at "$G2_ISSUE")"
+  printf '  G1 #%s (deploy channel out of branch reach, rotated) closed at: %s\n' "$G1_ISSUE" "${g1:-OPEN}"
+  printf '  G2 #%s (no branch-nameable token writes soleur/prd) closed at: %s\n' "$G2_ISSUE" "${g2:-OPEN}"
+  if [[ -z "$g1" || -z "$g2" ]]; then
+    soleur_op_yellow "  R9 waits for G1 and G2. Nothing changed. #8609 stays open (ADR-241 R1 OPEN) until both close and R9 passes."
+    return 1
+  fi
+  gate="$g1"; later "$g2" "$gate" && gate="$g2"
+
+  if [[ -z "$(env_get R9_PREV_FP)" ]]; then
+    born="$(env_get R1_BORN_AT)"
+    if [[ -n "$born" ]] && later "$born" "$gate"; then
+      soleur_op_green "  G3 holds: the live key (R1) was born ${born}, after G1 and G2 closed (${gate}). No closure rotation."
+      soleur_op_env_upsert "$ENV_FILE" R9_DONE "skipped: R1 key born ${born} after ${gate}"
+      return 0
+    fi
+    printf '  G3 fails: the live key was born %s, not after %s (an unknown birth counts as before).\n' "${born:-unknown}" "$gate"
+    live="$(fp_of_secret "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
+    check "the live key in ${APP_PROJECT}/prd is R1's" "$([[ -n "$live" && "$live" == "$(env_get R1_FP)" ]]; echo $?)"
+    retired_fp="$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)"
+    check "the park is empty (R-step 7 finished)" "$([[ -z "$retired_fp" ]]; echo $?)"
+    stage_verdict || return 1
+    impact "users notice nothing — this copies the live key where the web host cannot read it." \
+           "delete GITHUB_APP_PRIVATE_KEY_RETIRED from ${APP_PROJECT}/${RETIRED_CONFIG}."
+    park_key "$APP_PROJECT" prd "$live"
+    stage_verdict || return 1
+    soleur_op_env_upsert "$ENV_FILE" R9_PREV_FP "$live"
+  fi
+
+  if [[ -z "$(env_get R9_FP)" ]]; then
+    cur="$(fp_of_secret "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY)"
+    if [[ -n "$cur" && "$cur" != "$(env_get R9_PREV_FP)" ]] && app_accepts "$APP_PROJECT" prd GITHUB_APP_PRIVATE_KEY; then
+      soleur_op_yellow "  a new key GitHub accepts is already stored (SHA256:${cur}); recording it"
+      soleur_op_env_upsert "$ENV_FILE" R9_FP "$cur"
+      soleur_op_env_upsert "$ENV_FILE" R9_BORN_AT "$(env_get R9_ATTEMPTED)"
+    else
+      impact "users notice nothing yet — the new key is served from R9's release on." "delete the new row and restore the parked key to ${APP_PROJECT}/prd."
+      store_new_key R9_ATTEMPTED "$(env_get R9_PREV_FP)" "$(env_get R0_PRD_FP)" "$(env_get R0_PRDTF_FP)"
+      soleur_op_env_upsert "$ENV_FILE" R9_FP "$NEW_KEY_FP"
+      soleur_op_env_upsert "$ENV_FILE" R9_BORN_AT "$(now_iso)"
+    fi
+    soleur_op_env_reset "$ENV_FILE" R9_ATTEMPTED
+  fi
+
+  r9_rotate_token
+  # R-steps 3, 4, 5 and 5b again, recording under R9_-prefixed keys.
+  ROT="R9_"
+  stage_r3
+  stage_r4
+  stage_r5
+  stage_r5b
+  ROT=""
+
+  if [[ -z "$(env_get R9_R7_DELETED_AT)" ]]; then
+    retired_fp="$(fp_of_secret "$APP_PROJECT" "$RETIRED_CONFIG" GITHUB_APP_PRIVATE_KEY_RETIRED)"
+    check "the parked key is the one R9 retires" "$([[ -n "$retired_fp" && "$retired_fp" == "$(env_get R9_PREV_FP)" ]]; echo $?)"
+    check "the parked key is not R9's new key" "$([[ "$retired_fp" != "$(env_get R9_FP)" ]]; echo $?)"
+    key_check "web-1 reads isolated/ok/ok for the serving release now"
+    web2_check "web-2's latest boot stage since R9's replace is github_app_key_ok" "$(env_get R9_R5_DISPATCHED_AT)"
+    stage_verdict || return 1
+    retire_old_row "$(env_get R9_PREV_FP)" "$(env_get R9_FP)" R9_R7_DELETED_AT
+  fi
+  r9_revoke_old_token
+  delete_parked
+  stage_verdict || return 1
+  r8_checks "$(env_get R9_FP)" "$(env_get R9_R7_DELETED_AT)" R9
+  stage_verdict || return 1
+  soleur_op_env_upsert "$ENV_FILE" R9_DONE "rotated: key SHA256:$(env_get R9_FP) born $(env_get R9_BORN_AT) after ${gate}"
+  soleur_op_green "  R9 passes: G3 holds (the live key was born after G1 and G2 closed), and G4 re-checked on it."
 }
 
 main() {
@@ -1005,20 +1397,20 @@ main() {
   # skip what is already done, so re-run IS resume.
   run_stage 1 "R0 key inventory and park the old key" stage_r0
   run_stage 2 "R0b evidence limbs K1-K3 (read-only)" stage_r0b
-  run_stage 3 "R0c cross-project reference probe" stage_r0c
-  run_stage 4 "gate: #8209 O10 and O13 DOPPLER_TOKEN_TF" stage_gate
-  run_stage 5 "R1 new key into the isolated project" stage_r1
-  run_stage 6 "R2 read token into Tier B" stage_r2
-  run_stage 7 "R3 deliver the token to web-1" stage_r3
-  run_stage 8 "R4 ship on the new key" stage_r4
-  run_stage 9 "R5 replace standby web-2" stage_r5
-  run_stage 10 "R5b re-pin web-2's SSH host key" stage_r5b
-  run_stage 11 "R6 evict the key from prd" stage_r6
-  run_stage 12 "R7 kill the old key at GitHub" stage_r7
-  run_stage 13 "R8 gate for the follow-up PR" stage_r8
+  run_stage 3 "gate: #8209 O10 and O13 DOPPLER_TOKEN_TF" stage_gate
+  run_stage 4 "R1 new key into the isolated project" stage_r1
+  run_stage 5 "R2 read token into Tier B" stage_r2
+  run_stage 6 "R3 deliver the token to web-1" stage_r3
+  run_stage 7 "R4 ship on the new key" stage_r4
+  run_stage 8 "R5 replace standby web-2" stage_r5
+  run_stage 9 "R5b re-pin web-2's SSH host key" stage_r5b
+  run_stage 10 "R6 evict the key from prd" stage_r6
+  run_stage 11 "R7 kill the old key at GitHub" stage_r7
+  run_stage 12 "R8 gate G4 for the follow-up PR" stage_r8
+  run_stage 13 "R9 closure rotation (gate G3)" stage_r9
 
-  soleur_op_summary_begin "BOOTSTRAP COMPLETE — #8609 R0-R8 verified."
-  soleur_op_summary_line "Open the follow-up PR: ADR-241 D2 and D10 -> accepted, Closes #8609 (plan Phase 5)."
+  soleur_op_summary_begin "BOOTSTRAP COMPLETE — #8609 R0-R9 verified."
+  soleur_op_summary_line "PR-B (ADR-241 D2 and D10 -> accepted, Closes #8609) needs G1 #${G1_ISSUE} and G2 #${G2_ISSUE} closed, G3 (R9) and G4 (R8) — link each in its body."
   soleur_op_summary_line "Recorded values (fingerprints, run ids, timestamps — no secrets): ${ENV_FILE} (mode 600)."
   soleur_op_summary_line "Run ledger: ${SOLEUR_BOOTSTRAP_LEDGER}"
 }

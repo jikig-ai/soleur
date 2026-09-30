@@ -30,7 +30,7 @@ one, and D2's is `proposed`.
 - **D9's residuals are standing constraints.** They are not accepted as closed; each is discharged
   by the issue named with it.
 - **D10 is `adopting`** (added 2026-09-30, #8609; see the Amendment log). It flips with D2, in the
-  PR that closes #8609.
+  PR that closes #8609, once residual R1's gates G1–G4 hold.
 
 The ordinal was chosen after enumerating every `origin/*` ref: `feat-8322-affected-test-gate`
 already claims ADR-238. Re-run that probe immediately before merge — a parallel #8211 session may
@@ -90,6 +90,13 @@ Credentials are split by what their disclosure costs, not by what they are named
 
 Tiering is by measured config and access, never by a secret's name (learning
 `2026-05-15-token-namespace-divergence-across-secret-stores.md`).
+
+> **Amended 2026-09-30 (#8609), D1 census:** `WEBHOOK_DEPLOY_SECRET` and the CF Access client ID
+> and secret in `soleur/prd_terraform` are **Tier B**, not Tier A. Together they authenticate
+> `/hooks/infra-config`, which can rewrite `ci-deploy.sh` on the production host and read the host's
+> credential file, so they write infrastructure. Their eviction to Tier B and their rotation is
+> [#9294](https://github.com/jikig-ai/soleur/issues/9294) (gate G1 of residual R1). This is a tier
+> classification change, recorded here rather than as a new ADR. See the Amendment log.
 
 ### D2 — The boundary is a main-only environment secret
 
@@ -315,7 +322,7 @@ These are **not** accepted as closed.
 
 | # | Residual | Status |
 |---|---|---|
-| R1 | The soleur-ai **runtime** key in Doppler `prd` is readable by `DOPPLER_TOKEN_PRD` and by every `prd_*` branch-config repo-secret token. The App holds `administration:write` on `jikig-ai/soleur`, so a holder can rewrite an environment's deployment-branch policy — which defeats D2 — and can use `contents:write` plus its ruleset-bypass listing to change scripts that `main` jobs run. | **CLOSING — mechanism merged; closes when the old key's JWT gets `401`, the App lists exactly one key, and the project lists exactly one token after #8209 O13** (D10, 2026-09-30). Opened 2026-09-22 as: **OPEN — [#8609](https://github.com/jikig-ai/soleur/issues/8609).** Filed at `p1-high`, `type/security`, ranked on its own risk (the runtime key reaches two third-party installations **today**), not merely as a cutover precondition. Blocks #8211 and the first real git-data cutover. **D2 stays `proposed` until it closes.** Detective control meanwhile: `scheduled-terraform-drift.yml` (Tier B) plans the `github_repository_environment*` resources and the `infra/github` rulesets, so a rewritten policy or bypass list surfaces as drift on that job's existing email and Sentry route. |
+| R1 | The soleur-ai **runtime** key in Doppler `prd` is readable by `DOPPLER_TOKEN_PRD` and by every `prd_*` branch-config repo-secret token. The App holds `administration:write` on `jikig-ai/soleur`, so a holder can rewrite an environment's deployment-branch policy — which defeats D2 — and can use `contents:write` plus its ruleset-bypass listing to change scripts that `main` jobs run. | **OPEN — [#8609](https://github.com/jikig-ai/soleur/issues/8609).** Filed at `p1-high`, `type/security`, ranked on its own risk (the runtime key reaches two third-party installations **today**), not merely as a cutover precondition. Blocks #8211 and the first real git-data cutover. **D2 stays `proposed` until it closes.** Detective control meanwhile: `scheduled-terraform-drift.yml` (Tier B) plans the `github_repository_environment*` resources and the `infra/github` rulesets, so a rewritten policy or bypass list surfaces as drift on that job's existing email and Sentry route. |
 | R2 | Web-platform root state is Tier-A readable and holds other Terraform-minted secrets. | **PRE-EXISTING, accepted by ADR-220.** Narrowed here: the two `doppler_secret.github_app_*` mirrors leave that state. |
 | R3 | Tier-B dry runs can no longer be dispatched from a branch ref. | **ACCEPTED.** A branch-ref Tier-B dispatch is exactly the reach this ADR closes. |
 | R4 | The PR plan no longer shows live drift. | **ACCEPTED.** `scheduled-terraform-drift.yml` owns drift; the plan comment header says so. |
@@ -323,6 +330,22 @@ These are **not** accepted as closed.
 | R6 | The Tier-B environment secrets are operator-seeded, because the Terraform identity cannot write environment secrets until the infra App exists. | **OPEN — [#8610](https://github.com/jikig-ai/soleur/issues/8610).** Target design: keep `doppler_service_token.git_data_root_read` in the (by then Tier-B) root-key state and publish it with `github_actions_environment_secret` under the infra App. That issue also drops the dangling `-target=` lines of the forgotten addresses and deletes Guard 3's one-shot arm. |
 | R7 | Before this change the Tier-A backend keys were **read/write** on `soleur-terraform-state`, so a branch actor could tamper with web-platform state — for example by swapping a `doppler_service_token.key` that a later `main` run publishes. | **FOLDED IN; closes at the runbook's state-key step (O5b).** D4's read-only Tier-A key plus `TF_STATE_AWS_*` in Tier B, with every backend-credential extraction in a Tier-B job preferring the Tier-B pair. Every **writer** of that bucket must be Tier B before the swap, `apply-sentry-infra.yml`'s apply job included. Required in-PR by both the CTO and the architecture reviews. |
 | R8 | `GITHUB_APP_WEBHOOK_SECRET` and `GITHUB_CLIENT_SECRET` stay in Doppler `prd`, as branch-reachable as R1's key was. A holder can forge inbound webhook deliveries or act as the App's OAuth client; neither signs an App JWT or mints an installation token. The webhook secret is minted by `random_id.github_webhook_secret` in the Tier-A-readable web-platform state (`github-app.tf`), so moving its Doppler copy closes nothing until its minting moves. | **OPEN — [#9277](https://github.com/jikig-ai/soleur/issues/9277)** (added 2026-09-30, #8609). Move the webhook secret's minting out of the web-platform root, then both names into `soleur-github-app` (D10). Re-evaluate when #8610 lands. |
+
+> **Superseded 2026-09-30 (#8609), as to R1's status:** **OPEN — mechanism merged (D10); closes on
+> G1–G4.** The mechanism is D10; the residual closes only when all four gates hold, because two
+> branch-to-key chains outlive the merge (the deploy channel and Tier-A writes to `prd`, both in D10's
+> residuals):
+>
+> - **G1** — [#9294](https://github.com/jikig-ai/soleur/issues/9294) closed: the deploy channel
+>   (`WEBHOOK_DEPLOY_SECRET` and the CF Access client pair) is out of branch reach and rotated.
+> - **G2** — [#9295](https://github.com/jikig-ai/soleur/issues/9295) closed: no branch-nameable token
+>   can write `soleur/prd`.
+> - **G3** — the live key was born after G1 and G2 closed. If it was not, the runbook's R-step 9
+>   (closure rotation) mints one more key and read token, and the previous key gets `401`.
+> - **G4** — the existing probes pass: the old key's JWT gets `401`, the App lists exactly one key,
+>   and the project lists exactly one token after #8209 O13 (the runbook's R-step 8).
+>
+> The runbook's §Runtime App key (#8609) holds the gates' evidence commands. See the Amendment log.
 
 ### D10 — The runtime App key lives in its own Doppler project, `soleur-github-app`
 
@@ -362,19 +385,59 @@ cloud-init and is not an SSH or rescue edit, so `hr-prod-host-config-change-immu
 holds. web-2, whose credentials are birth-frozen, gets the line only through an immutable
 `web_host_replace` from `main`.
 
-**The key is handed only to signed images.** The deploy overlays exactly one name: `ci-deploy.sh`
-and the boot path download `prd` as before, then fetch `GITHUB_APP_PRIVATE_KEY` from the isolated
-project and let it win — only when the image being run is a `@sha256:` ref whose cosign signature
-verified against the pinned release identity, whatever the global `IMAGE_VERIFY_MODE` (#6129).
-Before promotion, the canary proves GitHub accepts the key (`GET /app` returns `slug=soleur-ai` and
-the expected `id`); a missing or rejected key leaves the running container serving. Until the key is
-evicted from `prd`, a failed fetch falls back to the still-valid `prd` key, and says so in Sentry.
+**The key is handed only to images signed from `main`.** The deploy overlays exactly one name:
+`ci-deploy.sh` and the boot path download `prd` as before, then fetch `GITHUB_APP_PRIVATE_KEY` from
+the isolated project and let it win — only for an image signed by `reusable-release.yml` from a run
+whose ref is `refs/heads/main` of `jikig-ai/soleur`. The verifier pins that on the caller's run
+(`--certificate-github-workflow-ref=refs/heads/main` and
+`--certificate-github-workflow-repository=jikig-ai/soleur`, next to the SAN and issuer), whatever the
+global `IMAGE_VERIFY_MODE` (#6129). The SAN alone is not enough: it names the reusable workflow's
+ref, which a branch run satisfies by calling `reusable-release.yml@main`; and the identity no longer
+admits a `refs/tags/v…` arm. The pin holds on **every hand-off arm**:
+
+- **the deploy** — the digest `verify_image_signature` returned with rc 0, and nothing else, is the
+  overlay's verified ref;
+- **the local-cache arm** — the reused image is re-verified by its digest, or overlaid with an empty
+  ref, which means no key;
+- **boot** — the key goes only to the digest `ci-deploy.sh` last verified, recorded root-only on the
+  host; any other image reference boots keyless (`unverified_image`, in Sentry).
+
+The overlay refuses a `prd` env that carries a runtime-hijack name, by **prefix class** rather than
+by a list of names: `NODE_*` except `NODE_ENV`, `LD_*`, `GLIBC_*`, `GIT_*`, `BASH_*`, `ENV`, `PATH`,
+`SHELL`, `HOME`, `TMPDIR`, `SSL_*`, `OPENSSL_*`, `CURL_*`, `*_PROXY`/`*_proxy`,
+`NPM_CONFIG_*`/`npm_config_*`, `PYTHON*` and `PERL*`. A collision fails safe: the `prd` key before
+eviction, a refused canary after. Before promotion, the canary proves GitHub accepts the key
+(`GET /app` returns `slug=soleur-ai` and the expected `id`). The probe runs as an absolute-path node
+under `env -i`, which passes only `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`, so a planted `node`
+or an environment hook cannot answer for it. The probe is code inside the image under test: `ok`
+proves key acceptance for an image whose provenance the pin above already established, and is never
+provenance evidence itself. A missing or rejected key leaves the running container serving. Until the
+key is evicted from `prd`, a failed or withheld fetch falls back to the still-valid `prd` key, says so
+in Sentry, and reports at boot as `github_app_key_ok_fallback`, never as `github_app_key_ok`.
+
+**A key that existed while a branch-reachable path to it was open is treated as taken.** That is why
+the old key is rotated rather than moved, and it applies to the new key too: if it was born before
+residual R1's gates G1 and G2 closed, the runbook's R-step 9 mints one more key (and read token) and
+retires the previous one with a `401` proof.
 
 **Residuals D10 does not close**, recorded so that they are not read as closed:
 
 - **Host, container and unit environment.** The key is in the web container's environment, and the
-  token is in the host's credential file, which eight units load — the class today's full-`prd`
-  host token already occupies. D10 adds one name to that file and narrows nothing else on the host.
+  token is in the host's credential file — the class today's full-`prd` host token already occupies.
+  Eight units load that file; each carries `UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN` (applied after
+  `EnvironmentFile=`), so only `ci-deploy.sh` and the boot download, which parse the file themselves,
+  see the token. What remains is host-compromise class.
+- **The gate's enforcer is replaceable through the deploy channel.** `/hooks/infra-config`
+  authenticates only by the Tier-A HMAC secret and CF Access pair, and can rewrite `ci-deploy.sh` and
+  read the host's token. Until that pair leaves branch reach, the host-side gates above are defence in
+  depth. **Closure gate G1**, [#9294](https://github.com/jikig-ai/soleur/issues/9294).
+- **Tier A can write `prd`.** The prefix-class refusal is defence in depth: a `prd` writer can still
+  use a name outside the classes, or change the value of an allowed one. **Closure gate G2**,
+  [#9295](https://github.com/jikig-ai/soleur/issues/9295).
+- **Signer-side guards.** There is no tag ruleset for `v*`/`web-v*`, and neither `reusable-release.yml`
+  nor `web-platform-release.yml`'s `workflow_dispatch` checks its ref before signing. The verifier pin
+  makes this hygiene, not a gate, because a signer runs code the branch controls and so cannot be the
+  boundary: [#8780](https://github.com/jikig-ai/soleur/issues/8780).
 - **Hetzner metadata.** For web hosts born after the token is seeded, it is in `user_data`, which
   the metadata endpoint serves to host processes, so an SSRF in the app could reach it. web-1's
   `user_data` is birth-frozen and never carries it. The web-host drop of `169.254.169.254` is
@@ -385,7 +448,7 @@ evicted from `prd`, a failed fetch falls back to the still-valid `prd` key, and 
 - **The two opt-in Tier-B jobs carry the token** (not the key): the deploy-pipeline push and the
   web-host create/replace jobs. Same reasoning as A3.
 - **`DOPPLER_TOKEN_TF` and workplace administrators** read every project. The birth gate above and
-  R1's closing condition (exactly one project token after O13) bound the first; the second is the
+  gate G4 (exactly one project token after O13) bound the first; the second is the
   vendor-side trust every Doppler-held secret already rests on.
 
 The canonical operator sequence is
@@ -405,7 +468,11 @@ The canonical operator sequence is
 | D7 state custody | `adopting` | The privileged bucket's object matches the source by sha256, lineage and serial; a Tier-A key gets `403` on it; the two custody forgets have applied. |
 | D8 census | `adopting` | Every mutation row of the Guard Contract is measured RED, and the suite is green on the PR head. |
 | D9 residuals | Standing constraints | Not accepted. Each is discharged by the issue named with it. |
-| D10 runtime App key | `adopting` | R7 and R8 of the runbook's §Runtime App key (#8609) pass: the old key's JWT gets `401`, both web hosts report `isolated`/`ok`, the App lists exactly one key (R1's fingerprint), and the project lists exactly one token after #8209 O13. Flips to `accepted` with D2. |
+| D10 runtime App key | `adopting` | Residual R1's gates G1–G4 hold (see the blockquote under the D9 table): #9294 and #9295 closed; the live key born after both closures, or rotated by the runbook's R-step 9 with the previous key at `401`; and the runbook's R-steps 7 and 8 pass — the old key's JWT gets `401`, both web hosts report the isolated key, the App lists exactly one key, and the project lists exactly one token after #8209 O13. Flips to `accepted` with D2, in PR-B, which is not opened until G1–G3 are evidenced with links. |
+
+> **Superseded 2026-09-30 (#8609), as to D2's row:** D2 flips when **residual R1 closes (G1–G4)**
+> and residual R7 closes at #8209 O5b. "R7" in D2's row is the residual (the state key), not the
+> runbook's R-step 7. D2 and D10 flip together, in PR-B.
 
 ## Consequences
 
@@ -518,13 +585,27 @@ sequence in the runbook's §Runtime App key (#8609), which is the canonical copy
 
 - **D10 added, `adopting`.** The decision, its supersession of A11 for web-1 and its residuals are
   in D10 above.
-- **R1 → CLOSING.** The new status leads the cell and the 2026-09-22 text follows it unchanged; it
-  closes on the measured probes named there, not on the merge.
+- **R1 → OPEN — mechanism merged (D10); closes on G1–G4.** The 2026-09-22 cell stays verbatim; the
+  new status is the `Superseded 2026-09-30` blockquote under the D9 table. It is OPEN, not closing,
+  while two branch-to-key chains exist: the deploy channel (G1, #9294) and Tier-A writes to `prd`
+  (G2, #9295). G3 is the closure rotation (runbook
+  R-step 9) and G4 the existing probes (runbook R-step 8).
+- **D1 census amendment.** `WEBHOOK_DEPLOY_SECRET` and the CF Access client pair are reclassified
+  Tier B (blockquote under D1); their eviction and rotation is #9294. A tier classification change,
+  not a new ADR.
+- **D10 residuals added:** the deploy channel can replace the gate's enforcer (G1, #9294); Tier A can
+  write `prd` (G2, #9295); no signer-side or tag guards (hygiene, #8780). The host unit-environment
+  residual records the `UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN` narrowing this PR applies.
 - **R8 added** (webhook and client secrets, #9277), because moving their Doppler copies closes
   nothing until the webhook secret's minting moves.
 - **A11 annotated, not rewritten.** It records the deferral as it was decided.
-- **D2 stays `proposed`.** D2 and D10 flip to `accepted` in the follow-up PR that closes #8609,
-  after R7 and R8; that PR also records the #8209 limb of ADR-220 D2–D3.
+- **D2 stays `proposed`.** D2 and D10 flip to `accepted` in the follow-up PR (PR-B) that closes
+  #8609, after the runbook's R-steps 7 and 8 pass and gates G1–G4 hold. PR-B is not opened until
+  G1–G3 are evidenced with links (the two issue closures, and the live key's birth time against their
+  closure times). That PR also records the #8209 limb of ADR-220 D2–D3, naming it "ADR-241 D2
+  `accepted`" (residual R1 **and** residual R7), never by runbook R-step labels.
+- **Labels.** In this ADR, R1–R8 are residuals. The runbook's steps are written "R-step N"
+  (R-step 7 is the GitHub key delete); an unqualified "R7" here always means the residual.
 
 Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
 
@@ -546,4 +627,4 @@ Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-fr
   ADR-228 (generated operator scripts), ADR-237 (host keys are pinned; its #8209 residual is in
   scope here)
 - Issues: #8209, #6167, #8189, #8211, #8385, #8093
-- D10 (2026-09-30): #8609, #9277, #9278, #6730, #6129, #7095
+- D10 (2026-09-30): #8609, #9277, #9278, #6730, #6129, #7095, #9294 (G1), #9295 (G2), #8780
