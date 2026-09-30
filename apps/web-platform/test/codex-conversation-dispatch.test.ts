@@ -150,7 +150,9 @@ describe("Codex conversation dispatch bridge", () => {
 
     await expect(dispatchCodexConversationToWebSocket(options)).rejects.toThrow("socket send failed");
 
-    expect(persistedStatuses).toEqual(["running", "completed"]);
+    // The running state is persisted by transitionAttempt; the lifecycle event
+    // ledger receives provider status events, including the terminal outcome.
+    expect(persistedStatuses).toEqual(["completed"]);
     expect(repository.transitionAttempt.mock.calls).toEqual([["synthetic-attempt", "running"]]);
   });
 

@@ -90,7 +90,7 @@ describe("migration 145: Codex auth-mode rebinding", () => {
     expect(transition).toMatch(/^\s*SELECT a\.run_id INTO v_run_id[\s\S]*?^\s*SELECT r\.auth_mode_generation INTO v_run_generation[\s\S]*?FROM public\.agent_engine_runs AS r WHERE r\.id = v_run_id FOR UPDATE;[\s\S]*?^\s*SELECT a\.\* INTO v_row[\s\S]*?WHERE a\.id = p_attempt_id AND a\.run_id = v_run_id FOR UPDATE;/m);
     expect(lifecycle).toMatch(/^\s*SELECT r\.auth_mode_generation INTO v_run_generation[\s\S]*?FROM public\.agent_engine_runs AS r WHERE r\.id = p_run_id FOR UPDATE;[\s\S]*?^\s*SELECT a\.\* INTO v_attempt[\s\S]*?WHERE a\.id = p_attempt_id AND a\.run_id = p_run_id FOR UPDATE;/m);
     expect(lifecycle).toMatch(/^\s*INSERT INTO public\.agent_engine_events[\s\S]*RETURNING \* INTO v_row/m);
-    expect(lifecycle).toMatch(/IF p_payload->>'source_type' = 'status'[\s\S]*p_payload->>'status' IS DISTINCT FROM v_attempt\.status THEN\s+PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
+    expect(lifecycle).toMatch(/IF p_payload->>'source_type' = 'status'[\s\S]*p_payload->>'status' IS DISTINCT FROM v_attempt\.status THEN(?:\s*--[^\n]*\n)*\s*PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
     expect(lifecycle).not.toMatch(/UPDATE public\.agent_engine_attempts AS a SET/);
     const down = read("148_codex_lifecycle_lock_order.down.sql");
     const priorLifecycle = read("147_codex_lifecycle_state_sync.sql").match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";

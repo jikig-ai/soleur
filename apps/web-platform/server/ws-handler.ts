@@ -394,7 +394,12 @@ function abortSession(
   reason?: Parameters<typeof abortLegacySession>[2],
   leaderId?: string,
 ): number {
-  const aborted = abortLegacySession(userId, conversationId, reason, leaderId) ?? 0;
+  const legacyAbortResult = leaderId === undefined
+    ? reason === undefined
+      ? abortLegacySession(userId, conversationId)
+      : abortLegacySession(userId, conversationId, reason)
+    : abortLegacySession(userId, conversationId, reason, leaderId);
+  const aborted = legacyAbortResult ?? 0;
   const key = codexTurnKey(userId, conversationId);
   const codexTurn = codexTurnAbortControllers.get(key);
   if (codexTurn) {

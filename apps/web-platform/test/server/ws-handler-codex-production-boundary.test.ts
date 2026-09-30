@@ -10,7 +10,8 @@ const fixture = vi.hoisted(() => ({
   workspaceId: "a1b2c3d4-0000-4000-8000-000000000123",
   repoUrl: "https://github.com/example/synthetic-repo.git",
   mode: "api-key" as "api-key" | "managed",
-  rpc: vi.fn(async (_name: string): Promise<{ data: { id: string } | null; error: null }> => ({ data: null, error: null })),
+  generation: 0,
+  rpc: vi.fn(async (_name: string): Promise<{ data: unknown; error: null }> => ({ data: null, error: null })),
   from: vi.fn(),
   spawn: vi.fn(() => { throw new Error("Unexpected provider process launch"); }),
   captureException: vi.fn(),
@@ -75,7 +76,7 @@ describe("Codex real production handler boundary", () => {
           id: "synthetic-codex-run", execution_kind: "conversation",
           conversation_id: fixture.conversationId, workspace_id: fixture.workspaceId,
           engine_id: "codex", auth_mode: fixture.mode, adapter_version: "codex-v1",
-          auth_mode_generation: 0,
+          auth_mode_generation: fixture.generation,
           created_at: "2026-01-01T00:00:00Z",
         } : {
           id: fixture.conversationId, user_id: fixture.userId,
@@ -124,6 +125,7 @@ describe("Codex real production handler boundary", () => {
 
   it.each(["api-key", "managed"] as const)("rejects %s before credentials, attempts or provider calls", async (mode) => {
     fixture.mode = mode;
+    fixture.generation = 0;
     const credentialFactory = vi.spyOn(credentials, "createCodexApiKeyProviderForUser");
     const frames = await chat();
     assertNoExecution(frames);
@@ -142,6 +144,30 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.captureException).toHaveBeenCalledWith(expect.objectContaining({
       message: "Codex conversation attachments are not qualified",
     }));
+  });
+
+  it("withholds a switched Codex conversation until this member acknowledges history transfer", async () => {
+    fixture.mode = "api-key";
+    fixture.generation = 1;
+    fixture.rpc.mockImplementation(async (name: string) => name === "codex_history_transfer_acknowledged"
+      ? { data: false, error: null }
+      : { data: null, error: null });
+
+    const frames = await chat();
+
+    expect(frames).toEqual([{
+      type: "codex_history_transfer_required",
+      conversationId: fixture.conversationId,
+      authModeGeneration: 1,
+    }]);
+    expect(fixture.rpc).toHaveBeenCalledWith("codex_history_transfer_acknowledged", {
+      p_conversation_id: fixture.conversationId,
+      p_auth_mode_generation: 1,
+    });
+    expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
+    expect(fixture.from).not.toHaveBeenCalledWith("api_keys");
+    expect(fixture.from).not.toHaveBeenCalledWith("messages");
+    expect(fixture.spawn).not.toHaveBeenCalled();
   });
 
   it("routes abort_turn through the real handler into the active Codex dispatch signal", async () => {
