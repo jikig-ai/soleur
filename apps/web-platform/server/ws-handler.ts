@@ -37,6 +37,8 @@ import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { ERR_ATTACHMENT_NOT_FOUND } from "./error-messages";
+import { validateAttachmentRef } from "./attachment-pipeline";
 import { createChildLogger } from "./logger";
 import {
   connectionThrottle,
@@ -2336,12 +2338,28 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       // Materialize pending conversation on first real message
       if (!session.conversationId && session.pending) {
         const stripped = userContent.replace(/@\w+\s*/g, "").trim();
-        if (!stripped) {
+        // `attachments: []` is truthy: test the length, never `!msg.attachments`.
+        if (!stripped && (msg.attachments?.length ?? 0) === 0) {
           sendToClient(userId, {
             type: "error",
             message: "Please include a message along with the @-mention.",
           });
           return;
+        }
+        // First message with ANY attachments (#9297): validate every ref BEFORE
+        // createConversation, text or not. A forged/stale ref (e.g. uploaded
+        // under a pending id a reconnect has since re-minted) must not create
+        // the conversation row or the user message before the attachment
+        // pipeline rejects it.
+        if ((msg.attachments?.length ?? 0) > 0) {
+          try {
+            for (const a of msg.attachments ?? []) {
+              validateAttachmentRef(a, userId, session.pending.id);
+            }
+          } catch (refErr) {
+            sendToClient(userId, { type: "error", message: sanitizeErrorForClient(refErr) });
+            return;
+          }
         }
 
         try {
@@ -2379,6 +2397,24 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
           );
+          // Two-tab context_path fallback: the row id differs from the pending
+          // id the client uploaded under, so the pipeline prefix check would
+          // fail closed AFTER the user message row was appended to the other
+          // tab's conversation. Fail closed here instead: countable, and no
+          // empty user message. Session state is left untouched (still pending).
+          if (resolvedId !== pendingId && (msg.attachments?.length ?? 0) > 0) {
+            reportSilentFallback(null, {
+              feature: "attachments",
+              op: "attachments-pending-id-diverged",
+              message: "first-message attachments uploaded under a pending id that diverged from the resolved conversation id",
+              extra: { userId, pendingId, resolvedId, attachmentCount: msg.attachments?.length },
+            });
+            sendToClient(userId, {
+              type: "error",
+              message: sanitizeErrorForClient(new Error(ERR_ATTACHMENT_NOT_FOUND)),
+            });
+            return;
+          }
           session.conversationId = resolvedId;
           session.pending = undefined;
           // Seed the routing cache so chat-case on subsequent turns
