@@ -29,3 +29,13 @@ Subagent b5db5525 completed successfully but returned no readable output; recove
 - IMPORTANT/CRITICAL findings fixed inline: statuses→issues fold; board meta into ctx (kills TOCTOU + degrade-blind + read→write import); authoritative `done` commit under SWR mutation-discard (pending/in-flight id registries — incl. the confirmed-patch-revert CRITICAL); disconnect/cap abort propagation; cap telemetry (log.warn + Sentry mirror); 60s client stall watchdog + server `: ka` keepalives; `loadFailed` sheet state; `NoResults` `!isValidating` gate; badge `partial` latch; `Vary: Accept`; `IssueCard` memo; `{issues, board}` on `workstream_issues_list`; createIssue `...cur` spreads; hooks contract test vs real `listRepoIssues`; cap-timer fake-timer test; post-loop reconcile flush test.
 - Live SSE re-verified post-refactor: `200` `text/event-stream` + `Vary: Accept`, meta → done on the QA workspace.
 - Wontfix/scope-out: SSE codec shared extraction (third surface will force it); `Accept` q-value parsing (cosmetic); overlapping-feed upstream duplication (pre-existing parity — same chain cost as bulk); fetcher AbortController on unmount (mountedRef guards commits; resolve-write narrowing noted).
+
+## Ship Phase (soleur:ship)
+- QA: plan scenarios prose-only → skipped per skill; nav-states gate INFRA-FLAKE locally (#5009 signature, host memory pressure; 12 shifting failures, all untouched surfaces) — CI `e2e` authoritative.
+- Compound: learning `2026-09-30-swr-mid-fetch-mutates-discard-the-fetchers-resolve.md`; review-skill sharp-edge bullet applied (operator-approved); qa-auth raw-JSON cookie comment; auto-consolidation archive DEFERRED to post-ship (ship gates read plan/tasks live).
+- Review trailer: `Reviewed-By-Soleur` + `Reviewed-Coverage: full 12/12` (f357c5bf58).
+- Preflight: 12 checks PASS/SKIP (sensitive-path → `single-user incident` verified; discoverability_test ran green).
+- Phase 5.5: advisor consult = complete; PIR no-signal; operator-step/vendor/soak/deploy-drift gates clear; `compliance/critical` auto-applied; merge-base lints + ADR ordinals pass.
+- Battery: `battery-owed.sh` → OWED (fresh SHA); local affected battery skipped per operator ruling "rely on CI" — CI `test` context is the merge gate.
+- PR #9267: draft→ready, `compliance/critical` labeled, body refreshed post-review, squash auto-merge armed on head c4dea08c69 (+merge commit).
+- Pending: CI green → auto-merge → Phase 7 cleanup (worktree reap, spec/plan archive).
