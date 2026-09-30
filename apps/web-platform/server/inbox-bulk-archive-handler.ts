@@ -42,7 +42,6 @@ import {
   type ArchiveEligibilityReason,
   type BulkItemRef,
   type BulkItemResult,
-  type BulkOutcome,
 } from "@/lib/inbox-archive-eligibility";
 
 const UUID_PATTERN =
