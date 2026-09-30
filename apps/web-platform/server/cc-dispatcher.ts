@@ -110,6 +110,7 @@ import {
 } from "./narrate-tool";
 import { buildCrmTools } from "@/server/crm/crm-tools";
 import { updateConversationFor } from "./conversation-writer";
+import { registerLiveLoopProbe } from "./agent-session-registry";
 import {
   getUserServiceTokens,
   patchWorkspacePermissions,
@@ -2955,6 +2956,12 @@ export function hasActiveCcQuery(conversationId: string): boolean {
   if (!_runner) return false;
   return _runner.hasActiveQuery(conversationId);
 }
+
+// Register into the shared cross-lineage liveness predicate
+// (agent-session-registry.ts): the stuck-active reaper and ws-handler's
+// dead-socket reap consult it, and the cc lineage's live Queries are
+// invisible to the legacy `activeSessions` registry without this probe.
+registerLiveLoopProbe(hasActiveCcQuery);
 
 /**
  * #5356 — signal the process-wide cc runner to close a conversation's live

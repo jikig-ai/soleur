@@ -211,6 +211,7 @@ import {
   unregisterSession,
   getSession,
   forEachSessionForConversation,
+  hasLiveAgentLoop,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
 import { classifySandboxStartupError } from "./sandbox-startup-classifier";
@@ -838,6 +839,23 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
     // per-row, not cross-row.
     await Promise.allSettled(
       candidates.map(async (conv) => {
+        // #9270 review P1 — live-loop guard BEFORE the status flip. The
+        // RPC's `s.id IS NULL` arm selects rows with NO slot row — but a
+        // resume/follow-up turn is slotless BY DESIGN (`acquireSlot` runs
+        // on start_session only; `touchSlot` is UPDATE-only), so a live
+        // resumed/follow-up turn is a guaranteed false-positive candidate
+        // once status='active' — and for the legacy lineage this path
+        // abortSession()s a running turn mid-flight. SQL cannot see
+        // in-process liveness; hasLiveAgentLoop (cc runner probe +
+        // legacy activeSessions) is the no-false-reap discriminator
+        // ws-handler's dead-socket reap already uses.
+        if (hasLiveAgentLoop(conv.user_id, conv.id)) {
+          log.info(
+            { userId: conv.user_id, conversationId: conv.id },
+            "stuck-active reap skipped: live agent loop",
+          );
+          return;
+        }
         // #3463: race-window guard. The candidate set was computed
         // ≤300s ago (the reaper poll cadence); the candidate's session may have completed cleanly
         // (result branch wrote `waiting_for_user`) in the interval

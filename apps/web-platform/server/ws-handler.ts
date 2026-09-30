@@ -53,7 +53,7 @@ import {
   getActiveTurnConversation,
   setActiveTurnConversation,
   clearActiveTurnConversation,
-  forEachSessionForConversation,
+  hasLiveAgentLoop,
 } from "./agent-session-registry";
 import {
   streamReplayBuffer,
@@ -468,15 +468,10 @@ export function abortActiveSession(userId: string, session: ClientSession): void
  * (knowledge-base/engineering/architecture/decisions): reap on agent-loop
  * liveness, not socket focus.
  */
-function hasLiveAgentLoop(userId: string, conversationId: string): boolean {
-  if (hasActiveCcQuery(conversationId)) return true;
-  let found = false;
-  forEachSessionForConversation(userId, conversationId, () => {
-    found = true;
-    return true; // stop at the first match
-  });
-  return found;
-}
+// The predicate itself is imported from the shared registry
+// (agent-session-registry.hasLiveAgentLoop) — the stuck-active reaper
+// consults the same cross-lineage check so a slotless-but-live turn is
+// never reaped from either path.
 
 export async function tryLedgerDivergenceRecovery(
   userId: string,
