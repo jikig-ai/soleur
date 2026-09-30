@@ -57,7 +57,12 @@ import {
   type WorkflowName,
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
-import { reportSilentFallback, mirrorWithDebounce } from "./observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+  mirrorWithDebounce,
+} from "./observability";
+import { stripStopGateMarkup } from "./stop-gate-markup";
 // #5394 — skip the Sentry mirror for the expected repo-cloning/error dispatch
 // block (re-thrown to the dispatch catch, which emits the honest client message).
 import { RepoNotReadyError } from "./repo-readiness";
@@ -2099,8 +2104,29 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       if (!block || typeof block !== "object") continue;
       const b = block as { type?: string };
       if (b.type === "text") {
-        const text = (block as { text?: string }).text ?? "";
+        const rawText = (block as { text?: string }).text ?? "";
+        // Re-arms the per-block runaway watchdog. MUST stay ahead of the strip
+        // below: a markup-only block is still evidence the model is alive.
         recordAssistantBlock(state, "text", null);
+        // Plugin Stop-hook escape-hatch markup (`<stop>OPERATOR-GATE...</stop>`)
+        // must never reach a user-visible surface or replace the previous
+        // block's text (W8). Runs BEFORE the chapter-prefix logic so a
+        // markup-only block cannot consume `prefixEmitted`.
+        const stripped = stripStopGateMarkup(rawText);
+        if (stripped.hadMarkup) {
+          // Never the body: conversationId, whether the block was markup-only,
+          // and how many bytes were removed.
+          warnSilentFallback(null, {
+            feature: "soleur-go-runner",
+            op: "stop-gate-markup-stripped",
+            extra: {
+              conversationId: state.conversationId,
+              markupOnly: stripped.markupOnly,
+              strippedBytes: Buffer.byteLength(rawText) - Buffer.byteLength(stripped.text),
+            },
+          });
+        }
+        const text = stripped.text;
         if (text) {
           // #3436 Phase 3.B — prepend the chapter prefix to the first
           // text block of the turn. Server-side guarantee — the system
