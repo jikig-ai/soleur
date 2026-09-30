@@ -2186,12 +2186,20 @@ assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-al
 # unchanged — the restart still happens — so the anchor moves to the guarded construct.
 assert "bootstrap restarts inngest-server.service (new ExecStart loads on redeploy)" \
   "grep -qE '^if ! systemctl restart inngest-server\.service; then$' '$BOOTSTRAP_SH'"
-# The upgrade-drain resume must still run after the restart (R2 — restart must
-# not orphan the pause/resume pairing). Match the actual resume COMMAND
-# (`"$INSTALL_PATH" resume`) precisely — no broad `|| grep resume` fallback,
-# which would vacuously pass on any comment line merely mentioning "resume".
-assert "upgrade-drain resume command still present (pause/resume pairing intact)" \
-  "grep -qE '\"\\\$INSTALL_PATH\" resume' '$BOOTSTRAP_SH'"
+# #9219: the bootstrap may invoke ONLY inngest-cli verbs measured to exist on the pinned
+# binary. `pause`/`resume` were measured ABSENT on v1.19.4 and v1.45.1 ("No help topic",
+# inngest-cli.provenance.md) and were removed. Add a verb to the allowlist ONLY after
+# recording a measurement in inngest-cli.provenance.md. Comment lines are excluded, and
+# `start` (the ExecStart verb) is a floor, so a broken extractor is RED, never vacuous.
+INNGEST_VERB_ALLOWLIST_RE='^(start|version)$'
+BOOTSTRAP_CODE_LINES=$(grep -vE '^[[:space:]]*#' "$BOOTSTRAP_SH" || true)
+# shellcheck disable=SC2016
+INNGEST_VERBS_USED=$(grep -oE '(\$INSTALL_PATH|\$\{INSTALL_PATH\}|/usr/local/bin/inngest)"?[[:space:]]+[A-Za-z][A-Za-z0-9_-]*' <<<"$BOOTSTRAP_CODE_LINES" \
+  | awk '{print $NF}' | sort -u || true)
+INNGEST_VERBS_UNMEASURED=$(grep -vE "$INNGEST_VERB_ALLOWLIST_RE" <<<"$INNGEST_VERBS_USED" || true)
+INNGEST_HAS_START=$(grep -cx start <<<"$INNGEST_VERBS_USED" || true)
+assert "bootstrap invokes only measured inngest-cli verbs (allowlist: start, version) — no pause/resume (#9219) (got: $(tr '\n' ' ' <<<"$INNGEST_VERBS_USED"); unmeasured: $(tr '\n' ' ' <<<"$INNGEST_VERBS_UNMEASURED"))" \
+  "[[ \"\$INNGEST_HAS_START\" == 1 && -z \"\$INNGEST_VERBS_UNMEASURED\" ]]"
 
 # --- Durable backend assets (#5450) ---
 echo ""
