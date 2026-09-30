@@ -95,6 +95,10 @@ edge at all, not that the host lacks a reboot.
    tracked deferral). Its detail carries `why=<last stage>`, the last stage the attempt reached.
    Every stage row the script emits carries `iid=<cloud-init instance-id>`, because old and new
    hosts share `host_name` during a replace.
+
+   > **Superseded 2026-09-30 (#9176):** the deferral is closed. `sentry_alert.inngest_provision_failure` (`inngest-provision-failure`) now pages
+   > `provision_attempt_failed` and `bootstrap_done_degraded`, excluding attempts whose detail
+   > carries `why=inngest_pull_fatal`; pull misses stay on `zot_mirror_fallback_rate`.
 6. **Quiesce the cutover FSMs before every bootstrap run.** Immediately before invoking
    `inngest-bootstrap.sh`, the script stops `inngest-cutover-flip.timer` and
    `inngest-luks-cutover.timer`, then waits (bounded at 300 s) until neither
@@ -191,6 +195,10 @@ edge at all, not that the host lacks a reboot.
   - **Non-pull failures do not page.** `provision_attempt_failed` (warning), an isolation FATAL, a
     failed bootstrap and `provision-fsm-busy` reach Sentry and Better Stack but match no alert
     rule. The rule is a tracked deferral.
+
+    > **Superseded 2026-09-30 (#9176):** `sentry_alert.inngest_provision_failure` (`inngest-provision-failure`) now pages
+    > `provision_attempt_failed` and `bootstrap_done_degraded`, excluding attempts whose detail
+    > carries `why=inngest_pull_fatal`; pull misses stay on `zot_mirror_fallback_rate`.
 - **The unit's journald rows stay on the host.** Vector is installed by the bootstrap this unit
   runs, and shipping those rows would need a `vector.toml` edit, which mints a bootstrap tag. The
   off-host channels are the phone-home and the Sentry emitter (tracked on #6780).
