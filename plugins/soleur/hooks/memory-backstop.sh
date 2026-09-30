@@ -71,7 +71,7 @@
 # copy. CONTRACT: bump on EVERY behavioural change to this file — an un-bumped
 # edit is invisible to resolution, never self-publishes to the managed path,
 # and fails scripts/check-backstop-revision.sh in CI.
-readonly BACKSTOP_REVISION=2
+readonly BACKSTOP_REVISION=3
 
 # All four cap values live here so raising one is a one-token change. They are
 # re-validated against a two-sided band on every run (see validate_caps): a
@@ -852,14 +852,20 @@ Nothing was applied — this session is UNPROTECTED. To restore the shipped valu
       local existing_bt; existing_bt=$(systemctl --user show "$scope" -p BindsTo --value 2>/dev/null)
       terminal_scope="${existing_bt:-$terminal_scope}"
 
+      # OOMPolicy is deliberately NOT in this call — the same exclusion
+      # repair_eval_scope documents: it is creation-only on scopes (measured
+      # on systemd 261 — SetUnitProperties rejects it with "Cannot set
+      # property OOMPolicy", and the call is ALL-OR-NOTHING, so the form that
+      # carried it could never apply any of the four caps: #9246). Every
+      # version of this hook has created scopes with OOMPolicy=continue, so
+      # the value persists and there is nothing on that axis to refresh.
       "${TO[@]}" busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
         org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
-        "$scope" true 5 \
+        "$scope" true 4 \
         "MemoryHigh" "t" "$SCOPE_HIGH_BYTES" \
         "MemoryMax" "t" "$SCOPE_MAX_BYTES" \
         "MemorySwapMax" "t" 0 \
         "TasksMax" "t" "$SCOPE_TASKS_MAX" \
-        "OOMPolicy" "s" "continue" \
         >/dev/null 2>&1
 
     fi

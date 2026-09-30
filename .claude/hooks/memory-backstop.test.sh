@@ -77,6 +77,7 @@ LIVE_LABELS=(
   T11-bindsto-reap T12-fleet-two-sessions T13-managed-oom-pref
   T14-kill-mechanism T15-idempotency T15-terminal-scope-stable
   T18-documented-kill-path AC18-reentry-resweep T20-repair-stale-scope
+  T21-reentry-converge
 )
 declare -A LIVE_SEEN=()
 live_mark() { LIVE_SEEN["$1"]=1; }
@@ -291,6 +292,46 @@ if [[ "$_scope_tasks_props" -eq 5 && "$_fleet_tasks_props" -eq 1 ]]; then
   pass "T2 TasksMax reaches both StartTransientUnit calls, the re-entry refresh, the sibling sweep, the stale-scope repair, and the fleet slice call"
 else
   fail "T2 TasksMax property wiring: scope $_scope_tasks_props (want 5), fleet $_fleet_tasks_props (want 1)"
+fi
+
+# T21 (static) — the re-entry refresh's SetUnitProperties must carry ONLY the
+# four runtime-settable caps. The call is all-or-nothing, so one creation-only
+# member (OOMPolicy on scopes — measured rejected on systemd 261 — or any
+# other the array admits) silently disables the whole refresh: the #9246
+# defect shape. Whitelist the four caps rather than blacklist OOMPolicy — a
+# DIFFERENT non-runtime member (BindsTo, say) must red this too. The re-entry
+# call is uniquely the "$scope"-targeted SetUnitProperties (the slice calls
+# target "$SLICE_NAME"/"soleur.slice", the repair call "$u"), and an empty
+# extraction is a FAIL — a pin that cannot find its call must not pass
+# vacuously.
+_reentry_block=$(awk '
+  /SetUnitProperties/ { inblk=1; buf=$0 "\n"; next }
+  inblk { buf = buf $0 "\n" }
+  inblk && />\/dev\/null 2>&1/ {
+    if (buf ~ /"\$scope" true/) printf "%s", buf
+    inblk=0; buf=""
+  }' "$HOOK")
+if [[ -z "$_reentry_block" ]]; then
+  fail "T21 re-entry call-shape pin: no \"\$scope\"-targeted SetUnitProperties block exists — the pin cannot pass on a missing call"
+else
+  _reentry_props=$(printf '%s' "$_reentry_block" | grep -oE '"[A-Z][A-Za-z]+" "[a-z]+"' | grep -oE '^"[A-Z][A-Za-z]+"' | tr -d '"' | sort)
+  _reentry_want=$'MemoryHigh\nMemoryMax\nMemorySwapMax\nTasksMax'
+  if [[ "$_reentry_block" == *'"$scope" true 4'* && "$_reentry_props" == "$_reentry_want" ]]; then
+    pass "T21 re-entry SetUnitProperties carries exactly the four runtime-settable caps (\"\$scope\" true 4)"
+  else
+    fail "T21 re-entry call shape drifted — want \"\$scope\" true 4 + {MemoryHigh,MemoryMax,MemorySwapMax,TasksMax}, got:
+$(printf '%s\n' "$_reentry_block")"
+  fi
+fi
+# OOMPolicy's only legitimate sites are the three StartTransientUnit creation
+# calls (sweep, main, pid-reuse) — it is creation-only on scopes. A fix that
+# stripped a creation site would silently break the T8/M2a OOM semantics, and
+# one that merely MOVED a creation-only member between calls still reds here.
+_reentry_oom_sites=$(grep -c '"OOMPolicy" "s" "continue"' "$HOOK")
+if [[ "$_reentry_oom_sites" -eq 3 ]]; then
+  pass "T21 OOMPolicy stays at exactly the three StartTransientUnit creation sites ($_reentry_oom_sites)"
+else
+  fail "T21 OOMPolicy site count: $_reentry_oom_sites (want 3 — sweep/main/pid-reuse creation calls)"
 fi
 
 # =====================================================================
@@ -1461,9 +1502,36 @@ $(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
 
     bindsto_before=$(sysd_prop "$scope_name" BindsTo)
     ts_before=$(tail -1 "$E2E_LOG" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
+    # T21 — degrade the scope's TasksMax BEFORE this scheduled re-entry run, so
+    # the run must actually CONVERGE a drifted cap, not merely not-crash:
+    # the refresh's stated purpose is "a changed cap lands without a session
+    # restart". 37984 is the terminal-scope ceiling the constants comment
+    # names — strictly a RAISE of the bound while set (the incident's own
+    # stale shape), never a MemoryMax-style lower that could throttle this
+    # suite. Runtime-only; the re-entry run below must restore 4096.
+    busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+      org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
+      "$scope_name" true 1 "TasksMax" "t" 37984 >/dev/null 2>&1
+    t21_degraded=$(sysd_prop "$scope_name" TasksMax)
     run_real_hook
     bindsto_after=$(sysd_prop "$scope_name" BindsTo)
     ts_after=$(tail -1 "$E2E_LOG" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
+    t21_tm=$(sysd_prop "$scope_name" TasksMax)
+    t21_outcome=$(tail -1 "$E2E_LOG" 2>/dev/null | jq -r '.outcome // ""' 2>/dev/null)
+    t21_repaired=$(tail -1 "$E2E_LOG" 2>/dev/null | jq -r '.repaired // ""' 2>/dev/null)
+    live_mark T21-reentry-converge
+    # `.repaired` MUST be 0 — that is the discriminator. A refresh call that
+    # failed (e.g. the #9246 OOMPolicy member, rejected all-or-nothing on
+    # systemd >=261) leaves the degraded cap for repair_stale_scopes — the
+    # sibling arm that runs later in the SAME hook pass — to heal: TasksMax
+    # still reads 4096 and the outcome still says applied, but repaired=1.
+    # Asserting convergence alone cannot see the defect shape; "the refresh
+    # did it" requires the repair arm to have found nothing to do.
+    if [[ "$t21_degraded" == "37984" && "$t21_tm" == "4096" && "$t21_outcome" == "applied" && "$t21_repaired" == "0" ]]; then
+      pass "T21 re-entry refresh reconverged a degraded TasksMax 37984 -> 4096 (outcome=$t21_outcome repaired=$t21_repaired)"
+    else
+      fail "T21 re-entry refresh did not converge the scope itself: degraded=$t21_degraded TasksMax-after=$t21_tm outcome=$t21_outcome repaired=$t21_repaired — a failed call is masked by repair_stale_scopes unless repaired==0 is asserted (#9246)"
+    fi
 
     if [[ "$parked" == "yes" ]]; then
       late_after=$(cut -d: -f3 < "/proc/$LATE/cgroup" 2>/dev/null)
@@ -1500,7 +1568,7 @@ $(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
     fi
   else
     for t in T8-adoption T9-tree-adoption T9-grandchild T15-idempotency \
-             T15-terminal-scope-stable AC18-reentry-resweep; do
+             T15-terminal-scope-stable AC18-reentry-resweep T21-reentry-converge; do
       skip "$t" "the hook itself declined: outcome='${outcome:-<no log line>}' reason='${reason:-}' — run this suite STANDALONE to exercise the adoption arm; the hook runs one process deeper than this suite, so at lefthook depth claude sits outside its ${MAX_WALK_HOPS}-hop limit"
     done
   fi
