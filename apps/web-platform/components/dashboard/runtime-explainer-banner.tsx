@@ -80,7 +80,7 @@ export function RuntimeExplainerBanner({ onDismiss }: Props) {
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss"
-          className="shrink-0 hover:text-soleur-text-primary"
+          className="shrink-0 p-1.5 hover:text-soleur-text-primary"
         >
           <svg
             className="h-4 w-4"

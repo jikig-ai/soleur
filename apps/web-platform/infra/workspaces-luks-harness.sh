@@ -172,6 +172,8 @@ harness_blockdev_other() {
 #   CRYPTSETUP_UUID           what `cryptsetup luksUUID` prints (default EMPTY: rc 1, nothing printed)
 #   READLINK_RC=<n>           force `readlink`'s exit status (the naive _same_dev fails OPEN here)
 #   READLINK_EMPTY=1          readlink exits 0 but prints NOTHING (the other fail-open half)
+#   PLAINTEXT_LABEL_ABSENT=1  _plaintext_label_present fails: /dev/disk/by-label/workspaces_plain is
+#                             gone (a zeroed or deleted plaintext volume). Default: present.
 #
 # Dead-man unit model (#9045). `systemctl show|stop|reset-failed` and `systemd-run` answer PER UNIT
 # for workspaces-luks-deadman.{timer,service} (a bare `workspaces-luks-deadman` is the service,
@@ -619,6 +621,10 @@ run_case() {
         if [ "${1:-}" = "-v" ] && [ -n "${TOOL_ABSENT:-}" ] && [ "${2:-}" = "${TOOL_ABSENT}" ]; then return 1; fi
         builtin command "$@"
       }
+      # #6604 step 7 — the plaintext-label seam. The production body tests a fixed /dev/disk/by-label
+      # path this host does not have. Default PRESENT, so every pre-wipe rollback path behaves as
+      # before; PLAINTEXT_LABEL_ABSENT=1 models a zeroed or deleted plaintext volume.
+      _plaintext_label_present() { [ "${PLAINTEXT_LABEL_ABSENT:-0}" != "1" ]; }
       for f in ${REQUIRE_FNS:-}; do
         declare -F "$f" >/dev/null || { echo "HARNESS_UNDEFINED:$f"; exit 97; }
       done

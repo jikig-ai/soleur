@@ -46,6 +46,12 @@ import {
   mockSupabaseAuth,
 } from "./helpers/supabase-mocks";
 import type { StreamEvent } from "@/lib/chat-state-machine";
+import {
+  GLYPH_VIEWPORTS,
+  MIN_GLYPH_PX,
+  expectBoxAtLeast,
+  skipLocallyFailInCi,
+} from "./helpers/glyph-box";
 
 const CONV_ID = "conv-stage-6-routing";
 
@@ -105,7 +111,9 @@ async function bootChat(page: Page): Promise<WsInjector> {
 
   const response = await page.goto(`/dashboard/chat/${CONV_ID}`);
   if (response && response.status() >= 500) {
-    test.skip(true, "Dev server compile error — skipped in worktree, passes in CI");
+    // Skips locally only; throws in CI so a CSS compile failure cannot
+    // swallow the composer glyph-box gate (FR-glyph below).
+    skipLocallyFailInCi("Dev server compile error (5xx on chat route)");
   }
 
   await injector.ready;
@@ -501,6 +509,60 @@ test.describe("cc-soleur-go routing: FR2.9 ended-state UX", () => {
     await expect(
       page.getByPlaceholder("This conversation has ended"),
     ).toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Composer glyph boxes — Button primitive layout gate (Guard 2).
+//
+// The real ChatInput's attach ("Attach file") and send ("Send message")
+// buttons are icon-only `Button`s sized `h-[36px] w-[36px]` with no padding
+// class. When the primitive's base `px-6 py-3` leaked into them the svg
+// collapsed to a 0px content box (blank composer). The mobile "@" button
+// ("Mention a leader", md:hidden) carries a text glyph and an explicit p-0.
+// happy-dom has no layout, so the class-contract vitest suites cannot catch
+// this; this measures real boxes at desktop and mobile widths.
+// ---------------------------------------------------------------------------
+
+test.describe("cc-soleur-go routing: composer glyph boxes (Button layout gate)", () => {
+  for (const vp of GLYPH_VIEWPORTS) {
+    test(`attach and send svgs have a real rendered box at ${vp.name}`, async ({ page }) => {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await bootChat(page);
+
+      const attach = page.getByLabel("Attach file", { exact: true });
+      const send = page.getByLabel("Send message", { exact: true });
+      await expect(attach).toBeVisible({ timeout: 10_000 });
+      await expect(send).toBeVisible();
+
+      await expectBoxAtLeast(attach.locator("svg"), MIN_GLYPH_PX, `attach svg @${vp.name}`);
+      await expectBoxAtLeast(send.locator("svg"), MIN_GLYPH_PX, `send svg @${vp.name}`);
+    });
+  }
+
+  test("mobile @ mention button keeps a real button box and glyph box at 390px", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await bootChat(page);
+
+    const mention = page.getByLabel("Mention a leader", { exact: true });
+    await expect(mention).toBeVisible({ timeout: 10_000 });
+    // 44px touch target on mobile (min-h-11 min-w-11) survives the base box.
+    await expectBoxAtLeast(mention, 44, "@ button @390px");
+    // The "@" glyph is a text span (no svg): it must occupy real space and
+    // sit inside the button rather than be squeezed out by base padding.
+    const glyph = mention.locator("span", { hasText: "@" });
+    await expectBoxAtLeast(glyph, 6, "@ glyph @390px");
+    const [btnBox, glyphBox] = await Promise.all([mention.boundingBox(), glyph.boundingBox()]);
+    expect(btnBox && glyphBox, "@ button and glyph must both be laid out").toBeTruthy();
+    expect(glyphBox!.x).toBeGreaterThanOrEqual(btnBox!.x - 1);
+    expect(glyphBox!.x + glyphBox!.width).toBeLessThanOrEqual(btnBox!.x + btnBox!.width + 1);
+  });
+
+  test("mobile @ mention button is not rendered at 1440px (md:hidden)", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await bootChat(page);
+    await expect(page.getByLabel("Attach file", { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel("Mention a leader", { exact: true })).toBeHidden();
   });
 });
 
