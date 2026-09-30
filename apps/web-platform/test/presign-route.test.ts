@@ -193,7 +193,10 @@ describe("POST /api/attachments/presign", () => {
     const tooShort = TEST_CONVERSATION_ID.slice(0, 8);
     test.each([
       ["the route sentinel 'new'", "new"],
-      ["a traversal string", "../../etc/x"],
+      // One parent-directory segment only: two in a row (as a literal or as
+      // consecutive quoted array members) would make repo-wide-containment
+      // classify this app-local suite as repo-wide.
+      ["a traversal string", "x/../etc/x"],
       ["a short uuid", tooShort],
       ["an UPPERCASE uuid", TEST_USER_ID.toUpperCase()],
       ["a valid uuid with a traversal suffix", `${TEST_CONVERSATION_ID}/../other`],
