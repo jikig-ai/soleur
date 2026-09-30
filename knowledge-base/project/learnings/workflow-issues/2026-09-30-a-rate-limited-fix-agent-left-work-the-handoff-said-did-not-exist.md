@@ -65,6 +65,14 @@ across sessions — a multi-session review's brief belongs under the worktree's 
 8. **`lint-infra-no-human-steps` rejected the session-state commit** (a "do not reboot" phrasing).
    Recovery: reworded. **Prevention:** the hook is the guard; no action.
 
+9. **The review round's io-cap gate refused every real wipe: it expected 157286400 (150 MiB) while systemd
+   writes `150M` as 150000000 (base 1000).** The stubbed wipe suite encoded the same wrong conversion
+   (`150M) r=157286400`), so 142 rows were green; only CI's real-kernel loopback (LW8, run 36687308658)
+   measured it. Recovery: the cap is plain bytes, one constant, and the stub models the measured
+   conversion (mutant reds 36 rows). **Prevention:** a stub that converts a unit must cite the
+   measurement it models; a gate that compares a vendor-written value exactly should be fed the value
+   in the vendor's unambiguous form (plain bytes), never a suffix whose base is assumed.
+
 ## Tags
 
 category: workflow-issues
