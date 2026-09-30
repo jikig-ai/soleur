@@ -118,7 +118,7 @@ def span(src, kind, name):
     m = re.search(r'^resource "%s" "%s" \{\n(.*?)^\}\n' % (kind, re.escape(name)), src, re.S | re.M)
     return strip_comments(m.group(1)) if m else None
 
-DEDICATED = 'provisioner "remote-exec" { inline = ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh] }'
+DEDICATED = 'provisioner "remote-exec" { inline = [ "set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh, ] }'
 CONSUMERS = {"zot_consumer_probe_install": "web-1", "deploy_pipeline_fix_web2": "web-2"}
 
 def wiring(root):
@@ -382,7 +382,7 @@ for c in $CHECKS; do "chk_$c" "$SB" >/dev/null 2>&1 || harness "control: the unm
 pass "control: the unmutated sandbox passes every check"
 
 DENY_ENTRY_TAIL=$'    done\n  # #8651/#6438: converge'
-DENY_BLOCK_TF=$'  provisioner "remote-exec" {\n    inline = ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh]\n  }\n'
+DENY_BLOCK_TF=$'  provisioner "remote-exec" {\n    inline = [\n      "set -e",\n      local.ghcr_deny_sh,\n      local.ghcr_deny_assert_sh,\n    ]\n  }\n'
 sub server.tf "printf '0.0.0.0 %s\n:: %s\n'" "printf '127.0.0.1 %s\n:: %s\n'"
 row "1 0.0.0.0 -> 127.0.0.1 in copy B only" parity server.tf
 sub cloud-init.yml "$DENY_ENTRY_TAIL" $'    done\n    : > /etc/hosts\n  # #8651/#6438: converge'

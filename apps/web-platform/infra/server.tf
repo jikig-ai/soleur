@@ -936,7 +936,11 @@ resource "terraform_data" "zot_consumer_probe_install" {
   # suppresses all of its output (the FATAL would be hidden) and a failed run leaves its script in
   # /root; running after the token block also means a deny failure never blocks the probe delivery.
   provisioner "remote-exec" {
-    inline = ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh]
+    inline = [
+      "set -e",
+      local.ghcr_deny_sh,
+      local.ghcr_deny_assert_sh,
+    ]
   }
 }
 
@@ -2219,7 +2223,11 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
   # sensitive webhook secret would suppress this block's FATAL), and after the webhook restart so a
   # deny failure can never leave the new hooks.json / webhook.service unloaded.
   provisioner "remote-exec" {
-    inline = ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh]
+    inline = [
+      "set -e",
+      local.ghcr_deny_sh,
+      local.ghcr_deny_assert_sh,
+    ]
   }
 }
 
