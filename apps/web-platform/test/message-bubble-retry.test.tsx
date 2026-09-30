@@ -18,6 +18,17 @@ import { MessageBubble } from "../components/chat/message-bubble";
 // ---------------------------------------------------------------------------
 
 describe("MessageBubble retry + error render (FR5 #2861)", () => {
+  test("retains an unsent user message and announces its delivery state", () => {
+    const view = render(<MessageBubble role="user" content="Keep this draft for resend" delivery="unsent" />);
+    expect(view.getByText("Keep this draft for resend")).toBeVisible();
+    expect(view.getByRole("status")).toHaveTextContent("Message not sent");
+  });
+
+  test("does not label ordinary user messages as unsent", () => {
+    const view = render(<MessageBubble role="user" content="Already sent" />);
+    expect(view.queryByText("Message not sent")).toBeNull();
+  });
+
   test("tool_use bubble with retrying=true shows an honest 'No response yet' chip, never the 'Retrying…' lie (FR4 #5240)", () => {
     const { container, getByTestId } = render(
       <MessageBubble

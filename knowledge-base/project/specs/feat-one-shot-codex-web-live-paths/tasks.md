@@ -33,7 +33,7 @@ Plan: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wirin
 ## Phase 4: Security, review and QA
 
 - [ ] 4.1 Run tenant/credential/egress security checks, independent code review, QA, preflight and complete all remaining applicable gates. The full suite, focused suite, migration probe, schema-level GDPR checks (lawful basis, retention, erasure, Art. 9, and Chapter V), and CPO/CTO conditional plan review are recorded; production security review and live qualification remain.
-- [ ] 4.2 Update `workspace-default-engine.pen` for the engine dropdown, owner confirmation and member history-transfer acknowledgment; run screenshot QA for the changed settings control. Current visual review is blocked by unavailable Pencil MCP.
+- [x] 4.2 Update `workspace-default-engine.pen` for the engine dropdown, owner confirmation and member history-transfer acknowledgment; native Pencil screenshot QA is complete for all four settings/confirmation frames. These are design captures, not rendered implementation screenshots.
 
 ## Phase 5: Synthetic qualification and disposition
 

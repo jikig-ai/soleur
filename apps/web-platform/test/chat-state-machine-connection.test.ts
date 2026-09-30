@@ -18,6 +18,34 @@ function emptyState(): ChatState {
   };
 }
 
+describe("unsent optimistic user turns", () => {
+  test("marks only the correlated text message while preserving content, attachments and other slices", () => {
+    const attachments = [{ storagePath: "synthetic/draft.txt", filename: "draft.txt", contentType: "text/plain", sizeBytes: 42 }];
+    const state: ChatState = {
+      ...emptyState(),
+      messages: [
+        { id: "user-turn-1", type: "text", role: "user", content: "Original draft", attachments },
+        { id: "user-turn-2", type: "text", role: "user", content: "Other message" },
+      ],
+    };
+    const next = chatReducer(state, { type: "mark_message_unsent", clientTurnId: "turn-1" });
+    expect(next.messages[0]).toEqual({ ...state.messages[0], delivery: "unsent" });
+    expect(next.messages[1]).toBe(state.messages[1]);
+    expect(state.messages[0]).not.toHaveProperty("delivery");
+    expect(next.activeStreams).toBe(state.activeStreams);
+    expect(next.connection).toBe(state.connection);
+  });
+
+  test("does not relabel another message when a turn cannot be correlated", () => {
+    const state: ChatState = {
+      ...emptyState(),
+      messages: [{ id: "user-turn-1", type: "text", role: "user", content: "Keep this state" }],
+    };
+    expect(chatReducer(state, { type: "mark_message_unsent", clientTurnId: "unknown-turn" }).messages)
+      .toEqual(state.messages);
+  });
+});
+
 describe("connection slice — connection_change (AC4 latest-wins)", () => {
   test("initial state is live", () => {
     expect(emptyState().connection.phase).toBe("live");

@@ -382,6 +382,8 @@ const codexHistoryTransferRequiredSchema = z.strictObject({
   type: z.literal("codex_history_transfer_required"),
   conversationId: conversationIdSchema,
   authModeGeneration: z.number().int().nonnegative(),
+  authMode: z.enum(["api-key", "managed"]).optional(),
+  clientTurnId: z.string().uuid().optional(),
 });
 const codexHistoryTransferAcknowledgedSchema = z.strictObject({
   type: z.literal("codex_history_transfer_acknowledged"),

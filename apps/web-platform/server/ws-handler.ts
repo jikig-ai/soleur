@@ -1259,6 +1259,8 @@ async function dispatchCodexChatTurn(
         type: "codex_history_transfer_required",
         conversationId,
         authModeGeneration,
+        authMode: binding.authMode === "api-key" || binding.authMode === "managed" ? binding.authMode : undefined,
+        clientTurnId,
       });
       return;
     }

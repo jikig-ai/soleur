@@ -109,7 +109,7 @@ describe("Codex real production handler boundary", () => {
     sessions.set(fixture.userId, session);
     await handleMessage(fixture.userId, JSON.stringify({
       type: "chat", content: "Synthetic qualification boundary prompt",
-      clientTurnId: "synthetic-turn", ...(attachments ? { attachments } : {}),
+      clientTurnId: "90000000-0000-4000-8000-000000000001", ...(attachments ? { attachments } : {}),
     }));
     return send.mock.calls.map(([value]) => JSON.parse(value as string) as { type: string });
   }
@@ -148,8 +148,8 @@ describe("Codex real production handler boundary", () => {
     }));
   });
 
-  it("withholds a switched Codex conversation until this member acknowledges history transfer", async () => {
-    fixture.mode = "api-key";
+  it.each(["api-key", "managed"] as const)("withholds a switched %s conversation and reports the mode and unsent turn", async (mode) => {
+    fixture.mode = mode;
     fixture.generation = 1;
     fixture.rpc.mockImplementation(async (name: string) => name === "codex_history_transfer_acknowledged"
       ? { data: false, error: null }
@@ -161,6 +161,8 @@ describe("Codex real production handler boundary", () => {
       type: "codex_history_transfer_required",
       conversationId: fixture.conversationId,
       authModeGeneration: 1,
+      authMode: mode,
+      clientTurnId: "90000000-0000-4000-8000-000000000001",
     }]);
     expect(fixture.rpc).toHaveBeenCalledWith("codex_history_transfer_acknowledged", {
       p_conversation_id: fixture.conversationId,
@@ -170,6 +172,9 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.from).not.toHaveBeenCalledWith("api_keys");
     expect(fixture.from).not.toHaveBeenCalledWith("messages");
     expect(fixture.spawn).not.toHaveBeenCalled();
+    expect(fixture.sendUserMessage).not.toHaveBeenCalled();
+    expect(fixture.startAgentSession).not.toHaveBeenCalled();
+    expect(fixture.dispatchSoleurGo).not.toHaveBeenCalled();
   });
 
   it("records the active member's acknowledgment for the exact conversation generation", async () => {
@@ -199,6 +204,9 @@ describe("Codex real production handler boundary", () => {
     });
     expect(fixture.from).not.toHaveBeenCalledWith("messages");
     expect(fixture.spawn).not.toHaveBeenCalled();
+    expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
+    expect(fixture.sendUserMessage).not.toHaveBeenCalled();
+    expect(fixture.dispatchSoleurGo).not.toHaveBeenCalled();
   });
 
   it("routes abort_turn through the real handler into the active Codex dispatch signal", async () => {

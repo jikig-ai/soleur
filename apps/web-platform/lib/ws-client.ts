@@ -290,6 +290,7 @@ export type ChatAction =
   | { type: "set_live_narration"; message: string }
   | { type: "ack_timer_action" }
   | { type: "add_message"; message: ChatMessage }
+  | { type: "mark_message_unsent"; clientTurnId: string }
   | { type: "filter_prepend"; messages: ChatMessage[] }
   | { type: "gate_error"; gateId: string; message: string }
   | { type: "resolve_gate"; gateId: string; selection: string }
@@ -438,6 +439,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return state.pendingTimerAction === undefined ? state : { ...state, pendingTimerAction: undefined };
     case "add_message":
       return { ...state, messages: [...state.messages, action.message] };
+    case "mark_message_unsent":
+      return {
+        ...state,
+        messages: state.messages.map((message) =>
+          message.type === "text" && message.role === "user" && message.id === `user-${action.clientTurnId}`
+            ? { ...message, delivery: "unsent" }
+            : message,
+        ),
+      };
     case "filter_prepend": {
       const existingIds = new Set(state.messages.map(m => m.id));
       const unique = action.messages.filter(m => !existingIds.has(m.id));
@@ -979,9 +989,20 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "codex_history_transfer_required": {
+          if (msg.conversationId !== realConversationIdRef.current) break;
+          if (msg.clientTurnId) {
+            dispatch({ type: "mark_message_unsent", clientTurnId: msg.clientTurnId });
+          }
+          const billingNotice = msg.authMode === "api-key"
+            ? " API-key mode uses your own credential and charges your provider account."
+            : msg.authMode === "managed"
+              ? " Managed mode uses the workspace’s connected ChatGPT account; confirm applicable billing."
+              : " Check the selected credential and billing mode in workspace settings.";
           setLastError({
             code: "codex_history_transfer_required",
-            message: "This conversation's stored history may be sent to the selected Codex account. Acknowledge before retrying your message.",
+            message: "OpenAI will receive this conversation's stored history when you resend or send a later message."
+              + billingNotice
+              + " Acknowledge history transfer, then resend your message. Your original message was not sent.",
             conversationId: msg.conversationId,
             authModeGeneration: msg.authModeGeneration,
           });
@@ -997,6 +1018,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "codex_history_transfer_acknowledged": {
+          if (msg.conversationId !== realConversationIdRef.current) break;
           setLastError((current) => current?.code === "codex_history_transfer_required"
             && current.conversationId === msg.conversationId
             && current.authModeGeneration === msg.authModeGeneration
@@ -1193,6 +1215,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "session_started": {
           if (msg.conversationId) {
+            setLastError((current) => current?.code === "codex_history_transfer_required"
+              && current.conversationId !== msg.conversationId ? null : current);
             setRealConversationId(msg.conversationId);
             // #3448 PR2 (review fix): mirror to ref synchronously so a
             // first-turn Stop click that races the realConversationId
@@ -1225,6 +1249,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_resumed": {
+          setLastError((current) => current?.code === "codex_history_transfer_required"
+            && current.conversationId !== msg.conversationId ? null : current);
           setRealConversationId(msg.conversationId);
           // feat-stream-since-disconnect (#5273) — full transcript resume
           // rehydrates from persisted history; reset the replay cursor.

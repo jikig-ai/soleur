@@ -124,3 +124,19 @@ The Codex lifecycle added three WebSocket message types, but CI's exact
 update `apps/web-platform/test/ws-known-types-guard.test.ts` alongside the
 shared wire schema and handlers; this guard intentionally rejects both missing
 and stale entries.
+
+The named Chrome-for-Testing browser session did not inherit the authenticated
+Zen Browser session; a redacted snapshot showed its own login form. Inspect
+only the task's isolated browser session and say which window needs sign-in;
+never infer authentication from another browser. GUI focus attempts using this
+host's Hyprland `hyprctl dispatch` syntax failed; consult the installed
+`hyprctl --help` and local API rather than retrying the removed legacy syntax.
+
+`domain-model-drift.sh drift` exited 1 after reporting zero stale citations
+and 45 undocumented tables; its stderr also had 180 awk escape warnings.
+Keep stale-citation, undocumented-fact, and blind-spot counts distinct. The
+migration 145 SQL tests expected a local Docker container and silently skipped
+in CI; integration tests should provision and remove their own disposable CI
+container. A helper assertion with `git check-ignore -v` can return success on
+a negation rule; use `git check-ignore -q` when checking whether a capture is
+ignored.

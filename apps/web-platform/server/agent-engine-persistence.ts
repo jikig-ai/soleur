@@ -152,7 +152,7 @@ export class AgentEnginePersistenceRepository {
       p_created_by: input.createdBy,
     });
     if (result.error) throw new Error(`engine run bind failed: ${result.error.message}`);
-    return result.data;
+    return normalizeRun(result.data);
   }
 
   async appendEvent(event: EngineEvent): Promise<unknown> {

@@ -891,7 +891,7 @@ export function ChatSurface({
                 message={lastError.message}
                 onRetry={lastError.code !== "key_invalid" && lastError.code !== "subscription_limit" && lastError.code !== "codex_history_transfer_required" ? reconnect : undefined}
                 retryLabel="Reconnect"
-                confirmLabel="Acknowledge and continue"
+                confirmLabel="Acknowledge history transfer"
                 onConfirm={lastError.code === "codex_history_transfer_required"
                   && lastError.conversationId
                   && lastError.authModeGeneration !== undefined
@@ -953,6 +953,7 @@ export function ChatSurface({
                       getDisplayName={getDisplayName}
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
+                      delivery={msg.delivery}
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}

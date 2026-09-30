@@ -23,9 +23,10 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
   beforeEach(() => {
     wsReturn = createWebSocketMock({
       realConversationId: "test-id",
+      messages: [{ id: "unsent-turn", type: "text", role: "user", content: "Please continue this draft", delivery: "unsent" }],
       lastError: {
         code: "codex_history_transfer_required",
-        message: "Acknowledge before continuing.",
+        message: "OpenAI will receive this conversation's stored history when you resend or send a later message. API-key mode uses your own credential and charges your provider account. Acknowledge history transfer, then resend your message. Your original message was not sent.",
         conversationId: "test-id",
         authModeGeneration: 2,
       },
@@ -36,7 +37,13 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     const { ChatSurface } = await import("@/components/chat/chat-surface");
     render(<ChatSurface variant="full" conversationId="test-id" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Acknowledge and continue" }));
+    expect(screen.getByText(/OpenAI will receive/)).toBeVisible();
+    expect(screen.getByText("Please continue this draft")).toBeVisible();
+    expect(screen.getByText("Message not sent")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Acknowledge history transfer" }));
     expect(wsReturn.acknowledgeCodexHistoryTransfer).toHaveBeenCalledWith("test-id", 2);
+    expect(wsReturn.sendMessage).not.toHaveBeenCalled();
+    expect(wsReturn.resumeSession).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Acknowledge history transfer" })).toBeVisible();
   });
 });

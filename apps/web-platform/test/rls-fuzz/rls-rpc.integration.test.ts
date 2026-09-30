@@ -138,6 +138,33 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     expect(uncovered, `anon-EXECUTE definer fns with no classification: ${uncovered.join(", ")}`).toEqual([]);
   });
 
+  test("anonymisation deletes recovery data and rejects a later checkpoint from the same attempt", async () => {
+    await rolledBackRaw(sql, async (t) => {
+      await t.unsafe("set local role service_role");
+      await t.unsafe("select set_config('request.jwt.claims', $1, true)", ['{"role":"service_role"}']);
+      await t.unsafe("update public.agent_engine_runs set engine_id = 'codex', auth_mode = 'managed', auth_mode_generation = 0, created_by = $2 where id = $1", [ctx.engineRunA, ctx.userA]);
+      const [attempt] = await t.unsafe("select (public.start_agent_engine_attempt($1, $2, $3, $4)).id as id", [ctx.engineRunA, "erasure-checkpoint", "managed", 0]);
+      await t.unsafe("select public.save_agent_engine_recovery_checkpoint($1, $2, $3::jsonb)", [ctx.engineRunA, attempt.id, t.json({ synthetic: true })]);
+      const [before] = await t.unsafe("select count(*)::integer as count from public.agent_engine_recovery_checkpoints where run_id = $1", [ctx.engineRunA]);
+      expect(before.count).toBe(1);
+      await t.unsafe("select public.anonymise_agent_engine_data($1)", [ctx.userA]);
+      const [after] = await t.unsafe("select count(*)::integer as count from public.agent_engine_recovery_checkpoints where run_id = $1", [ctx.engineRunA]);
+      expect(after.count).toBe(0);
+      await t.unsafe("SAVEPOINT erased_checkpoint");
+      let code: string | undefined;
+      try {
+        await t.unsafe("select public.save_agent_engine_recovery_checkpoint($1, $2, $3::jsonb)", [ctx.engineRunA, attempt.id, t.json({ synthetic: true })]);
+      } catch (error) {
+        code = (error as { code?: string }).code;
+        await t.unsafe("ROLLBACK TO SAVEPOINT erased_checkpoint");
+      }
+      await t.unsafe("RELEASE SAVEPOINT erased_checkpoint");
+      expect(code).toBe("55000");
+      const [retained] = await t.unsafe("select count(*)::integer as count from public.agent_engine_recovery_checkpoints where run_id = $1", [ctx.engineRunA]);
+      expect(retained.count).toBe(0);
+    });
+  });
+
   test("an accepted Codex attempt finishes after a mode switch while stale retries and checkpoints fail", async () => {
     await rolledBackRaw(sql, async (t) => {
       await t.unsafe("set local role service_role");

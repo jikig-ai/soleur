@@ -407,7 +407,7 @@ export type WSMessage =
   // A switched Codex conversation is held before transcript replay and
   // credential resolution until this resuming member has acknowledged the
   // active provider account for the current binding generation.
-  | { type: "codex_history_transfer_required"; conversationId: string; authModeGeneration: number }
+  | { type: "codex_history_transfer_required"; conversationId: string; authModeGeneration: number; authMode?: "api-key" | "managed"; clientTurnId?: string }
   | { type: "codex_history_transfer_acknowledged"; conversationId: string; authModeGeneration: number }
   // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
   // persistent chip (server→client). `autonomous` is the SERVER truth

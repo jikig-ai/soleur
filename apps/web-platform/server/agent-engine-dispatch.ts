@@ -168,17 +168,21 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
     options.registry,
     options.egress?.selection,
   );
-  yield* dispatchBoundEngineRun({
-    repository: options.repository,
-    persistedRun: options.persistedRun,
-    adapter,
-    adapterEngineId: binding.engineId,
-    eventSink: options.eventSink,
-    observability: options.observability,
-    runId: options.runId,
-    input: options.input,
-    context: options.context,
-  });
+  try {
+    yield* dispatchBoundEngineRun({
+      repository: options.repository,
+      persistedRun: persisted,
+      adapter,
+      adapterEngineId: binding.engineId,
+      eventSink: options.eventSink,
+      observability: options.observability,
+      runId: options.runId,
+      input: options.input,
+      context: options.context,
+    });
+  } finally {
+    await adapter.dispose();
+  }
 }
 
 /** Resolve a conversation's immutable binding before selecting any provider adapter. */

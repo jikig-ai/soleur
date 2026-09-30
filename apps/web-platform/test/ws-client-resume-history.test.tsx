@@ -102,6 +102,109 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     });
   }
 
+  it.each([
+    { authMode: "api-key", billing: "your own credential", account: "your provider account" },
+    { authMode: "managed", billing: "workspace’s connected ChatGPT account", account: "confirm applicable billing" },
+  ])("correlates an unsent turn and explains history transfer for $authMode without resending on acknowledgment", async ({ authMode, billing, account }) => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    const attachments = [{ storagePath: "synthetic/draft.txt", filename: "draft.txt", contentType: "text/plain", sizeBytes: 42 }];
+    act(() => result.current.sendMessage("Keep this original draft", attachments));
+    act(() => result.current.sendMessage("A separate turn"));
+    const chats = (wsInstance?.send.mock.calls ?? []).map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat");
+    expect(chats).toHaveLength(2);
+
+    serverSend({
+      type: "codex_history_transfer_required", conversationId: "conv-history-ack",
+      authModeGeneration: 2, authMode, clientTurnId: chats[0].clientTurnId,
+    });
+
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({
+      id: `user-${chats[0].clientTurnId}`, content: "Keep this original draft", attachments, delivery: "unsent",
+    }));
+    expect(result.current.messages[1]).not.toHaveProperty("delivery");
+    expect(result.current.lastError?.message).toContain("OpenAI");
+    expect(result.current.lastError?.message).toContain("stored history");
+    expect(result.current.lastError?.message).toContain(billing);
+    expect(result.current.lastError?.message).toContain(account);
+    expect(result.current.lastError?.message).toContain("then resend");
+
+    wsInstance?.send.mockClear();
+    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2));
+    expect(result.current.lastError?.code).toBe("codex_history_transfer_required");
+    expect(wsInstance?.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([{
+      type: "codex_history_transfer_acknowledge", conversationId: "conv-history-ack", authModeGeneration: 2,
+    }]);
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
+    expect(result.current.lastError).toBeNull();
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "Keep this original draft", attachments, delivery: "unsent" }));
+    expect(wsInstance?.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores another conversation's required notice even when its turn ID matches a local message", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-active" });
+    act(() => result.current.sendMessage("Keep active conversation"));
+    const chat = (wsInstance?.send.mock.calls ?? []).map(([frame]) => JSON.parse(frame as string)).find((frame) => frame.type === "chat");
+    serverSend({
+      type: "codex_history_transfer_required", conversationId: "conv-stale",
+      authModeGeneration: 2, authMode: "api-key", clientTurnId: chat.clientTurnId,
+    });
+    expect(result.current.lastError).toBeNull();
+    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+  });
+
+  it("keeps a legacy notice usable without inventing correlation or credential ownership", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    act(() => result.current.sendMessage("Older server turn"));
+    serverSend({ type: "codex_history_transfer_required", conversationId: "conv-history-ack", authModeGeneration: 2 });
+    expect(result.current.lastError?.message).toContain("OpenAI");
+    expect(result.current.lastError?.message).toContain("then resend");
+    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+  });
+
+  it.each([
+    { conversationId: "conv-history-ack", authModeGeneration: 1 },
+    { conversationId: "conv-stale", authModeGeneration: 2 },
+  ])("keeps the current notice after a stale acknowledgment %j", async (confirmation) => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    serverSend({ type: "codex_history_transfer_required", conversationId: "conv-history-ack", authModeGeneration: 2, authMode: "managed" });
+    serverSend({ type: "codex_history_transfer_acknowledged", ...confirmation });
+    expect(result.current.lastError).toEqual(expect.objectContaining({ conversationId: "conv-history-ack", authModeGeneration: 2 }));
+  });
+
+  it.each(["codex_history_transfer_acknowledgment_rejected", "codex_history_transfer_acknowledgment_failed"])("keeps the notice after %s", async (errorCode) => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    serverSend({ type: "codex_history_transfer_required", conversationId: "conv-history-ack", authModeGeneration: 2, authMode: "managed" });
+    wsInstance?.send.mockClear();
+    serverSend({ type: "error", errorCode, message: "Review the current notice and try again." });
+    expect(result.current.lastError?.code).toBe("codex_history_transfer_required");
+    expect(wsInstance?.send).not.toHaveBeenCalled();
+  });
+
+  it("clears an old conversation's notice when a different session starts", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    serverSend({ type: "codex_history_transfer_required", conversationId: "conv-history-ack", authModeGeneration: 2, authMode: "managed" });
+    serverSend({ type: "session_started", conversationId: "conv-next" });
+    expect(result.current.lastError).toBeNull();
+  });
+
   it("fetches history when realConversationId is set from session_resumed", async () => {
     const { useWebSocket } = await import("@/lib/ws-client");
     const { result } = renderHook(() => useWebSocket("new"));

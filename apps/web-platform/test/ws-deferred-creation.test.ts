@@ -20,14 +20,15 @@ const { mockRpc, mockEngine, mockStartAttemptError } = vi.hoisted(() => ({
     name === "bind_agent_engine_run"
       ? {
           data: {
-            binding: {
-              workspaceId: String(args?.p_workspace_id ?? "ws-mock-workspace-1"),
-              execution: { kind: "conversation", conversationId: String(args?.p_conversation_id ?? "conv-1") },
-              engineId: mockEngine.id,
-              authMode: "managed",
-              adapterVersion: "claude-code-v1",
-              boundAt: new Date().toISOString(),
-            },
+            id: "engine-run-1",
+            workspace_id: String(args?.p_workspace_id ?? "ws-mock-workspace-1"),
+            execution_kind: "conversation",
+            conversation_id: String(args?.p_conversation_id ?? "conv-1"),
+            engine_id: mockEngine.id,
+            auth_mode: "managed",
+            auth_mode_generation: 0,
+            adapter_version: mockEngine.id === "codex" ? "codex-v1" : "claude-code-v1",
+            created_at: "2026-09-30T00:00:00Z",
           },
           error: null,
         }
@@ -336,7 +337,7 @@ describe("deferred conversation creation", () => {
     sessions.set("user-1", session);
 
     // Step 1: start_session (deferred)
-    await handleMessage("user-1", JSON.stringify({ type: "start_session" }));
+    await handleMessage("user-1", JSON.stringify({ type: "start_session", leaderId: "cto" }));
     const started = sent.find((m: any) => m.type === "session_started") as any;
     expect(session.pending?.id).toBe(started.conversationId);
 
@@ -351,6 +352,9 @@ describe("deferred conversation creation", () => {
     // Session should transition from pending to active
     expect(session.conversationId).toBe(started.conversationId);
     expect(session.pending?.id).toBeUndefined();
+    expect((await import("@/server/agent-runner")).sendUserMessage)
+      .toHaveBeenCalledWith("user-1", started.conversationId, "Set up Stripe webhooks", undefined, undefined);
+    expect(sent).not.toContainEqual(expect.objectContaining({ type: "error" }));
   });
 
   it("routes a Codex-bound first turn without invoking the Claude runner", async () => {

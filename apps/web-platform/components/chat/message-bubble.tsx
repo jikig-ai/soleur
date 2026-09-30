@@ -109,9 +109,11 @@ export const MessageBubble = memo(function MessageBubble({
   status,
   usage,
   commandBlocks,
+  delivery,
 }: {
   role: "user" | "assistant";
   content: string;
+  delivery?: "unsent";
   leaderId?: DomainLeaderId;
   showFullTitle?: boolean;
   messageState?: MessageState;
@@ -234,6 +236,11 @@ export const MessageBubble = memo(function MessageBubble({
 
           {attachments && attachments.length > 0 && (
             <AttachmentDisplay attachments={attachments} />
+          )}
+          {isUser && delivery === "unsent" && (
+            <p role="status" aria-live="polite" className="mt-2 text-xs text-amber-400">
+              Message not sent
+            </p>
           )}
         </div>
       </div>

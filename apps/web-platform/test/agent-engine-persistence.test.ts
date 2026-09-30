@@ -109,8 +109,19 @@ describe("AgentEnginePersistenceRepository", () => {
 
   it("uses the atomic bind RPC and never derives the engine from client input", async () => {
     const supabase = client();
+    supabase.rpc.mockResolvedValueOnce({ data: {
+      id: "run-1", workspace_id: "ws-1", execution_kind: "conversation",
+      conversation_id: "conv-1", engine_id: "claude-code", auth_mode: "managed",
+      auth_mode_generation: 0, adapter_version: "claude-code-v1",
+      created_at: "2026-09-30T00:00:00Z",
+    }, error: null });
     const repo = new AgentEnginePersistenceRepository(supabase);
-    await repo.bind({ workspaceId: "ws-1", executionKind: "conversation", conversationId: "conv-1", createdBy: "user-1" });
+    await expect(repo.bind({ workspaceId: "ws-1", executionKind: "conversation", conversationId: "conv-1", createdBy: "user-1" }))
+      .resolves.toEqual({ id: "run-1", binding: {
+        workspaceId: "ws-1", execution: { kind: "conversation", conversationId: "conv-1" },
+        engineId: "claude-code", authMode: "managed", authModeGeneration: 0,
+        adapterVersion: "claude-code-v1", boundAt: "2026-09-30T00:00:00Z",
+      } });
     expect(supabase.rpc).toHaveBeenCalledWith("bind_agent_engine_run", expect.objectContaining({ p_workspace_id: "ws-1" }));
     expect(supabase.rpc.mock.calls[0][1]).not.toHaveProperty("p_engine_id");
   });

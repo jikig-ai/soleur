@@ -100,6 +100,8 @@ export interface CommandBlock {
 
 interface ChatTextMessage extends ChatMessageBase {
   type: "text";
+  /** Local delivery feedback; a held turn retains its content and attachments for manual resend. */
+  delivery?: "unsent";
   /**
    * feat-concierge-stream-commands — inline streamed-terminal blocks for
    * Concierge Bash tool-uses. Append-only; `undefined`/empty on bubbles
