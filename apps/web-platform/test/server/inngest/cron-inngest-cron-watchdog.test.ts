@@ -51,7 +51,7 @@ function fullRegistry(): RegistryFunction[] {
 }
 
 describe("cron-inngest-cron-watchdog — manifest", () => {
-  it("manifest is non-empty and includes the two watched crons", () => {
+  it("manifest is non-empty and lists the crons these tests exercise", () => {
     expect(EXPECTED_CRON_FUNCTIONS.length).toBeGreaterThan(0);
     expect(EXPECTED_CRON_FUNCTIONS).toContain("cron-oauth-probe");
     expect(EXPECTED_CRON_FUNCTIONS).toContain("cron-community-monitor");

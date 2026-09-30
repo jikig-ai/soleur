@@ -262,7 +262,7 @@ with `soleur:trigger-cron`:
 > **Superseded 2026-09-30 (#9303):** `cron-gh-pages-cert-state` is deleted, not merely
 > manual-trigger-only, and its `cron/gh-pages-cert-state.manual-trigger` event has no handler.
 > Nothing detects origin-certificate expiry any more, on purpose (ADR-194): the origin
-> certificate is abandoned, not renewed. The 2026-08-20 note below is kept as the record it was.
+> certificate is abandoned, not renewed. Sending that event now returns 400 "Event not allowlisted", so the "Fire it with" instruction in the 2026-08-20 note below no longer works; that note is kept as the record it was.
 
 > **Superseded 2026-08-20 (#7640):** the daily `0 3 * * *` trigger described in this
 > section was REMOVED by the ADR-194 substrate PR; `cron-gh-pages-cert-state` is
@@ -270,7 +270,7 @@ with `soleur:trigger-cron`:
 > steps below as the pre-cutover behaviour. Fire it with
 > `cron/gh-pages-cert-state.manual-trigger` via POST /api/internal/trigger-cron.
 
-`cron-gh-pages-cert-state` ran daily at 03:00 UTC (schedule now disarmed) and:
+`cron-gh-pages-cert-state` ran daily at 03:00 UTC (its schedule was later removed and the routine deleted, 2026-09-30) and:
 
 - files/updates a `[cert-poll]` issue below **21 days** to expiry (a log), and
 - **pages via Sentry** below **7 days** when the cert is wedged in a state ACME

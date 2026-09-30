@@ -157,7 +157,7 @@ export async function oneshot4650MonitorCloseHandler({
     return (res.data as { state?: string }).state ?? "open";
   });
 
-  // --- Step 2: classify the 3 target cron functions ------------------------
+  // --- Step 2: classify the target cron functions --------------------------
   const classify = await step.run("classify-registry", async () => {
     try {
       const host = resolveInngestHost(process.env.INNGEST_BASE_URL);
@@ -239,7 +239,7 @@ export async function oneshot4650MonitorCloseHandler({
     const body = [
       `## Autonomous close — all cron triggers re-planned`,
       "",
-      `The Inngest \`/v1/functions\` registry shows all the cron functions behind`,
+      `The Inngest \`/v1/functions\` registry shows all the surviving cron functions behind`,
       `this issue's monitors are present and cron-planned (H9a/H9b cleared):`,
       "",
       ...TARGET_FN_IDS.map((f) => `- \`${f}\` — OK`),

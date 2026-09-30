@@ -363,7 +363,7 @@ resource "sentry_cron_monitor" "scheduled_community_monitor" {
   timezone                = "UTC"
 }
 
-# scheduled-gh-pages-cert-state: RETIRED. Deleted by the follow-up PR (#9304).
+# scheduled-gh-pages-cert-state: RETIRED. To be deleted by the follow-up PR (tracked on #9304).
 #
 # Origin: a daily poll of the GitHub Pages certificate, added after the 2026-05-18
 # silent cert-expiry outage (#3976). ADR-194 abandoned that origin certificate at the

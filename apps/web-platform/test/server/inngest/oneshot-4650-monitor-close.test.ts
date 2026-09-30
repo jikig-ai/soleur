@@ -181,6 +181,21 @@ describe("oneshot-4650-monitor-close", () => {
     expect(patched()).toBe(false);
   });
 
+  it("partial registry (FIRST target MISSING, last planned) + open → leave open, NO close", async () => {
+    fetchRegistrySpy.mockResolvedValue([
+      // cron-community-monitor MISSING
+      planned("cron-inngest-cron-watchdog"),
+    ]);
+    setIssueState("open");
+    const res = await oneshot4650MonitorCloseHandler({
+      event: event({ date_override: "2026-05-31" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(res).toEqual({ ok: false, reason: "not-all-healthy" });
+    expect(patched()).toBe(false);
+  });
+
   it("registry fetch throws + open → fail-safe, no close (distinct from partial)", async () => {
     fetchRegistrySpy.mockRejectedValue(new Error("inngest /v1/functions returned 503"));
     setIssueState("open");

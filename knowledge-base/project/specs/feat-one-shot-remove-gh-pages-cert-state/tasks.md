@@ -47,14 +47,14 @@ Two PRs (Sentry two-PR rule, #8630). This file covers PR A (this branch); PR B l
 ## Phase 6: Ship PR A
 
 - [ ] 6.1 PR body first line states the production effect (deploy plus one in-place Sentry alert update, zero destroys); include `Ref #9304` and `Closes #7711` (comment on #7711 first); commit the plan, tasks and `decision-challenges.md`.
-- [ ] 6.2 After merge (`soleur:postmerge`): `apply-sentry-infra.yml` green; wait for the release deploy; dispatch read-only `cutover-inngest.yml -f op=registry-probe` with a watch armed; `comm -23` the population file against the result minus the retired minter id; post the result as a comment on #9304.
+- [ ] 6.2 After merge (`soleur:postmerge`): `apply-sentry-infra.yml` green; wait for the release deploy; dispatch read-only `cutover-inngest.yml -f op=registry-probe` with a watch armed; `comm -23` the population file against the result minus the retired minter id; post the result as a comment on #9304. **Superseded 2026-09-30 (review):** the registry-probe step is dropped. At `35b9f088c1` (the last `origin/main` commit before the 2026-09-15 population measurement) the deleted function had no `cron:` trigger (event-only since #7640) and exactly 52 function files carried one, equal to `POPULATION_SIZE=52`, so its UUID is not in the soak population. Keep the `apply-sentry-infra.yml` and deploy-arm checks.
 - [ ] 6.3 Confirm the watchdog's next tick shows no defect for the manifest.
 
 ## Phase 7: PR B (tracker #9304, separate branch)
 
-- [ ] 7.1 Delete the monitor and its comment block in `cron-monitors.tf`; delete the unrouted entry; remove the temporary `NON_INNGEST_MONITORS` entry.
+- [ ] 7.1 Delete the monitor and its comment block in `cron-monitors.tf`; delete the unrouted entry; remove the temporary `NON_INNGEST_MONITORS` entry. Also rewrite the two comments citing `scheduled_gh_pages_cert_state` as a margin precedent (`cron-monitors.tf`, search `cf. scheduled_gh_pages_cert_state`), which dangle once the resource is gone; PR A added a `(c3)` guard so a forgotten `NON_INNGEST_MONITORS` entry now reds.
 - [ ] 7.2 Count ledgers: `infra/sentry/README.md` (two `60` -> 59), `scripts/sentry-monitors-audit.sh` addendum line, `model.c4` (`Of 59 cron monitors, 16 ... and 43 from webapp` plus the ungated `44 Inngest-substrate` phrase -> 43), regenerate `model.likec4.json`.
-- [ ] 7.3 Conditional: `RETIRED_IDS` + a test row in `inngest-soak-6178.sh` / `.test.sh` if #9304's comment names a missing population id; mirror #9071's test row `C0e`; that suite runs longer than two minutes, so run it in the background; land before `SOAK_STALE` (2026-10-06).
+- [ ] 7.3 Conditional: `RETIRED_IDS` + a test row in `inngest-soak-6178.sh` / `.test.sh` if #9304's comment names a missing population id; mirror #9071's test row `C0e`; that suite runs longer than two minutes, so run it in the background; land before `SOAK_STALE` (2026-10-06). **Superseded 2026-09-30 (review):** moot for the same reason as 6.2; no `RETIRED_IDS` edit is needed.
 - [ ] 7.4 Art. 30 register: append the dated supersession note under the 2026-05-19 sentence; run `bash scripts/lint-legal-registers.sh`.
 - [ ] 7.5 The PR plan must show exactly 1 delete; commit BODY carries a line-anchored `[ack-destroy]`; PR body `Closes #9304`.
 - [ ] 7.6 Post-merge: `apply-sentry-infra.yml` green; next `scheduled-terraform-drift.yml` sentry leg exits 0.

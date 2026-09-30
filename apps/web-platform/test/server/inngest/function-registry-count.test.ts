@@ -291,6 +291,13 @@ describe("Inngest function registry — drift guards", () => {
     expect(phantom).toEqual([]);
   });
 
+  // The mirror of (c2): an exemption must name a monitor that still exists, so a
+  // temporary entry expires when the monitor it covers is deleted.
+  it("(c3) every NON_INNGEST_MONITORS entry names a monitor declared in cron-monitors.tf", () => {
+    const stale = [...NON_INNGEST_MONITORS].filter((name) => !tfMonitors.has(name));
+    expect(stale).toEqual([]);
+  });
+
   it("(d) KNOWN_UNMONITORED_SLUGS contains no stale entries", () => {
     const actualSlugs = new Set(slugMap.values());
     const stale = [...KNOWN_UNMONITORED_SLUGS].filter((s) => !actualSlugs.has(s));
