@@ -232,6 +232,12 @@ _PRINT_AFFECTED=0
 # selects (AFFECTED_SELECTED per runnable suite + one AFFECTED_SUMMARY), running
 # no suite. --print-affected-set prints CLASSES and ignores the diff.
 _PRINT_SELECTION=0
+# --paths=<a,b,...> (#9307): with --print-selection only, select against THESE paths
+# instead of the real diff -- "what would these files select?". Print-only by
+# construction (--print-selection exits before any suite runs), so it can never
+# narrow a real run's diff.
+_PRINT_PATHS=""
+_PRINT_PATHS_REQ=0
 # --affected-scope=branch|staged (#9173): which diff the affected axis selects
 # on. `staged` swaps the selection window to the index (`git diff --cached`) —
 # the pre-commit hook's unit of work is the commit, not the branch. Valid only
@@ -296,6 +302,10 @@ while [[ "${1:-}" == --* ]]; do
       _PRINT_SELECTION=1
       _AFFECTED_REQ=1
       ;;
+    --paths=*)
+      _PRINT_PATHS="${1#--paths=}"
+      _PRINT_PATHS_REQ=1
+      ;;
     --print-affected-set)
       # Plumbing, not an early exit: it RAISES enumerate so the walk below emits
       # receipts without running a suite, and terminates at the enumerate exit.
@@ -317,6 +327,8 @@ Modes (local default is --affected; CI always runs the full battery):
   --print-selection     print what THIS diff selects (AFFECTED_SELECTED per suite +
                         AFFECTED_SUMMARY); runs nothing. --print-affected-set prints
                         classes and ignores the diff.
+  --paths=a,b           with --print-selection: select against these paths instead
+                        of the real diff (print-only; never narrows a real run).
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
   --enumerate           emit the leg's assigned registration labels; runs nothing.
@@ -1000,6 +1012,11 @@ if (( _PRINT_SELECTION == 1 )) && { (( _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROU
   exit 2
 fi
 
+if (( _PRINT_PATHS_REQ == 1 && _PRINT_SELECTION == 0 )); then
+  echo "ERROR: --paths is print-only: it is valid only with --print-selection." >&2
+  exit 2
+fi
+
 # --affected-scope names WHICH diff an affected axis selects on (#9173). It is
 # meaningful only where an affected axis consumes _diff_names — `--affected`
 # (explicit or the local default) and `TEST_GROUP=affected` — so the three
@@ -1369,6 +1386,7 @@ _aff_fallback=""
 _aff_sel=()
 _aff_label=()
 _aff_cls=()
+_aff_edges=()
 
 # --- Shard selection at the registration chokepoint (#7902, #8006) ---------------------------
 #
@@ -1990,6 +2008,16 @@ if [[ "$TEST_GROUP" == "affected" ]]; then
   _diff_names="${_diff_names}
 $(git ls-files --others --exclude-standard 2>/dev/null || true)"
   fi
+fi
+
+# --paths (#9307): the caller named the paths, so they ARE the diff. Both detection
+# arms are set -- a named path list is fully determined, so neither undecidable-diff
+# arm can fire -- while the runner-changed arm still reads the names honestly (a
+# list naming the runner itself degrades, as a real diff would).
+if (( _PRINT_PATHS_REQ == 1 )); then
+  _diff_names="${_PRINT_PATHS//,/$'\n'}"
+  _diff_detect_ok=1
+  _diff_head_ok=1
 fi
 
 # Does this run's diff touch any of the given paths? Used to decline suites that guard code the
@@ -2878,6 +2906,11 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
             _aff_cmd_records=$(( _aff_cmd_records + 1 ))
             _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
             _aff_cls[$_aff_ordinal]="$_AC_CLASS"
+            if (( _PRINT_SELECTION == 1 )); then
+              _aff_ej=""
+              for _aff_e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do _aff_ej+="${_aff_ej:+|}${_aff_e}"; done
+              _aff_edges[$_aff_ordinal]="$_aff_ej"
+            fi
             if [[ "$_AC_CLASS" == edge:* && ${#_AC_EDGES[@]} -gt 0 ]] \
               && ! _diff_touches ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; then
               _aff_sel[$_aff_ordinal]=0
@@ -2951,7 +2984,8 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
       # A DECLINED (relevance) record carries no selection bit: no row for it.
       [[ -n "${_aff_sel[$_aff_i]:-}" ]] || continue
       if (( _PRINT_SELECTION == 1 )); then
-        printf 'AFFECTED_SELECTED\t%s\t%s\n' "${_aff_label[$_aff_i]}" "${_aff_sel[$_aff_i]}"
+        printf 'AFFECTED_SELECTED\t%s\t%s\t%s\t%s\n' "${_aff_label[$_aff_i]}" "${_aff_sel[$_aff_i]}" \
+          "${_aff_cls[$_aff_i]:-}" "${_aff_edges[$_aff_i]:-}"
       fi
       if [[ "${_aff_sel[$_aff_i]}" == "1" ]]; then
         case "${_aff_cls[$_aff_i]:-}" in

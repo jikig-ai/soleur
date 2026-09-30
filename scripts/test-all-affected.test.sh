@@ -1756,13 +1756,85 @@ else
   fail "m4: rc=$ARM_RC — $(grep -c AFFECTED_SELECTED <<<"$ARM_OUT") rows"
 fi
 
+# --- Rows q1-q4 + m6: --print-selection --paths and the why-columns (#9307) --------
+# `--paths=<a,b>` answers "what would THESE paths select?" without a real diff. It
+# is print-only by construction (valid only with --print-selection, which exits
+# before any suite runs), so it can never narrow a real run's diff. Each
+# AFFECTED_SELECTED row also carries the suite's class and its edge set, so the
+# reason a suite is (not) selected is on the row instead of in the classifier.
+#
+# q1: the why-columns — class and edges ride on the row.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  -- --print-selection --paths=README.md
+_rc=$ARM_RC
+_row=$(awk -F'\t' '$1=="AFFECTED_SELECTED" && $2=="test/x-community"' <<<"$ARM_OUT" | head -1)
+if [[ "$_rc" == "0" ]] \
+  && [[ "$(awk -F'\t' '{print $3"|"$4}' <<<"$_row")" == "0|edge:declared" ]] \
+  && awk -F'\t' '{print $5}' <<<"$_row" | grep -qF '^plugins/soleur/skills/community/scripts/' \
+  && grep -qF $'AFFECTED_SELECTED\tscripts/lint-dual-lockfile\t1\talways_on\t' <<<"$ARM_OUT"; then
+  pass "q1: rows carry bit, class and edge set (declared edges shown anchored)"
+else
+  fail "q1: rc=$_rc row='${_row}'"
+fi
+
+# q2: --paths selects by the given paths, not by the real diff.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  -- --print-selection --paths=test/x-community.test.ts
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] \
+  && grep -qF $'AFFECTED_SELECTED\ttest/x-community\t1\t' <<<"$ARM_OUT" \
+  && grep -qF 'fallback=none' <<<"$ARM_OUT"; then
+  pass "q2: --paths=test/x-community.test.ts selects test/x-community, no fallback"
+else
+  fail "q2: rc=$_rc — $(grep -E 'AFFECTED_(SUMMARY|FALLBACK)' <<<"$ARM_OUT" | head -2)"
+fi
+
+# q3: --paths is print-only: refused without --print-selection.
+cases=$((cases + 1))
+_q3a=0; env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --affected --paths=README.md >/dev/null 2>&1 || _q3a=$?
+_q3b=0; env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --paths=README.md >/dev/null 2>&1 || _q3b=$?
+if [[ "$_q3a" == "2" && "$_q3b" == "2" ]]; then
+  pass "q3: --paths exits 2 unless --print-selection is named"
+else
+  fail "q3: --affected rc=$_q3a, bare rc=$_q3b, expected 2/2"
+fi
+
+# q4: against the REAL runner and corpus, --paths bypasses the runner-changed
+#     fallback this very branch would otherwise hit, and reports a live selection.
+cases=$((cases + 1))
+_q4=$(cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-selection --paths=README.md 2>/dev/null) || true
+_q4_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$_q4" | head -1)
+_q4_sel=$(sed -E 's/.*selected=([0-9]+) .*/\1/' <<<"$_q4_sum")
+if grep -qF 'fallback=none' <<<"$_q4_sum" && [[ "$_q4_sel" =~ ^[0-9]+$ ]] && (( _q4_sel >= 100 )); then
+  pass "q4: real corpus, --paths=README.md: ${_q4_sum#AFFECTED_SUMMARY }"
+else
+  fail "q4: summary='${_q4_sum}'"
+fi
+
+# m6: the paths override is dead — q2's selection must now be empty.
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='  _diff_names="${_PRINT_PATHS//,/$'"'"'\n'"'"'}"' \
+SANDBOX_MUT_NEW='  _diff_names=""' \
+SANDBOX_LIB=with-lib run_arm \
+  -- --print-selection --paths=test/x-community.test.ts
+if [[ "$ARM_RC" != "98" ]] && ! grep -qF $'AFFECTED_SELECTED\ttest/x-community\t1\t' <<<"$ARM_OUT"; then
+  pass "m6: dead-override mutant stops selecting test/x-community (q2 detects it)"
+else
+  fail "m6: rc=$ARM_RC — $(grep -c AFFECTED_SELECTED <<<"$ARM_OUT") rows"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=70
+MIN_CASES=75
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
