@@ -239,7 +239,10 @@ jobs:
           echo "d6 rotate stamp: run $last_ok"
           # deploy_in_flight: no web-1-swap member running/queued (a concurrent
           # env-rebaking deploy mid-flip would be an unattributed cutover).
-          inflight="$(gh run list --workflow web-platform-release.yml --limit 20 \
+          # --event workflow_run names the DEPLOY arm: each merge produces both a
+          # push-arm and a workflow_run-arm record, and an armless list reads the
+          # wrong half ~50% of the time (workflow-run-deploy-invariants G8).
+          inflight="$(gh run list --workflow web-platform-release.yml --event workflow_run --limit 20 \
                        --json databaseId,status 2>/dev/null \
             | jq -r '[.[] | select(.status=="in_progress" or .status=="queued" or .status=="waiting")] | length' || echo 99)"
           [[ "$inflight" == "0" ]] || fail deploy_in_flight "web-platform deploys in-flight/queued ($inflight) — wait for the fleet to settle, then re-dispatch."
