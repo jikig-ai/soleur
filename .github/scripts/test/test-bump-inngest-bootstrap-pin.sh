@@ -64,7 +64,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=567   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=578   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -887,6 +887,13 @@ assert_gh_not_called 'g1.armed-full-build:no-disarm' 'disable-auto'
 run_bump mirror-only-bad --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only yes
 [[ "$LAST_RC" != 0 ]] && pass 'g1.mirror-only-bad:nonzero' || fail 'g1.mirror-only-bad:nonzero' "--mirror-only yes accepted"
 assert_out_has 'g1.mirror-only-bad:stage' '::error::args:'
+# A repeated flag is refused, never last-wins (a trailing `--mirror-only false`
+# would otherwise cancel the hold).
+run_bump mirror-only-dup --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only true --mirror-only false
+[[ "$LAST_RC" != 0 ]] && pass 'g1.mirror-only-dup:nonzero' || fail 'g1.mirror-only-dup:nonzero' "a repeated --mirror-only was accepted"
+assert_out_has 'g1.mirror-only-dup:names' 'duplicate argument: --mirror-only'
+assert_result  'g1.mirror-only-dup:result' error
+assert_out_has 'g1.mirror-only-dup:stage' '::error::args:'
 
 # ---------------------------------------------------------------------------
 # AC9 — degraded mirror: PR opens, auto-merge NOT armed, hold comment lands.
@@ -1995,7 +2002,31 @@ elif isinstance(on, list): on_keys = set(on)
 elif isinstance(on, dict): on_keys = set(on)
 else: on_keys = set()
 emit("S21:trigger-dispatch-only", on_keys == {"workflow_dispatch"}, f"on keys={sorted(map(str, on_keys))} (a tag-ref run is refused by the main-only environment; ADR-232 A5)")
-emit("S22:bump-passes-mirror-only", benv.get("MIRROR_ONLY") == "${{ inputs.mirror_only }}" and '--mirror-only "$MIRROR_ONLY"' in str(bstep2.get("run") or ""), repr(benv.get("MIRROR_ONLY")))
+# S22 parses the script invocation into an argv (a substring test is satisfied by a
+# comment, and by a trailing `--mirror-only false` that would cancel the hold) and
+# requires every flag exactly once, --mirror-only bound to "$MIRROR_ONLY".
+import shlex
+def bump_argv(run):
+    for line in str(run or "").replace("\\\n", " ").splitlines():
+        line = line.strip()
+        if line.startswith("bash .github/scripts/bump-inngest-bootstrap-pin.sh"):
+            try: return shlex.split(line, comments=True)
+            except ValueError: return None
+    return None
+argv = bump_argv(bstep2.get("run")) or []
+flags = [a for a in argv if a.startswith("--")]
+mo_ok = argv.count("--mirror-only") == 1 and argv[argv.index("--mirror-only") + 1] == "$MIRROR_ONLY"
+emit("S22:bump-passes-mirror-only", benv.get("MIRROR_ONLY") == "${{ inputs.mirror_only }}" and mo_ok and len(flags) == len(set(flags)), f"env={benv.get('MIRROR_ONLY')!r} argv={argv}")
+# S23: the script step's env is EXACT, so no extra credential (the Tier-B Doppler
+# token, a PAT) can ride in beside the App token.
+want_env = {"GH_TOKEN": "${{ steps.mint.outputs.token }}", "TAG": "${{ needs.build.outputs.tag }}",
+            "SIGNED_DIGEST": "${{ needs.build.outputs.digest }}", "SIGNED_COMMIT": "${{ needs.build.outputs.commit }}",
+            "MIRROR_STATUS": "${{ needs.build.outputs.mirror_status }}", "MIRROR_ONLY": "${{ inputs.mirror_only }}",
+            "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}
+emit("S23:bump-script-env-exact", benv == want_env, f"env keys={sorted(benv)}")
+# S24: exactly the verify and mint steps name the Tier-B Doppler token.
+tb = sorted(str(s.get("name")) for s in bsteps if "DOPPLER_TOKEN_INFRA_PRIVILEGED" in yaml.safe_dump(s))
+emit("S24:tier-b-token-steps", tb == sorted(["Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present", "Mint soleur-infra App token (contents+pull_requests write on soleur)"]), f"steps={tb}")
 print(f"END|{emitted}")
 PY
 python3 "$SHAPE_PY" "$WORKFLOW" "$REFUSE_STEP" "$RECORD_STEP" "$REFUSE_BODY" "$RECORD_BODY" > "$SHAPE_OUT" 2>&1
@@ -2052,6 +2083,8 @@ shape_mut tag-trigger-readded 'S21' $'\non:\n' $'\non:\n  push:\n    tags:\n    
 shape_mut second-minter 'S19,S20' $'          repositories: soleur\n' $'          repositories: soleur\n\n      - name: Second mint\n        id: mint2\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"contents":"write"}\'\n          repositories: soleur\n'
 shape_mut workflow-env-tier-a 'S20' $'\npermissions:\n' $'\nenv:\n  LEAK: ${{ secrets.DOPPLER_TOKEN }}\npermissions:\n'
 shape_mut bracket-tier-a 'S20' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
+shape_mut mirror-only-cancelled 'S22' '            --mirror-only "$MIRROR_ONLY"' '            --mirror-only "$MIRROR_ONLY" --mirror-only false'
+shape_mut script-env-extra-token 'S23,S24' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n'
 shape_mut mirror-only-dropped 'S22' ' \'$'\n''            --mirror-only "$MIRROR_ONLY"' ''
 # H1: point the job lookup at a name that does not exist — S15 must RED rather
 # than the exact rows passing vacuously on an empty dict.
@@ -2430,6 +2463,23 @@ st_run 4 excluded-side-effects assert_excluded 'selftest.ex-b' v1.1.99   # crane
 printf 'result=error\n' > "$LAST_GOUT"; LAST_RC=1
 st_run 3 refused-side-effects assert_refused 'selftest.rf-b' 'wording present' resolve   # crane, gh, branch
 pass 'selftest:verdict-helpers-can-fail'
+# The gh/output/result assertion helpers own their verdicts too: drive each once in
+# the direction it must FAIL (delta 1) and once in the direction it must PASS
+# (delta 0), so a helper rewritten to always pass (or always fail) is caught.
+MOCK_GH_LOG="$TMP/selftest.ghlog"; printf 'gh pr create --head x\n' > "$MOCK_GH_LOG"
+LAST_OUT="$TMP/selftest2.out"; printf 'hello needle world\n' > "$LAST_OUT"
+LAST_GOUT="$TMP/selftest2.gout"; printf 'result=opened\n' > "$LAST_GOUT"; LAST_RC=0
+st_run 1 gh-called-miss      assert_gh_called     'selftest.gc-miss' 'gh pr merge '
+st_run 0 gh-called-hit       assert_gh_called     'selftest.gc-hit'  'gh pr create '
+st_run 1 gh-not-called-hit   assert_gh_not_called 'selftest.gn-hit'  'gh pr create '
+st_run 0 gh-not-called-miss  assert_gh_not_called 'selftest.gn-miss' 'gh pr merge '
+st_run 1 out-has-miss        assert_out_has       'selftest.oh-miss' 'absent-token'
+st_run 0 out-has-hit         assert_out_has       'selftest.oh-hit'  'needle'
+st_run 1 result-miss         assert_result        'selftest.r-miss'  existing
+st_run 0 result-hit          assert_result        'selftest.r-hit'   opened
+st_run 1 rc-miss             assert_rc            'selftest.rc-miss' 1
+st_run 0 rc-hit              assert_rc            'selftest.rc-hit'  0
+pass 'selftest:gh-out-result-helpers-both-directions'
 
 # ---------------------------------------------------------------------------
 echo ""

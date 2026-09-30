@@ -152,6 +152,7 @@ die() { # die <stage> <msg...>
 
 # --- args -------------------------------------------------------------------
 SIGNED_TAG="" SIGNED_DIGEST="" SIGNED_COMMIT="" MIRROR_STATUS="" RUN_URL="" MIRROR_ONLY=""
+SEEN_FLAGS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --signed-tag|--signed-digest|--signed-commit|--mirror-status|--run-url|--mirror-only)
@@ -159,6 +160,10 @@ while [[ $# -gt 0 ]]; do
       # without consuming, and the while loop would re-match $1 forever
       # (no `set -e` here) — burning the job's whole timeout budget.
       [[ $# -ge 2 ]] || die args "missing value for $1"
+      # A repeated flag is refused, never last-wins: `--mirror-only "$X" --mirror-only
+      # false` appended to the workflow's call would otherwise silently cancel the hold.
+      case " ${SEEN_FLAGS:-} " in *" $1 "*) die args "duplicate argument: $1" ;; esac
+      SEEN_FLAGS="${SEEN_FLAGS:-} $1"
       ;;
     *) die args "unknown argument: $1" ;;
   esac

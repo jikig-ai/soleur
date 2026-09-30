@@ -83,7 +83,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=596   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=610   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1439,6 +1439,11 @@ g3_mut g3.w14-env-not-tier-b 'mwf' '    environment: infra-privileged' '    envi
 g3_mut g3.w15-no-env 'mwf' $'    environment: infra-privileged\n' ''
 g3_mut g3.w17-workflow-env-tier-a 'mwf' $'\npermissions:\n  contents: read\n' $'\nenv:\n  LEAK: ${{ secrets.DOPPLER_TOKEN }}\npermissions:\n  contents: read\n'
 g3_mut g3.w18-bracket-tier-a 'mwf' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
+g3_mut g3.w16b-second-minter-tier-b 'mwf' $'          repositories: soleur\n' $'          repositories: soleur\n      - name: Second mint\n        id: app2\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          installation-id: "166065653"\n          permissions: \'{"administration":"write"}\'\n          repositories: soleur\n'
+# ...and the row that catches it must be one-minter (the Tier-B token passes no-tier-a).
+w16b_out=$(g3_wf "$MUTDIR/g3.w16b-second-minter-tier-b.$(basename "$MINT_WF")" "$BUILD_WF")
+if grep -q '^BAD one-minter ' <<<"$w16b_out"; then pass 'g3.w16b:caught-by-one-minter'
+else fail 'g3.w16b:caught-by-one-minter' "the Tier-B second minter was not caught by one-minter"; fi
 g3_mut g3.w16-second-minter 'mwf' $'          repositories: soleur\n' $'          repositories: soleur\n      - name: Second mint\n        id: app2\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"actions":"write"}\'\n          repositories: soleur\n'
 
 # H2 (must-PASS, non-canonical): the {name: ...} mapping form of the environment is
@@ -1465,7 +1470,7 @@ sed 's/^KEYSET = True$/KEYSET = False/' "$TMP/g3_wf.py" > "$TMP/g3_wf_nokeyset.p
 if cmp -s "$TMP/g3_wf.py" "$TMP/g3_wf_nokeyset.py"; then fail 'g3.h1b-keyset-load-bearing' "KEYSET switch did not land in the checker copy"
 else
   h1b_out=$(python3 "$TMP/g3_wf_nokeyset.py" "$MUTDIR/g3.w12-app-continue-on-error.$(basename "$MINT_WF")" "$BUILD_WF" "$SCRIPT" "$COMPOSITE" 2>&1 || echo "BAD python-crashed")
-  if grep -qE '^BAD (app-exact|python-crashed)' <<<"$h1b_out"; then fail 'g3.h1b-keyset-load-bearing' "app-exact still RED with the key-set half off: the half is not what catches w12"
+  if grep -qE '^BAD (app-exact|python-crashed)' <<<"$h1b_out" || ! grep -q '^OK app-exact$' <<<"$h1b_out"; then fail 'g3.h1b-keyset-load-bearing' "app-exact still RED (or absent) with the key-set half off: the half is not what catches w12"
   else pass 'g3.h1b-keyset-load-bearing'; fi
 fi
 
@@ -1554,6 +1559,18 @@ run_comp scope-all-repos '{"actions":"write"}' soleur '{"token":"fixture-install
 a_eq 'comp.selection-all:refused' "$(refused)" yes
 a_eq 'comp.selection-all:no-token-out' "$(cat "$COUT")" ''
 a_eq 'comp.selection-all:revoked' "$(grep -cx 'https://api.github.com/installation/token' "$CLOG" || true)" 1
+# The two repository clauses, each ALONE: selection=all with the right repo list, and
+# selection=selected over MORE repositories than requested — both refused.
+run_comp sel-all-with-repos '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","metadata":"read"},"repository_selection":"all","repositories":[{"name":"soleur"}]}'
+a_eq 'comp.sel-all-with-repos:refused' "$(refused)" yes
+a_eq 'comp.sel-all-with-repos:no-token-out' "$(cat "$COUT")" ''
+run_comp repos-wider '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","metadata":"read"},"repository_selection":"selected","repositories":[{"name":"soleur"},{"name":"other"}]}'
+a_eq 'comp.repos-wider:refused' "$(refused)" yes
+a_eq 'comp.repos-wider:no-token-out' "$(cat "$COUT")" ''
+# metadata may only ever be read.
+run_comp metadata-write '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","metadata":"write"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
+a_eq 'comp.metadata-write:refused' "$(refused)" yes
+a_eq 'comp.metadata-write:no-token-out' "$(cat "$COUT")" ''
 # Mandatory inputs (#9262). Composite `required: true` is not enforced by the runner,
 # and an UNSCOPED token of this App carries administration:write and secrets:write,
 # so every empty input is refused before any Doppler read or network call. The two
@@ -1593,11 +1610,47 @@ a_eq 'comp.exchange-refused:no-token-out' "$(cat "$COUT")" ''
 a_eq 'comp.exchange-refused:one-line' "$(grep -c 'Resource not accessible' "$CDIR/exchange-refused.stdout" || true)" 1
 a_eq 'comp.exchange-refused:tail-kept' "$(grep -c 'Resource not accessible.*debug:w' "$CDIR/exchange-refused.stdout" || true)" 1
 a_eq 'comp.exchange-refused:no-forged-anything' "$(grep -cE '^::(notice|warning|debug)|^::error::[^m]' "$CDIR/exchange-refused.stdout" || true)" 0
+a_eq 'comp.exchange-refused:no-legacy-command' "$(grep -c '^##\[' "$CDIR/exchange-refused.stdout" || true)" 0
 # A transport failure (curl rc 28) is annotated, never a bare errexit with only curl's stderr.
 CURL_FAIL=28 run_comp transport-fail '{"actions":"write"}' soleur "$R_OK"
 a_eq 'comp.transport-fail:refused' "$(refused)" yes
 a_eq 'comp.transport-fail:annotated' "$(grep -c '^::error::mint-infra-app-token: the installation-token exchange did not complete (curl rc=28' "$CDIR/transport-fail.stdout" || true)" 1
 a_eq 'comp.transport-fail:no-token-out' "$(cat "$COUT")" ''
+# The composite's own shape, parsed: exactly one step whose keys are exactly
+# {name,id,shell,env,run} (no if / continue-on-error — a soft-failed mint hands out an
+# empty token and the tag step would still run), env bound to the four inputs, and the
+# token output wired to that step. The run-block harness above cannot see any of this.
+cat > "$CDIR/shape.py" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+steps = (d.get("runs") or {}).get("steps") or []
+st = steps[0] if len(steps) == 1 else {}
+want_env = {"DOPPLER_TOKEN": "${{ inputs.doppler-token }}", "INSTALLATION_ID": "${{ inputs.installation-id }}",
+            "SCOPE_PERMISSIONS": "${{ inputs.permissions }}", "SCOPE_REPOSITORIES": "${{ inputs.repositories }}"}
+ok = (len(steps) == 1 and set(st) == {"name", "id", "shell", "env", "run"} and st.get("id") == "mint"
+      and st.get("shell") == "bash" and st.get("env") == want_env
+      and ((d.get("outputs") or {}).get("token") or {}).get("value") == "${{ steps.mint.outputs.token }}"
+      and set((d.get("inputs") or {})) == {"doppler-token", "installation-id", "permissions", "repositories"})
+print("OK" if ok else "BAD keys=%s env=%s" % (sorted(st), st.get("env")))
+PY
+comp_shape=$(python3 "$CDIR/shape.py" "$COMPOSITE")
+a_eq 'comp.shape:exact' "$comp_shape" OK
+comp_shape_mut() { # comp_shape_mut <id> <old> <new> — mutate a copy; the shape check must say BAD
+  local cid="$1" cdst="$CDIR/action.shape-$1.yml" got
+  python3 - "$COMPOSITE" "$cdst" "$2" "$3" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(old) != 1: sys.exit(2)
+open(dst, "w").write(s.replace(old, new, 1))
+PY
+  if [[ $? -ne 0 ]] || cmp -s "$COMPOSITE" "$cdst"; then fail "comp.shape-mut-$cid:landed" "anchor did not land"; return; fi
+  got=$(python3 "$CDIR/shape.py" "$cdst")
+  a_eq "comp.shape-mut-$cid:caught" "${got%% *}" BAD
+}
+comp_shape_mut continue-on-error $'      id: mint\n' $'      id: mint\n      continue-on-error: true\n'
+comp_shape_mut env-swapped 'SCOPE_PERMISSIONS: ${{ inputs.permissions }}' 'SCOPE_PERMISSIONS: ${{ inputs.repositories }}'
+comp_shape_mut output-rewired 'value: ${{ steps.mint.outputs.token }}' 'value: ${{ steps.other.outputs.token }}'
 # Mutation (plan Guard Contract row 8): the composite's project argv moved to the
 # Tier-A `soleur` project must turn the scoped row RED — the stub refuses it.
 comp_mut="$CDIR/action.mut-project.yml"
