@@ -480,22 +480,22 @@ Panel: `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`
 
 ## Acceptance Criteria
 
-- [ ] AC1: no non-comment line of `apps/web-platform/infra/inngest-bootstrap.sh` invokes
+- [x] AC1: no non-comment line of `apps/web-platform/infra/inngest-bootstrap.sh` invokes
   `pause` or `resume` through the binary. Check:
   `grep -vE '^[[:space:]]*#' apps/web-platform/infra/inngest-bootstrap.sh | grep -cE '(INSTALL_PATH\}?"?|/usr/local/bin/inngest)[[:space:]]+(pause|resume)'`
   prints `0`. Its exit 1 is expected, because `grep -c` exits 1 on zero matches.
-- [ ] AC2: the upgrade block still sleeps `DRAIN_SLEEP_SEC`. `grep -cF 'sleep "$DRAIN_SLEEP_SEC"' apps/web-platform/infra/inngest-bootstrap.sh`
+- [x] AC2: the upgrade block still sleeps `DRAIN_SLEEP_SEC`. `grep -cF 'sleep "$DRAIN_SLEEP_SEC"' apps/web-platform/infra/inngest-bootstrap.sh`
   prints `1`, and the `DRAIN_SLEEP_SEC="${DRAIN_SLEEP_SEC:-2}"` default is unchanged.
-- [ ] AC3: the upgrade completion log survives. `grep -cF 'log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"' apps/web-platform/infra/inngest-bootstrap.sh`
+- [x] AC3: the upgrade completion log survives. `grep -cF 'log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"' apps/web-platform/infra/inngest-bootstrap.sh`
   prints `1`, still inside an `if [[ -n "${UPGRADE_FROM:-}" ]]` branch.
-- [ ] AC4: no stale prose remains in the bootstrap. Three checks:
+- [x] AC4: no stale prose remains in the bootstrap. Three checks:
   - `grep -nE 'DEAD on every|dead call|no-op on tested|~5s|pausing for queue drain|resume below|Resume from upgrade pause|drain to SQLite' apps/web-platform/infra/inngest-bootstrap.sh`
     returns nothing.
   - `grep -nE '[Dd]rain' apps/web-platform/infra/inngest-bootstrap.sh | grep -vE 'DRAIN_SLEEP_SEC|idle-drain|DRAINS idle|not a drain'`
     returns nothing.
   - `grep -cF 'settle delay before binary replace' apps/web-platform/infra/inngest-bootstrap.sh`
     prints `1`.
-- [ ] AC5: diff scope. `git diff --name-only origin/main...HEAD` lists only:
+- [x] AC5: diff scope. `git diff --name-only origin/main...HEAD` lists only:
   - `inngest-bootstrap.sh`, `inngest.test.sh` and `inngest-cli.provenance.md` (all under
     `apps/web-platform/infra/`)
   - `knowledge-base/engineering/operations/runbooks/inngest-server.md`
@@ -505,10 +505,10 @@ Panel: `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`
   It lists no `.github/workflows/*`, no `cloud-init*.yml` and no `ci-deploy.sh`. Also,
   `git diff origin/main...HEAD -- apps/web-platform/infra/ | grep -E '^\+.*systemctl[[:space:]]+(start|restart)'`
   returns nothing. If it does return a line, `ci-deploy.test.sh` becomes mandatory.
-- [ ] AC6: `inngest.test.sh` no longer contains the "upgrade-drain resume command still present"
+- [x] AC6: `inngest.test.sh` no longer contains the "upgrade-drain resume command still present"
   assertion. It contains the #9219 verb-allowlist assertion, which passes on the edited
   bootstrap. Mutation rows 1, 2, 3, 5 and 6 were each observed FAIL and row 4 PASS, read from the guard's own line on a scratch copy of `infra/`.
-- [ ] AC7: targeted ratchets pass locally:
+- [x] AC7: targeted ratchets pass locally:
   - `bash apps/web-platform/infra/inngest.test.sh`
   - `bash apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh`
   - `bash apps/web-platform/infra/inngest-cli-staleness.test.sh` and `inngest-cli-staleness-mutation.test.sh`
@@ -518,7 +518,7 @@ Panel: `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`
   - `bash scripts/lint-shell-capture-exit.test.sh`
   - `bash plugins/soleur/test/fixture-relative-assert.test.sh`, with no baseline row change. If
     a row does change, regenerate with `--write-baseline` in the same commit, with a stated reason.
-- [ ] AC8: the runbook sentence and the provenance row are corrected. Each of these prints `0`:
+- [x] AC8: the runbook sentence and the provenance row are corrected. Each of these prints `0`:
   - `grep -c 'pauses → drains → restarts → resumes' knowledge-base/engineering/operations/runbooks/inngest-server.md`
   - `grep -c '~5s downtime on loopback' knowledge-base/engineering/operations/runbooks/inngest-server.md`
   - `grep -c 'follow-up issue, not an upgrade regression' apps/web-platform/infra/inngest-cli.provenance.md`
