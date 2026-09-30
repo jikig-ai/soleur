@@ -50,6 +50,7 @@ const ACKS: Record<string, { reason: AckReason; lines: number }> = {
   ".claude/hooks/prod-write-defer-gate.test.sh|user-set-role": { reason: "doc-mention", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/admin-ip-drift.md|admin-ip-refresh": { reason: "operator-handoff", lines: 5 },
   "knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md|admin-ip-refresh": { reason: "operator-handoff", lines: 1 },
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md|admin-ip-refresh": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-cloudflare": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-doppler": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-github": { reason: "operator-handoff", lines: 2 },
