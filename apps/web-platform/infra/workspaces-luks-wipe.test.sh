@@ -1151,9 +1151,13 @@ run_case "$CUTOVER" 'DRY_RUN=0 arm_dead_man' 'arm_dead_man'
 G5D_STATE="$STATE/state"
 G5D_FIRE="$(awk '/^systemd-run / { sub(/^.* \/bin\/sh -c /, ""); print; exit }' "$CALLS")"
 G5D_BIN="$WIPE_SCRATCH/g5d-bin"; mkdir -p "$G5D_BIN"
-for b in logger umount mount cryptsetup docker systemctl; do
-  printf '#!/bin/sh\nprintf "%%s %%s\\n" %s "$*" >> "$G5D_LOG"\n' "$b" > "$G5D_BIN/$b"
-done
+# One recording stub, copied per name (a quoted heredoc, so the stub's own `>>` is never read as a
+# redirect of this suite by the fixture-relative-assert scanner).
+cat > "$G5D_BIN/logger" <<'G5D_STUB'
+#!/bin/sh
+printf '%s %s\n' "${0##*/}" "$*" >> "$G5D_LOG"
+G5D_STUB
+for b in umount mount cryptsetup docker systemctl; do cp "$G5D_BIN/logger" "$G5D_BIN/$b"; done
 printf '#!/bin/sh\nprintf "%%s\\n" "$G5D_SRC"\n' > "$G5D_BIN/findmnt"
 chmod +x "$G5D_BIN"/*
 g5d_fire() {  # <mount source> <state line or empty>
