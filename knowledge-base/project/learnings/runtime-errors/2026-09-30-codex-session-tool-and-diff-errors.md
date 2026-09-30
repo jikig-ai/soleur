@@ -88,3 +88,14 @@ lint script from the repository root. Check `pwd` against the script's owning
 package before invoking it. The PR-diff form of the FK-precondition lint skips
 an untracked migration, so run the explicit-file form while a migration is
 still uncommitted; it caught missing `to_regclass` checks for both FK targets.
+
+The operator authorized CI-only test validation, but the first WIP commit used
+`LEFTHOOK_EXCLUDE=bun-test` and still ran `plugin-component-test` because they
+are separate hooks with different globs. It completed 3,809 tests successfully
+with 12 skipped. Read `lefthook.yml`, exclude every test-running hook by its
+exact key, and verify the hook output lists each skip; the work skill now pins
+that procedure. The app's Web Platform tests remain for CI.
+
+The first work-skill edit exceeded its 362,000-byte body budget by 502 bytes,
+so the commit hook refused it. Keep only a conditional pointer in the loaded
+skill and place the procedure in a reference file read at that named step.
