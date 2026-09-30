@@ -1836,6 +1836,90 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
   }
 }
 
+# #8609 / ADR-241 D10 — the web host's runtime GitHub App key, checked at boot and at deploy.
+#
+# BOOT (github_app_key_boot). After the first `docker run`, soleur-host-bootstrap.sh runs the
+# canary key probe (`GET /app`, slug soleur-ai) in the serving container and emits ONE
+# soleur-boot-emit stage per outcome: `github_app_key_ok` or one of the five below. A SEPARATE
+# rule, not five more stages on web_terminal_boot_fatal above: the boot is not aborted (the
+# container is already up), so folding them into "terminal-boot-fatal" would page a degraded key
+# as a dead host and teach the reader to discount that rule — the web_private_nic_boot_gate
+# precedent. Without a stage-filtered rule these events land in the shared, always-open
+# "soleur-cloud-init boot stage" group and page nobody (observability review P1-1).
+# `value = 0` pages the first event: every condition is a NON-ok emit (`github_app_key_ok` is
+# deliberately absent), the same failure-only precedent as web_terminal_boot_fatal.
+# `_transport` is included although it does not block a deploy: at boot it means the host could
+# not prove its key at all, and R5/R7 read web-2's key state from exactly these events.
+#
+# DEPLOY (github_app_key_deploy). ci-deploy.sh's curl emitter sends feature=ci-deploy
+# op=github-app-key on an isolated-project fetch failure, an unsigned image refused the key, or a
+# canary probe verdict of rejected/transport (a classification and a length only, never Doppler
+# stderr). `no_token` (the pre-R3 state) emits nothing, so every event on this op is non-ok.
+#
+# Distinct `frequency_minutes` 29 and 32 avoid Sentry POST-time exact-duplicate dedup (both unused).
+# Judge severity by the event's host_name / level, not by the rule name. Runbook:
+# infra-credential-tiers-8209.md, "Runtime App key (#8609)".
+resource "sentry_alert" "github_app_key_boot" {
+  organization      = var.sentry_org
+  name              = "web-host-github-app-key-boot"
+  enabled           = true
+  frequency_minutes = 29
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "any-short"
+      conditions = [
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_rejected" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_missing" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_transport" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_probe_absent" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_exec_failed" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+resource "sentry_alert" "github_app_key_deploy" {
+  organization      = var.sentry_org
+  name              = "ci-deploy-github-app-key"
+  enabled           = true
+  frequency_minutes = 32
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "ci-deploy" } },
+        { tagged_event = { key = "op", match = "eq", value = "github-app-key" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-workspace-sync-health.ts: a daily probe that
 # emits `feature=workspace-sync-health` events via reportSilentFallback for both
 # user-actionable findings (op ∈ {ready-null-installation, stale-sync-failed,

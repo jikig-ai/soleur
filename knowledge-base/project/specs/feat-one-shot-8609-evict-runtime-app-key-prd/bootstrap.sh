@@ -836,11 +836,10 @@ stage_r5b() {
   branch="ops-8609-web-2-host-key"
   show_cmd "bash scripts/capture-web-2-host-key.sh ${ip}; commit ${PIN_FILE} on ${branch}; gh pr create"
   soleur_op_ack_or_die "  Capture web-2's host key and open the pin PR? Type 'yes': "
-  git -C "$REPO_ROOT" fetch -q origin main
   wt="$(mktemp -d)/r5b"
-  git -C "$REPO_ROOT" worktree add -q -b "$branch" "$wt" origin/main
+  ( cd "$REPO_ROOT" && git fetch -q origin main && git worktree add -q -b "$branch" "$wt" origin/main ) || return 1
   (
-    trap 'git -C "$REPO_ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true' EXIT
+    trap '( cd "$REPO_ROOT" && git worktree remove --force "$wt" ) >/dev/null 2>&1 || true' EXIT
     cd "$wt"
     bash scripts/capture-web-2-host-key.sh "$ip"
     git add "$PIN_FILE"
