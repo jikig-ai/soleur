@@ -109,6 +109,9 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
       onKeyDown={
         navigable
           ? (e) => {
+              // Only the row itself navigates — a bubbled keydown from a
+              // focused inner control (Mark done / Archive) must not.
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 navigate();

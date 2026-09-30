@@ -117,6 +117,9 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
       tabIndex={0}
       onClick={navigate}
       onKeyDown={(e) => {
+        // Only the row itself navigates — a bubbled keydown from a focused
+        // inner control (Acknowledge / Archive) must not.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           navigate();
