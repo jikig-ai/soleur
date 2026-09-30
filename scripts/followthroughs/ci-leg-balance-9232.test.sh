@@ -211,12 +211,12 @@ SOLEUR_FT_EARLIEST="2099-06-01T00:00:00Z" expect "3 balanced qualifying runs -> 
 # actions-queue-health.test.sh's jobs-call pin. Anchored on /actions/runs/ so
 # the binary /actions/artifacts/<id>/zip downloads are excluded. Reads case 6's
 # calls.log — case 9's pre-cutoff runs never reach the artifacts call.
-art_calls="$(grep '/actions/runs/.*/artifacts' "$FIXTURE_DIR/calls.log" | grep -vc '/zip' || true)"
-art_calls_paginated="$(grep '/actions/runs/.*/artifacts' "$FIXTURE_DIR/calls.log" | grep -v '/zip' | grep -c -- '--paginate' || true)"
+art_calls="$(grep -E '/actions/runs/.*/(artifacts|jobs)' "$FIXTURE_DIR/calls.log" | grep -vc '/zip' || true)"
+art_calls_paginated="$(grep -E '/actions/runs/.*/(artifacts|jobs)' "$FIXTURE_DIR/calls.log" | grep -v '/zip' | grep -c -- '--paginate' || true)"
 if [ "$art_calls" -gt 0 ] && [ "$art_calls" -eq "$art_calls_paginated" ]; then
-  pass "every artifacts list call carried --paginate ($art_calls_paginated/$art_calls)"
+  pass "every artifacts/jobs list call carried --paginate ($art_calls_paginated/$art_calls)"
 else
-  fail "artifacts list call(s) missing --paginate ($art_calls_paginated/$art_calls): $(grep '/actions/runs/.*/artifacts' "$FIXTURE_DIR/calls.log" | grep -v '/zip')"
+  fail "artifacts/jobs list call(s) missing --paginate ($art_calls_paginated/$art_calls): $(grep -E '/actions/runs/.*/(artifacts|jobs)' "$FIXTURE_DIR/calls.log" | grep -v '/zip')"
 fi
 
 # --- Case 7: a breaching leg → FAIL ---------------------------------------------

@@ -483,12 +483,13 @@ cat > "$FP/bin/gh" <<'STUB'
 set -u
 printf '%s\n' "$*" >> "$FIXTURE_DIR/calls.log"
 url="${2:-}"   # argv shape: gh api <url>
-# `&page=N` is anchored on the '&' — a bare 'page=N' substring would match the
-# 'per_page=100' inside EVERY request and serve page 1 for all of them.
+# `&page=N` is anchored on the '&' (a bare 'page=N' substring matches the
+# 'per_page=100' in EVERY request) AND end-anchored — '&page=1' as a non-final
+# pattern would also match '&page=10'/'&page=100' and silently re-serve page 1.
 case "$url" in
-  *'/artifacts?'*'&page=2'*)
+  *'/artifacts?'*'&page=2')
     cat "$FIXTURE_DIR/arts-p2.json" ;;
-  *'/artifacts?'*'&page=1'*|*'/artifacts?per_page=100')
+  *'/artifacts?'*'&page=1'|*'/artifacts?per_page=100')
     cat "$FIXTURE_DIR/arts-p1.json" ;;
   *'/artifacts/'*'/zip')
     aid="$(printf '%s' "$url" | sed -nE 's#.*/artifacts/([0-9]+)/zip#\1#p')"
@@ -512,7 +513,7 @@ if grep -qF $'page1-suite\t111\tmeasured' "$WORK/P-durations.tsv" 2>/dev/null \
 else
   check fail "fixture P: a page-2-only artifact was dropped — the artifacts listing truncated at page 1"
 fi
-if grep -qF 'page=2' "$FP/calls.log"; then
+if grep -qF '&page=2' "$FP/calls.log"; then
   check pass "fixture P: the artifacts call actually fetched page 2 (call-shape, not just output)"
 else
   check fail "fixture P: no page=2 call in the stub's argv log — pagination never ran"

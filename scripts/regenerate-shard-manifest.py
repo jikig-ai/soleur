@@ -91,6 +91,7 @@ EPSILON_FRACTION = 0.05  # of mean leg load
 # Weight for a registered suite no run measured: median-of-measured normally;
 # this constant when nothing measured at all (the all-floor degrade).
 DEFAULT_SUITE_MS = 60000
+ARTIFACTS_PER_PAGE = 100
 
 # Artifact name patterns, one per group and mutually exclusive: the heavy job's
 # artifacts carry a `-heavy-` infix the light pattern cannot match, and vice versa.
@@ -150,18 +151,24 @@ def list_run_artifacts(run_id):
     multi-document output json.loads cannot parse; a pure page loop keeps
     this operator-run tool's only dependency on `gh` itself.)"""
     arts = []
+    seen = set()
     total = None
     page = 1
     while True:
         chunk = json.loads(gh([
             "api",
             f"repos/{REPO}/actions/runs/{run_id}/artifacts"
-            f"?per_page=100&page={page}",
+            f"?per_page={ARTIFACTS_PER_PAGE}&page={page}",
         ]))
+        if not isinstance(chunk, dict):
+            die(f"unexpected artifacts response for page {page} (not an object)")
         batch = chunk.get("artifacts") or []
-        arts.extend({"id": a["id"], "name": a["name"]} for a in batch)
+        for a in batch:
+            if a["id"] not in seen:  # dedupe: offset paging can resurface a row
+                seen.add(a["id"])    # at a boundary mid-enumeration
+                arts.append({"id": a["id"], "name": a["name"]})
         total = chunk.get("total_count", total)
-        if len(batch) < 100 or (total is not None and len(arts) >= total):
+        if len(batch) < ARTIFACTS_PER_PAGE or (total is not None and len(arts) >= total):
             return arts
         page += 1
 

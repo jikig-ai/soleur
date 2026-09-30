@@ -170,6 +170,42 @@ Sibling sites checked and dispositioned (write-boundary sweep —
   repo-root body == `sed __TARGET_DIR__` of the template). Both files get
   the same edit — fixing only the dogfood copy reds parity.
 
+Review-round sweep expansion (the review panel's structural-enumeration seat
+found sites the keyed census missed — same defect class, fixed in the same
+commit where the read silently under-samples, dispositioned otherwise):
+
+- `scripts/followthroughs/zot-mirror-connector-6416.sh` (jobs, default 30/page)
+  — silent `skipped_runs++` under-sampling: **fixed** (`--paginate` + `jq -s --arg`).
+- `scripts/followthroughs/inngest-cli-apply-window-7463.sh` (`jobs?per_page=100`)
+  — never-PASS probe on a page-2 job: **fixed**.
+- `scripts/followthroughs/plugin-delivery-canary-7490.sh` (jobs, 30/page)
+  — alarm direction (false "canary not wired" FAIL): **fixed** anyway —
+  one-line canonical shape removes the false-positive class entirely.
+- `.github/workflows/apply-web-platform-infra.yml` (`jobs?per_page=100`)
+  — degraded diagnostic (failing-step name → "unresolved"): **fixed**
+  (`--paginate` + `jq -rs`/`inputs` on the two reads).
+- `apps/web-platform/server/ci-tools.ts` `fetchFallbackLog` — fetch-based
+  first-30-jobs read; a page-2 failed job silently drops the fallback log:
+  **fixed** (per_page=100 page loop on `total_count`).
+- `plugins/soleur/skills/ship/references/settle-then-admin-merge.md` and
+  `plugins/soleur/skills/brainstorm/SKILL.md` — doc snippets taught the
+  per-page `--jq` anti-shape: **fixed to canonical form**.
+- `plugins/soleur/scripts/deploy-arm.sh` — `--paginate`+`--jq` is *benign
+  here and only here* (GH_JOBS_JQ emits flat @tsv rows; per-page application
+  concatenates identically): **documented at the call site**, no behavior
+  change.
+- `scripts/followthroughs/git-data-boot-poll-8178.sh` — already paginated;
+  its stub **requires** the flag positionally (drop it → BADARGV/64 → every
+  arm fails): pin confirmed structural, no change.
+- `scripts/followthroughs/deploy-script-tests-legs-8736.sh` — already
+  paginated but the flag was unpinned (stub shifts it silently): **Case I
+  calls.log assert added**.
+- Bounded/alarm-direction members dispositioned, no change: `watchdog-arm-
+  soak-9237.sh` (paginated already), `commits/<sha>/pulls`, `check-runs`,
+  `gh run view --json jobs` (gh-internal listing), `workflows/*/runs`
+  bounded newest-first samples, `main-push-duplicate-skip.sh` + `audit-bot-
+  codeql-coverage.sh` per the table above.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec claim | Reality | Plan response |

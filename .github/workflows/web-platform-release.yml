@@ -399,7 +399,10 @@ jobs:
               echo "gh api failed (rc=$_rc, attempt $_try) — retrying in $((_try * 5))s" >&2
               sleep $((_try * 5))
             done
-            fail_closed "the GitHub API read '$1' failed after 3 attempts (rc=$_rc): $(tr -d '\r' <"$RUNNER_TEMP/gh.err" | tr '\n' ' ' | sed 's/%/%25/g' | head -c 300)" "github_api_unavailable"
+            # ${!#} — the endpoint is the LAST arg; callers may pass flags like
+            # --paginate first, and naming '--paginate' in the annotation loses the
+            # identity that makes the failure actionable.
+            fail_closed "the GitHub API read '${!#}' failed after 3 attempts (rc=$_rc): $(tr -d '\r' <"$RUNNER_TEMP/gh.err" | tr '\n' ' ' | sed 's/%/%25/g' | head -c 300)" "github_api_unavailable"
           }
 
           # ── Dispatch arm: everything is in this run. No API, no artifact. ────
@@ -605,7 +608,8 @@ jobs:
           # NO --jq under --paginate: gh applies --jq PER PAGE (one document per
           # page); jq -s slurps the concatenated page objects and flattens.
           jobs_json=$(gh_api --paginate "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
-            | jq -s '[.[].jobs[] | select(.name == "release / release") | {name, conclusion}]')
+            | jq -s '[.[].jobs[] | select(.name == "release / release") | {name, conclusion}]') \
+            || fail_closed "reading the jobs list for run $run_id failed after retries" "github_api_unavailable"
           n=$(printf '%s' "$jobs_json" | jq 'length')
           if [ "$n" -ne 1 ]; then
             fail_closed "expected exactly 1 job named 'release / release' in run $run_id, found $n (the job may have been renamed — this is the empty-haystack class, not a missing release)" "release_job_unresolvable"

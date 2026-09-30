@@ -60,6 +60,8 @@ while read -r id sha; do
   # filter=all: every ATTEMPT's jobs. The default (latest) hides an attempt that
   # applied when a later re-run attempt failed at the apply step, which would
   # push the window back to an older commit (permissive direction).
+  # --paginate | jq -s, never --jq under --paginate: gh applies --jq PER PAGE
+  # (one document per page); jq -s slurps the concatenated page objects.
   concl=$(gh api --paginate "repos/${REPO}/actions/runs/${id}/jobs?filter=all&per_page=100" </dev/null \
     | jq -s "[.[].jobs[] | select(.name == \"${APPLY_JOB}\") | .steps[]? | select(.name == \"${APPLY_STEP}\") | .conclusion] | if index(\"success\") != null then \"success\" else (first // \"\") end") || rc=$?
   if [[ "$rc" -ne 0 ]]; then

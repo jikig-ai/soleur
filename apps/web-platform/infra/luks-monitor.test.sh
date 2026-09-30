@@ -542,11 +542,11 @@ else
 fi
 
 # (t1b) WIRE assert (#9245) — the argv log proves cryptsetup was ASKED; this proves the
-# passphrase actually ARRIVED. The luksOpen stub drains stdin into $CALLS.escrow-stdin;
+# passphrase actually ARRIVED. The cryptsetup stub drains stdin into $CALLS.escrow-stdin;
 # without the drain the file is absent and this fails DETERMINISTICALLY — not at the
-# scheduler's discretion. Compared against the MON_KEY knob, not a literal, so a case
-# that overrides the key still reads delivery correctly.
-if [ "$(cat "$CALLS.escrow-stdin" 2>/dev/null)" = "${MON_KEY-k}" ]; then
+# scheduler's discretion. `:-` (not `-`) keeps the compare discriminating even against an
+# exported-empty MON_KEY — `"" = ""` would read delivery that never happened.
+if [ "$(cat "$CALLS.escrow-stdin" 2>/dev/null)" = "${MON_KEY:-k}" ]; then
   ok "escrow passphrase reached cryptsetup on the wire (\$CALLS.escrow-stdin == MON_KEY)"
 else
   no "escrow passphrase never reached cryptsetup — stdin undrained (captured: $(cat "$CALLS.escrow-stdin" 2>/dev/null || echo '<absent>'))"

@@ -58,6 +58,9 @@
 #                  `[[ != /* ]]` form `_rel_guarded` deliberately does not read), its .test.sh
 #                  1->0 (the flagged site left with the removed `INFRA_WF` harness), and
 #                  test-all-killed-classification.test.sh 3->2 (a site retired by the merge).
+#   2026-09-30   #9245 row move (source edit, not detector): regenerate-shard-manifest.test.sh
+#                  45->51 — fixture P's two-page artifacts fixture adds six relative-operand
+#                  rows (the bin/gh stub's cat > payloads and the python zip writes).
 #
 #   isolated, against the shipped scanner:
 #     `-t` re-treated as a destination flag          +858 rows
@@ -314,7 +317,7 @@
 1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
-45	plugins/soleur/test/regenerate-shard-manifest.test.sh
+51	plugins/soleur/test/regenerate-shard-manifest.test.sh
 13	plugins/soleur/test/scripts-shard-totality-mutations.sh
 1	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
