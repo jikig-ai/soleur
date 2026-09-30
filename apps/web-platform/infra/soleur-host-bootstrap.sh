@@ -434,7 +434,7 @@ overlay_github_app_key() {
     unset _gak_dl
     return 0
   fi
-  _gak_line=$(printf '%s\n' "$_gak_dl" | grep -E '^GITHUB_APP_PRIVATE_KEY=.')
+  _gak_line=$(printf '%s\n' "$_gak_dl" | grep -E '^GITHUB_APP_PRIVATE_KEY=.') || _gak_line=
   _gak_rest=$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' "$1") || _gak_rest=
   if ! printf '%s\n%s\n' "$_gak_rest" "$_gak_line" > "$1"; then
     GITHUB_APP_KEY_FETCH=failed

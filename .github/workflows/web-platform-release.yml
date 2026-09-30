@@ -1556,6 +1556,16 @@ jobs:
             EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
             REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
             TAG=$(echo "$BODY" | jq -r '.tag // ""')
+            # #8609: the GitHub App key overlay's fetch outcome. Absent = the deploy never reached
+            # the overlay; ok/no_token are healthy. Anything else ships green before R6 (the prd key
+            # still serves) and must not be visible only asynchronously in Sentry. Enum-filtered, and
+            # only for THIS release's state (a stale prior deploy's fields are not this run's).
+            GAK_FETCH=$(echo "$BODY" | jq -r '.github_app_key_fetch // ""' | tr -cd 'a-z_' | cut -c1-40)
+            GAK_SOURCE=$(echo "$BODY" | jq -r '.github_app_key_source // ""' | tr -cd 'a-z_' | cut -c1-40)
+            case "$TAG:$GAK_FETCH" in
+              *:|*:ok|*:no_token) ;;
+              "v$VERSION":*) echo "::warning::GitHub App key overlay: github_app_key_fetch=$GAK_FETCH (source=$GAK_SOURCE) — the container runs on the prd key; see Sentry op=github-app-key (#8609)" ;;
+            esac
             case "$EXIT_CODE" in
               0)
                 if [ "$TAG" = "v$VERSION" ]; then

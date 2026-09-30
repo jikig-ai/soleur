@@ -322,9 +322,8 @@ w2_bad_key = [n for n in W2_DIALERS
 # (bare hyphen) would false-positive on the legitimate `10-*-doppler-token.conf`
 # drop-ins, so it is deliberately absent — those files point units AT the
 # credential path; they do not carry the value.
-w2_creds = [n for n in W2_DIALERS if re.search(
-    r'doppler_token|DOPPLER_TOKEN|soleur-doppler-token|push-infra-config',
-    ssh_resources[n])]
+W2_CRED_RE = r'doppler_token|DOPPLER_TOKEN|soleur-doppler-token|push-infra-config'
+w2_creds = [n for n in W2_DIALERS if re.search(W2_CRED_RE, ssh_resources[n])]
 w2_named = "deploy_pipeline_fix_web2" in W2_DIALERS
 if w2_named and not w2_bad_key and not w2_creds and len(W2_DIALERS) == 1:
     ok(f"1: web-2 sibling deploy_pipeline_fix_web2 pins local.web_2_ssh_host_key and carries no credential material "
@@ -337,6 +336,17 @@ else:
        "never reference the prd credential under any spelling "
        "(var.doppler_token / webhook_doppler_token_env / soleur_doppler_token_env_b64 / "
        "SOLEUR_DOPPLER_TOKEN / soleur-doppler-token / push-infra-config).")
+# #8609 (plan 1.4): the GitHub App key read token rides the SAME credential file web-2 does not
+# receive in place, so the denylist above needs no change — but only while every spelling of the
+# new credential falls inside it. Pinned: the pattern is byte-unchanged and matches each spelling
+# (the variable, its TF_VAR_ export, the rendered env line), so narrowing it reds here.
+_w2_new_spellings = ["var.github_app_runtime_doppler_token", "TF_VAR_github_app_runtime_doppler_token",
+                     "GITHUB_APP_DOPPLER_TOKEN"]
+_w2_missed = [t for t in _w2_new_spellings if not re.search(W2_CRED_RE, t)]
+if W2_CRED_RE == r'doppler_token|DOPPLER_TOKEN|soleur-doppler-token|push-infra-config' and not _w2_missed:
+    ok("1: web-2's credential denylist is unchanged and covers every spelling of the #8609 App-key read token")
+else:
+    no(f"1: web-2's credential denylist changed or misses the #8609 App-key read token: missed={_w2_missed}")
 # The webhook channel twin: hooks.json rides the sibling's sanctioned base64 delivery
 # to /etc/webhook/hooks.json, and web-1 legitimately receives it. If the template's
 # argument map gains a doppler/token reference, a rendered credential reaches web-2

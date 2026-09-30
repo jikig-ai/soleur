@@ -38,6 +38,7 @@ spot.
 | 1c | `curl http://localhost:3001/dashboard --max-redirs 0` returns 200/302/307, body does NOT contain `data-error-boundary=` | middleware redirect or successful render; rejects SSR-rendered error.tsx | enforced |
 | 2 | Headless chromium hydrates `/login` AND `/dashboard`; rejects on any `pageerror`, console.error, or `Unhandled error` event during hydration | client-only throws at module load (validators, polyfill incompatibilities, encoding mismatches) | **required — was D1, promoted post-#3014** |
 | 3 | `apps/web-platform/infra/canary-bundle-claim-check.sh` fetches the deployed login chunk and asserts the inlined Supabase JWT has canonical claims (`iss=supabase`, `role=anon`, ref shape) | inlined build-arg corruption (the #3007 regression class) — runs without a browser, catches what Layer 1 cannot see | enforced |
+| 4 | GitHub App key check (#8609), after the bwrap probes and last before promotion: the env-file holds exactly one `GITHUB_APP_PRIVATE_KEY` line that is not `EVICTED_SEE_ADR_241`, then `docker exec soleur-web-platform-canary node /app/scripts/github-app-key-probe.mjs` prints one of `github_app_key_probe=ok\|rejected\|transport` | a missing, evicted, wrong or other-App key reaching production (`reason=github_app_key_missing` / `github_app_key_rejected`); `transport` and an absent script (rc 127) promote | enforced |
 
 Layer 1 is the cheapest broad-coverage gate. Layer 2 is the ONLY layer
 that exercises the production browser environment — including webpack's
@@ -66,6 +67,21 @@ during SSR). Client-only throws are caught by Layer 3.
    `MOCK_CURL_<NAME>_5XX` env var → expect rollback trace).
 4. Bump preflight Check 7 if the new probe is load-bearing for an
    incident class.
+
+### Registered: the GitHub App key probe (Layer 4, #8609)
+
+1. **Where:** `github_app_key_canary_check` in `ci-deploy.sh`, called after the bwrap/faithful
+   sandbox probes and before the swap; the boot path runs the same probe in the booted container
+   (`soleur-github-app-key-check`, `soleur-boot-emit` stage `github_app_key_*`).
+2. **Success contract:** the probe's whole stdout is `github_app_key_probe=ok` (GET
+   `https://api.github.com/app` → 200, `slug=soleur-ai`, `id=GITHUB_APP_ID`). `transport` promotes
+   with a Sentry warning (`op=github-app-key`); anything else, or a non-zero exit with no verdict
+   (other than 127), refuses. Verdict rules: `apps/web-platform/scripts/github-app-key-probe.mjs`.
+3. **Failure-mode tests:** `ci-deploy.test.sh` Guard 7 (`MOCK_GAK_PROBE_OUT` / `MOCK_GAK_PROBE_RC`)
+   and `apps/web-platform/test/github-app-key-probe.test.ts`.
+4. **Preflight Check 7:** not bumped — it gates the authenticated-surface probes, and this probe
+   does not render a route. Read the outcome with no SSH:
+   `bash apps/web-platform/scripts/github-app-key-status.sh`.
 
 ## Removing a probe
 

@@ -29,10 +29,13 @@ const decode = (seg: string) => JSON.parse(Buffer.from(seg, "base64url").toStrin
 const hdrs = (h: Record<string, string> = {}) => new Headers(h);
 const okBody = { slug: EXPECTED_SLUG, id: Number(APP_ID) };
 
+// The probe reads a plain env map; ProcessEnv's declared NODE_ENV is irrelevant to it.
+const asEnv = (e: Record<string, string>) => e as unknown as NodeJS.ProcessEnv;
+
 function stubFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
   const calls: { url: string; init: RequestInit }[] = [];
-  const fetchImpl = async (url: string, init: RequestInit) => {
-    calls.push({ url, init });
+  const fetchImpl: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init: init ?? {} });
     return new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers });
   };
   return { calls, fetchImpl };
@@ -105,7 +108,7 @@ describe("classifyResponse — verdict rules", () => {
 });
 
 describe("probe — request shape and failure classes", () => {
-  const env = { GITHUB_APP_ID: `${APP_ID}\n`, GITHUB_APP_PRIVATE_KEY: ESCAPED };
+  const env = asEnv({ GITHUB_APP_ID: `${APP_ID}\n`, GITHUB_APP_PRIVATE_KEY: ESCAPED });
 
   it("GETs the hard-coded /app URL with a Bearer JWT, a 10 s abort signal and manual redirects", async () => {
     const { calls, fetchImpl } = stubFetch(200, okBody);
@@ -124,7 +127,7 @@ describe("probe — request shape and failure classes", () => {
   });
 
   it("a fetch that throws (DNS, reset, abort/timeout) ⇒ transport", async () => {
-    const fetchImpl = async () => {
+    const fetchImpl: typeof fetch = async () => {
       throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
     };
     expect(await probe({ env, fetchImpl })).toBe("transport");
@@ -132,10 +135,10 @@ describe("probe — request shape and failure classes", () => {
 
   it("absent key, absent or non-numeric id, or an unparseable key ⇒ rejected without a request", async () => {
     const { calls, fetchImpl } = stubFetch(200, okBody);
-    expect(await probe({ env: { GITHUB_APP_ID: APP_ID }, fetchImpl })).toBe("rejected");
-    expect(await probe({ env: { GITHUB_APP_PRIVATE_KEY: ESCAPED }, fetchImpl })).toBe("rejected");
-    expect(await probe({ env: { GITHUB_APP_ID: "Iv1.abc", GITHUB_APP_PRIVATE_KEY: ESCAPED }, fetchImpl })).toBe("rejected");
-    expect(await probe({ env: { GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: "EVICTED_SEE_ADR_241" }, fetchImpl })).toBe(
+    expect(await probe({ env: asEnv({ GITHUB_APP_ID: APP_ID }), fetchImpl })).toBe("rejected");
+    expect(await probe({ env: asEnv({ GITHUB_APP_PRIVATE_KEY: ESCAPED }), fetchImpl })).toBe("rejected");
+    expect(await probe({ env: asEnv({ GITHUB_APP_ID: "Iv1.abc", GITHUB_APP_PRIVATE_KEY: ESCAPED }), fetchImpl })).toBe("rejected");
+    expect(await probe({ env: asEnv({ GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: "EVICTED_SEE_ADR_241" }), fetchImpl })).toBe(
       "rejected",
     );
     expect(calls).toHaveLength(0);
@@ -143,7 +146,7 @@ describe("probe — request shape and failure classes", () => {
 });
 
 describe("runCli — exactly one enum line, nothing else", () => {
-  const env = { GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: ESCAPED };
+  const env = asEnv({ GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: ESCAPED });
 
   for (const [status, body, headers, verdict, code] of [
     [200, okBody, {}, "ok", 0],
@@ -153,7 +156,11 @@ describe("runCli — exactly one enum line, nothing else", () => {
     it(`HTTP ${status} ⇒ "github_app_key_probe=${verdict}" and exit ${code}`, async () => {
       const { calls, fetchImpl } = stubFetch(status, body, headers);
       let out = "";
-      const rc = await runCli({ env, fetchImpl, write: (s: string) => (out += s) });
+      const rc = await runCli({ env, fetchImpl, write: (s: string) => {
+          out += s;
+          return true;
+        },
+      });
       expect(out).toBe(`github_app_key_probe=${verdict}\n`);
       expect(rc).toBe(code);
       const jwt = (calls[0].init.headers as Record<string, string>).authorization.split(" ")[1];
@@ -163,7 +170,7 @@ describe("runCli — exactly one enum line, nothing else", () => {
 
   it("the real CLI with no key prints only the rejected line (no network needed)", () => {
     const r = spawnSync(process.execPath, [MJS_PATH], {
-      env: { PATH: process.env.PATH ?? "" },
+      env: asEnv({ PATH: process.env.PATH ?? "" }),
       encoding: "utf8",
       timeout: 15_000,
     });

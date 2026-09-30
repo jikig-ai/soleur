@@ -8669,6 +8669,7 @@ PY
 # gak_run_ci <dir> <token yes|no> <prd-body> <script> [extra]: one traced web-platform deploy.
 gak_run_ci() {
   local d="$1" tok="$2" body="$3" script="$4" extra="${5:-}" rc=0
+  assert_fixture_dir "$d"
   : > "$d/calls.log"; : > "$d/gak.log"; : > "$d/logger.txt"; : > "$d/sentry.txt"
   { printf 'DOPPLER_TOKEN=%s\n' "$GAK_PRD_TOKEN"
     if [[ "$tok" == yes ]]; then printf 'GITHUB_APP_DOPPLER_TOKEN=%s\n' "$GAK_TOKEN"; fi; } > "$d/cred"
@@ -8697,6 +8698,7 @@ gak_run_ci() {
 # moment the container's env is fixed), then the post-run check the helper would have launched.
 gak_run_boot() {
   local d="$1" tok="$2" body="$3" boot="$4" extra="${5:-}"
+  assert_fixture_dir "$d"
   mkdir -p "$d/bin" "$d/detail"
   : > "$d/calls.log"; : > "$d/gak.log"; : > "$d/logger.txt"; : > "$d/emits.txt"
   awk "/cat > \/usr\/local\/bin\/soleur-doppler-download <<'DDLEOF'/{f=1;next} f&&/^DDLEOF\$/{f=0} f{print}" "$boot" > "$d/bin/soleur-doppler-download"
@@ -8749,20 +8751,24 @@ _gak_sentry() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="github-app-key")] 
 _gak_line() { grep -n -m1 -xF "$2" "$1/gak.log" 2>/dev/null | cut -d: -f1; }
 _gak_emits() { cut -d' ' -f1,2 "$1/emits.txt" 2>/dev/null | tr '\n' ',' | sed 's/,$//'; }
 _gak_no_token_leak() {
-  ! grep -qF "$GAK_TOKEN" "$1"/envfile.* 2>/dev/null && ! grep -q 'env_token=1' "$1/gak.log" 2>/dev/null
+  if ! grep -qF "$GAK_TOKEN" "$1"/envfile.* 2>/dev/null && ! grep -q 'env_token=1' "$1/gak.log" 2>/dev/null; then return 0; fi
+  return 1
 }
-_gak_promoted() {
-  [[ "$(cat "$1/rc")" == 0 && "$(_gak_st "$1" reason)" == ok ]] && grep -q '^run:soleur-web-platform ' "$1/gak.log"
+_gak_promoted() {  # predicate: 0 = promoted
+  if [[ "$(cat "$1/rc")" == 0 && "$(_gak_st "$1" reason)" == ok ]] && grep -q '^run:soleur-web-platform ' "$1/gak.log"; then return 0; fi
+  return 1
 }
-_gak_refused() {  # <dir> <reason>: refused with <reason>; production never started
-  [[ "$(cat "$1/rc")" != 0 && "$(_gak_st "$1" reason)" == "$2" ]] && ! grep -q '^run:soleur-web-platform ' "$1/gak.log"
+_gak_refused() {  # <dir> <reason>: predicate — refused with <reason>; production never started
+  if [[ "$(cat "$1/rc")" != 0 && "$(_gak_st "$1" reason)" == "$2" ]] && ! grep -q '^run:soleur-web-platform ' "$1/gak.log"; then return 0; fi
+  return 1
 }
 _gak_probe_in_canary_before_swap() {
   local c p s
   c="$(_gak_line "$1" 'run:soleur-web-platform-canary env_token=0')"
   p="$(_gak_line "$1" 'probe:soleur-web-platform-canary')"
-  s="$(grep -n -m1 '^run:soleur-web-platform ' "$1/gak.log" | cut -d: -f1)"
-  [[ -n "$c" && -n "$p" && -n "$s" && "$c" -lt "$p" && "$p" -lt "$s" ]] && ! grep -q '^probe:soleur-web-platform$' "$1/gak.log"
+  s="$(grep -n -m1 '^run:soleur-web-platform ' "$1/gak.log" | cut -d: -f1 || true)"
+  if [[ -n "$c" && -n "$p" && -n "$s" && "$c" -lt "$p" && "$p" -lt "$s" ]] && ! grep -q '^probe:soleur-web-platform$' "$1/gak.log"; then return 0; fi
+  return 1
 }
 
 # --- per-scenario property checks: <site> <dir> → 0 when the property holds; GAK_WHY otherwise ---
@@ -9020,8 +9026,9 @@ _gak_static() {  # <ci-file> <boot-file>
     [[ "$n" == 1 ]] || { GAK_WHY="${f##*/} defines github_app_key_emit $n time(s) outside the block (want 1)"; return 1; }
   done
   # The boot emitter must live in the same baked helper as the block it serves.
-  awk "/cat > \/usr\/local\/bin\/soleur-doppler-download <<'DDLEOF'/{f=1;next} f&&/^DDLEOF\$/{f=0} f{print}" "$2" | grep -qx 'github_app_key_emit() {' \
-    || { GAK_WHY="the boot emitter is not inside soleur-doppler-download"; return 1; }
+  # Captured, not piped into `grep -q`: an early grep exit SIGPIPEs awk and pipefail reads it as a miss.
+  n="$(awk "/cat > \/usr\/local\/bin\/soleur-doppler-download <<'DDLEOF'/{f=1;next} f&&/^DDLEOF\$/{f=0} f{print}" "$2" | grep -cx 'github_app_key_emit() {' || true)"
+  [[ "$n" == 1 ]] || { GAK_WHY="the boot emitter is not inside soleur-doppler-download ($n)"; return 1; }
 }
 TOTAL=$((TOTAL + 1))
 if _gak_static "$DEPLOY_SCRIPT" "$GAK_BOOT"; then PASS=$((PASS + 1)); echo "  PASS: 7.6-control the sentinel-bounded overlay block is byte-identical in both files; each file defines its own emitter"
@@ -9134,7 +9141,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
 # #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
 # #6428: raised to 359 with the 17 pre-swap freshness rows (F1-F13).
-CI_DEPLOY_ASSERT_FLOOR=359
+# #8609: raised to 402 with the 42 Guard 7 rows (7.0-7.15 + mutation variants, 7.p1-7.p7, 7.13).
+CI_DEPLOY_ASSERT_FLOOR=402
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
