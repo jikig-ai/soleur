@@ -221,7 +221,7 @@ describe("inngest provision alerts ↔ soleur-inngest-provision emitter contract
       ],
       detectorIds: ["1213799"],
       enabled: true,
-      frequency: 33,
+      frequency: 34,
       name: "inngest-provision-degraded",
       triggerConditions: FIRST_EVENT_REF_TRIGGER,
       triggerLogicType: "single",
@@ -251,8 +251,8 @@ describe("inngest provision alerts ↔ soleur-inngest-provision emitter contract
 
   it("T7b: degraded rule pages on the first event, at a frequency no other rule in the root uses", () => {
     expect(degraded).toMatch(FIRST_EVENT_TRIGGER);
-    expect(degraded).toMatch(/^\s*frequency_minutes\s*=\s*33\b/m);
-    expect(sentryRoot.match(/^\s*frequency_minutes\s*=\s*33\b/gm) ?? []).toHaveLength(1);
+    expect(degraded).toMatch(/^\s*frequency_minutes\s*=\s*34\b/m);
+    expect(sentryRoot.match(/^\s*frequency_minutes\s*=\s*34\b/gm) ?? []).toHaveLength(1);
   });
 
   it("T8: no other infra file names a paged stage (so no host_name filter is needed)", () => {

@@ -437,12 +437,12 @@ emitter: treat it as forged (the DSN is semi-public). Map the page to the next r
 | any other `why=` | The attempt died at or after that stage. Read that attempt's rows in `life.txt`. |
 
 - **Each rule throttles on its own.** `inngest-provision-failure` re-pages at most every 2 hours
-  and `inngest-provision-degraded` at most every 33 minutes, per issue group, so a failure page no
+  and `inngest-provision-degraded` at most every 34 minutes, per issue group, so a failure page no
   longer suppresses a degraded page (#9299). After a failure page, confirm `bootstrap-done` (not
   `bootstrap-done-DEGRADED`) for the same `iid`; a degraded page is never re-emitted, so treat it as
   open until `bootstrap-done` appears.
 - **A benign or forged page can hide a real failure.** For a retrying failure the window is up to
-  2 h. For a degraded page it is up to 33 minutes, and a real degraded event inside that window is
+  2 h. For a degraded page it is up to 34 minutes, and a real degraded event inside that window is
   silent until the next boot, because it is not re-emitted. Corroborate with the Better Stack
   `provision-attempt-exit-<rc>` and `bootstrap-done-DEGRADED` rows, which need a Doppler-held token
   to write.
@@ -474,9 +474,9 @@ reads the same state as `FAIL reason=degraded` while that follow-through is open
   `stage` tag. A degraded page minutes after a failure page is the next attempt ending degraded,
   not a duplicate.
 - **A forged degraded event can hide a real one.** The DSN is semi-public, and a page whose issue
-  is NOT `WEB-PLATFORM-4S` is forged. Each forged event opens a 33-minute window, and a real
+  is NOT `WEB-PLATFORM-4S` is forged. Each forged event opens a 34-minute window, and a real
   degraded event that arrives inside it is suppressed and, since it is not re-emitted, stays silent
-  until the next boot; a forger repeating every 33 minutes keeps that window open. A forged page
+  until the next boot; a forger repeating every 34 minutes keeps that window open. A forged page
   also carries a forged `iid`, so do not corroborate on the page's own `iid`: read the host's
   current `iid` from its newest `provision-unit-armed` row (recipe in
   [§ Reading a page](#reading-a-page)) and check that life for `bootstrap-done` or
