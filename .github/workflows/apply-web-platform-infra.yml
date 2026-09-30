@@ -615,6 +615,9 @@ jobs:
               -target=github_repository_environment_deployment_policy.workspaces_luks_cutover_main \
               -target=doppler_project.infra_privileged \
               -target=doppler_environment.infra_privileged_prd \
+              -target=doppler_project.github_app_runtime \
+              -target=doppler_environment.github_app_runtime_prd \
+              -target=doppler_config.github_app_runtime_prd_retired \
               -target=cloudflare_r2_bucket.terraform_state_privileged \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
@@ -4805,6 +4808,7 @@ jobs:
         with:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          github-app-runtime-token: true
 
       # FIRST mutating-adjacent step: validate the dispatch inputs before anything reads a
       # secret or contacts a provider. web_host_key is routed through env: and never
@@ -5259,6 +5263,7 @@ jobs:
         with:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          github-app-runtime-token: true
 
       # FIRST mutating-adjacent step: validate the dispatch inputs before anything reads a
       # secret or contacts a provider. web_host_key is routed through env: and never

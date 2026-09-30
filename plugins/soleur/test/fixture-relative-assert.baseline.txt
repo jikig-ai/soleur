@@ -140,8 +140,8 @@
 3	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-15	apps/web-platform/infra/ci-deploy.sh
-3	apps/web-platform/infra/ci-deploy.test.sh
+18	apps/web-platform/infra/ci-deploy.sh
+6	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
@@ -259,7 +259,7 @@
 2	.claude/hooks/ship-unpushed-commits-gate.sh
 1	.claude/hooks/skill-invocation-logger.sh
 4	.claude/hooks/skill-invocation-logger.test.sh
-55	.github/scripts/test/fixtures-validate-infra-templates.sh
+58	.github/scripts/test/fixtures-validate-infra-templates.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
 2	plugins/soleur/hooks/lib/log-rotation.sh
 3	plugins/soleur/hooks/memory-backstop.sh
