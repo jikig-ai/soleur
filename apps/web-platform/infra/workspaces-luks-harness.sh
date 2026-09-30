@@ -361,6 +361,11 @@ run_case() {
       }
       cryptsetup() {
         rec "cryptsetup $*"
+        # Drain stdin before any verdict arm when the call feeds the key on a pipe
+        # (--key-file -): real cryptsetup reads it, and a stub that exits unread
+        # races the producer into EPIPE under pipefail (#9245). First statement
+        # after rec so every arm drains; [ ! -t 0 ] keeps unpiped stdin untouched.
+        case " $* " in *" --key-file - "*) { [ ! -t 0 ] && cat >/dev/null; } 2>/dev/null || true ;; esac
         if [ "${1:-}" = "status" ] && [ -n "${CRYPTSETUP_DEV:-}" ]; then
           printf "  type:    LUKS2\n  device:  %s\n" "$CRYPTSETUP_DEV"
         fi
@@ -689,7 +694,12 @@ printf 'cryptsetup %s\n' "$*" >> "$CALLS"
 case "$1" in
   status)  printf '  type:    LUKS2\n  device:  %s\n' "${MON_REAL_DEV-$FAKE_MAPPER}" ;;
   luksUUID) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
-  luksOpen) exit "${MON_ESCROW_RC:-0}" ;;
+  # Drain stdin like real `cryptsetup --key-file -` does — a stub that exits without
+  # reading races the producer's write (EPIPE under pipefail = a fake
+  # escrow_passphrase_mismatch, #9245). The capture file is what the suite's wire
+  # assert reads; [ ! -t 0 ] keeps an unpiped interactive stdin out of the drain.
+  luksOpen) { [ ! -t 0 ] && cat >"${CALLS}.escrow-stdin"; } 2>/dev/null || true
+            exit "${MON_ESCROW_RC:-0}" ;;
 esac
 exit 0
 STUB

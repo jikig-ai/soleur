@@ -541,6 +541,17 @@ else
   no "healthy probe did not push the heartbeat (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:200}"
 fi
 
+# (t1b) WIRE assert (#9245) — the argv log proves cryptsetup was ASKED; this proves the
+# passphrase actually ARRIVED. The luksOpen stub drains stdin into $CALLS.escrow-stdin;
+# without the drain the file is absent and this fails DETERMINISTICALLY — not at the
+# scheduler's discretion. Compared against the MON_KEY knob, not a literal, so a case
+# that overrides the key still reads delivery correctly.
+if [ "$(cat "$CALLS.escrow-stdin" 2>/dev/null)" = "${MON_KEY-k}" ]; then
+  ok "escrow passphrase reached cryptsetup on the wire (\$CALLS.escrow-stdin == MON_KEY)"
+else
+  no "escrow passphrase never reached cryptsetup — stdin undrained (captured: $(cat "$CALLS.escrow-stdin" 2>/dev/null || echo '<absent>'))"
+fi
+
 # (t2) ABSENT URL => fatal. The exact state #6808 existed to remove.
 mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
 mon_run LUKS_MONITOR_ASSERT_READYZ=1 MON_HB_URL=

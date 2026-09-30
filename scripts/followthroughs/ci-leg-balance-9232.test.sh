@@ -203,6 +203,22 @@ mk_runs "$FIXTURE_DIR/runs.json" \
 mk_balanced_run 9001; mk_balanced_run 9002; mk_balanced_run 9003
 SOLEUR_FT_EARLIEST="2099-06-01T00:00:00Z" expect "3 balanced qualifying runs -> PASS" 0
 
+# --- Case 6b: every /artifacts LIST call carries --paginate ---------------------
+# A first-page-only fetch truncates a >100-artifact run and reads identically
+# to a leg that died before its feed write — the qualifying-runs filter would
+# silently under-sample. Assert on call SHAPE, not just output: the stub serves
+# its fixture regardless, so only the argv log sees a dropped flag. Mirrors
+# actions-queue-health.test.sh's jobs-call pin. Anchored on /actions/runs/ so
+# the binary /actions/artifacts/<id>/zip downloads are excluded. Reads case 6's
+# calls.log — case 9's pre-cutoff runs never reach the artifacts call.
+art_calls="$(grep '/actions/runs/.*/artifacts' "$FIXTURE_DIR/calls.log" | grep -vc '/zip' || true)"
+art_calls_paginated="$(grep '/actions/runs/.*/artifacts' "$FIXTURE_DIR/calls.log" | grep -v '/zip' | grep -c -- '--paginate' || true)"
+if [ "$art_calls" -gt 0 ] && [ "$art_calls" -eq "$art_calls_paginated" ]; then
+  pass "every artifacts list call carried --paginate ($art_calls_paginated/$art_calls)"
+else
+  fail "artifacts list call(s) missing --paginate ($art_calls_paginated/$art_calls): $(grep '/actions/runs/.*/artifacts' "$FIXTURE_DIR/calls.log" | grep -v '/zip')"
+fi
+
 # --- Case 7: a breaching leg → FAIL ---------------------------------------------
 # N legs of 1000ms plus one leg of 4000ms built from small suites: total
 # (N+3)*1000 over N legs; the hot leg sits above ~2x the mean with no single

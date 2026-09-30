@@ -602,8 +602,10 @@ jobs:
           # the bare name returns ZERO rows — measured — and a guard built on it
           # would report clean forever. The non-empty assertion below is what makes
           # that a loud failure instead of an empty haystack.
-          jobs_json=$(gh_api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
-            --jq '[.jobs[] | select(.name == "release / release") | {name, conclusion}]')
+          # NO --jq under --paginate: gh applies --jq PER PAGE (one document per
+          # page); jq -s slurps the concatenated page objects and flattens.
+          jobs_json=$(gh_api --paginate "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+            | jq -s '[.[].jobs[] | select(.name == "release / release") | {name, conclusion}]')
           n=$(printf '%s' "$jobs_json" | jq 'length')
           if [ "$n" -ne 1 ]; then
             fail_closed "expected exactly 1 job named 'release / release' in run $run_id, found $n (the job may have been renamed — this is the empty-haystack class, not a missing release)" "release_job_unresolvable"
@@ -617,8 +619,9 @@ jobs:
           fi
 
           # ── Step 2: THE VALUES, from the artifact ───────────────────────────
-          arts=$(gh_api "repos/$REPO/actions/runs/$run_id/artifacts?per_page=100" \
-            --jq '[.artifacts[] | select(.name == "release-outputs-web-platform") | {id, expired}]')
+          arts=$(gh_api --paginate "repos/$REPO/actions/runs/$run_id/artifacts?per_page=100" \
+            | jq -s '[.[].artifacts[] | select(.name == "release-outputs-web-platform") | {id, expired}]') \
+            || fail_closed "reading the artifacts list for run $run_id failed after retries" "github_api_unavailable"
           a_n=$(printf '%s' "$arts" | jq 'length')
           if [ "$a_n" -eq 0 ]; then
             fail_closed "release run $run_id succeeded but published no release-outputs-web-platform artifact" "release_outputs_missing"

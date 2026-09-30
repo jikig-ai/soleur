@@ -882,7 +882,7 @@ script_case() {  # <script> <findmnt-source> [env assignments...]
   done
   printf '#!/usr/bin/env bash\nprintf "findmnt %%s\\n" "$*" >> "$CALLS"\nprintf "%%s\\n" "$FINDMNT_SRC"\n' > "$d/bin/findmnt"
   printf '#!/usr/bin/env bash\nprintf "doppler %%s\\n" "$*" >> "$CALLS"\nprintf "test-passphrase\\n"\n' > "$d/bin/doppler"
-  printf '#!/usr/bin/env bash\nprintf "cryptsetup %%s\\n" "$*" >> "$CALLS"\ncase "$*" in *luksFormat*) exit "${LUKSFORMAT_RC:-0}";; *luksOpen*) exit "${LUKSOPEN_RC:-0}";; esac\nexit 0\n' > "$d/bin/cryptsetup"
+  printf '#!/usr/bin/env bash\nprintf "cryptsetup %%s\\n" "$*" >> "$CALLS"\ncase "$*" in *luksFormat*) { [ ! -t 0 ] && cat >/dev/null; } 2>/dev/null || true; exit "${LUKSFORMAT_RC:-0}";; *luksOpen*) { [ ! -t 0 ] && cat >/dev/null; } 2>/dev/null || true; exit "${LUKSOPEN_RC:-0}";; esac\nexit 0\n' > "$d/bin/cryptsetup"
   chmod +x "$d/bin"/*
   SCRIPT_OUT="$(
     env "$@" CALLS="$SCRIPT_CALLS" FINDMNT_SRC="$fmsrc" \

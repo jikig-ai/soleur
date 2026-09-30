@@ -139,15 +139,39 @@ def median(xs):
     return xs[m // 2] if m % 2 else (xs[m // 2 - 1] + xs[m // 2]) // 2
 
 
+def list_run_artifacts(run_id):
+    """Every artifact of RUN_ID as [{id, name}], across ALL pages.
+
+    `per_page=100` alone truncates at the first page — a >100-artifact run
+    silently drops entries, and a truncated page reads identically to a leg
+    that died before its feed write. Terminates on a short page OR
+    `total_count` reached, so an API regression that drops total_count still
+    exits. (No `gh --paginate`+`--jq`: gh applies --jq per page, yielding
+    multi-document output json.loads cannot parse; a pure page loop keeps
+    this operator-run tool's only dependency on `gh` itself.)"""
+    arts = []
+    total = None
+    page = 1
+    while True:
+        chunk = json.loads(gh([
+            "api",
+            f"repos/{REPO}/actions/runs/{run_id}/artifacts"
+            f"?per_page=100&page={page}",
+        ]))
+        batch = chunk.get("artifacts") or []
+        arts.extend({"id": a["id"], "name": a["name"]} for a in batch)
+        total = chunk.get("total_count", total)
+        if len(batch) < 100 or (total is not None and len(arts) >= total):
+            return arts
+        page += 1
+
+
 def fetch_timings_from_run(run_id, artifact_re, expected_legs=None, allow_empty=False):
     """Return {label: ms} merged across the group's timing artifacts of RUN_ID.
     In multi-run aggregation (allow_empty) a run that uploaded no artifacts for
     the group warns and contributes nothing instead of dying — one shape-dead
     run must not void the other N-1."""
-    arts = json.loads(gh([
-        "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts?per_page=100",
-        "--jq", "{artifacts: [.artifacts[] | {id: .id, name: .name}]}",
-    ]))["artifacts"]
+    arts = list_run_artifacts(run_id)
     names = [a for a in arts if artifact_re.match(a["name"])]
     if not names:
         if allow_empty:
