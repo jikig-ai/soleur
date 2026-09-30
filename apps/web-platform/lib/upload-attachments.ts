@@ -42,6 +42,10 @@ function sanitizeErrorForLog(err: unknown, stage: "presign" | "storage"): Error 
  * inline error display, `activeXhrs` for cancellation) that this helper does
  * not expose. Any change to the presign request shape must be applied in both
  * places.
+ *
+ * Presign error codes are an HTTP vocabulary; `attachmentErrorCopy`
+ * (`lib/attachment-error-copy.ts`) is the human-copy mapping for them and is
+ * the one to reuse if this helper ever surfaces failures to the user (#9316).
  */
 export async function uploadPendingFiles(
   files: File[],
