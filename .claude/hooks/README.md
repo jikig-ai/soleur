@@ -945,8 +945,8 @@ today distinguish "stale caps" from "deliberately raised caps" — if you need a
 lasting raise, re-run the set-property after any intervening session start.
 `OOMPolicy` is *not* in the repair set: systemd 261 rejects it on scopes
 (creation-only) and `SetUnitProperties` is all-or-nothing, so including it
-would drop the four caps with it (a pre-existing defect in the re-entry
-refresh path is tracked as #9246).
+would drop the four caps with it — the re-entry refresh applies the same
+exclusion (#9246).
 
 ### If a session gets stopped
 
