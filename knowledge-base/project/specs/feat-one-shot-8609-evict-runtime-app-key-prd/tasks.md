@@ -41,7 +41,7 @@ Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-fr
 ## Phase 4: Records (PR-A)
 
 - [ ] 4.1 ADR-241 via `soleur:architecture`: new Amendment log, D10 (incl. signed-image condition and residuals), D10 Statuses row, R1 CLOSING, R8, A11 annotation; D2 stays `proposed`
-- [ ] 4.2 Runbook: "Runtime App key (#8609)" R-table (R0–R8 incl. R0c, R5b), "Routine rotation (steady state)", dated notes on O0 U1 and O13(b)
+- [ ] 4.2 Runbook: "Runtime App key (#8609)" R-table (R0–R9 incl. R5b; R0c dropped at review in favour of `xproj_ref_count`), "Routine rotation (steady state)", dated notes on O0 U1 and O13(b)
 - [ ] 4.3 Operator bootstrap script via `soleur:operator-bootstrap`
 - [ ] 4.4 C4 `model.c4` edges; run the three C4 tests
 - [ ] 4.5 Legal (through the CLO agent): new exposure assessment, #8209 pointer addendum, breach-register row + note, compliance-posture IN-PROGRESS + evidence-limb row
@@ -56,7 +56,7 @@ Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-fr
 
 ## Phase 6: Operator sequence (each production step individually authorized)
 
-- [ ] 6.1 R0 key inventory + park old key in `prd_retired`; R0b evidence limbs; R0c cross-project reference probe
+- [ ] 6.1 R0 key inventory + park old key in `prd_retired`; R0b evidence limbs; cross-project reference count (`xproj_ref_count`) at R-step 1
 - [ ] 6.2 Gate: #8209 O10 and O13's `DOPPLER_TOKEN_TF` rotation done
 - [ ] 6.3 R1 → R2 → R3 → R4 → R5 → R5b → R6 → R7 per the runbook table
 - [ ] 6.4 R8 after #8209 O13's App-key delete

@@ -490,7 +490,7 @@ revocation** — which is why R1 (the new key's birth) is gated on O10 and O13's
     `/run/soleur-stage-detail.d/<stage>` (the emitter's sanitized, ≤ 180-byte detail channel), plus a
     `logger -t` line under an allowlisted tag so Better Stack also carries it (`soleur-boot-emit`
     itself posts to Sentry only). This is how R5/R7 read web-2 without SSH:
-    `scripts/sentry-issue.sh --host-events web-2 --stage github_app_key_ok` — a missing `ok` event
+    `doppler run -p soleur -c prd -- scripts/sentry-issue.sh --host-events soleur-web-2 --stage github_app_key_ok` — a missing `ok` event
     counts as a fail, because the emitter exits silently on an empty DSN.
     Two copies rather than one shared file: `soleur-host-bootstrap.sh` is baked into the image and
     hash-checked via `local.host_scripts_content_hash`, while `ci-deploy.sh` is pushed through the
@@ -1246,7 +1246,7 @@ user-impact, test-design, a verify-the-negative/citation pass, and the instituti
 |---|---|---|
 | A branch can ship its own image to web-1 (branch-readable deploy webhook secret, CF Access pair, registry push credentials; `IMAGE_VERIFY_MODE=warn`) and would receive the key | security P0 | Key handed only to a `@sha256:` `$VERIFIED_REF` (Phase 3.2 step 2); Phase 0.4 verify-health check; #6129 commented |
 | `prd` writers could inject `NODE_OPTIONS`/proxy/CA settings into the key's process | security P1-a | Overlay denylist (0 of 132 names present, measured); AC-R6b lists `prd` writers |
-| Doppler cross-project references might resolve for a `prd_terraform` reader | security P1-b | R0c scratch-project probe; G6n |
+| Doppler cross-project references might resolve for a `prd_terraform` reader | security P1-b | `xproj_ref_count` over every `soleur` config at R-step 1 and R-step 6 (review: R0c scratch-project probe dropped); G6n |
 | Metadata endpoint serves `user_data` to the app | security P1-c | web-1 unaffected (birth-frozen); web-2 not promoted to serving until the drop exists |
 | Parked old key downloaded by the host; PEM on disk; pipe without `pipefail`; probe contract; loader over-exposure; precondition on one consumer only; `TF_LOG` | security P2 | `prd_retired` branch config; tmpfs download dir; R2 pipeline hardened; probe contract in 3.3; opt-in loader input; shape gate on both consumers; G6m |
 | Replaced web-2 presents a new SSH host key; every later push fails closed | deployment | R5b |
