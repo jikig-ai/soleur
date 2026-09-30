@@ -2105,13 +2105,16 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       const b = block as { type?: string };
       if (b.type === "text") {
         const rawText = (block as { text?: string }).text ?? "";
-        // Re-arms the per-block runaway watchdog. MUST stay ahead of the strip
-        // below: a markup-only block is still evidence the model is alive.
+        // Re-arms the per-block runaway watchdog for EVERY text block. It stays
+        // outside the `if (text)` below on purpose: a markup-only block is still
+        // evidence the model is alive.
         recordAssistantBlock(state, "text", null);
         // Plugin Stop-hook escape-hatch markup (`<stop>OPERATOR-GATE...</stop>`)
-        // must never reach a user-visible surface or replace the previous
-        // block's text (W8). Runs BEFORE the chapter-prefix logic so a
-        // markup-only block cannot consume `prefixEmitted`.
+        // must not become `onText` input or replace the previous block's text
+        // (W8). This covers the cc text path only; tool inputs and the legacy
+        // runner are outside it (ADR-093 amendment). Runs BEFORE the
+        // chapter-prefix logic so a markup-only block cannot consume
+        // `prefixEmitted`.
         const stripped = stripStopGateMarkup(rawText);
         if (stripped.hadMarkup) {
           // Never the body: conversationId, whether the block was markup-only,

@@ -61,7 +61,8 @@
 # -------------------------------------------------------------------
 # Stated here rather than implied away, because a guard that reads complete is
 # more dangerous than one whose limits are written down. A structural
-# enumeration (2026-09-07) established all of these:
+# enumeration (2026-09-07) established residuals 0-6; residual 7 is a 2026-09-30
+# scope decision, not part of that enumeration:
 #
 #   0. THE PARKED ARM IS NARROWER THAN ITS NAME, in ways measured by a structural
 #      enumeration (2026-09-17) rather than guessed. It catches only a turn that
@@ -108,8 +109,10 @@
 #      instructs the model in words a chat user must never see, and the web runtime
 #      loads it anyway (see WEB RUNTIME OPT-OUT below). Accepted trade-off: the
 #      header above says the guard matters more for non-technical users, but in the
-#      web Concierge it leaked `<stop>OPERATOR-GATE` over the user's question list,
-#      and the unkept-promise class there is left to the Concierge system prompt.
+#      web Concierge it leaked `<stop>OPERATOR-GATE` over the user's question list.
+#      The unkept-promise duty is therefore currently UNOWNED in web: no Concierge
+#      prompt carries an end-of-turn follow-through rule. That gap is tracked in
+#      #9289 (which also covers the non-Stop plugin hooks); it is not closed here.
 #
 # What it DOES buy: the common case, which is a plain closing sentence naming
 # the next action. Measured against the five real 2026-09-07 instances, it
@@ -141,9 +144,11 @@ set -uo pipefail
 # CRM question list in the chat bubble. The platform sets this variable in
 # `buildAgentEnv` (apps/web-platform/server/agent-env.ts); it also works as an
 # operator kill switch, mirroring SOLEUR_DISABLE_COMPACTION_HOOKS. Its position is
-# load-bearing: AFTER the trace marker above (the suite counts executions through
-# that stderr line, so an opted-out spawn is still counted as a run) and BEFORE the
-# jq fail-open below (so an opted-out session never depends on jq).
+# load-bearing in ONE direction: it must sit AFTER the trace marker above (the suite
+# counts executions through that stderr line, so an opted-out spawn is still counted
+# as a run — moving it above the marker trips the floor). Its position relative to the
+# jq fail-open below is behaviourally equivalent (both exit 0 silently), so it sits
+# first only to keep an opted-out session independent of jq.
 [[ "${SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK:-0}" == "1" ]] && exit 0
 
 

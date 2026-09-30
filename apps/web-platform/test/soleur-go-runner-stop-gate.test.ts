@@ -98,7 +98,25 @@ describe("soleur-go-runner stop-gate markup boundary", () => {
       ["conversationId", "markupOnly", "strippedBytes"].sort(),
     );
     expect(opts.extra.markupOnly).toBe(true);
+    expect(opts.extra.conversationId).toBe("conv-stop-gate");
+    expect(opts.extra.strippedBytes).toBe(Buffer.byteLength(STOP_TAG));
     expect(JSON.stringify(opts)).not.toContain("OPERATOR-GATE");
+  });
+
+  it("embedded markup also warns, with markupOnly false and the removed byte count", async () => {
+    await replay([`${QUESTION_LIST}\n\n${STOP_TAG}`]);
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+    const opts = mockWarnSilentFallback.mock.calls[0][1];
+    expect(opts.extra.markupOnly).toBe(false);
+    expect(opts.extra.strippedBytes).toBeGreaterThanOrEqual(Buffer.byteLength(STOP_TAG));
+  });
+
+  it("an SVG gradient answer passes through untouched and does not warn", async () => {
+    const svg =
+      'Gradient:\n```svg\n<linearGradient id="g">\n<stop offset="0" stop-color="#fff"/>\n</linearGradient>\n```\nDone.';
+    const { texts } = await replay([svg]);
+    expect(texts).toEqual([svg]);
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
   });
 
   it("no markup: no Sentry warning, text passes through unchanged", async () => {

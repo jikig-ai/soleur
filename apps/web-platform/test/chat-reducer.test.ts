@@ -212,21 +212,29 @@ describe("chatReducer", () => {
       expect(s.streamState).toBe("idle");
     });
 
-    test("stopping is preserved (only session_ended:user_aborted releases it)", () => {
+    test("stopping is RELEASED on cc turn end (abort_turn never reaches a live cc turn)", () => {
       let s = emptyState();
       s = chatReducer(s, { type: "stream_event", msg: streamMsg("cc_router") });
       s = chatReducer(s, { type: "enter_stopping" });
       expect(s.streamState).toBe("stopping");
       s = chatReducer(s, { type: "stream_event", msg: streamEnd("cc_router") });
-      expect(s.streamState).toBe("stopping");
+      expect(s.streamState).toBe("idle");
     });
 
-    test("legacy leader stream_end with another leader still streaming stays streaming", () => {
+    test("cc_router stream_end while ANOTHER leader stream is still open stays streaming (size conjunct)", () => {
+      let s = emptyState();
+      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cc_router") });
+      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cpo") });
+      s = chatReducer(s, { type: "stream_event", msg: streamEnd("cc_router") });
+      expect(s.activeStreams.size).toBe(1);
+      expect(s.streamState).toBe("streaming");
+    });
+
+    test("a lone legacy leader stream_end drains but does NOT idle (leader conjunct)", () => {
       let s = emptyState();
       s = chatReducer(s, { type: "stream_event", msg: streamMsg("cpo") });
-      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cto") });
       s = chatReducer(s, { type: "stream_event", msg: streamEnd("cpo") });
-      expect(s.activeStreams.size).toBe(1);
+      expect(s.activeStreams.size).toBe(0);
       expect(s.streamState).toBe("streaming");
     });
 

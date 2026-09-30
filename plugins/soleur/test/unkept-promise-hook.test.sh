@@ -14,6 +14,11 @@
 # Fixtures are real closings from the 2026-09-07 session, both directions.
 
 set -uo pipefail
+# HERMETIC against the web opt-out: the web agent's Bash tool inherits
+# SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1 from buildAgentEnv, and an operator may export
+# it as a kill switch. Left set, every BLOCK row reads ALLOW and the suite fails with
+# no message naming the cause (measured 35 passed / 31 failed).
+unset SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK
 REPO_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 HOOK="$REPO_ROOT/plugins/soleur/hooks/unkept-promise-hook.sh"
 
@@ -373,15 +378,20 @@ expect BLOCK "opt-out unset: the CRM question-list closing still blocks (CLI beh
 expect ALLOW "opt-out set: the CRM question-list closing is allowed" "$CRM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1"
 expect BLOCK "opt-out unset: a differently-phrased promise still blocks" "$FORM_CLOSING"
 expect ALLOW "opt-out set: a differently-phrased promise is allowed" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1"
+# Value semantics: only the exact string "1" opts out. A truthy-looking or empty value
+# must NOT (`!= "0"` would treat "" and "true" as an opt-out).
+expect BLOCK "opt-out value 0 does not opt out" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=0"
+expect BLOCK "opt-out value empty does not opt out" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK="
+expect BLOCK "opt-out value true does not opt out" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=true"
 
 SUT_RUNS=$(wc -l < "$SOLEUR_HOOK_TRACE" 2>/dev/null | tr -d ' ')
 SUT_RUNS=${SUT_RUNS:-0}
 INVOCATIONS=$(wc -l < "$INVOCATION_LOG" 2>/dev/null | tr -d ' ')
 INVOCATIONS=${INVOCATIONS:-0}
-MIN_INVOCATIONS=55
+MIN_INVOCATIONS=58
 # THE SUT-WRITTEN FLOOR, checked FIRST. This is the one a neutered harness cannot
 # satisfy, because only the hook appends to it.
-MIN_SUT_RUNS=55
+MIN_SUT_RUNS=58
 if [ "$SUT_RUNS" -lt "$MIN_SUT_RUNS" ]; then
   printf '[FATAL] coverage: the hook itself ran %s time(s), floor is %s -- the harness is certifying rows it never spawned the SUT for\n' \
     "$SUT_RUNS" "$MIN_SUT_RUNS" >&2
@@ -406,7 +416,7 @@ if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
     "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
   exit 1
 fi
-MIN_EXPECT_ROWS=55
+MIN_EXPECT_ROWS=58
 if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
   printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
     "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
@@ -415,7 +425,7 @@ fi
 echo ""
 echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
-MIN_ASSERTIONS=66
+MIN_ASSERTIONS=69
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

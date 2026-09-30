@@ -155,10 +155,11 @@ export function buildAgentEnv(
   opts?: BuildAgentEnvOptions,
 ): Record<string, string> {
   const env: Record<string, string> = {
-    // Telemetry-suppression overrides ride OUTSIDE the auth branch: a
-    // subscription token must NOT phone home to the operator's personal
-    // Claude account. These names are not in ALLOWED_SERVICE_ENV_VARS, so
-    // the service-token loop below cannot clobber them.
+    // Fixed overrides (telemetry suppression and plugin-hook opt-outs) ride
+    // OUTSIDE the auth branch: a subscription token must NOT phone home to the
+    // operator's personal Claude account, and no ambient value may re-enable an
+    // opted-out hook. These names are not in ALLOWED_SERVICE_ENV_VARS, so the
+    // service-token loop below cannot clobber them.
     ...AGENT_ENV_OVERRIDES,
   };
 

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, resolve } from "node:path";
 import { buildAgentEnv } from "../server/agent-env";
+import { stripStopGateMarkup } from "../server/stop-gate-markup";
 
 // Guard: every plugin Stop hook is classified for the web runtime.
 //
@@ -15,22 +16,26 @@ import { buildAgentEnv } from "../server/agent-env";
 // rewrite the visible reply. See the ADR-093 amendment (2026-09-30).
 //
 // The population is DERIVED from hooks.json; the registry below classifies it.
-// Behaviour, not the label, is the anchor: `web-safe` hooks are spawned with NO
-// opt-out env, `web-disabled` hooks with the env buildAgentEnv really produces.
+// Behaviour, not the label, is the anchor: `web-disabled` hooks are spawned with the
+// env buildAgentEnv really produces, and must still BLOCK without it (the hook is real).
+// Classes: `web-disabled` (opt-out proven by behaviour) and `deferred` (an open issue;
+// not spawned, because the hook has host or repo side effects). There is no `web-safe`
+// class: an empty temp repo proves nothing about a tenant's connected repo, so a hook
+// cannot be argued safe from a fixture.
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const HOOKS_JSON = join(REPO_ROOT, "plugins/soleur/hooks/hooks.json");
 const HOOKS_DIR = join(REPO_ROOT, "plugins/soleur/hooks");
 
 type Classification =
-  | { kind: "web-safe"; why: string }
   | { kind: "web-disabled"; optOutVar: string }
   | { kind: "deferred"; issue: string };
 
 const REGISTRY: Record<string, Classification> = {
-  // Acts only on `.claude/ralph-loop.<PPID>.local.md` state files that a web
-  // workspace never has; spawned in a fresh temp git repo below.
-  "stop-hook.sh": { kind: "web-safe", why: "no ralph-loop state file in a web workspace" },
+  // Reads `.claude/ralph-loop.<pid>.local.md` from the git root of the cwd, which in a
+  // web session is the tenant's connected repo (repo-controlled content), and `rm -f`s
+  // stale ones. Not spawned here: classification is tracked with the non-Stop hooks.
+  "stop-hook.sh": { kind: "deferred", issue: "#9289" },
   "unkept-promise-hook.sh": { kind: "web-disabled", optOutVar: "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK" },
   // Kills host Chrome processes; whether that can reach another tenant is unverified.
   "browser-cleanup-hook.sh": { kind: "deferred", issue: "#9281" },
@@ -115,15 +120,6 @@ describe("plugin Stop hooks are classified for the web runtime", () => {
   });
 
   for (const [name, c] of Object.entries(REGISTRY)) {
-    if (c.kind === "web-safe") {
-      it(`${name} (web-safe) does not block either closing with no opt-out env`, () => {
-        for (const msg of FIXTURES) {
-          const r = runHook(name, msg, BASE_ENV);
-          expect(r.rc).toBe(0);
-          expect(r.blocked, msg).toBe(false);
-        }
-      });
-    }
     if (c.kind === "web-disabled") {
       it(`${name} (web-disabled): buildAgentEnv sets ${c.optOutVar}=1`, () => {
         expect(WEB_ENV[c.optOutVar]).toBe("1");
@@ -143,13 +139,34 @@ describe("plugin Stop hooks are classified for the web runtime", () => {
     }
   }
 
-  it("the web-disabled hooks themselves ran (SUT-written floor, not a harness counter)", () => {
-    // 4 spawns of the web-disabled hook (2 fixtures x {web env, bare env}). A test
-    // that never spawns it cannot satisfy this: only the hook writes the marker.
+  it("the web-disabled hooks themselves ran (SUT-written floor, self-contained)", () => {
+    // Self-contained: spawns its own fixtures so it neither depends on earlier `it`s
+    // having run nor drifts from FIXTURES. Only the hook writes the marker, so a test
+    // that never spawns it cannot satisfy this.
     for (const [name, c] of Object.entries(REGISTRY)) {
       if (c.kind !== "web-disabled") continue;
-      expect(spawnsBy[name] ?? 0, name).toBeGreaterThanOrEqual(4);
-      expect(ranBy[name] ?? 0, name).toBe(spawnsBy[name]);
+      const before = { spawns: spawnsBy[name] ?? 0, ran: ranBy[name] ?? 0 };
+      for (const msg of FIXTURES) {
+        runHook(name, msg, { ...BASE_ENV, ...WEB_ENV });
+        runHook(name, msg, BASE_ENV);
+      }
+      expect((spawnsBy[name] ?? 0) - before.spawns, name).toBe(FIXTURES.length * 2);
+      expect((ranBy[name] ?? 0) - before.ran, name).toBe(FIXTURES.length * 2);
     }
+  });
+
+  it("the runner strip removes the sentinel span in the hook's REAL block reason", () => {
+    // Couples the strip to the producer: if the hook's wording changes, the boundary
+    // stops matching and this reds instead of both suites staying green on copies.
+    const r = spawnSync("bash", [join(HOOKS_DIR, "unkept-promise-hook.sh")], {
+      cwd: REPO,
+      input: JSON.stringify({ last_assistant_message: FORM_CLOSING, stop_hook_active: false, session_id: "parity" }),
+      env: BASE_ENV as unknown as NodeJS.ProcessEnv,
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    const reason: string = JSON.parse(r.stdout).reason;
+    expect(reason).toMatch(/<stop>\s*OPERATOR-GATE/i);
+    expect(stripStopGateMarkup(reason).hadMarkup).toBe(true);
   });
 });

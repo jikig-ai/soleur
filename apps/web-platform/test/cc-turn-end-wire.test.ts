@@ -51,9 +51,13 @@ vi.mock("@/server/cc-reprovision", () => ({
   reprovisionWorkspaceOnDispatch: vi.fn().mockResolvedValue("ok"),
 }));
 
-import { dispatchSoleurGo, __resetDispatcherForTests, __setCcRunnerForTests } from "@/server/cc-dispatcher";
+import {
+  dispatchSoleurGo,
+  __resetDispatcherForTests,
+  __setCcRunnerForTests,
+  TurnPersistenceState,
+} from "@/server/cc-dispatcher";
 import { chatReducer, type ChatState } from "@/lib/ws-client";
-import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 
 const QUESTION_LIST = "To enter the lead I need:\n- **lastContact**\n- **amount**";
 const FOLDED = new Set(["stream_start", "stream", "stream_end", "tool_use", "tool_progress"]);
@@ -89,7 +93,9 @@ function stubRunner(onDispatch: (events: Events) => void) {
   } as any;
 }
 
-async function frameFold(onDispatch: (events: Events) => void): Promise<ChatState> {
+async function frameFold(
+  onDispatch: (events: Events) => void,
+): Promise<{ state: ChatState; frameTypes: string[]; stateTrail: string[] }> {
   __setCcRunnerForTests(stubRunner(onDispatch));
   const frames: Array<{ type: string; leaderId?: string }> = [];
   const sendToClient = vi.fn((_uid: string, msg: { type: string; leaderId?: string }) => {
@@ -106,12 +112,14 @@ async function frameFold(onDispatch: (events: Events) => void): Promise<ChatStat
     persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
   });
   let state = idleState();
+  const stateTrail: string[] = [];
   for (const f of frames) {
     if (!FOLDED.has(f.type)) continue;
     // biome-ignore lint/suspicious/noExplicitAny: frames are WS messages
     state = chatReducer(state, { type: "stream_event", msg: f as any });
+    stateTrail.push(state.streamState);
   }
-  return state;
+  return { state, frameTypes: frames.map((f) => f.type), stateTrail };
 }
 
 describe("cc turn end over the wire", () => {
@@ -124,7 +132,7 @@ describe("cc turn end over the wire", () => {
   });
 
   it("text + turn end -> one done bubble with the list, and streamState returns to idle", async () => {
-    const state = await frameFold((events) => {
+    const { state, frameTypes } = await frameFold((events) => {
       events.onText(QUESTION_LIST);
       events.onTextTurnEnd?.();
     });
@@ -133,7 +141,35 @@ describe("cc turn end over the wire", () => {
     expect(bubbles[0].content).toBe(QUESTION_LIST);
     expect(bubbles[0].state).toBe("done");
     expect(state.activeStreams.size).toBe(0);
-    expect(CC_ROUTER_LEADER_ID).toBeTruthy();
     expect(state.streamState).toBe("idle");
+    // The cc path must not emit a per-turn session_ended (it would clear_streams and
+    // blank the workflow bar). The list is UNFILTERED: FOLDED cannot hide such a frame.
+    expect(frameTypes).not.toContain("session_ended");
+    expect(frameTypes.filter((t) => t === "stream_end")).toHaveLength(1);
+  });
+
+  it("a second turn re-enters streaming and returns to idle again", async () => {
+    const { state, stateTrail } = await frameFold((events) => {
+      events.onText(QUESTION_LIST);
+      events.onTextTurnEnd?.();
+      events.onText("Second turn.");
+      events.onTextTurnEnd?.();
+    });
+    expect(stateTrail).toEqual(["streaming", "idle", "streaming", "idle"]);
+    expect(state.streamState).toBe("idle");
+  });
+});
+
+describe("cc turn persistence when a markup-only block is dropped", () => {
+  it("the persisted text stays the previous block's text (the runner never calls onText for the dropped block)", () => {
+    const turn = new TurnPersistenceState();
+    turn.setText(QUESTION_LIST);
+    // A markup-only block never reaches onText, so setText is not called again.
+    expect(turn.consumeForComplete()).toEqual({ text: QUESTION_LIST, usage: null });
+  });
+
+  it("a markup-only ONLY turn persists empty text, which saveAssistantMessage drops (no row)", () => {
+    const turn = new TurnPersistenceState();
+    expect(turn.consumeForComplete()).toEqual({ text: "", usage: null });
   });
 });
