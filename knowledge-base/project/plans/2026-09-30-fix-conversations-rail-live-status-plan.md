@@ -64,32 +64,34 @@ on `isTerminalSubscribeStatus`.
 
 1. **Server — write `status: "active"` when a user turn starts on an existing
    conversation.** Two lineages, two chokepoints:
-   - cc/soleur-go (Concierge, the reported path): add `status: "active"` to the
-     `updateConversationFor` ownership write in `dispatchSoleurGo`
-     (`cc-dispatcher.ts`) — it already writes `last_active` on every dispatch,
-     so one statement covers all soleur-go turn starts (WS `chat` branches at
-     `ws-handler.ts:1370` + `dispatchSoleurGoForConversation`, and
-     `api/support/route.ts`).
-   - legacy: `sendUserMessage` (`agent-runner.ts`) — after the ownership probe,
-     `updateConversationFor(userId, conversationId, { status: "active",
-     last_active: <now> }, { feature: "agent-runner", op:
-     "turn-start-active", expectMatch: true })`. Covers both `ws-handler.ts`
-     `chat` call sites.
+   - cc/soleur-go (Concierge, the reported path): a dedicated
+     `updateConversationFor` write `{ status: "active" }` in `dispatchSoleurGo`
+     (`cc-dispatcher.ts`) immediately before `runner.dispatch` — deliberately
+     NOT in the earlier ownership/`last_active` write, so the ~930 lines of
+     throw-eligible setup between them (tenant mint, workspace_id read,
+     messages INSERT, reprovision) can never leave a falsely-`active` row
+     (see Compensating write below). Covers all soleur-go turn starts (WS
+     `chat` branches + `api/support/route.ts`).
+   - legacy: `sendUserMessage` (`agent-runner.ts`) — after the messages INSERT
+     + attachments (same narrow-window contract), `updateConversationFor(userId,
+     conversationId, { status: "active", last_active: <now> }, { feature:
+     "agent-runner", op: "turn-start-active", expectMatch: true })`. Covers
+     both `ws-handler.ts` `chat` call sites.
    - Semantics: a user-initiated turn IS activity — unconditional flip
      (`completed`/`waiting_for_user`/`failed` → `active`) is correct;
      permission-gate writes remain consistent (`waiting_for_user` → `active`
      round-trips unchanged).
-   - **Compensating write on cc dispatch failure (advisor P-finding, applied):**
-     the `active` write precedes ~10 throw-eligible setup steps in
-     `dispatchSoleurGo` (assertWriteScope, tenant mint, `convWsRow` select,
-     message INSERT, `runner.dispatch`). On a throw the WS `chat` catch emits an
-     error frame but writes no status — the row would stay `active`, and because
-     the session heartbeat keeps `touchSlot` fresh, `find_stuck_active_…`
-     never reaps it → permanent `In progress`. Mirror the legacy
-     `handleSessionError` primitive (`agent-runner.ts` `updateConversationStatusIfActive`,
-     #3463): a guarded `updateConversationFor(…, { status: "failed" },
-     { onlyIfStatusIn: ["active"], expectMatch: false })` on the dispatch
-     throw path — revert only when the turn-start flip is what set it.
+   - **Compensating write on cc dispatch failure (advisor P-finding, applied
+     with a narrower design than first drafted):** originally the `active`
+     write was planned inside the ownership write, preceding ~10 throw-eligible
+     setup steps — a falsely-`active` row there is reaper-invisible (the bound
+     session keeps `touchSlot` fresh). Shipped instead: the flip sits
+     immediately before `runner.dispatch`, collapsing the false-active window
+     to the dispatch call itself; the existing `runner.dispatch` catch (the
+     single boundary every dispatch failure funnels through) carries a guarded
+     `updateConversationFor(…, { status: "failed" }, { onlyIfStatusIn:
+     ["active"], expectMatch: false })` — mirrors the legacy
+     `updateConversationStatusIfActive` primitive (#3463).
    - **Existing semantic noted (advisor):** the cc lineage writes NO terminal
      `conversations.status` at normal turn end — `active` persists while the
      session stays bound; terminal values arrive via supersede / close /
@@ -257,28 +259,28 @@ no new interactive surface) and auto-accepts under the pipeline arm.
 
 ## Acceptance Criteria
 
-- [ ] A `chat` message dispatched via `dispatchSoleurGo` on an existing
+- [x] A `chat` message dispatched via `dispatchSoleurGo` on an existing
       conversation whose `status` is `completed` or `waiting_for_user` results
       in `updateConversationFor` being invoked with `status: "active"`.
-- [ ] A `chat` message routed to `sendUserMessage` (legacy engine) results in
+- [x] A `chat` message routed to `sendUserMessage` (legacy engine) results in
       `updateConversationFor` being invoked with `status: "active"` +
       `last_active` before agent dispatch.
-- [ ] A `dispatchSoleurGo` setup throw AFTER the turn-start write results in a
+- [x] A `dispatchSoleurGo` setup throw AFTER the turn-start write results in a
       guarded `updateConversationFor` with `{ status: "failed" }`,
       `onlyIfStatusIn: ["active"]`, `expectMatch: false` (no permanent
       `active` row on a turn that never started; does NOT stomp a row another
       writer moved to `waiting_for_user`/`completed`).
-- [ ] `CONVERSATION_ACTIVITY_EVENT` is exported from `use-conversations.ts`
+- [x] `CONVERSATION_ACTIVITY_EVENT` is exported from `use-conversations.ts`
       and dispatched by `chat-surface.tsx` when `streamState` enters and
       leaves `"streaming"` and on the `awaitingUserInput`/gate transition,
       carrying `detail.conversationId`.
-- [ ] The rail listener refetches quietly (no loading flash) on the event; a
+- [x] The rail listener refetches quietly (no loading flash) on the event; a
       listed conversation whose turn starts shows `In progress` without the
       user leaving the route.
-- [ ] `resume_session` and socket reconnects write NO status change (viewing a
+- [x] `resume_session` and socket reconnects write NO status change (viewing a
       `completed` conversation must not flip it to `In progress`); the event
       must NOT dispatch on socket bind/resume alone.
-- [ ] No existing rail test regresses
+- [x] No existing rail test regresses
       (`test/conversations-rail*.test.tsx`, `use-conversations-limit.test.tsx`,
       `ws-handler-cc-session-id-wiring.test.ts`).
 

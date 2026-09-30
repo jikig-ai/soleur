@@ -13,7 +13,10 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { useActiveRepo } from "@/hooks/use-active-repo";
-import { CONVERSATION_CREATED_EVENT } from "@/hooks/use-conversations";
+import {
+  CONVERSATION_ACTIVITY_EVENT,
+  CONVERSATION_CREATED_EVENT,
+} from "@/hooks/use-conversations";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
 import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
 import { uploadPendingFiles } from "@/lib/upload-attachments";
@@ -665,6 +668,37 @@ export function ChatSurface({
       (m.type === "review_gate" || m.type === "autonomous_disclosure") &&
       !m.resolved,
   );
+
+  // Deterministic rail-refresh signal for the VIEWED conversation's status
+  // (PR #9270 — same class as CONVERSATION_CREATED_EVENT above: the rail's
+  // realtime UPDATE can miss or die unobserved mid-view, so its badge stayed
+  // at the previous terminal value for the whole run). Dispatch on DERIVED
+  // turn boundaries — `streamState` transitions and the `awaitingUserInput`
+  // gate transition — never on wire frames: the cc path emits no
+  // `stream_start`, and `session_started` fires on socket bind/resume (a
+  // resume-on-view would falsely signal activity — the plan's inverse-lie
+  // AC). The rail listener debounces bursts and refetches quietly; the status
+  // value stays server-owned.
+  const activitySignalRef = useRef<{
+    streamState: typeof streamState;
+    awaiting: boolean;
+  } | null>(null);
+  useEffect(() => {
+    const convId = realConversationId ?? conversationId;
+    const sig = { streamState, awaiting: awaitingUserInput };
+    const prev = activitySignalRef.current;
+    activitySignalRef.current = sig;
+    if (prev === null) return; // mount — no transition yet
+    if (prev.streamState === sig.streamState && prev.awaiting === sig.awaiting) {
+      return;
+    }
+    if (typeof window === "undefined" || !convId || convId === "new") return;
+    window.dispatchEvent(
+      new CustomEvent(CONVERSATION_ACTIVITY_EVENT, {
+        detail: { conversationId: convId },
+      }),
+    );
+  }, [streamState, awaitingUserInput, realConversationId, conversationId]);
 
   // feat-debug-mode-stream — the separate debug drawer. Visibility is the
   // dev-cohort `debug-mode` flag; the panel filters debug_event frames out of

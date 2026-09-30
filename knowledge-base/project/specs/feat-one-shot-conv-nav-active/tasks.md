@@ -3,7 +3,7 @@
 Derived from `knowledge-base/project/plans/2026-09-30-fix-conversations-rail-live-status-plan.md` (post-review, incl. advisor P-findings).
 Branch: `feat-one-shot-conv-nav-active`. Draft PR: #9270. Follow-up: #9293.
 
-## Phase 1 — Tests first (failing)
+## Phase 1 — Tests first (failing) ✅ (5 RED → 8 GREEN)
 
 - 1.1 Create `apps/web-platform/test/conversation-turn-start-status.test.ts`:
   - existing `completed` conversation + `chat` via `dispatchSoleurGo` →
@@ -20,13 +20,15 @@ Branch: `feat-one-shot-conv-nav-active`. Draft PR: #9270. Follow-up: #9293.
     (no loading flash) and the row shows the updated status without remount.
   - negative: no dispatch happens on socket bind/resume alone.
 
-## Phase 2 — Server: turn-start `status='active'` + guarded revert
+## Phase 2 — Server: turn-start `status='active'` + guarded revert ✅
 
-- 2.1 `apps/web-platform/server/cc-dispatcher.ts` — in `dispatchSoleurGo`, add
-  `status: "active"` to the existing `updateConversationFor` ownership write
-  that bumps `last_active` (~line 3269).
-- 2.2 `apps/web-platform/server/cc-dispatcher.ts` — on the dispatch throw
-  path after that write, revert via
+- 2.1 `apps/web-platform/server/cc-dispatcher.ts` — in `dispatchSoleurGo`, a
+  dedicated `updateConversationFor(…, { status: "active" })` write immediately
+  before `runner.dispatch` (~line 4229). [Shipped design refinement vs the
+  original "add to the ownership write": the separate placement collapses the
+  false-`active` window — setup throws above it leave the row untouched.]
+- 2.2 `apps/web-platform/server/cc-dispatcher.ts` — in the `runner.dispatch`
+  catch (~line 4286), revert via
   `updateConversationFor(…, { status: "failed" }, { onlyIfStatusIn: ["active"],
   expectMatch: false, feature: "cc-dispatcher", op: "turn-start-revert" })`
   — mirrors `agent-runner.ts` `updateConversationStatusIfActive` (#3463).
@@ -37,7 +39,7 @@ Branch: `feat-one-shot-conv-nav-active`. Draft PR: #9270. Follow-up: #9293.
 - 2.4 Do NOT touch `resume_session` / `start_session` status — viewing is not a
   turn (plan Technical Considerations).
 
-## Phase 3 — Client: deterministic rail refresh on derived state
+## Phase 3 — Client: deterministic rail refresh on derived state ✅
 
 - 3.1 `apps/web-platform/hooks/use-conversations.ts` — export
   `CONVERSATION_ACTIVITY_EVENT = "soleur:conversation-activity"`; add a window
@@ -52,9 +54,10 @@ Branch: `feat-one-shot-conv-nav-active`. Draft PR: #9270. Follow-up: #9293.
 
 ## Phase 4 — Verify
 
-- 4.1 Run new tests + existing rail/handler suites:
+- 4.1 ✅ Run new tests + existing rail/handler suites — 8 new + 46 rail/handler
+  + 116 dispatcher/agent-runner all green:
   `cd apps/web-platform && ./node_modules/.bin/vitest run test/conversation-turn-start-status.test.ts test/conversations-rail-activity-event.test.tsx test/conversations-rail.test.tsx test/conversations-rail-insert.test.tsx test/conversations-rail-connect-race.test.tsx test/conversations-active-repo-scope.test.tsx test/use-conversations-limit.test.tsx test/ws-handler-cc-session-id-wiring.test.ts`
-- 4.2 Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
+- 4.2 ✅ Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (clean)
 - 4.3 Browser QA (playwright): open a `completed` conversation in the
   Concierge, send a message, observe the rail badge flip to `In progress`
   while `Working…` shows — without leaving the route. Before/after

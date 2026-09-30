@@ -2992,6 +2992,26 @@ export async function sendUserMessage(
     attachmentContext = result.attachmentContext;
   }
 
+  // Turn-start status flip (rail-live-status fix, PR #9270): a follow-up
+  // `chat` message on an existing `completed`/`waiting_for_user`/`failed`
+  // conversation IS new activity, but nothing upstream flipped the row back
+  // to `active` — the conversations rail rendered the stale terminal badge
+  // for the whole run. Placed after the message/attachment persistence so an
+  // early throw leaves the row at its previous honest value (same
+  // narrow-window contract as dispatchSoleurGo's flip). `expectMatch: true`
+  // mirrors the probe→update deletion race to Sentry without aborting the
+  // turn — status is display-only, the session must proceed regardless.
+  await updateConversationFor(
+    userId,
+    conversationId,
+    { status: "active", last_active: new Date().toISOString() },
+    {
+      feature: "agent-runner",
+      op: "turn-start-active",
+      expectMatch: true,
+    },
+  );
+
   // Check for an in-memory session with a captured session_id
   const activeSession = getSession(userId, conversationId);
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;

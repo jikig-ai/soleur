@@ -4226,6 +4226,28 @@ export async function dispatchSoleurGo(
     },
   };
 
+  // Turn-start status flip (rail-live-status fix, PR #9270): a follow-up
+  // `chat` message on an existing `completed`/`waiting_for_user`/`failed`
+  // conversation IS new activity, but nothing upstream flipped the row back
+  // to `active` — the conversations rail rendered the stale terminal badge
+  // for the whole run. This write sits immediately before `runner.dispatch`
+  // — NOT in the earlier ownership/`last_active` write — so a setup throw
+  // above (tenant mint, workspace_id read, messages INSERT) leaves the row
+  // at its previous honest value instead of falsely `active` (a bound
+  // session keeps the slot heartbeat fresh, so `find_stuck_active_…` would
+  // never reap such a row). `expectMatch: false`: a mid-setup-deleted row is
+  // silent-success; real errors still mirror inside the wrapper.
+  await updateConversationFor(
+    userId,
+    conversationId,
+    { status: "active" },
+    {
+      feature: "cc-dispatcher",
+      op: "turn-start-active",
+      expectMatch: false,
+    },
+  );
+
   try {
     await runner.dispatch({
       conversationId,
@@ -4262,6 +4284,23 @@ export async function dispatchSoleurGo(
       workspacePath: callerWorkspacePath ?? workspacePath,
     });
   } catch (err) {
+    // Turn-start revert: the flip above set the row `active`; this catch is
+    // the single boundary every dispatch failure funnels through, so revert
+    // here — `onlyIfStatusIn: ["active"]` confines the write to rows still
+    // holding the value we set (a concurrent gate-resolve / supersede write
+    // wins and is left untouched). Same shape as the legacy
+    // `updateConversationStatusIfActive` abort/result path (#3463).
+    await updateConversationFor(
+      userId,
+      conversationId,
+      { status: "failed" },
+      {
+        feature: "cc-dispatcher",
+        op: "turn-start-revert",
+        onlyIfStatusIn: ["active"],
+        expectMatch: false,
+      },
+    );
     const errorClass =
       err instanceof KeyInvalidError
         ? "KeyInvalidError"
