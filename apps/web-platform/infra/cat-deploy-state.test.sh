@@ -111,14 +111,14 @@ assert "OK state injects services.inngest_heartbeat_timer" \
 # --- #8609: the GitHub App key fields ci-deploy.sh write_state records ride through verbatim ---
 # (github-app-key-status.sh and the release workflow's ::warning:: read them off this output.) An
 # ABSENT field means the deploy never reached the overlay — it must not be fabricated.
-echo '{"exit_code":0,"reason":"ok","github_app_key_source":"isolated","github_app_key_fetch":"ok","github_app_key_probe":"transport"}' > "$TMP/gak.state"
+echo '{"exit_code":0,"reason":"ok","github_app_key_source":"isolated","github_app_key_fetch":"ok","github_app_key_probe":"rejected","github_app_key_probe_reason":"http_401"}' > "$TMP/gak.state"
 GAK_OUT=$(CI_DEPLOY_STATE="$TMP/gak.state" bash "$TARGET")
-for _gak in "github_app_key_source isolated" "github_app_key_fetch ok" "github_app_key_probe transport"; do
+for _gak in "github_app_key_source isolated" "github_app_key_fetch ok" "github_app_key_probe rejected" "github_app_key_probe_reason http_401"; do
   assert "#8609 ${_gak% *} is printed (${_gak#* })" \
     "[[ \$(printf '%s' '$GAK_OUT' | jq -r '.${_gak% *}') == '${_gak#* }' ]]"
 done
 assert "#8609 a state without the overlay fields prints none (absent = never ran, not a default)" \
-  "printf '%s' '$OK_OUT' | jq -e 'has(\"github_app_key_source\") or has(\"github_app_key_fetch\") or has(\"github_app_key_probe\") | not' >/dev/null"
+  "printf '%s' '$OK_OUT' | jq -e 'has(\"github_app_key_source\") or has(\"github_app_key_fetch\") or has(\"github_app_key_probe\") or has(\"github_app_key_probe_reason\") | not' >/dev/null"
 
 # --- pre-existing services.* keys preserved ---
 echo '{"exit_code":0,"services":{"web":"healthy"}}' > "$TMP/svc.state"

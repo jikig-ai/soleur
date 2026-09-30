@@ -8,9 +8,11 @@
 // from its OWN environment (never passed with `docker exec -e`), signs an App JWT and calls
 // GET https://api.github.com/app.
 //
-// OUTPUT IS EXACTLY ONE LINE from a fixed enum: `github_app_key_probe=ok|rejected|transport`.
-// Never the JWT, a header, the body or an error message — both callers forward stdout to sinks
-// that leave the host. Standalone on purpose (node:crypto + fetch, no app imports) so the probe
+// OUTPUT IS EXACTLY ONE LINE from a fixed enum: `github_app_key_probe=ok|transport`, or
+// `github_app_key_probe=rejected reason=<REJECT_REASONS>`. Never the JWT, a header, the body or an
+// error message — both callers forward stdout to sinks that leave the host. The reason separates
+// the hypotheses a bare `rejected` merged (a bad GITHUB_APP_ID, a PEM the env-file merge mangled,
+// a key GitHub refuses, an unknown App, another App's key); both host parsers carry the same enum. Standalone on purpose (node:crypto + fetch, no app imports) so the probe
 // cannot be broken by the app bundle it is judging.
 import { createPrivateKey, createSign } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -19,6 +21,14 @@ export const GITHUB_APP_URL = "https://api.github.com/app";
 export const EXPECTED_SLUG = "soleur-ai";
 export const PROBE_TIMEOUT_MS = 10_000;
 export const VERDICTS = Object.freeze(["ok", "rejected", "transport"]);
+export const REJECT_REASONS = Object.freeze([
+  "no_app_id",
+  "unparseable_key",
+  "http_401",
+  "http_404",
+  "wrong_app",
+  "http_other",
+]);
 
 // Same steps as normalizeAppPrivateKey() in server/github/app-private-key.ts (the escaped-`\n`
 // expansion Doppler's docker format needs, then Node's format-tolerant re-export). Not imported:
@@ -57,16 +67,30 @@ export function classifyResponse({ status, headers, body, appId }) {
   return "rejected";
 }
 
-export async function probe({ env = process.env, fetchImpl = globalThis.fetch, now = Date.now } = {}) {
+// The closed sub-reason of a `rejected` HTTP verdict: 200 (a body that is not this App), 401, 404,
+// or any other status classifyResponse rejects (403 without a rate-limit signal, 3xx, 4xx).
+export function rejectReason(status) {
+  if (status === 200) return "wrong_app";
+  if (status === 401) return "http_401";
+  if (status === 404) return "http_404";
+  return "http_other";
+}
+
+const rejected = (reason) => ({ verdict: "rejected", reason });
+
+// probeResult → { verdict, reason }: reason is one of REJECT_REASONS when verdict is `rejected`,
+// else null.
+export async function probeResult({ env = process.env, fetchImpl = globalThis.fetch, now = Date.now } = {}) {
   // Trimmed exactly as readAppId() does; anything non-numeric can never be accepted by GitHub.
   const appId = String(env.GITHUB_APP_ID ?? "").trim();
   const raw = env.GITHUB_APP_PRIVATE_KEY ?? "";
-  if (!/^[0-9]+$/.test(appId) || raw === "") return "rejected";
+  if (!/^[0-9]+$/.test(appId)) return rejected("no_app_id");
+  if (raw === "") return rejected("unparseable_key");
   let jwt;
   try {
     jwt = buildAppJwt({ appId, privateKeyPem: normalizeAppPrivateKey(raw), nowSec: Math.floor(now() / 1000) });
   } catch {
-    return "rejected"; // not a parseable private key
+    return rejected("unparseable_key");
   }
   let res;
   try {
@@ -82,7 +106,7 @@ export async function probe({ env = process.env, fetchImpl = globalThis.fetch, n
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
   } catch {
-    return "transport";
+    return { verdict: "transport", reason: null };
   }
   let body = null;
   if (res.status === 200) {
@@ -90,20 +114,25 @@ export async function probe({ env = process.env, fetchImpl = globalThis.fetch, n
     try {
       text = await res.text();
     } catch {
-      return "transport"; // the connection died mid-body
+      return { verdict: "transport", reason: null }; // the connection died mid-body
     }
     try {
       body = JSON.parse(text);
     } catch {
-      body = null;
+      body = null; // a 200 that is not JSON (a proxy's HTML page) is not this App: rejected
     }
   }
-  return classifyResponse({ status: res.status, headers: res.headers, body, appId });
+  const verdict = classifyResponse({ status: res.status, headers: res.headers, body, appId });
+  return verdict === "rejected" ? rejected(rejectReason(res.status)) : { verdict, reason: null };
+}
+
+export async function probe(opts = {}) {
+  return (await probeResult(opts)).verdict;
 }
 
 export async function runCli({ env = process.env, fetchImpl = globalThis.fetch, write = (s) => process.stdout.write(s) } = {}) {
-  const verdict = await probe({ env, fetchImpl });
-  write(`github_app_key_probe=${verdict}\n`);
+  const { verdict, reason } = await probeResult({ env, fetchImpl });
+  write(verdict === "rejected" ? `github_app_key_probe=rejected reason=${reason}\n` : `github_app_key_probe=${verdict}\n`);
   return verdict === "rejected" ? 1 : 0;
 }
 

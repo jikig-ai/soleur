@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createPublicKey, createVerify, generateKeyPairSync } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -12,7 +13,10 @@ import {
   GITHUB_APP_URL,
   normalizeAppPrivateKey as probeNormalize,
   probe,
+  probeResult,
   PROBE_TIMEOUT_MS,
+  REJECT_REASONS,
+  rejectReason,
   runCli,
 } from "../scripts/github-app-key-probe.mjs";
 import { normalizeAppPrivateKey as serverNormalize } from "../server/github/app-private-key";
@@ -143,6 +147,71 @@ describe("probe — request shape and failure classes", () => {
     );
     expect(calls).toHaveLength(0);
   });
+
+  it("each pre-request refusal carries its closed reason", async () => {
+    const { fetchImpl } = stubFetch(200, okBody);
+    expect(await probeResult({ env: asEnv({ GITHUB_APP_PRIVATE_KEY: ESCAPED }), fetchImpl })).toEqual({
+      verdict: "rejected",
+      reason: "no_app_id",
+    });
+    expect(await probeResult({ env: asEnv({ GITHUB_APP_ID: APP_ID }), fetchImpl })).toEqual({
+      verdict: "rejected",
+      reason: "unparseable_key",
+    });
+    expect(
+      await probeResult({ env: asEnv({ GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: "EVICTED_SEE_ADR_241" }), fetchImpl }),
+    ).toEqual({ verdict: "rejected", reason: "unparseable_key" });
+  });
+
+  it("a 200 whose body is not JSON (a proxy's HTML page) ⇒ rejected (wrong_app), never ok or transport", async () => {
+    const { fetchImpl } = stubFetch(200, "<html><body>captive portal</body></html>");
+    expect(await probeResult({ env, fetchImpl })).toEqual({ verdict: "rejected", reason: "wrong_app" });
+  });
+
+  it("a 200 whose body read fails mid-stream ⇒ transport", async () => {
+    const fetchImpl: typeof fetch = async () => {
+      const res = new Response("{}", { status: 200 });
+      Object.defineProperty(res, "text", { value: () => Promise.reject(new TypeError("terminated")) });
+      return res;
+    };
+    expect(await probeResult({ env, fetchImpl })).toEqual({ verdict: "transport", reason: null });
+  });
+
+  it("HTTP rejections map to their closed reason; accepted and transport verdicts carry none", async () => {
+    for (const [status, body, reason] of [
+      [401, {}, "http_401"],
+      [404, {}, "http_404"],
+      [403, {}, "http_other"],
+      [302, "", "http_other"],
+      [200, { ...okBody, slug: "other-app" }, "wrong_app"],
+    ] as const) {
+      const { fetchImpl } = stubFetch(status, body);
+      expect(await probeResult({ env, fetchImpl })).toEqual({ verdict: "rejected", reason });
+    }
+    expect(await probeResult({ env, fetchImpl: stubFetch(200, okBody).fetchImpl })).toEqual({ verdict: "ok", reason: null });
+    expect(await probeResult({ env, fetchImpl: stubFetch(503, "down").fetchImpl })).toEqual({
+      verdict: "transport",
+      reason: null,
+    });
+    expect(rejectReason(500)).toBe("http_other");
+  });
+});
+
+describe("REJECT_REASONS — the host parsers carry the same closed enum", () => {
+  // Both host callers match the reason against a literal alternation; a reason the probe can emit
+  // but a host does not know reads as no verdict (ci: rejected/no_verdict; boot: exec_failed).
+  const infra = (f: string) => readFileSync(fileURLToPath(new URL(`../infra/${f}`, import.meta.url)), "utf8");
+  const want = [...REJECT_REASONS].sort().join("|");
+
+  it("ci-deploy.sh's canary-check regex lists exactly REJECT_REASONS", () => {
+    const m = infra("ci-deploy.sh").match(/github_app_key_probe=rejected\(\\ reason=\(([a-z0-9_|]+)\)\)\?\$/);
+    expect(m?.[1].split("|").sort().join("|")).toBe(want);
+  });
+
+  it("soleur-host-bootstrap.sh's boot check lists exactly REJECT_REASONS", () => {
+    const m = infra("soleur-host-bootstrap.sh").match(/\n {10}([a-z0-9_|]+)\) S=rejected; L=error ;;/);
+    expect(m?.[1].split("|").sort().join("|")).toBe(want);
+  });
 });
 
 describe("runCli — exactly one enum line, nothing else", () => {
@@ -150,7 +219,7 @@ describe("runCli — exactly one enum line, nothing else", () => {
 
   for (const [status, body, headers, verdict, code] of [
     [200, okBody, {}, "ok", 0],
-    [401, { message: "A JSON web token could not be decoded" }, {}, "rejected", 1],
+    [401, { message: "A JSON web token could not be decoded" }, {}, "rejected reason=http_401", 1],
     [503, "upstream down", {}, "transport", 0],
   ] as const) {
     it(`HTTP ${status} ⇒ "github_app_key_probe=${verdict}" and exit ${code}`, async () => {
@@ -174,7 +243,7 @@ describe("runCli — exactly one enum line, nothing else", () => {
       encoding: "utf8",
       timeout: 15_000,
     });
-    expect(r.stdout).toBe("github_app_key_probe=rejected\n");
+    expect(r.stdout).toBe("github_app_key_probe=rejected reason=no_app_id\n");
     expect(r.stderr).toBe("");
     expect(r.status).toBe(1);
   });

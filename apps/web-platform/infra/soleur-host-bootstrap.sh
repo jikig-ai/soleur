@@ -367,6 +367,9 @@ TMO="${SOLEUR_DOPPLER_TIMEOUT:-20}"
 B1="${SOLEUR_DOPPLER_BACKOFF_1:-5}"
 B2="${SOLEUR_DOPPLER_BACKOFF_2:-10}"
 # Worst case: 3 x (20 s + 5 s SIGKILL grace) + 5 s + 10 s backoff + 2 x 12 s bounded emit = 114 s.
+# (#8609) After a successful prd download, the GitHub App key overlay adds at most
+# 3 x (20 s + 5 s) + 2 s + 4 s backoff = 81 s (its isolated fetch retries only on a non-zero exit),
+# plus one 12 s bounded emit if the check cannot be launched: 93 s on the success arm.
 EMIT_TMO="${SOLEUR_DOPPLER_EMIT_TIMEOUT:-12}"
 # Mode at CREATION, not chmod-after: the buffers hold scrubbed, capped process stderr on a
 # root-owned tmpfs, and there is no window in which they should be world-readable. Not
@@ -390,61 +393,104 @@ ERRF=$(mktemp "$ERRDIR/doppler-err.XXXXXX") || {
 chmod 600 "$ERRF" 2>/dev/null || true
 # This helper is a SEPARATE PROCESS from the cloud-init terminal block, so that block's EXIT
 # trap cannot see $ERRF. The helper owns its own cleanup.
-trap 'rm -f "$ERRF"' EXIT INT TERM HUP
+# ${_gak_tmp}: the #8609 overlay's merge temp file beside $OUT (named there while it exists).
+trap 'rm -f "$ERRF" ${_gak_tmp:+"$_gak_tmp"}' EXIT INT TERM HUP
 # (#8609) GitHub App key overlay. The block between the sentinels is byte-identical to
 # ci-deploy.sh's; the emitter and the finish step below it are this file's own.
 # >>> github-app-key-overlay >>>
 # Byte-identical in ci-deploy.sh and soleur-host-bootstrap.sh (inside soleur-doppler-download);
 # ci-deploy.test.sh Guard 7 compares the two. POSIX sh, because the boot copy runs under dash.
 # Contract (#8609): knowledge-base/project/plans/
-# 2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md §3.2-§3.4. Each file
-# defines its own github_app_key_emit <classification> <level> [detail]; detail is numeric k=v
-# only — never Doppler stderr, key or token bytes.
+# 2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md §3.2-§3.4, as amended by
+# the CTO ruling on PR #9263 (b)-(e). Each file defines its own emitter (<classification> <level>
+# [detail]); detail is numeric or enum k=v only — never Doppler stderr, key or token bytes.
 #
-# overlay_github_app_key <env-file> <verified-ref>: <verified-ref> is EMPTY unless the caller proved
-# the image it is about to run (a sha256 ref). Rewrites <env-file> in place (no new file, so the
-# caller's cleanup still covers every secret byte), sets GITHUB_APP_KEY_SOURCE and
-# GITHUB_APP_KEY_FETCH, and returns 1 only on the runtime-hijack refusal.
+# overlay_github_app_key <env-file> <verified-ref>: <verified-ref> is EMPTY unless the caller proved,
+# in this same run, that the image it is about to run passed the main-pinned cosign verify
+# (ci-deploy: verify_image_signature rc 0; boot: the digest matches the last one ci-deploy
+# verified). Anything but an exact `[<repo>@]sha256:<64 hex>` gets no key. Sets
+# GITHUB_APP_KEY_SOURCE and GITHUB_APP_KEY_FETCH. The merge is atomic: a sibling temp file (named
+# in _gak_tmp while it exists, so the caller's cleanup trap covers it) is renamed over <env-file>.
+# Returns 0, or 1 on the runtime-hijack refusal, or 2 when the merge failed (<env-file> is then
+# untouched) — both non-zero returns abort the deploy and the boot.
+#
+# Runtime-hijack refusal: a prd name in one of these classes can run code, or re-route TLS/egress,
+# inside a process that holds the key (node, git, a shell, a TLS stack), so the key is refused to
+# the whole env rather than to one name. The classes, not a name list (#8609 d): NODE_* (except
+# NODE_ENV), LD_*, GLIBC_*, GIT_* (except the app's own GIT_DATA_/GIT_PROVISION_/GIT_REMOVE_/
+# GIT_TRANSPORT_ config, none of which git reads), BASH_*, ENV, PATH, SHELL, HOME, TMPDIR, SSL_*,
+# OPENSSL_*, CURL_*, *_PROXY, *_proxy, npm_config_*, NPM_CONFIG_*, PYTHON*, PERL*. A bare NAME
+# line counts too (docker --env-file then copies the docker CLI's own value).
 overlay_github_app_key() {
   GITHUB_APP_KEY_SOURCE=prd
   GITHUB_APP_KEY_FETCH=no_token
-  if grep -qE '^(NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|LD_PRELOAD|SSL_CERT_FILE|SSL_CERT_DIR|HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy)=' "$1"; then
+  _gak_tmp=
+  if [ ! -f "$1" ] || [ ! -r "$1" ]; then
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=read"
+    return 2
+  fi
+  _gak_hij=$(grep -E '^[[:space:]]*(NODE_[A-Za-z0-9_]*|LD_[A-Za-z0-9_]*|GLIBC_[A-Za-z0-9_]*|GIT_[A-Za-z0-9_]*|BASH_[A-Za-z0-9_]*|ENV|PATH|SHELL|HOME|TMPDIR|SSL_[A-Za-z0-9_]*|OPENSSL_[A-Za-z0-9_]*|CURL_[A-Za-z0-9_]*|[A-Za-z0-9_]*_PROXY|[A-Za-z0-9_]*_proxy|npm_config_[A-Za-z0-9_]*|NPM_CONFIG_[A-Za-z0-9_]*|PYTHON[A-Za-z0-9_]*|PERL[A-Za-z0-9_]*)[[:space:]]*(=|$)' "$1" \
+    | grep -cvE '^[[:space:]]*(NODE_ENV|GIT_(DATA|PROVISION|REMOVE|TRANSPORT)_[A-Za-z0-9_]*)[[:space:]]*(=|$)') || _gak_hij=0
+  if [ "$_gak_hij" -ne 0 ]; then
     GITHUB_APP_KEY_FETCH=env_hijack
-    github_app_key_emit env_hijack error
+    github_app_key_emit env_hijack error "names=$_gak_hij"
     return 1
   fi
   if [ -z "${GITHUB_APP_DOPPLER_TOKEN:-}" ]; then
     github_app_key_emit no_token info
     return 0
   fi
+  _gak_ref_ok=0
   case "${2:-}" in
-    *sha256:*) ;;
-    *)
-      GITHUB_APP_KEY_FETCH=unverified_image
-      github_app_key_emit unverified_image error
-      return 0
-      ;;
+    '' | *[!A-Za-z0-9@:/._-]*) ;;
+    *) if printf '%s\n' "$2" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;
   esac
-  _gak_rc=0
-  _gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout -k 5 20 doppler secrets download --no-file --format docker --project soleur-github-app --config prd 2>/dev/null) || _gak_rc=$?
+  if [ "$_gak_ref_ok" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=unverified_image
+    github_app_key_emit unverified_image error
+    return 0
+  fi
+  # Bounded retry, like the prd download's: a transient Doppler error must not cost the key.
+  # Only a non-zero exit is retried; a wrong key-line count is a deterministic answer.
+  # The two knobs are test seams (digits only; anything else falls back to the default).
+  _gak_max=${GITHUB_APP_KEY_FETCH_ATTEMPTS:-3}
+  _gak_bo=${GITHUB_APP_KEY_FETCH_BACKOFF:-2}
+  case "$_gak_max" in '' | *[!0-9]*) _gak_max=3 ;; esac
+  case "$_gak_bo" in '' | *[!0-9]*) _gak_bo=2 ;; esac
+  _gak_try=1
+  while :; do
+    _gak_rc=0
+    _gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout -k 5 20 doppler secrets download --no-file --format docker --project soleur-github-app --config prd 2>/dev/null) || _gak_rc=$?
+    if [ "$_gak_rc" -eq 0 ] || [ "$_gak_try" -ge "$_gak_max" ]; then break; fi
+    sleep $((_gak_try * _gak_bo))
+    _gak_try=$((_gak_try + 1))
+  done
   _gak_n=$(printf '%s\n' "$_gak_dl" | grep -cE '^GITHUB_APP_PRIVATE_KEY=.') || _gak_n=0
   if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then
     GITHUB_APP_KEY_FETCH=failed
-    github_app_key_emit fetch_failed error "rc=$_gak_rc key_lines=$_gak_n len=${#_gak_dl}"
+    github_app_key_emit fetch_failed error "rc=$_gak_rc key_lines=$_gak_n len=${#_gak_dl} attempts=$_gak_try"
     unset _gak_dl
     return 0
   fi
   _gak_line=$(printf '%s\n' "$_gak_dl" | grep -E '^GITHUB_APP_PRIVATE_KEY=.') || _gak_line=
-  _gak_rest=$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' "$1") || _gak_rest=
-  if ! printf '%s\n%s\n' "$_gak_rest" "$_gak_line" > "$1"; then
-    GITHUB_APP_KEY_FETCH=failed
-    github_app_key_emit merge_failed error
+  _gak_grc=0
+  _gak_rest=$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' "$1") || _gak_grc=$?
+  # grep -v: rc 1 = every line was a key line (an empty rest is fine); rc 2+ = a read error.
+  if [ "$_gak_grc" -le 1 ] && _gak_tmp=$(mktemp "$1.gak.XXXXXX") \
+    && printf '%s\n%s\n' "$_gak_rest" "$_gak_line" > "$_gak_tmp" && mv -f "$_gak_tmp" "$1"; then
+    _gak_tmp=
+  else
+    if [ -n "$_gak_tmp" ]; then rm -f "$_gak_tmp"; fi
+    _gak_tmp=
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"
     unset _gak_dl _gak_line _gak_rest
-    return 0
+    return 2
   fi
   GITHUB_APP_KEY_SOURCE=isolated
   GITHUB_APP_KEY_FETCH=ok
-  github_app_key_emit ok info "len=${#_gak_line}"
+  github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"
   unset _gak_dl _gak_line _gak_rest
   return 0
 }
@@ -474,21 +520,48 @@ github_app_key_boot_finish() {
       if [ "$_k" = GITHUB_APP_DOPPLER_TOKEN ] && [ -n "$_v" ]; then GITHUB_APP_DOPPLER_TOKEN=$_v; fi
     done < "$CRED"
   fi
-  # The boot image ref is the Terraform-pinned digest the seed block resolved.
-  if ! overlay_github_app_key "$OUT" "$(cat "${SOLEUR_IMAGE_REF_FILE:-/run/soleur-image-ref}" 2>/dev/null)"; then
-    printf 'doppler_download rc=72 cond=github_app_key_env_hijack attempts=%s' "$n" > "$DDIR/doppler_download"
+  # (#8609 c) The boot image is the Terraform-pinned digest the seed block resolved, and nothing on
+  # this path cosign-verifies it. It is handed to the overlay as verified ONLY when its digest
+  # equals the last digest ci-deploy.sh verified under the main-pinned identity on this host
+  # (GITHUB_APP_KEY_VERIFIED_REF_FILE there, on the re-attached /mnt/data volume). No record, a
+  # symlink, or another digest: an empty ref, so `unverified_image` — no key, and the post-run check
+  # reports it (ok_fallback before R6, missing after). A registry-side tag swap never yields the key.
+  GAK_REF=$(head -c 512 "${SOLEUR_IMAGE_REF_FILE:-/run/soleur-image-ref}" 2>/dev/null)
+  GAK_REC_FILE="${SOLEUR_GAK_VERIFIED_REF_FILE:-/mnt/data/github-app-key-verified-ref}"
+  GAK_VREF=
+  GAK_VCHK=absent
+  if [ -f "$GAK_REC_FILE" ] && [ ! -L "$GAK_REC_FILE" ]; then
+    GAK_REC=$(head -n 1 "$GAK_REC_FILE" 2>/dev/null | head -c 512)
+    GAK_VCHK=mismatch
+    if [ -n "$GAK_REC" ] && [ -n "$GAK_REF" ] && [ "${GAK_REF##*@}" = "${GAK_REC##*@}" ]; then
+      GAK_VREF=$GAK_REF
+      GAK_VCHK=match
+    fi
+  fi
+  GAK_ORC=0
+  overlay_github_app_key "$OUT" "$GAK_VREF" || GAK_ORC=$?
+  if [ "$GAK_ORC" -ne 0 ]; then
+    if [ "$GAK_ORC" = 1 ]; then GAK_COND=github_app_key_env_hijack; else GAK_COND=github_app_key_merge_failed; fi
+    printf 'doppler_download rc=72 cond=%s attempt=%s/%s' "$GAK_COND" "$n" "$ATTEMPTS" > "$DDIR/doppler_download"
     exit 72
   fi
   GAK_PRESENT=0
   if github_app_key_present "$OUT"; then GAK_PRESENT=1; fi
-  GAK_STATE="source=$GITHUB_APP_KEY_SOURCE fetch=$GITHUB_APP_KEY_FETCH present=$GAK_PRESENT"
+  GAK_STATE="source=$GITHUB_APP_KEY_SOURCE fetch=$GITHUB_APP_KEY_FETCH present=$GAK_PRESENT vref=$GAK_VCHK"
   printf '%s\n' "$GAK_STATE" > "${SOLEUR_GAK_STATE_FILE:-/run/soleur-github-app-key.state}" 2>/dev/null || true
   # A transient unit, not a cloud-init line: the check must run AFTER the caller's `docker run`,
-  # and user_data has no headroom for another runcmd line.
+  # and user_data has no headroom for another runcmd line. The unit name is unique per boot and
+  # invocation, so a leftover unit can never swallow the launch; a failed launch is reported here,
+  # synchronously, because the check that would have reported anything never runs.
   GAK_CHECK="${SOLEUR_GAK_CHECK:-/usr/local/bin/soleur-github-app-key-check}"
-  if [ -x "$GAK_CHECK" ] && command -v systemd-run >/dev/null; then
-    systemd-run --no-block --quiet --collect --unit=soleur-github-app-key-check "$GAK_CHECK" >/dev/null 2>/dev/null || true
+  GAK_UNIT="soleur-github-app-key-check-$(tr -dc '0-9a-f' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)-$$"
+  if [ -x "$GAK_CHECK" ] && command -v systemd-run >/dev/null 2>/dev/null \
+    && systemd-run --no-block --quiet --collect --unit="$GAK_UNIT" "$GAK_CHECK" >/dev/null 2>/dev/null; then
+    exit 0
   fi
+  printf '%s probe=exec_failed launch=failed rc=0 up=0' "$GAK_STATE" > "$DDIR/github_app_key_exec_failed" 2>/dev/null || true
+  logger -t ci-deploy "GITHUB_APP_KEY_BOOT: stage=github_app_key_exec_failed $GAK_STATE launch=failed" 2>/dev/null || true
+  timeout "$EMIT_TMO" soleur-boot-emit github_app_key_exec_failed error >/dev/null 2>/dev/null || true
   exit 0
 }
 rc=0
@@ -549,11 +622,21 @@ chmod 0755 /usr/local/bin/soleur-doppler-download
 
 # (#8609) Boot-side GitHub App key check (plan §3.4). soleur-doppler-download launches it as a
 # transient unit once the overlay has run; it waits for the web container, runs the baked probe
-# INSIDE it (the key is read from the container's own env) and sends exactly one soleur-boot-emit
-# stage — github_app_key_ok / _rejected / _missing / _transport / _probe_absent / _exec_failed —
-# with `source= fetch= present= probe= rc= up=` in the per-stage detail file, plus the same line to
-# journald under the allowlisted `ci-deploy` tag. A missing _ok event counts as a failure: the
-# emitter exits silently on an empty DSN.
+# INSIDE it (the key is read from the container's own env, under `env -i` with absolute paths, as
+# ci-deploy.sh's canary check does) and sends exactly one soleur-boot-emit stage:
+#   github_app_key_ok           info     the probe accepted the key AND it came from the isolated
+#                                        project (state `source=isolated fetch=ok`)
+#   github_app_key_ok_no_token  info     the probe accepted the PRD key and the host holds no read
+#                                        token (expected before R3; not paged, but never `_ok`)
+#   github_app_key_ok_fallback  warning  the probe accepted the PRD key although a token IS present
+#                                        (isolated fetch failed, image unverified) — paged; R5/R6
+#                                        must not pass on it
+#   github_app_key_transport / _probe_absent  warning
+#   github_app_key_rejected / _missing / _exec_failed  error (the boot is not aborted; the container
+#                                        keeps running, so this is not a fatal)
+# with `source= fetch= present= vref= probe= [reason=] rc= up=` in the per-stage detail file, plus
+# the same line to journald under the allowlisted `ci-deploy` tag. A missing event counts as a
+# failure: the emitter exits silently on an empty DSN.
 STAGE=github_app_key_check_helper; FAILED_FILE=soleur-github-app-key-check
 cat > /usr/local/bin/soleur-github-app-key-check <<'GAKEOF'
 #!/bin/sh
@@ -561,8 +644,10 @@ cat > /usr/local/bin/soleur-github-app-key-check <<'GAKEOF'
 set -u
 DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail.d}"
 STATE=$(head -n 1 "${SOLEUR_GAK_STATE_FILE:-/run/soleur-github-app-key.state}" 2>/dev/null)
+# The probe the image bakes (Dockerfile COPY; ci-deploy.sh GITHUB_APP_KEY_PROBE_MJS is the same path).
+P="${SOLEUR_GAK_PROBE_MJS:-/app/scripts/github-app-key-probe.mjs}"
 C=soleur-web-platform
-n=0; UP=0; RC=0; OUT=
+n=0; UP=0; RC=0; OUT=; R=
 while [ "$n" -lt "${SOLEUR_GAK_WAIT_POLLS:-90}" ]; do
   if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" = true ]; then UP=1; break; fi
   n=$((n+1)); sleep "${SOLEUR_GAK_WAIT_SECS:-2}"
@@ -570,22 +655,35 @@ done
 case "$STATE" in
   *present=1*)
     if [ "$UP" = 1 ]; then
-      # `sh -c '[ -f … ] || exit 127'`: an image older than the probe reads as absent, not rejected.
-      OUT=$(docker exec "$C" sh -c '[ -f "$1" ] || exit 127; exec node "$1"' \
-        github-app-key-probe /app/scripts/github-app-key-probe.mjs 2>/dev/null) || RC=$?
+      # `[ -f … ] || exit 127`: an image older than the probe reads as absent, not rejected.
+      OUT=$(docker exec "$C" /bin/sh -c '[ -f "$1" ] || exit 127; exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' \
+        github-app-key-probe "$P" 2>/dev/null) || RC=$?
     fi
     # The WHOLE output must be one enum line; anything else is not a verdict.
     case "$OUT" in
-      github_app_key_probe=ok) S=ok; L=info ;;
+      github_app_key_probe=ok)
+        case "$STATE" in
+          "source=isolated fetch=ok "*) S=ok; L=info ;;
+          *" fetch=no_token "*) S=ok_no_token; L=info ;;
+          *) S=ok_fallback; L=warning ;;
+        esac
+        ;;
       github_app_key_probe=transport) S=transport; L=warning ;;
-      github_app_key_probe=rejected) S=rejected; L=fatal ;;
-      *) if [ "$UP" = 1 ] && [ "$RC" = 127 ]; then S=probe_absent; L=warning; else S=exec_failed; L=fatal; fi ;;
+      github_app_key_probe=rejected) S=rejected; L=error; R=unspecified ;;
+      "github_app_key_probe=rejected reason="*)
+        R=${OUT#github_app_key_probe=rejected reason=}
+        case "$R" in
+          no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other) S=rejected; L=error ;;
+          *) R=; S=exec_failed; L=error ;;
+        esac
+        ;;
+      *) if [ "$UP" = 1 ] && [ "$RC" = 127 ]; then S=probe_absent; L=warning; else S=exec_failed; L=error; fi ;;
     esac
     ;;
-  *) S=missing; L=fatal ;;
+  *) S=missing; L=error ;;
 esac
 [ -d "$DDIR" ] || mkdir -m 700 "$DDIR" 2>/dev/null || true
-D=$(printf '%s probe=%s rc=%s up=%s' "${STATE:-state=absent}" "$S" "$RC" "$UP")
+D=$(printf '%s probe=%s%s rc=%s up=%s' "${STATE:-state=absent}" "$S" "${R:+ reason=$R}" "$RC" "$UP")
 printf '%s' "$D" > "$DDIR/github_app_key_$S" 2>/dev/null || true
 logger -t ci-deploy "GITHUB_APP_KEY_BOOT: stage=github_app_key_$S $D" 2>/dev/null || true
 soleur-boot-emit "github_app_key_$S" "$L"
