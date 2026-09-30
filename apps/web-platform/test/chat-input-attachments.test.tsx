@@ -474,4 +474,207 @@ describe("ChatInput — attachments", () => {
       });
     });
   });
+  describe("markdown / plain-text attachments", () => {
+    function stageFile(f: File) {
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [f] } });
+    }
+
+    it("stages a .md the browser reports with an empty type, labelled MD", async () => {
+      setup();
+      stageFile(new File(["# notes"], "2026-01-01-onboarding-notes.md", { type: "" }));
+
+      const tile = await screen.findByTestId("attachment-preview");
+      expect(tile).toHaveTextContent("MD");
+      expect(tile).toHaveTextContent("2026-01-01-onboarding-notes.md");
+      expect(tile).toHaveAttribute("title", "2026-01-01-onboarding-notes.md");
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("stages a .txt labelled TXT", async () => {
+      setup();
+      stageFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
+      expect(await screen.findByTestId("attachment-preview")).toHaveTextContent("TXT");
+    });
+
+    it("still labels a PDF as PDF", async () => {
+      setup();
+      stageFile(new File(["x"], "doc.pdf", { type: "application/pdf" }));
+      expect(await screen.findByTestId("attachment-preview")).toHaveTextContent("PDF");
+    });
+
+    it("offers .md and .txt in the file picker", () => {
+      setup();
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      const accept = fileInput.getAttribute("accept") ?? "";
+      expect(accept.split(",")).toEqual(expect.arrayContaining([".md", ".txt", "text/markdown"]));
+    });
+
+    it("surfaces a rejection as an alert", async () => {
+      setup();
+      stageFile(new File(["x"], "virus.exe", { type: "application/x-msdownload" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent('"virus.exe" is not a supported file type.');
+    });
+
+    it("rejects a 0-byte file as empty", async () => {
+      setup();
+      stageFile(new File([""], "empty.md", { type: "" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent('"empty.md" is empty.');
+      expect(screen.queryAllByTestId("attachment-preview")).toHaveLength(0);
+    });
+
+    it("presigns and PUTs a .md with the canonical text/markdown type", async () => {
+      const onSend = vi.fn();
+      const mockXhr = {
+        open: vi.fn(),
+        setRequestHeader: vi.fn(),
+        send: vi.fn(),
+        abort: vi.fn(),
+        upload: { onprogress: null as null | ((e: Partial<ProgressEvent>) => void) },
+        onload: null as null | (() => void),
+        onerror: null as null | (() => void),
+        onabort: null as null | (() => void),
+        status: 200,
+      };
+      vi.stubGlobal("XMLHttpRequest", vi.fn(function () { return mockXhr; }));
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          uploadUrl: "https://storage.supabase.co/upload/signed/abc",
+          storagePath: "user-1/conv-1/uuid.md",
+        }),
+      });
+      let completeUpload: () => void;
+      mockXhr.send.mockImplementation(() => {
+        completeUpload = () => mockXhr.onload?.();
+      });
+
+      setup({ onSend, conversationId: "conv-1" });
+      stageFile(new File(["# notes"], "notes.md", { type: "" }));
+      await screen.findByTestId("attachment-preview");
+
+      await userEvent.type(screen.getByRole("textbox"), "see notes");
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(mockXhr.send).toHaveBeenCalled());
+      completeUpload!();
+
+      const presignBody = JSON.parse(mockFetch.mock.calls[0]![1].body as string);
+      expect(presignBody.contentType).toBe("text/markdown");
+      expect(presignBody.filename).toBe("notes.md");
+      expect(mockXhr.setRequestHeader).toHaveBeenCalledWith("Content-Type", "text/markdown");
+      await waitFor(() => {
+        expect(onSend).toHaveBeenCalledWith(
+          "see notes",
+          expect.arrayContaining([
+            expect.objectContaining({ filename: "notes.md", contentType: "text/markdown" }),
+          ]),
+        );
+      });
+    });
+  });
+
+  describe("composer icon buttons render a glyph", () => {
+    // happy-dom cannot measure layout, so this is the STRUCTURAL half of the
+    // gate (the svg exists inside the right button and the button carries no
+    // padding that would collapse it); the bounding-box half is the Playwright
+    // e2e in cc-soleur-go-routing.e2e.ts.
+    it("attach and send buttons each contain an svg and no base padding", () => {
+      setup();
+      for (const label of [/attach file/i, "Send message"]) {
+        const btn = screen.getByLabelText(label);
+        expect(btn.querySelector("svg")).not.toBeNull();
+        const tokens = btn.className.split(/\s+/);
+        expect(tokens).not.toContain("soleur-btn-pad");
+        expect(tokens).not.toContain("px-6");
+      }
+    });
+
+    it("the mobile @ button (text child) opts out of the text-button padding", () => {
+      setup();
+      const tokens = screen.getByLabelText("Mention a leader").className.split(/\s+/);
+      expect(tokens).toContain("p-0");
+    });
+  });
+  describe("while an attachment send is in flight", () => {
+    function primeHangingUpload() {
+      const mockXhr = {
+        open: vi.fn(),
+        setRequestHeader: vi.fn(),
+        send: vi.fn(),
+        abort: vi.fn(),
+        upload: { onprogress: null as null | ((e: Partial<ProgressEvent>) => void) },
+        onload: null as null | (() => void),
+        onerror: null as null | (() => void),
+        onabort: null as null | (() => void),
+        status: 200,
+      };
+      vi.stubGlobal("XMLHttpRequest", vi.fn(function () { return mockXhr; }));
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          uploadUrl: "https://storage.supabase.co/upload/signed/abc",
+          storagePath: "user-1/conv-1/uuid.md",
+        }),
+      });
+      return mockXhr;
+    }
+
+    async function startSend() {
+      const mockXhr = primeHangingUpload();
+      const onSend = vi.fn();
+      setup({ onSend, conversationId: "conv-1" });
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [new File(["# a"], "a.md", { type: "" })] } });
+      await screen.findByTestId("attachment-preview");
+      await userEvent.type(screen.getByRole("textbox"), "hi");
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(mockXhr.send).toHaveBeenCalled());
+      return { mockXhr, onSend };
+    }
+
+    it("ignores a drop until the upload settles", async () => {
+      const { mockXhr } = await startSend();
+      const before = screen.queryAllByTestId("attachment-preview").length;
+
+      const zone = document.querySelector("div.relative") as HTMLElement;
+      fireEvent.drop(zone, {
+        dataTransfer: { files: [new File(["# b"], "b.md", { type: "" })] },
+      });
+
+      expect(screen.queryAllByTestId("attachment-preview")).toHaveLength(before);
+      mockXhr.onload?.();
+    });
+
+    it("ignores a pasted file until the upload settles", async () => {
+      const { mockXhr } = await startSend();
+      const before = screen.queryAllByTestId("attachment-preview").length;
+
+      fireEvent.paste(screen.getByRole("textbox"), {
+        clipboardData: {
+          files: [new File(["# c"], "c.md", { type: "" })],
+          getData: () => "",
+        },
+      });
+
+      expect(screen.queryAllByTestId("attachment-preview")).toHaveLength(before);
+      mockXhr.onload?.();
+    });
+
+    it("returns focus to the textarea once the send finishes", async () => {
+      const { mockXhr, onSend } = await startSend();
+      // Browsers drop focus from a control that becomes disabled; happy-dom
+      // does not model that, so park focus elsewhere and assert it is GIVEN BACK.
+      const parking = document.createElement("input");
+      document.body.appendChild(parking);
+      parking.focus();
+      expect(document.activeElement).toBe(parking);
+
+      mockXhr.onload?.();
+      await waitFor(() => expect(onSend).toHaveBeenCalled());
+      const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
+      await waitFor(() => expect(document.activeElement).toBe(textarea));
+      parking.remove();
+    });
+  });
 });
