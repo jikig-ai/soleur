@@ -14,6 +14,39 @@ brand_survival_threshold: aggregate pattern
 
 # infra(inngest): own Sentry alert rule for degraded provision bootstraps
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30, kept proportionate to a two-rule change.
+**Agents:** observability-coverage reviewer, test-design reviewer, and a verify-the-negative /
+attribution sweep; halt gates 4.6, 4.7, 4.8, 4.10 and 4.11 all pass (`lint-guard-contract.py`
+green; the discoverability probe passes `probe-verb-gate.sh`).
+
+### Key improvements
+
+1. The throttle premise is now sourced: Sentry's workflow engine keeps one
+   `WorkflowActionGroupStatus` row per (workflow, action, group) and fires only when
+   `now - date_updated > frequency` (`src/sentry/workflow_engine/processors/action.py`), so two
+   workflows on one group throttle independently. The read-only probe of the live org confirms
+   `sentry_alert` rules are these workflows (the live projection carries `frequency: 120`).
+2. Closed a silent mutant no gate saw: an `environment = …` line on the new block would bind the
+   rule to one environment at CREATE time (`ignore_changes` applies only after creation, and the
+   projection omits `environment`), so it would never match a boot event. T1/T1b now pin its
+   absence, and the comment strip also drops `//` lines.
+3. Runbook structure fixed: the degraded read is a sibling `###` section with its own anchor, and
+   the stages-table row links to it (a `####` under the failure heading would have swallowed the
+   failure table and bullets).
+4. Observability block cites its routes per `hr-observability-layer-citation`, and names the
+   residual that remains: a degraded event whose Sentry POST fails is unpaged.
+
+### New considerations discovered
+
+- `depends_on` skip-on-failed-dependency is standard Terraform graph behaviour, but the official
+  docs do not state it for the update-after-create case; the plan cites it as observed behaviour
+  (hashicorp/terraform#32148), and a failed create reds the apply either way.
+- The first real firing of the degraded rule cannot be exercised until the next
+  inngest-host-replace; AC-post-2 proves the configuration, and the trigger shape is the one the
+  sibling boot-stage rules already page with.
+
 ## Overview
 
 PR #9292 (commit `404825d`) added one Sentry rule, `sentry_alert.inngest_provision_failure`
@@ -110,6 +143,16 @@ EMISSION CADENCE, not by failure class") prescribes exactly this fix.
   inngest-provision-failure page (#9176)` (anchor `#reading-an-inngest-provision-failure-page-9176`,
   linked from the stages table; keep the heading text so the anchor survives).
 
+**Vendor semantics (sourced at deepen).** Sentry's workflow engine throttles per (workflow, action,
+issue group): `src/sentry/workflow_engine/processors/action.py` keeps one
+`WorkflowActionGroupStatus` row keyed `(workflow_id, action_id, group_id)` and fires only if
+`now - date_updated > frequency`
+(<https://github.com/getsentry/sentry/blob/master/src/sentry/workflow_engine/processors/action.py>).
+A read-only `GET /api/0/organizations/jikigai-eu/workflows/?per_page=100` with
+`SENTRY_ISSUE_RO_TOKEN` (2026-09-30) returned 40 workflows, and the projection of the live
+`inngest-provision-failure` equals its committed reference entry, so `sentry_alert` rules are these
+workflows and the throttle premise applies to them.
+
 **Institutional learnings.**
 
 - `2026-09-30-one-throttle-over-a-repeating-and-a-once-only-signal-silences-the-once-only-one.md`:
@@ -167,7 +210,11 @@ than the bug being fixed):
   depends_on = [sentry_alert.inngest_provision_degraded]
 ```
 
-The inline comment is required: it is the first `depends_on` in this root and no test pins it.
+The inline comment is required: it is the first `depends_on` in this root and no test pins it
+(a transient apply-order concern, recorded as a known gap). Terraform walks a node only after its
+dependencies, and a failed dependency stops the dependent (graph internals:
+<https://developer.hashicorp.com/terraform/internals/graph>; observed behaviour discussed in
+hashicorp/terraform#32148); a failed create reds the apply run either way.
 Meta-arguments do not appear in the plan JSON's resource values, so the projection and the gates
 are unaffected.
 
@@ -248,13 +295,14 @@ uploads it as an artifact; copy it verbatim.
 `git mv apps/web-platform/test/sentry-inngest-provision-failure-alert-op-contract.test.ts
 apps/web-platform/test/sentry-inngest-provision-alerts-op-contract.test.ts` (it now guards both
 rules; only archived plans/specs reference the old name), then extend it. Widen the header comment
-and the describe title to both rules. Parse both blocks with the existing `tfBlockFor` and
-`taggedEvents`; read each rule's stage row directly (no helper: both rules use `eq`, DC-1).
+and the describe title to both rules. Extend `stripComments` to drop `//` comment lines as well as
+`#` ones (HCL accepts both). Parse both blocks with the existing `tfBlockFor` and `taggedEvents`;
+read each rule's stage row directly (no helper: both rules use `eq`, DC-1).
 
 | Row | Asserts |
 | --- | --- |
-| T1 (failure) | unchanged: one resource, name, `enabled = true`, monitor binding, one provision script, `on_exit`. |
-| T1b (degraded) | `count(tf, 'resource "sentry_alert" "inngest_provision_degraded"') === 1`; `name = "inngest-provision-degraded"`; `enabled = true`; same monitor binding. |
+| T1 (failure) | unchanged (one resource, name, `enabled = true`, monitor binding, one provision script, `on_exit`), plus no `environment =` line in the block. |
+| T1b (degraded) | `count(tf, 'resource "sentry_alert" "inngest_provision_degraded"') === 1`; `name = "inngest-provision-degraded"`; `enabled = true`; same monitor binding; no `environment =` line (an environment set at CREATE binds the rule before `ignore_changes` applies, and the projection omits the field, so no other gate sees it). |
 | T2 (failure) | unchanged: one `logic_type`, `"all"`, exactly 2 rows, one email action with the issue_owners/ActiveMembers shape. |
 | T2b (degraded) | one `logic_type`, `"all"`, exactly **1** row, one email action with the same shape. |
 | T3 (partition, replaces the old T3) | every provision-block emit is attributable (unchanged); the failure block's `stage` rows `toEqual([{key: "stage", match: "eq", value: "provision_attempt_failed"}])`; the degraded block's `toEqual([{key: "stage", match: "eq", value: "bootstrap_done_degraded"}])`; `[failureValue, degradedValue].sort()` equals `[...emittedWarningStages].sort()`. That one equality also proves the emitted set is non-empty and the two rules are disjoint. |
@@ -290,13 +338,17 @@ because the failure rule's stage row is still a two-member `in`.
 1. **Runbook** `knowledge-base/engineering/operations/runbooks/inngest-server.md`:
    - Stages table: the `provision_attempt_failed` row stays "paged by `inngest-provision-failure`".
      The `bootstrap_done_degraded` row becomes "**paged** by `inngest-provision-degraded` (#9299)"
-     and drops "but see the throttle note in …".
-   - `### Reading an inngest-provision-failure page (#9176)`: keep the heading (anchor). Directly
-     under it add `#### Reading an inngest-provision-degraded page (#9299)` so a search for the
-     rule name in the email lands here. The opening text must say plainly: both rules page the
-     same issue with the same subject, so **a second email minutes after a failure page is not a
-     duplicate**; read the rule name or the `stage` tag. Keep the `stage=bootstrap_done_degraded`
-     row first in the table.
+     and links to the new section's anchor (`#reading-an-inngest-provision-degraded-page-9299`)
+     instead of the throttle note.
+   - `### Reading an inngest-provision-failure page (#9176)`: keep the heading (anchor). Its opening
+     paragraph gains: both rules page the same issue with the same subject, so **a second email
+     minutes after a failure page is not a duplicate**; read the rule name or the `stage` tag. Move
+     the `stage=bootstrap_done_degraded` table row out to the new section.
+   - Add a sibling `### Reading an inngest-provision-degraded page (#9299)` right after the failure
+     section's bullets (before `### Replace triggers`), so a search for the rule name lands on it:
+     the `why=` read (`.redis-inactive`, `.no-durable-execstart`), "emitted once per boot, never
+     re-emitted: treat it as open until `bootstrap-done` appears for the same `iid`", and the
+     forged-event and POST-failure residuals below.
    - Replace the first bullet (the shared-throttle caveat) with: each rule throttles on its own
      (`inngest-provision-failure` at most every 2 h, `inngest-provision-degraded` at most every
      33 min), so a failure page no longer suppresses a degraded page. Keep the read "treat a
@@ -307,6 +359,9 @@ because the failure rule's stage row is still a two-member `in`.
      silent until the next boot. Keep "corroborate with Better Stack".
    - "To quiet it": name both resources (`sentry_alert.inngest_provision_failure`,
      `sentry_alert.inngest_provision_degraded`).
+   - "Not paged by any rule": name "a degraded event whose Sentry POST failed
+     (`sentry-emit-FAILED stage=bootstrap_done_degraded` in Better Stack)" explicitly; the degraded
+     state has no second paging path.
 2. **ADR-257** (both `Superseded 2026-09-30 (#9176)` blockquotes, one indented 3 spaces, one 4;
    the 3-space copy also carries "the deferral is closed.", and the phrases to replace wrap across
    several `>`-prefixed lines, so write out each multi-line old string exactly, per indentation):
@@ -387,13 +442,16 @@ error_reporting:
 failure_modes:
   - mode: "degraded bootstrap (SQLite-only, no latch) after a provision-failure page within 2 h (the #9299 gap)"
     detection: "stage=bootstrap_done_degraded, detail why=.redis-inactive and/or .no-durable-execstart"
-    alert_route: "not a numbered layer (layer 3 Vector is installed only by the bootstrap): direct host emitter soleur-boot-emit -> Sentry store API -> Sentry alert inngest-provision-degraded (own throttle) -> email issue_owners/ActiveMembers; corroborated by the direct Better Stack phone-home row bootstrap-done-DEGRADED"
+    alert_route: "Sentry monitor: issue alert inngest-provision-degraded (own throttle, 33 min), fed by the host's direct soleur-boot-emit store-API POST -> email issue_owners/ActiveMembers; corroborated by the direct Better Stack phone-home row bootstrap-done-DEGRADED (not paged)"
   - mode: "non-pull provision attempt failure"
     detection: "stage=provision_attempt_failed with detail why=<last_stage> (not inngest_pull_fatal)"
-    alert_route: "not a numbered layer: direct host emitter -> Sentry alert inngest-provision-failure (unchanged throttle 120) -> email; corroborated by the Better Stack row provision-attempt-exit-<rc>"
+    alert_route: "Sentry monitor: issue alert inngest-provision-failure (unchanged, throttle 120), fed by the direct soleur-boot-emit store-API POST -> email issue_owners/ActiveMembers; corroborated by the Better Stack row provision-attempt-exit-<rc> (not paged)"
   - mode: "forged degraded event from the semi-public DSN masks a real one"
-    detection: "a real degraded boot inside the 33-min window after a forged page is not re-paged; the Better Stack bootstrap-done-DEGRADED row (Doppler-held token) still lands"
-    alert_route: "residual, documented in the runbook; corroboration via the Better Stack row"
+    detection: "none that pages: a real degraded event inside the 33-min window after a forged one is suppressed and not re-emitted; the Better Stack bootstrap-done-DEGRADED row (Doppler-held token) is corroboration, not detection"
+    alert_route: "residual, documented in the runbook degraded section (pre-existing class for every tag-keyed rule on the semi-public DSN; narrowed from 2 h to 33 min by this change)"
+  - mode: "degraded event's Sentry POST fails"
+    detection: "soleur-boot-emit phones home sentry-emit-FAILED stage=bootstrap_done_degraded to Better Stack; nothing pages on it"
+    alert_route: "residual, listed under the runbook's 'Not paged by any rule' (pre-existing: soleur-boot-emit has no retry, the same for every boot-stage rule); the #8562 delivery probe reads the state as FAIL reason=degraded while that follow-through is open"
   - mode: "apply fails to create the new rule or to update the old one"
     detection: "red apply-sentry-infra.yml run for the merge SHA (its failure issue filer fires); post-apply fidelity and the daily drift job report a reference name missing live or a mismatched leaf; AC-post-2 projection diff"
     alert_route: "layer 6 (workflow run log) + the filed GitHub issue"
@@ -439,9 +497,11 @@ PR body's test notes).
 | M5 | add a second warning emit `soleur-boot-emit foo_failed warning` in the provision block after the compliant ones | T3 |
 | M6 | degraded `frequency_minutes = 120` | T7 (two `= 120` lines), T7b (no `= 33` line) |
 | M10 | add the string `bootstrap_done_degraded` to `cloud-init.yml` | T8 |
+| M11 | add `environment = "development"` to the degraded block | T1b |
 
 **Harness rows.** H1 (must RED): turn the degraded rule's stage row into a `#` comment line; the
-comment strip removes it and T2b/T3 go red, so a comment cannot satisfy a code anchor. H2 (must
+comment strip removes it and T2b/T3 go red, so a comment cannot satisfy a code anchor. H1b (must
+RED): the same with a `//` comment. H2 (must
 PASS, not the canonical): move the degraded resource block above the failure block and swap the
 field order inside its `tagged_event` (`value`, `key`, `match`); the rows locate blocks by label
 and parse fields order-insensitively.
@@ -539,8 +599,9 @@ consult. Applied (mechanical):
 - AC5 reduced to the open-PR check (T7b already enforces uniqueness on the branch).
 - Test file renamed to `sentry-inngest-provision-alerts-op-contract.test.ts` (Kieran).
 - README edit split across its wrapped lines; ADR-257 edit instructions corrected (Kieran).
-- Runbook: an explicit "a second email is not a duplicate" read, a searchable
-  `inngest-provision-degraded` subheading, degraded row first (CTO).
+- Runbook: an explicit "a second email is not a duplicate" read and a searchable
+  `inngest-provision-degraded` section (CTO; made a sibling `###` at deepen, see the Enhancement
+  Summary).
 - AC-post-2 now uses the fidelity script's `?per_page=100` URL and a null check; the RO token's
   access to `/workflows/` was probed read-only at plan time (HTTP 200, live projection equals the
   committed entry).
@@ -564,8 +625,8 @@ Not applied, and why:
 - [ ] AC1: the extended op-contract vitest is RED on the base `.tf` (T1b: resource absent; T3:
   failure stage row is a two-member `in`) and GREEN after Phase 2
   (`cd apps/web-platform && npx vitest run test/sentry-inngest-provision-alerts-op-contract.test.ts`).
-- [ ] AC2: the PR body's test notes record the mutation tally: M1, M2, M3, M5, M6, M10 and H1 each
-  reddened the named row, and H2 stayed green.
+- [ ] AC2: the PR body's test notes record the mutation tally: M1, M2, M3, M5, M6, M10, M11, H1 and
+  H1b each reddened the named row, and H2 stayed green.
 - [ ] AC3: T25 green: `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` passes its T25
   block with README ``**39 `sentry_alert` rules**`` and `(39 alert rules total)`.
 - [ ] AC4: `terraform fmt -check` clean and `terraform validate` (`init -backend=false`) green on
@@ -614,7 +675,8 @@ paging rule split into two, plus docs). No user-facing surface, copy, pricing or
 ## Test Scenarios
 
 - Op-contract rows T1-T8 plus T1b, T2b, T4c, T7b, and the Guard Contract matrix (M1, M2, M3, M5,
-  M6, M10, H1, H2).
+  M6, M10, M11, H1, H1b, H2). A second non-`tagged_event` condition or trigger row is not pinned by
+  the test; the `plan_pr` reference gate catches both before merge.
 - `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` (unchanged) keeps pinning the
   emitted degraded line format that T5 relies on.
 - T25 in `sentry-monitors-audit.test.sh`; the C4 suite.

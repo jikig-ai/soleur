@@ -12,10 +12,11 @@ plan: knowledge-base/project/plans/2026-09-30-feat-inngest-provision-degraded-se
 
 - [ ] 1.1 `git mv` the op-contract test to
   `apps/web-platform/test/sentry-inngest-provision-alerts-op-contract.test.ts`; widen the header
-  comment and describe title to both rules.
+  comment and describe title to both rules; extend `stripComments` to drop `//` lines too.
 - [ ] 1.2 Add rows T1b, T2b, T4c, T7b; replace T3 with the partition row (each rule's stage row
   `toEqual` one `eq` row, and the two values equal the emitted warning set); switch T8 to both
-  rules' stage values; update T4b to the `eq` stage condition.
+  rules' stage values; update T4b to the `eq` stage condition; T1 and T1b also assert no
+  `environment =` line in either block.
 - [ ] 1.3 Run the vitest file and confirm T1b and T3 are RED on the unmodified `.tf`.
 
 ## Phase 2: Rules and registries (GREEN)
@@ -32,14 +33,15 @@ plan: knowledge-base/project/plans/2026-09-30-feat-inngest-provision-degraded-se
   paragraph.
 - [ ] 2.5 Re-run the op-contract vitest (GREEN), T25 in `sentry-monitors-audit.test.sh`,
   `terraform fmt -check`, and `terraform init -backend=false && terraform validate`.
-- [ ] 2.6 Run the Guard Contract mutation matrix (M1, M2, M3, M5, M6, M10, H1, H2), each restore in
+- [ ] 2.6 Run the Guard Contract mutation matrix (M1, M2, M3, M5, M6, M10, M11, H1, H1b, H2), each restore in
   `try/finally`; record the tally for the PR body (AC2).
 
 ## Phase 3: Docs the change makes false
 
-- [ ] 3.1 Runbook `inngest-server.md`: stages-table degraded row; under the kept heading add a
-  `#### Reading an inngest-provision-degraded page (#9299)` subheading and a "second email is not a
-  duplicate" read; degraded row first; throttle, forged-page and "To quiet it" bullets.
+- [ ] 3.1 Runbook `inngest-server.md`: stages-table degraded row links the new anchor; the kept
+  failure heading gains the "second email is not a duplicate" read; add a sibling
+  `### Reading an inngest-provision-degraded page (#9299)` before `### Replace triggers`; throttle,
+  forged-page, "To quiet it" and "Not paged by any rule" (degraded POST failure) bullets.
 - [ ] 3.2 ADR-257: both `Superseded 2026-09-30 (#9176)` blockquotes, each multi-line old string
   written out exactly with its own indent.
 - [ ] 3.3 `model.c4`: "35 of the 37" -> "36 of the 38"; `bash scripts/regenerate-c4-model.sh`; run
