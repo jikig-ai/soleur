@@ -6,9 +6,8 @@
 #   - Writes systemd units for inngest-server.service + inngest-heartbeat.{service,timer}.
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
-#   - On version bump: a DRAIN_SLEEP_SEC settle delay (no pause/resume verb
-#     exists — measured absent on v1.19.4 and v1.45.1, #9219), then binary
-#     replace, then restart. In-flight work is killed at restart.
+#   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then
+#     restart; in-flight step dispatches are interrupted at the restart (#7463/#9219).
 #
 # Self-hosted Inngest binds 0.0.0.0:8288 (events) + 8289 (connect-gateway).
 # ADR-030's "loopback only" intent — keep Inngest unreachable from the public
@@ -83,7 +82,7 @@ readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
 readonly HEARTBEAT_FAILURE_LOG_UNIT="/etc/systemd/system/inngest-heartbeat-failure-log.service"
 readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_${INNGEST_CLI_ARCH}.tar.gz"
 # In-place upgrade settle delay (DRAIN_SLEEP_SEC: the name is historical — nothing is drained).
-# Override via env at install time.
+# Not overridable on the ci-deploy sudo path (--preserve-env omits it); edit the default.
 DRAIN_SLEEP_SEC="${DRAIN_SLEEP_SEC:-2}"
 
 # Defense-in-depth: refuse to operate if the writable host paths are symlinks
@@ -121,8 +120,8 @@ if [[ -z "$SKIP_BINARY_INSTALL" ]]; then
 
 # Detect in-place version upgrade (existing service running an older version).
 # No pause/resume verb exists (measured absent on v1.19.4 and v1.45.1, #7463/#9219);
-# the sleep is a settle delay, not a drain — the server keeps accepting work until
-# the restart, and a host replace never enters this block.
+# the sleep is a settle delay, not a drain — nothing is quiesced before the restart,
+# and a host replace never enters this block.
 UPGRADE_FROM=""
 if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
   UPGRADE_FROM=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
@@ -1600,7 +1599,7 @@ UNITEOF
 # injected env (same $${...} contract as before). NOTE the `exec` inside the bash -c
 # payload does NOT make inngest the unit's main PID — `doppler run` forks the bash
 # child and stays the MainPID itself (signal-forwarding supervisor), which is why
-# /proc/<MainPID>/exe resolves to doppler, not inngest. (Type=simple.)
+# /proc/<MainPID>/exe resolves to doppler, not inngest.
 # #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
 # the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
 # every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
@@ -1734,7 +1733,8 @@ if [[ "${DEDICATED_LUKS_CUTOVER:-0}" == "1" ]]; then
   log "LUKS cutover poll timer enabled (#6894)"
 fi
 
-# In-place upgrade completion marker (the restart above loaded the new binary).
+# In-place upgrade completion marker. Logged even when the restart above was refused
+# (its warn line and inngest-server-start-REFUSED marker report that case).
 if [[ -n "${UPGRADE_FROM:-}" ]]; then
   log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"
 fi
