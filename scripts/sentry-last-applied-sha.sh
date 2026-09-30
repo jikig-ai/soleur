@@ -60,10 +60,12 @@ while read -r id sha; do
   # filter=all: every ATTEMPT's jobs. The default (latest) hides an attempt that
   # applied when a later re-run attempt failed at the apply step, which would
   # push the window back to an older commit (permissive direction).
-  # --paginate | jq -s, never --jq under --paginate: gh applies --jq PER PAGE
-  # (one document per page); jq -s slurps the concatenated page objects.
+  # --paginate | jq -sr, never --jq under --paginate: gh applies --jq PER PAGE
+  # (one document per page); jq -s slurps the concatenated page objects and -r
+  # keeps the raw string form the --jq path used to emit (bare "success", not
+  # the JSON-quoted '"success"').
   concl=$(gh api --paginate "repos/${REPO}/actions/runs/${id}/jobs?filter=all&per_page=100" </dev/null \
-    | jq -s "[.[].jobs[] | select(.name == \"${APPLY_JOB}\") | .steps[]? | select(.name == \"${APPLY_STEP}\") | .conclusion] | if index(\"success\") != null then \"success\" else (first // \"\") end") || rc=$?
+    | jq -sr "[.[].jobs[] | select(.name == \"${APPLY_JOB}\") | .steps[]? | select(.name == \"${APPLY_STEP}\") | .conclusion] | if index(\"success\") != null then \"success\" else (first // \"\") end") || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     echo "::error::last-applied lookup: could not read the jobs of run ${id} (gh exit ${rc}); refusing to skip past it. This is a transport/API failure: re-running the job may clear it." >&2
     exit 1
