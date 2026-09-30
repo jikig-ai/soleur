@@ -19,3 +19,9 @@
 
 ### Components Invoked
 - soleur:plan, soleur:plan-review, soleur:deepen-plan; research/review agents per plan; lint-guard-contract.py, lint-infra-no-human-steps.py, probe-verb-gate.sh, markdownlint-cli2
+
+## Review/QA/Compound Phase
+- Review: 10/10 agents, 0 P1 / 2 P2 / ~20 P3; fixed inline in 5a8e6224eb; filed 0. Trailer emitted.
+- QA: skipped (prose Given/When/Then scenarios; unit suite + mutation battery cover them).
+- Compound: learning 2026-09-30-an-extractor-floor-proves-only-the-branch-that-feeds-it.md; route-to-definition skipped (class covered by review/SKILL.md battery-axes + comment-is-review-surface rules); constitution: no new principle (duplicate coverage).
+- Archival DEFERRED until after soleur:ship Phase 6 renders decision-challenges.md into the PR body.
