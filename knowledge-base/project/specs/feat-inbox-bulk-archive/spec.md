@@ -40,9 +40,11 @@ be cleared one click at a time.
   `set_email_triage_status`) — re-implements per-row authz for no benefit; the
   DB stays the per-row authority via the existing RPCs.
 - Changes to the NEEDS YOU act flow, the email detail page, or retention.
-- The optional DB-level statutory guard on `set_email_triage_status` — an
-  open question recorded in the brainstorm; decide at plan time (adds a
-  migration + `test/rls-fuzz/rpc-cases.ts` classification to scope).
+- Changes to the `new → acknowledged|archived` transition matrix of
+  `set_email_triage_status`. (Note: the plan resolved the brainstorm's open
+  question — the DB-level statutory guard DOES ship in this PR as migration
+  145, folding in what was candidate-deferred; see plan §Technical
+  Considerations.)
 
 ## Functional Requirements
 
@@ -57,8 +59,10 @@ that cannot be archived get a **disabled** checkbox with a reason label/tooltip:
   `acknowledged → archived` transition)
 - Archived tab: no selection UI at all in this PR.
 
-The checkbox MUST `stopPropagation` on click and keydown — rows are
-`role="button"` with Enter/Space → navigate.
+The checkbox is rendered as a SIBLING of the row at the dispatch site (rows
+are `role="button"` whose keydown `preventDefault`s bubbled keys — a nested
+checkbox's Space would navigate instead of toggle). No `stopPropagation`
+needed: its events never traverse the row.
 
 ### FR2: Per-section "Select all"
 
@@ -82,16 +86,19 @@ Cancel / Archive. No "Delete/Remove/Clear/Dismiss" verbs; no undo promises.
 
 ### FR5: Bulk endpoint
 
-`POST /api/inbox/bulk-archive` accepting kind-partitioned ids
-(`{inboxIds: uuid[], emailIds: uuid[]}`). Route file exports POST only and stays
-thin — the handler lives in `server/` and loops `set_inbox_item_state` /
+`POST /api/inbox/bulk-archive` accepting `{items: [{kind: "inbox"|"email", id: uuid}]}`
+(≤200, deduped). Route file exports POST only and stays thin — the handler
+lives in `server/` and loops `set_inbox_item_state` /
 `set_email_triage_status` per id. Server re-derives eligibility per id —
 including `statutory_class IS NULL` for email ids — because the client
-selection may be stale and the email RPC has no statutory check.
+selection may be stale and the email RPC has no statutory check (mig 145 in
+this PR adds the DB-level pin as belt-and-suspenders).
 
-Response: `{archived: number, results: [{id, kind, outcome}]}` with
-`outcome ∈ archived|guarded|not_found|conflict`; per-item 404/409 collapse
-preserves the no-existence-oracle property of the single-id handlers.
+Response: `{results: [{id, kind, outcome}]}` with
+`outcome ∈ archived|guarded|not_found|conflict|error` — predicate-ineligible
+ids return `guarded` with a reason code (`statutory|needs_action|
+already_acknowledged|already_archived`); per-item 404/409 collapse preserves
+the no-existence-oracle property of the single-id handlers.
 
 ### FR6: Result reporting
 
@@ -106,13 +113,17 @@ and the confirmation dialog for FR1–FR4.
 
 ## Technical Requirements
 
-### TR1: No new DB surface
+### TR1: Minimal DB surface
 
-No migration, no new RPC, no signature change to `set_inbox_item_state`
-(`test/migration-122-inbox-item.test.ts` regex-pins it). The bulk handler calls
-the existing RPCs through the user-context client — `createServiceClient` is
-banned under `app/api/inbox/**` (`test/inbox-no-service-client.test.ts`; add any
-new `server/` handler module to its `SERVER_MODULES` allowlist).
+No new RPC, no signature change to `set_inbox_item_state`
+(`test/migration-122-inbox-item.test.ts` regex-pins it). One migration ships:
+`145_email_triage_statutory_archive_guard.sql` re-creates
+`set_email_triage_status` adding a statutory pin (`archived` rejected when
+`statutory_class IS NOT NULL`, `ERRCODE='P0001'`) — resolved at plan time when
+the deferral gate classed it inline-sized. The bulk handler calls the existing
+RPCs through the user-context client — `createServiceClient` is banned under
+`app/api/inbox/**` (`test/inbox-no-service-client.test.ts`; add any new
+`server/` handler module to its `SERVER_MODULES` allowlist).
 
 ### TR2: Rate limit
 
