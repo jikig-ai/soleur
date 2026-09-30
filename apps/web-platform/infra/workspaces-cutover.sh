@@ -75,9 +75,6 @@ ROLLBACK="${ROLLBACK:-0}"
 # dispatch falls into by omission. Unlike ROLLBACK it does NOT force DRY_RUN=0; see clean_stray().
 CLEAN_STRAY="${CLEAN_STRAY:-0}"
 CONFIRM_WIPE="${CONFIRM_WIPE:-0}"
-# The label the retained plaintext volume carries: rollback() and the dead-man fire remount it by this
-# name, and the wipe's first-wipe identity check requires it. A literal, never read from the environment.
-PLAINTEXT_LABEL="workspaces_plain"
 
 # Locate sibling scripts relative to THIS file. The workflow ships this script + its siblings
 # (workspaces-luks-emit.sh, luks-monitor.{sh,service,timer}) as a tar bundle and runs THIS file as a
@@ -812,28 +809,59 @@ _plaintext_dev_valid() {
   return 0
 }
 
-# _plaintext_label_present — the PHYSICAL witness that a plaintext copy still exists to remount: the
-# by-label link udev keeps for the retained volume. A zeroed volume carries no label and a deleted one
-# no device, so the link is gone in both cases. A SEAM (the suites override it): it reads no
-# environment, only the literal label.
-_plaintext_label_present() { [ -e "/dev/disk/by-label/${PLAINTEXT_LABEL}" ]; }
+# _plaintext_blkid_bin — blkid from a fixed root-owned list, never `command -v` (a PATH-resolved or
+# function name baked into the unattended root fire is an exec primitive). SEAM; reads no environment.
+_plaintext_blkid_bin() { local b; for b in /usr/sbin/blkid /sbin/blkid /usr/bin/blkid /bin/blkid; do [ -x "$b" ] && { printf '%s' "$b"; return 0; }; done; return 0; }
+# _plaintext_dev_type <dev> — the blkid TYPE of the recorded plaintext (the device rollback remounts):
+# `ext4` = intact; empty = unrecorded/absent/zeroed; `blkid_unavailable` = cannot tell. Identity is the
+# cutover's recorded mount source, not a filesystem label — no artifact labels the retained plaintext
+# (ADR-119, corrected 2026-09-30). SEAM; reads only its argument.
+# KEEP IN SYNC with arm_dead_man's inline gone_guard.
+_plaintext_dev_type() {
+  local b; [ -b "${1:-}" ] || return 0
+  b="$(_plaintext_blkid_bin)"; [ -n "$b" ] || { printf blkid_unavailable; return 0; }
+  "$b" -p -s TYPE -o value "$1" 2>/dev/null || true
+}
 
-# _plaintext_gone — Guard 5 (#6604 step 7): is there NO plaintext copy left for a rollback to remount?
-# Two independent witnesses, either one sufficient:
+# _plaintext_gone — Guard 5 (#6604 step 7): is there NO intact plaintext copy left for a rollback to
+# remount? Two witnesses, either one sufficient:
 #   marker    PLAINTEXT_WIPE_BEGUN or PLAINTEXT_WIPED persisted (the wipe began, or finished);
-#   physical  $MOUNT is the LUKS mapper AND the plaintext label is gone. This one does not depend on the
-#             state file, so a lost, truncated or unreadable state file cannot reopen the door.
-# Sets PLAINTEXT_GONE_WHY (marker|label_absent) for the caller's message.
-PLAINTEXT_GONE_WHY=""
+#   physical  $MOUNT is the LUKS mapper AND the recorded PLAINTEXT_DEV (the device rollback() remounts)
+#             is not an intact plaintext: invalid or unrecorded, resolving to the mapper, or its blkid
+#             TYPE is not ext4. The physical arm reads the state file only for WHICH device to probe;
+#             a lost or invalid record reads as gone. That is fail-closed, but it strands a still-intact
+#             plaintext as a rollback source (accepted; see the runbook).
+# Sets PLAINTEXT_GONE_WHY (marker|plaintext_dev_gone), PLAINTEXT_DEV_SEEN (the record, or none) and
+# PLAINTEXT_DEV_TYPE (what it read: ext4, empty, crypto_LUKS, blkid_unavailable, or invalid) for the
+# caller's message and off-host row, so a stale record is never read as a wipe.
+PLAINTEXT_GONE_WHY=""; PLAINTEXT_DEV_SEEN=""; PLAINTEXT_DEV_TYPE=""
 _plaintext_gone() {
-  PLAINTEXT_GONE_WHY=""
+  PLAINTEXT_GONE_WHY=""; PLAINTEXT_DEV_SEEN=""; PLAINTEXT_DEV_TYPE=""
+  local pdev
   if [ -n "$(read_state PLAINTEXT_WIPE_BEGUN)$(read_state PLAINTEXT_WIPED)" ]; then
     PLAINTEXT_GONE_WHY=marker; return 0
   fi
-  if [ "$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)" = "$MAPPER" ] && ! _plaintext_label_present; then
-    PLAINTEXT_GONE_WHY=label_absent; return 0
+  if [ "$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)" = "$MAPPER" ]; then
+    pdev="$(read_state PLAINTEXT_DEV)"; PLAINTEXT_DEV_SEEN="${pdev:-none}"
+    # readlink equality, NOT _same_dev: _same_dev returns "different" when readlink fails or the mapper
+    # is not a block device — the wrong direction here, where unknown-or-same must read as gone.
+    if ! _plaintext_dev_valid "$pdev" \
+       || [ "$(readlink -f -- "$pdev" 2>/dev/null)" = "$(readlink -f -- "$MAPPER" 2>/dev/null)" ]; then
+      PLAINTEXT_GONE_WHY=plaintext_dev_gone; PLAINTEXT_DEV_TYPE=invalid; return 0
+    fi
+    PLAINTEXT_DEV_TYPE="$(_plaintext_dev_type "$pdev")"
+    [ "$PLAINTEXT_DEV_TYPE" = ext4 ] || { PLAINTEXT_GONE_WHY=plaintext_dev_gone; return 0; }
   fi
   return 1
+}
+# _plaintext_gone_fields — ` why=… recorded=… recorded_type=…` for a refusal row (after the existing
+# fields), each scrubbed through _deadman_detail (`=` -> `_`) and with spaces folded, so no field can
+# be forged or split.
+_plaintext_gone_fields() {
+  local w r t
+  w="$(_deadman_detail "${PLAINTEXT_GONE_WHY:-none}")"; r="$(_deadman_detail "${PLAINTEXT_DEV_SEEN:-none}")"
+  t="$(_deadman_detail "${PLAINTEXT_DEV_TYPE:-none}")"
+  printf ' why=%s recorded=%s recorded_type=%s' "${w// /_}" "${r// /_}" "${t// /_}"
 }
 
 # Host-local rollback: unmount the mapper, remount the RETAINED plaintext volume at $MOUNT, restart.
@@ -848,7 +876,7 @@ rollback() {
   if _plaintext_gone; then
     ROLLBACK_REFUSED=1
     emit_drift rollback_refused_plaintext_wiped
-    log "ROLLBACK REFUSED (${PLAINTEXT_GONE_WHY}): the retained plaintext volume has been (or is being) wiped — nothing to remount; $MOUNT stays on $MAPPER untouched"
+    log "ROLLBACK REFUSED (${PLAINTEXT_GONE_WHY}): no intact recorded plaintext to remount — a wipe began, OR the record is stale/unreadable; read recorded_type —$(_plaintext_gone_fields); $MOUNT stays on $MAPPER untouched"
     return 1
   fi
   step "ROLLBACK — remount the retained plaintext at $MOUNT + restart"
@@ -866,7 +894,7 @@ rollback() {
   #      it would race two restores over one mountpoint. On expiry report
   #      check=fire_stuck and proceed — the plaintext remount the fire was performing is this
   #      function's own end state. The page is emitted ONLY if the disarm above has not already paged.
-  local i=0 prior="" paged=0 src=""
+  local i=0 prior="" paged=0 src="" pdev=""
   if [ "$DEADMAN_ARMED" = "1" ]; then
     disarm_dead_man rollback_engaged || paged=1
   else
@@ -904,9 +932,10 @@ rollback() {
   if [ -e "$MAPPER" ]; then
     cryptsetup close "$MAPPER_NAME" || emit_drift rollback_mapper_close_failed
   fi
-  # Remount the retained plaintext volume (its by-label / by-id device — never the mapper).
-  mount /dev/disk/by-label/workspaces_plain "$MOUNT" 2>/dev/null \
-    || mount "$(read_state PLAINTEXT_DEV)" "$MOUNT" 2>/dev/null || true
+  # Remount the retained plaintext volume: its recorded mount source, never the mapper, and never an
+  # option-shaped or non-device record (the validator; _plaintext_gone refused the mapper case above).
+  pdev="$(read_state PLAINTEXT_DEV)"
+  if _plaintext_dev_valid "$pdev"; then mount "$pdev" "$MOUNT" 2>/dev/null || true; fi
   # #9098 C — restart the app (and the writers) ONLY onto a mounted, non-mapper $MOUNT. The remount
   # above swallows its own failure, so a bare mountpoint directory or a mapper that would not unmount
   # must leave the app DOWN (webhook/app writing to the root disk or to the LUKS copy is worse than an
@@ -936,12 +965,12 @@ rollback() {
 assert_rollback_not_post_cutover() {
   local src persisted p_uuid mapper_dev live_uuid=""
   # #6604 step 7 — FIRST, before any other probe: once the plaintext copy is gone (a wipe marker, or the
-  # mapper mounted with the plaintext label gone) there is nothing to remount. rollback() carries the
+  # mapper mounted with the recorded PLAINTEXT_DEV not an intact ext4) there is nothing to remount. rollback() carries the
   # same check as its own first line (it covers every caller); this copy runs it BEFORE the CANARY_OK
   # probes so ROLLBACK mode refuses with this slug, never the post-cutover one. NOT overridable by
   # ROLLBACK_ACK_LUKS_WRITES (that ack is about stranding writes on a copy that still exists).
   if _plaintext_gone; then
-    _rollback_refuse rollback_refused_plaintext_wiped refused_plaintext_wiped "ROLLBACK refused (${PLAINTEXT_GONE_WHY}): the retained plaintext volume has been (or is being) wiped — there is no plaintext copy to remount, and unmounting $MAPPER would take every workspace offline. Fix forward on the LUKS volume; rollback_ack_luks_writes does not override this."
+    _rollback_refuse rollback_refused_plaintext_wiped refused_plaintext_wiped "ROLLBACK REFUSED (${PLAINTEXT_GONE_WHY}): no intact recorded plaintext to remount — a wipe began, OR the record is stale/unreadable; read recorded_type —$(_plaintext_gone_fields). Unmounting $MAPPER would take every workspace offline. Fix forward on the LUKS volume; rollback_ack_luks_writes does not override this." "$(_plaintext_gone_fields)"
   fi
   src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
   [ "$src" = "$MAPPER" ] || return 0
@@ -958,13 +987,14 @@ assert_rollback_not_post_cutover() {
   _rollback_refuse rollback_refused_post_cutover refused_post_cutover "ROLLBACK refused: $MOUNT is the LUKS mapper and the persisted CANARY_OK ($(_vscrub "$persisted")) matches the live header ($(_vscrub "${live_uuid:-<unreadable>}")) — this cutover COMPLETED. Rolling back now would remount the plaintext frozen at the cutover and strand every write made on the LUKS volume since docker start. Fix forward instead; to roll back anyway, re-dispatch with rollback_ack_luks_writes=true (ROLLBACK_ACK_LUKS_WRITES=1) and reconcile the stranded writes by hand."
 }
 
-# _rollback_refuse <drift slug> <outcome> <message> — the ONE shape of a ROLLBACK-mode refusal: the Sentry
-# slug, ONE outcome row (mode=rollback), the EXIT trap dropped, then die. ROLLBACK mode has no cleanup()
+# _rollback_refuse <drift slug> <outcome> <message> [row fields] — the ONE shape of a ROLLBACK-mode
+# refusal: the Sentry slug, ONE outcome row (mode=rollback, then the optional pre-scrubbed fields), the
+# EXIT trap dropped, then die. ROLLBACK mode has no cleanup()
 # arm of its own, so without its own row and the dropped trap a refusal would record a false
 # outcome=pre_freeze.
 _rollback_refuse() {
   emit_drift "$1"
-  _deadman_row "result=cutover_aborted outcome=${2} mode=rollback"
+  _deadman_row "result=cutover_aborted outcome=${2} mode=rollback${4:-}"
   trap - EXIT
   die "$3"
 }
@@ -1010,7 +1040,7 @@ cleanup() {
   # SIGPIPE and kills bash mid-rollback. HUP/INT/TERM are ignored for the same reason — a second
   # signal must not abort the recovery halfway. (The main body keeps the default dispositions: an SSH
   # drop mid-freeze must still abort INTO this trap, DP-6.)
-  local rc=$? outcome="" src="" abnormal="" detail="" derr="" drc=0 mode="" begun=""
+  local rc=$? outcome="" src="" abnormal="" detail="" derr="" drc=0 mode="" begun="" gone=""
   trap '' PIPE HUP INT TERM
   trap - EXIT
   if [ "$rc" -eq 0 ]; then
@@ -1026,7 +1056,7 @@ cleanup() {
   if [ "$CANARY_OK" != "1" ] && { [ "$FLIP_DONE" = "1" ] || [ "$FREEZE_HELD" = "1" ]; }; then
     # rollback() refuses (touching nothing) when the plaintext copy is gone; the untouched mapper mount
     # is then NOT a failed remount, so the outcome says what happened.
-    if rollback || [ "$ROLLBACK_REFUSED" != "1" ]; then _rollback_outcome; else outcome=refused_plaintext_wiped; fi
+    if rollback || [ "$ROLLBACK_REFUSED" != "1" ]; then _rollback_outcome; else outcome=refused_plaintext_wiped; gone="$(_plaintext_gone_fields)"; fi
   elif [ "$CANARY_OK" = "1" ]; then
     # #9045 — past the host-canary door the LUKS mount is authoritative (ADR-119 §(b)), and nothing
     # unattended is armed any more. Roll FORWARD: a death between CANARY_OK=1 and the end of
@@ -1080,7 +1110,7 @@ cleanup() {
   # say, the truthful outcome is dry_run — never a "rolled back" page for a rehearsal.
   [ "$DRY_RUN" = "1" ] && outcome=dry_run
   # ONE outcome row per abort, on the existing luks-monitor tag (readable off-host, no SSH).
-  _deadman_row "result=cutover_aborted outcome=${outcome}${mode}${abnormal}${detail}"
+  _deadman_row "result=cutover_aborted outcome=${outcome}${mode}${abnormal}${detail}${gone}"
   exit "$rc"
 }
 
@@ -1140,8 +1170,24 @@ arm_dead_man() {
   # RESULTING string (no external binary at fire time), NOT how the string is built. Hardcoding the
   # units left the one UNATTENDED restore path asymmetric under a QUIESCE_UNITS override — the exact
   # drift _quiesce_list() exists to prevent, on the path nobody is watching.
-  local dev u stops="" starts="" tstarts=""
+  local dev u stops="" starts="" tstarts="" blkid_bin why_bad
   dev="$(read_state PLAINTEXT_DEV)"
+  # #6604 fix-forward — refuse to arm a backstop that could restore NOTHING. The fire unmounts $MOUNT and
+  # remounts ${dev}; with no valid, non-mapper, intact-ext4 record (or no blkid at a fixed root-owned path
+  # for the fire's own check) it would take the live copy offline and mount nothing. Pre-freeze and
+  # side-effect free. After this, $dev and $blkid_bin are charset-safe absolute paths, baked UNQUOTED into
+  # the fire like the existing mount clause — never relax _plaintext_dev_valid without re-adding quoting.
+  blkid_bin="$(_plaintext_blkid_bin)"; why_bad=""
+  if [ -z "$blkid_bin" ]; then why_bad="blkid_absent"
+  elif ! _plaintext_dev_valid "$dev"; then why_bad="record_invalid:${dev:-empty}"
+  elif [ "$(readlink -f -- "$dev" 2>/dev/null)" = "$(readlink -f -- "$MAPPER" 2>/dev/null)" ]; then why_bad="record_is_mapper:$dev"
+  elif [ "$(_plaintext_dev_type "$dev")" != ext4 ]; then why_bad="record_not_ext4:$dev"
+  fi
+  if [ -n "$why_bad" ]; then
+    _deadman_row "result=arm_refused reason=plaintext_dev_unrecorded detail=$(_deadman_detail "$why_bad")"
+    emit_drift deadman_arm_failed
+    die "no restorable recorded plaintext device ($(_vscrub "$why_bad")) — a dead-man armed now could unmount \$MOUNT and restore nothing. Refusing to arm; nothing is frozen (runbook: deadman_arm_failed)"
+  fi
   for u in $(_quiesce_list); do
     stops="${stops}systemctl stop ${u} 2>/dev/null; "
     starts="systemctl reset-failed ${u} 2>/dev/null; systemctl start ${u} 2>/dev/null; ${starts}"  # reverse
@@ -1192,11 +1238,16 @@ arm_dead_man() {
   # #6604 step 7 — Guard 5 in the FIRE itself. The fire runs after this script is gone, so it cannot
   # call rollback()'s _plaintext_gone; it carries the same two witnesses inline, evaluated by /bin/sh AT
   # FIRE TIME, before any stop/umount/close: a PLAINTEXT_WIPE_BEGUN/PLAINTEXT_WIPED line in the state
-  # file, or $MOUNT on the mapper with the plaintext label gone. Either one logs
-  # result=fail reason=refused_plaintext_wiped and exits with the LIVE mount untouched. (Arming is
-  # already unreachable on a cut-over host — S6 — so this is the belt for a fire that outlives a wipe.)
+  # file (why=marker), or $MOUNT on the mapper with the recorded plaintext device no longer an intact
+  # ext4 (why=plaintext_dev_gone, with recorded= and recorded_type=). Either one logs
+  # result=fail reason=refused_plaintext_wiped and exits with the LIVE mount untouched. The physical test
+  # uses ${dev} and ${blkid_bin}, BAKED at arm time (validated above), so it is the one witness that
+  # survives a lost state file. KEEP IN SYNC with _plaintext_dev_type / _plaintext_gone.
+  # Consequence stated plainly: with the record intact, a PRE-wipe fire on a cut-over host now RESTORES —
+  # it remounts the stale 2026-07-23 plaintext over the live LUKS mount. Arming is unreachable there (S6)
+  # and the wipe refuses while any dead-man is armed (W7); those are the protections.
   local t_sub err rc n=0 gone_guard
-  gone_guard="if grep -qE '^PLAINTEXT_WIPE(_BEGUN|D)=' ${STATE_FILE} 2>/dev/null || { [ \"\$(findmnt -no SOURCE ${MOUNT} 2>/dev/null)\" = ${MAPPER} ] && [ ! -e /dev/disk/by-label/${PLAINTEXT_LABEL} ]; }; then logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=refused_plaintext_wiped'; exit 0; fi;"
+  gone_guard="if grep -qE '^PLAINTEXT_WIPE(_BEGUN|D)=' ${STATE_FILE} 2>/dev/null; then logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=refused_plaintext_wiped why=marker'; exit 0; fi; t=\$(${blkid_bin} -p -s TYPE -o value ${dev} 2>/dev/null); if [ \"\$(findmnt -no SOURCE ${MOUNT} 2>/dev/null)\" = ${MAPPER} ] && [ \"\$t\" != ext4 ]; then logger -t ${LUKS_LOG_TAG} -- \"SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=refused_plaintext_wiped why=plaintext_dev_gone recorded=${dev} recorded_type=\${t:-none}\"; exit 0; fi;"
   t_sub="$(_dm_prop timer SubState)"
   if [ "$t_sub" = "waiting" ]; then
     _deadman_row "result=arm_refused reason=already_armed"
@@ -1212,7 +1263,7 @@ arm_dead_man() {
   systemctl reset-failed workspaces-luks-deadman.timer workspaces-luks-deadman.service 2>/dev/null || true
   err="$(systemd-run --on-active="${DEAD_MAN_MIN}min" --unit=workspaces-luks-deadman \
     --description="workspaces LUKS cutover dead-man (auto-remount plaintext)" \
-    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${gone_guard} ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] && logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
+    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${gone_guard} ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] && logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted mount_source=${dev}'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed mount_source=${dev}'; fi" \
     2>&1 >/dev/null)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     _deadman_row "result=arm_failed reason=systemd_run_refused rc=${rc} detail=$(_deadman_detail "$err")"
@@ -2929,9 +2980,9 @@ if [ "$ROLLBACK" = "1" ]; then
   rollback
   # rollback() re-checks the plaintext itself (its first line); a refusal there touched nothing.
   if [ "$ROLLBACK_REFUSED" = "1" ]; then
-    _deadman_row "result=cutover_aborted outcome=refused_plaintext_wiped mode=rollback"
+    _deadman_row "result=cutover_aborted outcome=refused_plaintext_wiped mode=rollback$(_plaintext_gone_fields)"
     trap - EXIT
-    die "ROLLBACK refused inside rollback() (${PLAINTEXT_GONE_WHY}): no plaintext copy is left to remount"
+    die "ROLLBACK REFUSED inside rollback() (${PLAINTEXT_GONE_WHY}): no intact recorded plaintext to remount — a wipe began, OR the record is stale/unreadable; read recorded_type —$(_plaintext_gone_fields)"
   fi
   # The outcome is read off the mount, as cleanup() does: rollback() never fails, so an unconditional
   # `exit 0` turned a failed remount (app and writers left DOWN) or a still-open mapper into a green

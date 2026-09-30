@@ -459,6 +459,7 @@ for pat in \
   "result=armed reason=freeze_engaged" \
   "result=arm_refused reason=already_armed" \
   "result=arm_refused reason=fire_in_progress" \
+  "result=arm_refused reason=plaintext_dev_unrecorded" \
   "result=arm_failed reason=systemd_run_refused" \
   "result=arm_failed reason=timer_not_waiting" \
   'result=disarmed reason=${reason}' \

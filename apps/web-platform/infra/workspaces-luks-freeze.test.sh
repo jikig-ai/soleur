@@ -215,9 +215,9 @@ outF 'quiesced_unit_not_active_inngest-redis' \
 # mounted, NON-mapper source, so the fixture reports the retained plaintext device after the remount.
 run_case "$CUTOVER" 'DRY_RUN=0 rollback' 'rollback resume_writers' ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service" \
   FINDMNT_MOUNT_SRC=/dev/sdz9
-has '^systemctl start .*inngest-redis\.service' \
-  && ok "T5 rollback() restores inngest-redis.service (DP-6 leaves the host as it found it)" \
-  || no "T5 rollback() does not restore inngest-redis.service"
+has '^systemctl start .*inngest-redis\.service' && has '^mount /dev/sdz9[[:space:]]' \
+  && ok "T5 rollback() remounts the RECORDED plaintext device (the harness seed) and restores inngest-redis.service (DP-6 leaves the host as it found it)" \
+  || no "T5 rollback() does not remount the recorded device or restore inngest-redis.service"
 m_i="$(idx '^mount ')"; r_i="$(idx '^systemctl start .*inngest-redis\.service')"
 if [ -n "$m_i" ] && [ -n "$r_i" ] && [ "$m_i" -lt "$r_i" ]; then
   ok "T6 rollback() remounts BEFORE starting redis (RequiresMountsFor=/mnt/data)"
@@ -846,6 +846,23 @@ for t33 in "already_armed DEADMAN_TIMER_SUBSTATES=waiting" "fire_in_progress DEA
     no "T33 arm did not refuse a live dead-man ($t33_reason, ${t33_knob#*=}, rc=$CASE_RC) ${CASE_OUT:0:240}"
   fi
 done
+# A1–A6 (#6604 fix-forward) — the arm REFUSES a backstop that could restore nothing. The fire unmounts
+# $MOUNT and remounts the recorded PLAINTEXT_DEV; with no valid, non-mapper, ext4 record (or no blkid at a
+# fixed path to test it at fire time) it would take the live copy offline and mount nothing. Pre-freeze:
+# dies before any stop of the dead-man unit and before systemd-run (the T33 shape).
+for a in "record_invalid:empty PLAINTEXT_DEV_UNSEEDED=1" "record_invalid:x;logger REC=x;logger INJECTED" \
+         "record_is_mapper:/dev/mapper/workspaces REC=/dev/mapper/workspaces" "blkid_absent BLKID_ABSENT=1" \
+         "record_not_ext4:/dev/sdz9 PLAINTEXT_DEV_FSTYPE=crypto_LUKS" "record_invalid:-o REC=-o"; do
+  a_n=$((${a_n:-0} + 1)); a_detail="${a%% *}"; a_knob="${a#* }"; a_pre=":;"
+  case "$a_knob" in REC=*) a_pre="persist_state PLAINTEXT_DEV '${a_knob#REC=}';"; a_knob="A_NOOP=1" ;; esac
+  run_case "$CUTOVER" "$a_pre DRY_RUN=0; arm_dead_man; echo PAST_ARM" 'arm_dead_man' "$a_knob" WORKSPACES_MAPPER_NAME=workspaces
+  if died && markerF "$DM result=arm_refused reason=plaintext_dev_unrecorded detail=$a_detail" && has '^EMIT_DRIFT deadman_arm_failed$' \
+    && ! outF PAST_ARM && nhas '^systemd-run ' && nhas '^systemctl stop workspaces-luks-deadman' && outF 'DIE:'; then
+    ok "A${a_n} arm refuses with no restorable record ($a_detail): dies pre-freeze, no dead-man stop, no systemd-run, drift deadman_arm_failed"
+  else
+    no "A${a_n} arm did not refuse ($a_detail, rc=$CASE_RC) $(grep -F 'op=workspaces-luks-deadman' "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:200}"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # #9045 — the DISARM verifies itself, returns a status, and never dies.
@@ -922,7 +939,7 @@ run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; rollback' 'rollback disarm_dead
   ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service" FINDMNT_MOUNT_SRC=/dev/sdz9
 t35_m="$(idx '^logger .*result=disarm_failed reason=rollback_engaged check=c')"; t35_u="$(idx '^umount[[:space:]]')"
 if ran && [ -n "$t35_m" ] && [ -n "$t35_u" ] && [ "$t35_m" -lt "$t35_u" ] \
-  && has '^mount /dev/disk/by-label/workspaces_plain ' && has '^docker start ' && [ "$(drift_last)" = "rollback_engaged" ]; then
+  && has '^mount /dev/sdz9[[:space:]]' && has '^docker start ' && [ "$(drift_last)" = "rollback_engaged" ]; then
   ok "T35 rollback() disarms BEFORE any umount, and a failed disarm (check=c) never aborts it mid-way"
 else
   no "T35 rollback() dead-man handling wrong (rc=$CASE_RC marker=$t35_m umount=$t35_u last-drift=$(drift_last)) ${CASE_OUT:0:240}"
@@ -1188,7 +1205,7 @@ fi
 # receives the default disposition from sshd, which is what this row pins.
 run_case "$CUTOVER" 'trap cleanup EXIT; DRY_RUN=0; FREEZE_HELD=1; exec 1> >(:); wait $! 2>/dev/null; log "write into the dead pipe"; printf PAST_PIPE >&2' 'cleanup rollback' \
   --default-signal=PIPE FINDMNT_MOUNT_SRC=/dev/sdz9 ACTIVE_UNITS="$T37_ACT"
-if [ "$CASE_RC" -ne 0 ] && ! undef && ! outF PAST_PIPE && has '^umount[[:space:]]' && has '^mount /dev/disk/by-label/workspaces_plain ' \
+if [ "$CASE_RC" -ne 0 ] && ! undef && ! outF PAST_PIPE && has '^umount[[:space:]]' && has '^mount /dev/sdz9[[:space:]]' \
   && markerF "$DM result=cutover_aborted outcome=rolled_back abnormal_exit=1"; then
   ok "T42b a closed stdout pipe mid-freeze (SIGPIPE) aborts into cleanup, which rolls back and records abnormal_exit=1 despite logging into the dead pipe"
 else
@@ -1587,7 +1604,7 @@ echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
 # still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=170
+FREEZE_MIN_PASS=176
 [ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
 harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
 [ "$fail" -eq 0 ]
