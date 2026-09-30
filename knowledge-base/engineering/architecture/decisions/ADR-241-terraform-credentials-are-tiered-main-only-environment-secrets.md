@@ -99,7 +99,9 @@ required reviewers: the reviewers are a human gate, the branch policy is the sec
 
 A new environment, **`infra-privileged`**, carries the `main` policy and has **no reviewers**. It
 serves the unattended Tier-B jobs — apply-on-merge and the scheduled drift check — which a reviewer
-gate would deadlock. Jobs that already declare a reviewer-gated environment keep it; that
+gate would deadlock. *(Note, 2026-09-28, #6604 step 7: it also serves one dispatched state-forget,
+`workspaces-plaintext-forget.yml`, a `terraform state rm` that only forgets addresses whose object is
+measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* Jobs that already declare a reviewer-gated environment keep it; that
 environment then carries the same Tier-B secret and **must** have a `main` policy of its own. The
 four Tier-B environments are `infra-privileged`, `web-platform-infra-apply`, `inngest-cutover` and
 `workspaces-luks-cutover`. The last of these had **no** deployment-branch policy when measured, so a

@@ -360,7 +360,9 @@ def apply_steps(j):
 # would run credential-less and strand a paid host. A destroy needs the same credentials as the
 # apply and writes the same state object. G4b and G5 keep `apply_steps`: they reason about -target
 # lists and plan_only guards, which a teardown carries neither of.
-STATE_WRITE = re.compile(r"(?<![-\w])terraform\s+(apply|destroy)(?![-\w])")
+# #6604 step 7 widened it to `state rm|mv|push`: workspaces-plaintext-forget.yml writes this state with
+# `terraform state rm` and no apply at all, which must classify exactly like an apply (G1h).
+STATE_WRITE = re.compile(r"(?<![-\w])terraform\s+(apply|destroy|state\s+(rm|mv|push))(?![-\w])")
 def state_write_steps(j):
     for s in j.steps:
         if STATE_WRITE.search(str(s.get("run") or "")):
@@ -1917,6 +1919,16 @@ if fixture_written g1-10-destroy-only-no-environment "$MUTDIR/tree/.github/workf
   mutant_red g1-10-destroy-only-no-environment wf_row "$T/mut/g1-10.tsv" "G1h:"
 fi
 
+# Row 11 (#6604 step 7) — a STATE-RM-ONLY job against the privileged-state root, no `environment:`.
+# `terraform state rm` writes the same state object an apply does; before the STATE_WRITE widening this
+# job scored Tier A and G1h never saw it (workspaces-plaintext-forget.yml is the live instance).
+MUTDIR="$(fixcopy g1-11)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\nenv:\n  INFRA_DIR: apps/web-platform/infra\njobs:\n  forget:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}\n      - name: Forget\n        working-directory: ${{ env.INFRA_DIR }}\n        run: |\n          set -euo pipefail\n          terraform state rm \x27hcloud_volume.workspaces["web-1"]\x27\n' > "$MUTDIR/tree/.github/workflows/zz-forget.yml"
+if fixture_written g1-11-state-rm-only-no-environment "$MUTDIR/tree/.github/workflows/zz-forget.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1-11.tsv" ""
+  mutant_red g1-11-state-rm-only-no-environment wf_row "$T/mut/g1-11.tsv" "G1h:"
+fi
+
 # ── G1g: the read-only-first allowance must not be launderable by a comment ──────────
 # The allowance is 1-of-1 on the live tree (`workspaces-luks-cutover::cutover`), so anything
 # that satisfies it cheaply removes the row's only teeth. `_first` is a raw scan, so a single
@@ -2306,9 +2318,10 @@ fi
 # 26 -> 27 (review W1): M-g1-10-destroy-only-no-environment.
 # 27 -> 30 (#8714): M-g4-6 (two landings) and M-g4-7, the intended-destroy allowance rows.
 # 30 -> 32 (#9215): M-g1-i3 and M-g1-i4, the root-key extract-precedence mutants (drop + reorder).
-# 32 -> 52 (#8609): Guard 6 — 19 fixture landings (g6a..g6l, g6p) + the g6h2 TSV truncation. EXACT,
-# not a lower bound: G6h asserts a copy missing one G6 mutant stops here at 51.
-MUTANT_FLOOR=52
+# 32 -> 52 (#8609): Guard 6 — 19 fixture landings (g6a..g6l, g6p) + the g6h2 TSV truncation.
+# 52 -> 53 (merge with #6604 step 7): M-g1-11, which main added without raising this floor. EXACT,
+# not a lower bound: G6h asserts a copy missing one G6 mutant stops here at 52.
+MUTANT_FLOOR=53
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -2318,9 +2331,10 @@ _ran=$((passes + fails))
 # 80 -> 82 (review W1): M-g1-10's fixture-written row and its RED row. Measured: 82 ran.
 # 82 -> 88 (#8714): live G4f, and M-g4-6/M-g4-7 (3 landings + 2 verdicts). Measured: 88 ran.
 # 88 -> 93 (#9215): live G1i-rk, and M-g1-i3/M-g1-i4 (2 landings + 2 verdicts). Measured: 93 ran.
-# 93 -> 148 (#8609): live G6a..G6l (11), G6g/G6g2 (2), 20 G6 landings + 18 G6 verdicts + G6p's
-# must-pass (1), G6h2 presence (1), G6h (2). Measured: 148 ran.
-FLOOR=148
+# 93 -> 95 (#6604 step 7): M-g1-11, the state-rm-only writer (1 landing + 1 verdict). Measured: 95 ran.
+# 95 -> 150 (#8609): live G6a..G6l (11), G6g/G6g2 (2), 20 G6 landings + 18 G6 verdicts + G6p's
+# must-pass (1), G6h2 presence (1), G6h (2). Measured: 150 ran.
+FLOOR=150
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

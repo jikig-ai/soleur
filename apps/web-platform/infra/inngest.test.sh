@@ -2186,12 +2186,39 @@ assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-al
 # unchanged — the restart still happens — so the anchor moves to the guarded construct.
 assert "bootstrap restarts inngest-server.service (new ExecStart loads on redeploy)" \
   "grep -qE '^if ! systemctl restart inngest-server\.service; then$' '$BOOTSTRAP_SH'"
-# The upgrade-drain resume must still run after the restart (R2 — restart must
-# not orphan the pause/resume pairing). Match the actual resume COMMAND
-# (`"$INSTALL_PATH" resume`) precisely — no broad `|| grep resume` fallback,
-# which would vacuously pass on any comment line merely mentioning "resume".
-assert "upgrade-drain resume command still present (pause/resume pairing intact)" \
-  "grep -qE '\"\\\$INSTALL_PATH\" resume' '$BOOTSTRAP_SH'"
+# #9219: the bootstrap must not invoke inngest-cli verbs that do not exist on the pinned binary.
+# `pause`/`resume` were measured ABSENT on v1.19.4 and v1.45.1 ("No help topic",
+# knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md)
+# and were removed. Both checks read inngest-bootstrap.sh's NON-COMMENT lines only; helper scripts
+# it installs are out of scope (none invokes the CLI today).
+#   (1) No `pause`/`resume` word in any spelling — catches the forms the extractor cannot see
+#       (bare `inngest pause` via PATH, an alias variable, a backslash continuation, a --flag).
+#   (2) Every verb invoked via $INSTALL_PATH, ${INSTALL_PATH} or /usr/local/bin/inngest is in the
+#       allowlist of verbs in production use (start: the unit's ExecStart; version: the probe).
+#       Add a verb only after measuring it on the pinned binary and recording it in
+#       inngest-cli.provenance.md.
+# The `start` floor proves only the absolute-path branch, so the extractor is self-tested on a
+# fixture covering all three spellings: dropping a branch is RED.
+inngest_cli_verbs() {
+  # shellcheck disable=SC2016
+  grep -vE '^[[:space:]]*#' \
+    | grep -oE '(\$INSTALL_PATH|\$\{INSTALL_PATH\}|/usr/local/bin/inngest)"?[[:space:]]+[A-Za-z][A-Za-z0-9_-]*' \
+    | awk '{print $NF}' | sort -u
+}
+# shellcheck disable=SC2016
+INNGEST_EXTRACTOR_FIXTURE=$(printf '%s\n' '"$INSTALL_PATH" aaa' '"${INSTALL_PATH}" bbb' '/usr/local/bin/inngest ccc' '  # "$INSTALL_PATH" ddd')
+INNGEST_EXTRACTOR_SELFTEST=$(inngest_cli_verbs <<<"$INNGEST_EXTRACTOR_FIXTURE" | tr '\n' ' ' || true)
+assert "#9219 verb extractor sees all three path spellings and skips comment lines (got: $INNGEST_EXTRACTOR_SELFTEST)" \
+  "[[ '$INNGEST_EXTRACTOR_SELFTEST' == 'aaa bbb ccc ' ]]"
+INNGEST_DEAD_VERB_LINES=$(grep -vE '^[[:space:]]*#' "$BOOTSTRAP_SH" | grep -cwE 'pause|resume' || true)
+assert "bootstrap code names no pause/resume verb in any spelling (#9219) (matching lines: $INNGEST_DEAD_VERB_LINES)" \
+  "[[ '$INNGEST_DEAD_VERB_LINES' == 0 ]]"
+INNGEST_VERB_ALLOWLIST_RE='^(start|version)$'
+INNGEST_VERBS_USED=$(inngest_cli_verbs <"$BOOTSTRAP_SH" || true)
+INNGEST_VERBS_UNMEASURED=$(grep -vE "$INNGEST_VERB_ALLOWLIST_RE" <<<"$INNGEST_VERBS_USED" || true)
+INNGEST_HAS_START=$(grep -cx start <<<"$INNGEST_VERBS_USED" || true)
+assert "bootstrap invokes only allowlisted inngest-cli verbs, start present (#9219) (got: $(tr '\n' ' ' <<<"$INNGEST_VERBS_USED"); unmeasured: $(tr '\n' ' ' <<<"$INNGEST_VERBS_UNMEASURED"))" \
+  "[[ '$INNGEST_HAS_START' == 1 && -z '$INNGEST_VERBS_UNMEASURED' ]]"
 
 # --- Durable backend assets (#5450) ---
 echo ""
@@ -2518,7 +2545,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=414
+INNGEST_MIN_ASSERTIONS=416
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
