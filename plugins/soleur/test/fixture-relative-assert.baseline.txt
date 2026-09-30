@@ -256,7 +256,7 @@
 2	.claude/hooks/ship-unpushed-commits-gate.sh
 1	.claude/hooks/skill-invocation-logger.sh
 4	.claude/hooks/skill-invocation-logger.test.sh
-55	.github/scripts/test/fixtures-validate-infra-templates.sh
+58	.github/scripts/test/fixtures-validate-infra-templates.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
 2	plugins/soleur/hooks/lib/log-rotation.sh
 3	plugins/soleur/hooks/memory-backstop.sh

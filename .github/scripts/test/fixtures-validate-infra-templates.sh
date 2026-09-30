@@ -191,7 +191,9 @@ chmod 644 "$D/cloud-init-locked.yml"  # so the EXIT trap can clean up
 # file's PROSE COMMENT, yields an empty key map, and fails the render.
 #
 # 6a: a template with real syntax but NO .tf call site  → exit 4 (nobody renders it)
-# 6b: a template referenced by TWO call sites           → exit 4 (ambiguous; never silently pick one)
+# 6b: a template referenced by TWO call sites whose key sets DIFFER → exit 4 (never silently pick one)
+# 6c: TWO call sites with ONE key set and different values → PASS (the render stubs
+#     values, so both sites render identical bytes; #8609 keyless + token-bearing render)
 #
 # 6a's stub .tf mirrors ci-ssh-key.tf's REAL prose shape — `templatefile()` and
 # the filename mentioned in the same comment but never adjacent as call syntax.
@@ -239,12 +241,39 @@ cat > "$D/other.tf" <<'EOF'
 locals {
   second = templatefile("${path.module}/cloud-init.yml", {
     greeting = var.other
+    farewell = var.other
   })
 }
 EOF
 run_check "$D"
 assert_rc "F6b-ambiguous-call-site-reds" 4
 assert_out "F6b-names-the-right-branch" "ambiguous var map"
+
+D=$(newdir f6c)
+cat > "$D/cloud-init.yml" <<'EOF'
+#cloud-config
+runcmd:
+  - echo ${greeting}
+EOF
+cat > "$D/main.tf" <<'EOF'
+locals {
+  first = templatefile("${path.module}/cloud-init.yml", {
+    greeting = var.greeting
+  })
+}
+EOF
+cat > "$D/other.tf" <<'EOF'
+locals {
+  second = templatefile("${path.module}/cloud-init.yml", {
+    greeting = ""
+  })
+}
+EOF
+run_check "$D"
+assert_rc "F6c-same-key-set-call-sites-pass" 0
+# rc 0 alone would also pass if the multi-site check were deleted outright and a
+# site picked blindly; pin the branch that decided it.
+assert_out "F6c-names-the-shared-key-set-branch" "share one key set"
 
 # ---------------------------------------------------------------------------
 # F7 — arm selection. THE property justifying the render over a directive-strip
