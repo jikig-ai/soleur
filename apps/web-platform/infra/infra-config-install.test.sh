@@ -377,6 +377,21 @@ with no name|UnsetEnvironment=
 ending in a continuation|UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN\
 UNSETROWS
 
+  # (c3) #9314 review (P2, pre-existing): systemd ends a line at a BARE carriage return, so a
+  # permitted prefix line followed by \r smuggled a second directive past this per-line grep.
+  # Any C0 control byte other than tab/newline (and DEL) is now refused outright.
+  local cr_desc cr_payload
+  while IFS='|' read -r cr_desc cr_payload; do
+    bad_rc=0
+    printf "[Service]\n${cr_payload}\n" \
+      | bash "$HELPER" "$d" "$mode" "$owner" >/dev/null 2>&1 || bad_rc=$?
+    assert_eq "drop-in with $cr_desc is rejected" "$RC_REJECTED" "$bad_rc"
+  done <<'CRROWS'
+a bare CR smuggling User= after Environment=|Environment=A=1\rUser=root
+a bare CR smuggling ExecStart= after EnvironmentFile=|EnvironmentFile=-/x\rExecStart=/bin/sh
+a vertical tab after the unset literal|UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN\v
+CRROWS
+
   # (d) The rejection names the reason with its count, so a denial is diagnosable from the
   # handler's per-file accounting without SSH.
   rc=0
@@ -707,7 +722,7 @@ fi
 # whole job is to make a silently-shrinking suite loud, switchable off from the environment by
 # the same CI config that would be shrinking it. Matches APPLY_MIN_ASSERTIONS, which is a plain
 # literal for the same reason. Ratchet it here when the suite grows.
-INSTALL_MIN_ASSERTIONS=64
+INSTALL_MIN_ASSERTIONS=67
 if [[ "$PASS" -lt "$INSTALL_MIN_ASSERTIONS" ]]; then
   echo "FAIL: assertion floor — ran $PASS, expected >= $INSTALL_MIN_ASSERTIONS." >&2
   echo "      Arms were deleted or skipped; a green run here would be a coverage loss." >&2
