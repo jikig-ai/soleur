@@ -198,6 +198,63 @@ describe("chatReducer", () => {
     expect(next.pendingTimerAction).toEqual({ type: "reset", leaderId: "cpo" });
   });
 
+  describe("cc turn end: stream_end for the cc router returns streamState to idle", () => {
+    const streamMsg = (leaderId: string, content = "hi") =>
+      ({ type: "stream", leaderId, content, partial: true }) as never;
+    const streamEnd = (leaderId: string) => ({ type: "stream_end", leaderId }) as never;
+
+    test("cc_router stream + stream_end -> idle", () => {
+      let s = emptyState();
+      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cc_router") });
+      expect(s.streamState).toBe("streaming");
+      s = chatReducer(s, { type: "stream_event", msg: streamEnd("cc_router") });
+      expect(s.activeStreams.size).toBe(0);
+      expect(s.streamState).toBe("idle");
+    });
+
+    test("stopping is preserved (only session_ended:user_aborted releases it)", () => {
+      let s = emptyState();
+      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cc_router") });
+      s = chatReducer(s, { type: "enter_stopping" });
+      expect(s.streamState).toBe("stopping");
+      s = chatReducer(s, { type: "stream_event", msg: streamEnd("cc_router") });
+      expect(s.streamState).toBe("stopping");
+    });
+
+    test("legacy leader stream_end with another leader still streaming stays streaming", () => {
+      let s = emptyState();
+      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cpo") });
+      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cto") });
+      s = chatReducer(s, { type: "stream_event", msg: streamEnd("cpo") });
+      expect(s.activeStreams.size).toBe(1);
+      expect(s.streamState).toBe("streaming");
+    });
+
+    test("workflow and spawnIndex are untouched (this is not clear_streams)", () => {
+      let s = emptyState();
+      const workflow = { state: "active", workflow: "brainstorm" } as never;
+      s = { ...s, workflow };
+      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cc_router") });
+      const before = { workflow: s.workflow, spawnIndex: s.spawnIndex };
+      s = chatReducer(s, { type: "stream_event", msg: streamEnd("cc_router") });
+      expect(s.streamState).toBe("idle");
+      expect(s.workflow).toBe(before.workflow);
+      expect(s.spawnIndex).toBe(before.spawnIndex);
+    });
+
+    test("a review_gate earlier in the turn does not break the transition", () => {
+      let s = { ...emptyState(), messages: [gateMessage("g1")] };
+      s = chatReducer(s, { type: "stream_event", msg: streamMsg("cc_router") });
+      s = chatReducer(s, { type: "stream_event", msg: streamEnd("cc_router") });
+      expect(s.streamState).toBe("idle");
+    });
+
+    test("stream_end before any stream (nothing to end) stays idle", () => {
+      const s = chatReducer(emptyState(), { type: "stream_event", msg: streamEnd("cc_router") });
+      expect(s.streamState).toBe("idle");
+    });
+  });
+
   test("exhaustive: all action discriminants are handled (TypeScript guarantees, runtime sanity)", () => {
     const actions: ChatAction["type"][] = [
       "stream_event",
