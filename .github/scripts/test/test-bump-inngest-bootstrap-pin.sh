@@ -64,7 +64,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=487   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=544   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -73,7 +73,10 @@ fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
 DIG_OLD="sha256:$(printf 'a%.0s' $(seq 1 64))"
 DIG_NEW="sha256:$(printf 'b%.0s' $(seq 1 64))"
 DIG_NEWER="sha256:$(printf 'c%.0s' $(seq 1 64))"
-BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
+# #9262: the bump authors as the soleur-infra App (bot user id 335404629). The
+# soleur-ai identity it used before is LEGACY: a tip carrying it is not ours.
+BOT_EMAIL='335404629+soleur-infra[bot]@users.noreply.github.com'
+LEGACY_BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
 
 # ---------------------------------------------------------------------------
 # Fixture builders
@@ -218,10 +221,15 @@ chmod +x "$BIN/sleep"
 # gh — records every call to $MOCK_GH_LOG (one line, whitespace flattened) and
 # serves the PR surface the script uses. PR state lives in $MOCK_GH_PRS:
 #   number|headRefName|url|headRefOid|state[|flags]   (state: open|closed;
-#   flags: `fork` => isCrossRepository:true + author.login=fork-user)
+#   flags: `fork` => isCrossRepository:true + author.login=fork-user;
+#          `author=<login>` => that author.login)
+# Without a flag a PR's author lists as `app/soleur-infra` — the form `gh pr list
+# --json author` reports for a GitHub App (measured: {"is_bot":true,"login":
+# "app/soleur-ai"} for the pre-#9262 pin PRs), never `<slug>[bot]` (#9262).
 # `gh api repos/<r>/commits/<sha>` resolves author.login from the commit's
-# author email in $MOCK_ORIGIN (mirrors GitHub's email→login resolution):
-# bot noreply => soleur-ai[bot]; anything else => fixture-human.
+# author email in $MOCK_ORIGIN (mirrors GitHub's email→login resolution): the
+# soleur-infra noreply => soleur-infra[bot]; the legacy soleur-ai noreply =>
+# soleur-ai[bot]; anything else => fixture-human.
 cat > "$BIN/gh" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -229,7 +237,8 @@ printf 'gh %s\n' "$*" | tr '\n' ' ' >> "${MOCK_GH_LOG:?unset}"
 printf '\n' >> "$MOCK_GH_LOG"
 args=("$@")
 sub="${args[0]:-} ${args[1]:-}"
-BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
+BOT_EMAIL='335404629+soleur-infra[bot]@users.noreply.github.com'
+LEGACY_BOT_EMAIL='273333864+soleur-ai[bot]@users.noreply.github.com'
 
 flag() { # flag <name> — value of a --flag arg
   local i
@@ -240,8 +249,9 @@ flag() { # flag <name> — value of a --flag arg
 
 pr_json() { # emit one PR object from a state line
   local n="$1" h="$2" u="$3" o="$4" s="$5" fl="${6:-}"
-  local xr=false al='soleur-ai[bot]'
+  local xr=false al='app/soleur-infra'
   if [[ "$fl" == *fork* ]]; then xr=true; al='fork-user'; fi
+  if [[ "$fl" =~ author=([^,]+) ]]; then al="${BASH_REMATCH[1]}"; fi
   # |nullhead flag: GitHub emits headRefName:null for PRs whose head repo or
   # branch was deleted — the supersede jq must skip, not throw mid-pipe.
   if [[ "$fl" == *nullhead* ]]; then
@@ -303,7 +313,8 @@ case "$sub" in
     if [[ "$ep" =~ commits/([0-9a-f]{40})$ ]]; then
       sha="${BASH_REMATCH[1]}"
       em=$(git --git-dir="$MOCK_ORIGIN" log -1 --format='%ae' "$sha" 2>/dev/null || true)
-      if [[ "$em" == "$BOT_EMAIL" ]]; then login='soleur-ai[bot]'
+      if [[ "$em" == "$BOT_EMAIL" ]]; then login='soleur-infra[bot]'
+      elif [[ "$em" == "$LEGACY_BOT_EMAIL" ]]; then login='soleur-ai[bot]'
       elif [[ -n "$em" ]]; then login='fixture-human'
       else login=''
       fi
@@ -629,6 +640,9 @@ run_bump humantip --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-statu
 assert_rc     'g1.humantip:exit' 0
 assert_result 'g1.humantip:result' skipped
 assert_out_has 'g1.humantip:marker' 'branch-has-manual-commits'
+# The recovery is an action a human can take (#9262) — never "reset the tip to a
+# bot commit", which no human can author.
+assert_out_has 'g1.humantip:recovery' 'close the PR and delete the branch, then dispatch the build once from main with mirror_only=true'
 assert_gh_not_called 'g1.humantip:no-pr' 'gh pr '
 # The human tip must still be the remote tip (not clobbered).
 [[ $(git --git-dir="$F_ORIGIN" log -1 --format='%ae' 'soleur/inngest-pin-v1.1.38') == 'human@example.test' ]] \
@@ -643,7 +657,7 @@ printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 # Seed sha captured: %ae alone is vacuous here (the seed ALREADY carries the
 # bot email) — the sha must MOVE and the new tip must be the bump commit.
-seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
+seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-infra[bot]' "$BOT_EMAIL")
 
 run_bump bottip --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_rc     'g1.bottip:exit' 0
@@ -662,7 +676,7 @@ fixture_commit "pins at v1.1.37"
 seed_tag vinngest-v1.1.38
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
-seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
+seed_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-infra[bot]' "$BOT_EMAIL")
 
 MOCK_GH_UNLINKED=1 run_bump unlinkedbot --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 assert_rc     'g1.unlinkedbot:exit' 0
@@ -734,6 +748,88 @@ assert_gh_called 'g1.collide:relist' 'gh pr list .*--head soleur/inngest-pin-v1.
   || fail 'g1.collide:no-new-pr' "state rows after collision: $(cat "$MOCK_GH_PRS")"
 
 # ---------------------------------------------------------------------------
+# #9262 — the PR-author filter. `gh pr list --json author` reports an App author
+# as `app/<slug>`, so the filter compares against BOT_PR_LOGIN (app/soleur-infra),
+# never BOT_NAME: before #9262 it compared against `soleur-ai[bot]` and the
+# reuse path never matched in production. A same-repo PR for the branch authored
+# by the LEGACY App or by a human is NOT reused (it is not this identity's PR):
+# the run falls through to `gh pr create`.
+# ---------------------------------------------------------------------------
+for who in 'app/soleur-ai:legacy-app' 'fixture-human:human'; do
+  login="${who%%:*}"; lbl="${who##*:}"
+  new_fixture_repo "author-$lbl"
+  write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+  fixture_commit "pins at v1.1.37"
+  seed_tag vinngest-v1.1.38
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+  printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|author=%s\n' \
+    "$(git -C "$F_REPO" rev-parse HEAD)" "$login" >> "$MOCK_GH_PRS"
+  run_bump "author-$lbl" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+  assert_rc     "g1.author-$lbl:exit" 0
+  assert_result "g1.author-$lbl:result" opened
+  assert_gh_called     "g1.author-$lbl:creates" 'gh pr create '
+  assert_gh_not_called "g1.author-$lbl:not-reused" 'gh pr (comment|merge) 9 '
+done
+
+# #9262 — a pin branch whose tip is the LEGACY soleur-ai[bot] identity (left over
+# from before the switch) is treated like a human tip: never force-pushed over.
+new_fixture_repo legacytip
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+legacy_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$LEGACY_BOT_EMAIL")
+run_bump legacytip --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+assert_rc      'g1.legacytip:exit' 0
+assert_result  'g1.legacytip:result' skipped
+assert_out_has 'g1.legacytip:marker' 'branch-has-manual-commits'
+assert_origin_branch 'g1.legacytip:tip-preserved' 'soleur/inngest-pin-v1.1.38' "$legacy_sha"
+
+# ---------------------------------------------------------------------------
+# #9262 — `--mirror-only true` never arms auto-merge. The build's sign step
+# re-resolves the tag and signs whatever it points at, and mirror_only skips the
+# build's ancestry refusal, so a backfill cannot attest provenance: the PR opens
+# HELD and says why, even when every other attestation (mirror ok, signed tag ==
+# target, provenance bound) would have armed it. `false` and '' keep arming.
+# ---------------------------------------------------------------------------
+for mo in 'true:held' 'false:armed' ':armed'; do
+  val="${mo%%:*}"; want="${mo##*:}"; lbl="mirror-only-${val:-empty}"
+  new_fixture_repo "$lbl"
+  write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+  fixture_commit "pins at v1.1.37"
+  seed_tag vinngest-v1.1.38
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+  run_bump "$lbl" --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only "$val"
+  assert_rc     "g1.$lbl:exit" 0
+  assert_result "g1.$lbl:result" opened
+  if [[ "$want" == held ]]; then
+    assert_gh_not_called "g1.$lbl:no-merge" 'gh pr merge '
+    assert_gh_called     "g1.$lbl:body-says-why" 'gh pr create .*mirror_only backfill cannot attest provenance'
+    assert_gh_called     "g1.$lbl:hold-comment" 'gh pr comment .*mirror_only'
+  else
+    assert_gh_called "g1.$lbl:merge-armed" 'gh pr merge '
+  fi
+done
+# The `existing` path re-lists a reusable PR: under mirror_only it is not armed either.
+new_fixture_repo mirror-only-existing
+write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+fixture_commit "pins at v1.1.37"
+seed_tag vinngest-v1.1.38
+printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open\n' "$(git -C "$F_REPO" rev-parse HEAD)" >> "$MOCK_GH_PRS"
+run_bump mirror-only-existing --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only true
+assert_result        'g1.mirror-only-existing:result' existing
+assert_gh_called     'g1.mirror-only-existing:reused' 'gh pr comment 9 '
+assert_gh_not_called 'g1.mirror-only-existing:no-merge' 'gh pr merge '
+run_bump mirror-only-bad --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok --mirror-only yes
+[[ "$LAST_RC" != 0 ]] && pass 'g1.mirror-only-bad:nonzero' || fail 'g1.mirror-only-bad:nonzero' "--mirror-only yes accepted"
+assert_out_has 'g1.mirror-only-bad:stage' '::error::args:'
+
+# ---------------------------------------------------------------------------
 # AC9 — degraded mirror: PR opens, auto-merge NOT armed, hold comment lands.
 # ---------------------------------------------------------------------------
 new_fixture_repo degraded
@@ -777,7 +873,7 @@ seed_tag vinngest-v1.1.38
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
 # Stale bot PR for the previous target.
-old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.37' 'soleur-ai[bot]' "$BOT_EMAIL")
+old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.37' 'soleur-infra[bot]' "$BOT_EMAIL")
 printf '7|soleur/inngest-pin-v1.1.37|https://github.test/mock/pull/7|%s|open\n' "$old_sha" >> "$MOCK_GH_PRS"
 # A null-headRefName PR (head repo deleted upstream) sits in the same list
 # output — the supersede jq must skip it without aborting the sweep.
@@ -871,7 +967,7 @@ fixture_commit "pins at v1.1.37"
 seed_tag vinngest-v1.1.38
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
 git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
-old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-ai[bot]' "$BOT_EMAIL")
+old_sha=$(push_branch_to_origin 'soleur/inngest-pin-v1.1.38' 'soleur-infra[bot]' "$BOT_EMAIL")
 # A fork PR wearing the same headRefName — real `gh pr list --head` returns it.
 printf '9|soleur/inngest-pin-v1.1.38|https://github.test/mock/pull/9|%s|open|fork\n' "$old_sha" >> "$MOCK_GH_PRS"
 
@@ -1334,6 +1430,8 @@ NO_AUTO_SIGNED_COMMIT=1 run_bump anc-b11-missing --signed-tag v1.1.38 --signed-d
 assert_result  'g1b.B11-missing:result' error
 assert_out_has 'g1b.B11-missing:stage' '::error::args:'
 assert_out_has 'g1b.B11-missing:names-flag' '--signed-commit'
+# #9262: a hand-pushed tag starts nothing, so the recovery is a dispatch from main.
+assert_out_has 'g1b.B11-missing:recovery' 'then dispatch the build once from main'
 run_bump anc-b11-bad --signed-commit 'abc123' --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
 [[ "$LAST_RC" != 0 ]] && pass 'g1b.B11-bad:nonzero' || fail 'g1b.B11-bad:nonzero' "malformed --signed-commit accepted"
 assert_out_has 'g1b.B11-bad:stage' '::error::args:'
@@ -1360,6 +1458,7 @@ precond_off_main 'g1b.B12' vinngest-v1.1.39
 run_bump anc-b12 --signed-tag v1.1.25 --signed-digest "$DIG_OLD" --mirror-status ok
 assert_refused 'g1b.B12' 'Refusing to author a downgrade' resolve
 assert_out_has 'g1b.B12:do-not-delete' 'Do NOT delete or re-cut'
+assert_out_has 'g1b.B12:recovery' 'then dispatch the build once from main'
 grep -qF 'git push origin :refs/tags/vinngest-v1.1.39' "$LAST_OUT" \
   && fail 'g1b.B12:no-delete-command' "the refusal prints a command that deletes the live pin" \
   || pass 'g1b.B12:no-delete-command'
@@ -1608,13 +1707,10 @@ check_block 'g2.bump:contents-read'          'contents: read'
 check_block 'g2.bump:packages-read'          'packages: read'
 check_block 'g2.bump:ghcr-login'             'docker/login-action'
 check_block 'g2.bump:ghcr-registry'          'registry: ghcr.io'
-check_block 'g2.bump:doppler-token-verify'   'DOPPLER_TOKEN'
 # P3 (review): the inline App-JWT recipe is extracted to a composite action —
 # the workflow wires the action, the recipe lives in the action file.
-check_block 'g2.bump:mint-action'            'uses: ./.github/actions/mint-soleur-ai-app-token'
 check_block 'g2.bump:mint-id'                'id: mint'
 check_block 'g2.bump:mint-token-env'         'steps.mint.outputs.token'
-check_block 'g2.bump:installation-id'        '122213433'
 check_block 'g2.bump:script-invoked'         'bump-inngest-bootstrap-pin.sh'
 # Binding-level asserts (not literal presence): a swapped or miswired value —
 # digest into --signed-tag, a different token output — must fail here.
@@ -1626,6 +1722,8 @@ check_block 'g2.bump:invoke-signed-tag'      '--signed-tag "$TAG"'
 check_block 'g2.bump:invoke-signed-digest'   '--signed-digest "$SIGNED_DIGEST"'
 check_block 'g2.bump:invoke-mirror-status'   '--mirror-status "$MIRROR_STATUS"'
 check_block 'g2.bump:invoke-run-url'         '--run-url "$RUN_URL"'
+check_block 'g2.bump:invoke-mirror-only'     '--mirror-only "$MIRROR_ONLY"'
+check_block 'g2.bump:env-mirror-only-binding' 'MIRROR_ONLY: ${{ inputs.mirror_only }}'
 check_block 'g2.bump:failure-slack'          'SLACK_RELEASES_WEBHOOK_URL'
 check_block 'g2.bump:timeout'                'timeout-minutes: 10'
 
@@ -1646,15 +1744,15 @@ fi
 
 # The extracted composite action must carry the JWT recipe verbatim — the same
 # anchors the bump block used to pin when the recipe was inline.
-ACTION="$REPO_ROOT/.github/actions/mint-soleur-ai-app-token/action.yml"
+ACTION="$REPO_ROOT/.github/actions/mint-infra-app-token/action.yml"
 check_action() { # name needle
   if [[ -f "$ACTION" ]] && grep -qF -- "$2" "$ACTION"; then pass "$1"
-  else fail "$1" "mint-soleur-ai-app-token action lacks: $2"; fi
+  else fail "$1" "mint-infra-app-token action lacks: $2"; fi
 }
 check_action 'g2.action:exists'           "using: 'composite'"
-check_action 'g2.action:doppler-config'   'prd_terraform'
-check_action 'g2.action:app-id'           'GITHUB_APP_ID'
-check_action 'g2.action:app-key'          'GITHUB_APP_PRIVATE_KEY'
+check_action 'g2.action:doppler-config'   '--project soleur-infra-privileged --config prd'
+check_action 'g2.action:app-id'           'doppler secrets get GITHUB_INFRA_APP_ID --plain'
+check_action 'g2.action:app-key'          'doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain'
 check_action 'g2.action:b64url'           "b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\\n'; }"
 check_action 'g2.action:jwt-exchange'     'access_tokens'
 check_action 'g2.action:openssl-sign'     'openssl dgst -sha256 -sign'
@@ -1729,8 +1827,9 @@ RECORD_STEP='Record the built commit (#8747)'
 REFUSE_BODY="$TMP/refuse-step.sh"
 RECORD_BODY="$TMP/record-step.sh"
 SHAPE_OUT="$TMP/shape.out"
-python3 - "$WORKFLOW" "$REFUSE_STEP" "$RECORD_STEP" "$REFUSE_BODY" "$RECORD_BODY" > "$SHAPE_OUT" 2>&1 <<'PY'
-import sys, yaml
+SHAPE_PY="$TMP/shape.py"
+cat > "$SHAPE_PY" <<'PY'
+import re, sys, yaml
 wf, refuse_name, record_name, refuse_out, record_out = sys.argv[1:6]
 doc = yaml.safe_load(open(wf))
 jobs = doc.get("jobs") or {}
@@ -1804,8 +1903,42 @@ bstep2 = next((s for s in bsteps if s.get("name") == "Bump the cloud-init pin"),
 benv = bstep2.get("env") or {}
 emit("S8:bump-env-signed-commit", benv.get("SIGNED_COMMIT") == "${{ needs.build.outputs.commit }}", repr(benv.get("SIGNED_COMMIT")))
 emit("S8:bump-passes-signed-commit", '--signed-commit "$SIGNED_COMMIT"' in str(bstep2.get("run") or ""), "")
+# --- #9262: the bump job is re-tiered to the main-only Tier-B environment -------
+# Read from the PARSED job (a comment cannot satisfy it). Each step is compared to
+# an EXACT dict AND its key set (name/timeout-minutes aside; ANY = present, value
+# not pinned), so an added key, a second token or a widened value is a different
+# step; one_minter/no_tier_a quantify over the whole job, because the step lookup
+# returns the FIRST match and cannot see a second minter after a compliant one.
+ANY = "<any>"
+IGN = {"name", "timeout-minutes"}
+def norm_env(j):
+    e = j.get("environment")
+    return e.get("name") if isinstance(e, dict) else e
+def exact(st, want):
+    got = {k: (ANY if (want[k] == ANY and st.get(k) is not None) else st.get(k)) for k in want}
+    keys = set(st) - IGN
+    return got == want and keys == {k for k, v in want.items() if v is not None}, f"got={got} keys={sorted(keys)}"
+emit("S15:bump-job-parsed", "bump-cloud-init-pin" in jobs and bool(bump), "no bump-cloud-init-pin job in the parsed workflow")
+emit("S16:bump-env-infra-privileged", norm_env(bump) == "infra-privileged", repr(bump.get("environment")))
+vstep = next((s for s in bsteps if s.get("name") == "Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present"), {})
+emit("S17:bump-verify-exact", *exact(vstep, {"env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}"}, "run": ANY, "if": None, "uses": None}))
+mstep = next((s for s in bsteps if str(s.get("uses", "")).endswith("mint-infra-app-token")), {})
+emit("S18:bump-mint-exact", *exact(mstep, {"id": "mint", "uses": "./.github/actions/mint-infra-app-token", "if": None, "env": None, "run": None,
+     "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", "installation-id": "166065653",
+              "permissions": '{"contents":"write","pull_requests":"write"}', "repositories": "soleur"}}))
+minters = [s for s in bsteps if str(s.get("uses", "")).endswith("mint-infra-app-token")]
+emit("S19:bump-one-minter", len(minters) == 1, f"{len(minters)} mint-infra-app-token step(s)")
+emit("S20:bump-no-tier-a", not re.search(r"secrets\.DOPPLER_TOKEN(?![A-Za-z0-9_])", yaml.safe_dump(bump)), "the bump job names the Tier-A secrets.DOPPLER_TOKEN")
+on = doc.get("on", doc.get(True))
+if isinstance(on, str): on_keys = {on}
+elif isinstance(on, list): on_keys = set(on)
+elif isinstance(on, dict): on_keys = set(on)
+else: on_keys = set()
+emit("S21:trigger-dispatch-only", on_keys == {"workflow_dispatch"}, f"on keys={sorted(map(str, on_keys))} (a tag-ref run is refused by the main-only environment; ADR-232 A5)")
+emit("S22:bump-passes-mirror-only", benv.get("MIRROR_ONLY") == "${{ inputs.mirror_only }}" and '--mirror-only "$MIRROR_ONLY"' in str(bstep2.get("run") or ""), repr(benv.get("MIRROR_ONLY")))
 print(f"END|{emitted}")
 PY
+python3 "$SHAPE_PY" "$WORKFLOW" "$REFUSE_STEP" "$RECORD_STEP" "$REFUSE_BODY" "$RECORD_BODY" > "$SHAPE_OUT" 2>&1
 shape_rc=$?
 [[ "$shape_rc" == 0 ]] && pass 'g2b.shape:parser-ran' \
   || fail 'g2b.shape:parser-ran' "rc=$shape_rc — $(tail -3 "$SHAPE_OUT" | tr '\n' '|')"
@@ -1821,6 +1954,58 @@ done < "$SHAPE_OUT"
 # means it died part-way, which must not read as "the rows that ran were green".
 [[ -n "$shape_end" && "$shape_rows" == "$shape_end" ]] && pass 'g2b.shape:row-count' \
   || fail 'g2b.shape:row-count' "parser reported END=${shape_end:-<none>}, parsed $shape_rows rows"
+
+# --- #9262 bump-side mutation harness (plan Guard Contract, Guard 1) ---------
+# Mutate a TEMP copy of the workflow, re-run the SAME shape parser on it, and
+# require the named S-row to report `no`. Instrument control first: the
+# unmodified copy must parse with every S-row ok, or a mutant "caught" on an
+# already-red copy proves nothing.
+SMUT="$TMP/shape-mut"; mkdir -p "$SMUT"
+shape_on() { python3 "$SHAPE_PY" "$1" "$REFUSE_STEP" "$RECORD_STEP" "$SMUT/r.sh" "$SMUT/c.sh" 2>&1 || echo "CRASH|no|parser crashed"; }
+cp "$WORKFLOW" "$SMUT/control.yml"
+ctl=$(shape_on "$SMUT/control.yml")
+if grep -qE '^S[0-9]+[^|]*\|no\||^CRASH' <<<"$ctl" || ! grep -q '^END|' <<<"$ctl"; then
+  fail 'g2m.control:clean' "the unmodified workflow copy is not clean: $(grep -E '\|no\||^CRASH' <<<"$ctl" | cut -d'|' -f1 | paste -sd, -)"
+else pass 'g2m.control:clean'; fi
+shape_mut() { # shape_mut <id> <expected S-key prefix(es), comma list> <old> <new>
+  local id="$1" keys="$2" dst="$SMUT/$1.yml" out k missed=""
+  if ! python3 - "$WORKFLOW" "$dst" "$3" "$4" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(old) != 1: sys.exit(2)
+open(dst, "w").write(s.replace(old, new, 1))
+PY
+  then fail "g2m.$id:landed" "mutation anchor must match exactly once in the workflow"; return; fi
+  pass "g2m.$id:landed"
+  out=$(shape_on "$dst")
+  if grep -q '^CRASH' <<<"$out"; then fail "g2m.$id:caught" "instrument broken: the shape parser crashed on the mutant"; return; fi
+  IFS=',' read -ra want <<<"$keys"
+  for k in "${want[@]}"; do grep -qE "^${k}[^|]*\|no\|" <<<"$out" || missed+="$k "; done
+  [[ -z "$missed" ]] && pass "g2m.$id:caught [$keys]" || fail "g2m.$id:caught" "mutant SURVIVED on: $missed"
+}
+shape_mut env-removed 'S16' $'    environment: infra-privileged\n' ''
+shape_mut verify-tier-a 'S17' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}'
+shape_mut perms-widened 'S18' $'permissions: \'{"contents":"write","pull_requests":"write"}\'' $'permissions: \'{"administration":"write","contents":"write","pull_requests":"write"}\''
+shape_mut mint-continue-on-error 'S18' $'        id: mint\n' $'        id: mint\n        continue-on-error: true\n'
+shape_mut tag-trigger-readded 'S21' $'\non:\n' $'\non:\n  push:\n    tags:\n      - \'vinngest-v*.*.*\'\n'
+shape_mut second-minter 'S19,S20' $'          repositories: soleur\n' $'          repositories: soleur\n\n      - name: Second mint\n        id: mint2\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"contents":"write"}\'\n          repositories: soleur\n'
+shape_mut mirror-only-dropped 'S22' ' \'$'\n''            --mirror-only "$MIRROR_ONLY"' ''
+# H1: point the job lookup at a name that does not exist — S15 must RED rather
+# than the exact rows passing vacuously on an empty dict.
+shape_mut job-renamed 'S15,S16,S18' $'  bump-cloud-init-pin:\n' $'  bump-cloud-init-pin-renamed:\n'
+# H2 (must-PASS): the {name: ...} mapping form of the environment is the same binding.
+python3 - "$WORKFLOW" "$SMUT/h2.yml" <<'PY'
+import sys
+src, dst = sys.argv[1:3]
+s = open(src).read()
+old = "    environment: infra-privileged\n"
+assert s.count(old) == 1
+open(dst, "w").write(s.replace(old, "    environment:\n      name: infra-privileged\n", 1))
+PY
+h2=$(shape_on "$SMUT/h2.yml")
+if ! cmp -s "$WORKFLOW" "$SMUT/h2.yml" && ! grep -qE '\|no\||^CRASH' <<<"$h2" && grep -q '^END|' <<<"$h2"; then pass 'g2m.h2-env-mapping:passes'
+else fail 'g2m.h2-env-mapping:passes' "mapping-form environment reddened: $(grep -E '\|no\||^CRASH' <<<"$h2" | cut -d'|' -f1 | paste -sd, -)"; fi
 
 # --- behaviour harness ------------------------------------------------------
 REAL_GIT=$(command -v git)
@@ -2132,7 +2317,7 @@ else
   fail 'g2.script:token-from-env' "push URL does not source the token from GH_TOKEN env"
 fi
 # Script carries the CLA-allowlisted bot identity.
-for lit in 'soleur-ai[bot]' '273333864+soleur-ai[bot]@users.noreply.github.com'; do
+for lit in "BOT_NAME='soleur-infra[bot]'" "BOT_EMAIL='335404629+soleur-infra[bot]@users.noreply.github.com'" "BOT_PR_LOGIN='app/soleur-infra'"; do
   if [[ -f "$SCRIPT" ]] && grep -qF -- "$lit" "$SCRIPT"; then pass "g2.script:$lit"
   else fail "g2.script:$lit" "script lacks identity literal: $lit"; fi
 done

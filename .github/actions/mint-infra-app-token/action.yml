@@ -1,0 +1,151 @@
+name: 'Mint soleur-infra GitHub App installation token'
+description: >
+  Fetch the soleur-infra App credentials from the Tier-B Doppler project
+  soleur-infra-privileged (config prd), mint an RS256 App JWT, exchange it for
+  a SCOPED installation token, and emit the token as the `token` output
+  (masked). Renamed in #9262 (it minted the soleur-ai App before), when its two
+  consumers (the inngest-bootstrap pin bump and the auto-mint build dispatch)
+  moved to the main-only `infra-privileged` environment (ADR-232, ADR-241 D5).
+  One identity and one source, neither an input: the project and config are
+  named in argv, so a Tier-A token (bound to soleur/prd_terraform) is refused by
+  Doppler itself. `gh api` cannot take a JWT as GH_TOKEN, so the JWT is
+  exchanged via curl. Three inline App-JWT copies still exist
+  (board-status-sync.yml, apply-github-infra.yml, apply-web-platform-infra.yml);
+  census row G4e covers those.
+  The soleur-infra App's grant is committed in
+  apps/web-platform/infra/github-infra-app-manifest.json and includes
+  administration:write and secrets:write, so every token here is scoped:
+  `permissions` and `repositories` are mandatory and the grant is checked.
+
+inputs:
+  doppler-token:
+    description: >
+      Doppler service token for the soleur-infra-privileged project
+      (secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED, an environment secret of the
+      main-only infra-privileged environment).
+    required: true
+  installation-id:
+    description: 'soleur-infra App installation id on jikig-ai (166065653).'
+    required: true
+  permissions:
+    description: >
+      REQUIRED non-empty JSON object naming exactly the permissions wanted,
+      e.g. '{"actions":"write"}'. The mint FAILS unless the response grants
+      exactly these (plus the implicit metadata:read).
+    required: true
+  repositories:
+    description: >
+      REQUIRED comma list of repository NAMES the token is limited to, e.g.
+      'soleur'. The mint FAILS unless the response says
+      repository_selection=selected over exactly these names.
+    required: true
+
+outputs:
+  token:
+    description: 'soleur-infra installation access token (masked)'
+    value: ${{ steps.mint.outputs.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Mint installation token
+      id: mint
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        INSTALLATION_ID: ${{ inputs.installation-id }}
+        SCOPE_PERMISSIONS: ${{ inputs.permissions }}
+        SCOPE_REPOSITORIES: ${{ inputs.repositories }}
+      run: |
+        set -euo pipefail
+
+        # Composite `required: true` is NOT enforced by the runner, so every input
+        # is checked here, before any Doppler read or network call. An unscoped
+        # token of this App would carry administration:write and secrets:write.
+        [[ -n "${DOPPLER_TOKEN:-}" ]] || {
+          echo "::error::mint-infra-app-token: doppler-token is empty (pass secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED from a job bound to environment infra-privileged)."; exit 1; }
+        [[ "${INSTALLATION_ID:-}" =~ ^[0-9]+$ ]] || {
+          echo "::error::mint-infra-app-token: installation-id must be a numeric installation id (got '${INSTALLATION_ID:-}')."; exit 1; }
+        scope_body=$(jq -nc --arg perms "${SCOPE_PERMISSIONS:-}" --arg repos "${SCOPE_REPOSITORIES:-}" '
+          ($repos | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $r
+          | (try ($perms | fromjson) catch null) as $p
+          | if ($p | type) != "object" or ($p | length) == 0 then error("permissions")
+            elif ($r | length) == 0 then error("repositories")
+            else {repositories: $r, permissions: $p} end') || {
+          echo "::error::mint-infra-app-token: 'permissions' must be a non-empty JSON object (e.g. '{\"actions\":\"write\"}') and 'repositories' a non-empty comma list; an unscoped token of this App is refused."; exit 1; }
+
+        # The source is FIXED and named in argv (never DOPPLER_PROJECT/DOPPLER_CONFIG):
+        # a service token is bound to one config, so a Tier-A token asked for this
+        # project is refused by Doppler, and the fixture suite can observe the argv.
+        APP_ID=$(doppler secrets get GITHUB_INFRA_APP_ID --plain --project soleur-infra-privileged --config prd 2>/dev/null) || {
+          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_ID not readable from Doppler soleur-infra-privileged/prd (is doppler-token the Tier-B token?)."; exit 1; }
+        PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project soleur-infra-privileged --config prd 2>/dev/null) || {
+          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_PRIVATE_KEY not readable from Doppler soleur-infra-privileged/prd."; exit 1; }
+        if [[ -z "$APP_ID" || -z "$PEM" ]]; then
+          echo "::error::mint-infra-app-token: GitHub App credentials empty in Doppler soleur-infra-privileged/prd."; exit 1; fi
+        printf '::add-mask::%s\n' "$APP_ID"
+        # $GITHUB_ENV/log does NOT auto-mask a multi-line secret — mask each PEM line.
+        while IFS= read -r pem_line; do
+          [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
+        done <<< "$PEM"
+
+        umask 077
+        APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-infra-app-pem.XXXXXX)
+        printf '%s\n' "$PEM" > "$APP_PEM_FILE"
+        chmod 600 "$APP_PEM_FILE"
+        trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
+        # Catch a corrupted PEM (literal \n, BOM, partial paste) HERE with a
+        # routable error rather than a generic openssl "unable to load Private Key".
+        if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
+          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
+
+        b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
+
+        now=$(date +%s)
+        header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+        payload=$(jq -nc \
+          --argjson iss "$APP_ID" \
+          --argjson iat "$((now - 60))" \
+          --argjson exp "$((now + 540))" \
+          '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+        unsigned="${header}.${payload}"
+        signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
+        JWT="${unsigned}.${signature}"
+        [[ -n "$JWT" ]] || { echo "::error::mint-infra-app-token: App-JWT mint produced empty output."; exit 1; }
+        echo "::add-mask::$JWT"
+
+        INSTALL_RESP=$(curl -sS --max-time 30 -X POST \
+          -d "$scope_body" \
+          -H "Authorization: Bearer $JWT" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens")
+        INSTALL_TOKEN=$(jq -r '.token // empty' <<<"$INSTALL_RESP" 2>/dev/null || true)
+        if [[ -z "$INSTALL_TOKEN" ]]; then
+          # GitHub's own refusal text names the missing permission. Vendor text is
+          # untrusted: control characters (CR/LF included), U+2028/U+2029 and DEL
+          # become spaces and colon runs collapse to one, so it cannot open a second
+          # workflow command. Never the JWT or a token: .message only.
+          gh_msg=$(jq -r '(.message // "no message in the response") | tostring
+            | gsub("[\\p{Cc}\\x{2028}\\x{2029}]"; " ") | gsub(":+"; ":") | .[0:300]' \
+            <<<"$INSTALL_RESP" 2>/dev/null || echo "unparseable response")
+          echo "::error::mint-infra-app-token: installation-token exchange for installation ${INSTALLATION_ID} returned no token. GitHub said: ${gh_msg}"
+          exit 1
+        fi
+        echo "::add-mask::$INSTALL_TOKEN"
+        # Exact-grant check (#4326): the response must grant exactly the request.
+        # GitHub may add metadata:read on its own, and nothing else is accepted.
+        jq -e --argjson want "$SCOPE_PERMISSIONS" \
+          '(.permissions | type) == "object" and (.permissions | del(.metadata)) == $want
+           and ((.permissions.metadata // "read") == "read")' <<<"$INSTALL_RESP" >/dev/null || {
+          echo "::error::mint-infra-app-token: the granted permissions $(jq -c '.permissions // null' <<<"$INSTALL_RESP") differ from the requested ${SCOPE_PERMISSIONS} (plus metadata:read); refusing to hand out the token."; exit 1; }
+        jq -e --arg repos "$SCOPE_REPOSITORIES" '
+          .repository_selection == "selected"
+          and ([.repositories[]?.name] | sort)
+              == ($repos | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | sort)' \
+          <<<"$INSTALL_RESP" >/dev/null || {
+          echo "::error::mint-infra-app-token: the token is not limited to the requested repositories (${SCOPE_REPOSITORIES}); got repository_selection=$(jq -r '.repository_selection // "none"' <<<"$INSTALL_RESP"); refusing to hand out the token."; exit 1; }
+        # Per-run evidence (runbook infra-credential-tiers-8209.md step O4c): which
+        # App, which installation, which scope. No secret in it.
+        echo "::notice title=app-token::app=soleur-infra installation=${INSTALLATION_ID} permissions=$(jq -cS '.permissions' <<<"$INSTALL_RESP")"
+        echo "token=${INSTALL_TOKEN}" >> "$GITHUB_OUTPUT"

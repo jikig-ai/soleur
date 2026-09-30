@@ -53,7 +53,7 @@ BUMP="$REPO_ROOT/.github/scripts/bump-inngest-bootstrap-pin.sh"
 BUILD_WF="$REPO_ROOT/.github/workflows/build-inngest-bootstrap-image.yml"
 MINT_WF="$REPO_ROOT/.github/workflows/mint-inngest-bootstrap-tag.yml"
 CONSUMER="$REPO_ROOT/apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh"
-COMPOSITE="$REPO_ROOT/.github/actions/mint-soleur-ai-app-token/action.yml"
+COMPOSITE="$REPO_ROOT/.github/actions/mint-infra-app-token/action.yml"
 for f in "$SCRIPT" "$BUMP" "$BUILD_WF" "$MINT_WF" "$CONSUMER" "$COMPOSITE"; do
   [[ -f "$f" ]] || { echo "FAIL: $f not found"; exit 1; }
 done
@@ -83,7 +83,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=545   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=583   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1267,6 +1267,12 @@ job = jobs.get("mint") or {}
 (ok if len(jobs) == 1 and job else bad)("one-mint-job", "expected exactly one job named mint" + AUTH)
 (ok if str(job.get("if", "")).strip() == "github.ref == 'refs/heads/main'" else bad)("job-if-main", "job if must be github.ref == 'refs/heads/main'" + AUTH)
 (ok if job.get("permissions") == {"contents": "write"} else bad)("job-permissions", "job permissions must be exactly contents: write" + AUTH)
+# #9262: the job is bound to the main-only Tier-B environment. norm_env accepts the
+# scalar and the {name: ...} mapping form (the census's env_arms does the same).
+def norm_env(j):
+    e = j.get("environment")
+    return e.get("name") if isinstance(e, dict) else e
+(ok if norm_env(job) == "infra-privileged" else bad)("job-env", "job environment must be infra-privileged (the main-only Tier-B environment, #9262), got %r%s" % (job.get("environment"), AUTH))
 conc = job.get("concurrency") or doc.get("concurrency") or {}
 (ok if conc.get("group") == "inngest-bootstrap-automint" and conc.get("cancel-in-progress") is False else bad)("concurrency", "concurrency must be inngest-bootstrap-automint, cancel-in-progress false" + AUTH)
 steps = job.get("steps") or []
@@ -1281,21 +1287,32 @@ w = co.get("with") or {}
 (ok if w.get("fetch-depth") == 0 and w.get("fetch-tags") is True and w.get("persist-credentials") is False else bad)("checkout-history", "checkout needs fetch-depth 0, fetch-tags true, persist-credentials false" + AUTH)
 di, dec = find(lambda s: s.get("id") == "decide")
 ii, inst = find(lambda s: str(s.get("uses", "")).startswith("DopplerHQ/cli-action@"))
-ki, chk = find(lambda s: s.get("name") == "Verify DOPPLER_TOKEN present")
-ai, app = find(lambda s: str(s.get("uses", "")).endswith("mint-soleur-ai-app-token"))
+ki, chk = find(lambda s: s.get("name") == "Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present")
+ai, app = find(lambda s: str(s.get("uses", "")).endswith("mint-infra-app-token"))
 ti, tag = find(lambda s: s.get("name") == "Create tag")
 xi, dsp = find(lambda s: s.get("name") == "Dispatch build")
 # EXACT shape of every step that decides, holds a credential or writes: an `if`,
 # `run` or `env` that merely CONTAINS the right words (a `|| true`, an extra env
 # var, a widened condition) is a different step.
+# ANY = "present, value not pinned" (a SHA-pinned `uses:` a Dependabot bump moves).
+# The KEY SET is pinned too (#9262): every key other than name/timeout-minutes must
+# be one `want` names as present, so an added continue-on-error / env / with is a
+# different step even when every pinned value still matches.
+ANY = "<any>"
+KEYSET = True
+IGNORED_KEYS = {"name", "timeout-minutes"}
+def keyset_ok(st, want):
+    return set(st) - IGNORED_KEYS == {k for k, v in want.items() if v is not None}
 def exact(sid, st, want):
-    got = {k: st.get(k) for k in want}
-    (ok if got == want else bad)(sid + "-exact", "%s must be exactly %s, got %s%s" % (sid, json.dumps(want, sort_keys=True), json.dumps(got, sort_keys=True, default=str), AUTH))
+    got = {k: (ANY if (want[k] == ANY and st.get(k) is not None) else st.get(k)) for k in want}
+    good = got == want and (keyset_ok(st, want) or not KEYSET)
+    (ok if good else bad)(sid + "-exact", "%s must be exactly %s (key set %s), got %s (key set %s)%s" % (sid, json.dumps(want, sort_keys=True), sorted(k for k, v in want.items() if v is not None), json.dumps(got, sort_keys=True, default=str), sorted(set(st) - IGNORED_KEYS), AUTH))
 exact("decide", dec, {"id": "decide", "if": None, "env": None, "run": SCRIPT + " --dry-run", "uses": None})
-exact("doppler-install", inst, {"if": WOULD, "env": None, "run": None})
-exact("doppler-check", chk, {"if": WOULD, "uses": None, "env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN }}"}})
-exact("app", app, {"id": "app", "if": WOULD, "env": None, "run": None, "uses": "./.github/actions/mint-soleur-ai-app-token",
-                   "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN }}", "installation-id": "122213433",
+exact("doppler-install", inst, {"if": WOULD, "env": None, "run": None, "uses": ANY})
+exact("doppler-check", chk, {"if": WOULD, "uses": None, "run": ANY,
+                             "env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}"}})
+exact("app", app, {"id": "app", "if": WOULD, "env": None, "run": None, "uses": "./.github/actions/mint-infra-app-token",
+                   "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", "installation-id": "166065653",
                             "permissions": '{"actions":"write"}', "repositories": "soleur"}})
 exact("tag", tag, {"id": "tag", "if": WOULD, "uses": None, "run": SCRIPT + " --tag",
                    "env": {"MINT_TAG_TOKEN": "${{ github.token }}"}})
@@ -1305,7 +1322,7 @@ exact("dispatch", dsp, {"if": "steps.tag.outputs.result == 'tagged'", "uses": No
 aw = app.get("with") or {}
 try: perms = json.loads(str(aw.get("permissions", "")))
 except Exception: perms = None  # noqa: BLE001
-(ok if perms == {"actions": "write"} and aw.get("repositories") == "soleur" and str(aw.get("installation-id")) == "122213433" else bad)("app-scope", "the App mint must be scoped to permissions {\"actions\":\"write\"} and repositories soleur" + AUTH)
+(ok if perms == {"actions": "write"} and aw.get("repositories") == "soleur" and str(aw.get("installation-id")) == "166065653" else bad)("app-scope", "the App mint must be scoped to permissions {\"actions\":\"write\"} and repositories soleur" + AUTH)
 # Every steps.X.outputs.Y names a real step id and an output that step emits:
 # the mint script's GITHUB_OUTPUT keys, or a local composite's declared outputs.
 script_keys = set(re.findall(r"printf '([a-z_]+)=[^']*'[^\n]*>>\s*\"\$GITHUB_OUTPUT\"", open(mint_sh).read()))
@@ -1314,7 +1331,7 @@ emits = {}
 for s in steps:
     if not s.get("id"): continue
     if SCRIPT in str(s.get("run", "")): emits[s["id"]] = script_keys
-    elif str(s.get("uses", "")) == "./.github/actions/mint-soleur-ai-app-token": emits[s["id"]] = comp_keys
+    elif str(s.get("uses", "")) == "./.github/actions/mint-infra-app-token": emits[s["id"]] = comp_keys
     else: emits[s["id"]] = set()
 refs = re.findall(r"steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)", raw)
 dangling = sorted({"%s.%s" % r for r in refs if r[1] not in emits.get(r[0], set())})
@@ -1329,6 +1346,12 @@ for i, s in enumerate(steps):
     if u and not u.startswith("./") and not re.search(r"@[0-9a-f]{40}$", u): bad("sha-pinned", "step %d uses %s, not a 40-hex SHA pin" % (i, u))
 for rid in ("tag-token-isolated", "dispatch-token-isolated", "app-token-isolated", "github-token-isolated", "sha-pinned"):
     if not any(o.startswith("BAD " + rid + " ") for o in out): ok(rid)
+# find() returns the FIRST match, so the exact rows alone cannot see a second minter
+# appended after a compliant first one; count them. And no step anywhere in the job
+# may name the Tier-A secrets.DOPPLER_TOKEN (the lookahead spares *_INFRA_PRIVILEGED).
+minters = [s for s in steps if str(s.get("uses", "")).endswith("mint-infra-app-token")]
+(ok if len(minters) == 1 else bad)("one-minter", "expected exactly one mint-infra-app-token step, found %d%s" % (len(minters), AUTH))
+(bad if re.search(r"secrets\.DOPPLER_TOKEN(?![A-Za-z0-9_])", yaml.safe_dump(job)) else ok)("no-tier-a", "the mint job references the Tier-A secrets.DOPPLER_TOKEN; it holds only DOPPLER_TOKEN_INFRA_PRIVILEGED (#9262)" + AUTH)
 (bad if re.search(r"secrets\.[A-Za-z0-9_]*PAT\b|\b[A-Z0-9_]*_PAT\b", raw) else ok)("no-pat", "a PAT-named secret is referenced (hr-github-app-auth-not-pat)")
 si, sl = find(lambda s: str(s.get("name", "")).startswith("Post to Slack"))
 (ok if si == len(steps) - 1 and str(sl.get("if", "")).strip() == "failure() || cancelled()" and sl.get("continue-on-error") is True else bad)("slack-on-failure", "the LAST step is the Slack step, if: failure() || cancelled(), continue-on-error: true" + AUTH)
@@ -1348,7 +1371,7 @@ g3_wf() { python3 "$TMP/g3_wf.py" "$1" "$2" "${3:-$SCRIPT}" "${4:-$COMPOSITE}" 2
 report g3.parity < <(g3_parity "$SCRIPT" "$BUMP" "$CONSUMER" "$BUILD_WF")
 a_eq 'g3.parity:row-count' "$REPORTED" 11
 report g3.wf < <(g3_wf "$MINT_WF" "$BUILD_WF")
-a_eq 'g3.wf:row-count' "$REPORTED" 36
+a_eq 'g3.wf:row-count' "$REPORTED" 39
 
 # Guard 3 mutation rows: mutate a TEMP copy; RED = at least one BAD line.
 MUTDIR="$TMP/g3mut"; mkdir -p "$MUTDIR"
@@ -1406,24 +1429,67 @@ g3_mut g3.w8-slack-failure-only 'mwf' 'if: failure() || cancelled()' 'if: failur
 g3_mut g3.w9-job-cap-below-sum 'mwf' '    timeout-minutes: 20' '    timeout-minutes: 10'
 g3_mut g3.w10-no-tag-state-branch 'mwf' '          TAG_STATE: ${{ steps.tag.outputs.tag_state }}'$'\n' ''
 g3_mut g3.w11-paths-whole-infra 'mwf' "      - 'apps/web-platform/infra/inngest*'" "      - 'apps/web-platform/infra/**'"
+# #9262 re-tier rows (plan Guard Contract, Guard 1 mutation matrix rows 2, 5, 6, 7).
+g3_mut g3.w12-app-continue-on-error 'mwf' '        uses: ./.github/actions/mint-infra-app-token' $'        continue-on-error: true\n        uses: ./.github/actions/mint-infra-app-token'
+g3_mut g3.w13-app-tier-a-token 'mwf' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' 'doppler-token: ${{ secrets.DOPPLER_TOKEN }}'
+g3_mut g3.w14-env-not-tier-b 'mwf' '    environment: infra-privileged' '    environment: production'
+g3_mut g3.w15-no-env 'mwf' $'    environment: infra-privileged\n' ''
+g3_mut g3.w16-second-minter 'mwf' $'          repositories: soleur\n' $'          repositories: soleur\n      - name: Second mint\n        id: app2\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"actions":"write"}\'\n          repositories: soleur\n'
+
+# H2 (must-PASS, non-canonical): the {name: ...} mapping form of the environment is
+# the same binding, so every row stays OK. A row that only accepted the scalar would
+# RED here on a correct workflow.
+env_map="$MUTDIR/g3.h2-env-mapping.$(basename "$MINT_WF")"
+python3 - "$MINT_WF" "$env_map" <<'PY'
+import sys
+src, dst = sys.argv[1:3]
+s = open(src).read()
+old = "    environment: infra-privileged\n"
+assert s.count(old) == 1
+open(dst, "w").write(s.replace(old, "    environment:\n      name: infra-privileged\n", 1))
+PY
+h2_out=$(g3_wf "$env_map" "$BUILD_WF")
+if cmp -s "$MINT_WF" "$env_map"; then fail 'g3.h2-env-mapping:landed' "mutation produced an identical file"
+elif grep -q '^BAD ' <<<"$h2_out"; then fail 'g3.h2-env-mapping:passes' "mapping-form environment reddened: $(grep '^BAD ' <<<"$h2_out" | awk '{print $2}' | paste -sd, -)"
+else pass 'g3.h2-env-mapping:passes'; fi
+
+# H1b: the key-set half of exact() is load-bearing. With it switched off in a COPY of
+# the checker, the continue-on-error mutant (w12) must pass app-exact; restore = the
+# real checker above, which caught it.
+sed 's/^KEYSET = True$/KEYSET = False/' "$TMP/g3_wf.py" > "$TMP/g3_wf_nokeyset.py"
+if cmp -s "$TMP/g3_wf.py" "$TMP/g3_wf_nokeyset.py"; then fail 'g3.h1b-keyset-load-bearing' "KEYSET switch did not land in the checker copy"
+else
+  h1b_out=$(python3 "$TMP/g3_wf_nokeyset.py" "$MUTDIR/g3.w12-app-continue-on-error.$(basename "$MINT_WF")" "$BUILD_WF" "$SCRIPT" "$COMPOSITE" 2>&1 || echo "BAD python-crashed")
+  if grep -qE '^BAD (app-exact|python-crashed)' <<<"$h1b_out"; then fail 'g3.h1b-keyset-load-bearing' "app-exact still RED with the key-set half off: the half is not what catches w12"
+  else pass 'g3.h1b-keyset-load-bearing'; fi
+fi
 
 # ===========================================================================
-echo "=== Composite scope-down (mint-soleur-ai-app-token) ==="
+echo "=== Composite (mint-infra-app-token) ==="
 # ===========================================================================
 # The composite's `run:` block, executed under the runner's composite shell with
-# `doppler` and `curl` shimmed and a real synthesized RSA key. Pins both arms:
-# empty inputs send NO -d (byte-identical to the pre-#4326 call); set inputs send
-# exactly the scoped JSON body.
+# `doppler` and `curl` shimmed and a real synthesized RSA key. #9262 made it
+# Tier-B-only: one identity (soleur-infra), one source (soleur-infra-privileged/prd,
+# named in ARGV so this stub can see it — the harness unsets DOPPLER_PROJECT and
+# DOPPLER_CONFIG, so an env-var form would read nothing), and mandatory scoping.
 CDIR="$TMP/composite"; CBIN="$CDIR/bin"; mkdir -p "$CBIN"
-awk '/^      run: \|[[:space:]]*$/ {on=1; next} on' "$COMPOSITE" | sed 's/^        //' > "$CDIR/run.sh"
+extract_comp() { awk '/^      run: \|[[:space:]]*$/ {on=1; next} on' "$1" | sed 's/^        //'; }
+extract_comp "$COMPOSITE" > "$CDIR/run.sh"
 if grep -qF 'INSTALL_RESP=$(curl -sS --max-time 30 -X POST \' "$CDIR/run.sh"; then pass 'comp:extracted'
 else fail 'comp:extracted' "could not extract the composite run block from $COMPOSITE"; fi
 openssl genrsa 2048 > "$CDIR/key.pem" 2>/dev/null
+# doppler: logs its argv, and refuses (exit 1) unless the argv carries exactly
+# `--project soleur-infra-privileged --config prd` and names one of the two keys.
 cat > "$CBIN/doppler" <<STUB
 #!/usr/bin/env bash
-case "\$*" in
-  *GITHUB_APP_ID*) printf '12345' ;;
-  *GITHUB_APP_PRIVATE_KEY*) cat "$CDIR/key.pem" ;;
+printf '%s\n' "\$*" >> "\${DOPPLER_LOG:?unset}"
+case " \$* " in
+  *" --project soleur-infra-privileged --config prd "*) : ;;
+  *) echo "doppler-stub: wrong project/config: \$*" >&2; exit 1 ;;
+esac
+case "\$1 \$2 \$3" in
+  "secrets get GITHUB_INFRA_APP_ID") printf '12345' ;;
+  "secrets get GITHUB_INFRA_APP_PRIVATE_KEY") cat "$CDIR/key.pem" ;;
   *) exit 1 ;;
 esac
 STUB
@@ -1434,23 +1500,21 @@ if [[ -n "${CURL_RESP:-}" ]]; then printf '%s' "$CURL_RESP"
 else printf '%s' '{"token":"fixture-installation-credential"}'; fi
 STUB
 chmod +x "$CBIN/doppler" "$CBIN/curl"
-run_comp() { # run_comp <label> <permissions> <repositories> [response-json]
-  CLOG="$CDIR/$1.curl"; COUT="$CDIR/$1.out"; : > "$CLOG"; : > "$COUT"
+# run_comp <label> <permissions> <repositories> [response-json] [doppler-token] [installation-id] [run.sh]
+run_comp() {
+  CLOG="$CDIR/$1.curl"; COUT="$CDIR/$1.out"; DLOG="$CDIR/$1.doppler"; : > "$CLOG"; : > "$COUT"; : > "$DLOG"
   CRC=0
-  env -u SCOPE_PERMISSIONS -u SCOPE_REPOSITORIES -u CURL_RESP ${4:+CURL_RESP="$4"} PATH="$CBIN:$PATH" CURL_LOG="$CLOG" \
-    DOPPLER_TOKEN=fixture DOPPLER_PROJECT=soleur DOPPLER_CONFIG=prd_terraform INSTALLATION_ID=122213433 \
+  env -u SCOPE_PERMISSIONS -u SCOPE_REPOSITORIES -u CURL_RESP -u DOPPLER_PROJECT -u DOPPLER_CONFIG \
+    ${4:+CURL_RESP="$4"} PATH="$CBIN:$PATH" CURL_LOG="$CLOG" DOPPLER_LOG="$DLOG" \
+    DOPPLER_TOKEN="${5-fixture}" INSTALLATION_ID="${6-166065653}" \
     SCOPE_PERMISSIONS="$2" SCOPE_REPOSITORIES="$3" RUNNER_TEMP="$CDIR" GITHUB_OUTPUT="$COUT" \
-    bash --noprofile --norc -eo pipefail "$CDIR/run.sh" > "$CDIR/$1.stdout" 2>&1 || CRC=$?
+    bash --noprofile --norc -eo pipefail "${7:-$CDIR/run.sh}" > "$CDIR/$1.stdout" 2>&1 || CRC=$?
 }
+calls() { grep -c -- '^--call--$' "$CLOG" || true; }
+dcalls() { grep -c '' "$DLOG" || true; }
+refused() { (( CRC != 0 )) && echo yes || echo "no (rc=$CRC)"; }
 # data_arg — the value following -d/--data* in the logged argv, or NONE.
 data_arg() { awk 'f {print; exit} $0 ~ /^(-d|--data|--data-raw|--data-binary)$/ {f=1} END {if (!f) print "NONE"}' "$CLOG"; }
-run_comp default '' ''
-a_eq 'comp.default:rc' "$CRC" 0
-a_eq 'comp.default:no-data' "$(data_arg)" NONE
-a_eq 'comp.default:one-call' "$(grep -c -- '^--call--$' "$CLOG" || true)" 1
-a_eq 'comp.default:token-out' "$(cat "$COUT")" 'token=fixture-installation-credential'
-# The token call is bounded, on every path.
-a_eq 'comp.default:max-time' "$(awk 'f {print; exit} $0 == "--max-time" {f=1}' "$CLOG")" 30
 # Scoped: the response must grant exactly the request (+ metadata:read) over
 # repository_selection=selected, or no token is handed out.
 R_OK='{"token":"fixture-installation-credential","permissions":{"actions":"write","metadata":"read"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
@@ -1458,25 +1522,77 @@ run_comp scoped '{"actions":"write"}' soleur "$R_OK"
 a_eq 'comp.scoped:rc' "$CRC" 0
 a_eq 'comp.scoped:body' "$(data_arg)" '{"repositories":["soleur"],"permissions":{"actions":"write"}}'
 a_eq 'comp.scoped:token-out' "$(cat "$COUT")" 'token=fixture-installation-credential'
+a_eq 'comp.scoped:one-call' "$(calls)" 1
+# The token call is bounded, on every path.
+a_eq 'comp.scoped:max-time' "$(awk 'f {print; exit} $0 == "--max-time" {f=1}' "$CLOG")" 30
+# The source is fixed: exactly these two reads, project and config in argv.
+a_eq 'comp.scoped:doppler-argv' "$(cat "$DLOG")" $'secrets get GITHUB_INFRA_APP_ID --plain --project soleur-infra-privileged --config prd\nsecrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project soleur-infra-privileged --config prd'
+# Per-run evidence (runbook O4c): the identity, installation and granted scope.
+a_eq 'comp.scoped:notice' "$(grep -c '^::notice title=app-token::app=soleur-infra installation=166065653 permissions={"actions":"write","metadata":"read"}$' "$CDIR/scoped.stdout" || true)" 1
 run_comp scoped-no-meta '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
 a_eq 'comp.scoped-no-metadata:rc' "$CRC" 0
 run_comp scope-wider '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","contents":"write","metadata":"read"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
-a_eq 'comp.scope-mismatch:refused' "$( (( CRC != 0 )) && echo yes || echo "no (rc=$CRC)")" yes
+a_eq 'comp.scope-mismatch:refused' "$(refused)" yes
 a_eq 'comp.scope-mismatch:no-token-out' "$(cat "$COUT")" ''
 a_eq 'comp.scope-mismatch:named' "$(grep -c 'differ from the requested' "$CDIR/scope-wider.stdout" || true)" 1
+run_comp scope-narrower '{"contents":"write","pull_requests":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"contents":"write","metadata":"read"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
+a_eq 'comp.scope-narrower:refused' "$(refused)" yes
+a_eq 'comp.scope-narrower:no-token-out' "$(cat "$COUT")" ''
 run_comp scope-all-repos '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","metadata":"read"},"repository_selection":"all"}'
-a_eq 'comp.selection-all:refused' "$( (( CRC != 0 )) && echo yes || echo "no (rc=$CRC)")" yes
+a_eq 'comp.selection-all:refused' "$(refused)" yes
 a_eq 'comp.selection-all:no-token-out' "$(cat "$COUT")" ''
-run_comp repos-only '' 'soleur, other' '{"token":"fixture-installation-credential","permissions":{"contents":"write"},"repository_selection":"selected","repositories":[{"name":"other"},{"name":"soleur"}]}'
-a_eq 'comp.repos-only:body' "$(data_arg)" '{"repositories":["soleur","other"]}'
-a_eq 'comp.repos-only:rc' "$CRC" 0
-# Unscoped: nothing is checked, so a response without permissions still mints.
-a_eq 'comp.default:unchecked' "$(grep -c '::error::' "$CDIR/default.stdout" || true)" 0
+# Mandatory inputs (#9262). Composite `required: true` is not enforced by the runner,
+# and an UNSCOPED token of this App carries administration:write and secrets:write,
+# so every empty input is refused before any Doppler read or network call. The two
+# rows that used to assert the unscoped mint (comp.default, comp.repos-only) are the
+# old contract, flipped deliberately.
+for spec in 'default||' 'repos-only||soleur, other' 'perms-only|{"actions":"write"}|'; do
+  IFS='|' read -r lbl perms repos <<<"$spec"
+  run_comp "$lbl" "$perms" "$repos"
+  a_eq "comp.$lbl:refused" "$(refused)" yes
+  a_eq "comp.$lbl:no-call" "$(calls)" 0
+  a_eq "comp.$lbl:no-doppler" "$(dcalls)" 0
+  a_eq "comp.$lbl:no-token-out" "$(cat "$COUT")" ''
+done
+run_comp empty-token '{"actions":"write"}' soleur "$R_OK" ''
+a_eq 'comp.empty-token:refused' "$(refused)" yes
+a_eq 'comp.empty-token:no-doppler' "$(dcalls)" 0
+a_eq 'comp.empty-token:no-call' "$(calls)" 0
+run_comp empty-installation '{"actions":"write"}' soleur "$R_OK" fixture ''
+a_eq 'comp.empty-installation:refused' "$(refused)" yes
+a_eq 'comp.empty-installation:no-doppler' "$(dcalls)" 0
+a_eq 'comp.empty-installation:no-call' "$(calls)" 0
 run_comp bad-json 'not json' soleur
-a_eq 'comp.bad-json:refused' "$( (( CRC != 0 )) && echo yes || echo "no (rc=$CRC)")" yes
-a_eq 'comp.bad-json:no-call' "$(grep -c -- '^--call--$' "$CLOG" || true)" 0
+a_eq 'comp.bad-json:refused' "$(refused)" yes
+a_eq 'comp.bad-json:no-call' "$(calls)" 0
 run_comp non-object '["actions"]' soleur
-a_eq 'comp.non-object:refused' "$( (( CRC != 0 )) && echo yes || echo "no (rc=$CRC)")" yes
+a_eq 'comp.non-object:refused' "$(refused)" yes
+# A failed exchange names GitHub's refusal, with CR/LF/U+2028/::  stripped so vendor
+# text cannot open a second workflow command (the fixture tries to forge one).
+run_comp exchange-refused '{"actions":"write"}' soleur '{"message":"Resource not accessible\r\n::notice title=forged::x ::warning::y","documentation_url":"https://docs.github.test"}'
+a_eq 'comp.exchange-refused:refused' "$(refused)" yes
+a_eq 'comp.exchange-refused:names-message' "$(grep -c '^::error::.*Resource not accessible' "$CDIR/exchange-refused.stdout" || true)" 1
+a_eq 'comp.exchange-refused:no-forged-command' "$(grep -cE '^::(notice|warning)' "$CDIR/exchange-refused.stdout" || true)" 0
+a_eq 'comp.exchange-refused:no-double-colon' "$(grep '^::error::' "$CDIR/exchange-refused.stdout" | sed 's/^::error:://' | grep -c '::' || true)" 0
+a_eq 'comp.exchange-refused:no-token-out' "$(cat "$COUT")" ''
+# Mutation (plan Guard Contract row 8): the composite's project argv moved to the
+# Tier-A `soleur` project must turn the scoped row RED — the stub refuses it.
+comp_mut="$CDIR/action.mut-project.yml"
+python3 - "$COMPOSITE" "$comp_mut" <<'PY'
+import sys
+src, dst = sys.argv[1:3]
+s = open(src).read()
+n = s.count("--project soleur-infra-privileged")
+if n < 1: sys.exit(2)
+open(dst, "w").write(s.replace("--project soleur-infra-privileged", "--project soleur"))
+PY
+if [[ $? -ne 0 ]] || cmp -s "$COMPOSITE" "$comp_mut"; then fail 'comp.mut-project:landed' "the project argv anchor did not land in the composite copy"
+else
+  pass 'comp.mut-project:landed'
+  extract_comp "$comp_mut" > "$CDIR/run.mut-project.sh"
+  run_comp mut-project '{"actions":"write"}' soleur "$R_OK" fixture 166065653 "$CDIR/run.mut-project.sh"
+  a_eq 'comp.mut-project:caught' "$( (( CRC != 0 )) && [[ ! -s "$COUT" ]] && echo yes || echo "no (rc=$CRC, token-out=$(wc -c < "$COUT"))")" yes
+fi
 
 # ===========================================================================
 echo "=== Script-mutation battery (temp copies) ==="
