@@ -104,6 +104,12 @@
 #   6. SELF-DISARM. A turn quoting this hook's own `<stop>` syntax while
 #      explaining it satisfies the escape hatch. Accepted: the alternative is a
 #      sentinel nobody can document.
+#   7. WEB SESSIONS OPT OUT. This hook is operator-CLI vocabulary: its block reason
+#      instructs the model in words a chat user must never see, and the web runtime
+#      loads it anyway (see WEB RUNTIME OPT-OUT below). Accepted trade-off: the
+#      header above says the guard matters more for non-technical users, but in the
+#      web Concierge it leaked `<stop>OPERATOR-GATE` over the user's question list,
+#      and the unkept-promise class there is left to the Concierge system prompt.
 #
 # What it DOES buy: the common case, which is a plain closing sentence naming
 # the next action. Measured against the five real 2026-09-07 instances, it
@@ -128,6 +134,17 @@ set -uo pipefail
 # for the block protocol; the harness counts this marker from captured stderr, so
 # a harness that never spawns the hook still counts zero.
 [ -n "${SOLEUR_HOOK_TRACE:-}" ] && printf 'SOLEUR_HOOK_RAN\n' >&2
+
+# WEB RUNTIME OPT-OUT. The web Concierge loads this plugin's hooks.json through the
+# SDK plugin binding, so this operator-CLI guard ran against end users: its block
+# reason tells the model to write `<stop>OPERATOR-GATE: ...</stop>`, which replaced a
+# CRM question list in the chat bubble. The platform sets this variable in
+# `buildAgentEnv` (apps/web-platform/server/agent-env.ts); it also works as an
+# operator kill switch, mirroring SOLEUR_DISABLE_COMPACTION_HOOKS. Its position is
+# load-bearing: AFTER the trace marker above (the suite counts executions through
+# that stderr line, so an opted-out spawn is still counted as a run) and BEFORE the
+# jq fail-open below (so an opted-out session never depends on jq).
+[[ "${SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK:-0}" == "1" ]] && exit 0
 
 
 # Fail OPEN on every infrastructure problem: this must never be the reason a

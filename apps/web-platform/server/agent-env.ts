@@ -53,6 +53,13 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   DISABLE_AUTOUPDATER: "1",
   DISABLE_TELEMETRY: "1",
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+  // The platform-deployed plugin's hooks.json is loaded into every web session
+  // (`plugins:[{type:"local"}]`; `settingSources:[]` does not exclude it), and the
+  // `unkept-promise-hook.sh` Stop hook is operator-CLI vocabulary whose block reason
+  // made the Concierge write `<stop>OPERATOR-GATE...` over its own reply. It reads
+  // this variable and exits early. Rides the overrides, not the allowlist, so an
+  // ambient value cannot re-enable it. See the ADR-093 amendment (2026-09-30).
+  SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
 } as const);
 
 // Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed

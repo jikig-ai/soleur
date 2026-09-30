@@ -37,24 +37,24 @@ INVOCATION_LOG="$(mktemp -t unkept-inv.XXXXXXXX)"
 export SOLEUR_HOOK_TRACE
 SOLEUR_HOOK_TRACE="$(mktemp -t unkept-sut.XXXXXXXX)"
 trap 'rm -f "$INVOCATION_LOG" "$SOLEUR_HOOK_TRACE"' EXIT INT TERM
-verdict() { # <message> [extra-json] -> BLOCK | ALLOW
+verdict() { # <message> [extra-json] [VAR=value] -> BLOCK | ALLOW
   echo x >> "$INVOCATION_LOG"
-  local msg="$1" extra="${2:-{\}}" out
+  local msg="$1" extra="${2:-{\}}" envkv="${3:-}" out
   # stderr is captured, not discarded, so the SUT's own execution marker can be
   # counted. The marker is what makes the coverage floor measure the subject: a
   # harness that skips the spawn produces none, whatever its own counters say.
   local _err; _err=$(mktemp -t unkept-err.XXXXXXXX)
   out=$(jq -n --arg m "$msg" --argjson e "$extra" '$e + {last_assistant_message:$m}' \
-        | bash "$HOOK" 2>"$_err")
+        | env ${envkv:+"$envkv"} bash "$HOOK" 2>"$_err")
   grep -c '^SOLEUR_HOOK_RAN$' "$_err" 2>/dev/null | grep -qv '^0$' \
     && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
   rm -f "$_err"
   printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1 && echo BLOCK || echo ALLOW
 }
 EXPECT_ROWS=0
-expect() { # <want> <label> <message>
+expect() { # <want> <label> <message> [VAR=value]
   EXPECT_ROWS=$((EXPECT_ROWS + 1))
-  local got; got=$(verdict "$3")
+  local got; got=$(verdict "$3" "{}" "${4:-}")
   [ "$got" = "$1" ] && pass "$2" || fail "$2 (want $1, got $got)"
 }
 
@@ -360,14 +360,28 @@ EXPECT_ROWS=$((EXPECT_ROWS + 1))
 [ "$PARKED_RC" -eq 0 ] \
   && pass "a parked block exits 0 and speaks via stdout JSON, not rc 2" || fail "a parked block exits 0 (got rc=$PARKED_RC)"
 
+echo "=== web runtime opt-out (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK) ==="
+# The web Concierge loads this plugin's hooks.json, so this operator-CLI guard ran
+# against end users and steered the model into writing `<stop>OPERATOR-GATE...`
+# over its own question list. The opt-out must silence the hook in the web runtime
+# WITHOUT touching CLI behaviour: each fixture is a BLOCK without the variable and an
+# ALLOW with it, so an opt-out that neuters the hook for everyone reds the BLOCK row.
+# Two phrasings, so a hook that allows one memorised string is not enough.
+CRM_CLOSING=$'To enter the lead I need:\n- **lastContact**\n- **amount**, with **currency** (required if you give an amount)\n- **expectedCloseDate**\n\nYou can paste everything in one message. I\'ll show you a review before saving, and that review is the only confirmation step.'
+FORM_CLOSING="Implementing the lead form now."
+expect BLOCK "opt-out unset: the CRM question-list closing still blocks (CLI behaviour unchanged)" "$CRM_CLOSING"
+expect ALLOW "opt-out set: the CRM question-list closing is allowed" "$CRM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1"
+expect BLOCK "opt-out unset: a differently-phrased promise still blocks" "$FORM_CLOSING"
+expect ALLOW "opt-out set: a differently-phrased promise is allowed" "$FORM_CLOSING" "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1"
+
 SUT_RUNS=$(wc -l < "$SOLEUR_HOOK_TRACE" 2>/dev/null | tr -d ' ')
 SUT_RUNS=${SUT_RUNS:-0}
 INVOCATIONS=$(wc -l < "$INVOCATION_LOG" 2>/dev/null | tr -d ' ')
 INVOCATIONS=${INVOCATIONS:-0}
-MIN_INVOCATIONS=51
+MIN_INVOCATIONS=55
 # THE SUT-WRITTEN FLOOR, checked FIRST. This is the one a neutered harness cannot
 # satisfy, because only the hook appends to it.
-MIN_SUT_RUNS=51
+MIN_SUT_RUNS=55
 if [ "$SUT_RUNS" -lt "$MIN_SUT_RUNS" ]; then
   printf '[FATAL] coverage: the hook itself ran %s time(s), floor is %s -- the harness is certifying rows it never spawned the SUT for\n' \
     "$SUT_RUNS" "$MIN_SUT_RUNS" >&2
@@ -392,7 +406,7 @@ if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
     "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
   exit 1
 fi
-MIN_EXPECT_ROWS=51
+MIN_EXPECT_ROWS=55
 if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
   printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
     "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
@@ -401,7 +415,7 @@ fi
 echo ""
 echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=66
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
