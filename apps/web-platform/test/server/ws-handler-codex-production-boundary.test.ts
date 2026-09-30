@@ -64,6 +64,8 @@ import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler
 describe("Codex real production handler boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fixture.mode = "api-key";
+    fixture.generation = 0;
     fixture.rpc.mockReset().mockResolvedValue({ data: null, error: null });
     vi.useFakeTimers();
     fixture.from.mockImplementation((table: string) => {

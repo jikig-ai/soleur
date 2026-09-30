@@ -59,3 +59,9 @@ failing unit test: the new Codex history-transfer handler assertion. Its
 annotations also contained expected in-flight migration warnings, which were
 not the failure cause. Use the failed step's test summary, not adjacent
 annotations, to classify a tenant-integration failure.
+
+The next CI run passed the new acknowledgment assertion but failed the
+following abort assertion because that test file's mutable `generation` fixture
+was left at 1. Reset provider mode and generation in `beforeEach`; adjacent
+real-handler tests share the hoisted fixture even though Vitest creates fresh
+test functions.
