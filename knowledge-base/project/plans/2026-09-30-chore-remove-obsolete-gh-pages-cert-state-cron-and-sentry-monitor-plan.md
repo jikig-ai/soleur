@@ -14,6 +14,23 @@ brand_survival_threshold: none
 
 # chore: remove the obsolete cron-gh-pages-cert-state routine and its Sentry monitor
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30
+**Verification passes run:** deepen-plan halt gates 4.6 (user-brand impact), 4.7 (observability), 4.8 (PAT shapes), 4.9/4.11 (no UI surface, no guard deliverable: skipped), 4.10 (skipped: deletion only, no store or connection introduced); live check of every cited issue/PR state; rule-id existence; probe-verb gate and shell-active-byte scan on the `discoverability_test.command`; plus the plan-review panel (DHH, Kieran, code-simplicity, CTO devex lens) and the CTO/CLO/learnings passes recorded under Research Insights.
+
+### Key improvements over the first draft
+
+1. The two-PR rule (#8630) was found and drives the whole shape; the brief's file list (`issue-alerts.tf`) and counts (55/11/44) were corrected against the tree (60/16/44).
+2. An opaque-id consumer the name-keyed grep cannot see was found: the #6178 dedicated-host soak probe pins 52 function UUIDs and refuses on any missing one unless it is in `RETIRED_IDS`. Handled with one post-deploy registry-vs-population comparison, not a pre-merge guess.
+3. Review findings applied: acceptance grep patterns corrected to the real hit set, the RED step reworded to what actually goes red (registry count only), the `discoverability_test` made a positive, rc-0, shell-active-free probe, and PR B's hand-off made self-contained on tracker #9304.
+
+### Verified in this pass
+
+- Cited state: #9304, #7711, #7799, #8595, #6178, #8714 OPEN; #4650, #8630, #6589, #7640 CLOSED; #9071 MERGED (the `RETIRED_IDS` precedent; its test row `C0e` in `inngest-soak-6178.test.sh` is the pattern PR B mirrors — that suite runs longer than two minutes, so run it in the background).
+- The soak population file has exactly 52 non-comment lines (82 total with the header).
+- `probe-verb-gate.sh` accepts the declared probe (`grep`); it contains none of `| ; & < > $` or a backtick.
+
 ## Overview
 
 The daily GitHub Pages certificate poll (`cron-gh-pages-cert-state`) and its Sentry cron monitor

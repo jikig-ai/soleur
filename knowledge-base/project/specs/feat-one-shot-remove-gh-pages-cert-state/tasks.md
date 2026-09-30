@@ -54,7 +54,7 @@ Two PRs (Sentry two-PR rule, #8630). This file covers PR A (this branch); PR B l
 
 - [ ] 7.1 Delete the monitor and its comment block in `cron-monitors.tf`; delete the unrouted entry; remove the temporary `NON_INNGEST_MONITORS` entry.
 - [ ] 7.2 Count ledgers: `infra/sentry/README.md` (two `60` -> 59), `scripts/sentry-monitors-audit.sh` addendum line, `model.c4` (`Of 59 cron monitors, 16 ... and 43 from webapp` plus the ungated `44 Inngest-substrate` phrase -> 43), regenerate `model.likec4.json`.
-- [ ] 7.3 Conditional: `RETIRED_IDS` + a test row in `inngest-soak-6178.sh` / `.test.sh` if #9304's comment names a missing population id; land before `SOAK_STALE` (2026-10-06).
+- [ ] 7.3 Conditional: `RETIRED_IDS` + a test row in `inngest-soak-6178.sh` / `.test.sh` if #9304's comment names a missing population id; mirror #9071's test row `C0e`; that suite runs longer than two minutes, so run it in the background; land before `SOAK_STALE` (2026-10-06).
 - [ ] 7.4 Art. 30 register: append the dated supersession note under the 2026-05-19 sentence; run `bash scripts/lint-legal-registers.sh`.
 - [ ] 7.5 The PR plan must show exactly 1 delete; commit BODY carries a line-anchored `[ack-destroy]`; PR body `Closes #9304`.
 - [ ] 7.6 Post-merge: `apply-sentry-infra.yml` green; next `scheduled-terraform-drift.yml` sentry leg exits 0.
