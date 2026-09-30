@@ -225,6 +225,49 @@ mb20() {
 }
 run_case "MB-20 DROP FUNCTION CASCADE removes WORM attachments -> A24" 1 24 mb20
 
+# -- MB-21: unsupported WORM DDL must fail closed rather than preserve stale state.
+mb21() {
+  printf '\nDROP TRIGGER trg_flag_flip_audit_no_delete ON ONLY public.flag_flip_audit CASCADE;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-21 unsupported DROP TRIGGER form refuses stale-state verdict -> A24" 1 24 mb21
+
+mb22() {
+  printf '\nDROP TABLE public.flag_flip_audit, public.action_sends CASCADE;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-22 multi-table WORM drop fails closed -> A24" 1 24 mb22
+
+mb23() {
+  printf '\nDROP TABLE public.\"flag_flip_audit\" CASCADE;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-23 quoted WORM table drop fails closed -> A24" 1 24 mb23
+
+mb24() {
+  printf '\nDROP TRIGGER trg_flag_flip_audit_no_delete ON public.flag_flip_audit;\nCREATE TRIGGER trg_flag_flip_audit_no_delete BEFORE DELETE ON public.flag_flip_audit FOR EACH ROW WHEN (false) EXECUTE FUNCTION public.flag_flip_audit_no_delete();\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-24 conditional WORM trigger cannot prove event coverage -> A24" 1 24 mb24
+
+mb25() {
+  printf '\nCREATE OR REPLACE FUNCTION public.flag_flip_audit_no_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN OLD; END; $$;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-25 non-blocking replacement WORM function fails -> A25" 1 25 mb25
+
+mb26() {
+  printf '\nDROP FUNCTION public.flag_flip_audit_no_update(), public.flag_flip_audit_no_delete() CASCADE;\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-26 multi-function WORM drop fails closed -> A24" 1 24 mb26
+
+mb27() {
+  printf '\nDROP TRIGGER \"trg_flag_flip_audit_no_delete\" ON public.\"flag_flip_audit\";\n' \
+    >> "$1/$MIGDIR/145_codex_auth_mode_rebind.sql"
+}
+run_case "MB-27 quoted WORM trigger drop fails closed -> A24" 1 24 mb27
+
 # -- MB-11: the gate's own self-test must fire when the replay stops applying
 #    drops. Without this, net-of-drops is vacuous and every predicate the gate
 #    reports may be a superseded one — the exact failure that shipped twice.
@@ -257,7 +300,7 @@ if [[ 2 -ne 0 ]]; then pass "MB-12 exit 2 (no verdict) is distinct from exit 0 (
 # ------------------------------------------------------------------ verdict
 # Floor and summary emit with printf + an explicit exit, never through the
 # pass()/fail() helpers they backstop (ADR-193).
-FLOOR=20
+FLOOR=27
 TOTAL=$((PASSED + FAILED))
 if [[ $TOTAL -lt $FLOOR ]]; then
   printf 'ASSERTION FLOOR: only %d of %d cases executed. A partial run is not a pass.\n' "$TOTAL" "$FLOOR" >&2

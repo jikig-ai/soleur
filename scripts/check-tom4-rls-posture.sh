@@ -419,6 +419,8 @@ drop_function = re.compile(
     r'^\s*DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?'
     r'([a-z_][a-z0-9_]*)\s*\([^;]*\)\s*(?:CASCADE|RESTRICT)?\s*$', re.I | re.S)
 live_worm_triggers = {}
+unmodeled_worm_ddl = []
+conditional_worm_triggers = []
 for migration in MIGRATIONS:
     body = BODY[migration]
     trigger_events = []
@@ -443,6 +445,12 @@ for migration in MIGRATIONS:
                 events = frozenset(event.upper() for event in re.findall(
                     r'\b(INSERT|UPDATE|DELETE|TRUNCATE)\b', event_clause, re.I))
                 covers_all_updates = not re.search(r'\bUPDATE\s+OF\b', event_clause, re.I)
+                if re.search(r'\bWHEN\s*\(', trigger_body, re.I | re.S):
+                    # A conditional trigger does not prove that every matching
+                    # mutation is blocked; treating its event list as universal
+                    # coverage would let WHEN (false) satisfy TOM 7.
+                    conditional_worm_triggers.append((os.path.basename(migration),
+                                                      create_match.group(1)))
                 trigger_events.append((statement.start(), 'create', create_match.group(1),
                                        table_match.group(1), function_match.group(1),
                                        events, covers_all_updates))
@@ -460,6 +468,19 @@ for migration in MIGRATIONS:
             trigger_events.append((statement.start(), 'drop_function',
                                    function_drop_match.group(1), '', None,
                                    frozenset(), False))
+        statement_ddl = statement_body.strip()
+        ddl_kind = re.match(
+            r'^(?:CREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER|DROP\s+TRIGGER|'
+            r'ALTER\s+TABLE\b.*\bTRIGGER\b|DROP\s+TABLE|DROP\s+FUNCTION)\b',
+            statement_ddl, re.I | re.S)
+        if ddl_kind and not (create_match or drop_match or state_match
+                             or table_drop_match or function_drop_match):
+            identifiers = set(re.findall(r'"([^"]+)"|\b([a-z_][a-z0-9_]*)\b',
+                                         statement_ddl, re.I))
+            referenced = {part.lower() for pair in identifiers for part in pair if part}
+            worm_objects = {name.lower() for name in worm_tables | worm_fns}
+            if referenced & worm_objects:
+                unmodeled_worm_ddl.append((os.path.basename(migration), statement_ddl))
     for _, kind, name, table, function, events, covers_all_updates in sorted(trigger_events):
         key = (table.lower(), name.lower())
         if kind == 'drop':
@@ -527,13 +548,34 @@ excluded_worm_attachments = sorted(
     if table in worm_exclusions)
 check("24", attached_worm_fns == worm_fns and not wrong_worm_attachments
       and not missing_worm_events
-      and not excluded_worm_attachments and not disabled_worm_triggers,
+      and not excluded_worm_attachments and not disabled_worm_triggers
+      and not unmodeled_worm_ddl and not conditional_worm_triggers,
       "every defined WORM function has a matching live, enabled trigger for required events",
       "missing functions: %s; unexpected attachments: %s; mismatched table/function pairs: %s; "
       "missing mutation events: %s; excluded tables with WORM attachments: %s; "
-      "disabled WORM triggers: %s"
+      "disabled WORM triggers: %s; unsupported WORM DDL: %s; conditional triggers: %s"
       % (missing_worm_attachments, unexpected_worm_attachments, wrong_worm_attachments,
-         missing_worm_events, excluded_worm_attachments, disabled_worm_triggers))
+         missing_worm_events, excluded_worm_attachments, disabled_worm_triggers,
+         unmodeled_worm_ddl, conditional_worm_triggers))
+
+# A function can stay attached under the expected name while a replacement
+# silently changes it to permit mutation. Replay the last definition body for
+# each WORM function and require executable exception behavior after stripping
+# comments; counting function names alone does not prove that the guard remains.
+function_body_re = re.compile(
+    r'CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z_]+_(?:no_mutate|no_update|no_delete))\s*\([^)]*\)'
+    r'.*?\bAS\s+(\$[a-zA-Z_0-9]*\$)(.*?)\2', re.I | re.S)
+final_worm_bodies = {}
+for function_match in function_body_re.finditer(ALL):
+    final_worm_bodies[function_match.group(1).lower()] = function_match.group(3)
+weak_worm_functions = sorted(
+    function for function in worm_fns
+    if not re.search(r'\bRAISE\s+EXCEPTION\b',
+                     final_worm_bodies.get(function.lower(), ''), re.I))
+check("25", not weak_worm_functions,
+      "the final definition of every WORM function still raises on forbidden mutations",
+      "missing or non-blocking final function bodies: %s — restore explicit exception behavior"
+      % weak_worm_functions)
 
 check("18", all(table in dpa_text for table in worm_exclusions)
       and "outside that WORM set" in dpa_text,
@@ -650,7 +692,7 @@ check("23", not bad22,
 # The floor and the verdict are emitted with sys.stdout.write + an explicit exit
 # code, never through check() — a helper must not be the thing that reports
 # whether the helper ran (ADR-193).
-FLOOR = 24
+FLOOR = 25
 if ASSERTED < FLOOR:
     sys.stderr.write("INSTRUMENT: only %d of %d assertions executed. A partial "
                      "run is not a pass.\n" % (ASSERTED, FLOOR))
