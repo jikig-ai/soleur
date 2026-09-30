@@ -579,6 +579,14 @@ for generate and delete; R0 and R8 are reads and should complete without one. If
 server is unreachable (it was during this planning session), the fallback is the operator opening
 the page, reading the fingerprints into the script's prompt, and making the single click.
 
+**Attempt recorded 2026-09-30 (work phase):** `playwright-attempt: navigated
+https://github.com/organizations/jikig-ai/settings/apps/soleur-ai; reached authenticator-TOTP
+(GitHub sudo-mode "Confirm access", alternatives passkey / GitHub Mobile / email code); the gate
+fires on the settings page itself, so R0 and R8 are gated too, not only generate/delete.`
+Disposition: `operator-only` for the re-authentication alone — the script drives up to it, the
+operator clears it once (sudo mode then lasts a few hours), and the page reads and the single click
+proceed under Playwright.
+
 ## Alternative Approaches Considered
 
 | # | Alternative | Why not |
