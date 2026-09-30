@@ -186,4 +186,116 @@ describe("FileTree upload", () => {
       expect(screen.queryByText("Unsupported file type: .exe")).toBeNull();
     });
   });
+
+  describe("markdown (.md) uploads", () => {
+    const pick = (file: File) => {
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    };
+
+    it("offers .md in the picker accept list, derived from KB_UPLOAD_EXTENSIONS", async () => {
+      const { KB_UPLOAD_EXTENSIONS } = await import("@/lib/kb-constants");
+      renderFileTree();
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const accepted = fileInput.accept.split(",");
+      expect(accepted).toContain(".md");
+      // Pins the derivation: exactly the shared allowlist (existing csv/docx
+      // entries unchanged), nothing duplicated locally.
+      expect([...accepted].sort()).toEqual(
+        KB_UPLOAD_EXTENSIONS.map((e) => `.${e}`).sort(),
+      );
+      for (const e of ["png", "jpg", "jpeg", "gif", "webp", "pdf", "csv", "txt", "docx"]) {
+        expect(accepted).toContain(`.${e}`);
+      }
+    });
+
+    it("fires the upload POST for onboarding-notes.md", async () => {
+      const xhr = mockXhr(201, { path: "assets/onboarding-notes.md", sha: "a", commitSha: "b" });
+      renderFileTree();
+      pick(new File(["# notes"], "onboarding-notes.md", { type: "" }));
+
+      await waitFor(() => {
+        expect(xhr.open).toHaveBeenCalledWith("POST", "/api/kb/upload");
+      });
+      const sent = xhr.send.mock.calls[0][0] as FormData;
+      expect((sent.get("file") as File).name).toBe("onboarding-notes.md");
+      await waitFor(() => expect(mockRefreshTree).toHaveBeenCalled());
+    });
+
+    it("accepts an uppercase extension (NOTES.MD) client-side", async () => {
+      const xhr = mockXhr(201, { path: "assets/NOTES.md", sha: "a", commitSha: "b" });
+      renderFileTree();
+      pick(new File(["# notes"], "NOTES.MD", { type: "text/markdown" }));
+      await waitFor(() => {
+        expect(xhr.open).toHaveBeenCalledWith("POST", "/api/kb/upload");
+      });
+    });
+
+    it("rejects a .md over 1MB client-side without an XHR", async () => {
+      const xhr = mockXhr(201, {});
+      renderFileTree();
+      const big = new File(["x"], "huge-notes.md", { type: "text/markdown" });
+      Object.defineProperty(big, "size", { value: 1024 * 1024 + 1 });
+      pick(big);
+
+      await waitFor(() => {
+        expect(screen.getByText("Markdown files cannot exceed 1MB")).toBeDefined();
+      });
+      expect(xhr.open).not.toHaveBeenCalled();
+    });
+
+    it("does not apply the 1MB cap to non-markdown files (2MB .txt goes through)", async () => {
+      const xhr = mockXhr(201, { path: "assets/big.txt", sha: "a", commitSha: "b" });
+      renderFileTree();
+      const big = new File(["x"], "big.txt", { type: "text/plain" });
+      Object.defineProperty(big, "size", { value: 2 * 1024 * 1024 });
+      pick(big);
+      await waitFor(() => {
+        expect(xhr.open).toHaveBeenCalledWith("POST", "/api/kb/upload");
+      });
+    });
+
+    it.each(["CLAUDE.md", "agents.md", "Skill.MD", "CLAUDE.local.md", "GEMINI.md"])(
+      "refuses reserved instruction file %s client-side",
+      async (name) => {
+        const xhr = mockXhr(201, {});
+        renderFileTree();
+        pick(new File(["x"], name, { type: "text/markdown" }));
+        await waitFor(() => {
+          expect(screen.getByText("Reserved filename")).toBeDefined();
+        });
+        expect(xhr.open).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["md", ".md"])("rejects a file literally named `%s`", async (name) => {
+      const xhr = mockXhr(201, {});
+      renderFileTree();
+      pick(new File(["x"], name, { type: "text/markdown" }));
+      await waitFor(() => {
+        expect(screen.getByText("Unsupported file type: .unknown")).toBeDefined();
+      });
+      expect(xhr.open).not.toHaveBeenCalled();
+    });
+
+    it("still rejects .exe", async () => {
+      const xhr = mockXhr(201, {});
+      renderFileTree();
+      pick(new File(["x"], "virus.exe", { type: "application/x-msdownload" }));
+      await waitFor(() => {
+        expect(screen.getByText("Unsupported file type: .exe")).toBeDefined();
+      });
+      expect(xhr.open).not.toHaveBeenCalled();
+    });
+
+    it("shows the 409 replace dialog naming a .md that collides with an authored doc", async () => {
+      mockXhr(409, { error: "File already exists", code: "DUPLICATE", sha: "authored", path: "assets/readme.md" });
+      renderFileTree();
+      pick(new File(["# mine"], "readme.md", { type: "text/markdown" }));
+      await waitFor(() => {
+        expect(screen.getByText(/readme\.md.*already exists\. Replace\?/)).toBeDefined();
+      });
+      expect(screen.getByText("Replace")).toBeDefined();
+    });
+  });
 });

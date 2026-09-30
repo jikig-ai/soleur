@@ -8,11 +8,17 @@ import { useKb } from "./kb-context";
 import { UploadProgress } from "./upload-progress";
 import type { TreeNode } from "@/server/kb-reader";
 import { classifyByExtension } from "@/lib/kb-file-kind";
+import { fileExtension } from "@/lib/attachment-constants";
+import {
+  KB_MAX_FILE_SIZE,
+  KB_UPLOAD_EXTENSIONS,
+  isReservedKbUploadFilename,
+} from "@/lib/kb-constants";
 
-const ALLOWED_ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.pdf,.csv,.txt,.docx";
-const ALLOWED_EXTENSIONS = new Set([
-  "png", "jpg", "jpeg", "gif", "webp", "pdf", "csv", "txt", "docx",
-]);
+// Derived from the shared allowlist so the picker, the client check and the
+// upload route cannot drift apart.
+const ALLOWED_ACCEPT = KB_UPLOAD_EXTENSIONS.map((e) => `.${e}`).join(",");
+const ALLOWED_EXTENSIONS = new Set<string>(KB_UPLOAD_EXTENSIONS);
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
 function xhrUpload(
@@ -174,9 +180,22 @@ function TreeItem({
     e.target.value = "";
 
     // Client-side validation
-    const ext = file.name.split(".").pop()?.toLowerCase();
+    const ext = fileExtension(file.name);
     if (!ext || !ALLOWED_EXTENSIONS.has(ext)) {
       setUploadState({ status: "error", message: `Unsupported file type: .${ext || "unknown"}` });
+      return;
+    }
+
+    if (isReservedKbUploadFilename(file.name)) {
+      setUploadState({ status: "error", message: "Reserved filename" });
+      return;
+    }
+
+    if (ext === "md" && file.size > KB_MAX_FILE_SIZE) {
+      setUploadState({
+        status: "error",
+        message: `Markdown files cannot exceed ${KB_MAX_FILE_SIZE / 1024 / 1024}MB`,
+      });
       return;
     }
 

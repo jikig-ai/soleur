@@ -774,4 +774,130 @@ describe("POST /api/kb/upload", () => {
       expect(res.status).toBe(201);
     });
   });
+  // .md upload support: an allowlisted extension must survive every KB
+  // guard (lowercased stored name, 1 MB reader cap, reserved instruction
+  // files) — see lib/kb-constants.ts KB_UPLOAD_EXTENSIONS.
+  describe("markdown upload (.md)", () => {
+    const md = (name: string, size = 64, type = "text/markdown") =>
+      new File([new Uint8Array(size).fill(0x61)], name, { type });
+    const upload = (file: File) =>
+      POST(createRequest(createFormData(file, "uploads"), "https://app.soleur.ai"));
+
+    test("accepts onboarding-notes.md and commits it to the KB path", async () => {
+      setupFullMocks();
+      const res = await upload(md("onboarding-notes.md"));
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.path).toBe("knowledge-base/uploads/onboarding-notes.md");
+    });
+
+    test("accepts .md regardless of the browser-reported type (empty / octet-stream)", async () => {
+      for (const type of ["", "application/octet-stream"]) {
+        setupFullMocks();
+        const res = await upload(md("onboarding-notes.md", 64, type));
+        expect(res.status).toBe(201);
+      }
+    });
+
+    test("stores the extension lowercased (NOTES.MD -> NOTES.md)", async () => {
+      setupFullMocks();
+      const res = await upload(md("NOTES.MD"));
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.path).toBe("knowledge-base/uploads/NOTES.md");
+      const [, putPath] = mockGithubApiPost.mock.calls[0];
+      expect(putPath).toMatch(/\/contents\/knowledge-base\/uploads\/NOTES\.md$/);
+      expect(mockGithubApiPost.mock.calls[0][2].message).toBe("Upload NOTES.md via Soleur");
+    });
+
+    test("returns 413 for a .md over the 1 MB reader limit", async () => {
+      setupFullMocks();
+      const res = await upload(md("huge-notes.md", 1024 * 1024 + 1));
+      expect(res.status).toBe(413);
+      const body = await res.json();
+      expect(body.error).toMatch(/1\s?MB/);
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test("accepts a .md at exactly 1 MB", async () => {
+      setupFullMocks();
+      const res = await upload(md("edge-notes.md", 1024 * 1024));
+      expect(res.status).toBe(201);
+    });
+
+    test("the 1 MB cap is .md-only (a 2 MB .txt still uploads)", async () => {
+      setupFullMocks();
+      const res = await upload(md("big-notes.txt", 2 * 1024 * 1024, "text/plain"));
+      expect(res.status).toBe(201);
+    });
+
+    test.each([
+      "CLAUDE.md",
+      "claude.md",
+      "CLAUDE.local.md",
+      "AGENTS.md",
+      "agents.md",
+      "GEMINI.md",
+      "skill.md",
+      "SKILL.MD",
+    ])("refuses reserved instruction file %s with 400", async (name) => {
+      setupFullMocks();
+      const res = await upload(md(name));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/reserved/i);
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test("a reserved basename with a different suffix is not reserved (CLAUDE-notes.md)", async () => {
+      setupFullMocks();
+      const res = await upload(md("CLAUDE-notes.md"));
+      expect(res.status).toBe(201);
+    });
+
+    test("rejects a file literally named `md` (no extension) with 415", async () => {
+      setupFullMocks();
+      const res = await upload(md("md"));
+      expect(res.status).toBe(415);
+    });
+
+    test("rejects a file literally named `.md` (no basename) with 400", async () => {
+      setupFullMocks();
+      const res = await upload(md(".md"));
+      expect(res.status).toBe(400);
+    });
+
+    test("does not treat notes.md.exe / notes.md. as markdown", async () => {
+      for (const name of ["notes.md.exe", "notes.md."]) {
+        setupFullMocks();
+        const res = await upload(md(name));
+        expect(res.status).toBe(415);
+      }
+    });
+
+    test("a duplicate .md still returns the 409 DUPLICATE shape naming the path", async () => {
+      setupFullMocks();
+      mockGithubApiGet.mockResolvedValue({
+        sha: "authored-sha",
+        name: "onboarding-notes.md",
+        path: "knowledge-base/uploads/onboarding-notes.md",
+      });
+      const res = await upload(md("onboarding-notes.md"));
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body).toMatchObject({
+        code: "DUPLICATE",
+        sha: "authored-sha",
+        path: "knowledge-base/uploads/onboarding-notes.md",
+      });
+      expect(mockGithubApiPost).not.toHaveBeenCalled();
+    });
+
+    test(".exe still returns 415", async () => {
+      setupFullMocks();
+      const res = await upload(md("virus.exe", 2, "application/x-msdownload"));
+      expect(res.status).toBe(415);
+    });
+  });
 });
