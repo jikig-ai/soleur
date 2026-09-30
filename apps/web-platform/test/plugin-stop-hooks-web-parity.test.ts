@@ -1,10 +1,11 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, resolve } from "node:path";
 import { buildAgentEnv } from "../server/agent-env";
 import { stripStopGateMarkup } from "../server/stop-gate-markup";
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 // Guard: every plugin Stop hook is classified for the web runtime.
 //
@@ -58,14 +59,9 @@ function stopHookBasenames(): string[] {
 const scratch = mkdtempSync(join(tmpdir(), "stop-hook-parity-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-function cleanGitEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = {};
-  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
-  return env;
-}
 const REPO = join(scratch, "ws");
-spawnSync("mkdir", ["-p", REPO]);
-spawnSync("git", ["init", "-q", REPO], { env: cleanGitEnv() as unknown as NodeJS.ProcessEnv });
+mkdirSync(REPO, { recursive: true });
+spawnSync("git", ["init", "-q", REPO], { env: gitFixtureEnv(REPO) });
 
 // Per-script spawn and SUT-marker counts. Only hooks that write the trace marker
 // (`unkept-promise-hook.sh`) can be counted; `stop-hook.sh` writes none, so its
