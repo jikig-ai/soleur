@@ -24,6 +24,12 @@ Two claims hide inside "make the gate affected-only": whether the *mechanism* ex
 4. **`sleep 45 && cat ...` blocked by the tool guard** — Recovery: waited for the background completion notification instead. Prevention: use the completion notification or Monitor, never chained sleeps.
 5. **Stop hook fired on a closing line that promised a next action** — Recovery: acted in the same turn (asked the scoping question). Prevention: do not end a turn with a first-person commitment while a question or tool call is the actual next step.
 
+6. **Planning-session research claims that were wrong** — a research agent reported the skill description budget 781 words over (the budget test passes; headroom is about zero) and that plugin scripts do not ship unless referenced (`plugins/soleur` ships whole via the marketplace `git-subdir` entry). Recovery: re-derived both (ran the budget test, read the marketplace manifest and an existing `${CLAUDE_PLUGIN_ROOT}/scripts/...` call). Prevention: already covered by "a subagent's COUNT is a claim to re-derive"; no new rule.
+7. **My own "306 selected" claim, found wrong in planning** — `--print-affected-set` prints classes; selection is decided later by the pre-pass. It reached the brainstorm, spec, issue and learning before a research agent's harness refuted it. Recovery: corrected all four artifacts and renamed this learning. Prevention: read the code that produces an output before quoting it as a measurement (the Key Insight above).
+8. **Correction edits left uncommitted after the first push** — the brainstorm/spec/learning corrections and a `git mv` were staged-but-uncommitted while plan artifacts were committed, so a push would have shipped the wrong figure. Recovery: caught by `git status` after the plan commit and committed. Prevention: run `git status --short` after every correction sweep, before the next commit.
+9. **Sharp-edges catalogue exceeded the Read tool's page limit** — the plan skill's "three pages" no longer fit 25k tokens per page (77k tokens over 268 lines); the first attempts failed. Recovery: read in 60-line chunks. Prevention: page by line count (about 60 lines per call) rather than assuming three even pages.
+10. **Plan-review recommended narrowing operator-chosen scope** — five seats advised fewer adapters than the operator chose. Recovery: surfaced as a User-Challenge with the operator's direction as default; the operator kept all four. Prevention: none needed; the classifier routed it correctly.
+
 ## Tags
 
 category: workflow-issues
