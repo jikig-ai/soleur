@@ -2407,10 +2407,14 @@ fsck_advisory_probe() {
 # rollback and roll-forward arms on those globals, and an in-process CANARY_OK=1 would make an aborted
 # wipe `docker start` the app.
 # ============================================================================
-WIPE_IO_CAP="150M"                   # cgroup io.max, per device, on the zero AND the read-back
+# cgroup io.max, per device, on the zero AND the read-back: 150 MB/s, given to systemd as PLAIN BYTES.
+# A suffix is a trap: systemd parses IO*BandwidthMax suffixes in base 1000 (`150M` -> io.max rbps=150000000,
+# measured by loopback LW8 on a real kernel), not the 150*1024*1024 this constant once assumed — and the
+# in-scope gate compares io.max against WIPE_IO_CAP_BYTES exactly, so the two must be ONE number.
+WIPE_IO_CAP_BYTES=150000000
+WIPE_IO_CAP="$WIPE_IO_CAP_BYTES"
 WIPE_HDR_DL="${STATE_DIR}/wipe-header-download.img"
 WIPE_HDR_FRESH="${STATE_DIR}/wipe-header-fresh.img"
-WIPE_IO_CAP_BYTES=157286400          # WIPE_IO_CAP as systemd writes it to io.max (150 * 1024 * 1024)
 # The plaintext was frozen by the 2026-07-23 cutover: run 29995956562's host step ran 09:37:15Z-09:40:41Z
 # (read back with `gh run view 29995956562 --json jobs`), and its flip unmounted the plaintext for the
 # last time. 09:45:00Z leaves a few minutes for host clock skew. W9 refuses a first wipe whose

@@ -1366,7 +1366,7 @@ Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
   that UUID, opens with that passphrase, and is byte-identical to a fresh `luksHeaderBackup` (W5 — a UUID
   survives `luksAddKey`, so a UUID match alone could certify a stale backup).
 - **The zero is proven, not assumed.** `blkdiscard -z` (util-linux >= 2.36 opens O_EXCL; never `-f`)
-  under a 150M cgroup `io.max` cap (not `ionice`, a no-op under `mq-deadline`/`none`), then a full-device
+  under a 150 MB/s cgroup `io.max` cap (plain bytes, `150000000` — systemd reads a `150M` suffix in base 1000) (not `ionice`, a no-op under `mq-deadline`/`none`), then a full-device
   O_DIRECT read-back that `cmp` decides (dd's rc alone never classifies), then no signature, and only
   then `PLAINTEXT_WIPED`. The cap is **proven in force**, not assumed from `systemd-run`'s rc (0 even
   when io.max cannot apply): a gate running inside the scope reads that scope's own `io.max` for the

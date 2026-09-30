@@ -736,7 +736,7 @@ if [[ -f "$SCRATCH/wipe-host.sh" ]]; then
       WORKSPACES_LUKS_BOOT_TOKEN=boot-token-synth DOPPLER_TOKEN=dp-synth PLAINTEXT_SIZE_BYTES=21474836480 \
       LUKS_DEV_ID=106443278 "$@"
   }
-  WIPED="$ROWP result=wiped arm=first_wipe volume_id=105149570 bytes=21474836480 readback=zero io_max=8:32_rbps=157286400_wbps=157286400_riops=max_wiops=max plaintext_only=0"
+  WIPED="$ROWP result=wiped arm=first_wipe volume_id=105149570 bytes=21474836480 readback=zero io_max=8:32_rbps=150000000_wbps=150000000_riops=max_wiops=max plaintext_only=0"
   host_run attached "[workspaces-cutover] zeroing
 $WIPED"
   if [[ "$BODY_RC" == 0 && "$GHOUT" == *"result=wiped"* ]] \
@@ -926,7 +926,7 @@ if [[ -f "$SCRATCH/cutover-run.sh" && -f "$SCRATCH/cutover-env-wipe-rehearsal.tx
   CENV=()
   while IFS= read -r l; do [[ -n "$l" ]] && CENV+=("$l"); done < "$SCRATCH/cutover-env-wipe-rehearsal.txt"
   fx_reset; fx GET "/volumes?name=soleur-web-platform-data-luks" 0 200 '{"volumes":[{"id":106443278,"name":"soleur-web-platform-data-luks"}]}'
-  printf '%s\n' "SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=rehearsal_ok arm=first_wipe volume_id=105149570 uuid=u-1 io_max=8:32_rbps=157286400_wbps=157286400_riops=max_wiops=max plaintext_only=0" > "$SCRATCH/host.out"
+  printf '%s\n' "SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=rehearsal_ok arm=first_wipe volume_id=105149570 uuid=u-1 io_max=8:32_rbps=150000000_wbps=150000000_riops=max_wiops=max plaintext_only=0" > "$SCRATCH/host.out"
   : > "$SCRATCH/env.capture"
   run_body "$SCRATCH/cutover-run.sh" "${CENV[@]}" WEB_HOST_SSH="$BIN/ssh-stub" SSH_HOST_OUT="$SCRATCH/host.out" SSH_ENV_CAPTURE="$SCRATCH/env.capture" \
     INFRA_DIR="apps/web-platform/infra" RO_TOKEN=ro-token-synth

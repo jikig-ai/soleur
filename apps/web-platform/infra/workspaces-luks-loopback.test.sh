@@ -1479,7 +1479,7 @@ fi
 #   LW7  W5 against a REAL header: after `luksAddKey` the escrowed backup keeps the same UUID but is
 #        STALE, and the wipe refuses wipe_header_backup_stale (a UUID match alone would have passed).
 #   LW8  the io.max cap against REAL systemd: the rehearsal's in-scope gate read back the scope's own
-#        io.max line for the loop's MAJ:MIN, carrying rbps=wbps=157286400 (systemd-run's rc alone proves
+#        io.max line for the loop's MAJ:MIN, carrying rbps=wbps=150000000 (systemd-run's rc alone proves
 #        nothing: it starts an uncapped scope when io.max cannot apply).
 #   LW5c W6b against a MOUNTED loop: the real reverse-dependency probe must REFUSE
 #        wipe_target_has_dependents naming the mount unit (the must-refuse direction LW6 cannot show).
@@ -1577,8 +1577,8 @@ else
 fi
 # --- LW8: the io.max cap was IN FORCE in a real scope, read back by the in-scope gate ---------------
 LW8_DEVNUM="$(tr -d '[:space:]' < "/sys/class/block/$(basename "$(readlink -f "$WP_DEV")")/dev")"
-if grep -qE " io_max=${LW8_DEVNUM}_rbps=157286400_wbps=157286400(_|\$| )" "$CASE_OUT"; then
-  ok "LW8 real systemd wrote io.max for the loop's MAJ:MIN ($LW8_DEVNUM) with rbps=wbps=157286400 in the rehearsal's scope, and the gate read it back"
+if grep -qE " io_max=${LW8_DEVNUM}_rbps=150000000_wbps=150000000(_|\$| )" "$CASE_OUT"; then
+  ok "LW8 real systemd wrote io.max for the loop's MAJ:MIN ($LW8_DEVNUM) with rbps=wbps=150000000 in the rehearsal's scope, and the gate read it back"
 else
   no "LW8 the rehearsal's io.max read-back is missing or wrong for $LW8_DEVNUM: $(grep -oE ' io_max=[^ ]*' "$CASE_OUT" | head -1) $(grep -E 'io_cap' "$CASE_OUT" | head -1 | cut -c1-200)"
 fi

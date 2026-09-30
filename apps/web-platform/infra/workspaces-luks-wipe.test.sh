@@ -306,7 +306,8 @@ systemd-escape() {
   printf 'mnt-data.mount\n'
 }
 # systemd-run --scope models what systemd does with IO*BandwidthMax: it writes io.max in the SCOPE's
-# cgroup, for the major:minor of the device the property names, in bytes (150M = 157286400). The SUT's
+# cgroup, for the major:minor of the device the property names, in bytes — a plain number verbatim, a
+# K/M/G suffix in base 1000 (`150M` = 150000000, measured by loopback LW8 on a real kernel). The SUT's
 # in-scope gate then reads that file FOR REAL (the gate text runs in a child bash). W_IOMAX_ABSENT=1 is
 # the measured failure: the io controller is not enabled on the path, systemd logs a warning, the scope
 # starts anyway, and io.max does not exist. W_IOMAX_LINE overrides the line verbatim.
@@ -328,8 +329,9 @@ systemd-run() {
     esac
   done
   dv="${dv%% *}"
-  case "$r" in 150M) r=157286400 ;; esac
-  case "$w" in 150M) w=157286400 ;; esac
+  _w_sd_bytes() { case "$1" in *K) echo $(( ${1%K} * 1000 )) ;; *M) echo $(( ${1%M} * 1000000 )) ;; *G) echo $(( ${1%G} * 1000000000 )) ;; *) echo "$1" ;; esac; }
+  [ "$r" = max ] || r="$(_w_sd_bytes "$r")"
+  [ "$w" = max ] || w="$(_w_sd_bytes "$w")"
   cg="$(sed -n 's/^0:://p' /proc/self/cgroup)"
   dir="$W_CASE_DIR/cgroup$cg"; mkdir -p "$dir"; rm -f "$dir/io.max"
   if [ "${W_IOMAX_ABSENT:-0}" != 1 ] && ! { [ "${W_IOMAX_ABSENT_AT_ZERO:-0}" = 1 ] && [[ " $* " == *" blkdiscard "* ]]; }; then
@@ -589,12 +591,12 @@ fi
 # the gate arguments + the command (the gate text itself sits between them).
 scoped() { awk -v p="$1" -v q="$2" 'index($0, p) == 1 && substr($0, length($0) - length(q) + 1) == q { f = 1 } END { exit !f }' "$CALLS"; }
 P1_CG="$WIPE_SCRATCH/case-$CASE_N/cgroup"
-scoped "systemd-run --scope --quiet -p IOWriteBandwidthMax=$TGT_REAL 150M -p IOReadBandwidthMax=$TGT_REAL 150M bash -c " \
-  " wipe-io-gate $P1_CG 8:32 157286400 157286400 blkdiscard -z -v $TGT_REAL" \
-  && ok "P1b the zero runs inside a scope capped at 150M read AND write on the target, behind the in-scope io.max gate (rbps=wbps=157286400 for the target's MAJ:MIN)" \
+scoped "systemd-run --scope --quiet -p IOWriteBandwidthMax=$TGT_REAL 150000000 -p IOReadBandwidthMax=$TGT_REAL 150000000 bash -c " \
+  " wipe-io-gate $P1_CG 8:32 150000000 150000000 blkdiscard -z -v $TGT_REAL" \
+  && ok "P1b the zero runs inside a scope capped at 150M read AND write on the target, behind the in-scope io.max gate (rbps=wbps=150000000 for the target's MAJ:MIN)" \
   || no "P1b the zero is not wrapped in the gated io.max scope: $(grep -E '^systemd-run .*blkdiscard' "$CALLS" | head -1 | cut -c1-200)"
-scoped "systemd-run --scope --quiet -p IOReadBandwidthMax=$TGT_REAL 150M bash -c " \
-  " wipe-io-gate $P1_CG 8:32 157286400 - dd if=$TGT_REAL iflag=direct bs=4M status=none" \
+scoped "systemd-run --scope --quiet -p IOReadBandwidthMax=$TGT_REAL 150000000 bash -c " \
+  " wipe-io-gate $P1_CG 8:32 150000000 - dd if=$TGT_REAL iflag=direct bs=4M status=none" \
   && hasF "cmp -n $SIZE - /dev/zero" \
   && ok "P1c the read-back is a capped (gated, read cap) O_DIRECT full-device read compared by cmp -n <size> against /dev/zero" \
   || no "P1c the read-back shape drifted (gate / direct IO / cap / cmp -n size): $(grep -E '^(systemd-run .*dd|cmp -n)' "$CALLS" | tr '\n' '|' | cut -c1-240)"
@@ -628,7 +630,7 @@ P2_ROW="$(wrow rehearsal_ok first_wipe)"
 p2_fields=1; p2_missing=""
 for f in "uuid=$UUID_LIVE" "hdr_sha256=" "hdr_bytes=" "label=workspaces_plain" "dependents=0" "holders=0" "device_units=2" \
   "discard_gran=4096" "write_zeroes_max=33554432" "scheduler=mq-deadline" "magic=53ef" "size=$SIZE" \
-  "io_max=8:32_rbps=157286400_wbps=157286400_riops=max_wiops=max" "plaintext_only=0"; do
+  "io_max=8:32_rbps=150000000_wbps=150000000_riops=max_wiops=max" "plaintext_only=0"; do
   [[ "$P2_ROW" == *" $f"* ]] || { p2_fields=0; p2_missing="$p2_missing $f"; }
 done
 if ran && [ -n "$P2_ROW" ] && [ "$p2_fields" = 1 ] && [ "$(zero_calls)" -eq 0 ] && nounk \
@@ -855,10 +857,11 @@ refusal "W7 a dead-man start job is queued" wipe_deadman_armed W_DM_SVC_JOB=4242
 # W8 (impact F1 / quality F1) — the cap is proven IN FORCE by reading the scope's own io.max; systemd-run's
 # rc proves nothing (it starts an uncapped scope when io.max cannot apply — measured, systemd 261).
 refusal "W8 io.max absent in the scope (io controller not enabled: systemd starts the scope uncapped, rc 0)" wipe_io_cap_unavailable W_IOMAX_ABSENT=1
-refusal "W8 io.max carries the cap for ANOTHER device (wrong MAJ:MIN)" wipe_io_cap_unavailable "W_IOMAX_LINE=9:99 rbps=157286400 wbps=157286400 riops=max wiops=max"
-refusal "W8 io.max carries the read cap but no write cap" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=157286400 wbps=max riops=max wiops=max"
-refusal "W8 io.max carries the write cap but no read cap" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=max wbps=157286400 riops=max wiops=max"
+refusal "W8 io.max carries the cap for ANOTHER device (wrong MAJ:MIN)" wipe_io_cap_unavailable "W_IOMAX_LINE=9:99 rbps=150000000 wbps=150000000 riops=max wiops=max"
+refusal "W8 io.max carries the read cap but no write cap" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=150000000 wbps=max riops=max wiops=max"
+refusal "W8 io.max carries the write cap but no read cap" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=max wbps=150000000 riops=max wiops=max"
 refusal "W8 io.max carries a different rate (15M, not 150M)" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=15728640 wbps=15728640 riops=max wiops=max"
+refusal "W8 io.max carries 150 MiB (157286400), the base-1024 reading systemd never writes" wipe_io_cap_unavailable "W_IOMAX_LINE=8:32 rbps=157286400 wbps=157286400 riops=max wiops=max"
 refusal "W8 the target's MAJ:MIN is unreadable from sysfs" wipe_io_cap_unavailable PRE_INV='rm -f "$W_CASE_DIR/sysfs/$TGT_KNAME/dev"'
 run_wipe 'wipe_plaintext' W_IOMAX_ABSENT=1
 w8_row="$(awk -v p="^$WROW result=refused " '$0 ~ p { print; exit }' <<<"$CASE_OUT")"
@@ -1179,6 +1182,6 @@ fi
 echo
 echo "workspaces-luks-wipe.test.sh: $pass passed, $fail failed"
 # PASS FLOOR at the measured count (harness_floor exits through printf, never through no()).
-WIPE_MIN_PASS=142
+WIPE_MIN_PASS=143
 harness_floor workspaces-luks-wipe.test.sh "$WIPE_MIN_PASS"
 [ "$fail" -eq 0 ]
