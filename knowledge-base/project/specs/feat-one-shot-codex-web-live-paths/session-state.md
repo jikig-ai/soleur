@@ -160,3 +160,4 @@
 
 - Pushed head `741646679c` refreshes the canonical privacy-policy SHA. CI on the superseded `bc77a93d` head passed `test-bun` and failed `tc-document-sha-guard` as expected; the RLS/authz-fuzz run independently found the new `record_codex_history_transfer_acknowledgment` and `codex_history_transfer_acknowledged` RPCs missing from the authenticated SECURITY DEFINER classification.
 - Local test changes add both RPCs as tenant-B-versus-tenant-A attacks and seed a real A-owned Codex binding and acknowledgment with an owner positive control, avoiding a vacuous `false` from a missing row. These changes have not been run locally. They need a commit, push, and fresh CI; no shared database was changed.
+- CI on `7bd3d16ce8` then failed while seeding that fixture because engine runs default to generation `0`, which acknowledgments reject. The fixture now explicitly inserts generation `1`; fresh CI is required to verify it.

@@ -114,3 +114,7 @@ RLS fuzz then found the two new authenticated Codex acknowledgment RPCs missing
 from its `ATTACK_SQL` classification. Add real cross-tenant cases and a valid
 Codex binding plus positive acknowledgment fixture; a missing-record `false`
 alone would make these denial checks vacuous.
+
+The first real fixture exposed that `agent_engine_runs` defaults its auth-mode
+generation to zero, which the acknowledgment table correctly rejects. Seed a
+positive generation explicitly before inserting the acknowledgment.

@@ -129,13 +129,14 @@ export async function seedTwoTenant(sql: Sql): Promise<Ctx> {
   await sql`insert into conversations (id, user_id, workspace_id, status, visibility) values
     (${convA}, ${userA}, ${wsA}, 'active', 'workspace'),
     (${convA2}, ${userA}, ${wsA}, 'active', 'workspace')`;
+  const engineAuthModeGenerationA = 1;
   const [engineRun] = await sql<{ id: string; auth_mode_generation: string }[]>`
     insert into agent_engine_runs (
       workspace_id, execution_kind, conversation_id, engine_id, auth_mode,
-      adapter_version, status, created_by
+      auth_mode_generation, adapter_version, status, created_by
     ) values (
       ${wsA}, 'conversation', ${convA}, 'codex', 'managed',
-      'rls-fuzz-fixture', 'queued', ${userA}
+      ${engineAuthModeGenerationA}, 'rls-fuzz-fixture', 'queued', ${userA}
     ) returning id, auth_mode_generation`;
   const [ack] = await sql<{ member_user_id: string }[]>`
     insert into codex_history_transfer_acknowledgments (
