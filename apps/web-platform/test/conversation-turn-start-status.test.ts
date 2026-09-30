@@ -22,7 +22,8 @@
  *      concurrent writer already moved on.
  *   3. `sendUserMessage` (legacy path) writes `{ status: "active",
  *      last_active }` via `updateConversationFor` after its ownership probe
- *      and before the user-message INSERT/dispatch.
+ *      and after message/attachment persistence, immediately before session
+ *      dispatch — same narrow-window contract as the cc flip.
  *   4. `resume_session` / socket bind writes nothing (viewing is not a turn).
  */
 process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
@@ -195,6 +196,12 @@ vi.mock("../server/domain-leaders", () => ({
   ],
 }));
 vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
+vi.mock("../server/byok-resolver", () => ({
+  resolveKeyOwnerThenLease: vi.fn(
+    async (_a: unknown, _b: unknown, cb: (lease: { getRestApiKey: () => string }) => unknown) =>
+      cb({ getRestApiKey: () => "sk-test" }),
+  ),
+}));
 vi.mock("../server/session-sync", () => ({
   syncPull: vi.fn(),
   syncPush: vi.fn(),
@@ -229,12 +236,12 @@ import { createSupabaseMockImpl } from "./helpers/agent-runner-mocks";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function stubRunner(opts: { throw?: unknown } = {}) {
+function stubRunner(opts: { throw?: unknown; activeQuery?: boolean } = {}) {
   return {
     dispatch: vi.fn(async () => {
       if (opts.throw) throw opts.throw;
     }),
-    hasActiveQuery: () => false,
+    hasActiveQuery: () => opts.activeQuery ?? false,
     activeQueriesSize: () => 0,
     reapIdle: () => 0,
     closeConversation: () => {},
@@ -300,6 +307,13 @@ describe("dispatchSoleurGo — turn-start status='active' write", () => {
     expect(active.length).toBeGreaterThanOrEqual(1);
     expect(active[0].convId).toBe("conv-existing");
     expect(active[0].userId).toBe("u-turn-status");
+    // Guard shape pinned asymmetric-to-legacy: expectMatch:false keeps a
+    // mid-setup-deleted row silent-success (no Sentry noise).
+    expect(active[0].options.feature).toBe("cc-dispatcher");
+    expect(active[0].options.op).toBe("turn-start-active");
+    expect(active[0].options.expectMatch).toBe(false);
+    // Success path: NO revert write (a hoisted-revert mutant fails here).
+    expect(callsWithStatus("failed")).toHaveLength(0);
   });
 
   it("the 'active' write lands AFTER setup — a messages-INSERT failure never produces an 'active' write", async () => {
@@ -328,6 +342,22 @@ describe("dispatchSoleurGo — turn-start status='active' write", () => {
     expect(failed[0].options.onlyIfStatusIn).toEqual(["active"]);
     expect(failed[0].options.expectMatch).toBe(false);
     expect(failed[0].convId).toBe("conv-existing");
+  });
+
+  it("skips the revert when a CONCURRENT live cc query owns the row's 'active' (provenance guard)", async () => {
+    // ws-handler fires `chat` per frame without serialization — a parallel
+    // dispatch can throw while a DIFFERENT turn's Query legitimately holds
+    // the row at `active`. `hasActiveQuery` is the authoritative
+    // discriminator: a rejected duplicate must not write `failed` onto the
+    // running turn (review P-finding — a live slot could then be
+    // force-released as orphaned by the ledger recovery).
+    __setCcRunnerForTests(
+      stubRunner({ throw: new Error("dup dispatch"), activeQuery: true }),
+    );
+    await dispatchSoleurGo(ccDispatchArgs());
+
+    expect(callsWithStatus("active")).toHaveLength(1);
+    expect(callsWithStatus("failed")).toHaveLength(0);
   });
 
   it("ownership/auth gate unchanged: the early write still carries last_active + expectMatch", async () => {
@@ -360,6 +390,73 @@ describe("sendUserMessage — turn-start status='active' write", () => {
     expect(write.options.feature).toBe("agent-runner");
     expect(write.options.op).toBe("turn-start-active");
     expect(write.options.expectMatch).toBe(true);
+    // Success path: no 'failed' write leaks from the session result branch.
+    expect(callsWithStatus("failed")).toHaveLength(0);
+  });
+
+  it("covers the tag-and-route branch (domain_leader: null) — the flip fires before the router early-return", async () => {
+    // Without a null-leader case a mutant scoping the flip below the
+    // `!conv.domain_leader` early `return` (~agent-runner.ts:3117) would
+    // silently drop it for tag-and-route conversations and stay green.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "conversations") {
+        const selectChain: Record<string, unknown> = {
+          eq: vi.fn(),
+          single: vi.fn(() => ({
+            data: { domain_leader: null, session_id: null, workspace_id: "ws-test" },
+            error: null,
+          })),
+        };
+        (selectChain.eq as ReturnType<typeof vi.fn>).mockReturnValue(selectChain);
+        return {
+          select: vi.fn(() => selectChain),
+          update: vi.fn(() => {
+            const chain: Record<string, unknown> = {
+              error: null,
+              eq: vi.fn(),
+              select: vi.fn(() => Promise.resolve({ data: [{ id: "mock" }], error: null })),
+            };
+            (chain.eq as ReturnType<typeof vi.fn>).mockReturnValue(chain);
+            return chain;
+          }),
+        };
+      }
+      if (table === "messages") {
+        return {
+          insert: mockMessagesInsert,
+          select: () => {
+            const chain: Record<string, unknown> = {
+              eq: () => chain,
+              order: () => Promise.resolve({ data: [], error: null }),
+              then: (resolve: (v: unknown) => void) =>
+                resolve({ data: [], error: null }),
+            };
+            return chain;
+          },
+        };
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () => ({ data: null, error: null }),
+            maybeSingle: () => ({ data: null, error: null }),
+          }),
+        }),
+        update: () => ({ eq: () => ({ error: null }) }),
+        insert: () => ({ error: null }),
+      };
+    });
+    const { routeMessage } = await import("../server/domain-router");
+    (routeMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      leaders: ["cpo"],
+      source: "router",
+    });
+
+    await sendUserMessage("u-turn-status", "conv-existing", "hello");
+
+    const active = callsWithStatus("active");
+    expect(active.length).toBeGreaterThanOrEqual(1);
+    expect(active[0].options.op).toBe("turn-start-active");
   });
 
   it("a user-message INSERT failure produces no 'active' write (narrow-window parity with the cc path)", async () => {

@@ -4290,17 +4290,34 @@ export async function dispatchSoleurGo(
     // holding the value we set (a concurrent gate-resolve / supersede write
     // wins and is left untouched). Same shape as the legacy
     // `updateConversationStatusIfActive` abort/result path (#3463).
-    await updateConversationFor(
-      userId,
-      conversationId,
-      { status: "failed" },
-      {
-        feature: "cc-dispatcher",
-        op: "turn-start-revert",
-        onlyIfStatusIn: ["active"],
-        expectMatch: false,
-      },
-    );
+    //
+    // Provenance guard (review P-finding): the status-value guard cannot
+    // distinguish "active we just set" from "active a CONCURRENT live turn
+    // set" — ws-handler fires `chat` per frame without serialization, so a
+    // parallel dispatch on the same conversation is reachable. A live Query
+    // is the authoritative discriminator: when `hasActiveCcQuery` reports a
+    // running loop, THIS throw is a rejected duplicate and the row legitimately
+    // belongs to the other turn — `failed` would both lie on the badge and
+    // drop the row out of the orphan-ledger's live-status set (a live slot
+    // could then be force-released as orphaned). Best-effort: a revert
+    // write/mint failure must not mask the primary dispatch error below.
+    if (!hasActiveCcQuery(conversationId)) {
+      try {
+        await updateConversationFor(
+          userId,
+          conversationId,
+          { status: "failed" },
+          {
+            feature: "cc-dispatcher",
+            op: "turn-start-revert",
+            onlyIfStatusIn: ["active"],
+            expectMatch: false,
+          },
+        );
+      } catch {
+        // Mirror already fired inside updateConversationFor for real errors.
+      }
+    }
     const errorClass =
       err instanceof KeyInvalidError
         ? "KeyInvalidError"

@@ -2996,21 +2996,24 @@ export async function sendUserMessage(
   // `chat` message on an existing `completed`/`waiting_for_user`/`failed`
   // conversation IS new activity, but nothing upstream flipped the row back
   // to `active` — the conversations rail rendered the stale terminal badge
-  // for the whole run. Placed after the message/attachment persistence so an
-  // early throw leaves the row at its previous honest value (same
-  // narrow-window contract as dispatchSoleurGo's flip). `expectMatch: true`
-  // mirrors the probe→update deletion race to Sentry without aborting the
-  // turn — status is display-only, the session must proceed regardless.
-  await updateConversationFor(
-    userId,
-    conversationId,
-    { status: "active", last_active: new Date().toISOString() },
-    {
-      feature: "agent-runner",
-      op: "turn-start-active",
-      expectMatch: true,
-    },
-  );
+  // for the whole run. The flip is invoked at each dispatch boundary below —
+  // after `loadConversationHistory`, the last awaited throw-eligible step —
+  // so a persistence/mint failure leaves the row at its previous honest value
+  // (same narrow-window contract as dispatchSoleurGo's flip; a stale-active
+  // row here would idle in the rail for the reaper window). `expectMatch:
+  // true` mirrors the probe→update deletion race to Sentry without aborting
+  // the turn — status is display-only, the session must proceed regardless.
+  const markTurnStarted = () =>
+    updateConversationFor(
+      userId,
+      conversationId,
+      { status: "active", last_active: new Date().toISOString() },
+      {
+        feature: "agent-runner",
+        op: "turn-start-active",
+        expectMatch: true,
+      },
+    );
 
   // Check for an in-memory session with a captured session_id
   const activeSession = getSession(userId, conversationId);
@@ -3076,6 +3079,10 @@ export async function sendUserMessage(
   // routeMessage hits Anthropic with the plaintext apiKey; the lease
   // bounds the in-process heap window for that call too.
   if (!conv.domain_leader) {
+    // Turn-start flip BEFORE the routing try so the branch's own
+    // `handleSessionError` catch reverts it (guarded `failed` via
+    // updateConversationStatusIfActive) on any lease/route failure.
+    await markTurnStarted();
     try {
       // Sentinel sweep site #2 (#4232 PR-A). Routing-side BYOK fetch;
       // workspace resolved against the caller's ACTIVE workspace inside
@@ -3119,6 +3126,7 @@ export async function sendUserMessage(
 
   // Legacy single-leader flow (conversation has explicit domain_leader)
   if (resumeSessionId) {
+    await markTurnStarted();
     // Try SDK resume first; fall back to message replay if it fails
     startAgentSession(
       userId,
@@ -3154,8 +3162,12 @@ export async function sendUserMessage(
       ).catch(handleSessionError);
     });
   } else {
-    // No session to resume — first turn or history-only replay
+    // No session to resume — first turn or history-only replay. The flip is
+    // AFTER loadConversationHistory (the last awaited throw-eligible step in
+    // this branch) — a mint/history failure leaves status untouched instead
+    // of falsely `active`.
     const history = await loadConversationHistory(userId, conversationId);
+    await markTurnStarted();
     const prompt = history.length > 0
       ? buildReplayPrompt(history, augmentedContent)
       : augmentedContent;

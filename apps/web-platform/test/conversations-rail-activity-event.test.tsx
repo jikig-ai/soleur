@@ -40,7 +40,9 @@ const state: {
   rows: Conversation[];
   channels: ChannelMock[];
   rpcCalls: number;
-} = { rows: [], channels: [], rpcCalls: 0 };
+  deferRpcOnCall: number | null;
+  releaseRpc: (() => void) | null;
+} = { rows: [], channels: [], rpcCalls: 0, deferRpcOnCall: null, releaseRpc: null };
 
 function buildChannel(name: string): ChannelMock {
   const ch: ChannelMock = {
@@ -78,7 +80,19 @@ vi.mock("@/lib/supabase/client", () => ({
         return Promise.resolve({ data: null, error: { message: `unexpected rpc: ${name}` } });
       }
       state.rpcCalls += 1;
-      return Promise.resolve({ data: enrichConversationFixtures(state.rows, []), error: null });
+      const body = () => ({
+        data: enrichConversationFixtures(state.rows, []),
+        error: null,
+      });
+      // Hold the Nth call pending so the test can assert loading stays false
+      // while the event refetch is IN FLIGHT (the quiet contract — a post-hoc
+      // loading===false read after completion would be vacuous).
+      if (state.deferRpcOnCall === state.rpcCalls) {
+        return new Promise((resolve) => {
+          state.releaseRpc = () => resolve(body());
+        });
+      }
+      return Promise.resolve(body());
     }),
     from: vi.fn((table: string) => {
       const chain: Record<string, unknown> = {};
@@ -140,6 +154,8 @@ beforeEach(() => {
   state.rows = [];
   state.channels = [];
   state.rpcCalls = 0;
+  state.deferRpcOnCall = null;
+  state.releaseRpc = null;
   vi.stubGlobal(
     "fetch",
     vi.fn((_url: string) =>
@@ -170,7 +186,13 @@ describe("useConversations — CONVERSATION_ACTIVITY_EVENT quiet refetch", () =>
 
     // The server has flipped the row to 'active' (turn-start write); the
     // realtime UPDATE never lands — chat-surface fires the activity signal.
+    // The refetch RPC is held pending so `loading` is observable WHILE the
+    // fetch is in flight — a `background: false` mutation would flip
+    // loading=true here (a post-hoc read after completion cannot see the
+    // flash, so pinning mid-flight is what makes the quiet contract
+    // non-vacuous).
     state.rows = [makeRow({ id: "conv-live", status: "active" })];
+    state.deferRpcOnCall = callsBefore + 1;
     const { CONVERSATION_ACTIVITY_EVENT } = await import("@/hooks/use-conversations");
     await act(async () => {
       window.dispatchEvent(
@@ -179,14 +201,16 @@ describe("useConversations — CONVERSATION_ACTIVITY_EVENT quiet refetch", () =>
         }),
       );
     });
-
-    await waitFor(() => expect(state.rpcCalls).toBeGreaterThan(callsBefore), {
+    await waitFor(() => expect(state.rpcCalls).toBe(callsBefore + 1), {
       timeout: 3000,
+    });
+    expect(view.result.current.loading).toBe(false); // pending fetch, still quiet
+    await act(async () => {
+      state.releaseRpc?.();
     });
     await waitFor(() =>
       expect(view.result.current.conversations[0]?.status).toBe("active"),
     );
-    // Quiet contract: the event refetch never flashed the rail into loading.
     expect(view.result.current.loading).toBe(false);
   });
 

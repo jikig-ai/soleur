@@ -679,16 +679,23 @@ export function ChatSurface({
   // resume-on-view would falsely signal activity — the plan's inverse-lie
   // AC). The rail listener debounces bursts and refetches quietly; the status
   // value stays server-owned.
-  const activitySignalRef = useRef<{
-    streamState: typeof streamState;
-    awaiting: boolean;
-  } | null>(null);
+  //
+  // Ref seeded with the mount-time signal (the codebase's "seed with CURRENT
+  // value" idiom — mount is not a transition, so it must never emit: a
+  // resume-on-view is not activity). The tuple compare suppresses firing on
+  // realConversationId/conversationId-only changes (mid-stream id resolution).
+  // `detail.conversationId` is carried for parity with
+  // CONVERSATION_CREATED_EVENT and future scoped consumers — the current rail
+  // listener intentionally ignores it (the refetch is the whole scoped list).
+  const activitySignalRef = useRef({
+    streamState,
+    awaiting: awaitingUserInput,
+  });
   useEffect(() => {
     const convId = realConversationId ?? conversationId;
     const sig = { streamState, awaiting: awaitingUserInput };
     const prev = activitySignalRef.current;
     activitySignalRef.current = sig;
-    if (prev === null) return; // mount — no transition yet
     if (prev.streamState === sig.streamState && prev.awaiting === sig.awaiting) {
       return;
     }

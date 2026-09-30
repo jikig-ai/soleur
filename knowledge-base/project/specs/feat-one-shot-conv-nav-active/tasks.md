@@ -58,8 +58,25 @@ Branch: `feat-one-shot-conv-nav-active`. Draft PR: #9270. Follow-up: #9293.
   + 116 dispatcher/agent-runner all green:
   `cd apps/web-platform && ./node_modules/.bin/vitest run test/conversation-turn-start-status.test.ts test/conversations-rail-activity-event.test.tsx test/conversations-rail.test.tsx test/conversations-rail-insert.test.tsx test/conversations-rail-connect-race.test.tsx test/conversations-active-repo-scope.test.tsx test/use-conversations-limit.test.tsx test/ws-handler-cc-session-id-wiring.test.ts`
 - 4.2 ✅ Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (clean)
-- 4.3 Browser QA (playwright): open a `completed` conversation in the
-  Concierge, send a message, observe the rail badge flip to `In progress`
-  while `Working…` shows — without leaving the route. Before/after
-  screenshots.
+- 4.3 Browser QA — partial via CDP (Playwright's browser pipe dies ~30 s in
+  under host memory pressure; a raw Chromium+CDP driver works): seeded QA
+  conversation, live DOM verified `Done` → `In progress` in place on the
+  `CONVERSATION_ACTIVITY_EVENT` with no navigation (screenshots
+  /tmp/qa-event-*.png). The full WS send path could NOT run end-to-end —
+  this dev env's tenant-JWT mint (`mintFounderJwt` → generateLink/verifyOtp)
+  fails with RuntimeAuthError:jwt_mint on every WS chat op — pre-existing
+  env defect, unrelated to the diff. Server-side write coverage rests on
+  conversation-turn-start-status.test.ts.
 - 4.4 Re-entry regression: navigate away and back — badge still correct.
+  (Verified: status read is fresh on each mount; the badge showed the
+  server-persisted value on re-entry.)
+- 4.5 Review round (PR #9270): 4-agent panel (security / simplicity /
+  test-design / architecture). Fixed: (a) P2 provenance-blind revert —
+  `hasActiveCcQuery` guard + try/catch so a rejected-duplicate dispatch
+  can't write `failed` onto a concurrent live turn or mask the primary
+  error; (b) P1 emitter coverage — new chat-surface-activity-event.test.tsx
+  (mount-no-emit inverse-lie AC + idle↔streaming + gate transitions);
+  (c) quiet-contract vacuity — deferred-RPC mid-flight `loading===false`
+  pin; (d) domain_leader:null tag-and-route branch coverage; (e) legacy
+  flip moved per-branch (`markTurnStarted`) past `loadConversationHistory`;
+  (f) success-path no-`failed` negatives + cc write option pins.
