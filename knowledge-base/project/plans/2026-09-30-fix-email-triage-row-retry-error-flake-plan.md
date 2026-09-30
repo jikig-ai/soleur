@@ -12,6 +12,20 @@ requires_cpo_signoff: false
 
 # fix: de-flake email-triage-row retry-clears-error test (#9126)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30
+**Sections enhanced:** Root cause (empirical confirmation), Research Insights (deepen gate results)
+**Research agents used:** none spawned — proportionate to a one-file test fix; verification done by instrumented probe, React-source read, and gate greps (the plan-review panel — DHH, Kieran, code-simplicity — already ran and its mechanical findings were applied).
+
+### Key Improvements
+1. The entanglement/ordering claim is now confirmed by a deterministic instrumented probe (not only by reading React source and a load repro): see "Empirical confirmation" below.
+2. AC set trimmed to one deterministic merge gate (AC3 mutation) plus non-gating load evidence (E1, >= 20 runs), per plan-review.
+
+### New Considerations Discovered
+- The stale alert is present at `onChanged` time even on an idle machine; the test passes idle only because RTL's post-`waitFor` drain happens to outlast the settle. The flake is a shrinking of that margin, not an intermittent logic path.
+
+
 Spec lacks valid `lane:` (no spec.md exists for this branch) — defaulted to `cross-domain` (fail-closed).
 
 ## Overview
@@ -27,6 +41,8 @@ The issue's hypothesis ("the retry's re-render hadn't committed before `queryByR
 3. `setActionError(null)` executes in the **synchronous prefix** of the async transition callback, so React 19 assigns it the **transition lane**, and that lane is *entangled with the in-flight async action*. In `react-dom` 19.2.4, `entangleAsyncAction` / `suspendIfUpdateReadFromEntangledAsyncAction` (`node_modules/react-dom/cjs/react-dom-client.development.js`) make a render that reads an entangled-lane update **suspend until the action's promise settles**. So the stale `<p role="alert">` is *not removed at click time*; it is removed only after `asyncFn` returns.
 4. `onChanged()` is called **inside** `asyncFn`, i.e. strictly *before* the action settles. The test's `await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))` therefore passes at a moment when, by construction, the stale alert is still in the DOM.
 5. Whether the test then observes the cleared alert depends on whether the action promise settles and the entangled transition commits inside RTL's post-`waitFor` drain (`asyncWrapper`'s `setTimeout(0)` wave). Idle machine: yes. CPU-starved worker: no. That is the flake.
+
+**Empirical confirmation (deepen pass, idle machine, 3/3 runs, scratch probe deleted afterwards):** a temporary test recorded `document.querySelector('[role="alert"]') !== null` at three instants of the retry. Results, identical on every run: alert present right after the second `fireEvent.click` (`true`), alert present **inside** `onChanged` (`[true]`), alert absent after the following `waitFor` returned (`false`). This proves the ordering deterministically: `onChanged` strictly precedes the alert's removal, so any un-waited absence assertion depends on a drain margin. Working tree confirmed clean after the probe (`git status --short` empty).
 
 **Reproduction (this session, before any fix):** with 40 busy-loop processes on a 16-core host, `npx vitest run --project component test/components/inbox/email-triage-row.test.tsx -t "retry after"` failed **1 of 5** runs with exactly `AssertionError: expected <p role="alert" …(1)></p> to be null`; the 4 others passed. Idle runs pass. This is the harness AC3 reuses.
 
@@ -166,3 +182,4 @@ Skipped: pure test-file change (Files to Edit contains no path under `apps/*/ser
 - Sibling with identical pattern and no equivalent assertion: `apps/web-platform/components/inbox/inbox-item-row.tsx` (no change needed).
 - Stack: react/react-dom 19.2.4, @testing-library/react 16.3.2, vitest 4.1.11; `component` project uses `test/setup-dom.ts` (`vitest.config.ts` projects block).
 - No external research needed (strong local context; no security/payments/API surface).
+- Deepen-plan gates: `## User-Brand Impact` present (threshold `none`, scope-out reason present, no sensitive path); PAT-shaped-variable grep: no matches; cited PRs #5125 and #8904 verified MERGED via `gh pr view`; no AGENTS rule IDs cited in the plan body; UI-wireframe halt not applicable (no UI-surface file in Files to Edit; the file edited is under `apps/web-platform/test/`); Observability halt: the sole edited file is a test file outside the plan Phase 2.9 code/infra trigger set, so no `## Observability` section is required (matches the skip recorded above); no `## Guard Contract` required (the deliverable is an assertion reorder in an existing test, not a new guard/lint/gate); no Encryption Posture / Downtime triggers.
