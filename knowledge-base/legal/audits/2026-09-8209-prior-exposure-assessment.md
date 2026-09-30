@@ -17,6 +17,7 @@ open_limbs: "five, all INCONCLUSIVE, none run in full (one L3 sub-limb run 2026-
 tier_classification: "Tier 1 — an internal assessment record. No public document is edited, no right is narrowed, no processing is added. The mirror/SHA/heading gates are NOT engaged."
 semver: "No TC_VERSION bump."
 addendum_2026_09_28: "The fourth L3 route (§Addendum — 2026-09-28 (#8734)). Hetzner snapshot image 411798619 (web-1 root disk, 2026-07-23) was deleted 2026-09-28T08:01:45Z (DELETE 204, GET 404). Its image-use sub-limb is CLEAN within [2026-07-23T15:34:04Z, 2026-09-28T08:01:45Z]; the `web-probes-read` token-read limb stays INCONCLUSIVE and its value-rotation determination is owed under #9122. L3 as a whole stays INCONCLUSIVE. Determination unchanged: REACHABILITY-ONLY, PROVISIONAL."
+addendum_2026_09_30: "Pointer to the #8609 record (§Addendum — 2026-09-30 (#8609)), conditioned on the merge of PR #9263, which carries it. The soleur-ai RUNTIME key in `soleur/prd` (residual R1) is assessed in `knowledge-base/legal/audits/2026-09-30-8609-runtime-app-key-exposure-assessment.md`, not here. That record's K0 (the App key inventory) must precede this record's O13 App-key delete. Nothing above is amended. Determination unchanged: REACHABILITY-ONLY, PROVISIONAL."
 ---
 
 # CLO assessment — #8209 prior exposure of the `prd_terraform` privileged credentials
@@ -394,3 +395,54 @@ The record stays **REACHABILITY-ONLY** and **PROVISIONAL**. `art_33_triggered` a
 `art_34_triggered` stay `false`. No limb has surfaced evidence of use, so §If the finding flips is
 not engaged. If evidence of use of the image, or of the token, surfaces later, a FRESH 72h
 Art. 33(1) clock runs from awareness of it, as §If the finding flips states.
+
+## Addendum — 2026-09-30 (#8609) — pointer to the runtime-key assessment
+
+**This addendum takes effect on the merge of PR #9263, which carries it.** If that PR closes
+unmerged, this addendum is void and §Conditions / residual actions stands as written. Nothing above
+is amended.
+
+**What this addendum annotates.** The §Conditions / residual actions bullet "RESIDUAL R1 — the
+soleur-ai RUNTIME key is NOT evicted by this work and stays reachable", and in particular its
+sentence that "this record's reachable class applies to the runtime key with no change".
+
+### 1. Where the runtime key's exposure is assessed
+
+The runtime key's prior exposure is assessed in its own dated record,
+`knowledge-base/legal/audits/2026-09-30-8609-runtime-app-key-exposure-assessment.md`, with its own
+evidence limbs K0–K4 and its own index row in `knowledge-base/legal/breach-register.md`. It is not
+assessed here, and this record's L1–L5 do not discharge it.
+
+The sentence quoted above stays true of the **principals**: write collaborators on
+`jikig-ai/soleur`, plus Apps installed on it holding `contents:write`. It does not carry over to
+the **routes** or the **window**. The runtime key sits in the root config `prd`, so every
+`prd`/`prd_*` branch-config repository-secret token and the branch-readable deploy channel reach
+it, and its exposure window may start earlier than this record's. Those differences are why it has
+a record of its own.
+
+### 2. Two ordering constraints this record now shares
+
+- **The #8609 K0 inventory precedes O13's App-key delete.** O13 deletes the `prd_terraform` key's
+  row on the App settings page, and that delete destroys the row's added date. K0 reads every key
+  row, this record's `prd_terraform` key included, so K0 is also the only evidence of when that key
+  was created.
+- **One class enumeration serves both records.** A single dated run of §The reachable class
+  commands, recorded in both files, discharges that part of L1 here and of K1 there. The two run
+  censuses do differ: K1's workflow set is wider. A single census over K1's set covers L1(b)'s set as
+  well, provided each record states the workflow set it relied on.
+
+### 3. One gap in §If the finding flips, recorded rather than corrected
+
+§If the finding flips names Art. 33(1), Art. 33(2) and Art. 34. It does not name the published Data
+Protection Disclosure §7.2 (Platform Breaches), which promises affected Users notice within 72 hours
+"where feasible" of a breach affecting the Web Platform or the repository, with no Art. 33(1) risk
+threshold on its face. If a limb here flips, §7.2 engages alongside Art. 33(2). The #8609 record
+states this in its own §If the finding flips.
+
+### 4. Disposition unchanged
+
+The record stays **REACHABILITY-ONLY** and **PROVISIONAL**. `art_33_triggered` and
+`art_34_triggered` stay `false`. The `GITHUB_APP_PRIVATE_KEY` bullet in §6 of the 2026-09-28
+addendum ("owed under #8209 R5 / R1") stays accurate. The `prd_terraform` key is rotated under this
+record's O13. The runtime key is rotated under the #8609 operator sequence (R1 to R7), and that
+closure is recorded in the #8609 record, not here.

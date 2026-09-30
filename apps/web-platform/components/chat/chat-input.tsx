@@ -10,6 +10,10 @@ import { SpinnerIcon } from "@/components/icons";
 import type { AttachmentRef } from "@/lib/types";
 import type { StreamState } from "@/lib/ws-client";
 import { validateFiles } from "@/lib/validate-files";
+import {
+  ATTACHMENT_ACCEPT,
+  attachmentTileLabel,
+} from "@/lib/attachment-constants";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
 import { safeSession } from "@/lib/safe-session";
 import { detectImagePlaceholders } from "@/lib/image-placeholder-detect";
@@ -497,11 +501,14 @@ export function ChatInput({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragOver(false);
+      // Ignore drops while a send is uploading: handleSubmit is uploading the
+      // staged set, so a late file would sit outside that send.
+      if (isUploading) return;
       if (e.dataTransfer.files.length > 0) {
         validateAndAddFiles(e.dataTransfer.files);
       }
     },
-    [validateAndAddFiles],
+    [validateAndAddFiles, isUploading],
   );
 
   // Clipboard paste handler
@@ -510,6 +517,7 @@ export function ChatInput({
       const files = e.clipboardData.files;
       if (files.length > 0) {
         e.preventDefault();
+        if (isUploading) return; // same reason as handleDrop
         validateAndAddFiles(files);
         return;
       }
@@ -531,8 +539,16 @@ export function ChatInput({
         }
       }
     },
-    [validateAndAddFiles],
+    [validateAndAddFiles, isUploading],
   );
+
+  // The textarea is disabled while a send uploads, which drops focus; give it
+  // back when the upload settles so the user can keep typing.
+  const wasUploadingRef = useRef(false);
+  useEffect(() => {
+    if (wasUploadingRef.current && !isUploading) textareaRef.current?.focus();
+    wasUploadingRef.current = isUploading;
+  }, [isUploading]);
 
   return (
     <div
@@ -555,6 +571,7 @@ export function ChatInput({
             <div
               key={att.id}
               data-testid="attachment-preview"
+              title={att.file.name}
               className="relative flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
             >
               {att.preview ? (
@@ -565,7 +582,8 @@ export function ChatInput({
                 />
               ) : (
                 <div className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary">
-                  PDF
+                  {/* intake canonicalizes file.type (validateFiles), so this label is the extension of the resolved type */}
+                  {attachmentTileLabel(att.file.type)}
                 </div>
               )}
               <div className="flex flex-col">
@@ -612,7 +630,7 @@ export function ChatInput({
 
       {/* Error toast */}
       {attachError && (
-        <div className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+        <div role="alert" className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
           {attachError}
         </div>
       )}
@@ -676,7 +694,7 @@ export function ChatInput({
           ref={fileInputRef}
           type="file"
           multiple
-          accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+          accept={ATTACHMENT_ACCEPT}
           className="hidden"
           onChange={(e) => {
             if (e.target.files) validateAndAddFiles(e.target.files);
@@ -704,7 +722,7 @@ export function ChatInput({
             type="button"
             onClick={handleAtButtonClick}
             disabled={disabled}
-            className="absolute bottom-1 right-0 flex min-h-11 min-w-11 items-center justify-center rounded-md text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
+            className="absolute bottom-1 right-0 flex min-h-11 min-w-11 items-center justify-center rounded-md p-0 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
             aria-label="Mention a leader"
           >
             <span className="text-sm font-medium">@</span>
