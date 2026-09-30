@@ -1359,7 +1359,9 @@ Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
 - **The one property.** `blkdiscard -z` runs on exactly one device, the pinned volume, never the device
   backing `/dev/mapper/workspaces`. The pin (`expected_plaintext_volume_id`) is bound through preflight's
   API classification, the host's by-id path (W1), path + major:minor + holders + mount + size +
-  hypervisor `ID_SERIAL` + the `workspaces_plain` label (W6), every systemd device unit sharing the
+  hypervisor `ID_SERIAL` + the cutover's recorded plaintext mount source `PLAINTEXT_DEV` (W6; the label
+  premise was false — no artifact labels the retained plaintext, corrected 2026-09-30), every systemd
+  device unit sharing the
   target's `SysFSPath` (W6b), the success row the job parses, and the forget's state identity.
   Recoverability of the sole copy is proven at wipe time: the persisted `CANARY_OK` UUID names the live
   header (W3), the escrowed passphrase opens it (W4), and the off-host header object downloads, carries
@@ -1383,7 +1385,8 @@ Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
   `debugfs`) that the live mount lacks (`plaintext_only=`); the approver's ask accounts for each.
 - **Post-wipe rollback is refused permanently** (`outcome=refused_plaintext_wiped`), with or without the
   ack, on either of two witnesses: a persisted wipe marker, or `/mnt/data` on the mapper with the
-  plaintext label gone (the physical witness does not depend on the state file). The check is the first
+  recorded `PLAINTEXT_DEV` invalid, resolving to the mapper, or no longer ext4 (a lost record reads as
+  gone: it refuses). The check is the first
   line of `rollback()` itself, so every caller is covered, and the dead-man fire string carries its own
   self-contained copy. Arming a dead-man stays unreachable on a cut-over host: `prepare_staging_target`
   refuses it first.

@@ -63,7 +63,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 | **Volume id / name** | *(fill — MUST be `105149570` / `soleur-web-platform-data`)* | preflight banner; the `wiped` row's `volume_id` |
 | **Size** | *(fill: GiB and bytes)* | preflight banner; the `wiped` row's `bytes` |
 | **`linux_device` / server** | *(fill — `/dev/disk/by-id/scsi-0HC_Volume_105149570` on `123931471`)* | preflight banner |
-| **`format` / label** | *(fill — `ext4` / `workspaces_plain`)* | preflight banner; the rehearsal row's `label` |
+| **`format` / observed label / recorded mount source** | *(fill — `ext4` / the observed `label` (`none` on web-1: no artifact labelled it) / the `plaintext_dev` the rehearsal row printed, which resolves to `target=`)* | preflight banner; the rehearsal row's `label` and `plaintext_dev` |
 | **Resolved target vs the mapper's backing device** | *(fill: `target=` and `backing=` from the rehearsal row — they MUST differ)* | rehearsal row (W6) |
 | **Holders / dependents / device units** | *(fill: `holders=0 dependents=0 device_units=<n>`)* | rehearsal row (W6, W6b) |
 
