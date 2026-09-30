@@ -81,8 +81,14 @@ locals {
 
 locals {
   rendered = replace(templatefile("${path.module}/../../cloud-init-git-data.yml", {
-    git_data_bootstrap               = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
-    git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
+    git_data_bootstrap = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
+    # (#8211 PR2) The REAL CAS-fence hook ships and installs at birth — the flip's
+    # d6_replace_stale precondition means a replace always precedes the flag write, and a
+    # hook copied out-of-band is reverted to the reject-all placeholder by the next routine
+    # replace (a silent total replication outage). The placeholder's deny-all posture is
+    # preserved in substance: the real hook fail-closed-rejects every non-CAS push, and
+    # before the flag flips no transport credential exists to push with.
+    git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive.sh"), local.git_data_rationale_strip, "")
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
     git_data_provision = replace(file("${path.module}/../../git-data-provision.sh"), local.git_data_rationale_strip, "")

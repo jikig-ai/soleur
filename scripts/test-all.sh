@@ -4391,8 +4391,8 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-rung2-plan-shape" bash tests/scripts/test-git-data-rung2-plan-shape.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
-  # host-key option anywhere in the tree), its mutation harness, and Guard 7 (the
-  # git-data-pin-redeploy.yml tracker that loads a rotated git-data pin into the app).
+  # host-key option anywhere in the tree), its mutation harness, and the track.sh
+  # webhook contract (the same-version redeploy that loads a rotated git-data pin).
   run_suite "tests/scripts/no-tofu-ssh" bash tests/scripts/test-no-tofu-ssh.sh
   run_suite "tests/scripts/no-tofu-ssh-mutation" bash tests/scripts/test-no-tofu-ssh-mutation.sh
   run_suite "tests/scripts/dispatch-web-redeploy" bash tests/scripts/test-dispatch-web-redeploy.sh

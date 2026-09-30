@@ -96,10 +96,10 @@ describe("GitDataHostKeyPinError", () => {
       "git-data: GIT_DATA_SSH_HOST_KEY is malformed — expected exactly one `ssh-ed25519 <base64>` key with no host pattern, marker, comment or newline. Refusing to dial the git-data host.",
     );
     expect(new GitDataHostKeyPinError("pin_absent", { storeEnabled: true }).message).toBe(
-      "git-data: GIT_DATA_SSH_HOST_KEY is unset (GIT_DATA_STORE_ENABLED=true) — refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd; if the secret is already there, the container has not loaded it (re-run git-data-pin-redeploy.yml).",
+      "git-data: GIT_DATA_SSH_HOST_KEY is unset (GIT_DATA_STORE_ENABLED=true) — refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd; if the secret is already there, the container has not loaded it (dispatch git-data-cutover.yml mode=redeploy to re-load it).",
     );
     expect(new GitDataHostKeyPinError("pin_absent", { storeEnabled: false }).message).toBe(
-      "git-data: GIT_DATA_SSH_HOST_KEY is unset (GIT_DATA_STORE_ENABLED is not true) — refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd; if the secret is already there, the container has not loaded it (re-run git-data-pin-redeploy.yml).",
+      "git-data: GIT_DATA_SSH_HOST_KEY is unset (GIT_DATA_STORE_ENABLED is not true) — refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd; if the secret is already there, the container has not loaded it (dispatch git-data-cutover.yml mode=redeploy to re-load it).",
     );
   });
 
