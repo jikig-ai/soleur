@@ -311,7 +311,7 @@
 1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
-26	plugins/soleur/test/regenerate-shard-manifest.test.sh
+45	plugins/soleur/test/regenerate-shard-manifest.test.sh
 13	plugins/soleur/test/scripts-shard-totality-mutations.sh
 1	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
@@ -342,6 +342,7 @@
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
+2	scripts/followthroughs/ci-leg-balance-9232.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
 1	scripts/followthroughs/cwv-field-rum-9178.sh
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
