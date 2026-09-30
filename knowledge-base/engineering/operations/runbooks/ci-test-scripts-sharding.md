@@ -65,23 +65,62 @@ benchmark the lookup, not the parse.
 **Regeneration.**
 
 ```bash
-python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write
-python3 scripts/regenerate-shard-manifest.py --group heavy --run <green-ci-run-id> --write
+python3 scripts/regenerate-shard-manifest.py --runs 5 --write   # median over the last 5 green main runs
+python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write   # single-run override
+python3 scripts/regenerate-shard-manifest.py --group heavy --runs 5 --write
 # INFRA (#8736): the infra table lives at apps/web-platform/infra/suite-shard-legs.tsv.
-# Its run must be a green infra-validation.yml run on main (the suite-timings-infra-N
-# artifacts), and its registered set is `--enumerate`d by run-registered-suites.sh.
-python3 scripts/regenerate-shard-manifest.py --group infra --run <green-infra-run-id> --write
+# Its runs are green infra-validation.yml runs on main (the suite-timings-infra-N
+# artifacts — paths-filtered, so many green runs contribute nothing; --runs
+# skips them). --runs counts SCANNED runs, not contributing ones — for an
+# effective 5-sample median on a sparse group, raise N (e.g. --runs 10).
+python3 scripts/regenerate-shard-manifest.py --group infra --runs 5 --write
 ```
 
 Without `--write` it prints predicted per-leg totals and the incumbent diff.
-`--run` defaults to the latest green `ci.yml` run on `main`; `--timings-dir`
-reads local `suite-timings.tsv` files instead. Sticky-LPT keeps incumbent
-legs within 5% of optimal, so each refresh moves only what balance
-requires. Regenerate when:
+`--runs N` (default 5) aggregates the N most recent green main runs by
+**median** per label — a sustained drift moves a weight, a one-run contention
+spike does not; `--timings-dir` (repeatable — one run per dir) reads local
+`suite-timings.tsv` files instead. Sticky-LPT keeps incumbent legs within 5%
+of optimal, so each refresh moves only what balance requires.
 
-- `scripts-shard-manifest.test.sh` reds (n drift, phantom rows, malformed),
+**Floor rule (#9232).** A registered label absent from every timing input is
+still tabled — at `floor_ms`, the median of the group's measured labels, or
+`DEFAULT_SUITE_MS = 60000` when nothing measured at all (an all-floor,
+count-balanced manifest with a WARN — never a die). Floor rows carry
+`src=floor` in the durations table so a later aggregation re-derives the
+estimate rather than entrenching it as a measurement.
+
+**The durations tables.** The same `--write` emits `suite-durations.tsv`
+(light), `suite-durations-heavy.tsv`, and `apps/web-platform/infra/
+suite-durations.tsv` — `label<TAB>ms<TAB>src` rows, label-sorted, the single
+duration source both consumers read. `--durations <path>` repacks from a
+table instead of fetching; `--durations-out <path>` redirects the write.
+
+**Arbitrary-K emission (`--legs K`, #8231).** The packing can be emitted at
+any leg count for offline consumers — the local parallel scheduler packs W
+host-chosen workers from the committed table with zero `gh` calls:
+
+```bash
+python3 scripts/regenerate-shard-manifest.py \
+  --durations scripts/suite-durations.tsv --legs "$W" \
+  --manifest "$WORK/local-legs.tsv" --write
+# then W workers, each: SCRIPTS_SHARD=k/W \
+#   SOLEUR_SHARD_MANIFEST="$WORK/local-legs.tsv" bash scripts/test-all.sh scripts
+```
+
+`--write` to the group's *committed* manifest with K != the workflow's
+declared leg count is refused (exit 2) — a committed n-mismatch degrades
+every leg to positional while reading as applied. Dry-run or an explicit
+`--manifest` path is the sanctioned K-simulation surface.
+
+Regenerate when:
+
+- `scripts-shard-manifest.test.sh` reds (n drift, phantom rows, malformed —
+  the same lint now covers the durations tables: well-formed rows, `src`
+  enum, keys == sibling manifest keys),
 - the `suite-timings-*` artifacts show one `test-scripts*` leg drifting well
-  past its peers (the probe that auto-reported this retired with issue 8006),
+  past its peers (the post-merge `ci-leg-balance-9232` followthrough probe
+  sweeps this daily once enrolled),
 - a suite was renamed (its old row becomes a phantom; the lint names it).
 
 **Merge conflict on the TSV → regenerate, never hand-merge.** Re-run the
