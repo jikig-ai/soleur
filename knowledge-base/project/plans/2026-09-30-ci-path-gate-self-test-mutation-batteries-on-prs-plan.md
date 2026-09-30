@@ -12,6 +12,27 @@ requires_cpo_signoff: false
 
 <!-- Spec lacks valid lane: -- defaulted to cross-domain (TR2 fail-closed). No spec.md exists for this branch. -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30
+**Gates run:** User-Brand Impact (4.6, threshold `none`), Observability (4.7), PAT-shape (4.8), Guard Contract (4.11, lint green); 4.4/4.55/4.9/4.10 not triggered (no scheduled job, downtime, UI, or persistent store).
+**Agents:** architecture-strategist, spec-flow-analyzer, test-design-reviewer, observability-coverage-reviewer, plus a verify-the-negative sweep (all six negative/existence claims confirmed).
+
+### Key improvements folded in
+
+1. **Trust root named and narrowed.** On a pull_request run the PR's own runner evaluates the PR's own predicate. Added an in-runner canary (Proposed Solution 2b) for the accident class; the adversarial class is a stated residual (CODEOWNERS is not enforced: the CI Required ruleset carries no code-owner review rule, so an entry would be inert).
+2. **Enumerate is never gated.** `--enumerate`/`--enumerate-commands` consumers (shard-totality, linter census, fanout-suite-scope, battery-tag-authorship stream counts) inherit `CI` and `GITHUB_EVENT_NAME` inside PR jobs; the PR arm is inert under `_ENUMERATE==1` (ADR-242 decision 5 precedent) so the enumerate stream stays byte-identical.
+3. **Guard 2 scoped honestly.** cf-tunnel copies `scripts/` and `.github/` wholesale and test-all-affected hardlinks all of `scripts/`: a literal-operand closure would red or force directory prefixes that defeat the gate. Guard 2 checks explicit file operands only and exempts whole-directory/corpus operands through a declared allowlist with reasons (ADR-181's "copy set vs dependencies" precedent).
+4. **test-all-affected is honestly broad.** Its census sandbox hardlinks all of `scripts/`; the measured arm-rate of a `scripts/` prefix is 54% of the last 300 commits, so its saving is the smaller (~46%). Declared by dependency (runner, three libs, the linter, itself), with the copy-set blind spot named in the ADR.
+5. **Escape path and recovery specified.** A break that escapes is caught by the per-SHA push run (which also blocks that SHA's deploy, ADR-217) and the 6-h monitor; the fix PR must widen the declaring array, and that edit is itself a machinery path that arms every battery. `workflow_dispatch` of ci.yml is the documented force-full lever. Bot PRs never run the real legs (synthetic checks), before or after this change.
+6. **Guard suite mechanics specified** (mutate copies in `$TMP` with count==1 scoped substitutions, env isolation, positive `RECORDED_SUITE` assertions, per-battery table, runtime budget) and the matrix rebalanced.
+7. **Follow-through hardened** (escape-rate check, exit-2 on too few runs, merge-SHA-pinned window, gate-touching and bot PRs excluded, directive shape) and the discoverability script made sandbox-safe (falls back to `HEAD` when `origin/main` is absent).
+
+### New considerations discovered
+
+- The ADR-181/ADR-242/ADR-183 statements that become false are more numerous than first listed (see Files to Edit); the `_diff_touches` header and `_suite_affected` FAIL-SAFE comments also assert "CI runs everything".
+- Each new else-arm must also increment `_relevance_declined` (it drives the epilogue's force-all hint).
+
 ## Overview
 
 Pull-request CI runs every registered script suite on every PR, because `_diff_touches` in
@@ -150,6 +171,15 @@ execution; PR #9286 took three full restarts. The binding constraint is runner c
    `scripts/test-all-infra-coverage-notice.test.sh` (`grep -oE '_diff_touches +"?\$\{[A-Z0-9_]+\[@\]'`); each
    gains an optional `( +--pr-gated)?`. The `want` dispatch-floor regex (`_diff_touches +[^#]*\$\{...`) already
    tolerates the flag and counts call sites, not registrations.
+   **2b. Enumerate is never gated; in-runner canary (deepen-plan).** The PR arm is inert when `_ENUMERATE == 1`
+   (`--enumerate` / `--enumerate-commands` answer "what is registered", ADR-242 decision 5), so the enumerate
+   stream that shard-totality, the linter census, fanout-suite-scope and battery-tag-authorship consume stays
+   byte-identical under `CI=1 GITHUB_EVENT_NAME=pull_request`. Before the first gated call on a PR run, a ~8-line
+   canary evaluates the predicate against a fabricated `_diff_names` (one containing `scripts/test-all.sh`, one
+   unrelated); if the machinery name does not return run or the unrelated name does not decline, the runner
+   prints `PR_GATE_CANARY_FAILED` and forces run-all for the rest of the run. This defeats an accidental
+   predicate regression at runtime, not an adversarial coordinated edit (see the trust-root residual in the ADR).
+   Every new else-arm also increments `_relevance_declined` (it drives the epilogue's force-all hint).
 3. **Gate-machinery degrade.** A diff touching `scripts/test-all.sh`, `scripts/lib/test-relevance-paths.sh`,
    `scripts/lib/test-affected-paths.sh`, `.github/workflows/ci.yml` or `scripts/suite-shard-legs*.tsv` arms
    every battery (each array lists them, exactly as the arrays already self-include the predicate file).
@@ -213,8 +243,16 @@ dispatch and the main-health monitor run everything."* Status `active`, `amends:
 ADR-242 (decision 1)`. About one page: the event-discriminator contract and its fail-closed semantics; the
 call-site opt-in (`--pr-gated`); the gated set and the admission rule (a self-test of gate/test machinery whose
 verdict is a property of named files); the coverage split table (event -> runs all / gated); the **named
-residual** (a break in a battery outside its declared subject set surfaces on the merge-SHA push run or the 6-h
-monitor, not on the PR; no merge queue enforced); Alternatives Considered, only those not already rejected in
+residuals** -- (R1) a break in a battery outside its declared subject set surfaces on the merge-SHA push run (which
+also blocks that SHA's deploy, ADR-217) or the 6-h monitor, not on the PR; the remediation PR must widen the
+declaring array, which is itself a machinery path and arms every battery on that PR; no merge queue is enforced;
+`workflow_dispatch` of ci.yml is the force-full lever; (R2) trust root -- a pull_request run executes the PR's own
+runner and predicate, so a coordinated edit of the predicate, the canary and the guard suite is undetectable
+in-repo (the canary covers accidents; CODEOWNERS is inert because the ruleset has no code-owner review rule); (R3)
+blind spots by construction -- a battery whose subject is a whole directory or corpus (cf-tunnel copies `scripts/` and
+`.github/`; test-all-affected hardlinks `scripts/`; the lint battery reads `git ls-files '*.test.sh'`) is declared by
+dependency, not copy set (ADR-181 precedent), so an edit to an undeclared member of such a corpus is an R1 escape;
+(R4) bot PRs carry synthetic checks and never run the real legs, before or after this change; Alternatives Considered, only those not already rejected in
 ADR-181: job-level path filters (required contexts would be unreported), an explicit env flag (the event name is
 already authoritative), adopting the affected classifier wholesale on CI (changes selection of ~500 suites, a
 blast radius the issue does not ask for); the rest cite ADR-181. Create via `soleur:architecture create`.
@@ -253,8 +291,14 @@ measured saving is a follow-through, not an ADR precondition.
 - `scripts/suite-shard-legs.tsv` -- add the new guard suite label (regenerated, not hand-edited).
 - `knowledge-base/engineering/architecture/decisions/ADR-181-local-gate-declines-are-counted-verdicts.md` and
   `ADR-242-the-local-gate-defaults-to-affected-suites-and-always-on-ratchets.md` -- `amended_by` frontmatter +
-  one-paragraph amendment pointing at ADR-262 (the statements that become false: "CI runs everything by
-  construction" / "a decline is UNREACHABLE under CI"; and ADR-242's ALWAYS_ON rationale for the four labels).
+  one-paragraph amendment pointing at ADR-262. Statements that become false (plan-review/deepen verified): ADR-181
+  "a decline is UNREACHABLE under CI" (property 4), "local-run optimisation only ... CI runs everything by
+  construction" (Scope), "CI runs them regardless" (Consequences); ADR-242 "CI keeps the full battery" (decision 1),
+  "the merge gate is unchanged: CI's required `test` runs the full battery on the PR head", "the serial battery still
+  runs on CI" and the accepted-residual bound "CI's full battery on the PR head, which remains the authoritative
+  merge gate"; ADR-183's "no local run is the merge gate" wording; and ADR-242's ALWAYS_ON rationale
+  ("runner-SUT ... whole registration set") for the four labels. The same "CI runs everything" claims in the
+  `_diff_touches` header and the `_suite_affected` FAIL-SAFE comment in `scripts/test-all.sh` are rewritten.
 - `scripts/test-all-group-affected.test.sh`, `scripts/test-all-affected.test.sh`: only if their CI-arm
   assertions (`CI=1` => no decline) need the `GITHUB_EVENT_NAME` unset/non-PR control row; they must not change
   meaning. `.github/workflows/ci.yml` is NOT edited (no binding); confirm with `git diff --stat` at ship.
@@ -264,7 +308,9 @@ measured saving is a follow-through, not an ADR precondition.
 - `scripts/test-all-pr-battery-gate.test.sh` -- the guard suite (Guard 1 matrix below); sandbox git repo with an
   `origin/main` and a PR-shaped branch, driven with `CI=1 GITHUB_EVENT_NAME=pull_request`; registered LAST in its
   block in `scripts/test-all.sh`'s `scripts` group, classified `ALWAYS_ON` (runner-SUT).
-- `scripts/ci-battery-gate-replay.sh` -- <= 30 lines: replays the declared arrays against the last N first-parent
+- `scripts/ci-battery-gate-replay.sh` -- <= 30 lines, read-only, no fetch; falls back to `HEAD` when `origin/main`
+  is absent (preflight Check 10 runs it in a sandbox with the repo read-only) and prints the `run_rate` header
+  unconditionally so the fallback path still satisfies the probe: replays the declared arrays against the last N first-parent
   commits of `origin/main` with one `git log --name-only`, prints `battery<TAB>run_rate` per array. Kept (a
   reviewer recommended cutting it for a pasted one-liner) because it is the `discoverability_test` command that
   must exist in THIS PR's tree (runnable locally, no credentials), it supplies the pre-merge forecast the ADR
@@ -300,7 +346,15 @@ Checked 87 open `code-review` issues against every path in the Files lists (two-
    directory-prefix entry).
 2. Replay (`scripts/ci-battery-gate-replay.sh`, written first) each candidate array against 300 commits; record
    run-rates in the PR and quote ONLY its output in ADR-262.
-3. Precedent grep: how `ci.yml`-adjacent guards parse YAML (only needed if a wire check is reintroduced).
+3. Enumerate-consumer audit: run `CI=1 GITHUB_EVENT_NAME=pull_request bash scripts/test-all.sh --enumerate-commands`
+   on a docs-only fixture branch before and after the change; the output must be byte-identical (the PR arm is
+   inert under `_ENUMERATE`). Run each enumerate consumer (`scripts-shard-totality`, the orphan linter census,
+   `fanout-suite-scope`, `battery-tag-authorship`, and the nine suites that set `CI=1` and invoke the runner)
+   under that env on the docs-only fixture.
+4. Declare test-all-affected's subject set by dependency: `scripts/test-all.sh`, the three libs it copies
+   (`test-relevance-paths.sh`, `test-affected-paths.sh`, `repo-write-boundary.sh`), `scripts/lint-orphan-test-suites.sh`,
+   its own file; record the census sandbox's whole-`scripts/` hardlink copy as the named R3 blind spot. Measured
+   arm-rate of a `scripts/` prefix instead is 54% (163/300) -- the fallback if the dependency set proves unsound.
 
 ### Phase 1 -- Write the matrix first, then RED tests (`cq-write-failing-tests-before`)
 
@@ -344,28 +398,48 @@ test-all-affected) over five arrays, and the `skip_suite` else-arm at each. Memb
 behavioural arm (it drives the real runner with stubbed registrations and counts `[skip]` lines), not by this
 list -- a sixth `--pr-gated` site that the arm does not exercise reds the floor row.
 
-**Mutation matrix.** Each row is an edit that MUST drive the named check RED.
+**Suite mechanics (deepen-plan, test-design review).** The suite never touches the live runner (sibling shards are
+executing it): it copies `scripts/test-all.sh` and `scripts/lib/*` into `$TMP`, applies each mutant to the COPY with a
+block-scoped `sub_once` that asserts exactly one substitution (the five call sites are near-identical, so an
+unscoped `s///` lands on the wrong site), checks the mutant landed with a region-scoped grep and `bash -n`, and
+grades a mutant caught ONLY when it fails its named arm (a syntax-broken mutant reds everything and must not read
+as caught). Every arm runs under `env -u CI -u GITHUB_EVENT_NAME -u TEST_GROUP -u 'SOLEUR_*' -u 'TEST_SHARD*' -u 'GIT_*'`
+then sets exactly what the arm needs; `tc_acquire`/`tc_preamble` are neutered as in the group-affected precedent so a
+sibling-run refusal cannot depend on concurrent sessions; `_diff_detect_ok` is NOT neutered (row 3 would be vacuous).
+Registrations are replaced by a recorder emitting `RECORDED_SUITE:<label>`; every RUN assertion requires that
+positive line exactly once (absence of `[skip]` also describes an rc=4 or an empty selection), with a floor on the
+recorded total, and uses `TEST_GROUP=all` (the batteries span the light and heavy groups). An instrument control
+runs first: the pristine runner must go green on every arm before any mutant is read. Runtime: each mutant runs
+only its discriminating arm, arms run in parallel, and the pristine arm is timed first against a 60 s budget.
 
-| # | Mutation | Must red | Class |
+**Mutation matrix.** Each row is an edit that MUST drive the named check RED. Labels asserted are the SIX
+registration labels (lint `-a` and `-b` emit two `[skip]` lines from one site).
+
+| # | Mutation (applied to the `$TMP` copy) | Must red | Class |
 |---|---|---|---|
-| 1 | Predicate mutated to always-decline under the PR arm | behavioural arm: a diff touching one subject path must RUN that battery | declines-everything |
-| 2 | Predicate mutated to always-run under the PR arm | behavioural arm: a docs-only diff must DECLINE all five with counted `[skip]` lines | vacuous gate (saves nothing) |
-| 3 | Fail-safe arm removed (`_diff_detect_ok` check) | behavioural arm: no `origin/main` ref => all run | undeterminable diff declines |
-| 4 | Event test loosened (honors any non-empty `GITHUB_EVENT_NAME`, or ignores it) | behavioural arm: `push`, `merge_group`, `workflow_dispatch`, `schedule`, unset => all run | gate reaches main / monitor |
-| 5 | Bypass ignores `CI` (PR arm fires with `CI` unset) | behavioural arm: `GITHUB_EVENT_NAME=pull_request` without `CI` => local semantics | local leak |
-| 6 | Gate-machinery path removed from one array (e.g. `test-all.sh` from the lint-orphan array) | behavioural arm: a diff touching only `test-all.sh` must RUN all five | machinery edit declines a battery |
-| 7 | **Lost opt-in:** one call site reverts to bare `_diff_touches` | behavioural arm: PR-event docs-only diff must decline ALL FIVE (the reverted one runs, so the count is 4) | allowlisted battery never gated (replaces a static census) |
-| 8 | `skip_suite` else-arm deleted at one site | `GATED` harness / linter site-4 check | silent absence |
-| 9 | **Dispatch self-check:** guard suite exercises 0 gated sites | floor row (>= 5 sites, >= 5 arrays exercised) reds; "0 checked" is not green | vacuous dispatch |
-| 10 | Rename-only / delete-only diff of a declared SUT path | behavioural arm must RUN | rename/delete slips the predicate |
-| 11 | **Reorder/window:** guard-suite registration moved mid-block | existing `test-all-affected` s1/s2 `ran>0` row reds | positional shard parity |
-| 12 | **Natural repair:** a stuck maintainer edits `test-all.sh` or `ci.yml` to "just make it run" | that edit is itself in every array, so the PR runs all batteries; row 6 asserts the machinery-degrade arm fires on exactly this diff | fail-closed change whose easiest repair re-opens it |
+| 1 | Predicate mutated to always-decline under the PR arm | arm: a diff touching one battery's own file must RUN exactly that battery's labels (and the canary line appears on the mutant) | declines-everything |
+| 2 | Predicate mutated to always-run under the PR arm | arm: docs-only diff must DECLINE all six labels with counted `[skip]` lines | vacuous gate (saves nothing) |
+| 3 | Fail-safe arm removed, for `_diff_detect_ok` AND separately `_diff_head_ok` | arm: no `origin/main` ref / failing `git diff HEAD` => all run | undeterminable diff declines |
+| 4 | Event test loosened (honors any non-empty `GITHUB_EVENT_NAME`, or ignores it) | arm: `push`, `merge_group`, `workflow_dispatch`, `schedule`, unset => all run | gate reaches main / monitor |
+| 5 | Bypass ignores `CI` | arm: `GITHUB_EVENT_NAME=pull_request` with `CI=""` (set-but-empty) and unset => local semantics; `CI=1` with event unset => all run | local leak |
+| 6 | Gate-machinery path removed from ONE array, one mutant per array (five mutants) | arm: a diff touching only `scripts/test-all.sh` must RUN that array's labels | machinery edit declines a battery |
+| 7 | **Lost opt-in:** one call site reverts to bare `_diff_touches`, one mutant per site (five) | arm: PR-event docs-only diff; the reverted site's labels RUN and every other label declines | allowlisted battery never gated |
+| 8 | **Dispatch self-check:** suite exercises 0 gated sites | floor: the site set is DERIVED by grepping `_diff_touches --pr-gated` in the runner and compared by SET EQUALITY with the expected labels (a sixth site the arm does not exercise reds); "0 checked" is not green | vacuous dispatch |
+| 9 | Rename-only / delete-only diff of a declared SUT path; rename below the similarity threshold (delete+add) | arm must RUN | rename/delete slips the predicate |
+| 10 | Enumerate gated: drop the `_ENUMERATE` inertness | arm: `CI=1 GITHUB_EVENT_NAME=pull_request --enumerate-commands` on a docs-only diff emits zero `SUITE_COMMAND_DECLINED` and is byte-identical to the event-unset stream | enumerate consumers break under PR env |
+| 11 | Canary deleted, then predicate mutated to always-decline | arm: the battery must RUN and `PR_GATE_CANARY_FAILED` must print on the always-decline mutant with the canary present; with the canary deleted row 1 reds | canary vacuous |
+| 12 | **Per-battery isolation table:** touch each battery's own file in turn | arm: that battery (only) RUNs, the others decline; covers a typo in any single array | array typo invisible to a one-battery test |
 
-**Harness rows.** (H1) Replace the suite's `pass()` with a no-op: the suite's negative-control arm (a mutant that
-must red) exits non-zero, and an explicit `passed >= floor` line refuses `0 passed, 0 failed`. (H2) Must-PASS,
-non-canonical inputs: a diff touching ONLY `scripts/zot-mirror-diagnosis.sh` (a registry array member that is not
-the canonical SUT) must RUN the registry battery; a docs-only diff must DECLINE; a file whose path merely
-*contains* a subject path as a substring elsewhere must RUN (over-match is the safe direction, documented).
+Rows owned elsewhere (asserted by their existing owners, listed so the contract is complete): `skip_suite` else-arm
+deleted at a site -> `GATED` harness + linter site-4 check; guard-suite registration moved mid-block -> the
+existing `test-all-affected` s1/s2 `ran>0` row; the "natural repair" (editing `test-all.sh` or `ci.yml` to force a
+run) edits a machinery path and so arms every battery on that PR (row 6).
+
+**Harness rows.** (H1) Replace the suite's `pass()` with a no-op: the negative-control arm exits non-zero, and an
+explicit `passed >= floor` line refuses `0 passed, 0 failed`. (H2) Must-PASS, non-canonical inputs: a diff touching
+ONLY `scripts/zot-mirror-diagnosis.sh` (a registry array member that is not the canonical SUT) must RUN the registry
+battery; a docs-only diff must DECLINE; a file whose path merely *contains* a subject path as a substring elsewhere
+must RUN (over-match is the safe direction); a stacked-PR fixture (base branch not `main`) over-includes and RUNs.
 
 **Anchor.** The declared arrays are a stored value compared to the thing they protect (what each battery
 sources); one commit can edit both. What moves outside the commit: Guard 2 derives the closure from the
@@ -380,8 +454,11 @@ site (`if _diff_touches --pr-gated "${X_PATHS[@]}"; then`) and `scripts/lint-orp
 **Property.** For every PR-gated battery, every repo path the battery sources, copies, or invokes is contained
 in its declared array (exactly, or under a directory-prefix entry).
 
-**Assembly.** Quantifies over all PR-gated arrays in `RELEVANCE_ARRAYS` and, per array, over the battery file
-and the files it sources: derived edges via `--print-affected-set` when Phase 0 spike 1 shows it works, else
+**Assembly.** Quantifies over all PR-gated arrays in `RELEVANCE_ARRAYS` and, per array, over the EXPLICIT FILE
+operands of the battery file and the files it sources (whole-directory and corpus operands -- cf-tunnel's
+`cp -a "$REPO_ROOT/scripts"` and `.github`, test-all-affected's `cp -al scripts/.`, the lint battery's
+`git ls-files '*.test.sh'` -- are exempted through a declared allowlist entry with a written reason, per ADR-181's
+"dependencies, not copy sets" rule, and named as ADR-262 residual R3): derived edges via `--print-affected-set` when Phase 0 spike 1 shows it works, else
 `"$REPO_ROOT/<path>"` / `source` literal operands. Members drift; the assembly is the battery's source. Scope
 note: two reviewers recommended cutting this guard; the issue's own risk mitigation ("derive subject paths from
 what each battery actually sources") is the operator's stated direction, so it stays, bounded by the spike and
@@ -412,12 +489,18 @@ battery operand that is a `$TMPDIR` path (not a repo path) is ignored.
       alternatives not already rejected in ADR-181.
 - [ ] With `CI=1 GITHUB_EVENT_NAME=pull_request` and a simulated docs-only diff, each of the five gated call sites
       prints `[skip] <label> (relevance)` and the run exits 0; the BREAKDOWN line counts them. Evidence: the
-      guard suite's behavioural arm plus one real docs-only PR run.
+      guard suite's behavioural arm (pre-merge). A real docs-only PR showing the `[skip]` lines is post-merge
+      evidence (this PR touches `test-all.sh`, so it cannot be that run): the first docs-only PR after merge is
+      checked by `soleur:postmerge`/QA with `gh run view <id> --log | grep -F '[skip]'`, and the follow-through's
+      runner-minute saving cannot hold unless declines occur.
 - [ ] The same diff with `GITHUB_EVENT_NAME` = `push` / `merge_group` / `workflow_dispatch` / `schedule` / unset
       runs every battery; with `CI` unset it behaves as a local run; `--full` and `SOLEUR_TEST_FORCE_ALL=1` run
       every battery.
 - [ ] A diff touching `scripts/test-all.sh`, `scripts/lib/test-relevance-paths.sh`,
       `scripts/lib/test-affected-paths.sh` or `.github/workflows/ci.yml` runs every battery (this PR itself).
+- [ ] Under `CI=1 GITHUB_EVENT_NAME=pull_request` on a docs-only fixture, `--enumerate-commands` is byte-identical to
+      the event-unset stream and every enumerate consumer (shard-totality, linter census, fanout-suite-scope,
+      battery-tag-authorship) is green.
 - [ ] `bash scripts/lint-orphan-test-suites.sh` exits 0, reporting the new arrays in `RELEVANCE_ARRAYS`, the widened
       de-reference anchor, and the Guard 2 closure check over >= 4 batteries;
       `bash scripts/test-all-infra-coverage-notice.test.sh` exits 0 with the widened `RUNNER_ARRAYS` regex.
@@ -430,7 +513,7 @@ battery operand that is a `$TMPDIR` path (not a repo path) is ignored.
 - [ ] `plugins/soleur/test/c4-count-parity.test.sh` green; no `.github/workflows/*.yml` added.
 - [ ] `plugins/soleur/test/scripts-shard-totality.test.sh` and the `shard-totality-mutations` job green;
       `test-all-affected` s1/s2 report `ran>0`.
-- [ ] `scripts/test-all-pr-battery-gate.test.sh` (mutation matrix rows 1-12 + harness rows H1-H2) green and
+- [ ] `scripts/test-all-pr-battery-gate.test.sh` (mutation matrix rows 1-12 + harness rows H1-H2, instrument control first) green and
       every row demonstrably RED against its mutant (evidence: row-by-row output in the PR).
 - [ ] No battery is classified both `ALWAYS_ON` and consumed-edge (orphan linter census green).
 
@@ -467,7 +550,7 @@ battery operand that is a `$TMPDIR` path (not a repo path) is ignored.
 
 - Rename below the similarity threshold (delete+add) of a subject path; delete-only; new file under a subject
   prefix that no array names (must DECLINE -- and is caught by Guard 2 only if a battery sources it);
-  stacked PR (non-main base) over-includes; bot PRs with synthetic checks still run the real legs.
+  stacked PR (non-main base) over-includes (harness row H2). Bot PRs created with `GITHUB_TOKEN` carry synthetic checks and never run the real legs before or after this change (R4); their verification is the push run only.
 
 ### Integration verification (for `soleur:qa`)
 
@@ -500,8 +583,11 @@ error_reporting:
   fail_loud: "a declined battery that would have failed surfaces as a red push-to-main CI run for the merge SHA (per-SHA concurrency, ADR-217) and a red monitor run; an undeterminable diff or non-PR event runs the battery (fails toward coverage)"
 failure_modes:
   - mode: "subject array stale or too narrow -> battery declines forever on PRs"
-    detection: "Guard 2 closure lint in lint-orphan-test-suites; run-rate drift in scripts/ci-battery-gate-replay.sh"
-    alert_route: "red lint-orphan-test-suites suite in required `test` on the PR that introduced the drift"
+    detection: "Guard 2 closure lint in lint-orphan-test-suites (PR-time); run-rate drift in scripts/ci-battery-gate-replay.sh; post-merge, the red merge-SHA push run (workflow run log, `::error::` annotations) or the monitor's ci/main-broken issue"
+    alert_route: "red lint-orphan-test-suites suite in required `test` on the PR that introduced the drift; red push run / ci/main-broken for an escape"
+  - mode: "predicate regression on a PR run (accident class) -> machinery edit declines a battery"
+    detection: "in-runner canary prints PR_GATE_CANARY_FAILED and forces run-all (runner stdout in the job log)"
+    alert_route: "visible in the PR's required `test` job log; guard-suite rows 1 and 11 cover it pre-merge"
   - mode: "discriminator matches a non-PR event -> full backstop silently gated"
     detection: "guard-suite behavioural rows 4-5 (push, merge_group, workflow_dispatch, schedule, unset, CI unset)"
     alert_route: "red required `test` on the PR that edits the predicate"
@@ -509,7 +595,7 @@ failure_modes:
     detection: "merge-SHA push CI run runs all batteries; main-health-monitor every 6 h"
     alert_route: "red push run / ci/main-broken P1 (same channel as a red test today)"
   - mode: "diff undeterminable"
-    detection: "fail-safe arm runs the battery (guard-suite row 3)"
+    detection: "fail-safe arm runs the battery (guard-suite row 3); suite-timings artifacts carry `skip=relevance` rows and the runner's `_relevance_declined` counter (scripts/test-all.sh) for every decline"
     alert_route: "none needed (fails toward coverage); the battery's own [skip] line is absent"
 logs:
   where: "GitHub Actions job logs for ci.yml test-scripts / test-scripts-heavy; suite-timings-scripts-* artifacts record skip=relevance rows"
@@ -521,10 +607,18 @@ discoverability_test:
 
 ### Soak follow-through enrollment
 
-`scripts/followthroughs/pr-battery-gate-saving-9323.sh` exits 0 when, over the first 20 `pull_request` `ci.yml`
-runs after the merge SHA, mean billable runner-minutes per run (sum over `test-scripts*` jobs) is at least 20
-below the pinned pre-change baseline (76 runner-min per run, measured 2026-09-30 on 15 runs, recorded in the
-script header with its producing command) and prints mean `test-scripts` queue wait as informational. Directive
+`scripts/followthroughs/pr-battery-gate-saving-9323.sh` follows the followthrough convention
+(`knowledge-base/engineering/operations/runbooks/followthrough-convention.md`): xtrace-refusal prologue (exit 78),
+no `: "${VAR:?}"` (banned by `scripts/lint-followthrough-varq-ban.sh`), exit 0 = soak holds, 1 = fails, 2 = transient.
+Window pinned to runs whose head is after the merge SHA; excludes cancelled runs, bot PRs (no real legs) and PRs
+that touch any machinery path; needs >= 20 qualifying runs else exit 2 (never a fail). Exit 0 requires (a) mean
+billable runner-minutes per run (sum over `test-scripts*` jobs) at least 20 below the pinned pre-change baseline
+(76 runner-min per run, measured 2026-09-30 on 15 runs, recorded in the script header with its producing command)
+AND (b) the escape-rate check: no `ci.yml` push run for the merge SHA of those PRs is red where the PR run was
+green. Mean `test-scripts` queue wait is printed as informational and never affects the exit code. Failure action:
+the sweeper comments on #9323 and the operator decides between widening arrays and reverting the PR arm. The
+directive's `earliest` is a full ISO timestamp (`YYYY-MM-DDTHH:MM:SSZ`) at column 0 outside any code fence, set
+at ship time to merge + 7 d; the probe must exist in the main checkout before the tracker is annotated. Directive
 on tracker #9323: `earliest=<merge+7d>`, `secrets=GH_TOKEN`; no new secret wiring beyond the sweeper's existing
 `GH_TOKEN`.
 
@@ -584,6 +678,10 @@ correctness axes fired on the guard apparatus, so cuts were preferred to fixes.
 - **Local behaviour change for four suites** (they now decline locally on irrelevant diffs): intentional and
   uniform; `--full` is the lever; ADR-242 amendment records it.
 - **This PR edits the runner**, so it runs every battery (self-proof), and `--affected` degrades to full locally.
+- **Trust root (R2):** a pull_request run executes the PR's own runner and predicate; the canary covers accidents, not a
+  coordinated adversarial edit, and CODEOWNERS is inert (no code-owner review rule in the CI Required ruleset). Named in ADR-262.
+- **test-all-affected saves less than the issue assumes:** its census sandbox hardlinks all of `scripts/`; declared by
+  dependency (saving ~80%) with a measured fallback of a `scripts/` prefix (54% arm-rate, saving ~46%).
 - **Positional shard parity** when registering the guard suite: last-in-block, s1/s2 `ran>0` row.
 
 ## Sharp Edges

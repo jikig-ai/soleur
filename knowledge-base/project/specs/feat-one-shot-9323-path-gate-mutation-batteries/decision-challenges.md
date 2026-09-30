@@ -35,3 +35,15 @@ Three reviewers converged: the reaper already has a declared affected edge set
 (`AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS`), so a second `*_PATHS` array would shadow it. The issue
 lists it as a 100-165 s next-tier suite, not a top-five battery. Deferred with a tracking issue; fold it in after
 the post-merge measurement by reusing the existing array.
+
+## DC-4 -- CODEOWNERS hardening not added; test-all-affected declared by dependency
+
+**Date:** 2026-09-30
+**Classification:** Taste
+
+Deepen-plan architecture review suggested CODEOWNERS entries for the five machinery paths as an out-of-band control
+for the trust-root residual (a PR edits the predicate that gates its own batteries). Not added: the CI Required
+ruleset (`gh api repos/jikig-ai/soleur/rulesets/14145388`) has only a `required_status_checks` rule, so no
+code-owner review is enforced and an entry would be inert. Recorded as residual R2 in ADR-262 instead.
+Separately, test-all-affected's census sandbox hardlinks all of `scripts/`; it is declared by dependency (runner,
+libs, linter, itself), with the measured `scripts/` prefix (54% arm-rate) as the documented fallback.
