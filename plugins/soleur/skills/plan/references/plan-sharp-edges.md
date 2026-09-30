@@ -266,3 +266,4 @@ NEVER CODE! Just research and write the plan.
   - five spelling-based guards (the same class as #9134)
 
   See `knowledge-base/project/learnings/2026-09-28-a-retrying-unit-must-latch-only-full-success-and-undo-what-it-paused.md`.
+- **When one alert rule covers several signals, group by EMISSION CADENCE, not by failure class.** An alert throttle (`frequency_minutes`, a mute window) is per rule per issue group, so a signal emitted once (per boot, per deploy) can be suppressed permanently by a repeating sibling that consumed the window. Give a once-only signal its own rule. **Why:** #9176/PR #9292 — `bootstrap_done_degraded` shared a 120-min throttle with `provision_attempt_failed`, so the common fail-then-degraded sequence left a SQLite-only host silent until its next boot. See `knowledge-base/project/learnings/2026-09-30-one-throttle-over-a-repeating-and-a-once-only-signal-silences-the-once-only-one.md`.
