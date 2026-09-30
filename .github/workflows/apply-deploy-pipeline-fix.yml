@@ -251,6 +251,9 @@ jobs:
         with:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          # #8609: this push delivers the web host's soleur-github-app read token to web-1
+          # (one line of /etc/default/soleur-doppler-token); every other Tier-B job gets "".
+          github-app-runtime-token: true
 
       - name: Verify DOPPLER_TOKEN
         env:

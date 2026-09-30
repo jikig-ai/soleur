@@ -45,6 +45,10 @@ vi.mock("@/server/logger", () => ({
 
 import { POST } from "@/app/api/attachments/presign/route";
 import { validateOrigin } from "@/lib/auth/validate-origin";
+import {
+  ALLOWED_ATTACHMENT_TYPES,
+  ATTACHMENT_EXTENSION_BY_TYPE,
+} from "@/lib/attachment-constants";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -217,7 +221,10 @@ describe("POST /api/attachments/presign", () => {
   });
 
   test("accepts all allowed content types", async () => {
-    const allowedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"];
+    const allowedTypes = [...ALLOWED_ATTACHMENT_TYPES];
+    // Anti-vacuity: the loop must actually cover md + txt.
+    expect(allowedTypes).toContain("text/markdown");
+    expect(allowedTypes).toContain("text/plain");
 
     for (const contentType of allowedTypes) {
       vi.clearAllMocks();
@@ -228,7 +235,7 @@ describe("POST /api/attachments/presign", () => {
         error: null,
       });
 
-      const ext = contentType === "application/pdf" ? "pdf" : contentType.split("/")[1];
+      const ext = ATTACHMENT_EXTENSION_BY_TYPE[contentType];
       const res = await POST(makeRequest({ contentType, filename: `file.${ext}` }));
       expect(res.status).toBe(200);
     }
@@ -303,6 +310,67 @@ describe("POST /api/attachments/presign", () => {
         }),
       );
       expect(res.status).toBe(200);
+    });
+  });
+  describe("markdown / plain-text attachments (server re-resolves the type)", () => {
+    function primeSuccess() {
+      setupAuthenticatedUser();
+      setupConversationOwnership(true);
+      mockCreateSignedUploadUrl.mockResolvedValue({
+        data: { signedUrl: "https://storage.supabase.co/upload/signed/abc123" },
+        error: null,
+      });
+    }
+
+    test.each([
+      ["text/markdown", "2026-01-01-onboarding-notes.md", "md"],
+      ["text/plain", "notes.txt", "txt"],
+      // Old cached clients still send the raw browser-reported type.
+      ["", "a.md", "md"],
+      ["application/octet-stream", "a.md", "md"],
+      ["text/x-markdown", "a.md", "md"],
+      ["application/x-genesis-rom", "a.md", "md"],
+      ["", "NOTES.TXT", "txt"],
+    ])("accepts contentType %j for %j and mints a .%s path", async (contentType, filename, ext) => {
+      primeSuccess();
+      const res = await POST(makeRequest({ contentType, filename }));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.storagePath).toMatch(
+        new RegExp(`^${TEST_USER_ID}/${TEST_CONVERSATION_ID}/[a-f0-9-]+\\.${ext}$`),
+      );
+    });
+
+    test.each([
+      ["application/x-msdownload", "evil.md"],
+      ["text/html", "x.md"],
+      ["text/plain", "x.py"],
+      ["text/plain", "notes"],
+      ["text/plain", "md"],
+      ["application/octet-stream", "virus.exe"],
+    ])("rejects contentType %j for %j with 400 unsupported_file_type", async (contentType, filename) => {
+      primeSuccess();
+      const res = await POST(makeRequest({ contentType, filename }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("unsupported_file_type");
+      expect(mockCreateSignedUploadUrl).not.toHaveBeenCalled();
+    });
+
+    test("a .pdf typed octet-stream is still rejected (the resolver does not widen PDFs)", async () => {
+      primeSuccess();
+      const res = await POST(
+        makeRequest({ contentType: "application/octet-stream", filename: "doc.pdf" }),
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("unsupported_file_type");
+    });
+
+    test("a .md typed text/html with a charset parameter is rejected", async () => {
+      primeSuccess();
+      const res = await POST(
+        makeRequest({ contentType: "text/html;charset=utf-8", filename: "x.md" }),
+      );
+      expect(res.status).toBe(400);
     });
   });
 });

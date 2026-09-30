@@ -504,6 +504,8 @@ unconditionally.
 | `SOLEUR_COMPACTION_COUNT_THRESHOLD` | `2` | Automatic compactions in one session window before a fresh session is recommended. `1` recommends on the first; a high value effectively never recommends. `0` and any non-numeric value fall back to the default — `0` reads as "off" to most people, and honouring it literally would mean "recommend always", so use the kill switch above instead |
 | `SOLEUR_COMPACTION_CLI_VERSION` | derived from `claude --version` | Pins the CLI version stamped into the directive, for drift attribution |
 
+`SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1` makes the `unkept-promise-hook.sh` Stop hook exit immediately. The web platform sets it for every agent session (`AGENT_ENV_OVERRIDES` in `apps/web-platform/server/agent-env.ts`) because that hook speaks operator vocabulary a chat user must not see; an operator can export it as a kill switch. Only the exact value `1` opts out.
+
 ### Harness support
 
 The compaction lifecycle is a Claude Code API. The other three harnesses

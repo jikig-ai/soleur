@@ -14,9 +14,14 @@ import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import path from "path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
-import { KB_UPLOAD_EXTENSIONS } from "@/lib/kb-constants";
+import {
+  KB_MAX_FILE_SIZE,
+  KB_UPLOAD_EXTENSIONS,
+  isReservedKbUploadFilename,
+} from "@/lib/kb-constants";
 import {
   MAX_AGENT_READABLE_PDF_SIZE,
+  fileExtension,
   isPdfAttachment,
 } from "@/lib/attachment-constants";
 import { verifiedUserId } from "@/server/request-auth";
@@ -136,7 +141,7 @@ export async function POST(request: Request) {
   }
 
   // Validate filename
-  const { valid: nameValid, sanitized: sanitizedName, error: nameError } =
+  const { valid: nameValid, sanitized: rawSanitizedName, error: nameError } =
     sanitizeFilename(file.name);
   if (!nameValid) {
     return NextResponse.json(
@@ -146,11 +151,37 @@ export async function POST(request: Request) {
   }
 
   // Validate extension
-  const ext = sanitizedName.split(".").pop()?.toLowerCase();
+  const ext = fileExtension(rawSanitizedName);
   if (!ext || !ALLOWED_EXTENSIONS.has(ext)) {
     return NextResponse.json(
       { error: `Unsupported file type: .${ext || "unknown"}` },
       { status: 415 },
+    );
+  }
+
+  // Store a markdown extension lowercased: kb-reader and classifyByExtension
+  // are case-sensitive, so `NOTES.MD` would otherwise render as a dead
+  // download. Other types keep their existing stored name. `ext` is the text
+  // after the last dot, so the slice is exact.
+  const sanitizedName =
+    ext === "md"
+      ? `${rawSanitizedName.slice(0, -ext.length)}${ext}`
+      : rawSanitizedName;
+
+  // Reserved instruction files (CLAUDE.md, AGENTS.md, ...) are auto-loaded by
+  // agent CLIs; a co-member must not be able to drop one into the shared KB.
+  if (isReservedKbUploadFilename(sanitizedName)) {
+    return NextResponse.json({ error: "Reserved filename" }, { status: 400 });
+  }
+
+  // Markdown is read whole by kb-reader, which skips files over
+  // KB_MAX_FILE_SIZE — refuse what could never be rendered.
+  if (ext === "md" && file.size > KB_MAX_FILE_SIZE) {
+    return NextResponse.json(
+      {
+        error: `Markdown files cannot exceed ${KB_MAX_FILE_SIZE / 1024 / 1024}MB`,
+      },
+      { status: 413 },
     );
   }
 
@@ -219,6 +250,17 @@ export async function POST(request: Request) {
     );
   }
 
+  // The KB PATCH/DELETE endpoints refuse to modify markdown (authored docs are
+  // edited elsewhere), so an upload must not be a way around that: a markdown
+  // file may be CREATED here, never REPLACED. No `sha` is honoured for it, and
+  // an existing file is a plain conflict with no overwrite offered.
+  if (ext === "md" && sha) {
+    return NextResponse.json(
+      { error: "Markdown files cannot be replaced through upload" },
+      { status: 400 },
+    );
+  }
+
   try {
     // If no sha provided, check if file exists (duplicate detection)
     if (!sha) {
@@ -227,6 +269,17 @@ export async function POST(request: Request) {
           userData.github_installation_id,
           `/repos/${owner}/${repo}/contents/${urlFilePath}`,
         );
+        // Markdown: refuse without offering an overwrite (no sha in the body).
+        if (ext === "md") {
+          return NextResponse.json(
+            {
+              error: "A markdown file with this name already exists",
+              code: "DUPLICATE_PROTECTED",
+              path: filePath,
+            },
+            { status: 409 },
+          );
+        }
         // File exists — return 409 with sha for client to use for overwrite
         return NextResponse.json(
           {

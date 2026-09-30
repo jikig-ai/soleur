@@ -22,6 +22,9 @@ locals {
 
   # --- local.webhook_doppler_token_env — the full rationale for soleur-doppler-token.tmpl ---
   #
+  # #8609: the .tmpl carries NO comment lines at all any more (its two-line pointer header moved
+  # here) — the web render had ~28 B of CI headroom once #9169's ghcr deny and the token line landed.
+  #
   # THE PROSE LIVES HERE, NOT IN THE .tmpl, AND THAT IS DELIBERATE. The rendered file is injected
   # verbatim into cloud-init `user_data`, which is base64gzip'd against a hard 32,768-byte Hetzner
   # cap. A comment in the template is therefore not free — the first draft carried ~3.8 KB of
@@ -93,12 +96,72 @@ locals {
 
   doppler_token_shape_ok = nonsensitive(can(regex("^dp\\.(st|sa|pt|ct)\\.[A-Za-z0-9._-]+$", var.doppler_token)))
 
-  webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
-    doppler_token        = var.doppler_token
-    sentry_ingest_domain = local.sentry_dsn_parts.host
-    sentry_project_id    = local.sentry_dsn_parts.project
-    sentry_public_key    = local.sentry_dsn_parts.key
+  # --- #8609 / ADR-241 D10: the web host's read token for the isolated soleur-github-app project ---
+  #
+  # ONE CONDITIONAL LINE in the template above, not a separate file: the render already feeds
+  # fresh-host cloud-init (hcloud provider 1.63.0 keeps only a hash of user_data in state — census
+  # row G6l pins that version) and deploy_pipeline_fix's SOLEUR_DOPPLER_TOKEN_B64 push to web-1, and
+  # the installer already admits any KEY=VALUE line in /etc/default/*. A separate file would need new
+  # FILE_MAP/hooks/installer entries (each re-fires infra_config_handler_bootstrap on web-1) and could
+  # not be removed without SSH. The `~` strip markers make an EMPTY variable render the file
+  # byte-identical to its pre-#8609 content, so rollback is "set the Tier-B value empty and bump
+  # the github_app_runtime_token_generation literal in deploy_pipeline_fix's trigger" — no SSH. The push's TRIGGER hashes the keyless render
+  # only (see webhook_doppler_token_env_keyless below).
+  #
+  # The line is NOT exported to the container: ci-deploy.sh reads it into a local and overlays exactly
+  # one name (GITHUB_APP_PRIVATE_KEY) from the isolated project (Phase 3 of the #8609 plan).
+  #
+  # SHAPE GATE ON THE RENDER, NOT ON ONE CONSUMER: the same string feeds both delivery paths, so the
+  # precondition sits on BOTH terraform_data.deploy_pipeline_fix and hcloud_server.web. Service
+  # tokens only (`dp.st.`, R2 mints one); the class excludes whitespace, CR, '#' and '=' for the same
+  # EnvironmentFile reason as doppler_token_shape_ok. nonsensitive() is applied to the boolean, never
+  # to the token (census row G6c admits exactly this nonsensitive(can(regex(...))) form).
+  #
+  # NON-EMPTY IS REQUIRED ONLY WHERE THE TOKEN IS DELIVERED. Every job but the three opted-in ones
+  # (census G6q) gets the variable EMPTY by design: the Tier-A PR plan, the drift job, and the push
+  # apply, which pulls hcloud_server.web in through -target=cloudflare_record.app. Requiring
+  # non-empty on the resource graph would fail every one of those plans the day PR-B flips
+  # local.github_app_key_isolated. So the requirement keys on var.github_app_runtime_token_delivered,
+  # a NON-secret flag the infra-credentials loader exports as "true" only in a job that opted in.
+  # PR-B is then a pure flip of github_app_key_isolated. A keyless push from a context that did NOT
+  # opt in is refused at apply time instead, by the guard provisioner on deploy_pipeline_fix.
+  github_app_key_isolated = false
+  github_app_token_shape_ok = nonsensitive(can(regex(
+    local.github_app_key_isolated && var.github_app_runtime_token_delivered ? "^dp\\.st\\.[A-Za-z0-9._-]{20,}$" : "^(dp\\.st\\.[A-Za-z0-9._-]{20,})?$",
+    var.github_app_runtime_doppler_token,
+  )))
+
+  # THE deploy_pipeline_fix TRIGGER NEVER SEES THE TOKEN (census row G6o). The trigger hashes the
+  # render WITHOUT the key-read line: the same template with the token forced empty, which is
+  # byte-identical to the pre-#8609 file. Hashing the real render made the trigger differ between
+  # the opted-in apply (token present) and every other plan (token ""), so after R3 the drift job
+  # and the Tier-A PR plan would have planned a replace forever. The token itself still rides only
+  # in the provisioner's environment {} (SOLEUR_DOPPLER_TOKEN_B64, the full render below).
+  #
+  # DELIVERY THEREFORE KEYS ON A COMMITTED GENERATION, not on the token: the literal
+  # "github_app_runtime_token_generation=N" element of that trigger. Bump N in a PR to (re)deliver the
+  # line to web-1: first delivery (runbook R3), a rotation of the read token, or its rollback to
+  # empty. server.tf is in apply-deploy-pipeline-fix.yml's paths filter, so the merge fires the
+  # opted-in push. (A literal, not a local: ship-deploy-pipeline-fix-gate.test.ts resolves every
+  # local.* in that trigger to a templatefile() source file.)
+  webhook_doppler_token_env_keyless = templatefile("${path.module}/soleur-doppler-token.tmpl", {
+    doppler_token            = var.doppler_token
+    sentry_ingest_domain     = local.sentry_dsn_parts.host
+    sentry_project_id        = local.sentry_dsn_parts.project
+    sentry_public_key        = local.sentry_dsn_parts.key
+    github_app_doppler_token = ""
   })
+
+  webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
+    doppler_token            = var.doppler_token
+    sentry_ingest_domain     = local.sentry_dsn_parts.host
+    sentry_project_id        = local.sentry_dsn_parts.project
+    sentry_public_key        = local.sentry_dsn_parts.key
+    github_app_doppler_token = var.github_app_runtime_doppler_token
+  })
+  # Whether this context's render carries the key-read line: the deploy_pipeline_fix keyless-push
+  # guard reads it. A boolean about the render, never the render (census row G6c's admitted form).
+  github_app_render_keyed = nonsensitive(can(regex("(?m)^GITHUB_APP_DOPPLER_TOKEN=.", local.webhook_doppler_token_env)))
 
   # Fresh-host bootstrap assets baked into var.image_name and extracted by cloud-init.yml
   # at first boot (#5921). These 22 scripts + hooks.json.tmpl were REMOVED from cloud-init
@@ -500,6 +563,13 @@ resource "hcloud_server" "web" {
   # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-143 + moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
+
+    # #8609 — a fresh host's cloud-init carries the same credential render as deploy_pipeline_fix;
+    # rationale at local.github_app_token_shape_ok.
+    precondition {
+      condition     = local.github_app_token_shape_ok
+      error_message = "github_app_runtime_doppler_token (Tier B, soleur-infra-privileged GITHUB_APP_RUNTIME_DOPPLER_TOKEN) must be empty or a Doppler service token matching ^dp.st.[A-Za-z0-9._-]{20,}$ with no newline, and non-empty once local.github_app_key_isolated is true in a job that delivers it (var.github_app_runtime_token_delivered, the loader opt-in) (#8609). A fresh web host would otherwise boot with a malformed or missing key-read line. The value is deliberately NOT shown: it is a live credential."
+    }
   }
 
   labels = {
@@ -848,7 +918,36 @@ resource "terraform_data" "private_nic_guard_install" {
   }
 }
 
+# #9169 — the ghcr.io hosts-file deny for the RUNNING web hosts (ADR-096 amendment 2026-09-30).
+# ghcr_deny_sh is a byte copy of the registry's runcmd entry (cloud-init-registry.yml) and of the
+# web cloud-init runcmd[1] entry that covers fresh/replaced hosts; web-ghcr-deny.test.sh asserts all
+# three are identical and that both consumers below hash AND run these locals in a dedicated,
+# secret-free, last remote-exec block. Consumers: zot_consumer_probe_install (web-1) and
+# deploy_pipeline_fix_web2 (web-2). The assertion is the POSITIVE form (non-empty AND only the
+# sinkhole), so an unresolvable name cannot pass vacuously. No dollar-brace or percent-brace in
+# either heredoc: both must render literally.
+locals {
+  ghcr_deny_sh        = <<-EOT
+    for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
+      [ -f "$f" ] || continue
+      for h in ghcr.io pkg-containers.githubusercontent.com; do
+        grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
+      done
+    done
+  EOT
+  ghcr_deny_assert_sh = <<-EOT
+    for h in ghcr.io pkg-containers.githubusercontent.com; do
+      a=$(timeout 10 getent ahosts "$h" | awk '{print $1}' | sort -u)
+      if [ -z "$a" ] || printf '%s\n' "$a" | grep -qvxE '0\.0\.0\.0|::'; then
+        echo "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run rerun --failed." >&2
+        exit 1
+      fi
+    done
+  EOT
+}
+
 # §1 zot consumer serviceability probe.
+# Also carries the ghcr.io hosts-file deny for web-1 (#9169; web-ghcr-deny.test.sh).
 resource "terraform_data" "zot_consumer_probe_install" {
   # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
   depends_on = [terraform_data.journald_persistent]
@@ -861,6 +960,8 @@ resource "terraform_data" "zot_consumer_probe_install" {
     local.zot_probe_repo,
     # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
+    local.ghcr_deny_sh,
+    local.ghcr_deny_assert_sh,
   ]))
 
   connection {
@@ -899,6 +1000,16 @@ resource "terraform_data" "zot_consumer_probe_install" {
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
       "systemctl list-timers web-zot-consumer-probe.timer --no-pager",
+    ]
+  }
+  # #9169 ghcr.io deny: its own LAST block, secret-free. A sensitive value in a provisioner's config
+  # suppresses all of its output (the FATAL would be hidden) and a failed run leaves its script in
+  # /root; running after the token block also means a deny failure never blocks the probe delivery.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      local.ghcr_deny_sh,
+      local.ghcr_deny_assert_sh,
     ]
   }
 }
@@ -1755,6 +1866,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
       condition     = local.doppler_token_shape_ok
       error_message = "doppler_token must be a Doppler token matching ^dp.(st|sa|pt|ct).[A-Za-z0-9._-]+$ with no whitespace, CR, '#' or '=' — it is rendered into a systemd EnvironmentFile on a host that cannot be replaced, and a malformed value bricks the deploy channel (#7095). The offending value is deliberately NOT shown: it is a live credential."
     }
+    # #8609 — the same gate hcloud_server.web carries; rationale at local.github_app_token_shape_ok.
+    precondition {
+      condition     = local.github_app_token_shape_ok
+      error_message = "github_app_runtime_doppler_token (Tier B, soleur-infra-privileged GITHUB_APP_RUNTIME_DOPPLER_TOKEN) must be empty or a Doppler service token matching ^dp.st.[A-Za-z0-9._-]{20,}$ with no newline (write it with tr -d '\\n', runbook R2), and non-empty once local.github_app_key_isolated is true in a job that delivers it (var.github_app_runtime_token_delivered, the loader opt-in) (#8609). The value is deliberately NOT shown: it is a live credential."
+    }
   }
 
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
@@ -1885,7 +2001,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # happened at 11:19:30.614Z) does not update prd_terraform, so even a scheduled apply would
     # re-push the same stale value. Closing that is a follow-up (a schedule: on this workflow
     # plus a liveness probe); do not read this line as more than it is.
-    local.webhook_doppler_token_env,
+    #
+    # #8609 — the KEYLESS render plus the committed generation, never the delivered render: this
+    # value must be identical in every plan context, opted in or not (rationale and census row
+    # G6o at the webhook_doppler_token_env_keyless local).
+    local.webhook_doppler_token_env_keyless,
+    "github_app_runtime_token_generation=0",
     # #7095 — the two drop-ins re-pointing the generated units (vector, inngest-heartbeat) at
     # the credential above. Plain repo files, so file()-hashed normally; registering them here
     # is what makes a body-only edit re-fire the push and actually reach the host.
@@ -1903,6 +2024,17 @@ resource "terraform_data" "deploy_pipeline_fix" {
   # base64-encoded file payloads to /hooks/infra-config; the webhook handler
   # (infra-config-apply.sh) writes them atomically on the host.
   #
+  # #8609 — KEYLESS-PUSH GUARD, apply time only. Once PR-B flips local.github_app_key_isolated, a
+  # replace of this resource from a context that did NOT opt in to the token (an operator-local
+  # apply; the plan-time precondition cannot stop it without failing every non-opt-in PLAN) would
+  # push a credential file without the key-read line and silently strip web-1's key source. This
+  # runs before the push below, only when the resource is (re)created, and refuses. The condition
+  # is a boolean about the render (the admitted nonsensitive(can(regex(...))) form), never the
+  # token; before PR-B it is the no-op `true`.
+  provisioner "local-exec" {
+    command = local.github_app_key_isolated && !local.github_app_render_keyed ? "echo 'REFUSED (#8609): github_app_key_isolated is true but this apply has no GITHUB_APP_RUNTIME_DOPPLER_TOKEN, so the push would strip web-1 key-read line. Run apply-deploy-pipeline-fix.yml (it opts in); never apply this resource locally.' >&2; exit 1" : "true"
+  }
+
   # Sensitive values are passed via the environment {} block (Terraform >=1.0
   # accepts sensitive values here but refuses to interpolate them into the
   # command string).
@@ -1955,11 +2087,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # delivered (they only POINT units at the credential file, which exists from birth).
 #
 # Sentinel string at the end forces re-creation when the inline remote-exec list itself
-# changes; bump the suffix in lockstep with any inline edit. The host-id entry re-fires on
+# changes; bump the suffix in lockstep with any inline edit. (#9169 added no bump: its two
+# new triggers_replace elements move the hash by themselves.) The host-id entry re-fires on
 # web-2 replacement (cattle), re-delivering the full set post-boot.
 #
 # Scope boundary (named so it does not read as an omission): this resource covers the
-# deploy-pipeline FILE_MAP set only. docker_seccomp_config and apparmor_bwrap_profile stay
+# deploy-pipeline FILE_MAP set, plus ONE non-file duty: the #9169 ghcr.io hosts-file
+# deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
+# web-ghcr-deny.test.sh). docker_seccomp_config and apparmor_bwrap_profile stay
 # web-1-only — a seccomp-bwrap.json/apparmor profile merge still leaves web-2 birth-frozen
 # on those files until #7103's wider pass. Same for the CI ssh pubkey: a
 # DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf but not web-2's
@@ -1990,6 +2125,8 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     file("${path.module}/10-inngest-server-doppler-token.conf"),
     file("${path.module}/10-inngest-redis-doppler-token.conf"),
     hcloud_server.web["web-2"].id,
+    local.ghcr_deny_sh,
+    local.ghcr_deny_assert_sh,
     file("${path.module}/web-2-ssh-host-key.pub"),
     "dpf-web2-remote-exec-v1",
   ]))
@@ -2171,6 +2308,16 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       # running webhook is sub-second; the assert catches a dead one).
       "systemctl try-restart webhook",
       "test \"$(systemctl is-active webhook)\" = 'active'",
+    ]
+  }
+  # #9169 ghcr.io deny: LAST and secret-free (the block above references local.hooks_json, whose
+  # sensitive webhook secret would suppress this block's FATAL), and after the webhook restart so a
+  # deny failure can never leave the new hooks.json / webhook.service unloaded.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      local.ghcr_deny_sh,
+      local.ghcr_deny_assert_sh,
     ]
   }
 }
