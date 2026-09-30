@@ -43,7 +43,8 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
   (part 1), and the registry host boots zot from a pinned release asset with ghcr.io denied
   (part 2). See the two "Amendment 2026-09-28 (#8714 step 5.3b-iii, …)" sections. 5.4 is done
   (#9071). The web hosts deny ghcr.io as well (2026-09-30, #9169; see "Amendment 2026-09-30
-  (#9169)"); bridge-network containers are the remaining gap (#9275).
+  (#9169)"); bridge-network containers and the `docker.pkg.github.com` alias are the remaining
+  gaps (#9275).
 
 This ADR flips to **accepted** (task 5.6) when 5.3b-iii and 5.4 are also complete (5.3b-i is done).
 
@@ -1817,16 +1818,18 @@ The registry host's deny (part 2 above) now covers both web hosts, with the same
 `ghcr_blocked` semantics.
 
 - **Three copies, one text.** The registry's runcmd entry (copy R) is copied byte for byte into
-  `cloud-init.yml` as runcmd[1], right after the #6090 trap arm (fresh and replaced hosts), and into
-  `server.tf` `local.ghcr_deny_sh` (the running hosts). `web-ghcr-deny.test.sh` asserts all three
-  are identical and the G1 census admits the deny line only as part of a whole entry equal to it.
-- **Delivery route: an in-place Terraform re-provision, not a replace.** web-1 cannot be replaced
-  (`apply-deploy-pipeline-fix.yml`'s recovery text: cx33, 0/6 stock, and `-replace` destroys
-  first). web-1 gets the deny from `terraform_data.zot_consumer_probe_install`
-  (`apply-web-platform-infra.yml`); web-2 from `terraform_data.deploy_pipeline_fix_web2`
-  (`apply-deploy-pipeline-fix.yml`). web-2 could be replaced under ADR-148, but the same apply
-  already re-fires its deploy-pipeline delivery, so a replace would add a destroy-first host cycle
-  for no extra property. Both resources hash the deny and its assertion in `triggers_replace` and
+  `cloud-init.yml` as runcmd[1], right after the #6090 trap arm (copy A: fresh and replaced
+  hosts), and into `server.tf` `local.ghcr_deny_sh` (copy B: the running hosts).
+  `web-ghcr-deny.test.sh` asserts all three are identical on both `web_tunnel_connector` render
+  arms, and the G1 census admits the deny line only as part of a whole entry equal to it.
+- **Delivery route: an in-place Terraform re-provision, not a replace.** web-1 cannot be replaced:
+  ADR-148 refuses it by name (§"web-1 is refused by name"), and a `-replace` also destroys first
+  on a server type with no guaranteed stock. web-1 gets the deny from
+  `terraform_data.zot_consumer_probe_install` (`apply-web-platform-infra.yml`); web-2 from
+  `terraform_data.deploy_pipeline_fix_web2` (`apply-deploy-pipeline-fix.yml`). web-2 could be
+  replaced under ADR-148, and a replace would add one thing: a live boot proof of copy A. It was
+  declined because copy A is proven offline by `web-ghcr-deny.test.sh` and a replace adds a
+  destroy-first host cycle; copy A's first live boot is the next web-host replace. Both resources hash the deny and its assertion in `triggers_replace` and
   run them in a separate, last, secret-free `remote-exec` block: a sensitive value in a
   provisioner's config hides its output, and a failed run leaves its script in `/root`. The web-1
   route retires with active-active Phase 5 (ADR-143); copy A is the end state.
@@ -1834,7 +1837,9 @@ The registry host's deny (part 2 above) now covers both web hosts, with the same
   `0.0.0.0` / `::`. Otherwise it prints `FATAL: … (#9169). Route back: …` and fails the apply. An
   unresolvable name fails it too.
 - **Per-release field, not a heartbeat.** No periodic web heartbeat reaches both running hosts.
-  `ci-deploy.sh` is the one host script both routes deliver, so it logs
+  `ci-deploy.sh` is the one host script `apply-deploy-pipeline-fix.yml` delivers to both hosts
+  (web-1 through the `deploy_pipeline_fix` webhook push, web-2 through `deploy_pipeline_fix_web2`;
+  on web-1 the marker and the deny therefore arrive through different workflows), so it logs
   `GHCR_DENY ghcr_blocked=<1|0|unknown>` after `DEPLOY_SCRIPT_SHA` on every invocation. The
   classifier matches the registry's, probes `ghcr.io` only, and fails open (`timeout 5`). The
   evidence is as old as the last release. `pkg-containers.githubusercontent.com` is proven at
@@ -1844,10 +1849,20 @@ The registry host's deny (part 2 above) now covers both web hosts, with the same
   containers (the app, agent sandboxes) are NOT covered: they resolve through DNS, and the container
   CIDR allowlist admits GitHub's frontend ranges. The `docker.pkg.github.com` alias is not denied
   either, because adding it means editing `cloud-init-registry.yml`, which forces a registry-host
-  replace. Both are #9275.
-- **Loopback.** `0.0.0.0` and `::` route to loopback on Linux, so a client of ghcr.io fails fast
-  (a connect was refused in 0 ms, measured with `curl` on 2026-09-30). `127.0.0.1` is avoided: a
-  loopback-resolving registry name may be treated as a local registry.
+  replace. Both are #9275. This is an accident guard on name resolution, not an egress control:
+  an IP literal, a client that bypasses NSS (DoH, `dig @…`), a `--network host` container created
+  before the deny, or a root edit of `/etc/hosts` all get past it. Two narrower gaps are accepted
+  as well: the idempotency grep keys on the `0.0.0.0` line only, so a hand-deleted `::` line is not
+  restored (changing that means editing copy R); and a `hcloud server rebuild` re-runs the host's
+  creation-time `user_data` without re-firing either route. Nothing alerts on a later
+  `ghcr_blocked=0`; that regression check is tracked with #9275.
+- **Loopback.** A connect to `0.0.0.0` or `::` reaches the local host on Linux, just as
+  `127.0.0.1` would: HTTPS on :443 fails fast (a connect was refused in 0 ms, measured with `curl`
+  on 2026-09-30), while plain HTTP on :80 reaches the web host's own app. No registry client talks
+  plain HTTP to ghcr.io, because ghcr.io is not in dockerd's `insecure-registries`. `127.0.0.1` is
+  still avoided, because dockerd treats every `127.0.0.0/8` registry as insecure by default and
+  would then accept a plain-HTTP answer; `0.0.0.0` is outside that range, and it keeps registry
+  parity.
 - **Live proof.** Green post-merge runs of both apply workflows, then the first release after them
   logs `GHCR_DENY ghcr_blocked=1` from `soleur-web-platform` and `soleur-web-2` next to
   `IMAGE_VERIFY: ok`. The ADR stays **Adopting**; 5.6 flips it.

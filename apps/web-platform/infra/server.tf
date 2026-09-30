@@ -867,7 +867,7 @@ locals {
   EOT
   ghcr_deny_assert_sh = <<-EOT
     for h in ghcr.io pkg-containers.githubusercontent.com; do
-      a=$(getent ahosts "$h" | awk '{print $1}' | sort -u)
+      a=$(timeout 10 getent ahosts "$h" | awk '{print $1}' | sort -u)
       if [ -z "$a" ] || printf '%s\n' "$a" | grep -qvxE '0\.0\.0\.0|::'; then
         echo "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run rerun --failed." >&2
         exit 1
@@ -1992,13 +1992,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # delivered (they only POINT units at the credential file, which exists from birth).
 #
 # Sentinel string at the end forces re-creation when the inline remote-exec list itself
-# changes; bump the suffix on any inline edit the triggers_replace locals do not already
-# cover (the #9169 deny block runs only locals that ARE hashed, so it needed no bump). The
-# host-id entry re-fires on web-2 replacement (cattle), re-delivering the full set post-boot.
+# changes; bump the suffix in lockstep with any inline edit. (#9169 added no bump: its two
+# new triggers_replace elements move the hash by themselves.) The host-id entry re-fires on
+# web-2 replacement (cattle), re-delivering the full set post-boot.
 #
 # Scope boundary (named so it does not read as an omission): this resource covers the
-# deploy-pipeline FILE_MAP set, plus ONE non-file duty: the #9169 ghcr.io hosts-file deny
-# (local.ghcr_deny_sh + its assertion, in the last, secret-free block; web-ghcr-deny.test.sh). docker_seccomp_config and apparmor_bwrap_profile stay
+# deploy-pipeline FILE_MAP set, plus ONE non-file duty: the #9169 ghcr.io hosts-file
+# deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
+# web-ghcr-deny.test.sh). docker_seccomp_config and apparmor_bwrap_profile stay
 # web-1-only — a seccomp-bwrap.json/apparmor profile merge still leaves web-2 birth-frozen
 # on those files until #7103's wider pass. Same for the CI ssh pubkey: a
 # DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf but not web-2's

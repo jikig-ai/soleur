@@ -703,7 +703,7 @@ failure_modes:
     alert_route: "post-merge verification in the pipeline (Post-merge ACs); no page"
   - mode: "deny text mis-rendered by HCL (escape or interpolation drift)"
     detection: "layer 6 workflow run log: web-ghcr-deny.test.sh parity/execution/agreement rows red the PR check; the in-band ghcr_deny_assert_sh prints its FATAL in the terraform apply transcript (visible because the deny runs in its own secret-free provisioner block)"
-    alert_route: "red CI check / red apply run on main (main-health-monitor)"
+    alert_route: "red CI check pre-merge; post-merge, a red apply emails ops (apply-web-platform-infra.yml 'Email ops on a non-green apply run') and trips apply-deploy-pipeline-fix.yml's red-gate alert (main-health-monitor does not watch apply runs)"
   - mode: "a future change re-points the cosign verifier (or any host pull) at ghcr.io"
     detection: "layer 6 workflow run log: cloud-init-ghcr-seed-login.test.sh G1 census VIOL pre-merge; post-merge layer 3 vector (IMAGE_VERIFY_FAIL result=cosign_absent via logger) plus the Sentry event cosign_verify_event POSTs"
     alert_route: "red CI check pre-merge; cosign_verify_event page post-merge"

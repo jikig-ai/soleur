@@ -7577,7 +7577,7 @@ _after=$(sed -n '/GHCR_DENY/,$p' <<<"$_GD_CAP" | grep -vc 'GHCR_DENY' || true)
 _gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_after" -gt 0 ]] && echo 1 || echo 0)" \
   "GHCR_DENY: NXDOMAIN (getent exit 2) under set -euo pipefail -> ghcr_blocked=unknown, deploy continues (rc $_GD_RC == baseline $_GD_BASE_RC, $_after later lines)"
 _gd_run hang
-_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_GD_SECS" -lt 20 ]] && echo 1 || echo 0)" \
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_GD_SECS" -le 10 ]] && echo 1 || echo 0)" \
   "GHCR_DENY: a hanging getent is bounded by timeout 5 -> ghcr_blocked=unknown, rc unchanged (${_GD_SECS}s)"
 unset -f _gd_run _gd_row _gd_count; unset _GD_RC _GD_CAP _GD_SECS _GD_BASE_RC _ok _sha_ln _gd_ln _after
 
@@ -8627,7 +8627,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
 # #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
 # #6428: raised to 359 with the 17 pre-swap freshness rows (F1-F13).
-CI_DEPLOY_ASSERT_FLOOR=359
+# #9169: raised to 364 (measured) with the 4 GHCR_DENY rows.
+CI_DEPLOY_ASSERT_FLOOR=364
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

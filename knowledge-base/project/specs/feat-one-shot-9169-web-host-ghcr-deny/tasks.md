@@ -31,7 +31,8 @@ Plan: `knowledge-base/project/plans/2026-09-30-infra-deny-ghcr-on-web-hosts-plan
 - [x] 0.4 `ci-deploy.test.sh` RED: default `getent` shim on EVERY harness PATH construction; rows
       for a hanging shim (`unknown` within `timeout 5`, exit status equal to a paired baseline),
       NXDOMAIN under `set -euo pipefail`, and `DEPLOY_SCRIPT_SHA` then `GHCR_DENY` exactly once.
-- [x] 0.5 `cloud-init-ghcr-seed-login.test.sh`: Guard 1 rows 1-4 asserting the specific VIOL kind
+- [x] 0.5 `cloud-init-ghcr-seed-login.test.sh`: Guard 1 rows 1-4 (implemented as rows 17-20, plus
+      harness row 21 and the review-round shadow row 22) asserting the specific VIOL kind
       (RED until 1.5).
 
 ## Phase 1 — The deny on every route
@@ -63,7 +64,8 @@ Plan: `knowledge-base/project/plans/2026-09-30-infra-deny-ghcr-on-web-hosts-plan
 
 ## Phase 3 — Budgets and records
 
-- [x] 3.1 Raise `WEB_GZIP_BUDGET` from the CI failure line only if it reds.
+- [x] 3.1 Raise `WEB_GZIP_BUDGET` (raised to 23,800 ahead of CI from the local render + 32 B, the
+      same derivation as the previous lower; re-derive from the CI failure line if it reds).
 - [x] 3.2 ADR-096: "Amendment 2026-09-30 (#9169) — the web hosts deny ghcr.io" (routes and the
       in-place rationale for web-1 and web-2, marker + worst-case evidence age, host vs
       bridge-container scope + #9275, `ghcr.io`-only marker vs apply-time proof of both names,

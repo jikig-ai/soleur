@@ -10,15 +10,19 @@
 #           by zot_consumer_probe_install (web-1) and deploy_pipeline_fix_web2 (web-2).
 #
 # Checks (each takes a root dir, so the in-suite mutation battery can point it at a sandbox):
-#   parity   A == B == R, whole entry, parsed (render -> yaml.safe_load; terraform console)
-#   order    runcmd[0] is the trap arm, runcmd[1] is the one deny entry
-#   exec     copy B runs under bash + set -e against temp files: one 0.0.0.0 and one :: line per
-#            name, idempotent, unrelated lines untouched, an existing entry not duplicated
-#   agree    the three "resolves ONLY to the sinkhole" implementations (registry heartbeat,
-#            ci-deploy.sh _ghcr_blocked_state, the apply-time assertion) on per-name getent shims
-#   wiring   both consumers: the locals in triggers_replace AND a last remote-exec block that runs
-#            exactly ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh]
-#   census   every `for h in ghcr.io` / `/etc/hosts` in any infra .tf sits inside the two locals
+#   parity    A == B == R, whole entry, parsed (render -> yaml.safe_load; terraform console), on
+#             BOTH web_tunnel_connector arms (web-1 is born with true, web-2 with false)
+#   order     runcmd[0] is the trap arm, runcmd[1] is the one deny entry (both arms)
+#   exec      copy B runs under sh + set -e against temp files: one 0.0.0.0 and one :: line per
+#             name, idempotent, unrelated lines untouched, an existing entry not duplicated
+#   agree     the three "resolves ONLY to the sinkhole" implementations (registry heartbeat,
+#             ci-deploy.sh _ghcr_blocked_state, the apply-time assertion) on per-name getent shims
+#   wiring    both consumers: the locals in triggers_replace AND a last remote-exec block that runs
+#             exactly ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh]; no count/for_each/
+#             lifecycle on either; var.web_hosts names exactly the hosts those two routes reach; and
+#             hcloud_server.web's user_data is the plain cloud-init.yml render
+#   census    across the infra .tf/.sh/.yml/.tmpl files: the deny loop header appears only in its
+#             three sanctioned copies, and nothing writes /etc/hosts or cloud-init's hosts template
 #
 # The render/console half needs terraform: SKIP locally without it, FAIL CLOSED under CI.
 # Every fixture is synthesized (cq-test-fixtures-synthesized-only).
@@ -31,9 +35,10 @@ RETIRE="the deny must move to the successor route or be retired with it (active-
 PASS=0; FAIL=0
 pass() { PASS=$((PASS + 1)); printf '  pass: %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL: %s\n' "$1"; }
-# Instrument self-test BEFORE anything is measured: both helpers must move their counters.
-pass "instrument: pass() counts"
-fail "instrument: fail() counts (this FAIL line is EXPECTED)"
+# Instrument self-test BEFORE anything is measured: both helpers must move their counters. Output
+# suppressed so the deliberate FAIL line cannot lead a runner's failure excerpt.
+pass "instrument: pass() counts" >/dev/null
+fail "instrument: fail() counts" >/dev/null
 if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
   printf '[FATAL] instrument: pass/fail counters did not move (pass=%s fail=%s)\n' "$PASS" "$FAIL" >&2; exit 2
 fi
@@ -67,6 +72,19 @@ cat > "$WORK/g2.py" <<'PY'
 import base64, os, re, sys, yaml
 
 HDR = "for h in ghcr.io pkg-containers.githubusercontent.com; do"
+LOC_START = re.compile(r"^\s*ghcr_deny_sh\s*=\s*<<-EOT\s*$")
+ASSERT_START = re.compile(r"^\s*ghcr_deny_assert_sh\s*=\s*<<-EOT\s*$")
+EOT = re.compile(r"^\s*EOT\s*$")
+# A shell loop over the deny's names, in either order (`for h in ... ; do`). A string that merely
+# NAMES the header (zot-image-rehearse.sh finds the registry entry by it) is not a loop.
+DENY_LOOP = re.compile(r"\bfor\s+h\s+in\s+[^;\n\"']*\b(?:ghcr\.io|pkg-containers\.githubusercontent\.com)\b[^;\n\"']*;\s*do\b")
+# A write to the hosts file or cloud-init's hosts template, in any of the usual shell shapes, plus a
+# FILE_MAP destination (infra-config-apply.sh's `B64|/dest|mode|owner` rows).
+HOSTS_WRITE = re.compile(
+    r"(?:>>?|\btee\b(?:\s+-a)?|\bsed\s+(?:-[a-zA-Z]*i|--in-place)\S*|\b(?:cp|mv|install|ln|truncate)\b)"
+    r"[^;&|\n]*?/etc/+(?:host|cloud/+templates/+host)"
+    r"|\|\s*/etc/+(?:host|cloud/+templates/+host)[^|]*\|")
+CENSUS_EXT = (".tf", ".sh", ".yml", ".yaml", ".tmpl")
 
 def runcmd(src_b64, out_dir):
     """Rendered template (base64) -> out_dir/idx (deny entry index), out_dir/A, out_dir/r0."""
@@ -79,82 +97,94 @@ def runcmd(src_b64, out_dir):
     r0 = items[0] if items and isinstance(items[0], str) else ""
     open(os.path.join(out_dir, "r0"), "w").write(r0)
 
+def deny_span(L):
+    """(first, last) line index of the two ghcr_deny locals, or None."""
+    s = next((i for i, l in enumerate(L) if LOC_START.match(l)), None)
+    a = next((i for i, l in enumerate(L) if ASSERT_START.match(l)), None)
+    if s is None or a is None or a < s:
+        return None
+    e = next((j for j in range(a + 1, len(L)) if EOT.match(L[j])), None)
+    return (s, e) if e is not None else None
+
 def locals_block(tf, out):
-    """The ghcr_deny locals, cut on content (header line through the second closing EOT)."""
     L = open(tf).read().split("\n")
-    try:
-        i = L.index("  ghcr_deny_sh        = <<-EOT")
-    except ValueError:
-        open(out, "w").write(""); return
-    ends = [j for j in range(i, len(L)) if L[j] == "  EOT"][:2]
-    txt = "\n".join(L[i:ends[-1] + 1]) if len(ends) == 2 else ""
-    open(out, "w").write("locals {\n" + txt + "\n}\n" if txt else "")
+    sp = deny_span(L)
+    open(out, "w").write("locals {\n" + "\n".join(L[sp[0]:sp[1] + 1]) + "\n}\n" if sp else "")
 
 def strip_comments(t):
     return "\n".join(l for l in t.split("\n") if not l.lstrip().startswith("#"))
 
-def span(src, name):
-    m = re.search(r'^resource "terraform_data" "%s" \{\n(.*?)^\}\n' % re.escape(name), src, re.S | re.M)
+def span(src, kind, name):
+    m = re.search(r'^resource "%s" "%s" \{\n(.*?)^\}\n' % (kind, re.escape(name)), src, re.S | re.M)
     return strip_comments(m.group(1)) if m else None
 
-def wiring(tf):
-    src = open(tf).read()
+DEDICATED = 'provisioner "remote-exec" { inline = ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh] }'
+CONSUMERS = {"zot_consumer_probe_install": "web-1", "deploy_pipeline_fix_web2": "web-2"}
+
+def wiring(root):
+    src = open(os.path.join(root, "server.tf")).read()
     bad = []
-    for name in ("zot_consumer_probe_install", "deploy_pipeline_fix_web2"):
-        b = span(src, name)
+    for name, host in CONSUMERS.items():
+        b = span(src, "terraform_data", name)
         if b is None:
             bad.append("%s: resource not found" % name); continue
+        if re.search(r"^\s*(count|for_each)\s*=|^\s*lifecycle\s*\{", b, re.M):
+            bad.append("%s: carries count/for_each/lifecycle, which can disable or freeze the deny route" % name)
+        if 'hcloud_server.web["%s"].ipv4_address' % host not in b:
+            bad.append("%s: its connection no longer reaches %s" % (name, host))
         tr = re.search(r'triggers_replace = sha256\(join\(",", \[\n(.*?)^\s*\]\)\)', b, re.S | re.M)
         trl = [l.strip() for l in tr.group(1).split("\n")] if tr else []
         for want in ("local.ghcr_deny_sh,", "local.ghcr_deny_assert_sh,"):
             if want not in trl:
                 bad.append("%s: %s missing from triggers_replace (the deny text must move the hash)" % (name, want[:-1]))
-        starts = [m.start() for m in re.finditer(r'^  provisioner "[a-z-]+" \{$', b, re.M)]
-        blocks = []
-        for s in starts:
-            e = b.index("\n  }", s)
-            blocks.append(b[s:e + 4])
-        if not blocks:
+        # Every provisioner, one-line or multi-line, at any indentation.
+        starts = [m.start() for m in re.finditer(r'^\s*provisioner\s+"', b, re.M)]
+        if not starts:
             bad.append("%s: no provisioner blocks" % name); continue
-        last = blocks[-1]
-        inner = " ".join(last.split("\n", 1)[1].rsplit("\n", 1)[0].split())
-        if not last.startswith('  provisioner "remote-exec" {') or \
-                inner != 'inline = ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh]':
-            bad.append("%s: the LAST provisioner must be a dedicated remote-exec running exactly "
-                       '["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh]; got: %s' % (name, inner[:120]))
-        for tok in ("var.", "doppler_", "hooks_json", "${"):
-            if tok in last:
-                bad.append("%s: the deny block references %s (a sensitive value hides the FATAL; a failure leaves a secret script in /root)" % (name, tok))
+        blocks = [b[s:e] for s, e in zip(starts, starts[1:] + [len(b)])]
+        if " ".join(blocks[-1].split()) != DEDICATED:
+            bad.append("%s: the LAST provisioner must be exactly %s; got: %s" % (name, DEDICATED, " ".join(blocks[-1].split())[:140]))
         for blk in blocks[:-1]:
             if "ghcr_deny" in blk:
                 bad.append("%s: the deny locals appear in a non-dedicated provisioner block" % name)
+    # The two routes are singletons; a host they do not reach gets the deny only at birth.
+    vt = open(os.path.join(root, "variables.tf")).read()
+    m = re.search(r'^variable "web_hosts" \{\n(.*?)^\}\n', vt, re.S | re.M)
+    keys = sorted(set(re.findall(r'^\s*"(web-[0-9]+)"\s*=\s*\{', m.group(1), re.M))) if m else []
+    if keys != sorted(CONSUMERS.values()):
+        bad.append("var.web_hosts names %s but the running-host deny routes reach %s — add a route for the new host" % (keys, sorted(CONSUMERS.values())))
+    w = re.search(r'^resource "hcloud_server" "web" \{\n(.*?)^\}\n', src, re.S | re.M)
+    if not w or not re.search(r'^\s*user_data\s*=\s*base64gzip\(templatefile\("\$\{path\.module\}/cloud-init\.yml",\s*\{\s*$', w.group(1), re.M):
+        bad.append("hcloud_server.web user_data is no longer the plain base64gzip(templatefile(cloud-init.yml)) render copy A is proven against")
     print("\n".join("BAD " + x for x in bad) if bad else "OK")
 
 def census(root):
-    bad, inside = [], 0
+    bad = []
+    sanctioned = {("server.tf", "locals"): 0, ("cloud-init.yml", ""): 0, ("cloud-init-registry.yml", ""): 0}
     for d, dirs, files in os.walk(root):
-        dirs[:] = [x for x in dirs if x != ".terraform"]
+        dirs[:] = [x for x in dirs if x not in (".terraform", "test", "tests", "fixtures")]
         for f in files:
-            if not f.endswith(".tf"):
+            if not f.endswith(CENSUS_EXT) or ".test." in f:
                 continue
             p = os.path.join(d, f)
-            L = open(p).read().split("\n")
-            lo = hi = -1
-            if f == "server.tf" and d == root and "  ghcr_deny_sh        = <<-EOT" in L:
-                lo = L.index("  ghcr_deny_sh        = <<-EOT")
-                ends = [j for j in range(lo, len(L)) if L[j] == "  EOT"][:2]
-                hi = ends[-1] if len(ends) == 2 else -1
+            rel = os.path.relpath(p, root)
+            L = open(p, encoding="utf-8", errors="replace").read().split("\n")
+            sp = deny_span(L) if rel == "server.tf" else None
             for n, l in enumerate(L):
                 if l.lstrip().startswith("#"):
                     continue
-                if "for h in ghcr.io" in l or "/etc/hosts" in l:
-                    if lo <= n <= hi:
-                        inside += 1
+                if HOSTS_WRITE.search(l):
+                    bad.append("%s:%d writes the hosts file outside the deny: %s" % (rel, n + 1, l.strip()[:100]))
+                if DENY_LOOP.search(l):
+                    key = (rel, "locals") if sp and sp[0] <= n <= sp[1] else (rel, "")
+                    if key in sanctioned:
+                        sanctioned[key] += 1
                     else:
-                        bad.append("%s:%d %s" % (os.path.relpath(p, root), n + 1, l.strip()[:100]))
-    # deny header + assert header + the one /etc/hosts loop line = 3 sanctioned occurrences
-    if inside != 3:
-        bad.append("expected exactly 3 sanctioned occurrences inside the two locals, found %d" % inside)
+                        bad.append("%s:%d a deny loop outside its three sanctioned copies: %s" % (rel, n + 1, l.strip()[:100]))
+    want = {("server.tf", "locals"): 2, ("cloud-init.yml", ""): 1, ("cloud-init-registry.yml", ""): 1}
+    for k, v in want.items():
+        if sanctioned[k] != v:
+            bad.append("%s%s: %d deny loop header(s), want %d" % (k[0], " (ghcr_deny locals)" if k[1] else "", sanctioned[k], v))
     print("\n".join("BAD " + x for x in bad) if bad else "OK")
 
 cmd = sys.argv[1]
@@ -169,11 +199,11 @@ PY
 tfconsole() {  # <scratch dir> <expr> <out> : the console's quoted base64 string, verbatim
   printf '%s\n' "$2" | terraform -chdir="$1" console > "$3" 2> "$3.err"
 }
-# render_a <root> <out dir>: copy A + runcmd[0] + the deny entry's index from the rendered template.
+# render_a <root> <out dir> <web_tunnel_connector>: copy A + runcmd[0] + the deny entry's index.
 render_a() {
   assert_fixture_dir "$WORK"; mkdir -p "$2" "$WORK/tfa"
   local expr
-  expr=$(printf 'base64encode(templatefile("%s", { image_name="ghcr.io/jikig-ai/soleur-web-platform:v9.9.9", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="tt", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="https://k@o1.ingest.de.sentry.io/1", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="10.0.1.30:5000", web_colocate_inngest=false, web_tunnel_connector=false, host_name="soleur-web-2", private_ip="10.0.1.20", web_probes_token="t", expected_ip="10.0.1.20", web_host_key="web-2", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zot-pull", zot_pull_token="dkryFMT07elszGNU18fmtAHOV29gnuBIPW3ahovC" }))' "$1/cloud-init.yml")
+  expr=$(printf 'base64encode(templatefile("%s", { image_name="ghcr.io/jikig-ai/soleur-web-platform:v9.9.9", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="tt", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="https://k@o1.ingest.de.sentry.io/1", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="10.0.1.30:5000", web_colocate_inngest=false, web_tunnel_connector=%s, host_name="soleur-web-2", private_ip="10.0.1.20", web_probes_token="t", expected_ip="10.0.1.20", web_host_key="web-2", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zot-pull", zot_pull_token="dkryFMT07elszGNU18fmtAHOV29gnuBIPW3ahovC" }))' "$1/cloud-init.yml" "$3")
   tfconsole "$WORK/tfa" "$expr" "$2/web.b64" || { printf 'render failed: %s' "$(head -c 300 "$2/web.b64.err")" > "$2/why"; return 1; }
   python3 "$WORK/g2.py" runcmd "$2/web.b64" "$2" || { echo "runcmd parse failed" > "$2/why"; return 1; }
 }
@@ -207,24 +237,30 @@ same() { cmp -s "$1" "$2"; }
 
 # ── the checks: each prints a reason and returns non-zero on failure ─────────────────────────────
 chk_nonempty() {  # <root>
-  render_a "$1" "$WORK/a" || { echo "copy A: $(cat "$WORK/a/why" 2>/dev/null)"; return 1; }
+  render_a "$1" "$WORK/a-false" false || { echo "copy A: $(cat "$WORK/a-false/why" 2>/dev/null)"; return 1; }
   copy_b "$1" "$WORK/b"
-  [[ -s "$WORK/a/A" && -s "$WORK/b/deny.sh" && -s "$WORK/b/assert.sh" && -s "$WORK/copyR" ]] \
-    || { echo "a copy is EMPTY (A=$(wc -c < "$WORK/a/A") B=$(wc -c < "$WORK/b/deny.sh") assert=$(wc -c < "$WORK/b/assert.sh")) — $RETIRE"; return 1; }
+  [[ -s "$WORK/a-false/A" && -s "$WORK/b/deny.sh" && -s "$WORK/b/assert.sh" && -s "$WORK/copyR" ]] \
+    || { echo "a copy is EMPTY (A=$(wc -c < "$WORK/a-false/A") B=$(wc -c < "$WORK/b/deny.sh") assert=$(wc -c < "$WORK/b/assert.sh")); is the ghcr_deny_sh / ghcr_deny_assert_sh heredoc still named and closed?"; return 1; }
 }
 chk_parity() {  # <root>
-  render_a "$1" "$WORK/a" || { echo "copy A: $(cat "$WORK/a/why" 2>/dev/null)"; return 1; }
+  local arm
+  for arm in false true; do
+    render_a "$1" "$WORK/a-$arm" "$arm" || { echo "copy A (web_tunnel_connector=$arm): $(cat "$WORK/a-$arm/why" 2>/dev/null)"; return 1; }
+    same "$WORK/a-$arm/A" "$WORK/copyR" || { echo "copy A (cloud-init.yml runcmd deny entry, web_tunnel_connector=$arm) differs from copy R (the registry entry)"; return 1; }
+  done
   copy_b "$1" "$WORK/b"
-  same "$WORK/a/A" "$WORK/copyR" || { echo "copy A (cloud-init.yml runcmd deny entry) differs from copy R (the registry entry)"; return 1; }
-  same "$WORK/b/deny.sh" "$WORK/copyR" || { echo "copy B (local.ghcr_deny_sh) differs from copy R — $RETIRE"; return 1; }
+  same "$WORK/b/deny.sh" "$WORK/copyR" || { echo "copy B (local.ghcr_deny_sh) differs from copy R"; return 1; }
 }
 chk_order() {  # <root>
-  render_a "$1" "$WORK/a" || { echo "copy A: $(cat "$WORK/a/why" 2>/dev/null)"; return 1; }
-  [[ "$(cat "$WORK/a/count")" == 1 ]] || { echo "expected exactly one deny entry in the web runcmd, found $(cat "$WORK/a/count")"; return 1; }
-  grep -qF 'trap on_err EXIT' "$WORK/a/r0" || { echo "runcmd[0] must stay the #6090 trap-arm entry"; return 1; }
-  [[ "$(cat "$WORK/a/idx")" == 1 ]] || { echo "the deny must be runcmd[1] (right after the trap arm), found at $(cat "$WORK/a/idx")"; return 1; }
+  local arm
+  for arm in false true; do
+    render_a "$1" "$WORK/a-$arm" "$arm" || { echo "copy A (web_tunnel_connector=$arm): $(cat "$WORK/a-$arm/why" 2>/dev/null)"; return 1; }
+    [[ "$(cat "$WORK/a-$arm/count")" == 1 ]] || { echo "web_tunnel_connector=$arm: expected exactly one deny entry in the web runcmd, found $(cat "$WORK/a-$arm/count")"; return 1; }
+    grep -qxE '[[:space:]]*trap on_err EXIT' "$WORK/a-$arm/r0" || { echo "runcmd[0] must stay the #6090 trap-arm entry (an executed 'trap on_err EXIT' line)"; return 1; }
+    [[ "$(cat "$WORK/a-$arm/idx")" == 1 ]] || { echo "web_tunnel_connector=$arm: the deny must be runcmd[1] (right after the trap arm), found at $(cat "$WORK/a-$arm/idx")"; return 1; }
+  done
 }
-chk_exec() {  # <root>
+chk_exec() {  # <root> — copy B runs the way remote-exec runs it: POSIX sh, set -e first
   copy_b "$1" "$WORK/b" || { echo "copy B unreadable"; return 1; }
   local w="$WORK/exec" n rc
   assert_fixture_dir "$WORK"; rm -rf "$w"; mkdir -p "$w"
@@ -232,8 +268,8 @@ chk_exec() {  # <root>
   if grep -qE '/etc/hosts|/etc/cloud' "$w/deny.sh"; then echo "path substitution left a real path in the script; refusing to run it"; return 1; fi
   { echo 'set -e'; cat "$w/deny.sh"; } > "$w/run.sh"
   printf '127.0.0.1 localhost\n' > "$w/hosts"; printf '127.0.0.1 localhost\n' > "$w/tmpl"
-  rc=0; bash "$w/run.sh" && bash "$w/run.sh" || rc=$?
-  [[ "$rc" == 0 ]] || { echo "copy B exited $rc under bash + set -e"; return 1; }
+  rc=0; sh "$w/run.sh" && sh "$w/run.sh" || rc=$?
+  [[ "$rc" == 0 ]] || { echo "copy B exited $rc under sh + set -e"; return 1; }
   for f in hosts tmpl; do
     for n in ghcr.io pkg-containers.githubusercontent.com; do
       [[ "$(grep -cxF "0.0.0.0 $n" "$w/$f")" == 1 && "$(grep -cxF ":: $n" "$w/$f")" == 1 ]] \
@@ -243,7 +279,7 @@ chk_exec() {  # <root>
   done
   # An existing TAB-separated sinkhole entry is not duplicated; an absent template is skipped.
   rm -f "$w/tmpl"; printf '10.0.0.1 other\n0.0.0.0\tghcr.io\n' > "$w/hosts"
-  rc=0; bash "$w/run.sh" || rc=$?
+  rc=0; sh "$w/run.sh" || rc=$?
   [[ "$rc" == 0 && ! -e "$w/tmpl" && "$(grep -c 'ghcr\.io' "$w/hosts")" == 1 && "$(head -1 "$w/hosts")" == "10.0.0.1 other" \
     && "$(grep -c 'pkg-containers' "$w/hosts")" == 2 ]] \
     || { echo "pre-seeded hosts: ghcr.io duplicated, an unrelated line changed, or the absent template was created (rc=$rc)"; return 1; }
@@ -267,13 +303,16 @@ EOF
   sed -n '/^_ghcr_blocked_state() {$/,/^}$/p' "$1/ci-deploy.sh" > "$WORK/ci-fn.sh"
   [[ -s "$WORK/ci-fn.sh" ]] || { echo "_ghcr_blocked_state not found in ci-deploy.sh"; return 1; }
   local SINK='0.0.0.0 STREAM x\n0.0.0.0 DGRAM\n:: STREAM\n' ROUT='140.82.121.34 STREAM x\n' \
-    MIX='0.0.0.0 STREAM x\n140.82.121.34 STREAM\n' V6='2606:50c0:8000::154 STREAM x\n'
-  # ghcr | pkg | registry | ci-deploy | assertion — the last row is the NAMED expected difference:
-  # both classifiers probe ghcr.io only (registry parity) while the assertion checks both names.
+    MIX='0.0.0.0 STREAM x\n140.82.121.34 STREAM\n' V6='2606:50c0:8000::154 STREAM x\n' LOOP='127.0.0.1 STREAM x\n'
+  # ghcr | pkg | registry | ci-deploy | assertion. The two one-name-sinked rows are the NAMED
+  # expected difference: both classifiers probe ghcr.io only (registry parity) while the assertion
+  # checks both names — so it must fail whichever of the two is not sinked.
+  # Each implementation runs under its production shell: the registry heartbeat script is bash,
+  # ci-deploy.sh is bash with set -euo pipefail, and a remote-exec inline script runs under sh.
   while IFS='|' read -r row gh pk want_reg want_ci want_as; do
-    reg=$(env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" sh -c ". '$WORK/reg-classifier.sh'; printf %s \"\$GHCR_BLOCKED\"" 2>/dev/null)
+    reg=$(env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" bash -c ". '$WORK/reg-classifier.sh'; printf %s \"\$GHCR_BLOCKED\"" 2>/dev/null)
     ci=$(env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" bash -euo pipefail -c ". '$WORK/ci-fn.sh'; _ghcr_blocked_state" 2>/dev/null)
-    rc=0; env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" bash -c "set -e; $(cat "$WORK/b/assert.sh")" >/dev/null 2>"$WORK/as.err" || rc=$?
+    rc=0; env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" sh -c "set -e; $(cat "$WORK/b/assert.sh")" >/dev/null 2>"$WORK/as.err" || rc=$?
     as=pass; [[ "$rc" == 0 ]] || as=fail
     err=""
     if [[ "$as" == fail ]] && ! grep -qE '^FATAL: .* \(#9169\)\. Route back: .*never gh run rerun --failed\.$' "$WORK/as.err"; then err=" (FATAL text/route-back missing)"; fi
@@ -285,18 +324,20 @@ sink-only|$SINK|$SINK|1|1|pass
 routable-v4|$ROUT|$ROUT|0|0|fail
 sink+routable|$MIX|$MIX|0|0|fail
 routable-v6-with-::|$V6|$V6|0|0|fail
+loopback-127|$LOOP|$LOOP|0|0|fail
 unresolvable|||unknown|unknown|fail
 ghcr-sinked-pkg-routable|$SINK|$ROUT|1|1|fail
+ghcr-routable-pkg-sinked|$ROUT|$SINK|0|0|fail
 EOF
   [[ -z "$bad" ]] || { echo "classifier disagreement:$bad"; return 1; }
 }
 chk_wiring() {  # <root>
-  local o; o=$(python3 "$WORK/g2.py" wiring "$1/server.tf")
+  local o; o=$(python3 "$WORK/g2.py" wiring "$1")
   [[ "$o" == OK ]] || { printf '%s — %s\n' "$(tr '\n' ';' <<<"$o")" "$RETIRE"; return 1; }
 }
 chk_census() {  # <root>
   local o; o=$(python3 "$WORK/g2.py" census "$1")
-  [[ "$o" == OK ]] || { printf 'a deny literal / hosts-file write outside the two locals: %s — %s\n' "$(tr '\n' ';' <<<"$o")" "$RETIRE"; return 1; }
+  [[ "$o" == OK ]] || { printf '%s — %s\n' "$(tr '\n' ';' <<<"$o")" "$RETIRE"; return 1; }
 }
 CHECKS="nonempty parity order exec agree wiring census"
 
@@ -305,6 +346,11 @@ echo "--- Guard 2 on the live tree ---"
 for c in $CHECKS; do
   why=$("chk_$c" "$DIR" 2>&1) && pass "$c" || fail "$c: $why"
 done
+if [[ "$FAIL" -ne 0 ]]; then
+  # A red live tree would also red the battery's control; report the real failure, not a harness fault.
+  echo "=== web-ghcr-deny: $PASS passed, $FAIL failed (mutation battery skipped: the live tree is red) ==="
+  exit 1
+fi
 
 # ── in-suite mutation battery (sandbox copies; each row must red on its NAMED check) ──────────────
 echo "--- Guard 2 mutation battery ---"
@@ -312,8 +358,8 @@ SB="$WORK/sb"
 sandbox() {
   assert_fixture_dir "$SB"; assert_fixture_dir "$DIR"
   rm -rf "$SB"; mkdir -p "$SB"
+  find "$DIR" -maxdepth 1 -type f ! -name '*.test.*' -exec cp -t "$SB/" {} +
   (cd "$DIR" && find . -name '*.tf' -not -path '*/.terraform/*' -print0 | xargs -0 -I{} cp --parents {} "$SB/")
-  cp "$DIR/cloud-init.yml" "$DIR/ci-deploy.sh" "$SB/"
 }
 sub() {  # <file> <old> <new> : literal, first occurrence; a missing anchor is a HARNESS fault
   python3 - "$SB/$1" "$2" "$3" <<'PY' || harness "mutation anchor not found in $1"
@@ -354,11 +400,11 @@ assert_fixture_dir "$SB"
 cat > "$SB/extra-deny.tf" <<'EOF'
 resource "terraform_data" "handcopied_deny" {
   provisioner "remote-exec" {
-    inline = ["for h in ghcr.io pkg-containers.githubusercontent.com; do printf '0.0.0.0 %s\\n' \"$h\" >> /etc/hosts; done"]
+    inline = ["for h in pkg-containers.githubusercontent.com ghcr.io; do printf '0.0.0.0 %s\\n' \"$h\" >> /etc/cloud/templates/hosts.debian.tmpl; done"]
   }
 }
 EOF
-row "6 a hand-copied deny literal in a new resource in a second .tf" census extra-deny.tf
+row "6 a hand-copied, name-reordered deny writing only the hosts template, in a second .tf" census extra-deny.tf
 python3 - "$SB/cloud-init.yml" <<'PY' || harness "row 7/8 anchor missing"
 import sys
 p = sys.argv[1]; s = open(p).read()
@@ -385,6 +431,29 @@ sub ci-deploy.sh "grep -qvxE '0\\.0\\.0\\.0|::'" "grep -qvE '0\\.0\\.0\\.0|::'"
 row "10 -x dropped from _ghcr_blocked_state's whole-value match" agree ci-deploy.sh
 sub server.tf "  ghcr_deny_sh        = <<-EOT" "  ghcr_deny_shx       = <<-EOT"
 row "11 the heredoc renamed, so the console read of copy B is empty" nonempty server.tf
+sub server.tf "$DENY_BLOCK_TF" "$DENY_BLOCK_TF"$'  provisioner "remote-exec" { inline = ["sed -i /ghcr/d /etc/host?"] }\n'
+row "12 a one-line provisioner after web-1's deny block that undoes it" wiring server.tf
+sub ci-deploy.sh "unset _ghcr_blocked" $'unset _ghcr_blocked\nfor h in ghcr.io; do printf \'127.0.0.1 %s\\n\' "$h" >> /etc/hosts; done'
+row "13 a drifted 127.0.0.1 deny in a host script (ci-deploy.sh)" census ci-deploy.sh
+sub server.tf '      a=$(timeout 10 getent ahosts "$h" | awk' '      a=$(timeout 10 getent ahosts pkg-containers.githubusercontent.com | awk'
+row "14 the assertion stops probing ghcr.io itself" agree server.tf
+sub server.tf "grep -qvxE '0\\.0\\.0\\.0|::'; then" "grep -qvxE '0\\.0\\.0\\.0|::|127\\.0\\.0\\.1'; then"
+row "15 the assertion accepts 127.0.0.1 as the sinkhole" agree server.tf
+sub server.tf $'resource "terraform_data" "zot_consumer_probe_install" {\n' $'resource "terraform_data" "zot_consumer_probe_install" {\n  count = 0\n'
+row "16 count = 0 on web-1's deny route" wiring server.tf
+python3 - "$SB/cloud-init.yml" <<'PY' || harness "row 17 anchor missing"
+import sys
+p = sys.argv[1]; s = open(p).read()
+start = s.index("  - |\n    for f in /etc/hosts")
+end = s.index("  # #8651/#6438: converge")
+open(p, "w").write(s[:start] + "%{ if !web_tunnel_connector ~}\n" + s[start:end] + "%{ endif ~}\n" + s[end:])
+PY
+row "17 copy A wrapped so it vanishes on the web_tunnel_connector=true (web-1) arm" parity cloud-init.yml
+sub server.tf '  user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", {' '  user_data = base64gzip(replace(templatefile("${path.module}/cloud-init.yml", {'
+row "18 hcloud_server.web user_data post-processed instead of the plain render" wiring server.tf
+sub variables.tf $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n' \
+  $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n    "web-3" = { location = "hel1", private_ip = "10.0.1.12", server_type = "cpx22" }\n'
+row "19 a third web host that neither running-host route reaches" wiring variables.tf
 
 # Harness row (must PASS): copy A re-indented under its `- |` parses to the same entry.
 python3 - "$SB/cloud-init.yml" <<'PY' || harness "re-indent anchor missing"
@@ -408,8 +477,10 @@ if ( same() { return 0; }; chk_parity "$SB" >/dev/null 2>&1 ); then
 else fail "harness: row 1 was detected even with same() forced true — parity is not decided by the comparator"; fi
 sandbox
 
-# Floor: reported with printf + exit DIRECTLY, never through pass()/fail() (the floor polices them).
-MIN_ASSERTIONS=21
+# Floor at the MEASURED count (7 live checks + control + 19 rows + 2 harness rows = 29, #9169
+# review round). Reported with printf + exit DIRECTLY, never through pass()/fail() (the floor
+# polices them).
+MIN_ASSERTIONS=29
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
