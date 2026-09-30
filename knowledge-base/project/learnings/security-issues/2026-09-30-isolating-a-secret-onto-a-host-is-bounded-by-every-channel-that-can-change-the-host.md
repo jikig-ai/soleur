@@ -140,6 +140,25 @@ depend on a value only some contexts can see.
     residuals on #8211. **Prevention:** verify a proposed disposition before offering it as a menu
     option.
 
+## Post-merge addendum (2026-09-30)
+
+17. **The first post-merge apply was partial.** The root install helper's drop-in shape gate rejected
+    all four webhook-delivered drop-ins, because each carried the review-added
+    `UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN` line (16/20 files). The census row G6u *required*
+    that line in every loader. The helper's managed-dests test fed each drop-in dest a made-up
+    payload instead of the committed file, so no test ever ran a shipped drop-in through the gate
+    that installs it. Recovery: #9314 admits the exact literal and feeds the real bytes.
+    **Prevention:** a test of an install gate must feed the artifact that ships, never a
+    representative stand-in; when a PR adds a line to a delivered file, grep the receiving side
+    for a content gate before merge.
+18. **Five CI reds after the review round**, each from a ratchet the local subset never ran: a
+    runbook naming a user-invoked skill, a CWD-relative anchor in a sharp-edge bullet, a stale
+    Sentry README count, awk patterns that read as heredoc openers to the vacuity guard, and a
+    suite bound (180 s) the grown suite exceeded. **Prevention:** after a large test-suite growth,
+    re-time the suite against its registered bound and run the repo-wide ratchets
+    (`guard-vacuity-floor`, `invocation-axis`, `plugin-root-anchoring`, `sentry-monitors-audit`)
+    before pushing, not only the suites the diff names.
+
 ## Tags
 
 category: security-issues
