@@ -137,7 +137,7 @@ describe("model-tiers registry — #5106", () => {
 
   it("EXECUTION_MODEL is the sonnet SSOT and AUDIT_MODEL is opus-5-5", () => {
     expect(EXECUTION_MODEL).toBe(SONNET_MODEL);
-    expect(EXECUTION_MODEL).toBe("claude-sonnet-5");
+    expect(EXECUTION_MODEL).toBe("claude-sonnet-5-5");
     // Intentional model-bump tripwire: AUDIT_MODEL has no SSOT constant to
     // alias (opus is not an AnthropicModelId member), so it is pinned to the
     // literal here. A deliberate re-tier (e.g. opus-5 → opus-5-5, a separate

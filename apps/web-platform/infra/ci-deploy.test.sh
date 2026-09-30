@@ -7495,6 +7495,30 @@ else
 fi
 unset _sha_field
 
+# --- #9151: DEPLOY_SCRIPT_SHA — the full-sha parity anchor ---
+# The INVOCATION marker's script_sha is a stable-format 12-char value; parity needs
+# the FULL sha256 of the executed script so scripts/check-deploy-script-parity.sh can
+# compare a Better Stack row against the repo bytes. Same capture harness: the
+# credential-path rewrite means the emitted sha must equal the sha of the EXECUTED
+# copy, not of the on-disk DEPLOY_SCRIPT — proving the value is measured, not canned.
+TOTAL=$((TOTAL + 1))
+_cap=$(mktemp -t shacap.XXXXXX); _cred=$(mktemp -t credfile.XXXXXX); _script=$(mktemp -t cideploy.XXXXXX)
+sed "s#/etc/default/soleur-doppler-token#$_cred#g" "$DEPLOY_SCRIPT" > "$_script"
+_want=$(sha256sum "$_script" | cut -d' ' -f1)
+rm -f "$_cred"
+(
+  export MOCK_LOGGER_CAPTURE_FILE="$_cap"
+  DEPLOY_SCRIPT="$_script"
+  run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 || true
+)
+_got=$(grep -h 'DEPLOY_SCRIPT_SHA' "$_cap" 2>/dev/null | grep -oE 'sha256=[0-9a-f]{64}' | head -1 | cut -d= -f2)
+if [[ "$_got" == "$_want" && -n "$_want" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: DEPLOY_SCRIPT_SHA is the sha256 of the executed script bytes"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: DEPLOY_SCRIPT_SHA — expected sha256=$_want, got '${_got:-<none emitted>}'"
+fi
+rm -f "$_cap" "$_cred" "$_script"; unset _cap _cred _script _want _got
+
 # hooks.json.tmpl: both deploy hooks must carry a DISTINCT SOLEUR_DEPLOY_HOOK_ID. Two hooks
 # sharing one id would emit a clean-looking marker that discriminates nothing — the precise
 # failure this whole marker exists to prevent.

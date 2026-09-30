@@ -349,6 +349,26 @@ assert "unreachable metadata does not abort the hook (exit 0)" "[[ '$NOMETA_RC' 
 assert "unreachable metadata still emits parseable JSON with a host_id key" \
   "printf '%s' '$HID_NOMETA' | jq -e 'has(\"host_id\")' >/dev/null"
 
+# --- #9151: ci_deploy_sha256 — the live sha of the script the host serves ---
+# The parity anchor scripts/check-deploy-script-parity.sh reads: the field must be
+# the sha256 of /usr/local/bin/ci-deploy.sh computed at REQUEST time (not at last
+# deploy), and its failure contract mirrors host_id's — EMPTY on a read failure,
+# never ABSENT (absent reads as an old reporter) and never a non-200.
+KNOWN_SH="$TMP/fake-ci-deploy.sh"
+printf '#!/bin/sh\necho fake\n' > "$KNOWN_SH"
+WANT_SHA="$(sha256sum "$KNOWN_SH" | cut -d' ' -f1)"
+CDS_OUT=$(CI_DEPLOY_STATE="$TMP/ok.state" CI_DEPLOY_SH_PATH="$KNOWN_SH" \
+  SOLEUR_HOST_ID_OVERRIDE="hetzner-4242" bash "$TARGET")
+assert "ci_deploy_sha256 is the sha256 of the served script" \
+  "[[ \$(printf '%s' '$CDS_OUT' | jq -r .ci_deploy_sha256) == '$WANT_SHA' ]]"
+
+CDS_MISS=$(CI_DEPLOY_STATE="$TMP/ok.state" CI_DEPLOY_SH_PATH="$TMP/does-not-exist.sh" \
+  SOLEUR_HOST_ID_OVERRIDE="hetzner-4242" bash "$TARGET")
+assert "unreadable script emits an EMPTY ci_deploy_sha256 (never absent, never an abort)" \
+  "[[ \$(printf '%s' '$CDS_MISS' | jq -r .ci_deploy_sha256) == '' ]]"
+assert "unreadable script keeps the hook 200-parseable" \
+  "printf '%s' '$CDS_MISS' | jq -e '.exit_code == 0' >/dev/null"
+
 echo ""
 echo "--- #7286: services.inngest_redis* probe fields ---"
 #

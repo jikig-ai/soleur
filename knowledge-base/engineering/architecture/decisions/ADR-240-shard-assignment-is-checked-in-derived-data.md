@@ -20,6 +20,29 @@ ADR-238 deferred; amends ADR-238's rejected-alternative entry for LPT.
 the same contract, and the "Per-group manifests" rejected-alternative entry
 below records why the earlier deferral stopped holding.
 
+**Amended 2026-09-29 (#9232):** the aggregation horizon, the untimed-label
+gap, and the leg-count coupling are all widened:
+
+- **Weights aggregate across the last N green main runs by per-label median**
+  (`--runs N`, default 5; `--run` remains the single-run override), not a
+  single run's snapshot. Median — not max or mean — so a sustained drift
+  moves a weight while a one-run contention spike does not entrench itself.
+- **Registered-but-untimed labels are tabled at a floor weight** (median of
+  the group's measured labels, else `DEFAULT_SUITE_MS = 60000`) instead of
+  hash-falling at effective weight 0; timings-empty input produces an
+  all-floor count-balanced manifest with a WARN rather than dying.
+- **The generator emits at arbitrary K** via `--legs K` — the consumption
+  surface #8231's local parallel scheduler needs. `--write` to a group's
+  committed manifest with K != the workflow's declared leg count is refused
+  (a committed n-mismatch degrades every leg to positional while reading as
+  applied); dry-run and an explicit `--manifest` path accept any K.
+- **`suite-durations*.tsv` tables are committed alongside each group's
+  manifest** (`label<TAB>ms<TAB>src`, `src` ∈ `measured|floor`,
+  label-sorted) — ADR-235 artifacts, the single duration source both
+  consumers read: CI regen writes them, the local scheduler repacks from
+  them via `--durations` with zero `gh` calls. `src=floor` marks an estimate
+  so a later aggregation never launders it into a measurement.
+
 ## Context
 
 ADR-238's carve-out + K=5 cut the worst `test-scripts*` leg from 31–39 min
