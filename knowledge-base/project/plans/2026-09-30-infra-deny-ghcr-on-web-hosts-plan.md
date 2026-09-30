@@ -13,6 +13,45 @@ lane: cross-domain
 
 # infra: deny ghcr.io on the web hosts
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-30
+**Sections enhanced:** Research Insights, Proposed Solution, Architecture, Implementation Phases,
+Infrastructure (IaC), Downtime & Cutover (new), Network-Outage Deep-Dive (new), Architecture Decision,
+Observability, Guard Contract, Acceptance Criteria, Test Scenarios, Non-Goals, Sharp Edges.
+**Agents used:** `soleur:engineering:review:security-sentinel`,
+`soleur:engineering:review:observability-coverage-reviewer`,
+`soleur:engineering:review:test-design-reviewer`, `soleur:engineering:review:architecture-strategist`,
+`soleur:engineering:research:framework-docs-researcher`, a verify-the-negative sweep (standard tier),
+plus local measurements (Docker host-network `/etc/hosts`, `curl` to `0.0.0.0`/`::`, Better Stack,
+`gh run` step conclusions). Halt gates 4.5 (resource-shape trigger), 4.55, 4.6, 4.7, 4.8, 4.10, 4.11
+run; 4.9 not triggered (no UI surface).
+
+### Key Improvements
+
+1. **The deny runs in its own secret-free `remote-exec` block** on both resources. Both existing
+   blocks reference sensitive values, so Terraform would have suppressed the FATAL text and a failure
+   would have left a token/webhook-secret script in `/root` (security + observability + architecture).
+2. **The container claim was false.** Bridge containers can reach GHCR through the GitHub CIDRs in
+   the container egress allowlist, and `docker.pkg.github.com` is an undenied alias — both scoped out
+   to #9275 with the reason (the alias needs a registry-template edit, i.e. a registry replace).
+3. **Guards now parse instead of scanning lines:** render the template, `yaml.safe_load` runcmd,
+   whole-entry parity (catches an extra command in the entry), `terraform console` for copy B,
+   per-name `getent` shims with the IPv6 fixture, an in-suite mutation battery, and a block-anchored
+   census exemption that also closes a pre-existing hole in the registry exemption.
+4. **Blast radius corrected:** the web-2 re-fire restarts web-2's deploy listener (weight-0 host),
+   and the `ci-deploy.sh` push restarts web-1's listener as every `ci-deploy.sh` change already does;
+   `## Downtime & Cutover` records both and the zero-downtime default.
+
+### New Considerations Discovered
+
+- `cloud-init-registry.yml` must stay byte-identical: the registry host's `user_data` is ForceNew
+  (AC16 + Sharp Edge).
+- Measured: dockerd honours the deny (`zot-image-rehearse.sh` in CI), host-network containers carry
+  the host's hosts file, and a connect to `0.0.0.0`/`::` fails in 0 ms.
+- PM1 must check the SSH stage concluded `success` (a token-gate skip leaves the run green), and PM2
+  treats `cancelled` (shared concurrency group) like red.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -58,6 +97,11 @@ The change must reach both running hosts through the Terraform-owned apply route
 - **ADR corpus check (mechanism).** The mechanism (hosts-file sinkhole + `ghcr_blocked` field) is
   ADR-096's own "Amendment 2026-09-28 (#8714 step 5.3b-iii, part 2)", which names the web-host deny
   as "a tracked follow-up" — this issue. Not a rejected alternative.
+
+**Deepen correction (2026-09-30).** The #9151 plan states `apply-deploy-pipeline-fix.yml` excludes
+`server.tf` from `paths:`; the workflow on `main` lists it (and `ship-deploy-pipeline-fix-gate.test.ts`
+pins that by set equality). The issue text's "the container egress allowlist names no GHCR host" is
+true by name only — the CIDR allowlist admits GHCR's addresses (#9275).
 
 ### Property List (Phase 0.6b)
 
@@ -184,8 +228,10 @@ named devex seat `soleur:engineering:cto`. Mechanical findings applied:
 
 ADR-096 step 5.3b-iii asked to "re-scope, then remove, the GHCR egress allow". That allow was
 measured as having no object (all five hcloud firewall rules are `direction=in`; host OUTPUT is
-never filtered; the container egress allowlist names no GHCR host), so the step is realised as an
-**enforced, observed per-host deny**. The registry host got it in PR #9147 (live:
+never filtered; the container egress allowlist names no GHCR host *by name* — deepen correction: its
+CIDR half, `cron-egress-allowlist-cidr.txt`, admits `140.82.112.0/20` and `185.199.108.0/22`, which
+contain ghcr.io and pkg-containers.githubusercontent.com, so bridge containers CAN reach GHCR; tracked
+as #9275), so the step is realised as an **enforced, observed per-host deny**. The registry host got it in PR #9147 (live:
 `ghcr_blocked=1`). The two web hosts still resolve `ghcr.io`: nothing on them pulls from it any
 more, but that is a claim, not an enforced and observed fact. A ghcr.io outage or compromise can
 still reach anything on a web host that resolves the name — most importantly a future regression
@@ -256,47 +302,71 @@ Copies A, B and R are asserted byte-identical after dedent (Guard 2).
 
 Why host `/etc/hosts` is the right layer: `dockerd` performs every image pull on the host with the
 Go resolver, which honours `/etc/hosts` under the default `hosts: files dns` order; the cosign
-verifier pull is a `dockerd` pull. The cosign verifier itself runs `docker run --rm --network host`
-(`ci-deploy.sh`, the `"$COSIGN_IMAGE" verify --offline` call), and host-network containers carry the
-host's hosts entries, so the deny covers the verifier's own resolution too. Bridge-network containers
-(the app, agent sandboxes) get a docker-generated `/etc/hosts` without host entries; their egress is
-governed by the cron-egress nftables allowlist, which names no GHCR host. That split is stated in the
-ADR amendment, not left implicit.
+verifier pull is a `dockerd` pull. (Measured, not assumed: `zot-image-rehearse.sh` step 2 — "dockerd
+could still pull from ghcr.io after the deny" → die — ran green in `zot-image-mirror.yml`'s `rehearse`
+job on 2026-09-28 against the rendered registry deny.) The cosign verifier itself runs
+`docker run --rm --network host` (`ci-deploy.sh`, the `"$COSIGN_IMAGE" verify --offline` call), and a
+host-network container carries the host's hosts file (measured locally 2026-09-30, Docker 29.7.2:
+`docker run --network host node:22-slim cat /etc/hosts` printed the host's file byte-for-byte, while a
+bridge-network run printed Docker's generated one), so the deny covers the verifier's own resolution
+too. **Bridge-network containers (the app, agent sandboxes) are NOT covered:** they resolve through
+DNS, and the container egress CIDR allowlist admits GitHub's frontend ranges, which include GHCR —
+out of scope here and tracked as #9275 (with the undenied `docker.pkg.github.com` alias). That split
+is stated in the ADR amendment, not left implicit.
 
 ### Implementation Phases
 
 **Phase 0 — RED tests first (`cq-write-failing-tests-before`).**
 
 - 0.1 New `apps/web-platform/infra/web-ghcr-deny.test.sh` (auto-registered by
-  `infra-validation.yml`'s `apps/web-platform/infra/**.test.sh` glob):
-  - extracts copy A (the `cloud-init.yml` runcmd block), copy B (`local.ghcr_deny_sh` heredoc body
-    from `server.tf`) and copy R (the registry block) by anchor, dedents each, asserts A == B == R;
-  - asserts copy B's heredoc body contains no `${` and no `%{` (HCL renders it literally — heredocs
-    do not process backslash escapes);
-  - executes copy B ONCE under `bash` (Terraform's `inline` has no shebang, so on the hosts it runs
-    under root's login shell, bash — copy R's execution under `sh` by `zot-image-fetch.test.sh` R10
-    does not cover that interpreter) against synthesized temp files, asserting one `0.0.0.0` and one
-    `::` line per name;
-  - classifier agreement: runs ONE table of `getent` shim states (sinkhole only; routable only;
-    sinkhole + routable; unresolvable) against all three "resolves only to the sinkhole"
-    implementations — the registry classifier snippet (`cloud-init-registry.yml`, the
-    `GHCR_BLOCKED` block), `_ghcr_blocked_state` in `ci-deploy.sh`, and `local.ghcr_deny_assert_sh`
-    — and asserts they agree (`1`/pass, `0`/fail, `0`/fail, `unknown`/fail);
-  - asserts copy A is the `runcmd:` entry IMMEDIATELY after the entry containing `trap on_err EXIT`,
-    and precedes every entry containing `apt-get`, `docker pull`, `docker run` or `wget` (the
-    trap-arm entry stays first — its own comment requires it);
-  - asserts both `zot_consumer_probe_install` and `deploy_pipeline_fix_web2` reference
-    `local.ghcr_deny_sh` AND `local.ghcr_deny_assert_sh` in BOTH `triggers_replace` and a
-    `remote-exec` `inline`;
-  - non-vacuity floor: fails if any extraction is empty or fewer than 3 copies were compared;
-  - every failure message for copy B / the two consumers says: "the deny must move to the successor
-    route or be retired with it (active-active Phase 5, ADR-143); cloud-init copy A is the end
-    state" — so retiring the web-1 SSH route reds with an explanation, not a mystery.
-- 0.2 `ci-deploy.test.sh`: (classifier values are covered by 0.1's agreement table) one row with
-  `getent` absent / exiting 2 asserting `ghcr_blocked=unknown`, the deploy's exit status unchanged
-  under `set -euo pipefail`; and one row asserting `^GHCR_DENY ghcr_blocked=(1|0|unknown)$` is
-  logged exactly once per invocation, after `DEPLOY_SCRIPT_SHA`.
-- 0.3 `cloud-init-ghcr-seed-login.test.sh`: new mutation rows (see Guard 1) — RED until Phase 1.
+  `infra-validation.yml`'s `apps/web-platform/infra/**.test.sh` glob). Parse, don't scan lines
+  (deepen: a guard over a structured language must lex it):
+  - **Render, then parse.** Render `cloud-init.yml` through `terraform console` exactly as
+    `cloud-init-web-zot-seed.test.sh` (its "Render (terraform templatefile)" block) does — the raw file
+    is not valid YAML (`%{ if web_tunnel_connector ~}` at column 0) — and load `runcmd` with
+    `yaml.safe_load`. Terraform absent: skip locally, FAIL under `CI` (the same fail-closed gate as
+    that suite and `zot-image-fetch.test.sh`'s `R_RAN`). Do the same for `cloud-init-registry.yml`
+    to get copy R as a parsed runcmd element.
+  - **Copy B** is read from the dedicated deny `provisioner "remote-exec"` block (Phase 1.3/1.4) by
+    evaluating `local.ghcr_deny_sh` with `terraform console` in a scratch root (heredoc `<<-`
+    strips indentation itself; no hand-written dedent).
+  - **Whole-entry parity:** runcmd element A == copy B == copy R, byte for byte — the WHOLE entry,
+    so an extra command added to the entry (`: > /etc/hosts` names no ghcr.io and is invisible to
+    the census) reds too.
+  - **Ordering on the parsed list:** runcmd[0] contains `trap on_err EXIT`; runcmd[1] is copy A.
+  - **One execution of copy B under `bash`** (Terraform's `inline` has no shebang; root's shell runs
+    it), prefixed with `set -e` as the real block is, against synthesized temp files — after first
+    asserting the path substitution removed every literal `/etc/hosts` from the script (so a root run
+    can never touch the real file) — expecting one `0.0.0.0 <name>` and one `:: <name>` line per name.
+  - **Classifier agreement,** with a `getent` shim that answers PER NAME: fixtures = sinkhole only;
+    routable IPv4 only; sinkhole + routable; routable IPv6 containing `::` (`2606:50c0:8000::154`, the
+    registry H6 fixture); unresolvable; and "ghcr.io sinkholed but pkg-containers routable". Run the
+    registry classifier block (extracted from rendered copy R's heartbeat), `_ghcr_blocked_state`
+    (sourced from `ci-deploy.sh` via a function-extraction seam) and `local.ghcr_deny_assert_sh`.
+    Expected: `1`/pass, `0`/fail, `0`/fail, `0`/fail, `unknown`/fail, and for the last row the two
+    classifiers say `1` (they probe ghcr.io only — by design, registry parity) while the assertion
+    FAILS (it checks both names) — asserted as an expected difference, not agreement.
+  - **Wiring, by parsed span:** strip HCL comments, then within each resource's own block (bounded
+    by the top-level-block regex `ship-deploy-pipeline-fix-gate.test.ts` uses) assert both locals
+    appear in the `triggers_replace` expression AND in a dedicated trailing `provisioner "remote-exec"`
+    whose body references nothing but `"set -e"`, `local.ghcr_deny_sh` and `local.ghcr_deny_assert_sh`
+    (no `var.`, no `doppler_`, no `hooks_json`, no `${` — Terraform suppresses a provisioner's whole
+    output when its config holds a sensitive value, and a failed secret-bearing inline leaves its
+    script in `/root`; deepen: security + observability + architecture).
+  - **Consumer census:** across ALL `apps/web-platform/infra/*.tf`, every occurrence of
+    `for h in ghcr.io` or of a write to `/etc/hosts` sits inside the two locals' definitions.
+  - **In-suite mutation battery** (every Guard 2 row, applied to scratch copies, each required to red
+    with the named check — not a one-off demonstration) plus a floor on assertions run.
+  - Every copy-B/consumer failure message says: "the deny must move to the successor route or be
+    retired with it (active-active Phase 5, ADR-143); cloud-init copy A is the end state".
+- 0.2 `ci-deploy.test.sh`: put the default `getent` shim on EVERY PATH the harness constructs
+  (`git grep -n 'PATH=' apps/web-platform/infra/ci-deploy.test.sh` — `$MOCK_DIR`, `$qd`,
+  `$_CET_FCDIR`, `$effective_path`, `$TEST_PATH_BASE` at plan time — so no invocation does a real
+  lookup). Rows: (a) a HANGING `getent` shim → `ghcr_blocked=unknown` inside the `timeout 5` bound and
+  the script's exit status equals a paired baseline run's; (b) an NXDOMAIN shim (exit 2) under
+  `set -euo pipefail` → `unknown`, run continues to a later marker; (c) `DEPLOY_SCRIPT_SHA` then
+  `^GHCR_DENY ghcr_blocked=(1|0|unknown)$`, each exactly once per invocation.
+- 0.3 `cloud-init-ghcr-seed-login.test.sh`: Guard 1 rows (RED until Phase 1).
 - 0.4 Measure the budget BEFORE editing anything else: render `cloud-init.yml` with the deny block
   inserted (scratch copy) through `plugins/soleur/test/cloud-init-user-data-size.test.ts`'s own
   render path and record the delta against `WEB_GZIP_BUDGET` (~184 B headroom per its comment). If
@@ -306,39 +376,46 @@ ADR amendment, not left implicit.
 **Phase 1 — the deny on every route.**
 
 - 1.1 `cloud-init.yml`: insert the deny as the second `runcmd:` entry (right after the trap-arm
-  entry that ends with `_emit "soleur-cloud-init boot stage" runcmd_start info`) with a SHORT comment (the
-  rendered comment bytes count against `WEB_GZIP_BUDGET`; put the long rationale in the ADR, not
-  the template).
-- 1.2 `server.tf` `locals`: add `ghcr_deny_sh` (heredoc, byte-identical loop) and
-  `ghcr_deny_assert_sh` (heredoc: for each of the two names, `a=$(getent ahosts "$h" | awk '{print
-  $1}' | sort -u)`; `if [ -z "$a" ] || printf '%s\n' "$a" | grep -qvxE '0\.0\.0\.0|::'; then echo
-  "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource
-  is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run
-  rerun --failed." >&2; exit 1; fi` — this is the ONE FATAL literal; every AC greps
-  `FATAL: .* (#9169)`),
-  with a comment naming both consumers and Guard 2.
-- 1.3 `zot_consumer_probe_install`: add both locals to `triggers_replace`; append both as the LAST
-  elements of its `remote-exec` `inline` (after the env-file write and `systemctl` lines), so a deny
-  or assertion failure can never block re-delivery of the probe's Doppler token file. Before relying on the re-fire, confirm its existing body
-  is idempotent on a live host (it is: two `file` provisioners overwrite the same bytes, the env file
-  is rewritten from the same inputs under `umask 0137`, `daemon-reload`, and `enable --now` on an
-  already-enabled timer) — re-read the block at work time and say so in the PR body. Add a one-line
-  header comment on the resource: `# also carries the ghcr.io hosts-file deny (#9169; Guard 2)`.
+  entry that ends with `_emit "soleur-cloud-init boot stage" runcmd_start info`) with a SHORT comment
+  (the rendered comment bytes count against `WEB_GZIP_BUDGET`; put the long rationale in the ADR).
+  The comment names why the sinkhole is `0.0.0.0`/`::` and never `127.0.0.1` (a loopback-resolving
+  registry name is one Docker may treat as an insecure/local registry — unverified here, stated as
+  the reason not to "fix" it; Guard 2 row 1 reds on it).
+- 1.2 `server.tf` `locals`: add `ghcr_deny_sh` (heredoc, byte-identical to copy R's whole runcmd
+  entry) and `ghcr_deny_assert_sh` (heredoc: `for h in ghcr.io pkg-containers.githubusercontent.com;
+  do a=$(getent ahosts "$h" | awk '{print $1}' | sort -u); if [ -z "$a" ] || printf '%s\n' "$a" |
+  grep -qvxE '0\.0\.0\.0|::'; then echo "FATAL: $h does not resolve ONLY to the sinkhole after the
+  deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the
+  owning apply workflow; never gh run rerun --failed." >&2; exit 1; fi; done` — the ONE FATAL
+  literal; every AC greps `FATAL: .* (#9169)`), with a comment naming both consumers and Guard 2.
+- 1.3 `zot_consumer_probe_install`: add both locals to `triggers_replace`; add a NEW, LAST
+  `provisioner "remote-exec" { inline = ["set -e", local.ghcr_deny_sh, local.ghcr_deny_assert_sh] }`
+  — separate from the existing token-bearing block, so (a) the FATAL text is not swallowed by
+  Terraform's sensitive-output suppression, (b) a failure never leaves the Doppler-token script in
+  `/root`, (c) the token re-delivery has already completed. Confirm the existing body is idempotent
+  (two `file` provisioners overwrite the same bytes, the env file is rewritten from the same inputs
+  under `umask 0137`, `daemon-reload`, `enable --now` on an already-enabled timer) and say so in the
+  PR body. Header comment: `# also carries the ghcr.io hosts-file deny (#9169; Guard 2)`.
 - 1.4 `deploy_pipeline_fix_web2`: add both locals to `triggers_replace` ABOVE the
   `file(".../web-2-ssh-host-key.pub"),` line (the pin line and the `"dpf-web2-remote-exec-v1",`
-  sentinel after it must stay adjacent and byte-identical: `web-host-provisioner-parity-mutation.test.sh`
-  M4b/c/d anchor on exactly those two lines); leave the sentinel at `-v1`; append both locals to the post-file `remote-exec` `inline` after the
-  sha256 assertions; update the resource's header comment, whose charter today is "the FILE_MAP
-  file set", to name the hosts-file deny as its one non-file duty (and re-run
-  `web-host-provisioner-parity.test.sh` §1, which treats this resource as the only web-2 dialer).
-  A failed assertion taints the resource, so every later run re-attempts it until fixed — the FATAL
-  text names the route back.
+  sentinel after it stay adjacent and byte-identical: `web-host-provisioner-parity-mutation.test.sh`
+  M4b/c/d anchor on exactly those two lines, and M4f on the first `remote-exec` block); leave the
+  sentinel at `-v1` and amend the resource's sentinel comment to "bump on any inline edit the
+  `triggers_replace` locals do not already cover"; add the same NEW, LAST, secret-free
+  `provisioner "remote-exec"` block AFTER the existing post-file block (so it runs after
+  `systemctl try-restart webhook` / `is-active`, and a deny failure cannot leave the new
+  `hooks.json`/`webhook.service` unloaded); update the header comment, whose charter today is "the
+  FILE_MAP file set", to name the hosts-file deny as its one non-file duty; re-run
+  `web-host-provisioner-parity.test.sh` §1, which treats this resource as the only web-2 dialer.
 - 1.5 `cloud-init-ghcr-seed-login.test.sh`: widen the whole-line exemption (today
   `f == "cloud-init-registry.yml" and s in REGISTRY_DENY_LINES`) to a `{file: {lines}}` table that
-  admits the deny line in `cloud-init.yml` only; add the Guard 1 rows; re-measure and re-pin the
+  admits the deny header in `cloud-init.yml`, and make the exemption BLOCK-anchored for both files:
+  the header line is admitted only when its whole runcmd entry equals copy R (closes the hole where
+  an exempt header is followed by `docker pull "$h/jikig-ai/…"`, which names no ghcr.io literal on the
+  pull line — the registry exemption has the same hole today). Add the Guard 1 rows; re-pin the
   row-count floor.
 - 1.6 `web-host-provisioner-parity.test.sh`: it reads LITERAL destinations in server.tf, so the
-  deny's `/etc/hosts` write — reached through `${local.ghcr_deny_sh}` — is invisible to it (it would
+  deny's `/etc/hosts` write — reached through `local.ghcr_deny_sh` — is invisible to it (it would
   fail open, not red). Guard 2 owns this destination's fresh-boot parity explicitly (copy A ≡ copy
   B). Run both parity suites unchanged; re-pin floors only if a measured count moves.
 
@@ -346,7 +423,10 @@ ADR amendment, not left implicit.
 
 - 2.1 `ci-deploy.sh`: add `_ghcr_blocked_state` (prints exactly one of `1|0|unknown`; every
   command `|| true`/`if`-guarded because the script runs `set -euo pipefail`; `getent` bounded with
-  `timeout 5` when `timeout` exists; probes `ghcr.io` only — registry-classifier parity) and emit
+  `timeout 5` when `timeout` exists; probes `ghcr.io` only — registry-classifier parity; defined as
+  a column-0 `_ghcr_blocked_state() {` … `}` function so tests extract it with the existing
+  `sed -n '/^_name()/,/^}/p' "$DEPLOY_SCRIPT"` seam, as `ci-deploy.test.sh` does for
+  `_cred_redact_env_values`) and emit
   `logger -t "$LOG_TAG" "GHCR_DENY ghcr_blocked=$v" 2>/dev/null || true` immediately after the
   `DEPLOY_SCRIPT_SHA` line. In `ci-deploy.test.sh`, put a default `getent` shim on the harness PATH
   so the many existing invocations never do a real lookup (which could stall up to 5 s each on a
@@ -394,8 +474,10 @@ ADR amendment, not left implicit.
 
 ## Non-Goals
 
-- Container-internal name resolution (docker-generated `/etc/hosts` in each container). Covered by
-  the cron-egress nftables allowlist, which names no GHCR host.
+- Bridge-network container resolution and egress (docker-generated `/etc/hosts`; the container CIDR
+  allowlist admits GitHub's frontend ranges, which include GHCR) and the `docker.pkg.github.com`
+  alias — both deferred to #9275 (adding the alias means editing `cloud-init-registry.yml`, whose
+  `user_data` is ForceNew, i.e. a registry-host replace; see Sharp Edges).
 - The inngest and git-data hosts. ADR-096 5.3b-iii's measured object was the registry host and the
   web hosts; the inngest template's `ghcr.io/...soleur-inngest-bootstrap` literal is the bump bot's
   pin carrier and is never pulled (G1 census).
@@ -409,7 +491,7 @@ ADR amendment, not left implicit.
   sentinel unchanged; new trigger entries inserted above the pin line).
 - `apps/web-platform/infra/ci-deploy.sh` — `_ghcr_blocked_state` + `GHCR_DENY` marker.
 - `apps/web-platform/infra/ci-deploy.test.sh` — fail-open + once-per-invocation marker rows.
-- `apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh` — cloud-init.yml whole-line exemption, mutation rows,
+- `apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh` — block-anchored exemption table (registry + web), mutation rows,
   floor re-pin.
 - `plugins/soleur/test/cloud-init-user-data-size.test.ts` (conditional, Phase 3.1) —
   `WEB_GZIP_BUDGET`.
@@ -439,8 +521,9 @@ singletons); this plan adds no `count`/`for_each`. The scope-out stays open.
   no provider pin change, no new variable, no new secret, no new `TF_VAR_*`.
 - `server.tf`: two new `locals` (`ghcr_deny_sh`, `ghcr_deny_assert_sh`, plain strings, no
   interpolation); `terraform_data.zot_consumer_probe_install` and
-  `terraform_data.deploy_pipeline_fix_web2` gain both locals in `triggers_replace` and in a
-  `remote-exec` `inline`; the web-2 sentinel is unchanged (the new inline text is hash-covered).
+  `terraform_data.deploy_pipeline_fix_web2` gain both locals in `triggers_replace` and a NEW, last,
+  secret-free `provisioner "remote-exec"` block running them; the web-2 sentinel is unchanged (the
+  new inline text is hash-covered).
 - `cloud-init.yml`: second `runcmd:` entry, after the trap arm (rendered by the existing
   `templatefile("${path.module}/cloud-init.yml", …)` for `hcloud_server.web`).
 - No resource is created or destroyed; both `terraform_data` resources are REPLACED (re-provisioned)
@@ -457,12 +540,13 @@ merge-triggered workflows re-fire the two resources:
 - web-2: `apply-deploy-pipeline-fix.yml` (`-target=terraform_data.deploy_pipeline_fix_web2`),
   push-triggered because the PR edits `server.tf` and `ci-deploy.sh` (both in its `paths:`).
 
-Downtime/blast radius: none expected. The deny appends at most four lines per file; no daemon is
-restarted (dockerd re-reads `/etc/hosts` per lookup via the Go resolver). The web-1 resource re-runs
+Downtime/blast radius: see `## Downtime & Cutover`. The deny itself restarts nothing (dockerd reads
+`/etc/hosts` per lookup via the Go resolver). The web-1 resource re-runs
 `systemctl enable --now web-zot-consumer-probe.timer` (no-op when enabled) and rewrites its env file
-with identical content; the web-2 resource re-delivers the same deploy-pipeline file set (identical
-bytes except `ci-deploy.sh`) and re-runs `visudo`/sha assertions — the same work #9212's first apply
-did. Neither resource restarts `webhook.service`.
+with identical content. The web-2 resource re-delivers the deploy-pipeline file set and ends with
+`systemctl try-restart webhook` + an `is-active` assertion (server.tf, the post-file `inline` of
+`deploy_pipeline_fix_web2`) — a restart of web-2's deploy listener that ANY `ci-deploy.sh` change
+already triggers today; this PR's `ci-deploy.sh` edit alone would cause it.
 
 Coupling check (measured, correcting a premise): the #9151 plan's deepen note says
 `apply-deploy-pipeline-fix.yml` "deliberately excludes `server.tf` from `paths:` (R13)". The
@@ -485,6 +569,57 @@ resources — no drift window between the hosts. Work re-verifies this with
 No vendor resource is created. Better Stack ingestion of one extra short log line per `ci-deploy.sh`
 invocation (a few dozen per day across two hosts) is negligible against the existing Source 4 volume.
 
+## Downtime & Cutover
+
+(deepen-plan Phase 4.55 — fired on the deploy/router class.)
+
+- **Offline-inducing operation:** `deploy_pipeline_fix_web2`'s re-fire ends with
+  `systemctl try-restart webhook` on web-2. For the second or two of that restart, a deploy POST to
+  web-2's listener is refused. Nothing else in this change restarts a serving process: the deny is a
+  file append, `zot_consumer_probe_install` only re-enables an already-enabled timer, and no
+  `hcloud_server` attribute changes (`ignore_changes = [user_data, …]`).
+- **web-1 side (pre-existing, unchanged):** the `ci-deploy.sh` edit also fires `deploy_pipeline_fix`
+  (web-1's webhook push), whose handler schedules `systemd-run --on-active=3s … systemctl restart
+  webhook` after every accepted push (`infra-config-apply.sh`, the "scheduling self-restart in 3s"
+  branch). That is the standard delivery of every `ci-deploy.sh` change and is not new here;
+  `infra_config_handler_bootstrap` is NOT re-fired (its hash inputs are untouched).
+- **Surface affected:** the deploy listeners (`webhook.service`) only — a few seconds each. web-2 is serving-weight 0 (out of the load
+  balancer pool, `variables.tf` comment near the `web_hosts` map: "web-2 is OUT-OF-BAND (serving-weight
+  0, ADR-143 D2)"), so no user request is served by it; web-1's `webhook.service` is untouched.
+- **Zero-downtime path evaluated — and it is the default:** the restart is already the documented
+  behaviour of every `ci-deploy.sh` delivery to web-2 since #9212, and it is `try-restart` (a stopped
+  unit stays stopped). The one casualty class is a release's web-2 deploy POST landing inside the
+  restart window; it self-reports (the release's web-2 `DEPLOY_SCRIPT_SHA` / `IMAGE_VERIFY` rows are
+  missing and `check-deploy-script-parity.sh` flags the host), and PM3/PM4 read the first release
+  AFTER both applies precisely so that race cannot produce a false result. No maintenance window is
+  needed; no residual user-facing downtime is accepted.
+- **Placement:** the deny + assertion run in a separate, last `provisioner "remote-exec"` block AFTER
+  the block that ends with `try-restart` / `is-active`, so a deny failure can never leave web-2's
+  deploy listener un-restarted on the new files (the same "never block the resource's primary duty"
+  rule applied to web-1 in Phase 1.3).
+
+## Network-Outage Deep-Dive
+
+(deepen-plan Phase 4.5 — fired on the resource shape: both touched resources use `remote-exec` over a
+`connection { type = "ssh" }`.)
+
+1. **L3 firewall allow-list:** not an operator-egress question — both resources are applied only by CI
+   through tunnels (web-1: the `cf-tunnel-ssh-bridge` in `apply-web-platform-infra.yml`; web-2: the
+   ADR-220 bastion forward through web-1 in `apply-deploy-pipeline-fix.yml`), never from an operator
+   IP. **Verified** 2026-09-30: the latest `apply-web-platform-infra.yml` push run's step "Terraform
+   apply (SSH-provisioned resources, over the bridge)" concluded `success`, and the latest
+   `apply-deploy-pipeline-fix.yml` push run (2026-09-30T02:38Z) concluded `success`
+   (`gh run list` / `gh run view --json jobs`).
+2. **L3 DNS/routing:** the connections use literal IPv4 addresses (`hcloud_server.web[…].ipv4_address`)
+   redirected through the tunnel; no DNS dependency. **Verified** by the same green runs.
+3. **L7 TLS/proxy:** the tunnel legs are Cloudflare Access (service-token) — covered by the same green
+   runs; host keys are pinned (ADR-237: `local.web_1_ssh_host_key`, `local.web_2_ssh_host_key`).
+4. **L7 application (sshd):** no sshd change in this plan. **Opt-out justified** by the green runs
+   above (same connection blocks, unchanged).
+
+Gap to close at work time: none, beyond re-reading the two most recent runs' conclusions before
+merge (a red SSH stage on `main` would make PM1/PM2 unattributable).
+
 ## Architecture Decision (ADR/C4)
 
 ### ADR
@@ -496,9 +631,15 @@ with "Amendment 2026-09-30 (#9169) — the web hosts deny ghcr.io": the three co
 worst-case evidence age (time since the last release); a short
 **delivery route** paragraph (in-place Terraform re-provision because web-1 cannot be replaced —
 cx33, 0/6 stock — with the ADR-148 gated web-host replace as the alternative, and the web-1 route
-retiring with active-active Phase 5); the scope split (host processes and host-network containers
-such as the cosign verifier are covered; bridge-network containers are governed by the cron-egress
-allowlist); the loopback behaviour of `0.0.0.0`/`::`; the two workflows that carry the two hosts;
+retiring with active-active Phase 5; web-2 COULD be replaced under ADR-148, and is changed in place
+anyway because the same apply already re-fires its deploy-pipeline delivery for the `ci-deploy.sh`
+edit, so a replace would add a destroy-first host cycle for no extra property); the scope split (host
+processes and host-network containers such as the cosign verifier are covered; bridge-network
+containers are NOT — GitHub CIDRs in the container allowlist, #9275 — nor is the
+`docker.pkg.github.com` alias, #9275); that the release marker probes `ghcr.io` only (registry parity)
+while `pkg-containers.githubusercontent.com` is proven at apply time by the assertion; the loopback
+behaviour of `0.0.0.0`/`::` (a connect fails in 0 ms — measured with `curl` 2026-09-30); the two
+workflows that carry the two hosts;
 and the live proof (green post-merge applies, then the first release's `GHCR_DENY ghcr_blocked=1`
 row per web host alongside `IMAGE_VERIFY: ok`). Update
 the status bullets (top of file and the part-2 amendment's "a web-host deny is a tracked follow-up"
@@ -558,16 +699,16 @@ error_reporting:
 
 failure_modes:
   - mode: "deny not applied on a running host (resource did not re-fire, or workflow B did not run)"
-    detection: "GHCR_DENY ghcr_blocked=0 on that host_name in the next release's rows; gh run list for the two apply workflows"
+    detection: "layer 3 vector (journald Source 4 -> Better Stack): GHCR_DENY ghcr_blocked=0 on that host_name in the next release's rows; layer 6 workflow run log: gh run list / gh run view --json jobs for the two apply workflows (SSH step success vs skipped)"
     alert_route: "post-merge verification in the pipeline (Post-merge ACs); no page"
   - mode: "deny text mis-rendered by HCL (escape or interpolation drift)"
-    detection: "web-ghcr-deny.test.sh copy-parity + bash-execution + classifier-agreement rows in CI; the in-band ghcr_deny_assert_sh fails the apply"
+    detection: "layer 6 workflow run log: web-ghcr-deny.test.sh parity/execution/agreement rows red the PR check; the in-band ghcr_deny_assert_sh prints its FATAL in the terraform apply transcript (visible because the deny runs in its own secret-free provisioner block)"
     alert_route: "red CI check / red apply run on main (main-health-monitor)"
   - mode: "a future change re-points the cosign verifier (or any host pull) at ghcr.io"
-    detection: "cloud-init-ghcr-seed-login.test.sh G1 census VIOL pre-merge; post-merge IMAGE_VERIFY_FAIL result=cosign_absent via cosign_verify_event"
+    detection: "layer 6 workflow run log: cloud-init-ghcr-seed-login.test.sh G1 census VIOL pre-merge; post-merge layer 3 vector (IMAGE_VERIFY_FAIL result=cosign_absent via logger) plus the Sentry event cosign_verify_event POSTs"
     alert_route: "red CI check pre-merge; cosign_verify_event page post-merge"
   - mode: "probe itself breaks (getent absent / hangs)"
-    detection: "GHCR_DENY ghcr_blocked=unknown rows; the probe is timeout-bounded and fail-open, so the deploy's own markers (DEPLOY_SCRIPT_SHA, IMAGE_VERIFY) still land"
+    detection: "layer 3 vector (journald Source 4 -> Better Stack): GHCR_DENY ghcr_blocked=unknown rows; the probe is timeout-bounded and fail-open, so the deploy's own markers (DEPLOY_SCRIPT_SHA, IMAGE_VERIFY) still land"
     alert_route: "post-merge verification; no page"
 
 logs:
@@ -614,84 +755,98 @@ exception:
 ### Guard 1 — G1 host-GHCR census keeps its teeth after the web exemption (`apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh`)
 
 **Property.** No comment-stripped code line in any rendered cloud-init template (or
-`soleur-host-bootstrap.sh`) names `ghcr.io` except the `IREF=` pin carrier, the `GHCR_OK_TOKENS`, and
-three exact whole lines each admitted ONLY in its named file: the registry deny and probe lines in
-`cloud-init-registry.yml`, and the web deny line in `cloud-init.yml`; and no baked host script
+`soleur-host-bootstrap.sh`) names `ghcr.io` except the `IREF=` pin carrier, the `GHCR_OK_TOKENS`, the
+registry probe line, and a deny header that is admitted only as part of a whole runcmd entry equal to
+copy R, in `cloud-init-registry.yml` or `cloud-init.yml`; and no baked host script
 (`local.host_script_files`, which includes `ci-deploy.sh`) presents a GHCR login or pulls a
 `ghcr.io/jikig-ai/` image.
 
 **Assembly.** Two chokepoints, stated as two, both in `cloud-init-ghcr-seed-login.test.sh`: (i) the
-whole-line rule, check (5) in the `for f in derived + extras` loop (~line 304-331; the `elif f ==
-"cloud-init-registry.yml" and s in REGISTRY_DENY_LINES` branch this PR generalises to a
-`{file: {exact stripped line, …}}` table) — its file set is DERIVED from every `templatefile()` call
-plus `soleur-host-bootstrap.sh`; (ii) the host-literal rule (~line 387), over `local.host_script_files`
-plus `hextras`, which is where `ci-deploy.sh` is scanned and which this PR does not change.
+whole-line rule, check (5) in the `for f in derived + extras` loop (the `elif f ==
+"cloud-init-registry.yml" and s in REGISTRY_DENY_LINES` branch, which this PR generalises to a
+`{file: {admitted block}}` table) — its file set is DERIVED from every `templatefile()` call plus
+`soleur-host-bootstrap.sh`; (ii) the host-literal rule (the `host_script_files` + `hextras` sweep),
+where `ci-deploy.sh` is scanned and which this PR does not change (its existing rows 15/15b already
+cover a GHCR pull appended in `ci-deploy.sh`).
 
-**Mutation matrix** (added to the suite's `mrow` battery; written before the exemption change):
+**Mutation matrix** (added to the suite's `mrow` battery; each row asserts the SPECIFIC VIOL kind,
+not "any new VIOL"):
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Append `; docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20` to the web deny line in `cloud-init.yml` | RED (VIOL ghcr.io cloud-init.yml) |
-| 2 | Append `; docker pull ghcr.io/jikig-ai/soleur-web-platform:latest` to the new probe line in `ci-deploy.sh` | RED (host-literal rule: host-pull-ghcr in ci-deploy.sh — the probe line is NOT a shelter) |
-| 3 | Keep the compliant deny line and ADD a second line `curl -fsS https://ghcr.io/v2/` after it in `cloud-init.yml` | RED (second member after a compliant first) |
+| 1 | Append `; docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20` to the web deny header in `cloud-init.yml` | RED — `VIOL cloud-init.yml ghcr.io` |
+| 2 | Keep the header byte-identical and add `docker pull "$h/jikig-ai/soleur-web-platform:latest"` inside the web deny entry's loop body | RED — the entry no longer equals copy R, so the header loses its admission (`VIOL cloud-init.yml ghcr.io`) |
+| 3 | Keep the compliant entry and ADD a second line `curl -fsS https://ghcr.io/v2/` after it in `cloud-init.yml` | RED — `VIOL cloud-init.yml ghcr.io` (second member after a compliant first) |
+| 4 | Row 2's mutation applied to the REGISTRY entry in `cloud-init-registry.yml` | RED — `VIOL cloud-init-registry.yml ghcr.io` (the pre-existing registry hole, closed in the same change) |
 
 The guard's own dispatch (an empty derived file set) is already caught by the suite's existing
-SCANNED / measured row-count floor, re-pinned once for the three new rows.
+SCANNED / measured row-count floor, re-pinned once for the new rows.
 
-**Harness rows.** (a) must-PASS, non-canonical but permitted: the web deny line re-indented by two
-extra spaces (the census strips the line before comparing) → PASS. (b) Suite edit that must RED:
-turn the `mrow` helper's mutation into a no-op (`py_sub` writes nothing) → the new rows 1-3 report
-"not detected" and the measured row-count floor (re-pinned from 47 to the new measured count) fails.
+**Harness rows.** (a) must-PASS, non-canonical but permitted: the web deny entry re-indented under
+its `- |` (YAML indentation differs, parsed entry identical) → PASS. (b) Suite edit that must red:
+make `py_sub` write nothing → `landed()` exits 2 (an instrument fault, reported as such, not as a
+detection) — the suite must fail, and must not report the rows as "detected".
 
-**Anchor.** No stored value is compared; the exemption table and the lines it admits live in the same
-commit, so a weakening needs a reviewed diff to this test file — the file is under `apps/web-platform/infra/`,
-covered by the repo's review gates. Stated so it is not mistaken for an integrity check.
+**Anchor.** No stored value is compared; the exemption table and the entries it admits live in the
+same commit, so a weakening needs a reviewed diff to this test file. Copy R is the external
+reference for the admitted block (a registry-template diff fires the registry suites). Stated so it
+is not mistaken for an integrity check.
 
-### Guard 2 — every deny copy is the registry's bytes and every running-host route hashes AND runs it (`apps/web-platform/infra/web-ghcr-deny.test.sh`)
+### Guard 2 — every deny copy is the registry's entry and every running-host route hashes AND runs it, secret-free (`apps/web-platform/infra/web-ghcr-deny.test.sh`)
 
-**Property.** Each copy of the deny that can reach a web host (cloud-init runcmd[1]; `local.ghcr_deny_sh`
-as consumed by `zot_consumer_probe_install` and `deploy_pipeline_fix_web2`) is byte-identical (after
-dedent) to the registry precedent, whose executed effect `zot-image-fetch.test.sh` R10 already proves;
-each running-host consumer includes the deny and its assertion in BOTH its `triggers_replace` and its
-`remote-exec` body; and the three "resolves only to the sinkhole" implementations agree.
+**Property.** Each copy of the deny that can reach a web host (rendered cloud-init runcmd[1];
+`local.ghcr_deny_sh` as consumed by `zot_consumer_probe_install` and `deploy_pipeline_fix_web2`) is
+byte-identical to copy R's whole runcmd entry (whose executed effect `zot-image-fetch.test.sh` R10
+proves) and runs correctly under `bash`; each running-host consumer carries the deny and its
+assertion in BOTH its `triggers_replace` and a dedicated, secret-free, last `remote-exec` block; and
+the three "only the sinkhole" implementations agree on every fixture except the named, expected
+difference.
 
-**Assembly.** Two chokepoints, stated as two: (i) fresh hosts — the `runcmd:` entry right after the trap arm in
-`cloud-init.yml`; (ii) running hosts — `local.ghcr_deny_sh`/`local.ghcr_deny_assert_sh`, consumed by
-the two named resources. The suite also DERIVES the consumer set: every `server.tf` occurrence of
-`for h in ghcr.io` must sit inside the two locals' heredoc definitions (occurrences outside them = 0),
-so a hand-copied literal in a new resource is caught rather than silently unguarded.
+**Assembly.** Two chokepoints, stated as two: (i) fresh hosts — rendered runcmd[1] of `cloud-init.yml`;
+(ii) running hosts — `local.ghcr_deny_sh`/`local.ghcr_deny_assert_sh`, consumed by the two named
+resources. The consumer set is DERIVED: every occurrence of `for h in ghcr.io` or of an `/etc/hosts`
+write across `apps/web-platform/infra/*.tf` must sit inside the two locals' definitions, so a
+hand-copied literal in a new resource is caught rather than silently unguarded. Resource spans are
+bounded by the top-level-block regex, comment-stripped, so a mutation cannot land in the wrong
+resource (`zot_consumer_probe_install` precedes `deploy_pipeline_fix_web2` in `server.tf`).
 
-**Mutation matrix:**
+**Mutation matrix** (in-suite battery on scratch copies; each row names the check that must red):
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | `0.0.0.0` → `127.0.0.1` in copy B (`local.ghcr_deny_sh`) only | RED (copy parity) |
-| 3 | Remove `local.ghcr_deny_sh` from `deploy_pipeline_fix_web2`'s `triggers_replace`, keep it in `inline` | RED (hash coverage) |
-| 4 | Keep it in `triggers_replace`, remove it from `zot_consumer_probe_install`'s `inline` | RED (wiring: not run) |
-| 5 | Add a NEW `terraform_data` whose `inline` carries a hand-copied deny literal (not the local), after the two compliant consumers | RED (occurrences of `for h in ghcr.io` outside the two locals ≠ 0) |
-| 6 | Move the deny below the `STAGE=cf_apt_key`/`apt-get` entry (after the first package fetch) | RED (ordering) |
-| 6b | Move the deny ABOVE the trap-arm entry (runcmd[0]) | RED (the trap arm must stay first) |
-| 6c | Weaken `ghcr_deny_assert_sh` to the negative form (drop the `[ -z "$a" ]` arm) | RED (agreement table: the unresolvable shim must FAIL the assertion) |
-| 7 | Make `_ghcr_blocked_state` report `1` when `getent` prints nothing | RED (agreement table: unresolvable must be `unknown`) |
-| 8 | Dispatch: rename the heredoc anchor so extraction of copy B returns empty | RED (non-vacuity floor: 3 non-empty copies required) |
+| 1 | `0.0.0.0` → `127.0.0.1` in copy B (`local.ghcr_deny_sh`) only | RED (whole-entry parity) |
+| 2 | Append `: > /etc/hosts` as a new last line of copy A's runcmd entry | RED (whole-entry parity) |
+| 3 | Remove `local.ghcr_deny_sh` from `deploy_pipeline_fix_web2`'s `triggers_replace`, keep the deny block | RED (hash coverage, scoped to the web-2 span) |
+| 4 | Keep it in `triggers_replace`, delete `zot_consumer_probe_install`'s dedicated deny block | RED (wiring, scoped to the web-1 span) |
+| 5 | Move the deny locals INTO web-1's existing token-bearing `remote-exec` block | RED (the deny block must be secret-free and separate) |
+| 6 | Add a NEW `terraform_data` in a second `.tf` file whose `inline` carries a hand-copied deny literal, after the two compliant consumers | RED (consumer census: occurrence outside the locals) |
+| 7 | Move copy A to runcmd[2] (after `networkctl reload`) | RED (ordering on the parsed list) |
+| 8 | Move copy A above the trap-arm entry (runcmd[0]) | RED (the trap arm must stay first) |
+| 9 | Weaken `ghcr_deny_assert_sh` to `[ -n "$a" ] && printf '%s\n' "$a" \| grep …` (unresolvable now passes) | RED (agreement: the unresolvable fixture must FAIL the assertion) |
+| 10 | Drop `-x` from `_ghcr_blocked_state`'s `grep -qvxE` | RED (agreement: the `2606:50c0:8000::154` fixture must read `0`) |
+| 11 | Dispatch: rename the heredoc so the `terraform console` read of copy B returns empty | RED (non-vacuity floor: 3 non-empty copies and ≥ N assertions) |
 
 **Harness rows.** (a) must-PASS, non-canonical: copy A re-indented to a different YAML block indent
-(4 → 6 spaces under its `- |`) → still equal after dedent → PASS. (b) Suite edit that must RED: make
-the comparator return success unconditionally → row 1 goes undetected, which the suite's own
-self-check (it runs row 1's mutation on a scratch copy and requires a RED) reports.
+→ parsed entry unchanged → PASS; and a synthesized hosts file already holding `0.0.0.0<TAB>ghcr.io`
+plus unrelated lines → the `bash` execution of copy B adds nothing for `ghcr.io` and leaves the
+unrelated lines byte-identical → PASS. (b) Suite edit that must red: make the parity comparator return
+success unconditionally → the in-suite battery's row 1 reports "not detected" and the suite fails.
 
 **Anchor.** Copy R (the registry template) is the external reference for copies A and B: a weakening
-of the web copies alone reds on parity; weakening all three at once needs a diff to
-`cloud-init-registry.yml`, which fires its own registry suites (`zot-image-fetch.test.sh` R10/H6).
+of the web copies alone reds on parity; weakening all three needs a diff to `cloud-init-registry.yml`,
+which fires its own suites (`zot-image-fetch.test.sh` R10/H6) and, since the registry host's
+`user_data` is not ignored the same way, a planned registry replace — which is exactly why this plan
+does NOT touch copy R.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `bash apps/web-platform/infra/web-ghcr-deny.test.sh` exits 0, and every Guard 2 mutation
-  row was demonstrated RED during work (record the command + outcome per row in the PR body).
+- [ ] AC1 `CI=1 bash apps/web-platform/infra/web-ghcr-deny.test.sh` exits 0 with terraform present
+  (the render/console half RAN, not skipped), and its in-suite mutation battery reports every Guard 2
+  row detected by the named check.
 - [ ] AC2 `bash apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh` exits 0 with the new
-  Guard 1 rows 1-3 detected and the re-pinned row-count floor printed.
+  Guard 1 rows 1-4 detected (each with its named VIOL kind) and the re-pinned row-count floor printed.
 - [ ] AC3 `bash apps/web-platform/infra/ci-deploy.test.sh` exits 0 including the fail-open row
   (`getent` absent/NXDOMAIN → `unknown`, exit status unchanged) and the once-per-invocation row
   (`DEPLOY_SCRIPT_SHA` then `GHCR_DENY ghcr_blocked=…`, each exactly once).
@@ -725,12 +880,17 @@ of the web copies alone reds on parity; weakening all three at once needs a diff
   appending the deny to `/etc/hosts`; the merge click is the authorization. Those are the only two
   workflows that `-target` either resource (`git grep -n 'target=terraform_data.zot_consumer_probe_install\|target=terraform_data.deploy_pipeline_fix_web2' .github/workflows`
   → `apply-web-platform-infra.yml:1171`, `apply-deploy-pipeline-fix.yml:422`); re-run that grep at
-  work time and name any new hit.
+  work time and name any new hit. The one other path is the pre-existing break-glass untargeted
+  `terraform apply -var image_name=…` chain printed in `apply-web-platform-infra.yml`'s web-host
+  recovery text, which would also apply both resources; it is unchanged by this PR.
 - [ ] AC14 `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` passes with
   `BASELINE_DECLARED_PROBES` bumped 36 → 37 and a PLACEMENT/TRUTH/NO SUBSTITUTE comment for this
   plan (this plan's `discoverability_test` declares `credentials_required`, which moves that corpus
   count the moment the plan is committed).
 - [ ] AC15 `npx markdownlint-cli2` over this plan and its `tasks.md` exits 0.
+- [ ] AC16 `git diff --exit-code origin/main...HEAD -- apps/web-platform/infra/cloud-init-registry.yml
+  apps/web-platform/infra/zot-registry.tf` is clean (copy R and the registry host are untouched — a
+  byte change there forces a registry-host replace).
 
 ### Post-merge (automated verification by the pipeline, no host access)
 
@@ -743,7 +903,9 @@ of the web copies alone reds on parity; weakening all three at once needs a diff
 - [ ] PM2 `apply-deploy-pipeline-fix.yml` (push run for the merge commit) is green, with
   `terraform_data.deploy_pipeline_fix_web2` re-created and the same assertion passing on web-2.
   A red run is re-driven with a fresh commit or `gh workflow run apply-deploy-pipeline-fix.yml`,
-  never `gh run rerun --failed`.
+  never `gh run rerun --failed`. A `cancelled` run (both workflows share the
+  `terraform-apply-web-platform-host` concurrency group, so a waiting run can be cancelled by a newer
+  one) is re-driven the same way.
 - [ ] PM3 After the first web release that starts AFTER both PM1 and PM2 are green (the merge's own
   `web-platform-release.yml` run if it qualifies, else a dispatch),
   `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 6h --grep GHCR_DENY`
@@ -808,7 +970,8 @@ internal host-configuration change with no user data, no UI, no vendor or cost c
   runcmd for any later bare `$f`/`$h` read that relies on being unset (none expected; same shape as
   the registry precedent), and do not wrap the loop in a subshell — that would break byte parity with
   copy R for no measured benefit.
-- `/etc/cloud/templates/hosts.debian.tmpl` absent (`grep -n manage_etc_hosts cloud-init.yml` is empty): the loop
+- `/etc/cloud/templates/hosts.debian.tmpl` present or absent — a property of the base image the repo
+  cannot show (`user_data` sets no `manage_etc_hosts`): either way the loop
   `continue`s; only `/etc/hosts` is written.
 - `getent` absent or hanging: bounded by `timeout 5` when present; result `unknown`; deploy continues.
 - A host where the deny was removed out of band: the next release logs `ghcr_blocked=0`. A
@@ -838,7 +1001,7 @@ internal host-configuration change with no user data, no UI, no vendor or cost c
 - **Risk — HCL heredoc rendering.** Mitigated by Guard 2 (byte parity + no `${`/`%{` + one `bash`
   execution of copy B) and AC7 (`terraform validate`).
 - **Risk — web-1 re-fire side effects.** `zot_consumer_probe_install`'s body is idempotent (Phase 1.3);
-  it restarts nothing.
+  it restarts nothing. (The web-2 re-fire's `try-restart webhook` is covered in `## Downtime & Cutover`.)
 - **Risk — ordering between the two workflows.** The first release after merge can race the applies,
   so its marker may read `0` on one host; PM3 reads the first release AFTER both applies are green.
 
@@ -852,3 +1015,16 @@ internal host-configuration change with no user data, no UI, no vendor or cost c
 - `gh run rerun --failed` re-runs the ORIGINAL merge ref; after pushing a fix, dispatch or push, do not
   rerun.
 - Better Stack rows are double-encoded JSON; grep the decoded `.message`, never the raw line.
+- **Never edit `cloud-init-registry.yml` in this PR** (not even to add `docker.pkg.github.com`, not
+  even whitespace): `hcloud_server.registry`'s `user_data` is ForceNew with no `ignore_changes`
+  (`zot-registry.tf`, the "Deliberately NO lifecycle.ignore_changes=[user_data]" note), so any byte
+  change plans a destroy-first replace of the only image pull path. Copy R is read-only here; Guard 1
+  row 4 mutates a scratch copy only. Assert it with
+  `git diff --exit-code origin/main...HEAD -- apps/web-platform/infra/cloud-init-registry.yml`.
+- **Terraform suppresses a provisioner's entire output when its config references a sensitive
+  value** — which is why the deny lives in its own secret-free `remote-exec` block; putting it inside
+  the existing token-bearing block would hide the FATAL and leave a secret-bearing script in `/root`
+  on failure (the `#8706` `script_path` comment on each resource in server.tf).
+- **The #9151 plan's claim that `apply-deploy-pipeline-fix.yml` excludes `server.tf` from `paths:`
+  is false on `main`** (the workflow lists it; the gate test pins it). Re-verify workflow triggers
+  from the YAML, never from a sibling plan's prose.
