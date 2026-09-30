@@ -975,6 +975,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
+        case "codex_history_transfer_required": {
+          setLastError({
+            code: "codex_history_transfer_required",
+            message: "This conversation changed Codex accounts. Acknowledge the history transfer before continuing.",
+          });
+          break;
+        }
+
         case "c4_diagram_saved": {
           // #8739 — a Concierge `edit_c4_diagram` write completed on the
           // server. Re-broadcast as a DOM event so the open C4Workspace (or

@@ -1245,6 +1245,24 @@ async function dispatchCodexChatTurn(
   if (binding.engineId !== "codex" || binding.workspaceId !== owned.workspace_id) {
     throw new Error("Codex conversation binding changed");
   }
+  const authModeGeneration = binding.authModeGeneration ?? 0;
+  if (authModeGeneration > 0) {
+    const { data: historyTransferAcknowledged, error: acknowledgementError } = await tenant.rpc(
+      "codex_history_transfer_acknowledged",
+      { p_conversation_id: conversationId, p_auth_mode_generation: authModeGeneration },
+    );
+    if (acknowledgementError) {
+      throw new Error("Codex history-transfer acknowledgment could not be verified");
+    }
+    if (historyTransferAcknowledged !== true) {
+      sendToClient(userId, {
+        type: "codex_history_transfer_required",
+        conversationId,
+        authModeGeneration,
+      });
+      return;
+    }
+  }
   if (Array.isArray(attachments) && attachments.length > 0) {
     throw new Error("Codex conversation attachments are not qualified");
   }
@@ -2994,6 +3012,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "usage_update":
     case "fanout_truncated":
     case "context_reset":
+    case "codex_history_transfer_required":
     case "c4_diagram_saved": // #8739 — Concierge diagram-save notice (server→client only)
     case "upgrade_pending":
     case "interactive_prompt":

@@ -47,3 +47,15 @@ command's `workdir`; a failed lookup is not evidence that a file is absent.
 An attempted learning-file patch copied context from a different learning and
 was rejected without a write; re-read the target tail and patch its exact
 content rather than borrowing nearby prose.
+
+The first attempt to inspect an in-progress CI job log was refused because its
+cleanup command used `rm -f`; no log file was created. The retry correctly
+reported that GitHub exposes failure logs only after the overall run
+completes, while `rg` returned 1 because it received no failure lines. Avoid
+temporary files when a filtered pipeline is enough, and distinguish
+"logs unavailable yet" from a test verdict before interpreting an empty grep.
+After the workflow completed, the tenant job log showed 5,695 passing and 1
+failing unit test: the new Codex history-transfer handler assertion. Its
+annotations also contained expected in-flight migration warnings, which were
+not the failure cause. Use the failed step's test summary, not adjacent
+annotations, to classify a tenant-integration failure.

@@ -401,6 +401,10 @@ export type WSMessage =
   // `existingWorkspace` true => offer the opt-out ("Keep autonomous on" /
   // "Ask me each time"); false => default-ON workspace ("Got it" ack).
   | { type: "autonomous_disclosure"; gateId: string; existingWorkspace: boolean }
+  // A switched Codex conversation is held before transcript replay and
+  // credential resolution until this resuming member has acknowledged the
+  // active provider account for the current binding generation.
+  | { type: "codex_history_transfer_required"; conversationId: string; authModeGeneration: number }
   // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
   // persistent chip (server→client). `autonomous` is the SERVER truth
   // `bashAutonomous && ackAt != null` — i.e. "Auto-run on" only when the toggle

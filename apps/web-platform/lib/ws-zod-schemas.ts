@@ -373,6 +373,11 @@ const autonomousPostureSchema = z.strictObject({
   type: z.literal("autonomous_posture"),
   autonomous: z.boolean(),
 });
+const codexHistoryTransferRequiredSchema = z.strictObject({
+  type: z.literal("codex_history_transfer_required"),
+  conversationId: conversationIdSchema,
+  authModeGeneration: z.number().int().nonnegative(),
+});
 const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),
   conversationId: z.string(),
@@ -632,6 +637,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   reviewGateSchema,
   autonomousDisclosureSchema,
   autonomousPostureSchema,
+  codexHistoryTransferRequiredSchema,
   sessionStartedSchema,
   sessionResumedSchema,
   sessionEndedSchema,
