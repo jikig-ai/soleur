@@ -130,6 +130,7 @@ EOF
 # probe's verdict; every call is logged so arms can bound the probe count.
 make_curl_stub() {
   local dir="$1"
+  assert_fixture_dir "$dir"
   mkdir -p "$dir"
   cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -304,6 +305,9 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "B8: bun arm probes the bunfig.toml registry override"
 REPO=$(new_repo repo-b8)
+# $() binding is untraceable to the fixture scanner — assert the operand
+# directly so the redirects below have their guard.
+assert_fixture_dir "$REPO"
 rm -f "$REPO/package-lock.json" "$REPO/apps/demo/package-lock.json"
 printf '{\n  "lockfileVersion": 1\n}\n' > "$REPO/bun.lock"
 printf '{\n  "lockfileVersion": 1\n}\n' > "$REPO/apps/demo/bun.lock"
