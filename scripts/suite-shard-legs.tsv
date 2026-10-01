@@ -265,7 +265,6 @@ scripts/battery-tag-authorship	1
 scripts/betterstack-assert-absence	7
 scripts/betterstack-ingest-parity	1
 scripts/board/set-board-status	1
-scripts/bwrap-probe-selfreport-8016	6
 scripts/capture-web-1-host-key	1
 scripts/capture-web-2-host-key	1
 scripts/cf-tunnel-liveness-gate-mutations	4
