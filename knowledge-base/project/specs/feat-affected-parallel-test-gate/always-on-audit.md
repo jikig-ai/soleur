@@ -238,3 +238,13 @@ The recorder and attribution scripts were session scratch and are not committed.
 | `tests/scripts/infra-privileged-tier-census` | kept | 1 | 205 | 24 | broad,git-diff,git-enum,net,rc!=0,time,wide-cover |  |
 | `tests/scripts/no-tofu-ssh` | kept | 0 | 5649 | 451 | broad,git-diff,git-enum,net,time,wide-cover |  |
 | `tests/scripts/sentry-alert-live-fidelity` | kept | 0 | 13 | 4 | git-enum,net |  |
+
+## Addendum — 2026-10-01 (#9307, correction to "What the demotion costs")
+
+Appended, not edited: the paragraph above attributes the pre-pass cost to specific registrations and to comment tokens.
+Profiling the walk (see ADR-242, Amendment — 2026-10-01) shows the cost lands on whichever registration first scans a file,
+because the per-file memo moves it there: the eight named registrations were the first touchers of a shared closure of
+about 465 files (the runner's text), not eight expensive suites. The measured cost on a quiet host (load average 4 to 9)
+was 291 s of CPU, not 11 minutes (that figure was taken at load 30 to 64), and about 3x of it is removed by bounding the
+variable resolution and replacing the array scan (not attributed per change), with the selection unchanged. The demotion of `scripts/domain-model-drift`
+is therefore re-priced, not decided, by that change; it follows in the next PR with a committed recorder.
