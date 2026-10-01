@@ -30,3 +30,8 @@
 - Compound: learning `knowledge-base/project/learnings/2026-10-01-the-guards-i-wrote-to-protect-the-sole-copy-scanned-a-shape-the-attack-did-not-take.md`; routed one bullet to plan-sharp-edges.md.
 - Archival of this plan/spec is DEFERRED to the post-hold resume session (the resume reads them; archive-kb would orphan the PR body's resume pointer).
 - Local gate skipped by operator direction ("rely on CI"); lefthook absent from PATH (#8271).
+
+## Operator gate log (append-only)
+
+- 2026-10-01 (UTC 21:30Z): step 1 DONE by explicit per-command go-ahead. `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` went `active` -> `disabled_manually` (verified via the Actions workflows API). BOTH MUST BE RE-ENABLED after #9348 merges (step 6), then dispatch manual-rerun (own go-ahead).
+- 2026-10-01: #9381 merged (probe on main); tracker #9380 `earliest` re-baselined to 2026-10-01; plan note committed in abca1c78b1. Preconditions re-read before step 2: wipe/forget workflow files unchanged vs 59abf6a76c on main; `workspaces-luks-cutover` environment has required reviewer deruelle (non-empty).
