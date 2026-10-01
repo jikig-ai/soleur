@@ -335,6 +335,15 @@ function toBoardInput(item: GhIssueResponse): BoardIssueInput {
   };
 }
 
+/** Optional per-page hooks for the progressive feed. `onBatch` fires once per
+ *  fetched REST page with that page's non-PR items (empty for an all-PR page —
+ *  the caller decides whether to emit); `onOpenTruncated` fires when the open
+ *  page cap drops a likely tail (the same point the warn + Sentry mirror run). */
+export interface ListRepoIssuesHooks {
+  onBatch?: (items: BoardIssueInput[]) => void;
+  onOpenTruncated?: () => void;
+}
+
 /**
  * Page one issue `state` (query string) into `out`, skipping PRs. Returns true
  * iff the page cap was reached with a still-FULL final page — i.e. a tail was
@@ -347,16 +356,21 @@ async function pageIssuesInto(
   repo: string,
   query: string,
   maxPages: number,
+  onBatch?: (items: BoardIssueInput[]) => void,
 ): Promise<boolean> {
   for (let page = 1; page <= maxPages; page++) {
     const raw = await githubApiGet<GhIssueResponse[]>(
       installationId,
       `/repos/${owner}/${repo}/issues?${query}&per_page=${BOARD_PER_PAGE}&page=${page}`,
     );
+    const batch: BoardIssueInput[] = [];
     for (const item of raw) {
       if (item.pull_request) continue; // skip PRs — board shows issues only
-      out.push(toBoardInput(item));
+      const input = toBoardInput(item);
+      out.push(input);
+      batch.push(input);
     }
+    onBatch?.(batch);
     if (raw.length < BOARD_PER_PAGE) return false; // short page → exhausted, no tail
     if (page === maxPages) return true; // full final page → tail likely dropped
   }
@@ -382,6 +396,7 @@ export async function listRepoIssues(
   installationId: number,
   owner: string,
   repo: string,
+  hooks?: ListRepoIssuesHooks,
 ): Promise<BoardIssueInput[]> {
   const out: BoardIssueInput[] = [];
 
@@ -393,6 +408,7 @@ export async function listRepoIssues(
     repo,
     "state=open",
     MAX_OPEN_PAGES,
+    hooks?.onBatch,
   );
   if (openTruncated) {
     log.warn(
@@ -409,6 +425,7 @@ export async function listRepoIssues(
         extra: { owner, repo, loaded: out.length },
       },
     );
+    hooks?.onOpenTruncated?.();
   }
 
   // Done column only needs the recently-closed — windowed on purpose (no warn).
@@ -419,6 +436,7 @@ export async function listRepoIssues(
     repo,
     "state=closed&sort=updated&direction=desc",
     MAX_CLOSED_PAGES,
+    hooks?.onBatch,
   );
 
   return out;

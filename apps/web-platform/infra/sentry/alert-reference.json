@@ -476,6 +476,55 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "ci-deploy-github-app-key": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "ci-deploy"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "github-app-key"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 32,
+    "name": "ci-deploy-github-app-key",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "container-restart-burst": {
     "actionFilters": [
       {
@@ -608,7 +657,6 @@
       "1214787",
       "1214788",
       "1214789",
-      "1227831",
       "1229213",
       "1258965",
       "1259317",
@@ -1093,6 +1141,55 @@
     ],
     "triggerLogicType": "single"
   },
+  "image-verify-failed": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "image-verify"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "verify_result",
+              "match": "nc",
+              "value": "reused_local_reload"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 33,
+    "name": "image-verify-failed",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "inbox-action-required-notify-failure": {
     "actionFilters": [
       {
@@ -1139,6 +1236,47 @@
     ],
     "triggerLogicType": "single"
   },
+  "inngest-provision-degraded": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "bootstrap_done_degraded"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 34,
+    "name": "inngest-provision-degraded",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "inngest-provision-failure": {
     "actionFilters": [
       {
@@ -1162,8 +1300,8 @@
           {
             "comparison": {
               "key": "stage",
-              "match": "in",
-              "value": "bootstrap_done_degraded,provision_attempt_failed"
+              "match": "eq",
+              "value": "provision_attempt_failed"
             },
             "type": "tagged_event"
           }
@@ -1707,6 +1845,87 @@
       }
     ],
     "triggerLogicType": "any-short"
+  },
+  "web-host-github-app-key-boot": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_exec_failed"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_missing"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_ok_fallback"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_probe_absent"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_rejected"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_transport"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 29,
+    "name": "web-host-github-app-key-boot",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
   },
   "web-host-private-nic-boot-gate": {
     "actionFilters": [

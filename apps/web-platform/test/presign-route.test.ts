@@ -5,12 +5,14 @@ import { mockQueryChain } from "./helpers/mock-supabase";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockGetUser, mockFrom, mockCreateSignedUploadUrl, mockRpc } = vi.hoisted(() => ({
-  mockGetUser: vi.fn(),
-  mockFrom: vi.fn(),
-  mockRpc: vi.fn(),
-  mockCreateSignedUploadUrl: vi.fn(),
-}));
+const { mockGetUser, mockFrom, mockCreateSignedUploadUrl, mockRpc, mockReportSilentFallback } =
+  vi.hoisted(() => ({
+    mockGetUser: vi.fn(),
+    mockFrom: vi.fn(),
+    mockRpc: vi.fn(),
+    mockCreateSignedUploadUrl: vi.fn(),
+    mockReportSilentFallback: vi.fn(),
+  }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
@@ -38,6 +40,11 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+
+vi.mock("@/server/observability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/observability")>();
+  return { ...actual, reportSilentFallback: mockReportSilentFallback };
+});
 
 // ---------------------------------------------------------------------------
 // Import route handler AFTER mocks
@@ -80,27 +87,60 @@ function setupAuthenticatedUser() {
   });
 }
 
-function setupConversationOwnership(owned: boolean) {
-  // mig 068 #4318: route now also reads user_id + workspace_id and falls
-  // back to is_workspace_member RPC when conv.user_id !== caller. Set the
-  // owned-conv shape so the RPC is NOT invoked (own-folder branch).
-  mockFrom.mockImplementation((table: string) => {
-    if (table === "conversations") {
-      return mockQueryChain(
-        owned
-          ? {
-              id: TEST_CONVERSATION_ID,
-              user_id: TEST_USER_ID,
-              workspace_id: TEST_USER_ID,
-            }
-          : null,
-      );
-    }
-    return {};
-  });
+const OTHER_USER_ID = "99999999-8888-7777-6666-555555555555";
+const OTHER_WORKSPACE_ID = "77777777-6666-5555-4444-333333333333";
+
+function wireConversations(chain: ReturnType<typeof mockQueryChain>) {
+  mockFrom.mockImplementation((table: string) => (table === "conversations" ? chain : {}));
   // Default is_workspace_member to false; tests covering the co-member
-  // branch can override per-test via mockRpc.mockResolvedValueOnce.
+  // branch override per-test via mockRpc.mockResolvedValueOnce.
   mockRpc.mockResolvedValue({ data: false, error: null });
+  return chain;
+}
+
+function setupOwnedConversation() {
+  // mig 068 #4318: route also reads user_id + workspace_id and falls back to
+  // is_workspace_member RPC when conv.user_id !== caller. Owned-conv shape so
+  // the RPC is NOT invoked (own-folder branch).
+  return wireConversations(
+    mockQueryChain({
+      id: TEST_CONVERSATION_ID,
+      user_id: TEST_USER_ID,
+      workspace_id: TEST_USER_ID,
+    }),
+  );
+}
+
+/**
+ * Fresh (deferred) conversation: no row exists yet. PostgREST-faithful:
+ * `.single()` on zero rows is an ERROR (PGRST116), `.maybeSingle()` is
+ * `{ data: null, error: null }`. A route that kept `.single()` would 500
+ * every fresh conversation once it checks `error` first.
+ */
+function setupNoConversationRow() {
+  const chain = mockQueryChain(null);
+  chain.single.mockImplementation(() =>
+    Promise.resolve({ data: null, error: { code: "PGRST116", message: "0 rows" } }),
+  );
+  chain.maybeSingle.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+  return wireConversations(chain);
+}
+
+function setupForeignConversation() {
+  return wireConversations(
+    mockQueryChain({
+      id: TEST_CONVERSATION_ID,
+      user_id: OTHER_USER_ID,
+      workspace_id: OTHER_WORKSPACE_ID,
+    }),
+  );
+}
+
+function primeSignedUrl() {
+  mockCreateSignedUploadUrl.mockResolvedValue({
+    data: { signedUrl: "https://storage.supabase.co/upload/signed/abc123" },
+    error: null,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -132,20 +172,132 @@ describe("POST /api/attachments/presign", () => {
     expect(body.error).toBe("unauthorized");
   });
 
-  test("returns 404 when user does not own the conversation", async () => {
-    setupAuthenticatedUser();
-    setupConversationOwnership(false);
+  // ---- D1: presign tolerates an unmaterialized (fresh) conversation id ----
+  describe("unmaterialized conversation id (deferred creation)", () => {
+    test("valid lowercase UUID with NO row -> 200 + path under the caller's own folder (RED pre-fix: 404)", async () => {
+      setupAuthenticatedUser();
+      const chain = setupNoConversationRow();
+      primeSignedUrl();
 
-    const res = await POST(makeRequest());
-    expect(res.status).toBe(404);
+      const res = await POST(makeRequest());
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.uploadUrl).toBe("https://storage.supabase.co/upload/signed/abc123");
+      expect(body.storagePath.startsWith(`${TEST_USER_ID}/${TEST_CONVERSATION_ID}/`)).toBe(true);
+      // PostgREST fidelity: .single() on zero rows is PGRST116, so the route
+      // must use .maybeSingle() (error-first) for this to be a 200.
+      expect(chain.maybeSingle).toHaveBeenCalled();
+      expect(chain.single).not.toHaveBeenCalled();
+    });
 
-    const body = await res.json();
-    expect(body.error).toBe("conversation_not_found");
+    const tooShort = TEST_CONVERSATION_ID.slice(0, 8);
+    test.each([
+      ["the route sentinel 'new'", "new"],
+      // One parent-directory segment only: two in a row (as a literal or as
+      // consecutive quoted array members) would make repo-wide-containment
+      // classify this app-local suite as repo-wide.
+      ["a traversal string", "x/../etc/x"],
+      ["a short uuid", tooShort],
+      ["an UPPERCASE uuid", TEST_USER_ID.toUpperCase()],
+      ["a valid uuid with a traversal suffix", `${TEST_CONVERSATION_ID}/../other`],
+      ["a valid uuid with a trailing char", `${TEST_CONVERSATION_ID}x`],
+      ["a valid uuid with a leading char", `x${TEST_CONVERSATION_ID}`],
+      // Right length (36) but wrong grouping: `[0-9a-f-]{36}` would admit these.
+      ["a 36-char wrong-grouping id", "0123456789abcdef-0123456789abcdef-0123"],
+      ["a 36-char all-dash-free hex id", "0123456789abcdef0123456789abcdef0123"],
+      ["a 32-hex id with no dashes", "0123456789abcdef0123456789abcdef"],
+    ])("%s -> 404 conversation_not_found with NO lookup and NO storage call", async (_label, id) => {
+      setupAuthenticatedUser();
+      setupNoConversationRow();
+      primeSignedUrl();
+
+      const res = await POST(makeRequest({ conversationId: id }));
+      expect(res.status).toBe(404);
+      expect((await res.json()).error).toBe("conversation_not_found");
+      // Shape check must run BEFORE the DB call: conversations.id is a uuid
+      // column, so `.eq("id", "new")` is a Postgres 22P02 error (500), which
+      // mockQueryChain(null) alone cannot show.
+      expect(mockFrom).not.toHaveBeenCalled();
+      expect(mockCreateSignedUploadUrl).not.toHaveBeenCalled();
+    });
+
+    test("a DB lookup error for a valid UUID -> 500 upload_failed, never the tolerant branch, mirrored to Sentry", async () => {
+      setupAuthenticatedUser();
+      const chain = wireConversations(mockQueryChain(null, { message: "db down" }));
+      chain.maybeSingle.mockImplementation(() =>
+        Promise.resolve({ data: null, error: { message: "db down" } }),
+      );
+      primeSignedUrl();
+
+      const res = await POST(makeRequest());
+      expect(res.status).toBe(500);
+      expect((await res.json()).error).toBe("upload_failed");
+      expect(mockCreateSignedUploadUrl).not.toHaveBeenCalled();
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ feature: "attachments", op: "presign-lookup" }),
+      );
+    });
+
+    test("extra body fields (workspaceId, userId) never change the storage path", async () => {
+      setupAuthenticatedUser();
+      setupNoConversationRow();
+      primeSignedUrl();
+
+      const res = await POST(
+        makeRequest({ workspaceId: OTHER_WORKSPACE_ID, userId: OTHER_USER_ID }),
+      );
+      expect(res.status).toBe(200);
+      const { storagePath } = await res.json();
+      expect(storagePath.startsWith(`${TEST_USER_ID}/${TEST_CONVERSATION_ID}/`)).toBe(true);
+      expect(storagePath).not.toContain(OTHER_USER_ID);
+      expect(storagePath).not.toContain(OTHER_WORKSPACE_ID);
+    });
+  });
+
+  // CHARACTERIZATION (pass before the fix): the membership check on an
+  // existing row is intact.
+  describe("existing row owned by another user (characterization)", () => {
+    test("non-member -> 403 not_a_workspace_member and the RPC is asked with the row's workspace", async () => {
+      setupAuthenticatedUser();
+      setupForeignConversation();
+      primeSignedUrl();
+
+      const res = await POST(makeRequest());
+      expect(res.status).toBe(403);
+      expect((await res.json()).error).toBe("not_a_workspace_member");
+      expect(mockRpc).toHaveBeenCalledWith("is_workspace_member", {
+        p_workspace_id: OTHER_WORKSPACE_ID,
+        p_user_id: TEST_USER_ID,
+      });
+      expect(mockCreateSignedUploadUrl).not.toHaveBeenCalled();
+    });
+
+    test("membership RPC error -> 403 (fail closed)", async () => {
+      setupAuthenticatedUser();
+      setupForeignConversation();
+      mockRpc.mockResolvedValue({ data: null, error: { message: "rpc down" } });
+      primeSignedUrl();
+
+      const res = await POST(makeRequest());
+      expect(res.status).toBe(403);
+      expect(mockCreateSignedUploadUrl).not.toHaveBeenCalled();
+    });
+
+    test("co-member -> 200", async () => {
+      setupAuthenticatedUser();
+      setupForeignConversation();
+      mockRpc.mockResolvedValue({ data: true, error: null });
+      primeSignedUrl();
+
+      const res = await POST(makeRequest());
+      expect(res.status).toBe(200);
+    });
   });
 
   test("returns 400 for unsupported file type", async () => {
     setupAuthenticatedUser();
-    setupConversationOwnership(true);
+    setupOwnedConversation();
 
     const res = await POST(makeRequest({ contentType: "application/exe", filename: "virus.exe" }));
     expect(res.status).toBe(400);
@@ -156,7 +308,7 @@ describe("POST /api/attachments/presign", () => {
 
   test("returns 400 when file exceeds 20 MB", async () => {
     setupAuthenticatedUser();
-    setupConversationOwnership(true);
+    setupOwnedConversation();
 
     const res = await POST(makeRequest({ sizeBytes: 21 * 1024 * 1024 }));
     expect(res.status).toBe(400);
@@ -167,7 +319,7 @@ describe("POST /api/attachments/presign", () => {
 
   test("returns 400 when sizeBytes is zero or negative", async () => {
     setupAuthenticatedUser();
-    setupConversationOwnership(true);
+    setupOwnedConversation();
 
     const res = await POST(makeRequest({ sizeBytes: 0 }));
     expect(res.status).toBe(400);
@@ -180,7 +332,7 @@ describe("POST /api/attachments/presign", () => {
   // `<= 0` before the Number.isFinite gate. Closes a defense-in-depth gap.
   test("returns 400 when sizeBytes is NaN", async () => {
     setupAuthenticatedUser();
-    setupConversationOwnership(true);
+    setupOwnedConversation();
 
     // JSON has no NaN literal; emulate via a body that round-trips NaN
     // through the route's number-coercion path. The simplest way is to
@@ -204,7 +356,7 @@ describe("POST /api/attachments/presign", () => {
 
   test("returns 200 with uploadUrl and storagePath on success", async () => {
     setupAuthenticatedUser();
-    setupConversationOwnership(true);
+    setupOwnedConversation();
     mockCreateSignedUploadUrl.mockResolvedValue({
       data: { signedUrl: "https://storage.supabase.co/upload/signed/abc123" },
       error: null,
@@ -229,7 +381,7 @@ describe("POST /api/attachments/presign", () => {
     for (const contentType of allowedTypes) {
       vi.clearAllMocks();
       setupAuthenticatedUser();
-      setupConversationOwnership(true);
+      setupOwnedConversation();
       mockCreateSignedUploadUrl.mockResolvedValue({
         data: { signedUrl: "https://storage.supabase.co/upload/signed/abc123" },
         error: null,
@@ -243,7 +395,7 @@ describe("POST /api/attachments/presign", () => {
 
   test("returns 500 when Storage createSignedUploadUrl fails", async () => {
     setupAuthenticatedUser();
-    setupConversationOwnership(true);
+    setupOwnedConversation();
     mockCreateSignedUploadUrl.mockResolvedValue({
       data: null,
       error: { message: "Storage unavailable" },
@@ -279,7 +431,7 @@ describe("POST /api/attachments/presign", () => {
   describe("PDF size cap (#3332)", () => {
     test("rejects 25 MB application/pdf with 400 file_too_large", async () => {
       setupAuthenticatedUser();
-      setupConversationOwnership(true);
+      setupOwnedConversation();
 
       const res = await POST(
         makeRequest({
@@ -296,7 +448,7 @@ describe("POST /api/attachments/presign", () => {
 
     test("accepts 19 MB application/pdf with 200 (under both caps)", async () => {
       setupAuthenticatedUser();
-      setupConversationOwnership(true);
+      setupOwnedConversation();
       mockCreateSignedUploadUrl.mockResolvedValue({
         data: { signedUrl: "https://storage.supabase.co/upload/signed/abc123" },
         error: null,
@@ -315,7 +467,7 @@ describe("POST /api/attachments/presign", () => {
   describe("markdown / plain-text attachments (server re-resolves the type)", () => {
     function primeSuccess() {
       setupAuthenticatedUser();
-      setupConversationOwnership(true);
+      setupOwnedConversation();
       mockCreateSignedUploadUrl.mockResolvedValue({
         data: { signedUrl: "https://storage.supabase.co/upload/signed/abc123" },
         error: null,

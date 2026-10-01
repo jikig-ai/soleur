@@ -91,6 +91,7 @@ EPSILON_FRACTION = 0.05  # of mean leg load
 # Weight for a registered suite no run measured: median-of-measured normally;
 # this constant when nothing measured at all (the all-floor degrade).
 DEFAULT_SUITE_MS = 60000
+ARTIFACTS_PER_PAGE = 100
 
 # Artifact name patterns, one per group and mutually exclusive: the heavy job's
 # artifacts carry a `-heavy-` infix the light pattern cannot match, and vice versa.
@@ -139,15 +140,45 @@ def median(xs):
     return xs[m // 2] if m % 2 else (xs[m // 2 - 1] + xs[m // 2]) // 2
 
 
+def list_run_artifacts(run_id):
+    """Every artifact of RUN_ID as [{id, name}], across ALL pages.
+
+    `per_page=100` alone truncates at the first page — a >100-artifact run
+    silently drops entries, and a truncated page reads identically to a leg
+    that died before its feed write. Terminates on a short page OR
+    `total_count` reached, so an API regression that drops total_count still
+    exits. (No `gh --paginate`+`--jq`: gh applies --jq per page, yielding
+    multi-document output json.loads cannot parse; a pure page loop keeps
+    this operator-run tool's only dependency on `gh` itself.)"""
+    arts = []
+    seen = set()
+    total = None
+    page = 1
+    while True:
+        chunk = json.loads(gh([
+            "api",
+            f"repos/{REPO}/actions/runs/{run_id}/artifacts"
+            f"?per_page={ARTIFACTS_PER_PAGE}&page={page}",
+        ]))
+        if not isinstance(chunk, dict):
+            die(f"unexpected artifacts response for page {page} (not an object)")
+        batch = chunk.get("artifacts") or []
+        for a in batch:
+            if a["id"] not in seen:  # dedupe: offset paging can resurface a row
+                seen.add(a["id"])    # at a boundary mid-enumeration
+                arts.append({"id": a["id"], "name": a["name"]})
+        total = chunk.get("total_count", total)
+        if len(batch) < ARTIFACTS_PER_PAGE or (total is not None and len(arts) >= total):
+            return arts
+        page += 1
+
+
 def fetch_timings_from_run(run_id, artifact_re, expected_legs=None, allow_empty=False):
     """Return {label: ms} merged across the group's timing artifacts of RUN_ID.
     In multi-run aggregation (allow_empty) a run that uploaded no artifacts for
     the group warns and contributes nothing instead of dying — one shape-dead
     run must not void the other N-1."""
-    arts = json.loads(gh([
-        "api", f"repos/{REPO}/actions/runs/{run_id}/artifacts?per_page=100",
-        "--jq", "{artifacts: [.artifacts[] | {id: .id, name: .name}]}",
-    ]))["artifacts"]
+    arts = list_run_artifacts(run_id)
     names = [a for a in arts if artifact_re.match(a["name"])]
     if not names:
         if allow_empty:

@@ -615,6 +615,9 @@ jobs:
               -target=github_repository_environment_deployment_policy.workspaces_luks_cutover_main \
               -target=doppler_project.infra_privileged \
               -target=doppler_environment.infra_privileged_prd \
+              -target=doppler_project.github_app_runtime \
+              -target=doppler_environment.github_app_runtime_prd \
+              -target=doppler_config.github_app_runtime_prd_retired \
               -target=cloudflare_r2_bucket.terraform_state_privileged \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
@@ -1454,14 +1457,18 @@ jobs:
           # exists for — job outputs would be unreliable even if it did. So everything below comes
           # from the jobs API under `actions: read`, which is the only channel that works there.
           resp="$RUNNER_TEMP/apply-jobs.json"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" > "$resp" 2>/dev/null
+          # --paginate: a first-page-only read would silently drop the `apply`
+          # job and degrade the email's step name to "unresolved" (#9245 sweep).
+          # --paginate emits one JSON document per page, so the reads below use
+          # `jq -rs`/`inputs`, never the object form that parses page 1 alone.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" > "$resp" 2>/dev/null
           api_rc=$?
 
           raw=""
           swept="unknown"
           if [[ "$api_rc" -eq 0 && -s "$resp" ]]; then
-            raw=$(jq -r '[.jobs[]? | select(.name=="apply") | .steps[]? | select(.conclusion=="failure" or .conclusion=="cancelled") | .name] | first // empty' "$resp" 2>/dev/null)
-            swept=$(jq -r '[.jobs[]? | select(.name=="apply") | .steps[]? | select(.name | ascii_downcase | test("re-pause")) | .conclusion] | first // "unknown"' "$resp" 2>/dev/null)
+            raw=$(jq -rs '[inputs.jobs[]? | select(.name=="apply") | .steps[]? | select(.conclusion=="failure" or .conclusion=="cancelled") | .name] | first // empty' "$resp" 2>/dev/null)
+            swept=$(jq -rs '[inputs.jobs[]? | select(.name=="apply") | .steps[]? | select(.name | ascii_downcase | test("re-pause")) | .conclusion] | first // "unknown"' "$resp" 2>/dev/null)
           else
             echo "::warning::Could not read the jobs API (rc=${api_rc}); the email will say the failing step is unresolved AND that the sweep's state is unknown — never that the sweep did not run."
           fi
@@ -4801,6 +4808,7 @@ jobs:
         with:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          github-app-runtime-token: true
 
       # FIRST mutating-adjacent step: validate the dispatch inputs before anything reads a
       # secret or contacts a provider. web_host_key is routed through env: and never
@@ -5255,6 +5263,7 @@ jobs:
         with:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          github-app-runtime-token: true
 
       # FIRST mutating-adjacent step: validate the dispatch inputs before anything reads a
       # secret or contacts a provider. web_host_key is routed through env: and never

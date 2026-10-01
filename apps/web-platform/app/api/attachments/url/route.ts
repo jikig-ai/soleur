@@ -5,12 +5,11 @@ import { reportSilentFallback } from "@/server/observability";
 import { verifiedUserId } from "@/server/request-auth";
 import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
 import {
+  CONVERSATION_ID_RE,
   INLINE_ATTACHMENT_EXTENSIONS,
   fileExtension,
   sanitizeAttachmentFilename,
 } from "@/lib/attachment-constants";
-
-const UUID_RE = /^[0-9a-f-]{36}$/i;
 
 // Filename for Content-Disposition: the shared sanitizer plus quotes (the
 // header value is quoted), falling back to the path basename.
@@ -51,7 +50,7 @@ export async function POST(request: Request) {
   if (!body.storagePath.startsWith(`${userId}/`)) {
     const segments = body.storagePath.split("/");
     const conversationSegment = segments[1];
-    if (!conversationSegment || !UUID_RE.test(conversationSegment)) {
+    if (!conversationSegment || !CONVERSATION_ID_RE.test(conversationSegment)) {
       return NextResponse.json({ error: "unauthorized" }, { status: 403 });
     }
     const { data: conversation } = await service
