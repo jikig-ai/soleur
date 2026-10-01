@@ -1310,8 +1310,11 @@ if [[ "$ARM_RC" == "0" ]] \
   && grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT" \
   && ! grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
   && grep -qF $'RAN\tscripts/lint-dual-lockfile' <<<"$ARM_RECORD" \
-  && ! grep -qF $'RAN\ttests/scripts/registry-gate-mutation-battery' <<<"$ARM_RECORD" \
+  && grep -qF $'RAN\ttests/scripts/registry-gate-mutation-battery' <<<"$ARM_RECORD" \
   && ! grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+  # ADR-262: scripts/test-all.sh is now a gate-machinery edge of every --pr-gated battery
+  # (PR_GATE_MACHINERY_PATHS), so the registry battery is SELECTED here; it was the "unedged suite"
+  # this row used to assert declined, and tests/commands/sync-domain-model still plays that role.
   pass "sc6: staged runner path → bounded selection + runner-in-scope note"
 else
   fail "sc6: rc=$ARM_RC ran=$(ran_count) markers=$(grep -cE 'AFFECTED_' <<<"$ARM_OUT")"

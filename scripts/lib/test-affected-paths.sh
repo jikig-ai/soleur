@@ -102,6 +102,7 @@ ALWAYS_ON_SUITES=(
   "scripts/test-contention"
   "scripts/suite-exit-class-parity"
   "scripts/battery-tag-authorship"
+  "scripts/test-all-pr-battery-gate"
   "scripts/lint-orphan-test-suites"
   # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected,
   # battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864).

@@ -301,6 +301,7 @@ scripts/followthrough-exec-bit	20	measured
 scripts/followthrough-predicate-parity	2082	measured
 scripts/followthrough-varq-ban	22211	measured
 scripts/followthrough-varq-ban-live	1357	measured
+scripts/followthroughs/pr-battery-gate-saving-9323	60000	floor
 scripts/followthroughs/t5-skip-persistence-bound-7510	7431	measured
 scripts/generate-kb-index-live	3134	measured
 scripts/ghcr-read-retired-8036	2099	measured
@@ -425,6 +426,7 @@ scripts/test-all-group-affected	3082	measured
 scripts/test-all-infra-coverage-notice	82763	measured
 scripts/test-all-killed-classification	3800	measured
 scripts/test-all-orphan-log-retention	2862	measured
+scripts/test-all-pr-battery-gate	60000	floor
 scripts/test-all-runtime-ceiling	33481	measured
 scripts/test-all-webplat-gate	83	measured
 scripts/test-contention	133834	measured

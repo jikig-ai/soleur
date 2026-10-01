@@ -304,6 +304,7 @@ scripts/followthrough-exec-bit	4
 scripts/followthrough-predicate-parity	6
 scripts/followthrough-varq-ban	1
 scripts/followthrough-varq-ban-live	2
+scripts/followthroughs/pr-battery-gate-saving-9323	1
 scripts/followthroughs/t5-skip-persistence-bound-7510	1
 scripts/generate-kb-index-live	7
 scripts/ghcr-read-retired-8036	3
@@ -428,6 +429,7 @@ scripts/test-all-group-affected	6
 scripts/test-all-infra-coverage-notice	2
 scripts/test-all-killed-classification	5
 scripts/test-all-orphan-log-retention	5
+scripts/test-all-pr-battery-gate	6
 scripts/test-all-runtime-ceiling	6
 scripts/test-all-webplat-gate	4
 scripts/test-contention	7

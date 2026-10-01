@@ -4,6 +4,8 @@ status: active
 date: 2026-08-11
 amends: ADR-177
 related_adrs: [ADR-133, ADR-177]
+amended_by:
+  - "ADR-262 (2026-09-30, #9323) — property 4 and Scope no longer hold for five self-test mutation batteries on a pull_request run; see ## Amendment — 2026-09-30"
 ---
 
 # ADR-181: `test-all.sh` — relevance-gated suites, and declines that count
@@ -352,3 +354,16 @@ It is not fixed here because the fix lands inside a function this change pins by
 merge base. (b) This addendum's own gate harness is registered **ungated** and grew from 19 to ~45
 sandbox arms, so the change adds unconditional local cost in service of removing conditional cost.
 That trade is not measurable on a contended machine and is stated rather than quantified.
+
+## Amendment — 2026-09-30 (#9323, ADR-262)
+
+Three statements above are **superseded for one class of call site**, and only for it. Property 4 ("a
+decline is UNREACHABLE under CI"), Scope ("CI runs everything by construction") and Consequences ("CI runs
+them regardless") hold for every `_diff_touches` caller **except** the six registrations of five self-test
+mutation batteries that opt in with `_diff_touches --pr-gated`. On a `pull_request` CI run (`CI` set,
+`GITHUB_EVENT_NAME == pull_request`, not an enumeration, canary not tripped) those declines ARE reachable;
+`push`, `merge_group`, `workflow_dispatch`, `schedule`, an unset event, `--full` and
+`SOLEUR_TEST_FORCE_ALL=1` run them, and `main-health-monitor` still re-runs everything every six hours. The
+coverage split, the admission rule and the residual (an escape is caught on the push run, not the PR) are
+recorded in ADR-262. The rejected-alternative row for a CI "no skip occurred" assertion stands: the
+discriminator is the event name, not an assertion about skips.
