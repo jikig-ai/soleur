@@ -11,17 +11,16 @@ name: Mint inngest-bootstrap tag
 # workflow cannot be dispatch-tested from a branch). That suite also pins this file's
 # shape: the triggers, the job gate, the checkout, and which step sees which token.
 #
-# ONE BUILD PER TAG. The tag is created with the job's GITHUB_TOKEN on purpose:
-# GitHub starts no workflow from a GITHUB_TOKEN event, so the tag's `push: tags`
-# trigger stays silent and the build runs exactly once — from the dispatch below,
-# made from main by the soleur-ai App. A workflow_dispatch run executes main's copy
-# of the build workflow, not a tag-ref copy, which is the shape #8209 can bind to a
-# main-only environment once it re-tiers this job. The dispatch is sent once and
-# never retried: a retry after a lost 2xx could start a second build and MOVE the
-# digest.
+# ONE BUILD PER TAG. The tag is created with the job's GITHUB_TOKEN, and since
+# #9262 the build workflow has no `push: tags` trigger at all (ADR-232 A5), so the
+# build runs exactly once — from the dispatch below, made from main by the
+# soleur-infra App. A workflow_dispatch run executes main's copy of the build
+# workflow, not a tag-ref copy, which is what lets its pin-bump job hold the
+# main-only infra-privileged environment. The dispatch is sent once and never
+# retried: a retry after a lost 2xx could start a second build and MOVE the digest.
 #
 # CREDENTIALS BEFORE THE TAG. Every credential step (Doppler CLI, the
-# DOPPLER_TOKEN check, the App-token mint) runs after Decide and BEFORE Create tag,
+# DOPPLER_TOKEN_INFRA_PRIVILEGED check, the App-token mint) runs after Decide and BEFORE Create tag,
 # so a credential failure publishes nothing and the only step after the tag is the
 # dispatch. Isolation still holds: Create tag sees only the job's GITHUB_TOKEN, and
 # only Dispatch build sees the App token (the script refuses the other one too).
@@ -57,11 +56,13 @@ permissions:
 
 jobs:
   mint:
-    # A branch workflow_dispatch runs that branch's copy of this file; this gate stops
-    # the accidental case only. There is NO `environment:` on this job today, so
-    # nothing stops a malicious branch copy that deletes the gate: #8209 must bind
-    # this job to its main-only environment (infra-credential-tiers-8209.md lists it).
+    # A branch workflow_dispatch runs that branch's copy of this file; this `if:`
+    # stops the accidental case only. The boundary is the environment (#9262,
+    # ADR-241): infra-privileged admits only refs/heads/main, and its secret
+    # DOPPLER_TOKEN_INFRA_PRIVILEGED is the only way to the soleur-infra App key, so
+    # a branch copy that deletes the gate is refused before any step runs.
     if: github.ref == 'refs/heads/main'
+    environment: infra-privileged
     runs-on: ubuntu-latest
     # Above the sum of every step's own timeout (checkout 3 + decide 2 + Doppler
     # install 2 + token check 1 + App 2 + tag 3 + dispatch 3 + Slack 1 = 17), so a
@@ -102,30 +103,30 @@ jobs:
         timeout-minutes: 2
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
-      - name: Verify DOPPLER_TOKEN present
+      - name: Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present
         if: steps.decide.outputs.result == 'would-mint'
         timeout-minutes: 1
         env:
-          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
         run: |
           set -euo pipefail
           if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
-            echo "::error::DOPPLER_TOKEN secret is not configured."
+            echo "::error::DOPPLER_TOKEN_INFRA_PRIVILEGED is not available (an environment secret of infra-privileged)."
             exit 1
           fi
 
-      # Minted BEFORE the tag (a failure here publishes nothing), scoped to what the
-      # one call needs: actions:write on this repository, not the installation's full
-      # grant. The composite verifies the granted scope, and the script revokes the
-      # token right after the dispatch POST.
-      - name: Mint soleur-ai App token (actions:write on soleur)
+      # Minted BEFORE the tag (a failure here publishes nothing — including a
+      # soleur-infra App that lacks actions:write, runbook step O4c), scoped to what
+      # the one call needs: actions:write on this repository. The composite verifies
+      # the granted scope, and the script revokes the token right after the dispatch.
+      - name: Mint soleur-infra App token (actions:write on soleur)
         id: app
         if: steps.decide.outputs.result == 'would-mint'
         timeout-minutes: 2
-        uses: ./.github/actions/mint-soleur-ai-app-token
+        uses: ./.github/actions/mint-infra-app-token
         with:
-          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
-          installation-id: "122213433"
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          installation-id: "166065653"
           permissions: '{"actions":"write"}'
           repositories: soleur
 
