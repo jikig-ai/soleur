@@ -58,7 +58,7 @@ The `soleur:ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contr
 | `component_unknown` | 1 | Unknown component name | Check ALLOWED_COMPONENTS allowlist |
 | `image_mismatch` | 1 | Image doesn't match component | Check ALLOWED_IMAGES mapping |
 | `tag_malformed` | 1 | Tag doesn't match semver | Check CI tag format |
-| `canary_sandbox_failed` | 1 | bwrap verification failed on canary | SSH -> `journalctl -u webhook` for bwrap stderr |
+| `canary_sandbox_failed` | 1 | bwrap verification failed on canary | Read the `DEPLOY_ROLLBACK: bwrap sandbox non-functional` row without SSH: `knowledge-base/engineering/operations/runbooks/canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026` |
 | `canary_failed` | 1 | Canary health-check failed 10x | Roll back; inspect canary container logs |
 | `production_start_failed` | 1 | Production container didn't start post-swap | Check docker state; consider manual rollback |
 | `inngest_restart_failed` | 1 | `systemctl restart inngest-server.service` itself exited non-zero (restart path, before any health probe) | Check Sentry + Better Stack for OOM/unit errors around the timestamp; re-dispatch `restart-inngest-server.yml` once — repeated failures mean a unit/host problem, not a transient |
