@@ -4404,6 +4404,10 @@ if want_scripts; then
   # light legs uploaded their timing artifact — a leg that died pre-upload is
   # unmeasurable and fail-closed, never a green leg.
   run_suite "scripts/ci-leg-balance-9232" bash scripts/followthroughs/ci-leg-balance-9232.test.sh
+  # #9348: exit-code harness for the PR B hold-expiry probe (0 = merged; 5 = open at/after
+  # 2026-10-15, forget >48 h old, or closed unmerged; 2 = NOT YET; 3 = gh failed). Registered
+  # explicitly (orphan-suite class above): a false 0 would close the tracker on a live hold.
+  run_suite "scripts/workspaces-plaintext-hold-9348" bash scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh
   # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
   # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
   # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
