@@ -34,6 +34,14 @@ ASSERT_SCRIPT="$SCRIPT_DIR/cron-egress-postapply-assert.sh"
 PASS=0
 FAIL=0
 
+# One owning EXIT trap for every tempdir this suite allocates (ADR-129 / #6734):
+# per-test `mktemp -d` calls land under a suite-owned scratch dir via TMPDIR, so
+# a suite that dies between allocation and its own `rm -rf` leaks nothing. The
+# trap runs once, in this shell — a `$( … )` test subshell does not inherit it.
+SUITE_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/cron-egress-firewall-test.XXXXXX")"
+export TMPDIR="$SUITE_SCRATCH"
+trap 'rm -rf "$SUITE_SCRATCH"' EXIT
+
 assert_grep() {
   local description="$1" pattern="$2" file="$3"
   if grep -qE -- "$pattern" "$file"; then
@@ -131,12 +139,12 @@ done
 # The template unit's `@` needs its own anchors (regex-escaping differs).
 assert_grep "delivers cron-egress-alarm@.service (source=)" 'source += +"\$\{path\.module\}/cron-egress-alarm@\.service"' "$SERVER_TF"
 SERVER_BLOCK="$(awk '/resource "terraform_data" "cron_egress_firewall"/,/^}/' "$SERVER_TF")"
-if echo "$SERVER_BLOCK" | grep -qE 'server_id += +hcloud_server\.web\["web-1"\]\.id'; then
+if echo "$SERVER_BLOCK" | grep -cE 'server_id += +hcloud_server\.web\["web-1"\]\.id' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: cron_egress_firewall trigger folds hcloud_server.web[\"web-1\"].id"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: cron_egress_firewall trigger does not fold hcloud_server.web[\"web-1\"].id"
 fi
-if echo "$SERVER_BLOCK" | grep -q 'mkdir -p /etc/soleur'; then
+if echo "$SERVER_BLOCK" | grep -c 'mkdir -p /etc/soleur' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: parent dir created before file provisioners (scp does not mkdir)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: missing 'mkdir -p /etc/soleur' before file provisioners"
@@ -175,8 +183,8 @@ assert_grep "workflow -targets cron_egress_firewall" 'target=terraform_data\.cro
 echo "-- loader safety invariants --"
 # Availability ordering: the resolve (set population) line must precede the
 # default-drop install (flush chain + add rules) — proven by line order.
-RESOLVE_LINE="$(grep -n '"\$RESOLVE_SCRIPT"' "$LOADER" | head -1 | cut -d: -f1)"
-DROP_LINE="$(grep -n 'flush chain ip filter SOLEUR-EGRESS' "$LOADER" | head -1 | cut -d: -f1)"
+RESOLVE_LINE="$(grep -n '"\$RESOLVE_SCRIPT"' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+DROP_LINE="$(grep -n 'flush chain ip filter SOLEUR-EGRESS' "$LOADER" | sed -n '1p' | cut -d: -f1)"
 if [[ -n "$RESOLVE_LINE" && -n "$DROP_LINE" && "$RESOLVE_LINE" -lt "$DROP_LINE" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: sets populate BEFORE the default-drop installs (line $RESOLVE_LINE < $DROP_LINE)"
 else
@@ -194,8 +202,8 @@ assert_grep "dedicated inngest host :8288 accept (#6178)" \
   'ip daddr 10\.0\.1\.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host' "$LOADER"
 # Line-order: the dedicated-host accept MUST precede the terminal default drop
 # (first-match-wins), mirroring the RESOLVE_LINE < DROP_LINE block above.
-DEDICATED_LINE="$(grep -n 'ip daddr 10\.0\.1\.40 tcp dport 8288 accept' "$LOADER" | head -1 | cut -d: -f1)"
-DROP_RULE_LINE="$(grep -n 'counter drop comment "soleur-egress: default drop"' "$LOADER" | head -1 | cut -d: -f1)"
+DEDICATED_LINE="$(grep -n 'ip daddr 10\.0\.1\.40 tcp dport 8288 accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+DROP_RULE_LINE="$(grep -n 'counter drop comment "soleur-egress: default drop"' "$LOADER" | sed -n '1p' | cut -d: -f1)"
 if [[ -n "$DEDICATED_LINE" && -n "$DROP_RULE_LINE" && "$DEDICATED_LINE" -lt "$DROP_RULE_LINE" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: dedicated inngest host accept precedes the default drop (line $DEDICATED_LINE < $DROP_RULE_LINE)"
 else
@@ -384,8 +392,8 @@ assert_grep "retention: OK log carries retained= count" 'retained=' "$RESOLVER"
 # Ordering: the fail-safe-on-empty guard MUST precede the store-record line, so a
 # zero-resolution tick aborts BEFORE the store is ever read (a DNS outage must not
 # be papered over by stale store IPs). Proven by line order (loader-precedent shape).
-FAILSAFE_LINE="$(grep -n 'refusing to touch the sets' "$RESOLVER" | head -1 | cut -d: -f1)"
-RETAIN_LINE="$(grep -n 'SEEN_DIR/\$ip' "$RESOLVER" | head -1 | cut -d: -f1)"
+FAILSAFE_LINE="$(grep -n 'refusing to touch the sets' "$RESOLVER" | sed -n '1p' | cut -d: -f1)"
+RETAIN_LINE="$(grep -n 'SEEN_DIR/\$ip' "$RESOLVER" | sed -n '1p' | cut -d: -f1)"
 if [[ -n "$FAILSAFE_LINE" && -n "$RETAIN_LINE" && "$FAILSAFE_LINE" -lt "$RETAIN_LINE" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: fail-safe-on-empty guard precedes the store-record block (line $FAILSAFE_LINE < $RETAIN_LINE)"
 else
@@ -442,7 +450,7 @@ retention_build() {
 # (a) retention within window: stored-but-not-re-resolved IP is RETAINED.
 T1="$(mktemp -d)"; echo "100" > "$T1/104.18.24.159"
 OUT1="$(printf '10.0.0.1\n' | retention_build "$T1" 150 100 0)"
-if echo "$OUT1" | grep -qx '104.18.24.159' && echo "$OUT1" | grep -qx '10.0.0.1'; then
+if echo "$OUT1" | grep -cx '104.18.24.159' >/dev/null && echo "$OUT1" | grep -cx '10.0.0.1' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: within-window stored IP retained though not re-resolved this tick"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: within-window stored IP should be retained (got: $(echo "$OUT1" | tr '\n' ' '))"
@@ -451,7 +459,7 @@ fi
 # (b) eviction after window (prune tick): past-window IP dropped AND store entry removed.
 T2="$(mktemp -d)"; echo "100" > "$T2/198.51.100.7"
 OUT2="$(printf '10.0.0.1\n' | retention_build "$T2" 300 100 0)"
-if ! echo "$OUT2" | grep -qx '198.51.100.7' && [[ ! -f "$T2/198.51.100.7" ]]; then
+if ! echo "$OUT2" | grep -cx '198.51.100.7' >/dev/null && [[ ! -f "$T2/198.51.100.7" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: past-window IP evicted and store entry removed on prune tick"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: past-window IP should be evicted + file removed on prune tick"
@@ -469,7 +477,7 @@ fi
 # (d) no-prune STILL records (refresh ts) + unions (within-window stored IP).
 T4="$(mktemp -d)"; echo "100" > "$T4/198.18.0.5"
 OUT4="$(printf '198.18.0.9\n' | retention_build "$T4" 150 100 1)"
-if echo "$OUT4" | grep -qx '198.18.0.5' && [[ "$(cat "$T4/198.18.0.9" 2>/dev/null)" == "150" ]]; then
+if echo "$OUT4" | grep -cx '198.18.0.5' >/dev/null && [[ "$(cat "$T4/198.18.0.9" 2>/dev/null)" == "150" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: no-prune still unions within-window store IP and refreshes current-tick ts"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: no-prune must still record (refresh ts) and union within-window store IPs"
@@ -478,7 +486,7 @@ fi
 # (e) readback re-filter: a non-dotted-quad store file never reaches the set.
 T5="$(mktemp -d)"; echo "100" > "$T5/not-an-ip"; echo "100" > "$T5/1.2.3.4"
 OUT5="$(printf '10.0.0.1\n' | retention_build "$T5" 150 100 0)"
-if echo "$OUT5" | grep -qx '1.2.3.4' && ! echo "$OUT5" | grep -q 'not-an-ip'; then
+if echo "$OUT5" | grep -cx '1.2.3.4' >/dev/null && ! echo "$OUT5" | grep -c 'not-an-ip' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: non-IPv4 store filename re-filtered out of the batch"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: non-IPv4 store filename must be re-filtered out"
@@ -486,7 +494,7 @@ fi
 # (f) boundary: age == GRACE_WINDOW exactly is RETAINED (pins `<=`, not `<`).
 T6="$(mktemp -d)"; echo "100" > "$T6/192.0.2.50"
 OUT6="$(printf '10.0.0.1\n' | retention_build "$T6" 200 100 0)"   # age = 200-100 = 100 == window
-if echo "$OUT6" | grep -qx '192.0.2.50'; then
+if echo "$OUT6" | grep -cx '192.0.2.50' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: IP at exactly age==window is retained (inclusive boundary, <= not <)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: IP at age==window must be retained (a <=→< regression would drop it)"
@@ -567,7 +575,7 @@ else
   echo "  FAIL: doppler-copy sweep discovered only ${#DOPPLER_COPY_UNITS[@]} unit(s), below the floor of ${#DOPPLER_COPY_KNOWN[@]} — the sweep is under-covering or matched nothing at all"
 fi
 for known in "${DOPPLER_COPY_KNOWN[@]}"; do
-  if printf '%s\n' "${DOPPLER_COPY_UNITS[@]}" | grep -qxF -- "$SCRIPT_DIR/$known"; then
+  if printf '%s\n' "${DOPPLER_COPY_UNITS[@]}" | grep -cxF -- >/dev/null "$SCRIPT_DIR/$known"; then
     PASS=$((PASS + 1))
     echo "  PASS: known doppler-copy consumer is in the derived sweep: $known"
   else
@@ -628,7 +636,7 @@ for f in "${DROPIN_FOUND[@]}"; do
   fi
   # A drop-in that points at ANY OTHER /etc/default file is the re-pointing mutation that went
   # green: it still looks like a wired drop-in and still delivers the revoked credential.
-  if stray="$(grep -oE '^EnvironmentFile=-?/etc/default/[A-Za-z0-9._-]+' "$f" | grep -vxF -- "$DROPIN_LINE" | head -1)"; [[ -n "$stray" ]]; then
+  if stray="$(grep -oE '^EnvironmentFile=-?/etc/default/[A-Za-z0-9._-]+' "$f" | grep -vxF -- "$DROPIN_LINE" | sed -n '1p')"; [[ -n "$stray" ]]; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $b also carries '$stray' — a drop-in must point ONLY at the re-deliverable credential; anything else re-introduces the dead-token path"
   else
     PASS=$((PASS + 1)); echo "  PASS: drop-in points at no other /etc/default file: $b"
@@ -643,8 +651,8 @@ assert_grep "resolve unit bounded (no infinite activating hang)" 'TimeoutStartSe
 assert_grep "resolve unit declares persistent StateDirectory for the retention store" 'StateDirectory=cron-egress-resolve' "$SCRIPT_DIR/cron-egress-resolve.service"
 
 echo "-- cross-file literal parity (replicated literals drift silently) --"
-SLUG_RESOLVE="$(grep -oE 'SENTRY_SLUG="[^"]+"' "$RESOLVER" | head -1)"
-SLUG_ALARM="$(grep -oE 'SENTRY_SLUG="[^"]+"' "$ALARM" | head -1)"
+SLUG_RESOLVE="$(grep -oE 'SENTRY_SLUG="[^"]+"' "$RESOLVER" | sed -n '1p')"
+SLUG_ALARM="$(grep -oE 'SENTRY_SLUG="[^"]+"' "$ALARM" | sed -n '1p')"
 if [[ -n "$SLUG_RESOLVE" && "$SLUG_RESOLVE" == "$SLUG_ALARM" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: SENTRY_SLUG identical in resolver + alarm ($SLUG_RESOLVE)"
 else
@@ -666,6 +674,281 @@ echo "-- alarm content invariants --"
 assert_grep "alarm posts Sentry error check-in" 'status=error' "$ALARM"
 assert_grep "alarm emails via Resend (disk-monitor precedent)" 'api\.resend\.com/emails' "$ALARM"
 assert_grep "alarm email cooldown (no per-tick inbox storm)" 'EMAIL_COOLDOWN_SECS' "$ALARM"
+
+echo "-- alarm transport confinement + Sentry destination pin (#7898 §2) --"
+# Static rows anchored on SYNTAX (a comment cannot satisfy `^\s*[var="$(]curl …`),
+# and on COUNT equality rather than -q: both credentialed curls (Sentry check-in +
+# Resend) must carry the four flags first, the positive ingest-apex grammar must
+# sit on the `if [[ "$_si_host" =~` call form exactly once, no bare `curl -s` may
+# remain, no credentialed curl may follow redirects (`-L` forwards a custom auth
+# header cross-host; the Rule D linter has no -L limb), and no invocation may be
+# path-qualified (a `/usr/bin/curl` bypasses every PATH stub; the linter's
+# CURL_INVOKE does match it — belt-and-braces for the stub chokepoint claim).
+CONFINED_CURLS="$(grep -cE "^[[:space:]]*([A-Za-z_]+=\"?\\\$\()?curl --disable --noproxy '\\*' --proto '=https' -g" "$ALARM" || true)"
+if [[ "$CONFINED_CURLS" -eq 2 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: both alarm curls are transport-confined (count=2)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected exactly 2 confined curl lines in alarm, found $CONFINED_CURLS"
+fi
+PIN_GRAMMAR_COUNT="$(grep -F 'if [[ "$_si_host" =~ ' "$ALARM" | grep -cF 'ingest\.(de|us)\.sentry\.io$ ]]' || true)"
+if [[ "$PIN_GRAMMAR_COUNT" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: alarm carries the positive Sentry ingest-apex grammar on the _si_host test exactly once"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected the ingest-apex grammar once on the _si_host test in alarm, found $PIN_GRAMMAR_COUNT"
+fi
+assert_not_grep "alarm has no unconfined bare 'curl -s' line" '^[[:space:]]*([A-Za-z_]+="?\$\()?curl -s' "$ALARM"
+assert_not_grep "alarm credentialed curls never follow redirects (-L/--location)" '^[[:space:]]*([A-Za-z_]+="?\$\()?curl .* (-L|--location)( |$)' "$ALARM"
+assert_not_grep "alarm never invokes a path-qualified curl (PATH-stub + linter bypass)" '(^|[[:space:]"(])/[A-Za-z0-9_./-]*/curl([[:space:]]|$)' "$ALARM"
+
+# Exec rows: the alarm under a PATH-shimmed curl / logger / journalctl, with a
+# fake Resend key, a TLS-env canary the prologue must unset, and the cooldown
+# stamp redirected into a tmpdir. Each row is LABELLED (one verdict per row).
+# The curl shim: one line per INVOCATION in curl_args; argv[1..6] + --noproxy
+# cardinality + scheme/TLS-canary checks written to curl_violations (never
+# exited on); ALARM_MOCK_SENTRY_CODE / ALARM_MOCK_RESEND_CODE set the -w code
+# per vendor; ALARM_MOCK_CURL_EXIT makes every call exit non-zero (transport
+# failure). The logger shim records the crit rows the alarm ships off-box.
+run_alarm() {
+  local d="$1"; shift
+  mkdir -p "$d/bin"
+  cat > "$d/bin/curl" << MOCK
+#!/bin/bash
+vendor=""; scheme_http=0; has_proto=0
+for arg in "\$@"; do
+  case "\$arg" in
+    *api.resend.com*) vendor="api.resend.com" ;;
+    *.sentry.io*) vendor="sentry.io" ;;
+  esac
+  [[ "\$arg" == http://* ]] && scheme_http=1
+  [[ "\$arg" == "--proto" ]] && has_proto=1
+done
+if [[ -n "\$vendor" ]]; then
+  echo "\$vendor" >> "$d/curl_checked"
+  if [[ "\${1:-}" != "--disable" || "\${2:-}" != "--noproxy" || "\${3:-}" != '*' \\
+     || "\${4:-}" != "--proto" || "\${5:-}" != "=https" || "\${6:-}" != "-g" ]]; then
+    echo "ARGV_ORDER host=\$vendor" >> "$d/curl_violations"
+  fi
+  n=0
+  for arg in "\$@"; do
+    if [[ "\$arg" == "--noproxy" ]]; then n=\$((n + 1)); fi
+  done
+  if [[ "\$n" -ne 1 ]]; then echo "NOPROXY_COUNT n=\$n" >> "$d/curl_violations"; fi
+  if [[ -n "\${SSLKEYLOGFILE:-}\${CURL_CA_BUNDLE:-}" ]]; then echo "TLS_ENV_LEAK" >> "$d/curl_violations"; fi
+fi
+if [[ "\$scheme_http" -eq 1 && "\$has_proto" -eq 1 ]]; then echo "PROTO_ON_HTTP" >> "$d/curl_violations"; fi
+# one line per INVOCATION (the -d payload is multi-line JSON)
+echo "\$*" | tr '\\n' ' ' >> "$d/curl_args"; echo >> "$d/curl_args"
+if [[ -n "\${ALARM_MOCK_CURL_EXIT:-}" ]]; then echo "000"; exit "\$ALARM_MOCK_CURL_EXIT"; fi
+if [[ "\$vendor" == "sentry.io" ]]; then echo "\${ALARM_MOCK_SENTRY_CODE:-200}"; else echo "\${ALARM_MOCK_RESEND_CODE:-200}"; fi
+exit 0
+MOCK
+  cat > "$d/bin/logger" << MOCK
+#!/bin/bash
+echo "\$*" >> "$d/logger_args"
+exit 0
+MOCK
+  cat > "$d/bin/journalctl" << 'MOCK'
+#!/bin/bash
+echo "(fixture journal line)"
+exit 0
+MOCK
+  cat > "$d/bin/hostname" << 'MOCK'
+#!/bin/bash
+echo "test-server-cx33"
+MOCK
+  chmod +x "$d/bin/"*
+  (
+    export PATH="$d/bin:$PATH"
+    export EMAIL_COOLDOWN_FILE="$d/last-email"
+    export RESEND_API_KEY="re_test_fake_key_123"
+    # TLS-env canary: the prologue's `unset` must clear these before any curl.
+    export SSLKEYLOGFILE="$d/keys.log" CURL_CA_BUNDLE="$d/ca.pem"
+    env "$@" bash "$ALARM" "${ALARM_UNIT:-cron-egress-resolve.service}"
+  )
+}
+alarm_curl_lines() { grep -c '' "$1/curl_args" 2>/dev/null || true; }
+alarm_row() {   # alarm_row "<description>" <ok-flag> <dir> "<out>"
+  if [[ "$2" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1"; echo "        out: $4"
+    echo "        curl: $(cat "$3/curl_args" 2>/dev/null)"; echo "        violations: $(cat "$3/curl_violations" 2>/dev/null)"
+    echo "        logger: $(cat "$3/logger_args" 2>/dev/null)"
+  fi
+}
+ALARM_TRIPLE_OK=(SENTRY_INGEST_DOMAIN=o0000000.ingest.de.sentry.io SENTRY_PROJECT_ID=4321 SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef)
+
+# Row 1: refused ingest host (the negative fixture) → REFUSED marker with a
+# reason TOKEN, exactly one curl (Resend) whose payload carries the note, exit 0.
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" SENTRY_INGEST_DOMAIN=ingest.example.test SENTRY_PROJECT_ID=4321 SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ "$(alarm_curl_lines "$ALARM_D")" -eq 1 ]] || ALARM_OK=0
+grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+grep -qF "sentry channel refused" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+[[ ! -f "$ALARM_D/curl_violations" ]] || ALARM_OK=0
+echo "$ALARM_OUT" | grep -cF "SOLEUR_CRON_EGRESS_ALARM_REFUSED channel=sentry reason=host-shape" >/dev/null || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_REFUSED channel=sentry reason=host-shape" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF "example.test" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+alarm_row "alarm exec: refused host → REFUSED marker (reason token), one confined Resend curl carrying the note, exit 0" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 1b/1c: project id with a traversal suffix, and a non-hex key, with a valid
+# host → reason=project-shape / reason=key-shape, no Sentry curl.
+for ALARM_CASE in "SENTRY_PROJECT_ID=4321/../evil project-shape" "SENTRY_PUBLIC_KEY=pubkey_test key-shape"; do
+  ALARM_D="$(mktemp -d)"
+  ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" "${ALARM_CASE% *}" 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+  ALARM_OK=1
+  [[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+  grep -qF "sentry.io" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+  echo "$ALARM_OUT" | grep -cF "SOLEUR_CRON_EGRESS_ALARM_REFUSED channel=sentry reason=${ALARM_CASE##* }" >/dev/null || ALARM_OK=0
+  grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+  alarm_row "alarm exec: ${ALARM_CASE% *} is refused with reason=${ALARM_CASE##* }; Resend still sends" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+  rm -rf "$ALARM_D"
+done
+
+# Row 2: must-PASS non-canonical host (uppercase + trailing dot) → two confined
+# curls, the first to the FOLDED host; no violations (argv order, --noproxy
+# cardinality, TLS canary cleared).
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" SENTRY_INGEST_DOMAIN=O0000000.INGEST.DE.SENTRY.IO. SENTRY_PROJECT_ID=4321 SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ "$(alarm_curl_lines "$ALARM_D")" -eq 2 ]] || ALARM_OK=0
+[[ "$(grep -c '' "$ALARM_D/curl_checked" 2>/dev/null || true)" -eq 2 ]] || ALARM_OK=0
+[[ ! -f "$ALARM_D/curl_violations" ]] || ALARM_OK=0
+head -1 "$ALARM_D/curl_args" 2>/dev/null | grep -cF "https://o0000000.ingest.de.sentry.io/api/4321/cron/" >/dev/null || ALARM_OK=0
+grep -qF "INGEST.DE.SENTRY.IO" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+echo "$ALARM_OUT" | grep -cF "_REFUSED channel=sentry" >/dev/null && ALARM_OK=0
+[[ -f "$ALARM_D/logger_args" ]] && ALARM_OK=0    # a clean send ships no crit row
+[[ -e "$ALARM_D/last-email" ]] || ALARM_OK=0     # 2xx wrote the cooldown stamp
+alarm_row "alarm exec: uppercase + trailing-dot host accepted; two confined curls (checked=2, no violations), folded host first, stamp written, no crit row" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 3: cooldown stamp present + Sentry triple unset → ZERO curls; the
+# suppressed email and the unset Sentry channel each ship a SEND_SKIPPED row
+# (a deliberate skip, never SEND_FAILED — an alert rule on SEND_FAILED must not
+# page on configuration), and the log line does not claim a Sentry post.
+ALARM_D="$(mktemp -d)"
+touch "$ALARM_D/last-email"
+ALARM_OUT="$(run_alarm "$ALARM_D" -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ ! -f "$ALARM_D/curl_args" ]] || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=resend reason=cooldown unit=cron-egress-resolve.service" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=sentry reason=unset" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF "_SEND_FAILED" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+grep -qF -- "-p user.crit" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF -- "-t cron-egress-alarm" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+echo "$ALARM_OUT" | grep -cF "Sentry check-in still posted" >/dev/null && ALARM_OK=0
+alarm_row "alarm exec: cooldown active + triple unset → zero curls, SEND_SKIPPED rows for both channels (never SEND_FAILED)" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 4: Sentry triple UNSET, no cooldown → exactly one confined (Resend) curl,
+# exit 0 (an unbound read on this path under set -u would abort the only
+# surviving channel); the Sentry skip ships a SEND_SKIPPED row, not a refusal.
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ "$(alarm_curl_lines "$ALARM_D")" -eq 1 ]] || ALARM_OK=0
+grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+[[ ! -f "$ALARM_D/curl_violations" ]] || ALARM_OK=0
+echo "$ALARM_OUT" | grep -cF "Sentry env unset" >/dev/null || ALARM_OK=0
+echo "$ALARM_OUT" | grep -cF "_REFUSED channel=sentry" >/dev/null && ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=sentry reason=unset" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+alarm_row "alarm exec: triple unset → one confined Resend curl, SEND_SKIPPED channel=sentry reason=unset, exit 0" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 5: Resend answers 500 → the cooldown stamp is NOT written (the next fire
+# retries) and a SEND_FAILED row carries the code with curl's exit (0: the
+# transport succeeded, the vendor refused).
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" ALARM_MOCK_RESEND_CODE=500 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ ! -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_FAILED channel=resend http_code=500 rc=0" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF "channel=sentry" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0   # Sentry side was healthy
+alarm_row "alarm exec: Resend 500 → no cooldown stamp, SEND_FAILED channel=resend http_code=500 rc=0" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 6: Sentry answers 500 with a valid triple → SEND_FAILED channel=sentry
+# http_code=500 rc=0; the Resend channel still sends (stamp written).
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" ALARM_MOCK_SENTRY_CODE=500 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_FAILED channel=sentry http_code=500 rc=0" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+[[ -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+[[ "$(alarm_curl_lines "$ALARM_D")" -eq 2 ]] || ALARM_OK=0
+alarm_row "alarm exec: Sentry 500 → SEND_FAILED channel=sentry http_code=500 rc=0; Resend still sends" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 7: transport failure (curl exits 7) on both channels → http_code=000 with
+# curl's exit status as the reason token, exit 0 kept.
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" ALARM_MOCK_CURL_EXIT=7 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_FAILED channel=sentry http_code=000 rc=7" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_FAILED channel=resend http_code=000 rc=7" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+[[ ! -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+alarm_row "alarm exec: curl exit 7 on both channels → http_code=000 rc=7 rows, no stamp, exit 0" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 8: a hostile %n → the unit token collapses to the sentinel before the
+# first marker; nothing else changes.
+ALARM_D="$(mktemp -d)"
+touch "$ALARM_D/last-email"
+ALARM_OUT="$(ALARM_UNIT='../evil' run_alarm "$ALARM_D" -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+grep -qF "reason=cooldown unit=invalid-unit-name" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF "../evil" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+alarm_row "alarm exec: a %n outside the unit-name charset reads unit=invalid-unit-name in every marker" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Parity rows. (a) The predicate-only `sentry-dest-pin` region must be BYTE-
+# IDENTICAL in the alarm (inside sentry_checkin()) and container-restart-
+# monitor.sh (inside sentry_event()) — same indentation, no normalisation.
+# Both extractions must be non-empty and terminated: a missing marker must not
+# diff two empty strings green. (b) `export LC_ALL=C` — which the region's
+# [a-z0-9]/[a-f0-9] classes depend on and which sits OUTSIDE the region —
+# must appear exactly once in each file.
+PIN_ALARM="$(sed -n '/# BEGIN sentry-dest-pin (#7898)/,/# END sentry-dest-pin (#7898)/p' "$ALARM")"
+PIN_MONITOR="$(sed -n '/# BEGIN sentry-dest-pin (#7898)/,/# END sentry-dest-pin (#7898)/p' "$SCRIPT_DIR/container-restart-monitor.sh")"
+if [[ -z "$PIN_ALARM" || -z "$PIN_MONITOR" ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: sentry-dest-pin region missing (alarm=$(echo -n "$PIN_ALARM" | wc -c)B monitor=$(echo -n "$PIN_MONITOR" | wc -c)B) — a missing BEGIN/END marker must not read as parity"
+elif ! grep -qF "# END sentry-dest-pin (#7898)" <<<"$PIN_ALARM" || ! grep -qF "# END sentry-dest-pin (#7898)" <<<"$PIN_MONITOR"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: sentry-dest-pin region is unterminated in alarm or monitor (END marker absent)"
+elif [[ "$PIN_ALARM" == "$PIN_MONITOR" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: sentry-dest-pin predicate is byte-identical in alarm and container-restart-monitor.sh"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: sentry-dest-pin predicate drifted between alarm and container-restart-monitor.sh:"; diff <(echo "$PIN_ALARM") <(echo "$PIN_MONITOR") | sed 's/^/        /' || true
+fi
+LC_ALARM="$(grep -c '^export LC_ALL=C$' "$ALARM" || true)"; LC_MONITOR="$(grep -c '^export LC_ALL=C$' "$SCRIPT_DIR/container-restart-monitor.sh" || true)"
+if [[ "$LC_ALARM" -eq 1 && "$LC_MONITOR" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: export LC_ALL=C pinned exactly once in alarm and container-restart-monitor.sh (the pin's classes depend on it)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: export LC_ALL=C count alarm=$LC_ALARM monitor=$LC_MONITOR (expected 1 and 1)"
+fi
+# (c) emit_refusal() is pasted into the four host scripts; the alarm's copy is
+# the only one without a logger-absent exec row, so pin it to the copies that
+# have one. Function bodies extracted verbatim; all four must be identical.
+EMIT_REF="$(sed -n '/^emit_refusal() {/,/^}/p' "$SCRIPT_DIR/disk-monitor.sh")"
+EMIT_DRIFT=""
+for EMIT_F in resource-monitor.sh container-restart-monitor.sh cron-egress-alarm.sh; do
+  [[ "$(sed -n '/^emit_refusal() {/,/^}/p' "$SCRIPT_DIR/$EMIT_F")" == "$EMIT_REF" ]] || EMIT_DRIFT+="$EMIT_F "
+done
+if [[ -z "$EMIT_REF" ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: emit_refusal() not found in disk-monitor.sh (parity reference missing)"
+elif [[ -z "$EMIT_DRIFT" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: emit_refusal() is byte-identical across the four host monitors"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: emit_refusal() drifted from disk-monitor.sh in: $EMIT_DRIFT"
+fi
 
 echo "-- allowlist completeness (grep-enumerated runtime hosts) --"
 for host in api.anthropic.com github.com api.github.com api.doppler.com \
@@ -767,8 +1050,8 @@ fi
 # Type=oneshot loader and propagates its `die`) must ALSO surface the loader's
 # journalctl tail, so the next apply names the loader `die` directly in the
 # Actions log (no SSH). `enable` (symlink only) does not run the loader.
-if echo "$ASSERT_BLOCK" | grep -qE 'ASSERT-FAILED: firewall-restart' \
-  && echo "$ASSERT_BLOCK" | grep -q 'journalctl -u cron-egress-firewall.service'; then
+if echo "$ASSERT_BLOCK" | grep -cE 'ASSERT-FAILED: firewall-restart' >/dev/null \
+  && echo "$ASSERT_BLOCK" | grep -c 'journalctl -u cron-egress-firewall.service' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: firewall-restart sentinel surfaces journalctl tail"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: firewall-restart sentinel must surface 'journalctl -u cron-egress-firewall.service'"
@@ -777,7 +1060,7 @@ fi
 # Protected-invariant sentinels (plan AC3/AC4 set) — each load-bearing
 # containment check names itself distinctly so the failing one is unambiguous.
 for sentinel in docker-user-jump default-drop bridge-ipv6 egress-probe-negative egress-probe-positive; do
-  if echo "$ASSERT_BLOCK" | grep -qE "ASSERT-FAILED: $sentinel"; then
+  if echo "$ASSERT_BLOCK" | grep -cE "ASSERT-FAILED: $sentinel" >/dev/null; then
     PASS=$((PASS + 1)); echo "  PASS: sentinel present for $sentinel"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: missing ASSERT-FAILED sentinel for $sentinel"
@@ -811,7 +1094,7 @@ fi
 # sentinel AND halt (not fall through). Proves the guard actually fires rather
 # than being decorative.
 SENTINEL_OUT="$(bash -c 'set -e; false || { echo "ASSERT-FAILED: probe"; exit 1; }; echo SHOULD-NOT-REACH' 2>&1 || true)"
-if echo "$SENTINEL_OUT" | grep -qF 'ASSERT-FAILED: probe' && ! echo "$SENTINEL_OUT" | grep -qF 'SHOULD-NOT-REACH'; then
+if echo "$SENTINEL_OUT" | grep -cF 'ASSERT-FAILED: probe' >/dev/null && ! echo "$SENTINEL_OUT" | grep -cF 'SHOULD-NOT-REACH' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: sentinel pattern emits name and halts under set -e (non-vacuous)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: sentinel pattern did not emit+halt as expected (got: $SENTINEL_OUT)"
@@ -819,4 +1102,11 @@ fi
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
+# Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
+# deleted row would vanish green. Reported directly, never through the
+# PASS/FAIL accounting this backstops. Ratchet when adding rows.
+if [[ $((PASS + FAIL)) -lt 236 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 236. A row was deleted.\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

@@ -10,6 +10,9 @@ and ticket-triage P-level accuracy — adapting the [ponytail](https://github.co
 - Node `>=22.22` (the worktree ships v22.22.1) — no dependency is added to any `package.json`;
   the harness runs via `npx promptfoo`.
 - `ANTHROPIC_API_KEY` in the environment (promptfoo's `anthropic:messages:*` providers read it).
+  In this repository, take it from Doppler `ci`: `doppler run -p soleur -c ci -- <command>`. That
+  key lives in the spend-capped `soleur-ci-eval` Console workspace ($100/month), so a grid can
+  never drain the balance production draws on. Never run a grid under a `prd*` config (#8505).
 
 ## Reproduce
 
@@ -20,12 +23,12 @@ cd plugins/soleur/skills/eval-harness
 bash scripts/gen-models.sh
 
 # 2. (No-spend) sanity-check the configs — zero API calls.
-npx promptfoo validate config -c promptfooconfig.go-routing.yaml
-npx promptfoo validate config -c promptfooconfig.ticket-triage.yaml
+npx promptfoo validate config -c promptfooconfig-go-routing.yaml
+npx promptfoo validate config -c promptfooconfig-ticket-triage.yaml
 
 # 3. Run a target (SPENDS — see cost below). `--repeat 3` runs each cell 3×.
-npx promptfoo eval -c promptfooconfig.go-routing.yaml --repeat 3
-npx promptfoo eval -c promptfooconfig.ticket-triage.yaml --repeat 3
+npx promptfoo eval -c promptfooconfig-go-routing.yaml --repeat 3
+npx promptfoo eval -c promptfooconfig-ticket-triage.yaml --repeat 3
 
 # 4. Inspect results in the browser.
 npx promptfoo view
@@ -82,6 +85,14 @@ Opus cells, but outputs are single tokens so per-call cost is small (the first f
 under $1). This is why the harness is **opt-in and manual** and is NOT wired into per-PR CI. See the
 `<decision_gate>` in [SKILL.md](./SKILL.md) for the billing disclosure.
 
+Before any paid grid that asks for free-text generation, smoke it with
+`--filter-first-n 1 --repeat 1 --no-cache` and read each row's output length and `finishReason`.
+Opus 5.5 and Sonnet 5.5 think by default, so a small `ANTHROPIC_MAX_TOKENS` (300 measured) spends the whole
+budget on thinking and returns empty text, which a lexical scorer reads as compliant (#8290 needed
+3000). Estimate spend from a measured prompt size rather than from file bytes (the #8290 estimate ran
+39% low). promptfoo prints no progress when it isn't writing to a terminal, so poll
+`sqlite3 ~/.promptfoo/promptfoo.db "select count(*) from eval_results where eval_id like '<id>%'"`.
+
 ## First recorded delta (2026-06-15, `--repeat 3`, opus-4-8 / sonnet-4-6 / haiku-4-5)
 
 The baseline run that proved the rig pays off (point-in-time; model updates will shift these):
@@ -135,7 +146,7 @@ The two-target v1 exists to prove this is cheap. To add target N:
    `prompts/<target>-baseline.txt` (label set only, no rules). Each uses the `{{input}}` placeholder.
 3. Add golden tasks `tasks/<target>.jsonl` — `{"vars": {"input": "...", "golden_label": "..."}}` per
    line, synthesized fixtures only.
-4. Add `promptfooconfig.<target>.yaml` mirroring the existing configs: `providers: file://models.generated.json`,
+4. Add `promptfooconfig-<target>.yaml` mirroring the existing configs: `providers: file://models.generated.json`,
    the two prompts, `defaultTest.vars.enum: file://enums/<target>.json`, and the two shared asserts
    ([measure-classification.cjs](./scripts/measure-classification.cjs),
    [gate-classification.cjs](./scripts/gate-classification.cjs)).
@@ -154,12 +165,19 @@ defers only the irreducible set factor. Half-covering a multi-label surface with
 harness ships false confidence — defer it whole instead. See
 `knowledge-base/project/learnings/2026-06-29-multi-label-classifier-gateable-core-is-its-single-token-output-slice.md`.
 
+## Archived measurement: `rule-phrasing` (B5, #8290)
+
+B5 measured positive-led vs prohibition-led phrasing of four always-loaded rules (648 calls,
+2026-09-21). The verdict was INCONCLUSIVE with limited instrument validity, and the machinery was
+archived rather than kept: see `knowledge-base/project/specs/archive/20260921-162911-feat-one-shot-8290-invocation-axis-budget-relief/b5-eval-results.md`
+for the record and the recovery command, and #8497 for the rerun conditions.
+
 ## Files
 
 | Path | Role |
 |------|------|
-| [promptfooconfig.go-routing.yaml](./promptfooconfig.go-routing.yaml) | `/go` routing target config |
-| [promptfooconfig.ticket-triage.yaml](./promptfooconfig.ticket-triage.yaml) | ticket-triage target config |
+| [promptfooconfig-go-routing.yaml](./promptfooconfig-go-routing.yaml) | `/go` routing target config |
+| [promptfooconfig-ticket-triage.yaml](./promptfooconfig-ticket-triage.yaml) | ticket-triage target config |
 | [scripts/gen-models.sh](./scripts/gen-models.sh) | single-sources the 3 model IDs → `models.generated.json` |
 | [scripts/extract-block.cjs](./scripts/extract-block.cjs) | extracts a gated source block between sentinels (the projection seam) |
 | [scripts/gen-skill-prompt.cjs](./scripts/gen-skill-prompt.cjs) | projects a block into a skill-arm prompt (regenerate on source edit) |

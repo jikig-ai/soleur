@@ -1,5 +1,5 @@
 <overview>
-Skills improve through iteration and testing. This reference covers evaluation-driven development, Claude A/B testing patterns, and XML structure validation during testing.
+Skills improve through iteration and testing. This reference covers evaluation-driven development, Claude A/B testing patterns, and heading-structure validation during testing.
 </overview>
 
 <evaluation_driven_development>
@@ -167,7 +167,7 @@ Questions to ask:
 Sonnet benefits from:
 
 - Balanced detail level
-- XML structure for clarity
+- Clear heading structure
 - Progressive disclosure
 - Concise but complete guidance
 </sonnet_testing>
@@ -197,61 +197,60 @@ See [core-principles.md](core-principles.md) for model testing examples.
 </balancing_across_models>
 </model_testing>
 
-<xml_structure_validation>
+<heading_structure_validation>
 <principle>
-During testing, validate that your skill's XML structure is correct and complete.
+During testing, validate that your skill's heading structure is correct and complete. Markdown headings structure a skill body; XML tags are optional semantic wrappers inside a section and never replace headings.
 </principle>
 
 <validation_checklist>
 After updating a skill, verify:
 
-<required_tags_present>
+<required_sections_present>
 
-- ✅ `<objective>` tag exists and defines what skill does
-- ✅ `<quick_start>` tag exists with immediate guidance
-- ✅ `<success_criteria>` or `<when_successful>` tag exists
-</required_tags_present>
+- ✅ A `#` title followed by what the skill does
+- ✅ A `## Quick start` (or first numbered phase) with immediate guidance
+- ✅ A completion criterion (`## Success criteria` or a per-phase exit condition)
+</required_sections_present>
 
-<no_markdown_headings>
+<heading_hierarchy>
 
-- ✅ No `#`, `##`, or `###` headings in skill body
-- ✅ All sections use XML tags instead
-- ✅ Markdown formatting within tags is preserved (bold, italic, lists, code blocks)
-</no_markdown_headings>
+- ✅ Body sections are `#` / `##` / `###` headings, in a sensible hierarchy
+- ✅ No top-level tag stands in for a section
+- ✅ Markdown formatting within sections is preserved (bold, italic, lists, code blocks)
+</heading_hierarchy>
 
-<proper_xml_nesting>
+<optional_wrappers>
 
-- ✅ All XML tags properly closed
-- ✅ Nested tags have correct hierarchy
-- ✅ No unclosed tags
-</proper_xml_nesting>
+- ✅ Any XML wrapper sits inside a section and bounds one block
+- ✅ Every wrapper is closed
+</optional_wrappers>
 
-<conditional_tags_appropriate>
+<conditional_sections_appropriate>
 
-- ✅ Conditional tags match skill complexity
-- ✅ Simple skills use required tags only
-- ✅ Complex skills add appropriate conditional tags
+- ✅ Conditional sections match skill complexity
+- ✅ Simple skills use required sections only
+- ✅ Complex skills add appropriate conditional sections
 - ✅ No over-engineering or under-specifying
-</conditional_tags_appropriate>
+</conditional_sections_appropriate>
 
 <reference_files_check>
 
-- ✅ Reference files also use pure XML structure
+- ✅ Reference files are also structured with markdown headings
 - ✅ Links to reference files are correct
 - ✅ References are one level deep from SKILL.md
 </reference_files_check>
 </validation_checklist>
 
-<testing_xml_during_iteration>
+<testing_structure_during_iteration>
 When iterating on a skill:
 
-1. Make changes to XML structure
-2. **Validate XML structure** (check tags, nesting, completeness)
+1. Make changes to the section structure
+2. **Validate heading structure** (hierarchy, required sections, closed wrappers)
 3. Test with Claude on representative tasks
-4. Observe if XML structure aids or hinders Claude's understanding
+4. Observe whether the structure aids or hinders Claude's understanding
 5. Iterate structure based on actual performance
-</testing_xml_during_iteration>
-</xml_structure_validation>
+</testing_structure_during_iteration>
+</heading_structure_validation>
 
 <observation_based_iteration>
 <principle>
@@ -316,7 +315,7 @@ Skills don't need to be perfect initially. Start minimal, observe usage, add wha
 Start with:
 
 - Valid YAML frontmatter
-- Required XML tags: objective, quick_start, success_criteria
+- Required sections: title + purpose, quick start, completion criterion
 - Minimal working example
 - Basic success criteria
 
@@ -414,7 +413,7 @@ The description is Claude's primary discovery mechanism.
 
 **Fix**:
 
-- Use clearer XML tag names
+- Use clearer section headings
 - Reorganize content hierarchy
 - Move frequently-needed content earlier
 - Add explicit links to relevant sections

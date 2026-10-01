@@ -11,7 +11,17 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/server/routines/run-routine", () => ({
   runRoutine: mockRunRoutine,
 }));
-vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+vi.mock("@/server/workspace-resolver", () => ({
+  readWorkspaceIdFromDb: vi.fn().mockResolvedValue("ws-1"),
+}));
+vi.mock("@/server/agent-engine-persistence", () => ({
+  AgentEnginePersistenceRepository: class {
+    bind = vi.fn().mockResolvedValue({ id: "engine-run-1" });
+  },
+}));
+vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 
 import { POST } from "@/app/api/dashboard/routines/run/route";
 

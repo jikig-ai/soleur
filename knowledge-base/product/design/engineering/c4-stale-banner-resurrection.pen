@@ -1,0 +1,344 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "c4sb1",
+      "x": 0,
+      "y": 0,
+      "name": "KB › C4 Diagram — stale banner resurrected (c4-edit OFF default)",
+      "clip": true,
+      "width": 960,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 24,
+      "padding": 40,
+      "children": [
+        {
+          "type": "frame",
+          "id": "c4sb2",
+          "name": "titleBlock",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "c4sb3",
+              "name": "title",
+              "fill": "$--text-primary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "C4Diagnostics stale banner — server-derived state",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "c4sb4",
+              "name": "subtitle",
+              "fill": "$--text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Existing amber strip, no new visual surface. Difference is WHEN it mounts: it is now driven by staleness derived on GET /api/kb/c4/project, so it reappears after a dropped c4_diagram_saved frame, a remount, or a Concierge reopen — and also covers out-of-band source pushes.",
+              "fontFamily": "Inter",
+              "fontSize": 12
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "c4sb5",
+          "name": "pageShell",
+          "clip": true,
+          "width": "fill_container",
+          "fill": "$--bg-surface-1",
+          "cornerRadius": 12,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--border-default"
+          },
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "c4sb6",
+              "name": "tabBar",
+              "width": "fill_container",
+              "layout": "horizontal",
+              "gap": 16,
+              "padding": [
+                10,
+                16
+              ],
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$--border-default"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "c4sb7",
+                  "name": "crumb",
+                  "fill": "$--text-tertiary",
+                  "content": "Knowledge Base › architecture/diagrams",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "frame",
+                  "id": "c4sb8",
+                  "name": "tabDiagram",
+                  "padding": [
+                    4,
+                    10
+                  ],
+                  "cornerRadius": 6,
+                  "fill": "$--bg-surface-2",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "c4sb9",
+                      "name": "tabDiagramLabel",
+                      "fill": "$--text-primary",
+                      "content": "Diagram",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "c4sb11",
+              "name": "C4Diagnostics — stale (resurrected)",
+              "width": "fill_container",
+              "fill": "$--amber-notice-bg",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$--amber-notice-border"
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                8,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "c4sb12",
+                  "name": "bannerTitle",
+                  "fill": "$--amber-notice-fg-strong",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Source edited — rendered diagram may be out of date",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "c4sb13",
+                  "name": "bannerBody (flag-off / c4-edit OFF default)",
+                  "fill": "$--amber-notice-fg-strong",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Ask the Concierge to re-render this diagram.",
+                  "fontFamily": "Inter",
+                  "fontSize": 11
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "c4sb14",
+              "name": "canvas",
+              "width": "fill_container",
+              "height": 260,
+              "layout": "horizontal",
+              "gap": 48,
+              "padding": 32,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "c4sb15",
+                  "name": "node-web-platform",
+                  "padding": [
+                    14,
+                    20
+                  ],
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-default"
+                  },
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "c4sb16",
+                      "name": "n1t",
+                      "fill": "$--text-primary",
+                      "content": "Web Platform",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "c4sb17",
+                      "name": "n1s",
+                      "fill": "$--text-tertiary",
+                      "content": "Next.js + custom server",
+                      "fontFamily": "Inter",
+                      "fontSize": 10
+                    }
+                  ]
+                },
+                {
+                  "type": "line",
+                  "id": "c4sb18",
+                  "name": "edge-1",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$--border-default"
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "c4sb19",
+                  "name": "node-github-repo",
+                  "padding": [
+                    14,
+                    20
+                  ],
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-default"
+                  },
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "c4sb20",
+                      "name": "n2t",
+                      "fill": "$--text-primary",
+                      "content": "GitHub Repo",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "c4sb21",
+                      "name": "n2s",
+                      "fill": "$--text-tertiary",
+                      "content": "tenant KB contents",
+                      "fontFamily": "Inter",
+                      "fontSize": 10
+                    }
+                  ]
+                },
+                {
+                  "type": "line",
+                  "id": "c4sb22",
+                  "name": "edge-2",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$--border-default"
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "c4sb23",
+                  "name": "node-supabase",
+                  "padding": [
+                    14,
+                    20
+                  ],
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border-default"
+                  },
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "c4sb24",
+                      "name": "n3t",
+                      "fill": "$--text-primary",
+                      "content": "Supabase",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "c4sb25",
+                      "name": "n3s",
+                      "fill": "$--text-tertiary",
+                      "content": "auth + workspace meta",
+                      "fontFamily": "Inter",
+                      "fontSize": 10
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "c4sb26",
+          "name": "annotations",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "text",
+              "id": "c4sb27",
+              "name": "note1",
+              "fill": "$--text-tertiary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Trigger inventory (all drive the same banner): save outcome rerendered:false · dropped WS frame · page remount / Concierge reopen · out-of-band source push. Derivation is content-addressed: source blob shas in the current listing vs the newest model.likec4.json commit's tree — .md writes neither flag nor mask staleness.",
+              "fontFamily": "Inter",
+              "fontSize": 11
+            },
+            {
+              "type": "text",
+              "id": "c4sb28",
+              "name": "note2",
+              "fill": "$--text-tertiary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Line-2 copy matrix: c4-edit ON → 'Save again to render the latest version' · flag OFF + canonical diagrams dir → 'Ask the Concierge…' (shown here) · non-canonical dir → 're-run the diagram export for this folder'. Warning-only by design while c4-edit is flag-gated — retry affordance tracked in #8987. aria-live=polite announces async resurrection to AT.",
+              "fontFamily": "Inter",
+              "fontSize": 11
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

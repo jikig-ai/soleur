@@ -192,6 +192,7 @@ REASON_LINES+=("Resolve via one of:")
 REASON_LINES+=("  (a) Inline-execute each step now (Doppler/gh/Playwright/MCP — see hr-exhaust-all-automated-options-before).")
 REASON_LINES+=("  (b) File a 'deferred-automation' tracked issue per match: gh issue create --label type/chore --title '...' --body 'deferred-automation backlog item; re-evaluate when: <criterion>' then add 'Tracks #N' next to each match in the PR body.")
 REASON_LINES+=("  (c) Emergency override: SOLEUR_SKIP_OPERATOR_STEP_GATE=1 <cmd> (use sparingly; logged as gate-override).")
+REASON_LINES+=("  (d) If 2+ of the matches are scriptable and blocked on the SAME credential you cannot mint: invoke skill soleur:operator-bootstrap to generate knowledge-base/project/specs/<feature>/bootstrap.sh, then point ONE tracked follow-through issue's auto_command at it (hr-multi-step-post-merge-bootstrap-script) — the one option that removes the step instead of recording it.")
 
 REASON=$(printf '%s\n' "${REASON_LINES[@]}")
 

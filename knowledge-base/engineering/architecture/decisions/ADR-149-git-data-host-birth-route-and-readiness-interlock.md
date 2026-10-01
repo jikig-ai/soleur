@@ -4,7 +4,8 @@
 - **Date:** 2026-07-27
 - **Issue:** #6977
 - **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27); #7025 (DC-6 — the
-  rung-2 rehearsal route, shipped unfired, 2026-07-29)
+  rung-2 rehearsal route, shipped unfired, 2026-07-29); #8128 (item 8 discharged — 2026-09-13);
+  #7884 (ADR-222 — reason (c)'s object cap superseded by a measured count — 2026-09-15)
 - **Supersedes / amends:** amends ADR-145 (`## Consequences`)
 - **Related:** ADR-068 (multi-host workspaces), ADR-103 (operator-applied exclusions),
   ADR-115 (dedicated-host boot convergence), ADR-130 (vendor-scope probes), ADR-143
@@ -223,6 +224,206 @@ repository. An earlier draft said "impossible"; that overstated it.
     refusal, not a silent one — and because the same disclosure also reaches the operator through
     the `apply_target` input description, which GitHub renders before any job exists.
 
+### Disposition — #8010 (2026-09-19): the rung-2 gate resolves the run it names
+
+The #8043 disposition below records this as open, in the row headed *"A voided attestation is
+DELETED, never rewritten"*: `git_data_rung2_rehearsal_gate`'s only provenance check was a regex
+that `RUNG2_EVIDENCE_URL` **looks like** an Actions run URL — it never fetched the run. A hand-typed
+URL, a URL naming somebody's unrelated run, and a URL naming a `dry_run=true` dispatch that
+uploaded nothing all passed identically. This closes that finding. It extends the interlock
+decision rather than reversing it, so there is **no new ADR**.
+
+**The five new steps, in the pinned order** — local before network, and the cheap network call
+before the expensive-to-be-wrong one, so an offline operator sees file defects first and the
+common refusal costs one request:
+
+| # | Step | Reach |
+|---|---|---|
+| A | `jq` / `curl` / `tar` present | local |
+| B | Sentry verdict is `CLEAN`, or `UNAVAILABLE` plus a run-bound ack | local |
+| C | `GET /actions/runs/<id>`: `path`, `event`, `head_branch`, `status`, `conclusion`, `head_sha` | network |
+| D | `head_sha` reachable in this checkout, and the archived tree at it re-hashes to the claim | local git |
+| E | `GET /actions/runs/<id>/artifacts`: a `git-data-rung2-boot-evidence` entry | network |
+
+**Identity is asserted by four facts together, and the fourth is the one that matters.** The
+workflow `path`, the `workflow_dispatch` `event` and the `head_branch` of `main` say the run was
+*this* route; the **capture artifact** (step E) is what says the run actually spent a host,
+because a `dry_run=true` dispatch also concludes `success` and satisfies the other three. Without
+step E the gate would release on a plan-only rehearsal.
+
+**`conclusion == success` is required**, and the earlier caveat that a conclusion says nothing
+about the capture no longer applies: with step E present, a `success` conclusion plus an evidence
+artifact is a statement about a run that captured. **Accepted consequence, recorded rather than
+mitigated:** the artifact uploads before teardown, so a *failed teardown after a good capture*
+yields a red run and therefore no usable evidence. The operator pays a second host. That is the
+correct direction for this gate — the alternative is releasing a production birth on a run whose
+own conclusion is `failure` — and the rehearsal runbook's *After a PASS* now leads with
+`gh run watch` so the operator learns it before downloading rather than after committing.
+
+**The run-bound acknowledgement is the only way `UNAVAILABLE` releases.** Grammar:
+`RUNG2_SENTRY_CROSSCHECK_ACK=<run-id>:<reason>`, where the run-id must equal the one parsed from
+`RUNG2_EVIDENCE_URL`, the reason must be non-empty after trimming, and the reason may not contain
+`#` (the gate's trailing-comment strip would truncate it). Binding the ack to the run is what stops
+it from becoming a permanent blanket waiver copied forward into the next evidence file. A `FATAL`
+verdict has no acknowledgement path at all, and the capture's never-consulted branches now write
+`NOT_RUN`, which nothing rescues — a cross-check that never ran must not commit bytes identical to
+one that ran and degraded. **Tripwire, recorded here because nothing enforces it:** the ack is
+meant to be rare. Two consecutive evidence files carrying one means the second channel is
+structurally broken rather than momentarily quiet, and the remedy is `SENTRY_ISSUE_RO_TOKEN`'s
+scope, not a third ack. If that pattern appears, the ack path is doing the opposite of its job.
+
+**Every CI call site resolves the run ANONYMOUSLY.** None of the three jobs that source this
+gate grants `actions: read`, nor does the follow-through sweeper, so the anonymous path is the
+operative one at all four sites. (The narrower claim is the true one: an earlier revision said
+"no workflow in this repository grants `actions: read`", which review falsified — nine
+occurrences exist, one of them in a DIFFERENT job of `apply-web-platform-infra.yml`, the file
+hosting two of these call sites.) At 60 requests/hour per IP, shared behind NAT on hosted
+runners — at 60 requests/hour per IP, shared behind NAT on hosted runners. The
+gate is fail-closed on that, which is the correct direction, and every could-not-measure token
+names its own remedy rather than a generic one. Two of the gate's three CI callers cannot be
+edited this cycle (`apply-web-platform-infra.yml` is over GitHub's 500 KB workflow-file limit,
+#8361), which is **why the gate emits its own `::error::` annotation**: the callers' fixed text is
+otherwise the only signal an operator would see. Granting `actions: read`, threading `GH_TOKEN`,
+and converting the three call sites' binary `if !` into a tri-state that separates an instrument
+failure from a HOLD is filed as this cycle's blocker issue, milestone `Phase 4: Validate + Scale`,
+and is cited from the `RUN_RATE_LIMITED` message itself.
+
+**Residuals, accepted and recorded.**
+
+1. **The Sentry verdict is still a human-committed string.** Steps C–E bind the *run*; nothing
+   binds `RUNG2_SENTRY_CROSSCHECK` to anything outside the file. The capture writes it, an
+   operator commits it, and the gate reads what was committed.
+2. **Artifact-record retention is undocumented by the vendor, so the gate picks a threshold.**
+   `GIT_DATA_RUNG2_ARTIFACT_WINDOW_DAYS = 90` in the gate library is the flip point, chosen to
+   match the workflow's own `retention-days: 90`: at or under it, no evidence artifact is a
+   refusal (`RUN_NO_EVIDENCE_ARTIFACT`); past it, the same emptiness is a could-not-measure token
+   (`RUN_ARTIFACT_RECORD_UNREADABLE`), because the gate cannot tell "this run uploaded nothing"
+   from "GitHub no longer keeps the answer". The one datum behind the choice: a record was
+   measured surviving ~110 days on run 27579149955, so records outlive the 90-day BYTES — the
+   threshold is deliberately conservative rather than derived.
+3. **The producer is unbound, and the deferral is CONDITIONAL.** The hash roster binds neither
+   the rehearsal workflow nor the capture script, so an edit making the capture write `PASS`
+   unconditionally moves no hash and invalidates no committed evidence. Binding them here is
+   self-voiding — this change edits both — and the roster means "what renders into `user_data`",
+   which the producer is not. A `RUNG2_PRODUCER_SHA256` recomputed at the run's `head_sha` is the
+   recorded next step.
+
+   **It is deferred, not dismissed, and its safety is conditional rather than established.** This
+   residual is bounded only while every commit to the two producer files reaches `main` through a
+   reviewed PR. `main` carries no required-review ruleset today — the same fact the URL-shape HOLD
+   already names — so the bound is presently SOCIAL, not mechanical, and the ruleset item filed
+   with #8397 is what converts it. Two falsifying observations, either of which reopens this as
+   live: (a) a commit to either producer file on `main` whose PR carries no approving review from
+   a second identity (`gh api repos/jikig-ai/soleur/commits/<sha>/pulls --jq '.[].number'` then
+   `gh pr view <n> --json reviews`); (b) an evidence file whose resolved `head_sha` producer bytes
+   differ from the producer bytes at the gated `HEAD`. Enforcement is scheduled to land with the
+   next rehearsal dispatch, so the one-time re-HOLD is paid out of a host that is already being
+   spent. Staged: first as a drift OBSERVATION in the #8210 daily probe (costs no host, catches
+   the accidental-regression class immediately), then flipped to a refusal in the PR carrying the
+   next rehearsal's evidence.
+
+**Future considerations** — recorded here beside the deferred check-run idea (binding the Sentry
+verdict to something outside the file, i.e. a check-run output written by the rehearsal workflow):
+an **attestation-based** alternative, `actions/attest-build-provenance` in the rehearsal workflow
+plus a committed Sigstore bundle verified by the gate. It would replace steps C–E's live API reads
+with an offline cryptographic verification, which removes the anonymous-rate-limit failure mode
+and the retention residual at once, and would bind the producer (residual 3) as a side effect. Not
+taken now: it adds a signing dependency and a bundle format to a gate whose present job is to stop
+being fooled by a regex, and the live read is the smaller change that closes the finding.
+
+**Operator-facing effect.** `git-data-rung2-rehearsal.md` gains the token-to-remedy table, the
+`--ref main` dispatch and the two-PR payload-change sequence; `git-data-birth.md` gains the
+fallback order for a `RUN_*` HOLD on the birth and replace routes and retires its claim that the
+gate ignores `RUNG2_SENTRY_CROSSCHECK`.
+
+### Addendum — #8189 (2026-09-15): a root authority beside item 10's three keys
+
+Item 10 and the #8009 disposition account for **three** SSH authorities on git-data, each a distinct
+key with a fixed forced command. #8189 adds a **distinct root** authority, and this record carries it
+so the accounting stays complete. It is not the only root authority: `hcloud_ssh_key.default` (the
+operator's public key) has been delivered as a root login key, with no forced command, by every create
+of `hcloud_server.git_data`, including the host born 2026-09-14, and the create gate requires exactly
+that key and the root key. Item 10's three-key count never covered it; a count of "four" would read
+as complete, so none is given. As of this addendum the authority is declared, not delivered: the
+root-key apply, the fingerprint PR and the replace all run after #8189 merges, each with its own
+authorization, so the entries below are written in the future tense.
+
+- **What it is.** `tls_private_key.git_data_root` (ED25519) in the separate root
+  `apps/web-platform/infra/git-data-root-key/`. Once delivered, it **will authenticate as root**, with
+  **no forced command**, so it will be able to bypass every git-principal measure item 10's map
+  protects.
+- **Where it will be held.** Once the root-key apply runs: the Doppler project `soleur-git-data-root`
+  (not `prd`), and that root's R2 state object.
+- **How it will reach the host.** Only through `hcloud_server.git_data`'s create-time `ssh_keys`, as a
+  Hetzner key object labelled `soleur-role=git-data-root`, at the next replace. Both the birth and the
+  replace gate call `git_data_root_key_arm`, which refuses a create unless a committed fingerprint file
+  matches the one resolved key. Until that file is committed, every birth and replace refuses.
+- **What it does not change.** `git_data_authorization_map_gate` still asserts exactly three distinct
+  forced-command keys, correctly assigned. The root key is not a fourth `git` slot and is not in
+  `cloud-init-git-data.yml`, so the rung-2 hash does not move.
+- **Approval.** #8009 C1 was re-approved for this addition by CPO and CTO. Custody limits and residuals
+  are in ADR-220, "Amendment log".
+
+### Addendum — #6680 (2026-09-15): F9's "operator root key" does not exist
+
+The #8043 disposition's F9 row says the root paths for the real fence hook are "a host replace
+(cloud-init) or the operator root key the cutover already uses". The second half is false: the
+cutover never held a root key on git-data (ADR-220, Context). A host replace is the only root
+delivery path for the real fence hook. The same stale claim ("the operator root path the cutover
+uses") sits in the comments of the hash-bound `git-data-pre-receive.sh` and
+`git-data-pre-receive-placeholder.sh`. They are left untouched here,
+because editing them moves the rung-2 hash, and the fix is tracked in #8189.
+
+> **Superseded 2026-09-15 (#8189), as to where the fix is tracked:** #8189 left both hash-bound files
+> untouched, and the stale comment is carried by a comment on #8093 for its next batch.
+
+### Disposition — #8128 (2026-09-13): item 8 discharged — the banner is cleared
+
+| Item | Status |
+|---|---|
+| 8 — clear the banner | **DONE** by PR #8128, on the sequence #8043 prescribed and nothing shorter: a fresh rehearsal dispatched from `main` `15fd63aff` (run [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), `dry_run=false`, environment-approved, verdict PASS — `stage:boot_complete` with `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes nft_metadata_drop=yes`, no `level:fatal`, teardown verified against the Hetzner API); its evidence committed ALONE in PR #8126 (Guard 4 provenance PASS, template sha256 `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`, equal to `main`); then this banner PR. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (run-pinned liveness window on a quiet project; the gate ignores that key — #8010). The runbook now opens with a release record in the banner's place. |
+
+**Checklist effect.** Every item is now DONE, DISCHARGED, or recorded NOT SATISFIABLE AS
+WRITTEN (item 7). #7025's second checkbox reads "tick ADR-149 checklist item 7" — written
+before the #6982 disposition recorded item 7 as not satisfiable; the item that checkbox
+describes (the banner clear) is item 8, and this row is its tick. Nothing in this change
+dispatches a birth: the only control left on
+`apply_target=git-data-host-create` is the `web-platform-infra-apply` environment approval,
+measured `prevent_self_review: false`, one reviewer, `can_admins_bypass: true` — one human, not
+two parties — plus the three static interlocks, which self-invalidate the moment a bound input
+moves.
+
+### Disposition — #8043 (2026-09-11): six hash-bound hardening items, and what they cost the evidence
+
+Six defects on the git-data host were fixed as ONE change because each edits a file inside the
+13-file `RUNG2_TEMPLATE_SHA256` binding: F6 (a comment framing the three SSH pubkeys as
+identity-shaped), F7 (the `git` account owned its own authorization map), F8 (an Art. 17 erasure
+could report success over an unmounted store), F9 (`core.hooksPath` pointed at a git-writable
+directory), F10 (five wrapper comments claiming `AcceptEnv` is empty), F11 (the stage's only ssh
+unit action named `sshd`, which ubuntu-24.04 does not have). Moving them together costs one
+fresh rehearsal instead of six. Four decisions belong here rather than in the plan:
+
+| Decision | Record |
+|---|---|
+| **The ssh unit is `ssh`, and only git-data is edited** | ubuntu-24.04 ships ssh socket-activated: `ssh.socket` is `Accept=no` (one long-lived `sshd -D`, so no per-connection re-read makes a drop-in effective), and `Alias=sshd.service` is instantiated only when `ssh.service` is enabled — under socket activation, never. `systemctl restart sshd` therefore failed rc=5 on every boot, fail-open. The rename is safe on a console-less host because `ssh.socket` carries no `Conflicts=ssh.service` (the listener stays bound; a failed start does not close port 22); it adds a bounded wait (`Type=notify` + `ExecStartPre`, ≤ `DefaultTimeoutStartSec` 90 s) above the LUKS stage, to be read from the fresh rehearsal's boot wall-clock delta. **Fleet decision — git-data only:** `hcloud_server.web` has `ignore_changes = [user_data]` (an edit is inert); `inngest` and `registry` are ForceNew on LIVE hosts (a destructive replace); `grok_dogfood` renders no ssh action. The siblings load the drop-in at the daemon's first start regardless, so they are *noisy, not unhardened* — except inngest's next `runcmd` item, `inngest-boot-phone-home.sh sshd-restarted`, a positive attestation for an action that fails every boot. Filed at load-bearing severities (#8043 FR17). |
+| **A voided attestation is DELETED, never rewritten** | `git-data-rung2-boot-evidence.env` was deleted by this change rather than edited to the moved digest. Editing would make a void attestation look freshly re-rehearsed — the exact failure the gate exists to prevent and one it structurally cannot catch: `git_data_rung2_rehearsal_gate`'s only provenance check is a regex that `RUNG2_EVIDENCE_URL` *looks like* an Actions run URL; it never fetches the run (#8010). Deletion is fail-closed in both directions: the gate HOLDs on an absent file, and the CI freshness step (advisory — `deploy-script-tests` is not a required check) returns to its dormant-by-design arm instead of reddening on the moved hash. "Rehearse first" was not available either: the rehearsal environment deploys from `main` only, so the evidence could not be refreshed before the change landed. A provenance gate now enforces the shape (birth-time arm inside the rehearsal gate; advisory PR-range arm in CI); the multi-commit residual — a bound-file edit in one commit and the hash in another, landed by any non-squash method — is #8010's. |
+| **The hash binds SOURCE, not the render** | `git_data_rung2_user_data_sha256()` hashes the template and the nine payloads as committed, while `local.git_data_rationale_strip` (ADR-152) strips comment lines at render time. So a comment-only edit (F6, F10) that never reaches the host voids a paid attestation exactly as a code edit does — which is why this batch had to be six items wide, and why a future rung-2 evidence design should consider binding the RENDER. Recorded as a finding, not changed here. |
+| **The `git` login shell is a real shell, not git-shell** | Found at review (measured in the pinned image): sshd runs a `command=` as `<login shell> -c "<command>"`, and git-shell accepts only its four built-ins, so with `shell: /usr/bin/git-shell` every forced command — transport, provision, and the Art. 17 erasure — exited 128 `fatal: unrecognized command`. Nobody had ever connected to the host, so nothing had measured it; the ownership suite's runtime arm created its user with `/bin/sh` and could not see it either. Now `shell: /bin/sh`, the bootstrap reads the shell back and refuses a restricted one, the suite creates its user with the template's shell and runs a REAL forced command through sshd (R9), and ADR-068's "per-key `command=` overrides the login shell" is corrected. The confinement is the three-line forced-command map the authorization gate pins; a restricted shell only decided whether the forced command could run at all. Pre-existing, hash-bound, folded into this batch for the same reason the batch exists. |
+| **F9 retires the pipeline-iterable hook delivery** | With `$HOOKS_DIR` at `root:git 0750` and `pre-receive` installed `root:root`, no git-uid channel can deliver the real CAS fence that `git-data-pre-receive-placeholder.sh` says "ships via the web-platform deploy pipeline" (no workflow references it; it was never built). The only root paths are a host replace (cloud-init) or the operator root key the cutover already uses. Recorded so a future author does not loosen F9 to make a git-uid delivery work. |
+| **The authorization-map gate's ownership arm was measured wrong and flipped** | The arm required `owner: git:git` on the rationale that any other owner is "unreadable by sshd or writable by a second principal". Measured in the pinned image: a `root:root 0644` map in a `root:git 0750` `.ssh` authenticates; `root:root 0600` does NOT (sshd opens the file under the target user's uid — "Permission denied", every push refused). The arm now requires `root:root` / `'0644'` (checklist item 10's control, tightened; the three-distinct-keys assertion is unchanged). |
+
+| **Review pass (#8052): four host-trust seams closed while the hash was already moving** | The ten-seat review measured, in the pinned image: (1) root's weekly gc set `safe.directory=$REPO_ROOT/*` system-wide, and the trailing-`/*` form needs git ≥ 2.46 — 24.04 ships 2.43.0, where it matches nothing, so every run failed every repo (rc 128 "dubious ownership") and reported success; `git-data-gc.sh` now passes `-c safe.directory="$repo"` per command and `gc_report` is on the warning rule. (2) The gc lock sat in `/var/lock` (`/run/lock`, 1777): a git-uid pre-created file makes root's open fail under `fs.protected_regular`; moved to `RuntimeDirectory=git-data-gc`. (3) A repo-local `core.hooksPath` (git-writable) outranks the system value the bootstrap sets, so code-exec-as-`git` could unfence one workspace without touching the root-owned hook; the transport wrapper now execs `git -c core.hooksPath=$HOOKS_DIR <verb>`, the one scope repo config cannot override. (4) The transport wrapper — the forced command that WRITES user source — had none of the store-mounted/root-on-store guard provision and remove carry; it does now, with `.cutover-freeze` honoured by all three, `rm -rf --one-file-system` on the erasure, and the per-workspace lock never unlinked (unlink-while-held let a sibling hold a fresh inode). Each is hash-bound; landing them here costs nothing the batch was not already paying. |
+
+**Checklist effect.** Items 1–7, 9 and 10 are unchanged in status. The rung-2 evidence that
+satisfied item 8's precondition (landed by #8002 from run 33888071954, dated 2026-09-04 —
+the ADR's last word on item 8 before this disposition was #7025's "unproducible") is void by
+construction (the template moved) and has been deleted; item 8 (#7025) is therefore
+**re-armed**, and since this change its precondition also carries the evidence's commit
+PROVENANCE (Guard 4: the evidence's last commit must touch no bound file, read from a
+non-shallow checkout) — the sequel is a fresh rehearsal dispatched
+from `main`, its evidence PR, then the banner PR, then the birth. Nothing in this change
+dispatches a rehearsal or a birth.
+
 ### Disposition — #8009 (2026-09-10)
 
 | Item | Status |
@@ -236,7 +437,7 @@ repository. An earlier draft said "impossible"; that overstated it.
 | 1 — emitter + `sentry_dsn` threaded | **DONE.** One `/usr/local/bin/git-data-emit` (ADR-147's #6982 addendum records why it is a file and not an inline function). |
 | 2 — credential reachable in the token's single-config scope | **DONE, and it found a live boot-breaker.** The probe measured that `doppler run --config prd` under a `prd_git_data`-scoped token **exits 1** with `GIT_DATA_LUKS_KEY` absent — so `doppler run` was exiting BEFORE exec'ing the LUKS heredoc, its `set -euo pipefail` ran zero times, and the host would have booted dark with sshd up. Both invocations corrected to `--config prd_git_data`. This is exactly the "dark by construction" trap this item exists to catch, and it was sitting inside the file the interlock inspects. |
 | 3 — new addresses registered | **DONE, and the item understated the work: there are SIX sites, not three.** The gate carries `def allow:` (a PERMISSION set) *and* a separate hardcoded PRESENCE loop (a COMPLETENESS set) that nothing extracted, so a three-of-four edit was fully green — an address PERMITTED to change but not REQUIRED to appear, which is Residual 2's harm hiding behind a PASS. Set is 18 → 20. |
-| 4 — post-apply signal | **DONE, host-side.** `stage:boot_complete` from `git-data-bootstrap.sh` **plus a poll that reads it** inside the birth job (`if: always()`). A producer with no reader is not a signal. |
+| 4 — post-apply signal | **DONE, host-side.** `stage:boot_complete` from `git-data-bootstrap.sh` **plus a poll that reads it** inside the birth job (`if: always()` at the time; since PR #8171 gated on the apply step's outcome — it runs after a green or failed apply, never after a skipped one). A producer with no reader is not a signal. |
 | 5 — `GIT_DATA_SSH_HOST` | **SHIPPED, BOTH CONSTRAINTS MET.** `doppler_secret.git_data_ssh_host` ships and its `OPERATOR_APPLIED_EXCLUSIONS` entry lands in the same change (second constraint). The first constraint — single-source from `hcloud_server_network.git_data.ip` — is now met **as written**: the value reads that computed attribute. #6982's first draft shipped `local.git_data_private_ip` and recorded the divergence as DC-5 on the grounds that the computed attribute is unappliable pre-birth; **review refuted that** and the divergence was reversed before merge. See the DC-5 reversal note below. |
 | 6 — firewall entailment | **ALREADY DISCHARGED on `main`**, verified rather than assumed: the gate splits the attachment out of the entailed loop and asserts the OUTCOME (`server_ids` ends at length 1). No code change. |
 | 7 — replace the interlock mechanism (DC-2) | **NOT SATISFIABLE AS WRITTEN — recorded here per this item's own instruction.** #6982 ships the emitter as a FILE inside `user_data` (`/usr/local/bin/git-data-emit`), not as a Terraform resource: git-data has no bake path, so there is no resource to assert. ADR-147's #6982 addendum records that divergence. Per item 7's closing clause the `${sentry_dsn}`-pinned sentinel therefore **stays exactly as shipped**, and this recording is the precondition item 7 places on clearing item 8. |
@@ -655,7 +856,150 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
 | Keep the untargeted laptop apply | **Rejected** — the violation this closes; a plan of that shape carried nine destroys. |
 | Inline the gate in the workflow YAML | **Rejected on evidence.** Untestable, and it fails the parity job⇄gate pairing. An earlier draft then shipped the *interlock* inline, contradicting itself; corrected. |
 | Ship the route with no interlock, hold by convention | **Rejected.** A capability held only by prose is held until the first person who reads the runbook and not the plan — and #6982 contains items ADR-115 makes unfixable after birth. |
-| Target the heartbeat too | **Rejected — verdict STANDS, on stronger and partly different evidence (#6982, D-HB).** The recorded reason (*the feeder already shipped and is web-host-resident; creating a monitor this route cannot arm is the #6537 fed-but-paused shape*) is now *partly stale on the feeding half*: the feeder shipped, `web-git-data-probe.service` runs `doppler run` per tick and resolves its URL by indirection through `GIT_DATA_HEARTBEAT_URL_KEY`, so the URL would propagate within one 60 s tick with no `ci-deploy` redeploy, and `heartbeat-manifest.ts` carries the row with no `arming_pending`. Three findings replace it, any one disqualifying. **(a) It would wedge every merge to `main`:** the `arm_one` call for `git_data_prd` lives in the PER-MERGE `apply` job, not a birth-only step, and no-ops today only because the address is absent from tfstate — the moment the heartbeat exists, every merge unpauses it, polls 230 s, and on no-beat rolls back and returns non-zero. That converts the health of an unborn, flag-off host into a merge-blocking dependency for the whole repository. **(b) It would prove the wrong thing:** `web-git-data-probe.sh` names its own limit — a TCP connect-and-close to :22 proves the port is OPEN, not that git transport SERVES — and sshd is up before `runcmd` runs, so a host whose Doppler download 404'd, whose LUKS never mounted and whose bootstrap died ANSWERS ON :22 AND BEATS GREEN. **(c) Object cap:** live Better Stack holds 7 heartbeats + 3 monitors against a vendor-page reading of a single shared pool of ten. Item 4 is satisfied HOST-SIDE instead, by the `stage:boot_complete` emit plus a poll that reads it. #6548 keeps ownership and receives these three findings. |
+| Target the heartbeat too | **Rejected — verdict STANDS, on stronger and partly different evidence (#6982, D-HB).** The recorded reason (*the feeder already shipped and is web-host-resident; creating a monitor this route cannot arm is the #6537 fed-but-paused shape*) is now *partly stale on the feeding half*: the feeder shipped, `web-git-data-probe.service` runs `doppler run` per tick and resolves its URL by indirection through `GIT_DATA_HEARTBEAT_URL_KEY`, so the URL would propagate within one 60 s tick with no `ci-deploy` redeploy, and `heartbeat-manifest.ts` carries the row with no `arming_pending`. Three findings replace it, any one disqualifying. **(a) It would wedge every merge to `main`:** the `arm_one` call for `git_data_prd` lives in the PER-MERGE `apply` job, not a birth-only step, and no-ops today only because the address is absent from tfstate — the moment the heartbeat exists, every merge unpauses it, polls 230 s, and on no-beat rolls back and returns non-zero. That converts the health of an unborn, flag-off host into a merge-blocking dependency for the whole repository. **(b) It would prove the wrong thing:** `web-git-data-probe.sh` names its own limit — a TCP connect-and-close to :22 proves the port is OPEN, not that git transport SERVES — and sshd is up before `runcmd` runs, so a host whose Doppler download 404'd, whose LUKS never mounted and whose bootstrap died ANSWERS ON :22 AND BEATS GREEN. **(c) Object cap:** live Better Stack holds 7 heartbeats + 3 monitors against a vendor-page reading of a single shared pool of ten. Item 4 is satisfied HOST-SIDE instead, by the `stage:boot_complete` emit plus a poll that reads it. #6548 keeps ownership and receives these three findings. **Amended 2026-09-15 (#7884):** the (c) reading is superseded by measurement. The twice-daily reconcile prints `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n>`, and live held 4 monitors + 9 heartbeats = 13 objects that day, which contradicts a single shared pool of ten. See [ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md). **Amended 2026-09-27 (#8754):** the heartbeat now exists, created by the per-merge `apply` job (which targets `betteruptime_heartbeat.git_data_prd` and `doppler_secret.git_data_heartbeat_url_prd`), not by this birth route. So (a) is live, no longer hypothetical: every merge whose monitor is still paused runs `arm_one` (a 200 s deadline) and, with no beat, rolls back and fails the arm step. It was accepted because the host is born and fed: on 2026-09-27 both web hosts logged `GIT_DATA_HEARTBEAT_URL unset — reachable but cannot ping` every 60 s, so the first merge should arm it and later merges read `already armed`. The birth-route verdict is unchanged: `git_data_host_create` still does not target the pair (`GIT_DATA_BIRTH_REFUSED`). |
 | Include `doppler_secret.git_data_ssh_host` | **Cut from #6977; SHIPPED in #6982, and the feasibility regression was not structural.** The wedge is real only under the remedy *"give the new secret a per-PR `-target` line"* — which is not what any of its five sibling secrets do; they sit in `OPERATOR_APPLIED_EXCLUSIONS` with no per-PR target. Sourcing the value from a STATIC local rather than the computed NIC attribute leaves no edge that can reach the server, so the address is plannable and appliable with the host absent. **The operator upheld the cut on 2026-07-27 (DC-3)** and attached two mechanical constraints, recorded in release-checklist item 5: single-source from `hcloud_server_network.git_data.ip`, and land the `OPERATOR_APPLIED_EXCLUSIONS` entry in the same change. Both are now met: **DC-5 was REVERSED during #6982's review** (see the reversal note above) and the value reads `hcloud_server_network.git_data.ip` as mandated. The divergence argument — that the computed attribute is unappliable pre-birth — did not survive contact with the actual `-target` lines, which already include the NIC. The #6977 dissent is in `knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/decision-challenges.md` (PR #6989); the operator's decision upholding it was added to that same file by #7003. |
 | Ship gate + suite now, enum + job in #6982 | **Considered and declined by the operator.** It would delete the interlock entirely by removing the capability, but #6977 would no longer deliver an executable route and would close on a partial. Recorded as DC-1. |
 <!-- lint-infra-ignore end -->
+
+## Amendment — 2026-09-17 (#8178): item 4's reader had never read
+
+Item 4 is satisfied host-side by *"the `stage:boot_complete` emit plus a poll that reads
+it"*, and the disposition row above records it **DONE**. The producer half held. The
+reader half had never once succeeded.
+
+**Measured.** On both real birth dispatches every one of the 20 polls returned `rc=22`
+(`curl --fail-with-body` on an HTTP >= 400): run
+[34822248580](https://github.com/jikig-ai/soleur/actions/runs/34822248580) (apply skipped
+by the birth gate) and run
+[34836141887](https://github.com/jikig-ai/soleur/actions/runs/34836141887) (apply SUCCESS,
+host born). In the second, the host was genuinely dark: it died at `gitdata_doppler_dl`
+about 20 s into runcmd and never emitted `boot_complete`. The job went RED saying *"the
+birth is UNVERIFIED"*, and the poll could not have told a dark host from a healthy one.
+The step ran `betterstack-query.sh … 2>/dev/null`, so the response body never reached the
+log and the cause was unrecoverable from `gh run view`.
+
+**Cause: a stale SQL API connection.** The step bound the three repository secrets
+`secrets.BETTERSTACK_QUERY_*`, last written 2026-07-03. They hold the SQL API connection
+created 2026-06-01, and git-data's Logs source (2734275) was created 2026-09-03. A Better
+Stack connection does not cover sources created after it (#7867, resolved 2026-09-09), so
+every read against the git-data table answered HTTP 500 `CLUSTER_DOESNT_EXIST`, which
+`--fail-with-body` reports as the same `rc=22` as a 401. The fix for #7867 created a new
+connection and wrote it only to Doppler `prd_terraform`, which the step's own error text
+had always named. The identical query succeeds under `doppler run -p soleur -c
+prd_terraform` (measured 2026-09-17 and 2026-09-18, `rc=0` on the UNION and on each arm).
+ADR-192's `## Addendum — 2026-09-18 (#8178)` retires its "never stored a row" reading of
+that error.
+
+**A correction to this PR's own first draft.** An earlier revision of this amendment said
+the 20 x 30 s budget was too short because run 34836141887's `boot_complete` landed
+`15:27:24`, 2 m 37 s after the poll gave up. That row came from the NEXT host: replace run
+[34861860722](https://github.com/jikig-ai/soleur/actions/runs/34861860722) finished its
+apply at `15:27:06`, 18 s before the row. With working credentials the birth would have read
+`silent`, which was correct. Measured healthy boots report `boot_complete` 8-13 s after runcmd
+starts, and runcmd starts 3-10 s after apply ends. So the budget stays at 20 x 30 s, about
+30x the measured latency. The job `timeout-minutes` is raised instead, and each read is
+capped at 45 s, so a slow read path ends in a verdict rather than a cancelled job with none.
+
+**A premise nobody had asserted: `git_data_host_replace` had no poll at all**, and it is
+the path that actually runs. Birth is once-ever, so with a live host present every later
+boot comes through replace, and one completed green on 2026-09-16 having verified
+nothing. Its apply step also carried no `id:`, so a copied poll's `steps.apply.outcome`
+would have resolved to `''` and the poll would have been skipped. Both jobs are now wired,
+and both `Dispatch summary` steps turn an apply/poll outcome pair that did not produce a
+verdict (including an empty outcome) red.
+
+**What item 4 now means.** The reader is
+`scripts/lib/git-data-boot-signal-poll.sh`, driven hermetically by
+`tests/scripts/test-git-data-boot-signal-poll.sh`. It reports three outcomes: `received`
+/ `silent` / `unreadable`. The verdict rests on the FINAL read, and the summary line
+`answered=N/M` says how many reads answered. `silent` is a statement about the host;
+`unreadable` measures nothing about it. stdout and stderr go to separate files, so a
+reader's error echo can never reach the match buffer. The failure log carries rc, a
+classification, the body's byte LENGTH and a scrubbed stderr line, never the body, because
+this repository is public and a ClickHouse auth body carries half a Basic-auth pair.
+
+**The read is anchored to the run.** Both jobs stamp `BOOT_TRAIL_SINCE` immediately before
+their apply, and the poll refuses to run without a well-formed anchor
+(`VERDICT=refused-no-anchor`). The rule: *a readiness verdict filtered by `host_name` is
+scoped to the host, not the host generation, so its read must be bounded by an anchor
+stamped before the action that creates the generation.* No back-skew is subtracted. `dt` is
+assigned by Better Stack at ingest (the emitter's POST body carries none), so the only clock
+comparison is Better Stack's against the runner's, and both are NTP-synced. An earlier
+revision subtracted 120 s, which let a replace queued behind another replace accept the
+previous generation's row. The rule is recorded as principle **AP-027**.
+
+**Accepted residual, stated rather than hidden.** Time is the only thing separating two host
+generations: the `boot_complete` row carries no per-host identity. If a previous host is still
+booting when the next replace starts (its own poll ended `silent`, and a replace was queued or
+re-dispatched), its late `boot_complete` can be ingested after the new anchor and before the
+destroy, and the new poll would then accept it. That needs a previous boot slower than the
+10-minute budget plus a dispatch inside that window; measured healthy boots report in 8-13 s.
+Closing it needs a generation id (the Hetzner server id) in the emit and in the `WHERE`
+clause, which changes `user_data` (ForceNew) and so rides the next change to the emitter.
+
+**Closure is event-gated.** No suite can show the read working from a real runner. #8178
+closes on the first post-merge git-data dispatch whose poll answers, judged by
+`scripts/followthroughs/git-data-boot-poll-8178.sh`, and not on a `boot_complete` row (one
+already existed before the fix).
+
+A producer with no reader is not a signal; a reader that has never read is not a reader.
+
+## Amendment — 2026-09-20 (#8010): two residuals the ship-time consult measured
+
+`soleur:ship` Phase 5.5's scoped advisor consult, run against PR #8388 after the nine-seat
+panel had already closed three P1s, measured five further concerns. Three were fixed inline
+(the token-set parity assertion was blind to 11 of 21 tokens; the #8210 probe hand-copied a
+stale could-not-measure set and had already drifted; the downgrade ack stated a `'#'` rule its
+code did not implement). Two are recorded here rather than fixed, because neither is a
+one-line change:
+
+**R1 — Guard 5's floor is read from a commit that was itself ungated, so the downgrade shape
+survives in two commits.** `_git_data_rung2_run_floor` walks history, skips entry 0, and
+returns at the first prior version in which the evidence file exists — printing whatever that
+version's `RUNG2_EVIDENCE_URL` parses to, and printing *nothing* when it parses to nothing.
+Nothing is indistinguishable from "first-ever evidence file, no floor". So: commit A reverts
+the payload tree **and** writes the evidence with a non-parsing or deliberately low URL;
+commit B (evidence-only) restores the old evidence naming the genuine older run. Guard 4 arm 1
+passes because the *last* commit touching the evidence touches no bound file; Guard 5 reads
+entry 1 = commit A = no floor, and stays silent; steps C/D/E are all honestly true. Measured
+against the real helper:
+
+```text
+floor after v1 (runs/80000900):   []
+floor after v2 (URL="pending"):   [80000900]
+floor seen at v3 (runs/80000800): []      <-- Guard 5 silent
+```
+
+F1-F8 only ever feed a well-formed prior version and the deletion case, so nothing covers an
+*existing but unparseable* intermediate. A max-over-all-prior-versions walk closes the
+unparseable variant. The low-id variant needs the floor to come from a version that itself
+passed a gate, which is a design question, not an edit — and it is the honest statement of what
+Guard 5 is: the CTO ruling framed it as a **mitigation** of the downgrade shape, never a
+closure. It requires a non-squash merge, which the evidence runbook mandates, so it is live.
+
+**R2 — `RUN_FLOOR_UNREADABLE` is an unreachable refusal path whose remedy names a different
+case.** It fires only when `git rev-parse --show-toplevel` fails from the evidence's directory,
+but Guard 4 runs first and already refuses exactly that ("is not inside a git work tree"), and
+refuses shallow clones too. Zero test references. Its message prescribes `git fetch origin main`
+/ `fetch-depth: 0` — the *shallow* case, where the floor actually returns EMPTY (one `git log`
+entry, consumed as entry 0) and Guard 5 skips silently rather than reporting UNREADABLE. So the
+dead arm's remedy addresses a live gap that takes a different path. The token stays in the
+could-not-measure set (both consumers now read that set, so classification is correct); what is
+owed is either reachability or deletion, plus a floor that distinguishes "shallow, cannot see
+history" from "no prior version".
+
+Both are carried by #8397.
+
+## Amendment — 2026-09-24 (#5274): the rung-2 rehearsal boots three times
+
+Pointer only; the decision lives in
+[ADR-239's 2026-09-24 amendment](./ADR-239-git-data-serves-from-luks-at-birth.md#amendment-2026-09-24--the-dirty-journal-gap-is-closed-5274-5914).
+The rehearsal route now seeds a dirty plaintext journal, boots the payload (boot #1, reboot arm
+unchanged), then replaces the host again (boot #2, adopting the LUKS volume boot #1 formatted).
+Every plan passes `scripts/git-data-rung2-plan-shape.sh`; the evidence upload additionally gates on
+the replace arm (`RUNG2_REPLACE_BOOT`), and teardown is its own `if: always()` job. The birth
+readiness gate still ignores the reboot key, but now also requires the replace keys: exactly one
+`RUNG2_REPLACE_BOOT=PASS` and one `RUNG2_REPLACE_SENTRY_CROSSCHECK`, classified over the same closed
+set as `RUNG2_SENTRY_CROSSCHECK` (UNAVAILABLE takes the same run-keyed ack). A hand-assembled
+evidence file therefore cannot release on boot #1 alone.
+Runbook: `git-data-rung2-rehearsal.md`.

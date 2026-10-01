@@ -30,10 +30,18 @@
 #   P3  no in-progress release run ......... GATING
 #   P4  live zot serving probe ............. DELIBERATELY ABSENT (see below)
 #   P5  the replace will be OBSERVABLE ..... GATING   (control + container-log channel)
+#   P6  the boot-image asset exists ........ GATING, fail-closed (#8714 5.3b-iii)
 #
 # Output: a single `verdict=` line on stdout. Exit 0 = clear to dispatch, non-zero = do not.
 #
-# Usage: scripts/registry-replace-preflight.sh [--manual]
+# Usage: scripts/registry-replace-preflight.sh [--manual] | --print-asset | --check-asset
+#   --print-asset  print the release asset the rendered user_data will fetch (repo/tag/asset/
+#             sha256/url, derived from zot-registry.tf exactly as P6 derives it) and exit. Read-only,
+#             no credentials.
+#   --check-asset  run ONLY P6 (the boot-image asset exists and matches T) and exit. The gate the
+#             other registry-host-creating routes call before terraform creates a host
+#             (apply-web-platform-infra.yml registry_host_replace / registry_luks_recut /
+#             registry_region_migrate), and rule-audit's standing probe. Needs gh + GH_TOKEN.
 #   --manual  this run is the operator's re-fire of a refused/dark replace. Skips P1 only.
 #             A FLAG, NOT AN ENV VAR, on purpose: the caller that may set it is the
 #             workflow_dispatch arm, and `github.event_name` is unforgeable by the caller,
@@ -41,14 +49,25 @@
 #             refuses. REGISTRY_PREFLIGHT_MANUAL is honoured OUTSIDE Actions for local use and
 #             refused inside it, so there is no env route to a P1 downgrade in production.
 # Env seams (tests only, one per external dependency):
-#   REGISTRY_PREFLIGHT_QUERY_CMD   REGISTRY_PREFLIGHT_RUNS_CMD
+#   REGISTRY_PREFLIGHT_QUERY_CMD   REGISTRY_PREFLIGHT_RUNS_CMD   REGISTRY_PREFLIGHT_TF
 
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). This script handles a live credential, and `set -x`
+# would print it — xtrace expands before any masking hook can see the line, so
+# refusing is the only reliable mitigation rather than a belt-and-braces one.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 MANUAL=0
+PRINT_ASSET=0
+CHECK_ASSET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --manual) MANUAL=1; shift ;;
+    --print-asset) PRINT_ASSET=1; shift ;;
+    --check-asset) CHECK_ASSET=1; shift ;;
     -h|--help) sed -n '1,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "registry-replace-preflight: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -58,6 +77,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QUERY_CMD="${REGISTRY_PREFLIGHT_QUERY_CMD:-${ROOT}/scripts/betterstack-query.sh}"
 RUNS_CMD="${REGISTRY_PREFLIGHT_RUNS_CMD:-gh}"
 WINDOW="${REGISTRY_PREFLIGHT_WINDOW:-24h}"
+TF_FILE="${REGISTRY_PREFLIGHT_TF:-${ROOT}/apps/web-platform/infra/zot-registry.tf}"
 # P5's two markers. The control rides the HOST heartbeat transport; the channel marker rides the
 # CONTAINER-LOG transport that #7556 actually reads. They must stay on different transports or
 # P5's positive control proves nothing.
@@ -84,8 +104,11 @@ if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   #
   # WAIT_SECS and POLL_SECS are deliberately NOT here: they can only shorten the wait, which
   # refuses earlier. A seam that can only over-refuse is not a bypass.
+  # REGISTRY_PREFLIGHT_TF: pointing P6 at a doctored .tf would make it check an asset the host
+  # will never fetch -- the same manufactured-CLEAR power.
   for _seam in REGISTRY_PREFLIGHT_QUERY_CMD REGISTRY_PREFLIGHT_RUNS_CMD REGISTRY_PREFLIGHT_WINDOW REGISTRY_PREFLIGHT_MANUAL \
-               REGISTRY_PREFLIGHT_ZOT_WRITERS REGISTRY_PREFLIGHT_P5_CONTROL REGISTRY_PREFLIGHT_P5_CHANNEL; do
+               REGISTRY_PREFLIGHT_ZOT_WRITERS REGISTRY_PREFLIGHT_P5_CONTROL REGISTRY_PREFLIGHT_P5_CHANNEL \
+               REGISTRY_PREFLIGHT_TF; do
     if [[ -n "${!_seam:-}" ]]; then
       echo "::error::registry-replace-preflight: ${_seam} is set inside GitHub Actions. A seam set on the production path can manufacture a CLEAR verdict. Refusing." >&2
       echo "verdict=REFUSED predicate=SEAM"
@@ -108,11 +131,75 @@ abort() { # $1 = predicate, rest = message
   exit 1
 }
 
+# ── The boot-image asset the rendered user_data will fetch (#8714 5.3b-iii) ─────────────────
+# Tag, asset name and version come from the mirror builder's `names` mode, the one bash
+# derivation the publish workflow also uses (zot-image-oci-archive.sh); T and the repo are literals
+# in zot-registry.tf's zot-mirror block. zot-image-fetch.test.sh pins the rendered ZOT_ASSET_URL
+# (terraform's own derivation) equal to the url printed here. Sets MIRROR_* or returns 1.
+mirror_asset() {
+  local names
+  MIRROR_ERR=""
+  [[ -r "$TF_FILE" ]] || { MIRROR_ERR="cannot read $TF_FILE"; return 1; }
+  names="$(ZOT_REGISTRY_TF="$TF_FILE" bash "${ROOT}/apps/web-platform/infra/zot-image-oci-archive.sh" names 2>&1)" \
+    || { MIRROR_ERR="zot-image-oci-archive.sh names failed: $(printf '%s' "$names" | tail -1)"; return 1; }
+  MIRROR_TAG="$(printf '%s\n' "$names" | sed -n 's/^TAG=//p')"
+  MIRROR_ASSET="$(printf '%s\n' "$names" | sed -n 's/^ASSET=//p')"
+  MIRROR_T="$(grep -E '^[[:space:]]*zot_mirror_asset_sha256_amd64[[:space:]]*=[[:space:]]*"[0-9a-f]{64}"[[:space:]]*$' "$TF_FILE" | grep -oE '[0-9a-f]{64}' || true)"
+  MIRROR_REPO="$(grep -E '^[[:space:]]*zot_mirror_repo[[:space:]]*=[[:space:]]*"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"[[:space:]]*$' "$TF_FILE" | sed -E 's/^[^"]*"([^"]+)".*$/\1/' || true)"
+  [[ "$(printf '%s' "$MIRROR_T" | grep -c . || true)" == 1 ]] || { MIRROR_ERR="expected exactly one zot_mirror_asset_sha256_amd64 = \"<64 hex>\" in $TF_FILE"; return 1; }
+  [[ "$(printf '%s' "$MIRROR_REPO" | grep -c . || true)" == 1 ]] || { MIRROR_ERR="expected exactly one zot_mirror_repo = \"<owner>/<repo>\" in $TF_FILE"; return 1; }
+  [[ "$MIRROR_TAG" =~ ^zot-image-v[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{12}$ && "$MIRROR_ASSET" =~ ^zot-linux-amd64-v[0-9]+\.[0-9]+\.[0-9]+\.oci\.tar$ ]] \
+    || { MIRROR_ERR="the builder printed an unexpected tag/asset: [$MIRROR_TAG] [$MIRROR_ASSET]"; return 1; }
+  MIRROR_URL="https://github.com/${MIRROR_REPO}/releases/download/${MIRROR_TAG}/${MIRROR_ASSET}"
+}
+
+if [[ "$PRINT_ASSET" == "1" ]]; then
+  mirror_asset || { echo "registry-replace-preflight: --print-asset: ${MIRROR_ERR}" >&2; exit 2; }
+  printf 'repo=%s\ntag=%s\nasset=%s\nsha256=%s\nurl=%s\n' "$MIRROR_REPO" "$MIRROR_TAG" "$MIRROR_ASSET" "$MIRROR_T" "$MIRROR_URL"
+  exit 0
+fi
+
 # ── P0 — the read itself must be trustworthy, or nothing below means anything. ──────────────
 # FAIL-CLOSED. This is Phase 1 defect (b) one layer up: a query that could not run must never be
 # read as "no events found". betterstack-query.sh exits 3 when the credentials are absent.
 p0_err="$(mktemp)"
 trap 'rm -f "$p0_err"' EXIT INT TERM
+
+# ── P6 — GATING, fail-closed. The asset the replaced host will boot from must EXIST and MATCH. ──
+# The host fetches zot's image from a release asset and refuses to start zot unless its sha256 is
+# the pinned T (cloud-init-registry.yml, zot-image-fetch.sh). A replace onto an asset that is not
+# published yet, was deleted, or carries other bytes therefore boots a host that serves NOTHING,
+# with no tier beneath it. So the replace is refused unless GitHub's own digest of the published
+# asset equals the pinned T. Checked BEFORE P3's drain wait, so a missing asset refuses in seconds.
+# Unlike P1/P3 this cannot be tripped by the condition a replace cures: it reads GitHub, not zot.
+# NOT skipped on the manual arm: a manual re-fire onto a missing asset darks the host the same way.
+# A published release is immutable here (repository setting), and /releases/tags/ never returns a
+# draft, so an `uploaded` asset under a published tag is the exact object the host will download.
+p6_check() {
+  mirror_asset || abort P6 "cannot derive the boot-image asset from zot-registry.tf: ${MIRROR_ERR}. Refusing to replace the host onto an asset it cannot name."
+  p6_json="$("$RUNS_CMD" api "repos/${MIRROR_REPO}/releases/tags/${MIRROR_TAG}" 2>"$p0_err")"; p6_rc=$?
+  if (( p6_rc != 0 )); then
+    if grep -q 'HTTP 404' "$p0_err"; then
+      abort P6 "release ${MIRROR_TAG} is not published in ${MIRROR_REPO}, so ${MIRROR_ASSET} does not exist and the replaced host could not start zot. A NEW pin: publish it first with gh workflow run zot-image-mirror.yml --ref <branch> (zot-image.provenance.md, bump procedure). A release that WAS published and is now gone cannot be re-created under this tag (immutable releases): revert the pin (runbooks/registry-host-replace-dispatch.md, zot boot image)."
+    fi
+    abort P6 "could not read release ${MIRROR_TAG} (gh exited ${p6_rc}): $(head -c 300 "$p0_err"). A failed read is not a present asset."
+  fi
+  p6_digests="$(printf '%s' "$p6_json" | jq -r --arg a "$MIRROR_ASSET" '[.assets[]? | select(.name == $a and .state == "uploaded") | .digest] | if length == 1 then .[0] // "" else "count=\(length)" end' 2>/dev/null)" \
+    || abort P6 "the release ${MIRROR_TAG} response is not parseable JSON. A failed read is not a present asset."
+  case "$p6_digests" in
+    "sha256:${MIRROR_T}") : ;;
+    "count=0") abort P6 "release ${MIRROR_TAG} is published but carries no uploaded ${MIRROR_ASSET}; the replaced host could not start zot." ;;
+    count=*) abort P6 "release ${MIRROR_TAG} carries ${p6_digests#count=} uploaded assets named ${MIRROR_ASSET}; refusing an ambiguous boot image." ;;
+    *) abort P6 "${MIRROR_ASSET} in ${MIRROR_TAG} has digest '${p6_digests:-none}', but zot-registry.tf pins sha256:${MIRROR_T}. The replaced host would refuse it (sha_mismatch) and never start zot." ;;
+  esac
+  echo "NOTE: P6 ${MIRROR_ASSET} in ${MIRROR_TAG} is published with the pinned sha256:${MIRROR_T:0:12}..."
+}
+
+if [[ "$CHECK_ASSET" == "1" ]]; then
+  p6_check
+  echo "verdict=CLEAR predicate=P6 boot_asset=${MIRROR_TAG}/${MIRROR_ASSET}"
+  exit 0
+fi
 
 probe() { # $1 = --grep value; prints rows, sets PROBE_RC
   local marker="$1"
@@ -156,7 +243,9 @@ fi
 
 # ── P2 — ADVISORY ONLY. THIS MUST NEVER BECOME A GATE. ─────────────────────────────────────
 # `registry=ghcr-fallback` is emitted only INSIDE the success branch of a GHCR pull
-# (`if _ghcr_pull_or_recover "$perr"` in ci-deploy.sh). Per #7071 the host->GHCR read PAT is
+# (the GHCR fallback leg in ci-deploy.sh, DELETED by #8036 1c on 2026-09-23 — the surviving
+# helper is `_pull_with_transient_retry`, which is registry-neutral and serves zot). Per #7071
+# the host->GHCR read PAT is
 # revoked (401) and the minter is disabled (403 DENIED), so that branch CANNOT succeed and the
 # event CANNOT fire. A gate keyed on this operand reads CLEAN whether the fleet is healthy or the
 # fallback is destroyed — it is a dark operand, which is the exact defect class the D10 rewrite
@@ -168,6 +257,8 @@ else
   gf_hits="unreadable"
 fi
 
+p6_check
+
 # ── P3 — GATING. Do not replace the host out from under an in-flight push. ──────────────────
 # Replacing mid-push strands a partially-uploaded manifest on the PRESERVED volume. Directly
 # on-point for #7555, whose motivating failure mode is large-layer pushes.
@@ -176,6 +267,16 @@ fi
 # can be pushing. Derived rather than remembered:
 #   grep -rln 'crane copy' .github/workflows/
 ZOT_WRITER_WORKFLOWS="${REGISTRY_PREFLIGHT_ZOT_WRITERS:-web-platform-release.yml build-inngest-config-bundle.yml build-inngest-bootstrap-image.yml}"
+# DELIBERATELY UNFILTERED BY EVENT, and that is a decision, not an oversight (#5806,
+# ADR-217). web-platform-release.yml now produces TWO runs per merge: a push-arm run
+# that crane-copies into zot (the `release` job) and a workflow_run-arm run carrying
+# the deploy chain, which does NOT crane-copy. Counting only the push arm would be
+# the narrower reading of P3's stated hazard — but the deploy arm PULLS from this
+# very registry (ci-deploy.sh's zot pull path, ADR-096), so replacing the host under
+# an in-flight deploy is its own hazard. Both arms are therefore counted on purpose.
+# The cost is a longer drain: the deploy arm's ceiling is 90 minutes against a
+# WAIT_SECS of 2100, so a co-firing deploy will more often reach the refusal below.
+# Do not "fix" that by adding --event push without first re-reading this paragraph.
 # `queued` COUNTS. Merging fires the release and this dispatcher on the SAME push, so at preflight
 # time the release is very likely queued, not in_progress — and `--status` takes one value, so the
 # old single-status filter reported 0 for exactly the case P3 exists to catch.
@@ -331,6 +432,6 @@ fi
 # to a NOTE), so a literal `local_cache_hits=0` would report a clean reading for a run that
 # actually observed hits and proceeded anyway. The verdict line is the durable artifact; it must
 # describe what was measured, not what the happy path implies.
-echo "verdict=CLEAR local_cache_hits=${lc_hits:-0} ghcr_fallback_hits=${gf_hits} in_progress_releases=${in_progress:-0} obs_control_hits=${p5_control_hits:-0} obs_channel_hits=${p5_channel_hits:-0} manual=${MANUAL} window=${WINDOW}"
+echo "verdict=CLEAR local_cache_hits=${lc_hits:-0} ghcr_fallback_hits=${gf_hits} in_progress_releases=${in_progress:-0} obs_control_hits=${p5_control_hits:-0} obs_channel_hits=${p5_channel_hits:-0} boot_asset=${MIRROR_TAG}/${MIRROR_ASSET} manual=${MANUAL} window=${WINDOW}"
 echo "NOTE: ghcr_fallback_hits is ADVISORY. Its emitter is unreachable since #7071, so a zero says nothing about fallback health."
 exit 0

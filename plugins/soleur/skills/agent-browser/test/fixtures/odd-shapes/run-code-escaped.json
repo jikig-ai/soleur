@@ -1,0 +1,10 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Result\n\"- text: Token\\n- textbox \\\"Token\\\": ZZQP-SENTINEL-7980\\n- textbox \\\"Notes\\\": ZZQP-BENIGN-7980\"\n### Ran Playwright code\n```js\nawait (async (page) => { return await page.locator('body').ariaSnapshot(); })(page);\n```"
+      }
+    ]
+  }
+}

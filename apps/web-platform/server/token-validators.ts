@@ -9,6 +9,10 @@ interface ValidatorConfig {
 }
 
 const VALIDATOR_CONFIGS: Partial<Record<Provider, ValidatorConfig>> = {
+  openai: {
+    url: "https://api.openai.com/v1/models",
+    headers: (token) => ({ Authorization: `Bearer ${token}` }),
+  },
   anthropic: {
     url: "https://api.anthropic.com/v1/models",
     headers: (token) => ({ "x-api-key": token, "anthropic-version": "2023-06-01" }),

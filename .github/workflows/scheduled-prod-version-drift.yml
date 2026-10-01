@@ -35,13 +35,16 @@
 # check. This workflow keys on the OUTCOME ("prod is missing commits it should have") rather than
 # on one mechanism of becoming stale, so it also catches any future silent no-op path.
 #
-# SCHEDULE REALITY. `*/30` is a REQUEST, not a guarantee, and on this repo the gap between it and
-# delivery is large enough to matter when tuning anything here: 59 consecutive scheduled runs of
-# the `*/30` sibling measured min 61 / median 114 / max 243 minutes apart, and the `*/15` sibling
-# delivers the SAME ~11 runs/day. So end-to-end detection is ~5h typical (threshold 195m + up to
-# one delivered interval), not the 3.25h the cron line implies, and tightening the cron would buy
-# nothing. This is also why the staleness clock reads an immutable commit timestamp instead of
-# counting ticks — tick-counting here would measure an interval that does not exist.
+# SCHEDULE REALITY. A `schedule:` cron is a REQUEST, not a guarantee, and on this repo the gap
+# between it and delivery is large enough to matter when tuning anything here: 59 consecutive
+# scheduled runs of a `*/30` sibling measured min 61 / median 114 / max 243 minutes apart, and a
+# `*/15` sibling delivers the SAME ~11 runs/day. So end-to-end detection is typically the
+# threshold (`DRIFT_SUSTAINED_THRESHOLD_MIN` in scripts/prod-version-drift-check.sh) + up to one
+# delivered interval, not the threshold + the cron's nominal interval, and tightening the cron
+# would buy nothing — the hourly cadence below (#8450) loses almost nothing against a threshold
+# that is already 225 min + delivered-interval dominated. This is also why the staleness clock
+# reads an immutable commit timestamp instead of counting ticks — tick-counting here would
+# measure an interval that does not exist.
 #
 # Security: the /health response is UNTRUSTED INPUT. A well-formed build_sha is validated to
 # 40-hex before use; on the malformed path the offending value is deliberately echoed back to the
@@ -61,7 +64,10 @@ name: "Scheduled: Production Version-Drift Alerter"
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    # Hourly (#8450): detection is DRIFT_SUSTAINED_THRESHOLD_MIN-dominated (225 min) and the
+    # delivered `*/30` cadence already medians ~114 min, so this relax adds ~0-60 min worst-case
+    # lag against a 225-min window. Paired monitor: sentry_cron_monitor.scheduled_prod_version_drift.
+    - cron: "0 * * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -268,10 +274,17 @@ jobs:
           BODY="${BODY}"$'\n\n'"Run: ${RUN_URL}"
           BODY="${BODY}"$'\n\n'"Undeployed (first 10): ${MISSING_SHAS:-<none captured>}"
           BODY="${BODY}"$'\n\n'"### Remediation"
-          BODY="${BODY}"$'\n\n'"1. Find the release run that did not deploy:"
-          BODY="${BODY}"$'\n'"   \`gh run list --workflow=web-platform-release.yml --limit 10 --json conclusion,createdAt,url,headSha\`"
+          BODY="${BODY}"$'\n\n'"1. Find the release run that did not deploy. \`--event workflow_run\` is load-bearing:"
+          BODY="${BODY}"$'\n'"   since #5806 (ADR-217) every merge produces TWO web-platform-release runs — a push-arm"
+          BODY="${BODY}"$'\n'"   run carrying only \`release\` (build + publish) and a workflow_run-arm run carrying the"
+          BODY="${BODY}"$'\n'"   whole deploy chain. Without the filter half the window has no \`deploy\` job at all."
+          BODY="${BODY}"$'\n'"   \`gh run list --workflow=web-platform-release.yml --event workflow_run --limit 10 --json conclusion,createdAt,url,headSha\`"
           BODY="${BODY}"$'\n'"   A run whose \`deploy\` job is SKIPPED (not failed) is this alarm's motivating case: the"
-          BODY="${BODY}"$'\n'"   absence is the signal, so nothing on the release-outcome path reports it."
+          BODY="${BODY}"$'\n'"   absence is the signal, so nothing on the release-outcome path reports it. Read"
+          BODY="${BODY}"$'\n'"   \`resolve-target\`'s \`skip_reason\` output on that run for WHY it skipped — the deploy arm"
+          BODY="${BODY}"$'\n'"   concludes GREEN on a clean skip, so a green run is not proof that prod moved."
+          BODY="${BODY}"$'\n'"   A RED \`resolve-target\` whose annotation says \`[skip_reason=release_run_missing]\` is the"
+          BODY="${BODY}"$'\n'"   loud form of the same miss (GitHub's run search lagged): \`gh run rerun <that-run-id> --failed\`."
           BODY="${BODY}"$'\n'"2. List exactly which commits are undeployed. The pathspec below IS the release path"
           BODY="${BODY}"$'\n'"   filter, and \`--first-parent\` is load-bearing under merge topology:"
           BODY="${BODY}"$'\n'"   \`git log --first-parent --oneline \$(curl -fsS ${PROD_HEALTH_URL} | jq -r .build_sha)..origin/main -- ${PATHSPEC_DOC}\`"

@@ -50,6 +50,81 @@ const SUT_SOURCE = readFileSync(
   "utf-8",
 );
 
+// =============================================================================
+// The exit code must be a VERDICT, not a log field (#8384 review)
+// =============================================================================
+//
+// rule-prune.sh exits 2 when the metrics aggregate is absent — the normal state
+// of any checkout with no local incident log, which #8377 made reachable on the
+// only automated caller by untracking rule-metrics.json. Before this guard the
+// handler read its outcome solely from parseSentinels(stdout), so that exit 2
+// produced `noCandidates` -> ok:true heartbeat -> "no-candidates": the monitor
+// could never fail again.
+//
+// COMMENT-STRIPPED, and anchored on the `if` + `throw` CONSTRUCT rather than on
+// the token `exitCode` — which appears 6x in this file's own prose and type
+// signatures, so a bare-token grep would pass with the guard deleted
+// (cq-assert-anchor-not-bare-token).
+const SUT_CODE = SUT_SOURCE.split("\n")
+  .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+  .join("\n");
+
+describe("rule-prune exit code is consumed, not just logged", () => {
+  // ANCHOR ON THE THROW TEXT, NOT ON `result.exitCode !== 0`. That expression occurs THREE
+  // times in this file (the git-clone check at the top, this guard, and diffCheck), so an
+  // anchor on it matched the clone check and passed with this guard deleted — measured:
+  // 37/37 green on the mutation. The message is unique to this guard.
+  const GUARD_THROW = "rule-prune.sh exited";
+
+  it("the guard exists in executable code (not only in a comment)", () => {
+    expect(SUT_CODE).toContain(GUARD_THROW);
+  });
+
+  it("is exactly one guard — a second copy would make the cardinality check below lie", () => {
+    const n = SUT_CODE.split(GUARD_THROW).length - 1;
+    expect(n).toBe(1);
+  });
+
+  it("throws from inside a non-zero-exitCode branch", () => {
+    const i = SUT_CODE.indexOf(GUARD_THROW);
+    const before = SUT_CODE.slice(Math.max(0, i - 400), i);
+    expect(before).toMatch(/if\s*\(\s*result\.exitCode\s*!==\s*0\s*\)\s*\{/);
+    expect(SUT_CODE.slice(i - 400 < 0 ? 0 : i - 400, i + 200)).toContain("throw new Error");
+  });
+
+  it("treats rc 3 as not-applicable, not as a failure", () => {
+    // The no-corpus state is the STEADY state for this cron after #8377: the clone is
+    // fresh, .rule-incidents*.jsonl is gitignored, the aggregator writes nothing.
+    // Throwing there would page the operator every quarter for a correct condition.
+    expect(SUT_CODE).toMatch(/if\s*\(\s*result\.exitCode\s*===\s*3\s*\)/);
+    const i = SUT_CODE.search(/if\s*\(\s*result\.exitCode\s*===\s*3\s*\)/);
+    const block = SUT_CODE.slice(i, i + 400);
+    expect(block).toContain("notApplicable: true");
+    expect(block).not.toContain("throw new Error");
+  });
+
+  it("the rc-3 arm precedes the generic non-zero throw, or it is unreachable", () => {
+    const three = SUT_CODE.search(/if\s*\(\s*result\.exitCode\s*===\s*3\s*\)/);
+    const generic = SUT_CODE.indexOf(GUARD_THROW);
+    expect(three).toBeGreaterThan(-1);
+    expect(generic).toBeGreaterThan(-1);
+    expect(three).toBeLessThan(generic);
+  });
+
+  it("surfaces not-applicable as its own status, distinct from no-candidates", () => {
+    expect(SUT_CODE).toContain('"not-applicable"');
+    expect(SUT_CODE).toMatch(/notApplicable\s*\?\s*"not-applicable"\s*:\s*"no-candidates"/);
+  });
+
+  it("precedes the sentinel parse it would otherwise be bypassed by", () => {
+    const guard = SUT_CODE.indexOf(GUARD_THROW);
+    const parse = SUT_CODE.search(/const\s+sentinels\s*=\s*parseSentinels\(/);
+    expect(guard).toBeGreaterThan(-1);
+    expect(parse).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(parse);
+  });
+});
+
 describe("registration source-shape anchors", () => {
   it.each([
     ['id: "cron-rule-prune"', "canonical function id"],

@@ -11,7 +11,9 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/server/routines/list-routines", () => ({
   listRecentRuns: mockListRecentRuns,
 }));
-vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 
 import { GET } from "@/app/api/dashboard/routines/runs/route";
 

@@ -22,7 +22,11 @@
 #   JOB_STATUS      ${{ job.status }} — only a job that got as far as a successful apply is
 #                   entitled to a dark-boot verdict
 #   DISPATCH_LABEL  the apply_target name, used in log/summary prose (default web-host-create)
-#   DOPPLER_TOKEN   read-only source for SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT
+#   SENTRY_ACTIONS_RO_TOKEN  the org-level read-only Sentry integration token (ADR-031
+#                   `actions-read-prd`), bound by the caller from the repo secret of the same
+#                   name. Empty/unbound → the read is SKIPPED and NAMED (annotation + summary),
+#                   never silently. No Doppler read: the previous form fetched a PERSONAL token
+#                   under the canonical vendor name from `prd_terraform` (#7797 class, #7946).
 #   BOOT_TRAIL_SINCE epoch seconds; events older than this are ignored (run anchor, see below)
 #   GITHUB_STEP_SUMMARY  runner-provided; every summary write appends to it (REQUIRED)
 #
@@ -31,13 +35,13 @@
 
 set +e
 
-# REFUSE TO RUN UNDER XTRACE (#7797). This script ACQUIRES a credential at
-# runtime, so the refusal is UNCONDITIONAL: a `${VAR:+x}` hatch would be open
-# here by construction (the variable is still empty) and the fetch itself would
-# then be traced. `$-` is the load-bearing arm -- bash applies an env-supplied
-# SHELLOPTS or BASH_ENV before line 1, so `x` is already set by the time this runs.
+# REFUSE TO RUN UNDER XTRACE (#7797). Unconditional rather than a `${VAR:+x}` hatch: the
+# token now arrives bound in the environment, but the refusal predates that and the cost of
+# keeping it unconditional is nil, while a hatch keyed on one name is exactly the shape a
+# later rename leaves stale (#7946 Guard 2). `$-` is the load-bearing arm -- bash applies an
+# env-supplied SHELLOPTS or BASH_ENV before line 1, so `x` is already set by the time this runs.
 case "$-" in
-  *x*) printf '[FATAL] refusing to run under xtrace: this script fetches a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+  *x*) printf '[FATAL] refusing to run under xtrace: this script carries a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
 # Prose-only. Defaulted rather than required so a caller that forgets it degrades to the
 # historical wording instead of printing an empty label into the operator-facing summary.
@@ -51,25 +55,82 @@ DISPATCH_LABEL="${DISPATCH_LABEL:-web-host-create}"
 # Callers stamp this immediately before `terraform apply`. Unset/0 disables the bound, which
 # preserves the pre-extraction behaviour for any caller that has not been updated.
 BOOT_TRAIL_SINCE="${BOOT_TRAIL_SINCE:-0}"
-if [[ -n "$BOOT_TRAIL_SINCE" && "$BOOT_TRAIL_SINCE" != "0" ]]; then
+# Every jq program below takes it as `--argjson since`; a non-numeric value makes each of them
+# fail and the trail read nothing while looking like "no events". Refuse it by name instead.
+SINCE_OK=1
+[[ "$BOOT_TRAIL_SINCE" =~ ^[0-9]+$ ]] || SINCE_OK=0
+# R3-adjacent, re-decided in #7946: the token is BOUND by the workflow from the repo secret
+# SENTRY_ACTIONS_RO_TOKEN (a `secrets.*` binding is masked by Actions itself, in the log and
+# in the summary file, so no `::add-mask::` here). The silent-dark class R3 was written
+# against -- a step reading an UNSET repo secret self-skips and nobody notices -- is closed
+# on the other side now: the unbound case is NAMED below on two channels, and the
+# observability suite asserts BOTH provisioning jobs bind the secret. Org and project are
+# literals: they were read from Doppler only because the token was, and Rule D pins them
+# against these same literals regardless.
+readonly SENTRY_ORG="jikigai-eu"
+readonly SENTRY_PROJECT="web-platform"
+# (#8651) IMAGE ORIGIN — which registry served a fresh web boot. Read SERVER-SIDE from the org
+# events endpoint (Discover), filtered on host_name + stage over 14 days: the unfiltered
+# 1h/100-event read below is on a SHARED project and a healthy boot's early `app_zot` falls off
+# both its page and its printed 8-event slice. Measured 2026-09-23 against jikigai-eu: this
+# endpoint honours `stage:[a,b]`, `host_name:` and `message:"…"` (the project endpoint the loop
+# uses ignores `message:` — R4 below). Prints "stage=<s> host=<h> time=<iso Z> detail=<d>" for the
+# newest match at/after <since-epoch> ("stage=none …" when there is none); on a non-200, a
+# non-array answer or a FULL page it prints the reason and returns 2 — never a bare miss.
+# One script-owned tempfile, removed by the EXIT trap: origin_query runs inside $(…), so a
+# per-call mktemp there would leak whenever the subshell died between allocation and its rm.
+ORIGIN_TMP=$(mktemp 2>/dev/null) || ORIGIN_TMP=""
+trap '[[ -z "$ORIGIN_TMP" ]] || rm -f "$ORIGIN_TMP"' EXIT
+origin_query() {  # <query> [since-epoch]
+  local enc code tmp="$ORIGIN_TMP"
+  [[ -n "$tmp" ]] || { echo "mktemp failed"; return 2; }
+  enc=$(printf '%s' "$1" | jq -sRr @uri)
+  code=$(curl --disable --noproxy '*' -s --max-time 20 -o "$tmp" -w '%{http_code}' \
+    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
+    "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=project%3A${SENTRY_PROJECT}%20${enc}&statsPeriod=14d&per_page=100&sort=-timestamp&field=timestamp&field=stage&field=host_name&field=detail" 2>/dev/null || echo 000)
+  if [[ "$code" != "200" ]] || ! jq -e '(.data | type) == "array"' "$tmp" >/dev/null 2>&1; then
+    echo "HTTP ${code} or no data array"; return 2
+  fi
+  if [[ "$(jq '.data | length' "$tmp")" -ge 100 ]]; then
+    echo "full page (100/100) — truncated, the newest match may be missing"; return 2
+  fi
+  # The projection's own failure is TRANSIENT too: a jq error (a non-string timestamp, a
+  # non-numeric since) printed nothing and returned rm's 0 — read downstream as an empty verdict.
+  local out rc=0
+  out=$(jq -r --argjson since "${2:-0}" '
+    [ .data[] | ((.timestamp // "") | sub("\\+00:00$"; "Z") | sub("\\.[0-9]+Z$"; "Z")) as $t
+      | select($since <= 0 or (($t | fromdateiso8601?) // 0) >= $since) | . + {t: $t} ][0]
+    | if . == null then "stage=none host=- time=- detail=-"
+      else "stage=\(.stage // "?") host=\(.host_name // "?") time=\(.t) detail=\(.detail // "")" end' "$tmp" 2>/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 || "$out" != stage=* ]]; then echo "event projection failed (jq rc=${rc})"; return 2; fi
+  printf '%s\n' "$out"
+}
+readonly ORIGIN_Q_STAGES='stage:[app_zot,app_ghcr_served,app_ghcr_fallback]'
+# `--image-origin <host_name>`: query-only mode (no summary file, no poll) — the discoverability
+# command in the #8651 plan and the evidence read of scripts/followthroughs/web-fresh-boot-zot-8651.sh.
+# Prints `image-origin: …` and `seed-fatal: …` (newest `soleur-hostscript-seed failed` for the
+# host). Exit 0 = an origin event exists, 1 = none in the window, 2 = TRANSIENT (unbound token,
+# unreadable Sentry, truncated page, bad host argument) — never a confident "nothing found".
+if [[ "${1:-}" == "--image-origin" ]]; then
+  IO_HOST="${2:-}"
+  if [[ ! "$IO_HOST" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then echo "TRANSIENT: --image-origin needs a host_name ([a-z0-9-]), got '${IO_HOST}'"; exit 2; fi
+  if [[ "$SINCE_OK" != 1 ]]; then echo "TRANSIENT: BOOT_TRAIL_SINCE='${BOOT_TRAIL_SINCE}' is not an epoch"; exit 2; fi
+  if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is not bound — the image origin was NOT read (this is not 'nothing found')"; exit 2; fi
+  IO=$(origin_query "host_name:${IO_HOST} ${ORIGIN_Q_STAGES}" "${BOOT_TRAIL_SINCE:-0}") || { echo "TRANSIENT: image-origin read failed: ${IO}"; exit 2; }
+  SF=$(origin_query "host_name:${IO_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") || { echo "TRANSIENT: seed-fatal read failed: ${SF}"; exit 2; }
+  echo "image-origin: ${IO}"
+  echo "seed-fatal: ${SF}"
+  [[ "$IO" == stage=none* ]] && exit 1
+  exit 0
+fi
+if [[ "$SINCE_OK" != 1 ]]; then
+  echo "::error::BOOT_TRAIL_SINCE='${BOOT_TRAIL_SINCE}' is not an epoch — the boot-trail read did NOT run (this is NOT a 'host emitted nothing' result)."
+  exit 0
+elif [[ "$BOOT_TRAIL_SINCE" != "0" ]]; then
   echo "boot-trail: ignoring events older than epoch ${BOOT_TRAIL_SINCE} (run anchor)"
 else
   echo "boot-trail: NO run anchor set — a same-named predecessor's terminal event can be read as this host's. Callers should export BOOT_TRAIL_SINCE."
 fi
-# R3-adjacent: read creds from Doppler prd_terraform, NOT GitHub repo secrets —
-# the repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips and
-# logs "skipped", which is the silent-dark class this step exists to end. Capture
-# the fetch rc so a FETCH FAILURE is NAMED rather than collapsed into "not
-# configured".
-SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform 2>/tmp/doppler-sentry.err); dop_rc=$?
-# Doppler-fetched secrets are NOT auto-masked by Actions (unlike `secrets.*`).
-# Every other Doppler read in this job masks; this one was the sole exception, and
-# it is the only NEW secret the PR introduced. Latent today (no `set -x` anywhere
-# in the file, and nothing echoes it) — masked anyway, because "no current caller
-# prints it" is a property of today's code, not of the secret.
-[[ -n "${SENTRY_AUTH_TOKEN:+x}" ]] && printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
-SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
-SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
 # Echo to the LOG as well as the summary so
 # `gh run view <id> --log | grep 'fresh-host Sentry pointer'` works.
 echo "${DISPATCH_LABEL} ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (job=${JOB_STATUS})"
@@ -83,12 +144,17 @@ echo "${DISPATCH_LABEL} ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (job=${
   fi
   echo "_Best-effort: the host id is unknown to the runner, so this matches on message + a recent window — it may show an unrelated host or be empty._"
 } >> "$GITHUB_STEP_SUMMARY"
-if [[ "$dop_rc" -ne 0 ]]; then
-  echo "_Sentry query skipped: DOPPLER FETCH FAILED (rc=${dop_rc}) — verify secrets.DOPPLER_TOKEN scope/validity for soleur/prd_terraform. doppler stderr: $(tr '\n' ' ' </tmp/doppler-sentry.err | tail -c 300)_" | tee -a "$GITHUB_STEP_SUMMARY"
-  exit 0
-fi
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" || -z "${SENTRY_ORG:-}" || -z "${SENTRY_PROJECT:-}" ]]; then
-  echo "_Sentry query skipped: fetch succeeded but SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT is empty in Doppler prd_terraform (secret genuinely absent)._" | tee -a "$GITHUB_STEP_SUMMARY"
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
+  # ONE sentence on BOTH channels: an annotation is reachable from `gh run view --log`, a
+  # step summary is not; the summary is what the operator reads. A successful apply whose
+  # boot verdict cannot be read is an ERROR annotation (the read was the point of the step);
+  # a failed job gets a warning (there may be no host to read). Exit 0 either way -- a
+  # skipped read is not a proven dark boot, and this step must never fail an apply.
+  msg="Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound in this step's env (repo secret absent or workflow env not wired); the auto-read did NOT run. This is NOT a 'host emitted nothing' result."
+  level=warning
+  [[ "${JOB_STATUS}" == "success" ]] && level=error
+  echo "::${level}::${WEB_HOST_KEY:-?}: ${msg}"
+  echo "_${msg}_" | tee -a "$GITHUB_STEP_SUMMARY"
   exit 0
 fi
 # Lockstep with the emit MESSAGE literals in soleur-host-bootstrap.sh and
@@ -96,7 +162,7 @@ fi
 # apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh (AC8) fails
 # — that test checks BOTH directions, so a rename on either side goes red here
 # rather than silently making this query match nothing.
-QUERY='message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'
+QUERY='message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage" OR message:"app image served"'
 # R4: the /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search
 # prefix — a message:"x" query returns 0 even for events that provably exist
 # (verified against a known event id: bare full-text = 1 hit, message:"x" = 0).
@@ -174,8 +240,8 @@ RETRIED=""
 RETRY_DETAIL=""
 TOTAL=0
 while :; do
-  HTTP=$(curl -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  HTTP=$(curl --disable --noproxy '*' -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
+    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
     --data-urlencode "per_page=100" \
     --data-urlencode "statsPeriod=1h" \
     --data-urlencode "sort=-timestamp" \
@@ -277,7 +343,9 @@ while :; do
     fi
     if (( SECONDS - CC_SEEN >= CC_GRACE )); then TERMINAL="complete_no_readiness"; break; fi
   fi
-  if (( SECONDS >= DEADLINE )); then TERMINAL="timeout"; break; fi
+  # (#8651) Not while inside the cloud_init_complete grace: a host that reached the marker just
+  # before the deadline finished cloud-init, and calling it DARK is false. CC_GRACE bounds this.
+  if (( SECONDS >= DEADLINE )) && [[ -z "$CC_SEEN" ]]; then TERMINAL="timeout"; break; fi
   sleep 30
 done
 {
@@ -294,6 +362,16 @@ if [[ -n "$LAST_STAGE" ]]; then
     | "- `\((.message // .title) // "?")` — stage=`\($stage)` host=`\($hn)` (\(.dateCreated // "?"))"
       + (if $d == "" then "" else "\n  - detail: `\($d)`" end)
   ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+fi
+# (#8651) The image-origin line, OUTSIDE the 8-event slice above (a healthy boot's `app_zot` is
+# early and falls off it). Informational: it never changes the verdict — fresh_boot_ready stays
+# the sole green. Bounded by the run anchor so a predecessor's origin cannot be read as this boot's.
+if [[ -n "$EXPECT_HOST" ]]; then
+  if IO_LINE=$(origin_query "host_name:${EXPECT_HOST} ${ORIGIN_Q_STAGES}" "${BOOT_TRAIL_SINCE:-0}"); then
+    echo "- image-origin (\`${EXPECT_HOST}\`, since run anchor): \`${IO_LINE}\`" | tee -a "$GITHUB_STEP_SUMMARY"
+  else
+    echo "- image-origin read FAILED (${IO_LINE}) — which registry served this boot is UNKNOWN, not 'none'." | tee -a "$GITHUB_STEP_SUMMARY"
+  fi
 fi
 case "$TERMINAL" in
   complete|complete_no_readiness)
@@ -347,6 +425,12 @@ case "$TERMINAL" in
     fi
     echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within 960s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 900). Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
     echo "_**No terminal boot event inside the host's own boot window.** Host \`${LAST_HOST:-unknown}\`, last-reached stage \`${LAST_STAGE:-none observed}\`. Treated as dark._" | tee -a "$GITHUB_STEP_SUMMARY"
+    # (#8651) A slow seed pull can fail AFTER this poll ends; the fatal still reaches Sentry.
+    # Read it once more (server-side, 14 d) so the cause is not lost, and name the re-read.
+    if SFL=$(origin_query "host_name:${EXPECT_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") && [[ "$SFL" != stage=none* ]]; then
+      echo "::error::${WEB_HOST_KEY} late seed fatal (after the poll): ${SFL}"
+    fi
+    echo "_Re-read later without SSH: \`bash apps/web-platform/infra/scripts/fresh-host-boot-trail.sh --image-origin ${EXPECT_HOST}\` (SENTRY_ACTIONS_RO_TOKEN)._" | tee -a "$GITHUB_STEP_SUMMARY"
     if [[ -n "$LAST_DETAIL" ]]; then
       echo "_Last detail: \`${LAST_DETAIL}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
     fi

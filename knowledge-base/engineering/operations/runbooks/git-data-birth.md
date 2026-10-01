@@ -1,114 +1,59 @@
 # Runbook — birthing the git-data host
 
-> ## ⛔ DO NOT DISPATCH THIS YET
+> ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13 (PR #8128, merged 2026-09-14)
 >
-> **Do not assume this banner is backed by a mechanical hold — as of PR #8002 it may not
-> be.** Both gates release once
-> `apps/web-platform/infra/git-data-rung2-boot-evidence.env` is on `main`. From that moment
-> this banner is the ONLY prose hold, and the sole remaining control is the
-> `web-platform-infra-apply` environment approval — measured `prevent_self_review: false`
-> with a single reviewer, so **the dispatcher can approve their own deployment.** That is one
-> human clicking twice, not a two-party control. Do not dispatch.
+> This runbook opened with a `⛔ DO NOT DISPATCH THIS YET` banner from its first commit until
+> the PR that made this edit. It was cleared on the release condition it stated, and nothing
+> else: the rendered template booted **once on a throwaway host** outside the
+> `hcloud_server.git_data` address, and the artifacts were observed **off-box**.
 >
-> #6982 shipped the off-host emitter, so `git_data_birth_readiness_gate` no longer refuses —
-> the sentinel it looks for (`${sentry_dsn}` in non-comment template text) is present. That
-> released the FIRST gate, and for a while this banner really was the only hold, which is the
-> posture ADR-149's own Alternatives table rejects.
->
-> So #6982 also added a SECOND gate: `git_data_rung2_rehearsal_gate` runs in the same
-> dispatch job, before any provider is contacted, and refuses unless
-> `apps/web-platform/infra/git-data-rung2-boot-evidence.env` exists and attests a rung-2 boot
-> rehearsal **of the current template** (the evidence carries a sha256 of
-> `cloud-init-git-data.yml`, so it self-invalidates the moment that file is edited again).
-> **That was true until PR #8002.** Once its evidence file lands on `main` this gate
-> RELEASES and a dispatch no longer exits early. Check the live state rather than trusting
-> this paragraph:
+> - **Rehearsal:** `git-data-rung2-rehearsal.yml` run
+>   [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), dispatched
+>   from `main` `15fd63aff` with `dry_run=false`. Verdict `PASS` — `stage:boot_complete`
+>   reached carrying `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes
+>   luks_reopen_unit=yes`, no
+>   `level:fatal` on Better Stack, the Better Stack source-liveness anchor answered (the Sentry
+>   one did not — next bullet); teardown verified against
+>   the Hetzner API. Read the booleans as the capture script does: they are literals
+>   `git-data-bootstrap.sh` emits after its own `mountpoint`/`test` checks pass, so the PASS
+>   attests that the final stage was REACHED and nothing reported a fatal — not four
+>   independently measured invariants. Each artifact is recorded in the evidence file with
+>   the query that retrieved it. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (a run-pinned
+>   liveness window on a quiet project). **That key is load-bearing since #8010** — the gate now
+>   refuses `UNAVAILABLE` outright unless the evidence carries a matching
+>   `RUNG2_SENTRY_CROSSCHECK_ACK=<run-id>:<reason>` naming the run in `RUNG2_EVIDENCE_URL`, and
+>   refuses a `FATAL` verdict with no way to acknowledge it at all. So this record's own evidence
+>   is valid only with that ack line present; read the gate, not this paragraph
+>   (`git-data-rung2-rehearsal.md` › *The gate's refusals — token → remedy*).
+> - **Evidence:** `apps/web-platform/infra/git-data-rung2-boot-evidence.env`, committed ALONE
+>   in PR #8126 — merged to `main` BEFORE this record landed, because ADR-149's #8043
+>   disposition orders "evidence PR, then the banner PR, then the birth" (Guard 4 of `git_data_rung2_rehearsal_gate` reads the evidence's own commit and
+>   HOLDs on a co-edit with any of the 13 hash-bound inputs). Template sha256
+>   `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`.
+> - **Gate:** `git_data_rung2_rehearsal_gate` read `RELEASED`, provenance `PASS`, when this
+>   record landed. PR #8511 (ADR-237) moved a bound input, so from its merge the gate reads
+>   `HOLD` until the rung-2 evidence PR lands (`git-data-luks-cutover-5274.md` › host-key
+>   post-merge step 2). It self-invalidates the moment any bound input moves — re-check it
+>   rather than trusting this paragraph:
 >
 > ```bash
-> git cat-file -e origin/main:apps/web-platform/infra/git-data-rung2-boot-evidence.env \
->   && echo 'evidence IS on main — the rung-2 gate is RELEASED' \
->   || echo 'evidence absent — the rung-2 gate still HOLDs'
+> source tests/scripts/lib/git-data-birth-readiness-gate.sh
+> git_data_rung2_rehearsal_gate \
+>   apps/web-platform/infra/cloud-init-git-data.yml \
+>   apps/web-platform/infra/git-data-rung2-boot-evidence.env
 > ```
 >
-> Note what that gate does and does not check: it asserts that a well-formed, template-bound
-> assertion EXISTS. It strips comments before reading, never resolves the Actions run id, and
-> ignores `RUNG2_SENTRY_CROSSCHECK` entirely (#8010). The hash is a staleness detector, not an
-> authorship proof.
+> **What clearing the banner does NOT change.** The sole remaining control on the dispatch is
+> the `web-platform-infra-apply` environment approval — measured `prevent_self_review: false`
+> with a single reviewer AND `can_admins_bypass: true`, so the dispatcher can approve their
+> own deployment, and an org admin can skip the approval outright (see *"Three things a green
+> boot does NOT mean"* below). ADR-149 item 8 is
+> the banner clear itself; the item's history (deferred out of #6982 into #7025, then held open
+> again when #8052 voided the first evidence) is why this edit touches the runbook, the ADR-149
+> disposition row that records the clear, and nothing else.
 >
-> ### What changed in #7025: the route to produce that evidence now EXISTS
->
-> Until #7025 there was no automation that could produce
-> `git-data-rung2-boot-evidence.env` at all — `rung2` appeared only in the apply workflow
-> and the gate itself. Nothing booted a throwaway host; nothing captured the artifacts. The
-> gate was waiting on something no one could do without a hand-run laptop procedure.
->
-> #7025 shipped the **route, not the run**:
->
-> - `.github/workflows/git-data-rung2-rehearsal.yml` — `workflow_dispatch` only, confirm
->   token `REHEARSE-GIT-DATA`, `dry_run` defaulting to **true**.
-> - `apps/web-platform/infra/rung2-rehearsal/` — a **separate Terraform root** with its own
->   R2 state key, so a rehearsal apply cannot address a production resource through
->   Terraform's managed-resource lifecycle. That boundary is narrower than it sounds and
->   ADR-149 DC-6 spells out what it does NOT cover: the Hetzner credential, the Doppler
->   project, Sentry, the parent root's push trigger, and teardown garbage collection are all
->   shared. State separation bounds the LIFECYCLE, not the AUTHORITY.
-> - `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — captures the evidence
->   off-box and writes the file **only** on PASS.
->
-> It shipped **unfired**, and the banner stayed up, for a reason worth internalising: a PR
-> merges **atomically**, so evidence committed in the same PR that builds the harness would
-> be evidence from a rehearsal that never ran. The harness has to exist, merge, and then
-> *run*. Producing evidence is now one gated dispatch, not a procedure.
->
-> **RELEASE CONDITION — clear this banner only when the rehearsal evidence exists.**
-> Every gate #6982 ships is STATIC, and the failure class it defends against
-> (*green apply, dark host*) is only observable at RUNTIME. Mutation arms prove the code
-> CAN go red when neutered; they never prove an event ARRIVES when it is intact. So the
-> condition is not "the code merged" — it is:
->
-> 1. the rendered template booted **once on a throwaway host** outside the
->    `hcloud_server.git_data` address (dispatch the rehearsal workflow with
->    `dry_run=false`), and
-> 2. the artifacts were **observed off-box**, each recorded with the query that retrieved
->    it: a Better Stack **source-liveness anchor**, one `stage:boot_complete` row carrying
->    its four assertion booleans, and **no `level:fatal`** from that host.
->
-> **A CORRECTION TO AN EARLIER VERSION OF THIS LIST**, because it asked for something
-> unsatisfiable. It previously demanded *"a Sentry event from the fatal channel"* from a
-> successful rehearsal. The fatal channel fires **only on failure** — a clean boot emits
-> `info`, never `fatal` — so that clause could be met only by a rehearsal that failed, or
-> by fabricating it. The fatal channel is proven at **rung 1** instead, by
-> `git-data-runcmd-rehearsal.test.sh`, which shows the trap firing and emitting `fatal`.
-> Rung 2's job is the real-host facts rung 1 structurally cannot reach: TLS egress from a
-> real Hetzner host, a real `doppler run`, and a real `cryptsetup luksOpen`.
->
-> Related measurement, since it shaped the capture script: `stage:bootcmd_start` reaches
-> **Sentry only**. It is a bare `curl` inside `bootcmd`, which runs before `write_files`,
-> so `/usr/local/bin/git-data-emit` does not exist yet. That much still holds.
->
-> **Superseded in part by #7460 (ADR-198).** The rest of this paragraph used to read: "the
-> emitter's Better Stack block is gated on `BETTERSTACK_LOGS_TOKEN`, which is present only
-> under `doppler run`. On a *successful* boot the only Better Stack row a git-data host ever
-> produces is `boot_complete` itself." The token is now baked at `0600` in `user_data`, so
-> EIGHT of the nine stages reach Better Stack and only `bootcmd_start` is Sentry-only.
-> Anchoring a Better Stack query on an early stage is now correct, not a mistake — but
-> `bootcmd_start` specifically still returns zero rows.
->
-> If only the container-harness rung was reached, that is **not** sufficient: the harness
-> cannot exercise `doppler run` against real Doppler, `luksOpen` against a real volume, the
-> private NIC, or whether an event actually lands. The banner-clear PR carries the
-> throwaway-host rung as **its own** precondition.
->
-> **Why the hold outlived the gate:** the interlock is a ONE-BIT LATCH guarding a
-> ten-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
-> verify the emitter emits. ADR-115 additionally makes several #6982 items unfixable after
-> the birth — git-data is excluded from the reboot primitive, and `user_data` is ForceNew
-> with no `ignore_changes`, so **every** cloud-init edit after birth costs a destructive
-> `git-data-host-replace` of the host holding every user's source code.
->
-> The full release checklist is **ADR-149**, and its per-item disposition table records
-> what #6982 discharged. Clear this banner only when every item is done — including the
-> rehearsal — not merely when the gate stops refusing.
+> The banner's text is preserved in git history:
+> `git log -p --follow -- knowledge-base/engineering/operations/runbooks/git-data-birth.md`.
 
 ---
 
@@ -130,12 +75,12 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 
 | Check | How |
 |---|---|
-| #6982 has shipped and ADR-149's release checklist is complete | The banner above is cleared |
+| #6982 has shipped and ADR-149's release checklist is complete | ADR-149's disposition table records item 8 DONE, and the release record at the top of this runbook names the rehearsal run and the evidence PR |
 | You are on `main` | The environment pins `main`; a branch dispatch is refused |
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
 | **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
-| **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the banner. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
-| The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
+| **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the release record at the top of this runbook. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
+| `DOPPLER_TOKEN` is present | **Changed by #8178.** The poll resolves `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` through `doppler run -p soleur -c prd_terraform`, so `DOPPLER_TOKEN` is the only repo-config precondition. (The GitHub-secret copies hold a SQL API connection that does not cover git-data's source; ADR-149's #8178 amendment has the history.) If the poll fails because the token is absent, the boot signal is **unread** and you are back to "a green apply proves nothing" — do not re-dispatch after a green apply; run the query in "After the birth". |
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
 
@@ -164,30 +109,60 @@ approve it**. Two things to know about that reading: it comes from the live API,
 `prevent_self_review` is declared **nowhere in this repository's Terraform** — so `false` is
 the provider default rather than a setting anyone chose. Every environment here that has
 required reviewers reads the same way, with the same single reviewer: **no approval gate in
-this repo is two-party.** Re-measure rather than trusting this line:
+this repo is two-party.** The same read (2026-09-13) shows `can_admins_bypass: true`, and the
+sole reviewer is an org admin — so for that person the approval is one click, optionally.
+Re-measure rather than trusting this line:
 
 ```bash
 gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply \
-  --jq '.protection_rules[] | select(.type=="required_reviewers")
-        | {prevent_self_review, reviewers: [.reviewers[].reviewer.login]}'
+  --jq '{can_admins_bypass, rules: [.protection_rules[] | select(.type=="required_reviewers")
+        | {prevent_self_review, reviewers: [.reviewers[].reviewer.login]}]}'
 ```
 
 One human clicking twice is the real control. Treat it as **one** control, not two.
 
-**3 — The rehearsal evidence attests that a STAGE WAS REACHED, not that four invariants were
-measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
+**3 — The rehearsal evidence attests that a STAGE WAS REACHED for four of the five terminal
+booleans, not that four invariants were measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
 literals** at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction.
 That is not nothing: each has a named upstream `FATAL:` gate followed by `exit 1` (19 in that script — a 20th `FATAL:` match is the emitter arm inside `log()`, not a gate),
 so a failure aborts *before* the emit rather than emitting `no`. Read them as "no gate
 fired", never as "four invariants were measured".
 
-Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just above the
+Exactly **two** booleans in that row are measured. The first is `nft_metadata_drop`, computed just above the
 emit by grepping the live nftables chain (`nft list chain inet soleur_git_data output` for
 `169.254.169.254`), anchored on the metadata address rather than the table name so a table
-whose rule was flushed reads `no`. It read `yes`. It is **not** in
-`git-data-rung2-boot-evidence.env` — that file records the queries, and the capture projects
-only the four hardcoded booleans — so it was read directly from Better Stack and recorded in
-the evidence PR's body.
+whose rule was flushed reads `no`. The second is `luks_reopen_unit` (#8210): `systemctl
+is-enabled` AND `Result=success` on `git-data-luks-reopen.service`, the boot-time LUKS reopen
+armed by the runcmd item one stage earlier. Unlike `nft_metadata_drop` it is TERMINAL for both
+readers — a birth or replace that delivers an unarmed reopen unit FAILS rather than warning,
+because a replace is the only route by which that unit reaches the live host. **On
+`luks_reopen_unit=no`, read Sentry BEFORE you replace.** The measurement is fail-closed with a
+bounded false-negative window: the bootstrap waits at most 420 s for the unit to leave
+`activating`, while the unit's own restart ladder can legitimately run ~1740 s against a slow
+Doppler. So a `no` means either a real reopen failure (a `stage:luks_reopen level:fatal` row
+with an `action=`; follow its runbook row) or a ladder that finished AFTER the measurement (a
+`stage:luks_reopen_ok` info row later in the same boot: the host is healthy, the boolean was
+early). `doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events <host> --stage luks_reopen_ok …` and
+`--stage luks_reopen` distinguish them; a replace on the second reading destroys a healthy host. It is **not** in `git-data-rung2-boot-evidence.env` —
+that file records the queries, and the capture projects only the four hardcoded booleans —
+so it has to be read from Better Stack separately. For the rehearsal that cleared the banner
+(run 34768256297, host `soleur-git-data-rehearsal-34768256297`) it read `yes` on the
+`boot_complete` row at `2026-09-13 16:27:17 UTC`, via:
+
+```bash
+export BS_TABLE=t520508_soleur_git_data_prd_logs
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+  "SELECT dt, JSONExtractString(raw,'stage') AS stage,
+          JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
+          JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit
+   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+   WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data-rehearsal-34768256297'
+   ORDER BY dt ASC FORMAT JSONEachRow"
+```
+
+(An earlier rehearsal's reading, run 33888071954, was recorded in PR #8002's body; that
+attestation was voided and deleted by #8052, so it is not the one this runbook rests on.)
 
 Finally: the authorization-map interlock is a **static** assertion over Terraform source. It
 proves what the production root *renders*, not what a live host *honours*. No live host is
@@ -201,29 +176,37 @@ a deliberate actor with repository write. What compensates is that the same gate
 the live production root on every pull request, so a collapse cannot reach `main` without
 first reddening the required `test` check.
 
-### An undocumented invariant that Article 17 correctness currently rests on
+### The invariant Article 17 correctness rests on — asserted from PR #8052 (#8043 F8)
 
-**`/mnt/git-data` must stay root-owned.** This is not a preference; it is the only thing
-making erasure fail closed today, and nothing asserts it.
+**Erasure and provision refuse to act unless the store is mounted, and never create it.** Until
+2026-09-11 this was an *accident*, and the accident is worth keeping on record because it is
+what the assertion replaced.
 
 `git-data-remove.sh` derives `REPO_ROOT=/mnt/git-data/repositories`, then guards with
-`readlink -f`. **`readlink -f` succeeds on a non-existent path whose parents all exist** (verified: rc=0, and it
-prints the path), so on a host where the volume failed to mount, both guards pass. The script
-then runs `mkdir -p "$REPO_ROOT"`, finds no repo, prints `not present (no-op)` and **exits 0** —
-reporting Article 17 erasure success over a store nobody looked at.
+`readlink -f`. **`readlink -f` succeeds on a non-existent path whose parents all exist** (verified:
+rc=0, and it prints the path), so on a host where the volume failed to mount, both path guards
+passed. The script then created the repo root, found no repo, printed `not present (no-op)`
+and **exited 0** — reporting Article 17 erasure success over a store nobody looked at.
+`git-data-provision.sh` had the severe half: it ran `git init --bare` onto the root disk, where a
+later successful mount silently hides the user's repository.
 
-What actually prevents that today: the forced command runs as `git`, cloud-init creates
-`/mnt/git-data` as root, and `git-data-bootstrap.sh` chowns `$REPO_ROOT` itself and the
-`repositories` symlink, but **never the mountpoint `/mnt/git-data`**. So the `mkdir -p` takes EACCES and `set -euo pipefail`
-(`git-data-remove.sh` line 28) aborts before the false success.
+What prevented it was that the forced command runs as `git`, cloud-init creates `/mnt/git-data`
+as root, and the bootstrap never chowned that mountpoint — so the create took EACCES and
+`set -euo pipefail` aborted before the false success. One unrelated `chown` and erasure would
+have begun silently succeeding over nothing.
 
-That is an **accidental** invariant holding up a statutory guarantee. The moment anyone chowns
-that mountpoint to `git` for an unrelated permissions fix, erasure begins silently succeeding
-over nothing, and the failure is invisible — a no-op and a real erasure produce the same exit
-code and the same message. The assertion that would make it deliberate is a `mountpoint -q`
-check, which cannot land here: `git-data-remove.sh` is one of the payloads bound by
-`RUNG2_TEMPLATE_SHA256`, so editing it voids the rung-2 evidence and buys a fresh paid
-rehearsal. It is tracked with the other hash-bound hardening items.
+**What asserts it now.** Both wrappers assert a second, independently-defaulted seam
+`GIT_DATA_MOUNT_ROOT` (default `/mnt/git-data`) is a mount point — on the mount ROOT, not on
+`REPO_ROOT`, because `mountpoint -q` on the `repositories` subdirectory returns 1 on a healthy
+host and would refuse every erasure — and refuse with a named non-zero exit otherwise;
+`mountpoint(1)` absent from PATH is itself a refusal. The create of the repo root is deleted from
+both. Guard 1 in `git-data-remove.test.sh` / `git-data-provision.test.sh` pins it (mounted store
+still erases; unmounted → refusal with the root still absent; instrument absent → fail closed).
+
+**What this does NOT close, stated so it is not read as closed:** `account-delete.ts` catches the
+refusal, mirrors it to Sentry, and continues the cascade — the user is still told the account
+was deleted. That app-layer boundary is a follow-up deadlined to the `GIT_DATA_STORE_ENABLED`
+cutover (#8043 FR17), not this host's job.
 
 ## Dispatch
 
@@ -272,7 +255,12 @@ approval: the interlock, the birth gate, and the stock preflight.
    ```
 
 8. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
-   which arm refused.
+   which arm refused. Its last arm (#8189, shared with the replace gate) refuses unless the
+   created server carries exactly the default key and the git-data root key, and the root
+   key's `SHA256:` fingerprint equals `apps/web-platform/infra/git-data-root-key.fingerprint`:
+   `verdict=git_data_root_key_not_in_create reason=<word>`. Remedy: dispatch
+   `apply-git-data-root-key.yml`, commit its printed fingerprint, re-dispatch
+   (`git-data-luks-cutover-5274.md` › verdict map).
 9. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
    *after* the birth gate: the gate proves the plan is the right plan, the preflight proves
    it is a feasible one.
@@ -292,6 +280,8 @@ approval: the interlock, the birth gate, and the stock preflight.
 - **Monitoring.** `betteruptime_heartbeat.git_data_prd` is deliberately **out** of this
   job's `-target` set and ships paused. Its feeder already exists and is web-host-resident,
   so arming a monitor from this route would produce a green dashboard measuring nothing.
+  Since #8754 the per-merge apply creates and arms it instead, so an already-armed monitor
+  pages on absence during a re-birth window.
 - **Working transport keys in the running web container.** See below — this one has an
   action attached.
 
@@ -312,6 +302,9 @@ needed.
 > `docker run` from `cloud-init.yml`. If you find a document telling you to restart a unit
 > to pick up these keys, that document is wrong — `git-data-cutover.sh` currently contains
 > exactly that mistake at two sites (tracked under #5274/#6982).
+>
+> **Superseded 2026-09-15 (#8189):** both sites were deleted with the rest of the cutover body. The
+> dispatch is now a read-only proof, and the real cutover is being rebuilt under #8211.
 
 ## If it fails
 
@@ -345,6 +338,50 @@ terraform import doppler_config.git_data_prd soleur.prd_git_data
 
 then re-dispatch. This is the one failure mode the otherwise-additive re-dispatch story
 does not cover, which is why it is called out separately.
+
+### The rung-2 interlock HOLDs with a `RUN_*` or `SENTRY_*` token
+
+Step 3 above refuses before anything applies. Since #8010 that refusal carries exactly one
+bracketed token, and the first question is not "what is wrong with the evidence" but **did the
+gate manage to look at all**. Work in this order, and do not skip to the last one:
+
+1. **Read the token.** The two sets and their remedies are tabulated in
+   `git-data-rung2-rehearsal.md` › *The gate's refusals — token → remedy*. `TOOLING_MISSING`,
+   `RUN_OFFLINE`, `RUN_RATE_LIMITED`, `RUN_UNRESOLVABLE`, `RUN_SHA_UNREACHABLE`,
+   `RUN_HASH_UNCOMPUTABLE`, `RUN_ARTIFACT_RECORD_UNREADABLE`, `RUN_FLOOR_UNREADABLE` and
+   `SENTRY_VERDICT_UNREADABLE` mean the gate could not measure. Nothing has been said about
+   the evidence or the host. This list is a RESTATEMENT — the set that actually decides is
+   `git_data_rung2_token_sets cannot` in the gate library, which the #8210 probe and
+   `infra-validation.yml` both read. It had already drifted once (#8010 shipped
+   `RUN_FLOOR_UNREADABLE` and this line did not follow), so check it against the function
+   rather than trusting it.
+2. **Re-run the gate locally with a token.** Every CI call site resolves the run **anonymously**
+   — three of the four call sites still do. Since #8010, `infra-validation.yml`'s
+   `deploy-script-tests` job grants `actions: read` and passes `GH_TOKEN`, so that one is
+   authenticated; the two `apply-web-platform-infra.yml` sites are blocked behind #8361 and the
+   sweeper runs under `env -i`. The remainder is tracked as this cycle's blocker issue (#8397)
+   and cited from the `RUN_RATE_LIMITED` message itself. The anonymous limit is 60
+   requests/hour per IP, shared behind NAT on hosted runners, so a rate limit on CI is expected
+   weather rather than a finding. On a clean checkout of the ref the job used:
+
+   ```bash
+   export GH_TOKEN="$(gh auth token)"
+   source tests/scripts/lib/git-data-birth-readiness-gate.sh
+   git_data_rung2_rehearsal_gate \
+     apps/web-platform/infra/cloud-init-git-data.yml \
+     apps/web-platform/infra/git-data-rung2-boot-evidence.env
+   ```
+
+3. **If the authenticated local run RELEASES**, the CI HOLD was an instrument failure. Re-dispatch
+   the apply; nothing needs fixing.
+4. **If it still HOLDs**, the refusal is real. Take the token's remedy from the table. A measured
+   refusal on fresh evidence usually means the payload moved after the rehearsal, which costs a
+   new rehearsal (`git-data-rung2-rehearsal.md` › *Changing the payload: the two-PR sequence*).
+
+**Never reach for `git-data-host-replace` to clear a gate HOLD.** The gate is refusing a *file*
+and the *run* it names; a replace destroys and recreates the host holding every connected user's
+repositories and cannot change either. The replace route runs this same interlock and will refuse
+identically.
 
 ## Verifying the result
 
@@ -396,17 +433,55 @@ channels. It still has no heartbeat of its own (deliberate — see ADR-149's D-H
 - `git-data-luks-cutover-5274.md` — the cutover that makes the LUKS volume live
 - #6977 (this route) · #6982 (the interlock's release) · #5274 (Phase-3 GA)
 
+## Reading the poll's verdict (#8178)
+
+Since #8178 the poll (both `git_data_host_create` and `git_data_host_replace`) reports
+**three** outcomes. The verdict rests on the FINAL read, and the summary line
+`answered=N/M` says how many reads answered.
+
+| Verdict | What it means | Where to go |
+|---|---|---|
+| `received` | The host reported `boot_complete` after this run's anchor. | Nowhere. The per-field invariants run next. |
+| `silent` | The final read ANSWERED and no `boot_complete` from this host generation was present. A statement about the host, or about its upload path. | Sentry events for `host_name:soleur-git-data` timestamped AFTER the run's boot-trail anchor, in this order: (1) a `stage:betterstack_ingest` warning means the host ran and its Better Stack upload failed; (2) a `stage:boot_complete` event means it finished booting, after the final read or with its upload lost — do not replace it; (3) a `level:fatal` event names the stage that failed; (4) `stage:bootcmd_start` with no `stage:gitdata_runcmd_ok` means it stopped in package or file setup, or its runcmd_ok emit was not delivered; (5) nothing at all means it died before its network came up. For a birth, then see "If it fails" above. For a replace there is no in-job remedy: do not re-dispatch it as a reading. |
+| `unreadable` | The final read failed. If `answered=0`, nothing about the host was measured; if some reads answered, they saw no `boot_complete`, but the final window is unmeasured. | The READ path, never the host. The class names which fault it was. |
+
+The class on an `unreadable` run:
+
+| Class | Meaning |
+|---|---|
+| `credentials-rejected` | The read path refused the credentials. Rotate/verify them in `prd_terraform`. |
+| `source-not-in-connection` | `CLUSTER_DOESNT_EXIST`: the SQL API connection in use does not cover this source (#7867). A connection covers only sources created before it; use the connection in `prd_terraform`, or create one that covers the source. |
+| `source-under-maintenance` | The vendor's read path is under maintenance. |
+| `transport` | DNS / connect / timeout / TLS from the runner, or the per-read 45 s cap expired. |
+| `reader-refusal` | `betterstack-query.sh` refused (destination pin / usage / trace). A reader misconfiguration. |
+| `credentials-absent` / `reader-exit-1` | The wiring itself: the three variables were not injected, or `doppler run` failed before the reader (check `DOPPLER_TOKEN`). |
+| `other` | None of the above; read the per-poll line's rc and stderr. |
+
+**Re-dispatch is never how to get a reading.** After a green birth apply the birth gate
+refuses a re-dispatch. A replace can be re-dispatched, but every replace destroys and
+recreates the host holding every connected user's repositories. Once the read works, run
+the read-only query in "After the birth" with the run's boot-trail anchor. (There is no
+web-host `git ls-remote` serving check yet; it is #5274 PR C. The existing web-host probe is
+a TCP connect to :22, which answers on a host whose LUKS volume never mounted.)
+
+The log never prints the response body, only its byte length: this repository is public,
+and a ClickHouse auth failure body names the query username.
+
 ## After the birth — verify the host actually booted (#6982)
 
 **A green apply is not a green boot.** The dispatch's own post-apply step polls for the
-boot signal and FAILS the job if it does not arrive, so a green run is now meaningful — but
-verify independently if that step warned that its credentials were missing.
+boot signal and FAILS the job if it does not arrive, so a green run is now meaningful; the
+poll runs only after the apply step actually ran (green or failed) — a run refused at the
+gate skips it, so a skipped poll is not a verdict on the host. A RED job whose summary shows
+`apply outcome: success` is a failed VERIFICATION, not a failed birth: run the query below;
+do not re-dispatch (the gate refuses a zero-create plan).
 
 No SSH appears below, and none is possible: git-data has no human SSH path by design
-(`git-shell` + three `command=`/`no-pty` forced commands, deny-all public ingress).
+(three `command=`/`no-pty` forced commands on a `/bin/sh` login shell — the forced-command map is the whole confinement, ADR-149 #8043 disposition — deny-all public ingress).
 
 ```bash
-# 1. The boot-completion signal, with its FIVE assertions (#7772 added nft_metadata_drop).
+# 1. The boot-completion signal, with its SIX assertions (#7772 added nft_metadata_drop;
+#    #8210 added the MEASURED, TERMINAL luks_reopen_unit).
 #    BS_TABLE IS PINNED: git-data ships to its own source 2734275, not the shared 2457081
 #    that betterstack-query.sh defaults to. Unpinned, this returns zero rows on a healthy
 #    host and the reading instruction below sends you down the partial-birth tree for a
@@ -414,17 +489,24 @@ No SSH appears below, and none is possible: git-data has no human SSH path by de
 #    bare-substring grep matches the shared source's inngest rows quoting issue bodies.
 #    NOTE `remote($BS_TABLE)` takes NO `primary` argument; only s3Cluster does. The
 #    archive arm is REQUIRED: remote() alone is the ~40-minute hot window.
-BS_TABLE=t520508_soleur_git_data_prd_logs \
+#    ANCHOR IS REQUIRED (#8178, AP-027): set ANCHOR to the epoch the run's
+#    "Stamp boot-trail run anchor" step printed. host_name does not tell host generations
+#    apart, so without it a replace whose new host never reported returns the DESTROYED
+#    host's all-yes row and this query certifies a dark host.
+ANCHOR=<epoch printed by the run's anchor step>
+BS_TABLE=t520508_soleur_git_data_prd_logs BS_TABLE_S3=t520508_soleur_git_data_prd_s3 \
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
   SELECT dt, JSONExtractString(raw,'stage') AS stage,
              JSONExtractString(raw,'luks_mounted') AS luks_mounted,
              JSONExtractString(raw,'repo_root')    AS repo_root,
              JSONExtractString(raw,'hooks_path')   AS hooks_path,
              JSONExtractString(raw,'provision')    AS provision,
-             JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
+             JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
+             JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit
   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
-  WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data'
+  WHERE dt > fromUnixTimestamp(${ANCHOR})
+    AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
     AND JSONExtractString(raw,'stage') = 'boot_complete'
   ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow"
 
@@ -436,7 +518,8 @@ doppler run -p soleur -c prd -- sh -c '
   q=$(printf "%s" "host_name:soleur-git-data" | jq -sRr @uri)
   curl -sS -H "Authorization: Bearer $SENTRY_ISSUE_RO_TOKEN" -H "Accept: application/json" \
     "https://sentry.io/api/0/organizations/jikigai-eu/issues/?query=$q&statsPeriod=24h" \
-  | jq -r ".[] | \"\(.shortId)  \(.count)x  \(.title)\""'
+  | jq -r ".[] | \"\(.shortId)  \(.count)x  last=\(.lastSeen)  \(.title)\""'
+#    Only issues whose `last=` is AFTER the run's anchor can describe this host generation.
 
 #    Then, for any id above:
 #    doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --latest-event <issue-id>
@@ -464,14 +547,18 @@ Art. 30 register carries that distinction explicitly.
 and `user_data` is **ForceNew**. Both of these are inputs to it:
 
 - `apps/web-platform/infra/cloud-init-git-data.yml`
-- `apps/web-platform/infra/git-data-bootstrap.sh` (and the four other scripts, now injected
-  as plain text rather than base64 — #6982)
+- the `file()`-bound payloads `modules/git-data-userdata/main.tf` injects as plain text
+  (`git-data-bootstrap.sh` and its siblings — #6982; `git_data_rung2_bound_files` in
+  `tests/scripts/lib/git-data-birth-readiness-gate.sh` enumerates the current set, 13 inputs
+  with the template and the module's `.tf` files)
 
 **Every byte counts, comments included.** Post-birth, a one-word comment fix in either file
 costs a full `git-data-host-replace`: a destroy-then-create of the host holding every
 connected user's source code, with both volumes and the passphrase preserved *by omission*.
-Pre-birth the same edit costs nothing. The omission is deliberate — it preserves the clean
-replace-to-reprovision path — so this is a residual to respect, not a bug to fix.
+Pre-birth the same edit costs a full re-rehearsal instead — the evidence binds these bytes,
+so any edit re-holds the birth until another paid cpx22 boots and a fresh evidence PR lands.
+The omission is deliberate — it preserves the clean replace-to-reprovision path — so this is a
+residual to respect, not a bug to fix.
 
 There is also a hard **32,768-byte** cap on the rendered `user_data`, gated in CI by
 `apps/web-platform/infra/git-data-userdata-budget.sh`. Measure with Terraform's own

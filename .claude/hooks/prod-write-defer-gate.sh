@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# PreToolUse(Bash) hook: defers prod-write commands for explicit operator approval.
+# PreToolUse(Bash, Monitor) hook: defers prod-write commands for explicit operator approval.
+# Registered for Monitor too (#8486): a Monitor script is a shell command
+# (tool_input.command), so a write run as a monitor must not bypass the gate.
 #
-# Three inline starter regexes (telemetry-driven expansion via follow-up PRs):
+# Four inline rules (the first three telemetry-driven; the fourth, #8486, is
+# exempt from the dry-run expansion gate — see its block below):
 #   prod-write-defer-git-push-main           — git push origin {main,master,HEAD:main,HEAD:master}
 #   prod-write-defer-terraform-apply         — terraform / tofu apply
 #   prod-write-defer-doppler-secrets-stdout  — doppler secrets {set|delete} ... --config {prd|prd_terraform|prd_orchestration|dev|ci}
@@ -11,6 +14,15 @@
 #                                              `prd_orchestration` added at PR #4031 review since tenant-* runbooks
 #                                              operate against it and the same trap class applies to
 #                                              cross-tenant value chunks rendered post-deletion).
+#   prod-write-defer-operator-ack-script     — a write-mode invocation of any operator script that
+#                                              gates its production writes on the operator-script
+#                                              library's TTY ack (#8486, ADR-249): flag-create,
+#                                              flag-delete, user-set-role, flag-set-role,
+#                                              provision-hetzner, audit-sentry … --apply. Every
+#                                              call in the command is evaluated (not only the
+#                                              leftmost), a read-only escape is scoped to that
+#                                              call's own argument tail, and the rule fails CLOSED
+#                                              on its own error (EXIT trap -> deny envelope).
 #
 # Mode (controlled by SOLEUR_DEFER_DRYRUN, default 0):
 #   1 (dry-run)          — emit kind=would_defer, allow (output "{}").
@@ -50,9 +62,113 @@ DEFER_VALUE="defer"
 # `;`/`)`/`&` a `git push origin main;` or `(git push origin main)` slips past
 # the gate even though the leading anchor already treats those operators as
 # significant.
+# --- Rule 4: operator scripts behind the TTY ack (#8486, ADR-249) -----------
+# WHY THIS RULE SKIPS THE 2-WEEK DRY-RUN EXPANSION GATE: after #8486 there is no
+# legitimate agent invocation of these scripts in write mode — the script itself
+# refuses a write with no TTY (exit 64 before any credential fetch). So a false-
+# positive defer costs nothing a correct run would have produced. The case this
+# backstop exists for is an agent that allocates a PTY (`script -qc`,
+# `unbuffer`, `expect`, `python3 -c 'import pty…'`) and types `yes` into it.
+#
+# Unique basenames match anywhere as a path token (preceded by `/`, whitespace, a
+# quote or a command boundary, so `inngest-cutover-flip.sh` does not match: `-`
+# precedes `flip.sh`). The generic basenames create.sh/delete.sh match only
+# dir-qualified, or bare after a `cd` into their skill directory.
+OPACK_RULE="prod-write-defer-operator-ack-script"
+OPACK_UNIQUE='flip\.sh|set-role\.sh|provision-hetzner\.sh|audit-sentry-extra-text-references\.sh'
+OPACK_QUALIFIED='flag-create/scripts/create\.sh|flag-delete/scripts/delete\.sh'
+OPACK_CALL_RE="(^|[^A-Za-z0-9_.-])(${OPACK_QUALIFIED}|${OPACK_UNIQUE})([^A-Za-z0-9_.-].*)?\$"
+OPACK_CD_CONTEXT_RE='(^|[;&|(]|[[:space:]])cd[[:space:]]+[^;&|]*flag-(create|delete)(/scripts)?/?["'"'"']?[[:space:]]*(;|&&|\|\||$)'
+# A PTY wrapper or a `yes |` pipe anywhere cancels every read-only escape: a dry
+# run never needs a TTY, and the PTY route is the one this rule exists for.
+OPACK_PTY_RE='(^|[^A-Za-z0-9_.-])(script|unbuffer|expect)([[:space:]]|$)|pty\.(spawn|fork|openpty)|(^|[^A-Za-z0-9_.-])yes([[:space:]][^|;&]*)?\|'
+# Output piped into an interpreter (or process substitution / eval) cancels the
+# reader escape: `cat …/flip.sh | bash` runs the script.
+OPACK_TO_SHELL_RE='\|[[:space:]]*(sudo[[:space:]]+)?(sh|bash|zsh|dash|ksh|script|expect|source)([[:space:]]|$)|<\(|(^|[^A-Za-z0-9_])eval([[:space:]]|$)'
+OPACK_READERS='^(cat|less|more|head|tail|grep|egrep|rg|git|wc|ls|stat|file|diff|shellcheck|test|\[|\[\[)$'
+# A call's argument tail ends at the next separator, quote, comment, backtick or
+# newline; `$(` is cut separately below.
+OPACK_TAIL_RE=$'^([^;&|)"\'#`\n]*)'
+OPACK_SEG_BOUNDARY=$';&|(\n`'
+
+# opack_prefilter <cmd> — a fixed-string test so the common command pays nothing.
+opack_prefilter() {
+  [[ "$1" == *flip.sh* || "$1" == *set-role.sh* || "$1" == *provision-hetzner.sh* \
+     || "$1" == *audit-sentry-extra-text-references.sh* || "$1" == *create.sh* || "$1" == *delete.sh* ]]
+}
+
+# opack_verdict <cmd> -> rc 0 = at least one call is a write (defer);
+#                        rc 1 = every call is a reader or a read-only mode (allow);
+#                        any other rc = the rule could not decide (caller denies).
+opack_verdict() {
+  local cmd="$1" re="$OPACK_CALL_RE" rem consumed="" prefix seg first second tail name
+  local pty=0 to_shell=0 any_write=0 calls=0 rc
+  case "${SOLEUR_DEFER_TEST_INJECT_FAULT:-}" in
+    return) return 3 ;;
+    exit) exit 1 ;;
+  esac
+  [[ "" =~ $re ]]; rc=$?
+  (( rc >= 2 )) && return 3
+  if [[ "$cmd" =~ $OPACK_CD_CONTEXT_RE ]]; then
+    re="(^|[^A-Za-z0-9_.-])(${OPACK_QUALIFIED}|${OPACK_UNIQUE}|create\.sh|delete\.sh)([^A-Za-z0-9_.-].*)?\$"
+  fi
+  [[ "$cmd" =~ $OPACK_PTY_RE ]] && pty=1
+  [[ "$cmd" =~ $OPACK_TO_SHELL_RE ]] && to_shell=1
+  rem="$cmd"
+  while [[ "$rem" =~ $re ]]; do
+    local -a m=("${BASH_REMATCH[@]}")
+    calls=$((calls + 1))
+    (( calls > 256 )) && return 3
+    prefix="${rem:0:$(( ${#rem} - ${#m[0]} ))}"
+    name="${m[2]##*/}"
+    # --- the segment this call sits in, for the reader escape ---------------
+    seg="${consumed}${prefix}${m[1]}"
+    seg="${seg##*[$OPACK_SEG_BOUNDARY]}"
+    read -r first second _ <<<"$seg" || true
+    while [[ "$first" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+      seg="${seg#*"$first"}"; read -r first second _ <<<"$seg" || true
+    done
+    # --- the call's own argument tail -----------------------------------------
+    tail="${m[3]:-}"
+    [[ "$tail" == [\"\']* ]] && tail="${tail:1}"
+    [[ "$tail" =~ $OPACK_TAIL_RE ]] && tail="${BASH_REMATCH[1]}"
+    tail="${tail%%\$(*}"
+    consumed="${consumed}${prefix}${m[1]}${m[2]}"
+    rem="${m[3]:-}"
+    if (( ! to_shell )) && [[ "$first" =~ $OPACK_READERS ]]; then
+      continue
+    fi
+    if (( ! to_shell )) && [[ ( "$first" == sed || "$first" == bash || "$first" == sh ) && "$second" == -n ]]; then
+      continue
+    fi
+    if (( ! pty )); then
+      case "$name" in
+        flip.sh|set-role.sh|create.sh|delete.sh)
+          [[ " $tail " =~ [[:space:]]--dry-run[[:space:]] ]] && continue ;;
+        audit-sentry-extra-text-references.sh)
+          [[ " $tail " =~ [[:space:]]--apply[[:space:]] ]] || continue ;;
+      esac
+    fi
+    any_write=1
+  done
+  (( any_write )) && return 0
+  return 1
+}
+
+# Once the prefilter hits, a crash anywhere below must not become an allow:
+# Claude Code RUNS the command when a hook exits non-zero or prints nothing.
+OPACK_DECIDED=0
+opack_exit_guard() {
+  if [[ "${OPACK_DECIDED:-0}" != 1 ]]; then
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"BLOCKED (prod-write-defer-gate self-fault): the operator-ack rule could not decide; failing closed (#8486)"}}'
+  fi
+  exit 0
+}
+
 declare -a DEFAULT_TARGETS=(
   "prod-write-defer-git-push-main|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*git[[:space:]]+push([[:space:]]+(-f|--force(-with-lease)?))?[[:space:]]+origin[[:space:]]+(main|master|HEAD:main|HEAD:master)([[:space:]]|;|\\)|&|$)"
   "prod-write-defer-terraform-apply|hr-all-infrastructure-provisioning-servers|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*(terraform|tofu)[[:space:]]+apply([[:space:]]|;|\\)|&|$)"
+  "${OPACK_RULE}|hr-menu-option-ack-not-prod-write-auth|${OPACK_CALL_RE}"
   "prod-write-defer-doppler-secrets-stdout|hr-menu-option-ack-not-prod-write-auth|(^|&&|\\|\\||;|\\(|[[:space:]]--[[:space:]])[[:space:]]*([A-Za-z_]+=[A-Za-z0-9_]+[[:space:]]+)*doppler[[:space:]]+secrets[[:space:]]+(set|delete)([[:space:]]+[^[:space:]]+)*[[:space:]]+(--config|-c)[[:space:]]+(prd|prd_terraform|prd_orchestration|dev|ci)([[:space:]]|;|\\)|&|$)"
 )
 
@@ -87,6 +203,7 @@ fi
 # etc.). Always exits 0 (the deny is conveyed through JSON, not exit code).
 deny_self_fault() {
   local reason="$1" cmd_snippet="$2"
+  OPACK_DECIDED=1
   emit_incident "prod-write-defer-hook-self-fault" "deny" \
     "F2 defer-gate self-fault — failing closed" \
     "$cmd_snippet" "PreToolUse" "hook_self_fault"
@@ -147,7 +264,7 @@ append_approval_log() {
   local line
   line=$(jq -nc \
     --arg ts "$ts" \
-    --arg t "Bash" \
+    --arg t "${HOOK_TOOL_NAME:-Bash}" \
     --arg h "$args_hash" \
     --arg c "${resolved_command:0:1024}" \
     --arg o "$operator_email" \
@@ -213,6 +330,17 @@ for entry in "${TARGETS[@]}"; do
   if [[ -z "$rule_id" || -z "$regex_pat" ]]; then
     deny_self_fault "malformed TARGETS entry (missing fields)" "$CMD_SNIPPET"
   fi
+  if [[ "$rule_id" == "$OPACK_RULE" ]]; then
+    opack_prefilter "$CMD" || continue
+    trap opack_exit_guard EXIT
+    rc=0
+    opack_verdict "$CMD" || rc=$?
+    case "$rc" in
+      0) MATCHED_RULE="$rule_id"; MATCHED_RULE_PROSE="$prose_ref"; break ;;
+      1) continue ;;
+      *) deny_self_fault "operator-ack rule could not decide (rc=$rc)" "$CMD_SNIPPET" ;;
+    esac
+  fi
   # bash [[ =~ ]] returns 0 (match), 1 (no match), 2 (invalid regex).
   # Capture rc directly — chaining via && loses the 2-signal.
   [[ "$CMD" =~ $regex_pat ]]
@@ -234,6 +362,7 @@ done
 
 # No match → no-op, allow (output "{}").
 if [[ -z "$MATCHED_RULE" ]]; then
+  OPACK_DECIDED=1
   echo '{}'
   exit 0
 fi
@@ -260,6 +389,7 @@ if [[ "${CLAUDE_HOOK_BYPASS:-}" == "1" ]]; then
   # (CWE-117 log/terminal injection — operator's terminal hygiene).
   CMD_DISPLAY=$(printf '%s' "$CMD_SNIPPET" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed -e $'s/\xe2\x80\xa8//g' -e $'s/\xe2\x80\xa9//g')
   echo "[prod-write-defer-gate] BYPASS by $BYPASS_OPERATOR — $BYPASS_REASON :: $CMD_DISPLAY" >&2
+  OPACK_DECIDED=1
   echo '{}'
   exit 0
 fi
@@ -271,6 +401,7 @@ case "$SOLEUR_DEFER_DRYRUN" in
     emit_incident "$MATCHED_RULE" "applied" \
       "F2 defer-gate dry-run would defer: $MATCHED_RULE_PROSE" \
       "$CMD_SNIPPET" "PreToolUse" "would_defer"
+    OPACK_DECIDED=1
     echo '{}'
     exit 0
     ;;
@@ -294,6 +425,7 @@ case "$SOLEUR_DEFER_DRYRUN" in
       # path rather than a silent pause (plan §User-Brand Impact bullet-1).
       echo "[prod-write-defer-gate] resume via: claude --resume (no session_id in payload; pick the paused session)" >&2
     fi
+    OPACK_DECIDED=1
     jq -n \
       --arg rule "$MATCHED_RULE" \
       --arg cmd "$CMD_SNIPPET" \

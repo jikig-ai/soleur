@@ -84,6 +84,8 @@
     { "label": "Legal", "url": "/legal/" },
     { "label": "Privacy Policy", "url": "/legal/privacy-policy/" },
     { "label": "Terms of Service", "url": "/legal/terms-and-conditions/" },
-    { "label": "Acceptable Use", "url": "/legal/acceptable-use-policy/" }
+    { "label": "Acceptable Use", "url": "/legal/acceptable-use-policy/" },
+    { "label": "GDPR Policy", "url": "/legal/gdpr-policy/" },
+    { "label": "Data Protection", "url": "/legal/data-protection-disclosure/" }
   ]
 }

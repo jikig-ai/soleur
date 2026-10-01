@@ -11,13 +11,13 @@
 # ── WHY THIS GATE EXISTS (the footgun it removes) ──────────────────────────────────────────
 # The 2026-07-24 guest-side-LUKS change made hcloud_volume.registry a RAW device: cloud-init
 # now discriminates on `blkid TYPE` with three arms — "" (fresh) -> luksFormat; crypto_LUKS ->
-# reuse; ANY OTHER TYPE -> `refusing-non-luks-device … exit 1`. The live volume is still
-# PLAINTEXT ext4, so it sits in that third arm.
+# reuse; ANY OTHER TYPE -> `refusing-non-luks-device … exit 1`. Until the first recut on
+# 2026-08-10 (run 31437037877) the live volume sat in that third arm, so a replaced host FATALed
+# and darked the registry. Current posture: the ledger's `hcloud_volume.registry` row.
 #
-# The operator must therefore NOT use `registry-host-replace` to perform the recut: that path
-# PRESERVES the volume (store_destroyed==0), so the replaced host boots cloud-init against the
-# still-plaintext device, FATALs, and DARKS THE REGISTRY. Forgetting the `-replace` on the
-# volume has exactly the same effect. This gate is the sanctioned vehicle: it admits ONLY a
+# `registry-host-replace` cannot perform a recut: that path PRESERVES the volume
+# (store_destroyed==0). Forgetting the `-replace` on the volume is likewise not a recut. This gate is the
+# sanctioned vehicle for a recut: it admits ONLY a
 # plan that replaces the volume, its attachment and the server TOGETHER, so a fresh raw volume
 # meets the `blkid` empty arm and gets luksFormatted.
 #
@@ -342,6 +342,6 @@ registry_luks_recut_gate() {
     return 0
   fi
 
-  echo "registry_luks_recut_gate: ABORT — plan is NOT the exact scoped registry LUKS recut (out-of-scope create/update/destroy, logs-token secret destroy/forget, LUKS key/password touched, volume id mismatch, or a missing server/volume/attachment/NIC/firewall provision). A PRESERVED store volume (volume_provisioned=0) is the registry-host-replace footgun this path exists to remove: the host would boot cloud-init against a still-plaintext device and FATAL. NO [ack-destroy] bypass on this path."
+  echo "registry_luks_recut_gate: ABORT — plan is NOT the exact scoped registry LUKS recut (out-of-scope create/update/destroy, logs-token secret destroy/forget, LUKS key/password touched, volume id mismatch, or a missing server/volume/attachment/NIC/firewall provision). A PRESERVED store volume (volume_provisioned=0) is a host replace, not a recut: it cannot re-encrypt or empty the store. NO [ack-destroy] bypass on this path."
   return 1
 }

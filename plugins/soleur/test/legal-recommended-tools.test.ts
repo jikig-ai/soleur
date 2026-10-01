@@ -7,7 +7,7 @@ const RECOMMENDED_TOOLS_PATH = resolve(REPO_ROOT, "knowledge-base/legal/recommen
 const CLO_PATH = resolve(REPO_ROOT, "plugins/soleur/agents/legal/clo.md");
 const LEGAL_AUDIT_PATH = resolve(REPO_ROOT, "plugins/soleur/skills/legal-audit/SKILL.md");
 
-const EXPECTED_THRESHOLDS = 5;
+const EXPECTED_THRESHOLDS = 5 + 1; // +1 for the template-libraries section added with the General-Legal CC0 vendoring (#8122)
 
 function kebab(s: string): string {
   return s

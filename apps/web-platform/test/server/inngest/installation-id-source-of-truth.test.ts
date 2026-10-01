@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { stripComments } from "../../helpers/strip-comments";
 
 // PR-A (#4124) — Sentinel: `installationId` MUST be server-resolved
 // inside `agent-on-spawn-requested` keyed by the SERVER-DERIVED `founderId`.
@@ -45,14 +46,6 @@ const DRIFT_PATTERNS: RegExp[] = [
  * raw source would false-positive on the documentation that EXPLAINS
  * the rule.
  */
-function stripComments(src: string): string {
-  // Block comments
-  let out = src.replace(/\/\*[\s\S]*?\*\//g, "");
-  // Single-line comments (// to end-of-line). Naive but sufficient for
-  // a TS source file with no strings containing `//`.
-  out = out.replace(/(^|\n)\s*\/\/[^\n]*/g, "$1");
-  return out;
-}
 
 describe("installation-id source-of-truth sentinel", () => {
   const fnSrcRaw = readFileSync(FUNCTION_SOURCE, "utf8");

@@ -171,7 +171,10 @@ fixes for every per-step plan:
 > through the transport key). **Resolution: a dedicated, separately-keyed SSH
 > forced-command provisioning path.** A SECOND ED25519 key on the git-data host —
 > distinct from the git-shell transport key, same `git` OS user (repo root is
-> `git:git 0750`; per-key `command=` overrides the login shell) — carries a FIXED
+> `git:git 0750`; per-key `command=` is RUN BY the login shell as `<shell> -c "<command>"`, so
+> the login shell must be a real shell — git-shell refuses it with `fatal: unrecognized
+> command`, rc=128, measured in the pinned image and corrected by #8043 to `/bin/sh`; the
+> confinement is the forced-command map, never the shell) — carries a FIXED
 > forced command `command="/usr/local/bin/git-data-provision.sh"`. The wrapper
 > reads `workspace_id` from `SSH_ORIGINAL_COMMAND` as an OPAQUE argument (validated,
 > NEVER `eval`'d), enforces `^[A-Za-z0-9._-]+$` and rejects `.`/`..`/slash
@@ -1274,6 +1277,39 @@ wrong-arch binary. That is why this was a real code change and not a var flip.
 | **D9** | **This ADR authorizes no birth.** The repin changes declared state only. |
 | **D10** | **Born-on-LUKS rejected** — keep the additive cutover topology (plaintext source volume + fresh LUKS target, flipped by `git-data-cutover.sh`). Revisiting it would rewrite a cutover path that is already built and tested for a host that does not exist yet. |
 
+**Addendum — 2026-09-15 (#6680).** The access path and root credential for this cutover, and for every
+rotation cutover D10 keeps on the same route, are decided in
+[ADR-220](./ADR-220-git-data-root-access-via-web-1-jump-and-a-dedicated-terraform-minted-key.md):
+a jump through web-1's existing `ssh.` ingress, and a dedicated Terraform-minted root key provisioned
+by #8189. Rotation cutovers inherit ADR-220's rule that the read credential is scoped to the window,
+and they need **no host replace per rotation**. Only the first key delivery rides a git-data replace.
+Rotations against a populated store stay gated on #7226 (host-key pinning), per ADR-220 D4.
+
+> **Superseded 2026-09-15 (#8189), as to the window-scoped read credential:** the read token has no
+> window and does not expire, and the root key persists across replaces. Rotation cutovers still need no
+> replace for access. The real cutover route itself is being rebuilt under #8211, and the first real
+> cutover needs a fresh replace plus a `GIT_DATA_LUKS_KEY` rotation. See ADR-220, "Amendment log".
+>
+> **Amended 2026-09-21 (#7226, PR #8511):** host-key pinning is decided in
+> [ADR-237](./ADR-237-ssh-host-keys-are-pinned.md); this gate is discharged when ADR-237 reaches
+> `accepted` (its post-merge step 4), and every git-data replace now also rotates the host key.
+>
+> **Superseded 2026-09-23 (#8211, PR #8564), as to D10 in full:** born-on-LUKS is **adopted**, in
+> [ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md). D10's stated ground — that revisiting
+> it "would rewrite a cutover path that is already built and tested" — is false today: #8189 deleted
+> that path, and it had never run (ADR-220, Context). The git-data render now always mounts
+> `/dev/mapper/git-data` at `/mnt/git-data`, there is no plaintext/LUKS selector and no additive
+> cutover topology, and the serving change rides ADR-237's post-merge step 3 `git_data_host_replace`
+> while the store is empty and `GIT_DATA_STORE_ENABLED` is off. The plaintext volume
+> `hcloud_volume.git_data` is retained, read once per instance read-only to prove it holds no
+> repository, and never mounted after boot. Read ADR-239 for the rationale, the consequences (there
+> is no rollback to plaintext, and copy mode is deferred to #8571) and the alternatives; this marker
+> records only that D10 no longer governs.
+
+**Correction — 2026-09-15 (#6680).** The "Inngest-dispatches-GHA" claim in the 2026-07-02 Phase 3 GA
+amendment, item (b), is false for the git-data cutover: `git-data-cutover.yml` is dispatched by hand
+only, and no dispatcher exists.
+
 ### Why D7 is mandatory
 
 Terraform **prunes an unreferenced data source under `-target=`** (probed against the pinned
@@ -1397,3 +1433,8 @@ plaintext git object data paged out from under the LUKS posture the whole `git_d
 apparatus exists to establish. Encrypted swap (random-key dm-crypt) would work but adds a
 second crypt device to a host already barred from ADR-115's reboot primitive. **Bound memory
 instead** — which is what `MemoryMax=`/`MemorySwapMax=0` on the gc unit do.
+
+## Amendment — 2026-09-23 (#8611, ADR-243)
+
+Adding a second host that serves `/api/inngest` step calls reopens ADR-243 §2 (the process-local
+single-flight guard that stops duplicate paid Claude sessions assumes one step-executing host).

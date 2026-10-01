@@ -76,6 +76,10 @@ const RUNTIME_FLAGS = {
   // OFF for all roles until rollout. Fail-closed: FLAG_GUIDED_TOUR=0 mirror (the
   // env fallback is role-blind, so keep it 0 until the Flagsmith feature is created).
   "guided-tour": "FLAG_GUIDED_TOUR",
+  // feat-pluggable-web-agent-engines — gates Codex rollout independently of
+  // registry capability, authorization, and qualification checks. Keep the
+  // env mirror default-off because it is role-blind during a Flagsmith outage.
+  "codex-engine": "FLAG_CODEX_ENGINE",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -88,9 +92,21 @@ export type Identity = {
   userId: string | null;
   role: Role;
   orgId: string | null;
+  // Additive fields for the dashboard chrome server-render (Phase 6,
+  // perf-dashboard-section-load-latency): email comes free from
+  // userData.user.email; subscriptionStatus rides the widened users select.
+  // ANON_IDENTITY keeps literal null for both (no widening of the anon shape).
+  email: string | null;
+  subscriptionStatus: string | null;
 };
 
-export const ANON_IDENTITY: Identity = { userId: null, role: "prd", orgId: null };
+export const ANON_IDENTITY: Identity = {
+  userId: null,
+  role: "prd",
+  orgId: null,
+  email: null,
+  subscriptionStatus: null,
+};
 
 function envIsOn(name: string): boolean {
   return process.env[name] === "1";
@@ -150,8 +166,9 @@ async function fetchRuntimeFlagsFromFlagsmith(
     // The page degrades gracefully via runtimeEnvFallback() below — this is a
     // recovered path, not a user-facing failure. Report at WARNING level and
     // debounce per-segment so a Flagsmith edge slowdown cannot burst Sentry.
-    // (The error-level, undebounced burst is what tripped the unrelated
-    // alert rule `auth-callback-no-code-burst`; Sentry ID
+    // (The error-level, undebounced burst fired `auth-callback-no-code-burst`,
+    // whose filters were empty 2026-05-17..06-02 so it matched every issue
+    // (#4781); Sentry ID
     // ac2d712121d94ad9ab154a16f6178fa7 / #4571.) Dedup key is the snapshot
     // cache key shape (role:orgId), never a userId — in-process, never emitted.
     mirrorWarnWithDebounce(
@@ -203,6 +220,43 @@ export async function isTeamWorkspaceInviteEnabled(orgId: string, identity: Iden
 export async function isByokDelegationsEnabled(orgId: string | null | undefined, identity: Identity): Promise<boolean> {
   if (!orgId) return false;
   return getRuntimeFlag("byok-delegations", identity);
+}
+
+/**
+ * Engine rollout mapping. A null entry means the reviewed engine is always
+ * available once registry capability checks pass; a runtime flag keeps an
+ * engine dark until its qualification and cohort gates are complete. Engines
+ * are deliberately fail-closed until they are registered here.
+ */
+const ENGINE_ROLLOUT_FLAGS: Readonly<Record<string, RuntimeFlagName | null>> = {
+  "claude-code": null,
+  codex: "codex-engine",
+};
+
+export async function isEngineRolloutEnabled(
+  engineId: string,
+  orgId: string | null | undefined,
+  identity: Identity,
+): Promise<boolean> {
+  const rolloutFlag = ENGINE_ROLLOUT_FLAGS[engineId];
+  if (rolloutFlag === undefined) return false;
+  if (rolloutFlag === null) return true;
+  if (!orgId || identity.orgId !== orgId) return false;
+  return getRuntimeFlag(rolloutFlag, identity);
+}
+
+/**
+ * feat-pluggable-web-agent-engines — internal Codex rollout gate.
+ *
+ * A workspace is required so anonymous or unbound requests cannot enter the
+ * rollout cohort. Dispatch still must resolve the persisted binding through
+ * the engine registry; this flag only controls cohort exposure.
+ */
+export async function isCodexEngineEnabled(
+  orgId: string | null | undefined,
+  identity: Identity,
+): Promise<boolean> {
+  return isEngineRolloutEnabled("codex", orgId, identity);
 }
 
 /**

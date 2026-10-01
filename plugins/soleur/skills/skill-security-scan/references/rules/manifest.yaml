@@ -4,8 +4,16 @@
 # mismatch fail-closes the scan to REVIEW with reason "rule pack tampered."
 # This prevents a poisoned rule pack from silently passing malicious skills.
 #
-# SHA computation: `sha256sum <file>` over raw bytes. .gitattributes pins LF
-# line-endings via `text=auto` so SHAs are reproducible cross-platform.
+# SHA computation: `sha256sum <file>` over raw bytes, as checked out.
+#
+# NO ATTRIBUTE PINS THOSE BYTES. This header used to claim `.gitattributes`
+# fixed LF line-endings via `text=auto`; measured 2026-09-19, `git check-attr
+# text -- <this file>` reported `unspecified` and the repo's .gitattributes
+# carried only three `merge=` lines (it has since been deleted with the merge
+# driver it configured, #8377). Reproducibility today rests on `core.autocrlf`
+# being unset, which is the default everywhere this repo is checked out but is
+# not enforced by anything in-tree. Tracked as a real gap, not fixed here: a
+# repo-wide `text=auto` renormalises every file and is not this change's call.
 #
 # Rule-pack edits MUST recompute SHAs in the same commit. Use:
 #

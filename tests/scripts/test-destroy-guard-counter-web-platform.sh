@@ -4,14 +4,15 @@
 # (allow-list, non-SSH resources only)" step). Closes #4419 (sibling of
 # #4420 — the github-infra widening).
 #
-# Five nested-block Cloudflare surfaces plus one reboot-update surface are
+# Six nested-block Cloudflare surfaces plus one reboot-update surface are
 # covered:
 #   1. cloudflare_ruleset.*                              .rules
 #   2. cloudflare_zero_trust_tunnel_cloudflared_config.* .config[0].ingress_rule
 #   3. cloudflare_zone_settings_override.*               .settings[0].security_header
 #   4. cloudflare_notification_policy.*                  .email_integration
 #   5. cloudflare_zero_trust_access_policy.*             .include
-#   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
+#   6. cloudflare_list.*                                 .item (#8364)
+#   7. hcloud_server.* reboot-forcing in-place update    placement_group_id /
 #                                                        server_type (#5911)
 #
 # Deterministic; no network. Uses synthesized fixtures plus one captured
@@ -46,7 +47,7 @@
 #   #         random_id.{b64_*,hex}, github_actions_secret.plaintext_value).
 #   #   (3) .planned_values / .prior_state mirror the same fields.
 #   # The filter only consumes .resource_changes[].change.actions and the
-#   # path-specific nested counts on the 5 vulnerable Cloudflare types — every
+#   # path-specific nested counts on the 6 vulnerable Cloudflare types — every
 #   # other key is dead weight.
 #   jq 'del(.variables, .planned_values, .prior_state, .configuration,
 #          .relevant_attributes)
@@ -148,7 +149,7 @@ _run_gate() {
   echo "$rdel:$ndel:$rupd:$dcount:$rc"
 }
 
-# 7th surface (#6416): the `host_creates` HALT. Deliberately a SECOND, SEPARATE
+# 8th surface (#6416): the `host_creates` HALT. Deliberately a SECOND, SEPARATE
 # rc source rather than a 6th field threaded through _run_gate, for two reasons:
 #
 #   1. _run_gate's "$rdel:$ndel:$rupd:$dcount:$rc" string encodes the ack
@@ -182,7 +183,7 @@ _run_host_creates_gate() {
   echo "$hc:$rc"
 }
 
-# 8th surface (#7695): the `luks_passphrase_rotations` HALT. Same shape and same reasoning as
+# 10th surface (#7695): the `luks_passphrase_rotations` HALT. Same shape and same reasoning as
 # _run_host_creates_gate above — a SECOND, ack-INDEPENDENT rc source, taking no head_msg
 # parameter, because the workflow's HALT never reads HEAD_MSG. Returns "lr:rc".
 _run_luks_rotation_gate() {
@@ -258,6 +259,36 @@ t_access_policy_include_removal_trips() {
     _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" ok
   else
     _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" fail "got '$out' want '0:1:0:1:1'"
+  fi
+}
+
+# T61: cloudflare_list item removal trips guard (#8364 — the 6th nested
+# surface). legal_redirects carries the whole bulk-redirect set; an item
+# leaving the array strands that legacy URL's edge 301 with no resource
+# delete and no reboot. items 3 → 2.
+t_list_item_removal_trips() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-cf-list-item-removal.json" "feat: drop a bulk redirect")
+  if [[ "$out" == "0:1:0:1:1" ]]; then
+    _report "T61 cloudflare_list.item removal trips guard (rdel=0 ndel=1 rupd=0 dcount=1 rc=1)" ok
+  else
+    _report "T61 cloudflare_list.item removal trips guard" fail "got '$out' want '0:1:0:1:1'"
+  fi
+}
+
+# T62: item ADDITION (the control arm — before=2, after=3) must NOT page the
+# destroy guard: select(. > 0) filters growth, dcount=0. Derived from the
+# removal fixture by swapping change.before/change.after, so the only variable
+# between T61 and this arm is the direction of the diff.
+t_list_item_addition_passes() {
+  local tmp; tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup; bounded (matches T55's pattern, #6734)
+  jq '.resource_changes[].change |= (. as $c | .before = $c.after | .after = $c.before)' \
+    "$FIXTURES/tfplan-cf-list-item-removal.json" > "$tmp"
+  local out; out=$(_run_gate "$tmp" "feat: add a bulk redirect")
+  rm -f "$tmp"
+  if [[ "$out" == "0:0:0:0:0" ]]; then
+    _report "T62 cloudflare_list item addition is ignored (rdel=0 ndel=0)" ok
+  else
+    _report "T62 cloudflare_list item addition is ignored" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -344,9 +375,9 @@ t_ack_destroy_substring_rejected() {
 }
 
 # ---------------------------------------------------------------------------
-# 6th surface (#5911): hcloud_server.* reboot-forcing in-place `update`.
+# 7th surface (#5911): hcloud_server.* reboot-forcing in-place `update`.
 # `placement_group_id` / `server_type` change → power-off reboot of the
-# RUNNING host with ZERO destroys — invisible to resource_deletes + the 5
+# RUNNING host with ZERO destroys — invisible to resource_deletes + the 6
 # Cloudflare nested clauses. reboot_updates (rupd) counts these. Reuses the
 # same `[ack-destroy]` gate (no new token; regex-parity still 6 sites).
 # ---------------------------------------------------------------------------
@@ -449,10 +480,10 @@ t_hcloud_reboot_ack_allows() {
 }
 
 # ---------------------------------------------------------------------------
-# 7th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
+# 8th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
 # hcloud_volume on the per-PR apply path.
 #
-# Why a 7th counter was needed: `-target` is transitive at the RESOURCE level, so
+# Why an 8th counter was needed: `-target` is transitive at the RESOURCE level, so
 # every allow-listed resource referencing ANY hcloud_server.web instance
 # (cloudflare_record.app at dns.tf:16, hcloud_firewall_attachment.web at
 # firewall.tf:93) pulls the whole for_each map — web-2 included. A pure create
@@ -470,7 +501,7 @@ t_hcloud_reboot_ack_allows() {
 # `hcloud_server.web["web-2"]` create — HALTs. Reuses the EXISTING
 # tfplan-hcloud-server-create.json fixture (measured host_creates=1); T18 above
 # asserts the same fixture is invisible to all three legacy counters, so this
-# pair is the whole argument for the 7th surface in two tests.
+# pair is the whole argument for the 8th surface in two tests.
 t_host_create_halts() {
   local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-create.json")
   if [[ "$out" == "1:1" ]]; then
@@ -860,6 +891,114 @@ t_deploy_pipeline_fix_carries_host_creates_halt() {
   fi
 }
 
+# ── T63 — deploy-pipeline-fix refuses non-terraform_data deletes (#8705). ─────
+#
+# That workflow's -targets reach hcloud_server.web["web-1"] and, through its user_data, every
+# credential the server's templatefile reads, so a pending credential rename plans as a replace
+# THERE, with no [ack-destroy] path and without re-firing the credential's SSH installers.
+# Mirrors the workflow block: counter from the shared filter, fail-closed numeric validation,
+# HALT on > 0. Returns "n:rc". Fixtures are synthesized inline (cq-test-fixtures-synthesized-only).
+_run_ntd_gate() {
+  local fixture="$1"
+  local counts n rc=0
+  if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
+    echo "ERROR:99"
+    return
+  fi
+  n=$(echo "$counts" | jq -r '.non_terraform_data_deletes')
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    echo "PARSE:1"
+    return
+  fi
+  if [[ "$n" -gt 0 ]]; then
+    rc=1
+  fi
+  echo "$n:$rc"
+}
+
+_ntd_case() {
+  local label="$1" plan="$2" want="$3" tmp out
+  tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup (T55's pattern)
+  printf '%s' "$plan" > "$tmp"
+  out=$(_run_ntd_gate "$tmp")
+  rm -f "$tmp"
+  if [[ "$out" == "$want" ]]; then
+    _report "$label" ok
+  else
+    _report "$label" fail "got '$out' want '$want'"
+  fi
+}
+
+t_non_terraform_data_deletes_counter() {
+  _ntd_case "T63a a doppler_service_token create_before_destroy replace counts 1 and HALTs" \
+    '{"resource_changes":[{"mode":"managed","type":"doppler_service_token","address":"doppler_service_token.fixture","change":{"actions":["create","delete"]}}]}' "1:1"
+  _ntd_case "T63b a terraform_data replace (this path's routine) counts 0" \
+    '{"resource_changes":[{"mode":"managed","type":"terraform_data","address":"terraform_data.fixture","change":{"actions":["delete","create"]}}]}' "0:0"
+  _ntd_case "T63c a forget of a non-terraform_data resource counts 1 and HALTs" \
+    '{"resource_changes":[{"mode":"managed","type":"hcloud_volume","address":"hcloud_volume.fixture","change":{"actions":["forget"]}}]}' "1:1"
+  _ntd_case "T63d a no-op and a create count 0" \
+    '{"resource_changes":[{"mode":"managed","type":"hcloud_server","address":"hcloud_server.fixture","change":{"actions":["no-op"]}},{"mode":"managed","type":"random_password","address":"random_password.fixture","change":{"actions":["create"]}}]}' "0:0"
+  local out
+  out=$(_run_ntd_gate "$FIXTURES/tfplan-hcloud-server-location-replace.json")
+  if [[ "$out" =~ ^[1-9][0-9]*:1$ ]]; then
+    _report "T63e the hcloud_server location-replace fixture HALTs" ok
+  else
+    _report "T63e the hcloud_server location-replace fixture HALTs" fail "got '$out'"
+  fi
+  out=$(_run_ntd_gate "$FIXTURES/tfplan-web-platform-real-baseline.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T63f the captured real baseline counts 0 (routine merges stay green)" ok
+  else
+    _report "T63f the captured real baseline counts 0" fail "got '$out' want '0:0'"
+  fi
+}
+
+t_deploy_pipeline_fix_carries_ntd_halt() {
+  local wf code halt_ln apply_ln
+  wf="${REPO_ROOT}/.github/workflows/apply-deploy-pipeline-fix.yml"
+  code="$(grep -vE '^[[:space:]]*#' "$wf" 2>/dev/null || true)"
+  if grep -qF "ntd_deletes=\$(echo \"\$counts\" | jq -r '.non_terraform_data_deletes') || ntd_rc=\$?" <<<"$code"; then
+    _report "T56e deploy-pipeline-fix parses .non_terraform_data_deletes with a guarded capture" ok
+  else
+    _report "T56e deploy-pipeline-fix parses .non_terraform_data_deletes" fail "no guarded jq -r '.non_terraform_data_deletes' capture"
+  fi
+  if grep -qF '[[ "$ntd_rc" -ne 0 || ! "$ntd_deletes" =~ ^[0-9]+$ ]]' <<<"$code"; then
+    _report "T56f deploy-pipeline-fix validates non_terraform_data_deletes (fail-CLOSED)" ok
+  else
+    _report "T56f deploy-pipeline-fix validates non_terraform_data_deletes" fail "missing the ^[0-9]+\$ / rc guard"
+  fi
+  # `|| true` inside the capture: under this suite's `set -e` a no-match grep would otherwise
+  # abort the run at the assignment, before the row that reports it.
+  halt_ln=$({ grep -nF '[[ "$ntd_deletes" -gt 0 ]]' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  apply_ln=$({ grep -nF 'terraform apply -auto-approve -input=false tfplan' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  if [[ -n "$halt_ln" && -n "$apply_ln" && "$halt_ln" -lt "$apply_ln" ]]; then
+    _report "T56g deploy-pipeline-fix HALTs on non_terraform_data_deletes > 0 before its apply" ok
+  else
+    _report "T56g deploy-pipeline-fix HALTs before its apply" fail "halt line='${halt_ln}' apply line='${apply_ln}'"
+  fi
+  local window
+  window="$(awk -v s="${halt_ln:-0}" 'NR >= s && NR < s + 8' <<<"$code")"
+  if [[ -n "$halt_ln" ]] && grep -qE '^[[:space:]]*exit 1$' <<<"$window"; then
+    _report "T56h the non_terraform_data_deletes HALT exits non-zero" ok
+  else
+    _report "T56h the non_terraform_data_deletes HALT exits non-zero" fail "no exit 1 within the HALT block"
+  fi
+  if grep -qF "rb_updates=\$(echo \"\$counts\" | jq -r '.reboot_updates') || rb_rc=\$?" <<<"$code" \
+     && grep -qF '[[ "$rb_rc" -ne 0 || ! "$rb_updates" =~ ^[0-9]+$ ]]' <<<"$code"; then
+    _report "T56i deploy-pipeline-fix parses and validates .reboot_updates (fail-CLOSED)" ok
+  else
+    _report "T56i deploy-pipeline-fix parses and validates .reboot_updates" fail "no guarded, validated capture"
+  fi
+  local rb_ln
+  rb_ln=$({ grep -nF '[[ "$rb_updates" -gt 0 ]]' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  window="$(awk -v s="${rb_ln:-0}" 'NR >= s && NR < s + 5' <<<"$code")"
+  if [[ -n "$rb_ln" && -n "$apply_ln" && "$rb_ln" -lt "$apply_ln" ]] && grep -qE '^[[:space:]]*exit 1$' <<<"$window"; then
+    _report "T56j deploy-pipeline-fix HALTs on reboot_updates > 0 before its apply" ok
+  else
+    _report "T56j deploy-pipeline-fix HALTs on reboot_updates > 0 before its apply" fail "reboot line='${rb_ln}' apply line='${apply_ln}'"
+  fi
+}
+
 # ── T55 — the host_creates arm is hcloud_server-scoped (#6919). ──────────────
 #
 # host_creates counts hcloud_server BIRTHS only. hcloud_volume was DROPPED from
@@ -930,6 +1069,8 @@ t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
 t_notification_email_removal_trips
 t_access_policy_include_removal_trips
+t_list_item_removal_trips
+t_list_item_addition_passes
 t_no_changes_passes
 t_ruleset_resource_delete_no_double_count
 t_mixed_delete_and_nested
@@ -964,6 +1105,8 @@ t_web2_retire_server_replace_aborts
 t_apply_job_host_creates_halt_job_scoped
 t_volume_create_does_not_trip_host_birth_halt
 t_deploy_pipeline_fix_carries_host_creates_halt
+t_non_terraform_data_deletes_counter
+t_deploy_pipeline_fix_carries_ntd_halt
 
 
 # ── #7695: the LUKS passphrase HALT ──────────────────────────────────────────────
@@ -1465,16 +1608,18 @@ t_apply_job_luks_halt_job_scoped
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((pass + fail))
 # Measured on the as-written suite after the origin/main merge: 49 shared with the merge base,
-# + 9 added by this branch, + 15 added by main (PR4b/AC72) = 73. Exact, not a ceiling: deleting a
-# single arm invocation reports "only 72 assertions ran, floor is 75".
+# + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
+# + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
+# delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 88 assertions ran, floor is 89".
 # current count rather than leaving slack — the review panel showed 3 assertions
 # of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
 # is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 75 ]]; then
+if [[ "$_ran" -lt 89 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 75. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 89. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 75)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 89)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

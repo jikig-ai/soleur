@@ -52,6 +52,14 @@
 # intentionally omitted (see the CodeQL block above). Enforced file-vs-file by
 # plugins/soleur/test/required-checks-canonical-parity.test.sh. Grouped below to
 # mirror infra/github/ruleset-ci-required.tf tiers for legibility.
+#
+# `test` is a CONTENT-SCOPED fabrication since #6907: its needs: include the
+# encryption-posture ledger sweep, so a bot PR's synthetic `test` green is
+# sound only while the bot action's ALLOWED_PATHS ({weakness-digest.md}) stays
+# disjoint from the sweep's surface (the ledger, every *.tf, every file under
+# apps/*/infra/, and the docs/legal/ disclosed_as anchors). Re-derive that
+# intersection before widening ALLOWED_PATHS; see the ADR-140 addendum of
+# 2026-09-23.
 test
 dependency-review
 e2e
@@ -77,7 +85,8 @@ Bash fixture tests for guard scripts
 #   knowledge-base/project/weakness-digest.md  — a .md file, but knowledge-base/project/
 #                                                is excluded in .markdownlintignore, so
 #                                                the sweep never reads it.
-#   knowledge-base/project/rule-metrics.json   — not Markdown at all.
+#   (knowledge-base/project/rule-metrics.json was a second member and was "not Markdown at
+#   all"; #8377 untracked it and removed it from the array entirely.)
 #
 # Measured against the live producer: the swept set is 1,345 files and its
 # intersection with ALLOWED_PATHS is 0. A bot PR therefore cannot change a file
@@ -132,7 +141,12 @@ adr-ordinals
 # ⚠ FABRICATED-NOT-EARNED for bot PRs (#6049 auto-fabrication guard): this is a
 # CONTENT-scoped gate, but the bot composite action does NOT reproduce it in its
 # Phase-4 ceiling — so the synthetic green is unconditional. This is SOUND ONLY
-# because the action's ALLOWED_PATHS = {weakness-digest.md, rule-metrics.json}
+# because the action's ALLOWED_PATHS = {weakness-digest.md}
+# (#8377 removed knowledge-base/project/rule-metrics.json from that array when it
+# became an untracked cache. Every intersection below is unchanged: dropping a member
+# can only shrink an intersection, never grow one. The premises are restated from the
+# current array rather than carried, because a premise naming a set that no longer
+# exists reads as verified and is not.)
 # makes AGENTS.rules.md physically unreachable by every bot PR today,
 # so no bot can weaken a rule body under a fabricated green. The residual goes
 # LIVE the instant #6038's auto-proposer adds an AGENTS path to ALLOWED_PATHS —
@@ -146,7 +160,7 @@ rule-body-lint
 # contract + /go golden-path eval. Always-runs; installs Grok CLI on ubuntu-latest.
 grok-fidelity
 
-# #4384 — legal-doc-cross-document-gate.yml jobs.enforce. Always-runs (no
+# #4384 — pr-quality-guards.yml jobs.enforce (folded from legal-doc-cross-document-gate.yml, #8902). Always-runs (no
 # path filter post-#4384) — synthetic needed for bot PRs only.
 enforce
 # #5585 — tenant-integration.yml jobs.tenant-integration-required. Always-run
@@ -163,8 +177,8 @@ tenant-integration-required
 # rule-body-lint above, not by exemption. This gate asks "does this PR's plan
 # destroy a Sentry resource without an acknowledgement?", which is a question
 # about the diff, so a fabricated green is only sound if no bot PR can produce a
-# destroying diff. It cannot: the action's ALLOWED_PATHS = {weakness-digest.md,
-# rule-metrics.json} makes apps/web-platform/infra/sentry/** physically
+# destroying diff. It cannot: the action's ALLOWED_PATHS = {weakness-digest.md}
+# makes apps/web-platform/infra/sentry/** physically
 # unreachable by every bot PR, and the action exits 1 on any path outside that
 # set. A full-root plan over a bot diff is therefore vacuously non-destroying,
 # and the synthetic green asserts something true.
@@ -223,8 +237,7 @@ credential-path-guard
 # inherited, per the ADR-139 instruction that the intersection test is per-gate:
 #
 #   SCAN_DIRS  = { infra/github/soleur-marketplace-manifest.json }  (one file)
-#   ALLOWED_PATHS = { knowledge-base/project/weakness-digest.md,
-#                     knowledge-base/project/rule-metrics.json }
+#   ALLOWED_PATHS = { knowledge-base/project/weakness-digest.md }
 #   ALLOWED_PATHS ∩ SCAN_DIRS = ∅
 #
 # So no bot PR can modify this gate's guarded surface, and its synthetic green
@@ -234,6 +247,35 @@ credential-path-guard
 # fixed file, so unlike weakness-digest.md its reachability cannot widen via a
 # generator's output format, only via ALLOWED_PATHS itself.
 marketplace-manifest-guard
+
+# #8203 — vendor-pin-verify.yml `vendor-pin-required` job. Always-run
+# aggregator (third instance of the #5585 pattern — sentry-destroy-required
+# was the second, #6589) that wraps the
+# path-gated `verify-upstream-blobs` job — the CI enforcement of the #8181
+# NOTICE path+commit+blob binding. Born blocking: before this entry the
+# binding's context was never required, so a red could merge.
+#
+# ⚠ CONTENT-SCOPED — TWO synthetic paths, BOTH dispositions re-derived, not
+# inherited (ADR-139 per-gate rule):
+#
+#   1. Composite action (bot-pr-with-synthetic-checks/action.yml): CHECK_NAMES
+#      derives from THIS file, so the action will post a synthetic green for
+#      vendor-pin-required on its PRs. Sound by UNREACHABILITY only —
+#      ALLOWED_PATHS = {knowledge-base/project/weakness-digest.md} and the guarded surface is
+#      plugins/soleur/skills/** → intersection ∅. If ALLOWED_PATHS ever gains
+#      a vendored-surface path, this synthetic becomes a fabricated binding
+#      result and the gate must be reproduced in the action's Phase-4
+#      ceiling BEFORE the path lands.
+#
+#   2. Inngest SYNTHETIC_CHECK_NAMES (apps/web-platform/server/inngest/
+#      functions/_cron-safe-commit.ts): vendor-pin-required is DELIBERATELY
+#      ABSENT. The content-vendor-drift cron is the one synthetic consumer
+#      whose PRs DO touch the vendored surface — it pushes with an App token
+#      that triggers real CI (#8166), so the check is EARNED by a real
+#      verify-upstream-blobs run. Adding the name would fabricate the
+#      binding result on exactly the re-vendor PRs the gate exists to
+#      protect. Do not add it.
+vendor-pin-required
 
 # CLA Required ruleset
 cla-check

@@ -53,20 +53,23 @@ jobs:
       # Count the candidate pool BEFORE the drain. `closed` is derived as a
       # delta rather than self-reported by the agent: a runner that reports its
       # own success is the shape this PR exists to remove.
+      # `-label:keep-open` (both here and in the post-count) excludes the
+      # standing measurement issue, which IS machinery and carries the
+      # kill-switch -- without it the instrument sits in its own pool forever.
       - name: Count machinery candidates (pre-drain)
         id: pre
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          n="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22" --jq '.total_count')"
+          n="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22+-label:keep-open" --jq '.total_count')"
           echo "candidates=$n" >> "$GITHUB_OUTPUT"
           echo "candidate pool: $n"
 
       - name: Drain the machinery ledger
         id: drain
         continue-on-error: true
-        uses: anthropics/claude-code-action@5aa6f47e977fec3321f32c06d8076b1f503f832c # v1.0.161
+        uses: anthropics/claude-code-action@20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # `--headless` is load-bearing, not decoration: without it the skill
@@ -75,7 +78,7 @@ jobs:
           prompt: '/soleur:drain-labeled-backlog --label meta/machinery --headless'
           # Explicit model pin (ADR-053) -- an unpinned model drifts with action
           # releases, which is an unbounded per-run spend surface on a weekly cron.
-          claude_args: '--model claude-sonnet-5'
+          claude_args: '--model claude-sonnet-5-5'
 
       # THE FLOOR, and it is gated on candidate SUPPLY. Without that arm the
       # floor is unsatisfiable-by-construction the moment the backlog is
@@ -91,7 +94,7 @@ jobs:
           FLOOR: ${{ env.MACHINERY_DRAIN_CLOSING_FLOOR }}
         run: |
           set -euo pipefail
-          after="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22" --jq '.total_count')"
+          after="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22+-label:keep-open" --jq '.total_count')"
           closed=$(( BEFORE - after ))
           [ "$closed" -lt 0 ] && closed=0
           echo "before=$BEFORE after=$after closed=$closed floor=$FLOOR"
@@ -170,8 +173,12 @@ jobs:
             gh issue comment "$existing" --body "$body"
             echo "updated standing issue #$existing"
           else
+            # `keep-open` is the drain kill-switch (group-by-area.sh excludes it
+            # from every candidate set; the sweeper skips it): the standing
+            # issue is machinery, so without it the weekly drain would close its
+            # own measurement surface.
             gh issue create --title "$TITLE" --body "$body" \
-              --label meta/machinery --milestone "Post-MVP / Later"
+              --label meta/machinery --label keep-open --milestone "Post-MVP / Later"
             echo "created the standing issue (first run only)"
           fi
 

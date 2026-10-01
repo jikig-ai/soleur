@@ -131,12 +131,17 @@ export function formatSkillInvocation(skill: string, args?: string): string {
   }
 
   if (harness === "devin") {
-    const skillId = `soleur:${name}`;
-    return trimmedArgs ? `${skillId} (args: ${trimmedArgs})` : skillId;
+    const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
+    return command;
   }
 
-  const skillId = `soleur:${name}`;
-  return trimmedArgs ? `${skillId} (args: ${trimmedArgs})` : skillId;
+  // Claude's operator-typed form is the slash command, exactly as the codex/grok/devin arms
+  // above give theirs. This used to return `soleur:<name> (args: <x>)` — a DISPLAY string no
+  // operator can type — while ADR-226 §4 and the `operator-typed-render` blocks in ten skills
+  // cite this function as the thing that produces a typeable form. The blocks were right about
+  // the contract and the claude arm was the outlier (#8299).
+  const command = `/soleur:${name}`;
+  return trimmedArgs ? `${command} ${trimmedArgs}` : command;
 }
 
 /**
@@ -147,7 +152,7 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
   const name = normalizeSkillName(skill);
   const trimmedArgs = args?.trim();
 
-  const pipelineSuffix = pipelineInvocationSuffix(name);
+  const pipelineSuffix = pipelineInvocationSuffix(name, harness);
 
   if (harness === "codex") {
     return {
@@ -171,23 +176,23 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
       command,
       args: trimmedArgs,
       instruction:
-        `Invoke the registered skill via slash command \`${command}\`. ` +
-        "Do NOT improvise workflow steps — run the skill to completion." +
+        `Read \`plugins/soleur/skills/${name}/SKILL.md\` in this process and run it to completion ` +
+        `(Grok has no nested Skill/slash tool; \`/${name}\` names the skill, it is not a nested tool_use). ` +
+        "Do NOT improvise a subset of its steps." +
         pipelineSuffix,
     };
   }
 
   if (harness === "devin") {
-    const command = `soleur:${name}`;
+    const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
     return {
       harness,
-      tool: "Skill",
+      tool: "slash_command",
       command,
       args: trimmedArgs,
       instruction:
-        `Invoke via the **Skill tool** with skill \`${command}\`` +
-        (trimmedArgs ? ` and args: \`${trimmedArgs}\`` : "") +
-        ". Do NOT improvise workflow steps." +
+        `Invoke the registered skill via the \`${command}\` slash command. ` +
+        "Do NOT improvise workflow steps — run the skill to completion." +
         pipelineSuffix,
     };
   }
@@ -369,7 +374,7 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Grok Build)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **Shell** with adequate `block_until_ms` for short `gh` probes.",
-        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `Merge poll timed out`, `\\[ship\\.phase7\\.`, `\\[pr-behind-sync\\] kind=`, `postmerge verification complete`.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/ship` merge: poll release workflows, invoke `/postmerge <PR>`, then emit `<promise>DONE</promise>`.",
         "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",
@@ -382,7 +387,35 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Devin CLI)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **exec** with adequate timeout for short `gh` probes.",
-        "- Use **get_output** with timeout for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        // SOLEUR-DEBT: partially live-verified. Measured 2026-09-23 on Devin CLI
+        // 3000.11.1 (authenticated, `devin -p` in a scratch repo): `run_subagent` DOES
+        // arm a background subagent and the parent continues — "Subagent <id> is running
+        // in the background". The wake-on-completion half is NOT yet verified: the
+        // probe's foreground step hit headless mode's confirmation gate ("rejected a
+        // tool call that requires confirmation"), and finishing it needs
+        // `--permission-mode dangerous`, which auto-approves every tool.
+        // The claim this bullet replaces — that `get_output` cannot wait — is fully
+        // measured (devin/INSTRUCTIONS.md §Polling, envelope-capture §7).
+        // Upgrade trigger: re-run the probe under a permission mode that admits the
+        // foreground write, or from an interactive trusted session. The measurement
+        // lives in `devin/INSTRUCTIONS.md` §Polling with an amendment to ADR-223 (Devin
+        // wire names) — NOT in ADR-245, which states in as many words that the wait
+        // primitive is a fact about Devin's TOOLS rather than about that decision.
+        // #8390 item 2 is the origin.
+        //
+        // The hedge is MIRRORED into the emitted bullets below on purpose. A caveat that
+        // lives only here is invisible to the agent that runs the string, and this one
+        // changes what the agent should do when the wake does not arrive.
+        //
+        // What is deliberately NOT mirrored: a bullet saying "`get_output` is not a
+        // fallback". harness.test.ts asserts this string never contains `get_output` at
+        // all, and that negative over the whole string is a stronger guard than any
+        // phrase match that would have to replace it. The measurement it rests on lives
+        // in `devin/INSTRUCTIONS.md` §Polling. Do not re-add the bullet to be helpful.
+        "- Arm the wait as a background **run_subagent** running an exit-coded poll loop: one exit code per actionable transition (`MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`, check failure). Its completion notification is the only wake primitive, so the loop must EXIT to report.",
+        "- Give the loop its own **bounded** exits, so a wait that ends without a transition is still diagnosable: a deadline exit (`Merge poll timed out`) and a probe-error exit (`gh` non-zero N consecutive ticks). An unbounded loop cannot report at all, because only its exit wakes you.",
+        "- **Partially verified, and this is the part to watch.** Arming IS measured: on Devin CLI 3000.11.1 `run_subagent` returns immediately and the parent continues. Waking the parent on that subagent's completion is NOT yet measured end to end. So treat a missing wake as possible, not impossible: if no notification has arrived by the deadline you set, fall back to foreground **exec** `gh` probes on your own cadence and say in the deliverable that the wait ran foreground. Never report a merge or a deploy you did not observe.",
+        "- Mutations (`gh pr update-branch`, the merge itself) stay in the foreground — never inside the waiting subagent.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/soleur:ship` merge: poll release workflows, invoke `/soleur:postmerge <PR>`, then emit `<promise>DONE</promise>`.",
         "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",
@@ -436,10 +469,10 @@ export function routingInstructions(harness: Harness): string {
     case "grok":
       return [
         "**Harness: Grok Build**",
-        "- Skills: **slash commands** — `/brainstorm`, `/one-shot`, `/plan`, etc.",
+        "- Skills: any `soleur:<name>` in any Soleur doc names a skill — Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion. Slash `/<skill>` names the skill; it is not a nested tool_use.",
         "- Agents: **spawn_subagent** (not Task). Use `spawnAgent()` so registry colon ids map to hyphen filename stems (`soleur:product:cpo` → `soleur-product-cpo`).",
         "- Commands: `/go`, `/sync`, `/help` — **not** `/soleur:go`.",
-        "- **Never improvise** — invoke the registered slash command or subagent.",
+        "- **Never improvise** — Read the registered SKILL.md or spawn the subagent; do not invent a nested Skill tool.",
         "",
         fidelity,
         "",
@@ -449,10 +482,10 @@ export function routingInstructions(harness: Harness): string {
     case "devin":
       return [
         "**Harness: Devin CLI**",
-        "- Skills: **Skill tool** with `soleur:<skill>` namespace.",
+        "- Skills: **slash commands** — `/soleur:<skill>` (e.g. `/soleur:one-shot`, `/soleur:brainstorm`).",
         "- Agents: **run_subagent** with agent id.",
         "- Commands: `/soleur:go`, `/soleur:sync`, `/soleur:help`.",
-        "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke it.",
+        "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke the slash command or subagent.",
         "- Read devin/INSTRUCTIONS.md in the installed plugin for tool and path mappings.",
         "",
         fidelity,
@@ -464,7 +497,7 @@ export function routingInstructions(harness: Harness): string {
       return [
         "**Harness: unknown** — default to Claude conventions.",
         "- Skills: Skill tool (`soleur:<skill>`). Agents: Task tool.",
-        "- If tools are missing, run `grok inspect` and `grok --trust` from repo root.",
+        "- If tools are missing, run `grok inspect` from repo root. Live CLI 1.0.29 has no `--trust` flag — do not invent one.",
         "",
         fidelity,
         "",

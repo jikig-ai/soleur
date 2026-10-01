@@ -23,6 +23,7 @@ export class KbErrorBoundary extends Component<
               Something went wrong loading this content.
             </p>
             <button
+              data-button-exempt="accent-gold inline text-link — no Button variant covers underlined text-link styling"
               onClick={() => this.setState({ hasError: false })}
               className="mt-2 text-sm text-soleur-accent-gold-fg underline hover:text-soleur-accent-gold-text"
             >

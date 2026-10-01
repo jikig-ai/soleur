@@ -1,0 +1,42 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_list.legal_redirects",
+      "mode": "managed",
+      "type": "cloudflare_list",
+      "name": "legal_redirects",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "list-id-legal-redirects",
+          "account_id": "redacted-cf-account-id",
+          "name": "legal_redirects",
+          "kind": "redirect",
+          "description": "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + reslugs + tombstones (#8364).",
+          "item": [
+            {"value": [{"redirect": [{"source_url": "soleur.ai/pages/legal/privacy-policy.html", "target_url": "https://soleur.ai/legal/privacy-policy/", "status_code": 301, "include_subdomains": "enabled", "preserve_query_string": "enabled"}]}]},
+            {"value": [{"redirect": [{"source_url": "soleur.ai/pages/legal/cookie-policy.html", "target_url": "https://soleur.ai/legal/cookie-policy/", "status_code": 301, "include_subdomains": "enabled", "preserve_query_string": "enabled"}]}]},
+            {"value": [{"redirect": [{"source_url": "soleur.ai/pages/legal/gdpr-policy.html", "target_url": "https://soleur.ai/legal/gdpr-policy/", "status_code": 301, "include_subdomains": "enabled", "preserve_query_string": "enabled"}]}]}
+          ]
+        },
+        "after": {
+          "id": "list-id-legal-redirects",
+          "account_id": "redacted-cf-account-id",
+          "name": "legal_redirects",
+          "kind": "redirect",
+          "description": "Legacy /pages/legal/*.html -> /legal/<slug>/ 301s + reslugs + tombstones (#8364).",
+          "item": [
+            {"value": [{"redirect": [{"source_url": "soleur.ai/pages/legal/privacy-policy.html", "target_url": "https://soleur.ai/legal/privacy-policy/", "status_code": 301, "include_subdomains": "enabled", "preserve_query_string": "enabled"}]}]},
+            {"value": [{"redirect": [{"source_url": "soleur.ai/pages/legal/cookie-policy.html", "target_url": "https://soleur.ai/legal/cookie-policy/", "status_code": 301, "include_subdomains": "enabled", "preserve_query_string": "enabled"}]}]}
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

@@ -32,8 +32,8 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${GH_TOKEN:+x}${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, GH_TOKEN, SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${GH_TOKEN:+x}${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, GH_TOKEN, SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
@@ -99,6 +99,12 @@ fi
 # `fromjson? | .raw | fromjson?` inside ONE filter keeps the decoded value a
 # single jq value: the trailing garbage makes `fromjson` fail, and `?` drops
 # the row closed. Do not split this back into two stages.
+# The pino payload sits under `.message` of the decoded `raw` on the live
+# source (measured 2026-09-12: 11/11 DAILY rows nested, 0 at the top level),
+# so the producer fields are read from `.message` when it is an object and
+# from the top level otherwise. Reading only the top level made this probe
+# report ZERO_PRODUCER_ROWS on every sweep while the producer was alive
+# (#8074 review).
 # Emit "<dt>\t<status>" and sort on dt HERE rather than trusting the query's
 # output order. betterstack-query.sh does emit an outer `ORDER BY dt ASC`
 # today, but that is a cross-script coupling held by a comment with no
@@ -106,7 +112,7 @@ fi
 # the OLDEST row, so an active key revocation (ok newest → dark) would invert
 # into PASS and auto-close #6297. The rows already carry dt; use it.
 PRODUCER=$(printf '%s\n' "$OUT" \
-  | jq -R -r 'fromjson? | . as $r | ($r.raw // empty | fromjson? | select(.SOLEUR_CLAUDE_COST_DAILY == true and .component == "claude-cost") | .status // "unknown") as $s | "\($r.dt)\t\($s)"' 2>/dev/null \
+  | jq -R -r 'fromjson? | . as $r | ($r.raw // empty | fromjson? | ((.message | select(type == "object")) // .) | select(.SOLEUR_CLAUDE_COST_DAILY == true and .component == "claude-cost") | .status // "unknown") as $s | "\($r.dt)\t\($s)"' 2>/dev/null \
   | LC_ALL=C sort \
   || true)
 
@@ -124,22 +130,30 @@ if (( ROWS == 0 )); then
   # Stack shows nothing, the producer is alive and the SHIPPING path is broken
   # — a real fault the Sentry cron monitor cannot see (its check-in succeeded,
   # so it stays GREEN in exactly this mode).
-  if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-    echo "  Sentry cross-check skipped: SENTRY_AUTH_TOKEN not set."
+  if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
+    echo "  Sentry cross-check skipped: SENTRY_ACTIONS_RO_TOKEN not set."
   else
-    SENTRY_HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
-    SENTRY_ORG="${SENTRY_ORG:-jikigai-eu}"
+    readonly SENTRY_HOST_PINNED="jikigai-eu.sentry.io"
+    readonly SENTRY_ORG_PINNED="jikigai-eu"
+    SENTRY_HOST="${SENTRY_API_HOST:-$SENTRY_HOST_PINNED}"
+    SENTRY_ORG="${SENTRY_ORG:-$SENTRY_ORG_PINNED}"
+    # Rule D pin (ADR-202): both are env-settable and carry a live credential, so each is
+    # adjudicated against the ONE literal it may take before the credentialed call.
+    if [[ "$SENTRY_HOST" != "$SENTRY_HOST_PINNED" || "$SENTRY_ORG" != "$SENTRY_ORG_PINNED" ]]; then
+      echo "TRANSIENT: refusing an unpinned Sentry destination (host=${SENTRY_HOST} org=${SENTRY_ORG}; pinned to ${SENTRY_HOST_PINNED} / ${SENTRY_ORG_PINNED})" >&2
+      exit 2
+    fi
     # --fail is load-bearing: without it curl exits 0 on 4xx and jq's
     # `(.data[0]["count()"] // 0)` maps an {"detail":"Invalid token"} body to
     # "0" — so an auth failure would be reported as a substantive zero events.
-    SC=$(curl -sS --fail --max-time 25 -G \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    SC=$(curl --disable --noproxy '*' -sS --fail --max-time 25 -G \
+      -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
       --data-urlencode 'field=count()' \
       --data-urlencode 'query=op:anthropic-admin-key-missing' \
       --data-urlencode 'statsPeriod=48h' \
       "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/events/" 2>/dev/null \
       | jq -r '(.data[0]["count()"] // 0) | tostring' 2>/dev/null || echo "")
-    if [[ -z "$SC" ]]; then
+    if [[ -z "${SC:-}" ]]; then
       echo "  Sentry cross-check inconclusive (query failed)."
     elif [[ "$SC" == "0" ]]; then
       # Do NOT conclude "the producer is not running". This tag is emitted ONLY

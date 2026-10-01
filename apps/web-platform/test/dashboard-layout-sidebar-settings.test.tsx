@@ -93,14 +93,21 @@ afterEach(() => {
 });
 
 async function renderDashboard() {
-  const { default: DashboardLayout } = await import(
-    "@/app/(dashboard)/layout"
+  // Phase 6: the (dashboard) layout is an async server component feeding the
+  // client DashboardShell — tests render the shell directly with the props
+  // the layout used to resolve via mount effects (admin check + users row).
+  const { DashboardShell } = await import(
+    "@/app/(dashboard)/dashboard-shell"
   );
   return render(
     <Wrap>
-      <DashboardLayout>
+      <DashboardShell
+        isAdmin={false}
+        userEmail={null}
+        subscriptionStatus={null}
+      >
         <div data-testid="page">page</div>
-      </DashboardLayout>
+      </DashboardShell>
     </Wrap>,
   );
 }

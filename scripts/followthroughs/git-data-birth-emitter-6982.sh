@@ -10,7 +10,7 @@
 #
 # THREE-STATE CONTRACT (the repo's documented convention — see
 # chardevice-wedge-nonrecurrence-5934.sh):
-#   0 = PASS      — >= 1 boot_complete event, all four assertions positive.
+#   0 = PASS      — >= 1 boot_complete event, every terminal assertion positive.
 #   1 = FAIL      — an event exists with a FALSE assertion (the host booted dark).
 #   2 = TRANSIENT — the host is still unborn, or the query is unreachable/unauthorised.
 #
@@ -19,16 +19,26 @@
 # a genuine post-birth boot failure produces, training the reader to ignore the one signal
 # that matters. `REOPEN_MAX` caps only the closed path, so the open path has no brake.
 #
-# IT READS BETTER STACK, NOT SENTRY, and that is forced rather than chosen: the sweeper
-# passes SENTRY_AUTH_TOKEN (from SENTRY_IAC_AUTH_TOKEN), which scripts/sentry-issue.sh's own
-# header records as 403-ing on `event:read` — that script needs SENTRY_ISSUE_RO_TOKEN, which
-# the sweeper does not pass. The BETTERSTACK_QUERY_* triple below is what the sweeper
-# actually has, which is what makes this probe executable AT ALL rather than silently
-# failing on an unknown secret name.
+# IT READS BETTER STACK, NOT SENTRY, and that is forced rather than chosen: this probe was
+# written when the sweeper's Sentry credential lacked the scope scripts/sentry-issue.sh
+# needs (that script's own header records the 403), and the read-only inline credential it
+# does need is not one the sweeper forwards. The BETTERSTACK_QUERY_* triple below is what
+# the sweeper actually has, which is what makes this probe executable AT ALL rather than
+# silently failing on an unknown secret name. (The sweeper's Sentry credential is now the
+# org-level actions integration, ADR-031 -- this probe still has no reason to use it.)
 #
 # It deliberately does NOT read the heartbeat API: `status == "up"` proves reachability,
 # the proxy D-HB rejects (a host whose LUKS never mounted still answers on :22).
 set -uo pipefail
+
+# REFUSE TO RUN UNDER XTRACE (#7797) -- unconditionally, not behind a `${VAR:+x}` hatch:
+# the credentials below are bound by INDIRECT expansion (`${!v:-}`), which xtrace prints
+# as the VALUE, and a conditional hatch keyed on one literal name cannot cover an
+# indirection. `$-` is the load-bearing arm: bash applies an env-supplied SHELLOPTS or
+# BASH_ENV before line 1, so `x` is already set by the time this runs.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script binds live credentials by indirect expansion and -x would print them (see #7797)\n' >&2; exit 78 ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${REPO_ROOT}/scripts/betterstack-query.sh"
@@ -62,7 +72,11 @@ SQL="
          JSONExtractString(raw,'repo_root')    AS repo_root,
          JSONExtractString(raw,'hooks_path')   AS hooks_path,
          JSONExtractString(raw,'provision')    AS provision,
-         JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
+         JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
+         JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit,
+         JSONExtractString(raw,'fence_on_mapper') AS fence_on_mapper,
+         JSONExtractString(raw,'erasure_probe') AS erasure_probe,
+         JSONExtractString(raw,'plaintext_empty') AS plaintext_empty
   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
   WHERE dt > now() - INTERVAL 30 DAY
@@ -92,13 +106,24 @@ fi
 
 # An event with a FALSE assertion is the FAIL case: the bootstrap reached its final stage
 # with an invariant unmet, which is precisely the dark boot the interlock exists to catch.
+#
+# (#8211) THE PROJECTION IS THE PREDICATE. This arm greps the ROW, so a boolean the SELECT
+# above does not project is absent from every row and can never read `no` however dark the
+# boot was. fence_on_mapper, erasure_probe and plaintext_empty are therefore projected: each
+# is MEASURED by the bootstrap (the fence's findmnt SOURCE, a real erasure run as `git`, the
+# read-only plaintext count), so unlike its literal siblings a `no` here is real news.
+# The informational plaintext_volume (present|absent), served_repos (<n>) and (#5274)
+# plaintext_journal (dirty|clean|absent) are deliberately NOT projected: neither is a yes/no assertion, a non-zero served_repos is already a bootstrap
+# FATAL (luks_residue), and pulling them into a whole-row word match would only add ways for
+# this arm to fire on a value that is not a refusal.
 if printf '%s' "$out" | grep -qE '\bno\b'; then
   echo "FAIL: a boot_complete event carries a FALSE assertion — the host booted with an"
-  echo "unmet invariant (LUKS mount, repo root, hooksPath or provision wrapper)."
+  echo "unmet invariant (LUKS mount, repo root, hooksPath, provision wrapper, the boot-time"
+  echo "reopen unit, the fence on the mapper, the erasure probe or the plaintext check)."
   printf '%s\n' "$out" | head -20
   exit 1
 fi
 
-echo "PASS: stage:boot_complete observed from soleur-git-data with all four assertions positive."
+echo "PASS: stage:boot_complete observed from soleur-git-data with every terminal assertion positive."
 printf '%s\n' "$out" | head -5
 exit 0

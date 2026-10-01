@@ -43,32 +43,40 @@ describe("likec4 CLI / client-renderer version parity", () => {
   });
 
   // The C4 auto-regen tooling adds two EXECUTABLE surfaces that render the model
-  // with the pinned CLI: scripts/regenerate-c4-model.sh (pre-commit hook + ad-hoc)
+  // with the pinned CLI: plugins/soleur/scripts/render-c4-model.sh (pre-commit hook via the
+  // scripts/regenerate-c4-model.sh wrapper, the merge resolver, ad-hoc)
   // and the .github/workflows/ci.yml freshness-test install. If either drifts from
   // the Dockerfile/package.json pin, the committed model.likec4.json is rendered by
   // a skewed CLI and the runtime client renderer mismatches. tsc can't catch a bash
   // literal or a YAML step — only this source-read parity assertion can.
-  it("scripts/regenerate-c4-model.sh and ci.yml pin the same likec4 version as the Dockerfile", () => {
+  it("render-c4-model.sh and ci.yml pin the same likec4 version as the Dockerfile", () => {
     const dockerfile = read("Dockerfile");
     const cliVersion = dockerfile.match(
       /npm install -g likec4@([0-9][^\s"'`]*)/,
     )![1];
 
-    const script = readRepo("scripts/regenerate-c4-model.sh");
+    const script = readRepo("plugins/soleur/scripts/render-c4-model.sh");
     const scriptMatch = script.match(/LIKEC4_VERSION="([0-9][^\s"'`]*)"/);
     expect(
       scriptMatch,
-      "regenerate-c4-model.sh must pin LIKEC4_VERSION=\"<version>\"",
+      "render-c4-model.sh must pin LIKEC4_VERSION=\"<version>\"",
     ).toBeTruthy();
     expect(scriptMatch![1]).toBe(cliVersion);
 
     const ci = readRepo(".github/workflows/ci.yml");
-    const ciMatch = ci.match(/npm install -g likec4@([0-9][^\s"'`]*)/);
+    // matchAll, not match: `test-scripts-heavy` installs likec4 too, so ci.yml
+    // carries THREE `npm install -g likec4@` lines (test-webplat, test-scripts, test-scripts-heavy) — a first-match read would
+    // never see the second copy drift.
+    const ciMatches = [
+      ...ci.matchAll(/npm install -g likec4@([0-9][^\s"'`]*)/g),
+    ];
     expect(
-      ciMatch,
+      ciMatches.length,
       "ci.yml must install a pinned `likec4@<version>` for the freshness test",
-    ).toBeTruthy();
-    expect(ciMatch![1]).toBe(cliVersion);
+    ).toBeGreaterThan(0);
+    for (const m of ciMatches) {
+      expect(m[1]).toBe(cliVersion);
+    }
 
     // 5th surface (#7307): main-health-monitor.yml installs likec4 so that
     // c4-model-freshness.test.sh actually RUNS there — without the CLI that suite
@@ -90,5 +98,33 @@ describe("likec4 CLI / client-renderer version parity", () => {
     expect(script).not.toMatch(/likec4@latest/);
     expect(ci).not.toMatch(/likec4@latest/);
     expect(monitor).not.toMatch(/likec4@latest/);
+  });
+
+  // #8861 doc surfaces: the recipes agents copy VERBATIM pin literal
+  // `likec4@<version>` — without a census they drift on the next bump and an
+  // agent in a customer repo renders with a stale CLI (the same skew class
+  // the executable surfaces above are pinned against).
+  it("agent-facing likec4 recipes pin the same version and never float @latest", () => {
+    const dockerfile = read("Dockerfile");
+    const cliVersion = dockerfile.match(
+      /npm install -g likec4@([0-9][^\s"'`]*)/,
+    )![1];
+
+    const DOC_SURFACES = [
+      "plugins/soleur/skills/architecture/references/likec4-reference.md",
+      "plugins/soleur/skills/architecture/SKILL.md",
+    ];
+    for (const path of DOC_SURFACES) {
+      const doc = readRepo(path);
+      const pins = [...doc.matchAll(/likec4@([0-9][^\s"'`]*)/g)];
+      expect(
+        pins.length,
+        `${path} must pin a literal likec4@<version>`,
+      ).toBeGreaterThan(0);
+      for (const m of pins) {
+        expect(m[1], `${path} pins a stale likec4 version`).toBe(cliVersion);
+      }
+      expect(doc, `${path} must not float @latest`).not.toMatch(/likec4@latest/);
+    }
   });
 });

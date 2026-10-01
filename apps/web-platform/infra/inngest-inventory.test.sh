@@ -23,6 +23,42 @@ TARGET="$SCRIPT_DIR/inngest-inventory.sh"
 # own value inline (a local assignment wins over this export).
 export SOLEUR_HOST_ID_OVERRIDE="hetzner-test-1"
 
+# #6921/#8077: the functions-query failure branch calls inngest_quiesce_state (the ADR-100
+# amendment tri-state, byte-identical across three scripts), which reads `systemctl is-active`,
+# `is-enabled` and `show -p ActiveEnterTimestamp --value` plus the quiesce marker. The function is
+# byte-identical by contract, so there is NO env override inside it — the suite drives a PATH
+# `systemctl` stub (real systemd exit codes) whose answers come from STUB_UNIT_ACTIVE /
+# STUB_UNIT_ENABLED / STUB_ACTIVE_ENTER (test-side only; the production script never reads them).
+# Default: a serving unit (active+enabled), so every pre-existing FATAL row is deterministic
+# regardless of the runner's systemd. The marker and capture paths default to files that do not
+# exist, so the runner's /var/lib/inngest can never leak in. /health defaults to 000 so no row
+# issues a real loopback curl (rows that need 200/500 set it inline).
+STUB_BIN="$(mktemp -d)"
+trap 'rm -rf "$STUB_BIN"' EXIT
+cat > "$STUB_BIN/systemctl" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  is-active)
+    [[ "${2:-}" == inngest-server.service ]] || exit 3
+    s="${STUB_UNIT_ACTIVE:-active}"; echo "$s"; [[ "$s" == active ]] && exit 0; exit 3 ;;
+  is-enabled)
+    [[ "${2:-}" == inngest-server.service ]] || exit 1
+    s="${STUB_UNIT_ENABLED:-enabled}"; echo "$s"
+    case "$s" in enabled|enabled-runtime|static) exit 0 ;; not-found) exit 4 ;; *) exit 1 ;; esac ;;
+  show)
+    if [[ " $* " == *" ActiveEnterTimestamp "* && " $* " == *" inngest-server.service "* ]]; then
+      printf '%s\n' "${STUB_ACTIVE_ENTER-}"
+    fi
+    exit 0 ;;
+  *) exit 3 ;;
+esac
+STUB
+chmod +x "$STUB_BIN/systemctl"
+export PATH="$STUB_BIN:$PATH"
+export INNGEST_QUIESCE_MARKER="$STUB_BIN/no-such-marker"
+export INNGEST_CUTOVER_CAPTURE_FILE="$STUB_BIN/no-such-capture.json"
+export INVENTORY_INNGEST_HEALTH_CODE=000
+
 PASS=0
 FAIL=0
 
@@ -36,7 +72,7 @@ readonly NOW_MS=1781784000000        # 2026-06-17T12:00:00Z
 readonly FUTURE_MS=1781870400000     # 2026-06-18T12:00:00Z
 readonly PAST_MS=1780358400000       # 2026-06-01T12:00:00Z
 
-# Build a v1.19.4-shaped eventsV2 page. Args: <hasNextPage> <endCursor> <edges-json>
+# Build a v1.45.1-shaped eventsV2 page. Args: <hasNextPage> <endCursor> <edges-json>
 make_page() {
   local has_next="$1" end_cursor="$2" edges="$3"
   jq -nc --argjson hn "$has_next" --arg ec "$end_cursor" --argjson edges "$edges" \
@@ -61,7 +97,7 @@ make_edge() {
 
 # Build a /v0/gql `functions` query response (#5517). The captured real shape is
 # {"data":{"functions":[{id,name,slug,triggers}]}} — GET /v1/functions is a 404 in
-# inngest v1.19.4, so the projection reads the GraphQL envelope, not a bare array.
+# inngest v1.45.1, so the projection reads the GraphQL envelope, not a bare array.
 make_functions() {  # $1 = JSON array of names
   jq -nc --argjson names "$1" '{data:{functions:[ $names[] | {id:., name:., slug:., triggers:[]} ]}}'
 }
@@ -223,7 +259,7 @@ test_functions_fetch_failure_is_loud() {
 
 # --- Test 10 (#5517): functions projected from the captured /v0/gql functions shape ---
 # The real shape is {"data":{"functions":[{id,name,slug,...}]}} (GET /v1/functions is a
-# 404 in v1.19.4). The projection MUST read .data.functions, and a BARE array (the old
+# 404 in inngest v1.45.1). The projection MUST read .data.functions, and a BARE array (the old
 # wrong assumption) must trip the guard rather than be silently accepted.
 test_functions_from_gql_shape() {
   local d; d=$(mktemp -d); local ff; ff=$(mktemp); trap 'rm -rf "$d" "$ff"' RETURN
@@ -529,7 +565,7 @@ host_id_tokens_missing() {  # $1=file — "" when every load-bearing token is pr
   body=$(extract_fn_body "$f" resolve_host_id)
   [[ -n "$body" ]] || { printf '%s' "$(basename "$f"):resolve_host_id-not-found"; return; }
   for tok in "${tokens[@]}"; do
-    printf '%s' "$body" | grep -qF -- "$tok" || missing="$missing $(basename "$f"):$tok"
+    printf '%s' "$body" | grep -cF -- >/dev/null "$tok" || missing="$missing $(basename "$f"):$tok"
   done
   printf '%s' "$missing"
 }
@@ -718,7 +754,8 @@ STUB
   # `env "$@"` — an expanded "$@" token is NOT recognized as an assignment prefix (bash
   # decides assignment-vs-command at parse time, before expansion), so pass extra KEY=VAL
   # seams through `env`, which DOES apply them (with $@ empty, `env bash …` is a clean no-op).
-  STDOUT_CAP=$(PATH="$bindir:$PATH" INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" \
+  # EXTRA_BIN (optional): a dir of further stubs (e.g. `systemctl`) searched after the logger stub.
+  STDOUT_CAP=$(PATH="$bindir${EXTRA_BIN:+:$EXTRA_BIN}:$PATH" INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" \
     INVENTORY_NOW_MS="$NOW_MS" env "$@" bash "$TARGET" 2>/dev/null) || RC=$?
   MARKERS_CAP=$(cat "$logout")
   rm -rf "$bindir" "$logout"
@@ -735,7 +772,7 @@ test_deadline_abort() {
   if echo "$STDOUT_CAP" | jq -e '.armed_reminders' >/dev/null 2>&1; then
     echo "  FAIL: stdout is a jq-parseable armed_reminders object on a deadline abort (truncated false-clean)"; FAIL=$((FAIL+1));
   else echo "  PASS: stdout NOT a jq-parseable armed_reminders object on abort"; PASS=$((PASS+1)); fi
-  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=deadline'; then
+  if echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=deadline' >/dev/null; then
     echo "  PASS: SOLEUR_INNGEST_PREFLIGHT_TIMEOUT reason=deadline emitted"; PASS=$((PASS+1));
   else echo "  FAIL: no TIMEOUT reason=deadline marker (markers=$markers)"; FAIL=$((FAIL+1)); fi
 }
@@ -750,7 +787,7 @@ test_page_ceiling_abort() {
   make_page false "" "[$(make_edge 01P5 reminder.scheduled rem5 "$FUTURE_MS" "[]")]" > "$d/page-5.json"
   run_inv_logcap "$d" "$ff" INNGEST_MAX_PAGES=2; local markers="$MARKERS_CAP"
   assert_eq "page ceiling hit exits 1 (loud-abort)" "1" "$RC"
-  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=page_ceiling'; then
+  if echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=page_ceiling' >/dev/null; then
     echo "  PASS: SOLEUR_INNGEST_PREFLIGHT_TIMEOUT reason=page_ceiling emitted"; PASS=$((PASS+1));
   else echo "  FAIL: no TIMEOUT reason=page_ceiling marker (markers=$markers)"; FAIL=$((FAIL+1)); fi
   # A page-ceiling abort is a distinct trigger from the deadline — assert it also refuses to
@@ -775,7 +812,7 @@ test_start_marker_first_on_functions_fail() {
   make_page false "" "[]" > "$d/page-1.json"
   run_inv_logcap "$d" "$ff"; local markers="$MARKERS_CAP"
   assert_eq "functions-fail still exits 1" "1" "$RC"
-  if echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory'; then
+  if echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory' >/dev/null; then
     echo "  PASS: START marker emitted before the functions query (absence-of-START = host-down)"; PASS=$((PASS+1));
   else echo "  FAIL: no START marker on a functions-query failure (markers=$markers)"; FAIL=$((FAIL+1)); fi
 }
@@ -788,12 +825,12 @@ test_markers_journald_only() {
   run_inv_logcap "$d" "$ff"; local markers="$MARKERS_CAP"
   assert_eq "happy path exits 0" "0" "$RC"
   assert_eq "stdout stays a pure JSON object (no marker leaked to stdout)" "object" "$(echo "$STDOUT_CAP" | jq -r 'type')"
-  if echo "$STDOUT_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT'; then
+  if echo "$STDOUT_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT' >/dev/null; then
     echo "  FAIL: a SOLEUR marker leaked onto stdout (would corrupt the webhook JSON body)"; FAIL=$((FAIL+1));
   else echo "  PASS: no SOLEUR marker on stdout (journald-only)"; PASS=$((PASS+1)); fi
-  echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory' \
+  echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_START op=inventory' >/dev/null \
     && { echo "  PASS: START in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no START in journald"; FAIL=$((FAIL+1)); }
-  echo "$markers" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_DONE op=inventory pages=' \
+  echo "$markers" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_DONE op=inventory pages=' >/dev/null \
     && { echo "  PASS: DONE (with pages) in journald"; PASS=$((PASS+1)); } || { echo "  FAIL: no DONE in journald"; FAIL=$((FAIL+1)); }
 }
 
@@ -836,7 +873,7 @@ test_completeness_differential() {
   # FROM_TS byte-identical: the 365-day clamp is unchanged and never narrowed for cost.
   if grep -q '365 days ago' "$TARGET"; then echo "  PASS: FROM_TS 365-day clamp unchanged (never narrowed)"; PASS=$((PASS+1));
   else echo "  FAIL: FROM_TS 365-day clamp missing (window narrowed for cost — completeness risk)"; FAIL=$((FAIL+1)); fi
-  if grep -qF 'eventNames:["reminder.scheduled"]' "$TARGET" || grep -qF "'[\"reminder.scheduled\"]'" "$TARGET"; then
+  if grep -qF 'eventNames:["reminder.scheduled"]' "$TARGET" || grep -cF "'[\"reminder.scheduled\"]'" >/dev/null "$TARGET"; then
     echo "  PASS: dedicated reminder.scheduled query present (armed by construction)"; PASS=$((PASS+1));
   else echo "  FAIL: no dedicated reminder.scheduled query (armed completeness not by construction)"; FAIL=$((FAIL+1)); fi
 }
@@ -854,7 +891,7 @@ test_marker_purity() {
   assert_eq "no '://' URI in any SOLEUR marker" "0" "$(echo "$soleur_lines" | grep -c '://' || true)"
   assert_eq "no user:pass@host in any SOLEUR marker" "0" "$(echo "$soleur_lines" | grep -cE '@[^ ]+:[0-9]+' || true)"
   assert_eq "raw GraphQL message never verbatim (reason is an enum)" "0" "$(echo "$soleur_lines" | grep -c 'password authentication' || true)"
-  if echo "$soleur_lines" | grep -q 'reason=gql_error'; then echo "  PASS: reason mapped to enum gql_error"; PASS=$((PASS+1));
+  if echo "$soleur_lines" | grep -c 'reason=gql_error' >/dev/null; then echo "  PASS: reason mapped to enum gql_error"; PASS=$((PASS+1));
   else echo "  FAIL: reason not mapped to the gql_error enum"; FAIL=$((FAIL+1)); fi
   # #6258 review P1: the DSN must ALSO be scrubbed from the sibling FATAL/ERROR
   # diagnostic lines — journald (→ Better Stack) AND stdout (→ the Actions run log) —
@@ -885,6 +922,157 @@ test_marker_tag_in_vector_allowlist() {
   else echo "  FAIL: inngest-inventory tag NOT in vector.toml (marker would not ship to Better Stack)"; FAIL=$((FAIL+1)); fi
 }
 
+# ===========================================================================
+# #6921/#8077 — QUIESCED / DISABLED_UNATTRIBUTED verdicts (review-fix contract §2 + §4).
+# On a functions-query failure with /health != 200, inngest_quiesce_state decides:
+#   quiesced              → `inngest-inventory: QUIESCED … quiesced_since=<marker.epoch>
+#                            capture=<present|consumed|absent> rebooted_since_quiesce=<bool> — …`
+#   disabled_unattributed → `inngest-inventory: DISABLED_UNATTRIBUTED … — … dispatch op=rollback`
+#   not_quiesced          → today's FATAL.
+# Both verdict lines are decided BEFORE `_pf_timeout_marker gql_error` and the ERROR logger (a
+# quiesced tick every 15 min must not spam the TIMEOUT marker). /health == 200 still wins.
+# ===========================================================================
+
+readonly Q_EPOCH=1789000000
+Q_BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+
+# $1=marker path $2=capture_sha256 $3=boot_id $4=extra jq object (e.g. {capture_consumed_at:1})
+write_marker() {
+  jq -nc --argjson e "$Q_EPOCH" --arg b "$3" --arg sha "$2" --argjson x "${4:-{\}}" \
+    '{v:1, epoch:$e, boot_id:$b, host_id:"hetzner-777", run_id:"1", capture_sha256:$sha, capture_count:1} + $x' > "$1"
+}
+
+# Globals for the verdict rows: RC/STDOUT_CAP/MARKERS_CAP (run_inv_logcap). $@ = extra env.
+run_q() {
+  run_inv_logcap "$Q_D" "$Q_FF" SOLEUR_HOST_ID_OVERRIDE=hetzner-777 "$@"
+}
+
+assert_first_line() {  # $1=desc $2=exact expected first line of the body
+  local first; first="$(printf '%s\n' "$STDOUT_CAP" | sed -n '1p')"
+  assert_eq "$1: exact first body line" "$2" "$first"
+}
+
+assert_no_failure_noise() {  # $1=desc — a verdict tick logs no TIMEOUT marker and no ERROR line
+  if printf '%s\n' "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT' >/dev/null; then
+    echo "  FAIL: $1: _pf_timeout_marker gql_error fired on a verdict tick"; FAIL=$((FAIL+1))
+  else echo "  PASS: $1: no _pf_timeout_marker line"; PASS=$((PASS+1)); fi
+  if printf '%s\n' "$MARKERS_CAP" | grep -c '^ERROR:' >/dev/null; then
+    echo "  FAIL: $1: ERROR logger fired on a verdict tick"; FAIL=$((FAIL+1))
+  else echo "  PASS: $1: no ERROR logger line"; PASS=$((PASS+1)); fi
+  if [[ "$STDOUT_CAP" == *"inngest-inventory: FATAL"* ]]; then
+    echo "  FAIL: $1: FATAL also emitted (the watchdog would restart)"; FAIL=$((FAIL+1))
+  else echo "  PASS: $1: no FATAL sentinel"; PASS=$((PASS+1)); fi
+}
+
+assert_fatal_not_quiesced() {  # $1=desc
+  assert_eq "$1: exits 1" "1" "$RC"
+  case "$STDOUT_CAP" in
+    "inngest-inventory: FATAL host_id=hetzner-777 "*) echo "  PASS: $1: FATAL sentinel unchanged"; PASS=$((PASS+1));;
+    *) echo "  FAIL: $1: expected FATAL"; echo "    body: $STDOUT_CAP"; FAIL=$((FAIL+1));;
+  esac
+  if [[ "$STDOUT_CAP" == *"QUIESCED"* || "$STDOUT_CAP" == *"DISABLED_UNATTRIBUTED"* ]]; then
+    echo "  FAIL: $1: a quiesce verdict emitted outside its shape (would suppress a real restart)"; FAIL=$((FAIL+1))
+  else echo "  PASS: $1: no QUIESCED / DISABLED_UNATTRIBUTED"; PASS=$((PASS+1)); fi
+  # Non-vacuity for assert_no_failure_noise: the FATAL path DOES log the gql_error TIMEOUT marker.
+  if printf '%s\n' "$MARKERS_CAP" | grep -c 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=gql_error' >/dev/null; then
+    echo "  PASS: $1: FATAL path still logs the gql_error TIMEOUT marker"; PASS=$((PASS+1))
+  else echo "  FAIL: $1: FATAL path lost its gql_error TIMEOUT marker"; FAIL=$((FAIL+1)); fi
+}
+
+Q_D=""; Q_FF=""
+test_quiesced_verdict() {
+  Q_D=$(mktemp -d); Q_FF=$(mktemp); local q; q=$(mktemp -d)
+  trap 'rm -rf "$Q_D" "$Q_FF" "$q"' RETURN
+  make_page false "" "[]" > "$Q_D/page-1.json"
+  printf '%s' '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}' > "$Q_FF"
+  local marker="$q/quiesced-by-op" cap="$q/cutover-capture.json" sha
+  printf '%s' '[{"reminder_id":"r1"}]' > "$cap"
+  sha="$(sha256sum "$cap" | awk '{print $1}')"
+  assert_eq "runner exposes a boot_id (rebooted_since_quiesce rows need it)" "1" "$([[ -n "$Q_BOOT_ID" ]] && echo 1 || echo 0)"
+  local MK="INNGEST_QUIESCE_MARKER=$marker" CF="INNGEST_CUTOVER_CAPTURE_FILE=$cap"
+  local tail_q=" — deliberate stop+disable (op=quiesce-web); no restart"
+  local tail_u=" — scheduler disabled with no valid quiesce marker; not a deliberate quiesce; dispatch op=rollback"
+
+  # Q1 liveness-only, inactive+disabled, valid marker, capture present (sha match), same boot.
+  write_marker "$marker" "$sha" "$Q_BOOT_ID"
+  run_q "$MK" "$CF" INVENTORY_LIVENESS_ONLY=1 STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled
+  assert_eq "Q1 liveness quiesced: exits 1" "1" "$RC"
+  assert_first_line "Q1 liveness quiesced" "inngest-inventory: QUIESCED host_id=hetzner-777 unit=inactive enabled=disabled quiesced_since=$Q_EPOCH capture=present rebooted_since_quiesce=false$tail_q"
+  assert_no_failure_noise "Q1 liveness quiesced"
+  if printf '%s\n' "$MARKERS_CAP" | grep -cE "^SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced quiesced_since=$Q_EPOCH .*host_id=hetzner-777\$" >/dev/null; then
+    echo "  PASS: Q1: journald VERDICT mode=quiesced quiesced_since=… host_id=…"; PASS=$((PASS+1))
+  else echo "  FAIL: Q1: no VERDICT mode=quiesced marker"; echo "    markers: $MARKERS_CAP"; FAIL=$((FAIL+1)); fi
+
+  # Q2 FULL mode, failed+disabled, consumed marker (capture file retired), different boot.
+  write_marker "$marker" "$sha" "00000000-0000-0000-0000-000000000000" '{"capture_consumed_at":1789000500}'
+  run_q "$MK" "INNGEST_CUTOVER_CAPTURE_FILE=$q/absent.json" STUB_UNIT_ACTIVE=failed STUB_UNIT_ENABLED=disabled
+  assert_eq "Q2 full-mode quiesced: exits 1" "1" "$RC"
+  assert_first_line "Q2 full-mode quiesced (failed, consumed, rebooted)" "inngest-inventory: QUIESCED host_id=hetzner-777 unit=failed enabled=disabled quiesced_since=$Q_EPOCH capture=consumed rebooted_since_quiesce=true$tail_q"
+  assert_no_failure_noise "Q2 full-mode quiesced"
+
+  # Q3 capture=absent: no capture file; and a capture whose sha does not match the marker.
+  write_marker "$marker" "$sha" "$Q_BOOT_ID"
+  run_q "$MK" "INNGEST_CUTOVER_CAPTURE_FILE=$q/absent.json" STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled
+  assert_first_line "Q3a no capture file" "inngest-inventory: QUIESCED host_id=hetzner-777 unit=inactive enabled=disabled quiesced_since=$Q_EPOCH capture=absent rebooted_since_quiesce=false$tail_q"
+  write_marker "$marker" "$(printf '%064d' 0)" "$Q_BOOT_ID"
+  run_q "$MK" "$CF" STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled
+  assert_first_line "Q3b capture sha mismatch → absent" "inngest-inventory: QUIESCED host_id=hetzner-777 unit=inactive enabled=disabled quiesced_since=$Q_EPOCH capture=absent rebooted_since_quiesce=false$tail_q"
+
+  # Q4 ActiveEnterTimestamp BEFORE the marker epoch (the start the quiesce stopped) → still quiesced.
+  write_marker "$marker" "$sha" "$Q_BOOT_ID"
+  run_q "$MK" "$CF" STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled \
+    "STUB_ACTIVE_ENTER=$(date -u -d "@$((Q_EPOCH - 3600))" '+%a %Y-%m-%d %H:%M:%S UTC')"
+  assert_first_line "Q4 started before the quiesce → quiesced" "inngest-inventory: QUIESCED host_id=hetzner-777 unit=inactive enabled=disabled quiesced_since=$Q_EPOCH capture=present rebooted_since_quiesce=false$tail_q"
+
+  # U1 DISABLED_UNATTRIBUTED: the shape with NO marker (liveness + full).
+  rm -f "$marker"
+  run_q "$MK" "$CF" INVENTORY_LIVENESS_ONLY=1 STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled
+  assert_eq "U1 no marker: exits 1" "1" "$RC"
+  assert_first_line "U1 no marker (liveness)" "inngest-inventory: DISABLED_UNATTRIBUTED host_id=hetzner-777 unit=inactive enabled=disabled$tail_u"
+  assert_no_failure_noise "U1 no marker"
+  if [[ "$STDOUT_CAP" == *"QUIESCED"* ]]; then echo "  FAIL: U1: QUIESCED emitted without a marker"; FAIL=$((FAIL+1));
+  else echo "  PASS: U1: no QUIESCED without a marker"; PASS=$((PASS+1)); fi
+  if printf '%s\n' "$MARKERS_CAP" | grep -cE '^SOLEUR_INNGEST_LIVENESS_VERDICT mode=disabled_unattributed .*host_id=hetzner-777$' >/dev/null; then
+    echo "  PASS: U1: journald VERDICT mode=disabled_unattributed"; PASS=$((PASS+1))
+  else echo "  FAIL: U1: no VERDICT mode=disabled_unattributed marker"; echo "    markers: $MARKERS_CAP"; FAIL=$((FAIL+1)); fi
+  run_q "$MK" "$CF" STUB_UNIT_ACTIVE=failed STUB_UNIT_ENABLED=disabled
+  assert_first_line "U1b no marker (full, failed)" "inngest-inventory: DISABLED_UNATTRIBUTED host_id=hetzner-777 unit=failed enabled=disabled$tail_u"
+
+  # U2 VOID marker: the unit STARTED after the marker epoch (ActiveEnterTimestamp > epoch).
+  write_marker "$marker" "$sha" "$Q_BOOT_ID"
+  run_q "$MK" "$CF" STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled \
+    "STUB_ACTIVE_ENTER=$(date -u -d "@$((Q_EPOCH + 60))" '+%a %Y-%m-%d %H:%M:%S UTC')"
+  assert_first_line "U2 void marker (started after quiesce)" "inngest-inventory: DISABLED_UNATTRIBUTED host_id=hetzner-777 unit=inactive enabled=disabled$tail_u"
+  assert_no_failure_noise "U2 void marker"
+
+  # U3 malformed marker (v != 1) → unattributed.
+  jq -nc --argjson e "$Q_EPOCH" '{v:2, epoch:$e}' > "$marker"
+  run_q "$MK" "$CF" STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled
+  assert_first_line "U3 malformed marker (v=2)" "inngest-inventory: DISABLED_UNATTRIBUTED host_id=hetzner-777 unit=inactive enabled=disabled$tail_u"
+
+  # F-rows: any shape other than (inactive|failed)+disabled keeps FATAL, even with a valid marker.
+  write_marker "$marker" "$sha" "$Q_BOOT_ID"
+  local shape
+  for shape in active:disabled inactive:enabled inactive:static inactive:masked activating:disabled inactive:not-found; do
+    run_q "$MK" "$CF" INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=500 \
+      "STUB_UNIT_ACTIVE=${shape%%:*}" "STUB_UNIT_ENABLED=${shape#*:}"
+    assert_fatal_not_quiesced "F ${shape/:/+} (valid marker)"
+  done
+
+  # H-rows: /health == 200 wins over the quiesced state.
+  run_q "$MK" "$CF" INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=200 STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled
+  assert_eq "H1 health=200 + quiesced exits 1" "1" "$RC"
+  case "$STDOUT_CAP" in
+    "inngest-inventory: DEGRADED host_id=hetzner-777 "*) echo "  PASS: H1 health=200 + quiesced → DEGRADED (serving beats shape)"; PASS=$((PASS+1));;
+    *) echo "  FAIL: H1 health=200 + quiesced did not emit DEGRADED"; echo "    body: $STDOUT_CAP"; FAIL=$((FAIL+1));;
+  esac
+  if [[ "$STDOUT_CAP" == *"QUIESCED"* ]]; then echo "  FAIL: H1 health=200 emitted QUIESCED"; FAIL=$((FAIL+1));
+  else echo "  PASS: H1 health=200 did NOT emit QUIESCED"; PASS=$((PASS+1)); fi
+  run_q "$MK" "$CF" INVENTORY_INNGEST_HEALTH_CODE=200 STUB_UNIT_ACTIVE=inactive STUB_UNIT_ENABLED=disabled
+  assert_fatal_not_quiesced "H2 full-mode health=200 + quiesced (serving beats shape)"
+}
+
+test_quiesced_verdict
 test_liveness_only_skips_eventsv2
 test_liveness_only_durability_enum
 test_liveness_only_fails_loud_on_down
@@ -921,4 +1109,10 @@ test_fatal_cleans_spool_tempfile
 test_argv_ceiling_final_emit_armed
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
+# Exact assertion floor: a deleted, skipped or early-returning row changes the dispatched count.
+readonly EXPECTED_ASSERTIONS=173
+if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
+  printf '  FAIL: dispatched %s assertions, expected exactly %s — a row was added, removed or skipped (update the floor deliberately)\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

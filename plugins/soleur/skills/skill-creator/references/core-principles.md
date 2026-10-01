@@ -184,7 +184,8 @@ See [workflows-and-validation.md](./workflows-and-validation.md) for validation 
 
 ## Summary
 
-- **Standard Markdown**: Use markdown headings for structure, not XML tags
+- **Standard Markdown**: Use markdown headings for structure; XML tags are optional wrappers inside a section
+- **Authoring levers**: Leading words, the two loads (and the invocation choice), co-location, and criterion demand are in [authoring-levers.md](authoring-levers.md)
 - **Conciseness**: Only add context Claude doesn't have. Assume Claude is smart
 - **Degrees of Freedom**: Match specificity to fragility
 - **Model Testing**: Test with all target models. Balance detail level

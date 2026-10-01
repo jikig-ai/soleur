@@ -1,6 +1,8 @@
 # Runbook: Vendor Pin Drift Resolution
 
-When the content-vendor-drift cron files a re-vendor PR (label `vendor/pin-drift`) or opens a tracking issue (label `vendor/cron-failure` / `vendor/upstream-rollback` / `vendor/upstream-archived`), use this runbook to resolve the situation.
+When the content-vendor-drift cron opens a tracking issue (label `vendor/pin-drift` / `vendor/license-changed` / `vendor/upstream-rollback` / `vendor/upstream-archived`), or its Sentry monitor (`scheduled-content-vendor-drift`) reports a red check-in, use this runbook to resolve the situation.
+
+**Multi-bundle model (#8122).** The cron discovers every schema-conforming bundle — `plugins/soleur/skills/*/NOTICE` with parseable frontmatter declaring `upstream` + `pinned-commit` — and runs an independent detect/attest arm per bundle. Artifacts are slugged: re-vendor branches `ci/content-vendor-drift-<slug>-<ts>`, attestation branches `ci/vendor-attest-<slug>-`, per-bundle cron name `cron-content-vendor-drift-<slug>`. Legacy un-suffixed branches/issues classify as `gdpr-gate`'s. A failure in one bundle does NOT mask a sibling — each arm returns a typed outcome and the run-level heartbeat is the AND of all bundle outcomes. Substitute `<slug>` and its NOTICE path wherever this runbook names `gdpr-gate`.
 
 Cross-references:
 
@@ -14,14 +16,14 @@ Cross-references:
   (allowlisted via the drift-guarded manifest in `server/inngest/cron-manifest.ts`).
   **`gh workflow run` cannot dispatch this job** — there is no workflow to dispatch.
 - Compliance posture: `knowledge-base/legal/compliance-posture.md` §Vendored Code Provenance
-- gdpr-gate skill: `plugins/soleur/skills/gdpr-gate/SKILL.md`
+- Enrolled bundles: `plugins/soleur/skills/gdpr-gate/NOTICE`, `plugins/soleur/skills/legal-generate/NOTICE` (schema-conforming set is authoritative — see `vendor-bundle-coverage.test.sh`)
 - Helper scripts: `plugins/soleur/skills/gdpr-gate/scripts/{notice-frontmatter,vendor-pin-integrity,vendor-drift-classify}.sh`
 
 ## 1. Synthetic-Drift Test — Cron-Failure-Path Validation
 
 Run this once after merging the PR that landed this runbook (#3517) — or after any change to the cron, classifier, or NOTICE schema — to verify NOTICE tampering produces a visible alert. The earlier form of this test mutated `pinned-commit` only, but the drift-detection logic compares per-file `upstream-blob-sha` values, so mutating `pinned-commit` alone produced "no drift detected" and silently skipped validation (issue #3540).
 
-**Scope:** this test validates the **cron-failure path** — the workflow's `if: failure()` arm that opens a `vendor/cron-failure` issue when an upstream blob lookup 404s. It does NOT validate the happy-path auto-PR creation, which requires a real upstream content change (covered separately when a real upstream drift lands or when a fork-based test is added).
+**Scope:** this test validates the **cron-failure path** — a per-bundle arm failure (e.g. an upstream blob lookup 404) produces a typed failed outcome, a red Sentry check-in, and a `comparison-could-not-measure` Sentry event. NOTE: no `vendor/cron-failure` ISSUE is filed — arm failures surface via Sentry + the heartbeat only. It does NOT validate the happy-path auto-PR creation — that route IS implemented (the `safe-commit-pr-<slug>` step writes merged bytes + NOTICE bumps before `safeCommitAndPr`; #8180); the synthetic-drift mutation here routes to a typed failure, not the PR arm.
 
 ```bash
 # 1. Create a feature branch with one upstream-blob-sha mutated to a
@@ -43,36 +45,77 @@ git push -u origin synthetic-drift-test
 # directly instead -- `vendor-drift-classify.sh` is a standalone script.
 
 # 3. Poll until the run completes (expect failure status — the
-#    cron-failure arm is what fires).
+#    typed-failure arm is what fires).
 # Observe the run in Inngest / Sentry (monitor slug `scheduled-content-vendor-drift`)
 # rather than via `gh run`.
 
-# 4. Assert a `vendor/cron-failure` issue was auto-filed with a link to
-#    the failed run.
-gh issue list --label vendor/cron-failure --state open --limit 5
+# 4. Assert the failure surfaced: a red check-in on the
+#    `scheduled-content-vendor-drift` Sentry monitor AND a Sentry event with
+#    op=comparison-could-not-measure (or bundle-arm) naming the bundle slug.
+#    There is NO auto-filed issue on this path — the alert IS the Sentry
+#    event + red heartbeat.
 ```
 
-Expected outcome: a `vendor/cron-failure` issue is auto-filed within ~10 minutes of dispatch, body linking to the failed run. The most-important invariant — NOTICE tampering produces a visible alert — is validated. Clean up after assertion:
+Expected outcome: within ~10 minutes of dispatch, the Sentry monitor shows a red check-in and a `reportSilentFallback` event naming the failing bundle. The most-important invariant — NOTICE tampering produces a visible alert — is validated. Clean up after assertion:
 
 ```bash
-gh issue close <issue-num> --reason completed --comment "synthetic-drift-test validation — closing"
 git push origin --delete synthetic-drift-test
 ```
 
-## 2. Conflict-Marker Resolution (`needs-human-review` label)
+## 2. Re-vendor PRs — Clean vs. Conflicted
 
-When the auto-PR is labeled `needs-human-review`, the workflow's inline 3-way merge produced conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`). The classifier output and bumped NOTICE are still on the PR branch, but the lifted-file changes are unmerged.
+The batched (exit-13) route now DOES write: `safe-commit-pr-<slug>` performs a `git merge-file --diff3` three-way merge of each drifted upstream blob into its lifted path, rewrites the NOTICE record (both blob SHAs), advances `pinned-commit` + `last-verified`, and commits through `safeCommitAndPr`. The PR's "Per-file merge status" table names each file `merged` or `conflicted`.
 
-1. Check out the PR branch locally: `gh pr checkout <num>`.
-2. For each lifted file with conflict markers (`grep -l '<<<<<<<' plugins/soleur/skills/gdpr-gate/references/`):
-   - Open the file. The `--diff3` markers show three labels: `<<<<<<< <our>`, `||||||| <base>` (the pinned upstream blob), `=======`, `>>>>>>> <theirs>` (the new upstream blob).
-   - Decide per hunk: keep our text (Soleur extension is right), keep theirs (upstream patch supersedes our extension), or merge (combine both).
-   - Remove all conflict markers.
-3. After resolving, recompute the local blob SHA: `git hash-object --no-filters <path>`.
-4. Update NOTICE `local-blob-sha` for the resolved file to the new SHA.
-5. Commit: `git commit -am "fix(vendor-drift): resolve conflict on <path>"`.
-6. Push and re-run the workflow's classifier locally to verify no further drift: `bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh plugins/soleur/skills/gdpr-gate/references/<path>`.
-7. Remove the `needs-human-review` label and merge.
+### 2a. All files `merged` (no `needs-human-review` label)
+
+The PR carries clean merged bytes and self-merges via `mergeMode: "direct"`. No operator action unless it stalls — check the PR checks and merge per normal review.
+
+### 2b. Any file `conflicted` (`needs-human-review` label, create-only)
+
+The conflicted files carry `--diff3` markers and the PR deliberately does NOT auto-merge. Resolve in place on the existing bot branch:
+
+```bash
+# 1. Check out the existing PR branch (named in the PR + the issue body).
+gh pr checkout <pr-number>
+
+# 2. Open each file the PR body marks `conflicted` and resolve the markers:
+#    <<<<<<< <lifted-path>   — our current content
+#    ||||||| upstream-pinned — the content at the OLD pinned commit
+#    =======
+#    >>>>>>> upstream-new    — the new upstream content
+#    Keep local adaptations (attribution header, local edits) AND the
+#    upstream delta; delete all four marker lines.
+
+# 3. Recompute the resolved file's pin and update its NOTICE record:
+git hash-object --no-filters plugins/soleur/skills/<slug>/references/<file>.md
+#    → replace that record's `local-blob-sha:` value in
+#      plugins/soleur/skills/<slug>/NOTICE (the record's upstream-blob-sha
+#      and the top-level pinned-commit/last-verified are already correct
+#      in the PR's NOTICE diff — do not re-derive them).
+
+# 4. Verify both gates locally before pushing:
+bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh \
+  plugins/soleur/skills/<slug>/references/<file>.md
+NOTICE_FILE=plugins/soleur/skills/<slug>/NOTICE \
+  bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh \
+  --verify-upstream
+
+# 5. Commit and push to the SAME branch — the existing PR picks up the
+#    resolution; remove the `needs-human-review` label after re-review.
+git commit -am "fix(vendor-drift): resolve re-vendor conflicts in <file>.md"
+git push
+```
+
+### 2c. Manual re-vendor (drift issue landed — no PR)
+
+Security-/license-/rollback-/archived-/renamed-class drift (exits 10–12, 15, 16, unknown) opens an ISSUE only — no PR is produced, by design. Perform the re-vendor by hand:
+
+1. Fetch the new upstream blobs: `gh api repos/<o>/<r>/git/blobs/<new-sha>` per drifted `upstream-path` (the issue names them), or `gh api repos/<o>/<r>/contents/<upstream-path>?ref=<default-branch>` and decode `content`.
+2. Write the upstream bytes into the lifted path, re-adding the line-1 attribution header (`<!-- Adapted from <upstream> (<license>) — see NOTICE -->`).
+3. Recompute pins: `git hash-object --no-filters <path>` → NOTICE `local-blob-sha`; the fetched blob's `sha` field → `upstream-blob-sha`; set `pinned-commit` to the upstream commit you fetched against and bump `last-verified`.
+4. Verify locally: `bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh <lifted-paths>` (pass `SKILL_PREFIX`/`NOTICE_FILE` env for non-default bundles) and `NOTICE_FILE=<bundle>/NOTICE … --verify-upstream`.
+5. Commit on a normal branch: `fix(vendor-drift): re-vendor <o>/<r> @<sha>`; the lefthook stanza re-checks the pins on commit.
+6. Close the drift issue on merge.
 
 ## 3. Upstream Rollback (`vendor/upstream-rollback` label)
 
@@ -84,7 +127,7 @@ Upstream maintainers reverted a commit (security regression, unintended breaking
 
 1. Verify the rollback is intentional by reading upstream commit history: `gh api repos/<o>/<r>/commits?per_page=10`.
 2. Check the upstream issue tracker / changelog for a rollback announcement.
-3. If intentional: dispatch the workflow with `--ref main` to bump to current upstream HEAD. The classifier will re-run; if exit 15 stabilizes, manually edit NOTICE `pinned-commit` to the rollback target SHA and open a non-auto PR.
+3. If intentional: trigger the cron via `/soleur:trigger-cron` (`cron/content-vendor-drift.manual-trigger`) to bump to current upstream HEAD. The classifier will re-run; if exit 15 stabilizes, manually edit the affected bundle's NOTICE `pinned-commit` to the rollback target SHA and open a non-auto PR.
 
 ### 3b. Force-push accident
 
@@ -113,20 +156,20 @@ When upstream is permanently archived (read-only, will not receive patches), we 
    - **Fork**: create `Soleur/<repo>` as a hard fork, change NOTICE `upstream` to point at the fork, rotate `pinned-commit`, merge.
    - **Drop**: delete the lifted files + NOTICE entry, update `compliance-posture.md` registry to remove the row, rotate any downstream skill references.
 
-## 6. Cron Failure (`vendor/cron-failure` issue)
+## 6. Cron Failure (red check-in + Sentry event — no issue is filed)
 
-The `if: failure()` step in the workflow opens an issue when the cron itself fails (gh api 5xx, rate-limit, runner OOM, etc.). The issue title and body link to the failed run.
+A per-bundle arm failure surfaces as a typed `failed` outcome: a red Sentry check-in on `scheduled-content-vendor-drift` plus a `reportSilentFallback` event (`op=bundle-arm` or `comparison-could-not-measure`) whose message names the bundle slug. **No `vendor/cron-failure` issue is filed** — the `if: failure()` filing step was dropped in the Inngest port; Sentry is the alert surface.
 
-1. Inspect the run: `gh run view <run-id> --log`.
+1. Inspect the run: it is an Inngest function, so `gh run view` finds nothing — observe via Inngest / Sentry; the event message names the failing bundle slug.
 2. Common transient causes:
-   - **Rate-limit** (HTTP 403 from `gh api`): wait one hour, manually re-dispatch.
-   - **Upstream 5xx**: wait, re-dispatch. If GitHub Status indicates a degraded API, hold until resolved.
-   - **Runner OOM**: rare; bump the timeout-minutes or split into smaller batches if it recurs.
-3. If the failure persists across two consecutive re-dispatches, escalate: read the policy doc §4.1 and consider whether the workflow logic itself needs revision (issue + PR).
+   - **Rate-limit** (HTTP 403 from `gh api`): wait one hour, manually re-trigger via `/soleur:trigger-cron`.
+   - **Upstream 5xx**: wait, re-trigger. If GitHub Status indicates a degraded API, hold until resolved.
+   - **Per-bundle arm failure**: a typed failure in one bundle leaves siblings green — check the handler result's per-bundle `outcomes` to see which arm threw.
+3. If the failure persists across two consecutive re-triggers, escalate: read the policy doc §4.1 and consider whether the cron logic itself needs revision (issue + PR).
 
 ## 7. POSTURE_FAIL Operator Chain (>90d stale)
 
-When `gdpr-gate.sh` emits `POSTURE_FAIL: gdpr-gate rules >90 days stale` to STDOUT during a regulated PR's `/soleur:gdpr-gate` invocation, the gate is signaling that the cron + auto-PR pipeline has been silently broken for >90 days and the lifted detection rules are dangerously stale. The chain:
+When a bundle's staleness surface emits `POSTURE_FAIL:` — `gdpr-gate.sh` during a regulated PR's `/soleur:gdpr-gate` invocation, or `legal-generate`'s Phase 1.5 staleness check — it is signaling that the cron + auto-PR pipeline has been silently broken for >90 days and that bundle's lifted content is dangerously stale. The chain (shown for `gdpr-gate`; substitute the affected bundle's slug and NOTICE path):
 
 1. **Do not pause the current regulated PR.** The gate is advisory and exits 0; the staleness signal is a separate cycle.
 2. Open a tracking issue:
@@ -146,7 +189,7 @@ When `gdpr-gate.sh` emits `POSTURE_FAIL: gdpr-gate rules >90 days stale` to STDO
    ```
 
 5. Drive re-vendor:
-   - If a `ci/vendor-drift-*` PR is already open, ping it.
+   - If a `ci/content-vendor-drift-<slug>-*` PR is already open, resolve it per §2 (conflicted files carry `--diff3` markers and block auto-merge until resolved).
    - Otherwise dispatch via `/soleur:trigger-cron` (`cron/content-vendor-drift.manual-trigger`).
 6. The current regulated PR ships per its own gate; the staleness-driven follow-up is a separate work cycle with its own review and merge. The Active Compliance Items row tracks both.
 

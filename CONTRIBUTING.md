@@ -14,6 +14,12 @@ claude --plugin-dir ./plugins/soleur
 
 This loads the plugin directly without installation, so you can test changes immediately.
 
+Skills resolve their scripts through the loader's plugin root (`${CLAUDE_PLUGIN_ROOT}`), not the working
+directory, so a session only runs a worktree's edited scripts when it was started with
+`claude --plugin-dir "$PWD/plugins/soleur"` from that worktree. The absolute root in any emitted command shows
+which copy ran. Never start a session with `--plugin-dir` pointing at a checkout of a PR you did not author: every
+gate the skills run, including the `--admin` merge gate, would then be that author's copy.
+
 ### Codex
 
 From the repository or feature worktree root:
@@ -34,11 +40,10 @@ With [Grok Build](https://docs.x.ai/build/overview), the same in-repo plugin loa
 
 ```bash
 grok inspect   # verify soleur plugin, skills, and MCP servers are discovered
-grok --trust   # first session only: trust project hooks (or run /hooks-trust in-session)
 grok           # start an interactive session
 ```
 
-Soleur is hook-heavy; without trust, PreToolUse guards from `.claude/settings.json` stay inactive.
+Soleur is hook-heavy. Live CLI 1.0.29 has no `grok --trust` — do not invent one. Use `/hooks` in-session for the unified extensions modal. Unarmed hooks skip with `SOLEUR_HOOK_SKIP reason=untrusted-session`.
 
 ### Grok command naming
 

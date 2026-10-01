@@ -23,10 +23,13 @@ pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 # call site. The reverse direction (release_lock) is exercised by the trap
 # in session-state.sh's exit handler, but we also assert it textually so a
 # future refactor that drops the release doesn't silently leak the lock.
-echo "T1: 4 skill files wrap gh pr merge --auto with acquire_lock merge-main"
+echo "T1: 3 skill files wrap gh pr merge --auto with acquire_lock merge-main"
 
+# schedule/SKILL.md left this list in #7453: its merge call lives in a workflow TEMPLATE
+# written into the customer's repo, where `with_lock` (a machine-local flock) serialises
+# nothing on an ephemeral runner and the plugin-root token would bake the operator's local
+# install path into the YAML. T1d below pins that the template carries no token at all.
 declare -a SKILL_FILES=(
-  "plugins/soleur/skills/schedule/SKILL.md"
   "plugins/soleur/skills/product-roadmap/SKILL.md"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/merge-pr/SKILL.md"
@@ -107,13 +110,12 @@ done
 # test rather than reading it from SKILL.md. AC6 was a manual grep, which is
 # not a gate.
 # ---------------------------------------------------------------------------
-echo "T1c: all seven SKILL.md sites resolve session-state through the plugin-root anchor"
+echo "T1c: all six SKILL.md sites resolve session-state through the bare plugin-root anchor"
 
 declare -a ANCHOR_SITES=(
   "plugins/soleur/skills/merge-pr/SKILL.md"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/product-roadmap/SKILL.md"
-  "plugins/soleur/skills/schedule/SKILL.md"
   "plugins/soleur/skills/one-shot/SKILL.md"
   "plugins/soleur/skills/work/SKILL.md"
   "plugins/soleur/skills/git-worktree/SKILL.md"
@@ -125,11 +127,19 @@ for f in "${ANCHOR_SITES[@]}"; do
 
   # Presence of the new shape, then absence of the old — in that order. An
   # absence-only assertion is satisfied by DELETING the call site.
-  if grep -qE '\$\{CLAUDE_PLUGIN_ROOT:-[^}]+\}/scripts/lib/session-state\.sh' "$path"; then
-    pass "T1c: $f anchors session-state at \${CLAUDE_PLUGIN_ROOT:-…}/scripts/lib/"
+  if grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/scripts/lib/session-state\.sh' "$path"; then
+    pass "T1c: $f anchors session-state at the bare \${CLAUDE_PLUGIN_ROOT}/scripts/lib/"
   else
-    fail "T1c: $f does not resolve session-state through the plugin-root anchor — \
-a marketplace install cannot reach the library from this site (#7409)"
+    fail "T1c: $f does not resolve session-state through the bare plugin-root anchor — \
+a marketplace install cannot reach the library from this site (#7409, #7453)"
+  fi
+
+  # #7453: the default-arm form resolves into the caller's tree when the token is not
+  # substituted (ADR-179). Presence above, absence here — deleting the site fails the first.
+  if grep -qE '\$\{CLAUDE_PLUGIN_ROOT:-[^}]*\}/scripts/lib/session-state\.sh' "$path"; then
+    fail "T1c: $f still resolves session-state through a default arm on the plugin root"
+  else
+    pass "T1c: $f carries no default-arm session-state anchor"
   fi
 
   if grep -qE '\.claude/hooks/lib/session-state\.sh' "$path"; then
@@ -139,6 +149,34 @@ exist in a marketplace install"
     pass "T1c: $f carries no reference to the pre-#7409 repo-only path"
   fi
 done
+
+# ---------------------------------------------------------------------------
+# T1d (#7453): schedule's one-time-mode workflow TEMPLATE carries no plugin-root token.
+#
+# The `prompt: |` block is written into the customer's committed workflow. A bare token
+# there is substituted at AUTHORING time with the operator's local install path; a default
+# arm resolves into the runner's checkout. The merge step calls `gh pr merge --auto`
+# directly (the machine-local merge-main lock serialises nothing on an ephemeral runner).
+# Flag-based extraction (never an awk range, #3809), and the block is proven non-empty and
+# the RIGHT block before the absence check can pass.
+# ---------------------------------------------------------------------------
+echo "T1d: schedule's one-time template merges directly and carries no plugin-root token"
+SCHED="$REPO_ROOT/plugins/soleur/skills/schedule/SKILL.md"
+tmpl=$(awk '
+  /^ +prompt: \|$/ { buf = ""; inblk = 1; next }
+  inblk && /^```$/ { if (buf ~ /MERGE_ERR/) { printf "%s", buf; exit } inblk = 0; next }
+  inblk { buf = buf $0 "\n" }
+' "$SCHED")
+if [[ -n "$tmpl" ]] && grep -qF 'gh pr merge --squash --auto' <<<"$tmpl" && grep -qF 'MERGE_ERR' <<<"$tmpl"; then
+  pass "T1d: extracted the one-time template block (non-empty, carries the merge + MERGE_ERR)"
+else
+  fail "T1d: could not extract the one-time template block — the absence check below would be vacuous"
+fi
+if grep -qF 'CLAUDE_PLUGIN_ROOT' <<<"$tmpl"; then
+  fail "T1d: the schedule template names CLAUDE_PLUGIN_ROOT — it would leak the operator's install path into the customer's workflow"
+else
+  pass "T1d: the schedule template carries no CLAUDE_PLUGIN_ROOT token"
+fi
 
 # ---------------------------------------------------------------------------
 # T2: Serialization smoke — primitive correctness under contention

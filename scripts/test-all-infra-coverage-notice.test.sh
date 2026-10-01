@@ -224,7 +224,7 @@ echo "=== test-all.sh infra coverage-notice suite ==="echo "=== test-all.sh infr
 # --- THE CORE INVARIANT, over the full group x diff matrix ---------------------------------
 # The claim and the invocation must agree in EVERY cell. This is the assertion the defect
 # would have failed in three of them.
-for group in all webplat bun scripts infra; do
+for group in all webplat bun scripts scripts-heavy infra; do
   for in_diff in 1 0; do
     run_arm "$group" "$in_diff" 0 || continue
     claims_covered=0
@@ -237,10 +237,10 @@ for group in all webplat bun scripts infra; do
   done
 done
 
-# --- The three CI shards specifically, on an infra-touching diff ----------------------------
+# --- The four CI shards specifically, on an infra-touching diff ----------------------------
 # Named individually because these are the exact invocations ci.yml uses, and the defect was
 # invisible anywhere else.
-for group in webplat bun scripts; do
+for group in webplat bun scripts scripts-heavy; do
   run_arm "$group" 1 0 || continue
   if grep -q 'IS covered above' <<<"$ARM_OUT"; then
     fail "CI shard '$group' claims infra coverage it does not have"
@@ -428,9 +428,16 @@ GATED=(
 # test) while GATED is hand-maintained here, so the two operands have independent lifetimes. The
 # one thing this cannot check is the label<->array PAIRING, which check_element_arms covers
 # behaviourally.
+# `_AC_EDGES` is filtered out of the runner side: it is the affected-mode
+# classifier's per-registration SCRATCH array — a resolved copy of the
+# consumed-edge arrays it names — not a declaration site. The declaration
+# arrays it copies from (AFFECTED_CONSUMED_EDGES members) are already GATED
+# rows here; a scratch alias needs no row of its own, and giving it one would
+# assert a gate no diff can exercise on a name nothing declares. (#8322)
 RUNNER_ARRAYS=$(sed 's/[[:space:]]*#.*$//' "$TARGET" \
   | grep -oE '_diff_touches +"?\$\{[A-Z0-9_]+\[@\]' \
-  | grep -oE '[A-Z0-9_]+\[@\]' | sed 's/\[@\]//' | sort -u)
+  | grep -oE '[A-Z0-9_]+\[@\]' | sed 's/\[@\]//' \
+  | grep -vxF '_AC_EDGES' | sort -u)
 GATED_ARRAYS=$(printf '%s\n' "${GATED[@]}" | sed 's/^[^|]*|//' | sort -u)
 if [[ "$RUNNER_ARRAYS" != "$GATED_ARRAYS" ]]; then
   echo "FATAL: GATED does not match the predicate arrays scripts/test-all.sh dereferences." >&2

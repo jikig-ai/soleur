@@ -1,0 +1,14 @@
+[Unit]
+Description=Poll the Inngest LUKS cutover flag every 30s (#6894)
+
+[Timer]
+# The dedicated host has no inbound control channel; a 30s Doppler-flag poll is the only no-SSH
+# trigger. The flag is the sole gate — the terminal and unset states are no-ops.
+OnBootSec=30s
+OnUnitActiveSec=30s
+# Persistent=true is deliberately NOT copied from inngest-cutover-flip.timer: there a missed run is
+# an idempotent flag read, here it would fire at boot, so a host rebooted mid-window would re-enter
+# the cutover before anyone had read why it stopped.
+
+[Install]
+WantedBy=timers.target

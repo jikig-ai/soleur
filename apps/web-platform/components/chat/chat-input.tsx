@@ -1,17 +1,26 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useLayoutEffect as reactUseLayoutEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useId, useLayoutEffect as reactUseLayoutEffect } from "react";
 
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? reactUseLayoutEffect : useEffect;
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { SpinnerIcon } from "@/components/icons";
 import type { AttachmentRef } from "@/lib/types";
 import type { StreamState } from "@/lib/ws-client";
 import { validateFiles } from "@/lib/validate-files";
+import {
+  ATTACHMENT_ACCEPT,
+  attachmentTileLabel,
+} from "@/lib/attachment-constants";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
 import { safeSession } from "@/lib/safe-session";
 import { detectImagePlaceholders } from "@/lib/image-placeholder-detect";
+import { attachmentErrorCopy } from "@/lib/attachment-error-copy";
+
+const ATTACHMENTS_UNAVAILABLE_MESSAGE =
+  "Attachments are available once the conversation starts.";
 
 interface PendingAttachment {
   id: string;
@@ -28,8 +37,12 @@ interface ChatInputProps {
   onAtDismiss: () => void;
   disabled?: boolean;
   placeholder?: string;
-  /** Conversation ID for presigning uploads. */
-  conversationId?: string;
+  /** Conversation ID for presigning uploads. `null` means attachments are
+   *  unavailable (the caller has no usable conversation id yet): the paperclip
+   *  is `aria-disabled` and `validateAndAddFiles` rejects drop/paste/picker
+   *  files, so nothing is ever presigned against a non-id. `undefined` keeps
+   *  the legacy behaviour (attachments enabled, presign sends no id). */
+  conversationId?: string | null;
   /** Insert text at the current cursor position (used by AtMentionDropdown selection). */
   insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
   /** Callback ref that invokes insertQuote for the KB selection-toolbar flow. */
@@ -130,6 +143,8 @@ export function ChatInput({
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashQuote, setFlashQuote] = useState(false);
+  const attachmentsUnavailable = conversationId === null;
+  const unavailableDescId = useId();
 
   // AC5 per-path drafts: when `draftKey` changes (e.g. KB doc A → doc B),
   // rehydrate the textarea with the new key's stored value. Skip on the
@@ -293,6 +308,12 @@ export function ChatInput({
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
+      // Single choke point for picker, drop and paste: nothing may be staged
+      // (and therefore nothing presigned) while attachments are unavailable.
+      if (attachmentsUnavailable) {
+        setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+        return;
+      }
       const { valid, error } = validateFiles(files, attachments.length);
 
       if (error) setAttachError(error);
@@ -308,7 +329,7 @@ export function ChatInput({
         ]);
       }
     },
-    [attachments.length],
+    [attachments.length, attachmentsUnavailable],
   );
 
   const removeAttachment = useCallback((id: string) => {
@@ -379,7 +400,7 @@ export function ChatInput({
         setAttachments((prev) =>
           prev.map((a) =>
             a.id === att.id
-              ? { ...a, error: err instanceof Error ? err.message : "Upload failed" }
+              ? { ...a, error: attachmentErrorCopy(err instanceof Error ? err.message : undefined) }
               : a,
           ),
         );
@@ -394,11 +415,18 @@ export function ChatInput({
           r.status === "fulfilled" && r.value !== null,
       )
       .map((r) => r.value);
-  }, [attachments]);
+  }, [attachments, conversationId]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
     if (!trimmed && attachments.length === 0) return;
+
+    // Never presign against a null id (e.g. the socket reconnected after the
+    // files were staged): keep them staged and say why.
+    if (attachments.length > 0 && attachmentsUnavailable) {
+      setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+      return;
+    }
 
     let sent = false;
     if (attachments.length > 0) {
@@ -425,7 +453,7 @@ export function ChatInput({
       setValue("");
       onAtDismiss();
     }
-  }, [value, attachments, onSend, onAtDismiss, uploadAttachments]);
+  }, [value, attachments, attachmentsUnavailable, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -496,11 +524,14 @@ export function ChatInput({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragOver(false);
+      // Ignore drops while a send is uploading: handleSubmit is uploading the
+      // staged set, so a late file would sit outside that send.
+      if (isUploading) return;
       if (e.dataTransfer.files.length > 0) {
         validateAndAddFiles(e.dataTransfer.files);
       }
     },
-    [validateAndAddFiles],
+    [validateAndAddFiles, isUploading],
   );
 
   // Clipboard paste handler
@@ -509,6 +540,7 @@ export function ChatInput({
       const files = e.clipboardData.files;
       if (files.length > 0) {
         e.preventDefault();
+        if (isUploading) return; // same reason as handleDrop
         validateAndAddFiles(files);
         return;
       }
@@ -530,8 +562,16 @@ export function ChatInput({
         }
       }
     },
-    [validateAndAddFiles],
+    [validateAndAddFiles, isUploading],
   );
+
+  // The textarea is disabled while a send uploads, which drops focus; give it
+  // back when the upload settles so the user can keep typing.
+  const wasUploadingRef = useRef(false);
+  useEffect(() => {
+    if (wasUploadingRef.current && !isUploading) textareaRef.current?.focus();
+    wasUploadingRef.current = isUploading;
+  }, [isUploading]);
 
   return (
     <div
@@ -554,6 +594,7 @@ export function ChatInput({
             <div
               key={att.id}
               data-testid="attachment-preview"
+              title={att.file.name}
               className="relative flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
             >
               {att.preview ? (
@@ -564,7 +605,8 @@ export function ChatInput({
                 />
               ) : (
                 <div className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary">
-                  PDF
+                  {/* intake canonicalizes file.type (validateFiles), so this label is the extension of the resolved type */}
+                  {attachmentTileLabel(att.file.type)}
                 </div>
               )}
               <div className="flex flex-col">
@@ -592,7 +634,8 @@ export function ChatInput({
                   <span className="text-xs text-green-400">Uploaded</span>
                 ) : null}
               </div>
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={() => removeAttachment(att.id)}
                 className="ml-1 rounded p-0.5 text-soleur-text-muted hover:text-soleur-text-secondary"
@@ -602,7 +645,7 @@ export function ChatInput({
                   <line x1="18" y1="6" x2="6" y2="18" />
                   <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -610,7 +653,7 @@ export function ChatInput({
 
       {/* Error toast */}
       {attachError && (
-        <div className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+        <div role="alert" className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
           {attachError}
         </div>
       )}
@@ -635,12 +678,12 @@ export function ChatInput({
       {repoError && (
         <div className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
           Your repository setup failed.{" "}
-          <Link
+          <NavLink
             href="/dashboard/settings"
             className="font-medium text-red-200 underline hover:text-red-100"
           >
             Reconnect in Settings → Repository
-          </Link>
+          </NavLink>
         </div>
       )}
 
@@ -657,23 +700,41 @@ export function ChatInput({
         }
       >
         {/* Paperclip / attach button */}
-        <button
+        <Button
+          variant="ghost"
           type="button"
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => {
+            if (attachmentsUnavailable) {
+              // aria-disabled (not native disabled) keeps the control focusable
+              // and click-able so touch users, who have no hover/title, still
+              // get the reason.
+              setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+              return;
+            }
+            fileInputRef.current?.click();
+          }}
           disabled={disabled || isUploading}
-          className="flex h-[36px] w-[36px] min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary disabled:opacity-50 md:min-h-0 md:min-w-0"
+          aria-disabled={attachmentsUnavailable ? "true" : undefined}
+          aria-describedby={attachmentsUnavailable ? unavailableDescId : undefined}
+          title={attachmentsUnavailable ? ATTACHMENTS_UNAVAILABLE_MESSAGE : undefined}
+          className="flex h-[36px] w-[36px] min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 md:min-h-0 md:min-w-0"
           aria-label="Attach file"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
           </svg>
-        </button>
+        </Button>
+        {attachmentsUnavailable && (
+          <span id={unavailableDescId} className="sr-only">
+            {ATTACHMENTS_UNAVAILABLE_MESSAGE}
+          </span>
+        )}
 
         <input
           ref={fileInputRef}
           type="file"
           multiple
-          accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+          accept={ATTACHMENT_ACCEPT}
           className="hidden"
           onChange={(e) => {
             if (e.target.files) validateAndAddFiles(e.target.files);
@@ -696,15 +757,16 @@ export function ChatInput({
             className="w-full resize-none border-none bg-transparent px-1 py-2 pr-11 text-base text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none focus-visible:shadow-none disabled:opacity-50 min-h-[36px] max-h-[140px] overflow-y-auto md:pr-8 md:text-sm"
           />
           {/* Mobile @ button */}
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={handleAtButtonClick}
             disabled={disabled}
-            className="absolute bottom-1 right-0 flex min-h-11 min-w-11 items-center justify-center rounded-md text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
+            className="absolute bottom-1 right-0 flex min-h-11 min-w-11 items-center justify-center rounded-md p-0 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
             aria-label="Mention a leader"
           >
             <span className="text-sm font-medium">@</span>
-          </button>
+          </Button>
         </div>
         {showStop ? (
           // #3448 PR2: Stop button replaces Send while a turn is in flight
@@ -712,7 +774,8 @@ export function ChatInput({
           // the server's `session_ended` ack (`stopping`). The accessible
           // name + visible label both transition to "Stopping…" so the
           // user has a single source of truth on the Stop affordance.
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={onStop}
             disabled={isStopping || onStop === undefined}
@@ -723,27 +786,22 @@ export function ChatInput({
             <span className="text-xs font-medium">
               {isStopping ? "Stopping…" : "Stop"}
             </span>
-          </button>
+          </Button>
         ) : (
-          <button
+          <Button
+            variant="gold"
             type="button"
             onClick={handleSubmit}
             disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
+            loading={isUploading}
             className="flex h-[36px] w-[36px] min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600 md:min-h-0 md:min-w-0"
             aria-label="Send message"
           >
-            {isUploading ? (
-              <svg width="18" height="18" viewBox="0 0 24 24" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
-                <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
-              </svg>
-            ) : (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="19" x2="12" y2="5" />
-                <polyline points="5 12 12 5 19 12" />
-              </svg>
-            )}
-          </button>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+          </Button>
         )}
       </div>
     </div>

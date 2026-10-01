@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { SlidingWindowCounter } from "@/server/rate-limiter";
+import { verifiedUserId } from "@/server/request-auth";
 
 // Rate limit: 1 deletion attempt per 60 seconds per user
 const deletionLimiter = new SlidingWindowCounter({
@@ -14,18 +14,16 @@ export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/account/delete", origin);
 
-  // Auth check
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Auth check — middleware-verified identity (x-soleur-auth-user-id);
+  // absent header falls back to getUser() inside verifiedUserId (fail-closed).
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   // Rate limit
-  if (!deletionLimiter.isAllowed(user.id)) {
+  if (!deletionLimiter.isAllowed(userId)) {
     return NextResponse.json(
       { error: "Too many requests. Please wait before trying again." },
       { status: 429 },
@@ -48,11 +46,11 @@ export async function POST(request: Request) {
   const log = createChildLogger("account-delete-route");
 
   // Execute deletion cascade
-  const result = await deleteAccount(user.id, body.confirmEmail);
+  const result = await deleteAccount(userId, body.confirmEmail);
 
   if (!result.success) {
     log.warn(
-      { userId: user.id, error: result.error },
+      { userId, error: result.error },
       "Account deletion failed",
     );
     return NextResponse.json(
@@ -61,8 +59,28 @@ export async function POST(request: Request) {
     );
   }
 
+  // (#8094) Relay whether the git-data bare-repo erasure actually completed. The
+  // deletion succeeded either way — this flag is what stops the client claiming an
+  // erasure the server never observed, against DPD s10.3(b) and T&C s14.1b.
+  if (result.gitDataErasurePending) {
+    // PSEUDONYMIZED, not raw. The same compliance event is emitted 40 lines earlier by
+    // `reportSilentFallback`, which renames extra.userId to a peppered hash by contract
+    // (ADR-029, Recital 26). Logging the raw id here would de-pseudonymize the subject in
+    // Better Stack for an event the Sentry side deliberately anonymized — and this is a
+    // subject who has just completed an Art. 17 erasure. The operator-actionable repo
+    // identifier is carried once, deliberately, in that Sentry event's `gitDataRepoId`.
+    const { hashUserId } = await import("@/server/observability");
+    log.warn(
+      { userIdHash: hashUserId(userId) },
+      "Account deleted but the git-data bare-repo erasure did not complete — reported to the user as pending",
+    );
+  }
+
   // Build response and clear all Supabase cookies
-  const response = NextResponse.json({ success: true });
+  const response = NextResponse.json({
+    success: true,
+    ...(result.gitDataErasurePending ? { gitDataErasurePending: true } : {}),
+  });
 
   // Clear all sb-* cookies to fully sign out the deleted user
   const cookieHeader = request.headers.get("cookie") ?? "";

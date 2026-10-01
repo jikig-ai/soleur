@@ -124,3 +124,26 @@ Whichever branch fires, the record must carry the window requested, the window a
 covered, the per-source instrumentation status, and the verdict — as one block. A count
 separated from its verdict is how a partial pull becomes a clean bill of health three
 documents downstream.
+
+## Addendum — 2026-09-14 (#7945): qualified sub-states of INCONCLUSIVE
+
+Append-only. Step 4 stays "three ways, and only three": BREACH, CLEAN, INCONCLUSIVE. This
+addendum admits a **qualifier** on the third branch, not a fourth branch.
+
+An INCONCLUSIVE verdict routes "the residual-window decision to the CLO" (Step 4). That
+decision has its own outcomes, and a record that carries only `INCONCLUSIVE` cannot show
+how it was closed. Determinations may therefore write the verdict as
+`INCONCLUSIVE-<QUALIFIER>`, where the qualifier records how the CLO closed the residual
+window — never a softer way of saying clean, and never a promotion out of the branch:
+
+| Qualifier | Meaning |
+|---|---|
+| `INCONCLUSIVE-EXHAUSTED` | Every instrument available to the controller, including processor assistance under GDPR Art. 28(3)(f), was run and could not answer. Closed on Art. 32 reasonable-steps grounds. |
+| `INCONCLUSIVE-BY-DECISION` | An instrument remained available and the controller declined to run it. Closed on a recorded decision with its reasons. Weaker than EXHAUSTED, and the record must say so. |
+
+Either form is still the INCONCLUSIVE branch: the window actually covered is recorded as
+not covered, the coverage limitation is stated, and any later evidence re-opens on the BREACH
+path. In a §Recording-the-outcome block, write the branch first and the qualifier as a
+sub-state — `INCONCLUSIVE (sub-state BY-DECISION, #7945)` — so the enum stays greppable.
+First use: `knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md`,
+2026-09-14 addendum.

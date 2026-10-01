@@ -172,25 +172,44 @@ t_schema_field() {
   rm -rf "$root"
 }
 
-# T7: malformed first_seen → aggregator still exits 0, rows intact.
+# T7: a row whose `timestamp` is not RFC 3339 UTC is DROPPED, and the run still
+# succeeds over the rows that are well-formed.
+#
+# The contract this asserts CHANGED in #8302. It used to be "the aggregator's
+# try/catch on fromdateiso8601 rescues the row", i.e. a malformed timestamp
+# still produced a counted event. It cannot any more: `timestamp` is copied
+# VERBATIM into rules[].first_seen / last_hit of the COMMITTED aggregate, and
+# the read was widened to sibling worktrees, so a row this checkout does not
+# control could put free text into a public file through that field. The
+# aggregator now gates it on the same closed alphabet as `rule_id`.
+#
+# Tolerance is still the property under test — one bad row must not abort the
+# run or swallow its neighbours — so the fixture seeds a well-formed row beside
+# it. The drop is asserted as OBSERVABLE (the `Dropped N malformed line(s)`
+# warning), because a silent drop and a counted event are indistinguishable to
+# an operator reading only the output file.
 t_malformed_first_seen() {
   local root; root=$(_setup)
-  # Emit an event for hr-rule-a with a broken timestamp string. The
-  # aggregator's try/catch on fromdateiso8601 rescues the row. Per
-  # rule-metrics emit_incident coverage (#2866), rules_unused_over_8w
-  # switched from hit_count==0 to fire_count==0 — any event (deny,
-  # bypass, applied, warn) excludes the rule from the unused bucket. So
-  # hr-rule-a is NOT unused (one bypass → fire_count=1); hr-rule-b and
-  # cm-rule-c remain unused (null first_seen + fire_count=0).
   printf '{"schema":1,"timestamp":"not-a-date","rule_id":"hr-rule-a","event_type":"bypass","rule_text_prefix":"","command_snippet":""}\n' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  jq -nc '{schema:1, timestamp:"2026-04-04T00:00:00Z", rule_id:"hr-rule-b", event_type:"bypass", rule_text_prefix:"", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
   local err="$root/err.log"
   INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" 2> "$err" >/dev/null \
-    || { _report "malformed first_seen tolerated" fail "non-zero exit; stderr: $(cat "$err")"; rm -rf "$root"; return; }
+    || { _report "malformed timestamp tolerated" fail "non-zero exit; stderr: $(cat "$err")"; rm -rf "$root"; return; }
+  local out="$root/knowledge-base/project/rule-metrics.json"
+  [[ -f "$out" ]] \
+    || { _report "malformed timestamp: the well-formed row still writes an aggregate" fail "no output file; stderr: $(cat "$err")"; rm -rf "$root"; return; }
+  grep -q 'Dropped 1 malformed line' "$err" \
+    || { _report "malformed timestamp: the drop is reported, not silent" fail "$(cat "$err")"; rm -rf "$root"; return; }
+  local a_fires
+  a_fires=$(jq '.rules[] | select(.id == "hr-rule-a") | .fire_count' < "$out")
+  [[ "$a_fires" == "0" ]] \
+    || { _report "malformed timestamp: the bad row is NOT counted" fail "hr-rule-a fire_count=$a_fires"; rm -rf "$root"; return; }
   local unused
-  unused=$(jq '.summary.rules_unused_over_8w' < "$root/knowledge-base/project/rule-metrics.json")
-  [[ "$unused" == "2" ]] && _report "malformed first_seen → rule in unused bucket" ok \
-    || _report "malformed first_seen → rule in unused bucket" fail "got $unused"
+  unused=$(jq '.summary.rules_unused_over_8w' < "$out")
+  [[ "$unused" == "2" ]] && _report "malformed timestamp → row dropped, hr-rule-a stays unused, hr-rule-b counted" ok \
+    || _report "malformed timestamp → unused bucket" fail "got $unused (want 2: hr-rule-a + cm-rule-c)"
   rm -rf "$root"
 }
 

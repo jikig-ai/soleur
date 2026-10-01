@@ -11,6 +11,12 @@ ROOT = os.environ.get("REPO", ".")
 CAP = os.path.join(ROOT, "knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json")
 OUTDIR = os.environ["OUTDIR"]
 
+# FROZEN to the 2026-09-04 capture (CAP above). This one-shot generator authored the
+# Phase 2 blocks and is kept runnable only to re-diff against THAT capture. Its EXCLUDE
+# set deliberately predates `seer_activity_trigger` (a Sentry-created default registered
+# 2026-09-22) and is NOT kept in sync with `def excluded` in
+# tests/scripts/lib/sentry-alert-projection.jq. Re-running it against a later capture
+# requires reviewing this set first.
 EXCLUDE = {"event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue"}
 
 def in_scope(w):

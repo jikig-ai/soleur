@@ -45,6 +45,19 @@ variable "betterstack_ingest_url" {
   # Not a credential, so hr-tf-variable-no-operator-mint-default does not apply — an ingest
   # URL is a public endpoint; the token that authorizes writing to it is separate.
   default = "https://s2734275.eu-central-1a.betterstackdata.com/"
+
+  # (#5274 review W8) PINNED AT PLAN TIME, not only at boot. seed-dirty-journal.sh refuses any
+  # other rendered URL — correctly, since the ingest token must reach git-data's own source only —
+  # but a refusal on the seed host emits nothing, so the run learned of it only when the 10-minute
+  # power-off poll expired. Validated here, a TF_VAR_betterstack_ingest_url override (the Doppler
+  # tf-var transformer would supply one if prd_terraform ever held that name) fails `terraform
+  # plan` before a host is spent. The literal is the seed script's BS_URL_PINNED;
+  # git-data-rung2-rehearsal.test.sh requires this condition, the default above and that pin to
+  # be the same string.
+  validation {
+    condition     = var.betterstack_ingest_url == "https://s2734275.eu-central-1a.betterstackdata.com/"
+    error_message = "betterstack_ingest_url must be git-data's own Better Stack ingest endpoint (https://s2734275.eu-central-1a.betterstackdata.com/): the rehearsal must ship to production's sink, and the seed host refuses any other URL."
+  }
 }
 
 variable "git_data_betterstack_logs_token" {
@@ -92,5 +105,15 @@ variable "rehearsal_run_id" {
     # an injection surface. Fail at plan time rather than at query time.
     condition     = can(regex("^[0-9]+$", var.rehearsal_run_id))
     error_message = "rehearsal_run_id must be the numeric GitHub Actions run id (it names Hetzner resources and is interpolated into the Better Stack query the capture script runs)."
+  }
+}
+
+variable "rehearsal_phase" {
+  description = "(#5274) `seed` boots seed-dirty-journal.sh (dirty the plaintext journal, power off without unmounting); `payload` replaces the host with the real module render. NO DEFAULT on purpose: a run that forgot the seed must fail at plan time, not silently rehearse a clean journal."
+  type        = string
+
+  validation {
+    condition     = contains(["seed", "payload"], var.rehearsal_phase)
+    error_message = "rehearsal_phase must be `seed` or `payload`."
   }
 }

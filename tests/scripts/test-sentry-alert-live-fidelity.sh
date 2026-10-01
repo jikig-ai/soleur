@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for scripts/sentry-alert-live-fidelity.sh (#7650 §2.9) — the probe that
-# notices one of the 28 adopted rules going dark WEEKS after the adopting apply.
+# notices a declared `sentry_alert` going dark WEEKS after the adopting apply.
 #
 # THE FAILURE THIS SUITE IS SHAPED AGAINST. A fidelity probe compares a document
 # to itself for a living, and the degenerate implementation — return PASS —
@@ -15,15 +15,38 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROBE="$REPO_ROOT/scripts/sentry-alert-live-fidelity.sh"
-# Tracks the PROBE's production default. Repointed to the Phase 3.4 capture with
-# the probe itself (#7985): the 2026-09-04 Phase 2 capture pre-dates
-# `git-data-boot-warning`, so a suite pinned to it would assert 27 while the probe
-# it tests compares 28 — the suite would go red for the fixture, not the code.
+PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
+# THE FROZEN LIVE FIXTURE. Since #8050 the probe's production reference is
+# `apps/web-platform/infra/sentry/alert-reference.json` (a projection of the
+# Terraform plan), not this capture. The capture stays here as the LIVE side of
+# every row — fixtures may be frozen — and the suite's reference is DERIVED from
+# it at start (below), so the two sides agree by construction and each drift
+# row is a single scoped edit to one of them. 28 in-scope rules is therefore a
+# fixture constant, not a claim about production.
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
+COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=13
+EXPECTED_TESTS=76
 
+export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
+
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
+# the verbatim body; see plugins/soleur/test/test-helpers.sh). Every fixture in
+# this suite is written under $TMPD and the EXIT trap removes it recursively, so
+# a relative or `..`-bearing root would put both the writes and the `rm -rf`
+# somewhere other than the scratch dir.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$TMPD"
 
 _report() {
   local label="$1" status="$2" detail="${3:-}"
@@ -34,9 +57,62 @@ _report() {
   fi
 }
 
-for f in "$PROBE" "$CAPTURE"; do
+# INSTRUMENT SELF-TEST. `EXPECTED_TESTS` reconciles `pass + fail` against a
+# literal, and BOTH counters are incremented only inside `_report` — so the gate
+# is computed from the very helper it backstops. Measured: routing the fail
+# branch into `pass` (one token) left the suite `63 passed, 0 failed`, exit 0,
+# with two genuinely failing rows printing only to stderr. A floor cannot see
+# that; only driving the helper in BOTH directions can. Counters are restored
+# afterwards so the row count stays exact.
+_selftest_report() {
+  local p0=$pass f0=$fail
+  _report "instrument self-test: ok moves pass" ok
+  [[ "$pass" -eq $((p0 + 1)) && "$fail" -eq "$f0" ]] \
+    || { printf '[FATAL] _report ok did not move pass alone (pass %s->%s, fail %s->%s)\n' "$p0" "$pass" "$f0" "$fail" >&2; exit 2; }
+  _report "instrument self-test: fail moves fail (expected; retracted immediately)" fail
+  [[ "$fail" -eq $((f0 + 1)) && "$pass" -eq $((p0 + 1)) ]] \
+    || { printf '[FATAL] _report fail did not move fail alone (pass %s->%s, fail %s->%s)\n' "$p0" "$pass" "$f0" "$fail" >&2; exit 2; }
+  pass=$p0; fail=$f0
+}
+
+for f in "$PROBE" "$CAPTURE" "$PROJ" "$COMMITTED_REF"; do
   [[ -f "$f" ]] || { echo "ERROR: $f does not exist — RED phase expected this." >&2; exit 1; }
 done
+
+# The suite's reference: the capture pushed through the LIVE side of the module
+# and then the REFERENCE side, exactly as production data would be. Non-vacuity
+# on the derivation itself, and N is COMPUTED, never typed.
+REFERENCE="$TMPD/reference.json"
+jq --arg side live -f "$PROJ" "$CAPTURE" | jq -S --arg side reference -f "$PROJ" > "$REFERENCE" \
+  || { echo "ERROR: could not derive the suite reference from the capture." >&2; exit 1; }
+N=$(jq 'length' "$REFERENCE")
+[[ "$N" =~ ^[0-9]+$ && "$N" -gt 0 ]] || { echo "ERROR: the derived reference holds $N rules." >&2; exit 1; }
+
+# The capture's own cardinality and its excluded-type census, DERIVED here rather
+# than typed. Two rows below (F12's "comparing N", F13's API-shaped length) used
+# to carry the integers 28 and 31, which are properties of the committed capture:
+# the day a workflow is added to it, a typed literal reds a correct suite and the
+# obvious repair is to re-type the new number rather than to look.
+#
+# `EXCL_DEF` is lifted from the projection module exactly as the probe lifts it
+# (same anchored regex), so the excluded set the suite counts with is the one the
+# probe selects its census with — if that line is ever reshaped, both refuse.
+CAPTURE_N=$(jq 'length' "$CAPTURE")
+EXCL_DEF=$(grep -m1 -E '^def excluded: \[.*\];[[:space:]]*$' "$PROJ" || true)
+[[ -n "$EXCL_DEF" ]] || { echo "ERROR: could not lift 'def excluded' from $PROJ." >&2; exit 1; }
+EXCL_CAPTURE_N=$(jq --argjson ex "$(jq -n -c "$EXCL_DEF excluded")" \
+  '[ .[] | select([.triggers.conditions[]?.type] as $t | any($ex[]; . as $e | $t | index($e))) ] | length' "$CAPTURE")
+# The floor, and the CROSS-CHECK that makes it more than a shape assert: the
+# projection's in-scope count and the capture's excluded census must partition the
+# capture exactly. A derivation that silently drifts (a reshaped capture, a widened
+# `def excluded`) fails here, before any row runs, instead of moving a row's
+# expected number underneath it.
+[[ "$CAPTURE_N" =~ ^[0-9]+$ && "$EXCL_CAPTURE_N" =~ ^[0-9]+$ ]] \
+  || { echo "ERROR: non-numeric derivation (CAPTURE_N=$CAPTURE_N EXCL_CAPTURE_N=$EXCL_CAPTURE_N)." >&2; exit 1; }
+if [[ "$CAPTURE_N" -le "$N" || "$EXCL_CAPTURE_N" -le 0 || $(( CAPTURE_N - EXCL_CAPTURE_N )) -ne "$N" ]]; then
+  echo "ERROR: the capture/reference derivation does not partition: CAPTURE_N=$CAPTURE_N N=$N EXCL_CAPTURE_N=$EXCL_CAPTURE_N (want CAPTURE_N > N > 0, EXCL_CAPTURE_N > 0, N == CAPTURE_N - EXCL_CAPTURE_N)." >&2
+  exit 1
+fi
 
 # _run <live-fixture> — sets the globals $_rc and $_out (stdout+stderr merged).
 #
@@ -44,11 +120,34 @@ done
 # assignment to `_out` would be discarded and every marker assertion below would
 # grep an empty string — reporting "the probe failed to detect" for nine drift
 # classes it detects correctly.
+# `SENTRY_REFERENCE_FILE` points at the derived reference; a second argument
+# overrides it for the reference-side rows.
 _out=""; _rc=0
+# A BASH ERROR IN THE PROBE'S OUTPUT FAILS EVERY ROW, not only the rows that look
+# for one: `_run` merges stderr into `$_out`, so a stray command substitution
+# (#4781: unescaped backticks ran `def` as a command and dropped the noun from the
+# remedy) or a `set -u` abort reads as noise to a row grepping for its marker.
+# `_bash_err` forces `_rc=97`, which no row accepts. It keys on the
+# `<script>: line N:` prefix, which bash TRANSLATES (`Zeile`, `ligne`) — so
+# `LC_ALL=C` below is what makes this guard work at all; do not drop it. No
+# finding text in the probe contains `: line N`.
+BASH_ERR_RE='sentry-alert-live-fidelity\.sh: line [0-9]+: '
+_bash_err() { # $1 = text; rc 0 = a bash error is present, 1 = absent, exits 2 on a broken regex
+  local rc=0
+  grep -qE -- "$BASH_ERR_RE" <<<"$1" || rc=$?
+  if [[ "$rc" -ge 2 ]]; then
+    printf '[FATAL] BASH_ERR_RE did not evaluate (grep rc=%s)\n' "$rc" >&2
+    exit 2
+  fi
+  return "$rc"
+}
+_guard_out() { if _bash_err "$_out"; then _rc=97; _out+=$'\n[harness] bash error in probe output (rc forced to 97)'; fi; }
 _run() {
   _rc=0
-  _out=$(SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture \
+  _out=$(LC_ALL=C SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture \
+         SENTRY_REFERENCE_FILE="${2:-$REFERENCE}" \
          SENTRY_FIXTURE_RULES="$1" bash "$PROBE" 2>&1) || _rc=$?
+  _guard_out
 }
 
 # _mutant <label> <jq-program> -> path to the mutated live payload.
@@ -81,7 +180,7 @@ _drift_case() { # $1=label $2=jq-program $3=expected-marker $4=human description
   if [[ "$_rc" -eq 1 ]] && grep -q "$3" <<<"$_out"; then
     _report "$4" ok
   else
-    _report "$4" fail "rc=$_rc (want 1), marker '$3' not found. Output: $(head -c 400 <<<"$_out")"
+    _report "$4" fail "rc=$_rc (want 1; 97 = bash error in probe output); marker '$3' $(grep -q "$3" <<<"$_out" && echo found || echo 'not found'). Output: $(head -c 400 <<<"$_out")"
   fi
 }
 
@@ -130,7 +229,7 @@ t_live_api_shape() {
     )
   ' "$CAPTURE" > "$shaped" 2>/dev/null
 
-  if [[ ! -s "$shaped" ]] || ! jq -e 'length == 31' "$shaped" >/dev/null 2>&1; then
+  if [[ ! -s "$shaped" ]] || ! jq -e --argjson n "$CAPTURE_N" 'length == $n' "$shaped" >/dev/null 2>&1; then
     _report "F13 an API-shaped payload (server fields + unsorted keys) still PASSES" fail \
       "the shaped fixture was not built — this row proves nothing"
     return
@@ -169,12 +268,16 @@ t_live_api_shape() {
 }
 
 # ── The identity row. ONE row, because it is the one a broken probe passes. ──
+# A WIRING test: the reference is derived from the capture two lines above, so
+# this proves the probe reads both sides through the module and prints the
+# fixture-mode verdict with the computed count — nothing about production.
 t_identity_passes() {
   _run "$CAPTURE"
-  if [[ "$_rc" -eq 0 ]] && grep -q 'all 28 in-scope rules match' <<<"$_out"; then
-    _report "F1 live == capture PASSES, and reports having compared all 28" ok
+  local want="PASS (FIXTURE — not live) (all ${N} in-scope rules match the committed reference field-for-field)"
+  if [[ "$_rc" -eq 0 ]] && grep -qF -- "$want" <<<"$_out"; then
+    _report "F1 live == derived reference PASSES with the FIXTURE token and the computed count (${N})" ok
   else
-    _report "F1 live == capture passes over all 28" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+    _report "F1 live == derived reference passes (wiring)" fail "rc=$_rc; want '$want'; output: $(head -c 300 <<<"$_out")"
   fi
 }
 
@@ -192,6 +295,24 @@ t_deleted() {
 # drift issue routes DRIFT to "re-run the apply" and DISABLED to "an apply will
 # NOT fix this", so a misclassified UI mute sends the operator down the wrong
 # path. Verified by the review's mutation battery.
+# The complement of F3: a rule the ROOT declares `enabled = false` and live holds
+# disabled is in its desired state and must NOT be reported DISABLED (which would
+# red every apply and every daily run for as long as the declaration stands — the
+# #8050 shape one attribute over). Built by deriving a reference from a capture
+# whose byok-art-33-breach is disabled, then probing that same disabled live copy.
+t_declared_disabled_is_not_a_finding() {
+  local f; f=$(_mutant decldisabled 'map(if .name=="byok-art-33-breach" then .enabled=false else . end)')
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then _report "F34 declared-disabled rule is not DISABLED" fail "the mutation did not land ($f)"; return; fi
+  local r="$TMPD/decldisabled.reference.json"
+  jq --arg side live -f "$PROJ" "$f" | jq -S --arg side reference -f "$PROJ" > "$r" || { _report "F34 declared-disabled rule is not DISABLED" fail "could not derive the reference"; return; }
+  jq -e '."byok-art-33-breach".enabled == false' "$r" >/dev/null || { _report "F34 declared-disabled rule is not DISABLED" fail "derived reference does not carry enabled:false"; return; }
+  _run "$f" "$r"
+  if [[ "$_rc" -eq 0 ]] && grep -q 'live fidelity: PASS' <<<"$_out" && ! grep -q 'DISABLED:' <<<"$_out"; then
+    _report "F34 a rule declared enabled=false and live-disabled PASSES with no DISABLED finding (DISABLED is judged against the declared value)" ok
+  else
+    _report "F34 declared-disabled rule is not DISABLED" fail "rc=$_rc (want 0); DISABLED $(grep -q 'DISABLED:' <<<"$_out" && echo present || echo absent). Output: $(head -c 300 <<<"$_out")"
+  fi
+}
 t_disabled() {
   _drift_case disabled 'map(if .name=="byok-art-33-breach" then .enabled=false else . end)' \
     "DISABLED: 'byok-art-33-breach'" \
@@ -210,7 +331,7 @@ t_detector_empty() {
 
 t_logictype_flip() {
   _drift_case logicflip 'map(if .name=="byok-art-33-breach" then .triggers.logicType="all" else . end)' 'LOGICTYPE FLIP' \
-    "F6 a triggers.logicType flip is detected"
+    "F6 a THREE-trigger rule's logicType flip (any-short → all) is detected — the pair of F26"
 }
 
 # The narrow one. A renamed tag key leaves the rule present, enabled, bound and
@@ -239,26 +360,28 @@ t_comparison_interval_drift() {
 
 # The other direction. A live in-scope rule the capture never saw is one nothing
 # in this repo manages, and regenerating from the capture would not produce it.
+# The marker runs on to the remedy noun, whose loss to an unescaped command
+# substitution (#4781) left the finding's prefix intact.
 t_unmanaged_new_rule() {
   _drift_case unmanaged \
     '. + [{"name":"created-in-the-ui","enabled":true,"detectorIds":["1213799"],"environment":null,"id":"999999","config":{"frequency":5},"triggers":{"logicType":"any-short","conditions":[{"type":"first_seen_event","comparison":true}],"actions":[]},"actionFilters":[]}]' \
-    'UNMANAGED' \
-    "F10 an in-scope live rule absent from the capture is reported as UNMANAGED"
+    "UNMANAGED: 'created-in-the-ui' (live id 999999) is live and in scope but declared nowhere.*def excluded" \
+    "F10 an in-scope live rule absent from the reference is reported as UNMANAGED (= undeclared), with its live id and its remedy noun intact"
 }
 
 # ── Anti-vacuity: the probe must refuse to certify having checked nothing. ──
-t_empty_capture_refuses() {
-  local cap="$TMPD/empty-capture.json"
-  printf '[]' > "$cap"
-  local rc=0
-  local out
-  out=$(SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture \
-        SENTRY_CAPTURE_FILE="$cap" SENTRY_FIXTURE_RULES="$CAPTURE" bash "$PROBE" 2>&1) || rc=$?
-  if [[ "$rc" -eq 1 ]] && grep -q 'ZERO in-scope rules' <<<"$out"; then
-    _report "F11 a capture yielding zero in-scope rules REFUSES to report a clean verdict" ok
+# `{}` passes the module's shape floor (shape is not cardinality), so this row
+# reaches the probe's OWN zero-rules floor rather than the module's — the two
+# floors are distinct and each has its row (see F23 for the shape floor).
+t_empty_reference_refuses() {
+  local ref="$TMPD/empty-reference.json"
+  printf '{}' > "$ref"
+  _run "$CAPTURE" "$ref"
+  if [[ "$_rc" -eq 1 ]] && grep -q 'ZERO in-scope rules' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "F11 a reference holding zero rules REFUSES to report a clean verdict (never PASS (all 0)" ok
   else
-    _report "F11 a capture yielding zero in-scope rules refuses" fail \
-      "rc=$rc (want 1); output: $(head -c 300 <<<"$out")"
+    _report "F11 a zero-rule reference refuses" fail \
+      "rc=$_rc (want 1); output: $(head -c 300 <<<"$_out")"
   fi
 }
 
@@ -268,22 +391,1088 @@ t_empty_capture_refuses() {
 t_survivors_out_of_scope() {
   _run "$CAPTURE"
   local names_ok=1
-  # 31 live workflows, 28 in scope: the vendor default plus the two carrying
-  # `event_unique_user_frequency_count` are excluded by the predicate, not by a
-  # name list. Assert the COUNT and that neither survivor is named in a finding.
-  grep -q 'comparing 28 captured in-scope rule' <<<"$_out" || names_ok=0
+  # ${CAPTURE_N} live workflows, ${N} in scope: the vendor default plus the two
+  # carrying `event_unique_user_frequency_count` are excluded by the predicate, not
+  # by a name list. Both numbers are DERIVED above from the capture and the module's
+  # own `def excluded`; the count asserted here is the full sentence the probe
+  # prints, so a probe that compared a different population reds.
+  # `-F` because the literal carries `(s)` — as a regex that is a capture group.
+  local want="comparing ${N} declared rule(s) against ${N} live in-scope rule(s)"
+  grep -qF -- "$want" <<<"$_out" || names_ok=0
   if [[ "$_rc" -eq 0 && "$names_ok" -eq 1 ]]; then
-    _report "F12 scope is 28: the vendor default and the two survivors are excluded by predicate" ok
+    _report "F12 scope is ${N} (= ${CAPTURE_N} captured − ${EXCL_CAPTURE_N} excluded-type): the vendor default and the two survivors are excluded by predicate" ok
   else
-    _report "F12 scope is 28, survivors excluded" fail \
-      "rc=$_rc; expected 'comparing 28 captured in-scope rule' in: $(head -c 300 <<<"$_out")"
+    _report "F12 scope is ${N}, survivors excluded" fail \
+      "rc=$_rc; expected '$want' in: $(head -c 300 <<<"$_out")"
   fi
 }
 
+# ── #8050 rows — the reference side, the pins, and the normalisations. ────────
+
+# (b) The reverse direction from the REFERENCE side: a rule the reference lacks
+# is undeclared to the probe even though live has it.
+t_reference_minus_one_rule() {
+  local ref="$TMPD/ref-minus-one.json"
+  jq 'del(.["auth-signout-burst"])' "$REFERENCE" > "$ref"
+  jq -e 'has("auth-signout-burst") | not' "$ref" >/dev/null || { _report "F22 reference minus one rule" fail "mutation did not land"; return; }
+  _run "$CAPTURE" "$ref"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED: 'auth-signout-burst'" <<<"$_out"; then
+    _report "F22 a rule removed from the reference is reported UNMANAGED (the live side still has it)" ok
+  else
+    _report "F22 reference minus one rule → UNMANAGED" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
+# (c) An API-shaped capture handed to the probe AS THE REFERENCE — the exact
+# mistake a reader of the old capture-file override contract would make.
+t_capture_as_reference_refused() {
+  _run "$CAPTURE" "$CAPTURE"
+  if [[ "$_rc" -eq 1 ]] && grep -q 'not a name-indexed projection object' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "F23 an API-shaped capture passed as the reference is refused at the shape floor, before any comparison" ok
+  else
+    _report "F23 capture-as-reference refused" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
+# (j) The shape floor at the leaf: one rule missing one required key.
+t_reference_missing_key_refused() {
+  local ref="$TMPD/ref-missing-key.json"
+  jq 'del(.["auth-signout-burst"].triggerLogicType)' "$REFERENCE" > "$ref"
+  jq -e '.["auth-signout-burst"] | has("triggerLogicType") | not' "$ref" >/dev/null || { _report "F24 missing key" fail "mutation did not land"; return; }
+  _run "$CAPTURE" "$ref"
+  if [[ "$_rc" -eq 1 ]] && grep -q 'not a name-indexed projection object' <<<"$_out"; then
+    _report "F24 a reference with one rule's triggerLogicType key deleted is refused at the shape floor" ok
+  else
+    _report "F24 reference missing key refused" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
+# THE PINS are covered by F14/F15 below (#8023's rows, adapted: rc 2 and the
+# `refusing destination host` / `refusing org` anchors the drift workflow greps).
+# This shim records argv AND stdin so the end-to-end row can assert the bearer
+# header travels on stdin, which #8023's stub cannot see.
+_shim_dir=""
+_install_curl_shim() { # $1 = file to serve on a real call
+  _shim_dir="$TMPD/shim.$RANDOM"
+  mkdir -p "$_shim_dir"
+  : > "$_shim_dir/calls.log"
+  : > "$_shim_dir/stdin.log"
+  cat > "$_shim_dir/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$_shim_dir/calls.log"
+printf '%s\0' "\$@" >> "$_shim_dir/argv.bin"
+cat >> "$_shim_dir/stdin.log"
+cat "$1"
+EOF
+  chmod +x "$_shim_dir/curl"
+}
+# (f) END TO END THROUGH THE PINNED PATH. Host and org equal the literals; the
+# shim asserts curl's argv shape (#7997: `--disable` literally first, `--noproxy
+# '*'`, the bearer header fed on stdin via `--header @-` so the token never
+# appears in argv) and serves the capture; the probe must print the LIVE PASS
+# line (no FIXTURE token) over all 28.
+t_pinned_path_end_to_end() {
+  _install_curl_shim "$CAPTURE"
+  local rc=0 out
+  out=$(PATH="$_shim_dir:$PATH" SENTRY_AUTH_TOKEN=fixture-token SENTRY_ORG=jikigai-eu \
+        SENTRY_API_HOST=jikigai-eu.sentry.io SENTRY_REFERENCE_FILE="$REFERENCE" bash "$PROBE" 2>&1) || rc=$?
+  local why=()
+  [[ "$rc" -eq 0 ]] || why+=("rc=$rc")
+  grep -qF -- "sentry_alert live fidelity: PASS (all ${N} in-scope rules match the committed reference field-for-field)" <<<"$out" || why+=("no live PASS line")
+  grep -q 'FIXTURE' <<<"$out" && why+=("FIXTURE token present on a live-branch run")
+  [[ "$(wc -l < "$_shim_dir/calls.log")" -gt 0 ]] || why+=("curl was never invoked")
+  # argv[1] must be `--disable`, LITERALLY FIRST (curl reads it only there).
+  local first; first=$(tr '\0' '\n' < "$_shim_dir/argv.bin" | head -1)
+  [[ "$first" == "--disable" ]] || why+=("argv[1]='$first', want --disable")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '--noproxy' || why+=("--noproxy absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '\*' || why+=("noproxy '*' absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '@-' || why+=("--header @- absent")
+  grep -q 'fixture-token' "$_shim_dir/argv.bin" && why+=("the token appeared in curl argv")
+  grep -q '^Authorization: Bearer fixture-token$' "$_shim_dir/stdin.log" || why+=("the bearer header was not fed on stdin")
+  # The pinned URL must be the ONLY URL-shaped argument, with the page size the
+  # `>= 100` ceiling assumes; and the call must be a plain GET.
+  local urls; urls=$(tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -E '^[a-z]+://' || true)
+  [[ "$urls" == "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/workflows/?per_page=100" ]] || why+=("URL set is not exactly the pinned URL: $(tr '\n' ' ' <<<"$urls")")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qxE -- '-X|--request|-d|--data|--data-binary|--data-raw|--data-urlencode|-F|--form|-L|--location|-T|--upload-file' && why+=("a method/body/redirect flag is present")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '-fsS' || why+=("-fsS absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '--max-time' || why+=("--max-time absent")
+  tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -qx -- '--proto' || why+=("--proto absent")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "F25 with host and org pinned, curl gets exactly the pinned URL (GET, --disable --noproxy '*' --proto, -fsS --max-time, --header @- with the token on stdin) and the probe prints the LIVE PASS over ${N}" ok
+  else
+    _report "F25 pinned path end to end" fail "${why[*]}; output: $(head -c 300 <<<"$out")"
+  fi
+}
+
+
+# ── #8023's rows F14–F21 (transport confinement + destination pin), adapted ──
+# to this probe: the reference is the derived one, the org pin is a LITERAL
+# (so a 63-octet org passes the SHAPE gate and is refused by the PIN), and every
+# refusal exits 2 with the anchor the drift workflow greps.
+_stub_curl_dir() {
+  local d="$TMPD/stub.$1"
+  mkdir -p "$d"
+  cat > "$d/curl" <<'STUB'
+: > "$STUB_ARGV"
+for a in "$@"; do printf '%s\n' "$a" >> "$STUB_ARGV"; done
+printf '%s\n' "${SSLKEYLOGFILE-<unset>}" > "$STUB_ENV"
+cat >/dev/null
+printf '[]'
+STUB
+  chmod +x "$d/curl"
+  printf '%s' "$d"
+}
+_argv=""; _envf=""
+_run_live() {
+  local name="$1"; shift
+  local d; d=$(_stub_curl_dir "$name")
+  _argv="$TMPD/$name.argv"; _envf="$TMPD/$name.env"
+  : > "$_argv"; : > "$_envf"
+  _rc=0
+  _out=$(env -u SENTRY_FIXTURE_RULES \
+           PATH="$d:$PATH" STUB_ARGV="$_argv" STUB_ENV="$_envf" \
+           SENTRY_AUTH_TOKEN=fixture SENTRY_REFERENCE_FILE="$REFERENCE" \
+           "$@" bash "$PROBE" 2>&1) || _rc=$?
+}
+t_hostile_host_refused() {
+  local h bad=0 detail=""
+  for h in attacker.tld eu.sentry.io de.sentry.io sentry.io jikigai-eu.sentry.io.evil.example; do
+    _run_live "hostilehost.${h//./_}" SENTRY_ORG=jikigai-eu SENTRY_API_HOST="$h"
+    if [[ "$_rc" -ne 2 ]] || ! grep -q '^ERROR: refusing destination host' <<<"$_out" \
+       || [[ -s "$_argv" ]]; then
+      bad=$((bad + 1))
+      detail+=" [$h rc=$_rc argv-bytes=$(wc -c <"$_argv")]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F14 all five non-pinned hosts REFUSED (rc 2, anchored) before any request (incl. the near-misses)" ok
+  else
+    _report "F14 hostile SENTRY_API_HOST is refused" fail "$bad of 5 arms wrong:$detail"
+  fi
+}
+t_hostile_org_refused() {
+  local o bad=0 detail="" i=0
+  for o in '@evil.tld/x' 'jikigai.evil.tld' 'jikigai/../../evil' 'jikigai%2fx' 'JIKIGAI' '-leading' '' 'jikigai-eu2'; do
+    i=$((i + 1))
+    _run_live "hostileorg.$i" SENTRY_ORG="$o" SENTRY_API_HOST="jikigai-eu.sentry.io"
+    # The empty org exits 1 at the `:?` guard; every other shape must exit 2
+    # with the anchor (from the shape gate or the literal pin), and none may
+    # reach the wire.
+    if [[ "$_rc" -eq 0 ]] || [[ -s "$_argv" ]] \
+       || { [[ -n "$o" ]] && { [[ "$_rc" -ne 2 ]] || ! grep -q '^ERROR: refusing org' <<<"$_out"; }; }; then
+      bad=$((bad + 1)); detail+=" [org='$o' rc=$_rc argv-bytes=$(wc -c <"$_argv")]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F15 every non-RFC-1035 org shape AND a well-formed non-pinned org are REFUSED (rc 2, anchored) before any request" ok
+  else
+    _report "F15 hostile SENTRY_ORG is refused" fail "$bad shape(s) wrong:$detail"
+  fi
+}
+t_transport_flags_first() {
+  _run_live flags SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io
+  local a1 a2 a3 a4
+  a1=$(sed -n '1p' "$_argv"); a2=$(sed -n '2p' "$_argv")
+  a3=$(sed -n '3p' "$_argv"); a4=$(sed -n '4p' "$_argv")
+  if [[ "$a1" == "--disable" && "$a2" == "--noproxy" && "$a3" == '*' \
+        && "$a4" == "--proto" ]] && grep -qx -- '=https' "$_argv" && grep -qx -- '-g' "$_argv"; then
+    _report "F16 the credentialed curl is transport-confined, flags FIRST (--disable --noproxy * --proto =https -g)" ok
+  else
+    _report "F16 transport flags are first" fail \
+      "argv[1..4]=[$a1 $a2 $a3 $a4]; want [--disable --noproxy * --proto]. Full argv: $(head -c 300 "$_argv" | tr '\n' ' ')"
+  fi
+}
+t_resolver_env_scrubbed() {
+  _run_live scrub SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io \
+    SSLKEYLOGFILE=/tmp/should-not-survive
+  if grep -qx '<unset>' "$_envf"; then
+    _report "F17 resolver / trust-anchor / keylog env is scrubbed before the request" ok
+  else
+    _report "F17 resolver env is scrubbed" fail \
+      "the child saw SSLKEYLOGFILE=$(cat "$_envf") — the unset prologue did not run"
+  fi
+}
+t_fixture_mode_still_passes() {
+  _run "$CAPTURE"
+  if [[ "$_rc" -eq 0 ]] && grep -q "all ${N} in-scope rules match" <<<"$_out"; then
+    _report "F18 fixture mode still PASSES with the guards in place" ok
+  else
+    _report "F18 fixture mode still passes" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+  fi
+}
+t_org_locale_independent() {
+  local lc bad=0 detail=""
+  for lc in C en_US.UTF-8; do
+    _run_live "loc.${lc//./_}" LC_ALL="$lc" LANG="$lc" \
+      SENTRY_ORG='jikigaí' SENTRY_API_HOST=jikigai-eu.sentry.io
+    if [[ "$_rc" -ne 2 ]] || ! grep -q '^ERROR: refusing org' <<<"$_out"; then
+      bad=$((bad + 1)); detail+=" [LC_ALL=$lc rc=$_rc]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F19 a non-ASCII org is refused under BOTH LC_ALL=C and en_US.UTF-8" ok
+  else
+    _report "F19 org refusal is locale-independent" fail "$bad of 2 locales wrong:$detail"
+  fi
+}
+t_org_length_boundary() {
+  # A 63-octet slug passes the SHAPE gate and is then refused by the literal
+  # PIN (its message carries `(pinned:`); a 64-octet one never reaches the pin.
+  _run_live len63 SENTRY_ORG="a$(printf 'b%.0s' $(seq 62))" SENTRY_API_HOST=jikigai-eu.sentry.io
+  local rc63=$_rc out63="$_out"
+  _run_live len64 SENTRY_ORG="a$(printf 'b%.0s' $(seq 63))" SENTRY_API_HOST=jikigai-eu.sentry.io
+  local rc64=$_rc out64="$_out"
+  if [[ "$rc63" -eq 2 ]] && grep -q '^ERROR: refusing org .*(pinned: jikigai-eu)' <<<"$out63" \
+     && [[ "$rc64" -eq 2 ]] && grep -q '^ERROR: refusing org' <<<"$out64" && ! grep -q '(pinned:' <<<"$out64"; then
+    _report "F20 a 63-octet org passes the shape gate (refused by the PIN); a 64-octet one is refused by the shape gate" ok
+  else
+    _report "F20 org length boundary is 63/64" fail \
+      "63: rc=$rc63 pinned=$(grep -c '(pinned:' <<<"$out63"); 64: rc=$rc64 pinned=$(grep -c '(pinned:' <<<"$out64")"
+  fi
+}
+t_transport_not_reopened_by_suffix() {
+  _run_live suffix SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io
+  local a bad="" n_noproxy=0 n_proto=0
+  while IFS= read -r a; do
+    case "$a" in
+      -x|--proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5 \
+        |--socks5-hostname|--socks5-basic|--socks5-gssapi) bad+=" $a" ;;
+      -K|--config) bad+=" $a" ;;
+      --proto-default|--proto-redir) bad+=" $a" ;;
+      --resolve|--connect-to|--unix-socket|--abstract-unix-socket|--url) bad+=" $a" ;;
+      -k|--insecure|--proxy-insecure|--ssl-no-revoke|--cacert|--capath \
+        |--doh-url|--doh-insecure|--location-trusted|-L|--location) bad+=" $a" ;;
+      --no-globoff) bad+=" $a" ;;
+    esac
+    [[ "$a" == "--noproxy" ]] && n_noproxy=$((n_noproxy + 1))
+    [[ "$a" == "--proto"   ]] && n_proto=$((n_proto + 1))
+  done < "$_argv"
+  [[ "$n_noproxy" -eq 1 ]] || bad+=" --noproxy x${n_noproxy}"
+  [[ "$n_proto"   -eq 1 ]] || bad+=" --proto x${n_proto}"
+  if [[ -z "$bad" && -s "$_argv" ]]; then
+    _report "F21 no later argument re-opens the transport the prefix closed" ok
+  else
+    _report "F21 the argv SUFFIX re-opens confinement" fail \
+      "offending token(s):${bad:-<none>}; argv-bytes=$(wc -c <"$_argv"). Full argv: $(head -c 300 "$_argv" | tr '\n' ' ')"
+  fi
+}
+
+# ── Live-side floors that were missing (#8069 review) ──────────────────────
+# A live in-scope duplicate name, an empty name, and a multi-trigger workflow
+# with no logicType each REFUSE (exit 1, no PASS line, the module's own error
+# text) — each was measured PASS at rc 0 before these floors existed.
+_live_refusal() { # $1=label $2=jq-program over the capture $3=marker $4=description
+  local f; f=$(_mutant "$1" "$2")
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then _report "$4" fail "the mutation did not land ($f)"; return; fi
+  _run "$f"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "$3" <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "$4" ok
+  else
+    _report "$4" fail "rc=$_rc (want 1), marker '$3' $(grep -qF -- "$3" <<<"$_out" && echo present || echo ABSENT). Output: $(head -c 300 <<<"$_out")"
+  fi
+}
+t_live_duplicate_name_refused() {
+  _live_refusal livedup \
+    '. + [ (map(select(.name=="byok-art-33-breach"))[0] | .enabled=false) ]' \
+    'duplicate in-scope workflow name(s): byok-art-33-breach' \
+    "F29 a disabled same-name live copy of byok-art-33-breach makes the probe REFUSE, never PASS (order-independent)"
+}
+t_live_empty_name_refused() {
+  _live_refusal liveempty \
+    'map(if .name=="auth-signout-burst" then .name="" else . end)' \
+    'empty or non-string name' \
+    "F30 a live in-scope workflow with an empty name is REFUSED rather than dropped from the UNMANAGED loop"
+}
+t_live_multi_trigger_null_logictype_refused() {
+  _live_refusal livenull \
+    'map(if .name=="byok-art-33-breach" then del(.triggers.logicType) else . end)' \
+    'carries no triggers.logicType; refusing to default it' \
+    "F31 a 3-trigger live workflow with no logicType is REFUSED, never defaulted to the TF side's any-short"
+}
+# The probe's compared-field list is hardcoded; `frequency` had no drift row, so
+# dropping it from the list left the suite green (review mutation).
+t_frequency_drift() {
+  _drift_case freq 'map(if .name=="auth-signout-burst" then .config.frequency=999 else . end)' \
+    "DRIFT: 'auth-signout-burst'.frequency declared=" \
+    "F32 a changed config.frequency is detected and named"
+}
+
+# (g)/(h) THE PROVIDER CONSTANT. The provider hard-codes trigger logicType
+# `any-short` on every write (resource_alert_impl.go 803/835 @ v0.15.7); a
+# single-trigger rule imported as `all` becomes `any-short` on its first edit,
+# and that must NOT read as a flip — one condition has no logic. A THREE-trigger
+# rule flipping to `all` still must.
+t_single_trigger_logictype_is_not_a_flip() {
+  # `all → any-short`: the provider's post-apply value. (`all → all` would be a
+  # NOOP the landing check rejects.)
+  local f; f=$(_mutant single-any 'map(if .name=="auth-signout-burst" then .triggers.logicType="any-short" else . end)')
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then _report "F26 single-trigger logicType" fail "mutation did not land ($f)"; return; fi
+  _run "$f"
+  if [[ "$_rc" -eq 0 ]] && ! grep -q 'LOGICTYPE FLIP' <<<"$_out"; then
+    _report "F26 a single-trigger rule whose live logicType becomes any-short (the provider's write) is NOT a flip" ok
+  else
+    _report "F26 single-trigger any-short is not a flip" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+  fi
+}
+# F6 already flips the THREE-trigger byok-art-33-breach to `all` and asserts
+# LOGICTYPE FLIP; that row is (h). Kept there, referenced here so the pair reads
+# together.
+
+# (k) NORMALISE IS ORDER-INSENSITIVE AND DATA-SENSITIVE. Swapping the VALUES of
+# two conditions with DIFFERENT keys changes the data (the set of (key,value)
+# pairs), so `sort_by(tostring)` must not hide it.
+#
+# SELECTED BY KEY, NOT BY INDEX (#8036 1c). This used to read "[0] is
+# registry=ghcr-fallback and [2] is stage=inngest_ghcr_fallback" and index those
+# two positions directly. 1c removed the `ghcr-fallback` condition, so [0] became
+# a different member and every later index shifted by one — the mutation would
+# still have landed and the row would still have passed, but on a pair it had not
+# chosen, with its own comment describing operands that were no longer there. A
+# positional pin carries no claim about WHICH members it compares.
+#
+# WHAT IT MUTATES: the FROZEN live capture ($CAPTURE, 2026-09-09), never the
+# committed rule or alert-reference.json. That capture still holds the
+# five-condition rule of its date; the committed rule is two conditions since
+# #8036 1d (`registry = zot-gate-degraded`, `stage = inngest_pull_fatal`). So a
+# narrowing of the rule cannot turn this row into a NOOP: it needs one `registry`
+# and one `stage` condition IN THE CAPTURE, and the capture does not move with a
+# .tf edit. Keyed selection keeps the row addressing the same two kinds of member
+# on any capture that is ever re-taken, of either shape.
+#
+# The mutation ABORTS rather than silently no-opping if either key is absent:
+# `_drift_case` reports a NOOP as "the mutation did not land — this row compared
+# the capture to itself and proves nothing", which is the failure mode a null
+# index would otherwise produce.
+t_value_swap_is_drift() {
+  _drift_case valueswap \
+    'map(if .name=="zot-mirror-fallback-rate" then
+           (.actionFilters[0].conditions
+              | to_entries
+              | map(select(.value.comparison.key=="registry"))[0].key) as $i
+           | (.actionFilters[0].conditions
+              | to_entries
+              | map(select(.value.comparison.key=="stage"))[0].key) as $j
+           | if ($i == null or $j == null) then .
+             else
+               (.actionFilters[0].conditions[$i].comparison.value) as $a
+               | (.actionFilters[0].conditions[$j].comparison.value) as $b
+               | .actionFilters[0].conditions[$i].comparison.value = $b
+               | .actionFilters[0].conditions[$j].comparison.value = $a
+             end
+         else . end)' \
+    'comparison.value' \
+    "F27 swapping comparison.value between a registry-keyed and a stage-keyed condition is DRIFT (order-insensitive, data-sensitive; selected by key, never by index)"
+}
+
+# (i) TF/LIVE SHAPE PARITY — the structural anchor for the module's `tf` side,
+# against REAL data on both sides: the COMMITTED reference (projected from the
+# real plan) and the LIVE projection of the frozen capture. For every common
+# rule the SET of (leaf path with numeric indices erased, leaf TYPE) must be
+# equal. A dropped `comparison: true`, a null `targetIdentifier` becoming a
+# string, or a string-vs-array `detectorIds` reds here; a threshold edit or an
+# added condition does not (no value ledger — that is what the live probe is
+# for). `common >= 20` is the floor that keeps this row from passing on a near-
+# empty intersection.
+t_tf_live_shape_parity() {
+  local live_proj="$TMPD/live-proj.json"
+  jq --arg side live -f "$PROJ" "$CAPTURE" > "$live_proj"
+  local report
+  report=$(jq -r -n --slurpfile t "$COMMITTED_REF" --slurpfile l "$live_proj" '
+    def shapes: [ paths(type != "array" and type != "object") as $p
+                  | [ ($p | map(if type == "number" then "[]" else . end) | join(".")), (getpath($p) | type) ] ]
+                | unique;
+    $t[0] as $T | $l[0] as $L
+    | (($T | keys) - (($T | keys) - ($L | keys))) as $common
+    | "common=\($common | length)",
+      ( $common[] as $n
+        | ($T[$n] | shapes) as $a | ($L[$n] | shapes) as $b
+        | select($a != $b)
+        | "MISMATCH \($n): tf-only=\(($a - $b) | tojson) live-only=\(($b - $a) | tojson)" )
+  ')
+  local common; common=$(sed -n 's/^common=//p' <<<"$report")
+  local mism; mism=$(grep -c '^MISMATCH' <<<"$report" || true)
+  if [[ "$common" =~ ^[0-9]+$ && "$common" -ge 20 && "$mism" -eq 0 ]]; then
+    _report "F28 tf/live shape parity over ${common} common rules (>= 20): every leaf path and type agrees between the committed tf-projected reference and the live projection" ok
+  else
+    _report "F28 tf/live shape parity" fail "common=${common:-?} mismatches=$mism: $(grep '^MISMATCH' <<<"$report" | head -3 | cut -c1-300)"
+  fi
+}
+
+# (l) H4 — THE HARNESS ROW. `_mutant` with a selector matching nothing must
+# report NOOP so the row built on it FAILS on landing rather than comparing the
+# capture to itself and passing an identity assertion.
+t_h4_mutant_noop_is_detected() {
+  local f; f=$(_mutant noop 'map(if .name=="this-rule-does-not-exist" then .enabled=false else . end)')
+  if [[ "$f" == "NOOP" ]]; then
+    _report "H4 _mutant reports NOOP when the selector matches nothing, so a row built on it fails on landing" ok
+  else
+    _report "H4 _mutant NOOP detection" fail "got '$f' (want NOOP)"
+  fi
+}
+
+# ── Guard 4 — the frozen-rule live pin (#8451) ───────────────────────────────
+# The workflows whose trigger type is in the projection's `excluded` set are
+# outside BOTH projection sides, so every row above is blind to them by
+# construction. After #8451 two of them are also `ignore_changes = all` in
+# Terraform, so a UI edit plans "0 changes". The probe's frozen-rule pass pins
+# every rule TERRAFORM FREEZES (a `sentry_alert` block carrying
+# `legacy_trigger_conditions`, derived from the .tf) to the committed capture
+# entry of the same name, on every field that decides paging: enabled,
+# detectorIds, the full trigger {type, comparison} set, triggers.logicType,
+# config.frequency, environment and the canonicalised actionFilters. Every other
+# excluded-type live workflow is a census member: in the capture = Sentry's own
+# unmanaged default (not pinned), absent from it = UNMANAGED-FROZEN.
+#
+# Expected counts are DERIVED here, independently of the probe (a grep of the
+# .tf, not the probe's awk; capture minus the live projection). Never typed.
+FROZEN_N=$(( CAPTURE_N - N ))
+FROZEN_NAMES_JSON=$(jq -c --slurpfile r "$REFERENCE" '[ .[].name | select(. as $n | $r[0] | has($n) | not) ]' "$CAPTURE")
+FROZEN_TF_N=$(cat "$REPO_ROOT"/apps/web-platform/infra/sentry/*.tf | grep -cE '^[[:space:]]*legacy_trigger_conditions[[:space:]]*=[[:space:]]*\[[[:space:]]*"')
+# The census's third number AS THIS FIXTURE POPULATION PRODUCES IT: excluded-type
+# captured workflows minus the ones Terraform freezes. It is capture-and-.tf
+# derived and deliberately does NOT read vendor-default-workflows.json, so it
+# equals the probe's third COUNT field only because every fixture here draws its
+# live payload from the capture, where the registry's sole entry does not appear.
+# Derived either way, so a row asserting it cannot be satisfied by a typed 1.
+DEFAULTS_N=$(( FROZEN_N - FROZEN_TF_N ))
+[[ "$DEFAULTS_N" -gt 0 ]] || { echo "ERROR: DEFAULTS_N=$DEFAULTS_N (FROZEN_N=$FROZEN_N FROZEN_TF_N=$FROZEN_TF_N); the census rows below would assert nothing." >&2; exit 1; }
+# _run_env <live-fixture> VAR=val… — `_run` with extra probe environment.
+_run_env() {
+  local fx="$1"; shift
+  _rc=0
+  _out=$(env LC_ALL=C SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture \
+         SENTRY_REFERENCE_FILE="$REFERENCE" \
+         SENTRY_FIXTURE_RULES="$fx" "$@" bash "$PROBE" 2>&1) || _rc=$?
+  _guard_out
+}
+
+t_g4_identity_pins_census() {
+  _run "$CAPTURE"
+  local want="frozen-rule pin: compared ${FROZEN_TF_N} of ${FROZEN_TF_N} Terraform-frozen rule(s) against the committed capture"
+  if [[ "$FROZEN_TF_N" -ge 2 && "$FROZEN_N" -gt "$FROZEN_TF_N" ]] && [[ "$_rc" -eq 0 ]] && grep -qF -- "$want" <<<"$_out" \
+     && grep -q 'live fidelity: PASS' <<<"$_out" && ! grep -q 'FROZEN\|UNMANAGED-FROZEN' <<<"$_out"; then
+    _report "G4-6 a live fixture equal to the capture PASSES and the frozen pin compares the ${FROZEN_TF_N} Terraform-frozen rules (grep of the .tf), fewer than the ${FROZEN_N} excluded-type captured workflows" ok
+  else
+    _report "G4-6 identity passes the frozen pin" fail "FROZEN_TF_N=$FROZEN_TF_N FROZEN_N=$FROZEN_N rc=$_rc; want '$want'. Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_comparison_true() {
+  _drift_case g4cmptrue \
+    'map(if .name=="sandbox-startup-failure" then .triggers.conditions[0].comparison=true else . end)' \
+    "FROZEN DRIFT: 'sandbox-startup-failure'.triggerConditions" \
+    "G4-1 a frozen rule's trigger comparison replaced by 'true' is detected"
+}
+t_g4_threshold_changed() {
+  _drift_case g4threshold \
+    'map(if .name=="sandbox-startup-failure" then .triggers.conditions[0].comparison.value=50 else . end)' \
+    "FROZEN DRIFT: 'sandbox-startup-failure'.triggerConditions" \
+    "G4-1b a frozen rule re-thresholded in the UI (comparison.value 2 -> 50) is detected"
+}
+# SECOND MEMBER: the first frozen rule is correct, the second is not. A pass
+# that stops at the first excluded-type workflow (or only checks one) greens.
+t_g4_second_member_disabled() {
+  local f; f=$(_mutant g4disabled 'map(if .name=="sandbox-startup-failure" then .enabled=false else . end)')
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then _report "G4-3 second member disabled" fail "the mutation did not land ($f)"; return; fi
+  _run "$f"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "FROZEN DISABLED: 'sandbox-startup-failure'" <<<"$_out" \
+     && ! grep -q "'auth-per-user-loop'" <<<"$_out" && grep -q 'live fidelity FAILED' <<<"$_out"; then
+    _report "G4-3 auth-per-user-loop correct, then sandbox-startup-failure enabled=false: RED on the second member only" ok
+  else
+    _report "G4-3 second member disabled" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_no_email_action() {
+  _drift_case g4noemail \
+    'map(if .name=="auth-per-user-loop" then .actionFilters |= map(.actions = []) else . end)' \
+    "FROZEN DRIFT: 'auth-per-user-loop'.actionFilters" \
+    "G4-4 a frozen rule stripped of its email action is detected (full actions comparison, not '>= 1 email')"
+}
+t_g4_detector_changed() {
+  _drift_case g4detector \
+    'map(if .name=="sandbox-startup-failure" then .detectorIds=["9999999"] else . end)' \
+    "FROZEN MONITOR UNBIND: 'sandbox-startup-failure'" \
+    "G4-5 a frozen rule re-bound to another detector is detected"
+}
+t_g4_unknown_frozen_rule() {
+  _drift_case g4unknown \
+    '. + [ (map(select(.name=="auth-per-user-loop"))[0] | .name="new-frozen-rule" | .id="999998") ]' \
+    "UNMANAGED-FROZEN: 'new-frozen-rule'" \
+    "G4-7 an excluded-type live workflow absent from the capture is UNMANAGED-FROZEN"
+}
+t_g4_compared_nothing() {
+  _drift_case g4none \
+    "map(select(.name | IN(${FROZEN_NAMES_JSON}[]) | not))" \
+    'frozen-rule pin compared nothing' \
+    "G4-2 zero excluded-type live workflows while the capture holds ${FROZEN_N}: RED ('compared nothing')"
+}
+# The capture is the anchor; an unreadable one must refuse, never skip the pin.
+t_g4_capture_unreadable_refuses() {
+  _rc=0
+  _out=$(SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture SENTRY_REFERENCE_FILE="$REFERENCE" \
+         SENTRY_FROZEN_CAPTURE_FILE="$TMPD/no-such-capture.json" \
+         SENTRY_FIXTURE_RULES="$CAPTURE" bash "$PROBE" 2>&1) || _rc=$?
+  if [[ "$_rc" -eq 1 ]] && grep -q 'frozen-rule capture not readable' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-8 an unreadable frozen-rule capture REFUSES (rc 1), never skips the pin" ok
+  else
+    _report "G4-8 unreadable capture refuses" fail "rc=$_rc (want 1). Output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
+# ── Guard 4 review rows (#8451 review) ───────────────────────────────────────
+t_g4_one_frozen_deleted() {
+  _drift_case g4del1 'map(select(.name != "sandbox-startup-failure"))' \
+    "FROZEN DELETED: 'sandbox-startup-failure'" \
+    "G4-9 ONE of the two Terraform-frozen rules deleted live (the other intact) is FROZEN DELETED, not a quiet census shrink"
+}
+t_g4_fallthrough_noone() {
+  _drift_case g4fallthrough \
+    'map(if .name=="auth-per-user-loop" then .actionFilters[0].actions[0].data.fallthroughType="NoOne" else . end)' \
+    "FROZEN DRIFT: 'auth-per-user-loop'.actionFilters" \
+    "G4-10 a frozen rule's email fallthroughType ActiveMembers -> NoOne (still an email action, pages nobody) is detected"
+}
+t_g4_tag_filter_emptied() {
+  _drift_case g4tagempty \
+    'map(if .name=="sandbox-startup-failure" then .actionFilters[0].conditions=[] else . end)' \
+    "FROZEN DRIFT: 'sandbox-startup-failure'.actionFilters" \
+    "G4-11 a frozen rule's tag filter emptied (now pages on every event) is detected"
+}
+t_g4_frequency_changed() {
+  _drift_case g4freq \
+    'map(if .name=="auth-per-user-loop" then .config.frequency=1440 else . end)' \
+    "FROZEN DRIFT: 'auth-per-user-loop'.frequency" \
+    "G4-12 a frozen rule's config.frequency changed (30 -> 1440) is detected"
+}
+t_g4_trigger_logictype_changed() {
+  _drift_case g4logic \
+    'map(if .name=="sandbox-startup-failure" then .triggers.logicType="none" else . end)' \
+    "FROZEN DRIFT: 'sandbox-startup-failure'.triggerLogicType" \
+    "G4-13 a frozen rule's triggers.logicType changed (all -> none, inverts the trigger) is detected"
+}
+# Sentry's own default workflow is excluded-type and IN the capture, but
+# Terraform does not manage it: pinning it filed a p1 over a vendor default.
+t_g4_vendor_default_not_pinned() {
+  local f; f=$(_mutant g4vendor 'map(if .name=="Send a notification for high priority issues" then .enabled=false else . end)')
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then _report "G4-14 vendor default not pinned" fail "the mutation did not land ($f)"; return; fi
+  _run "$f"
+  if [[ "$_rc" -eq 0 ]] && grep -q 'live fidelity: PASS' <<<"$_out" && ! grep -q 'FROZEN' <<<"$_out"; then
+    _report "G4-14 Sentry's default 'Send a notification for high priority issues' (566201, not Terraform-managed) disabled live PASSES: not pinned" ok
+  else
+    _report "G4-14 vendor default not pinned" fail "rc=$_rc (want 0). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_unknown_vendor_shaped() {
+  _drift_case g4unknown2 \
+    '. + [ (map(select(.name=="Send a notification for high priority issues"))[0] | .name="another-high-priority-copy" | .id="999997") ]' \
+    "UNMANAGED-FROZEN: 'another-high-priority-copy'" \
+    "G4-15 an unknown excluded-type workflow (high-priority trigger, not a frozen name, not in the capture) is UNMANAGED-FROZEN"
+}
+# #8267: Sentry created the Seer default on 2026-09-17, after the 2026-09-09
+# capture, with a trigger type the provider cannot express (v0.15.7 reads it into
+# legacy_trigger_conditions and writes comparison=true). It is registered in
+# vendor-default-workflows.json, never appended to the dated capture. The live
+# fixture below is the capture plus that workflow, built from the registry's own
+# {id, name} so the rows track the file they test.
+REGISTRY="$REPO_ROOT/apps/web-platform/infra/sentry/vendor-default-workflows.json"
+SEER_NAME="Send a notification when pull requests are ready"
+_seer_live() { # $1=out $2=id override (default: the registered id)
+  local id="${2:-$(jq -r --arg n "$SEER_NAME" '.[] | select(.name == $n) | .id' "$REGISTRY")}"
+  jq --arg n "$SEER_NAME" --arg i "$id" \
+    '. + [ (map(select(.name=="Send a notification for high priority issues"))[0]
+           | .name=$n | .id=$i
+           | .triggers.conditions=[{"type":"seer_activity_trigger","comparison":["pr_ready_for_review"]}]) ]' \
+    "$CAPTURE" > "$1"
+}
+# Both halves, one row each direction: registered (type excluded + {id, name} in
+# the registry) PASSES; the same live payload with an EMPTY registry is
+# UNMANAGED-FROZEN, not plain UNMANAGED (so the type half is what took it out of
+# scope). Dropping the type from `def excluded` makes the first run UNMANAGED.
+t_g4_seer_default_registered() {
+  local live="$TMPD/live-seer.json" empty="$TMPD/registry-empty.json"
+  _seer_live "$live"; printf '[]\n' > "$empty"
+  jq -e --arg n "$SEER_NAME" 'map(select(.name == $n)) | length == 1' "$live" >/dev/null \
+    || { _report "G4-20 Seer default registered" fail "the live fixture did not land"; return; }
+  _run_env "$live"
+  local rc_reg=$_rc out_reg="$_out"
+  _run_env "$live" SENTRY_VENDOR_DEFAULTS_FILE="$empty"
+  if [[ "$rc_reg" -eq 0 ]] && grep -q 'live fidelity: PASS' <<<"$out_reg" && ! grep -q 'UNMANAGED' <<<"$out_reg" \
+     && [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED-FROZEN: '$SEER_NAME'" <<<"$_out" \
+     && ! grep -qF -- "UNMANAGED: '$SEER_NAME'" <<<"$_out"; then
+    _report "G4-20 the registered Seer default PASSES; with an empty registry it is UNMANAGED-FROZEN (out of scope by type, unknown by registry)" ok
+  else
+    _report "G4-20 Seer default registered" fail "registered rc=$rc_reg (want 0); empty-registry rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+# A workflow borrowing a registered default's NAME under another id is not that
+# default: matching by name alone was an evasion (#8545 review).
+t_g4_seer_name_other_id() {
+  local live="$TMPD/live-seer-otherid.json"; _seer_live "$live" 999111
+  _run_env "$live"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED-FROZEN: '$SEER_NAME' (id \"999111\") carries the name of a registered Sentry default under a DIFFERENT id" <<<"$_out"; then
+    _report "G4-21 a registered default's name under a different id is UNMANAGED-FROZEN (identity is id AND name)" ok
+  else
+    _report "G4-21 name under another id" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_seer_duplicate_name() {
+  local live="$TMPD/live-seer-dup.json" dup="$TMPD/live-seer-dup2.json"
+  _seer_live "$live"
+  jq --arg n "$SEER_NAME" '. + [ (map(select(.name == $n))[0] | .id = "999112") ]' "$live" > "$dup"
+  _run_env "$dup"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED-FROZEN DUPLICATE: '$SEER_NAME' names more than one" <<<"$_out"; then
+    _report "G4-22 a registered default's name live twice is UNMANAGED-FROZEN DUPLICATE, even when one copy has the registered id" ok
+  else
+    _report "G4-22 duplicate registered name" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+# The capture half of KNOWN is id-matched too: the high-priority default under a
+# new id is no longer accepted by name.
+t_g4_capture_default_other_id() {
+  _drift_case g4hpid \
+    'map(if .name=="Send a notification for high priority issues" then .id="999113" else . end)' \
+    "UNMANAGED-FROZEN: 'Send a notification for high priority issues' (id \"999113\") carries the name of a registered Sentry default under a DIFFERENT id" \
+    "G4-23 the captured high-priority default under a different id is UNMANAGED-FROZEN"
+}
+t_g4_registry_malformed_refuses() {
+  local bad="$TMPD/registry-bad.json"
+  printf '[{"name":"x"}]\n' > "$bad"
+  _run_env "$CAPTURE" SENTRY_VENDOR_DEFAULTS_FILE="$bad"
+  if [[ "$_rc" -eq 1 ]] && grep -q 'vendor-default registry' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-24 a registry entry without a string id REFUSES (rc 1), never a silent census" ok
+  else
+    _report "G4-24 malformed registry refuses" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_zero_frozen_names_refuses() {
+  local d="$TMPD/tf-nofrozen"; mkdir -p "$d"
+  printf 'resource "sentry_alert" "x" {\n  name = "x"\n  trigger_conditions = []\n}\n' > "$d/a.tf"
+  _run_env "$CAPTURE" SENTRY_FROZEN_TF_DIR="$d"
+  if [[ "$_rc" -eq 1 ]] && grep -q 'derived ZERO frozen rule' <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-16 a .tf set from which ZERO frozen names derive REFUSES (rc 1), never passes a pin that compared nothing" ok
+  else
+    _report "G4-16 zero frozen names refuses" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_frozen_name_without_capture_refuses() {
+  local d="$TMPD/tf-extra"; mkdir -p "$d"
+  cp "$REPO_ROOT"/apps/web-platform/infra/sentry/*.tf "$d/"
+  printf '\nresource "sentry_alert" "not_captured" {\n  name              = "frozen-but-not-captured"\n  trigger_conditions        = []\n  legacy_trigger_conditions = ["event_unique_user_frequency_count"]\n  lifecycle {\n    ignore_changes = all\n  }\n}\n' >> "$d/issue-alerts.tf"
+  _run_env "$CAPTURE" SENTRY_FROZEN_TF_DIR="$d"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "'frozen-but-not-captured'" <<<"$_out" && grep -q 'no entry in the committed capture' <<<"$_out" \
+     && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-17 a Terraform-frozen name with no capture entry REFUSES (the pin has no anchor for it)" ok
+  else
+    _report "G4-17 frozen name without capture refuses" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+t_g4_environment_changed() {
+  _drift_case g4env \
+    'map(if .name=="auth-per-user-loop" then .environment="staging" else . end)' \
+    "FROZEN DRIFT: 'auth-per-user-loop'.environment" \
+    "G4-19 a frozen rule bound to an environment (null -> staging, matches only that environment) is detected"
+}
+# M11: every trigger condition is compared, not [0]. A SYNTHESIZED capture gives
+# sandbox-startup-failure two excluded-type trigger conditions; the identity run
+# over it must PASS (so the RED below is caused by the second condition alone),
+# then conditions[1].comparison.value is moved in the live copy only.
+t_g4_second_trigger_condition() {
+  local cap2="$TMPD/capture-2trig.json" live2="$TMPD/live-2trig.json"
+  jq 'map(if .name=="sandbox-startup-failure" then .triggers.conditions += [{"type":"event_unique_user_frequency_count","comparison":{"value":9,"interval":"1d"}}] else . end)' "$CAPTURE" > "$cap2"
+  jq 'map(if .name=="sandbox-startup-failure" then .triggers.conditions[1].comparison.value=90 else . end)' "$cap2" > "$live2"
+  jq -e 'map(select(.name=="sandbox-startup-failure"))[0].triggers.conditions | length == 2 and .[1].comparison.value == 9' "$cap2" >/dev/null \
+    || { _report "G4-18 second trigger condition" fail "the synthesized two-trigger capture did not land"; return; }
+  cmp -s "$cap2" "$live2" && { _report "G4-18 second trigger condition" fail "the live mutation did not land"; return; }
+  _run_env "$cap2" SENTRY_FROZEN_CAPTURE_FILE="$cap2"
+  local rc_id=$_rc out_id="$_out"
+  _run_env "$live2" SENTRY_FROZEN_CAPTURE_FILE="$cap2"
+  if [[ "$rc_id" -eq 0 ]] && grep -q 'live fidelity: PASS' <<<"$out_id" \
+     && [[ "$_rc" -eq 1 ]] && grep -qF -- "FROZEN DRIFT: 'sandbox-startup-failure'.triggerConditions" <<<"$_out"; then
+    _report "G4-18 a frozen rule with TWO trigger conditions: identity PASSES, moving only conditions[1] is FROZEN DRIFT (all conditions compared, not [0])" ok
+  else
+    _report "G4-18 second trigger condition" fail "identity rc=$rc_id (want 0); mutant rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+
+# ── A MANAGED RULE THAT GAINS AN EXCLUDED TRIGGER (#8576) ────────────────────
+# Sentry can add a trigger type to an existing workflow (#8267 is the adjacent
+# case, where Seer CREATED a workflow carrying one, on
+# 2026-09-17). If it lands on a rule Terraform MANAGES, that rule leaves the
+# projection scope: the per-rule loop sees a declared name with no in-scope live
+# entry and used to call it `DELETED or RENAMED` — whose remedy is "an apply
+# recreates it", which is wrong twice over (the provider re-sends the trigger as
+# `comparison: true`, and the create tripwire refuses the write). The census half
+# was worse: `$KNOWN` was built from EVERY capture entry, so the rule was accepted
+# as a "registered Sentry default" and the run PASSED.
+#
+# `_gained_live <label> <name>…` appends the Seer trigger to each named rule and
+# asserts the edit landed on every one of them. It takes a LABEL, not a path, and
+# roots the fixture at $TMPD itself: a caller-supplied destination is an operand
+# the P1b scanner cannot prove absolute, and this write plus the EXIT trap's
+# `rm -rf` must both land inside the scratch dir.
+GAINED_TRIGGER='{"type":"seer_activity_trigger","comparison":["pr_ready_for_review"]}'
+_gained_live() {
+  local out="$TMPD/$1.json"; shift
+  local names_json; names_json=$(printf '%s\n' "$@" | jq -R -s -c 'split("\n") | map(select(. != ""))')
+  jq --argjson names "$names_json" --argjson trig "$GAINED_TRIGGER" \
+    'map(if (.name as $n | $names | index($n)) then .triggers.conditions += [$trig] else . end)' \
+    "$CAPTURE" > "$out" || return 1
+  jq -e --argjson names "$names_json" \
+    '[ .[] | select(.name as $n | $names | index($n))
+       | select(any(.triggers.conditions[]?; .type == "seer_activity_trigger")) ] | length == ($names | length)' \
+    "$out" >/dev/null
+}
+t_g4_managed_rule_gained_trigger() {
+  local live="$TMPD/live-gained.json"
+  _gained_live live-gained byok-art-33-breach \
+    || { _report "G4-25 a managed rule that gains an excluded trigger" fail "the live fixture did not land"; return; }
+  _run "$live"
+  if [[ "$_rc" -eq 1 ]] \
+     && grep -qF -- "MANAGED RULE GAINED EXCLUDED TRIGGER: 'byok-art-33-breach'" <<<"$_out" \
+     && ! grep -qF -- "DELETED or RENAMED: 'byok-art-33-breach'" <<<"$_out" \
+     && ! grep -qF -- "UNMANAGED-FROZEN: 'byok-art-33-breach'" <<<"$_out" \
+     && grep -qF -- "(${DEFAULTS_N} other excluded-type" <<<"$_out"; then
+    _report "G4-25 a Terraform-managed rule that gains an excluded trigger live is MANAGED RULE GAINED EXCLUDED TRIGGER, not DELETED or RENAMED, and is not counted among the ${DEFAULTS_N} registered default(s)" ok
+  else
+    _report "G4-25 managed rule gained excluded trigger" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+# TWO members: an arm that stops at the first `$O` member greens on G4-25 alone.
+t_g4_two_managed_rules_gained() {
+  local live="$TMPD/live-gained2.json"
+  _gained_live live-gained2 byok-art-33-breach kb-db-error \
+    || { _report "G4-26 two managed rules gained" fail "the live fixture did not land"; return; }
+  _run "$live"
+  if [[ "$_rc" -eq 1 ]] \
+     && grep -qF -- "MANAGED RULE GAINED EXCLUDED TRIGGER: 'byok-art-33-breach'" <<<"$_out" \
+     && grep -qF -- "MANAGED RULE GAINED EXCLUDED TRIGGER: 'kb-db-error'" <<<"$_out"; then
+    _report "G4-26 TWO managed rules that gained an excluded trigger are BOTH reported (the arm iterates every census member)" ok
+  else
+    _report "G4-26 two managed rules gained" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+# The intact rule stays in scope, and a same-name COPY under a different id carries
+# the excluded type. That copy is NOT a managed rule that left scope — the managed
+# one is still there — so it must stay UNMANAGED-FROZEN. Asserted on the anchor
+# only: the `$KNOWN` narrowing legitimately changes the tail of that message.
+t_g4_same_name_excluded_copy_stays_unmanaged() {
+  local live="$TMPD/live-gained-copy.json"
+  jq --argjson trig "$GAINED_TRIGGER" \
+    '. + [ (map(select(.name=="byok-art-33-breach"))[0] | .id="999900" | .triggers.conditions=[$trig]) ]' \
+    "$CAPTURE" > "$live"
+  jq -e 'map(select(.name=="byok-art-33-breach")) | length == 2' "$live" >/dev/null \
+    || { _report "G4-27 same-name excluded copy" fail "the live fixture did not land"; return; }
+  _run "$live"
+  if [[ "$_rc" -eq 1 ]] \
+     && grep -qF -- "UNMANAGED-FROZEN: 'byok-art-33-breach'" <<<"$_out" \
+     && ! grep -qF -- "MANAGED RULE GAINED EXCLUDED TRIGGER: 'byok-art-33-breach'" <<<"$_out"; then
+    _report "G4-27 an excluded-type COPY of a healthy managed rule (same name, different id) stays UNMANAGED-FROZEN: the managed rule itself never left scope" ok
+  else
+    _report "G4-27 same-name excluded copy" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+# The `$KNOWN` narrowing, isolated: a rule REMOVED from Terraform while still live
+# and carrying an excluded trigger. Before the narrowing `$KNOWN` held every capture
+# entry, so this matched by {id, name} and the whole run PASSED rc=0 having compared
+# nothing for it.
+t_g4_unowned_excluded_rule_not_known() {
+  local live="$TMPD/live-gained-unowned.json" ref="$TMPD/ref-minus-byok.json"
+  _gained_live live-gained-unowned byok-art-33-breach \
+    || { _report "G4-28 unowned excluded rule" fail "the live fixture did not land"; return; }
+  jq 'del(.["byok-art-33-breach"])' "$REFERENCE" > "$ref"
+  jq -e 'has("byok-art-33-breach") | not' "$ref" >/dev/null \
+    || { _report "G4-28 unowned excluded rule" fail "the reference mutation did not land"; return; }
+  _run "$live" "$ref"
+  # The census LINE, not just the class. This fixture puts one member in $O that
+  # is neither KNOWN nor GAINED, so the tally must stay at ${DEFAULTS_N}. Without
+  # this assert, dropping `is_in($KNOWN)` from the tally — or replacing the whole
+  # expression with |$O| - |$GAINED| — prints 2 here and no row notices.
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED-FROZEN: 'byok-art-33-breach'" <<<"$_out" \
+     && grep -qF -- "(${DEFAULTS_N} other excluded-type" <<<"$_out"; then
+    _report "G4-28 an excluded-type live rule that no longer exists in the reference is UNMANAGED-FROZEN, not silently accepted as a registered default, and the census still tallies ${DEFAULTS_N} registered default(s)" ok
+  else
+    _report "G4-28 unowned excluded rule" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
+# ── ROWS THE REVIEW PANEL'S MUTATION AUDIT SHOWED MISSING ────────────────────
+# Each of these kills a mutant that the first battery could not reach, because
+# every one of its rows perturbed the same axis (the $O chain's content) and
+# every fixture derived unmodified from the committed capture.
+
+# mA: the elif ORDER. The chain puts GAINED before the KNOWN identity arm, and a
+# comment calls that deliberate — but with every fixture's $GAINED member absent
+# from $KNOWN, moving the arm below KNOWN left the suite byte-identical green.
+# The discriminator is a name that is in BOTH: the reference declares the
+# captured high-priority default, so the same workflow is GAINED *and* KNOWN.
+# Measured: with the arm moved, this fixture reports PASS at rc=0 — the silent
+# green this whole change exists to remove.
+HI_PRI_NAME="Send a notification for high priority issues"
+t_g4_gained_precedes_known() {
+  local ref="$TMPD/ref-plus-hipri.json"
+  jq --arg n "$HI_PRI_NAME" '. + {($n): (.["auth-signout-burst"])}' "$REFERENCE" > "$ref"
+  jq -e --arg n "$HI_PRI_NAME" 'has($n)' "$ref" >/dev/null \
+    || { _report "G4-29 GAINED precedes KNOWN" fail "the reference mutation did not land"; return; }
+  _run "$CAPTURE" "$ref"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "MANAGED RULE GAINED EXCLUDED TRIGGER: '$HI_PRI_NAME'" <<<"$_out" \
+     && grep -qF -- "(0 other excluded-type" <<<"$_out"; then
+    _report "G4-29 a workflow that is BOTH declared by the reference and a registered default is reported GAINED, not silently accepted — the GAINED arm precedes the KNOWN identity arm, and the census does not count it as a default" ok
+  else
+    _report "G4-29 GAINED precedes KNOWN" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
+# mG: id TYPE. Every fixture inherits the capture's string ids, so a one-sided
+# `tostring` in `is_in` is invisible — and its consequence is that the GAINED arm
+# goes dead and the rule degrades to the arm whose remedy says to register a
+# Terraform-managed rule as a vendor default.
+t_g4_numeric_ids_still_classify() {
+  local live="$TMPD/live-gained-numeric.json"
+  _gained_live live-gained-numeric byok-art-33-breach \
+    || { _report "G4-30 numeric ids" fail "the live fixture did not land"; return; }
+  jq 'map(.id |= (tonumber? // .))' "$TMPD/live-gained-numeric.json" > "$live.num"
+  jq -e 'map(select(.name=="byok-art-33-breach")) | .[0].id | type == "number"' "$live.num" >/dev/null \
+    || { _report "G4-30 numeric ids" fail "the id retype did not land"; return; }
+  _run "$live.num"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "MANAGED RULE GAINED EXCLUDED TRIGGER: 'byok-art-33-breach'" <<<"$_out" \
+     && ! grep -qF -- "UNMANAGED-FROZEN: 'byok-art-33-breach'" <<<"$_out"; then
+    _report "G4-30 a live payload whose ids are JSON NUMBERS classifies identically (both sides of the id comparison are tostring-normalised)" ok
+  else
+    _report "G4-30 numeric ids" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
+# The DUPLICATE arm precedes GAINED, so a managed rule that gains the trigger AND
+# has a same-name excluded copy is reported under the duplicate class, whose
+# remedy ends in DELETE. The addendum naming the managed case is the only thing
+# standing between that instruction and a live paging rule — and it was dead
+# (`.name` under `jq -n` is null; every sibling binds `$w`). No row entered this
+# arm: G4-27 leaves the original IN scope, so $O holds one member.
+t_g4_duplicate_managed_name_warns() {
+  local live="$TMPD/live-dup-managed.json"
+  jq --argjson trig "$GAINED_TRIGGER" \
+    '. + [ (map(select(.name=="byok-art-33-breach"))[0] | .id="999900" | .triggers.conditions=[$trig]) ]
+     | map(if .name=="byok-art-33-breach" and .id=="600195" then .triggers.conditions += [$trig] else . end)' \
+    "$CAPTURE" > "$live"
+  jq -e '[ .[] | select(.name=="byok-art-33-breach")
+           | select(any(.triggers.conditions[]?; .type == "seer_activity_trigger")) ] | length == 2' \
+    "$live" >/dev/null \
+    || { _report "G4-31 duplicate managed name" fail "the live fixture did not land"; return; }
+  _run "$live"
+  local hits; hits=$(grep -cF -- "ALSO declared in the Sentry root" <<<"$_out" || true)
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNMANAGED-FROZEN DUPLICATE: 'byok-art-33-breach'" <<<"$_out" \
+     && [[ "$hits" -eq 2 ]]; then
+    _report "G4-31 two excluded-type copies of a DECLARED name are UNMANAGED-FROZEN DUPLICATE, and every line warns that the name is Terraform-declared (the duplicate arm precedes GAINED, and its remedy ends in DELETE)" ok
+  else
+    _report "G4-31 duplicate managed name" fail "rc=$_rc (want 1), 'ALSO declared' lines=$hits (want 2). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
+# The hand-off ledger. The per-rule loop defers a declared name whose live bearer
+# is out of scope; the census can only classify members of $O, which excludes
+# Terraform-FROZEN names. Measured before the fix: rc=0 and `all 29 in-scope
+# rules match` while 28 were compared — a clean verdict over a rule nothing
+# checked, and a REGRESSION against the pre-change probe, which said DELETED.
+t_g4_handoff_is_reconciled() {
+  local ref="$TMPD/ref-plus-frozen-name.json"
+  jq '. + {"auth-per-user-loop": (.["auth-signout-burst"])}' "$REFERENCE" > "$ref"
+  jq -e 'has("auth-per-user-loop")' "$ref" >/dev/null \
+    || { _report "G4-32 hand-off reconciled" fail "the reference mutation did not land"; return; }
+  _run "$CAPTURE" "$ref"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "UNRECONCILED HAND-OFF: 'auth-per-user-loop'" <<<"$_out" \
+     && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "G4-32 a declared name whose only live bearer is Terraform-FROZEN is reported UNRECONCILED HAND-OFF: the per-rule loop deferred it and the census cannot classify it, so nothing compared the reference entry" ok
+  else
+    _report "G4-32 hand-off reconciled" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
+# ── #4781: THE AUTH RULES EMPTIED LIVE ───────────────────────────────────────
+# The 2026-06-02 incident shape (all four auth rules with empty triggers and tag
+# filters), plus the second Terraform-frozen member. Emptying a FROZEN rule's
+# triggers removes its excluded trigger type, so it enters the live projection's
+# scope, where the reference cannot declare it (tf_legacy_floor). It must be
+# reported as the frozen rule it is, never as UNMANAGED ("delete it in Sentry").
+F4781_FROZEN=(auth-per-user-loop sandbox-startup-failure)
+F4781_BURST=(auth-callback-no-code-burst auth-exchange-code-burst auth-signout-burst)
+t_auth_rules_emptied_4781() {
+  local names_json; names_json=$(jq -nc '$ARGS.positional' --args "${F4781_BURST[@]}" "${F4781_FROZEN[@]}")
+  # `map(if … else . end)`, NOT `map(select(…))`: the select form deletes every
+  # other workflow, and each assertion below would still pass on that fixture.
+  local f; f=$(_mutant auth4781 \
+    "map(if (.name as \$n | ${names_json} | index(\$n)) then .triggers.conditions=[] | .actionFilters=[.actionFilters[] | .conditions=[]] else . end)")
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then
+    _report "F35 #4781 auth rules emptied" fail "the mutation did not land ($f)"
+    return
+  fi
+  _run "$f"
+  local detail="" n
+  [[ "$_rc" -eq 1 ]] || detail+=" [rc=$_rc want 1]"
+  # The frozen list is typed, so pin it to the set the probe derives from the .tf.
+  [[ "${#F4781_FROZEN[@]}" -eq "$FROZEN_TF_N" ]] || detail+=" [F4781_FROZEN has ${#F4781_FROZEN[@]} names, the .tf freezes $FROZEN_TF_N]"
+  # Fixture precondition: every frozen member entered scope and no burst rule left it.
+  grep -qF -- "comparing ${N} declared rule(s) against $((N + ${#F4781_FROZEN[@]})) live in-scope rule(s)" <<<"$_out" \
+    || detail+=" [header: want ${N} vs $((N + ${#F4781_FROZEN[@]}))]"
+  ! grep -qF -- "DELETED or RENAMED" <<<"$_out" || detail+=" [DELETED or RENAMED printed]"
+  ! grep -qF -- "delete it in Sentry" <<<"$_out" || detail+=" [a delete-it remedy printed]"
+  for n in "${F4781_BURST[@]}"; do
+    grep -qF -- "DRIFT: '$n'.triggerConditions" <<<"$_out" || detail+=" [no DRIFT $n.triggerConditions]"
+    grep -qF -- "DRIFT: '$n'.actionFilters" <<<"$_out" || detail+=" [no DRIFT $n.actionFilters]"
+  done
+  for n in "${F4781_FROZEN[@]}"; do
+    grep -qF -- "FROZEN DRIFT: '$n'.triggerConditions" <<<"$_out" || detail+=" [no FROZEN DRIFT $n]"
+    grep -qF -- "FROZEN RULE LEFT SCOPE: '$n'" <<<"$_out" || detail+=" [no LEFT SCOPE $n]"
+    ! grep -qF -- "UNMANAGED: '$n'" <<<"$_out" || detail+=" [UNMANAGED printed for frozen $n]"
+  done
+  if [[ -z "$detail" ]]; then
+    _report "F35 #4781: all four auth rules (and the second frozen member) emptied live -> DRIFT on each burst rule's triggers and filters, FROZEN DRIFT + FROZEN RULE LEFT SCOPE for each frozen rule, and no delete-it co-finding" ok
+  else
+    _report "F35 #4781 auth rules emptied" fail "$detail. Output: $(head -c 600 <<<"$_out")"
+  fi
+}
+
+# A live NAME is vendor- and org-member-controlled text, printed into the runner
+# log and a PUBLIC issue body. A CR in it survives a line-oriented read and reaches
+# the Actions runner as a `::` workflow command; an LF split by `keys[] | read`
+# yields a fragment that can impersonate a frozen rule. Classified whole, printed
+# scrubbed.
+t_unmanaged_name_is_scrubbed_and_whole() {
+  local f; f=$(_mutant spoofname \
+    '. + [{"name":"auth-per-user-loop\nx\r::error::spoofed","enabled":true,"detectorIds":["1213799"],"environment":null,"id":"999998","config":{"frequency":5},"triggers":{"logicType":"any-short","conditions":[{"type":"first_seen_event","comparison":true}],"actions":[]},"actionFilters":[]}]')
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then
+    _report "F36 hostile name" fail "the mutation did not land ($f)"
+    return
+  fi
+  _run "$f"
+  local detail="" um
+  [[ "$_rc" -eq 1 ]] || detail+=" [rc=$_rc want 1]"
+  # A CR is a line break to the runner, so split on it too before anchoring. A
+  # herestring, not `tr | grep -q`: under pipefail an early grep exit can SIGPIPE
+  # the producer and the negation would then read as clean.
+  ! grep -q '^[[:space:]]*::error::spoofed' <<<"${_out//$'\r'/$'\n'}" || detail+=" [a line starts with ::error::spoofed]"
+  ! grep -qF -- "FROZEN RULE LEFT SCOPE: 'auth-per-user-loop'" <<<"$_out" || detail+=" [a fragment impersonated the frozen rule]"
+  um=$(grep -c "^  UNMANAGED: '" <<<"$_out" || true)
+  [[ "$um" -eq 1 ]] || detail+=" [UNMANAGED lines=$um want 1]"
+  grep -qF -- "UNMANAGED: 'auth-per-user-loopx::error::spoofed'" <<<"$_out" || detail+=" [no scrubbed whole-name UNMANAGED line]"
+  if [[ -z "$detail" ]]; then
+    _report "F36 an undeclared live name carrying LF, CR and a :: command is classified WHOLE and printed scrubbed on exactly one UNMANAGED line" ok
+  else
+    _report "F36 hostile name" fail "$detail. Output: $(head -c 600 <<<"$_out")"
+  fi
+}
+
+# LEFT SCOPE ALONE must fail the run. F35 always carries a FROZEN DRIFT beside it,
+# which keeps rc 1 on its own; here the capture entry itself has no excluded type,
+# so the pin matches and LEFT is the only finding.
+t_left_scope_alone_fails() {
+  local cap="$TMPD/capture-left-only.json"
+  jq 'map(if .name=="auth-per-user-loop" then .triggers.conditions=[] else . end)' "$CAPTURE" > "$cap"
+  jq -e 'map(select(.name=="auth-per-user-loop"))[0].triggers.conditions == []' "$cap" >/dev/null \
+    || { _report "F37 LEFT SCOPE alone" fail "the fixture did not land"; return; }
+  _run_env "$cap" SENTRY_FROZEN_CAPTURE_FILE="$cap"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "FROZEN RULE LEFT SCOPE: 'auth-per-user-loop' (live id 566671; captured id 566671)" <<<"$_out" \
+     && ! grep -q 'live fidelity: PASS' <<<"$_out" && ! grep -qF -- "FROZEN DRIFT" <<<"$_out"; then
+    _report "F37 a frozen rule that left scope while still matching its capture entry fails the run on FROZEN RULE LEFT SCOPE alone" ok
+  else
+    _report "F37 LEFT SCOPE alone" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
+# A name that scrubs to another rule's name must say so, and carry its own id.
+t_scrubbed_name_is_flagged() {
+  local f; f=$(_mutant belname \
+    '. + [{"name":"auth-per-user-loop\u0007","enabled":true,"detectorIds":["1213799"],"environment":null,"id":"999997","config":{"frequency":5},"triggers":{"logicType":"any-short","conditions":[{"type":"first_seen_event","comparison":true}],"actions":[]},"actionFilters":[]}]')
+  [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]] && { _report "F38 scrubbed name" fail "the mutation did not land ($f)"; return; }
+  _run "$f"
+  local line; line=$(grep "^  UNMANAGED: 'auth-per-user-loop'" <<<"$_out" || true)
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "(live id 999997)" <<<"$line" && grep -qF -- "DISPLAY NAME ALTERED" <<<"$line" \
+     && ! grep -qF -- "FROZEN RULE LEFT SCOPE: 'auth-per-user-loop'" <<<"$_out"; then
+    _report "F38 an undeclared name that scrubs to a frozen rule's name is printed with its live id and a DISPLAY NAME ALTERED warning, never as that rule" ok
+  else
+    _report "F38 scrubbed name" fail "rc=$_rc (want 1). Line: $(head -c 400 <<<"$line")"
+  fi
+}
+
+# FROZEN DUPLICATE had no row.
+t_frozen_duplicate() {
+  _drift_case g4frozendup \
+    '. + [ (map(select(.name=="auth-per-user-loop"))[0] | .id="999996") ]' \
+    "FROZEN DUPLICATE: 'auth-per-user-loop'" \
+    "F39 a Terraform-frozen name live twice is FROZEN DUPLICATE"
+}
+
+# A frozen block the derivation cannot parse must refuse, not leave the pin.
+t_frozen_derivation_parity_refuses() {
+  local d="$TMPD/tf-multiline"; mkdir -p "$d"
+  cp "$REPO_ROOT"/apps/web-platform/infra/sentry/*.tf "$d/"
+  python3 - "$d/issue-alerts.tf" <<'PY' || { _report "F40 multi-line legacy list" fail "the .tf edit did not land"; return; }
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '  legacy_trigger_conditions = ["event_unique_user_frequency_count"]'
+assert s.count(old) >= 1
+i = s.index(old)
+open(p, 'w').write(s[:i] + '  legacy_trigger_conditions = [\n    "event_unique_user_frequency_count",\n  ]' + s[i + len(old):])
+PY
+  _run_env "$CAPTURE" SENTRY_FROZEN_TF_DIR="$d"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "but the frozen-name derivation read" <<<"$_out" && ! grep -q 'live fidelity: PASS' <<<"$_out"; then
+    _report "F40 a frozen block whose legacy list the derivation cannot parse REFUSES, instead of silently leaving the frozen-rule pin" ok
+  else
+    _report "F40 multi-line legacy list" fail "rc=$_rc (want 1). Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+
+# A bidi override reorders how a name DISPLAYS without changing its bytes'
+# printability, so `safe` must strip it and the line must say the name was altered.
+t_bidi_name_is_scrubbed() {
+  local f; f=$(_mutant bidiname \
+    '. + [{"name":"auth-per-user-loop\u202e","enabled":true,"detectorIds":["1213799"],"environment":null,"id":"999994","config":{"frequency":5},"triggers":{"logicType":"any-short","conditions":[{"type":"first_seen_event","comparison":true}],"actions":[]},"actionFilters":[]}]')
+  [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]] && { _report "F41 bidi name" fail "the mutation did not land ($f)"; return; }
+  _run "$f"
+  local line; line=$(grep "^  UNMANAGED: 'auth-per-user-loop' (live id 999994)" <<<"$_out" || true)
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "DISPLAY NAME ALTERED" <<<"$line" && [[ "$_out" != *$'\xe2\x80\xae'* ]]; then
+    _report "F41 a bidi-override character in a live name is stripped and the line is flagged DISPLAY NAME ALTERED" ok
+  else
+    _report "F41 bidi name" fail "rc=$_rc (want 1). Line: $(head -c 300 <<<"$line")"
+  fi
+}
+
+t_frozen_id_mismatch() {
+  _drift_case g4idmismatch \
+    'map(if .name=="auth-per-user-loop" then .id="999995" else . end)' \
+    "FROZEN ID MISMATCH: 'auth-per-user-loop' live id \"999995\", captured id \"566671\"" \
+    "F42 a frozen name borne by a different live id than the captured rule is FROZEN ID MISMATCH (the pin no longer matches by name alone)"
+}
+
+# DRIFT detail lines are built from live OBJECT KEYS too, so they go through `safe`.
+t_leaf_key_is_scrubbed() {
+  local f; f=$(_mutant leafkey \
+    'map(if .name=="auth-signout-burst" then .actionFilters[0].conditions[0].comparison += {"k\n::error::leafkey\r":1} else . end)')
+  [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]] && { _report "F43 leaf key" fail "the mutation did not land ($f)"; return; }
+  _run "$f"
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- "DRIFT: 'auth-signout-burst'.actionFilters" <<<"$_out" \
+     && ! grep -q '^[[:space:]]*::error::leafkey' <<<"${_out//$'\r'/$'\n'}"; then
+    _report "F43 a live object key carrying LF/CR and a :: command is scrubbed in the DRIFT detail lines" ok
+  else
+    _report "F43 leaf key" fail "rc=$_rc (want 1). Output: $(head -c 500 <<<"$_out")"
+  fi
+}
+
+# INSTRUMENT SELF-TEST for the bash-error guard: it must match a bash error and
+# pass a clean finding line (a regex grep cannot evaluate exits 2, which
+# `_bash_err` turns into a fatal). Reported by printf/exit, never through the guard.
+_selftest_bash_err() {
+  _bash_err "$PROBE: line 1: def: command not found" \
+    || { printf '[FATAL] BASH_ERR_RE does not match a bash error line\n' >&2; exit 2; }
+  if _bash_err "  UNMANAGED: 'x' (live id 1) is live and in scope"; then
+    printf '[FATAL] BASH_ERR_RE matches a clean finding line\n' >&2; exit 2
+  fi
+}
+
+_selftest_report
+_selftest_bash_err
 t_identity_passes
 t_live_api_shape
 t_deleted
 t_disabled
+t_declared_disabled_is_not_a_finding
 t_detector_unbind
 t_detector_empty
 t_logictype_flip
@@ -291,8 +1480,70 @@ t_tagged_event_key_drift
 t_comparison_value_drift
 t_comparison_interval_drift
 t_unmanaged_new_rule
-t_empty_capture_refuses
+t_empty_reference_refuses
 t_survivors_out_of_scope
+t_hostile_host_refused
+t_hostile_org_refused
+t_transport_flags_first
+t_resolver_env_scrubbed
+t_fixture_mode_still_passes
+t_org_locale_independent
+t_org_length_boundary
+t_transport_not_reopened_by_suffix
+t_reference_minus_one_rule
+t_capture_as_reference_refused
+t_reference_missing_key_refused
+t_pinned_path_end_to_end
+t_single_trigger_logictype_is_not_a_flip
+t_value_swap_is_drift
+t_tf_live_shape_parity
+t_live_duplicate_name_refused
+t_live_empty_name_refused
+t_live_multi_trigger_null_logictype_refused
+t_frequency_drift
+t_h4_mutant_noop_is_detected
+t_g4_identity_pins_census
+t_g4_comparison_true
+t_g4_threshold_changed
+t_g4_second_member_disabled
+t_g4_no_email_action
+t_g4_detector_changed
+t_g4_unknown_frozen_rule
+t_g4_compared_nothing
+t_g4_capture_unreadable_refuses
+t_g4_one_frozen_deleted
+t_g4_fallthrough_noone
+t_g4_tag_filter_emptied
+t_g4_frequency_changed
+t_g4_trigger_logictype_changed
+t_g4_vendor_default_not_pinned
+t_g4_unknown_vendor_shaped
+t_g4_seer_default_registered
+t_g4_seer_name_other_id
+t_g4_seer_duplicate_name
+t_g4_capture_default_other_id
+t_g4_registry_malformed_refuses
+t_g4_zero_frozen_names_refuses
+t_g4_frozen_name_without_capture_refuses
+t_g4_second_trigger_condition
+t_g4_environment_changed
+t_g4_managed_rule_gained_trigger
+t_g4_two_managed_rules_gained
+t_g4_same_name_excluded_copy_stays_unmanaged
+t_g4_unowned_excluded_rule_not_known
+t_g4_gained_precedes_known
+t_g4_numeric_ids_still_classify
+t_g4_duplicate_managed_name_warns
+t_g4_handoff_is_reconciled
+t_auth_rules_emptied_4781
+t_unmanaged_name_is_scrubbed_and_whole
+t_left_scope_alone_fails
+t_scrubbed_name_is_flagged
+t_frozen_duplicate
+t_frozen_derivation_parity_refuses
+t_bidi_name_is_scrubbed
+t_frozen_id_mismatch
+t_leaf_key_is_scrubbed
 
 echo "=== $pass passed, $fail failed ==="
 

@@ -45,7 +45,9 @@ pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); FAILURES+=("$1"); printf 'FAIL: %s\n' "$1" >&2; }
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-WF_PR="$REPO_ROOT/.github/workflows/skill-security-scan-pr-trailer.yml"
+# The three in-scope steps live under jobs.skill-security-scan since #8902
+# folded skill-security-scan-pr-trailer.yml into the shared PR-gates file.
+WF_PR="$REPO_ROOT/.github/workflows/pr-quality-guards.yml"
 WF_PM="$REPO_ROOT/.github/workflows/skill-security-scan-postmerge.yml"
 
 SANDBOX=$(mktemp -d -t sss-step-body.XXXXXXXX) || {
@@ -82,12 +84,13 @@ EXCLUDED=(
   "Assert jq present (runner-image dependency — no install, no network)"
 )
 
-extract_body() {  # $1=workflow $2=step name $3=destination file
-  python3 - "$1" "$2" "$3" <<'PY'
+extract_body() {  # $1=workflow $2=step name $3=destination file $4=job filter (optional)
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
 import sys, yaml
-wf, want, dest = sys.argv[1], sys.argv[2], sys.argv[3]
+wf, want, dest, jf = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 d = yaml.safe_load(open(wf))
-hits = [s for j in d["jobs"].values() for s in j.get("steps", []) if s.get("name", "") == want]
+jobs = [d["jobs"][jf]] if jf else d["jobs"].values()
+hits = [s for j in jobs for s in j.get("steps", []) if s.get("name", "") == want]
 if len(hits) != 1:
     sys.stderr.write(f"expected exactly 1 step named {want!r} in {wf}, found {len(hits)}\n")
     sys.exit(1)
@@ -112,14 +115,14 @@ _dest_for() {
 }
 _extracted=0
 for _n in "${IN_SCOPE_PR[@]}"; do
-  if extract_body "$WF_PR" "$_n" "$(_dest_for "$_n")" 2>"$SANDBOX/x.err"; then
+  if extract_body "$WF_PR" "$_n" "$(_dest_for "$_n")" "skill-security-scan" 2>"$SANDBOX/x.err"; then
     pass; _extracted=$((_extracted + 1))
   else
     fail "G1.1 pr-trailer: could not extract step $_n: $(cat "$SANDBOX/x.err")"
   fi
 done
 for _n in "${IN_SCOPE_PM[@]}"; do
-  if extract_body "$WF_PM" "$_n" "$(_dest_for "$_n")" 2>"$SANDBOX/x.err"; then
+  if extract_body "$WF_PM" "$_n" "$(_dest_for "$_n")" "" 2>"$SANDBOX/x.err"; then
     pass; _extracted=$((_extracted + 1))
   else
     fail "G1.2 postmerge: could not extract step $_n: $(cat "$SANDBOX/x.err")"
@@ -155,7 +158,9 @@ excluded = {n for n in os.environ["SSS_EXCLUDED"].split("\n") if n}
 out = []
 for wf in sys.argv[1:]:
     d = yaml.safe_load(open(wf))
-    for j in d["jobs"].values():
+    job_filter = "skill-security-scan" if os.path.basename(wf) == "pr-quality-guards.yml" else None
+    jobs = [d["jobs"][job_filter]] if job_filter else d["jobs"].values()
+    for j in jobs:
         for s in j.get("steps", []):
             if "run" not in s:
                 continue
@@ -183,7 +188,7 @@ fi
 # declare `CI: 'true'`, and running their bodies without it exercises the opposite mode from
 # production.
 _wrapper=$(python3 - "$WF_PR" "$WF_PM" <<'PY'
-import sys, yaml
+import os, sys, yaml
 want = {
   "Identify added SKILL/agent files in PR diff",
   "Validate override artifacts (if any)",
@@ -193,7 +198,9 @@ want = {
 out = []
 for wf in sys.argv[1:]:
     d = yaml.safe_load(open(wf))
-    for jn, j in d["jobs"].items():
+    job_filter = "skill-security-scan" if os.path.basename(wf) == "pr-quality-guards.yml" else None
+    items = [(job_filter, d["jobs"][job_filter])] if job_filter else d["jobs"].items()
+    for jn, j in items:
         if j.get("continue-on-error"):
             out.append(f"{wf}:job {jn}: continue-on-error")
         for s in j.get("steps", []):
@@ -441,6 +448,52 @@ else
   fail "1f.ii REAL ADDITION: the added path is absent from GITHUB_OUTPUT, so the scan loop would receive an empty ADDED even with no_new_skills=false"
 fi
 
+# ── 1f.iii / 1f.iv / 1e.iv — a path git QUOTES must not drop out of the scan ─────
+# `git diff --name-only` wraps a path containing non-ASCII bytes (core.quotePath=true, the
+# default) or a tab/newline/`"`/`\` (always) in double quotes with octal escapes, so
+# `"plugins/soleur/agents/caf\303\251.md"` fails the `^plugins/...` filter and the file is
+# neither scanned nor audited: a weaponised agent named `café.md` passed the required gate.
+# 1f.iii: a non-ASCII agent path must reach ADDED verbatim. 1f.iv / 1e.iv: a path git still
+# quotes after quotePath=false must FAIL CLOSED in both the PR gate and the postmerge audit.
+_fx=$(mkfixture 1f-iii)
+( cd "$_fx" && git init -q -b main . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m base \
+  && mkdir -p plugins/soleur/agents \
+  && printf -- '---\nname: cafe\n---\nbody\n' > "plugins/soleur/agents/café.md" \
+  && git add -A && git -c user.email=t@t -c user.name=t commit -q -m add-agent ) >/dev/null 2>&1 || {
+  printf 'FAIL: 1f.iii fixture repo could not be built\n' >&2; exit 2; }
+BASE_SHA=$(git -C "$_fx" rev-parse HEAD~1) \
+HEAD_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_IDENT" "$_fx"
+if [ "$RC" -eq 0 ] && grep -qxF 'plugins/soleur/agents/café.md' "$_fx/gh_output" 2>/dev/null; then
+  pass
+else
+  fail "1f.iii NON-ASCII PATH: exit $RC and GITHUB_OUTPUT does not name plugins/soleur/agents/café.md verbatim — git quoted the path and the filter dropped it, so the gate never scans it. Output: $(head -c 250 "$OUT")"
+fi
+_fx=$(mkfixture 1f-iv)
+( cd "$_fx" && git init -q -b main . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m base \
+  && mkdir -p plugins/soleur/agents \
+  && printf -- '---\nname: tab\n---\nbody\n' > "plugins/soleur/agents/a$(printf '\t')b.md" \
+  && git add -A && git -c user.email=t@t -c user.name=t commit -q -m add-agent ) >/dev/null 2>&1 || {
+  printf 'FAIL: 1f.iv fixture repo could not be built\n' >&2; exit 2; }
+BASE_SHA=$(git -C "$_fx" rev-parse HEAD~1) \
+HEAD_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_IDENT" "$_fx"
+if [ "$RC" -ne 0 ] && grep -q 'quoted path' "$OUT" 2>/dev/null; then
+  pass
+else
+  fail "1f.iv QUOTED PATH (PR gate): exit $RC — a tab-bearing agent path git still quotes was not refused, so it silently left the scan set. Output: $(head -c 250 "$OUT")"
+fi
+EVENT_BEFORE=$(git -C "$_fx" rev-parse HEAD~1) \
+MERGE_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_AUDIT" "$_fx"
+if [ "$RC" -ne 0 ] && grep -q 'quoted path' "$OUT" 2>/dev/null; then
+  pass
+else
+  fail "1e.iv QUOTED PATH (postmerge audit): exit $RC — a tab-bearing agent path git still quotes was not refused, so the audit skipped it. Output: $(head -c 250 "$OUT")"
+fi
+
 # ── 1e.ii — the postmerge audit must honour a SUPPLIED base ────────────────────
 # The `*)` branch -- the github.event.before path #7629 adds, and the whole reason the
 # multi-commit push shape is now visible -- was exercised by no fixture: 1e leaves
@@ -564,7 +617,7 @@ fi
 # reports a clean total. This one compares against a literal and exits
 # directly, so deleting assertions above reddens the run rather than shrinking
 # both sides of an equality.
-# Set to the FULL measured count (26, measured 2026-08-20), not a slack figure: any headroom
+# Set to the FULL measured count (29, measured 2026-09-25; was 26 on 2026-08-20), not a slack figure: any headroom
 # between a floor and the real total is deletable-assertion budget, not padding.
 #
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS -- no comment between them, and none between
@@ -575,7 +628,7 @@ fi
 # mutant rather than a covered floor. Measured: that is exactly how this floor tripped the
 # guard's construction ratchet (15 -> 16) on 2026-08-20.
 _total=$((passes + fails))
-_FLOOR=26
+_FLOOR=29
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

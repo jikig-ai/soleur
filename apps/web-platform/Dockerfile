@@ -52,9 +52,13 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # KEEP IN SYNC with the `@anthropic-ai/claude-code` pin in package.json: the
 # CLI carries a bundled per-model table, and a model ID absent from it silently
 # falls back to half the max_tokens (measured 64000 → 32000 on #6934), so a
-# stale pin here degrades every cron that passes --model. This was skewed at
-# 2.1.79 vs package.json's 2.1.197 until #6934.
-RUN npm install -g @anthropic-ai/claude-code@2.1.219
+# stale pin degrades whichever cron resolves this copy. This was skewed at
+# 2.1.79 vs package.json's 2.1.197 until #6934. The crons spawn the package.json
+# copy (/app/node_modules/.bin/claude, installed by `npm ci` below); this global
+# install is the fallback path. Since #8603
+# test/server/inngest/claude-cli-pin-knows-models.test.ts enforces that the two
+# pins agree and that the installed bundle knows every tier model id.
+RUN npm install -g @anthropic-ai/claude-code@2.1.284
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
 # Global install (NOT a package.json dep) — same pattern as the line above —
@@ -64,8 +68,14 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.219
 # vite/esbuild/bundle-require never enter prod deps.
 # Pinned to 1.50.0 to MATCH the client renderer @likec4/core/@likec4/diagram@1.50.0
 # (package.json) so `export json` emits the exact schema LikeC4Model.create reads.
-# Lays out via bundled graphviz-wasm — no native `dot` binary needed (verified
-# 2026-06-05: `likec4@1.50.0 export json` exits 0 with no dot on PATH, ~0.8s).
+# Lays out via bundled graphviz-wasm. server/c4-render.ts passes `--no-use-dot`:
+# inside a container likec4 otherwise defaults to the native `dot` binary, which
+# this image does not have, and exports a model with ZERO views (exit 0, ~1 s).
+# With wasm layout an 82-view model takes 4-7 s at 2 CPUs (#8696, measured
+# 2026-09-24). The child runs inside bubblewrap (installed below), launched by
+# /usr/bin/bash -> choom -> nice -> bwrap -> prlimit -> sh, all from the base
+# image (bash, util-linux, coreutils, dash); in production each must resolve
+# under /usr or the render refuses to run.
 RUN npm install -g likec4@1.50.0
 
 # Install git (workspace provisioning) + bubblewrap/socat (Agent SDK sandbox)
@@ -85,8 +95,13 @@ RUN npm install -g likec4@1.50.0
 # GHA runner (jq preinstalled) into this image without porting the dependency,
 # so every scheduled post failed with "jq is required but not installed" and
 # routed to a per-post fallback issue (e.g. #4858). Do NOT remove jq.
+# `openssh-client` is load-bearing for git-data (#5914): git-auth.ts spawns `ssh`
+# directly (sshWithPrivateKeyAuth) and via GIT_SSH_COMMAND (gitWithPrivateKeyAuth).
+# git only *Recommends* it, so --no-install-recommends silently drops it and every
+# Art. 17 git-data erasure reads ENOENT. Guarded by test/dockerfile-runner-ssh-client.test.ts
+# and the `git_data_ssh_client=` startup line. Do NOT remove openssh-client.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git bubblewrap socat qpdf jq \
+    ca-certificates git bubblewrap socat qpdf jq openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
@@ -148,8 +163,12 @@ ARG BUILD_VERSION=dev
 ENV BUILD_VERSION=$BUILD_VERSION
 
 # Git commit SHA injected at build time for /health endpoint verification.
-# Asserted post-deploy by web-platform-release.yml against ${{ github.sha }}
-# to catch bad-tag → bad-image associations (#3409).
+# Asserted post-deploy by web-platform-release.yml against
+# ${{ needs.resolve-target.outputs.head_sha }} to catch bad-tag → bad-image
+# associations (#3409). It was `${{ github.sha }}` until the deploy chain moved
+# onto the workflow_run arm (#5806, ADR-217), where `github.sha` is the default
+# branch head rather than the SHA CI verified — `resolve-target` carries the
+# authoritative one.
 ARG BUILD_SHA=dev
 ENV BUILD_SHA=$BUILD_SHA
 
@@ -182,6 +201,9 @@ COPY --from=builder /app/dist/server ./dist/server
 # bwrap) with no runtime TypeScript/SDK dependency. The fixture is version-
 # consistent with this image's SDK because both are baked at build time.
 COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
+# GitHub App key acceptance probe (#8609): ci-deploy.sh `docker exec`s it in the canary before the
+# swap and the boot path in the booted container. Standalone node:crypto + fetch, like the canary.
+COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
 
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)

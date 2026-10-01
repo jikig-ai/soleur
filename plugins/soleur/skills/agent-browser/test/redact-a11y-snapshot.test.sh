@@ -455,6 +455,59 @@ assert_redacted 'json shape: tree under data.diff, not data.snapshot' \
   "$(printf -- '{"ok":true,"data":{"diff":"+- textbox \\"Token\\" [ref=e1]: %s"}}' "$SENTINEL")"
 
 # ---------------------------------------------------------------------------
+# YAML single-quoted keys (#7980 review). Playwright wraps the WHOLE key in single
+# quotes when the accessible name contains ` #`, `: `, `{`, `}`, a backtick or a
+# control character; the key strings below were rendered by 0.0.78's own
+# yamlEscapeKeyIfNeeded. Measured live: "API Key #1" leaked in clear through the
+# proxy before this arm existed.
+# ---------------------------------------------------------------------------
+assert_redacted 'quoted key: "API Key #1" (space-hash)' \
+  "$(printf -- "- 'textbox \"API Key #1\" [ref=e2]': %s" "$SENTINEL")"
+assert_redacted 'quoted key: "Token: production" (colon-space)' \
+  "$(printf -- "- 'textbox \"Token: production\" [ref=e3]': %s" "$SENTINEL")"
+assert_redacted 'quoted key: "Secret {prod}" (braces)' \
+  "$(printf -- "- 'textbox \"Secret {prod}\" [ref=e4]': %s" "$SENTINEL")"
+assert_redacted 'quoted key: "Deploy `key`" (backtick)' \
+  "$(printf -- "- 'textbox \"Deploy \`key\`\" [ref=e5]': %s" "$SENTINEL")"
+assert_redacted "quoted key: doubled apostrophe (Owner''s token #2), indented" \
+  "$(printf -- "- generic [ref=e1]:\n  - 'textbox \"Owner''s token #2\" [ref=e6]': %s" "$SENTINEL")"
+assert_preserved 'must-PASS: quoted key "Notes #3" keeps its value' \
+  "- 'textbox \"Notes #3\" [ref=e7]': ZZQP-BENIGN-A11Y" 'ZZQP-BENIGN-A11Y'
+assert_preserved 'must-PASS: a redacted quoted key keeps its quoting' \
+  "$(printf -- "- 'textbox \"API Key #1\" [ref=e2]': %s" "$SENTINEL")" "- 'textbox \"API Key #1\" [ref=e2]': <redacted>"
+
+# ---------------------------------------------------------------------------
+# Provider contract (#7980). playwright-mcp-redact-proxy.py loads this file by
+# path and binds exactly these four names at startup. The contract is tested
+# where it is provided: a rename of any of them must red THIS suite, not only
+# the proxy's refuse-to-start arm. The row increments `cases` itself because it
+# uses neither assert helper.
+# ---------------------------------------------------------------------------
+cases=$((cases + 1))
+_contract_out=$(python3 - "$FILTER" <<'PY' 2>&1 || true
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("redact_a11y_snapshot", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+names = ["redact_text", "looks_like_a11y_tree", "MAX_INPUT_BYTES", "REDACTED"]
+missing = [n for n in names if not hasattr(mod, n)]
+if missing or mod.__all__ != names:
+    print("CONTRACT-BROKEN missing=%s __all__=%s" % (missing, getattr(mod, "__all__", None)))
+elif not mod.looks_like_a11y_tree('- textbox "Token" [ref=e1]: x') or mod.looks_like_a11y_tree("### Page\n- Page URL: x"):
+    print("CONTRACT-BROKEN looks_like_a11y_tree verdicts")
+elif not mod.looks_like_a11y_tree("- 'textbox \"API Key #1\" [ref=e2]': x"):
+    print("CONTRACT-BROKEN looks_like_a11y_tree on a quoted key")
+else:
+    print("CONTRACT-OK")
+PY
+)
+if [[ "$_contract_out" == "CONTRACT-OK" ]]; then
+  ok  "provider contract: the four consumer names are exported, __all__ pins them, quoted keys are tree-shaped"
+else
+  bad "provider contract: $_contract_out"
+fi
+
+# ---------------------------------------------------------------------------
 # Verdict. Reported with printf + exit, never through ok()/bad() — the floor
 # must not be dispatched through the helpers it backstops (ADR-193).
 # ---------------------------------------------------------------------------
@@ -465,7 +518,7 @@ if [[ $((pass + fail)) -ne $cases ]]; then
     "$((pass + fail))" "$cases" >&2
   exit 1
 fi
-MIN_ASSERTIONS=61
+MIN_ASSERTIONS=69
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

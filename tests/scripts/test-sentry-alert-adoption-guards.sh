@@ -6,6 +6,10 @@
 #            Implementations: scripts/sentry-issue-alert-create-tripwire.sh (A-ii)
 #                             scripts/sentry-create-gate.sh, now invoked in BOTH
 #                             workflow jobs (A-i)
+#   Guard 2  (#8451) no create/update/replace of a `sentry_alert` whose
+#            after-state carries a legacy trigger type the provider re-sends as
+#            `comparison: true`, zeroing the paging threshold.
+#            Implementation: scripts/sentry-issue-alert-create-tripwire.sh
 #   Guard B  the forget<->import bijection.
 #            Implementation: scripts/sentry-forget-import-bijection.sh
 #            Consumer:       scripts/sentry-adoption-plan-assert.sh (AC2/AC10)
@@ -33,7 +37,7 @@ BINDING="$REPO_ROOT/scripts/sentry-monitor-binding-gate.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=32
+EXPECTED_TESTS=70
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -63,15 +67,29 @@ _plan() { # rows... -> a plan document on stdout
   printf '{"resource_changes":[%s]}' "$*"
 }
 
-# _pairs <n> -> N matched forget/import pairs, named p1..pN
+# _pairs <n> -> N matched forget/import pairs, named p1..pN. An import row's
+# after-state is the object read back from Sentry, so it carries that
+# workflow's name (the real plan shape; section 4 of the assert reads it).
 _pairs() {
   local n="$1" i rows=()
   for ((i = 1; i <= n; i++)); do
     rows+=("$(_row sentry_issue_alert "p$i" '["forget"]')")
-    rows+=("$(_row sentry_alert "p$i" '["no-op"]' "acme/10$i")")
+    rows+=("$(_row sentry_alert "p$i" '["no-op"]' "acme/10$i" | jq -c --arg n "p$i" '.change.after.name = $n')")
   done
   _plan "${rows[@]}"
 }
+
+# _lrow <name> <actions-json> <legacy-json|absent> [importing-id] -> a
+# sentry_alert row whose after-state carries `legacy_trigger_conditions`, the
+# field the v0.15.7 provider re-sends with `comparison: true` on any write.
+_lrow() {
+  local imp="" leg=""
+  [[ -n "${4:-}" ]] && imp=",\"importing\":{\"id\":\"$4\"}"
+  [[ "$3" != absent ]] && leg="\"legacy_trigger_conditions\":$3"
+  printf '{"type":"sentry_alert","address":"sentry_alert.%s","mode":"managed","change":{"actions":%s,"before":{},"after":{%s}%s}}' \
+    "$1" "$2" "$leg" "$imp"
+}
+LEGACY='["event_unique_user_frequency_count"]'
 
 _write() { local f="$TMPD/$1.json"; cat > "$f"; echo "$f"; }
 _rc() { local rc=0; "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
@@ -213,17 +231,20 @@ t_a6_zero_rows_red() {
   fi
 }
 
-# A7 — the two survivors must still be updatable. Without this row the tripwire
-# could be a blanket "no sentry_issue_alert row of any kind", which would red
-# every legitimate edit to the two rules the provider cannot express.
+# A7 — the sentry_issue_alert refusal keys on CREATE only. Since #8451 no
+# sentry_issue_alert remains (the last two were adopted as `sentry_alert`, and
+# their write hazard is Guard 2's, rows G2-*), so this row no longer protects an
+# editable survivor. It pins the selector's shape: without it the refusal could
+# be a blanket "no sentry_issue_alert row of any kind", which would also red the
+# `["forget"]` rows every adoption plan carries.
 t_a7_update_green() {
   local f; f=$(_plan "$(_row sentry_issue_alert auth_per_user_loop '["update"]')" \
                      "$(_row sentry_issue_alert sandbox_startup_failure '["no-op"]')" | _write a7)
   local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
   if [[ "$rc" -eq 0 ]]; then
-    _report "A7 an UPDATE on a surviving sentry_issue_alert passes (the two are still editable)" ok
+    _report "A7 an UPDATE on a sentry_issue_alert passes (the refusal is create-only)" ok
   else
-    _report "A7 an UPDATE on a surviving sentry_issue_alert passes" fail "rc=$rc want 0"
+    _report "A7 an UPDATE on a sentry_issue_alert passes (the refusal is create-only)" fail "rc=$rc want 0"
   fi
 }
 
@@ -621,6 +642,205 @@ t_d6_no_sentry_alert_rows_passes() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
+# Guard 3 (#8630) — the binding gate is ADDRESS-AWARE. Every sentry_alert other
+# than the cron-bound set still binds exactly 1213799 (the correlated-rebind
+# protection for the issue-stream rules is unchanged). The cron-bound address
+# `sentry_alert.cron_monitor_failure` binds a NON-EMPTY set, each element the
+# `.values.id` of a `sentry_cron_monitor` in the SAME plan's planned_values,
+# never 1213799, never null. A second address binding cron detectors is refused
+# until the gate's literal names it. Each RED row asserts the offending ADDRESS
+# and its own reason literal, so a RED for a neighbouring reason cannot pass.
+# Row 6 of the matrix (the 0-row anti-vacuity floor) is D5 above, unchanged.
+# ════════════════════════════════════════════════════════════════════════════
+CRON_ADDR="sentry_alert.cron_monitor_failure"
+# 59 synthesized cron detector ids (not real Sentry ids).
+CRON_IDS=$(jq -nc '[range(59) | tostring | "40000\(.)"]')
+# _g3_plan <cron-ids-json> <alerts-json> — a plan whose planned_values carries
+# one sentry_cron_monitor per cron id (plus one uptime monitor, so "is some
+# monitor's id" and "is a sentry_cron_monitor's id" differ), and whose
+# resource_changes carry the given alerts ([{addr, ids}]) plus the monitors.
+_g3_plan() {
+  jq -nc --argjson c "$1" --argjson a "$2" '
+    ([ $c | to_entries[] | {address: "sentry_cron_monitor.m\(.key)", mode: "managed",
+         type: "sentry_cron_monitor", name: "m\(.key)", values: {id: .value, name: "m\(.key)"}} ]
+     + [ {address: "sentry_uptime_monitor.web", mode: "managed", type: "sentry_uptime_monitor",
+          name: "web", values: {id: "555000"}} ]) as $mons
+    | { planned_values: { root_module: { resources: (
+          $mons + [ $a[] | {address: .addr, mode: "managed", type: "sentry_alert",
+                            name: (.addr | sub("^sentry_alert\\."; "")), values: {monitor_ids: .ids}} ] ) } },
+        resource_changes: (
+          [ $mons[] | {address, mode, type, name, change: {actions: ["no-op"], before: .values, after: .values}} ]
+          + [ $a[] | {address: .addr, mode: "managed", type: "sentry_alert",
+                      name: (.addr | sub("^sentry_alert\\."; "")),
+                      change: {actions: ["no-op"], before: {}, after: {monitor_ids: .ids}}} ] ) }'
+}
+# _issue_alerts <n> — n issue-stream alerts all binding 1213799.
+_issue_alerts() { jq -nc --argjson n "$1" '[range($n) | {addr: "sentry_alert.issue_\(.)", ids: ["1213799"]}]'; }
+# _g3_red <label> <plan-file> <address> <reason-literal>
+_g3_red() {
+  local label="$1" f="$2" addr="$3" want="$4" rc msg
+  rc=$(_rc bash "$BINDING" "$f"); msg=$(_err bash "$BINDING" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -F -- "$addr " <<<"$msg" | grep -qF -- "$want"; then
+    _report "$label" ok
+  else
+    _report "$label" fail "rc=$rc (want 1), address '$addr' with reason '$want' not on one stderr line. stderr: $(head -c 600 <<<"$msg")"
+  fi
+}
+_cron_ok() { jq -nc --arg a "$CRON_ADDR" --argjson c "$CRON_IDS" '[{addr: $a, ids: $c}]'; }
+
+t_g3_1_issue_rule_rebound_to_cron_red() {
+  local alerts f
+  alerts=$(jq -nc --argjson i "$(_issue_alerts 3)" --argjson k "$(_cron_ok)" \
+    '$i + $k | (.[1].ids = ["400007"])')
+  f=$(_g3_plan "$CRON_IDS" "$alerts" | _write g3-1)
+  _g3_red "G3-1 an issue-stream rule rebound to a cron detector id REDs (names sentry_alert.issue_1)" \
+    "$f" "sentry_alert.issue_1" "expected '1213799'"
+}
+t_g3_2a_cron_binds_expected_alone_red() {
+  local f; f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" '$i + [{addr: $a, ids: ["1213799"]}]')" | _write g3-2a)
+  _g3_red "G3-2a cron_monitor_failure binding 1213799 alone REDs (contains the issue-stream detector)" \
+    "$f" "$CRON_ADDR" "contains the issue-stream detector '1213799'"
+}
+t_g3_2b_cron_binds_expected_plus_cron_red() {
+  local f; f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" --argjson c "$CRON_IDS" '$i + [{addr: $a, ids: ($c + ["1213799"])}]')" | _write g3-2b)
+  _g3_red "G3-2b cron_monitor_failure binding 1213799 PLUS the 59 cron ids REDs" \
+    "$f" "$CRON_ADDR" "contains the issue-stream detector '1213799'"
+}
+t_g3_3_cron_binds_non_cron_id_red() {
+  # 555000 IS a monitor in the plan — an uptime monitor, not a cron monitor.
+  local f; f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" --argjson c "$CRON_IDS" '$i + [{addr: $a, ids: ($c[1:] + ["555000"])}]')" | _write g3-3)
+  _g3_red "G3-3 cron_monitor_failure binding an id that is no sentry_cron_monitor's .values.id (an uptime monitor's) REDs" \
+    "$f" "$CRON_ADDR" "not the .values.id of any sentry_cron_monitor"
+}
+t_g3_4_second_cron_bound_address_red() {
+  local f msg
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --argjson k "$(_cron_ok)" --argjson c "$CRON_IDS" '$i + $k + [{addr: "sentry_alert.cron_monitor_failure_2", ids: $c[0:3]}]')" | _write g3-4)
+  _g3_red "G3-4 a SECOND address binding cron detector ids REDs (not in the gate's cron-bound set)" \
+    "$f" "sentry_alert.cron_monitor_failure_2" "not in the gate's cron-bound address set"
+  # The compliant first address must not be the one blamed.
+  msg=$(_err bash "$BINDING" "$f")
+  if grep -qF -- "$CRON_ADDR " <<<"$msg"; then
+    _report "G3-4b the compliant cron_monitor_failure is NOT blamed alongside the second address" fail "stderr: $(head -c 400 <<<"$msg")"
+  else
+    _report "G3-4b the compliant cron_monitor_failure is NOT blamed alongside the second address" ok
+  fi
+}
+t_g3_5a_cron_empty_set_red() {
+  local f; f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" '$i + [{addr: $a, ids: []}]')" | _write g3-5a)
+  _g3_red "G3-5a cron_monitor_failure binding an EMPTY set REDs" "$f" "$CRON_ADDR" "binds an EMPTY monitor_ids set"
+}
+t_g3_5b_cron_null_element_red() {
+  local f; f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" --argjson c "$CRON_IDS" '$i + [{addr: $a, ids: ($c + [null])}]')" | _write g3-5b)
+  _g3_red "G3-5b cron_monitor_failure with a null element REDs" "$f" "$CRON_ADDR" "carries 1 null element(s)"
+}
+t_g3_p1_real_shape_passes() {
+  # 33 issue-stream rules + cron_monitor_failure with all 59 cron ids, the
+  # alerts and the ids both in shuffled (non-sorted) order.
+  local alerts f rc out
+  alerts=$(jq -nc --argjson i "$(_issue_alerts 33)" --arg a "$CRON_ADDR" --argjson c "$CRON_IDS" '
+    ($c | to_entries | sort_by((.key * 37) % 59) | map(.value)) as $shuf
+    | ($i[0:17] + [{addr: $a, ids: $shuf}] + $i[17:])')
+  f=$(_g3_plan "$CRON_IDS" "$alerts" | _write g3-p1)
+  if ! jq -e --argjson c "$CRON_IDS" '[.resource_changes[] | select(.type=="sentry_alert")] as $s
+        | ($s | length) == 34
+        and ($s[17].change.after.monitor_ids | length) == 59
+        and ($s[17].change.after.monitor_ids != ($s[17].change.after.monitor_ids | sort))
+        and (($s[17].change.after.monitor_ids | sort) == ($c | sort))' "$f" >/dev/null; then
+    _report "G3-P1 real shape passes" fail "fixture did not land as 34 alerts with 59 shuffled cron ids"; return
+  fi
+  rc=0; out=$(bash "$BINDING" "$f" 2>&1) || rc=$?
+  # The FULL count clause, not the prefix: "1 cron-bound" is the jq-side count
+  # of cron-bound rows that complied, so a regression that stops counting (or
+  # counts a non-cron row as cron) moves this literal.
+  if [[ "$rc" -eq 0 ]] && grep -qF -- "PASS (34 sentry_alert resource(s): 33 bind detector 1213799, 1 cron-bound" <<<"$out"; then
+    _report "G3-P1 33 issue-stream rules + cron_monitor_failure with 59 shuffled cron ids PASS" ok
+  else
+    _report "G3-P1 real shape passes" fail "rc=$rc out=$(head -c 500 <<<"$out")"
+  fi
+}
+t_g3_p2_no_cron_row_passes() {
+  local f rc out
+  f=$(_g3_plan "$CRON_IDS" "$(_issue_alerts 33)" | _write g3-p2)
+  rc=0; out=$(bash "$BINDING" "$f" 2>&1) || rc=$?
+  if [[ "$rc" -eq 0 ]] && grep -qF -- "PASS (33 sentry_alert resource(s)" <<<"$out"; then
+    _report "G3-P2 the pre-merge shape (no cron_monitor_failure row) still PASSES" ok
+  else
+    _report "G3-P2 no cron row passes" fail "rc=$rc out=$(head -c 500 <<<"$out")"
+  fi
+}
+# G3-6 — a monitor id carrying a NEWLINE must not split a verdict row. The gate
+# used to emit `addr<TAB>ids<TAB>why` with `jq -r` and re-split it in bash with
+# `read`, so an id of "999\n" put an empty `why` on the first half-line (PASS)
+# and a bare fragment on the second (PASS), and any passing non-1213799 row
+# was counted as cron-bound WITHOUT checking its address.
+t_g3_6a_newline_id_on_issue_rule_red() {
+  local f msg
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" '$i + [{addr: "sentry_alert.a", ids: ["999\n"]}]')" | _write g3-6a)
+  _g3_red "G3-6a an issue rule binding [\"999\\n\"] REDs (a newline in an id cannot split the row into two PASSes)" \
+    "$f" "sentry_alert.a" "expected '1213799'"
+  # The id is rendered ESCAPED on the offending line, never as a raw line break.
+  msg=$(_err bash "$BINDING" "$f")
+  if grep -F -- "sentry_alert.a " <<<"$msg" | grep -qF -- "'999\\n'"; then
+    _report "G3-6b the newline-bearing id is rendered escaped ('999\\n') on the address's own line" ok
+  else
+    _report "G3-6b newline-bearing id rendered escaped" fail "stderr: $(head -c 400 <<<"$msg")"
+  fi
+}
+t_g3_6c_newline_id_on_cron_rule_red() {
+  local f
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" '$i + [{addr: $a, ids: ["400000\nx", "1213799"]}]')" | _write g3-6c)
+  _g3_red "G3-6c cron_monitor_failure binding [\"400000\\nx\",\"1213799\"] REDs (contains the issue-stream detector)" \
+    "$f" "$CRON_ADDR" "contains the issue-stream detector '1213799'"
+}
+# G3-7 — a REPLACE (["delete","create"] / ["create","delete"]) carries the new
+# binding in `.change.after`; only a PURE delete has nothing to check.
+_g3_actions() { # $1=address $2=actions-json — jq-edit a plan on stdin
+  jq -c --arg a "$1" --argjson act "$2" '(.resource_changes[] | select(.address == $a) | .change.actions) = $act'
+}
+t_g3_7a_replaced_cron_rule_red() {
+  local f
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" '$i + [{addr: $a, ids: ["1213799", "999"]}]')" \
+      | _g3_actions "$CRON_ADDR" '["delete","create"]' | _write g3-7a)
+  if ! jq -e --arg a "$CRON_ADDR" '.resource_changes[] | select(.address == $a) | .change.actions == ["delete","create"]' "$f" >/dev/null; then
+    _report "G3-7a replaced cron rule REDs" fail "fixture did not land (actions not [delete,create])"; return
+  fi
+  _g3_red "G3-7a a REPLACED cron_monitor_failure bound to [1213799,999] REDs (a replace is not skipped as a delete)" \
+    "$f" "$CRON_ADDR" "contains the issue-stream detector '1213799'"
+}
+t_g3_7b_replaced_issue_rule_red() {
+  local f alerts
+  alerts=$(jq -nc --argjson i "$(_issue_alerts 3)" --argjson k "$(_cron_ok)" '$i + $k | (.[1].ids = ["400007"])')
+  f=$(_g3_plan "$CRON_IDS" "$alerts" | _g3_actions "sentry_alert.issue_1" '["create","delete"]' | _write g3-7b)
+  if ! jq -e '.resource_changes[] | select(.address == "sentry_alert.issue_1") | .change.actions == ["create","delete"]' "$f" >/dev/null; then
+    _report "G3-7b replaced issue rule REDs" fail "fixture did not land (actions not [create,delete])"; return
+  fi
+  _g3_red "G3-7b a REPLACED issue rule bound to a cron id REDs (create_before_destroy ordering)" \
+    "$f" "sentry_alert.issue_1" "expected '1213799'"
+}
+# G3-8 — only a MANAGED sentry_cron_monitor's id is a routable detector. A
+# `data` source of the same type is not a monitor this root declares.
+t_g3_8_data_mode_cron_monitor_not_accepted() {
+  local f
+  f=$(_g3_plan "$CRON_IDS" "$(jq -nc --argjson i "$(_issue_alerts 2)" --arg a "$CRON_ADDR" --argjson c "$CRON_IDS" '$i + [{addr: $a, ids: ($c + ["777000"])}]')" \
+      | jq -c '.planned_values.root_module.resources += [{address: "data.sentry_cron_monitor.ext", mode: "data",
+                 type: "sentry_cron_monitor", name: "ext", values: {id: "777000", name: "ext"}}]' | _write g3-8)
+  if ! jq -e '[.planned_values.root_module.resources[] | select(.type == "sentry_cron_monitor" and .mode == "data" and .values.id == "777000")] | length == 1' "$f" >/dev/null; then
+    _report "G3-8 data-mode cron monitor" fail "fixture did not land"; return
+  fi
+  _g3_red "G3-8 cron_monitor_failure binding a DATA-mode sentry_cron_monitor's id REDs (managed monitors only)" \
+    "$f" "$CRON_ADDR" "binds id(s) 777000 that are not the .values.id of any sentry_cron_monitor"
+}
+# G3-9 — an issue rule binding the issue-stream detector PLUS a cron id is not
+# compliant: the issue-stream check is set EQUALITY, not "contains 1213799".
+t_g3_9_issue_rule_expected_plus_cron_red() {
+  local f alerts
+  alerts=$(jq -nc --argjson i "$(_issue_alerts 3)" --argjson k "$(_cron_ok)" '$i + $k | (.[1].ids = ["1213799", "400000"])')
+  f=$(_g3_plan "$CRON_IDS" "$alerts" | _write g3-9)
+  _g3_red "G3-9 an issue rule binding [1213799,400000] REDs (equality, not containment)" \
+    "$f" "sentry_alert.issue_1" "expected '1213799'"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
 # AC2/AC10 — the adoption assert, which is what carries Guard B into the apply
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -638,19 +858,196 @@ t_c1_non_adoption_plan_skips() {
   fi
 }
 
-# C2 — the AC10 property itself: an adoption plan carrying anything that is not
-# a no-op or a forget is rejected. This is the hole the apply arm had, where a
-# blanket [ack-destroy] greened every non-delete change.
-t_c2_extra_change_red() {
-  local f
-  f=$(_pairs 3 | jq -c '.resource_changes += [{"type":"sentry_alert","address":"sentry_alert.drifted","mode":"managed","change":{"actions":["update"],"before":{},"after":{}}}]' | _write c2)
-  local rc; rc=$(_rc bash "$ADOPT" "$f" 3)
-  local msg; msg=$(_err bash "$ADOPT" "$f" 3)
-  if [[ "$rc" -eq 1 ]] && grep -q 'sentry_alert.drifted' <<<"$msg"; then
-    _report "C2 an adoption plan with an extra UPDATE row REDs and names it (AC10)" ok
+# C2 — the AC10 property, SCOPED TO THE ADOPTED ROWS (#8451 CTO ruling). An
+# adoption landing on a wedged root necessarily carries the unapplied backlog
+# (creates/updates merged while every plan failed), so global inertness cannot
+# hold. Inertness is asserted where the adoption acts: every IMPORT row must be
+# a no-op, every FORGET must move the legacy type, and nothing anywhere may
+# delete or replace. Backlog creates/updates are delegated to the create gate
+# (diff-matched against the last applied commit), the reference gate and the
+# tripwire, and are printed, never silently passed.
+_c2_run() { # $1=label-slug $2=jq-edit -> sets C2_RC, C2_MSG (stdout+stderr)
+  local f; f=$(_pairs 3 | jq -c "$2" | _write "c2-$1")
+  C2_RC=$(_rc bash "$ADOPT" "$f" 3)
+  C2_MSG=$(bash "$ADOPT" "$f" 3 2>&1)
+}
+t_c2a_import_with_update_red() {
+  _c2_run a '(.resource_changes[] | select(.address == "sentry_alert.p2") | .change.actions) = ["update"]'
+  if [[ "$C2_RC" -eq 1 ]] && grep -q 'sentry_alert.p2 .*(3a:' <<<"$C2_MSG"; then
+    _report "C2a an UPDATE at an imported address REDs and names it (the adopted row is not inert)" ok
   else
-    _report "C2 an adoption plan with an extra update row REDs" fail "rc=$rc; msg=$msg"
+    _report "C2a an update at an imported address REDs" fail "rc=$C2_RC; msg=$C2_MSG"
   fi
+}
+t_c2b_backlog_rows_pass_and_are_printed() {
+  _c2_run b '.resource_changes += [
+    {"type":"sentry_alert","address":"sentry_alert.backlog_update","mode":"managed","change":{"actions":["update"],"before":{},"after":{}}},
+    {"type":"sentry_cron_monitor","address":"sentry_cron_monitor.backlog_create","mode":"managed","change":{"actions":["create"],"before":null,"after":{}}}]'
+  if [[ "$C2_RC" -eq 0 ]] && grep -q 'sentry_alert.backlog_update' <<<"$C2_MSG" \
+     && grep -q 'sentry_cron_monitor.backlog_create' <<<"$C2_MSG"; then
+    _report "C2b backlog create/update rows elsewhere PASS and are printed (delegated, not silent)" ok
+  else
+    _report "C2b backlog rows pass and are printed" fail "rc=$C2_RC; msg=$C2_MSG"
+  fi
+}
+t_c2c_replace_anywhere_red() {
+  _c2_run c '.resource_changes += [{"type":"sentry_alert","address":"sentry_alert.replaced","mode":"managed","change":{"actions":["create","delete"],"before":{},"after":{}}}]'
+  if [[ "$C2_RC" -eq 1 ]] && grep -q 'sentry_alert.replaced .*(3c:' <<<"$C2_MSG"; then
+    _report "C2c a REPLACE anywhere REDs and names it (no ack reaches it)" ok
+  else
+    _report "C2c a replace anywhere REDs" fail "rc=$C2_RC; msg=$C2_MSG"
+  fi
+}
+t_c2d_delete_anywhere_red() {
+  _c2_run d '.resource_changes += [{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.gone","mode":"managed","change":{"actions":["delete"],"before":{},"after":null}}]'
+  if [[ "$C2_RC" -eq 1 ]] && grep -q 'sentry_cron_monitor.gone .*(3c:' <<<"$C2_MSG"; then
+    _report "C2d a DELETE anywhere REDs and names it" ok
+  else
+    _report "C2d a delete anywhere REDs" fail "rc=$C2_RC; msg=$C2_MSG"
+  fi
+}
+t_c2e_forget_of_non_legacy_type_red() {
+  _c2_run e '.resource_changes += [{"type":"sentry_alert","address":"sentry_alert.forgotten","mode":"managed","change":{"actions":["forget"],"before":{},"after":null}}]'
+  if [[ "$C2_RC" -eq 1 ]] && grep -q 'sentry_alert.forgotten .*(3b:' <<<"$C2_MSG"; then
+    _report "C2e a FORGET of a sentry_alert REDs (forgets may only move the legacy type)" ok
+  else
+    _report "C2e a forget of a sentry_alert REDs" fail "rc=$C2_RC; msg=$C2_MSG"
+  fi
+}
+
+# L — scripts/sentry-last-applied-sha.sh: the create gate's window starts at the
+# commit last APPLIED — the newest main push/dispatch run whose `apply` job ran
+# its `Terraform apply` STEP to success. Not the run (a kill-switch run is green
+# with the apply skipped) and not the job (a post-apply probe can red the job
+# after the apply landed). The fake gh returns API-SHAPED JSON and applies the
+# script's own `--jq` filter with the real jq, so the event filter, the job-name
+# filter and the step-name filter are all exercised (review M1/M1b/M2/M3).
+LAST_APPLIED="$REPO_ROOT/scripts/sentry-last-applied-sha.sh"
+SHA_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+SHA_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+SHA_C=cccccccccccccccccccccccccccccccccccccccc
+_la_stub() { # $1=mode -> a PATH dir with a fake gh
+  local d="$TMPD/la-$1"; mkdir -p "$d"
+  cat > "$d/gh" <<'STUB'
+#!/usr/bin/env bash
+# Two accepted shapes: `api <path> --jq <expr>` (the bounded runs list, which the
+# script still filters via --jq) and `api --paginate <path>` (the jobs read —
+# --jq under --paginate runs per page, so the script slurps page objects with
+# jq -s instead; this stub emits the raw page and the script's own filter is
+# what the suite exercises). Anything else exits 64.
+[[ "$1" == api ]] || { echo "unexpected gh call: $*" >&2; exit 64; }
+if [[ "$2" == --paginate ]]; then
+  path="$3"; expr=""
+elif [[ "$3" == --jq && -n "${4:-}" ]]; then
+  path="$2"; expr="$4"
+else
+  echo "unexpected gh call: $*" >&2; exit 64
+fi
+step='Terraform apply (cron + uptime monitors)'
+job() { # $1=job name $2=job conclusion $3=apply-step conclusion (or "none")
+  if [[ "$3" == none ]]; then printf '{"name":"%s","conclusion":"%s","steps":[]}' "$1" "$2"
+  else printf '{"name":"%s","conclusion":"%s","steps":[{"name":"Terraform init","conclusion":"success"},{"name":"%s","conclusion":"%s"}]}' "$1" "$2" "$step" "$3"; fi
+}
+case "$path" in
+  "repos/o/r/actions/workflows/apply-sentry-infra.yml/runs?branch=main&status=completed&per_page=50")
+    [[ "$LA_MODE" == apierr ]] && exit 1
+    if [[ "$LA_MODE" == none ]]; then json='{"workflow_runs":[]}'
+    else
+      # Run 100 is a pull_request run on the NEWEST slot whose own apply step
+      # "succeeded" — the event filter must pass over it.
+      json=$(printf '{"workflow_runs":[{"id":100,"head_sha":"%s","event":"pull_request"},{"id":101,"head_sha":"%s","event":"push"},{"id":102,"head_sha":"%s","event":"workflow_dispatch"}]}' "$SHA_C" "$SHA_A" "$SHA_B")
+    fi ;;
+  "repos/o/r/actions/runs/100/jobs?filter=all&per_page=100")
+    json="{\"jobs\":[$(job apply success success)]}" ;;
+  "repos/o/r/actions/runs/101/jobs?filter=all&per_page=100")
+    # A decoy job listed FIRST carrying the same step name, succeeded: the job
+    # filter must not credit it.
+    decoy=$(job plan_pr success success)
+    case "$LA_MODE" in
+      first)      json="{\"jobs\":[$decoy,$(job apply success success)]}" ;;
+      skipfirst)  json="{\"jobs\":[$decoy,$(job apply skipped none)]}" ;;
+      probefail)  json="{\"jobs\":[$decoy,$(job apply failure success)]}" ;;
+      applyfail)  json="{\"jobs\":[$decoy,$(job apply failure failure)]}" ;;
+      # Attempt 1 applied, a re-run attempt 2 failed at the apply step: the run
+      # WAS applied (filter=all returns both attempts' jobs).
+      rerun)      json="{\"jobs\":[$decoy,$(job apply failure failure),$(job apply success success)]}" ;;
+      *)          json="{\"jobs\":[$decoy]}" ;;
+    esac ;;
+  "repos/o/r/actions/runs/102/jobs?filter=all&per_page=100")
+    json="{\"jobs\":[$(job apply success success)]}" ;;
+  *) echo "unexpected gh path: $path" >&2; exit 64 ;;
+esac
+if [[ -n "$expr" ]]; then printf '%s' "$json" | jq -r "$expr"; else printf '%s\n' "$json"; fi
+STUB
+  chmod +x "$d/gh"; echo "$d"
+}
+_la_run() { # $1=mode -> LA_OUT, LA_RC
+  local d; d=$(_la_stub "$1")
+  LA_RC=0
+  LA_OUT=$(LA_MODE="$1" SHA_A="$SHA_A" SHA_B="$SHA_B" SHA_C="$SHA_C" GITHUB_REPOSITORY=o/r PATH="$d:$PATH" bash "$LAST_APPLIED" 2>&1) || LA_RC=$?
+}
+t_l1_newest_applied_run() {
+  _la_run first
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_A" ]]; then
+    _report "L1 last-applied: the newest push run whose apply STEP succeeded is returned (PR run and decoy job passed over)" ok
+  else _report "L1 last-applied newest applied run" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l2_skipped_apply_is_not_applied() {
+  _la_run skipfirst
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_B" ]]; then
+    _report "L2 last-applied: a run whose apply job was SKIPPED is passed over (the decoy job's success is not credited)" ok
+  else _report "L2 last-applied skips a run with a skipped apply" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l6_post_apply_probe_failure_still_applied() {
+  _la_run probefail
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_A" ]]; then
+    _report "L6 last-applied: a job that FAILED after its apply step succeeded still counts as applied (the window does not stall)" ok
+  else _report "L6 last-applied counts a post-apply probe failure as applied" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l7_failed_apply_step_is_not_applied() {
+  _la_run applyfail
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_B" ]]; then
+    _report "L7 last-applied: a run whose apply STEP failed is passed over" ok
+  else _report "L7 last-applied skips a failed apply step" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l9_earlier_attempt_applied() {
+  _la_run rerun
+  if [[ "$LA_RC" -eq 0 && "$LA_OUT" == "$SHA_A" ]]; then
+    _report "L9 last-applied: an earlier ATTEMPT that applied counts even when a later re-run attempt failed" ok
+  else _report "L9 last-applied counts an earlier applied attempt" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l3_api_error_fails_closed() {
+  _la_run apierr
+  if [[ "$LA_RC" -eq 1 && "$LA_OUT" == *"::error::"* ]]; then
+    _report "L3 last-applied: an unreadable run list fails CLOSED" ok
+  else _report "L3 last-applied fails closed on API error" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l4_nothing_applied_fails_closed() {
+  _la_run none
+  if [[ "$LA_RC" -eq 1 && "$LA_OUT" == *"none of the newest"* ]]; then
+    _report "L4 last-applied: no applied run found fails CLOSED" ok
+  else _report "L4 last-applied fails closed when nothing applied" fail "rc=$LA_RC out=$LA_OUT"; fi
+}
+t_l5_both_sites_use_the_window() {
+  # Per SITE, not a file-wide count (review M8): the line immediately above each
+  # create-gate `-- 'apps/web-platform/infra/sentry/*.tf'` pathspec must be the
+  # diff FROM "$last_applied", and each site must carry the ancestry refusal.
+  local diffs; diffs=$(awk '/-- .apps\/web-platform\/infra\/sentry\/\*\.tf. > \/tmp\/sentry-(apply-)?tf\.diff/ { print prev } { prev = $0 }' "$WF")
+  local n_diff; n_diff=$(grep -c . <<<"$diffs")
+  local n_good; n_good=$(grep -cE '^[[:space:]]+git -C "\$\{GITHUB_WORKSPACE\}" diff "\$last_applied" HEAD \\$' <<<"$diffs")
+  local n_call; n_call=$(grep -cE '^[[:space:]]+last_applied=\$\(.*bash "\$\{GITHUB_WORKSPACE\}/scripts/sentry-last-applied-sha\.sh"\) \|\| exit 1$' "$WF")
+  local n_anc; n_anc=$(grep -cE 'merge-base --is-ancestor "\$last_applied" HEAD' "$WF")
+  if [[ "$n_diff" -eq 2 && "$n_good" -eq 2 && "$n_call" -eq 2 && "$n_anc" -eq 2 ]]; then
+    _report "L5 both create-gate sites diff FROM the last applied commit, behind the lookup and an ancestry refusal" ok
+  else _report "L5 both create-gate sites use the last-applied window" fail "diff sites=$n_diff last_applied diffs=$n_good lookups=$n_call ancestry=$n_anc"; fi
+}
+t_l8_step_name_is_the_workflows() {
+  # The helper keys on a step NAME; a rename in the workflow must red here, not
+  # silently refuse every create in production.
+  local step; step=$(sed -n 's/^APPLY_STEP="\(.*\)"$/\1/p' "$LAST_APPLIED")
+  if [[ -n "$step" ]] && grep -qxF "      - name: ${step}" "$WF"; then
+    _report "L8 the helper's APPLY_STEP names a real step in the workflow ('$step')" ok
+  else _report "L8 helper step name matches the workflow" fail "APPLY_STEP='$step' not found as a step name in $WF"; fi
 }
 
 # C3 — cardinality. The bijection holds for 26 pairs too; dropping a
@@ -727,6 +1124,148 @@ t_c5_import_id_not_in_capture_red() {
   fi
 }
 
+# C7 — the imported object must BE the captured workflow of its id. Under
+# ignore_changes = all an import always plans no-op, so swapping two live ids
+# passes 3a, uniqueness and membership; only the read-back name tells.
+t_c7_swapped_import_ids_red() {
+  local cap="$TMPD/capture7.json"
+  printf '[{"id":"101","name":"p1"},{"id":"102","name":"p2"},{"id":"103","name":"p3"}]' > "$cap"
+  local swapped absent
+  swapped=$(_pairs 3 | jq -c '(.resource_changes[] | select(.address == "sentry_alert.p1") | .change.after.name) = "p2"
+                        | (.resource_changes[] | select(.address == "sentry_alert.p2") | .change.after.name) = "p1"' | _write c7)
+  absent=$(_pairs 3 | jq -c '(.resource_changes[] | select(.address == "sentry_alert.p3") | .change.after) = {}' | _write c7b)
+  local rc_s rc_a; rc_s=$(_rc bash "$ADOPT" "$swapped" 3 "$cap"); rc_a=$(_rc bash "$ADOPT" "$absent" 3 "$cap")
+  local ms ma; ms=$(_err bash "$ADOPT" "$swapped" 3 "$cap"); ma=$(_err bash "$ADOPT" "$absent" 3 "$cap")
+  if [[ "$rc_s" -eq 1 && "$rc_a" -eq 1 ]] \
+     && grep -q 'sentry_alert.p1 id=101 imported name=p2 capture name=p1' <<<"$ms" \
+     && grep -q 'sentry_alert.p3 id=103 imported name=<absent> capture name=p3' <<<"$ma"; then
+    _report "C7 an import whose read-back name is not the captured workflow's (swapped or unreadable) REDs" ok
+  else
+    _report "C7 swapped/unreadable import names RED" fail "rc_s=$rc_s rc_a=$rc_a; msgs: $ms / $ma"
+  fi
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# Guard 2 (#8451) — no threshold-destroying write reaches apply
+# ════════════════════════════════════════════════════════════════════════════
+# Matrix row 2 (a zero-row plan) is A6: the same floor, the same script.
+# Every RED row anchors on the FINDING LINE (`sentry_alert.<name> actions=`),
+# never on a bare name: the static prose names both adopted rules on every
+# failure, so a bare-name grep is satisfied by the boilerplate.
+
+# G2-1 — an update on an adopted legacy-trigger rule. `ignore_changes = all`
+# plans no update today; this is the day someone narrows it.
+t_g2_1_legacy_update_red() {
+  local f; f=$(_plan "$(_lrow sandbox_startup_failure '["update"]' "$LEGACY")" | _write g2-1)
+  local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
+  local msg; msg=$(_err bash "$TRIPWIRE" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -qE 'sentry_alert\.sandbox_startup_failure actions=update' <<<"$msg" \
+     && grep -q 'comparison: true' <<<"$msg" && grep -q '#7985' <<<"$msg"; then
+    _report "G2-1 an UPDATE on a legacy-trigger sentry_alert REDs, names it, says why and the remedy" ok
+  else
+    _report "G2-1 an UPDATE on a legacy-trigger sentry_alert REDs" fail "rc=$rc (want 1); msg=$msg"
+  fi
+}
+
+# G2-3 — second member. A guard that inspects only the first sentry_alert row
+# (`first(...)`, `.[0]`) passes this plan: the compliant row comes first.
+t_g2_3_second_member_create_red() {
+  local f; f=$(_plan "$(_lrow some_native_rule '["no-op"]' '[]')" \
+                     "$(_lrow auth_per_user_loop '["create"]' "$LEGACY")" | _write g2-3)
+  local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
+  local msg; msg=$(_err bash "$TRIPWIRE" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -qE 'sentry_alert\.auth_per_user_loop actions=create' <<<"$msg" \
+     && ! grep -qE 'sentry_alert\.some_native_rule actions=' <<<"$msg"; then
+    _report "G2-3 a legacy CREATE behind a compliant no-op row REDs (census, not first row)" ok
+  else
+    _report "G2-3 a legacy create behind a compliant row REDs" fail "rc=$rc (want 1); msg=$msg"
+  fi
+}
+
+# G2-4 — a replace, in both orderings (create_before_destroy serialises
+# `["create","delete"]`). A `-replace`/taint or a label rename lands here.
+t_g2_4_legacy_replace_red() {
+  local a b; a=$(_plan "$(_lrow sandbox_startup_failure '["delete","create"]' "$LEGACY")" | _write g2-4a)
+  b=$(_plan "$(_lrow sandbox_startup_failure '["create","delete"]' "$LEGACY")" | _write g2-4b)
+  local rc_a rc_b; rc_a=$(_rc bash "$TRIPWIRE" "$a"); rc_b=$(_rc bash "$TRIPWIRE" "$b")
+  local ma mb; ma=$(_err bash "$TRIPWIRE" "$a"); mb=$(_err bash "$TRIPWIRE" "$b")
+  if [[ "$rc_a" -eq 1 && "$rc_b" -eq 1 ]] \
+     && grep -qE 'sentry_alert\.sandbox_startup_failure actions=delete,create' <<<"$ma" \
+     && grep -qE 'sentry_alert\.sandbox_startup_failure actions=create,delete' <<<"$mb"; then
+    _report "G2-4 a REPLACE on a legacy-trigger sentry_alert REDs in both orderings" ok
+  else
+    _report "G2-4 a replace on a legacy-trigger sentry_alert REDs" fail \
+      "delete,create rc=$rc_a create,delete rc=$rc_b (both want 1); msgs: $ma / $mb"
+  fi
+}
+
+# G2-5 — must-PASS. The adoption itself is an import no-op (a read), and after
+# the #7985 native conversion an update writes the true {interval,value}. A
+# guard stuck RED satisfies G2-1/3/4; this row is what it fails.
+t_g2_5_import_and_native_update_pass() {
+  local f; f=$(_plan "$(_lrow auth_per_user_loop '["no-op"]' "$LEGACY" acme/566671)" \
+                     "$(_lrow sandbox_startup_failure '["no-op"]' "$LEGACY" acme/669246)" \
+                     "$(_lrow converted_rule '["update"]' '[]')" \
+                     "$(_lrow other_native_rule '["update"]' absent)" | _write g2-5)
+  local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
+  if [[ "$rc" -eq 0 ]]; then
+    _report "G2-5 an import no-op carrying legacy and a native-trigger UPDATE both PASS" ok
+  else
+    _report "G2-5 import no-op + native update pass" fail "rc=$rc want 0; msg=$(_err bash "$TRIPWIRE" "$f")"
+  fi
+}
+
+# G2-6 — the refreshed BEFORE state (review of #8451). Narrowing ignore_changes
+# AND deleting the `legacy_trigger_conditions` line plans an update whose AFTER
+# carries no legacy entry while live still has the trigger: the write strips it.
+t_g2_6_before_legacy_update_red() {
+  local f; f=$(_plan "$(_lrow sandbox_startup_failure '["update"]' absent)" \
+    | jq -c --argjson L "$LEGACY" '.resource_changes[0].change.before = {legacy_trigger_conditions: $L}' | _write g2-6)
+  local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
+  local msg; msg=$(_err bash "$TRIPWIRE" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -qE 'sentry_alert\.sandbox_startup_failure actions=update legacy_trigger_conditions after=\[\] before=\[event_unique_user_frequency_count\]' <<<"$msg"; then
+    _report "G2-6 an UPDATE whose after drops the legacy trigger but whose refreshed before carries it REDs" ok
+  else
+    _report "G2-6 an update stripping a live legacy trigger REDs" fail "rc=$rc (want 1); msg=$msg"
+  fi
+}
+
+# G2-7 — ANY legacy type, and every member of the list. The provider re-sends
+# every legacy entry, not only the fidelity projection's excluded types; and a
+# selector reading `$legacy[0]` must not miss the second element.
+t_g2_7_any_legacy_type_and_second_element_red() {
+  local a b
+  a=$(_plan "$(_lrow r_other '["update"]' '["issue_resolution_change"]')" | _write g2-7a)
+  b=$(_plan "$(_lrow r_two '["create"]' '["issue_resolution_change","event_unique_user_frequency_count"]')" | _write g2-7b)
+  local rc_a rc_b; rc_a=$(_rc bash "$TRIPWIRE" "$a"); rc_b=$(_rc bash "$TRIPWIRE" "$b")
+  local ma mb; ma=$(_err bash "$TRIPWIRE" "$a"); mb=$(_err bash "$TRIPWIRE" "$b")
+  if [[ "$rc_a" -eq 1 && "$rc_b" -eq 1 ]] \
+     && grep -qE 'sentry_alert\.r_other actions=update .*after=\[issue_resolution_change\]' <<<"$ma" \
+     && grep -qE 'sentry_alert\.r_two actions=create .*after=\[issue_resolution_change,event_unique_user_frequency_count\]' <<<"$mb"; then
+    _report "G2-7 a write carrying a non-excluded legacy type, or a two-element legacy list, REDs" ok
+  else
+    _report "G2-7 any legacy type / every element REDs" fail "rc_a=$rc_a rc_b=$rc_b; msgs: $ma / $mb"
+  fi
+}
+
+# G2-8 — an import that also UPDATES is a write, and a legacy value unknown at
+# plan time cannot be judged, so both are refused.
+t_g2_8_import_update_and_unknown_red() {
+  local a b
+  a=$(_plan "$(_lrow auth_per_user_loop '["update"]' "$LEGACY" acme/566671)" | _write g2-8a)
+  b=$(_plan "$(_lrow r_unknown '["create"]' absent)" \
+    | jq -c '.resource_changes[0].change.after_unknown = {legacy_trigger_conditions: true}' | _write g2-8b)
+  local rc_a rc_b; rc_a=$(_rc bash "$TRIPWIRE" "$a"); rc_b=$(_rc bash "$TRIPWIRE" "$b")
+  local ma mb; ma=$(_err bash "$TRIPWIRE" "$a"); mb=$(_err bash "$TRIPWIRE" "$b")
+  if [[ "$rc_a" -eq 1 && "$rc_b" -eq 1 ]] \
+     && grep -qE 'sentry_alert\.auth_per_user_loop actions=update' <<<"$ma" \
+     && grep -qE 'sentry_alert\.r_unknown actions=create .*unknown at plan time' <<<"$mb"; then
+    _report "G2-8 an import that UPDATES, and a legacy value unknown at plan time, both RED" ok
+  else
+    _report "G2-8 import+update and unknown legacy RED" fail "rc_a=$rc_a rc_b=$rc_b; msgs: $ma / $mb"
+  fi
+}
+
 t_a1_issue_alert_create_red
 t_a2_not_ack_reachable
 t_a3_unexplained_sentry_alert_create_red
@@ -738,6 +1277,13 @@ t_a8_a9_invoked_in_both_jobs
 t_a10_runs_before_apply
 t_a11_guards_are_unconditional
 t_a_harness_three_unrelated_creates_pass
+t_g2_1_legacy_update_red
+t_g2_3_second_member_create_red
+t_g2_4_legacy_replace_red
+t_g2_5_import_and_native_update_pass
+t_g2_6_before_legacy_update_red
+t_g2_7_any_legacy_type_and_second_element_red
+t_g2_8_import_update_and_unknown_red
 t_b1_missing_import_red
 t_b2_missing_forget_red
 t_b3_mismatched_membership_red
@@ -748,10 +1294,24 @@ t_b_harness_three_pairs_green
 t_b_harness_constant_extractor_defeats_b1
 t_b7_locale_collation
 t_c1_non_adoption_plan_skips
-t_c2_extra_change_red
+t_c2a_import_with_update_red
+t_c2b_backlog_rows_pass_and_are_printed
+t_c2c_replace_anywhere_red
+t_c2d_delete_anywhere_red
+t_c2e_forget_of_non_legacy_type_red
 t_c3_dropped_pair_red
+t_l1_newest_applied_run
+t_l2_skipped_apply_is_not_applied
+t_l3_api_error_fails_closed
+t_l4_nothing_applied_fails_closed
+t_l5_both_sites_use_the_window
+t_l6_post_apply_probe_failure_still_applied
+t_l7_failed_apply_step_is_not_applied
+t_l8_step_name_is_the_workflows
+t_l9_earlier_attempt_applied
 t_c4_clean_adoption_green
 t_c5_import_id_not_in_capture_red
+t_c7_swapped_import_ids_red
 t_c6_duplicate_import_id_red
 t_d1_correct_binding_passes
 t_d2_wrong_binding_reds
@@ -759,6 +1319,21 @@ t_d3_unreadable_binding_reds
 t_d4_delete_row_is_skipped
 t_d5_zero_rows_reds
 t_d6_no_sentry_alert_rows_passes
+t_g3_1_issue_rule_rebound_to_cron_red
+t_g3_2a_cron_binds_expected_alone_red
+t_g3_2b_cron_binds_expected_plus_cron_red
+t_g3_3_cron_binds_non_cron_id_red
+t_g3_4_second_cron_bound_address_red
+t_g3_5a_cron_empty_set_red
+t_g3_5b_cron_null_element_red
+t_g3_p1_real_shape_passes
+t_g3_p2_no_cron_row_passes
+t_g3_6a_newline_id_on_issue_rule_red
+t_g3_6c_newline_id_on_cron_rule_red
+t_g3_7a_replaced_cron_rule_red
+t_g3_7b_replaced_issue_rule_red
+t_g3_8_data_mode_cron_monitor_not_accepted
+t_g3_9_issue_rule_expected_plus_cron_red
 
 echo "=== $pass passed, $fail failed ==="
 
@@ -766,6 +1341,22 @@ echo "=== $pass passed, $fail failed ==="
 # Delete an assertion body and keep the `pass` accounting and this floor is what
 # notices. It counts EXECUTED tests, so a commented-out dispatch line reds here
 # even though every remaining test is green.
+#
+# Harness row (b): the floor below reads counters that ONLY `_report` moves, so
+# it backstops the very helper it depends on. Drive both of `_report`'s paths
+# once with the counters snapshotted, check each moved by exactly one, then
+# unwind. Emitted with printf + exit DIRECTLY — routing this through `_report`
+# would dispatch the detector through the thing it detects (the pattern in
+# apps/web-platform/scripts/sentry-monitors-audit.test.sh and the defect class
+# scripts/guard-vacuity-floor.test.sh exists for).
+_h_p=$pass; _h_f=$fail
+{ _report "harness self-test (unwound)" ok; _report "harness self-test (unwound)" fail; } >/dev/null 2>&1
+if [[ "$pass" -ne $((_h_p + 1)) || "$fail" -ne $((_h_f + 1)) ]]; then
+  printf 'FATAL: _report cannot conclude — pass %s->%s (want +1), fail %s->%s (want +1).\n' \
+    "$_h_p" "$pass" "$_h_f" "$fail" >&2
+  exit 1
+fi
+pass=$_h_p; fail=$_h_f
 ran=$((pass + fail))
 if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
   echo "[FAIL] harness: ran $ran test(s), expected $EXPECTED_TESTS — a suite that silently stops running its assertions reports green" >&2

@@ -11,19 +11,22 @@
 # in the window; the `op=verify` arm does the (functionID, floor(startedAt /
 # cron_period)) exactly-once bucketing (no group > 1 ⇒ no double-fire).
 #
-# There is NO per-tick schedule field in inngest v1.19.4 (ADR-100 Decision 7) — the
-# exactly-once invariant is derived downstream from startedAt, never a tick field.
+# No per-tick schedule field is consulted (ADR-100 Decision 7) — the exactly-once
+# invariant is derived downstream from startedAt alone, which is version-agnostic.
+# (inngest v1.45.1 DOES populate a per-run `cronSchedule` — it was null on v1.19.4 — but it
+# reports the function's schedule, not the tick, so the probe still buckets on
+# startedAt; measured in the #7463 re-spike.)
 # The introspected surface (phase0-empirical-spike.md): RunsFilterV2 =
 # { from: Time!, until: Time, timeField (QUEUED_AT|STARTED_AT|ENDED_AT),
 #   status, functionIDs: [UUID!], appIDs, query }; FunctionRunV2 node carries
 # { id, functionID, status, queuedAt, startedAt, endedAt, ... }.
 #
-# Output (stdout): a single pure-JSON object — run metadata ONLY (functionID +
+# Output (stdout): a single pure-JSON object — run metadata ONLY (run id, functionID,
 # startedAt), never reminder bodies / actors / connection strings (P2-sec-a). The
 # webhook returns CombinedOutput and the workflow jq-parses the body as an OBJECT,
 # so on SUCCESS this writes NOTHING non-JSON to EITHER stream (summary + the
 # SOLEUR_INNGEST_PREFLIGHT_* markers → journald via `logger` only):
-#   { "runs": [ { "functionID": <uuid>, "startedAt": <iso> }, ... ] }
+#   { "runs": [ { "id": <ulid>, "functionID": <uuid>, "startedAt": <iso> }, ... ] }
 #
 # Fail-LOUD (non-zero exit + stderr) on a non-array `.data.runs.edges` — a fetch
 # failure / GraphQL error / unexpected shape must NOT read as a false-clean
@@ -107,7 +110,7 @@ PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-100}"
 FIXTURE_DIR="${INNGEST_DOUBLEFIRE_RUNS_FIXTURE:-}"
 
 # STARTED_AT lower bound. Same 365-day clamp + BusyBox-safe fallback as the sibling
-# inngest scripts (the epoch is rejected by v1.19.4 as an out-of-range Time bound).
+# inngest scripts (the epoch is rejected by inngest v1.45.1 as an out-of-range Time bound).
 # This is only the DEFAULT used when no caller supplies ?from=; the cutover workflow always
 # supplies an anchored bound (see WINDOW POLICY above, which retired the former
 # "never narrowed" rule for this scan).
@@ -423,8 +426,10 @@ run_probe() {
         fi
       fi
     fi
-    # Append this page's projected runs (functionID + startedAt ONLY — no bodies).
-    echo "$resp" | jq -c '[ .data.runs.edges[].node | {functionID, startedAt} ]' >> "$spool"
+    # Append this page's projected runs (run id + functionID + startedAt ONLY — no bodies). The run
+    # id (a ULID, trace_runs.run_id PRIMARY KEY) lets op=verify drop a run returned on two pages
+    # without collapsing two distinct runs that share a millisecond startedAt (#6178).
+    echo "$resp" | jq -c '[ .data.runs.edges[].node | {id, functionID, startedAt} ]' >> "$spool"
     has_next=$(echo "$resp" | jq -r '.data.runs.pageInfo.hasNextPage // false')
     end_cursor=$(echo "$resp" | jq -r '.data.runs.pageInfo.endCursor // ""')
     if [[ "$has_next" == "true" ]]; then

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Follow-through verification for #5274 Phase 3 GA soak (post-cutover, Sub-PR 3.D).
 #
-# The git-data LUKS cutover (git-data-cutover.yml) flips GIT_DATA_STORE_ENABLED on
-# both web hosts. ADR-068 flips `adopting`→`accepted` and the #5274 Phase-3
+# The git-data LUKS cutover flips GIT_DATA_STORE_ENABLED on both web hosts. That flip is
+# owned by #8211's real cutover, not git-data-cutover.yml, which is a read-only proof since
+# #8189. ADR-068 flips `adopting`→`accepted` and the #5274 Phase-3
 # milestone closes ONLY after a >=7-day soak in which the multi-host routing +
 # shared-git-data + fence path stays clean under real two-host contention. This
 # script is that soak gate: it PASSES only when, over the window from just-after
@@ -27,8 +28,10 @@
 #   1 = FAIL       (>=1 event in window; a GA-gating regression fired — leave open, investigate)
 #   * = TRANSIENT  (Sentry API unreachable / auth / parse failure; retry next sweep)
 #
-# Required env: SENTRY_AUTH_TOKEN (wired in scheduled-followthrough-sweeper.yml
-#   as secrets.SENTRY_IAC_AUTH_TOKEN). Mirrors ac8-founder-ambiguous-soak-5673.sh.
+# Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
+#   as secrets.SENTRY_ACTIONS_RO_TOKEN -- the org-level read-only `actions-read-prd` integration, ADR-031;
+#   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
+#   Mirrors ac8-founder-ambiguous-soak-5673.sh.
 
 set -uo pipefail
 
@@ -40,15 +43,15 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
     ;;
 esac
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
@@ -72,11 +75,18 @@ QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 # in the issue directive still defers the first check to >=7 days after this.
 START="<POST_CUTOVER_UTC>"
 END=$(date -u +%Y-%m-%dT%H:%M:%S)
+# Name the unpinned case (the shape zot-soak-6122.sh uses) instead of sending the
+# placeholder to Sentry, which answered HTTP 400 on every sweep (measured 2026-09-11) --
+# a TRANSIENT that names a 4xx reads as an auth or query defect, not as "not yet pinned".
+if [[ ! "$START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+  echo "TRANSIENT: START is unpinned ($START) — pin START in this script to the post-cutover UTC before this gate can report a verdict." >&2
+  exit 2
+fi
 
 URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&start=${START}&end=${END}&per_page=10&field=title&field=timestamp&field=level"
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
+  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
   -H "Accept: application/json" \
   "$URL")
 

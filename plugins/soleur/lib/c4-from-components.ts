@@ -10,10 +10,14 @@
 // DISCONNECTED BOXES reported as a successful result. `assessRender` reports that
 // state as `degraded`: the docs are the defect, not the run.
 //
-// VALIDATION MIRRORS scripts/regenerate-c4-model.sh:85-97, NOT c4-render.ts.
-// The two in-repo precedents deliberately disagree. `c4-render.ts` gates on
-// element count only, reasoning that likec4's stderr wording drifts across patch
-// versions — correct for a RUNTIME save path that cannot pin the CLI. This
+// VALIDATION MIRRORS plugins/soleur/scripts/render-c4-model.sh (its DIAG_RE and
+// element-count gates), NOT c4-render.ts — except the #8861 views gate, which
+// all three writers share identically (plain-object `views` count > 0).
+// The two in-repo precedents deliberately disagree on the DIAGNOSTIC gate:
+// `c4-render.ts` refuses to key on likec4 stderr, reasoning that its wording
+// drifts across patch versions — correct for a RUNTIME save path that cannot
+// pin the CLI (its element/view COUNT gates are identical to this module's).
+// This
 // producer pins `likec4@1.50.0` (asserted by a drift guard against both
 // precedents), so the wording is fixed and both gates are safe. That pin is load
 // bearing: if it moves, the diagnostic gate is the thing that breaks.
@@ -28,7 +32,7 @@ import { join } from "node:path";
 
 /**
  * Pinned likec4 CLI version. MUST stay equal to `LIKEC4_VERSION` in
- * scripts/regenerate-c4-model.sh and the `likec4@…` pin in
+ * plugins/soleur/scripts/render-c4-model.sh and the `likec4@…` pin in
  * apps/web-platform/server/c4-render.ts — a drift guard asserts all three.
  */
 export const LIKEC4_VERSION = "1.50.0";
@@ -39,7 +43,7 @@ export const GENERATED_HEADER =
 
 /**
  * Source-fault detector, behaviourally equivalent to `DIAG_RE` in
- * scripts/regenerate-c4-model.sh:94. likec4@1.50.0 exits 0 on a syntax error —
+ * plugins/soleur/scripts/render-c4-model.sh. likec4@1.50.0 exits 0 on a syntax error —
  * it drops the bad fragment, prints `Invalid <file>` / `Line N:`, and still emits
  * a non-empty but INCOMPLETE model, which element-count alone cannot see.
  *
@@ -47,7 +51,22 @@ export const GENERATED_HEADER =
  * unanchored `Invalid` would false-fail for a checkout directory whose name
  * happens to contain the marker word.
  */
-export const DIAG_RE = /^Invalid |Could not resolve|^\s+Line [0-9]+:/m;
+export const DIAG_RE =
+  /^([0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)? +[A-Z]+ +[^ ]+ +)?Invalid |Could not resolve|^\s+Line [0-9]+:/m;
+
+/**
+ * The environment likec4 runs under. Under CI it switches to a timestamped, ANSI-coloured
+ * reporter; CI and FORCE_COLOR are dropped and NO_COLOR set so the diagnostics reach
+ * `DIAG_RE` plain. `assessRender` also strips ANSI, so either defence alone holds.
+ */
+export function likec4ChildEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, NO_COLOR: "1" };
+  delete env.CI;
+  delete env.FORCE_COLOR;
+  return env;
+}
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 /** Marker sentinel for the C4 producer. */
 export const C4_MARKER = "SOLEUR_KB_SYNC_C4";
@@ -419,7 +438,8 @@ export function generateViewPage(viewId = "generatedComponents"): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Count elements and relationships in a rendered `model.likec4.json`.
+ * Count elements, relationships, and views in a rendered `model.likec4.json`.
+ * `views` feeds `assessRender`'s zero-views gate (#8861).
  *
  * ‼️ The relationship key is `relations`, NOT `relationships`. Reading the wrong
  * key returns `undefined` -> 0, which makes `assessRender` report EVERY corpus as
@@ -431,28 +451,46 @@ export function generateViewPage(viewId = "generatedComponents"): string {
  * Non-object shapes yield 0 rather than throwing: likec4 can emit a null/array
  * field, and a bare `Object.keys` on those would silently produce a wrong count.
  */
-export function countModelJson(json: string): { elements: number; relationships: number } {
+export function countModelJson(json: string): {
+  elements: number;
+  relationships: number;
+  views: number;
+} {
   try {
     const model = JSON.parse(json) as Record<string, unknown>;
     const size = (v: unknown) =>
       v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v).length : 0;
-    return { elements: size(model.elements), relationships: size(model.relations) };
+    return {
+      elements: size(model.elements),
+      relationships: size(model.relations),
+      views: size(model.views),
+    };
   } catch {
-    return { elements: 0, relationships: 0 };
+    return { elements: 0, relationships: 0, views: 0 };
   }
 }
 
 /**
- * The three gates. Order matters: a source fault is a hard failure regardless of
- * counts, an empty model is a failure, and only then is a zero-relationship model
- * classified — as `degraded`, never `failed`. The docs are the defect there, not
- * the run, and failing the sync over it would punish the tester for a corpus
- * Soleur itself taught them to write.
+ * The gates. Order matters: a source fault is a hard failure regardless of
+ * counts, an empty model is a failure, a zero-view model is a LAYOUT failure
+ * (#8861 — a successful layout always emits at least `index`, so this is the
+ * graphviz-fallback/container shape, never the user's source), and only then is
+ * a zero-relationship model classified — as `degraded`, never `failed`. The
+ * docs are the defect there, not the run, and failing the sync over it would
+ * punish the tester for a corpus Soleur itself taught them to write.
  */
 export function assessRender(input: {
   diagnostics: string;
   /** Elements in the RENDERED model (the whole diagrams dir). Validates non-degeneracy. */
   elementCount: number;
+  /**
+   * Views in the RENDERED model — the #8861 gate, mirroring c4-render.ts's
+   * `counts.views === 0`. Elements-but-no-views means the layout engine failed,
+   * so a zero here is `failed`, and it is checked before the
+   * generatedRelationships degrade so a broken layout is never published as a
+   * "link-free corpus".
+   */
+  viewCount: number;
   /** Relationships in the RENDERED model. Reported, but NOT the gate — see below. */
   relationshipCount: number;
   /**
@@ -473,12 +511,29 @@ export function assessRender(input: {
    */
   generatedRelationships: number;
 }): RenderVerdict {
-  if (DIAG_RE.test(input.diagnostics)) {
-    const line = input.diagnostics.split("\n").find((l) => DIAG_RE.test(l)) ?? "";
+  const diagnostics = input.diagnostics.replace(ANSI_RE, "");
+  if (DIAG_RE.test(diagnostics)) {
+    const line = diagnostics.split("\n").find((l) => DIAG_RE.test(l)) ?? "";
     return { status: "failed", reason: "source-fault", detail: line.trim() };
   }
   if (input.elementCount === 0) {
     return { status: "failed", reason: "empty-model", detail: "likec4 produced an empty/degenerate model" };
+  }
+  if (input.viewCount === 0) {
+    // A layout failure with no diagnostic the source-fault arm could claim —
+    // the likec4 output tail is the only evidence the agent gets, so carry a
+    // trimmed copy on the wire (the marker collapses whitespace anyway).
+    const tail = diagnostics
+      .split("\n")
+      .filter(Boolean)
+      .slice(-5)
+      .join(" | ")
+      .slice(0, 300);
+    return {
+      status: "failed",
+      reason: "zero-views",
+      detail: `likec4 produced a model with elements but no views — a layout failure, not a source fault${tail ? ` — last output: ${tail}` : ""}`,
+    };
   }
   if (input.generatedRelationships === 0) {
     return {

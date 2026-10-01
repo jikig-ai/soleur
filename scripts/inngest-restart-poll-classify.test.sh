@@ -27,8 +27,8 @@ STALE=500
 echo "--- classify_restart_frame ---"
 
 # exit 0 + inngest + fresh → success (the only exit-0 verdict; RED would be predates if floor compared wrong).
-assert_eq "exit0 + inngest + fresh → success" "success" \
-  "$(classify_restart_frame 0 inngest "$FRESH" "$FLOOR" completed)"
+assert_eq "exit0 + inngest + fresh + reason=success → success" "success" \
+  "$(classify_restart_frame 0 inngest "$FRESH" "$FLOOR" success)"
 
 # exit 0 + inngest + stale → predates (a green PREVIOUS-slot read before our webhook writes running).
 assert_eq "exit0 + inngest + stale → predates" "predates" \
@@ -67,15 +67,36 @@ assert_eq "failure + inngest + fresh + other reason → terminal_fail" "terminal
 assert_eq "sentinel -99 + inngest + fresh + other reason → terminal_fail" "terminal_fail" \
   "$(classify_restart_frame -99 inngest "$FRESH" "$FLOOR" health_check_failed)"
 
+# #8077 review: ci-deploy.sh writes component=inngest exit_code=0 for op=quiesce-web (`quiesced`) and
+# op=rollback (`enabled`) too. A fresh frame from one of those is NOT this run's restart succeeding —
+# classify it other_op (keep polling) so a concurrent quiesce can never read as "restart completed".
+assert_eq "exit0 + inngest + fresh + reason=quiesced → other_op (not a restart success)" "other_op" \
+  "$(classify_restart_frame 0 inngest "$FRESH" "$FLOOR" quiesced)"
+assert_eq "exit0 + inngest + fresh + reason=enabled → other_op (not a restart success)" "other_op" \
+  "$(classify_restart_frame 0 inngest "$FRESH" "$FLOOR" enabled)"
+assert_eq "exit0 + inngest + fresh + reason=unknown (field absent) → other_op" "other_op" \
+  "$(classify_restart_frame 0 inngest "$FRESH" "$FLOOR" unknown)"
+assert_eq "exit0 + inngest + fresh + reason=success → success (the restart handler's reason)" "success" \
+  "$(classify_restart_frame 0 inngest "$FRESH" "$FLOOR" success)"
+assert_eq "exit0 + inngest + fresh + reason=success_degraded_durability → success (a superseding deploy brought inngest current)" "success" \
+  "$(classify_restart_frame 0 inngest "$FRESH" "$FLOOR" success_degraded_durability)"
+assert_eq "exit0 + inngest + STALE + reason=quiesced → predates (freshness still decides first)" "predates" \
+  "$(classify_restart_frame 0 inngest "$STALE" "$FLOOR" quiesced)"
+# The refusals are ordinary terminal failures (their legible text lives in the workflow arm).
+assert_eq "failure + inngest + fresh + inngest_quiesced_restart_refused → terminal_fail" "terminal_fail" \
+  "$(classify_restart_frame 1 inngest "$FRESH" "$FLOOR" inngest_quiesced_restart_refused)"
+assert_eq "failure + inngest + fresh + inngest_disabled_unattributed_restart_refused → terminal_fail" "terminal_fail" \
+  "$(classify_restart_frame 1 inngest "$FRESH" "$FLOOR" inngest_disabled_unattributed_restart_refused)"
+
 echo "--- deploy_status_confirms_fresh_inngest ---"
 
 # 200 + inngest + exit0 + fresh start_ts → yes.
 assert_eq "200 + inngest + exit0 + fresh → yes" "yes" \
-  "$(deploy_status_confirms_fresh_inngest 200 '{"component":"inngest","exit_code":0,"start_ts":1000}' "$FLOOR")"
+  "$(deploy_status_confirms_fresh_inngest 200 '{"component":"inngest","exit_code":0,"start_ts":1000,"reason":"success"}' "$FLOOR")"
 
 # 200 + inngest + exit0 but STALE start_ts (< floor) → no (a superseded op that predates our trigger).
 assert_eq "200 + inngest + exit0 + stale start_ts → no" "no" \
-  "$(deploy_status_confirms_fresh_inngest 200 '{"component":"inngest","exit_code":0,"start_ts":500}' "$FLOOR")"
+  "$(deploy_status_confirms_fresh_inngest 200 '{"component":"inngest","exit_code":0,"start_ts":500,"reason":"success"}' "$FLOOR")"
 
 # 200 + exit0 + fresh but WRONG component → no.
 assert_eq "200 + exit0 + fresh + wrong component → no" "no" \
@@ -88,6 +109,14 @@ assert_eq "non-200 → no" "no" \
 # non-JSON body at 200 → no.
 assert_eq "200 + non-JSON body → no" "no" \
   "$(deploy_status_confirms_fresh_inngest 200 'not json' "$FLOOR")"
+
+# #8077 review: the budget-expiry re-read must not confirm "inngest current" off a quiesce/enable frame.
+assert_eq "200 + inngest + exit0 + fresh + reason=quiesced → no" "no" \
+  "$(deploy_status_confirms_fresh_inngest 200 '{"component":"inngest","exit_code":0,"start_ts":1000,"reason":"quiesced"}' "$FLOOR")"
+assert_eq "200 + inngest + exit0 + fresh + reason=enabled → no" "no" \
+  "$(deploy_status_confirms_fresh_inngest 200 '{"component":"inngest","exit_code":0,"start_ts":1000,"reason":"enabled"}' "$FLOOR")"
+assert_eq "200 + inngest + exit0 + fresh + reason=success_degraded_durability → yes" "yes" \
+  "$(deploy_status_confirms_fresh_inngest 200 '{"component":"inngest","exit_code":0,"start_ts":1000,"reason":"success_degraded_durability"}' "$FLOOR")"
 
 echo "--- liveness_confirms_healthy ---"
 
@@ -108,4 +137,10 @@ assert_eq "200 + non-object body → no" "no" \
   "$(liveness_confirms_healthy 200 '[1,2,3]')"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
+# Exact assertion floor: a deleted or skipped row changes the dispatched count.
+readonly EXPECTED_ASSERTIONS=31
+if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
+  printf '  FAIL: dispatched %s assertions, expected exactly %s — a row was added, removed or skipped\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

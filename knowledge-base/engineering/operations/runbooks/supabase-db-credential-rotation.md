@@ -85,8 +85,9 @@ immediate check answers a different question than the one you are asking.
 
 Uses `SUPABASE_ACCESS_TOKEN` from `soleur/prd_terraform`.
 
-It deliberately does **not** use `SUPABASE_PAT`, which returns HTTP 401 in every
-config that carries it — see #8028.
+`SUPABASE_PAT` was retired in #8028 (dead — HTTP 401 — in every config that
+carried it, deleted at the `dev` and `prd` roots); `SUPABASE_ACCESS_TOKEN` is
+the sole Management-API credential.
 
 ## Verifying without the old password
 

@@ -120,3 +120,201 @@ Nutlope/hallmark
   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+mattpocock/skills
+  License: MIT
+  URL: https://github.com/mattpocock/skills
+  Audited at: HEAD c55ee46073ed923f86ce59a5eb3b6d895095d1b7 (2026-09-18)
+  Description: "Skills for Real Engineers" -- 38 skills for Claude Code
+    covering engineering workflow (diagnosis, TDD, triage, wayfinding),
+    productivity (grilling, handoff, teaching) and agent-document
+    authoring.
+  Used in: skills/operator-bootstrap/, skills/operator-rephrase/,
+    scripts/lib/operator-script.sh,
+    skills/brainstorm-techniques/references/phase-boundaries.md,
+    skills/ship/SKILL.md (Merge Danger section) (#8287),
+    skills/reproduce-bug/SKILL.md, skills/test-fix-loop/SKILL.md,
+    skills/constraint-scaffold/ (#8288),
+    skills/kb-glossary/ (SKILL.md, references/glossary-format.md,
+    references/rejected-request-register.md),
+    skills/questionnaire-generate/ (SKILL.md,
+    references/questionnaire.template),
+    skills/triage/SKILL.md (intake pre-checks),
+    agents/support/ticket-triage.md (intake pre-checks),
+    skills/skill-creator/references/authoring-levers.md (#8290),
+    skills/product-roadmap/SKILL.md (#8292: Where Work Lives, the
+      next frontier, workshop step 1.6),
+    skills/brainstorm/SKILL.md (section 1.2 dialogue discipline),
+    skills/brainstorm-techniques/SKILL.md (exit condition),
+    skills/compound/SKILL.md (Phase 1.5 step 3.6),
+    commands/help.md (skill-composition map) (#8647)
+  Portions adopted: Patterns and prose, not source code. Specifically:
+    the wizard architecture (a human-in-the-loop procedure rendered as a
+    runnable staged script with confirmation gates and idempotent
+    writes); the "print the URL before asking for its value" and
+    additive-only URL-opening discipline; the context-boundary decision
+    tree (Continue / clear / handoff / subagent / compact, first-yes-wins);
+    the re-pitch-in-plain-language corrective; and the merge-danger
+    framing that a PR body should state what reverses a change.
+
+    The Soleur implementation is an EXTRACTION, not a port: five of the
+    six library primitives already existed in this repository and were
+    consolidated from apps/cla-evidence/infra/bootstrap.sh,
+    linkedin-setup.sh and provision-operator-digest-repo.sh rather than
+    copied from upstream. Two upstream mechanisms were deliberately NOT
+    adopted -- the inlined-library STAGES-marker invariant (Soleur's
+    generated scripts source a shared library instead) and the one-way/
+    two-way "Door" verdict (unanswerable by default on the PRs where
+    Soleur's reversibility evidence is not produced).
+
+    Bundle 2 (#8288, from skills/engineering/diagnosing-bugs/SKILL.md
+    and skills/in-progress/setup-ts-deep-modules/SKILL.md at the same
+    HEAD) imports four mechanics, again as prose composed into existing
+    skills: the red-capable feedback-loop completion gate with its
+    ranked falsifiable-hypothesis ladder and the tighten /
+    non-deterministic branch (reproduce-bug); the [DEBUG-<hex4>]
+    tagged-probe convention with its cleanup grep and the perf-branch
+    measure-first rule (reproduce-bug, test-fix-loop; taxonomy in
+    ADR-230); "if no correct seam exists, that itself is the finding"
+    plus repro minimisation (reproduce-bug, routed to the
+    legacy-code-expert agent); and the install-time bite-proof with the
+    README-next-to-the-governed-path plus agent-instructions-pointer
+    shape (constraint-scaffold). Two upstream elements were deliberately
+    NOT imported: the peer's four-rule deep-module scope (Soleur's gate
+    stays single-boundary, client->server-secret only) and
+    scripts/hitl-loop.template.sh (reproduce-bug's rung 10 points at
+    soleur:agent-browser; the template is a script, not peer prose).
+    The server/README.md that constraint-scaffold emits into a founder's
+    repository is Soleur-authored, shares no sentence with either peer
+    file (checked by an 8-word shingle comparison at ship), and carries
+    no credit: the constitution's vendored-content rule keeps a third
+    party's credit in the corpus for provenance and strips it from
+    emitted user output, and the MIT notice is satisfied by this file in
+    Soleur's distribution. The template the README is rendered from
+    (references/boundary-readme.template) carries the attribution
+    comment; the emitter strips that first line.
+
+    Bundle 3 (#8289, from skills/engineering/domain-modeling/SKILL.md
+    and CONTEXT-FORMAT.md, skills/engineering/triage/OUT-OF-SCOPE.md and
+    SKILL.md step 1, and skills/productivity/to-questionnaire/SKILL.md at
+    the same HEAD) imports four mechanics, again as prose composed into
+    Soleur skills: the glossary write discipline (challenge a term that
+    conflicts with the glossary, sharpen a fuzzy or overloaded one,
+    update inline as a decision settles it rather than batching, and the
+    hard scope line that the artifact is a glossary and nothing else) and
+    the entry format with its opinionated-single-term and _Avoid_-list
+    shape (kb-glossary); the one-file-per-concept rejected-concepts
+    convention with concept-not-keyword matching, the durable-reason
+    test and the built-is-not-rejected prohibition (kb-glossary/
+    references/rejected-request-register.md; substrate decision in
+    ADR-234); the two intake pre-checks -- redundancy search keyed on
+    domain concept with the searched surfaces reported, and a
+    prior-rejection lookup (skills/triage/SKILL.md,
+    agents/support/ticket-triage.md); and grill-the-send-not-the-subject
+    with its two-exchange interview and questionnaire-template shape
+    (questionnaire-generate). Four upstream elements were deliberately
+    NOT imported: the three-way Confirm / Reconsider / Disagree
+    maintainer prompt (a recorded refusal that can be re-litigated with
+    no new information is a suggestion, and on a non-technical founder it
+    becomes click-through that launders auto-closes as consent); ADR-FORMAT.md
+    (Soleur has 234 ADRs on an established format in
+    skills/architecture/references/adr-template.md, and adopting a peer
+    format would fork a live internal convention); the .out-of-scope/
+    dotted-directory location (a dotfile hides founder-readable records
+    from the founder, against the principle that a founder can clone the
+    repository and see all of it); and CONTEXT-MAP.md's multi-context
+    mechanism (Soleur's glossary is single-context -- one company, one
+    vocabulary -- so a bounded-context map would ship as dead structure,
+    and that need already routes to the ddd-architect agent).
+    The questionnaire that questionnaire-generate emits into a founder's
+    repository is Soleur-authored on the same terms as the emitted
+    server/README.md above: it shares no 8-word shingle with any peer
+    file, and it carries no credit because the emitter strips the first
+    line of the template, which is where the attribution comment lives.
+    No Bundle 3 record under knowledge-base/ carries the comment --
+    knowledge-base/project/glossary.md and
+    knowledge-base/project/rejected/ are Soleur's own vocabulary and
+    Soleur's own record, so attributing them would be a false
+    attribution, and they are outside the plugin payload
+    (.claude-plugin/marketplace.json sets source to ./plugins/soleur).
+
+    Bundle 4 (#8290, from skills/productivity/writing-for-agents/SKILL.md,
+    skills/productivity/writing-for-agents/SKILL-MECHANICS.md and
+    .agents/invocation.md at HEAD c55ee46073ed923f86ce59a5eb3b6d895095d1b7)
+    imports five authoring patterns as Soleur-authored prose in
+    skills/skill-creator/references/authoring-levers.md: leading words
+    (with the pair-every-prohibition-with-its-positive-target negation
+    rule); the two loads (context load vs cognitive load); co-location,
+    set against duplication and a single source of truth; completion-
+    criterion demand (clarity and demand as separate properties); and
+    the invocation axis (the "could the model reach for this on its own,
+    or must another skill reach it" test behind disable-model-invocation).
+    The examples, the ADR-236 necessary conditions, the per-harness
+    measurements, the headless-refusal policy and the four-site flip
+    checklist are Soleur's own. The file shares no 8-word shingle with
+    any of the three peer files. The disable-model-invocation and
+    user-invocable rows in skills/skill-creator/references/official-spec.md
+    are sourced from Anthropic's Claude Code documentation, not the peer,
+    and carry no credit.
+
+    Bundle 5 (#8292, from skills/engineering/wayfinder/SKILL.md at the
+    same HEAD) imports these mechanics into skills/product-roadmap/
+    SKILL.md: the Not Yet Specified fog section with its
+    state-the-question-not-answer-it test, the no-pre-slicing rule, and
+    graduation that clears the fog entry so the work lives only as its
+    issue; out-of-scope-as-closed-issue that never graduates (a changed
+    mind is a fresh issue, not a resumption), kept out of the decisions
+    record; and native blocking edges wired in a second pass once every
+    issue exists, read by an open, unblocked, unassigned frontier (the
+    frontier treats an assignee as a claim). Deliberately NOT imported:
+    the map issue with child decision tickets and wayfinder:* labels, the
+    four ticket types, the claim act itself (self-assigning before work),
+    one-ticket-per-session, and sub-issue hierarchy (Soleur's phase
+    milestones already carry it). The imported SKILL.md prose shares no
+    8-word shingle with the peer file outside the quoted graduation-test
+    sentence. The two roadmap.md section intros and the fog note in
+    skills/plan/SKILL.md share none at all and carry no comment.
+
+    Bundle 6 (#8647, audit items B4/B10/B12b at the same HEAD) imports,
+    as prose composed into existing skills: from
+    skills/productivity/grilling/SKILL.md, the round protocol's
+    completion criterion (every decision branch walked or explicitly
+    parked, nothing silently assumed), dependency-ordered questions and
+    non-blocking fact lookups (brainstorm section 1.2 and its
+    brainstorm-techniques exit line); from skills/in-progress/retro/
+    SKILL.md, the null-guardrail finding category, applied per recurring
+    failure class after reading the repo's own check commands (compound
+    Phase 1.5 step 3.6); and from the ask-matt skill, the flow-map shape
+    of main flow, on-ramps and standalone skills (the commands/help.md
+    map, which names only Soleur skills). Deliberately NOT imported:
+    grilling's batched multi-question frontier (Soleur keeps one question
+    per turn), retro's tool-economy and information-access categories,
+    and retro's repo-level null-guardrail finding reported on every run.
+    compound/SKILL.md carries no inline attribution comment because it
+    sits at its lifecycle byte ceiling (plugins/soleur/test/
+    skill-body-budget.json); this entry is its attribution.
+
+  MIT License (upstream)
+
+  Copyright (c) 2026 Matt Pocock
+
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

@@ -27,7 +27,7 @@
 #      falls back to `sh`, which is dash on 24.04. That is silent bash/dash divergence on a
 #      fail-closed host: the same defect class as the gc-unit `. <file>` bug this PR fixes.
 #
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -70,7 +70,7 @@ printf '\n=== git-data-render-strip-parity ===\n\n'
 #
 # Extracted by shape (`git_data_rationale_strip = <literal>`) rather than by line number, so
 # neither file's formatting can silently decouple them.
-# COMMENTS STRIPPED FIRST. `grep … | head -1` over an unstripped file will happily pick a
+# COMMENTS STRIPPED FIRST. `grep … | sed -n '1p'` over an unstripped file will happily pick a
 # COMMENT that mentions the assignment — and this repo's house style is dense inline
 # rationale, so a line like `# git_data_rationale_strip = "<old form>"` explaining a past
 # change is exactly the kind of prose that gets written. Both files would then be compared on
@@ -85,7 +85,7 @@ printf '\n=== git-data-render-strip-parity ===\n\n'
 # `git_data_template_rationale_strip` does not contain `git_data_rationale_strip` as a
 # substring, which is why the template local is named with the qualifier in the MIDDLE and
 # not as a `_template` suffix.
-extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$2" | grep -oE "$1"'[[:space:]]*=[[:space:]]*".*"' | head -1 | sed 's/^[^=]*=[[:space:]]*//'; }
+extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$2" | grep -oE "$1"'[[:space:]]*=[[:space:]]*".*"' | sed -n '1p' | sed 's/^[^=]*=[[:space:]]*//'; }
 
 tf_strip="$(extract_strip git_data_rationale_strip "$TF")"
 # The budget script emits its locals block through an UNQUOTED heredoc, so bash halves every
@@ -164,7 +164,7 @@ fi
 # one line in main.tf reverts what a git-data host boots from, on a ForceNew attribute, and
 # nothing else in CI can see it.
 _tf_code="$(grep -vE '^[[:space:]]*(#|//)' "$TF")"
-_open_ln="$(grep -nE '^[[:space:]]*rendered[[:space:]]*=[[:space:]]*replace\(templatefile\(' <<<"$_tf_code" | head -1 | cut -d: -f1)"
+_open_ln="$(grep -nE '^[[:space:]]*rendered[[:space:]]*=[[:space:]]*replace\(templatefile\(' <<<"$_tf_code" | sed -n '1p' | cut -d: -f1)"
 CASES=$((CASES + 1))
 if [[ -z "$_open_ln" ]]; then
   fail "the render does NOT apply the template strip" \
@@ -232,10 +232,10 @@ fi
 
 n_entries=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*replace\(file\(' "$TF")
 CASES=$((CASES + 1))
-if [[ "$n_entries" -eq 9 ]]; then
-  pass "all 9 stripped map entries are each on ONE physical line"
+if [[ "$n_entries" -eq 13 ]]; then
+  pass "all 13 stripped map entries are each on ONE physical line"
 else
-  fail "expected 9 single-line stripped map entries in the render module, found ${n_entries}" \
+  fail "expected 13 single-line stripped map entries in the render module, found ${n_entries}" \
     "a wrapped entry defeats the line-based var parser in cloud-init-user-data-size.test.ts"
 fi
 
@@ -269,11 +269,27 @@ fi
 #
 # Latent today (0 hits) across ~20 continuation sites. Guarded because ADR-152 tells
 # maintainers comments are now free, which is exactly the belief that trips it.
+# THE FILE LIST IS DERIVED FROM THE RENDER MODULE, NOT HAND-TYPED. The first revision listed ten
+# files by name and the four #8210 payloads joined the strip map (9 -> 13 entries, asserted
+# just above) without joining this list — so the one unit whose ExecStart is a ten-line
+# `\`-continued `sh -c` body (the reopen reporter, the sole emitter for every reopen failure)
+# sat outside the guard that exists for exactly that shape. Every `replace(file("…"))` operand
+# in the module, plus the template itself, is what the strip is applied to; read them.
+_stripped_files="$(grep -oE 'replace\(file\("\$\{path\.module\}/\.\./\.\./[^"]+"\)' "$TF" \
+  | sed -E 's#^replace\(file\("\$\{path\.module\}/\.\./\.\./##; s#"\)$##')"
+_stripped_n="$(printf '%s\n' "$_stripped_files" | grep -c .)"
+CASES=$((CASES + 1))
+if [[ "$_stripped_n" -eq "$n_entries" ]]; then
+  pass "the continuation guard's file list is derived from the module and covers all ${n_entries} stripped payloads"
+else
+  fail "derived ${_stripped_n} stripped payload paths from the module but counted ${n_entries} map entries" \
+    "the derivation and the count disagree, so the guard below would scan a NARROWER set than ships"
+fi
+_cont_files=()
+while IFS= read -r _f; do [[ -n "$_f" ]] && _cont_files+=("$DIR/$_f"); done <<<"$_stripped_files"
+_cont_files+=("$DIR/cloud-init-git-data.yml")
 _cont_hits="$(awk 'prev ~ /\\[ \t]*$/ && $0 ~ /^[ \t]*#/ {printf "%s:%d\n", FILENAME, NR} {prev=$0}' \
-  "$DIR"/git-data-bootstrap.sh "$DIR"/git-data-provision.sh "$DIR"/git-data-transport-wrapper.sh \
-  "$DIR"/git-data-remove.sh "$DIR"/git-data-gc.sh "$DIR"/git-data-pre-receive-placeholder.sh \
-  "$DIR"/git-data-gc.service "$DIR"/git-data-gc-failure.service "$DIR"/git-data-gc.timer \
-  "$DIR"/cloud-init-git-data.yml 2>/dev/null || true)"
+  "${_cont_files[@]}" 2>/dev/null || true)"
 CASES=$((CASES + 1))
 if [[ -z "$_cont_hits" ]]; then
   pass "no comment sits directly after a line continuation in any injected payload"
@@ -332,6 +348,94 @@ PY
       pass "all ${n_checked} rendered shell payloads keep their shebang and pass bash -n"
     else
       fail "the strip damaged ${n_bad} rendered payload(s)" "$(grep '^BAD ' <<<"$shebang_out" | head -6)"
+    fi
+
+    # ── 3b. (#8211, ADR-239) THE SERVED LAYOUT, read off the RENDER ───────────────────
+    #
+    # Read here rather than off the template because this is the document the host is handed:
+    # a strip or an interpolation that dropped one of these lines would leave the template
+    # correct and the boot wrong. Before #8211 the render mounted the PLAINTEXT volume by a raw
+    # by-id glob at /mnt/git-data, gave it an fstab line, and parked the LUKS mapper beside it at
+    # /mnt/git-data-luks — so the store every script acts on was the unencrypted one while every
+    # artifact attested encryption. Each arm below is one half of that state.
+    #
+    # `layout_sites` is the set of lines that MOUNT, CREATE or REGISTER a mountpoint. Scoping to
+    # it keeps the /mnt/git-data-luks arm honest: the boot emitter's redaction pattern names the
+    # pre-#8211 path on purpose (it must still redact repository paths from an older host's
+    # rows), and a blanket grep would read that as a layout regression.
+    layout_sites() {
+      grep -nE '(^|[^[:alnum:]_.-])(mount|mountpoint|mkdir)([[:space:]]|$)|>>[[:space:]]*/etc/fstab' "$1"
+    }
+    _sites="$(layout_sites "$RENDER" || true)"
+
+    CASES=$((CASES + 1))
+    _fstab="$(grep -nE '>>[[:space:]]*/etc/fstab' "$RENDER" || true)"
+    _n_fstab="$(printf '%s' "$_fstab" | grep -c . || true)"
+    if [[ "$_n_fstab" -eq 1 ]] \
+       && printf '%s\n' "$_fstab" | grep -cF '/dev/mapper/git-data /mnt/git-data ext4' >/dev/null; then
+      pass "the render writes EXACTLY ONE fstab line, and it is /dev/mapper/git-data at /mnt/git-data"
+    else
+      fail "the render's fstab appends are not the single mapper line" \
+        "n=${_n_fstab} lines=[$(printf '%s' "$_fstab" | tr '\n' '/')]"
+    fi
+
+    CASES=$((CASES + 1))
+    _legacy="$(printf '%s\n' "$_sites" | grep -F '/mnt/git-data-luks' || true)"
+    if [[ -z "$_legacy" ]]; then
+      pass "no layout site names the pre-#8211 /mnt/git-data-luks"
+    else
+      fail "a mount/mkdir/fstab site still names /mnt/git-data-luks" "$(printf '%s' "$_legacy" | head -4)"
+    fi
+
+    CASES=$((CASES + 1))
+    _ptfstab="$(grep -nE '>>[[:space:]]*/etc/fstab' "$RENDER" | grep -F 'scsi-0HC_Volume_' || true)"
+    if [[ -z "$_ptfstab" ]]; then
+      pass "no fstab line for a by-id block device — nothing remounts the plaintext volume after boot"
+    else
+      fail "the render writes an fstab line for a by-id device" "$(printf '%s' "$_ptfstab" | head -4)"
+    fi
+
+    CASES=$((CASES + 1))
+    # A raw glob is the #6604 shape: `mount /dev/disk/by-id/scsi-0HC_Volume_* …` binds whichever
+    # device the shell expands first, with no discriminator. The bootstrap's `for dev in …` LUKS
+    # selection loop is not a mount and is deliberately not matched.
+    _glob="$(grep -nE '(^|[^[:alnum:]_.-])mount[[:space:]][^|;&]*scsi-0HC_Volume_\*' "$RENDER" || true)"
+    if [[ -z "$_glob" ]]; then
+      pass "no raw-glob mount of a by-id block device"
+    else
+      fail "the render mounts a scsi-0HC_Volume_* glob" "$(printf '%s' "$_glob" | head -4)"
+    fi
+
+    CASES=$((CASES + 1))
+    # Every mount whose TARGET is the served root must source the mapper. This is the arm that
+    # would have caught the pre-#8211 render directly.
+    _at_root="$(grep -nE '(^|[^[:alnum:]_.-])mount[[:space:]][^|;&]*[[:space:]]/mnt/git-data([[:space:]]|$)' "$RENDER" || true)"
+    _bad_root="$(printf '%s\n' "$_at_root" | grep -v '/dev/mapper/git-data' | grep -E '.' || true)"
+    if [[ -n "$_at_root" && -z "$_bad_root" ]]; then
+      pass "every mount at /mnt/git-data sources /dev/mapper/git-data ($(printf '%s' "$_at_root" | grep -c .) site(s))"
+    else
+      fail "a mount at /mnt/git-data does not source the mapper, or none exists at all" \
+        "at_root=[$(printf '%s' "$_at_root" | tr '\n' '/')] bad=[$(printf '%s' "$_bad_root" | tr '\n' '/')]"
+    fi
+
+    # ── 3c. Both render branches fit under the Hetzner cap ─────────────────────────────
+    #
+    # The plaintext volume id is interpolated into user_data, so the render has two branches:
+    # attached (the birth state) and detached (where the host ends up). The budget gate only
+    # ever measured the first. Measured through the budget script's own seam, so this arm and
+    # the gate cannot disagree about what "the render" is.
+    CASES=$((CASES + 1))
+    _b_set="$(bash "$BUDGET" --json 2>/dev/null || true)"
+    _b_empty="$(GIT_DATA_BUDGET_VOLUME_ID="" bash "$BUDGET" --json 2>/dev/null || true)"
+    _s_set="$(sed -n 's/.*"stored":\([0-9]*\).*/\1/p' <<<"$_b_set")"
+    _s_empty="$(sed -n 's/.*"stored":\([0-9]*\).*/\1/p' <<<"$_b_empty")"
+    _cap="$(sed -n 's/.*"cap":\([0-9]*\).*/\1/p' <<<"$_b_set")"
+    if [[ -n "$_s_set" && -n "$_s_empty" && -n "$_cap" ]] \
+       && [[ "$_s_set" -lt "$_cap" && "$_s_empty" -lt "$_cap" ]]; then
+      pass "both render branches are under the ${_cap} B cap (volume id set ${_s_set} B, empty ${_s_empty} B)"
+    else
+      fail "a render branch is over the Hetzner cap, or could not be measured" \
+        "set=${_s_set:-unmeasured} empty=${_s_empty:-unmeasured} cap=${_cap:-unmeasured}"
     fi
   fi
 fi
@@ -408,16 +512,17 @@ fi
 # nobody read before exit, the suite printed a clean total and exited 0. A floor enforced
 # through the suspect cannot witness the suspect.
 #
-# Zero headroom against the current count (10 unconditional arms + the render arm + arm 4's
-# four probes = 15), so any deletion is loud — and so is a silently skipped conditional arm,
-# because a skipped arm never increments. Ratchet when adding arms.
-if [[ "$CASES" -lt 15 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= 15.\n' "$CASES" >&2
+# Zero headroom against the current count (10 unconditional arms + the render arm + arm 3b's
+# five layout arms + arm 3c's two-branch budget arm + arm 4's four probes = 21), so any deletion
+# is loud — and so is a silently skipped conditional arm, because a skipped arm never
+# increments. Ratchet when adding arms.
+if [[ "$CASES" -lt 21 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= 21.\n' "$CASES" >&2
   printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
   printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 15)\n' "$CASES"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 21)\n' "$CASES"
 
 printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

@@ -1,0 +1,317 @@
+# sentry-alert-projection.jq — the ONE comparable shape for a `sentry_alert`,
+# reachable from three inputs (#8050).
+#
+#   jq --arg side tf        -f this.jq <terraform show -json plan-or-state>
+#   jq --arg side live      -f this.jq <GET /api/0/organizations/{org}/workflows/>
+#   jq --arg side reference -f this.jq <an already-projected document>
+#
+# Every side emits `{ <rule name>: { actionFilters, detectorIds, enabled,
+# frequency, name, triggerConditions, triggerLogicType } }` with canonical key
+# order and sorted arrays, so two documents are equal iff the rules they describe
+# are equal. One definition of `canon` and `normalise` serves all three sides: a
+# field can never be normalised differently on the two halves of a comparison.
+#
+# WHY THE REFERENCE IS PROJECTED FROM TERRAFORM AND NOT CAPTURED FROM LIVE. The
+# post-apply probe used to compare live Sentry against a committed live capture.
+# A rule cannot be live-captured before it is applied, so every rule added in a
+# PR was UNMANAGED to that probe on the merge that applied it — `main` went red
+# after a COMPLETE apply, twice (#7772 -> #7985, #7989 -> #8050). The plan the
+# apply job is about to apply already carries every Terraform-owned field of
+# every declared rule; projecting it gives the probe a reference that is true by
+# construction the moment the `.tf` changes.
+#
+# MEASURED, NOT INFERRED. The `tf` side was measured against the real post-apply
+# state of run 34491157462 (29 `sentry_alert`, serial 124) and the 2026-09-09
+# live capture: 28 common rules, 0 mismatches, once the two normalisations below
+# are applied. Each `trigger_conditions[]` / `action_filters[].conditions[]` /
+# `actions[]` element in the provider's shape carries exactly ONE non-null key
+# (the live `type`) and every other key as null.
+#
+# NORMALISATION 1 — lifecycle triggers. The provider renders `first_seen_event`,
+# `reappeared_event`, `regression_event` and `issue_resolved_trigger` as `{}`;
+# the live API renders their `comparison` as `true`. Both mean "no parameters".
+#
+# NORMALISATION 2 — trigger logicType. The provider HARD-CODES it: at tag
+# v0.15.7, `internal/provider/resource_alert_impl.go` sets
+# `OrganizationWorkflowTriggerLogicTypeAnyShort` in BOTH the create (line 803)
+# and the update (line 835) request builders, and `sentry_alert` exposes no
+# attribute for it (the `issue-alerts.tf` header says the same). The 15
+# single-trigger rules read `all` in live Sentry only because they were imported
+# and never PUT; the first `.tf` edit to one of them makes live `any-short`. With
+# ONE condition any/all are indistinguishable, so both sides project the constant
+# `single` for a single-trigger rule; a multi-trigger rule projects `any-short`
+# on the Terraform side (what the provider will write) and the REAL value on the
+# live side, so a flip to `all` made in the Sentry UI still reports.
+#
+# EVERY FLOOR IS AN `error`, NEVER A DEFAULT. jq exits 5 on `error(...)`, and
+# every caller must refuse on a non-zero rc (the gate and the probe capture it on
+# its own line; the apply workflow's plan step uses `|| { …; exit 1; }` because
+# `set -e` is armed there) — a projection that quietly emits `{}` or `null` for
+# an unexpected input would make a downstream "0 rules compared" read as a clean
+# verdict. The one deliberate non-error is `trigger_logic_type`'s TF-side
+# constant (documented at the definition); the LIVE side never defaults.
+#
+# ALLOWLISTS, NOT PASS-THROUGH, for every element kind. The provider renders each
+# condition/action kind as its own snake_case sub-object, and the live API
+# renders the same kind in camelCase or as a scalar — measured in the provider's
+# wire structs for `assigned_to` (`target_id` -> `targetIdentifier`),
+# `age_comparison` (`comparison_type` -> `comparisonType`), `latest_release`
+# (`{}` -> `true`), `issue_priority_*` (`{comparison: 75}` -> `75`), and every
+# optional sub-attribute (`null` here, `omitempty`-absent there). Passing an
+# unmapped kind through would make the PR-time gate green (tf vs tf) and the
+# post-apply probe red after a COMPLETE apply — the #8050 class again. So a kind
+# outside the allowlist is an `error` at PR time, and adding one means mapping it
+# on BOTH sides here plus a shape-parity row in the probe's suite.
+
+def canon: walk(if type == "object" then (to_entries | sort_by(.key) | from_entries) else . end);
+
+# Array order is not semantic on either side. Sort AFTER canon so `tostring`
+# serialises identical data identically regardless of input key order — a
+# hand-built fixture with `{value, interval}` order would otherwise sort into a
+# different array position than the live side's `{interval, value}`.
+def normalise: canon
+  | with_entries(.value |= (
+      .detectorIds |= sort
+      | .triggerConditions |= sort_by(tostring)
+      | .actionFilters |= map(.conditions |= sort_by(tostring) | .actions |= sort_by(tostring))
+      | .actionFilters |= sort_by(tostring)));
+
+# Trigger types the provider cannot express as a native `sentry_alert` trigger.
+# A rule carrying one is outside the fidelity scope on BOTH sides by this one
+# definition: the live side's `in_scope` and the TF side's `tf_in_scope`. Such a
+# rule is either still a `sentry_issue_alert`, or an adopted `sentry_alert` whose
+# trigger the provider's Read carries only in `legacy_trigger_conditions` (#8451),
+# or a default Sentry itself created that Terraform does not manage, which the
+# probe's census accepts only by id AND name (the captured high-priority default;
+# Seer's `seer_activity_trigger` pull-requests-ready default, registered in
+# apps/web-platform/infra/sentry/vendor-default-workflows.json, #8267). When #7985
+# converts the frozen rules, the vendor-default types must STAY in this set.
+def excluded: ["event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue", "seer_activity_trigger"];
+# Lifecycle triggers: the provider renders them `{}`; the live API renders their
+# `comparison` as `true`. Both mean "no parameters".
+def lifecycle: ["first_seen_event", "reappeared_event", "regression_event", "issue_resolved_trigger"];
+# Kinds the projection maps, per element position. Each has a MEASURED live shape
+# (the 2026-09-09 capture, 28 rules): `event_frequency_count` -> `{interval,value}`
+# on both sides; `tagged_event` -> `{key,match,value}` on both sides with every
+# key set; `email` -> the field mapping in `tf_action`. Everything else is an
+# `error` (see the header).
+def trigger_kinds: lifecycle + ["event_frequency_count"];
+def condition_kinds: ["tagged_event"];
+def action_kinds: ["email"];
+
+# Trigger logicType (NORMALISATION 2 in the header). One condition has no logic,
+# so a single-trigger rule projects the constant `single` on both sides — and a
+# live `none` on one trigger is NOT folded into it (it inverts the trigger, so it
+# reports). A multi-trigger rule projects `any-short` on the TF side (the value
+# the provider will write; `$live` is null there by construction) and the REAL
+# value on the live side — a live workflow with more than one trigger and no
+# `logicType` is an error, never a default that happens to equal the TF side.
+def trigger_logic_type($n; $live):
+  if $n <= 1 then (if $live == null or ($live | IN("all", "any", "any-short")) then "single" else $live end)
+  elif $live == null then "any-short"
+  else $live end;
+def live_trigger_logic_type($n; $live):
+  if $n > 1 and $live == null
+  then error("live side: a workflow with \($n) trigger conditions carries no triggers.logicType; refusing to default it")
+  else trigger_logic_type($n; $live) end;
+
+# Shape, NOT cardinality: `{}` passes, so the callers' zero-rules floor stays
+# reachable and testable.
+#
+# WHAT IS NOT IN THE SHAPE, deliberately. `environment` is the one attribute
+# under `lifecycle.ignore_changes` on every `sentry_alert` block, by design
+# (issue-alerts.tf documents the UI-binding case it tolerates); comparing it here
+# would alarm on the one change Terraform has been told not to care about.
+# `organization` is the provider's routing, not the rule. `id` is the join key.
+def rule_keys: ["actionFilters", "detectorIds", "enabled", "frequency", "name", "triggerConditions", "triggerLogicType"];
+def shape_ok:
+  type == "object"
+  and all(.[]; type == "object" and (keys == rule_keys));
+
+# ── side == "tf" ─────────────────────────────────────────────────────────────
+def one_key($ctx):
+  (to_entries | map(select(.value != null))) as $set
+  | if ($set | length) != 1
+    then error("\($ctx): a condition/action element must carry exactly one non-null key, got \($set | length) (\($set | map(.key) | join(",")))")
+    else $set[0] end;
+
+# `.key as $k | (list | index($k))` — NOT `list | index(.key)`: inside that pipe
+# `.key` would be evaluated against the LIST, not the element.
+def tf_trigger($ctx):
+  one_key($ctx)
+  | .key as $k
+  | if (trigger_kinds | index($k)) == null
+    then error("\($ctx): trigger kind '\($k)' is not mapped by the projection (allowlist: \(trigger_kinds | join(","))); map it here and on the live side together, with a shape-parity row")
+    else {type: $k, comparison: (if (lifecycle | index($k)) != null then true else .value end)} end;
+
+def tf_condition($ctx):
+  one_key($ctx)
+  | .key as $k
+  | if (condition_kinds | index($k)) == null
+    then error("\($ctx): condition kind '\($k)' is not mapped by the projection (allowlist: \(condition_kinds | join(","))); map it here and on the live side together, with a shape-parity row")
+    else {type: $k, comparison: .value} end;
+
+def tf_action($ctx):
+  one_key($ctx)
+  | .key as $k
+  | if (action_kinds | index($k)) == null
+    then error("\($ctx): action kind '\($k)' is not mapped by the projection (allowlist: \(action_kinds | join(","))); map it here and on the live side together")
+    else {type: $k, targetType: .value.target_type, targetIdentifier: .value.target_id, fallthroughType: .value.fallthrough_type} end;
+
+def tf_rule:
+  .address as $a
+  | .values as $v
+  | if (.sensitive_values | type) != "object"
+    then error("\($a): sensitive_values is absent or not an object — not a terraform show -json resource; refusing to project without the sensitivity mask") else . end
+  | if ([.sensitive_values | .. | select(. == true)] | length) > 0
+    then error("\($a): a sensitive attribute is set on a sentry_alert; `terraform show -json` renders sensitive VALUES in plaintext, so the projection refuses rather than commit one") else . end
+  | if ($v.enabled | type) != "boolean" then error("\($a): enabled is not a boolean (\($v.enabled | tojson)) — unknown at plan time; set it explicitly in the block") else . end
+  | if ($v.trigger_conditions | type) != "array" then error("\($a): trigger_conditions is not an array (\($v.trigger_conditions | tojson))") else . end
+  | if ($v.action_filters | type) != "array" then error("\($a): action_filters is not an array (\($v.action_filters | tojson))") else . end
+  | if ($v.name | type) != "string" then error("\($a): name is not a string") else . end
+  | if ($v.frequency_minutes | type) != "number" then error("\($a): frequency_minutes is not a number") else . end
+  | if ($v.monitor_ids | type) != "array" then error("\($a): monitor_ids is not an array (\($v.monitor_ids | tojson))") else . end
+  # Unknown-detector floor (#8630). A `sentry_cron_monitor` created or recreated
+  # in this plan has no id until the apply, so a rule binding it renders a `null`
+  # element. Projecting it would commit `detectorIds: [..., null]`: the PR-time
+  # gate goes green, and the post-apply probe (live: the real id) reds `main`
+  # after a COMPLETE apply — the #8050 class. The text must NOT contain the
+  # phrase the reference gate's generic arm matches for "set the attribute
+  # explicitly" (the wrong remedy here); the gate has a dedicated arm for it.
+  | if ($v.monitor_ids | any(. == null)) then error("\($a): monitor_ids carries \($v.monitor_ids | map(select(. == null)) | length) detector id(s) that do not exist yet (a monitor created or recreated in this plan) — it cannot be routed in the same apply; list it in local.cron_monitor_alert_unrouted in cron-monitor-alerts.tf with a (#N) reason and route it in a follow-up PR after the first apply") else . end
+  | {
+      name: $v.name,
+      enabled: $v.enabled,
+      detectorIds: $v.monitor_ids,
+      frequency: $v.frequency_minutes,
+      triggerLogicType: trigger_logic_type($v.trigger_conditions | length; null),
+      triggerConditions: [ $v.trigger_conditions[] | tf_trigger($a) ],
+      actionFilters: [ $v.action_filters[]
+        | if (.conditions | type) != "array" then error("\($a): an action_filters[].conditions is not an array") else . end
+        | if (.actions | type) != "array" then error("\($a): an action_filters[].actions is not an array") else . end
+        | {
+            logicType: .logic_type,
+            conditions: [ .conditions[] | tf_condition($a) ],
+            actions: [ .actions[] | tf_action($a) ]
+          } ]
+    };
+
+# TF-side mirror of the live side's `in_scope` (#8451): a `sentry_alert` is out of
+# scope when ANY of its trigger types is in `excluded`, in EITHER representation —
+#   native: the key of a `trigger_conditions[]` element carrying a non-null value;
+#   legacy: a string in `legacy_trigger_conditions`.
+# On the TF side `legacy_trigger_conditions` comes from the provider's Read, i.e.
+# refreshed/imported STATE, not the `.tf` config: an adopted type-only rule under
+# `ignore_changes = all` carries its trigger there, with `trigger_conditions` `[]`
+# or `null`. Keying on the legacy field alone would break the symmetry the day a
+# provider bump makes Read populate the native field. `// []` here is membership
+# only; `tf_rule` still floors a non-array `trigger_conditions` on an IN-scope rule.
+def tf_trigger_types:
+  [ (.values.trigger_conditions // [])[] | to_entries[] | select(.value != null) | .key ]
+  + (.values.legacy_trigger_conditions // []);
+def tf_in_scope:
+  tf_trigger_types as $t
+  | (excluded | any(. as $e | $t | index($e))) | not;
+# An in-scope rule may not carry ANY legacy type: every legacy type in `excluded`
+# was dropped above, so what remains is unmapped — an error, never a rule that
+# silently projects with fewer triggers than Sentry evaluates.
+def tf_legacy_floor:
+  .address as $a
+  | .values.legacy_trigger_conditions as $l
+  | if ($l | type) != "array" and $l != null
+    then error("\($a): legacy_trigger_conditions is neither an array nor null (\($l | tojson))")
+    elif ($l // [] | length) > 0
+    then error("\($a): unmapped legacy trigger type(s) \($l | map(tostring) | join(",")) (excluded: \(excluded | join(","))); a legacy type outside `excluded` has no projection — map it on BOTH sides or add it to `excluded`")
+    else . end;
+
+def project_tf:
+  ((.planned_values // .values) // error("not a terraform show -json plan or state document (no .planned_values and no .values)"))
+  | .root_module
+  | if ((.child_modules // []) | length) > 0
+    then error("the root carries child_modules; the projection reads root_module.resources only and refuses a second injection site") else . end
+  | [ (.resources // [])[] | select(.type == "sentry_alert") ]
+  # BEFORE `canon | map(tf_rule)`: an excluded adopted rule may render
+  # `trigger_conditions: null` with no `sensitive_values`, and `tf_rule`'s floors
+  # would refuse a rule that is out of scope anyway.
+  | map(select(tf_in_scope) | tf_legacy_floor)
+  | canon
+  | map(tf_rule)
+  | (group_by(.name) | map(select(length > 1) | .[0].name)) as $dups
+  | if ($dups | length) > 0 then error("duplicate sentry_alert name(s): \($dups | join(","))") else . end
+  | INDEX(.name)
+  | normalise;
+
+# ── side == "live" ───────────────────────────────────────────────────────────
+# The probe's projection, moved here from scripts/sentry-alert-live-fidelity.sh.
+# ALLOWLIST PROJECTION, not a blocklist: the live API returns server-assigned
+# fields on every object (`id`, `conditionResult`, `organizationId` on
+# triggers/conditions; `integrationId`, `status` on actions). Measured 2026-09-04,
+# comparing raw live against a normalised reference reported 38 divergences on a
+# healthy org. Projecting ONLY the asserted fields makes a future server-side
+# addition inert by construction.
+# ANY-CONDITION, deliberately, and symmetric with `tf_in_scope` above: one
+# excluded type anywhere in a workflow's conditions takes the WHOLE workflow out
+# of scope, because the provider cannot express that type and a comparison of the
+# remaining fields would be a comparison of a rule Sentry does not evaluate.
+# Narrowing this to all-conditions-excluded was considered and rejected: it would
+# re-admit a rule the provider still cannot write, and report it as DRIFT — whose
+# remedy is "re-run the apply", which is wrong for exactly this case. Instead,
+# scripts/sentry-alert-live-fidelity.sh classifies a MANAGED name found out of
+# scope as `MANAGED RULE GAINED EXCLUDED TRIGGER` and says an apply is not a
+# repair — on the DAILY job; on the apply job the reference is projected from the
+# plan, where a refreshed legacy trigger has already taken the rule out of
+# `tf_in_scope`, so the same live state lands on the census's generic arm instead.
+# FOUR sites spell this predicate, not two: `in_scope` and `tf_in_scope` here, plus
+# `def excl_type` and `$INSCOPE` in scripts/sentry-alert-live-fidelity.sh. Only the
+# SET (`def excluded`) is shared — both the probe and its suite lift that one line
+# verbatim and refuse if the lift fails. Changing any of these predicates means
+# changing all four.
+def in_scope:
+  [ .triggers.conditions[]?.type ] as $t
+  | (excluded | any(. as $e | $t | index($e))) | not;
+
+def project_live:
+  if type != "array" then error("live side: input is not a JSON array of workflows") else . end
+  | canon
+  | map(select(in_scope))
+  # A live in-scope workflow with no usable name would be indexed under `""`
+  # and skipped by every consumer's `[[ -n "$name" ]]`, i.e. exempt from the
+  # UNMANAGED loop. Refuse rather than drop.
+  | if any(.[]; (.name | type) != "string" or .name == "")
+    then error("live side: an in-scope workflow has an empty or non-string name; refusing to index it") else . end
+  # Sentry does not enforce unique workflow names, and `INDEX(.name)` is
+  # last-writer-wins — a disabled managed rule shadowed by an enabled same-name
+  # copy would read as healthy depending on API order. Refuse; the probe reports
+  # this as unavailable and the daily filer names the class.
+  | (group_by(.name) | map(select(length > 1) | .[0].name)) as $dups
+  | if ($dups | length) > 0 then error("live side: duplicate in-scope workflow name(s): \($dups | join(",")) — the probe cannot tell the managed rule from a same-name copy") else . end
+  | map({
+      name: .name,
+      enabled: .enabled,
+      detectorIds: (.detectorIds // []),
+      frequency: .config.frequency,
+      triggerLogicType: live_trigger_logic_type((.triggers.conditions // []) | length; .triggers.logicType),
+      triggerConditions: [ .triggers.conditions[]? | {type, comparison} ],
+      actionFilters: [ .actionFilters[]? | {
+          logicType: .logicType,
+          conditions: [ .conditions[]? | {type, comparison} ],
+          actions: [ .actions[]? | {
+              type: .type,
+              targetType: .config.targetType,
+              targetIdentifier: .config.targetIdentifier,
+              fallthroughType: .data.fallthroughType
+            } ]
+        } ]
+    })
+  | INDEX(.name)
+  | normalise;
+
+# ── side == "reference" ──────────────────────────────────────────────────────
+def project_reference:
+  if shape_ok then normalise
+  else error("reference is not a name-indexed projection object (expected {<name>: {\(rule_keys | join(","))}})") end;
+
+if $side == "tf" then project_tf
+elif $side == "live" then project_live
+elif $side == "reference" then project_reference
+else error("--arg side must be one of tf|live|reference, got '\($side)'") end

@@ -3,6 +3,7 @@ title: A heartbeat's arming claim must be executable — a monitor is fed, or ho
 status: accepted
 date: 2026-07-16
 amends: ADR-103
+amended_by: [ADR-222]
 supersedes: none
 issue: 6537
 ---
@@ -324,6 +325,89 @@ asserted — `describe("the ARM gate's deadlines fit its job")` in
 `plugins/soleur/test/terraform-target-parity.test.ts` pins the two-part inequality, and
 `apps/web-platform/infra/arm-heartbeats.test.sh` drives the wall-clock bound and the rollback
 behaviourally against a fake clock.
+
+### Amendment (2026-09-15, #7884)
+
+The live-reconcile the 2026-07-17 amendment added now also lists monitors and reports objects no
+declaration accounts for ([ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md)
+owns that decision). Three changes touch this ADR's reconcile, and one limit comes with them.
+
+**1. Declarations resolve exactly, not by pattern.** A templated heartbeat such as
+`name = "soleur-web-zot-consumer-${each.key}"` was compared as the literal string, never matched
+live, and produced two false `absent-live` rows on every run since July (#6645). The reconcile now
+resolves `for_each = var.<X>` from the variable's literal map default (one instance per top-level
+key, `${each.key}` substituted) and `count = var.<X> ? 1 : 0` from its literal bool default. The
+count-gated carve-out above is therefore evaluated, not assumed. Any other shape (another
+interpolation, `for_each` over a non-variable, a variable with no literal default, another `count`
+form) fails the run with `reason=unresolvable-declaration` (rc 1) instead of guessing.
+
+**Limit, stated because it is real.** The resolver reads defaults from the `.tf` source. A Doppler
+value surfaced through `doppler run --name-transformer tf-var` (`WEB_HOSTS`,
+`BETTERSTACK_PAID_TIER`, `ADOPT_APP_HEALTH_MONITOR`) would change what Terraform applies without
+changing what the reconcile expects. None of the three exists in `soleur/prd_terraform` (164
+secret names read on 2026-09-15, zero matches), so today the two agree; adding one would break
+that silently.
+
+> **Updated 2026-09-16 (#7884).** `ADOPT_APP_HEALTH_MONITOR` is off that list: the
+> `adopt_app_health_monitor` variable was deleted with the one-time monitor-adoption scaffolding
+> (ADR-222 amendment of 2026-09-16), so two `tf-var` override paths remain, not three. The sweep
+> result is unchanged — none of them exists in `soleur/prd_terraform`.
+
+**2. Every mismatch row carries routing tokens.** Existing heartbeat rows gain a trailing
+`resource=<type.name>`; `logs_alert` rows gain `resource=<type.name>` immediately before
+`detail="…"`, so vendor text stays last. Every `MISMATCH` row also carries exactly one
+`route=<reason>~<subject>` token (for example `route=monitor-config-drift~id.4226366.paused`). The
+`logs_alert` prefix ADR-218 and `monitor-send-failed-alert.md` quote is unchanged only through
+`reason=`; the fields after it changed. The issue step escalates on the `route=` key, compared as a
+whole token, instead of on a `name=` substring match.
+
+**3. Escalation follows the latest reconcile comment.** A `route=` key emails again whenever it is
+absent from the latest bot-authored reconcile comment, and history is read only from the marker
+lines of bot-authored comments, so a human comment cannot suppress an alert.
+`reason=monitor-config-drift` emails on every run while it persists. Two consequences: the first
+run after merge re-emails every existing row once, because issue history (#6645) carries no
+`route=` tokens; and a row that clears and then returns emails again, because a fully clean run
+(rc 0, no arm unreachable) posts a `SOLEUR_HEARTBEAT_RECONCILE_CLEAR` comment that becomes the latest
+reconcile post.
+
+ADR-117 stays **amended, not superseded**: the manifest is still the substrate the reconcile reads.
+
+### Amendment (2026-09-27, #8706): evidence in code that never ran
+
+**A third state the guard cannot rule out.** The two states under "What this does NOT exclude" are
+FED-but-inert and FALSELY FED. A third one survives: **the evidence line exists, in code that never
+ran.** The `workspaces_luks` row cited `systemctl enable --now luks-monitor.timer` in
+`workspaces-cutover.sh`. The line was real, and it named the right unit. But it sat in the tail of a
+one-shot script, after `app_canary`, and no real cutover reached that tail. So the timer was never
+installed on web-1, and the guard stayed green for about nine weeks. The shared heartbeat stayed
+`up` too, because a second pusher (the verify job) fed it. Evidence:
+[ADR-119's 2026-09-27 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-27-the-monitor-units-and-the-dsn-line-have-a-terraform-owner-8706).
+
+**What moving the evidence buys.** The row now cites the same line inside
+`terraform_data.luks_monitor_install` in `workspaces-luks.tf`. That adds checks a script tail never
+had. `terraform-target-parity.test.ts` requires every SSH-provisioned `terraform_data` to be
+targeted by an apply workflow, or to sit on its allowlist with a reason ("every SSH-provisioned
+resource is in the target ∪ allowlist union"). Its Guard 1 (#7539) requires that target to come
+after the SSH bridge. This resource is targeted in the per-merge SSH apply, so the arming line runs
+whenever its trigger changes, and a failed run turns the apply red. Evidence in a one-shot script's
+tail has no such check: nothing proves the tail is reachable. Note the parity test reads every
+`-target` in the workflow, dispatch-only jobs included, so "per-merge" is this row's placement, not
+something the test enforces.
+
+> **Corrected 2026-09-27 (#8706 review):** the guard that ties the arming line to live code in a
+> per-merge SSH resource is `apps/web-platform/infra/luks-monitor-install.test.sh` Guard 2, not
+> `terraform-target-parity.test.ts`. Two of its checks carry it: "that occurrence is live code
+> inside the installer" (the arming string occurs once outside comments, inside
+> `terraform_data.luks_monitor_install`), and "the per-merge SSH apply targets
+> terraform_data.luks_monitor_install" (it reads only the `apply` job's SSH step, so a
+> dispatch-only target does not satisfy it). The parity test proves only that the resource is
+> targeted somewhere.
+
+**What it still does not buy.** Being in the apply proves the arming line runs. It does not prove
+the timer then fires. That proof is a runtime signal keyed on the host unit alone,
+`logtail_exploration_alert.luks_monitor_host_timer_dark`, not this guard. The invariant is
+unchanged: no static check can prove a monitor is armed; it can only prove a feeder exists. This
+amendment adds that "exists" must mean "on a path that runs".
 
 ## Consequences
 

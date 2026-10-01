@@ -4,6 +4,12 @@ import {
   injectFakeSupabaseSession,
   mockSupabaseAuth,
 } from "./helpers/supabase-mocks";
+import {
+  GLYPH_VIEWPORTS,
+  MIN_GLYPH_PX,
+  expectBoxAtLeast,
+  skipLocallyFailInCi,
+} from "./helpers/glyph-box";
 
 // ---------------------------------------------------------------------------
 // Mock KB tree data builders
@@ -66,17 +72,19 @@ async function setupDashboardMocks(page: Page, kbFiles: string[]) {
 }
 
 /**
- * Navigate to /dashboard and skip if CSS compilation fails (known worktree issue).
- * Checks response status AND page content for 500 errors.
+ * Navigate to /dashboard. A dev-server CSS compilation failure (known worktree
+ * issue) skips LOCALLY only; in CI it throws, so a broken stylesheet cannot
+ * silently green the layout gate below. Checks response status AND page
+ * content for 500 errors.
  */
 async function gotoDashboard(page: Page) {
   const response = await page.goto("/dashboard");
   if (response && response.status() >= 500) {
-    test.skip(true, "Dev server CSS compilation error — skipped in worktree, passes in CI");
+    skipLocallyFailInCi("Dev server CSS compilation error (5xx on /dashboard)");
   }
   const html = await page.content();
   if (html.includes('statusCode":500') || html.includes("ERR_INVALID_URL_SCHEME")) {
-    test.skip(true, "Dev server CSS compilation error — skipped in worktree, passes in CI");
+    skipLocallyFailInCi("Dev server CSS compilation error (500 page content)");
   }
 }
 
@@ -93,6 +101,30 @@ test.describe("Start Fresh onboarding: first-run state", () => {
     await expect(page.getByPlaceholder("What are you building?")).toBeVisible();
     await expect(page.getByLabel("Send message")).toBeVisible();
   });
+
+  // Layout gate for the Button primitive (Guard 2). The first-run attach
+  // button is a `Button` with `h-[36px] w-[36px]` and no padding class: when
+  // the primitive's `px-6 py-3` collapsed the content box the paperclip svg
+  // rendered 0px wide and the operator saw a blank square. happy-dom has no
+  // layout, so this is the only test that sees it.
+  for (const vp of GLYPH_VIEWPORTS) {
+    test(`first-run attach icon has a real rendered box at ${vp.name}`, async ({ page }) => {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await setupDashboardMocks(page, []);
+      await gotoDashboard(page);
+
+      const attach = page.getByLabel("Attach files");
+      await expect(attach).toBeVisible({ timeout: 10_000 });
+      await expectBoxAtLeast(attach.locator("svg"), MIN_GLYPH_PX, `attach svg @${vp.name}`);
+
+      // Control: the first-run send button is a native `data-button-exempt`
+      // <button>, not the primitive, so it never had the defect. If this fails
+      // while the attach assertion passes, the harness (not Button) is broken.
+      const send = page.getByLabel("Send message");
+      await expect(send).toBeVisible();
+      await expectBoxAtLeast(send.locator("svg"), MIN_GLYPH_PX, `send svg (control) @${vp.name}`);
+    });
+  }
 
   test("hides suggested prompts and leader strip in first-run state", async ({ page }) => {
     await setupDashboardMocks(page, []);

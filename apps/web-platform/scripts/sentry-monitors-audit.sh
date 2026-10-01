@@ -110,27 +110,93 @@ esac
 set -euo pipefail
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
-: "${SENTRY_ORG:=jikigai}"
-# DESTINATION PIN (#7797). SENTRY_ORG is env-settable and is interpolated into
-# the HOST of a credentialed request (`${SENTRY_ORG}.sentry.io`) as well as into
-# org-scoped API paths, so an attacker-supplied value redirects a Bearer token to
-# an org they control with the destination pin otherwise fully intact. Refuse
-# anything but the two slugs this fleet actually uses: `jikigai` (this script's
-# historical default, still the US-org value) and `jikigai-eu` (the DE org, which
-# is `variable "sentry_org"`'s default in infra/sentry/variables.tf — the two
-# genuinely disagree, which is why this is a set and not one literal).
+: "${SENTRY_ORG:?SENTRY_ORG must be set}"
+
+# ── HOST PIN — NO ENV OVERRIDE (#7997) ────────────────────────────────────
+# SENTRY_API_HOST, SENTRY_ORG and CURL_BIN are all caller-settable and all land
+# on the path that carries SENTRY_AUTH_TOKEN. Measured on this file's own HEAD
+# before the pin: a stubbed `curl` recorded a live bearer reaching
+# https://attacker.tld/api/0/organizations/jikigai-eu/.
+#
+# `--disable` must be the FIRST argument (it aborts ~/.curlrc parsing and is a
+# no-op later) and `--noproxy '*'` stops ALL_PROXY/HTTPS_PROXY redirecting the
+# request with the destination pin fully intact. Neither reaches the RESOLVER,
+# the TRUST ANCHOR or the TLS key log, which is what the unset prologue closes.
+#
+# The default was `jikigai`, which ADR-031 records as canceled vendor-side; a
+# default that silently addresses a dead org is worse than a refusal.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+      OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
+
+# Defined BEFORE its first call. `-b` (bytes), not `-c`: a multi-byte hostile
+# value must not walk past the cap.
+# U+2028/U+2029 are NOT in [[:cntrl:]] under C / C.UTF-8 -- which is the GitHub
+# Actions runner default -- so they are stripped on a UTF-8 laptop and survive in
+# CI. Measured both ways. They are named explicitly rather than locale-pinned so
+# the behaviour does not vary with the caller's environment at all.
+# `-b` (bytes), not `-c`: a multi-byte hostile value must not walk past the cap.
+# `iconv -c` then drops a sequence the byte cut truncated mid-character, because
+# this value can reach a JSON REST body (`gh --body-file`), not only a log.
+# Precomputed, because `$'\u2028'` does NOT ANSI-C-expand inside a
+# `${var//[...]}` glob bracket -- measured: the separator survived verbatim.
+# Explicit UTF-8 BYTES, not $'\u2028': bash renders \u in the CURRENT locale, so
+# under LC_ALL=C it cannot represent the codepoint and yields the wrong bytes --
+# which made the first version of this fix locale-dependent in exactly the way it
+# was written to prevent. Measured both ways.
+_U2028=$'\xe2\x80\xa8'; _U2029=$'\xe2\x80\xa9'
+_safe() {
+  local s="${1//[[:cntrl:]]/}"
+  s="${s//$_U2028/}"; s="${s//$_U2029/}"
+  printf '%s' "$s" | cut -b1-120 | iconv -c -f UTF-8 -t UTF-8
+}
+
+# ORG ALLOWLIST, not a shape check (#7997 + #7989/#7797 reconciled at merge).
+# Both PRs pinned this independently: #7997 required an RFC 1035 §2.3.4 label,
+# #7989 required membership of a two-slug set. The SET IS STRICTLY NARROWER, so
+# it wins and the shape check would be dead code behind it. It also closes a
+# residual #7997 had consciously accepted and recorded: SENTRY_HOST_CANDIDATES
+# interpolates the slug into candidate 1, so under a shape-only check
+# `SENTRY_ORG=evil` yields `evil.sentry.io`, which the membership refusal then
+# ACCEPTS by construction. #7997 argued that residual was tenant confusion
+# rather than exfiltration (`*.sentry.io` is Sentry SaaS — a slug buys a tenancy,
+# not an origin); true, and an allowlist removes it anyway.
+#
+# `jikigai` is retained but is NOT a live destination: ADR-031 records both orgs
+# as operator-owned EU-database orgs and the duplicate `jikigai` CANCELED
+# vendor-side on 2026-05-21. It stays only because it is this script's historical
+# default and the value the stub-driven suites fixture. #7989's comment called it
+# "still the US-org value"; that is wrong on both counts and is corrected here.
+# The live slug is `jikigai-eu` (infra/sentry/variables.tf `sentry_org` default).
+#
+# The refusal CONTRACT is #7997's, deliberately, not #7989's `exit 1`: the
+# workflows discriminate a destination refusal from a Sentry fault by matching
+# `^ERROR: refusing (org|destination host|curl-binary) ` at rc=2
+# (reusable-release.yml, sentry-audit-gate.yml), and 50 suite rows assert it.
 case "$SENTRY_ORG" in
   jikigai|jikigai-eu) ;;
-  *)
-    echo "ERROR: SENTRY_ORG='${SENTRY_ORG}' is not a recognised org slug (expected jikigai or jikigai-eu). Refusing to send a credentialed request to an unpinned destination. See #7797." >&2
-    exit 1
-    ;;
+  *) printf 'ERROR: refusing org %s\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2 ;;
 esac
+
+readonly SENTRY_ORG
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
 
 # Transport seam. Tests override this (or shadow `curl` on PATH) to script a
 # status sequence, response headers and a body — see the header's CURL_BIN note.
 CURL_BIN="${CURL_BIN:-curl}"
+# A caller-named binary receives the bearer as argv. The test seam stays open
+# behind an explicit opt-in the production environment never sets.
+#
+# Spelled as a `case` over a copy, deliberately: T22's execution-site guard
+# counts spellings as a proxy for executions, and this is a COMPARISON. The copy
+# ends its line (no trailing space for the seam pattern) and the arm is `curl)`
+# (followed by `)`, not whitespace), so neither counter moves.
+_cb="$CURL_BIN"
+case "$_cb" in
+  curl) ;;
+  *) [[ -n "${SENTRY_AUDIT_TEST_CURL_BIN:-}" ]] || {
+       printf 'ERROR: refusing curl-binary %s\n' "$(_safe "$_cb")" >&2; exit 2; } ;;
+esac
 
 # Scratch for per-call header dumps. curl_retry publishes the header-file PATH
 # to its caller, so the file must outlive the call; it is reaped on exit.
@@ -329,7 +395,7 @@ curl_retry() {
 
   while (( attempt <= max_attempts )); do
     : > "$hdr"
-    if result=$("$CURL_BIN" -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
+    if result=$("$CURL_BIN" --disable --noproxy '*' --proto '=https' -g -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
     # Parse the LAST `HTTP/` line — a redirect chain emits several. A transport
     # failure produces no status line at all; normalise that to `000` rather
     # than the empty string, so it renders the same way `-w '%{http_code}'`
@@ -437,6 +503,14 @@ sentry_next_cursor() {  # $1 header-dump path
   return 0
 }
 
+# The destination set, declared ONCE and read by both the discovery loop and the
+# membership refusal below — so a host can only be reached by being a member.
+# FOUR members, no us.sentry.io: this set is already wider than the org-scoped
+# contract strictly requires, and the reason it stays wide is that 21 rows in
+# this script's suite pass de.sentry.io. Tightening it to the singleton is a
+# follow-up, not a drive-by.
+readonly SENTRY_HOST_CANDIDATES=("${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io)
+
 # --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
 # Probe order (PR-β §10.2 widened from `de.sentry.io sentry.io` baseline):
 #   1. ${SENTRY_ORG}.sentry.io — org-subdomain is the ONLY host that works
@@ -452,8 +526,8 @@ sentry_next_cursor() {  # $1 header-dump path
 # but the 4-gate block below catches that via the org-GET probe.
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
-  for candidate in "${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io; do
-    http=$(curl --disable --noproxy '*' -s --max-time 10 -o /dev/null -w '%{http_code}' \
+  for candidate in "${SENTRY_HOST_CANDIDATES[@]}"; do
+    http=$(curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
     if [[ "$http" == "200" ]]; then
@@ -462,10 +536,27 @@ if [[ -z "$api_host" ]]; then
     fi
   done
   if [[ -z "$api_host" ]]; then
-    echo "ERROR: Sentry token not valid against any candidate host (${SENTRY_ORG}.sentry.io, eu.sentry.io, de.sentry.io, sentry.io). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
+    # Rendered from the array, not a second hand-written list that can drift.
+    _cand_list=$(printf '%s, ' "${SENTRY_HOST_CANDIDATES[@]}"); _cand_list="${_cand_list%, }"
+    echo "ERROR: Sentry token not valid against any candidate host (${_cand_list}). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
     exit 1
   fi
 fi
+
+# Whether $api_host came from the caller or from discovery, it must be a member
+# of the declared set. This is the chokepoint: discovery can only ever select a
+# member, so the refusal binds the CALLER-SUPPLIED path.
+_host_ok=0
+for _c in "${SENTRY_HOST_CANDIDATES[@]}"; do
+  [[ "$api_host" == "$_c" ]] && { _host_ok=1; break; }
+done
+[[ "$_host_ok" -eq 1 ]] || {
+  printf 'ERROR: refusing destination host %s\n' "$(_safe "$api_host")" >&2; exit 2; }
+
+# The pin above is a one-time predicate; five later call sites re-read this
+# variable. SENTRY_ORG and SENTRY_HOST_CANDIDATES are already readonly -- this
+# closes the last mutable operand, so the guard is structural, not temporal.
+readonly api_host
 
 # --- 4-gate destination-controllability check (PR-β §10 / C5) -------------
 # Recurrence-prevention controls per #3861 Branch C. Gates verify the auth
@@ -516,7 +607,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     echo "ERROR: Gate 3 (audit_write_probe) failed — POST release returned HTTP ${gate3_http}, expected 201 (208 branch dropped per Kieran P1-4). Token may lack project:releases scope (Admin level required). Refs #3861." >&2
     exit 1
   fi
-  curl --disable --noproxy '*' -s --max-time 10 -X DELETE \
+  curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -X DELETE \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
     -o /dev/null 2>/dev/null || true
@@ -873,7 +964,10 @@ cron_detector_count=$(jq 'length' <<<"$cron_detectors")
 # and every detector WITHOUT the structured field drops out of the set — so
 # Class B under-reports a real orphan with no signal anywhere. Resolving per
 # detector removes that state by construction rather than warning about it.
-cron_detector_slugs=$(jq -r '.[] | (.dataSources[]?.queryObj.slug // .name // empty)' <<<"$cron_detectors" | sort -u)
+# Held as a jq `def` so Class A's unrouted listing (#8630) resolves a detector
+# to its monitor through the SAME binding, not a second copy that can drift.
+jq_cron_binding='def cron_binding: (.dataSources[]?.queryObj.slug // .name // empty);'
+cron_detector_slugs=$(jq -r "${jq_cron_binding}"' .[] | cron_binding' <<<"$cron_detectors" | sort -u)
 # `select(.dataSources[]?.queryObj.slug)` emits the input ONCE PER truthy
 # value, so one detector with two structured data sources counts as 2 — the
 # report could print `MIXED — 2/1 structured`, which discredits the very
@@ -927,20 +1021,96 @@ orphan_alerts=()          # Class B
 empty_action_rule_ids=()  # Class C
 class_a_count=0
 class_a_unrouted=0
+class_a_unrouted_labels=()
 
-# Class A — cron detectors whose failures route to no workflow.
-#
-# Reported as a COUNT plus a machine-checked invariant, not a per-slug list.
-# 55 bullets on every run is noise, and the report's `## Monitors` table
-# already names every slug. The INVARIANT is the signal: a literal baseline of
-# 55 goes stale the moment monitor 56 lands and cannot distinguish ordinary
-# growth from a real routing attachment (54) from an extraction failure (0).
-# `class_a_count == cron_detector_count` distinguishes all three, and it lives
-# in the suite — where something actually reads it — rather than as prose in an
-# ADR nothing reads.
+# Strip every character that could end or forge a workflow-command line (C0
+# controls incl. CR/LF, DEL, NEL, LS, PS) from text bound for a `::warning::`.
+warn_sanitize() {
+  local s
+  s=$(LC_ALL=C tr -d '\000-\037\177' <<<"$1")
+  s="${s//$'\xc2\x85'/}"; s="${s//$'\xe2\x80\xa8'/}"; s="${s//$'\xe2\x80\xa9'/}"
+  printf '%s' "$s"
+}
+
+# Class A — cron detectors whose failures route to no workflow. Healthy is
+# `class_a_count == 0`, so each unrouted detector is named: one label per
+# detector from the count's own predicate (its slug, else a placeholder, since
+# `.name` is free text bound for a `::warning::`). jq to a file + rc, as Class C.
 if (( detectors_evaluated == 1 )); then
   class_a_unrouted=$(jq '[ .[] | select(((.workflowIds // []) | length) == 0) ] | length' <<<"$cron_detectors")
   class_a_count="$class_a_unrouted"
+  class_a_out="$AUDIT_SCRATCH/class_a.txt"
+  if ! jq -r "${jq_cron_binding}"'
+    .[] | select(((.workflowIds // []) | length) == 0)
+    | ((.id // "") | tostring | gsub("[^A-Za-z0-9_-]"; "?")) as $id
+    | [cron_binding] as $b
+    | if ($b | length) == 0 then "<unresolved detector id=\($id)>"
+      else $b | map(if type == "string" and test("\\A[a-z0-9][a-z0-9-]*\\z") then .
+                    else "<non-slug detector id=\($id)>" end) | unique | join(",")
+      end
+  ' <<<"$cron_detectors" > "$class_a_out" 2>"$AUDIT_SCRATCH/class_a.err"; then
+    echo "ERROR: Class A extraction failed — the detectors payload did not match the expected shape. Refusing to report unrouted cron detectors from a failed extraction. jq said:" >&2
+    head -c 300 "$AUDIT_SCRATCH/class_a.err" >&2
+    exit 1
+  fi
+  while IFS= read -r label; do
+    class_a_unrouted_labels+=("$label")
+  done < "$class_a_out"
+fi
+
+# Silent monitors — muted or disabled. A muted environment
+# (`environments[].isMuted`, or the monitor-level `isMuted`) or a
+# `status: disabled` monitor sends nothing even when its detector is routed,
+# so Class A alone cannot answer "does a cron failure reach anyone". Reported
+# and warned, never failed on. Extraction fails loud like Class C. Muted is
+# "unknown" when no monitor carries `isMuted` at all: a 0 there would be
+# indistinguishable from "checked, none muted".
+silent_out="$AUDIT_SCRATCH/silent_monitors.txt"
+if ! jq -r '
+  def envs: [ .environments[]? | select(type == "object") ];
+  ( [ .[] | select(has("isMuted") or any(envs[]; has("isMuted"))) ] | length | "carriers\t\(.)" ),
+  ( .[]
+    | (.isMuted == true) as $top
+    | [ envs[] | select(.isMuted == true) | (.name // "?" | tostring) ] as $menvs
+    | ($top or ($menvs | length) > 0) as $muted
+    | (.status == "disabled") as $disabled
+    | select($muted or $disabled)
+    | [ "row",
+        (.slug // "" | tostring | if . == "" then "?" else . end),
+        (if $muted then "1" else "0" end),
+        (if $disabled then "1" else "0" end),
+        (if $top or ($menvs | length) == 0 then "all environments" else ($menvs | join(", ")) end) ]
+    | @tsv )
+' <<<"$monitors_json" > "$silent_out" 2>"$AUDIT_SCRATCH/silent.err"; then
+  echo "ERROR: muted/disabled monitor extraction failed — the monitors payload did not match the expected shape. Refusing to report 'Muted monitors: 0' from a failed extraction. jq said:" >&2
+  head -c 300 "$AUDIT_SCRATCH/silent.err" >&2
+  exit 1
+fi
+muted_carriers=0
+muted_monitor_slugs=()
+disabled_monitor_slugs=()
+silent_monitor_rows=()
+while IFS=$'\t' read -r kind slug is_muted is_disabled envs; do
+  if [[ "$kind" == "carriers" ]]; then
+    muted_carriers="$slug"
+    continue
+  fi
+  [[ "$slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || slug="<non-slug monitor>"
+  row_label=""
+  if [[ "$is_disabled" == "1" ]]; then
+    disabled_monitor_slugs+=("$slug")
+    row_label="disabled"
+  fi
+  if [[ "$is_muted" == "1" ]]; then
+    muted_monitor_slugs+=("$slug")
+    row_label="${row_label:+${row_label}; }muted in: ${envs}"
+  fi
+  printf -v silent_row -- '- `%s` — %s' "$slug" "$row_label"
+  silent_monitor_rows+=("$silent_row")
+done < "$silent_out"
+muted_unknown=0
+if (( muted_carriers == 0 )) && [[ "$(jq 'length' <<<"$monitors_json")" != "0" ]]; then
+  muted_unknown=1
 fi
 
 # Class B — a cron detector naming a monitor that does not exist live.
@@ -959,7 +1129,7 @@ if (( detectors_evaluated == 1 )); then
     [[ -z "$ref" ]] && continue
     if ! [[ "$ref" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
       class_b_discarded=$(( class_b_discarded + 1 ))
-      echo "::warning::cron detector binding '${ref}' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
+      echo "::warning::cron detector binding '$(warn_sanitize "$ref")' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
       continue
     fi
     if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
@@ -1013,12 +1183,16 @@ done < "$class_c_out"
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
 #
-# Addendum 2026-09-10: the tf root now declares
-# 57 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
-# one. This is a count of DECLARATIONS, not a re-verification against the live
-# org: the 57th monitor does not exist in Sentry until apply-sentry-infra.yml
+# Addendum 2026-09-17 (extended 2026-09-30): the tf root now declares
+# 61 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
+# one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, the
+# #8450 scheduled-actions-queue-health probe a third, the #9168
+# scheduled-supabase-watchdog monitor a fourth, and the #9274
+# scheduled-bot-pr-reaper monitor a fifth.
+# This is a count of DECLARATIONS, not a re-verification against the live
+# org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
-# than silently promoted to 57. T25 derives from the tf root, so it reads this
+# than silently promoted to 61. T25 derives from the tf root, so it reads this
 # line; the live-set assertion is re-established by the next audit run.
 CRON_MONITOR_MONTHLY_USD="0.78"
 
@@ -1285,17 +1459,32 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
     printf '_Class A (cron detector with no routing workflow):_\n\n'
     printf -- '- **%s** of **%s** cron detectors have an empty `workflowIds`.\n' \
       "$class_a_count" "$cron_detector_count"
-    if (( class_a_count == cron_detector_count )) && (( cron_detector_count > 0 )); then
-      printf -- '- Invariant `class_a_count == cron_detector_count` HOLDS: no cron monitor in this org routes through a workflow. This is a true statement about the org, not a detection bug.\n'
-    elif (( cron_detector_count > 0 )); then
-      # The interesting state. Without this branch the invariant line simply
-      # DISAPPEARS when routing changes, so the one transition worth noticing
-      # is the one the report goes quiet about.
-      printf -- '- Invariant `class_a_count == cron_detector_count` DOES NOT HOLD: %s of %s cron detectors now route through a workflow. Routing changed since the last report — confirm it was intended.\n' \
-        "$(( cron_detector_count - class_a_count ))" "$cron_detector_count"
+    printf -- '- Healthy state: **0** unrouted (every cron detector bound to a workflow).\n'
+    if (( class_a_count > 0 )); then
+      printf -- '- A non-zero count means a cron detector is bound to no workflow: either a pending route under the two-PR rule, listed in `cron_monitor_alert_unrouted` in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf`, or live drift.\n\n'
+      printf '_Unrouted cron detectors (by monitor slug):_\n\n'
+      for label in "${class_a_unrouted_labels[@]}"; do
+        printf -- '- `%s` — bound to no workflow; a check-in failure for this monitor notifies no one.\n' "$label"
+      done
     fi
-    printf -- '\n_Not enumerated per-slug by design: every slug already appears in the `## Monitors` table above, and %s identical bullets per run is noise. The machine-checked invariant lives in `sentry-monitors-audit.test.sh`._\n\n' "$cron_detector_count"
+    printf '\n'
   fi
+
+  # Printed on every run, detectors payload or not: it reads only the monitors
+  # payload. The count lines are there at zero too, so "checked and none" is
+  # distinguishable from "not checked" (which prints **unknown**).
+  printf '_Silent monitors (muted or disabled: sends nothing, routed or not):_\n\n'
+  if (( muted_unknown == 1 )); then
+    printf -- '- Muted monitors: **unknown** (no monitor in the payload carries isMuted)\n'
+  else
+    printf -- '- Muted monitors: **%s** (monitor-level `isMuted: true`, or at least one environment with it).\n' \
+      "${#muted_monitor_slugs[@]}"
+  fi
+  printf -- '- Disabled monitors: **%s** (`status: disabled`).\n' "${#disabled_monitor_slugs[@]}"
+  if (( ${#silent_monitor_rows[@]} > 0 )); then
+    printf '%s\n' "${silent_monitor_rows[@]}"
+  fi
+  printf '\n'
 
   if (( ${#orphan_live_monitors[@]} > 0 )); then
     printf '_Class D (live monitor with no declaring `.tf` resource block):_\n\n'
@@ -1347,8 +1536,8 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   # The `<!-- ids: ... -->` manifest was RETIRED in #7590.
   #
   # It existed to feed a first-time `terraform import` of issue-alert rules.
-  # That adoption is complete — it is now 29 `sentry_alert` plus 2
-  # `sentry_issue_alert` resources against a full-root plan, not 29
+  # That adoption is complete — every alert rule is a `sentry_alert` since #8451
+  # (the count lives in the .tf and README, pinned by T25), not 29
   # `sentry_issue_alert` — so the manifest has no live consumer, and its README
   # runbook was stale by 25 resources. Repointing it at the workflows endpoint would
   # have been worse than deleting it: workflow ids and rule ids are DISJOINT
@@ -1357,6 +1546,33 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
 } > "$out_file"
 
 echo "[ok] Wrote audit report: $out_file"
+
+# --- Routing warning (Class A + silent monitors) ---------------------------
+# ONE line on stderr, outside the report (the Article 30 evidence artifact):
+# a job-log signal on every apply run. It describes the state BEFORE this
+# run's apply — the audit runs ahead of `terraform plan`. Emitted before the
+# Class D gate, which exits, so a Class D failure cannot hide it. Gated on the
+# same count the report prints; silent when everything is routed and nothing
+# is muted, disabled, or unknown.
+routing_warn_parts=()
+if (( class_a_count > 0 )); then
+  routing_warn_parts+=("${class_a_count} cron detector(s) bound to no workflow (healthy state is 0, so this is a pending route under the two-PR rule or live drift): ${class_a_unrouted_labels[*]}")
+fi
+if (( muted_unknown == 1 )); then
+  routing_warn_parts+=("muted monitors unknown (no monitor in the payload carries isMuted)")
+elif (( ${#muted_monitor_slugs[@]} > 0 )); then
+  routing_warn_parts+=("${#muted_monitor_slugs[@]} monitor(s) muted in at least one environment (a muted monitor sends nothing): ${muted_monitor_slugs[*]}")
+fi
+if (( ${#disabled_monitor_slugs[@]} > 0 )); then
+  routing_warn_parts+=("${#disabled_monitor_slugs[@]} monitor(s) disabled (a disabled monitor sends nothing): ${disabled_monitor_slugs[*]}")
+fi
+if (( ${#routing_warn_parts[@]} > 0 )); then
+  routing_warn="${routing_warn_parts[0]}"
+  for part in "${routing_warn_parts[@]:1}"; do
+    routing_warn+="; ${part}"
+  done
+  echo "::warning::$(warn_sanitize "Sentry cron routing: pre-apply state (before this run's apply): ${routing_warn}. See ${out_file}.")" >&2
+fi
 
 # --- Class D gate ---------------------------------------------------------
 # Deliberately NOT the A/B/C posture. Those classes only `printf` into the

@@ -102,7 +102,7 @@ That is what [Soleur](https://soleur.ai) is. Not a plugin in the same category a
 The distinction is not subtle: the plugins above make you better at the things you are already doing. Soleur changes the scope of what you can do alone.
 
 ```
-claude plugin install soleur
+claude plugin install soleur@soleur-marketplace
 ```
 
 The install is one command. What ships behind it is an AI organization that reviews your code, drafts your contracts, monitors your competitors, tracks your pipeline, and compounds its knowledge of your business with every task.
@@ -128,7 +128,7 @@ For a solo technical founder, the practical install list looks like this:
 | code-review | Parallel multi-agent PR review | `claude plugin install code-review@claude-plugins-official` |
 | playwright | Browser automation in-session | `claude plugin install playwright@claude-plugins-official` |
 | github | Issue and PR management | `claude plugin install github@claude-plugins-official` |
-| soleur | Full AI organization across all departments | `claude plugin install soleur` |
+| soleur | Full AI organization across all departments | `claude plugin install soleur@soleur-marketplace` |
 
 The first five make the engineering workflow faster. The last one changes what one person can build.
 

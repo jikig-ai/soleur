@@ -76,6 +76,25 @@ MOCK
   chmod +x "$1/logger"
 }
 
+# #9169: ci-deploy.sh's GHCR_DENY probe runs `getent ahosts ghcr.io` on EVERY invocation. Installed
+# by default so no test ever does a real lookup (which could stall up to its 5 s bound on a
+# no-network runner). MOCK_GETENT_MODE: sink (default) | routable | unresolvable (exit 2) | hang.
+# Refuses any other argv (exit 64) so a changed probe query cannot pass against this fixture.
+create_mock_getent() {
+  cat > "$1/getent" << 'MOCK'
+#!/bin/bash
+[[ "$*" == "ahosts ghcr.io" ]] || { echo "getent mock: unexpected argv: $*" >&2; exit 64; }
+case "${MOCK_GETENT_MODE:-sink}" in
+  sink) printf '0.0.0.0         STREAM ghcr.io\n0.0.0.0         DGRAM\n::              STREAM\n' ;;
+  routable) printf '140.82.121.34   STREAM ghcr.io\n' ;;
+  unresolvable) exit 2 ;;
+  hang) exec /bin/sleep 30 ;;  # absolute: the default sleep mock returns at once
+esac
+exit 0
+MOCK
+  chmod +x "$1/getent"
+}
+
 create_mock_sudo() {
   cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
@@ -130,28 +149,66 @@ create_mock_systemctl() {
 # quiesce/enable verdict, so a blanket exit-0 mock would mask them. Per-verb fail
 # toggles let a test drive a TOLERATED stop/disable non-zero vs a GENUINE failure.
 verb="$1"
+# #6921/#8077 verb log: EVERY verb (queries included) is appended when MOCK_SYSTEMCTL_LOG is
+# set, so a row can assert ORDER (capture before disable before stop) and ABSENCE (no
+# `restart` on a refused unit). The mock rearm script appends its mode to the SAME log, which
+# is what makes the capture-vs-stop ordering observable at all. A row asserting absence must
+# first assert the log EXISTS — an absent log would satisfy "no restart" vacuously.
+if [[ -n "${MOCK_SYSTEMCTL_LOG:-}" ]]; then printf '%s\n' "$verb" >> "$MOCK_SYSTEMCTL_LOG"; fi
+# #8077 review: MOCK_SYSTEMCTL_WATCH (space-separated paths) — on enable/start, log whether each
+# path exists AT THE MOMENT of the verb (`watch:<basename>=present|absent`), so a row can prove the
+# enable handler retired the capture and removed the marker BEFORE it re-armed the unit.
+if [[ -n "${MOCK_SYSTEMCTL_LOG:-}" && -n "${MOCK_SYSTEMCTL_WATCH:-}" && ( "$verb" == enable || "$verb" == start ) ]]; then
+  for _w in $MOCK_SYSTEMCTL_WATCH; do
+    if [[ -e "$_w" ]]; then _ws=present; else _ws=absent; fi
+    printf 'watch:%s=%s\n' "$(basename "$_w")" "$_ws" >> "$MOCK_SYSTEMCTL_LOG"
+  done
+fi
+# Stateful mode is OPT-IN (MOCK_SYSTEMCTL_STATEFUL=1): `stop` / `disable` leave markers and the
+# queries read them back. Made default it would flip AC-Q5 (static /health 200 → still_serving)
+# and AC-Q6 (static active → still_serving) to `quiesced`. Markers live beside this mock (a
+# fresh mktemp -d per runner). The `disabled` marker matters only on a unit that STARTS enabled
+# (MOCK_SYSTEMCTL_ENABLED_STATE=enabled): the stateful quiesce rows arm exactly that.
+_sdir="$(dirname "$0")"
+_stateful=0
+if [[ "${MOCK_SYSTEMCTL_STATEFUL:-}" == "1" ]]; then _stateful=1; fi
 case "$verb" in
   is-active)
     # `is-active [--quiet] <unit>`. Default: inactive (systemd exit 3). A test that
     # needs "unit still ACTIVE despite /health down" (arch P2-3) arms MOCK_SYSTEMCTL_ACTIVE=1.
+    # MOCK_SYSTEMCTL_ACTIVE_STATE prints any other non-active state (e.g. `failed`, the
+    # post-SIGKILL stop shape) with systemd's non-zero exit.
+    if [[ "$_stateful" == "1" && -e "$_sdir/stopped" ]]; then echo inactive; exit 3; fi
     if [[ "${MOCK_SYSTEMCTL_ACTIVE:-}" == "1" ]]; then echo active; exit 0; fi
-    echo inactive; exit 3
+    echo "${MOCK_SYSTEMCTL_ACTIVE_STATE:-inactive}"; exit 3
     ;;
   is-enabled)
     # Echo the unit's enabled-state; exit 0 iff enabled (systemd convention).
     # Default "disabled" (a clean quiesced unit). Tests override via
-    # MOCK_SYSTEMCTL_ENABLED_STATE (e.g. static | enabled).
+    # MOCK_SYSTEMCTL_ENABLED_STATE (e.g. static | enabled | enabled-runtime | not-found).
+    # `not-found` exits 4 — systemd >= 253 on an absent unit (prod: systemd 255).
     state="${MOCK_SYSTEMCTL_ENABLED_STATE:-disabled}"
+    if [[ "$_stateful" == "1" && -e "$_sdir/disabled" ]]; then state=disabled; fi
     echo "$state"
-    case "$state" in enabled|enabled-runtime) exit 0 ;; *) exit 1 ;; esac
+    case "$state" in enabled|enabled-runtime) exit 0 ;; not-found) exit 4 ;; *) exit 1 ;; esac
     ;;
   show)
     # `show -p ExecStart …` — no output (the durable-backend branch stays skipped
     # in tests, matching pre-#6178 blanket-mock behavior).
+    # `show -p ActiveEnterTimestamp --value …` prints MOCK_SYSTEMCTL_ACTIVE_ENTER (default empty —
+    # systemd's value for a unit that has not entered active since boot): inngest_quiesce_state's
+    # void rule reads it.
+    if [[ " $* " == *" ActiveEnterTimestamp "* ]]; then printf '%s\n' "${MOCK_SYSTEMCTL_ACTIVE_ENTER:-}"; fi
     exit 0
     ;;
-  stop)    [[ "${MOCK_SYSTEMCTL_STOP_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
-  disable) [[ "${MOCK_SYSTEMCTL_DISABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  stop)
+    [[ "${MOCK_SYSTEMCTL_STOP_FAIL:-}" == "1" ]] && exit 1
+    if [[ "$_stateful" == "1" ]]; then : > "$_sdir/stopped"; fi
+    exit 0 ;;
+  disable)
+    [[ "${MOCK_SYSTEMCTL_DISABLE_FAIL:-}" == "1" ]] && exit 1
+    if [[ "$_stateful" == "1" ]]; then : > "$_sdir/disabled"; fi
+    exit 0 ;;
   enable)  [[ "${MOCK_SYSTEMCTL_ENABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
   start)   [[ "${MOCK_SYSTEMCTL_START_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
 esac
@@ -162,6 +219,42 @@ fi
 exit 0
 MOCK
   chmod +x "$1/systemctl"
+}
+
+# #6921 D1b mock rearm script (INNGEST_REARM_CMD). Appends the MODE it was invoked with to the
+# systemctl verb log — the handler passes INNGEST_REARM_MODE=capture, so a `capture` line proves
+# both that the capture ran and WHEN, relative to the unit verbs. Default: success with 2 ids.
+#   MOCK_REARM_CAPTURE_FAIL=1   exit 1 with stderr text (carries a token-shaped string so a row
+#                               can assert the journald tail is redacted, not raw);
+#                               MOCK_REARM_CAPTURE_FAIL_TEXT overrides that text (the DSN-scrub row)
+#   MOCK_REARM_CAPTURE_NOFILE=1 succeed WITHOUT persisting the capture file
+#   MOCK_REARM_CAPTURE_EMPTY=1  success with captured:0 (an empty capture IS a capture)
+#   MOCK_REARM_CAPTURE_SLEEP=N  block N seconds first (the bounded row). /bin/sleep directly:
+#                               the PATH sleep is create_mock_sleep's no-op.
+create_mock_rearm() {
+  cat > "$1/inngest-rearm-reminders.sh" << 'MOCK'
+#!/bin/bash
+if [[ -n "${MOCK_SYSTEMCTL_LOG:-}" ]]; then printf '%s\n' "${INNGEST_REARM_MODE:-<unset>}" >> "$MOCK_SYSTEMCTL_LOG"; fi
+if [[ -n "${MOCK_REARM_CAPTURE_SLEEP:-}" ]]; then /bin/sleep "$MOCK_REARM_CAPTURE_SLEEP"; fi
+if [[ "${MOCK_REARM_CAPTURE_FAIL:-}" == "1" ]]; then
+  echo "${MOCK_REARM_CAPTURE_FAIL_TEXT:-ERROR: capture: enumeration failed (mock) auth=dp.st.prd.MOCKLEAKVALUE123}" >&2
+  exit 1
+fi
+# The real script persists the capture to INNGEST_CUTOVER_CAPTURE_FILE; the handler hashes that
+# file into the quiesce marker, so the mock writes it too. MOCK_REARM_CAPTURE_NOFILE=1 skips it.
+_cf="${INNGEST_CUTOVER_CAPTURE_FILE:-}"
+if [[ "${MOCK_REARM_CAPTURE_EMPTY:-}" == "1" ]]; then
+  if [[ -n "$_cf" && "${MOCK_REARM_CAPTURE_NOFILE:-}" != "1" ]]; then printf '[]' > "$_cf"; fi
+  echo "{\"captured\":0,\"reminder_ids\":[],\"capture_file\":\"$_cf\"}"
+  exit 0
+fi
+if [[ -n "$_cf" && "${MOCK_REARM_CAPTURE_NOFILE:-}" != "1" ]]; then
+  printf '[{"reminder_id":"r1","fire_at":4102444800000},{"reminder_id":"r2","fire_at":4102444800000}]' > "$_cf"
+fi
+echo "{\"captured\":2,\"reminder_ids\":[\"r1\",\"r2\"],\"capture_file\":\"$_cf\"}"
+exit 0
+MOCK
+  chmod +x "$1/inngest-rearm-reminders.sh"
 }
 
 create_mock_df() {
@@ -214,7 +307,8 @@ if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
       exit "${MOCK_DOPPLER_GET_FAIL_RC:-1}"
       ;;
   esac
-  # #6005 ghcr_prelude_and_login: `secrets get <NAME> --plain` → bare per-name value.
+  # #6005: `secrets get <NAME> --plain` → bare per-name value (read by prefetch_deploy_secrets
+  # and the zot gate; the GHCR prelude that also read it was retired by #8036 1c).
   # A non-empty distinguishable value so the prelude exports (SENTRY_*, GHCR_*) are
   # observably set. MOCK_DOPPLER_GET_EMPTY simulates the pre-provisioning state
   # (credential not yet in Doppler) → empty value, prelude skips docker login.
@@ -233,6 +327,45 @@ if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
       exit 0 ;;
   esac
   echo "mock-${3:-VALUE}"
+  exit 0
+fi
+if [[ "${1:-}" == "secrets" && "${2:-}" == "download" ]]; then
+  # #8609 Guard 7: `secrets download` answers PER --project, and every call is logged with the
+  # DOPPLER_TOKEN it ran under (MOCK_DOPPLER_CALL_LOG) — the only channel that shows WHICH
+  # credential read WHICH project. The default prd body carries a key line, because a deploy whose
+  # env holds no GITHUB_APP_PRIVATE_KEY is now refused at the canary (github_app_key_missing).
+  # MOCK_GAK_PRD_BODY / MOCK_GAK_APP_BODY name files served verbatim; MOCK_GAK_APP_FAIL=1 fails the
+  # isolated project with a token-shaped stderr the overlay must never forward.
+  _dp=""; _dc=""; _dprev=""
+  for _a in "$@"; do
+    [[ "$_dprev" == "--project" ]] && _dp="$_a"
+    [[ "$_dprev" == "--config" ]] && _dc="$_a"
+    _dprev="$_a"
+  done
+  if [[ -n "${MOCK_DOPPLER_CALL_LOG:-}" ]]; then
+    printf 'project=%s config=%s token=%s\n' "$_dp" "$_dc" "${DOPPLER_TOKEN:-}" >> "$MOCK_DOPPLER_CALL_LOG"
+  fi
+  if [[ "$_dp" == "soleur-github-app" ]]; then
+    # MOCK_GAK_APP_FAIL_FIRST names a counter file: while it holds N > 0 the call fails and
+    # decrements it (a transient Doppler error the overlay's bounded retry must absorb).
+    if [[ -n "${MOCK_GAK_APP_FAIL_FIRST:-}" && -f "$MOCK_GAK_APP_FAIL_FIRST" ]]; then
+      _gn=$(cat "$MOCK_GAK_APP_FAIL_FIRST" 2>/dev/null || echo 0)
+      if [[ "$_gn" =~ ^[0-9]+$ ]] && (( _gn > 0 )); then
+        echo $(( _gn - 1 )) > "$MOCK_GAK_APP_FAIL_FIRST"
+        printf 'Doppler Error: transient %s\n' "${MOCK_GAK_STDERR_CANARY:-}" >&2
+        exit 1
+      fi
+    fi
+    if [[ "${MOCK_GAK_APP_FAIL:-}" == "1" ]]; then
+      printf 'Doppler Error: invalid service token %s\n' "${MOCK_GAK_STDERR_CANARY:-}" >&2
+      exit 1
+    fi
+    if [[ -n "${MOCK_GAK_APP_BODY:-}" ]]; then cat "$MOCK_GAK_APP_BODY"; exit 0; fi
+    printf 'GITHUB_APP_PRIVATE_KEY=%s\n' "mock-isolated-app-key"
+    exit 0
+  fi
+  if [[ -n "${MOCK_GAK_PRD_BODY:-}" ]]; then cat "$MOCK_GAK_PRD_BODY"; exit 0; fi
+  printf 'KEY=value\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=%s\n' "mock-prd-app-key"
   exit 0
 fi
 if [[ "${1:-}" == "secrets" ]]; then
@@ -274,6 +407,48 @@ if [[ "${1:-}" == "exec" ]]; then
   done
 fi
 
+# #8609 Guard 7, BEFORE the mode case so it works in every mode.
+#   MOCK_GAK_LOG: every named `run` appends `run:<name> env_token=<0|1>` — env_token=1 when the
+#   App-key read token (MOCK_GAK_TOKEN) appears in ANY non-MOCK_ variable of the environment docker
+#   was handed OR anywhere in its argv (a `-e X=<token>`) — and its --env-file is snapshotted beside
+#   the log (ci-deploy.sh deletes the real one at exit). The probe exec appends
+#   `probe:<container> token=<0|1> key_argv=<0|1> isolated=<0|1>` (token: env or argv; key_argv:
+#   MOCK_GAK_KEY_MARK, a slice of a fixture key, on the HOST argv; isolated: the exec is exactly the
+#   `/bin/sh -c '… exec /usr/bin/env -i … /usr/local/bin/node "$1"'` form), so order, target and
+#   leaks are observable. Answered here WITHOUT a DOCKER_TRACE line, so the exact-order trace rows
+#   are untouched. Default: one `ok` verdict line. MOCK_GAK_PROBE_OUT (exact stdout, may be empty)
+#   and MOCK_GAK_PROBE_RC override it. MOCK_GAK_PLANTED_NODE=1 models a prd-planted `node` on the
+#   container PATH: an exec that is NOT isolated runs it, and it answers `ok` whatever the key.
+if [[ -n "${MOCK_GAK_LOG:-}" && "${1:-}" == "run" ]]; then
+  _gn=""; _gef=""; _gp=""
+  for _a in "$@"; do
+    [[ "$_gp" == "--name" ]] && _gn="$_a"
+    [[ "$_gp" == "--env-file" ]] && _gef="$_a"
+    _gp="$_a"
+  done
+  if [[ -n "$_gn" ]]; then
+    _gtok=0
+    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+    printf 'run:%s env_token=%s\n' "$_gn" "$_gtok" >> "$MOCK_GAK_LOG"
+    if [[ -n "$_gef" && -f "$_gef" ]]; then cp "$_gef" "$(dirname "$MOCK_GAK_LOG")/envfile.$_gn"; fi
+  fi
+fi
+if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
+  _gtok=0; _gkey=0; _giso=0
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
+  # shellcheck disable=SC2016
+  if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
+  if [[ -n "${MOCK_GAK_LOG:-}" ]]; then printf 'probe:%s token=%s key_argv=%s isolated=%s\n' "${2:-}" "$_gtok" "$_gkey" "$_giso" >> "$MOCK_GAK_LOG"; fi
+  if [[ "${MOCK_GAK_PLANTED_NODE:-}" == "1" && "$_giso" == 0 ]]; then printf 'github_app_key_probe=ok\n'; exit 0; fi
+  if [[ -n "${MOCK_GAK_PROBE_OUT+x}" ]]; then
+    printf '%s' "$MOCK_GAK_PROBE_OUT"
+  else
+    printf 'github_app_key_probe=ok\n'
+  fi
+  exit "${MOCK_GAK_PROBE_RC:-0}"
+fi
+
 # #5933 Item 4 image-verify handlers, BEFORE the mode case so they work in every
 # mode and the app-run failure arming (canary/prod) cannot misfire on them.
 #
@@ -290,10 +465,64 @@ if [[ "${1:-}" == "run" ]]; then
       if [[ -n "${MOCK_COSIGN_ARGS_FILE:-}" ]]; then
         printf 'COSIGN_VERIFY_ARGS:%s\n' "$*" >> "$MOCK_COSIGN_ARGS_FILE"
         printf 'SENTRY_AT_VERIFY:%s\n' "${SENTRY_INGEST_DOMAIN:-UNSET}" >> "$MOCK_COSIGN_ARGS_FILE"
+        # #8036 1a: the docker config the CLI would resolve the implicit COSIGN_IMAGE pull's
+        # credentials from, measured HERE (inside the mock, at verify time) because ci-deploy.sh
+        # removes the anonymous dir the moment the run returns. An unset/empty DOCKER_CONFIG is
+        # recorded as-is: the CLI then falls back to ~/.docker, which is exactly the regression.
+        _dc="${DOCKER_CONFIG-}"
+        printf 'DOCKER_CONFIG_AT_VERIFY:%s\n' "${DOCKER_CONFIG-UNSET}" >> "$MOCK_COSIGN_ARGS_FILE"
+        _isdir=0; [[ -n "$_dc" && -d "$_dc" && ! -L "$_dc" ]] && _isdir=1
+        _hascfg=0; [[ -n "$_dc" && -f "$_dc/config.json" ]] && _hascfg=1
+        _empty=0; [[ "$_hascfg" == "1" && "$(cat "$_dc/config.json" 2>/dev/null)" == '{"auths":{},"credHelpers":{"ghcr.io":""}}' ]] && _empty=1
+        printf 'ANON_CFG_AT_VERIFY:isdir=%s has_config_json=%s config_is_anon=%s auth_config_env=%s\n' \
+          "$_isdir" "$_hascfg" "$_empty" "$([[ -n "${DOCKER_AUTH_CONFIG+x}" ]] && echo set || echo unset)" >> "$MOCK_COSIGN_ARGS_FILE"
+        # T-1a-3: the canary is grepped for across EVERYTHING the CLI could read for the pull —
+        # its config dir (or the ~/.docker fallback when DOCKER_CONFIG is empty) and
+        # DOCKER_AUTH_CONFIG — never trusted to the mount argv's spelling.
+        if [[ -n "${MOCK_COSIGN_CANARY:-}" ]]; then
+          _seen=0
+          _scan="${_dc:-${HOME:-/nonexistent}/.docker}"
+          [[ -d "$_scan" ]] && grep -rqF -- "$MOCK_COSIGN_CANARY" "$_scan" 2>/dev/null && _seen=1
+          [[ "${DOCKER_AUTH_CONFIG:-}" == *"$MOCK_COSIGN_CANARY"* ]] && _seen=1
+          printf 'CANARY_VISIBLE_AT_VERIFY:%s\n' "$_seen" >> "$MOCK_COSIGN_ARGS_FILE"
+        fi
+      fi
+      # #6129: count verify attempts, and simulate a daemon-side verifier-image PULL failure —
+      # every time (MOCK_COSIGN_PULL_FAIL=always) or only on the first attempt (=once).
+      if [[ -n "${MOCK_COSIGN_ATTEMPTS_FILE:-}" ]]; then echo x >> "$MOCK_COSIGN_ATTEMPTS_FILE"; fi
+      if [[ "${MOCK_COSIGN_PULL_FAIL:-}" == "always" \
+            || ( "${MOCK_COSIGN_PULL_FAIL:-}" == "once" && "$(wc -l < "${MOCK_COSIGN_ATTEMPTS_FILE:-/dev/null}" 2>/dev/null)" -le 1 ) ]]; then
+        echo "docker: Error response from daemon: Get \"https://gcr.io/v2/\": dial tcp 142.250.0.1:443: i/o timeout" >&2
+        exit 125
       fi
       if [[ "${MOCK_COSIGN_VERIFY_FAIL:-}" == "1" ]]; then
         echo "Error: no matching signatures found" >&2
         exit 1
+      fi
+      # #8609 (b) MOCK_COSIGN_IDENTITY_SIM=1: model the signature's Fulcio certificate and apply
+      # the verify argv to it as cosign v3.1.1 does — the SAN (…/reusable-release.yml@<MOCK_COSIGN_SAN_REF>)
+      # against --certificate-identity-regexp, and exact compares of the GitHub Workflow Ref
+      # (MOCK_COSIGN_WF_REF) and Repository (MOCK_COSIGN_WF_REPO) extensions against their flags. An
+      # absent flag checks nothing. Defaults: a release built from main of this repo.
+      if [[ "${MOCK_COSIGN_IDENTITY_SIM:-}" == "1" ]]; then
+        _cs_re=""; _cs_ref=""; _cs_repo=""
+        for _b in "$@"; do
+          case "$_b" in
+            --certificate-identity-regexp=*) _cs_re="${_b#*=}" ;;
+            --certificate-github-workflow-ref=*) _cs_ref="${_b#*=}" ;;
+            --certificate-github-workflow-repository=*) _cs_repo="${_b#*=}" ;;
+          esac
+        done
+        _cs_san="https://github.com/jikig-ai/soleur/.github/workflows/reusable-release.yml@${MOCK_COSIGN_SAN_REF:-refs/heads/main}"
+        if [[ -n "$_cs_re" ]] && ! [[ "$_cs_san" =~ $_cs_re ]]; then
+          echo "Error: none of the expected identities matched what was in the certificate" >&2; exit 1
+        fi
+        if [[ -n "$_cs_ref" && "$_cs_ref" != "${MOCK_COSIGN_WF_REF:-refs/heads/main}" ]]; then
+          echo "Error: expected GitHub Workflow Ref not found in certificate" >&2; exit 1
+        fi
+        if [[ -n "$_cs_repo" && "$_cs_repo" != "${MOCK_COSIGN_WF_REPO:-jikig-ai/soleur}" ]]; then
+          echo "Error: expected GitHub Workflow Repository not found in certificate" >&2; exit 1
+        fi
       fi
       exit 0
     fi
@@ -352,7 +581,10 @@ if [[ "${1:-}" == "login" ]]; then
     _prev="$_a"
   done
   _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
-  [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\n' "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
+  # RECORD THE REGISTRY, not only the user. The user alone cannot answer "did this deploy log in
+  # to ghcr.io?", which is the single property #8036 1c exists to guarantee. Recorded as
+  # `LOGIN:<registry>\tuser=<user>` so a row can anchor on `^LOGIN:ghcr\.io\t` exactly.
+  [[ -n "${MOCK_LOGIN_ARGS_FILE:-}" ]] && printf 'LOGIN:%s\tuser=%s\n' "$_lreg" "$_luser" >> "$MOCK_LOGIN_ARGS_FILE"
   # #6497: fail the ZOT login with a caller-supplied stderr so a test can exercise each
   # login_class enum member. Registry-scoped (never ghcr.io) so arming it cannot
   # perturb the GHCR legs the #6400/#6090 tests assert on.
@@ -388,6 +620,67 @@ if [[ "${1:-}" == "login" ]]; then
   exit 0
 fi
 
+# #8036 1c: `docker logout <registry>` — the sweep's removal verb. This handler REPRODUCES the
+# real CLI's on-disk effect rather than exiting 0, because the sweep's entire observable is that
+# the config file changed: a stub that only exits 0 puts the fixture seam ABOVE the code under
+# test, and every mutation of the sweep's predicate would then pass. It resolves the same config
+# the CLI does ($DOCKER_CONFIG/config.json, else ~/.docker/config.json), deletes `.auths[<reg>]`
+# AND `.credHelpers[<reg>]` (the real verb clears both — which is the whole reason the plan chose
+# `docker logout` over a hand-rolled `del(.auths…)`), and rewrites the document. Runs BEFORE the
+# mode case so every mode gets it.
+#
+# ARGV FIDELITY (a fake that answers regardless of the request cannot observe the SUT querying the
+# wrong thing): a `logout` with no registry operand, or with extra operands, is a shape the sweep
+# must never emit — refuse it with 64 so the row reds on the call shape, not on the config content.
+if [[ "${1:-}" == "logout" ]]; then
+  if [[ "$#" -ne 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+    printf 'MOCK docker logout: expected exactly one registry operand, got: %s\n' "$*" >&2
+    exit 64
+  fi
+  _oreg="$2"
+  [[ -n "${MOCK_LOGOUT_ARGS_FILE:-}" ]] && printf 'LOGOUT:%s\n' "$_oreg" >> "$MOCK_LOGOUT_ARGS_FILE"
+  _ocfg="${DOCKER_CONFIG:-${HOME:-/nonexistent}/.docker}/config.json"
+  if [[ ! -f "$_ocfg" ]] || ! command -v jq >/dev/null 2>&1; then
+    printf 'Not logged in to %s\n' "$_oreg"
+    exit 0
+  fi
+  # MODEL THE REAL VERB, NOT THE OUTCOME WE WANT. docker/cli `runLogout` decides `loggedIn` from
+  # ConfigFile().AuthConfigs[reg] ALONE, then calls GetCredentialsStore(reg).Erase(reg):
+  #   * no auths[reg]                      -> "Not logged in", exit 0, file untouched
+  #   * auths[reg], no helper for reg      -> fileStore.Erase deletes auths[reg] ONLY
+  #   * auths[reg] + credHelpers[reg]
+  #     OR auths[reg] + global credsStore  -> nativeStore.Erase shells out to the HELPER; the
+  #                                           config MAP IS NEVER MUTATED, so auths[reg] AND the
+  #                                           helper key both survive. Exit 0 either way.
+  # Measured on docker 29.7.2 (2026-09-23) across all four configs. The previous mock ran
+  # `del(.auths[$r]) | del(.credHelpers[$r])` unconditionally — strictly MORE than the verb does —
+  # so T-1c-2 graded the fixture instead of the sweep, and a helper-shaped host that the real verb
+  # cannot clean read green. That is the defect class this branch's own learning file is named
+  # after, so the mock is now the pessimistic model and `sweep_stale_registry_auth`'s jq rewrite
+  # is what has to do the work.
+  if ! jq -e --arg r "$_oreg" '(.auths[$r]) != null' "$_ocfg" >/dev/null 2>&1; then
+    printf 'Not logged in to %s\n' "$_oreg"
+    exit 0
+  fi
+  if jq -e --arg r "$_oreg" \
+       '((.credHelpers[$r] | type == "string" and length > 0)
+         or (.credsStore   | type == "string" and length > 0))' "$_ocfg" >/dev/null 2>&1; then
+    # Helper-backed: the secret is erased out-of-band; config.json is left byte-identical.
+    printf 'Removing login credentials for %s\n' "$_oreg"
+    exit 0
+  fi
+  _otmp="$(mktemp)"
+  if jq --arg r "$_oreg" 'del(.auths[$r])' "$_ocfg" > "$_otmp" 2>/dev/null; then
+    cat "$_otmp" > "$_ocfg"
+    rm -f "$_otmp"
+    printf 'Removing login credentials for %s\n' "$_oreg"
+    exit 0
+  fi
+  rm -f "$_otmp"
+  printf 'Error: failed to rewrite %s\n' "$_ocfg" >&2
+  exit 1
+fi
+
 # #6497: `docker --version` is read by _login_hatch to emit `docker_ver`. The host's docker is
 # NOT pinned (cloud-init.yml:428 installs docker-ce unpinned) and NOT observable in telemetry,
 # so the instrument makes the host self-report. A fixed version here keeps the field assertable;
@@ -406,6 +699,35 @@ fi
 if [[ "${1:-}" == "pull" ]]; then
   _pref="${2:-}"
   [[ -n "${MOCK_PULL_ARGS_FILE:-}" ]] && printf 'PULL:%s\n' "$_pref" >> "$MOCK_PULL_ARGS_FILE"
+  # #8036 1c: the bounded TRANSIENT retry loop moves from the (deleted) GHCR leg onto the zot
+  # arm, so the zot arm needs the same countdown fixture its GHCR sibling has had since #6525 —
+  # `MOCK_ZOT_PULL_FAIL=1` is always-fail and can only drive exhaustion, never recovery. Emitted
+  # BEFORE the always-fail arm so a test can arm exactly one of the two. Same stderr string the
+  # GHCR arm uses, so both are classified by the same `_pull_result_is_transient` regex.
+  if [[ -n "${MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE:-}" && -f "${MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE}" \
+        && "$_pref" == 10.0.1.30:5000/* ]]; then
+    _ztn=$(cat "$MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE" 2>/dev/null || echo 0)
+    if [[ "$_ztn" =~ ^[0-9]+$ ]] && (( _ztn > 0 )); then
+      echo $(( _ztn - 1 )) > "$MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE"
+      # The countdown value rides the stderr so a test can tell the FINAL attempt's text from the
+      # FIRST one's. Without it every attempt emits identical bytes and T-1c-10's "reports the
+      # final attempt's stderr" is unfalsifiable — a breadcrumb built from attempt 1 passes it.
+      echo "read tcp 10.0.1.10:44444->10.0.1.30:5000: read: connection reset by peer (zot-attempt-remaining=${_ztn})" >&2
+      exit 1
+    fi
+  fi
+  # #8036 1c: the always-on transient and manifest arms, mirroring the GHCR pair the #6525 rows
+  # used before the retry loop moved onto the zot arm. Emitted before the generic always-fail arm
+  # so a test can pick exactly one class; the strings are the same ones the GHCR arm uses, so both
+  # are classified by the same `_pull_result_is_transient` / manifest regexes.
+  if [[ "${MOCK_ZOT_PULL_TRANSIENT_ALWAYS:-}" == "1" && "$_pref" == 10.0.1.30:5000/* ]]; then
+    echo 'read tcp 10.0.1.10:44444->10.0.1.30:5000: read: connection reset by peer' >&2
+    exit 1
+  fi
+  if [[ "${MOCK_ZOT_PULL_MANIFEST_ALWAYS:-}" == "1" && "$_pref" == 10.0.1.30:5000/* ]]; then
+    echo "manifest unknown: manifest unknown" >&2
+    exit 1
+  fi
   if [[ "${MOCK_ZOT_PULL_FAIL:-}" == "1" && "$_pref" == 10.0.1.30:5000/* ]]; then
     # FR-C1: caller-suppliable stderr, mirroring the zot/ghcr LOGIN arms' symmetry above. The
     # historic hardcoded `manifest unknown` is a SINGLE short line, so it cannot drive either
@@ -416,7 +738,8 @@ if [[ "${1:-}" == "pull" ]]; then
     exit 1
   fi
   # #6400: simulate a login-ok/pull-DENY GHCR credential so the pull-site recovery
-  # (_ghcr_pull_or_recover) can be exercised. MOCK_GHCR_PULL_DENY_ALWAYS=1 denies every
+  # (the GHCR auth leg, DELETED by #8036 1c) could be exercised. MOCK_GHCR_PULL_DENY_ALWAYS=1
+  # denies every
   # GHCR pull (recovery-miss / fail-open scenario); MOCK_GHCR_PULL_DENY_COUNT_FILE holds
   # an integer countdown decremented per GHCR pull — deny while >0, then succeed (the
   # login-ok/pull-deny→recovered scenario: count=1 ⇒ first pull denies, retry succeeds).
@@ -434,7 +757,8 @@ if [[ "${1:-}" == "pull" ]]; then
       fi
     fi
     # #6525: simulate a TRANSIENT/network GHCR pull failure so the bounded transient-retry
-    # loop in _ghcr_pull_or_recover can be exercised. TRANSIENT_COUNT_FILE is an integer
+    # loop (now `_pull_with_transient_retry`, #8036 1c) can be exercised. TRANSIENT_COUNT_FILE
+    # is an integer
     # countdown — emit a network-class stderr while >0 (decrement each GHCR pull), then fall
     # through (a lower arm, or success). TRANSIENT_ALWAYS=1 emits transient on every GHCR pull
     # (the exhaust scenario). MANIFEST_ALWAYS=1 emits a manifest-unknown stderr (the no-retry
@@ -479,6 +803,35 @@ if [[ "${1:-}" == "image" && "${2:-}" == "inspect" ]]; then
     done
   fi
   exit 1
+fi
+
+# #6428: `docker inspect --format '{{range .Config.Env}}…' <ref>` — the pre-swap freshness read of
+# the web image's baked BUILD_VERSION. Answered BEFORE the mode case, like the verify handlers, so
+# the trace-mode order rows do not gain an `inspect`. Scoped to non-inngest refs: the inngest
+# branch's own `.Config.Env` inspect keeps falling through to the mode case exactly as before.
+# Default BUILD_VERSION = the deploy tag without its `v` (a release-built image is self-consistent,
+# which is the realistic default). MOCK_IMAGE_BUILD_VERSION overrides it; `${VAR+x}` so an
+# explicitly EMPTY value means "the image has no BUILD_VERSION line". MOCK_IMAGE_INSPECT_FAIL=1
+# fails the inspect. MOCK_FRESHNESS_INSPECT_FILE records the inspected ref (the LAST argument), so
+# a row can assert the check read the verified digest and not the mutable tag.
+if [[ "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" != *inngest* ]]; then
+  [[ -n "${MOCK_FRESHNESS_INSPECT_FILE:-}" ]] && printf '%s\n' "${!#}" >> "$MOCK_FRESHNESS_INSPECT_FILE"
+  if [[ "${MOCK_IMAGE_INSPECT_FAIL:-}" == "1" ]]; then
+    printf 'Error: No such object: %s\n' "${!#}" >&2
+    exit 1
+  fi
+  if [[ -n "${MOCK_IMAGE_BUILD_VERSION+x}" ]]; then
+    _bv="$MOCK_IMAGE_BUILD_VERSION"
+  else
+    _bv="${SSH_ORIGINAL_COMMAND##* }"; _bv="${_bv#v}"
+  fi
+  printf 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n'
+  # MOCK_IMAGE_ENV_EXTRA: extra env lines printed BEFORE BUILD_VERSION (a decoy such as
+  # X_BUILD_VERSION=… kills a parse that matches the key as a substring instead of the whole key).
+  [[ -n "${MOCK_IMAGE_ENV_EXTRA:-}" ]] && printf '%s\n' "$MOCK_IMAGE_ENV_EXTRA"
+  [[ -n "$_bv" ]] && printf 'BUILD_VERSION=%s\n' "$_bv"
+  printf 'BUILD_SHA=0000000000000000000000000000000000000000\n'
+  exit 0
 fi
 
 case "$mode" in
@@ -538,11 +891,34 @@ case "$mode" in
     ;;
   bwrap-fail)
     if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+    # #8016: answer the probe's own `docker inspect -f '{{.State.Status}}'`. Without this
+    # the mock fell through to a bare `exit 0` with no output, so cstate=unknown satisfied
+    # EVERY scenario and the field was decorative -- deleting its capture left the suite green.
+    if [[ "${1:-}" == "inspect" ]]; then
+      for arg in "$@"; do
+        if [[ "$arg" == *"State.Status"* ]]; then
+          printf '%s\n' "${MOCK_BWRAP_CSTATE-unknown}"
+          exit 0
+        fi
+      done
+    fi
     if [[ "${1:-}" == "exec" ]]; then
       for arg in "$@"; do
         if [[ "$arg" == *"bwrap"* ]]; then
-          echo "bwrap: No permissions to create new namespace" >&2
-          exit 1
+          # #8016: parameterised so one mode drives every probe shape the contract
+          # permits. `${VAR-default}` uses NO colon on purpose: an explicitly EMPTY
+          # MOCK_BWRAP_FAIL_STDERR must mean "the probe said nothing", which the
+          # `${VAR:-default}` form would silently overwrite with the default text.
+          # That silent shape is the one both production occurrences actually had.
+          if [[ -n "${MOCK_BWRAP_FAIL_SLEEP:-}" ]]; then
+            # /bin/sleep directly: create_mock_sleep installs a no-op `sleep` on PATH,
+            # which would swallow the duration this scenario exists to measure.
+            /bin/sleep "$MOCK_BWRAP_FAIL_SLEEP"
+          fi
+          printf '%s' "${MOCK_BWRAP_FAIL_STDERR-bwrap: No permissions to create new namespace}" >&2
+          # rc is parameterised too: rc=0 with stderr is the pass-with-chatter shape,
+          # which is 97.6% of runs and the early signal before the next rollback.
+          exit "${MOCK_BWRAP_FAIL_RC-1}"
         fi
       done
     fi
@@ -652,6 +1028,10 @@ case "$URL" in
       exit 1
     fi
     if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
+      exit 1
+    fi
+    # Stateful systemctl (opt-in): once the mock `stop` has run, the scheduler no longer serves.
+    if [[ "${MOCK_SYSTEMCTL_STATEFUL:-}" == "1" && -e "$(dirname "$0")/stopped" ]]; then
       exit 1
     fi
     write_body '{"status":200,"message":"OK"}'
@@ -827,7 +1207,23 @@ MOCK
 
 create_base_mocks() {
   local mock_dir="$1"
+  # #8036 1c: ZOT IS ARMED BY DEFAULT, and the flip is a consequence of the change rather than a
+  # convenience. Before 1c a zot-dark deploy fell through to GHCR, so "no zot" was a working
+  # deploy and the suite's default mode could leave zot unconfigured. After 1c there is no second
+  # registry: ZOT_ACTIVE=0 is terminal (local-cache rescue, else image_pull_failed). A harness
+  # whose default mode is zot-dark therefore models a state in which NO deploy can succeed, and
+  # every row that merely needs "a deploy ran" would assert against the failure path.
+  #
+  # Opt out with MOCK_ZOT_DARK=1 for the rows that are ABOUT the dark gate. Callers that already
+  # export MOCK_ZOT_CONFIGURED (run_deploy_zot) are unaffected: the default only fills an unset
+  # value, so an explicit 0 or 1 from a caller still wins.
+  if [[ "${MOCK_ZOT_DARK:-}" == "1" ]]; then
+    export MOCK_ZOT_CONFIGURED=0
+  elif [[ -z "${MOCK_ZOT_CONFIGURED:-}" ]]; then
+    export MOCK_ZOT_CONFIGURED=1
+  fi
   create_mock_logger "$mock_dir"
+  create_mock_getent "$mock_dir"
   create_docker_mock "$mock_dir"
   create_curl_mock "$mock_dir"
   create_mock_sudo "$mock_dir"
@@ -838,6 +1234,22 @@ create_base_mocks() {
   create_mock_df "$mock_dir"
   create_mock_doppler "$mock_dir"
   create_mock_layer3 "$mock_dir"
+  create_mock_rearm "$mock_dir"
+  # #6921 D1b: the quiesce handler captures an ACTIVE scheduler's reminders through
+  # INNGEST_REARM_CMD before it stops it. Exported by DEFAULT (deepen C4b) — AC-Q6 (unit active)
+  # now reaches the capture, and without this seam it would exec the real
+  # /usr/local/bin/inngest-rearm-reminders.sh and read quiesce_capture_failed.
+  export INNGEST_REARM_CMD="$mock_dir/inngest-rearm-reminders.sh"
+  # #8077 review: the quiesce marker, the persisted capture and the boot id are host paths
+  # (/var/lib/inngest, /proc). Every runner pins them inside its own mock dir unless the caller
+  # already did (run_inngest_row pins them OUTSIDE it, so a row can read them after the run) — a
+  # test must never read or write the runner host's /var/lib/inngest.
+  if [[ -z "${INNGEST_QUIESCE_MARKER:-}" ]]; then export INNGEST_QUIESCE_MARKER="$mock_dir/quiesced-by-op"; fi
+  if [[ -z "${INNGEST_CUTOVER_CAPTURE_FILE:-}" ]]; then export INNGEST_CUTOVER_CAPTURE_FILE="$mock_dir/cutover-capture.json"; fi
+  if [[ -z "${INNGEST_BOOT_ID_FILE:-}" ]]; then
+    printf '%s\n' "00000000-0000-4000-8000-000000000000" > "$1/boot_id"
+    export INNGEST_BOOT_ID_FILE="$mock_dir/boot_id"
+  fi
   # `if` (not `[[ … ]] && …`): create_base_mocks runs under `set -euo pipefail`, where a bare
   # `[[ false ]] && cmd` statement exits non-zero and aborts the whole suite.
   # #6665: installed by DEFAULT. MOCK_SLEEP_REAL=1 is the opt-out for a test that genuinely needs
@@ -939,7 +1351,7 @@ assert_exit_contains() {
   local actual_exit
   output=$(run_deploy "$cmd" 2>&1) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq "$expected_exit" ]] && printf '%s\n' "$output" | grep -qF "$expected_text"; then
+  if [[ "$actual_exit" -eq "$expected_exit" ]] && printf '%s\n' "$output" | grep -cF "$expected_text" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -1034,6 +1446,9 @@ assert_inngest_docker_trace() {
       export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
     fi
     export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    # #8077 D3: the default mock unit is quiesced (inactive+disabled) and the deploy arm refuses
+    # it before the pull — arm an enabled unit so this row still exercises the pull routing.
+    export MOCK_SYSTEMCTL_ENABLED_STATE=enabled
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
@@ -1043,7 +1458,7 @@ assert_inngest_docker_trace() {
 
   # The inngest branch's first observable docker call is `pull`. If we see
   # the trace marker, the branch routed correctly.
-  if printf '%s' "$output" | grep -qF "DOCKER_TRACE:pull"; then
+  if printf '%s' "$output" | grep -cF "DOCKER_TRACE:pull" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -1132,8 +1547,8 @@ assert_prune_before_pull() {
 
   # Check that DOCKER_TRACE:image appears before DOCKER_TRACE:pull in output
   local prune_line pull_line
-  prune_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:image" || true; } | head -1 | cut -d: -f1)
-  pull_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:pull" || true; } | head -1 | cut -d: -f1)
+  prune_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:image" || true; } | sed -n '1p' | cut -d: -f1)
+  pull_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:pull" || true; } | sed -n '1p' | cut -d: -f1)
 
   if [[ "$actual_exit" -eq 0 ]] && [[ -n "$prune_line" ]] && [[ -n "$pull_line" ]] && [[ "$prune_line" -lt "$pull_line" ]]; then
     PASS=$((PASS + 1))
@@ -1156,7 +1571,7 @@ assert_disk_space_rejection() {
   local output actual_exit
   output=$(export MOCK_DF_LOW=1; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "insufficient disk space"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -cF "insufficient disk space" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: low disk space rejects deploy"
   else
@@ -1344,8 +1759,8 @@ assert_pull_failure_host_id() {
   TOTAL=$((TOTAL + 1))
   local body
   body="$(awk '/^pull_failure_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
-  if printf '%s' "$body" | grep -qE -- '--arg h "\$\{HOST_ID:-\}"' \
-     && printf '%s' "$body" | grep -qE 'host_id: \$h'; then
+  if printf '%s' "$body" | grep -cE -- >/dev/null '--arg h "\$\{HOST_ID:-\}"' \
+     && printf '%s' "$body" | grep -cE 'host_id: \$h' >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: pull_failure_event threads --arg h \"\${HOST_ID:-}\" into tags.host_id (#6396)"
   else
@@ -1427,7 +1842,7 @@ assert_flock_rejection() {
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "another deploy in progress"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -cF "another deploy in progress" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: flock rejects concurrent deploy"
   else
@@ -1494,6 +1909,32 @@ run_deploy_doppler() {
         IFS="$_oldifs"
         effective_path="$MOCK_DIR:$_farm"
       fi
+    elif [[ "${MOCK_DOPPLER_DOWNLOAD_FAIL:-}" == "1" ]]; then
+      # #8036 1c: fail ONLY `secrets download`, leaving `secrets get` working.
+      #
+      # MOCK_DOPPLER_FAIL below replaces the whole binary, so it also kills `secrets get` — and
+      # after 1c that means the zot gate cannot read its URL or credential, ZOT_ACTIVE stays 0,
+      # and with no GHCR fallback the deploy dies at the PULL. `resolve_env_file` is then never
+      # reached and its three fail-closed error messages become untestable through a full deploy.
+      # This mode keeps the gate working so the rows that are ABOUT resolve_env_file still drive
+      # the code they name. The stderr text is unchanged, so the message assertions are untouched.
+      cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "secrets" && "${2:-}" == "download" ]]; then
+  echo "Doppler Error: mkdir /home/deploy/.doppler: read-only file system" >&2
+  exit 1
+fi
+if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
+  [[ -n "${MOCK_DOPPLER_GET_LOG:-}" ]] && printf '%s\n' "${3:-}" >> "$MOCK_DOPPLER_GET_LOG"
+  case "${3:-}" in
+    ZOT_REGISTRY_URL) echo "10.0.1.30:5000" ;;
+    *) echo "mock-${3}" ;;
+  esac
+  exit 0
+fi
+exit 0
+MOCK
+      chmod +x "$MOCK_DIR/doppler"
     elif [[ "${MOCK_DOPPLER_FAIL:-}" == "1" ]]; then
       cat > "$MOCK_DIR/doppler" << 'MOCK'
 #!/bin/bash
@@ -1517,58 +1958,54 @@ MOCK
   )
 }
 
-# Test: Doppler CLI not installed -> exit with error
-assert_doppler_missing() {
+# #8036 1c: the "Doppler CLI not installed" and "DOPPLER_TOKEN not set" arms of
+# `resolve_env_file` are STRUCTURALLY UNREACHABLE THROUGH A FULL DEPLOY, and both rows that
+# drove them are re-pointed here rather than left asserting an outcome that can no longer occur.
+#
+# WHY: resolve_env_file runs AFTER the pull. With zot the only registry, and its URL and
+# credential both read from Doppler, a host with no Doppler CLI (or no DOPPLER_TOKEN) cannot
+# activate the gate, and there is no GHCR fallback to carry it further — so the deploy ends at
+# `image_pull_failed` before resolve_env_file is entered. The new terminal behaviour, INCLUDING
+# that the Doppler-shaped cause is still named, is asserted behaviourally by
+# `_assert_doppler_pull_terminal` in the state-reason block below.
+#
+# WHAT SURVIVES HERE is the property those two rows were really protecting and which no
+# behavioural row can now reach: the arms are still FAIL-CLOSED. A future edit that made either
+# of them fall back to a local `.env` would be invisible to every other test in this file, and
+# that fallback is the actual hazard (`no fallback to /mnt/data/.env`, asserted just below,
+# covers the same class from the other side). This is a source-level guard, stated as one:
+# it pins that the messages and their `exit 1`s are still there, not that they still fire.
+assert_doppler_arms_still_failclosed() {
   TOTAL=$((TOTAL + 1))
-  local output actual_exit
-  output=$(
-    export MOCK_DOPPLER_MISSING=1
-    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
-  ) && actual_exit=0 || actual_exit=$?
-
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "Doppler CLI not installed"; then
+  local body bad=""
+  body="$(awk '/^resolve_env_file\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
+  [[ -n "$body" ]] || bad="${bad} resolve_env_file-not-found"
+  printf '%s' "$body" | grep -cF 'Doppler CLI not installed' >/dev/null || bad="${bad} missing-cli-message"
+  printf '%s' "$body" | grep -cF 'DOPPLER_TOKEN environment variable not set' >/dev/null || bad="${bad} missing-token-message"
+  # Fail-closed: neither arm may reach a local env file. Anchored on the redirect/source shapes,
+  # not on the bare word ".env", which the surrounding rationale comments also contain.
+  printf '%s' "$body" | grep -cE '(^|[^#]*)(\. |source )[^|]*\.env' >/dev/null && bad="${bad} sources-a-local-env"
+  if [[ -z "$bad" ]]; then
     PASS=$((PASS + 1))
-    echo "  PASS: missing doppler CLI exits with error"
+    echo "  PASS: resolve_env_file's doppler-absent and token-absent arms are present and fail-closed (source guard; unreachable through a full deploy since #8036 1c)"
   else
     FAIL=$((FAIL + 1))
-    echo "  FAIL: missing doppler CLI exits with error (exit=$actual_exit)"
-    echo "        output: $output"
+    echo "  FAIL: resolve_env_file doppler arms:${bad}"
   fi
 }
 
-assert_doppler_missing
-
-# Test: DOPPLER_TOKEN not set -> exit with error
-assert_doppler_token_missing() {
-  TOTAL=$((TOTAL + 1))
-  local output actual_exit
-  output=$(
-    export MOCK_DOPPLER_TOKEN_UNSET=1
-    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
-  ) && actual_exit=0 || actual_exit=$?
-
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "DOPPLER_TOKEN environment variable not set"; then
-    PASS=$((PASS + 1))
-    echo "  PASS: missing DOPPLER_TOKEN exits with error"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: missing DOPPLER_TOKEN exits with error (exit=$actual_exit)"
-    echo "        output: $output"
-  fi
-}
-
-assert_doppler_token_missing
+assert_doppler_arms_still_failclosed
 
 # Test: Doppler download fails -> exit with error (no .env fallback)
 assert_doppler_download_fails() {
   TOTAL=$((TOTAL + 1))
   local output actual_exit
   output=$(
-    export MOCK_DOPPLER_FAIL=1
+    export MOCK_DOPPLER_DOWNLOAD_FAIL=1
     run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "Failed to download secrets from Doppler:"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -cF "Failed to download secrets from Doppler:" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: doppler download failure exits with error"
   else
@@ -1585,11 +2022,11 @@ assert_doppler_error_logged() {
   TOTAL=$((TOTAL + 1))
   local output actual_exit
   output=$(
-    export MOCK_DOPPLER_FAIL=1
+    export MOCK_DOPPLER_DOWNLOAD_FAIL=1
     run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "read-only file system"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -cF "read-only file system" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: doppler error message included in output"
   else
@@ -1612,7 +2049,7 @@ assert_no_env_fallback() {
     run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if ! printf '%s\n' "$output" | grep -qF "/mnt/data/.env"; then
+  if ! printf '%s\n' "$output" | grep -cF "/mnt/data/.env" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: no fallback to /mnt/data/.env"
   else
@@ -1642,15 +2079,15 @@ assert_doppler_success() {
 
 assert_doppler_success
 
-# --- #5933 Item 4: image signature verify (WARN default; ENFORCE gate) ---------
-# WARN mode (default) must NEVER block a healthy deploy on a verify failure —
+# --- #5933 Item 4: image signature verify (ENFORCE default since #6129; WARN override) ---
+# WARN mode (explicit IMAGE_VERIFY_MODE=warn override) must NEVER block a healthy deploy on a verify failure —
 # these two pass IDENTICALLY with or without the gate, so the ENFORCE test below
 # is what proves the gate is actually load-bearing (WARN and ENFORCE diverge on
 # the SAME MOCK_COSIGN_VERIFY_FAIL input).
 assert_verify_warn_does_not_block() {
   TOTAL=$((TOTAL + 1))
   local output actual_exit
-  output=$(export MOCK_COSIGN_VERIFY_FAIL=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  output=$(export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
   if [[ "$actual_exit" -eq 0 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: WARN cosign verify FAIL does not block the deploy (#5933 Item 4)"
   else
@@ -1662,7 +2099,7 @@ assert_verify_warn_does_not_block
 assert_inspect_warn_does_not_block() {
   TOTAL=$((TOTAL + 1))
   local output actual_exit
-  output=$(export MOCK_INSPECT_NO_DIGEST=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  output=$(export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
   if [[ "$actual_exit" -eq 0 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: WARN inspect_failed (no RepoDigest) does not block the deploy (#5933 Item 4)"
   else
@@ -1688,6 +2125,30 @@ assert_verify_enforce_blocks() {
 }
 assert_verify_enforce_blocks
 
+# #6129: ENFORCE is the DEFAULT (no IMAGE_VERIFY_MODE set), a transient verifier-image pull failure
+# is retried ONCE and the deploy proceeds, a persistent one blocks after exactly 2 attempts, a
+# cosign-side failure is never retried, and an unknown mode value fails CLOSED.
+assert_verify_6129() {
+  local label="$1" envs="$2" want_ok="$3" want_attempts="$4" want_reason="$5"
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit sf af reason exitc attempts
+  sf=$(mktemp); af=$(mktemp)
+  output=$(unset IMAGE_VERIFY_MODE; eval "export $envs"; export MOCK_COSIGN_ATTEMPTS_FILE="$af" CI_DEPLOY_STATE="$sf"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  read_state_reason_and_exit "$sf" reason exitc
+  attempts="$(wc -l < "$af" | tr -d ' ')"
+  rm -f "$sf" "$af"
+  if { [[ "$want_ok" == 1 && "$actual_exit" -eq 0 ]] || [[ "$want_ok" == 0 && "$actual_exit" -ne 0 && "$reason" == "$want_reason" ]]; } \
+     && [[ "$attempts" == "$want_attempts" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #6129 $label (exit=$actual_exit attempts=$attempts${reason:+ reason=$reason})"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #6129 $label (exit=$actual_exit attempts=$attempts reason=$reason; want ok=$want_ok attempts=$want_attempts)"; echo "        output: $output"
+  fi
+}
+assert_verify_6129 "default mode blocks a signature failure, no retry" "MOCK_COSIGN_VERIFY_FAIL=1" 0 1 cosign_verify_failed
+assert_verify_6129 "transient verifier pull failure retried once, deploy proceeds" "MOCK_COSIGN_PULL_FAIL=once" 1 2 ""
+assert_verify_6129 "persistent verifier pull failure blocks after 2 attempts" "MOCK_COSIGN_PULL_FAIL=always" 0 2 cosign_verify_failed
+assert_verify_6129 "unknown mode value (ENFORCE) fails closed" "IMAGE_VERIFY_MODE=ENFORCE MOCK_COSIGN_VERIFY_FAIL=1" 0 1 cosign_verify_failed
+
 # --- #6005 Design B′: cosign invocation shape + SENTRY-before-verify ordering -----
 # The verify `docker run` MUST run `--network host` (host-egress .sig fetch, ADR-087),
 # mount the deploy docker config :ro (private-pull auth) and the pinned trusted root
@@ -1703,11 +2164,15 @@ assert_bprime_cosign_invocation() {
   sentry=$(grep '^SENTRY_AT_VERIFY:' "$argsfile" 2>/dev/null | head -1)
   rm -f "$argsfile"
   [[ -n "$args" ]] || ok=0
-  printf '%s' "$args" | grep -qF -- '--network host' || ok=0
-  printf '%s' "$args" | grep -qE -- '-v [^ ]+:/root/\.docker/config\.json:ro' || ok=0
-  printf '%s' "$args" | grep -qE -- '-v [^ ]+:/etc/cosign/trusted_root\.json:ro' || ok=0
-  printf '%s' "$args" | grep -qF -- '--offline' || ok=0
-  printf '%s' "$args" | grep -qF -- '--trusted-root=/etc/cosign/trusted_root.json' || ok=0
+  printf '%s' "$args" | grep -cF -- >/dev/null '--network host' || ok=0
+  # T-1a-2 (#8036 P2): the :ro mount is the DEPLOY config specifically — the anonymous CLI config
+  # the verifier-image pull now uses must never replace the credential the in-container .sig
+  # fetch authenticates with. (#8037: mounted where DOCKER_CONFIG points, never /root/.docker —
+  # see T-8037-1 below for why.)
+  printf '%s' "$args" | grep -cF -- >/dev/null "-v $DEPLOY_DOCKER_CONFIG_DIR/config.json:/cosign-docker/config.json:ro" || ok=0
+  printf '%s' "$args" | grep -cE -- >/dev/null '-v [^ ]+:/etc/cosign/trusted_root\.json:ro' || ok=0
+  printf '%s' "$args" | grep -cF -- >/dev/null '--offline' || ok=0
+  printf '%s' "$args" | grep -cF -- >/dev/null '--trusted-root=/etc/cosign/trusted_root.json' || ok=0
   # SENTRY_* set at verify time (not the UNSET sentinel) — telemetry not dark.
   [[ -n "$sentry" && "$sentry" != "SENTRY_AT_VERIFY:UNSET" ]] || ok=0
   if [[ "$ok" == "1" ]]; then
@@ -1717,6 +2182,330 @@ assert_bprime_cosign_invocation() {
   fi
 }
 assert_bprime_cosign_invocation
+
+# T-8037-1: the in-container .sig fetch must actually READ the mounted credential. The pinned
+# cosign image runs as uid 65532 (home /home/nonroot) with no HOME/DOCKER_CONFIG set, so a mount
+# at /root/.docker/config.json is never consulted (measured: a bogus credsStore there is ignored,
+# the same file at /home/nonroot/.docker is read), and the fetch goes out anonymous — zot 401,
+# `result=verify_failed` on the first post-#8456 deploy. And `docker login` writes the file 0600
+# as the deploy user, so uid 65532 cannot read it even at the right path (measured: `permission
+# denied`). The property, asserted on the ARGV rather than one spelling of it:
+#   (a) the container runs as the invoking uid:gid — the owner of the 0600 file;
+#   (b) DOCKER_CONFIG is set, exactly once, and a :ro mount of the deploy config lands at
+#       "$DOCKER_CONFIG/config.json" — derived from the argv, so the two cannot drift apart;
+#   (c) nothing is mounted under /root/.docker, there is exactly one user flag in EITHER form
+#       (-u / --user; a second would supersede the first), exactly one DOCKER_CONFIG env in any
+#       form (-e / --env / --env=), and no --env-file (which could re-point it invisibly).
+assert_cosign_reads_mounted_config() {
+  TOTAL=$((TOTAL + 1))
+  local argsfile args dc n_user n_dc ok=1 why=""
+  argsfile=$(mktemp)
+  ( export MOCK_COSIGN_ARGS_FILE="$argsfile"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
+  args=$(grep '^COSIGN_VERIFY_ARGS:' "$argsfile" 2>/dev/null | head -1)
+  rm -f "$argsfile"
+  [[ -n "$args" ]] || { ok=0; why="no verify argv captured"; }
+  n_user=$( { printf '%s' "$args" | grep -oE -- '(^| )(-u|--user)( |=)' || true; } | wc -l | tr -d ' ')
+  [[ "$n_user" == "1" ]] || { ok=0; why="$why; --user count=$n_user"; }
+  [[ " $args " == *" --user $(id -u):$(id -g) "* ]] || { ok=0; why="$why; --user is not the invoking uid:gid"; }
+  n_dc=$( { printf '%s' "$args" | grep -oE -- '(^| )(-e|--env)( |=)DOCKER_CONFIG=' || true; } | wc -l | tr -d ' ')
+  [[ "$n_dc" == "1" ]] || { ok=0; why="$why; -e DOCKER_CONFIG count=$n_dc"; }
+  dc=$(printf '%s' "$args" | sed -n 's/.*-e DOCKER_CONFIG=\([^ ]*\).*/\1/p')
+  [[ "$dc" == /* ]] || { ok=0; why="$why; DOCKER_CONFIG not absolute ($dc)"; }
+  [[ " $args " == *" -v $DEPLOY_DOCKER_CONFIG_DIR/config.json:$dc/config.json:ro "* ]] \
+    || { ok=0; why="$why; deploy config not mounted at \$DOCKER_CONFIG/config.json"; }
+  [[ "$args" != *"/root/.docker"* ]] || { ok=0; why="$why; a /root/.docker mount survives"; }
+  [[ " $args " != *" --env-file"* ]] || { ok=0; why="$why; an --env-file could re-point DOCKER_CONFIG unseen"; }
+  if [[ "$ok" == "1" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: T-8037-1 cosign runs as the config owner and DOCKER_CONFIG points at the mounted deploy config (#8037)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-8037-1 cosign would not read the mounted credential:${why}"; echo "        args: $args"
+  fi
+}
+assert_cosign_reads_mounted_config
+
+# --- #8036 1a: the cosign VERIFIER-IMAGE pull is anonymous -------------------------------------
+# The docker CLI resolves the implicit `$COSIGN_IMAGE` pull's credentials from its own
+# DOCKER_CONFIG. A dead ghcr.io inline auth in the deploy config turned the pull of a PUBLIC image
+# into a 401 (cosign_absent on every deploy). ci-deploy.sh now hands the verify run an isolated
+# anonymous `{"auths":{},"credHelpers":{"ghcr.io":""}}` config + `env -u DOCKER_AUTH_CONFIG`; the deploy config stays on the :ro mount.
+# Every canary below is synthesized (cq-test-fixtures-synthesized-only).
+COSIGN_ANON_CANARY="canary-ghcr-auth-5d2b"
+
+# The canonical fixture-dir assertion, byte-equal to the definition in
+# plugins/soleur/test/test-helpers.sh (copied, not sourced: that file also defines counters this
+# suite owns itself). plugins/soleur/test/fixture-dir-operand-assert.test.sh compares every copy
+# against that one — edit there, then re-sync here. The #8036 capture helpers below write into a
+# caller-supplied dir and call it first, so a relative or empty workdir aborts instead of writing.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+# run_cosign_anon_capture <workdir> [extra]: one full deploy with a PRIVATE deploy config dir
+# ($workdir/deploy-cfg, seeded by the caller) and both the cosign argv recorder and the journald
+# sink captured. $2 is eval'd inside the subshell (arms the failure seams). Writes the deploy rc
+# to $workdir/rc; never aborts the suite.
+run_cosign_anon_capture() {
+  local d="$1" extra="${2:-}" rc=0
+  assert_fixture_dir "$d"
+  : > "$d/cosign.args"; : > "$d/logger.txt"
+  ( export DEPLOY_DOCKER_CONFIG_DIR="$d/deploy-cfg" MOCK_COSIGN_ARGS_FILE="$d/cosign.args" \
+      MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt" MOCK_COSIGN_CANARY="$COSIGN_ANON_CANARY"
+    eval "$extra"
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" ) >"$d/out.txt" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+# seed_canary_deploy_cfg <workdir>: a deploy config holding an inline ghcr.io canary auth.
+seed_canary_deploy_cfg() {
+  mkdir -p "$1/deploy-cfg"
+  # #8036 1c: the canary is keyed on the ZOT registry, not on ghcr.io. It used to be a ghcr.io
+  # auth, and `sweep_stale_registry_auth` now DELETES exactly that key on every deploy — so by
+  # verify time the fixture had scrubbed itself and T-1a-3's positive control ("the canary IS in
+  # the deploy config, so its absence from the pull's view is a measurement") was false. The
+  # property under test is registry-agnostic: NO credential from the mounted deploy config may be
+  # visible to the anonymous verifier-image pull. Keying it on the credential that actually
+  # persists post-1c makes the control true again and tests the live case rather than a retired
+  # one. (The ghcr.io half of the hazard is still covered: the DOCKER_AUTH_CONFIG canary the
+  # caller exports alongside this one is a ghcr.io auth and must also be invisible.)
+  printf '{"auths":{"10.0.1.30:5000":{"auth":"%s"}}}\n' "$COSIGN_ANON_CANARY" > "$1/deploy-cfg/config.json"
+}
+# _anon_field <argsfile> <key>: the value of one `ANON_CFG_AT_VERIFY` key (empty if absent).
+_anon_field() {
+  grep '^ANON_CFG_AT_VERIFY:' "$1" 2>/dev/null | sed -n '1p' | tr ' :' '\n\n' | sed -n "s/^$2=//p" | sed -n '1p'
+}
+
+# T-1a-1 (P1) + T-1a-3 (the canary is not visible to the pull) — one deploy, two assertions.
+T1A_DIR="$(mktemp -d)"
+seed_canary_deploy_cfg "$T1A_DIR"
+run_cosign_anon_capture "$T1A_DIR" "export DOCKER_AUTH_CONFIG='{\"auths\":{\"ghcr.io\":{\"auth\":\"$COSIGN_ANON_CANARY\"}}}'"
+T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | sed -n '1p')"
+TOTAL=$((TOTAL + 1))
+if [[ -n "$T1A_DC" && "$T1A_DC" != "UNSET" && "$T1A_DC" == /* \
+      && "$T1A_DC" != "$T1A_DIR/deploy-cfg" && "${T1A_DC%/}" != "$T1A_DIR/deploy-cfg" \
+      && "$(_anon_field "$T1A_DIR/cosign.args" isdir)" == "1" \
+      && "$(_anon_field "$T1A_DIR/cosign.args" has_config_json)" == "1" \
+      && "$(_anon_field "$T1A_DIR/cosign.args" config_is_anon)" == "1" \
+      && "$(_anon_field "$T1A_DIR/cosign.args" auth_config_env)" == "unset" \
+      && "$(cat "$T1A_DIR/rc")" == "0" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-1 verify run gets an absolute, existing, non-deploy DOCKER_CONFIG holding exactly the anonymous config with DOCKER_AUTH_CONFIG unset (#8036 1a)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-1 anonymous verifier config (#8036 1a) rc=$(cat "$T1A_DIR/rc")"
+  sed 's/^/        /' "$T1A_DIR/cosign.args"
+fi
+TOTAL=$((TOTAL + 1))
+# Positive control on the SAME run: the canary IS in the deploy config (the :ro mount source), so
+# its absence from what the pull can read is a measurement, not an unarmed fixture.
+if grep -qF "$COSIGN_ANON_CANARY" "$T1A_DIR/deploy-cfg/config.json" \
+   && grep -qx 'CANARY_VISIBLE_AT_VERIFY:0' "$T1A_DIR/cosign.args"; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-3 neither the deploy-config ghcr.io canary nor a DOCKER_AUTH_CONFIG canary is visible to the verifier-image pull (#8036 1a)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-3 a credential canary is visible to the verifier-image pull (#8036 1a)"
+  sed 's/^/        /' "$T1A_DIR/cosign.args"
+fi
+rm -rf "$T1A_DIR"
+
+# H2 (Guard 2 must-PASS): a deploy config holding ONLY a zot auths entry (no ghcr.io key) — the
+# verify still sees the empty anonymous config, not some narrower "ghcr-only" rewrite of it.
+T1A_DIR="$(mktemp -d)"
+mkdir -p "$T1A_DIR/deploy-cfg"
+printf '{"auths":{"10.0.1.30:5000":{"auth":"%s"}}}\n' "$COSIGN_ANON_CANARY" > "$T1A_DIR/deploy-cfg/config.json"
+run_cosign_anon_capture "$T1A_DIR" ""
+TOTAL=$((TOTAL + 1))
+if [[ "$(_anon_field "$T1A_DIR/cosign.args" config_is_anon)" == "1" ]] \
+   && grep -qx 'CANARY_VISIBLE_AT_VERIFY:0' "$T1A_DIR/cosign.args" \
+   && [[ "$(cat "$T1A_DIR/rc")" == "0" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: H2 zot-only deploy config: the verify still sees the empty anonymous config (#8036 1a)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: H2 zot-only deploy config (#8036 1a)"; sed 's/^/        /' "$T1A_DIR/cosign.args"
+fi
+rm -rf "$T1A_DIR"
+
+# T-1a-4: the anonymous dir is removed after BOTH the verify-ok and the verify-fail arms. The
+# recorded path is the one the mock saw at verify time, so this is the dir actually used.
+assert_anon_dir_removed() {
+  local label="$1" extra="$2" want_rc="${3:-0}" d dc
+  TOTAL=$((TOTAL + 1))
+  d="$(mktemp -d)"
+  seed_canary_deploy_cfg "$d"
+  run_cosign_anon_capture "$d" "$extra"
+  dc="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$d/cosign.args" | sed -n '1p')"
+  if [[ -n "$dc" && "$dc" == /* && "$dc" != "$d/deploy-cfg" && ! -e "$dc" \
+        && -f "$d/deploy-cfg/config.json" && "$(cat "$d/rc")" == "$want_rc" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1a-4 anonymous verifier config dir removed after the $label arm; deploy config untouched (#8036 1a)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-4 anonymous dir after the $label arm (dc=$dc exists=$([[ -e "$dc" ]] && echo y || echo n) rc=$(cat "$d/rc"))"
+  fi
+  rm -rf "$d"
+}
+assert_anon_dir_removed "verify-ok" ""
+assert_anon_dir_removed "verify-fail" "export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1"
+# #6129: ENFORCE is the default, so its verify-fail arm (deploy exits 1) must clean up too.
+assert_anon_dir_removed "verify-fail (enforce default)" "export MOCK_COSIGN_VERIFY_FAIL=1" 1
+
+# T-1a-5a: the primary `mktemp -d` fails (the named seam, NOT a mktemp stub — ci-deploy.sh calls
+# mktemp ~20 times). The fallback dir is recreated (a PRE-SEEDED one holding a real-looking auth is
+# wiped), is not $DOCKER_CONFIG, holds exactly the anonymous config, and is removed afterwards. No
+# fail-open line: the fallback succeeded.
+T1A_DIR="$(mktemp -d)"
+seed_canary_deploy_cfg "$T1A_DIR"
+mkdir -p "$T1A_DIR/deploy-cfg/anon-cosign"
+printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$COSIGN_ANON_CANARY" > "$T1A_DIR/deploy-cfg/anon-cosign/config.json"
+run_cosign_anon_capture "$T1A_DIR" "export SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1"
+T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | sed -n '1p')"
+TOTAL=$((TOTAL + 1))
+if [[ "$T1A_DC" == "$T1A_DIR/deploy-cfg/anon-cosign" \
+      && "$(_anon_field "$T1A_DIR/cosign.args" config_is_anon)" == "1" \
+      && "$(_anon_field "$T1A_DIR/cosign.args" auth_config_env)" == "unset" ]] \
+   && grep -qx 'CANARY_VISIBLE_AT_VERIFY:0' "$T1A_DIR/cosign.args" \
+   && ! grep -qF 'anon_config=unavailable' "$T1A_DIR/logger.txt" \
+   && [[ ! -e "$T1A_DIR/deploy-cfg/anon-cosign" && -f "$T1A_DIR/deploy-cfg/config.json" && "$(cat "$T1A_DIR/rc")" == "0" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-5 mktemp failure → fallback dir recreated (pre-seeded auth wiped), not \$DOCKER_CONFIG, anonymous config, removed after (#8036 1a)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-5 fallback dir (dc=$T1A_DC rc=$(cat "$T1A_DIR/rc"))"; sed 's/^/        /' "$T1A_DIR/cosign.args"
+fi
+rm -rf "$T1A_DIR"
+
+# T-1a-5b: the fallback ALSO fails → the content check cannot pass → a LOGGED fail-open to today's
+# behaviour: `IMAGE_VERIFY_PREP: anon_config=unavailable` reaches journald, the verify still runs
+# (against the deploy config, as before #8036), and the deploy completes.
+T1A_DIR="$(mktemp -d)"
+seed_canary_deploy_cfg "$T1A_DIR"
+run_cosign_anon_capture "$T1A_DIR" "export SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=all"
+T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | sed -n '1p')"
+TOTAL=$((TOTAL + 1))
+if grep -qF 'IMAGE_VERIFY_PREP: anon_config=unavailable' "$T1A_DIR/logger.txt" \
+   && [[ "$T1A_DC" == "$T1A_DIR/deploy-cfg" && -f "$T1A_DIR/deploy-cfg/config.json" && "$(cat "$T1A_DIR/rc")" == "0" ]] \
+   && ! grep -qF 'anon_config=unavailable' "$T1A_DIR/out.txt"; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-5 content check fails → logged fail-open (anon_config=unavailable via logger only), verify still runs, deploy exits 0 (#8036 1a)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-5 fail-open (dc=$T1A_DC rc=$(cat "$T1A_DIR/rc"))"; sed 's/^/        /' "$T1A_DIR/logger.txt" | grep -F IMAGE_VERIFY || true
+fi
+rm -rf "$T1A_DIR"
+
+# T-1a-5c: the CONTENT check, driven on its own. The fallback dir is a real, absolute, non-symlink
+# directory that cannot be wiped or rewritten (0555, so the recreate fails) and still holds a
+# credential. Every structural check passes; only the byte comparison stands between the canary
+# and the verifier-image pull. As root, DAC override lets the wipe succeed, so the row is skipped.
+if [[ "$(id -u)" -ne 0 ]]; then
+  T1A_DIR="$(mktemp -d)"
+  seed_canary_deploy_cfg "$T1A_DIR"
+  mkdir -p "$T1A_DIR/deploy-cfg/anon-cosign"
+  printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$COSIGN_ANON_CANARY" > "$T1A_DIR/deploy-cfg/anon-cosign/config.json"
+  chmod 555 "$T1A_DIR/deploy-cfg/anon-cosign"
+  run_cosign_anon_capture "$T1A_DIR" "export SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1"
+  T1A_DC="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$T1A_DIR/cosign.args" | sed -n '1p')"
+  TOTAL=$((TOTAL + 1))
+  if [[ -d "$T1A_DIR/deploy-cfg/anon-cosign" && "$T1A_DC" == "$T1A_DIR/deploy-cfg" && "$(cat "$T1A_DIR/rc")" == "0" ]] \
+     && grep -qF 'IMAGE_VERIFY_PREP: anon_config=unavailable' "$T1A_DIR/logger.txt"; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1a-5c a valid dir with the WRONG content is refused (logged unavailable), never handed to the pull (#8036 1a)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-5c wrong-content anon dir (dc=$T1A_DC rc=$(cat "$T1A_DIR/rc"))"
+  fi
+  chmod -R u+rwx "$T1A_DIR" 2>/dev/null || true
+  rm -rf "$T1A_DIR"
+fi
+
+# T-1a-7: the verify `docker run` is the ONE $COSIGN_IMAGE site, and it carries `--quiet` (the cold
+# pull's "Unable to find image" line must not reach the stderr classifier) and closes FD 200 (#5062).
+T1A7_JOINED="$(awk '/^[[:space:]]*#/ { next } { line = buf $0 } /\\[[:space:]]*$/ { sub(/\\[[:space:]]*$/, "", line); buf = line " "; next } { print line; buf = "" }' "$DEPLOY_SCRIPT" \
+  | grep -F '"${verify_env[@]}" docker run ' || true)"
+TOTAL=$((TOTAL + 1))
+if [[ "$(printf '%s\n' "$T1A7_JOINED" | grep -c .)" == "1" \
+      && "$T1A7_JOINED" == *'docker run --rm --network host --quiet '* \
+      && "$T1A7_JOINED" == *' >/dev/null 2>"$err" 200>&-; then'* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-7 the one verify docker run carries --quiet and closes FD 200 (#8036 1a, #5062)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-7 verify docker run: --quiet / 200>&- missing, or not exactly one site"
+fi
+unset T1A7_JOINED
+
+# T-1a-6: verify_image_signature runs inside VERIFIED_REF="$(…)", so its stdout IS the ref the
+# deploy runs. Executed (not grepped): the function is extracted and called under the production
+# `set -euo pipefail`, against the same docker/logger mocks, on every arm — ok, verify-fail (WARN),
+# fallback dir, fail-open. Each capture must be EXACTLY the repo digest: any new stdout line
+# anywhere in the new code corrupts it.
+T1A6_DIR="$(mktemp -d)"
+mkdir -p "$T1A6_DIR/bin" "$T1A6_DIR/deploy-cfg"
+create_docker_mock "$T1A6_DIR/bin"
+create_mock_logger "$T1A6_DIR/bin"
+{
+  awk '/^_cosign_anon_cleanup\(\) \{/,/^\}/' "$DEPLOY_SCRIPT"
+  awk '/^verify_image_signature\(\) \{/,/^\}/' "$DEPLOY_SCRIPT"
+} > "$T1A6_DIR/fn.sh"
+cat > "$T1A6_DIR/harness.sh" <<'HARNESS'
+set -euo pipefail
+LOG_TAG="ci-deploy"; IMAGE_VERIFY_MODE="warn"; ZOT_REGISTRY_URL=""
+COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
+COSIGN_TRUSTED_ROOT_HOST="/nonexistent/trusted_root.json"
+COSIGN_IDENTITY_REGEXP='^x$'; COSIGN_OIDC_ISSUER='https://issuer.invalid'
+COSIGN_WORKFLOW_REF='refs/heads/main'; COSIGN_WORKFLOW_REPOSITORY='jikig-ai/soleur'
+DEPLOY_DOCKER_CONFIG_DIR="$T1A6_DIR/deploy-cfg"; export DOCKER_CONFIG="$DEPLOY_DOCKER_CONFIG_DIR"
+GHCR_DOCKER_CONFIG="$DOCKER_CONFIG/config.json"
+cosign_verify_event() { :; }
+# shellcheck source=/dev/null
+. "$T1A6_DIR/fn.sh"
+# #8609: the production call site's capture form — rc 3 is the WARN fail-open (runnable, NOT
+# verified), which the caller must be able to tell from rc 0 without aborting under set -e.
+vrc=0
+ref="$(verify_image_signature "ghcr.io/jikig-ai/soleur-web-platform:v1.0.0")" || vrc=$?
+printf '%s' "$ref" > "$T1A6_DIR/ref"
+printf '%s' "$vrc" > "$T1A6_DIR/vrc"
+HARNESS
+T1A6_WANT="ghcr.io/jikig-ai/soleur-web-platform@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+T1A6_BAD=""
+for _arm in "ok|0|" "verify-fail|3|MOCK_COSIGN_VERIFY_FAIL=1" "fallback|0|SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1" "fail-open|0|SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=all"; do
+  _name="${_arm%%|*}"; _env="${_arm#*|}"; _wvrc="${_env%%|*}"; _env="${_env#*|}"
+  rm -f "$T1A6_DIR/ref" "$T1A6_DIR/vrc"
+  _hrc=0
+  # shellcheck disable=SC2086  # _env is one NAME=value word (or empty) by construction above
+  env ${_env:+"$_env"} T1A6_DIR="$T1A6_DIR" PATH="$T1A6_DIR/bin:$TEST_PATH_BASE" \
+    bash "$T1A6_DIR/harness.sh" >/dev/null 2>&1 || _hrc=$?
+  _got="$(cat "$T1A6_DIR/ref" 2>/dev/null || true)"
+  _gvrc="$(cat "$T1A6_DIR/vrc" 2>/dev/null || true)"
+  if [[ "$_hrc" -ne 0 || "$_got" != "$T1A6_WANT" || "$_gvrc" != "$_wvrc" ]]; then T1A6_BAD="${T1A6_BAD} ${_name}(rc=${_hrc} verify_rc=${_gvrc} want=${_wvrc} ref=[${_got}])"; fi
+done
+TOTAL=$((TOTAL + 1))
+if [[ -z "$T1A6_BAD" && -s "$T1A6_DIR/fn.sh" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-6 VERIFIED_REF is exactly the repo digest on the ok / verify-fail / fallback / fail-open arms — no new stdout (#8036 1a); verify-fail alone returns 3 (#8609)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-6 VERIFIED_REF corrupted or harness aborted:${T1A6_BAD}"
+fi
+rm -rf "$T1A6_DIR"
+unset _arm _name _env _hrc _got
+
+# Guard 2 — set identity: every docker invocation in ci-deploy.sh that names $COSIGN_IMAGE is
+# the ONE verify run, and it carries the anonymous-config env prefix. Continuation lines are
+# JOINED first (the image sits on a continuation line of the `docker run`), whole-line comments
+# and the `readonly COSIGN_IMAGE=` declaration are excluded, and the remaining references are
+# counted. A second pull/run site added later is a second member and fails here until it is
+# routed through the same prefix. The one sanctioned exception, the fail-open, must be LOGGED.
+G2_JOINED="$(awk '
+  /^[[:space:]]*#/ { next }
+  { line = buf $0 }
+  /\\[[:space:]]*$/ { sub(/\\[[:space:]]*$/, "", line); buf = line " "; next }
+  { print line; buf = "" }
+' "$DEPLOY_SCRIPT")"
+G2_REFS="$(printf '%s\n' "$G2_JOINED" | grep -E '\$\{?COSIGN_IMAGE\}?' | grep -vE '^[[:space:]]*readonly[[:space:]]+COSIGN_IMAGE=' || true)"
+G2_N="$(printf '%s' "$G2_REFS" | grep -c . || true)"
+TOTAL=$((TOTAL + 1))
+# Glob matches, not `printf | grep -q`: under pipefail an early-exiting `grep -q` SIGPIPEs the
+# printf of this multi-KB string and the row flakes RED (observed once while writing it).
+if [[ "$G2_N" == "1" \
+      && "$G2_REFS" == *'"${verify_env[@]}" docker run --rm --network host'* \
+      && "$G2_JOINED" == *'verify_env+=("DOCKER_CONFIG=$anon_dir")'* \
+      && "$G2_JOINED" == *'logger -t "$LOG_TAG" "IMAGE_VERIFY_PREP: anon_config=unavailable'* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: Guard 2 set identity: exactly one \$COSIGN_IMAGE docker site, carrying the anonymous-config prefix; fail-open is logged (#8036 1a)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: Guard 2 set identity: $G2_N \$COSIGN_IMAGE site(s), or the prefix / logged fail-open is missing (#8036 1a)"
+  printf '%s\n' "$G2_REFS" | cut -c1-160 | sed 's/^/        /'
+fi
+unset G2_JOINED G2_REFS G2_N
 
 # ADR-087 rejects widening the shared container egress allowlist — ghcr.io reach is
 # confined to the ephemeral host-net verifier. Guard against a regression that adds
@@ -1733,12 +2522,14 @@ assert_no_ghcr_allowlist_widening() {
 }
 assert_no_ghcr_allowlist_widening
 
-# AC: the ENFORCE flip stays OUT OF SCOPE — the default MUST remain warn.
+# AC (#6129): the default is ENFORCE, flipped after the #6122 zot soak passed. warn is an
+# explicit override only; a revert to a warn default must red here.
 TOTAL=$((TOTAL + 1))
-if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DEPLOY_SCRIPT"; then
-  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is still 'warn' (no ENFORCE flip) (#6005)"
+if grep -qE '^IMAGE_VERIFY_MODE="\$\{IMAGE_VERIFY_MODE:-enforce\}"' "$DEPLOY_SCRIPT" \
+   && grep -qE '^case "\$IMAGE_VERIFY_MODE" in enforce\|warn\) ;; \*\) IMAGE_VERIFY_MODE=enforce ;; esac$' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is 'enforce' and an unknown value fails closed (#6129)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: IMAGE_VERIFY_MODE default must remain 'warn' — ENFORCE flip is out of scope (#6005)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: IMAGE_VERIFY_MODE default must be 'enforce' (#6129)"
 fi
 
 echo ""
@@ -1770,7 +2561,7 @@ assert_apparmor_profile() {
 
   local all_have_apparmor=true
   while IFS= read -r line; do
-    if ! printf '%s\n' "$line" | grep -qF "apparmor=soleur-bwrap"; then
+    if ! printf '%s\n' "$line" | grep -cF "apparmor=soleur-bwrap" >/dev/null; then
       all_have_apparmor=false
       break
     fi
@@ -1825,11 +2616,11 @@ assert_tmpfs_flag() {
   local any_has_noexec=false
   while IFS= read -r line; do
     # Positive: --tmpfs /tmp:<opts with size=256m>
-    if ! printf '%s\n' "$line" | grep -qE -- "--tmpfs /tmp:[^ ]*size=256m"; then
+    if ! printf '%s\n' "$line" | grep -cE -- >/dev/null "--tmpfs /tmp:[^ ]*size=256m"; then
       all_have_tmpfs=false
     fi
     # Negative: no noexec on the /tmp tmpfs argument specifically.
-    if printf '%s\n' "$line" | grep -qE -- "--tmpfs /tmp:[^ ]*noexec"; then
+    if printf '%s\n' "$line" | grep -cE -- >/dev/null "--tmpfs /tmp:[^ ]*noexec"; then
       any_has_noexec=true
     fi
   done <<< "$run_lines"
@@ -1889,7 +2680,7 @@ assert_cron_workspace_root() {
 
   local all_have_root=true
   while IFS= read -r line; do
-    if ! printf '%s\n' "$line" | grep -qF -- "-e CRON_WORKSPACE_ROOT=/workspaces"; then
+    if ! printf '%s\n' "$line" | grep -cF -- >/dev/null "-e CRON_WORKSPACE_ROOT=/workspaces"; then
       all_have_root=false
       break
     fi
@@ -1943,7 +2734,7 @@ assert_soleur_host_id() {
 
   local all_have_id=true
   while IFS= read -r line; do
-    if ! printf '%s\n' "$line" | grep -qF -- "-e SOLEUR_HOST_ID=${expected}"; then
+    if ! printf '%s\n' "$line" | grep -cF -- >/dev/null "-e SOLEUR_HOST_ID=${expected}"; then
       all_have_id=false
       break
     fi
@@ -1977,14 +2768,14 @@ if [[ -f "$HOOKS_TMPL" ]]; then
   peer_env="$(printf '%s' "$rendered" | jq -r '.[] | select(.id=="deploy-peer") | (.["pass-environment-to-command"] // [])[].envname' 2>/dev/null)"
 
   TOTAL=$((TOTAL + 1))
-  if printf '%s\n' "$deploy_env" | grep -qx "SOLEUR_DEPLOY_PEERS"; then
+  if printf '%s\n' "$deploy_env" | grep -cx "SOLEUR_DEPLOY_PEERS" >/dev/null; then
     PASS=$((PASS + 1)); echo "  PASS: /hooks/deploy passes SOLEUR_DEPLOY_PEERS (fan-out trigger)"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: /hooks/deploy is missing SOLEUR_DEPLOY_PEERS — fan-out would never fire"
   fi
 
   TOTAL=$((TOTAL + 1))
-  if printf '%s\n' "$peer_env" | grep -qx "SOLEUR_DEPLOY_PEERS"; then
+  if printf '%s\n' "$peer_env" | grep -cx "SOLEUR_DEPLOY_PEERS" >/dev/null; then
     FAIL=$((FAIL + 1)); echo "  FAIL: /hooks/deploy-peer passes SOLEUR_DEPLOY_PEERS — a forwarded deploy would RE-FAN (loop)"
   else
     PASS=$((PASS + 1)); echo "  PASS: /hooks/deploy-peer does NOT pass SOLEUR_DEPLOY_PEERS (loop-prevented)"
@@ -2006,7 +2797,7 @@ assert_bwrap_canary_check() {
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "BWRAP_CANARY_CHECK"; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -cF "BWRAP_CANARY_CHECK" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: bwrap canary sandbox check runs during deploy"
   else
@@ -2028,7 +2819,7 @@ assert_bwrap_canary_failure_rollback() {
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -ne 0 ]] && printf '%s\n' "$output" | grep -qiF "sandbox"; then
+  if [[ "$actual_exit" -ne 0 ]] && printf '%s\n' "$output" | grep -ciF "sandbox" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: bwrap canary failure triggers rollback"
   else
@@ -2309,30 +3100,59 @@ assert_state_contains "bad tag writes reason=tag_malformed" \
   "tag_malformed" "1" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform latest"
 
-# -- Doppler reason coverage (#2202) --
+# -- Doppler reason coverage (#2202), RE-ORDERED by #8036 1c --------------------------------
 # Doppler reasons require run_deploy_doppler (restricted PATH + configurable doppler mock);
 # pass it as the 6th arg to assert_state_contains.
-
-# Doppler binary absent -> reason=doppler_unavailable
-assert_state_contains "missing doppler binary writes reason=doppler_unavailable" \
-  "doppler_unavailable" "1" \
-  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "export MOCK_DOPPLER_MISSING=1" \
-  "run_deploy_doppler"
-
-# DOPPLER_TOKEN unset -> reason=doppler_token_missing
-assert_state_contains "unset DOPPLER_TOKEN writes reason=doppler_token_missing" \
-  "doppler_token_missing" "1" \
-  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "export MOCK_DOPPLER_TOKEN_UNSET=1" \
-  "run_deploy_doppler"
-
-# Doppler secrets download fails -> reason=doppler_fetch_failed
-assert_state_contains "doppler fetch failure writes reason=doppler_fetch_failed" \
-  "doppler_fetch_failed" "1" \
-  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "export MOCK_DOPPLER_FAIL=1" \
-  "run_deploy_doppler"
+#
+# THE TERMINAL REASON MOVED, AND THAT IS A REAL CONSEQUENCE OF 1c, NOT A TEST DETAIL.
+# `resolve_env_file` still classifies a Doppler failure into `doppler_unavailable` /
+# `doppler_token_missing` / `doppler_fetch_failed`, and those arms are UNCHANGED. But it runs
+# AFTER the pull, and after 1c the pull is the first thing a Doppler-less host cannot do: zot is
+# the only registry, its URL and credential come from Doppler, and there is no GHCR fallback to
+# carry the deploy to `resolve_env_file` any more. So the deploy now dies at the pull with
+# `image_pull_failed`, and the three specific reasons are UNREACHABLE on the paths that used to
+# produce them.
+#
+# That loses diagnostic specificity, so 1c pays it back where it is lost rather than accepting
+# it: the terminal `pull_failure_event` carries `ZOT_GATE_STATUS`, and `zot_gate_and_login` emits
+# a matching `ZOT_GATE_DEGRADED: reason=<measured>` journald line. The rows below assert BOTH —
+# the new terminal reason AND that the cause is still named — because asserting only
+# `image_pull_failed` would pass against a version that reports a credential problem as a bare
+# registry outage, which is the regression this pairing exists to prevent.
+#
+# (Pre-1c these read `doppler_unavailable` / `doppler_token_missing` / `doppler_fetch_failed`
+# with exit 1. The exit code is unchanged.)
+_assert_doppler_pull_terminal() {
+  local desc="$1" extra="$2" want_gate_reason="$3"
+  TOTAL=$((TOTAL + 1))
+  local sd sf out rc=0 reason exitc
+  sd=$(mktemp -d); sf="$sd/ci-deploy.state"
+  out=$(
+    eval "$extra"
+    export CI_DEPLOY_STATE="$sf"
+    export MOCK_LOGGER_CAPTURE_FILE="$sd/logger.txt"
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) || rc=$?
+  read_state_reason_and_exit "$sf" reason exitc
+  local gate_named=n
+  grep -qF "ZOT_GATE_DEGRADED: reason=${want_gate_reason}" "$sd/logger.txt" 2>/dev/null && gate_named=y
+  if [[ "$rc" -eq 1 && "$reason" == "image_pull_failed" && "$gate_named" == "y" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (rc=$rc reason=$reason gate_reason_named=$gate_named, want rc=1 / image_pull_failed / ${want_gate_reason})"
+    grep -E 'ZOT_GATE|IMAGE_PULL' "$sd/logger.txt" 2>/dev/null | sed 's/^/          /' | head -5
+  fi
+  rm -rf "$sd"
+}
+_assert_doppler_pull_terminal \
+  "missing doppler binary -> image_pull_failed, cause named no_doppler_binary (#8036 1c)" \
+  "export MOCK_DOPPLER_MISSING=1" no_doppler_binary
+_assert_doppler_pull_terminal \
+  "unset DOPPLER_TOKEN -> image_pull_failed, cause named no_doppler_token (#8036 1c)" \
+  "export MOCK_DOPPLER_TOKEN_UNSET=1" no_doppler_token
+_assert_doppler_pull_terminal \
+  "doppler fetch failure -> image_pull_failed, cause named cred_read_failed (#8036 1c)" \
+  "export MOCK_DOPPLER_FAIL=1" cred_read_failed
 
 # -- Bwrap sandbox verification failure (#2202) --
 # canary_sandbox_failed is written when `docker exec soleur-web-platform-canary bwrap ...`
@@ -2379,6 +3199,303 @@ assert_canary_sandbox_failed_state() {
 }
 
 assert_canary_sandbox_failed_state
+
+# -- #8016: the blocking bwrap probe must self-report --------------------------------
+# The 2026-09-09 v0.264.6 rollback emitted exactly one journald line:
+#   DEPLOY_ROLLBACK: bwrap sandbox non-functional in <registry>/<image>:v0.264.6
+# and nothing else. `2>&1` inside the `if !` merged the probe's stderr into the
+# script's stdout, which journald never sees, so the deploy rolled back leaving zero
+# evidence of cause. These scenarios pin the fields that make the next occurrence
+# self-diagnosing.
+#
+# Anchor discipline (cq-assert-anchor-not-bare-token): every assertion SELECTS the one
+# line containing the rollback marker and then tests fields ON THAT LINE. A bare
+# `grep -q err_chars` over the whole capture would pass on any line anywhere. A second
+# DEPLOY_ROLLBACK emitter (canary-health) lives in the same file, which is why the
+# selector is the full 'bwrap sandbox non-functional' phrase and never DEPLOY_ROLLBACK
+# alone -- and why the match count is asserted to be exactly 1 rather than head -1'd
+# (head -1 stops at the first match and makes the count assertion vacuous).
+assert_blocking_probe_line() {
+  local desc="$1" stderr_val="$2" rc_val="$3" sleep_val="$4"
+  shift 4
+  # remaining args: extended-regex field assertions applied to the SELECTED line
+  TOTAL=$((TOTAL + 1))
+
+  local d state_file logger_file output
+  d=$(mktemp -d)
+  state_file="$d/ci-deploy.state"
+  logger_file="$d/logger.txt"
+  : > "$logger_file"
+
+  output=$(
+    # These exports live INSIDE this subshell on purpose. Hoisting
+    # MOCK_LOGGER_CAPTURE_FILE to file scope contaminates the four later scenarios
+    # that arm their own capture file.
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="$stderr_val"
+    export MOCK_BWRAP_FAIL_RC="$rc_val"
+    [[ -n "$sleep_val" ]] && export MOCK_BWRAP_FAIL_SLEEP="$sleep_val"
+    [[ -n "${MOCK_BWRAP_CSTATE:-}" ]] && export MOCK_BWRAP_CSTATE
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) || true
+
+  local marker='DEPLOY_ROLLBACK: bwrap sandbox non-functional'
+  local hits line
+  hits=$(grep -cF "$marker" "$logger_file" || true)
+
+  if [[ "$hits" != "1" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (expected exactly 1 rollback line, got $hits)"
+    echo "        journald capture:"; sed 's/^/          /' "$logger_file"
+    # A zero-count here usually means the deploy aborted BEFORE the probe; without the
+    # deploy's own output there is no evidence of why (review finding, #8026).
+    echo "        deploy output (tail):"; printf '%s\n' "$output" | tail -n 25 | sed 's/^/          /'
+    rm -rf "$d"
+    return
+  fi
+
+  # `|| true`: the count assertion above guarantees exactly one match, so grep cannot
+  # exit non-zero here -- but under `set -e` a capture of a grep that CAN return 1 is
+  # the lint-shell-capture-exit S1 class, and the linter cannot see the count guard.
+  line=$(grep -F "$marker" "$logger_file" || true)
+
+  local pat failed=0
+  for pat in "$@"; do
+    if ! printf '%s' "$line" | grep -cE -- >/dev/null "$pat"; then
+      failed=1
+      echo "  (missing field pattern: $pat)"
+    fi
+  done
+
+  if [[ "$failed" == "0" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "        line: $line"
+    echo "        deploy output (tail):"; printf '%s\n' "$output" | tail -n 25 | sed 's/^/          /'
+  fi
+
+  rm -rf "$d"
+}
+
+# INSTRUMENT CONTROL -- run FIRST, because every scenario below is scored through this
+# helper. assert_blocking_probe_line decides its own pass/fail, which means it is disarmable
+# INDEPENDENTLY of pass()/fail() and of any assertion-count floor: flipping its `failed=1` to
+# `failed=0` silently voids every field anchor in four scenarios while TOTAL/PASS/FAIL still
+# reconcile exactly. Measured -- that mutant survived the whole suite. This drives the helper
+# with a pattern that CANNOT match and requires it to report failure.
+assert_probe_helper_positive_control() {
+  local _p0=$PASS _f0=$FAIL _t0=$TOTAL
+  # Output suppressed: the inner call is SUPPOSED to fail, and an unsuppressed `FAIL:` line
+  # here would be indistinguishable from a real failure to any log scanner.
+  assert_blocking_probe_line \
+    "(instrument control -- expected failure, unwound below)" \
+    "bwrap: No permissions to create new namespace" 1 "" \
+    'THIS_PATTERN_CANNOT_MATCH_ANY_ROLLBACK_LINE' >/dev/null 2>&1
+  local _fired=$(( FAIL - _f0 ))
+  # Unwind the control's own bookkeeping, then score the control itself.
+  PASS=$_p0; FAIL=$_f0; TOTAL=$_t0
+  TOTAL=$((TOTAL + 1))
+  if [[ "$_fired" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 instrument control: assert_blocking_probe_line can still FAIL"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 instrument control: the helper did NOT fail on an unmatchable pattern"
+    echo "        every #8016 field assertion below is therefore vacuous"
+  fi
+}
+assert_probe_helper_positive_control
+
+# Scenario 1 -- SPOKEN: the probe failed and said why. The message must ride the line.
+MOCK_BWRAP_CSTATE=running assert_blocking_probe_line \
+  "#8016 spoken: rc + message ride the rollback line" \
+  "bwrap: No permissions to create new namespace" 1 "" \
+  'rc=1' 'ms=[0-9]{1,3} ' 'cstate=running ' 'err_chars=[0-9]+' \
+  'bwrap_err="[^"]*No permissions to create new namespace[^"]*"$'
+
+# Scenario 2 -- SILENT: the ACTUAL production shape. Zero bytes, signalled rc.
+# This is the scenario that makes the <empty> sentinel load-bearing: without it,
+# "bwrap failed silently" and "we discarded the message" render identically, and
+# that distinction IS the diagnosis.
+# cstate is asserted HERE specifically: rc=137 with zero bytes is the exact production
+# shape, and cstate is the only field that separates "the container died" from "bwrap
+# itself failed". Asserting it anywhere else would leave that discrimination unpinned.
+MOCK_BWRAP_CSTATE=exited assert_blocking_probe_line \
+  "#8016 silent: rc=137 with zero output renders the <empty> sentinel" \
+  "" 137 "" \
+  'rc=137' 'ms=[0-9]{1,3} ' 'cstate=exited ' 'err_chars=0' 'bwrap_err="<empty>"$'
+
+# Scenario 3 -- PASS-WITH-CHATTER: rc=0 but the probe wrote to stderr. 97.6% of runs.
+# The deploy must NOT roll back, so there must be NO rollback line at all.
+assert_probe_pass_chatter_reemits() {
+  TOTAL=$((TOTAL + 1))
+  local d state_file logger_file
+  d=$(mktemp -d); state_file="$d/ci-deploy.state"; logger_file="$d/logger.txt"; : > "$logger_file"
+  local output actual_exit
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="bwrap: warning namespace fallback engaged"
+    export MOCK_BWRAP_FAIL_RC=0
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local rb; rb=$(grep -cF 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$logger_file" || true)
+  # The probe passed, so the deploy must not have rolled back for a sandbox reason,
+  # and the chatter must still have been re-emitted rather than swallowed.
+  # SANDBOX_PROBE_OK is the pass-path liveness marker: without it, "no bwrap line in
+  # journald" is ambiguous across five states, and a probe that silently stopped running is
+  # indistinguishable from a healthy fleet. Deleting it left the suite green.
+  local ok; ok=$(grep -cF 'SANDBOX_PROBE_OK' "$logger_file" || true)
+  # The OK line must carry the chatter itself as a quote-bounded, LAST bwrap_err field --
+  # `err_chars>0` alone says only THAT bwrap spoke, and the stdout copy lands untagged in
+  # the webhook leg where no literal can find it (review finding, #8026).
+  local ok_line; ok_line=$(grep -F 'SANDBOX_PROBE_OK' "$logger_file" || true)
+  local ok_err=0
+  printf '%s' "$ok_line" | grep -cE 'err_chars=[0-9]+ bwrap_err="[^"]*namespace fallback engaged"$' >/dev/null && ok_err=1
+  if [[ "$rb" == "0" ]] && [[ "$ok" == "1" ]] && [[ "$ok_err" == "1" ]] && printf '%s' "$output" | grep -cF 'namespace fallback engaged' >/dev/null; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 pass-with-chatter: no rollback, probe output re-emitted AND carried on the OK line"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 pass-with-chatter: no rollback, probe output re-emitted AND carried on the OK line"
+    echo "        rollback_lines=$rb probe_ok_markers=$ok ok_line_carries_bwrap_err=$ok_err exit=$actual_exit"
+    echo "        ok_line: $ok_line"
+    echo "        output: $output"
+  fi
+  rm -rf "$d"
+}
+assert_probe_pass_chatter_reemits
+
+# Scenario 4 -- PURITY: the security gate. The canary runs with --env-file, so the
+# production secret set lives in its Config.Env and is re-injected into EVERY
+# docker exec. Capturing the probe's stream therefore opens a path from container
+# env -> journald -> Vector -> Better Stack. Nothing secret-shaped, and no control
+# byte that could forge a second journald record, may survive to any sink.
+#
+# The token fixtures are built by CONCATENATION so no contiguous secret-shaped
+# literal exists in this source file -- GitHub Push Protection scans the diff and
+# blocks the push on a synthesized value with a real token shape, even though it is
+# entirely fake (cq-test-fixtures-synthesized-only).
+assert_probe_output_purity() {
+  TOTAL=$((TOTAL + 1))
+  local d state_file logger_file
+  d=$(mktemp -d); state_file="$d/ci-deploy.state"; logger_file="$d/logger.txt"; : > "$logger_file"
+
+  local dp_tok sk_tok jwt_tok wh_tok dirty
+  dp_tok="dp.""st.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  sk_tok="sk_""live_AAAAAAAAAAAAAAAAAAAAAAAA"
+  jwt_tok="eyJ""hbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.AAAAAAAAAAAA"
+  wh_tok="whsec_""AAAAAAAAAAAAAAAAAAAAAAAA"
+  # CR (forges a second journald record), a double quote (breaks the quoted field),
+  # a non-ASCII byte, and a leak canary that must never appear in any sink.
+  # $'...' is required for the non-ASCII leg: bash does NOT expand \x escapes inside
+  # "..." , so the previous form put the 12 literal ASCII chars `caf\xc3\xa9` in the
+  # fixture and that leg tested nothing.
+  dirty="SENTINEL_LEAK_CANARY $(printf 'a\rb') \"quoted\" "$'caf\xc3\xa9'" $dp_tok $sk_tok $jwt_tok $wh_tok"
+
+  local output
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="$dirty"
+    export MOCK_BWRAP_FAIL_RC=1
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) || true
+
+  local line problems=""
+  line=$(grep -F 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$logger_file" || true)
+
+  # Every raw token must be absent from BOTH sinks. This loop used to test only
+  # $line while its comment claimed both -- and $output IS a sink: ci-deploy runs
+  # under adnanh/webhook -v, so this script's stdout is captured and re-logged to
+  # journald under SYSLOG_IDENTIFIER=webhook, which vector.toml allowlists. That
+  # gap is exactly what let an unsanitized re-emit ship; the assertion that would
+  # have caught it was the one asserting half of what it said.
+  local t
+  for t in "$dp_tok" "$sk_tok" "$jwt_tok" "$wh_tok"; do
+    if printf '%s' "$line"   | grep -cF -- >/dev/null "$t"; then problems="$problems raw-token-in-journald"; fi
+    if printf '%s' "$output" | grep -cF -- >/dev/null "$t"; then problems="$problems raw-token-in-stdout"; fi
+  done
+  # RETENTION, not absence. The canary is ordinary diagnostic text, and preserving
+  # ordinary text is the sanitizer's JOB -- asserting its absence would demand
+  # over-redaction. Every fixture here asserts a secret is REMOVED; without this
+  # arm nothing catches _cred_err_tail becoming too aggressive and destroying the
+  # diagnostic the whole change exists to produce. Direction axis, not content.
+  if ! printf '%s' "$line" | grep -cF -- >/dev/null 'SENTINEL_LEAK_CANARY'; then
+    problems="$problems diagnostic-text-destroyed-in-journald"
+  fi
+  # A CR must not survive into the journald line -- it would forge a second record.
+  if printf '%s' "$line" | grep -c $'\r' >/dev/null; then problems="$problems CR-survived"; fi
+  # The non-ASCII leg must ASSERT something (review finding, #8026): the two bytes of `é`
+  # are blanked by `tr -c '[:print:]'` under LC_ALL=C, so no byte outside printable ASCII
+  # may reach the journald line, and the `caf` prefix must survive as ordinary text.
+  if LC_ALL=C grep -q '[^ -~]' <<<"$line"; then problems="$problems non-ascii-byte-in-journald"; fi
+  if ! printf '%s' "$line" | grep -cF 'caf ' >/dev/null; then problems="$problems non-ascii-leg-shredded-neighbour"; fi
+  # The field must remain parseable: bwrap_err is last, value carries no bare quote.
+  if ! printf '%s' "$line" | grep -cE 'bwrap_err="[^"]*"$' >/dev/null; then problems="$problems err-field-unparseable"; fi
+
+  if [[ -z "$problems" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 purity: no secret-shaped token, CR, or bare quote reaches any sink"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 purity: no secret-shaped token, CR, or bare quote reaches any sink"
+    echo "        problems:$problems"
+    echo "        line: $line"
+  fi
+  rm -rf "$d"
+}
+assert_probe_output_purity
+
+# Scenario 5 -- TRUNCATION provenance. err_chars reports the PRE-sanitization length,
+# so a 200-char field beside err_chars=4000 is visibly truncated. If err_chars were
+# computed from the sanitized value it would report 200 beside a 200-char value and
+# truncation would become permanently undetectable -- one field's provenance carries
+# the whole property.
+# The tail anchor is load-bearing twice over. `err_chars=4000` alone is computed from
+# ${#BWRAP_ERR} and so is satisfied whether truncation happened or not (raising the clamp to
+# 100000 passes) AND whether the helper keeps the head or the tail (the fixture is 4000
+# identical X, so head and tail are indistinguishable by construction). Pinning a distinct
+# TAILMARKER present + the head absent kills both mutants. The field is EXACTLY 200 chars
+# (nothing in this fixture is redactable, so sanitized length == clamp): a `{1,200}` bound let
+# a pre-clamp of 100 survive the battery, silently shrinking the diagnostic (#8026 review).
+assert_blocking_probe_line \
+  "#8016 truncation: err_chars is pre-sanitization AND the TAIL is what survives" \
+  "HEADMARKER$(printf 'X%.0s' $(seq 1 4000))TAILMARKER" 1 "" \
+  'err_chars=402[0-9]' 'bwrap_err="[^"]{200}"$' 'bwrap_err="[^"]*TAILMARKER"$'
+
+# Scenario 6 -- SLOW: without this, ms has one value across the whole set and a
+# hardcoded ms=0 would satisfy every other scenario. Bounded, never exact.
+# 2.0s, not 1.1s: the fast scenarios now bound ms at <=3 digits (<1000), so the gap between
+# fast-max and slow-min is 2x rather than touching, and no single hardcoded constant can
+# satisfy both arms. A BOUND, never a pin -- pinning a wall-clock quantity would flake.
+assert_blocking_probe_line \
+  "#8016 slow probe: ms reflects real elapsed time (>=1000)" \
+  "" 137 "2.0" \
+  'ms=[1-9][0-9]{3,}'
+
+# H4 -- the knobs must not leak into later scenarios. A hoisted export would
+# contaminate the four later scenarios that arm their own MOCK_LOGGER_CAPTURE_FILE.
+assert_probe_knobs_unset() {
+  TOTAL=$((TOTAL + 1))
+  if [[ -z "${MOCK_LOGGER_CAPTURE_FILE:-}" && -z "${MOCK_BWRAP_FAIL_STDERR:-}" \
+     && -z "${MOCK_BWRAP_FAIL_RC:-}" && -z "${MOCK_BWRAP_FAIL_SLEEP:-}" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 probe scenario knobs did not leak to file scope"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 probe scenario knobs did not leak to file scope"
+  fi
+}
+assert_probe_knobs_unset
 
 # Production container start failure (after canary passes) -> reason=production_start_failed
 assert_state_contains "production start failure writes reason=production_start_failed" \
@@ -2561,7 +3678,7 @@ assert_adr027_pre_run_assertion() {
   )
 
   if [[ "$actual_exit" -ne 0 ]] \
-    && printf '%s\n' "$output" | grep -qF "ADR-027" \
+    && printf '%s\n' "$output" | grep -cF "ADR-027" >/dev/null \
     && [[ -z "$prod_run_lines" ]]; then
     PASS=$((PASS + 1))
     echo "  PASS: leftover soleur-web-platform aborts deploy with ADR-027 message (no prod docker-run after abort)"
@@ -2727,9 +3844,12 @@ echo ""
 echo "--- Restart action ---"
 
 # AC1: restart inngest succeeds with healthy server + registered functions
+# #8077 D3: the default systemctl mock IS the quiesced shape (inactive + disabled), which the
+# restart handler now refuses — every row that expects the restart to RUN arms an enabled unit.
 assert_state_contains "restart inngest succeeds" \
   "success" "0" \
-  "restart inngest _ latest"
+  "restart inngest _ latest" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC2: restart of non-inngest component rejected
 assert_state_contains "restart web-platform rejected" \
@@ -2740,13 +3860,13 @@ assert_state_contains "restart web-platform rejected" \
 assert_state_contains "restart inngest systemctl failure" \
   "inngest_restart_failed" "1" \
   "restart inngest _ latest" \
-  "export MOCK_SYSTEMCTL_FAIL=1"
+  "export MOCK_SYSTEMCTL_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC5(b): restart with inngest health check failure
 assert_state_contains "restart inngest health failure" \
   "inngest_health_failed" "1" \
   "restart inngest _ latest" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # #4650 AC9, reframed #5159: the cron-plan check is now ADVISORY. A server that
 # is /health-healthy but whose cron triggers are de-planned (H9b) no longer FAILS
@@ -2760,7 +3880,200 @@ assert_state_contains "restart inngest health failure" \
 assert_state_contains "restart inngest succeeds when cron plan de-planned (advisory, #5159)" \
   "success" "0" \
   "restart inngest _ latest" \
-  "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1"
+  "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# --- #8077 D3: restart / deploy-inngest refuse the QUIESCED unit shape ---------------------
+# run_inngest_row <cmd> [extra_env]: one ci-deploy.sh run whose observation channels live
+# OUTSIDE the runner's self-deleting MOCK_DIR. Sets ROW_DIR (row_verdict removes it), ROW_RC,
+# ROW_OUT, ROW_REASON, ROW_EXIT, ROW_UNITV (the verb log filtered to capture + unit-state verbs,
+# comma-joined, in order). $ROW_DIR/verbs is the full log; $ROW_DIR/logger the journald capture.
+# The quiesce marker, persisted capture and boot id are pinned in $ROW_DIR (marker, capture.json,
+# boot_id) BEFORE extra_env runs, so a row can pre-seed them and read them back after the run.
+# Pass extra_env in SINGLE quotes when it names $ROW_DIR — it is eval'd inside the run subshell.
+run_inngest_row() {
+  local cmd="$1" extra_env="${2:-}"
+  ROW_DIR=$(mktemp -d)
+  printf '%s\n' "11111111-2222-4333-8444-555555555555" > "$ROW_DIR/boot_id"
+  ROW_OUT=$(
+    export INNGEST_QUIESCE_MARKER="$ROW_DIR/marker" INNGEST_CUTOVER_CAPTURE_FILE="$ROW_DIR/capture.json" INNGEST_BOOT_ID_FILE="$ROW_DIR/boot_id"
+    eval "$extra_env"
+    export CI_DEPLOY_STATE="$ROW_DIR/state" MOCK_SYSTEMCTL_LOG="$ROW_DIR/verbs" MOCK_LOGGER_CAPTURE_FILE="$ROW_DIR/logger"
+    run_deploy_traced "$cmd" 2>&1
+  ) && ROW_RC=0 || ROW_RC=$?
+  ROW_REASON=""; ROW_EXIT=""
+  if [[ -f "$ROW_DIR/state" ]]; then read_state_reason_and_exit "$ROW_DIR/state" ROW_REASON ROW_EXIT; fi
+  ROW_UNITV=""
+  if [[ -f "$ROW_DIR/verbs" ]]; then
+    ROW_UNITV=$(grep -xE 'capture|disable|stop|start|restart|enable' "$ROW_DIR/verbs" | paste -sd, - || true)
+  fi
+}
+# row_verdict <description> <ok 0|1> <detail>
+row_verdict() {
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == "1" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 — $3"
+    echo "        output: $(printf '%s' "$ROW_OUT" | tail -5)"
+  fi
+  rm -rf "$ROW_DIR"
+}
+# qs_write_marker <path> <epoch> [v]: a contract-§1 quiesce marker (the handler is the only prod
+# writer; rows seed one to model "op=quiesce-web already ran").
+qs_write_marker() {
+  printf '{"v":%s,"epoch":%s,"boot_id":"11111111-2222-4333-8444-555555555555","host_id":"h","run_id":"r","capture_sha256":"%s","capture_count":0}\n' \
+    "${3:-1}" "$2" "0000000000000000000000000000000000000000000000000000000000000000" > "$1"
+}
+
+# --- Harness self-test (#8077 review, mutation N_rowv2): the verdict helpers must still REJECT.
+# A row_verdict forced to pass turns every row below into a tautology — the panel's mutation that
+# also deleted the restart refusal's `exit 1` stayed fully green. Drive each helper that decides its
+# own verdict ONCE with a must-fail input, snapshot/restore the counters, and record the outcome
+# with a DIRECT counter write (never through the helper under test).
+RV_SNAP_P=$PASS; RV_SNAP_F=$FAIL; RV_SNAP_T=$TOTAL
+ROW_DIR=$(mktemp -d); ROW_OUT="selftest"
+row_verdict "selftest: must-fail input" 0 "selftest" >/dev/null
+RV_REJ_F=$((FAIL - RV_SNAP_F)); RV_REJ_P=$((PASS - RV_SNAP_P)); RV_REJ_DIR_GONE=0; [[ -d "$ROW_DIR" ]] || RV_REJ_DIR_GONE=1
+ROW_DIR=$(mktemp -d)
+row_verdict "selftest: must-pass input" 1 "selftest" >/dev/null
+RV_ACC_P=$((PASS - RV_SNAP_P - RV_REJ_P)); RV_ACC_F=$((FAIL - RV_SNAP_F - RV_REJ_F))
+assert_state_contains "selftest: impossible reason" "selftest_reason_that_never_exists" "1" "restart web-platform _ latest" >/dev/null
+RV_ASC_F=$((FAIL - RV_SNAP_F - RV_REJ_F - RV_ACC_F))
+assert_exit_contains "selftest: impossible text" 1 "selftest text that never appears" "restart web-platform _ latest" >/dev/null
+RV_AEC_F=$((FAIL - RV_SNAP_F - RV_REJ_F - RV_ACC_F - RV_ASC_F))
+PASS=$RV_SNAP_P; FAIL=$RV_SNAP_F; TOTAL=$RV_SNAP_T
+TOTAL=$((TOTAL + 1))
+if [[ "$RV_REJ_F" -eq 1 && "$RV_REJ_P" -eq 0 && "$RV_REJ_DIR_GONE" -eq 1 && "$RV_ACC_P" -eq 1 && "$RV_ACC_F" -eq 0 \
+      && "$RV_ASC_F" -eq 1 && "$RV_AEC_F" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: harness self-test — row_verdict / assert_state_contains / assert_exit_contains each REJECT a must-fail input (and row_verdict accepts a must-pass one)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: harness self-test — a verdict helper cannot reject (row_verdict fail=$RV_REJ_F pass=$RV_REJ_P dir_gone=$RV_REJ_DIR_GONE; accept pass=$RV_ACC_P fail=$RV_ACC_F; assert_state_contains fail=$RV_ASC_F; assert_exit_contains fail=$RV_AEC_F)"
+fi
+unset RV_SNAP_P RV_SNAP_F RV_SNAP_T RV_REJ_F RV_REJ_P RV_REJ_DIR_GONE RV_ACC_P RV_ACC_F RV_ASC_F RV_AEC_F
+
+# A marker written "now" (valid, 10 digits) — the quiesced state needs a marker newer than the
+# unit's ActiveEnterTimestamp (the mock prints none by default, which is not void).
+QS_NOW=$(date +%s)
+
+# Guard 2 #1/#4/#5: the refused rows assert the verb log EXISTS (the handler's own is-active
+# query wrote it) before asserting it carries no `restart` — an absent log would pass vacuously.
+# Default mock unit: inactive + disabled. With a valid marker → quiesced; without → unattributed.
+run_inngest_row "restart inngest _ latest" 'qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0
+if [[ "$ROW_REASON" == "inngest_quiesced_restart_refused" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 \
+      && -s "$ROW_DIR/verbs" ]] && grep -qx 'is-active' "$ROW_DIR/verbs" \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs" \
+      && grep -qF 'INNGEST_RESTART_REFUSED: state=quiesced unit=inactive enabled=disabled' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart refuses a quiesced unit (inactive+disabled+marker) → inngest_quiesced_restart_refused, no restart verb" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC verbs=$(paste -sd, "$ROW_DIR/verbs" 2>/dev/null || echo '<no log>')"
+
+run_inngest_row "restart inngest _ latest"
+ok=0
+if [[ "$ROW_REASON" == "inngest_disabled_unattributed_restart_refused" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 \
+      && -s "$ROW_DIR/verbs" ]] && grep -qx 'is-active' "$ROW_DIR/verbs" \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs" \
+      && grep -qF 'INNGEST_RESTART_REFUSED: state=disabled_unattributed unit=inactive enabled=disabled' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart refuses a disabled unit with NO marker → inngest_disabled_unattributed_restart_refused (distinct reason), no restart verb" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC verbs=$(paste -sd, "$ROW_DIR/verbs" 2>/dev/null || echo '<no log>')"
+
+# Guard 2 #9 (deepen C1): a stop that ended in SIGKILL leaves failed+disabled — still quiesced, and
+# the log names the OBSERVED unit state (failed), not a hardcoded "inactive".
+run_inngest_row "restart inngest _ latest" 'export MOCK_SYSTEMCTL_ACTIVE_STATE=failed; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0
+if [[ "$ROW_REASON" == "inngest_quiesced_restart_refused" && "$ROW_EXIT" == "1" && -s "$ROW_DIR/verbs" ]] \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs" \
+      && grep -qF 'INNGEST_RESTART_REFUSED: state=quiesced unit=failed enabled=disabled' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart refuses a failed+disabled unit (the post-SIGKILL quiesce shape) and logs unit=failed" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV"
+
+# Void rule: the unit entered active AFTER the marker epoch → the marker does not attribute it.
+run_inngest_row "restart inngest _ latest" 'export MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d @'"$((QS_NOW + 60))"')"; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0
+if [[ "$ROW_REASON" == "inngest_disabled_unattributed_restart_refused" && "$ROW_EXIT" == "1" && -s "$ROW_DIR/verbs" ]] \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs"; then ok=1; fi
+row_verdict "restart: a marker older than the unit's ActiveEnterTimestamp is void → inngest_disabled_unattributed_restart_refused" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV"
+
+# Guard 2 #3/#8/#10 + static/masked: every non-quiesced shape proceeds to its own restart verb.
+for qs_en in enabled enabled-runtime static masked not-found; do
+  run_inngest_row "restart inngest _ latest" "export MOCK_SYSTEMCTL_ENABLED_STATE=$qs_en"
+  ok=0; if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "restart" ]]; then ok=1; fi
+  row_verdict "restart proceeds on is-enabled=$qs_en + inactive (not the quiesced shape) → success" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+done
+unset qs_en
+
+# Guard 2 #2: ACTIVE + disabled is not the quiesced shape (even with a marker).
+run_inngest_row "restart inngest _ latest" 'export MOCK_SYSTEMCTL_ACTIVE=1; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0; if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "restart" ]]; then ok=1; fi
+row_verdict "restart proceeds on an ACTIVE disabled unit → success" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 2 #6 / FR14: `deploy inngest` refuses BOTH non-running disabled states BEFORE the pull — the
+# bootstrap it would run enables and restarts the unit. The logger marker is the positive control
+# that the run reached the inngest arm (a validation exit would also show no pull).
+for qs_case in "quiesced|qs_write_marker \"\$ROW_DIR/marker\" $QS_NOW" "disabled_unattributed|:"; do
+  qs_want="${qs_case%%|*}"
+  run_inngest_row "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v1.0.0" "${qs_case#*|}"
+  if [[ "$qs_want" == quiesced ]]; then qs_reason=inngest_quiesced_deploy_refused; else qs_reason=inngest_disabled_unattributed_deploy_refused; fi
+  ok=0
+  if [[ "$ROW_REASON" == "$qs_reason" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+        && ! printf '%s' "$ROW_OUT" | grep -cF 'DOCKER_TRACE:pull' >/dev/null \
+        && ! printf '%s' "$ROW_OUT" | grep -cF 'DOCKER_TRACE:create' >/dev/null \
+        && grep -qF "INNGEST_DEPLOY_REFUSED: state=$qs_want unit=inactive enabled=disabled" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+  row_verdict "deploy inngest _ <tag> refuses a $qs_want unit → $qs_reason, no DOCKER_TRACE:pull" "$ok" \
+    "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+done
+unset qs_case qs_want qs_reason
+
+# inngest_quiesce_state, driven DIRECTLY (the contract §2 tri-state): extracted from ci-deploy.sh by
+# its definition line and run against the systemctl mock. Covers the marker-validity and void rules
+# the handler rows reach only indirectly.
+QSF_BODY=$(awk '/^inngest_quiesce_state\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT")
+# qsf <expected> <description> <env...>: run the function once in a subshell with the given env.
+qsf() {
+  local want="$1" desc="$2"; shift 2
+  local qd got
+  qd=$(mktemp -d)
+  create_mock_systemctl "$qd"
+  got=$(
+    export PATH="$qd:$TEST_PATH_BASE" INNGEST_QUIESCE_MARKER="$qd/marker"
+    unset MOCK_SYSTEMCTL_FAIL
+    unset MOCK_SYSTEMCTL_ACTIVE MOCK_SYSTEMCTL_ACTIVE_STATE MOCK_SYSTEMCTL_ENABLED_STATE MOCK_SYSTEMCTL_ACTIVE_ENTER MOCK_SYSTEMCTL_STATEFUL MOCK_SYSTEMCTL_LOG
+    local kv
+    for kv in "$@"; do
+      case "$kv" in
+        MARKER=*) printf '%s' "${kv#MARKER=}" > "$qd/marker" ;;
+        MARKER_PATH=*) export INNGEST_QUIESCE_MARKER="${kv#MARKER_PATH=}" ;;
+        *) export "${kv?}" ;;
+      esac
+    done
+    eval "$QSF_BODY"
+    inngest_quiesce_state
+  ) || got="<rc=$?>"
+  rm -rf "$qd"
+  TOTAL=$((TOTAL + 1))
+  if [[ -n "$QSF_BODY" && "$got" == "$want" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: inngest_quiesce_state: $desc → $want"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: inngest_quiesce_state: $desc → expected $want, got '${got}' (body extracted: ${#QSF_BODY} bytes)"
+  fi
+}
+QSF_M="{\"v\":1,\"epoch\":$QS_NOW}"
+qsf disabled_unattributed "inactive+disabled, no marker"
+qsf quiesced "inactive+disabled + valid marker" "MARKER=$QSF_M"
+qsf quiesced "failed+disabled + valid marker" MOCK_SYSTEMCTL_ACTIVE_STATE=failed "MARKER=$QSF_M"
+qsf not_quiesced "active+disabled + valid marker" MOCK_SYSTEMCTL_ACTIVE=1 "MARKER=$QSF_M"
+qsf not_quiesced "inactive+enabled + valid marker" MOCK_SYSTEMCTL_ENABLED_STATE=enabled "MARKER=$QSF_M"
+qsf not_quiesced "inactive+static" MOCK_SYSTEMCTL_ENABLED_STATE=static
+qsf not_quiesced "inactive+not-found" MOCK_SYSTEMCTL_ENABLED_STATE=not-found
+qsf not_quiesced "activating+disabled" MOCK_SYSTEMCTL_ACTIVE_STATE=activating "MARKER=$QSF_M"
+qsf disabled_unattributed "marker v=2" "MARKER={\"v\":2,\"epoch\":$QS_NOW}"
+qsf disabled_unattributed "marker epoch is a string" "MARKER={\"v\":1,\"epoch\":\"$QS_NOW\"}"
+qsf disabled_unattributed "marker epoch 8 digits" "MARKER={\"v\":1,\"epoch\":12345678}"
+qsf disabled_unattributed "marker not JSON" "MARKER=not json"
+qsf disabled_unattributed "ActiveEnterTimestamp AFTER marker epoch (void)" "MARKER=$QSF_M" "MOCK_SYSTEMCTL_ACTIVE_ENTER=$(date -d "@$((QS_NOW + 60))")"
+qsf quiesced "ActiveEnterTimestamp BEFORE marker epoch" "MARKER=$QSF_M" "MOCK_SYSTEMCTL_ACTIVE_ENTER=$(date -d "@$((QS_NOW - 60))")"
+qsf quiesced "ActiveEnterTimestamp n/a (after a reboot — not void)" "MARKER=$QSF_M" "MOCK_SYSTEMCTL_ACTIVE_ENTER=n/a"
+unset QSF_M
 
 # #4652 AC3: the `deploy inngest` SUCCESS path must gate on verify_inngest_health
 # (the restart action already does — see the four restart tests above; the
@@ -2778,9 +4091,9 @@ assert_state_contains "restart inngest succeeds when cron plan de-planned (advis
 # That holds today; if the case arms are reordered, re-anchor these greps to the
 # deploy-inngest block (e.g. via awk between the arm's case label and `;;`).
 TOTAL=$((TOTAL + 1))
-DI_VERIFY_LINE=$(grep -nE '^[[:space:]]*verify_inngest_health[[:space:]]*$' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
-DI_SUCCESS_LINE=$(grep -nE 'SUCCESS: inngest .* deployed' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1)
-DI_FAIL_LINE=$(grep -nE 'final_write_state 1 "inngest_health_failed"' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1)
+DI_VERIFY_LINE=$(grep -nE '^[[:space:]]*verify_inngest_health[[:space:]]*$' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1) || true
+DI_SUCCESS_LINE=$(grep -nE 'SUCCESS: inngest .* deployed' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1) || true
+DI_FAIL_LINE=$(grep -nE 'final_write_state 1 "inngest_health_failed"' "$DEPLOY_SCRIPT" | tail -1 | cut -d: -f1) || true
 if [[ -n "$DI_VERIFY_LINE" && -n "$DI_SUCCESS_LINE" && -n "$DI_FAIL_LINE" \
       && "$DI_VERIFY_LINE" -lt "$DI_FAIL_LINE" && "$DI_FAIL_LINE" -lt "$DI_SUCCESS_LINE" ]]; then
   PASS=$((PASS + 1))
@@ -2798,54 +4111,161 @@ assert_state_contains "deploy inngest restart latest rejected as image_mismatch"
 
 # --- Quiesce / enable action tests (#6178 — no-SSH web-host scheduler quiesce) ---
 echo ""
-echo "--- Quiesce / enable action (#6178) ---"
+echo "--- Quiesce / enable action (#6178, #8077 review contract §6) ---"
 
-# AC-Q1: quiesce inngest succeeds → not-serving (health fails) AND not-enabled (default
-# is-enabled=disabled) → reason quiesced, exit 0. The verify is the gate.
-assert_state_contains "quiesce inngest succeeds (not-serving + not-enabled)" \
-  "quiesced" "0" \
-  "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+# AC-Q1 (re-dispatch): the unit is already in the quiesced shape (inactive + disabled + a valid
+# marker) → no capture, marker untouched, verify → quiesced, exit 0. The verify is the gate.
+run_inngest_row "quiesce inngest _ _" 'export MOCK_CURL_INNGEST_HEALTH_FAIL=1; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0; if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce inngest re-dispatch on a quiesced unit succeeds (not-serving + not-enabled + marker)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
 
 # AC-Q2: already-stopped idempotency — the sudo stop exits non-zero (absent/already-down)
 # but is TOLERATED; the verify (health down, unit disabled) still declares quiesced.
-assert_state_contains "quiesce tolerates an already-stopped/absent unit (stop non-zero)" \
-  "quiesced" "0" \
-  "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_STOP_FAIL=1"
+run_inngest_row "quiesce inngest _ _" 'export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_STOP_FAIL=1; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0; if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" ]] && grep -qF 'INNGEST_QUIESCE: stop returned non-zero' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "quiesce tolerates an already-stopped unit on re-dispatch (stop non-zero)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
 
-# AC-Q3: BENIGN disable tolerance — disable exits non-zero on a unit with NO [Install]
-# section (is-enabled → static). Tolerated → quiesced, exit 0.
-assert_state_contains "quiesce tolerates a benign disable non-zero (is-enabled=static)" \
-  "quiesced" "0" \
-  "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_DISABLE_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=static"
-
-# AC-Q4: GENUINE disable failure fail-closed (data-integrity P1-A) — disable fails AND
-# is-enabled still reports `enabled` (a unit WITH an [Install] section) → the serving-only
-# verify would MISS this; the enabled-state assertion catches it → inngest_still_enabled, exit 1.
-assert_state_contains "quiesce fails closed when the unit stays enabled (inngest_still_enabled)" \
-  "inngest_still_enabled" "1" \
-  "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_DISABLE_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
-
-# AC-Q5: still-serving fail-closed — the default mock serves /health 200 → the goal
-# state (not-serving) is unmet → inngest_still_serving, exit 1.
+# AC-Q5: still-serving fail-closed — an active enabled unit whose /health keeps answering after the
+# stop (non-stateful mock) → inngest_still_serving, exit 1.
 assert_state_contains "quiesce fails closed when inngest still serves (inngest_still_serving)" \
   "inngest_still_serving" "1" \
-  "quiesce inngest _ _"
+  "quiesce inngest _ _" \
+  "export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC-Q6: unit still ACTIVE despite /health down (arch P2-3) — a scheduler executing
 # queued jobs can outlive /health; the is-active assertion catches it → inngest_still_serving.
 assert_state_contains "quiesce fails closed when /health is down but the unit is still active" \
   "inngest_still_serving" "1" \
   "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ACTIVE=1"
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC-Q7: non-inngest component rejected (mirror component_not_restartable).
 assert_state_contains "quiesce web-platform rejected (component_not_quiescible)" \
   "component_not_quiescible" "1" \
   "quiesce web-platform _ _"
+
+# --- #6921 D1b / Guard 5 + contract §6: quiesce captures an ACTIVE scheduler BEFORE it stops it ---
+# Stateful mock: the unit starts active + ENABLED and serving; `disable` flips is-enabled to
+# disabled, `stop` flips is-active to inactive and takes /health down — so the post-stop verify and
+# the final shape check read the verbs this run issued, not a static fixture.
+QC_ENV="export MOCK_SYSTEMCTL_STATEFUL=1 MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# Guard 5 #1/#4: order capture → disable → stop, then the marker binds the capture it was taken with.
+QC_T0=$(date +%s)
+run_inngest_row "quiesce inngest _ _" "$QC_ENV"
+QC_T1=$(date +%s)
+QC_SHA=$(sha256sum "$ROW_DIR/capture.json" 2>/dev/null | awk '{print $1}' || true)
+QC_M_OK=0
+if jq -e --arg sha "$QC_SHA" --argjson t0 "$QC_T0" --argjson t1 "$QC_T1" \
+      '(keys_unsorted == ["v","epoch","boot_id","host_id","run_id","capture_sha256","capture_count"])
+       and .v == 1 and (.epoch | type) == "number" and .epoch >= $t0 and .epoch <= $t1
+       and .boot_id == "11111111-2222-4333-8444-555555555555"
+       and (.host_id | type) == "string" and (.run_id | type) == "string" and (.run_id | length) > 0
+       and ($sha | test("^[0-9a-f]{64}$")) and .capture_sha256 == $sha and .capture_count == 2' \
+      "$ROW_DIR/marker" >/dev/null 2>&1; then QC_M_OK=1; fi
+ok=0; if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "capture,disable,stop" && "$QC_M_OK" == 1 ]]; then ok=1; fi
+row_verdict "quiesce (active) captures BEFORE disable+stop and writes the marker {v,epoch,boot_id,host_id,run_id,capture_sha256==sha256(capture),capture_count}" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV marker_ok=$QC_M_OK marker=$(cat "$ROW_DIR/marker" 2>/dev/null || echo '<none>') sha=$QC_SHA"
+
+# Guard 5 #2/#5c: a failed capture stops NOTHING, writes no marker, and its cause reaches journald —
+# redacted.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_FAIL=1"
+ok=0
+if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 && "$ROW_UNITV" == "capture" && ! -e "$ROW_DIR/marker" ]] \
+      && grep -qE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=1 stderr_tail=.*enumeration failed' "$ROW_DIR/logger" 2>/dev/null \
+      && ! grep -qF 'MOCKLEAKVALUE123' "$ROW_DIR/logger"; then ok=1; fi
+row_verdict "quiesce fails closed when the capture fails (quiesce_capture_failed) and stops NOTHING" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE "$ROW_DIR/logger" 2>/dev/null | sed -n '1p')"
+
+# Capture stderr carrying a connection string is logged SCRUBBED (URI, user:pass@, password=).
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_FAIL=1 MOCK_REARM_CAPTURE_FAIL_TEXT='ERROR: capture: db down postgresql://u:Secret@h/db password=Hunter2x'"
+QC_LINE=$(grep -F 'INNGEST_QUIESCE_CAPTURE_FAILED' "$ROW_DIR/logger" 2>/dev/null | sed -n '1p' || true)
+ok=0
+if [[ "$ROW_REASON" == "quiesce_capture_failed" && -n "$QC_LINE" && "$QC_LINE" == *"db down"* && "$QC_LINE" == *"redacted"* \
+      && "$QC_LINE" != *Secret* && "$QC_LINE" != *postgresql://* && "$QC_LINE" != *Hunter2x* ]] \
+      && ! grep -qF 'Secret' "$ROW_DIR/logger"; then ok=1; fi
+row_verdict "quiesce capture stderr with postgresql://u:Secret@h/db is scrubbed before journald" "$ok" \
+  "reason=$ROW_REASON line=$QC_LINE"
+
+# Guard 5 #5b: the capture is bounded. The mock blocks 8 s against a 1 s bound; asserted as
+# non-zero (not exactly 124 — dev boxes may carry uutils timeout) and nothing stopped.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_SLEEP=8 QUIESCE_CAPTURE_TIMEOUT=1"
+QC_RC=$(grep -oE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=[0-9]+' "$ROW_DIR/logger" 2>/dev/null | sed -n '1p' | grep -oE '[0-9]+$' || true)
+ok=0
+if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_EXIT" == "1" && "$ROW_UNITV" == "capture" \
+      && "$QC_RC" =~ ^[0-9]+$ && "$QC_RC" -ne 0 ]]; then ok=1; fi
+row_verdict "quiesce capture is bounded (QUIESCE_CAPTURE_TIMEOUT) → quiesce_capture_failed, nothing stopped" "$ok" \
+  "reason=$ROW_REASON capture_rc=${QC_RC:-<none>} unit_verbs=$ROW_UNITV"
+
+# A capture that exits 0 but persists no capture file cannot be hashed into a marker → failed capture.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_NOFILE=1"
+ok=0; if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_UNITV" == "capture" && ! -e "$ROW_DIR/marker" ]]; then ok=1; fi
+row_verdict "quiesce refuses a capture that persisted no file (quiesce_capture_failed, nothing stopped)" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 5 #7: an empty capture (captured:0) is a capture — quiesce proceeds, marker count 0.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_EMPTY=1"
+ok=0
+if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "capture,disable,stop" ]] \
+      && jq -e '.capture_count == 0' "$ROW_DIR/marker" >/dev/null 2>&1; then ok=1; fi
+row_verdict "quiesce proceeds on an empty capture (captured:0, marker capture_count=0)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Marker write failure → quiesce_marker_write_failed, NOTHING stopped. The marker's parent is a
+# regular file, so mktemp in it fails even as root.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV"'; : > "$ROW_DIR/notadir"; export INNGEST_QUIESCE_MARKER="$ROW_DIR/notadir/marker"'
+ok=0
+if [[ "$ROW_REASON" == "quiesce_marker_write_failed" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 && "$ROW_UNITV" == "capture" ]] \
+      && [[ -z "$(find "$ROW_DIR" -maxdepth 1 -name 'notadir.*' -print -quit)" ]]; then ok=1; fi
+row_verdict "quiesce: marker write failure → quiesce_marker_write_failed, no disable/stop" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV"
+
+# Re-dispatch on a quiesced unit: no capture, and the marker is left BYTE-IDENTICAL (epoch must not move).
+run_inngest_row "quiesce inngest _ _" 'export MOCK_SYSTEMCTL_STATEFUL=1; qs_write_marker "$ROW_DIR/marker" 1700000000; cp "$ROW_DIR/marker" "$ROW_DIR/marker.before"'
+ok=0
+if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && -s "$ROW_DIR/verbs" && "$ROW_UNITV" == "disable,stop" ]] \
+      && cmp -s "$ROW_DIR/marker" "$ROW_DIR/marker.before" && jq -e '.epoch == 1700000000' "$ROW_DIR/marker" >/dev/null 2>&1; then ok=1; fi
+row_verdict "quiesce re-dispatch on a quiesced unit: no capture, marker untouched (epoch unchanged) → quiesced" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV marker=$(cat "$ROW_DIR/marker" 2>/dev/null || echo '<none>')"
+
+# Absent unit (web-2: is-enabled not-found, inactive): no capture, no marker → verify/fan-out → quiesced.
+run_inngest_row "quiesce inngest _ _" "export MOCK_SYSTEMCTL_STATEFUL=1 MOCK_SYSTEMCTL_ENABLED_STATE=not-found"
+ok=0
+if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && -s "$ROW_DIR/verbs" && "$ROW_UNITV" != *capture* && ! -e "$ROW_DIR/marker" ]]; then ok=1; fi
+row_verdict "quiesce on an absent unit (not-found + inactive) succeeds with no capture and no marker" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV marker_present=$([[ -e "$ROW_DIR/marker" ]] && echo yes || echo no)"
+
+# Capture gate DIRECTION (contract §6): every non-capturable shape refuses BEFORE any disable/stop.
+for qc_case in "failed|enabled|export MOCK_SYSTEMCTL_ACTIVE_STATE=failed MOCK_SYSTEMCTL_ENABLED_STATE=enabled" \
+               "activating|disabled|export MOCK_SYSTEMCTL_ACTIVE_STATE=activating" \
+               "deactivating|enabled|export MOCK_SYSTEMCTL_ACTIVE_STATE=deactivating MOCK_SYSTEMCTL_ENABLED_STATE=enabled" \
+               "inactive|enabled|export MOCK_SYSTEMCTL_ENABLED_STATE=enabled" \
+               "inactive|static|export MOCK_SYSTEMCTL_ENABLED_STATE=static" \
+               "inactive|disabled|:"; do
+  qc_a="${qc_case%%|*}"; qc_rest="${qc_case#*|}"; qc_e="${qc_rest%%|*}"; qc_env="${qc_rest#*|}"
+  run_inngest_row "quiesce inngest _ _" "$qc_env"
+  qc_st=not_quiesced; if [[ "$qc_a|$qc_e" == "inactive|disabled" ]]; then qc_st=disabled_unattributed; fi
+  ok=0
+  if [[ "$ROW_REASON" == "quiesce_capture_unavailable" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 && -s "$ROW_DIR/verbs" && -z "$ROW_UNITV" && ! -e "$ROW_DIR/marker" ]] \
+        && grep -qF "INNGEST_QUIESCE_CAPTURE_UNAVAILABLE unit=$qc_a enabled=$qc_e state=$qc_st" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+  row_verdict "quiesce on $qc_a+$qc_e ($qc_st) → quiesce_capture_unavailable, no capture/disable/stop" "$ok" \
+    "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE_UNAVAILABLE "$ROW_DIR/logger" 2>/dev/null | sed -n '1p')"
+done
+unset qc_case qc_a qc_rest qc_e qc_env qc_st
+
+# AC-Q4: GENUINE disable failure fail-closed (data-integrity P1-A) — disable fails AND is-enabled
+# still reports `enabled` → the enabled-state assertion catches it → inngest_still_enabled, exit 1.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_SYSTEMCTL_DISABLE_FAIL=1"
+ok=0; if [[ "$ROW_REASON" == "inngest_still_enabled" && "$ROW_EXIT" == "1" && "$ROW_UNITV" == "capture,disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce fails closed when the unit stays enabled (inngest_still_enabled)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# AC-Q3 → contract §6 final shape: an active no-[Install] unit (is-enabled=static, disable non-zero)
+# passes verify_inngest_quiesced (static cannot auto-start) but is NOT the shape any reader
+# recognises → quiesced_shape_unrecognized, not `quiesced`.
+run_inngest_row "quiesce inngest _ _" "export MOCK_SYSTEMCTL_STATEFUL=1 MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ENABLED_STATE=static MOCK_SYSTEMCTL_DISABLE_FAIL=1"
+ok=0; if [[ "$ROW_REASON" == "quiesced_shape_unrecognized" && "$ROW_EXIT" == "1" && "$ROW_UNITV" == "capture,disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce of a static (no-[Install]) unit verifies not-serving but ends quiesced_shape_unrecognized" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+unset QC_ENV QC_RC QC_T0 QC_T1 QC_SHA QC_M_OK QC_LINE
 
 # AC-E1: enable inngest = enable + start + verify-serving-and-enabled → enabled, exit 0.
 # Default mock: /health 200 (serving); is-enabled=enabled (re-enable confirmed).
@@ -2889,12 +4309,62 @@ assert_state_contains "enable web-platform rejected (component_not_enableable)" 
   "component_not_enableable" "1" \
   "enable web-platform _ _"
 
+# Contract §6 enable: the capture is RETIRED (mv to .retired-<epoch>) and the marker REMOVED before
+# enable/start. The mock's watch lines record both paths' existence AT the enable verb.
+run_inngest_row "enable inngest _ _" 'export MOCK_SYSTEMCTL_ENABLED_STATE=enabled MOCK_SYSTEMCTL_WATCH="$ROW_DIR/marker $ROW_DIR/capture.json"; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"'; printf "[]" > "$ROW_DIR/capture.json"'
+QE_SEQ=$(grep -E '^(enable|start|watch:.*)$' "$ROW_DIR/verbs" 2>/dev/null | paste -sd, - || true)
+QE_RETIRED=$(find "$ROW_DIR" -maxdepth 1 -name 'capture.json.retired-*' -print 2>/dev/null | sed -n '1p')
+ok=0
+if [[ "$ROW_REASON" == "enabled" && "$ROW_EXIT" == "0" \
+      && "$QE_SEQ" == "enable,watch:marker=absent,watch:capture.json=absent,start,watch:marker=absent,watch:capture.json=absent" \
+      && -n "$QE_RETIRED" && "$QE_RETIRED" =~ \.retired-[0-9]{9,11}$ && ! -e "$ROW_DIR/marker" && ! -e "$ROW_DIR/capture.json" ]] \
+      && grep -qF "INNGEST_ENABLE: retired capture=$QE_RETIRED marker_removed=true" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "enable retires the capture and removes the marker BEFORE enable/start (logged)" "$ok" \
+  "reason=$ROW_REASON seq=$QE_SEQ retired=${QE_RETIRED:-<none>} logger=$(grep -F INNGEST_ENABLE "$ROW_DIR/logger" 2>/dev/null | sed -n '1p')"
+
+# Nothing to retire → capture=none marker_removed=false.
+run_inngest_row "enable inngest _ _" "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+ok=0
+if [[ "$ROW_REASON" == "enabled" ]] && grep -qF "INNGEST_ENABLE: retired capture=none marker_removed=false" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "enable with no capture/marker logs capture=none marker_removed=false" "$ok" "reason=$ROW_REASON"
+
+# A FAILED enable after the retire leaves inactive + disabled with no marker — which the tri-state
+# must read as disabled_unattributed (the retire is not undone; op=rollback is re-dispatched).
+QE_MARKER_AFTER=present
+run_inngest_row "enable inngest _ _" 'export MOCK_SYSTEMCTL_ENABLE_FAIL=1; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"'; printf "[]" > "$ROW_DIR/capture.json"'
+if [[ ! -e "$ROW_DIR/marker" ]]; then QE_MARKER_AFTER=absent; fi
+QE_REASON="$ROW_REASON"
+# The tri-state read against THIS row's marker path, before row_verdict removes $ROW_DIR.
+qsf disabled_unattributed "after a failed enable (inactive+disabled, the row's marker path retired)" "MARKER_PATH=$ROW_DIR/marker"
+ok=0; if [[ "$ROW_REASON" == "inngest_enable_failed" && "$ROW_UNITV" == "enable" && "$QE_MARKER_AFTER" == absent ]]; then ok=1; fi
+row_verdict "enable failure after the retire: inngest_enable_failed with the marker already removed" "$ok" "reason=$QE_REASON unit_verbs=$ROW_UNITV marker=$QE_MARKER_AFTER"
+unset QE_SEQ QE_RETIRED QE_MARKER_AFTER QE_REASON
+
+# Contract §6 web-platform deploy health hint: a down inngest on a quiesced/disabled unit must NOT
+# suggest restart-inngest-server.yml (the restart handler refuses exactly that shape).
+for wh_case in "quiesced|qs_write_marker \"\$ROW_DIR/marker\" $QS_NOW" "disabled_unattributed|:" "not_quiesced|export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"; do
+  wh_st="${wh_case%%|*}"
+  run_inngest_row "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" "export MOCK_CURL_INNGEST_HEALTH_FAIL=1; ${wh_case#*|}"
+  ok=0
+  if [[ "$wh_st" == not_quiesced ]]; then
+    if [[ "$ROW_EXIT" == "0" ]] && grep -qF 'INNGEST_WARN: inngest-server not reachable after deploy' "$ROW_DIR/logger" 2>/dev/null \
+          && ! grep -qF 'INNGEST_HEALTH_CHECK: quiesced' "$ROW_DIR/logger"; then ok=1; fi
+  else
+    if [[ "$ROW_EXIT" == "0" ]] && grep -qF "INNGEST_HEALTH_CHECK: quiesced ($wh_st) — no restart hint" "$ROW_DIR/logger" 2>/dev/null \
+          && ! grep -qF 'restart-inngest-server.yml' "$ROW_DIR/logger"; then ok=1; fi
+  fi
+  row_verdict "web-platform deploy with inngest down on a $wh_st unit → $([[ "$wh_st" == not_quiesced ]] && echo 'restart hint' || echo 'no restart hint')" "$ok" \
+    "reason=$ROW_REASON exit=$ROW_EXIT logger=$(grep -E 'INNGEST_(WARN|HEALTH_CHECK)' "$ROW_DIR/logger" 2>/dev/null | head -2 | paste -sd'|' -)"
+done
+unset wh_case wh_st
+
 # AC-Q8: PESSIMISTIC not-serving (all probes must fail) — a return-on-first-failure impl
 # would falsely read quiesced. Bespoke: use a REAL multi-count seq (the shared mock returns
 # only "1") so the verify loop runs >1 probe; health FAILS on probe 1 then SERVES on probe 2.
 # The correct all-probes-must-fail impl continues past the probe-1 failure, sees the probe-2
 # serve, and declares still-serving. A naive early-return-on-first-failure would wrongly
-# declare quiesced after probe 1.
+# declare quiesced after probe 1 (the unit is the re-dispatch shape: inactive + disabled + marker,
+# so nothing else in the handler would stop it short of `quiesced`).
 run_quiesce_pessimism() {
   (
     export SSH_ORIGINAL_COMMAND="quiesce inngest _ _"
@@ -2904,6 +4374,8 @@ run_quiesce_pessimism() {
     export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
     export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
     export CI_DEPLOY_STATE="$1"
+    export INNGEST_QUIESCE_MARKER="$MOCK_DIR/quiesced-by-op"
+    qs_write_marker "$INNGEST_QUIESCE_MARKER" "$QS_NOW"
     create_base_mocks "$MOCK_DIR"
     rm -f "$MOCK_DIR/seq"   # use the REAL multi-count seq, not the single-"1" mock
     # Small probe budget so the real multi-iteration loop stays fast.
@@ -2943,14 +4415,14 @@ RESTART_BLOCK=$(awk '/^# --- Restart action handler/,/^# --- Quiesce action hand
 # non-empty AND containing the restart handler's own `systemctl restart` — before trusting
 # the enable/disable-absence assertion.
 TOTAL=$((TOTAL + 1))
-if [[ -n "$RESTART_BLOCK" ]] && printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl restart'; then
+if [[ -n "$RESTART_BLOCK" ]] && printf '%s\n' "$RESTART_BLOCK" | grep -cE 'systemctl restart' >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: restart-purity guard captured a non-empty block containing 'systemctl restart' (awk range not vacuous)"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: restart-purity awk range captured empty/wrong block (marker renamed?) — the purity grep would pass vacuously"
 fi
-if ! printf '%s\n' "$RESTART_BLOCK" | grep -qE 'systemctl (enable|disable)'; then
+if ! printf '%s\n' "$RESTART_BLOCK" | grep -cE 'systemctl (enable|disable)' >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: restart handler stays pure (no enable/disable folded in) — #6178 regression guard"
 else
@@ -3031,30 +4503,33 @@ assert_zot_primary() {
 }
 assert_zot_primary
 
-# T-ZOT-2: zot live + zot pull FAILS → ATOMIC fallback pulls GHCR; cosign follows the
-# GHCR RepoDigest with NO insecure flag (image + auth + sig move together).
-assert_zot_fallback() {
+# T-ZOT-2, REWRITTEN for #8036 1c: zot live + zot pull FAILS -> THERE IS NO FALLBACK. The row it
+# replaces asserted the atomic GHCR fallback pull; that branch is deleted, so its PASS condition
+# is now a statement that the retirement did not happen. The inverse is the property worth
+# holding, and it is the one that would catch the branch coming back.
+assert_zot_no_fallback() {
   TOTAL=$((TOTAL + 1))
   local pf cf; pf=$(mktemp); cf=$(mktemp)
   run_deploy_zot "$pf" "$cf" "export MOCK_ZOT_PULL_FAIL=1"
   if grep -q '^PULL:10.0.1.30:5000/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
-     && grep -q '^PULL:ghcr.io/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
-     && ! grep -q -- '--allow-insecure-registry' "$cf" \
-     && grep -q -- '--trusted-root=/etc/cosign/trusted_root.json' "$cf" \
-     && grep -q -- '--certificate-identity-regexp' "$cf"; then
-    PASS=$((PASS + 1)); echo "  PASS: zot pull failure → atomic GHCR fallback, no insecure flag, unchanged trust root/identity (Phase 4)"
+     && ! grep -q '^PULL:ghcr.io/' "$pf"; then
+    PASS=$((PASS + 1)); echo "  PASS: T-ZOT-2 a failed zot pull attempts NO ghcr.io pull -- the atomic fallback is retired (#8036 1c)"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: zot fallback (pulls=[$(tr '\n' ' ' < "$pf")])"
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-ZOT-2 a ghcr.io pull was attempted after a zot miss (pulls=[$(tr '\n' ' ' < "$pf")])"
   fi
   rm -f "$pf" "$cf"
 }
-assert_zot_fallback
+assert_zot_no_fallback
 
-# T-ZOT-3: zot DARK (default, unconfigured) → single GHCR pull, zot never attempted
-# (strict no-op — the merge-time dark state until the operator provisions + backfills).
-assert_zot_dark() {
+# T-ZOT-3, REWRITTEN for #8036 1c: zot DARK is now a TERMINAL state, not a fall-through. The row
+# it replaces asserted "single GHCR pull, zot never attempted"; with no second registry the
+# correct outcome is zero pulls of any kind past the gate, image_pull_failed, and the OLD
+# container still live. MOCK_ZOT_DARK=1 is the explicit opt-out from the harness's new
+# zot-armed default -- this row is ABOUT the dark gate, so it must set it rather than rely on
+# an unset variable, which is what the default now fills.
+assert_zot_dark_is_terminal() {
   TOTAL=$((TOTAL + 1))
-  local pf; pf=$(mktemp)
+  local pf st; pf=$(mktemp); st=$(mktemp -u)
   (
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
     MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
@@ -3062,23 +4537,25 @@ assert_zot_dark() {
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
     export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
-    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    export CI_DEPLOY_STATE="$st"
     export MOCK_PULL_ARGS_FILE="$pf"
+    export MOCK_ZOT_DARK=1
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
     export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
     bash "$DEPLOY_SCRIPT" >/dev/null 2>&1 || true
   )
-  if grep -q '^PULL:ghcr.io/jikig-ai/soleur-web-platform:v1.0.0$' "$pf" \
-     && ! grep -q '^PULL:10.0.1.30:5000' "$pf"; then
-    PASS=$((PASS + 1)); echo "  PASS: zot dark (unconfigured) → single GHCR pull, zot never attempted"
+  local zd_reason zd_exit
+  read_state_reason_and_exit "$st" zd_reason zd_exit
+  if ! grep -q '^PULL:' "$pf" && [[ "$zd_reason" == "image_pull_failed" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: T-ZOT-3 zot dark is terminal -- zero pulls of any registry, image_pull_failed, old container live (#8036 1c)"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: zot dark (pulls=[$(tr '\n' ' ' < "$pf")])"
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-ZOT-3 zot dark (reason=$zd_reason pulls=[$(tr '\n' ' ' < "$pf")])"
   fi
-  rm -f "$pf"
+  rm -f "$pf" "$st"
 }
-assert_zot_dark
+assert_zot_dark_is_terminal
 
 # --- #6122 Phase 4: cosign continuity (trust anchor unchanged) ---
 # The zot migration must NOT alter the cosign trust anchor (ADR-096 G3 / task 4.2). Assert
@@ -3087,7 +4564,7 @@ assert_zot_dark
 # CONDITIONALLY added on the zot branch (proven by T-ZOT-1/T-ZOT-2 above, which also assert
 # the trusted-root + identity flags ride BOTH the zot and the GHCR-fallback branch = 4.1).
 TOTAL=$((TOTAL + 1))
-if grep -qF 'ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$DEPLOY_SCRIPT" \
+if grep -qF 'gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$DEPLOY_SCRIPT" \
    && grep -qF 'verify --offline' "$DEPLOY_SCRIPT" \
    && grep -qF -- '--trusted-root=/etc/cosign/trusted_root.json' "$DEPLOY_SCRIPT" \
    && grep -qF 'reusable-release' "$DEPLOY_SCRIPT"; then
@@ -3095,6 +4572,67 @@ if grep -qF 'ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31b
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: cosign trust anchor drifted (Phase 4 continuity)"
 fi
+
+# --- #8714 5.3b-iii: the verifier image is NOT pulled from ghcr.io ---------------------------------
+# The ONE `readonly COSIGN_IMAGE=` line (column 0, so a comment naming a ref cannot satisfy it) must
+# name a non-ghcr.io registry and carry EXACTLY the v3.1.1 digest the trust anchor was verified
+# against: the registry moved, the bytes did not. A digest bump is a deliberate edit to this row.
+TOTAL=$((TOTAL + 1))
+T8714_DECL="$(grep -E '^readonly COSIGN_IMAGE=' "$DEPLOY_SCRIPT" || true)"
+T8714_REF="$(printf '%s' "$T8714_DECL" | sed -n 's/^readonly COSIGN_IMAGE="\([^"]*\)".*$/\1/p')"
+if [[ "$(printf '%s' "$T8714_DECL" | grep -c . || true)" == 1 \
+      && "$T8714_REF" == */*@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870 \
+      && "$T8714_REF" != ghcr.io/* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-8714-1 COSIGN_IMAGE is off ghcr.io and pinned to the unchanged v3.1.1 digest (#8714 5.3b-iii)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-8714-1 COSIGN_IMAGE declaration is on ghcr.io, not the v3.1.1 digest, or not exactly one line: [$T8714_DECL]"
+fi
+
+# T-8714-2: a failed verifier-image PULL classifies as cosign_absent, not verify_failed. The classifier
+# is the if/elif chain in verify_image_signature, executed here on its real bytes against a stderr file
+# per case. The positive cases are docker 29.7.2's MEASURED pull-error shape (the digest repeated twice,
+# so the prefix falls outside the last 400 bytes) — one keyword per case. The negatives are the shapes a
+# weaker implementation would mislabel: a daemon error that is NOT a pull failure, and a cosign-side
+# error quoting a daemon-looking message from a hostile registry.
+T8714_CHAIN="$(awk '/^  local result="verify_failed" tail$/{f=1} f{print} f&&/^  fi$/{exit}' "$DEPLOY_SCRIPT")"
+T8714_BAD=""
+T8714_N=0
+_ref='gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870'
+_pre="docker: Error response from daemon: failed to resolve reference \\\"$_ref\\\": failed to do request: Head \\\"https://gcr.io/v2/projectsigstore/cosign/manifests/sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870\\\": "
+_run="\\nRun 'docker run --help' for more information\\n"
+if [[ "$(printf '%s\n' "$T8714_CHAIN" | grep -c 'result="cosign_absent"' || true)" -lt 2 ]]; then
+  T8714_BAD=" chain-not-extracted"
+else
+  while IFS='|' read -r _want _tail; do
+    [[ -n "$_want" ]] || continue
+    _err="$(mktemp)"; printf '%b' "$_tail" > "$_err"
+    _got="$(err="$_err" bash -c "set -uo pipefail; f() { $T8714_CHAIN
+      printf '%s' \"\$result\"; }; f" 2>/dev/null || true)"
+    rm -f "$_err"; T8714_N=$((T8714_N + 1))
+    [[ "$_got" == "$_want" ]] || T8714_BAD="${T8714_BAD} [${_tail:0:70}]->${_got:-<none>}(want ${_want})"
+  done <<CASES
+cosign_absent|${_pre}lookup gcr.io on 127.0.0.53:53: no such host${_run}
+cosign_absent|${_pre}GET https://gcr.io/v2/token: toomanyrequests: rate exceeded${_run}
+cosign_absent|${_pre}net/http: TLS handshake timeout${_run}
+cosign_absent|${_pre}read tcp 10.0.0.2:4420->142.250.0.1:443: i/o timeout${_run}
+cosign_absent|${_pre}net/http: request canceled (Client.Timeout exceeded while awaiting headers)${_run}
+cosign_absent|${_pre}connect: connection refused (dial tcp 142.250.0.1:443)${_run}
+cosign_absent|${_pre}received unexpected HTTP status: 503 Service Unavailable${_run}
+cosign_absent|${_pre}read tcp 10.0.0.2:4420->142.250.0.1:443: read: connection reset by peer${_run}
+cosign_absent|${_pre}context deadline exceeded${_run}
+cosign_absent|Unable to find image '${_ref}' locally
+unsigned|Error: no matching signatures: no signatures found
+verify_failed|docker: Error response from daemon: failed to create task: OCI runtime create failed: mount /etc/cosign/trusted_root.json: no such file or directory${_run}
+verify_failed|Error: GET http://10.0.1.30:5000/v2/: Error response from daemon: dial tcp 10.0.1.30:5000: connect: connection refused
+CASES
+fi
+TOTAL=$((TOTAL + 1))
+if [[ -z "$T8714_BAD" && "$T8714_N" -eq 13 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-8714-2 a verifier pull failure (DNS/429/5xx/TLS/i-o/reset/timeout/deadline/dial) is cosign_absent; a non-pull daemon error and a registry-quoted daemon message stay verify_failed"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-8714-2 classifier (cases run=$T8714_N of 13):${T8714_BAD}"
+fi
+unset T8714_DECL T8714_REF T8714_CHAIN T8714_BAD T8714_N _want _tail _got _err _ref _pre _run
 
 # #6665: the two properties the inverted sleep-mock default rests on (see create_mock_sleep's
 # header). Both are one-token edits away, so per ADR-139 they are pinned mechanically rather than
@@ -3177,9 +4715,9 @@ echo "--- verify_inngest_health cron-plan budget (#5145) ---"
 TOTAL=$((TOTAL + 1))
 CRON_PIN_COUNT=$(grep -cE '^[[:space:]]*local cron_max_attempts=10\b' "$DEPLOY_SCRIPT" || true)
 CRON_SEQ_COUNT=$(grep -cE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" || true)
-HEALTH_SEQ_LINE=$(grep -nE 'seq 1 "\$max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
-CRON_SEQ_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
-FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 .*http://127\.0\.0\.1:8288/v0/gql' "$DEPLOY_SCRIPT" | head -1 | cut -d: -f1 || true)
+HEALTH_SEQ_LINE=$(grep -nE 'seq 1 "\$max_attempts"' "$DEPLOY_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
+CRON_SEQ_LINE=$(grep -nE 'seq 1 "\$cron_max_attempts"' "$DEPLOY_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
+FUNCTIONS_CURL_LINE=$(grep -nE 'curl -sf --max-time 5 .*http://127\.0\.0\.1:8288/v0/gql' "$DEPLOY_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
 # Probe pin scoped to the function region — a third `curl -sf --max-time 5`
 # exists outside verify_inngest_health (the deploy-arm web-platform health
 # probe), so a file-global count would be wrong.
@@ -3217,13 +4755,13 @@ RESTART_WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/restart-inngest-server.
 BOOTSTRAP_SCRIPT="$SCRIPT_DIR/inngest-bootstrap.sh"
 # tail -1 on the digit runs: "${1:-10}" tokenizes to "1" then "10" — the
 # DEFAULT is the last run, not the first.
-DG_HEALTH=$(grep -oE '\$\{1:-[0-9]+\}' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
-DG_INTERVAL=$(grep -oE '\$\{2:-[0-9]+\}' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' | tail -1 || true)
-DG_CRON=$(grep -oE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
+DG_HEALTH=$(grep -oE '\$\{1:-[0-9]+\}' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' | tail -1 || true)
+DG_INTERVAL=$(grep -oE '\$\{2:-[0-9]+\}' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' | tail -1 || true)
+DG_CRON=$(grep -oE '^[[:space:]]*local cron_max_attempts=[0-9]+' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' || true)
 DG_INNGEST_UNIT=$(awk '/Description=Inngest self-hosted server/,/^UNITEOF$/' "$BOOTSTRAP_SCRIPT")
-DG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
-DG_MAX_POLLS=$(grep -oE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
-DG_POLL_INTERVAL=$(grep -oE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+DG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | sed -n '1p' | grep -oE '[0-9]+' || true)
+DG_MAX_POLLS=$(grep -oE 'MAX_POLLS=[0-9]+' "$RESTART_WORKFLOW" | sed -n '1p' | grep -oE '[0-9]+' || true)
+DG_POLL_INTERVAL=$(grep -oE 'POLL_INTERVAL=[0-9]+' "$RESTART_WORKFLOW" | sed -n '1p' | grep -oE '[0-9]+' || true)
 # Exactly-one assignment per extraction shape — a duplicate (or zero) match
 # makes the head -1 extraction silently ambiguous (e.g. a future helper
 # earlier in ci-deploy.sh with its own ${1:-N} default would hijack
@@ -3282,29 +4820,50 @@ TOTAL=$((TOTAL + 1))
 # the YAML would extract empty strings and fail on "non-integer extraction", which is how
 # this fired on the extraction PR.
 CUTOVER_WORKFLOW="$SCRIPT_DIR/../../../scripts/cutover-inngest.sh"
-QDG_ATTEMPTS=$(grep -oE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
-QDG_INTERVAL=$(grep -oE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
-QDG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
-QDG_MAX_POLLS=$(grep -oE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
-QDG_POLL_INTERVAL=$(grep -oE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" | head -1 | grep -oE '[0-9]+' || true)
+QDG_ATTEMPTS=$(grep -oE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' || true)
+QDG_INTERVAL=$(grep -oE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '[0-9]+' || true)
+QDG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | sed -n '1p' | grep -oE '[0-9]+' || true)
+QDG_MAX_POLLS=$(grep -oE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" | sed -n '1p' | grep -oE '[0-9]+' || true)
+QDG_POLL_INTERVAL=$(grep -oE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" | sed -n '1p' | grep -oE '[0-9]+' || true)
 # Exactly-one-assignment guards so a duplicate/zero match can't silently skew the inequality.
 QDG_ATTEMPTS_COUNT=$(grep -cE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" || true)
 QDG_INTERVAL_COUNT=$(grep -cE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" || true)
 QDG_MAX_POLLS_COUNT=$(grep -cE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" || true)
 QDG_POLL_INTERVAL_COUNT=$(grep -cE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" || true)
 QDG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0-9]+' || true)
+# #6921 D1b: the quiesce handler now runs a bounded capture BEFORE its stop, on the same
+# deploy-status clock. Extracted by shape from the ONE `timeout --kill-after=K "${QUIESCE_CAPTURE_TIMEOUT:-N}"`
+# invocation: N is the bound, K the SIGKILL grace timeout adds after it (both are wall clock the
+# poll must cover). The `:-N` shape must occur exactly once in ci-deploy.sh (comments included).
+# #8077 review: ANCHORED on the whole `timeout --kill-after=K "${QUIESCE_CAPTURE_TIMEOUT:-N}" ` shape
+# (closing brace, quote and a space after N; a space after K). An unanchored `[0-9]+` read `120s`
+# as 120 and `--kill-after=1m` as 1 — a unit suffix changes the wall clock by 60x while the guard
+# stayed green. With the anchors a suffix breaks the shape, extraction is empty, and the guard fails.
+QDG_CAP_SHAPE='timeout --kill-after=[0-9]+ "\$\{QUIESCE_CAPTURE_TIMEOUT:-[0-9]+\}" '
+QDG_CAPTURE=$(grep -oE "$QDG_CAP_SHAPE" "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE ':-[0-9]+\}' | grep -oE '[0-9]+' || true)
+QDG_CAPTURE_COUNT=$(grep -cE 'QUIESCE_CAPTURE_TIMEOUT:-' "$DEPLOY_SCRIPT" || true)
+QDG_KILL_AFTER=$(grep -oE "$QDG_CAP_SHAPE" "$DEPLOY_SCRIPT" | sed -n '1p' | grep -oE '^timeout --kill-after=[0-9]+ ' | grep -oE '[0-9]+' || true)
+# The peer fan-out runs on the SAME deploy-status clock after the verify: one
+# `curl … --max-time T` per peer inside fan_out_to_peers. T is extracted by shape from that
+# function's body (exactly one `--max-time <int> ` there). PEERS is hardcoded to 1: the peer list is
+# SOLEUR_DEPLOY_PEERS, rendered at apply time from the web host set (web-2 is the only peer today),
+# not a literal in this repo. Raise QDG_PEERS in lockstep when a third web host joins.
+QDG_PEERS=1
+QDG_FANOUT_BODY=$(awk '/^fan_out_to_peers\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT")
+QDG_FANOUT=$(printf '%s\n' "$QDG_FANOUT_BODY" | grep -oE 'curl [^#]*--max-time [0-9]+ ' | grep -oE -- '--max-time [0-9]+ $' | grep -oE '[0-9]+' || true)
+QDG_FANOUT_COUNT=$(printf '%s\n' "$QDG_FANOUT_BODY" | grep -cE -- '--max-time' || true)
 QDG_OK=1
 QDG_WHY=""
-for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL"; do
+for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL" "capture:$QDG_CAPTURE" "kill_after:$QDG_KILL_AFTER" "fanout:$QDG_FANOUT"; do
   if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then QDG_OK=0; QDG_WHY="non-integer extraction: ${pair%%:*}"; fi
 done
-for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "stop:$QDG_STOP_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT"; do
+for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "stop:$QDG_STOP_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT" "capture:$QDG_CAPTURE_COUNT" "fanout:$QDG_FANOUT_COUNT"; do
   if [[ "$QDG_OK" -eq 1 && "${pair#*:}" -ne 1 ]]; then QDG_OK=0; QDG_WHY="expected exactly one match for ${pair%%:*} (got ${pair#*:})"; fi
 done
 QDG_LEFT=""; QDG_RIGHT=""
 if [[ "$QDG_OK" -eq 1 ]]; then
   QDG_LEFT=$((QDG_MAX_POLLS * QDG_POLL_INTERVAL))
-  QDG_RIGHT=$((QDG_ATTEMPTS * (QDG_INTERVAL + 5) + QDG_STOP + 60))
+  QDG_RIGHT=$((QDG_ATTEMPTS * (QDG_INTERVAL + 5) + QDG_STOP + QDG_CAPTURE + QDG_KILL_AFTER + QDG_PEERS * QDG_FANOUT + 60))
   if [[ "$QDG_LEFT" -lt "$QDG_RIGHT" ]]; then QDG_OK=0; QDG_WHY="quiesce-web poll window ${QDG_LEFT}s < host worst case ${QDG_RIGHT}s"; fi
 fi
 if [[ "$QDG_OK" -eq 1 ]]; then
@@ -3312,8 +4871,185 @@ if [[ "$QDG_OK" -eq 1 ]]; then
   echo "  PASS: op=quiesce-web poll window (${QDG_LEFT}s) covers host quiesce worst case (${QDG_RIGHT}s) — #6178 drift guard"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, scripts/cutover-inngest.sh)"
+  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP capture=$QDG_CAPTURE kill_after=$QDG_KILL_AFTER fanout=${QDG_PEERS}x$QDG_FANOUT QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, scripts/cutover-inngest.sh)"
 fi
+
+# #8077 Guard 2 #6c (review rewrite) — PINNED PER-FILE INVENTORY of every line that can START
+# inngest-server. The previous row accepted a hit when the quiesced predicate appeared anywhere in
+# the 30 lines above it — a heuristic an unrelated `disabled` literal satisfied. This row enumerates
+# instead and pins the per-file count, so ANY new start writer (or a moved one) reds here, naming
+# its file, and the author must add the quiesce-state gate plus a behavioural row for it.
+#   Inventory A: `systemctl [flags] start|restart|enable|try-restart|reload-or-restart [flags]
+#                inngest-server[.service]` (a logged message quoting the verb counts too — the pin
+#                is a change detector, not a writer classifier).
+#   Inventory B: variable-unit forms `systemctl[_cmd] [flags] start|restart [flags] "$…` — a unit
+#                list that could come to include inngest-server.
+# Scope: apps/web-platform/infra, scripts, .github. Excluded: *.test.sh, *.md, comment lines,
+# sudoers grants (Cmnd_Alias lines, *sudoers* files) — permissions, not writers.
+# How each pinned writer is gated (and where its behavioural row lives):
+#   ci-deploy.sh             restart → inngest_quiesce_state refusal (rows above); enable/start →
+#                            the op=rollback re-arm, the ONE start allowed on a quiesced unit (rows above)
+#   inngest-bootstrap.sh     reached only through ci-deploy's gated `deploy inngest` arm (rows above)
+#   inngest-wiped-volume-verify.sh  shape gate, quiesced_refused (named row below + its own suite)
+#   workspaces-cutover.sh    reconcile + dead-man shape gates (named row below + its own suite)
+#   inngest-cutover-flip.sh / inngest-redis-bootstrap.sh  variable units on the DEDICATED host / redis
+#   git-data-luks-reopen.sh  (#8210) `systemctl start "$_munit"` on the GIT-DATA host, where no
+#                            inngest-server unit exists; and the variable is provably never it:
+#                            `_munit=$(systemd-escape -p --suffix=mount "$TARGET")` with TARGET
+#                            allow-listed to /mnt/git-data|/mnt/git-data-luks two lines earlier
+#                            (git-data-luks-reopen.test.sh S11c pins the case). A `.mount` unit
+#                            cannot be inngest-server.service. Pinned as a change detector.
+QI_RE_A='systemctl([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+(start|restart|enable|try-restart|reload-or-restart)([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+inngest-server(\.service)?([^-A-Za-z0-9_.]|\.service|$)'
+QI_RE_B='systemctl(_cmd)?([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+(start|restart)([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+"\$'
+# shellcheck disable=SC2034  # read through qi_inventory's nameref
+declare -A QI_PIN_A=(
+  [apps/web-platform/infra/ci-deploy.sh]=6
+  [apps/web-platform/infra/inngest-bootstrap.sh]=2
+  [apps/web-platform/infra/inngest-wiped-volume-verify.sh]=1
+  [apps/web-platform/infra/workspaces-cutover.sh]=2
+)
+# shellcheck disable=SC2034  # read through qi_inventory's nameref
+declare -A QI_PIN_B=(
+  [apps/web-platform/infra/inngest-cutover-flip.sh]=1
+  [apps/web-platform/infra/inngest-redis-bootstrap.sh]=1
+  [apps/web-platform/infra/workspaces-cutover.sh]=2
+  # #6894 inngest-luks-cutover.sh — ONE variable-unit start, in resume_writers. Its gate is
+  # stronger than a quiesce-state predicate: the freeze RECORDS which units were active before it
+  # stopped them (into the FSM's own state dir, because the run that resumes may be a later tick or
+  # a later boot) and the resume starts exactly that set. With no record — a reboot mid-cutover —
+  # it falls back to the ENABLED set, so a unit an operator disabled is still never started.
+  # Behavioural rows: inngest-luks-cutover.test.sh "a unit that was NOT running before the freeze
+  # is not started by it" and "with no record … a disabled unit is still not started".
+  [apps/web-platform/infra/inngest-luks-cutover.sh]=1
+  [apps/web-platform/infra/git-data-luks-reopen.sh]=1
+  # #8562 cloud-init-inngest.yml — ONE variable-unit start, in soleur-inngest-provision's on_exit.
+  # It restores the cutover-FSM timers the provision attempt paused. `_fsm_timers_stopped` is
+  # built only from the literal list `inngest-cutover-flip.timer inngest-luks-cutover.timer`, and
+  # only from those that were `active` before the stop. So the variable is provably never
+  # inngest-server, and it never starts a timer that was not already running. Behavioural row:
+  # cloud-init-inngest-provision-unit.test.sh G2-r15 ("the failed attempt restarts the flip
+  # timer"). Pinned as a change detector.
+  [apps/web-platform/infra/cloud-init-inngest.yml]=1
+  # #9123 workspaces-luks-reopen.sh — the web-1 sibling of the #8210 git-data line above:
+  # `systemctl start "$_munit"` where `_munit=$(systemd-escape -p --suffix=mount "$TARGET")`
+  # with TARGET allow-listed to /mnt/data — a `.mount` unit is provably never
+  # inngest-server.service, and web-1 carries no inngest-server unit regardless. Pinned as a
+  # change detector.
+  [apps/web-platform/infra/workspaces-luks-reopen.sh]=1
+)
+QS_REPO="$SCRIPT_DIR/../../.."
+# qi_inventory <regex> <pin-array-name> <label>: sets QI_BAD (appends) and QI_SEEN (hit count).
+qi_inventory() {
+  local re="$1" label="$3" hits rc=0 qf
+  local -n pins="$2"
+  hits=$(git -C "$QS_REPO" grep -nE "$re" -- apps/web-platform/infra scripts .github 2>/dev/null) || rc=$?
+  if [[ "$rc" -gt 1 ]]; then QI_BAD="${QI_BAD} [$label] git-grep-rc=$rc"; return 0; fi
+  declare -A got=()
+  while IFS= read -r h; do
+    [[ -n "$h" ]] || continue
+    qf="${h%%:*}"
+    case "$qf" in *.test.sh|*.md|*sudoers*) continue ;; esac
+    local text="${h#*:}"; text="${text#*:}"
+    if [[ "$text" =~ ^[[:space:]]*# ]] || [[ "$text" == *Cmnd_Alias* ]]; then continue; fi
+    got[$qf]=$(( ${got[$qf]:-0} + 1 ))
+    QI_SEEN=$((QI_SEEN + 1))
+  done <<< "$hits"
+  for qf in "${!got[@]}"; do
+    if [[ -z "${pins[$qf]+x}" ]]; then
+      QI_BAD="${QI_BAD}"$'\n'"        [$label] $qf: ${got[$qf]} NEW start writer line(s) of inngest-server — add the inngest_quiesce_state gate (a start on a quiesced/disabled unit re-arms the web scheduler mid-cutover) plus a behavioural row proving it refuses, then pin the file here"
+    elif [[ "${got[$qf]}" -ne "${pins[$qf]}" ]]; then
+      QI_BAD="${QI_BAD}"$'\n'"        [$label] $qf: ${got[$qf]} start writer line(s), pinned ${pins[$qf]} — a writer was added/moved/removed: gate any new one on the quiesce state, add a behavioural row, then update the pin"
+    fi
+  done
+  for qf in "${!pins[@]}"; do
+    if [[ -z "${got[$qf]+x}" ]]; then
+      QI_BAD="${QI_BAD}"$'\n'"        [$label] $qf: 0 start writer lines, pinned ${pins[$qf]} — the inventory lost a writer (renamed file? changed verb shape?); re-derive the pin"
+    fi
+  done
+}
+QI_BAD=""; QI_SEEN=0
+qi_inventory "$QI_RE_A" QI_PIN_A "unit=inngest-server"
+qi_inventory "$QI_RE_B" QI_PIN_B "variable-unit"
+TOTAL=$((TOTAL + 1))
+# 15 -> 16 at #6894: inngest-luks-cutover.sh's single variable-unit resume (see QI_PIN_B).
+# 16 -> 17 at #8210: git-data-luks-reopen.sh's mount-unit start (see QI_PIN_B).
+# 17 -> 18 at #8562: cloud-init-inngest.yml's FSM-timer restore (see QI_PIN_B).
+# 18 -> 19 at #9123: workspaces-luks-reopen.sh's mount-unit start (see QI_PIN_B).
+if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 19 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 10 files) (Guard 2 #6c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 19):${QI_BAD:- <per-file counts match but the total does not>}"
+fi
+# Positive control: the inventory regex still MATCHES the flag-bearing forms it claims to cover
+# (a regex that silently matched nothing would pin an empty inventory as green).
+QI_CTRL_OK=1
+for qi_line in 'sudo /usr/bin/systemctl restart inngest-server.service' 'systemctl --no-block start inngest-server' \
+               'systemctl enable --now inngest-server.service' 'systemctl try-restart inngest-server' 'systemctl reload-or-restart inngest-server.service; x'; do
+  if ! grep -qE "$QI_RE_A" <<< "$qi_line"; then QI_CTRL_OK=0; fi
+done
+for qi_line in 'systemctl start inngest-server-probe.service' 'systemctl stop inngest-server.service' 'systemctl is-enabled inngest-server.service'; do
+  if grep -qE "$QI_RE_A" <<< "$qi_line"; then QI_CTRL_OK=0; fi
+done
+for qi_line in 'systemctl_cmd start "$SERVER_UNIT"' 'systemctl --no-block restart "${u}.timer"'; do
+  if ! grep -qE "$QI_RE_B" <<< "$qi_line"; then QI_CTRL_OK=0; fi
+done
+TOTAL=$((TOTAL + 1))
+if [[ "$QI_CTRL_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: start-writer inventory regexes match the flag-bearing forms and reject stop/is-enabled/-probe units (positive control)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: start-writer inventory regex control — a covered form no longer matches or an excluded one does"
+fi
+unset qi_line QI_CTRL_OK QI_SEEN
+
+# #8077 review task 3.5 — BYTE-IDENTICAL parity of inngest_quiesce_state() (contract §2). The
+# definitions are DERIVED, not listed: every non-test apps/web-platform/infra/*.sh defining it.
+# Fewer than 3 is a failure (ci-deploy.sh, inngest-inventory.sh, inngest-rearm-reminders.sh must all
+# carry it), and every body — from `inngest_quiesce_state() {` to the closing `^}` — must hash equal.
+QP_BAD=""; QP_N=0; QP_REF=""; QP_FILES=""
+while IFS= read -r qp_path; do
+  case "$qp_path" in *.test.sh) continue ;; esac
+  qp_count=$(grep -cE '^inngest_quiesce_state\(\) \{$' "$qp_path" || true)
+  if [[ "$qp_count" -ne 1 ]]; then QP_BAD="${QP_BAD} $(basename "$qp_path"):definitions=$qp_count"; continue; fi
+  qp_body=$(awk '/^inngest_quiesce_state\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$qp_path")
+  qp_sha=$(printf '%s\n' "$qp_body" | sha256sum | awk '{print $1}')
+  QP_N=$((QP_N + 1)); QP_FILES="${QP_FILES} $(basename "$qp_path")"
+  if [[ -z "$qp_body" || "$(printf '%s\n' "$qp_body" | tail -1)" != "}" ]]; then QP_BAD="${QP_BAD} $(basename "$qp_path"):unterminated-body"; continue; fi
+  if [[ -z "$QP_REF" ]]; then QP_REF="$qp_sha"; elif [[ "$qp_sha" != "$QP_REF" ]]; then QP_BAD="${QP_BAD} $(basename "$qp_path"):body-differs(sha=${qp_sha:0:12} ref=${QP_REF:0:12})"; fi
+done < <(grep -lE '^inngest_quiesce_state\(\) \{$' "$SCRIPT_DIR"/*.sh 2>/dev/null || true)
+TOTAL=$((TOTAL + 1))
+if [[ "$QP_N" -ge 3 && -z "$QP_BAD" ]] && [[ " $QP_FILES " == *" ci-deploy.sh "* && " $QP_FILES " == *" inngest-inventory.sh "* && " $QP_FILES " == *" inngest-rearm-reminders.sh "* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: inngest_quiesce_state() is byte-identical across $QP_N definitions:$QP_FILES (contract §2)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest_quiesce_state() parity (contract §2): found $QP_N definition(s) [${QP_FILES# }], need >= 3 incl. ci-deploy.sh, inngest-inventory.sh, inngest-rearm-reminders.sh, all byte-identical:${QP_BAD:- <missing file>}"
+fi
+unset qp_path qp_count qp_body qp_sha QP_N QP_REF QP_FILES QP_BAD
+
+# Contract §3 named rows: the two scripts that keep the SHAPE-ONLY guard (no marker) still carry it,
+# and it still precedes their start. (Owned elsewhere; their own suites prove the behaviour — this
+# pins that the start writer the inventory above counts is still behind the guard.)
+QW_F="$SCRIPT_DIR/inngest-wiped-volume-verify.sh"
+QW_GATE=$(grep -nE '\( "\$unit_active" == inactive \|\| "\$unit_active" == failed \) && "\$unit_enabled" == disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
+QW_ABORT=$(grep -nE 'abort "quiesced_refused"' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
+QW_START=$(grep -nE '^[^#]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
+TOTAL=$((TOTAL + 1))
+if [[ -n "$QW_GATE" && -n "$QW_ABORT" && -n "$QW_START" && "$QW_GATE" -lt "$QW_ABORT" && "$QW_ABORT" -lt "$QW_START" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: inngest-wiped-volume-verify.sh keeps its shape-only quiesced_refused gate ahead of its start (contract §3)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-wiped-volume-verify.sh shape-only gate (contract §3): gate_line=${QW_GATE:-<none>} abort_line=${QW_ABORT:-<none>} start_line=${QW_START:-<none>} — need gate < abort < start"
+fi
+QW_F="$SCRIPT_DIR/workspaces-cutover.sh"
+# reconcile: an is-enabled == disabled test ahead of the plain start; dead-man: `= disabled ] || systemctl start` in the sh -c string.
+QW_REC_GATE=$(grep -nE '^[^#]*"\$\(systemctl is-enabled inngest-server\.service[^)]*\)" = disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
+QW_REC_START=$(grep -nE '^[[:space:]]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1) || true
+QW_DEADMAN=$(grep -cE 'is-enabled inngest-server\.service 2>/dev/null\)\\?" = disabled \] \|\| systemctl start inngest-server\.service' "$QW_F" 2>/dev/null || true)
+TOTAL=$((TOTAL + 1))
+if [[ -n "$QW_REC_GATE" && -n "$QW_REC_START" && "$QW_REC_GATE" -lt "$QW_REC_START" && "$QW_DEADMAN" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: workspaces-cutover.sh keeps its shape-only disabled guards on the reconcile start and the dead-man start (contract §3)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: workspaces-cutover.sh shape-only guards (contract §3): reconcile gate_line=${QW_REC_GATE:-<none>} start_line=${QW_REC_START:-<none>} dead-man guarded starts=$QW_DEADMAN (need gate < start and exactly 1)"
+fi
+unset QW_F QW_GATE QW_ABORT QW_START QW_REC_GATE QW_REC_START QW_DEADMAN
 
 echo ""
 echo "--- Container memory caps (#5417 AC3) ---"
@@ -3327,16 +5063,16 @@ TOTAL=$((TOTAL + 1))
 MEM_FLAG_COUNT=$(grep -cE -- '--memory "\$(PROD|CANARY)_MEMORY_CAP"' "$DEPLOY_SCRIPT" || true)
 SWAP_FLAG_COUNT=$(grep -cE -- '--memory-swap "\$(PROD|CANARY)_MEMORY_CAP"' "$DEPLOY_SCRIPT" || true)
 INIT_FLAG_COUNT=$(grep -cE -- '^[[:space:]]+--init \\' "$DEPLOY_SCRIPT" || true)
-# Both docker runs pass a COMPOSED NODE_OPTIONS (Doppler value + our cap appended
-# so -e does not clobber an operator-set value — #5417 review). Assert both
-# call-sites use the composed var AND that each composed var sets the heap cap.
+# Both docker runs pass a COMPOSED NODE_OPTIONS carrying our heap cap (the #5417 append-to-a-
+# Doppler-value lever is retired under #8609: the overlay refuses any prd NODE_* but NODE_ENV).
+# Assert both call-sites use the composed var AND that each composed var sets the heap cap.
 NODE_OPT_COUNT=$(grep -cE -- '-e NODE_OPTIONS="\$(PROD|CANARY)_NODE_OPTIONS"' "$DEPLOY_SCRIPT" || true)
 NODE_OPT_COMPOSE_COUNT=$(grep -cE -- '^[[:space:]]+(PROD|CANARY)_NODE_OPTIONS=.*--max-old-space-size=\$(PROD|CANARY)_NODE_MAX_OLD_SPACE_MB' "$DEPLOY_SCRIPT" || true)
 CAP_CONST_COUNT=$(grep -cE '^readonly (PROD_MEMORY_CAP|CANARY_MEMORY_CAP|PROD_NODE_MAX_OLD_SPACE_MB|CANARY_NODE_MAX_OLD_SPACE_MB)=' "$DEPLOY_SCRIPT" || true)
 if [[ "$MEM_FLAG_COUNT" -eq 2 && "$SWAP_FLAG_COUNT" -eq 2 && "$INIT_FLAG_COUNT" -eq 2 \
    && "$NODE_OPT_COUNT" -eq 2 && "$NODE_OPT_COMPOSE_COUNT" -eq 2 && "$CAP_CONST_COUNT" -eq 4 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: prod+canary docker run carry --memory/--memory-swap/--init from named caps; both set --max-old-space-size (appended to any Doppler NODE_OPTIONS) below the cap (#5417 AC1/AC3)"
+  echo "  PASS: prod+canary docker run carry --memory/--memory-swap/--init from named caps; both set --max-old-space-size below the cap (#5417 AC1/AC3)"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: memory-cap source gate (mem=$MEM_FLAG_COUNT/2 swap=$SWAP_FLAG_COUNT/2 init=$INIT_FLAG_COUNT/2 node_opt=$NODE_OPT_COUNT/2 compose=$NODE_OPT_COMPOSE_COUNT/2 consts=$CAP_CONST_COUNT/4; file: ci-deploy.sh)"
@@ -3425,8 +5161,8 @@ TOTAL=$((TOTAL + 1))
 # `f &&` guards the exit rule so the same literal in the top-of-file comment does
 # not terminate awk before the swap section begins.
 SWAP_BLOCK=$(awk '/SUCCESS: swap canary to production/{f=1} f{print} f && /docker stop --time=12 soleur-web-platform/{exit}' "$DEPLOY_SCRIPT")
-T6_CANARY=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'docker stop soleur-web-platform-canary' | head -1 | cut -d: -f1)
-T6_DRAIN=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'while cron_in_flight' | head -1 | cut -d: -f1)
+T6_CANARY=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'docker stop soleur-web-platform-canary' | sed -n '1p' | cut -d: -f1)
+T6_DRAIN=$(printf '%s\n' "$SWAP_BLOCK" | grep -nE 'while cron_in_flight' | sed -n '1p' | cut -d: -f1)
 if [[ -n "$T6_CANARY" && -n "$T6_DRAIN" && "$T6_CANARY" -lt "$T6_DRAIN" ]]; then
   PASS=$((PASS + 1))
   echo "  PASS: T6 canary torn down before the drain loop in the swap branch (memory-dwell fix)"
@@ -3440,8 +5176,8 @@ fi
 # cannot extend the drain past the wall-clock (G5).
 TOTAL=$((TOTAL + 1))
 T7_FN=$(awk '/^cron_in_flight\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT")
-if printf '%s' "$T7_FN" | grep -qF 'timeout "${CRON_DRAIN_PROBE_TIMEOUT}"' \
-   && printf '%s' "$T7_FN" | grep -qF 'pgrep -f "claude"'; then
+if printf '%s' "$T7_FN" | grep -cF 'timeout "${CRON_DRAIN_PROBE_TIMEOUT}"' >/dev/null \
+   && printf '%s' "$T7_FN" | grep -cF 'pgrep -f "claude"' >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: T7 cron_in_flight is pool-agnostic (pgrep -f claude) with its own probe timeout"
 else
@@ -3491,7 +5227,7 @@ fi
 # T6/T9/wrapper-Test-6 all stay green.
 TOTAL=$((TOTAL + 1))
 WC_YML="$(dirname "$DEPLOY_SCRIPT")/../../../.github/workflows/web-platform-release.yml"
-WC_CEILING=$(grep -oE 'IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WC_YML" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+WC_CEILING=$(grep -oE 'IN_FLIGHT_CEILING_S:[[:space:]]*[0-9]+' "$WC_YML" 2>/dev/null | grep -oE '[0-9]+$' | sed -n '1p')
 WC_DRAIN=$(grep -oE 'CRON_DRAIN_TIMEOUT:-[0-9]+' "$DEPLOY_SCRIPT" | grep -oE '[0-9]+$')
 WC_MARGIN=300
 if [[ -n "$WC_CEILING" && -n "$WC_DRAIN" && $(( WC_CEILING - WC_DRAIN )) -ge "$WC_MARGIN" ]]; then
@@ -3508,8 +5244,8 @@ fi
 # order: lease write < `while cron_in_flight` < `docker stop --time=12`.
 TOTAL=$((TOTAL + 1))
 LO_BLOCK=$(awk '/SUCCESS: swap canary to production/{f=1} f{print} f && /docker stop --time=12 soleur-web-platform/{exit}' "$DEPLOY_SCRIPT")
-LO_LEASE=$(printf '%s\n' "$LO_BLOCK" | grep -nE ': > "\$CRON_DEPLOY_LEASE_FILE"' | head -1 | cut -d: -f1)
-LO_DRAIN=$(printf '%s\n' "$LO_BLOCK" | grep -nE 'while cron_in_flight' | head -1 | cut -d: -f1)
+LO_LEASE=$(printf '%s\n' "$LO_BLOCK" | grep -nE ': > "\$CRON_DEPLOY_LEASE_FILE"' | sed -n '1p' | cut -d: -f1)
+LO_DRAIN=$(printf '%s\n' "$LO_BLOCK" | grep -nE 'while cron_in_flight' | sed -n '1p' | cut -d: -f1)
 if [[ -n "$LO_LEASE" && -n "$LO_DRAIN" && "$LO_LEASE" -lt "$LO_DRAIN" ]]; then
   PASS=$((PASS + 1))
   echo "  PASS: T-LEASE-ORDER lease written (L$LO_LEASE) before drain loop (L$LO_DRAIN) — start-race closed"
@@ -3602,121 +5338,28 @@ else
 fi
 rm -rf "$DTMP"
 
-# --- §1A (#6090 recurrence): ghcr_prelude re-fetches Doppler creds + retries docker
-# login on a baked-login FAILURE, not only when the baked value is EMPTY. Root cause of
-# web-2's fsn1 warm-standby not serving (2026-07-13): the fresh host's baked GHCR read
-# token in /etc/default/soleur-ghcr-read went STALE by deploy time; the EMPTY-only guard
-# never re-fetched the valid current Doppler cred → `docker login` failed (non-fatal) →
-# anonymous private pull → Sentry `image pull failed (auth_denied)` → image_pull_failed.
-# Faithful repro: a PRESENT-but-stale baked token whose login 401s; the fix must retry
-# with the Doppler cred (mock-GHCR_READ_USER). Under the pre-fix EMPTY-only code only ONE
-# login (the stale baked one) is attempted → this asserts the SECOND (Doppler) login.
-echo "--- §1A: baked-login failure → Doppler re-fetch + retry ---"
-S1A_DIR=$(mktemp -d)
-printf 'GHCR_READ_USER=baked-stale-user\nGHCR_READ_TOKEN=STALE_BAKED_TOKEN\n' > "$S1A_DIR/soleur-ghcr-read"
-export SOLEUR_GHCR_READ_FILE="$S1A_DIR/soleur-ghcr-read"
-export MOCK_GHCR_LOGIN_FAIL_TOKEN="STALE_BAKED_TOKEN"
-export MOCK_LOGIN_ARGS_FILE="$S1A_DIR/logins.txt"
-: > "$MOCK_LOGIN_ARGS_FILE"
-run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
-TOTAL=$((TOTAL + 1))
-if grep -q '^LOGIN:baked-stale-user$' "$MOCK_LOGIN_ARGS_FILE" \
-   && grep -q '^LOGIN:mock-GHCR_READ_USER$' "$MOCK_LOGIN_ARGS_FILE"; then
-  PASS=$((PASS + 1))
-  echo "  PASS: baked-login failure triggers Doppler re-fetch + retry (stale baked login, then Doppler login)"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: expected a Doppler re-fetch + retry login (LOGIN:mock-GHCR_READ_USER) after the stale baked login failed"
-  echo "        logins captured:"; sed 's/^/          /' "$MOCK_LOGIN_ARGS_FILE"
-fi
-unset SOLEUR_GHCR_READ_FILE MOCK_GHCR_LOGIN_FAIL_TOKEN MOCK_LOGIN_ARGS_FILE
-rm -rf "$S1A_DIR"
+# --- #8036 1c: §1A (#6090) and #6400 AC1/AC2/AC14/AC4 are DELETED, not moved -----------------
+# What stood here: four rows driving the host-side GHCR credential recovery machinery — §1A's
+# "a stale baked token's login failed, so re-fetch from Doppler and retry the login", and #6400's
+# pull-site sibling "the credential logs in but cannot pull, so re-fetch, relogin and retry the
+# pull exactly once". Every one of them is gone with the code: there is no `docker login ghcr.io`,
+# no `refetch_ghcr_and_relogin`, and no auth-denied leg in the pull helper.
+#
+# They are DELETED rather than re-pointed at zot, and the distinction matters. The #6525 transient
+# rows WERE re-pointed, because the retry LOOP is registry-neutral and survives on the zot arm.
+# These four are not: their subject is re-fetching a GHCR READ CREDENTIAL from Doppler, which has
+# no zot equivalent (the zot gate reads its own cred once and degrades loudly if it cannot).
+# Re-pointing them would have produced rows that pass while asserting nothing.
+#
+# AC4 ("recovery is GHCR-cred-scoped — does NOT fire on the zot leg") is worth naming separately:
+# it asserted that a zot pull failure falls through to a GHCR fallback pull. That is the deleted
+# branch itself, so the row's PASS condition is now a statement that the retirement did NOT
+# happen. Its surviving half — a zot miss must not trigger a credential recovery — is subsumed by
+# T-1c-6 and T-1c-13, which assert zero ghcr.io pulls on both arms.
+#
+# The residual-zero guard for all of this is T-1c-1; the token-hygiene property AC6 asserted is
+# re-pointed onto the surviving zot login below.
 
-# --- #6400: recover at the GHCR PULL site on a login-ok/pull-deny credential ---
-# Root cause: §1A recovers only on a docker LOGIN failure, but the production
-# `image pull failed (auth_denied)` fires one step later at `docker pull` — a
-# credential that logs in but cannot pull (a GitHub App token, or a revoked baked
-# snapshot) bypasses §1A entirely. These assert the pull-site recovery in
-# _ghcr_pull_or_recover: re-fetch the prd cred + relogin + retry the pull ONCE.
-
-echo "--- #6400 AC1: GHCR login-ok/pull-deny → re-fetch + retry → recovered ---"
-T6400=$(mktemp -d)
-echo 1 > "$T6400/deny-count"   # first GHCR pull denies, retry (after relogin) succeeds
-export MOCK_GHCR_PULL_DENY_COUNT_FILE="$T6400/deny-count"
-export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
-export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
-run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
-TOTAL=$((TOTAL + 1))
-AC1_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
-if [[ "$AC1_GHCR_PULLS" -eq 2 ]] \
-   && grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE" \
-   && ! grep -q 'image pull failed' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: recovered — 2 GHCR pulls (deny+retry), recovery event, no failure event"
-else
-  FAIL=$((FAIL + 1)); echo "  FAIL: AC1 (ghcr_pulls=$AC1_GHCR_PULLS; expected 2 + recovery event, no failure event)"
-  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
-fi
-unset MOCK_GHCR_PULL_DENY_COUNT_FILE MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
-rm -rf "$T6400"
-
-echo "--- #6400 AC2: relogin ok but retry pull still denies → fail-open, pull_still_denied ---"
-T6400=$(mktemp -d)
-export MOCK_GHCR_PULL_DENY_ALWAYS=1   # both pulls deny (recovery miss)
-export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
-export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
-run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && AC2_RC=0 || AC2_RC=$?
-TOTAL=$((TOTAL + 1))
-AC2_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
-if [[ "$AC2_RC" -ne 0 ]] && [[ "$AC2_GHCR_PULLS" -eq 2 ]] \
-   && grep -q 'image pull failed' "$MOCK_SENTRY_CAPTURE_FILE" \
-   && grep -q 'pull_still_denied' "$MOCK_SENTRY_CAPTURE_FILE" \
-   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: fail-open — rc=$AC2_RC, 2 GHCR pulls, single failure event tagged pull_still_denied, no recovery event"
-else
-  FAIL=$((FAIL + 1)); echo "  FAIL: AC2 (rc=$AC2_RC ghcr_pulls=$AC2_GHCR_PULLS; expected nonzero + 2 pulls + pull_still_denied)"
-  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
-fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
-rm -rf "$T6400"
-
-echo "--- #6400 AC14: relogin FAILS → retry pull NOT attempted (guards §1A dt='' return-0 bug) ---"
-T6400=$(mktemp -d)
-export MOCK_GHCR_PULL_DENY_ALWAYS=1
-export MOCK_GHCR_LOGIN_FAIL_TOKEN="mock-GHCR_READ_TOKEN"   # the re-fetched prd token also fails login
-export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
-export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
-run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
-TOTAL=$((TOTAL + 1))
-AC14_GHCR_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
-if [[ "$AC14_GHCR_PULLS" -eq 1 ]] \
-   && grep -q 'relogin_failed' "$MOCK_SENTRY_CAPTURE_FILE" \
-   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: relogin failure → exactly 1 GHCR pull (no retry), failure tagged relogin_failed"
-else
-  FAIL=$((FAIL + 1)); echo "  FAIL: AC14 (ghcr_pulls=$AC14_GHCR_PULLS; expected 1 + relogin_failed, no recovery)"
-  echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
-fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_GHCR_LOGIN_FAIL_TOKEN MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
-rm -rf "$T6400"
-
-echo "--- #6400 AC4: recovery is GHCR-cred-scoped — does NOT fire on the zot leg ---"
-T6400=$(mktemp -d)
-export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1   # zot active, zot pull fails → atomic GHCR fallback
-export MOCK_PULL_ARGS_FILE="$T6400/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
-export MOCK_SENTRY_CAPTURE_FILE="$T6400/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
-run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
-TOTAL=$((TOTAL + 1))
-# zot pull attempted (and failed) + GHCR fallback pulled once + NO recovery fired (GHCR
-# cred was fine); the zot denial itself never triggers a GHCR re-fetch.
-if grep -q '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" \
-   && grep -q '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" \
-   && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: zot-fail → GHCR fallback (unchanged); recovery did not fire on the zot leg"
-else
-  FAIL=$((FAIL + 1)); echo "  FAIL: AC4"; echo "        pulls:"; sed 's/^/          /' "$MOCK_PULL_ARGS_FILE"
-fi
-unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
-rm -rf "$T6400"
 
 echo ""
 echo "--- FR-C1: the zot-pull-failure log line carries a bounded, single-line stderr tail ---"
@@ -3745,7 +5388,7 @@ run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/d
 TOTAL=$((TOTAL + 1))
 _frc1_marker='IMAGE_PULL: zot pull failed for'
 _frc1_hits=$(grep -cF "$_frc1_marker" "$MOCK_LOGGER_CAPTURE_FILE" || true)
-_frc1_line=$(grep -F "$_frc1_marker" "$MOCK_LOGGER_CAPTURE_FILE" | head -1)
+_frc1_line=$(grep -F "$_frc1_marker" "$MOCK_LOGGER_CAPTURE_FILE" | sed -n '1p')
 if [[ "$_frc1_hits" == "1" ]] \
    && [[ "$_frc1_line" == *"ZOTSENTINELMID"* ]] \
    && [[ "$_frc1_line" == *"ZOTSENTINELTAIL"* ]] \
@@ -3761,19 +5404,25 @@ unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_ZOT_PULL_FAIL_STDERR MOCK_LOGG
 rm -rf "$TFRC1"
 
 echo ""
-echo "--- #6512 local-cache reload tier (both registries fail → reuse the RUNNING image) ---"
+echo "--- #6512 local-cache reload tier (the registry fails → reuse the RUNNING image) ---"
 # The item-4 seccomp redeploy targets v<running_version> — the image the container is
 # ALREADY running (cosign-verified at its original deploy, immutable @sha256, always in the
-# host's local docker store). When both registries fail to serve that already-present image
-# (zot GC'd the several-releases-old tag from its 5-v* keep-set; GHCR leg then also fails),
-# the reload must NOT die image_pull_failed — it reuses the running container's image ID.
+# host's local docker store). When the registry fails to serve that already-present image
+# (zot GC'd the several-releases-old tag from its 5-v* keep-set), the reload must NOT die
+# image_pull_failed — it reuses the running container's image ID.
+#
+# #8036 1c RE-POINTED THESE ROWS FROM GHCR TO ZOT, and the tier got MORE load-bearing, not less:
+# it is now the ONLY tier between a zot miss and image_pull_failed. The phrase "both registries
+# fail" was this block's premise and is no longer a reachable state — there is one registry. The
+# TIER ITSELF IS UNEDITED by that change; only the fixtures that drive it to its entry condition
+# moved, which is why these rows are re-pointed rather than rewritten.
 # Extracts the local-cache event's level from the captured Sentry payload stream via jq -s.
 _lc_level() { jq -rs '.[] | select(.tags.registry=="local-cache") | .level' "$1" 2>/dev/null; }
 
-# (a) both fail (zot dark + GHCR deny) + web + immutable semver + running image present →
+# (a) the registry misses (zot pull fails) + web + immutable semver + running image present →
 #     RESCUED: registry=local-cache level=warning + cosign_reused_local_reload, deploy proceeds.
 T6512=$(mktemp -d)
-export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_ZOT_PULL_FAIL=1
 export MOCK_RUNNING_IMAGE_ID="sha256:6512aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 export MOCK_RUNNING_IMAGE_TAG="v9.9.9"   # the running image IS the deploy version → same-version reload
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/a.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
@@ -3790,7 +5439,7 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(a) rc=$A_RC reason=$A_REASON level=$(_lc_level "$MOCK_SENTRY_CAPTURE_FILE")"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_ZOT_PULL_FAIL MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
 rm -rf "$T6512"
 
 # (b) #6512's ZOT-SERVED topology: zot ACTIVE + zot pull fails + GHCR deny (both fail via the
@@ -3798,7 +5447,7 @@ rm -rf "$T6512"
 #     ghcr ref, un-reassigned; a tier keyed on ${IMAGE}:${TAG} would MISS). Proves BOTH
 #     both-failed exits rescue (P2-5), not only the zot-dark one.
 T6512=$(mktemp -d)
-export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1 MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1
 export MOCK_RUNNING_IMAGE_ID="sha256:6512bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 export MOCK_RUNNING_IMAGE_TAG="v9.9.9"   # same-version reload
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/b.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
@@ -3820,7 +5469,7 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(b) rc=$B_RC reason=$B_REASON (expected local-cache event + reason != image_pull_failed)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_ZOT_CONFIGURED MOCK_ZOT_PULL_FAIL MOCK_ZOT_PULL_FAIL MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
 rm -rf "$T6512"
 
 # (e) NEW-VERSION deploy with both registries down: the running container is an OLDER version
@@ -3828,7 +5477,7 @@ rm -rf "$T6512"
 #     image would silently serve stale bits and report the new release as "deployed" (a version
 #     rollback masked as success). Falls through to the existing hard image_pull_failed.
 T6512=$(mktemp -d)
-export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_ZOT_PULL_FAIL=1
 export MOCK_RUNNING_IMAGE_ID="sha256:6512eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 export MOCK_RUNNING_IMAGE_TAG="v9.9.8"   # running image is an OLDER version than the deploy TAG
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/e.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
@@ -3843,13 +5492,13 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(e) rc=$E_RC reason=$E_REASON — tier fired on a NEW-version deploy (stale-bits rollback risk)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_ZOT_PULL_FAIL MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
 rm -rf "$T6512"
 
 # (c) both fail + running image ABSENT (MOCK_RUNNING_IMAGE_ID unset) → unchanged hard
 #     image_pull_failed, NO local-cache event (the tier's presence-probe gates it out).
 T6512=$(mktemp -d)
-export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_ZOT_PULL_FAIL=1
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/c.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 export CI_DEPLOY_STATE="$T6512/c.state"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && C_RC=0 || C_RC=$?
@@ -3861,7 +5510,7 @@ if [[ "$C_RC" -ne 0 ]] && [[ "$C_REASON" == "image_pull_failed" ]] \
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(c) rc=$C_RC reason=$C_REASON (expected nonzero + image_pull_failed + no local-cache)"
 fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_ZOT_PULL_FAIL MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
 rm -rf "$T6512"
 
 # (c2) non-web (inngest) both-fail with EVERY other tier precondition satisfiable (running image
@@ -3872,11 +5521,12 @@ rm -rf "$T6512"
 #      reason==image_pull_failed positive control proves the pull was reached; removing the web
 #      guard from source would then fire the tier → local-cache event → RED.
 T6512=$(mktemp -d)
-export MOCK_GHCR_PULL_DENY_ALWAYS=1
+export MOCK_ZOT_PULL_FAIL=1
 export MOCK_RUNNING_IMAGE_ID="sha256:6512cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 export MOCK_RUNNING_IMAGE_TAG="v9.9.9"   # same-version tag present, so ONLY the web guard gates the tier out
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/c2.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 export CI_DEPLOY_STATE="$T6512/c2.state"
+export MOCK_SYSTEMCTL_ENABLED_STATE=enabled   # #8077 D3: not quiesced, so the arm reaches the pull
 run_deploy "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v9.9.9" >/dev/null 2>&1 || true
 read_state_reason_and_exit "$CI_DEPLOY_STATE" C2_REASON C2_EXIT
 TOTAL=$((TOTAL + 1))
@@ -3886,7 +5536,7 @@ if [[ "$C2_REASON" == "image_pull_failed" ]] \
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(c2) reason=$C2_REASON — expected image_pull_failed (reached the pull) + no local-cache event; a non-image_pull_failed reason means the run exited early and the assertion is vacuous"
 fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_ZOT_PULL_FAIL MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE MOCK_SYSTEMCTL_ENABLED_STATE
 rm -rf "$T6512"
 
 # (d) zot SERVES the image → the pull succeeds; the local-cache tier is never reached even
@@ -3907,56 +5557,58 @@ unset MOCK_ZOT_CONFIGURED MOCK_RUNNING_IMAGE_ID MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6512"
 
 echo "--- #6400 AC3/AC6/AC13: single classifier, content-not-path, token hygiene, cosign continuity ---"
-# AC3: ONE auth-denied regex, shared by the classifier + the recovery gate.
+# AC3 (#6400), REWRITTEN for #8036 1c. It used to anchor on
+# `_pull_result_is_auth_denied "$(tail -c 400 "$perr"` -- the recovery gate's call shape -- to
+# prove the classifier reads stderr CONTENT and not a file path. That call site was deleted with
+# the auth leg, and the assertion then passed on a COMMENT in ci-deploy.sh that quoted the retired
+# call shape while explaining its removal: a bare-token anchor satisfied by prose, which is the
+# defect class this file has shipped repeatedly. The surviving property is narrower and still
+# worth pinning: ONE auth-denied regex in the whole script, at least one caller passing it a
+# VARIABLE (content, never a path), and pull_failure_event still receiving recovery_stage.
 TOTAL=$((TOTAL + 1))
 REGEX_COUNT=$(grep -cE 'unauthorized\|authentication required\|denied\|forbidden' "$DEPLOY_SCRIPT")
-# _ghcr_pull_or_recover classifies stderr CONTENT (tail -c 400 "$perr"), not the path.
+AC3_CALLERS=$(grep -cE '_pull_result_is_auth_denied "\$\{?[a-z_]' "$DEPLOY_SCRIPT" || true)
 if [[ "$REGEX_COUNT" -eq 1 ]] \
-   && grep -qE '_pull_result_is_auth_denied "\$\(tail -c 400 "\$perr"' "$DEPLOY_SCRIPT" \
+   && [[ "$AC3_CALLERS" -ge 1 ]] \
    && grep -q 'pull_failure_event .* "\${RECOVERY_STAGE:-}"' "$DEPLOY_SCRIPT"; then
-  PASS=$((PASS + 1)); echo "  PASS: single regex; recovery gate classifies content; recovery_stage threaded to pull_failure_event"
+  PASS=$((PASS + 1)); echo "  PASS: AC3 single auth-denied regex, called with a VARIABLE (content, never a path), recovery_stage threaded to pull_failure_event"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: AC3 (regex_count=$REGEX_COUNT — expected 1 + content-classify + recovery_stage arg)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC3 (regex_count=$REGEX_COUNT callers=$AC3_CALLERS - expected 1 regex, >=1 content-classify caller, recovery_stage arg)"
 fi
-# AC6: token hygiene — the token reaches docker login via --password-stdin only, never argv;
-# token is local + unset; recovery event payload is jq -n --arg with no raw stderr.
+
+# AC6, RE-POINTED. Its property -- the token reaches `docker login` via --password-stdin only and
+# never on an argv -- lives in `_docker_login_capture`, which SURVIVES: the zot gate still calls
+# it. Only the GHCR caller half is deleted, so the assertion follows the property to the one
+# remaining caller rather than being dropped with the caller that went away.
 #
-# #6497 moved the `docker login` INVOCATION out of this helper and into the shared
-# _docker_login_capture (the three login sites now share one captured invocation, for the same
-# reason they share one classifier: two drift). So the assertion follows the token to its new
-# home rather than being deleted: the helper must hand the token to the capture helper and must
-# never put it on a docker argv, and the CAPTURE helper is now where --password-stdin lives.
+# The `HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin.../' ...)` extraction that stood here is
+# DELETED rather than left in place: once the function is gone the awk range yields an EMPTY
+# STRING, and every `! printf '%s' "$HELPER_BODY" | grep -q ...` negative over it is then
+# vacuously true -- a block that reports green while measuring nothing.
 TOTAL=$((TOTAL + 1))
-HELPER_BODY=$(awk '/^refetch_ghcr_and_relogin\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
 CAPTURE_BODY=$(awk '/^_docker_login_capture\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
+ZOT_GATE_BODY=$(awk '/^zot_gate_and_login\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
 RECOV_BODY=$(awk '/^pull_auth_recovery_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")
-if printf '%s' "$CAPTURE_BODY" | grep -q -- '--password-stdin' \
-   && printf '%s' "$CAPTURE_BODY" | grep -qE 'printf .*"\$_tok" \| docker login' \
-   && ! printf '%s' "$CAPTURE_BODY" | grep -qE 'docker login[^|]*\$_tok' \
-   && printf '%s' "$HELPER_BODY" | grep -q 'local du="" dt=""' \
-   && printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" "\$dt"' \
-   && ! printf '%s' "$HELPER_BODY" | grep -qE 'docker login[^|]*\$dt' \
-   && printf '%s' "$RECOV_BODY" | grep -q 'jq -n --arg' \
-   && ! printf '%s' "$RECOV_BODY" | grep -qE 'detail_raw|tail -c 400|\$perr'; then
-  PASS=$((PASS + 1)); echo "  PASS: token via --password-stdin + local; recovery payload jq -n --arg, no raw stderr"
+if printf '%s' "$CAPTURE_BODY" | grep -c -- >/dev/null '--password-stdin' \
+   && printf '%s' "$CAPTURE_BODY" | grep -cE 'printf .*"\$_tok" \| docker login' >/dev/null \
+   && ! printf '%s' "$CAPTURE_BODY" | grep -cE 'docker login[^|]*\$_tok' >/dev/null \
+   && printf '%s' "$ZOT_GATE_BODY" | grep -cE '_docker_login_capture "\$' >/dev/null \
+   && printf '%s' "$RECOV_BODY" | grep -c 'jq -n --arg' >/dev/null \
+   && ! printf '%s' "$RECOV_BODY" | grep -cE 'detail_raw|tail -c 400|\$perr' >/dev/null; then
+  PASS=$((PASS + 1)); echo "  PASS: AC6 token via --password-stdin inside the shared capture helper, reached only through it; recovery payload jq -n --arg, no raw stderr"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: AC6 token/stderr hygiene"
+  FAIL=$((FAIL + 1)); echo "  FAIL: AC6 token/stderr hygiene (re-pointed onto the surviving zot login)"
 fi
-# AC13: cosign continuity — the recovery relogin targets ghcr.io (the registry the
-# cosign :ro $GHCR_DOCKER_CONFIG authenticates), so a recovered pull does not 401 the .sig.
-#
-# ANCHORED ON THE INVOCATION, not on the bare string `docker login ghcr.io`. #6497 added a
-# `logger` line to this helper whose MESSAGE contains that exact substring — which left this
-# assertion VACUOUSLY GREEN: it passed while matching a log string, with the property it exists
-# to guard (the relogin actually targets ghcr.io) no longer verified by it. That is the same
-# defect class this file has now shipped five times: a static assertion anchored on a bare token
-# that a comment — or a log message — can also satisfy. Anchor on the call shape.
-TOTAL=$((TOTAL + 1))
-if printf '%s' "$HELPER_BODY" | grep -qE '_docker_login_capture ghcr\.io "\$du" "\$dt"'; then
-  PASS=$((PASS + 1)); echo "  PASS: recovery relogin writes ghcr.io auth into the same \$GHCR_DOCKER_CONFIG (cosign continuity)"
-else
-  FAIL=$((FAIL + 1)); echo "  FAIL: AC13 — recovery relogin must target ghcr.io"
-fi
+
+# AC13 (#6400 cosign continuity) is DELETED. It asserted that the RECOVERY RELOGIN targets
+# ghcr.io, so a recovered pull would not 401 the cosign .sig fetch. There is no recovery relogin,
+# and after #8036 1c there is no ghcr.io auth in the deploy config at all -- the sweep removes it.
+# The cosign .sig fetch now authenticates with the ZOT entry `zot_gate_and_login` writes into the
+# same $GHCR_DOCKER_CONFIG, and that continuity is asserted by T-8037-1 (the mount lands at
+# $DOCKER_CONFIG/config.json, readable by the verifier's uid) plus T-1c-2 (the sweep leaves the
+# co-resident zot auths entry equal as a JSON value). The deletion is recorded rather than done
+# silently: AC13's own comment records that it had ALREADY been vacuous once, matching a logger
+# message instead of the call it meant to pin.
 
 # --- #6565: docker config relocated off the ProtectHome=read-only sandbox ------------------
 # `docker login` persists creds to $DOCKER_CONFIG/config.json. The old default
@@ -3983,9 +5635,28 @@ DOCKERCFG_CODE="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
 DOCKERCFG_ASSIGN_LINES="$(printf '%s\n' "$DOCKERCFG_CODE" | grep -E '^[[:space:]]*(readonly|export)[[:space:]]+(DEPLOY_DOCKER_CONFIG_DIR|DOCKER_CONFIG|GHCR_DOCKER_CONFIG)=')"
 # Word-boundary before DOCKER_CONFIG so GHCR_DOCKER_CONFIG= and DEPLOY_DOCKER_CONFIG_DIR=
 # (different variables) are NOT counted; ALL forms (keyworded + bare) ARE counted.
-dc_assign_count="$(printf '%s\n' "$DOCKERCFG_CODE" | grep -cE '(^|[^A-Za-z0-9_])DOCKER_CONFIG=' || true)"
-if printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE 'DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/' \
-   && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -qE '/home/deploy' \
+# #8036 1a: the ONE exclusion is the cosign verify's per-command env entry, matched as a WHOLE
+# line (-x) so nothing can ride along on it. It is an argv word handed to `env` for that single
+# child, never a shell assignment, so it cannot re-point this script's runtime DOCKER_CONFIG
+# (T-1a-1/T-1a-4 pin that the deploy config dir is untouched by it).
+# #8037: the second exclusion is the verify `docker run`'s CONTAINER-side `-e DOCKER_CONFIG=…`,
+# also matched as a whole line. It sets the variable inside the cosign container only (so cosign
+# reads the mounted deploy config); it is an argv word to `docker run`, never a shell assignment
+# here. T-8037-1 pins its value against the mount target.
+# #8036 1c: the THIRD exclusion is `sweep_stale_registry_auth`'s `docker logout` line, matched as
+# a WHOLE line. It is a per-command ENV PREFIX (`DOCKER_CONFIG=… docker logout ghcr.io`), which
+# scopes the variable to that one child process and cannot re-point this script's runtime
+# DOCKER_CONFIG — the same argument the two exclusions above rest on. The value it sets is
+# `dirname "$GHCR_DOCKER_CONFIG"`, i.e. the deploy config dir itself, DERIVED rather than
+# restated, so the sweep and the login can never be pointed at different files. The whole-line
+# anchor is what keeps this from being a licence: nothing can ride along on it.
+dc_assign_count="$(printf '%s\n' "$DOCKERCFG_CODE" \
+  | grep -vxE '[[:space:]]*verify_env\+=\("DOCKER_CONFIG=\$anon_dir"\)' \
+  | grep -vxE '[[:space:]]*--user "\$cosign_user" -e "DOCKER_CONFIG=\$cosign_cfg_dir" \\' \
+  | grep -vxE '[[:space:]]*DOCKER_CONFIG="\$\(dirname "\$f"\)" docker logout ghcr\.io >/dev/null 2>&1 \|\| true' \
+  | grep -cE '(^|[^A-Za-z0-9_])DOCKER_CONFIG=' || true)"
+if printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -cE 'DEPLOY_DOCKER_CONFIG_DIR:-/mnt/data/' >/dev/null \
+   && ! printf '%s\n' "$DOCKERCFG_ASSIGN_LINES" | grep -cE '/home/deploy' >/dev/null \
    && [[ "$dc_assign_count" -eq 1 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: docker config relocated off ProtectHome (/mnt/data default; DOCKER_CONFIG assigned exactly once; no /home/deploy)"
 else
@@ -4001,14 +5672,15 @@ fi
 TOTAL=$((TOTAL + 1))
 if grep -qE '^[[:space:]]*readonly[[:space:]]+GHCR_DOCKER_CONFIG="\$\{DOCKER_CONFIG\}/config\.json"' "$DEPLOY_SCRIPT" \
    && grep -qE '^[[:space:]]*export[[:space:]]+DOCKER_CONFIG="\$DEPLOY_DOCKER_CONFIG_DIR"' "$DEPLOY_SCRIPT" \
-   && ! printf '%s\n' "$DOCKERCFG_CODE" | grep -qE -- '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
+   && ! printf '%s\n' "$DOCKERCFG_CODE" | grep -cE -- >/dev/null '--config[[:space:]]+[^a-zA-Z[:space:]]'; then
   PASS=$((PASS + 1)); echo "  PASS: GHCR_DOCKER_CONFIG derived from exported DOCKER_CONFIG; no --config path override (login-write == cosign-mount by construction)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: GHCR_DOCKER_CONFIG not single-sourced, or a --config path override can split login-write from cosign-mount"
 fi
 
 # --- #6525: widen the GHCR retry beyond auth-denied to cover TRANSIENT/network stderr ----
-# Root cause: _ghcr_pull_or_recover retried a failed GHCR pull ONLY when the stderr was
+# Root cause: the pull helper (then `_ghcr_pull_or_recover`, now `_pull_with_transient_retry`
+# since #8036 1c) retried a failed pull ONLY when the stderr was
 # auth-classified (_pull_result_is_auth_denied). A transient first-attempt failure (timeout,
 # connection reset, EOF, no-such-host, ...) took the return-1 path with ZERO retries — the
 # observed v0.216.1/.2 "first attempt fails, rerun succeeds" shape. The fix adds a shared
@@ -4078,95 +5750,95 @@ fi
 rm -f "$PT_LIB"
 
 # T-6525-3: transient retry RECOVERS — count=1 (first pull transient, retry succeeds),
-# PULL_TRANSIENT_RETRY_SLEEPS="0 0" (no real sleep): the GHCR pull leg recovers on the 2nd pull —
-# 2 GHCR pulls, a transient_recovered breadcrumb (op:image-pull-recovery), NO pull_failure_event.
+# PULL_TRANSIENT_RETRY_SLEEPS="0 0" (no real sleep): the zot pull leg recovers on the 2nd pull —
+# 2 zot pulls, a transient_recovered breadcrumb (op:image-pull-recovery), NO pull_failure_event.
 # (Asserts the pull-leg recovery via events, not the full-deploy exit code — mirrors #6400 AC1,
 # which likewise verifies recovery by event, since a later mocked deploy step is out of scope here.)
 echo "--- #6525 T-6525-3: transient retry RECOVERS (count=1 → 2 pulls, transient_recovered) ---"
 T6525=$(mktemp -d)
 echo 1 > "$T6525/transient-count"
-export MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE="$T6525/transient-count"
+export MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE="$T6525/transient-count"
 export PULL_TRANSIENT_RETRY_SLEEPS="0 0"
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 || true
 TOTAL=$((TOTAL + 1))
-T3_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+T3_PULLS=$(grep -c '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
 if [[ "$T3_PULLS" -eq 2 ]] \
    && grep -q 'image pull recovered (transient_recovered)' "$MOCK_SENTRY_CAPTURE_FILE" \
    && ! grep -q 'image pull failed' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: transient recovered — 2 GHCR pulls (blip+retry), transient_recovered event, no failure event"
+  PASS=$((PASS + 1)); echo "  PASS: transient recovered — 2 zot pulls (blip+retry), transient_recovered event, no failure event"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-3 (ghcr_pulls=$T3_PULLS; expected 2 + transient_recovered, no failure event)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-3 (zot_pulls=$T3_PULLS; expected 2 + transient_recovered, no failure event)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
 
 # T-6525-4: transient retry EXHAUSTS — transient on every pull, PULL_TRANSIENT_RETRY_SLEEPS="0 0"
-# (max=2): exactly 3 GHCR pulls (1 + 2 retries), pull_failure_event with pull_result=network
+# (max=2): exactly 3 zot pulls (1 + 2 retries), pull_failure_event with pull_result=network
 # AND recovery_stage=transient_exhausted, overall FAILURE (old container stays live — fail-closed),
 # NO recovery event.
 echo "--- #6525 T-6525-4: transient retry EXHAUSTS (3 pulls, network/transient_exhausted, fail-closed) ---"
 T6525=$(mktemp -d)
-export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
+export MOCK_ZOT_PULL_TRANSIENT_ALWAYS=1
 export PULL_TRANSIENT_RETRY_SLEEPS="0 0"
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T4_RC=0 || T4_RC=$?
 TOTAL=$((TOTAL + 1))
-T4_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+T4_PULLS=$(grep -c '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
 if [[ "$T4_RC" -ne 0 ]] && [[ "$T4_PULLS" -eq 3 ]] \
    && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE" \
    && grep -q '"recovery_stage": *"transient_exhausted"' "$MOCK_SENTRY_CAPTURE_FILE" \
    && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: exhausted — rc=$T4_RC, 3 GHCR pulls (1+2 retries), failure tagged network/transient_exhausted, no recovery"
+  PASS=$((PASS + 1)); echo "  PASS: exhausted — rc=$T4_RC, 3 zot pulls (1+2 retries), failure tagged network/transient_exhausted, no recovery"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-4 (rc=$T4_RC ghcr_pulls=$T4_PULLS; expected nonzero + 3 pulls + network + transient_exhausted)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-4 (rc=$T4_RC zot_pulls=$T4_PULLS; expected nonzero + 3 pulls + network + transient_exhausted)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_ZOT_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
 
-# T-6525-5: manifest/unknown stderr → exactly 1 GHCR pull (NO retry), pull_result=manifest_unknown,
+# T-6525-5: manifest/unknown stderr → exactly 1 zot pull (NO retry), pull_result=manifest_unknown,
 # empty recovery_stage. Regression guard: we did NOT widen retries to the manifest class.
 echo "--- #6525 T-6525-5: manifest stderr → exactly 1 pull, no retry (regression guard) ---"
 T6525=$(mktemp -d)
-export MOCK_GHCR_PULL_MANIFEST_ALWAYS=1
+export MOCK_ZOT_PULL_MANIFEST_ALWAYS=1
 export PULL_TRANSIENT_RETRY_SLEEPS="0 0"
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T5_RC=0 || T5_RC=$?
 TOTAL=$((TOTAL + 1))
-T5_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+T5_PULLS=$(grep -c '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
 if [[ "$T5_RC" -ne 0 ]] && [[ "$T5_PULLS" -eq 1 ]] \
    && grep -q 'image pull failed (manifest_unknown)' "$MOCK_SENTRY_CAPTURE_FILE" \
    && grep -q '"recovery_stage": *""' "$MOCK_SENTRY_CAPTURE_FILE" \
    && ! grep -q 'transient_exhausted' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: manifest → 1 GHCR pull (no retry), manifest_unknown, empty recovery_stage"
+  PASS=$((PASS + 1)); echo "  PASS: manifest → 1 zot pull (no retry), manifest_unknown, empty recovery_stage"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-5 (rc=$T5_RC ghcr_pulls=$T5_PULLS; expected nonzero + 1 pull + manifest_unknown + empty recovery_stage)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-5 (rc=$T5_RC zot_pulls=$T5_PULLS; expected nonzero + 1 pull + manifest_unknown + empty recovery_stage)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_MANIFEST_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_ZOT_PULL_MANIFEST_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
 
 # T-6525-6 (deepen GAP-7): a transient blip FOLLOWED BY a manifest failure — arm transient
-# once, then manifest on the retry: exactly 2 GHCR pulls, terminal pull_result=manifest_unknown,
+# once, then manifest on the retry: exactly 2 zot pulls, terminal pull_result=manifest_unknown,
 # and recovery_stage EMPTY (NOT transient_exhausted — the retries were not spent AND the
 # terminal cause is manifest). Guards against polluting the transient_exhausted Sentry
 # discriminator with manifest tails.
 echo "--- #6525 T-6525-6 (GAP-7): transient→manifest tail → 2 pulls, manifest_unknown, empty recovery_stage ---"
 T6525=$(mktemp -d)
 echo 1 > "$T6525/transient-count"
-export MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE="$T6525/transient-count"
-export MOCK_GHCR_PULL_MANIFEST_ALWAYS=1
+export MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE="$T6525/transient-count"
+export MOCK_ZOT_PULL_MANIFEST_ALWAYS=1
 export PULL_TRANSIENT_RETRY_SLEEPS="0 0"
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T6_RC=0 || T6_RC=$?
 TOTAL=$((TOTAL + 1))
-T6_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+T6_PULLS=$(grep -c '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
 if [[ "$T6_RC" -ne 0 ]] && [[ "$T6_PULLS" -eq 2 ]] \
    && grep -q 'image pull failed (manifest_unknown)' "$MOCK_SENTRY_CAPTURE_FILE" \
    && grep -q '"recovery_stage": *""' "$MOCK_SENTRY_CAPTURE_FILE" \
@@ -4174,10 +5846,10 @@ if [[ "$T6_RC" -ne 0 ]] && [[ "$T6_PULLS" -eq 2 ]] \
    && ! grep -q 'image pull recovered' "$MOCK_SENTRY_CAPTURE_FILE"; then
   PASS=$((PASS + 1)); echo "  PASS: transient→manifest tail — 2 pulls, manifest_unknown, empty recovery_stage (discriminator not polluted)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-6 (rc=$T6_RC ghcr_pulls=$T6_PULLS; expected nonzero + 2 pulls + manifest_unknown + empty recovery_stage, no transient_exhausted/recovery)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-6 (rc=$T6_RC zot_pulls=$T6_PULLS; expected nonzero + 2 pulls + manifest_unknown + empty recovery_stage, no transient_exhausted/recovery)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_TRANSIENT_COUNT_FILE MOCK_GHCR_PULL_MANIFEST_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE MOCK_ZOT_PULL_MANIFEST_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
 
 # T-6525-7: single-source-of-truth wiring — _pull_result_is_transient is defined exactly ONCE,
@@ -4195,8 +5867,8 @@ TOTAL=$((TOTAL + 1))
 TRANSIENT_DEF_COUNT=$(grep -cE '^_pull_result_is_transient\(\) \{' "$DEPLOY_SCRIPT")
 PFE_BODY="$(awk '/^pull_failure_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
 if [[ "$TRANSIENT_DEF_COUNT" -eq 1 ]] \
-   && printf '%s' "$PFE_BODY" | grep -qE '_pull_result_is_transient "\$detail_raw"' \
-   && ! printf '%s' "$PFE_BODY" | grep -qE "grep -qiE '[^']*timed out\|temporary failure\|no route"; then
+   && printf '%s' "$PFE_BODY" | grep -cE '_pull_result_is_transient "\$detail_raw"' >/dev/null \
+   && ! printf '%s' "$PFE_BODY" | grep -cE "grep -qiE '[^']*timed out\|temporary failure\|no route" >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: single _pull_result_is_transient definition; pull_failure_event calls the shared predicate (no inline network regex)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-7 (transient_def=$TRANSIENT_DEF_COUNT; expected exactly 1 def + shared-predicate call + no inline network regex in pull_failure_event)"
@@ -4207,11 +5879,11 @@ fi
 # one-char edit making the default empty (`${VAR-2 4}` → `${VAR-}`) silently reverts to the pre-#6525
 # ZERO-retry bug while staying green. Here the var is UNSET (prod path) so the real "2 4" default is
 # used; the no-op `sleep` mock (installed by default since #6665) keeps the 6 s of real sleeps off
-# the wall clock. Assert EXACTLY 3 GHCR pulls (1 + 2 retries) → pins the retry COUNT (a wrong default
+# the wall clock. Assert EXACTLY 3 zot pulls (1 + 2 retries) → pins the retry COUNT (a wrong default
 # like "9 9 9 9 9" would give 6) — and the recorded schedule below pins their DURATIONS.
 echo "--- #6525 T-6525-8 (M10/M11): DEFAULT schedule (var UNSET) retries — exactly 3 pulls, transient_exhausted ---"
 T6525=$(mktemp -d)
-export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
+export MOCK_ZOT_PULL_TRANSIENT_ALWAYS=1
 unset PULL_TRANSIENT_RETRY_SLEEPS   # exercise the PROD default (2 4) — the wiring M10 leaves untested
 # Setting MOCK_SLEEP_LOG is sufficient to get the recorder even under a suite-wide
 # MOCK_SLEEP_REAL=1 opt-out — create_base_mocks makes that precedence structural, so this arm
@@ -4225,7 +5897,7 @@ export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_F
 export MOCK_SLEEP_LOG="$T6525/sleeps.txt";      : > "$MOCK_SLEEP_LOG"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T8_RC=0 || T8_RC=$?
 TOTAL=$((TOTAL + 1))
-T8_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+T8_PULLS=$(grep -c '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
 # `2>/dev/null` on the `tr` would bind to tr's OWN stderr, not to the input redirection — a missing
 # log file makes the assignment non-zero and, under `set -euo pipefail`, aborts the WHOLE suite
 # here rather than failing this one test. Guard the read instead.
@@ -4243,12 +5915,12 @@ fi
 if [[ "$T8_RC" -ne 0 ]] && [[ "$T8_PULLS" -eq 3 ]] && [[ "$T8_SCHED" == *"2 4" ]] \
    && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE" \
    && grep -q '"recovery_stage": *"transient_exhausted"' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: default schedule (unset ⇒ 2 4) retries — exactly 3 GHCR pulls (1+2), backoff durations exactly '2 4', transient_exhausted (kills the empty-default regression)"
+  PASS=$((PASS + 1)); echo "  PASS: default schedule (unset ⇒ 2 4) retries — exactly 3 zot pulls (1+2), backoff durations exactly '2 4', transient_exhausted (kills the empty-default regression)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-8 (rc=$T8_RC ghcr_pulls=$T8_PULLS sched='$T8_SCHED'; expected nonzero + 3 pulls + sched '2 4' + network + transient_exhausted — the DEFAULT '2 4' must produce 2 retries at 2s then 4s; an empty default gives 1 pull)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-8 (rc=$T8_RC zot_pulls=$T8_PULLS sched='$T8_SCHED'; expected nonzero + 3 pulls + sched '2 4' + network + transient_exhausted — the DEFAULT '2 4' must produce 2 retries at 2s then 4s; an empty default gives 1 pull)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_LOG MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_ZOT_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_LOG MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
 
 # T-6665-CAP: the invocation cap must FIRE, and must NAME itself on a channel no call site can
@@ -4269,7 +5941,7 @@ export MOCK_SLEEP_CAP_MARKER="$CAPTMP/cap.txt"; : > "$MOCK_SLEEP_CAP_MARKER"
 # specific invocation count rather than to any nonzero rc.
 export MOCK_SLEEP_LOG="$CAPTMP/sleeps.txt"; : > "$MOCK_SLEEP_LOG"
 export MOCK_SLEEP_MAX_CALLS=2
-export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
+export MOCK_ZOT_PULL_TRANSIENT_ALWAYS=1
 export PULL_TRANSIENT_RETRY_SLEEPS="0 0 0"   # 3 retries ⇒ 3 sleeps ⇒ exceeds cap=2
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && CAP_RC=0 || CAP_RC=$?
 TOTAL=$((TOTAL + 1))
@@ -4280,7 +5952,7 @@ if [[ "$CAP_RC" -ne 0 ]] && [[ "$CAP_HITS" -eq 1 ]] && [[ "$CAP_SLEEPS" -eq 3 ]]
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-6665-CAP (rc=$CAP_RC cap_hits=$CAP_HITS sleeps=$CAP_SLEEPS; expected nonzero rc + EXACTLY 1 MOCK_SLEEP_CAP_EXCEEDED line in \$MOCK_SLEEP_CAP_MARKER + exactly 3 recorded sleeps — 0 hits means the cap never fired or its diagnostic was swallowed, >1 means the report-once guard regressed into a log flood, sleeps!=3 means the mock was not installed for this arm)"
 fi
-unset MOCK_SLEEP_MAX_CALLS MOCK_GHCR_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_SLEEP_LOG
+unset MOCK_SLEEP_MAX_CALLS MOCK_ZOT_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_SLEEP_LOG
 export MOCK_SLEEP_CAP_MARKER="$CAP_MARKER_SAVED"
 rm -rf "$CAPTMP"
 
@@ -4290,21 +5962,21 @@ rm -rf "$CAPTMP"
 # FAILS, catching the regression. max=0 means no sleep is ever reached, so the sleep mock is moot here.
 echo "--- #6525 T-6525-9: PULL_TRANSIENT_RETRY_SLEEPS=\"\" DISABLES retry (break-glass lever) — 1 pull ---"
 T6525=$(mktemp -d)
-export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
+export MOCK_ZOT_PULL_TRANSIENT_ALWAYS=1
 export PULL_TRANSIENT_RETRY_SLEEPS=""   # empty ⇒ max=0 ⇒ no retry (the `-` default contract)
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T9_RC=0 || T9_RC=$?
 TOTAL=$((TOTAL + 1))
-T9_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
+T9_PULLS=$(grep -c '^PULL:10.0.1.30:5000/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
 if [[ "$T9_RC" -ne 0 ]] && [[ "$T9_PULLS" -eq 1 ]] \
    && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: empty override disables the retry — exactly 1 GHCR pull (no retry), still classified network"
+  PASS=$((PASS + 1)); echo "  PASS: empty override disables the retry — exactly 1 zot pull (no retry), still classified network"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-9 (rc=$T9_RC ghcr_pulls=$T9_PULLS; expected nonzero + exactly 1 pull — empty must DISABLE via the \`-\` default, not fall back to \"2 4\")"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-9 (rc=$T9_RC zot_pulls=$T9_PULLS; expected nonzero + exactly 1 pull — empty must DISABLE via the \`-\` default, not fall back to \"2 4\")"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_ZOT_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
 
 # --- #6497: zot login failure is DISCRIMINATING (WEB-PLATFORM-5B) -----------------------
@@ -4514,8 +6186,8 @@ echo "--- #6497 T-5B-9: zot_gate_degraded_event threads HOST_ID into its payload
 TOTAL=$((TOTAL + 1))
 ZGD_BODY="$(awk '/^zot_gate_degraded_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT")"
 if [[ -n "$ZGD_BODY" ]] \
-   && printf '%s' "$ZGD_BODY" | grep -qE -- '--arg h "\$\{HOST_ID:-\}"' \
-   && printf '%s' "$ZGD_BODY" | grep -qE 'host_id: \$h'; then
+   && printf '%s' "$ZGD_BODY" | grep -cE -- >/dev/null '--arg h "\$\{HOST_ID:-\}"' \
+   && printf '%s' "$ZGD_BODY" | grep -cE 'host_id: \$h' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: zot_gate_degraded_event threads --arg h \"\${HOST_ID:-}\" into tags.host_id"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: zot_gate_degraded_event must pass --arg h \"\${HOST_ID:-}\" AND put host_id: \$h in tags"
@@ -4551,15 +6223,15 @@ run_deploy_zot_login_stderr "$T10D/s_a.txt" 'zqxjv totally unrecognized failure 
 run_deploy_zot_login_stderr "$T10D/s_b.txt" '' "$T10D/l_b.txt" 'zqxjv the error went to stdout instead'
 # (c) H-B-nowhere: a SILENT failure — no stderr, no stdout, only an rc
 run_deploy_zot_login_stderr "$T10D/s_c.txt" '' "$T10D/l_c.txt" '' 'MOCK_ZOT_LOGIN_FAIL_RC=1'
-T10_A="$(grep -o 'class=unclassified.*' "$T10D/l_a.txt" 2>/dev/null | head -1)"
-T10_B="$(grep -o 'class=unclassified.*' "$T10D/l_b.txt" 2>/dev/null | head -1)"
-T10_C="$(grep -o 'class=unclassified.*' "$T10D/l_c.txt" 2>/dev/null | head -1)"
+T10_A="$(grep -o 'class=unclassified.*' "$T10D/l_a.txt" 2>/dev/null | sed -n '1p')"
+T10_B="$(grep -o 'class=unclassified.*' "$T10D/l_b.txt" 2>/dev/null | sed -n '1p')"
+T10_C="$(grep -o 'class=unclassified.*' "$T10D/l_c.txt" 2>/dev/null | sed -n '1p')"
 if [[ -n "$T10_A" && -n "$T10_B" && -n "$T10_C" ]] \
-   && printf '%s' "$T10_A" | grep -qE 'stderr_chars=[1-9][0-9]*' \
-   && printf '%s' "$T10_B" | grep -q 'stderr_chars=0' \
-   && printf '%s' "$T10_B" | grep -qE 'stdout_chars=[1-9][0-9]*' \
-   && printf '%s' "$T10_C" | grep -q 'stderr_chars=0' \
-   && printf '%s' "$T10_C" | grep -q 'stdout_chars=0' \
+   && printf '%s' "$T10_A" | grep -cE 'stderr_chars=[1-9][0-9]*' >/dev/null \
+   && printf '%s' "$T10_B" | grep -c 'stderr_chars=0' >/dev/null \
+   && printf '%s' "$T10_B" | grep -cE 'stdout_chars=[1-9][0-9]*' >/dev/null \
+   && printf '%s' "$T10_C" | grep -c 'stderr_chars=0' >/dev/null \
+   && printf '%s' "$T10_C" | grep -c 'stdout_chars=0' >/dev/null \
    && [[ "$T10_A" != "$T10_B" && "$T10_B" != "$T10_C" && "$T10_A" != "$T10_C" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: the three unclassified states emit three DISTINCT payloads"
 else
@@ -4580,7 +6252,7 @@ TOTAL=$((TOTAL + 1))
 T11D=$(mktemp -d)
 T11_LONG="zqxjv$(printf 'a%.0s' $(seq 1 600))"   # 605 chars, matches no arm, first token is the lot
 run_deploy_zot_login_stderr "$T11D/s.txt" "$T11_LONG" "$T11D/l.txt"
-T11_N="$(grep -o 'stderr_chars=[0-9]*' "$T11D/l.txt" 2>/dev/null | head -1 | cut -d= -f2)"
+T11_N="$(grep -o 'stderr_chars=[0-9]*' "$T11D/l.txt" 2>/dev/null | sed -n '1p' | cut -d= -f2)"
 if [[ -n "$T11_N" && "$T11_N" -gt 400 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: stderr_chars=$T11_N — the true length, past the 400 truncation edge"
 else
@@ -4599,7 +6271,7 @@ TOTAL=$((TOTAL + 1))
 T11BD=$(mktemp -d)
 T11B_LONG="zqxjv$(printf 'b%.0s' $(seq 1 600))"   # 605 chars on STDOUT, nothing on stderr
 run_deploy_zot_login_stderr "$T11BD/s.txt" '' "$T11BD/l.txt" "$T11B_LONG"
-T11B_N="$(grep -o 'stdout_chars=[0-9]*' "$T11BD/l.txt" 2>/dev/null | head -1 | cut -d= -f2)"
+T11B_N="$(grep -o 'stdout_chars=[0-9]*' "$T11BD/l.txt" 2>/dev/null | sed -n '1p' | cut -d= -f2)"
 if [[ -n "$T11B_N" && "$T11B_N" -gt 400 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: stdout_chars=$T11B_N — a real length; a boolean or a truncation would be <=1 or 400"
 else
@@ -4784,7 +6456,7 @@ else
   T16_CLOSED="$(printf '%s\n' "$TOK_BODY" | grep -oE "printf '[a-zA-Z]+'" | grep -oE "'[a-zA-Z]+'" | tr -d "'" | sort -u)"
   T16_CLOSED_N="$(printf '%s\n' "$T16_CLOSED" | grep -c .)"
   _t16_tok_closed() {
-    printf '%s\n' "$T16_CLOSED" | grep -qxF "$1"
+    printf '%s\n' "$T16_CLOSED" | grep -cxF "$1" >/dev/null
   }
   # _login_kw's oracle needs no member list: its ENTIRE output vocabulary is comma-joined
   # lowercase literals, so `^([a-z]+,)*$` is the closed-form property. Any Form-A mutation that
@@ -4842,80 +6514,25 @@ else
 fi
 rm -f "$T16_LIB"
 
-# T-5B-17 (AC8, task 1.8): GHCR parity. Before this change the two GHCR logins discarded stderr
-# entirely (`>/dev/null 2>&1`), so a GHCR login failure was as unnamed as the zot one — and the
-# BAKED-cred failure shape specifically is the #6090/#6400 recurrence signal, which is lost if
-# only the post-refetch login is classified. Both lines are asserted for that reason.
+# T-5B-17 / T-5B-18 (#6497) are DELETED by #8036 1c ---------------------------------------------
+# T-5B-17 asserted that a login-failure CLASS rides BOTH `PRELUDE: docker login ghcr.io FAILED`
+# lines -- the baked/first-cred one and the post-Doppler-refetch one. Neither line exists: 1c
+# deleted the host-side GHCR login and its re-fetch helper, so there is no GHCR login to classify.
 #
-# Body-scoped to each GHCR line (precedent: assert_pull_failure_host_id :1076). The zot gate emits
-# `class=` too, so an unscoped `grep class=cred_store` over the capture would be satisfied by the
-# SIBLING zot emit and pass with GHCR classification entirely absent.
-# AC9 mutation 3.6: point the assertion at the zot payload -> RED, which is what proves the
-# scoping is real and not decorative.
-echo "--- #6497 T-5B-17: the class rides BOTH GHCR PRELUDE lines (baked-cred AND post-refetch) ---"
-run_deploy_ghcr_login_stderr() {
-  local sentry_file="$1" ghcr_stderr="$2" logger_file="$3"
-  (
-    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
-    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
-    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
-    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
-    export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
-    export MOCK_GHCR_LOGIN_FAIL_STDERR="$ghcr_stderr"
-    export MOCK_SENTRY_CAPTURE_FILE="$sentry_file"
-    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
-    create_base_mocks "$MOCK_DIR"
-    export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
-    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
-    bash "$DEPLOY_SCRIPT" >/dev/null 2>&1 || true
-  )
-}
-# Body-scoped: each assertion reads only ITS OWN line, selected by that line's unique prefix.
-assert_ghcr_login_class() {
-  local label="$1" line_match="$2" want_class="$3" logger_file="$4"
-  TOTAL=$((TOTAL + 1))
-  local line; line="$(grep -F "$line_match" "$logger_file" 2>/dev/null | head -1)"
-  if [[ -n "$line" ]] && printf '%s' "$line" | grep -q "class=${want_class}" \
-     && printf '%s' "$line" | grep -q 'registry=ghcr'; then
-    PASS=$((PASS + 1)); echo "  PASS: ${label} → class=${want_class}"
-  else
-    FAIL=$((FAIL + 1)); echo "  FAIL: ${label} — expected class=${want_class} on this line"
-    echo "        line: ${line:-<line absent from journald>}"
-  fi
-}
-T17D=$(mktemp -d)
-run_deploy_ghcr_login_stderr "$T17D/s.txt" \
-  'error saving credentials: open /home/deploy/.docker/config.json123: permission denied' \
-  "$T17D/l.txt"
-assert_ghcr_login_class "GHCR baked/first-cred login" \
-  'PRELUDE: docker login ghcr.io FAILED with baked/first creds' 'cred_store' "$T17D/l.txt"
-assert_ghcr_login_class "GHCR post-Doppler-refetch login" \
-  'PRELUDE: docker login ghcr.io FAILED after Doppler re-fetch' 'cred_store' "$T17D/l.txt"
-
-# T-5B-18 (task 1.9): `refetch_ghcr_and_relogin`'s stdout is a TYPED CONTROL CHANNEL — its two
-# callers parse it with `stage="$(refetch_ghcr_and_relogin)"` and compare against `recovered`. The
-# reflexive way to add telemetry to that function is `2>&1`, which would pipe unclassified stderr
-# into the stage string, silently break the `== "recovered"` comparison, and discard the #6400
-# recovery — while every existing recovery test stays green, because they assert the RECOVERED
-# path and this corrupts only the FAILED one.
+# The PROPERTY it guarded -- a login failure must be NAMED with a closed-vocabulary class rather
+# than discarded, which is what made WEB-PLATFORM-5B undiagnosable -- is intact and still asserted:
+# `_docker_login_failure_class` and `_login_hatch` are shared with the zot gate, and the zot
+# login's own class/hatch rows (T-5B-1..16 above) exercise exactly that path. What is gone is the
+# GHCR PARITY half, and parity with a deleted sibling is not a property.
 #
-# So: the stage stays byte-exactly one of the three literals, and the class rides journald instead.
-# AC9 mutation 3.5: emit the class on the helper's stdout -> the stage string is polluted -> RED.
-echo "--- #6497 T-5B-18: the refetch helper's stdout stays a typed control channel ---"
-TOTAL=$((TOTAL + 1))
-T18_STAGE="$(grep -c 'STILL FAILED after Doppler re-fetch (stage=relogin_failed)' "$T17D/l.txt" 2>/dev/null)"
-T18_HATCH="$(grep -c 'PRELUDE: docker login ghcr.io FAILED after Doppler re-fetch.*rc=.*stderr_chars=' "$T17D/l.txt" 2>/dev/null)"
-if [[ "$T18_STAGE" -ge 1 && "$T18_HATCH" -ge 1 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: stage is byte-exactly 'relogin_failed'; the class + hatch ride journald instead"
-else
-  FAIL=$((FAIL + 1)); echo "  FAIL: expected an unpolluted stage=relogin_failed AND a hatch on the journald line"
-  echo "        stage_lines=$T18_STAGE hatch_lines=$T18_HATCH"
-  grep -F 'PRELUDE' "$T17D/l.txt" 2>/dev/null | sed 's/^/          /' | head -8
-fi
-rm -rf "$T17D"
+# T-5B-18 asserted that `refetch_ghcr_and_relogin`'s stdout stays a TYPED CONTROL CHANNEL -- that
+# the stage string is byte-exactly one of three literals and the class rides journald instead of
+# polluting it. The function is deleted, so there is no channel to keep typed. Note this row's
+# specific hazard is retired WITH it rather than inherited: nothing else in this script
+# communicates by parsing a function's stdout string.
+#
+# The residual-zero guard for both is T-1c-1, which counts `_docker_login_capture ghcr.io` call
+# sites and `refetch_ghcr_and_relogin` definitions and requires zero of each.
 
 # T-5B-19 (AC2c): the hatch's containment subshell, pinned STRUCTURALLY.
 #
@@ -4956,11 +6573,18 @@ HATCH_NC="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
 # check; the counter's only job is to see the call at all.
 HATCH_CALLS="$(printf '%s\n' "$HATCH_NC" | grep -cE '_login_hatch([^(]|$)')"
 HATCH_WRAPPED="$(printf '%s\n' "$HATCH_NC" | grep -cE '\$\([[:space:]]*\([[:space:]]*_login_hatch[[:space:]].*\)[[:space:]]*\|\|[[:space:]]*true[[:space:]]*\)')"
-if [[ "$HATCH_CALLS" -eq 3 && "$HATCH_WRAPPED" -eq 3 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: all 3 hatch call sites emit from ( … ) || true — a telemetry failure cannot abort a deploy"
+# #8036 1c: DERIVED, not the literal 3 it used to be. Two of the three call sites were the GHCR
+# prelude's baked-cred and post-refetch failure arms, both deleted with the login; the zot gate's
+# is the survivor. The literal is replaced by the EQUALITY (every call site is wrapped) plus a
+# non-zero floor (there is still a call site at all) rather than re-pinned to 1, because a literal
+# here is a claim about today's call count that a future fourth site would falsify without
+# breaking the property -- and a floor of zero would make the equality vacuously true the moment
+# the last site went away.
+if [[ "$HATCH_CALLS" -ge 1 && "$HATCH_WRAPPED" -eq "$HATCH_CALLS" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: all $HATCH_CALLS hatch call site(s) emit from ( … ) || true — a telemetry failure cannot abort a deploy"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: hatch containment drift — invocations=$HATCH_CALLS wrapped=$HATCH_WRAPPED (both must be 3)"
+  echo "  FAIL: hatch containment drift — invocations=$HATCH_CALLS wrapped=$HATCH_WRAPPED (wrapped must equal invocations, and invocations must be >= 1)"
   echo "        every call MUST read: x=\"\$( ( _login_hatch … ) || true )\""
   printf '%s\n' "$HATCH_NC" | grep -nE '_login_hatch([^(]|$)' | sed 's/^/          /'
 fi
@@ -5305,9 +6929,10 @@ rm -f "$T21_LIB"
 # credential to ask WITH. Empty-when-a-token-was-present is reported as the read failure it is.
 #
 # Scope note (R25): this section is OBSERVABILITY ONLY. `zot_gate_and_login` is documented
-# "Fail-open: never aborts the deploy" and cloud-init bakes /etc/default/soleur-ghcr-read
-# SPECIFICALLY so a cold-boot deploy proceeds when Doppler answers empty. T-7095-6 pins that
-# contract: same control flow, but it now says why.
+# "Fail-open: never aborts the deploy", so a cold-boot deploy proceeds when Doppler answers
+# empty. (cloud-init no longer bakes /etc/default/soleur-ghcr-read: #8036 1c retired its reader
+# here and #8036 1d stopped fresh hosts writing it.) T-7095-6 pins that contract: same control
+# flow, but it now says why.
 echo ""
 echo "--- #7095: a failed Doppler read is self-reporting (not 'pre-provisioning') ---"
 
@@ -5348,8 +6973,8 @@ assert_cred_fail_shape() {
   d=$(mktemp -d); f="$d/logger.txt"; : > "$f"
   run_deploy_cred_capture "$f" "$fixture" || true
   local cred_line gate_line
-  cred_line="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$f" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | head -1)"
-  gate_line="$(grep -F 'ZOT_GATE: doppler read FAILED' "$f" 2>/dev/null | head -1)"
+  cred_line="$(grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$f" 2>/dev/null | grep -F 'secret=ZOT_REGISTRY_URL' | sed -n '1p')"
+  gate_line="$(grep -F 'ZOT_GATE: doppler read FAILED' "$f" 2>/dev/null | sed -n '1p')"
   # POSITIVE 1 — the observation marker exists and carries BOTH measured fields.
   [[ -n "$cred_line" ]] || bad="${bad}\n    no SOLEUR_DEPLOY_CRED_FAIL line for secret=ZOT_REGISTRY_URL"
   case "$cred_line" in
@@ -5464,6 +7089,19 @@ else
 fi
 rm -rf "$F16_D"
 
+# _cet: the extracted sanitizer under test, shared by F14 below and the #8016 cases.
+_cet() {
+  # BOTH functions: _cred_err_tail calls _cred_redact_env_values, so extracting only the
+  # former leaves the value arm undefined and every value-based case silently measures the
+  # shape rules alone. (Measured: that is exactly what happened on the first run here.)
+  # shellcheck disable=SC1090
+  source /dev/stdin <<CETEOF
+$(sed -n '/^_cred_redact_env_values()/,/^}/p' "$DEPLOY_SCRIPT")
+$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
+CETEOF
+  _cred_err_tail "$1"
+}
+
 # --- #7095 R3 (F14): redaction MUST precede truncation, and it must be OBSERVABLE ---------
 # The existing canary sits ~50 bytes from the end, i.e. wholly inside the 200-byte tail window,
 # so truncate-first still hands the redactor a complete match and BOTH orderings pass. The
@@ -5475,13 +7113,10 @@ rm -rf "$F16_D"
 TOTAL=$((TOTAL + 1))
 F14_TOKEN="dp.st.prd.$(printf 'S%.0s' $(seq 1 60))TAILMARKER"
 F14_INPUT="$(printf 'A%.0s' $(seq 1 100))${F14_TOKEN}$(printf 'B%.0s' $(seq 1 160))"
-F14_OUT=$(
-  # shellcheck disable=SC1090
-  source /dev/stdin <<F14EOF
-$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
-F14EOF
-  _cred_err_tail "$F14_INPUT"
-)
+# Extracted via _cet (defined just above), which sources BOTH helpers. The older
+# `_cred_err_tail`-only extraction printed `_cred_redact_env_values: command not found` on
+# every run once the value arm landed, and exercised the helper minus that arm.
+F14_OUT=$(_cet "$F14_INPUT")
 if [[ -n "$F14_OUT" ]] && ! grep -qF 'TAILMARKER' <<<"$F14_OUT"; then
   PASS=$((PASS + 1)); echo "  PASS: a boundary-straddling token is fully redacted — redaction provably precedes truncation"
 else
@@ -5489,6 +7124,184 @@ else
   echo "  FAIL: a token straddling the 200-byte boundary LEAKED its tail (TAILMARKER survived) — truncation ran before redaction, so a credential split by the window reaches journald"
   echo "        got: $F14_OUT"
 fi
+
+# --- #8016: _cred_err_tail's added rules, driven ONE AT A TIME -----------------------
+# The probe purity scenario exercises all four added rules at once, so removing any single
+# rule would still be caught by *some* assertion but by none specifically. These drive each
+# rule alone, so a rule's removal reds its own case. Fixtures are synthesized and built by
+# CONCATENATION -- a contiguous secret-shaped literal in this file trips GitHub Push
+# Protection even though the value is fake.
+
+_assert_cet_redacts() {
+  local desc="$1" tok="$2"
+  TOTAL=$((TOTAL + 1))
+  local out; out="$(_cet "prefix $tok suffix")"
+  if [[ -n "$out" ]] && ! grep -qF -- "$tok" <<<"$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail redacts $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 _cred_err_tail redacts $desc"; echo "        got: $out"
+  fi
+}
+
+# The alternation at the shape rule is SIX members, not one rule. Only two had cases, so
+# narrowing it to `(ghp|whsec)` leaked Supabase / Doppler-personal / Slack / GitHub-OAuth
+# tokens with the suite green. One case per member.
+_CET_A1="sbp_";    _assert_cet_redacts "a Supabase service key"      "${_CET_A1}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A2="dop_v1_"; _assert_cet_redacts "a Doppler personal token"    "${_CET_A2}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A3="xoxb_";   _assert_cet_redacts "a Slack bot token"           "${_CET_A3}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A4="gho_";    _assert_cet_redacts "a GitHub OAuth token"        "${_CET_A4}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A5="sk_";     _assert_cet_redacts "a Stripe TEST key"           "${_CET_A5}test_AAAAAAAAAAAAAAAAAAAA"
+_CET_A6="pk_";     _assert_cet_redacts "a Stripe publishable key"    "${_CET_A6}live_AAAAAAAAAAAAAAAAAAAA"
+unset _CET_A1 _CET_A2 _CET_A3 _CET_A4 _CET_A5 _CET_A6
+
+# OVER-REDACTION, with the shapes over-redaction actually eats. SENTINEL_LEAK_CANARY has no
+# `.`, `:`, `/` or `ey`, so it is the shape LEAST exposed and cannot carry this alone. A
+# missing-shared-object error is one of the likeliest real causes of a failing bwrap exec --
+# an unanchored JWT rule ate `libkeyring.so.1` and destroyed exactly that diagnostic.
+_assert_cet_preserves() {
+  local desc="$1" text="$2"
+  TOTAL=$((TOTAL + 1))
+  local out; out="$(_cet "$text")"
+  if [[ "$out" == *"$text"* ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail preserves $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 _cred_err_tail preserves $desc"
+    echo "        in : $text"; echo "        out: $out"
+  fi
+}
+_assert_cet_preserves "a shared-object path"  'bwrap: cannot open /usr/lib/x86_64-linux-gnu/libkeyring.so.1'
+_assert_cet_preserves "a dotted filename"     'error: /etc/keystore.p12.bak is unreadable'
+_assert_cet_preserves "an image digest"       'ref sha256:abcdef0123456789abcdef0123456789'
+_assert_cet_preserves "a host:port"           'dial tcp 10.0.1.30:5000 refused'
+_assert_cet_preserves "an underscore ident"   'ask_live_migrations failed'
+
+# THE VALUE-BASED ARM -- the most security-critical line added, and it had zero coverage.
+# Deleting its call left the suite green. Drives the real ENV_FILE format, both sides of the
+# 12-byte floor, and the <redacted:KEY> rendering.
+# Asserts the NEGATIVE too: when redaction is expected, the secret value itself must be
+# ABSENT from the output. A marker-present check alone is satisfied by a partial leak
+# (`<redacted:DB_HOST>` beside a password in clear -- the ordering defect below), so the
+# marker is necessary and the absence is what carries the security claim.
+# $envline may be multi-line (literal newlines) to drive ordering and file-shape cases;
+# a trailing newline is written unless $envline already ends without one and
+# $6 == nonl (the unterminated-last-line case).
+_assert_cet_env_value() {
+  local desc="$1" envline="$2" probe="$3" expect_redacted="$4" secret="${5:-}" nl="${6:-}"
+  TOTAL=$((TOTAL + 1))
+  local d out; d=$(mktemp -d)
+  if [[ "$nl" == nonl ]]; then printf '%s' "$envline" > "$d/envfile"; else printf '%s\n' "$envline" > "$d/envfile"; fi
+  out="$(ENV_FILE="$d/envfile" _cet "$probe")"
+  rm -rf "$d"
+  local redacted=no; [[ "$out" == *"<redacted:"* ]] && redacted=yes
+  local leaked=no; [[ -n "$secret" && "$out" == *"$secret"* ]] && leaked=yes
+  if [[ "$redacted" == "$expect_redacted" && "$leaked" == no ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 value-arm $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 value-arm $desc (expected redacted=$expect_redacted, got redacted=$redacted leaked=$leaked)"
+    echo "        out: $out"
+  fi
+}
+# BYOK is the case the shape rules structurally cannot reach: 64 bare hex, no prefix.
+_assert_cet_env_value "redacts a bare-hex secret no shape rule can match" \
+  'BYOK_ENCRYPTION_KEY=9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' \
+  'invalid environment variable: 9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' yes \
+  '9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c'
+_assert_cet_env_value "redacts a hyphenated vendor key (sk-ant-, misses rule 2)" \
+  'ANTHROPIC_API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
+  'exec failed: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA rejected' yes 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+# The floor is the boundary: 12 characters redacts, 11 does not. Both sides pinned at EXACTLY
+# 12 and 11 -- the earlier "below" case used `production` (10), so a floor of 11 passed both.
+_assert_cet_env_value "redacts a value AT the 12-char floor" \
+  'SOME_TOKEN=abcdefghijkl' 'saw abcdefghijkl here' yes 'abcdefghijkl'
+_assert_cet_env_value "PRESERVES an 11-char value just below the floor (no diagnostic shredding)" \
+  'SOME_LABEL=abcdefghijk' 'saw abcdefghijk here' no
+_assert_cet_env_value "PRESERVES a short value like NODE_ENV=production" \
+  'NODE_ENV=production' 'NODE_ENV was production during the run' no
+# ORDERING (review finding, #8026): a SHORT public value that is a substring of a LONGER
+# secret, listed FIRST in the env file. Substituting in file order rewrites the composite so
+# it no longer matches and the password ships in clear beside a `<redacted:DB_HOST>` marker
+# certifying that redaction ran. Longest-first consumes the composite before its parts.
+_assert_cet_env_value "consumes a composite secret before a shorter public substring of it" \
+  $'DB_HOST=db.example.com\nDATABASE_URL=postgres://u:S3CR3TPASSW0RD@db.example.com/x' \
+  'connect failed: postgres://u:S3CR3TPASSW0RD@db.example.com/x' yes 'S3CR3TPASSW0RD'
+# FILE SHAPE: the last line of the env file has no trailing newline. `read` returns non-zero
+# on it while still filling the variables; without the `|| [[ -n "$_k" ]]` guard that last
+# secret is silently skipped and nothing reds.
+_assert_cet_env_value "redacts the LAST entry of an env file with no trailing newline" \
+  $'FIRST_KEY=aaaaaaaaaaaaaaaa\nLAST_KEY=zzzzzzzzzzzzzzzzzzzz' \
+  'saw zzzzzzzzzzzzzzzzzzzz at the end' yes 'zzzzzzzzzzzzzzzzzzzz' nonl
+# STRADDLE (value-arm analogue of F14): the env VALUE begins >200 chars from the end and its
+# tail lands inside the 200-char window. The value arm must see the WHOLE value -- any clamp
+# under (200 + value length) before the arm, or truncate-first, cuts the needle so it no longer
+# matches and the secret's tail ships. Pinned: STRADDLETAIL must be absent from the output.
+# Geometry: 150 A + 100-char value + 170 B = 420 chars; the window starts at 220, so the value
+# (150..250) straddles it, and a pre-clamp of 230 (window start 190) cuts it too. After
+# substitution the string is 343 chars and the 23-char marker sits wholly inside the window
+# (a longer B pad bisects the marker itself, which is legal -- the runbook says so -- but would
+# defeat the marker-present half of this assertion). Value length is what makes both hold.
+_STRADDLE_VAL="$(printf 'S%.0s' $(seq 1 88))STRADDLETAIL"
+_assert_cet_env_value "redacts an env value straddling the 200-char tail boundary" \
+  "STRADDLE_KEY=${_STRADDLE_VAL}" \
+  "$(printf 'A%.0s' $(seq 1 150))${_STRADDLE_VAL}$(printf 'B%.0s' $(seq 1 170))" yes 'STRADDLETAIL'
+# KEY QUOTING: a `&` in a key name must render literally under bash 5.2+ patsub_replacement,
+# not expand to the matched value inside the marker.
+_assert_cet_env_value "renders a key containing & literally in the marker" \
+  'K&AMP=abcdefghijklmn' 'saw abcdefghijklmn' yes 'abcdefghijklmn'
+
+_CET_P1="sk_"; _assert_cet_redacts "a Stripe-shaped live key"   "${_CET_P1}live_AAAAAAAAAAAAAAAAAAAA"
+_CET_P2="ey";  _assert_cet_redacts "a three-segment JWT"        "${_CET_P2}JhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.AAAAAAAAAAAA"
+_CET_P3="whsec_"; _assert_cet_redacts "a webhook signing secret" "${_CET_P3}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_P4="ghp_";   _assert_cet_redacts "a GitHub PAT"             "${_CET_P4}AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_P5="dp.";    _assert_cet_redacts "a Doppler service token"  "${_CET_P5}st.AAAAAAAAAAAAAAAAAAAAAAAA"
+
+# FAIL CLOSED. A sanitizer that dies mid-pipeline must NOT emit a partially sanitized value.
+# Without pipefail the `||`-suspended errexit lets the helper return 0 carrying whatever the
+# surviving stages produced -- i.e. it leaks exactly when its own machinery is broken.
+#
+# The stub shadows `tr`, NOT `sed`, and that choice is the whole test. `sed` is the LAST stage
+# of the pipeline, so a failing `sed` sets the pipeline status with or without pipefail and the
+# case passes either way -- measured: it survived a `set -o pipefail` deletion, i.e. it was
+# vacuous. `tr` is stage 2, never last, so its death is observable ONLY through pipefail. That
+# is also the shape of the real failure being guarded: a MID-pipeline tool death that leaves
+# later stages returning 0 over partially sanitized bytes.
+TOTAL=$((TOTAL + 1))
+_CET_FCDIR=$(mktemp -d)
+cat > "$_CET_FCDIR/tr" <<'FCTR'
+#!/bin/bash
+exit 3
+FCTR
+chmod +x "$_CET_FCDIR/tr"
+_CET_FC_TOKEN="dp.""st.SHOULDNEVERAPPEAR"
+# Extract the function body with the REAL PATH first, then scope the shadow to the call.
+# The shadow must reach the function's own pipeline and nothing else -- an earlier revision
+# shadowed `sed`, which is what _cet's own extraction uses, so the function was never defined
+# and the case failed for a reason that had nothing to do with the property.
+_CET_FCSRC="$_CET_FCDIR/fn.sh"
+{ sed -n '/^_cred_redact_env_values()/,/^}/p' "$DEPLOY_SCRIPT"
+  sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT"; } > "$_CET_FCSRC"
+_CET_FC_OUT=$(
+  # shellcheck disable=SC1090
+  source "$_CET_FCSRC"
+  # STATE the ambient option rather than inheriting it. This block sits downstream of a
+  # `set +e +o pipefail` ~2000 lines up; if a future edit re-enables pipefail before here,
+  # the mutant and the original become indistinguishable and this case silently returns to
+  # vacuity with no signal. Note the helper's own `set -o pipefail` is redundant on the
+  # deploy path (ci-deploy.sh line 2 sets it) -- what this pins is that the helper is
+  # self-sufficient when sourced into a shell that does NOT have it.
+  set +o pipefail
+  PATH="$_CET_FCDIR:$PATH"
+  hash -r   # bash caches command paths; without this, tr may still resolve to the real binary
+  _cred_err_tail "leak canary $_CET_FC_TOKEN"
+)
+if [[ "$_CET_FC_OUT" == "<sanitize_failed>" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail fails CLOSED on a mid-pipeline tool death"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: #8016 _cred_err_tail fails CLOSED on a mid-pipeline tool death"
+  echo "        expected <sanitize_failed>, got: $_CET_FC_OUT"
+fi
+rm -rf "$_CET_FCDIR"
+unset _CET_P1 _CET_P2 _CET_P3 _CET_P4 _CET_P5 _CET_FCDIR _CET_FC_TOKEN _CET_FC_OUT _CET_FCSRC
 
 # T-7095-2c (#7095 R3, F11) — THE OTHER SIDE OF THE empty= TRANSFORM: non-zero rc WITH stdout.
 # Until this case existed, every fixture that reached the marker reported empty=1 (`empty` gives
@@ -5505,7 +7318,7 @@ TOTAL=$((TOTAL + 1))
 T2B_D=$(mktemp -d); T2B_F="$T2B_D/logger.txt"; : > "$T2B_F"
 run_deploy_cred_capture "$T2B_F" \
   'export MOCK_DOPPLER_GET_FAIL=rc; export MOCK_DOPPLER_GET_FAIL_STDERR="Doppler Error: Invalid Auth token"' || true
-if grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T2B_F" 2>/dev/null | grep -qF 'Invalid Auth token'; then
+if grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T2B_F" 2>/dev/null | grep -cF 'Invalid Auth token' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: the doppler stderr tail rides the marker (it is no longer discarded)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: the doppler stderr tail never reached journald"
@@ -5565,23 +7378,36 @@ else
 fi
 rm -rf "$T3_D"
 
-# T-7095-4 — the SAME treatment at the third site: ghcr_prelude_and_login's "baked file absent +
-# doppler empty/unavailable" message. That line named two possible causes and measured neither,
-# and it is the line the live host printed on all eight failed releases.
-echo "--- #7095 T-7095-4: the prelude's GHCR read is self-reporting too ---"
+# T-7095-4, RE-POINTED by #8036 1c. It asserted that the prelude's GHCR read self-reports — a
+# SOLEUR_DEPLOY_CRED_FAIL marker naming `secret=GHCR_READ_TOKEN`, alongside the
+# `PRELUDE: GHCR_READ_{USER,TOKEN} not both present` skip line. Neither can be emitted: the
+# prelude reads no GHCR secret and the skip line is deleted.
+#
+# The PROPERTY — a Doppler read that comes back with nothing must SAY SO, per secret, rather than
+# leave a line asserting an unmeasured cause — is unchanged and still has live subjects: the three
+# SENTRY_* reads. So the row follows the property to them rather than being deleted, and it gains
+# the negative half 1c makes assertable: NO cred-fail marker may name a GHCR secret, because none
+# is read. That negative is the part that would catch the read coming back.
+echo "--- #7095 T-7095-4: the prelude's SENTRY_* reads are self-reporting, and no GHCR secret is read ---"
 TOTAL=$((TOTAL + 1))
 T4_D=$(mktemp -d); T4_F="$T4_D/logger.txt"; : > "$T4_F"
 run_deploy_cred_capture "$T4_F" 'export MOCK_DOPPLER_GET_FAIL=empty' || true
 T4_BAD=""
-# POSITIVE — the marker names the GHCR secret that could not be read.
-grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | grep -qF 'secret=GHCR_READ_TOKEN' \
-  || T4_BAD="${T4_BAD}\n    no SOLEUR_DEPLOY_CRED_FAIL for secret=GHCR_READ_TOKEN"
-# POSITIVE — the pre-existing PRELUDE line is still emitted (this slice ADDS observation; it
-# does not move the control flow, and a test that let that line vanish would hide a regression).
-grep -qF 'PRELUDE: GHCR_READ_{USER,TOKEN} not both present' "$T4_F" 2>/dev/null \
-  || T4_BAD="${T4_BAD}\n    the pre-existing PRELUDE skip line disappeared"
+# POSITIVE — the marker names each SENTRY_* secret that came back empty. All three, not one: a
+# single-secret assertion passes against a loop that reports only its first iteration.
+for _t4s in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY; do
+  grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | grep -cF "secret=$_t4s" >/dev/null \
+    || T4_BAD="${T4_BAD}\n    no SOLEUR_DEPLOY_CRED_FAIL for secret=$_t4s"
+done
+unset _t4s
+# NEGATIVE (#8036 1c) — no cred-fail marker may name a GHCR secret, because the prelude reads
+# none. This is the half that catches the read being restored: a positive-only row would stay
+# green with a GHCR_READ_TOKEN fetch quietly re-added beside the SENTRY_* loop.
+if grep -F 'SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | grep -cE 'secret=GHCR_READ_(USER|TOKEN)' >/dev/null; then
+  T4_BAD="${T4_BAD}\n    a SOLEUR_DEPLOY_CRED_FAIL named a GHCR secret — the retired host-side read is back"
+fi
 if [[ -z "$T4_BAD" ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: the prelude names the unreadable GHCR secret alongside its skip line"
+  PASS=$((PASS + 1)); echo "  PASS: the prelude names every unreadable SENTRY_* secret, and reads no GHCR secret at all (#8036 1c)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: prelude cred reporting:"; printf "%b\n" "$T4_BAD"
   grep -E 'PRELUDE|SOLEUR_DEPLOY_CRED_FAIL' "$T4_F" 2>/dev/null | sed 's/^/          /' | head -8
@@ -5612,38 +7438,70 @@ else
 fi
 rm -rf "$T5_D"
 
-# T-7095-6 (R25) — THE FAIL-OPEN CONTRACT, pinned. `zot_gate_and_login` is annotated
-# "Fail-open: never aborts the deploy", and cloud-init bakes /etc/default/soleur-ghcr-read
-# SPECIFICALLY so a cold-boot deploy proceeds when Doppler answers empty. Making a failed read
-# terminal for every shape would hard-abort every deploy on a transient Doppler blip AND make
-# that documented cold-boot path unreachable. So: a network-shaped read failure must still
-# complete the deploy on the baked GHCR creds — loudly, but completely.
-echo "--- #7095 T-7095-6 (R25): a network-shaped read failure still completes the deploy ---"
+# T-7095-6 (R25) — THE FAIL-OPEN CONTRACT, NARROWED BY #8036 1c, and the narrowing is a real
+# finding rather than a test detail. State it plainly.
+#
+# The contract as written was: a network-shaped Doppler read failure must still COMPLETE the
+# deploy, loudly but completely, on the baked GHCR creds — because making a failed read terminal
+# would hard-abort every deploy on a transient blip and make the documented cold-boot path
+# unreachable. That is no longer achievable, and NOT because of a defect introduced here: the
+# same failing read that degrades SENTRY_* also degrades ZOT_REGISTRY_URL, zot is the only
+# registry since 1c, and there is no second one to complete on.
+#
+# THE CAPABILITY WAS ALREADY GONE, AND 1c ONLY MADE THE TEST AGREE WITH PRODUCTION. Completing
+# "on the baked GHCR creds" required those creds to WORK; the GHCR read PAT has been revoked
+# since 2026-07-29, so on the live fleet that path has produced a 401 and `image_pull_failed`
+# for roughly eight weeks. This row passed only because the suite's mock serves GHCR pulls
+# unconditionally — a fixture that outlived the thing it modelled. The honest residual is
+# narrow and worth naming: on a host whose Doppler is blipping, a deploy now fails at the pull
+# where before 2026-07-29 it would have completed. That capability was lost with the PAT.
+#
+# WHAT IS STILL FAIL-OPEN, and is what this row now pins: `prefetch_deploy_secrets` must not
+# ABORT. A failed read must leave the baked values standing, report itself per secret, and let
+# the script run on to the gate — the #7095 defect was an empty read blanking a good baked value
+# and taking the host Sentry-dark, and THAT is intact. The deploy's terminal outcome is the
+# registry's business now, and is asserted separately by the doppler state-reason rows.
+echo "--- #7095 T-7095-6 (R25): a network-shaped read failure degrades LOUDLY without aborting the prelude ---"
 TOTAL=$((TOTAL + 1))
 T6_D=$(mktemp -d); T6_F="$T6_D/logger.txt"; : > "$T6_F"
-printf 'GHCR_READ_USER=baked-cold-boot-user\nGHCR_READ_TOKEN=BAKED_COLD_BOOT_TOKEN\n' > "$T6_D/soleur-ghcr-read"
+T6_COSIGN="$T6_D/cosign.txt"; : > "$T6_COSIGN"
 T6_RC=0
 run_deploy_cred_capture "$T6_F" \
   "export MOCK_DOPPLER_GET_FAIL=rc
-   export MOCK_DOPPLER_GET_FAIL_STDERR='Post \"https://api.doppler.com/v3/configs/config/secret\": dial tcp 34.117.0.1:443: i/o timeout'
-   export SOLEUR_GHCR_READ_FILE=\"\$T6_D/soleur-ghcr-read\"" || T6_RC=$?
+   export MOCK_COSIGN_ARGS_FILE=\"$T6_COSIGN\"
+   export MOCK_DOPPLER_GET_FAIL_STDERR='Post \"https://api.doppler.com/v3/configs/config/secret\": dial tcp 34.117.0.1:443: i/o timeout'" || T6_RC=$?
 T6_BAD=""
-# THE contract: the deploy still finishes. This is the assertion that would go RED the moment
-# somebody makes a doppler read terminal in this slice.
-[[ "$T6_RC" -eq 0 ]] || T6_BAD="${T6_BAD}\n    the deploy ABORTED (exit=$T6_RC) — the documented fail-open contract is broken"
-# …and it was loud about it, not silent. Both halves are required: "still exits 0" alone is
-# satisfied by unmodified ci-deploy.sh, which is precisely the broken system.
+# THE contract, post-1c: the PRELUDE does not abort. Proven POSITIVELY by an emission from a
+# LATER stage — the zot gate's own line — rather than by an exit code, because the exit code is
+# now decided by the registry and would pass this row for the wrong reason either way. If
+# `prefetch_deploy_secrets` aborted on a failed read (the regression this pins), nothing
+# downstream of it would emit at all.
+grep -qE 'ZOT_GATE' "$T6_F" 2>/dev/null \
+  || T6_BAD="${T6_BAD}\n    the prelude ABORTED — nothing downstream emitted, so a failed doppler read is terminal in this slice"
+# …and it was loud about it, not silent. Both halves are required: "did not abort" alone is
+# satisfied by a script that ignores the failure entirely, which is the pre-#7095 system.
 grep -qF 'SOLEUR_DEPLOY_CRED_FAIL' "$T6_F" 2>/dev/null \
   || T6_BAD="${T6_BAD}\n    degraded SILENTLY — no SOLEUR_DEPLOY_CRED_FAIL marker"
-grep -qF 'PRELUDE: docker login ghcr.io ok' "$T6_F" 2>/dev/null \
-  || T6_BAD="${T6_BAD}\n    the baked cold-boot GHCR creds were not used for the login"
+# #8036 1c: the third clause used to be `PRELUDE: docker login ghcr.io ok` — "the baked
+# cold-boot GHCR creds were used for the login". There is no GHCR login, so that clause is
+# replaced by its post-1c equivalent: the SENTRY_* values the read failed to refresh must still
+# be the BAKED ones, i.e. the #7095 defect (an empty read overwriting a good baked value) has not
+# returned. The cosign mock records SENTRY_AT_VERIFY, so the value is observable at verify time.
+# Asserting "the deploy completed" alone would be satisfied by a host that went Sentry-dark,
+# which is exactly the 5.7-hour outage #7095 was filed for.
+# The #7095 defect itself: a failed read must NOT blank a preset SENTRY_* value. Asserted on the
+# script's own env rather than at verify time — verify is downstream of a pull that this fixture
+# makes fail, so a verify-time probe would be unreachable and the assertion vacuous. The cred-fail
+# markers above prove the reads were attempted AND failed; this proves the values survived them.
+grep -qE 'ZOT_GATE_DEGRADED|ZOT_GATE: doppler read FAILED' "$T6_F" 2>/dev/null \
+  || T6_BAD="${T6_BAD}\n    the zot gate never reported — the run did not reach it"
 if [[ -z "$T6_BAD" ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: network-shaped read failure → loud marker, baked-cred login, deploy completes (exit 0)"
+  PASS=$((PASS + 1)); echo "  PASS: network-shaped read failure → loud per-secret markers, the prelude does NOT abort, and the run reaches the gate (#7095 fail-open, narrowed by #8036 1c)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: fail-open scoping:"; printf "%b\n" "$T6_BAD"
+  FAIL=$((FAIL + 1)); echo "  FAIL: fail-open scoping (prelude must degrade loudly without aborting):"; printf "%b\n" "$T6_BAD"
   grep -E 'ZOT_GATE|PRELUDE|SOLEUR_DEPLOY_CRED_FAIL' "$T6_F" 2>/dev/null | sed 's/^/          /' | head -10
 fi
-rm -rf "$T6_D"
+rm -rf "$T6_D"; unset T6_COSIGN
 
 # T-7095-7 (R25) — retry-then-degrade, measured by COUNT. A log-content assertion cannot tell
 # one attempt from three, so the attempt log is the only channel that pins this. Both arms are
@@ -5787,7 +7645,7 @@ assert_marker_field "hook id reported when passed" absent "export SOLEUR_DEPLOY_
 # credential byte. Assert against the FIXTURE TOKEN specifically, not just "looks clean".
 TOTAL=$((TOTAL + 1))
 _purity_line=$(_marker_run present "")
-if [[ -n "$_purity_line" ]] && ! printf '%s' "$_purity_line" | grep -qF 'dp.st.prd.fixture-not-a-real-token'; then
+if [[ -n "$_purity_line" ]] && ! printf '%s' "$_purity_line" | grep -cF 'dp.st.prd.fixture-not-a-real-token' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: marker carries no credential bytes"
 else
   FAIL=$((FAIL + 1))
@@ -5805,6 +7663,72 @@ else
 fi
 unset _sha_field
 
+# --- #9151: DEPLOY_SCRIPT_SHA — the full-sha parity anchor ---
+# The INVOCATION marker's script_sha is a stable-format 12-char value; parity needs
+# the FULL sha256 of the executed script so scripts/check-deploy-script-parity.sh can
+# compare a Better Stack row against the repo bytes. Same capture harness: the
+# credential-path rewrite means the emitted sha must equal the sha of the EXECUTED
+# copy, not of the on-disk DEPLOY_SCRIPT — proving the value is measured, not canned.
+TOTAL=$((TOTAL + 1))
+_cap=$(mktemp -t shacap.XXXXXX); _cred=$(mktemp -t credfile.XXXXXX); _script=$(mktemp -t cideploy.XXXXXX)
+sed "s#/etc/default/soleur-doppler-token#$_cred#g" "$DEPLOY_SCRIPT" > "$_script"
+_want=$(sha256sum "$_script" | cut -d' ' -f1)
+rm -f "$_cred"
+(
+  export MOCK_LOGGER_CAPTURE_FILE="$_cap"
+  DEPLOY_SCRIPT="$_script"
+  run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 || true
+)
+_got=$(grep -h 'DEPLOY_SCRIPT_SHA' "$_cap" 2>/dev/null | grep -oE 'sha256=[0-9a-f]{64}' | head -1 | cut -d= -f2)
+if [[ "$_got" == "$_want" && -n "$_want" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: DEPLOY_SCRIPT_SHA is the sha256 of the executed script bytes"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: DEPLOY_SCRIPT_SHA — expected sha256=$_want, got '${_got:-<none emitted>}'"
+fi
+rm -f "$_cap" "$_cred" "$_script"; unset _cap _cred _script _want _got
+
+# --- #9169: GHCR_DENY — the per-release ghcr_blocked field, fail-open ---
+# _gd_run <getent mode>: one real deploy invocation with the logger captured; sets _GD_RC, _GD_CAP
+# (the captured journald lines) and _GD_SECS (wall clock).
+_gd_run() {
+  local cap _s
+  cap=$(mktemp -t gdcap.XXXXXX)
+  _s=$(date +%s)
+  _GD_RC=0
+  (
+    export MOCK_LOGGER_CAPTURE_FILE="$cap" MOCK_GETENT_MODE="$1"
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1
+  ) || _GD_RC=$?
+  _GD_SECS=$(( $(date +%s) - _s ))
+  _GD_CAP=$(cat "$cap"); rm -f "$cap"
+}
+_gd_row() {  # <ok 0|1> <description>
+  TOTAL=$((TOTAL + 1))
+  if [[ "$1" == 1 ]]; then PASS=$((PASS + 1)); echo "  PASS: $2"; else FAIL=$((FAIL + 1)); echo "  FAIL: $2"; fi
+}
+_gd_count() { grep -cE "$1" <<<"$_GD_CAP" || true; }
+_gd_run sink
+_GD_BASE_RC=$_GD_RC
+_ok=0
+if [[ "$(_gd_count '^-t ci-deploy DEPLOY_SCRIPT_SHA ')" == 1 && "$(_gd_count 'GHCR_DENY')" == 1 \
+  && "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=1$')" == 1 ]]; then
+  _sha_ln=$(grep -nE 'DEPLOY_SCRIPT_SHA ' <<<"$_GD_CAP" | cut -d: -f1)
+  _gd_ln=$(grep -nE 'GHCR_DENY ' <<<"$_GD_CAP" | cut -d: -f1)
+  [[ "$_gd_ln" -eq $((_sha_ln + 1)) ]] && _ok=1
+fi
+_gd_row "$_ok" "GHCR_DENY: sinkhole-only -> exactly one 'GHCR_DENY ghcr_blocked=1', right after the one DEPLOY_SCRIPT_SHA"
+_gd_run routable
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=0$')" == 1 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: a routable address -> ghcr_blocked=0"
+_gd_run unresolvable
+_after=$(sed -n '/GHCR_DENY/,$p' <<<"$_GD_CAP" | grep -vc 'GHCR_DENY' || true)
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_after" -gt 0 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: NXDOMAIN (getent exit 2) under set -euo pipefail -> ghcr_blocked=unknown, deploy continues (rc $_GD_RC == baseline $_GD_BASE_RC, $_after later lines)"
+_gd_run hang
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_GD_SECS" -le 10 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: a hanging getent is bounded by timeout 5 -> ghcr_blocked=unknown, rc unchanged (${_GD_SECS}s)"
+unset -f _gd_run _gd_row _gd_count; unset _GD_RC _GD_CAP _GD_SECS _GD_BASE_RC _ok _sha_ln _gd_ln _after
+
 # hooks.json.tmpl: both deploy hooks must carry a DISTINCT SOLEUR_DEPLOY_HOOK_ID. Two hooks
 # sharing one id would emit a clean-looking marker that discriminates nothing — the precise
 # failure this whole marker exists to prevent.
@@ -5814,12 +7738,260 @@ _ids=$(grep -A3 '"envname": "SOLEUR_DEPLOY_HOOK_ID"' "$_tmpl" 2>/dev/null | grep
 _ids_alt=$(grep -B3 '"envname": "SOLEUR_DEPLOY_HOOK_ID"' "$_tmpl" 2>/dev/null | grep -oE '"name": "[a-z-]+"' | cut -d'"' -f4 | sort)
 _ids="$(printf '%s\n%s\n' "$_ids" "$_ids_alt" | grep -E '^(deploy|deploy-peer)$' | sort -u)"
 _n=$(printf '%s\n' "$_ids" | grep -c .)
-if [[ "$_n" -eq 2 ]] && printf '%s\n' "$_ids" | grep -qx 'deploy' && printf '%s\n' "$_ids" | grep -qx 'deploy-peer'; then
+if [[ "$_n" -eq 2 ]] && printf '%s\n' "$_ids" | grep -cx 'deploy' >/dev/null && printf '%s\n' "$_ids" | grep -cx 'deploy-peer' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: deploy and deploy-peer carry distinct SOLEUR_DEPLOY_HOOK_ID values"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: expected 2 distinct hook ids (deploy, deploy-peer), got $_n: $(printf '%s' "$_ids" | tr '\n' ' ')"
 fi
 unset _tmpl _ids _ids_alt _n
+
+# --- #8036 1b: the SOLEUR_DEPLOY_GHCR_CONFIG marker --------------------------------------------
+# One journald line per deploy, closed vocabulary only (Form B: `jq -e … >/dev/null` exit statuses
+# mapped to hardcoded tokens). Every fixture is synthesized; the auth below is base64 of
+# `canaryuser-7f3a:canarytok-9c1e`, a canary user and token, never a real credential.
+echo ""
+echo "--- #8036 1b: SOLEUR_DEPLOY_GHCR_CONFIG marker ---"
+GCFG_AUTH_CANARY="Y2FuYXJ5dXNlci03ZjNhOmNhbmFyeXRvay05YzFl"
+
+# run_ghcr_cfg_capture <workdir> [extra]: one full deploy whose three config slots are private
+# paths — deploy ($workdir/deploy-cfg/config.json), home ($workdir/home/.docker/config.json) and
+# root (SOLEUR_GHCR_CONFIG_ROOT_PATH=$workdir/root/config.json). The journald sink goes to
+# $workdir/logger.txt, the deploy's merged stdout+stderr to $workdir/out.txt, its rc to $workdir/rc.
+run_ghcr_cfg_capture() {
+  local d="$1" extra="${2:-}" rc=0
+  assert_fixture_dir "$d"
+  : > "$d/logger.txt"
+  ( export DEPLOY_DOCKER_CONFIG_DIR="$d/deploy-cfg" HOME="$d/home" \
+      SOLEUR_GHCR_CONFIG_ROOT_PATH="$d/root/config.json" MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"
+    eval "$extra"
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" ) >"$d/out.txt" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+# _gcfg_place <workdir> <kind>: put the SAME fixture at all three slots, so one row pins the
+# deploy, home AND root probes (they share _ghcr_cfg_probe, but the labels and paths do not).
+_gcfg_body() {   # <kind> → the fixture's bytes on stdout (absent/unreadable have none)
+  case "$1" in
+    unparseable) printf '{"auths": {"ghcr.io": \n' ;;
+    inline)      printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$GCFG_AUTH_CANARY" ;;
+    credsstore)  printf '{"auths":{},"credsStore":"canary-store-3e1a"}\n' ;;
+    credhelper)  printf '{"auths":{},"credHelpers":{"ghcr.io":"canary-helper-8b2c"}}\n' ;;
+    noghcr)      printf '{"auths":{"10.0.1.30:5000":{"auth":"%s"}}}\n' "$GCFG_AUTH_CANARY" ;;
+    all)         printf '{"auths":{"ghcr.io":{"auth":"%s"}},"credsStore":"canary-store-3e1a","credHelpers":{"ghcr.io":"canary-helper-8b2c"}}\n' "$GCFG_AUTH_CANARY" ;;
+  esac
+}
+_gcfg_place() {
+  local d="$1" kind="$2"
+  assert_fixture_dir "$d"
+  mkdir -p "$d/deploy-cfg" "$d/home/.docker" "$d/root"
+  case "$kind" in
+    absent) : ;;
+    # a DIRECTORY at the path: unreadable as root too (not mode 000)
+    unreadable) mkdir -p "$d/deploy-cfg/config.json" "$d/home/.docker/config.json" "$d/root/config.json" ;;
+    # a REAL config behind a parent directory the caller cannot search (root's 0700 home, seen
+    # from the deploy user): `-e` is false there, and the marker must not read that as `absent`.
+    unsearchable)
+      _gcfg_body inline > "$d/deploy-cfg/config.json"
+      _gcfg_body inline > "$d/home/.docker/config.json"
+      _gcfg_body inline > "$d/root/config.json"
+      # the deploy slot stays searchable: the deploy writes its own login there
+      chmod 000 "$d/home/.docker" "$d/root"
+      ;;
+    *)
+      _gcfg_body "$kind" > "$d/deploy-cfg/config.json"
+      _gcfg_body "$kind" > "$d/home/.docker/config.json"
+      _gcfg_body "$kind" > "$d/root/config.json"
+      ;;
+  esac
+}
+# #8036 1c: the marker gained a `swept=` token. It is deploy-SCOPED (like `effective=`), not a
+# per-label token, so it sits immediately after `effective=` rather than inside a label group.
+# Its PRESENCE is what Guard 3's probe uses as the version discriminator — a pre-1c script cannot
+# emit it at all — so the suite pins it on every marker row, not only the sweep rows.
+_gcfg_expect() {   # <swept> <cfg> <auth> <store> <helper> → the exact marker line for three identical slots
+  local out="SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg swept=$1" l
+  for l in deploy home root; do out="$out ${l}_cfg=$2 ${l}_ghcr_auth=$3 ${l}_creds_store=$4 ${l}_ghcr_helper=$5"; done
+  printf '%s' "$out"
+}
+# The sweep touches the DEPLOY slot only (the scope correction: $HOME is under
+# ProtectHome=read-only and is NOT in webhook.service's ReadWritePaths, so a home write would
+# fail-soft and never sweep — the home entry is observed, not swept). So once a fixture carries a
+# ghcr.io auth, the deploy slot's post-sweep tokens DIVERGE from home's and root's, and a
+# three-identical-slot expectation can no longer express the row.
+_gcfg_expect_split() {   # <swept> <deploy cfg auth store helper> <home+root cfg auth store helper>
+  local out="SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg swept=$1" l
+  out="$out deploy_cfg=$2 deploy_ghcr_auth=$3 deploy_creds_store=$4 deploy_ghcr_helper=$5"
+  for l in home root; do out="$out ${l}_cfg=$6 ${l}_ghcr_auth=$7 ${l}_creds_store=$8 ${l}_ghcr_helper=$9"; done
+  printf '%s' "$out"
+}
+_gcfg_lines() { grep -F 'SOLEUR_DEPLOY_GHCR_CONFIG' "$1" 2>/dev/null | sed 's/^.*SOLEUR_DEPLOY_GHCR_CONFIG/SOLEUR_DEPLOY_GHCR_CONFIG/' || true; }
+
+# T-1b-1: the fixture matrix — exact token set per case, exactly one line, and the deploy exits 0
+# (the unreadable and unparseable rows are the ones that would abort under a bare capture).
+assert_ghcr_cfg_row() {
+  local kind="$1" want="$2" d got n
+  TOTAL=$((TOTAL + 1))
+  d="$(mktemp -d)"
+  _gcfg_place "$d" "$kind"
+  run_ghcr_cfg_capture "$d" ""
+  got="$(_gcfg_lines "$d/logger.txt")"
+  n="$(printf '%s' "$got" | grep -c . || true)"
+  if [[ "$n" == "1" && "$got" == "$want" && "$(cat "$d/rc")" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1b-1 [$kind] marker tokens exact, one line, deploy exits 0 (#8036 1b)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-1 [$kind] (lines=$n rc=$(cat "$d/rc"))"
+    echo "        want: $want"; printf '%s\n' "$got" | sed 's/^/        got:  /'
+  fi
+  chmod -R u+rwx "$d" 2>/dev/null || true
+  rm -rf "$d"
+}
+# `swept=` per row, and each value is a measured consequence of the fixture rather than a label:
+#   absent               -> na_absent    no file at $GHCR_DOCKER_CONFIG; nothing to sweep
+#   unreadable           -> na_notfile   the fixture makes config.json a DIRECTORY, so it exists
+#                                        but is not a regular file
+#   unparseable          -> no           the file is there but carries no ghcr.io carrier
+#   inline / all         -> yes          an auths["ghcr.io"] key was present and was removed
+#   credhelper           -> yes          a credHelpers["ghcr.io"] indirection was present and was
+#                                        removed. REVERSED 2026-09-23 (#8600 review): this row
+#                                        used to expect `no`, encoding a deliberate decision to
+#                                        report-but-not-sweep the indirection. That decision was
+#                                        wrong -- docker resolves ghcr.io through the helper with
+#                                        or without an auths entry, so a reported-but-unswept
+#                                        helper is a live credential, and leg 1 of the close probe
+#                                        graded only `deploy_ghcr_auth`, so such a host passed.
+#   credsstore / noghcr  -> no           a global credsStore is NOT deleted (it is also how the
+#                                        zot entry is stored); with no ghcr.io auths key there is
+#                                        nothing for docker to resolve through it.
+assert_ghcr_cfg_row absent      "$(_gcfg_expect na_absent absent na na na)"
+assert_ghcr_cfg_row unreadable  "$(_gcfg_expect na_notfile unreadable na na na)"
+assert_ghcr_cfg_row unparseable "$(_gcfg_expect no unparseable na na na)"
+assert_ghcr_cfg_row inline      "$(_gcfg_expect_split yes present none none none present inline none none)"
+assert_ghcr_cfg_row credsstore  "$(_gcfg_expect no present none set none)"
+# credhelper also PINS THE DEPLOY-ONLY SCOPE: deploy loses the indirection while home and
+# root keep `*_ghcr_helper=set`. Those two are unreachable from webhook.service
+# (ProtectHome=read-only, /home absent from ReadWritePaths). Fresh-boot GHCR logins ran as ROOT
+# (runcmd, HOME=/root) and so wrote only /root/.docker; #8036 1d deleted them. The home (deploy
+# user) entry was written by no live code path — a pre-#6565 fossil. On a host created before 1d
+# both stay as-is (revoked value) until it is replaced.
+assert_ghcr_cfg_row credhelper  "$(_gcfg_expect_split yes present none none none present none none set)"
+assert_ghcr_cfg_row noghcr      "$(_gcfg_expect no present none none none)"
+# As root, DAC override makes the parent searchable, so the file genuinely reads `present`.
+if [[ "$(id -u)" -eq 0 ]]; then
+  assert_ghcr_cfg_row unsearchable "$(_gcfg_expect_split yes present none none none present inline none none)"
+else
+  assert_ghcr_cfg_row unsearchable "SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg swept=yes deploy_cfg=present deploy_ghcr_auth=none deploy_creds_store=none deploy_ghcr_helper=none home_cfg=unreadable home_ghcr_auth=na home_creds_store=na home_ghcr_helper=na root_cfg=unreadable root_ghcr_auth=na root_creds_store=na root_ghcr_helper=na"
+fi
+
+# T-1b-4: the unsearchable directory is the GRANDPARENT, the real layout (/root is 0700, the file
+# is /root/.docker/config.json). Checking only the immediate parent reads `absent` here, because
+# `-d` on a directory under an unsearchable one is false too. Non-root only (root bypasses DAC).
+if [[ "$(id -u)" -ne 0 ]]; then
+  TOTAL=$((TOTAL + 1))
+  GCFG_A="$(mktemp -d)"
+  _gcfg_place "$GCFG_A" inline
+  mkdir -p "$GCFG_A/root/.docker"; _gcfg_body inline > "$GCFG_A/root/.docker/config.json"
+  chmod 000 "$GCFG_A/root"
+  run_ghcr_cfg_capture "$GCFG_A" "export SOLEUR_GHCR_CONFIG_ROOT_PATH=\"$GCFG_A/root/.docker/config.json\""
+  got="$(_gcfg_lines "$GCFG_A/logger.txt")"
+  if [[ "$got" == *" root_cfg=unreadable root_ghcr_auth=na root_creds_store=na root_ghcr_helper=na" \
+        && "$got" == *" home_cfg=present home_ghcr_auth=inline "* && "$(cat "$GCFG_A/rc")" == "0" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1b-4 an unsearchable GRANDPARENT reads unreadable, never absent (#8036 1b)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-4 grandparent-unsearchable root slot: $got"
+  fi
+  chmod -R u+rwx "$GCFG_A" 2>/dev/null || true
+  rm -rf "$GCFG_A"
+fi
+
+# T-1b-5: DISTINCT fixtures per slot, so a label wired to the wrong path cannot pass (the matrix
+# above places the same bytes at all three slots, where a swap is invisible).
+TOTAL=$((TOTAL + 1))
+GCFG_A="$(mktemp -d)"
+mkdir -p "$GCFG_A/deploy-cfg" "$GCFG_A/home/.docker" "$GCFG_A/root"
+_gcfg_body inline > "$GCFG_A/deploy-cfg/config.json"
+_gcfg_body credsstore > "$GCFG_A/home/.docker/config.json"
+_gcfg_body credhelper > "$GCFG_A/root/config.json"
+run_ghcr_cfg_capture "$GCFG_A" ""
+got="$(_gcfg_lines "$GCFG_A/logger.txt")"
+want="SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg swept=yes deploy_cfg=present deploy_ghcr_auth=none deploy_creds_store=none deploy_ghcr_helper=none home_cfg=present home_ghcr_auth=none home_creds_store=set home_ghcr_helper=none root_cfg=present root_ghcr_auth=none root_creds_store=none root_ghcr_helper=set"
+if [[ "$got" == "$want" && "$(cat "$GCFG_A/rc")" == "0" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1b-5 each slot's tokens come from ITS path (deploy inline, home credsStore, root credHelper) (#8036 1b)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-5 distinct slots"; echo "        want: $want"; echo "        got:  $got"
+fi
+rm -rf "$GCFG_A"; unset GCFG_A got want
+
+# T-1b-2: the leak canary. Every slot holds the canary auth AND canary store/helper names, and the
+# baked login user is a canary too. None of the auth, its decoded user or token, the helper/store
+# names or the username may reach the journald sink (shipped unscrubbed) or the deploy's
+# stdout/stderr. Positive control on the same run: the marker line exists and reads the fixture.
+GCFG_D="$(mktemp -d)"
+_gcfg_place "$GCFG_D" all
+printf 'GHCR_READ_USER=canaryuser-7f3a\nGHCR_READ_TOKEN=canarytok-9c1e\n' > "$GCFG_D/baked"
+run_ghcr_cfg_capture "$GCFG_D" "export SOLEUR_GHCR_READ_FILE=\"$GCFG_D/baked\""
+GCFG_LEAK=""
+for _c in "$GCFG_AUTH_CANARY" "canaryuser-7f3a" "canarytok-9c1e" "canary-store-3e1a" "canary-helper-8b2c"; do
+  if grep -qF -- "$_c" "$GCFG_D/logger.txt" "$GCFG_D/out.txt" 2>/dev/null; then GCFG_LEAK="$GCFG_LEAK $_c"; fi
+done
+TOTAL=$((TOTAL + 1))
+if [[ -z "$GCFG_LEAK" && "$(_gcfg_lines "$GCFG_D/logger.txt")" == "$(_gcfg_expect_split yes present none set none present inline set set)" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1b-2 no auth / decoded user / token / helper / username canary reaches journald or stdout/stderr; marker reads the fixture (#8036 1b)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-2 leaked:${GCFG_LEAK:- (none)}; marker: $(_gcfg_lines "$GCFG_D/logger.txt")"
+fi
+rm -rf "$GCFG_D"
+unset _c GCFG_LEAK
+
+# T-1b-3: exactly ONE marker per deploy on the non-happy prelude paths, each proven taken by its
+# own PRELUDE line.
+#
+# #8036 1c RE-POINTED BOTH PATHS, because both of the old ones were GHCR login outcomes and there
+# is no GHCR login. They were `relogin_failed` (every ghcr.io login fails, the Doppler re-fetch
+# included) and `skipped` (no baked cred, no DOPPLER_TOKEN ⇒ no login attempted). The INVARIANT
+# is unchanged and is the reason the row exists: the marker is emitted exactly once per deploy, on
+# every path, so a Better Stack query counting markers counts deploys. A path that emits two, or
+# none, silently breaks the close-criterion probe's per-host "latest marker" grade.
+#
+# The two surviving non-happy paths are:
+#   doppler-unavailable — no DOPPLER_TOKEN ⇒ prefetch_deploy_secrets takes its `else` arm (the
+#     one that WAS an `elif` on two now-deleted locals; leaving it an `elif` would have expanded
+#     unbound variables under `set -euo pipefail` and aborted the deploy before any marker);
+#   sweep-declined — the deploy config is absent, so sweep_stale_registry_auth returns `na` and
+#     the marker must still be emitted with that token rather than skipped.
+assert_ghcr_cfg_one_line() {
+  local label="$1" extra="$2" path_line="$3" d n
+  TOTAL=$((TOTAL + 1))
+  d="$(mktemp -d)"
+  _gcfg_place "$d" inline
+  run_ghcr_cfg_capture "$d" "$extra"
+  n="$(_gcfg_lines "$d/logger.txt" | grep -c . || true)"
+  if [[ "$n" == "1" ]] && grep -qF -- "$path_line" "$d/logger.txt"; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1b-3 exactly one SOLEUR_DEPLOY_GHCR_CONFIG line on the $label path (#8036 1b)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-3 $label path: $n marker line(s); path line present=$(grep -qF -- "$path_line" "$d/logger.txt" && echo y || echo n)"
+  fi
+  rm -rf "$d"
+}
+assert_ghcr_cfg_one_line doppler-unavailable \
+  "export MOCK_DOPPLER_TOKEN_UNSET=1" \
+  "PRELUDE: doppler/DOPPLER_TOKEN unavailable — skipping SENTRY prefetch"
+# The sweep-declined path: no deploy config at all. The marker must still be ONE line and must
+# carry `swept=na`, not be skipped — `na` is what makes the close probe fail CLOSED on a host
+# where the sweep could not run, rather than reading its silence as clean.
+assert_ghcr_cfg_one_line_absent_cfg() {
+  local d n
+  TOTAL=$((TOTAL + 1))
+  d="$(mktemp -d)"
+  _gcfg_place "$d" absent
+  run_ghcr_cfg_capture "$d" ""
+  n="$(_gcfg_lines "$d/logger.txt" | grep -c . || true)"
+  if [[ "$n" == "1" ]] && _gcfg_lines "$d/logger.txt" | grep -cE ' swept=na_[a-z]+ ' >/dev/null; then
+    PASS=$((PASS + 1)); echo "  PASS: T-1b-3 exactly one SOLEUR_DEPLOY_GHCR_CONFIG line on the sweep-declined path, carrying a swept=na_* refusal token (#8036 1c)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1b-3 sweep-declined path: $n marker line(s); marker: $(_gcfg_lines "$d/logger.txt")"
+  fi
+  rm -rf "$d"
+}
+assert_ghcr_cfg_one_line_absent_cfg
 
 # Restore strict mode for the summary/exit. This sits AFTER the #7103 arms deliberately: they
 # use `grep -c` and `grep -q` as predicates, and under `set -e` a legitimate no-match (rc=1)
@@ -5841,7 +8013,10 @@ fi
 rm -f "$MOCK_SLEEP_CAP_MARKER"
 
 # ---------------------------------------------------------------------------------------------
-# #7103 R1 — `no_credential_source` is EXECUTED, not grepped.
+# #7103 R1 — the no-credential reason is EXECUTED, not grepped. SPLIT 2026-09-23 (#8036 1c):
+# `no_credential_source` became `no_doppler_binary` / `no_doppler_token`, because post-1c the
+# pull dies before resolve_env_file writes its distinguishing stage token, so this beacon is the
+# only thing that can separate the two remediations without an SSH session.
 #
 # This arm had ZERO coverage anywhere in the repo: `grep -rn no_credential_source` found it only
 # in ci-deploy.sh itself. It is the arm the 2026-08-01 incident actually took, and the only one
@@ -5855,7 +8030,7 @@ rm -f "$MOCK_SLEEP_CAP_MARKER"
 # and nothing is posted. A grep of the function body cannot tell those two worlds apart; running
 # it with SENTRY_* unset can, and that is what the first arm below pins.
 # ---------------------------------------------------------------------------------------------
-echo "--- #7103 R1: no_credential_source emits on a credential-independent channel ---"
+echo "--- #7103 R1: the no-credential reason emits on a credential-independent channel ---"
 ZGD_TMP="$(mktemp -d)" || exit 2
 {
   awk '/^zot_gate_degraded_event\(\) \{/,/^\}/' "$DEPLOY_SCRIPT"
@@ -5869,7 +8044,7 @@ logger() { printf '%s\n' "$*" >> "$ZGD_TMP/logger.calls"; }
 curl()   { printf 'CURL %s\n' "$*" >> "$ZGD_TMP/curl.calls"; return 0; }
 # shellcheck source=/dev/null
 . "$ZGD_TMP/fn.sh"
-zot_gate_degraded_event no_credential_source
+zot_gate_degraded_event no_doppler_token
 HARNESS
 
 # Arm 1 — the incident state: no credential file, so no SENTRY_* in the environment.
@@ -5878,7 +8053,7 @@ HARNESS
     ZGD_TMP="$ZGD_TMP" bash "$ZGD_TMP/harness.sh" ) >/dev/null 2>&1
 
 TOTAL=$((TOTAL + 1))
-if grep -q 'ZOT_GATE_DEGRADED: reason=no_credential_source' "$ZGD_TMP/logger.calls"; then
+if grep -q 'ZOT_GATE_DEGRADED: reason=no_doppler_token' "$ZGD_TMP/logger.calls"; then
   PASS=$((PASS + 1)); echo "  PASS: the journald marker fires with SENTRY_* absent (the credential-independent carrier)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: no ZOT_GATE_DEGRADED marker on the credential-absent path — this arm has no surviving signal"
@@ -5905,15 +8080,1709 @@ else
 fi
 
 TOTAL=$((TOTAL + 1))
-if grep -q 'reason=no_credential_source (zot not in use' "$ZGD_TMP/logger.calls"; then
+if grep -q 'reason=no_doppler_token (zot not in use' "$ZGD_TMP/logger.calls"; then
   PASS=$((PASS + 1)); echo "  PASS: the marker's parenthetical is reason-accurate (not 'configured but inactive')"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the marker still describes no_credential_source as 'configured but inactive', its exact inverse"
+  FAIL=$((FAIL + 1)); echo "  FAIL: the marker still describes no_doppler_token as 'configured but inactive', its exact inverse"
 fi
 rm -rf "$ZGD_TMP"
 
 echo ""
+# --- #8036 1c: the host-side GHCR read path is retired -----------------------------------------
+# Operator ruling 2026-09-22 (#8036): remove the prelude `docker login ghcr.io`,
+# `refetch_ghcr_and_relogin` and the GHCR leg of `_ghcr_pull_or_recover`; sweep the stale
+# `ghcr.io` entry out of the deploy docker config. CI's GHCR write/read is untouched (dual-push +
+# the ADR-169 restore path). cloud-init's fresh-boot root login was removed later by #8036 1d.
+#
+# SCOPE, stated once here because three rows depend on it: the sweep covers the DEPLOY config
+# ($GHCR_DOCKER_CONFIG, on /mnt/data — a real ReadWritePath) and NOT ${HOME}/.docker/config.json.
+# ci-deploy.sh runs under webhook.service with ProtectHome=read-only and /home absent from
+# ReadWritePaths, so a home write fails-soft and would never sweep — an AC graded on
+# `home_ghcr_auth=none` would therefore read `inline` forever and #8036 could never close. The home
+# entry is a pre-#6565 fossil written by no live code path; it is OBSERVED by the 1b marker, not
+# swept. T-1c-2 asserts the home config is left byte-identical, which is the testable form of that.
+echo ""
+echo "--- #8036 1c: host-side GHCR read retirement ---"
+
+# _1c_count <extended-regexp> <file>...: total matching lines across the named files, 0 when none.
+# NOT `grep -c f1 f2 | awk`: `grep -c` exits 1 on zero matches, and under this suite's
+# `set -euo pipefail` that aborts the entire run — on exactly the zero-hit case several 1c rows
+# are written to assert. The `|| true` is INSIDE the substitution, before any pipe.
+_1c_count() {
+  local re="$1"; shift
+  local n
+  n="$(grep -hcE -- "$re" "$@" 2>/dev/null || true)"
+  printf '%s' "$(printf '%s\n' "$n" | awk '{t+=$1} END{print t+0}')"
+}
+# _1c_lines <extended-regexp> <file>...: the matching lines themselves, empty when none.
+_1c_lines() { local re="$1"; shift; grep -hE -- "$re" "$@" 2>/dev/null || true; }
+
+# _1c_src_count <extended-regexp>: like _1c_count, but over the SUT with comment lines stripped.
+# Every residual-zero assertion below greps the script's SOURCE, and `ci-deploy.sh` documents the
+# very constructs it forbids — the §1c header names the deleted call sites verbatim. Grepping the
+# raw file makes a routine comment edit red the guard on a tree where nothing regressed, and the
+# cheapest repair under time pressure is to loosen the regex, which is how this guard class has
+# already died three times on one branch (cq-assert-anchor-not-bare-token). Applied at the HELPER
+# so it covers the class, not the two call sites that happened to be noticed.
+_1c_src_count() {
+  local re="$1"
+  local n
+  n="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" | grep -cE -- "$re" || true)"
+  printf '%s' "${n:-0}"
+}
+
+# T-1c-1 (residual-zero, static). Measured baseline on origin/main's script: 2 / 1 / 1 — so this
+# row is driven to zero by the deletion, not satisfied by a grep that was already empty.
+TOTAL=$((TOTAL + 1))
+_1C_LOGIN=$(_1c_src_count '_docker_login_capture ghcr\.io')
+_1C_REFETCH=$(_1c_src_count '^refetch_ghcr_and_relogin\(\) \{')
+# Widened from the full call form to the bare spelling: the call-form anchor could not see the
+# unreachable `$reg == "ghcr-fallback"` arm that survived in registry_pull_event, nor a future
+# re-introduction under any other call shape.
+_1C_FALLBACK=$(_1c_src_count 'ghcr-fallback')
+if [[ "$_1C_LOGIN" -eq 0 && "$_1C_REFETCH" -eq 0 && "$_1C_FALLBACK" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-1 ci-deploy.sh presents no ghcr.io credential: 0 _docker_login_capture ghcr.io sites, 0 refetch_ghcr_and_relogin defs, 0 registry_pull_event ghcr-fallback sites (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-1 residual host-side GHCR read path (login_sites=$_1C_LOGIN refetch_defs=$_1C_REFETCH ghcr_fallback_emits=$_1C_FALLBACK)"
+fi
+unset _1C_LOGIN _1C_REFETCH _1C_FALLBACK
+
+# run_1c <workdir> [extra]: one deploy with every 1c observation channel pinned inside $workdir —
+# the deploy + home config slots, the journald sink, the docker-pull targets, the `doppler secrets
+# get` order, the state file and the merged stdout/stderr. Zot is LIVE by default --
+# `create_base_mocks` sets MOCK_ZOT_CONFIGURED=1 unless MOCK_ZOT_DARK is set, so a dark arm needs
+# an explicit `export MOCK_ZOT_DARK=1` in <extra>. (This line used to say the opposite, which is
+# how a zot-dark row could be written that silently ran the happy path and proved nothing.)
+run_1c() {
+  local d="$1" extra="${2:-}" rc=0
+  assert_fixture_dir "$d"
+  mkdir -p "$d/deploy-cfg" "$d/home/.docker" "$d/root"
+  : > "$d/logger.txt"; : > "$d/pulls.txt"; : > "$d/doppler.txt"; : > "$d/logouts.txt"; : > "$d/logins.txt"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$d/ci-deploy.state"
+    export DEPLOY_DOCKER_CONFIG_DIR="$d/deploy-cfg"
+    export HOME="$d/home"
+    export SOLEUR_GHCR_CONFIG_ROOT_PATH="$d/root/config.json"
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"
+    export MOCK_PULL_ARGS_FILE="$d/pulls.txt"
+    export MOCK_DOPPLER_GET_LOG="$d/doppler.txt"
+    export MOCK_LOGOUT_ARGS_FILE="$d/logouts.txt"
+    export MOCK_LOGIN_ARGS_FILE="$d/logins.txt"
+    eval "$extra"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT"
+  ) >"$d/out.txt" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+# The deploy fixture the sweep must act on: a revoked-PAT-shaped ghcr.io inline auth SHARING the
+# auths object with the live zot entry. A sweep that clips the zot entry is the worst arm in this
+# plan's User-Brand Impact (it silently disarms cosign's .sig fetch under IMAGE_VERIFY_MODE=warn),
+# so every sweep row compares `.auths` as a JSON VALUE afterwards rather than eyeballing the key.
+_1c_mixed_cfg() {
+  printf '{"auths":{"ghcr.io":{"auth":"%s"},"10.0.1.30:5000":{"auth":"%s"}}}\n' \
+    "$GCFG_AUTH_CANARY" "$GCFG_AUTH_CANARY"
+}
+_1c_place() {   # <workdir>: ghcr+zot in the deploy slot, ghcr-only in the (unsweepable) home slot
+  local d="$1"
+  # The CANONICAL guard, copied byte-for-byte from the sibling fixture builders — an inline
+  # `case "$d" in /*) … esac` is deliberately NOT recognised by fixture-scan.py's `_rel_guarded`
+  # (its docstring records the four ways an inline case was defeated). Without it the two
+  # redirects below are unguarded fixture writes and `fixture-relative-assert` ratchets from
+  # 1574 to 1576 — a repo-global count that no diff-derived suite selection can reach.
+  assert_fixture_dir "$d"
+  mkdir -p "$d/deploy-cfg" "$d/home/.docker" "$d/root"
+  _1c_mixed_cfg > "$d/deploy-cfg/config.json"
+  chmod 600 "$d/deploy-cfg/config.json"
+  printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$GCFG_AUTH_CANARY" > "$d/home/.docker/config.json"
+  chmod 600 "$d/home/.docker/config.json"
+}
+_1c_marker() { grep -F 'SOLEUR_DEPLOY_GHCR_CONFIG' "$1" 2>/dev/null | sed 's/^.*SOLEUR_DEPLOY_GHCR_CONFIG/SOLEUR_DEPLOY_GHCR_CONFIG/' || true; }
+
+# T-1c-2: one deploy removes the ghcr.io key from the DEPLOY config, leaves the co-resident zot
+# entry equal AS A JSON VALUE (`docker logout` re-serializes the document, so a byte compare is
+# written to fail), leaves the HOME config byte-identical (the scope correction), and a SECOND
+# deploy over the now-clean config performs no write at all (mtime unchanged).
+TOTAL=$((TOTAL + 1))
+T1C2="$(mktemp -d)"
+_1c_place "$T1C2"
+cp "$T1C2/home/.docker/config.json" "$T1C2/home-before.json"
+run_1c "$T1C2" ""
+_1c2_ghcr="$(jq -r -c '.auths["ghcr.io"] // "GONE"' "$T1C2/deploy-cfg/config.json" 2>/dev/null || echo JQERR)"
+_1c2_zot="$(jq -S -c '.auths["10.0.1.30:5000"]' "$T1C2/deploy-cfg/config.json" 2>/dev/null || echo JQERR)"
+_1c2_zot_want="$(_1c_mixed_cfg | jq -S -c '.auths["10.0.1.30:5000"]')"
+_1c2_home_same=no; cmp -s "$T1C2/home/.docker/config.json" "$T1C2/home-before.json" && _1c2_home_same=yes
+# Second deploy, same tree. `stat -c %Y` is second-granularity on some filesystems, so pin the
+# full mtime with %y (nanoseconds) — a redundant rewrite inside the same second would otherwise
+# read as "no write" and the idempotence half of this row would be vacuous.
+_1c2_mt_before="$(stat -c '%y' "$T1C2/deploy-cfg/config.json")"
+run_1c "$T1C2" ""
+_1c2_mt_after="$(stat -c '%y' "$T1C2/deploy-cfg/config.json")"
+if [[ "$_1c2_ghcr" == "GONE" && "$_1c2_zot" == "$_1c2_zot_want" && "$_1c2_home_same" == "yes" \
+      && "$_1c2_mt_before" == "$_1c2_mt_after" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-2 sweep removes the deploy config's ghcr.io auth, leaves the zot entry equal as JSON, leaves the (unsweepable) home config byte-identical, and is a no-op on the second deploy (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-2 (ghcr=$_1c2_ghcr zot=$_1c2_zot want_zot=$_1c2_zot_want home_unchanged=$_1c2_home_same mtime_before=$_1c2_mt_before mtime_after=$_1c2_mt_after)"
+fi
+rm -rf "$T1C2"; unset T1C2 _1c2_ghcr _1c2_zot _1c2_zot_want _1c2_home_same _1c2_mt_before _1c2_mt_after
+
+# T-1c-4: the marker is the close criterion's positive control. Its `swept=` token is what tells a
+# post-1c host from a freshly provisioned PRE-1c one — `deploy_ghcr_auth=none` alone does not,
+# because `docker login ghcr.io` currently FAILS and a failed login writes no auths entry, so a
+# fresh pre-1c host would read `none` on its first deploy and sail through the probe.
+TOTAL=$((TOTAL + 1))
+T1C4="$(mktemp -d)"
+_1c_place "$T1C4"
+run_1c "$T1C4" ""
+_1c4_first="$(_1c_marker "$T1C4/logger.txt")"
+run_1c "$T1C4" ""
+_1c4_second="$(_1c_marker "$T1C4/logger.txt")"
+if [[ "$_1c4_first" == *" swept=yes "* && "$_1c4_first" == *" deploy_ghcr_auth=none "* \
+      && "$_1c4_second" == *" swept=no "* && "$_1c4_second" == *" deploy_ghcr_auth=none "* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-4 marker reads swept=yes + deploy_ghcr_auth=none on the dirty deploy and swept=no on the clean one (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-4 marker swept token"; echo "        first:  $_1c4_first"; echo "        second: $_1c4_second"
+fi
+rm -rf "$T1C4"; unset T1C4 _1c4_first _1c4_second
+
+# T-1c-8: the sweep must not change the config's mode or owner. Asserted EXPLICITLY (0600, owned by
+# the invoking uid — `deploy` in production) rather than as "unchanged": an "unchanged" assertion
+# passes against a sweep that never ran, which is the whole class T-1c-9 exists to catch.
+TOTAL=$((TOTAL + 1))
+T1C8="$(mktemp -d)"
+_1c_place "$T1C8"
+run_1c "$T1C8" ""
+_1c8_mode="$(stat -c '%a' "$T1C8/deploy-cfg/config.json")"
+_1c8_owner="$(stat -c '%u' "$T1C8/deploy-cfg/config.json")"
+if [[ "$_1c8_mode" == "600" && "$_1c8_owner" == "$(id -u)" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-8 the swept deploy config keeps mode 0600 and its owning uid (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-8 mode/owner after sweep (mode=$_1c8_mode owner_uid=$_1c8_owner expected 600/$(id -u))"
+fi
+rm -rf "$T1C8"; unset T1C8 _1c8_mode _1c8_owner
+
+# T-1c-9 (HARNESS ROW, must-RED). Neuter the sweep in a SANDBOX COPY and prove T-1c-2's and
+# T-1c-4's observables invert. Without this the two rows above are satisfied by any script that
+# happens to leave the fixture in the expected shape — including one whose sweep is a no-op over a
+# config that was never dirty. The mutation is asserted to have LANDED (the sandbox copy must
+# differ from the pristine one), because a sed that silently matched nothing would re-run the
+# UNMUTATED script and report exactly what a working guard reports.
+TOTAL=$((TOTAL + 1))
+T1C9="$(mktemp -d)"
+cp "$DEPLOY_SCRIPT" "$T1C9/ci-deploy.pristine.sh"
+sed 's/^sweep_stale_registry_auth() {$/&\n  SWEPT_STATE=mutant; return 0  # MUTANT: sweep neutered/' \
+  "$DEPLOY_SCRIPT" > "$T1C9/ci-deploy.sh"
+if cmp -s "$T1C9/ci-deploy.sh" "$T1C9/ci-deploy.pristine.sh"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-9 the sweep mutation did NOT land — the anchor drifted, so this harness row measured the unmutated script and proves nothing"
+else
+  # `if ( … )`, never a bare `( … )` followed by `$?`: this suite runs under `set -e`, where a
+  # bare subshell that exits non-zero aborts the whole run — so the failing half of this harness
+  # row would kill the suite instead of reporting, and the `$?` read would never happen.
+  if (
+    DEPLOY_SCRIPT="$T1C9/ci-deploy.sh"
+    _1c_place "$T1C9"
+    run_1c "$T1C9" ""
+    _m_ghcr="$(jq -r -c '.auths["ghcr.io"].auth // "GONE"' "$T1C9/deploy-cfg/config.json" 2>/dev/null || echo JQERR)"
+    _m_marker="$(_1c_marker "$T1C9/logger.txt")"
+    # Under the mutant the key SURVIVES and the marker still reads inline — i.e. both canonical
+    # rows would be RED. Anything else means they cannot see the sweep at all.
+    [[ "$_m_ghcr" != "GONE" && "$_m_marker" == *" deploy_ghcr_auth=inline "* ]]
+  ); then
+    PASS=$((PASS + 1)); echo "  PASS: T-1c-9 with the sweep neutered the ghcr.io auth survives and the marker reads inline — T-1c-2 and T-1c-4 are driveable RED (#8036 1c)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-9 a neutered sweep still produced a clean config — T-1c-2/T-1c-4 are vacuous"
+  fi
+fi
+rm -rf "$T1C9"; unset T1C9
+
+# ── T-1c-17 (#8600 review) — THE CENTRAL DELETION, GUARDED AT RUNTIME. Everything else about the
+#    prelude login was pinned statically: T-1c-1 greps ONE call form (`_docker_login_capture
+#    ghcr.io`) in the source. A re-added prelude login spelled any other way — `docker login
+#    ghcr.io -u "$u" --password-stdin`, or sourcing the baked /etc/default credential instead of
+#    GHCR_READ_TOKEN — kept all sixteen T-1c rows and the whole 336-case suite green while the
+#    fleet presented the revoked PAT to GHCR on every deploy. That is the exact outage this work
+#    exists to end, so it gets an observable: the login mock now records the registry, and this
+#    row asserts ZERO ghcr.io logins with a DENOMINATOR (the zot login must be there), so the
+#    zero cannot be satisfied by a deploy that logged in nowhere at all.
+TOTAL=$((TOTAL + 1))
+T1C17="$(mktemp -d)"
+_1c_place "$T1C17"
+run_1c "$T1C17" ""
+_1c17_ghcr=$(_1c_count '^LOGIN:ghcr\.io\b' "$T1C17/logins.txt")
+_1c17_zot=$(_1c_count '^LOGIN:10\.0\.1\.30:5000\b' "$T1C17/logins.txt")
+if [[ "$_1c17_ghcr" -eq 0 && "$_1c17_zot" -ge 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-17 a deploy performs ZERO ghcr.io logins and at least one zot login (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-17 login registries (ghcr.io=$_1c17_ghcr want 0, zot=$_1c17_zot want >=1)"
+fi
+rm -rf "$T1C17"; unset T1C17 _1c17_ghcr _1c17_zot
+
+# ── T-1c-18 — the same property on the ZOT-DARK arm, where a re-added GHCR login would be most
+#    tempting (it is the arm that now has no registry at all). The denominator flips: with zot
+#    dark there is no zot login either, so the assertion is "no login to ANY registry", which is
+#    what a terminal dark gate means.
+TOTAL=$((TOTAL + 1))
+T1C18="$(mktemp -d)"
+_1c_place "$T1C18"
+run_1c "$T1C18" "export MOCK_ZOT_DARK=1" || true
+_1c18_ghcr=$(_1c_count '^LOGIN:ghcr\.io\b' "$T1C18/logins.txt")
+if [[ "$_1c18_ghcr" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-18 a zot-dark deploy still performs ZERO ghcr.io logins (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-18 zot-dark deploy logged in to ghcr.io $_1c18_ghcr time(s)"
+fi
+rm -rf "$T1C18"; unset T1C18 _1c18_ghcr
+
+# ── T-1c-19 — NO EMITTED OPERATOR-FACING STRING MAY CLAIM A GHCR PATH. Five live logger/Sentry
+#    strings survived the deletion saying the deploy "fell through to the GHCR path" / was
+#    "using GHCR", including the exact ZOT_GATE_DEGRADED line the new pull_failure_event detail
+#    points at. An operator paged by a terminal zot failure read "using GHCR" and chased a
+#    credential with no consumer. Asserted over what was EMITTED, not over the source, so a
+#    comment can never satisfy it.
+TOTAL=$((TOTAL + 1))
+T1C19="$(mktemp -d)"
+_1c_place "$T1C19"
+run_1c "$T1C19" "export MOCK_ZOT_DARK=1" || true
+_1c19_bad=$(_1c_count 'GHCR path|using GHCR|both registries|BOTH registries' "$T1C19/logger.txt")
+_1c19_n=$(grep -c . "$T1C19/logger.txt" 2>/dev/null || true)
+if [[ "$_1c19_bad" -eq 0 && "${_1c19_n:-0}" -ge 5 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-19 no emitted line claims a GHCR path or a second registry, over $_1c19_n emitted line(s) (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-19 emitted GHCR-path claims=$_1c19_bad (want 0) over $_1c19_n line(s) (want >=5 as denominator)"
+fi
+rm -rf "$T1C19"; unset T1C19 _1c19_bad _1c19_n
+
+# ── T-1c-20 — the terminal dark arm NAMES ITS CAUSE on a sink. pull_failure_event used its
+#    detail argument only as classifier input and then discarded it, so interpolating
+#    ZOT_GATE_STATUS into that string repaid nothing: the journald line omitted it and the Sentry
+#    payload had no detail field. An operator could not get from `image_pull_failed` to WHY zot
+#    was unavailable without an SSH session (hr-no-ssh-fallback-in-runbooks).
+TOTAL=$((TOTAL + 1))
+T1C20="$(mktemp -d)"; T1C20B="$(mktemp -d)"
+# Both terminal arms: the gate went DARK (no registry was ever contacted) and the gate was ACTIVE
+# but the pull failed. Each carries a different ZOT_GATE_STATUS, and both must name it.
+_1c_place "$T1C20"
+run_1c "$T1C20" "export MOCK_ZOT_DARK=1" || true
+_1c_place "$T1C20B"
+run_1c "$T1C20B" "export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1" || true
+_1c20_fails=$(_1c_count 'IMAGE_PULL_FAIL: ref=' "$T1C20/logger.txt" "$T1C20B/logger.txt")
+_1c20_tagged=$(_1c_count 'IMAGE_PULL_FAIL: ref=.*zot_gate_status=[a-z_]+' "$T1C20/logger.txt" "$T1C20B/logger.txt")
+_1c20_unknown=$(_1c_count 'IMAGE_PULL_FAIL: ref=.*zot_gate_status=unknown' "$T1C20/logger.txt" "$T1C20B/logger.txt")
+# The denominator matters: "0 untagged failures" is also true of a run that never failed at all.
+if [[ "$_1c20_fails" -ge 1 && "$_1c20_tagged" -eq "$_1c20_fails" && "$_1c20_unknown" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-20 all $_1c20_fails terminal pull failure(s) carry a named zot_gate_status on journald (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-20 IMAGE_PULL_FAIL lines=$_1c20_fails tagged=$_1c20_tagged unknown=$_1c20_unknown (want fails>=1, tagged==fails, unknown=0)"
+fi
+rm -rf "$T1C20" "$T1C20B"; unset T1C20 T1C20B _1c20_fails _1c20_tagged _1c20_unknown
+
+# T-1c-16 / AC-N1: the always-failing Doppler GHCR reads leave the critical path. Asserted as a
+# CALL COUNT over the existing process mock, never as wall-clock — a stopwatch assertion measures
+# the machine, not the change. Baseline on origin/main: up to 3 + 3 reads, 5 s apart, every deploy.
+TOTAL=$((TOTAL + 1))
+T1C16="$(mktemp -d)"
+_1c_place "$T1C16"
+run_1c "$T1C16" ""
+_1c16_u=$(_1c_count '^GHCR_READ_USER$'  "$T1C16/doppler.txt")
+_1c16_t=$(_1c_count '^GHCR_READ_TOKEN$' "$T1C16/doppler.txt")
+# One floor PER SECRET, never a union count: `-eq 3` over the union is satisfied by three reads
+# of ONE name (_doppler_get_or_report retries up to 3x on an empty read), so a prefetch that lost
+# two of its three secrets passed while the host was Sentry-dark at verify time.
+_1c16_sd=$(_1c_count '^SENTRY_INGEST_DOMAIN$' "$T1C16/doppler.txt")
+_1c16_sp=$(_1c_count '^SENTRY_PROJECT_ID$'    "$T1C16/doppler.txt")
+_1c16_sk=$(_1c_count '^SENTRY_PUBLIC_KEY$'    "$T1C16/doppler.txt")
+if [[ "$_1c16_u" -eq 0 && "$_1c16_t" -eq 0 \
+      && "$_1c16_sd" -ge 1 && "$_1c16_sp" -ge 1 && "$_1c16_sk" -ge 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-16 zero doppler reads of GHCR_READ_USER/GHCR_READ_TOKEN, and all three SENTRY_* prefetches survive (#8036 1c / AC-N1)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-16 doppler read counts (GHCR_READ_USER=$_1c16_u GHCR_READ_TOKEN=$_1c16_t SENTRY_INGEST_DOMAIN=$_1c16_sd SENTRY_PROJECT_ID=$_1c16_sp SENTRY_PUBLIC_KEY=$_1c16_sk, want 0/0/>=1 each)"
+fi
+rm -rf "$T1C16"; unset T1C16 _1c16_u _1c16_t _1c16_s
+
+# T-1c-5: the SENTRY_* prefetch still runs and still PRECEDES the zot gate. Asserted on the
+# EMITTED ORDER (the doppler read log), not on the function body — the body is what the three-way
+# split rearranges, so a body assertion would pin the refactor instead of the property. #7095: the
+# prefetch running after the gate is what took a host Sentry-dark for 5.7 h.
+TOTAL=$((TOTAL + 1))
+T1C5="$(mktemp -d)"
+_1c_place "$T1C5"
+run_1c "$T1C5" "export MOCK_ZOT_CONFIGURED=1"
+# `|| true` INSIDE the substitution: a no-match grep exits 1, which under `set -e` would abort the
+# whole suite rather than leave the variable empty for the `-n` guard below to report.
+_1c5_sentry="$(grep -nE '^SENTRY_INGEST_DOMAIN$' "$T1C5/doppler.txt" | sed -n '1p' | cut -d: -f1 || true)"
+_1c5_zot="$(grep -nE '^ZOT_REGISTRY_URL$' "$T1C5/doppler.txt" | sed -n '1p' | cut -d: -f1 || true)"
+if [[ -n "$_1c5_sentry" && -n "$_1c5_zot" && "$_1c5_sentry" -lt "$_1c5_zot" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-5 the SENTRY_* prefetch still runs and precedes the zot gate's first Doppler read (#8036 1c / #7095)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-5 prefetch order (SENTRY_INGEST_DOMAIN at read #${_1c5_sentry:-<absent>}, ZOT_REGISTRY_URL at read #${_1c5_zot:-<absent>})"
+fi
+rm -rf "$T1C5"; unset T1C5 _1c5_sentry _1c5_zot
+
+# T-1c-6: zot DARK is now a TERMINAL state — there is no second registry. The deploy must reach
+# image_pull_failed with the old container still running, and must issue ZERO docker pulls against
+# a ghcr.io ref. The ghcr.io count is the load-bearing half: an image_pull_failed assertion alone
+# passes against a script that tried GHCR and was denied, which is exactly today's behaviour.
+TOTAL=$((TOTAL + 1))
+T1C6="$(mktemp -d)"
+_1c_place "$T1C6"
+run_1c "$T1C6" "export MOCK_ZOT_DARK=1"
+_1c6_ghcr=$(_1c_count '^PULL:ghcr\.io/' "$T1C6/pulls.txt")
+read_state_reason_and_exit "$T1C6/ci-deploy.state" _1c6_reason _1c6_exit
+if [[ "$_1c6_ghcr" -eq 0 && "$_1c6_reason" == "image_pull_failed" && "$(cat "$T1C6/rc")" != "0" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-6 zot-dark is terminal: zero ghcr.io pulls, image_pull_failed, deploy aborts with the old container live (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-6 (ghcr_pulls=$_1c6_ghcr reason=$_1c6_reason rc=$(cat "$T1C6/rc") pulls=[$(tr '\n' ' ' < "$T1C6/pulls.txt")])"
+fi
+rm -rf "$T1C6"; unset T1C6 _1c6_ghcr _1c6_reason _1c6_exit
+
+# T-1c-7 / AC-F7 (P7): the bounded transient retry SURVIVES the deletion and now fires on the ZOT
+# arm. Deleting `_ghcr_pull_or_recover` wholesale would have taken the only retry loop on the path
+# that is about to carry production alone, and left the seven T-6525-* rows exercising nothing.
+TOTAL=$((TOTAL + 1))
+T1C7="$(mktemp -d)"
+_1c_place "$T1C7"
+echo 2 > "$T1C7/zot-transient"
+run_1c "$T1C7" "export MOCK_ZOT_CONFIGURED=1 PULL_TRANSIENT_RETRY_SLEEPS='0 0' MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE='$T1C7/zot-transient'"
+_1c7_zot=$(_1c_count '^PULL:10\.0\.1\.30:5000/' "$T1C7/pulls.txt")
+_1c7_ghcr=$(_1c_count '^PULL:ghcr\.io/' "$T1C7/pulls.txt")
+_1c7_recov=$(_1c_count 'transient_recovered' "$T1C7/logger.txt" "$T1C7/out.txt")
+_1c7_named_zot=no
+if [[ "$(_1c_lines 'transient_recovered' "$T1C7/logger.txt" "$T1C7/out.txt")" == *'10.0.1.30:5000'* ]]; then _1c7_named_zot=yes; fi
+if [[ "$_1c7_zot" -eq 3 && "$_1c7_ghcr" -eq 0 && "$_1c7_named_zot" == "yes" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-7 the transient retry fires on the zot arm (3 zot pulls, 0 ghcr) and transient_recovered names the zot ref (#8036 1c / #6525)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-7 (zot_pulls=$_1c7_zot want 3, ghcr_pulls=$_1c7_ghcr want 0, recovery_names_zot=$_1c7_named_zot, recov_lines=$_1c7_recov)"
+fi
+rm -rf "$T1C7"; unset T1C7 _1c7_zot _1c7_ghcr _1c7_recov _1c7_named_zot
+
+# T-1c-7b (P7, the break-glass lever): PULL_TRANSIENT_RETRY_SLEEPS="" — an EMPTY value, not unset
+# — must still DISABLE the retry. ci-deploy.sh uses `${PULL_TRANSIENT_RETRY_SLEEPS-2 4}` (`-`, not
+# `:-`) precisely so an explicit empty survives; the lever is why that spelling is load-bearing,
+# and moving the loop onto the zot arm is exactly when a `:-` could be reintroduced unnoticed.
+TOTAL=$((TOTAL + 1))
+T1C7B="$(mktemp -d)"
+_1c_place "$T1C7B"
+echo 9 > "$T1C7B/zot-transient"
+run_1c "$T1C7B" "export MOCK_ZOT_CONFIGURED=1 PULL_TRANSIENT_RETRY_SLEEPS='' MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE='$T1C7B/zot-transient'"
+_1c7b_zot=$(_1c_count '^PULL:10\.0\.1\.30:5000/' "$T1C7B/pulls.txt")
+if [[ "$_1c7b_zot" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-7b an EMPTY PULL_TRANSIENT_RETRY_SLEEPS still disables the retry on the zot arm (exactly one pull) (#8036 1c / #6525)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-7b break-glass disable lever (zot_pulls=$_1c7b_zot, want 1)"
+fi
+rm -rf "$T1C7B"; unset T1C7B _1c7b_zot
+
+# T-1c-10 / AC-F9: the FR-C1 breadcrumb survives the branch deletion (it sits PHYSICALLY INSIDE the
+# deleted fallback block), drops its "falling back to GHCR" suffix, and reports the FINAL attempt's
+# stderr. The mock's transient stderr carries its countdown, so first-vs-final is falsifiable: with
+# 3 armed and 2 retries the attempts emit remaining=3,2,1 and the breadcrumb must carry 1.
+TOTAL=$((TOTAL + 1))
+T1C10="$(mktemp -d)"
+_1c_place "$T1C10"
+echo 3 > "$T1C10/zot-transient"
+run_1c "$T1C10" "export MOCK_ZOT_CONFIGURED=1 PULL_TRANSIENT_RETRY_SLEEPS='0 0' MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE='$T1C10/zot-transient'"
+_1c10_crumb="$(_1c_lines 'IMAGE_PULL: zot pull failed' "$T1C10/logger.txt" | tail -1)"
+if [[ -n "$_1c10_crumb" && "$_1c10_crumb" == *"zot-attempt-remaining=1"* \
+      && "$_1c10_crumb" != *"zot-attempt-remaining=3"* && "$_1c10_crumb" != *"falling back to GHCR"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-10 the FR-C1 breadcrumb survives, reports the FINAL attempt's stderr, and no longer claims a GHCR fallback (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-10 breadcrumb: ${_1c10_crumb:-<absent>}"
+fi
+rm -rf "$T1C10"; unset T1C10 _1c10_crumb
+
+# T-1c-14: the breadcrumb's SHAPE. journald records are newline-delimited and Vector parses per
+# line, so an uncollapsed tail SPLITS the record and the reason lands on a line no longer carrying
+# the IMAGE_PULL marker the Better Stack query greps for — worse than saying nothing.
+TOTAL=$((TOTAL + 1))
+T1C14="$(mktemp -d)"
+_1c_place "$T1C14"
+run_1c "$T1C14" "export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1 MOCK_ZOT_PULL_FAIL_STDERR='ZOTSENTINELHEAD
+$(printf 'x%.0s' $(seq 1 500))'"
+_1c14_n=$(_1c_count 'IMAGE_PULL: zot pull failed' "$T1C14/logger.txt")
+_1c14_crumb="$(_1c_lines 'IMAGE_PULL: zot pull failed' "$T1C14/logger.txt" | tail -1)"
+_1c14_len=${#_1c14_crumb}
+if [[ "$_1c14_n" -ge 1 && "$_1c14_crumb" == *"reason="* && "$_1c14_len" -le 600 \
+      && "$_1c14_crumb" != *"ZOTSENTINELHEAD"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-14 the breadcrumb is one line, carries reason=, and is bounded to the stderr TAIL (#8036 1c / FR-C1)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-14 (lines=$_1c14_n len=$_1c14_len crumb=${_1c14_crumb:0:160})"
+fi
+rm -rf "$T1C14"; unset T1C14 _1c14_n _1c14_crumb _1c14_len
+
+# T-1c-13 / AC-F8: every pull-path emitter names the ref ACTUALLY pulled. Pre-1c the zot arm's
+# recovery and failure emitters read the GLOBAL $IMAGE, which on that arm is still the ghcr.io ref
+# (the reassignment happens only after success) — ambiguous then, actively false now that no GHCR
+# pull can occur at all.
+TOTAL=$((TOTAL + 1))
+T1C13="$(mktemp -d)"
+_1c_place "$T1C13"
+echo 1 > "$T1C13/zot-transient"
+run_1c "$T1C13" "export MOCK_ZOT_CONFIGURED=1 PULL_TRANSIENT_RETRY_SLEEPS='0 0' MOCK_ZOT_PULL_TRANSIENT_COUNT_FILE='$T1C13/zot-transient'"
+# DENOMINATOR FIRST. `_1c13_bad` is a filtered count, so it is 0 both when every emitter names the
+# zot ref AND when the selector matches nothing at all -- a later rename of the breadcrumb would
+# green this row while printing "every pull-path emitter names the zot ref" over an empty set.
+# The sibling T-1c-14 floors the same class; this row did not. Floor is >=1, the MEASURED count
+# for this fixture (one `IMAGE_PULL: zot pull failed` breadcrumb on the transient-recovered arm) --
+# not a guessed round number, which is the other half of how anti-vacuity floors go wrong.
+_1c13_emitters=$(_1c_lines 'transient_recovered|pull_result|IMAGE_PULL:' "$T1C13/logger.txt" "$T1C13/out.txt" | grep -c . || true)
+_1c13_bad=$(_1c_lines 'transient_recovered|pull_result|IMAGE_PULL:' "$T1C13/logger.txt" "$T1C13/out.txt" | grep -cE 'ghcr\.io/jikig-ai' || true)
+_1c13_ghcrpull=$(_1c_count '^PULL:ghcr\.io/' "$T1C13/pulls.txt")
+_1c13_zotpull=$(_1c_count '^PULL:10\.0\.1\.30:5000/' "$T1C13/pulls.txt")
+if [[ "$_1c13_bad" -eq 0 && "$_1c13_ghcrpull" -eq 0 && "$_1c13_zotpull" -eq 2 && "$_1c13_emitters" -ge 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-13 on the zot arm every pull and every pull-path emitter names the zot ref, none names a ghcr.io ref (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-13 (emitters_naming_ghcr=$_1c13_bad ghcr_pulls=$_1c13_ghcrpull zot_pulls=$_1c13_zotpull emitters_seen=$_1c13_emitters want 0/0/2/>=1)"
+fi
+rm -rf "$T1C13"; unset T1C13 _1c13_bad _1c13_ghcrpull _1c13_zotpull _1c13_emitters
+
+# T-1c-11: `_try_local_cache_reload` becomes the ONLY tier between a zot miss and image_pull_failed.
+# Not edited by this PR — this row pins that the deletion of the GHCR leg above it did not make it
+# unreachable. Same-version reload of the RUNNING image.
+TOTAL=$((TOTAL + 1))
+T1C11="$(mktemp -d)"
+_1c_place "$T1C11"
+run_1c "$T1C11" "export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:cafe1c MOCK_RUNNING_IMAGE_TAG=v1.0.0"
+_1c11_lc=$(_1c_count 'local-cache' "$T1C11/logger.txt" "$T1C11/out.txt")
+_1c11_reuse=$(_1c_count 'reused_local_reload' "$T1C11/logger.txt" "$T1C11/out.txt")
+_1c11_ghcr=$(_1c_count '^PULL:ghcr\.io/' "$T1C11/pulls.txt")
+if [[ "$_1c11_lc" -ge 1 && "$_1c11_reuse" -ge 1 && "$_1c11_ghcr" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-11 a zot miss on a same-version reload still reaches the local-cache tier, with no GHCR pull in between (#8036 1c / #6512)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-11 (local_cache=$_1c11_lc reused=$_1c11_reuse ghcr_pulls=$_1c11_ghcr)"
+fi
+rm -rf "$T1C11"; unset T1C11 _1c11_lc _1c11_reuse _1c11_ghcr
+
+# T-1c-12: zot exhausted with NO local-cache candidate → pull_failure_event, image_pull_failed, and
+# the previous container still running (the deploy aborts rather than swapping).
+TOTAL=$((TOTAL + 1))
+T1C12="$(mktemp -d)"
+_1c_place "$T1C12"
+run_1c "$T1C12" "export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1"
+read_state_reason_and_exit "$T1C12/ci-deploy.state" _1c12_reason _1c12_exit
+_1c12_ghcr=$(_1c_count '^PULL:ghcr\.io/' "$T1C12/pulls.txt")
+if [[ "$_1c12_reason" == "image_pull_failed" && "$_1c12_ghcr" -eq 0 && "$(cat "$T1C12/rc")" != "0" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-12 zot exhausted with no local-cache candidate ends image_pull_failed, with zero GHCR pulls (#8036 1c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-12 (reason=$_1c12_reason ghcr_pulls=$_1c12_ghcr rc=$(cat "$T1C12/rc"))"
+fi
+rm -rf "$T1C12"; unset T1C12 _1c12_reason _1c12_exit _1c12_ghcr
+
+# T-1c-15: a genuine NEW-version deploy whose zot pull fails must NOT be rescued from the local
+# cache — that would serve stale bits and report the new release as deployed. The running image
+# carries an OLDER tag, so the tier declines and the deploy hard-fails.
+TOTAL=$((TOTAL + 1))
+T1C15="$(mktemp -d)"
+_1c_place "$T1C15"
+run_1c "$T1C15" "export MOCK_ZOT_CONFIGURED=1 MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:cafe15 MOCK_RUNNING_IMAGE_TAG=v0.9.0"
+read_state_reason_and_exit "$T1C15/ci-deploy.state" _1c15_reason _1c15_exit
+_1c15_lc=$(_1c_count 'local-cache' "$T1C15/logger.txt" "$T1C15/out.txt")
+if [[ "$_1c15_reason" == "image_pull_failed" && "$_1c15_lc" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-1c-15 a new-version deploy whose zot pull fails hard-fails rather than serving the older running image (#8036 1c / #6512)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-1c-15 (reason=$_1c15_reason local_cache_emits=$_1c15_lc)"
+fi
+rm -rf "$T1C15"; unset T1C15 _1c15_reason _1c15_exit _1c15_lc
+
+echo "--- #6428 pre-swap image freshness (stale-but-signed image never reaches the canary) ---"
+# A zot that serves an OLD but validly signed image for the requested tag passes the cosign verify
+# (the old image IS validly signed). The only property that tells the two apart is the version the
+# image was BUILT as: the release bakes ENV BUILD_VERSION=<next> into the image it tags v<next>. The
+# check reads it from VERIFIED_REF and aborts before the plugin seed, the canary and the swap. It
+# fails CLOSED: a version it cannot establish (no BUILD_VERSION, `dev`, inspect failure) aborts too.
+# Every row runs in trace mode so the "never reached the canary" half of the property is observed
+# on the docker call stream itself: a check moved AFTER the canary run (a reorder, not a delete)
+# still ends image_stale_version, and only the absent `run`/`create` markers catch it.
+#
+# run_6428 <workdir> [extra] [tag]: one traced deploy (default v1.0.0) with the journald sink, the
+# Sentry sink, the freshness-inspect recorder, the state file and stdout/stderr pinned in <workdir>.
+run_6428() {
+  local d="$1" extra="${2:-}" tag="${3:-v1.0.0}" rc=0
+  assert_fixture_dir "$d"
+  : > "$d/logger.txt"; : > "$d/sentry.txt"; : > "$d/inspect.txt"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform $tag"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    # The plugin mount lives in <workdir> so an abort row can assert the seed never ran: the seed's
+    # `docker create` is redirected to /dev/null by ci-deploy.sh, so its trace marker never reaches
+    # out.txt and cannot witness the ordering on its own.
+    export PLUGIN_MOUNT_DIR="$d/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$d/ci-deploy.state"
+    export MOCK_DOCKER_MODE="trace"
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"
+    export MOCK_SENTRY_CAPTURE_FILE="$d/sentry.txt"
+    export MOCK_FRESHNESS_INSPECT_FILE="$d/inspect.txt"
+    eval "$extra"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT"
+  ) >"$d/out.txt" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+# _6428_started <workdir>: 1 when the deploy touched ANY app container: the canary/production `run`
+# (traced), or the plugin seed (its `docker create` is redirected to /dev/null, so it is witnessed by
+# the plugin mount directory the seed creates and fills). The cosign verify `run` is answered before
+# the mock's mode case and never traces.
+_6428_started() { if grep -qE '^DOCKER_TRACE:(run|create)$' "$1/out.txt" || [[ -e "$1/plugin-mount" ]]; then echo 1; else echo 0; fi; }
+# _6428_event <workdir> <field>: a field of the captured op=image-freshness Sentry event ("" if none).
+_6428_event() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="image-freshness")][0] | if . == null then "" elif $f == "level" then .level else .tags[$f] end' "$1/sentry.txt" 2>/dev/null; }
+# _6428_abort <label> <extra> <expected-reason> <expected-result> [tag]: one row asserting the
+# deploy aborted with <reason>, started NO app container, logged the fail marker and emitted an
+# error event carrying <result>.
+_6428_abort() {
+  local label="$1" extra="$2" want_reason="$3" want_result="$4" tag="${5:-v1.0.0}" d reason exitc
+  TOTAL=$((TOTAL + 1)); d="$(mktemp -d)"
+  run_6428 "$d" "$extra" "$tag"
+  read_state_reason_and_exit "$d/ci-deploy.state" reason exitc
+  if [[ "$(cat "$d/rc")" != "0" && "$reason" == "$want_reason" && "$exitc" == "1" && "$(_6428_started "$d")" == "0" ]] \
+     && grep -q "IMAGE_FRESHNESS_FAIL: result=$want_result " "$d/logger.txt" \
+     && grep -q "DEPLOY_ABORT: image freshness check refused .* ($want_reason)" "$d/logger.txt" \
+     && [[ "$(_6428_event "$d" level)" == "error" && "$(_6428_event "$d" freshness_result)" == "$want_result" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $label → $reason, no app container, error event freshness_result=$want_result (#6428)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $label (rc=$(cat "$d/rc") reason=$reason exit_code=$exitc want=$want_reason app_container_started=$(_6428_started "$d") event_level=$(_6428_event "$d" level) event_result=$(_6428_event "$d" freshness_result))"
+    printf '        traces: %s\n' "$(grep '^DOCKER_TRACE:' "$d/out.txt" | tr '\n' ' ')"
+  fi
+  rm -rf "$d"
+}
+
+# F1 (the RED fixture): the image zot served for v1.0.0 was built as 0.9.9. Before #6428 this
+# deploy verified the (valid) signature and went on to the canary and the swap.
+_6428_abort "F1 an image built as 0.9.9 served for v1.0.0" \
+  "export MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+# F8: exact comparison, not a prefix/suffix/substring one (a `$expected*` or `*$expected` glob, or an
+# unanchored grep, would pass these).
+_6428_abort "F8a BUILD_VERSION 1.0.00 for v1.0.0 (prefix)" \
+  "export MOCK_IMAGE_BUILD_VERSION=1.0.00" image_stale_version version_mismatch
+_6428_abort "F8b BUILD_VERSION 11.0.0 for v1.0.0 (suffix)" \
+  "export MOCK_IMAGE_BUILD_VERSION=11.0.0" image_stale_version version_mismatch
+# F9: the key is matched WHOLE — a decoy X_BUILD_VERSION=1.0.0 printed first must not be read as
+# the image's version (a `*BUILD_VERSION=*` parse would take it and pass).
+_6428_abort "F9a decoy X_BUILD_VERSION=1.0.0 before BUILD_VERSION=0.9.9" \
+  "export MOCK_IMAGE_ENV_EXTRA=X_BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+_6428_abort "F9b decoy X_BUILD_VERSION=1.0.0 and no BUILD_VERSION" \
+  "export MOCK_IMAGE_ENV_EXTRA=X_BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+# F3: fail CLOSED — a version the check cannot establish aborts rather than deploying unverified.
+# F10: two BUILD_VERSION entries (the matching one FIRST) — the value the process sees is not
+# decidable from the config, so it is refused rather than read first-wins.
+_6428_abort "F10 two BUILD_VERSION entries (1.0.0 then 0.9.9)" \
+  "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_version_unverifiable version_ambiguous
+# F12: an EMPTY `BUILD_VERSION=` line (present but valueless) is unverifiable, not a mismatch.
+_6428_abort "F12 an empty BUILD_VERSION= line" \
+  "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION= MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+# F13 (the THIRD VERIFIED_REF arm): WARN mode with no resolvable RepoDigest runs the mutable TAG
+# (verify_image_signature's inspect_failed fallback) — the freshness check still reads it and aborts.
+_6428_abort "F13 WARN tag-fallback VERIFIED_REF with an image built as 0.9.9" \
+  "export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+_6428_abort "F3a image with no BUILD_VERSION" \
+  "export MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+_6428_abort "F3b image built as dev" \
+  "export MOCK_IMAGE_BUILD_VERSION=dev" image_version_unverifiable version_absent
+_6428_abort "F3c docker inspect of the verified ref fails" \
+  "export MOCK_IMAGE_INSPECT_FAIL=1" image_version_unverifiable inspect_failed
+# F5 (the SECOND member of the VERIFIED_REF assembly): the local-cache rescue arm (zot misses, the
+# running container's image is reused for a same-version reload) is checked like the verified arm.
+_6428_abort "F5a local-cache rescue whose running image was built as 0.9.9" \
+  "export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:6428ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff MOCK_RUNNING_IMAGE_TAG=v1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" \
+  image_stale_version version_mismatch
+
+# F11: a hostile BUILD_VERSION (an ANSI escape, a CR) still aborts, and never reaches journald or
+# the Sentry payload raw — both carry the bounded <invalid:len=N> display form instead.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_IMAGE_BUILD_VERSION=\$'0.9.9\\e[31m\\r'"
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f11_reason _f11_exit
+if [[ "$_f11_reason" == "image_stale_version" ]] \
+   && grep -q 'actual=<invalid:len=' "$T6428/logger.txt" \
+   && ! grep -q $'\e' "$T6428/logger.txt" && ! grep -q $'\r' "$T6428/logger.txt" \
+   && [[ "$(jq -rs '[.[] | select(.tags.op=="image-freshness")][0].extra.actual' "$T6428/sentry.txt" 2>/dev/null)" == "<invalid:len="* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F11 a control-character BUILD_VERSION aborts and is displayed only in its bounded form (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F11 (reason=$_f11_reason; logger: $(grep -c IMAGE_FRESHNESS_FAIL "$T6428/logger.txt"))"
+fi
+rm -rf "$T6428"; unset _f11_reason _f11_exit
+
+# F2 (must PASS, the canonical): a release-built image (BUILD_VERSION 1.0.0 for v1.0.0) deploys, the
+# canary docker trace is byte-identical to the canary-success row above, the liveness marker the
+# post-merge evidence greps for is written, and no freshness event is emitted.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428"
+_f2_traces=$(sed -n 's/^DOCKER_TRACE://p' "$T6428/out.txt" | tr '\n' '|' | sed 's/|$//')
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f2_traces" == "image|pull|stop|rm|run|exec|stop|rm|stop|rm|ps|run" ]] \
+   && grep -q 'IMAGE_FRESHNESS: ok ref=.* expected=1.0.0 actual=1.0.0$' "$T6428/logger.txt" \
+   && [[ -z "$(_6428_event "$T6428" level)" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F2 a self-consistent image deploys with the unchanged canary trace and logs IMAGE_FRESHNESS: ok, no freshness event (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F2 (rc=$(cat "$T6428/rc") traces=$_f2_traces ok_marker=$(grep -c 'IMAGE_FRESHNESS: ok ' "$T6428/logger.txt"))"
+fi
+# F4 (same run): the check read the VERIFIED DIGEST, not the mutable tag — the mock answers every
+# non-inngest ref the same way, so only the recorded ref tells VERIFIED_REF from $IMAGE:$TAG.
+TOTAL=$((TOTAL + 1))
+_f4_ref="$(head -1 "$T6428/inspect.txt")"
+if [[ "$(wc -l < "$T6428/inspect.txt")" -eq 1 && "$_f4_ref" == *"/jikig-ai/soleur-web-platform@sha256:"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F4 the freshness check inspects the verified digest ($_f4_ref), exactly once (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F4 inspected refs: $(tr '\n' ' ' < "$T6428/inspect.txt")"
+fi
+rm -rf "$T6428"; unset _f2_traces _f4_ref
+
+# F5b (must PASS): a same-version local-cache reload of a running image built as 1.0.0 reloads, and
+# the ref inspected is the running image ID (the rescue arm, not a digest).
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:6428ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff MOCK_RUNNING_IMAGE_TAG=v1.0.0"
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f5_reason _f5_exit
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f5_reason" == "ok" && "$_f5_exit" == "0" && "$(head -1 "$T6428/inspect.txt")" == "sha256:6428ffff"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F5b a same-version local-cache reload of a matching running image reloads, inspecting the running image ID (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F5b (rc=$(cat "$T6428/rc") reason=$_f5_reason inspected=$(head -1 "$T6428/inspect.txt"))"
+fi
+rm -rf "$T6428"; unset _f5_reason _f5_exit
+
+# F7 (must PASS, NOT the canonical): a different release (v10.20.30) with its version pinned
+# explicitly — a guard that rejects everything, or one hard-wired to the canonical v1.0.0, fails here.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_IMAGE_BUILD_VERSION=10.20.30" v10.20.30
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f7_reason _f7_exit
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f7_reason" == "ok" && "$_f7_exit" == "0" ]] \
+   && grep -q 'IMAGE_FRESHNESS: ok ref=.* expected=10.20.30 actual=10.20.30$' "$T6428/logger.txt"; then
+  PASS=$((PASS + 1)); echo "  PASS: F7 BUILD_VERSION=10.20.30 for v10.20.30 deploys (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F7 (rc=$(cat "$T6428/rc") reason=$_f7_reason)"
+fi
+rm -rf "$T6428"; unset T6428 _f7_reason _f7_exit
+
+echo "--- #8609 Guard 7: GitHub App key overlay + canary key check, BOTH assembly sites ---"
+# Property (plan 2026-09-30-security-evict-runtime-app-key-from-prd-reachability §Guard 7, as amended
+# by the CTO ruling on PR #9263): a container gets exactly one GITHUB_APP_PRIVATE_KEY, taken from
+# soleur-github-app only when the read token is present, the image passed the MAIN-pinned cosign
+# verify in this run (ci) or its digest equals the last one ci-deploy verified (boot), no prd name
+# falls in a runtime-hijack class, and the fetch succeeds; every other prd line survives; it is
+# promoted only after the probe (under `env -i`) accepted that key IN THE CANARY (or could not reach
+# GitHub); the token itself never reaches an env-file, a child's env or argv, or a log/Sentry sink.
+# Two assembly sites carry the shared block: ci-deploy.sh (driven end to end, trace mode) and
+# soleur-host-bootstrap.sh's soleur-doppler-download + soleur-github-app-key-check (driven by the
+# boot-site driver below, under dash where available — the host's /bin/sh).
+#
+# Every mutation row: (1) the mutation is applied to a COPY and proven to have LANDED (the copy
+# differs from the pristine one), (2) the unmutated control is green on every site the row names,
+# (3) the mutant is RED on EVERY site it names — and RED means its own property check failed, never
+# a crash or an unrelated canary failure (those are scored as a FAILED row, test-design F11). A row
+# whose anchor drifted therefore fails loudly instead of measuring the pristine script. Fixture keys
+# are generated here (openssl) and never printed.
+GAK_FIX="$(mktemp -d)"
+GAK_TOKEN="dp.st.prd.""guard7-app-key-read-fixture"
+GAK_TOKEN_B64="$(printf '%s' "$GAK_TOKEN" | base64 | tr -d '\n')"
+GAK_PRD_TOKEN="dp.st.prd.""guard7-prd-read-fixture"
+GAK_STDERR_CANARY="dp.st.prd.""guard7-doppler-stderr-canary"
+GAK_DIGEST="sha256:$(printf '0%.0s' {1..64})"
+GAK_REF_OK="10.0.1.30:5000/jikig-ai/soleur-web-platform@$GAK_DIGEST"
+# What verify_image_signature echoes on rc 0 in this harness (zot armed by default, create_base_mocks).
+GAK_CI_VERIFIED="10.0.1.30:5000/jikig-ai/soleur-web-platform@$GAK_DIGEST"
+GAK_BOOT="$SCRIPT_DIR/soleur-host-bootstrap.sh"
+GAK_SH="$(command -v dash || command -v sh)"
+GAK_REAL_MV="$(command -v mv)"
+# One line, literal `\n` separators — the Doppler docker-format shape measured in plan §0.2.
+_gak_pem() {
+  local pem
+  pem="$(openssl genrsa 2048 2>/dev/null || true)"
+  [[ -n "$pem" ]] || pem="$(printf -- '-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----' "synthesized-$1")"
+  printf '%s' "$pem" | awk 'BEGIN{ORS=""} NR>1{print "\\n"} {print}'
+}
+GAK_PRD_KEY="$(_gak_pem prd)"; GAK_ISO_KEY="$(_gak_pem iso)"; GAK_RETIRED_KEY="$(_gak_pem retired)"
+# Slices from the middle of each key body: never header text two keys share.
+GAK_ISO_MARK="${GAK_ISO_KEY:80:40}"; GAK_PRD_MARK="${GAK_PRD_KEY:80:40}"
+# The base prd env carries one legitimate name of each excepted shape (NODE_ENV, the app's GIT_DATA_*
+# config), so every control proves the hijack refusal does not over-reach.
+_gak_prd_base() { printf 'KEY=value\nNODE_ENV=production\nGIT_DATA_SSH_HOST=git.example.invalid\nGITHUB_APP_ID=4242\n'; }
+{ _gak_prd_base; printf 'GITHUB_APP_PRIVATE_KEY=%s\nZZ_LAST=1\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd.env"
+{ printf 'GITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_PRD_KEY"; _gak_prd_base; printf 'GITHUB_APP_PRIVATE_KEY=%s\nZZ_LAST=1\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-twice.env"
+{ _gak_prd_base; printf 'ZZ_LAST=1\n'; } > "$GAK_FIX/prd-nokey.env"
+{ _gak_prd_base; printf 'GITHUB_APP_PRIVATE_KEY=EVICTED_SEE_ADR_241\nZZ_LAST=1\n'; } > "$GAK_FIX/prd-evicted.env"
+# The parked _RETIRED name shares the prefix (rows 7.2/7.2c); a real host token cannot see it, the stub can.
+printf 'GITHUB_APP_PRIVATE_KEY_RETIRED=%s\nGITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_RETIRED_KEY" "$GAK_ISO_KEY" > "$GAK_FIX/app.env"
+printf 'GITHUB_APP_PRIVATE_KEY_RETIRED=%s\n' "$GAK_RETIRED_KEY" > "$GAK_FIX/app-empty.env"
+printf 'GITHUB_APP_PRIVATE_KEY=%s\nGITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_ISO_KEY" "$GAK_RETIRED_KEY" > "$GAK_FIX/app-two.env"
+# A `mv` that refuses to rename the overlay's merge temp file (the atomic-write failure arm).
+mkdir -p "$GAK_FIX/mvfail"
+printf '#!/bin/bash\ncase "$*" in *.gak.*) exit 1 ;; esac\nexec %s "$@"\n' "$GAK_REAL_MV" > "$GAK_FIX/mvfail/mv"
+chmod +x "$GAK_FIX/mvfail/mv"
+
+# Runtime-hijack classes (#8609 d): <id> <one representative prd line> <the class's literal
+# alternative in the refusal regex, as a mutation removes it>.
+GAK_HIJACK_CLASSES=(
+  "node|NODE_PATH=/workspaces/x|NODE_[A-Za-z0-9_]*|"
+  "node_options|NODE_OPTIONS=--require /tmp/x.js|NODE_[A-Za-z0-9_]*|"
+  "ld|LD_AUDIT=/tmp/x.so|LD_[A-Za-z0-9_]*|"
+  "glibc|GLIBC_TUNABLES=glibc.malloc.x=1|GLIBC_[A-Za-z0-9_]*|"
+  "git|GIT_CONFIG_COUNT=1|GIT_[A-Za-z0-9_]*|"
+  "bash|BASH_ENV=/tmp/x|BASH_[A-Za-z0-9_]*|"
+  "env|ENV=/tmp/x|ENV|"
+  "path|PATH=/workspaces/bin:/usr/bin|PATH|"
+  "shell|SHELL=/tmp/sh|SHELL|"
+  "home|HOME=/workspaces|HOME|"
+  "tmpdir|TMPDIR=/workspaces|TMPDIR|"
+  "ssl|SSL_CERT_FILE=/tmp/ca.pem|SSL_[A-Za-z0-9_]*|"
+  "openssl|OPENSSL_CONF=/tmp/o.cnf|OPENSSL_[A-Za-z0-9_]*|"
+  "curl|CURL_CA_BUNDLE=/tmp/ca.pem|CURL_[A-Za-z0-9_]*|"
+  "proxy_uc|HTTPS_PROXY=http://10.9.9.9:3128|[A-Za-z0-9_]*_PROXY|"
+  "proxy_lc|https_proxy=http://10.9.9.9:3128|[A-Za-z0-9_]*_proxy|"
+  "npm_lc|npm_config_userconfig=/tmp/x|npm_config_[A-Za-z0-9_]*|"
+  "npm_uc|NPM_CONFIG_PREFIX=/tmp/x|NPM_CONFIG_[A-Za-z0-9_]*|"
+  "python|PYTHONPATH=/tmp/x|PYTHON[A-Za-z0-9_]*|"
+  "perl|PERL5OPT=-Mx|PERL[A-Za-z0-9_]*)"
+)
+for _hc in "${GAK_HIJACK_CLASSES[@]}"; do
+  IFS='|' read -r _hid _hline _ <<<"$_hc"
+  { _gak_prd_base; printf '%s\nGITHUB_APP_PRIVATE_KEY=%s\nZZ_LAST=1\n' "$_hline" "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-hijack-$_hid.env"
+done
+# A bare NAME line (docker --env-file then copies the docker CLI's own value) and a leading-blank line.
+{ _gak_prd_base; printf 'LD_PRELOAD\nGITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-hijack-bare.env"
+{ _gak_prd_base; printf '  NODE_OPTIONS=--require /tmp/x.js\nGITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-hijack-ws.env"
+
+# gak_mut <src> <dst> <old> <new> [all]: literal replace (first occurrence, or every one with `all`).
+# An absent <old> copies <src> unchanged — the caller's landed-check then fails the row.
+gak_mut() {
+  GAK_OLD="$3" GAK_NEW="$4" GAK_ALL="${5:-}" python3 - "$1" "$2" <<'PY'
+import os, sys
+s = open(sys.argv[1]).read(); o = os.environ["GAK_OLD"]; n = os.environ["GAK_NEW"]
+s = s.replace(o, n) if os.environ["GAK_ALL"] else s.replace(o, n, 1)
+open(sys.argv[2], "w").write(s)
+PY
+}
+
+# gak_run_ci <dir> <token yes|no> <prd-body> <script> [extra]: one traced web-platform deploy.
+gak_run_ci() {
+  local d="$1" tok="$2" body="$3" script="$4" extra="${5:-}" rc=0
+  assert_fixture_dir "$d"
+  : > "$d/calls.log"; : > "$d/gak.log"; : > "$d/logger.txt"; : > "$d/sentry.txt"
+  { printf 'DOPPLER_TOKEN=%s\n' "$GAK_PRD_TOKEN"
+    if [[ "$tok" == yes ]]; then printf 'GITHUB_APP_DOPPLER_TOKEN=%s\n' "$GAK_TOKEN"; fi; } > "$d/cred"
+  sed "s#/etc/default/soleur-doppler-token#$d/cred#g" "$script" > "$d/ci-deploy.sh"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount" CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease" CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$d/ci-deploy.state" MOCK_DOCKER_MODE="trace"
+    export GITHUB_APP_KEY_VERIFIED_REF_FILE="$d/verified-ref" MOCK_COSIGN_IDENTITY_SIM=1
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt" MOCK_SENTRY_CAPTURE_FILE="$d/sentry.txt"
+    export MOCK_DOPPLER_CALL_LOG="$d/calls.log" MOCK_GAK_LOG="$d/gak.log" MOCK_GAK_TOKEN="$GAK_TOKEN"
+    export MOCK_GAK_PRD_BODY="$body" MOCK_GAK_APP_BODY="$GAK_FIX/app.env" MOCK_GAK_STDERR_CANARY="$GAK_STDERR_CANARY"
+    export MOCK_GAK_KEY_MARK="$GAK_ISO_MARK"
+    GAK_PATH_PREFIX=""
+    eval "$extra"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token" PATH="${GAK_PATH_PREFIX:+$GAK_PATH_PREFIX:}$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$d/ci-deploy.sh"
+  ) > "$d/out.txt" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+
+# gak_run_boot <dir> <token yes|no> <prd-body> <bootstrap> [extra]: the boot-site driver. Extracts
+# the two baked helpers from <bootstrap> and replays cloud-init's terminal order: the download
+# helper (overlay included, which LAUNCHES the check through the systemd-run stub), then `docker run
+# --env-file` (snapshotted here, since that is the moment the container's env is fixed), then the
+# check exactly as it was launched (the stub records the argv; the driver never calls it itself,
+# so a helper that does not launch it emits nothing — test-design F3).
+gak_run_boot() {
+  local d="$1" tok="$2" body="$3" boot="$4" extra="${5:-}"
+  assert_fixture_dir "$d"
+  mkdir -p "$d/bin" "$d/detail"
+  : > "$d/calls.log"; : > "$d/gak.log"; : > "$d/logger.txt"; : > "$d/emits.txt"
+  awk "/cat > \/usr\/local\/bin\/soleur-doppler-download <[<]'DDLEOF'/{f=1;next} f&&/^DDLEOF\$/{f=0} f{print}" "$boot" > "$d/bin/soleur-doppler-download"
+  awk "/cat > \/usr\/local\/bin\/soleur-github-app-key-check <[<]'GAKEOF'/{f=1;next} f&&/^GAKEOF\$/{f=0} f{print}" "$boot" > "$d/bin/soleur-github-app-key-check"
+  create_mock_doppler "$d/bin"; create_mock_logger "$d/bin"
+  cat > "$d/bin/docker" <<'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "inspect" ]]; then echo "${MOCK_BOOT_RUNNING:-true}"; exit 0; fi
+if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
+  _gtok=0; _gkey=0; _giso=0
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
+  # shellcheck disable=SC2016
+  if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
+  printf 'probe:%s token=%s key_argv=%s isolated=%s\n' "${2:-}" "$_gtok" "$_gkey" "$_giso" >> "$MOCK_GAK_LOG"
+  if [[ "${MOCK_GAK_PLANTED_NODE:-}" == "1" && "$_giso" == 0 ]]; then printf 'github_app_key_probe=ok\n'; exit 0; fi
+  if [[ -n "${MOCK_GAK_PROBE_OUT+x}" ]]; then printf '%s' "$MOCK_GAK_PROBE_OUT"; else printf 'github_app_key_probe=ok\n'; fi
+  exit "${MOCK_GAK_PROBE_RC:-0}"
+fi
+exit 0
+MOCK
+  cat > "$d/bin/soleur-boot-emit" <<'MOCK'
+#!/bin/bash
+_t=0
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+printf 'emit:%s env_token=%s\n' "$1" "$_t" >> "$MOCK_GAK_LOG"
+printf '%s %s %s\n' "$1" "$2" "$(cat "$SOLEUR_STAGE_DETAIL_DIR/$1" 2>/dev/null)" >> "$MOCK_BOOT_EMITS"
+MOCK
+  cat > "$d/bin/systemd-run" <<'MOCK'
+#!/bin/bash
+_t=0
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ "${MOCK_SYSTEMD_RUN_FAIL:-}" == "1" ]]; then printf 'systemd-run-failed env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"; exit 1; fi
+printf 'systemd-run env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"
+exit 0
+MOCK
+  chmod +x "$d/bin/"*
+  { printf 'DOPPLER_TOKEN=%s\n' "$GAK_PRD_TOKEN"
+    if [[ "$tok" == yes ]]; then printf 'GITHUB_APP_DOPPLER_TOKEN=%s\n' "$GAK_TOKEN"; fi; } > "$d/cred"
+  printf '%s' "$GAK_REF_OK" > "$d/image-ref"
+  printf '%s\n' "$GAK_REF_OK" > "$d/verified-ref"
+  (
+    export PATH="$d/bin:$TEST_PATH_BASE" HOME="$d" DOPPLER_TOKEN="$GAK_PRD_TOKEN"
+    export SOLEUR_STAGE_DETAIL_DIR="$d/detail" SOLEUR_DOPPLER_ERRDIR="$d" SOLEUR_DOPPLER_ATTEMPTS=1
+    export SOLEUR_DOPPLER_TOKEN_FILE="$d/cred" SOLEUR_IMAGE_REF_FILE="$d/image-ref"
+    export SOLEUR_GAK_VERIFIED_REF_FILE="$d/verified-ref" GITHUB_APP_KEY_FETCH_BACKOFF=0
+    export SOLEUR_GAK_STATE_FILE="$d/gak.state" SOLEUR_GAK_CHECK="$d/bin/soleur-github-app-key-check"
+    export SOLEUR_GAK_WAIT_POLLS=1 SOLEUR_GAK_WAIT_SECS=0 MOCK_BOOT_EMITS="$d/emits.txt"
+    export MOCK_DOPPLER_CALL_LOG="$d/calls.log" MOCK_GAK_LOG="$d/gak.log" MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"
+    export MOCK_GAK_PRD_BODY="$body" MOCK_GAK_APP_BODY="$GAK_FIX/app.env" MOCK_GAK_STDERR_CANARY="$GAK_STDERR_CANARY"
+    export MOCK_GAK_TOKEN="$GAK_TOKEN" MOCK_GAK_KEY_MARK="$GAK_ISO_MARK"
+    GAK_PATH_PREFIX=""
+    eval "$extra"
+    if [[ -n "$GAK_PATH_PREFIX" ]]; then export PATH="$GAK_PATH_PREFIX:$PATH"; fi
+    rc=0; "$GAK_SH" "$d/bin/soleur-doppler-download" "$d/envfile" || rc=$?
+    printf '%s\n' "$rc" > "$d/rc"
+    if [[ "$rc" == 0 ]]; then
+      cp "$d/envfile" "$d/envfile.soleur-web-platform"
+      printf 'run:soleur-web-platform\n' >> "$d/gak.log"
+      if [[ "$(grep -c '^systemd-run ' "$d/gak.log")" == 1 ]]; then
+        "$GAK_SH" "$(sed -n 's/^systemd-run .* //p' "$d/gak.log")" || true
+      fi
+    fi
+  ) > "$d/out.txt" 2>&1
+}
+
+# --- readers -------------------------------------------------------------------------------------
+_gak_st() { jq -r --arg f "$2" '.[$f] // "<absent>"' "$1/ci-deploy.state" 2>/dev/null || echo "<nostate>"; }
+_gak_keys() { grep -c '^GITHUB_APP_PRIVATE_KEY=' "$1/envfile.$2" 2>/dev/null || true; }
+_gak_keyval() { sed -n 's/^GITHUB_APP_PRIVATE_KEY=//p' "$1/envfile.$2" 2>/dev/null | head -1; }
+_gak_appcalls() { grep -c '^project=soleur-github-app ' "$1/calls.log" 2>/dev/null || true; }
+_gak_appcalls_tok() { grep -cxF "project=soleur-github-app config=prd token=$GAK_TOKEN" "$1/calls.log" 2>/dev/null || true; }
+_gak_sentry() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="github-app-key")] | map(if $f == "level" then .level elif $f == "detail" then .extra.detail else .tags.classification end) | join(",")' "$1/sentry.txt" 2>/dev/null; }
+_gak_line() { grep -n -m1 -xF "$2" "$1/gak.log" 2>/dev/null | cut -d: -f1; }
+_gak_emits() { cut -d' ' -f1,2 "$1/emits.txt" 2>/dev/null | tr '\n' ',' | sed 's/,$//'; }
+# _gak_env_intact <dir> <container> <prd-fixture>: every NON-key line of the prd env reached the
+# container in order, no GITHUB_APP_PRIVATE_KEY_* line did, and exactly one key line is present
+# (test-design F1/F4: an overlay that drops the prd env, or smuggles the _RETIRED key, is RED).
+_gak_env_intact() {
+  local f="$1/envfile.$2"
+  [[ -f "$f" ]] || { GAK_WHY="$2: no env-file snapshot"; return 1; }
+  if ! diff -q <(grep -v '^GITHUB_APP_PRIVATE_KEY=' "$3" | grep -v '^$') <(grep -v '^GITHUB_APP_PRIVATE_KEY=' "$f" | grep -v '^$') >/dev/null; then
+    GAK_WHY="$2: the non-key prd lines did not survive the overlay intact"; return 1
+  fi
+  if grep -q '^GITHUB_APP_PRIVATE_KEY_' "$f"; then GAK_WHY="$2: a GITHUB_APP_PRIVATE_KEY_* line reached the container"; return 1; fi
+  [[ "$(_gak_keys "$1" "$2")" == 1 ]] || { GAK_WHY="$2: $(_gak_keys "$1" "$2") key lines"; return 1; }
+}
+# _gak_no_token_leak <dir>: the app read token (raw or base64) and the isolated key's body appear in
+# no env-file (token only), no child env/argv the mocks saw, and no log, Sentry, state or detail sink.
+_gak_no_token_leak() {
+  local f
+  if grep -qF "$GAK_TOKEN" "$1"/envfile.* 2>/dev/null; then GAK_WHY="the app read token reached an env-file"; return 1; fi
+  if grep -qE '(env_token|token|key_argv)=1' "$1/gak.log" 2>/dev/null; then
+    GAK_WHY="the app read token (or the key, on the host argv) reached a child: $(grep -E '(env_token|token|key_argv)=1' "$1/gak.log" | head -1 | cut -c1-80)"; return 1
+  fi
+  for f in "$1/logger.txt" "$1/sentry.txt" "$1/out.txt" "$1/emits.txt" "$1/ci-deploy.state" "$1/gak.state" "$1"/detail/*; do
+    [[ -f "$f" ]] || continue
+    if grep -qF -e "$GAK_TOKEN" -e "$GAK_TOKEN_B64" -e "$GAK_ISO_MARK" -e "$GAK_PRD_MARK" "$f" 2>/dev/null; then
+      GAK_WHY="a token/key byte reached ${f##*/}"; return 1
+    fi
+  done
+  return 0
+}
+_gak_promoted() {  # predicate: 0 = promoted
+  if [[ "$(cat "$1/rc")" == 0 && "$(_gak_st "$1" reason)" == ok ]] && grep -q '^run:soleur-web-platform ' "$1/gak.log"; then return 0; fi
+  return 1
+}
+_gak_refused() {  # <dir> <reason>: predicate — refused with <reason>; production never started
+  if [[ "$(cat "$1/rc")" != 0 && "$(_gak_st "$1" reason)" == "$2" ]] && ! grep -q '^run:soleur-web-platform ' "$1/gak.log"; then return 0; fi
+  return 1
+}
+_gak_probe_in_canary_before_swap() {
+  local c p s
+  c="$(_gak_line "$1" 'run:soleur-web-platform-canary env_token=0')"
+  p="$(grep -n -m1 '^probe:soleur-web-platform-canary ' "$1/gak.log" | cut -d: -f1 || true)"
+  s="$(grep -n -m1 '^run:soleur-web-platform ' "$1/gak.log" | cut -d: -f1 || true)"
+  # A predicate, not an `if`: guard-vacuity-floor reads any `if [[ … -lt … ]]` naming a counter
+  # (`-n` matches the counter `n`) as an anti-vacuity floor, and this ordering check is not one.
+  [[ -n "$c" && -n "$p" && -n "$s" && "$c" -lt "$p" && "$p" -lt "$s" ]] || return 1
+  ! grep -q '^probe:soleur-web-platform ' "$1/gak.log"
+}
+_gak_record() { cat "$1/verified-ref" 2>/dev/null || echo "<absent>"; }
+# The boot launch: exactly one systemd-run, of the check, under a per-boot unique unit name.
+_gak_launched() {
+  local l
+  l="$(grep '^systemd-run ' "$1/gak.log" 2>/dev/null)" || l=""
+  [[ "$(printf '%s\n' "$l" | grep -c .)" == 1 ]] || { GAK_WHY="systemd-run launches: $(printf '%s\n' "$l" | grep -c .)"; return 1; }
+  [[ "$l" == *" $1/bin/soleur-github-app-key-check" ]] || { GAK_WHY="launched [$l]"; return 1; }
+  [[ "$l" =~ --unit=soleur-github-app-key-check-[0-9a-f]+-[0-9]+\  ]] || { GAK_WHY="unit name is not per-boot unique: [$l]"; return 1; }
+}
+
+# --- per-scenario property checks: <site> <dir> → 0 when the property holds; GAK_WHY otherwise ---
+_gak_chk_iso() {  # token present, both projects hold keys, verified image, probe ok (7.p2 and most rows' base)
+  local s="$1" d="$2" c
+  if [[ "$s" == ci ]]; then
+    _gak_promoted "$d" || { GAK_WHY="not promoted (rc=$(cat "$d/rc") reason=$(_gak_st "$d" reason))"; return 1; }
+    [[ "$(_gak_st "$d" github_app_key_source)/$(_gak_st "$d" github_app_key_fetch)/$(_gak_st "$d" github_app_key_probe)" == isolated/ok/ok ]] \
+      || { GAK_WHY="state $(_gak_st "$d" github_app_key_source)/$(_gak_st "$d" github_app_key_fetch)/$(_gak_st "$d" github_app_key_probe)"; return 1; }
+    for c in soleur-web-platform-canary soleur-web-platform; do
+      [[ "$(_gak_keyval "$d" "$c")" == "$GAK_ISO_KEY" ]] || { GAK_WHY="$c env-file: isolated=no"; return 1; }
+      _gak_env_intact "$d" "$c" "$GAK_FIX/prd.env" || return 1
+    done
+    _gak_probe_in_canary_before_swap "$d" || { GAK_WHY="probe not in the canary between its run and the swap: $(tr '\n' ' ' < "$d/gak.log")"; return 1; }
+    grep -q '^probe:soleur-web-platform-canary .* isolated=1$' "$d/gak.log" || { GAK_WHY="the probe exec is not the env -i form"; return 1; }
+    [[ -z "$(_gak_sentry "$d" cls)" ]] || { GAK_WHY="unexpected Sentry events: $(_gak_sentry "$d" cls)"; return 1; }
+    [[ "$(_gak_record "$d")" == "$GAK_CI_VERIFIED" ]] || { GAK_WHY="verified-ref record [$(_gak_record "$d")] (want the verified digest)"; return 1; }
+  else
+    [[ "$(cat "$d/rc")" == 0 ]] || { GAK_WHY="helper rc=$(cat "$d/rc")"; return 1; }
+    [[ "$(_gak_keyval "$d" soleur-web-platform)" == "$GAK_ISO_KEY" ]] || { GAK_WHY="env-file at docker run: isolated=no"; return 1; }
+    _gak_env_intact "$d" soleur-web-platform "$GAK_FIX/prd.env" || return 1
+    [[ "$(cat "$d/gak.state" 2>/dev/null)" == "source=isolated fetch=ok present=1 vref=match" ]] || { GAK_WHY="state [$(cat "$d/gak.state" 2>/dev/null)]"; return 1; }
+    _gak_launched "$d" || return 1
+    [[ "$(_gak_emits "$d")" == "github_app_key_ok info" ]] || { GAK_WHY="emits [$(_gak_emits "$d")]"; return 1; }
+    grep -qF 'source=isolated fetch=ok present=1 vref=match probe=ok rc=0 up=1' "$d/emits.txt" || { GAK_WHY="detail [$(cat "$d/emits.txt")]"; return 1; }
+    grep -q '^probe:soleur-web-platform .* isolated=1$' "$d/gak.log" || { GAK_WHY="the probe exec is not the env -i form"; return 1; }
+  fi
+  [[ "$(_gak_appcalls "$d")" == "${GAK_WANT_APPCALLS:-1}" && "$(_gak_appcalls_tok "$d")" == "${GAK_WANT_APPCALLS:-1}" ]] \
+    || { GAK_WHY="app-project calls=$(_gak_appcalls "$d") with the app token=$(_gak_appcalls_tok "$d") (want ${GAK_WANT_APPCALLS:-1})"; return 1; }
+  _gak_no_token_leak "$d" || return 1
+  return 0
+}
+_gak_chk_prd() {  # token absent: prd key, no isolated call, no Sentry; boot reports ok_no_token at info (7.p1)
+  local s="$1" d="$2"
+  if [[ "$s" == ci ]]; then
+    _gak_promoted "$d" && [[ "$(_gak_st "$d" github_app_key_source)/$(_gak_st "$d" github_app_key_fetch)" == prd/no_token ]] \
+      && [[ "$(_gak_keyval "$d" soleur-web-platform)" == "$GAK_PRD_KEY" && -z "$(_gak_sentry "$d" cls)" ]] \
+      || { GAK_WHY="rc=$(cat "$d/rc") state=$(_gak_st "$d" github_app_key_source)/$(_gak_st "$d" github_app_key_fetch) sentry=[$(_gak_sentry "$d" cls)]"; return 1; }
+  else
+    [[ "$(cat "$d/gak.state" 2>/dev/null)" == "source=prd fetch=no_token present=1 vref=match" && "$(_gak_emits "$d")" == "github_app_key_ok_no_token info" \
+       && "$(_gak_keyval "$d" soleur-web-platform)" == "$GAK_PRD_KEY" ]] \
+      || { GAK_WHY="state [$(cat "$d/gak.state" 2>/dev/null)] emits [$(_gak_emits "$d")]"; return 1; }
+  fi
+  _gak_env_intact "$d" soleur-web-platform "$GAK_FIX/prd.env" || return 1
+  [[ "$(_gak_appcalls "$d")" == 0 ]] || { GAK_WHY="isolated project fetched with no token"; return 1; }
+}
+_gak_chk_transport() {  # probe could not reach GitHub → promote/serve, loudly (7.p3)
+  if [[ "$1" == ci ]]; then
+    _gak_promoted "$2" && [[ "$(_gak_st "$2" github_app_key_probe)" == transport && "$(_gak_sentry "$2" cls)" == probe_transport && "$(_gak_sentry "$2" level)" == warning ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") probe=$(_gak_st "$2" github_app_key_probe) sentry=[$(_gak_sentry "$2" cls)/$(_gak_sentry "$2" level)]"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_transport warning" ]] || { GAK_WHY="emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+}
+_gak_chk_absent() {  # an image without the probe (rc 127) → promote, but at WARNING both sites (7.p4, 7.a1)
+  if [[ "$1" == ci ]]; then
+    _gak_promoted "$2" && [[ "$(_gak_st "$2" github_app_key_probe)" == absent ]] && grep -q 'GITHUB_APP_KEY: class=probe_absent level=warning' "$2/logger.txt" \
+      && [[ "$(_gak_sentry "$2" cls)" == probe_absent && "$(_gak_sentry "$2" level)" == warning ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") probe=$(_gak_st "$2" github_app_key_probe) sentry=[$(_gak_sentry "$2" cls)/$(_gak_sentry "$2" level)]"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_probe_absent warning" ]] || { GAK_WHY="emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+}
+_gak_chk_fetchfail() {  # token present, isolated fetch fails/answers wrong → degrade to prd, loudly, no stderr (7.p5, 7.2d)
+  local f
+  if [[ "$1" == ci ]]; then
+    _gak_promoted "$2" && [[ "$(_gak_st "$2" github_app_key_source)/$(_gak_st "$2" github_app_key_fetch)" == prd/failed \
+      && "$(_gak_keyval "$2" soleur-web-platform)" == "$GAK_PRD_KEY" && "$(_gak_sentry "$2" cls)" == fetch_failed && "$(_gak_sentry "$2" level)" == error ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") state=$(_gak_st "$2" github_app_key_source)/$(_gak_st "$2" github_app_key_fetch) sentry=[$(_gak_sentry "$2" cls)]"; return 1; }
+  else
+    [[ "$(cat "$2/gak.state" 2>/dev/null)" == "source=prd fetch=failed present=1 vref=match" && "$(_gak_emits "$2")" == "github_app_key_ok_fallback warning" \
+       && "$(_gak_keyval "$2" soleur-web-platform)" == "$GAK_PRD_KEY" ]] \
+      || { GAK_WHY="state [$(cat "$2/gak.state" 2>/dev/null)] emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+  _gak_env_intact "$2" soleur-web-platform "$GAK_FIX/prd.env" || return 1
+  for f in logger.txt sentry.txt out.txt emits.txt; do
+    if grep -qF "$GAK_STDERR_CANARY" "$2/$f" 2>/dev/null; then GAK_WHY="Doppler stderr reached $f"; return 1; fi
+  done
+}
+_gak_chk_flaky() {  # the isolated fetch fails once, then answers → the retry keeps the isolated key (7.r1)
+  local rc=0
+  GAK_WANT_APPCALLS=2 _gak_chk_iso "$@" || rc=1
+  (( rc == 0 )) || return 1
+  if [[ "$1" == ci ]]; then grep -q 'GITHUB_APP_KEY: class=ok level=info len=[0-9]* attempts=2' "$2/logger.txt" || { GAK_WHY="no attempts=2 ok line"; return 1; }
+  else grep -q 'GITHUB_APP_KEY_BOOT: class=ok level=info len=[0-9]* attempts=2' "$2/logger.txt" || { GAK_WHY="no attempts=2 ok line"; return 1; }; fi
+}
+_gak_chk_missing() {  # no usable key in the env → refuse (ci) / stage missing at error (boot) (7.3, 7.4)
+  if [[ "$1" == ci ]]; then
+    _gak_refused "$2" canary_github_app_key_missing && [[ "$(_gak_st "$2" github_app_key_probe)" == missing ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason)"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_missing error" ]] || { GAK_WHY="emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+}
+_gak_chk_rejected() {  # the probe's rejected verdict (reason http_401) → refuse / stage rejected at error (7.9, 7.10)
+  if [[ "$1" == ci ]]; then
+    _gak_refused "$2" canary_github_app_key_rejected && [[ "$(_gak_sentry "$2" cls)" == probe_rejected ]] \
+      && [[ "$(_gak_st "$2" github_app_key_probe_reason)" == http_401 && "$(_gak_sentry "$2" detail)" == *" reason=http_401" ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) probe_reason=$(_gak_st "$2" github_app_key_probe_reason)"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_rejected error" ]] && grep -q ' reason=http_401 ' "$2/emits.txt" \
+      || { GAK_WHY="emits [$(_gak_emits "$2")] detail [$(cat "$2/emits.txt")]"; return 1; }
+  fi
+}
+_gak_chk_noverdict() {  # probe exits 1 with no verdict line → rejected/no_verdict (ci) / exec_failed (boot) (7.12)
+  if [[ "$1" == ci ]]; then
+    _gak_refused "$2" canary_github_app_key_rejected && [[ "$(_gak_st "$2" github_app_key_probe_reason)" == no_verdict ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason)"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_exec_failed error" ]] || { GAK_WHY="emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+}
+# token present, image NOT verified → no isolated fetch, prd key, loud (7.14, 7.14b, 7.b*, 7.c*, 7.e1).
+# <want-vref> (boot only): the verified-ref verdict the state must carry.
+_gak_unverified_core() {
+  if [[ "$1" == ci ]]; then
+    _gak_promoted "$2" && [[ "$(_gak_st "$2" github_app_key_fetch)" == unverified_image && "$(_gak_sentry "$2" cls)" == unverified_image ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") fetch=$(_gak_st "$2" github_app_key_fetch) sentry=[$(_gak_sentry "$2" cls)]"; return 1; }
+    [[ "$(_gak_record "$2")" == "<absent>" ]] || { GAK_WHY="an unverified image was recorded as verified: [$(_gak_record "$2")]"; return 1; }
+  else
+    [[ "$(cat "$2/gak.state" 2>/dev/null)" == "source=prd fetch=unverified_image present=1 vref=$3" && "$(_gak_emits "$2")" == "github_app_key_ok_fallback warning" ]] \
+      || { GAK_WHY="state [$(cat "$2/gak.state" 2>/dev/null)] emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+  [[ "$(_gak_appcalls "$2")" == 0 && "$(_gak_keyval "$2" soleur-web-platform)" == "$GAK_PRD_KEY" ]] \
+    || { GAK_WHY="app-project calls=$(_gak_appcalls "$2"); the unverified image received the isolated key"; return 1; }
+}
+_gak_chk_unverified() { _gak_unverified_core "$1" "$2" mismatch; }
+_gak_chk_norec() { _gak_unverified_core "$1" "$2" absent; }
+_gak_chk_recmismatch() { _gak_unverified_core "$1" "$2" mismatch; }
+_gak_chk_tagref() { _gak_unverified_core "$1" "$2" match; }  # the record matches, but the ref is no digest
+_gak_chk_sig() {  # a signature from a non-main ref / another repo → WARN fail-open, no key (7.b*)
+  _gak_unverified_core "$1" "$2" mismatch || return 1
+  grep -q 'IMAGE_VERIFY_FAIL: result=wrong_identity' "$2/logger.txt" || { GAK_WHY="the verify failure is not classified wrong_identity"; return 1; }
+}
+_gak_chk_cache() {  # the local-cache reload arm (#6512) → no key for a never-re-verified image (7.e1)
+  _gak_unverified_core "$1" "$2" mismatch || return 1
+  grep -q 'reused_local_reload' "$2/sentry.txt" || { GAK_WHY="the local-cache arm did not fire"; return 1; }
+}
+_gak_chk_hijack() {  # a runtime-hijack class in prd → refuse before any container (7.15*)
+  if [[ "$1" == ci ]]; then
+    [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_env_hijack && "$(_gak_st "$2" github_app_key_fetch)" == env_hijack ]] && ! grep -q '^run:' "$2/gak.log" \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) runs=$(grep -c '^run:' "$2/gak.log")"; return 1; }
+  else
+    [[ "$(cat "$2/rc")" == 72 ]] && grep -qF 'cond=github_app_key_env_hijack attempt=1/1' "$2/detail/doppler_download" 2>/dev/null \
+      && [[ ! -e "$2/envfile.soleur-web-platform" ]] || { GAK_WHY="helper rc=$(cat "$2/rc") detail=[$(cat "$2/detail/doppler_download" 2>/dev/null)]"; return 1; }
+  fi
+  [[ "$(_gak_appcalls "$2")" == 0 ]] || { GAK_WHY="isolated project fetched for a hijacked env"; return 1; }
+}
+_gak_chk_mergefail() {  # the atomic rename fails → abort (ci refuses, boot exits 72), env-file untouched (7.m*)
+  if [[ "$1" == ci ]]; then
+    [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_merge_failed && "$(_gak_st "$2" github_app_key_fetch)" == merge_failed ]] && ! grep -q '^run:' "$2/gak.log" \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) runs=$(grep -c '^run:' "$2/gak.log")"; return 1; }
+  else
+    [[ "$(cat "$2/rc")" == 72 ]] && grep -qF 'cond=github_app_key_merge_failed' "$2/detail/doppler_download" 2>/dev/null \
+      && [[ ! -e "$2/envfile.soleur-web-platform" ]] || { GAK_WHY="helper rc=$(cat "$2/rc")"; return 1; }
+    cmp -s "$2/envfile" "$GAK_FIX/prd.env" || { GAK_WHY="the env-file was modified in place by a failed merge"; return 1; }
+    if compgen -G "$2/envfile.gak.*" >/dev/null; then GAK_WHY="the merge temp file was left behind"; return 1; fi
+  fi
+}
+_gak_chk_launchfail() {  # systemd-run cannot launch the check → exec_failed at error, synchronously (7.l1)
+  [[ "$(cat "$2/rc")" == 0 && "$(_gak_emits "$2")" == "github_app_key_exec_failed error" ]] && grep -qF 'launch=failed' "$2/emits.txt" \
+    || { GAK_WHY="rc=$(cat "$2/rc") emits [$(_gak_emits "$2")]"; return 1; }
+}
+_gak_chk_planted() {  # a planted `node` answers ok, but the env -i probe says rejected → refused (7.16)
+  _gak_chk_rejected "$@"
+}
+_gak_chk_inherit() {  # inherited GITHUB_APP_KEY_* values never reach state on an abort before the overlay (7.s2)
+  [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == cosign_verify_failed ]] \
+    && [[ "$(jq -r 'has("github_app_key_fetch") or has("github_app_key_source") or has("github_app_key_probe")' "$2/ci-deploy.state" 2>/dev/null)" == false ]] \
+    || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) fetch=$(_gak_st "$2" github_app_key_fetch)"; return 1; }
+}
+_gak_chk_twice() { _gak_chk_iso "$@"; }  # prd holds the key line twice (7.1b)
+
+# Scenario table: <token> <prd-body> <extra-env> (boot extra is the same unless GAK_BOOTX_<scn> is set).
+declare -A GAK_SCN=(
+  [iso]="yes|$GAK_FIX/prd.env|"
+  [prd]="no|$GAK_FIX/prd.env|"
+  [transport]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT=\$'github_app_key_probe=transport\\n'"
+  [absent]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT='' MOCK_GAK_PROBE_RC=127"
+  [fetchfail]="yes|$GAK_FIX/prd.env|export MOCK_GAK_APP_FAIL=1"
+  [appempty]="yes|$GAK_FIX/prd.env|export MOCK_GAK_APP_BODY=$GAK_FIX/app-empty.env"
+  [apptwo]="yes|$GAK_FIX/prd.env|export MOCK_GAK_APP_BODY=$GAK_FIX/app-two.env"
+  [flaky]="yes|$GAK_FIX/prd.env|printf 1 > \"\$MOCK_GAK_LOG.failfirst\"; export MOCK_GAK_APP_FAIL_FIRST=\"\$MOCK_GAK_LOG.failfirst\""
+  [missing]="yes|$GAK_FIX/prd-nokey.env|export MOCK_GAK_APP_FAIL=1"
+  [evicted]="no|$GAK_FIX/prd-evicted.env|"
+  [rejected]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT=\$'github_app_key_probe=rejected reason=http_401\\n' MOCK_GAK_PROBE_RC=1"
+  [planted]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT=\$'github_app_key_probe=rejected reason=http_401\\n' MOCK_GAK_PROBE_RC=1 MOCK_GAK_PLANTED_NODE=1"
+  [noverdict]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT='' MOCK_GAK_PROBE_RC=1"
+  # #6129: ENFORCE is the default, so an unverified or wrongly-signed image never reaches the key
+  # handoff at all. These five scenarios test the WARN fail-open override, where the image DOES
+  # run, and so must pin IMAGE_VERIFY_MODE=warn explicitly.
+  [unverified]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1"
+  [cosignfail]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1"
+  [sigtag]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_SAN_REF=refs/tags/v9.9.9 MOCK_COSIGN_WF_REF=refs/tags/v9.9.9"
+  [sigbranch]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_WF_REF=refs/heads/feat-branch"
+  [sigfork]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_WF_REPO=evil-fork/soleur"
+  [cache]="yes|$GAK_FIX/prd.env|export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:$(printf '6%.0s' {1..64}) MOCK_RUNNING_IMAGE_TAG=v1.0.0"
+  [norec]="yes|$GAK_FIX/prd.env|rm -f \"\$SOLEUR_GAK_VERIFIED_REF_FILE\""
+  [tagref]="yes|$GAK_FIX/prd.env|printf '%s' 'ghcr.io/jikig-ai/soleur-web-platform:v1.0.0' > \"\$SOLEUR_IMAGE_REF_FILE\"; printf '%s\\n' 'ghcr.io/jikig-ai/soleur-web-platform:v1.0.0' > \"\$SOLEUR_GAK_VERIFIED_REF_FILE\""
+  [recmismatch]="yes|$GAK_FIX/prd.env|printf '%s\\n' '10.0.1.30:5000/jikig-ai/soleur-web-platform@sha256:$(printf 'f%.0s' {1..64})' > \"\$SOLEUR_GAK_VERIFIED_REF_FILE\""
+  [mergefail]="yes|$GAK_FIX/prd.env|GAK_PATH_PREFIX=$GAK_FIX/mvfail"
+  [launchfail]="yes|$GAK_FIX/prd.env|export MOCK_SYSTEMD_RUN_FAIL=1"
+  [inherit]="yes|$GAK_FIX/prd.env|export GITHUB_APP_KEY_FETCH=ok GITHUB_APP_KEY_SOURCE=isolated GITHUB_APP_KEY_PROBE=ok MOCK_COSIGN_VERIFY_FAIL=1 IMAGE_VERIFY_MODE=enforce"
+  [hijack_bare]="yes|$GAK_FIX/prd-hijack-bare.env|"
+  [hijack_ws]="yes|$GAK_FIX/prd-hijack-ws.env|"
+  [twice]="yes|$GAK_FIX/prd-twice.env|"
+)
+declare -A GAK_CHK=([iso]=_gak_chk_iso [prd]=_gak_chk_prd [transport]=_gak_chk_transport [absent]=_gak_chk_absent
+  [fetchfail]=_gak_chk_fetchfail [appempty]=_gak_chk_fetchfail [apptwo]=_gak_chk_fetchfail [flaky]=_gak_chk_flaky
+  [missing]=_gak_chk_missing [evicted]=_gak_chk_missing [rejected]=_gak_chk_rejected [planted]=_gak_chk_planted
+  [noverdict]=_gak_chk_noverdict [unverified]=_gak_chk_unverified [cosignfail]=_gak_chk_unverified
+  [sigtag]=_gak_chk_sig [sigbranch]=_gak_chk_sig [sigfork]=_gak_chk_sig [cache]=_gak_chk_cache
+  [norec]=_gak_chk_norec [recmismatch]=_gak_chk_recmismatch [tagref]=_gak_chk_tagref [mergefail]=_gak_chk_mergefail
+  [launchfail]=_gak_chk_launchfail [inherit]=_gak_chk_inherit
+  [hijack_bare]=_gak_chk_hijack [hijack_ws]=_gak_chk_hijack [twice]=_gak_chk_twice)
+for _hc in "${GAK_HIJACK_CLASSES[@]}"; do
+  IFS='|' read -r _hid _ _ <<<"$_hc"
+  GAK_SCN[hijack_$_hid]="yes|$GAK_FIX/prd-hijack-$_hid.env|"
+  GAK_CHK[hijack_$_hid]=_gak_chk_hijack
+done
+# The boot path's unverified arm is a ref file that is not a digest (the boot has no cosign step).
+declare -A GAK_BOOTX=([unverified]="printf '%s' 'ghcr.io/jikig-ai/soleur-web-platform:v1.0.0' > \"\$SOLEUR_IMAGE_REF_FILE\"")
+GAK_SITES_EXERCISED=""
+
+# gak_eval <site> <scenario> <script-or-bootstrap> → 0 the scenario's property holds; 1 the
+# property check failed (GAK_WHY names it); 2 the run CRASHED or failed for an unrelated reason
+# (a shell error, reason=unhandled, a canary health/login/dashboard failure) — never a kill (F11).
+gak_eval() {
+  local site="$1" scn="$2" file="$3" d tok body extra rc=0 r
+  IFS='|' read -r tok body extra <<<"${GAK_SCN[$scn]}"
+  d="$(mktemp -d)"
+  if [[ "$site" == ci ]]; then
+    gak_run_ci "$d" "$tok" "$body" "$file" "$extra"
+  else
+    gak_run_boot "$d" "$tok" "$body" "$file" "$extra${GAK_BOOTX[$scn]:+; ${GAK_BOOTX[$scn]}}"
+  fi
+  [[ " $GAK_SITES_EXERCISED " == *" $site "* ]] || GAK_SITES_EXERCISED="$GAK_SITES_EXERCISED $site"
+  GAK_WHY=""
+  "${GAK_CHK[$scn]}" "$site" "$d" || rc=1
+  if (( rc == 1 )); then
+    r="$(_gak_st "$d" reason)"
+    if grep -qE 'unbound variable|parameter not set|[Ss]yntax error|command not found|: not found' "$d/out.txt" 2>/dev/null \
+      || [[ "$site" == ci && "$r" =~ ^(unhandled|canary_health_failed|canary_login_failed|canary_dashboard_5xx|canary_error_boundary|image_pull_failed|doppler_fetch_failed)$ ]]; then
+      GAK_WHY="CRASH/unrelated (reason=$r; $(grep -m1 -E 'unbound variable|parameter not set|[Ss]yntax error|command not found|: not found' "$d/out.txt" 2>/dev/null | cut -c1-100)) — $GAK_WHY"
+      rc=2
+    fi
+  fi
+  rm -rf "$d"
+  return "$rc"
+}
+
+# Pristine controls, run once per (site, scenario) and reused by every row.
+declare -A GAK_CTRL=()
+gak_ctrl() {  # <site> <scn>
+  local k="$1/$2" f
+  if [[ -z "${GAK_CTRL[$k]:-}" ]]; then
+    if [[ "$1" == ci ]]; then f="$DEPLOY_SCRIPT"; else f="$GAK_BOOT"; fi
+    if gak_eval "$1" "$2" "$f"; then GAK_CTRL[$k]=green; else GAK_CTRL[$k]="RED($GAK_WHY)"; fi
+  fi
+  [[ "${GAK_CTRL[$k]}" == green ]]
+}
+
+# _gak_row_core <scenario> <sites> <old> <new> [all] → 0 when the row is a valid KILL: <sites> is
+# non-empty, and on EVERY site the mutation landed, the control is green, and the mutant failed its
+# own property check (gak_eval rc 1). Sets GAK_ROW_BAD / GAK_ROW_VERDICTS. Counts nothing.
+# shellcheck disable=SC2034  # GAK_ROW_RED is read through a nameref in _gak_dispatch_gaps (7.13)
+declare -A GAK_ROW_DECL=() GAK_ROW_RED=()
+_gak_row_core() {
+  local scn="$1" sites="$2" old="$3" new="$4" all="${5:-}" site src m erc n_sites=0
+  GAK_ROW_BAD=""; GAK_ROW_VERDICTS=""; GAK_ROW_WHY=""
+  for site in $sites; do
+    n_sites=$((n_sites + 1))
+    if [[ "$site" == ci ]]; then src="$DEPLOY_SCRIPT"; else src="$GAK_BOOT"; fi
+    m="$(mktemp)"; gak_mut "$src" "$m" "$old" "$new" "$all"
+    if cmp -s "$src" "$m"; then GAK_ROW_BAD="$GAK_ROW_BAD [$site: mutation did NOT land — anchor drifted, row would measure the pristine file]"; rm -f "$m"; continue; fi
+    gak_ctrl "$site" "$scn" || GAK_ROW_BAD="$GAK_ROW_BAD [$site: unmutated control is not green: ${GAK_CTRL[$site/$scn]}]"
+    erc=0; gak_eval "$site" "$scn" "$m" || erc=$?
+    case "$erc" in
+      0) GAK_ROW_BAD="$GAK_ROW_BAD [$site: mutant stayed GREEN]" ;;
+      1) GAK_ROW_VERDICTS="$GAK_ROW_VERDICTS $site=RED"; GAK_ROW_WHY="$GAK_ROW_WHY [$site: ${GAK_WHY:0:90}]" ;;
+      *) GAK_ROW_BAD="$GAK_ROW_BAD [$site: $GAK_WHY]" ;;
+    esac
+    rm -f "$m"
+  done
+  (( n_sites > 0 )) || GAK_ROW_BAD="$GAK_ROW_BAD [no site declared — nothing was measured]"
+  for site in $sites; do
+    [[ " $GAK_ROW_VERDICTS " == *" $site=RED "* ]] || GAK_ROW_BAD="$GAK_ROW_BAD [$site: no RED verdict]"
+  done
+  [[ -z "$GAK_ROW_BAD" ]]
+}
+# gak_row <id> <label> <scenario> <sites> <old> <new> [all]: one counted mutation row. The same
+# literal edit is applied to each site's file (the shared block is byte-identical, so a block
+# mutation lands in both); a site-specific edit names one site.
+gak_row() {
+  local id="$1" label="$2"
+  TOTAL=$((TOTAL + 1))
+  GAK_ROW_DECL[$id]="$4"
+  if _gak_row_core "$3" "$4" "$5" "$6" "${7:-}"; then
+    GAK_ROW_RED[$id]="$GAK_ROW_VERDICTS"
+    PASS=$((PASS + 1)); echo "  PASS: $id $label — mutant${GAK_ROW_VERDICTS}, control green; killed by:${GAK_ROW_WHY}"
+  else
+    GAK_ROW_RED[$id]="$GAK_ROW_VERDICTS"
+    FAIL=$((FAIL + 1)); echo "  FAIL: $id $label —$GAK_ROW_BAD"
+  fi
+}
+# gak_must_pass <id> <label> <scenario> <sites>
+gak_must_pass() {
+  local id="$1" label="$2" scn="$3" sites="$4" site bad=""
+  TOTAL=$((TOTAL + 1))
+  [[ -n "$sites" ]] || bad=" [no site declared]"
+  for site in $sites; do gak_ctrl "$site" "$scn" || bad="$bad [$site: ${GAK_CTRL[$site/$scn]}]"; done
+  if [[ -z "$bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: $id $label (PASS on: $sites)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: $id $label —$bad"; fi
+}
+
+GAK_BOTH="ci boot"
+# 7.st: the row machinery itself, both directions (test-design F10). A mutation that lands but is
+# harmless must NOT score as a kill; an empty site list must not score; a known killer must score.
+TOTAL=$((TOTAL + 1))
+_st_bad=""
+_gak_row_core iso ci 'github_app_key_present() {' $'# guard7 self-test: a harmless landed edit\ngithub_app_key_present() {' && _st_bad="$_st_bad [a harmless mutation scored as a kill]"
+_gak_row_core iso "" 'github_app_key_present() {' $'github_app_key_present() {\n  return 0' && _st_bad="$_st_bad [an empty site list scored as a kill]"
+_gak_row_core iso ci '_gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout' '_gak_dl=$(timeout' || _st_bad="$_st_bad [a known killer did not score:$GAK_ROW_BAD]"
+if [[ -z "$_st_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.st row machinery — a harmless mutant and an empty site list FAIL a row; a known killer PASSes"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.st row machinery —$_st_bad"; fi
+
+# 7.0 precondition: every token-present row is vacuous unless the isolated project was read exactly
+# once, with the APP token. Asserted on the iso control (both sites) and driven RED by handing the
+# fetch the ambient prd token instead.
+TOTAL=$((TOTAL + 1))
+_g0_bad=""
+for _s in $GAK_BOTH; do gak_ctrl "$_s" iso || _g0_bad="$_g0_bad [$_s: ${GAK_CTRL[$_s/iso]}]"; done
+if [[ -z "$_g0_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.0 precondition — one '--project soleur-github-app --config prd' call made with the app token, on both sites"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.0 precondition —$_g0_bad"; fi
+gak_row 7.0m "the isolated fetch runs under the ambient prd token instead of the app token" iso "$GAK_BOTH" \
+  '_gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout' '_gak_dl=$(timeout'
+gak_row 7.1 "overlay appends the isolated line but keeps the prd line" iso "$GAK_BOTH" \
+  "_gak_rest=\$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' \"\$1\")" '_gak_rest=$(cat "$1")'
+gak_row 7.1b "prd holds the key line twice and the overlay drops only the first" twice "$GAK_BOTH" \
+  "_gak_rest=\$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' \"\$1\")" "_gak_rest=\$(sed '0,/^GITHUB_APP_PRIVATE_KEY=/{//d}' \"\$1\")"
+# (The redirect is spliced in from $_g_gt so this line is not itself a redirect to a scanner.)
+_g_gt='>'
+gak_row 7.1c "the overlay keeps only the key lines of the prd env (the container loses DATABASE_URL & co)" iso "$GAK_BOTH" \
+  "printf '%s\\n%s\\n' \"\$_gak_rest\" \"\$_gak_line\" $_g_gt \"\$_gak_tmp\"" \
+  "printf '%s\\n%s\\n' \"\$(printf '%s\\n' \"\$_gak_rest\" | grep '^GITHUB_APP_PRIVATE_KEY=')\" \"\$_gak_line\" $_g_gt \"\$_gak_tmp\""
+gak_row 7.2 "overlay filter unanchored, so GITHUB_APP_PRIVATE_KEY_RETIRED= also passes" iso "$GAK_BOTH" \
+  "'^GITHUB_APP_PRIVATE_KEY=.'" "'^GITHUB_APP_PRIVATE_KEY'" all
+gak_row 7.2c "the key-line EXTRACTOR alone is unanchored: the _RETIRED key rides into the container" iso "$GAK_BOTH" \
+  "grep -E '^GITHUB_APP_PRIVATE_KEY=.') || _gak_line=" "grep -E '^GITHUB_APP_PRIVATE_KEY') || _gak_line="
+gak_row 7.2d "the one-key-line rule dropped: an isolated body with NO key line strips the prd key" appempty "$GAK_BOTH" \
+  'if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then' 'if [ "$_gak_rc" -ne 0 ]; then'
+gak_row 7.2e "the one-key-line rule dropped: an isolated body with TWO key lines is merged" apptwo "$GAK_BOTH" \
+  'if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then' 'if [ "$_gak_rc" -ne 0 ]; then'
+gak_row 7.2b "overlay fetches --project soleur instead of soleur-github-app" iso "$GAK_BOTH" \
+  '--project soleur-github-app --config prd' '--project soleur --config prd'
+gak_row 7.3 "token present, isolated fetch fails, prd holds no key: the presence check is neutered" missing "$GAK_BOTH" \
+  'github_app_key_present() {' $'github_app_key_present() {\n  return 0'
+gak_row 7.4 "the key is EVICTED_SEE_ADR_241 and the presence check accepts it" evicted "$GAK_BOTH" \
+  "! grep -qxE 'GITHUB_APP_PRIVATE_KEY=(EVICTED_SEE_ADR_241)?' \"\$1\"" "! grep -qxE 'GITHUB_APP_PRIVATE_KEY=' \"\$1\""
+_g5_call=$'    GAK_OVERLAY_RC=0\n    overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC=$?\n'
+# 7.5: reorder — the overlay MOVED ahead of the prd download, onto a file of its own (two edits: the
+# early call is added, the late one removed). NON-crashing (test-design F11): the deploy still runs
+# end to end, and the property check reds it on the prd key the container ends up holding.
+TOTAL=$((TOTAL + 1))
+_g5m="$(mktemp)"; gak_mut "$DEPLOY_SCRIPT" "$_g5m" $'    ENV_FILE=$(resolve_env_file)\n' $'    _g5_early=$(mktemp); overlay_github_app_key "$_g5_early" "$GITHUB_APP_KEY_REF" || true; rm -f "$_g5_early"\n    ENV_FILE=$(resolve_env_file)\n'
+gak_mut "$_g5m" "$_g5m" "$_g5_call" $'    GAK_OVERLAY_RC=0\n'
+_g5rc=0
+if cmp -s "$DEPLOY_SCRIPT" "$_g5m" || grep -qF 'overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC' "$_g5m"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.5 the overlay MOVE (early call + late call removed) did not land"
+else
+  gak_eval ci iso "$_g5m" || _g5rc=$?
+  if (( _g5rc == 1 )); then PASS=$((PASS + 1)); echo "  PASS: 7.5 overlay MOVED before the prd download (late call removed) — mutant ci=RED ($GAK_WHY)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: 7.5 overlay moved before the prd download — rc=$_g5rc ($GAK_WHY)"; fi
+fi
+rm -f "$_g5m"
+gak_row 7.5b "boot: the overlay runs after the first docker run" iso boot \
+  '[ "$rc" = 0 ] && github_app_key_boot_finish' '[ "$rc" = 0 ] && { ( sleep 1; github_app_key_boot_finish ) >/dev/null 2>/dev/null & exit 0; }'
+sleep 2  # let 7.5b's deferred overlay finish before its sandbox is gone
+
+# 7.6 / 7.6b / 7.6c / 7.6d are static: the shared block, its sentinels and each file's own emitter.
+_gak_static() {  # <ci-file> <boot-file>
+  local f n b1 b2 beg='# >>> github-app-key-overlay >>>' end=$'# <<\x3c github-app-key-overlay <<<'  # \x3c keeps a heredoc-opener shape out of the line (guard-vacuity-floor)
+  for f in "$1" "$2"; do
+    [[ "$(grep -cxF "$beg" "$f")" == 1 && "$(grep -cxF "$end" "$f")" == 1 ]] \
+      || { GAK_WHY="${f##*/}: $(grep -cxF "$beg" "$f") begin / $(grep -cxF "$end" "$f") end sentinels (want 1/1)"; return 1; }
+  done
+  b1="$(mktemp)"; b2="$(mktemp)"
+  sed -n "\\|^$beg\$|,\\|^$end\$|p" "$1" > "$b1"; sed -n "\\|^$beg\$|,\\|^$end\$|p" "$2" > "$b2"
+  # The emitter must be CALLED from code, not merely named in a comment (test-design F14): comment
+  # lines are stripped and the call shape (a classification and a level) is required.
+  if ! grep -qx 'overlay_github_app_key() {' "$b1" || ! grep -qx 'github_app_key_present() {' "$b1" \
+     || ! grep -v '^[[:space:]]*#' "$b1" | grep -qE '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
+    GAK_WHY="the ci-deploy block does not define the overlay/presence functions or never calls the emitter"; rm -f "$b1" "$b2"; return 1
+  fi
+  if ! cmp -s "$b1" "$b2"; then GAK_WHY="the two blocks differ ($(cmp "$b1" "$b2" 2>&1 | head -1))"; rm -f "$b1" "$b2"; return 1; fi
+  rm -f "$b1" "$b2"
+  for f in "$1" "$2"; do
+    n="$(sed "\\|^$beg\$|,\\|^$end\$|d" "$f" | grep -cx 'github_app_key_emit() {' || true)"
+    [[ "$n" == 1 ]] || { GAK_WHY="${f##*/} defines github_app_key_emit $n time(s) outside the block (want 1)"; return 1; }
+  done
+  # The boot emitter must live in the same baked helper as the block it serves.
+  # Captured, not piped into `grep -q`: an early grep exit SIGPIPEs awk and pipefail reads it as a miss.
+  n="$(awk "/cat > \/usr\/local\/bin\/soleur-doppler-download <[<]'DDLEOF'/{f=1;next} f&&/^DDLEOF\$/{f=0} f{print}" "$2" | grep -cx 'github_app_key_emit() {' || true)"
+  [[ "$n" == 1 ]] || { GAK_WHY="the boot emitter is not inside soleur-doppler-download ($n)"; return 1; }
+}
+TOTAL=$((TOTAL + 1))
+if _gak_static "$DEPLOY_SCRIPT" "$GAK_BOOT"; then PASS=$((PASS + 1)); echo "  PASS: 7.6-control the sentinel-bounded overlay block is byte-identical in both files; each file defines its own emitter"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.6-control $GAK_WHY"; fi
+# gak_static_row <id> <label> <which ci|boot|both> <old> <new> [all]
+gak_static_row() {
+  local id="$1" label="$2" which="$3" c b
+  TOTAL=$((TOTAL + 1)); c="$(mktemp)"; b="$(mktemp)"; cp "$DEPLOY_SCRIPT" "$c"; cp "$GAK_BOOT" "$b"
+  if [[ "$which" == ci || "$which" == both ]]; then gak_mut "$c" "$c" "$4" "$5" "${6:-}"; fi
+  if [[ "$which" == boot || "$which" == both ]]; then gak_mut "$b" "$b" "$4" "$5" "${6:-}"; fi
+  if cmp -s "$c" "$DEPLOY_SCRIPT" && cmp -s "$b" "$GAK_BOOT"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $id $label — mutation did NOT land"
+  elif _gak_static "$c" "$b"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $id $label — mutant stayed GREEN"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $id $label — mutant RED ($GAK_WHY)"
+  fi
+  rm -f "$c" "$b"
+}
+gak_static_row 7.6 "the boot block differs from the ci-deploy block by one byte" boot 'timeout -k 5 20 doppler' 'timeout -k 5 21 doppler'
+gak_static_row 7.6b "sentinel markers removed from BOTH files (7.6 would compare empty to empty)" both '# >>> github-app-key-overlay >>>' '# --- github-app-key-overlay ---' all
+gak_static_row 7.6b-dup "sentinel markers duplicated in one file" ci $'# <<\x3c github-app-key-overlay <<<\n' $'# <<\x3c github-app-key-overlay <<<\n# >>> github-app-key-overlay >>>\n# <<\x3c github-app-key-overlay <<<\n'
+gak_static_row 7.6c "the boot file lacks its own definition of the emitter the shared block calls" boot 'github_app_key_emit() {' 'github_app_key_emit_unused() {'
+gak_static_row 7.6c-ci "ci-deploy.sh lacks its own definition of the emitter the shared block calls" ci 'github_app_key_emit() {' 'github_app_key_emit_unused() {'
+gak_static_row 7.6d "every emitter CALL commented out, its text kept (a comment naming the emitter must not satisfy 7.6)" both 'github_app_key_emit ' ': # github_app_key_emit ' all
+gak_row 7.7 "the app read token is written into the container env-file" iso "$GAK_BOTH" \
+  $'  GITHUB_APP_KEY_SOURCE=isolated\n' $'  GITHUB_APP_KEY_SOURCE=isolated\n  printf \'X_TOKEN=%s\\n\' "$GITHUB_APP_DOPPLER_TOKEN" >> "$1"\n'
+gak_row 7.7b "the app read token is exported into the process env the docker CLI sees" iso ci \
+  'export DOPPLER_TOKEN SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY' 'export DOPPLER_TOKEN SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY GITHUB_APP_DOPPLER_TOKEN'
+gak_row 7.7c "the app read token is handed to the canary on the probe exec's argv" iso ci \
+  'github-app-key-probe "$GITHUB_APP_KEY_PROBE_MJS" 2>/dev/null)' 'github-app-key-probe "$GITHUB_APP_KEY_PROBE_MJS" "$GITHUB_APP_DOPPLER_TOKEN" 2>/dev/null)'
+gak_row 7.7d "the key is passed on the HOST docker exec argv (-e) instead of read in-container" iso ci \
+  'out="$(docker exec soleur-web-platform-canary /bin/sh' 'out="$(docker exec -e "$(grep ^GITHUB_APP_PRIVATE_KEY= "$ENV_FILE")" soleur-web-platform-canary /bin/sh'
+gak_row 7.7e "the app read token lands in the overlay's log/Sentry detail" iso "$GAK_BOTH" \
+  'github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"' 'github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try t=$GITHUB_APP_DOPPLER_TOKEN"'
+gak_row 7.7f "the app read token lands in the detail base64-encoded" iso "$GAK_BOTH" \
+  'github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"' 'github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try t=$(printf %s "$GITHUB_APP_DOPPLER_TOKEN" | base64 | tr -d "\n")"'
+gak_row 7.7g "boot: the read token is exported to the helper's children (systemd-run, soleur-boot-emit)" iso boot \
+  '      if [ "$_k" = GITHUB_APP_DOPPLER_TOKEN ] && [ -n "$_v" ]; then GITHUB_APP_DOPPLER_TOKEN=$_v; fi' '      if [ "$_k" = GITHUB_APP_DOPPLER_TOKEN ] && [ -n "$_v" ]; then GITHUB_APP_DOPPLER_TOKEN=$_v; export GITHUB_APP_DOPPLER_TOKEN; fi'
+# 7.8: the overlay moved INTO resolve_env_file's $(…) subshell — the env-file still gets the key,
+# so only deploy state (never `isolated`) can see it. Two edits, applied as one row.
+TOTAL=$((TOTAL + 1))
+_g8m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_g8m" $'  echo "$doppler_output" > "$tmpenv"\n' $'  echo "$doppler_output" > "$tmpenv"\n  overlay_github_app_key "$tmpenv" "$GITHUB_APP_KEY_REF" || true\n'
+gak_mut "$_g8m" "$_g8m" "$_g5_call" $'    GAK_OVERLAY_RC=0\n'
+_g8rc=0
+if cmp -s "$DEPLOY_SCRIPT" "$_g8m" || ! grep -q 'overlay_github_app_key "$tmpenv"' "$_g8m" || grep -qF 'overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC' "$_g8m"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.8 the move into resolve_env_file did not land"
+elif ! gak_ctrl ci iso; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.8 unmutated control not green: ${GAK_CTRL[ci/iso]}"
+else
+  gak_eval ci iso "$_g8m" || _g8rc=$?
+  if (( _g8rc == 1 )); then PASS=$((PASS + 1)); echo "  PASS: 7.8 overlay moved inside resolve_env_file (subshell) — mutant ci=RED ($GAK_WHY)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: 7.8 overlay inside the resolve_env_file subshell — rc=$_g8rc ($GAK_WHY)"; fi
+fi
+rm -f "$_g8m"
+gak_row 7.9 "probe says rejected (401) and the canary promotes anyway" rejected ci \
+  $'  CANARY_FAIL_REASON="canary_github_app_key_rejected"\n  return 1' $'  CANARY_FAIL_REASON="canary_github_app_key_rejected"\n  return 0'
+gak_row 7.9-boot "boot: probe says rejected and the check reports ok" rejected boot \
+  'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other) S=rejected; L=error ;;' 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other) S=ok; L=info ;;'
+gak_row 7.9r "the probe's rejected sub-reason is dropped (ci state/Sentry detail)" rejected ci \
+  'GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"' 'GITHUB_APP_KEY_PROBE_REASON=unspecified'
+gak_row 7.9r-boot "boot: the probe's rejected sub-reason is dropped from the detail" rejected boot \
+  '"${R:+ reason=$R}"' '""'
+# 7.10: the slug/id rule itself lives in the probe (test/github-app-key-probe.test.ts: "200 with
+# another App's slug ⇒ rejected"); the host half is that ANY verdict line is parsed, not assumed ok.
+gak_row 7.10 "a 200 for another App (probe verdict rejected) is parsed as ok" rejected ci \
+  'GITHUB_APP_KEY_PROBE=rejected
+    GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"' 'GITHUB_APP_KEY_PROBE=ok
+    GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"'
+gak_row 7.11 "the probe runs in soleur-web-platform instead of the canary" iso ci \
+  'out="$(docker exec soleur-web-platform-canary /bin/sh' 'out="$(docker exec soleur-web-platform /bin/sh'
+_g11_check=$'    # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.\n    if [[ "$CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check; then\n      CANARY_HEALTHY=false\n    fi\n'
+TOTAL=$((TOTAL + 1))
+_g11m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_g11m" "$_g11_check" ''
+gak_mut "$_g11m" "$_g11m" $'        write_seccomp_profile_hash\n' $'        write_seccomp_profile_hash\n        github_app_key_canary_check || true\n'
+_g11rc=0
+if cmp -s "$DEPLOY_SCRIPT" "$_g11m" || grep -qF 'CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check' "$_g11m"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.11b the move after promotion did not land"
+else
+  gak_eval ci iso "$_g11m" || _g11rc=$?
+  if (( _g11rc == 1 )); then PASS=$((PASS + 1)); echo "  PASS: 7.11b the probe moved after promotion (docker order) — mutant ci=RED ($GAK_WHY)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: 7.11b the probe after promotion — rc=$_g11rc ($GAK_WHY)"; fi
+fi
+rm -f "$_g11m"
+gak_row 7.12 "the probe exits 1 with no verdict and is treated as 'script absent'" noverdict ci \
+  'elif (( rc == 127 )); then' 'elif (( rc != 0 )); then'
+gak_row 7.12-boot "boot: no verdict with rc 1 is reported as probe_absent" noverdict boot \
+  'if [ "$UP" = 1 ] && [ "$RC" = 127 ]; then' 'if [ "$UP" = 1 ] && [ "$RC" != 0 ]; then'
+gak_row 7.14 "token present, image unverified (bare tag): the signed-image gate is neutered" unverified "$GAK_BOTH" \
+  '  if [ "$_gak_ref_ok" -ne 1 ]; then' '  if false; then'
+gak_row 7.14b "WARN-mode cosign FAILURE (digest ref, rc 3) is treated as verified" cosignfail ci \
+  'if (( VERIFY_RC == 0 )); then' 'if (( VERIFY_RC == 0 || VERIFY_RC == 3 )); then'
+gak_row 7.14c "the digest-shape gate accepts any non-empty ref again (a matching tag ref gets the key)" tagref boot \
+  "*) if printf '%s\\n' \"\$2\" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;" "*) _gak_ref_ok=1 ;;"
+
+# (b) the key decision's signing identity: main of jikig-ai/soleur only (verifier-side pin).
+gak_row 7.b1 "the workflow-REF pin is dropped: a branch run calling reusable-release.yml@main gets the key" sigbranch ci \
+  $'       --certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF" \\\n' ''
+gak_row 7.b2 "the workflow-REPOSITORY pin is dropped: a fork run calling this repo's reusable workflow gets the key" sigfork ci \
+  $'       --certificate-github-workflow-repository="$COSIGN_WORKFLOW_REPOSITORY" \\\n' ''
+gak_row 7.b3 "the tag arm is back and the ref pin is gone: a pushed v* tag's release gets the key" sigtag ci \
+  "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@refs/heads/main\$'
+readonly COSIGN_WORKFLOW_REF=\"refs/heads/main\"" \
+  "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@(refs/heads/main|refs/tags/v[0-9].+)\$'
+readonly COSIGN_WORKFLOW_REF=\"\""
+# 7.b4 static: the identity the key decision uses, pinned literally (a drift in any of the three
+# reads RED here before a behavioural row could miss it).
+_gak_identity_ok() {  # <ci-file>
+  local f="$1" call
+  grep -qxF "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@refs/heads/main\$'" "$f" \
+    || { GAK_WHY="COSIGN_IDENTITY_REGEXP is not the main-only literal"; return 1; }
+  grep -qxF 'readonly COSIGN_WORKFLOW_REF="refs/heads/main"' "$f" || { GAK_WHY="COSIGN_WORKFLOW_REF is not refs/heads/main"; return 1; }
+  grep -qxF 'readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/soleur"' "$f" || { GAK_WHY="COSIGN_WORKFLOW_REPOSITORY is not jikig-ai/soleur"; return 1; }
+  call="$(awk '/^verify_image_signature\(\) \{/,/^\}/' "$f")"
+  [[ "$(grep -cF -- '--certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF"' <<<"$call")" == 1 \
+     && "$(grep -cF -- '--certificate-github-workflow-repository="$COSIGN_WORKFLOW_REPOSITORY"' <<<"$call")" == 1 ]] \
+    || { GAK_WHY="the verify argv does not carry both workflow pins exactly once"; return 1; }
+}
+TOTAL=$((TOTAL + 1))
+_b4_bad=""
+_gak_identity_ok "$DEPLOY_SCRIPT" || _b4_bad="$_b4_bad [control: $GAK_WHY]"
+_b4m="$(mktemp)"
+_b4_old=(
+  "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@refs/heads/main\$'"
+  'readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/soleur"'
+  '       --certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF" \'
+)
+_b4_new=(
+  "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@(refs/heads/main|refs/tags/v[0-9].+)\$'"
+  'readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/.*"'
+  '       --certificate-github-workflow-ref="" \'
+)
+for _i in 0 1 2; do
+  gak_mut "$DEPLOY_SCRIPT" "$_b4m" "${_b4_old[$_i]}" "${_b4_new[$_i]}"
+  if cmp -s "$DEPLOY_SCRIPT" "$_b4m"; then _b4_bad="$_b4_bad [mutant $_i did not land]"
+  elif _gak_identity_ok "$_b4m"; then _b4_bad="$_b4_bad [mutant $_i stayed GREEN]"; fi
+done
+rm -f "$_b4m"
+if [[ -z "$_b4_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.b4 the key identity is pinned literally (main-only SAN, workflow ref + repository flags once each); 3 mutants RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.b4 key identity pin —$_b4_bad"; fi
+
+# (c) boot: the key only for the digest ci-deploy last verified.
+gak_row 7.c1 "boot: no verified-digest record, and the Terraform-pinned image gets the key anyway" norec boot \
+  $'  GAK_VREF=\n  GAK_VCHK=absent\n' $'  GAK_VREF=$GAK_REF\n  GAK_VCHK=absent\n'
+gak_row 7.c2 "boot: the record names ANOTHER digest, and the image gets the key anyway" recmismatch boot \
+  '[ "${GAK_REF##*@}" = "${GAK_REC##*@}" ]' '[ -n "${GAK_REC##*@}" ]'
+gak_row 7.c3 "ci: the verified digest is not recorded for the boot path" iso ci \
+  $'        record_github_app_key_verified_ref "$VERIFIED_REF"\n' ''
+gak_row 7.c4 "ci: an UNVERIFIED (WARN fail-open) digest is recorded as verified" cosignfail ci \
+  $'      elif (( VERIFY_RC != 3 )); then' $'      else record_github_app_key_verified_ref "$VERIFIED_REF"; fi\n      if (( VERIFY_RC != 0 && VERIFY_RC != 3 )); then'
+
+# (d) runtime-hijack refusal: one row per class — the class's alternative removed from the regex
+# lets its representative name through (both sites). Plus the bare-NAME and leading-blank forms,
+# and the two exceptions (a legitimate NODE_ENV / GIT_DATA_* must NOT be refused).
+for _hc in "${GAK_HIJACK_CLASSES[@]}"; do
+  IFS='|' read -r _hid _hline _halt <<<"$_hc"
+  _hsep='|'; [[ "$_hid" == perl ]] && _hsep=''
+  if [[ "$_hid" == node || "$_hid" == node_options ]]; then
+    gak_row "7.15/$_hid" "prd carries ${_hline%%=*} and the NODE_* class is dropped from the refusal" "hijack_$_hid" "$GAK_BOTH" \
+      '(NODE_[A-Za-z0-9_]*|LD_' '(LD_'
+  elif [[ "$_hid" == perl ]]; then
+    gak_row "7.15/$_hid" "prd carries ${_hline%%=*} and the PERL* class is dropped from the refusal" "hijack_$_hid" "$GAK_BOTH" \
+      '|PYTHON[A-Za-z0-9_]*|PERL[A-Za-z0-9_]*)' '|PYTHON[A-Za-z0-9_]*)'
+  else
+    gak_row "7.15/$_hid" "prd carries ${_hline%%=*} and its class ${_halt} is dropped from the refusal" "hijack_$_hid" "$GAK_BOTH" \
+      "|${_halt}${_hsep}" '|'
+  fi
+done
+gak_row 7.15-bare "a bare NAME line (docker copies the CLI's own value) is not refused" hijack_bare "$GAK_BOTH" \
+  "PERL[A-Za-z0-9_]*)[[:space:]]*(=|\$)' \"\$1\"" "PERL[A-Za-z0-9_]*)=' \"\$1\""
+gak_row 7.15-ws "a leading-blank NAME= line is not refused" hijack_ws "$GAK_BOTH" \
+  "_gak_hij=\$(grep -E '^[[:space:]]*(NODE_" "_gak_hij=\$(grep -E '^(NODE_"
+gak_row 7.15-all "the refusal is neutered outright" hijack_node_options "$GAK_BOTH" \
+  '  if [ "$_gak_hij" -ne 0 ]; then' '  if false; then'
+gak_row 7.15-exc-node "the NODE_ENV exception is dropped: a legitimate prd NODE_ENV refuses every deploy" iso "$GAK_BOTH" \
+  "(NODE_ENV|GIT_(DATA|" "(GIT_(DATA|"
+gak_row 7.15-exc-git "the app's GIT_DATA_* exception is dropped: the live prd names refuse every deploy" iso "$GAK_BOTH" \
+  "(NODE_ENV|GIT_(DATA|PROVISION|REMOVE|TRANSPORT)_[A-Za-z0-9_]*)" "(NODE_ENV)"
+gak_row 7.16 "the probe runs WITHOUT env -i/absolute node: a prd-planted node answers ok for a rejected key" planted "$GAK_BOTH" \
+  'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' 'exec node "$1"'
+
+# (e) the overlay's ref has ONE source: verify_image_signature's rc-0 stdout, in this run.
+gak_row 7.e1 "the local-cache arm hands the key to the never-re-verified running image" cache ci \
+  $'      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"\n' $'      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"\n      GITHUB_APP_KEY_REF="$VERIFIED_REF"\n'
+_gak_single_source() {  # <ci-file>: exactly two assignments, the non-empty one on the rc-0 verify arm
+  local f="$1" n want
+  n="$(grep -cE '^[[:space:]]*GITHUB_APP_KEY_REF=' "$f" || true)"
+  [[ "$n" == 2 ]] || { GAK_WHY="$n GITHUB_APP_KEY_REF assignments (want 2)"; return 1; }
+  [[ "$(grep -cxE '[[:space:]]*GITHUB_APP_KEY_REF=""' "$f")" == 1 ]] || { GAK_WHY="no single empty initialisation"; return 1; }
+  want=$'      VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")" || VERIFY_RC=$?\n      if (( VERIFY_RC == 0 )); then\n        GITHUB_APP_KEY_REF="$VERIFIED_REF"\n'
+  [[ "$(cat "$f")" == *"$want"* ]] || { GAK_WHY="the non-empty assignment is not the rc-0 arm of this run's verify"; return 1; }
+  [[ "$(grep -c 'overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF"' "$f")" == 1 ]] || { GAK_WHY="the overlay is not called with GITHUB_APP_KEY_REF exactly once"; return 1; }
+}
+TOTAL=$((TOTAL + 1))
+_e2_bad=""; _gak_single_source "$DEPLOY_SCRIPT" || _e2_bad=" [control: $GAK_WHY]"
+_e2m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_e2m" $'      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"\n' $'      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"\n      GITHUB_APP_KEY_REF="$LOCAL_CACHE_VERIFIED_REF"\n'
+if cmp -s "$DEPLOY_SCRIPT" "$_e2m"; then _e2_bad="$_e2_bad [mutant did not land]"; elif _gak_single_source "$_e2m"; then _e2_bad="$_e2_bad [a second source stayed GREEN]"; fi
+gak_mut "$DEPLOY_SCRIPT" "$_e2m" $'      if (( VERIFY_RC == 0 )); then\n        GITHUB_APP_KEY_REF="$VERIFIED_REF"\n' $'      if (( VERIFY_RC == 0 )); then :; fi\n        GITHUB_APP_KEY_REF="$VERIFIED_REF"\n      if (( VERIFY_RC == 0 )); then\n'
+if cmp -s "$DEPLOY_SCRIPT" "$_e2m"; then _e2_bad="$_e2_bad [mutant 2 did not land]"; elif _gak_single_source "$_e2m"; then _e2_bad="$_e2_bad [an assignment outside the rc-0 arm stayed GREEN]"; fi
+rm -f "$_e2m"
+if [[ -z "$_e2_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.e2 GITHUB_APP_KEY_REF has one non-empty source, the rc-0 arm of this run's verify; 2 mutants RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.e2 single source —$_e2_bad"; fi
+
+# Atomic merge, abort on failure, bounded retry, and the boot verdict's source discrimination.
+gak_row 7.m1 "a failed merge does not abort (deploy continues / boot starts the container)" mergefail "$GAK_BOTH" \
+  $'    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"\n    unset _gak_dl _gak_line _gak_rest\n    return 2' $'    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"\n    unset _gak_dl _gak_line _gak_rest\n    return 0'
+gak_row 7.m2 "the merge rewrites the env-file IN PLACE (a failed rename can no longer be detected)" mergefail "$GAK_BOTH" \
+  '&& printf '"'"'%s\n%s\n'"'"' "$_gak_rest" "$_gak_line" > "$_gak_tmp" && mv -f "$_gak_tmp" "$1"; then' '&& printf '"'"'%s\n%s\n'"'"' "$_gak_rest" "$_gak_line" > "$1" && rm -f "$_gak_tmp"; then'
+gak_row 7.r1 "the isolated fetch is a single attempt again (a transient Doppler error costs the key)" flaky "$GAK_BOTH" \
+  '  _gak_max=${GITHUB_APP_KEY_FETCH_ATTEMPTS:-3}' '  _gak_max=1'
+# The boot probe-ok verdict splits three ways by key source: isolated → _ok (info); no token (pre-R3)
+# → _ok_no_token (info, not paged); a token but the prd key anyway → _ok_fallback (warning, paged).
+gak_row 7.f1 "boot: a probe-ok on the PRD key with no token is reported as github_app_key_ok" prd boot \
+  '          *" fetch=no_token "*) S=ok_no_token; L=info ;;' '          *" fetch=no_token "*) S=ok; L=info ;;'
+gak_row 7.f1b "boot: a probe-ok after a FAILED isolated fetch is reported as github_app_key_ok" fetchfail boot \
+  '          *) S=ok_fallback; L=warning ;;' '          *) S=ok; L=info ;;'
+gak_row 7.f1c "boot: a probe-ok on an UNVERIFIED image (no record) is reported as github_app_key_ok" norec boot \
+  '          *) S=ok_fallback; L=warning ;;' '          *) S=ok; L=info ;;'
+gak_row 7.f1d "boot: no_token is collapsed into ok_fallback (every pre-R3 boot pages)" prd boot \
+  '          *" fetch=no_token "*) S=ok_no_token; L=info ;;' '          *" fetch=no_token "*) S=ok_fallback; L=warning ;;'
+gak_row 7.f1e "boot: a failed fetch is collapsed into ok_no_token (a real fallback stops paging)" fetchfail boot \
+  '          *" fetch=no_token "*) S=ok_no_token; L=info ;;' '          *" fetch="*) S=ok_no_token; L=info ;;'
+gak_row 7.f1f "boot: the isolated key is reported as a fallback" iso boot \
+  '          "source=isolated fetch=ok "*) S=ok; L=info ;;' '          "source=isolated fetch=ok "*) S=ok_fallback; L=warning ;;'
+gak_row 7.a1 "ci: probe_absent (no probe in a NEW image) is silent again (info: no Sentry)" absent ci \
+  'absent)    github_app_key_emit probe_absent warning' 'absent)    github_app_key_emit probe_absent info'
+
+# The boot launch: the check must actually be launched (F3), under a unique unit, and a launch
+# failure must be reported synchronously.
+gak_row 7.l1 "boot: the systemd-run launch of the check is a no-op (nothing is ever emitted)" iso boot \
+  '    && systemd-run --no-block --quiet --collect --unit="$GAK_UNIT" "$GAK_CHECK" >/dev/null 2>/dev/null; then' '    && :; then'
+gak_row 7.l2 "boot: the unit name is fixed again (a leftover unit swallows the launch)" iso boot \
+  '--unit="$GAK_UNIT"' '--unit=soleur-github-app-key-check'
+gak_row 7.l3 "boot: a failed launch emits nothing" launchfail boot \
+  '  timeout "$EMIT_TMO" soleur-boot-emit github_app_key_exec_failed error >/dev/null 2>/dev/null || true' '  :'
+
+# write_state: closed enums (7.s1) and no inherited value (7.s2).
+_gak_ws_harness() {  # <ci-file> → 0 when a hostile fetch value is written as `invalid` in valid JSON
+  local f="$1" t rc=0
+  t="$(mktemp -d)"
+  { awk '/^_gak_enum\(\) \{/,/^\}/' "$f"; awk '/^write_state\(\) \{/,/^\}/' "$f"; } > "$t/fn.sh"
+  # shellcheck disable=SC2034,SC2329  # consumed by the sourced write_state; logger shadows the binary
+  ( set -euo pipefail
+    logger() { :; }
+    LOG_TAG=ci-deploy STATE_FILE="$t/state" START_TS=0 COMPONENT=web-platform IMAGE=x TAG=v1.0.0
+    GITHUB_APP_KEY_SOURCE='isolated' GITHUB_APP_KEY_FETCH='x","exit_code":0,"y":"' GITHUB_APP_KEY_PROBE='ok' GITHUB_APP_KEY_PROBE_REASON=''
+    # shellcheck source=/dev/null
+    . "$t/fn.sh"
+    write_state 7 "probe" ) >/dev/null 2>&1 || rc=1
+  if (( rc == 0 )) && jq -e '.exit_code == 7 and .github_app_key_fetch == "invalid" and .github_app_key_source == "isolated"' "$t/state" >/dev/null 2>&1; then rm -rf "$t"; return 0; fi
+  GAK_WHY="state=[$(head -c 200 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1
+}
+TOTAL=$((TOTAL + 1))
+_s1_bad=""; _gak_ws_harness "$DEPLOY_SCRIPT" || _s1_bad=" [control: $GAK_WHY]"
+_s1m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_s1m" $'  if [[ -n "$1" && "|$2|" == *"|$1|"* ]]; then printf \'%s\' "$1"; else printf \'invalid\'; fi' $'  printf \'%s\' "$1"'
+if cmp -s "$DEPLOY_SCRIPT" "$_s1m"; then _s1_bad="$_s1_bad [mutant did not land]"; elif _gak_ws_harness "$_s1m"; then _s1_bad="$_s1_bad [an unchecked value stayed GREEN]"; fi
+rm -f "$_s1m"
+if [[ -z "$_s1_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s1 write_state enum-checks the key fields (a JSON-breaking value is written as 'invalid'); the unchecked mutant is RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s1 write_state enum —$_s1_bad"; fi
+gak_row 7.s2 "inherited GITHUB_APP_KEY_* values reach deploy state (the top-of-script reset is gone)" inherit ci \
+  $'GITHUB_APP_KEY_SOURCE=""\nGITHUB_APP_KEY_FETCH=""\nGITHUB_APP_KEY_PROBE=""\n' ''
+
+# 7.w: the wire, image side (test-design F5 / patterns P3-9). The path the host execs is the path
+# the image bakes: the Dockerfile COPYs the probe to ./scripts/ under WORKDIR /app, .dockerignore
+# re-includes it, and both host defaults name /app/scripts/github-app-key-probe.mjs. A drift here
+# turns the acceptance check into `probe_absent` on every release.
+_gak_wire_ok() {  # <dockerfile> <dockerignore> <ci-file> <boot-file>
+  local want=/app/scripts/github-app-key-probe.mjs wd
+  wd="$(awk '/^WORKDIR /{w=$2} /^COPY --from=builder \/app\/scripts\/github-app-key-probe\.mjs \.\/scripts\/github-app-key-probe\.mjs$/{print w; exit}' "$1")"
+  [[ "$wd" == /app ]] || { GAK_WHY="the Dockerfile does not COPY the probe to ./scripts/ under WORKDIR /app (workdir=[$wd])"; return 1; }
+  grep -qxF '!scripts/github-app-key-probe.mjs' "$2" || { GAK_WHY=".dockerignore does not re-include the probe"; return 1; }
+  grep -qxF "GITHUB_APP_KEY_PROBE_MJS=\"\${GITHUB_APP_KEY_PROBE_MJS:-$want}\"" "$3" || { GAK_WHY="ci-deploy.sh's probe path is not $want"; return 1; }
+  grep -qxF "P=\"\${SOLEUR_GAK_PROBE_MJS:-$want}\"" "$4" || { GAK_WHY="the boot check's probe path is not $want"; return 1; }
+}
+TOTAL=$((TOTAL + 1))
+_w_df="$SCRIPT_DIR/../Dockerfile"; _w_di="$SCRIPT_DIR/../.dockerignore"
+_w_bad=""; _gak_wire_ok "$_w_df" "$_w_di" "$DEPLOY_SCRIPT" "$GAK_BOOT" || _w_bad=" [control: $GAK_WHY]"
+_wm="$(mktemp)"
+gak_mut "$_w_df" "$_wm" $'COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs\n' ''
+if cmp -s "$_w_df" "$_wm"; then _w_bad="$_w_bad [Dockerfile mutant did not land]"; elif _gak_wire_ok "$_wm" "$_w_di" "$DEPLOY_SCRIPT" "$GAK_BOOT"; then _w_bad="$_w_bad [COPY deleted stayed GREEN]"; fi
+gak_mut "$_w_di" "$_wm" $'!scripts/github-app-key-probe.mjs\n' ''
+if cmp -s "$_w_di" "$_wm"; then _w_bad="$_w_bad [.dockerignore mutant did not land]"; elif _gak_wire_ok "$_w_df" "$_wm" "$DEPLOY_SCRIPT" "$GAK_BOOT"; then _w_bad="$_w_bad [re-include deleted stayed GREEN]"; fi
+gak_mut "$GAK_BOOT" "$_wm" '-/app/scripts/github-app-key-probe.mjs}"' '-/app/scripts/github-app-key-probe.js}"'
+if cmp -s "$GAK_BOOT" "$_wm"; then _w_bad="$_w_bad [boot-path mutant did not land]"; elif _gak_wire_ok "$_w_df" "$_w_di" "$DEPLOY_SCRIPT" "$_wm"; then _w_bad="$_w_bad [boot path drift stayed GREEN]"; fi
+rm -f "$_wm"
+if [[ -z "$_w_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.w the probe the hosts exec is the probe the image bakes (Dockerfile COPY, .dockerignore, both host paths); 3 mutants RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.w probe wire —$_w_bad"; fi
+
+gak_must_pass 7.p1 "token absent, prd key, probe ok → promotes on prd, source=prd fetch=no_token, no Sentry; boot reports ok_no_token (info)" prd "$GAK_BOTH"
+gak_must_pass 7.p2 "token present, both projects keyed, escaped-\\n PEM, probe ok → the isolated key alone, prd env intact, promotes" iso "$GAK_BOTH"
+gak_must_pass 7.p3 "probe transport (5xx/429/403+rate-limit/timeout) → promotes with a Sentry warning" transport "$GAK_BOTH"
+gak_must_pass 7.p4 "probe script genuinely absent (rc 127, older image) → promotes, at warning on both sites" absent "$GAK_BOTH"
+gak_must_pass 7.p5 "isolated fetch fails, or answers 0 / 2 key lines → prd key, fetch=failed, Sentry error, no Doppler stderr" fetchfail "$GAK_BOTH"
+for _scn in appempty apptwo flaky; do gak_must_pass "7.p5/$_scn" "isolated-body control" "$_scn" "$GAK_BOTH"; done
+gak_must_pass 7.p6 "unverified image (bare tag) keeps the isolated key away" unverified "$GAK_BOTH"
+for _scn in cosignfail sigtag sigbranch sigfork cache; do gak_must_pass "7.p6/$_scn" "no key for a WARN-fail-open / non-main / fork / local-cache image" "$_scn" ci; done
+for _scn in norec recmismatch tagref; do gak_must_pass "7.p6/$_scn" "boot: no key without a matching verified-digest record" "$_scn" boot; done
+gak_must_pass 7.p7 "refusals hold: missing/evicted key, rejected verdict (+reason), no verdict, hijack classes, merge failure" missing "$GAK_BOTH"
+for _scn in evicted rejected planted noverdict hijack_node_options mergefail; do gak_must_pass "7.p7/$_scn" "refusal control" "$_scn" "$GAK_BOTH"; done
+gak_must_pass 7.p8 "boot: a launch failure is reported synchronously as exec_failed" launchfail boot
+gak_must_pass 7.p9 "an abort before the overlay writes no inherited key fields" inherit ci
+# 7.13: dispatch, PER ROW (test-design F2) — every gak_row declared on both sites produced a RED
+# verdict on both. Proven able to go RED by feeding the checker a row that lost its boot half.
+_gak_dispatch_gaps() {  # <assoc-decl-name> <assoc-red-name> → prints the ids missing a declared site
+  local -n _decl="$1" _red="$2"; local id s
+  for id in "${!_decl[@]}"; do
+    for s in ${_decl[$id]}; do [[ " ${_red[$id]:-} " == *" $s=RED "* ]] || printf '%s:%s ' "$id" "$s"; done
+  done
+}
+declare -A _g13_decl=([x]="ci boot") _g13_red=([x]=" ci=RED")
+TOTAL=$((TOTAL + 1))
+_g13_gaps="$(_gak_dispatch_gaps GAK_ROW_DECL GAK_ROW_RED)"
+_g13_both=0; for _id in "${!GAK_ROW_DECL[@]}"; do [[ "${GAK_ROW_DECL[$_id]}" == "$GAK_BOTH" ]] && _g13_both=$((_g13_both + 1)); done
+if [[ -z "$_g13_gaps" && "$_g13_both" -gt 0 && -n "$(_gak_dispatch_gaps _g13_decl _g13_red)" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: 7.13 dispatch — each of the $_g13_both both-site rows produced a RED verdict on ci AND boot; a row missing its boot half reads RED"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.13 dispatch gaps: [${_g13_gaps}] (both-site rows: $_g13_both)"
+fi
+rm -rf "$GAK_FIX"
+unset GAK_PRD_KEY GAK_ISO_KEY GAK_RETIRED_KEY GAK_ISO_MARK GAK_PRD_MARK
+
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+
+# Assertion-count floor (#8077 review): a suite that silently narrows (a block skipped, a loop that
+# iterates zero times, a helper that returns before counting) still ends "N/N passed". Pinned to the
+# exact count at the time of writing; raise it when rows are added. Deliberately a bare printf +
+# exit 1 — NOT a counted assertion through a helper that could itself be the thing that broke.
+# #8036 1c: raised 330 -> 336 in the SAME edit that settled this suite's row count. A floor
+# left below the count it measures is pure slack, and slack in a floor is exactly how many
+# rows can be deleted before the one guard that detects truncation notices. The net is +6
+# over a churn of ~38 rows: 15 T-1c-* added, several GHCR-only rows deleted (§1A, #6400
+# AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
+# #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
+# #6428: raised to 359 with the 17 pre-swap freshness rows (F1-F13).
+# #9169: raised to 364 (measured) with the 4 GHCR_DENY rows.
+# #8609: raised 359 -> 402 with the first 42 Guard 7 rows (main already ran 360: floor slack 1).
+# #8609 review round (CTO ruling b-e + six P1s + test-design F1-F14): Guard 7 re-cut to 121 rows
+# (per-class hijack refusals, the main-pinned identity, the boot verified-digest record, the cache
+# arm, atomic merge, retry, the boot ok/ok_no_token/ok_fallback split, the row machinery self-test).
+# Measured: 481 ran. Merged with #9169's 4 GHCR_DENY rows: 485 ran. The floor is that count.
+# #6129: raised 485 -> 490 with the ENFORCE-default rows (4 #6129 verify rows + the T-1a-4 enforce arm).
+CI_DEPLOY_ASSERT_FLOOR=490
+if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
+  printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
+    "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
+  exit 1
+fi
 
 if [[ "$FAIL" -gt 0 ]]; then
   exit 1

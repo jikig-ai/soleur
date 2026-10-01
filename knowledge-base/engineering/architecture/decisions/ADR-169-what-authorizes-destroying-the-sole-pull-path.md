@@ -21,10 +21,12 @@ empty-store window**. Two independent failures ended that premise:
 1. **The premise was retracted (#7071).** The host→GHCR edge is dead: the read PAT is revoked
    (`GET api.github.com/user` → 401) and the pull-token minter is disabled (403 DENIED). Nothing
    covers the window. It is a total pull outage until the store is refilled.
-2. **The operand went dark.** `registry_pull_event ghcr-fallback` is emitted in `ci-deploy.sh`
-   only inside the *success* branch of `_ghcr_pull_or_recover`, i.e. only after a **successful**
-   GHCR pull. With the credential revoked it can never fire, so the operand that most directly
-   measured "is the fallback healthy" is permanently zero.
+2. **The operand went dark.** `registry_pull_event ghcr-fallback` was emitted in `ci-deploy.sh`
+   only inside the *success* branch of the GHCR pull helper, i.e. only after a **successful**
+   GHCR pull. With the credential revoked it could never fire, so the operand that most directly
+   measured "is the fallback healthy" was permanently zero. *(Since #8036 1c, 2026-09-23, both
+   the helper and the emit site are deleted — see Named residual 3. The reasoning above is kept
+   as written because it is what the gate's change rests on; only its tense has moved.)*
 
 On 2026-07-30 the gate was changed to refuse unconditionally. That was correct at the time and
 wrong to leave standing: it made the recut unfireable during exactly the incident it exists to
@@ -240,6 +242,25 @@ the removal is not a regression on what this gate asserts. What changes is the r
    `local-cache`, with no `.tf` diff for a reviewer to catch). Tracked separately. The
    compensating control is the chained restore, which *bounds the very window the alert was
    supposed to page on*.
+
+   > **Resolved 2026-09-23 (#8036 item 1c). Dark → DELETED; the rule is narrowed, not retired.**
+   > `registry_pull_event ghcr-fallback` had no reachable success arm, so the residual above was
+   > "an operand that cannot fire". 1c deleted the GHCR leg of the pull path, which turns that
+   > into "an operand that cannot exist" — the emit site is gone from `ci-deploy.sh`. The
+   > `zot_mirror_fallback_rate` Sentry rule was NARROWED to its other four conditions rather than
+   > retired (the in-code `RETIREMENT TRIPWIRE (#6285)` gave that instruction and it was
+   > executed), and `zot-soak-6122.sh`'s `FAIL_QUERIES[rolling]` entry went with it, together
+   > with its runtime cardinality floor (5 → 4, in the same edit — moving one without the other
+   > is the defect that floor exists to catch). #7295, which tracked this residual, closes with
+   > that PR. The semantic split this paragraph declined to invert is untouched: `local-cache`
+   > still means what it meant, and it is now the only tier between a zot miss and
+   > `image_pull_failed` — **but it is a NARROW tier, and the window arithmetic must not budget
+   > it as general coverage.** `_try_local_cache_reload` opens `[[ "$image_kind" == "web" ]] ||
+   > return 1` and reuses the ALREADY-RUNNING image, so it rescues only a **same-version `web`
+   > redeploy**. It does not apply to the inngest deploy site (`pull_image_with_fallback
+   > inngest`) and it does not apply to any new-version deploy — which is every ordinary
+   > release. For those paths a zot miss has **zero** tiers and goes straight to
+   > `image_pull_failed`.
 4. **`registry-region-migrate` is an unguarded bypass to the same creates** (#6946): no confirm
    token, no id-pin, no live posture probe, no D10. An operator whose recut aborts can fire it
    instead. Wiring D10 there needs a posture probe and an id-pin it does not have — a materially
@@ -510,7 +531,15 @@ for one class of destroy, so the change is recorded here rather than only in ADR
 ### What changed
 
 `registry-host-replace` is `workflow_dispatch`-only and carries **no `environment:` reviewer gate
-and no typed `confirm` token** — verified against the job's own guard. So before #7555 the entire
+and no typed `confirm` token** — verified against the job's own guard.
+
+> **Superseded in part, 2026-09-22 (#8209, ADR-241 D2):** the job now declares
+> `environment: infra-privileged`. That is still **not a reviewer gate** — the environment has no
+> reviewers by design, because it serves unattended jobs — so the sentence above remains true of
+> the *human* authorization. What changed is the branch reach: the environment's deployment-branch
+> policy admits `main` only, so a dispatch from any other ref is refused before the job starts.
+
+ So before #7555 the entire
 human authorization for recreating the fleet's sole pull path was *an operator deliberately typed
 a dispatch*. Nothing in the repo fired it, which is why `apps/web-platform/infra/cloud-init-registry.yml`
 could merge and sit **inert** — the defect #7555 exists to remove.
@@ -597,3 +626,70 @@ means comparing the *render* at both SHAs (`registry-userdata-budget.sh` already
 those bytes offline, with no credentials and no state) instead of comparing the template file.
 That is the right shape and is not implemented here; it is tracked with the #7556 follow-through
 rather than left implicit in a passing gate.
+
+> **Note 2026-09-28 (#7582):** the residual above is closed for the push arm. The delta gate now
+> RENDERS the registry user_data at the delivery watermark and at the head
+> (`registry-userdata-budget.sh`, offline, both sides rendered by the head's script) and compares
+> the bytes; `push.paths` wakes it on `cloud-init-registry.yml`, `zot-registry.tf` and
+> `variables.tf`. The budget script now READS every `zot-registry.tf` literal the template map
+> consumes (it had hand-copied `doppler_sha256`, the users, the IP and the ingest URL, so a bump
+> to any of them rendered identical). What an offline render must stub is compared directly:
+> `registry_server_type`, `registry_location` and `registry_volume_size` by value, and the map,
+> derivation locals and registry resource blocks in `zot-registry.tf` as comment-stripped text.
+> On the push arm, an unreadable watermark revision and an unmeasurable or over-cap head render
+> are refusals (the replace's create would fail after its destroy); an unmeasurable WATERMARK
+> render delivers. The manual re-fire arm still delivers without rendering. Residual: an input
+> moved out of the three watched files. No decision text changes.
+
+> **Note 2026-09-19 (#8279):** the standing "#7556 verifies the host" pointer above described the #7555 soak only. The dispatcher now records each delivery's verdict on the delivering change's own tracker (the PR that changed the config, or the `tracker` input), and its step summary asserts no enrolment it did not measure — post-replace verification is whatever follow-through the delivering change enrolled. P4 remains absent; its defence above now rests on the delivering change enrolling a boot-line follow-through, which is not enforced — a delivery with none is verified only by the apply's conclusion (the dispatcher's own step summary says so). No decision text changes.
+
+> **Note 2026-09-28 (#7377):** this merge-to-replace path is also the ONLY registry config-delivery
+> mechanism by decision: ADR-172's amendment of 2026-09-28 records `push-config` as realized by it,
+> and `restart` / `reclaim` as not built. No in-place lever sits beside it.
+
+## Amendment 2026-09-28 — the boot-image asset is a replace precondition (P6, #8714 step 5.3b-iii)
+
+The registry host no longer pulls zot from ghcr.io at boot. It downloads a release asset of this
+repository, refuses it unless its sha256 equals the `T` pinned in `zot-registry.tf`, and refuses
+to start zot unless the loaded image ID is the upstream config digest `C` or manifest digest `D`
+(ADR-096 amendment 2026-09-28, part 2). So the release asset is now a **boot dependency of the sole
+pull path**. A replace onto an asset that is unpublished, deleted, or carries other bytes boots a
+host that serves nothing, and #7071 left no tier beneath it.
+
+`scripts/registry-replace-preflight.sh` therefore gains **P6, gating and fail-closed**. It reads
+the asset the rendered `user_data` will fetch from the same `zot-registry.tf` literals, asks GitHub
+for that release's asset `digest`, and refuses unless exactly one uploaded asset of that name
+carries `sha256:<T>`. A 404, an API error, a missing asset, an ambiguous asset list or a digest
+other than `T` each refuse, naming the cause.
+
+Against the independence criterion, P6 reads **GitHub**, not zot or the pull path. The condition a
+replace cures cannot trip it, so it keeps gating on the manual re-fire arm too (unlike P1). It runs
+**before** P3's drain wait, so a missing asset refuses in seconds rather than after 35 minutes.
+
+The dispatcher is not the only route that creates a registry host. `apply-web-platform-infra.yml`'s
+`registry_host_replace`, `registry_luks_recut` and `registry_region_migrate` jobs each run P6 alone
+(`registry-replace-preflight.sh --check-asset`) before terraform, so no route boots a host onto an
+asset P6 would refuse. The same `--check-asset` runs on rule-audit's cron. There, a deleted or
+replaced asset is named as a latent outage before the next replace, not at it. `zot-image-*` releases
+are never deleted, and a deleted one cannot be re-created under its tag (immutable releases). Recovery
+is workflow-only: `runbooks/registry-host-replace-dispatch.md` § "zot boot image (#8714)".
+
+## Amendment 2026-09-30 — cosign verification enforces by default (#6129); this decision is re-signed
+
+§"The `IMAGE_VERIFY_MODE=warn` dependency" said a flip to `enforce` needs this decision re-signed.
+The flip happened: `ci-deploy.sh` now defaults to `IMAGE_VERIFY_MODE=enforce`. The operator
+authorized it on 2026-09-30, after accepting the #6122 zot soak verdict (#6122 closed as completed).
+
+The decision stands unchanged, because it never relied on the tolerance. The restore has no
+unsigned arm. It copies each image's `sha256-<hex>` signature tag and fails if the tag can't be
+read back. A copied Sigstore v0.3 bundle binds to the digest, so it verifies unchanged at a zot ref.
+
+What changes is the failure mode, **for the web-platform image**, which is the only image
+`ci-deploy.sh` verifies. Before, a restored app image whose signature did not verify was deployed
+with a warning. Now it fails verification: the deploy keeps the old container running and emits
+`IMAGE_VERIFY_FAIL` plus the `cosign_verify_event` Sentry event. That turns the path
+§"Named residuals" worried about (an app image altered on GHCR, then restored) from a warning into
+a refusal. The restored inngest bootstrap image is not covered. Nothing verifies its signature; its
+boot pins a digest instead (see `cloud-init-inngest.yml`, #6617 / #7410, and the ADR-096 amendment
+of the same date). The cost is availability: a restore that loses a signature blocks releases until it is
+re-copied. It no longer runs unverified bits.

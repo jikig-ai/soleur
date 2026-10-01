@@ -574,10 +574,24 @@ a re-enrollment on next login.
 ### `SUPABASE_ACCESS_TOKEN` (CLI / `sbp_`)
 
 1. <https://supabase.com/dashboard/account/tokens> → revoke compromised token.
-2. Generate new token; update Doppler `prd_terraform` (used by Terraform
-   provider) AND any local `~/.zshrc` exports.
+2. Generate new token; update the Doppler `prd` **root** — its current home,
+   inherited by every `prd_*` branch including `prd_terraform` for the Terraform
+   provider; #7716 item 6 moves the migrate job onto the GH secret and removes
+   the root copy, because `ci-deploy.sh resolve_env_file()` downloads the whole
+   root into the app container env and nothing in app code reads this token — AND
+   any local `~/.zshrc` exports. The GitHub Actions secret of the same name is
+   Terraform-published: `terraform apply` of
+   `github_actions_secret.supabase_access_token` rewrites it from the
+   `supabase_access_token` variable.
 3. Re-run any in-flight `terraform apply` that may have authenticated with
    the old token.
+4. Blast radius: the post-migration PostgREST reload
+   (`apps/web-platform/scripts/postgrest-reload-schema.sh`) authenticates with
+   this token, and a rejected credential fails the prd `migrate` job on the
+   very next release (#8028 made that loud — `release-outcome` emails ops@).
+   No `dev` config carries this token by design (a `pull_request` job reads
+   `dev_scheduled`); the sole Management-API credential is this one —
+   `SUPABASE_PAT` was retired in #8028.
 
 ### `ANTHROPIC_API_KEY`
 

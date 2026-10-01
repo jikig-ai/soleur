@@ -107,6 +107,11 @@ const PLACEHOLDER_RE =
 // Step 10.4. Never strip from the string that would be executed.
 const dequote = (cmd: string): string => cmd.replace(/["'\\]/g, "");
 
+// The ssh reject reads the same DEQUOTED copy — mirrors `CMD_NOQ` in SKILL.md
+// Step 10.4 — so `\ssh h`, `'s''sh' h` and `bash -c "ssh h"` cannot slip past the
+// word-boundary anchors of SSH_REJECT_RE.
+const containsSsh = (cmd: string): boolean => SSH_REJECT_RE.test(dequote(cmd));
+
 // Shell-active tokens that route command output / chain commands / spawn
 // subshells / expand vars. The plan author is trust-on-PR-review but the env
 // scrub in SKILL.md Step 10.5 is the load-bearing mitigation — this regex
@@ -199,7 +204,15 @@ export function parseCommand(observabilityBlock: string): string {
         continue;
       }
       const inlineKey = line.match(INLINE_KEY_RE);
-      if (inlineKey) return stripQuotes(inlineKey[1].trim());
+      if (inlineKey) {
+        // The decode sees the UNTRIMMED capture, so its quote decision is
+        // ASCII-exact like the awk's, which Step 10.4 runs under LC_ALL=C (bytes,
+        // never a host-dependent Unicode class). A value it declines falls back to a trim —
+        // NOT stripQuotes(), which would empty `""` and strip the outer pair of
+        // `"a" b "c"` while the awk returns both unchanged.
+        const raw = inlineKey[1];
+        return decodeQuotedScalar(raw) ?? raw.trim();
+      }
       continue;
     }
     // Blank lines are legal inside a scalar and carry no indentation, so this
@@ -300,7 +313,7 @@ export function parseCredentialsRequired(observabilityBlock: string): string {
     if (indent <= parentIndent) break;
     const m = line.match(/^\s*credentials_required:\s*(.*)$/);
     if (!m) continue;
-    const raw = stripQuotes(m[1].trim());
+    const raw = stripQuotes(dropYamlTrailingComment(m[1].trim()));
     // A comment-only value, a bare block/fold indicator, or nothing at all
     // declares nothing — and a declaration that says nothing waives nothing.
     // The CHOMPED indicators are included for the same reason as the bare ones:
@@ -384,7 +397,7 @@ export function effectiveVerb(cmd: string): string {
 }
 
 export function rejectReason(cmd: string): string | null {
-  if (SSH_REJECT_RE.test(cmd)) {
+  if (containsSsh(cmd)) {
     return "discoverability_test.command contains ssh (rule violation per hr-observability-as-plan-quality-gate)";
   }
 
@@ -456,7 +469,7 @@ export async function classifyDiscoverabilityResult(
   //
   // `ssh` stays first and is NOT overridable by a declaration:
   // hr-observability-as-plan-quality-gate mandates a no-SSH probe unconditionally.
-  if (SSH_REJECT_RE.test(cmd)) {
+  if (containsSsh(cmd)) {
     return {
       result: "FAIL",
       reason:
@@ -557,6 +570,56 @@ export async function classifyDiscoverabilityResult(
   return { result: "PASS" };
 }
 
+/**
+ * Decode a YAML-quoted inline `command:` scalar — mirrors `yaml_inline_scalar()` in
+ * parse-form-a.awk, which is authoritative (if they drift, the awk wins).
+ *
+ * Contract (#8102): the closing quote is the first UNESCAPED quote of the same kind,
+ * and only ASCII `[ \t\r]*` or `[ \t\r]+#…` (a YAML comment) may follow it.
+ * `"…"` decodes `\"` and `\\` in one left-to-right pass; every other backslash
+ * sequence (`\n`, `\t`, …) passes through byte-for-byte, so a shell `\n` never
+ * becomes a real newline that Step 10.5 would reject. `'…'` decodes `''` only.
+ *
+ * Returns null — the caller keeps its fallback — when the value is not quoted, the
+ * pair is unterminated or mismatched, anything else follows the closing quote, or
+ * the body is EMPTY. `""` must stay `""`: decoded to "", the runtime would fall
+ * through to Form B and execute whatever fence follows.
+ *
+ * Used ONLY by parseCommand. `expected_output` and `credentials_required` keep
+ * stripQuotes(), because their runtimes decode nothing.
+ */
+function decodeQuotedScalar(value: string): string | null {
+  const dq = value.match(/^"((?:[^"\\]|\\.)*)"(?:[ \t\r]*|[ \t\r]+#.*)$/);
+  if (dq) return dq[1].length >= 1 ? dq[1].replace(/\\(["\\])/g, "$1") : null;
+  const sq = value.match(/^'((?:[^']|'')*)'(?:[ \t\r]*|[ \t\r]+#.*)$/);
+  if (sq) return sq[1].length >= 1 ? sq[1].replace(/''/g, "'") : null;
+  return null;
+}
+
+/**
+ * Drop a YAML trailing comment from a `credentials_required` value — mirrors the
+ * case block before the quote strip in SKILL.md Step 10.4. Without it,
+ * `"TODO" # fill later` failed the symmetric-pair strip and reached SKIP-DECLARED
+ * as a non-placeholder. A value opening with a quote keeps everything through its
+ * first matching close quote; any other value is cut at its first ` #`.
+ */
+function dropYamlTrailingComment(value: string): string {
+  const q = value[0];
+  if (q === '"' || q === "'") {
+    const close = value.indexOf(q, 1);
+    if (close > 0 && /^[\t\n\r \f\v]+#/.test(value.slice(close + 1))) return value.slice(0, close + 1);
+    return value;
+  }
+  return value.replace(/[\t\n\r \f\v]#.*$/, "").replace(/[\t\n\r \f\v]+$/, "");
+}
+
 function stripQuotes(value: string): string {
-  return value.replace(/^["'](.*)["']$/, "$1");
+  // SYMMETRIC pair only, mirroring the runtime's `CREDS_REQ` case-strip in
+  // SKILL.md Step 10.4 (`"…"` or `'…'`). It decodes NOTHING, on purpose: the
+  // runtimes of its two remaining callers (`expected_output`, `credentials_required`)
+  // do not decode either. The `command:` path decodes through decodeQuotedScalar().
+  // The earlier `^["'](.*)["']$` also stripped a MISMATCHED pair (`"…'`), which no
+  // YAML parser accepts — the mirror was looser than the string of record and would
+  // have PASSed a plan the runtime cannot run.
+  return value.replace(/^"(.*)"$|^'(.*)'$/, (_m, d, s) => d ?? s);
 }

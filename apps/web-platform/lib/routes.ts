@@ -44,6 +44,13 @@ export const PUBLIC_PATHS = [
   // length-guarded timingSafeEqual gate runs. Same class as trigger-cron /
   // kb-drift-ingest. NARROW exact path — do NOT broaden to /api/internal.
   "/api/internal/schedule-reminder",
+  // /api/internal/cohort: Bearer-shared-secret-gated PATCH
+  // (INNGEST_MANUAL_TRIGGER_SECRET) that writes users.cohort_key — the
+  // operator curls it at onboarding time (#8880). Cookieless caller — without
+  // PUBLIC_PATHS membership Supabase middleware 307s before the route's own
+  // timingSafeEqual gate runs. Same class as schedule-reminder / trigger-cron.
+  // NARROW exact path — do NOT broaden to /api/internal.
+  "/api/internal/cohort",
   "/ws",
   "/manifest.webmanifest",
   // /robots.txt: Next.js robots.ts metadata route (Disallow: /). Public-by-design,

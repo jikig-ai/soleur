@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { buildTree } from "@/server/kb-reader";
@@ -8,7 +8,7 @@ import { resolveNeedsReconnect } from "@/lib/repo-status";
 import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
 import { resolveInstallationId } from "@/server/resolve-installation-id";
 
-async function getHandler(_req: Request, user: User) {
+async function getHandler(_req: Request, user: VerifiedUser) {
   const serviceClient = createServiceClient();
 
   // ADR-044 (#4543): the KB lives on the ACTIVE workspace, not the caller's own

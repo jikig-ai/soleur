@@ -30,12 +30,68 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/rule-metrics-constants.sh
 source "$SCRIPT_DIR/lib/rule-metrics-constants.sh"
+# shellcheck source=lib/incidents-roots.sh
+source "$SCRIPT_DIR/lib/incidents-roots.sh"
 
 REPO_ROOT="${INCIDENTS_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 AGENTS_MD="$REPO_ROOT/AGENTS.md"
-INCIDENTS="$REPO_ROOT/.claude/.rule-incidents.jsonl"
 OUT="$REPO_ROOT/knowledge-base/project/rule-metrics.json"
+
+# Incident logs are written by hooks into `$CWD/.claude/`, so they accumulate in
+# BOTH the shared checkout (beside the git COMMON dir) and in each worktree --
+# `.claude/.rule-incidents*` is gitignored, which makes them untracked, NOT
+# absent. Reading only $REPO_ROOT was the original bug: compound, the
+# authoritative producer (ADR-091), runs from a feature worktree BY DESIGN (its
+# branch-safety gate forbids main), so the aggregator read a worktree path
+# holding a few dozen session-local rows -- or nothing -- and reported nearly
+# every rule unused. That is how `rules_unused_over_8w` reached 105/105 on
+# origin/main with 0 rules at hits>0.
+#
+# Collect EVERY root rather than picking one. Preferring the worktree copy when
+# it exists (a `! -f` guard) reintroduces the same null reading in a new costume.
+#
+# When INCIDENTS_REPO_ROOT is set the caller named the only root that may be
+# read: every test seeds it, and a test exercising the empty-log path must keep
+# seeing an empty log. Never widen past it.
+INCIDENTS_DIRS=("$REPO_ROOT/.claude")
+if [[ -z "${INCIDENTS_REPO_ROOT:-}" ]]; then
+  # EVERY ROOT, ONCE (#8029 -> #8302). A session running in ANY worktree writes
+  # to that worktree's own .claude. `git worktree list` yields the main worktree
+  # (which is also what --git-common-dir/.. resolved to before #8302) and every
+  # sibling; scripts/lib/incidents-roots.sh dedupes them BY INODE, NOT BY
+  # STRING, because the same directory reaches this list under different
+  # spellings, and an un-deduped union cats one log twice into a commutative
+  # reduce where the inflation is invisible. Measured 2026-09-18 on one
+  # machine: 23,882 rows readable from the two pre-#8302 roots against 11,346
+  # stranded across 34 sibling roots -- 32% of the corpus, reported as the
+  # whole. (Point-in-time; the brainstorm and learning carry the derivation.)
+  _deduped=()
+  while IFS= read -r -d '' _d; do
+    [[ -n "$_d" ]] || continue
+    _deduped+=("$_d")
+  done < <(incidents_enumerate_log_roots "$REPO_ROOT")
+  # PIN ELEMENT 0. AGGREGATOR_ROTATE truncates INCIDENTS_DIRS[0]; dedupe drops a
+  # non-existent dir, so on a fresh checkout with no .claude yet the repo root
+  # could vanish and a SIBLING's live log be promoted into the rotation slot.
+  if [[ ${#_deduped[@]} -eq 0 || "${_deduped[0]}" != "$REPO_ROOT/.claude" ]]; then
+    INCIDENTS_DIRS=("$REPO_ROOT/.claude" ${_deduped[@]+"${_deduped[@]}"})
+  else
+    INCIDENTS_DIRS=("${_deduped[@]}")
+  fi
+fi
+INCIDENTS="${INCIDENTS_DIRS[0]}/.rule-incidents.jsonl"
+
+# Absence must be LOUD, and "absent" means NO root produced a log. A missing log
+# and a log of genuinely zero hits produce the same all-unused summary, and the
+# silent one reads as a finding rather than the null measurement it is.
+_found_any=0
+for _d in "${INCIDENTS_DIRS[@]}"; do
+  [[ -f "$_d/.rule-incidents.jsonl" ]] && _found_any=1
+done
+if [[ "$_found_any" -eq 0 ]]; then
+  echo "SOLEUR_RULE_METRICS_NO_INCIDENTS dirs=${INCIDENTS_DIRS[*]} reason=absent — summary is a NULL reading, not evidence that rules are unused" >&2
+fi
 
 [[ -f "$AGENTS_MD" ]] || { echo "ERROR: $AGENTS_MD not found" >&2; exit 2; }
 mkdir -p "$(dirname "$OUT")"
@@ -114,10 +170,38 @@ fi
 # and `last_hit`/`first_seen` are computed from event timestamps.
 INCIDENTS_MERGED="$_tmpdir/incidents-merged.jsonl"
 : > "$INCIDENTS_MERGED"
-[[ -s "$INCIDENTS" ]] && cat "$INCIDENTS" >> "$INCIDENTS_MERGED"
-for _gz in "$REPO_ROOT"/.claude/.rule-incidents-*.jsonl.gz; do
-  [[ -e "$_gz" ]] || continue
-  zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true
+# Merge across EVERY incidents root (worktree + shared checkout) and every
+# rotated archive within each. Counts are commutative and first_seen/last_hit
+# come from event timestamps, so order does not matter.
+for _dir in "${INCIDENTS_DIRS[@]}"; do
+  # `|| true` is load-bearing (#8302). Under `set -euo pipefail` the `cat` is the
+  # LAST member of this AND-OR list, so unlike the `[[ -s ]]` test its failure DOES
+  # trip errexit and aborts the whole aggregation. Widening the root set above makes
+  # another user's worktree reachable for the first time, so an EACCES here would
+  # take down a run that should simply skip that root.
+  # A root that is ENUMERATED but UNREADABLE must say so. `[[ -s ]]` is true for
+  # a mode-000 log (size is a stat, not a read), the `cat` then fails and is
+  # swallowed by the `|| true` above, and that root contributes zero rows while
+  # `_found_any` counts it as found -- so the null-reading sentinel is suppressed
+  # exactly when a root vanished from the corpus. One line to stderr, no abort.
+  # An enumerated dir that cannot be SEARCHED hides its files from `[[ -s ]]`
+  # entirely (a mode-000 .claude), so the file-level sentinel below never
+  # fires for it. Say so at the directory level first.
+  if [[ -d "$_dir" && ! -x "$_dir" ]]; then
+    echo "SOLEUR_RULE_METRICS_ROOT_UNREADABLE root=$_dir — enumerated but not searchable; its rows are ABSENT from this aggregate" >&2
+    continue
+  fi
+  if [[ -s "$_dir/.rule-incidents.jsonl" ]]; then
+    if [[ -r "$_dir/.rule-incidents.jsonl" ]]; then
+      cat "$_dir/.rule-incidents.jsonl" >> "$INCIDENTS_MERGED" || true
+    else
+      echo "SOLEUR_RULE_METRICS_ROOT_UNREADABLE root=$_dir — enumerated but not readable; its rows are ABSENT from this aggregate" >&2
+    fi
+  fi
+  for _gz in "$_dir"/.rule-incidents-*.jsonl.gz; do
+    [[ -e "$_gz" ]] || continue
+    zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true
+  done
 done
 
 jq_counts='{}'
@@ -138,7 +222,26 @@ if [[ -s "$INCIDENTS_MERGED" ]]; then
   # #3509 plan Sharp Edge #2). select(.rule_id != null) drops sentinels —
   # they have `error` but no `rule_id`, and entering the reduce would create
   # a `"null"` key that poisons $known_ids and trips the orphan gate.
-  valid_stream=$(jq -R 'fromjson? | select(.) | select(.schema == 1) | select(.rule_id != null)' \
+  #
+  # SHAPE-GATED, NOT MERELY NON-NULL (#8302 review). `rule_id` is the one field
+  # every downstream key is built from -- non_corpus_counts, orphan_rule_ids,
+  # hook_input_fault_reasons all use it VERBATIM as an object key in the
+  # COMMITTED aggregate. With the read widened to sibling worktrees, any row a
+  # session this checkout does not control writes can therefore put free text
+  # (a path, an identity string, an embedded newline) into a public file
+  # through a key name, satisfying the CLO condition by the letter (no new
+  # FIELD) and defeating it in substance. Measured at review: a row with
+  # rule_id "gh pr merge 123 --body \"user@example.com /home/user/secret\""
+  # committed that string as a non_corpus_counts key, and a row with
+  # `"rule_id":123` aborted the whole aggregation (jq: Cannot index object with
+  # number). A closed alphabet -- the corpus id shape plus the documented
+  # emitter-family prefixes -- closes all three in one place.
+  valid_stream=$(jq -R 'fromjson? | select(.) | select(.schema == 1)
+      | select((.rule_id | type) == "string" and (.rule_id | test("^[A-Za-z0-9._-]{1,128}$")))
+      # `timestamp` is copied VERBATIM into rules[].first_seen / last_hit of the
+      # committed file (the reduce below), so it is a second free-text channel
+      # into a public artifact. Same closed shape: RFC 3339 UTC, nothing else.
+      | select((.timestamp | type) == "string" and (.timestamp | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))' \
     < "$INCIDENTS_MERGED" 2>/dev/null || echo "")
   valid_lines=0
   if [[ -n "$valid_stream" ]]; then
@@ -160,7 +263,8 @@ if [[ -s "$INCIDENTS_MERGED" ]]; then
       | select(length > 0)
       | (fromjson? // empty)
       | select(.schema == 1)
-      | select(.error != null)
+      # Same closed alphabet as rule_id above: `error` becomes a key too.
+      | select((.error | type) == "string" and (.error | test("^[A-Za-z0-9._-]{1,128}$")))
     ]
     | reduce .[] as $e ({};
         .[$e.error] = ((.[$e.error] // 0) + 1)
@@ -353,7 +457,8 @@ report=$(jq -n \
         # that lives in the guard hook, outside this change.
         # NOTE: no apostrophes in this block. It is inside a single-quoted jq
         # program; one of them ends the program and bash parses the rest as shell.
-        | map(select(. != "cq-pencil-collapse-auto-recover"))) as $orphan_ids
+        | map(select(. != "cq-pencil-collapse-auto-recover"))
+) as $orphan_ids
     # Hook input-contract faults, split out of $counts BEFORE the summary so the
     # count survives the orphan exclusion above. Keyed on rule_id like every
     # other counter in this script.
@@ -561,7 +666,9 @@ fi
 # build and --dry-run print above are intentionally left intact so compound's
 # unused-rules hint (compound/SKILL.md step 8) still parses.
 if [[ "${valid_lines:-0}" -eq 0 ]]; then
-  echo "rule-metrics: 0 rule-carrying incident lines; leaving committed $OUT unchanged." >&2
+  # NOT "committed" since #8377/ADR-235 -- $OUT is an untracked cache. Callers that need it
+  # must treat this exit-0-without-writing as "nothing was produced", not as success.
+  echo "rule-metrics: 0 rule-carrying incident lines; no aggregate written ($OUT left as-is)." >&2
   if [[ "${drops_total:-0}" -gt 0 ]]; then
     drops_breakdown=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$drops_counts_json" 2>/dev/null || echo "")
     echo "rule-metrics: filtered $drops_total telemetry-drop sentinel row(s) [${drops_breakdown}]; no aggregate written." >&2

@@ -14,8 +14,8 @@
 # assignment that resolves their host: `.github/workflows/apply-inngest-rls.yml:238` is 131
 # lines BELOW its `API="https://api.supabase.com"` at `:107`, and
 # `scripts/supabase-advisor-scan.sh:159` is 101 lines below its `API=` at `:58`. The same
-# split holds in `apply-inngest-rls-dev.yml` (`:113` vs `:134,157,171`) and
-# `apps/web-platform/infra/inngest-rls/anon-probe.sh` (`:30` vs `:55,66`). Line-scoped, this
+# split held in the now-retired `apply-inngest-rls-dev.yml` and `anon-probe.sh`
+# (both deleted 2026-09-19 with the #6488 drop). Line-scoped, this
 # guard finds ZERO deprecated paths and the ratchet reports green — the exact class closed by
 # `924994b2f fix(gates): close four fail-open gates that reported success while doing
 # nothing`. So `$API` / `${REF}` / `$PROJECT_REF` are resolved WITHIN the file first.
@@ -144,11 +144,19 @@ ALLOWLIST=(
   'apps/web-platform/infra/cutover-inngest-workflow.test.sh|2026-08-26|snapshot assertion on the string secrets.SUPABASE_ACCESS_TOKEN in the workflow; makes no HTTP call'
   'apps/web-platform/infra/inngest.tf|2026-08-27|env plumbing only: a github_actions_secret resource whose secret_name is the literal SUPABASE_ACCESS_TOKEN, writing var.supabase_access_token to GitHub via the github provider. There is no supabase provider, no data "http" and no curl in the file, so Terraform makes no Management API call; the one host literal is a # comment recording a live pgbouncer-drift check. Same category as the three env-plumbing workflows above. Surfaced 2026-08-27 when the host pin stopped counting comment text as a pin'
   'scripts/lint-supabase-deprecated-endpoints.highwater|2026-08-27|this guard'"'"'s own baseline. Its only non-comment line is the integer; every /v1/projects and the one host literal sit in the # provenance header that documents what the census counts. A data file cannot make an HTTP call. The guard-of-the-guard shape, one level down — and NOT excluded from the pathspec, because narrowing what the guard can see is the move this header exists to refuse'
-  'apps/web-platform/infra/inngest-rls/0002_dev_inngest_tables_lockdown.sql|2026-08-26|SQL comment describing the workflow identity check (GET /v1/projects/<ref>); SQL cannot call an HTTP API'
-  'apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh|2026-08-26|python assertion strings checking that /v1/projects/ appears in a captured run log; makes no HTTP call'
-  'apps/web-platform/scripts/run-migrations.sh|2026-08-26|comment about a missing SUPABASE_PAT never failing the run; delegates to postgrest-reload-schema.sh, which is pinned'
+  'apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh|2026-09-19|python assertion strings checking that /v1/projects/ appears in a captured run log; makes no HTTP call. Renamed from apply-inngest-rls-dev-workflow.test.sh when the dev half was retired (#6488); the entry is MANDATORY under the new name because the file still matches the host-pin assembly and would otherwise emit UNPINNED-HOST and exit 1'
+  'apps/web-platform/scripts/run-migrations.sh|2026-09-13|runner messages/comments name SUPABASE_ACCESS_TOKEN around the post-apply hook; delegates to postgrest-reload-schema.sh, which is pinned'
+  'apps/web-platform/scripts/verify-required-secrets.sh|2026-09-13|presence check only: SUPABASE_ACCESS_TOKEN is a member of the REQUIRED[] list this script asserts is exported (#8028); the value is never sent anywhere — no curl, no Management API call'
+  'apps/web-platform/test/scripts/run-migrations-unmerged-gate.test.ts|2026-09-14|test env override: sets SUPABASE_ACCESS_TOKEN to the empty string so the real runner takes the reload hook'"'"'s absence-soak and issues no network call from a unit test (#8028 review); no HTTP client in the file'
+  '.github/workflows/tenant-integration.yml|2026-09-14|absence assertion only: `doppler secrets --only-names` + jq has("SUPABASE_ACCESS_TOKEN") reds the pull_request job if the token ever lands in dev_scheduled (#8028 DC-1); names only, no value read, no Management API call'
+  '.github/workflows/dev-ledger-reconcile.yml|2026-09-24|absence assertion only (copied from tenant-integration.yml): `doppler secrets --only-names` + jq has("SUPABASE_ACCESS_TOKEN") refuses to run PR-authored down SQL if the token ever lands in dev_scheduled (#8028 DC-1, #8605); names only, no value read, no Management API call'
+  'apps/web-platform/scripts/dev-ledger-parity.test.sh|2026-09-24|fixtures for the dev-ledger-reconcile.yml absence assertion: JSON name lists containing SUPABASE_ACCESS_TOKEN fed to the extracted step; makes no HTTP call'
   'apps/web-platform/test/server/inngest/cron-supabase-advisor-scan.test.ts|2026-08-26|the guard-of-the-guard: asserts the ABSENCE of SUPABASE_ACCESS_TOKEN and advisors/security in-process'
   'plugins/soleur/test/terraform-target-parity.test.ts|2026-08-26|comment naming the SUPABASE_ACCESS_TOKEN GitHub-secret terraform resource; makes no HTTP call'
+  'apps/web-platform/infra/supabase-project.tf|2026-09-29|imported supabase_project resource (#9168); /v1/projects appears only in a # comment recording the measured live values. The provider block carrying the literal endpoint pin lives in main.tf'
+  'apps/web-platform/test/server/inngest/supabase-watchdog-workflow-parity.test.ts|2026-09-29|assertion strings on the workflow file (monitor slug, sentinel literal, SUPABASE_ACCESS_TOKEN env name); makes no HTTP call'
+  'apps/web-platform/test/server/inngest/cron-supabase-watchdog-dispatch.test.ts|2026-09-29|negative-assertion strings (the HARD NON-GOAL test asserts the dispatcher does NOT reference SUPABASE_ACCESS_TOKEN or api.supabase.com); makes no HTTP call'
+  'scripts/supabase-watchdog-classify.sh|2026-09-29|pure classifier (#9168): the /v1/projects restart path appears only in a # comment; the script consumes HTTP codes and bodies as arguments and makes no network call'
 )
 
 # ── Assemblies ──────────────────────────────────────────────────────────────────────────
@@ -165,12 +173,14 @@ assembly_hostpin() {
   # against the SHAPE and absolves no existing line. Widening an assembly is the safe direction;
   # membership is the assertion, and a non-caller that lands here is triaged onto the dated
   # allowlist rather than being hidden from the guard.
+  # SUPABASE_PAT intentionally retained after #8028 — a resurrected consumer must still enter the assembly.
   git -C "$REPO_ROOT" grep -lIE -e '/v1/projects|SUPABASE_ACCESS_TOKEN|SUPABASE_PAT' -- "${PATHSPEC[@]}" 2>/dev/null || true
 }
 
 # Comment markers are per-language. `--` is a comment ONLY in .sql: in shell and YAML a huge
 # share of the real call sites are curl continuation lines that START with `--url`
-# (apply-inngest-rls.yml:155,178 and inngest-rls/anon-probe.sh:55 among them), so a global `--`
+# (apply-inngest-rls.yml:155,178 among them; anon-probe.sh:55 was another until it was
+# retired 2026-09-19 with the #6488 drop), so a global `--`
 # rule would silently drop the majority of the corpus and the ratchet would report the loss
 # as green.
 comment_re_for() {

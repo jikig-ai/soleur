@@ -43,3 +43,4 @@ test/helpers/
 # satisfy it. Measured: the sweep rewrote 10 of the 11 tracked files and reddened
 # vendor-pin-integrity. Restore, never re-pin.
 plugins/soleur/skills/gdpr-gate/references/
+plugins/soleur/skills/legal-generate/references/

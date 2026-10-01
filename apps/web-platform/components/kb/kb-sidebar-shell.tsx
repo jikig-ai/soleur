@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { Button } from "@/components/ui/button";
 import { FileTree } from "@/components/kb/file-tree";
 import { SearchOverlay } from "@/components/kb/search-overlay";
 import { useKb } from "@/components/kb/kb-context";
@@ -139,7 +140,8 @@ export function KbSidebarShell({
       <KbErrorBoundary>
       {collapsed ? (
         <div className="flex flex-col items-center gap-1 px-1 py-3">
-          <button
+          <Button
+            variant="ghost"
             type="button"
             data-testid="kb-rail-collapsed-expand"
             aria-label="Browse files"
@@ -148,8 +150,9 @@ export function KbSidebarShell({
             className="flex min-h-[44px] w-full items-center justify-center rounded-lg text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
           >
             <FilesIcon className="h-4 w-4 shrink-0" />
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             type="button"
             data-testid="kb-rail-collapsed-refresh"
             aria-label="Refresh file tree"
@@ -158,7 +161,7 @@ export function KbSidebarShell({
             className="flex min-h-[44px] w-full items-center justify-center rounded-lg text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
           >
             <SyncIcon className="h-4 w-4 shrink-0" />
-          </button>
+          </Button>
         </div>
       ) : (
         <>
