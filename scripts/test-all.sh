@@ -3890,6 +3890,12 @@ if want_scripts; then
   # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
   # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
   run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
+  # Agent sandbox allocator (soleur-sandbox.sh new|rm): disk-only base, owner marker,
+  # refusals on unmarked/foreign paths are asserted in both directions.
+  run_suite "tests/scripts/soleur-sandbox" bash tests/scripts/test-soleur-sandbox.sh
+  # Direct-run residue canary: each measured leaker leaves 0 entries in a private TMPDIR
+  # after rc 0 and SIGTERM; SIGKILL leaves a classifiable dead-owner root.
+  run_suite "tests/scripts/scratch-residue" bash tests/scripts/test-scratch-residue.sh
   # #7537: the orphaned-PROCESS reaper. It SIGNALS processes, so every gate
   # (own-uid, unlinked cwd, unlinked fd/255, self-exclusion, mount/pid
   # namespace, age floor) is asserted in both directions here. Registered

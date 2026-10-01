@@ -47,7 +47,10 @@ PASS=0; FAIL=0
 # ADR-129 rule (c): ONE owning trap for every tempfile. /tmp is a machine-global
 # tmpfs shared with sibling worktrees, so a case dying mid-assertion must not leak.
 ROOT="$(mktemp -d -t greprw.XXXXXXXX)"
-trap 'rm -rf "$ROOT"' EXIT
+# COMPOSED with the sandbox cleanup the sourced lib installed, not a replacement for it (#8659, #9117):
+# a bare `trap 'rm -rf "$ROOT"' EXIT` here silently replaced the lib's trap and leaked one
+# soleur-inc-* directory per direct run. `_soleur_inc_sb_cleanup` is defined by the sourced lib.
+trap 'rm -rf "$ROOT"; _soleur_inc_sb_cleanup' EXIT
 
 ok()  { PASS=$((PASS+1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL+1)); echo "FAIL: $1"; shift; local l; for l in "$@"; do echo "  $l"; done; }

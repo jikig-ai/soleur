@@ -107,6 +107,17 @@ _soleur_test_incident_sandbox_init() {
   export INCIDENTS_REPO_ROOT="$d"
   export SOLEUR_TEST_INCIDENT_ROOT="$d"
 
+  # Marker-at-creation (#9117): declare an owner the reapers can verify BEFORE anything can go wrong.
+  # A suite that installs its own EXIT trap after sourcing this lib REPLACES the composed one below
+  # (#8659), and SIGKILL runs no trap; either way the dir is then a reaper-eligible `marker:<pid>`
+  # entry instead of unattributable residue. A SUBSHELL, so no function or variable leaks into the
+  # suite and no trap is involved (ADR-129). A missing lib (the lib-copy fixtures copy only
+  # .claude/hooks) or a failed write degrades to the pre-#9117 shape and never aborts the suite.
+  (
+    _soleur_sr="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/lib/scratch-root.sh"
+    [ -f "$_soleur_sr" ] && . "$_soleur_sr" && soleur_scratch_mark_owned "$d"
+  ) >/dev/null 2>&1 || true
+
   # Compose with any EXIT trap the suite has ALREADY installed rather than
   # clobbering it. A suite that installs its own trap AFTER sourcing this will
   # still win — that only leaks one small tmpdir, never a real-ledger write,

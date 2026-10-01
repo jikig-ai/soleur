@@ -14,7 +14,12 @@ module is imported by every python suite that spawns git, which is exactly the p
 
 from __future__ import annotations
 
+import atexit
 import os
+import secrets
+import shutil
+import signal
+import stat as _stat
 import sys
 import tempfile
 
@@ -62,6 +67,122 @@ def assert_no_inherited_git_location(runner: str = "python") -> None:
     )
     raise SystemExit(GIT_TRIPWIRE_EXIT_CODE)
 
+_SCRATCH_MARKER = ".soleur-owned"
+_scratch_owned_root: str | None = None
+
+
+def _pid_namespace() -> str:
+    try:
+        return os.readlink("/proc/self/ns/pid")
+    except OSError:
+        return "pid:[unknown]"
+
+
+def write_scratch_marker(directory: str, pid: int | None = None) -> None:
+    """Write ``<directory>/.soleur-owned`` atomically, in the format ``tc_marker_owner_pid`` parses.
+
+    The python sibling of ``soleur_scratch_mark_owned`` (``scripts/lib/scratch-root.sh``) and of
+    ``writeScratchMarker`` (``plugins/soleur/test/lib/scratch-session.ts``): ``pid=``, ``schema=1``,
+    ``ns=``. Three writers, one parser -- ``tests/scripts/test-scratch-residue.sh`` pins that.
+    """
+    owner = os.getpid() if pid is None else pid
+    tmp = os.path.join(directory, f"{_SCRATCH_MARKER}.{secrets.token_hex(4)}")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(f"pid={owner}\nschema=1\nns={_pid_namespace()}\n")
+    os.replace(tmp, os.path.join(directory, _SCRATCH_MARKER))
+
+
+def is_adoptable_scratch_root(root: str) -> bool:
+    """True when a live same-uid, same-pid-namespace process declared ``root`` its own scratch root."""
+    try:
+        if not root.startswith("/"):
+            return False
+        st = os.lstat(root)
+        if not _stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            return False
+        marker = os.path.join(root, _SCRATCH_MARKER)
+        ms = os.lstat(marker)
+        if not _stat.S_ISREG(ms.st_mode) or ms.st_uid != os.getuid():
+            return False
+        with open(marker, encoding="utf-8") as fh:
+            body = fh.read()
+        ns = next((ln[3:] for ln in body.splitlines() if ln.startswith("ns=pid:[")), None)
+        pid = next((ln[4:] for ln in body.splitlines() if ln.startswith("pid=")), None)
+        mine = _pid_namespace()
+        if not ns or not pid or not pid.isdigit() or mine == "pid:[unknown]" or ns != mine:
+            return False
+        os.kill(int(pid), 0)  # ESRCH (dead) and EPERM (another uid) both mean: not the owner
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def ensure_scratch_session() -> str:
+    """Bind this process to a per-run ``soleur-run.<pid>.*`` scratch root and point TMPDIR at it (#9117).
+
+    The python sibling of ``plugins/soleur/test/lib/scratch-session.ts``. Call it as a statement
+    immediately BEFORE ``ensure_incident_sandbox()``: reversed, ``soleur-inc-*`` lands in the shared
+    base and escapes the root (``.claude/hooks/incident-sandbox-coverage.test.sh`` asserts the order).
+
+    A valid ``SOLEUR_SCRATCH_SESSION_ROOT`` (exists, same uid, marker from a live same-uid owner in
+    our pid namespace) is ADOPTED and never deleted; an invalid one is left untouched and a fresh
+    root is created. Only a root this call created is removed -- at exit, and on SIGTERM (whose
+    default action skips ``atexit``). ``SOLEUR_KEEP_SCRATCH=1`` keeps it for inspection. The stdlib
+    caches ``tempfile.tempdir`` on first use, so it is set explicitly.
+    """
+    global _scratch_owned_root
+    if _scratch_owned_root is not None:
+        return _scratch_owned_root
+
+    inherited = os.environ.get("SOLEUR_SCRATCH_SESSION_ROOT", "")
+    base = tempfile.gettempdir()
+    if inherited:
+        if is_adoptable_scratch_root(inherited):
+            os.environ["TMPDIR"] = inherited
+            tempfile.tempdir = inherited
+            return inherited
+        if base.rstrip("/") == inherited.rstrip("/"):
+            base = os.path.dirname(inherited.rstrip("/"))
+
+    root = ""
+    for _ in range(8):
+        # 6 random bytes -> exactly 8 url-safe characters: the ``soleur-run.<pid>.XXXXXXXX`` schema.
+        candidate = os.path.join(base, f"soleur-run.{os.getpid()}.{secrets.token_urlsafe(6)}")
+        try:
+            os.mkdir(candidate, 0o700)
+        except FileExistsError:
+            continue
+        root = candidate
+        break
+    if not root:
+        raise RuntimeError(f"scratch-session: could not allocate a root under {base}")
+    try:
+        write_scratch_marker(root)
+    except OSError:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+
+    _scratch_owned_root = root
+    os.environ["TMPDIR"] = root
+    os.environ["SOLEUR_SCRATCH_SESSION_ROOT"] = root
+    os.environ["SOLEUR_SCRATCH_OWNER_PID"] = str(os.getpid())
+    tempfile.tempdir = root
+
+    def _remove() -> None:
+        if os.environ.get("SOLEUR_KEEP_SCRATCH") != "1":
+            shutil.rmtree(root, ignore_errors=True)
+
+    atexit.register(_remove)
+    try:
+        if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:
+            def _on_term(signum: int, _frame: object) -> None:
+                raise SystemExit(128 + signum)  # unwinds through atexit; keeps the 128+n status
+
+            signal.signal(signal.SIGTERM, _on_term)
+    except ValueError:
+        pass  # not the main thread: atexit still covers a normal exit
+    return root
+
 
 def ensure_incident_sandbox() -> str:
     """Point incident telemetry at a scratch root, unless the caller already chose one (#7853).
@@ -108,4 +229,5 @@ def pytest_configure() -> None:
     unittest arm calls the function directly with its own label.
     """
     assert_no_inherited_git_location("pytest")
+    ensure_scratch_session()  # BEFORE the sandbox: otherwise soleur-inc-* escapes the root (#9117)
     ensure_incident_sandbox()

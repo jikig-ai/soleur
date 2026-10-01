@@ -49,6 +49,14 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        }
        export INCIDENTS_REPO_ROOT="$_soleur_sb"
        export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_sb"
+       # Marker-at-creation (#9117): declare an owner the reapers can verify BEFORE anything can go
+       # wrong. 33 suites install their own EXIT trap after sourcing this file and replace the one
+       # composed below (#8659), and SIGKILL runs no trap at all; either way the dir is then a
+       # reaper-eligible `marker:<pid>` entry instead of unattributable residue. Done in a SUBSHELL so
+       # the suite's function namespace is not polluted and no trap is involved (ADR-129); a missing
+       # lib (a lib-copy fixture) or a failed write degrades to the pre-#9117 shape, never aborts.
+       ( set +e; _soleur_sr="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/lib/scratch-root.sh"
+         [ -f "$_soleur_sr" ] && . "$_soleur_sr" && soleur_scratch_mark_owned "$_soleur_sb" ) >/dev/null 2>&1 || true
        # Own it (ADR-129 rule (c)), COMPOSED with any EXIT trap already installed.
        #
        # Unescaped with PARAMETER EXPANSION, never `eval`. `trap -p` emits the body single-quoted

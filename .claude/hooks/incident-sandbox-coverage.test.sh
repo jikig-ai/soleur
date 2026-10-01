@@ -235,6 +235,48 @@ _chokepoint_total=$(( ${#CHOKEPOINT_FILES[@]} + ${#PRELOAD_FILES[@]} ))
 rc=1; [ "$ok_chokepoints" -eq "$_chokepoint_total" ] && rc=0
 verdict "$rc" "every chokepoint carries the export ($ok_chokepoints/$_chokepoint_total)"
 
+# --- D2. THE SCRATCH SESSION IS BOUND BEFORE THE INCIDENT SANDBOX (#9117) -------------------------
+# A runner chokepoint that allocates the incident sandbox must bind its per-process scratch root
+# FIRST. Reversed, `soleur-inc-*` lands in the shared TMPDIR base and escapes the root -- so the
+# property is about the WINDOW (call order), not about the call merely existing. The population is
+# DERIVED from the registry above (every CHOKEPOINT_FILES member that calls the sandbox), not a second
+# hand-kept list, so a new chokepoint that arms the sandbox without the scratch call reds here.
+#
+# A CALL is a statement-position line (`name()` first on its line, as `ensureScratchSession();` and
+# `ensure_scratch_session()` are written at every chokepoint). A definition (`def name()`), an import
+# list and a docstring sentence that merely mentions the name never start with it, so none of them can
+# satisfy -- or reorder -- the check.
+_first_call_line() { # <file> <regex-name> -> line number of the first CALL, else empty
+  _strip_line_comments "$1" | grep -nE "^[[:space:]]*$2\(\)" | head -1 | cut -d: -f1
+}
+order_checked=0
+for c in "${CHOKEPOINT_FILES[@]}"; do
+  [ -f "$REPO/$c" ] || continue
+  case "$c" in
+    *.ts) _scr='ensureScratchSession';  _inc='ensureIncidentSandbox' ;;
+    *.py) _scr='ensure_scratch_session'; _inc='ensure_incident_sandbox' ;;
+    *)    continue ;;
+  esac
+  _inc_line="$(_first_call_line "$REPO/$c" "$_inc")"
+  [ -n "$_inc_line" ] || continue            # arms no incident sandbox: nothing to order
+  order_checked=$((order_checked+1))
+  _scr_line="$(_first_call_line "$REPO/$c" "$_scr")"
+  rc=1; [ -n "$_scr_line" ] && [ "$_scr_line" -lt "$_inc_line" ] && rc=0
+  verdict "$rc" "scratch session is bound BEFORE the incident sandbox: $c (scratch line ${_scr_line:-<absent>}, sandbox line $_inc_line)"
+done
+rc=1; [ "$order_checked" -ge 4 ] && rc=0
+verdict "$rc" "the call-order check ran over the derived chokepoints ($order_checked, floor 4) -- 0 checked is a failure"
+
+# The shell chokepoints cannot bind a per-process root (ADR-129: no new EXIT trap in a sourced lib), so
+# their half of the property is MARKER-AT-CREATION: the sandbox dir must declare an owner right after
+# its mktemp, so a replaced trap (#8659) or a SIGKILL leaves a reaper-eligible dir, not residue.
+for c in plugins/soleur/test/test-helpers.sh .claude/hooks/lib/test-incident-sandbox.sh; do
+  _mk="$(_strip_line_comments "$REPO/$c" | grep -nE 'mktemp.*soleur-inc-' | head -1 | cut -d: -f1)"
+  _mo="$(_strip_line_comments "$REPO/$c" | grep -nE 'soleur_scratch_mark_owned' | head -1 | cut -d: -f1)"
+  rc=1; [ -n "$_mk" ] && [ -n "$_mo" ] && [ "$_mo" -gt "$_mk" ] && rc=0
+  verdict "$rc" "sandbox dir is marked owned right after its mktemp: $c (mktemp line ${_mk:-<absent>}, mark line ${_mo:-<absent>})"
+done
+
 # --- E. THE OUTSIDE SET ------------------------------------------------------
 # Preload/globalSetup coverage is DERIVED: a config's declared entry file must itself reach
 # ensureIncidentSandbox for that config's directory to count as a covered root.
@@ -473,7 +515,7 @@ rm -rf "$_tc_probe"
 unset _tc_probe _tc_out _tc_rc _tc_sb
 
 printf '\n'
-MIN_CASES=25
+MIN_CASES=32
 if [ "$CASES" -lt "$MIN_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$CASES" "$MIN_CASES" >&2; exit 1
 fi
