@@ -440,6 +440,13 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
+> **As verified at work/QA (2026-10-02).** Run literally: the raw-apt grep prints no line; `run-registered-suites.sh --list` lists
+> `apt-bounded.test.sh`; the ADR-188 amendment grep prints one line; `guard-vacuity-floor`, `c4-count-parity`,
+> `git-data-render-strip-parity` and `fixture-relative-assert` pass. Helper calls: ownership 1, rehearsal 5 (6 sites).
+> **The diff-scope AC is amended:** the diff also touches `scripts/guard-vacuity-floor.test.sh` (a PROMOTED_FILES entry for the
+> new suite, required to keep the deferral ledger at 47). Real-docker results and the stall reproduction are in the PR body;
+> the mutation battery was 31/32 killed (survivor equivalent). The AC wording below predates the as-built design (see the banner above).
+
 - [ ] `bash apps/web-platform/infra/apt-bounded.test.sh` exits 0 and prints its own terminal summary with a
       floor; every row of the Guard Contract matrix was observed RED against a mutated helper or suite copy
       (the PR body lists the seven rows and their observed RED).
