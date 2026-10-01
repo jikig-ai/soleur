@@ -10,13 +10,14 @@
 // open-by-default (which lives in useKbLayoutState, not here). Below `md` the
 // diagram takes the whole viewport and the Concierge starts closed, opening as
 // a full-screen overlay on top of it.
-import { useContext, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { KbChatContent } from "@/components/chat/kb-chat-content";
 import { KbChatFullScreen } from "@/components/chat/kb-chat-fullscreen";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { Button } from "@/components/ui/button";
 import {
   Spinner,
   useC4Project,
@@ -25,7 +26,15 @@ import {
   C4CodePanel,
 } from "@/components/kb/c4-shared";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
-import { C4_EDIT_FLAG } from "@/lib/c4-constants";
+import {
+  C4_DIAGRAM_SAVED_EVENT,
+  C4_EDIT_FLAG,
+  type C4DiagramSavedDetail,
+} from "@/lib/c4-constants";
+import {
+  staleActionLine,
+  staleOutcomeVerdict,
+} from "@/components/kb/c4-diagnostics";
 
 function ResizeHandle() {
   // Active/drag wash is brand gold (`soleur-accent-gold-fill/70`), grey on hover
@@ -63,11 +72,81 @@ export default function C4Workspace({
   // Non-throwing read so provider-less render surfaces treat "no flag" as off.
   const c4EditEnabled = useOptionalFeatureFlag(C4_EDIT_FLAG);
   const [rightTab, setRightTab] = useState<"concierge" | "code">("concierge");
-  // True only when the server FAILED to re-render after a save (#4964). On a
-  // successful save the server regenerates model.likec4.json out-of-process and
-  // the reloaded dump is fresh, so stale stays false; if the re-render failed it
-  // flips true and the C4Diagnostics banner honestly says the diagram is stale.
-  const [stale, setStale] = useState(false);
+  // The last save whose server re-render failed or was skipped (#4964), keyed
+  // by the folder it was saved in: one folder = one model, and the KB page
+  // renders this component with no `key`, so the instance survives navigation.
+  // Keying (rather than resetting on navigation) also attributes a save that
+  // finishes after the user moved to the folder it was made in (#8695).
+  // `diagnostic` is the server's reason (banner line 2); null = none given.
+  const [staleSave, setStaleSave] = useState<{
+    dirPath: string;
+    diagnostic: string | null;
+  } | null>(null);
+  // #8966 — the GET-derived verdict is authoritative when present; the
+  // outcome-driven `staleSave` is only the fallback for a GET that produced
+  // none (derivation failure / no model commit / in-flight save window).
+  // `??` keeps undefined distinct from false: absent is "no information".
+  // A present verdict also RETIRES the fallback — otherwise a later ABSENT
+  // answer would resurrect a banner the last verdict already overrode.
+  useEffect(() => {
+    if (data?.stale !== undefined) setStaleSave(null);
+  }, [data?.stale]);
+  const derivedStale = data?.stale;
+  const stale =
+    derivedStale !== undefined ? derivedStale : staleSave?.dirPath === dirPath;
+  // A diagnostic is outcome state — the retirement effect already dropped any
+  // stale-era one, so a `staleSave` present here post-dates the verdict.
+  const staleDiagnostic =
+    stale && staleSave?.dirPath === dirPath ? staleSave.diagnostic : null;
+
+  // The save-outcome transition shared by the Code panel (`onSaved`) and the
+  // #8739 Concierge-save event listener: refetch, then reconcile THIS folder's
+  // banner — stale only when the server could NOT re-render; a success clears
+  // only its own folder. `dirPath` is the folder bound at this render. The
+  // listener passes `silent` — an unsolicited refetch must not unmount the
+  // canvas for a spinner flash.
+  const applySavedOutcome = useCallback(
+    async (rerendered: boolean, diagnostic?: string | null, silent?: boolean) => {
+      await reload({ silent });
+      // #8966: the outcome NEVER overrules a derived verdict — the render-time
+      // `data.stale ?? …` union handles that. The helper only decides what the
+      // outcome contributes as the absent-verdict fallback; a supersede shape
+      // (rerendered:false, no diagnostic) defers entirely — a superseding
+      // save's model commit is already live.
+      const v = staleOutcomeVerdict(rerendered, diagnostic);
+      setStaleSave((cur) =>
+        !v.apply
+          ? cur
+          : v.stale
+            ? { dirPath, diagnostic: v.diagnostic }
+            : cur?.dirPath === dirPath
+              ? null
+              : cur,
+      );
+    },
+    [dirPath, reload],
+  );
+
+  // #8739 — a Concierge `edit_c4_diagram` save pushes `c4_diagram_saved` on
+  // the user's one live socket (supersedeExistingUserSocket); `ws-client`
+  // re-broadcasts it as this DOM event. `dirPath` match is the scope filter:
+  // the frame is user-scoped, so a workspace showing another folder must not
+  // refetch. The `rerendered` typeof guard fails closed on malformed details.
+  //
+  // COVERAGE HOLE this does NOT close: the concierge panel owns the page's
+  // only socket, and collapse unmounts it — a save landing while collapsed
+  // emits nothing (sendToClient: no session). C4Workspace stays mounted, so
+  // the listener alone cannot cover it; the reopen effect below refetches.
+  useEffect(() => {
+    const onDiagramSaved = (e: Event) => {
+      const d = (e as CustomEvent<C4DiagramSavedDetail>).detail;
+      if (d?.dirPath !== dirPath || typeof d.rerendered !== "boolean") return;
+      void applySavedOutcome(d.rerendered, d.diagnostic ?? null, true);
+    };
+    window.addEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
+    return () => window.removeEventListener(C4_DIAGRAM_SAVED_EVENT, onDiagramSaved);
+  }, [dirPath, applySavedOutcome]);
+
   // Reveal/collapse is LIFTED to KbChatContext so the SHARED top-bar trigger
   // ("Ask about this document", in KbContentHeader) drives it — consistent with
   // the markdown viewer. The C4 page keeps setSuppressSidebar(true) so the
@@ -97,6 +176,19 @@ export default function C4Workspace({
     if (chatCtx?.collapseEmbeddedConcierge) chatCtx.collapseEmbeddedConcierge();
     else setLocalCollapsed(true);
   };
+
+  // #8739, other half: concierge reopen is the recovery point for saves that
+  // landed while the socket was gone (collapse mid-turn, transient disconnect,
+  // desktop↔mobile socket swap). One silent GET per open — cheaper than
+  // buffering the frame, which would need a conversationId the user-scoped
+  // emit deliberately lacks.
+  const wasCollapsed = useRef(conciergeCollapsed);
+  useEffect(() => {
+    if (wasCollapsed.current && !conciergeCollapsed) {
+      void reload({ silent: true });
+    }
+    wasCollapsed.current = conciergeCollapsed;
+  }, [conciergeCollapsed, reload]);
 
   // #7222 — TOPOLOGY, not just a default. Desktop keeps the resizable
   // side-by-side split. Below `md` a 190px/190px split makes both panes
@@ -131,6 +223,7 @@ export default function C4Workspace({
           ).map(([t, label]) => (
             <button
               key={t}
+              data-button-exempt="segmented Concierge|Code tab — active state lives in conditional className that variant base colors would flatten"
               onClick={() => setRightTab(t)}
               className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                 rightTab === t
@@ -152,7 +245,8 @@ export default function C4Workspace({
         )}
         <div className="ml-auto flex items-center gap-1.5 pr-1">
           {isDesktop && (
-          <button
+          <Button
+            variant="ghost"
             type="button"
             aria-label="Collapse Concierge"
             onClick={collapseConcierge}
@@ -162,7 +256,7 @@ export default function C4Workspace({
               <polyline points="13 17 18 12 13 7" />
               <polyline points="6 17 11 12 6 7" />
             </svg>
-          </button>
+          </Button>
           )}
         </div>
       </div>
@@ -194,12 +288,8 @@ export default function C4Workspace({
               <C4CodePanel
                 data={data}
                 dirPath={dirPath}
-                onSaved={async (rerendered) => {
-                  await reload();
-                  // Stale only when the server could NOT re-render; on a
-                  // successful re-render the reloaded dump is fresh.
-                  setStale(!rerendered);
-                }}
+                allowResave={stale}
+                onSaved={applySavedOutcome}
               />
             ) : (
               <Spinner />
@@ -229,6 +319,8 @@ export default function C4Workspace({
                   diagnostics={data.diagnostics}
                   hasModel={!!data.dump}
                   stale={stale}
+                  staleDiagnostic={staleDiagnostic}
+                  staleAction={staleActionLine(c4EditEnabled, dirPath)}
                 />
                 <div className="relative min-h-0 flex-1">
                   <C4Canvas dump={data.dump} initialViewId={viewId} />

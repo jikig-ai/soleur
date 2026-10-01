@@ -46,7 +46,11 @@ Flag `--org <orgId>` switches to per-org targeting mode. When provided, the scri
 Flag `--control-org <orgId>` (per-org mode only) sets the control org for the eval-layer re-verify (the org asserted to be NOT enabled — proves no leak). Defaults to a synthetic non-member UUID; pass a real sibling org (e.g. one sharing the legacy `org-targeted` segment) for a stronger leak check.
 Flag `--detach-shared` (migration verb; requires `--org <memberId>` and value `on`) removes the feature's override on the legacy shared `org-targeted` segment in BOTH envs by publishing a version with `segment_ids_to_delete_overrides:[<org-targeted id>]` (resolved by name, never hard-coded), then eval-verifies the feature STILL resolves `enabled=true` for the member org (served by its own `<flag>-orgs` segment now) and `enabled=false` for the control org. Provision `<flag>-orgs` via the `--org` path FIRST — detach removes the shared override, it does not create the per-feature one. Idempotent: a no-op for any env with no override, and a clean no-op if `org-targeted` is already gone.
 Flag `--dry-run` runs detect/diff/validate steps (no writes).
-Flag `--confirmed` skips the interactive `read -p` prompt (for agent-driven use; the agent must obtain operator ack via AskUserQuestion before passing this flag).
+There is no flag that skips the typed-`yes` prompt. The one that used to exist for
+agent-driven use was removed (#8486): an operator's "yes" in a menu is not
+authorization for a production write (`hr-menu-option-ack-not-prod-write-auth`).
+Passing it now fails as an unknown flag (exit `2`) with a message pointing at the
+operator's own terminal.
 
 ## Prerequisites
 
@@ -56,23 +60,61 @@ Flag `--confirmed` skips the interactive `read -p` prompt (for agent-driven use;
 
 ## Procedure
 
-Invoke the script:
+The agent runs only the preview, which prints the pre/post matrix (exit 0, no writes,
+no prompt):
 
 ```bash
-# Dry-run to see the matrix:
 bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" <flag> <role> <on|off> --dry-run
-# After AskUserQuestion confirmation:
-bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" <flag> <role> <on|off> --confirmed
 ```
 
-**Agent-driven flow (recommended):**
+Every write changes BOTH Flagsmith environments (dev and prd), whichever role
+segment it names, so a `dev` flip is a production write too.
 
-1. Run with `--dry-run` to get the pre/post matrix (exits 0, no writes, no prompt).
-2. Present the matrix output to the operator via **AskUserQuestion** with options: "Yes, apply" / "Cancel".
-3. On confirmation, re-run with `--confirmed` (skips the `read -p` prompt, proceeds to write).
-4. On cancel, abort.
+## Writes run in the operator's own terminal (#8486, ADR-249)
 
-**Important:** The agent must always pass `--dry-run` (for preview) or `--confirmed` (for apply) — never invoke without one of these flags, or the interactive prompt will hang the agent shell.
+The write path asks for a typed `yes` through the operator-script library's TTY
+acknowledgement. It has no skip variable and no flag. An agent's shell has no TTY,
+so a write run there stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` on
+stdout, before any credential is fetched. Exit `64` is a refusal, never a success.
+The agent therefore:
+
+1. Runs the script with `--dry-run` and shows the preview. That mode needs no TTY
+   and makes no writes.
+2. Prints the exact write command below, in a fenced block, for the operator to run
+   in their own terminal (Warp). It replaces `<WORKTREE>` with the absolute path of
+   the worktree that holds this change (`git rev-parse --show-toplevel`) and
+   `<ARGS>` with `<flag> <role> <on|off>` plus any `--org`, `--control-org` or `--detach-shared` the operator chose, without `--dry-run`. It never prints a
+   `${CLAUDE_PLUGIN_ROOT}` or repo-relative form. A plugin-root or repo-relative path resolves against whatever directory the operator's terminal happens to be in; the absolute worktree path does not.
+3. Does not run the command, and does not run it through Claude Code's `!` prefix
+   either (whether that gives the command a TTY is unmeasured, ADR-249). The
+   printed command is an undone operator step under
+   `wg-block-pr-ready-on-undeferred-operator-steps`: record it where the pipeline
+   tracks operator steps, and do not mark a PR ready until the operator says it ran.
+
+<!-- operator-write-command -->
+```bash
+cd <WORKTREE> && bash <WORKTREE>/plugins/soleur/skills/flag-set-role/scripts/flip.sh <ARGS>
+```
+
+The operator types `yes` at the prompt. Any other answer stops the script with exit
+`1` and `SOLEUR_BOOTSTRAP_ABORTED stage=ack`, before anything is written.
+
+## Incident rollback (the operator, in their own terminal)
+
+When a flip has to be undone during an incident, skip the preview: give the
+operator the rollback command at once, with the opposite value, in the same shape
+as above:
+
+```bash
+cd <WORKTREE> && bash <WORKTREE>/plugins/soleur/skills/flag-set-role/scripts/flip.sh <flag> <role> <on|off>
+```
+
+- Run it in the operator's own terminal (Warp). Not through Claude Code's `!`
+  prefix: whether that gives the command a TTY is unmeasured (ADR-249).
+- If it exits `4` with `FATAL: audit …` (the WORM append failed, so nothing was
+  written), the break-glass is the Flagsmith dashboard: make the same change there.
+  A dashboard write leaves no WORM row, so record it afterwards (what, when, why) in
+  the incident's issue.
 
 The script (full procedure in [scripts/flip.sh](./scripts/flip.sh)):
 
@@ -83,7 +125,7 @@ The script (full procedure in [scripts/flip.sh](./scripts/flip.sh)):
 3. **Read current state.** For each env (dev `90722`, prd `90721`), fetch the live version's feature-states + per-segment override.
 4. **Apply fallback-fidelity rule.** If proposed = `dev off` AND current `prd on` in either env, abort with exit 1 + clear message. (See ADR-038 v2 §"Fallback semantics" — the env-var fallback can only mirror one state; `dev off / prd on` cannot be represented and would silently re-enable the dev cohort on outage.)
 5. **Print pre/post matrix.** Show current (env × segment) enablement table and the proposed delta.
-6. **Operator ack.** If `--confirmed` is passed, skip (the agent already obtained ack via AskUserQuestion). Otherwise, wait for literal `yes` at the terminal prompt (per `hr-menu-option-ack-not-prod-write-auth`). Anything else aborts.
+6. **Operator ack.** Wait for a typed `yes` at the terminal prompt (per `hr-menu-option-ack-not-prod-write-auth`); anything else exits `1`. No flag skips it, and with no TTY the script already stopped at exit `64` before step 2.
 7. **Flip Flagsmith.** For each env, POST to `/api/v1/environments/{env_id}/features/{feature_id}/versions/` with `feature_states_to_create` (first-time) OR `feature_states_to_update` (subsequent), `publish_immediately: true`.
 8. **Mirror Doppler (only on `role=prd` flip).** Run `doppler secrets set FLAG_<X>=<0|1> -p soleur -c dev` AND `-c prd` via stdin-piped 0600 temp file (no CLI-arg leak).
 9. **Re-verify.** Re-fetch state in both envs and assert matches proposed.
@@ -93,7 +135,7 @@ The script (full procedure in [scripts/flip.sh](./scripts/flip.sh)):
 1. **Validate args.** Same as role targeting, plus UUID format validation on `--org` and `--control-org` (and they must differ).
 2. **Read current membership.** Resolve the feature's own `<flag>-orgs` segment (may not exist yet → empty membership) and extract its orgIds from the `rules[0].rules[0].conditions[]` array (each condition is `EQUAL orgId <uuid>` inside an `ANY` rule).
 3. **Compute new membership + display.** Add (on) or remove (off) the target org. Print current membership, proposed action, control org, and the new membership. No "already present" early-exit — the override may still be missing, so provisioning + eval-verify always run.
-4. **Dry-run / operator ack.** `--dry-run` prints the plan and exits 0 with no writes. Otherwise wait for `yes` (or `--confirmed`).
+4. **Dry-run / operator ack.** `--dry-run` prints the plan and exits 0 with no writes. Otherwise wait for a typed `yes`.
 5. **Audit trail.** WORM audit entry with `target: org:<orgId>` BEFORE any Flagsmith mutation (append-before-flip).
 6. **Provision `<flag>-orgs`.** Idempotently create the segment (ALL→ANY/EQUAL-orgId envelope) and ensure an ON feature-state override for the flag in BOTH envs (`provision_feature_segment`).
 7. **Write membership.** Re-read the segment immediately before the PUT (shrinks the read-modify-write window), then PUT the conditions array rebuilt from the fresh read (one `EQUAL` condition per org).
@@ -106,7 +148,7 @@ No Doppler mirror runs for org-targeting (segment membership is not reflected in
 This is the migration verb (#4617), not a routine flip — it moves a feature off the legacy shared `org-targeted` segment onto its own `<flag>-orgs` segment. Ordering is load-bearing: provision `<flag>-orgs` (the `--org` path) and eval-verify the member is enabled BEFORE detaching, or the member loses the feature in the window between detach and provision.
 
 1. **Validate args.** Requires `--org <memberId>` (a member org to eval-verify stays enabled), value `on`, and UUID format on `--org`/`--control-org` (they must differ).
-2. **Dry-run / operator ack.** `--dry-run` prints the plan (which envs, member/control) and exits 0 with no writes. Otherwise wait for `yes` (or `--confirmed`).
+2. **Dry-run / operator ack.** `--dry-run` prints the plan (which envs, member/control) and exits 0 with no writes. Otherwise wait for a typed `yes`.
 3. **Audit trail.** WORM audit entry with `target: detach:org-targeted` BEFORE any Flagsmith mutation (append-before-flip). Enablement is unchanged (the feature stays ON, now served by `<flag>-orgs`), so before/after are both `true`.
 4. **Detach.** Resolve `org-targeted` by name. For each env (dev `90722`, prd `90721`) where the feature has an override row on the shared segment, POST a new version with `segment_ids_to_delete_overrides:[<org-targeted id>]` and empty create/update arrays (`publish_immediately: true`). Envs with no override are skipped (idempotent).
 5. **Eval-layer re-verify.** Evaluate the flag for the member org (must STILL be `enabled=true` — served by `<flag>-orgs`) AND the control org (must settle to `enabled=false` — no leak), against `edge.api.flagsmith.com`. A dropped member or a control leak fails loud (exit 3). No Doppler mirror.
@@ -114,10 +156,11 @@ This is the migration verb (#4617), not a routine flip — it moves a feature of
 ## Exit codes
 
 - `0` — success (or `--dry-run` clean).
-- `1` — fallback-fidelity rule violated (caller error).
-- `2` — prerequisite missing (Doppler not authed, FLAGSMITH_MANAGEMENT_API_KEY unset, flag not in RUNTIME_FLAGS).
+- `1` — fallback-fidelity rule violated (caller error), or the operator did not type `yes` (`SOLEUR_BOOTSTRAP_ABORTED stage=ack`; nothing written).
+- `2` — prerequisite missing (Doppler not authed, FLAGSMITH_MANAGEMENT_API_KEY unset, flag not in RUNTIME_FLAGS), a usage error, or an unknown flag (including the removed prompt-skip flag).
 - `3` — Flagsmith API error (network, 5xx, auth).
-- `4` — Doppler write failed (skill aborts — Flagsmith state is now ahead of Doppler; operator must reconcile).
+- `4` — Doppler write failed (skill aborts — Flagsmith state is now ahead of Doppler; operator must reconcile), or the WORM audit append failed before any write.
+- `64` — a write run with no TTY (`SOLEUR_BOOTSTRAP_INPUT_REQUIRED`): nothing was fetched or changed; hand the command to the operator (above).
 
 ## Sharp edges
 

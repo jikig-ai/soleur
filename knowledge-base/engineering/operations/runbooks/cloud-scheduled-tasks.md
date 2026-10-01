@@ -489,12 +489,19 @@ both sub-modes.
 its own `scheduled-*` monitor with `failure_issue_threshold`, so a cron that
 stops checking in pages on its own (that is how the original #4650 regression —
 `scheduled-community-monitor` / `scheduled-gh-pages-cert-state` missed check-ins
-— was caught). Read any monitor's state via the Sentry Crons API (no SSH):
+— was caught). Since #8630 every declared monitor is bound to the one
+`sentry_alert.cron_monitor_failure` workflow, which emails the org's active members
+(cron issues have no owners, so `issue_owners` falls through to `ActiveMembers`) on a
+monitor's first failure, on each failure after a recovery, and when an archived
+cron issue escalates, at most once per monitor per 24 h. A **persistent** failure
+emails once, at its start; the next reminder is Sentry's own broken-monitor email
+after 14 days. A **muted** monitor environment creates no issue and sends nothing,
+even though it is routed. Read any monitor's state via the Sentry Crons API (no SSH):
 
 ```bash
 curl -s -H "Authorization: Bearer $SENTRY_API_TOKEN" \
   "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/?per_page=100" \
-  | jq '.[] | {slug, envs: [.environments[]? | {name, status, lastCheckIn}]}'
+  | jq '.[] | {slug, status, isMuted, envs: [.environments[]? | {name, status, isMuted, lastCheckIn}]}'
 ```
 
 **The `cron-inngest-cron-watchdog` function is RETIRED to a liveness-only beacon
@@ -525,8 +532,10 @@ rows). Now two signals surface it:
 **Primary — the hourly canary `cron-anthropic-credit-probe`** sends a 1-token ping
 on the operator key each hour. Since #8505 the page is the Sentry issue alert
 `anthropic-credit-exhausted` (`sentry_alert.anthropic_credit_exhausted`), which
-emails the operator; the probe's cron monitor turns RED too but is muted and routes
-to no workflow (#8630), so do not rely on it to page.
+emails the operator; the probe's cron monitor turns RED too, and since #8630 it is
+routed to the `cron-monitor-failure` email workflow, but it is muted (measured
+2026-09-24; unmute tracked in #8704) and a muted monitor creates no issue, so do
+not rely on it to page while it stays muted.
 
 - Sentry issue "Anthropic credit balance is too low — operator key exhausted"
   (`feature=anthropic-credit`, `op=anthropic-credit-exhausted`, `source=cron:<name>`
@@ -590,8 +599,13 @@ doppler run -p soleur -c prd_terraform -- bash -c \
     | jq "{status, isMuted}"'
 ```
 
+Mute is per monitor ENVIRONMENT (`environments[].isMuted`), not only the
+top-level flag, so read both: `jq "{status, isMuted, envs: [.environments[] | {name, isMuted}]}"`.
 If `status` is `disabled` or `isMuted` is `true`, re-enable with a `PUT` to the
-same monitor URL (`{"status":"active","isMuted":false}`) using the same token;
+same monitor URL (`{"status":"active","isMuted":false}`) using the same token; for
+a muted environment, `PUT` `…/monitors/<slug>/environments/<env>/` with
+`{"isMuted":false}` (unverified form — confirm with the read above that every
+`environments[].isMuted` is `false` afterwards);
 fall back to the Sentry dashboard ONLY on a confirmed API-write failure (record a
 `playwright-attempt:` evidence line). (The GET above is live-verified; the
 PUT/un-mute form is unverified as of writing — it should succeed under

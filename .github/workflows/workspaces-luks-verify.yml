@@ -311,7 +311,7 @@ jobs:
           # future producer/consumer drift of exactly this kind.
           is_probe_integrity() {
             case "${1:-}" in
-              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable|heartbeat_url_absent|heartbeat_push_failed)
+              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable|heartbeat_url_absent|heartbeat_push_failed|covered_inode_peek_failed)
                 return 0 ;;
             esac
             return 1
@@ -335,6 +335,13 @@ jobs:
           # the mapper node exists and is serving as the mount source. "cryptsetup cannot describe
           # it" is a tooling/parse fault, not plaintext at rest.
           #
+          # The #9123 members (fstab_mnt_data_lines, fstab_mapper_line_missing,
+          # covered_inode_not_immutable) are DURABLE-encryption verdicts rather than
+          # live-mount refutations: they fire after the mount/mapper chain passes — the
+          # volume IS serving encrypted — but the boot contract or the §(e) tripwire no
+          # longer guarantees the next boot keeps data on the LUKS volume. Latent
+          # plaintext-at-rest is still the p0 class this allowlist exists for.
+          #
           # Fail direction: an unrecognised reason lands in `unavailable`, which still ALARMS and
           # still files an issue — it just does not assert a legal claim it cannot support. The
           # under-reporting risk (a NEW at-rest reason added upstream and not added here) is closed
@@ -343,7 +350,7 @@ jobs:
           # from luks-monitor.sh and fails loudly on a new member.
           is_at_rest_drift() {
             case "${1:-}" in
-              not_mounted|mount_not_mapper|mapper_absent|device_not_luks|escrow_passphrase_mismatch|header_uuid_unreadable)
+              not_mounted|mount_not_mapper|mapper_absent|device_not_luks|escrow_passphrase_mismatch|header_uuid_unreadable|fstab_mnt_data_lines|fstab_mapper_line_missing|covered_inode_not_immutable)
                 return 0 ;;
             esac
             return 1
@@ -477,6 +484,19 @@ jobs:
           probe_rc=$?
           cat "$probe_log"
           echo "luks-monitor probe rc=$probe_rc"
+
+          # (#8706) INFORMATIONAL ONLY — the host timer/service unit state, for the runbook's no-SSH
+          # decode (`gh run view <id> --log | grep UnitFileState`). A unit stopped before its probe
+          # runs (203/EXEC, a disabled timer) logs under
+          # SYSLOG_IDENTIFIER=systemd, which Vector does not ship, so this line is the daily read.
+          # OUTSIDE the classifier: it touches none of probe_rc/probe_log/ssh_rc/ssh_err/reason and
+          # no GITHUB_OUTPUT, its own failure is swallowed (`|| true`), and it is skipped on a
+          # transport failure (rc 255) so it cannot add another bounded-ssh wait there. stdin from
+          # /dev/null; stderr dropped; control bytes (incl. CR, which the runner also splits on) are
+          # stripped BEFORE every line is prefixed, so remote text cannot start a
+          # `::workflow-command::`. `Id` leads each block so the timer and service are told apart.
+          # shellcheck disable=SC2086
+          [[ "$probe_rc" -eq 255 ]] || { ${WEB_HOST_SSH} "$WEB_HOST" 'systemctl show -p Id,LoadState,UnitFileState,ActiveState,LastTriggerUSec,Result,ExecMainStatus luks-monitor.timer luks-monitor.service --no-pager' </dev/null 2>/dev/null | LC_ALL=C tr -cd '\12\40-\176' | sed 's/^/[unit-state] /'; } || true
 
           # App-level liveness over the full public HTTPS path, RETRIED to an attempt bound.
           #

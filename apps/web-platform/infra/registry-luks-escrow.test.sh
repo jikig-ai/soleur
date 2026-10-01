@@ -50,7 +50,7 @@ awk -v want="  - path: /usr/local/bin/registry-luks-escrow.sh" '
     if ($0 ~ /^[[:space:]]*$/) { print ""; next }
     exit
   }' "$CI_YML" > "$RAW"
-check "escrow script extracted from the template (non-empty, has a shebang)" "head -1 '$RAW' | grep -q '^#!'"
+check "escrow script extracted from the template (non-empty, has a shebang)" "head -1 '$RAW' | grep -c '^#!' >/dev/null"
 ES="$TMP/escrow.sh"
 sed -E '/^[[:blank:]]*#([[:blank:]].*)?$/d' "$RAW" | sed 's|[$][$][{]|${|g' > "$ES"
 check "the rendered script is valid bash" "bash -n '$ES'"
@@ -128,7 +128,7 @@ run_escrow() {
   env CALLS="$TMP/calls" KEYSEEN="$TMP/keyseen" REGISTRY_LUKS_KEY="$KEY" "$@" \
     bash "$ES" > "$TMP/out" 2> "$TMP/err"
   RC=$?
-  RESULT_TOKEN="$(sed -n 's/^result=\([a-z_]*\) at=[0-9]*$/\1/p' "$STATE" 2>/dev/null | head -1)"
+  RESULT_TOKEN="$(sed -n 's/^result=\([a-z_]*\) at=[0-9]*$/\1/p' "$STATE" 2>/dev/null | sed -n '1p')"
 }
 meminfo() { printf 'MemTotal:        3905536 kB\nMemAvailable:    %s kB\n' "$1" > "$TMP/meminfo"; }
 fresh() { rm -rf "$TMP/state"; }
@@ -192,7 +192,7 @@ check "indeterminate: luksDump failed -> indeterminate, NO KDF run (an empty dum
 fresh; rm -rf "$TMP/oom"; mkdir -p "$TMP/oom"
 : > "$TMP/calls"; rm -f "$TMP/keyseen"
 env CALLS="$TMP/calls" KEYSEEN="$TMP/keyseen" REGISTRY_LUKS_KEY="$KEY" bash "$ES" > "$TMP/out" 2> "$TMP/err"
-RESULT_TOKEN="$(sed -n 's/^result=\([a-z_]*\) at=[0-9]*$/\1/p' "$STATE" 2>/dev/null | head -1)"
+RESULT_TOKEN="$(sed -n 's/^result=\([a-z_]*\) at=[0-9]*$/\1/p' "$STATE" 2>/dev/null | sed -n '1p')"
 check "indeterminate: the OOM shield could not be raised -> indeterminate, NO KDF run" \
   "[ '$RESULT_TOKEN' = indeterminate ] && ! grep -q luksOpen '$TMP/calls'"
 rm -rf "$TMP/oom"
@@ -263,14 +263,14 @@ check "derived the host's other cron.d minute fields (>= 3: heartbeat, shipper, 
 CLASH=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  minutes_of "$f" | grep -qx 19 && CLASH=$((CLASH + 1))
+  minutes_of "$f" | grep -cx 19 >/dev/null && CLASH=$((CLASH + 1))
 done <<<"$OTHER_MIN"
 check "no other cron.d minute set on this host contains minute 19" "[ '$CLASH' -eq 0 ]"
 BOOT_LN="$(grep -nxF "  - set -a; . /etc/default/registry-doppler; set +a; nohup sh -c 'sleep 900; exec doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY --no-fallback -- /usr/local/bin/registry-luks-escrow.sh' >/dev/null 2>&1 &" "$CI_YML" | cut -d: -f1)"
 check "exactly one boot escrow call, deferred 900 s, with the cron's exact wrapper (found line(s): ${BOOT_LN//$'\n'/,})" \
   "[ \"\$(grep -c . <<<'$BOOT_LN')\" -eq 1 ] && [ \"\$(grep -vE '^[[:blank:]]*#' '$CI_YML' | grep -c 'doppler run .*-- /usr/local/bin/registry-luks-escrow.sh')\" -eq 2 ]"
-ZOT_RUN_LN="$(grep -nE '^[[:blank:]]*docker run -d --name zot ' "$CI_YML" | head -1 | cut -d: -f1)"
-HB_BOOT_LN="$(grep -nF -- '-- bash /usr/local/bin/zot-disk-heartbeat.sh || true' "$CI_YML" | head -1 | cut -d: -f1)"
+ZOT_RUN_LN="$(grep -nE '^[[:blank:]]*docker run -d --name zot ' "$CI_YML" | sed -n '1p' | cut -d: -f1)"
+HB_BOOT_LN="$(grep -nF -- '-- bash /usr/local/bin/zot-disk-heartbeat.sh || true' "$CI_YML" | sed -n '1p' | cut -d: -f1)"
 check "the boot escrow run exists, backgrounded, with the cron's wrapper (a bare run records fail_key_absent)" "[ -n '$BOOT_LN' ]"
 check "the boot escrow run comes AFTER zot's docker run (a slow KDF never lengthens the pull-path window)" \
   "[ '${ZOT_RUN_LN:-0}' -gt 0 ] && [ '${BOOT_LN:-0}' -gt '${ZOT_RUN_LN:-0}' ]"

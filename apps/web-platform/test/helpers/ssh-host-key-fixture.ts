@@ -29,7 +29,24 @@ export function expectedFingerprint(pin: string): string {
 }
 
 /**
- * The unpinned TOFU option, assembled so that no test file carries the literal
- * (Guard 1 counts it in exactly one tracked place: git-auth.ts TOFU_FALLBACK_OPTS).
+ * The unpinned TOFU option, assembled so that no test file carries the literal. The
+ * pinned tests assert its ABSENCE; git-auth.ts carries zero such literals since #5914,
+ * and Guard 1 (tests/scripts/test-no-tofu-ssh.sh) no longer allow-lists that file.
  */
 export const TOFU_OPT = "StrictHostKeyChecking=" + "accept" + "-new";
+
+/**
+ * Every malformed-pin shape the resolver refuses — ONE table, shared by the resolver's
+ * tests and the git-auth runtime guard's, so "the guard is exactly as strict as the
+ * resolver" is held by the fixtures rather than asserted in prose (#5914 review).
+ */
+export const BAD_PIN_SHAPES: Array<[string, (p: string) => string]> = [
+  ["embedded newline + a second `* ssh-rsa` line", (p) => `${p}\n* ssh-rsa AAAAB3NzaC1yc2E`],
+  ["trailing comment", (p) => `${p} host@x`],
+  ["host pattern prefix", (p) => `git-data ${p}`],
+  ["@cert-authority marker", (p) => `@cert-authority * ${p}`],
+  ["an ssh-rsa key", () => "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7"],
+  ["a truncated ED25519 key", (p) => p.slice(0, -1)],
+  ["an ED25519 key with padding appended", (p) => `${p}=`],
+  ["two key lines", (p) => `${p}\n${p}`],
+];

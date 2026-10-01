@@ -10,7 +10,7 @@
 # the user's repository (data loss, not a false report).
 #
 # Run: bash apps/web-platform/infra/git-data-provision.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -198,7 +198,7 @@ rm -rf "$root"
 #     truncates its target. ---
 root=$(fresh_root)
 victim="$(mktemp "${TMPDIR:-/tmp}/gdprov-victim.XXXXXX")"; printf 'keep\n' > "$victim"
-ln -s "$victim" "${root}/.ws-lock.init.lock"
+ln -s "$victim" "${root}/.init.lock"
 rc=$(run_provision "$root" "ws-lock")
 if [ "$rc" != "0" ]; then pass; else fail "T10 lock symlink: expected refusal (non-zero), got 0"; fi
 if grep -q 'lock path is a symlink' "$ERR" && [ "$(cat "$victim")" = "keep" ]; then pass; else fail "T10 lock symlink: refusal does not name it, or the target was truncated ($(head -c 200 "$ERR"))"; fi

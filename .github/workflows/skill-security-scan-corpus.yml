@@ -30,8 +30,35 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # (#8919, item 5) Push-arm duplicate proof; PR arm is path-filtered so the
+  # proof's per-job check (the `corpus calibration` job EXECUTED green on that
+  # head, not just the run) is what keeps this honest — a rules-untouched merge
+  # never had corpus coverage to copy.
+  detect-duplicate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      duplicate: ${{ steps.dup.outputs.duplicate }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - id: dup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+        run: bash scripts/main-push-duplicate-skip.sh skill-security-scan-corpus.yml "$MERGE_SHA" "corpus calibration" >> "$GITHUB_OUTPUT"
+
   calibration:
     name: corpus calibration
+    needs: detect-duplicate
+    # always() is load-bearing: on non-push events detect-duplicate is
+    # skipped, and a plain needs-graph would skip this job too — the explicit
+    # always() + `!= 'true'` reads the skip as "" and runs (#8919).
+    if: always() && needs.detect-duplicate.outputs.duplicate != 'true'
     runs-on: ubuntu-latest
     # Bounded so a hung step fails loudly instead of parking a required check for the
     # 360-minute GitHub default. #7623 removed the apt-get that actually hung on

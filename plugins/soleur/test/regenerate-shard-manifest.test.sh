@@ -51,7 +51,7 @@ echo ""
 
 # The declared N — same job-block scoping as scripts-shard-manifest.test.sh.
 CI_N="$(awk -v j='^  test-scripts:' '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML" \
-  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)"
+  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)" || true
 if [[ "$CI_N" =~ ^[0123456789]+$ ]] && (( 10#$CI_N >= 2 )); then
   check pass "ci.yml test-scripts matrix declares N=$CI_N"
 else
@@ -202,14 +202,21 @@ if gen "$FE/empty" "$FE/registered.txt" "$WORK/E-m.tsv" > /dev/null 2>&1; then
 else
   check pass "D2: empty timings dir refuses (exit 2)"
 fi
-# D3: all timed labels unregistered → exit 2 (the table would be empty-but-valid).
+# D3: all timed labels unregistered → the measured set empties, the registered
+# label is tabled at the floor, and a count-balanced all-floor manifest is
+# still written (WARN-degrade, not a die — #9232).
 FF="$WORK/F"; mkdir -p "$FF"
 printf 'real-suite\n' > "$FF/registered.txt"
 printf 'fake-suite\t100\n' > "$FF/timings.tsv"
-if gen "$FF" "$FF/registered.txt" "$FF/m.tsv" > /dev/null 2>&1; then
-  check fail "D3: zero-registered timings produced a manifest"
+if gen "$FF" "$FF/registered.txt" "$FF/m.tsv" --durations-out "$WORK/F-dur.tsv" --write > /dev/null 2> "$WORK/F-err.txt"; then
+  check pass "D3: zero-registered timings degrade to an all-floor manifest"
 else
-  check pass "D3: timings with zero registered labels refuse (exit 2)"
+  check fail "D3: all-floor degrade refused: $(tail -2 "$WORK/F-err.txt")"
+fi
+if grep -qF $'real-suite\t60000\tfloor' "$WORK/F-dur.tsv" 2>/dev/null; then
+  check pass "D3: the registered label is tabled at DEFAULT_SUITE_MS with src=floor"
+else
+  check fail "D3: registered label not floored: $(cat "$WORK/F-dur.tsv" 2>/dev/null)"
 fi
 # D4: dry-run must NOT write the manifest.
 FG="$WORK/G"; mkdir -p "$FG"
@@ -229,7 +236,7 @@ fi
 # (warned) — a light label in the heavy table would red the ⊆ lint while
 # consuming leg weight for nothing.
 CI_N_H="$(awk -v j='^  test-scripts-heavy:' '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML" \
-  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)"
+  | grep -oE 'shard: \["1/[0123456789]+' | grep -oE '[0123456789]+$' | head -1)" || true
 if [[ "$CI_N_H" =~ ^[0123456789]+$ ]] && (( 10#$CI_N_H >= 1 )); then
   check pass "ci.yml test-scripts-heavy matrix declares N=$CI_N_H"
 else
@@ -265,16 +272,251 @@ else
   check fail "fixture H: light-group labels dropped WITHOUT a WARN"
 fi
 
-# === Fixture I: wrong-group registration set refuses ========================================
+# === Fixture I: wrong-group registration set degrades to all-floor ==========================
 # A registered file containing only LIGHT labels against HEAVY timings drops
-# every row and must exit 2 — an empty-but-valid table is the worst output.
+# every measured row — but registered labels still carry weight: the labels
+# floor-table and the manifest is produced with a WARN (the all-floor degrade
+# replaced this die site in #9232 — a count-balanced table beats an abort).
 FI="$WORK/I"; mkdir -p "$FI"
 printf 'light-only-1\nlight-only-2\n' > "$FI/registered.txt"
 printf 'heavy-a\t800\nheavy-b\t600\n' > "$FI/timings.tsv"
-if gen "$FI" "$FI/registered.txt" "$WORK/I-m.tsv" --group heavy > /dev/null 2>&1; then
-  check fail "fixture I: heavy timings against a light-only registration produced a manifest"
+if gen "$FI" "$FI/registered.txt" "$WORK/I-m.tsv" --group heavy \
+     --durations-out "$WORK/I-dur.tsv" --write > /dev/null 2> "$WORK/I-err.txt"; then
+  check pass "fixture I: wrong-group registration degrades to all-floor, not a die"
 else
-  check pass "fixture I: wrong-group registration refuses (exit 2)"
+  check fail "fixture I: all-floor degrade refused: $(tail -2 "$WORK/I-err.txt")"
+fi
+if grep -qF $'light-only-1\t60000\tfloor' "$WORK/I-dur.tsv" 2>/dev/null \
+   && grep -q 'dropping timed-but-unregistered' "$WORK/I-err.txt"; then
+  check pass "fixture I: untimed registered labels floor-table; dropped timings still warn"
+else
+  check fail "fixture I: floor tabling or the unregistered-drop WARN is missing"
+fi
+
+# === Fixture J: multi-run aggregation by MEDIAN =============================================
+# Three timing dirs — each repeatable --timings-dir is one run's artifact set.
+# suite-mid measures 100/300/900 across them: the weight must be the median
+# (300) — a max-merge pins the 900 spike, a mean drags to ~433 (ADR-240 amd.).
+FJ1="$WORK/J1"; FJ2="$WORK/J2"; FJ3="$WORK/J3"; mkdir -p "$FJ1" "$FJ2" "$FJ3"
+printf 'suite-mid\nsuite-lo\n' > "$WORK/J-registered.txt"
+printf 'suite-mid\t100\nsuite-lo\t10\n' > "$FJ1/timings.tsv"
+printf 'suite-mid\t300\nsuite-lo\t10\n' > "$FJ2/timings.tsv"
+printf 'suite-mid\t900\nsuite-lo\t10\n' > "$FJ3/timings.tsv"
+if gen "$FJ1" "$WORK/J-registered.txt" "$WORK/J-manifest.tsv" \
+     --timings-dir "$FJ2" --timings-dir "$FJ3" \
+     --durations-out "$WORK/J-durations.tsv" --write \
+     > "$WORK/J-out.txt" 2> "$WORK/J-err.txt"; then
+  check pass "fixture J: repeated --timings-dir aggregates one run per dir"
+else
+  check fail "fixture J: multi-run input refused: $(tail -2 "$WORK/J-err.txt")"
+fi
+if grep -qF $'suite-mid\t300\tmeasured' "$WORK/J-durations.tsv" 2>/dev/null; then
+  check pass "fixture J: suite-mid aggregates to the MEDIAN 300ms across runs"
+else
+  check fail "fixture J: suite-mid is not the median: $(grep 'suite-mid' "$WORK/J-durations.tsv" 2>/dev/null)"
+fi
+
+# === Fixture K: registered-but-untimed labels table at the floor ============================
+FK="$WORK/K"; mkdir -p "$FK"
+printf 'timed-a\nnever-timed-b\nnever-timed-c\n' > "$FK/registered.txt"
+printf 'timed-a\t400\n' > "$FK/timings.tsv"
+if gen "$FK" "$FK/registered.txt" "$WORK/K-manifest.tsv" \
+     --durations-out "$WORK/K-durations.tsv" --write \
+     > "$WORK/K-out.txt" 2> "$WORK/K-err.txt"; then
+  check pass "fixture K: generator exits 0 with untimed registered labels"
+else
+  check fail "fixture K: refused untimed labels: $(tail -2 "$WORK/K-err.txt")"
+fi
+# floor_ms = median of the measured set (only timed-a at 400) → both untimed
+# labels table at 400 with src=floor; the measured row keeps src=measured.
+if grep -q '^never-timed-b' "$WORK/K-manifest.tsv" \
+   && grep -qF $'never-timed-b\t400\tfloor' "$WORK/K-durations.tsv" 2>/dev/null; then
+  check pass "fixture K: untimed label tables in the manifest at floor_ms with src=floor"
+else
+  check fail "fixture K: untimed label not floored into the manifest/durations table"
+fi
+if grep -qF $'timed-a\t400\tmeasured' "$WORK/K-durations.tsv" 2>/dev/null; then
+  check pass "fixture K: measured rows carry src=measured"
+else
+  check fail "fixture K: measured row lost its src=measured provenance"
+fi
+if grep -qi 'floor' "$WORK/K-err.txt"; then
+  check pass "fixture K: floor tabling is warned, not silent"
+else
+  check fail "fixture K: floor tabling produced no WARN"
+fi
+# Two untimed labels must flow through assign() — not collapse onto one leg by
+# construction (equal weights over N>=2 legs deal to distinct least-loaded legs).
+LEGS_K="$(awk -F'\t' '$1 ~ /^never-timed-/ {print $2}' "$WORK/K-manifest.tsv" 2>/dev/null | sort -u | wc -l || true)"
+if [[ "$LEGS_K" == "2" ]]; then
+  check pass "fixture K: floor labels flow through assign() (distinct legs)"
+else
+  check fail "fixture K: two floor labels collapsed onto $LEGS_K leg(s) — bypassed assign()"
+fi
+
+# === Fixture L: --write to the default manifest with K != workflow N refuses ================
+# The refusal must fire BEFORE any write: snapshot the committed file, attempt
+# the mismatched emission, verify the bytes are untouched. No --manifest arg —
+# the default path is the group's committed table.
+FL="$WORK/L"; mkdir -p "$FL"
+printf 'l-a\nl-b\n' > "$FL/registered.txt"
+printf 'l-a\t100\nl-b\t100\n' > "$FL/timings.tsv"
+SUM_BEFORE="$(cksum "$REPO_ROOT/scripts/suite-shard-legs.tsv")"
+if python3 "$GEN" --timings-dir "$FL" --registered-file "$FL/registered.txt" \
+     --legs "$(( N + 1 ))" --write > /dev/null 2> "$WORK/L-err.txt"; then
+  check fail "fixture L: --legs $(( N + 1 )) --write at the DEFAULT path succeeded — a committed n-mismatch must refuse"
+else
+  check pass "fixture L: default-path --write with K != workflow N exits non-zero"
+fi
+if [[ "$(cksum "$REPO_ROOT/scripts/suite-shard-legs.tsv")" == "$SUM_BEFORE" ]]; then
+  check pass "fixture L: refusal fired before the write — committed manifest untouched"
+else
+  check fail "fixture L: the refusal left the committed manifest rewritten"
+fi
+if grep -qiE 'mismatch|--legs|declares' "$WORK/L-err.txt"; then
+  check pass "fixture L: the refusal names the n-mismatch"
+else
+  check fail "fixture L: refusal stderr does not explain the mismatch: $(tail -2 "$WORK/L-err.txt")"
+fi
+
+# === Fixture M: --durations input wins over --timings-dir ===================================
+# The durations file says m-a is heavy (1000); the timings dir says it is light
+# (100). Precedence --durations > --timings-dir pins the emitted weight to the
+# file's value — and the report's provenance names the source that fed.
+FM="$WORK/M"; mkdir -p "$FM"
+printf 'm-a\nm-b\n' > "$FM/registered.txt"
+printf 'm-a\t100\nm-b\t1000\n' > "$FM/timings.tsv"
+printf 'm-a\t1000\tmeasured\nm-b\t100\tmeasured\n' > "$FM/in-durations.tsv"
+if gen "$FM" "$FM/registered.txt" "$WORK/M-manifest.tsv" \
+     --durations "$FM/in-durations.tsv" --durations-out "$WORK/M-durations.tsv" --write \
+     > "$WORK/M-out.txt" 2> "$WORK/M-err.txt"; then
+  check pass "fixture M: --durations input exits 0"
+else
+  check fail "fixture M: --durations input refused: $(tail -2 "$WORK/M-err.txt")"
+fi
+if grep -qF $'m-a\t1000\tmeasured' "$WORK/M-durations.tsv" 2>/dev/null; then
+  check pass "fixture M: the durations file's weights drive the packing, not the dir's"
+else
+  check fail "fixture M: --durations ignored — $(grep 'm-a' "$WORK/M-durations.tsv" 2>/dev/null)"
+fi
+if grep -q 'source: durations:' "$WORK/M-out.txt"; then
+  check pass "fixture M: provenance names the durations source that actually fed"
+else
+  check fail "fixture M: report provenance does not name the --durations source"
+fi
+
+# === Fixture N: an all-floor durations file still packs (must-pass) ==========================
+# src=floor rows in an input file are estimates, not measurements: they re-derive
+# as floor on re-pack (floor never launders into measured) and a file of ONLY
+# floor rows still produces a valid manifest.
+FN="$WORK/N"; mkdir -p "$FN"
+printf 'n-a\nn-b\n' > "$FN/registered.txt"
+printf 'n-a\t60000\tfloor\nn-b\t60000\tfloor\n' > "$FN/in-durations.tsv"
+if python3 "$GEN" --durations "$FN/in-durations.tsv" --registered-file "$FN/registered.txt" \
+     --manifest "$WORK/N-manifest.tsv" --durations-out "$WORK/N-durations.tsv" --write \
+     > "$WORK/N-out.txt" 2> "$WORK/N-err.txt"; then
+  check pass "fixture N: all-floor durations input still packs (exit 0)"
+else
+  check fail "fixture N: all-floor durations input refused: $(tail -2 "$WORK/N-err.txt")"
+fi
+if grep -qF $'n-a\t60000\tfloor' "$WORK/N-durations.tsv" 2>/dev/null \
+   && ! grep -qF $'\tmeasured' "$WORK/N-durations.tsv" 2>/dev/null; then
+  check pass "fixture N: floor rows re-derive as floor — never re-read as measured"
+else
+  check fail "fixture N: a src=floor row laundered into measured: $(cat "$WORK/N-durations.tsv" 2>/dev/null)"
+fi
+
+# === Fixture O: zero usable timing rows → all-floor WARN-degrade =============================
+# Files exist but every row is excluded → the measured set is empty. The
+# generator warns and still writes a count-balanced all-floor manifest at
+# DEFAULT_SUITE_MS (the die this replaces is fixture D3's original contract).
+FO="$WORK/O"; mkdir -p "$FO"
+printf 'o-a\no-b\n' > "$FO/registered.txt"
+printf '__run_boundary_start__\t0\n' > "$FO/timings.tsv"
+if gen "$FO" "$FO/registered.txt" "$WORK/O-manifest.tsv" \
+     --durations-out "$WORK/O-durations.tsv" --write \
+     > /dev/null 2> "$WORK/O-err.txt"; then
+  check pass "fixture O: timings-empty input produces an all-floor manifest"
+else
+  check fail "fixture O: all-floor degrade refused: $(tail -2 "$WORK/O-err.txt")"
+fi
+if grep -qi 'floor' "$WORK/O-err.txt" \
+   && [[ "$(grep -c '^o-[ab]' "$WORK/O-manifest.tsv" 2>/dev/null)" == "2" ]]; then
+  check pass "fixture O: all-floor degrade warns and tables every registered label"
+else
+  check fail "fixture O: all-floor manifest/WARN missing: $(tail -2 "$WORK/O-err.txt")"
+fi
+if grep -qF $'o-a\t60000\tfloor' "$WORK/O-durations.tsv" 2>/dev/null; then
+  check pass "fixture O: nothing measured → floor falls back to DEFAULT_SUITE_MS"
+else
+  check fail "fixture O: DEFAULT_SUITE_MS fallback missing from durations table"
+fi
+
+# === Fixture P: --run paginates the artifacts listing =======================================
+# A run with more than one page of artifacts must not silently drop the tail:
+# page 1 carries 99 fillers + one timing artifact, page 2 carries the ONLY copy
+# of page2-only-suite. A single-page fetch merges the page-1 leg and quietly
+# loses page 2 — indistinguishable from a leg that died before its feed write.
+# The stub also answers the unpaginated `?per_page=100` shape (returns page 1)
+# so the mutation "revert to a single fetch" is expressible and goes RED.
+FP="$WORK/P"; mkdir -p "$FP/bin"
+printf 'page1-suite\npage2-only-suite\n' > "$FP/registered.txt"
+: > "$FP/calls.log"
+# Artifact zips: each matching artifact is a zip holding suite-timings.tsv.
+python3 - "$FP" <<'PYEOF'
+import sys, zipfile
+fp = sys.argv[1]
+zipfile.ZipFile(f"{fp}/art-9001.zip", "w").writestr(
+    "suite-timings.tsv", "page1-suite\t111\n")
+zipfile.ZipFile(f"{fp}/art-9002.zip", "w").writestr(
+    "suite-timings.tsv", "page2-only-suite\t222\n")
+PYEOF
+{
+  printf '{"total_count":101,"artifacts":['
+  for i in $(seq 1 99); do printf '{"id":%d,"name":"filler-art-%d"},' "$i" "$i"; done
+  printf '{"id":9001,"name":"suite-timings-scripts-1"}]}'
+} > "$FP/arts-p1.json"
+printf '{"total_count":101,"artifacts":[{"id":9002,"name":"suite-timings-scripts-2"}]}' \
+  > "$FP/arts-p2.json"
+cat > "$FP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$FIXTURE_DIR/calls.log"
+url="${2:-}"   # argv shape: gh api <url>
+# `&page=N` is anchored on the '&' (a bare 'page=N' substring matches the
+# 'per_page=100' in EVERY request) AND end-anchored — '&page=1' as a non-final
+# pattern would also match '&page=10'/'&page=100' and silently re-serve page 1.
+case "$url" in
+  *'/artifacts?'*'&page=2')
+    cat "$FIXTURE_DIR/arts-p2.json" ;;
+  *'/artifacts?'*'&page=1'|*'/artifacts?per_page=100')
+    cat "$FIXTURE_DIR/arts-p1.json" ;;
+  *'/artifacts/'*'/zip')
+    aid="$(printf '%s' "$url" | sed -nE 's#.*/artifacts/([0-9]+)/zip#\1#p')"
+    cat "$FIXTURE_DIR/art-$aid.zip" ;;
+  *) echo "STUB-UNEXPECTED: $*" >> "$FIXTURE_DIR/calls.log"; exit 64 ;;
+esac
+STUB
+chmod +x "$FP/bin/gh"
+
+if FIXTURE_DIR="$FP" PATH="$FP/bin:$PATH" python3 "$GEN" --run 4242 --group light \
+     --registered-file "$FP/registered.txt" --manifest "$WORK/P-manifest.tsv" \
+     --durations-out "$WORK/P-durations.tsv" --write \
+     > "$WORK/P-out.txt" 2> "$WORK/P-err.txt"; then
+  check pass "fixture P: --run against a two-page artifact set exits 0"
+else
+  check fail "fixture P: --run fetch refused: $(tail -2 "$WORK/P-err.txt")"
+fi
+if grep -qF $'page1-suite\t111\tmeasured' "$WORK/P-durations.tsv" 2>/dev/null \
+   && grep -qF $'page2-only-suite\t222\tmeasured' "$WORK/P-durations.tsv" 2>/dev/null; then
+  check pass "fixture P: timing artifacts on BOTH pages merged (listing paginated)"
+else
+  check fail "fixture P: a page-2-only artifact was dropped — the artifacts listing truncated at page 1"
+fi
+if grep -qF '&page=2' "$FP/calls.log"; then
+  check pass "fixture P: the artifacts call actually fetched page 2 (call-shape, not just output)"
+else
+  check fail "fixture P: no page=2 call in the stub's argv log — pagination never ran"
 fi
 
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
@@ -290,7 +532,7 @@ fi
 # --- ASSERTION FLOOR (ADR-193) -------------------------------------------------------------
 # printf + exit, NEVER through fail(). MIN_CASES sits on the line directly above its
 # `if` so guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=20
+MIN_CASES=40
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d check(s) ran, expected >= %d. The suite did not run to completion.\n' "$cases" "$MIN_CASES" >&2
   exit 1

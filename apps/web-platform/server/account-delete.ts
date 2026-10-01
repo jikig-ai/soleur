@@ -6,6 +6,14 @@ import { removeGitDataRepo } from "@/server/git-data-replication";
 import { createChildLogger } from "./logger";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
+/**
+ * Sentry tag literals of the Art. 17 git-data erasure report. `sentry_alert.art17_erasure_incomplete`
+ * (infra/sentry/issue-alerts.tf) filters on exactly these two, and
+ * sentry-git-data-pin-fault-alert-op-contract.test.ts pins the rule to them (#8572).
+ */
+export const ART17_ERASURE_FEATURE = "account-delete";
+export const ART17_ERASURE_OP = "git-data-bare-repo-erasure";
+
 const log = createChildLogger("account-delete");
 
 const PAGE_SIZE = 1_000;
@@ -236,9 +244,13 @@ export async function deleteAccount(
       //                  remove_key_absent — the remove key is missing while git-data is
       //                    otherwise armed. Remedy: restore GIT_REMOVE_SSH_PRIVATE_KEY in
       //                    Doppler prd and redeploy.
-      //                  pin_invalid | pin_absent_store_enabled — GIT_DATA_SSH_HOST_KEY is
-      //                    malformed, or unset while the store is enabled (#7226). Remedy:
-      //                    republish the pin (the replace job does) and redeploy.
+      //                  pin_invalid | pin_absent — GIT_DATA_SSH_HOST_KEY is malformed or
+      //                    unset, whatever the store flag says (#7226, #5914). Remedy:
+      //                    republish the pin (the replace job does), or re-run
+      //                    git-data-cutover.yml mode=redeploy if the secret is present but not loaded,
+      //                    then sweep the refused erasures (runbook pin-fault row).
+      //                  ssh_client_absent — the image has no `ssh` (#5914): ship
+      //                    openssh-client in the runner stage, then sweep.
       //   unreachable  — no answer at all; the repo's state is unknown, which is not the
       //                  same as un-erased.
       //   host_key_mismatch — ssh reached a host whose key does not match the pin (#7226).
@@ -246,10 +258,23 @@ export async function deleteAccount(
       //                  pin — redeploy; or the host was re-keyed outside the replace job.
       // Sentry does not index `extra`, so an alert rule cannot key on a value that lives
       // only there — which is why `outcome` moved out of it.
-      reportSilentFallback(new Error(`git-data erasure ${outcome.status}`), {
-        feature: "account-delete",
-        op: "git-data-bare-repo-erasure",
-        tags: { erasure_outcome: outcome.status },
+      //
+      // MESSAGE path (err === null, #5914): an Error-path report is pre-captured by the
+      // pino mirror with only `feature=pino-mirror` and the tagged capture is dropped
+      // (#8629), so art17_erasure_incomplete — which filters on `feature`/`op` — would
+      // never see it. The status (and, for `unconfigured`, the fixed reason word) leads the
+      // message so each fault groups into its own Sentry issue, and a `remove_key_absent`
+      // issue can never hide a later `pin_absent`. Since #8572 the rule also re-pages per
+      // event (`event_frequency_count {1h, 0}`, throttled by its 5-minute per-issue action
+      // interval), so an open issue no longer swallows the next fault; before, it paged
+      // only on first-seen / reappeared / regression. An archived or ignored issue fires
+      // no trigger at all, so these issues are resolved after the sweep, never archived.
+      const reason =
+        outcome.status === "unconfigured" ? /^([a-z_]+): /.exec(outcome.detail)?.[1] : undefined;
+      reportSilentFallback(null, {
+        feature: ART17_ERASURE_FEATURE,
+        op: ART17_ERASURE_OP,
+        tags: { erasure_outcome: outcome.status, ...(reason ? { erasure_reason: reason } : {}) },
         extra: {
           userId,
           // DELIBERATE, and not a duplicate of `userId` above: `reportSilentFallback`
@@ -268,7 +293,8 @@ export async function deleteAccount(
           detail: outcome.detail,
         },
         message:
-          "git-data bare-repo erasure did not complete during Art. 17 deletion — the repo may persist on the git-data host",
+          `git-data erasure ${outcome.status}${reason ? ` (${reason})` : ""}: bare-repo erasure ` +
+          "did not complete during Art. 17 deletion — the repo may persist on the git-data host",
       });
     }
   } catch (err) {
@@ -276,11 +302,19 @@ export async function deleteAccount(
     // SAME honest answer as a refusal. Before #8094 this arm existed and set nothing, so
     // it was the one route that could still report an unobserved success.
     gitDataErasurePending = true;
-    reportSilentFallback(err, {
-      feature: "account-delete",
-      op: "git-data-bare-repo-erasure",
-      extra: { userId },
-      message: "removeGitDataRepo threw during Art. 17 deletion — bare repo may persist on the git-data host",
+    // MESSAGE path, like the outcome report above (#8629): the Error path never reaches
+    // art17_erasure_incomplete. The thrown MESSAGE is deliberately not carried —
+    // assertSafeWorkspaceId's embeds the raw id — only the error's name. The known throws
+    // here are pre-dial (`refusing unsafe workspace_id`, `GIT_DATA_SSH_HOST is unset in
+    // production`), so the host was not reached.
+    reportSilentFallback(null, {
+      feature: ART17_ERASURE_FEATURE,
+      op: ART17_ERASURE_OP,
+      tags: { erasure_outcome: "threw" },
+      extra: { userId, gitDataRepoId: userId, errorName: err instanceof Error ? err.name : typeof err },
+      message:
+        "git-data erasure threw: removeGitDataRepo threw during Art. 17 deletion — bare repo may " +
+        "persist on the git-data host",
     });
   }
 

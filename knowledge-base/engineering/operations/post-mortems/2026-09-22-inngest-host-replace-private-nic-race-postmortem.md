@@ -179,4 +179,6 @@ Every action item and follow-up so this incident cannot recur (save logs, add te
 
 | Issue | Action | Status |
 |---|---|---|
-| #8562 | Move the bootstrap pull into a retrying systemd unit so a missed first-boot pull is recoverable without a host replace, and add a forced-race rehearsal that proves the converge primitive under a deliberately late attach. | open |
+| #8562 | Move the bootstrap pull into a retrying systemd unit so a missed first-boot pull is recoverable without a host replace, and add a forced-race rehearsal that proves the converge primitive under a deliberately late attach. | retrying unit merged in PR #9159, delivered dark (live at the next `inngest-host-replace` + `op=resume`; #8562 stays open with a follow-through probe) |
+| #9175 | The forced-race rehearsal split out of #8562: a throwaway-root run with a real late attach, real zot and real Doppler (PR #9159 covers the systemd semantics offline, with systemd 255 as PID 1). | open |
+| #8495 | The external watchdog `scheduled-inngest-health` never ran inside this window: GitHub's `schedule:` left a gap from 06:01 to 11:36 UTC on 09-22, so the probe that files `ci/inngest-down` could not see the dark scheduler. The trigger now comes from an in-process dispatch clock on both web hosts, on a 15-minute slot, with the Sentry margin sized to the measured runner queue (ADR-248, PR #8691). | fixed in PR #8691 |

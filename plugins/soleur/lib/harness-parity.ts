@@ -1,7 +1,7 @@
 /**
  * Harness parity — every component reference in plugin prose is the canonical `soleur:<name>`.
  *
- * ADR-226 (#8299). A skill, command or agent named in a SKILL.md / command doc is read by an
+ * ADR-226 (#8299). A skill, command or agent named in a SKILL.md, command or agent doc is read by an
  * agent on FOUR harnesses (Claude, Grok Build, Codex, Devin), and each harness has its own
  * invocation syntax (`/plan`, `/soleur:plan`, `$soleur:plan`, `soleur:plan`). The doc must name
  * the component in the one shape every adapter resolves — `soleur:<name>` for skills and
@@ -28,7 +28,7 @@
 
 import { execFileSync } from "child_process";
 import { readFileSync } from "fs";
-import { resolve } from "path";
+import { basename, resolve } from "path";
 import {
   PLUGIN_ROOT,
   discoverAgentPaths,
@@ -36,9 +36,9 @@ import {
   agentIdToGrokSubagentType,
 } from "./agent-registry";
 
-export type RegionPolicy = "skill" | "command";
+export type RegionPolicy = "skill" | "command" | "agent";
 
-export type Verdict = "CANONICAL" | "BARE" | "PATH" | "NONCANONICAL" | "UNKNOWN-NS" | "EXEMPT";
+export type Verdict = "CANONICAL" | "BARE" | "PATH" | "NONCANONICAL" | "UNKNOWN-NS" | "EXEMPT" | "SELF-NAME";
 
 /** Which rule produced a NONCANONICAL verdict — the census's shape split. */
 export type Shape =
@@ -88,17 +88,12 @@ const REFERENCES_PATHSPEC = ":(glob)plugins/soleur/skills/*/references/**/*.md";
  * The docs examined. `regionPolicy` is derived from WHICH glob matched, so one constant carries
  * both membership and policy.
  *
- * NG-P widening (#8317) is HALF DONE as of 2026-09-23. The four prerequisites this comment
- * named were: `**` support in `globToRegex`; the two `regionPolicyForPath` fixtures pinning
- * nested paths to `undefined`; the tree test's "no nested SKILL.md" assertion; and a
- * frontmatter carve-out. The first three were only ever needed by the REFERENCES half, and
- * all three are now done — `skills/*\/references/**\/*.md` is in the population below.
- *
- * The AGENT-BODY half stays on #8317 and the fourth prerequisite is why: every agent body
- * opens with its own leaf as a `name:` value (69 lines across the 67 registry agents), which
- * R6b classifies NONCANONICAL and which `discoverAgentEntries` reads into the committed
- * manifest, so it cannot be rewritten to the registry id. That carve-out is the remaining
- * work; nothing else blocks it.
+ * NG-P widening (#8317) is COMPLETE as of 2026-09-24. The references half (2026-09-23) needed
+ * `**` support in `globToRegex`, the nested-`SKILL.md` exclusion below, and the tree test's
+ * "no nested SKILL.md" assertion. The agent-body half needed the self-name carve-out: every
+ * agent opens with its own leaf as a frontmatter `name:` value, which R6b would classify
+ * NONCANONICAL and which cannot be rewritten (see `findSelfNameLine`). The `agent` policy
+ * scopes that carve-out; it does NOT honour harness-forms regions — only `command` does.
  */
 export const POPULATION_GLOBS: readonly PopulationGlob[] = [
   { pathspec: ":(glob)plugins/soleur/skills/*/SKILL.md", regionPolicy: "skill" },
@@ -112,6 +107,10 @@ export const POPULATION_GLOBS: readonly PopulationGlob[] = [
   // the census entirely until now. A nested `SKILL.md` here is excluded in
   // `regionPolicyForPath`, scoped to THIS glob.
   { pathspec: REFERENCES_PATHSPEC, regionPolicy: "skill" },
+  // The agent-body half of NG-P (#8317). Every registry agent is read by every spawned
+  // subagent on every harness. `agents/` holds only agent definitions (Claude loads every
+  // `.md` under it as a subagent), so this glob IS the registry; the tree test pins that.
+  { pathspec: ":(glob)plugins/soleur/agents/**/*.md", regionPolicy: "agent" },
 ];
 
 /** Docs excluded by path, each with the reason it is not wrapped in a region instead. */
@@ -298,7 +297,7 @@ export interface CensusResult {
   readonly attribution: Readonly<Record<Attribution, number>>;
 }
 
-const VERDICTS: readonly Verdict[] = ["CANONICAL", "BARE", "PATH", "NONCANONICAL", "UNKNOWN-NS", "EXEMPT"];
+const VERDICTS: readonly Verdict[] = ["CANONICAL", "BARE", "PATH", "NONCANONICAL", "UNKNOWN-NS", "EXEMPT", "SELF-NAME"];
 const ATTRIBUTIONS: readonly Attribution[] = [
   "grok",
   "claude-devin",
@@ -516,6 +515,33 @@ const ATTRIBUTION_LABEL: Readonly<Record<Attribution, string>> = {
 
 const BRACE_TAIL = " — or, if this is not a component reference, brace/rename the identifier";
 
+/**
+ * The agent self-name carve-out (#8317 agent half; ADR-226 amendment 2026-09-24). An agent's own
+ * frontmatter `name:` is its bare leaf by necessity: `discoverAgentEntries` reads it into the
+ * committed manifest and Claude's loader keys on it, so it cannot become the registry id.
+ *
+ * The candidate is the FIRST line of the doc matching `^name:` — first, not first-exact, so a later
+ * exact line cannot certify a doc whose real `name:` is quoted (the registry's YAML reader rejects
+ * duplicate keys outright). It is accepted only when it sits inside a closed leading frontmatter
+ * (line 1 is exactly `---`; it ends at the first later line starting with `---`) and reads
+ * byte-exactly `name: <stem>`,
+ * where the stem comes from the PATH, so a doc cannot certify itself. Accepted: the one own-stem
+ * token on it is SELF-NAME. Rejected: every non-canonical site on it carries a message that says
+ * how to fix the line, because any `write <id>` hint there would rewrite the manifest's key. Every
+ * other token, in frontmatter or body, keeps its ordinary verdict.
+ */
+function findSelfNameLine(lines: readonly string[], path: string): { line: number; accepted: boolean; stem: string } | undefined {
+  const candidate = lines.findIndex((l) => l.startsWith("name:"));
+  if (candidate === -1) return undefined;
+  const stem = basename(path, ".md");
+  // The frontmatter ends where the registry's own loader ends it: at the first later line that
+  // STARTS with `---` (agent-registry.ts parseFrontmatter). A stricter close would certify a
+  // name: line every loader reads as body text.
+  const close = lines[0] === "---" ? lines.findIndex((l, i) => i > 0 && l.startsWith("---")) : -1;
+  const inFrontmatter = close !== -1 && candidate > 0 && candidate < close;
+  return { line: candidate + 1, accepted: inFrontmatter && lines[candidate] === `name: ${stem}`, stem };
+}
+
 /** Classify one doc. Pure: `text` in, sites and marker errors out. */
 export function classifyDoc(text: string, index: Index, regionPolicy: RegionPolicy, path = "<doc>"): DocResult {
   const sites: Site[] = [];
@@ -523,6 +549,7 @@ export function classifyDoc(text: string, index: Index, regionPolicy: RegionPoli
   const counts = zeroCounts(VERDICTS);
   const lines = text.split("\n");
   let regionOpenAt: number | undefined;
+  const selfName = regionPolicy === "agent" ? findSelfNameLine(lines, path) : undefined;
 
   lines.forEach((line, i) => {
     const lineNo = i + 1;
@@ -555,6 +582,8 @@ export function classifyDoc(text: string, index: Index, regionPolicy: RegionPoli
       const token = raw.replace(TRAILING_GLUE, "");
       let verdict = c.verdict;
       if (exempt && verdict === "NONCANONICAL") verdict = "EXEMPT";
+      const onSelfNameLine = selfName !== undefined && selfName.line === lineNo;
+      if (onSelfNameLine && selfName.accepted && verdict === "NONCANONICAL" && token === selfName.stem) verdict = "SELF-NAME";
       counts[verdict] += 1;
       if (verdict !== "NONCANONICAL") {
         sites.push({ path, line: lineNo, col: s + 1, raw, token, before, verdict, message: "" });
@@ -567,7 +596,11 @@ export function classifyDoc(text: string, index: Index, regionPolicy: RegionPoli
       const atb = before === "\n" || BOUNDARY.has(before);
       const site = atb ? raw : `${before}${raw}`;
       const tail = attribution === "unrecognised" || attribution === "bare-leaf" ? BRACE_TAIL : "";
-      const message = `${path}:${lineNo}: ${site} — ${ATTRIBUTION_LABEL[attribution]}; write ${c.fix}${tail}`;
+      const rejectedSelfName = onSelfNameLine && !selfName.accepted;
+      const message = rejectedSelfName
+        ? `${path}:${lineNo}: ${site} — agent self-name must be exactly "name: ${selfName.stem}" ` +
+          `(unquoted, equal to the filename, inside the frontmatter: line 1 exactly ---, ending at the next line that starts with ---); do not write a registry id here`
+        : `${path}:${lineNo}: ${site} — ${ATTRIBUTION_LABEL[attribution]}; write ${c.fix}${tail}`;
       sites.push({ path, line: lineNo, col: s + 1, raw, token, before, verdict, shape, attribution, fix: c.fix, message });
     }
   });
@@ -665,7 +698,8 @@ export function formatReport(result: CensusResult): string {
   const lines: string[] = [];
   lines.push(
     `harness-parity: ${result.docsExamined} docs examined, ${result.noncanonical.length} non-canonical sites in ${result.docsWithNoncanonical} docs, ` +
-      `${result.totals.CANONICAL} canonical, ${result.unknownNs.length} unknown-ns, ${result.totals.EXEMPT} exempt, ${result.errors.length} marker errors`,
+      `${result.totals.CANONICAL} canonical, ${result.unknownNs.length} unknown-ns, ${result.totals.EXEMPT} exempt, ` +
+      `${result.totals["SELF-NAME"]} self-name, ${result.errors.length} marker errors`,
   );
   lines.push(
     "attribution: " + ATTRIBUTIONS.map((a) => `${a} ${result.attribution[a]}`).join(" / "),

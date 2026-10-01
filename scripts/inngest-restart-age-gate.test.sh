@@ -72,5 +72,41 @@ assert_eq "resolve: functions_query_degraded + age exactly 45 min → ESCALATE t
 assert_eq "resolve: functions_query_degraded + age 3h (>> 45) → ESCALATE to inngest_down" "inngest_down" \
   "$(resolve_effective_failure_mode "functions_query_degraded" "2026-07-12T23:00:00Z" "$WINDOW" "$NOW_EPOCH")"
 
+# --- #8495 restart dedup: a second run in the same outage must not double-restart ---
+# The web-server dispatch clock fires every 15 min and a slot can hold a second, queued run
+# (a host collision or a late fallback `schedule:` tick). Pure function over the
+# `gh run list --workflow restart-inngest-server.yml --json event,status,createdAt` JSON.
+RWIN=12
+ago() { date -u -d "@$(( NOW_EPOCH - $1 * 60 ))" +%Y-%m-%dT%H:%M:%SZ; }
+assert_eq "dedup: no restart runs → dispatch (false)" "false" \
+  "$(restart_recently_dispatched '[]' "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: a queued dispatched restart → skip (true)" "true" \
+  "$(restart_recently_dispatched "[{\"event\":\"workflow_dispatch\",\"status\":\"queued\",\"createdAt\":\"$(ago 40)\"}]" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: an in-progress dispatched restart → skip (true)" "true" \
+  "$(restart_recently_dispatched "[{\"event\":\"workflow_dispatch\",\"status\":\"in_progress\",\"createdAt\":\"$(ago 3)\"}]" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: a restart completed 5 min ago (inside the window) → skip (true)" "true" \
+  "$(restart_recently_dispatched "[{\"event\":\"workflow_dispatch\",\"status\":\"completed\",\"createdAt\":\"$(ago 5)\"}]" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: a restart completed 20 min ago (outside the window) → dispatch (false)" "false" \
+  "$(restart_recently_dispatched "[{\"event\":\"workflow_dispatch\",\"status\":\"completed\",\"createdAt\":\"$(ago 20)\"}]" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: window boundary — exactly 12 min old → dispatch (false)" "false" \
+  "$(restart_recently_dispatched "[{\"event\":\"workflow_dispatch\",\"status\":\"completed\",\"createdAt\":\"$(ago 12)\"}]" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: a push-event run (the no-op registration run) is ignored → dispatch (false)" "false" \
+  "$(restart_recently_dispatched "[{\"event\":\"push\",\"status\":\"in_progress\",\"createdAt\":\"$(ago 1)\"}]" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: an eligible run behind an ignored one still skips (true)" "true" \
+  "$(restart_recently_dispatched "[{\"event\":\"push\",\"status\":\"completed\",\"createdAt\":\"$(ago 1)\"},{\"event\":\"workflow_dispatch\",\"status\":\"completed\",\"createdAt\":\"$(ago 4)\"}]" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: empty read (gh failed) → FAIL-OPEN dispatch (false)" "false" \
+  "$(restart_recently_dispatched "" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: malformed JSON → FAIL-OPEN dispatch (false)" "false" \
+  "$(restart_recently_dispatched "not json" "$NOW_EPOCH" "$RWIN")"
+assert_eq "dedup: unparseable createdAt on a completed run → FAIL-OPEN dispatch (false)" "false" \
+  "$(restart_recently_dispatched '[{"event":"workflow_dispatch","status":"completed","createdAt":"garbage"}]' "$NOW_EPOCH" "$RWIN")"
+
+# Anti-vacuity floor: the dedup block above adds 11 assertions to the 13 before it.
+MIN_ASSERTIONS=24
+if [[ $((PASS + FAIL)) -lt $MIN_ASSERTIONS ]]; then
+  printf 'FATAL: only %d assertions ran (floor %d)\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS"
+  exit 1
+fi
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

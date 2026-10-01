@@ -134,7 +134,10 @@ reports/mutation/
 .stryker-tmp/
 mutants/
 /.AGENTS.md.source
-/.claude/.session-manifests/
+# Manifests a pre-#8611 loader planted under a subdirectory's .claude/ outlive a rebase and
+# block resolve-regenerable-conflicts.sh. `**/`: an inner slash otherwise root-anchors the
+# pattern. Sibling `.claude/.*` sinks stay anchored — their writers root on the worktree.
+**/.claude/.session-manifests/
 
 # Compound Promotion Loop (#2720). promotion-config.yml is TRACKED so the
 # cron's actions/checkout can read it; default-OFF safety comes from the

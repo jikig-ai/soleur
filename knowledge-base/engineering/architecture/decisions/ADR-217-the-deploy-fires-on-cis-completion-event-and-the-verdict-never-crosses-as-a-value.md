@@ -126,6 +126,7 @@ sources at different trust levels:
 |---|---|---|
 | **the verdict** (`release.result`) | the jobs API, always | the only thing between a mirror-gate-blocked release and a prod deploy of an unmirrored image |
 | **the values** (`version`, `tag`, `docker_pushed`, `mirror_verified`) | an artifact `reusable-release.yml` uploads | read from the same step outputs the job's `outputs:` block reads, so identical to what `needs` delivers |
+| **run discovery** (which push-arm run to read) — *added 2026-09-24* | the filtered runs search, then the unfiltered run list (up to 4 lookups) | a **locator only**: the identity binding below still asserts `head_sha` and `run_id` against the trusted event, so neither read can supply identity (see the §3 addendum) |
 
 **The prohibition that carries the whole design:** `resolve-target` must never
 substitute the artifact's `mirror_verified` for the API conclusion read.
@@ -154,7 +155,8 @@ it fires on every `main` CI completion, including docs-only pushes.
 
 | observed | meaning | action |
 |---|---|---|
-| no push-arm run for this SHA | `on.push.paths` declined | **clean skip, green** |
+| no push-arm run found after 4 lookups (filtered + unfiltered) **and** the SHA's diff touches no deployable path — *amended 2026-09-24* | `on.push.paths` declined | **clean skip, green** |
+| no push-arm run found, but the diff touches deployable paths or cannot be computed — *added 2026-09-24* | a release was due; the runs search is lagging | **fail closed, loud** (`release_run_missing`) |
 | run exists, published nothing | `check_changed` declined | **clean skip, green** |
 | run exists, still running | the measured lead did not hold | bounded liveness poll |
 | run exists, `release` failed | a real failure | **fail closed, loud** |
@@ -190,6 +192,52 @@ The loop is therefore dead code on both paths today, and is kept deliberately:
 stops the arms sharing a group — one made to parallelise them, say — makes the
 loop live again with no other warning. There is deliberately **no**
 `RELEASE_WAIT_S` constant: a derived constant is one more thing that can drift.
+
+> **Addendum (2026-09-24).** An empty runs lookup no longer means "`on.push.paths`
+> declined" on its own. `event` and `head_sha` are documented **search** parameters of
+> the list-runs endpoint, and on 2026-09-24 the filtered search answered `[]` for SHA
+> `ee9f2c9` at least 13 minutes after its push-arm release (run `36047804812`) had
+> published. Deploy-arm run `36050118687` attempt 1 clean-skipped green and production
+> kept the previous build until a manual re-run. Over the 200 preceding runs, 1 of 10
+> first-attempt `no_release_run` verdicts was false; the other 9 SHAs changed 0
+> deployable files each.
+>
+> - **Discovery** is up to 4 lookups, 20 s apart, each reading the filtered search and
+>   then the unfiltered run list (no search params), selected client-side on
+>   `event == "push"`, `head_branch == "main"` and `head_sha`. It is a locator only
+>   (§2): the identity binding is unchanged.
+> - **Only when both reads stay empty** does `resolve-target` diff the SHA against its
+>   first parent under `path_filter` (a lazy, SHA-addressed deepen; the checkout stays
+>   depth 1 because `deploy-arm.sh` keys on its log line). No deployable path is the
+>   old clean skip. A deployable or uncomputable diff is a new state,
+>   `release_run_missing`: **fail closed, loud** (Slack and the non-delivery email).
+> - **The diff never produces `should_deploy=true`.** It only chooses red or green for
+>   a SHA that has no run; with no run there is no artifact, version or image to deploy.
+> - **Four copies of one definition now decide a verdict.** `on.push.paths` ↔
+>   `path_filter` ↔ the step's `RELEASE_PATH_FILTER`, plus B8's `PATHSPEC` in
+>   `scripts/prod-version-drift-check.sh`. Invariant rows P1 (step copy = `path_filter`)
+>   and P3 (`on.push.paths` translated = `path_filter`) pin them; P2 pins the checkout
+>   at depth 1.
+> - **Rejected:** retry only (the measured lag outlasts any reasonable in-job wait);
+>   `should_deploy=true` on an empty lookup (nothing is deployable without the
+>   artifact); a check-suites lookup (`check_suite_id` is also a search parameter, with
+>   no better documented consistency); diff first (it would skip rebase-merged PRs
+>   whose head commit is docs-only on every run, not only under lag).
+> - **Residual, fails open:** a multi-commit push whose head commit is docs-only but
+>   whose earlier commit is deployable, *and* search lag over ~60 s, *and* the push run
+>   off page 1 of the unfiltered list. Its backstop is `scheduled-prod-version-drift.yml`
+>   (hourly, 225-minute threshold).
+> - **Residual, fails closed:** `release_run_missing` also fires when GitHub's path filter
+>   genuinely declined a push whose head diff is deployable (its documented 3,000-file diff
+>   limit; a multi-commit push whose net diff is empty). Re-running cannot recover that, so
+>   the Slack text and ship's admin-merge reference name the check (`gh run list … --event push
+>   -c <sha>`) and the dispatch fallback.
+> - **The reason code rides in the annotation** (`[skip_reason=<reason>]`), because job
+>   outputs are not readable through the REST API and check-run annotations are; postmerge
+>   reads it to decide whether a re-run is the recovery.
+> - **Scope of this note:** §3's heading ("Five states") and its "sixth state" paragraph
+>   predate this addendum and are left as written; the table above now has six rows, plus the
+>   `ci_not_green` state.
 
 ### 4. The creep detector is relocated, not deleted
 
@@ -350,6 +398,11 @@ form.
    `skip_reason` strings, and its own trust ladder. More surface than a poll, and
    the guard's matrix has to grow with it or it passes vacuously over new arms.
 
+   > **Correction (2026-09-24).** The counts above were already stale before this
+   > date. After the §3 addendum, `resolve-target` produces **15** `skip_reason`
+   > strings (G9's extractor output, not a hand count), 5 of them clean skips, and
+   > §3's table has six rows plus the `ci_not_green` state.
+
 5. **Both clean-skip states depend on `if: always()` on the artifact upload.**
    Removing it as "dead code" converts the `check_changed` no-op from a green
    skip into a loud fail-closed on every docs-adjacent push.
@@ -438,6 +491,9 @@ none of those three defects.
 - ADR-212 (`Named residual` corrected; Decision 4 relocated)
 - `.github/workflows/ci.yml` — the concurrency block and the dispatch note
 - `.github/workflows/web-platform-release.yml` — `resolve-target`
-- `plugins/soleur/test/workflow-run-deploy-invariants.test.sh` — Guards 3/4/5/7/8
+- `plugins/soleur/test/workflow-run-deploy-invariants.test.sh` — Guards 3/4/5/7/8, plus
+  P1/P2/P3 (pathspec coupling, checkout depth; 2026-09-24)
+- `plugins/soleur/test/resolve-target-decision.test.sh` — the decision logic, executed
+  (including the empty-lookup rows L1–L9, 2026-09-24)
 - `plugins/soleur/test/ci-concurrency-key.test.sh` — Guard 1
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — Guard 6

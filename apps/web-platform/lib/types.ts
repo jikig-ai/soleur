@@ -464,6 +464,23 @@ export type WSMessage =
     }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
+  // #8739 — Concierge `edit_c4_diagram` save notice (server→client). Emitted
+  // once per successful write so the open C4 workspace refetches and updates
+  // its stale banner with no user action. Shares ADR-025's transport
+  // invariants (server-emit-only, once-per-fire, zod-parsed boundary) but is
+  // NOT a conversation notice — it renders nowhere in the thread and carries
+  // no `reason` discriminator; its consumer is a mounted component. No `seq`,
+  // deliberately outside the ADR-059 buffered/replay family: a replayed frame
+  // would only cause a spurious-but-benign extra refetch, and a remounting
+  // workspace refetches on mount anyway.
+  | {
+      type: "c4_diagram_saved";
+      /** dirname of the written KB-relative path (today always C4_DIAGRAMS_DIR). */
+      dirPath: string;
+      /** Mirrors the Code panel's `onSaved(rerendered, diagnostic)`: true = the model re-rendered. */
+      rerendered: boolean;
+      diagnostic?: string | null;
+    }
   // Stage 3 (#2885) — Command Center soleur-go router protocol with
   // discriminated payloads + Zod-parsed boundary. The `interactive_prompt` /
   // `interactive_prompt_response` sub-unions were previously a feature-local

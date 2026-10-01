@@ -171,6 +171,14 @@ def tf_rule:
   | if ($v.name | type) != "string" then error("\($a): name is not a string") else . end
   | if ($v.frequency_minutes | type) != "number" then error("\($a): frequency_minutes is not a number") else . end
   | if ($v.monitor_ids | type) != "array" then error("\($a): monitor_ids is not an array (\($v.monitor_ids | tojson))") else . end
+  # Unknown-detector floor (#8630). A `sentry_cron_monitor` created or recreated
+  # in this plan has no id until the apply, so a rule binding it renders a `null`
+  # element. Projecting it would commit `detectorIds: [..., null]`: the PR-time
+  # gate goes green, and the post-apply probe (live: the real id) reds `main`
+  # after a COMPLETE apply — the #8050 class. The text must NOT contain the
+  # phrase the reference gate's generic arm matches for "set the attribute
+  # explicitly" (the wrong remedy here); the gate has a dedicated arm for it.
+  | if ($v.monitor_ids | any(. == null)) then error("\($a): monitor_ids carries \($v.monitor_ids | map(select(. == null)) | length) detector id(s) that do not exist yet (a monitor created or recreated in this plan) — it cannot be routed in the same apply; list it in local.cron_monitor_alert_unrouted in cron-monitor-alerts.tf with a (#N) reason and route it in a follow-up PR after the first apply") else . end
   | {
       name: $v.name,
       enabled: $v.enabled,

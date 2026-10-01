@@ -25,6 +25,12 @@ export const swrConfig: SWRConfiguration = {
   // Coalesce duplicate requests for the same key fired within this window
   // (e.g. Dashboard + Inbox both keying `/api/inbox/emails` — free dedup).
   dedupingInterval: 2000,
+  // Bound error retries (#9178): the raw-fetch predecessors issued ONE
+  // attempt per mount/focus — SWR's unbounded backoff would keep retrying a
+  // persistently-failing endpoint for the life of the mount, multiplying
+  // both request traffic and the per-attempt silent-fallback Sentry mirrors
+  // during an outage. 3 keeps modest resilience while bounding the blast.
+  errorRetryCount: 3,
 };
 
 /**
@@ -67,6 +73,10 @@ export const swrKeys = {
   // Not an HTTP endpoint — the fetcher runs a Supabase count query. Key is a
   // plain sentinel (no URL shape) so it can't be mistaken for a route.
   dashboardOrphanCount: () => ["dashboard:orphan-conversation-count"] as const,
+  // Onboarding users-row read (PostgREST transport, no URL shape — sentinel
+  // like orphanCount). Shared because dashboard/page.tsx AND tour-provider
+  // both instantiate useOnboarding at every mount (#9180 review).
+  onboardingState: () => ["onboarding:state"] as const,
   // Nav-badge count of conversations needing founder attention/decision, scoped
   // to the active workspace's repo (matches the dashboard list scope). Keyed on
   // (repoUrl, workspaceId) so it re-counts on workspace switch and gates until
@@ -74,7 +84,27 @@ export const swrKeys = {
   dashboardConversationAttention: (repoUrl: string, workspaceId: string) =>
     ["dashboard:conversation-attention-count", repoUrl, workspaceId] as const,
   routinesList: () => ["/api/dashboard/routines"] as const,
+  // Mount-fetch contract (#9178): every mount-time /api/* GET on the dashboard
+  // shell keys here so SWR's per-key in-flight coalescing dedupes across
+  // consumers — a raw fetch() GET on the mount path is a defect (the census
+  // guard test/dashboard-mount-fetch-dedup.test.tsx enforces this).
+  listMemberships: () => ["/api/workspace/list-memberships"] as const,
+  byokEffectiveStatus: () => ["/api/byok/effective-status"] as const,
+  pendingInvites: () => ["/api/workspace/pending-invites"] as const,
+  teamNames: () => ["/api/team-names"] as const,
+  // LeaderLoopStatus cost poll — keyed per messageId; the URL embeds the id so
+  // jsonFetcher works (cf. crmContactDetail convention above).
+  todayCost: (messageId: string) =>
+    [`/api/dashboard/today/${encodeURIComponent(messageId)}/cost`] as const,
+  // Foundation-card completion stat — keyed "dashboard"-scoped, deliberately
+  // NOT kbTree() (richer payload + distinct error mapping, see page.tsx).
+  dashboardFoundationStatus: () =>
+    ["/api/dashboard/foundation-status", "dashboard"] as const,
   releasesList: () => ["/api/dashboard/releases"] as const,
+  // The board's fetcher negotiates `Accept: text/event-stream` (progressive
+  // delta frames, lib/workstream-feed.ts); other consumers — the nav badge's
+  // jsonFetcher — get the unchanged bulk JSON. Both resolve `{issues, board}`
+  // so one shared entry feeds every reader.
   workstreamIssues: () => ["/api/workstream/issues"] as const,
   /** Picker options (labels/assignees/milestones) for the edit-fields drawer —
    *  fetched lazily (key gated to null until an editor opens). */

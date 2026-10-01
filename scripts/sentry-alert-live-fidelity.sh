@@ -314,7 +314,10 @@ while IFS= read -r name; do
     if [[ "$local_ref" != "$local_live" ]]; then
       case "$field" in
         detectorIds)
-          _finding "MONITOR UNBIND: '$name'.detectorIds declared=$local_ref live=$local_live — the rule is bound to a different detector (or none), so it watches nothing while still appearing healthy." ;;
+          # A set difference, not two full arrays: cron-monitor-failure binds ~59 ids (#8630).
+          only_ref=$(jq -nc --argjson a "$local_ref" --argjson b "$local_live" '($a // []) - ($b // [])')
+          only_live=$(jq -nc --argjson a "$local_ref" --argjson b "$local_live" '($b // []) - ($a // [])')
+          _finding "MONITOR UNBIND: '$name'.detectorIds only-declared=$only_ref only-live=$only_live — the rule is bound to a different detector set (or none), so those detectors page nobody while it still appears healthy." ;;
         triggerLogicType)
           _finding "LOGICTYPE FLIP: '$name'.triggers.logicType declared=$local_ref live=$local_live — the rule now requires all/any of its triggers where it required the other. Live state an apply will NOT touch: the provider always writes any-short, so a rule reading 'all' was edited in Sentry." ;;
         triggerConditions|actionFilters)
@@ -640,7 +643,7 @@ frozen_report=$(jq -r -n --arg q "'" --argjson ex "$excluded_json" --argjson liv
         elif any($KNOWN[]; .name == $w.name) then
           "FINDING UNMANAGED-FROZEN: \($q)\($w.name | safe)\($q) (id \($w.id | safe | tojson)) carries the name of a registered Sentry default under a DIFFERENT id, so it is not that default. GET it and compare with the registered id before trusting it."
         else
-          "FINDING UNMANAGED-FROZEN: \($q)\($w.name | safe)\($q) is live with an excluded trigger type (\([ $w.triggers.conditions[]?.type | safe ] | join(","))), is not frozen in Terraform, and is in neither the committed capture nor apps/web-platform/infra/sentry/vendor-default-workflows.json, so neither projection side nor this pin checks it. FIRST `git grep -nw <name> apps/web-platform/infra/sentry/issue-alerts.tf`: if the name IS declared there it is Terraform-managed and must NOT be registered as a vendor default (the apply job projects its reference from the plan, where a refreshed legacy trigger takes the rule out of tf scope, so a managed rule that gained an excluded trigger reaches THIS arm rather than the GAINED one). Only if it is undeclared, and Sentry created it (createdBy null), register {id, name} in vendor-default-workflows.json."
+          "FINDING UNMANAGED-FROZEN: \($q)\($w.name | safe)\($q) is live with an excluded trigger type (\([ $w.triggers.conditions[]?.type | safe ] | join(","))), is not frozen in Terraform, and is in neither the committed capture nor apps/web-platform/infra/sentry/vendor-default-workflows.json, so neither projection side nor this pin checks it. FIRST `git grep -nw <name> -- apps/web-platform/infra/sentry/`: if the name IS declared there it is Terraform-managed and must NOT be registered as a vendor default (the apply job projects its reference from the plan, where a refreshed legacy trigger takes the rule out of tf scope, so a managed rule that gained an excluded trigger reaches THIS arm rather than the GAINED one). Only if it is undeclared, and Sentry created it (createdBy null), register {id, name} in vendor-default-workflows.json."
         end )
 ' 2>"$jq_err")
 rc=$?

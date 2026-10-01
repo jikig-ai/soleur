@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import {
   UNTITLED_FALLBACK,
   WORKSPACE_NAME_MAX,
@@ -23,17 +25,18 @@ export function RenameWorkspaceAction({
   const [name, setName] = useState(organizationName ?? "");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const save = useCallback(async () => {
+  // The validation early-return stays inside asyncFn: an invalid draft
+  // resolves immediately — never starts a fetch, releases normally.
+  // asyncFn never throws: failures land on the local `error` surface.
+  const { run: save, pending: submitting } = usePendingAction(async () => {
     const validated = validateWorkspaceName(draft);
     if (!validated.ok) {
       setError(`Workspace name must be 1–${WORKSPACE_NAME_MAX} characters.`);
       return;
     }
     const trimmed = validated.trimmed;
-    setSubmitting(true);
     setError(null);
     try {
       const res = await fetch("/api/workspace/rename", {
@@ -43,17 +46,14 @@ export function RenameWorkspaceAction({
       });
       if (!res.ok) {
         setError("Couldn't rename workspace. Please try again.");
-        setSubmitting(false);
         return;
       }
       setName(trimmed);
       setEditing(false);
-      setSubmitting(false);
     } catch {
       setError("Couldn't rename workspace. Please try again.");
-      setSubmitting(false);
     }
-  }, [draft, organizationId]);
+  });
 
   return (
     <div className="mb-6 flex flex-col gap-2">
@@ -68,17 +68,22 @@ export function RenameWorkspaceAction({
           {name || UNTITLED_FALLBACK}
         </span>
         {isOwner && !editing && (
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={() => {
               setDraft(name);
               setError(null);
               setEditing(true);
             }}
-            className="text-xs text-soleur-accent-gold-fg underline decoration-dotted underline-offset-2 hover:opacity-90"
+            className="text-xs underline decoration-dotted underline-offset-2"
+            // text-soleur-accent-gold-fg loses Tailwind emit-order against the
+            // ghost variant's text-soleur-text-secondary — preserve the gold
+            // affordance via the token directly.
+            style={{ color: "var(--soleur-accent-gold-fg)" }}
           >
             Rename
-          </button>
+          </Button>
         )}
       </div>
       {editing && (
@@ -91,24 +96,28 @@ export function RenameWorkspaceAction({
               onChange={(e) => setDraft(e.target.value)}
               className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-1.5 text-sm text-soleur-text-primary outline-none focus:border-soleur-border-emphasized"
             />
-            <button
+            <Button
+              variant="gold"
               type="button"
               onClick={save}
               disabled={submitting}
-              className="rounded-md bg-soleur-accent-gold-fg px-3 py-1.5 text-sm font-medium text-soleur-bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90"
+              loading={submitting}
+              loadingLabel="Saving"
+              className="rounded-md"
             >
-              {submitting ? "Saving…" : "Save"}
-            </button>
-            <button
+              Save
+            </Button>
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => {
                 setEditing(false);
                 setError(null);
               }}
-              className="px-2 py-1.5 text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
+              className="hover:text-soleur-text-primary"
             >
               Cancel
-            </button>
+            </Button>
           </div>
           {error && (
             <p className="text-xs text-red-400" role="alert">

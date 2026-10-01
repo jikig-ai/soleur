@@ -65,7 +65,7 @@ bcfab9abb9f678ddac38725bac7010de8218dc5908dabc958c3bc61c3d056278  wg-cla-signed-
 de4d2ffc8bf6f0393474450cf1616d2029a436174712348d85e8f5ddf1d72576  wg-pm-class-followthrough-for-operator-dogfood
 a7d752df4f6a2f494ffec8dfc4efc74afe4d43d9034d0fba0e972517b18f2d7b  wg-ship-push-before-merge
 8b95ccde7d534ca9b2a25e7c65f9780fbd20facaf00a813a40bdc7933d33ea79  wg-ui-feature-requires-pen-wireframe
-ea8a5568d2b51e204dcb090c14e897b3d78a6d7b3664b9a643756df163230203  wg-use-closes-n-in-pr-body-not-title-to
+d5c202d916b42a4529c03a5189b8da39333f37f3399c67f21822b25d51905c71  wg-use-closes-n-in-pr-body-not-title-to
 4f2e2fa5da1ff0be5608ef0c93bb7fbc4582ad31e1f33dd23a596c65c0837352  wg-verified-work-ships-without-asking
 786e718c53f30f20bd81c8de80ef7e06879dd4f6430dc8f7d7db17695feadb24  wg-when-a-test-runner-crashes-segfault-oom
 c2f594134bc9a968584656621ba45bb5dcf5efe6778f5eb4ce088ee4912902db  wg-when-a-workflow-gap-causes-a-mistake-fix

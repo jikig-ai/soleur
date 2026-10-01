@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { Button } from "@/components/ui/button";
 
 // Responsive dialog shell (mobile Phase 3). Below `md` the dialog anchors to the
 // bottom edge as a sheet (rounded top, drag-handle affordance, safe-area bottom
@@ -192,11 +193,12 @@ export function ResponsiveModal({
               className="h-1.5 w-10 rounded-full bg-soleur-bg-surface-2"
             />
             {onClose && (
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={onClose}
                 aria-label="Close"
-                className="absolute right-1 top-0 inline-flex h-11 w-11 items-center justify-center rounded-full text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
+                className="absolute right-1 top-0 h-11 w-11 hover:text-soleur-text-primary"
               >
                 <svg
                   width="20"
@@ -212,7 +214,7 @@ export function ResponsiveModal({
                   <line x1="18" y1="6" x2="6" y2="18" />
                   <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
-              </button>
+              </Button>
             )}
           </div>
         )}

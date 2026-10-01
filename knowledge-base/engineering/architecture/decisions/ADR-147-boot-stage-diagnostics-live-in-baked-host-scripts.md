@@ -61,7 +61,8 @@ Concretely, this ADR freezes four cross-consumer contract constraints:
 
 2. **Alert-filtered stage names are frozen.** `sentry_issue_alert.web_terminal_boot_fatal` is
    `filter_match = "any"` over four bare `tagged_event { key = "stage" }` filters with no `level`
-   filter. Renaming one darks the alert silently.
+   filter. Renaming one darks the alert silently. **Updated 2026-09-24:** five since #7071 added
+   `pull`, and since #8036 1d the rule fires on the first event (`value = 0`).
 
 3. **A non-fatal breadcrumb may never reuse — or string-prefix — an alert-filtered stage name.**
    `"stage=doppler_download_attempt"` contains `"stage=doppler_download"`, which would make the

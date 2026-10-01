@@ -73,8 +73,8 @@ for h in soleur-boot-emit soleur-doppler-download; do
   # not exist yet and aborts EVERY fresh boot at STAGE=assert — before the emitter exists, so
   # the failure is itself unreportable. An earlier revision of this PR shipped exactly that, and
   # AC-F3 above passed the whole time because co-presence is not ordering.
-  a_line="$(grep -nF "test -x /usr/local/bin/$h" "$BOOT" | head -1 | cut -d: -f1)"
-  c_line="$(grep -nF "cat > /usr/local/bin/$h <<" "$BOOT" | head -1 | cut -d: -f1)"
+  a_line="$(grep -nF "test -x /usr/local/bin/$h" "$BOOT" | sed -n '1p' | cut -d: -f1)"
+  c_line="$(grep -nF "cat > /usr/local/bin/$h <<" "$BOOT" | sed -n '1p' | cut -d: -f1)"
   if [ -z "$a_line" ] || [ -z "$c_line" ]; then
     no "AC-F3b: could not locate both the assertion and the authoring line for $h (anchors drifted)"
   elif [ "$a_line" -gt "$c_line" ]; then
@@ -106,7 +106,7 @@ if [ -n "$helper_code" ]; then
 else
   no "AC-H0: helper body is EMPTY — every AC-H/AC-D/AC-E negative check below is VACUOUS"
 fi
-if printf '%s\n' "$helper_code" | grep -qE '2>&1|&>'; then
+if printf '%s\n' "$helper_code" | grep -cE '2>&1|&>' >/dev/null; then
   no "AC-H1: soleur-doppler-download must never merge stderr into stdout (2>&1 / &>)"
 else
   ok "AC-H1: no stream merge (2>&1 / &>) in the soleur-doppler-download body"
@@ -125,13 +125,13 @@ fi
 # Join backslash-continuations first: the doppler call wraps, so `> "$OUT"` sits on the second
 # physical line and a per-line match would compare against a fragment.
 helper_joined="$(printf '%s\n' "$helper_code" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta')"
-if printf '%s\n' "$helper_joined" | grep -E '>>?[[:space:]]*"\$OUT"' | grep -q 'doppler secrets download'; then
+if printf '%s\n' "$helper_joined" | grep -E '>>?[[:space:]]*"\$OUT"' | grep -c 'doppler secrets download' >/dev/null; then
   ok "AC-H2b: the sole \$OUT writer is the doppler invocation"
 else
   no "AC-H2b: the line writing \$OUT is not the doppler invocation"
 fi
 # ...and nothing may write to the helper's own stdout (unredirected printf/echo).
-if printf '%s\n' "$helper_code" | grep -qE '^[[:space:]]*(echo|printf)([[:space:]][^|>]*)?$'; then
+if printf '%s\n' "$helper_code" | grep -cE '^[[:space:]]*(echo|printf)([[:space:]][^|>]*)?$' >/dev/null; then
   no "AC-H2c: soleur-doppler-download writes to stdout (every printf/echo must be redirected)"
 else
   ok "AC-H2c: soleur-doppler-download never writes to its own stdout"
@@ -144,7 +144,7 @@ if [ -n "$ci_dl_region" ]; then
 else
   no "AC-H3a: could not locate the cloud-init doppler_download region"
 fi
-if printf '%s\n' "$ci_dl_region" | grep -qE '2>&1|&>'; then
+if printf '%s\n' "$ci_dl_region" | grep -cE '2>&1|&>' >/dev/null; then
   no "AC-H3b: the cloud-init doppler_download region must not merge streams"
 else
   ok "AC-H3b: no stream merge in the cloud-init doppler_download region"
@@ -154,19 +154,19 @@ fi
 # re-raises. The AND-OR list is set -e EXEMPT, so the capture ALONE deletes the fail-closed
 # `exit` that lived inside the `if !` branch it replaces — worst case a host reporting
 # cloud_init_complete with NO prd secrets, strictly worse than #6969 itself.
-if printf '%s\n' "$ci_dl_region" | grep -qF 'soleur-doppler-download "$TMPENV" && rc=0 || rc=$?'; then
+if printf '%s\n' "$ci_dl_region" | grep -cF 'soleur-doppler-download "$TMPENV" && rc=0 || rc=$?' >/dev/null; then
   ok "AC-E1: call site captures rc via the set -e-exempt AND-OR form (R9)"
 else
   no "AC-E1: expected 'soleur-doppler-download \"\$TMPENV\" && rc=0 || rc=\$?' at the call site"
 fi
-if printf '%s\n' "$ci_dl_region" | grep -qE '\[ "\$rc" = 0 \] \|\| exit "\$rc"'; then
+if printf '%s\n' "$ci_dl_region" | grep -cE '\[ "\$rc" = 0 \] \|\| exit "\$rc"' >/dev/null; then
   ok "AC-E2: call site RE-RAISES the failure — boot stays fail-closed (R26)"
 else
   no "AC-E2: missing the mandatory '[ \"\$rc\" = 0 ] || exit \"\$rc\"' re-raise (R26)"
 fi
 # The `if !` form must be gone: it yields $? = 0 in both dash and bash, so any exit_code it
 # recorded would read 0 on EVERY failure.
-if printf '%s\n' "$ci_dl_region" | grep -qE '^[[:space:]]*if ! '; then
+if printf '%s\n' "$ci_dl_region" | grep -cE '^[[:space:]]*if ! ' >/dev/null; then
   no "AC-E3: the 'if ! <cmd>' form must not gate the doppler download (\$? is 0 inside it)"
 else
   ok "AC-E3: no 'if !' gate remains in the doppler_download region (R9)"
@@ -178,12 +178,12 @@ fi
 # Anchored on CODE lines, not the raw body: this very carve-out guarantees the helper carries a
 # comment naming the forbidden identifier, so a raw-token absence grep would red-fail forever on
 # correct code. Non-vacuity for this check rides on AC-H0 above.
-if printf '%s\n' "$helper_code" | grep -qF 'doppler_download_attempt'; then
+if printf '%s\n' "$helper_code" | grep -cF 'doppler_download_attempt' >/dev/null; then
   no "AC-D2: attempt stage must not be 'doppler_download_attempt' (string-prefixes the filtered stage, R20)"
 else
   ok "AC-D2: attempt stage does not string-prefix an alert-filtered stage"
 fi
-if printf '%s\n' "$helper_code" | grep -qF 'doppler_retry'; then
+if printf '%s\n' "$helper_code" | grep -cF 'doppler_retry' >/dev/null; then
   ok "AC-D2b: attempts use the distinct, non-prefixing stage 'doppler_retry'"
 else
   no "AC-D2b: expected the attempt stage 'doppler_retry' in the helper"
@@ -196,10 +196,10 @@ if [ -f "$ALERTS" ]; then
   vals="$(grep -oE 'value[[:space:]]*=[[:space:]]*"[a-z_]+"' "$ALERTS" | grep -oE '"[a-z_]+"' | tr -d '"' | sort -u | tr '\n' ' ')"
   if [ -z "$(printf '%s' "$vals" | tr -d '[:space:]')" ]; then
     no "AC-D3: extracted ZERO filter values from issue-alerts.tf — the negative below is vacuous"
-  elif ! printf '%s' "$vals" | grep -qF 'doppler_download'; then
+  elif ! printf '%s' "$vals" | grep -cF 'doppler_download' >/dev/null; then
     no "AC-D3: extraction did not find the known filter value doppler_download — anchor drifted"
   fi
-  if printf '%s' "$vals" | grep -qF 'doppler_retry'; then
+  if printf '%s' "$vals" | grep -cF 'doppler_retry' >/dev/null; then
     no "AC-D3: doppler_retry must NOT appear in the alert's filter values (would page on a healthy boot)"
   else
     ok "AC-D3: doppler_retry is absent from the alert's filter values (no false page, RK9)"
@@ -223,12 +223,12 @@ fi
 # Bounded call: the failing download was the ONLY unbounded Doppler invocation in the file
 # (11 bounded siblings). An unbounded hang emits NOTHING, so the channel would be structurally
 # blind to the leading hypothesis' most common shape.
-if printf '%s\n' "$helper_code" | grep -qE 'timeout -k [0-9]+ "\$TMO" doppler'; then
+if printf '%s\n' "$helper_code" | grep -cE 'timeout -k [0-9]+ "\$TMO" doppler' >/dev/null; then
   ok "AC-E4: the doppler invocation is timeout-bounded WITH -k (a TERM-ignoring hang is still bounded)"
 else
   no "AC-E4: the helper's doppler invocation must be wrapped in 'timeout' (R19)"
 fi
-if printf '%s\n' "$helper_code" | grep -qF 'NO_COLOR=1'; then
+if printf '%s\n' "$helper_code" | grep -cF 'NO_COLOR=1' >/dev/null; then
   ok "AC-A5: helper invokes the CLI with NO_COLOR=1 (deterministic payload)"
 else
   no "AC-A5: helper must set NO_COLOR=1 for a deterministic stderr payload"
@@ -236,7 +236,7 @@ fi
 
 # The message literal is FROZEN: changing it mints a NEW Sentry issue group, where value = 1
 # means ">1" and a single fatal would then not page AT ALL (R12) — and darks the birth gate.
-if printf '%s\n' "$EMIT" | grep -qF '"message":"soleur-cloud-init boot stage"'; then
+if printf '%s\n' "$EMIT" | grep -cF '"message":"soleur-cloud-init boot stage"' >/dev/null; then
   ok "AC-J1: the emitter's message literal is unchanged (paging correctness + gate lockstep)"
 else
   no "AC-J1: the emitter's message literal MUST stay '\"message\":\"soleur-cloud-init boot stage\"'"
@@ -335,7 +335,7 @@ exit 7'
   else
     no "AC-B6b: expected 2 retry breadcrumbs on the exhaust path, got $exh_warns"
   fi
-  fatal_line="$(grep -n '"level":"fatal"' "$sb/events.jsonl" | head -1 | cut -d: -f1)"
+  fatal_line="$(grep -n '"level":"fatal"' "$sb/events.jsonl" | sed -n '1p' | cut -d: -f1)"
   if [ -n "$fatal_line" ]; then
     fstage="$(ev_field "$sb/events.jsonl" "$fatal_line" '.tags.stage')"
     fdetail="$(ev_field "$sb/events.jsonl" "$fatal_line" '.tags.detail')"
@@ -349,27 +349,27 @@ exit 7'
     else
       no "AC-B2: the fatal shipped an EMPTY detail — this is the #6969 symptom itself"
     fi
-    if printf '%s' "$fdetail" | grep -qF 'Doppler Error'; then
+    if printf '%s' "$fdetail" | grep -cF 'Doppler Error' >/dev/null; then
       ok "AC-B3: the fatal's detail carries the CLI's own error line"
     else
       no "AC-B3: detail must contain the CLI error line, got: '$fdetail'"
     fi
-    if printf '%s' "$fdetail" | grep -qE 'rc=7'; then
+    if printf '%s' "$fdetail" | grep -cE 'rc=7' >/dev/null; then
       ok "AC-B4: the fatal's detail carries the real exit code (rc=7, not 0 — R9)"
     else
       no "AC-B4: detail must carry rc=7, got: '$fdetail'"
     fi
-    if printf '%s' "$fdetail" | grep -qF 'cond=error'; then
+    if printf '%s' "$fdetail" | grep -cF 'cond=error' >/dev/null; then
       ok "AC-B4b: the fatal names the CONDITION class (cond=error), not just the code"
     else
       no "AC-B4b: detail must carry cond=error, got: '$fdetail'"
     fi
-    if printf '%s' "$fdetail" | grep -qE 'attempts=3'; then
+    if printf '%s' "$fdetail" | grep -cE 'attempts=3' >/dev/null; then
       ok "AC-B5: the fatal's detail carries the attempt count"
     else
       no "AC-B5: detail must carry attempts=3, got: '$fdetail'"
     fi
-    if printf '%s' "$fdetail" | grep -qF 'Using DOPPLER'; then
+    if printf '%s' "$fdetail" | grep -cF 'Using DOPPLER' >/dev/null; then
       no "AC-A1: the 'Using DOPPLER_*' preamble must be dropped (it is what defeated head -c)"
     else
       ok "AC-A1: the CLI preamble is dropped before the cap (R1)"
@@ -418,14 +418,14 @@ exit 0'
       soleur-doppler-download "'"$sb"'/envfile" && rc=0 || rc=$?
       [ "$rc" = 0 ] || exit "$rc"
     ' ) >/dev/null 2>&1
-  hang_line="$(grep -n '"level":"fatal"' "$sb/events.jsonl" | head -1 | cut -d: -f1)"
+  hang_line="$(grep -n '"level":"fatal"' "$sb/events.jsonl" | sed -n '1p' | cut -d: -f1)"
   hdetail="$(ev_field "$sb/events.jsonl" "${hang_line:-1}" '.tags.detail')"
-  if printf '%s' "$hdetail" | grep -qE 'rc=124'; then
+  if printf '%s' "$hdetail" | grep -cE 'rc=124' >/dev/null; then
     ok "AC-E7: a hang is recorded as rc=124, a distinct named condition (R19)"
   else
     no "AC-E7: expected rc=124 for a hung CLI, got: '$hdetail'"
   fi
-  if printf '%s' "$hdetail" | grep -qF 'cond=timeout'; then
+  if printf '%s' "$hdetail" | grep -cF 'cond=timeout' >/dev/null; then
     ok "AC-E7b: the hang is CLASSIFIED as cond=timeout (distinguishes it from an auth failure)"
   else
     no "AC-E7b: expected cond=timeout for a hung CLI, got: '$hdetail'"
@@ -474,7 +474,7 @@ exit 0'
   else
     no "AC-C4: expected exactly 1 warning breadcrumb, got $warns"
   fi
-  wline="$(grep -n '"level":"warning"' "$sb/events.jsonl" | head -1 | cut -d: -f1)"
+  wline="$(grep -n '"level":"warning"' "$sb/events.jsonl" | sed -n '1p' | cut -d: -f1)"
   wstage="$(ev_field "$sb/events.jsonl" "${wline:-1}" '.tags.stage')"
   wdetail="$(ev_field "$sb/events.jsonl" "${wline:-1}" '.tags.detail')"
   if [ "$wstage" = "doppler_retry" ]; then
@@ -482,7 +482,7 @@ exit 0'
   else
     no "AC-D1: warning stage was '$wstage', expected 'doppler_retry'"
   fi
-  if [ -n "$wdetail" ] && printf '%s' "$wdetail" | grep -qF 'transient 503'; then
+  if [ -n "$wdetail" ] && printf '%s' "$wdetail" | grep -cF 'transient 503' >/dev/null; then
     ok "AC-C5: the retry warning carries the attempt's own cause"
   else
     no "AC-C5: retry warning detail must carry the attempt's cause, got: '$wdetail'"
@@ -594,7 +594,7 @@ exit 0'
                'PAYLOAD.sig:Bearer token' \
                'AbCdEfGhIjKlMnOpQrStUvWxYz:GitHub token'; do
     pat="${shape%%:*}"; label="${shape#*:}"
-    if printf '%s' "$red" | grep -qF "$pat"; then
+    if printf '%s' "$red" | grep -cF "$pat" >/dev/null; then
       no "AC-A14: the EMITTER leaked a $label into the detail tag"
     else
       ok "AC-A14: the emitter redacts $label"
@@ -616,12 +616,12 @@ exit 0'
   ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit keepstage fatal' ) >/dev/null 2>&1
   keep="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
-  if printf '%s' "$keep" | grep -qF 'KEEPTHISCAUSE'; then
+  if printf '%s' "$keep" | grep -cF 'KEEPTHISCAUSE' >/dev/null; then
     ok "AC-A15a: redaction preserves the non-secret remainder of a token-bearing line"
   else
     no "AC-A15a: the redactor destroyed the diagnostic line — empty cause is the #6969 symptom"
   fi
-  if printf '%s' "$keep" | grep -qF 'aB3xK9mQ7zP1wR5tY8uI2oL4nH6gF0dS'; then
+  if printf '%s' "$keep" | grep -cF 'aB3xK9mQ7zP1wR5tY8uI2oL4nH6gF0dS' >/dev/null; then
     no "AC-A15a2: FIXTURE/SUT ERROR — the token survived on the very line being kept"
   else
     ok "AC-A15a2: ...while still redacting the token on that same line"
@@ -632,7 +632,7 @@ exit 0'
   ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit imgstage fatal' ) >/dev/null 2>&1
   img="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
-  if printf '%s' "$img" | grep -qF 'soleur-web-platform:latest@sha256:'; then
+  if printf '%s' "$img" | grep -cF 'soleur-web-platform:latest@sha256:' >/dev/null; then
     ok "AC-A15b: redaction preserves docker image refs (userinfo rule is scheme-anchored)"
   else
     no "AC-A15b: the userinfo rule ate a docker image ref — the primary docker_run diagnostic"
@@ -662,7 +662,7 @@ exit 0'
     ok "AC-C6a: a zero-exit EMPTY payload is fail-closed (never reaches docker_run)"
   fi
   emptyd="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
-  if printf '%s' "$emptyd" | grep -qF 'cond=empty_payload'; then
+  if printf '%s' "$emptyd" | grep -cF 'cond=empty_payload' >/dev/null; then
     ok "AC-C6b: the empty-payload failure is CLASSIFIED distinctly (cond=empty_payload)"
   else
     no "AC-C6b: expected cond=empty_payload, got: '$emptyd'"
@@ -686,7 +686,7 @@ exit 0'
   ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit doppler_download fatal' ) >/dev/null 2>&1
   iso2="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
-  if printf '%s' "$iso2" | grep -qF 'isolated'; then
+  if printf '%s' "$iso2" | grep -cF 'isolated' >/dev/null; then
     ok "AC-I2: the matching stage DOES read its own per-stage detail file"
   else
     no "AC-I2: doppler_download emit did not read .d/doppler_download, got: '$iso2'"
@@ -738,7 +738,7 @@ exit 0'
   # Precondition self-check: if the adversarial fixture ever grows past the cap again, every
   # assertion below silently degrades to testing the tail filler instead of the content. Fail
   # as a clear FIXTURE error rather than a phantom pass.
-  if printf '%s' "$adv" | grep -qF 'Doppler Error'; then
+  if printf '%s' "$adv" | grep -cF 'Doppler Error' >/dev/null; then
     ok "AC-A4a: the adversarial content survived the cap (assertions below are non-vacuous)"
   else
     no "AC-A4a: FIXTURE ERROR — adversarial content was capped away; assertions below are vacuous"
@@ -760,7 +760,7 @@ exit 0'
   # as impermissible in Sentry tag values; the trailing printable-ASCII pass would strip them
   # either way, so without this assertion the fold step is untested and words would silently run
   # together in the one field an operator reads to diagnose a dark boot.
-  if printf '%s' "$adv" | grep -qF 'line two line three'; then
+  if printf '%s' "$adv" | grep -cF 'line two line three' >/dev/null; then
     ok "AC-A4c: newlines fold to spaces (multi-line stderr stays readable)"
   else
     no "AC-A4c: expected 'line two line three' (folded), got: '$adv'"
@@ -769,12 +769,12 @@ exit 0'
   # helper->emitter composition, where the helper has already dropped the preamble — so they
   # stay green if the emitter's strip is deleted. This fixture is written straight to the
   # detail dir, so only the emitter can remove it.
-  if printf '%s' "$adv" | grep -qF 'Using DOPPLER'; then
+  if printf '%s' "$adv" | grep -cF 'Using DOPPLER' >/dev/null; then
     no "AC-A12: the EMITTER must drop the '^Using ' preamble itself (defence in depth, R1)"
   else
     ok "AC-A12: the emitter independently drops the CLI preamble"
   fi
-  if printf '%s' "$adv" | grep -qE '\[3[0-9]m|\[0m'; then
+  if printf '%s' "$adv" | grep -cE '\[3[0-9]m|\[0m' >/dev/null; then
     no "AC-A7: ANSI escape residue survived the sanitizer"
   else
     ok "AC-A7: no ANSI residue in the sanitized detail"
@@ -799,7 +799,7 @@ exit 0'
     no "AC-A13a: split UTF-8 produced INVALID JSON"
   fi
   u8="$(printf '%s' "$u8raw" | jq -r '.tags.detail // empty' 2>/dev/null)"
-  if ! printf '%s' "$u8" | grep -qF 'OK-TAIL-MARKER'; then
+  if ! printf '%s' "$u8" | grep -cF 'OK-TAIL-MARKER' >/dev/null; then
     no "AC-A13b: FIXTURE ERROR — the ASCII tail marker did not survive; assertion is vacuous"
   elif printf '%s' "$u8" | LC_ALL=C grep -q '[^ -~]'; then
     no "AC-A13b: non-ASCII/partial-sequence bytes survived the cap, got: '$(printf '%s' "$u8" | head -c 60)'"
@@ -824,7 +824,7 @@ exit 3'
       [ "$rc" = 0 ] || exit "$rc"
     ' ) >/dev/null 2>&1
   scrubbed="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
-  if printf '%s' "$scrubbed" | grep -qE 'dp\.st\.SYNTHETIC'; then
+  if printf '%s' "$scrubbed" | grep -cE 'dp\.st\.SYNTHETIC' >/dev/null; then
     no "AC-A10: a token-shaped string reached the emitted payload unredacted (RK3)"
   else
     ok "AC-A10: token-shaped strings are scrubbed before any write (RK3)"
@@ -878,7 +878,7 @@ else
   # would drift and this suite would then be verifying its own copy, not the shipped gate).
   # The workflow defines it as a jq `def` so its jq programs can stay single-quoted, which is
   # what keeps the `test($re)` literal that the observability suite's AC16 pins byte-identical.
-  HOSTDEF_WF="$(grep -F "JQ_HOSTDEF='" "$TRAIL" | head -1 | sed -e "s/^[[:space:]]*JQ_HOSTDEF='//" -e "s/'$//")"
+  HOSTDEF_WF="$(grep -F "JQ_HOSTDEF='" "$TRAIL" | sed -n '1p' | sed -e "s/^[[:space:]]*JQ_HOSTDEF='//" -e "s/'$//")"
   if [ -n "$HOSTDEF_WF" ]; then
     ok "AC-M1: extracted the host-matching jq def from the shipped workflow"
   else
@@ -916,7 +916,7 @@ FIXEOF
   else
     no "AC-M2: gate jq returned stage '$m_stage', expected 'doppler_download'"
   fi
-  if printf '%s' "$m_detail" | grep -qF 'rc=124'; then
+  if printf '%s' "$m_detail" | grep -cF 'rc=124' >/dev/null; then
     ok "AC-M3: the gate's jq surfaces the detail (cause), not just the stage"
   else
     no "AC-M3: gate jq returned detail '$m_detail', expected one containing rc=124"
@@ -965,7 +965,7 @@ FIXEOF
   # AC-M7c: and it must carry the RETRY event's detail. LAST_DETAIL is [0] of the newest-first
   # list, which on this branch is cloud_init_complete (no per-stage file) — so interpolating it
   # renders "<none>" on every run, discarding the very cause the annotation exists to surface.
-  if grep -E '::warning::.*RETRIED' "$TRAIL" | grep -qF '${RETRY_DETAIL'; then
+  if grep -E '::warning::.*RETRIED' "$TRAIL" | grep -cF '${RETRY_DETAIL' >/dev/null; then
     ok "AC-M7c: the retry warning interpolates RETRY_DETAIL (the retry event's own cause)"
   else
     no "AC-M7c: the retry warning must interpolate \${RETRY_DETAIL}, not the terminal event's detail"
@@ -1077,8 +1077,8 @@ fi
 # while the grep above still passes. `\bdoppler\b` not `doppler secrets` — the sibling cloud-inits
 # use `doppler run`/`doppler configure`, and a narrow verb list would let a new early call site
 # slip above the export while this arm still reported correct ordering.
-home_ln=$(grep -nE "$EXPORT_RE" <<<"$CI_RUNCMD" | head -1 | cut -d: -f1)
-dop_ln=$(grep -nE '\bdoppler\b|soleur-doppler-download' <<<"$CI_RUNCMD" | head -1 | cut -d: -f1)
+home_ln=$(grep -nE "$EXPORT_RE" <<<"$CI_RUNCMD" | sed -n '1p' | cut -d: -f1)
+dop_ln=$(grep -nE '\bdoppler\b|soleur-doppler-download' <<<"$CI_RUNCMD" | sed -n '1p' | cut -d: -f1)
 if [ -n "$home_ln" ] && [ -n "$dop_ln" ] && [ "$home_ln" -lt "$dop_ln" ]; then
   ok "AC-HOME2: the export precedes the first doppler invocation (line $home_ln < $dop_ln)"
 else
@@ -1104,8 +1104,8 @@ for _h in "soleur-doppler-download:$HELPER" "soleur-fresh-boot-ready:$FRESHREADY
   # THE LOAD-BEARING HALF, and the one the first version of this block left uncovered: `:=` creates
   # a SHELL variable. Measured: `env -u HOME sh -c ': "${HOME:=/root}"; env | grep ^HOME='` prints
   # NOTHING, so the child `doppler` still dies. Deleting the `export` left the whole suite green.
-  _assign_ln=$(grep -nF ': "${HOME:=/root}"' <<<"$_code" | head -1 | cut -d: -f1)
-  _export_ln=$(grep -nE '^[[:space:]]*export HOME[[:space:]]*$' <<<"$_code" | head -1 | cut -d: -f1)
+  _assign_ln=$(grep -nF ': "${HOME:=/root}"' <<<"$_code" | sed -n '1p' | cut -d: -f1)
+  _export_ln=$(grep -nE '^[[:space:]]*export HOME[[:space:]]*$' <<<"$_code" | sed -n '1p' | cut -d: -f1)
   if [ -n "$_assign_ln" ] && [ -n "$_export_ln" ] && [ "$_export_ln" -gt "$_assign_ln" ]; then
     ok "AC-HOME3b: ${_name} exports HOME after defaulting it (a bare := would not reach the doppler child)"
   else
@@ -1189,18 +1189,18 @@ fi
 if [ -n "${TRAIL:-}" ] && [ -s "${TRAIL:-/nonexistent}" ]; then
   # Pull the reader's ACTUAL terminal-complete jq program, so a future edit to it is
   # exercised here rather than compared against a copy that silently drifts.
-  # `grep | head -1` lets a DECOY line win: a correct copy placed above the shipped test
+  # `grep | sed -n '1p'` lets a DECOY line win: a correct copy placed above the shipped test
   # makes every assertion below exercise the wrong program at full green (mutation-proven).
   # Require the match to be UNIQUE, so a second copy is a loud failure, not a silent swap.
   _cc_matches=$(grep -cF 'TERMINAL="complete"; break' "$TRAIL" || true)
   # TWO filters now: fresh_boot_ready is the PRIMARY terminal (the definitive readiness
   # verdict), cloud_init_complete is the graced FALLBACK. Extract and exercise both — a
   # single-filter test would leave whichever one it skipped completely unpinned.
-  _cc_line="$(grep -F 'TERMINAL="complete"; break' "$TRAIL" | grep -F 'fresh_boot_ready' | head -1 || true)"
-  _mk_line="$(grep -F 'cloud_init_complete")] | length > 0' "$TRAIL" | head -1 || true)"
+  _cc_line="$(grep -F 'TERMINAL="complete"; break' "$TRAIL" | grep -F 'fresh_boot_ready' | sed -n '1p' || true)"
+  _mk_line="$(grep -F 'cloud_init_complete")] | length > 0' "$TRAIL" | sed -n '1p' || true)"
   _cc_prog="$(printf '%s' "$_cc_line" | sed -e "s/^.*\"\\\$JQ_HOSTDEF\"'//" -e "s/'[[:space:]]*>\\/dev\\/null.*$//")"
   # JQ_HOSTDEF is a MULTI-LINE single-quoted assignment (hostok on line 1, sincok on
-  # line 2). A `grep | head -1` captures only hostok, leaving sincok undefined — jq then
+  # line 2). A `grep | sed -n '1p'` captures only hostok, leaving sincok undefined — jq then
   # errors and EVERY call returns false, which makes the negative controls below pass
   # vacuously while the positive one fails. Take the whole assignment.
   _hostdef="$(awk "/JQ_HOSTDEF='/{f=1} f{print} f&&/;'\$/{exit}" "$TRAIL" \
@@ -1220,14 +1220,14 @@ if [ -n "${TRAIL:-}" ] && [ -s "${TRAIL:-/nonexistent}" ]; then
     no "AC-TERM0: the extracted jq program does not COMPILE (jq exit ${_jqrc}) — every assertion below would read false regardless of the fixture"
   # A truncated-but-compiling fragment is the other extraction failure the compile check
   # cannot see; pin the program's shape.
-  elif ! printf '%s' "$_cc_prog" | grep -q '^\[\.\[\]' || ! printf '%s' "$_cc_prog" | grep -q 'length > 0$'; then
+  elif ! printf '%s' "$_cc_prog" | grep -c '^\[\.\[\]' >/dev/null || ! printf '%s' "$_cc_prog" | grep -c 'length > 0$' >/dev/null; then
     no "AC-TERM0: the extracted READINESS jq program is not a whole filter (expected [.[] … length > 0) — extraction bound to a fragment"
   # The MARKER program needs the same guard: a broken one returns false for every fixture,
   # which makes the negative controls (TERM3/TERM6) pass VACUOUSLY while only the positive
   # one (TERM5) fails. That happened during development — an escaping slip expanded
   # $JQ_HOSTDEF to empty, and three assertions reported green over a program that could
   # never match.
-  elif [ -z "$_mk_prog" ] || ! printf '%s' "$_mk_prog" | grep -q '^\[\.\[\]' \
+  elif [ -z "$_mk_prog" ] || ! printf '%s' "$_mk_prog" | grep -c '^\[\.\[\]' >/dev/null \
        || { printf '[]' | jq -e --arg re x --arg eh y --argjson since 0 "${_hostdef}${_mk_prog}" >/dev/null 2>&1; [ "$?" -gt 1 ]; }; then
     no "AC-TERM0: the extracted MARKER jq program is empty, malformed, or does not compile — TERM3/TERM5/TERM6 below would be vacuous"
   else
@@ -1293,7 +1293,7 @@ if [ -n "${TRAIL:-}" ] && [ -s "${TRAIL:-/nonexistent}" ]; then
   # S3: AC-TERM3 supplies its OWN --argjson since, so it tests the FILTER, not the WIRING.
   # Changing the shipped call site to `--argjson since 0` disables the anchor entirely and
   # survives every fixture. Pin the call site itself.
-  if printf '%s' "$_cc_line" | grep -qF -- '--argjson since "${BOOT_TRAIL_SINCE:-0}"'; then
+  if printf '%s' "$_cc_line" | grep -cF -- >/dev/null '--argjson since "${BOOT_TRAIL_SINCE:-0}"'; then
     ok "AC-TERM3b: the shipped complete test passes the run anchor through --argjson since"
   else
     no "AC-TERM3b: the shipped complete test does not bind --argjson since to BOOT_TRAIL_SINCE — the anchor is inert and a predecessor's marker satisfies membership (#6969 class)"
@@ -1301,8 +1301,8 @@ if [ -n "${TRAIL:-}" ] && [ -s "${TRAIL:-/nonexistent}" ]; then
 
   # ORDERING: fatal must be tested BEFORE complete. Membership alone would let a
   # completed-then-fatal run report clean — fail-OPEN on a boot-health gate.
-  _fatal_ln=$(grep -nF 'TERMINAL="fatal"; break' "$TRAIL" | head -1 | cut -d: -f1)
-  _cc_ln=$(grep -nF 'TERMINAL="complete"; break' "$TRAIL" | head -1 | cut -d: -f1)
+  _fatal_ln=$(grep -nF 'TERMINAL="fatal"; break' "$TRAIL" | sed -n '1p' | cut -d: -f1)
+  _cc_ln=$(grep -nF 'TERMINAL="complete"; break' "$TRAIL" | sed -n '1p' | cut -d: -f1)
   if [ -n "$_fatal_ln" ] && [ -n "$_cc_ln" ] && [ "$_fatal_ln" -lt "$_cc_ln" ]; then
     ok "AC-TERM4: the fatal test precedes the complete test (line $_fatal_ln < $_cc_ln) — a run emitting both reports fatal"
   else

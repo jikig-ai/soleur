@@ -106,7 +106,7 @@ Ask questions **one at a time** to understand the user's intent. Avoid overwhelm
 | Edge Cases | What shouldn't happen? Any error states to consider? |
 | Existing Patterns | Are there similar features in the codebase to follow? |
 
-**Exit Condition:** Continue until the idea is clear OR user says "proceed" or "let's move on"
+**Exit Condition:** Done when every open decision branch (a design choice still unsettled; see `brainstorm` §1.2) has been walked or explicitly parked (deferred and recorded as an open question), with nothing silently assumed. If the user says "proceed" or "let's move on" first, stop asking and record the unwalked branches as parked.
 
 ### Phase 2: Explore Approaches
 

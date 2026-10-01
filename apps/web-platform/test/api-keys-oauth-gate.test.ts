@@ -37,7 +37,9 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 vi.mock("@/server/logger", () => ({
   default: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
-vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 
 import { POST } from "@/app/api/keys/route";
 

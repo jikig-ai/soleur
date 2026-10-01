@@ -508,7 +508,19 @@ git_data_rung2_bound_files() {
   #     non-`path.module` prefix) breaks the binding, and that is exactly what this form check
   #     catches. A filename pin would assert a different property — identity, not
   #     admissibility — and would buy the digest nothing.
-  if ! printf '%s\n' "$_shape_src" | grep -qE 'templatefile\("\$\{path\.module\}/[^"]+"'; then
+  # A HERESTRING, NOT A PIPE, AND THE VERDICT IS SPLIT. The pipe-fed `grep -q` this replaces
+  # is the #9210 flake — grep -q closes the pipe on first match, the producer takes EPIPE,
+  # and pipefail reports a non-zero pipeline even though the pattern MATCHED (the run log's
+  # `printf: write error: Broken pipe` immediately before this arm's ABORT). rc >= 2 means
+  # the matcher could not evaluate at all: an instrument failure, reported as such so the
+  # next transport flake does not arrive dressed as a shape violation.
+  local _shape_rc=0
+  grep -qE 'templatefile\("\$\{path\.module\}/[^"]+"' <<< "$_shape_src" || _shape_rc=$?
+  if [[ "$_shape_rc" -ge 2 ]]; then
+    echo "git_data_rung2_bound_files: ABORT — could not evaluate the \`templatefile(\` shape check on ${module_tf}: the matcher exited ${_shape_rc} instead of returning a verdict. An instrument failure is not a shape violation; refuse to guess. Fail-closed."
+    return 1
+  fi
+  if [[ "$_shape_rc" -eq 1 ]]; then
     echo "git_data_rung2_bound_files: ABORT — ${module_tf}'s sole \`templatefile(\` argument is not a single-line \"\${path.module}/…\" literal. An indirected or multi-line template reference is not statically resolvable, so the evidence digest cannot bind the bytes that render into user_data. Fail-closed."
     return 1
   fi
@@ -1131,8 +1143,14 @@ _git_data_rung2_fetch() {
         # public. A rejected bearer retries ONCE anonymously rather than reporting a refusal
         # that is really an authorization gap. A rate-limit body is excluded — dropping the
         # bearer makes a rate limit strictly worse.
+        # Deliberately UNSPLIT (unlike the verdict arms): this is a retry heuristic, not a
+        # verdict — a matcher rc >= 2 resolves to "not a rate-limit body" and drops the
+        # bearer once (bounded by _anon_retried), and the de-permissioned direction is the
+        # safe one for an instrument failure.
+        local _rl_body
+        _rl_body="$(sed '$d' <<< "$_resp")"
         if [[ "$_anon_retried" -eq 0 && ${#_auth[@]} -gt 0 ]] \
-           && ! printf '%s' "$_resp" | sed '$d' | grep -qiE 'rate limit'; then
+           && ! grep -qiE 'rate limit' <<< "$_rl_body"; then
           _anon_retried=1; _auth=(); _attempt=0; continue
         fi
         ;;
@@ -1399,6 +1417,13 @@ _git_data_rung2_hash_at_sha() {
   # an unprovable destructive operation. The residual is one directory per gate call.
   _tmp="$(mktemp -d -t rung2-archive.XXXXXXXX)" || {
     printf 'RUN_HASH_UNCOMPUTABLE|could not create a scratch directory to extract the archived tree. Nothing was measured — check free space and TMPDIR, then re-run.\n'; return 1; }
+  # Declare the owner the tmp reaper can check (#7004): pid= is the session
+  # harness owner when soleur_scratch_session_begin ran, else this process —
+  # the dir deliberately outlives the call (the bounded-leak trade documented
+  # above), so the marker is what lets Reaper 3 reclaim it once the owner dies.
+  printf 'pid=%s\nschema=1\nns=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}" \
+    "$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')" \
+    > "$_tmp/.soleur-owned" 2>/dev/null || true
   # `core.attributesfile=/dev/null` DISABLES THE GLOBAL/SYSTEM ATTRIBUTES FILE, AND NOTHING
   # MORE — the earlier comment here claimed it stopped a future `export-ignore`/`export-subst`
   # entry from making archived bytes differ from the worktree bytes, and that is false.
@@ -1544,7 +1569,13 @@ HOLD
   # recorded is not a verdict — while the OPTIONAL ack key needs at-most-once semantics and
   # gets its own loop below. The two counts are genuinely independent: this pattern ends in
   # `[[:space:]]*=`, which `RUNG2_SENTRY_CROSSCHECK_ACK=` does not match.
-  for _k in RUNG2_BOOT_REHEARSAL RUNG2_EVIDENCE_URL RUNG2_TEMPLATE_SHA256 RUNG2_VAR_DIVERGENCE RUNG2_SENTRY_CROSSCHECK; do
+  #
+  # (#5274) THE TWO REPLACE-ARM KEYS JOIN IT TOO. The rehearsal workflow runs the replace arm (boot
+  # #2 adopting a LUKS volume a predecessor formatted, against the plaintext volume boot #1 read)
+  # unconditionally after the reboot arm, and uploads the evidence ONLY when that arm passed — so
+  # every file the route can produce carries both, exactly once. A file without them is capture
+  # #1 alone: a PASS for a birth that never proved the replace path production will take.
+  for _k in RUNG2_BOOT_REHEARSAL RUNG2_EVIDENCE_URL RUNG2_TEMPLATE_SHA256 RUNG2_VAR_DIVERGENCE RUNG2_SENTRY_CROSSCHECK RUNG2_REPLACE_BOOT RUNG2_REPLACE_SENTRY_CROSSCHECK; do
     # `(export[[:space:]]+)?` is load-bearing. Measured: an evidence file carrying
     #   RUNG2_BOOT_REHEARSAL=PASS
     #   export RUNG2_BOOT_REHEARSAL=FAIL
@@ -1561,6 +1592,12 @@ HOLD
 
   if ! grep -qE '^[[:space:]]*RUNG2_BOOT_REHEARSAL[[:space:]]*=[[:space:]]*PASS[[:space:]]*$' <<<"$body"; then
     echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} does not assert RUNG2_BOOT_REHEARSAL=PASS in non-comment text. Fail-closed: an evidence file that does not claim a pass is not a pass."
+    return 1
+  fi
+  # (#5274) …AND THE REPLACE BOOT PASSED. Same exact-line discipline as the check above; the
+  # cardinality loop has already refused a file carrying this key twice (PASS beside FAIL).
+  if ! grep -qE '^[[:space:]]*RUNG2_REPLACE_BOOT[[:space:]]*=[[:space:]]*PASS[[:space:]]*$' <<<"$body"; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} does not assert RUNG2_REPLACE_BOOT=PASS in non-comment text. The rehearsal must prove boot #2 too — the replace that ADOPTS a LUKS volume a predecessor formatted, reading the plaintext volume boot #1 only ever read — and this file does not say it did. Fail-closed: re-run the whole rehearsal; its replace arm appends this key to capture #1's file."
     return 1
   fi
 
@@ -1741,7 +1778,36 @@ HOLD
     return 1
   fi
 
-  case "$_sentry" in
+  # (#5274) THE REPLACE BOOT'S CROSS-CHECK, over the same closed set and with the same refusals.
+  # It is recorded by the replace arm over ITS window (stamped before the replace), so it is a
+  # second, independent verdict — not a restatement of the one above. FATAL is measured and
+  # un-ackable, NOT_RUN and anything unknown are could-not-measure and un-ackable, and UNAVAILABLE
+  # is routed through the ONE acknowledgement arm below: an ack is keyed to the RUN, and both reads
+  # belong to one run, so one well-formed RUNG2_SENTRY_CROSSCHECK_ACK covers either or both.
+  local _rsentry _sentry_case="$_sentry" _unavail_keys=""
+  _rsentry="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_REPLACE_SENTRY_CROSSCHECK[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
+  # `if`, not `&&`: a false test would return 1 under a caller's errexit (see the `_rel_dir` guard).
+  if [[ "$_sentry" == "UNAVAILABLE" ]]; then _unavail_keys="RUNG2_SENTRY_CROSSCHECK"; fi
+  case "$_rsentry" in
+    CLEAN) : ;;
+    UNAVAILABLE)
+      _unavail_keys="${_unavail_keys:+${_unavail_keys} and }RUNG2_REPLACE_SENTRY_CROSSCHECK"
+      if [[ "$_sentry" == "CLEAN" ]]; then _sentry_case="UNAVAILABLE"; fi
+      ;;
+    FATAL)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_FATAL] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK=FATAL: the second channel MEASURED a fatal for this host during the replace boot (boot #2). That is a measured failure of the boot, not a gap in the instrument, so no acknowledgement can release it. Read the run's Sentry events for the host named in the evidence header after the replace, fix the cause, and re-run the rehearsal.${_seam_note}"
+      return 1 ;;
+    NOT_RUN)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN: the replace boot's cross-check never ran at all (no jq, no SENTRY_ISSUE_RO_TOKEN, or no reader on the rehearsal runner). There is nothing to acknowledge, so no RUNG2_SENTRY_CROSSCHECK_ACK can release this — re-run the rehearsal on a runner where the second channel is reachable.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN (the cross-check never ran)"
+      return 1 ;;
+    *)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_rsentry" 60)', which is outside the closed set the capture can write {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}. An unknown verdict is not a pass and no acknowledgement can rescue it — re-run the rehearsal, and if this value keeps appearing the capture script and this gate have drifted apart.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_REPLACE_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_rsentry" 60)'"
+      return 1 ;;
+  esac
+
+  case "$_sentry_case" in
     CLEAN)
       # An ack beside CLEAN is IGNORED, not refused: it satisfies no property here, and a
       # refusal would be ceremony.
@@ -1751,7 +1817,7 @@ HOLD
       return 1 ;;
     UNAVAILABLE)
       if [[ -z "$_ack" ]]; then
-        echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_UNAVAILABLE_UNACKED] — ${evidence} records RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE: the Sentry cross-check ran and could not be trusted, so the PASS rests on Better Stack alone. Before #8010 this released silently. To proceed, append RUNG2_SENTRY_CROSSCHECK_ACK=${_run_id}:<why the second channel may be skipped for THIS run> in the evidence file's own commit (the reason may not contain '#', which this gate's trailing-comment strip would truncate). The rehearsal workflow prints the exact line to append. See knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md.${_seam_note}"
+        echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_UNAVAILABLE_UNACKED] — ${evidence} records ${_unavail_keys}=UNAVAILABLE: the Sentry cross-check ran and could not be trusted, so the PASS rests on Better Stack alone. Before #8010 this released silently. To proceed, append RUNG2_SENTRY_CROSSCHECK_ACK=${_run_id}:<why the second channel may be skipped for THIS run> in the evidence file's own commit (the reason may not contain '#', which this gate's trailing-comment strip would truncate). The rehearsal workflow prints the exact line to append. See knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md.${_seam_note}"
         return 1
       fi
       # READ THE RAW LINE, not `body`. The comment strip has already removed everything from
@@ -1850,7 +1916,7 @@ HOLD
     return 1
   }
 
-  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} ($(_git_data_rung2_safe "$url" 160)); declared render-var divergence: ${divergence}; provenance: ${_prov_out#*: }. RUN: ${_run_id} concluded success at head_sha ${_head_sha}, whose tree re-hashes to the same digest; it uploaded ${_art_out#*|}; Sentry cross-check ${_sentry}${_ack:+ (acknowledged)}.${_seam_note} NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
+  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} ($(_git_data_rung2_safe "$url" 160)); declared render-var divergence: ${divergence}; provenance: ${_prov_out#*: }. RUN: ${_run_id} concluded success at head_sha ${_head_sha}, whose tree re-hashes to the same digest; it uploaded ${_art_out#*|}; Sentry cross-check ${_sentry}; replace boot PASS, its Sentry cross-check ${_rsentry}${_ack:+ (acknowledged)}.${_seam_note} NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
   return 0
 }
 
@@ -2005,9 +2071,27 @@ git_data_authorization_map_gate() {
   # that writes it: `runcmd` runs AFTER write_files, so one appended line there adds a key
   # the gate's block-scoped read can never see. The property is "what this template puts on
   # authorized_keys", not "what the first write_files entry says".
-  if grep -nE '/home/git/\.ssh/authorized_keys' "$cloud_init" \
-     | grep -vE ':[[:space:]]*-[[:space:]]*path:' | grep -qvE ':[[:space:]]*#'; then
+  # CAPTURED STAGE BY STAGE, never `producer | grep -q` in the `if`: under pipefail an early
+  # `grep -q` exit EPIPEs the producer, and this arm's non-negated `if` then reads a mid-pipe
+  # death as "no outside references" — the #9210 mechanism, applied to the fail-OPEN arm:
+  # where site 1 false-ABORTed, this sweep would silently skip its HOLD. Each stage is
+  # captured separately because pipefail reports only the RIGHTMOST non-zero member, so a
+  # stage's rc >= 2 (instrument failure) would be masked behind a later stage's rc 1.
+  local _ak_outside _ak_rc=0
+  _ak_outside="$(grep -nE '/home/git/\.ssh/authorized_keys' "$cloud_init")" || _ak_rc=$?
+  if [[ "$_ak_rc" -lt 2 && -n "$_ak_outside" ]]; then
+    _ak_outside="$(printf '%s\n' "$_ak_outside" | grep -vE ':[[:space:]]*-[[:space:]]*path:')" || _ak_rc=$?
+  fi
+  if [[ "$_ak_rc" -lt 2 && -n "$_ak_outside" ]]; then
+    _ak_outside="$(printf '%s\n' "$_ak_outside" | grep -vE ':[[:space:]]*#')" || _ak_rc=$?
+  fi
+  if [[ "$_ak_rc" -ge 2 ]]; then
+    echo "git_data_authorization_map_gate: ABORT — could not evaluate the /home/git/.ssh/authorized_keys outside-write_files sweep on ${cloud_init}: the extraction exited ${_ak_rc}. An instrument failure is not a measured absence of runcmd/bootcmd references. Fail-closed."
+    return 2
+  fi
+  if [[ -n "$_ak_outside" ]]; then
     echo "git_data_authorization_map_gate: HOLD — ${cloud_init} references /home/git/.ssh/authorized_keys outside its write_files path declaration (a runcmd, a bootcmd, or another statement). cloud-init runs runcmd AFTER write_files, so any such statement decides the final authorization map and this gate reads only the write_files block."
+    printf '%s\n' "$_ak_outside" | sed 's/^/  /'
     return 1
   fi
 
@@ -2260,7 +2344,17 @@ git_data_authorization_map_gate() {
   # git-data.tf already carries `ignore_changes = [ssh_keys]`, so adding a second element is
   # exactly the edit a person makes. Measured rc=0. This joins the whole extracted server
   # block and matches across newlines instead.
-  if tr '\n' ' ' <<< "$_server_block" | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*\buser_data\b'; then
+  # Same conversion as the sites above: capture the flattened block, then herestring-grep —
+  # and split the verdict, because this arm is also non-negated (a mid-pipe death was a
+  # missed HOLD — fail-open on the gate's own premise).
+  local _flat_server _ic_rc=0
+  _flat_server="$(tr '\n' ' ' <<< "$_server_block")"
+  grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*\buser_data\b' <<< "$_flat_server" || _ic_rc=$?
+  if [[ "$_ic_rc" -ge 2 ]]; then
+    echo "git_data_authorization_map_gate: ABORT — could not evaluate the lifecycle.ignore_changes sweep on hcloud_server.git_data in ${root}: the matcher exited ${_ic_rc}. An instrument failure is not a measured absence. Fail-closed."
+    return 2
+  fi
+  if [[ "$_ic_rc" -eq 0 ]]; then
     echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data declares lifecycle.ignore_changes on user_data. That deletes this gate's own premise: user_data is ForceNew and ADR-115 bars git-data from the reboot primitive, so a replace is the ONLY route by which a corrected authorization map reaches the host. With it ignored, the map can drift with no apply able to correct it."
     return 1
   fi

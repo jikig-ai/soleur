@@ -212,6 +212,9 @@ replay the root login.
 > **Superseded 2026-09-15 (#8189), as to the D1b and D2–D3 rows:** their flip conditions are restated
 > in the Amendment log, "D5".
 
+> **Superseded 2026-09-27 (#8211 PR2, post-merge), as to the D1b row's status:** D1b is `accepted`.
+> See the Amendment log, "2026-09-27 (#8211 PR2, post-merge): D1b is accepted".
+
 ### D6 — Sequencing
 
 **This PR** ships D1a's wiring and a fail-closed access gate; the change list is in the plan
@@ -640,6 +643,91 @@ entry records what changes in them.
   re-asserted before the volume is replaced. PR1 builds none of it. Until that rotation runs,
   `erased` on the Art. 17 path means **unlinked**: the blocks stay readable to a holder of the LUKS
   key.
+
 - **Unchanged.** D1a, D1b, D2, D3, D4 and D5 are untouched. The access path, the dedicated root key
   and the read credential are the same; ADR-239 changes what the host serves, not how CI reaches
   root on it.
+
+### 2026-09-30 (#8211 PR2): D6 has a route — `git-data-host-rotate`
+
+The pending-PR2 sentence above is discharged: D6's combined rotation is `apply_target=
+git-data-host-rotate` in `apply-web-platform-infra.yml` — the `git_data_host_replace` job run
+with `confirm=ROTATE-GIT-DATA`, a `served_repos=0` Better Stack precondition (the host is
+deny-all; the latest `stage:bootstrap` emit on `host_name=git-data` must read empty — an
+unreadable store fails closed, not open), and the `-replace` set extended by
+`hcloud_volume.git_data_luks` + `random_password.git_data_luks` +
+`doppler_secret.git_data_luks_key`. The `git_data_host_replace_gate` gained a `rotate` arm that
+requires the trio to move TOGETHER — a passphrase without a fresh volume can never `luksOpen`,
+and a retained passphrase is not a rotation — while `hcloud_volume.git_data` (the plaintext
+rollback backstop) stays preserved by omission in both modes. The pin-load is the job's inline
+`pin_load` step (the `git-data-pin-redeploy.yml` follower is retired; ADR-237 addendum
+2026-09-30). "Freshness" for the cutover's `d6_replace_stale` precondition is a completed
+`git-data-host-rotate` run whose apply job concluded `success` AND whose rotate-confirm
+marker step concluded `success` — the rotation proof; a plain `git-data-host-replace`
+cannot discharge D6 because it re-mints no LUKS key.
+
+### 2026-09-27 (#8211 PR2): the store probes read the LUKS-served store
+
+The probe chain is now a configuration check (`probe=config`), then `store-mounted`,
+`store-on-mapper`, one ssh session reporting `store-verified` and `store-empty`, then `fence-shape`
+([ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md), amendment 2026-09-27). One of the "three
+store probes" the D5 row for D1b names is retired, so that flip condition is restated. **Departing
+from the 2026-09-21 entry**, which judged D1b on the access gate and the store probes only, the fence
+probe is now part of it too, because the flip evidence is the run's exit 0: **D1b flips on a dispatch
+from `main` that reads `role=git-data-auth verdict=ok` with the store probes and the fence probe
+clear.** The caveat is unchanged: a pinned host authenticates the host, not the truth of its answers.
+Dated text above is not rewritten.
+
+### 2026-09-27 (#8211 PR2, post-merge): D1b is accepted
+
+- **The D1b condition, as the entry above restates it, is met.** `git-data-cutover.yml` run
+  [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) was dispatched from
+  `main` at `ab4a07e5e0` on 2026-09-27 and concluded `success`. Its notice annotations read
+  `role=web`, `role=git-data-jump` and `role=git-data-auth` `verdict=ok`; `probe=store-mounted`,
+  `store-on-mapper`, `store-verified`, `store-empty` and `fence-shape` `verdict=ok`; then
+  `verdict=clear`. Both hops were pinned (ADR-237 `accepted`, PR #9036). Recorded on #5914
+  (issuecomment-5859802570). The same run warned `TOFU_ARM present`: the app's unpinned git-data
+  fallback arm (#5914, host-key step 6) is untouched by this flip and still gates
+  `GIT_DATA_STORE_ENABLED`.
+- **History.** The 2026-09-15 form of the condition was first met by run
+  [35119099336](https://github.com/jikig-ai/soleur/actions/runs/35119099336) (2026-09-16, `main` at
+  `2d9177bec2`, `verdict=clear`). That run was unpinned and predates the fence probe. It closed
+  #8189 and #6680, but the D1b flip was not recorded then.
+- **`probe=config` has no `ok` notice.** It annotates only on refusal. The run reached the access
+  gate and ended `verdict=clear`, so it passed.
+- **The caveat stands.** A pinned host authenticates the host, not the truth of its answers, so
+  `store_not_empty` and the bounded probes stay.
+- **D5 for the D1b row.** D1b authenticated hop is `accepted` (2026-09-27). D1a is unchanged.
+  D2–D3 stay `proposed`: their #7226 limb is met (ADR-237 `accepted`), while the #8211 limb and
+  the #8209 limb (ADR-241 residuals R1 and R7) remain. D4 stays standing constraints, except its
+  first residual, which closed at host-key post-merge step 4 (run 36119817656, 2026-09-25), as the
+  2026-09-21 entry provides; ADR-237 recorded it `accepted` on 2026-09-27.
+- **The frontmatter stays `proposed`,** the least-advanced status, because D2–D3 are `proposed`.
+  Dated text above is not rewritten.
+
+### 2026-09-28 (#5914, PR #9096): the app's unpinned git-data arm is deleted
+
+- **The flag-flip precondition "#5914 closed" is met on the merge of PR #9096** (host-key step 6): the app's
+  transitional unpinned fallback arm is deleted, and the pin resolver now refuses an absent pin
+  whatever `GIT_DATA_STORE_ENABLED` says (ADR-237, Addendum PR #9096). From this merge, a
+  `git-data-cutover.yml` dispatch from `main` reads `TOFU_ARM absent`. The other flip preconditions
+  (the pin present in `prd`, #8572 paging, and #8211's per-id re-erasure path, which the LUKS
+  cutover runbook requires before the first flip) stand. No earlier entry is edited, and no status in D5
+  changes.
+
+### 2026-09-28 (#8572): the "#8572 paging" flip precondition
+
+- **Met on #8572's merge plus a green `apply-sentry-infra.yml` and `web-platform-release.yml`.** The
+  `git-data-host-key-pin-fault` rule pages on the `pin_fault` tag (boot and replication-push pin
+  faults), and `art17-erasure-incomplete` now also re-pages per event on an unresolved issue. The
+  #8211 PR2 flip check (`pin_fault_paging_absent`, not built yet) must read the live rule's content
+  (enabled, the exact `in` set, the issue-owners email falling back to active members) and the
+  deployed release, not the rule's name; until it exists, `scripts/sentry-alert-live-fidelity.sh`'s
+  `sentry_alert live fidelity: PASS` is that read. #8211's per-id re-erasure path remains a separate, hard precondition. No earlier entry
+  is edited.
+- **Condition met 2026-09-28 (#8572).** PR #9150 merged as `7541fb13`; apply-sentry-infra run
+  36454249853 read `sentry_alert live fidelity: PASS (all 35 in-scope rules …)`, and the release
+  serving `7541fb13` finished deploying at 2026-09-28T17:15:30Z (deploy arm 36456390256). So the
+  "#8572 paging" precondition holds as configured and verified; email delivery is not yet observed
+  (nothing has fired), and the per-id re-erasure path is still the open hard precondition. Record:
+  `knowledge-base/legal/audits/2026-09-counsel-reattestation-5914.md`, "Verification 2026-09-28 (#8572)".

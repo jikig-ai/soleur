@@ -6,6 +6,7 @@ import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver
 import { createWorkspaceInvitation } from "@/server/workspace-invitations";
 import { sendInviteEmail } from "@/server/notifications";
 import { emitWorkspaceActionContext } from "@/server/workspace-action-audit";
+import { boundedAuthGetUser } from "@/server/request-auth";
 
 // POST /api/workspace/invite-member
 // Body: { workspaceId, email, role: "owner"|"member", attestationText }
@@ -14,9 +15,8 @@ export async function POST(request: Request) {
   if (!originValid) return rejectCsrf("api/workspace/invite-member", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userData = await boundedAuthGetUser(supabase);
+  const user = userData?.user;
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   if (!pageData.ok) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  const identity: Identity = { userId: user.id, role: "prd", orgId: pageData.data.organizationId };
+  const identity: Identity = { userId: user.id, role: "prd", orgId: pageData.data.organizationId , email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(pageData.data.organizationId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }

@@ -99,7 +99,7 @@ function buildContext(depsOverrides: Record<string, unknown> = {}) {
 }
 
 function sdkOptions() {
-  return { signal: new AbortController().signal, toolUseID: "tu-1" };
+  return { signal: new AbortController().signal, toolUseID: "tu-1", requestId: "req-1" };
 }
 
 describe("autonomous first-run soft-gate", () => {
@@ -121,6 +121,7 @@ describe("autonomous first-run soft-gate", () => {
       { command: "rm -rf build" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     // The disclosure frame must be sent.
     const disclosureSends = (deps.sendToClient as ReturnType<typeof vi.fn>).mock
       .calls.map((c) => c[1])
@@ -145,6 +146,7 @@ describe("autonomous first-run soft-gate", () => {
       { command: "rm -rf build" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     expect(result.behavior).toBe("allow");
     const disclosureSends = (deps.sendToClient as ReturnType<typeof vi.fn>).mock
       .calls.map((c) => c[1])
@@ -185,6 +187,7 @@ describe("autonomous first-run soft-gate", () => {
       { command: "sudo rm -rf /" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     expect(result.behavior).toBe("deny");
     expect(deps.sendToClient).not.toHaveBeenCalled();
   });
@@ -212,11 +215,13 @@ describe("autonomous first-run soft-gate", () => {
 
     // Command #1 — held, acked, released.
     const r1 = await canUseTool("Bash", { command: "rm -rf build" }, sdkOptions());
+    if (r1 === null) throw new Error("canUseTool returned null");
     expect(r1.behavior).toBe("allow");
     expect(deps.abortableReviewGate).toHaveBeenCalledTimes(1);
 
     // Command #2 — must NOT hold again (posture now acked).
     const r2 = await canUseTool("Bash", { command: "npm run build" }, sdkOptions());
+    if (r2 === null) throw new Error("canUseTool returned null");
     expect(r2.behavior).toBe("allow");
     // No SECOND gate awaited.
     expect(deps.abortableReviewGate).toHaveBeenCalledTimes(1);
@@ -241,6 +246,7 @@ describe("autonomous first-run soft-gate", () => {
       { command: "rm -rf build" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     expect(
       (deps as unknown as { verifyAutonomousAck: ReturnType<typeof vi.fn> })
         .verifyAutonomousAck,
@@ -262,6 +268,7 @@ describe("autonomous first-run soft-gate", () => {
       { command: "rm -rf build" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     const disclosureSends = (deps.sendToClient as ReturnType<typeof vi.fn>).mock
       .calls.map((c) => c[1])
       .filter((p: { type?: string }) => p.type === "autonomous_disclosure");
@@ -288,6 +295,7 @@ describe("autonomous first-run soft-gate", () => {
       { command: "rm -rf build" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     const sends = (deps.sendToClient as ReturnType<typeof vi.fn>).mock.calls.map(
       (c) => c[1],
     );
@@ -339,6 +347,7 @@ describe("autonomous first-run soft-gate", () => {
       { command: "rm -rf build" },
       sdkOptions(),
     );
+    if (result === null) throw new Error("canUseTool returned null");
     expect(deps.abortableReviewGate).toHaveBeenCalled();
     expect(result.behavior).toBe("deny");
   });

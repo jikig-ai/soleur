@@ -47,7 +47,34 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # (#8919, item 5) Push-arm duplicate proof: on push, if the merged PR's head
+  # ran this workflow green on the byte-identical tree, the work job skips.
+  # duplicate=false on every ambiguity (and on non-push events) → the run
+  # proceeds. Job-level read scopes stay narrow — the proof only reads.
+  detect-duplicate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read         # this workflow's own runs on the PR head
+      pull-requests: read   # commits/{sha}/pulls association
+    outputs:
+      duplicate: ${{ steps.dup.outputs.duplicate }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - id: dup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+        run: bash scripts/main-push-duplicate-skip.sh validate-vector-config.yml "$MERGE_SHA" validate-vector-config >> "$GITHUB_OUTPUT"
+
   validate-vector-config:
+    needs: detect-duplicate
+    # always() is load-bearing: on non-push events detect-duplicate is
+    # skipped, and a plain needs-graph would skip this job too — the explicit
+    # always() + `!= 'true'` reads the skip as "" and runs (#8919).
+    if: always() && needs.detect-duplicate.outputs.duplicate != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

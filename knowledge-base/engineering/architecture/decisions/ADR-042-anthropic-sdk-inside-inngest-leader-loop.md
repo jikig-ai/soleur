@@ -3,7 +3,7 @@ title: Anthropic SDK inside Inngest function bodies — leader-loop topology
 status: accepted
 date: 2026-05-25
 related: [4379, 4124, 4378]
-related_adrs: [ADR-030, ADR-041]
+related_adrs: [ADR-030, ADR-041, ADR-251]
 related_plans:
   - knowledge-base/project/plans/2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md
 related_specs:
@@ -54,7 +54,11 @@ For each turn `n` in `[1..maxTurns]`, the Inngest function body issues:
 
 Step names are deterministic and keyed off `actionSendId` + turn index. **Inngest replay determinism** memoizes successful step results: on retry, only failed steps re-run. This is the cost-correct shape per Inngest replay semantics — a transient SDK error in turn 5 does NOT re-bill turns 1-4.
 
-**Sentinel test**: `apps/web-platform/test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts` replays a forced-fail turn-2 and asserts only turn-2 re-runs.
+**Sentinel test**: `apps/web-platform/test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts` replays a forced-fail turn-2 and asserts only turn-2 re-runs. The same file's "Guard 2 — deterministic rejections are returned from the step" block pins the two terminal outcomes below.
+
+> **Amended 2026-09-24 (leader-loop prompt-caching fix).** `turn-${n}-claude` now has two terminal outcomes, `AnthropicTurnResult | TurnRejection`. A deterministic API rejection (any 4xx other than 408/409/429) and a missing key (`MissingByokKeyError`) are **returned** from the step as plain JSON (`{ rejected, status, message, stack }`), not thrown, so they are never step failures and never retried. The reason: a thrown error reaches the handler as an Inngest `StepError` whose `status` is dropped and whose custom `name` is rewritten to `"Error"`, so the handler could not tell a rejection from a timeout, and `retries: 3` re-sent the same rejected request three more times. The status is read on the live error inside the step, before the key is billed; everything after `messages.create` resolves stays outside that `try`. Transient failures (408/409/429, 5xx, connection errors, lease `fetch_failed`/`escape`) are still thrown and retried as before. Lease `decrypt_failed` is deterministic but is still thrown, by stated exception; it costs nothing and classifies correctly through its string `cause`, which does survive the round-trip. A deterministic 400 for an exhausted credit balance or the founder's own spend cap is classified as `byok_lease_unavailable`, not as a rejected request. A rejection appears as a *completed* step in the Inngest UI; the dead-letter log line and the Sentry event are the signal. Precedent for "returned = terminal, thrown = retried": `apps/web-platform/server/inngest/middleware/run-log.ts` (#5674, a returned `{ ok:false }`).
+
+> **Amended 2026-09-25 (#8783, #8803).** A transient that is still THROWN now carries its `FailureReason` as a string own-property `cause`: inside the step, `tagTransientAnthropicError` reads the live error and throws a fresh Error with its message, stack and that `cause`. That is the one field that survives the StepError round-trip, and `ByokLeaseError` already relies on it. A 429 is tagged `anthropic_rate_limited`. A 408, 409 or 5xx, or any error that is `instanceof APIConnectionError`, is tagged `anthropic_timeout`. The check is `instanceof`, not `name`, because the SDK sets `name === "Error"` on both connection classes. The error is still thrown and retried 3 times; only the label of the final failure changes. The handler's classifier now matches positively only: a lease `cause`, or a transient tag. Any other thrown error is `leader_internal_error`, which pages. This newly pages any error in `turn-${n}-claude` that is neither a lease error nor a tagged Anthropic transient, for example a post-billing cost-write failure or a `TypeError`: defects on our side that used to read as an Anthropic timeout. Rejected alternative: #8783's final-attempt `TurnRejection` keyed on `ctx.maxAttempts`, because that field is optional in SDK 3.54.2, so the final attempt cannot be known.
 
 ### I2 — BYOK lease opens INSIDE each SDK-calling `step.run`
 
@@ -103,11 +107,17 @@ Each leader-prompt module exports `promptVersion: "v${number}.${number}.${number
 
 ### I5 — `cache_control: ephemeral` ON; cache tokens load-bearing in `persistTurnCost`
 
-All Anthropic calls use `cache_control: { type: "ephemeral" }` markers on the system prompt + tool definitions. The `cache_read_input_tokens` + `cache_creation_input_tokens` fields from the SDK response MUST flow through `persistTurnCost(...)`'s usage object. Per learning `2026-05-12-stub-handlers-as-silent-undercount-vectors.md`, omitting these fields under-counts dashboard input cost by ~90% (with caching ON, the bulk of "real" input tokens land in `cache_read_input_tokens`).
+All Anthropic calls use `cache_control: { type: "ephemeral" }` markers on the system prompt + tool definitions *(placement superseded 2026-09-24 — see the amendment below)*. The `cache_read_input_tokens` + `cache_creation_input_tokens` fields from the SDK response MUST flow through `persistTurnCost(...)`'s usage object. Per learning `2026-05-12-stub-handlers-as-silent-undercount-vectors.md`, omitting these fields under-counts dashboard input cost by ~90% (with caching ON, the bulk of "real" input tokens land in `cache_read_input_tokens`).
 
 `persistTurnCost` is **awaited** inside the per-turn `step.run` (Kieran review B2 fix); the cost row commits before the next step's progress-write triggers the Supabase Realtime fanout. This makes the Today card's cumulative cost display read the just-completed turn deterministically (no race window).
 
-**Sentinel test**: `byok-audit-writer-sweep` lint + `agent-on-spawn-requested-leader-loop.test.ts` assertion that mocked SDK calls returning cache fields propagate to the RPC call args.
+**Sentinel test**: `byok-audit-writer-sweep` lint + `agent-on-spawn-requested-leader-loop.test.ts` assertion that mocked SDK calls returning cache fields propagate to the RPC call args, plus the same file's "Guard 1 — leader-loop cache breakpoints" block (≤ 4 and exactly 2 breakpoints per request, for every class in `LEADER_PROMPTS` and every turn).
+
+> **Amended 2026-09-24 (leader-loop prompt-caching fix).** Marker placement is now **one explicit marker on the last system block plus top-level automatic caching** (`cache_control` on the request), never one per tool definition. The Messages API caps a request at 4 breakpoints, the automatic one included, and `security.cve_alert` has 5 tools, so per-tool markers made every one of its turns a 400. Render order is tools → system → messages, so the system marker already covers the tools, though today tools + system sit below every leader model's minimum cacheable length, so that marker is inert until prompts grow and the real caching comes from the automatic breakpoint, which moves forward each turn so calls 2..N read the growing conversation from cache. Both markers keep the 5-minute default TTL, which `MODEL_PRICING`'s cache-write rate assumes. If the TTL ever changes, change both, and keep the explicit marker's TTL ≥ the top-level one (a 1-hour automatic entry after a 5-minute marker is a 400).
+
+### I6 — Every leader-loop run ends in a terminal `action_sends` state, with four tracked exceptions
+
+*Added 2026-09-25 (#8803).* For failures the handler catches, the body writes the terminal state through `persistFailure`. A run the body did not finish is settled by `agent-on-spawn-settle`. That covers a retry-exhausted throw from one of the steps with no try/catch, a synchronous throw, the `timeouts.finish` cutoff (built from `FINISH_TIMEOUT_MS`) and an Inngest-level cancel. The settle function is reached two ways: from the handler's `onFailure`, which forwards `agent.spawn.orphaned`, and from the `inngest/function.cancelled` listener. It writes `leader_internal_error` (paged) with a conditional, founder-scoped UPDATE. The one exception is a cancel that lands before the timeout on a row where the founder had clicked Stop; that row gets `cancelled_by_operator`. The dead-letter message carries the lifecycle (`(failed)`, `(cancelled)`, `(timed_out)` or `(settle_failed)`), so each cause gets its own Sentry issue. The exceptions, all tracked in #8839: a run Inngest loses; a `persist-failure` write that fails inside `persistFailure`; and a settle or `onFailure` forward that exhausts its retries (both page `(settle_failed)`, but nothing is written). The fleet-wide rule, and the measured server semantics behind it, are in [ADR-251](ADR-251-inngest-terminal-record-handles-both-lifecycle-signals.md). Triage: `knowledge-base/engineering/operations/runbooks/spawn-dead-letter-triage.md`.
 
 ## Consequences
 
@@ -131,7 +141,9 @@ All Anthropic calls use `cache_control: { type: "ephemeral" }` markers on the sy
 | Sentinel | Path | Asserts |
 |---|---|---|
 | Loop replay determinism | `test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts` | I1 |
+| Deterministic rejections returned, not retried (Guard 2, 2026-09-24) | `test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts` | I1 |
 | BYOK audit writer sweep | `test/server/byok-audit-writer-sweep.test.ts` (existing, widened scope) | I2 + I5 |
+| Cache-breakpoint cap and placement (Guard 1, 2026-09-24) | `test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts` | I5 |
 | Tool surface allowlist | `test/server/inngest/leader-prompts/tool-surface.test.ts` | I3 |
 | Prompt version stability | `test/server/inngest/leader-prompts/prompt-version-stability.test.ts` | I3 + I4 |
 | ADR ordinal guard | `scripts/check-adr-ordinals.sh` | this ADR + ADR-041 exist with required headings |
@@ -144,6 +156,8 @@ All Anthropic calls use `cache_control: { type: "ephemeral" }` markers on the sy
 4. **Hash-based `promptVersion`** — rejected; JS engine `.toString()` is runtime-dependent (Kieran review M6).
 5. **`persistTurnCost` fire-and-forget** — rejected; Kieran review B2 surfaced the cost-vs-Realtime race that the await closes.
 6. **Inngest Realtime (`step.realtime.publish()`)** for in-flight progress channel — deferred to a follow-up issue post-PR-B per Reality-Check Findings row 3 (brainstorm locked Supabase Realtime).
+7. **`cache_control` on every tool definition** — rejected 2026-09-24: exceeds the 4-breakpoint cap at ≥ 3 tools once automatic caching takes a slot (`security.cve_alert` has 5), and tools + system is below the minimum cacheable length anyway.
+8. **Carrying a rejection verdict across the step boundary in the thrown error** (a custom error `name`, or a message tag plus `NonRetriableError`) — rejected 2026-09-24: Inngest's error serialization rewrites custom names to `"Error"` and drops `status`, so a name carrier does not survive. A string `cause` or a message tag does survive, but needs a parser, a membership check and a serializer fixture; a returned value is memoized as-is and needs none of them.
 
 ## References
 

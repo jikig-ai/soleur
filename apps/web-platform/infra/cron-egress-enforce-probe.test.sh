@@ -72,7 +72,7 @@ assert_grep "negative probe captures curl exit code (errexit-safe)" \
 assert_grep "negative probe treats reachable (exit 0) as INERT" 'neg_rc" -eq 0' "$PROBE"
 assert_grep "negative probe treats non-timeout (!= 28) as INCONCLUSIVE → fail-closed" 'neg_rc" -ne 28' "$PROBE"
 # Negative probe MUST stay single-shot (a --retry on it would mask a real open path).
-if grep -qE 'https://example\.com .*--retry' "$PROBE" || grep -qE '--retry.* https://example\.com' "$PROBE"; then
+if grep -qE 'https://example\.com .*--retry' "$PROBE" || grep -cE '--retry.* https://example\.com' >/dev/null "$PROBE"; then
   FAIL=$((FAIL + 1)); echo "  FAIL: negative probe must NOT --retry (would mask a real open egress path)"
 else
   PASS=$((PASS + 1)); echo "  PASS: negative probe is single-shot (no --retry)"
@@ -154,12 +154,13 @@ assert_grep "cloud-init fail-closed poweroff on non-enforcing host" 'poweroff -f
 assert_grep "probe invocation is fail-closed (if ! probe; then … poweroff)" \
   'if ! /usr/local/bin/cron-egress-enforce-probe\.sh; then' "$CLOUD_INIT"
 # ORDERING: the probe must run AFTER the app container starts (the terminal `docker run`'s
-# final image arg). #6122 replaced the bare `${image_name}` arg with the resolved
-# zot-or-GHCR ref `"$(cat /run/soleur-image-ref … || echo '${image_name}')"`; the run arg
+# final image arg). #6122 replaced the bare `${image_name}` arg with the ref the seed block
+# resolved, `"$(cat /run/soleur-image-ref)"` (#8036 1d dropped its `|| echo` GHCR fallback: the
+# seed block's `exit 1` guarantees the sentinel exists before any reader). The run arg
 # is the only line that STARTS with the quoted `cat` (the pull/create sites prefix it with
 # `docker pull`/`docker create`). Probe line number MUST be greater.
 CONTAINER_LINE="$(grep -nE '^\s*"\$\(cat /run/soleur-image-ref' "$CLOUD_INIT" | tail -1 | cut -d: -f1)"
-PROBE_LINE="$(grep -nE 'if ! /usr/local/bin/cron-egress-enforce-probe\.sh' "$CLOUD_INIT" | head -1 | cut -d: -f1)"
+PROBE_LINE="$(grep -nE 'if ! /usr/local/bin/cron-egress-enforce-probe\.sh' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)"
 if [[ -n "$CONTAINER_LINE" && -n "$PROBE_LINE" && "$PROBE_LINE" -gt "$CONTAINER_LINE" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: probe runs AFTER the app container starts (container=$CONTAINER_LINE < probe=$PROBE_LINE)"
 else
@@ -172,7 +173,7 @@ fi
 # fall through to a clean exit.
 echo "-- shell-semantics guard: an ASSERT-FAILED branch emits + halts under set -e --"
 SENTINEL_OUT="$(bash -c 'set -e; if true; then echo "ASSERT-FAILED: egress-probe-negative"; exit 1; fi; echo SHOULD-NOT-REACH' 2>&1 || true)"
-if echo "$SENTINEL_OUT" | grep -qF 'ASSERT-FAILED: egress-probe-negative' && ! echo "$SENTINEL_OUT" | grep -qF 'SHOULD-NOT-REACH'; then
+if echo "$SENTINEL_OUT" | grep -cF 'ASSERT-FAILED: egress-probe-negative' >/dev/null && ! echo "$SENTINEL_OUT" | grep -cF 'SHOULD-NOT-REACH' >/dev/null; then
   PASS=$((PASS + 1)); echo "  PASS: an ASSERT-FAILED branch emits name and halts (fail-branch shell semantics intact)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: ASSERT-FAILED branch did not emit+halt as expected (got: $SENTINEL_OUT)"

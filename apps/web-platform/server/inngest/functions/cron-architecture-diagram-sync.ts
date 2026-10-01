@@ -31,7 +31,9 @@ import {
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
-  DeployInProgressError,
+  deferDeployOnFinalAttempt,
+  unwrapSetupVerdict,
+  type WorkspaceSetupVerdict,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -263,20 +265,19 @@ export async function cronArchitectureDiagramSyncHandler({
   );
 
   // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
-  let ephemeralRoot: string | null = null;
-  let spawnCwd: string | null = null;
+  let verdict: WorkspaceSetupVerdict;
   try {
-    const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace({
-        installationToken,
-        cronName: "cron-architecture-diagram-sync",
-      });
-    });
-    ephemeralRoot = workspace.ephemeralRoot;
-    spawnCwd = workspace.spawnCwd;
+    verdict = await step.run("setup-workspace", async () =>
+      deferDeployOnFinalAttempt(
+        () =>
+          setupEphemeralWorkspace({
+            installationToken,
+            cronName: "cron-architecture-diagram-sync",
+          }),
+        { attempt, maxAttempts },
+      ),
+    );
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare.
-    if (err instanceof DeployInProgressError) throw err;
     const e = err as Error;
     const redacted = new Error(redactToken(e.message ?? "", installationToken));
     redacted.name = e.name;
@@ -296,6 +297,9 @@ export async function cronArchitectureDiagramSyncHandler({
     });
     return { ok: false };
   }
+
+  // Outside the catch, before the try/finally — see unwrapSetupVerdict (#8726).
+  const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-architecture-diagram-sync");
 
   try {
     // #5728 — flag pattern. The body runs in an inner try whose throw sets
@@ -325,7 +329,7 @@ export async function cronArchitectureDiagramSyncHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
             prompt: injectRunDate(ARCHITECTURE_DIAGRAM_SYNC_PROMPT, runStartedAt),
@@ -379,7 +383,7 @@ export async function cronArchitectureDiagramSyncHandler({
       if (heartbeatOk && !spawnResult.abortedByTimeout) {
         const commitResult = await step.run("safe-commit-pr", async () =>
           safeCommitAndPr({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             cronName: "cron-architecture-diagram-sync",
             commitMessage: COMMIT_MESSAGE,
@@ -488,10 +492,8 @@ export async function cronArchitectureDiagramSyncHandler({
         });
       }
     } catch (err) {
-      // #5728 G1 — a deploy-in-progress defer is benign: rethrow bare with NO
-      // heartbeat. Any OTHER throw is a real failure — flag it;
+      // #5728 — any throw here is a real failure — flag it;
       // finalizeOutputAwareHeartbeat decides error-vs-retry below.
-      if (err instanceof DeployInProgressError) throw err;
       threw = true;
       const e = err as Error;
       const redacted = new Error(
@@ -548,8 +550,7 @@ export async function cronArchitectureDiagramSyncHandler({
       // the re-spawned agent burns real Anthropic spend against a path that no
       // longer exists. One honest terminal RED beats a retry that cannot succeed.
       // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
-      // itself) are unaffected and still retry into a fresh workspace, and
-      // DeployInProgressError still rethrows bare.
+      // itself) are unaffected and still retry into a fresh workspace.
       //
       // This is a PREREQUISITE for consuming safeCommitAndPr's return value, not a
       // peer of it: that consumption lowers heartbeatOk, which on a run that also

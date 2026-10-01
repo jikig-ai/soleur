@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { C4_PROMPT_ADDENDUM, C4_TOOL_DESCRIPTION } from "@/server/c4-concierge-tools";
 
 // Honesty gate for the two LLM-facing C4 surfaces — the edit_c4_diagram tool
 // description AND the Concierge system-prompt addendum in cc-dispatcher.ts. They
@@ -19,12 +20,28 @@ function read(rel: string): string {
   return readFileSync(path.join(ROOT, rel), "utf8");
 }
 
-const surfaces = ["server/c4-concierge-tools.ts", "server/cc-dispatcher.ts"];
+// #8623: both copies now live in c4-concierge-tools.ts (C4_TOOL_DESCRIPTION and
+// C4_PROMPT_ADDENDUM share one rerender-outcome paragraph); cc-dispatcher.ts
+// assigns the constant (pinned by c4-concierge-copy.test.ts). So the honesty
+// sweep reads the constants, and the dispatcher must carry no inline copy.
+
+const surfaces: Array<[string, () => string]> = [
+  ["C4_TOOL_DESCRIPTION", () => C4_TOOL_DESCRIPTION],
+  ["C4_PROMPT_ADDENDUM", () => C4_PROMPT_ADDENDUM],
+  ["server/cc-dispatcher.ts", () => read("server/cc-dispatcher.ts")],
+];
 
 describe("C4 edit-tool / prompt-addendum honesty (Layer 2)", () => {
-  for (const rel of surfaces) {
+  for (const [rel, load] of surfaces) {
     it(`${rel} keys the re-render claim on the rerendered field`, () => {
-      const src = read(rel);
+      const src = load();
+      if (rel.endsWith(".ts")) {
+        // The dispatcher delegates to the shared constant rather than restating it.
+        expect(src).toMatch(/c4PromptAddendum\s*=\s*C4_PROMPT_ADDENDUM/);
+        expect(src.toLowerCase()).not.toContain("out-of-band");
+        expect(src.toLowerCase()).not.toContain("cannot trigger");
+        return;
+      }
       // The truthful contract references the `rerendered` signal.
       expect(src).toContain("rerendered");
       // The stale Layer-1 copy ("only ... out-of-band", "you cannot trigger")

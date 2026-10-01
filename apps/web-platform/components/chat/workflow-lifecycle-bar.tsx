@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { Button } from "@/components/ui/button";
 import type { WorkflowLifecycleState } from "@/lib/chat-state-machine";
 
 /**
@@ -53,13 +54,14 @@ export function WorkflowLifecycleBar({
           ) : null}
           {onSwitchWorkflow !== undefined ? (
             <div className="ml-auto">
-              <button
+              <Button
+                variant="outlined"
                 type="button"
                 onClick={onSwitchWorkflow}
                 className="rounded-md border border-soleur-border-default px-2 py-1 text-xs text-soleur-text-secondary hover:border-soleur-border-emphasized"
               >
                 Switch workflow
-              </button>
+              </Button>
             </div>
           ) : null}
         </div>
@@ -89,13 +91,14 @@ export function WorkflowLifecycleBar({
             ) : null}
           </div>
           <div>
-            <button
+            <Button
+              variant="gold"
               type="button"
               onClick={onStartNewConversation}
               className="rounded-md bg-amber-600 px-3 py-1 text-xs text-soleur-text-on-accent hover:bg-amber-500"
             >
               Start new conversation
-            </button>
+            </Button>
           </div>
         </div>
       );

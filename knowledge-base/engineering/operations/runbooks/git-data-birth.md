@@ -280,6 +280,8 @@ approval: the interlock, the birth gate, and the stock preflight.
 - **Monitoring.** `betteruptime_heartbeat.git_data_prd` is deliberately **out** of this
   job's `-target` set and ships paused. Its feeder already exists and is web-host-resident,
   so arming a monitor from this route would produce a green dashboard measuring nothing.
+  Since #8754 the per-merge apply creates and arms it instead, so an already-armed monitor
+  pages on absence during a re-birth window.
 - **Working transport keys in the running web container.** See below — this one has an
   action attached.
 

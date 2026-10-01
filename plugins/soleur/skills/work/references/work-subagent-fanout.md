@@ -35,12 +35,15 @@ INSTRUCTIONS:
 - Follow existing codebase patterns and conventions
 - Write tests for new functionality
 - Run tests relevant to your changes. If you create or edit a `*.test.sh` or a `tests/scripts/lib/*` file, ALSO run the repo-global ratchets no file-selected run can see: `plugins/soleur/test/fixture-relative-assert.test.sh`, `scripts/guard-vacuity-floor.test.sh`, `scripts/lint-trap-tempfile-ownership.test.sh`, `tests/scripts/test-plan-gate-preamble.sh` (#8189: four agents each shipped a green own-suite and 15 ratchet sites + 3 red ratchets between them)
+- For EVERY file you edit, also run each suite that `git grep -l <basename>` returns, not only the suites you wrote (#9098: a new alert moved a sibling battery's exact-count anchors in the same .tf file, and CI went red)
 - Do NOT commit -- the lead will commit after reviewing all work
 - Do NOT modify files outside your assigned scope
 - Do NOT run package manager install commands (bun install, npm install) that create lockfiles
 - If any task involves UI copy from an approved copy document, include the FULL VERBATIM text in the task description -- never summarize or paraphrase CMO-approved copy
 - Report back: what you completed, files modified, any issues encountered"
 ```
+
+**A brief written by hand (a review-fix round, a one-shot slice) still owes this template's INSTRUCTIONS block verbatim**, and a slice that WRITES records describing a pipeline step (an enrolment, a tracker, a close) must run after that step, not before it. **Why:** #8708 — four ad-hoc briefs omitted the ratchet line and 13 unguarded fixture sites reached the tree; a records slice wrote "enrolled on #6122" before the enrolment ran, and two review seats flagged it.
 
 ## Step B3: Collect results and integrate
 

@@ -20,6 +20,7 @@ import {
   agentIdToCompatFilename,
   agentIdToGrokSubagentType,
   buildCompatStubBody,
+  renderAgentIdsForGrok,
   PLUGIN_ROOT,
 } from "../lib/agent-registry";
 
@@ -48,14 +49,27 @@ function grokStubModelLine(model: string): string | null {
   return `model: ${model}`;
 }
 
-/** YAML-safe quoted scalar for frontmatter fields that may contain `:`, `§`, etc. */
+/**
+ * YAML-safe double-quoted scalar for frontmatter fields that may contain `:`, `§`, etc. Line
+ * breaks and control characters are escaped too: a raw newline could close the stub's
+ * frontmatter early under a `^---` regex parser.
+ */
 function yamlQuote(value: string): string {
-  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
   return `"${escaped}"`;
 }
 
-function compatStubMarkdown(entry: ReturnType<typeof discoverAgentEntries>[number]): string {
-  const description = entry.description || entry.name;
+function compatStubMarkdown(
+  entry: ReturnType<typeof discoverAgentEntries>[number],
+  agentIds: ReadonlySet<string>,
+): string {
+  const description = renderAgentIdsForGrok(entry.description || entry.name, agentIds);
   // Frontmatter name MUST match the Grok spawn key (filename stem = colons→hyphens).
   // Using colon-form here lists `soleur:product:cpo` in available types while
   // spawn only accepts `soleur-product-cpo` (Grok ≤0.2.102 filename-stem match).
@@ -73,8 +87,10 @@ function compatStubMarkdown(entry: ReturnType<typeof discoverAgentEntries>[numbe
 
 function expectedCompatFiles(): Map<string, string> {
   const files = new Map<string, string>();
-  for (const entry of discoverAgentEntries()) {
-    files.set(agentIdToCompatFilename(entry.id), compatStubMarkdown(entry));
+  const entries = discoverAgentEntries();
+  const agentIds = new Set(entries.map((e) => e.id));
+  for (const entry of entries) {
+    files.set(agentIdToCompatFilename(entry.id), compatStubMarkdown(entry, agentIds));
   }
   return files;
 }

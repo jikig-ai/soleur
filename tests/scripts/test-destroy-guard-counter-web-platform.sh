@@ -891,6 +891,114 @@ t_deploy_pipeline_fix_carries_host_creates_halt() {
   fi
 }
 
+# ── T63 — deploy-pipeline-fix refuses non-terraform_data deletes (#8705). ─────
+#
+# That workflow's -targets reach hcloud_server.web["web-1"] and, through its user_data, every
+# credential the server's templatefile reads, so a pending credential rename plans as a replace
+# THERE, with no [ack-destroy] path and without re-firing the credential's SSH installers.
+# Mirrors the workflow block: counter from the shared filter, fail-closed numeric validation,
+# HALT on > 0. Returns "n:rc". Fixtures are synthesized inline (cq-test-fixtures-synthesized-only).
+_run_ntd_gate() {
+  local fixture="$1"
+  local counts n rc=0
+  if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
+    echo "ERROR:99"
+    return
+  fi
+  n=$(echo "$counts" | jq -r '.non_terraform_data_deletes')
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    echo "PARSE:1"
+    return
+  fi
+  if [[ "$n" -gt 0 ]]; then
+    rc=1
+  fi
+  echo "$n:$rc"
+}
+
+_ntd_case() {
+  local label="$1" plan="$2" want="$3" tmp out
+  tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup (T55's pattern)
+  printf '%s' "$plan" > "$tmp"
+  out=$(_run_ntd_gate "$tmp")
+  rm -f "$tmp"
+  if [[ "$out" == "$want" ]]; then
+    _report "$label" ok
+  else
+    _report "$label" fail "got '$out' want '$want'"
+  fi
+}
+
+t_non_terraform_data_deletes_counter() {
+  _ntd_case "T63a a doppler_service_token create_before_destroy replace counts 1 and HALTs" \
+    '{"resource_changes":[{"mode":"managed","type":"doppler_service_token","address":"doppler_service_token.fixture","change":{"actions":["create","delete"]}}]}' "1:1"
+  _ntd_case "T63b a terraform_data replace (this path's routine) counts 0" \
+    '{"resource_changes":[{"mode":"managed","type":"terraform_data","address":"terraform_data.fixture","change":{"actions":["delete","create"]}}]}' "0:0"
+  _ntd_case "T63c a forget of a non-terraform_data resource counts 1 and HALTs" \
+    '{"resource_changes":[{"mode":"managed","type":"hcloud_volume","address":"hcloud_volume.fixture","change":{"actions":["forget"]}}]}' "1:1"
+  _ntd_case "T63d a no-op and a create count 0" \
+    '{"resource_changes":[{"mode":"managed","type":"hcloud_server","address":"hcloud_server.fixture","change":{"actions":["no-op"]}},{"mode":"managed","type":"random_password","address":"random_password.fixture","change":{"actions":["create"]}}]}' "0:0"
+  local out
+  out=$(_run_ntd_gate "$FIXTURES/tfplan-hcloud-server-location-replace.json")
+  if [[ "$out" =~ ^[1-9][0-9]*:1$ ]]; then
+    _report "T63e the hcloud_server location-replace fixture HALTs" ok
+  else
+    _report "T63e the hcloud_server location-replace fixture HALTs" fail "got '$out'"
+  fi
+  out=$(_run_ntd_gate "$FIXTURES/tfplan-web-platform-real-baseline.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T63f the captured real baseline counts 0 (routine merges stay green)" ok
+  else
+    _report "T63f the captured real baseline counts 0" fail "got '$out' want '0:0'"
+  fi
+}
+
+t_deploy_pipeline_fix_carries_ntd_halt() {
+  local wf code halt_ln apply_ln
+  wf="${REPO_ROOT}/.github/workflows/apply-deploy-pipeline-fix.yml"
+  code="$(grep -vE '^[[:space:]]*#' "$wf" 2>/dev/null || true)"
+  if grep -qF "ntd_deletes=\$(echo \"\$counts\" | jq -r '.non_terraform_data_deletes') || ntd_rc=\$?" <<<"$code"; then
+    _report "T56e deploy-pipeline-fix parses .non_terraform_data_deletes with a guarded capture" ok
+  else
+    _report "T56e deploy-pipeline-fix parses .non_terraform_data_deletes" fail "no guarded jq -r '.non_terraform_data_deletes' capture"
+  fi
+  if grep -qF '[[ "$ntd_rc" -ne 0 || ! "$ntd_deletes" =~ ^[0-9]+$ ]]' <<<"$code"; then
+    _report "T56f deploy-pipeline-fix validates non_terraform_data_deletes (fail-CLOSED)" ok
+  else
+    _report "T56f deploy-pipeline-fix validates non_terraform_data_deletes" fail "missing the ^[0-9]+\$ / rc guard"
+  fi
+  # `|| true` inside the capture: under this suite's `set -e` a no-match grep would otherwise
+  # abort the run at the assignment, before the row that reports it.
+  halt_ln=$({ grep -nF '[[ "$ntd_deletes" -gt 0 ]]' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  apply_ln=$({ grep -nF 'terraform apply -auto-approve -input=false tfplan' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  if [[ -n "$halt_ln" && -n "$apply_ln" && "$halt_ln" -lt "$apply_ln" ]]; then
+    _report "T56g deploy-pipeline-fix HALTs on non_terraform_data_deletes > 0 before its apply" ok
+  else
+    _report "T56g deploy-pipeline-fix HALTs before its apply" fail "halt line='${halt_ln}' apply line='${apply_ln}'"
+  fi
+  local window
+  window="$(awk -v s="${halt_ln:-0}" 'NR >= s && NR < s + 8' <<<"$code")"
+  if [[ -n "$halt_ln" ]] && grep -qE '^[[:space:]]*exit 1$' <<<"$window"; then
+    _report "T56h the non_terraform_data_deletes HALT exits non-zero" ok
+  else
+    _report "T56h the non_terraform_data_deletes HALT exits non-zero" fail "no exit 1 within the HALT block"
+  fi
+  if grep -qF "rb_updates=\$(echo \"\$counts\" | jq -r '.reboot_updates') || rb_rc=\$?" <<<"$code" \
+     && grep -qF '[[ "$rb_rc" -ne 0 || ! "$rb_updates" =~ ^[0-9]+$ ]]' <<<"$code"; then
+    _report "T56i deploy-pipeline-fix parses and validates .reboot_updates (fail-CLOSED)" ok
+  else
+    _report "T56i deploy-pipeline-fix parses and validates .reboot_updates" fail "no guarded, validated capture"
+  fi
+  local rb_ln
+  rb_ln=$({ grep -nF '[[ "$rb_updates" -gt 0 ]]' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  window="$(awk -v s="${rb_ln:-0}" 'NR >= s && NR < s + 5' <<<"$code")"
+  if [[ -n "$rb_ln" && -n "$apply_ln" && "$rb_ln" -lt "$apply_ln" ]] && grep -qE '^[[:space:]]*exit 1$' <<<"$window"; then
+    _report "T56j deploy-pipeline-fix HALTs on reboot_updates > 0 before its apply" ok
+  else
+    _report "T56j deploy-pipeline-fix HALTs on reboot_updates > 0 before its apply" fail "reboot line='${rb_ln}' apply line='${apply_ln}'"
+  fi
+}
+
 # ── T55 — the host_creates arm is hcloud_server-scoped (#6919). ──────────────
 #
 # host_creates counts hcloud_server BIRTHS only. hcloud_volume was DROPPED from
@@ -997,6 +1105,8 @@ t_web2_retire_server_replace_aborts
 t_apply_job_host_creates_halt_job_scoped
 t_volume_create_does_not_trip_host_birth_halt
 t_deploy_pipeline_fix_carries_host_creates_halt
+t_non_terraform_data_deletes_counter
+t_deploy_pipeline_fix_carries_ntd_halt
 
 
 # ── #7695: the LUKS passphrase HALT ──────────────────────────────────────────────
@@ -1499,16 +1609,17 @@ t_apply_job_luks_halt_job_scoped
 _ran=$((pass + fail))
 # Measured on the as-written suite after the origin/main merge: 49 shared with the merge base,
 # + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
-# + 2 cloudflare_list arms (#8364, T61/T62) = 77. Exact, not a ceiling: deleting a
-# single arm invocation reports "only 76 assertions ran, floor is 77".
+# + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
+# delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 88 assertions ran, floor is 89".
 # current count rather than leaving slack — the review panel showed 3 assertions
 # of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
 # is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 77 ]]; then
+if [[ "$_ran" -lt 89 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 77. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 89. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 77)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 89)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

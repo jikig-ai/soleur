@@ -300,7 +300,8 @@ export async function emailOnReceivedHandler({
 
   // Final-attempt gate for the degraded-finalize tail (#5468). With retries: 1
   // (below) maxAttempts is statically 2, so attempts 0 and 1 → final is index 1.
-  // Predicate copied verbatim from cron-stale-deferred-scope-outs.ts:358. The
+  // Same formula as `isFinalAttempt` in _cron-shared.ts (not imported: this is
+  // not a cron and does not pull in _cron-shared's github deps). The
   // `?? 1` fail-safe collapses to always-final if a fire ever omits maxAttempts
   // — that degrades to "degrade on first failure" (over-eager), never to
   // masking a recoverable transient by writing a degraded row AND swallowing

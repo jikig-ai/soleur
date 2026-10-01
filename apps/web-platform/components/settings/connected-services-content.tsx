@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import {
   PROVIDER_CONFIG,
   EXCLUDED_FROM_SERVICES_UI,
@@ -52,29 +54,39 @@ function ProviderCard({
   const config = PROVIDER_CONFIG[provider];
   const [expanded, setExpanded] = useState(false);
   const [token, setToken] = useState("");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [removing, setRemoving] = useState(false);
+  // New error surface (#9053): a failed remove was silently swallowed by the
+  // parent — the row stayed connected-looking with no signal.
+  const [removeError, setRemoveError] = useState("");
 
-  const handleSubmit = async () => {
+  // Independent controls → one hook each (connect + remove).
+  // Both asyncFns never throw; failures land on their local error surfaces.
+  const { run: runConnect, pending: loading } = usePendingAction(async () => {
     if (!token.trim()) return;
-    setLoading(true);
     setError("");
-    const result = await onConnect(provider, token.trim());
-    setLoading(false);
-    if (result.valid) {
-      setExpanded(false);
-      setToken("");
-    } else {
-      setError(result.error ?? "Token validation failed. Please check and try again.");
+    try {
+      const result = await onConnect(provider, token.trim());
+      if (result.valid) {
+        setExpanded(false);
+        setToken("");
+      } else {
+        setError(result.error ?? "Token validation failed. Please check and try again.");
+      }
+    } catch {
+      setError("Something went wrong. Please check your connection and try again.");
     }
-  };
+  });
 
-  const handleRemove = async () => {
-    setRemoving(true);
-    await onRemove(provider);
-    setRemoving(false);
-  };
+  const { run: handleRemove, pending: removing } = usePendingAction(async () => {
+    setRemoveError("");
+    try {
+      await onRemove(provider);
+    } catch {
+      setRemoveError("Couldn't remove the token. Please try again.");
+    }
+  });
+
+  const handleSubmit = () => runConnect();
 
   return (
     <div
@@ -105,30 +117,41 @@ function ProviderCard({
         <div className="flex shrink-0 items-center gap-2">
           {connected ? (
             <>
-              <button
+              <Button
+                variant="outlined"
                 onClick={() => setExpanded(!expanded)}
-                className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
+                className="text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
               >
                 Rotate
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
                 onClick={handleRemove}
                 disabled={removing}
-                className="rounded-lg border border-red-900/30 px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:border-red-800 hover:text-red-300 disabled:opacity-50"
+                loading={removing}
+                loadingLabel="Removing"
+                className="text-xs"
               >
-                {removing ? "Removing..." : "Remove"}
-              </button>
+                Remove
+              </Button>
             </>
           ) : (
-            <button
+            <Button
+              variant="gold"
               onClick={() => setExpanded(!expanded)}
-              className="rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent transition-colors hover:opacity-90"
+              className="text-xs"
             >
               {expanded ? "Cancel" : "Connect"}
-            </button>
+            </Button>
           )}
         </div>
       </div>
+
+      {removeError && (
+        <p className="mt-2 text-sm text-red-400" role="alert">
+          {removeError}
+        </p>
+      )}
 
       {expanded && (
         <div className="mt-4 space-y-3">
@@ -164,13 +187,15 @@ function ProviderCard({
             <p className="text-xs text-soleur-text-muted">
               Token will be encrypted at rest and validated before saving.
             </p>
-            <button
+            <Button
+              variant="gold"
               onClick={handleSubmit}
               disabled={loading || !token.trim()}
-              className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
+              loading={loading}
+              loadingLabel="Validating"
             >
-              {loading ? "Validating..." : "Save"}
-            </button>
+              Save
+            </Button>
           </div>
         </div>
       )}
@@ -213,9 +238,12 @@ export function ConnectedServicesContent({ initialServices }: Props) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider }),
     });
-    if (res.ok) {
-      setServices((prev) => prev.filter((s) => s.provider !== provider));
+    if (!res.ok) {
+      // #9053: non-OK used to resolve silently — the row stayed connected-
+      // looking with zero signal. Throw so the card's removeError surfaces it.
+      throw new Error(`remove failed (${res.status})`);
     }
+    setServices((prev) => prev.filter((s) => s.provider !== provider));
   };
 
   // Group providers by category

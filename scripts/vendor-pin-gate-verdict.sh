@@ -60,7 +60,7 @@ if [[ "$detect" == "success" && ( "$verify" == "success" || "$verify" == "skippe
       echo "::error::vendor-pin gate FAILED closed: the upstream-blob verification was SKIPPED but detect-changes declared vendor='${vendor_flag:-<empty>}' (expected 'false'). A skipped worker without a positive 'no vendored surface' declaration asserts nothing about this tree — the gate cannot pass." >&2
       exit 1
     fi
-    skipped_msg="vendor-pin-required PASSED on the SKIPPED arm: the NOTICE upstream-blob verification did NOT execute against this tree (detect-changes emitted vendor=false — no vendored-surface path in the diff, or a merge_group candidate whose authoritative PR-arm run already passed). The green asserts nothing about upstream blob SHAs on this PR."
+    skipped_msg="vendor-pin-required PASSED on the SKIPPED arm: the NOTICE upstream-blob verification did NOT execute against this tree (detect-changes emitted vendor=false — no vendored-surface path in the diff, a merge_group candidate, or a push proven duplicate of the merged PR's green run on the identical tree #8919). The green asserts nothing about upstream blob SHAs on this PR."
     echo "::notice::$skipped_msg"
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       printf '%s\n' "- :warning: $skipped_msg" >>"$GITHUB_STEP_SUMMARY"

@@ -2,6 +2,11 @@
 #
 # FAIL-CLOSED placeholder pre-receive — epic #5274 Phase 2 PR B / ADR-068 §3.
 #
+# SUPERSEDED 2026-09-29 (#8211 PR2): the payload now ships the REAL CAS fence
+# (git-data-pre-receive.sh) and installs it at birth — a replace always precedes
+# the flip, and an out-of-band copy would be reverted by the next replace. This
+# file remains for the fixture suites that synthesize it by name; nothing ships it.
+#
 # Ships in cloud-init as the git-data fence hook UNTIL the real CAS fence
 # (git-data-pre-receive.sh) is delivered by a host replace (cloud-init) or the
 # operator root path the cutover uses. NOT by a git-uid channel: the hook directory is

@@ -18,6 +18,7 @@ import {
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import { NOT_LEGAL_ADVICE_NOTICE } from "@/lib/email-triage/statutory-rules";
 import type { InboxItemSeverity } from "@/lib/inbox-severity";
+import type { FailureReason } from "@/lib/failure-reason";
 
 const log = createChildLogger("notifications");
 
@@ -141,7 +142,7 @@ export const COST_BREAKER_NOTIFY_REASONS = [
   "byok_cap_exceeded",
   "leader_max_turns_exceeded",
   "cap_check_unavailable",
-] as const;
+] as const satisfies readonly FailureReason[];
 
 export type CostBreakerReason = (typeof COST_BREAKER_NOTIFY_REASONS)[number];
 

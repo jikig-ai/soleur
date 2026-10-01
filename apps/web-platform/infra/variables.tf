@@ -564,6 +564,34 @@ variable "doppler_token" {
   # so the never-attempt property that made this worth having is preserved.
 }
 
+# #8609 / ADR-241 D10 — the web host's read token for the isolated `soleur-github-app` project
+# (github-app-runtime-project.tf). Rendered as one conditional line into soleur-doppler-token.tmpl.
+# autonomy-considered: operator-mint (ADR-241 D3: this root's state is Tier-A readable, so a
+# doppler_service_token minted here would be branch-readable; the operator mints it into Tier-B
+# `soleur-infra-privileged` instead, runbook step R2). Supplied as a real value ONLY to jobs that
+# opt in through the infra-credentials loader's `github-app-runtime-token` input; every other job
+# gets "". Default "" keeps every plan working before R2 and renders the credential file
+# byte-identical to its pre-#8609 content. NO `validation` block, for the reason on
+# `variable "doppler_token"` above: the shape gate is local.github_app_token_shape_ok (server.tf).
+variable "github_app_runtime_doppler_token" {
+  description = "Read-only Doppler service token for soleur-github-app/prd (#8609). Tier B, operator-minted; empty until runbook step R2."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# #8609 — NOT a secret: "is this the job that delivers the token above?". The infra-credentials
+# loader exports TF_VAR_github_app_runtime_token_delivered in EVERY job, "true" only where the job
+# opted in (github-app-runtime-token: true), so a prd_terraform plant cannot win under
+# --preserve-env. It gates ONE thing: local.github_app_token_shape_ok requires a non-empty token
+# only when this is true and local.github_app_key_isolated is true. Census row G6o keeps it out of
+# every plan-visible attribute (it differs between contexts by design).
+variable "github_app_runtime_token_delivered" {
+  description = "True only in the jobs that deliver github_app_runtime_doppler_token to a web host (infra-credentials loader opt-in, #8609). Not a secret."
+  type        = bool
+  default     = false
+}
+
 variable "sentry_dsn" {
   description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. ENFORCED as of #6730 (ADR-145): the web-host-create dispatch asserts this non-empty in Doppler prd_terraform BEFORE any create, and fails closed on an unreadable secret as well as an empty one (ADR-128 R1). The web-host-replace dispatch (#6969, ADR-148) carries the same assertion, where it matters MORE: a replace destroys the existing host first, so an empty DSN means the replacement boots dark with nothing to fall back to. Between #6575 (which deleted the web-2-recreate job that used to assert it) and #6730 nothing enforced it; the operator pinned-image chain in the host_creates HALT still carries the check for the break-glass path, where nothing else does."
   type        = string
@@ -640,8 +668,14 @@ variable "git_data_betterstack_logs_token" {
   sensitive   = true
 }
 
+variable "host_proxy_tls_enabled" {
+  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default false, which is today's single-serving-host posture (#8754): SOLEUR_PROXY_BIND and SOLEUR_PROXY_PEER_ALLOWLIST are absent from Doppler prd, so delivering PROXY_TLS_* now would make createProxyServer fire a reportSilentFallback (createProxyServer.no-bind) on every web container start. Set true at the multi-host flip (#5274 Phase 3/6), in the same change that adds the bind + allowlist and the -target lines for all four addresses. Target the key and the cert together: a cert in prd without its key is unusable. See the ADR-118 amendment."
+  type        = bool
+  default     = false
+}
+
 variable "inngest_config_digest" {
-  description = "Promoted digest pointer (INNGEST_CONFIG_DIGEST) for the ADR-135 pull-based config-refresh channel (#6780). The IMMUTABLE @sha256 digest of the currently-promoted, keyless-signed config bundle. Provisioned into the ISOLATED soleur-inngest/prd project by inngest-config-digest.tf; the host timer resolves it, pulls the bundle @sha256 GHCR-direct, and cosign-verify-blobs offline before applying. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_config_digest (--name-transformer tf-var) on each `terraform apply`-driven promotion (HARD-6: Terraform is the writer, no standing CI write-token into the isolated project). Unlike the sibling secrets this is NOT rotation-at-source: promotion CHANGES the value, so the resource does NOT ignore_changes=[value]. Default is EMPTY — the honest dark/pre-promotion sentinel (nothing promoted yet). This is NOT a minted-secret default (hr-tf-variable-no-operator-mint-default targets secrets a default would let an operator skip minting): the value is a CI promotion OUTPUT whose absence is a legitimate state, and an empty default keeps every unrelated `terraform plan`/apply between merge and the #6178 cutover from failing var-resolution (the whole root resolves all TF_VARs before -target pruning). The doppler_secret is excluded from the apply -target list until the cutover, so the empty default never propagates."
+  description = "Promoted digest pointer (INNGEST_CONFIG_DIGEST) for the ADR-135 pull-based config-refresh channel (#6780). The IMMUTABLE @sha256 digest of the currently-promoted, keyless-signed config bundle. Provisioned into the ISOLATED soleur-inngest/prd project by inngest-config-digest.tf; the host timer resolves it, pulls the bundle @sha256 GHCR-direct, and cosign-verify-blobs offline before applying. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_config_digest (--name-transformer tf-var) on each `terraform apply`-driven promotion (HARD-6: Terraform is the writer, no standing CI write-token into the isolated project). Unlike the sibling secrets this is NOT rotation-at-source: promotion CHANGES the value, so the resource does NOT ignore_changes=[value]. Default is EMPTY — the honest dark/pre-promotion sentinel (nothing promoted yet). This is NOT a minted-secret default (hr-tf-variable-no-operator-mint-default targets secrets a default would let an operator skip minting): the value is a CI promotion OUTPUT whose absence is a legitimate state, and an empty default keeps every unrelated `terraform plan`/apply between merge and the #6178 cutover from failing var-resolution (the whole root resolves all TF_VARs before -target pruning). The doppler_secret is count-gated on a non-empty value (#8754), so the empty default instantiates nothing; it stays off every -target list until the promotion route lands (#9060)."
   type        = string
   sensitive   = true
   default     = ""
@@ -706,23 +740,6 @@ variable "github_infra_app_private_key" {
   type        = string
   sensitive   = true
   default     = ""
-}
-
-# #6005: scoped read:packages credential (machine account) for the now-PRIVATE GHCR
-# packages. NO default (hr-tf-variable-no-operator-mint-default) — the operator mints
-# it and writes the value into Doppler `prd_terraform` (the TF_VAR source) BEFORE this
-# file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
-# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-087).
-variable "ghcr_read_user" {
-  description = "GitHub machine-account login that owns the scoped read:packages PAT (the docker login -u value). Published to Doppler soleur/prd as GHCR_READ_USER."
-  type        = string
-  sensitive   = true
-}
-
-variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN. CONSUMERS \u2014 THREE fresh-boot login sites, not one: apps/web-platform/infra/cloud-init.yml (web host, root, writes root\u0027s docker config), apps/web-platform/infra/soleur-host-bootstrap.sh (web host, root, writes the SAME root config \u2014 so retiring only the cloud-init site would leave root_ghcr_auth=inline and make a 1d close criterion ungreenable), and apps/web-platform/infra/cloud-init-inngest.yml (inngest host, templated from inngest-host.tf). An earlier revision of this description said \u0027cloud-init fresh-boot login ONLY\u0027, which would have sent the 1d grep to one of the three. The ci-deploy.sh consumer (host pull + cosign .sig fetch auth) was RETIRED in #8036 item 1c on 2026-09-23 \u2014 the deploy path no longer reads this secret at all, and it sweeps any inline ghcr.io entry out of the deploy docker config on every deploy. The boot path still reads it and is tracked as 1d. The divergence is named here on purpose: the next engineer to grep GHCR_READ_TOKEN lands on why two host postures disagree instead of re-deriving it. NO default."
-  type        = string
-  sensitive   = true
 }
 
 # #6178 — post-cutover web-host scheduling toggle. When true, a freshly-CREATED web

@@ -278,3 +278,19 @@ shim (`xargs` reports **125** for a real signal versus **123** for a deliberate 
 the only position where the two are distinguishable at all — at the fixture-suite position they
 are byte-identical at every chokepoint (`rc=$?` 137, `xargs` 0). A canary placed there could
 never have fired, which is the same vacuity class this ADR's taxonomy exists to expose.
+
+## Addendum — 2026-09-25 (#8616): leaf hook suites exit 3; the runner still counts them FAILED
+
+About 25 leaf suites under `.claude/hooks/` now exit **3** when a tool they guard (`jq`, `git`,
+`perl`, `realpath`, `python3`, `script`) is off PATH, printing
+`UNRESOLVED: <tool> missing — this suite asserted nothing; install <tool>`. This does **not** adopt
+3 below the top level in the sense D2 forbids. `run_suite` keeps classifying a leaf rc 3 as
+`failed`, prints `[FAIL]`, and the runner exits 1. That is deliberate: D2's reason (a suite can exit 3
+for its own reasons, so the runner cannot trust it as "my children were killed") still holds.
+
+What the leaf rc 3 buys is attribution at direct invocation (`bash <suite>; echo $?` separates
+"could not run" from "an assertion failed"), plus the suite's own `UNRESOLVED:` line streaming
+directly above the `[FAIL]` in the aggregate log. A future change that teaches `run_suite` to render a
+leaf rc 3 as `[UNRESOLVED]` is not cosmetic: it would move the top-level exit from 1 to 3, and
+`grok-pre-push-gate.sh` branches on that value. It needs its own decision. The taxonomy lives in
+the header of `.claude/hooks/hook-suite-dep-unresolved.test.sh`.

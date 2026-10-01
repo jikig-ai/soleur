@@ -30,6 +30,8 @@
 #   git push … refs/tags/…  writes the REMOTE, never the local ref store
 #   git clone               creates refs in the NEW repo, which by construction is not the live one
 #   git tag -d / --list/-l  delete or read; create nothing
+#   git tag --merged/--no-merged/--no-contains  list filters: they put `git tag` in list
+#                           mode, so a trailing name is a PATTERN (measured: no tag is created)
 #   git ls-remote           reads the remote; writes no ref
 #   git checkout/switch/worktree add   move HEAD, never write refs/tags/*
 #   git replace/notes/bundle unbundle  write refs/replace|notes|bundle — other namespaces
@@ -506,7 +508,7 @@ _is_in_class() {
   [[ "$l" =~ [[:space:]]ls-remote([[:space:]]|$) ]] && return 1
   if [[ "$l" =~ [[:space:]]tag([[:space:]]|$) ]]; then
     # creating forms only
-    [[ "$l" =~ [[:space:]]tag[[:space:]]+(-d|--delete|-l|--list|--verify|-n|--contains|--points-at) ]] && return 1
+    [[ "$l" =~ [[:space:]]tag[[:space:]]+(-d|--delete|-l|--list|--verify|-n|--contains|--no-contains|--points-at|--merged|--no-merged) ]] && return 1
   fi
   if [[ "$l" =~ update-ref ]]; then
     [[ "$l" =~ refs/tags/ ]] || return 1

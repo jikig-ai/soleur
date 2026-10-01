@@ -81,14 +81,14 @@ awk '/^  - path: \/usr\/local\/bin\/inngest-boot-phone-home\.sh$/{f=1;next} f&&/
 chmod +x "$EMITTER"
 
 assert "extraction: the emitter body was recovered (non-empty, has the shebang and the POST)" \
-  "[[ -s '$EMITTER' ]] && head -1 '$EMITTER' | grep -q '^#!' && grep -q 'betterstackdata.com' '$EMITTER'"
+  "[[ -s '$EMITTER' ]] && head -1 '$EMITTER' | grep -c '^#!' >/dev/null && grep -q 'betterstackdata.com' '$EMITTER'"
 assert "extraction: the emitter is syntactically valid bash (dedent did not corrupt it)" \
   "bash -n '$EMITTER'"
 
 # --- the tag is DERIVED from the emitter, never restated --------------------------------------
 # Two hardcoded copies of the tag would agree with each other while both disagreeing with the
 # script — a guard that passes precisely when it is wrong (journald-config.test.sh R1-1.8).
-EMITTER_TAG="$(grep -oE '^[[:space:]]*logger -t [A-Za-z0-9._-]+' "$EMITTER" | head -1 | awk '{print $3}' || true)"
+EMITTER_TAG="$(grep -oE '^[[:space:]]*logger -t [A-Za-z0-9._-]+' "$EMITTER" | sed -n '1p' | awk '{print $3}' || true)"
 assert "the emitter declares a logger tag at all (this is the whole fix: it used to be silent)" \
   "[[ -n \"\$EMITTER_TAG\" ]]"
 # The positive half of the pair. An emitter whose tag is not allowlisted is silence that READS AS
@@ -106,10 +106,15 @@ cat > "$WORK/bin/logger" <<'LOGEOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$LOGGER_OUT"
 LOGEOF
+# #8562 security review: the emitter now hands the bearer header to curl on STDIN (`-K -`), never
+# on argv. The stub records argv to CURL_OUT and stdin to CURL_OUT.stdin, and accepts the header
+# from either place so the refusal below still bites on a POST that sends it nowhere.
 cat > "$WORK/bin/curl" <<'CURLEOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$CURL_OUT"
-case "$*" in
+_in=""
+case " $* " in *" -K - "*) _in="$(cat)"; printf '%s\n' "$_in" >> "$CURL_OUT.stdin" ;; esac
+case "$* $_in" in
   *Authorization*) ;;
   *) echo "curl-stub: refusing a POST with no Authorization header" >&2; exit 64 ;;
 esac
@@ -124,6 +129,7 @@ fire() {
   # $1 = token-file path (may not exist), $2 = CURL_STUB_RC, $3 = stage
   : > "$LOGGER_OUT"
   : > "$CURL_OUT"
+  : > "$CURL_OUT.stdin"
   PATH="$WORK/bin:$PATH" LOGGER_OUT="$LOGGER_OUT" CURL_OUT="$CURL_OUT" \
     CURL_STUB_RC="$2" SOLEUR_INNGEST_BS_TOKEN_FILE="$1" \
     bash "$EMITTER" "$3" "detail-value-must-not-ship"
@@ -186,6 +192,12 @@ assert "ARM4 successful POST -> a POST was attempted" \
   "[[ -s '$CURL_OUT' ]]"
 assert "ARM4 successful POST -> emits NO logger row (silent on success; the quota stays bounded)" \
   "[[ ! -s '$LOGGER_OUT' ]]"
+# #8562 security review: the bearer token must never be on curl's argv (readable by any local user
+# from /proc/<pid>/cmdline for the life of the POST); it rides stdin as a `-K -` config header.
+assert "ARM4 the bearer token is NOT on curl's argv" \
+  "! grep -q 'synthetic-token-value' '$CURL_OUT'"
+assert "ARM4 the bearer token reaches curl on stdin as an Authorization header (-K -)" \
+  "grep -qF 'header = \"Authorization: Bearer synthetic-token-value\"' '$CURL_OUT.stdin'"
 
 # --- the stub's own non-vacuity ------------------------------------------------------------------
 # If the curl stub could not distinguish success from failure, ARM3 and ARM4 would be the same
@@ -224,7 +236,7 @@ else
   # `sentry_dsn` (#6500) is short, alphanumeric and non-hex on purpose: it must pass the emitter's
   # DSN shape check, and the redaction pattern backstop must NOT be able to catch its key, so the
   # Guard 4 cases prove the explicit enumeration rather than the backstop.
-  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42" })' "$CLOUD_INIT")"
+  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42" })' "$CLOUD_INIT")"
   printf '%s\n' "$RENDER_EXPR" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
 
   # KEY-SET PARITY WITH THE REAL CALL SITE (#7695). The map above is hand-kept, and the comment
@@ -258,22 +270,22 @@ else
   # entries are 4-space indented, so no interior line can match it.
   TF_KEYS="$(awk '/templatefile\("\$\{path\.module\}\/cloud-init-inngest\.yml", \{/,/^  \}\)/' \
     "$SCRIPT_DIR/inngest-host.tf" | grep -oE '^    [a-z0-9_]+ +=' | tr -d ' =' | sort -u)"
-  MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | head -1 \
+  MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | sed -n '1p' \
     | grep -oE '[a-z0-9_]+=' | tr -d '=' | sort -u)"
   # Non-vacuity: an extraction that found nothing must not report parity. The floor is the ACTUAL
-  # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`; 18 -> 19: #8539 threads `inngest_private_ip`) — a `-ge 10` passed at 13 while three keys were
+  # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`; 18 -> 19: #8539 threads `inngest_private_ip`; 19 -> 17: #8036 1d drops `ghcr_read_user`/`ghcr_read_token`, the retired GHCR bake) — a `-ge 10` passed at 13 while three keys were
   # missing from both sides, which is precisely the state it was supposed to make visible.
   assert "AC5 key-set parity: the .tf call site's keys were extracted" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 19 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 17 ]]"
   # ...and an OVER-extraction bound, the direction the floor above is blind to. A range whose end
   # anchor stops matching runs to EOF and harvests unrelated assignments; that is not a missing
   # key and should not be reported as one. 17 is the call site's actual key count, so this is
-  # exact in both directions when paired with the floor. 19 is the count as of #8539.
+  # exact in both directions when paired with the floor. 17 is the count as of #8036 1d.
 # (16 -> 17: #6894 added
   # `inngest_luks_volume_id`, the additive volume's id the two-device resolver needs, and this
   # suite's map was not updated in the same commit — so the over-read guard fired on a real key.)
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 19 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 17 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \
@@ -362,7 +374,7 @@ else
   RENDERED_DSN="$WORK/rendered-dsn.env"
   extract_wf /etc/default/soleur-sentry-dsn "$RENDERED" | grep -v '^ *#' | grep -v '^ *$' > "$RENDERED_DSN"
   assert "G3 extraction: the rendered soleur-boot-emit body is non-empty, has a shebang and a curl" \
-    "[[ -s '$EMIT' ]] && head -1 '$EMIT' | grep -q '^#!/bin/sh' && grep -q 'curl ' '$EMIT'"
+    "[[ -s '$EMIT' ]] && head -1 '$EMIT' | grep -c '^#!/bin/sh' >/dev/null && grep -q 'curl ' '$EMIT'"
   assert "G3 extraction: the rendered soleur-boot-emit is valid sh" "sh -n '$EMIT'"
   assert "G4 extraction: the rendered inngest-redact.sh body is non-empty and valid bash" \
     "[[ -s '$REDACT' ]] && bash -n '$REDACT'"
@@ -451,11 +463,13 @@ EPH
       "$EC_DIR/body" >/dev/null 2>&1 || return 1
   }
   # G2 row 6: the level and detail arguments are carried, not hardcoded — and the STAGE too: a
-  # SUT that hardcodes the stage would report every fallback as inngest_zot.
+  # SUT that hardcodes the stage would report every terminal zot miss as inngest_zot. The fixture
+  # is the pull item's real miss-arm call (#8036 1d: `inngest_pull_fatal fatal`, which replaced
+  # the retired `inngest_ghcr_fallback warning`), so the FATAL level is what is carried.
   case_warning() {
-    run_emit "$1" "$(dsn_file "$DSN_OK")" 0 inngest_ghcr_fallback warning "rc=7"
+    run_emit "$1" "$(dsn_file "$DSN_OK")" 0 inngest_pull_fatal fatal "rc=7"
     [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 1 ]] || return 1
-    jq -e '.level == "warning" and .tags.stage == "inngest_ghcr_fallback" and .tags.detail == "rc=7"' \
+    jq -e '.level == "fatal" and .tags.stage == "inngest_pull_fatal" and .tags.detail == "rc=7"' \
       "$EC_DIR/body" >/dev/null 2>&1
   }
   # Review P2-5 + security F4: every argument is interpolated into the body, so every one is
@@ -499,9 +513,9 @@ EPH
   }
   # G3 rows 1 + 5: curl fails -> exit 0 anyway, and the failure reaches the phone-home seam, numeric.
   case_curlfail() {
-    run_emit "$1" "$(dsn_file "$DSN_OK")" 7 inngest_ghcr_fallback warning "rc=1"
+    run_emit "$1" "$(dsn_file "$DSN_OK")" 7 inngest_pull_fatal fatal "rc=1"
     [[ "$EC_RC" -eq 0 && "$(ncalls)" -eq 1 ]] || return 1
-    [[ "$(cat "$EC_DIR/ph")" == "sentry-emit-FAILED stage=inngest_ghcr_fallback rc=7" ]]
+    [[ "$(cat "$EC_DIR/ph")" == "sentry-emit-FAILED stage=inngest_pull_fatal rc=7" ]]
   }
   # Review P1-3: an HTTP-level rejection (quota 429, revoked key 403) is a non-delivery too, and
   # only -f turns it into a non-zero rc the emitter can report.
@@ -623,7 +637,7 @@ EPH
   fi
 
   # --- Guard 4: inngest-redact.sh enumerates the DSN and its key by VALUE ---------------------------
-  # env -i: the redactor also reads DOPPLER_TOKEN / GHCR_READ_TOKEN from sourced files and would
+  # env -i: the redactor also reads DOPPLER_TOKEN / ZOT_PULL_TOKEN from sourced files and would
   # enumerate an operator's live values from their shell; the case must see only the fixture.
   run_redact() { # $1 redactor, $2 dsn file, stdin = tail
     env -i PATH="$PATH" HOME="$WORK" SOLEUR_INNGEST_SENTRY_DSN_FILE="$2" bash "$1"
@@ -680,9 +694,10 @@ EPH
     printf '[FATAL] anti-vacuity floor: only %s #6500 mutation rows ran, expected %s — a row was deleted\n' "$S6500_ROWS" "$S6500_EXPECTED_ROWS" >&2
     exit 1
   fi
-  # Whole-suite verdict floor: the 40 pre-#6500 assertions plus this section's 53.
+  # Whole-suite verdict floor: the 42 pre-#6500 assertions (40 + #8562's two argv/stdin rows) plus
+  # this section's 53.
   SUITE_VERDICTS=$((PASS + FAIL))
-  SUITE_EXPECTED_VERDICTS=93
+  SUITE_EXPECTED_VERDICTS=95
   if [[ "$SUITE_VERDICTS" -lt $SUITE_EXPECTED_VERDICTS ]]; then
     printf '[FATAL] anti-vacuity floor: only %s assertions ran, expected %s\n' "$SUITE_VERDICTS" "$SUITE_EXPECTED_VERDICTS" >&2
     exit 1
