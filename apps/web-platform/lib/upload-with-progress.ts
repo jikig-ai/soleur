@@ -32,9 +32,10 @@ export function uploadWithProgress(
 
     // One failure leg for both storage-reject (non-2xx onload) and
     // network/CSP block (onerror): report with the discriminating
-    // xhr.status, then reject — finally-guaranteed so a throwing report can
-    // never hang the caller. `reportedToSentry` marks the error so callers
-    // with their own catch (lib/upload-attachments.ts) skip re-capture.
+    // xhr.status, then reject unconditionally — a throwing report can
+    // neither hang the caller nor propagate out of the event handler.
+    // `reportedToSentry` marks the error so callers with their own catch
+    // (lib/upload-attachments.ts) skip re-capture.
     const fail = () => {
       const err = new Error("Upload to storage failed") as Error & {
         reportedToSentry?: boolean;
@@ -49,9 +50,10 @@ export function uploadWithProgress(
           },
         });
         err.reportedToSentry = true;
-      } finally {
-        reject(err);
+      } catch {
+        // Sentry itself failing is not a reason to break the upload path.
       }
+      reject(err);
     };
 
     xhr.onload = () => {
