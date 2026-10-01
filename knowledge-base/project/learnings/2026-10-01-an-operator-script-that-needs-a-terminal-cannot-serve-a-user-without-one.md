@@ -65,6 +65,45 @@ the founder a terminal task.
   against the pristine copy and `bash -n`) before it is asked to redden a guard, and the one equivalent mutant
   (dropping only the nonce format check) is recorded as equivalent instead of being left to look like a gap.
 
+## What review of the first implementation found (a gate that trusts inputs in the agent's own domain fails open)
+
+Eleven review seats converged on one structural cause: the receipt was only as strong as "the agent's only
+route to a satisfied gate is the hook", and four routes stayed open because the gate (or its guards) trusted
+something the agent controls.
+
+- **A second approval source kept "for the human" is a second approval source for the agent.** The gate kept
+  a typed `yes` at `[[ -t 0 && -t 1 ]]` as a fallback. `script(1)` or a python `pty` gives any Bash call a
+  pseudo-terminal, so the agent typed its own `yes`; the suite even owned the primitive (its decline-path
+  guard drives the old ack through `script -qec`). The terminal is evidence of a person only OUTSIDE an agent
+  harness, so the source is now refused when the harness variables are set, and a row drives the pty both
+  ways (with the variable, refused; without, accepted, as the control that proves the pty mechanism works).
+- **A "human-set" environment marker is agent-writable if the harness reads settings.** The headless resume
+  marker looked unreachable ("the agent cannot alter the harness's own environment") until a probe showed a
+  settings `env` block, written by an ordinary Bash call, reaches the hook of the next process. Measure what
+  the channel really carries before trusting it; the marker was removed and resume is interactive.
+- **Bind the approval to the bytes that run, not only the command that names them.** The digest covered the
+  script path, stage and argv, so an agent could edit `apply_*` after the plan and run the approved command.
+  The script's content hash is now in both the receipt binding and the plan digest, and every variable field
+  is length-prefixed so a newline in an argument cannot read as the next argument.
+- **Take the secret out of the environment at the first line you control, not at the gate.** The nonce was
+  unset at the gate, but the plan phase had already run vendor reads with it exported. The library now moves
+  it into a plain shell variable the moment it is sourced; a suite that only snapshots the FIRST MUTATING call
+  cannot see this, so the stub records the nonce on EVERY call.
+- **A guard assembled from the self-declared shape proves the properties of the world it defines.** The
+  stub classified a call as mutating by a list of verbs (so `gh api -X DELETE`, `curl -XPOST` and
+  `secrets delete` passed as reads), drove the apply with no bypass variable set (so a gate wrapped in
+  `if [[ "${FORCE:-}" != 1 ]]` was invisible), drove only the stages the table listed, and discovered
+  scripts by extension and line. Each is now the other way round: default-deny classification, every
+  approve/force/skip-shaped name set to 1, undeclared stage names probed, discovery by `git grep` of the
+  header with no directory exclusions.
+- **A fake that cannot reject proves nothing.** The stubbed GitHub answered 200 to any request, so six
+  mutations of the JWT (wrong algorithm, issuer, lifetime, scheme, key) stayed green. The stub now validates
+  the token the way GitHub would and derives the signature from the key bytes it was handed.
+- **Text the person reads at the prompt comes from the file being approved.** The first line of the prompt is
+  the agent's `description` and the impact sentence is the script's own words; both are now replaced or
+  framed ("the script describes this as ..., not verified by Soleur"), stripped of control characters and
+  capped.
+
 ## Where it lives
 
 ADR-264 (supersedes in part ADR-228 points 2-4 and ADR-249 step 1 points 2 and 4, for generated scripts only;

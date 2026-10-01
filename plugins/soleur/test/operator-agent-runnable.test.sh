@@ -164,12 +164,22 @@ g1_world() { # <name>
   stub_world_init "$d" >/dev/null 2>&1 || return 1
   G1_ROOT="$d"
 }
-g1_skipvars() { # <script> — every class-1/class-3 skip variable the script names
-  grep -ohE 'soleur_op_(barrier|value) SOLEUR_BOOTSTRAP_[A-Z0-9_]+' "$1" 2>/dev/null | awk '{print $2}' | sort -u
+g1_skipvars() { # <script> — every class-1/class-3 skip variable the script names (quoted or not)
+  grep -ohE "soleur_op_(barrier|value)[[:space:]]+[\"']?SOLEUR_BOOTSTRAP_[A-Z0-9_]+" "$1" 2>/dev/null | grep -oE 'SOLEUR_BOOTSTRAP_[A-Z0-9_]+' | sort -u
 }
+# g1_bypassvars <script> — every name the script mentions that LOOKS like an approval / force / skip
+# switch, plus the fixed set an agent might try. The no-receipt apply is driven with ALL of them set:
+# a gate wrapped in `if [[ "${SOLEUR_BOOTSTRAP_FORCE:-}" != 1 ]]` is invisible to a drive that never
+# sets the variable the bypass reads.
+g1_bypassvars() {
+  { grep -ohE '[A-Z][A-Z0-9_]*(YES|FORCE|CONFIRM|APPROVE|ASSUME|BYPASS|NONINTERACTIVE|AUTOMATION|ACKED)[A-Z0-9_]*' "$1" 2>/dev/null
+    printf '%s\n' SOLEUR_BOOTSTRAP_YES SOLEUR_BOOTSTRAP_ASSUME_YES SOLEUR_BOOTSTRAP_CONFIRM SOLEUR_BOOTSTRAP_FORCE SOLEUR_OP_ACKED CI; } | sort -u
+}
+G1_BYPASS=0
 g1_run() {
   local script="$1" v envs=(); shift
   for v in $(g1_skipvars "$script"); do envs[${#envs[@]}]="$v=g1-guard-value"; done
+  if [[ "$G1_BYPASS" == "1" ]]; then for v in $(g1_bypassvars "$script"); do envs[${#envs[@]}]="$v=1"; done; fi
   assert_fixture_dir "$STUB_LOG"
   : > "$STUB_LOG"; rm -f "$STUB_SNAP" "$STUB_SNAP.nonce"
   G1_OUT="$(env "PATH=${G1_ROOT}/bin:${PATH}" "SOLEUR_OP_LIB=$LIB" "ENV_FILE=${G1_ROOT}/.env" "SOLEUR_BOOTSTRAP_LEDGER=${G1_ROOT}/ledger.jsonl" \
@@ -256,8 +266,8 @@ g1_check() {
         continue
       fi
       grep -qF "SOLEUR_BOOTSTRAP_IMPACT stage=${name}" <<<"$G1_OUT" && grep -qF "SOLEUR_BOOTSTRAP_ROLLBACK stage=${name}" <<<"$G1_OUT" || { echo "g1: ${script}: the plan of ${name} prints no impact/rollback lines"; v=1; }
-      # the apply path with NO receipt
-      g1_run "$script" --stage "$name" --apply --plan-digest "$plan_digest"
+      # the apply path with NO receipt, with every bypass-shaped variable set to 1
+      G1_BYPASS=1 g1_run "$script" --stage "$name" --apply --plan-digest "$plan_digest"
       if [[ "${ops:-0}" -eq 0 ]]; then
         # P2: nothing to change => changed=0, no approval, no prompt, no write
         if [[ "$G1_RC" -ne 0 || "$G1_MUT" -ne 0 ]] || ! grep -qF "SOLEUR_BOOTSTRAP_STAGE_OK stage=${name} changed=0" <<<"$G1_OUT"; then
@@ -274,6 +284,15 @@ g1_check() {
     fi
   done <<<"$stages"
   if [[ "$driven" -eq 0 ]]; then echo "g1: ${script}: zero stages were driven"; v=1; fi
+  # --- behaviour: a stage the table does NOT list must be refused, whatever the dispatcher contains ---
+  local probe
+  for probe in sneaky hidden debug all run-all apply admin test x "g1-undeclared-$RANDOM"; do
+    grep -qxF "$probe" <<<"$table" && continue
+    g1_run "$script" --stage "$probe"
+    if [[ "$G1_RC" -ne 64 ]] || ! grep -qF "SOLEUR_BOOTSTRAP_UNKNOWN_STAGE stage=${probe}" <<<"$G1_OUT" || [[ "$G1_MUT" -ne 0 || "$(grep -c . "$STUB_LOG")" -ne 0 ]]; then
+      echo "g1: ${script}: an UNDECLARED stage '${probe}' was not refused with exit 64 UNKNOWN_STAGE and no vendor call (rc ${G1_RC}, ${G1_MUT} mutating): $(printf '%s' "$G1_OUT" | head -2 | tr '\n' ' ')"; v=1
+    fi
+  done
   # assert_green/assert_red run this in a command substitution, so a variable would be lost: count in a file.
   printf '%s\n' "$driven" >> "$SB/driven.count"
   return "$v"
@@ -281,12 +300,10 @@ g1_check() {
 
 # --- population ---------------------------------------------------------------------------------
 # g1_population <repo-root> <legacy-list-file> <base-v1-list-file> — prints violations, rc 1 on any.
-# Files: every tracked-or-untracked-unignored file whose LINE 2 is a generated-script header,
-# fixtures and tests excluded (they quote the header).
-g1_discover() { # <repo-root>
-  ( cd "$1" && git ls-files --cached --others --exclude-standard -- '*.sh' \
-      | grep -vE '(^|/)test/|\.test\.sh$|(^|/)fixtures/' \
-      | while IFS= read -r f; do [[ -f "$f" ]] && sed -n '2p' "$f" | grep -qE '^# SOLEUR-GENERATED-OPERATOR-SCRIPT v[0-9]+$' && printf '%s\n' "$f"; done )
+# Files: every tracked-or-untracked-unignored file that carries the header as a whole line, with no
+# directory exclusion and no extension filter (a header on any other line is a violation, not a miss).
+g1_discover() { # <repo-root> — every file CARRYING the header line anywhere (any extension, any directory)
+  ( cd "$1" && git grep -l --untracked -E '^# SOLEUR-GENERATED-OPERATOR-SCRIPT v[0-9]+$' 2>/dev/null )
 }
 g1_population() {
   local root="$1" legacy_file="$2" base_file="$3" v=0 f ver listed
@@ -294,10 +311,14 @@ g1_population() {
   if [[ -z "$found" ]]; then echo "g1: the population is EMPTY — nothing was checked"; return 1; fi
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
+    if ! sed -n '2p' "$root/$f" | grep -qE '^# SOLEUR-GENERATED-OPERATOR-SCRIPT v[0-9]+$'; then
+      echo "g1: ${f}: carries the generated-script header but NOT on line 2 — the approval hook and this guard recognise line 2 only"; v=1; continue
+    fi
     ver="$(sed -n '2p' "$root/$f" | sed -E 's/.* v([0-9]+)$/\1/')"
     case "$ver" in
       2) : ;;
-      1) grep -qxF "$f" "$legacy_file" || { echo "g1: ${f}: a v1 (typed-yes) generated script outside the legacy list — new generated scripts are v2"; v=1; } ;;
+      1) case "$f" in knowledge-base/project/specs/archive/*) continue ;; esac   # archived (archive-kb moves spec dirs): history, not guidance
+         grep -qxF "$f" "$legacy_file" || { echo "g1: ${f}: a v1 (typed-yes) generated script outside the legacy list — new generated scripts are v2"; v=1; } ;;
       *) echo "g1: ${f}: unknown generated-script version v${ver}"; v=1 ;;
     esac
   done <<<"$found"
@@ -430,6 +451,58 @@ mutate_copy "g1-8 empty rollback line" "$SB/fx/template-baked.sh" "$SB/mut/m8.sh
 s{(\# SOLEUR-STAGE provision\|write\|[^|\n]*)\|[^\n]*\n}{$1|\n}
 PERL
 
+# 10. an ENVIRONMENT-VARIABLE bypass of the gate (the hard-rule shape): the gate runs only unless a
+#     force variable is set. A drive that never sets the variable the bypass reads sees nothing.
+mutate_copy "g1-10 gate skipped when SOLEUR_BOOTSTRAP_FORCE=1" "$SB/fx/write-fixture.sh" "$SB/mut/m10.sh" <<'PERL' && assert_red_for g1_check "g1-10 an env-var bypass of the stage gate" 'MUTATING call' "$SB/mut/m10.sh"
+s{\n(        )(soleur_op_stage_gate [^\n]*)\n}{\n$1if [[ "\$\{SOLEUR_BOOTSTRAP_FORCE:-\}" != "1" ]]; then $2; fi\n}
+PERL
+# 11. a stage that is NOT in the table, reached through the dispatcher (the table is self-declared)
+mutate_copy "g1-11 undeclared stage in the dispatcher" "$SB/fx/write-fixture.sh" "$SB/mut/m11.sh" <<'PERL' && assert_red_for g1_check "g1-11 a hidden stage performs a write with no gate and is not listed" 'UNDECLARED stage' "$SB/mut/m11.sh"
+s{(dispatch_stage\(\) \{\n  local stage="\$1"[^\n]*\n)}{$1  case "\$stage" in sneaky) doppler secrets set HIDDEN -p demo -c prd </dev/null >/dev/null; exit 0 ;; esac\n}
+PERL
+# 12. the header on line 3 is a population violation (the hook and this guard recognise line 2 only)
+g1_mut12() {
+  local r="$SB/pop12"; rm -rf "$r"; mkdir -p "$r/knowledge-base/project/specs/feat-new"
+  ( cd "$r" && git init -q . ) >/dev/null 2>&1
+  printf '#!/usr/bin/env bash\n# a second comment line\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v2\n' > "$r/knowledge-base/project/specs/feat-new/bootstrap"
+  : > "$SB/empty-legacy12.txt"
+  g1_population "$r" "$SB/empty-legacy12.txt" "$SB/empty-legacy12.txt"
+}
+# 12b. a legacy v1 script moved by archive-kb under specs/archive/ is not a violation
+g1_mut12b() {
+  local r="$SB/pop12b"; rm -rf "$r"; mkdir -p "$r/knowledge-base/project/specs/archive/20261001-feat-old"
+  ( cd "$r" && git init -q . ) >/dev/null 2>&1
+  printf '#!/usr/bin/env bash\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v1\n' > "$r/knowledge-base/project/specs/archive/20261001-feat-old/bootstrap.sh"
+  : > "$SB/empty-legacy12b.txt"
+  g1_population "$r" "$SB/empty-legacy12b.txt" "$SB/empty-legacy12b.txt"
+}
+assert_green g1_mut12b "g1-12b must-PASS: an archived v1 script (archive-kb moved its spec dir) is not flagged"
+assert_red_for g1_mut12 "g1-12 a header-bearing file with no extension and the header on line 3" 'NOT on line 2'
+# 13-15. reads that write: the stub classifies by an allowlist of READ verbs, so each of these is seen
+for m in "13|gh api -X DELETE repos/jikig-ai/soleur/environments/x|gh api -X DELETE" "14|gh variable set X --body 1 -R jikig-ai/soleur|gh variable set" "15|curl -XPOST https://api.github.com/app|curl -XPOST"; do
+  n="${m%%|*}"; rest="${m#*|}"; body="${rest%%|*}"; what="${rest#*|}"
+  cp "$SCRIPT9321" "$SB/mut/m${n}.sh"
+  perl -0777 -pi -e 's{(read_preflight\(\) \{\n)}{$1  '"${body//\//\\/}"' </dev/null >/dev/null 2>&1 \|\| true\n}' "$SB/mut/m${n}.sh"
+  if [[ "$(md5_of "$SB/mut/m${n}.sh")" != "$(md5_of "$SCRIPT9321")" ]] && bash -n "$SB/mut/m${n}.sh" 2>/dev/null; then
+    pass "mutation 'g1-${n} read stage runs ${what}' landed (md5 differs from its source; bash -n clean)"
+    assert_red_for g1_check "g1-${n} a read stage that runs ${what}" 'declared read but made' "$SB/mut/m${n}.sh"
+  else
+    fail "mutation 'g1-${n}' did not land"
+  fi
+done
+# 16. a PLAN that writes
+mutate_copy "g1-16 plan function mutates" "$SCRIPT9321" "$SB/mut/m16.sh" <<'PERL' && assert_red_for g1_check "g1-16 a plan_ function makes a mutating call" 'PLAN of stage' "$SB/mut/m16.sh"
+s{(plan_copy_app_values\(\) \{\n)}{$1  gh secret delete SNEAKY -R jikig-ai/soleur </dev/null >/dev/null 2>\&1 \|\| true\n}
+PERL
+# 17. must-PASS: a class-1 skip variable named in QUOTES is still found and set (no false RED)
+sed 's/soleur_op_value SOLEUR_BOOTSTRAP_INSTALL_KEYS_NAME/soleur_op_value "SOLEUR_BOOTSTRAP_INSTALL_KEYS_NAME"/' "$SB/fx/case-table.sh" > "$SB/fx/case-table-quoted.sh"
+if grep -qF 'soleur_op_value "SOLEUR_BOOTSTRAP_INSTALL_KEYS_NAME"' "$SB/fx/case-table-quoted.sh"; then
+  pass "fixture 'g1-17 quoted skip variable' landed"
+  assert_green g1_check "g1-17 must-PASS: a quoted class-1 skip variable" "$SB/fx/case-table-quoted.sh"
+else
+  fail "fixture 'g1-17' did not land"
+fi
+
 # 9. THE ORIGINAL DEFECT: the pre-ADR-264 template (every write needs a typed `yes` at a terminal,
 #    no stages), merely re-labelled v2, is a script that cannot run without a TTY. The guard must
 #    fail it. Taken from the merge base, so it is the real old artifact and not a re-typed one.
@@ -456,7 +529,7 @@ fi
 
 # --- anti-vacuity floor (reported directly, never through fail(): ADR-193) -----------------------
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=28
+FLOOR=46
 G1_DRIVEN_TOTAL="$(awk '{ s += $1 } END { print s + 0 }' "$SB/driven.count" 2>/dev/null)"
 if [[ "${G1_DRIVEN_TOTAL:-0}" -lt 1 ]]; then
   printf '  [FAIL] anti-vacuity: the guard drove ZERO stages across the whole run\n' >&2

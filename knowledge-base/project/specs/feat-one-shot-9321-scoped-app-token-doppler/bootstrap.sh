@@ -12,7 +12,9 @@
 #
 # THE CONTRACT (ADR-264): an AGENT runs this script, one stage at a time, with no
 # terminal. A human acknowledges every production write, but at the harness
-# approval prompt on the exact command, not at a typed `yes`:
+# approval prompt on the exact command, not at a typed `yes` (this guards against an
+# agent acting on a mistaken instruction, not a compromised one; headless, bypass-mode
+# and no-hook surfaces defer or refuse and never auto-approve — ADR-264):
 #   bash bootstrap.sh --list                                        the stages (static; no credentials)
 #   bash bootstrap.sh --stage <name>                                read stage: runs; write stage: prints the PLAN
 #   bash bootstrap.sh --stage <name> --apply --plan-digest <d>      write stage: the approved write
@@ -49,6 +51,10 @@ esac
 # xtrace refusal above — measured).
 unset SSLKEYLOGFILE
 
+# No pathname expansion anywhere below: stage code loops over vendor-supplied names
+# (`for s in $SLUGS`), and a name such as `*` must stay a name, never a file glob.
+set -f
+
 # --- the stage table ---------------------------------------------------------
 # ONE source of truth: --list prints it, the dispatcher validates `--stage`
 # against it, and the approval hook reads these same lines (statically; it never
@@ -58,9 +64,9 @@ unset SSLKEYLOGFILE
 # founder, with no `|` in them.
 #
 # SOLEUR-STAGE preflight|read|Nothing changes: this only checks Doppler, GitHub and the two source values.|None needed.
-# SOLEUR-STAGE copy-app-values|write|Nothing user-facing: the copy in the new Doppler project is not read by any release job until the switch change merges.|Delete the copied values from the soleur-infra-app prd config; the soleur-infra-privileged source is untouched.
+# SOLEUR-STAGE copy-app-values|write|Copies the release App's id and private key into a second Doppler project (soleur-infra-app); nothing reads the copy yet, so releases are unaffected.|Delete the copied values from the soleur-infra-app prd config; the soleur-infra-privileged source is untouched.
 # SOLEUR-STAGE prove-live-app|read|Nothing changes: this signs a short-lived token with the copied key and asks GitHub whether it is the live App.|None needed.
-# SOLEUR-STAGE mint-and-store-token|write|The release jobs are unaffected: nothing reads the stored token until the switch change merges.|Revoke the release-app-mint token on soleur-infra-app prd and delete DOPPLER_TOKEN_INFRA_APP from the infra-privileged environment.
+# SOLEUR-STAGE mint-and-store-token|write|Creates a read-only Doppler token for soleur-infra-app and saves it as the GitHub secret DOPPLER_TOKEN_INFRA_APP (infra-privileged environment), then revokes older tokens of the same name; once releases use it, a rotation replaces the token they read.|Before releases use it: revoke the release-app-mint token on soleur-infra-app prd and delete DOPPLER_TOKEN_INFRA_APP from the infra-privileged environment. Afterwards: run the stage again with --rotate-token instead.
 # SOLEUR-STAGE verify|read|Nothing changes: this lists names only and never prints a value.|None needed.
 
 # `--list` is a STATIC read of the table above: no library, no credentials, no
@@ -105,6 +111,15 @@ SOLEUR_OP_LIB="${SOLEUR_OP_LIB:-}"
 last_rejected="<no candidate was absolute>"
 if [[ -n "$SOLEUR_OP_LIB" && "$SOLEUR_OP_LIB" != /* ]]; then
   last_rejected="$SOLEUR_OP_LIB (SOLEUR_OP_LIB must be an absolute path)"
+  SOLEUR_OP_LIB=""
+fi
+# An override is held to the same test as every other candidate (a readable regular
+# file named operator-script.sh that defines the gate): a stray value cannot make this
+# script source an arbitrary file. HONEST LIMIT: a process that can write such a file
+# and set this variable can also edit this script; that is the hijacked-agent case the
+# approval receipt does not claim to resist (ADR-264).
+if [[ -n "$SOLEUR_OP_LIB" ]] && ! { [[ -f "$SOLEUR_OP_LIB" && ! -L "$SOLEUR_OP_LIB" && -r "$SOLEUR_OP_LIB" && "${SOLEUR_OP_LIB##*/}" == "operator-script.sh" ]] && grep -aq '^soleur_op_stage_gate()' "$SOLEUR_OP_LIB"; }; then
+  last_rejected="$SOLEUR_OP_LIB (SOLEUR_OP_LIB must name a regular readable operator-script.sh that defines the staged gate)"
   SOLEUR_OP_LIB=""
 fi
 if [[ -z "$SOLEUR_OP_LIB" ]]; then
@@ -253,8 +268,10 @@ fi
 # ONE trap. On a non-zero exit inside a stage it prints the STAGE_FAILED marker,
 # tells the founder which stage stopped and the one command that resumes, and
 # settles the stage in the ledger as `failed`. A refusal that already printed its
-# own marker and sentence (exit 75: approval required / invalid / plan drift)
-# settles as `refused` and adds nothing.
+# own marker and sentence (approval required / invalid / plan drift, a precondition,
+# a missing digest) raised the library's SOLEUR_OP_REFUSED flag and settles as
+# `refused`, adding nothing. The flag, not the exit code, decides: a vendor CLI that
+# exits 75 mid-write is a failure.
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_REAL="$(soleur_approval_realpath "${BASH_SOURCE[0]}")"
 CURRENT_STAGE_INDEX=0
@@ -264,7 +281,7 @@ mark_changed() { STAGE_CHANGED="${STAGE_CHANGED:+${STAGE_CHANGED}; }$1"; }
 on_exit() {
   local rc=$?
   [[ "$rc" -ne 0 && "$CURRENT_STAGE_INDEX" -gt 0 ]] || return 0
-  if [[ "$rc" -eq 75 ]]; then
+  if [[ -n "${SOLEUR_OP_REFUSED:-}" ]]; then
     soleur_op_stage_end "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" refused "$rc"
     return 0
   fi
@@ -593,10 +610,14 @@ plan_mint_and_store_token() {
   esac
   [[ "$TP_MODE" != "satisfied" ]] || return 0    # already satisfied: no operation, no approval, no network proof needed
   # The earlier stages' work is re-proved here, in-process, not trusted from a previous run.
-  for name in "$ID_NAME" "$PEM_NAME"; do
-    copy_equal "$name" || soleur_op_precondition_failed mint-and-store-token copy-app-values "${name} in ${DST_PROJECT}/${CFG} is missing or differs from ${SRC_PROJECT}/${CFG}. Run copy-app-values first."
-  done
-  live_app_ok || soleur_op_precondition_failed mint-and-store-token prove-live-app "A JWT from the copied key was not accepted by GitHub as the ${APP_SLUG} App (or the check could not finish). Run prove-live-app and fix what it names."
+  # Finishing a rotation only revokes tokens that are already superseded by the stored one,
+  # so it needs neither proof (an unrelated GitHub outage must not keep a stale token live).
+  if [[ "$TP_MODE" != "finish-rotation" ]]; then
+    for name in "$ID_NAME" "$PEM_NAME"; do
+      copy_equal "$name" || soleur_op_precondition_failed mint-and-store-token copy-app-values "${name} in ${DST_PROJECT}/${CFG} is missing or differs from ${SRC_PROJECT}/${CFG}. Run copy-app-values first."
+    done
+    live_app_ok || soleur_op_precondition_failed mint-and-store-token prove-live-app "A JWT from the copied key was not accepted by GitHub as the ${APP_SLUG} App (or the check could not finish). Run prove-live-app and fix what it names."
+  fi
   if [[ -n "$(env_get TOKEN_MINT_ATTEMPTED)" ]]; then
     soleur_op_plan_op recover-interrupted-mint "${DST_PROJECT}/${CFG}"
   fi
@@ -614,9 +635,10 @@ plan_mint_and_store_token() {
 
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 apply_mint_and_store_token() {
-  local before old_recorded new_slug tokval="" s
+  local before old_recorded old_stored new_slug tokval="" s
   decide_token_plan || { soleur_op_red "  the vendor state could not be read; nothing was changed."; return 1; }
   if [[ "$TP_MODE" == "finish-rotation" ]]; then
+    mark_changed "superseded token(s) ${TP_PREV} may have been revoked"
     soleur_op_yellow "  finishing an interrupted rotation: revoking the superseded token(s) ${TP_PREV}"
     for s in $TP_PREV; do revoke_confirmed "$s" || return 1; done
     return 0
@@ -625,6 +647,7 @@ apply_mint_and_store_token() {
   mark_changed "a read token may have been minted on ${DST_PROJECT}/${CFG} and stored as ${ENV_SECRET}"
   before="$TP_SLUGS"
   old_recorded="$(env_get TOKEN_SLUG)"
+  old_stored="$(env_get TOKEN_STORED)"
   soleur_op_env_upsert "$ENV_FILE" TOKEN_MINT_ATTEMPTED "$(now_iso)"
   tokval="$(doppler configs tokens create "$READ_TOKEN_NAME" -p "$DST_PROJECT" -c "$CFG" --access read --plain 2>/dev/null | tr -d '\n')" || tokval=""
   [[ -n "$tokval" ]] || { soleur_op_red "  minting failed (if the token was created server-side, the next plan finds it by listing)."; soleur_op_env_reset "$ENV_FILE" TOKEN_MINT_ATTEMPTED; return 1; }
@@ -642,6 +665,9 @@ apply_mint_and_store_token() {
     if revoke_confirmed "$new_slug"; then
       soleur_op_red "  the new token did not verify and was revoked (slug ${new_slug})."
       if [[ -n "$old_recorded" ]]; then soleur_op_env_upsert "$ENV_FILE" TOKEN_SLUG "$old_recorded"; else soleur_op_env_reset "$ENV_FILE" TOKEN_SLUG; fi
+      # The old token is still live AND still stored: put its stored marker back too, or a
+      # healthy system reads as unfinished and the next plan wants to mint again.
+      if [[ -n "$old_stored" ]]; then soleur_op_env_upsert "$ENV_FILE" TOKEN_STORED "$old_stored"; fi
     fi
     return 1
   fi
@@ -650,6 +676,9 @@ apply_mint_and_store_token() {
     if revoke_confirmed "$new_slug"; then
       soleur_op_red "  storing ${ENV_SECRET} failed; the new token was revoked (slug ${new_slug})."
       if [[ -n "$old_recorded" ]]; then soleur_op_env_upsert "$ENV_FILE" TOKEN_SLUG "$old_recorded"; else soleur_op_env_reset "$ENV_FILE" TOKEN_SLUG; fi
+      # The old token is still live AND still stored: put its stored marker back too, or a
+      # healthy system reads as unfinished and the next plan wants to mint again.
+      if [[ -n "$old_stored" ]]; then soleur_op_env_upsert "$ENV_FILE" TOKEN_STORED "$old_stored"; fi
     fi
     return 1
   fi
@@ -731,6 +760,7 @@ dispatch_stage() {
         if [[ -z "$PLAN_DIGEST" ]]; then
           printf 'SOLEUR_BOOTSTRAP_PLAN_DIGEST_REQUIRED stage=%s\n' "$stage"
           printf 'Run the stage without --apply first, then run the apply command exactly as the plan printed it.\n'
+          SOLEUR_OP_REFUSED=1
           exit 64
         fi
         local computed
@@ -750,7 +780,7 @@ dispatch_stage() {
 }
 
 main() {
-  soleur_op_require_bins grep mktemp printenv sed date od id stat cut tr
+  soleur_op_require_bins grep mktemp printenv sed date od id stat cut tr awk find doppler gh jq curl openssl sha256sum comm sort head
   soleur_op_ledger_init 1 "bootstrap.sh"
   dispatch_stage "$STAGE"
 }

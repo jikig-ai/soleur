@@ -22,7 +22,7 @@ CI is the test gate; no closed issue number in `#N` form; GHCR retirement and th
 
 ## 2. Library
 
-- 2.1 `plugins/soleur/scripts/lib/operator-approval.sh` (digest, directory, record validation, `algo=1`; portable `stat`; no shell options).
+- 2.1 Receipt algorithm (digest, directory, record validation, `algo=1`; portable `stat`; no shell options) — DEVIATION: folded into `plugins/soleur/scripts/lib/operator-script.sh` (one-file library; the hook sources it), not a sibling `operator-approval.sh`; the receipt-gate guard is Guard 11 of `operator-script.test.sh`.
 - 2.2 `operator-script.sh`: `plan_emit`, `soleur_op_stage_gate`, stage-ok marker, ledger fields, exit 75 and marker tables, wording.
 - 2.3 Keep `soleur_op_ack_or_die` unchanged.
 
@@ -54,10 +54,18 @@ CI is the test gate; no closed issue number in `#N` form; GHCR retirement and th
 ## 7. Guards, ADR, C4, learning
 
 - 7.1 Generalize Guards 4 and 9 for `soleur_op_stage_gate`; relevance map entries; shard harness.
-- 7.2 ADR-262 plus blockquotes on ADR-228 and ADR-249; C4 edges (`founder -> doppler`, `founder -> github`), Hook Engine and plugin descriptions; run C4 tests.
+- 7.2 ADR-264 (not 262: 262 and 263 were taken on main) plus blockquotes on ADR-228 and ADR-249; C4 edges (`founder -> doppler`, `founder -> github`), Hook Engine and plugin descriptions; run C4 tests.
 - 7.3 Learning file.
 
 ## 8. Deferral issues and PR
 
 - 8.1 File four follow-ups with milestone and roadmap listing before merge.
 - 8.2 PR body (`Ref #9321`, plain residual, W0 measurements, files not touched); CI green; mark ready; do not merge.
+
+## 9. Review-driven changes (2026-10-02)
+
+- 9.1 TTY ack refused inside an agent harness (gate and class-2 ack); resume marker removed (headless always defers; resume is interactive); interactive-entrypoint allowlist `cli|claude-vscode|claude-desktop|claude-desktop-3p` (unmeasured beyond cli/sdk-cli).
+- 9.2 Receipt binds script bytes and length-prefixes fields; nonce held in a non-exported variable from source time; TTL 300 s with prune and per-session supersede; rename failure reads `perms`; `SOLEUR_OP_REFUSED` flag replaces the bare rc-75 test; a precondition settles as refused.
+- 9.3 Hook: description replaced, prompt text capped and framed, exact stage lookup, `--apply` on a read stage denied, path arm independent of the library, `Read` dropped from the matcher, `timeout: 10`, one jq call for scalars.
+- 9.4 Guards: stub world default-deny classification, JWT-validating curl and key-derived openssl signatures, refuse-shims for tools outside the stage world, nonce recorded on every call; Guard 1 drives bypass-shaped variables and undeclared stages and discovers by `git grep`; Guard 11 gains pty, content, TTL, entropy and supersede rows; instrument self-tests in the hook and 9321 suites.
+- 9.5 test-affected-paths: only operator-agent-runnable stays always-on; operator-9321-stages gets a declared edge.

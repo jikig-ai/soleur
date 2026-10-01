@@ -79,9 +79,10 @@ DEFER_VALUE="defer"
 # plugins/soleur/hooks/operator-stage-approval.sh, which turns the harness approval
 # prompt on the exact `--apply` command into the human acknowledgement. When one
 # command matches BOTH this rule and that hook, the harness resolves the two
-# decisions by the documented precedence deny > ask > defer: the approval hook's
-# `ask` (or its `deny` under bypassPermissions / dontAsk / auto) outranks this
-# rule's `defer`. Rule 4 itself is unchanged; it still backstops the legacy v1
+# decisions by the precedence deny > defer > ask > allow (measured against the 2.1.287
+# aggregator): the approval hook's `deny` (bypassPermissions / dontAsk / auto) outranks
+# this rule's `defer`, but this rule's `defer` outranks the approval hook's `ask`, so the
+# run waits and the approval hook's receipt is left unused until it expires. Rule 4 itself is unchanged; it still backstops the legacy v1
 # typed-yes scripts, which the approval hook never mints for.
 OPACK_RULE="prod-write-defer-operator-ack-script"
 OPACK_UNIQUE='flip\.sh|set-role\.sh|provision-hetzner\.sh|audit-sentry-extra-text-references\.sh'

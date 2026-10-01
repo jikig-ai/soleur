@@ -704,7 +704,7 @@ bound to that exact command, rewrites the command to carry the receipt's nonce a
 answers `ask`, so the harness approval prompt on the exact command is the human
 acknowledgement. Headless runs `defer`; `bypassPermissions`, `dontAsk` and auto
 modes `deny`. A command that matches both this gate's rule 4 and that hook resolves
-by the precedence deny > ask > defer. Rule 4 is unchanged and still covers the
+by the precedence deny > defer > ask > allow. Rule 4 is unchanged and still covers the
 legacy typed-yes scripts. The approval guards against an agent acting on a mistaken
 instruction, not against a compromised one. Decision record:
 [ADR-264](../../knowledge-base/engineering/architecture/decisions/ADR-264-generated-operator-scripts-are-agent-run-in-stages.md).

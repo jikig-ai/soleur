@@ -137,7 +137,12 @@
 #   SOLEUR_BOOTSTRAP_APPROVAL_INVALID     stage=<s> reason=<no-record|expired|digest-mismatch|
 #                                         consumed|algo|perms|format>               → exit 75
 #   SOLEUR_BOOTSTRAP_PLAN_DRIFT           stage=<s>                      → exit 75, receipt burned
-#   SOLEUR_BOOTSTRAP_PRECONDITION_FAILED  stage=<s> need=<stage>         → exit 1
+#   SOLEUR_BOOTSTRAP_PRECONDITION_FAILED  stage=<s> need=<stage>         → exit 1 (settles as refused;
+#                                         run the `need` stage, then this one again)
+#   SOLEUR_BOOTSTRAP_PATH_UNSUPPORTED     stage=<s>                      → exit 64 (script path has a ')
+#   SOLEUR_BOOTSTRAP_STAGE_REQUIRED       (no marker args)               → exit 64 (no --stage: no run-all mode)
+#   SOLEUR_BOOTSTRAP_UNKNOWN_STAGE        stage=<s>                      → exit 64 (not in the stage table)
+#   SOLEUR_BOOTSTRAP_PLAN_DIGEST_REQUIRED stage=<s>                      → exit 64 (--apply without the digest)
 #   SOLEUR_BOOTSTRAP_STAGE_OK             stage=<s> changed=<0|1> [approval=<harness-receipt|tty-ack>]
 #   SOLEUR_BOOTSTRAP_STAGE_FAILED         stage=<s> rc=<n>
 #   SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE     need=stage-1 got=<n>            → exit 64 (consumer)
@@ -214,9 +219,19 @@ umask 077
 # refused with reason=algo, never as a generic failure (version skew is a
 # distinct, reportable condition).
 SOLEUR_APPROVAL_ALGO=1
-# A record is valid for ten minutes. Long enough for a human to read the prompt,
-# short enough that a record the human denied cannot be used later.
-SOLEUR_APPROVAL_TTL_SECONDS=600
+# A record is valid for five minutes. Long enough for a human to read the prompt,
+# short enough that a record the human denied is dead soon. A new mint for the same
+# session also removes that session's earlier unconsumed records (soleur_approval_mint).
+SOLEUR_APPROVAL_TTL_SECONDS=300
+
+# The presented nonce is taken OUT of the environment the moment this file is loaded
+# and held in a plain (never exported) shell variable. A child process the script
+# starts later (doppler, gh, curl, a stage helper) therefore never inherits it, and
+# the only function that ever reads it is soleur_approval_consume / _burn. The hook
+# sources this file too and presents no nonce, so it holds the empty string there.
+unset _SOLEUR_APPROVAL_NONCE_HELD
+_SOLEUR_APPROVAL_NONCE_HELD="${SOLEUR_APPROVAL_NONCE:-}"
+unset SOLEUR_APPROVAL_NONCE
 
 # soleur_approval_sha256  — stdin to a lowercase hex digest on stdout.
 soleur_approval_sha256() {
@@ -242,20 +257,33 @@ soleur_approval_realpath() {
   printf '%s/%s' "$d" "$(basename "$p")"
 }
 
+# soleur_approval_content_hash <file>  — sha256 of the file's bytes, or the fixed
+#   word `unreadable`. A receipt is bound to the script's CONTENT as well as its
+#   path: a script edited between the human's approval and the run no longer matches.
+soleur_approval_content_hash() {
+  local h
+  h="$(soleur_approval_sha256 < "$1" 2>/dev/null)" || h=""
+  [[ "$h" =~ ^[0-9a-f]{64}$ ]] && printf '%s' "$h" || printf 'unreadable'
+}
+
 # soleur_approval_binding_digest <script-realpath> <stage> <arg>...
-#   The digest an approval is bound to: the resolved script, the stage and every
-#   argument EXACTLY as the shell handed it over, one per line, so `"a b"` and
-#   `"a" "b"` differ. The hook computes it from the command string it parsed; the
-#   script recomputes it from "$@". The two are equal only for the same
-#   invocation.
+#   The digest an approval is bound to: the resolved script, its content hash, the
+#   stage and every argument EXACTLY as the shell handed it over. Every variable
+#   field is written as `<byte-length>:<value>` so no value, whatever characters it
+#   carries (a newline included), can read as the next field. The hook computes it
+#   from the command string it parsed; the script recomputes it from "$@". The two
+#   are equal only for the same invocation of the same script bytes.
 soleur_approval_binding_digest() {
-  local real="$1" stage="$2" a
+  local real="$1" stage="$2" a content
   shift 2
+  content="$(soleur_approval_content_hash "$real")"
   {
+    local LC_ALL=C
     printf 'algo=%s\n' "$SOLEUR_APPROVAL_ALGO"
-    printf 'script=%s\n' "$real"
-    printf 'stage=%s\n' "$stage"
-    for a in "$@"; do printf 'arg=%s\n' "$a"; done
+    printf 'script=%d:%s\n' "${#real}" "$real"
+    printf 'content=%s\n' "$content"
+    printf 'stage=%d:%s\n' "${#stage}" "$stage"
+    for a in "$@"; do printf 'arg=%d:%s\n' "${#a}" "$a"; done
   } | soleur_approval_sha256
 }
 
@@ -292,6 +320,22 @@ _soleur_approval_file_ok() {
   [[ "$st" == "$(id -u) 600" ]]
 }
 
+# _soleur_approval_housekeeping <dir> <session>
+#   Runs on every mint. (1) Removes every record, consumed or not, older than an
+#   hour: the directory never grows without bound and a stale record is not left
+#   for a later session to find. (2) Removes this session's earlier UNCONSUMED
+#   records: only the newest receipt of a session is live, so a prompt the person
+#   declined cannot be revived by a later one. Best effort; a failure here never
+#   blocks a mint.
+_soleur_approval_housekeeping() {
+  local dir="$1" session="$2"
+  # find, not a glob: the approval hook runs with pathname expansion off (`set -f`).
+  find "$dir" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null || true
+  find "$dir" -maxdepth 1 -type f ! -name '*.consumed' ! -name '.mint.*' \
+    -exec grep -aqx "session=${session}" {} \; -delete 2>/dev/null || true
+  return 0
+}
+
 # soleur_approval_mint <binding-digest> <session-id>
 #   Writes one record and prints the nonce on stdout (the ONLY place it is ever
 #   printed; the caller embeds it in the rewritten command and nowhere else).
@@ -309,6 +353,7 @@ soleur_approval_mint() {
   soleur_approval_nonce_ok "$nonce" || return 1
   name="$(printf '%s' "$nonce" | soleur_approval_sha256)"
   expires=$(( $(date +%s) + SOLEUR_APPROVAL_TTL_SECONDS ))
+  _soleur_approval_housekeeping "$dir" "${session//[^A-Za-z0-9._-]/_}"
   tmp="${dir}/.mint.$$.${name:0:12}"
   (
     umask 077
@@ -320,7 +365,7 @@ soleur_approval_mint() {
   printf '%s' "$nonce"
 }
 
-# soleur_approval_reset_reason / SOLEUR_APPROVAL_REASON
+# SOLEUR_APPROVAL_REASON
 #   The consume functions report WHY through this variable (never stdout: stdout
 #   of a library function is often captured). One of: no-record expired
 #   digest-mismatch consumed algo perms format. Empty means "no nonce was
@@ -337,7 +382,7 @@ soleur_approval_consume() {
   local digest="$1" nonce dir name rec algo rdigest expires now
   SOLEUR_APPROVAL_REASON=""
   SOLEUR_APPROVAL_NONCE_SHA12=""
-  nonce="$(printenv SOLEUR_APPROVAL_NONCE 2>/dev/null || true)"
+  nonce="${_SOLEUR_APPROVAL_NONCE_HELD:-}"
   [[ -n "$nonce" ]] || return 1
   if ! soleur_approval_nonce_ok "$nonce"; then SOLEUR_APPROVAL_REASON=format; return 1; fi
   dir="$(soleur_approval_dir)"
@@ -366,7 +411,13 @@ soleur_approval_consume() {
   (( expires > now )) || { SOLEUR_APPROVAL_REASON=expired; return 1; }
   # Single use. A lost rename race (two applies, one record) fails here and the
   # loser writes nothing.
-  mv -- "$rec" "${rec}.consumed" 2>/dev/null || { SOLEUR_APPROVAL_REASON=consumed; return 1; }
+  if ! mv -- "$rec" "${rec}.consumed" 2>/dev/null; then
+    # The record is gone: another run won the rename. Still there: the rename itself
+    # failed (permissions, a full disk) and that is a different, reportable condition.
+    if [[ -e "$rec" ]]; then SOLEUR_APPROVAL_REASON=perms; else SOLEUR_APPROVAL_REASON=consumed; fi
+    return 1
+  fi
+  _SOLEUR_APPROVAL_NONCE_HELD=""
   return 0
 }
 
@@ -375,7 +426,7 @@ soleur_approval_consume() {
 #   that drifted between plan and apply must not leave a live receipt behind.
 soleur_approval_burn() {
   local nonce dir name rec
-  nonce="$(printenv SOLEUR_APPROVAL_NONCE 2>/dev/null || true)"
+  nonce="${_SOLEUR_APPROVAL_NONCE_HELD:-}"
   soleur_approval_nonce_ok "$nonce" || return 0
   dir="$(soleur_approval_dir)"
   _soleur_approval_dir_ok "$dir" || return 0
@@ -383,6 +434,7 @@ soleur_approval_burn() {
   rec="${dir}/${name}"
   [[ -f "$rec" && ! -L "$rec" ]] || return 0
   mv -- "$rec" "${rec}.consumed" 2>/dev/null || true
+  _SOLEUR_APPROVAL_NONCE_HELD=""
 }
 
 # ---------------------------------------------------------------------------
@@ -649,10 +701,23 @@ soleur_op_barrier() {
   [[ "$reply" == "yes" ]] || soleur_op_aborted barrier
 }
 
+# soleur_op_in_agent_harness
+#   True when this process runs under an agent harness (Claude Code sets CLAUDECODE
+#   and CLAUDE_CODE_ENTRYPOINT in every tool call's environment). A typed `yes` on a
+#   pseudo-terminal is accepted only when this is false. HONEST LIMIT: an agent that
+#   deliberately unsets these names and opens a pty defeats it; that is the
+#   hijacked-agent case the receipt threshold already excludes (ADR-264).
+soleur_op_in_agent_harness() {
+  [[ -n "${CLAUDECODE:-}" || -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]
+}
+
 # soleur_op_ack_or_die <prompt>                       [class 2]
 #   NO skip variable, by design and by rule. Do not add one.
 soleur_op_ack_or_die() {
   local prompt_text="$1" reply
+  if soleur_op_in_agent_harness; then
+    soleur_op_input_required "destructive-write-ack(agent-harness-no-typed-ack)" ack
+  fi
   [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack
   read -r -p "$prompt_text" reply
   [[ "$reply" == "yes" ]] || soleur_op_aborted ack
@@ -690,13 +755,22 @@ soleur_op_ack_or_die() {
 
 SOLEUR_OP_PLAN_OPS=()
 SOLEUR_OP_APPROVAL=""
+# Set by soleur_op_stage_gate immediately before it exits 75. The EXIT trap of a
+# generated script settles the stage as `refused` on THIS flag, never on the bare
+# exit code: a vendor CLI that happens to exit 75 mid-write must not be reported as
+# a clean refusal.
+SOLEUR_OP_REFUSED=""
 
 # soleur_op_shquote <word>  — the word as one shell-safe token (raw when it is
-# plain, single-quoted otherwise). A path containing a single quote is refused:
-# the approval hook parses simple commands only and will not mint for it.
+# plain, single-quoted otherwise). Returns 1 and prints nothing for a word that
+# contains a single quote: no quoting of it survives the approval hook's parser, so
+# the caller refuses (soleur_op_plan_emit) instead of printing a command the hook
+# cannot ask about.
 soleur_op_shquote() {
   if [[ "$1" =~ ^[A-Za-z0-9_./:=@+,-]+$ ]]; then
     printf '%s' "$1"
+  elif [[ "$1" == *"'"* ]]; then
+    return 1
   else
     printf "'%s'" "$1"
   fi
@@ -732,11 +806,15 @@ soleur_op_plan_count() { printf '%s' "${#SOLEUR_OP_PLAN_OPS[@]}"; }
 #   The impact and rollback TEXT is inside it, so the words the human read are
 #   the words that were approved.
 soleur_op_plan_digest() {
-  local op
+  local op content
+  content="$(soleur_approval_content_hash "$1")"
   {
+    local LC_ALL=C
     printf 'algo=%s\n' "$SOLEUR_APPROVAL_ALGO"
-    printf 'script=%s\nstage=%s\nflags=%s\nimpact=%s\nrollback=%s\n' "$1" "$2" "$3" "$4" "$5"
-    for op in ${SOLEUR_OP_PLAN_OPS[@]+"${SOLEUR_OP_PLAN_OPS[@]}"}; do printf 'op=%s\n' "$op"; done
+    printf 'script=%d:%s\ncontent=%s\n' "${#1}" "$1" "$content"
+    printf 'stage=%d:%s\nflags=%d:%s\n' "${#2}" "$2" "${#3}" "$3"
+    printf 'impact=%d:%s\nrollback=%d:%s\n' "${#4}" "$4" "${#5}" "$5"
+    for op in ${SOLEUR_OP_PLAN_OPS[@]+"${SOLEUR_OP_PLAN_OPS[@]}"}; do printf 'op=%d:%s\n' "${#op}" "$op"; done
   } | soleur_approval_sha256
 }
 
@@ -745,7 +823,7 @@ soleur_op_plan_digest() {
 #   applies it. Declared impact and rollback text come from the script's own
 #   stage line; the agent relays them verbatim and composes none of its own.
 soleur_op_plan_emit() {
-  local real="$1" stage="$2" rotate="${3:-0}" impact rollback flags="" digest op n apply_cmd approval
+  local real="$1" stage="$2" rotate="${3:-0}" impact rollback flags="" digest op n apply_cmd approval quoted
   impact="$(soleur_op_stage_field "$real" "$stage" 3)"
   rollback="$(soleur_op_stage_field "$real" "$stage" 4)"
   [[ "$rotate" == "1" ]] && flags="rotate-token"
@@ -762,10 +840,15 @@ soleur_op_plan_emit() {
     SOLEUR_OP_PLAN_DIGEST="$digest"
     return 0
   fi
-  apply_cmd="bash $(soleur_op_shquote "$real") --stage ${stage} --apply --plan-digest ${digest}"
+  if ! quoted="$(soleur_op_shquote "$real")"; then
+    printf 'SOLEUR_BOOTSTRAP_PATH_UNSUPPORTED stage=%s\n' "$stage"
+    printf 'This script lives at a path containing a single quote, which the approval prompt cannot carry. Move the script to a path without one and run the stage again; nothing was changed.\n'
+    exit 64
+  fi
+  apply_cmd="bash ${quoted} --stage ${stage} --apply --plan-digest ${digest}"
   [[ "$rotate" == "1" ]] && apply_cmd="${apply_cmd} --rotate-token"
-  # approval_digest is what a person resuming a deferred headless run puts in
-  # SOLEUR_RESUME_APPROVED_DIGEST; computed over the exact argv printed below.
+  # approval_digest names the exact command printed below (script bytes included). It is an
+  # identifier for the receipt, never an approval: no variable or flag turns it into one.
   if [[ "$rotate" == "1" ]]; then
     approval="$(soleur_approval_binding_digest "$real" "$stage" --stage "$stage" --apply --plan-digest "$digest" --rotate-token)"
   else
@@ -793,6 +876,9 @@ soleur_op_stage_ok() {
 soleur_op_precondition_failed() {
   printf 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=%s need=%s\n' "$1" "$2"
   printf '%s\n' "$3"
+  # A precondition is a refusal with a named remedy, not a failure of the stage: the
+  # EXIT trap settles it as `refused` and prints no "run the stage again" banner.
+  SOLEUR_OP_REFUSED=1
   exit 1
 }
 
@@ -826,20 +912,20 @@ soleur_op_stage_gate() {
   if [[ "$supplied" != "$computed" ]]; then
     soleur_approval_burn
     printf 'SOLEUR_BOOTSTRAP_PLAN_DRIFT stage=%s\n' "$stage"
-    printf 'The state changed since the plan was shown, so nothing was changed. Run --stage %s again (without --apply), tell the person what is different, and ask for approval again.\n' "$stage"
+    printf 'The digest does not match the plan this script computes now (the state changed since the plan was shown, or the digest was not the one printed), so nothing was changed. Run --stage %s again (without --apply), use the digest it prints, tell the person what is different if anything is, and ask for approval again.\n' "$stage"
     soleur_op_run_halt plan_drift "$stage"
+    SOLEUR_OP_REFUSED=1
     exit 75
   fi
 
   # 2. A presented nonce must match a live record for exactly this invocation.
   if soleur_approval_consume "$binding"; then
-    unset SOLEUR_APPROVAL_NONCE
     SOLEUR_OP_APPROVAL="harness-receipt"
     soleur_op_ledger_approval "$stage" harness-receipt "$SOLEUR_APPROVAL_NONCE_SHA12" "$computed" "$surface"
     return 0
   fi
   if [[ -n "$SOLEUR_APPROVAL_REASON" ]]; then
-    unset SOLEUR_APPROVAL_NONCE
+    _SOLEUR_APPROVAL_NONCE_HELD=""
     printf 'SOLEUR_BOOTSTRAP_APPROVAL_INVALID stage=%s reason=%s\n' "$stage" "$SOLEUR_APPROVAL_REASON"
     case "$SOLEUR_APPROVAL_REASON" in
       no-record|expired|digest-mismatch|consumed)
@@ -848,11 +934,15 @@ soleur_op_stage_gate() {
         printf 'A safety check on the approval failed (%s) and nothing was changed. Stop and report this to the person; do not retry.\n' "$SOLEUR_APPROVAL_REASON" ;;
     esac
     soleur_op_run_halt approval_invalid "$stage"
+    SOLEUR_OP_REFUSED=1
     exit 75
   fi
 
-  # 3. The second valid source: a real person typing yes at a real terminal.
-  if [[ -t 0 && -t 1 ]]; then
+  # 3. The second valid source: a real person typing yes at a real terminal, and
+  #    ONLY outside an agent harness. A pseudo-terminal an agent opens (script, a
+  #    python pty, expect) satisfies `-t 0`, so a bare TTY test would let the agent
+  #    type its own `yes`; inside a harness the terminal is not evidence of a person.
+  if [[ -t 0 && -t 1 ]] && ! soleur_op_in_agent_harness; then
     printf '  If this fails: %s\n  Rollback: %s\n' "$impact" "$rollback"
     soleur_op_ack_or_die "  Apply stage ${stage}? Type 'yes': "
     SOLEUR_OP_APPROVAL="tty-ack"
@@ -864,8 +954,9 @@ soleur_op_stage_gate() {
   #    simple command so the approval hook can ask the person, or reports that this
   #    surface cannot make production changes yet.
   printf 'SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED stage=%s approval_digest=%s surface=%s\n' "$stage" "$binding" "$surface"
-  printf 'This change needs the person to approve this exact command, and nothing approved it. In Claude Code with the Soleur plugin, issue the apply command as ONE simple command (no pipe, no semicolon, no &&, no substitution) and the person will be asked at the prompt. On a surface without that prompt this stage cannot make production changes yet: tell the person so; do not ask them to open a terminal.\n'
+  printf 'This change needs the person to approve this exact command, and nothing approved it. In Claude Code with the Soleur plugin, issue the apply command as ONE simple command (no pipe, no semicolon, no &&, no substitution) and the person will be asked at the prompt. On a surface without that prompt I cannot make this change from here yet: nothing was changed, the plan is saved above, and it needs Claude Code with the Soleur plugin on the person'"'"'s computer (tracked in #9388). Tell the person exactly that; do not ask them to open a terminal.\n'
   soleur_op_run_halt approval_required "$stage"
+  SOLEUR_OP_REFUSED=1
   exit 75
 }
 

@@ -2,7 +2,7 @@
 title: "ADR-264: Generated operator scripts are agent-run in stages; the human acknowledgement is a harness-approved receipt"
 status: adopting
 date: 2026-10-01
-supersedes: "ADR-228 points 2-4 and ADR-249 step 1 points 2 and 4, for generated operator scripts only"
+supersedes: "ADR-228 points 2-4 as they apply to the destructive-write acknowledgement, and ADR-249 step 1 points 2 and 4, for generated operator scripts only"
 amends: [ADR-162]
 issue: 9321
 related: [9321, 9387, 9388, 9389]
@@ -15,15 +15,20 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-Adopting, 2026-10-01. The acknowledgement this ADR describes resists an
-instruction-following agent. It does not resist a hijacked or deliberate one (see
-[Threat model and residual](#threat-model-and-residual)). The status flips to `accepted` when
-the first real harness-approved production write is recorded in a run ledger. Until then the
-existing TTY handoff for writes stays in force for the founder; reads and plans are
-agent-runnable regardless, because they need no approval.
+Adopting, 2026-10-01 (revised after review, 2026-10-02). The acknowledgement this ADR describes
+resists an instruction-following agent. It does not resist a hijacked or deliberate one (see
+[Threat model and residual](#threat-model-and-residual)). The status flips to `accepted` when the
+FOUNDER confirms that the first real harness-approved production write was approved by them at the
+prompt. A run-ledger line saying `approval=harness-receipt` is NOT that evidence: an agent that
+reads the hook can mint its own receipt (see the residual list), so the ledger records which source
+was used, never that a person approved. The mechanism is shipped and in force for generated (v2)
+scripts: the harness prompt is the approval, and a typed `yes` at a person's own terminal (no agent
+harness around it) remains a valid second source inside the gate. The flag and tenant scripts keep
+their typed-yes handoff (see [Scope](#scope)).
 
 > **Supersedes in part**, for **generated operator scripts only**: [ADR-228](./ADR-228-generated-operator-scripts-are-non-interactive-by-default.md)
-> points 2, 3 and 4, and [ADR-249](./ADR-249-operator-prod-writes-need-a-tty-ack-layered-with-credential-custody.md)
+> points 2, 3 and 4 *as they apply to the class-2 destructive-write acknowledgement* (the
+> non-interactive default and the class-1 and class-3 skip variables stand), and [ADR-249](./ADR-249-operator-prod-writes-need-a-tty-ack-layered-with-credential-custody.md)
 > step 1 points 2 and 4. Each of those carries a "Superseded in part by ADR-264" blockquote
 > that names what stays in force. **Amends** [ADR-162](./ADR-162-pretooluse-hooks-may-rewrite-tool-input.md)
 > (a second named PreToolUse rewriter). The schema carries ADR ids only, so the point
@@ -92,21 +97,36 @@ bash <script> --stage <name> --apply --plan-digest <d> [--rotate-token]
    pipe, `;`, trailing `&&`, redirect, substitution or glob. The human approves one exact string.
 3. The receipt is a record named `sha256(nonce)` in `${XDG_STATE_HOME:-~/.local/state}/soleur/approvals`
    (directory `0700`, files `0600`, outside the worktree). It holds the digest of the script
-   realpath, the stage and the exact argv, a 10-minute expiry and the session id.
+   realpath **and the sha256 of the script's bytes**, the stage and the exact argv (every
+   variable field length-prefixed, so no value can read as the next field), a **five-minute**
+   expiry and the session id. A new mint removes the same session's earlier unconsumed records
+   and every record older than an hour, so a prompt the person declined cannot be revived later.
 4. Rewrites the command to carry `SOLEUR_APPROVAL_NONCE=<nonce>` immediately before `bash`
-   (`updatedInput`) and answers `ask` on an interactive session
-   (`CLAUDE_CODE_ENTRYPOINT=cli`), so the human sees the rewritten command plus the stage's
-   plain-language impact and rollback.
-5. Headless (`claude -p`, `--bg`, one-shot; entrypoint `sdk-cli` or anything else) it emits
-   `defer` and mints **nothing** on the deferring invocation. On `claude --resume` the hook
-   re-runs and mints only when the environment of the human-owned resumed process carries
-   `SOLEUR_RESUME_APPROVED_DIGEST` equal to this command's digest, then answers `allow`.
+   (`updatedInput`) and answers `ask` on an interactive entrypoint, so the human sees the
+   rewritten command plus the stage's impact and rollback. `updatedInput` also **replaces the
+   agent-written `description`** (the first line of the prompt) with Soleur's own, and the impact
+   and rollback sentences, which come from the script file, are control-character-stripped,
+   capped at 500 characters and framed as "the script describes ..., not verified by Soleur".
+   Interactive entrypoints are `cli`, `claude-vscode`, `claude-desktop` and `claude-desktop-3p`;
+   only `cli` and `sdk-cli` were measured, the other three are an allowlist taken on trust and
+   listed as unmeasured below.
+5. On any other entrypoint (headless: `claude -p`, `--bg`, one-shot, `sdk-cli`) it emits `defer`
+   and mints **nothing**. The run waits; a person resumes the session **interactively**
+   (`claude --resume`), the hook runs again under an interactive entrypoint and asks. There is
+   no environment variable, settings key or file that stands in for that answer. An earlier
+   draft honoured `SOLEUR_RESUME_APPROVED_DIGEST` in the resumed process; review measured that a
+   settings-level `env` block written through an ordinary Bash call reaches the hook in a fresh
+   process, so the marker was an agent-writable approval and was removed.
 6. Under `bypassPermissions`, `dontAsk`, `auto`, or an unknown permission mode it **denies** and
    never mints. If interactive versus headless cannot be determined it emits `defer`, never
    `allow`.
-7. Denies any original tool input that already contains the nonce variable name, and any
-   Bash, Monitor, Write, Edit or Read access to the receipt directory. The path-tool denial is
-   reliable; string matching on a shell command is a speed bump, not a wall.
+7. Denies any original tool input that already contains the nonce variable name, any Bash or
+   Monitor command that names the receipt directory by its resolved path, and any Write, Edit,
+   MultiEdit or NotebookEdit of a path inside it (canonicalised, so traversal and symlink
+   spellings are caught). `Read` is not handled: a record holds a digest, a time and a session
+   id, never a nonce. The path-tool denial is reliable; string matching on a shell command is a
+   speed bump, not a wall. A `--apply` on a stage the script itself declares `read` is denied,
+   so `--apply` means one thing.
 8. A call that is not a candidate returns at once, before any `jq` is needed. Only a candidate
    fails closed, so a machine without `jq` is not denied every Bash call.
 
@@ -117,14 +137,22 @@ enforces this order, and the order is the contract:
    `75`, and the receipt is burned.
 2. Require a 32-hex nonce with a matching, unexpired record that is not a symlink, is owned by
    the script's euid and has mode `0600`, and whose bound digest equals the recomputed command
-   digest.
+   digest (which includes the script's current bytes: a script edited after the approval no
+   longer matches).
 3. Consume the record (rename to `.consumed`) **before** the first write. A lost rename race
-   fails closed.
-4. Unset the nonce so no child process inherits it. The nonce is never echoed.
+   fails closed as `consumed`; a rename that fails while the record is still there is `perms`
+   (stop and report), never a re-ask loop.
+4. The nonce was moved out of the environment into a plain shell variable the moment the library
+   was sourced, so **no child process ever inherits it**, the pre-gate plan reads included (the
+   first draft unset it only at the gate, after the plan phase had run `doppler` reads with it
+   exported). It is never echoed.
 5. Only then may the caller write. The ledger records `approval=harness-receipt`.
 
-Otherwise a real TTY with a typed `yes` is a second valid source (`approval=tty-ack`), and
-otherwise the script exits `75`.
+Otherwise a typed `yes` at a real terminal is a second valid source (`approval=tty-ack`) **only
+outside an agent harness** (`CLAUDECODE` / `CLAUDE_CODE_ENTRYPOINT` unset): a pseudo-terminal an
+agent allocates inside a harness satisfies `-t 0`, so a terminal there is not evidence of a
+person. Otherwise the script exits `75`. The class-2 ack for legacy scripts applies the same
+refusal.
 
 **Exit `75`** (`EX_TEMPFAIL`) is new: approval required, approval invalid, or plan drift. `64`
 stays "missing input" and `78` stays "xtrace refused". The stdout markers, one line each and
@@ -138,6 +166,12 @@ and `_STAGE_FAILED`.
 record the hook wrote. A value with no matching record gets exit `75`. The nonce is bearer-only,
 single-use and bound to one command digest. The plan digest is not a secret and is not the
 acknowledgement; the receipt is.
+
+**The library is one file.** The receipt algorithm lives in `plugins/soleur/scripts/lib/operator-script.sh`
+beside the rest of the library (ADR-178's one-file distribution contract: a harness that copies the
+library to a sandbox gets everything), and the hook sources that same file, so mint and verify cannot
+drift. The plan named a sibling `operator-approval.sh`; it was folded in when a copy-based test harness
+lost it. The guards are numbered as in the library test file (the receipt gate is its Guard 11).
 
 **Where it ships.** The hook ships in `plugins/soleur/hooks/hooks.json`, the surface that reaches
 a founder's install, not only in this repository's `.claude/hooks`. Web Concierge loads that file
@@ -153,9 +187,17 @@ What this design resists: an instruction-following agent that follows skill text
 markers, sets environment variables, passes flags, pipes `yes`, or uses its ordinary
 Write/Edit/Bash tools without reverse-engineering the gate. Such an agent cannot satisfy it.
 
-What it does **not** resist: a hijacked or deliberate agent that forges a record through an
-obfuscated path, allocates a PTY wrapper for the `tty-ack` source, calls `curl` directly with
-Doppler-held keys, sets `BASH_ENV`, or edits the hook files or settings. Closing that needs a
+What it does **not** resist: a hijacked or deliberate agent that forges a record (the shipped
+library exports the mint primitive, so this needs one `bash -c`, no obfuscation), unsets the
+harness variables and allocates a pseudo-terminal for the `tty-ack` source, calls `curl` directly
+with Doppler-held keys, sets `BASH_ENV`, edits the hook files, the library or settings (including a
+settings `env` block that sets `SOLEUR_OP_LIB` or `XDG_STATE_HOME`), replays a nonce it read back
+from the session transcript after a prompt the person declined (live at most five minutes, one per
+session), or **authors the script itself**: the stage class, the impact text and the apply body
+are chosen by whoever wrote the script, and the hook can show the person a hash and the script's
+own words, not prove them true. The review also found two cheaper routes and closed them: a typed
+`yes` through a pseudo-terminal inside a harness, and an approval marker in the resumed
+process's environment. Closing the rest needs a
 principal the agent cannot write as: a separate OS user, or a broker holding a FIDO2 touch. That
 is credential custody, the open step 2 of ADR-249, and it is not moved into this change.
 
@@ -164,9 +206,21 @@ mistaken instruction, not against a compromised one; do not claim that a human a
 production write without that qualifier.**
 
 The credibility of the approval prompt itself has one more measured limit: the first line above
-the command in the prompt is the model-authored `description` field, not the real command. The
-real command is the line below it. The hook's own reason text carries the impact and rollback so
-the founder does not rely on the model's description.
+the command in the prompt is the model-authored `description` field (W0 row 6). The hook now
+replaces it with a fixed Soleur sentence, so the first line is Soleur's, the real command is the
+line below it, and the reason text carries the script's impact and rollback sentences framed as
+the script's own, unverified words.
+
+Decision precedence across hooks was re-measured against the 2.1.287 aggregator: **deny > defer >
+ask > allow**. This hook answers deny, defer or ask and never allow. A co-matching `defer` from
+another hook outranks this hook's `ask`; the minted record then sits unused until it expires or
+the session's next mint removes it.
+
+One composition edge is accepted rather than fixed: this repository's own `grep-rewrite.sh` hook
+also rewrites a command whose text contains `grep` (a script path such as `feat-x-grep-fix/`
+counts). If its rewrite wins, the person approves a command with no nonce and the script answers
+`75` with `no-record`; nothing is changed and the apply is re-issued. It does not affect a
+founder's install, which does not carry that hook.
 
 ## Alternatives considered
 
@@ -193,8 +247,10 @@ the founder does not rely on the model's description.
 | Surface | Mechanism | Result |
 |---|---|---|
 | Claude Code interactive (`CLAUDE_CODE_ENTRYPOINT=cli`) | `ask` plus `updatedInput`; the hook mints at that point | Human sees the rewritten command, impact and rollback; approval runs it |
-| Headless, `claude -p`, `--bg`, one-shot (`sdk-cli`) | `defer`, then a resume marker | Mints nothing on the deferring call; mints on `--resume` only when `SOLEUR_RESUME_APPROVED_DIGEST` matches, then `allow` |
-| Codex, Devin cloud, Grok | No hook runs | The script exits `75` and writes nothing; a tracked capability gap (#9389) |
+| Claude Code in VS Code, the Desktop app (`claude-vscode`, `claude-desktop`, `claude-desktop-3p`) | Treated as interactive: `ask` plus `updatedInput` | **Unmeasured.** Taken on trust that these surfaces show a prompt a person answers. If one does not, `ask` is the fail-safe: no approval, no write. Re-probe before relying on it |
+| Headless, `claude -p`, `--bg`, one-shot (`sdk-cli`, any other entrypoint) | `defer`; resume interactively | Mints nothing. A person runs `claude --resume` and is asked at the prompt on the exact command; the defer text carries the impact and rollback so the approval is not blind |
+| Codex, Devin cloud, Grok | They load the plugin's `hooks.json`, but their entrypoints are not interactive Claude Code ones, so nothing mints (and a harness without PreToolUse support runs no hook at all) | The script exits `75` and writes nothing; a tracked capability gap (#9389) |
+| Sandboxed Bash that cannot write `~/.local/state` | Unmeasured | The hook (outside the sandbox) mints, the script's rename fails and reads as `perms`: stop and report, no write |
 | Web app (Concierge) | The hook opts out through `SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK=1`, set by `buildAgentEnv` | Scripts fail closed at exit `75` until the web adapter lands (#9388) |
 
 Web Concierge loads `plugins/soleur/hooks/hooks.json`, so without the opt-out the hook would run
@@ -215,9 +271,11 @@ stage approval (ADR-264), measured 2026-10-01".
 |---|---|---|
 | 1 | Does `ask` together with `updatedInput` show the rewritten command and run it after approval? | Yes. The prompt shows the rewritten command and the hook's reason ("Hook PreToolUse:Bash requires confirmation for this command"); PostToolUse receives the rewritten command; it executes after approval |
 | 2 | Does the hook's `ask` hold against an allow rule and under `bypassPermissions`? | Yes. With `Bash(echo:*)` matching the original command, and under `--permission-mode bypassPermissions`, `ask` still prompts. The payload carries `permission_mode` (`default` versus `bypassPermissions`) |
-| 3 | Does headless `defer` plus `--resume` re-run the hook and expose a human-set marker? | Yes. `defer` ends the turn with terminal_reason `tool_deferred` and the deferred input shows the ORIGINAL command. `claude -p --resume <session>` re-runs the hook; an environment variable on the resumed process (`SOLEUR_RESUME_APPROVED_DIGEST=abc123`) is visible to it; `allow` plus `updatedInput` on resume executes the rewritten command |
+| 3 | Does headless `defer` plus `--resume` re-run the hook and expose a human-set marker? | Yes, which is why it was NOT used: `defer` ends the turn with terminal_reason `tool_deferred` and the deferred input shows the ORIGINAL command; `claude -p --resume <session>` re-runs the hook and an environment variable on the resumed process is visible to it, **including one set by a settings `env` block that an agent can write through Bash** (review measurement, 2026-10-02). So resume is interactive and approved at the prompt; no marker exists |
 | 4 | Is there an interactive versus headless discriminator? | Yes. `CLAUDE_CODE_ENTRYPOINT` is `cli` interactive and `sdk-cli` under `claude -p`. The payload also has `permission_mode`, `session_id`, `cwd`, `tool_use_id`, `prompt_id` |
-| 5 | Does the tool_use text the model sees afterwards leak the nonce? | No. The model sees the ORIGINAL command. The nonce appears only in the transcript's hook_success attachment (the hook's stdout), in the human-visible prompt, and in a headless permission_denials result record. It is single-use and bound to the exact command digest |
+| 5 | Does the tool_use text the model sees afterwards leak the nonce? | Not in the tool_use text: the model sees the ORIGINAL command. The nonce DOES appear in the transcript's hook_success attachment (the hook's stdout), a file the agent can read, and in a headless permission_denials result record. It is single-use, bound to the exact command digest and script bytes, and live for at most five minutes; a replay of a nonce from a DECLINED prompt is a deliberate act and is in the residual list |
+| 7 | Hook decision precedence | deny > defer > ask > allow (the 2.1.287 aggregator; an earlier text said "deny > ask > defer", which was wrong) |
+| 8 | Entrypoints beyond `cli` and `sdk-cli` | NOT measured: `claude-vscode`, `claude-desktop`, `claude-desktop-3p` are interactive by assumption; `local-agent`, `sdk-ts`, `sdk-py` and `claude-code-github-action` are treated as headless |
 | 6 | What is the first line of the prompt? | The model-authored `description` field, not the real command; the real command is the line below it |
 
 For replace-versus-merge (`updatedInput` REPLACES `tool_input`), see
@@ -233,7 +291,9 @@ release-job App source re-cut (#9321), the new hook, and the new guard.
   whose CHECK allows only `'tty-ack'` or NULL. Widening it is a migration with the
   rollback-ordering hazard ADR-249 recorded.
 - The three finished generated scripts (for the earlier CI-concurrency work, the LinkedIn-token
-  work and the runtime-App-key-eviction work) keep the legacy ack.
+  work and the runtime-App-key-eviction work) keep the legacy ack, tracked in #9387. The legacy ack
+  now also refuses a typed `yes` inside an agent harness, so it is a person-at-their-own-terminal
+  mechanism only.
 - `soleur_op_ack_or_die` is unchanged. ADR-228 points 1, 5, 6 and 7 and its class-1 and class-3
   skip variables stand, as do ADR-249 step 1 points 1, 3, 5 and 6, step 2 and the residual list.
 
@@ -250,8 +310,8 @@ release-job App source re-cut (#9321), the new hook, and the new guard.
 - On a surface with no hook (Codex, Devin cloud, Grok) and on the web app until its adapter lands,
   a write stage cannot complete. This is deliberate: it fails closed for an instruction-following
   agent, and it is a visible, tracked gap rather than a silent regression.
-- The receipt directory is local state on the founder's machine with a 10-minute record
-  lifetime. It is not a persistent store and adds no C4 element; the C4 model gains the
+- The receipt directory is local state on the founder's machine with a five-minute record
+  lifetime, pruned on every mint. It is not a persistent store and adds no C4 element; the C4 model gains the
   founder-to-Doppler and founder-to-GitHub write edges and the approval hook in the Hook Engine
   description.
 - The approval depends on the harness honouring a hook's `ask` plus `updatedInput`. That was

@@ -1118,7 +1118,17 @@ pty_drive() {
   local answer="$1" ledger="$2"; shift 2
   local cmd
   printf -v cmd '%q ' bash "$SB/drive.sh" "$@"
-  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
+  # A person's own terminal: no agent-harness variable (the suite itself may run under one).
+  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
+  return "${PIPESTATUS[1]}"
+}
+# The same pty, but INSIDE an agent harness: what an agent that allocates a pseudo-terminal
+# (script, a python pty, expect) and types its own `yes` gets.
+pty_drive_agent() {
+  local answer="$1" ledger="$2"; shift 2
+  local cmd
+  printf -v cmd '%q ' bash "$SB/drive.sh" "$@"
+  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 env CLAUDECODE=1 CLAUDE_CODE_ENTRYPOINT=cli script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
   return "${PIPESTATUS[1]}"
 }
 
@@ -1157,6 +1167,22 @@ gdecline_check() {
   return "$v"
 }
 
+# A typed `yes` on a pseudo-terminal is not evidence of a person when the process runs under an
+# agent harness: the class-2 ack refuses (exit 64, INPUT_REQUIRED) instead of reading it.
+gagent_check() { # <lib>
+  local lib="$1" out rc v=0 ledger="$SB/gagent-ledger.jsonl"
+  : > "$ledger"
+  out="$(pty_drive_agent $'yes\n' "$ledger" "$lib" soleur_op_ack_or_die "Type yes: ")"; rc=$?
+  if [[ "$rc" -ne 64 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_INPUT_REQUIRED' <<<"$out"; then
+    echo "gagent: a piped yes through a pty INSIDE an agent harness exited ${rc} (expected 64 + INPUT_REQUIRED): ${out}"; v=1
+  fi
+  out="$(pty_drive $'yes\n' "$ledger" "$lib" soleur_op_ack_or_die "Type yes: ")"; rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "gagent: control — a person's own terminal (no harness variable) answering yes exited ${rc}, expected 0: ${out}"; v=1
+  fi
+  return "$v"
+}
+
 echo "== Guard 8 — decline path through a pty =="
 
 assert_green gdecline_check "pristine library" "$PRISTINE"
@@ -1178,6 +1204,14 @@ if mutate "gdecline-r3 aborted writes no run_halt" "$SB/mut/gd3.sh" <<'PROG'
 s{  soleur_op_run_halt aborted "\$1"\n}{}
 PROG
 then assert_red gdecline_check "gdecline-r3 decline invisible in the ledger" "$SB/mut/gd3.sh"; fi
+
+assert_green gagent_check "pristine library (typed yes inside an agent harness refused)" "$PRISTINE"
+
+# row 4 — the harness refusal removed from the class-2 ack: the agent's own typed yes is accepted
+if mutate "gagent-r4 ack accepts a pty yes inside an agent harness" "$SB/mut/gd4.sh" <<'PROG'
+s{  if soleur_op_in_agent_harness; then\n    soleur_op_input_required "destructive-write-ack\(agent-harness-no-typed-ack\)" ack\n  fi\n}{}
+PROG
+then assert_red gagent_check "gagent-r4 a pty yes inside an agent harness is accepted" "$SB/mut/gd4.sh"; fi
 
 # =============================================================================
 # Guard 9 — every destructive write in a consumer sits under an ack (P1-3)
@@ -1647,11 +1681,14 @@ if [[ -r "$TEMPLATE" ]]; then
   # mid-stage on the renamed helper instead (review, lead's coverage consult).
   newer_lib="$SB/newer-lib.sh"
   { cat "$LIB"; printf '\nexport SOLEUR_OP_LIB_API=2\nunset -f soleur_op_barrier\n'; } > "$newer_lib"
+  # The library under test is BAKED into a copy of the generated script: an explicit
+  # SOLEUR_OP_LIB override is validated (name + gate) and these stand-ins are not named
+  # operator-script.sh, which is the point of the validation rows below.
+  sed "s|^SOLEUR_OP_LIB_BAKED=.*|SOLEUR_OP_LIB_BAKED=\"${newer_lib}\"|" "$TEMPLATE" > "$gen_home/bootstrap-newer.sh"
   newer_ledger="$SB/newer-api-ledger.jsonl"
   rm -f "$newer_ledger"
-  newer_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT SOLEUR_OP_LIB="$newer_lib" \
-    SOLEUR_BOOTSTRAP_LEDGER="$newer_ledger" SOLEUR_BOOTSTRAP_SKIP_ACCOUNT_BARRIER=1 \
-    SOLEUR_BOOTSTRAP_ACCOUNT_ID=a timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh </dev/null 2>&1)"; newer_rc=$?
+  newer_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB \
+    SOLEUR_BOOTSTRAP_LEDGER="$newer_ledger" timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap-newer.sh --stage account </dev/null 2>&1)"; newer_rc=$?
   if [[ "$newer_rc" -eq 64 ]] && grep -qF 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=2' <<<"$newer_out"; then
     pass "F6b: a library whose API moved to 2 is refused with LIB_INCOMPATIBLE need=1 got=2, exit 64"
   else
@@ -1664,13 +1701,37 @@ if [[ -r "$TEMPLATE" ]]; then
   fi
 
   # F6 — the consumer-side contract refuses a library that predates the API.
-  : > "$SB/empty-lib.sh"
-  api_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT SOLEUR_OP_LIB="$SB/empty-lib.sh" timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh --help 2>&1)"; api_rc=$?
+  # A library that has the gate but predates the API export.
+  grep -v '^export SOLEUR_OP_LIB_API=1' "$LIB" > "$SB/preapi-lib.sh"
+  sed "s|^SOLEUR_OP_LIB_BAKED=.*|SOLEUR_OP_LIB_BAKED=\"$SB/preapi-lib.sh\"|" "$TEMPLATE" > "$gen_home/bootstrap-preapi.sh"
+  api_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap-preapi.sh --stage account </dev/null 2>&1)"; api_rc=$?
   if [[ "$api_rc" -eq 64 ]] && grep -qF 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=0' <<<"$api_out"; then
     pass "F6: a library without SOLEUR_OP_LIB_API is refused with LIB_INCOMPATIBLE, exit 64"
   else
     fail "F6: pre-API library was not refused (rc=${api_rc}): ${api_out}"
   fi
+  # F6c — an explicit SOLEUR_OP_LIB override is held to the same test as every other
+  # candidate: a regular, non-symlink, readable file NAMED operator-script.sh that
+  # defines the staged gate. A stray value cannot make a generated script source an
+  # arbitrary file. Observable: a canary line the stand-in prints when it is sourced.
+  mkdir -p "$SB/override/ok" "$SB/override/nogate" "$SB/override/linked"
+  { cat "$LIB"; printf '\nprintf "OVERRIDE_SOURCED\\n"\n'; } > "$SB/override/ok/operator-script.sh"
+  cp "$SB/override/ok/operator-script.sh" "$SB/override/misnamed.sh"
+  printf 'printf "OVERRIDE_SOURCED\\n"\nexport SOLEUR_OP_LIB_API=1\n' > "$SB/override/nogate/operator-script.sh"
+  ln -sfn "$SB/override/ok/operator-script.sh" "$SB/override/linked/operator-script.sh"
+  ov_run() { (cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT SOLEUR_OP_LIB="$1" SOLEUR_BOOTSTRAP_LEDGER="$SB/ov-ledger.jsonl" timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh --help </dev/null 2>&1); }
+  if grep -qF 'OVERRIDE_SOURCED' <<<"$(ov_run "$SB/override/ok/operator-script.sh")"; then
+    pass "F6c control: a valid override (regular file named operator-script.sh defining the gate) IS honoured"
+  else
+    fail "F6c control: a valid override was not honoured, so the rows below prove nothing"
+  fi
+  for ov in "$SB/override/misnamed.sh" "$SB/override/nogate/operator-script.sh" "$SB/override/linked/operator-script.sh" "override/ok/operator-script.sh"; do
+    if grep -qF 'OVERRIDE_SOURCED' <<<"$(ov_run "$ov")"; then
+      fail "F6c: the override '${ov#"$SB"/}' was sourced although it fails the override test"
+    else
+      pass "F6c: the override '${ov#"$SB"/}' is refused (misnamed / no gate / symlink / relative)"
+    fi
+  done
 else
   fail "F1: template.sh not readable at ${TEMPLATE}"
 fi
@@ -2036,8 +2097,9 @@ fi
 # =============================================================================
 #
 # Property: the ONLY inputs that let a staged write proceed are a valid single-use
-# record for this exact script, stage, argv and plan, or a real TTY typed `yes`;
-# every other input exits 75 and writes nothing.
+# record for this exact script (path AND bytes), stage, argv and plan, or a typed
+# `yes` at a real terminal OUTSIDE any agent harness; every other input exits 75 and
+# writes nothing. A pseudo-terminal an agent allocates inside a harness is not a person.
 #
 # Assembly (every way a value reaches the gate): the environment (the nonce and
 # every SOLEUR_BOOTSTRAP_* / CI-shaped name), argv, stdin, a file in the receipt
@@ -2079,8 +2141,10 @@ stage="${G11_STAGE:-demo}"
 soleur_op_plan_begin; soleur_op_plan_op op1 target1
 computed="$(soleur_op_plan_digest "$real" "$stage" "" "impact" "rollback")"
 supplied="${G11_SUPPLIED:-$computed}"
+# A vendor READ before the gate, as the dispatcher's plan phase does: no child may see the nonce.
+doppler secrets get X -p P -c C </dev/null >/dev/null 2>&1 || true
 soleur_op_stage_gate "$real" "$stage" "$computed" "$supplied" "impact" "rollback" "$@"
-doppler secrets set X -p P -c C </dev/null
+doppler secrets set X -p P -c C </dev/null >/dev/null
 echo GATE_PASSED
 DRIVER
 
@@ -2112,6 +2176,20 @@ g11_run() {
     timeout 20 bash "$G11_DIR/driver.sh" "$@" </dev/null 2>&1)"; G11_RC=$?
 }
 
+# g11_pty <lib> [ENV=VAL ...] -- <argv...> — the driver under a real pty with `yes` typed at it, in an
+# environment that has NO harness variable unless the caller passes one (the suite itself may run
+# inside one).
+g11_pty() {
+  local lib="$1" envs=() cmd; shift
+  while [[ "${1:-}" != "--" ]]; do envs[${#envs[@]}]="$1"; shift; done
+  shift
+  printf -v cmd '%q ' bash "$G11_DIR/driver.sh" "$@"
+  printf 'yes\n' | env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "PATH=${G11_ROOT}/bin:${PATH}" "G11_LIB=$lib" "G11_SCRIPT=$G11_SCRIPT" "${envs[@]+"${envs[@]}"}" \
+    timeout 20 script -qec "$cmd" /dev/null > "$G11_ROOT/pty.out" 2>&1
+  G11_RC=${PIPESTATUS[1]}   # (read here, not inside a $(...): a capture loses PIPESTATUS)
+  G11_OUT="$(tr -d '\r' < "$G11_ROOT/pty.out")"
+}
+
 G11_ARGV=(--stage demo --apply --plan-digest PLACEHOLDER)
 
 # g11_expect <label> <rc> <marker-or-empty> <mutating-calls> — appends to $g11_v on a miss.
@@ -2138,7 +2216,7 @@ g11_check() {
   rec="$XDG_STATE_HOME/soleur/approvals/$(printf '%s' "$nonce" | sha256sum | cut -d' ' -f1)"
   if [[ -e "$rec" || ! -e "$rec.consumed" ]]; then g11_v="${g11_v}\ng11: A: the record was not consumed after a successful gate"; fi
   if grep -qxF "$(basename "$rec")" "$STUB_SNAP" 2>/dev/null; then g11_v="${g11_v}\ng11: A (consume before write): the record was still LIVE at the first mutating call"; fi
-  if [[ "$(cat "$STUB_SNAP.nonce" 2>/dev/null)" != "absent" ]]; then g11_v="${g11_v}\ng11: A (nonce unset): the nonce was visible in the environment of the first child"; fi
+  if [[ "$(cat "$STUB_SNAP.nonce" 2>/dev/null)" != "absent" || "$(stub_nonce_exposures)" -ne 0 ]]; then g11_v="${g11_v}\ng11: A (nonce unset): the nonce was visible in the environment of a child process (pre-gate reads included)"; fi
   if grep -qF "$nonce" <<<"$G11_OUT" || grep -qF "$nonce" "$SOLEUR_BOOTSTRAP_LEDGER"; then g11_v="${g11_v}\ng11: A: the nonce appeared in stdout or the ledger"; fi
   if ! grep -qF '"approval":"harness-receipt"' "$SOLEUR_BOOTSTRAP_LEDGER"; then g11_v="${g11_v}\ng11: A: no approval line in the ledger"; fi
 
@@ -2212,7 +2290,44 @@ g11_check() {
   printf '#!/usr/bin/env bash\nfor a in "$@"; do case "$a" in *.consumed) exit 1 ;; esac; done\nexec /bin/mv "$@"\n' > "$G11_ROOT/failmv/mv"; chmod +x "$G11_ROOT/failmv/mv"
   nonce="$(g11_mint "$binding")"
   G11_PATH_PREFIX="$G11_ROOT/failmv:" g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
-  g11_expect "I failed rename" 75 'reason=consumed' 0
+  g11_expect "I failed rename" 75 'reason=perms' 0
+  # I2. the record vanished under the rename (a lost race): that one IS "consumed"
+  g11_world i2 || return 1
+  mkdir -p "$G11_ROOT/racemv"
+  printf '#!/usr/bin/env bash\nfor a in "$@"; do case "$a" in *.consumed) rm -f -- "$1" "$2" 2>/dev/null; rm -f -- "$3" 2>/dev/null; exit 1 ;; esac; done\nexec /bin/mv "$@"\n' > "$G11_ROOT/racemv/mv"; chmod +x "$G11_ROOT/racemv/mv"
+  nonce="$(g11_mint "$binding")"
+  G11_PATH_PREFIX="$G11_ROOT/racemv:" g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "I2 lost rename race" 75 'reason=consumed' 0
+  # K. the script's BYTES are part of the approval: an edit between the approval and the run is refused.
+  #    Mint THROUGH the library under test (a mutant that drops the content hash must mint without it too).
+  g11_world k1 || return 1
+  local kb kn
+  kb="$(bash -c 'source "$1"; shift; real="$(soleur_approval_realpath "$G11_SCRIPT")"; soleur_approval_binding_digest "$real" demo "$@"' _ "$lib" "${argv[@]}")"
+  kn="$(bash -c 'source "$1"; soleur_approval_mint "$2" g11-k' _ "$lib" "$kb")"
+  printf '# edited after approval\n' >> "$G11_SCRIPT"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$kn" -- "${argv[@]}"
+  g11_expect "K script edited after the approval" 75 '' 0
+  # (restore the fixture: strip the appended line)
+  printf '#!/usr/bin/env bash\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v2\n# SOLEUR-STAGE demo|write|impact|rollback\n' > "$G11_SCRIPT"
+  # L. the record's expiry is at most the documented TTL (a bound, not an equality), and two mints differ
+  g11_world l1 || return 1
+  local l1 l2 lrec lexp now
+  l1="$(bash -c 'source "$1"; soleur_approval_mint "$2" g11-l' _ "$lib" "$binding")"
+  l2="$(bash -c 'source "$1"; soleur_approval_mint "$2" g11-l' _ "$lib" "$binding")"
+  if [[ "$l1" == "$l2" || ! "$l1" =~ ^[0-9a-f]{32}$ ]]; then g11_v="${g11_v}\ng11: L entropy: two mints returned the same (or a malformed) nonce"; fi
+  lrec="$XDG_STATE_HOME/soleur/approvals/$(printf '%s' "$l2" | sha256sum | cut -d' ' -f1)"
+  lexp="$(sed -n 's/^expires=//p' "$lrec" 2>/dev/null)"; now="$(date +%s)"
+  if [[ ! "$lexp" =~ ^[0-9]+$ ]] || (( lexp - now > 300 )); then g11_v="${g11_v}\ng11: L ttl: a record outlives the five-minute bound (expires in $((lexp - now))s)"; fi
+  # M. one live receipt per session: the second mint of the same session removed the first
+  if [[ -e "$XDG_STATE_HOME/soleur/approvals/$(printf '%s' "$l1" | sha256sum | cut -d' ' -f1)" ]]; then g11_v="${g11_v}\ng11: M supersede: an earlier unconsumed record of the same session is still live"; fi
+  # N. a typed yes through a PSEUDO-TERMINAL inside an agent harness is not an approval; the same pty in a
+  #    person's own terminal (no harness variable) IS (the control that proves the pty mechanism works).
+  g11_world n1 || return 1
+  g11_pty "$lib" CLAUDECODE=1 CLAUDE_CODE_ENTRYPOINT=cli -- "${argv[@]}"
+  g11_expect "N pty yes inside an agent harness" 75 'SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED' 0
+  g11_world n2 || return 1
+  g11_pty "$lib" -- "${argv[@]}"
+  g11_expect "N control: pty yes outside any harness" 0 'GATE_PASSED' 1
   # J. the stub log must show the driver actually reached the first write on the positive row (own-dispatch)
   g11_world j1 || return 1
   nonce="$(g11_mint "$binding")"
@@ -2229,44 +2344,65 @@ echo "== Guard 11 — the receipt gate =="
 g11_kat() {
   local lib="$1" v=0 got want real
   real="$(soleur_realpath_py "$G11_SCRIPT")"
+  # The canonical text (ADR-264): every variable field is `<byte-length>:<value>`, the script's CONTENT hash
+  # is a line of its own, and nothing else varies. A second implementation, not a transcription of the shell.
   # vector 1: plain argv
-  want="$(python3 - "$real" <<'PY'
+  want="$(python3 - "$real" "$G11_SCRIPT" <<'PY'
 import hashlib, sys
-real = sys.argv[1]
-argv = ["--stage", "demo", "--apply", "--plan-digest", "d1"]
-text = "algo=1\nscript=%s\nstage=demo\n" % real + "".join("arg=%s\n" % a for a in argv)
-print(hashlib.sha256(text.encode()).hexdigest())
+real, path = sys.argv[1], sys.argv[2]
+content = hashlib.sha256(open(path, "rb").read()).hexdigest()
+def f(k, v): return "%s=%d:%s\n" % (k, len(v.encode()), v)
+def d(stage, argv):
+    text = "algo=1\n" + f("script", real) + "content=%s\n" % content + f("stage", stage) + "".join(f("arg", a) for a in argv)
+    return hashlib.sha256(text.encode()).hexdigest()
+print(d("demo", ["--stage", "demo", "--apply", "--plan-digest", "d1"]))
 PY
 )"
   got="$(bash -c 'source "$1"; shift; soleur_approval_binding_digest "$@"' _ "$lib" "$real" demo --stage demo --apply --plan-digest d1)"
   [[ "$got" == "$want" ]] || { echo "kat1: digest ${got} != python ${want}"; v=1; }
-  # vector 2: argv-boundary injection — "a b" and "a" "b" must differ and match python
-  want="$(python3 - "$real" <<'PY'
+  # vector 2: argv boundaries — "a b" vs "a" "b", and a NEWLINE-bearing argument that spells another argument
+  want="$(python3 - "$real" "$G11_SCRIPT" <<'PY'
 import hashlib, sys
-real = sys.argv[1]
+real, path = sys.argv[1], sys.argv[2]
+content = hashlib.sha256(open(path, "rb").read()).hexdigest()
+def f(k, v): return "%s=%d:%s\n" % (k, len(v.encode()), v)
 def d(argv):
-    text = "algo=1\nscript=%s\nstage=demo\n" % real + "".join("arg=%s\n" % a for a in argv)
+    text = "algo=1\n" + f("script", real) + "content=%s\n" % content + f("stage", "demo") + "".join(f("arg", a) for a in argv)
     return hashlib.sha256(text.encode()).hexdigest()
-print(d(["a b"]), d(["a", "b"]))
+print(d(["a b"]), d(["a", "b"]), d(["--plan-digest", "D\narg=--rotate-token"]), d(["--plan-digest", "D", "--rotate-token"]))
 PY
 )"
-  got="$(bash -c 'source "$1"; shift; a="$(soleur_approval_binding_digest "$@" "a b")"; b="$(soleur_approval_binding_digest "$@" a b)"; printf "%s %s" "$a" "$b"' _ "$lib" "$real" demo)"
+  got="$(bash -c 'source "$1"; shift; a="$(soleur_approval_binding_digest "$@" "a b")"; b="$(soleur_approval_binding_digest "$@" a b)"; c="$(soleur_approval_binding_digest "$@" --plan-digest $'"'"'D\narg=--rotate-token'"'"')"; d="$(soleur_approval_binding_digest "$@" --plan-digest D --rotate-token)"; printf "%s %s %s %s" "$a" "$b" "$c" "$d"' _ "$lib" "$real" demo)"
   [[ "$got" == "$want" ]] || { echo "kat2: ${got} != python ${want}"; v=1; }
-  [[ "${got%% *}" != "${got##* }" ]] || { echo "kat2: 'a b' and 'a' 'b' hash identically"; v=1; }
+  set -- $got
+  [[ "$1" != "$2" ]] || { echo "kat2: 'a b' and 'a' 'b' hash identically"; v=1; }
+  [[ "$3" != "$4" ]] || { echo "kat2: an argument carrying a newline collides with the argument it spells"; v=1; }
   # vector 3: a symlinked script path resolves to its target
   ln -sf "$G11_SCRIPT" "$G11_DIR/linked-script.sh"
   got="$(bash -c 'source "$1"; soleur_approval_realpath "$2"' _ "$lib" "$G11_DIR/linked-script.sh")"
   [[ "$got" == "$real" ]] || { echo "kat3: symlinked path resolved to ${got}, expected ${real}"; v=1; }
-  # vector 4: the plan digest, from the documented canonical text
-  want="$(python3 - "$real" <<'PY'
+  # vector 4: the plan digest, from the documented canonical text (content hash included)
+  want="$(python3 - "$real" "$G11_SCRIPT" <<'PY'
 import hashlib, sys
-real = sys.argv[1]
-text = "algo=1\nscript=%s\nstage=demo\nflags=\nimpact=impact\nrollback=rollback\nop=op1|target1\n" % real
+real, path = sys.argv[1], sys.argv[2]
+content = hashlib.sha256(open(path, "rb").read()).hexdigest()
+def f(k, v): return "%s=%d:%s\n" % (k, len(v.encode()), v)
+text = "algo=1\n" + f("script", real) + "content=%s\n" % content + f("stage", "demo") + f("flags", "") + f("impact", "impact") + f("rollback", "rollback") + f("op", "op1|target1")
 print(hashlib.sha256(text.encode()).hexdigest())
 PY
 )"
   got="$(bash -c 'source "$1"; soleur_op_plan_begin; soleur_op_plan_op op1 target1; soleur_op_plan_digest "$2" demo "" impact rollback' _ "$lib" "$real")"
   [[ "$got" == "$want" ]] || { echo "kat4: plan digest ${got} != python ${want}"; v=1; }
+  # vector 5: a changed script changes BOTH digests (the content is bound)
+  local b0 b1 p0 p1 copy="$G11_DIR/kat-copy.sh"
+  cp "$G11_SCRIPT" "$copy"
+  b0="$(bash -c 'source "$1"; soleur_approval_binding_digest "$2" demo --x' _ "$lib" "$copy")"
+  p0="$(bash -c 'source "$1"; soleur_op_plan_begin; soleur_op_plan_digest "$2" demo "" i r' _ "$lib" "$copy")"
+  printf '# one more line\n' >> "$copy"
+  b1="$(bash -c 'source "$1"; soleur_approval_binding_digest "$2" demo --x' _ "$lib" "$copy")"
+  p1="$(bash -c 'source "$1"; soleur_op_plan_begin; soleur_op_plan_digest "$2" demo "" i r' _ "$lib" "$copy")"
+  [[ "$b0" != "$b1" ]] || { echo "kat5: the binding digest ignores the script's bytes"; v=1; }
+  [[ "$p0" != "$p1" ]] || { echo "kat5: the plan digest ignores the script's bytes"; v=1; }
   return "$v"
 }
 soleur_realpath_py() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
@@ -2302,25 +2438,43 @@ g11_mutant "m4 any well-formed nonce accepted" 'F32 well-formed nonce' <<'PERL'
 s{(if \[\[ -e "\$\{rec\}\.consumed" \]\]; then SOLEUR_APPROVAL_REASON=consumed; else )SOLEUR_APPROVAL_REASON=no-record; fi\n    return 1}{$1return 0; fi\n    return 1}
 PERL
 g11_mutant "m5 consume moved after the write" 'consume before write' <<'PERL'
-s{mv -- "\$rec" "\$\{rec\}\.consumed" 2>/dev/null \|\| \{ SOLEUR_APPROVAL_REASON=consumed; return 1; \}\n  return 0}{( sleep 2; mv -- "\$rec" "\$\{rec\}.consumed" 2>/dev/null ) </dev/null >/dev/null 2>&1 &\n  return 0}
+s{if ! mv -- "\$rec" "\$\{rec\}\.consumed" 2>/dev/null; then}{if ! true; then}; s{(  _SOLEUR_APPROVAL_NONCE_HELD=""\n)(  return 0\n\}\n\n# soleur_approval_burn)}{$1  ( sleep 2; mv -- "\$rec" "\$\{rec\}.consumed" 2>/dev/null ) </dev/null >/dev/null 2>\&1 \&\n$2}
 PERL
 g11_mutant "m6 failed rename ignored" 'I failed rename' <<'PERL'
-s{mv -- "\$rec" "\$\{rec\}\.consumed" 2>/dev/null \|\| \{ SOLEUR_APPROVAL_REASON=consumed; return 1; \}\n  return 0}{mv -- "\$rec" "\$\{rec\}.consumed" 2>/dev/null || true\n  return 0}
+s{if ! mv -- "\$rec" "\$\{rec\}\.consumed" 2>/dev/null; then}{mv -- "\$rec" "\$\{rec\}.consumed" 2>/dev/null\n  if false; then}
 PERL
-g11_mutant "m7 nonce not unset" 'nonce unset' <<'PERL'
-s{\n    unset SOLEUR_APPROVAL_NONCE\n    SOLEUR_OP_APPROVAL="harness-receipt"}{\n    SOLEUR_OP_APPROVAL="harness-receipt"}
+g11_mutant "m7 nonce left in the environment" 'nonce unset' <<'PERL'
+s{(_SOLEUR_APPROVAL_NONCE_HELD="\$\{SOLEUR_APPROVAL_NONCE:-\}"\n)unset SOLEUR_APPROVAL_NONCE\n}{$1}
 PERL
 g11_mutant "m8 supplied digest trusted" 'H plan drift' <<'PERL'
 s{if \[\[ "\$supplied" != "\$computed" \]\]; then}{if false; then}
 PERL
 g11_mutant "m9 no approval accepted" 'G no nonce' <<'PERL'
-s{(soleur_op_run_halt approval_required "\$stage"\n  )exit 75}{$1return 0}
+s{(soleur_op_run_halt approval_required "\$stage"\n  SOLEUR_OP_REFUSED=1\n  )exit 75}{$1return 0}
 PERL
 g11_mutant "m10 no burn on drift" 'H: the receipt is still live' <<'PERL'
 s{\n    soleur_approval_burn\n    printf 'SOLEUR_BOOTSTRAP_PLAN_DRIFT}{\n    printf 'SOLEUR_BOOTSTRAP_PLAN_DRIFT}
 PERL
 g11_mutant "m11 nonce echoed on stdout" 'the nonce appeared' <<'PERL'
-s{\n    unset SOLEUR_APPROVAL_NONCE\n    SOLEUR_OP_APPROVAL="harness-receipt"}{\n    printf 'nonce=%s\\n' "\$(printenv SOLEUR_APPROVAL_NONCE)"\n    unset SOLEUR_APPROVAL_NONCE\n    SOLEUR_OP_APPROVAL="harness-receipt"}
+s{(  fi\n)(  _SOLEUR_APPROVAL_NONCE_HELD=""\n  return 0\n\}\n\n# soleur_approval_burn)}{$1  printf 'nonce=%s\\n' "\$nonce"\n$2}
+PERL
+g11_mutant "m14 a pty yes inside an agent harness is accepted" 'N pty yes inside an agent harness' <<'PERL'
+s{if \[\[ -t 0 && -t 1 \]\] && ! soleur_op_in_agent_harness; then}{if [[ -t 0 && -t 1 ]]; then}
+PERL
+g11_mutant "m15 the script bytes are not in the approval" 'K script edited' <<'PERL'
+s{    printf 'content=%s\\n' "\$content"\n}{}
+PERL
+g11_mutant "m16 a record is valid for a year" 'L ttl' <<'PERL'
+s{SOLEUR_APPROVAL_TTL_SECONDS=300}{SOLEUR_APPROVAL_TTL_SECONDS=31536000}
+PERL
+g11_mutant "m17 constant nonce" 'L entropy' <<'PERL'
+s{od -An -N16 -tx1 /dev/urandom 2>/dev/null \| tr -d ' \\n'}{printf '0123456789abcdef0123456789abcdef'}
+PERL
+g11_mutant "m18 a new mint does not supersede the session's earlier one" 'M supersede' <<'PERL'
+s{\n  _soleur_approval_housekeeping "\$dir" "\$\{session//\[\^A-Za-z0-9\._-\]/_\}"}{}
+PERL
+g11_mutant "m19 a failed rename reads as a lost race" 'I failed rename' <<'PERL'
+s{if \[\[ -e "\$rec" \]\]; then SOLEUR_APPROVAL_REASON=perms; else SOLEUR_APPROVAL_REASON=consumed; fi}{SOLEUR_APPROVAL_REASON=consumed}
 PERL
 g11_mutant "m13 other algo accepted" 'F algo=2' <<'PERL'
 s{\n  \[\[ "\$algo" == "\$SOLEUR_APPROVAL_ALGO" \]\] \|\| \{ SOLEUR_APPROVAL_REASON=algo; return 1; \}}{}
@@ -2335,7 +2489,7 @@ PERL
 # an attacker of the guard would neuter next. scripts/guard-vacuity-floor.test.sh
 # measures this shape across the repo and reddens on the fail()-routed form.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=173
+FLOOR=193
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"

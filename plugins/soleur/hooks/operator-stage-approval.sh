@@ -22,17 +22,22 @@
 #     with no pipe, `;`, trailing `&&`, redirect, substitution or glob. The human
 #     approves one exact string; a compound one would approve more than they read.
 #   - mint under bypassPermissions / dontAsk / auto, or when the permission mode is
-#     unknown. Interactive-vs-headless is decided by CLAUDE_CODE_ENTRYPOINT
-#     (`cli` is interactive; `sdk-cli` and anything else is headless), measured
-#     on Claude Code 2.1.287 (.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md,
-#     "Operator stage approval"). An undeterminable mode emits `defer`, never allow.
-#   - mint on the headless invocation that DEFERS. A person resuming the session
-#     (`claude --resume`) sets SOLEUR_RESUME_APPROVED_DIGEST=<approval_digest> in
-#     the environment of the resumed process; the hook re-runs there and mints only
-#     when that value equals this command's digest. The agent cannot alter the
-#     harness's own environment.
+#     unknown. Interactive-vs-headless is decided by CLAUDE_CODE_ENTRYPOINT: `cli`,
+#     `claude-vscode`, `claude-desktop` and `claude-desktop-3p` are interactive
+#     (they show a prompt a person answers); `sdk-cli` and anything else is
+#     headless. ONLY `cli` and `sdk-cli` were measured (Claude Code 2.1.287,
+#     .claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md "Operator stage approval"); the
+#     other three names are an allowlist taken on trust and recorded as unmeasured
+#     in ADR-264. An undeterminable mode emits `defer`, never allow.
+#   - mint on a headless invocation. It answers `defer` and the run waits; a person
+#     resumes the session interactively (`claude --resume`), the hook runs again
+#     under an interactive entrypoint, and the person is asked at the prompt. There
+#     is no environment variable, settings key or file that stands in for that
+#     answer (an earlier draft had a resume marker in the resumed process's
+#     environment; a settings-level `env` block can set it without a person, so it
+#     was removed).
 #   - let an input that already carries the nonce variable name through (deny), or
-#     let a Bash/Monitor command or a Write/Edit/Read path touch the receipt
+#     let a Bash/Monitor command or a Write/Edit path touch the receipt
 #     directory (deny; reliable only for the path tools — string matching on a shell
 #     command is a speed bump, not a wall).
 #   - break an unrelated call. A call that is not a candidate returns at once with
@@ -42,15 +47,22 @@
 # HONEST THRESHOLD: the receipt is a same-user file; this resists an agent that
 # follows instructions, not one that deliberately forges a record (ADR-264).
 #
+# DECISION PRECEDENCE across hooks (measured on 2.1.287, ADR-264): deny > defer > ask
+# > allow. This hook answers deny, defer or ask and never allow, so another hook's
+# allow cannot turn a prompt into a silent run.
+#
 # ADR-162 AMENDMENT: this hook is the second named PreToolUse rewriter and, unlike
-# the grep rewriter, emits a permission decision alongside updatedInput (`ask`, and
-# `allow` only when a human-set resume marker matched) and FAILS CLOSED. It never
+# the grep rewriter, emits a permission decision alongside updatedInput (`ask`) and
+# FAILS CLOSED for a candidate. It never
 # composes with another rewriter on the same call: the accepted command form is a
 # single simple command, so grep-rewrite.sh's predicate does not match it.
 
 set -uo pipefail
 # No pathname expansion: the command text is split into words below and must never glob.
 set -f
+# Byte semantics: `${s:i:1}` is O(1) per character in the C locale and the tokenizer
+# offsets (used to splice the nonce) are then byte offsets in both directions.
+export LC_ALL=C
 
 [[ "${SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK:-0}" == "1" ]] && exit 0
 
@@ -63,16 +75,21 @@ trace() {
 }
 
 # --- prefilter (R4): no jq, no parsing, nothing that can fail for a normal call ----
-approvals_fragment="soleur/approvals"
+# The receipt directory, spelled exactly as soleur_approval_dir spells it (a test pins
+# the two together): the path arm below must work without the library.
+approvals_fragment="state/soleur/approvals"
+APPROVALS_DIR="${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/soleur/approvals"
 candidate=0
 case "$INPUT" in
   *--apply*|*SOLEUR_APPROVAL_NONCE*|*"$approvals_fragment"*) candidate=1 ;;
 esac
-# The path tools are checked on their CANONICALIZED path (a traversal or a symlink can spell
-# the receipt directory without the fragment), so they are candidates whenever jq can parse
-# them. A missing jq makes them a no-op here, never a deny: denying every Write/Read on a
+# The write path tools are checked on their CANONICALIZED path (a traversal or a symlink can
+# spell the receipt directory without the fragment), so they are candidates whenever jq can
+# parse them. A missing jq makes them a no-op here, never a deny: denying every Write on a
 # machine without jq would brick the session, and the path arm is the lesser of the two risks.
-if [[ "$INPUT" =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"(Write|Edit|MultiEdit|NotebookEdit|Read)\" ]]; then
+# Read is not a candidate: a record is named sha256(nonce) and holds only a digest, a
+# timestamp and a session id, so reading one yields nothing a forger needs.
+if [[ "$INPUT" =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"(Write|Edit|MultiEdit|NotebookEdit)\" ]]; then
   if command -v jq >/dev/null 2>&1; then candidate=1; fi
 fi
 if [[ "$candidate" -eq 0 ]]; then
@@ -88,18 +105,15 @@ emit_deny() { # <fixed reason> — no jq, no interpolation of agent-controlled t
 
 command -v jq >/dev/null 2>&1 || emit_deny "Soleur's operator-stage approval check needs jq and it is not installed, so this command was refused. Install jq and ask again." "no-jq"
 
-# The library is the ONE home of the receipt algorithm (mint here, verify there).
-# shellcheck source=../scripts/lib/operator-script.sh disable=SC1091
-if ! source "${HOOK_DIR}/../scripts/lib/operator-script.sh" >/dev/null 2>&1; then
-  emit_deny "Soleur's operator-stage approval library is missing, so this command was refused. Update the Soleur plugin." "lib-missing"
-fi
-
-TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null)" || TOOL=""
-MODE="$(printf '%s' "$INPUT" | jq -r '.permission_mode // ""' 2>/dev/null)" || MODE=""
+# ONE jq call for the four scalar fields (none can hold a newline once sanitised).
+JQ_OUT="$(printf '%s' "$INPUT" | jq -r '(.tool_name // ""), (.permission_mode // ""), (.session_id // "unknown"), (.cwd // "") | gsub("[\\n\\r]"; " ")' 2>/dev/null)" || JQ_OUT=""
+# Split on newlines with parameter expansion (no fork, and no `read`: the prompt census
+# in operator-script.test.sh Guard 4 treats every `read` under plugins/soleur as a prompt).
+TOOL="${JQ_OUT%%$'\n'*}"; JQ_REST="${JQ_OUT#*$'\n'}"
+MODE="${JQ_REST%%$'\n'*}"; JQ_REST="${JQ_REST#*$'\n'}"
+SESSION="${JQ_REST%%$'\n'*}"; CWD_IN="${JQ_REST#*$'\n'}"
 MODE="${MODE//[^A-Za-z]/}"
-SESSION="$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)" || SESSION="unknown"
-CWD_IN="$(printf '%s' "$INPUT" | jq -r '.cwd // ""' 2>/dev/null)" || CWD_IN=""
-APPROVALS_DIR="$(soleur_approval_dir)"
+[[ -n "$SESSION" ]] || SESSION="unknown"
 
 # canonical_path <path> — absolute, `..` and `.` collapsed, symlinks resolved when
 # the target exists (the parent when it does not), so a traversal spelling of the
@@ -120,10 +134,10 @@ under_approvals_dir() {
 }
 
 case "$TOOL" in
-  Write|Edit|MultiEdit|NotebookEdit|Read)
+  Write|Edit|MultiEdit|NotebookEdit)
     P="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // .tool_input.notebook_path // ""' 2>/dev/null)" || P=""
     if [[ -n "$P" ]] && under_approvals_dir "$P"; then
-      emit_deny "That path holds Soleur approval receipts, which only the approval prompt may create or read. Nothing was changed." "receipt-dir-path"
+      emit_deny "That path holds Soleur approval receipts, which only the approval prompt may create. Nothing was changed." "receipt-dir-path"
     fi
     trace "ran verdict=noop reason=path-not-receipt-dir"
     exit 0
@@ -206,7 +220,7 @@ ACCEPTED_FORM="bash <script> --stage <name> --apply --plan-digest <digest> [--ro
 
 is_v2_script() { # <file>
   [[ -f "$1" ]] || return 1
-  head -n 3 "$1" 2>/dev/null | grep -aq '^# SOLEUR-GENERATED-OPERATOR-SCRIPT v2$'
+  [[ "$(sed -n '2p' "$1" 2>/dev/null)" == "# SOLEUR-GENERATED-OPERATOR-SCRIPT v2" ]]
 }
 
 # loose_v2_mention: does the command text name an existing v2 generated script at
@@ -222,7 +236,11 @@ loose_v2_mention() {
   return 1
 }
 
-if ! tokenize "$COMMAND"; then
+# A command this long is not one the person could read and approve as a single exact
+# line, and the tokenizer is character-at-a-time. Treat it as not-simple.
+TOKENIZED=1
+if (( ${#COMMAND} > 4096 )); then TOKENIZED=0; else tokenize "$COMMAND" || TOKENIZED=0; fi
+if (( ! TOKENIZED )); then
   if loose_v2_mention; then
     emit_deny "That is a staged Soleur operator-script apply in a form Soleur cannot ask the person about. Issue it as ${ACCEPTED_FORM}. Nothing was changed." "compound-command"
   fi
@@ -267,6 +285,14 @@ if ! is_v2_script "$SCRIPT_PATH"; then
   trace "ran verdict=noop reason=not-v2-script"
   exit 0
 fi
+
+# The library is the ONE home of the receipt algorithm (mint here, verify there). It is
+# sourced only now, for a real v2 apply: every other call (the path arm above, a
+# non-script command) must work when the library is absent.
+# shellcheck source=../scripts/lib/operator-script.sh disable=SC1091
+if ! source "${HOOK_DIR}/../scripts/lib/operator-script.sh" >/dev/null 2>&1; then
+  emit_deny "Soleur's operator-stage approval library is missing, so this command was refused. Update the Soleur plugin." "lib-missing"
+fi
 REAL="$(soleur_approval_realpath "$SCRIPT_PATH")"
 
 ARGS=()
@@ -289,14 +315,20 @@ if (( APPLY == 0 )); then
 fi
 [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]] || emit_deny "A staged Soleur operator-script apply needs the plan digest the plan printed. Run the stage without --apply first, then issue the apply command exactly as printed. Nothing was changed." "no-digest"
 
-STAGE_LINE="$(grep -a "^# SOLEUR-STAGE ${STAGE}|" "$REAL" 2>/dev/null | head -n 1)" || STAGE_LINE=""
-[[ -n "$STAGE" && -n "$STAGE_LINE" ]] || emit_deny "That stage is not declared by the script, so Soleur will not ask about it. Run --list to see the stages. Nothing was changed." "unknown-stage"
-STAGE_CLASS="$(printf '%s' "$STAGE_LINE" | sed 's/^# SOLEUR-STAGE //' | cut -d'|' -f2)"
-IMPACT="$(printf '%s' "$STAGE_LINE" | sed 's/^# SOLEUR-STAGE //' | cut -d'|' -f3)"
-ROLLBACK="$(printf '%s' "$STAGE_LINE" | sed 's/^# SOLEUR-STAGE //' | cut -d'|' -f4)"
+# Exact first-field match (never a regex built from the agent's stage name: a `.` in it
+# would select a different stage's line). First declaration wins, as in the library.
+STAGE_LINE=""
+if [[ -n "$STAGE" ]]; then
+  STAGE_LINE="$(grep -a '^# SOLEUR-STAGE ' "$REAL" 2>/dev/null | sed 's/^# SOLEUR-STAGE //' | awk -F'|' -v s="$STAGE" '$1 == s { print; exit }')" || STAGE_LINE=""
+fi
+[[ -n "$STAGE_LINE" ]] || emit_deny "That stage is not declared by the script, so Soleur will not ask about it. Run --list to see the stages. Nothing was changed." "unknown-stage"
+STAGE_CLASS="$(printf '%s' "$STAGE_LINE" | cut -d'|' -f2)"
+IMPACT="$(printf '%s' "$STAGE_LINE" | cut -d'|' -f3)"
+ROLLBACK="$(printf '%s' "$STAGE_LINE" | cut -d'|' -f4)"
 if [[ "$STAGE_CLASS" != "write" ]]; then
-  trace "ran verdict=noop reason=read-stage"
-  exit 0
+  # A read stage takes no --apply. Refusing it here (instead of letting the call
+  # through unasked) keeps `--apply` meaning one thing: a write the person approved.
+  emit_deny "That stage is declared read-only, so it takes no --apply. Run it without --apply. Nothing was changed." "apply-on-read-stage"
 fi
 
 BINDING="$(soleur_approval_binding_digest "$REAL" "$STAGE" "${ARGS[@]}")"
@@ -307,15 +339,23 @@ case "$MODE" in
   *) emit_deny "Approvals are switched off or cannot be asked in this session (permission mode '${MODE:-unknown}'), so Soleur will not make this production change. Switch to the normal permission mode and ask again. Nothing was changed." "mode-${MODE:-unknown}" ;;
 esac
 
-REASON="Soleur is about to run stage '${STAGE}' of a generated operator script and change production. If it fails: ${IMPACT} To undo: ${ROLLBACK} Approving runs exactly the command shown."
+# The impact and rollback sentences are read from the SCRIPT FILE, which the agent can
+# edit, so the prompt says so. Control characters are dropped and each sentence is
+# capped: the text can mislead a person, it cannot spoof the prompt's own framing.
+clean() { printf '%s' "$1" | tr -d '\000-\037\177' | cut -c1-500; }
+IMPACT="$(clean "$IMPACT")"; ROLLBACK="$(clean "$ROLLBACK")"
+REASON="Soleur is about to run stage '${STAGE}' of a generated operator script and change production. The script describes what it does as: ${IMPACT} It describes how to undo it as: ${ROLLBACK} (Both sentences come from the script file and are not verified by Soleur.) Approving runs exactly the command shown."
+# The Bash tool shows a `description` the AGENT wrote next to the command in the
+# prompt. It is replaced, so the person reads Soleur's words and not the agent's.
+DESC="Soleur approval: production change, stage '${STAGE}' of a generated operator script"
 emit_envelope() { # <decision> <reason> [with-update <nonce>]
   local nonce="${4:-}" new
   if [[ -n "$nonce" ]]; then
     # The nonce goes immediately BEFORE `bash`, not before the whole string, so the
     # `cd <dir> && bash ...` form hands it to the script and not to `cd`.
     new="${COMMAND:0:BASH_OFFSET}SOLEUR_APPROVAL_NONCE=${nonce} ${COMMAND:BASH_OFFSET}"
-    printf '%s' "$INPUT" | jq -c --arg d "$1" --arg r "$2" --arg n "$new" \
-      '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r,updatedInput:(.tool_input|.command=$n)}}'
+    printf '%s' "$INPUT" | jq -c --arg d "$1" --arg r "$2" --arg n "$new" --arg desc "$DESC" \
+      '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r,updatedInput:(.tool_input|.command=$n|.description=$desc)}}'
   else
     printf '%s' "$INPUT" | jq -c --arg d "$1" --arg r "$2" \
       '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$d,permissionDecisionReason:$r}}'
@@ -323,7 +363,9 @@ emit_envelope() { # <decision> <reason> [with-update <nonce>]
 }
 
 INTERACTIVE=0
-[[ "${CLAUDE_CODE_ENTRYPOINT:-}" == "cli" ]] && INTERACTIVE=1
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+  cli|claude-vscode|claude-desktop|claude-desktop-3p) INTERACTIVE=1 ;;
+esac
 
 if (( INTERACTIVE )); then
   NONCE="$(soleur_approval_mint "$BINDING" "$SESSION")" || NONCE=""
@@ -333,16 +375,8 @@ if (( INTERACTIVE )); then
   exit 0
 fi
 
-# Headless: mint only when the person who resumed the session said so, in the
-# environment of the resumed process, for exactly this command's digest.
-if [[ -n "${SOLEUR_RESUME_APPROVED_DIGEST:-}" && "${SOLEUR_RESUME_APPROVED_DIGEST}" == "$BINDING" ]]; then
-  NONCE="$(soleur_approval_mint "$BINDING" "$SESSION")" || NONCE=""
-  [[ -n "$NONCE" ]] || emit_deny "Soleur could not set up a safe place for the approval receipt on this machine, so it will not make this production change. Nothing was changed." "mint-failed"
-  trace "ran verdict=allow reason=resume-marker-matched stage=${STAGE}"
-  emit_envelope allow "$REASON" with-update "$NONCE"
-  exit 0
-fi
-
-trace "ran verdict=defer reason=headless-no-marker stage=${STAGE}"
-emit_envelope defer "A change is waiting for a person's approval: stage '${STAGE}'. Resume this session with SOLEUR_RESUME_APPROVED_DIGEST=${BINDING} set to approve exactly this command."
+# Headless: never mint. The run waits (`defer`) and a person resumes the session
+# interactively, where this hook runs again and asks.
+trace "ran verdict=defer reason=headless stage=${STAGE}"
+emit_envelope defer "A production change is waiting for a person's approval: stage '${STAGE}' of a generated operator script. The script describes what it does as: ${IMPACT} It describes how to undo it as: ${ROLLBACK} Resume this session interactively (claude --resume) and the person will be asked at the prompt to approve exactly this command. Nothing has been changed."
 exit 0

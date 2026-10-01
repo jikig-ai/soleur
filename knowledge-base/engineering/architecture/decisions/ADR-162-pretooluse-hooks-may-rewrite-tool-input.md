@@ -271,12 +271,13 @@ section records what the single-rewriter authority now permits, and what stays f
    point.
 4. **Clause 2 (never emit `permissionDecision`) and clause 7 (a rewriter does not ASK) are
    carved out for an approval hook.** The approval hook emits a permission decision **alongside**
-   `updatedInput`: `ask` on an interactive session, `defer` when headless, and `allow` only on a
-   resume where a human-set marker (`SOLEUR_RESUME_APPROVED_DIGEST`) equals this command's
-   digest. It emits `deny` under `bypassPermissions`, `dontAsk`, `auto`, or an unknown mode. The
-   reason clause 2 gave for forbidding a decision, an `allow` that bypasses the permission system
-   for a large share of Bash calls, does not apply: the approval hook acts on a narrow candidate
-   set, and its `allow` requires a marker the agent cannot set. Measured 2026-10-01 on Claude
+   `updatedInput`: `ask` on an interactive entrypoint and `defer` when headless (resumed
+   interactively, where it asks). It never emits `allow` (an earlier draft allowed on a resume
+   marker; review removed it because a settings `env` block can set one without a person). It
+   emits `deny` under `bypassPermissions`, `dontAsk`, `auto`, or an unknown mode. The reason
+   clause 2 gave for forbidding a decision, an `allow` that bypasses the permission system for a
+   large share of Bash calls, does not apply: the approval hook acts on a narrow candidate set
+   and never allows. Measured 2026-10-01 on Claude
    Code 2.1.287 (`.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md`, "Operator stage approval"): the
    hook's `ask` still prompts under an allow rule matching the original command and under
    `bypassPermissions`.

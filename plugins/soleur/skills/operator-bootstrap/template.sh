@@ -12,7 +12,9 @@
 #
 # THE CONTRACT (ADR-264): an AGENT runs this script, one stage at a time, with no
 # terminal. A human acknowledges every production write, but at the harness
-# approval prompt on the exact command, not at a typed `yes`:
+# approval prompt on the exact command, not at a typed `yes` (this guards against an
+# agent acting on a mistaken instruction, not a compromised one; headless, bypass-mode
+# and no-hook surfaces defer or refuse and never auto-approve — ADR-264):
 #   bash bootstrap.sh --list                                        the stages (static; no credentials)
 #   bash bootstrap.sh --stage <name>                                read stage: runs; write stage: prints the PLAN
 #   bash bootstrap.sh --stage <name> --apply --plan-digest <d>      write stage: the approved write
@@ -48,6 +50,10 @@ esac
 # TLS-inspecting proxy needs them (the credential linter requires only the
 # xtrace refusal above — measured).
 unset SSLKEYLOGFILE
+
+# No pathname expansion anywhere below: stage code loops over vendor-supplied names
+# (`for s in $SLUGS`), and a name such as `*` must stay a name, never a file glob.
+set -f
 
 # --- the stage table ---------------------------------------------------------
 # ONE source of truth: --list prints it, the dispatcher validates `--stage`
@@ -100,6 +106,15 @@ SOLEUR_OP_LIB="${SOLEUR_OP_LIB:-}"
 last_rejected="<no candidate was absolute>"
 if [[ -n "$SOLEUR_OP_LIB" && "$SOLEUR_OP_LIB" != /* ]]; then
   last_rejected="$SOLEUR_OP_LIB (SOLEUR_OP_LIB must be an absolute path)"
+  SOLEUR_OP_LIB=""
+fi
+# An override is held to the same test as every other candidate (a readable regular
+# file named operator-script.sh that defines the gate): a stray value cannot make this
+# script source an arbitrary file. HONEST LIMIT: a process that can write such a file
+# and set this variable can also edit this script; that is the hijacked-agent case the
+# approval receipt does not claim to resist (ADR-264).
+if [[ -n "$SOLEUR_OP_LIB" ]] && ! { [[ -f "$SOLEUR_OP_LIB" && ! -L "$SOLEUR_OP_LIB" && -r "$SOLEUR_OP_LIB" && "${SOLEUR_OP_LIB##*/}" == "operator-script.sh" ]] && grep -aq '^soleur_op_stage_gate()' "$SOLEUR_OP_LIB"; }; then
+  last_rejected="$SOLEUR_OP_LIB (SOLEUR_OP_LIB must name a regular readable operator-script.sh that defines the staged gate)"
   SOLEUR_OP_LIB=""
 fi
 if [[ -z "$SOLEUR_OP_LIB" ]]; then
@@ -248,8 +263,10 @@ fi
 # ONE trap. On a non-zero exit inside a stage it prints the STAGE_FAILED marker,
 # tells the founder which stage stopped and the one command that resumes, and
 # settles the stage in the ledger as `failed`. A refusal that already printed its
-# own marker and sentence (exit 75: approval required / invalid / plan drift)
-# settles as `refused` and adds nothing.
+# own marker and sentence (approval required / invalid / plan drift, a precondition,
+# a missing digest) raised the library's SOLEUR_OP_REFUSED flag and settles as
+# `refused`, adding nothing. The flag, not the exit code, decides: a vendor CLI that
+# exits 75 mid-write is a failure.
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_REAL="$(soleur_approval_realpath "${BASH_SOURCE[0]}")"
 CURRENT_STAGE_INDEX=0
@@ -259,7 +276,7 @@ mark_changed() { STAGE_CHANGED="${STAGE_CHANGED:+${STAGE_CHANGED}; }$1"; }
 on_exit() {
   local rc=$?
   [[ "$rc" -ne 0 && "$CURRENT_STAGE_INDEX" -gt 0 ]] || return 0
-  if [[ "$rc" -eq 75 ]]; then
+  if [[ -n "${SOLEUR_OP_REFUSED:-}" ]]; then
     soleur_op_stage_end "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" refused "$rc"
     return 0
   fi
@@ -394,6 +411,7 @@ dispatch_stage() {
         if [[ -z "$PLAN_DIGEST" ]]; then
           printf 'SOLEUR_BOOTSTRAP_PLAN_DIGEST_REQUIRED stage=%s\n' "$stage"
           printf 'Run the stage without --apply first, then run the apply command exactly as the plan printed it.\n'
+          SOLEUR_OP_REFUSED=1
           exit 64
         fi
         local computed
@@ -413,7 +431,7 @@ dispatch_stage() {
 }
 
 main() {
-  soleur_op_require_bins grep mktemp printenv sed date od id stat cut tr
+  soleur_op_require_bins grep mktemp printenv sed date od id stat cut tr awk find
   soleur_op_ledger_init 1 "bootstrap.sh"
   dispatch_stage "$STAGE"
 }

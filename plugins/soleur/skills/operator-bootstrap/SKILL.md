@@ -69,13 +69,17 @@ bash SCRIPT --stage NAME --apply --plan-digest D [--rotate-token]   the approved
   carry `SOLEUR_APPROVAL_NONCE`. The script consumes the record before its first write. An
   environment variable or a flag set by the agent is never an approval. No valid receipt: exit 75,
   nothing written.
+- **Keep the `.env` beside the script.** "Satisfied" and `verify` read the recorded slugs there (it is
+  gitignored). A fresh checkout without it turns a satisfied stage into a rotation plan and makes
+  `verify` report a healthy vendor state as failed: run `verify` from the checkout that ran the stages.
 - **Stages are idempotent.** A re-run of a satisfied stage changes nothing and needs no approval: its
   plan has `operations=0`, so skip `--apply`.
 - Markers (stdout): `SOLEUR_BOOTSTRAP_STAGE_DECL stage= class=` (read or write); `_PLAN`; `_PLAN_OP`;
   `_IMPACT`; `_ROLLBACK`; `_APPLY_COMMAND stage= approval_digest=`; `_APPROVAL_REQUIRED stage=
   approval_digest= surface=`; `_APPROVAL_INVALID stage= reason=` (one of `no-record`, `expired`,
   `digest-mismatch`, `consumed`, `algo`, `perms`, `format`); `_PLAN_DRIFT stage=`;
-  `_PRECONDITION_FAILED stage= need=`; `_STAGE_OK stage= changed=` (0 or 1, with `approval=` set to
+  `_PRECONDITION_FAILED stage= need=`; `_STAGE_REQUIRED`, `_UNKNOWN_STAGE stage=` and
+  `_PLAN_DIGEST_REQUIRED stage=` (exit 64, your own invocation was wrong); `_MISSING_BINARY bin=`; `_STAGE_OK stage= changed=` (0 or 1, with `approval=` set to
   `harness-receipt` or `tty-ack` after a write); `_STAGE_FAILED stage= rc=`; `_LIB_INCOMPATIBLE need=stage-1`.
 - Exit codes: 75 approval required, invalid or plan drift (nothing written); 64 missing input; 78
   refused under xtrace; 1 the stage failed.
@@ -199,7 +203,9 @@ Drive the generated script the way an agent will, with stdin closed:
    and writes nothing.
 
 `plugins/soleur/test/operator-agent-runnable.test.sh` does this for every v2 script in the tree
-(§Guards). Then read the ledger beside the script (`bootstrap-runs.jsonl`): every stage that ran has a
+(§Guards), and also drives every vendor call through a stub that counts anything not on its
+read-verb allowlist as a write: a `read_*` or `plan_*` function that writes is a defect, because the
+hook asks about `--apply` only, and the approval prompt is the one place a person sees a write. Then read the ledger beside the script (`bootstrap-runs.jsonl`): every stage that ran has a
 `begin` and a `settle` line. Hand off by **running the stages yourself** per §Running a generated
 script, not by giving the person a script path to run.
 
@@ -217,8 +223,9 @@ agent does every step and the person only answers the approval prompt.
    script's own `SOLEUR_BOOTSTRAP_IMPACT` and `SOLEUR_BOOTSTRAP_ROLLBACK` lines**, what the write will
    change and how it is undone, **before** issuing the apply. Compose no impact or rollback sentence
    of your own: the words the person reads are the words that were approved.
-5. **Announce it.** Print `SOLEUR_BOOTSTRAP_APPROVAL_PENDING stage=<s>`. In a headless session the
-   approval hook defers silently; this line is what makes the wait visible.
+5. **Announce it (headless or unknown entrypoint only).** State `SOLEUR_BOOTSTRAP_APPROVAL_PENDING stage=<s>`
+   in your reply. In a headless session the approval hook defers silently; this line is what makes the
+   wait visible. In an interactive session the prompt itself is the announcement: skip this step.
 6. **Issue exactly** `bash <script> --stage <name> --apply --plan-digest <d>` (plus `--rotate-token`
    only if the plan was produced with it) as **ONE simple command**: no pipe, `;`, `&&`, redirect,
    substitution or glob. The one accepted prefix is a leading `cd <dir> &&`. Use the line the plan
@@ -229,16 +236,19 @@ agent does every step and the person only answers the approval prompt.
 8. After the last write stage, run the `verify` stage and keep its stdout markers: they are the
    closure evidence for the follow-through issue.
 
-**Surfaces.** Claude Code interactive: the permission prompt on the exact command. Headless, `-p` or
-one-shot: the hook defers; print `SOLEUR_BOOTSTRAP_APPROVAL_PENDING` before issuing the apply, and a
-person resumes with `SOLEUR_RESUME_APPROVED_DIGEST=<approval_digest>` set in the resumed process.
-`bypassPermissions`, `dontAsk` and auto modes: the hook denies. Harnesses without the hook (Codex,
+**Surfaces.** Claude Code interactive (the terminal, the VS Code extension, the Desktop app): the
+permission prompt on the exact command. Headless, `-p` or one-shot: the hook defers and mints nothing;
+state `SOLEUR_BOOTSTRAP_APPROVAL_PENDING stage=<s>` in your reply (headless only), and a person runs `claude --resume`
+and approves at the prompt. There is no variable, setting or file that approves it; never suggest one.
+`bypassPermissions`, `dontAsk` and auto modes: the hook denies. The script itself accepts a typed `yes`
+only from a person at their own terminal with no agent harness around it, so never allocate a
+pseudo-terminal to answer it. Harnesses without the hook (Codex,
 Devin cloud, Grok) and the web app: the script exits 75 and writes nothing; say "this surface cannot
 make production changes yet" and **never** tell the person to open a terminal (the web approval
 adapter is #9388; per-harness adapters are #9389).
 
-**The scheduled follow-through sweeper never runs `--apply`.** A receipt expires after ten minutes,
-which an unattended runner cannot satisfy. The follow-through issue's `auto_command:` for a staged
+**The scheduled follow-through sweeper never runs `--apply`.** A receipt expires after five minutes
+and a person must approve the prompt, which an unattended runner cannot satisfy. The follow-through issue's `auto_command:` for a staged
 script is attended-only: it names `--list` plus this protocol, and the issue closes on the `verify`
 stage's stdout markers pasted into a comment.
 
@@ -248,9 +258,13 @@ stage's stdout markers pasted into a comment.
 |---|---|---|
 | founder denied the prompt | stop; do not re-prompt in a loop; ask once whether to retry | "You declined, so nothing changed." |
 | 75 `APPROVAL_INVALID` reason `expired`, `consumed` or `digest-mismatch` | re-plan, re-issue once | "That approval timed out (or was already used), so I am asking again." |
-| 75 `APPROVAL_INVALID` reason `perms`, `algo` or `format` | stop and report | "A safety check failed and nothing changed; this needs a person to look at it." |
+| 75 `APPROVAL_INVALID` reason `perms`, `algo` or `format` (a failed rename reads as `perms`) | stop and report | "A safety check failed and nothing changed; this needs a person to look at it." |
+| 75 `APPROVAL_INVALID` reason `expired` a second time | stop re-issuing; the receipt clock starts when the prompt is shown, not when it is approved | "Tell me when you are at the screen and I will ask again." |
+| 1 `PRECONDITION_FAILED need=<stage>` | run the named `need` stage (a read stage needs no approval), then re-plan; never re-run the same stage | "A step before this one is not done yet; I am doing it first." |
+| 64 `STAGE_REQUIRED`, `UNKNOWN_STAGE` or `PLAN_DIGEST_REQUIRED` | your own invocation was wrong: run `--list`, re-plan, use the printed digest | none |
+| 64 `MISSING_BINARY bin=<tool>` | stop; name the tool | "I need <tool> installed on this machine first." |
 | 75 `PLAN_DRIFT` | re-plan, relay the new impact, re-issue | "Something changed since I showed you the plan; here is what is different." |
-| 75 `APPROVAL_REQUIRED` on a no-hook or web surface | stop | "This surface cannot make production changes yet; run the stage from Claude Code." |
+| 75 `APPROVAL_REQUIRED` on a no-hook or web surface | stop | "I can't make this change from here yet. Nothing changed and the plan is saved; it needs Claude Code with Soleur on your computer (tracked in #9388)." |
 | headless pending | print `SOLEUR_BOOTSTRAP_APPROVAL_PENDING stage=<s>` | "A change is waiting for your approval." |
 | bypass-mode deny | stop | "Approvals are switched off in this session; switch to the normal mode and I will ask again." |
 | 64 missing input | stop; name the input; never ask for a secret in chat | "I need (the login or input) set up first." |
@@ -345,7 +359,8 @@ tracked in #9387; until then their writes keep the typed-yes handoff, and creden
 - [`plugins/soleur/test/operator-agent-runnable.test.sh`](../../test/operator-agent-runnable.test.sh)
   (Guard 1) discovers every v2 generated script in the tree and drives every `--list` entry with stdin
   closed and no terminal against PATH-stubbed vendor tools: every stage reaches a defined outcome, no
-  stage reaches a mutating call without a receipt or a real terminal ack, and no stage demands a
+  stage reaches a mutating call without a receipt (the apply is driven with every approve/force/skip-shaped
+  variable the script names set to `1`), an undeclared `--stage` name is refused, and no stage demands a
   terminal or calls `soleur_op_ack_or_die`. A v1 script must be one of the three legacy paths, and that
   list may only shrink. It is wired through the `plugins/soleur/test/*.test.sh` glob in
   [test-all.sh](../../../../scripts/test-all.sh), so it runs in the repository's test suite and CI with no per-script entry.

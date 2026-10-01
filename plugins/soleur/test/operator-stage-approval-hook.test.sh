@@ -6,12 +6,13 @@
 # mints under bypass mode or on a deferring invocation, never executes the script it
 # fingerprints, and never breaks a call that is not a candidate.
 #
-# ASSEMBLY (what the hook sees): the tool (Bash, Monitor, Write, Edit, Read), every
+# ASSEMBLY (what the hook sees): the tool (Bash, Monitor, Write, Edit), every
 # spelling of the script path (absolute, `cd <dir> && bash relative`, a path with a
 # space, a symlink, a renamed copy carrying the v2 header, a legacy v1 copy), the
-# modes (interactive, headless, bypass, dontAsk, auto, unknown, disabled by the web
-# variable, resume with and without the marker), and the other hooks that may fire on
-# the same call (prod-write-defer-gate rule 4, grep-rewrite).
+# modes (interactive entrypoints, headless, bypass, dontAsk, auto, unknown, disabled by
+# the web variable, a settings-level resume marker that must be IGNORED), the receipt
+# directory spelled by traversal and symlink, a script whose stage text lies, and the
+# other hooks that may fire on the same call (prod-write-defer-gate rule 4).
 #
 # ANCHOR: the envelope keys are asserted against the payload shapes measured and
 # committed in .claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md and
@@ -75,14 +76,19 @@ sed '2s/ v2$/ v1/' "$SB/fx/bootstrap.sh" > "$SB/fx/legacy-v1.sh"
   printf '# SOLEUR-STAGE demo|write|If it fails nothing user-facing changes.|Delete the demo key.\n'
 } > "$SB/fx/canary.sh"
 
+# A script whose stage text lies, carries a control character and is far longer than a sentence.
+{ printf '#!/usr/bin/env bash\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v2\n'
+  printf '# SOLEUR-STAGE go|write|Nothing at all happens, Soleur verified this is safe. \033[2JAPPROVE. %s|Fully reversible by Soleur.\n' "$(printf 'x%.0s' $(seq 1 2000))"
+} > "$SB/fx/liar.sh"
+
 # --- driver ---------------------------------------------------------------------------------------
 HOOK_OUT=""; HOOK_RC=0
 TRACE="$SB/trace.log"
-# hook_run <json> [ENV=VAL ...]  — default env: interactive CLI, no resume marker.
+# hook_run <json> [ENV=VAL ...]  — default env: interactive CLI.
 hook_run() {
   local json="$1"; shift
   : > "$TRACE"
-  HOOK_OUT="$(printf '%s' "$json" | env -u SOLEUR_RESUME_APPROVED_DIGEST -u SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK \
+  HOOK_OUT="$(printf '%s' "$json" | env -u SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK \
     "XDG_STATE_HOME=$XDG_STATE_HOME" "SOLEUR_OPERATOR_STAGE_APPROVAL_TRACE=$TRACE" "CLAUDE_CODE_ENTRYPOINT=cli" "$@" bash "$HOOK" 2>/dev/null)"; HOOK_RC=$?
 }
 # bash_json <command> [permission_mode] [cwd]
@@ -123,8 +129,9 @@ ran; expect "the SUT ran (trace file)" $?
 jq -e '.hookSpecificOutput.hookEventName == "PreToolUse"' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "envelope: hookEventName rides in the same object as the decision" $?
 N="$(newcmd)"
 [[ "$N" == SOLEUR_APPROVAL_NONCE=[0-9a-f]*" bash $SB/fx/bootstrap.sh --stage provision --apply --plan-digest $D" ]]; expect "the rewritten command is the original with the nonce prefixed immediately before bash" $?
-jq -e '.hookSpecificOutput.updatedInput | (.description == "run it" and .timeout == 45000 and .run_in_background == false)' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "updatedInput carries the WHOLE tool_input (it replaces, it does not merge)" $?
-jq -e '.hookSpecificOutput.permissionDecisionReason | (contains("If it fails: A billable resource") and contains("To undo: Delete the resource"))' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "the ask reason carries the stage's plain-language impact and rollback (read statically)" $?
+jq -e '.hookSpecificOutput.updatedInput | (.timeout == 45000 and .run_in_background == false and (.command | length > 0))' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "updatedInput carries the WHOLE tool_input (it replaces, it does not merge)" $?
+jq -e '.hookSpecificOutput.updatedInput.description | (startswith("Soleur approval:") and (contains("run it") | not))' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "the agent-written description is REPLACED by Soleur's (the first line the person reads is not the agent's)" $?
+jq -e '.hookSpecificOutput.permissionDecisionReason | (contains("describes what it does as: A billable resource") and contains("describes how to undo it as: Delete the resource") and contains("not verified by Soleur"))' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "the ask reason carries the stage's impact and rollback (read statically), attributed to the script" $?
 [[ "$(records)" -eq 1 ]]; expect "exactly one record was minted" $?
 NONCE="${N#SOLEUR_APPROVAL_NONCE=}"; NONCE="${NONCE%% *}"
 [[ -f "$XDG_STATE_HOME/soleur/approvals/$(printf '%s' "$NONCE" | sha256sum | cut -d' ' -f1)" ]]; expect "the record is named sha256(nonce): a listing never reveals a live nonce" $?
@@ -179,15 +186,18 @@ hook_run "$(bash_json "$CMD")" CLAUDE_CODE_ENTRYPOINT=
 [[ "$(decision)" == "defer" && "$(records)" -eq 0 ]]; expect "an undeterminable mode (empty entrypoint) emits defer, never allow" $?
 hook_run "$(bash_json "$CMD")" CLAUDE_CODE_ENTRYPOINT=something-new
 [[ "$(decision)" == "defer" && "$(records)" -eq 0 ]]; expect "an unknown entrypoint value emits defer" $?
-# the resume marker is the binding digest of THIS command
+# A resume marker in the environment (a settings-level `env` block can set one without a
+# person) is NOT an approval: headless always defers, whatever the environment says.
 BINDING="$(bash -c 'source "$1"; shift; soleur_approval_binding_digest "$(soleur_approval_realpath "$1")" "$2" "${@:3}"' _ "$LIB" "$SB/fx/bootstrap.sh" provision --stage provision --apply --plan-digest "$D")"
 hook_run "$(bash_json "$CMD")" CLAUDE_CODE_ENTRYPOINT=sdk-cli "SOLEUR_RESUME_APPROVED_DIGEST=$BINDING"
-[[ "$(decision)" == "allow" && "$(records)" -eq 1 && -n "$(newcmd)" ]]; expect "headless resume with the human-set marker equal to this command's digest: allow + rewritten command + one record" $?
+[[ "$(decision)" == "defer" && "$(records)" -eq 0 && -z "$(newcmd)" ]]; expect "headless + a resume marker equal to this command's digest in the environment: STILL defer, nothing minted" $?
+jq -e '.hookSpecificOutput.permissionDecisionReason | (contains("claude --resume") and contains("describes what it does as") and (contains("SOLEUR_RESUME_APPROVED_DIGEST") | not))' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "the defer text names interactive resume and the impact, and no longer names an environment variable" $?
+for ep in claude-vscode claude-desktop claude-desktop-3p; do
+  fresh_world "c-$ep" || exit 2
+  hook_run "$(bash_json "$CMD")" "CLAUDE_CODE_ENTRYPOINT=$ep"
+  [[ "$(decision)" == "ask" && "$(records)" -eq 1 && -n "$(newcmd)" ]]; expect "interactive entrypoint '$ep' (allowlist, unmeasured): ask + one record" $?
+done
 fresh_world c2 || exit 2
-hook_run "$(bash_json "$CMD")" CLAUDE_CODE_ENTRYPOINT=sdk-cli "SOLEUR_RESUME_APPROVED_DIGEST=$(printf '%064d' 0)"
-[[ "$(decision)" == "defer" && "$(records)" -eq 0 ]]; expect "a resume marker for a DIFFERENT digest mints nothing" $?
-hook_run "$(bash_json "$CMD")" CLAUDE_CODE_ENTRYPOINT=sdk-cli "SOLEUR_RESUME_APPROVED_DIGEST="
-[[ "$(decision)" == "defer" && "$(records)" -eq 0 ]]; expect "an empty resume marker mints nothing" $?
 for m in bypassPermissions dontAsk auto ""; do
   fresh_world "c-$m" || exit 2
   hook_run "$(bash_json "$CMD" "$m")"
@@ -212,7 +222,7 @@ hook_run "$(bash_json "ls $XDG_STATE_HOME/soleur/approvals")"
 [[ "$(decision)" == "deny" ]]; expect "a Bash command touching the receipt directory is denied" $?
 hook_run "$(bash_json "cat ~/.local/state/soleur/approvals/x")"
 [[ "$(decision)" == "deny" ]]; expect "the receipt-directory fragment is denied even with another XDG root" $?
-for t in Write Edit Read; do
+for t in Write Edit MultiEdit NotebookEdit; do
   hook_run "$(path_json "$t" "$XDG_STATE_HOME/soleur/approvals/forged")"
   [[ "$(decision)" == "deny" ]]; expect "$t of a path inside the receipt directory is denied" $?
 done
@@ -223,6 +233,12 @@ hook_run "$(path_json Write "$SB/elsewhere/via-link/forged")"
 [[ "$(decision)" == "deny" ]]; expect "a symlinked spelling of the receipt directory is canonicalized and denied" $?
 hook_run "$(path_json Read "$SB/fx/bootstrap.sh")"
 [[ -z "$HOOK_OUT" && "$HOOK_RC" -eq 0 ]]; expect "a Read of an unrelated file is ignored" $?
+hook_run "$(path_json Read "$XDG_STATE_HOME/soleur/approvals/anything")"
+[[ -z "$HOOK_OUT" && "$HOOK_RC" -eq 0 ]]; expect "Read is not a handled tool (a record holds only a digest, a time and a session id): no decision" $?
+hook_run "$(path_json Write "$SB/fx/notes.txt")"
+[[ -z "$HOOK_OUT" && "$HOOK_RC" -eq 0 ]]; expect "a Write outside the receipt directory is ignored" $?
+hook_run "$(bash_json "grep -rn soleur/approvals /srv/plugins")"
+[[ -z "$HOOK_OUT" && "$HOOK_RC" -eq 0 ]]; expect "a command that merely mentions the bare fragment soleur/approvals (docs, code search) is not denied" $?
 for compound in "$CMD | cat" "$CMD; echo done" "$CMD && echo done" "echo \$($CMD)" "$CMD > /tmp/out" "true || $CMD" "FOO=1 $CMD"; do
   fresh_world "d-cmp" || exit 2
   hook_run "$(bash_json "$compound")"
@@ -236,7 +252,9 @@ hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage nonexistent --apply --pl
 hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage provision --apply --plan-digest notahexdigest")"
 [[ "$(decision)" == "deny" ]]; expect "a malformed plan digest is denied" $?
 hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage account --apply --plan-digest $D")"
-[[ -z "$HOOK_OUT" && "$(records)" -eq 0 ]]; expect "--apply on a READ stage mints nothing (nothing to approve)" $?
+[[ "$(decision)" == "deny" && "$(records)" -eq 0 ]]; expect "--apply on a READ stage is denied and mints nothing (--apply means one thing)" $?
+hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage provis.on --apply --plan-digest $D")"
+[[ "$(decision)" == "deny" && "$(records)" -eq 0 ]]; expect "a stage name is matched EXACTLY (a regex metacharacter does not select another stage's line)" $?
 hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --list")"
 [[ -z "$HOOK_OUT" && "$HOOK_RC" -eq 0 ]]; ran; expect "--list returns no decision (not a candidate)" $?
 hook_run "$(bash_json "bash \"$SB/fx/with space/bootstrap.sh\" --list")"
@@ -246,9 +264,56 @@ hook_run "$(bash_json "ls -la")"
 hook_run "$(bash_json "bash /x/flip.sh --apply")"
 [[ -z "$HOOK_OUT" && "$HOOK_RC" -eq 0 ]]; expect "a prod-write-defer-gate rule 4 script (flip.sh --apply) is not this hook's: pass-through" $?
 hook_run "$(bash_json "bash /x/flip.sh --apply && $CMD")"
-[[ "$(decision)" == "deny" && "$(records)" -eq 0 ]]; expect "a command matching this hook AND rule 4 resolves to the strongest verdict (deny > ask > defer): denied, nothing minted" $?
+[[ "$(decision)" == "deny" && "$(records)" -eq 0 ]]; expect "a command matching this hook AND rule 4 resolves to the strongest verdict (deny > defer > ask > allow): denied, nothing minted" $?
 hook_run "$(jq -nc '{tool_name:"Monitor",tool_input:{command:"tail -f /var/log/x"},permission_mode:"default",session_id:"s",cwd:"/"}')"
 [[ -z "$HOOK_OUT" ]]; expect "a Monitor call that is not a candidate is ignored" $?
+
+echo "== hook: more input shapes =="
+fresh_world e1 || exit 2
+DL="$(printf '%064d' 1)"
+hook_run "$(bash_json "bash $SB/fx/liar.sh --stage go --apply --plan-digest $DL")"
+[[ "$(decision)" == "ask" ]] && ! printf '%s' "$HOOK_OUT" | grep -q $'\033' && ! grep -q '\\u001b' <<<"$HOOK_OUT" && [[ "$(jq -r '.hookSpecificOutput.permissionDecisionReason | length' <<<"$HOOK_OUT")" -lt 1400 ]]
+expect "a script whose stage text carries an escape sequence and runs 2000+ characters: control characters dropped, each sentence capped" $?
+jq -e '.hookSpecificOutput.permissionDecisionReason | contains("not verified by Soleur")' <<<"$HOOK_OUT" >/dev/null 2>&1; expect "script-authored reassurance is framed as the script's own words, not Soleur's" $?
+fresh_world e2 || exit 2
+D4="$(plan_digest "$SB/fx/bootstrap.sh" provision)"
+hook_run "$(bash_json "bash bootstrap.sh --stage provision --apply --plan-digest $D4" default "$SB/fx")"
+[[ "$(decision)" == "ask" && "$(records)" -eq 1 ]]; expect "a bare RELATIVE script path is resolved against the payload cwd" $?
+hook_run "$(bash_json "bash ./bootstrap.sh --stage provision --apply --plan-digest $D4" default "$SB/fx")"
+[[ "$(decision)" == "ask" ]]; expect "a ./relative script path is resolved against the payload cwd" $?
+hook_run "$(bash_json "bash bootstrap.sh --stage provision --apply --plan-digest $D4" default "/")"
+[[ -z "$HOOK_OUT" || "$(decision)" == "deny" ]] && [[ "$(newcmd)" == "" ]]; expect "the same relative path with a DIFFERENT cwd is not minted for" $?
+for wrapper in "env bash $SB/fx/bootstrap.sh" "timeout 60 bash $SB/fx/bootstrap.sh" "$SB/fx/bootstrap.sh" "sh $SB/fx/bootstrap.sh" "/bin/bash $SB/fx/bootstrap.sh"; do
+  fresh_world "e-w" || exit 2
+  hook_run "$(bash_json "$wrapper --stage provision --apply --plan-digest $D4")"
+  [[ "$(decision)" == "deny" && "$(records)" -eq 0 && -z "$(newcmd)" ]] && jq -e '.hookSpecificOutput.permissionDecisionReason | contains("ONE simple command")' <<<"$HOOK_OUT" >/dev/null 2>&1
+  expect "a habitual wrapper is denied with the accepted form and mints nothing: ${wrapper%% *}..." $?
+done
+hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage=provision --apply --plan-digest $D4 2>&1")"
+[[ "$(decision)" == "deny" && "$(records)" -eq 0 ]]; expect "--stage=name and a trailing 2>&1 are denied, never minted" $?
+# one session, one live receipt: a second mint supersedes the first unconsumed record
+fresh_world e3 || exit 2
+hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage provision --apply --plan-digest $D4")"
+hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage provision --apply --plan-digest $D4")"
+[[ "$(records)" -eq 1 ]]; expect "two prompts in one session leave ONE live receipt (a declined prompt cannot be revived later)" $?
+# the receipt directory is spelled by the hook itself when the library is absent or XDG is unset
+fresh_world e4 || exit 2
+mkdir -p "$SB/h/.local/state/soleur/approvals"
+hook_run "$(path_json Write "$SB/h/.local/state/soleur/approvals/forged")" "XDG_STATE_HOME=" "HOME=$SB/h"
+[[ "$(decision)" == "deny" ]]; expect "with XDG_STATE_HOME unset the default receipt directory (under HOME) is the one denied" $?
+mkdir -p "$SB/nolib/hooks"; cp "$HOOK_SRC" "$SB/nolib/hooks/operator-stage-approval.sh"
+HOOK_SAVE="$HOOK"; HOOK="$SB/nolib/hooks/operator-stage-approval.sh"
+hook_run "$(path_json Write "$XDG_STATE_HOME/soleur/approvals/forged")"
+[[ "$(decision)" == "deny" ]]; expect "library absent: the path arm still denies a write into the receipt directory" $?
+hook_run "$(path_json Write "$SB/fx/notes.txt")"
+[[ -z "$HOOK_OUT" && "$HOOK_RC" -eq 0 ]]; expect "library absent: an unrelated Write is a no-op (a missing library cannot brick file edits)" $?
+hook_run "$(bash_json "$CMD")"
+[[ "$(decision)" == "deny" && "$(records)" -eq 0 ]]; expect "library absent: a v2 apply is denied (fail closed) and nothing is minted" $?
+HOOK="$HOOK_SAVE"
+# the helper that owns most verdicts must be able to FAIL (a helper that always says yes passes every row)
+before="$FAIL_COUNT"
+{ expect "instrument self-test (expected to fail)" 1; } 2>/dev/null
+if [[ "$FAIL_COUNT" -eq $((before + 1)) ]]; then FAIL_COUNT="$before"; pass "instrument self-test: expect() moves the failure count on a known-false condition"; else fail "instrument self-test: expect() did not register a known-false condition"; fi
 
 echo "== hook: jq absent =="
 mkdir -p "$SB/nojq"
@@ -314,10 +379,40 @@ row_cd_before_bash() {
   hook_run "$(bash_json "cd $SB/fx && bash bootstrap.sh --stage provision --apply --plan-digest $D")"
   [[ "$(newcmd)" == "cd $SB/fx && SOLEUR_APPROVAL_NONCE="* ]]
 }
-row_resume_marker_exact() {
+row_resume_marker_ignored() {
   fresh_world "mr-m-$RANDOM" || return 0
-  hook_run "$(bash_json "$CMD")" CLAUDE_CODE_ENTRYPOINT=sdk-cli "SOLEUR_RESUME_APPROVED_DIGEST=$(printf '%064d' 0)"
+  hook_run "$(bash_json "$CMD")" CLAUDE_CODE_ENTRYPOINT=sdk-cli "SOLEUR_RESUME_APPROVED_DIGEST=$BINDING"
   [[ "$(decision)" == "defer" && "$(records)" -eq 0 ]]
+}
+row_vscode_asks() {
+  fresh_world "mr-v-$RANDOM" || return 0
+  hook_run "$(bash_json "$CMD")" CLAUDE_CODE_ENTRYPOINT=claude-vscode
+  [[ "$(decision)" == "ask" ]]
+}
+row_read_apply_denied() {
+  fresh_world "mr-ra-$RANDOM" || return 0
+  hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage account --apply --plan-digest $D")"
+  [[ "$(decision)" == "deny" ]]
+}
+row_stage_exact() {
+  fresh_world "mr-se-$RANDOM" || return 0
+  hook_run "$(bash_json "bash $SB/fx/bootstrap.sh --stage provis.on --apply --plan-digest $D")"
+  [[ "$(decision)" == "deny" ]]
+}
+row_description_replaced() {
+  fresh_world "mr-d2-$RANDOM" || return 0
+  hook_run "$(bash_json "$CMD")"
+  jq -e '.hookSpecificOutput.updatedInput.description | startswith("Soleur approval:")' <<<"$HOOK_OUT" >/dev/null 2>&1
+}
+row_text_capped() {
+  fresh_world "mr-tc-$RANDOM" || return 0
+  hook_run "$(bash_json "bash $SB/fx/liar.sh --stage go --apply --plan-digest $(printf '%064d' 1)")"
+  [[ "$(jq -r '.hookSpecificOutput.permissionDecisionReason | length' <<<"$HOOK_OUT")" -lt 1400 ]]
+}
+row_supersede() {
+  fresh_world "mr-ss-$RANDOM" || return 0
+  hook_run "$(bash_json "$CMD")"; hook_run "$(bash_json "$CMD")"
+  [[ "$(records)" -eq 1 ]]
 }
 row_noncandidate_nojq() {
   : > "$TRACE"
@@ -344,13 +439,13 @@ mutant_row() { # <label> <row-function> ; mutation on stdin
   HOOK="$HOOK_PRISTINE"
 }
 mutant_row "h1 fingerprint keyed on the basename / v1 accepted" row_renamed_minted_v1_not <<'PERL'
-s{head -n 3 "\$1" 2>/dev/null \| grep -aq '\^\# SOLEUR-GENERATED-OPERATOR-SCRIPT v2\$'}{head -n 3 "\$1" 2>/dev/null | grep -aq 'SOLEUR-GENERATED-OPERATOR-SCRIPT v[12]'}
+s{== "# SOLEUR-GENERATED-OPERATOR-SCRIPT v2" \]\]}{== "# SOLEUR-GENERATED-OPERATOR-SCRIPT v"* ]]}
 PERL
 mutant_row "h2 undeterminable mode emits allow instead of defer" row_undetermined_defer <<'PERL'
-s{trace "ran verdict=defer reason=headless-no-marker stage=\$\{STAGE\}"\nemit_envelope defer}{trace "ran verdict=defer reason=headless-no-marker stage=\$\{STAGE\}"\nemit_envelope allow}
+s{trace "ran verdict=defer reason=headless stage=\$\{STAGE\}"\nemit_envelope defer}{trace "ran verdict=defer reason=headless stage=\$\{STAGE\}"\nemit_envelope allow}
 PERL
 mutant_row "h3 mints on the deferring headless invocation" row_headless_no_mint <<'PERL'
-s{(trace "ran verdict=defer reason=headless-no-marker stage=\$\{STAGE\}"\n)}{NONCE="\$(soleur_approval_mint "\$BINDING" "\$SESSION")"\n$1}
+s{(trace "ran verdict=defer reason=headless stage=\$\{STAGE\}"\n)}{NONCE="\$(soleur_approval_mint "\$BINDING" "\$SESSION")"\n$1}
 PERL
 mutant_row "h4 mints under bypass mode" row_bypass_denied <<'PERL'
 s{default\|acceptEdits\|plan\) ;;}{default|acceptEdits|plan|bypassPermissions) ;;}
@@ -359,13 +454,13 @@ mutant_row "h5 strips instead of denies an input carrying the nonce" row_nonce_d
 s{\*SOLEUR_APPROVAL_NONCE\*\)\n    emit_deny "That command carries an approval token[^\n]*\n}{*SOLEUR_APPROVAL_NONCE*)\n    COMMAND="\$(printf '%s' "\$COMMAND" | sed -E 's/SOLEUR_APPROVAL_NONCE=[0-9a-f]+ //')" ;;\n}
 PERL
 mutant_row "h6 a compound command mints" row_compound_no_mint <<'PERL'
-s{if ! tokenize "\$COMMAND"; then}{if ! tokenize "\$\{COMMAND%%|*\}"; then}
+s{tokenize "\$COMMAND" \|\| TOKENIZED=0}{tokenize "\$\{COMMAND%%|*\}" || TOKENIZED=0}
 PERL
 mutant_row "h7 nonce injected before cd instead of before bash" row_cd_before_bash <<'PERL'
 s{new="\$\{COMMAND:0:BASH_OFFSET\}SOLEUR_APPROVAL_NONCE=\$\{nonce\} \$\{COMMAND:BASH_OFFSET\}"}{new="SOLEUR_APPROVAL_NONCE=\$\{nonce\} \$\{COMMAND\}"}
 PERL
-mutant_row "h8 resume marker not compared" row_resume_marker_exact <<'PERL'
-s{\[\[ -n "\$\{SOLEUR_RESUME_APPROVED_DIGEST:-\}" && "\$\{SOLEUR_RESUME_APPROVED_DIGEST\}" == "\$BINDING" \]\]}{[[ -n "\${SOLEUR_RESUME_APPROVED_DIGEST:-}" ]]}
+mutant_row "h8 an environment resume marker approves a headless run" row_resume_marker_ignored <<'PERL'
+s{(trace "ran verdict=defer reason=headless stage=\$\{STAGE\}"\n)}{if [[ -n "\$\{SOLEUR_RESUME_APPROVED_DIGEST:-\}" ]]; then NONCE="\$(soleur_approval_mint "\$BINDING" "\$SESSION")"; emit_envelope allow "\$REASON" with-update "\$NONCE"; exit 0; fi\n$1}
 PERL
 mutant_row "h9 fails closed on a non-candidate when jq is missing" row_noncandidate_nojq <<'PERL'
 s{case "\$INPUT" in\n  \*--apply\*\|\*SOLEUR_APPROVAL_NONCE\*\|\*"\$approvals_fragment"\*\) candidate=1 ;;\nesac}{candidate=1}
@@ -376,10 +471,28 @@ PERL
 mutant_row "h11 executes the script (--list) from the hook" row_never_executes <<'PERL'
 s{(REAL="\$\(soleur_approval_realpath "\$SCRIPT_PATH"\)"\n)}{$1bash "\$REAL" --list >/dev/null 2>\&1 </dev/null\n}
 PERL
+mutant_row "h12 only the cli entrypoint is interactive" row_vscode_asks <<'PERL'
+s#cli\|claude-vscode\|claude-desktop\|claude-desktop-3p\) INTERACTIVE=1#cli) INTERACTIVE=1#
+PERL
+mutant_row "h13 --apply on a declared-read stage passes through" row_read_apply_denied <<'PERL'
+s#emit_deny "That stage is declared read-only[^\n]*"apply-on-read-stage"#trace "ran verdict=noop reason=weakened"; exit 0#
+PERL
+mutant_row "h14 the stage name is matched as a regular expression" row_stage_exact <<'PERL'
+s#awk -F'\|' -v s="\$STAGE" '\$1 == s \{ print; exit \}'#grep -m1 "^\$STAGE|"#
+PERL
+mutant_row "h15 the agent's description is kept" row_description_replaced <<'PERL'
+s#\|\.command=\$n\|\.description=\$desc\)#|.command=\$n)#
+PERL
+mutant_row "h16 script-authored text is not capped" row_text_capped <<'PERL'
+s#cut -c1-500#cat#
+PERL
+mutant_row "h17 a second mint does not supersede the first" row_supersede <<'PERL'
+s#(REAL="\$\(soleur_approval_realpath "\$SCRIPT_PATH"\)"\n)#$1_soleur_approval_housekeeping() { return 0; }\n#
+PERL
 
 # --- floors: the instrument must be able to see both outcomes (reported directly, ADR-193) -------
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=87
+FLOOR=124
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"

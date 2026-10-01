@@ -132,6 +132,8 @@ world plan-mint-deps
 run --stage mint-and-store-token
 [[ "$RC" -eq 1 && "$(mut)" -eq 0 && -z "$(digest)" ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=mint-and-store-token need=copy-app-values' <<<"$OUT"
 check "mint plan with the copies absent: PRECONDITION_FAILED need=copy-app-values and NO digest (R10)" $?
+! grep -qF 'SOLEUR_BOOTSTRAP_STAGE_FAILED' <<<"$OUT" && grep -qE '"outcome":"refused"' "$ROOT/ledger.jsonl"
+check "a precondition refusal prints no STAGE_FAILED / 'run the stage again' banner and settles as refused in the ledger" $?
 cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; echo 401 > "$STUB_ROOT/app-code"
 run --stage mint-and-store-token
 [[ "$RC" -eq 1 && -z "$(digest)" ]] && grep -qF 'need=prove-live-app' <<<"$OUT"
@@ -285,8 +287,13 @@ world xtrace
 OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 30 bash -x "$S" --stage preflight </dev/null 2>&1)"; RC=$?
 [[ "$RC" -eq 78 && "$(grep -c . "$STUB_LOG")" -eq 0 ]] && grep -qF 'refusing to run under xtrace' <<<"$OUT"
 check "under bash -x: exit 78 before any vendor call (no xtrace while holding a credential)" $?
-OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 30 bash -c 'set -x; bash "$0" --stage preflight' "$S" </dev/null 2>&1)"
-! grep -qF "$STUB_PEM_SENTINEL" <<<"$OUT"; check "an exported xtrace in the parent shell does not leak the key either" $?
+# The previous row of this shape (`set -x; bash "$0"`) exported nothing, so the child never ran
+# under xtrace. The two ways xtrace really reaches a child bash are SHELLOPTS and BASH_ENV.
+OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" SHELLOPTS=xtrace timeout 30 bash "$S" --stage preflight </dev/null 2>&1)"; RC=$?
+[[ "$RC" -eq 78 && "$(grep -c . "$STUB_LOG")" -eq 0 ]] && ! grep -qF "$STUB_PEM_SENTINEL" <<<"$OUT"; check "SHELLOPTS=xtrace in the environment: exit 78 before any vendor call, the key never traced" $?
+printf 'set -x\n' > "$SB/xtrace-env.sh"
+OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" BASH_ENV="$SB/xtrace-env.sh" timeout 30 bash "$S" --stage preflight </dev/null 2>&1)"; RC=$?
+[[ "$RC" -eq 78 && "$(grep -c . "$STUB_LOG")" -eq 0 ]] && ! grep -qF "$STUB_PEM_SENTINEL" <<<"$OUT"; check "BASH_ENV that turns xtrace on: exit 78 before any vendor call" $?
 
 echo "== the environment-secret census (G7d) still accepts the re-cut script =="
 census_out="$(cd "$REPO_ROOT" && bash tests/scripts/test-infra-privileged-tier-census.sh 2>&1)"; census_rc=$?
@@ -300,6 +307,71 @@ else
 fi
 grep -qE '^GH_ENVIRONMENT="infra-privileged"$' "$S"; check "GH_ENVIRONMENT=\"infra-privileged\" stays pinned on its own line, top-level" $?
 ! grep -vE '^[[:space:]]*#' "$S" | grep -qE 'soleur_op_gh_secret_set|gh variable set'; check "no other store path exists in the script (no soleur_op_gh_secret_set, no gh variable set)" $?
+
+echo "== the approved flow: no child inherits the nonce, no secret on argv, the approval binds the script bytes =="
+world flow
+approve copy-app-values >/dev/null 2>&1; approve mint-and-store-token >/dev/null 2>&1
+[[ "$(calls_matching "^doppler${T}read")" -ge 4 && "$(stub_nonce_exposures)" -eq 0 ]]
+check "across EVERY vendor call of the approved flow (the plan phase reads BEFORE the gate) none saw SOLEUR_APPROVAL_NONCE" $?
+! grep -qF "$STUB_PEM_SENTINEL" "$STUB_LOG" && ! grep -qF "$STUB_TOKEN_SENTINEL" "$STUB_LOG" && ! grep -qF 'Bearer' "$STUB_LOG"
+check "no secret value, token or JWT appears in any vendor call's argv (the stub logs argv)" $?
+world edited
+EDITED="$SB/edited-bootstrap.sh"; cp "$S" "$EDITED"
+OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash "$EDITED" --stage copy-app-values </dev/null 2>&1)"; RC=$?; DE="$(digest)"
+cmd="bash $EDITED --stage copy-app-values --apply --plan-digest $DE"
+in="$(jq -nc --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c},permission_mode:"default",session_id:"s",cwd:"/",hook_event_name:"PreToolUse"}')"
+newc="$(printf '%s' "$in" | env "XDG_STATE_HOME=$XDG_STATE_HOME" CLAUDE_CODE_ENTRYPOINT=cli bash "$HOOK" | jq -r '.hookSpecificOutput.updatedInput.command // empty')"
+printf '\n# edited after the plan\n' >> "$EDITED"
+: > "$STUB_LOG"
+OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash -c "$newc" </dev/null 2>&1)"; RC=$?
+[[ -n "$newc" && "$RC" -eq 75 && "$(mut)" -eq 0 ]]
+check "a script edited AFTER its plan and approval no longer matches (exit 75, zero writes): the approval binds the bytes (rc ${RC})" $?
+ls "$XDG_STATE_HOME/soleur/approvals" | grep -qv '\.consumed$' && fail "the receipt is still live after the edit was refused" || pass "the receipt was burned when the edited script was refused"
+
+echo "== the live-App proof is a real JWT check, not a 200 that ignores the request =="
+world jwt
+cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"
+run --stage prove-live-app
+[[ "$RC" -eq 0 ]] && grep -qF 'PASS: a JWT from the copy gets 200' <<<"$OUT"; check "control: a well-formed RS256 App JWT signed with the right key is accepted by the stub App" $?
+printf 'WRONG-KEY\n' > "$STUB_ROOT/doppler/val/soleur-infra-app/GITHUB_INFRA_APP_PRIVATE_KEY"
+run --stage prove-live-app
+[[ "$RC" -ne 0 ]] && grep -qF 'GitHub answered 401' <<<"$OUT"; check "a copy that is NOT the live key (another key's signature) is answered 401 and the stage fails" $?
+
+echo "== rotation and finish-rotation edge cases =="
+world rotfail
+approve copy-app-values >/dev/null 2>&1; approve mint-and-store-token >/dev/null 2>&1
+echo 'SOME_OTHER_SECRET' > "$STUB_ROOT/doppler/download-extra"
+approve mint-and-store-token --rotate-token
+rm -f "$STUB_ROOT/doppler/download-extra"
+run --stage verify
+[[ "$RC" -eq 0 && "$(sed -n 's/^TOKEN_STORED=//p' "$ROOT/.env")" == "$(sed -n 's/^TOKEN_SLUG=//p' "$ROOT/.env")" ]] && grep -qF 'SOLEUR_BOOTSTRAP_READY_FOR_PR2' <<<"$OUT"
+check "a failed rotation leaves the still-stored old token marked stored: verify still prints READY" $?
+world finrot
+approve copy-app-values >/dev/null 2>&1; approve mint-and-store-token >/dev/null 2>&1
+printf 'slug97|release-app-mint\n' >> "$STUB_ROOT/doppler/tokens/soleur-infra-app"
+echo 503 > "$STUB_ROOT/app-code"
+run --stage mint-and-store-token
+[[ "$RC" -eq 0 && "$(ops)" -eq 1 ]] && grep -qF 'op=revoke-token target=slug97' <<<"$OUT"
+check "finish-rotation only revokes: it needs neither the copy proof nor the live-App proof (GitHub answering 503 does not keep a stale token live)" $?
+rm -f "$STUB_ROOT/app-code"
+printf 'slug98|release-app-mint\n' >> "$STUB_ROOT/doppler/tokens/soleur-infra-app"
+mkdir -p "$ROOT/glob" && : > "$ROOT/glob/alpha" && : > "$ROOT/glob/beta"
+printf '*|release-app-mint\n' >> "$STUB_ROOT/doppler/tokens/soleur-infra-app"
+OUT="$(cd "$ROOT/glob" && env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash "$S" --stage mint-and-store-token </dev/null 2>&1)"; RC=$?
+grep -qF 'op=revoke-token target=*' <<<"$OUT" && ! grep -qE 'target=(alpha|beta)' <<<"$OUT"
+check "a vendor-supplied slug of '*' stays a name in the plan, never a file glob (pathname expansion is off)" $?
+
+echo "== a missing binary is named, not misreported =="
+world nobin
+mkdir -p "$SB/nodoppler"
+for t in "$ROOT"/bin/* ; do [[ "$(basename "$t")" == doppler || "$(basename "$t")" == _stub-common.sh ]] || ln -sf "$t" "$SB/nodoppler/$(basename "$t")"; done
+for t in bash cat grep sed head tail cut tr date mv cp chmod mkdir id stat od readlink printenv dirname basename env rm sha256sum timeout ls mktemp awk find git comm sort wc uniq tee base64; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$SB/nodoppler/$t"
+done
+cp "$ROOT/bin/_stub-common.sh" "$SB/nodoppler/_stub-common.sh"
+OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" "PATH=$SB/nodoppler" timeout 30 "$SB/nodoppler/bash" "$S" --stage preflight </dev/null 2>&1)"; RC=$?
+[[ "$RC" -eq 64 ]] && grep -qF 'SOLEUR_BOOTSTRAP_MISSING_BINARY bin=doppler' <<<"$OUT"
+check "doppler absent: exit 64 MISSING_BINARY bin=doppler (not a wrong-cause 'project not readable')" $?
 
 echo "== mutation rows: each safety property goes RED when its line is broken =="
 S_PRISTINE="$S"
@@ -376,6 +448,45 @@ assert_fixture_dir "$STUB_ROOT"
 assert_fixture_dir "$STUB_ROOT"
 prop_unreadable_is_inconclusive() { S="$1"; world pm7; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/doppler/tokens-unreadable"; run --stage mint-and-store-token; [[ -z "$(digest)" ]]; }
 prop_revoke_new_on_failed_store() { S="$1"; world pm8; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/gh/secret-set-fails"; approve mint-and-store-token >/dev/null 2>&1; [[ ! -s "$STUB_ROOT/doppler/tokens/soleur-infra-app" ]]; }
+prop_no_secret_on_argv() { S="$1"; world pm9; assert_fixture_dir "$STUB_ROOT"; approve copy-app-values >/dev/null 2>&1; ! grep -qF "$STUB_PEM_SENTINEL" "$STUB_LOG"; }
+prop_live_jwt_checked() { S="$1"; world pm10; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; run --stage prove-live-app; [[ "$RC" -eq 0 ]]; }
+prop_rotation_failure_keeps_stored() {
+  S="$1"; world pm11; assert_fixture_dir "$STUB_ROOT"; approve copy-app-values >/dev/null 2>&1; approve mint-and-store-token >/dev/null 2>&1
+  echo 'SOME_OTHER_SECRET' > "$STUB_ROOT/doppler/download-extra"; approve mint-and-store-token --rotate-token >/dev/null 2>&1
+  rm -f "$STUB_ROOT/doppler/download-extra"; run --stage verify; [[ "$RC" -eq 0 ]]
+}
+prop_finish_rotation_no_proofs() {
+  S="$1"; world pm12; assert_fixture_dir "$STUB_ROOT"; approve copy-app-values >/dev/null 2>&1; approve mint-and-store-token >/dev/null 2>&1
+  printf 'slug97|release-app-mint\n' >> "$STUB_ROOT/doppler/tokens/soleur-infra-app"; echo 503 > "$STUB_ROOT/app-code"
+  run --stage mint-and-store-token; [[ "$RC" -eq 0 && "$(ops)" -eq 1 ]]
+}
+prop_missing_binary_named() {
+  S="$1"; world pm13; assert_fixture_dir "$STUB_ROOT"; mkdir -p "$SB/nodoppler2"
+  for t in "$ROOT"/bin/* ; do [[ "$(basename "$t")" == doppler ]] || ln -sf "$t" "$SB/nodoppler2/$(basename "$t")"; done
+  for t in bash cat grep sed head tail cut tr date mv cp chmod mkdir id stat od readlink printenv dirname basename env rm sha256sum timeout ls mktemp awk find git comm sort wc uniq tee base64; do
+    p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$SB/nodoppler2/$t"
+  done
+  cp "$ROOT/bin/_stub-common.sh" "$SB/nodoppler2/_stub-common.sh"
+  local o rc; o="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" "PATH=$SB/nodoppler2" timeout 30 "$SB/nodoppler2/bash" "$1" --stage preflight </dev/null 2>&1)"; rc=$?
+  [[ "$rc" -eq 64 ]]
+}
+prop_glob_off() {
+  S="$1"; world pm14; assert_fixture_dir "$STUB_ROOT"; approve copy-app-values >/dev/null 2>&1; approve mint-and-store-token >/dev/null 2>&1
+  printf 'slug97|release-app-mint\n*|release-app-mint\n' >> "$STUB_ROOT/doppler/tokens/soleur-infra-app"
+  mkdir -p "$ROOT/glob" && : > "$ROOT/glob/alpha" && : > "$ROOT/glob/beta"
+  OUT="$(cd "$ROOT/glob" && env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash "$1" --stage mint-and-store-token </dev/null 2>&1)"; RC=$?
+  ! grep -qE 'target=(alpha|beta)' <<<"$OUT"
+}
+prop_edit_after_plan_refused() {
+  S="$1"; world pm15; assert_fixture_dir "$STUB_ROOT"; local E="$SB/pm15-edited.sh"; cp "$1" "$E"
+  OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash "$E" --stage copy-app-values </dev/null 2>&1)"; local d; d="$(digest)"
+  local c="bash $E --stage copy-app-values --apply --plan-digest $d" i n
+  i="$(jq -nc --arg c "$c" '{tool_name:"Bash",tool_input:{command:$c},permission_mode:"default",session_id:"s",cwd:"/",hook_event_name:"PreToolUse"}')"
+  n="$(printf '%s' "$i" | env "XDG_STATE_HOME=$XDG_STATE_HOME" CLAUDE_CODE_ENTRYPOINT=cli bash "$HOOK" | jq -r '.hookSpecificOutput.updatedInput.command // empty')"
+  printf '\n# edited after the plan\n' >> "$E"
+  OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash -c "$n" </dev/null 2>&1)"; RC=$?
+  [[ "$RC" -eq 75 && "$(mut)" -eq 0 ]]
+}
 mutant9321() { # <label> <property-function> ; perl on stdin
   local label="$1" prop="$2" dst prog rc
   dst="$SB/m9321-${label// /-}.sh"
@@ -386,7 +497,7 @@ mutant9321() { # <label> <property-function> ; perl on stdin
   "$prop" "$dst"; rc=$?; S="$S_PRISTINE"
   if [[ "$rc" -eq 0 ]]; then fail "9321 mutant '${label}': property ${prop} stayed GREEN — no row sees the defect"; else pass "9321 mutant '${label}': property ${prop} went RED"; fi
 }
-for prop in prop_no_write_without_receipt prop_env_level_store prop_new_before_old prop_no_token_on_stdout prop_xtrace_refused prop_ready_from_vendor_state prop_unreadable_is_inconclusive prop_revoke_new_on_failed_store; do
+for prop in prop_no_write_without_receipt prop_env_level_store prop_new_before_old prop_no_token_on_stdout prop_xtrace_refused prop_ready_from_vendor_state prop_unreadable_is_inconclusive prop_revoke_new_on_failed_store prop_no_secret_on_argv prop_live_jwt_checked prop_rotation_failure_keeps_stored prop_finish_rotation_no_proofs prop_missing_binary_named prop_glob_off prop_edit_after_plan_refused; do
   "$prop" "$S_PRISTINE" && pass "control: ${prop} holds on the real script" || fail "control: ${prop} does NOT hold on the real script (the mutation rows below would be meaningless)"
 done
 S="$S_PRISTINE"
@@ -414,10 +525,45 @@ PERL
 mutant9321 "a failed store leaves the new token live" prop_revoke_new_on_failed_store <<'PERL'
 s{(      soleur_op_red "  storing \$\{ENV_SECRET\} failed; the new token was revoked)}{      :\n$1}; s{(  if ! printf '%s' "\$tokval" \| gh secret set[^\n]*\n    unset tokval\n    if )revoke_confirmed "\$new_slug"}{$1false}
 PERL
+mutant9321 "the App key is passed on argv" prop_no_secret_on_argv <<'PERL'
+s{doppler secrets get "\$1" -p "\$SRC_PROJECT" -c "\$CFG" --plain \\\n    \| doppler secrets set "\$1" -p "\$DST_PROJECT" -c "\$CFG" --silent >/dev/null}{doppler secrets set "\$1" "\$(doppler secrets get "\$1" -p "\$SRC_PROJECT" -c "\$CFG" --plain)" -p "\$DST_PROJECT" -c "\$CFG" --silent >/dev/null}
+PERL
+mutant9321 "JWT algorithm HS256" prop_live_jwt_checked <<'PERL'
+s{\{"alg":"RS256","typ":"JWT"\}}{{"alg":"HS256","typ":"JWT"}}
+PERL
+mutant9321 "JWT lifetime beyond ten minutes" prop_live_jwt_checked <<'PERL'
+s{\$\(\(now \+ 300\)\)}{\$((now + 3600))}
+PERL
+mutant9321 "JWT issuer is not the App id" prop_live_jwt_checked <<'PERL'
+s{\$\(\(now - 60\)\) \$\(\(now \+ 300\)\) "\$1"}{\$((now - 60)) \$((now + 300)) "0"}
+PERL
+mutant9321 "JWT sent with the wrong scheme" prop_live_jwt_checked <<'PERL'
+s{Authorization: Bearer %s}{Authorization: token %s}
+PERL
+mutant9321 "JWT signed with a different key" prop_live_jwt_checked <<'PERL'
+s{-sign <\(printf '%s\\n' "\$2"\)}{-sign <(printf '%s\\n' wrongkey)}
+PERL
+mutant9321 "a failed rotation forgets the old token was stored" prop_rotation_failure_keeps_stored <<'PERL'
+s{      if \[\[ -n "\$old_stored" \]\]; then soleur_op_env_upsert "\$ENV_FILE" TOKEN_STORED "\$old_stored"; fi\n}{}g
+PERL
+mutant9321 "finish-rotation demands the live-App proof" prop_finish_rotation_no_proofs <<'PERL'
+s{  if \[\[ "\$TP_MODE" != "finish-rotation" \]\]; then}{  if true; then}
+PERL
+mutant9321 "doppler dropped from the preflight binary list" prop_missing_binary_named <<'PERL'
+s{ doppler gh jq curl}{ gh jq curl}
+PERL
+mutant9321 "pathname expansion left on" prop_glob_off <<'PERL'
+s{\nset -f\n}{\n}
+PERL
+
+# the helper that owns most verdicts must be able to FAIL (a helper that always says yes passes every row)
+before="$FAIL_COUNT"
+{ check "instrument self-test (expected to fail)" 1; } 2>/dev/null
+if [[ "$FAIL_COUNT" -eq $((before + 1)) ]]; then FAIL_COUNT="$before"; pass "instrument self-test: check() moves the failure count on a known-false condition"; else fail "instrument self-test: check() did not register a known-false condition"; fi
 
 # --- floor (reported directly: ADR-193) --------------------------------------------------------------
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=77
+FLOOR=117
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"
