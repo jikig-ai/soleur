@@ -191,6 +191,10 @@ add_leaf sh-grep-rewrite        'bash .claude/hooks/grep-rewrite.test.sh' sh
 add_leaf sh-weakness-miner      'bash tests/scripts/test-weakness-miner.sh' sh
 # Sources plugins/soleur/test/test-helpers.sh (the shell chokepoint): the normal-exit leaf for it.
 add_leaf sh-test-helpers        'bash plugins/soleur/test/auto-close-scanner.test.sh' sh
+# test-all.sh binds its run root ~2900 lines above its full EXIT trap, so every early exit (flag modes, usage
+# errors) used to leave a marker-only root per invocation; a mutation battery driving it thousands of times
+# left 2388 in /var/tmp. --enumerate-commands exits 0 through the enumerate path, not the full trap.
+add_leaf sh-test-all-enumerate  'bash scripts/test-all.sh --enumerate-commands' sh
 add_leaf py-unittest            'python3 -m unittest tests.scripts.test_lint_rule_ids'
 add_leaf py-pytest-configure    'python3 -c "import tests.conftest as c; c.pytest_configure()"'
 VITEST_BIN="$REPO_ROOT/apps/web-platform/node_modules/.bin/vitest"
@@ -674,7 +678,7 @@ echo
 # exactly 4 verdicts, so a leaf pair skipped LOUDLY (no node_modules, non-CI) lowers the floor by exactly
 # its own 4 each -- and a leaf registration deleted from this file is not a loud skip, so it cannot
 # shrink the floor: it lowers CASES below it. Raise it when an arm is added; never lower it to pass.
-FULL_CASES=132
+FULL_CASES=136
 MIN_CASES=$((FULL_CASES - 4 * N_SKIPPED))
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   echo "[FATAL] vacuity floor: $CASES cases executed, expected at least $MIN_CASES" >&2; exit 1

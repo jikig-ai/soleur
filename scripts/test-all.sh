@@ -449,6 +449,12 @@ if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
   soleur_scratch_session_begin "$TMPDIR" || true
 fi
 declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+# Provisional owner for the window below: the full EXIT trap (which composes this cleanup) is installed ~2900
+# lines down, and every early `exit` before it (flag modes, usage errors, a timeout kill) left a marker-only
+# root behind -- measured: --enumerate-commands, --list and a bad flag each leaked one per invocation. The
+# later trap REPLACES this one and carries the same cleanup (ADR-129: one EXIT trap per shell).
+_provisional_scratch_exit() { _soleur_scratch_cleanup || true; }
+trap _provisional_scratch_exit EXIT
 
 # Pin the #6789 contention instrumentation to /tmp, INDEPENDENTLY of TMPDIR above.
 #
@@ -5221,6 +5227,7 @@ if (( _ENUMERATE == 1 )); then
   # soleur-inc-*/soleur-refguard.* tmpdir per invocation.
   _soleur_refguard_cleanup
   _soleur_inc_cleanup
+  _soleur_scratch_cleanup || true
   trap - EXIT
   exit 0
 fi

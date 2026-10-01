@@ -90,7 +90,8 @@ fi
 # Retention ordering in the trap: _run_log_retain MUST precede
 # _soleur_scratch_cleanup — the source file lives inside the scratch root the
 # cleanup deletes.
-trap_line="$(grep -n '^trap .*EXIT$' "$TARGET" | head -1 | cut -d' ' -f2-)"
+# The FULL chain trap, not the provisional one that precedes it (a bare scratch-cleanup trap near the top).
+trap_line="$(grep -n '^trap .*_enum_wd_disarm.*EXIT$' "$TARGET" | head -1 | cut -d' ' -f2-)"
 retain_pos="$(printf '%s' "$trap_line" | grep -bo '_run_log_retain' | head -1 | cut -d: -f1)"
 scratch_pos="$(printf '%s' "$trap_line" | grep -bo '_soleur_scratch_cleanup' | head -1 | cut -d: -f1)"
 if [[ -n "$retain_pos" && -n "$scratch_pos" && "$retain_pos" -lt "$scratch_pos" ]]; then
