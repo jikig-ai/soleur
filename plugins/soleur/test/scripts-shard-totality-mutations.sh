@@ -786,12 +786,13 @@ in_range && row "ROWS-DROP" "$RUNNER" \
 # ranges by lo-bound, so swapping the -a/-b lines is a permitted non-canonical input.
 # A guard that reds on this is over-tight; a RED-only matrix cannot see that.
 # The two-line anchor also pins the -a/-b ADJACENCY: a comment inserted between the
-# registration lines misses this anchor (ANCHOR MISSING) while GAP/DROP still land.
+# registration lines misses this anchor (ANCHOR MISSING) while GAP/DROP still land. The second line
+# carries FOUR spaces since ADR-262: both registrations sit inside the --pr-gated `if` block.
 in_range && row "ROWS-SWAP" "$RUNNER" \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
-  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
-  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
   GREEN "swapped registration order tiles identically (ranges sort before the tile check)"
 
 # --- Hardening residual rows (#9035) -------------------------------------------------------------
@@ -920,9 +921,9 @@ in_range && row "ROWS-UNRESOLVED" "$RUNNER" \
 # -a/-b adjacency the same way ROWS-SWAP's does.
 in_range && row "ROWS-ALL-UNFLAGGED" "$RUNNER" \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
-  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh
-  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
   RED "every registration unflagged beside a DECLARED_TOTAL declaration" \
   'carry no --rows'
 
