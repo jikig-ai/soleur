@@ -451,3 +451,48 @@ This is an extension, not a reversal. The infra `_skip()` semantics are unchange
 gitleaks probe (`plugins/soleur/test/lib/gitleaks-probe.sh`, #8266), which keeps its local skip and
 CI hard fail. `.claude/hooks/hook-suite-dep-unresolved.test.sh` names that probe as an accepted gap.
 The same idiom outside `.claude/hooks/` is tracked in #8773.
+
+## Amendment — 2026-10-01 (#9379): the apt decline gets a time bound, and no arm becomes skip-eligible
+
+#8744 bounded the NUMBER of in-container apt attempts in `git-data-ownership.test.sh` and
+`git-data-runcmd-rehearsal.test.sh`, not their elapsed time. From about 15:00 UTC on 2026-10-01 the
+Infra Validation `deploy-script-tests (1/4)` leg went red on every branch and on `main` because both
+suites hit their per-suite wall-clock bound (`rc=124`, empty log) instead of reaching the decline this
+ADR declares for "the apt archive's state at that instant".
+
+**The decision.** `apps/web-platform/infra/lib/apt-bounded.sh` puts one budget of apt seconds on every
+in-container apt cycle, shared by all containers a suite spawns through a host-owned state directory
+mounted at `/work/apt` (`budget`, plus one `spent` line appended per attempt). A single attempt is also
+capped (90 s) and retried up to three times. When the budget or the attempts run out, the container
+prints the credential-scrubbed log tail, a `FIXTURE_APT_CAUSE:` line naming the stage, the bare
+`FIXTURE_APT_FAILED` line, and exits 100. That is byte-for-byte the shape an apt exhaustion already
+produced, so no consumer's classifier changes and every skip-eligible arm reaches its EXISTING
+`arm_skip`. A non-timeout failure keeps apt's own rc (an OOM-killed apt stays 137 and is not retried),
+a missing lib at a call site exits 97, and an unarmed state directory exits 98; none of those can read
+as the environment decline, because 100 is in every consumer's allowlist.
+
+**Measured, not assumed.** Two choices came from running the suite against real docker:
+
+- *Apt seconds, not a wall-clock deadline.* The first cut armed one absolute deadline. The suite's
+  non-apt container time (the T5 tarball downloads, sshd) spent that budget too, so later healthy primary
+  arms inherited an expired deadline and starved. Only time inside the apt cycle is charged now.
+- *A per-attempt cap, not only a shared budget.* On this box roughly one apt cycle in three stalled for the
+  full allotted time although `Acquire::http::Timeout=20` and `Acquire::Retries=5` were set, and the very
+  same cycle succeeded in about 15 s on a fresh attempt. With the shared budget alone, one stalled first
+  attempt spent a third of it.
+
+**What this amendment does not do.** It creates no new skip path. T5 primary, T17 healthy and the R4
+driver stay hard, and the ownership runtime arm stays fail-closed under `CI=true` (#8744: "do not let an
+apt failure turn into a skip"). The honest consequence: during a SUSTAINED archive outage those legs are
+still red, but bounded (about the budget plus non-apt time, below the suite bound), attributable (the
+cause line and the `GD_APT: spent=` line name the stage and the cost) and no longer starving the other
+suites on the leg. The S1 skip ceiling still fires if every S1 arm starves, which is the intended signal
+for a total outage.
+
+**Alternatives considered.** Raising `_SUITE_BOUNDS` (bounds nothing; the leg has a 15-minute
+`timeout-minutes` shared across suites). A pre-baked fixture image (rejected 2026-08-13: it would remove
+the apt-under-`set -e` RED that T5 relies on). A per-site budget (twelve serial apt containers in the
+rehearsal suite make `12 x budget` exceed the 600 s bound for any budget large enough to survive a slow
+day). A wall-clock deadline (measured above). Making T5 primary, T17 healthy or R4 skip-eligible, or
+giving ownership a counted skip: not taken here; recorded as a User-Challenge for the operator because
+each weakens a guard or reverses #8744.

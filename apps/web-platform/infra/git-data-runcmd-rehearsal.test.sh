@@ -20,6 +20,18 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Bounded apt (#9379): ONE budget of APT SECONDS shared by every apt-bearing container this run spawns
+# (12: 2 run_case, T5/T17 mutation, 7 _s1_run, R4), armed at the first docker site. Only time spent
+# inside the apt cycle is charged, so the T5 tarball downloads and sshd work never spend it. The
+# rationale, the return-code contract and the marker live in lib/apt-bounded.sh; the terminal
+# `GD_APT: spent=` line records how much of it a run used. 420 s: measured healthy cost on a slow box is
+# ~27 s per container (~320 s for the 12), CI's healthy whole step is ~100 s, and non-apt time is ~15 s,
+# so a total stall ends near 450 s, below the 600 s suite bound with the margin the plan requires.
+APT_LIB="${DIR}/lib/apt-bounded.sh"
+APT_BUDGET_S=420
+[ -r "$APT_LIB" ] || { echo "FIXTURE-FAIL: ${APT_LIB} is missing — no apt-bearing container could be bounded" >&2; exit 2; }
+# shellcheck source=lib/apt-bounded.sh
+. "$APT_LIB"
 passes=0; fails=0
 pass() { passes=$((passes + 1)); }
 # THE VERDICT DOES NOT RIDE ON A COUNTER (#7565 review). `fails` feeds the terminal line and
@@ -1049,7 +1061,9 @@ run_case() {
   rm -rf "$TMP/out"; mkdir -p "$TMP/out"; : > "$TMP/out/capture.log"
   cp "$TMP/doppler-dl.sh" "$TMP/dl.case.sh"
   [ -n "$mut" ] && sed -i "$mut" "$TMP/dl.case.sh"
+  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
   docker run --rm \
+    -v "$GD_APT_STATE:/work/apt" \
     -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
     -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
     -v "$TMP/capture.py:/work/capture.py:ro" \
@@ -1058,28 +1072,12 @@ run_case() {
     "$UBUNTU_BASE" bash -c '
       set -e
       cp /work/git-data-emit-src /work/git-data-emit
-      # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
-      # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
-      # statement level let a failed apt-get UPDATE fall through into drive.sh with no
-      # python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:` hard
-      # FAIL asserting a deterministic fixture defect that had not occurred. Inside `if` the
-      # `&&` is a tested context; the 3-attempt loop with Acquire::Retries=5 and 10s/30s backoff
-      # absorbs transient mirror failure (#8744), and exhaustion exits 100 — which the env-rc
-      # allowlists classify honestly, now with a cause attached.
-      # apt output goes to a LOG FILE, not /dev/null and not the capture — the CONFIDENTIALITY
-      # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
-      # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. A GREEN
-      # run still leaks nothing into the stream the verdicts tail. Tail and marker share stderr:
-      # docker demuxes stdout/stderr, so a cross-stream order is not preserved (measured — a
-      # stdout marker can land BEFORE a stderr tail).
-      _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
-      _apt_ok=0
-      for _apt_try in 1 2 3; do
-        if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
-           && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
-        case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
-      done
-      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+      # Bounded apt (#9379): lib/apt-bounded.sh owns the retry loop, the shared apt budget, the
+      # credential scrub and the FIXTURE_APT_FAILED marker (rationale there). The lib load is its OWN
+      # statement ending in exit 97: 100 is in every env-rc allowlist, so a missing mount must not
+      # be able to read as the environment decline.
+      . /work/apt/apt-bounded.sh || exit 97
+      gd_apt_install_bounded curl python3 || exit $?
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1
   local rc=$?
@@ -1349,12 +1347,14 @@ else
   # mount path produced no marker, landed on `did-not-run`, and reported a green skip with a NOTE
   # forever. The paths are static and this file owns all of them, so asserting them here removes
   # the harness half of 125 entirely rather than trying to classify docker's error text.
-  for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.noerrexit.sh" "$TMP/out"; do
+  for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.noerrexit.sh" "$TMP/out" "$APT_LIB"; do
     [ -e "$_m" ] || {
       echo "FAIL: T5 mutation mount source is missing: ${_m} — docker would exit 125 and the verdict would misread a harness defect as an environment decline" >&2
       exit 1; }
   done
+  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
   docker run --rm \
+    -v "$GD_APT_STATE:/work/apt" \
     -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
     -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
     -v "$TMP/capture.py:/work/capture.py:ro" \
@@ -1363,28 +1363,12 @@ else
     "$UBUNTU_BASE" bash -c '
       set -e
       cp /work/git-data-emit-src /work/git-data-emit
-      # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
-      # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
-      # statement level let a failed apt-get UPDATE fall through into drive.sh with no
-      # python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:` hard
-      # FAIL asserting a deterministic fixture defect that had not occurred. Inside `if` the
-      # `&&` is a tested context; the 3-attempt loop with Acquire::Retries=5 and 10s/30s backoff
-      # absorbs transient mirror failure (#8744), and exhaustion exits 100 — which the env-rc
-      # allowlists classify honestly, now with a cause attached.
-      # apt output goes to a LOG FILE, not /dev/null and not the capture — the CONFIDENTIALITY
-      # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
-      # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. A GREEN
-      # run still leaks nothing into the stream the verdicts tail. Tail and marker share stderr:
-      # docker demuxes stdout/stderr, so a cross-stream order is not preserved (measured — a
-      # stdout marker can land BEFORE a stderr tail).
-      _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
-      _apt_ok=0
-      for _apt_try in 1 2 3; do
-        if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
-           && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
-        case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
-      done
-      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+      # Bounded apt (#9379): lib/apt-bounded.sh owns the retry loop, the shared apt budget, the
+      # credential scrub and the FIXTURE_APT_FAILED marker (rationale there). The lib load is its OWN
+      # statement ending in exit 97: 100 is in every env-rc allowlist, so a missing mount must not
+      # be able to read as the environment decline.
+      . /work/apt/apt-bounded.sh || exit 97
+      gd_apt_install_bounded curl python3 || exit $?
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1; _t5m_rc=$?
   # rc is CAPTURED AND USED. The trailing `|| true` this replaces discarded the one datum that
@@ -1578,12 +1562,14 @@ grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/drive.noguard.sh" || {
 # produce no marker, land on the env-decline rung and report a green skip forever. The paths are
 # static and this file owns all of them, so asserting them here removes the harness half of 125
 # rather than trying to classify docker's error text.
-for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.noguard.sh" "$TMP/out"; do
+for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.noguard.sh" "$TMP/out" "$APT_LIB"; do
   [ -e "$_m" ] || {
     echo "FAIL: T17 mutation mount source is missing: ${_m} — docker would exit 125 and the verdict would misread a harness defect as an environment decline" >&2
     exit 1; }
 done
+gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
 docker run --rm \
+  -v "$GD_APT_STATE:/work/apt" \
   -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
   -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
   -v "$TMP/capture.py:/work/capture.py:ro" \
@@ -1592,28 +1578,12 @@ docker run --rm \
   "$UBUNTU_BASE" bash -c '
     set -e
     cp /work/git-data-emit-src /work/git-data-emit
-    # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
-    # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
-    # statement level let a failed apt-get UPDATE fall through into drive.sh with no
-    # python3/curl, the capture server never bound, and THIS arm read the resulting EMPTY
-    # capture as its own vacuity finding -- an environment failure announced as a
-    # mutation-battery defect. Inside `if` the `&&` is a tested context; the 3-attempt loop
-    # with Acquire::Retries=5 and 10s/30s backoff absorbs transient mirror failure (#8744),
-    # and exhaustion exits 100, which the host captures instead of discarding it through a
-    # trailing || true.
-    # apt output goes to a LOG FILE, not /dev/null and not the capture -- the CONFIDENTIALITY
-    # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
-    # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. Tail and
-    # marker share stderr: docker demuxes stdout/stderr, so a cross-stream order is not
-    # preserved (measured -- a stdout marker can land BEFORE a stderr tail).
-    _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
-    _apt_ok=0
-    for _apt_try in 1 2 3; do
-      if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
-         && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
-      case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
-    done
-    [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+    # Bounded apt (#9379): lib/apt-bounded.sh owns the retry loop, the shared apt budget, the
+    # credential scrub and the FIXTURE_APT_FAILED marker (rationale there). The lib load is its OWN
+    # statement ending in exit 97: 100 is in every env-rc allowlist, so a missing mount must not
+    # be able to read as the environment decline.
+    . /work/apt/apt-bounded.sh || exit 97
+    gd_apt_install_bounded curl python3 || exit $?
     echo T17M_APT_OK
     bash /work/drive.sh
   ' >"$TMP/out/t17m.stdout" 2>&1; _t17m_rc=$?
@@ -1787,24 +1757,16 @@ if [ -s "$TMP/sshd-stage.sh" ] && [ -s "$TMP/01-hardening.conf" ]; then
   cat > "$TMP/sshd-drive.sh" <<'S1DRV'
 set -e
 export DEBIAN_FRONTEND=noninteractive
-# NAMED, NOT RESTRUCTURED -- and this site is the one that has to say why, because the other apt
-# sites in this file all got the opposite treatment. These two calls are ALREADY separate
-# statements rather than an `a && b` pair, so `set -e` DOES fire here: a failure aborts the
-# container with apt-s own rc, which _S1_ENV_RCS classifies and _s1_classify routes to
-# did-not-run. Nothing falls through, so there is no control flow to fix. What was missing was
-# only a NAME: a bare rc does not say WHICH of the two cycles starved, leaving a CI log to guess.
-#
-# THE HANDLER RE-RAISES THE MEASURED rc, NOT A HARDCODED 100 (review). An earlier draft exited
-# 100 unconditionally and claimed in this comment to "change no behaviour". That was false and in
-# the dangerous direction: `|| {...}` catches ANY non-zero status, so an OOM-killed apt (137) was
-# rewritten to 100, which _S1_ENV_RCS allowlists -- silently converting a harness-defect FAIL
-# into a green environment skip. Capturing `$?` first and re-raising it preserves exactly what
-# `set -e` would have produced, for every rc rather than only for apt-s own.
-# Both handlers emit BEFORE S1_FIXTURE_OK, so the classification stays did-not-run.
-apt-get update -qq >/dev/null 2>&1 \
-  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt-get update starved (openssh-server spin) — mirror unreachable or index corrupt (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
-apt-get install -y -qq openssh-server >/dev/null 2>&1 \
-  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt-get install openssh-server starved — mirror unreachable or package unavailable (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
+# Bounded apt (#9379). The handler RE-RAISES THE MEASURED rc, never a hardcoded 100: `|| {...}`
+# catches ANY non-zero status, so exiting 100 unconditionally would rewrite an OOM-killed apt (137)
+# into 100, which _S1_ENV_RCS allowlists -- silently turning a harness-defect FAIL into a green
+# environment skip. The helper already returns 100 only for a timeout or exhausted apt errors,
+# 97 for a missing lib and 98 for an unarmed budget; re-raising preserves each. The handler
+# emits BEFORE S1_FIXTURE_OK, so the classification stays did-not-run. The FIXTURE_APT_CAUSE
+# line the helper prints names which stage (update or install) consumed the time.
+. /work/apt/apt-bounded.sh || exit 97
+gd_apt_install_bounded openssh-server \
+  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt starved (openssh-server) — mirror unreachable, shared apt budget expired or package unavailable; the FIXTURE_APT_CAUSE line above names the stage (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
 mkdir -p /etc/ssh/sshd_config.d
 cp /work/01-hardening.conf /etc/ssh/sshd_config.d/01-hardening.conf
 # (#7226) MODEL cc_ssh: ssh_deletekeys removes the image's host keys and ssh_keys installs the
@@ -1907,10 +1869,12 @@ S1DRV
     # and therefore genuinely intercepts that case. A positive marker cannot, so the
     # interception has to happen here instead, before the ladder ever runs.
     local _m
-    for _m in "$1" "$_dropin" "$TMP/sshd-drive.sh" "$TMP/s1out" "$TMP/hostkey" "$TMP/hostkey.pub"; do
+    for _m in "$1" "$_dropin" "$TMP/sshd-drive.sh" "$TMP/s1out" "$TMP/hostkey" "$TMP/hostkey.pub" "$APT_LIB"; do
       [ -e "$_m" ] || { echo "FIXTURE-FAIL: S1 mount source is absent: $_m" >&2; exit 2; }
     done
+    gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
     docker run --rm \
+      -v "$GD_APT_STATE:/work/apt" \
       -e "S1_RESTART_MODE=${S1_RESTART_MODE:-ok}" -e "SSHD_T_MODE=${SSHD_T_MODE:-real}" \
       -e "S1_HOSTKEY_MODE=${S1_HOSTKEY_MODE:-rendered}" \
       -v "$TMP/hostkey:/work/hostkey:ro" -v "$TMP/hostkey.pub:/work/hostkey.pub:ro" \
@@ -3085,20 +3049,10 @@ INJECT="${GIT_DATA_REHEARSAL_INJECT:-}"
 # the merge gate -- they were already there, because a dead container yields 0 for all three
 # arms and the suite already exited non-zero. What changes is that the failure now says so.
 [ "$INJECT" = "apt-update" ] && fixture_fail "apt-get update (injected)"
-apt-get update -qq -o Acquire::Retries=3 >/dev/null 2>&1 \
-  || fixture_fail "apt-get update failed (mirror unreachable or index corrupt)"
-
-_apt_ok=0
-for _try in 1 2 3; do
-  if [ "$INJECT" = "apt-install" ]; then break; fi
-  if apt-get install -y -qq -o Acquire::Retries=3 curl python3 >/dev/null 2>&1; then
-    _apt_ok=1
-    [ "$_try" -gt 1 ] && echo "FIXTURE-RETRY: apt-get install succeeded on attempt ${_try}" >&2
-    break
-  fi
-  sleep $(( _try * 2 ))
-done
-[ "$_apt_ok" -eq 1 ] || fixture_fail "apt-get install curl python3 failed past 3 attempts"
+[ "$INJECT" = "apt-install" ] && fixture_fail "apt-get install curl python3 failed past 3 attempts"
+. /work/apt/apt-bounded.sh || fixture_fail "apt-bounded.sh could not be sourced (mount missing)"
+gd_apt_install_bounded curl python3 \
+  || { _apt_rc=$?; fixture_fail "apt-get update/install failed or the shared apt budget expired (rc=${_apt_rc}; FIXTURE_APT_CAUSE above names the stage)"; }
 
 [ "$INJECT" = "no-python3" ] && fixture_fail "python3 absent after install (injected)"
 command -v python3 >/dev/null 2>&1 || fixture_fail "python3 absent after a successful apt-get install"
@@ -3200,7 +3154,9 @@ rm -rf "$TMP/r4out"; mkdir -p "$TMP/r4out"; : > "$TMP/r4out/capture.log"
 # AND any reason to open the stdout file -- referenced only inside failure-message details,
 # so nothing ever read it. Reproducing #7501 required patching the EXIT trap by hand.
 _r4_rc=0
+gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
 docker run --rm \
+  -v "$GD_APT_STATE:/work/apt" \
   -e "GIT_DATA_REHEARSAL_INJECT=${GIT_DATA_REHEARSAL_INJECT:-}" \
   -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
   -v "$TMP/capture.py:/work/capture.py:ro" \
@@ -3944,6 +3900,7 @@ if [ "${#FAILURES[@]}" -ne "$fails" ]; then
   echo "FAIL LEDGER: ${fails} failure(s) counted but ${#FAILURES[@]} recorded — fail() was tampered with." >&2
   exit 1
 fi
+gd_apt_state_summary
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"
 if [ "$SKIPPED_ASSERTIONS" -gt 0 ]; then
   echo "  NOTE: ${SKIPPED_ASSERTIONS} assertion(s) were declared-skipped by loud SKIP arms — this run is weaker than a full one."
