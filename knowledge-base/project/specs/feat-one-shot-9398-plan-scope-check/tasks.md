@@ -21,9 +21,10 @@ issue: 9398
 - [ ] 2.1 Insert `### 2.4. Scope Check Gate (Always)` between `### 2.` and `### 2.5.` with the
   `[skill-enforced: plan Phase 2.4 + deepen-plan Phase 4.12]` marker and the "Read
   `plugins/soleur/skills/plan/references/plan-scope-check.md` now" pointer (~340 B).
-- [ ] 2.2 Compensating trim (same commit): remove the `<thinking>` scaffolding blocks at
-  `### 2.` and `### 5.` (~235 B combined), plus `### 1.` (~215 B) if more is needed — these
-  carry no load-bearing conditions.
+- [ ] 2.2 Compensating trim (same commit): remove ALL THREE `<thinking>` scaffolding blocks —
+  measured 201 B (line 274, `### 1.`), 135 B (line 429, `### 2.`), 121 B (line 845,
+  `### 5.`), 457 B total against the ~340 B pointer (~117 B net negative). These carry no
+  load-bearing conditions.
 - [ ] 2.3 Verify `python3 scripts/lint-skill-body-budget.py --base origin/main` → OK
   (plan ceiling 120000; was 119986 at plan time).
 
@@ -32,6 +33,8 @@ issue: 9398
 - [ ] 3.1 Insert `### 4.12. Scope Check Halt (Always)` after §4.11, before `### 5.`,
   following the 4.11 five-step shape (Detect → Locate `grep -q '^## Scope Check'` →
   Mechanical verify → Adequacy read → Pass-through), ≤ ~3000 B (deepen-plan headroom 3414 B).
+  Include the `SOLEUR_RULE_APPLIED rule=plan-scope-check-blocks-unmapped-asks` telemetry echo
+  on every fire (halt-only; none on pass), matching the 4.5/4.6/4.8 convention.
 - [ ] 3.2 Verify `python3 scripts/lint-skill-body-budget.py --base origin/main` → still OK.
 
 ## Phase 4: Templates

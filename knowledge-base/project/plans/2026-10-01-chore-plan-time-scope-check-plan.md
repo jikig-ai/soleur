@@ -29,6 +29,36 @@ and deepened — the catch cost an 11-seat review, several fix rounds, and about
 cycles. The defect class is "plan invents scope" + "plan outgrows the brief"; both are
 detectable at plan time for near-zero cost.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Sections enhanced:** Observability (added — gate applies per deepen-plan §4.7's
+not-pure-docs detect), Implementation Phases (telemetry parity, measured trim bytes),
+Research Insights.
+**Research agents used:** none spawnable — this run is a one-shot planning subagent with no
+Task tool; all deepen fan-outs (skill matching, learnings, per-section research, review
+agents) were performed inline by the same agent and are disclosed rather than claimed. The
+reviewer lenses were applied as a self-review pass, not as independent seats.
+
+### Key Improvements (deepen-pass findings)
+
+1. **`## Observability` is REQUIRED, not skippable** — deepen-plan §4.7's pure-docs
+   exemption is `\.md$` *outside* `plugins/*/skills/`; this plan's file list sits inside
+   that path, so the gate applies and the plan would HALT without the section. Added below.
+2. **§4.12 halt must emit `SOLEUR_RULE_APPLIED` telemetry on fire** — sibling halts
+   (4.5/4.6/4.8) all emit for the weekly aggregator; the spec now prescribes it.
+3. **`<thinking>`-block trims measured, not estimated** — the three blocks at plan/SKILL.md
+   lines 274/429/845 are 201/135/121 bytes (457 B total), comfortably covering the ~340 B
+   pointer with ~117 B net negative.
+
+### New Considerations Discovered
+
+- The deepen quality-check list (§9) verified: all cited issue/PR numbers resolve to
+  artifacts matching their cited semantic roles; no rule-IDs are cited; the
+  negative-mechanism claim survives a sweep across ALL skills + AGENTS.rules.md (zero hits);
+  `lint-guard-contract.py` passes this plan (1 guard entry, matrix ≥3 rows); the PAT sweep
+  (§4.8) is clean; no sensitive path is touched (§4.6 scope-out not required).
+
 ## Problem Statement / Motivation
 
 The plan skill has gates that check mechanisms against properties (Phase 0.6b) and gates that
@@ -263,11 +293,11 @@ Check` (ask mapping, item provenance, split assessment) into the plan; an unmapp
 unjustified `inferred` item blocks the plan.
 ```
 
-~340 B added. Compensating trim (≥ ~330 B) in the SAME file and SAME commit: remove the
-`<thinking>` scaffolding blocks at `### 2.` (~130 B: "Think like a product manager…") and
-`### 5.` (~105 B: "Apply best practices…"), and the `### 1.` block (~215 B) if more is
-needed. These carry no load-bearing conditions (the byte-ceiling learning warns only about
-compressing conditional prose). Verify with
+~340 B added. Compensating trim (≥ ~330 B) in the SAME file and SAME commit: remove all
+three `<thinking>` scaffolding blocks — measured 201 B (line 274, `### 1.`),
+135 B (line 429, `### 2.`), 121 B (line 845, `### 5.`) = **457 B total**, leaving ~117 B
+net negative headroom after the pointer. These carry no load-bearing conditions (the
+byte-ceiling learning warns only about compressing conditional prose). Verify with
 `python3 scripts/lint-skill-body-budget.py --base origin/main` → must stay OK.
 
 ### Phase 3: deepen-plan/SKILL.md `### 4.12. Scope Check Halt (Always)`
@@ -278,7 +308,11 @@ the 4.11 five-step shape, ≤ ~3000 B to respect the 3414 B headroom: Detect (al
 no `unmapped`/empty-justification `inferred` row, `### Split Assessment` + `Recommendation:`
 line present) → Adequacy read (justifications substantive; counts derived from the plan's
 file lists; quotes verbatim not paraphrase) → Pass-through. HALT text points back at
-`soleur:plan` Phase 2.4 / `references/plan-scope-check.md`.
+`soleur:plan` Phase 2.4 / `references/plan-scope-check.md`. On every fire (missing section
+OR rejected row) emit the sibling-halt telemetry line so the weekly aggregator records the
+enforcement event:
+`echo 'SOLEUR_RULE_APPLIED rule=plan-scope-check-blocks-unmapped-asks note=...'` — a
+halt-only line, none on pass, matching 4.5/4.6/4.8 convention.
 
 ### Phase 4: plan-issue-templates.md schema ×3
 
@@ -356,6 +390,36 @@ One open `code-review` issue touches the planned files: #4133 (schema parity tes
 already exists on this branch; the issue is stale-open for the Observability schema, a
 different section. This plan's own parity test follows the #4133 precedent for the new
 `## Scope Check` schema; #4133 remains open for its owner to confirm/close.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: contract test plan-scope-check.test.ts — the drift pin on the gate contract
+  cadence: every scripts/test-all.sh run (pre-commit + CI)
+  alert_target: red suite on the PR that breaks the contract
+  configured_in: plugins/soleur/test/plan-scope-check.test.ts
+
+error_reporting:
+  destination: session transcript — deepen-plan §4.12 HALT text plus a SOLEUR_RULE_APPLIED telemetry line on fire
+  fail_loud: deepen-plan refuses to proceed past §4.12 on a non-compliant plan; the halt is the error signal
+
+failure_modes:
+  - mode: gate spec / pointer / halt prose deleted or renamed
+    detection: plan-scope-check.test.ts red (heading + token-set parity across surfaces)
+    alert_route: CI failure on the PR that removes it
+  - mode: a plan ships without ## Scope Check or with an unjustified unmapped row
+    detection: deepen-plan §4.12 HALT before any fan-out spend
+    alert_route: the halted session transcript (operator-visible)
+
+logs:
+  where: CI log + session transcript (SOLEUR_RULE_APPLIED line on halt fire)
+  retention: CI artifact retention / session log lifetime
+
+discoverability_test:
+  command: grep -c '^## Scope Check$' plugins/soleur/skills/plan/references/plan-issue-templates.md
+  expected_output: "3"
+```
 
 ## Guard Contract
 
