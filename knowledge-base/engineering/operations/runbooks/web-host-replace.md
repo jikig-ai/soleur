@@ -1,6 +1,6 @@
 # Runbook — replacing a web host
 
-**Status:** current as of 2026-09-24 (#6969, ADR-148; rotated-credential re-seed #8705).
+**Status:** current as of 2026-10-01 (#6969, ADR-148; rotated-credential re-seed #8705; fresh-boot LUKS reading, ADR-263).
 **Applies to:** any `hcloud_server.web[<key>]` that is **already in state** — except `web-1`,
 which this path refuses (see below).
 
@@ -22,6 +22,12 @@ there is expected. A dispatch made *before* the rotation merges is NOT refused a
 credential into the new host. web-1 is excluded from this path; its copy is re-delivered by the
 SSH-stage installers of the rotation's own apply.
 
+**The fresh-host Doppler token is the exception to "rotate, then replace".** The read token a
+fresh host uses to unlock its `/workspaces` volume (`doppler_service_token.workspaces_luks_fresh_boot`,
+ADR-263 D4) is never co-rotated with web-1's `WORKSPACES_LUKS_BOOT_TOKEN`, and it is baked into the
+host's `user_data`, which only a new host picks up. Its rotation **is** a host replacement: rotating it
+without replacing the host leaves that host unable to re-open its volume on its next reboot.
+
 Dispatching the wrong one is safe by construction — each gate refuses the other's plan shape,
 and the `confirm` tokens are deliberately different — but it wastes a run.
 
@@ -41,8 +47,9 @@ not merely higher-stakes; it is topologically different:
   be left un-run against a dead IP.
 - Decisively: `/mnt/data` pins **by-id** to `hcloud_volume.workspaces[key]`, which on web-1 is
   the **plaintext** volume the 2026-07-23 LUKS cutover **superseded**. Nothing on a fresh boot
-  opens the LUKS mapper (crypttab keyfile is `none`; the guest-side unlock path is deferred to
-  **#6931**). A rebuilt web-1 would boot healthy and serve every user worktree **rolled back
+  opens the LUKS mapper on the template path web-1 was built from (crypttab keyfile is `none`;
+  the fresh-boot guest-side LUKS path that **#6931** delivered for fresh hosts, ADR-263, does not
+  change web-1's by-id pin to that volume). A rebuilt web-1 would boot healthy and serve every user worktree **rolled back
   to 2026-07-23**, while the live LUKS volume sat attached and unopened.
 
 The last one is a property of cloud-init, not of the terraform plan, so no gate arm can
@@ -50,17 +57,18 @@ observe it. **There is no automated route to replace web-1 today**, and there wa
 this path either.
 
 <!-- lint-infra-ignore start: the blockquote below states the PRECONDITIONS a future change
-     must satisfy before the web-1 refusal can be lifted (land #6931, add gate arms, rehearse
-     off-prod). It prescribes no step for today's operator — the operative instruction in this
+     must satisfy before the web-1 refusal can be lifted (add gate arms, rehearse
+     off-prod; #6931 is done). It prescribes no step for today's operator — the operative instruction in this
      runbook is a single `gh workflow run` dispatch. Naming a rehearsal as a prerequisite for
      someone else's future PR is not a human-run infra step in this one. -->
 > **Corrected 2026-07-27.** This section previously named an *"ambiguous `scsi-0HC_Volume_*`
 > mount glob"* as decisive and gave *"ADR-119 §Sequencing's volume-ID mount pin"* as the
 > prerequisite. Both were false — #6604 pinned the mount by-id before this path existed, and
 > ADR-119 has no §Sequencing — which made the refusal read as already relaxable. If you are
-> here to lift the refusal: the prerequisite is **#6931**, plus key-conditional gate arms for
-> `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, plus a rehearsal on
-> a non-production host. Tracker **#6964**; see ADR-148 §Alternatives item 4.
+> here to lift the refusal: **#6931 is done** (the fresh-boot guest-side LUKS path, ADR-263), so
+> the remaining blockers are key-conditional gate arms for
+> `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, a rehearsal on
+> a non-production host, and **#6964**; see ADR-148 §Alternatives item 4.
 <!-- lint-infra-ignore end -->
 
 ## The procedure
@@ -161,6 +169,29 @@ boot-trail step polls Sentry for the host's own stage breadcrumbs and:
 
 If it reports a dark boot: `runcmd` is once-per-instance, so the host **cannot be repaired by
 a reboot**. Do not put it into service — replace it again once the cause is fixed.
+
+### web-2 boot failed — how to read it
+
+On a host born with the guest-side LUKS path (ADR-263), the volume provisioner reports every step
+off-host, so the cause is readable without a login. Start from the readiness row, then the stage:
+
+- **Readiness row.** `bash scripts/betterstack-query.sh "host:soleur-web-2 SOLEUR_FRESH_BOOT_READY"`
+  returns the host's `SOLEUR_FRESH_BOOT_READY` row. Read three fields: `luks` (`1` only when the
+  `/mnt/data` source is the `/dev/mapper/workspaces` mapper; `0` is a readiness reason, so
+  `ready=0 reason=luks` means the volume step failed), `luks_arm` (`formatted` on the first boot of
+  a born-raw volume; `opened` or `noop` on a later boot) and `escrow` (`ok` once the LUKS header
+  copy is off-host; `missing` does not stop the boot but blocks the soak marker and is retried on
+  every boot).
+- **Sentry stage.** The provisioner emits one event per step with the stage tag
+  `workspaces_luks_provision_<arm>`, where `<arm>` is `config`, `device`, `discriminate`, `format`,
+  `open`, `escrow` or `wire`. A fatal on `discriminate` means the device carried a filesystem or
+  signature (a volume that was not born raw, or the wrong device) and **nothing was written**; a fatal
+  on `device` means the volume attachment never showed up inside the wait; `config` means the boot
+  env files were missing or malformed; `format` and `open` are Doppler key-fetch or `cryptsetup`
+  failures.
+- **What to do.** Do not retry blindly and do not put the host into service. Fix the named cause,
+  then replace the host again; the workspaces volume is never in the destroy set, so it re-attaches
+  to the new host.
 
 ## If the apply fails partway
 

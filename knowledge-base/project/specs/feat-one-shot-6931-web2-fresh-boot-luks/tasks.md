@@ -56,7 +56,7 @@ Write each phase's RED tests first (`cq-write-failing-tests-before`). Lane: cros
 
 ## Phase 6: Records and wording
 
-- [ ] 6.1 ADR-262 (via `soleur:architecture`) carrying the supersession, one-line pointers in ADR-143 and ADR-119; re-verify the ordinal across every pushed branch AND origin/main
+- [ ] 6.1 ADR-263 (via `soleur:architecture`) carrying the supersession, one-line pointers in ADR-143 and ADR-119; re-verify the ordinal across every pushed branch AND origin/main
 - [ ] 6.2 `model.c4` prose (workspacesVolume, hetzner, doppler edge) + c4 tests
 - [ ] 6.3 `workspaces-luks.tf` / `server.tf` comments; stale-citation sweep ("ADR-141 D3", "ADR-142 D3"); reopen.service header
 - [ ] 6.4 `web-host-replace.md` + replace-gate text; `nfr-register.md`; 2026-07-24 plan AC5 superseded marker

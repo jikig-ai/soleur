@@ -30,9 +30,13 @@ trap 'rm -rf "$TMP"' EXIT
 
 passes=0
 fails=0
-pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
+# Every assertion name that ran, one per line. The HARNESS row at the end asserts the
+# Guard 2 cases are in this set, so deleting one of them reds the suite instead of
+# silently shrinking it (the count floor alone cannot tell WHICH case went missing).
+_names=""
+pass() { passes=$((passes + 1)); _names+="$1"$'\n'; printf '  ok   %s\n' "$1"; }
 fail() {
-  fails=$((fails + 1))
+  fails=$((fails + 1)); _names+="$1"$'\n'
   printf '  FAIL %s\n' "$1"; printf '       rc=%s\n' "${2:-?}"; printf '       out=%s\n' "${3:-}"
 }
 
@@ -78,14 +82,51 @@ rc_update() {
     "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)" "$3" "$4"
 }
 
+# rc_volume <key> <actions-json> <format-json|ABSENT> [extra-after-json]
+#
+# A keyed hcloud_volume.workspaces entry in the shape the provider ACTUALLY serialises
+# (learning 2026-09-14-the-birth-gate-refused-the-real-birth-...: `rc_entry`'s `after: {}`
+# with no `after_unknown` is a claim about the producer nobody had checked).
+#
+# SHAPE SOURCE. Captured from an offline `terraform plan` + `terraform show -json` on a
+# scratch root mirroring `hcloud_volume.workspaces` (hcloud provider 1.63.0, a 64-character
+# dummy token — the provider validates length, not the token; nothing was applied and no
+# network call was made), then rebuilt here with synthesized values only
+# (cq-test-fixtures-synthesized-only). Two facts from that capture drive the gate:
+#   - a volume with NO `format` in HCL still serialises `after.format = null` (the key is
+#     PRESENT and null), so "no format" must mean null OR absent, never "key missing";
+#   - API-assigned attributes appear ONLY as `true` leaves in `after_unknown`
+#     (`id`, `linux_device`, `server_id`), never in `after`.
+# <format-json> is `null`, a JSON string such as `"ext4"`, or the literal ABSENT (key
+# omitted from `after`). The optional 4th arg is a JSON object merged into `after`.
+rc_volume() {
+  local key="$1" actions="$2" fmt="$3" extra="${4:-}"
+  [[ -n "$extra" ]] || extra='{}'
+  jq -cn --arg k "$key" --argjson actions "$actions" --arg fmt "$fmt" --argjson extra "$extra" '
+    { address: "hcloud_volume.workspaces[\"\($k)\"]",
+      mode: "managed", type: "hcloud_volume", name: "workspaces", index: $k,
+      provider_name: "registry.terraform.io/hetznercloud/hcloud",
+      change: {
+        actions: $actions,
+        before: (if ($actions | index("create")) then null else {} end),
+        after: ({ automount: null, delete_protection: false,
+                  labels: { app: "soleur-web-platform" },
+                  location: "hel1", name: "soleur-web-platform-data-\($k)", size: 20 }
+                + (if $fmt == "ABSENT" then {} else { format: ($fmt | fromjson) } end)
+                + $extra),
+        after_unknown: { id: true, labels: {}, linux_device: true, server_id: true },
+        before_sensitive: false, after_sensitive: { labels: {} } } }'
+}
+
 # The canonical happy plan: exactly one web-2 server create, plus its non-server
 # fan-out (network attachment, volume, volume attachment) which are creates too but
-# are NOT hcloud_server and so do not count as host births.
+# are NOT hcloud_server and so do not count as host births. The volume is born RAW
+# (`format: null`) — Guard 2 / ADR-143 R3 D2: a born-ext4 volume is refused.
 happy_changes() {
   printf '[%s,%s,%s,%s]' \
     "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
     "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
-    "$(rc_entry 'hcloud_volume.workspaces["web-2"]' 'hcloud_volume' '["create"]')" \
+    "$(rc_volume web-2 '["create"]' null)" \
     "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')"
 }
 
@@ -119,8 +160,11 @@ check "the PASS line names the host it authorized" 0 'web-2' "$TMP/happy.json" "
 # It was caught by review, not by this suite, and the reason is instructive: a suite built
 # entirely from "does the gate refuse bad plans?" cases cannot discover a missing
 # requirement. The question that finds it is "what is the WORST plan the gate ACCEPTS?"
-mk_plan "$TMP/no-nic.json" "$(printf '[%s]' \
-  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')")"
+# The raw volume rides along so that the REQUIREMENT arm below stays the SOLE guard for this
+# fixture (Guard 2 added a raw-volume requirement; without the volume it would be layered).
+mk_plan "$TMP/no-nic.json" "$(printf '[%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null)")"
 check "the server with NO private NIC => ABORT (#6416)" 1 "hcloud_server_network" "$TMP/no-nic.json" "web-2"
 
 # The volume ATTACHMENT is the same class, and its absence is the data-loss shape rather
@@ -217,9 +261,10 @@ fi
 # allow-set at all, so a nested rule-array shrinkage cannot reach this path without
 # first tripping this arm. Refusing the whole resource is strictly stronger than
 # counting its blocks, and it does not drift when the provider schema changes.
-mk_plan "$TMP/out-of-scope.json" "$(printf '[%s,%s,%s,%s]' \
+mk_plan "$TMP/out-of-scope.json" "$(printf '[%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
   "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null)" \
   "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_update 'cloudflare_ruleset.seo_page_redirects' 'cloudflare_ruleset' \
       '{"rules":[{"a":1},{"b":2}]}' '{"rules":[{"a":1}]}')")"
@@ -239,7 +284,7 @@ check "a DIFFERENT host's volume riding the birth => ABORT" 1 "out-of-scope" "$T
 mk_plan "$TMP/full-fanout.json" "$(printf '[%s,%s,%s,%s,%s,%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
   "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
-  "$(rc_entry 'hcloud_volume.workspaces["web-2"]' 'hcloud_volume' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null)" \
   "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_update 'hcloud_firewall_attachment.web' 'hcloud_firewall_attachment' '{"server_ids":[1]}' '{"server_ids":[1,2]}')" \
   "$(rc_entry 'betteruptime_heartbeat.web_zot_consumer["web-2"]' 'betteruptime_heartbeat' '["create"]')" \
@@ -251,9 +296,10 @@ check "the FULL ten-address birth fan-out => PASS" 0 "PASS" "$TMP/full-fanout.js
 
 # A `no-op` refresh entry is not a change and must not trip the out-of-scope arm —
 # terraform emits these routinely for transitively-pulled resources.
-mk_plan "$TMP/noop.json" "$(printf '[%s,%s,%s,%s]' \
+mk_plan "$TMP/noop.json" "$(printf '[%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
   "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null)" \
   "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'cloudflare_record.app' 'cloudflare_record' '["no-op"]')")"
 check "a no-op refresh of an out-of-scope resource => PASS" 0 "PASS" "$TMP/noop.json" "web-2"
@@ -262,12 +308,150 @@ check "a no-op refresh of an out-of-scope resource => PASS" 0 "PASS" "$TMP/noop.
 # app.soleur.ai keeps resolving to the dead host. On a web-2 birth it plans as a no-op.
 # Both shapes must PASS — a gate that refused the update would block the only birth that
 # actually needs it.
-mk_plan "$TMP/dns-update.json" "$(printf '[%s,%s,%s,%s]' \
+mk_plan "$TMP/dns-update.json" "$(printf '[%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
   "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null)" \
   "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_update 'cloudflare_record.app' 'cloudflare_record' '{"content":"1.2.3.4"}' '{"content":"5.6.7.8"}')")"
 check "the apex A record updating alongside the birth => PASS" 0 "PASS" "$TMP/dns-update.json" "web-2"
+
+# ── GUARD 2 (#6931): the born volume is RAW, and web-1 is refused by name ─────────
+#
+# Two facts the arms above cannot express.
+#
+# (a) REQUIREMENT. The guest-side fresh-boot LUKS path (ADR-143 R3 D2) treats a device whose
+#     blkid reports ext4 as a FATAL wrong plan and never reformats it. Hetzner formats at
+#     create when `format` is set, so a volume born with `format = "ext4"` would reach the
+#     provisioner as ext4 and the format arm would be dead code behind a green merge. The
+#     host being born must therefore get a keyed hcloud_volume.workspaces[<key>] whose
+#     PLANNED `after` carries no format. It reads the planned state, so it covers both a
+#     create (born raw) and the documented partial-apply retry (volume already exists and
+#     re-plans as a no-op): a pre-existing RAW volume passes, a pre-existing ext4 one does
+#     not. `ignore_changes = [format]` on the live volume is a different fact (an existing
+#     volume must not be replaced by the merge) and is pinned by its own test, not here.
+#
+# (b) REFUSAL. `hcloud_volume_attachment.workspaces_luks` is hard-bound to web-1's server id
+#     and sits OUTSIDE this dispatch's birth fan-out (#6964). A web-1 birth through this job
+#     would hand back a host with no LUKS attachment. Refusing web-1 by name is the cheapest
+#     enforceable invariant and mirrors web-host-replace's by-name refusal (DC-3 narrowing).
+#
+# Every fixture volume below goes through rc_volume, which reproduces the provider's real
+# serialisation (explicit `format: null`, API-assigned ids only in `after_unknown`).
+printf '\nguard 2: raw-volume requirement and web-1 refusal\n'
+
+# Row 1: re-add `format = "ext4"` to the web-2 volume => RED, with a named reason.
+mk_plan "$TMP/g2-ext4.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' '"ext4"')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 1: a volume born with format=ext4 => ABORT" 1 "BORN-FORMATTED VOLUME" "$TMP/g2-ext4.json" "web-2"
+check "G2 row 1: the ABORT names the volume address and the offending value" 1 'hcloud_volume.workspaces["web-2"]' "$TMP/g2-ext4.json" "web-2"
+
+# Any non-null format is refused, not only ext4: the provisioner decides on blkid, so xfs is
+# the same wrong plan. An EMPTY string is not null either (not provably "no format").
+mk_plan "$TMP/g2-xfs.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' '"xfs"')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 1b: format=xfs is refused too (any non-null format)" 1 "BORN-FORMATTED VOLUME" "$TMP/g2-xfs.json" "web-2"
+mk_plan "$TMP/g2-empty-fmt.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' '""')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 1c: format=\"\" is refused (not provably unset)" 1 "BORN-FORMATTED VOLUME" "$TMP/g2-empty-fmt.json" "web-2"
+
+# A format that is UNKNOWN at plan time (after_unknown.format=true) cannot be proven absent.
+mk_plan "$TMP/g2-unknown-fmt.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' ABSENT | jq -c '.change.after_unknown.format = true')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 1d: a format unknown at plan time => ABORT (cannot prove raw)" 1 "BORN-FORMATTED VOLUME" "$TMP/g2-unknown-fmt.json" "web-2"
+
+# The volume entry MISSING from the plan: the -target set dropped it, so nothing proves it raw.
+mk_plan "$TMP/g2-no-volume.json" "$(printf '[%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 1e: no keyed volume entry in the plan => ABORT" 1 "hcloud_volume.workspaces" "$TMP/g2-no-volume.json" "web-2"
+
+# Partial-apply retry (the documented recovery path): the volume already exists and
+# re-plans as a no-op. A raw one passes; an ext4 one is the live-volume shape and is refused.
+mk_plan "$TMP/g2-retry-raw.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["no-op"]' null)" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 retry: a pre-existing RAW volume (no-op) alongside the birth => PASS" 0 "PASS" "$TMP/g2-retry-raw.json" "web-2"
+mk_plan "$TMP/g2-retry-ext4.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["no-op"]' '"ext4"')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 retry: a pre-existing ext4 volume (no-op) would reach the provisioner => ABORT" 1 "BORN-FORMATTED VOLUME" "$TMP/g2-retry-ext4.json" "web-2"
+
+# Row 2: remove the volume attachment from the birth plan => RED. (Pre-existing arm, now
+# pinned with a COMPLIANT raw volume present, so the refusal can only be the attachment.)
+mk_plan "$TMP/g2-no-attach.json" "$(printf '[%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null)")"
+check "G2 row 2: raw volume present but NO volume attachment => ABORT" 1 "hcloud_volume_attachment" "$TMP/g2-no-attach.json" "web-2"
+
+# Row 3: request web-1 while EVERY other arm is satisfied => RED with a named refusal. The
+# fixture is a perfectly compliant web-1 birth, so the only thing left to object is the name.
+mk_plan "$TMP/g2-web1.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-1"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-1"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-1 '["create"]' null)" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-1"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 3: a fully-compliant web-1 birth request => ABORT (named refusal)" 1 "REFUSES web-1 by name" "$TMP/g2-web1.json" "web-1"
+check "G2 row 3: the refusal names the LUKS attachment it cannot cover" 1 "workspaces_luks" "$TMP/g2-web1.json" "web-1"
+# The refusal must not depend on the plan's contents: an unrelated plan still hits the name.
+check "G2 row 3b: the web-1 refusal holds against the happy web-2 plan too" 1 "REFUSES web-1 by name" "$TMP/happy.json" "web-1"
+
+# Row 4: a SECOND created host after a compliant first => RED (cardinality), with the first
+# host fully compliant including its raw volume so the second is the only objection.
+mk_plan "$TMP/g2-two-hosts.json" "$(printf '[%s,%s,%s,%s,%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null)" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
+  "$(rc_entry 'hcloud_server.web["web-3"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-3"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-3 '["create"]' null)" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-3"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 4: a second created host after a compliant first => ABORT" 1 "exactly 1" "$TMP/g2-two-hosts.json" "web-2"
+
+# Row 5: zero resource_changes => RED, not a vacuous pass. Both the empty array and a
+# document with the key missing entirely: a gate that scores zero-of-everything must refuse.
+mk_plan "$TMP/g2-empty.json" '[]'
+check "G2 row 5: an EMPTY resource_changes array => ABORT (not a vacuous pass)" 1 "ABORT" "$TMP/g2-empty.json" "web-2"
+printf '{"format_version":"1.2"}\n' > "$TMP/g2-nokey.json"
+check "G2 row 5b: a plan with no resource_changes key => ABORT" 1 "ABORT" "$TMP/g2-nokey.json" "web-2"
+
+# Row 7: MUST-PASS. A web-2 birth whose volume carries extra NON-format attributes
+# (a different size, delete_protection on, automount off, extra labels — including a label
+# literally named "format", which a text-grep implementation of the arm would trip on).
+# Without this control the arm could be "any non-trivial volume attribute is refused", which
+# is an outage dressed as a safety feature.
+mk_plan "$TMP/g2-extra-attrs.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null '{"size":200,"delete_protection":true,"automount":false,"labels":{"app":"soleur-web-platform","format":"ext4","tier":"fresh-boot-luks"}}')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 7: MUST-PASS web-2 birth, raw volume with extra non-format attributes => PASS" 0 "PASS" "$TMP/g2-extra-attrs.json" "web-2"
+# And with the `format` key OMITTED from `after` altogether (the other "no format" shape).
+mk_plan "$TMP/g2-absent-fmt.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' ABSENT)" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 7b: MUST-PASS web-2 birth, volume with the format key omitted => PASS" 0 "PASS" "$TMP/g2-absent-fmt.json" "web-2"
 
 # ── REJECT: unparseable input (fail-closed) ───────────────────────────────────────
 # "I could not check" must never read as "it is fine". This gate authorizes a
@@ -457,6 +641,45 @@ mutate_layered "reboot guard" 's/if \[\[ "\$reboot_updates" -ne 0 \]\]; then/if 
 
 
 
+# GUARD 2 MUTATIONS (#6931). Both arms are SOLE guards for their fixtures: the web-1 plan
+# satisfies every other arm, and the ext4 volume plan is otherwise a perfect birth, so
+# neutering the arm lets the bad plan through.
+mutate_and_check "G2 raw-volume guard" 's/if \[\[ "\$vol_verdict" != "raw" \]\]; then/if false; then/' \
+  "$TMP/g2-ext4.json" "web-2"
+mutate_and_check "G2 web-1 refusal" 's/if \[\[ "\$host_key" == "\$_WEB_HOST_BIRTH_LUKS_PINNED_KEY" \]\]; then/if false; then/' \
+  "$TMP/g2-web1.json" "web-1"
+# The unknown-format branch: a computed `format` cannot be proven absent. Neuter that branch
+# alone (the value branch still sees `format` absent from `after`) and the plan sails through.
+mutate_and_check "G2 format-unknown branch" 's/elif ((\$c.after_unknown \/\/ {})/elif false and ((\$c.after_unknown \/\/ {})/' \
+  "$TMP/g2-unknown-fmt.json" "web-2"
+# The value branch: key present with a non-null value. Neutered, the ext4 plan reads raw.
+mutate_and_check "G2 format-value branch" 's/elif (\$c.after | has("format")) and/elif false and (\$c.after | has("format")) and/' \
+  "$TMP/g2-ext4.json" "web-2"
+
+# HARNESS ROW (Guard 2 row 6): the suite asserts its own CASE SET, by name. The numeric floor
+# below only notices that FEWER assertions ran; it cannot tell that the web-1 refusal case
+# was the one deleted while a new unrelated case kept the count up. Self-contained (bash
+# builtins and this suite's own `_names` registry only), for the same reason the floor is.
+_missing=""
+for _req in \
+  "G2 row 1: a volume born with format=ext4 => ABORT" \
+  "G2 row 2: raw volume present but NO volume attachment => ABORT" \
+  "G2 row 3: a fully-compliant web-1 birth request => ABORT (named refusal)" \
+  "G2 row 4: a second created host after a compliant first => ABORT" \
+  "G2 row 5: an EMPTY resource_changes array => ABORT (not a vacuous pass)" \
+  "G2 row 7: MUST-PASS web-2 birth, raw volume with extra non-format attributes => PASS" \
+  "G2 raw-volume guard (arm is load-bearing — neutering it lets the bad plan through)" \
+  "G2 web-1 refusal (arm is load-bearing — neutering it lets the bad plan through)"; do
+  if ! grep -qxF -- "$_req" <<<"$_names"; then
+    _missing+="${_req}; "
+  fi
+done
+if [[ -n "$_missing" ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL HARNESS: required Guard 2 case(s) never ran: %s\n' "$_missing"
+else
+  printf '  ok   harness: all required Guard 2 cases ran (case set asserted by name)\n'
+fi
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
@@ -475,11 +698,11 @@ mutate_layered "reboot guard" 's/if \[\[ "\$reboot_updates" -ne 0 \]\]; then/if 
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 31 ]]; then
+if [[ "$_ran" -lt 55 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 31. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 31)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

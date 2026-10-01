@@ -254,6 +254,8 @@ web-2-recreate path**, and `moved` wants a singleton source.
 never served (fact 5), and its volume is empty. Encrypting a volume scheduled for deletion is waste.
 **This is a recorded deviation from #6588's "every `var.web_hosts` member" AC.**
 
+> **Reversed - 2026-10-01 (#6931):** a fresh web host now MUST get the reopen unit and web-2's volume is LUKS at boot (true after the live conversion); see [ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md).
+
 ### (e) The fail-closed mount gate reaches web-1 via the CUTOVER channel, not the bake
 
 **Supersedes the original ruling.** It held that LUKS goes in the baked `soleur-host-bootstrap.sh`

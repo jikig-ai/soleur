@@ -119,7 +119,7 @@ removed with the dispatch sweep); Phase 0 re-verifies before relying on either r
 | Per-host generalization of the Better Stack "host timer dark" alert | detect a dead probe on web-2 | CUT at review: the verify leg already fails on a stale or missing row (it must, to decide the marker), and the existing absence alert covers the readiness row. |
 | A second follow-through script re-implementing the Better Stack query | closure after soak | SIMPLIFIED at review: the follow-through script sources the same query helper the verify leg uses. |
 | Separate `workspaces-luks-canonical-lines.test.sh` | byte parity with the web-1 installer | SIMPLIFIED at review: a section of `fresh-boot-parity.test.sh`, not a new file. |
-| Addenda to ADR-143 and ADR-119 as separate edits | supersede R3 and section (d) | SIMPLIFIED at review: ADR-262 carries the supersession; each older ADR gets a one-line pointer. |
+| Addenda to ADR-143 and ADR-119 as separate edits | supersede R3 and section (d) | SIMPLIFIED at review: ADR-263 carries the supersession; each older ADR gets a one-line pointer. |
 
 ### Institutional learnings that bind this plan
 
@@ -199,7 +199,7 @@ line plus a test that pins the absence of `create_before_destroy`). Scope, state
 isolates the passphrase from the CONTAINER env file, not from a holder of this token; the full-`prd` `doppler_token` is
 already in the same user_data map, so the token's marginal exposure is the LUKS passphrase and the escrow credentials.
 Because the SAME `WORKSPACES_LUKS_KEY` unlocks web-2 and web-1's sole-copy volume, a leak from web-2 is a leak of web-1's
-passphrase; ADR-262 records this shared-passphrase residual (it also constrains any future `luksChangeKey` on web-1).
+passphrase; ADR-263 records this shared-passphrase residual (it also constrains any future `luksChangeKey` on web-1).
 The CTO preferred post-boot delivery over the bastion; this plan deviates for FIRST delivery: a rebirth rotates the host
 SSH key and the web-2 pin (`web-2-ssh-host-key.pub`) is a committed file re-captured by a follow-up PR, so a post-boot
 step cannot complete inside one dispatch. The CTO's condition for user_data delivery (a container cannot reach the
@@ -242,14 +242,15 @@ An architectural decision is made (topology ruling, a new credential path into u
 
 ### ADR
 
-- **New ADR-262** (provisional ordinal; origin/main max is 261; `soleur:ship`'s ADR-ordinal gate re-verifies, and a
+- **New ADR-263** (renumbered from the provisional 262, which the unmerged branch `feat-one-shot-9323-path-gate-mutation-batteries`
+  holds; origin/main max is 261; `soleur:ship`'s ADR-ordinal gate re-verifies, and a
   renumber must sweep this plan, tasks.md and any AC naming the ordinal): "Guest-side fresh-boot LUKS for web hosts:
   one mechanism, two Terraform addresses". Status `adopting` (flips to `accepted` after the live conversion and first
   soak). Records D1-D6, the raw-at-birth exception, and the rejected alternatives (T2 now, empty-ext4 reformat,
   post-boot token delivery, a token shared with web-1's rotation procedure).
-- ADR-262 carries the supersession: it marks ADR-143 R3's "DEFER" resolved, replaces "AC5 reframed: LUKS-intent declared in
+- ADR-263 carries the supersession: it marks ADR-143 R3's "DEFER" resolved, replaces "AC5 reframed: LUKS-intent declared in
   HCL" with "LUKS-backed at boot", and reverses ADR-119 section (d) ("a fresh host must not get these units"). ADR-143 and
-  ADR-119 each get a ONE-LINE pointer to it, not a separate addendum. ADR-262 also records: the shared-passphrase residual
+  ADR-119 each get a ONE-LINE pointer to it, not a separate addendum. ADR-263 also records: the shared-passphrase residual
   (one `WORKSPACES_LUKS_KEY` unlocks web-1 and web-2), that web-1 keeps its SSH installer until the de-pet (two delivery
   paths, one byte-parity test), and the single-use rebirth workflow.
 - Author these with `soleur:architecture`.
@@ -500,7 +501,7 @@ the step refuses xtrace; the token never appears in argv.
 
 ### Phase 6 — Records and wording (item 6)
 
-ADR-262 with one-line pointers in ADR-143 and ADR-119 (ADR section); `model.c4` prose; `workspaces-luks.tf` and `server.tf` comments; the
+ADR-263 with one-line pointers in ADR-143 and ADR-119 (ADR section); `model.c4` prose; `workspaces-luks.tf` and `server.tf` comments; the
 stale-citation sweep (`grep -rn "ADR-141 D3\|ADR-142 D3"` over infra, tests and `model.c4`); the
 `workspaces-luks-reopen.service` header; `web-host-replace.md` and `web-host-replace-gate.sh` unblock-condition text
 (#6931 done; remaining: key-conditional arms, a rehearsal, #6964); one-line pointers in `nfr-register.md` (Compute row) and
@@ -522,7 +523,7 @@ heals, rather than an orphan volume whose name collides with the next create), t
 destroy the server and attachment and run `web-host-create` for web-2 with the new image tag; every step idempotent, the
 volume id re-asserted at each. Because `prevent_destroy` refuses destroy and `-replace`, this follows the
 `workspaces-plaintext-forget.yml` precedent, and the workflow file is deleted after use (its existence is recorded in
-ADR-262). (4) Boot: the provisioner takes the `format` arm and `SOLEUR_FRESH_BOOT_READY` reports `luks=1 luks_arm=formatted`.
+ADR-263). (4) Boot: the provisioner takes the `format` arm and `SOLEUR_FRESH_BOOT_READY` reports `luks=1 luks_arm=formatted`.
 (5) The daily verify leg goes green and writes the marker. (6) Reboot proof: an hcloud reboot action issued by the workflow
 (no SSH) must produce a row with `luks_arm=opened` or `noop` and a new `boot_id`. The replace-with-populated-volume proof
 (`web-host-replace` on a populated volume) stays blocked on its own unblock list (key-conditional arms, rehearsal, #6964)
@@ -772,7 +773,7 @@ Non-functional:
 Quality gates:
 
 - [ ] The user-impact review agent runs on the diff (threshold `single-user incident`); CPO sign-off is recorded on the plan.
-- [ ] ADR-262 is authored and its ordinal re-verified against every pushed branch AND `origin/main` immediately before merge.
+- [ ] ADR-263 is authored and its ordinal re-verified against every pushed branch AND `origin/main` immediately before merge.
 
 ### Post-merge (gated dispatches; each runs from a workflow, none is a hand-run host step)
 
@@ -862,7 +863,7 @@ host private-key entry. Art. 32: web-2 holds no personal data and is gate-blocke
 
 - `apps/web-platform/infra/workspaces-luks-provision.sh`, `apps/web-platform/infra/workspaces-luks-provision.test.sh`.
 - `scripts/followthroughs/web2-luks-live-6931.sh` (live-evidence and soak probe; sources the verify leg's query helper; see Follow-Through).
-- `knowledge-base/engineering/architecture/decisions/ADR-262-guest-side-fresh-boot-luks-for-web-hosts.md`.
+- `knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md`.
 - The single-use P7 workflow file (name fixed in Phase 0.4 after the destroy-mechanism measurement).
 - `knowledge-base/project/specs/feat-one-shot-6931-web2-fresh-boot-luks/tasks.md` and `decision-challenges.md`.
 
@@ -887,7 +888,7 @@ with the `follow-through` label, and the sweeper workflow's `secrets=` list gain
 
 The plan is sized for one pipeline run, but three reviewers independently recommended splitting it (DC-6). The slices are
 dependency-ordered and each is independently safe: **PR-1** provisioner, wiring, raw-at-birth (`ignore_changes`), records core
-(ADR-262, `model.c4`); changes no running host. **PR-2** verification vehicle, `boot_id`, marker writer and its Terraform,
+(ADR-263, `model.c4`); changes no running host. **PR-2** verification vehicle, `boot_id`, marker writer and its Terraform,
 ledger row and floor; fail-closed until the live conversion. **PR-3** birth-gate hardening (raw-volume requirement, web-1
 refusal); independent of the others. Phase 7 is an operation run after PR-1 and PR-2, not PR content. If the work phase ships
 one PR, keep the commit order PR-1, PR-2, PR-3 so any slice can be peeled off.
@@ -902,7 +903,7 @@ each destructive call; `boot_id` joining and the query-failure vs negative-evide
 write token); the image/content-hash pre-dispatch check; API-delete-then-state-removal ordering; a named vehicle for the
 pre-merge plan run; hard gate placement before the first `/mnt/data` write; the Doppler retry ladder; the 300 s device wait;
 guard-matrix trimming; cuts of the per-host dark-timer alert and the separate canonical-lines test; ADR addenda folded into
-ADR-262. Surfaced, not decided silently (see `decision-challenges.md`): PR split, escrow-in-scope, marker-writer-in-scope,
+ADR-263. Surfaced, not decided silently (see `decision-challenges.md`): PR split, escrow-in-scope, marker-writer-in-scope,
 in-place web-2 reformat vs rebirth.
 
 ## Dependencies & Risks
@@ -940,7 +941,7 @@ in-place web-2 reformat vs rebirth.
 - The reopen script's `isLuks` is a read-only "refuse if not LUKS" check; the static guard allowlists exactly that occurrence and nothing else.
 - Cite content anchors, never line numbers (the ledger linter resolves anchors).
 - A resource created inside a birth plan is an out-of-scope create to the birth gate: the Doppler token and secret resources must be applied by the push apply BEFORE the P7 rebirth.
-- Renumbering ADR-262 requires sweeping this plan, tasks.md and any AC naming it.
+- Renumbering ADR-263 requires sweeping this plan, tasks.md and any AC naming it.
 
 ## References
 

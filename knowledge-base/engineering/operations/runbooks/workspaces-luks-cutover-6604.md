@@ -3,6 +3,8 @@
 > **Verification is a workflow + an API read, NEVER a login** (`hr-no-ssh-fallback-in-runbooks`).
 > Every step below is a `gh workflow run` or a dashboard-free query. There is no "SSH in and check".
 
+> **Scope note (2026-10-01, #6931):** this runbook covers web-1 only. Fresh hosts such as web-2 get LUKS through the baked guest-side path decided in [ADR-263](../../architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md), not through this cutover.
+
 ## What this is
 
 `hcloud_volume.workspaces` (web-1's `/mnt/data`) holds every user's checked-out source as **plaintext

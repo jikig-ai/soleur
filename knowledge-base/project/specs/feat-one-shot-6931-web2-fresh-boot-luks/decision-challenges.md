@@ -26,7 +26,7 @@ addendum, measured), and PR #9348 is already changing the same `for_each` and le
 with a T2-ready seam.
 
 **To revert to the stated direction.** Ship T2 as its own single-use state-surgery workflow (the
-`workspaces-plaintext-forget.yml` precedent) after PR #9348 lands; ADR-262 records the migration path.
+`workspaces-plaintext-forget.yml` precedent) after PR #9348 lands; ADR-263 records the migration path.
 
 ---
 
