@@ -6843,6 +6843,7 @@ jobs:
           # (#9360): the soleur-ai App key this used to mint from is the #8209 eviction
           # sentinel. Named AUDIT_POST_TOKEN, not GH_TOKEN, so the audit script below does
           # not inherit gh auth.
+          # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §legacy-app-key-evicted
           AUDIT_POST_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

@@ -207,7 +207,7 @@
 "external"
 ],
 "description": {
-"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
+"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. KNOWN GAP (#9360): the CI apply now writes as the soleur-infra App, which is not a bypass actor, so a manifest write is refused (409) until #9361 swaps the App bypass actor to soleur-infra. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
 },
 "title": "soleur-marketplace (distribution)",
 "kind": "system",
@@ -1808,7 +1808,7 @@
 "id": "1fnm3bk"
 },
 "f92ffp": {
-"title": "Authenticated WRITE from apply-github-infra.yml as the soleur-ai App: declares the default-branch ruleset AND publishes .claude-plugin/marketplace.json from infra/github/soleur-marketplace-manifest.json. Fires on merge to main touching infra/github/, and on a reconcile dispatched by the daily drift check. ALSO (github-internal, different target repo, and since #9262 NOT the soleur-ai credential named above: the Tier-B soleur-infra App key, which the ruleset write reaches only in #8209's infra mode, below — ADR-232, #8359): build-inngest-bootstrap-image.yml's bump-cloud-init-pin job (environment: infra-privileged, main-only; #9262) mints a soleur-infra App installation token via the ./.github/actions/mint-infra-app-token composite action (RS256 JWT -> /app/installations/166065653/access_tokens, scoped to contents:write + pull_requests:write on soleur; GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY read from the fixed Tier-B project soleur-infra-privileged/prd with the environment secret DOPPLER_TOKEN_INFRA_PRIVILEGED; NOT GITHUB_TOKEN — App-token pushes fire pull_request, so required checks run on the PR) and, on every dispatched vinngest-v* publish, runs .github/scripts/bump-inngest-bootstrap-pin.sh against THIS repo: recomputes the target as the semver-max vinngest-v* tag merged into main (git tag --merged HEAD on the ref: main checkout; an off-main tag is never a candidate, #8782), resolves the digest via crane against ghcr.io/jikig-ai/soleur-inngest-bootstrap, rewrites all four tag@sha256 cloud-init pins atomically, and opens/reuses a soleur/inngest-pin-v* PR as soleur-infra[bot] (the PR-author filters match app/soleur-infra, the form gh reports for an App author) — never a direct push to main. Auto-merge (--auto --squash) is armed ONLY when the same run's zot-mirror push reported ok, and NEVER on a mirror_only run (which cannot attest provenance; it also disarms auto-merge an earlier run armed on the reused PR); a degraded mirror or a mirror_only run leaves the PR visibly held. Stale bot-authored soleur/inngest-pin-* PRs are superseded (comment + close); a human-authored branch tip is never force-pushed or closed. Idempotent: pins already at target emit result=noop and touch nothing. It REFUSES (before crane; ADR-232 section 7, #8747, #8782) a shallow or unreadable history, a checkout with no merged tag, and a pin that sits above every merged tag, binds the pin to the commit the build job checked out (--signed-commit), and requires the resolved image's org.opencontainers.image.revision label to name the target's commit (unlabelled legacy images open held, no auto-merge); the build job itself refuses to build an off-main HEAD, except under mirror_only. Ancestry is an accident control, not a secret boundary: admitting this job to a main-only environment through a vinngest-v* tag deployment policy would run branch-written YAML with Tier-B secrets. THE IDENTITY ON BOTH WRITES CHANGES (#8209, ADR-241 D5) — this edge previously read 'as the soleur-ai App' as though that were a fixed property, and it is the property #8209 is changing. Terraform's GitHub identity is now selected by WHICH VARIABLES ARE NON-EMPTY, because Terraform cannot tell a plan from an apply and so cannot be given a tier flag to precondition on: infra mode (a DEDICATED soleur-infra App, installed on jikig-ai alone on the repositories Terraform manages, with environments:write among its scopes — its key reaches a job only as a main-only environment secret), token mode (the PR plan job's own read-only GITHUB_TOKEN, enough for a -refresh=false plan), and legacy mode (today's soleur-ai key from prd_terraform, the BEFORE state). The dynamic app_auth for_each is the exact COMPLEMENT of the token condition so exactly one always resolves — load-bearing, because integrations/github v6 otherwise falls back to an ambient GITHUB_TOKEN or `gh auth token` and authenticates as whoever the runner happens to be rather than failing. The github-internal pin-bump write named above is Tier B and, since #9262, mints as the infra App: the composite takes no identity or source input and reads only the two GITHUB_INFRA_APP_* names from soleur-infra-privileged/prd, with an exact-grant check on every scoped token. The build's push: tags trigger is REMOVED (ADR-232 alternative A5, adopted in #9262), because a main-only environment refuses a tag-ref run and a tag-pattern policy is forbidden (ADR-232 section 7): every build is a workflow_dispatch; the auto-mint and runbook dispatch from main (a dispatch from another ref runs that ref's build job, but infra-privileged refuses its bump job), and a hand-pushed tag starts nothing. On a push to main that changes the image inputs (#4326, ADR-232 section 8), mint-inngest-bootstrap-tag.yml (also environment: infra-privileged, still job-gated to refs/heads/main) creates the tag with GITHUB_TOKEN and dispatches the build from main as the soleur-infra App, scoped to actions:write on soleur, minted before the tag step and revoked right after the dispatch. The soleur-infra App's committed manifest carries actions:write and pull_requests:write for these two consumers (ADR-241 D5); the live App is widened by #8209 runbook step O4c. BOARD SYNC DELIBERATELY DOES NOT FOLLOW: it runs on pull_request/issues, stays Tier A, and mints from its own least-privilege soleur-board App (organization_projects:write plus read scopes), because handing an administration-capable App to a fork-triggerable job was the largest new attack surface in the first draft. After the eviction step the legacy variable resolves to the non-PEM sentinel EVICTED_SEE_ADR_241, which the three remaining inline readers of that name (apply-github-infra, board-status-sync and apply-web-platform-infra; census row G4e) refuse with verdict=legacy_app_key_evicted — the pin-bump composite no longer reads it — and the soleur-ai key that prd_terraform held is deleted in the App settings UI — a click with no API, on a list where it is distinguishable from the App's LIVE RUNTIME key by fingerprint alone (ADR-241 U2)",
+"title": "Authenticated WRITE from apply-github-infra.yml as the soleur-ai App until #9360, and since then as the soleur-infra App (#8209 infra mode; the post-apply verify mints its token through the same ./.github/actions/mint-infra-app-token composite, administration:write on soleur and soleur-marketplace): declares the default-branch ruleset AND publishes .claude-plugin/marketplace.json from infra/github/soleur-marketplace-manifest.json. Fires on merge to main touching infra/github/, and on a reconcile dispatched by the daily drift check. ALSO (github-internal, different target repo, and since #9262 the Tier-B soleur-infra App key, the same identity the ruleset write uses since #9360 — ADR-232, #8359): build-inngest-bootstrap-image.yml's bump-cloud-init-pin job (environment: infra-privileged, main-only; #9262) mints a soleur-infra App installation token via the ./.github/actions/mint-infra-app-token composite action (RS256 JWT -> /app/installations/166065653/access_tokens, scoped to contents:write + pull_requests:write on soleur; GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY read from the fixed Tier-B project soleur-infra-privileged/prd with the environment secret DOPPLER_TOKEN_INFRA_PRIVILEGED; NOT GITHUB_TOKEN — App-token pushes fire pull_request, so required checks run on the PR) and, on every dispatched vinngest-v* publish, runs .github/scripts/bump-inngest-bootstrap-pin.sh against THIS repo: recomputes the target as the semver-max vinngest-v* tag merged into main (git tag --merged HEAD on the ref: main checkout; an off-main tag is never a candidate, #8782), resolves the digest via crane against ghcr.io/jikig-ai/soleur-inngest-bootstrap, rewrites all four tag@sha256 cloud-init pins atomically, and opens/reuses a soleur/inngest-pin-v* PR as soleur-infra[bot] (the PR-author filters match app/soleur-infra, the form gh reports for an App author) — never a direct push to main. Auto-merge (--auto --squash) is armed ONLY when the same run's zot-mirror push reported ok, and NEVER on a mirror_only run (which cannot attest provenance; it also disarms auto-merge an earlier run armed on the reused PR); a degraded mirror or a mirror_only run leaves the PR visibly held. Stale bot-authored soleur/inngest-pin-* PRs are superseded (comment + close); a human-authored branch tip is never force-pushed or closed. Idempotent: pins already at target emit result=noop and touch nothing. It REFUSES (before crane; ADR-232 section 7, #8747, #8782) a shallow or unreadable history, a checkout with no merged tag, and a pin that sits above every merged tag, binds the pin to the commit the build job checked out (--signed-commit), and requires the resolved image's org.opencontainers.image.revision label to name the target's commit (unlabelled legacy images open held, no auto-merge); the build job itself refuses to build an off-main HEAD, except under mirror_only. Ancestry is an accident control, not a secret boundary: admitting this job to a main-only environment through a vinngest-v* tag deployment policy would run branch-written YAML with Tier-B secrets. THE IDENTITY ON BOTH WRITES CHANGED (#8209, ADR-241 D5; the ruleset write in #9360) — this edge previously read 'as the soleur-ai App' as though that were a fixed property, and it is the property #8209 is changing. Terraform's GitHub identity is now selected by WHICH VARIABLES ARE NON-EMPTY, because Terraform cannot tell a plan from an apply and so cannot be given a tier flag to precondition on: infra mode (a DEDICATED soleur-infra App, installed on jikig-ai alone on the repositories Terraform manages, with environments:write among its scopes — its key reaches a job only as a main-only environment secret), token mode (the PR plan job's own read-only GITHUB_TOKEN, enough for a -refresh=false plan), and legacy mode (the evicted soleur-ai key name in prd_terraform, which resolves to the EVICTED_SEE_ADR_241 sentinel; no CI runner of this root selects it while its environment secret is present). The dynamic app_auth for_each is the exact COMPLEMENT of the token condition so exactly one always resolves — load-bearing, because integrations/github v6 otherwise falls back to an ambient GITHUB_TOKEN or `gh auth token` and authenticates as whoever the runner happens to be rather than failing. The github-internal pin-bump write named above is Tier B and, since #9262, mints as the infra App: the composite takes no identity or source input and reads only the two GITHUB_INFRA_APP_* names from soleur-infra-privileged/prd, with an exact-grant check on every scoped token. The build's push: tags trigger is REMOVED (ADR-232 alternative A5, adopted in #9262), because a main-only environment refuses a tag-ref run and a tag-pattern policy is forbidden (ADR-232 section 7): every build is a workflow_dispatch; the auto-mint and runbook dispatch from main (a dispatch from another ref runs that ref's build job, but infra-privileged refuses its bump job), and a hand-pushed tag starts nothing. On a push to main that changes the image inputs (#4326, ADR-232 section 8), mint-inngest-bootstrap-tag.yml (also environment: infra-privileged, still job-gated to refs/heads/main) creates the tag with GITHUB_TOKEN and dispatches the build from main as the soleur-infra App, scoped to actions:write on soleur, minted before the tag step and revoked right after the dispatch. The soleur-infra App's committed manifest carries actions:write and pull_requests:write for these two consumers (ADR-241 D5); the live App is widened by #8209 runbook step O4c. BOARD SYNC DELIBERATELY DOES NOT FOLLOW: it runs on pull_request/issues, stays Tier A, and mints from its own least-privilege soleur-board App (organization_projects:write plus read scopes), because handing an administration-capable App to a fork-triggerable job was the largest new attack surface in the first draft. After the eviction step the legacy variable resolves to the non-PEM sentinel EVICTED_SEE_ADR_241, which the one remaining reader of that name (board-status-sync's legacy arm; census row G4e, an exact pin of 1 since #9360) refuses with verdict=legacy_app_key_evicted — the pin-bump composite no longer reads it — and the soleur-ai key that prd_terraform held is deleted in the App settings UI — a click with no API, on a list where it is distinguishable from the App's LIVE RUNTIME key by fingerprint alone (ADR-241 U2). KNOWN GAP (#9360): the marketplace ruleset's App bypass actor is still the soleur-ai App, so a manifest write made as soleur-infra is refused (409, repository rule violations) until #9361 swaps it",
 "technology": "HTTPS (GitHub REST: rulesets + contents; git refs/tags write via POST git/tags + git/refs; Actions workflow_dispatch API); git push x-access-token + gh CLI for the internal write. The vinngest tag write is a SEPARATE credential: the mint job's GITHUB_TOKEN, not the soleur-infra App token",
 "source": {
 "model": "github"
@@ -3152,7 +3152,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 13241,
+"width": 13237,
 "height": 2904
 },
 "nodes": [
@@ -3182,7 +3182,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__betaContact",
-"x": 11605,
+"x": 11601,
 "y": 0,
 "width": 331,
 "height": 180,
@@ -3256,7 +3256,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__contributor",
-"x": 10360,
+"x": 10356,
 "y": 0,
 "width": 327,
 "height": 180,
@@ -3507,7 +3507,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 10363,
+"x": 10361,
 "y": 2381,
 "width": 388,
 "height": 180,
@@ -3586,7 +3586,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__slack",
-"x": 11650,
+"x": 11647,
 "y": 2724,
 "width": 345,
 "height": 180,
@@ -3631,7 +3631,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__founder",
-"x": 11590,
+"x": 11586,
 "y": 360,
 "width": 362,
 "height": 180,
@@ -3671,7 +3671,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__codex",
-"x": 11346,
+"x": 11342,
 "y": 1559,
 "width": 324,
 "height": 180,
@@ -3743,7 +3743,7 @@
 "size": "md"
 },
 "description": {
-"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
+"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. KNOWN GAP (#9360): the CI apply now writes as the soleur-infra App, which is not a bypass actor, so a manifest write is refused (409) until #9361 swaps the App bypass actor to soleur-infra. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
 },
 "tags": [
 "external"
@@ -3751,7 +3751,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__soleurMarketplace",
-"x": 11781,
+"x": 11777,
 "y": 1559,
 "width": 352,
 "height": 180,
@@ -4353,7 +4353,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__flagsmith",
-"x": 10391,
+"x": 10387,
 "y": 1147,
 "width": 346,
 "height": 180,
@@ -4490,59 +4490,59 @@
 "label": "Loads canonical skills, command \nwrappers, agent instructions, MCP \nconnections, and compatible hooks",
 "points": [
 [
-11537,
+11533,
 1559
 ],
 [
-11549,
+11546,
 1502
 ],
 [
-11552,
+11550,
 1432
 ],
 [
-11509,
+11507,
 1387
 ],
 [
-11401,
+11399,
 1275
 ],
 [
-10253,
+10249,
 1392
 ],
 [
-10111,
+10107,
 1327
 ],
 [
-10011,
+10007,
 1281
 ],
 [
-10038,
+10034,
 1200
 ],
 [
-9942,
+9938,
 1147
 ],
 [
-9588,
+9585,
 953
 ],
 [
-9450,
+9448,
 1023
 ],
 [
-9049,
+9047,
 977
 ],
 [
-8335,
+8333,
 895
 ],
 [
@@ -4555,7 +4555,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10112,
+"x": 10108,
 "y": 1209,
 "width": 223,
 "height": 51
@@ -4575,40 +4575,40 @@
 "label": "Invokes Soleur skills and company \nworkflows",
 "points": [
 [
-11843,
+11839,
 540
 ],
 [
-11932,
+11928,
 661
 ],
 [
-12066,
+12062,
 884
 ],
 [
-12020,
+12016,
 1087
 ],
 [
-11994,
+11990,
 1203
 ],
 [
-11984,
-1239
+11979,
+1238
 ],
 [
-11905,
+11901,
 1327
 ],
 [
-11872,
-1365
+11869,
+1364
 ],
 [
-11850,
-1357
+11849,
+1358
 ],
 [
 11810,
@@ -4616,19 +4616,19 @@
 ],
 [
 11741,
-1438
+1439
 ],
 [
 11668,
 1501
 ],
 [
-11611,
+11610,
 1552
 ]
 ],
 "labelBBox": {
-"x": 12030,
+"x": 12026,
 "y": 1012,
 "width": 219,
 "height": 35
@@ -4652,24 +4652,24 @@
 1260
 ],
 [
-8677,
+8676,
 1281
 ],
 [
-8949,
+8946,
 1311
 ],
 [
-9185,
+9181,
 1327
 ],
 [
-9575,
+9572,
 1354
 ],
 [
-10563,
-1297
+10562,
+1296
 ],
 [
 10943,
@@ -4680,16 +4680,16 @@
 1421
 ],
 [
-11240,
+11238,
 1494
 ],
 [
-11350,
+11347,
 1554
 ]
 ],
 "labelBBox": {
-"x": 11230,
+"x": 11228,
 "y": 1395,
 "width": 251,
 "height": 90
@@ -4730,39 +4730,39 @@
 1301
 ],
 [
-9784,
+9781,
 1382
 ],
 [
-9652,
+9648,
 1327
 ],
 [
-9542,
+9538,
 1282
 ],
 [
-9561,
+9557,
 1201
 ],
 [
-9455,
+9451,
 1147
 ],
 [
-9115,
-974
+9112,
+975
 ],
 [
-8992,
+8990,
 1023
 ],
 [
-8613,
+8612,
 977
 ],
 [
-7989,
+7988,
 900
 ],
 [
@@ -4775,7 +4775,7 @@
 ]
 ],
 "labelBBox": {
-"x": 9653,
+"x": 9649,
 "y": 1182,
 "width": 265,
 "height": 106
@@ -4796,27 +4796,27 @@
 "label": "Runs Soleur sessions locally in the CLI \nor remotely in Devin Cloud",
 "points": [
 [
-11767,
+11762,
 540
 ],
 [
-11753,
+11748,
 717
 ],
 [
-11696,
-1117
+11691,
+1116
 ],
 [
-11461,
+11457,
 1327
 ],
 [
-11375,
-1404
+11372,
+1403
 ],
 [
-11303,
+11302,
 1322
 ],
 [
@@ -4825,7 +4825,7 @@
 ],
 [
 11150,
-1427
+1428
 ],
 [
 11105,
@@ -4837,7 +4837,7 @@
 ]
 ],
 "labelBBox": {
-"x": 11678,
+"x": 11674,
 "y": 1012,
 "width": 246,
 "height": 35
@@ -4861,23 +4861,23 @@
 1259
 ],
 [
-8677,
+8676,
 1279
 ],
 [
-8949,
+8946,
 1309
 ],
 [
-9185,
+9181,
 1327
 ],
 [
-9720,
+9717,
 1368
 ],
 [
-9866,
+9865,
 1271
 ],
 [
@@ -4919,35 +4919,35 @@
 "label": "[...]",
 "points": [
 [
-11590,
+11586,
 471
 ],
 [
-11426,
+11422,
 492
 ],
 [
-11179,
+11175,
 532
 ],
 [
-10973,
+10969,
 600
 ],
 [
-10899,
+10895,
 624
 ],
 [
-10891,
+10887,
 658
 ],
 [
-10815,
+10811,
 677
 ],
 [
-10283,
+10279,
 807
 ],
 [
@@ -4960,7 +4960,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10974,
+"x": 10970,
 "y": 626,
 "width": 25,
 "height": 18
@@ -4982,48 +4982,48 @@
 "label": "claude plugin marketplace add \njikig-ai/soleur-marketplace — fetches \nthe manifest only (~39 KB, ~13s)",
 "points": [
 [
-11952,
+11948,
 474
 ],
 [
-12042,
+12038,
 494
 ],
 [
-12146,
+12142,
 531
 ],
 [
-12217,
+12213,
 600
 ],
 [
-12345,
+12341,
 724
 ],
 [
-12325,
+12321,
 801
 ],
 [
-12356,
+12352,
 977
 ],
 [
-12397,
+12393,
 1206
 ],
 [
-12203,
+12199,
 1430
 ],
 [
-12071,
+12067,
 1552
 ]
 ],
 "labelBBox": {
-"x": 12363,
+"x": 12359,
 "y": 993,
 "width": 231,
 "height": 73
@@ -5044,11 +5044,11 @@
 "label": "Closes the terminal (stopping its \nscope), or runs `systemctl --user stop \nsoleur.slice` as an explicit fallback — \nwhich stops EVERY agent session on the \nmachine (ADR-161)",
 "points": [
 [
-11590,
+11586,
 454
 ],
 [
-10127,
+10124,
 476
 ],
 [
@@ -5094,24 +5094,24 @@
 "label": "Production flag and segment writes via \nthe flag-* operator scripts, gated on a \nTTY ack in the founder's own terminal \n(ADR-249)",
 "points": [
 [
-11634,
+11630,
 540
 ],
 [
-11405,
+11401,
 689
 ],
 [
-10944,
+10940,
 989
 ],
 [
-10709,
+10705,
 1142
 ]
 ],
 "labelBBox": {
-"x": 11328,
+"x": 11324,
 "y": 780,
 "width": 244,
 "height": 89
@@ -5132,24 +5132,24 @@
 "label": "Conversation PII origin — the operator \ncaptures notes about this third party",
 "points": [
 [
-11771,
+11767,
 180
 ],
 [
-11771,
+11767,
 232
 ],
 [
-11771,
+11767,
 297
 ],
 [
-11771,
+11767,
 350
 ]
 ],
 "labelBBox": {
-"x": 11772,
+"x": 11768,
 "y": 240,
 "width": 241,
 "height": 55
@@ -5170,48 +5170,48 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-10751,
+10749,
 2454
 ],
 [
-11289,
+11288,
 2408
 ],
 [
-12764,
+12760,
 2265
 ],
 [
-12764,
+12760,
 2061
 ],
 [
-12764,
+12760,
 826
 ],
 [
-12764,
+12760,
 826
 ],
 [
-12764,
+12760,
 826
 ],
 [
-12764,
+12760,
 656
 ],
 [
-12251,
+12247,
 537
 ],
 [
-11962,
+11958,
 483
 ]
 ],
 "labelBBox": {
-"x": 12765,
+"x": 12761,
 "y": 1387,
 "width": 262,
 "height": 106
@@ -5232,48 +5232,48 @@
 "label": "Mobile push notification",
 "points": [
 [
-11995,
+11993,
 2802
 ],
 [
-12342,
+12339,
 2777
 ],
 [
-13089,
+13085,
 2695
 ],
 [
-13089,
+13085,
 2472
 ],
 [
-13089,
+13085,
 826
 ],
 [
-13089,
+13085,
 826
 ],
 [
-13089,
+13085,
 826
 ],
 [
-13089,
+13085,
 594
 ],
 [
-12328,
+12324,
 498
 ],
 [
-11963,
+11959,
 465
 ]
 ],
 "labelBBox": {
-"x": 13090,
+"x": 13086,
 "y": 1627,
 "width": 150,
 "height": 39
@@ -5311,67 +5311,67 @@
 ],
 [
 10741,
-1287
+1288
 ],
 [
-11213,
+11210,
 1441
 ],
 [
-11318,
+11314,
 1327
 ],
 [
-11372,
+11368,
 1268
 ],
 [
-11344,
+11340,
 1223
 ],
 [
-11318,
+11314,
 1147
 ],
 [
-11277,
+11273,
 1025
 ],
 [
-11184,
+11180,
 1039
 ],
 [
-11143,
+11139,
 917
 ],
 [
-11117,
+11113,
 841
 ],
 [
-11100,
+11096,
 804
 ],
 [
-11143,
+11139,
 737
 ],
 [
-11239,
+11235,
 588
 ],
 [
-11433,
+11429,
 516
 ],
 [
-11580,
+11576,
 481
 ]
 ],
 "labelBBox": {
-"x": 11288,
+"x": 11284,
 "y": 976,
 "width": 265,
 "height": 107
@@ -5515,39 +5515,39 @@
 "label": "Opens untrusted PR — head code runs in \nfix-constraints Stage A (pull_request, \ncontents:read, no write token) (ADR-074)",
 "points": [
 [
-10525,
+10521,
 180
 ],
 [
-10528,
+10524,
 412
 ],
 [
-10528,
+10524,
 1025
 ],
 [
-10464,
+10460,
 1087
 ],
 [
-10400,
+10396,
 1150
 ],
 [
-8934,
+8931,
 1138
 ],
 [
-8844,
+8842,
 1147
 ],
 [
-8734,
+8733,
 1159
 ],
 [
-8612,
+8611,
 1179
 ],
 [
@@ -5556,7 +5556,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10524,
+"x": 10520,
 "y": 600,
 "width": 262,
 "height": 72
@@ -6438,67 +6438,67 @@
 ],
 [
 6378,
-832
+833
 ],
 [
-11248,
+11245,
 859
 ],
 [
-11540,
+11536,
 977
 ],
 [
-11607,
+11603,
 1004
 ],
 [
-11603,
-1043
+11599,
+1042
 ],
 [
-11660,
+11656,
 1087
 ],
 [
-11851,
+11846,
 1236
 ],
 [
-11961,
-1201
+11952,
+1203
 ],
 [
-12116,
+12108,
 1387
 ],
 [
-12218,
+12212,
 1510
 ],
 [
-12275,
-1606
+12271,
+1605
 ],
 [
-12188,
+12184,
 1740
 ],
 [
-11867,
-2235
+11864,
+2234
 ],
 [
-11123,
+11121,
 2397
 ],
 [
-10761,
+10760,
 2448
 ]
 ],
 "labelBBox": {
-"x": 12232,
+"x": 12227,
 "y": 1636,
 "width": 25,
 "height": 18
@@ -6537,23 +6537,23 @@
 977
 ],
 [
-8828,
+8827,
 1068
 ],
 [
-8914,
+8912,
 1233
 ],
 [
-9405,
+9401,
 1327
 ],
 [
-9620,
-1368
+9616,
+1369
 ],
 [
-10197,
+10196,
 1277
 ],
 [
@@ -6574,7 +6574,7 @@
 ]
 ],
 "labelBBox": {
-"x": 9406,
+"x": 9402,
 "y": 1224,
 "width": 25,
 "height": 18
@@ -6605,28 +6605,28 @@
 830
 ],
 [
-9655,
+9651,
 847
 ],
 [
-10113,
+10109,
 977
 ],
 [
-10232,
+10228,
 1010
 ],
 [
-10352,
+10348,
 1082
 ],
 [
-10438,
+10434,
 1141
 ]
 ],
 "labelBBox": {
-"x": 10346,
+"x": 10342,
 "y": 1002,
 "width": 234,
 "height": 55
@@ -6802,51 +6802,51 @@
 "label": "git-subdir entry resolves plugins/soleur \nout of the monorepo at main; the install \nmaterialises the plugin subtree alone \n(~10 MiB, ~33s, well inside the CLI's \n120s default). Keyless and unpinned, so ",
 "points": [
 [
-12015,
+12009,
 1559
 ],
 [
-12044,
+12036,
 1503
 ],
 [
-12064,
+12056,
 1433
 ],
 [
-12021,
+12013,
 1387
 ],
 [
-11964,
+11956,
 1325
 ],
 [
-11343,
+11339,
 1351
 ],
 [
-11262,
+11258,
 1327
 ],
 [
-10945,
+10941,
 1234
 ],
 [
-10926,
+10922,
 1062
 ],
 [
-10607,
+10603,
 977
 ],
 [
-10098,
+10095,
 842
 ],
 [
-6294,
+6293,
 829
 ],
 [
@@ -6855,7 +6855,7 @@
 ]
 ],
 "labelBBox": {
-"x": 11263,
+"x": 11259,
 "y": 1182,
 "width": 253,
 "height": 106
@@ -7188,11 +7188,11 @@
 "label": "Origin uptime probe at the LB-fronted \napp.soleur.ai surface \n(betteruptime_monitor.app/soleur_apex) — \ncovers web-1 (the app A-record → web-1, \ndns.tf); the #5933 per-host web-<n> ",
 "points": [
 [
-10363,
+10361,
 2467
 ],
 [
-8926,
+8924,
 2450
 ],
 [
@@ -7359,53 +7359,53 @@
 "id": "7g62ea",
 "source": "github",
 "target": "soleurMarketplace",
-"label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp: declares the default-branch ruleset \nAND publishes \n.claude-plugin/marketplace.json from ",
+"label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp until #9360, and since then as the \nsoleur-infra App (#8209 infra mode; the \npost-apply verify mints its token ",
 "points": [
 [
 8504,
 1261
 ],
 [
-8677,
+8676,
 1282
 ],
 [
-8949,
+8946,
 1312
 ],
 [
-9185,
+9181,
 1327
 ],
 [
-9443,
+9439,
 1344
 ],
 [
-11260,
-1317
+11258,
+1316
 ],
 [
-11509,
+11507,
 1387
 ],
 [
-11628,
+11625,
 1421
 ],
 [
-11747,
+11744,
 1493
 ],
 [
-11833,
+11830,
 1553
 ]
 ],
 "labelBBox": {
-"x": 11740,
+"x": 11737,
 "y": 1387,
-"width": 252,
+"width": 248,
 "height": 106
 },
 "parent": null,
@@ -8032,15 +8032,15 @@
 1740
 ],
 [
-9387,
-2019
+9386,
+2018
 ],
 [
-10031,
+10029,
 2273
 ],
 [
-10353,
+10351,
 2395
 ]
 ],
@@ -8070,24 +8070,24 @@
 1258
 ],
 [
-8677,
-1277
+8676,
+1278
 ],
 [
-8949,
-1306
+8946,
+1307
 ],
 [
-9185,
+9181,
 1327
 ],
 [
-9370,
-1343
+9367,
+1344
 ],
 [
-9852,
-1303
+9851,
+1302
 ],
 [
 10017,
@@ -8393,7 +8393,7 @@
 ],
 [
 8113,
-2210
+2209
 ],
 [
 8266,
@@ -8404,15 +8404,15 @@
 2321
 ],
 [
-8775,
+8774,
 2414
 ],
 [
-9890,
-2453
+9888,
+2452
 ],
 [
-10353,
+10350,
 2465
 ]
 ],
@@ -8438,24 +8438,24 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-10751,
+10749,
 2524
 ],
 [
-10993,
+10991,
 2589
 ],
 [
-11404,
+11401,
 2700
 ],
 [
-11641,
-2764
+11637,
+2763
 ]
 ],
 "labelBBox": {
-"x": 11267,
+"x": 11264,
 "y": 2620,
 "width": 214,
 "height": 39
@@ -8531,7 +8531,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 10304,
+"width": 10300,
 "height": 3094
 },
 "nodes": [
@@ -8712,7 +8712,7 @@
 "size": "md"
 },
 "description": {
-"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
+"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. KNOWN GAP (#9360): the CI apply now writes as the soleur-infra App, which is not a bypass actor, so a manifest write is refused (409) until #9361 swaps the App bypass actor to soleur-infra. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
 },
 "tags": [
 "external"
@@ -8720,7 +8720,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__soleurMarketplace",
-"x": 8827,
+"x": 8825,
 "y": 2914,
 "width": 352,
 "height": 180,
@@ -8760,7 +8760,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__devin",
-"x": 9372,
+"x": 9370,
 "y": 2914,
 "width": 362,
 "height": 180,
@@ -10570,20 +10570,20 @@
 2603
 ],
 [
-6899,
+6898,
 2680
 ],
 [
-8307,
+8306,
 2896
 ],
 [
-8816,
+8814,
 2974
 ]
 ],
 "labelBBox": {
-"x": 8022,
+"x": 8021,
 "y": 2760,
 "width": 231,
 "height": 73
@@ -10604,15 +10604,15 @@
 "label": "git-subdir entry resolves plugins/soleur \nout of the monorepo at main; the install \nmaterialises the plugin subtree alone \n(~10 MiB, ~33s, well inside the CLI's \n120s default). Keyless and unpinned, so ",
 "points": [
 [
-8827,
+8825,
 3002
 ],
 [
-8356,
-2997
+8354,
+2996
 ],
 [
-7029,
+7028,
 2972
 ],
 [
@@ -10682,20 +10682,20 @@
 2744
 ],
 [
-8934,
+8933,
 2786
 ],
 [
-9192,
+9190,
 2870
 ],
 [
-9362,
+9360,
 2931
 ]
 ],
 "labelBBox": {
-"x": 9127,
+"x": 9126,
 "y": 2779,
 "width": 246,
 "height": 35
@@ -10715,28 +10715,28 @@
 "label": "Loads skills, AGENTS.md rules, and MCP \nin both substrates; plugin subagents and \nSessionStart/SessionEnd hooks only on \nlocal. Since #8401 all three /soleur:go \nsession gates also resolve the plugin ",
 "points": [
 [
-9372,
+9370,
 2946
 ],
 [
-9327,
+9325,
 2934
 ],
 [
-9279,
+9277,
 2922
 ],
 [
-9234,
+9232,
 2914
 ],
 [
-9053,
+9051,
 2883
 ],
 [
 8578,
-2925
+2924
 ],
 [
 8408,
@@ -10747,16 +10747,16 @@
 2825
 ],
 [
-8352,
+8351,
 2770
 ],
 [
-8282,
+8281,
 2744
 ],
 [
-8252,
-2732
+8251,
+2733
 ],
 [
 6011,
@@ -11457,7 +11457,7 @@
 "id": "7g62ea",
 "source": "github",
 "target": "soleurMarketplace",
-"label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp: declares the default-branch ruleset \nAND publishes \n.claude-plugin/marketplace.json from ",
+"label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp until #9360, and since then as the \nsoleur-infra App (#8209 infra mode; the \npost-apply verify mints its token ",
 "points": [
 [
 6328,
@@ -11501,21 +11501,21 @@
 ],
 [
 9595,
-2778
+2779
 ],
 [
-9362,
+9361,
 2895
 ],
 [
-9189,
+9187,
 2954
 ]
 ],
 "labelBBox": {
 "x": 9596,
 "y": 1675,
-"width": 252,
+"width": 248,
 "height": 106
 },
 "parent": null,
@@ -11543,51 +11543,51 @@
 ],
 [
 9231,
-537
+536
 ],
 [
 9543,
 617
 ],
 [
-9795,
+9794,
 682
 ],
 [
-10069,
-616
+10065,
+618
 ],
 [
-10069,
+10065,
 877
 ],
 [
-10069,
+10065,
 877
 ],
 [
-10069,
+10065,
 877
 ],
 [
-10069,
+10065,
 2575
 ],
 [
-10069,
-2750
+10065,
+2749
 ],
 [
-9890,
-2867
+9888,
+2866
 ],
 [
-9743,
-2934
+9742,
+2933
 ]
 ],
 "labelBBox": {
-"x": 10070,
+"x": 10066,
 "y": 1675,
 "width": 234,
 "height": 106
@@ -27510,7 +27510,7 @@
 "size": "md"
 },
 "description": {
-"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
+"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. KNOWN GAP (#9360): the CI apply now writes as the soleur-infra App, which is not a bypass actor, so a manifest write is refused (409) until #9361 swaps the App bypass actor to soleur-infra. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
 },
 "tags": [
 "external"
@@ -29312,7 +29312,7 @@
 "size": "md"
 },
 "description": {
-"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
+"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. KNOWN GAP (#9360): the CI apply now writes as the soleur-infra App, which is not a bypass actor, so a manifest write is refused (409) until #9361 swaps the App bypass actor to soleur-infra. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
 },
 "tags": [
 "external"
@@ -30139,7 +30139,7 @@
 "id": "7g62ea",
 "source": "github",
 "target": "soleurMarketplace",
-"label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp: declares the default-branch ruleset \nAND publishes \n.claude-plugin/marketplace.json from ",
+"label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp until #9360, and since then as the \nsoleur-infra App (#8209 infra mode; the \npost-apply verify mints its token ",
 "points": [
 [
 3309,
@@ -30173,7 +30173,7 @@
 "labelBBox": {
 "x": 3404,
 "y": 616,
-"width": 252,
+"width": 248,
 "height": 107
 },
 "parent": null,
@@ -30193,35 +30193,35 @@
 "points": [
 [
 3410,
-503
+504
 ],
 [
-3497,
-526
+3496,
+528
 ],
 [
-3601,
-562
+3598,
+564
 ],
 [
-3684,
+3680,
 617
 ],
 [
-3749,
+3746,
 660
 ],
 [
-3808,
-725
+3805,
+726
 ],
 [
-3849,
-780
+3848,
+781
 ]
 ],
 "labelBBox": {
-"x": 3805,
+"x": 3802,
 "y": 616,
 "width": 255,
 "height": 107
@@ -30242,27 +30242,27 @@
 "label": "[...]",
 "points": [
 [
-3409,
-486
+3410,
+470
 ],
 [
-3624,
-511
+3589,
+478
 ],
 [
-3972,
-559
+3870,
+509
 ],
 [
-4088,
+4086,
 617
 ],
 [
-4166,
+4165,
 656
 ],
 [
-4238,
+4236,
 724
 ],
 [
@@ -30271,7 +30271,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4238,
+"x": 4229,
 "y": 659,
 "width": 25,
 "height": 18
@@ -30293,35 +30293,35 @@
 "points": [
 [
 3410,
-476
+477
 ],
 [
-3623,
-490
+3621,
+491
 ],
 [
-3990,
-525
+3984,
+527
 ],
 [
-4291,
+4282,
 617
 ],
 [
-4424,
+4417,
 657
 ],
 [
-4565,
-726
+4560,
+727
 ],
 [
-4669,
+4666,
 783
 ]
 ],
 "labelBBox": {
-"x": 4549,
+"x": 4544,
 "y": 616,
 "width": 258,
 "height": 107
@@ -30342,36 +30342,36 @@
 "label": "[...]",
 "points": [
 [
-3410,
+3409,
 475
 ],
 [
-3769,
+3768,
 491
 ],
 [
-4574,
-535
+4570,
+536
 ],
 [
-4836,
+4831,
 617
 ],
 [
-4955,
+4951,
 654
 ],
 [
-5077,
+5075,
 724
 ],
 [
-5166,
+5165,
 783
 ]
 ],
 "labelBBox": {
-"x": 5074,
+"x": 5071,
 "y": 659,
 "width": 25,
 "height": 18
@@ -30400,28 +30400,28 @@
 492
 ],
 [
-4804,
+4801,
 540
 ],
 [
-5127,
+5124,
 617
 ],
 [
-5285,
+5283,
 655
 ],
 [
-5455,
-726
+5454,
+727
 ],
 [
-5579,
+5578,
 785
 ]
 ],
 "labelBBox": {
-"x": 5446,
+"x": 5444,
 "y": 616,
 "width": 254,
 "height": 107
@@ -30442,7 +30442,7 @@
 "label": "zot-image-mirror.yml builds the boot \nasset from upstream: fetches manifest D \nand every blob anonymously, verifies \neach digest, packages them reproducibly \nand publishes the immutable prerelease ",
 "points": [
 [
-3409,
+3410,
 469
 ],
 [
@@ -30450,19 +30450,19 @@
 473
 ],
 [
-5291,
-495
+5289,
+496
 ],
 [
-5728,
+5726,
 617
 ],
 [
-5856,
+5854,
 652
 ],
 [
-5988,
+5987,
 724
 ],
 [
@@ -30471,7 +30471,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5982,
+"x": 5981,
 "y": 616,
 "width": 258,
 "height": 107
@@ -30612,11 +30612,11 @@
 485
 ],
 [
-5996,
+5995,
 535
 ],
 [
-6269,
+6268,
 617
 ],
 [
@@ -30633,7 +30633,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6498,
+"x": 6497,
 "y": 616,
 "width": 248,
 "height": 107
@@ -30662,11 +30662,11 @@
 478
 ],
 [
-6452,
+6451,
 515
 ],
 [
-6774,
+6773,
 617
 ],
 [
@@ -30674,7 +30674,7 @@
 651
 ],
 [
-6990,
+6989,
 723
 ],
 [
@@ -30683,7 +30683,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6985,
+"x": 6984,
 "y": 616,
 "width": 252,
 "height": 107
@@ -30712,11 +30712,11 @@
 472
 ],
 [
-6897,
+6896,
 492
 ],
 [
-7265,
+7264,
 617
 ],
 [
@@ -30733,7 +30733,7 @@
 ]
 ],
 "labelBBox": {
-"x": 7458,
+"x": 7457,
 "y": 659,
 "width": 25,
 "height": 18
@@ -30783,7 +30783,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 843,
+"width": 838,
 "height": 1001
 },
 "nodes": [
@@ -30880,7 +30880,7 @@
 "size": "md"
 },
 "description": {
-"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
+"txt": "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. KNOWN GAP (#9360): the CI apply now writes as the soleur-infra App, which is not a bypass actor, so a manifest write is refused (409) until #9361 swaps the App bypass actor to soleur-infra. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6)."
 },
 "tags": [
 "external"
@@ -30986,7 +30986,7 @@
 "id": "7g62ea",
 "source": "github",
 "target": "soleurMarketplace",
-"label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp: declares the default-branch ruleset \nAND publishes \n.claude-plugin/marketplace.json from ",
+"label": "Authenticated WRITE from \napply-github-infra.yml as the soleur-ai \nApp until #9360, and since then as the \nsoleur-infra App (#8209 infra mode; the \npost-apply verify mints its token ",
 "points": [
 [
 617,
@@ -31020,7 +31020,7 @@
 "labelBBox": {
 "x": 590,
 "y": 240,
-"width": 252,
+"width": 248,
 "height": 106
 },
 "parent": null,

@@ -214,6 +214,16 @@ copy this work exists to delete. The Tier-B key is delivered as a GitHub
 environment secret on `infra-privileged`; see
 knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md.
 
+**In CI the apply runs infra mode only (2026-10-01, #9360).** `apply-github-infra.yml` no longer
+fetches the soleur-ai pair from `prd_terraform`. The infra-credentials loader delivers the
+soleur-infra key to Terraform, and the job mints its post-apply verify token from the same App with
+`.github/actions/mint-infra-app-token` (`administration:write` on `soleur,soleur-marketplace`) before
+Terraform runs. That mint step fails the job closed, before any write, if the Tier-B secret or names
+are missing or the installation no longer covers a managed repository. Both CI runners of this root
+(`apply-github-infra.yml` and `scheduled-terraform-drift.yml`) load the Tier-B key, so legacy mode is
+reached only if that environment secret is missing, and it then fails on the sentinel. Removing the
+legacy arm from `main.tf` is tracked in #9361.
+
 Verify Doppler has both secrets:
 
 ```bash
@@ -335,6 +345,13 @@ App id `3261325` versus the installation id `122213433` — which leaves the fil
 and the run red. That is recoverable by a normal merge (the rulesets API is not gated by the
 ruleset), so it is a red pipeline, not a deadlock.
 
+**Known gap (2026-10-01, #9360): the bypass actor is still soleur-ai.** Since #9360 the CI apply runs
+as the soleur-infra App (5118911), but `ruleset-marketplace-pr-required.tf` still names the soleur-ai
+App (3261325) as its App bypass actor. A manifest write therefore fails with `409 Repository rule
+violations`: the run goes red and the published file and state stay unchanged. Swapping the actor
+(and `commit_author`) is a production ruleset write, tracked in #9361, which also carries the ordering
+requirement between the two resources.
+
 **The human bypass actors use `bypass_mode = "always"`, unlike the two sibling rulesets.** This is
 deliberate and was measured: in `pull_request` mode the sole maintainer's own merge is refused
 (`reviewDecision: REVIEW_REQUIRED`) and requires an `--admin` override, which would make every
@@ -421,6 +438,10 @@ gh api repos/jikig-ai/soleur/rulesets/14145388 \
 ```
 
 ## Phase 4 -- Rotation (App credentials -- none required operator-side)
+
+> **Superseded 2026-10-01 (#9360):** CI applies authenticate as the Tier-B `soleur-infra` App, whose
+> key lives in `soleur-infra-privileged/prd`; rotate it there (ADR-241 D5). The text below describes
+> the soleur-ai key, which `prd_terraform` no longer holds after #8209 O10.
 
 The provider authenticates as the `soleur-ai` GitHub App. App credentials do
 not rotate operator-side -- the App PEM lives in Doppler indefinitely.

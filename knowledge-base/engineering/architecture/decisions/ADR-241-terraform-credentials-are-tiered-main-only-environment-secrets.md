@@ -494,7 +494,7 @@ The canonical operator sequence is
 | D2 boundary | `proposed` | **R1 (#8609) closes** (and R7 closes at O5b). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
 | D3 carrier | `adopting` | The Tier-B project is populated and its read token is seeded on all four environments, and the canary reads `source=tier_b`. |
 | D4 Tier-A substitutes | `adopting` | The read-only Hetzner token returns `token_readonly` on a write, and the Tier-A state pair returns `403` on a put and `200` on a get. |
-| D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. **Amended 2026-09-30 (#9262):** and O4c's evidence (#9262 plan AC15): one `main`-dispatched build whose `bump-cloud-init-pin` job is green under `infra-privileged` with the `app-token` notice naming `app=soleur-infra`. D5 cannot reach `accepted` until the new scopes have been exercised. |
+| D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. **Amended 2026-09-30 (#9262):** and O4c's evidence (#9262 plan AC15): one `main`-dispatched build whose `bump-cloud-init-pin` job is green under `infra-privileged` with the `app-token` notice naming `app=soleur-infra`. D5 cannot reach `accepted` until the new scopes have been exercised. **Amended 2026-10-01 (#9360):** and the marketplace bypass-actor follow-up (#9361) has landed, with a manifest write exercised as soleur-infra. |
 | D6 integrity | `adopting` | The loader's sentinel row and Guard 2 are green on the PR, and a planted same-named `prd_terraform` value is measured to have no effect. |
 | D7 state custody | `adopting` | The privileged bucket's object matches the source by sha256, lineage and serial; a Tier-A key gets `403` on it; the two custody forgets have applied. |
 | D8 census | `adopting` | Every mutation row of the Guard Contract is measured RED, and the suite is green on the PR head. |
@@ -666,6 +666,36 @@ D5 and the D5 Statuses row carry the decision text.
 
 Plan: `knowledge-base/project/plans/2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
 
+### 2026-10-01 (#9360): apply-github-infra and entrypoint_audit leave the soleur-ai key
+
+O10 replaced `GITHUB_APP_PRIVATE_KEY` in `soleur/prd_terraform` with the `EVICTED_SEE_ADR_241`
+sentinel. `apply-github-infra.yml` still fetched the soleur-ai pair from that config for its
+post-apply verify, so every ruleset apply failed with `verdict=legacy_app_key_evicted`
+(run 36839787788). Its Terraform already ran as soleur-infra through the loader; only the fetch and
+the verify's inline mint used the evicted key.
+
+- **Apply path:** reads no GitHub identity from `prd_terraform`. The verify token comes from
+  `.github/actions/mint-infra-app-token` (`administration:write` on `soleur,soleur-marketplace`),
+  which runs **before** Terraform as the job's Tier-B identity preflight. A final `always()` step
+  revokes the token.
+- **`apply-web-platform-infra.yml::entrypoint_audit`:** posts with the job's own `github.token`
+  (`issues: write`), because soleur-infra holds no `issues` permission.
+- **Census:** G4e moves from a floor of 3 to an exact 1 (board-status-sync's legacy arm). It gains a
+  tier clause: no reader may sit in a job bound to a Tier-B environment.
+- **Known gap:** the `soleur-marketplace` ruleset's App bypass actor is still soleur-ai (3261325), so a
+  manifest write made as soleur-infra is refused (409, repository rule violations). Swapping the
+  actor is a production ruleset write, tracked as #9361.
+- **Pre-existing, unchanged here:** the tf-var `doppler run` over `prd_terraform` still lets a value
+  planted there (`ACTIONS_INTEGRATION_ID`, `CODEQL_INTEGRATION_ID`, `GH_OWNER`, `GH_REPO`) rebind the
+  required checks in place; tracked as #9362.
+- **D5 evidence, by limb:** O4c is done (an O10 precondition). Board sync is green on 2026-10-01 with
+  `source=soleur-board` and no legacy warning (runs 36853754168, 36858491319). The apply has only a
+  *dispatched no-op* (#9360 plan AC12, not the #8209 plan's AC12-AC16), not an apply-on-merge; the
+  run is recorded on #8209. The D5 Statuses row gains one dated condition.
+- No decision's status changes here.
+
+Plan: `knowledge-base/project/plans/2026-10-01-fix-retier-apply-github-infra-app-identity-plan.md`.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -686,3 +716,4 @@ Plan: `knowledge-base/project/plans/2026-09-30-infra-retier-pin-bump-and-automin
 - Issues: #8209, #6167, #8189, #8211, #8385, #8093
 - D10 (2026-09-30): #8609, #9277, #9278, #6730, #6129, #7095, #9294 (G1), #9295 (G2), #8780
 - D2/D5 amendment (2026-09-30): #9262; ADR-232 (amended the same day)
+- D5 apply-path note (2026-10-01): #9360, #9361, #9362

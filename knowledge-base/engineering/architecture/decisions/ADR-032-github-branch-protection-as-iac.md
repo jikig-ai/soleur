@@ -80,6 +80,10 @@ auth per `hr-github-app-auth-not-pat`. The current model uses the `soleur-ai`
 App (id `3261325`, installation `122213433`) — see §"Required-check
 inventory" below and `infra/github/main.tf`.
 
+> **Superseded 2026-10-01 (#9360):** for CI applies, superseded by ADR-241 D5 (#8209): the
+> soleur-infra App, installation `166065653`. `apply-github-infra.yml` no longer reads the
+> soleur-ai pair.
+
 The original PAT framing (kept for audit):
 
 > Fine-grained PAT named `terraform-infra-github-rulesets`, scoped to the
