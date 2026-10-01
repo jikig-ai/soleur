@@ -6,6 +6,7 @@ import { reportSilentFallback } from "@/server/observability";
 import { verifiedUserId } from "@/server/request-auth";
 import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
+import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
 import {
   ATTACHMENT_EXTENSION_BY_TYPE,
   CONVERSATION_ID_RE,
@@ -144,23 +145,30 @@ export async function POST(request: Request) {
 
   if (error || !data) {
     logger.error({ err: error, storagePath }, "Failed to create signed upload URL");
+    // storagePath's first segment is the raw user UUID — emit the tail so the
+    // Sentry extra doesn't duplicate userId inside a string value the
+    // key-rename scrubber (server/sentry-scrub.ts) cannot see.
+    const storagePathTail = storagePath.split("/").slice(1).join("/");
     if (error) {
       Sentry.captureException(error, {
         tags: { feature: "attachments", op: "presign" },
-        extra: { storagePath, userId },
+        extra: { storagePath: storagePathTail, userId },
       });
     } else {
       Sentry.captureMessage("signed upload URL returned no data", {
         level: "error",
         tags: { feature: "attachments", op: "presign" },
-        extra: { storagePath, userId },
+        extra: { storagePath: storagePathTail, userId },
       });
     }
     return errJson("upload_failed", 500);
   }
 
+  // The browser PUT must land on NEXT_PUBLIC_SUPABASE_URL — prod CSP
+  // connect-src does not list the raw <ref>.supabase.co host the service-role
+  // client signs against (same defect class as the #5020 download-URL fix).
   return NextResponse.json({
-    uploadUrl: data.signedUrl,
+    uploadUrl: toPublicStorageUrl(data.signedUrl),
     storagePath,
   });
 }
