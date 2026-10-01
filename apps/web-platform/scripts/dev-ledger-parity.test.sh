@@ -4107,6 +4107,8 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 137_byok_cap_breach_audit_row.down.sql
 140_flag_flip_audit_approval_method.down.sql
 141_conversation_engine_binding_state.down.sql
+145_email_triage_statutory_archive_guard.down.sql
+154_inbox_item_idempotent_rearchive.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \

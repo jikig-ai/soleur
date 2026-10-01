@@ -35,7 +35,8 @@
 # are dispatched by the web server's watchdog clock (ADR-248), so their margins
 # are budgeted for the clock plus the MEASURED runner queue instead (inngest 15 -> 50, zot
 # 120 -> 60; see each resource).
-# Daily/weekly monitors use 30-240 min as their observed jitter dictates.
+# Daily/weekly monitors use 30-1440 min as their observed jitter dictates; the 1440
+# outlier is scheduled_realtime_probe, sized to survive one wholly dropped daily run.
 # The TR9 substrate-migration sequence completed the move off GHA hourly cron
 # for the Inngest-fired cohort: PR-1 #3985 (daily-triage), PR-2 #4062
 # (follow-through), PR-3 #4227 closing issue #4211 (oauth-probe), PR-4
@@ -281,9 +282,9 @@ resource "sentry_cron_monitor" "scheduled_follow_through" {
   name         = "scheduled-follow-through"
   schedule     = { crontab = "0 9 * * 1-5" }
   # TR9 PR-2 (#4063): NEW Inngest-fired monitor for cron-follow-through-monitor.ts.
-  # 30-min margin per Inngest-fired precedent (scheduled_daily_triage above + PR-γ
-  # #4006's scheduled_gh_pages_cert_state). Weekday-only DOW range (1-5) is honored
-  # by Sentry's croniter-backed missed-checkin algorithm AND the jianyuan/sentry
+  # 30-min margin per Inngest-fired precedent (scheduled_daily_triage above).
+  # Weekday-only DOW range (1-5) is honored by Sentry's croniter-backed
+  # missed-checkin algorithm AND the jianyuan/sentry
   # provider passes the crontab through verbatim (verified at Phase 0.4 of the plan
   # via gh search against the provider's internal/provider/resource_cron_monitor_impl.go
   # — Schedule: inSchedule.Crontab.Get()). Weekend gap is expected silence, not a
@@ -363,40 +364,15 @@ resource "sentry_cron_monitor" "scheduled_community_monitor" {
   timezone                = "UTC"
 }
 
-# scheduled-gh-pages-cert-state: RETIRED. To be deleted by the follow-up PR (tracked on #9304).
-#
-# Origin: a daily poll of the GitHub Pages certificate, added after the 2026-05-18
-# silent cert-expiry outage (#3976). ADR-194 abandoned that origin certificate at the
-# Cloudflare cutover, and its producer function `cron-gh-pages-cert-state` is deleted.
-# The monitor has been `enabled = false` since #7640, so nothing checks in.
-#
-# WHY IT STILL EXISTS: the two-PR rule (this root's README, "Adding or removing a cron
-# monitor") forbids unrouting a monitor from `cron-monitor-alerts.tf` and deleting it in
-# the same apply. This PR moves it to `cron_monitor_alert_unrouted`; the next PR deletes
-# the resource (a destroy, so it carries `[ack-destroy]`). Every attribute below is
-# deliberately unchanged, which keeps this PR's plan free of any destroy.
-resource "sentry_cron_monitor" "scheduled_gh_pages_cert_state" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-gh-pages-cert-state"
-  enabled                 = false
-  schedule                = { crontab = "0 3 * * *" }
-  checkin_margin_minutes  = 240
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
 # TR9 PR-6 (closes #4416): Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-strategy-review.ts`. NEW
 # monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
 # with no Sentry check-in). The GHA scheduled-strategy-review workflow was
 # deleted in the same commit per TR9 I-13 hygiene.
 # Weekly Monday 08:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
-# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through,
-# scheduled_bug_fixer); tighter than the GHA-era 240-min margin
-# (cf. scheduled_gh_pages_cert_state) because Inngest has minimal jitter.
+# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through);
+# tighter than the GHA-era 240-min margin (see scheduled_daily_triage) because
+# Inngest has minimal jitter.
 # Single-miss alert (failure_issue_threshold=1): a single missed Monday is
 # noteworthy on a weekly cadence.
 resource "sentry_cron_monitor" "scheduled_strategy_review" {
@@ -1405,9 +1381,11 @@ resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
 
 # Liveness for the GitHub Actions queue-health monitor
 # (.github/workflows/scheduled-actions-queue-health.yml, on.schedule
-# "*/30 * * * *"). #8450 incident class: on 2026-09-22 the org sat ~90 minutes
-# at ~206 queued runs with ~8-10 jobs executing against a 60-job Team
-# entitlement — runner under-assignment — and nothing paged.
+# "*/30 * * * *" as FALLBACK + Inngest dispatch-primary via
+# cron-actions-queue-health-dispatch, #9273). #8450 incident class: on
+# 2026-09-22 the org sat ~90 minutes at ~206 queued runs with ~8-10 jobs
+# executing against a 60-job Team entitlement — runner under-assignment — and
+# nothing paged.
 #
 # TWO failure signals land here. (1) A ?status=error heartbeat = the probe ran
 # and returned UNDER_ASSIGNED (deep+old queue with delivered concurrency below
@@ -1416,23 +1394,48 @@ resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
 # itself cannot get a runner, absence pages — the only mechanism that can
 # detect a total-assignment outage.
 #
-# GHA-scheduled (NOT Inngest-dispatched) by design: an inngest cron would add
-# the prod inngest server as a liveness dependency (#5542 showed it can be
-# dark for hours) and would still land the executor in the queue being
-# measured. checkin_margin_minutes = 30 == the */30 interval (the
-# scheduled_inngest_health margin==interval precedent): a run up to one
-# interval late still checks in, while a genuinely starved monitor pages once
-# the window closes. max_runtime_minutes = 5 matches the job's
-# timeout-minutes. Slug MUST match the workflow's `monitor-slug`
-# (parity-asserted by
+# #9273 — the monitor was GHA-scheduled-only and paged on GitHub's schedule
+# DEFERRAL (measured ~4 fires/day under org load → ~47 missed-checkin
+# pages/day while the probe read HEALTHY whenever it landed). Deferral is not
+# starvation, so the primary trigger is now the Inngest dispatch cron: the
+# dispatch needs no runner to FIRE, and the executor still lands in the
+# measured queue (self-reference preserved). `schedule:` stays byte-identical
+# as the fallback clock (the #8450 cadence-parity guard keys on it).
+#
+# checkin_margin_minutes = 60 covers ~2× the measured dispatch-primary
+# delivery: p90 ~20 min runner-queue wait on the dispatched cohort
+# (2026-09-24, see QUEUE_ALLOWANCE_MINUTES in sentry-monitor-iac-parity.test.ts)
+# + ~5 min runtime + jitter. A run that never lands (both triggers failed, or
+# true starvation) still pages once the window closes.
+# max_runtime_minutes = 5 matches the job's timeout-minutes. Slug MUST match
+# the workflow's `monitor-slug` (parity-asserted by
 # apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts).
 resource "sentry_cron_monitor" "scheduled_actions_queue_health" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-actions-queue-health"
   schedule                = { crontab = "*/30 * * * *" }
-  checkin_margin_minutes  = 30
+  checkin_margin_minutes  = 60
   max_runtime_minutes     = 5
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Liveness for cron-bot-pr-reaper (#9274) — the every-2-hours sweep that
+# update-branches armed soleur-ai[bot] PRs stuck `mergeable_state: "behind"`
+# so auto-merge can fire, and files a [ci/bot-pr-reaper] action-required issue
+# for states update-branch cannot fix. Inngest-fired (pure REST sweep — no GHA
+# executor), so margin follows the Inngest-fired cohort convention: 30 min
+# over the */2h interval covers scheduler jitter plus a transient Inngest
+# retry; a dead reaper pages inside ~2.5 h.
+resource "sentry_cron_monitor" "scheduled_bot_pr_reaper" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-bot-pr-reaper"
+  schedule                = { crontab = "17 */2 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

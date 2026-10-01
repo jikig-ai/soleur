@@ -1183,11 +1183,13 @@ done < "$class_c_out"
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
 #
-# Addendum 2026-09-17 (extended 2026-09-28): the tf root now declares
+# Addendum 2026-09-17 (extended 2026-09-30 and 2026-10-01): the tf root now declares
 # 60 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
 # one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, the
-# #8450 scheduled-actions-queue-health probe a third, and the #9168
-# scheduled-supabase-watchdog monitor a fourth.
+# #8450 scheduled-actions-queue-health probe a third, the #9168
+# scheduled-supabase-watchdog monitor a fourth, and the #9274
+# scheduled-bot-pr-reaper monitor a fifth; #9304 then deleted the retired
+# scheduled-gh-pages-cert-state monitor (net 60).
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather

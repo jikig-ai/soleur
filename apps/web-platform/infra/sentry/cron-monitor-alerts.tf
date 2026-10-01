@@ -42,7 +42,13 @@ locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
   cron_monitor_alert_unrouted = {
-    scheduled_gh_pages_cert_state = "disabled, its producer function is deleted; the monitor is deleted in a follow-up PR per the two-PR rule (#9304)"
+    # #9274 — added under the two-PR rule: deliberately not in
+    # monitor_ids; a future PR may route it once the loop is measured. Real
+    # cover meanwhile: a dead reaper lets armed bot PRs sit >48h, which
+    # cron-cloud-task-heartbeat's stale-bot-PR scan (#5138) feeds
+    # sentry_alert.stale_bot_pr (issue-alerts.tf) → email; the unrouted
+    # monitor itself still opens a Sentry issue on failure.
+    scheduled_bot_pr_reaper = "48h stale-bot-PR watchdog (sentry_alert.stale_bot_pr) covers a dead reaper pending a routing decision (#9274)"
   }
 }
 

@@ -230,11 +230,16 @@ fi
 # is safe from `deploy`, because it is not.
 #
 # The permitted grammar is deliberately the NARROWEST that admits the payload we actually ship:
-# blank, comment, a bare [Service] header, Environment= and EnvironmentFile=. A directive
+# blank, comment, a bare [Service] header, Environment=, EnvironmentFile=, and the ONE exact line
+# `UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN` (#8609: every loader of the credential file must drop
+# the App read token; census G6u). It is a literal, anchored at end of line, so it admits no other
+# name, no suffix, no empty unset and no trailing-backslash continuation. A directive
 # outside it is rejected by name rather than silently dropped. Note this is a per-PHYSICAL-line
 # check while systemd parses LOGICAL lines (a trailing backslash continues), and that asymmetry
 # is safe in the only direction that matters: a continuation can merge permitted lines into one
 # directive, never synthesise a directive whose first physical line this loop did not inspect.
+# That holds only because control bytes are refused first: systemd also ends a line at a bare
+# CR, which the per-line grep cannot see (#9314 review).
 #
 # WHAT THIS GATE DOES NOT DEFEND AGAINST, stated plainly so nobody has to re-derive it:
 # `Environment=` is permitted, and it can set process-influencing variables — `LD_PRELOAD` being
@@ -254,7 +259,14 @@ fi
 # `grep -c` reads ALL input (no early close), so this cannot SIGPIPE the producer the way
 # `| grep -q` would under `set -o pipefail` — same reason as the env-file gate above.
 if [[ "$dest_canonical" == /etc/systemd/system/*.service.d/*.conf ]]; then
-  dropin_bad_lines="$(grep -cvE '^[[:space:]]*($|#|;|\[Service\][[:space:]]*$|Environment=|EnvironmentFile=)' "$tmp" || true)"
+  # CONTROL BYTES FIRST (#9314 review, P2 — predates #8609). systemd ends a line at a BARE
+  # carriage return, so `Environment=A=1<CR>User=root` was ONE physical line to the grep below
+  # (a permitted prefix) and TWO directives to systemd. Refuse every C0 byte except tab and
+  # newline, and DEL, before the per-line grammar runs. `tr` rather than `grep -P`: no PCRE
+  # dependency on the host. LC_ALL=C on both so the classes are bytes, not locale characters.
+  dropin_ctl_bytes="$(LC_ALL=C tr -d '\t\n\040-\176\200-\377' < "$tmp" | wc -c)"
+  [[ "$dropin_ctl_bytes" -eq 0 ]] || reject "dropin_shape:control_bytes=$dropin_ctl_bytes"
+  dropin_bad_lines="$(LC_ALL=C grep -cvE '^[[:space:]]*($|#|;|\[Service\][[:space:]]*$|Environment=|EnvironmentFile=|UnsetEnvironment=GITHUB_APP_DOPPLER_TOKEN[[:space:]]*$)' "$tmp" || true)"
   [[ "$dropin_bad_lines" == "0" ]] || reject "dropin_shape:bad_lines=$dropin_bad_lines"
 fi
 

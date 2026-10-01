@@ -33,7 +33,8 @@ vi.mock("@/server/workstream/mutate-workstream-issue", () => ({
 }));
 
 vi.mock("@/server/workstream/get-workstream-issues", () => ({
-  getWorkstreamIssues: vi.fn(),
+  resolveBoardReadContext: vi.fn(),
+  collectWorkstreamIssues: vi.fn(),
 }));
 
 const getWorkstreamIssueOptions = vi.fn();

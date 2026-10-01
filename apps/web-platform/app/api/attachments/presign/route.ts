@@ -6,13 +6,22 @@ import { reportSilentFallback } from "@/server/observability";
 import { verifiedUserId } from "@/server/request-auth";
 import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
+import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url";
 import {
   ATTACHMENT_EXTENSION_BY_TYPE,
+  CONVERSATION_ID_RE,
   MAX_AGENT_READABLE_PDF_SIZE,
   MAX_ATTACHMENT_SIZE,
+  type PresignErrorCode,
   isPdfAttachment,
   resolveAttachmentContentType,
 } from "@/lib/attachment-constants";
+
+// Every error body is typed against PRESIGN_ERROR_CODES: a code without client
+// copy (lib/attachment-error-copy.ts) is a compile error.
+function errJson(error: PresignErrorCode, status: number) {
+  return NextResponse.json({ error }, { status });
+}
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -23,7 +32,7 @@ export async function POST(request: Request) {
   const userId = await verifiedUserId(request);
 
   if (!userId) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return errJson("unauthorized", 401);
   }
 
   // Parse body
@@ -35,7 +44,7 @@ export async function POST(request: Request) {
     typeof body.sizeBytes !== "number" ||
     typeof body.conversationId !== "string"
   ) {
-    return NextResponse.json({ error: "invalid_request" }, { status: 400 });
+    return errJson("invalid_request", 400);
   }
 
   const { filename, sizeBytes, conversationId } = body;
@@ -50,7 +59,7 @@ export async function POST(request: Request) {
     filename,
   });
   if (!contentType) {
-    return NextResponse.json({ error: "unsupported_file_type" }, { status: 400 });
+    return errJson("unsupported_file_type", 400);
   }
 
   // Validate file size
@@ -61,14 +70,27 @@ export async function POST(request: Request) {
   // filename as a second signal.
   // Number.isFinite catches NaN/Infinity from a coerced sizeBytes.
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
-    return NextResponse.json({ error: "file_too_large" }, { status: 400 });
+    return errJson("file_too_large", 400);
   }
   const isPdf = isPdfAttachment({ contentType, filename });
   if (isPdf && sizeBytes > MAX_AGENT_READABLE_PDF_SIZE) {
-    return NextResponse.json({ error: "file_too_large" }, { status: 400 });
+    return errJson("file_too_large", 400);
   }
   if (sizeBytes > MAX_ATTACHMENT_SIZE) {
-    return NextResponse.json({ error: "file_too_large" }, { status: 400 });
+    return errJson("file_too_large", 400);
+  }
+
+  // Shape check BEFORE any DB call. `conversationId` is interpolated into the
+  // storage path below, and `conversations.id` is a uuid column, so a non-uuid
+  // (`"new"`, `../x`) would be a Postgres 22P02 error rather than an empty
+  // result. No match -> 404 with no lookup and no storage call.
+  //
+  // Contract: a 404 here no longer proves the conversation exists. A fresh
+  // conversation has no row until its first `chat` message (deferred creation),
+  // so this shape check plus the attachment pipeline's
+  // `${userId}/${conversationId}/` prefix check (unchanged) are the gate.
+  if (!CONVERSATION_ID_RE.test(conversationId)) {
+    return errJson("conversation_not_found", 404);
   }
 
   // Verify conversation read-eligibility (own OR workspace co-member).
@@ -77,17 +99,26 @@ export async function POST(request: Request) {
   // Inline lookup (no shared TS helper file — DHH P0-2 + code-simplicity
   // P0-1 + architecture P1-1 convergence per plan §Phase 3).
   const service = createServiceClient();
-  const { data: conversation } = await service
+  const { data: conversation, error: lookupErr } = await service
     .from("conversations")
     .select("id, user_id, workspace_id")
     .eq("id", conversationId)
-    .single();
+    .maybeSingle();
 
-  if (!conversation) {
-    return NextResponse.json({ error: "conversation_not_found" }, { status: 404 });
+  // A real DB error must NOT fall through to the tolerant (no-row) branch.
+  if (lookupErr) {
+    reportSilentFallback(lookupErr, {
+      feature: "attachments",
+      op: "presign-lookup",
+      extra: { userId, conversationId },
+    });
+    return errJson("upload_failed", 500);
   }
 
-  if (conversation.user_id !== userId) {
+  // No row is the expected state for a fresh conversation: the path stays
+  // caller-prefixed (`${userId}/...`), so it can only write into the caller's
+  // own folder. An existing row still goes through the membership check.
+  if (conversation && conversation.user_id !== userId) {
     const { data: isMember, error: memberErr } = await service.rpc("is_workspace_member", {
       p_workspace_id: conversation.workspace_id,
       p_user_id: userId,
@@ -99,7 +130,7 @@ export async function POST(request: Request) {
         message: "workspace_cutover_deny",
         extra: { userId, conversationId, workspaceId: conversation.workspace_id },
       });
-      return NextResponse.json({ error: "not_a_workspace_member" }, { status: 403 });
+      return errJson("not_a_workspace_member", 403);
     }
   }
 
@@ -114,23 +145,30 @@ export async function POST(request: Request) {
 
   if (error || !data) {
     logger.error({ err: error, storagePath }, "Failed to create signed upload URL");
+    // storagePath's first segment is the raw user UUID — emit the tail so the
+    // Sentry extra doesn't duplicate userId inside a string value the
+    // key-rename scrubber (server/sentry-scrub.ts) cannot see.
+    const storagePathTail = storagePath.split("/").slice(1).join("/");
     if (error) {
       Sentry.captureException(error, {
         tags: { feature: "attachments", op: "presign" },
-        extra: { storagePath, userId },
+        extra: { storagePath: storagePathTail, userId },
       });
     } else {
       Sentry.captureMessage("signed upload URL returned no data", {
         level: "error",
         tags: { feature: "attachments", op: "presign" },
-        extra: { storagePath, userId },
+        extra: { storagePath: storagePathTail, userId },
       });
     }
-    return NextResponse.json({ error: "upload_failed" }, { status: 500 });
+    return errJson("upload_failed", 500);
   }
 
+  // The browser PUT must land on NEXT_PUBLIC_SUPABASE_URL — prod CSP
+  // connect-src does not list the raw <ref>.supabase.co host the service-role
+  // client signs against (same defect class as the #5020 download-URL fix).
   return NextResponse.json({
-    uploadUrl: data.signedUrl,
+    uploadUrl: toPublicStorageUrl(data.signedUrl),
     storagePath,
   });
 }
