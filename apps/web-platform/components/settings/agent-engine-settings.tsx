@@ -241,6 +241,8 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
           >
             <h3 id="codex-auth-change-title" className="font-medium">Change mode for existing Codex conversations?</h3>
             <p id="codex-auth-change-description" className="mt-2 text-sm text-soleur-text-secondary">
+              Requested authentication mode: {pendingAuthChange.authMode === "api-key" ? "API key" : "Managed ChatGPT sign-in"}.
+              {" "}
               This affects all Codex conversations in this workspace, including chats started by other members.
               The current selection will change {pendingAuthChange.affectedConversationCount} existing Codex conversation{pendingAuthChange.affectedConversationCount === 1 ? "" : "s"}.
               Their stored history will be sent under the selected provider account only after each member acknowledges.

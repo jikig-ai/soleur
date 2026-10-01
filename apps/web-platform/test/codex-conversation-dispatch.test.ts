@@ -84,7 +84,11 @@ describe("Codex conversation dispatch bridge", () => {
       runtime: { userId: "user-1", transport: {} as never, apiKeyProvider: provider, createCodex: () => adapter as never },
       conversationId: "conv-1",
       input: { text: "hi", attachmentIds: [] },
-      context: { runId: "run-1", binding: {} as never, idempotencyKey: "idempotency", signal: new AbortController().signal },
+      context: {
+        runId: "run-1",
+        binding: { workspaceId: "ws-1", execution: { kind: "conversation", conversationId: "conv-1" }, engineId: "codex", authMode: "api-key", authModeGeneration: 2, adapterVersion: "codex-v1", boundAt: new Date().toISOString() },
+        idempotencyKey: "idempotency", signal: new AbortController().signal,
+      },
       selection: { engineId: "codex", authMode: "api-key", operation: "existing-run", workflow: "conversation", dataClass: "synthetic", requiredCapabilities: [], now: Date.now() },
       evidence: { endpoint: "https://api.openai.com/v1", allowedHosts: ["api.openai.com"], acceptedDataClasses: ["synthetic"], vendorDpaStatus: "verified", transferGeography: "scc", deletionSupport: "verified", approvalRequired: false },
       leaderId: "cc_router",
@@ -104,6 +108,37 @@ describe("Codex conversation dispatch bridge", () => {
       { type: "stream", content: "hello", partial: true, leaderId: "cc_router" },
       { type: "stream_end", leaderId: "cc_router" },
     ]);
+  });
+
+  it.each([
+    { label: "same-mode ABA generation switch", binding: { authModeGeneration: 4 } },
+    { label: "workspace replacement", binding: { workspaceId: "other-synthetic-workspace" } },
+    { label: "conversation replacement", binding: { execution: { kind: "conversation", conversationId: "other-synthetic-conversation" } } },
+    { label: "run replacement", binding: {}, runId: "other-synthetic-run" },
+  ])("rejects $label after acknowledgment before any attempt or provider access", async ({ binding, runId }) => {
+    const { repository, options } = turnFixture([{ type: "status", status: "completed" }]);
+    repository.getConversationRun.mockResolvedValue({
+      id: runId ?? options.context.runId,
+      binding: { ...options.context.binding, ...binding },
+    } as never);
+    const createCodex = vi.fn(() => ({ start: vi.fn() } as never));
+    const readCredentialMode = vi.fn(() => "api-key");
+    const acquire = vi.fn();
+    options.runtime.createCodex = createCodex;
+    options.runtime.apiKeyProvider = {
+      get mode() { return readCredentialMode(); },
+      acquire, refresh: vi.fn(), logout: vi.fn(),
+    } as never;
+
+    await expect(dispatchCodexConversationToWebSocket(options)).rejects.toMatchObject({ code: "codex_binding_stale" });
+    expect(repository.startAttempt).not.toHaveBeenCalled();
+    expect(repository.assertAttemptGeneration).not.toHaveBeenCalled();
+    expect(repository.transitionAttempt).not.toHaveBeenCalled();
+    expect(repository.appendLifecycleEvent).not.toHaveBeenCalled();
+    expect(readCredentialMode).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
+    expect(createCodex).not.toHaveBeenCalled();
+    expect(options.send).not.toHaveBeenCalled();
   });
 
   it("rejects a stale binding generation before constructing its mode-specific adapter", async () => {

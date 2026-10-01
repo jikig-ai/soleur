@@ -609,6 +609,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     authModeGeneration: number;
     acknowledged: boolean;
   }>());
+  const explicitCodexResumeRef = useRef<string | null>(null);
   // #5290 false-positive fix — mirror of `sessionKind` for the `auth_ok`
   // reconnect closure. That handler lives in the `connect` useCallback whose
   // dep array excludes `sessionKind`, so the useState would be captured STALE
@@ -917,6 +918,27 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           const isReconnect = hasConnectedBeforeRef.current;
           hasConnectedBeforeRef.current = true;
           const activeConvId = realConversationIdRef.current;
+          const hasHeldCodexTurns = [...pendingCodexHistoryTurnsRef.current.values()]
+            .some((turn) => turn.conversationId === activeConvId);
+          // Only the existing recovery button may request a full resume: it
+          // replaces the live session, so reconnect auth must not do so itself.
+          if (explicitCodexResumeRef.current === activeConvId && activeConvId && hasHeldCodexTurns) {
+            try {
+              if (ws.readyState !== WebSocket.OPEN) {
+                dispatch({ type: "connection_change", phase: "unrecoverable" });
+                break;
+              }
+              ws.send(JSON.stringify({ type: "resume_session", conversationId: activeConvId }));
+              explicitCodexResumeRef.current = null;
+            } catch (err) {
+              reportSilentFallback(err, {
+                feature: "codex-history-transfer", op: "send-resume-throw",
+                extra: { conversationId: activeConvId },
+              });
+              dispatch({ type: "connection_change", phase: "unrecoverable" });
+            }
+            break;
+          }
           // #5290 false-positive fix — only request replay for a row that
           // PROVABLY EXISTS server-side, so the owner-scoped `(id,user_id)`
           // lookup cannot return zero rows and mint a spurious
@@ -956,14 +978,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             // flag; the FIRST genuinely-rendered post-reattach frame confirms the
             // stream is alive and promotes to State 4. The sticky guard still
             // no-ops this `live` if `unrecoverable` was already set (AC11).
-            reattachPendingRef.current = true;
-            dispatch({ type: "connection_change", phase: "live" });
+            // Replay proves stream continuity, not that this new socket's
+            // server session is bound for a held retry. Keep its explicit
+            // recovery available until session_resumed/session_started.
+            reattachPendingRef.current = !hasHeldCodexTurns;
+            dispatch({ type: "connection_change", phase: hasHeldCodexTurns ? "unrecoverable" : "live" });
           } else {
             // Not replay-eligible: a fresh initial connect, OR a reconnect of a
             // `"fresh"`/unknown-kind session (no materialized row to replay, no
-            // buffered turn worth requesting). Plain `live`, no replay request,
-            // no notice.
-            dispatch({ type: "connection_change", phase: "live" });
+            // buffered turn worth requesting). Held Codex drafts need the
+            // explicit recovery affordance before the session can accept a retry.
+            dispatch({ type: "connection_change", phase: hasHeldCodexTurns ? "unrecoverable" : "live" });
           }
           break;
         }
@@ -1256,6 +1281,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_started": {
+          explicitCodexResumeRef.current = null;
           if (msg.conversationId) {
             for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
               if (heldTurn.conversationId !== msg.conversationId) {
@@ -1297,6 +1323,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_resumed": {
+          explicitCodexResumeRef.current = null;
           for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
             if (heldTurn.conversationId !== msg.conversationId) {
               dispatch({ type: "set_message_delivery", clientTurnId, delivery: "unsent" });
@@ -1916,21 +1943,31 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     (message: Extract<ChatMessage, { type: "text" }>) => {
       const clientTurnId = message.id.startsWith("user-") ? message.id.slice("user-".length) : "";
       const heldTurn = pendingCodexHistoryTurnsRef.current.get(clientTurnId);
-      if (status !== "connected" || message.role !== "user" || message.delivery !== "retryable"
+      if (status !== "connected" || !sessionConfirmed || message.role !== "user" || message.delivery !== "retryable"
         || !heldTurn?.acknowledged || heldTurn.conversationId !== realConversationIdRef.current
         || !clientTurnId) return;
 
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      try {
+        ws.send(JSON.stringify({
+          type: "chat",
+          content: message.content,
+          attachments: message.attachments,
+          clientTurnId,
+        }));
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "codex-history-transfer", op: "send-resend-throw",
+          extra: { conversationId: heldTurn.conversationId },
+        });
+        return;
+      }
+      pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
       dispatch({ type: "reset_connection" });
       dispatch({ type: "set_message_delivery", clientTurnId, delivery: undefined });
-      send({
-        type: "chat",
-        content: message.content,
-        attachments: message.attachments,
-        clientTurnId,
-      });
-      pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
     },
-    [send, status],
+    [sessionConfirmed, status],
   );
 
   const acknowledgeCodexHistoryTransfer = useCallback(
@@ -2043,6 +2080,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // clear State 3, THEN re-open the socket. The next user turn resumes the SDK
   // transcript with full context (#5240 v1 verified rebind).
   const resumeAfterUnrecoverable = useCallback(() => {
+    const activeConvId = realConversationIdRef.current;
+    if (activeConvId && [...pendingCodexHistoryTurnsRef.current.values()]
+      .some((turn) => turn.conversationId === activeConvId)) {
+      explicitCodexResumeRef.current = activeConvId;
+    }
     dispatch({ type: "reset_connection" });
     reconnect();
   }, [reconnect]);

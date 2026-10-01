@@ -96,3 +96,17 @@ Source: [workspace-default-engine.pen](workspace-default-engine.pen), frame
   reduced the output to 40 bytes; committed input recovery restored it before
   edits. Future iteration must supply a separate input snapshot and verify both
   loaded nodes and post-save size, not just the initial post-open byte count.
+
+## September 30 implementation screenshot evidence
+
+The current `.pen` and September 27 live-handler plan supersede the exploratory
+September 11 connection-card structure above: implementation uses native engine
+and authentication dropdowns, an owner-confirmed affected-conversation count,
+and separate member history-transfer acknowledgment with explicit resend.
+
+[Implementation component QA](screenshots/2026-09-30-implementation-component-qa.md)
+records actual rendered React components and compiled application Tailwind CSS
+at desktop and mobile sizes. Its synthetic loopback harness does not certify
+authenticated Web execution, provider credentials, legal disposition or rollout
+readiness. The report identifies each screenshot's state and the remaining
+qualification boundary.

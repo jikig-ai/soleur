@@ -162,3 +162,23 @@ Verify the visible window before asking for sign-in. The first sandboxed launch
 could not write its runtime socket; the approved retry succeeded. Hyprland's
 dispatcher help calls returned general usage instead of a focus API; use the
 measured workspace location without guessing a legacy dispatch command.
+
+Later continuation probes guessed migration/test/hook and Hyprland documentation
+paths that were absent. Resolve names with `rg --files` and inspect the actual
+hook configuration before reading. A heredoc extraction initially selected too
+many refusal-list rows; the corrected extraction matched the exact 59-member
+CI set. Large skill reads truncated; read bounded sections and disclose any
+unread scope instead of claiming a complete workflow attestation.
+
+The infrastructure census compared a CI merge checkout with a subsequently
+advanced `origin/main`, falsely attributing a sibling PR's new resources to this
+branch as deletions. Inspect both trees and synchronize main before retrying;
+do not weaken the guard to hide a stale-checkout comparison.
+
+One reconnect patch first selected the replay branch rather than its sibling;
+source rereading caught and corrected it before execution. A server-stamped
+replay frame establishes stream continuity, but `handleResumeStream()` does not
+bind the new WebSocket session's conversation. Keep held-message resend disabled
+until explicit session recovery is confirmed; do not infer admission from replay.
+The temporary screenshot harness's dependency deprecation and server termination
+were investigated and repeated captures succeeded, as recorded in its QA report.
