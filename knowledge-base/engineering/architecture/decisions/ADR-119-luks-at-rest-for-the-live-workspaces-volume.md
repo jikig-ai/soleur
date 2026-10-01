@@ -1136,12 +1136,15 @@ The mechanics live in `workspaces-cutover.sh`:
   exit status checked, and resumes writers. It pages through the fatal Sentry drift
   `cutover_aborted_post_canary`. If the mapper re-assert fails, it stops the app and the writers, so
   nothing writes to a mount that is not the mapper. The runbook makes this path fix-forward only.
-- **`ROLLBACK=1` refuses after a successful cutover.** When `/mnt/data` is the mapper and the
-  persisted `CANARY_OK` matches the live volume's LUKS UUID, a rollback dispatch refuses unless the
-  `rollback_ack_luks_writes` input is set. Such a rollback strands every write made since
-  `docker start` on the LUKS volume. It also refuses, with the same override, when the mapper is
-  mounted and `CANARY_OK` is persisted but the live header UUID cannot be read or the persisted
-  UUID is empty: an unmeasurable match fails closed. A refusal records `outcome=pre_freeze`.
+- **`ROLLBACK=1` refuses after a successful cutover.** When the persisted `CANARY_OK` matches the
+  live volume's LUKS UUID, a rollback dispatch refuses unless the `rollback_ack_luks_writes` input
+  is set. Such a rollback strands every write made since `docker start` on the LUKS volume. It also
+  refuses, with the same override, when `CANARY_OK` is persisted but the live header UUID cannot be
+  read (a closed mapper included) or the persisted UUID is empty: an unmeasurable match fails closed.
+  A refusal records `outcome=refused_post_cutover mode=rollback mount_src=<source>`. (Corrected
+  2026-09-30, PR #9286 review: the check no longer requires `/mnt/data` to be on the mapper. Keyed on
+  the mount, an unacked rollback after a failed boot unlock, with `/mnt/data` empty, would have
+  served the stale plaintext.)
 - **An unattended fire pages.** `logtail_exploration_alert.workspaces_luks_deadman_fired` (ADR-218
   semantics) matches `op=workspaces-luks-deadman result=fired` from `soleur-web-platform`. This
   closes the #6812 six-hour silence. The alert auto-resolves after ten quiet minutes; that does not
@@ -1328,6 +1331,114 @@ before this ships — the plan's own instruction when a probe reads ✓.
 "Boot-path re-canary (C15)" moved from blocked-on-#9123 to delivered-by-#9123: the proof itself
 is unchanged — one supervised restart, then the read-only verify — and it stays the runbook's
 separate gated step, not a step of this delivery.
+
+## Addendum (2026-09-28): retiring the plaintext backstop (CONFIRM_WIPE, #6604 step 7)
+
+**Status stays `adopting`.** It flips to `accepted` only in PR B, after the dispatch below has run and
+the Art. 5(2) destruction record is complete — the #6604 soak sweeper closes that issue on the string
+`accepted` alone.
+
+The soak passed on 2026-09-24. The last open item of this ADR is §(f)'s "terminal mode": until the
+retained plaintext volume (`105149570`) is gone, it holds every workspace as of the 2026-07-23 cutover,
+including ones users have deleted since, and defeats every Art. 17 erasure made on the live volume.
+
+**Decision.** Build the `CONFIRM_WIPE` slot this ADR reserved as a mode of `workspaces-cutover.sh`
+(`wipe_plaintext()`), reached through a separate, environment-gated `wipe` job in
+`workspaces-luks-cutover.yml`, followed by a single-use `workspaces-plaintext-forget.yml` for the
+Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
+`2026-09-28-feat-workspaces-plaintext-volume-wipe-plan.md`; runbook: Sequence step 7.
+
+- **AP-009 (Never delete user data): Deviation — documented carve-out.** The volume is **a superseded
+  copy frozen at the 2026-07-23 cutover** (run 29995956562), which the live LUKS volume was certified to
+  hold at least the contents of (C1 itemized verify, G3 counts, the git fsck differential),
+  green-verified daily since, soak passed 2026-09-24. It is *not* "a duplicate" (the CLEAN_STRAY basis):
+  it differs from the live volume by every deletion since the cutover, which is exactly why it must go.
+  Retaining it is the exposure #6588 exists to close. The accepted residual is stated, not hidden: after
+  the wipe the LUKS volume holds the **only** copy (tracked by #5274, #8625, #6964). W4/W5 exist so the
+  wipe never runs while that sole copy is unrecoverable.
+- **AP-001 (Terraform-only infrastructure provisioning): Deviation.** The delete is an API act, not a Terraform one: Terraform
+  cannot zero a device, and C5 requires a verified full-device zero to precede the delete. State
+  follows by `terraform state rm`, then config by PR B.
+- **The one property.** `blkdiscard -z` runs on exactly one device, the pinned volume, never the device
+  backing `/dev/mapper/workspaces`. The pin (`expected_plaintext_volume_id`) is bound through preflight's
+  API classification, the host's by-id path (W1), path + major:minor + holders + mount + size +
+  hypervisor `ID_SERIAL` + the cutover's recorded plaintext mount source `PLAINTEXT_DEV` (W6, first wipe only; the label
+  premise was false — no artifact labels the retained plaintext, corrected 2026-09-30), every systemd
+  device unit sharing the
+  target's `SysFSPath` (W6b), the success row the job parses, and the forget's state identity.
+  Recoverability of the sole copy is proven at wipe time: the persisted `CANARY_OK` UUID names the live
+  header (W3), the escrowed passphrase opens it (W4), and the off-host header object downloads, carries
+  that UUID, opens with that passphrase, and is byte-identical to a fresh `luksHeaderBackup` (W5 — a UUID
+  survives `luksAddKey`, so a UUID match alone could certify a stale backup).
+- **The zero is proven, not assumed.** `blkdiscard -z` (util-linux >= 2.36 opens O_EXCL; never `-f`)
+  under a 150 MB/s cgroup `io.max` cap (plain bytes, `150000000` — systemd reads a `150M` suffix in base 1000) (not `ionice`, a no-op under `mq-deadline`/`none`), then a full-device
+  O_DIRECT read-back that `cmp` decides (dd's rc alone never classifies), then no signature, and only
+  then `PLAINTEXT_WIPED`. The cap is **proven in force**, not assumed from `systemd-run`'s rc (0 even
+  when io.max cannot apply): a gate running inside the scope reads that scope's own `io.max` for the
+  device's MAJ:MIN and refuses unless `rbps`/`wbps` carry the cap; the zero and the read-back run behind
+  the same gate. The identity is re-asserted AT the act (the by-id link still resolves to the measured
+  kernel name, which still carries the pin's serial), and W6b re-runs after the zero, before the success
+  row. `PLAINTEXT_WIPE_BEGUN` is persisted first, so an interrupted zero resumes on `arm=re_zero`; a
+  zeroed-and-detached volume reports `arm=detached`. Both markers are written **and read back**; an
+  unwritable state file refuses before the zero (or before the success row).
+- **Provenance and completeness.** A first wipe refuses a plaintext whose superblock `Last write time`
+  is later than the cutover froze it (2026-07-23T09:45:00Z; run 29995956562's host step ended 09:40:41Z):
+  such a volume was remounted read-write since and may hold writes that exist nowhere else. As evidence
+  (never a refusal) the rehearsal lists the workspace names on the unmounted plaintext (read-only
+  `debugfs`) that the live mount lacks (`plaintext_only=`); the approver's ask accounts for each.
+- **Post-wipe rollback is refused permanently**, with or without the ack, on either of two witnesses: a
+  persisted wipe marker (`outcome=refused_plaintext_wiped`, the only proof of a wipe), or `/mnt/data`
+  on the mapper with the recorded `PLAINTEXT_DEV` not an intact restore source: invalid, resolving to
+  the mapper, not a block device, or not ext4 (`outcome=refused_plaintext_record_gone`, its own slug:
+  with no marker it is drift or a detach, never a wipe; a lost record reads as gone: it refuses). One
+  predicate, `_plaintext_record_status`, decides "intact" for this check, the dead-man arm and the
+  rollback remount (corrected 2026-09-30, PR #9286 review). The check is the first
+  line of `rollback()` itself, so every caller is covered, and the dead-man fire string carries its own
+  self-contained copy. Arming a dead-man stays unreachable on a cut-over host: `prepare_staging_target`
+  refuses it first.
+
+**Two PRs, because Terraform will not take one.** Measured on Terraform 1.10.5 against a scratch root:
+a narrowed `for_each` over state still holding `["web-1"]` makes every `-refresh=false` plan fail with
+`Instance cannot be destroyed` (`prevent_destroy`, which web-2 keeps); `moved` + `removed` makes every
+`-target`ed plan fail with `Moved resource instances excluded by targeting` until an untargeted apply
+this root never runs; and `state rm` with the OLD config still in place makes any push apply plan
+`+create` of a fresh plaintext volume through `-target` transitivity (`hcloud_firewall_attachment.web`
+→ `hcloud_server.web` → `user_data` → `hcloud_volume.workspaces[each.key]`), conditional or not. Only
+`state rm` then narrowed config plans `No changes`. So: PR A (the mode, no `.tf` change), the dispatch,
+the forget, PR B the same day.
+
+**The delete→PR-B window is closed by a pause, not a new guard.** Both push-apply workflows
+(`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`) are `gh workflow disable`d before the
+dispatch and re-enabled after PR B, with a `manual-rerun` apply. The `wipe` job and the forget
+workflow refuse unless both read `disabled_manually` with nothing queued. A create-counting surface on
+the shared destroy-guard filter would reverse #6919 (test T55 — volume creates were removed from the
+halt because they fired on valid dispatches) and needs an edit to a file a few hundred bytes under its
+size cap; #6919/T55 stands.
+
+**How the 2026-07-19 operand rule is kept.** "Every destructive mode contributes its own operand to the
+`cutover` job's `environment:` expression" holds by construction: the destructive wipe is not reachable
+from `cutover` at all. That job skips on a real wipe, and on a rehearsal delivers `CONFIRM_WIPE` only as
+`wipe_plaintext && dry_run`. The `wipe` job's environment is unconditional.
+
+**Serialization, and why the forget is its own workflow.** The forget runs in its own workflow on
+`terraform-apply-web-platform-host` (the lockless state's sole serializer). The reasons it is separate
+are **credential separation** — the destructive job (root SSH to web-1 and a Hetzner write token) never
+holds the R2 state credentials or runs `terraform init`, and the forget holds nothing that reaches web-1
+— and **idempotent re-runnability**: a failed forget is re-dispatched on its own (`already_forgotten`
+once state is clean) and never re-enters the wipe. Lock order is not the reason: with both appliers
+proven paused and idle, no apply can hold the host group, so nesting it could not deadlock in the
+window; the host group is belt.
+
+**A known gap, recorded, and the trade-off.** The `wipe` job's SSH delivery block is a **copy** of
+`cutover`'s. Byte-stability of the freeze path is not the reason any more — the freeze already ran and a
+cut-over host refuses it. The copy is kept because the two jobs differ where it matters (the wipe job
+fences all host output, keeps the tunnel alive through a silent zero, and parses a strict success row),
+and extracting a shared composite action would put the 2026-07-23-proven cutover delivery behind a new,
+unexercised abstraction. The cost: the rehearsal rides `cutover`'s copy, so the `wipe` job's copy first
+runs on the host at the real dispatch. It is mitigated, not closed: the remote `bash -c` delivery string
+is byte-identical in both (the workflow suite pins it), both copies' bodies are executed against an ssh
+stub, the host half is the same script, and every failure mode of the copy is fail-closed (a red run,
+never a wrong zero).
 
 ## References
 

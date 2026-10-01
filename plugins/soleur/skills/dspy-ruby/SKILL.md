@@ -178,7 +178,7 @@ end
 
 # Anthropic Claude
 DSPy.configure do |c|
-  c.lm = DSPy::LM.new('anthropic/claude-sonnet-5',
+  c.lm = DSPy::LM.new('anthropic/claude-sonnet-5-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 end
 
@@ -217,7 +217,7 @@ end
 - Development: Ollama (free) or gpt-4o-mini (cheap)
 - Testing: gpt-4o-mini with temperature=0.0
 - Production simple tasks: gpt-4o-mini, claude-haiku-4-5, gemini-1.5-flash
-- Production complex tasks: gpt-4o, claude-sonnet-5, gemini-1.5-pro
+- Production complex tasks: gpt-4o, claude-sonnet-5-5, gemini-1.5-pro
 
 **Full documentation**: See [providers.md](./references/providers.md) for all configuration options, provider-specific features, and troubleshooting.
 

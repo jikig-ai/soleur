@@ -210,7 +210,6 @@
 # they carry explicit rows (load-bearing-files-get-explicit-rows). NOTE: as the header says,
 # CODEOWNERS review is only an anchor once branch protection requires it.
 /apps/web-platform/infra/web-1-ssh-host-key.pub         @deruelle
-/.github/workflows/git-data-pin-redeploy.yml            @deruelle
 /.github/actions/dispatch-web-redeploy/                 @deruelle
 /apps/web-platform/server/git-auth.ts                   @deruelle
 /apps/web-platform/server/git-data-replication.ts       @deruelle

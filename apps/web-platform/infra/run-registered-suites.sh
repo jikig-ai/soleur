@@ -283,6 +283,10 @@ if (( LIST_ONLY == 0 )) && declare -F soleur_scratch_session_begin >/dev/null 2>
   soleur_scratch_session_begin "$_SUITE_TMP_BASE" || true
 fi
 declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+# Provisional owner for the window before the full EXIT trap below (an early `exit`, e.g. --enumerate, left a
+# marker-only root per invocation); that trap replaces this one and carries the same cleanup (ADR-129).
+_provisional_scratch_exit() { _soleur_scratch_cleanup 2>/dev/null || true; }
+trap _provisional_scratch_exit EXIT
 cd "$ROOT" || exit 1
 
 # SOLEUR_INFRA_DIR is a TEST SEAM. Namespaced because a bare
@@ -608,7 +612,10 @@ _SUITE_BOUNDS=(
   "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh=600"
   "apps/web-platform/infra/git-data-cutover-access.test.sh=600"
   "apps/web-platform/infra/git-data-ownership.test.sh=300"
-  "apps/web-platform/infra/ci-deploy.test.sh=180"
+  # #8609: the Guard 7 mutation rows took the suite from ~360 to 485 assertions. At 180 s it was
+  # bound-killed mid-run (rc=124 at 180 s, run 36730312987) while green; measured 385 s serial on a
+  # contended local host. 540 s matches the other mutation-heavy suites below and fits the 15-min leg.
+  "apps/web-platform/infra/ci-deploy.test.sh=540"
   "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
   "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
   "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
@@ -620,6 +627,11 @@ _SUITE_BOUNDS=(
   # ~2.5x serial so a slow day renders as their own RED, not a leg timeout.
   "apps/web-platform/infra/infra-config-repush-mutation.test.sh=540"
   "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh=540"
+  # #9195: nominally ~351 s — already ~97.5% of the 360 s default — and T9's
+  # restart-witness poll (up to 90 s) lands inside it on starved-runner days,
+  # so a bound-kill would replace the diagnostic red (and the teardown dump)
+  # with a bare timeout. Pin at 540 per the two-suite precedent above.
+  "apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh=540"
   # #9123: the boot-unlock guard suite re-runs itself once per mutation row
   # (47 rows), each child executing the writer-arm + stub-PATH runtime arm —
   # ~253 s serial on the dev box. Under -P4 contention the #8688 measurement

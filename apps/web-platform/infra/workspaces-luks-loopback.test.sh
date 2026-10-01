@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# REAL-DEVICE evidence for workspaces-cutover.sh :: prepare_staging_target (#6588 / epic #6604).
+# REAL-DEVICE evidence for workspaces-cutover.sh :: prepare_staging_target (#6588 / epic #6604), and
+# for the CONFIRM_WIPE zero + read-back (Session W, #6604 runbook step 7).
 #
 # Every other workspaces-luks suite stubs the block layer. This one does NOT: it builds a real
 # loopback device, runs a real `cryptsetup luksFormat` + `luksOpen`, and drives the REAL
@@ -1455,6 +1456,287 @@ else
   else
     no "L7c: a throwaway unit outlived the EXIT trap (timer=$l7_t service=$l7_s run=$l7_r)"
   fi
+fi
+
+# ===========================================================================
+# Session W — #6604 step 7: the CONFIRM_WIPE zero + read-back on REAL devices
+# ===========================================================================
+# The stubbed suite (workspaces-luks-wipe.test.sh) proves the rc plumbing and every refusal; only a real
+# kernel can prove the four things the wipe's irreversibility rests on:
+#   LW1  the real W9 -> W12 path: the positive control sees the ext4 magic 53 ef, `blkdiscard -z`
+#        really zeroes a device whose size is a multiple of 512 but NOT of 4 MiB, the O_DIRECT
+#        read-back passes, and no signature survives. The rehearsal (DRY_RUN=1) runs first and must
+#        leave the device untouched.
+#   LW2  the read-back can FAIL (Guard 3): one non-zero byte at FIXED offsets after zeroing — 1 MiB + 1,
+#        one byte before a 4 MiB boundary, and the LAST byte (which also catches a compare limit one
+#        byte short of the device) — each reds with cmp_rc=1. H1: the zeroed device passes.
+#   LW4  an interrupted zero (first MiB only, PLAINTEXT_WIPE_BEGUN set) resumes on arm=re_zero.
+#   LW5  the -f ban, BEHAVIOURALLY: the script's own blkdiscard flags, run against an open-LUKS loop and
+#        against a MOUNTED loop, fail (O_EXCL -> EBUSY) and leave the data intact.
+#   LW6  W6b against REAL systemd: the reverse-dependency probe passes on an unmounted loop, and the real
+#        `list-dependencies --reverse --plain` format (unit first, dependents indented two spaces) —
+#        the shape the stub models — is pinned here.
+#   LW7  W5 against a REAL header: after `luksAddKey` the escrowed backup keeps the same UUID but is
+#        STALE, and the wipe refuses wipe_header_backup_stale (a UUID match alone would have passed).
+#   LW8  the io.max cap against REAL systemd: the rehearsal's in-scope gate read back the scope's own
+#        io.max line for the loop's MAJ:MIN, carrying rbps=wbps=150000000 (systemd-run's rc alone proves
+#        nothing: it starts an uncapped scope when io.max cannot apply).
+#   LW5c W6b against a MOUNTED loop: the real reverse-dependency probe must REFUSE
+#        wipe_target_has_dependents naming the mount unit (the must-refuse direction LW6 cannot show).
+# Host identity that a loop device cannot carry (the Hetzner ID_SERIAL, the R2 download, the Doppler
+# read) is stubbed; every block-layer call is real. A missing binary or systemd is a FAILURE, never a
+# skip.
+for b in blkdiscard dd cmp od blockdev systemd-run systemd-escape systemctl udevadm lsblk dumpe2fs debugfs pgrep; do
+  command -v "$b" >/dev/null 2>&1 || unavailable "session W: required binary '$b' not found on PATH"
+done
+
+WP_ID=4242
+WP_SIZE=$((64 * 1024 * 1024 + 3 * 512))   # a multiple of 512, deliberately NOT of 4 MiB
+new_session w
+WL_LUKS_DEV="$LOOP_DEV"; WL_MAPPER_NAME="$MAPPER_NAME"; WL_STAGING="$STAGING_DIR"
+mkfs.ext4 -q "$MAPPER" >/dev/null 2>&1 || unavailable "session W: mkfs.ext4 on the mapper failed"
+WL_MOUNT="$(mktemp -d "$TMPROOT/wmount.XXXXXX")"
+mount "$MAPPER" "$WL_MOUNT" || unavailable "session W: could not mount the mapper"
+CLEAN_MOUNTS+=("$WL_MOUNT")
+WL_STATE="$(mktemp -d "$TMPROOT/wstate.XXXXXX")"
+WL_UUID="$(cryptsetup luksUUID "$WL_LUKS_DEV" 2>/dev/null)" || unavailable "session W: luksUUID failed"
+WP_HDR="$TMPROOT/escrow-header.img"
+cryptsetup luksHeaderBackup "$WL_LUKS_DEV" --header-backup-file "$WP_HDR" >/dev/null 2>&1 \
+  || unavailable "session W: luksHeaderBackup of the LUKS loop failed"
+
+# new_plain <tag> — a fresh plaintext loop with a real, UNLABELLED ext4 and real data on it: the shape of
+# web-1's retained plaintext (no artifact ever labelled it — the 2026-09-30 rehearsal read label=none).
+new_plain() {
+  local tag="$1" backing m
+  backing="$TMPROOT/plain-${tag}.img"
+  truncate -s "$WP_SIZE" "$backing" || unavailable "truncate $backing failed"
+  WP_DEV="$(losetup --find --show "$backing" 2>/dev/null)" || unavailable "losetup of $backing failed"
+  [ -b "$WP_DEV" ] || unavailable "$WP_DEV is not a block device"
+  CLEAN_LOOPS+=("$WP_DEV")
+  mkfs.ext4 -q "$WP_DEV" >/dev/null 2>&1 || unavailable "mkfs.ext4 on $WP_DEV failed"
+  m="$(mktemp -d "$TMPROOT/pmnt.XXXXXX")"
+  mount "$WP_DEV" "$m" || unavailable "could not mount $WP_DEV"
+  mkdir -p "$m/workspaces/ws1"; head -c 2097152 /dev/urandom > "$m/workspaces/ws1/blob.bin" 2>/dev/null
+  umount "$m" || unavailable "could not unmount $m"
+  udevadm settle >/dev/null 2>&1 || true
+}
+# seed_state [line] — the persisted run state: CANARY_OK, then the plaintext mount source the cutover
+# recorded (PLAINTEXT_DEV=$WP_DEV, which W6 binds the first wipe to), then the caller's line (last wins).
+seed_state() {
+  printf 'CANARY_OK=1:%s\nPLAINTEXT_DEV=%s\n' "$WL_UUID" "$WP_DEV" > "$WL_STATE/state"
+  [ -n "${1:-}" ] && printf '%s\n' "$1" >> "$WL_STATE/state"
+  return 0
+}
+
+# run_wipe_real <invocation> [env...] — the REAL wipe functions in a fresh subshell (functions only:
+# the sourced-detection guard stops before the main body). Sets CASE_RC, CASE_OUT (file), MARKER_LOG.
+run_wipe_real() {
+  local inv="$1"; shift
+  CASE_N=$((CASE_N + 1))
+  CASE_OUT="$TMPROOT/wout.$CASE_N"; MARKER_LOG="$TMPROOT/wmarker.$CASE_N"
+  : > "$CASE_OUT"; : > "$MARKER_LOG"
+  env WORKSPACES_MOUNT="$WL_MOUNT" WORKSPACES_STAGING="$WL_STAGING" WORKSPACES_MAPPER_NAME="$WL_MAPPER_NAME" \
+    WORKSPACES_STATE_DIR="$WL_STATE" CONFIRM_WIPE=1 DRY_RUN=0 \
+    WORKSPACES_PLAINTEXT_VOLUME_ID="$WP_ID" WORKSPACES_PLAINTEXT_DEV="/dev/disk/by-id/scsi-0HC_Volume_${WP_ID}" \
+    WORKSPACES_PLAINTEXT_SIZE_BYTES="$WP_SIZE" WORKSPACES_LUKS_DEV="$WL_LUKS_DEV" \
+    "$@" CUTOVER="$CUTOVER" MARKER_LOG="$MARKER_LOG" WP_DEV="$WP_DEV" WP_HDR="$WP_HDR" KEYFILE="$KEYFILE" \
+    WP_ID="$WP_ID" INVOCATION="$inv" \
+    bash -c '
+      source "$CUTOVER"
+      _wipe_dev_path() { printf "%s" "$WP_DEV"; }
+      read_key() { cat "$KEYFILE"; }
+      load_escrow_creds() { HEADER_BACKUP_BUCKET=wl-loopback; HEADER_R2_ENDPOINT=https://r2.invalid; }
+      aws() { [ "$1 $2" = "s3api get-object" ] || return 64; cat "$WP_HDR" > "$9"; }
+      udevadm() {
+        if [ "${2:-}" = --query=property ]; then printf "ID_SERIAL=0HC_Volume_%s\n" "$WP_ID"; return 0; fi
+        command udevadm "$@"
+      }
+      if [ "${W6B_REAL:-0}" != 1 ]; then _wipe_assert_no_dependents() { echo "W6B_STUBBED $*"; return 0; }; fi
+      # The plaintext loop is formatted TODAY, so the production freeze constant (2026-07-23) would refuse
+      # it as written-after-cutover; the provenance gate itself is proven in the stubbed suite.
+      _wipe_frozen_at_epoch() { printf "%s" "$(( $(date -u +%s) + 3600 ))"; }
+      logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+      emit_drift() { echo "EMIT_DRIFT: $1"; }
+      die()        { echo "DIE: $*"; exit 1; }
+      eval "$INVOCATION"
+    ' > "$CASE_OUT" 2>&1
+  CASE_RC=$?
+}
+wout_row() { grep -E "^SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=$1 arm=$2 " "$CASE_OUT" 2>/dev/null | head -1; }
+dev_magic() { dd if="$1" iflag=direct bs=4096 count=1 status=none 2>/dev/null | od -An -tx1 -j1080 -N2 | tr -d ' \n'; }
+dev_all_zero() { cmp -s -n "$WP_SIZE" "$1" /dev/zero; }
+poke() {  # <dev> <offset> <octal byte> — one byte, flushed to the device (not left in the page cache)
+  printf "\\$3" | dd of="$1" bs=1 seek="$2" count=1 conv=notrunc,fsync status=none 2>/dev/null
+  sync; blockdev --flushbufs "$1" >/dev/null 2>&1 || true
+}
+
+new_plain lw1
+note "session W: luks=$WL_LUKS_DEV mapper=$WL_MAPPER_NAME plain=$WP_DEV size=$WP_SIZE"
+
+# --- LW1a: the rehearsal first — every precondition, the device untouched -------------------------
+seed_state
+run_wipe_real 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1
+if [ "$CASE_RC" -eq 0 ] && [ -n "$(wout_row rehearsal_ok first_wipe)" ] && grep -q ' magic=53ef' "$CASE_OUT" \
+  && [ "$(dev_magic "$WP_DEV")" = "53ef" ] && ! grep -qE '^PLAINTEXT_WIPE(_BEGUN|D)=' "$WL_STATE/state"; then
+  ok "LW1a rehearsal on a real ext4 loop: rehearsal_ok arm=first_wipe with magic=53ef, the device untouched, no PLAINTEXT_* marker"
+else
+  no "LW1a real rehearsal wrong (rc=$CASE_RC magic=$(dev_magic "$WP_DEV")): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-400)"
+fi
+# --- LW-P1: the same rehearsal row, on an UNLABELLED real ext4, is bound to the recorded device, and
+# carries the real ext4 UUID (plaintext_fs_uuid=, the pre-reboot content anchor) --------------------
+LWP1_UUID="$(blkid -p -s UUID -o value "$WP_DEV" 2>/dev/null)"
+if [ -n "$LWP1_UUID" ] && grep -qE "result=rehearsal_ok arm=first_wipe .* label=none plaintext_dev=${WP_DEV} plaintext_fs_uuid=${LWP1_UUID}( |\$)" "$CASE_OUT"; then
+  ok "LW-P1 an unlabelled real ext4 loop bound to its recorded PLAINTEXT_DEV rehearses: label=none plaintext_dev=$WP_DEV plaintext_fs_uuid=$LWP1_UUID (real blkid)"
+else
+  no "LW-P1 the real rehearsal row lacks label=none plaintext_dev=$WP_DEV plaintext_fs_uuid=${LWP1_UUID:-<blkid read none>}: $(grep -oE 'result=[a-z_]+ .*' "$CASE_OUT" | head -1 | cut -c1-300)"
+fi
+# --- LW8: the io.max cap was IN FORCE in a real scope, read back by the in-scope gate ---------------
+LW8_DEVNUM="$(tr -d '[:space:]' < "/sys/class/block/$(basename "$(readlink -f "$WP_DEV")")/dev")"
+if grep -qE " io_max=${LW8_DEVNUM}_rbps=150000000_wbps=150000000(_|\$| )" "$CASE_OUT"; then
+  ok "LW8 real systemd wrote io.max for the loop's MAJ:MIN ($LW8_DEVNUM) with rbps=wbps=150000000 in the rehearsal's scope, and the gate read it back"
+else
+  no "LW8 the rehearsal's io.max read-back is missing or wrong for $LW8_DEVNUM: $(grep -oE ' io_max=[^ ]*' "$CASE_OUT" | head -1) $(grep -E 'io_cap' "$CASE_OUT" | head -1 | cut -c1-200)"
+fi
+# --- LW-P2: the REAL _plaintext_gone (real blkid, real mapper) reads an intact recorded plaintext ------
+LW_GONE='_plaintext_gone; echo "gone_rc=$? why=$PLAINTEXT_GONE_WHY status=$PLAINTEXT_RECORD_STATUS"'
+seed_state
+run_wipe_real "$LW_GONE"
+if grep -qE '^gone_rc=1 why= status=ok$' "$CASE_OUT"; then
+  ok "LW-P2 real devices: mapper mounted + the recorded plaintext loop intact (real blkid TYPE=ext4) → NOT gone (rollback stays possible)"
+else
+  no "LW-P2 the real witness misread an intact recorded plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+# --- LW1: the real zero + read-back -------------------------------------------------------------
+run_wipe_real 'wipe_plaintext; echo WIPE_RETURNED'
+LW1_BLKID_RC=0; blkid -p -s TYPE -o value "$WP_DEV" >/dev/null 2>&1 || LW1_BLKID_RC=$?
+if [ "$CASE_RC" -eq 0 ] && [ -n "$(wout_row wiped first_wipe)" ] && dev_all_zero "$WP_DEV" && [ "$LW1_BLKID_RC" -eq 2 ] \
+  && grep -qE "^PLAINTEXT_WIPED=${WP_ID}:" "$WL_STATE/state"; then
+  ok "LW1 real zero of a $WP_SIZE-byte loop (not a 4 MiB multiple): wiped row, every byte reads zero, blkid finds no signature, PLAINTEXT_WIPED persisted"
+else
+  no "LW1 real zero failed (rc=$CASE_RC blkid_rc=$LW1_BLKID_RC allzero=$(dev_all_zero "$WP_DEV" && echo y || echo n)): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-500)"
+fi
+
+# --- LW2: the read-back can fail, at fixed offsets; H1 the zeroed device passes --------------------
+LW2_RB='_wipe_readback "$WP_DEV" "$WORKSPACES_PLAINTEXT_SIZE_BYTES" "$(_wipe_cgroup_root)" "$(tr -d "[:space:]" < "/sys/class/block/$(basename "$(readlink -f "$WP_DEV")")/dev")"; echo "rb_rc=$? cmp_rc=$WIPE_CMP_RC dd_rc=$WIPE_DD_RC"'
+run_wipe_real "$LW2_RB"
+grep -q 'rb_rc=0 cmp_rc=0 dd_rc=0' "$CASE_OUT" \
+  && ok "LW2-H1 the real read-back of the zeroed, odd-sized loop passes (cmp_rc=0 dd_rc=0)" \
+  || no "LW2-H1 the zeroed loop failed the read-back: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+for off in 1048577 4194303 $((WP_SIZE - 1)); do
+  poke "$WP_DEV" "$off" 001
+  run_wipe_real "$LW2_RB"
+  if grep -qE 'rb_rc=[1-9][0-9]* cmp_rc=1 ' "$CASE_OUT"; then
+    ok "LW2 one non-zero byte at offset $off after zeroing fails the real read-back with cmp_rc=1"
+  else
+    no "LW2 a non-zero byte at offset $off PASSED the read-back: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+  fi
+  poke "$WP_DEV" "$off" 000
+done
+
+# --- LW-P3: after the REAL zero, the recorded device reads no filesystem → gone (no marker needed) -----
+seed_state
+run_wipe_real "$LW_GONE"
+if grep -qE '^gone_rc=0 why=plaintext_dev_gone status=none$' "$CASE_OUT"; then
+  ok "LW-P3 real devices: the recorded plaintext zeroed (real blkid finds nothing), no marker → gone, why=plaintext_dev_gone"
+else
+  no "LW-P3 the real witness did not read a zeroed recorded plaintext as gone: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+# --- LW-P4: a record naming the mapper's REAL dm-N node (it reads ext4!) is the live copy → gone ---------
+LWP4_DM="$(readlink -f "$MAPPER")"
+seed_state "PLAINTEXT_DEV=$LWP4_DM"
+run_wipe_real "$LW_GONE"
+if [ "$LWP4_DM" != "$MAPPER" ] && grep -qE '^gone_rc=0 why=plaintext_dev_gone status=is_mapper$' "$CASE_OUT"; then
+  ok "LW-P4 real devices: a record naming the mapper's own node ($LWP4_DM, a real ext4) is refused by the mapper-identity clause, not trusted as an intact plaintext"
+else
+  no "LW-P4 a record naming the live mapper node ($LWP4_DM) was read as an intact plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+
+# --- LW4: an interrupted zero (first MiB only, BEGUN set) resumes on arm=re_zero --------------------
+new_plain lw4
+dd if=/dev/zero of="$WP_DEV" bs=1M count=1 oflag=direct conv=fsync status=none 2>/dev/null
+seed_state "PLAINTEXT_WIPE_BEGUN=${WP_ID}:1759000000"
+run_wipe_real 'wipe_plaintext'
+if [ "$CASE_RC" -eq 0 ] && [ -n "$(wout_row wiped re_zero)" ] && dev_all_zero "$WP_DEV"; then
+  ok "LW4 an interrupted zero (first MiB cleared, BEGUN set) resumes on arm=re_zero and completes the zero"
+else
+  no "LW4 the interrupted zero did not resume (rc=$CASE_RC): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-400)"
+fi
+
+# --- LW5: the -f ban, behaviourally — the script's own blkdiscard flags hit EBUSY -------------------
+LW5_FLAGS="$(grep -vE '^[[:space:]]*#' "$CUTOVER" | grep -oE 'blkdiscard( -[a-z]+)+ "\$' | head -1 | sed -E 's/^blkdiscard //; s/ "\$$//')"
+if [ -z "$LW5_FLAGS" ] || grep -qE '(^| )(-[a-z]*f[a-z]*|--force)( |$)' <<<"$LW5_FLAGS"; then
+  no "LW5 could not extract the script's blkdiscard flags, or they carry -f (got '$LW5_FLAGS')"
+else
+  # shellcheck disable=SC2086  # the extracted flags are deliberately word-split
+  lw5_rc=0; blkdiscard $LW5_FLAGS "$WL_LUKS_DEV" </dev/null >/dev/null 2>&1 || lw5_rc=$?
+  if [ "$lw5_rc" -ne 0 ] && [ "$(cryptsetup luksUUID "$WL_LUKS_DEV" 2>/dev/null)" = "$WL_UUID" ]; then
+    ok "LW5a blkdiscard $LW5_FLAGS on the OPEN-LUKS loop fails (O_EXCL) and the LUKS header is intact"
+  else
+    no "LW5a blkdiscard $LW5_FLAGS on an open-LUKS device rc=$lw5_rc — O_EXCL did not protect it"
+  fi
+  new_plain lw5
+  LW5_MNT="$(mktemp -d "$TMPROOT/lw5mnt.XXXXXX")"; mount "$WP_DEV" "$LW5_MNT"; CLEAN_MOUNTS+=("$LW5_MNT")
+  # shellcheck disable=SC2086
+  lw5_rc=0; blkdiscard $LW5_FLAGS "$WP_DEV" </dev/null >/dev/null 2>&1 || lw5_rc=$?
+  if [ "$lw5_rc" -ne 0 ] && [ -s "$LW5_MNT/workspaces/ws1/blob.bin" ]; then
+    ok "LW5b blkdiscard $LW5_FLAGS on a MOUNTED loop fails (O_EXCL) and its data is intact"
+  else
+    no "LW5b blkdiscard $LW5_FLAGS on a mounted device rc=$lw5_rc — O_EXCL did not protect it"
+  fi
+  # LW5c (T7) — the must-REFUSE direction of W6b against real systemd, while the loop is mounted: its
+  # device unit gains a .mount dependent. systemd picks the mount up from mountinfo asynchronously, so
+  # wait (bounded by attempts) for the dependent to show before asserting.
+  LW5C_UNIT="dev-$(basename "$(readlink -f "$WP_DEV")").device"; lw5c_deps=""; lw5c_i=0
+  while [ "$lw5c_i" -lt 20 ]; do
+    lw5c_i=$((lw5c_i + 1))
+    lw5c_deps="$(systemctl list-dependencies --reverse --plain --no-pager -- "$LW5C_UNIT" 2>/dev/null)"
+    awk 'NR > 1' <<<"$lw5c_deps" | grep -qE '^[[:space:]]+[^[:space:]]+\.mount$' && break
+    sleep 0.5
+  done
+  run_wipe_real '_wipe_assert_no_dependents "$(readlink -f "$WP_DEV")"; echo W6B_PASSED' W6B_REAL=1
+  if [ "$CASE_RC" -ne 0 ] && ! grep -q '^W6B_PASSED$' "$CASE_OUT" \
+    && grep -qE 'result=refused .*reason=wipe_target_has_dependents .*dependent=[^ ]+\.mount' "$CASE_OUT" \
+    && awk 'NR > 1' <<<"$lw5c_deps" | grep -qE '^  [^ ]+\.mount$'; then
+    ok "LW5c the real W6b REFUSES a mounted loop (wipe_target_has_dependents naming the .mount), and real list-dependencies shows that dependent indented on line 2+"
+  else
+    no "LW5c real W6b did not refuse a mounted loop (rc=$CASE_RC deps=$(tr '\n' '|' <<<"$lw5c_deps" | cut -c1-200)): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+  fi
+  umount "$LW5_MNT" 2>/dev/null || true
+fi
+
+# --- LW6: W6b against real systemd -----------------------------------------------------------------
+new_plain lw6
+LW6_UNIT="dev-$(basename "$(readlink -f "$WP_DEV")").device"
+LW6_DEPS="$(systemctl list-dependencies --reverse --plain --no-pager -- "$LW6_UNIT" 2>/dev/null)"; LW6_RC=$?
+LW6_FIRST="$(head -n1 <<<"$LW6_DEPS")"
+LW6_BAD="$(awk 'NR>1 && !/^  [^ ]/' <<<"$LW6_DEPS" | head -1)"
+if [ "$LW6_RC" -eq 0 ] && [ "$LW6_FIRST" = "$LW6_UNIT" ] && [ -z "$LW6_BAD" ]; then
+  ok "LW6-fmt real list-dependencies --reverse --plain prints the unit first and dependents indented two spaces (the stub's model)"
+else
+  no "LW6-fmt the real format differs from the stub (rc=$LW6_RC first=[$LW6_FIRST] bad=[$LW6_BAD]): $(tr '\n' '|' <<<"$LW6_DEPS" | cut -c1-300)"
+fi
+note "LW6 measured: $(tr '\n' '|' <<<"$LW6_DEPS" | cut -c1-300)"
+run_wipe_real '_wipe_assert_no_dependents "$(readlink -f "$WP_DEV")"; echo W6B_PASSED' W6B_REAL=1
+if [ "$CASE_RC" -eq 0 ] && grep -q '^W6B_PASSED$' "$CASE_OUT"; then
+  ok "LW6 the real W6b probe passes on an unmounted loop (every device unit sharing its SysFSPath has no mount/swap/service dependent)"
+else
+  no "LW6 real W6b refused an unmounted loop: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-400)"
+fi
+
+# --- LW7: a STALE escrowed header (same UUID, different keyslots) is refused -----------------------
+LW7_KEY="$TMPROOT/lw7.key"; printf 'loopback-lw7-second-key-%s' "$$" > "$LW7_KEY"; chmod 600 "$LW7_KEY"
+new_plain lw7
+if cryptsetup luksAddKey --batch-mode --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --key-file "$KEYFILE" "$WL_LUKS_DEV" "$LW7_KEY" >/dev/null 2>&1; then
+  seed_state
+  run_wipe_real 'wipe_plaintext'
+  if [ "$CASE_RC" -ne 0 ] && grep -qE 'result=refused arm=first_wipe .*reason=wipe_header_backup_stale' "$CASE_OUT" \
+    && [ "$(dev_magic "$WP_DEV")" = "53ef" ] && [ ! -e "$WL_STATE/wipe-header-download.img" ] && [ ! -e "$WL_STATE/wipe-header-fresh.img" ]; then
+    ok "LW7 after luksAddKey the escrowed header (same UUID) is STALE: refused wipe_header_backup_stale, device untouched, both header copies shredded"
+  else
+    no "LW7 a stale escrowed header was not refused (rc=$CASE_RC): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-400)"
+  fi
+else
+  no "LW7 could not luksAddKey on the LUKS loop — the stale-header case did not run"
 fi
 
 # ===========================================================================

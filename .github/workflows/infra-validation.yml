@@ -183,6 +183,12 @@ on:
       # run: block against the script's own exit-code header; neither file is under apps/*/infra/**.
       - ".github/workflows/inngest-host-state.yml"
       - "scripts/inngest-host-state.sh"
+      # (#7463 PR-B) rule-audit-inngest-pin-workflow-guard.test.sh asserts the
+      # `Detect inngest CLI pin drift` step's contract in this workflow — the file
+      # is not under apps/*/infra/**, so a PR editing only the step would skip the
+      # suite whose entire job is protecting it (same defect class as #7278/#8449
+      # above).
+      - ".github/workflows/rule-audit.yml"
       - ".github/workflows/scheduled-supabase-advisor-scan.yml"
       - ".github/workflows/apply-sentry-infra.yml"
       - "scripts/supabase-advisor-scan.sh"
@@ -762,6 +768,12 @@ jobs:
       # -target lines, and the mutation rows that each require this guard to red.
       - name: Run workspaces-LUKS dead-man fired alert drift guard (#9045)
         run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh
+
+      # (#9342) The bwrap-probe rollback Logs alert: the needle read from ci-deploy.sh's own
+      # BWRAP_LINE, the two-conjunct predicate (no host_name), the paging semantics, both -target
+      # lines (the only enforcement for logtail resources), the runbook anchor, and the mutation rows.
+      - name: Run bwrap-probe rollback alert drift guard (#9342)
+        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh
 
       # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
       # predicate, exact literals, unpaused, both -target lines, and its mutation rows.

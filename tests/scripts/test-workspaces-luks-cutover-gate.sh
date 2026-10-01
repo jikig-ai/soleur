@@ -349,8 +349,15 @@ else fail "Q3b: the dead-man sh -c string does not log '$Q_MARK' behind the is-e
 # Q4 — the dead-man string RENDERED by the real arm_dead_man, parsed and EXECUTED under sh.
 (
   export WORKSPACES_STATE_DIR="$Q_TMP/state" WORKSPACES_MOUNT="$Q_TMP/mnt" WORKSPACES_STAGING="$Q_TMP/stg"
+  # #6604 step 7 (PR #9286): arm_dead_man refuses to arm without a restorable recorded plaintext
+  # device. Seed the record the cutover's rollback rehearsal writes, and answer the physical probe
+  # like an intact ext4 plaintext (the same seams workspaces-luks-harness.sh uses). The composing
+  # _plaintext_record_status stays REAL. The fire bakes the blkid path, so point it at a stub.
+  printf 'PLAINTEXT_DEV=/dev/sdz9\n' >> "$Q_TMP/state/state"
   # shellcheck source=/dev/null
   source "$CUTOVER" >/dev/null 2>&1
+  _plaintext_dev_type() { printf ext4; }
+  _plaintext_blkid_bin() { printf '%s' "$Q_TMP/bin/blkid"; }
   DRY_RUN=0
   systemd-run() { local a; for a in "$@"; do printf '%s\0' "$a"; done > "$Q_TMP/dm.args"; }
   # #9045: arm_dead_man now queries the units before and after systemd-run and fails closed unless
@@ -382,6 +389,7 @@ if sh -n -c "$q_dm_cmd" 2>/dev/null; then pass; else fail "Q4b: the rendered dea
 for q_b in logger docker umount cryptsetup mount; do
   printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/dm-exec.log"\nexit 0\n' "$q_b" "$Q_TMP" > "$Q_TMP/bin/$q_b"
 done
+printf '#!/bin/sh\nprintf "blkid %%s\\n" "$*" >> "%s/dm-exec.log"\necho ext4\n' "$Q_TMP" > "$Q_TMP/bin/blkid"
 cat > "$Q_TMP/bin/systemctl" <<STUB
 #!/bin/sh
 printf 'systemctl %s\n' "\$*" >> "$Q_TMP/dm-exec.log"

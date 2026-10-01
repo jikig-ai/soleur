@@ -930,9 +930,19 @@ _la_stub() { # $1=mode -> a PATH dir with a fake gh
   local d="$TMPD/la-$1"; mkdir -p "$d"
   cat > "$d/gh" <<'STUB'
 #!/usr/bin/env bash
-# Refuse anything but `gh api <expected path> --jq <expr>` (exit 64).
-[[ "$1" == api && "$3" == --jq && -n "${4:-}" ]] || { echo "unexpected gh call: $*" >&2; exit 64; }
-path="$2"; expr="$4"
+# Two accepted shapes: `api <path> --jq <expr>` (the bounded runs list, which the
+# script still filters via --jq) and `api --paginate <path>` (the jobs read —
+# --jq under --paginate runs per page, so the script slurps page objects with
+# jq -s instead; this stub emits the raw page and the script's own filter is
+# what the suite exercises). Anything else exits 64.
+[[ "$1" == api ]] || { echo "unexpected gh call: $*" >&2; exit 64; }
+if [[ "$2" == --paginate ]]; then
+  path="$3"; expr=""
+elif [[ "$3" == --jq && -n "${4:-}" ]]; then
+  path="$2"; expr="$4"
+else
+  echo "unexpected gh call: $*" >&2; exit 64
+fi
 step='Terraform apply (cron + uptime monitors)'
 job() { # $1=job name $2=job conclusion $3=apply-step conclusion (or "none")
   if [[ "$3" == none ]]; then printf '{"name":"%s","conclusion":"%s","steps":[]}' "$1" "$2"
@@ -967,7 +977,7 @@ case "$path" in
     json="{\"jobs\":[$(job apply success success)]}" ;;
   *) echo "unexpected gh path: $path" >&2; exit 64 ;;
 esac
-printf '%s' "$json" | jq -r "$expr"
+if [[ -n "$expr" ]]; then printf '%s' "$json" | jq -r "$expr"; else printf '%s\n' "$json"; fi
 STUB
   chmod +x "$d/gh"; echo "$d"
 }

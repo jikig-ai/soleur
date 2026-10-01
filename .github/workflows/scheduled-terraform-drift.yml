@@ -45,9 +45,11 @@ jobs:
           # A queue silently removed/mangled outside Terraform (provider 6.x
           # nested-block history) would leave the stall probe blind (no entries
           # -> nothing to detect), so `terraform plan` here is the real drift
-          # detector. Authenticates identically to apply-github-infra.yml:
-          # Doppler prd_terraform (App-auth TF_VAR_github_app_* + R2 backend
-          # creds) via --name-transformer tf-var. infra/github declares no
+          # detector. Authenticates as apply-github-infra.yml's Terraform does:
+          # the soleur-infra App key from the infra-credentials loader (infra
+          # mode, ADR-241 D5; the soleur-ai pair in prd_terraform is the #8209
+          # eviction sentinel), plus Doppler prd_terraform tf-var for the
+          # remaining inputs. infra/github declares no
           # ssh_key_path variable, so the CI-SSH-key VAR_ARGS guard below skips
           # it automatically.
           - infra/github

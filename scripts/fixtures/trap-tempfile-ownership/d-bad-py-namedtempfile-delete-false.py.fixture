@@ -1,0 +1,8 @@
+import tempfile
+
+
+def spill(data):
+    f = tempfile.NamedTemporaryFile("w", delete=False)
+    f.write(data)
+    f.close()
+    return f.name

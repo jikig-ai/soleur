@@ -172,7 +172,7 @@ locals {
     doppler_token          = join(".", ["dp", "st", "prd", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
     sdk_url                = "http://10.0.1.10:3000/api/inngest"
     inngest_cli_arch       = "amd64"
-    inngest_cli_sha256     = "d023b26659275fdbe9348b6518077ce1ea9906a449898e49ddced91bfc6fd757"
+    inngest_cli_sha256     = "52c07d837088a6712acd15b8edd4191f961b69884541f468a3c1b9bb4348a4e5"
     vector_sha256          = "8a3cc62d18ec88bb8433159d1d3455d3c77fefff73ce46d4f8cc464e100f65f1"
     doppler_arch           = "amd64"
     doppler_sha256         = "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"

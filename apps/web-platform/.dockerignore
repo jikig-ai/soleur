@@ -98,6 +98,8 @@ scripts/
 # the canary container; without this re-include the builder-stage `COPY . .`
 # drops it and the runner COPY fails the image build (the #5890 release break).
 !scripts/sandbox-canary.mjs
+# Same shape for the #8609 GitHub App key probe (`COPY --from=builder /app/scripts/github-app-key-probe.mjs`).
+!scripts/github-app-key-probe.mjs
 
 .git
 .gitignore

@@ -29,6 +29,7 @@ import { test, expect, describe } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const INFRA = join(REPO_ROOT, "apps", "web-platform", "infra");
@@ -164,7 +165,19 @@ const HETZNER_CAP = 32_768;
 // its `timeout 180`); the CI figure is taken as local + 32 B (the zlib delta recorded above, local
 // is the LOWER one), so ~23,392. 23,580 restores the same ~184 B headroom over that and stays
 // ~9.2 KB below HETZNER_CAP. If CI reds on the first run, re-derive from its failure line.
-const WEB_GZIP_BUDGET = 23_580;
+//
+// #8609 (Phase 0.1) — NOT raised. The credential file gained one conditional line carrying a 60-char
+// service token, modeled with real entropy (GITHUB_APP_TOKEN_FIXTURE). Measured locally
+// 2026-09-30: 23,352 B with the token empty -> 23,504 B with it set (+152 B), under 23,580 by 76 B
+// (~44 B after the recorded +32 B CI zlib delta). After merging #9169 (budget -> 23,800 below) the
+// token render measured 23,740 B (~28 B of CI headroom), so the plan's fallback was applied: the
+// two comment lines of soleur-doppler-token.tmpl moved into server.tf. Measured 23,436 B locally
+// (~23,468 CI), ~330 B under 23,800.
+// #9169 RAISE: the ghcr.io hosts-file deny (a byte copy of the registry's runcmd entry, as runcmd[1])
+// took the local render to 23,584 B, 4 B over. Same derivation as the lower above: CI ~= local + 32
+// = ~23,616; 23,800 restores ~184 B of headroom and stays ~9.0 KB below HETZNER_CAP. If CI reds,
+// re-derive from its failure line.
+const WEB_GZIP_BUDGET = 23_800;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -340,8 +353,40 @@ function parseVarMap(mapBody: string): Record<string, string> {
 // file is small but NOT negligible: it rides in user_data verbatim, and modeling it as an
 // 80-byte DEFAULT_REF_LEN scored a multi-KB blob as 80 bytes — the exact silent under-count
 // the base64encode(file()) guard above exists to prevent, reached through a different shape.
-function renderDopplerTokenEnv(): string {
-  const tmpl = readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8");
+//
+// #8609 — the template gained ONE conditional line (GITHUB_APP_DOPPLER_TOKEN, the web host's read
+// token for the isolated soleur-github-app project), rendered only when the Tier-B variable is set.
+// The budget arms model the WORST case the host will actually boot with: a real-entropy 60-char
+// `dp.st.prd.<50 random>` service token. Entropy matters here for the reason recorded at
+// web_colocate_inngest in variables.tf (an x-run placeholder gzips ~1000:1 and would under-count),
+// so the value is 50 base62 characters derived from sha512 — deterministic across runs, random-
+// shaped to gzip. Split across concatenation so no contiguous token-shaped literal sits in source.
+// Phase 0.1 measurement (#8609 plan): see the web budget arm below for the recorded numbers.
+const GITHUB_APP_TOKEN_FIXTURE: string = (() => {
+  const b62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = createHash("sha512").update("soleur-8609-budget-fixture").digest();
+  let s = "";
+  for (let i = 0; i < 50; i++) s += b62[bytes[i] % 62];
+  return "dp." + "st." + "prd." + s;
+})();
+
+// Terraform's `%{ if v != "" ~}` BODY `%{ endif ~}` with the `~` strip markers, for the one
+// directive shape the template uses. Anything else is refused: a second directive the model does
+// not evaluate would leave its literal `%{` text in the render and silently mis-measure it.
+const TMPL_IF_RE = /%\{ if ([a-zA-Z0-9_]+) != "" ~\}\n([\s\S]*?)%\{ endif ~\}\n?/g;
+function evalTmplIfs(tmpl: string, strVals: Record<string, string>): string {
+  const out = tmpl.replace(TMPL_IF_RE, (_w, n: string, body: string) => {
+    if (!(n in strVals)) throw new Error(`template directive references unmodeled var ${n}`);
+    return strVals[n] !== "" ? body : "";
+  });
+  if (out.includes("%{")) throw new Error("template carries an unmodeled %{ directive");
+  return out;
+}
+
+function renderDopplerTokenEnv(githubAppToken: string = GITHUB_APP_TOKEN_FIXTURE): string {
+  const tmpl = evalTmplIfs(readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8"), {
+    github_app_doppler_token: githubAppToken,
+  });
   const vals: Record<string, number> = {
     doppler_token: SECRET_LENGTHS.doppler_token,
     // Sentry DSN components: host, numeric project id, 32-hex public key. Fixed modeled widths —
@@ -351,6 +396,7 @@ function renderDopplerTokenEnv(): string {
     sentry_public_key: 32,
   };
   return tmpl.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_w, n: string) => {
+    if (n === "github_app_doppler_token") return githubAppToken;
     if (!(n in vals)) {
       throw new Error(`soleur-doppler-token.tmpl references unmodeled var \${${n}}`);
     }
@@ -873,6 +919,79 @@ const cloudInit = readFileSync(join(INFRA, "cloud-init.yml"), "utf8");
 const bootstrap = readFileSync(join(INFRA, "soleur-host-bootstrap.sh"), "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");
 const dockerignore = readFileSync(join(REPO_ROOT, "apps", "web-platform", ".dockerignore"), "utf8");
+
+// #8609 AC2/AC3 — the runtime App key's read-token line in /etc/default/soleur-doppler-token.
+describe("#8609 GITHUB_APP_DOPPLER_TOKEN line (soleur-doppler-token.tmpl)", () => {
+  const blockRe = /%\{ if github_app_doppler_token != "" ~\}\n[^\n]*\n%\{ endif ~\}\n?/;
+
+  test("AC2: an EMPTY token renders the file byte-identical to the template without the conditional block", () => {
+    const tmpl = readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8");
+    expect(blockRe.test(tmpl)).toBe(true); // precondition: the block exists in the one shape modeled
+    const stripped = tmpl.replace(blockRe, "");
+    const renderStripped = stripped.replace(/\$\{(doppler_token|sentry_ingest_domain|sentry_project_id|sentry_public_key)\}/g,
+      (_w, n: string) => "x".repeat(n === "doppler_token" ? SECRET_LENGTHS.doppler_token : n === "sentry_ingest_domain" ? 40 : n === "sentry_project_id" ? 8 : 32));
+    const empty = renderDopplerTokenEnv("");
+    expect(empty).toBe(renderStripped);
+    expect(empty).not.toContain("GITHUB_APP_DOPPLER_TOKEN");
+    expect(empty.endsWith("\n") && !empty.endsWith("\n\n")).toBe(true); // `~` ate the directive newlines
+  });
+
+  test("AC3: a set token renders exactly one GITHUB_APP_DOPPLER_TOKEN= line, newline-terminated", () => {
+    const set = renderDopplerTokenEnv(GITHUB_APP_TOKEN_FIXTURE);
+    expect(GITHUB_APP_TOKEN_FIXTURE.length).toBe(60);
+    expect(set.split("\n").filter((l) => l.startsWith("GITHUB_APP_DOPPLER_TOKEN=")).length).toBe(1);
+    expect(set).toContain(`\nGITHUB_APP_DOPPLER_TOKEN=${GITHUB_APP_TOKEN_FIXTURE}\n`);
+    expect(set.endsWith("\n") && !set.endsWith("\n\n")).toBe(true);
+    expect(set.startsWith(renderDopplerTokenEnv(""))).toBe(true); // additive: nothing else moved
+  });
+
+  test("AC2: the variable reaches web user_data ONLY through soleur_doppler_token_env_b64", () => {
+    // With the render unchanged at empty (above), user_data can then differ from main's only in
+    // inputs whose SOURCES changed (host_scripts_content_hash when a baked script changes).
+    const map = parseVarMap(extractTemplatefileMap(serverTf, "cloud-init.yml"));
+    const direct = Object.entries(map).filter(([, e]) => /github_app_runtime_doppler_token/.test(e));
+    const viaRender = Object.entries(map).filter(([, e]) => /local\.webhook_doppler_token_env\b/.test(e));
+    expect(direct).toEqual([]);
+    expect(viaRender.map(([k]) => k)).toEqual(["soleur_doppler_token_env_b64"]);
+  });
+
+  // The Terraform end of the wire (test-design F6). Both ends were pinned (the template line above,
+  // ci-deploy.sh's reader in Guard 7) but not the map entry between them: `= ""` in place of the
+  // variable left every suite green while the host never received the line. Two renders of the one
+  // template exist: the DELIVERED one (user_data + the push environment) must pass the variable,
+  // and the KEYLESS one (the deploy_pipeline_fix trigger, census row G6o) must pass "" and be
+  // otherwise identical, so the trigger hashes exactly "the delivered file minus the key line".
+  function localTmplMap(localName: string): Record<string, string> {
+    const re = new RegExp(`^[ \\t]*${localName}[ \\t]*=[ \\t]*templatefile\\("\\$\\{path\\.module\\}/soleur-doppler-token\\.tmpl",\\s*\\{`, "m");
+    const m = re.exec(serverTf);
+    if (m === null) throw new Error(`local.${localName} = templatefile(".../soleur-doppler-token.tmpl", {...}) not found`);
+    let i = m.index + m[0].length;
+    const start = i;
+    for (let depth = 1; i < serverTf.length && depth > 0; i++) {
+      if (serverTf[i] === "{") depth++;
+      else if (serverTf[i] === "}") depth--;
+    }
+    return parseVarMap(serverTf.slice(start, i - 1));
+  }
+
+  test("F6: the DELIVERED render passes var.github_app_runtime_doppler_token under the template's own directive name", () => {
+    const tmpl = readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8");
+    const directive = /%\{ if ([a-zA-Z0-9_]+) != "" ~\}/.exec(tmpl);
+    expect(directive?.[1]).toBe("github_app_doppler_token");
+    expect(localTmplMap("webhook_doppler_token_env")[directive![1]]).toBe("var.github_app_runtime_doppler_token");
+    expect(serverTf).toMatch(/^\s*SOLEUR_DOPPLER_TOKEN_B64\s*=\s*base64encode\(local\.webhook_doppler_token_env\)\s*$/m);
+  });
+
+  test("F6: the KEYLESS render passes \"\" and is otherwise the delivered render, key for key", () => {
+    const delivered = localTmplMap("webhook_doppler_token_env");
+    const keyless = localTmplMap("webhook_doppler_token_env_keyless");
+    expect(keyless.github_app_doppler_token).toBe('""');
+    const { github_app_doppler_token: _d, ...restDelivered } = delivered;
+    const { github_app_doppler_token: _k, ...restKeyless } = keyless;
+    expect(Object.keys(restDelivered).length).toBeGreaterThanOrEqual(4);
+    expect(restKeyless).toEqual(restDelivered);
+  });
+});
 
 describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
   test("web host base64gzip'd user_data is under the sub-cap budget (#6090)", () => {

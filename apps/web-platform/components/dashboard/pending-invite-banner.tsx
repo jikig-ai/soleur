@@ -157,7 +157,7 @@ export function PendingInviteBanner({
           type="button"
           onClick={() => setDismissed(true)}
           aria-label="Dismiss"
-          className="ml-1 hover:text-soleur-text-primary"
+          className="ml-1 p-1.5 hover:text-soleur-text-primary"
         >
           <svg
             className="h-4 w-4"

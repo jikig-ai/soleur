@@ -167,8 +167,8 @@ ok "$(grep -qE '^[[:space:]]*trap _pt_release EXIT$' "$UNIT_BODY"; echo $?)" \
 ok "$(grep -qF 'plaintext_unverified reason=umount' "$UNIT_BODY"; echo $?)" "S8b a failed teardown is FATAL reason=umount"
 n=$(grep -c 'rm -rf' "$UNIT_BODY" || true)
 ok "$((n != 0))" "S8c no rm -rf in the unit — it would walk a still-mounted plaintext tree into stderr (got $n)"
-ok "$(grep -qF "! -name '.*.init.lock' ! -name lost+found -printf x 2>/dev/null" "$UNIT_BODY"; echo $?)" \
-  "S9 the count excludes the .<id>.init.lock dotfiles and lost+found, and discards find's stderr (entry names are workspace ids)"
+ok "$(grep -qF "! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf x 2>/dev/null" "$UNIT_BODY"; echo $?)" \
+  "S9 the count excludes the shared .init.lock (#9066), legacy .<id>.init.lock residue and lost+found, and discards find's stderr (entry names are workspace ids)"
 n=$(grep -c "\-name '\*\.git'" "$UNIT_BODY" || true)
 ok "$((n != 0))" "S9b the count is NOT narrowed to *.git — a partial repositories/x is still user data (got $n)"
 # AC5 — every plaintext FATAL names a reason from the closed vocabulary, or is the residue line.
@@ -569,9 +569,9 @@ STUB
 printf 'remove|%s\n' "$*" >> "$FXD/calls.log"
 env > "$FXD/probe.env"
 _id="${SSH_ORIGINAL_COMMAND:-noenv}"
-# The real script's 0-byte lock dotfile, so "invisible to the served_repos count" is measured
-# against a file that exists rather than assumed.
-: > "$FXD/store/repositories/.$_id.init.lock"
+# The real script's 0-byte lock dotfile (#9066: the constant-name shared lock), so
+# "invisible to the served_repos count" is measured against a file that exists.
+: > "$FXD/store/repositories/.init.lock"
 if [ -e "$FXD/probe_refuse" ]; then
   printf 'remote: git-data remove: refused\n' >&2
   exit 1
@@ -762,7 +762,7 @@ ok "$(grep -q '^remove|' "$FX/calls.log"; echo $?)" "R1 the erasure probe ran th
 ok "$([ -z "$(cat "$FX/emit.log")" ]; echo $?)" "R1 no fatal was emitted on the all-pass path" "$(cat "$FX/emit.log")"
 # The probe's lock dotfile exists and is invisible to the count — both halves, so the row
 # cannot pass because the file was never created.
-ok "$([ -e "$FX/store/repositories/.boot-probe-0.init.lock" ]; echo $?)" "R1 the probe left its 0-byte lock dotfile"
+ok "$([ -e "$FX/store/repositories/.init.lock" ]; echo $?)" "R1 the probe left its 0-byte shared lock dotfile (.init.lock, #9066)"
 ok "$([ "$(field served_repos)" = 0 ]; echo $?)" "R1 served_repos stays 0 with that dotfile present"
 # The probe's environment: pinned, and carrying nothing of the caller's.
 ok "$(grep -qxF 'SSH_ORIGINAL_COMMAND=boot-probe-0' "$FX/probe.env"; echo $?)" "R1 the probe passed SSH_ORIGINAL_COMMAND=boot-probe-0"
@@ -1115,7 +1115,7 @@ new_fixture m2-count-glob
 mkdir -p "$FX/ptsrc/repositories/x"
 run_unit "$UNIT"
 ok "$(fatal_is 'plaintext_residue count=1')" "M2 instrument: the pristine unit counts a partial repositories/x" "$(cat "$FX/err")"
-mutate m2 "s/! -name '\\.\\*\\.init\\.lock' ! -name lost\\+found/-name '*.git'/"
+mutate m2 "s/! -name '\\.\\*\\.init\\.lock' ! -name '\\.init\\.lock' ! -name lost\\+found/-name '*.git'/"
 ok "$MUT_RC" \
   "M2 the mutation landed (the count narrowed to *.git)"
 run_unit "$MUT"

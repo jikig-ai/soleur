@@ -371,7 +371,18 @@ pre-commit:
       # narrow gate, not an opportunistic second battery), so the sanctioned
       # invocation needs no override — and no longer pays the full-battery
       # cost on every matching commit.
-      run: bash scripts/test-all.sh --affected
+      # `--affected-scope=staged` (#9173) scopes the selection diff to the
+      # index — a pre-commit gate's unit of work is the commit, so a branch
+      # that touches the runner/index no longer degrades every staged ts
+      # commit to the full battery (which crossed TC_RUNTIME_CEILING_S and
+      # made the commit unlandable through hooks). `TC_LOCK_TIMEOUT=300`
+      # bounds BOTH waits in tc_acquire — the ticket queue defaults to it
+      # (test-contention.sh) and the head-ticket flock acquire honours it —
+      # so worst-case commit latency is ~10 min of two bounded stages plus a
+      # narrow run, and on expiry tc_acquire proceeds with the
+      # LOCK_CONTENDED_PROCEEDING banner rather than aborting. CI's required
+      # `test` context remains the authoritative full-battery net.
+      run: TC_LOCK_TIMEOUT=300 bash scripts/test-all.sh --affected --affected-scope=staged
     plugin-component-test:
       priority: 7
       glob: "plugins/soleur/**/*.md"

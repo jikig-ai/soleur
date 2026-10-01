@@ -23,7 +23,7 @@
 #     git-data-luks-reopen.timer;
 #   * git-data-bootstrap.sh is exempt BY NAME (plan): it CREATES the store and writes the
 #     marker, so it cannot require its own marker;
-#   * git-data-pre-receive-placeholder.sh is exempt BY NAME (plan): it is copied into
+#   * git-data-pre-receive.sh is exempt BY NAME (plan): it is copied into
 #     hooks/ and runs only under the transport wrapper, which asserts first;
 #   * a payload that never reads the GIT_DATA_REPO_ROOT seam does not act on the bare-repo
 #     store at all. git-data-luks-reopen.sh is that case: it OPENS and MOUNTS the volume, so
@@ -139,7 +139,7 @@ derive_store_set() { # derive_store_set <main.tf> <payload dir>
   while read -r b; do
     [ -n "$b" ] || continue
     case "$b" in *.sh) ;; *) continue ;; esac
-    case "$b" in git-data-bootstrap.sh|git-data-pre-receive-placeholder.sh) continue ;; esac
+    case "$b" in git-data-bootstrap.sh|git-data-pre-receive.sh) continue ;; esac
     [ -f "${2}/${b}" ] || { printf 'MISSING:%s\n' "$b"; continue; }
     grep -q 'GIT_DATA_REPO_ROOT' <<< "$(_code "${2}/${b}")" || continue
     printf '%s\n' "$b"
@@ -154,14 +154,14 @@ _pn=$(printf '%s\n' "$PAYLOADS" | grep -c .)
 # makes the failure mode loud rather than arithmetic.
 if [ "$_pn" -ge 10 ]; then pass "A1: main.tf binds $_pn file() payloads (floor 10)"
 else fail "A1: the file() extraction found only $_pn payloads — the census would inspect almost nothing" "$PAYLOADS"; fi
-for b in git-data-bootstrap.sh git-data-pre-receive-placeholder.sh; do
+for b in git-data-bootstrap.sh git-data-pre-receive.sh; do
   if grep -qxF "$b" <<< "$PAYLOADS"; then pass "A2: the named exemption $b is a real payload (the exemption is not stale)"
   else fail "A2: $b is exempted by name but is no longer bound by file() in main.tf"; fi
 done
 _nonscript="$(printf '%s\n' "$PAYLOADS" | grep -v '\.sh$' | tr '\n' ' ')"
 if [ -n "$_nonscript" ]; then pass "A3: non-script payloads exempted by extension: ${_nonscript% }"
 else fail "A3: no non-script payload was found — the extension exemption is reading nothing"; fi
-_nonacting="$(printf '%s\n' "$PAYLOADS" | grep '\.sh$' | grep -vxF -e git-data-bootstrap.sh -e git-data-pre-receive-placeholder.sh | while read -r b; do
+_nonacting="$(printf '%s\n' "$PAYLOADS" | grep '\.sh$' | grep -vxF -e git-data-bootstrap.sh -e git-data-pre-receive.sh | while read -r b; do
   [ -f "${DIR}/${b}" ] && ! grep -q 'GIT_DATA_REPO_ROOT' <<< "$(_code "${DIR}/${b}")" && printf '%s\n' "$b"; done | tr '\n' ' ')"
 if [ "${_nonacting% }" = "git-data-luks-reopen.sh" ]; then pass "A4: the only script payload excluded as not store-acting is git-data-luks-reopen.sh (it mounts the store)"
 else fail "A4: the not-store-acting exclusion covers '${_nonacting% }', expected exactly git-data-luks-reopen.sh"; fi

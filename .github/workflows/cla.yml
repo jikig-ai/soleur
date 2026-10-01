@@ -55,7 +55,11 @@ jobs:
           # runtime's ambient `agent@soleur.ai` email resolves to a NULL login and never
           # matches. Login-based (non-spoofable) by design; do NOT add a plain author-name
           # entry like `Soleur Agent`. See #5520 (the PR that exposed the null-login gap).
-          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot],soleur-ai[bot]"
+          # `soleur-infra[bot]` (bot user ID 335404629) is the soleur-infra App, which authors
+          # the inngest-bootstrap cloud-init pin-bump PRs since #9262 (ADR-232). Same rule: its
+          # commits carry the `335404629+soleur-infra[bot]@users.noreply.github.com` author
+          # email (pinned as BOT_EMAIL in .github/scripts/bump-inngest-bootstrap-pin.sh).
+          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot],soleur-ai[bot],soleur-infra[bot]"
           custom-notsigned-prcomment: |
             Thank you for your contribution! One thing is needed before we can merge it.
 
