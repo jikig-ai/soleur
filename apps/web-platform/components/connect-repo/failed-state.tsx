@@ -1,9 +1,9 @@
 "use client";
 
 import { XCircleIcon } from "@/components/icons";
-import { GoldButton } from "@/components/ui/gold-button";
-import { OutlinedButton } from "@/components/ui/outlined-button";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import {
@@ -145,12 +145,17 @@ export function FailedState({
   // current_workspace_id JWT claim (ADR-044 Decision.3), then a HARD navigation
   // to /dashboard converges server components onto the durable truth. Redirecting
   // WITHOUT the refresh would land on the stale prior-claim workspace.
-  const handleSwitch = async () => {
-    if (!existingWorkspaceId) {
-      onRetry();
-      return;
-    }
-    const supabase = createClient();
+  // feat-ui-action-feedback redirect latch (brief §3.6 / spec-flow C4): the
+  // only terminal resolve path is the hard nav to /dashboard — latch() marks
+  // it explicitly. The onRetry paths resolve and release normally, which is
+  // also correct if onRetry did NOT unmount us (the CTA simply recovers).
+  const switchAction = usePendingAction(
+    async () => {
+      if (!existingWorkspaceId) {
+        onRetry();
+        return;
+      }
+      const supabase = createClient();
     const { error } = await supabase.rpc("set_current_workspace_id", {
       p_workspace_id: existingWorkspaceId,
     });
@@ -181,8 +186,19 @@ export function FailedState({
           "refreshSession failed after set_current_workspace_id committed — converging forward via hard nav",
       });
     }
+    switchAction.latch();
     window.location.assign("/dashboard");
-  };
+    },
+  );
+
+  // feat-ui-action-feedback: the reinstall CTA issues a hard nav OUTSIDE
+  // switchAction.run() — without its own episode the primary Button stays
+  // armed through the OAuth redirect commit (double-click fires two kicks,
+  // zero visual feedback). Same latch contract: nav owns teardown.
+  const reinstall = usePendingAction(async () => {
+    reinstall.latch();
+    window.location.assign("/api/repo/install");
+  });
 
   const handlePrimary = () => {
     if (!copy || copy.primaryCta.action === "retry") {
@@ -190,11 +206,11 @@ export function FailedState({
       return;
     }
     if (copy.primaryCta.action === "reinstall") {
-      window.location.href = "/api/repo/install";
+      reinstall.run();
       return;
     }
     if (copy.primaryCta.action === "switch") {
-      void handleSwitch();
+      switchAction.run();
       return;
     }
     // "choose" — the parent page owns repo selection; onRetry takes the
@@ -249,15 +265,29 @@ export function FailedState({
         </ol>
       </Card>
 
+      {switchAction.error ? (
+        <p role="alert" className="text-sm text-red-400">
+          {switchAction.error.message}
+        </p>
+      ) : null}
+
       <div className="flex items-center justify-center gap-3">
-        <GoldButton onClick={handlePrimary}>
+        <Button
+          variant="gold"
+          type="button"
+          onClick={handlePrimary}
+          disabled={switchAction.pending || reinstall.pending}
+          loading={switchAction.pending || reinstall.pending}
+        >
           {copy?.primaryCta.label ?? "Try Again"}
-        </GoldButton>
-        <OutlinedButton
+        </Button>
+        <Button
+          variant="outlined"
+          type="button"
           onClick={() => window.open("https://www.githubstatus.com", "_blank")}
         >
           GitHub Status Page
-        </OutlinedButton>
+        </Button>
       </div>
     </div>
   );

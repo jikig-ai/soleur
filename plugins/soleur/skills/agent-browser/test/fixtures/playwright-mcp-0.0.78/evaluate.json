@@ -1,0 +1,12 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Result\n{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ]\n}\n### Ran Playwright code\n```js\nawait page.evaluate('() => ({a: 1, b: [1,2]})');\n```"
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 9
+}

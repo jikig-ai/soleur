@@ -321,6 +321,10 @@ classify_body() { # <file> -> empty | html | bytes
 # reads git too.
 materialize_reference() { # <sha> -> prints the plugin subdir on success
   local sha="$1" dest="$SCRATCH/reference" root
+  # The SHA is a fetch refspec and a `git archive` operand below — pin its shape
+  # before it reaches either, so a malformed CANARY_DELIVERED_SHA or a misresolved
+  # install pin cannot smuggle an option or a refspec past the flag position.
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
   command -v git >/dev/null 2>&1 || return 1
   root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
   [[ -n "$root" ]] || return 1
@@ -332,18 +336,38 @@ materialize_reference() { # <sha> -> prints the plugin subdir on success
   # collapsing into `reference_unreadable` — which would report the canary as
   # broken in exactly the case it is supposed to catch.
   #
-  # `--no-tags` is load-bearing, not tidiness (#7795). `$root` is the LIVE repository
-  # (`git rev-parse --show-toplevel` above), and a bare `git fetch` auto-follows tags — so this
-  # line is a path by which a suite of the running battery writes `refs/tags/**` into the
-  # operator's own repo. The repo-write boundary classifies exactly that, and on a checkout with
-  # no sibling worktree it is a FATAL the gate is right to raise. Nothing downstream wants tags:
-  # the fetch exists only to make `$sha` reachable for the `git archive` below.
+  # THE FETCH LANDS IN A SCRATCH REPO, never in `$root` (#7795, deepened by
+  # #7924). `$root` is the LIVE repository — `git rev-parse --show-toplevel`
+  # above — and ANY fetch into it is a live-repo write: objects into the shared
+  # object store and, because the fetch is depth-bounded, `.git/shallow` into
+  # the common dir every linked worktree shares. The repo-write boundary now
+  # samples that file and classifies a create/remove/content-change there as
+  # FATAL — the `--no-tags` flag this site used to rely on only covered the
+  # `refs/tags/**` half of the write; tag hygiene was never the whole property.
+  # So the missing-sha fallback materializes inside `$SCRATCH/refrepo` — the
+  # canary's own trap-cleaned mktemp root — fetching there and archiving FROM
+  # there. The fetch, its objects, and its shallow file all land in the
+  # throwaway repo; nothing in the live repository is written at all. The
+  # `cat-file -e` check stays pointed at `$root` because it is a READ, and the
+  # boundary is over writes — so the sha-already-present fast path still
+  # archives from `$root` and builds no scratch repo.
+  local refrepo="$SCRATCH/refrepo" archive_repo="$root"
   if ! git -C "$root" cat-file -e "${sha}^{commit}" 2>/dev/null; then
-    git -C "$root" fetch --no-tags --depth 1 origin "$sha" >/dev/null 2>&1 || return 1
+    local remote_url
+    git init -q "$refrepo" || return 1
+    remote_url="$(git -C "$root" remote get-url origin 2>/dev/null)" || return 1
+    [[ -n "$remote_url" ]] || return 1
+    # The SHA is fetched DIRECTLY by URL, with no `remote add`: a credential-bearing
+    # origin URL would otherwise persist in the scratch repo's .git/config. Fetching
+    # an arbitrary SHA this way needs the server to allow reachable-SHA fetches
+    # (uploadpack.allowReachableSHA1InWant / allowTipSHA1InWant, which GitHub
+    # enables); `clone --branch` cannot address an arbitrary commit.
+    git -C "$refrepo" fetch --no-tags --depth 1 -- "$remote_url" "$sha" >/dev/null 2>&1 || return 1
+    archive_repo="$refrepo"
   fi
 
   mkdir -p "$dest" || return 1
-  git -C "$root" archive "$sha" -- "$PLUGIN_SUBDIR" 2>/dev/null | tar -x -C "$dest" 2>/dev/null || return 1
+  git -C "$archive_repo" archive "$sha" -- "$PLUGIN_SUBDIR" 2>/dev/null | tar -x -C "$dest" 2>/dev/null || return 1
   [[ -d "$dest/${PLUGIN_SUBDIR}" ]] || return 1
   printf '%s' "$dest/${PLUGIN_SUBDIR}"
 }

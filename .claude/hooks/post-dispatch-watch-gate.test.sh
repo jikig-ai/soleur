@@ -18,8 +18,8 @@ set -uo pipefail
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/post-dispatch-watch-gate.sh"
 PASS=0; FAIL=0; TOTAL=0
 [[ -x "$HOOK" ]] || { echo "FATAL: hook not executable" >&2; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 : "${WORK:?fixture dir is empty; git -C <empty> would retarget this write}"
@@ -27,6 +27,7 @@ git -C "$WORK" init -q
 STATE_DIR="$WORK/.git"
 
 bash_payload() { jq -nc --arg c "$1" --arg d "$WORK" '{tool_name:"Bash",cwd:$d,session_id:"t",tool_input:{command:$c}}'; }
+exec_payload() { jq -nc --arg c "$1" --arg d "$WORK" '{tool_name:"exec",cwd:$d,session_id:"t",tool_input:{command:$c}}'; }
 monitor_payload() { jq -nc --arg d "$WORK" '{tool_name:"Monitor",cwd:$d,session_id:"t",tool_input:{command:"watch"}}'; }
 
 nag_of() { jq -r '.systemMessage // ""' <<<"${1:-{\}}" 2>/dev/null; }
@@ -129,8 +130,13 @@ for c in \
   fi
 done
 
+# --- D4: Devin wire name `exec` reaches the observer (kind map, #8205) --------
+reset
+exec_payload 'gh workflow run cutover-inngest.yml -f op=execute' | "$HOOK" >/dev/null 2>&1
+[[ -s "$STATE_DIR/soleur-pending-dispatch" ]] && ok "D4 Devin exec dispatch recorded" || bad "D4 Devin exec dispatch not recorded"
+
 # --- V1: anti-vacuity ---------------------------------------------------------------------------
-if [[ "$TOTAL" -eq 18 ]]; then ok "V1 full inventory ran (18 checks incl. this)"; else bad "V1 expected 18, ran $((TOTAL+1))"; fi
+if [[ "$TOTAL" -eq 19 ]]; then ok "V1 full inventory ran (19 checks incl. this)"; else bad "V1 expected 19, ran $((TOTAL+1))"; fi
 
 echo ""
 echo "=== $PASS/$TOTAL passed ==="

@@ -79,6 +79,8 @@ vi.mock("@/server/logger", () => ({
 }));
 
 vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(),
   captureException: vi.fn(),
 }));
 

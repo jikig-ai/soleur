@@ -31,6 +31,9 @@ import {
   isSchemaConformingNotice,
   classifyBranchOwner,
   classifyIssueOwner,
+  rewriteNoticeRecord,
+  bumpNoticeField,
+  fetchAllPages,
 } from "@/server/inngest/functions/cron-content-vendor-drift";
 // #5111: consolidated into the safe-commit helper (was a per-cron copy).
 import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
@@ -710,7 +713,10 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
   it("fails an unreadable drifted body CLOSED, onto the guarded route", () => {
     // Emitting only headers would let check 5 route on a filename alone.
     expect(src).toMatch(/decodeContentsBody\(contents\)/);
-    expect(src).toMatch(/\[CRITICAL\] drifted content unreadable/);
+    // The critical marker covers BOTH the undecodable body AND the >cap
+    // body — either way the classifier sees a guarded-route signal.
+    expect(src).toMatch(/\[CRITICAL\] drifted content \$\{upstreamBody === null/);
+    expect(src).toMatch(/MAX_DIFF_LINES_PER_FILE/);
   });
 
   it("counts DISTINCT upstream paths, so a duplicate cannot fake completeness", () => {
@@ -929,9 +935,12 @@ describe("per-bundle identity — source-shape anchors", () => {
     );
   });
 
-  it("fetches upstream blobs on the repo's default branch, not a literal", () => {
-    expect(SUT_SOURCE).toMatch(/ref: upstreamRef/);
-    expect(SUT_SOURCE).toMatch(/upstreamRef = repoMeta\.default_branch/);
+  it("fetches upstream blobs at the resolved head commit, not a literal", () => {
+    // The contents read binds to the resolved pin when available — the
+    // mutable branch name is only the no-pin fallback (TOCTOU: a mid-loop
+    // upstream push must not mix C1's pin with C2's blob, #8185 review).
+    expect(SUT_SOURCE).toMatch(/ref: newPinnedCommit \?\? upstreamRef/);
+    expect(SUT_SOURCE).toMatch(/upstreamRef = repoMetaSummary\.defaultBranch/);
   });
 
   it("aggregates health across bundles — no sibling masking", () => {
@@ -941,5 +950,353 @@ describe("per-bundle identity — source-shape anchors", () => {
   it("treats zero discovered bundles as a measurement failure, not clean", () => {
     expect(SUT_SOURCE).toContain('status: "no-bundles"');
     expect(SUT_SOURCE).toMatch(/bundles\.length === 0/);
+  });
+});
+
+// =============================================================================
+// #8180 — re-vendor write helpers (Guard 2)
+//
+// Property: when the PR route runs, every drifted lifted file's NOTICE record
+// is rewritten atomically — or the step has thrown and NOTHING was written.
+// =============================================================================
+
+describe("rewriteNoticeRecord — Guard 2 row 4 (#8180)", () => {
+  const A_OLD_LOCAL = "a".repeat(40);
+  const A_OLD_UP = "b".repeat(40);
+  const B_OLD_LOCAL = "c".repeat(40);
+  const B_OLD_UP = "d".repeat(40);
+  const A_NEW_LOCAL = "1".repeat(40);
+  const A_NEW_UP = "2".repeat(40);
+  const NOTICE = [
+    "---",
+    "upstream: github.com/acme/widgets",
+    `pinned-commit: ${"e".repeat(40)}`,
+    "last-verified: 2026-01-01",
+    "lifted-files:",
+    "  - path: references/alpha.md",
+    "    upstream-path: rules/alpha.md",
+    `    upstream-blob-sha: ${A_OLD_UP}`,
+    `    local-blob-sha: ${A_OLD_LOCAL}`,
+    "    status: active-verbatim",
+    "  - path: references/beta.md",
+    "    upstream-path: rules/beta.md",
+    `    upstream-blob-sha: ${B_OLD_UP}`,
+    `    local-blob-sha: ${B_OLD_LOCAL}`,
+    "    status: active-verbatim",
+    "soleur-authored:",
+    "  - path: references/own.md",
+    `    local-blob-sha: ${"f".repeat(40)}`,
+    "    status: soleur-authored",
+    "---",
+    "",
+  ].join("\n");
+
+  const A_EXPECTED = {
+    upstreamPath: "rules/alpha.md",
+    oldUpstreamSha: A_OLD_UP,
+    oldLocalSha: A_OLD_LOCAL,
+  };
+  const B_EXPECTED = {
+    upstreamPath: "rules/beta.md",
+    oldUpstreamSha: B_OLD_UP,
+    oldLocalSha: B_OLD_LOCAL,
+  };
+
+  it("rewrites exactly the targeted record — both sha fields, nothing else", () => {
+    const out = rewriteNoticeRecord(
+      NOTICE,
+      "references/alpha.md",
+      A_NEW_LOCAL,
+      A_NEW_UP,
+      A_EXPECTED,
+    );
+    expect(out).toContain(`local-blob-sha: ${A_NEW_LOCAL}`);
+    expect(out).toContain(`upstream-blob-sha: ${A_NEW_UP}`);
+    // The second record and the soleur-authored block are byte-identical.
+    expect(out).toContain(`local-blob-sha: ${B_OLD_LOCAL}`);
+    expect(out).toContain(`upstream-blob-sha: ${B_OLD_UP}`);
+    expect(out).toContain(`local-blob-sha: ${"f".repeat(40)}`);
+    // No residual old values anywhere.
+    expect(out).not.toContain(A_OLD_LOCAL);
+    expect(out).not.toContain(A_OLD_UP);
+  });
+
+  it("matches a record that is NOT the first block", () => {
+    const out = rewriteNoticeRecord(
+      NOTICE,
+      "references/beta.md",
+      A_NEW_LOCAL,
+      A_NEW_UP,
+      B_EXPECTED,
+    );
+    expect(out).toContain(`upstream-blob-sha: ${A_NEW_UP}`);
+    expect(out).toContain(`upstream-blob-sha: ${A_OLD_UP}`); // alpha untouched
+  });
+
+  it("throws when the record block is absent — never a silent no-op", () => {
+    expect(() =>
+      rewriteNoticeRecord(
+        NOTICE,
+        "references/missing.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        A_EXPECTED,
+      ),
+    ).toThrow(/0 matching record blocks/);
+  });
+
+  it("throws when the path prefix-matches but is not the block (fail-closed anchoring)", () => {
+    const extended = NOTICE.replace(
+      "- path: references/alpha.md",
+      "- path: references/alpha.md.bak",
+    );
+    expect(() =>
+      rewriteNoticeRecord(
+        extended,
+        "references/alpha.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        A_EXPECTED,
+      ),
+    ).toThrow(/matching record blocks/);
+  });
+
+  it("throws on a duplicate path (2 blocks is not a unique record)", () => {
+    const dup = NOTICE.replace(
+      "soleur-authored:",
+      "  - path: references/alpha.md\n" +
+        "    upstream-path: rules/dup.md\n" +
+        `    upstream-blob-sha: ${B_OLD_UP}\n` +
+        `    local-blob-sha: ${B_OLD_LOCAL}\n` +
+        "    status: active-verbatim\nsoleur-authored:",
+    );
+    expect(() =>
+      rewriteNoticeRecord(
+        dup,
+        "references/alpha.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        A_EXPECTED,
+      ),
+    ).toThrow(/2 matching record blocks/);
+  });
+
+  it("throws when the block lacks the sha keys (sub-count assert)", () => {
+    const stripped = NOTICE.replace(
+      `    upstream-blob-sha: ${A_OLD_UP}\n`,
+      "",
+    );
+    expect(() =>
+      rewriteNoticeRecord(
+        stripped,
+        "references/alpha.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        A_EXPECTED,
+      ),
+    ).toThrow(/upstream-subs=0/);
+  });
+
+  it("throws when the block names a DIFFERENT upstream path — the crossed-pair guard", () => {
+    // A positionally-paired record that is not the one that drifted: the
+    // block exists and has both sha keys, but its upstream-path names
+    // record B's path while the caller passes record A's (#8185 review —
+    // equal-length filtered views can misalign the zip).
+    expect(() =>
+      rewriteNoticeRecord(
+        NOTICE,
+        "references/alpha.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        B_EXPECTED,
+      ),
+    ).toThrow(/does not name upstream-path/);
+  });
+
+  it("throws when the block's old shas differ from the drifted record's", () => {
+    // Same block, wrong expected old value → zero literal substitutions →
+    // fail closed instead of rewriting a neighboring record's sha.
+    expect(() =>
+      rewriteNoticeRecord(NOTICE, "references/alpha.md", A_NEW_LOCAL, A_NEW_UP, {
+        upstreamPath: "rules/alpha.md",
+        oldUpstreamSha: B_OLD_UP,
+        oldLocalSha: A_OLD_LOCAL,
+      }),
+    ).toThrow(/upstream-subs=0/);
+    expect(() =>
+      rewriteNoticeRecord(NOTICE, "references/alpha.md", A_NEW_LOCAL, A_NEW_UP, {
+        upstreamPath: "rules/alpha.md",
+        oldUpstreamSha: A_OLD_UP,
+        oldLocalSha: B_OLD_LOCAL,
+      }),
+    ).toThrow(/local-subs=0/);
+  });
+});
+
+describe("bumpNoticeField — fail-closed top-level bump (#8180)", () => {
+  const src = [
+    "upstream: github.com/acme/widgets",
+    `pinned-commit: ${"e".repeat(40)}`,
+    "last-verified: 2026-01-01",
+  ].join("\n");
+
+  it("advances the single matching line", () => {
+    const out = bumpNoticeField(src, "last-verified", "2026-09-14");
+    expect(out).toContain("last-verified: 2026-09-14");
+    expect(out).toContain("pinned-commit: " + "e".repeat(40));
+  });
+
+  it("throws when the field is absent", () => {
+    expect(() => bumpNoticeField("upstream: x", "last-verified", "2026-09-14")).toThrow(
+      /0 matching lines/,
+    );
+  });
+
+  it("throws on a duplicated field rather than picking one", () => {
+    const dup = src + "\nlast-verified: 2026-02-02";
+    expect(() => bumpNoticeField(dup, "last-verified", "2026-09-14")).toThrow(
+      /2 matching lines/,
+    );
+  });
+});
+
+// =============================================================================
+// #8182 — fetchAllPages (Guard 3, enumeration completeness)
+// =============================================================================
+
+describe("fetchAllPages — dedup enumeration completeness (#8182)", () => {
+  it("walks to a short page and returns every item", async () => {
+    const calls: number[] = [];
+    const fetchPage = async (page: number) => {
+      calls.push(page);
+      if (page === 1) return { data: Array.from({ length: 100 }, (_, i) => i) };
+      return { data: [100, 101] };
+    };
+    const out = await fetchAllPages(fetchPage);
+    expect(calls).toEqual([1, 2]);
+    expect(out.length).toBe(102);
+  });
+
+  // Guard 3 row 2: the match sitting on page 2 must be found — a bounded
+  // first page is exactly the defect this helper closes.
+  it("finds a match that lives only on page 2", async () => {
+    const fetchPage = async (page: number) => ({
+      data:
+        page === 1
+          ? Array.from({ length: 100 }, () => "other")
+          : ["the-matching-item"],
+    });
+    const out = await fetchAllPages(fetchPage);
+    expect(out).toContain("the-matching-item");
+  });
+
+  // Guard 3 row 3: per_page:100 without a loop hides item 101+.
+  it("still enumerates past 100 items", async () => {
+    const fetchPage = async (page: number) => ({
+      data:
+        page === 1
+          ? Array.from({ length: 100 }, (_, i) => `i${i}`)
+          : page === 2
+            ? ["i100"]
+            : [],
+    });
+    const out = await fetchAllPages(fetchPage);
+    expect(out).toContain("i100");
+    expect(out.length).toBe(101);
+  });
+
+  it("stops at the defensive 20-page cap — LOUDLY", async () => {
+    // A full final page at the cap means the enumeration is incomplete;
+    // dedup must not decide on a partial view, so the walk throws.
+    let calls = 0;
+    const fetchPage = async () => {
+      calls++;
+      return { data: Array.from({ length: 100 }, () => 1) };
+    };
+    await expect(fetchAllPages(fetchPage)).rejects.toThrow(
+      /20-page cap with a full final page/,
+    );
+    expect(calls).toBe(20);
+  });
+
+  it("a single full page is not mistaken for complete when a next page may exist", async () => {
+    // per_page 100 full page → must request page 2 to learn it is short/empty.
+    const calls: number[] = [];
+    const fetchPage = async (page: number) => {
+      calls.push(page);
+      return { data: page === 1 ? new Array(100).fill(0) : [] };
+    };
+    await fetchAllPages(fetchPage);
+    expect(calls).toEqual([1, 2]);
+  });
+});
+
+// =============================================================================
+// Source-shape anchors — #8180 / #8182 / #8183
+// =============================================================================
+
+describe("handler source-shape — the #8180-#8183 fixes", () => {
+  const src = SUT_SOURCE;
+
+  it("the re-vendor write lives INSIDE the per-bundle safe-commit-pr step, before safeCommitAndPr", () => {
+    // Replay safety is the whole fix: a write in its own step replays against
+    // a memoized detect result on a clean worktree → no-changes again (#8180).
+    const stepIdx = src.indexOf("step.run(`safe-commit-pr-${bundle.slug}`");
+    const writeIdx = src.indexOf("merge-file", stepIdx);
+    const noticeIdx = src.indexOf("rewriteNoticeRecord", stepIdx);
+    const commitIdx = src.indexOf("safeCommitAndPr({", stepIdx);
+    expect(stepIdx).toBeGreaterThan(-1);
+    expect(writeIdx).toBeGreaterThan(stepIdx);
+    expect(noticeIdx).toBeGreaterThan(stepIdx);
+    expect(commitIdx).toBeGreaterThan(writeIdx);
+    expect(commitIdx).toBeGreaterThan(noticeIdx);
+  });
+
+  it("zip-pairs lifted-files with upstream-files and throws on cardinality mismatch", () => {
+    expect(src).toMatch(/\["lifted-files"\]/);
+    expect(src).toMatch(
+      /liftedFiles\.length !== upstreamFiles\.length/,
+    );
+  });
+
+  it("fetches the new pinned commit at the probed default branch", () => {
+    expect(src).toMatch(/GET \/repos\/\{owner\}\/\{repo\}\/commits\/\{ref\}/);
+    expect(src).toMatch(/newPinnedCommit/);
+  });
+
+  it("conflict gate → create-only merge + needs-human-review label", () => {
+    expect(src).toMatch(/needsHumanReview \? "none" : "direct"/);
+    expect(src).toMatch(/needsHumanReview \? \["needs-human-review"\]/);
+    expect(src).toMatch(/\^<<<<<<</);
+  });
+
+  it("captures the safeCommitAndPr result and reports no-changes", () => {
+    expect(src).toMatch(/const res = await safeCommitAndPr/);
+    expect(src).toMatch(/res\.status === "no-changes"/);
+    expect(src).toMatch(/safe-commit-no-changes/);
+  });
+
+  it("enumeration dedup sites page to completion via fetchAllPages (#8182)", () => {
+    // listOpenPrHeads feeds BOTH the drift-PR dedup and the attest-PR dedup —
+    // it must enumerate every open PR, not page 1.
+    const headsIdx = src.indexOf("async function listOpenPrHeads");
+    expect(headsIdx).toBeGreaterThan(-1);
+    expect(src.indexOf("fetchAllPages", headsIdx)).toBeGreaterThan(headsIdx);
+    // The issue dedup scans `items` — an enumeration, not a total_count read —
+    // so it must also page to completion.
+    const issueIdx = src.indexOf("step.run(`open-drift-issue-${bundle.slug}`");
+    expect(issueIdx).toBeGreaterThan(-1);
+    const issueStep = src.slice(issueIdx, issueIdx + 4000);
+    expect(issueStep).toMatch(/fetchAllPages/);
+    expect(issueStep).toMatch(/GET \/search\/issues/);
+  });
+
+  it("the issue body carries the upstream repository metadata section (#8183)", () => {
+    expect(src).toContain("## Upstream repository metadata");
+    expect(src).toContain("repoMetaSummary");
+    // unreachable renders `?`, never affirmative facts — and upstream-
+    // controlled strings are scrubbed before code-span interpolation.
+    expect(src).toMatch(/meta \? mdSafe\(meta\.fullName\) : "\?"/);
+    expect(src).toContain("upstream_repo_state");
   });
 });

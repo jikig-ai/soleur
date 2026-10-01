@@ -2,17 +2,18 @@
 
 import { PlusIcon, LinkIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
-import { GoldButton } from "@/components/ui/gold-button";
-import { OutlinedButton } from "@/components/ui/outlined-button";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 interface ChooseStateProps {
   onCreateNew: () => void;
   onConnectExisting: () => void;
   onSkip: () => void;
+  /** feat-ui-action-feedback: hard-nav episode in flight (skip → /dashboard). */
+  navPending?: boolean;
 }
 
-export function ChooseState({ onCreateNew, onConnectExisting, onSkip }: ChooseStateProps) {
+export function ChooseState({ onCreateNew, onConnectExisting, onSkip, navPending }: ChooseStateProps) {
   return (
     <div className="space-y-8">
       <div className="space-y-4 text-center">
@@ -46,7 +47,7 @@ export function ChooseState({ onCreateNew, onConnectExisting, onSkip }: ChooseSt
             </p>
           </div>
           <div className="mt-6">
-            <GoldButton onClick={onCreateNew}>Create Project</GoldButton>
+            <Button variant="gold" type="button" onClick={onCreateNew}>Create Project</Button>
           </div>
         </Card>
 
@@ -66,19 +67,21 @@ export function ChooseState({ onCreateNew, onConnectExisting, onSkip }: ChooseSt
             </p>
           </div>
           <div className="mt-6">
-            <OutlinedButton onClick={onConnectExisting}>Connect Project</OutlinedButton>
+            <Button variant="outlined" type="button" onClick={onConnectExisting}>Connect Project</Button>
           </div>
         </Card>
       </div>
 
       <p className="text-center text-sm text-soleur-text-muted">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onSkip}
-          className="underline decoration-soleur-border-default underline-offset-2 transition-colors hover:text-soleur-text-secondary"
+          disabled={navPending}
+          className="underline decoration-soleur-border-default underline-offset-2"
         >
           Skip this step
-        </button>{" "}
+        </Button>{" "}
         — you can connect a project later from Settings.
       </p>
     </div>

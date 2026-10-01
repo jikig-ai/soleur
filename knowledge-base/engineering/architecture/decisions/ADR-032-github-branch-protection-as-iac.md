@@ -570,8 +570,10 @@ the queue rule is re-applied:
   required contexts (17 CI Required as of #6049 — was 16 — + 2 CLA Required:
   `cla-check`, `cla-evidence`) report on the `merge_group` temp ref incl.
   `CodeQL`, and it merges without stalling.
-- **Canary bot PR:** a `rule-metrics-aggregate.yml` bot PR flows through the
+- **Canary bot PR:** a `weakness-miner.yml` bot PR flows through the
   queue without stalling (CLA synthetics cover its CLA contexts).
+  (`rule-metrics-aggregate.yml` was the canary until #8377 retired it with the
+  committed aggregate -- ADR-235.)
 - **Stall probe live:** `merge-queue-stall-check.yml` has run ≥1 green cycle.
 - **Ruleset drift:** `scheduled-terraform-drift.yml` `infra/github` plan is clean
   (`plan → apply → plan` shows no `merge_queue` drift).
@@ -722,14 +724,147 @@ finds its tracking issue by the `merge-queue-revisit` **label** (#5840 today),
 not by number — the 2026-06-30 text's "pings issue #5840" describes the current
 resolution of that label, not a hardcoded id.
 
-**Producer / `merge_group` inventory as of 2026-09-14.** No trigger work is
-outstanding. Every producer of the 22 `@15368` contexts in ruleset 14145388 —
+**Producer / `merge_group` inventory as of 2026-09-15.** No trigger work is
+outstanding. Every producer of the 23 `@15368` contexts in ruleset 14145388 —
 `ci.yml`, `pr-quality-guards.yml`, `secret-scan.yml`, `dependency-review.yml`,
 `legal-doc-cross-document-gate.yml`, `tenant-integration.yml`,
-`apply-sentry-infra.yml`, `skill-security-scan-pr-trailer.yml` — carries
-`merge_group:` (PR-1, #5784). The CLA ruleset's two producers (`cla.yml`,
+`apply-sentry-infra.yml`, `skill-security-scan-pr-trailer.yml`,
+`vendor-pin-verify.yml` — carries `merge_group:` (PR-1, #5784; the ninth
+producer added by #8203, whose always-run aggregator is the required
+context). The CLA ruleset's two producers (`cla.yml`,
 `cla-evidence.yml`) do not, by design — the removed
 `merge-queue-cla-synthetics.yml` covered them and is on the restore list above.
 `CodeQL@57789` cannot. `infra/github/ruleset-ci-required.tf` still carries the
 `merge_queue` block deliberately absent under its "Merge queue REVERTED"
 comment; nothing in #8149 touches the ruleset.
+
+## Amendment — 2026-09-15 (#8203): 23 → 24, third always-run aggregator
+
+`required_status_checks` widened 23 → 24 by adding `vendor-pin-required`.
+The current-state grep
+(`grep -c '^      required_check {' infra/github/ruleset-ci-required.tf`)
+now returns `24`; T-rsc-7's literal and the canonical JSON moved in lockstep.
+
+**Third instance of the #5585 always-run aggregator pattern** (after
+`sentry-destroy-required`, #6589).
+`.github/workflows/vendor-pin-verify.yml` enforced the #8181
+path+commit+blob NOTICE binding via a `paths:`-filtered `verify-upstream-blobs`
+job whose context was never registered — so it could go red and the PR still
+merged (#8203's title bug). The workflow now always triggers (no `on.paths`);
+a cheap `detect-changes` job emits `vendor=true|false`; the
+`verify-upstream-blobs` job is gated on that output; and the always-run
+`vendor-pin-required` job (`if: always()`,
+`scripts/vendor-pin-gate-verdict.sh`, unit-tested) is the registered required
+context. `merge_group` is handled before the generic non-PR arm and emits
+`vendor=false`, so the queue never re-runs upstream-network verification and
+never leaves the context pending.
+
+**Schema-keyed surface ⇒ literal per-bundle anchors.** The verified surface
+is *schema-keyed*: a bundle is a skill NOTICE whose frontmatter parses and
+declares `upstream` + `pinned-commit`. `detect-changes` anchors the literal
+per-bundle paths (`plugins/soleur/skills/{gdpr-gate,legal-generate}/NOTICE`
+plus `references/`), the parser and integrity script, the workflow file, and the
+verdict pair — NOT a `plugins/soleur/skills/*/NOTICE` wildcard, because
+`vendor-bundle-coverage.test.sh` TS4 greps the literal prefixes and because
+#3492 warns that translating `paths:` globs into regexes silently
+under-matches. A NEW bundle enrollment must extend the anchor set in the
+same PR.
+
+**Earned vs fabricated across BOTH synthetic paths.** The #5585 amendment
+recorded a single synthetic path (the composite action's `CHECK_NAMES`).
+Two distinct fabricators now exist and their dispositions differ:
+
+1. *Composite action* (`bot-pr-with-synthetic-checks/action.yml`): derives
+   `CHECK_NAMES` from `scripts/required-checks.txt`, so it WILL post a
+   synthetic `vendor-pin-required` green on its PRs — sound by
+   **unreachability** (`ALLOWED_PATHS` ∩ `plugins/soleur/skills/**` = ∅),
+   the `rule-body-lint`/`sentry-destroy-required` shape.
+2. *Inngest* `SYNTHETIC_CHECK_NAMES` (`_cron-safe-commit.ts`): deliberately
+   does NOT contain `vendor-pin-required`. The content-vendor-drift cron is
+   the one synthetic consumer whose PRs touch the vendored surface; it
+   pushes with an App token that triggers real CI (#8166), so the check is
+   **earned** by a real `verify-upstream-blobs` run. Adding the name would
+   fabricate the binding result on exactly the diffs it gates.
+
+The two-arm guard note lives in `scripts/required-checks.txt` beside the
+entry; this paragraph is the decision record.
+
+## Amendment — 2026-09-21 (#8450): a fourth variant — the in-job step gate
+
+The `e2e` required context gains a path gate of a different shape than the
+three always-run aggregators above (`sentry-destroy-required`,
+`tenant-integration-required`, `vendor-pin-required`). Those gate a *job
+behind a `needs:`-fed `if:`* with an always-run aggregator as the registered
+context. `e2e` instead keeps its single job as the registered context and
+gates *inside* it: a first `Classify e2e applicability` step
+(`scripts/ci-e2e-classify.sh`, allowlist `knowledge-base/**` + root `*.md`)
+emits `applicable`, and the heavy steps carry
+`if: steps.detect.outputs.applicable == 'true'`.
+
+**Why this variant and not the aggregator.** A separate `detect-changes` job
+plus `needs:` edge was designed first and rejected on review: a failed
+detector job would needs-skip `e2e`, and a skipped required check posts
+GREEN — fabricating the certification on exactly the outage it must not
+outlive (the fail-open this file's amendments keep closing). In-job
+detection has no `needs:` edge to break: classifier failure exits the step
+and reds the job — an honest red, never a fabricated skip. A job-level `if:`
+on `e2e` itself was considered and explicitly rejected for the same reason:
+it would green-skip with no verdict step.
+
+**The residual this variant accepts (recorded, not hidden).** A green-skip
+still occupies a runner slot for job setup + the Playwright container pull —
+measured ~1–2 min of the ~4.2 min job. The gate saves the two `npm ci`
+installs and the test run, not the slot acquisition. A future "optimize to
+job-level `if:`" must not land for the reason above.
+
+**Reopener (iii) bookkeeping.** The 2026-09-14 amendment names an org plan
+change (Free 20 → Team 60) as reopener (iii) for the merge queue. #8450 is
+that plan change's driver. This amendment does NOT flip the reopener — the
+queue still needs (a) or (b) — but the capacity factor it cited is expected
+to dissolve post-upgrade; a post-upgrade commit records the observed
+deploy-arm tail and re-evaluates (iii) against the new pool. The queue stays
+off until then; nothing here re-enables it.
+
+## Amendment — 2026-09-22 (#8450, post-upgrade): reopener (iii) satisfied — capacity factor dissolved
+
+The organisation plan change the 2026-09-14 amendment named as reopener
+(iii) has occurred: `gh api orgs/jikig-ai --jq .plan.name` returns `team`,
+verified 2026-09-22T10:19:56Z (`UPGRADE_NOT_BEFORE`, recorded as `earliest=`
+on #8450's enrolled followthrough directive and in
+`knowledge-base/project/specs/feat-8450-ci-concurrency/measurements.md` via
+the ledger PR). The concurrent-job pool is now documented at 60 hosted
+jobs, up from the Free plan's 20 that made capacity a binding factor.
+
+**Observed post-upgrade data.** The upgrade did not translate into runner
+assignment immediately. In the ~90 minutes following, the org ran
+~8–10 hosted jobs against a 200+ deep run queue — far under the new 60-job
+ceiling — consistent with scheduler-side under-assignment or entitlement
+propagation lag, not with the plan number itself (no org-policy restriction
+could be verified; the Actions policy API needs org-admin scope the CI
+token lacks). ~94 superseded queued runs were cancelled as hygiene; the
+queue drained to ~26–30 runs with 12–14 executing within ~80 minutes of
+the flip. Deploy-arm tail measurement is in progress: the
+`actions-queue-tail-8450` probe (enrolled on #8450 with
+`earliest=UPGRADE_NOT_BEFORE`) requires ≥5 post-upgrade `workflow_run`
+deploy-arm samples; the first five post-upgrade runs carried no usable core
+deploy-job wait because `resolve-target` (#8494) correctly skipped
+`migrate`/`deploy`/`live-verify` on diffs with no deployable surface — the
+probe excludes resolve-target-only samples by design, so the p95 fills as
+real deploys land.
+
+**Re-evaluation of (iii).** Satisfied: the named plan change happened and
+the capacity factor — "the organisation is on the GitHub Free plan (20
+concurrent hosted jobs)" — no longer holds. Two qualifications accompany
+the flip rather than dissolve it. First, the observed under-assignment is a
+reminder that 60 is an entitlement, not a guarantee: a merge queue's 3×
+run fan-out per merged PR would still bind whenever scheduler assignment
+lags, so `check_response_timeout_minutes` must still be re-derived above
+the measured start-spread before any future enablement, per the 2026-09-14
+note. Second, (iii) removes only the capacity objection — (a)
+`codeql-action#1537` native `merge_group` status reporting or (b) a
+deliberate operator decision to make CodeQL advisory remains necessary,
+and neither has occurred.
+
+**The queue stays off.** #5840 remains the tracker. This amendment changes
+only the bookkeeping: (iii) is now a closed precondition behind (a) or (b),
+not an open blocker.

@@ -42,6 +42,10 @@
 
 set -euo pipefail
 
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 if [ -f "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" ]; then
@@ -72,6 +76,8 @@ payload="$(cat)"
 # empty → allow. Mirrors new-scheduled-cron-prefer-inngest.sh (#4600).
 tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 
+# DEVIN-SKIP reason=no-analog: Devin has no CronCreate tool; Claude-canonical
+# gate intentionally left on the raw name. Ledger: devin-dispositions.tsv.
 case "$tool_name" in
   CronCreate) ;;
   *) allow ;;
@@ -100,7 +106,7 @@ reason="[durable-reminder-prefer-inngest] CronCreate is being used for a durable
 CronCreate fires ONLY while a Claude Code session is alive and idle — a reminder armed for hours/days out silently never fires once this session exits (durable:true persists the job but still needs a live REPL). The project's canonical pattern for future-dated reminders is the Inngest reminder primitive (server-side, no per-reminder deploy):
 
   SECRET=\$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)
-  curl -fsS -X POST https://app.soleur.ai/api/internal/schedule-reminder \\
+  curl --disable --noproxy '*' -fsS -X POST https://app.soleur.ai/api/internal/schedule-reminder \\
     -H \"Authorization: Bearer \$SECRET\" -H 'Content-Type: application/json' \\
     -d '{\"reminder_id\":\"<slug>\",\"fire_at\":\"<ISO8601 UTC>\",\"actor\":\"platform\",
          \"action\":{\"type\":\"issue-comment\",\"issue\":<N>,\"body\":\"<text>\"}}'

@@ -21,6 +21,10 @@ At brainstorm-reconciliation time, verify the "baked" claim against the actual r
    ```
    If the carrier file changed after the newest tag was built, the pin points at a pre-drift image.
 
+   > **Superseded 2026-09-27 (#8782):** the pin target is now the semver-max tag **merged into
+   > `main`** — use `git tag --merged origin/main --list 'vinngest-v*' | sort -V | tail -1`. The
+   > recipe above also counts off-main tags, which the bump and AC6 never select (ADR-232 §7).
+
 2. **Content-carrier verify** (the load-bearing one — the review skill's #6539 learning):
    ```bash
    git show <tag>:<carrier-file> | grep -c '<fix-marker>'   # must be non-zero for the NEW tag

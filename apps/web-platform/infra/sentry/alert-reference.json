@@ -53,6 +53,128 @@
     ],
     "triggerLogicType": "single"
   },
+  "anthropic-credit-exhausted": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "anthropic-credit"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "anthropic-credit-exhausted"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 1440,
+    "name": "anthropic-credit-exhausted",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
+  "art17-erasure-incomplete": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "account-delete"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "git-data-bare-repo-erasure"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 5,
+    "name": "art17-erasure-incomplete",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "auth-callback-no-code-burst": {
     "actionFilters": [
       {
@@ -354,6 +476,55 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "ci-deploy-github-app-key": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "ci-deploy"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "github-app-key"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 32,
+    "name": "ci-deploy-github-app-key",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "container-restart-burst": {
     "actionFilters": [
       {
@@ -446,6 +617,101 @@
     "enabled": true,
     "frequency": 30,
     "name": "cron-egress-blocked",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
+  "cron-monitor-failure": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1214782",
+      "1214783",
+      "1214784",
+      "1214785",
+      "1214786",
+      "1214787",
+      "1214788",
+      "1214789",
+      "1229213",
+      "1258965",
+      "1259317",
+      "1259607",
+      "1259665",
+      "1259709",
+      "1262314",
+      "1262315",
+      "1266135",
+      "1266136",
+      "1285280",
+      "1292935",
+      "1299460",
+      "1307281",
+      "1317679",
+      "1339297",
+      "1342329",
+      "1343350",
+      "1343351",
+      "1343352",
+      "1343353",
+      "1343354",
+      "1343355",
+      "1343356",
+      "1343357",
+      "1343358",
+      "1343359",
+      "1343360",
+      "1343361",
+      "1343362",
+      "1343373",
+      "1343967",
+      "1359253",
+      "1425262",
+      "1431677",
+      "1442264",
+      "1477566",
+      "1479329",
+      "1493363",
+      "1509581",
+      "1516759",
+      "1542986",
+      "1591228",
+      "1596605",
+      "1623727",
+      "1636072",
+      "2185845",
+      "2204550",
+      "2270831",
+      "2275153",
+      "2321651"
+    ],
+    "enabled": true,
+    "frequency": 1441,
+    "name": "cron-monitor-failure",
     "triggerConditions": [
       {
         "comparison": true,
@@ -613,6 +879,14 @@
             "comparison": {
               "key": "stage",
               "match": "eq",
+              "value": "gitdata_luks_reopen_arm"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
               "value": "gitdata_nftables_metadata"
             },
             "type": "tagged_event"
@@ -630,6 +904,14 @@
               "key": "stage",
               "match": "eq",
               "value": "luks_open"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "luks_reopen"
             },
             "type": "tagged_event"
           },
@@ -686,7 +968,7 @@
             "comparison": {
               "key": "stage",
               "match": "in",
-              "value": "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn,gc_report"
+              "value": "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn,gc_report,gitdata_luks_reopen_arm_warn"
             },
             "type": "tagged_event"
           }
@@ -710,6 +992,59 @@
       }
     ],
     "triggerLogicType": "single"
+  },
+  "git-data-host-key-pin-fault": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "pin_fault",
+              "match": "in",
+              "value": "host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 240,
+    "name": "git-data-host-key-pin-fault",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
   },
   "github-webhook-founder-ambiguous": {
     "actionFilters": [
@@ -765,6 +1100,96 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "image-freshness-mismatch": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "image-freshness"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 28,
+    "name": "image-freshness-mismatch",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
+  "image-verify-failed": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "image-verify"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "verify_result",
+              "match": "nc",
+              "value": "reused_local_reload"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 33,
+    "name": "image-verify-failed",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "inbox-action-required-notify-failure": {
     "actionFilters": [
       {
@@ -807,6 +1232,96 @@
       {
         "comparison": true,
         "type": "first_seen_event"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
+  "inngest-provision-degraded": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "bootstrap_done_degraded"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 34,
+    "name": "inngest-provision-degraded",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
+  "inngest-provision-failure": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "detail",
+              "match": "nc",
+              "value": "why=inngest_pull_fatal"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "provision_attempt_failed"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 120,
+    "name": "inngest-provision-failure",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
       }
     ],
     "triggerLogicType": "single"
@@ -1208,6 +1723,75 @@
     ],
     "triggerLogicType": "single"
   },
+  "spawn-agent-dead-letter": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "spawn-agent"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "agent-on-spawn-requested"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "reason",
+              "match": "in",
+              "value": "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_internal_error,leader_refused,leader_response_truncated,leader_tool_invalid"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 1442,
+    "name": "spawn-agent-dead-letter",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "stale-bot-pr": {
     "actionFilters": [
       {
@@ -1261,6 +1845,87 @@
       }
     ],
     "triggerLogicType": "any-short"
+  },
+  "web-host-github-app-key-boot": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_exec_failed"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_missing"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_ok_fallback"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_probe_absent"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_rejected"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "github_app_key_transport"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 29,
+    "name": "web-host-github-app-key-boot",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
   },
   "web-host-private-nic-boot-gate": {
     "actionFilters": [
@@ -1377,7 +2042,7 @@
       {
         "comparison": {
           "interval": "1h",
-          "value": 1
+          "value": 0
         },
         "type": "event_frequency_count"
       }
@@ -1495,14 +2160,6 @@
             "comparison": {
               "key": "registry",
               "match": "eq",
-              "value": "ghcr-fallback"
-            },
-            "type": "tagged_event"
-          },
-          {
-            "comparison": {
-              "key": "registry",
-              "match": "eq",
               "value": "zot-gate-degraded"
             },
             "type": "tagged_event"
@@ -1511,23 +2168,7 @@
             "comparison": {
               "key": "stage",
               "match": "eq",
-              "value": "app_ghcr_fallback"
-            },
-            "type": "tagged_event"
-          },
-          {
-            "comparison": {
-              "key": "stage",
-              "match": "eq",
-              "value": "app_ghcr_served"
-            },
-            "type": "tagged_event"
-          },
-          {
-            "comparison": {
-              "key": "stage",
-              "match": "eq",
-              "value": "inngest_ghcr_fallback"
+              "value": "inngest_pull_fatal"
             },
             "type": "tagged_event"
           }

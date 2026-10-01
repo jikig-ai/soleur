@@ -24,10 +24,12 @@
  * dispatcher was dead for weeks. The check-in must mean "the scheduler fired
  * and the scan ran end-to-end", not merely "someone ran the workflow".
  *
- * 03:37 UTC is deliberate: 20 minutes after the `17 * * * *` hourly Inngest-RLS
- * self-heal, which minimizes the window in which the Supabase advisor is
- * legitimately stale and the gate has to fall back to its object-scoped
- * disagreement carve-out.
+ * 03:37 UTC predates #8450: it sat 20 minutes after the then-hourly
+ * `17 * * * *` Inngest-RLS self-heal. The heal now runs every fourth hour at
+ * minute 17, so the advisor-staleness bound is the heal's own ≤4h interval
+ * rather than a fixed post-heal offset — the window in which the gate falls
+ * back to its object-scoped disagreement carve-out is bounded by that
+ * cadence, not this dispatch's placement.
  *
  * Liveness (no own Sentry monitor, mirroring cron-terraform-drift):
  *  - Scheduler liveness: cron-inngest-cron-watchdog + the parity-guarded

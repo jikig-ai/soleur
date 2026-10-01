@@ -98,4 +98,18 @@ describe("Devin plugin package", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("");
   });
+
+  test("PreToolUse shell matchers bind Devin's exec as well as Claude Code's Bash", () => {
+    const { hooks } = readJson(join(pluginRoot, "hooks/hooks.json")) as {
+      hooks: { PreToolUse: { matcher?: string; hooks: { command: string }[] }[] };
+    };
+    const shellGuards = hooks.PreToolUse.filter((entry) =>
+      entry.hooks.some((hook) => hook.command.includes("browser-snapshot-credential-guard")),
+    );
+    expect(shellGuards.length).toBeGreaterThan(0);
+    for (const entry of shellGuards) {
+      const matcher = new RegExp(entry.matcher ?? "");
+      for (const toolName of ["exec", "Bash"]) expect(matcher.test(toolName)).toBe(true);
+    }
+  });
 });

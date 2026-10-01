@@ -3,11 +3,19 @@ name: test-browser
 description: "This skill should be used when running end-to-end browser tests on pages affected by a PR. Uses agent-browser CLI to map changed files to routes and capture screenshots."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Browser Test
 
 <command_purpose>Run end-to-end browser tests on pages affected by a PR or branch changes using agent-browser CLI.</command_purpose>
 
-> **Positioning (ADR-049, #4834):** for **structural-UI** diffs (nav/rail/dashboard shell), the *pre-merge* visual check is now the committed, CI-blocking `nav-states-*.e2e.ts` gate run by `/soleur:qa` Step 2.6 — not this skill. Running `test-browser` only *after* ship is the deferral trap that let the #4810 layout bugs reach prod. Treat this skill as a **post-ship smoke** (broad page reachability + console-error sweep) that complements, never replaces, the pre-merge `/soleur:qa` gate.
+> **Positioning (ADR-049, #4834):** for **structural-UI** diffs (nav/rail/dashboard shell), the *pre-merge* visual check is now the committed, CI-blocking `nav-states-*.e2e.ts` gate run by `soleur:qa` Step 2.6 — not this skill. Running `test-browser` only *after* ship is the deferral trap that let the #4810 layout bugs reach prod. Treat this skill as a **post-ship smoke** (broad page reachability + console-error sweep) that complements, never replaces, the pre-merge `soleur:qa` gate.
 
 ## CRITICAL: Use agent-browser CLI Only
 
@@ -159,7 +167,7 @@ a `test -f` on the script alone is a shape check and was measured bypassable.
   || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
        echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
-       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur', then RESTART Claude Code." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code." >&2
        echo "  Nothing has been captured yet, so nothing has leaked." >&2
        exit 2; }
 ```
@@ -178,7 +186,7 @@ Please start the development server:
 - Rails: `bin/dev` or `rails server`
 - Node/Next.js: `npm run dev`
 
-Then run `/test-browser` again.
+Then run `soleur:test-browser` again.
 ```
 
 </check_server>
@@ -373,13 +381,13 @@ fi
 
 ```bash
 # Test current branch changes
-/test-browser
+soleur:test-browser
 
 # Test specific PR
-/test-browser 847
+soleur:test-browser 847
 
 # Test specific branch
-/test-browser feature/new-dashboard
+soleur:test-browser feature/new-dashboard
 ```
 
 ## agent-browser CLI Reference

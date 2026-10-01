@@ -13,6 +13,15 @@
 # `ignore_changes = [environment]` only, not the wide list that previously made
 # this script their sole executable definition.
 #
+# > **Superseded 2026-09-21 (#8451): this script can no longer write anything.**
+# > It upserts through `projects/{org}/{proj}/rules/`, and Sentry REMOVED that
+# > API (a persistent `410 {"detail":"This API no longer exists."}`). The rule
+# > it defined is now the frozen `sentry_alert.auth_per_user_loop` in
+# > issue-alerts.tf; its live content is pinned against the committed capture by
+# > scripts/sentry-alert-live-fidelity.sh, and a content change goes through
+# > #7985's native conversion. Do not run this script. It is retired with #7985.
+# > The paragraphs below are the pre-#8451 record and are left as written.
+#
 # WHY THIS SCRIPT STILL EXISTS. `auth-per-user-loop` uses
 # `event_unique_user_frequency_count`, which the pinned provider (0.15.7)
 # does not offer under `trigger_conditions` — verified against the provider
@@ -82,7 +91,7 @@ esac
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
   for candidate in de.sentry.io sentry.io; do
-    http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    http=$(curl --disable --noproxy '*' -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/")
     if [[ "$http" == "200" ]]; then
@@ -102,7 +111,7 @@ echo "[info] Using Sentry API host: ${api_host}"
 # prefer Team (resolves to all team members + their notification preferences).
 # Fall back to IssueOwners + ActiveMembers if no ops/engineering team exists.
 team_id=""
-teams_json=$(curl -s --max-time 10 \
+teams_json=$(curl --disable --noproxy '*' -s --max-time 10 \
   -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
   "https://${api_host}/api/0/organizations/${SENTRY_ORG}/teams/")
 if jq -e . <<<"$teams_json" >/dev/null 2>&1; then
@@ -133,7 +142,7 @@ upsert_rule() {
   # picked .[0].id we would update one copy and leave the other(s) drifted
   # — paging on stale config with no signal. Fail-closed when count > 1.
   local rules_json match_count match_ids existing
-  rules_json=$(curl -s --max-time 10 \
+  rules_json=$(curl --disable --noproxy '*' -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/")
   if ! jq -e . <<<"$rules_json" >/dev/null 2>&1; then
@@ -165,7 +174,7 @@ upsert_rule() {
 
   local http
   if [[ -n "$existing" ]]; then
-    http=$(curl -s --max-time 10 -X PUT \
+    http=$(curl --disable --noproxy '*' -s --max-time 10 -X PUT \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       -H "Content-Type: application/json" \
       -o "$resp_file" -w '%{http_code}' \
@@ -178,7 +187,7 @@ upsert_rule() {
     fi
     echo "[ok] Updated rule '${name}' (id=${existing})"
   else
-    http=$(curl -s --max-time 10 -X POST \
+    http=$(curl --disable --noproxy '*' -s --max-time 10 -X POST \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       -H "Content-Type: application/json" \
       -o "$resp_file" -w '%{http_code}' \

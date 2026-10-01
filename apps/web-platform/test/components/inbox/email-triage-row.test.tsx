@@ -15,8 +15,9 @@ import { formatDueDate, STATUTORY_RULES } from "@/lib/email-triage/statutory-rul
 // the secondary check, per
 // 2026-05-06-test-public-dom-contract-not-setstate-side-effects.md.
 
+const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: mockPush }),
 }));
 
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -257,14 +258,31 @@ describe("EmailTriageRow — action error surfacing (N5)", () => {
     render(<EmailTriageRow item={makeStatutoryItem()} onChanged={onChanged} />);
 
     fireEvent.click(screen.getByLabelText("Acknowledge email"));
-    expect(
-      await screen.findByText("Couldn't acknowledge — try again."),
-    ).toBeInTheDocument();
+    // Same selector proves presence here and absence below, so the absence
+    // wait cannot pass vacuously on a role change.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't acknowledge — try again.",
+    );
 
     // Default mock (200) takes over for the retry.
     fireEvent.click(screen.getByLabelText("Acknowledge email"));
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole("alert")).toBeNull();
+
+    // onChanged fires before the alert clears (the clear commits with the async
+    // transition), so wait on the effect instead of asserting absence at once (#9126).
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+});
+
+describe("EmailTriageRow — keyboard", () => {
+  it("keydown on a focused inner control does not navigate (Space bubbles up)", async () => {
+    render(<EmailTriageRow item={makeItem()} />);
+    mockPush.mockClear();
+    // Space on an inner action button must NOT bubble-navigate the row.
+    fireEvent.keyDown(screen.getByRole("button", { name: "Archive email" }), {
+      key: " ",
+    });
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });
 

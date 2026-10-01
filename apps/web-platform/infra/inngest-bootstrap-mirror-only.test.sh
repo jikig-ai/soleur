@@ -11,8 +11,9 @@
 #
 # Every assertion below defends that biconditional from the *false-green* side, because a
 # run that reports success while mirroring nothing is what causes a pin to a digest zot
-# cannot serve — which sends every fresh boot down the GHCR-fallback branch and fires
-# `inngest_ghcr_fallback` permanently. Precedent for the failure class:
+# cannot serve — and since #8036 item 1d there is no GHCR fallback behind the zot pull, so
+# every fresh inngest boot then ends at `inngest_pull_fatal` and the sole scheduler stays dark
+# until a mirror_only backfill lands. Precedent for the failure class:
 # knowledge-base/engineering/operations/post-mortems/2026-07-29-v0244-1-published-green-with-an-unpullable-image-postmortem.md
 #
 # WHY THE MIRROR IS NOT GATED ON THE BRIDGE. An earlier revision of this file gated the
@@ -103,8 +104,8 @@ by_id = {s.get("id"): s for s in steps if s.get("id")}
 # job under mirror_only (workflow reports SUCCESS, nothing mirrored, no mirror_status, no
 # Slack), and a job-level `continue-on-error: true` reports the workflow green while the
 # mirror step fails. Both are one-line edits and both passed the previous revision 42/0.
-check("the workflow has exactly the `build` job (a second job is an unparsed surface)",
-      sorted(jobs) == ["build"], repr(sorted(jobs)))
+check("the workflow has exactly the `build` + `bump-cloud-init-pin` jobs (a third job is an unparsed surface)",
+      sorted(jobs) == ["build", "bump-cloud-init-pin"], repr(sorted(jobs)))
 _bj = jobs.get("build") or {}
 check("jobs.build carries no job-level if: (it would skip the whole mirror)",
       "if" not in _bj, repr(_bj.get("if")))
@@ -112,6 +113,16 @@ check("jobs.build carries no job-level continue-on-error: (it would mask a red m
       "continue-on-error" not in _bj, repr(_bj.get("continue-on-error")))
 check("jobs.build carries no matrix strategy (it would race duplicate mirrors of one tag)",
       "strategy" not in _bj, repr(_bj.get("strategy")))
+# The pin-bump job (#8359) is the sanctioned second job — it runs AFTER a successful publish
+# and so is out of mirror_only's blast radius, but its own masking surface must stay parsed:
+# a job-level `if:` could skip it silently, and `continue-on-error:` would mask a red bump.
+_pj = jobs.get("bump-cloud-init-pin") or {}
+check("jobs.bump-cloud-init-pin needs: build (it consumes the published tag/digest)",
+      _pj.get("needs") == "build", repr(_pj.get("needs")))
+check("jobs.bump-cloud-init-pin carries no job-level if: (it would skip the pin bump silently)",
+      "if" not in _pj, repr(_pj.get("if")))
+check("jobs.bump-cloud-init-pin carries no job-level continue-on-error: (it would mask a red bump)",
+      "continue-on-error" not in _pj, repr(_pj.get("continue-on-error")))
 
 
 def code_of(body):
@@ -229,6 +240,20 @@ pin = by_id.get("pin")
 check("the pin-reading step is gated to match the build step it feeds",
       pin is not None and pin.get("if") == GUARD,
       repr(pin.get("if")) if pin else "no step with id: pin")
+
+# #8747: the publish-side ancestry refusal. EXACT string: an inverted operand would refuse
+# every legacy backfill (mirror_only builds nothing and cannot move a digest, and the 16
+# off-main versions (v1.1.14, v1.1.24, v1.1.26-v1.1.39) must stay backfillable) while waving every rebuild
+# through. The step that records the built commit feeds the bump's --signed-commit on
+# EVERY path, so it must carry no `if:` at all.
+refuse = next((s for s in steps if s.get("name") == "Refuse a commit that is not on main (#8747)"), None)
+check("the #8747 ancestry refusal is skipped under mirror_only (exact !inputs.mirror_only)",
+      refuse is not None and refuse.get("if") == GUARD,
+      repr(refuse.get("if")) if refuse else "no step named 'Refuse a commit that is not on main (#8747)'")
+record = next((s for s in steps if s.get("name") == "Record the built commit (#8747)"), None)
+check("the built-commit record step runs on every path (no if:)",
+      record is not None and "if" not in record,
+      repr(record.get("if")) if record else "no step named 'Record the built commit (#8747)'")
 
 # NEGATIVE assertion, and the reason it exists: `mirror_only` skips the build, which makes
 # the GHCR login look vestigial to a future reader -- while it is in fact crane's SOLE
@@ -447,7 +472,9 @@ if mirror:
 # The Slack degrade step must carry a STATUS FUNCTION. Without one GitHub prepends an
 # implicit success(), so the step is skipped on exactly the mirror_only degrades it exists
 # to report -- the mode that authorises a root-exec digest pin had no push signal at all.
-slack = next((s for s in steps if "slack" in str(s.get("name", "")).lower()), None)
+# Selected by exact NAME: #8747 added a second Slack step (the publish-refused
+# alert), so "first step whose name mentions slack" no longer means this one.
+slack = next((s for s in steps if s.get("name") == "Post to Slack (inngest mirror status)"), None)
 check("the Slack degrade step exists", slack is not None)
 if slack:
     slack_if = str(slack.get("if") or "")
@@ -608,7 +635,7 @@ echo "passed: $pass  failed: $fail"
 # most load-bearing structural checks landed exactly on a floor of 30 and still certified the
 # run. A floor catches total neutering; only a tight one catches attrition. Re-derive it when
 # adding assertions — that is the intended maintenance cost.
-MIN_ASSERTIONS=53
+MIN_ASSERTIONS=62
 if (( pass + fail < MIN_ASSERTIONS )); then
   echo "FAIL - only $((pass + fail)) assertions ran (floor $MIN_ASSERTIONS) — a green run here would be vacuous"
   exit 1

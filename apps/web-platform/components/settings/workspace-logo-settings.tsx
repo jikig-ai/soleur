@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { WorkspaceIdentityTile } from "@/components/dashboard/workspace-identity-tile";
 import { WORKSPACE_LOGO_CHANGED_EVENT } from "@/lib/workspace-logo-events";
 
@@ -153,16 +154,17 @@ export function WorkspaceLogoSettings({
             <h2 className="text-base font-semibold text-soleur-text-primary">Workspace logo</h2>
             <p className="mt-0.5 text-xs text-soleur-text-muted">{OWNER_ONLY_COPY}</p>
           </div>
-          <button
+          <Button
+            variant="outlined"
             type="button"
             data-testid="workspace-logo-upload-btn"
             disabled
             aria-disabled="true"
             title={OWNER_ONLY_COPY}
-            className="shrink-0 cursor-not-allowed rounded-md border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-muted opacity-60"
+            className="shrink-0 cursor-not-allowed rounded-md text-soleur-text-muted opacity-60"
           >
             Upload logo
-          </button>
+          </Button>
         </div>
       </section>
     );
@@ -197,25 +199,31 @@ export function WorkspaceLogoSettings({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button
+          <Button
+            variant="outlined"
             type="button"
             data-testid="workspace-logo-upload-btn"
             onClick={() => fileInputRef.current?.click()}
             disabled={status === "uploading"}
-            className="rounded-md border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-primary hover:bg-soleur-bg-surface-2 disabled:opacity-60"
+            loading={status === "uploading"}
+            loadingLabel="Uploading"
+            className="rounded-md disabled:opacity-60"
           >
             {hasLogo ? "Replace" : "Upload logo"}
-          </button>
+          </Button>
           {hasLogo && (
-            <button
+            <Button
+              variant="ghost"
               type="button"
               data-testid="workspace-logo-remove-btn"
               onClick={handleRemove}
               disabled={status === "uploading"}
-              className="text-xs text-soleur-text-muted hover:text-soleur-text-secondary disabled:opacity-60"
+              loading={status === "uploading"}
+              loadingLabel="Removing"
+              className="text-xs disabled:opacity-60"
             >
               Remove
-            </button>
+            </Button>
           )}
         </div>
       </div>

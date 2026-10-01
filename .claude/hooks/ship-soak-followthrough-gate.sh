@@ -330,10 +330,67 @@ for n in $REFS; do
   # Fail-open on a gh error for this tracker (cannot prove non-enrollment).
   [[ "$labels" == "__ERR__" || "$body" == "__ERR__" ]] && continue
   enrolled=0
+  # FENCE-STRIP BEFORE THE ENROLMENT GREP (#7490). The sweeper SKIPS fenced blocks, so a
+  # directive inside a code fence enrols nothing — this gate must agree with the consumer or it
+  # certifies a tracker the sweeper will never evaluate. Measured: six open trackers were dead
+  # exactly this way, and this gate read every one of them as enrolled. Same dialect-safe
+  # predicate and column-0 anchor as scripts/sweep-followthroughs.sh.
+  # NOT `local`: this loop is at the script's top level, and `local` outside a function is a
+  # runtime error that aborts the gate -- which fails OPEN (no decision emitted), i.e. exactly
+  # the direction a security gate must never fail. Caught by the suite's deny rows going to
+  # `<none>`; `bash -n` cannot see it.
+  #
+  # `|| printf '%s' "$body"` for the SAME reason, one level down: under this file's
+  # `set -eo pipefail`, a non-zero status from this command substitution aborts the gate
+  # mid-loop, before the `jq -n` that emits the decision envelope -- so the tool call proceeds
+  # with no decision at all. Every sibling awk in this file is guarded; this one was the
+  # exception. Falling back to the UNSTRIPPED body is the deny-prone direction: a fenced
+  # directive then still reads as absent and the tracker lands in UNENROLLED.
+  # parity-extract:begin  (scripts/followthrough-predicate-parity.test.sh slices between these
+  # markers; they are content anchors, so editing the program below cannot silently unhook the
+  # oracle the way a shape-anchored slice does.)
+  unfenced_body=$(printf '%s' "$body" | awk '
+    BEGIN { fence = 0; fence_ch = ""; fence_len = 0; in_dir = 0 }
+    { sub(/\r$/, "") }
+    # Track the directive`s own extent and suppress fence toggling inside it, mirroring the
+    # authority (scripts/sweep-followthroughs.sh). `<!-- -->` is an HTML comment, so a ``` on
+    # one of its continuation lines is directive content, not a fence opener. Without this, a
+    # stray ``` between `script=` and `earliest=` in the canonical MULTI-LINE body opens a
+    # fence AFTER the directive`s first line: the `^<!-- *soleur:followthrough` grep below
+    # still matches (that line was already printed), but `earliest=` is stripped, so this gate
+    # reports a correctly-enrolled tracker as UNENROLLED and blocks `gh pr ready`. The
+    # authority honours it. That is a producer/consumer divergence in the false-DENIAL
+    # direction, which is the one an author cannot work around.
+    # `!fence` is load-bearing: in the authority the directive rule sits AFTER `fence { next }`,
+    # so a directive inside a real fence can never open a directive scope. Without it here, a
+    # FENCED directive would set in_dir and then suppress its own strip -- the gate would read
+    # a fenced (i.e. un-enrolled) tracker as enrolled, inverting the deny rows this suite pins.
+    !fence && !in_dir && /^<!-- *soleur:followthrough/ { in_dir = 1 }
+    in_dir && /^[ ]?[ ]?[ ]?(```|~~~)/ { print; next }
+    in_dir && /-->/ { print; in_dir = 0; next }
+    /^[ ]?[ ]?[ ]?(```|~~~)/ {
+      fl = $0; sub(/^[ ]+/, "", fl); fc = substr(fl, 1, 1); fn = 0
+      while (substr(fl, fn + 1, 1) == fc) fn++
+      if (!fence) { fence = 1; fence_ch = fc; fence_len = fn; next }
+      if (fc == fence_ch && fn >= fence_len) { fence = 0; fence_ch = ""; fence_len = 0; next }
+      next
+    }
+    fence { next }
+    { print }
+  ' || printf '%s' "$body")   # fence-strip
+  # parity-extract:end
+  # `<!--` then ZERO OR MORE spaces, matching the consumer's ` *` at parse_directive. An exact
+  # single space is STRICTER than the authority, which is a false DENIAL on a merge gate: a
+  # `<!--soleur:followthrough` or `<!--   soleur:followthrough` tracker IS enrolled and WILL be
+  # swept, while this gate would tell the author it is not and block `gh pr ready`. Measured
+  # before the fix: consumer honours all three spacings, this gate saw one of three.
   if [[ ",$labels," == *",follow-through,"* ]] \
-     && grep -q '<!-- soleur:followthrough' <<<"$body" \
-     && grep -qE 'earliest=' <<<"$body"; then
-    spath=$(printf '%s' "$body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
+     && grep -qE '^<!-- *soleur:followthrough' <<<"$unfenced_body" \
+     && grep -qE 'earliest=' <<<"$unfenced_body"; then
+    # `|| true`: a body with no `script=` token is a NORMAL answer here (the tracker is simply
+    # not enrolled), not an error. Without it `grep -oE`'s exit 1 on no-match propagates and the
+    # gate dies mid-loop -- which fails OPEN, the one direction a merge gate must never fail.
+    spath=$(printf '%s' "$unfenced_body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//' || true)
     [[ -n "$spath" && -f "$spath" ]] && enrolled=1
   fi
   [[ "$enrolled" == 1 ]] || UNENROLLED+=("$n")

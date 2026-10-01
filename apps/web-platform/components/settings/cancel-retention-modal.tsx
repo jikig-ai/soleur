@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 
 interface CancelRetentionModalProps {
@@ -67,18 +68,20 @@ export function CancelRetentionModal({
 
       {/* CTAs */}
       <div className="flex gap-3">
-        <button
+        <Button
+          variant="outlined"
           onClick={onConfirmCancel}
-          className="flex-1 rounded-lg border border-soleur-border-default px-4 py-2.5 text-sm font-medium text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2"
+          className="flex-1 text-soleur-text-secondary"
         >
           Continue to cancel
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="gold"
           onClick={onClose}
-          className="flex-1 rounded-lg bg-soleur-accent-gold-fill px-4 py-2.5 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90"
+          className="flex-1"
         >
           Keep my account
-        </button>
+        </Button>
       </div>
     </ResponsiveModal>
   );

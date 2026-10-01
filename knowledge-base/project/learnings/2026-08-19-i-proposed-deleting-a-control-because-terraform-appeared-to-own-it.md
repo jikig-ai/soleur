@@ -50,6 +50,10 @@ re-PUT of that script's definitions. The recurrence guard, **#4781**, is still
 open. Deleting the script would have deleted the remediation source for an open
 P2.
 
+> **Corrected 2026-09-23 (#4781):** #4781 is closed by PR #8654 — the guard is
+> `scripts/sentry-alert-live-fidelity.sh` (daily and after every apply). Since #8451 no auth rule
+> depends on `configure-sentry-alerts.sh`, whose `rules/` endpoint returns 410.
+
 ## Root cause
 
 `ignore_changes` inverts the usual reading of a Terraform resource. A resource
@@ -85,6 +89,9 @@ tells them apart:
 > `event_unique_user_frequency_count` trigger (upstream issue 950). It is therefore the only
 > rule `configure-sentry-alerts.sh` still writes, and the script is **not** deleted for exactly
 > that reason.
+>
+> **Superseded 2026-09-23 (#4781):** the script can no longer write it (its `rules/` endpoint
+> returns 410); `auth-per-user-loop` is repaired by a PUT from the committed capture.
 >
 > **The lesson is unchanged and the table is still the point.** Two disjoint sets still live in
 > one file, a file-level `ignore_changes` grep still cannot tell them apart, and the answer is

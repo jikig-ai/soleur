@@ -245,8 +245,8 @@ exists to close. This is asserted negatively in the test suite.
    `finally` tears down `ephemeralRoot` unconditionally, so the replay reads back an already-deleted
    path, hits `safeCommitAndPr`'s `workspace-lost` guard, and comments a misleading *"PR withheld"* +
    runbook pointer onto the operator's own issue. Scoped precisely: throws **before** the try (token
-   mint, `setup-workspace` itself) still retry into a fresh workspace, and `DeployInProgressError`
-   still rethrows bare.
+   mint, `setup-workspace` itself) still retry into a fresh workspace, and a deploy deferral exits
+   before the guarded body (see the ADR-078 amendment of 2026-09-24).
 3. **Every liveness-RED run now attempts a GitHub issue write.** All seven use
    `onBeforeHeartbeat: heartbeatOk ? undefined : …ensureScheduledAuditIssue(…)`, evaluated *after*
    `if (!livenessOk) heartbeatOk = false;`. It is bounded only by title dedup, so if that dedup ever
@@ -305,9 +305,16 @@ future observation shows a `no-changes` run for a Class A producer, that demotes
 
 Written down with numbers rather than papered over:
 
-1. **`DeployInProgressError` mid-spawn** is rethrown bare with no heartbeat, so Inngest retries — and
-   that retry fires the exact hazard `retryEligible` exists to close, because the workspace is already
-   gone. Outside this amendment's reach.
+1. **A deploy's drain timeout mid-spawn.** When `CRON_DRAIN_TIMEOUT` expires the deploy stops the
+   whole container (`docker stop`, not only `claude`), so the in-flight `claude-eval` request never
+   settles and the handler's `finally` never runs. Inngest then retries that step on the new
+   container against the memoized `ephemeralRoot`, which still exists on the host volume but is
+   partly mutated — or is gone if `cron-workspace-gc` (dirs older than 60 minutes) swept it first.
+   A step-level retry into a stale workspace, not the handler-level replay `retryEligible` closes;
+   outside this amendment's reach. *(Reworded 2026-09-24, #8726: this residual originally named
+   "`DeployInProgressError` mid-spawn", an error with no producer inside the guarded body — the
+   substrate's setup is its only producer — and one that could not have matched `instanceof`
+   across a step boundary anyway.)*
 2. **A throw inside the `sentry-heartbeat` step itself** is outside `retryEligible`'s reach.
 3. **The detector posts no check-in of its own**, so if it stops running its silence reads as healthy
    — the reporter-is-the-subject problem displaced one level up. Tracked in **#7047**.
@@ -357,6 +364,11 @@ edge… The Inngest-FIRED crons' check-ins are posted by the code `api` serves."
 note's **headline** reason is network topology (the Inngest host has no Sentry path at all), and the
 attribution sentence is secondary.
 
+> **Amendment 2026-09-21 (#6500):** the quoted model note is superseded — the dedicated Inngest host
+> now carries a boot-time `soleur-boot-emit`, and `model.c4` has an `inngest -> sentry` edge for that
+> emitter alone. The conclusion here is unaffected: it rests on the Inngest Server never opening a
+> git workspace, which is still true.
+
 It is also not `webapp -> kb`: `webapp` is a **system**, while all nine existing inbound `kb` edges
 are container or component level. `webapp -> sentry` earns system altitude because it spans the
 dashboard *and* server configs; the cron→kb path is single-container and server-only. Getting the
@@ -372,3 +384,13 @@ points at **#7046**, which tracks resolving it.
 
 No `views.c4` edit is required: the `containers` view already enumerates both endpoints, and LikeC4
 renders the relationship automatically.
+
+## Addendum — 2026-09-28 (#7046 resolved by #9134)
+
+The counter-evidence in the 2026-07-28 amendment no longer holds. `inngest -> github` and
+`inngest -> doppler` were deleted with the GHCR token minter's retirement (ADR-096 5.4, #9071), and
+#9134 (#7230) re-sourced the last Inngest-fired function write, `email-on-received`'s claim/finalize
+writes, from `inngest -> supabase` to `api -> supabase`. Every Inngest-fired function write is now
+attributed to `api`, and every remaining `inngest ->` edge is the Inngest host's own traffic
+(its Postgres, Redis, telemetry and bootstrap pulls). No CI check pins this; a new
+`inngest -> <external>` edge for a function's write would reintroduce the inconsistency.

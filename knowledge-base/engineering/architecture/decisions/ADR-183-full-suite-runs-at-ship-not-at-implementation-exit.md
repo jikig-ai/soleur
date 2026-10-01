@@ -50,7 +50,13 @@ first and cut: it has none of those, and it has an **empty-derived-set** state t
 
 ### The two ceilings
 
-1. **`/ship` Phase 4 stays `TEST_GROUP=all`.** This is the load-bearing constraint of the whole
+1. **`/ship` Phase 4 stays `TEST_GROUP=all`.** *(Amended 2026-09-18, ADR-242/#8322: Phase 4's
+   default dispatch is now `test-all.sh --affected` behind `battery-owed.sh`; `--full` is the
+   explicit operator opt-in and outranks even a SKIPPABLE verdict. The infra-coverage rationale
+   below survives the mode change — under `--affected` the infra runner is selected by its declared
+   consumed edge whenever the diff touches `apps/web-platform/infra/`, and `fullsuite-merge-gate`
+   re-pins the command as "unsharded, with an explicit mode flag".)*
+   This is the load-bearing constraint of the whole
    change. Sharding it for speed would delete the only BLOCKING gate the registered
    `apps/web-platform/infra/` suites have, because **no required status check runs that shard**.
    They are not unrun: `infra-validation.yml`'s `deploy-script-tests` executes the same registered

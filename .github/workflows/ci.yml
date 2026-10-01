@@ -53,8 +53,9 @@ permissions:
 # consecutive `main` pushes the group was occupied at creation on 7 (24%),
 # costing a median 393s; on the other 22 the first job started a median of 4s
 # after creation and the window's WORST time-to-`test` came from a run whose
-# group was EMPTY. The median saving is ZERO. See the dispatch note in the
-# `test-scripts` job for the full population and the reproduction command.
+# group was EMPTY. The median saving is ZERO. See the dispatch cohort table in
+# knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
+# for the full population and the reproduction command.
 #
 # THE COST, STATED PLAINLY. Peak concurrent `main` CI runs rises from 1 to the
 # burst depth. The same measurement identifies the runner pool as the binding
@@ -161,8 +162,10 @@ jobs:
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     # 2026-09-14 (#8149): the readme-counts, lint-conversations-update-callsites and
     # rule-metrics-shape jobs (each 0.2m measured over the same 10 runs, no `needs:`)
-    # were folded in as three steps — the job goes from 11 to 14 named steps; the
-    # 15m ceiling is unchanged and still >=3x the folded max. The three carry
+    # were folded in as three steps — the job went from 11 to 14 named steps. #8377
+    # then retired the rule-metrics-shape step with the committed aggregate (ADR-235),
+    # so the job is now 13 named steps; the 15m ceiling is unchanged and still >=3x
+    # the folded max. The two surviving folded steps carry
     # `if: ${{ !cancelled() }}` and the pre-existing eleven do not: they were
     # independent jobs and keep reporting after an earlier advisory lint reds,
     # which is what `gh run view --log-failed` shows the operator; the eleven
@@ -228,6 +231,28 @@ jobs:
         run: python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main
       - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # THE THIRD DISPATCH of the no-list guard (#8289). lefthook's pre-commit and pre-push
+      # entries see only the staged / pushed set; `git commit --no-verify` and a
+      # merge-resolution commit reach the repository through neither. So CI walks the WHOLE
+      # glob with --all, which discovers entries by walking
+      # knowledge-base/project/rejected/ rather than by reading a manifest — a manifest goes
+      # stale the first time somebody adds an entry without editing it. A walk that finds no
+      # entries exits 3 and does NOT report success: "nothing checked" is not "clean".
+      # ADVISORY, like the job it sits in: `lint-bot-statuses` is absent from
+      # scripts/required-checks.txt and from the ruleset, so a PR merges with this red. It is
+      # still the only arm that sees the WHOLE record, which is why it exists — but it reports,
+      # it does not block. The promotion path is #6883 / ADR-139 (extract into its own required
+      # context, re-deriving the unreachability argument per-gate — it is never inheritable), and
+      # the trap it avoids is the #6049 auto-fabrication guard. See the DISPATCH note in the script.
+      - name: "lint-bot-statuses — rejected-concepts record, full glob (#8289, advisory)"
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-rejected-register.sh --all
+
+      # Same advisory caveat as the step above, same reason. The whole-directory pass is the only arm
+      # that sees a questionnaire nobody staged.
+      - name: "lint-bot-statuses — questionnaire third-party identity, full glob (#8289, advisory)"
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-questionnaire-identity.sh --all
       # Supabase Management API deprecation + host-pin assembly guard.
       #
       # ENFORCEMENT LEVEL IS ADVISORY, NOT BLOCKING, exactly as stated for every other
@@ -266,22 +291,6 @@ jobs:
       - name: "lint-conversations-update-callsites (R8, #8149)"
         if: ${{ !cancelled() }}
         run: bash scripts/lint-conversations-update-callsites.sh
-      - name: "rule-metrics-shape (validate rule-metrics.json, #8149)"
-        if: ${{ !cancelled() }}
-        env:
-          METRICS_FILE: knowledge-base/project/rule-metrics.json
-        run: |
-          if [[ ! -f "$METRICS_FILE" ]]; then
-            echo "No $METRICS_FILE yet — skipping shape check."
-            exit 0
-          fi
-          jq empty "$METRICS_FILE"
-          jq -e 'has("generated_at") and has("rules") and has("summary")' "$METRICS_FILE" >/dev/null
-          jq -e '.summary | has("total_rules_tagged") and has("rules_unused_over_8w") and has("rules_bypassed_over_baseline") and has("orphan_rule_ids")' "$METRICS_FILE" >/dev/null
-          # Per-rule fields (applied_count/warn_count/fire_count) added for
-          # #2866 are validated by scripts/rule-metrics-aggregate.test.sh —
-          # not enforced here because the committed artifact lags the
-          # aggregator until the first post-merge Sunday run.
       # #7002 actionlint hang guard. Asserts ONLY that the linter TERMINATES.
       #
       # actionlint pipes every `run:` body into shellcheck over a pipe. When a body exceeds
@@ -349,16 +358,15 @@ jobs:
   # LUKS — never name similarity), and every plaintext/cert-off exception carries a
   # live tracking issue + unexpired expires_on.
   #
-  # ADVISORY, NOT BLOCKING. This job is absent from scripts/required-checks.txt, the
-  # CI-Required ruleset (infra/github/ruleset-ci-required.tf), the canonical parity
-  # JSON (scripts/ci-required-ruleset-canonical-required-status-checks.json), and the
-  # bot action CHECK_NAMES (.github/actions/bot-pr-with-synthetic-checks/action.yml),
-  # so a PR can merge with it red. It exists to SOAK an attributable green streak
-  # before promotion (#6901; ADR-117 measure-then-arm). The promotion is a five-site
-  # byte-consistent coupling — see the arming tracking issue #6907 and the ADR-140
-  # Amendment (2026-07-24, #6901) for the canonical recipe (15368 integration_id +
-  # add-to-required-checks.txt + sound-by-unreachability fabrication, NOT CodeQL's
-  # non-15368 omit shape, which would wedge every PR at "Expected — Waiting").
+  # BLOCKING since #6907 through `test`'s needs: (rationale, soak evidence and the
+  # bot-PR unreachability argument: ADR-140 addendum of 2026-09-23).
+  #
+  # The job must be able to conclude `failure` on a red sweep. A job-level
+  # `continue-on-error`, a step-level `if:` or `continue-on-error`, or any change to
+  # the step's run line (`|| true`, `--today`, `--repo-root`, `--check-templates`)
+  # fails OPEN: needs.encryption-posture.result reads success over a red or unrun
+  # sweep. A job-level `if:` fails CLOSED (the leg reads skipped and `test` reds) but
+  # wedges every PR it skips. ci-test-aggregator-diagnosis.test.sh W3 pins all of it.
   #
   # The full checkout (no paths filter) is load-bearing: --repo-sweep is whole-repo.
   encryption-posture:
@@ -387,8 +395,11 @@ jobs:
   # Content-scoped, and its bot-PR synthetic green is SOUND-BY-UNREACHABILITY
   # rather than earned: SCAN_DIRS here is the single file
   # infra/github/soleur-marketplace-manifest.json, and the composite action's
-  # ALLOWED_PATHS is {weakness-digest.md, rule-metrics.json} — intersection
-  # EMPTY. Re-derived per ADR-139 rather than inherited from rule-body-lint. If
+  # ALLOWED_PATHS is {weakness-digest.md} — intersection EMPTY. (It held
+  # rule-metrics.json too until #8377 untracked that file; the intersection was
+  # empty before and after, but the premise is re-derived here rather than left
+  # naming a set that no longer exists.) Re-derived per ADR-139 rather than
+  # inherited from rule-body-lint. If
   # ALLOWED_PATHS ever gains an infra/github path, reproduce this gate in the
   # action's Phase-4 ceiling BEFORE that lands.
   marketplace-manifest-guard:
@@ -497,6 +508,22 @@ jobs:
           git fetch --no-tags --quiet origin main
           BASE="$(git merge-base origin/main HEAD)"
           python3 scripts/lint-rule-bodies.py --check --base "$BASE"
+      # Per-file byte ceiling for lifecycle SKILL.md bodies, anchored to the same
+      # MERGE BASE (#8302, ADR-229). A STEP in this job rather than its own job,
+      # for two reasons that compose: (a) this job already provides the depth-0
+      # base the ratchet needs -- the `bun` job beside SKILL_DESCRIPTION_WORD_BUDGET
+      # declares no fetch-depth, so at depth 1 origin/main is not a ref and any
+      # working-tree fallback is permanently fail-open, degrading this guard into
+      # the 15-bump changelog it replaces; and (b) `rule-body-lint` is a REQUIRED
+      # context (infra/github/ruleset-ci-required.tf, ADR-092), so a red ratchet
+      # blocks auto-merge from day one. A separate job would have been advisory
+      # until someone pinned it, which is the state ADR-116 records as permanent
+      # (advisory→blocking promotion has never once happened in this repo). Base-unavailable
+      # is a hard failure inside the lint, never a skip.
+      - name: Lifecycle SKILL.md byte ratchet (#8302, ADR-229)
+        run: |
+          BASE="$(git merge-base origin/main HEAD)"
+          python3 scripts/lint-skill-body-budget.py --base "$BASE"
 
   # Regenerates apps/web-platform/package-lock.json under a pinned npm
   # major and diffs against the committed file. Catches the `bun add`
@@ -627,7 +654,7 @@ jobs:
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -682,7 +709,7 @@ jobs:
           # so a query-options `pluginPath`-threading regression is invisible to it
           # (covered by agent-runner-query-options.test.ts instead) — including it
           # would burn a paid Haiku turn on a probe that cannot detect the change.
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -807,6 +834,15 @@ jobs:
           DEST="apps/web-platform/_plugin-vendored"
           rm -rf "$DEST"
           cp -a --no-dereference plugins/soleur "$DEST"
+          # The plugin-root .mcp.json (#8156) is the Claude-Code-plugin
+          # registration surface only: the hosted agent-runner loads this
+          # vendored tree via plugins:[{type:"local"}] on a prod image with
+          # no python3 and no @playwright/mcp@0.0.78 — vendoring the file
+          # registers a guaranteed-failed playwright server on every hosted
+          # session. The plugin's manifest mcpServers (plugin.json) are
+          # unaffected. Pinned by the Guard-3 row in
+          # plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh.
+          rm -f "$DEST/.mcp.json"
           DEST_ABS="$(readlink -f "$DEST")"
           while IFS= read -r link; do
             target="$(readlink -f "$link" || true)"
@@ -831,22 +867,29 @@ jobs:
             NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
             NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
 
-  # --- Test matrix: 3 shards + synthetic aggregator ---
+  # --- Test matrix: 4 leg jobs + synthetic aggregator ---
   #
-  # The single `test` job was split into three parallel shards
-  # (test-webplat / test-bun / test-scripts) so install + typecheck +
-  # vitest + bun-test workloads run concurrently. The synthetic `test`
+  # The single `test` job was split into parallel leg jobs
+  # (test-webplat / test-bun / test-scripts / test-scripts-heavy) so install +
+  # typecheck + vitest + bun-test workloads run concurrently. test-scripts
+  # and test-scripts-heavy are shard matrices over the same runner (leg
+  # assignment is manifest-driven, positional when the table is absent or
+  # stale — see scripts/test-all.sh); the other two are single legs
+  # (test-webplat is itself a 2-way vitest --shard matrix). The synthetic `test`
   # aggregator (below) is the required status check on branch-protection
   # ruleset 14145388 — its NAME and EXISTENCE are load-bearing for
-  # every merge. Each shard invokes scripts/test-all.sh with the
-  # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`).
+  # every merge. Each leg invokes scripts/test-all.sh with the
+  # corresponding TEST_GROUP positional arg (`webplat`/`bun`/`scripts`/
+  # `scripts-heavy`).
   # See plan: knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md
   #
   # NOTE for future maintainers: keep `actions/checkout`, `oven-sh/setup-bun`,
   # `actions/setup-node`, and `actions/cache` SHA pins in lockstep across
-  # test-webplat / test-bun / test-scripts. When bumping any action, edit
-  # all three job blocks in the same commit; this YAML has no include or
-  # anchor mechanism so the duplication is structural.
+  # test-webplat / test-bun / test-scripts — plus `actions/checkout` and
+  # `oven-sh/setup-bun` on test-scripts-heavy (it carries no setup-node or
+  # cache). When bumping any action, edit every job block that carries it in
+  # the same commit; this YAML has no include or anchor mechanism so the
+  # duplication is structural.
   # 2-way vitest --shard matrix. Vitest natively supports `--shard=K/N`;
   # `test:ci` forwards `--shard=$VITEST_SHARD` when VITEST_SHARD is set.
   # `tsc --noEmit` is independent of shard and runs only on shard 1 to
@@ -904,13 +947,45 @@ jobs:
         # resize-safe (survives 2→N changes); a literal `'1/2'` would
         # silently stop running tsc if the matrix is renumbered.
         if: strategy.job-index == 0
-        run: npx tsc --noEmit
+        # Pinned .bin only, not `npx tsc` — the npm ci above makes the local
+        # binary present, and npx's fetch-latest fallback is the #7927 class.
+        run: ./node_modules/.bin/tsc --noEmit
         working-directory: apps/web-platform
+
+      # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
+      # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
+      # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
+      # step makes a missing binary FAIL that suite instead of skipping it.
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0
+          likec4 --version
+
+      # #8696 — the render child runs inside bubblewrap, so the acceptance test
+      # (test/c4-render-tenant-config.test.ts) also renders THROUGH real bwrap
+      # and measures what a sandboxed
+      # payload can reach (H4). Ephemeral GH-hosted runner only: relaxing the
+      # userns sysctl mirrors scripts/sandbox-canary-regression.test.sh, and like
+      # it is best-effort: the suite's own bwrap probe plus C4_BWRAP_REQUIRED
+      # decide whether the sandbox works here.
+      # ubuntu-latest ships a newer bwrap than prod's 0.8.0; every option the
+      # argv uses exists in 0.8.0 (measured, ADR-050 amendment).
+      # C4_BWRAP_REQUIRED on the run step makes an unusable bwrap FAIL.
+      - name: Install bubblewrap (C4 render sandbox)
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends bubblewrap
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
 
       - name: Run webplat tests (vitest --shard)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITEST_SHARD: ${{ matrix.shard }}
+          LIKEC4_REQUIRED: "1"
+          C4_BWRAP_REQUIRED: "1"
         run: bash scripts/test-all.sh webplat
 
   test-bun:
@@ -920,6 +995,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # redirect-tombstones.test.ts enumerates ALL history (`git log
+          # --diff-filter=RD` + `git log -p -Gpermalink:`) and fails closed on
+          # a shallow clone via --is-shallow-repository — a depth-1 checkout
+          # reads as "nothing died". #8364.
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -945,157 +1026,30 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
-    # MATRIX SHARDED (#7902). This job was ~90% of CI's wall clock and CI's wall clock had
-    # outgrown web-platform-release.yml's await-ci ceiling, so every deploy was fail-closing on
-    # a healthy build. Measured on run 34152496134: 35.25 min across 374 registered suites.
+    # MATRIX SHARDED (#7902), K=7 after the heavy carve-out (#8006 phase 2) and
+    # the 2026-09-25 rebalance (suite growth pushed K=6's worst leg to 13.0 min
+    # measured on run 36123485360; the K=6 dry-run regen predicted 614s).
+    # The three cost-heaviest registrations moved to `test-scripts-heavy` below;
+    # what is left is ~60 min of light suite work, so seven legs measure
+    # ~8.1-9.8 min suite time each plus setup (leg 5 is a single 589 s atomic
+    # suite — no K splits it; the suite split is deferred, tracked in #8864;
+    # the duration-aware manifest keeps assignment balanced as suites drift).
     #
-    # K=3 IS DERIVED, NOT ASSUMED. Per-suite durations were taken from that run's own job log
-    # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
-    # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order.
-    #
-    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 392 at time of writing; see the STALE stanza) — slowest-leg
-    # minutes, group total 35.25 min:
-    #
-    #   K=2 -> 21.91   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
-    #
-    # HOW TO RE-DERIVE (a table nobody can reproduce is not evidence): take a real test-scripts
-    # job log, keep only the `--- <label> ---` marks whose label appears in
-    # `bash scripts/test-all.sh --enumerate scripts`, and attribute each mark's span to the NEXT
-    # REGISTERED mark — folding nested child-runner marks into their parent. Sanity check: the
-    # attributed total must equal the job's wall clock (35.25 vs 35.77 min here). Attributing
-    # per-mark instead under-counts every suite that wraps a nested runner.
-    #
-    # K=4 measures worse than K=3 here. That is NOT a property of K: it is a property of THIS
-    # suite set. Adding two suites and removing one swung K=3 between 15.09 and 20.70 minutes
-    # during this PR's own review, purely from ordinal position. Any change to the registered
-    # suite set invalidates this table — RE-SIMULATE before touching K.
-    #
-    # STALE BY SEVENTEEN SUITES (re-measured 2026-09-10). The table above was simulated on a
-    # 374-suite order. `bash scripts/test-all.sh --enumerate scripts` returns 392 at this
-    # commit — this PR added 2 (ci-concurrency-key, ci-test-aggregator-diagnosis) and renamed
-    # 1; the rest arrived on `main` while this branch was open.
-    #
-    # DO NOT TRUST THE LITERAL ABOVE EITHER. It read 389, then 391, within hours of when this line was
-    # written and 391 after one rebase. The count is not a fact about the repo, it is a
-    # fact about a commit, and the only safe use of it is to re-run the enumeration.
-    # THE COUNT IS A MOVING TARGET AND EVERY NUMBER BELOW IS KEYED TO A SUPERSEDED ORDER:
-    # re-enumerate before treating any K as chosen (#8006 carries this). The 2026-09-08 note
-    # this replaces read "the set 375 -> 376", which was true when written and is not now.
-    #
-    # The original single-suite note, retained because its mechanism still holds:
-    # plugins/soleur/test/await-ci-ceiling-invariants.test.sh (renamed 2026-09-09 to
-    # workflow-run-deploy-invariants.test.sh, #5806) took the set 375 -> 376. Measured
-    # effect: it registers at ordinal 189, so the 8.14-min floor suite (ordinal 148) keeps its leg,
-    # but 187 of the 375 pre-existing suites move legs. The per-leg minutes above were NOT
-    # re-simulated — the Phase 0 job log they came from is a pre-shard run of a job shape that no
-    # longer exists on main, and re-deriving it needs a post-merge log. Post-merge AC25 measures
-    # the real thing anyway.
-    #
-    # AN EARLIER REVISION CLAIMED AN ORDER-INDEPENDENT SAFETY BOUND HERE. IT WAS WRONG — the
-    # retraction is kept because the argument is tempting and someone will rebuild it.
-    #
-    # It read: the group is 35.25 min = 2115s, so any leg of any partition is bounded by 2115s;
-    # plus the worst measured queue (1260s) that is 3375s, inside the 3600s ceiling with 225s to
-    # spare; therefore no reordering can push time-to-`test` past the gate. All three premises are
-    # wrong, measured over the same 25-run window:
-    #
-    #   * 2115s is ONE SAMPLE, not a bound. Max observed `test-scripts` duration is 2339s.
-    #   * 1260s is not the worst queue. Two runs in the window queued 1345s and 1433s.
-    #   * The sum OMITS A TERM. Time-to-`test` also includes the `test` aggregator's own runner
-    #     wait, measured at 619s on run 34214304922 and absent from the arithmetic entirely.
-    #
-    # Worst-case with the measured maxima: 2339 + 1433 + 619 = 4391s, well past 3600s. Composing a
-    # worst-case leg with a mid-case queue does not yield a bound, and calling the result "225s to
-    # spare" was fiction. There is no order-independent bound under this ceiling on current data.
-    #
-    # What actually makes the raise safe is narrower and worth stating plainly: the shard cuts the
-    # LEG term (the only term this PR controls), the soft-ceiling warning measures the real
-    # quantity every release, and AC25 checks the result post-merge over the first three runs. If
-    # AC25 misses, the answer is a larger K or a shorter CI — not a bigger ceiling. Making leg
-    # composition an owned fact rather than a positional accident (LPT over a checked-in duration
-    # table) is tracked as a follow-up, not shipped here.
-    #
-    # The floor no K can beat is the longest single suite —
-    # `tests/scripts/registry-gate-mutation-battery` at 8.14 min, 23% of the group on its own.
-    # K=3 landed 15.09 min on the 374-suite order this table was simulated over. On the then-376-suite
-    # order that actually ships it does NOT: re-simulated at review time, K=3 is 20.73 min and both
-    # K=4 (18.02) and K=5 (10.77) beat it, so the "K=3 is the optimum" conclusion above does not
-    # hold for this tree and is retracted. K=3 remains SAFE (totality holds for any K, and the
-    # order-independent bound below covers the wall clock); it is simply no longer known-optimal.
-    # Re-simulate before treating any K as chosen — the method above is reproducible from the
-    # archived job log in about two minutes, and "needs a post-merge log" (claimed in an earlier
-    # revision of this comment) is not true: the pre-shard log is exactly what the method consumes.
-    # Extra legs are not free — see the retracted dispatch note below; they draw on the same runner
-    # pool whose availability produces the multi-minute staggers.
-    #
-    # NOTE ON DISPATCH — RETRACTED TWICE, NOW REPLACED BY A MEASUREMENT.
-    #
-    # Revisions 1 and 2 each asserted a single MECHANISM, and each was retracted by the next
-    # reader. Revision 1: the multi-minute gaps between run creation and job start are runner-pool
-    # contention. Revision 2: dispatch is ~1s and the gaps are this file's own `concurrency` group
-    # serialising each main push behind its predecessor's `test`.
-    #
-    # BOTH ARE TRUE, OF DIFFERENT COHORTS. That is why each looked like a refutation of the other:
-    # they were measured on different runs. This revision states the population instead of the
-    # mechanism, so there is nothing left to retract.
-    #
-    # MEASURED 2026-09-09 over 29 consecutive `main` push CI runs (2026-09-07T09:02:01Z ->
-    # 2026-09-09T07:50:05Z, the committed TSV's true bounds; an earlier revision of this note
-    # labelled the upper bound 14:22Z, ~6.5h wider than the data it cites). "Group occupied at creation" = the predecessor run's `test` had not yet
-    # completed when this run was created. Jobs with `runner_id: null` or zero steps are EXCLUDED
-    # (they never acquired a runner, so they say nothing about availability). "Start spread" is
-    # measured over the 23 jobs with NO `needs:` (20 after the 2026-09-14 fold) — a group release starts those simultaneously, so
-    # any spread across them is runner availability by construction. `test` and `critical-css-gate`
-    # have `needs:` and are excluded from spread for that reason.
-    #
-    #   cohort                    n         first-job delay    queue term        start spread
-    #   group OCCUPIED            7 (24%)   med 460s max 1249s med 393s max 1245s med  68s max  913s
-    #   group DRAINED            22 (76%)   med   4s max  731s 0                  med 412s max 1708s
-    #   all                      29         —                  —                  med 292s max 1708s
-    #
-    # THE MODEL IS ADDITIVE, NOT EITHER/OR:
-    #     time-to-test = queue (only when the group is occupied) + runner availability + execution
-    # The queue term is workload-dependent: large on a merge-burst day, exactly zero on a normal
-    # one. On 2026-09-07 15:16-17:58 five consecutive runs were queue-bound; the queue is real.
-    # It is not the dominant term across the population — it binds on ~a quarter of runs, and the
-    # window's WORST time-to-test (4156s) came from a run whose group was EMPTY.
-    #
-    # WHAT THE PER-SHA KEY BUYS. It removes the queue term unconditionally rather than
-    # probabilistically. Its median wall-clock saving is ZERO, because the median run has no queue
-    # term to remove. It is justified on SEMANTICS — a run's gated quantity should not contain an
-    # unbounded term belonging to a different commit — not on wall clock (ADR-217, Decision 1).
-    # It raises peak runner concurrency, and the table above says the pool is the binding
-    # constraint on 76% of runs, so this could make the median WORSE. That is the declared risk.
-    #
-    # REPRODUCTION (two-stage jq: `gh --jq` does NOT forward `--arg`):
-    #   for p in 1 2 3 4 5 6; do
-    #     gh api "/repos/{owner}/{repo}/actions/runs?event=push&branch=main&per_page=100&page=$p" \
-    #       --jq '.workflow_runs[] | select(.name=="CI") | [.created_at,.id,.conclusion] | @tsv'
-    #   done | sort -ru | awk -F'\t' '$1>="<start>" && $1<="<end>"' > ci-win.tsv
-    #   while IFS=$'\t' read -r created rid concl; do
-    #     gh api "/repos/{owner}/{repo}/actions/runs/$rid/jobs?per_page=100" > j.json
-    #     jq -r --arg rid "$rid" --arg created "$created" \
-    #       '.jobs[] | [$rid,$created,.name,(.started_at//""),(.completed_at//""),
-    #                   (.conclusion//""),(.runner_id|tostring),(.steps|length|tostring)] | @tsv' j.json
-    #   done < ci-win.tsv > jobs.tsv
-    #
-    # `sort -ru` is load-bearing: GitHub's pagination is not stable while new runs are being
-    # created, so a plain `sort -r` can carry the same run on two pages and inflate the
-    # population. The raw `jobs.tsv` this table was computed from is committed at
-    # knowledge-base/project/specs/feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/
-    # measurement-jobs-2026-09-09.tsv, so the arithmetic is checkable without re-querying.
-    #
-    # A PRIOR RUN OF THIS SAME COMMAND, over a population reported as 35, published med 332s /
-    # max 1708s for the drained spread and a 20%/80% split. Re-derived here at 29 runs it is
-    # med 412s / max 1708s and 24%/76%. Every MAXIMUM and the ENTIRE occupied cohort (n=7; 460/
-    # 1249, 393/1245) reproduce to the second; the medians and the population do not. The
-    # conclusions above are invariant across both readings, which is why they are stated as
-    # cohort shape rather than as a headline number. Do not cite a median from this block without
-    # re-running the command — cite the shape.
+    # Leg membership is NOT positional: `scripts/suite-shard-legs.tsv` pins each
+    # label to a leg via the duration-aware sticky-LPT generator, packed from
+    # the MEDIAN of the last N green runs' `suite-timings-*` artifacts (#9232).
+    # Untabled labels (added since the last regen) hash-fallback at runtime;
+    # untimed-but-registered labels table at the floor weight. Before touching
+    # K, simulate the pack offline instead of re-deriving round-robin by hand:
+    # `python3 scripts/regenerate-shard-manifest.py --legs <K>` dry-run prints
+    # predicted per-leg totals (writing K != this matrix's N to the committed
+    # manifest is refused); then regen + change K in the same PR. The measured
+    # tables and the runner-availability data live in
+    # knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/3", "2/3", "3/3"]
+        shard: ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"]
     # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
     #
     # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
@@ -1113,22 +1067,19 @@ jobs:
     #
     # So `timeout-minutes` is the ONLY bound on a CI leg and it is SILENT — a job-kill produces no
     # annotation. It must therefore sit above the repo's own DECLARED EXPECTATION for the work on
-    # this leg (that advisory budget), because a silent kill below a duration the repo itself
+    # this leg, because a silent kill below a duration the repo itself
     # calls legitimate is indistinguishable from a hang:
     #
-    #   rest-of-leg 6.95 min + that suite's declared budget (41.67 min, itself ~1.5x its own
-    #     measured max) = 48.62 min
-    #   x1.2 (the convention that sized await-ci's timeout-minutes over CEILING_S before #5806
-    #        deleted that job; the ratio is kept because the reasoning was never about that job) = 58.3
-    #   -> 60
+    #   light leg ~8.1-9.8 min nominal at K=7 after the #8006 carve-out + phase-2 split and the 2026-09-25 K-bump. No light suite carries a
+    #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
+    #     moved to test-scripts-heavy, whose own derivation sits on that job.
+    #   -> 60 stays as the hang cap; it is ~7x the nominal leg, not a leg estimate.
     #
-    # An earlier revision of this PR set 30, sized against the leg's NOMINAL 15.09 min. That
-    # was a new silent-kill path: the same battery measures 14.3-27.9 min and its own budget
+    # An earlier revision of this file set 30, sized against the leg's NOMINAL value. That
+    # was a new silent-kill path: the battery measures 14.3-27.9 min and its own budget
     # comment notes load alone moves it 1.9x, so a healthy slow run would have been killed
     # with no diagnostic — #7902's failure mode relocated from the deploy gate into CI and
-    # made silent. Do NOT lower this to fit a leg estimate, and do NOT lower the 2500000 ms
-    # budget to fit this: it is the repo's stated expectation for that suite, and shrinking it to
-    # fit an unrelated cap re-creates this trap one layer down.
+    # made silent. Do NOT lower this to fit a leg estimate.
     #
     # This does not bound the deploy gate and is not trying to — see ADR-212. Its job is
     # capping a hung leg at 1 hour instead of GitHub's 6-hour default.
@@ -1157,10 +1108,15 @@ jobs:
     # has likec4 on PATH.
     #
     # Two CLIs ARE installed for tests in this shard:
-    #  - gitleaks: plugins/soleur/skills/code-to-prd/test/ (#2726) preflights
-    #    `command -v gitleaks` and aborts exit 2 if absent. Version + SHA
-    #    pinned identically to .github/workflows/secret-scan.yml — to upgrade,
-    #    bump both files together.
+    #  - gitleaks: code-to-prd.test.sh (#2726), gitleaks-rules.test.sh,
+    #    gitleaks-merge-commit.test.sh and git-commit-secret-scan.test.sh probe
+    #    RUNNABILITY (`gitleaks version` exits 0 — not `command -v`, which an
+    #    unpinned version-manager shim satisfies, #8266) and SKIP only the arms
+    #    that need the binary. Any skipped arm FAILS the suite under CI=true
+    #    (Actions sets it), so this install is load-bearing: without it those
+    #    suites go red here rather than skipping green. Version + SHA pinned
+    #    identically to .github/workflows/secret-scan.yml — to upgrade, bump
+    #    both files together.
     #  - likec4@1.50.0: plugins/soleur/test/c4-model-freshness.test.sh renders
     #    the .c4 sources and byte-diffs the committed model.likec4.json. The
     #    version MUST match apps/web-platform/Dockerfile + package.json
@@ -1177,10 +1133,12 @@ jobs:
       # argument would overload one channel with two independent decisions.
       #
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
-      # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
-      # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # all three legs would run the whole group (392 suites at this commit) and all report green. Guard 1 reads ci.yml's
-      # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
+      # silently running the whole group. DELETING this line leaves SCRIPTS_SHARD unset, and unset
+      # legitimately means "run the full group" — so every leg would run the whole group (~502 suites
+      # at this commit) and all report green; the deletion itself is caught, loudly, by Guard 1's
+      # wire check on this binding. The residual gap is a REWRITE (a literal in place of the matrix
+      # interpolation): the mutation battery proves that direction RED for the heavy job (ROW5D)
+      # but the light binding has no mutation row. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
       # fetch-depth: 0 — scripts/lint-trap-tempfile-ownership.py scopes rule (c) to
@@ -1254,7 +1212,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
-          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/3` and
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/7` and
           # `/` is not permitted in an artifact name, so it is not used at all —
           # an earlier revision of this comment described a `/`->`-` rewrite the
           # code never performed. job-index is also matrix-resize-safe, matching
@@ -1266,6 +1224,87 @@ jobs:
           # nothing to upload and that is not a fault. The cost is that a leg which
           # SHOULD have produced timings and did not fails silently — acceptable
           # while this data is advisory input to #8006 and gates nothing.
+          if-no-files-found: warn
+          retention-days: 14
+
+  # #8006 — the three cost-heaviest registrations, one suite per leg.
+  #
+  # Carved out of `test-scripts`: positional round-robin cannot keep the
+  # registry-gate-mutation-battery (~9 min nominal, 14-28 under load), the
+  # tag-authorship mutation battery (~6 min) and the .github fixture runner
+  # (~6 min) from sharing a leg — on the measured order they DID share one,
+  # which is where the 31-39 min long pole came from. A dedicated 3-leg
+  # matrix over `want_scripts_heavy` gives each its own leg; the light group
+  # fans out to seven legs above.
+  #
+  # TOOLCHAIN PARITY IS ASSERTED, NOT ASSUMED. scripts-shard-runtime-coverage.test.sh
+  # extracts BOTH job blocks and requires every runtime a scripts-group suite
+  # invokes to be installed in each — today's three members are bash+git only,
+  # but a future heavy registration must not red for want of a binary (#7332's
+  # exact shape), so the install steps below mirror test-scripts verbatim.
+  test-scripts-heavy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+    # Same silent-bound reasoning as test-scripts, one suite per leg:
+    #   worst leg = registry battery's declared budget (41.67 min, ~1.5x its
+    #     own measured max) + setup ~5 min = ~47 min; x1.2 -> 56 -> 60.
+    #   The budget is the repo's DECLARED expectation; a timeout below it is
+    #   a silent kill on a legitimate run. Do NOT lower either to fit an estimate.
+    timeout-minutes: 60
+    env:
+      GITLEAKS_VERSION: "8.24.2"
+      GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
+      # Same two-channel shape as test-scripts: the group arrives POSITIONALLY
+      # (`bash scripts/test-all.sh scripts-heavy`), the shard through the env.
+      SCRIPTS_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0
+          likec4 --version
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Run scripts-heavy tests (bash + python3 + bun)
+        run: bash scripts/test-all.sh scripts-heavy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_TIMING_LOG: ${{ runner.temp }}/suite-timings.tsv
+
+      - name: Upload per-suite timings
+        # `always()`: same as test-scripts — a failed or killed leg is exactly
+        # the leg whose timings the next partition decision needs.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # `scripts-heavy-` prefix is LOAD-BEARING, not cosmetic: artifact
+          # names are immutable within a run under upload-artifact v4, so
+          # reusing `suite-timings-scripts-N` here collides with the light
+          # job's legs and reds every run.
+          name: suite-timings-scripts-heavy-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/suite-timings.tsv
           if-no-files-found: warn
           retention-days: 14
 
@@ -1297,7 +1336,23 @@ jobs:
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # THREE-LEG ROW SPLIT (#9035). The battery declares 42 numbered row
+    # sites and takes `--rows A-B`; each leg runs its third plus the
+    # unconditional control and instrument self-test. The battery's own
+    # DECLARED_TOTAL pin is what keeps the legs honest — a row added without
+    # bumping it reds ALL legs, so the matrix cannot silently drift out of
+    # coverage. Ranges must be re-split whenever DECLARED_TOTAL changes (the
+    # battery fails closed on an out-of-bounds range, which is the alarm).
+    strategy:
+      fail-fast: false
+      matrix:
+        rows: ["1-14", "15-28", "29-42"]
+    # Sized above the measured need, not at it: the serial battery measured
+    # ~9.5 min as a single job at 24 rows (~24 s/row → ~17 min at 42); third-ing
+    # the row space plus the parallelized enumerate children inside the guard
+    # puts each leg near ~6 min. A timeout kill must never fire below a duration
+    # the repo calls legitimate.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -1313,16 +1368,123 @@ jobs:
       # mutation and aborts the battery outright if it is not green, so this job still exercises
       # both guards against the real tree — which is what AC14 asks for: a cross-leg union
       # asserted from a job that is not itself a leg.
-      - name: Guard 1 — shard-totality mutation battery (control + every row must drive it RED)
-        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
+      - name: Guard 1 — shard-totality mutation battery (rows ${{ matrix.rows }}; every mutated row must drive the guard RED)
+        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
+  # Vendor CLI pinned per ADR-245 decision 3 (#8615); pin freshness is #8574's criterion.
   grok-fidelity:
     # 15m — measured max 0.5m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 15
     runs-on: ubuntu-latest
+    env:
+      GROK_PIN: "1.0.41"
+      # sha256 of grok-${GROK_PIN}-linux-x86_64, measured 2026-09-24. xAI publishes no
+      # checksum, so this IS the content pin. Bump it together with GROK_PIN.
+      GROK_SHA256: "9ce03ed23e16ea01072b4496263d6213a27899e1e3e107f008d36edf82e70407"
+      # A self-update mid-gate would void the pin; the post-gate step verifies it held.
+      GROK_DISABLE_AUTOUPDATER: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install Grok CLI (exact pin + sha256 content pin)
+        run: |
+          set -uo pipefail
+          # The pin is interpolated into a URL path: accept only X.Y.Z.
+          [[ "$GROK_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { printf '::error::grok-fidelity[grok] invalid-pin:%q\n' "$GROK_PIN"; exit 3; }
+          tmp="$RUNNER_TEMP/grok-${GROK_PIN}"
+          # x.ai, then the vendor installer's own fallback base. The digest check makes
+          # either source safe; a pruned or unreachable artifact reds this required check.
+          ok=; reason=
+          for base in https://x.ai/cli https://storage.googleapis.com/grok-build-public-artifacts/cli; do
+            if ! curl -fsSL --proto '=https' --proto-redir '=https' \
+              --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 90 \
+              "${base}/grok-${GROK_PIN}-linux-x86_64" -o "$tmp"; then
+              reason="${reason}${base#https://}: download-failed; "; continue
+            fi
+            if echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null; then ok=1; break; fi
+            reason="${reason}${base#https://}: binary-digest-mismatch got=$(sha256sum "$tmp" | cut -d' ' -f1); "
+          done
+          [ -n "$ok" ] || { echo "::error::grok-fidelity[grok] ${reason}pin=${GROK_PIN} (refusing to execute)"; exit 3; }
+          install -D -m 0755 "$tmp" "$HOME/.grok/bin/grok"
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.grok/bin:$PATH"
+          # NOT got="$(grok --version | grep …)": under bash -e that kills the step at the
+          # assignment on a semver-less banner (see harness-discovery's Codex step).
+          raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          raw="${raw//[$'\r\n']/ }"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$GROK_PIN" ] || {
+            echo "::error::grok-fidelity[grok] version-mismatch:${got:-<unparsed>}!=${GROK_PIN} raw=${raw:0:200}"
+            exit 3
+          }
+          echo "grok-fidelity[grok] pinned ${GROK_PIN} (sha256 ok)"
+
+      # The gate and its bun tests resolve `grok` BY NAME, so the checks around it assert
+      # that name is the pinned file, not only that the file is intact.
+      - name: Grok fidelity gate (inspect contract + golden-path eval)
+        run: |
+          at="$(command -v grok || true)"
+          [ "$at" = "$HOME/.grok/bin/grok" ] \
+            || { echo "::error::grok-fidelity[grok] resolved-elsewhere:${at:-<none>}"; exit 3; }
+          bash plugins/soleur/scripts/grok-fidelity-gate.sh
+
+      - name: Pinned Grok binary unchanged by the gate
+        run: |
+          set -uo pipefail
+          at="$(command -v grok || true)"
+          [ "$at" = "$HOME/.grok/bin/grok" ] \
+            || { echo "::error::grok-fidelity[grok] resolved-elsewhere-after-gate:${at:-<none>}"; exit 3; }
+          echo "${GROK_SHA256}  ${HOME}/.grok/bin/grok" | sha256sum -c - >/dev/null || {
+            echo "::error::grok-fidelity[grok] binary-changed-during-gate (auto-update?) got $(sha256sum "$HOME/.grok/bin/grok" | cut -d' ' -f1)"
+            exit 3
+          }
+          raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          got="$(printf '%s' "${raw//[$'\r\n']/ }" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$GROK_PIN" ] \
+            || { echo "::error::grok-fidelity[grok] version-changed-during-gate:${got:-<unparsed>}!=${GROK_PIN}"; exit 3; }
+
+  # Rationale lives in ADR-245, not here (ADR-231: workflow files are byte-budgeted).
+  # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
+  # promoting it to a required check after a soak, and the pin-freshness criterion.
+  harness-discovery:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    # continue-on-error is LOAD-BEARING, not decoration (#8570 review, P0).
+    #
+    # "non-required" governs the MERGE gate: this job is absent from the `test`
+    # aggregator's `needs:`, so a red here cannot block a PR. It does NOT govern
+    # `workflow_run.conclusion` — and `web-platform-release.yml` is triggered by
+    # `workflows: ["CI"]` and refuses to deploy when that conclusion is not
+    # `success` (`ci_not_green`). So without this, an npm hiccup or a 404 on
+    # static.devin.ai would red the CI run for a main push and SKIP that SHA's
+    # production deploy: a third-party network flake gating our own releases.
+    #
+    # With it, the step still reds on the PR check list (visible, triageable)
+    # while the run conclusion stays `success`. #8574 owns promotion to a
+    # required check, and MUST remove this line as part of that promotion —
+    # a required check that cannot fail the run is worse than no check.
+    continue-on-error: true
+    env:
+      # One declaration per pin. Previously each appeared twice in this job plus
+      # once in the test README, with nothing asserting they agreed — and a
+      # `--pin` lagging its install step silently turns the script's own version
+      # check into a no-op (#8574 bumps these monthly).
+      CODEX_PIN: "0.156.1"
+      DEVIN_PIN: "3000.11.1"
+      # sha256 of the pinned Devin setup script, measured 2026-09-23. A version
+      # in a URL is a NAME, not a content pin; this is the content pin.
+      DEVIN_SETUP_SHA256: "bff4e02d0297ba5494d2cd1a8314b9c48ebd237f37f22438e83d60e09f3b72c7"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -1331,26 +1493,82 @@ jobs:
         with:
           bun-version-file: ".bun-version"
 
-      - name: Install Grok CLI
+      - name: Install Codex CLI (exact pin)
         run: |
-          set -euo pipefail
-          curl -fsSL https://x.ai/cli/install.sh | bash
-          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
-          grok --version
+          set -uo pipefail
+          npm i -g "@openai/codex@${CODEX_PIN}"
+          # NOT `got="$(codex --version | grep …)"`. A `run:` block with no
+          # `shell:` key runs under `bash -e`, so on a banner carrying no semver
+          # `grep` exits 1, pipefail propagates it, and `-e` kills the step AT
+          # the assignment — the `||` diagnostic below never prints and the step
+          # ends rc=1 with zero output. Measured. That is the exact drift this
+          # pin exists to catch, presenting as an unexplained red.
+          raw="$(codex --version 2>&1 || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$CODEX_PIN" ] || {
+            echo "::error::harness-discovery[codex] version-mismatch:${got:-<unparsed>}!=${CODEX_PIN} raw=${raw:0:200}"
+            exit 3
+          }
 
-      - name: Grok fidelity gate (inspect contract + golden-path eval)
-        run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
+      - name: Codex discovers every declared skill
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness codex --pin "$CODEX_PIN"
+
+      - name: Install Devin CLI (versioned setup script)
+        # `!cancelled()` so a Codex-side refusal does not silently skip the Devin
+        # half. The two harnesses are independent subjects: one vendor's npm
+        # outage should not cost us the other vendor's discovery signal, and the
+        # check row gives no hint that half the job never ran.
+        if: '!cancelled()'
+        run: |
+          set -uo pipefail
+          # The top-level install.sh leaves PINNED_VERSION empty (latest). The
+          # VERSIONED setup script is the pinned path — measured 2026-09-23.
+          curl -fsSL --max-time 60 "https://static.devin.ai/cli/${DEVIN_PIN}/setup.sh" -o /tmp/devin-setup.sh
+          echo "${DEVIN_SETUP_SHA256}  /tmp/devin-setup.sh" | sha256sum -c - || {
+            echo "::error::harness-discovery[devin] setup-script-digest-mismatch — refusing to execute; got $(sha256sum /tmp/devin-setup.sh | cut -d' ' -f1)"
+            exit 3
+          }
+          # The setup script INSTALLS and then starts an interactive login, which cannot
+          # succeed headless: it prints "Welcome to Devin CLI! / Error: Login canceled" and
+          # exits 1 AFTER reporting a successful install. Measured 2026-09-23 on this job's
+          # first live run.
+          #
+          # Under `bash -e` — GitHub's default shell, as the Codex step above already warns —
+          # that killed this step at this line, which ALSO skipped the PATH export and the
+          # version assertion below. Those are the only parts that gate anything, so the pin
+          # was silently not checked, and the discovery step that follows passed only because
+          # `~/.local/bin` happens to be on ubuntu-latest's default PATH. Luck, not design.
+          #
+          # So: tolerate the script's exit code and let the VERSION ASSERTION be this step's
+          # verdict. That costs no coverage — a genuinely failed install shows up below as an
+          # unparseable version and still exits 3. `</dev/null` makes the login give up at
+          # once instead of waiting on a TTY that will never arrive.
+          setup_rc=0
+          bash /tmp/devin-setup.sh </dev/null || setup_rc=$?
+          echo "harness-discovery[devin] setup-script rc=${setup_rc} (non-zero EXPECTED: post-install interactive login)"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          raw="$(devin --version 2>&1 || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$DEVIN_PIN" ] || {
+            echo "::error::harness-discovery[devin] version-mismatch:${got:-<unparsed>}!=${DEVIN_PIN} setup_rc=${setup_rc} raw=${raw:0:200}"
+            exit 3
+          }
+
+      - name: Devin discovers every declared skill
+        if: '!cancelled()'
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness devin --pin "$DEVIN_PIN"
 
   # Synthetic aggregator.
   #
   # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
   # branch-protection ruleset 14145388's `test` required check. It carries
-  # three distinct values: (a) cross-layer truing — converts three shard
+  # three distinct values: (a) cross-layer truing — converts six leg-job
   # `conclusion`s into the single required-context conclusion the ruleset
   # already expects by name; (b) drift-resilience — survives a future
   # ruleset edit that changes the required-context list, as long as the
   # `test` name still gates merge; (c) observability — single PR-status
-  # row to inspect, not three. Removing this job orphans the ruleset's
+  # row to inspect, not six. Removing this job orphans the ruleset's
   # `test` required check and breaks every PR merge.
   #
   # The name `test` MUST match the required-context name on ruleset
@@ -1369,10 +1587,10 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    needs: [test-webplat, test-bun, test-scripts, web-platform-build]
+    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture]
     if: always()
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads four `needs.*.result` strings (measured
+    # Bounds a HUNG job (#7902). This job only reads six `needs.*.result` strings (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
@@ -1395,7 +1613,9 @@ jobs:
           WEBPLAT_RESULT: ${{ needs.test-webplat.result }}
           BUN_RESULT: ${{ needs.test-bun.result }}
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
+          SCRIPTS_HEAVY_RESULT: ${{ needs.test-scripts-heavy.result }}
           BUILD_RESULT: ${{ needs.web-platform-build.result }}
+          POSTURE_RESULT: ${{ needs.encryption-posture.result }}
           # The event is a CLASSIFIER INPUT, not decoration. Supersession is only
           # reachable where `cancel-in-progress` is true, which since #7931 part 1
           # is pull_request only — see the SUPERSEDED arm below.
@@ -1429,9 +1649,10 @@ jobs:
           # under the shell Actions uses (`bash --noprofile --norc -eo pipefail`).
           fail=0
           # Single colon-delimited list, iterated twice: once to classify each leg,
-          # once (inner) to read that leg's siblings. Adding a 4th shard is still a
-          # one-line edit here, plus needs: + env:.
-          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "web-platform-build:$BUILD_RESULT" )
+          # once (inner) to read that leg's siblings. Adding a leg is still a
+          # one-line edit here, plus needs: + env: — test-scripts-heavy (#8006)
+          # and encryption-posture (#6907) are the worked examples.
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "test-scripts-heavy:$SCRIPTS_HEAVY_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" )
           for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
@@ -1453,7 +1674,7 @@ jobs:
                 # The comment above claims the classifier is correct whether a
                 # timed-out leg reads `cancelled` or `failure`; this arm is where
                 # that claim has to be honoured.
-                if [[ "$shard" == "test-scripts" ]]; then
+                if [[ "$shard" == "test-scripts" || "$shard" == "test-scripts-heavy" ]]; then
                   # A matrix rollup: "the job log" is not one log.
                   echo "$shard: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation before assuming assertions." >&2
                 else
@@ -1505,7 +1726,7 @@ jobs:
           if [[ $fail -ne 0 ]]; then
             exit 1
           fi
-          echo "All four legs green (three shards + web-platform-build)."
+          echo "All six legs green (four shards + web-platform-build + encryption-posture)."
 
   # E2E job runs inside the official Playwright container so Chromium + OS deps
   # are pre-installed at the matching Playwright version. Container tag, digest,
@@ -1540,23 +1761,79 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history on pull_request so the classifier's
+          # `origin/${GITHUB_BASE_REF}...HEAD` diff can resolve; a shallow
+          # clone would make every PR look unresolvable (which fails closed to
+          # applicable=true anyway). Other events never diff — depth 1.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+
+      # (#8450) In-job applicability classifier — verdict observed correct on
+      # this PR's own diff (report-only push), so the heavy steps below are
+      # gated on it. Deliberately NOT a detect-changes output + `needs:` edge:
+      # a failed upstream job would needs-skip `e2e`, and a skipped required
+      # check posts GREEN — the fail-open shape this file warns about. A
+      # classify-step failure reds the job instead.
+      - name: Classify e2e applicability
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # Judge the diff by the BASE ref's classifier, not the PR's own
+            # copy — a PR must not be able to weaken the gate it is judged by
+            # (e.g. shipping a classifier that emits false for its own paths).
+            # A PR that legitimately widens the allowlist is judged by the old
+            # rules — conservative by construction. fetch-depth: 0 guarantees
+            # the base object exists; a base without the classifier (pre-merge
+            # main) or an unresolvable diff falls back to enum-failed = true.
+            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null)" \
+              && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>/dev/null; then
+              APPLICABLE="$(printf '%s\n' "$CHANGED" | bash "$RUNNER_TEMP/ci-e2e-classify.sh" pull_request)"
+            else
+              echo "::warning::e2e classification fell back to enum-failed (diff unresolvable or classifier absent on base ref)"
+              APPLICABLE="$(bash scripts/ci-e2e-classify.sh --enum-failed)"
+            fi
+          else
+            APPLICABLE="$(bash scripts/ci-e2e-classify.sh "$EVENT_NAME" </dev/null)"
+          fi
+          # Empty/unknown verdict must red the job, not silently skip both the
+          # heavy steps AND the skip-verdict step.
+          case "$APPLICABLE" in
+            true|false) ;;
+            *) echo "::error::classifier emitted invalid verdict '$APPLICABLE'" >&2; exit 1 ;;
+          esac
+          echo "applicable=$APPLICABLE" >> "$GITHUB_OUTPUT"
+          echo "::notice::e2e applicable=$APPLICABLE (event=$EVENT_NAME)"
+
+      # The verdict must be legible in the run itself — a required check that
+      # silently does nothing reads as a green with no story.
+      - name: Record e2e skip verdict
+        if: steps.detect.outputs.applicable == 'false'
+        run: |
+          echo "::notice::e2e skipped: no app-affecting paths"
+          echo "**e2e skipped: no app-affecting paths** — classifier allowlist is \`knowledge-base/**\` + root \`*.md\` only (#8450)." >> "$GITHUB_STEP_SUMMARY"
 
       # setup-bun and its `unzip` prerequisite are both gone (ADR-191): this job's only
       # bun usage was the two installs below. The image ships Node 24, so no
       # actions/setup-node either — that is deliberate and unchanged.
       - name: Install dependencies
+        if: steps.detect.outputs.applicable == 'true'
         run: npm ci --ignore-scripts
 
       - name: Install web-platform dependencies
+        if: steps.detect.outputs.applicable == 'true'
         run: npm ci --ignore-scripts
         working-directory: apps/web-platform
 
       - name: Run E2E tests
+        if: steps.detect.outputs.applicable == 'true'
         run: npx playwright test
         working-directory: apps/web-platform
 
       - name: Upload test results on failure
-        if: failure()
+        if: failure() && steps.detect.outputs.applicable == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report

@@ -59,7 +59,7 @@ grep -qE '^# Generated: [0-9]{4}-[0-9]{2}-[0-9]{2}$' "$OUT1" && pass "header car
 grep -qF '(.git+.api)[]|select(test(":")|not)' "$OUT1" && pass "header carries verbatim jq filter (AC2)" || fail "header carries verbatim jq filter"
 
 echo "-- IPv6 drop + dedup --"
-if ! printf '%s' "$ACTUAL_BODY" | grep -q ':'; then pass "IPv6 entries dropped (no ':' in body)"; else fail "IPv6 entries dropped"; fi
+if ! printf '%s' "$ACTUAL_BODY" | grep -c ':' >/dev/null; then pass "IPv6 entries dropped (no ':' in body)"; else fail "IPv6 entries dropped"; fi
 DUP_N="$(grep -cxF '192.0.2.0/24' "$OUT1")"
 if [[ "$DUP_N" -eq 1 ]]; then pass "duplicate collapsed (192.0.2.0/24 once)"; else fail "duplicate collapsed (got $DUP_N)"; fi
 

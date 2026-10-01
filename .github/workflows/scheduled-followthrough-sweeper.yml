@@ -2,7 +2,8 @@
 # `<!-- soleur:followthrough script=... earliest=... secrets=... -->`
 # directive in each open issue body and runs the referenced script with
 # only the secrets it declared. Closes with PASS comment on exit 0,
-# comments FAIL on exit 1, comments TRANSIENT on any other exit.
+# comments FAIL on exit 1; exit 2 = NOT YET, 3 = CANNOT ESTABLISH,
+# 5 = ACTION REQUIRED, any other = TRANSIENT (all leave open + comment).
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 #
@@ -43,6 +44,10 @@ concurrency:
 permissions:
   contents: read
   issues: write
+  # (#8450) the actions-queue-tail probe reads Actions run/job data via `gh api`
+  # — under an explicit permissions block an unlisted scope is `none`, which is
+  # a silent 403 for that probe.
+  actions: read
 
 jobs:
   sweep:
@@ -70,10 +75,24 @@ jobs:
           fetch-depth: 0
           # `actions/checkout` otherwise writes an `http.<host>.extraheader`
           # carrying this workflow's token into `.git/config`, which `env -i`
-          # does NOT remove. Every verification script the sweeper runs could
-          # therefore recover a credential with `issues:write` — the identity
-          # `closed_precheck` treats as unforgeable — and this is the first
-          # probe to read third-party-controlled content.
+          # does NOT remove. It removes the AMBIENT credential — the one a probe
+          # could recover without declaring it. It does NOT, and must not, take
+          # the token away from probes that DO declare `secrets=GH_TOKEN`: those
+          # are deliberately handed an `issues:write` token by the `env:` block
+          # below, which is the whole mechanism by which a probe reads or writes
+          # GitHub state. The distinction is the point of the flag: declared and
+          # auditable, never ambient. (#7490 took the declared set from 24 to 28,
+          # by adding the clause to four probes that call `gh` and had omitted it
+          # — they were running unauthenticated and could never have closed. Same
+          # change took the HONOURED-directive population from 25 to 31, by
+          # unfencing six directives the sweeper had been skipping. Both numbers
+          # measured through the shipped `parse_directive`, 2026-09-18, over the
+          # 56 open trackers — counting `secrets=` with grep instead gives a
+          # different and wrong answer, because prose mentions it too.)
+          #
+          # The credential `closed_precheck` treats as unforgeable is the comment
+          # AUTHOR identity, and an ambient token is what would let an arbitrary
+          # probe forge it.
           #
           # Measured before flipping it: the sweeper itself runs no git command
           # at all (it resolves `script=` against the checked-out HEAD), and the

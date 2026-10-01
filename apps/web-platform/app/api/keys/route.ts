@@ -1,22 +1,21 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { encryptKey } from "@/server/byok";
 import { validateToken } from "@/server/token-validators";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
+import { verifiedUserId } from "@/server/request-auth";
 import * as Sentry from "@sentry/nextjs";
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/keys", origin);
 
-  // Authenticate
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Authenticate — middleware-verified identity (x-soleur-auth-user-id);
+  // absent header falls back to getUser() inside verifiedUserId (fail-closed).
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -30,6 +29,7 @@ export async function POST(request: Request) {
   }
 
   const apiKey: string = body.key.trim();
+  const provider: "anthropic" | "openai" = body.provider === "openai" ? "openai" : "anthropic";
 
   // feat-operator-cc-oauth — credential type. Absent/anything-else ⇒
   // 'api_key' (back-compat; both onboarding + settings POST this route
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     // is the gate. Requires: caller in ADMIN_USER_IDS (operator/internal
     // account) AND the kill-switch on. Either off ⇒ feature inert (403).
     const isOperator =
-      process.env.ADMIN_USER_IDS?.split(",").includes(user.id) ?? false;
+      process.env.ADMIN_USER_IDS?.split(",").includes(userId) ?? false;
     const ccOauthEnabled =
       process.env.CC_OAUTH_ENABLED === "1" ||
       process.env.CC_OAUTH_ENABLED === "true";
@@ -57,10 +57,10 @@ export async function POST(request: Request) {
     // via the service_role-only SECURITY DEFINER RPC, which hardcodes
     // provider='anthropic_oauth' so a regressed caller cannot overwrite the
     // raw-REST 'anthropic' row through this path.
-    const { encrypted, iv, tag } = encryptKey(apiKey, user.id);
+    const { encrypted, iv, tag } = encryptKey(apiKey, userId);
     const service = createServiceClient();
     const { error: rpcError } = await service.rpc("store_oauth_credential", {
-      p_user_id: user.id,
+      p_user_id: userId,
       p_encrypted: encrypted.toString("base64"),
       p_iv: iv.toString("base64"),
       p_tag: tag.toString("base64"),
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
       logger.error({ err: rpcError }, "Failed to store oauth credential");
       Sentry.captureException(rpcError, {
         tags: { feature: "api-keys", op: "store-oauth" },
-        extra: { userId: user.id, provider: "anthropic_oauth" },
+        extra: { userId, provider: "anthropic_oauth" },
       });
       return NextResponse.json(
         { error: "Failed to store key" },
@@ -83,21 +83,21 @@ export async function POST(request: Request) {
 
   // ---- api_key path (unchanged) ----
   // Validate against Anthropic API
-  const valid = await validateToken("anthropic", apiKey);
+  const valid = await validateToken(provider, apiKey);
   if (!valid) {
     return NextResponse.json({ valid: false });
   }
 
   // Encrypt and store
-  const { encrypted, iv, tag } = encryptKey(apiKey, user.id);
+  const { encrypted, iv, tag } = encryptKey(apiKey, userId);
 
   const service = createServiceClient();
   const { error: dbError } = await service
     .from("api_keys")
     .upsert(
       {
-        user_id: user.id,
-        provider: "anthropic",
+        user_id: userId,
+        provider,
         encrypted_key: encrypted.toString("base64"),
         iv: iv.toString("base64"),
         auth_tag: tag.toString("base64"),
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
     logger.error({ err: dbError }, "Failed to store API key");
     Sentry.captureException(dbError, {
       tags: { feature: "api-keys", op: "store" },
-      extra: { userId: user.id, provider: "anthropic" },
+      extra: { userId, provider },
     });
     return NextResponse.json(
       { error: "Failed to store key" },

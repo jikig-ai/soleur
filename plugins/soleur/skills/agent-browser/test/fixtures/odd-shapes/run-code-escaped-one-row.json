@@ -1,0 +1,10 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Result\n\"- textbox \\\"Token\\\": ZZQP-SENTINEL-7980\"\n### Ran Playwright code\n```js\nawait page.getByLabel('Token').ariaSnapshot();\n```"
+      }
+    ]
+  }
+}

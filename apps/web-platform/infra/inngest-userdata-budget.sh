@@ -30,18 +30,21 @@
 #   * `zot_pull_token` — exactly 40, from `random_password.zot_pull { length = 40 }`. Exact.
 #   * the three `*_sha256` values — 64 hex, and BOTH arch branches are 64 hex, so exact.
 #   * `inngest_volume_id` — 9 digits, matching every live hcloud volume id in-repo.
+#   * `inngest_luks_volume_id` — 9 digits, same reasoning (#6894's additive volume). It is
+#     interpolated twice in the template (the first-boot resolver and the boot-reopen script).
 #   * `inngest_expect_luks` — "false" (5 B) is the LONGER of the two `tostring(bool)` forms, so
 #     it bounds the "true" recut branch too.
 #   * `doppler_arch` / `inngest_cli_arch` — "amd64" and "arm64" are both 5 B, so this render is
 #     ARCH-NEUTRAL in length and the measurement holds for either `var.inngest_server_type`.
-#   * `ghcr_read_user` — 39 B, GitHub's maximum login length. True by construction.
-#   * `ghcr_read_token` — 128 B, comfortably over a `github_pat_` fine-grained PAT (~93 B).
 #   * `doppler_token` — a `dp.st.<config>.<body>` service token on project `soleur-inngest`,
 #     config `prd`; stubbed with a 48 B body, over the ~43 B Doppler emits.
 #   * `betterstack_logs_token` — 64 B. The real Better Stack token length is NOT derivable from
 #     anything in this repo (every in-tree sample is synthetic or redacted), so the bound is made
 #     true by construction rather than by belief. Same reasoning, same width, as the registry
 #     sibling's heartbeat-token stub.
+#   * `sentry_dsn` (#6500) — 149 B, in the DSN shape. A Sentry DSN is
+#     `https://<32-hex key>@o<org id>.ingest.<region>.sentry.io/<project id>`, about 90 B; the stub
+#     widens the org and project ids well past any issued value, so it bounds the real one.
 #
 # MEASURE WITH TERRAFORM'S OWN `base64gzip`, NEVER `gzip -9`. They are different compression
 # levels and `-9` OVERSTATES headroom. On a hard gate an optimistic measurement is worse
@@ -164,21 +167,22 @@ cat > "$TFDIR/main.tf" <<EOF
 locals {
   vars = {
     inngest_volume_id      = "100000004"
+    inngest_luks_volume_id = "100000005"
     inngest_expect_luks    = "false"
     doppler_token          = join(".", ["dp", "st", "prd", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
     sdk_url                = "http://10.0.1.10:3000/api/inngest"
     inngest_cli_arch       = "amd64"
-    inngest_cli_sha256     = "d023b26659275fdbe9348b6518077ce1ea9906a449898e49ddced91bfc6fd757"
+    inngest_cli_sha256     = "52c07d837088a6712acd15b8edd4191f961b69884541f468a3c1b9bb4348a4e5"
     vector_sha256          = "8a3cc62d18ec88bb8433159d1d3455d3c77fefff73ce46d4f8cc464e100f65f1"
     doppler_arch           = "amd64"
     doppler_sha256         = "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
-    ghcr_read_user         = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTU"
-    ghcr_read_token        = join("_", ["github", "pat", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
     zot_registry_endpoint  = "10.0.1.30:5000"
     zot_pull_user          = "zot-pull"
     zot_pull_token         = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"
     web_host_private_ips   = "10.0.1.10,10.0.1.11"
+    inngest_private_ip     = "10.0.1.40"
     betterstack_logs_token = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"
+    sentry_dsn             = "https://STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB@o0000000000000000.ingest.us.sentry.io/0000000000000000000000000000000000000000000000000000000000000000000000"
   }
 
   inngest_rationale_strip = ${STRIP_EXPR}

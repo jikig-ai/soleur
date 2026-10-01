@@ -118,3 +118,11 @@ element inside the already-modeled `supabase` container (C4 models containers, n
 external actor, external system, container, or access relationship. No `views.c4` include change.
 
 Pairs with #5767 (runaway guard) as the "agent-run supervisor".
+
+## Amendment — 2026-09-23 (#8611, ADR-243): the last two bypassing crons now write live rows
+
+`cron-daily-triage` and `cron-follow-through-monitor` spawned Claude inline and bypassed
+`spawnClaudeEval` in v1, so they wrote no `routine_run_progress` row. #8611 moved both onto
+`spawnClaudeEval`, so they now upsert and heartbeat a live row like the other claude-eval crons and
+appear in the Routines UI. The table's any-authenticated SELECT is unchanged (rows carry system ids
+only).

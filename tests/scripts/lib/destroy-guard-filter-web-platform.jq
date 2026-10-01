@@ -1,25 +1,30 @@
 # Destroy-guard counter for apply-web-platform-infra.yml. Path-specific
-# per #4420; NO recursive walk(). Five resource types have array-of-blocks
+# per #4420; NO recursive walk(). Six resource types have array-of-blocks
 # or single-block surfaces in the current apply allow-list (verified
-# 2026-05-25 via apps/web-platform/infra/*.tf inspection — closes #4419);
-# a sixth surface (#5911) counts reboot-forcing in-place updates on
-# hcloud_server.*; a seventh (#6416) counts hcloud_server CREATES:
+# 2026-05-25 via apps/web-platform/infra/*.tf inspection — closes #4419;
+# cloudflare_list added #8364 — it carries the bulk-redirect item set);
+# a seventh surface (#5911) counts reboot-forcing in-place updates on
+# hcloud_server.*; an eighth (#6416) counts hcloud_server CREATES:
 #
 #   1. cloudflare_ruleset.*                              .rules
 #   2. cloudflare_zero_trust_tunnel_cloudflared_config.* .config[0].ingress_rule
 #   3. cloudflare_zone_settings_override.*               .settings[0].security_header
 #   4. cloudflare_notification_policy.*                  .email_integration
 #   5. cloudflare_zero_trust_access_policy.*             .include
-#   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
+#   6. cloudflare_list.*                                 .item (#8364)
+#   7. hcloud_server.* reboot-forcing in-place update    placement_group_id /
 #                                                        server_type (#5911)
-#   7. hcloud_server.* host BIRTH                       actions incl. "create"
+#   8. hcloud_server.* host BIRTH                       actions incl. "create"
 #                                                        (create OR replace; #6416.
 #                                                        hcloud_volume dropped #6919/T55)
 #
 # The HIGHEST-impact case is (1) — removing the ACME carve-out
 # (cloudflare_ruleset.seo_page_redirects.rules[10] at seo-rulesets.tf)
 # would silently re-fire the 2026-05-18 cert-renewal outage on the next
-# ~60-day Let's Encrypt renewal cycle.
+# ~60-day Let's Encrypt renewal cycle. (6) is the widest single surface by
+# item count: cloudflare_list.legal_redirects carries the entire bulk-redirect
+# set (legal slugs + reslugs + tombstones), so an emptied or shrunken `item`
+# array is the largest silent-redirect-loss shape this guard covers.
 #
 # SCHEMA STABILITY: `terraform show -json change.before` / `change.after`
 # are documented contracts
@@ -33,8 +38,11 @@
 # destroy = false } }` blocks) will trip nested_deletes against this filter
 # because `change.actions = ["forget"]` is excluded only from resource_deletes
 # (the `index("delete")` check) but `before.rules` is populated while `after`
-# is null → positive count. Currently no `removed` blocks in
-# apps/web-platform/infra/; if you add one, the remedy DEPENDS ON THE CONSUMER:
+# is null → positive count. The `removed` blocks in apps/web-platform/infra/
+# today (doppler-write-token.tf, github-app.tf, inngest-host.tf's #8754 attachment
+# forget, web-host-birth-environment.tf's #8754 phantom deployment-policy forget) are
+# non-Cloudflare types, which the nested_deletes clauses do not match.
+# A forget of a Cloudflare type WOULD trip it; the remedy DEPENDS ON THE CONSUMER:
 #   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
 #   - apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE there (a push
 #     path with no ack token to type past), so the
@@ -43,11 +51,11 @@
 # Prefer the widening: it is the one fix that works for every consumer. Note also
 # that `["forget"]` is counted by NO host_creates arm on any path — a state-drop
 # of hcloud_server/hcloud_volume passes every gate and silently strands the
-# volume (the hazard T49 guards on the retire path). Pre-existing, no `removed`
-# blocks exist today; recorded here so the next author does not rediscover it.
+# volume (the hazard T49 guards on the retire path). Pre-existing; recorded here
+# so the next author does not rediscover it.
 #
 # PROVIDER PIN: cloudflare/cloudflare ~> 4.0 (currently 4.52.7). Two of
-# the five clauses are at risk on a v5 upgrade
+# the six clauses are at risk on a v5 upgrade
 # (`ingress_rule` → `ingress` rename; `cloudflare_zone_settings_override`
 # removed in v5). See learning
 # `2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`. When
@@ -62,7 +70,8 @@
 #
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
-#          host_creates: int, luks_passphrase_rotations: int}.
+#          host_creates: int, non_terraform_data_deletes: int,
+#          luks_passphrase_rotations: int, …}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
 # so the manual-rerun consumer that reads only them keeps working. host_creates
 # has TWO workflow readers: the `apply` job (#6416) and apply-deploy-pipeline-fix.yml
@@ -98,6 +107,9 @@ def cf_notif_email_integration_count($side):
 def cf_access_policy_include_count($side):
   ($side // {}) | [.include[]?] | length;
 
+def cf_list_item_count($side):
+  ($side // {}) | [.item[]?] | length;
+
 # --- web-2 retire scoped guard (#6538) -------------------------------------
 # web-2 RETIRE allow-set (#6538). FIVE addresses.
 #
@@ -124,6 +136,9 @@ def cf_access_policy_include_count($side):
 # web2_retire_out_of_scope_changes and ABORTS. Do NOT add them here or to B6.2's
 # -target list: targeting doppler_secret.proxy_tls_cert without
 # doppler_secret.proxy_tls_key writes a cert to prd with NO matching key.
+# (#8754) They are now count-gated on host_proxy_tls_enabled (default false), so a
+# retirement plan contains none of them unless the flip set the variable; when present
+# they carry `[0]` and still fall outside web2_retire_allow.
 def web2_retire_allow: [
   "hcloud_server.web[\"web-2\"]",
   "hcloud_server_network.web[\"web-2\"]",
@@ -184,12 +199,20 @@ def destroyed_at($addr):
        | select(.type == "cloudflare_zero_trust_access_policy")
        | select(.change.actions? | index("delete") | not)
        | (cf_access_policy_include_count(.change.before) - cf_access_policy_include_count(.change.after))
+       | select(. > 0)),
+      # 6. cloudflare_list.item (#8364 — the bulk-redirect list; an item
+      #    removal strands the legacy URL it was 301ing with no resource
+      #    delete and no reboot, invisible to every other counter)
+      (.resource_changes[]?
+       | select(.type == "cloudflare_list")
+       | select(.change.actions? | index("delete") | not)
+       | (cf_list_item_count(.change.before) - cf_list_item_count(.change.after))
        | select(. > 0))
     ] | add // 0
   ),
-  # 6th surface (#5911): hcloud_server.* reboot-forcing IN-PLACE update.
+  # 7th surface (#5911): hcloud_server.* reboot-forcing IN-PLACE update.
   # A placement_group_id / server_type change → power-off reboot of the
-  # RUNNING host with ZERO destroys → invisible to resource_deletes + the 5
+  # RUNNING host with ZERO destroys → invisible to resource_deletes + the 6
   # Cloudflare nested clauses above. TYPE-scoped select (not address)
   # INTENTIONALLY covers BOTH hcloud_server.web AND hcloud_server.git_data
   # (git-data.tf) — git_data is not target-reachable today but a git_data
@@ -216,7 +239,7 @@ def destroyed_at($addr):
             or .change.before.server_type       != .change.after.server_type) ]
     | length
   ),
-  # 7th surface (#6416): a pure `+ create` of an hcloud_server on the per-PR apply
+  # 8th surface (#6416): a pure `+ create` of an hcloud_server on the per-PR apply
   # path. INVISIBLE to every counter above — no delete (resource_deletes=0), no
   # nested-block shrinkage (nested_deletes=0), and not an ["update"]
   # (reboot_updates=0). Measured against tfplan-hcloud-server-create.json.
@@ -273,7 +296,7 @@ def destroyed_at($addr):
   # host_creates=1 (T30).
   #
   # KNOWN-UNCOVERED (declared, not accidental): a create/delete of
-  # hcloud_server_network against an EXISTING host is invisible to all 7
+  # hcloud_server_network against an EXISTING host is invisible to all 11
   # surfaces. The server create catches the born-unattached case that caused
   # #6416, but detaching a live host's private NIC would pass. That is the I1
   # runtime-precondition gap tracked in #6441, not a counter this filter can add.
@@ -299,7 +322,22 @@ def destroyed_at($addr):
     | length
   ),
 
-  # 8th surface (#7640 PR4b, plan AC72): the apex transition must never plan TWO
+  # (#8705) apply-deploy-pipeline-fix.yml's only reader. That workflow's -targets reach
+  # hcloud_server.web["web-1"], and through its user_data every credential the server's
+  # templatefile reads (e.g. doppler_service_token.web_probes), so a pending rename of
+  # such a credential plans as a replace INSIDE that workflow — which has no [ack-destroy]
+  # path and does not re-fire the credential's SSH installers. Replacing its own
+  # terraform_data resources is routine there; deleting or forgetting anything else is
+  # never its job. Counted separately from resource_deletes for that reason.
+  non_terraform_data_deletes: (
+    [ .resource_changes[]?
+      | select((.mode // "managed") == "managed")
+      | select(.type != "terraform_data")
+      | select((.change.actions // []) | any(. == "delete" or . == "forget")) ]
+    | length
+  ),
+
+  # 9th surface (#7640 PR4b, plan AC72): the apex transition must never plan TWO
   # addresses at once.
   #
   # THE ONLY CLAUSE HERE THAT IS ABOUT STATE RATHER THAN TEXT. Cloudflare rejects
@@ -345,7 +383,7 @@ def destroyed_at($addr):
     | if $apex_create > 0 and $sibling_delete > 0 then $sibling_delete else 0 end
   ),
 
-  # 9th surface (#7695): a LUKS PASSPHRASE ROTATION on the per-PR apply path.
+  # 10th surface (#7695): a LUKS PASSPHRASE ROTATION on the per-PR apply path.
   #
   # `random_password.inngest_redis_luks` and `doppler_secret.inngest_redis_luks_key` are BOTH in
   # the per-merge `-target=` allow-list, so a routine merge apply reaches them. A delete/replace
@@ -376,7 +414,7 @@ def destroyed_at($addr):
   # same three-verb exclusion for the same reason. `forget` IS counted: a Terraform 1.7+ state-drop
   # of the passphrase leaves the header cut from a value nothing records any more, which is the
   # stranding hazard wearing a different hat (the same note the retire counters carry at T49).
-  # 10th surface (#7695 review F1): AN ENTRY WHOSE VERB SET CANNOT BE READ, AT ANY ADDRESS.
+  # 11th surface (#7695 review F1): AN ENTRY WHOSE VERB SET CANNOT BE READ, AT ANY ADDRESS.
   #
   # I closed this shape at the two LUKS addresses and left the CLASS open everywhere else — the
   # instance fixed, the defect kept. `[] | any(...)` is `false` and `[] | index("delete")` is null,

@@ -269,6 +269,7 @@ NON_CRIT_ALLOWLIST = {
 NON_PAGING_MARKERS = {
     "SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED": "inngest-cutover-flip.sh: bare `logger -t` (user.notice, PRIORITY 5) — a cutover seam refusal, not a send failure",
     "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED": "resend-inbound-bootstrap.sh: CI-only, stdout only (see NON_CRIT_ALLOWLIST)",
+    "SOLEUR_INNGEST_LUKS_CUTOVER_SEAM_REFUSED": "inngest-luks-cutover.sh (#6894): bare `logger -t` (user.notice, PRIORITY 5) — the same shape and the same class as the flip's seam refusal above: a fixture-seam name was present in the environment without --fixture-seams and was ignored. It is a provisioning/config finding, not a failed send, and the class that DOES page for this host is the wrong-volume alert in betterstack-logs-alerts.tf",
 }
 SOLEUR_RE = re.compile(r'\bSOLEUR_[A-Z0-9_]+')
 CRIT_RE = re.compile(r'\bSOLEUR_[A-Z0-9_]*(?:_SEND_FAILED|_REFUSED)[A-Z0-9_]*')

@@ -116,8 +116,65 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     delete the whole tree. Same surface scope as the marker above. NOT paged — the
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
+//   - SOLEUR_TMP_SWEEP — the session-start scratch sweep's telemetry line (#7004,
+//     ADR-250): reaped/quarantined/retained/deferred counts plus the `skipped
+//     reason=` disarm lines (classifier-missing, lock-contended, flock-missing,
+//     bases-empty). NOT paged — every skip reason is either the safe outcome
+//     (lock contention, missing flock) or an intentional disarm (empty bases);
+//     a sweep that does nothing is correct-by-design on a clean host.
+// MIRRORED-NOT-PAGED (#9127, ADR-258): the SOLEUR_REAP_ARCHIVE_* family —
+// COMMITTED / STAGED / DEFERRED — emitted by worktree-manager.sh's reap loop at
+// the archive-persistence decision point. They report WHICH arm ran for a
+// reap-produced KB archive move: committed via the checkout's own commit path,
+// left staged when that commit failed (the session's own commits still carry
+// it), or deferred without a move on a non-committable checkout (main/master,
+// detached, bare). None is a wedge: every arm is the reaper completing a safe
+// decision — the bug they exist to prevent was an INVISIBLE mutation, so the
+// marker is the observability contract, not an error.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+
+// MIRRORED-NOT-PAGED (#9269): SOLEUR_WORKTREE_INSTALL_SKIPPED. Emitted by
+// worktree-manager.sh's install_deps when a dependency-install arm is skipped
+// — reason=opt-out (deliberate --no-install / SOLEUR_WORKTREE_SKIP_INSTALL=1),
+// reason=registry-unreachable (the bounded preflight found the resolved
+// registry host unreachable — the sandbox-egress-deny class that used to hang
+// the pipeline on the package manager's own retries), or reason=timeout (the
+// per-arm bound expired), reason=failed (ordinary nonzero install), plus
+// reason=tool-missing / reason=no-lockfile on the preflight-free arms; the
+// sibling SOLEUR_WORKTREE_INSTALL_UNBOUNDED marks arms that ran with no
+// timeout binary at all. None is a wedge: worktree creation still completes
+// and the worktree is usable — installs are re-runnable inside it. The marker
+// exists because a hung install previously read as a stalled pipeline with no
+// diagnostic naming the cause.
+//
+// MIRRORED-NOT-PAGED (#8287): the SOLEUR_BOOTSTRAP_* family.
+//
+// Emitted by plugins/soleur/scripts/lib/operator-script.sh (the shared library behind
+// `soleur:operator-bootstrap`'s generated scripts and the provision-* consumers, starting with
+// provision-hetzner.sh) — the header of that file is the contract listing every marker:
+// LIB_MISSING / LIB_INCOMPATIBLE (the consumer could not source a compatible library),
+// INPUT_REQUIRED (an unattended run reached a prompt with no non-interactive path — exit 64
+// naming the variable, or naming NONE for a destructive-write acknowledgement, which has no
+// skip variable by design), ENV_NOT_IGNORED (the credentials file would be committed),
+// BAD_ARG, UNSAFE_VARIABLE (a secret-shaped name refused on argv), SECRET_WRITE_FAILED /
+// SECRET_VERIFY_FAILED (the second means the write MAY have landed), LEDGER_WRITE_FAILED.
+// Registered by PREFIX rather than by enumeration because the namespace is owned entirely by
+// that one library and its header is the single source of truth; a per-marker list here is
+// a second copy that drifts. The drift guard in test/git-lock-marker-telemetry.test.ts walks
+// skills/*/scripts/*.sh and found the family unmirrored on provision-hetzner.sh.
+//
+// Same reasoning as SOLEUR_TRANSPORT_DIAG below: these scripts run on a customer's installed
+// CLI (observability layer 7, ADR-171), where the marker is an in-session stdout string and
+// the durable run ledger; this entry closes the HOSTED half, so a hosted agent that runs a
+// provision script into LIB_MISSING or ENV_NOT_IGNORED is visible rather than silent. They
+// carry no credential by construction: every field is a key NAME, a path, a variable name or
+// a reason token (the library's ledger records names, never values).
+//
+// NOT in WEDGE_RE. The dominant causes are a customer's plugin layout (LIB_MISSING), a
+// deliberate refusal working as designed (INPUT_REQUIRED on the class-2 acknowledgement is
+// the property the library exists to guarantee), or a founder's .gitignore. Paging an
+// operator for any of those is how a page becomes noise.
 
 // MIRRORED-NOT-PAGED (#7898): SOLEUR_TRANSPORT_DIAG and SOLEUR_FLAG_LIST_HALT.
 //
@@ -138,19 +195,26 @@ const MARKER_RE =
 // publishes a --json array on stdout, so its xtrace refusal is emitted as a marker rather
 // than as prose that a consumer would parse as a data row.
 
-// MIRRORED-NOT-PAGED, deliberately: the seven SOLEUR_*_HALT families (#7450, #7898, #7947, #7941).
+// MIRRORED-NOT-PAGED, deliberately: the nine SOLEUR_*_HALT families (#7450, #7898, #7947, #7941, #8289, #8402).
 //
 // SOLEUR_SHIP_PIR_GATE_HALT (#7941) is the /ship Phase 5.5 Incident-PIR gate refusing to give a
 // verdict: `reason=signal-scan-unavailable` (the signal scan did not run) or `reason=unavailable`
 // (the shape-check script did not run — absent from the plugin snapshot, or `origin/main`
-// unresolvable). Same shape as the six below: a refusal that must reach a sink, and a dominant
+// unresolvable). Same shape as the eight below: a refusal that must reach a sink, and a dominant
 // cause (a customer's plugin layout) that is not an operator page.
 //
-// The six below are the secret gates' fail-closed refusals — `incident`, `legal-generate`,
-// `linear-fetch`, `trigger-cron`, `flag-list` (#7898), and `snapshot` (#7947: one shared sentinel for the six
+// The eight below are the fail-closed refusals — `incident`, `legal-generate`,
+// `linear-fetch`, `trigger-cron`, `flag-list` (#7898), `questionnaire-generate` (#8289: the
+// redaction floor between an un-scanned questionnaire and the founder's mail client, whose
+// `reason=` discriminates sentinel-matches / sentinel-cannot-evaluate / draft-empty /
+// plugin-root-unverified — the cannot-evaluate arm exists because rc=0 and rc=2 were measured
+// byte-identical on stdout, so an unscanned document read as a clean one), and `snapshot` (#7947: one shared sentinel for the six
 // browser-driving skills that reach the accessibility-snapshot redactor, because the halt
 // condition — plugin root unverified before a snapshot — is identical across all six and a
-// per-skill name would buy six rows of noise and no extra signal). They belong in MARKER_RE because a refusal that reaches no
+// per-skill name would buy six rows of noise and no extra signal). `precommit-guard` (#8402) is
+// the odd one: it is not a SECRET gate but the commit-on-main backstop, and in a cloud session
+// where hooks do not fire it is the only such protection there is — so an unresolved or refusing
+// guard must reach a sink for exactly the reason the seven others must. They belong in MARKER_RE because a refusal that reaches no
 // sink is indistinguishable from a run that never happened, and the gate's whole purpose is to
 // refuse. They must NOT go in WEDGE_RE: the dominant cause is a customer whose plugin simply
 // is not installed, and paging an operator for that is how a page becomes noise.
@@ -178,6 +242,31 @@ const MARKER_RE =
 // local-only branch), OR a rejected worktree (SOLEUR_GIT_WORKTREE_VERIFY_FAILED → creation
 // aborted with exit 1). EXCLUDED (benign, mirrored-not-paged): SOLEUR_GIT_LOCK_IDENTITY_DIAG
 // (precondition) and SOLEUR_GIT_CONFIG_MASK_SKIP (non-bare-skip-under-mask → creation proceeds).
+// MIRRORED-NOT-PAGED (#8400): SOLEUR_WORKTREE_REAPED. It records the single
+// IRREVERSIBLE event cleanup-merged performs — a local branch deleted, and often
+// its remote ref with it, which also closes the PR. Before #8400 that event had no
+// sentinel at all: the only line naming it was `Deleted remote branch:`, which is
+// `verbose`-gated, i.e. `[[ -t 1 ]]`, i.e. invisible under `claude --bg` — the mode
+// cleanup-merged actually runs in. So the one destructive action in the function was
+// the one action with no record on any observability layer.
+//
+// Mirrored rather than paged because a reap is the NORMAL outcome: paging would fire
+// on the happy path several times a session. What it buys is forensics — an operator
+// asking "where did my branch go?" can answer it from Better Stack instead of from a
+// reflog they have to know to look at. The fail-closed refusals that PREVENT a reap
+// page through their own markers; this one records that a reap happened.
+//
+// MIRRORED-NOT-PAGED (#8490): SOLEUR_CLEANUP_GH_QUERY_FAILED. cleanup-merged could not ask
+// GitHub whether a worktree branch's PR merged. GitHub is the ONLY merge evidence for a
+// squash-merged, auto-deleted ([gone]) branch, so a gh outage makes cleanup reap nothing —
+// the #8490 symptom — and without this marker that is indistinguishable from "nothing was
+// merged". Fail-CLOSED (the branch is kept), so it is not a wedge and must not page.
+//
+// PAGED (#8400 review): SOLEUR_WORKTREE_REAP_PARTIAL. The local delete failed AFTER the remote
+// ref was already deleted — the PR is closed and the branch is only half reaped. Unlike a normal
+// reap this is an anomalous, actionable state, and it is the one the operator is least able to
+// reconstruct from their own terminal.
+//
 //   - SOLEUR_WORKTREE_REAPER_ARMED (#7409) — the one-time dry pass taken the first
 //     time cleanup-merged can reap on a given store. MIRRORED so the transition is
 //     measurable across the installed base (it fires once per machine, ever), NOT

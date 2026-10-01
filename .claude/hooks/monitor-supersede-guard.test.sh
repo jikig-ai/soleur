@@ -55,7 +55,39 @@ record() {  # record <session> <tool> <tool_input> <tool_response>
   jq -nc --arg s "$1" --arg t "$2" --argjson ti "$3" --argjson tr "$4" \
     '{session_id:$s, tool_name:$t, tool_input:$ti, tool_response:$tr}' | bash "$REC" >/dev/null 2>&1
 }
-complete_task() { printf '{"type":"queue-operation","content":"<task-notification><task-id>%s</task-id><status>completed</status></task-notification>"}\n' "$1" >> "$TRANSCRIPT"; }
+complete_task() { printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification><task-id>%s</task-id><status>completed</status></task-notification>"}\n' "$1" >> "$TRANSCRIPT"; }
+# The other terminal shapes, as measured over 400 session transcripts (#8420):
+# same `queue-operation` record, `content` a string of \n-separated tags. An
+# expiry carries NO <status> tag at all — only an <event> notice.
+expire_task() { printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>%s</task-id>\\n<event>[Monitor expired after %s with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>\\n</task-notification>"}\n' "$1" "${2:-30m}" >> "$TRANSCRIPT"; }
+fail_task()   { printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>%s</task-id>\\n<status>failed</status>\\n<summary>Monitor \\"CI poll\\" script failed (exit 1)</summary>\\n</task-notification>"}\n' "$1" >> "$TRANSCRIPT"; }
+
+# note <shape> <content> — append one record carrying <content> in a given
+# record shape. The first three are the harness shapes measured in real
+# transcripts; the rest are shapes that can QUOTE a notification and must be
+# ignored. Content is passed raw and JSON-encoded by jq, so fixtures read like
+# the real text.
+note() {
+  case "$1" in
+    user)    jq -nc --arg c "$2" '{type:"user",origin:{kind:"task-notification"},message:{role:"user",content:$c}}' ;;
+    attach)  jq -nc --arg c "$2" '{type:"attachment",attachment:{type:"queued_command",commandMode:"task-notification",prompt:$c}}' ;;
+    queue)   jq -nc --arg c "$2" '{type:"queue-operation",operation:"enqueue",content:$c}' ;;
+    queuerm) jq -nc --arg c "$2" '{type:"queue-operation",operation:"remove",reason:"absorbed_mid_turn",content:$c}' ;;
+    prompt)  jq -nc --arg c "$2" '{type:"user",message:{role:"user",content:$c}}' ;;
+    compact) jq -nc --arg c "$2" '{type:"user",isCompactSummary:true,message:{role:"user",content:$c}}' ;;
+    system)  jq -nc --arg c "$2" '{type:"system",content:$c}' ;;
+    queueobj) jq -nc --arg c "$2" '{type:"queue-operation",operation:"enqueue",content:{text:$c}}' ;;
+  esac >> "$TRANSCRIPT"
+}
+# blk <id> <inner> — one notification block in the real line layout.
+blk() { printf '<task-notification>\n<task-id>%s</task-id>\n%s\n</task-notification>' "$1" "$2"; }
+LIVE_EV='<summary>Monitor event: "CI poll"</summary>
+<event>12:00:00 [3/60] PR 7753 OPEN BLOCKED</event>'
+EXPIRY_EV='<summary>Monitor event: "CI poll"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>'
+DONE_ST='<tool-use-id>toolu_01</tool-use-id>
+<status>completed</status>
+<summary>Monitor "CI poll" stream ended</summary>'
 
 reported() { printf '%s' "$1" | grep -q '"additionalContext"'; }
 blocked()  { printf '%s' "$1" | grep -q '"permissionDecision"'; }
@@ -72,6 +104,18 @@ if [ $((PASS - _p)) -ne 1 ] || [ $((FAIL - _f)) -ne 1 ]; then
   printf '[FATAL] verdict helpers are not counting\n' >&2; exit 1
 fi
 PASS=$_p; FAIL=$_f
+
+# --- NEGATIVE CONTROL: verdict() itself records a known miss -----------------
+# The control above proves pass()/fail() count; this proves verdict() ROUTES a
+# non-zero rc to fail(). A verdict that always passed would leave every case
+# below green whatever the hook did. Reported via printf+exit, never verdict.
+_p=$PASS; _f=$FAIL; _c=$CASES
+verdict 1 'self-check: known miss' >/dev/null
+verdict 0 'self-check: known hit' >/dev/null
+if [ $((FAIL - _f)) -ne 1 ] || [ $((PASS - _p)) -ne 1 ] || [ $((CASES - _c)) -ne 2 ]; then
+  printf '[FATAL] verdict() does not route rc to pass/fail (known miss not recorded)\n' >&2; exit 1
+fi
+PASS=$_p; FAIL=$_f; CASES=$_c
 
 # --- 1-4: the core report -----------------------------------------------------
 fresh 1
@@ -300,11 +344,221 @@ TRANSCRIPT="$WORK/does-not-exist.jsonl"
 out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
 verdict "$rc" 'an unreadable transcript degrades to REPORTING (never silently drops)'
 
+# --- 31-35: every TERMINAL shape clears an arm, not only `completed` ---------
+# #8420 / #7961: a monitor also ends `failed`, or by harness expiry — an <event>
+# notice with no <status> tag (850 of them in 400 transcripts). Reading only
+# `completed` listed those dead arms as live and sent the agent to TaskStop ids
+# that answered `No task found`.
+fresh 31
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+expire_task T1
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'a prior monitor that EXPIRED (event notice, no status tag) is SILENT'
+
+fresh 32
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+fail_task T1
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'a prior monitor that FAILED is SILENT'
+
+fresh 33
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>T1</task-id>\\n<event>[Monitor timed out — re-arm if needed.]</event>\\n</task-notification>"}\n' >> "$TRANSCRIPT"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'the legacy timed-out notice (#7961) is SILENT'
+
+# The expired arm is recorded FIRST, so a loop that stops at the first terminal
+# arm (a `break` where `continue` belongs) drops the live one behind it.
+fresh 34
+record s1 Monitor "$CI" '{"taskId":"TEXP"}'
+record s1 Monitor '{"command":"gh pr view 7753","description":"merge","timeout_ms":600000}' '{"taskId":"TLIVE"}'
+expire_task TEXP
+out=$(guard s1 "$CI2")
+rc=1; printf '%s' "$out" | grep -q 'TLIVE' && ! printf '%s' "$out" | grep -q 'TEXP' && rc=0
+verdict "$rc" 'one expired + one live on one target names exactly the live id'
+
+# Must-PASS non-canonical: the expiry notice's tail varies (window, event count);
+# the predicate keys on `expired after <digits>`, not on the "no events" wording.
+fresh 35
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>T1</task-id>\\n<event>[Monitor expired after 20m with 3 events delivered. Re-arm it if you still need the watch.]</event>\\n</task-notification>"}\n' >> "$TRANSCRIPT"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'an expiry notice reading "after 20m with 3 events delivered" is SILENT'
+
+
+# --- 36-47: judged PER BLOCK, from HARNESS records only (must stay LIVE) ----
+# Each of these read as "ended" under the per-record rule: any non-assistant
+# record naming the id plus a terminal token anywhere in it.
+fresh 36
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 "$LIVE_EV")
+$(blk T9 "$DONE_ST")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" "a batched record: T1 live event + ANOTHER task's completed keeps T1 LIVE"
+
+fresh 37
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 '<summary>Monitor event: "CI poll"</summary>
+<event>job deploy: <status>failed</status> (retrying)</event>')"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" "the monitor's OWN output carrying <status>failed</status> keeps it LIVE"
+
+fresh 38
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 '<summary>Monitor event: "CI poll"</summary>
+<event>[Monitor timed out waiting on runner]
+still polling</event>')"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'monitor output with a line starting [Monitor timed out keeps it LIVE'
+
+fresh 39
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 '<summary>Monitor event: "CI poll"</summary>
+<event>log: [Monitor expired after 30m with 3 events delivered. Re-arm it if you still need the watch.]</event>')"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'the expiry sentence NOT at the start of the event keeps it LIVE'
+
+fresh 40
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note prompt "did $(blk T1 "$DONE_ST") mean it finished?"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" "an operator prompt quoting T1's id and a completed tag keeps it LIVE"
+
+fresh 41
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note compact "Summary: $(blk T1 "$DONE_ST")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'a compaction summary (isCompactSummary) quoting a completion keeps it LIVE'
+
+fresh 42
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note system "$(blk T1 "$DONE_ST")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'a type:system record carrying a completion keeps it LIVE'
+
+fresh 43
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note queueobj "$(blk T1 "$DONE_ST")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'a queue-operation with OBJECT content keeps it LIVE'
+
+# Typed prompts are queued as queue-operation too; one QUOTING a block, with
+# text around it, is not a notification.
+fresh 44
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note queue "why did this arrive? $(blk T1 "$DONE_ST")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'a queued typed prompt quoting a completion keeps it LIVE'
+
+# Kills a terminal pattern widened to any <event>: a live monitor's ordinary
+# heartbeats are events too.
+fresh 45
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note queue "$(blk T1 "$LIVE_EV")"
+note user "$(blk T1 "$LIVE_EV")"
+note attach "$(blk T1 "$LIVE_EV")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'a monitor emitting ordinary heartbeat events stays LIVE (all 3 harness shapes)'
+
+fresh 46
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 '<status>running</status>
+<summary>Monitor "CI poll"</summary>')"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" '<status>running</status> stays LIVE'
+
+# The agent-written description rides in <summary>: a terminal block for T9
+# whose summary QUOTES T1 must not end T1.
+fresh 47
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T9 '<status>completed</status>
+<summary>Monitor "replaces <task-id>T1</task-id>" stream ended</summary>')"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" "a task-id inside ANOTHER block's summary is not that task's end"
+
+# --- 48-51: MOST RECENT block wins, and the real shapes END a task ----------
+fresh 48
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 "$LIVE_EV")"
+note user "$(blk T1 "$LIVE_EV")"
+note attach "$(blk T1 "$EXPIRY_EV")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'heartbeats THEN an expiry (attachment shape) reads ENDED'
+
+fresh 49
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 "$DONE_ST")
+$(blk T9 "$LIVE_EV")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" "T1 completed batched with ANOTHER task's live event reads ENDED"
+
+fresh 50
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 "$EXPIRY_EV")"
+note user "$(blk T1 "$LIVE_EV")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'a live event AFTER a terminal one reads LIVE (most recent wins)'
+
+fresh 51
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note user "$(blk T1 '<status>completed</status>
+<summary>Monitor "CI poll" stream ended</summary>')"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'a completion in the user/origin=task-notification shape reads ENDED'
+
+# Deliveries lag enqueues. Real sequence (measured): T1's `completed` is
+# enqueued, THEN its previous live event is delivered (user record; a queue
+# `remove` is a delivery too). Ranked by raw line order that read LIVE;
+# enqueue order is the authority.
+fresh 55
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note queue "$(blk T1 "$LIVE_EV")"
+note queue "$(blk T1 "$DONE_ST")"
+note user "$(blk T1 "$LIVE_EV")"
+note queuerm "$(blk T1 "$LIVE_EV")"
+out=$(guard s1 "$CI2"); rc=1; reported "$out" || rc=0
+verdict "$rc" 'stale live DELIVERIES (user record, queue remove) after the completed ENQUEUE still read ENDED'
+
+# The enqueue pass pre-filters raw lines on the harness's compact JSON
+# (`"type":"queue-operation"`). A record spelled with spaces misses that
+# prefilter and must still be decided by the fallback pass — correct, slower.
+fresh 56
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+note queue "$(blk T1 "$DONE_ST")"
+sed -i.bak 's/"type":"queue-operation","operation":"enqueue"/"type": "queue-operation", "operation": "enqueue"/' "$TRANSCRIPT"
+out=$(guard s1 "$CI2"); rc=1; grep -qF '"type": "queue-operation"' "$TRANSCRIPT" && ! reported "$out" && rc=0
+verdict "$rc" 'a non-compact enqueue record still reads ENDED (fallback pass)'
+
+# --- 52-53: ledger rows split on TABS without IFS-whitespace collapse -------
+# `IFS=$'\t' read` merged an empty task field, so the description became the
+# task id, and an arm with neither was matched by an empty STOPPED set.
+fresh 52
+record s1 Monitor '{"command":"gh pr checks 7753","description":"CI poll","timeout_ms":600000}' '{}'
+out=$(guard s1 "$CI2")
+msg=$(printf '%s' "$out" | jq -r '.systemMessage' 2>/dev/null)
+rc=1; grep -qF '(no task id) — "CI poll"' <<<"$msg" && rc=0
+verdict "$rc" 'an arm with NO task id keeps its description in the description slot'
+
+fresh 53
+record s1 Monitor '{"command":"gh pr checks 7753","description":"","timeout_ms":600000}' '{}'
+out=$(guard s1 "$CI2"); rc=1; reported "$out" && rc=0
+verdict "$rc" 'an arm with no task id AND no description is still REPORTED'
+
+# --- 54: the notice renders literally (no command substitution) -------------
+# Backticks inside the double-quoted MSG ran `TaskStop` and `No` from PATH in a
+# PreToolUse hook and rendered "A  answering  means...".
+fresh 54
+record s1 Monitor "$CI" '{"taskId":"T1"}'
+out=$(guard s1 "$CI2")
+msg=$(printf '%s' "$out" | jq -r '.systemMessage' 2>/dev/null)
+rc=1; grep -qxF 'A `TaskStop` answering `No task found` means that row had already ended.' <<<"$msg" && rc=0
+verdict "$rc" 'the closing sentence renders verbatim, backticks included'
+
 printf '\n'
 # Floor. `-lt` (not `-ne`) so the suite grows without churn AND so
 # scripts/guard-vacuity-floor.test.sh can recognise the shape at all: its sweep
 # matches -lt/-le/-ge only, and the previous -ne floor was invisible to it.
-MIN_CASES=30
+MIN_CASES=56
 if [ "$CASES" -lt "$MIN_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

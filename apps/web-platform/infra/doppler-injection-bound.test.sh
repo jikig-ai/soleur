@@ -752,7 +752,7 @@ done
 # stage 2 (the doppler-run population) and stage 4 (the bound-required set) — so a zeroed floor
 # there is the most load-bearing vacuity available in this file.
 for _c in doppler_run_units bound_required_population; do
-  _line="$(grep -E "^CENSUS: ${_c}=" "$CONTROL_OUT" | head -1 || true)"
+  _line="$(grep -E "^CENSUS: ${_c}=" "$CONTROL_OUT" | sed -n '1p' || true)"
   if [[ -z "$_line" ]]; then
     fail "census: no count reported for '$_c'"
     continue
@@ -788,6 +788,17 @@ _pin_seen "the web-host vector unit from soleur-host-bootstrap.sh (heredoc surfa
   'soleur-vector-install'
 # The unit this change is about.
 _pin_seen "inngest-cutover-flip.service" 'inngest-cutover-flip\.service'
+# #6894: the LUKS cutover unit is a SECOND root doppler-run unit on the same host, and it moves the
+# store. Seen AND bound — a bound that silently lapsed would put every name in soleur-inngest/prd
+# into the environment of a root script that executes several of them.
+_pin_seen "inngest-luks-cutover.service (#6894)" 'inngest-luks-cutover\.service'
+if grep -qE '^  UNIT: +inngest-luks-cutover\.service +surface=service +bound=True' "$CONTROL_OUT"
+then
+  pass "the LUKS cutover unit's --only-secrets bound is DETECTED (its list is on continuation lines too)"
+else
+  fail "the LUKS cutover unit reads as UNBOUNDED" \
+    "$(grep -E '^  UNIT: +inngest-luks-cutover' "$CONTROL_OUT")"
+fi
 
 # THE JOIN IS LOAD-BEARING. The flip unit's bound lives ENTIRELY on continuation lines; without
 # CONT_RE the scanner reads it as unbounded and every row below is meaningless. Assert the
@@ -808,7 +819,7 @@ _pin_fp() {
     return 0
   fi
   # The POPULATION line is printed directly under its unit; -A1 is the association.
-  if grep -A1 -E "^  UNIT: +$2" "$CONTROL_OUT" | grep -q 'POPULATION'; then
+  if grep -A1 -E "^  UNIT: +$2" "$CONTROL_OUT" | grep -c 'POPULATION' >/dev/null; then
     fail "FP pin: $1 entered the bound-required population (false positive)"
   else
     pass "FP pin: $1 is enumerated but not bound-required"

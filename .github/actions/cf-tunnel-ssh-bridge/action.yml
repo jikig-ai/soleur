@@ -74,9 +74,30 @@
 #  TUNNEL_SERVICE_TOKEN_SECRET.
 #  When `server-ip` is EMPTY (terraform callers): TF_VAR_ci_ssh_private_key.
 #  When `server-ip` is SET (bash-ssh callers): CI_SSH_KEYFILE (chmod 600 temp key)
-#  + WEB_HOST_SSH + GIT_DATA_SSH (ready `ssh -i <keyfile> … -l root` invocations the
+#  + WEB_HOST_SSH (the ready `ssh -i <keyfile> … -l root` invocation the
 #  cutover/verify scripts consume via `${WEB_HOST_SSH}`). The key form is
 #  mutually exclusive per caller class — the key never lands on an unused surface.
+#  No GIT_DATA_SSH: that invocation was byte-identical to WEB_HOST_SSH and could never
+#  reach the git-data host, which is reached through web-1 with its own Terraform-minted
+#  root key (ADR-220). git-data-cutover.yml fetches that key and writes the ssh_config its
+#  GIT_DATA_SSH points at; the bridge never handles it. The export set is asserted by the
+#  bridge (BR) rows of git-data-cutover-access.test.sh.
+#
+# ── HOST-KEY PIN CONTRACT (#7226, ADR-237) ─────────────────────────────────
+# Bash-mode callers get a WEB_HOST_SSH that trusts EXACTLY ONE host key: web-1's committed
+# ECDSA-P256 pin (apps/web-platform/infra/web-1-ssh-host-key.pub, read from the caller's
+# checkout at $GITHUB_WORKSPACE, so every caller MUST check the repo out before this action).
+# write-known-hosts.sh (next to this file) validates the pin and writes
+# $RUNNER_TEMP/web-1.known_hosts as `web-1 <key>`, mode 0444; the invocation sets
+# `-F /dev/null` (no user or system ssh_config is read, so a runner image cannot add a
+# known-hosts command, a ProxyCommand or a second known-hosts file), StrictHostKeyChecking=yes,
+# HostKeyAlias=web-1, HostKeyAlgorithms=ecdsa-sha2-nistp256, UpdateHostKeys=no and
+# GlobalKnownHostsFile=/dev/null, so a changed or unknown web-1 key fails the connection
+# instead of being learned. The export set is unchanged:
+# {CI_SSH_KEYFILE, WEB_HOST_SSH}. Terraform callers are pinned by `host_key =
+# local.web_1_ssh_host_key` on every connection block (server.tf, ci-ssh-key.tf), whose HCL
+# regex() is this writer's twin. A host-key failure is NEVER fixed by re-enabling TOFU: it is a
+# re-capture PR (scripts/capture-web-1-host-key.sh) or breach triage — see ADR-237.
 #
 # Composite actions cannot read the `secrets` context — every secret is an
 # explicit input referenced ONLY inside `env:` mappings (never a `run:` body or
@@ -102,7 +123,7 @@ inputs:
   server-ip:
     description: >-
       Optional. The address the redirect scopes to AND (for bash-ssh callers) the
-      keyfile+WEB_HOST_SSH/GIT_DATA_SSH export is enabled by. When set, the bridge
+      keyfile+WEB_HOST_SSH export is enabled by. When set, the bridge
       skips `terraform output -raw server_ip` (no terraform needed) and writes the
       CI key to a temp file + exports the ready ssh invocation the cutover scripts
       consume. When empty (default), behavior is byte-identical to the pre-input
@@ -158,6 +179,9 @@ runs:
         DOPPLER_PROJECT: soleur
         DOPPLER_CONFIG: prd_terraform
         SERVER_IP_INPUT: ${{ inputs.server-ip }}
+        # The pin writer ships with this action; passed through env so the run body carries no
+        # ${{ }} expression and can be extracted and executed by tests.
+        ACTION_PATH: ${{ github.action_path }}
       # The bridge connection authenticates with var.ci_ssh_private_key
       # (agent = false in CI). The secret name (DEPLOY_SSH_PRIVATE_KEY) does NOT
       # map to the var name (ci_ssh_private_key) via --name-transformer tf-var,
@@ -189,9 +213,17 @@ runs:
           # teardown can shred the file even if the write below is interrupted.
           echo "CI_SSH_KEYFILE=$KEYFILE" >> "$GITHUB_ENV"
           printf '%s\n' "$KEY" > "$KEYFILE"
-          SSH_INVOCATION="ssh -i $KEYFILE -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root"
+          # HOST-KEY PIN (#7226, ADR-237): web-1's committed ECDSA-P256 pin becomes the ONLY
+          # trusted key. The writer validates the pin's shape and refuses (exit 1, nothing
+          # written) on anything but exactly one well-formed key line, which fails this step.
+          # This path is the bridge's own; clear a left-over copy so a persistent runner cannot
+          # trip the writer's duplicate-alias refusal.
+          KH="$RUNNER_TEMP/web-1.known_hosts"
+          rm -f "$KH"
+          bash "$ACTION_PATH/write-known-hosts.sh" web-1 \
+            "$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub" "$KH"
+          SSH_INVOCATION="ssh -F /dev/null -i $KEYFILE -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KH -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root"
           printf 'WEB_HOST_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
-          printf 'GIT_DATA_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
         else
           # terraform callers (apply-web-platform-infra.yml): the Go SSH client
           # authenticates with var.ci_ssh_private_key. Byte-identical to the

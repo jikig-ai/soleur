@@ -23,10 +23,20 @@
 #      green — a mutation proof that could not fail. The hardcoded rows below are
 #      kept as PARSER CHARACTERIZATION only; the gate is the extracted value.
 #
-# ABORTS (exit 2) rather than skipping when gitleaks is absent: ci.yml's
-# `test-scripts` shard installs the pinned 8.24.2 binary to /usr/local/bin, so
-# absence means a broken environment, not an optional tool. A fresh mutation
-# proof must never be able to silently skip (mirrors code-to-prd/test, #2726).
+# When gitleaks is not RUNNABLE (absent, or an unpinned version-manager shim
+# that resolves on PATH but exits non-zero — #8266), every arm that needs it
+# prints a SKIP line and the arms that do not (T0, T2's byte half, T6, P2, the
+# workflow `-m` check) still run. A skip is never silent and never a pass:
+# under CI=true the suite exits 1 at the end naming every skipped arm, because
+# ci.yml's `test-scripts` shard installs the pinned 8.24.2 binary to
+# /usr/local/bin, so a skip there means a broken environment. Locally it exits
+# 0 after listing them. (This replaced a hard `ABORT … exit 2`, which on a host
+# with an unrunnable shim was indistinguishable from a real regression.)
+#
+# DETECTION oracles (T3, T4, P1, the `-m` coupling arm) read the JSON report's
+# RuleIDs, never `rc == 1`: gitleaks exits 1 on a finding AND on a scan that
+# failed to run, so an exit-code oracle certifies "detected" about a scan that
+# never happened.
 #
 # The fixture repo is built on a branch named `trunk`, NOT `main`: the repo's
 # own commit-on-main guardrail blocks fixture commits when the ambient CWD sits
@@ -51,12 +61,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONFIG="$REPO_ROOT/.gitleaks.toml"
 WORKFLOW="$REPO_ROOT/.github/workflows/secret-scan.yml"
 
-if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "ABORT: gitleaks not installed. This is a mutation proof for a blocking" >&2
-  echo "       secret-scan gate; skipping it would defeat its purpose." >&2
-  echo "       CI installs it in ci.yml's test-scripts shard (pinned 8.24.2)." >&2
-  exit 2
-fi
+# Runnability probe — runs the binary; `command -v` alone certifies a shim that
+# cannot scan. `timeout` is optional (stock macOS lacks it and gtimeout).
+SUITE="gitleaks-merge-commit"
+# shellcheck source=lib/gitleaks-probe.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/gitleaks-probe.sh"
+gl_probe
+
+# Per-ARM skip. See the header: CI=true turns any skip into exit 1 at the end.
 
 PASS=0
 FAIL=0
@@ -136,6 +148,51 @@ scan_git_count() {
   )
 }
 
+# The rule the synthesized token is shaped for. Detection oracles assert THIS
+# RuleID is in the parsed report — not just "some finding", and never rc == 1.
+RULE="doppler-api-token"
+
+# report_rules <report.json> -> newline-separated, de-duplicated RuleIDs.
+# A missing, empty or unparseable report yields nothing, so an oracle built on
+# this reads a scan that never ran as "not detected" — the fail-loud direction.
+report_rules() {
+  jq -r '.[].RuleID' "$1" 2>/dev/null | sort -u
+}
+
+# ...but that is only honest about gitleaks if jq can actually parse. Without this
+# probe a missing or broken jq returns empty and T3/T4/T7 report "gitleaks dir
+# missed on-tree content" — a verdict about the SUBJECT sourced from a broken
+# INSTRUMENT, which is verbatim the #8266 class this suite exists to close, one
+# layer down. jq is not optional here; it IS the oracle, so it fails loud.
+if ! printf '%s' '[{"RuleID":"probe"}]' | jq -e -r '.[].RuleID' >/dev/null 2>&1; then
+  echo "FATAL: gitleaks-merge-commit.test: jq cannot parse a findings report, so every RuleID oracle below would read as 'gitleaks found nothing'. This is a broken instrument, not a gitleaks verdict — install jq." >&2
+  exit 2
+fi
+
+# scan_git_rules <repo-dir> <log-opts> -> RuleIDs `gitleaks git` reported.
+scan_git_rules() {
+  (
+    cd "$1" || exit 1
+    rpt=$(mktemp -t glreport.XXXXXXXX.json)
+    gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$2" \
+      --report-format json --report-path "$rpt" >/dev/null 2>&1
+    report_rules "$rpt"
+    rm -f "$rpt"
+  )
+}
+
+# scan_dir_rules <dir> -> RuleIDs `gitleaks dir .` reported for that tree.
+scan_dir_rules() {
+  (
+    cd "$1" || exit 1
+    rpt=$(mktemp -t glreport.XXXXXXXX.json)
+    gitleaks dir . --config "$CONFIG" --no-banner --exit-code 1 \
+      --report-format json --report-path "$rpt" >/dev/null 2>&1
+    report_rules "$rpt"
+    rm -f "$rpt"
+  )
+}
+
 # patch_bytes <log-opts-for-git-log> -> bytes of patch body
 # Anchored on 'diff --' so it catches BOTH `diff --git` (normal) and
 # `diff --cc` (combined). Anchoring on 'diff --git' alone silently reports 0
@@ -167,6 +224,9 @@ fi
 echo "T1: parser characterization — which walks see merge-exclusive content"
 # Hardcoded rows: characterization of gitleaks' walk behaviour, NOT the gate.
 # The gate is T3, which reads the shipped workflow.
+if [[ "$HAVE_GITLEAKS" != "1" ]]; then
+  _skip_arm "$SUITE: T1" "$GITLEAKS_REASON"
+else
 for row in \
   "--no-merges HEAD|0|today's PR/merge_group/push:main shape — MISSES" \
   "HEAD|0|bare HEAD — MISSES" \
@@ -184,13 +244,14 @@ for row in \
     fail "$label — expected rc=$want, got rc=$got"
   fi
 done
+fi  # T1 HAVE_GITLEAKS
 
 echo "T2: --cc is a SILENT NO-OP (emits patch bytes, detects nothing)"
 # Both halves matter. Asserting only rc=0 would leave the trap re-readable as
 # "--cc simply produces no output"; asserting only bytes>0 would not show the
 # miss. Together they pin: gitleaks ignores combined-diff format.
+# The byte half needs only git, so it runs without gitleaks; the rc half skips.
 cc_bytes=$(patch_bytes "--cc")
-cc_rc=$(scan_git "--cc HEAD")
 m_bytes=$(patch_bytes "-m")
 plain_bytes=$(patch_bytes "")
 if [[ "$cc_bytes" -gt 0 ]]; then
@@ -198,10 +259,15 @@ if [[ "$cc_bytes" -gt 0 ]]; then
 else
   fail "--cc emitted no patch bytes — fixture/extraction broken, trap unproven"
 fi
-if [[ "$cc_rc" == "0" ]]; then
-  pass "--cc detects NOTHING despite emitting content (rc=0) — never substitute for -m"
+if [[ "$HAVE_GITLEAKS" != "1" ]]; then
+  _skip_arm "$SUITE: T2 (--cc detects nothing)" "$GITLEAKS_REASON"
 else
-  fail "--cc unexpectedly detected (rc=$cc_rc) — gitleaks parser behaviour changed; re-evaluate #6721"
+  cc_rc=$(scan_git "--cc HEAD")
+  if [[ "$cc_rc" == "0" ]]; then
+    pass "--cc detects NOTHING despite emitting content (rc=0) — never substitute for -m"
+  else
+    fail "--cc unexpectedly detected (rc=$cc_rc) — gitleaks parser behaviour changed; re-evaluate #6721"
+  fi
 fi
 if [[ "$plain_bytes" == "0" && "$m_bytes" -gt 0 ]]; then
   pass "plain walk emits 0 patch bytes; -m emits $m_bytes"
@@ -215,6 +281,8 @@ CRON_OPTS=$(awk '/name: Scan \(full history, weekly cron\)/{f=1} f && /log-opts=
   "$WORKFLOW" | sed -E 's/.*--log-opts="([^"]*)".*/\1/')
 if [[ -z "$CRON_OPTS" ]]; then
   fail "could not extract cron --log-opts from secret-scan.yml (YAML restructured?)"
+elif [[ "$HAVE_GITLEAKS" != "1" ]]; then
+  _skip_arm "$SUITE: T3" "$GITLEAKS_REASON"
 else
   # The cron ships `-m --all`; --all is meaningless in the fixture repo (no other
   # refs) but harmless. Substitute the fixture's own ref so the walk is scoped.
@@ -236,11 +304,17 @@ else
 fi
 
 echo "T4: GATE — full-tree scan detects content still on the tree"
-tree_rc=$( (cd "$FIXTURE" && gitleaks dir . --config "$CONFIG" --no-banner --exit-code 1 >/dev/null 2>&1; echo $?) )
-if [[ "$tree_rc" == "1" ]]; then
-  pass "gitleaks dir detects merge-introduced content on the tree"
+# RuleID oracle, as T3: `gitleaks dir` exits 1 when the scan fails to run too,
+# so `rc == 1` passed this gate about a scan that read nothing (#8266).
+if [[ "$HAVE_GITLEAKS" != "1" ]]; then
+  _skip_arm "$SUITE: T4" "$GITLEAKS_REASON"
 else
-  fail "gitleaks dir missed on-tree content (rc=$tree_rc)"
+  tree_rules=$(scan_dir_rules "$FIXTURE")
+  if grep -qx "$RULE" <<<"$tree_rules"; then
+    pass "gitleaks dir detects merge-introduced content on the tree ($RULE in report)"
+  else
+    fail "gitleaks dir missed on-tree content — $RULE not in the report (got: ${tree_rules:-<none>}); a scan that never ran reads the same"
+  fi
 fi
 
 echo "T5: GATE — the PR-time window (BASE..HEAD spanning a conflict resolution)"
@@ -249,6 +323,8 @@ echo "T5: GATE — the PR-time window (BASE..HEAD spanning a conflict resolution
 # conflict, introduces a secret in the resolution).
 if [[ -z "$BASE_SHA" ]]; then
   fail "could not resolve fixture BASE_SHA"
+elif [[ "$HAVE_GITLEAKS" != "1" ]]; then
+  _skip_arm "$SUITE: T5" "$GITLEAKS_REASON"
 else
   pr_rc=$(scan_git "--no-merges ${BASE_SHA}..HEAD")
   if [[ "$pr_rc" == "0" ]]; then
@@ -383,11 +459,17 @@ if [[ -z "$CB" || -z "$CM" ]]; then
 else
   # P1 (non-vacuity): the planted secret must be detectable at all. Without
   # this, every arm below returns rc=0 and the suite reports "no coupling"
-  # about a fixture that contains nothing to find.
-  if [[ "$(scan_coupling "${CB}~1..${CB}")" == "1" ]]; then
-    pass "P1: planted trunk secret fires standalone (fixture is non-vacuous)"
+  # about a fixture that contains nothing to find. RuleID oracle, not rc: a scan
+  # that fails to run also exits 1, and would certify a fixture it never read.
+  if [[ "$HAVE_GITLEAKS" != "1" ]]; then
+    _skip_arm "$SUITE: T7 P1" "$GITLEAKS_REASON"
   else
-    fail "P1: planted trunk secret does NOT fire standalone — fixture invalid, T7 result is meaningless"
+    p1_rules=$(scan_git_rules "$COUPLING" "${CB}~1..${CB}")
+    if grep -qx "$RULE" <<<"$p1_rules"; then
+      pass "P1: planted trunk secret fires standalone ($RULE in report — fixture is non-vacuous)"
+    else
+      fail "P1: planted trunk secret does NOT fire standalone ($RULE not in report, got: ${p1_rules:-<none>}) — fixture invalid, T7 result is meaningless"
+    fi
   fi
   # P2: the merge must be a genuine 2-parent merge, else -m has nothing to expand.
   if [[ "$(git -C "$COUPLING" rev-list --parents -n1 "$CM" | wc -w)" == "3" ]]; then
@@ -396,17 +478,24 @@ else
     fail "P2: M is not a 2-parent merge — -m has nothing to expand"
   fi
 
-  arm_today=$(scan_coupling "--no-merges ${CB}..${CM}")
-  arm_dash_m=$(scan_coupling "-m ${CB}..${CM}")
-  if [[ "$arm_today" == "0" ]]; then
-    pass "shipped PR form (--no-merges BASE..HEAD) does NOT attribute trunk's secret to the PR (rc=0)"
+  if [[ "$HAVE_GITLEAKS" != "1" ]]; then
+    _skip_arm "$SUITE: T7 arm_today" "$GITLEAKS_REASON"
+    _skip_arm "$SUITE: T7 arm_dash_m" "$GITLEAKS_REASON"
   else
-    fail "expected shipped PR form to stay clean (rc=0), got rc=$arm_today"
-  fi
-  if [[ "$arm_dash_m" == "1" ]]; then
-    pass "COUPLING CONFIRMED: -m BASE..HEAD attributes trunk-originated content to the PR (rc=1)"
-  else
-    fail "expected -m to couple trunk content (rc=1), got rc=$arm_dash_m — re-derive the PR-job decision before trusting it"
+    arm_today=$(scan_coupling "--no-merges ${CB}..${CM}")
+    # The coupling claim is "the -m walk REPORTS trunk's secret", so it reads the
+    # report's RuleIDs. On rc it passed against a scan that never ran.
+    arm_dash_m=$(scan_git_rules "$COUPLING" "-m ${CB}..${CM}")
+    if [[ "$arm_today" == "0" ]]; then
+      pass "shipped PR form (--no-merges BASE..HEAD) does NOT attribute trunk's secret to the PR (rc=0)"
+    else
+      fail "expected shipped PR form to stay clean (rc=0), got rc=$arm_today"
+    fi
+    if grep -qx "$RULE" <<<"$arm_dash_m"; then
+      pass "COUPLING CONFIRMED: -m BASE..HEAD attributes trunk-originated content to the PR ($RULE in report)"
+    else
+      fail "expected -m to couple trunk content ($RULE in report), got: ${arm_dash_m:-<none>} — re-derive the PR-job decision before trusting it"
+    fi
   fi
 fi
 
@@ -426,6 +515,42 @@ else
   fail "a PR/merge_group step uses '-m BASE..HEAD' ($pr_dash_m) — coupling is confirmed above"
 fi
 
+# CI fail-on-skip contract, asserted against the epilogue's REAL BYTES. That
+# contract is the only thing stopping the skipped arms from reading as green on a
+# runner without gitleaks, and nothing asserted it — a refactor of the tail would
+# drop it silently and the shard would stay green. Extracted between the markers
+# and driven through a three-row truth table, so a mutation to the SHIPPED code
+# (not a copy) reds.
+_t_ci_contract() {
+  local body rc
+  body=$(awk '/^# >>> ci-contract-epilogue$/{f=1;next} /^# <<< ci-contract-epilogue$/{f=0} f' "${BASH_SOURCE[0]}")
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    fail "CI fail-on-skip contract — epilogue markers matched nothing — the extraction is broken, not the contract"
+    return
+  fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" != 1 ]]; then fail "CI fail-on-skip contract — CI=true with skips did not exit 1"; return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); unset CI; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then fail "CI fail-on-skip contract — a local skip (no CI) exited 1"; return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then fail "CI fail-on-skip contract — CI=true with no skips exited 1"; return; fi
+  pass "CI fail-on-skip contract (3-row truth table on the real epilogue)"
+}
+_t_ci_contract
+
 echo ""
-echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed, ${#SKIPPED_ARMS[@]} arm(s) skipped ==="
+# >>> ci-contract-epilogue
+if [[ "${#SKIPPED_ARMS[@]}" -gt 0 ]]; then
+  echo "Skipped arms (gitleaks not runnable):"
+  printf '  - %s\n' "${SKIPPED_ARMS[@]}"
+  if [[ "${CI:-}" == "true" ]]; then
+    echo "FAIL: ${#SKIPPED_ARMS[@]} arm(s) skipped under CI=true — CI installs the pinned gitleaks 8.24.2, so every arm above must run there."
+    exit 1
+  fi
+fi
+# <<< ci-contract-epilogue
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

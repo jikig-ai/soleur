@@ -5,15 +5,15 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { acceptWorkspaceInvitation } from "@/server/workspace-invitations";
 import { sendInviteAcceptedEmail } from "@/server/notifications";
 import { reportSilentFallback } from "@/server/observability";
+import { boundedAuthGetUser } from "@/server/request-auth";
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/workspace/accept-invite", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userData = await boundedAuthGetUser(supabase);
+  const user = userData?.user;
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

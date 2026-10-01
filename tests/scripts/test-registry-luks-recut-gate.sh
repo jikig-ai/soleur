@@ -127,8 +127,8 @@ canonical_recut "$TMP/canonical.json"
 check "canonical recut PASS" 0 "registry_luks_recut_gate: PASS" "$TMP/canonical.json"
 
 # --- THE case that proves this issue's purpose --------------------------------------------
-# registry-host-replace PRESERVES the volume. Against a still-plaintext volume that boots
-# cloud-init into the blkid `*)` FATAL arm and DARKS the registry. The gate must ABORT.
+# registry-host-replace PRESERVES the volume, so it is a host replace, not a recut (against a
+# non-LUKS volume it boots cloud-init into the blkid `*)` FATAL arm). The gate must ABORT.
 # NOTE the attachment/NIC shape: this fixture must be a FAITHFUL registry-host-replace plan,
 # because the cross-gate divergence block below asserts the host-replace gate PASSES it. In a
 # real host replace the SERVER is replaced, which forces its volume-attachment and private NIC

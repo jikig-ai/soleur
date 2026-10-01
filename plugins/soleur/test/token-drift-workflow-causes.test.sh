@@ -645,7 +645,7 @@ echo "T13: narrow coverage has a delivery channel that survives a GREEN clean ru
 #   always()   — a degraded run can exit 0, so failure()/success()-implicit would skip the
 #                step on exactly the runs it exists for
 #   degraded   — the state this channel's title, body and remedy describe
-#   NO `!=`    — `token_drift` is matrix-gated, so on the other leg every output is '' and
+#   NO `!=`    — `token_drift` is matrix-gated, so on every other leg each output is '' and
 #                `'' != 'at-floor'` is TRUE; the step then fires from a leg that never
 #                scanned, with a blank body. Positive polarity is what makes it skip-safe.
 if grep -qF 'always()' <<<"$COV_IF" \
@@ -822,8 +822,8 @@ echo "T14h2: the backstop ALSO gates on each filer's outcome, which the flag can
 # backstop exists for, and gating on the flag alone is blind to precisely it.
 #
 # `outcome` is populated under `continue-on-error` and is `skipped` (never `failure`) for a
-# skipped step, so these legs preserve the positive polarity that keeps the `infra/github`
-# matrix leg and every healthy run from firing the email.
+# skipped step, so these legs preserve the positive polarity that keeps every matrix leg but
+# `apps/web-platform/infra`, and every healthy run, from firing the email.
 _t14h2=1
 for _st in coverage_issue coverage_close; do
   grep -qE "steps\.${_st}\.outcome[[:space:]]*==[[:space:]]*'failure'" <<<"$CHAN_IF" \

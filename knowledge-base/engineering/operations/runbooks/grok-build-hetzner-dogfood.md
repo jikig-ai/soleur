@@ -36,6 +36,12 @@ enable_grok_dogfood = true   # default false
 
 Operator-local apply (after free slot + stock check for `cx33` in `hel1`):
 
+> **#8209 / ADR-241 — the single-loader form below is the PRE-cutover one.** After the Tier-B
+> cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the inner
+> `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
+> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+> invocation. This note covers both occurrences below.
+
 ```bash
 cd apps/web-platform/infra
 export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…   # R2 backend

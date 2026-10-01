@@ -24,6 +24,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { sync as globSync } from "fast-glob";
+import { stripComments } from "../helpers/strip-comments";
 
 const SERVER_DIR = "server";
 const OUT_OF_SCOPE_MARKER = "byok-audit-writer-sweep: out-of-scope";
@@ -102,10 +103,6 @@ describe("BYOK audit writer sweep", () => {
    * string literals, but TypeScript code that puts `runWithByokLease(`
    * inside a string is itself a regression signal worth surfacing.
    */
-  const stripComments = (src: string): string =>
-    src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/\/\/.*$/gm, "");
 
   // Filter to call-sites that open a BYOK lease (excluding the definition).
   // PR-F RV17: also flag alias-rename imports — see ALIAS_IMPORT_RE above.

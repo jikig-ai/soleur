@@ -98,6 +98,23 @@ t "commit-body gh pr ready stripped → CMD_RE no-match (#5192)" "$CMD_RE" "$FP_
 REAL_SCAN=$(strip_command_bodies $'git commit -F - <<EOF\nbody\nEOF\n && gh pr merge 7 --squash --auto')
 t "real gh pr merge --auto after heredoc still fires (#5192)" "$CMD_RE" "$REAL_SCAN" match
 
+# --- Option (d): the deny reason must name soleur:operator-bootstrap ---------
+# The gate is the one place the undeferred steps are enumerated, so it is the
+# one place the bootstrap script the rules mandate can be produced. A reason
+# that offers only "file, cite or attest" hands the operator three ways to
+# record the step and none to remove it (review P2-16).
+d_line=$(grep -E 'REASON_LINES\+=\("  \(d\) ' "$HOOK" || true)
+if [[ -n "$d_line" ]] \
+   && grep -q 'soleur:operator-bootstrap' <<<"$d_line" \
+   && grep -qE '(2\+|≥2|two or more)' <<<"$d_line" \
+   && grep -qiE 'same credential' <<<"$d_line"; then
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "PASS: deny reason offers option (d) naming soleur:operator-bootstrap with its 2+-steps-same-credential precondition"
+else
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  echo "FAIL: deny reason lacks option (d) naming soleur:operator-bootstrap with its precondition"
+fi
+
 # --- Hook script syntax check (no real invocation; lacks gh + PR context) --
 
 if bash -n "$HOOK"; then

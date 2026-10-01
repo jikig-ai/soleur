@@ -499,12 +499,140 @@ if [[ ! -f "$SCRIPT" ]]; then
   exit 1
 fi
 
+
+# ── AGGREGATOR-BEFORE-READ (#8377 / ADR-235) ───────────────────────────────────────────────
+#
+# rule-metrics.json is no longer committed: it aggregates gitignored local incident data
+# (ADR-091), so the committed copy only ever reflected whichever worktree last ran the
+# aggregator. Untracked, it is simply ABSENT on a fresh clone -- so rule-prune.sh must build it
+# rather than exit 2 telling the operator to run a second command.
+#
+# These cases relocate the script into a fixture tree and leave RULE_METRICS_ROOT UNSET, which
+# is the whole point: the new branch is gated on that variable being unset, so a case that sets
+# it (every case above) cannot reach the code under test. Relocating is what keeps an unset
+# RULE_METRICS_ROOT from pointing at the real repo and running the real aggregator over it.
+# Owning trap for the relocation fixtures (ADR-129). The per-case `rm -rf "$root"` lines
+# throughout this file run only on the path that reaches them: the three cases below can
+# `_report ... fail` and `return` early, and a `set -e` abort or a signal skips cleanup
+# entirely, leaving a populated tree under $TMPDIR. One trap at file scope owns every
+# relocation root; the per-case removals stay as the happy-path fast free.
+_RELOCATED_ROOTS=()
+_cleanup_relocated_roots() {
+  local d
+  for d in "${_RELOCATED_ROOTS[@]:-}"; do
+    # Guard the expansion: an empty array under `set -u` yields "", and `rm -rf ""`
+    # is a no-op only by luck of the shell — never rely on that.
+    [[ -n "$d" && -d "$d" ]] && rm -rf -- "$d"
+  done
+  # An EXIT trap that falls off its end hands ITS last status to the shell, and the
+  # test above is false for every root the per-case `rm -rf` already freed — i.e. the
+  # normal path. Without this the suite exits 1 while printing "0 failed".
+  return 0
+}
+trap _cleanup_relocated_roots EXIT
+
+_setup_relocated() {
+  local tmp; tmp=$(mktemp -d)
+  mkdir -p "$tmp/scripts/lib" "$tmp/knowledge-base/project"
+  cp "$SCRIPT" "$tmp/scripts/rule-prune.sh"
+  # rule-prune.sh sources this from $SCRIPT_DIR/lib; a relocation that drops it would make
+  # every case below fail at load time for a reason unrelated to what they assert.
+  cp "$REPO_ROOT/scripts/lib/rule-metrics-constants.sh" "$tmp/scripts/lib/"
+  _build_fake_gh "$tmp"
+  echo "$tmp"
+}
+
+# Writes a stub aggregator that emits a VALID metrics file and exits 0.
+_stub_aggregator_ok() {
+  cat > "$1/scripts/rule-metrics-aggregate.sh" <<'AGG'
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+echo "STUB_AGGREGATOR_RAN" >> "$ROOT/aggregator.calls"
+mkdir -p "$ROOT/knowledge-base/project"
+jq -n '{schema:1, generated_at:"2026-09-20T00:00:00Z", rules:[], summary:{total_rules_tagged:0, rules_unused_over_8w:0, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}}' \
+  > "$ROOT/knowledge-base/project/rule-metrics.json"
+AGG
+  chmod +x "$1/scripts/rule-metrics-aggregate.sh"
+}
+
+# T-agg1: metrics absent, RULE_METRICS_ROOT unset -> the aggregator runs and the read succeeds.
+t_agg_runs_when_absent() {
+  local root; root=$(_setup_relocated)
+  _RELOCATED_ROOTS+=("$root")   # parent scope: the helper runs in a command-substitution subshell
+  _stub_aggregator_ok "$root"
+  local rc=0
+  PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" \
+    bash "$root/scripts/rule-prune.sh" --weeks=8 --dry-run > "$root/out.txt" 2>&1 || rc=$?
+  [[ -f "$root/aggregator.calls" ]] \
+    && _report "aggregator runs when rule-metrics.json is absent" ok \
+    || _report "aggregator runs when rule-metrics.json is absent" fail "not invoked; out=$(cat "$root/out.txt")"
+  [[ "$rc" -eq 0 ]] \
+    && _report "rule-prune succeeds after building the metrics file" ok \
+    || _report "rule-prune succeeds after building the metrics file" fail "rc=$rc out=$(cat "$root/out.txt")"
+  rm -rf "$root"
+}
+
+# T-agg2: the aggregator fails AFTER a partial write. The partial file must be REMOVED, not
+# left for the schema check to misreport as corruption -- and rule-prune must exit 2 naming the
+# aggregator's own rc, so the operator debugs the aggregator rather than the metrics file.
+t_agg_failure_removes_partial() {
+  local root; root=$(_setup_relocated)
+  _RELOCATED_ROOTS+=("$root")   # parent scope: the helper runs in a command-substitution subshell
+  cat > "$root/scripts/rule-metrics-aggregate.sh" <<'AGG'
+#!/usr/bin/env bash
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+mkdir -p "$ROOT/knowledge-base/project"
+printf '{"schema":1,"rules":[' > "$ROOT/knowledge-base/project/rule-metrics.json"   # truncated
+exit 7
+AGG
+  chmod +x "$root/scripts/rule-metrics-aggregate.sh"
+  local rc=0
+  PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" \
+    bash "$root/scripts/rule-prune.sh" --weeks=8 --dry-run > "$root/out.txt" 2>&1 || rc=$?
+  [[ "$rc" -eq 2 ]] \
+    && _report "aggregator failure exits 2" ok \
+    || _report "aggregator failure exits 2" fail "rc=$rc out=$(cat "$root/out.txt")"
+  grep -q "aggregator failed (rc=7)" "$root/out.txt" \
+    && _report "aggregator failure names its rc" ok \
+    || _report "aggregator failure names its rc" fail "$(cat "$root/out.txt")"
+  [[ ! -f "$root/knowledge-base/project/rule-metrics.json" ]] \
+    && _report "a partial metrics file is removed on aggregator failure" ok \
+    || _report "a partial metrics file is removed on aggregator failure" fail "partial file survived"
+  rm -rf "$root"
+}
+
+# T-agg3: RULE_METRICS_ROOT SET -> the aggregator must NOT run. Tests and CI point that
+# variable at a fixture they have already populated; regenerating over it would overwrite the
+# fixture with a scan of the real machine, which is both wrong and slow.
+t_agg_skipped_when_root_set() {
+  local root; root=$(_setup_relocated)
+  _RELOCATED_ROOTS+=("$root")   # parent scope: the helper runs in a command-substitution subshell
+  _stub_aggregator_ok "$root"
+  # Give it a valid file so the run has no reason to fail for other causes.
+  local cutoff; cutoff=$(date -u -d "-70 days" +%Y-%m-%dT%H:%M:%SZ)
+  jq -n --arg seen "$cutoff" '{schema:1, generated_at:"2026-09-20T00:00:00Z",
+    rules:[{id:"hr-never-used-a", section:"Hard Rules", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"A"}],
+    summary:{total_rules_tagged:1, rules_unused_over_8w:1, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}}' \
+    > "$root/knowledge-base/project/rule-metrics.json"
+  PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" RULE_METRICS_ROOT="$root" \
+    bash "$root/scripts/rule-prune.sh" --weeks=8 --dry-run > "$root/out.txt" 2>&1 || true
+  [[ ! -f "$root/aggregator.calls" ]] \
+    && _report "aggregator is NOT run when RULE_METRICS_ROOT is set" ok \
+    || _report "aggregator is NOT run when RULE_METRICS_ROOT is set" fail "it ran and clobbered the fixture"
+  rm -rf "$root"
+}
+
+
 t_files_issues
 t_idempotent
 t_dry_run
 t_weeks_zero
 t_invalid_rule_id_skipped
 t_body_has_verify_block
+t_agg_runs_when_absent
+t_agg_failure_removes_partial
+t_agg_skipped_when_root_set
 
 # --propose-retirement (#3120 C2) tests
 tp1_no_candidates

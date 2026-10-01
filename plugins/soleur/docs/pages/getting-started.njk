@@ -94,7 +94,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
         </div>
 
         <div class="callout">
-          <strong>Updating later?</strong> It takes two commands, and the first one looks like enough on its own. <code>claude plugin marketplace update soleur</code> advances the marketplace checkout; <code>claude plugin update soleur</code> updates the plugin you actually run. Skipping the second leaves you on the old version while the new one looks installed &mdash; and if a fix still isn&rsquo;t taking effect, <code>claude plugin uninstall soleur &amp;&amp; claude plugin install soleur</code> is the step guaranteed to converge them.
+          <strong>Updating later?</strong> It takes two commands, and the first one looks like enough on its own. <code>claude plugin marketplace update soleur-marketplace</code> advances the marketplace checkout; <code>claude plugin update soleur@soleur-marketplace</code> updates the plugin you actually run. Name the marketplace in both halves &mdash; on current releases the bare plugin name can fail with <code>Plugin not found</code>, and if you added this repository directly the id is <code>soleur</code>, so run <code>claude plugin list</code> and use whatever it prints beside Soleur. Skipping the second command leaves you on the old version while the new one looks installed &mdash; and if a fix still isn&rsquo;t taking effect, <code>claude plugin uninstall soleur@soleur-marketplace &amp;&amp; claude plugin install soleur@soleur-marketplace</code> is the step guaranteed to converge them.
         </div>
 
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>

@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
-# lint-followthrough-varq-ban.sh -- fail when a follow-through probe gates its exit
-# on the banned `: "${VAR:?msg}"` / colon-less `${VAR?msg}` word-expansion (#6757).
+# lint-followthrough-varq-ban.sh -- the follow-through PROBE lint. Four rules, one exit
+# contract. Rule 1 (#6757): no probe may gate its exit on the banned `: "${VAR:?msg}"` /
+# colon-less `${VAR?msg}` word-expansion. Rule 2 (#7946): no file under the target dir may
+# name the retired credential. Rule 3 (#7490): every repo-relative path a probe assigns must
+# exist in the checkout. Rule 4 (#6617): a probe that reads issue comments AND branches on a
+# `RESULT:` verdict must route that decision through scripts/lib/trusted-verdict.sh -- stated
+# as the POSITIVE OBLIGATION, because a ban on the wrong mechanism was green over a probe that
+# read `.comments[].body` with no author filter at all. (Rule 4 had a body heading and no index
+# entry here, which is the same defect this header already records for rule 1 -- a reader
+# looking for it found it only in the failure message.) The name is kept although the file now does more than rule 1: it is
+# cited from followthrough-convention.md, ADR-031, the Article 30 register and several
+# learnings, and renaming it would churn point-in-time records.
+#
+# RULE 1 (#6757) -- the BANNED WORD-EXPANSION BAN. Rules 2 and 3 carry headings in both the
+# header and the body; rule 1 did not, so a reader looking for it found it only via the summary
+# line above.
 #
 # WHY: under the sweeper's non-interactive shell, `${VAR:?}` / `${VAR?}` ABORTS with
 # status 1 the instant the variable is unset/empty. In the sweep-followthroughs.sh exit
@@ -34,6 +48,44 @@
 # floor, so a broken rule-2 walk cannot hide behind rule 1's count -- and vice versa. Same
 # exit contract.
 #
+# RULE 3 (#7490) -- the PROBE REPO-PATH EXISTENCE check. Every assignment-shaped (or
+# `source`-shaped) repo-relative path literal in a non-test probe must name an artefact that
+# EXISTS in the checkout being tested, resolved from the repo root.
+#
+# WHY THE REPO ROOT IS THE RESOLUTION BASE: the sweeper runs every probe from there
+# (`scheduled-followthrough-sweeper.yml` -> `bash scripts/sweep-followthroughs.sh` -> `env -i
+# ... bash <script>`), so that is the directory a repo-relative literal actually resolves
+# against at run time. Resolving against TARGET_DIR would be a different, weaker property.
+#
+# WHY `git ls-files` AND NOT `-e`: a worktree carries untracked files, so `-e` passes locally
+# on an untracked artefact and reddens in CI. Tracked-ness removes that whole class. The
+# compared value is the tracked file set, which the SAME commit can move -- that is the point:
+# a rename that forgets the probe reddens the PR that renamed it. Directories count as
+# existing when any tracked file sits under them (a probe may legitimately cite a directory).
+#
+# THE `# repo-path: runtime` OPT-OUT IS PER LINE, NOT PER FILE. A file-scoped skip would pass
+# every row a naive matrix writes while silently exempting a real rot target -- the exact
+# failure this rule exists for. It has no live user since #7761 committed that probe's `.after`
+# sidecar (2026-09-24); the lint's own suite pins it with a synthetic fixture (R3-M20).
+#
+# DECLARED BLIND SPOTS (named, not silent): a path built by concatenation across lines or by
+# `printf -v`; a path assembled inside `$(cd ... && pwd)`; anything containing `..` (a
+# `$HERE/../../apps/...` script-relative literal is NOT normalised and is NOT checked); a
+# second path literal on a line that already yielded one; a path whose TOP-LEVEL directory is
+# not currently tracked (`plausible()` keys on the tracked top-dir set, so renaming a whole
+# top-level directory makes every reference into it silently unplausible rather than missing --
+# the one case where this rule degrades toward quiet); and anything in a `*.test.sh`
+# (rule 1's exclusion, load-bearing here because `ccla-representative-icla-7922.test.sh`
+# assigns a gitignored `node_modules/.bin/tsx` path that exists locally and not in the
+# `test-scripts` CI shard). A value that is a regex/glob pattern, a URL, or carries an
+# unresolved `$` is ignored by construction.
+#
+# Rules 1 and 3 share `exit 1` because both mean the same thing to the author: fix the probe.
+# Rule 3 has its OWN counters (`scanned_rule3`, `refs_rule3`, `missing_rule3`) and its OWN two
+# floors, so neither rule's floor vouches for another's walk. The two floors are distinct on
+# purpose: a broken GLOB and a broken REGEX are different vacuity modes, and the messages say
+# which.
+#
 # Usage:  lint-followthrough-varq-ban.sh [TARGET_DIR]
 #   no arg      -> scans <repo-root>/scripts/followthroughs (production run; ≥10-file floor)
 #   TARGET_DIR  -> scans that dir verbatim (how the .test.sh points it at a mktemp sandbox)
@@ -64,6 +116,7 @@ fi
 
 violations=0
 scanned=0
+# RULE 1: the banned `${VAR:?}` / `${VAR?}` word-expansion on an executable line.
 for f in "$TARGET_DIR"/*.sh; do
   [[ -e "$f" ]] || continue
   case "$f" in
@@ -97,12 +150,248 @@ while IFS= read -r hit; do
   violations=$((violations + 1))
 done <<<"$rule2_hits"
 
+# RULE 4: no probe may FILTER on `authorAssociation`. The trusted-verdict decision belongs to
+# scripts/lib/trusted-verdict.sh and nowhere else, which is what makes "the lib is the
+# chokepoint" a fact rather than an assertion: a probe cannot re-inline its own filter and stay
+# green.
+#
+# WHY IT IS BANNED. `authorAssociation` is computed against the READING token's visibility, so
+# under the sweeper's `GITHUB_TOKEN` an org member whose membership is PRIVATE renders as
+# CONTRIBUTOR and their verdict is dropped SILENTLY. Measured on #6617: the operator posted
+# `RESULT: PASS` on 2026-07-20 and the nightly sweeper reported FAIL for two months against an
+# issue whose verdict was already recorded. Effective repository permission does not depend on
+# membership visibility, so the lib resolves that instead.
+#
+# ANCHORED ON THE FILTER SHAPE, NOT THE BARE WORD — and this is the difference between a rule
+# that can be documented and one that cannot. Rule 2 bans a bare literal everywhere including
+# comments, which is right for a credential name. Here the bare word appears in every probe's
+# header explaining WHY not to use it, so a bare-word ban would false-fire on its own rationale
+# and force the explanation out of the file (cq-assert-anchor-not-bare-token). The property is
+# "no probe FILTERS on it", so the anchors are the comparison and the `select()` — a read for
+# reporting, e.g. printing the observed value, is not a filter and is not banned.
+# ANCHORED ON THE OBLIGATION, NOT ON ONE FORBIDDEN SPELLING -- and that distinction was
+# MEASURED, not reasoned. The first version of this rule banned the presence of the wrong
+# mechanism (`.authorAssociation ==` / `select(... .authorAssociation)`). Two independent
+# review lenses observed that the property the lib exists to establish is the ABSENCE of the
+# right one, which is not the same claim, and the gap was occupied: at the time this rule was
+# written `inngest-zot-client-authz-6500.sh` read `.comments[].body` with NO author filter at
+# all -- strictly WORSE than the spelling being banned, and invisible to it. The rule ran
+# clean (rc 0) over it while `grep -rn authorAssociation scripts/followthroughs/` found zero
+# live filters to ban. A rule green over the exact hole it advertises protection from is worse
+# than the documentation alone, because it converts "we wrote this down" into "we gated it".
+#
+# The obligation: a probe that reads issue COMMENTS and BRANCHES on an anchored `RESULT:`
+# verdict must route that decision through scripts/lib/trusted-verdict.sh. Both conjuncts are
+# load-bearing. Reading comments alone is not a verdict -- `anthropic-admin-key-6297.sh` counts
+# bot-authored marker comments and `inngest-watchdog-functions-query-6407.sh` greps issue text
+# for a technical failure signature; neither lets a comment decide a tracker's fate, and a rule
+# that fired on them would be reaching for an author filter that has nothing to filter.
+# An inline `authorAssociation` select is subsumed: it reads comments, branches on a verdict,
+# and does not source the lib, so it fires here without needing its own rule.
+# Three bypasses, all measured against synthetic probes at ship time (#8389 advisor consult),
+# all of them shapes a compliant-LOOKING probe reaches for:
+#   (a) the REST route was invisible. `gh api "repos/$R/issues/$N/comments" --jq '.[].body'`
+#       matched none of the three `gh issue view` spellings, so such a probe was neither a
+#       violation NOR counted in scanned_rule4 -- invisible to the rule AND to its own floor.
+#       LATENT, not live: measured 2026-09-20, no probe under scripts/followthroughs/ uses
+#       the REST comments route today, and the corpus is the same 5 probes before and after
+#       this widening. It is the idiom next door rather than an exotic one -- several probes
+#       already reach GitHub through `gh api` for other reads -- so the gap is one a future
+#       author walks into, which is exactly when a rule that cannot see them is worst.
+#   (b) the verdict only had to be EXTRACTED, not matched adjacently. The old regex required
+#       PASS/FAIL to sit next to `RESULT:`, so `v=$(grep -oE '^RESULT: [A-Z]+' | awk '{print $2}')`
+#       then `[[ $v == PASS ]]` decided a tracker's fate and passed. The obligation is about
+#       reading a verdict at all, so the anchor is now `RESULT:` on an executable line.
+#       Over-detection is deliberate and cheap: the remedy is "call the lib", which every
+#       legitimate comment-reading probe already does.
+READS_COMMENTS='--json[[:space:]]+comments|--comments|\.comments\[\]|issues/[^[:space:]"]*/comments'
+VERDICT_BRANCH='RESULT:'
+# The CALL, never the `source` line. Sourcing the lib and then reading `.comments[].body`
+# anyway satisfies a source-anchored pattern while leaving the decision exactly as
+# forgeable -- both endpoints pinned, the wire between them unpinned. Measured: the first
+# version of this regex also accepted the filename, and the mutation that reverts the
+# verdict read to an unfiltered one while LEAVING the source line in place -- which is what
+# a real regression looks like -- passed the rule at rc 0.
+LIB_CALL='trusted_verdict_bodies'
+
+# Counted over the files the rule's own predicate SELECTS, not over `find`. The previous
+# counter was `find "$TARGET_DIR" -type f | wc -l` -- byte-identical to rule 2's, so rule 4's
+# floor was true exactly when rule 2's was, rule 2's `exit 2` ran first, and rule 4's floor was
+# unreachable for every input. It existed only to be mutated by the test that existed to prove
+# it. This counts comment-reading probes, so a broken READS_COMMENTS regex drives it to zero
+# and trips the floor -- which is the failure this rule's walk can actually have.
+scanned_rule4=0
+rule4_hits=""
+while IFS= read -r f; do
+  [[ -n "$f" ]] || continue
+  # Comment-stripped: a probe's header explains WHY the lib is mandatory, and every one of
+  # those sentences quotes the constructs below (cq-assert-anchor-not-bare-token).
+  code="$(sed -E 's/^[[:space:]]*#.*$//' "$f")"
+  # The DENOMINATOR is "consumes issue comments by ANY route" -- a direct read OR the lib --
+  # so migrating a probe onto the lib moves it within the corpus instead of out of it. Counting
+  # only direct readers would make the floor fall every time the rule succeeds at its job, which
+  # is a floor that punishes compliance. (Measured while writing this: the first version counted
+  # direct readers, I derived its floor from the PRE-migration tree, and it fired at 2-of-3 on
+  # the very run that proved the migration had worked.)
+  direct=0; via_lib=0
+  printf '%s' "$code" | grep -qE -- "$READS_COMMENTS" && direct=1   # rule4-grep
+  printf '%s' "$code" | grep -qE -- "$LIB_CALL" && via_lib=1
+  (( direct == 1 || via_lib == 1 )) || continue
+  scanned_rule4=$((scanned_rule4 + 1))                              # rule4-count
+  (( direct == 1 )) || continue
+  printf '%s' "$code" | grep -qE -- "$VERDICT_BRANCH" || continue
+  # (c) NO via_lib exemption for a DIRECT reader. The old line was `(( via_lib == 0 )) || continue`,
+  # so a single occurrence of the call anywhere in the file exempted it -- a probe could call the
+  # lib once and then decide on an unfiltered `.comments[].body`, which is the "both endpoints
+  # pinned, the wire between them unpinned" shape this rule's own header says it closed, one level
+  # up. R4-M2d pinned only the `source`-line variant of it. A COMPLIANT probe has no raw comment
+  # read at all: it takes its bodies from the lib, so `direct == 1` is itself the defect and
+  # via_lib cannot excuse it. via_lib keeps its OTHER job untouched -- holding a lib-routed probe
+  # inside scanned_rule4 so the floor is not lowered by the rule succeeding.
+  rule4_hits="${rule4_hits}${f}"$'\n'
+done < <(find "$TARGET_DIR" -type f -name '*.sh' ! -name '*.test.sh' | sort)
+
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  lineno="$(grep -nE -- "$READS_COMMENTS" "$f" | head -1 | cut -d: -f1)"
+  echo "$f:${lineno:-1}: rule 4: reads issue comments AND branches on a RESULT: verdict WITHOUT routing the decision through scripts/lib/trusted-verdict.sh. This repo is PUBLIC with issues open, so an unfiltered '.comments[].body' accepts a verdict from ANY authenticated GitHub user -- one HTTP POST of 'RESULT: PASS' closes the tracker (#7448). Source the lib and call trusted_verdict_bodies. Do NOT re-inline an authorAssociation select instead: it is computed against the READING token's visibility, so a member with PRIVATE org membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped silently (#6617: two months of nightly FAIL on an already-recorded verdict)." >&2
+  violations=$((violations + 1))
+done <<<"$rule4_hits"
+
+# RULE 3: repo-relative path literals must name something that exists in the checkout.
+# The tracked set is files PLUS every ancestor directory of a tracked file, so a probe that
+# legitimately cites a DIRECTORY is not reported as a miss.
+#
+# The census program is held in a quoted heredoc rather than inlined in `awk '...'`: the
+# program's own body carries both `"` and `$`, and nesting it inside a single-quoted shell
+# word needs `'"'"'` seams that are a parse hazard in exactly the way this repo's own rules
+# warn about. A variable keeps the program readable and the quoting trivially correct.
+read -r -d '' RULE3_AWK <<'RULE3_AWK_EOF' || true
+function cut_at(rest,   i, c, out) {
+  out = ""
+  for (i = 1; i <= length(rest); i++) {
+    c = substr(rest, i, 1)
+    if (c == "\"" || c == "}" || c == " " || c == "\t") break
+    out = out c
+  }
+  return out
+}
+function plausible(p,   top) {
+  if (p == "") return 0
+  if (index(p, "/") == 0) return 0
+  if (p ~ /\$/) return 0
+  if (p ~ /\.\./) return 0
+  if (p ~ /[][*?\\()|^]/) return 0
+  if (p ~ /:\/\//) return 0
+  top = p; sub(/\/.*/, "", top)
+  if (index(TOPDIRS, "|" top "|") == 0) return 0
+  return 1
+}
+{
+  line = $0
+  if (line ~ /^[ \t]*#/) next
+  if (line ~ /#[ \t]*repo-path:[ \t]*runtime/) next
+  if (line !~ /^[ \t]*(local[ \t]+|export[ \t]+|readonly[ \t]+|declare[ \t]+-[a-zA-Z]+[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/ && line !~ /^[ \t]*(source|\.)[ \t]/) next
+  cand = ""; arm = ""
+  if (match(line, /"\$\{[A-Za-z_][A-Za-z0-9_]*:-\$\{[A-Za-z_][A-Za-z0-9_]*\}\//)) {
+    cand = cut_at(substr(line, RSTART + RLENGTH)); arm = "braced-default"
+  } else if (match(line, /"\$\{[A-Za-z_][A-Za-z0-9_]*:-\$[A-Za-z_][A-Za-z0-9_]*\//)) {
+    cand = cut_at(substr(line, RSTART + RLENGTH)); arm = "bare-default"
+  } else if (match(line, /"\$\{[A-Za-z_][A-Za-z0-9_]*:-/)) {
+    # Capture the default DIRECTLY. The first version walked backwards to the nearest `-`,
+    # which is the `-` of `:-` only when the first path segment is hyphen-free -- so
+    # `${OV:-knowledge-base/...}` yielded `base/legal/...`, whose top segment is not a tracked
+    # directory, and `plausible()` dropped the whole reference with no diagnostic. That is a
+    # silent MISS in the arm's own most likely shape: `knowledge-base/` is this repo's
+    # commonest repo-relative prefix. Measured: a seeded probe with one `knowledge-base/` and
+    # one `scripts/` absent default reported ONE miss, not two.
+    rest = substr(line, RSTART + RLENGTH)
+    if (rest ~ /^[A-Za-z0-9_.-]+\//) { cand = cut_at(rest); arm = "literal-default" }
+  } else if (match(line, /"\$\{[A-Za-z_][A-Za-z0-9_]*\}\//)) {
+    cand = cut_at(substr(line, RSTART + RLENGTH)); arm = "braced"
+  } else if (match(line, /"\$[A-Za-z_][A-Za-z0-9_]*\//)) {
+    cand = cut_at(substr(line, RSTART + RLENGTH)); arm = "bare"
+  } else if (match(line, /"[A-Za-z0-9_.-]+\//)) {
+    cand = cut_at(substr(line, RSTART + 1)); arm = "literal"
+  }
+  if (cand != "" && plausible(cand)) printf "%d\t%s\t%s\n", FNR, cand, arm
+}
+RULE3_AWK_EOF
+
+tracked_list="$( (cd "${REPO_ROOT:-.}" 2>/dev/null && git ls-files 2>/dev/null) || true )"
+# The membership set is written to a FILE and grepped as a file operand -- never
+# `printf ... | grep -qxF`. Under this script's `set -o pipefail`, `grep -q` closes the pipe on
+# its FIRST match, the producer takes SIGPIPE (141), and the pipeline exits non-zero although
+# grep matched -- so every tracked path would report as MISSING and the guard would be
+# false-RED on a clean tree. The failure is invisible for a small producer and certain for this
+# one (~18k lines, and the matches are early). Measured on this very file before the fix: 22
+# tracked paths reported missing. Same trap as the `grep -q`-on-a-pipe ban the repo's own work
+# rules carry. A file operand also makes it one open per reference instead of an 18k-line
+# re-serialisation.
+tracked_set_file="$(mktemp -t ft-tracked-set.XXXXXXXX)"
+trap 'rm -f "$tracked_set_file"' EXIT
+# Files plus every ancestor directory, so a probe citing a DIRECTORY is not a miss.
+printf '%s\n' "$tracked_list" \
+  | awk -F/ '{print; p=""; for (i=1;i<NF;i++) { p=(p==""?$i:p"/"$i); print p }}' \
+  | sort -u > "$tracked_set_file"
+TOPDIRS="|$(printf '%s\n' "$tracked_list" | grep / | cut -d/ -f1 | grep -xE '[A-Za-z0-9._-]+' | sort -u | paste -sd'|' -)|"
+
+scanned_rule3=0
+refs_rule3=0
+missing_rule3=0
+for f in "$TARGET_DIR"/*.sh; do
+  [[ -e "$f" ]] || continue
+  case "$f" in
+    *.test.sh) continue ;;
+  esac
+  scanned_rule3=$((scanned_rule3 + 1))
+  while IFS=$'\t' read -r lineno cand arm; do
+    [[ -z "${cand:-}" ]] && continue
+    refs_rule3=$((refs_rule3 + 1))
+    if ! grep -qxF -- "$cand" "$tracked_set_file"; then
+      echo "$f:$lineno: rule 3: MISSING $f -> $cand [$arm] -- not tracked in this checkout; the sweeper runs probes from the repo root, so this literal resolves to nothing. Repoint it, or annotate THAT LINE with '# repo-path: runtime' if the artefact is written at run time." >&2
+      missing_rule3=$((missing_rule3 + 1))   # rule3-missing
+      violations=$((violations + 1))
+    fi
+  done < <(awk -v TOPDIRS="$TOPDIRS" "$RULE3_AWK" "$f")   # rule3-census
+done
+
+# Rule 3's TWO floors. MIN_REF_FILES guards the GLOB (files walked); MIN_REFS guards the
+# REGEX (references extracted). A neutered regex walks every file and finds nothing, which the
+# file floor cannot see -- which is why there are two, with two messages naming which broke.
+# REPO_PATHS_MIN_REFS / REPO_PATHS_MIN_REF_FILES are TEST-ONLY overrides (mirroring
+# VARQ_BAN_MIN_PROBES); production CI never sets them. Both defaults were DERIVED from one run
+# of the committed census above, measured 2026-09-18 on the repointed tree: rule 3 WALKED 74
+# non-test probes and EXTRACTED 44 references from 29 of them. The two numbers count different
+# things and the floors must too -- `scanned_rule3` is every probe walked (74), not the 29 that
+# happen to carry a reference -- so the file floor sits just under the walk and the ref floor
+# just under the extraction. Slack is deliberate but small: refs are not one-per-file, and a
+# probe that legitimately loses its last path literal should not red the tree.
+MIN_REF_FILES="${REPO_PATHS_MIN_REF_FILES:-70}"
+MIN_REFS="${REPO_PATHS_MIN_REFS:-40}"
+if [[ "$is_production_run" == "yes" ]] && (( scanned_rule3 < MIN_REF_FILES )); then
+  echo "ERROR: rule 3 walked only $scanned_rule3 probe file(s) in $TARGET_DIR -- expected at least $MIN_REF_FILES; the GLOB or path is broken" >&2
+  exit 2
+fi
+if [[ "$is_production_run" == "yes" ]] && (( refs_rule3 < MIN_REFS )); then
+  echo "ERROR: rule 3 extracted only $refs_rule3 repo-path reference(s) from $scanned_rule3 file(s) -- expected at least $MIN_REFS; the census REGEX is broken (the walk is not: it saw $scanned_rule3 files)" >&2
+  exit 2
+fi
+
 # Minimum-cardinality floor (production run only): a broken glob yielding 0 files must not
 # pass vacuously. Skipped for an explicit sandbox dir (the .test.sh fixtures are few).
 # VARQ_BAN_MIN_PROBES is a TEST-ONLY override so the .test.sh can force a floor breach on the
 # real tree (set it above the probe count) and prove exit 2 fires; production CI never sets it
 # and gets the default 10.
 MIN_PROBES="${VARQ_BAN_MIN_PROBES:-10}"
+# Rule 4's own floor, on its OWN measure: probes that consume issue comments by any route.
+# MEASURED on the post-migration tree 2026-09-20 -- five, being anthropic-admin-key-6297 and
+# inngest-watchdog-functions-query-6407 (direct reads, neither a verdict) plus
+# concierge-strand-754ee124-5733, cpx22-invoice-reconcile-7431 and
+# inngest-zot-client-authz-6500 (via the lib). Floored at 3 rather than 5 so retiring a tracker
+# does not red the tree, and it is a FLOOR, not an equality: a new comment-reading probe must
+# not have to edit this number.
+MIN_COMMENT_READERS="${VARQ_BAN_MIN_COMMENT_READERS:-3}"
 if [[ "$is_production_run" == "yes" ]] && (( scanned < MIN_PROBES )); then
   echo "ERROR: only $scanned non-test probe(s) scanned in $TARGET_DIR -- expected the full set; the glob or path is broken" >&2
   exit 2
@@ -113,11 +402,17 @@ if [[ "$is_production_run" == "yes" ]] && (( scanned_rule2 < MIN_PROBES )); then
   echo "ERROR: rule 2 (retired-name ban) checked only $scanned_rule2 file(s) in $TARGET_DIR -- its walk resolved nothing; the glob or path is broken" >&2
   exit 2
 fi
+# Rule 4's own floor, keyed on ITS counter for the same reason: no rule's floor may vouch for
+# another's walk.
+if [[ "$is_production_run" == "yes" ]] && (( scanned_rule4 < MIN_COMMENT_READERS )); then
+  echo "ERROR: rule 4 (trusted-verdict obligation) found only $scanned_rule4 comment-reading probe(s) in $TARGET_DIR -- expected at least $MIN_COMMENT_READERS; the READS_COMMENTS regex or the walk is broken, and the rule is reporting clean over a corpus it cannot see" >&2
+  exit 2
+fi
 
 if (( violations > 0 )); then
-  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1) and/or the retired credential name (rule 2). See followthrough-convention.md §Author workflow." >&2
+  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1), the retired credential name (rule 2), a repo-relative path absent from this checkout (rule 3), and/or a comment-verdict read that bypasses scripts/lib/trusted-verdict.sh (rule 4). See followthrough-convention.md §Author workflow." >&2
   exit 1
 fi
 
-echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR)"
+echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing; rule 4 (trusted-verdict obligation) checked $scanned_rule4 comment-reading probe(s))"
 exit 0

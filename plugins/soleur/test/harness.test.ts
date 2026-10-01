@@ -127,11 +127,27 @@ describe("normalizeAgentName", () => {
 });
 
 describe("formatSkillInvocation", () => {
-  test("claude formats soleur: skill with args", () => {
+  test("claude formats the operator-typed slash command with args", () => {
     process.env.CLAUDECODE = "1";
-    expect(formatSkillInvocation("one-shot", "fix auth")).toBe(
-      "soleur:one-shot (args: fix auth)",
-    );
+    expect(formatSkillInvocation("one-shot", "fix auth")).toBe("/soleur:one-shot fix auth");
+    expect(formatSkillInvocation("plan")).toBe("/soleur:plan");
+  });
+
+  // Every arm must return something an operator can TYPE — that is the whole contract the
+  // `operator-typed-render` blocks cite. A parenthetical display form satisfies no harness.
+  test("no arm returns a non-typeable display form", () => {
+    for (const [env, prefix] of [
+      ["CLAUDECODE", "/soleur:"],
+      ["GROK_HOME", "/"],
+      ["CODEX_THREAD_ID", "$soleur:"],
+      ["DEVIN", "/soleur:"],
+    ] as const) {
+      for (const k of ["CLAUDECODE", "GROK_HOME", "CODEX_THREAD_ID", "DEVIN"]) delete process.env[k];
+      process.env[env] = "1";
+      const out = formatSkillInvocation("plan", "#123");
+      expect(out.startsWith(prefix)).toBe(true);
+      expect(out).not.toContain("(args:");
+    }
   });
 
   test("grok formats slash command", () => {
@@ -315,12 +331,19 @@ describe("pollInstructions", () => {
     expect(md).toContain("postmerge");
   });
 
-  test("devin documents get_output merge-deploy polling", () => {
+  test("devin arms merge-deploy waits as a background run_subagent loop", () => {
     const md = pollInstructions("devin");
-    expect(md).toContain("get_output");
+    expect(md).toContain("run_subagent");
+    expect(md).toContain("exit-coded");
     expect(md).toContain("/soleur:postmerge");
     expect(md).toContain("NEVER ask");
     expect(md).toContain("BEHIND");
     expect(md).toContain("/soleur:ship");
+    // The whole point of #8390's item 2: `devin/INSTRUCTIONS.md` measures that
+    // `get_output` only READS a backgrounded shell and cannot wait on an event,
+    // so naming it as the wait primitive tells a Devin session it is waiting
+    // while nothing will ever wake it. Absence is the property; a `toContain`
+    // on the replacement cannot express it.
+    expect(md).not.toContain("get_output");
   });
 });

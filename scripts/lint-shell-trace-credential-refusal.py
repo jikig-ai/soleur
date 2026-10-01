@@ -94,7 +94,7 @@ SIGNAL_GH_AUTH = r"gh auth token"
 # traces the word list UNEXPANDED (`+ for k in "${!seen[@]}"`), so even that
 # case emits nothing. And it is
 # the only way bash can iterate an associative array, so every script that uses
-# one was in scope. The bare `\$\{!` spelling flagged scripts/merge-kb-index.sh
+# one was in scope. The bare `\$\{!` spelling flagged a since-retired script
 # (#7935) for `for rel in "${!merged[@]}"`, a loop over knowledge-base row paths,
 # in a script that binds no credential at all. Both ways out of that -- an xtrace
 # refusal announcing a credential the script does not have, or a baseline entry

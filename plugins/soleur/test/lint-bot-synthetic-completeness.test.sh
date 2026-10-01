@@ -7,7 +7,7 @@
 # enumeration introduced for #3548 (R15 follow-up D5): the lint must now
 # detect any bot PR-creator workflow regardless of filename prefix, while
 # continuing to exempt composite-action consumers and the
-# skill-security-scan-pr-trailer CI workflow.
+# pr-quality-guards CI workflow.
 
 set -euo pipefail
 
@@ -168,13 +168,13 @@ assert_eq "1" "$rc" "(d) exits 1 when widened scope catches a missing-check file
 assert_contains "$output" "release-foo.yml" "(d) names the failing non-scheduled file"
 echo ""
 
-# Test (e): skill-security-scan-pr-trailer.yml is excluded even with full pattern (NEW).
-echo "Test (e): skill-security-scan-pr-trailer.yml is excluded by name"
+# Test (e): pr-quality-guards.yml is excluded even with full pattern (NEW).
+echo "Test (e): pr-quality-guards.yml is excluded by name"
 WF=$(setup_wf_dir "e")
 CONF="$TMPDIR_BASE/e/required-checks.txt"
 setup_config_file "$CONF"
 # Looks like a bot workflow (has gh pr create AND check-runs) but must be skipped.
-cat > "$WF/skill-security-scan-pr-trailer.yml" << 'YAML'
+cat > "$WF/pr-quality-guards.yml" << 'YAML'
 name: skill-security-scan PR trailer
 on: pull_request_target
 jobs:
@@ -189,8 +189,8 @@ output=$(WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" 2>&1) || tru
 rc=0; WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "0" "$rc" "(e) exits 0 (trailer is excluded, not linted)"
 # Must NOT appear in output as either ok/FAIL/skip line.
-if [[ "$output" == *"skill-security-scan-pr-trailer.yml"* ]]; then
-  echo "  FAIL: (e) skill-security-scan-pr-trailer.yml leaked into output"
+if [[ "$output" == *"pr-quality-guards.yml"* ]]; then
+  echo "  FAIL: (e) pr-quality-guards.yml leaked into output"
   echo "    output: $output"
   FAIL=$((FAIL + 1))
 else
@@ -300,11 +300,11 @@ echo ""
 # Test (i): trailer-lookalike must NOT be excluded (basename-exact-match guard).
 # Locks in the security hardening: substring exclusion would silently exempt
 # typo- or attacker-introduced look-alikes; exact basename comparison rejects them.
-echo "Test (i): evil-skill-security-scan-pr-trailer.yml is NOT excluded"
+echo "Test (i): evil-pr-quality-guards.yml is NOT excluded"
 WF=$(setup_wf_dir "i")
 CONF="$TMPDIR_BASE/i/required-checks.txt"
 setup_config_file "$CONF"
-cat > "$WF/evil-skill-security-scan-pr-trailer.yml" << 'YAML'
+cat > "$WF/evil-pr-quality-guards.yml" << 'YAML'
 name: Evil Spoof
 on: schedule
 jobs:
@@ -319,7 +319,7 @@ YAML
 output=$(WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" CONFIG_FILE="$CONF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "1" "$rc" "(i) exits 1 — spoofed lookalike is linted and fails for missing synthetics"
-assert_contains "$output" "evil-skill-security-scan-pr-trailer.yml" "(i) lookalike named in output"
+assert_contains "$output" "evil-pr-quality-guards.yml" "(i) lookalike named in output"
 echo ""
 
 # Test (j): whitespace-flexible `gh pr create` detection. A workflow that uses

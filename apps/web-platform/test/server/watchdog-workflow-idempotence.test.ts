@@ -1,0 +1,378 @@
+// #8495 — the watchdog workflows must tolerate a repeat run in one slot.
+//
+// The web-server dispatch clock (ADR-248) fires scheduled-inngest-health every
+// 15 min and scheduled-zot-restart-loop hourly, and a slot can hold a second,
+// queued run (a host collision or a late fallback `schedule:` tick). Two things
+// in those workflows were not idempotent against that and are pinned here by
+// EXECUTING the workflow's own bytes against a stubbed `gh`:
+//   1. Tracker create-or-comment lookups used GitHub issue SEARCH, which lags a
+//      just-created issue — the repeat run would file a duplicate tracker. They
+//      now LIST by the tracker's label and match the title.
+//   2. The auto-restart step would stack a second restart on one still running.
+
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
+
+const REPO_ROOT = resolve(__dirname, "../../../..");
+const WORKFLOWS = [
+  ".github/workflows/scheduled-inngest-health.yml",
+  ".github/workflows/scheduled-zot-restart-loop.yml",
+];
+
+type Step = { name?: string; run?: string };
+function steps(file: string): Step[] {
+  const doc = parseYaml(readFileSync(join(REPO_ROOT, file), "utf-8")) as {
+    jobs: Record<string, { steps?: Step[] }>;
+  };
+  return Object.values(doc.jobs).flatMap((j) => j.steps ?? []);
+}
+
+const scratch = mkdtempSync(join(tmpdir(), "wd-idem-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+// A PATH-shimmed `gh` that logs its argv and answers from env. It REFUSES an
+// issue search (exit 64), so a lookup that regresses to `--search` fails loudly.
+const BIN = join(scratch, "bin");
+execFileSync("mkdir", ["-p", BIN]);
+writeFileSync(
+  join(BIN, "gh"),
+  `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_LOG"
+case "$1 $2" in
+  "issue list")
+    # Emulates the real endpoint: --label filters (a tracker's label is its title's
+    # bracket prefix), --jq is applied; --search is refused.
+    label=""; jqexpr=""; prev=""
+    for a in "$@"; do
+      [[ "$a" == "--search" ]] && { echo "stub: --search refused" >&2; exit 64; }
+      [[ "$prev" == "--label" ]] && label="$a"
+      [[ "$prev" == "--jq" ]] && jqexpr="$a"
+      prev="$a"
+    done
+    filtered=$(jq -c --arg l "$label" '[.[] | select($l == "" or (.title | startswith("[" + $l + "]")))]' <<<"$STUB_ISSUES")
+    if [[ -n "$jqexpr" ]]; then jq -r "$jqexpr" <<<"$filtered"; else printf '%s' "$filtered"; fi ;;
+  "run list")
+    [[ "\${STUB_RUNS_FAIL:-0}" == "1" ]] && exit 1
+    printf '%s' "$STUB_RUNS" ;;
+  "workflow run") [[ "\${STUB_DISPATCH_FAIL:-0}" == "1" ]] && exit 1; : ;;
+  "issue create") [[ "\${STUB_CREATE_FAIL:-0}" == "1" ]] && exit 1; echo "https://github.com/o/r/issues/4242" ;;
+  "issue comment") [[ "\${STUB_COMMENT_FAIL:-0}" == "1" ]] && exit 1; : ;;
+  "label create") : ;;
+  *) echo "stub: unexpected gh $*" >&2; exit 64 ;;
+esac
+`,
+);
+chmodSync(join(BIN, "gh"), 0o755);
+
+function runBash(script: string, env: Record<string, string>): { out: string; log: string } {
+  const log = join(scratch, `gh-${Math.random().toString(36).slice(2)}.log`);
+  writeFileSync(log, "");
+  const out = execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+    env: {
+      PATH: `${BIN}:${process.env.PATH}`,
+      GH_LOG: log,
+      GH_REPO: "o/r",
+      ...env,
+    } as unknown as NodeJS.ProcessEnv,
+    encoding: "utf-8",
+  });
+  return { out, log: readFileSync(log, "utf-8") };
+}
+
+// Every tracker lookup line (create-or-comment dedup) with the title it serves.
+function trackerLookups(): Array<{ file: string; line: string; title: string }> {
+  const out: Array<{ file: string; line: string; title: string }> = [];
+  for (const file of WORKFLOWS) {
+    for (const st of steps(file)) {
+      // Dedup lookups live in steps that CREATE trackers; recovery (close) steps
+      // may keep searching — a lagged close only delays by one run.
+      if (!st.run || !st.run.includes("gh issue create")) continue;
+      const lines = st.run.split("\n");
+      lines.forEach((line, i) => {
+        if (!/^\s*EXISTING="?\$\(gh issue list /.test(line)) return;
+        const before = lines.slice(0, i).reverse();
+        const assign = before
+          .map((l) => l.match(/^\s*(?:ISSUE_TITLE|TITLE)="([^"$]*)"\s*$/))
+          .find(Boolean);
+        out.push({ file, line: line.trim(), title: assign ? assign[1] : "" });
+      });
+    }
+  }
+  return out;
+}
+
+describe("tracker lookups list by label, never search (#8495)", () => {
+  const lookups = trackerLookups();
+
+  it("finds every lookup site in both workflows (anti-vacuity)", () => {
+    expect(lookups.length).toBeGreaterThanOrEqual(17);
+    // The title-filtered set is exactly the #8495 rewrite: 15 converted sites.
+    expect(lookups.filter((l) => l.line.includes("select(.title")).length).toBe(15);
+    expect(new Set(lookups.map((l) => l.file)).size).toBe(2);
+    for (const l of lookups) expect(l.title, l.line).toMatch(/^\[ci\/[a-z0-9-]+\] /);
+  });
+
+  it.each(trackerLookups().map((l) => [l.title, l]))(
+    "%s: returns the open tracker whose title contains the class title, via its label",
+    (_title, l) => {
+      const label = l.title.match(/^\[([^\]]+)\]/)![1];
+      // Newest first, as gh lists: another class (other label), a sibling title
+      // under the SAME label, then this class's tracker (annotated), then an older one.
+      const issues = JSON.stringify([
+        { number: 5, title: "[ci/something-else] unrelated" },
+        { number: 11, title: `[${label}] a sibling class sharing this label` },
+        { number: 22, title: `${l.title} — annotated` },
+        { number: 33, title: l.title },
+      ]);
+      // Title-filtered lookups must pick 22; the two pre-existing label-only
+      // lookups (dedicated-host / no-live-scheduler) take the newest same-label
+      // issue by design.
+      const expected = l.line.includes("select(.title") ? 22 : 11;
+      const { out, log } = runBash(
+        `search_rc=0\nISSUE_TITLE='${l.title}'\nTITLE='${l.title}'\n${l.line}\necho "RESULT=$EXISTING"`,
+        { STUB_ISSUES: issues },
+      );
+      expect(out).toContain(`RESULT=${expected}`);
+      expect(log).toContain(`--label ${label}`);
+      expect(log).not.toContain("--search");
+    },
+  );
+
+  it("each tracker is CREATED with the label its lookup lists by (else the lookup could never find it)", () => {
+    for (const file of WORKFLOWS) {
+      for (const st of steps(file)) {
+        if (!st.run || !st.run.includes("gh issue create")) continue;
+        const lines = st.run.split("\n");
+        lines.forEach((line, i) => {
+          const m = line.match(/^\s*(?:ISSUE_TITLE|TITLE)="(\[([^\]]+)\][^"$]*)"\s*$/);
+          if (!m) return;
+          const label = m[2];
+          // The first `gh issue create` after this assignment must carry the label.
+          const rest = lines.slice(i + 1);
+          const createAt = rest.findIndex((l) => /gh issue create /.test(l));
+          expect(createAt, `${file}: no create after ${m[1]}`).toBeGreaterThanOrEqual(0);
+          const createCmd = rest.slice(createAt, createAt + 4).join(" ");
+          expect(createCmd, `${file}: ${m[1]}`).toMatch(
+            new RegExp(`--label "?${label.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}"?(\\s|$)`),
+          );
+        });
+      }
+    }
+  });
+
+  it("an empty list yields no tracker (so the run files one)", () => {
+    const l = lookups[0];
+    const { out } = runBash(
+      `search_rc=0\nISSUE_TITLE='${l.title}'\nTITLE='${l.title}'\n${l.line}\necho "RESULT=[$EXISTING]"`,
+      { STUB_ISSUES: "[]" },
+    );
+    expect(out).toContain("RESULT=[]");
+  });
+});
+
+describe("the auto-restart step never stacks a second restart (#8495)", () => {
+  const step = steps(WORKFLOWS[0]).find((s) => s.name === "Auto-dispatch inngest restart (failure)");
+  const now = Date.now();
+  const iso = (minAgo: number) => new Date(now - minAgo * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  it("the step exists and consults the dedup helper before dispatching", () => {
+    expect(step?.run).toBeDefined();
+    const run = step!.run!;
+    expect(run.indexOf("restart_recently_dispatched")).toBeGreaterThan(-1);
+    expect(run.indexOf("restart_recently_dispatched")).toBeLessThan(run.indexOf("gh workflow run"));
+  });
+
+  it.each([
+    ["a restart is queued", JSON.stringify([{ event: "workflow_dispatch", status: "queued", createdAt: iso(2) }]), "0", "0", false, "skipped_recent"],
+    ["a restart finished 5 min ago", JSON.stringify([{ event: "workflow_dispatch", status: "completed", createdAt: iso(5) }]), "0", "0", false, "skipped_recent"],
+    ["the last restart was 30 min ago", JSON.stringify([{ event: "workflow_dispatch", status: "completed", createdAt: iso(30) }]), "0", "0", true, "dispatched"],
+    ["no restart ever ran", "[]", "0", "0", true, "dispatched"],
+    ["the run list read failed (fail-open)", "", "1", "0", true, "dispatched"],
+    ["the dispatch itself failed", "[]", "0", "1", true, "failed"],
+  ])("%s → dispatch=%s", (_label, runs, fail, dispatchFail, dispatch, outcome) => {
+    const ghOut = join(scratch, `gh-output-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(ghOut, "");
+    const { out, log } = runBash(step!.run!, {
+      STUB_RUNS: runs as string,
+      STUB_RUNS_FAIL: fail as string,
+      STUB_DISPATCH_FAIL: dispatchFail as string,
+      GITHUB_WORKSPACE: REPO_ROOT,
+      GITHUB_OUTPUT: ghOut,
+    });
+    const dispatched = log.split("\n").some((l) => l.startsWith("workflow run restart-inngest-server.yml"));
+    expect(dispatched).toBe(dispatch);
+    if (!dispatch) expect(out).toContain("not dispatching a second restart");
+    // The step records WHAT happened, so the tracking comment can tell the truth.
+    expect(readFileSync(ghOut, "utf-8")).toBe(`restart_dispatch=${outcome}\n`);
+  });
+
+  // #6374 Defect 3 (truthful comments), extended by the pre-ship advisor consult: a
+  // run whose restart was deduped (or whose dispatch failed) must not comment
+  // "Restart re-dispatched" — the age gate's restart_ok=true no longer implies a dispatch.
+  it("the tracking comment claims a re-dispatch only when this run dispatched one", () => {
+    const doc = parseYaml(readFileSync(join(REPO_ROOT, WORKFLOWS[0]), "utf-8")) as {
+      jobs: Record<string, { steps?: Array<Step & { id?: string; env?: Record<string, string> }> }>;
+    };
+    const all = Object.values(doc.jobs).flatMap((j) => j.steps ?? []);
+    const restart = all.find((s) => s.name === "Auto-dispatch inngest restart (failure)")!;
+    expect(restart.id).toBe("restart");
+    const tracking = all.find((s) => s.name === "File or comment tracking issue (failure)")!;
+    expect(tracking.env?.RESTART_DISPATCH).toBe("${{ steps.restart.outputs.restart_dispatch }}");
+    const run = tracking.run!;
+    const claim = run.indexOf("Restart re-dispatched");
+    expect(claim).toBeGreaterThan(-1);
+    // Every line that asserts a dispatch sits under a RESTART_DISPATCH == dispatched test.
+    for (const phrase of ["Restart re-dispatched", "This run dispatched `restart-inngest-server.yml`"]) {
+      const at = run.indexOf(phrase);
+      expect(at, phrase).toBeGreaterThan(-1);
+      const guard = run.lastIndexOf('"$RESTART_DISPATCH" == "dispatched"', at);
+      expect(guard, `${phrase}: no RESTART_DISPATCH == dispatched guard before it`).toBeGreaterThan(-1);
+      // …and no other branch keyword intervenes between the guard and the claim.
+      expect(run.slice(guard, at), phrase).not.toMatch(/\n\s*(else|elif|fi)\b/);
+    }
+    // The deduped and failed cases each say so.
+    expect(run).toContain("skipped_recent");
+    expect(run).toMatch(/restart dispatch FAILED/);
+  });
+});
+
+// #7377 — the restart-loop alarm is the inventory lever's only automatic producer. The label
+// route it replaced could never fire: a label applied with GITHUB_TOKEN starts no workflow run,
+// and workflow_dispatch is the documented exception. The FIRE step hands a NEW non-OOM tracker
+// to a separate dispatch-inventory job (the only job holding actions: write), never on a repeat
+// run in the same slot, never for an OOM loop, and never before the tracker exists.
+describe("the restart-loop alarm dispatches the read-only inventory once per new non-OOM tracker (#7377)", () => {
+  type Job = {
+    permissions?: Record<string, string>;
+    needs?: string;
+    if?: string;
+    outputs?: Record<string, string>;
+    steps?: Array<Step & { id?: string }>;
+  };
+  const doc = parseYaml(readFileSync(join(REPO_ROOT, WORKFLOWS[1]), "utf-8")) as {
+    permissions?: Record<string, string>;
+    jobs: Record<string, Job>;
+  };
+  const FIRE = "Open or comment recurrence issue (FIRE)";
+  const DISPATCH = "Dispatch the read-only store inventory (new non-OOM tracker)";
+  const fireStep = steps(WORKFLOWS[1]).find((s) => s.name === FIRE);
+  const dispatchStep = steps(WORKFLOWS[1]).find((s) => s.name === DISPATCH);
+
+  // The gate literal is DERIVED from the alarm script's own CAUSE= line, so rewording the cause
+  // (e.g. its em-dash) without the workflow gate — or the reverse — reds here.
+  const alarmSrc = readFileSync(join(REPO_ROOT, "scripts/zot-restart-loop-alarm.sh"), "utf-8");
+  const prefixMatch = alarmSrc.match(/^\s*CAUSE="(non-OOM crash-loop — )/m);
+  const PREFIX = prefixMatch ? prefixMatch[1] : "";
+  const NON_OOM = `${PREFIX}zot_restarts climbed across >= 3 consecutive events; tier=fallback: NO diagnostic line matched`;
+  const OOM = "host/kernel OOM — exit_code=137 AND oom_kills_5m=2 (the box ran out of memory)";
+  const tracker = "[ci/zot-restart-loop] Zot registry restart-loop recurrence detected";
+
+  function fire(cause: string, issues: unknown[], extra: Record<string, string> = {}) {
+    const ghOut = join(scratch, `fire-out-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(ghOut, "");
+    const r = runBash(fireStep!.run!, {
+      STUB_ISSUES: JSON.stringify(issues),
+      CAUSE: cause,
+      DETAIL: "newest boot_id=b1",
+      RUN_URL: "https://github.com/o/r/actions/runs/1",
+      GITHUB_OUTPUT: ghOut,
+      ...extra,
+    });
+    return { ...r, output: readFileSync(ghOut, "utf-8") };
+  }
+  function dispatch(extra: Record<string, string> = {}) {
+    return runBash(dispatchStep!.run!, {
+      NEW_ISSUE: "https://github.com/o/r/issues/4242",
+      RUN_URL: "https://github.com/o/r/actions/runs/1",
+      GITHUB_SERVER_URL: "https://github.com",
+      STUB_ISSUES: "[]",
+      ...extra,
+    });
+  }
+  const dispatches = (log: string) =>
+    log.split("\n").filter((l) => l.startsWith("workflow run registry-zot-inventory.yml"));
+
+  it("the alarm script still emits the non-OOM cause prefix, and the FIRE gate matches it", () => {
+    expect(PREFIX).toBe("non-OOM crash-loop — ");
+    expect(fireStep?.run).toContain(`"$CAUSE" == "${PREFIX}"*`);
+  });
+
+  it("a new non-OOM tracker is handed to the dispatch job, after it was created", () => {
+    const { log, output } = fire(NON_OOM, []);
+    expect(log).toMatch(/^issue create /m);
+    expect(output).toBe("inventory_tracker=https://github.com/o/r/issues/4242\n");
+    expect(dispatches(log)).toHaveLength(0); // the FIRE step itself never dispatches
+  });
+
+  it("a repeat run in the slot (tracker already open) hands nothing on", () => {
+    const { log, output } = fire(NON_OOM, [{ number: 77, title: tracker }]);
+    expect(log).toMatch(/^issue comment 77 /m);
+    expect(log).not.toMatch(/^issue create /m);
+    expect(output).toBe("");
+  });
+
+  it("an OOM loop opens the tracker but hands nothing on", () => {
+    const { log, output } = fire(OOM, []);
+    expect(log).toMatch(/^issue create /m);
+    expect(output).toBe("");
+  });
+
+  it("the gate is a PREFIX match: an OOM cause whose tail merely contains the prefix hands nothing on", () => {
+    expect(fire(`${OOM}; tail: ${PREFIX}forged`, []).output).toBe("");
+  });
+
+  it("if the tracker cannot be created, nothing is handed on", () => {
+    const ghOut = join(scratch, `fire-fail-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(ghOut, "");
+    expect(() =>
+      runBash(fireStep!.run!, {
+        STUB_ISSUES: "[]",
+        STUB_CREATE_FAIL: "1",
+        CAUSE: NON_OOM,
+        DETAIL: "d",
+        RUN_URL: "u",
+        GITHUB_OUTPUT: ghOut,
+      }),
+    ).toThrow();
+    expect(readFileSync(ghOut, "utf-8")).toBe("");
+  });
+
+  it("the dispatch job dispatches on main with the only allow-listed action and the tracker number", () => {
+    const { log } = dispatch();
+    const d = dispatches(log);
+    expect(d).toHaveLength(1);
+    expect(d[0]).toContain("--ref main");
+    expect(d[0]).toContain("-f action=inventory");
+    expect(d[0]).toContain("-f tracker=4242");
+    expect(log).toMatch(/^issue comment https:\/\/github\.com\/o\/r\/issues\/4242 .*Dispatched/m);
+  });
+
+  it("a refused dispatch is fail-soft: the step exits 0 and the tracker records the failure", () => {
+    // runBash throws on a non-zero exit, so returning at all is the exit-0 assertion.
+    const { out, log } = dispatch({ STUB_DISPATCH_FAIL: "1" });
+    expect(log).toMatch(/^issue comment https:\/\/github\.com\/o\/r\/issues\/4242 .*FAILED/m);
+    expect(out).toContain("::warning::");
+  });
+
+  it("a failed tracker comment after a successful dispatch is fail-soft too", () => {
+    const { out, log } = dispatch({ STUB_COMMENT_FAIL: "1" });
+    expect(dispatches(log)).toHaveLength(1);
+    expect(out).toContain("::warning::the inventory was dispatched but the tracker comment could not be written.");
+  });
+
+  it("actions: write is held ONLY by the dispatch job, which is wired to the FIRE step's output", () => {
+    expect(doc.permissions?.actions).toBeUndefined();
+    const jobs = Object.entries(doc.jobs).filter(([, j]) => j.permissions?.actions === "write");
+    expect(jobs.map(([k]) => k)).toEqual(["dispatch-inventory"]);
+    const dj = doc.jobs["dispatch-inventory"];
+    expect(dj.needs).toBe("alarm");
+    expect(dj.if).toContain("needs.alarm.outputs.inventory_tracker != ''");
+    expect(dj.steps?.some((st) => (st as { uses?: string }).uses?.includes("actions/checkout"))).toBe(false);
+    expect(doc.jobs.alarm.outputs?.inventory_tracker).toBe("${{ steps.fire.outputs.inventory_tracker }}");
+    expect(doc.jobs.alarm.steps?.find((st) => st.name === FIRE)?.id).toBe("fire");
+  });
+});

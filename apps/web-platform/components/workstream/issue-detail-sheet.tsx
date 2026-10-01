@@ -18,6 +18,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import useSWR from "swr";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
 import {
   COLUMNS,
@@ -63,6 +65,7 @@ export function IssueDetailSheet({
   issue,
   notFound,
   loading = false,
+  loadFailed = false,
   readOnly = false,
   boardPrecedence = false,
   onKanbanOrg = false,
@@ -76,6 +79,9 @@ export function IssueDetailSheet({
   issue: WorkstreamIssue | null;
   notFound: boolean;
   loading?: boolean;
+  /** The feed errored before the issue could resolve — distinct from notFound:
+   *  "Issue not found" is a claim; "couldn't load" is honest uncertainty. */
+  loadFailed?: boolean;
   readOnly?: boolean;
   boardPrecedence?: boolean;
   onKanbanOrg?: boolean;
@@ -140,6 +146,24 @@ export function IssueDetailSheet({
       opener?.focus?.();
     };
   }, [open, onClose]);
+
+  // feat-ui-action-feedback: pending contracts on the sheet's mutations. These
+  // hooks must precede the early return below; `saveTitle`/`saveBody` are
+  // function declarations (hoisted past it), and the reopen/close wrappers are
+  // inline closures over the current render's props.
+  const titleSave = usePendingAction(saveTitle);
+  const bodySave = usePendingAction(saveBody);
+  const reopenAction = usePendingAction(async () => {
+    if (!issue) return;
+    await onReopen(issue.id);
+  });
+  const closeAction = usePendingAction(
+    async (stateReason: "completed" | "not_planned") => {
+      if (!issue) return;
+      await onChangeStatus(issue.id, "done", stateReason);
+      setCloseMenuOpen(false);
+    },
+  );
 
   if (!open || !mounted) return null;
 
@@ -279,17 +303,34 @@ export function IssueDetailSheet({
           >
             <div className="h-24 w-full animate-pulse rounded-lg bg-soleur-bg-surface-1/40" />
           </div>
-        ) : notFound || !issue ? (
+        ) : loadFailed ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-            <p className="text-sm text-soleur-text-secondary">Issue not found</p>
-            <button
+            <p className="text-sm text-soleur-text-secondary">
+              Couldn&apos;t load this issue — the feed ended before it arrived.
+              Try refreshing.
+            </p>
+            <Button
+              variant="outlined"
               ref={closeBtnRef}
               type="button"
               onClick={onClose}
               className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
             >
               Back to board
-            </button>
+            </Button>
+          </div>
+        ) : notFound || !issue ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <p className="text-sm text-soleur-text-secondary">Issue not found</p>
+            <Button
+              variant="outlined"
+              ref={closeBtnRef}
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
+            >
+              Back to board
+            </Button>
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
@@ -308,7 +349,7 @@ export function IssueDetailSheet({
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          void saveTitle();
+                          titleSave.run();
                         } else if (e.key === "Escape") {
                           e.preventDefault();
                           e.stopPropagation();
@@ -319,20 +360,24 @@ export function IssueDetailSheet({
                       className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1 text-base text-soleur-text-primary focus:outline-none"
                     />
                     <div className="flex gap-2">
-                      <button
+                      <Button
+                        variant="outlined"
                         type="button"
-                        onClick={() => void saveTitle()}
+                        onClick={() => titleSave.run()}
+                        loading={titleSave.pending}
+                        loadingLabel="Saving"
                         className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-2.5 py-1 text-xs font-medium text-soleur-text-primary"
                       >
                         Save
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="ghost"
                         type="button"
                         onClick={() => setEditingTitle(false)}
                         className="rounded-md px-2.5 py-1 text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
                       >
                         Cancel
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ) : (
@@ -341,7 +386,8 @@ export function IssueDetailSheet({
                       {issue.title}
                     </h2>
                     {!readOnly ? (
-                      <button
+                      <Button
+                        variant="ghost"
                         type="button"
                         aria-label="Edit title"
                         onClick={startEditTitle}
@@ -361,12 +407,13 @@ export function IssueDetailSheet({
                           <path d="M12 20h9" />
                           <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
                         </svg>
-                      </button>
+                      </Button>
                     ) : null}
                   </div>
                 )}
               </div>
-              <button
+              <Button
+                variant="ghost"
                 ref={closeBtnRef}
                 type="button"
                 onClick={onClose}
@@ -387,7 +434,7 @@ export function IssueDetailSheet({
                   <line x1="18" y1="6" x2="6" y2="18" />
                   <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
-              </button>
+              </Button>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -487,14 +534,15 @@ export function IssueDetailSheet({
                         : "—"}
                     </span>
                     {canEditFields && !editingAssignees ? (
-                      <button
+                      <Button
+                        variant="ghost"
                         type="button"
                         aria-label="Edit assignees"
                         onClick={startEditAssignees}
                         className="shrink-0 rounded px-1 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
                       >
                         Edit
-                      </button>
+                      </Button>
                     ) : null}
                   </span>
                 </Row>
@@ -511,7 +559,7 @@ export function IssueDetailSheet({
                           : [...prev, v],
                       )
                     }
-                    onSave={() => void saveAssignees()}
+                    onSave={saveAssignees}
                     onCancel={() => setEditingAssignees(false)}
                   />
                 ) : null}
@@ -524,14 +572,15 @@ export function IssueDetailSheet({
                         : "—"}
                     </span>
                     {canEditFields && !editingLabels ? (
-                      <button
+                      <Button
+                        variant="ghost"
                         type="button"
                         aria-label="Edit labels"
                         onClick={startEditLabels}
                         className="shrink-0 rounded px-1 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
                       >
                         Edit
-                      </button>
+                      </Button>
                     ) : null}
                   </span>
                 </Row>
@@ -548,7 +597,7 @@ export function IssueDetailSheet({
                           : [...prev, v],
                       )
                     }
-                    onSave={() => void saveLabels()}
+                    onSave={saveLabels}
                     onCancel={() => setEditingLabels(false)}
                   />
                 ) : null}
@@ -586,56 +635,61 @@ export function IssueDetailSheet({
               {!readOnly ? (
                 <div className="mt-4">
                   {isClosed ? (
-                    <button
+                    <Button
+                      variant="outlined"
                       type="button"
-                      onClick={() => void onReopen(issue.id)}
+                      onClick={() => reopenAction.run()}
+                      loading={reopenAction.pending}
+                      loadingLabel="Reopening"
                       className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-1.5 text-sm font-medium text-soleur-text-primary transition-colors hover:border-soleur-text-muted"
                     >
                       Reopen issue
-                    </button>
+                    </Button>
                   ) : closeMenuOpen ? (
                     <div className="flex flex-col gap-2 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 p-3">
                       <p className="text-xs text-soleur-text-tertiary">
                         Close as…
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        <button
+                        <Button
+                          variant="outlined"
                           type="button"
-                          onClick={() => {
-                            setCloseMenuOpen(false);
-                            void onChangeStatus(issue.id, "done", "completed");
-                          }}
+                          onClick={() => closeAction.run("completed")}
+                          loading={closeAction.pending}
+                          loadingLabel="Closing"
                           className="rounded-md border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-primary hover:border-soleur-text-muted"
                         >
                           Completed
-                        </button>
-                        <button
+                        </Button>
+                        <Button
+                          variant="outlined"
                           type="button"
-                          onClick={() => {
-                            setCloseMenuOpen(false);
-                            void onChangeStatus(issue.id, "done", "not_planned");
-                          }}
+                          onClick={() => closeAction.run("not_planned")}
+                          loading={closeAction.pending}
+                          loadingLabel="Closing"
                           className="rounded-md border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-primary hover:border-soleur-text-muted"
                         >
                           Not planned
-                        </button>
-                        <button
+                        </Button>
+                        <Button
+                          variant="ghost"
                           type="button"
                           onClick={() => setCloseMenuOpen(false)}
                           className="rounded-md px-3 py-1.5 text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
                         >
                           Cancel
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   ) : (
-                    <button
+                    <Button
+                      variant="outlined"
                       type="button"
                       onClick={() => setCloseMenuOpen(true)}
                       className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-1.5 text-sm font-medium text-soleur-text-primary transition-colors hover:border-soleur-text-muted"
                     >
                       Close issue
-                    </button>
+                    </Button>
                   )}
                 </div>
               ) : null}
@@ -647,14 +701,15 @@ export function IssueDetailSheet({
                     Description
                   </h3>
                   {canEditFields && !editingBody ? (
-                    <button
+                    <Button
+                      variant="ghost"
                       type="button"
                       aria-label="Edit description"
                       onClick={startEditBody}
                       className="rounded px-1 text-[11px] text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
                     >
                       Edit
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
                 {editingBody ? (
@@ -668,20 +723,24 @@ export function IssueDetailSheet({
                       className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5 text-sm text-soleur-text-primary focus:outline-none"
                     />
                     <div className="flex gap-2">
-                      <button
+                      <Button
+                        variant="outlined"
                         type="button"
-                        onClick={() => void saveBody()}
+                        onClick={() => bodySave.run()}
+                        loading={bodySave.pending}
+                        loadingLabel="Saving"
                         className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-2.5 py-1 text-xs font-medium text-soleur-text-primary"
                       >
                         Save
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="ghost"
                         type="button"
                         onClick={() => setEditingBody(false)}
                         className="rounded-md px-2.5 py-1 text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
                       >
                         Cancel
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ) : (
@@ -728,9 +787,14 @@ function MultiSelectEditor({
   optionLabels: string[];
   selected: string[];
   onToggle: (value: string) => void;
-  onSave: () => void;
+  onSave: () => void | Promise<void>;
   onCancel: () => void;
 }) {
+  // feat-ui-action-feedback: pending contract on the save — pendingRef closes
+  // the double-click window between click and first render.
+  const saveAction = usePendingAction(async () => {
+    await onSave();
+  });
   // Surface any currently-selected value even if it's not in the fetched option
   // list (e.g. a label that no longer exists in the repo picker) so a save
   // doesn't silently drop it.
@@ -762,20 +826,24 @@ function MultiSelectEditor({
         </div>
       )}
       <div className="mt-2 flex gap-2">
-        <button
+        <Button
+          variant="outlined"
           type="button"
-          onClick={onSave}
+          onClick={() => saveAction.run()}
+          loading={saveAction.pending}
+          loadingLabel="Saving"
           className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-2.5 py-1 text-xs font-medium text-soleur-text-primary"
         >
           Save
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="ghost"
           type="button"
           onClick={onCancel}
           className="rounded-md px-2.5 py-1 text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );

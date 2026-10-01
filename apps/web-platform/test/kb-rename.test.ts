@@ -84,6 +84,7 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
+  addBreadcrumb: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({
@@ -387,6 +388,30 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
     const req = createRequest(["overview", "missing.png"], { newName: "renamed.png" });
     const res = await PATCH(req, { params: createParams(["overview", "missing.png"]) });
     expect(res.status).toBe(404);
+  });
+
+  // 13b. Both Contents URLs (old file, new destination) are per-segment
+  // encoded: a raw `#` would truncate the path and a raw `?` inject a query.
+  test("encodes the old and new paths in every Contents URL", async () => {
+    setupFullMocks();
+    const base = mockGithubApiGet.getMockImplementation()!;
+    mockGithubApiGet.mockImplementation((id: number, path: string) => {
+      if (path.includes("/contents/") && path.includes("renamed")) {
+        return Promise.reject(new MockGitHubApiError("GitHub API request failed: 404", 404));
+      }
+      return base(id, path);
+    });
+
+    const segments = ["My Docs", "C# a?.png"];
+    const req = createRequest(segments, { newName: "renamed.png" });
+    await PATCH(req, { params: createParams(segments) });
+    const contentsUrls = mockGithubApiGet.mock.calls
+      .map((c) => c[1] as string)
+      .filter((u) => u.includes("/contents/"));
+    expect(contentsUrls).toEqual([
+      "/repos/test-owner/test-repo/contents/knowledge-base/My%20Docs/C%23%20a%3F.png",
+      "/repos/test-owner/test-repo/contents/knowledge-base/My%20Docs/renamed.png",
+    ]);
   });
 
   // 14. Destination already exists

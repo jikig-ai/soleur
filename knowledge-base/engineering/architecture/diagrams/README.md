@@ -74,6 +74,10 @@ over.
 > Comments in `.c4` files are NOT exported into `model.likec4.json`, so a
 > comment-only edit does not require regeneration. Any change to the
 > `specification` / `model` / `views` bodies DOES.
+>
+> In the app, every `.c4` save (including a comment-only one) re-renders
+> `model.likec4.json` on the server, which is how the Concierge repairs a
+> model with elements but no views (#8740).
 
 ## Cross-references
 

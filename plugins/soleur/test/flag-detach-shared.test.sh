@@ -99,14 +99,27 @@ STUB_DIR="$(mktemp -d)"; trap 'rm -rf "$STUB_DIR"' EXIT
 make_doppler_stub "$STUB_DIR"
 make_detach_curl_stub "$STUB_DIR"
 
+# Writes are driven through a real pty with `yes` typed at the ack (#8486): the
+# script refuses a write with no TTY (exit 64) and no flag skips the prompt.
 run_detach() { # caller sets env knobs; runs from repo root (FLAG_ENV_VARS resolution)
+  local cmd
+  printf -v cmd '%q ' bash "$FLIP" "$@"
   ( cd "$REPO_ROOT" \
-    && PATH="$STUB_DIR:$PATH" CURL_LOG="$CURL_LOG" DOPPLER_SET_LOG="$DOPPLER_SET_LOG" BODY_LOG="$BODY_LOG" \
+    && printf 'yes\n' | PATH="$STUB_DIR:$PATH" CURL_LOG="$CURL_LOG" DOPPLER_SET_LOG="$DOPPLER_SET_LOG" BODY_LOG="$BODY_LOG" \
        TARGET_ORG_FULL="$TARGET_ORG_FULL" CONTROL_ORG_FULL="$CONTROL_ORG_FULL" \
        FLAG_NAME="$FLAG_NAME" ORG_TARGETED_ID="$ORG_TARGETED_ID" \
-       EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=2 \
-       bash "$FLIP" "$@" )
+       EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=2 SHELL="$(type -P bash)" \
+       timeout 60 script -qec "$cmd" /dev/null )
 }
+
+# --- 0. the removed confirm-skip flag is refused before any work (#8486) ------
+CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
+rc0=0
+out0="$(cd "$REPO_ROOT" && PATH="$STUB_DIR:$PATH" CURL_LOG="$CURL_LOG" DOPPLER_SET_LOG="$DOPPLER_SET_LOG" \
+  bash "$FLIP" "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --confirm""ed 2>&1 </dev/null)" || rc0=$?
+[[ "$rc0" -eq 2 ]] || { echo "detach: FAIL — the removed confirm-skip flag must exit 2 (got $rc0)" >&2; fail=1; }
+grep -q 'own terminal' <<<"$out0" || { echo "detach: FAIL — the refusal must name the own-terminal path: $out0" >&2; fail=1; }
+[[ ! -s "$CURL_LOG" ]] || { echo "detach: FAIL — the refused flag still reached curl" >&2; fail=1; }
 
 # --- 1. source-level: the verb exists and resolves the shared segment by name ---
 if ! grep -q 'detach-shared' "$FLIP"; then
@@ -119,7 +132,7 @@ fi
 # --- 2. POSITIVE: detach with member-stays-enabled / control-off → exit 0 -------
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
 if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
-     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   # 2a. version-POST body shape: delete-override carries org-targeted id; create/update empty.
   grep -q "\"segment_ids_to_delete_overrides\":\[${ORG_TARGETED_ID}\]" "$BODY_LOG" \
@@ -155,7 +168,7 @@ fi
 # --- 3. CONTROL-LEAK (gate-present): control evals enabled → fail loud ----------
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
 if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=true \
-     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   echo "detach: FAIL — control-org leak (eval true for control) must fail loud, not exit 0" >&2; fail=1
 fi
@@ -165,7 +178,7 @@ fi
 # detach drops it (override never migrated), the eval-verify must catch it.
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
 if EVAL_TARGET_ENABLED=false EVAL_CONTROL_ENABLED=false \
-     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   echo "detach: FAIL — member org dropped (eval false) must fail loud (post-detach member must stay enabled)" >&2; fail=1
 fi
@@ -188,7 +201,7 @@ fi
 # --- 6. IDEMPOTENT: no override present → no version POST, still eval-verifies → 0 -
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
 if FS_OVERRIDE_PRESENT=0 EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
-     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   if grep -qE 'POST .*/versions/' "$CURL_LOG"; then
     echo "detach: FAIL — idempotent re-run (no override) must not POST a version" >&2; fail=1
@@ -200,14 +213,14 @@ fi
 # --- 7. FAIL-OPEN guard: edge eval HTTP error must not pass the verify ----------
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
 if EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false EVAL_HTTP_CODE=500 \
-     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   echo "detach: FAIL — edge eval HTTP 500 must fail loud (no fail-open), not exit 0" >&2; fail=1
 fi
 
 # --- 8. requires --org (the member to eval-verify) ------------------------------
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
-if run_detach "$FLAG_NAME" prd on --detach-shared --confirmed >/dev/null 2>&1; then
+if run_detach "$FLAG_NAME" prd on --detach-shared >/dev/null 2>&1; then
   echo "detach: FAIL — --detach-shared without --org must exit non-zero (need a member to eval-verify)" >&2; fail=1
 fi
 
@@ -216,7 +229,7 @@ fi
 # is absent, so detach_from_shared early-returns before touching any env.
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
 if FS_SHARED_ABSENT=1 EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
-     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   if grep -qE 'POST .*/versions/' "$CURL_LOG"; then
     echo "detach: FAIL — org-targeted absent must not POST a version (clean no-op)" >&2; fail=1
@@ -230,7 +243,7 @@ fi
 # --- 10. AUDIT-FAILURE ABORT (append-before-flip): audit RPC non-2xx → exit 4, no mutation -
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
 if AUDIT_HTTP_CODE=500 EVAL_TARGET_ENABLED=true EVAL_CONTROL_ENABLED=false \
-     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+     run_detach "$FLAG_NAME" prd on --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   echo "detach: FAIL — audit RPC failure must abort (non-zero exit), not proceed" >&2; fail=1
 else
@@ -241,7 +254,7 @@ fi
 
 # --- 11. value must be 'on' (off rejected: detach asserts the member stays enabled) ---
 CURL_LOG="$(mktemp)"; DOPPLER_SET_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"
-if run_detach "$FLAG_NAME" prd off --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" --confirmed \
+if run_detach "$FLAG_NAME" prd off --detach-shared --org "$TARGET_ORG_FULL" --control-org "$CONTROL_ORG_FULL" \
      >/dev/null 2>&1; then
   echo "detach: FAIL — --detach-shared with value 'off' must exit non-zero" >&2; fail=1
 fi

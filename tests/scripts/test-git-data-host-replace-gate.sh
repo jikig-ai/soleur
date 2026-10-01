@@ -36,6 +36,18 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# ── #8189 root-key arm fixtures ───────────────────────────────────────────────────
+# The gate now ends in git_data_root_key_arm (tests/scripts/lib/git-data-root-key-arm-gate.sh),
+# so every PASS fixture carries what that arm reads: data.hcloud_ssh_keys.git_data_root
+# resolved in prior_state, hcloud_ssh_key.default in prior_state, both ids on the recreated
+# server, and a committed-anchor fingerprint file. root_key_fixtures and root_key_prior_state
+# live ONCE in the shared harness (sourced here, ahead of its preamble arms below, for them);
+# the keys are synthesized into $TMP and deleted on exit — never committed.
+# shellcheck source=tests/scripts/lib/gate-suite-harness.sh
+source "${DIR}/lib/gate-suite-harness.sh"
+root_key_fixtures "${DIR}/lib/git-data-root-key-arm-gate.sh"
+PRIOR_STATE="$(root_key_prior_state)"
+
 # A resource_change object with the given address + actions array.
 rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 
@@ -43,16 +55,23 @@ rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 # (delete+create); firewall_attachment UPDATE-in-place (server_ids re-point). The two data
 # volumes + the LUKS passphrase are UNTARGETED → they do not appear in resource_changes at all
 # (preserved by omission). Test 8 exercises the explicit-no-op variant.
-SERVER_REPLACE="$(rc_obj 'hcloud_server.git_data' '"delete","create"')"
+# The recreated server carries BOTH key ids as strings (#8189): default "1111" and root 4242.
+SERVER_REPLACE='{"address":"hcloud_server.git_data","change":{"actions":["delete","create"],"after":{"ssh_keys":["1111","4242"]},"after_unknown":{"ssh_keys":[false,false]}}}'
 NET_REPLACE="$(rc_obj 'hcloud_server_network.git_data' '"delete","create"')"
 VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.git_data' '"delete","create"')"
 VA_LUKS_REPLACE="$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"delete","create"')"
 FW_UPDATE="$(rc_obj 'hcloud_firewall_attachment.git_data' '"update"')"
+# (#7226, ADR-237, Guard 4) The host-key pin rotates WITH the host: the replace job adds
+# -replace='tls_private_key.git_data_host_ssh' and -target='doppler_secret.git_data_ssh_host_key',
+# so the canonical plan carries a key replace plus a secret update (the value is the new key).
+HK_ROTATE="$(rc_obj 'tls_private_key.git_data_host_ssh' '"delete","create"')"
+HK_SECRET_UPDATE="$(rc_obj 'doppler_secret.git_data_ssh_host_key' '"update"')"
+HK_SET="${HK_ROTATE},${HK_SECRET_UPDATE}"
 
-write_plan() { printf '{"resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
+write_plan() { printf '{"prior_state":%s,"resource_changes":[%s]}' "${2:-$PRIOR_STATE}" "$1" > "$TMP/plan.json"; }
 
 # The canonical PASS fixture (referenced by later single-mutation tests).
-PASS_SET="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE}"
+PASS_SET="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
 
 # --- Test 1: PASS — exact scoped recreate; both volumes + passphrase preserved by omission ---
 write_plan "${PASS_SET}"
@@ -146,7 +165,7 @@ fi
 # hcloud_server_network.git_data shows ONLY delete (no create) → the new host boots with no
 # private NIC (10.0.1.20), no transport path for web-host push/pull. nic_recreated==0 must ABORT.
 NET_DELETE_ONLY="$(rc_obj 'hcloud_server_network.git_data' '"delete"')"
-write_plan "${SERVER_REPLACE},${NET_DELETE_ONLY},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE}"
+write_plan "${SERVER_REPLACE},${NET_DELETE_ONLY},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
 if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T10: a NIC-stripped plan (nic_recreated==0) must ABORT (rc=1)"
 else
@@ -157,7 +176,7 @@ fi
 # ISOLATES plaintext_attachment_recreated==0: the new host boots with /mnt/git-data UNMOUNTED
 # (the plaintext store) while the LUKS attachment, NIC, firewall all pass.
 VA_DELETE_ONLY="$(rc_obj 'hcloud_volume_attachment.git_data' '"delete"')"
-write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_DELETE_ONLY},${VA_LUKS_REPLACE},${FW_UPDATE}"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_DELETE_ONLY},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
 if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T11: a plaintext-store-attachment-stripped plan (plaintext_attachment_recreated==0) must ABORT (rc=1)"
 else
@@ -169,7 +188,7 @@ fi
 # (the at-rest store) while the plaintext attachment, NIC, firewall all pass. This is the
 # SEPARATE second store counter with no registry analog.
 VA_LUKS_DELETE_ONLY="$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"delete"')"
-write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_DELETE_ONLY},${FW_UPDATE}"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_DELETE_ONLY},${FW_UPDATE},${HK_SET}"
 if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T12: a LUKS-store-attachment-stripped plan (luks_attachment_recreated==0) must ABORT (rc=1)"
 else
@@ -179,7 +198,7 @@ fi
 # --- Test 13: FAIL — deny-all firewall stripped (firewall_attachment = ["delete"]) ---
 # ISOLATES firewall_ok==0: the new host is naked on its public IP. Every other clause holds.
 FW_DELETE="$(rc_obj 'hcloud_firewall_attachment.git_data' '"delete"')"
-write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_DELETE}"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_DELETE},${HK_SET}"
 if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T13: a firewall-stripped plan (firewall_ok==0) must ABORT (rc=1)"
 else
@@ -190,7 +209,7 @@ fi
 # server = ["update"] (no delete+create) so cloud-init never re-runs. ISOLATES
 # server_replaced==0 (oos=0 since update is in-allow-set; every other clause holds).
 SERVER_UPDATE="$(rc_obj 'hcloud_server.git_data' '"update"')"
-write_plan "${SERVER_UPDATE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE}"
+write_plan "${SERVER_UPDATE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
 if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T14: an in-place server update (server_replaced==0) must ABORT (rc=1)"
 else
@@ -274,9 +293,7 @@ fi
 _PG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE="${_PG_DIR}/lib/git-data-host-replace-gate.sh"
 PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
-# shellcheck source=tests/scripts/lib/gate-suite-harness.sh
-source "${_PG_DIR}/lib/gate-suite-harness.sh"
-
+# The shared harness was sourced at the top (the root-key fixtures need it first).
 
 # The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
 # gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
@@ -304,6 +321,222 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 
 
 
+# ── #8189: the root-key arm (Guard 4) is wired into THIS gate ─────────────────────
+# The arm's own suite (test-git-data-root-key-arm.sh) holds the full matrix; these rows prove
+# the replace gate reaches it on an otherwise-perfect scoped recreate.
+check_rk() {  # <name> <want_rc> <needle> — runs the gate on $TMP/plan.json
+  gate_check "$1" git_data_host_replace_gate "$2" "$3" "$TMP/plan.json"
+}
+
+write_plan "${PASS_SET}"
+check_rk "RK1 the scoped recreate carrying both key ids => PASS through the root-key arm" 0 "git_data_root_key_arm: PASS"
+
+write_plan "${PASS_SET}" "$(root_key_prior_state "$OTHER_KEY_PUB")"
+check_rk "RK2 [Guard 4 fingerprint] right name and label, different key => refused" 1 "verdict=git_data_root_key_not_in_create reason=fingerprint"
+
+write_plan "${PASS_SET}" "$(root_key_prior_state | jq -c '.values.root_module.resources |= map(select(.address != "data.hcloud_ssh_keys.git_data_root"))')"
+check_rk "RK3 [Guard 4 presence] data source absent from prior_state => refused" 1 "verdict=git_data_root_key_not_in_create reason=data_source_absent"
+
+SERVER_DEFAULT_ONLY='{"address":"hcloud_server.git_data","change":{"actions":["delete","create"],"after":{"ssh_keys":["1111"]},"after_unknown":{"ssh_keys":[false]}}}'
+write_plan "${SERVER_DEFAULT_ONLY},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
+check_rk "RK4 [Guard 4 membership] recreated server carries only the default key => refused" 1 "verdict=git_data_root_key_not_in_create reason=server_keys"
+
+SERVER_REORDERED='{"address":"hcloud_server.git_data","change":{"actions":["delete","create"],"after":{"ssh_keys":["4242","1111"]},"after_unknown":{"ssh_keys":[false,false]}}}'
+write_plan "${SERVER_REORDERED},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET}"
+check_rk "RK5 reordered ssh_keys (numeric id in the data source, strings on the server) => PASS" 0 "git_data_root_key_arm: PASS"
+
+write_plan "${PASS_SET}"
+_rk_saved="$GIT_DATA_ROOT_KEY_FINGERPRINT_FILE"
+export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="$TMP/absent.fingerprint"
+check_rk "RK6 missing fingerprint file => refused with reason=fingerprint_file_missing" 1 "verdict=git_data_root_key_not_in_create reason=fingerprint_file_missing"
+unset GIT_DATA_ROOT_KEY_FINGERPRINT_FILE
+check_rk "RK7 fingerprint env unset => refused with reason=fingerprint_file_missing (fail closed)" 1 "verdict=git_data_root_key_not_in_create reason=fingerprint_file_missing"
+export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="$_rk_saved"
+
+# SOLE-GUARD: delete the arm call from a COPY of the gate and the fingerprint-mismatch plan
+# PASSES — every counter in the gate is satisfied, so the arm is the only thing refusing it.
+write_plan "${PASS_SET}" "$(root_key_prior_state "$OTHER_KEY_PUB")"
+cp "$TMP/plan.json" "$TMP/rk-mismatch.json"
+gate_mutate_and_check "RK8 root-key arm call (the replace gate's only check on the key set)" \
+  '/^    git_data_root_key_arm "\$plan_json" /d' \
+  git_data_host_replace_gate "$TMP/rk-mismatch.json"
+
+# ── (#7226, ADR-237) GUARD 4: the replace rotates AND publishes exactly the pin set ──────
+# A replace that recreates the host must also re-mint tls_private_key.git_data_host_ssh (the
+# key cloud-init installs as the host key) and re-publish doppler_secret.git_data_ssh_host_key
+# (the pin the app and the cutover workflow verify against). A server replace that keeps the
+# OLD key re-uses a key a rooted host may have exfiltrated (ADR-220 D6); a rotated key whose
+# secret is not re-published leaves every pinned consumer holding a pin the host no longer
+# serves. Each ABORT row differs from PASS_SET by ONE mutation.
+check_hk() {  # <name> <want_rc> <needle> — runs the gate on $TMP/plan.json
+  gate_check "$1" git_data_host_replace_gate "$2" "$3" "$TMP/plan.json"
+}
+BASE_NO_HK="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE}"
+
+write_plan "${BASE_NO_HK},$(rc_obj 'tls_private_key.git_data_host_ssh' '"no-op"'),${HK_SECRET_UPDATE}"
+check_hk "HK1 server replaced, host key no-op => ABORT" 1 "ABORT"
+write_plan "${BASE_NO_HK},${HK_SECRET_UPDATE}"
+check_hk "HK2 server replaced, host key absent from the plan => ABORT" 1 "ABORT"
+write_plan "${BASE_NO_HK},${HK_ROTATE}"
+check_hk "HK3 host key rotated, pin secret absent => ABORT" 1 "ABORT"
+write_plan "${PASS_SET},$(rc_obj 'tls_private_key.git_data_host_ssh_2' '"create"')"
+check_hk "HK4 a SECOND tls address created => ABORT (out of scope)" 1 "ABORT"
+write_plan "${BASE_NO_HK},$(rc_obj 'tls_private_key.git_data_host_ssh' '"delete"'),${HK_SECRET_UPDATE}"
+check_hk "HK5 host key delete-only (no create) => ABORT" 1 "ABORT"
+write_plan "${BASE_NO_HK},${HK_ROTATE},$(rc_obj 'doppler_secret.git_data_ssh_host_key' '"delete"')"
+check_hk "HK6 pin secret deleted => ABORT" 1 "ABORT"
+write_plan "${BASE_NO_HK},${HK_ROTATE},$(rc_obj 'doppler_secret.git_data_ssh_host_key' '"no-op"')"
+check_hk "HK7 host key rotated but pin secret no-op (stale pin) => ABORT" 1 "ABORT"
+
+# MUST-PASS, not canonical. (i) THE FIRST ROTATION: before this PR's first replace neither
+# address is in state, so -replace on the key plans a plain create and the secret is a create.
+write_plan "${BASE_NO_HK},$(rc_obj 'tls_private_key.git_data_host_ssh' '"create"'),$(rc_obj 'doppler_secret.git_data_ssh_host_key' '"create"')"
+check_hk "HK8 first rotation: key + pin secret create-only => PASS" 0 "PASS"
+# (ii) the secret as a replace (provider-driven delete+create) is still a publication.
+write_plan "${BASE_NO_HK},${HK_ROTATE},$(rc_obj 'doppler_secret.git_data_ssh_host_key' '"delete","create"')"
+check_hk "HK9 pin secret replaced (delete+create) => PASS" 0 "PASS"
+write_plan "${PASS_SET}"
+check_hk "HK10 canonical: key replaced + pin secret update => PASS" 0 "PASS"
+
+# SOLE-GUARD: neuter the rotation/publication requirement and HK1 (stale key) passes.
+write_plan "${BASE_NO_HK},$(rc_obj 'tls_private_key.git_data_host_ssh' '"no-op"'),${HK_SECRET_UPDATE}"
+cp "$TMP/plan.json" "$TMP/hk-noop.json"
+gate_mutate_and_check "HK11 host-key rotation arm (the only check that the key rotates with the host)" \
+  's/ && "\$hkr" -eq 1 && "\$hkp" -eq 1//' \
+  git_data_host_replace_gate "$TMP/hk-noop.json"
+
+# HK14/HK15 (#7226 review F2) the action lists are EXACT. A create-before-destroy KEY is not a
+# rotation this job plans (-replace on a tls_private_key without create_before_destroy is
+# ["delete","create"]); the pin SECRET's provider may order either way, so both replace
+# orderings publish.
+write_plan "${BASE_NO_HK},$(rc_obj 'tls_private_key.git_data_host_ssh' '"create","delete"'),${HK_SECRET_UPDATE}"
+cp "$TMP/plan.json" "$TMP/hk-key-cbd.json"
+check_hk "HK14 host key [\"create\",\"delete\"] => ABORT" 1 "ABORT"
+write_plan "${BASE_NO_HK},${HK_ROTATE},$(rc_obj 'doppler_secret.git_data_ssh_host_key' '"create","delete"')"
+check_hk "HK15 pin secret [\"create\",\"delete\"] => PASS" 0 "PASS"
+# MUTATION: widen hk_key_ok to "any action list containing create" and HK14's plan passes.
+gate_mutate_and_check "HK14 exact key action list (widening hk_key_ok to any list containing create)" \
+  's/def hk_key_ok: (.change.actions? == \["delete","create"\]) or (.change.actions? == \["create"\]);/def hk_key_ok: (.change.actions? | index("create") != null);/' \
+  git_data_host_replace_gate "$TMP/hk-key-cbd.json"
+
+# HK12 THE GATE NEVER PRINTS PLAN VALUES. A replace plan's .change.before carries the OLD
+# user_data (the old host private key) and .after the new public key; the gate's output lands
+# in a public Actions log. Plant a sentinel in every before/after and read BOTH verdicts.
+_hk_sentinel="HKSENTINEL$$VALUE"
+jq -c --arg s "$_hk_sentinel" '.resource_changes |= map(.change.before = {"user_data":$s} | .change.after = ((.change.after // {}) + {"value":$s}))' \
+  <<<"$(printf '{"prior_state":%s,"resource_changes":[%s]}' "$PRIOR_STATE" "${PASS_SET}")" > "$TMP/hk-leak-pass.json"
+jq -c --arg s "$_hk_sentinel" '.resource_changes |= map(.change.before = {"user_data":$s} | .change.after = ((.change.after // {}) + {"value":$s}))' \
+  <<<"$(printf '{"prior_state":%s,"resource_changes":[%s]}' "$PRIOR_STATE" "${BASE_NO_HK},${HK_ROTATE}")" > "$TMP/hk-leak-abort.json"
+_hk_out_pass="$(git_data_host_replace_gate "$TMP/hk-leak-pass.json" 2>&1)"; _hk_rc_pass=$?
+_hk_out_abort="$(git_data_host_replace_gate "$TMP/hk-leak-abort.json" 2>&1)"; _hk_rc_abort=$?
+if [[ "$_hk_rc_pass" -eq 0 && "$_hk_rc_abort" -eq 1 && "$_hk_out_pass$_hk_out_abort" != *"$_hk_sentinel"* ]]; then
+  pass "HK12 the gate prints no .change.before/.after value on PASS or ABORT"
+else
+  fail "HK12 the gate leaked a plan value (or the fixtures did not grade as expected: pass rc=${_hk_rc_pass}, abort rc=${_hk_rc_abort})"
+fi
+
+# HK13 THE FIRST-ROTATION PREMISE, MEASURED: `terraform plan -replace=<addr>` on an address
+# absent from state plans a plain CREATE and exits 0. The property is core Terraform, not
+# provider behavior, so the fixture uses the built-in terraform_data (no provider download).
+if command -v terraform >/dev/null 2>&1; then
+  _hkfx="$TMP/hk-replace-fixture"; mkdir -p "$_hkfx"
+  printf 'resource "terraform_data" "k" {\n  input = "k"\n}\n' > "$_hkfx/main.tf"
+  _hk_acts=""; _hk_prc=1
+  if terraform -chdir="$_hkfx" init -input=false -backend=false >/dev/null 2>&1; then
+    terraform -chdir="$_hkfx" plan -input=false -no-color -replace=terraform_data.k -out=p >/dev/null 2>&1; _hk_prc=$?
+    _hk_acts="$(terraform -chdir="$_hkfx" show -json p 2>/dev/null | jq -c '[.resource_changes[] | select(.address == "terraform_data.k") | .change.actions]' 2>/dev/null)"
+  fi
+  if [[ "$_hk_prc" -eq 0 && "$_hk_acts" == '[["create"]]' ]]; then
+    pass "HK13 -replace on an address absent from state plans a create and exits 0"
+  else
+    fail "HK13 -replace on an absent address did not plan a plain create (plan rc=${_hk_prc}, actions=${_hk_acts:-<none>}) — the first-rotation must-PASS row models a plan terraform does not produce"
+  fi
+else
+  echo "SKIP (loud): HK13 terraform absent — the first-rotation premise is not re-measured here" >&2
+fi
+
+# ── ROTATE mode (#8211 PR2 / ADR-220 D6 — apply_target=git-data-host-rotate) ───────────
+# The ONLY path permitted to touch the LUKS store: volume + passphrase + key move together
+# (a new passphrase on a retained volume can never luksOpen). Plaintext volume stays
+# preserved; every replace invariant still applies.
+ROT_VOL="$(rc_obj 'hcloud_volume.git_data_luks' '"delete","create"')"
+ROT_PW="$(rc_obj 'random_password.git_data_luks' '"delete","create"')"
+ROT_KEY="$(rc_obj 'doppler_secret.git_data_luks_key' '"update"')"
+ROT_PASS_SET="${PASS_SET},${ROT_VOL},${ROT_PW},${ROT_KEY}"
+
+# R1: the full rotate plan passes in mode=rotate.
+write_plan "${ROT_PASS_SET}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null; then
+  pass "R1 rotate: host+deps+LUKS volume/passphrase/key all move -> PASS"
+else
+  fail "R1 rotate: the exact scoped rotate plan was refused"
+fi
+
+# R2 (must-RED): the same plan in mode=replace still refuses — the preserve backstops stand.
+write_plan "${ROT_PASS_SET}"
+if git_data_host_replace_gate "$TMP/plan.json" >/dev/null 2>&1; then
+  fail "R2 rotate-plan-as-replace: a LUKS-touching plan PASSED as a plain replace"
+else
+  pass "R2 rotate-plan-as-replace: mode=replace still refuses a LUKS rotation"
+fi
+
+# R3 (must-RED): rotate missing the passphrase re-mint -> ABORT (new volume + old key).
+write_plan "${PASS_SET},${ROT_VOL},${ROT_KEY}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R3 rotate-no-passphrase: a rotate without the passphrase re-mint PASSED"
+else
+  pass "R3 rotate-no-passphrase: a rotation missing the passphrase re-mint refuses"
+fi
+
+# R4 (must-RED): rotate missing the key re-publish -> ABORT.
+write_plan "${PASS_SET},${ROT_VOL},${ROT_PW}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R4 rotate-no-key: a rotate without the doppler_secret re-publish PASSED"
+else
+  pass "R4 rotate-no-key: a rotation missing the key re-publish refuses"
+fi
+
+# R5 (must-RED): rotate that ALSO destroys the plaintext volume -> ABORT (still preserved).
+PL_VOL="$(rc_obj 'hcloud_volume.git_data' '"delete","create"')"
+write_plan "${ROT_PASS_SET},${PL_VOL}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R5 rotate+plaintext-destroy: the plaintext store was touched in rotate mode"
+else
+  pass "R5 rotate+plaintext-destroy: the plaintext volume stays preserved in rotate"
+fi
+
+# R6 (must-RED): rotate missing the volume replace -> ABORT (passphrase-only is a stranding).
+write_plan "${PASS_SET},${ROT_PW},${ROT_KEY}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R6 rotate-no-volume: a passphrase re-mint without the volume replace PASSED"
+else
+  pass "R6 rotate-no-volume: key rotation without the fresh volume refuses"
+fi
+
+# R7 (must-RED): rotate missing the server replace -> ABORT (a bare LUKS rotate is not the D6 set).
+write_plan "${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE},${HK_SET},${ROT_VOL},${ROT_PW},${ROT_KEY}"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R7 rotate-no-server: a rotate that keeps the host PASSED"
+else
+  pass "R7 rotate-no-server: the rotate still requires the host replace"
+fi
+
+# R8 (must-RED): a bogus mode is a wiring fault — refuse, never default to a permissive arm.
+write_plan "${ROT_PASS_SET}"
+if git_data_host_replace_gate "$TMP/plan.json" bogus >/dev/null 2>&1; then
+  fail "R8 bogus-mode: an unknown mode PASSED"
+else
+  pass "R8 bogus-mode: an unknown mode refuses"
+fi
+
+# R9: rotate with an out-of-scope change still aborts (the allow-set extension is closed).
+write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.other' '"create"')"
+if git_data_host_replace_gate "$TMP/plan.json" rotate >/dev/null 2>&1; then
+  fail "R9 rotate-oos: an out-of-scope change passed the rotate arm"
+else
+  pass "R9 rotate-oos: out_of_scope still binds in rotate mode"
+fi
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -321,11 +554,11 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 20 ]]; then
+if [[ "$_ran" -lt 55 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 20. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 20)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
 fi
 
 echo ""

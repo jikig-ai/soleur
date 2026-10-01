@@ -8,7 +8,7 @@ set -euo pipefail
 # permanently blocked.
 #
 # Scope is content-based (since #3548): walks every workflow in
-# .github/workflows/ and exempts skill-security-scan-pr-trailer.yml
+# .github/workflows/ and exempts pr-quality-guards.yml
 # (real CI, not a bot workflow). Any file with `gh pr create` is in
 # scope regardless of filename prefix.
 #
@@ -22,11 +22,11 @@ checked=0
 for file in "$WORKFLOW_DIR"/*.yml; do
   [[ -f "$file" ]] || continue
 
-  # Exclude skill-security-scan-pr-trailer.yml: real CI workflow on
+  # Exclude pr-quality-guards.yml: real CI workflow on
   # pull_request_target, not a bot PR-creator. Exact-basename match —
   # substring matching would silently exempt typo- or attacker-introduced
-  # look-alikes like `evil-skill-security-scan-pr-trailer.yml`.
-  [[ "$(basename "$file")" == "skill-security-scan-pr-trailer.yml" ]] && continue
+  # look-alikes like `evil-pr-quality-guards.yml`.
+  [[ "$(basename "$file")" == "pr-quality-guards.yml" ]] && continue
 
   # Only check files that create PRs. Whitespace-flexible so
   # `gh  pr  create` (extra spaces or tabs) does not bypass.

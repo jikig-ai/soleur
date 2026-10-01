@@ -22,7 +22,7 @@
 // is added in the same PR (apps/web-platform/infra/sentry/cron-monitors.tf).
 //
 // SHAPE DIFF vs PR-7 cron-roadmap-review.ts:
-//   - --model claude-opus-5 — legal-audit skill
+//   - --model claude-opus-5-5 — legal-audit skill
 //     uses opus for cross-document consistency reasoning.
 //   - --max-turns 60 (was 40) — multi-document audit fans out across
 //     jurisdictions (US, EU/GDPR, UK).
@@ -73,7 +73,8 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
-import { AUDIT_MODEL } from "@/server/inngest/model-tiers";
+import { AUDIT_CLI_ARGS } from "@/server/inngest/model-tiers";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
 // Constants
@@ -98,13 +99,12 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 //
 // HISTORICAL GHA contract (scheduled-legal-audit.yml, removed by the TR9
 // Inngest migration — this file is now authoritative, there is no mirror):
-//   --model claude-opus-5
+//   --model claude-opus-5-5
 //   --max-turns 60
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task
 const CLAUDE_CODE_FLAGS = [
   "--print",
-  "--model",
-  AUDIT_MODEL,
+  ...AUDIT_CLI_ARGS,
   "--max-turns",
   "60",
   "--allowedTools",
@@ -372,6 +372,7 @@ export const cronLegalAudit = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 11 1 1,4,7,10 *" },

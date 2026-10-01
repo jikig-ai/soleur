@@ -8,6 +8,7 @@ status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris)"
 processing_activity: "Agent-assisted, human-approved outbound cold email for founder 1:1 outreach (`outbound.soleur.ai`) — Article 30 register Processing Activity 28"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
+addenda: ["2026-09-23 (#8617) — plaintext footprint outside the outbound tables"]
 data_subjects: "Outbound recipients (involuntary data subjects whose contact details were NOT obtained from them — Art. 14 applies); the founder/operator"
 related:
   [
@@ -220,6 +221,24 @@ architecture that achieves founder-led 1:1 cold outreach while structurally
 guaranteeing the Art. 14 disclosure (C3), permanent opt-out (C5), and
 anti-exfiltration recipient controls. Each rejected alternative is either less
 protective of the data subject or fails the purpose.
+
+> **Addendum 2026-09-23 (#8617, CLO determination) — the minimisation premise was narrower
+> than stated; the conclusion stands.** "The plaintext recipient address is never stored" and
+> "bodies are never persisted" (Purpose §, Alternative C) were true of the two outbound tables
+> only. They were not true of the platform as a whole, and were already inaccurate on the
+> assessment date. The recipient and body also persist in the agent conversation in which the
+> message is drafted (conversation content and SDK session files, #3418), and Anthropic
+> processes them during drafting. "No LLM sits in the send path" remains accurate. From
+> 2026-06-09 until the merge of PR #8617, refusal errors carried the recipient address into
+> journald, Better Stack and Sentry, and offline approval emails sent through Resend carried
+> the address and a 240-character body preview. PR #8617 closes both paths from its merge.
+>
+> **This is an ADDENDUM rather than an in-place edit, deliberately:** the text above is the
+> dated record of what was weighed. The balancing still favours processing. The decisive
+> safeguard (the per-send human approval gate), the permanent opt-out, and the pseudonymised
+> accountability record all survive. The larger footprint sits in conversation content already
+> covered by the Web Platform processing activity. The #3418 disclosure and erasure gap is a
+> named residual.
 
 ---
 

@@ -22,11 +22,19 @@
 #   - AWS_ACCESS_KEY_ID     (R2 backend)
 #   - AWS_SECRET_ACCESS_KEY (R2 backend)
 #
-# Two apply targets (#4829):
+# Five apply targets (the comment's original "two" predates three additions):
 #   - terraform_data.deploy_pipeline_fix — HTTPS-only (#3756): its local-exec
 #     provisioner POSTs base64 file payloads through the CF Tunnel to
 #     /hooks/infra-config; the webhook handler (infra-config-apply.sh) writes them
 #     atomically. No SSH needed for THIS target.
+#   - terraform_data.docker_seccomp_config and terraform_data.apparmor_bwrap_profile
+#     — SSH siblings riding the same bridge (web-1 only, #4829 follow-on).
+#   - terraform_data.deploy_pipeline_fix_web2 — SSH sibling for web-2 (#9151).
+#     It is reached through an `ssh -L 127.0.0.1:2223:<web-2-private>:22` forward
+#     ON the web-1 bastion session plus a second OUTPUT REDIRECT — so a down or
+#     mid-replace web-2 fails this job CLOSED before plan, and `[skip-deploy-fix-apply]`
+#     skips web-1 remediation too. Fail-closed is deliberate: a skipped web-2
+#     silently re-drifts into the #9151 defect.
 #   - terraform_data.infra_config_handler_bootstrap — root SSH (#4827). It
 #     delivers the handler + the infra-config-install escalation helper + the
 #     sudoers grant, which the webhook path cannot self-deliver (chicken-and-egg,
@@ -103,11 +111,11 @@ on:
       # deploy_pipeline_fix triggers_replace, so a body-only edit to any of them must fire
       # this apply or the change never reaches the host.
       #
-      # server.tf is DELIBERATELY ABSENT from this list and must stay absent (R13). Adding it
-      # would make EVERY server.tf edit auto-write production — a far larger blast radius than
-      # this workflow is scoped for. The filter covers host-delivered ARTIFACTS only. The
-      # consequence is explicit and accepted: a change to the RENDERED credential that touches
-      # no file in this list (a Doppler-only rotation) does not fire this workflow on its own.
+      # The consequence #7095's R13 warned about is NARROWER than the comment it left
+      # implied: server.tf IS in this list (added long ago, kept), so a change to the
+      # RENDERED credential that touches no file here (a Doppler-only rotation, which
+      # touches no repo path at all) does not fire this workflow on its own. That gap is
+      # explicit and accepted; the self-heal fires on the next unrelated apply.
       - "apps/web-platform/infra/soleur-doppler-token.tmpl"
       - "apps/web-platform/infra/10-vector-doppler-token.conf"
       - "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf"
@@ -131,6 +139,11 @@ on:
       # Kept in sync with the #5505 paths-union test in ship-deploy-pipeline-fix-gate.ts.
       - "apps/web-platform/infra/apparmor-soleur-bwrap.profile"
       - "apps/web-platform/infra/server.tf"
+      # #9151 — web-2's committed SSH host-key pin feeds local.web_2_ssh_host_key AND the
+      # deploy_pipeline_fix_web2 triggers_replace, so a re-capture alone must re-fire this
+      # apply (the sibling is the only resource that re-provisions web-2 over the bastion
+      # forward this workflow opens).
+      - "apps/web-platform/infra/web-2-ssh-host-key.pub"
   workflow_dispatch:
     inputs:
       reason:
@@ -170,6 +183,9 @@ permissions:
 
 env:
   TERRAFORM_VERSION: "1.10.5"
+  # (#7226) MUST equal TERRAFORM_VERSION (terraform-target-parity pins it); feeds
+  # web_1_host_key_probe's trigger in apps/web-platform/infra.
+  TF_VAR_terraform_version: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
   # cloudflared binary for the CF Tunnel SSH bridge to the
   # infra_config_handler_bootstrap resource (#4829, see #4177/#4181 precedent).
@@ -199,6 +215,7 @@ jobs:
           fi
 
   apply:
+    environment: infra-privileged
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
@@ -229,8 +246,14 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+          # #8609: this push delivers the web host's soleur-github-app read token to web-1
+          # (one line of /etc/default/soleur-doppler-token); every other Tier-B job gets "".
+          github-app-runtime-token: true
 
       - name: Verify DOPPLER_TOKEN
         env:
@@ -248,8 +271,8 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
@@ -280,6 +303,112 @@ jobs:
           cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
 
+      # #9151 — the web-2 route. terraform_data.deploy_pipeline_fix_web2 dials
+      # hcloud_server.web["web-2"].ipv4_address, which the runner cannot reach
+      # (web-2's :22 is admin_ips-restricted exactly like web-1's). Open a
+      # `ssh -L` forward THROUGH the pinned web-1 bastion the bridge just opened,
+      # then a second OUTPUT REDIRECT so Terraform's Go SSH client reaches it
+      # transparently — the ADR-220 second-private-host pattern, with no new
+      # Cloudflare ingress/Access/DNS objects.
+      #
+      # Requirements, each fail-closed rather than assumed: `ssh` on the runner;
+      # AllowTcpForwarding on web-1's sshd (a refusal shows up as the forward or
+      # the end-to-end probe dying); the CI private key (exported by the bridge
+      # as TF_VAR_ci_ssh_private_key — written to a 0600 file for the ssh client);
+      # and BOTH pinned host keys, verified through the same write-known-hosts.sh
+      # writer every CI consumer uses (no TOFU anywhere on this path).
+      - name: SSH forward to web-2 through the web-1 bastion
+        run: |
+          set -euo pipefail
+          command -v ssh >/dev/null || { echo "::error::ssh client not found on this runner — the web-2 forward cannot open."; exit 1; }
+          command -v iptables >/dev/null || { echo "::error::iptables not found — the web-2 NAT redirect cannot install."; exit 1; }
+
+          # `terraform output` reads STATE, and a new output is only recorded
+          # there by the first apply that contains it — the bootstrap apply this
+          # step exists to enable. Read the same attributes from state directly
+          # (hcloud_server.web["web-2"].ipv4_address is what the output renders;
+          # hcloud_server_network.web["web-2"].ip is the private side). Works
+          # identically before and after the outputs land in state, and each
+          # lookup fails closed on an empty/non-IPv4 result below.
+          WEB_2_STATE="$(terraform -chdir="$INFRA_DIR" show -json)" \
+            || { echo "::error::terraform show -json failed — cannot resolve web-2's addresses."; exit 1; }
+          WEB_2_IP="$(printf '%s' "$WEB_2_STATE" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server.web[\"web-2\"]") | .values.ipv4_address // empty')"
+          WEB_2_PRIVATE="$(printf '%s' "$WEB_2_STATE" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server_network.web[\"web-2\"]") | .values.ip // empty')"
+          [[ "$WEB_2_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+            || { echo "::error::could not resolve web-2's public IPv4 — hcloud_server.web[\"web-2\"].ipv4_address absent from state."; exit 1; }
+          [[ "$WEB_2_PRIVATE" =~ ^10\.0\.1\.[0-9]{1,3}$ ]] \
+            || { echo "::error::could not resolve web-2's private IPv4 — hcloud_server_network.web[\"web-2\"].ip absent from state."; exit 1; }
+          echo "WEB_2_IP=$WEB_2_IP" >> "$GITHUB_ENV"
+
+          # 0600 keyfile from the bridge-exported key material. `ssh -i` requires a
+          # file; the variable itself is multi-line PEM and survives the round trip.
+          WEB2_KEYFILE="$(mktemp /tmp/web2-fwd-key.XXXXXX)"
+          chmod 600 "$WEB2_KEYFILE"
+          printf '%s\n' "${TF_VAR_ci_ssh_private_key:?bridge did not export the CI key}" > "$WEB2_KEYFILE"
+          ssh-keygen -yf "$WEB2_KEYFILE" >/dev/null \
+            || { echo "::error::the CI key material did not parse as a private key."; exit 1; }
+          echo "WEB2_KEYFILE=$WEB2_KEYFILE" >> "$GITHUB_ENV"
+
+          # Pinned host keys for BOTH hops — the writer is the shape check every
+          # CI consumer applies; -F /dev/null so no runner-side config can widen it.
+          bash "$GITHUB_WORKSPACE/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh" \
+            web-1 "$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub" \
+            "$RUNNER_TEMP/web-1.known_hosts"
+          bash "$GITHUB_WORKSPACE/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh" \
+            web-2 "$GITHUB_WORKSPACE/apps/web-platform/infra/web-2-ssh-host-key.pub" \
+            "$RUNNER_TEMP/web-2.known_hosts"
+
+          : > /tmp/web2-forward.log
+          ssh -N -F /dev/null \
+              -o ExitOnForwardFailure=yes \
+              -o StrictHostKeyChecking=yes \
+              -o HostKeyAlias=web-1 \
+              -o UserKnownHostsFile="$RUNNER_TEMP/web-1.known_hosts" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o HostKeyAlgorithms=ecdsa-sha2-nistp256 \
+              -o UpdateHostKeys=no \
+              -o BatchMode=yes \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+              -i "$WEB2_KEYFILE" \
+              -L 127.0.0.1:2223:"${WEB_2_PRIVATE}:22" \
+              root@127.0.0.1 -p 2222 2>>/tmp/web2-forward.log &
+          WEB2_FORWARD_PID=$!
+          echo "WEB2_FORWARD_PID=$WEB2_FORWARD_PID" >> "$GITHUB_ENV"
+
+          up=0
+          for i in $(seq 1 30); do
+            if ! kill -0 "$WEB2_FORWARD_PID" 2>/dev/null; then break; fi
+            if (exec 3<>"/dev/tcp/127.0.0.1/2223") 2>/dev/null; then exec 3>&- 3<&- || true; up=1; break; fi
+            sleep 1
+          done
+          if [[ "$up" != 1 ]]; then
+            echo "::error::web-2 SSH forward did not open 127.0.0.1:2223 within 30s. Usual causes: AllowTcpForwarding=no on web-1's sshd, web-2's :22 closed on the private net, or the bastion auth failing."
+            tail -n 50 /tmp/web2-forward.log >&2 || true
+            exit 1
+          fi
+          echo "web-2 forward is up on 127.0.0.1:2223 (attempt ${i:-?})"
+
+          # End-to-end probe: authenticate to web-2 through the forward with the
+          # web-2 PINNED host key — proves the full path (tunnel + bastion +
+          # private-net forward + sshd auth + host-key pin) before Terraform plans
+          # against it. A failure here is a broken route, not a slow one.
+          timeout 30 ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=yes \
+              -o HostKeyAlias=web-2 \
+              -o UserKnownHostsFile="$RUNNER_TEMP/web-2.known_hosts" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o HostKeyAlgorithms=ecdsa-sha2-nistp256 \
+              -o UpdateHostKeys=no \
+              -i "$WEB2_KEYFILE" -p 2223 root@127.0.0.1 true \
+            || { echo "::error::end-to-end web-2 SSH probe failed — the forward is up but web-2 refused (auth, host key, or sshd config)."; tail -n 50 /tmp/web2-forward.log >&2 || true; exit 1; }
+          echo "end-to-end web-2 probe: root@web-2 ($WEB_2_PRIVATE) accepted the CI key and pinned host key"
+
+          sudo iptables -t nat -A OUTPUT -d "$WEB_2_IP" -p tcp --dport 22 \
+            -j REDIRECT --to-ports 2223
+          echo "NAT: $WEB_2_IP:22 → 127.0.0.1:2223 → $WEB_2_PRIVATE:22"
+
       - name: Terraform plan
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -288,16 +417,18 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          doppler run --name-transformer tf-var -- \
+          doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
             -target=terraform_data.docker_seccomp_config \
             -target=terraform_data.apparmor_bwrap_profile \
+            -target=terraform_data.deploy_pipeline_fix_web2 \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -no-color -input=false -out=tfplan
 
-          # host_creates HALT (#6718). All four -targets reference
-          # hcloud_server.web["web-1"] (server.tf: server_id / connection host), and
+          # host_creates HALT (#6718). All five -targets reference
+          # hcloud_server.web (server.tf: server_id / connection host — web-1 for
+          # the original four, web-2 for deploy_pipeline_fix_web2 since #9151), and
           # `-target` is TRANSITIVE at the resource level, so hcloud_server.web
           # ["web-1"] and hcloud_volume.workspaces["web-1"] sit in THIS plan's graph
           # too. This workflow passes no -var image_name, so a transitive web-1 birth
@@ -343,6 +474,42 @@ jobs:
             exit 1
           fi
           echo "deploy-pipeline-fix plan creates no hcloud_server (host_creates=0; hcloud_volume not counted since #6919/T55)."
+
+          # (#8705) NO NON-terraform_data DELETE OR FORGET on this path. The -targets above reach
+          # hcloud_server.web["web-1"] and, through its user_data, every credential its
+          # templatefile reads — so a pending credential rename (doppler_service_token.web_probes)
+          # plans as a replace HERE, where there is no [ack-destroy] and the credential's SSH
+          # installers are not re-fired. Replacing this workflow's own terraform_data resources
+          # is routine; anything else belongs to apply-web-platform-infra.yml.
+          ntd_rc=0
+          ntd_deletes=$(echo "$counts" | jq -r '.non_terraform_data_deletes') || ntd_rc=$?
+          if [[ "$ntd_rc" -ne 0 || ! "$ntd_deletes" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (non_terraform_data_deletes='${ntd_deletes}', jq rc=${ntd_rc}). The guard CANNOT evaluate, so this run aborts fail-CLOSED. Fix the filter or its consumer — do NOT re-run."
+            exit 1
+          fi
+          if [[ "$ntd_deletes" -gt 0 ]]; then
+            ntd_addrs=$(jq -r '[.resource_changes[]? | select((.mode // "managed") == "managed") | select(.type != "terraform_data") | select((.change.actions // []) | any(. == "delete" or . == "forget")) | .address] | join(", ")' tfplan.json 2>/dev/null || echo "<could not list>")
+            echo "::error::deploy-pipeline-fix plan would DELETE or FORGET ${ntd_deletes} resource(s) that are not its own terraform_data: ${ntd_addrs}. This workflow never removes credentials, hosts or volumes."
+            echo "::error::ROUTING — do NOT re-run this workflow yet. That change belongs to apply-web-platform-infra.yml (the merge commit that makes it must carry [ack-destroy] on its own line). Once that run is green, re-run this workflow. NO BYPASS on this path."
+            exit 1
+          fi
+          echo "deploy-pipeline-fix plan deletes nothing but its own terraform_data (non_terraform_data_deletes=0)."
+
+          # (#8705 review) NO REBOOT-FORCING UPDATE on this path either. The same transitive reach
+          # means a pending hcloud_server.web server_type / placement_group_id change would be
+          # applied HERE, rebooting web-1 with no [ack-destroy]. Same shared filter counter the
+          # apply job reads.
+          rb_rc=0
+          rb_updates=$(echo "$counts" | jq -r '.reboot_updates') || rb_rc=$?
+          if [[ "$rb_rc" -ne 0 || ! "$rb_updates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (reboot_updates='${rb_updates}', jq rc=${rb_rc}). The guard CANNOT evaluate, so this run aborts fail-CLOSED. Fix the filter or its consumer — do NOT re-run."
+            exit 1
+          fi
+          if [[ "$rb_updates" -gt 0 ]]; then
+            echo "::error::deploy-pipeline-fix plan would apply ${rb_updates} reboot-forcing server update(s) (server_type / placement group). This workflow never reboots a host."
+            echo "::error::ROUTING — do NOT re-run this workflow yet. That change belongs to apply-web-platform-infra.yml (the merge commit that makes it must carry [ack-destroy] on its own line). Once that run is green, re-run this workflow. NO BYPASS on this path."
+            exit 1
+          fi
 
           # #7104 — WAS A PUSH EVEN EXPECTED ON THIS RUN?
           #
@@ -565,18 +732,35 @@ jobs:
           # Free safety improvement worth naming: with `use_lockfile = false`, a break-glass
           # apply run outside CI now fails closed with a stale-plan error instead of silently
           # last-writer-wins.
-          doppler run --name-transformer tf-var -- \
+          doppler run --preserve-env --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
       - name: Tear down cloudflared SSH bridge
         if: always()
-        # Remove the NAT redirect + kill cloudflared as soon as the apply is done
-        # (the post-apply verifies below are HTTPS, not SSH). `if: always()` so a
-        # failed apply still leaves no stray rule/process — a left-over OUTPUT NAT
-        # rule or orphaned cloudflared would corrupt a later job on a persistent
-        # runner (moot on GH-hosted ephemeral runners, but the discipline is required).
+        # Remove the NAT redirects + kill the forward and cloudflared as soon as
+        # the apply is done (the post-apply verifies below are HTTPS, not SSH).
+        # `if: always()` so a failed apply still leaves no stray rule/process —
+        # a left-over OUTPUT NAT rule, orphaned forward, or on-disk CI keyfile
+        # would corrupt/leak into a later job on a persistent runner (moot on
+        # GH-hosted ephemeral runners, but the discipline is required). Every
+        # guard tolerates a run that failed before the forward step exported.
         run: |
           set +e
+          if [[ -n "${WEB_2_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT \
+              -d "$WEB_2_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2223 2>/dev/null || true
+          fi
+          if [[ -n "${WEB2_FORWARD_PID:-}" ]]; then
+            kill "$WEB2_FORWARD_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${WEB2_KEYFILE:-}" && -f "$WEB2_KEYFILE" ]]; then
+            shred -u "$WEB2_KEYFILE" 2>/dev/null || rm -f "$WEB2_KEYFILE"
+          fi
+          if [[ -f /tmp/web2-forward.log ]]; then
+            echo "=== /tmp/web2-forward.log ==="
+            tail -n 100 /tmp/web2-forward.log || true
+          fi
           if [[ -n "${SERVER_IP:-}" ]]; then
             sudo iptables -t nat -D OUTPUT \
               -d "$SERVER_IP" -p tcp --dport 22 \
@@ -638,6 +822,25 @@ jobs:
             exit 1
           fi
 
+      # #9151 — live parity read, no SSH: web-1's deploy-status must report the
+      # .ci_deploy_sha256 field (#9151's new field) equal to THIS checkout's
+      # ci-deploy.sh sha256. After a successful apply the pushed bytes are the
+      # repo's, so a mismatch means the push rewrote the status schema without
+      # converging the script — visible here instead of at the next deploy.
+      - name: Verify deploy-script parity (web-1 status arm)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          export APP_DOMAIN_BASE WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          WEBHOOK_DEPLOY_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          CF_ACCESS_CLIENT_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_CLIENT_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+          bash scripts/check-deploy-script-parity.sh --status-only
+
       - name: Export rendered credential digest (activates the gate's byte compare)
         id: rendered_digest
         # #7095 review — WITHOUT THIS STEP THE TIER-2 COMPARE IS DEAD CODE. infra-config-gate.sh
@@ -692,7 +895,7 @@ jobs:
           # So guard on CONTENT: require the decode to succeed AND to yield the template's
           # own marker line. sha256sum is reached only through that gate.
           b64=""; console_rc=0
-          b64="$(doppler run --name-transformer tf-var -- \
+          b64="$(doppler run --preserve-env --name-transformer tf-var -- \
             terraform console -var="ssh_key_path=${CI_SSH_PUB}" \
             <<<'nonsensitive(base64encode(local.webhook_doppler_token_env))' 2>/dev/null)" || console_rc=$?
           b64="${b64//\"/}"
@@ -781,7 +984,7 @@ jobs:
           # -lock-timeout so a cancelled re-push cannot leave the S3 backend lock held and
           # block every later apply on the sole no-SSH remediation path.
           rc=0
-          doppler run --name-transformer tf-var -- \
+          doppler run --preserve-env --name-transformer tf-var -- \
             terraform plan \
               -replace=terraform_data.deploy_pipeline_fix \
               -target=terraform_data.deploy_pipeline_fix \

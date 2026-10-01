@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 
 // ADR-067 GAP #4 / AC8: when SWR revalidation FAILS while stale-but-valid data
 // is still on screen (`error && data`), we keep the stale content visible and
@@ -20,21 +21,22 @@ export function StaleRefreshBar({ onRetry }: { onRetry: () => void }) {
     >
       <span>Couldn&apos;t refresh — showing the last loaded view.</span>
       <div className="flex shrink-0 items-center gap-2">
-        <button
+        <Button
+          variant="outlined"
           type="button"
           onClick={onRetry}
-          className="rounded-md border border-soleur-border-default px-2.5 py-1 font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2"
         >
           Retry
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => setDismissed(true)}
           aria-label="Dismiss refresh warning"
-          className="rounded p-1 text-soleur-text-muted hover:text-soleur-text-primary"
+          className="hover:text-soleur-text-primary"
         >
           ✕
-        </button>
+        </Button>
       </div>
     </div>
   );

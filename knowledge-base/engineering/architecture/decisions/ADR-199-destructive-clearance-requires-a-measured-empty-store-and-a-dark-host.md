@@ -44,6 +44,15 @@ dispatch — a reviewer approving an environment, a confirm literal being typed,
 pinned, a plan document matching a shape — is satisfiable in full while the host is serving live
 traffic and the store holds armed reminders. All four authorize by INTENT. None of them looks.
 
+> **Amended 2026-09-18 (#6894):** the preserve-and-copy route this ADR contrasts itself with is no
+> longer a design on paper — it is built and dispatchable (`op=luks-cutover`, ADR-142's 2026-09-18
+> amendment). Nothing here is superseded: this ADR governs the world where the store measures EMPTY,
+> and in that world the recut is still the cheaper route. What changes is the else-branch. "Expensive,
+> multi-step" below was written when the alternative was an operator procedure; it is now one
+> reviewer-gated dispatch whose on-host FSM copies, proves byte-equality and swaps, and which rolls
+> itself back if the post-swap verification fails. Read the cost comparison with that in mind before
+> choosing the destructive shape.
+
 ## Decision
 
 **A dispatch that destroys a state volume must prove, from telemetry, that the state is not there —

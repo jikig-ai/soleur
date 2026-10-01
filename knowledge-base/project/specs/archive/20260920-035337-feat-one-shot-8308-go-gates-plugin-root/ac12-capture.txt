@@ -1,0 +1,27 @@
+# AC12 — real-harness contact, #8308
+#
+# Captured 2026-09-20 from a SCRATCH git workspace, not the operator's repo. The earlier
+# capture was taken against the live repo and therefore performed a real destructive
+# cleanup (it deleted a merged branch and reset the main checkout) and committed ~60
+# absolute paths under the operator's $HOME — a review seat flagged both, and the suite's
+# own H3 row had already learned the lesson and routes through a scratch workspace.
+#
+# Recipe (both corrections are load-bearing — see go-session-gates.test.sh H3):
+#   prompt on STDIN; the positional form is rejected by the CLI outright.
+#   the prompt must INVOKE /soleur:go — asked to 'run the blocks', the agent Reads go.md
+#   from disk, the UNDELIVERED path, and the capture then reads source=none verified=false.
+#
+#   cd <scratch repo> && printf '%s\n' "/soleur:go run ONLY the Step 0.0, Step 0.5 and Step 0"
+#     " bash blocks exactly as delivered, then print their combined raw stdout verbatim..."
+#     | claude -p --plugin-dir <repo>/plugins/soleur --allowedTools Bash
+
+```
+SOLEUR_PLUGIN_ROOT_RESOLVE gate=readiness source=plugin-root-token verified=true
+SOLEUR_GIT_REPO_READY=true
+SOLEUR_PLUGIN_ROOT_RESOLVE gate=cloud-detect source=plugin-root-token verified=true
+not-local:no-devin-env
+SOLEUR_PLUGIN_ROOT_RESOLVE gate=session-start source=plugin-root-token verified=true
+SOLEUR_WORKTREE_LEASE_LIB_OK path=<worktree>/plugins/soleur/skills/git-worktree/scripts/../../../scripts/lib/session-state.sh
+SOLEUR_GIT_BARE_POISON git_dir=/tmp/ac12.j8eNisAO/.git shared_bare=false extension=absent git_version=2.55.0 branch=guard-skip
+/tmp/ac12.j8eNisAO 8d25de4 [main]
+```

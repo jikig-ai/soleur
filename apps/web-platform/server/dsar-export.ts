@@ -470,6 +470,47 @@ export async function exportSqlTable(
   }
 
   // -- api_keys ----------------------------------------------------------
+  // -- workspace_engine_settings (migration 138) -----------------------
+  {
+    const { data, error } = await service
+      .from("workspace_engine_settings")
+      .select("*")
+      .eq("updated_by", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`workspace_engine_settings read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "workspace_engine_settings", { ownerField: "updated_by" });
+    results.push({ table: "workspace_engine_settings", spec: DSAR_TABLE_ALLOWLIST.workspace_engine_settings, rows });
+  }
+
+  // -- agent_engine_runs (migration 138) --------------------------------
+  let engineRunIds: string[] = [];
+  {
+    const { data, error } = await service
+      .from("agent_engine_runs")
+      .select("*")
+      .eq("created_by", expectedUserId);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`agent_engine_runs read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    assertReadScope(rows, expectedUserId, "agent_engine_runs", { ownerField: "created_by" });
+    engineRunIds = rows.map((row) => row.id).filter((id): id is string => typeof id === "string");
+    results.push({ table: "agent_engine_runs", spec: DSAR_TABLE_ALLOWLIST.agent_engine_runs, rows });
+  }
+
+  // -- agent_engine_events (migration 138, join via run) ----------------
+  {
+    const { data, error } = await service
+      .from("agent_engine_events")
+      .select("*")
+      .in("run_id", engineRunIds);
+    if (signal.aborted) throw new Error("aborted");
+    if (error) throw new Error(`agent_engine_events read failed: ${error.message}`);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    results.push({ table: "agent_engine_events", spec: DSAR_TABLE_ALLOWLIST.agent_engine_events, rows });
+  }
+
+  // -- api_keys ----------------------------------------------------------
   {
     const { data, error } = await service
       .from("api_keys")

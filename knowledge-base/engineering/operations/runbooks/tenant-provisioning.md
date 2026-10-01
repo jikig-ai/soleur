@@ -56,7 +56,7 @@ deviates from the template.
 
 ### Step 1 — Create Hetzner sub-project
 
-> **Skill:** `soleur:provision-hetzner <slug> [--dry-run]` — guided Console flow + write-class smoke-test. No Terraform (Console-only).
+> **Operator types:** `/soleur:provision-hetzner <slug> [--dry-run]` — guided Console flow + write-class smoke-test. No Terraform (Console-only).
 
 **Action**: Log in to the tenant's Hetzner Cloud master account (the
 tenant org-owner has separately accepted Hetzner's Customer terms per the
@@ -95,7 +95,7 @@ manually delete the dummy resources first.
 
 ### Step 2 — Create Cloudflare scoped account-API token
 
-> **Skill:** `soleur:provision-cloudflare <slug> <zone-id> <account-id> [--dry-run]` — Terraform `cloudflare_api_token` with least-privilege permissions.
+> **Operator types:** `/soleur:provision-cloudflare <slug> <zone-id> <account-id> [--dry-run]` — Terraform `cloudflare_api_token` with least-privilege permissions.
 
 **Action**: Log in to the tenant's Cloudflare account (the tenant has
 separately accepted CF Self-Serve Subscription Agreement per the
@@ -132,7 +132,7 @@ the tenant org owner.)
 
 ### Step 3 — Create Doppler project + OIDC service-account identity
 
-> **Skill:** `soleur:provision-doppler <slug> <org> <repo> [--dry-run]` — Terraform `doppler_project` + `doppler_config`, then OIDC service-account via Doppler API.
+> **Operator types:** `/soleur:provision-doppler <slug> <org> <repo> [--dry-run]` — Terraform `doppler_project` + `doppler_config`, then OIDC service-account via Doppler API.
 
 **Action**: Log in to the tenant's Doppler account (separate Customer
 acceptance per the ToS-research artifact). Create a project named after
@@ -166,7 +166,7 @@ tenant's project context.
 
 ### Step 4 — Create GitHub repo + install Soleur GitHub App
 
-> **Skill:** `soleur:provision-github <slug> <org> <reviewer> [--dry-run]` — Terraform `github_repository` + `github_repository_environment`, then human consent gate for App install.
+> **Operator types:** `/soleur:provision-github <slug> <org> <reviewer> [--dry-run]` — Terraform `github_repository` + `github_repository_environment`, then human consent gate for App install.
 
 **Action**: In the tenant's GitHub organization, create a new repository for
 the tenant's project. Install the Soleur GitHub App (`app/soleur`) on
@@ -316,7 +316,7 @@ tenant repo's working tree. No external state changes.
 
 ### Step 7 — Configure GitHub Environment `production` on tenant repo
 
-> **Skill:** `soleur:provision-github` (same skill as Step 4) — creates the `production` Environment + required reviewers + deployment branch policy as part of the TF apply.
+> **Operator types:** `/soleur:provision-github` (same skill as Step 4) — creates the `production` Environment + required reviewers + deployment branch policy as part of the TF apply.
 
 **Action**: Create a GitHub Environment named `production` on the
 tenant repo. Configure:

@@ -4,14 +4,19 @@ status: accepted
 date: 2026-08-11
 amends: [ADR-093]
 related_adrs: [ADR-074, ADR-091, ADR-093, ADR-151, ADR-155, ADR-171]
-related: [7442, 7450, 6222, 7474, 7452, 7453, 7502]
+related: [7442, 7450, 6222, 7474, 7452, 7453, 7502, 8061, 8283, 8308]
 amended_by:
   - "#7474 (2026-08-11) — producer presence as a fourth precondition; see ## Amendment 2026-08-11"
   - "#7450 (2026-08-12) — the skills secret-gate subset; decisions 8/9/10 and the §R1 settlement from the CTO ruling; then amendment items A10 (§R3 measured on the skill surface) and A11 (root-outside-worktree REJECTED); see ## Amendment — 2026-08-12"
+  - "#8401 (2026-09-20) — amendment item A16: arm 3 is no longer confined to Step 0.5; the session-start dispatch is gated on the reaper capability token. Supersedes decision 11's confinement."
+  - "#8542 follow-up (2026-09-23) — amendment item A17: an in-payload SIBLING resolved from an absolutized BASH_SOURCE is a sanctioned code-root anchor; see ## Amendment — 2026-09-23"
+  - "#7453 (2026-09-24) — amendment items A18 (the skills deferral retired; payload markdown is a flat zero), A19 (the list/ls carve-out re-anchored) and A20 (the Read surface delivers its own root); see ## Amendment — 2026-09-24"
+  - "#8308 (2026-09-19) — decision 11 (the dual-harness resolution ORDER for /soleur:go's three session gates) and amendment item A15 (${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT} rejected); see ## Amendment — 2026-09-19"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
   - knowledge-base/project/plans/archive/20260812-125433-2026-08-11-fix-sync-producer-freshness-probe-plan.md
   - knowledge-base/project/plans/2026-08-12-fix-git-root-fallback-untrusted-anchor-plan.md
+  - knowledge-base/project/plans/2026-09-19-fix-go-session-gates-plugin-root-resolution-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-one-shot-7442-sync-plugin-root-anchoring/tasks.md
   - knowledge-base/project/specs/archive/20260812-145032-feat-one-shot-7474-sync-producer-freshness-probe/tasks.md
@@ -246,6 +251,8 @@ the workspace.
   and `plugin-root-list-carveout-coupling.test.ts`'s regex, and bundling an allowlist edit
   with a security fix is how allowlist regressions ship. Those ~105 are **unmigrated, not
   endorsed** — a new site must use the bare anchor.
+  **Superseded 2026-09-24 (#7453):** migrated. No payload markdown carries a default arm or a
+  git-root code root; see amendment item **A18**.
 - **The negative branch of §R3 has a larger blast radius than "the operator-experience
   calculus" implies, and it is stated here rather than left to the halt-gate note.** If the
   loader did not substitute, four skills — `incident`, `legal-generate`, `linear-fetch`,
@@ -691,9 +698,9 @@ and a direct `emit_incident` call produce byte-identical rows, differing only in
 
 **Scope of option (e).** Option (e) rejects a git-root shim as a **code root / trust
 anchor**. It does **not** reject `plugins/soleur/scripts/resolve-git-root.sh` in its live use
-as a **workspace/data** root by `hooks/stop-hook.sh`, `hooks/welcome-hook.sh`, and
-`.openhands/hooks/stop-hook.sh`, which is correct under item 7's code-root/data-root
-distinction. Stated because a one-line rejection read out of context invites deleting a
+as a **workspace/data** root by `hooks/stop-hook.sh` and `hooks/welcome-hook.sh`, which is
+correct under item 7's code-root/data-root distinction. (An `.openhands/hooks/stop-hook.sh`
+was a third such use until the port was retired 2026-09-23, ADR-245.) Stated because a one-line rejection read out of context invites deleting a
 working helper.
 
 ### Classification rule for the remaining corpus (#7453 needs no re-deciding)
@@ -869,3 +876,458 @@ which this PR migrated to the bare quoted anchor at five sites: the `community-r
 plus four `*-setup.sh` operator instructions that were **bare repo-relative** — strictly worse than
 a `:-` arm, since a bare path is CWD-relative unconditionally. Those four were found by Test 24's
 invariant-keyed rewrite, not by review.
+
+## Amendment — 2026-09-19 (#8308): the dual-harness resolution ORDER, and the `:-` class's second member
+
+### Decision 11 — `/soleur:go`'s session gates resolve the plugin root in a fixed arm order
+
+**Context.** PR #8061 (commit `949872534`, 2026-09-12) rewrote `plugins/soleur/commands/go.md`'s
+three session-gate fences from the canonical braced token to
+`ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"`, to give Grok Build a runtime override. The
+inner `$CLAUDE_PLUGIN_ROOT` is unbraced and therefore **is not the loader's token**: the whole
+line reached bash verbatim and expanded empty in any session with neither variable exported —
+which is every local Claude Code session (§R3, A10). All three gates then took their degraded
+branch, emitting only `reason=plugin-root-unverified`, while two CI guards pinned the
+broken literal and stayed green over it (#8308; #8283 §2 records the same symptom from a
+different session). Measured window: Steps 0.0 and 0 from 2026-09-12, 7 days; Step 0.5 from
+2026-09-16, 3 days — it did not exist before #8159, so "all three, for a week" overstates it.
+
+**Measured before deciding** (#7450 `phase-1-measurement.md` §Arm 5, 2026-09-19, on the
+**command** surface, with a live decoy `CLAUDE_PLUGIN_ROOT` as the control on both runs):
+
+| Form as written | Claude Code | Grok Build 1.0.34 |
+| --- | --- | --- |
+| `${CLAUDE_PLUGIN_ROOT}` | SUBSTITUTED | SUBSTITUTED |
+| `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` | literal | literal |
+| `$CLAUDE_PLUGIN_ROOT` | literal | literal |
+| `'${CLAUDE_PLUGIN_ROOT}'` | SUBSTITUTED | SUBSTITUTED |
+| `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` | literal | not re-run (Arm 3 measured it on the skill surface) |
+
+**Decision.** Each of the three fences carries one byte-identical resolver with this arm order:
+
+1. `ROOT="${CLAUDE_PLUGIN_ROOT}"` → `SRC=plugin-root-token`. On a substituting harness this is a
+   literal the loader fixes **before bash runs**, so no environment value can direct it — the
+   property §R3/A10 established and the one ground 1 of A11 relies on. On a read-from-disk
+   surface (Codex, Devin CLI) it is an ordinary variable those harnesses' `INSTRUCTIONS.md`
+   §"Paths and entry points" tell the agent to set.
+2. `GROK_PLUGIN_ROOT`, when arm 1 produced nothing → `SRC=grok-env`.
+3. Both documented Devin caches (`$HOME/.local/share/devin/cli/plugins/cache`,
+   `/opt/.devin/plugins`), `[ -d ]`-gated and identity-selected → `SRC=devin-cache`.
+   **Step 0.5 only** (see confinement below).
+
+Never a CWD default, in any arm (#7442, and option (d) above).
+
+**Restated, because this decision qualifies it — the option-(a) failure-mode table, with the
+#8061 form added as a row rather than appended to a different table:**
+
+| Form | Expands to (both variables unset) | Failure mode |
+| --- | --- | --- |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/…` | the substituted installed root, or `/scripts/…` | correct root, or root-anchored and nonexistent → the preflight refuses |
+| `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/…` | `./plugins/soleur/…` | resolves into the customer's tree → **fail-open, executes their file** |
+| `${CLAUDE_PLUGIN_ROOT:?msg}/…` | — | exit 127 |
+| `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/…` | **`/…`** | **not the loader's token; reaches bash verbatim, expands EMPTY, and the guard `[ -n "$ROOT" ]` then takes the degraded branch on every session — fail-CLOSED on the safety axis and fail-OPEN on the "did the gate run" axis** |
+
+The last row is why #8308 is not #7453 in reverse. #7453 migrates skill sites whose `:-` default
+executes the customer's file; this form executes nothing **when both variables are unset** —
+the row's stated condition, and the common case. It is not inert in general: with
+`GROK_PLUGIN_ROOT` exported, bash expands the construct at runtime and the gates execute
+whatever it names. Demonstrated at review against `main`'s own fences with a planted
+`{"name":"soleur"}` manifest — all three gates ran attacker-authored scripts, and `main`'s
+Step 0.5 fence carried **no identity check at all**, so a directory with no manifest executed
+too. What the unset case produces is a session-start gate that is a silent no-op, the failure
+ADR-177 names UNRESOLVED and which nothing alarmed on.
+
+**Arms 2 and 3 rest on the identity preflight as their only control — and on Step 0.5 this
+change ADDS that control where there was none.** An earlier draft said the change "promotes"
+the preflight to a role A11 declined. Measured at review, that understated the change in its
+own favour: `main` already reached both arms (the #8061 form reaches bash, and bash expands it
+whenever `GROK_PLUGIN_ROOT` is set), and `main`'s Step 0.5 had no manifest check whatsoever. The
+arm order narrows the environment-controlled surface rather than widening it.
+On arm 1 the security claim is carried by the loader. On arms 2 and 3 the root comes from a
+runtime value, so the only thing standing between the gate and an attacker-chosen directory is
+`plugin.json` naming `soleur` — a **shape check, not authentication**: a planted directory
+containing `{"name":"soleur"}` passes byte-for-byte, exactly as A11 recorded when it rejected the
+stronger root-outside-worktree assertion and kept the preflight as defence-in-depth. This is
+stated rather than implied, and `go-session-gates.test.sh` row **R6b is a MUST-PASS row that
+asserts the limitation**: a decoy manifest claiming `soleur` is accepted and its payload runs. If
+R6b ever goes red, someone has added the trust assertion A11 rejected, and A11 must be superseded
+before that row is changed.
+
+**Why arm 3 is confined to Step 0.5.** (SUPERSEDED 2026-09-20 by amendment item **A16** (#8401) —
+arm 3 is now in all three gates, and the session-start dispatch is gated on a reap-capability
+token instead. Read A16 before relying on this paragraph or on the "must NOT" directive below.) Step 0 dispatches `worktree-manager.sh cleanup-merged`.
+For a merged branch with **no** worktree, every one of that script's PER-BRANCH safety guards is
+gated on a non-empty worktree path and is therefore skipped (`:2851`, the lease check `:2868`,
+`:2890`, `:2905`, `:2942`), while the loop still reaches `git push origin --delete` (`:2954`)
+and `git branch -D` (`:2960`), and the post-loop non-bare tail reaches
+`git -C "$GIT_ROOT" reset --hard HEAD` (`:2999`). Two guards are NOT per-branch and so are not
+in that list: the one-time reaper-arming hold (`:2860`), which fires for every branch on a
+machine whose stamp is unspent, and `cleanup_orphan_worktree_dirs`, which runs after the loop
+regardless and reaches `rm -rf --one-file-system`. ADR-178
+§Context calls the operation unrecoverable. Putting the cache arms in the shared resolver would
+make that gate newly reachable on a harness where it has always skipped. Step 0.5 only
+classifies the session and Step 0.0 only probes readiness (and already answers correctly through
+its inline `git rev-parse` fallback), so the cache arms buy cloud-mode classification — what
+Devin sessions actually need — at no MUTATING blast radius. (It is not zero: the gate classifies
+by *executing* a script from the resolved root, and its verdict then steers the agent to read
+that root's `devin/INSTRUCTIONS.md`. One `bash` exec, no `git` mutation.) Extending Step 0 to
+Devin cloud is filed as **#8401**, explicitly gated on the script-side fix **#8400**. #8401 must
+NOT be resolved by moving the cache arms into the shared resolver: measured on an ordinary LOCAL
+box — where `cloud-detect.sh` returns `not-local:no-devin-env`, so the session-class gate passes
+— that makes Step 0 dispatch `cleanup-merged` out of a stale `0.0.0-unversioned` Devin cache
+selected by `find … | head -1`.
+
+**Step 0 additionally gates on the SESSION CLASS, in its own fence.** Bash carries no state
+between fences (see §"Why the axes stay separate" item 3), so Step 0.5's verdict is unavailable
+to Step 0. Step 0 therefore runs `cloud-detect.sh` from its own verified root and dispatches only
+on `local` or `not-local:no-devin-env`; any other verdict emits
+`SOLEUR_SESSION_START_SKIPPED reason=cloud-session` — a new *reason value* on an existing marker
+name. This is keyed on the session classifier and **not** on `SRC`: a Devin agent following its
+own `INSTRUCTIONS.md` resolves as `plugin-root-token`, so an `SRC != devin-cache` test would
+never fire.
+
+**Grok precedence changes, deliberately.** Today `GROK_PLUGIN_ROOT` wins unconditionally. Under
+arm order 1→2 it is never consulted on a Grok session where the token substitutes — and Arm 5
+measured that it does. Arm 2 remains reachable for a read-from-disk Grok path. The A11 Grok
+residual is restated as open, not closed.
+
+**Codex divergence, recorded rather than papered over.** `codex/INSTRUCTIONS.md` says never to
+search another harness's cache. The `[ -d ]` gate means a Codex-only box searches nothing; on a
+box carrying both installs, arm 3 is reached only when arms 1–2 produced nothing (i.e. the Codex
+agent did not follow its own INSTRUCTIONS) and returns an identity-verified **Soleur** plugin —
+the same plugin, not another harness's.
+
+**A recorded inconsistency.** The `soleur-cloud-mode` fleet block — **67 blocks**, measured: 64
+skills + 3 Devin shims, which is what `devin-cloud-mode.test.ts` pins as `marked.length === 67`
+— resolves the same Devin cloud cache **by basename, with no `name=soleur` check**. (An earlier
+draft said 74; that figure was wrong here, in the plan, and in the filed issue's title.) go.md's
+arm 3 is now stricter than the fleet block it resembles — this change *reversed* the direction
+of the inconsistency, since go.md's Step 0.5 previously used the same basename recipe. Filed as
+**#8402** rather than fixed here: it is a different change behind a different guard, and the
+deferral rests on review scope rather than on mechanical cost (the block is a byte-identity-pinned
+literal with a canonical source, so widening it is one edit plus regeneration).
+
+**Marker vocabulary.** Each fence emits exactly one
+`SOLEUR_PLUGIN_ROOT_RESOLVE gate=<readiness|cloud-detect|session-start> source=<plugin-root-token|grok-env|devin-cache|none> verified=<true|false>`
+line before it branches. It deliberately carries **no path**: interpolating `$ROOT` would put
+filesystem paths into telemetry, and `go-session-gates.test.sh` R9 asserts their absence. The
+existing `SOLEUR_GIT_REPO_DIAG` / `SOLEUR_CLOUD_DETECT_SKIPPED` / `SOLEUR_SESSION_START_SKIPPED`
+strings are unchanged byte-for-byte, because `plugin-root-anchoring.test.ts` P8 and the hosted
+`WEDGE_RE` lookahead discriminate on them.
+
+**Consequence for the fences themselves:** `set -e`, `set -u` and `set -o pipefail` are FORBIDDEN
+in all three. Line 1 is deliberately an unguarded expansion so it stays the exact token, and `-u`
+would abort before any marker printed — reintroducing the silent-skip class by a second route.
+
+### Amendment item A15 — `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` is a rejected form of the `:-` class
+
+A10 recorded that the loader's transform is exact-literal on the skill surface; Arm 5 extends that
+to the command surface and to two further forms. A15 names the specific shape #8061 introduced so
+the enumeration is not syntax-blind in the way ruling item 2 and A13 both exist to prevent:
+
+- **Rejected:** `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}`, and any `${<OTHER>:-$CLAUDE_PLUGIN_ROOT}`.
+  The inner reference is unbraced, so it is not the token; the construct is a `:-` default whose
+  *fallback* is the thing that was supposed to be the anchor.
+- **Rejected:** bare `$CLAUDE_PLUGIN_ROOT` anywhere in `plugins/soleur/commands/`, for the same
+  reason. Guarded by `plugin-root-anchoring.test.ts` P1b, whole-file over `commandFiles()`.
+- **Viable but NOT adopted:** `'${CLAUDE_PLUGIN_ROOT}'` — Arm 5 measured that the loader
+  substitutes inside single quotes on both harnesses. Recorded so a future reader does not
+  re-measure it; not switched to, because the unquoted braced token is already canonical
+  everywhere else and a second sanctioned spelling is a guard-surface cost for no gain.
+- **A11's Grok residual stays OPEN.** Arm 2 is a runtime variable with no loader carrier, and the
+  identity preflight is a shape check. Decision 11 states this rather than resolving it.
+
+## Amendment — 2026-09-20 (#8401): arm 3 is no longer confined to Step 0.5
+
+**A16. Decision 11's "arm 3 is confined to Step 0.5" is superseded by a narrower rule.** The
+blanket prohibition above — *"#8401 must NOT be resolved by moving the cache arms into the shared
+resolver"* — is replaced by:
+
+> **Step 0 may resolve the plugin root from any arm. It may dispatch `cleanup-merged` only from a
+> root whose `worktree-manager.sh` carries the reap-capability token.**
+
+An ADR that says "must NOT" cannot be contradicted by a PR that does not amend it, so the
+amendment lands in the same PR as the change.
+
+**Decision 11 states ONE ground and attaches a second to its forward directive.** An earlier
+draft of this amendment said "the confinement rested on two grounds" — that is this PR's
+restructuring, not the ADR's text, and the plan review corrected it (finding C7) before the
+amendment was written. The ADR argues the worktree-less-guard ground, and raises the stale-cache
+point only inside the "#8401 must NOT…" directive. Both have to close; here is what closes each.
+
+| Ground | Closed by | How |
+|---|---|---|
+| A worktree-less merged branch skips every per-branch guard and still reaches `git push origin --delete`, `git branch -D` and `reset --hard HEAD` | **#8400**, in this PR — `git push origin --delete` is covered transitively (the widened guards `continue` before it). NOT closed: `cleanup_orphan_worktree_dirs`, which decision 11 names as one of two non-per-branch hazards and which this PR does not touch; the one-time arming hold is what covers the newly-exposed population there | The lease and commit-age guards are keyed on the BRANCH rather than on a worktree path; the `reset --hard` is gated on the checkout being on `main`; `git branch -D` degrades to `-d` for a non-ancestor |
+| Arm 3 resolves a **cached copy** of `worktree-manager.sh`, of unbounded age, chosen by `find … \| head -1` | **the capability gate**, below | #8400 edits the repository's script. The artifact arm 3 executes is a different file on disk, so "#8400 fixed ⇒ #8401 safe" breaks at the artifact boundary |
+
+The second ground is why an `R5c`-analogue test row could not have caught this: `mk_root` builds
+its fixture cache by COPYING the payload, so the fixture is always in sync and structurally
+cannot exhibit staleness. A green row there is vacuous on the property that matters.
+
+**The mechanism is a capability feature-detect, not a version sniff.** `worktree-manager.sh`
+carries a literal `SOLEUR_WORKTREE_REAP_CAPABILITY="branch-keyed-guards"`, emitted on stdout at
+load so it is observable at runtime and present as a literal so it is greppable statically. Step 0
+greps the resolved root's script for it and, on a miss, emits
+`SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified source=<arm>` instead of
+dispatching. Membership in a space-separated set, never a version literal: a `-v1` suffix would
+re-import the version-sniff failure mode this ADR's own Alternatives table rejected. "Feature-
+detect, never sniff" is already this surface's doctrine — it is why `cloud-detect.sh` is
+sentinel-based rather than env-based.
+
+**The gate is narrowed to the `devin-cache` arm, and the narrowing is load-bearing.** An
+arm-agnostic form was written first and measured to have a fleet-wide blast radius: every root
+whose reaper predates this change — every long-lived worktree in this repository sitting on a
+pre-merge branch, and every marketplace install between releases — would have emitted
+`reaper-capability-unverified` and stopped reaping. The ground the ADR actually states is a
+property of the CACHE arm, so the gate is scoped to it and every other arm is untouched.
+
+**It covers the dispatch DECISION CHAIN, not only the dispatched artifact.** The session-start
+fence executes TWO artifacts from the resolved root: `cloud-detect.sh`, whose verdict decides
+whether the reaper runs at all, and the reaper itself. Gating only the second would leave the
+decision that gates it resolvable from the same possibly-stale cache — and would make the
+blast-radius argument circular, since it reasons that a Devin cloud session still will not
+dispatch *because the classifier says so*. The gate is therefore evaluated BEFORE the classifier:
+a cache root whose reaper lacks the capability is not trusted to classify the session either. One
+token, both consumers; no second token is invented.
+
+Honest severity on that limb: `cloud-detect.sh` is four days old and its only other commit touched
+comments, so no divergent cached copy exists today. This is structural, not live.
+
+**Path pinning is part of the design.** The `grep -q` and the `bash` operate on the same
+`${ROOT}`-derived path, resolved once, with **no second `find` between them**. A check that
+re-resolves is check-A/execute-B across two independent `head -1` calls — the same defect one
+level down from the one the gate closes, and invisible to every behavioural row. A static row in
+`go-session-gates.test.sh` asserts it.
+
+**What the arm now executes per gate, enumerated — because the plan gates ONE consumer and
+relocates the arm for THREE.**
+
+| Gate | Executes from the resolved root | Disposition |
+|---|---|---|
+| `session-start` | `worktree-manager.sh cleanup-merged` — mutating, unrecoverable | **Gated** by the capability token |
+| `cloud-detect` | `scripts/cloud-detect.sh` — read-only classifier | **Already dispositioned** by decision 11 ("one `bash` exec, no `git` mutation"). Unchanged |
+| `readiness` | `git-repo-readiness-diag.sh` — read-only probe, emits `SOLEUR_GIT_REPO_DIAG` | **Newly exposed by this change**, and recorded as a NEW acceptance rather than an inherited one. Same reasoning as `cloud-detect`: read-only, one exec, no `git` mutation, and the fallback arm it replaces already ran bare `git rev-parse` calls. The limb decision 11 was careful to include still applies — the verdict STEERS the agent (it is a STOP/GO decision for the whole session and feeds Better Stack), so this is argued on that axis too, not only on "no mutation" |
+
+**The token attests; it does not authenticate.** A planted CACHE root can declare
+`SOLEUR_WORKTREE_REAP_CAPABILITY` as trivially as it can declare `{"name":"soleur"}`. That is A11
+one level down, and it is why the gate is described as attesting a contract rather than verifying
+one.
+
+**A claim about R6b is retracted rather than deleted, because the way it was made is the lesson.**
+An earlier revision of this amendment said the decoy root must plant the token "or R6b goes red",
+and `go-session-gates.test.sh` carried the same sentence. Measured: R6b drives its decoy through
+`delivered_fence`, which resolves `source=plugin-root-token`, so under the narrowed gate
+`REAP_CAP=not-applicable` and the capability check never evaluates on it. Planting the token in
+`mk_decoy_root` is inert, and the red R6b the sentence warned about cannot occur. The A11 point
+above survives on its own; the mechanism cited for it did not. The claim was reasoned from the
+narrowing, never executed against the row.
+
+**Deviation from AP-025, stated rather than left unexamined.** The register prescribes a
+self-refusal the artifact carries; this is a boundary interceptor at one of three dispatch sites.
+The deviation is necessary here: a self-refusal cannot be retrofitted into copies that are
+**already cached**, which is precisely the population the gate exists for. The durable control is
+the carried refusal, and the interceptor is what covers the installed base until caches turn over.
+
+**An asymmetry with a renewal discipline, recorded because it decays.** The token becomes a
+constant once cache populations turn over — permanently true, therefore carrying no information —
+while the confinement it replaces is lifted permanently. The discipline: **any future change to
+the reaper's destructive surface mints a new capability name**, and the gate tests membership so
+adding one is additive.
+
+**Named residual.** The gate makes a PRE-capability wrong pick by `head -1` fail closed. A wrong
+pick that CARRIES the token still runs — `head -1` among several identity-matching manifests is
+nondeterministic by construction, and the capability check does not make the pick correct. What it
+buys is that an out-of-date pick refuses rather than reaps.
+
+**Second residual, same mechanism one level up: the arm loop SHADOWS rather than falls through.**
+`for d in "$HOME/.local/share/devin/cli/plugins/cache" /opt/.devin/plugins` breaks on the first
+identity match, and the capability check runs afterwards on whatever that produced. So a
+token-less copy in the `$HOME` cache masks a capable one in `/opt`, and the session refuses
+session-start maintenance while a root that would have passed sits one arm away. The refusal is
+still the correct direction to fail — it names `reason=reaper-capability-unverified source=devin-cache`
+and the remedy updates both caches — but it is a refusal the operator did not need. Fixing it
+properly means folding capability into arm SELECTION (keep searching until an arm yields a root
+that both verifies and declares the token), which changes the resolver's contract from "first
+identity match wins" to "first CAPABLE match wins" and would have to be mirrored into all three
+byte-identical fences plus the decision the fences share with Step 0.5, which does not need it.
+Deliberately not done here; recorded so the next reader does not mistake it for an oversight.
+
+**Test containment.** `/opt/.devin/plugins` is absolute and had no override, so on a host carrying
+a populated one with a `"name":"soleur"` manifest — i.e. exactly a Devin CLI host, the audience
+#8401 exists for — pre-existing MUST-PASS rows changed verdict with no diff change, and this
+change would have TRIPLED that exposure. The fences now read that arm through
+`${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}` and `run_gate` pins it to a scratch path that
+does not exist. It is env-directed exactly as `GROK_PLUGIN_ROOT` already is, and subject to the
+same identity preflight, so it adds no trust class. A MUST-PASS suite whose verdict is a property
+of the machine is not a suite.
+
+**Two reason values are split.** `source=none` (no arm produced a root and no cache directory
+existed to search) and `source=devin-cache-nomatch` (a cache directory existed and was searched,
+but carries no Soleur manifest) had collapsed into one value with two different remedies.
+
+**#8402 is closed in this same PR**, so the recorded inconsistency above — go.md's arm 3 being
+strictly stricter than the 67-block fleet — no longer holds. The fleet now uses the same
+identity-selected recipe.
+
+## Amendment — 2026-09-23 (#8542 follow-up): a payload script may run its own sibling
+
+### Amendment item A17 — an in-payload sibling resolved from an absolutized `BASH_SOURCE`
+
+The classification rule above bans a `git rev-parse --show-toplevel` code root, and it sanctions
+`BASH_SOURCE` for a payload script's own location. A17 records a consequence of that. A payload
+script may **execute a sibling in the same payload**, found from its own `BASH_SOURCE`, under
+three conditions:
+
+1. The directory is made absolute **before** the script changes directory. A relative
+   `BASH_SOURCE` resolved after a `cd` into the caller's repo points into that repo.
+2. The sibling comes first. A bare `${CLAUDE_PLUGIN_ROOT}`, with no `:-` default (A12), is used
+   only when the sibling is absent, and only when it is an absolute path — a relative value would
+   resolve against the caller's repository. An inherited variable is the weaker provenance.
+3. The `plugin.json` name check runs on whichever root is used, and the code calls it
+   defence-in-depth rather than a control. Per A11 it is a shape check. This repo's own tracked
+   manifest names `soleur`, so a copy inside a merged tree passes it.
+
+A sibling has the same provenance as the script that runs it, so it adds no trust edge. It also
+buys nothing when the script itself was loaded from an untrusted tree. That is a property of the
+call site, and the fix belongs there.
+
+**Instances.** `resolve-regenerable-conflicts.sh` finds `render-c4-model.sh` this way and meets all
+three conditions. `sync-pr-behind.sh` finds `resolve-regenerable-conflicts.sh` as a sibling and meets
+conditions 1–2 only (it has no name check on the sibling). The rationale lives in ADR-235's
+2026-09-23 amendment; this item records only the anchoring rule.
+
+**§R4 closure.** The `architecture` row in §R4's table (`bash scripts/regenerate-c4-model.sh`) is
+migrated: the skill now invokes `bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh"`.
+
+## Amendment — 2026-09-24 (#7453): the skills migration, the carve-out, and the Read surface
+
+### Amendment item A18 — the deferral is retired; payload markdown is a flat zero
+
+The `:-` sites the Consequences section deferred are migrated. Measured on `origin/main`
+`ed37571a45` before the change and on this branch after it:
+
+| Population | Before | After |
+| --- | --- | --- |
+| `${CLAUDE_PLUGIN_ROOT:-` in tracked `plugins/soleur/**/*.md` | 102 occurrences, 31 files | 0 |
+| Pattern C (`show-toplevel)/plugins/soleur/` code roots, `preflight/SKILL.md`) | 2 | 0 |
+
+- **Guard.** `plugin-root-anchoring.test.ts`'s fourth describe scans every tracked payload
+  markdown file (575 on 2026-09-24) with no allowlist: `readsRootUnsafely` (reads), a new
+  `plantsRootUnsafely` (root assignments, a default arm of any variable pointing into the
+  payload, `env` reads) and three literal dynamic-prefix regexes (a `$(…)`/`${…}`/`$VAR` prefix
+  before `plugins/soleur`, the backtick git-root form, and any `..` after the token). The
+  skills ratchet (#8570) loses form (a): a baseline row can be regenerated, a predicate can
+  only be edited in reviewed code. **A12 is discharged** — the flat zero it declined is this guard.
+- **Closed here:** §R5 C6, the Pattern-C item routed from #7450 (DC-1), and **A13** (the
+  depth-relative `.` default arm is gone from the one prose site that named it).
+- **§R3 closure.** The "missing A/B arm" #7453 named — a bare token inside a `bash` fence — is
+  **A10** (skill surface, decoy-controlled) plus #8391 Arm 5 (commands, both harnesses). The
+  hosted SDK passes the plugin as `--plugin-dir` (`@anthropic-ai/claude-agent-sdk` 0.3.197
+  `sdk.mjs`); that is a code-inspection fact, not a server measurement.
+- **Measured unset behaviour.** Where a block runs under `set -u` (preflight Check 10 does), an
+  unset token aborts at its first expansion with `CLAUDE_PLUGIN_ROOT: unbound variable` (rc 127)
+  before any `test -r` guard runs; elsewhere it expands to a root-anchored `/skills/…` or
+  `/scripts/…` path that fails `No such file or directory`. Both are fail-closed, and both are
+  pinned by decoy rows whose twin controls prove the pre-migration form DID execute the decoy.
+- **Scope decisions.** The decision-2 identity preflight is **not** added at the ~97 non-gate
+  sites: the bare form already fails closed unset, and A11 classifies the identity check as a
+  shape check. Shipped `.sh`/`.ts`/`.py` are out of scope — the variable is a real runtime
+  variable there and A17's `BASH_SOURCE` rule governs them (measured: no live instance).
+- **Tier-1 gates and their callers' exit-127 handling:**
+
+  | Gate | Caller's handling of a crash / unresolved root |
+  | --- | --- |
+  | `battery-owed.sh` | Any exit except 42 means "owed" — fails safe as written. |
+  | `run-scan.sh` | No caller handled it; callers branched only on the verdict string. Added: a missing `LOW-RISK`/`REVIEW`/`HIGH-RISK` line means **REVIEW**. |
+  | `emit-review-trailer.sh` | No caller rule covered a non-zero exit. Added: non-zero means the review is **not attested**. |
+  | `admin-merge-ready.sh` | The Read-surface blocks abort `exit 5` before any `gh` call (A20), pinned by a test row. |
+
+- **Recorded, not changed:** the cron-bug-fixer hook allowlist entry
+  (`bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`, prefix-matched in
+  `cron-bash-allowlist-hook.mjs`). `fix-issue/SKILL.md`'s site was denied before (the hook
+  rejects `${…}`) and is denied after (the substituted path is absolute and quoted, and does not
+  match the relative prefix); the reason changed, the behaviour did not.
+- **Trackers:** CWD-relative runner operands (ratchet forms b–e) → #6222; CWD-relative
+  `Read plugins/soleur/…` instructions → #8729; Grok nested-Read token delivery → #8730.
+
+### Amendment item A19 — the `list`/`ls` carve-out, re-anchored
+
+`EXACT_LITERAL_SAFE_COMMANDS` is `{substituted-deployed} × {list, ls}`: the skill text as the
+loader delivers it, the token replaced with `SOLEUR_PLUGIN_PATH_DEFAULT`. The SDK passes the plugin
+as `--plugin-dir`, the flag whose substitution A10 measured **on the CLI**; the hosted SDK path is
+inferred from that shared flag, not separately measured (the same hedge `agent-env.ts` states), and
+a miss there costs a prompt, not an admission. Exact string equality is retained; there is no
+`^bash` regex, and the check runs **after** every denylist stage with an ASCII-only trim, so the
+carve-out relaxes nothing (a `String.trim()` would have stripped NBSP/BOM that bash passes as argv). The raw `${CLAUDE_PLUGIN_ROOT}` form is deliberately **not** a member: it is unreachable
+on the hosted surface, and admitting a literal `$` would be the first denylist-bypassing member
+that no delivery path produces — the Decision 8 class, dead by construction. An unsubstituted
+token, or a `SOLEUR_PLUGIN_PATH` repoint, misses and falls back to an approval prompt, which is
+fail-safe. Decision 8's pointer to #7453 is discharged, and the issue's "known residual" (a prompt)
+is avoided rather than accepted. The coupling test extracts every token rendering, checks rendered
+membership, and pins the emission count at exactly 4.
+
+### Amendment item A20 — the Read surface delivers its own root
+
+The loader substitutes the token in text it **delivers** (a `SKILL.md` body, a command body,
+skill args). A non-`SKILL.md` doc is opened with the Read tool, which returns raw bytes, so its
+token reaches bash **unsubstituted**. Five docs carry one (Guard 4 derives the set from the tree, with a floor of 5). The
+rule has four parts:
+
+1. **The pointer is loader-anchored** (`${CLAUDE_PLUGIN_ROOT}/skills/<s>/references/<f>.md`),
+   never a CWD-relative path or a relative markdown link — after `gh pr checkout` a CWD-relative
+   Read loads the contributor's copy, so a notice inside it would harden attacker-chosen text.
+2. **The root is derived from the absolute path read** — the markdown twin of A17's
+   `BASH_SOURCE` rule — under a notice whose closed rule forbids taking it from repository files,
+   PR text or tool output.
+3. **No block exports the variable.** On a hosted session it is already set by
+   `buildAgentEnv` (the `/app`-validated root), and an unconditional export inside the block
+   would override that trusted value with whatever the block says. Off the hosted surface the
+   notice tells the agent to prefix each block with `export CLAUDE_PLUGIN_ROOT=<root>`, because
+   every Bash call, Monitor task and subagent starts a fresh shell. Unset, the token fails
+   closed (`/skills/…: No such file`, or `unbound variable` under `set -u`). The notice has the
+   agent print the variable first: the derived root → proceed; empty → export it; **anything
+   else → stop**, since only the loader or `buildAgentEnv` may have set it (a repository's
+   `.claude/settings.json` `env` block could otherwise pre-set a checkout path the notice never
+   sees).
+4. **The admin-merge blocks refuse a root they cannot trust** before any `gh` call, `exit 5`:
+   unset, relative, missing `.claude-plugin/plugin.json`, or resolving **inside the current
+   checkout**. The last clause is the one that matters — the natural "repair" for exit 5 is
+   `export CLAUDE_PLUGIN_ROOT=$PWD/plugins/soleur`, which would make the `--admin` gate the PR's
+   own `admin-merge-ready.sh`. This is still a **shape check, not authentication** (as A11):
+   a `plugin.json` planted outside the checkout passes; what it removes is the one-keystroke
+   bypass.
+
+   *(A first draft opened each block with an export of a cannot-exist sentinel. The design
+   pass removed it for the override reason above; the guard now flags any
+   `CLAUDE_PLUGIN_ROOT=` assignment in payload text other than the `<root>` placeholder.)*
+
+A future Read-surface site whose failure is **not** fail-closed must take A17's script route
+instead (a `BASH_SOURCE`-anchored wrapper). That route was not taken here because it would ship a
+new reusable `gh pr merge --admin` entry point, a larger trust change than this migration.
+
+**Residuals, stated rather than claimed equal.** On **Grok Build**, `one-shot` Reads nested
+`SKILL.md` files from disk, so their tokens are unsubstituted; in the monorepo the worktree,
+lease and `cleanup-merged` steps move from working (through the old default arm) to fail-closed.
+On a customer repo the old arm executed the customer's file, so fail-closed is the correct
+trade — and it is a real availability regression in the monorepo on Grok, tracked at #8730.
+The leak side of the same residual: on Grok the nested `SKILL.md` is itself Read from the
+checkout, so its stop-if-unsubstituted clause is text the checkout controls — the fix belongs in
+`harness.ts` `invokeSkill()` naming the installed root (#8730). The admin-merge refusal above holds
+regardless. A worktree created without its lease (`SOLEUR_SESSION_STATE_UNAVAILABLE …
+UNLEASED-and-reapable`) can be reaped by a sibling session's `cleanup-merged`; the marker is loud,
+the data-loss exposure is real on non-substituting harnesses until #8730. **Devin cloud** exec
+shells do not export the variable, so each needs the export (`devin/INSTRUCTIONS.md` already says
+so).
+
+**Fail-open consumers get an explicit presence check.** A script that exits 0 with empty output
+when it cannot run turns an unset root into "nothing found". `ship`'s auto-close scan is the
+instance (empty = no traps, so the PR would be created with one); it now refuses before scanning.
+
+**Unclassified surface.** `plugins/soleur/agents/**` bodies are delivered as subagent prompts,
+but whether the loader substitutes the token there is unmeasured, so this amendment classifies
+them as neither delivery nor Read surface. Their script invocations nevertheless take the bare
+quoted anchor — it fails closed either way, where the CWD-relative `plugins/soleur/…` form they
+used executed the customer's (or the PR author's) file: `agent-finder`'s `run-scan.sh` (a security
+gate — no verdict line now reads as `REVIEW`), `ops-provisioner`'s credential redactor,
+`community-manager`'s router, `ux-design-lead`'s taste-profile validator, and
+`legal-document-generator`. A guard keeps CWD-relative executions out of `agents/**`.

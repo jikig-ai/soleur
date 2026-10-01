@@ -227,9 +227,42 @@ else
   fail "(h.ii) streak not cleared: a PASS left the transient streak at '$(cat "$_r2/streak")'; the next genuine transient would escalate on a streak it did not earn"
 fi
 
+# ── (i) a loud T17 skip must ALSO be a FAIL ──────────────────────────────────
+# Same reason as (b), one arm later. #7535 Phase 2 makes the T17 mutation arm
+# skip-eligible by replacing the `|| true` that discarded its container rc, so a
+# marker set covering only T5 and S1 would go silent on the arm that change
+# creates -- and the suite's own roster guard (_PROBE_NAMED vs _SKIP_CALL_SITES)
+# would still be satisfied by arithmetic, because it counts names rather than
+# checking this file. This case is what actually holds the two in step.
+_r=$(mkcase i 20 <<EOF
+SKIP (loud): T17 MUTATION did not run: apt starved before the mutant executed
+$TERMINAL_LINE
+EOF
+)
+run_probe "$_r"
+expect "(i) T17 skip present" 1 "the marker set must cover T17 as well as T5 and S1, or the probe goes silent on the arm #7535 Phase 2 makes skip-eligible"
+
+# ── (j) the xtrace credential refusal must fire, and ONLY with a credential ──
+# The probe binds GH_TOKEN, and `set -x` expands the `gh` invocations carrying it
+# into a log that lands in a public Actions run. The guard must be conditional on
+# the credential rather than a blanket xtrace ban, or it would break tracing as a
+# debugging tool for every non-credentialed run.
+( GH_TOKEN=fake bash -x "$PROBE" ) >"$SANDBOX/out.xtrace" 2>&1
+_xt_rc=$?
+if [ "$_xt_rc" -eq 78 ]; then pass; else
+  fail "(j) xtrace refusal: traced with GH_TOKEN set exited $_xt_rc, expected 78 — the probe would have expanded its gh calls, token included, into a public run log"
+fi
+( env -u GH_TOKEN bash -x "$PROBE" ) >"$SANDBOX/out.xtrace.notok" 2>&1
+_xt_rc2=$?
+if [ "$_xt_rc2" -ne 78 ]; then pass; else
+  fail "(j.ii) xtrace refusal is unconditional: traced WITHOUT a credential also exited 78; the guard must key on the credential, not on xtrace alone"
+fi
+
 # ── Assertion floor (not routed through fail(), deliberately) ────────────────
+# RAISED 9 -> 12 (#7535 Phase 2), ITEMISED: (i) the T17 marker registration, plus
+# (j) and (j.ii), the two directions of the xtrace credential refusal.
 _total=$((passes + fails))
-_FLOOR=9
+_FLOOR=12
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

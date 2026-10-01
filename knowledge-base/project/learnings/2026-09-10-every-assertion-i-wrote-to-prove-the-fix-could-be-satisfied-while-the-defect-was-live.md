@@ -111,6 +111,11 @@ Acting on the inherited list would have produced busywork, and — worse — rep
 surviving would have been a false claim about coverage. **Re-drive every mutation against the
 current tree before reporting a survivor.**
 
+> **Addendum 2026-09-18 (#6894) — it cuts the other way too.** An inherited **kill** was false:
+> the scorer had credited `rc != 0` with no FAIL line ("floor/fatal") as KILLED, and re-driven the
+> mutant ran the suite 89/89 green. A crash is not a kill — require the row's own FAIL line. See
+> [2026-09-18-my-mutation-harness-counted-a-crash-as-a-kill-and-the-fixture-stacked-x-on-x.md](2026-09-18-my-mutation-harness-counted-a-crash-as-a-kill-and-the-fixture-stacked-x-on-x.md).
+
 ### B. "The documented API is the only write path" is an assumption, not a finding
 
 On the sibling issue #7966 (rotate a leaked dev database credential) I verified the Supabase

@@ -53,7 +53,7 @@ after the merge.
    > # ["main"]
    > ```
    >
-   > `github_repository_environment_deployment_policy.web_platform_infra_apply_main` does still appear as a pending CREATE in the push plan, but that is a **state** fact, not a **liveness** one: the policy exists at GitHub and Terraform has not yet adopted it. The two are easy to conflate and the difference is the whole F7 protection — read the API, never the plan, when the question is "is the pin protecting me right now".
+   > Until #8754 the policy appeared as a pending CREATE in the push plan (Terraform had not adopted it; see the ADOPTED BY IMPORT note in `web-host-birth-environment.tf`), but that was a **state** fact, not a **liveness** one: the policy exists at GitHub and Terraform has not yet adopted it. The two are easy to conflate and the difference is the whole F7 protection — read the API, never the plan, when the question is "is the pin protecting me right now".
 
 2. **No other web-1 mutation in flight.** This job takes the `web-1-swap` mutex, so GitHub will queue it — but a queued job holds the mutex for its whole run, and this one also holds an SSH bridge. Check:
 
@@ -130,6 +130,12 @@ Re-dispatch **once**. If it repeats, the gate or `terraform show -json` is broke
 Do **not** widen the allow-set and do **not** add an ack trailer to a merge commit. The named break-glass is the operator-local untargeted apply under the `OPERATOR_APPLIED_EXCLUSIONS` contract (ADR-096), which does **not** go through the wedged CI path.
 
 > Do not go looking for that pointer in this arm's own step log — it is not there. The `OPERATOR_APPLIED_EXCLUSIONS` / ADR-096 remediation text lives in the **push-apply** preflight halt (`apply-web-platform-infra.yml:660`, `:667`), a different job. This arm's refusal prints only the gate's own message and a pointer back to this runbook, which is why the route is written out here:
+
+> **#8209 / ADR-241 — the single-loader form below is the PRE-cutover one.** After the Tier-B
+> cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the inner
+> `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
+> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+> invocation.
 
 ```bash
 cd apps/web-platform/infra && \
@@ -220,7 +226,7 @@ Verify **off-host**. No SSH (`hr-no-ssh-fallback-in-runbooks`).
 
 ## Known residual
 
-- **A successful dispatch un-wedges the push apply.** The journald replace is currently the only destroy in the pending plan, so once this arm applies it the push guard's `destroy_count` drops to 0 and **the next merge touching a `paths:`-matching file applies the four pending creates plus the `cloudflare_bot_management` update unattended**, by whoever merges it. Those resources belong to #7462 / PR #7516 / #7539. Check what is pending before dispatching, and know that this is the release path for them unless one of those PRs lands first.
+- **A successful dispatch un-wedges the push apply.** The journald replace is currently the only destroy in the pending plan, so once this arm applies it the push guard's `destroy_count` drops to 0 and **the next merge touching a `paths:`-matching file applies the four pending creates plus the `cloudflare_bot_management` update (gone once #8754 PR-B has applied) unattended**, by whoever merges it. Those resources belong to #7462 / PR #7516 / #7539. Check what is pending before dispatching, and know that this is the release path for them unless one of those PRs lands first.
 
 - **A dated future brick.** This arm is clean today only because `hcloud_server.web` carries `lifecycle { ignore_changes = [user_data, ssh_keys, image, placement_group_id] }`, which `server.tf` documents as a temporary GA deferral ("REMOVE this entry in the GA maintenance-window PR as its FIRST diff"). When `placement_group_id` leaves that list, web-1 plans a pending in-place update on every dispatch, `vector_out_of_scope_changes` reads ≥ 1 forever, and this arm refuses permanently — a gate that always fails is an outage, not a tripwire. Revisit the allow-set in the same PR that removes the lifecycle entry.
 

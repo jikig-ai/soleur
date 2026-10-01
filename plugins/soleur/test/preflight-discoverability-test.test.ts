@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gitCleanEnv } from "./lib/git-clean-env";
 import {
   classifyDiscoverabilityResult,
+  extractAllObservabilityBlocks,
   extractObservabilityBlock,
   matchExpected,
+  normalizeCommand,
   parseCommand,
   parseCredentialsRequired,
   parseExpected,
@@ -208,10 +212,11 @@ describe("parseCommand", () => {
   });
 
   test("Form A — a YAML-quoted inline scalar is the string INSIDE the quotes (#8149)", () => {
-    // 389 plans in the corpus write `command: "…"`. The runtime executed the
-    // quotes as part of the first word and returned rc=127 on every one of
-    // them; the mirror had stripped the pair all along. Symmetric pair only —
-    // a mismatched pair is not YAML and must reach the gate untouched.
+    // Smoke subset only. Since #8102 the parser DECODES a quoted inline scalar
+    // (parse-form-a.awk, mirrored by the TS), and the full case matrix, with the
+    // YAML oracle and the executed-string E rows, lives in fixture 11 and the
+    // "#8102 quoted inline scalars" describe. A mismatched pair is not YAML and
+    // must reach the gate untouched.
     const dq = `discoverability_test:\n  command: "bash scripts/prod-version-drift-b9-probe.sh"\n`;
     expect(parseCommand(dq)).toBe("bash scripts/prod-version-drift-b9-probe.sh");
     const sq = `discoverability_test:\n  command: 'printf 200'\n`;
@@ -593,10 +598,17 @@ function expectBoth(block: string, expected: string): void {
   expect(runAwk(block)).toBe(expected);
 }
 
-/** Run the production awk over an Observability block; strip ONE trailing \n. */
+/**
+ * Run the production awk over an Observability block; strip ONE trailing \n.
+ *
+ * Under LC_ALL=C, exactly as SKILL.md Step 10.4 invokes it: the runtime pins the
+ * C locale so the parse does not vary by operator host, and a harness that ran the
+ * awk in the caller's locale would measure a program the runtime never executes.
+ */
 function runAwk(block: string): string {
   const proc = Bun.spawnSync({
     cmd: ["awk", "-f", AWK_PATH],
+    env: gitCleanEnv({ LC_ALL: "C" }),
     stdin: new TextEncoder().encode(block),
     stdout: "pipe",
     stderr: "pipe",
@@ -607,6 +619,251 @@ function runAwk(block: string): string {
   }
   return new TextDecoder().decode(proc.stdout).replace(/\n$/, "");
 }
+
+// ---------------------------------------------------------------------------
+// #8102 / #7548 — YAML-quoted inline `command:` scalars.
+//
+// Every section of fixture 11 enters the suite ONLY through this ID-keyed loader,
+// which registers it for P1, P3, Q and E. Adding a section ALSO needs its ID in
+// EXPECTED_QUOTED_IDS (the Q-ids row pins the set), plus a DEVIATIONS rule when its
+// value departs from YAML. The ID is the section's leading `# case: <ID>` YAML comment.
+// ---------------------------------------------------------------------------
+const FIXTURE_11 = "11-quoted-inline-scalars.md";
+const FIXTURE_12 = "12-empty-quoted-command-with-fence.md";
+const FIXTURE_13 = "13-empty-single-quoted-command-with-fence.md";
+const FIXTURE_14 = "14-form-b-quoted-fence-line.md";
+
+const QUOTED_CASES: { id: string; section: string }[] = extractAllObservabilityBlocks(
+  fx(FIXTURE_11),
+).map((section) => ({
+  id: section.match(/^# case: (\S+)$/m)?.[1] ?? "<no-case-id>",
+  section,
+}));
+for (const { id, section } of QUOTED_CASES) reg(id, "both", section);
+
+const EXPECTED_QUOTED_IDS = [
+  "DQ1",
+  "DQ2",
+  "DQ3",
+  "SQ1",
+  "NEST",
+  "PLAIN",
+  "NEG-CROSS-SQ",
+  "NEG-CROSS-DQ",
+  "NEG-BLOCK",
+  "NEG-FOLD",
+  "NEG-LF",
+  "NEG-MISMATCH",
+  "NEG-EMPTY",
+  "COMMENT-TAIL",
+  "NEG-UNTERMINATED",
+  "NEG-HASH-NOSPACE",
+  "TRAIL-WS",
+  "SQ-EMPTY",
+  "DQ-BS-CLOSE",
+  "DQ-TAIL-TEXT",
+  "HASH-IN-QUOTES",
+  "DQ-TAB-KEPT",
+];
+
+// The deliberate departures from YAML. KEY-PINNED (Q-ids) and RULE-DERIVED: an
+// entry names a derivation rule, never a free-form expected string, so parking a
+// broken row here fails twice — the key set moves, and the rule's own
+// precondition (YAML throws / YAML decodes exactly one kept escape / YAML yields "")
+// does not hold.
+type DeviationRule = "escape-kept" | "yaml-invalid-raw" | "empty-kept";
+const DEVIATIONS: Record<string, DeviationRule> = {
+  // Every `\x` other than `\"` / `\\` passes through byte-for-byte: a real LF would
+  // trip Step 10.5's newline reject, and a real TAB is not what a shell author wrote.
+  "NEG-LF": "escape-kept",
+  "DQ-TAB-KEPT": "escape-kept",
+  // Not YAML at all: the parser returns the value unchanged.
+  "NEG-MISMATCH": "yaml-invalid-raw",
+  "NEG-UNTERMINATED": "yaml-invalid-raw",
+  "NEG-HASH-NOSPACE": "yaml-invalid-raw",
+  "DQ-TAIL-TEXT": "yaml-invalid-raw",
+  // An empty pair (`""` or `''`) stays literal: decoded to "", Step 10.4 would fall
+  // through to Form B.
+  "NEG-EMPTY": "empty-kept",
+  "SQ-EMPTY": "empty-kept",
+};
+
+// The YAML double-quoted escapes the escape-kept rule can re-encode. Deliberately
+// SMALL: a row using an escape outside this map fails its precondition loudly
+// rather than deriving an expected value nobody checked.
+const YAML_KEPT_ESCAPES: Record<string, string> = { n: "\n", t: "\t" };
+
+const ORACLE_NOTE =
+  "expected value comes from Bun.YAML at the .bun-version pin; if the Bun pin just moved, the oracle moved, not the parser";
+
+/** The raw `command:` value exactly as the file spells it (after the key and its spaces). */
+const rawCommandValue = (section: string): string =>
+  section.match(/^[ \t]*command:[ \t]*(.*)$/m)?.[1] ?? "<no-command-line>";
+
+/**
+ * Bun.YAML's value for discoverability_test.command. Parsed INSIDE the caller's test,
+ * never at module scope: the invalid-YAML rows throw, and a module-scope throw would
+ * abort collection. One clip LF is dropped for the `|` header only (clip chomping).
+ */
+function yamlCommand(section: string): { ok: true; value: string } | { ok: false; error: string } {
+  let doc: unknown;
+  try {
+    doc = Bun.YAML.parse(section);
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+  const v = (doc as { discoverability_test?: { command?: unknown } } | null)?.discoverability_test
+    ?.command;
+  if (typeof v !== "string") return { ok: false, error: `command is ${typeof v}, not a string` };
+  const clip = /^[ \t]*command:[ \t]*\|[ \t]*$/m.test(section) && v.endsWith("\n");
+  return { ok: true, value: clip ? v.slice(0, -1) : v };
+}
+
+/** The contract value for a fixture-11 case: the YAML value, or its derived deviation. */
+function expectedQuoted(id: string, section: string): string {
+  const y = yamlCommand(section);
+  const raw = rawCommandValue(section);
+  switch (DEVIATIONS[id]) {
+    case undefined:
+      if (!y.ok) throw new Error(`${id}: YAML did not parse (${y.error}); ${ORACLE_NOTE}`);
+      return y.value;
+    case "escape-kept": {
+      // Preconditions, each re-checked per row: YAML parses; the raw value is a
+      // double-quoted scalar carrying EXACTLY ONE escape other than `\"` / `\\`; that
+      // escape is one YAML decodes (YAML_KEPT_ESCAPES); and its decoded character
+      // occurs exactly once in the YAML value. Only then is the one re-encoding safe.
+      if (!y.ok) throw new Error(`${id}: escape-kept requires YAML to parse (${y.error})`);
+      expect(raw.startsWith('"'), `${id}: escape-kept requires a double-quoted raw value`).toBe(true);
+      const kept = [...raw.matchAll(/\\(.)/g)].map((m) => m[1]).filter((c) => c !== '"' && c !== "\\");
+      expect(kept.length, `${id}: escape-kept requires exactly one kept escape, saw ${JSON.stringify(kept)}`).toBe(1);
+      const decoded = YAML_KEPT_ESCAPES[kept[0]];
+      expect(decoded, `${id}: escape-kept has no mapping for \\${kept[0]}`).toBeDefined();
+      expect(y.value.split(decoded).length, `${id}: escape-kept requires exactly one decoded ${JSON.stringify(decoded)} in the YAML value`).toBe(2);
+      return y.value.replace(decoded, `\\${kept[0]}`);
+    }
+    case "yaml-invalid-raw":
+      expect(y.ok, `${id}: yaml-invalid-raw requires YAML to REJECT the value`).toBe(false);
+      return raw;
+    case "empty-kept":
+      if (!y.ok) throw new Error(`${id}: empty-kept requires YAML to parse (${y.error})`);
+      expect(y.value, `${id}: empty-kept requires the YAML value to be empty`).toBe("");
+      expect(["\"\"", "''"], `${id}: empty-kept requires a literal empty pair, saw ${JSON.stringify(raw)}`).toContain(raw);
+      return raw;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SKILL.md Step 10.4 slicers, SHARED at module scope (#7453, #8102). There is ONE
+// extraction: formAAwkSlice() is the #7453 slice, and step104Chain() builds its
+// parse slice ON it (extending past AWK_RC=$? to the fence close), so the #7453
+// plugin-root rows and the #8102 executed-string rows cannot drift apart.
+// ---------------------------------------------------------------------------
+const PLUGIN_ROOT = join(import.meta.dir, "..");
+const NORMALIZE_ANCHOR = /^CMD="\$\(printf '%s' "\$CMD" \| sed/;
+// The Step 10.4 parser invocation, C-locale pinned (see parse-form-a.awk's header).
+const FORM_A_INVOCATION = 'CMD=$(LC_ALL=C awk -f "$FORM_A_AWK"';
+
+/** FORM_A_AWK= through AWK_RC=$? — the #7453 slice. Callers assert the indices. */
+function formAAwkSlice(lines: string[]): { from: number; to: number; block: string } {
+  const from = lines.findIndex((l) => l.startsWith("FORM_A_AWK="));
+  const to = lines.findIndex((l, i) => i > from && l.startsWith("AWK_RC=$?"));
+  return { from, to, block: lines.slice(from, to + 1).join("\n") };
+}
+
+/**
+ * The executable Step 10.4 chain, with its indices.
+ *
+ *   parse     — formAAwkSlice(), extended to the FORM_A fence close (the awk parse,
+ *               the EXPECTED read and the Form B fallback).
+ *   normalize — the WHOLE normalize fence: every line after its opening ```bash, so
+ *               a line inserted above NORMALIZE_ANCHOR is executed too, not skipped.
+ *
+ * The normalize fence must be the FIRST ```bash fence after the FORM_A fence closes
+ * and must contain the anchor: a fence slipped in between would run in production
+ * and in neither slice. Anchors are CODE lines resolved through uniqueIndex, so call
+ * this inside a test.
+ */
+function step104Chain(lines: string[]): {
+  parse: string;
+  normalize: string;
+  parseEnd: number;
+  normOpen: number;
+  normEnd: number;
+} {
+  const from = uniqueIndex(lines, (l) => l.startsWith("FORM_A_AWK="), "FORM_A_AWK=");
+  const awk = formAAwkSlice(lines);
+  expect(awk.from, "formAAwkSlice resolves the same FORM_A_AWK= line").toBe(from);
+  expect(awk.to, "formAAwkSlice ends at AWK_RC=$?").toBeGreaterThan(from);
+  const parseEnd = lines.findIndex((l, i) => i > awk.to && l.startsWith("```"));
+  expect(parseEnd, "the FORM_A fence must close").toBeGreaterThan(awk.to);
+  const norm = uniqueIndex(lines, (l) => NORMALIZE_ANCHOR.test(l), "normalize anchor");
+  const normOpen = lines.findIndex((l, i) => i > parseEnd && l.startsWith("```bash"));
+  expect(normOpen, "a ```bash fence follows the FORM_A fence").toBeGreaterThan(parseEnd);
+  const normEnd = lines.findIndex((l, i) => i > normOpen && l.startsWith("```"));
+  expect(norm, "the first ```bash fence after FORM_A holds the normalize anchor (no fence in between)").toBeGreaterThan(normOpen);
+  expect(normEnd, "the normalize anchor sits inside that fence").toBeGreaterThan(norm);
+  const parse = [awk.block, ...lines.slice(awk.to + 1, parseEnd)].join("\n");
+  const normalize = lines.slice(normOpen + 1, normEnd).join("\n");
+  expect(parse).toContain(FORM_A_INVOCATION);
+  expect(parse).toContain("if [[ -z \"$CMD\" ]]; then");
+  expect(normalize).toContain("sed -e '/^[[:space:]]*#/d'");
+  return { parse, normalize, parseEnd, normOpen, normEnd };
+}
+
+/**
+ * Execute the real SKILL.md Step 10.4 chain over one Observability section and
+ * return the `$CMD` it leaves for the verb gate, Step 10.5 and the exec.
+ *
+ * The chain runs under `set -uo pipefail` WITHOUT -e, so a mid-chain failure would
+ * still exit 0 through the final printf. The CHAIN_DONE stderr sentinel is what
+ * proves the chain ran to the end. CLAUDE_PLUGIN_ROOT is overridden explicitly:
+ * a Claude Code session exports the INSTALLED plugin root, which would run the old
+ * installed awk instead of this worktree's.
+ */
+function runChain(
+  section: string,
+  opts: {
+    pluginRoot?: string;
+    editNormalize?: (normalize: string) => string;
+    env?: Record<string, string>;
+  } = {},
+): { rc: number; cmd: string; stderr: string } {
+  const { parse, normalize } = step104Chain(readFileSync(SKILL_PATH, "utf8").split("\n"));
+  const dir = mkdtempSync(join(tmpdir(), "check10-chain-"));
+  try {
+    writeFileSync(join(dir, "preflight-observability.txt"), section);
+    const script = [
+      "set -uo pipefail",
+      `PREFLIGHT_TMP='${dir}'`,
+      parse,
+      opts.editNormalize ? opts.editNormalize(normalize) : normalize,
+      `printf '%s' "$CMD"`,
+      "printf CHAIN_DONE >&2",
+    ].join("\n");
+    const p = Bun.spawnSync({
+      cmd: ["bash", "-c", script],
+      cwd: dir,
+      env: gitCleanEnv({ CLAUDE_PLUGIN_ROOT: opts.pluginRoot ?? PLUGIN_ROOT, ...opts.env }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { rc: p.exitCode ?? -1, cmd: p.stdout.toString(), stderr: p.stderr.toString() };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// The #8149 normalize-block strip, verbatim, for twin (ii). It is DELETED from
+// SKILL.md (#8102): the parser decodes once, and this strip on top of it
+// double-decodes `command: "'x'"` into `x`.
+const OLD_8149_STRIP = [
+  "if [[ $CMD != *$'\\n'* ]]; then",
+  '  case "$CMD" in',
+  '    \\"*\\") CMD="${CMD#\\"}"; CMD="${CMD%\\"}" ;;',
+  "    \\'*\\') CMD=\"${CMD#\\'}\"; CMD=\"${CMD%\\'}\" ;;",
+  "  esac",
+  "fi",
+].join("\n");
 
 describe("#6772 F1-F5 — folded scalars parse (permissive)", () => {
   // F1-F3 [both]: all three indicators × with/without a trailing comment.
@@ -1065,16 +1322,6 @@ describe("#6772 P1-P3 — awk/TS parity harness", () => {
 
   // P2: known divergences asserted AS KNOWN, so AC8 is not a tautology. A
   // change on either surface reddens here and forces an explicit decision.
-  test("P2 known divergence — inline quote stripping (TS strips, awk does not)", () => {
-    const block = obs(
-      "discoverability_test:",
-      '  command: "curl -fsS https://app.soleur.ai/health"',
-      '  expected_output: "200"',
-    );
-    expect(runAwk(block)).toBe('"curl -fsS https://app.soleur.ai/health"');
-    expect(parseCommand(block)).toBe("curl -fsS https://app.soleur.ai/health");
-  });
-
   test("P2 known divergence — CRLF (TS splits on /\\r?\\n/, awk leaves the \\r)", () => {
     const block = [
       "discoverability_test:",
@@ -1086,10 +1333,25 @@ describe("#6772 P1-P3 — awk/TS parity harness", () => {
     expect(parseCommand(block)).toBe("curl -fsS https://app.soleur.ai/health");
   });
 
+  // Pre-existing, NOT widened by #8102: the quote decode is ASCII-exact on both
+  // surfaces ([ \t\r] only, and the awk runs under LC_ALL=C, where these are
+  // multi-byte non-space sequences), so a Unicode space after the closing quote
+  // declines the decode everywhere. What differs is the mirror's fallback: JS `.trim()`
+  // strips U+00A0, and INLINE_KEY_RE's `.` cannot cross U+2028 at all, while the
+  // awk returns both lines unchanged. Asserted AS KNOWN so a change reddens here.
+  test("P2 known divergence — a Unicode space after a closing quote (TS fallback, awk verbatim)", () => {
+    const lineSep = obs("discoverability_test:", '  command: "x"\u2028', '  expected_output: "200"');
+    expect(runAwk(lineSep)).toBe('"x"\u2028');
+    expect(parseCommand(lineSep)).toBe("");
+    const nbsp = obs("discoverability_test:", '  command: "x"\u00a0', '  expected_output: "200"');
+    expect(runAwk(nbsp)).toBe('"x"\u00a0');
+    expect(parseCommand(nbsp)).toBe('"x"');
+  });
+
   // A CI image swapping mawk for gawk (or busybox awk) surfaces as a NAMED
   // failure here rather than a mystery diff in P1.
   test("awk interpreter is a known implementation (mawk or gawk)", () => {
-    const proc = Bun.spawnSync({ cmd: ["awk", "--version"], stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawnSync({ cmd: ["awk", "--version"], env: gitCleanEnv(), stdout: "pipe", stderr: "pipe" });
     const banner =
       new TextDecoder().decode(proc.stdout) +
       new TextDecoder().decode(proc.stderr);
@@ -1146,11 +1408,17 @@ describe("#6772 SKILL.md wiring invariants", () => {
   const gateWindow = makeGateWindow(skill.split("\n"));
   const shellGate = () => gateWindow(/shell-active|\$'\\n'/);
 
-  test("Step 10.4 calls the extracted awk via git rev-parse, not CLAUDE_PLUGIN_ROOT", () => {
-    expect(skill).toMatch(
-      /FORM_A_AWK="\$\(git rev-parse --show-toplevel\)\/plugins\/soleur\/skills\/preflight\/scripts\/parse-form-a\.awk"/,
-    );
+  // INVERTED by #7453 (ADR-179 A18). This test used to pin the git-root form ("via git
+  // rev-parse, not CLAUDE_PLUGIN_ROOT"); after `gh pr checkout` the git root is the REVIEWED
+  // PARTY's tree, so both Check 10 operands now resolve through the loader token.
+  test("Step 10.4 resolves both Check 10 operands through the loader token, never the git root", () => {
+    expect(skill).toMatch(/^FORM_A_AWK="\$\{CLAUDE_PLUGIN_ROOT\}\/skills\/preflight\/scripts\/parse-form-a\.awk"$/m);
+    expect(skill).toMatch(/^PROBE_GATE="\$\{CLAUDE_PLUGIN_ROOT\}\/skills\/preflight\/scripts\/probe-verb-gate\.sh"$/m);
     expect(skill).toMatch(/test -r "\$FORM_A_AWK"/);
+    const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+    expect(check10).not.toBeNull();
+    // No git-root CODE root: a `show-toplevel)` followed by `/plugins/soleur`.
+    expect(check10![0]).not.toMatch(/show-toplevel\)"?\/plugins\/soleur/);
   });
 
   test("Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B", () => {
@@ -1209,7 +1477,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
   // the gate. It asserts identical VERDICT and identical REASON, so a message
   // reworded on one side alone also reddens.
   const runGate = (cmd: string): { rejected: boolean; reason: string } => {
-    const p = Bun.spawnSync({ cmd: ["bash", GATE_PATH, cmd], stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawnSync({ cmd: ["bash", GATE_PATH, cmd], env: gitCleanEnv(), stdout: "pipe", stderr: "pipe" });
     const out = new TextDecoder().decode(p.stdout).trim();
     expect(p.exitCode, `gate must exit 0 or 1 for: ${cmd}`).not.toBe(2);
     return { rejected: p.exitCode === 1, reason: out };
@@ -1807,22 +2075,39 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     expect(norm, "normalize before the sandboxed exec").toBeLessThan(exec);
   });
 
-  test("F1d the runtime dequotes a YAML-quoted inline scalar inside the normalize window (#8149)", () => {
-    // parse-form-a.awk prints the `command:` line verbatim, so `command: "bash x"`
-    // reached `bash -c` with its quotes and every quoted command died rc=127 while
-    // the verb gate (which dequotes a COPY) passed. The strip must sit AFTER the
-    // trim and BEFORE the gate so every consumer sees the same string.
-    const norm = lines.findIndex((l) => /^CMD="\$\(printf '%s' "\$CMD" \| sed/.test(l));
-    const gate = lines.findIndex((l) => /^PROBE_GATE=/.test(l));
-    const dq = lines.findIndex((l) => /^\s*\\"\*\\"\) CMD="\$\{CMD#\\"\}"; CMD="\$\{CMD%\\"\}" ;;/.test(l));
-    const sq = lines.findIndex((l) => /^\s*\\'\*\\'\) CMD="\$\{CMD#\\'\}"; CMD="\$\{CMD%\\'\}" ;;/.test(l));
-    expect(dq, "double-quote strip arm must exist").toBeGreaterThan(norm);
-    expect(sq, "single-quote strip arm must exist").toBeGreaterThan(norm);
-    expect(dq, "strip before the verb gate").toBeLessThan(gate);
-    expect(sq, "strip before the verb gate").toBeLessThan(gate);
-    // Single-line scalars only: a multi-line block scalar is never dequoted.
-    const guard = lines.findIndex((l, i) => i > norm && i < dq && /^if \[\[ \$CMD != \*\$'\\n'\* \]\]; then$/.test(l));
-    expect(guard, "newline guard must precede the case").toBeGreaterThan(norm);
+  test("F1d between the FORM_A fence and the exec, CMD is written only by the 3 normalize assignments (#8102)", () => {
+    // The parser decodes a YAML-quoted inline scalar ONCE (parse-form-a.awk). Any
+    // later rewrite of $CMD — the #8149 quote strip, or a decode moved downstream —
+    // double-decodes `command: "'x'"` into `x`, or makes the gate and the exec see
+    // different strings. The window starts at the FORM_A fence CLOSE, so a rewrite
+    // slipped into the normalize fence above its anchor is inside it.
+    //
+    // A BARE-TOKEN count rather than assignment regexes: every spelling that can
+    // write the variable — `CMD=`, `CMD+=`, `CMD[0]=`, `printf -v CMD`,
+    // `printf -v "CMD"`, `read -r CMD`, `declare -n r=CMD` — names it as a bare
+    // token, while every READ is `$CMD` / `${CMD…}`. Longer identifiers (`CMD_DEQ`)
+    // are excluded on both sides. Counted over CODE lines only (inside ``` fences,
+    // comments stripped), so prose naming the variable cannot move the pin.
+    const { parseEnd } = step104Chain(lines);
+    const exec = uniqueIndex(lines, (l) => /^DT_OUT=\$\(/.test(l), "DT_OUT=$(");
+    expect(exec, "the exec follows the FORM_A fence").toBeGreaterThan(parseEnd);
+    let inFence = false;
+    const code: string[] = [];
+    for (const l of lines.slice(parseEnd + 1, exec + 1)) {
+      if (/^```/.test(l)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) code.push(l);
+    }
+    const window = stripComments(code.join("\n"));
+    const bare = window.match(/(?<![$\w{])CMD(?!\w)/g) ?? [];
+    const lineHits = window.split("\n").filter((l) => /(?<![$\w{])CMD(?!\w)/.test(l));
+    expect(bare.length, `bare CMD tokens after the FORM_A fence: ${JSON.stringify(lineHits)}`).toBe(3);
+    expect(
+      lineHits.every((l) => /^CMD="/.test(l)),
+      `the 3 bare tokens are the normalize block's own \`CMD="…"\` lines: ${JSON.stringify(lineHits)}`,
+    ).toBe(true);
   });
 
   test("F2 AC2 — the sandbox carries the load-bearing binds", () => {
@@ -2137,8 +2422,8 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. The script is committed and +x, and
   //      the equivalent query was executed successfully during that PR's review.
   //   3. NO SUBSTITUTE — the dedicated inngest host (10.0.1.40) is deny-all-public and
-  //      not SSH-inspectable by policy, and its ONLY off-box channel is a direct-curl POST
-  //      to that warehouse. The property under test is "this host's boot markers reached
+  //      not SSH-inspectable by policy, and its ONLY off-box channel was (until #6500 added a
+  //      boot-time Sentry emit) a direct-curl POST to that warehouse. The property under test is "this host's boot markers reached
   //      that source", which is unverifiable from outside it. Also a warehouse query, not
   //      a host login, so the no-SSH requirement is satisfied.
   //
@@ -2345,7 +2630,162 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // missing file rather than on the property. It was replaced (old command kept in a dated
   // superseded note beneath the block), which is why the declaration is new although the plan
   // predates it.
-  const BASELINE_DECLARED_PROBES = 12;
+  // 13th declaration (2026-09-17): knowledge-base/project/plans/
+  // 2026-09-17-feat-upstream-devin-cloud-parity-asks-plan.md — the #8160
+  // drift-watcher liveness probe runs `gh run list` on this repo's Actions,
+  // which needs GH_TOKEN read access; unauthenticated reads cannot see run
+  // state. Declaration is genuine (the probe executes post-merge), so the
+  // baseline moves rather than the plan's line being deleted.
+  // 14th declaration — #7960 (PR #8272) raised this 13 -> 14. PLACEMENT: two-space child of
+  // `discoverability_test:` in the #7960 plan. TRUTH: the probe is
+  // `bash scripts/followthroughs/zot-last-err-redact-7500.sh`, which reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL) and was EXECUTED during that
+  // PR — the live run that returned `exit 3 … lacks err_redact_rev` on boot 78111e0e. NO
+  // SUBSTITUTE: the property is the CONTENT of warehouse rows the registry host POSTs, and that
+  // source has no unauthenticated read path; grepping the producer would verify the diff, not the
+  // delivery.
+  // 15th declaration — #8281 (PR #8276) raised this 14 -> 15. PLACEMENT: two-space child of
+  // `discoverability_test:` in the archived WikiSkill Phase 1 plan, single-line quoted scalar
+  // (preflight Check 10's flat reader treats a folded `>` scalar as absent). TRUTH: the probe is
+  // `bash scripts/followthroughs/compound-promote-outcome-8281.sh`, which reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL) to decode the
+  // SOLEUR_COMPOUND_PROMOTE_OUTCOME marker the cron emits. NO SUBSTITUTE: the property is that a
+  // SCHEDULED fire's marker reached Better Stack, and that sink has no unauthenticated read path.
+  // 16th declaration — #8392 (PR #8394) raised this 15 -> 16. PLACEMENT: two-space child of
+  // `discoverability_test:` in the first-text-block plan, single-line quoted scalar. TRUTH: the
+  // probe is the `scripts/betterstack-query.sh --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME` pipeline in
+  // that plan's `command:`, which reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs
+  // SQL) to count decoded outcome rows. NO SUBSTITUTE: the property is the CONTENT of warehouse
+  // rows the cron POSTs, and that sink has no unauthenticated read path — grepping the emitter
+  // would verify the diff, not the delivery.
+  // 17th declaration — #8427 (PR #8428) raised this 16 -> 17. PLACEMENT: two-space child of
+  // `discoverability_test:` in the diff-underivable enum-split plan, single-line quoted scalar.
+  // TRUTH: the probe is the `scripts/betterstack-query.sh --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME`
+  // pipeline in that plan's `command:`, projected one level deeper than #8392's — it reads
+  // `refusal_detail[].reason`, which is the field this PR adds — and reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL). NO SUBSTITUTE: the property
+  // is the CONTENT of warehouse rows the cron POSTs, and that sink has no unauthenticated read
+  // path — a source grep verifies the diff, not the delivery. A source-invariant probe was
+  // considered and declined TWICE, on DUPLICATION: the AST census in
+  // cron-compound-promote-outcome-census.test.ts is the authority, and re-deriving its
+  // comparison standalone is exactly what produced the vacuous compound-promote-reason-sites.sh
+  // this PR deletes. Running the census ITSELF is separately impossible — it is a vitest suite
+  // and bun/node/npx all resolve under /home/.../mise, which the bwrap sandbox tmpfs's. That
+  // rc=127 point covers the TS runners ONLY: /usr/bin/{python3,jq,curl} DO resolve in the
+  // sandbox, so a reimplementation would have run; it would also have been the duplicate.
+  // #8450 (2026-09-21): +1 for the actions-queue-tail soak probe — the plan's
+  // discoverability_test declares credentials_required for `gh` (Actions read);
+  // live queue state has no unauthenticated substitute. Genuine declaration.
+  // #8539 (2026-09-22): +1 for the inngest private-NIC boot event — the plan's
+  // discoverability_test declares credentials_required for the Better Stack Logs warehouse
+  // read. The marker is emitted by a deny-all, no-SSH host and exists only in that warehouse;
+  // no unauthenticated endpoint exposes it. Genuine declaration.
+  // #8211 (2026-09-23): +1 for the git-data boot_complete probe — the plan's
+  // discoverability_test declares credentials_required for the Better Stack ClickHouse
+  // read (Doppler soleur/prd_terraform). boot_complete is emitted by a host on the private
+  // network and lands only in Better Stack Logs and Sentry, so there is no unauthenticated
+  // substitute to read it from. Genuine declaration.
+  // #8505 (2026-09-23): +1 (20 -> 21 after merging #8211's +1) for the CI/prd Anthropic key distinctness probe —
+  // the plan's discoverability_test runs anthropic-key-distinctness.sh, which compares secret
+  // VALUES across Doppler soleur/ci and every soleur/prd* config; no unauthenticated endpoint
+  // exposes a secret or its hash. Genuine declaration.
+  // #8611 (2026-09-23): +1 for `2026-09-23-fix-anthropic-spend-cron-524-double-run-plan.md` (archived under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/probe-inngest-524-count.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
+  // NO SUBSTITUTE: the property is the count of inngest-server `invalid status code: 524`
+  // journald rows in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #8651 (2026-09-23): +1 for `2026-09-23-fix-web-host-fresh-boot-zot-primary-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`fresh-host-boot-trail.sh --image-origin`) reads SENTRY_ACTIONS_RO_TOKEN. NO SUBSTITUTE:
+  // a fresh boot's image origin is recorded only in Sentry events, which have no unauthenticated
+  // read path. Genuine.
+  // #4781 (2026-09-24): +1 (23 -> 24, after #8651 took 22 -> 23) for `2026-09-23-fix-sentry-auth-alert-empty-filter-recurrence-guard-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/sentry-alert-live-fidelity.sh`) reads the org's alert workflows with the
+  // Doppler prd SENTRY_IAC_AUTH_TOKEN. NO SUBSTITUTE: the property is the LIVE content of those
+  // workflows, which no unauthenticated Sentry endpoint exposes. Genuine declaration.
+  // #5274 (2026-09-24): +1 (24 -> 25) for `2026-09-24-fix-git-data-plaintext-dirty-journal-dm-snapshot-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/betterstack-query.sh --grep boot_complete`) reads the Better Stack ClickHouse
+  // credentials from Doppler soleur/prd_terraform. NO SUBSTITUTE: `plaintext_journal` rides the
+  // git-data host's boot_complete, which lands only in Better Stack Logs and Sentry; the host is
+  // on the private network and no unauthenticated endpoint exposes its boot state. Genuine.
+  // #8717 (2026-09-24): +1 (25 -> 26, after #5274 took 24 -> 25) for `2026-09-24-fix-leader-loop-prompt-caching-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/betterstack-query.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the leader-loop SOLEUR_CLAUDE_COST markers
+  // exist only in the Better Stack Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #8630 (2026-09-24): +1 (26 -> 27, after #8717 took 25 -> 26) for `2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/sentry-alert-live-fidelity.sh`) reads the org's alert workflows with the
+  // Doppler prd SENTRY_IAC_AUTH_TOKEN. NO SUBSTITUTE: the property is the LIVE content of the
+  // cron-monitor-failure workflow (its detectorIds binding and email action), which no
+  // unauthenticated Sentry endpoint exposes. Genuine declaration.
+  // #7761 (2026-09-24): +1 (27 -> 28, after #8630 took 26 -> 27) for `2026-09-24-fix-7761-flip-rollout-probe-post-cutover-answer-key-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block. TRUTH: the
+  // probe (`scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. NO SUBSTITUTE: the evidence is the dedicated host's
+  // journald rows in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #8705 (2026-09-24): +1 (28 -> 29, after #7761 took 27 -> 28) for `2026-09-24-security-rotate-web-probes-read-doppler-token-plan.md` (archived under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`apps/web-platform/infra/scripts/web-probes-token-rotation-verify.sh`) lists
+  // soleur/prd service tokens with the Tier-B DOPPLER_TOKEN_TF. NO SUBSTITUTE: service-token
+  // metadata (slug, created_at) has no unauthenticated endpoint, and a read service token gets HTTP
+  // 403 on the listing (measured 2026-09-24). Genuine declaration.
+  // #8737 (2026-09-25): +1 (29 -> 30, after #8705 took 28 -> 29) for `2026-09-25-security-rotate-ghcr-minter-write-doppler-token-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the declared probe is the same verifier (`web-probes-token-rotation-verify.sh`) run for
+  // retired slug 61c939b5 with the Tier-B DOPPLER_TOKEN_TF (the plan also runs it for e8e5187f). NO SUBSTITUTE: identical to
+  // #8705 — service-token metadata has no unauthenticated endpoint. Genuine declaration.
+  // #8754 (2026-09-25): +1 (30 -> 31, after #8737 took 29 -> 30) for `2026-09-25-fix-web-platform-infra-drift-8754-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (a curl GET of the Hetzner firewalls API filtered to `soleur-inngest`) reads
+  // HCLOUD_TOKEN from Doppler soleur/prd_terraform. NO SUBSTITUTE: Hetzner exposes a firewall's
+  // `applied_to` set only through the authenticated API, and the unauthenticated alternative (a TCP
+  // connect to the host's port 22) needs a public IP that changes on every replace. Genuine.
+  // #8706 (2026-09-27): +1 (31 -> 32, after #8754 took 30 -> 31) for `2026-09-27-fix-luks-monitor-host-timer-never-installed-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (it was a `>-` fold, which the reader treats as no declaration). TRUTH: the probe
+  // (`scripts/followthroughs/luks-monitor-host-timer-8706.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
+  // NO SUBSTITUTE: the evidence is web-1's luks-monitor.service journald rows in the Logs warehouse,
+  // which has no unauthenticated read path. Genuine.
+  // #8714 5.4 (2026-09-27): +1 (32 -> 33, after #8706 took 31 -> 32) for `2026-09-27-chore-retire-ghcr-token-minter-and-host-credential-plumbing-plan.md` (archived under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`doppler secrets -p soleur -c prd --only-names`) reads Doppler names only.
+  // NO SUBSTITUTE: the property is the ABSENCE of three secret names in Doppler after the merge
+  // apply, and a Doppler config listing has no unauthenticated read path. Genuine declaration.
+  // #9045 (2026-09-28): +1 (33 -> 34, after #8714 5.4 took 32 -> 33) for `2026-09-28-fix-luks-deadman-host-canary-disarm-and-snapshot-411798619-release-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/betterstack-query.sh --grep 'OK: /mnt/data
+  // is LUKS-backed'`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform).
+  // NO SUBSTITUTE: the SOLEUR_WORKSPACES_LUKS_DEADMAN markers and the nightly OK row share web-1's
+  // luks-monitor journald tag, which lands only in the Logs warehouse; it has no unauthenticated
+  // read path. Genuine.
+  // #7262/#7270 (2026-09-28): +1 (34 -> 35, after #9045 took 33 -> 34) for `2026-09-28-fix-zot-probe-self-diagnosis-plan.md` (archived under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK`)
+  // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
+  // the liveness_* counters ride the registry host's direct POST into the Logs warehouse, which has
+  // no unauthenticated read path, and the registry host is deny-all-public. Genuine.
+  // #8562 (2026-09-28): +1 (35 -> 36, after #7262/#7270 took 34 -> 35) for `2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md` (archived under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/followthroughs/inngest-provision-unit-8562.sh`)
+  // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
+  // the provision unit's phone-home rows (provision-unit-armed, bootstrap-done keyed on iid) land only
+  // in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #9169 (2026-09-30): +1 (36 -> 37, after #8562 took 35 -> 36) for `2026-09-30-infra-deny-ghcr-on-web-hosts-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/betterstack-query.sh --grep GHCR_DENY`)
+  // reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE:
+  // the per-host GHCR_DENY rows are ci-deploy journald lines that land only in the Logs warehouse,
+  // which has no unauthenticated read path, and a host's /etc/hosts has no remote probe. Genuine.
+  // #8609 (2026-09-30): +1 (37 -> 38, after #9169 took 36 -> 37) for `2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`apps/web-platform/scripts/github-app-key-status.sh`)
+  // signs a GET to the HMAC-gated `/hooks/deploy-status` with WEBHOOK_DEPLOY_SECRET plus the CF Access
+  // pair (Doppler soleur/prd_terraform). NO SUBSTITUTE: which key source a production host runs must
+  // not be disclosed by any unauthenticated endpoint, and deploy state has no other read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 38;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
@@ -2371,5 +2811,340 @@ describe("#7393 G — credentials_required corpus baseline", () => {
       declaring.length,
       `plans declaring credentials_required: ${JSON.stringify(declaring)}. FIRST confirm each declaration is intentional — a leftover template comment or a stray line outside the discoverability_test sub-block must be DELETED, not baselined. Only if every declaration is genuine does raising this baseline become the reviewable diff line the waiver's drift control depends on.`,
     ).toBe(BASELINE_DECLARED_PROBES);
+  });
+});
+
+// #7453 — behavioural row for the Pattern-C migration (ADR-179 A18). Runs the SHIPPED Form A
+// block with the plugin root UNSET, from a scratch repo whose own
+// `plugins/soleur/skills/preflight/scripts/parse-form-a.awk` is a decoy that writes a ledger.
+// The shipped block must fail closed and never execute the decoy. The twin runs the
+// PRE-migration git-root form of the same block and MUST execute the decoy — that proves the
+// decoy can run, so an empty ledger above means something.
+describe("Check 10 Form A block — unset plugin root never executes the checked-out copy (#7453)", () => {
+  const { gitFixtureEnv } = require("./lib/git-fixture-env") as typeof import("./lib/git-fixture-env");
+
+  const skillText = readFileSync(SKILL_PATH, { encoding: "utf8" });
+  const lines = skillText.split("\n");
+  // Shared module-scope slicer (also executed by the #8102 chain rows).
+  const { from, to, block } = formAAwkSlice(lines);
+  const PRE_MIGRATION =
+    'FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"';
+
+  function runBlock(src: string): { rc: number; out: string; ledger: string } {
+    const dir = mkdtempSync(join(tmpdir(), "form-a-decoy-"));
+    const env = gitFixtureEnv(dir);
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.GROK_PLUGIN_ROOT;
+    Bun.spawnSync(["git", "init", "-q", dir], { env, stdout: "pipe", stderr: "pipe" });
+    const ledger = join(dir, "decoy-ledger");
+    writeFileSync(ledger, "");
+    const decoyDir = join(dir, "plugins", "soleur", "skills", "preflight", "scripts");
+    mkdirSync(decoyDir, { recursive: true });
+    writeFileSync(join(decoyDir, "parse-form-a.awk"), `BEGIN { print "decoy-ran" > "${ledger}"; exit 0 }\n`);
+    writeFileSync(join(dir, "preflight-observability.txt"), "");
+    const script = `set -uo pipefail\nPREFLIGHT_TMP="${dir}"\n${src}\necho "BLOCK_DONE"\n`;
+    const p = Bun.spawnSync({ cmd: ["bash", "-c", script], cwd: dir, env, stdout: "pipe", stderr: "pipe" });
+    return {
+      rc: p.exitCode ?? -1,
+      out: p.stdout.toString() + p.stderr.toString(),
+      ledger: existsSync(ledger) ? readFileSync(ledger, "utf8") : "<missing>",
+    };
+  }
+
+  test("the extracted block is the real one (non-empty, carries the fail-closed test)", () => {
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    expect(block).toContain('test -r "$FORM_A_AWK"');
+    expect(block).toContain(FORM_A_INVOCATION);
+  });
+
+  // Measured: Check 10 runs under `set -uo pipefail`, so an unset token aborts the block at
+  // its FIRST line (`CLAUDE_PLUGIN_ROOT: unbound variable`, rc 127) — before the `test -r`
+  // guard is reached. Both are fail-closed; the row pins the one that actually happens.
+  test("shipped block, root unset: aborts before any parser runs, decoy ledger stays empty", () => {
+    const r = runBlock(block);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("CLAUDE_PLUGIN_ROOT: unbound variable");
+    expect(r.out).not.toContain("BLOCK_DONE");
+    expect(r.ledger).toBe("");
+  });
+
+  test("shipped block, root set but empty: the test -r guard fails closed at /skills/", () => {
+    const r = runBlock(`CLAUDE_PLUGIN_ROOT=""\n${block}`);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("FAIL: Check 10 parser missing at /skills/");
+    expect(r.out).toContain("plugin root unresolved?");
+    expect(r.ledger).toBe("");
+  });
+
+  test("twin control: the pre-migration git-root block DOES execute the decoy", () => {
+    const pre = block.replace(lines[from], PRE_MIGRATION);
+    expect(pre).not.toBe(block);
+    const r = runBlock(pre);
+    expect(r.ledger).toContain("decoy-ran");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8102 / #7548 — quoted inline scalars decode ONCE, in the parser, and the
+// string the real SKILL.md chain leaves in $CMD is the decoded one.
+//
+// Q  — both surfaces (awk runtime, TS mirror) emit the YAML value, per case.
+// E  — the EXECUTED string: the real Step 10.4 fenced bash, extracted and run.
+//      The parity harness used to compare only the gate verdict, which is how
+//      the #8149 strip shipped with its escapes undecoded (#7548).
+// Twins — permanent controls proving E can go red on the two failure modes it
+//      exists for: a Form B fall-through and a double decode.
+// ---------------------------------------------------------------------------
+describe("#8102 quoted inline scalars", () => {
+  test("Q-ids the fixture sections are exactly the expected cases and the deviation keys are pinned", () => {
+    const ids = QUOTED_CASES.map((c) => c.id);
+    expect(new Set(ids)).toEqual(new Set(EXPECTED_QUOTED_IDS));
+    expect(ids.length, "no duplicated case section").toBe(EXPECTED_QUOTED_IDS.length);
+    expect(Object.keys(DEVIATIONS).sort()).toEqual([
+      "DQ-TAB-KEPT",
+      "DQ-TAIL-TEXT",
+      "NEG-EMPTY",
+      "NEG-HASH-NOSPACE",
+      "NEG-LF",
+      "NEG-MISMATCH",
+      "NEG-UNTERMINATED",
+      "SQ-EMPTY",
+    ]);
+  });
+
+  for (const { id, section } of QUOTED_CASES) {
+    test(`Q ${id} awk and TS emit the YAML value`, () => {
+      const want = expectedQuoted(id, section);
+      expect(runAwk(section), `${id} awk runtime; ${ORACLE_NOTE}`).toBe(want);
+      expect(parseCommand(section), `${id} TS mirror; ${ORACLE_NOTE}`).toBe(want);
+    });
+  }
+
+  for (const { id, section } of QUOTED_CASES) {
+    test(`E ${id} the Step 10.4 chain leaves the decoded command`, () => {
+      const r = runChain(section);
+      expect(r.rc, `${id} chain rc (stderr: ${r.stderr})`).toBe(0);
+      expect(r.stderr, `${id} the chain must run to its end`).toBe("CHAIN_DONE");
+      expect(r.cmd, `${id} executed string vs the contract value`).toBe(
+        normalizeCommand(expectedQuoted(id, section)),
+      );
+      expect(r.cmd, `${id} executed string vs the TS mirror`).toBe(normalizeCommand(parseCommand(section)));
+    });
+  }
+
+  test("E-fence an empty quoted command never falls through to the Form B fence", () => {
+    const block = extractObservabilityBlock(fx(FIXTURE_12));
+    expect(block, "the fixture carries the fence the row guards against").toContain("printf LAUNDERED");
+    const r = runChain(block);
+    expect(r.rc).toBe(0);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe('""');
+    expect(r.cmd).not.toContain("LAUNDERED");
+    expect(r.cmd).toBe(normalizeCommand(parseCommand(block)));
+    // The literal pair then fails the verb gate as empty, on the mirror as at runtime.
+    expect(rejectReason(r.cmd) ?? "").toMatch(/empty after normalization/);
+  });
+
+  test("E-fence-SQ an empty single-quoted command never falls through to the Form B fence", () => {
+    const block = extractObservabilityBlock(fx(FIXTURE_13));
+    expect(block, "the fixture carries the fence the row guards against").toContain("printf LAUNDERED");
+    expect(rawCommandValue(block), "the fixture's command is the single-quoted empty pair").toBe("''");
+    const r = runChain(block);
+    expect(r.rc).toBe(0);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe("''");
+    expect(r.cmd).not.toContain("LAUNDERED");
+    expect(r.cmd).toBe(normalizeCommand(parseCommand(block)));
+    expect(rejectReason(r.cmd) ?? "").toMatch(/empty after normalization/);
+  });
+
+  test("E-formB a single-line quoted Form B fence reaches CMD verbatim, quotes included", () => {
+    // Form B is prose plus a fence, not YAML: nothing decodes it. The #8149 strip
+    // used to remove this pair; #8102 deleted it, so the quotes now reach the gate
+    // and the exec. The control proves the row can tell the two worlds apart.
+    const block = extractObservabilityBlock(fx(FIXTURE_14));
+    expect(block, "Form B only: no command: key").not.toMatch(/^[ \t]*command:/m);
+    const r = runChain(block);
+    expect(r.rc).toBe(0);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe('"printf 200"');
+    expect(r.cmd).toBe(normalizeCommand(parseCommand(block)));
+    const old = runChain(block, { editNormalize: (n) => `${n}\n${OLD_8149_STRIP}` });
+    expect(old.cmd, "control: the deleted #8149 strip would have removed the pair").toBe("printf 200");
+  });
+
+  test("CRLF awk-only a quoted inline value ending in CR still decodes (the TS mirror never sees the CR)", () => {
+    // parseCommand splits on /\r?\n/, so only the awk and the chain can exercise the
+    // `\r` in the trailing class. Asserted on both awk-backed surfaces.
+    const crlf = ["discoverability_test:", `  command: "printf '%s' \\"a\\""`, '  expected_output: "a"', ""].join("\r\n");
+    expect(crlf, "the command line really ends in CR LF").toContain('\\""\r\n');
+    expect(runAwk(crlf)).toBe(`printf '%s' "a"`);
+    const r = runChain(crlf);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe(`printf '%s' "a"`);
+  });
+
+  test("TRAIL-WS the fixture's raw command line still ends in whitespace", () => {
+    // An editor or formatter that strips trailing whitespace would silently turn
+    // TRAIL-WS into a duplicate of a plain decode row.
+    const t = QUOTED_CASES.find((c) => c.id === "TRAIL-WS");
+    expect(t, "TRAIL-WS section present").toBeDefined();
+    expect(rawCommandValue(t!.section)).toMatch(/"[ \t]+$/);
+  });
+
+  test("Locale the Step 10.4 parse is C-locale pinned, so a UTF-8 caller gets the same bytes", () => {
+    // Under a UTF-8 gawk, [[:space:]] matches U+2028, so the key-prefix strip ate it
+    // and the quote decode then fired; under C it is three non-space bytes and the
+    // value is kept verbatim. The runtime pins LC_ALL=C so the parse cannot vary by
+    // operator host. A byte-oriented awk (mawk) agrees in every locale, so on such a
+    // host this row cannot go red; it is the gawk hosts it protects.
+    const section = obs("discoverability_test:", '  command: \u2028"printf a"', '  expected_output: "a"');
+    const c = runChain(section, { editNormalize: () => "", env: { LC_ALL: "C" } });
+    const u = runChain(section, { editNormalize: () => "", env: { LC_ALL: "C.UTF-8" } });
+    expect(c.stderr).toBe("CHAIN_DONE");
+    expect(u.stderr).toBe("CHAIN_DONE");
+    expect(c.cmd).toBe('\u2028"printf a"');
+    expect(u.cmd, "a UTF-8 caller must not change the parse").toBe(c.cmd);
+    expect(runAwk(section), "the harness measures the same C-locale parse").toBe(c.cmd);
+  });
+
+  test("E twin i a length-2 decoder twin DOES launder the fence, so E-fence can go red", () => {
+    const block = extractObservabilityBlock(fx(FIXTURE_12));
+    const root = mkdtempSync(join(tmpdir(), "check10-twin-root-"));
+    try {
+      const scripts = join(root, "skills", "preflight", "scripts");
+      mkdirSync(scripts, { recursive: true });
+      const real = readFileSync(AWK_PATH, "utf8");
+      const twin = real.replace("if (cq < 3) return v", "if (cq < 2) return v");
+      expect(twin !== real, "the twin edit must land on the real minimum-length guard").toBe(true);
+      writeFileSync(join(scripts, "parse-form-a.awk"), twin);
+      const r = runChain(block, { pluginRoot: root });
+      expect(r.rc).toBe(0);
+      expect(r.stderr).toBe("CHAIN_DONE");
+      expect(r.cmd).toContain("LAUNDERED");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("E twin ii re-adding the 8149 strip double-decodes NEST, so E NEST can go red", () => {
+    const nest = QUOTED_CASES.find((c) => c.id === "NEST");
+    expect(nest, "NEST section present").toBeDefined();
+    const r = runChain(nest!.section, { editNormalize: (n) => `${n}\n${OLD_8149_STRIP}` });
+    expect(r.rc).toBe(0);
+    expect(r.stderr).toBe("CHAIN_DONE");
+    expect(r.cmd).toBe("printf 200");
+    expect(r.cmd).not.toBe(normalizeCommand(expectedQuoted("NEST", nest!.section)));
+  });
+
+  test("Scope parseExpected decodes nothing, the DQ2 expected value keeps both backslashes", () => {
+    const dq2 = QUOTED_CASES.find((c) => c.id === "DQ2");
+    expect(dq2, "DQ2 section present").toBeDefined();
+    expect(parseExpected(dq2!.section)).toBe(String.raw`a\\b+`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 10.4 hardening executed from SKILL.md itself (#8102 review): the ssh reject
+// and the credentials_required read. Each row runs the REAL fence (sliced around
+// its unique anchor) and the TS mirror, and asserts they agree.
+// ---------------------------------------------------------------------------
+
+/** The body of the ``` fence that contains the unique anchor line. Call inside a test. */
+function fenceAround(lines: string[], pred: (l: string) => boolean, label: string): string {
+  const idx = uniqueIndex(lines, pred, label);
+  let open = -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (lines[i].startsWith("```")) {
+      open = i;
+      break;
+    }
+  }
+  const close = lines.findIndex((l, i) => i > idx && l.startsWith("```"));
+  expect(lines[open], `${label}: the anchor sits inside a bash fence`).toBe("```bash");
+  expect(close, `${label}: the fence closes`).toBeGreaterThan(idx);
+  return lines.slice(open + 1, close).join("\n");
+}
+
+function runBash(script: string, env: Record<string, string> = {}, cwd?: string): { rc: number; out: string } {
+  const p = Bun.spawnSync({ cmd: ["bash", "-c", script], cwd, env: gitCleanEnv(env), stdout: "pipe", stderr: "pipe" });
+  return { rc: p.exitCode ?? -1, out: p.stdout.toString() + p.stderr.toString() };
+}
+
+const neverRun: Executor = async () => {
+  throw new Error("the executor must not be reached");
+};
+
+describe("Check 10 Step 10.4 hardening — ssh reject and credentials_required, runtime vs mirror", () => {
+  const skillLines = readFileSync(SKILL_PATH, "utf8").split("\n");
+
+  // Bash resolves `\ssh`, `'s''sh'` and `"ssh"` to the same binary, so the reject
+  // must match on a DEQUOTED COPY, as probe-verb-gate.sh does for the verb.
+  const SSH_SPELLINGS = [String.raw`bash -c \ssh h`, `bash -c 's''sh' h`, `'bash -c "ssh h"'`];
+
+  test("SSH the runtime reject and the mirror both refuse quoted and escaped ssh spellings", async () => {
+    const fence = fenceAround(skillLines, (l) => /^if \[\[ "\$CMD\w*" =~ \(\^\|\[\[:space:\]\]\|\/\)ssh/.test(l), "ssh reject");
+    for (const cmd of SSH_SPELLINGS) {
+      const r = runBash(`set -uo pipefail\n${fence}\nprintf SSH_PASSED`, { CMD: cmd });
+      expect(r.rc, `${cmd}: runtime rc (${r.out})`).toBe(1);
+      expect(r.out, `${cmd}: runtime reason`).toContain("contains ssh");
+      expect(rejectReason(cmd) ?? "", `${cmd}: mirror rejectReason`).toMatch(/contains ssh/);
+      const planBody = obs("## Observability", "", "discoverability_test:", `  command: ${cmd}`, '  expected_output: "ok"');
+      const c = await classifyDiscoverabilityResult({ planPath: "p.md", planBody, prBody: "", runner: neverRun });
+      expect(c.result, `${cmd}: mirror classification`).toBe("FAIL");
+      expect(c.reason ?? "", `${cmd}: mirror reason`).toMatch(/contains ssh/);
+    }
+    // Control: a token that only STARTS with ssh is not the ssh binary.
+    const ok = runBash(`set -uo pipefail\n${fence}\nprintf SSH_PASSED`, { CMD: "printf 'ssh-keys'" });
+    expect(ok.rc, ok.out).toBe(0);
+    expect(ok.out).toBe("SSH_PASSED");
+    expect(rejectReason("printf 'ssh-keys'")).toBeNull();
+  });
+
+  // [value as written after `credentials_required:`, verdict, the scope Check 10 reads]
+  const CREDS_ROWS: [string, "FAIL" | "SKIP-DECLARED", string][] = [
+    [`"TODO" # fill later`, "FAIL", "TODO"],
+    [`TODO   # fill later`, "FAIL", "TODO"],
+    [`'placeholder' # later`, "FAIL", "placeholder"],
+    [`"prd read token #3" # why`, "SKIP-DECLARED", "prd read token #3"],
+    [`prd read token # why`, "SKIP-DECLARED", "prd read token"],
+  ];
+
+  test("CREDS a YAML trailing comment is dropped before the placeholder test, on the runtime and the mirror", async () => {
+    const fence = fenceAround(skillLines, (l) => l.startsWith("CREDS_REQ=$(awk '"), "CREDS_REQ read");
+    for (const [value, verdict, scope] of CREDS_ROWS) {
+      const section = obs(
+        "discoverability_test:",
+        "  command: doppler run -- curl https://x.example/",
+        `  credentials_required: ${value}`,
+        '  expected_output: "200"',
+      );
+      const dir = mkdtempSync(join(tmpdir(), "check10-creds-"));
+      let r: { rc: number; out: string };
+      try {
+        writeFileSync(join(dir, "preflight-observability.txt"), section);
+        r = runBash(`set -uo pipefail\nPREFLIGHT_TMP='${dir}'\n${fence}\nprintf CREDS_ABSENT`, {}, dir);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+      expect(parseCredentialsRequired(section), `${value}: mirror scope`).toBe(scope);
+      const c = await classifyDiscoverabilityResult({
+        planPath: "p.md",
+        planBody: obs("## Observability", "", section),
+        prBody: "",
+        runner: neverRun,
+      });
+      expect(c.result, `${value}: mirror verdict`).toBe(verdict);
+      if (verdict === "FAIL") {
+        expect(r.rc, `${value}: runtime rc (${r.out})`).toBe(1);
+        expect(r.out, `${value}: runtime verdict`).toContain(`is a placeholder ("${scope}")`);
+        expect(c.reason ?? "").toContain(`is a placeholder ("${scope}")`);
+      } else {
+        expect(r.rc, `${value}: runtime rc (${r.out})`).toBe(0);
+        expect(r.out, `${value}: runtime scope`).toContain(`credentials_required — ${scope}. Check 10`);
+        expect(c.reason ?? "").toContain(`credentials_required — ${scope}. Check 10`);
+      }
+    }
   });
 });

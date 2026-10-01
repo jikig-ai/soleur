@@ -180,7 +180,7 @@ case "$method" in
   GET)
     if grep -qxF -- "$id" "$FAKE_GET_FAIL" 2>/dev/null; then emit 500 '{"errors":"boom"}'; fi
     # A GET that succeeds and THEN fails: "<id> <n>" means every GET after the nth returns 500.
-    n_after="$(awk -v i="$id" '$1==i{print $2}' "$FAKE_GET_FAIL_AFTER" 2>/dev/null | head -1)"
+    n_after="$(awk -v i="$id" '$1==i{print $2}' "$FAKE_GET_FAIL_AFTER" 2>/dev/null | sed -n '1p')"
     if [[ -n "$n_after" ]]; then
       seen="$(awk -F'\t' -v i="$id" '$2=="GET" && $3==i' "$FAKE_CALLS" | grep -c '')"
       if [[ "$seen" -gt "$n_after" ]]; then emit 500 '{"errors":"boom"}'; fi
@@ -206,7 +206,7 @@ case "$method" in
     if grep -qxF -- "$id $want" "$FAKE_PATCH_FAIL" 2>/dev/null; then emit 500 '{"errors":"boom"}'; fi
     # "<id> <want> <code>": only the FIRST matching PATCH answers <code>; later ones succeed. This
     # is what makes a RETRY distinguishable from a first-attempt success (#7658 E8).
-    once="$(awk -v i="$id" -v w="$want" '$1==i && $2==w{print $3}' "$FAKE_PATCH_FAIL_ONCE" 2>/dev/null | head -1)"
+    once="$(awk -v i="$id" -v w="$want" '$1==i && $2==w{print $3}' "$FAKE_PATCH_FAIL_ONCE" 2>/dev/null | sed -n '1p')"
     if [[ -n "$once" ]]; then
       seen="$(awk -F'\t' -v i="$id" '$2=="PATCH" && $3==i && $4 ~ /"paused":'"$want"'/' "$FAKE_CALLS" | grep -c '')"
       if [[ "$seen" -le 1 ]]; then emit "$once" '{"errors":"boom"}'; fi
@@ -366,7 +366,7 @@ get_urls()     { awk -F'\t' '$2=="GET"{print $3}' "$FAKE_CALLS"; }
 state_lines()  { if [[ -f "$STATEFILE" ]]; then grep -c '' "$STATEFILE"; else echo 0; fi; }
 observed_clock() { cat "$FAKE_CLOCK"; }
 reported_elapsed() {  # <deadline> — the elapsed the SUT PRINTS, distinct from the observed clock
-  printf '%s' "$OUT" | sed -n "s/.*never reached 'up' within \([0-9]*\)s of a $1s deadline.*/\1/p" | head -1
+  printf '%s' "$OUT" | sed -n "s/.*never reached 'up' within \([0-9]*\)s of a $1s deadline.*/\1/p" | sed -n '1p'
 }
 
 # --- T1: the steady state — every monitor already up ---------------------------------------
@@ -430,7 +430,7 @@ assert "T2 says a healthy feeder misses most windows, so the warning is not read
   "[[ \"\$OUT\" == *'five windows in six'* ]]"
 assert_eq "T2 unpauses then rolls back — exactly two PATCHes" "2" "$(patch_count)"
 assert "T2's FIRST PATCH is the unpause" \
-  "[[ \"\$(patch_bodies | head -1)\" == '$ID_INNGEST {\"paused\":false}' ]]"
+  "[[ \"\$(patch_bodies | sed -n '1p')\" == '$ID_INNGEST {\"paused\":false}' ]]"
 assert "T2's LAST PATCH is paused:true — the inverse would leave it live-and-unfed" \
   "[[ \"\$(patch_bodies | tail -1)\" == '$ID_INNGEST {\"paused\":true}' ]]"
 assert_eq "T2 clears the state file once the rollback returns 2xx" "0" "$(state_lines)"
@@ -517,7 +517,7 @@ assert_eq "T4 exits 0" "0" "$RC"
 assert "T4 declares the monitor ARMED on a measured beat" "[[ \"\$OUT\" == *'a real beat landed. ARMED'* ]]"
 assert_eq "T4 issues ONLY the unpause — no rollback on a successful arm" "1" "$(patch_count)"
 assert "T4's single PATCH is the unpause" \
-  "[[ \"\$(patch_bodies | head -1)\" == '$ID_INNGEST {\"paused\":false}' ]]"
+  "[[ \"\$(patch_bodies | sed -n '1p')\" == '$ID_INNGEST {\"paused\":false}' ]]"
 assert_eq "T4 removes the id from the state file on reaching up" "0" "$(state_lines)"
 # The second half of the self-clearing property the 30s deadline is chosen to PRESERVE: the next
 # apply must be a no-op, reached through `already armed`, not through a second unpause. Asserted
@@ -538,7 +538,7 @@ printf '%s true\n' "$ID_INNGEST" > "$FAKE_PATCH_FAIL"   # the ROLLBACK fails; th
 run_sut
 assert_eq "T5 exits 1 even for the SOFT caller — a failed rollback is about the arming" "1" "$RC"
 assert "T5 reached the rollback (positive control: the unpause did succeed)" \
-  "[[ \"\$(patch_bodies | head -1)\" == '$ID_INNGEST {\"paused\":false}' ]]"
+  "[[ \"\$(patch_bodies | sed -n '1p')\" == '$ID_INNGEST {\"paused\":false}' ]]"
 assert "T5 says the monitor is unpaused-and-unfed" "[[ \"\$OUT\" == *'unpaused-and-unfed'* ]]"
 assert "T5 does NOT emit the soft FEEDER verdict (that would leave the job green)" \
   "[[ \"\$OUT\" != *'no beat within'* ]]"
@@ -634,7 +634,7 @@ printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
 printf '2026-01-01T00:00:00Z\\n::error::FORGED-BY-VENDOR-STRING' > "$FAKE_STATE/$ID_INNGEST.updated"
 FAKE_CURL_COST=1 run_sut
 assert "T7e no line in the output BEGINS with the forged workflow command" \
-  "! printf '%s' \"\$OUT\" | grep -q '^::error::FORGED-BY-VENDOR-STRING'"
+  "! printf '%s' \"\$OUT\" | grep -c '^::error::FORGED-BY-VENDOR-STRING' >/dev/null"
 assert "T7e the vendor text is still carried, inline, where it cannot be parsed as a command" \
   "[[ \"\$OUT\" == *'FORGED-BY-VENDOR-STRING'* ]]"
 
@@ -706,7 +706,7 @@ assert "T11 the cut landed INSIDE the poll, before any rollback could run" \
   "[[ \"\$OUT\" != *'no beat within'* && \"\$OUT\" != *'ROLLED BACK'* ]]"
 assert_eq "T11 exactly one PATCH was issued — the unpause, with no rollback behind it" "1" "$(patch_count)"
 assert "T11 that PATCH was the unpause, so the monitor is LIVE at the moment of the cut" \
-  "[[ \"\$(patch_bodies | head -1)\" == '$ID_INNGEST {\"paused\":false}' ]]"
+  "[[ \"\$(patch_bodies | sed -n '1p')\" == '$ID_INNGEST {\"paused\":false}' ]]"
 assert_eq "T11 the id is on the re-pause sweep's books AT THE CUT, not only after a give-up" "1" "$(state_lines)"
 assert "T11 and it is the right id" "[[ \"\$(cat '$STATEFILE')\" == '$ID_INNGEST' ]]"
 # …and the `always()` sweep, reading the file the cut left behind, closes the window.
@@ -924,7 +924,7 @@ if mutate gate-up-only 1 's|if \[\[ "\$HB_STATUS" != "paused" \]\]; then|if [[ "
   printf 'down' > "$FAKE_STATE/$ID_ZOT1.status"
   FAKE_CURL_COST=0 run_sut "$MUTANT"
   assert "M8 RED: a DOWN monitor is now unpaused rather than skipped" \
-    "[[ \"\$(patch_bodies | head -1)\" == '$ID_ZOT1 {\"paused\":false}' ]]"
+    "[[ \"\$(patch_bodies | sed -n '1p')\" == '$ID_ZOT1 {\"paused\":false}' ]]"
   assert "M8 and it is polled to its deadline: the clock passes 200s" "[[ \$(observed_clock) -ge 200 ]]"
 fi
 

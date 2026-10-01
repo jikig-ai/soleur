@@ -4,7 +4,7 @@
 # Tunnel SSH bridge, with cloud-admin/Doppler creds held here in GitHub secrets (never on the host;
 # learning 2026-06-02). The fresh encrypted volume is +created + attached FIRST by a separate
 # `apply_target=workspaces-luks-cutover` run of apply-web-platform-infra.yml (gate-guarded); this
-# workflow does the freeze / rsync / repoint / canary. Mirrors git-data-cutover.yml.
+# workflow does the freeze / rsync / repoint / canary. Mirrors the pre-#8189 git-data cutover shape (that workflow is now a read-only proof; #8211).
 #
 # SIGN-OFF (C19 / AC20b): the freeze operates on SOLE-COPY user data with a terminal failure mode
 # the fix itself creates (passphrase/header loss ⇒ unreadable forever). The `environment:
@@ -42,6 +42,26 @@
 # 87692a0d9 is exactly that failure class: a staging mount that failed silently and put the entire
 # copy on the ROOT DISK. The gate now lives on the arm that can lose data. It only ever makes the
 # irreversible arm HARDER to reach; the reversible rehearsal arm is untouched.
+#
+# #6604 STEP 7 — THE PLAINTEXT WIPE (ADR-119 addendum 2026-09-28). `wipe_plaintext=true` retires web-1's
+# retained plaintext volume (a documented AP-009 deviation). Two arms, never one job:
+#   * dry_run=true  -> the READ-ONLY rehearsal rides the existing ungated `cutover` job, which delivers
+#     CONFIRM_WIPE=1 ONLY together with DRY_RUN=1 (its CONFIRM_WIPE expression is `wipe && dry_run`), so
+#     that job can never deliver a destructive wipe. Its `environment:` expression is untouched: the
+#     2026-07-19 rule "every destructive mode contributes its own operand" holds by construction,
+#     because the destructive wipe is not reachable from `cutover` at all.
+#   * dry_run=false -> the separate `wipe` job (below `cutover`, so the FIRST environment: line in this
+#     file stays cutover's), UNCONDITIONALLY gated on workspaces-luks-cutover — the one human approval.
+#     It proves the Hetzner project is visible, the pinned volume unchanged since preflight, both
+#     push-apply workflows paused and idle, a same-day green workspaces-luks-verify.yml run, and a WRITE
+#     token (idempotent labels PUT) BEFORE it touches web-1; then zeroes + verifies on the host, then
+#     detaches + deletes through the API only on exactly one success row for the pin. Its SSH delivery
+#     block is a COPY of cutover's; the remote `bash -c` delivery string is byte-identical in both (the
+#     workflow suite pins it), and the copy's own differences are executed against an ssh stub. The copy
+#     is first exercised on the host by the real dispatch — the ADR-119 addendum records that gap.
+# The Terraform state forget is NOT here: it is .github/workflows/workspaces-plaintext-forget.yml — a
+# separate, idempotently re-runnable run that alone holds the R2 state credentials and runs terraform,
+# while this destructive SSH + Hetzner-write job never does (ADR-119 addendum, "Serialization").
 
 name: workspaces-luks cutover freeze (#6604 / ADR-119)
 
@@ -53,12 +73,17 @@ on:
         required: true
         type: string
       dry_run:
-        description: "Rehearsal. COVERS: L3 gates; fresh-device selection + blkid discriminator; aws/lsof install; R2 escrow reachability probe (PUT/read-back/delete + the negative tfstate-denial probe); G2 manifest; advisory holder probe. Does NOT cover: no luksFormat/luksOpen/staging mount, no luksOpen --test-passphrase escrow proof, no header backup/upload, no rollback rehearsal, no bulk rsync, no freeze, no delta rsync, no C1 verify, no repoint, no canary, no wipe. A green rehearsal is NOT evidence the copy/verify path works. NOTE: clean_stray is REFUSED in this arm (a deletion has no rehearsal) — untick dry_run to run it."
+        description: "Rehearsal. COVERS: L3 gates; fresh-device selection + blkid discriminator; aws/lsof install; R2 escrow reachability probe (PUT/read-back/delete + the negative tfstate-denial probe); G2 manifest; advisory holder probe. Does NOT cover: no luksFormat/luksOpen/staging mount, no luksOpen --test-passphrase escrow proof, no header backup/upload, no rollback rehearsal, no bulk rsync, no freeze, no delta rsync, no C1 verify, no repoint, no canary, no wipe zero or delete (with wipe_plaintext=true the rehearsal runs the wipe's read-only host preconditions instead of the cutover's). A green rehearsal is NOT evidence the copy/verify path works. NOTE: clean_stray is REFUSED in this arm (a deletion has no rehearsal) — untick dry_run to run it."
         required: false
         type: boolean
         default: true
       rollback:
-        description: "Recovery: remount the retained plaintext at /mnt/data + restart. Use if a cutover left web-1 unhealthy."
+        description: "Recovery: remount the retained plaintext at /mnt/data + restart. Use if a cutover left web-1 unhealthy. REFUSED after a COMPLETED cutover (mount = LUKS mapper, persisted CANARY_OK matches its header) unless rollback_ack_luks_writes is also ticked."
+        required: false
+        type: boolean
+        default: false
+      rollback_ack_luks_writes:
+        description: "Only with rollback=true. Acknowledge that rolling back a COMPLETED cutover strands every write made on the LUKS volume since docker start (the plaintext copy is frozen at the cutover); those writes must then be reconciled by hand. Without it the script refuses (rollback_refused_post_cutover)."
         required: false
         type: boolean
         default: false
@@ -67,6 +92,16 @@ on:
         required: false
         type: boolean
         default: false
+      wipe_plaintext:
+        description: "IRREVERSIBLE with dry_run=false: zero, verify and DELETE web-1's retained PLAINTEXT /workspaces volume (runbook step 7). A documented AP-009 deviation — the volume is a superseded copy frozen at the 2026-07-23 cutover (ADR-119 addendum 2026-09-28). With dry_run=true (the default) it is the READ-ONLY rehearsal of every host precondition, ungated. With dry_run=false the gated `wipe` job runs behind the ONE workspaces-luks-cutover environment approval. Requires confirm=WIPE-PLAINTEXT-USER-DATA-AP-009 and expected_plaintext_volume_id. Mutually exclusive with rollback, clean_stray and rollback_ack_luks_writes."
+        required: false
+        type: boolean
+        default: false
+      expected_plaintext_volume_id:
+        description: "Only with wipe_plaintext=true: the Hetzner id of the retained plaintext volume (105149570) — the physical-id pin every check binds to. Must be EMPTY on every other mode."
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   # web-1-swap: this freeze stops/repoints web-1's /mnt/data — serialize against warm_standby /
@@ -85,6 +120,16 @@ env:
   # scope) and the Run step `WEB_HOST` (dial target). They MUST match or the
   # redirect misses the SSH; defining once removes that drift foot-gun.
   WEB_HOST_PRIVATE_IP: "10.0.1.10"
+  # #6604 step 7 — the identities the wipe binds to (measured 2026-09-28, read-only GETs). A token that
+  # cannot see WEB1_SERVER_ID holding LUKS_VOLUME_ID is a token for ANOTHER project, whose 404s mean
+  # nothing: every "gone" is believed only after that presence proof passes with the same token.
+  PLAINTEXT_VOLUME_NAME: soleur-web-platform-data
+  # The physical-id pin — a CONSTANT (S2): the dispatch input must merely EQUAL it, at every stage
+  # (preflight, the rehearsal, pre, host, api). The same value as workspaces-plaintext-forget.yml's PINNED.
+  PLAINTEXT_VOLUME_ID: "105149570"
+  WEB1_SERVER_ID: "123931471"
+  WEB1_SERVER_NAME: soleur-web-platform
+  LUKS_VOLUME_ID: "106443278"
 
 jobs:
   # ── UNGATED PREFLIGHT (#6588) ───────────────────────────────────────────────────────────────────
@@ -105,6 +150,11 @@ jobs:
   preflight:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # #6604 step 7 — the wipe's API classification, read by the `cutover` rehearsal (size) and the gated
+    # `wipe` job (it refuses unless the volume is still in this state when the approval lands).
+    outputs:
+      api_state: ${{ steps.api.outputs.api_state }}
+      size_bytes: ${{ steps.api.outputs.size_bytes }}
     steps:
       - name: Validate dispatch mode + confirm token
         env:
@@ -113,8 +163,41 @@ jobs:
           DRY: ${{ inputs.dry_run }}
           ROLLBACK_IN: ${{ inputs.rollback }}
           CLEAN_STRAY_IN: ${{ inputs.clean_stray }}
+          ACK_IN: ${{ inputs.rollback_ack_luks_writes }}
+          WIPE_IN: ${{ inputs.wipe_plaintext }}
+          PIN_IN: ${{ inputs.expected_plaintext_volume_id }}
         run: |
           set -euo pipefail
+
+          # #6604 step 7 — mode exclusion FIRST, so a mixed dispatch is refused for being mixed rather
+          # than being told to "untick dry_run" by a later check. The wipe is its own verb.
+          if [[ "${WIPE_IN:-false}" == "true" ]]; then
+            if [[ "$ROLLBACK_IN" == "true" || "$CLEAN_STRAY_IN" == "true" || "${ACK_IN:-false}" == "true" ]]; then
+              echo "::error::wipe_plaintext is mutually exclusive with rollback, clean_stray and rollback_ack_luks_writes — they are different verbs and the script refuses more than one mode. Re-dispatch with exactly ONE ticked."
+              exit 1
+            fi
+            # The physical-id pin every later check binds to (never a name). It must EQUAL the constant.
+            if [[ ! "${PIN_IN:-}" =~ ^[0-9]+$ ]]; then
+              echo "::error::wipe_plaintext requires expected_plaintext_volume_id = the numeric Hetzner id of the retained plaintext volume (runbook step 7)."
+              exit 1
+            fi
+            if [[ "$PIN_IN" != "$PLAINTEXT_VOLUME_ID" ]]; then
+              echo "::error::expected_plaintext_volume_id must equal the constant pin ${PLAINTEXT_VOLUME_ID} (the retained plaintext volume)."
+              exit 1
+            fi
+          elif [[ -n "${PIN_IN:-}" ]]; then
+            echo "::error::expected_plaintext_volume_id is only meaningful with wipe_plaintext=true — clear it, or tick wipe_plaintext."
+            exit 1
+          fi
+
+          # The post-cutover rollback acknowledgement only means something on a rollback dispatch; on
+          # any other mode it is a mis-ticked box, and silently ignoring it would hide the mistake.
+          # `${ACK_IN:-false}`: the step runs under `set -u`, and an input added later than its siblings
+          # must not turn every harness/dispatch that predates it into an unbound-variable abort.
+          if [[ "${ACK_IN:-false}" == "true" && "$ROLLBACK_IN" != "true" ]]; then
+            echo "::error::rollback_ack_luks_writes=true requires rollback=true — it acknowledges stranding post-cutover LUKS writes and has no meaning in any other mode. Untick it or tick rollback."
+            exit 1
+          fi
 
           # clean_stray deletes user data and has no rehearsal — there is nothing it could safely
           # simulate. dry_run DEFAULTS TO TRUE, so "tick clean_stray, change nothing else" lands
@@ -137,6 +220,8 @@ jobs:
           # the principle ID, so a pasted/muscle-memory cutover token can never reach a deletion.
           if [[ "$CLEAN_STRAY_IN" == "true" ]]; then
             EXPECT="DELETE-STRAY-USER-DATA-AP-009"
+          elif [[ "${WIPE_IN:-false}" == "true" ]]; then
+            EXPECT="WIPE-PLAINTEXT-USER-DATA-AP-009"
           else
             EXPECT="CUTOVER-WORKSPACES-LUKS"
           fi
@@ -150,8 +235,115 @@ jobs:
         if: ${{ inputs.clean_stray }}
 
       - name: Install Doppler CLI
-        if: ${{ inputs.clean_stray }}
+        if: ${{ inputs.clean_stray || inputs.wipe_plaintext }}
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      # #6604 step 7 — READ-ONLY API classification of the pinned plaintext volume, before anyone is
+      # paged. The read-only token first (the G1g-sanctioned shape), read/write only as the before-state
+      # fallback. Status codes are read with -w (never -f, which turns a 404 into exit 22), the token
+      # reaches curl on stdin (--config -), the API BODY never reaches an annotation (only .error.code
+      # and parsed fields), and fail() escapes every annotation. Writes nothing.
+      - name: Plaintext volume classification (read-only API)
+        id: api
+        if: ${{ inputs.wipe_plaintext }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PIN: ${{ inputs.expected_plaintext_volume_id }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace (a Hetzner token is in scope)"; exit 78 ;; esac
+          HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || HCLOUD_TOKEN=""
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"
+          fi
+          [[ -n "$HCLOUD_TOKEN" ]] || { echo "::error::no Hetzner token readable from prd_terraform"; exit 1; }
+          printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          HBODY="$(mktemp)"
+          # --- the Hetzner helpers: byte-identical in every copy (workspaces-luks-cutover-workflow.test.sh
+          # pins that). hapi <METHOD> <path> [json] -> prints the HTTP status ("000" on a transport error);
+          # body -> $HBODY. -w, never -f (a 404 is an ANSWER), and the token rides stdin (--config -).
+          hapi() {
+            local code rc=0
+            local -a extra=()
+            [[ -n "${3:-}" ]] && extra=(-H 'Content-Type: application/json' --data "$3")
+            code="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" \
+              | curl -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
+            [[ "$rc" -eq 0 ]] || code="000"
+            printf '%s' "$code"
+          }
+          # errcode — the API's .error.code only (never the body), at most 64 bytes; fail() escapes it.
+          errcode() {
+            local v
+            v="$(jq -r '.error.code // empty' "$HBODY" 2>/dev/null | head -c 64 || true)"
+            printf '%s' "${v:-none}"
+          }
+          # fail — EVERY annotation is %/CR/LF-escaped here, so no API value (a name, a status, an error
+          # code) can split the annotation or smuggle a workflow command into it.
+          fail() {
+            local m="$*"
+            m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"
+            echo "::error::$m"
+            exit 1
+          }
+          presence_proof() {
+            local code
+            code="$(hapi GET "/servers/${WEB1_SERVER_ID}")"
+            [[ "$code" == 200 ]] || fail "presence proof: GET /servers/${WEB1_SERVER_ID} -> ${code} (error.code=$(errcode)) — this token cannot see web-1, so no 404 it returns can mean 'gone'"
+            [[ "$(jq -r '.server.name' "$HBODY")" == "$WEB1_SERVER_NAME" ]] || fail "presence proof: server ${WEB1_SERVER_ID} is not named ${WEB1_SERVER_NAME}"
+            jq -e --argjson l "$LUKS_VOLUME_ID" '.server.volumes | index($l) != null' "$HBODY" >/dev/null \
+              || fail "presence proof: server ${WEB1_SERVER_ID} does not hold the live LUKS volume ${LUKS_VOLUME_ID}"
+          }
+          [[ "$PIN" =~ ^[0-9]+$ ]] || fail "expected_plaintext_volume_id is not numeric"
+          [[ "$PIN" == "$PLAINTEXT_VOLUME_ID" ]] || fail "the pin ${PIN} is not the constant ${PLAINTEXT_VOLUME_ID}"
+          [[ "$PIN" != "$LUKS_VOLUME_ID" ]] || fail "the pin ${PIN} is the LIVE LUKS volume — refusing"
+          presence_proof
+          lcode="$(hapi GET "/volumes?name=${PLAINTEXT_VOLUME_NAME}")"
+          [[ "$lcode" == 200 ]] || fail "name lookup -> ${lcode} (error.code=$(errcode))"
+          lookup_n="$(jq -r '.volumes | length' "$HBODY")"; lookup_id="$(jq -r '.volumes[0].id // empty' "$HBODY")"
+          code="$(hapi GET "/volumes/${PIN}")"
+          case "$code" in
+            200)
+              v_name="$(jq -r '.volume.name' "$HBODY")"; v_server="$(jq -r '.volume.server // "null"' "$HBODY")"
+              v_format="$(jq -r '.volume.format // "null"' "$HBODY")"; v_prot="$(jq -r '.volume.protection.delete' "$HBODY")"
+              v_dev="$(jq -r '.volume.linux_device // "null"' "$HBODY")"; v_size="$(jq -r '.volume.size' "$HBODY")"
+              v_created="$(jq -r '.volume.created' "$HBODY")"
+              [[ "$v_name" == "$PLAINTEXT_VOLUME_NAME" ]] || fail "volume ${PIN} is named '${v_name}', not ${PLAINTEXT_VOLUME_NAME}"
+              [[ "$v_format" == ext4 ]] || fail "volume ${PIN} format is '${v_format}', not ext4"
+              [[ "$v_prot" == false ]] || fail "volume ${PIN} has delete protection (${v_prot}) — the delete would fail after the zero"
+              [[ "$lookup_n" == 1 && "$lookup_id" == "$PIN" ]] || fail "the name lookup for ${PLAINTEXT_VOLUME_NAME} returned ${lookup_n} volume(s) (first id ${lookup_id:-none}) — the pin must be the ONLY one"
+              [[ "$v_size" =~ ^[0-9]+$ ]] || fail "volume ${PIN} size '${v_size}' is not numeric"
+              size_bytes=$((v_size * 1073741824))
+              if [[ "$v_server" == "$WEB1_SERVER_ID" ]]; then
+                [[ "$v_dev" == "/dev/disk/by-id/scsi-0HC_Volume_${PIN}" ]] || fail "volume ${PIN} linux_device '${v_dev}' is not the pinned by-id path"
+                api_state=attached
+              elif [[ "$v_server" == null ]]; then
+                api_state=detached
+              else
+                fail "volume ${PIN} is attached to server ${v_server}, not web-1 (${WEB1_SERVER_ID})"
+              fi ;;
+            404)
+              [[ "$lookup_n" == 0 ]] || fail "volume ${PIN} is 404 but the name lookup still finds ${lookup_n} volume(s) — a typo'd pin?"
+              fail "volume ${PIN} is already deleted (404, name lookup empty, presence proven). Nothing to wipe: dispatch workspaces-plaintext-forget.yml to forget its Terraform state (runbook step 7)." ;;
+            *) fail "GET /volumes/${PIN} -> ${code} (error.code=$(errcode)) — an error is never 'absent'" ;;
+          esac
+          printf 'api_state=%s\n' "$api_state" >> "$GITHUB_OUTPUT"
+          printf 'size_bytes=%s\n' "$size_bytes" >> "$GITHUB_OUTPUT"
+          {
+            echo "## #6604 step 7 — PLAINTEXT WIPE target (read-only classification)"
+            echo ""
+            echo "Approving the \`wipe\` job ZEROES and then DELETES this volume. It is a documented AP-009 deviation: a superseded copy frozen at the 2026-07-23 cutover (ADR-119 addendum 2026-09-28)."
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| volume id (pin) | ${PIN} |"
+            echo "| name | ${v_name} |"
+            echo "| size | ${v_size} GiB (${size_bytes} bytes) |"
+            echo "| created | ${v_created} |"
+            echo "| server | ${v_server} |"
+            echo "| live LUKS volume (never touched) | ${LUKS_VOLUME_ID} |"
+            echo "| api_state | ${api_state} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "classified volume ${PIN}: api_state=${api_state} size_bytes=${size_bytes}"
 
       - name: CF Tunnel SSH bridge (read-only probe)
         if: ${{ inputs.clean_stray }}
@@ -249,6 +441,10 @@ jobs:
 
   cutover:
     needs: preflight
+    # #6604 step 7 — the ONE job-level predicate: a REAL wipe (wipe_plaintext && !dry_run) runs in the
+    # gated `wipe` job instead, so this job skips. No status function here, so GitHub's implicit
+    # success() still blocks this job on a failed preflight.
+    if: ${{ !(inputs.wipe_plaintext && !inputs.dry_run) }}
     runs-on: ubuntu-24.04
     # 30 → 45 (#6588): the loopback-validation gate below runs a real losetup/cryptsetup/mkfs suite
     # on the freeze arm before the bridge is raised. Left at 30 it would eat the freeze's own
@@ -386,7 +582,15 @@ jobs:
           WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           ROLLBACK: ${{ inputs.rollback && '1' || '0' }}
+          ROLLBACK_ACK_LUKS_WRITES: ${{ inputs.rollback_ack_luks_writes && '1' || '0' }}
           CLEAN_STRAY: ${{ inputs.clean_stray && '1' || '0' }}
+          # #6604 step 7 — this job delivers a wipe ONLY as a rehearsal: `wipe && dry_run`, never
+          # `wipe` alone (a bare boolean would also deliver the string "true", which the script does not
+          # read as 1 and would fall through to a cutover rehearsal). The destructive DRY_RUN=0 wipe is
+          # reachable only from the gated `wipe` job.
+          CONFIRM_WIPE: ${{ (inputs.wipe_plaintext && inputs.dry_run) && '1' || '0' }}
+          PIN: ${{ inputs.expected_plaintext_volume_id }}
+          PLAINTEXT_SIZE_BYTES: ${{ needs.preflight.outputs.size_bytes }}
           WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
         # The cutover body runs ON web-1 (DP-6 host-side trap): ship the script + its siblings over the
         # bridge and execute it there AS A FILE so `trap cleanup EXIT` survives an SSH drop AND the
@@ -421,7 +625,14 @@ jobs:
           # otherwise reject it. Do not move that assertion earlier without revisiting this.
           LUKS_DEV=""
           if [[ "$CLEAN_STRAY" != "1" ]]; then
-            HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"
+            # (#8209 D4) TIER A -- this job only READS a Hetzner volume id, so it takes the
+            # READ-permission token. A DIFFERENT NAME on purpose: a same-named Tier-A value
+            # could shadow the Tier-B one, and this one cannot. The fallback is the before
+            # state and disappears with the name at operator step O10.
+            HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || HCLOUD_TOKEN=""
+            if [[ -z "$HCLOUD_TOKEN" ]]; then
+              HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"
+            fi
             VOL_JSON="$(curl -fsS --max-time 15 -H "Authorization: Bearer $HCLOUD_TOKEN" \
               'https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data-luks')"
             # Assert EXACTLY ONE volume matched before taking [0] — an ambiguous/zero match must NOT
@@ -440,31 +651,84 @@ jobs:
           # WEB_HOST_SSH lands `-l root`, and sudo's env_reset would scrub HOME + the sourced .env.
           # shellcheck disable=SC2086
           REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-cutover.XXXXXX')"
-          [[ -n "$REMOTE_DIR" ]] || { echo "::error::failed to create the remote bundle dir on web-1"; exit 1; }
+          # REMOTE_DIR is HOST output bound for $GITHUB_ENV, which every later step inherits: a second
+          # line (e.g. BASH_ENV=...) would run code in them. Only the exact mktemp shape is accepted.
+          [[ "$REMOTE_DIR" =~ ^/var/lib/workspaces-luks/wl-cutover\.[A-Za-z0-9]{6,}$ ]] || { echo "::error::web-1 did not return a /var/lib/workspaces-luks/wl-cutover.XXXXXX bundle dir — refusing to write it into GITHUB_ENV"; exit 1; }
           echo "REMOTE_DIR=$REMOTE_DIR" >> "$GITHUB_ENV"
           # shellcheck disable=SC2086
           tar czf - -C "$INFRA_DIR" workspaces-cutover.sh workspaces-luks-emit.sh luks-monitor.sh luks-monitor.service luks-monitor.timer \
-            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'"
+            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'" >/dev/null 2>&1
+          [[ "${PIPESTATUS[*]}" == "0 0" ]] || { echo "::error::bundle upload to web-1 failed — nothing ran"; exit 1; }
 
           # BLOCKER 4 — deliver the boot token (+ device + flags) via a mode-0600 root .env written
           # over STDIN (never `sudo VAR=val` argv — that leaks the full-prd-capable token into the host
           # process list). Write .env, arm the host-local shred trap, source it, and run the script AS A
           # FILE — ALL in ONE remote bash -c so the trap covers the .env's entire lifetime (no
-          # un-trapped window). Fields are metacharacter-free (dp.st token / by-id path / 0|1) so
-          # `set -a; . .env` is injection-safe.
+          # un-trapped window).
+          #
+          # #6604 step 7 — the host runs `set -a; . .env`, so EVERY value is shell code. Each one is
+          # RE-CHECKED here, right before the write, instead of assumed metacharacter-free: the mode flags
+          # to {0,1}, the device to a by-id path, the pin/size to digits, and the boot token to the
+          # characters a Doppler token has. One named printf per line (a multi-%s format repeats itself
+          # when the argument count outgrows it), no duplicate key, and CONFIRM_WIPE then DRY_RUN as the
+          # LAST two lines.
+          [[ "$WORKSPACES_LUKS_BOOT_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN carries characters a Doppler token never has — refusing to write it into a sourced .env"; exit 1; }
+          for v in DRY_RUN ROLLBACK ROLLBACK_ACK_LUKS_WRITES CLEAN_STRAY CONFIRM_WIPE; do
+            [[ "${!v}" == 0 || "${!v}" == 1 ]] || { echo "::error::${v} must be 0 or 1 — refusing to write it into a sourced .env"; exit 1; }
+          done
+          [[ -z "$LUKS_DEV" || "$LUKS_DEV" =~ ^/dev/disk/by-id/scsi-0HC_Volume_[0-9]+$ ]] || { echo "::error::WORKSPACES_LUKS_DEV is not a by-id path"; exit 1; }
+          P_ID=""; P_DEV=""; P_SIZE=""
+          if [[ "$CONFIRM_WIPE" == 1 ]]; then
+            [[ "$DRY_RUN" == 1 ]] || { echo "::error::the cutover job can never deliver a destructive wipe (CONFIRM_WIPE=1 requires DRY_RUN=1 here)"; exit 1; }
+            [[ "$PIN" =~ ^[0-9]+$ && "$PLAINTEXT_SIZE_BYTES" =~ ^[0-9]+$ ]] || { echo "::error::wipe rehearsal inputs are not numeric (pin / preflight size_bytes)"; exit 1; }
+            [[ "$PIN" == "$PLAINTEXT_VOLUME_ID" ]] || { echo "::error::the pin ${PIN} is not the constant ${PLAINTEXT_VOLUME_ID}"; exit 1; }
+            P_ID="$PIN"; P_DEV="/dev/disk/by-id/scsi-0HC_Volume_${PIN}"; P_SIZE="$PLAINTEXT_SIZE_BYTES"
+          fi
+          ENV_BODY="$(
+            printf 'DOPPLER_TOKEN=%s\n' "$WORKSPACES_LUKS_BOOT_TOKEN"
+            printf 'WORKSPACES_LUKS_DEV=%s\n' "$LUKS_DEV"
+            printf 'ROLLBACK=%s\n' "$ROLLBACK"
+            printf 'ROLLBACK_ACK_LUKS_WRITES=%s\n' "$ROLLBACK_ACK_LUKS_WRITES"
+            printf 'CLEAN_STRAY=%s\n' "$CLEAN_STRAY"
+            printf 'WORKSPACES_PLAINTEXT_VOLUME_ID=%s\n' "$P_ID"
+            printf 'WORKSPACES_PLAINTEXT_DEV=%s\n' "$P_DEV"
+            printf 'WORKSPACES_PLAINTEXT_SIZE_BYTES=%s\n' "$P_SIZE"
+            printf 'CONFIRM_WIPE=%s\n' "$CONFIRM_WIPE"; printf 'DRY_RUN=%s\n' "$DRY_RUN"
+          )"
+          [[ -z "$(cut -d= -f1 <<<"$ENV_BODY" | sort | uniq -d)" ]] || { echo "::error::duplicate key in the host .env — refusing to deliver it"; exit 1; }
+          RUN_LOG="$(mktemp)"
           # shellcheck disable=SC2086
-          printf 'DOPPLER_TOKEN=%s\nWORKSPACES_LUKS_DEV=%s\nDRY_RUN=%s\nROLLBACK=%s\nCLEAN_STRAY=%s\n' \
-            "$WORKSPACES_LUKS_BOOT_TOKEN" "$LUKS_DEV" "$DRY_RUN" "$ROLLBACK" "$CLEAN_STRAY" \
-            | ${WEB_HOST_SSH} "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/workspaces-cutover.sh\"'"
-          rc=$?
+          ${WEB_HOST_SSH} "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/workspaces-cutover.sh\"'" <<<"$ENV_BODY" 2>&1 | tee "$RUN_LOG"
+          rc=${PIPESTATUS[0]}
+          # #6604 step 7 — a wipe REHEARSAL surfaces its completeness evidence and the measured io.max cap
+          # on the summary (the approver's ask quotes them). Strict captures: digits/`unknown` and the
+          # io.max token only.
+          if [[ "$CONFIRM_WIPE" == 1 ]]; then
+            WROW="$(grep -E '^SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=rehearsal_ok ' "$RUN_LOG" | head -1)"
+            PO="$(sed -nE 's/^.* plaintext_only=([0-9]+|unknown|n\/a)( .*)?$/\1/p' <<<"$WROW")"
+            IOMAX="$(sed -nE 's/^.* io_max=([0-9:a-z_=]+)( .*)?$/\1/p' <<<"$WROW")"
+            {
+              echo "### Wipe rehearsal evidence"
+              echo ""
+              echo "| field | value |"
+              echo "|---|---|"
+              echo "| rehearsal row | ${WROW:+present}${WROW:-ABSENT} |"
+              echo "| plaintext_only (workspace names on the plaintext, not on the live mount) | ${PO:-none} |"
+              echo "| io_max (the scope's own io.max, read in-scope) | ${IOMAX:-none} |"
+              echo ""
+              echo "The ask must quote \`plaintext_only=0\`, or name and account for each \`field=plaintext_only_name\` evidence row (an Art. 17 deletion since 2026-07-23 is expected there)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [[ $rc -ne 0 ]]; then
-            # The DP-6 EXIT trap rolls back to the plaintext mount ONLY for a PRE-canary failure; a
-            # failure AFTER the host canary (e.g. monitor-timer arm) leaves the LUKS mount LIVE and
-            # retained (cleanup() no-ops once CANARY_OK=1). Not every failure emits a Sentry event —
-            # the at-rest asserts do; the timer-arm die now does too. Read the streamed die() message
-            # in this run log first, then the Sentry channel (feature=workspaces-luks op=workspaces-luks-drift).
-            echo "::error::workspaces-luks cutover exited $rc — see the streamed die() message above. Pre-canary failures auto-rolled-back to the plaintext mount (DP-6); a post-canary failure left the LUKS mount live. Check the run log + any emitted Sentry event (feature=workspaces-luks op=workspaces-luks-drift)."
-            exit $rc
+            # The DP-6 EXIT trap rolls back to the plaintext mount ONLY for a PRE-canary failure. After
+            # the host canary (CANARY_OK=1) cleanup() rolls FORWARD instead: it re-asserts the mapper,
+            # restarts the app + writers on the LUKS mount (or, on a wrong mount, stops them and pages),
+            # and never rolls back. Every abort writes ONE outcome row —
+            # `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<outcome>` — to this log
+            # and the luks-monitor tag; read that row first, then the streamed die() message, then the
+            # Sentry channel (feature=workspaces-luks op=workspaces-luks-drift).
+            echo "::error::workspaces-luks cutover exited $rc — read the 'result=cutover_aborted outcome=' row above (what cleanup() actually did: rolled_back / rollback_stacked / rollback_remount_failed / post_canary_* / arm_aborted / pre_freeze / dry_run / clean_stray / dry_run mode=wipe (a refused wipe rehearsal: read its SOLEUR_WORKSPACES_LUKS_WIPE result=refused reason= row); abnormal_exit=1 means a signal or SSH drop), then the streamed die() message, then any Sentry event (feature=workspaces-luks op=workspaces-luks-drift). Never ROLLBACK=1 after a post_canary_* outcome: it strands every write since docker start."
+            exit "$rc"
           fi
 
       - name: Remove remote cutover bundle
@@ -504,7 +768,9 @@ jobs:
           ACTOR: ${{ github.actor }}
           DRY: ${{ inputs.dry_run }}
           ROLLBACK_IN: ${{ inputs.rollback }}
+          ACK_IN: ${{ inputs.rollback_ack_luks_writes }}
           CLEAN_STRAY_IN: ${{ inputs.clean_stray }}
+          WIPE_IN: ${{ inputs.wipe_plaintext }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         # Reports the MODE, not just `Dry run:` (#6588). Two ways the old single-field summary
@@ -517,6 +783,8 @@ jobs:
             MODE="CLEAN_STRAY — deleted the stray plaintext copy (AP-009 documented deviation, ADR-119 addendum)"
           elif [[ "$ROLLBACK_IN" == "true" ]]; then
             MODE="ROLLBACK — remounted the retained plaintext at /mnt/data (runs for real regardless of dry_run)"
+          elif [[ "${WIPE_IN:-false}" == "true" ]]; then
+            MODE="WIPE REHEARSAL (dry_run) — every host precondition of the plaintext wipe, read-only; read the result=rehearsal_ok row"
           elif [[ "$DRY" == "true" ]]; then
             MODE="REHEARSAL (dry_run) — no irreversible operation"
           else
@@ -527,7 +795,7 @@ jobs:
             echo ""
             echo "**Actor:** ${ACTOR}"
             echo "**Mode:** ${MODE}"
-            echo "**Inputs:** dry_run=${DRY} rollback=${ROLLBACK_IN} clean_stray=${CLEAN_STRAY_IN}"
+            echo "**Inputs:** dry_run=${DRY} rollback=${ROLLBACK_IN} rollback_ack_luks_writes=${ACK_IN:-false} clean_stray=${CLEAN_STRAY_IN}"
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
@@ -535,5 +803,497 @@ jobs:
               echo "Magnitude and the pre-deletion AP-009 banner were written to this run's summary by the ungated \`preflight\` job BEFORE the approval gate; the per-outcome receipt is on the \`SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY\` marker in the run log and web-1 syslog."
               echo ""
             fi
-            echo "The wipe + convergence + ADR flip + PR 3 ride a SEPARATE environment-gated dispatch after the 7d soak passes (DP-4)."
+            echo "The plaintext wipe rides the SEPARATE environment-gated \`wipe\` job (wipe_plaintext=true dry_run=false); the Terraform state forget is workspaces-plaintext-forget.yml (runbook step 7)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── #6604 STEP 7 — THE GATED PLAINTEXT WIPE ─────────────────────────────────────────────────────
+  # Runs ONLY on wipe_plaintext=true dry_run=false, behind the ONE workspaces-luks-cutover approval
+  # (UNCONDITIONAL environment: census Guard 1 bars a Tier-B loader from a job with an ungated arm).
+  # Declared AFTER `cutover` so the first environment: line in this file stays cutover's (H17).
+  # Order is the contract (Guard 6): every precondition — including the WRITE-token probe — before
+  # web-1 is touched; the host zero + read-back next; the API detach + delete only on exactly one
+  # success row for the pin, matching the preflight api_state.
+  wipe:
+    needs: preflight
+    if: ${{ inputs.wipe_plaintext && !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    # A fixed ceiling committed with the mode: 20 GiB zeroed + 20 GiB read back at the 150 MB/s io.max cap
+    # is ~2.5 min each at full cap, well under an hour at a tenth of it. Raised only by a later PR if the
+    # rehearsal's W8 fields say otherwise.
+    timeout-minutes: 240
+    environment: workspaces-luks-cutover
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The only sanctioned Tier-B loader. Its legacy arm exports HCLOUD_TOKEN READ-ONLY-first; the
+      # labels PUT below is what proves this run actually holds a WRITE token before web-1 is touched.
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Wipe preconditions (all before web-1 is touched)
+        id: pre
+        env:
+          PIN: ${{ inputs.expected_plaintext_volume_id }}
+          API_STATE_PREFLIGHT: ${{ needs.preflight.outputs.api_state }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace (a Hetzner token is in scope)"; exit 78 ;; esac
+          [[ -n "${HCLOUD_TOKEN:-}" ]] || { echo "::error::the infra-credentials loader exported no HCLOUD_TOKEN"; exit 1; }
+          HBODY="$(mktemp)"
+          # --- the Hetzner helpers: byte-identical in every copy (workspaces-luks-cutover-workflow.test.sh
+          # pins that). hapi <METHOD> <path> [json] -> prints the HTTP status ("000" on a transport error);
+          # body -> $HBODY. -w, never -f (a 404 is an ANSWER), and the token rides stdin (--config -).
+          hapi() {
+            local code rc=0
+            local -a extra=()
+            [[ -n "${3:-}" ]] && extra=(-H 'Content-Type: application/json' --data "$3")
+            code="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" \
+              | curl -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
+            [[ "$rc" -eq 0 ]] || code="000"
+            printf '%s' "$code"
+          }
+          # errcode — the API's .error.code only (never the body), at most 64 bytes; fail() escapes it.
+          errcode() {
+            local v
+            v="$(jq -r '.error.code // empty' "$HBODY" 2>/dev/null | head -c 64 || true)"
+            printf '%s' "${v:-none}"
+          }
+          # fail — EVERY annotation is %/CR/LF-escaped here, so no API value (a name, a status, an error
+          # code) can split the annotation or smuggle a workflow command into it.
+          fail() {
+            local m="$*"
+            m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"
+            echo "::error::$m"
+            exit 1
+          }
+          presence_proof() {
+            local code
+            code="$(hapi GET "/servers/${WEB1_SERVER_ID}")"
+            [[ "$code" == 200 ]] || fail "presence proof: GET /servers/${WEB1_SERVER_ID} -> ${code} (error.code=$(errcode)) — this token cannot see web-1, so no 404 it returns can mean 'gone'"
+            [[ "$(jq -r '.server.name' "$HBODY")" == "$WEB1_SERVER_NAME" ]] || fail "presence proof: server ${WEB1_SERVER_ID} is not named ${WEB1_SERVER_NAME}"
+            jq -e --argjson l "$LUKS_VOLUME_ID" '.server.volumes | index($l) != null' "$HBODY" >/dev/null \
+              || fail "presence proof: server ${WEB1_SERVER_ID} does not hold the live LUKS volume ${LUKS_VOLUME_ID}"
+          }
+          # assert_apply_paused_idle — the delete->PR-B window pause is REAL: both push-apply workflows
+          # disabled_manually and nothing queued or running (disabling does not cancel a queued run).
+          # Byte-identical in every copy (pinned by the workflow suite).
+          assert_apply_paused_idle() {
+            local wf st busy
+            for wf in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml; do
+              st="$(gh api "repos/${REPO}/actions/workflows/${wf}" | jq -r '.state')"
+              [[ "$st" == disabled_manually ]] || fail "${wf} is '${st}', not disabled_manually — the window pause is not real (runbook step 7 d): a push apply would re-create a plaintext volume"
+              busy="$(gh run list --repo "$REPO" --workflow "$wf" --limit 50 --json status \
+                | jq '[.[] | select(.status == "queued" or .status == "waiting" or .status == "pending" or .status == "requested" or .status == "in_progress")] | length')"
+              [[ "$busy" == 0 ]] || fail "${wf} has ${busy} queued/running run(s) — disabling does not cancel a queued run; wait for it"
+            done
+          }
+          [[ "$PIN" =~ ^[0-9]+$ && "$PIN" == "$PLAINTEXT_VOLUME_ID" && "$PIN" != "$LUKS_VOLUME_ID" ]] || fail "pin '${PIN}' is not the constant ${PLAINTEXT_VOLUME_ID}, or is the live LUKS volume"
+          case "$API_STATE_PREFLIGHT" in attached|detached) ;; *) fail "preflight api_state '${API_STATE_PREFLIGHT}' is outside its enum" ;; esac
+          # (1) the project is visible with THIS token.
+          presence_proof
+          # (2) the pinned volume is still what preflight classified (the approval may have waited hours).
+          code="$(hapi GET "/volumes/${PIN}")"
+          [[ "$code" == 200 ]] || fail "GET /volumes/${PIN} -> ${code} (error.code=$(errcode)) — expected the volume preflight classified"
+          [[ "$(jq -r '.volume.name' "$HBODY")" == "$PLAINTEXT_VOLUME_NAME" ]] || fail "volume ${PIN} is no longer named ${PLAINTEXT_VOLUME_NAME}"
+          v_server="$(jq -r '.volume.server // "null"' "$HBODY")"
+          if [[ "$v_server" == "$WEB1_SERVER_ID" ]]; then now_state=attached
+          elif [[ "$v_server" == null ]]; then now_state=detached
+          else fail "volume ${PIN} is attached to server ${v_server}"; fi
+          [[ "$now_state" == "$API_STATE_PREFLIGHT" ]] || fail "api_state changed since preflight (${API_STATE_PREFLIGHT} -> ${now_state}) — re-dispatch so the approver sees the current state"
+          labels="$(jq -c '{labels: (.volume.labels // {})}' "$HBODY")"
+          # (3) the delete->PR-B window pause is REAL (re-proven again by the API step, at the mutation).
+          assert_apply_paused_idle
+          # (4) a same-day green baseline: a successful workspaces-luks-verify.yml run on main in the last
+          # 24 h whose HOST printed the readiness verdict with an inventory at or above its baseline. The
+          # match is anchored on the log's own shape (job, step, timestamp, then the host line at column 0):
+          # `gh run view --log` also echoes the verify step's SCRIPT, whose text contains the same literal.
+          vruns="$(gh run list --repo "$REPO" --workflow workspaces-luks-verify.yml --branch main --limit 20 --json databaseId,createdAt,headBranch,conclusion)"
+          rid="$(jq -r --argjson now "$(date -u +%s)" \
+            '[.[] | select(.conclusion == "success" and .headBranch == "main") | select(($now - (.createdAt | fromdateiso8601)) < 86400)] | .[0].databaseId // empty' <<<"$vruns")"
+          [[ "$rid" =~ ^[0-9]+$ ]] || fail "no successful workspaces-luks-verify.yml run on main in the last 24 h — dispatch it and wait for green first (the baseline is a machine precondition)"
+          vlog="$(mktemp)"
+          gh run view "$rid" --repo "$REPO" --log > "$vlog"
+          ready_line="$(grep -E $'^[^\t]*\t[^\t]*\t[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z \\[luks-monitor\\] SOLEUR_WORKSPACES_READYZ ready=true ' "$vlog" | tail -1 || true)"
+          [[ -n "$ready_line" ]] || fail "verify run ${rid} does not carry a host-emitted SOLEUR_WORKSPACES_READYZ ready=true line"
+          ws_count="$(sed -nE 's/^.* workspace_count=([0-9]+)( .*)?$/\1/p' <<<"$ready_line")"
+          ws_expected="$(sed -nE 's/^.* expected=([0-9]+)( .*)?$/\1/p' <<<"$ready_line")"
+          [[ "$ws_count" =~ ^[0-9]+$ && "$ws_expected" =~ ^[0-9]+$ && "$ws_count" -ge "$ws_expected" ]] \
+            || fail "verify run ${rid}: workspace_count '${ws_count}' is not at or above its baseline '${ws_expected}'"
+          {
+            printf 'verify_run=%s\n' "$rid"
+            printf 'workspace_count=%s\n' "$ws_count"
+            printf 'workspace_expected=%s\n' "$ws_expected"
+          } >> "$GITHUB_OUTPUT"
+          # (5) WRITE capability, proven here: an idempotent PUT of the volume's own labels. A read-only
+          # token 403s NOW, before the zero — not at the delete, after it.
+          code="$(hapi PUT "/volumes/${PIN}" "$labels")"
+          [[ "$code" == 200 ]] || fail "write-capability probe (PUT /volumes/${PIN} labels) -> ${code} (error.code=$(errcode)) — the loader did not export a write token; nothing was done"
+          echo "preconditions green: presence proven, api_state=${now_state}, both apply workflows paused+idle, verify run ${rid} ready=true workspace_count=${ws_count}>=${ws_expected}, write token proven"
+
+      - name: Verify required secrets present
+        env:
+          BOOT_TOKEN_CHECK: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$BOOT_TOKEN_CHECK" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN not configured."; exit 1; }
+
+      - name: CF Tunnel SSH bridge
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        env:
+          HCLOUD_TOKEN: ""
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+          server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
+
+      # A COPY of the cutover job's delivery block. The remote `bash -c` delivery string is byte-identical
+      # to cutover's (pinned by the workflow suite); the copy's differences: the .env carries
+      # CONFIRM_WIPE=1 DRY_RUN=0 and the pinned identities, the ssh keeps the tunnel alive through a
+      # silent multi-minute zero, EVERY host byte (from the first ssh on) is fenced with
+      # ::stop-commands:: so no host line can issue a workflow command, and a strict parser decides.
+      - name: Run the plaintext wipe on web-1
+        id: host
+        env:
+          WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
+          PIN: ${{ inputs.expected_plaintext_volume_id }}
+          API_STATE: ${{ needs.preflight.outputs.api_state }}
+          PLAINTEXT_SIZE_BYTES: ${{ needs.preflight.outputs.size_bytes }}
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+        run: |
+          set +e
+          set -uo pipefail
+          unset HCLOUD_TOKEN
+          case $- in *x*) echo "::error::refusing to run under xtrace (the boot token is in scope)"; exit 78 ;; esac
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1."; exit 1; }
+          [[ -n "${WORKSPACES_LUKS_BOOT_TOKEN:-}" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN not configured."; exit 1; }
+          case "$API_STATE" in attached|detached) ;; *) echo "::error::api_state '${API_STATE}' outside its enum"; exit 1 ;; esac
+          # Every .env value is shell code on the host (`set -a; . .env`): each one is re-validated here —
+          # the boot token to a Doppler token's characters, the pin to the constant, the ids and the size to
+          # digits (the device paths are built from those digits, the flags are literals).
+          [[ "$WORKSPACES_LUKS_BOOT_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN carries characters a Doppler token never has — refusing to write it into a sourced .env"; exit 1; }
+          [[ "$PIN" =~ ^[0-9]+$ && "$PIN" == "$PLAINTEXT_VOLUME_ID" && "$LUKS_VOLUME_ID" =~ ^[0-9]+$ && "$PIN" != "$LUKS_VOLUME_ID" ]] || { echo "::error::pin/LUKS id invalid (the pin must be the constant ${PLAINTEXT_VOLUME_ID})"; exit 1; }
+          [[ "$PLAINTEXT_SIZE_BYTES" =~ ^[0-9]+$ ]] || { echo "::error::size_bytes '${PLAINTEXT_SIZE_BYTES}' is not numeric — refusing to write it into a sourced .env"; exit 1; }
+          P_DEV="/dev/disk/by-id/scsi-0HC_Volume_${PIN}"
+          LUKS_DEV="/dev/disk/by-id/scsi-0HC_Volume_${LUKS_VOLUME_ID}"
+          ENV_BODY="$(
+            printf 'DOPPLER_TOKEN=%s\n' "$WORKSPACES_LUKS_BOOT_TOKEN"
+            printf 'WORKSPACES_LUKS_DEV=%s\n' "$LUKS_DEV"
+            printf 'ROLLBACK=%s\n' 0
+            printf 'CLEAN_STRAY=%s\n' 0
+            printf 'WORKSPACES_PLAINTEXT_VOLUME_ID=%s\n' "$PIN"
+            printf 'WORKSPACES_PLAINTEXT_DEV=%s\n' "$P_DEV"
+            printf 'WORKSPACES_PLAINTEXT_SIZE_BYTES=%s\n' "$PLAINTEXT_SIZE_BYTES"
+            printf 'CONFIRM_WIPE=%s\n' 1; printf 'DRY_RUN=%s\n' 0
+          )"
+          [[ -z "$(cut -d= -f1 <<<"$ENV_BODY" | sort | uniq -d)" ]] || { echo "::error::duplicate key in the host .env — refusing to deliver it"; exit 1; }
+          LOG="$(mktemp)"
+          STOP_TOKEN="$(openssl rand -hex 16)"
+          # The fence opens BEFORE the first host contact: from here on no byte web-1 prints can issue a
+          # workflow command. A fenced ::error:: would be inert too, so every refusal closes it first.
+          echo "::stop-commands::${STOP_TOKEN}"
+          unfence() { echo "::${STOP_TOKEN}::"; }
+          refuse_unfenced() { unfence; echo "::error::$*"; exit 1; }
+          # shellcheck disable=SC2086
+          REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-cutover.XXXXXX')"
+          # REMOTE_DIR is HOST output bound for $GITHUB_ENV, which every later step inherits — including
+          # the API step that holds the Hetzner WRITE token: a second line (BASH_ENV=...) would run code
+          # there. Only the exact mktemp shape is accepted.
+          [[ "$REMOTE_DIR" =~ ^/var/lib/workspaces-luks/wl-cutover\.[A-Za-z0-9]{6,}$ ]] || refuse_unfenced "web-1 did not return a /var/lib/workspaces-luks/wl-cutover.XXXXXX bundle dir — refusing to write it into GITHUB_ENV; nothing ran"
+          echo "REMOTE_DIR=$REMOTE_DIR" >> "$GITHUB_ENV"
+          # shellcheck disable=SC2086
+          tar czf - -C "$INFRA_DIR" workspaces-cutover.sh workspaces-luks-emit.sh luks-monitor.sh luks-monitor.service luks-monitor.timer \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'" >/dev/null 2>&1
+          [[ "${PIPESTATUS[*]}" == "0 0" ]] || refuse_unfenced "bundle upload to web-1 failed — nothing ran"
+          # shellcheck disable=SC2086
+          ${WEB_HOST_SSH} -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/workspaces-cutover.sh\"'" <<<"$ENV_BODY" 2>&1 | tee "$LOG"
+          rc=${PIPESTATUS[0]}
+          unfence
+          # The discriminators, extracted STRICTLY (slugs are [a-z_]+): the refusal reason and cleanup()'s
+          # outcome ride the annotation, the step output and the summary, so `gh run view` alone names
+          # what happened without pulling the full log.
+          reason="$(sed -nE 's/^SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=refused arm=[a-z_]+ volume_id=[0-9-]+ reason=([a-z_]+)( .*)?$/\1/p' "$LOG" | head -1)"
+          outcome="$(sed -nE 's/^SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=cutover_aborted outcome=([a-z_]+)( .*)?$/\1/p' "$LOG" | head -1)"
+          {
+            printf 'reason=%s\n' "${reason:-none}"
+            printf 'outcome=%s\n' "${outcome:-none}"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::the host wipe exited ${rc}: reason=${reason:-none} outcome=${outcome:-none} — follow the runbook step-7 verdict table for that reason (outcome=wipe_aborted with no reason = the run was cut short; read begun= on its row). No API write was made."
+            exit "$rc"
+          fi
+          # Exactly ONE line of the host output must be a success row for THIS pin, matching api_state.
+          ROW_RE='^SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=(wiped|already_wiped_detached) arm=[a-z_]+ volume_id=([0-9]+)( [a-z_]+=[^ ]*)*$'
+          n_rows="$(grep -cE "$ROW_RE" "$LOG" || true)"
+          [[ "$n_rows" == 1 ]] || { echo "::error::expected exactly ONE success row in the host output, found ${n_rows} — no API write"; exit 1; }
+          row="$(grep -E "$ROW_RE" "$LOG")"
+          [[ "$row" =~ $ROW_RE ]] || { echo "::error::success row did not re-parse"; exit 1; }
+          result="${BASH_REMATCH[1]}"; row_id="${BASH_REMATCH[2]}"
+          [[ "$row_id" == "$PIN" ]] || { echo "::error::the success row names volume ${row_id}, not the pin ${PIN} — no API write"; exit 1; }
+          case "${API_STATE}:${result}" in
+            attached:wiped|detached:already_wiped_detached) ;;
+            *) echo "::error::host result '${result}' does not match api_state '${API_STATE}' — no API write"; exit 1 ;;
+          esac
+          po="$(sed -nE 's/^.* plaintext_only=([0-9]+|unknown|n\/a)( .*)?$/\1/p' <<<"$row")"
+          {
+            printf 'result=%s\n' "$result"
+            printf 'plaintext_only=%s\n' "${po:-none}"
+          } >> "$GITHUB_OUTPUT"
+          echo "host verdict: ${result} for volume ${PIN}"
+
+      - name: Detach and delete the plaintext volume (Hetzner API)
+        id: api
+        env:
+          PIN: ${{ inputs.expected_plaintext_volume_id }}
+          API_STATE: ${{ needs.preflight.outputs.api_state }}
+          HOST_RESULT: ${{ steps.host.outputs.result }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace (a Hetzner token is in scope)"; exit 78 ;; esac
+          HBODY="$(mktemp)"
+          # --- the Hetzner helpers: byte-identical in every copy (workspaces-luks-cutover-workflow.test.sh
+          # pins that). hapi <METHOD> <path> [json] -> prints the HTTP status ("000" on a transport error);
+          # body -> $HBODY. -w, never -f (a 404 is an ANSWER), and the token rides stdin (--config -).
+          hapi() {
+            local code rc=0
+            local -a extra=()
+            [[ -n "${3:-}" ]] && extra=(-H 'Content-Type: application/json' --data "$3")
+            code="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" \
+              | curl -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
+            [[ "$rc" -eq 0 ]] || code="000"
+            printf '%s' "$code"
+          }
+          # errcode — the API's .error.code only (never the body), at most 64 bytes; fail() escapes it.
+          errcode() {
+            local v
+            v="$(jq -r '.error.code // empty' "$HBODY" 2>/dev/null | head -c 64 || true)"
+            printf '%s' "${v:-none}"
+          }
+          # fail — EVERY annotation is %/CR/LF-escaped here, so no API value (a name, a status, an error
+          # code) can split the annotation or smuggle a workflow command into it.
+          fail() {
+            local m="$*"
+            m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"
+            echo "::error::$m"
+            exit 1
+          }
+          presence_proof() {
+            local code
+            code="$(hapi GET "/servers/${WEB1_SERVER_ID}")"
+            [[ "$code" == 200 ]] || fail "presence proof: GET /servers/${WEB1_SERVER_ID} -> ${code} (error.code=$(errcode)) — this token cannot see web-1, so no 404 it returns can mean 'gone'"
+            [[ "$(jq -r '.server.name' "$HBODY")" == "$WEB1_SERVER_NAME" ]] || fail "presence proof: server ${WEB1_SERVER_ID} is not named ${WEB1_SERVER_NAME}"
+            jq -e --argjson l "$LUKS_VOLUME_ID" '.server.volumes | index($l) != null' "$HBODY" >/dev/null \
+              || fail "presence proof: server ${WEB1_SERVER_ID} does not hold the live LUKS volume ${LUKS_VOLUME_ID}"
+          }
+          # assert_apply_paused_idle — the delete->PR-B window pause is REAL: both push-apply workflows
+          # disabled_manually and nothing queued or running (disabling does not cancel a queued run).
+          # Byte-identical in every copy (pinned by the workflow suite).
+          assert_apply_paused_idle() {
+            local wf st busy
+            for wf in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml; do
+              st="$(gh api "repos/${REPO}/actions/workflows/${wf}" | jq -r '.state')"
+              [[ "$st" == disabled_manually ]] || fail "${wf} is '${st}', not disabled_manually — the window pause is not real (runbook step 7 d): a push apply would re-create a plaintext volume"
+              busy="$(gh run list --repo "$REPO" --workflow "$wf" --limit 50 --json status \
+                | jq '[.[] | select(.status == "queued" or .status == "waiting" or .status == "pending" or .status == "requested" or .status == "in_progress")] | length')"
+              [[ "$busy" == 0 ]] || fail "${wf} has ${busy} queued/running run(s) — disabling does not cancel a queued run; wait for it"
+            done
+          }
+          [[ -n "${HCLOUD_TOKEN:-}" ]] || fail "the infra-credentials loader exported no HCLOUD_TOKEN"
+          # Re-derived here, never trusted from an earlier step: the pin, and the host verdict for it.
+          [[ "$PIN" =~ ^[0-9]+$ && "$PIN" == "$PLAINTEXT_VOLUME_ID" && "$PIN" != "$LUKS_VOLUME_ID" ]] || fail "pin '${PIN}' is not the constant ${PLAINTEXT_VOLUME_ID}, or is the live LUKS volume — no API write"
+          case "${API_STATE}:${HOST_RESULT}" in
+            attached:wiped|detached:already_wiped_detached) ;;
+            *) fail "host verdict '${HOST_RESULT:-<none>}' does not match api_state '${API_STATE}' — no API write" ;;
+          esac
+          presence_proof
+          # The pause is re-proven AT the mutation, not only at the pre step: the host step can run for
+          # hours, and a push apply after the detach or the delete would plan a fresh plaintext volume.
+          assert_apply_paused_idle
+          code="$(hapi GET "/volumes/${PIN}")"
+          [[ "$code" == 200 ]] || fail "GET /volumes/${PIN} -> ${code} (error.code=$(errcode))"
+          v_server="$(jq -r '.volume.server // "null"' "$HBODY")"
+          action_id="none"
+          if [[ "$v_server" != null ]]; then
+            [[ "$v_server" == "$WEB1_SERVER_ID" ]] || fail "volume ${PIN} is attached to server ${v_server}, not web-1"
+            code="$(hapi POST "/volumes/${PIN}/actions/detach")"
+            [[ "$code" == 201 ]] || fail "POST detach -> ${code} (error.code=$(errcode))"
+            action_id="$(jq -r '.action.id' "$HBODY")"
+            [[ "$action_id" =~ ^[0-9]+$ ]] || fail "detach returned no action id"
+            # Poll THAT action every 5 s. Past 300 s keep polling it — never a second POST (the volume is
+            # then locked by the first). The job's 240-minute timeout is the outer bound.
+            polls=0; status=running
+            while :; do
+              code="$(hapi GET "/actions/${action_id}")"
+              [[ "$code" == 200 ]] || fail "GET /actions/${action_id} -> ${code} (error.code=$(errcode))"
+              status="$(jq -r '.action.status' "$HBODY")"
+              [[ "$status" == running ]] || break
+              polls=$((polls + 1))
+              [[ "$polls" -eq 60 ]] && echo "::warning::detach action ${action_id} still running after 300 s — polling on (never re-POSTing)"
+              [[ "$polls" -lt 2880 ]] || fail "detach action ${action_id} still running after 4 h"
+              sleep 5
+            done
+            [[ "$status" == success ]] || fail "detach action ${action_id} ended '${status}' (error.code=$(errcode))"
+            code="$(hapi GET "/volumes/${PIN}")"
+            [[ "$code" == 200 && "$(jq -r '.volume.server // "null"' "$HBODY")" == null ]] || fail "volume ${PIN} is still attached after the detach action succeeded"
+            printf 'detach_action=%s\n' "$action_id" >> "$GITHUB_OUTPUT"
+            # ...and once more, immediately before the DELETE.
+            assert_apply_paused_idle
+          fi
+          code="$(hapi DELETE "/volumes/${PIN}")"
+          case "$code" in
+            204) ;;
+            404) echo "DELETE returned 404 — accepted only because the presence proof re-runs green below" ;;
+            *) fail "DELETE /volumes/${PIN} -> ${code} (error.code=$(errcode))" ;;
+          esac
+          # From here the volume may be gone: the summary must never tell the operator to "resume the
+          # applies" (that is for a run that deleted nothing).
+          printf 'delete_issued=true\n' >> "$GITHUB_OUTPUT"
+          presence_proof
+          code="$(hapi GET "/volumes/${PIN}")"
+          [[ "$code" == 404 ]] || fail "volume ${PIN} still answers ${code} after the delete"
+          code="$(hapi GET "/servers/${WEB1_SERVER_ID}")"
+          [[ "$code" == 200 ]] || fail "final GET /servers/${WEB1_SERVER_ID} -> ${code}"
+          jq -e --argjson l "$LUKS_VOLUME_ID" '.server.volumes == [$l]' "$HBODY" >/dev/null \
+            || fail "server ${WEB1_SERVER_ID} volumes are $(jq -c '.server.volumes' "$HBODY"), not [${LUKS_VOLUME_ID}]"
+          printf 'deleted=true\n' >> "$GITHUB_OUTPUT"
+          echo "volume ${PIN} deleted (detach action ${action_id}); GET -> 404; web-1 now holds only [${LUKS_VOLUME_ID}]"
+
+      # impact F2 — after ANY API action (success or failure), before the bridge goes down: the LIVE mount
+      # must still be the mapper and the app must still answer readyz. A W6b false negative would let the
+      # hot detach stop a unit bound to the plaintext device; this is where that surfaces, loudly, instead
+      # of at the next daily verify. The host part is a FIXED stdin script (no interpolation) that uses the
+      # shipped emit helper's own readyz probe and pages through it (Sentry op:workspaces-luks-drift).
+      - name: Re-check the LIVE mount after the API step (over the bridge)
+        id: post
+        if: ${{ always() && steps.host.outcome == 'success' }}
+        env:
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+        run: |
+          set +e
+          set -uo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::no SSH bridge — the live mount could not be re-checked after the API step; run workspaces-luks-verify.yml now"; exit 1; }
+          [[ "${REMOTE_DIR:-}" =~ ^/var/lib/workspaces-luks/wl-cutover\.[A-Za-z0-9]{6,}$ ]] || { echo "::error::no remote bundle dir — the live mount could not be re-checked; run workspaces-luks-verify.yml now"; exit 1; }
+          # The host script is a FIXED text (a quoted heredoc: nothing of the runner's is interpolated
+          # into it) passed as ONE single-quoted `bash -c` argument, so it must carry no single quote.
+          POST_SCRIPT="$(cat <<'HOST'
+          set -uo pipefail
+          . "$1/workspaces-luks-emit.sh" 2>/dev/null || { echo "POST_CHECK result=fail reason=wipe_post_api_check_unavailable"; exit 3; }
+          tag=luks-monitor
+          src="$(findmnt -no SOURCE /mnt/data 2>/dev/null || true)"
+          if [ "$src" != /dev/mapper/workspaces ]; then
+            logger -t "$tag" -- "SOLEUR_WORKSPACES_LUKS_WIPE_POSTCHECK feature=workspaces-luks op=workspaces-luks-wipe result=fail reason=wipe_post_api_mount_not_mapper" 2>/dev/null || true
+            WL_REASON=wipe_post_api_mount_not_mapper WL_MOUNT_SOURCE="$src" workspaces_luks_emit
+            echo "POST_CHECK result=fail reason=wipe_post_api_mount_not_mapper"
+            exit 1
+          fi
+          if ! wl_probe_readyz http://127.0.0.1:3000/internal/readyz >/dev/null 2>&1; then
+            logger -t "$tag" -- "SOLEUR_WORKSPACES_LUKS_WIPE_POSTCHECK feature=workspaces-luks op=workspaces-luks-wipe result=fail reason=wipe_post_api_readyz_failed" 2>/dev/null || true
+            WL_REASON=wipe_post_api_readyz_failed workspaces_luks_emit
+            echo "POST_CHECK result=fail reason=wipe_post_api_readyz_failed"
+            exit 1
+          fi
+          logger -t "$tag" -- "SOLEUR_WORKSPACES_LUKS_WIPE_POSTCHECK feature=workspaces-luks op=workspaces-luks-wipe result=ok" 2>/dev/null || true
+          echo "POST_CHECK result=ok"
+          HOST
+          )"
+          [[ "$POST_SCRIPT" != *"'"* ]] || { echo "::error::internal: the post-check host script carries a single quote"; exit 1; }
+          LOG="$(mktemp)"
+          STOP_TOKEN="$(openssl rand -hex 16)"
+          echo "::stop-commands::${STOP_TOKEN}"
+          # shellcheck disable=SC2086
+          ${WEB_HOST_SSH} "$WEB_HOST" "bash -c '$POST_SCRIPT' post-check '$REMOTE_DIR'" </dev/null 2>&1 | tee "$LOG"
+          rc=${PIPESTATUS[0]}
+          echo "::${STOP_TOKEN}::"
+          # Strict: only a column-0 POST_CHECK line with [a-z_] slugs is read; anything else is "none".
+          line="$(grep -E '^POST_CHECK result=(ok|fail)( reason=[a-z_]+)?$' "$LOG" | tail -1)"
+          verdict="$(sed -nE 's/^POST_CHECK result=([a-z]+).*$/\1/p' <<<"$line")"
+          preason="$(sed -nE 's/^.* reason=([a-z_]+)$/\1/p' <<<"$line")"
+          printf 'result=%s\nreason=%s\n' "${verdict:-none}" "${preason:-none}" >> "$GITHUB_OUTPUT"
+          if [[ "$rc" -ne 0 || "$verdict" != ok ]]; then
+            echo "::error::after the API step the LIVE mount did not re-check healthy (rc=${rc}, result=${verdict:-none} reason=${preason:-none}) — /mnt/data must be /dev/mapper/workspaces and readyz ready; the host paged Sentry. Run workspaces-luks-verify.yml and escalate."
+            exit 1
+          fi
+          echo "live mount re-checked after the API step: /mnt/data is the LUKS mapper and readyz is ready"
+
+      - name: Remove remote wipe bundle
+        if: always()
+        env:
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+        run: |
+          set +e
+          if [[ -n "${WEB_HOST_SSH:-}" && -n "${REMOTE_DIR:-}" ]]; then
+            # shellcheck disable=SC2086
+            ${WEB_HOST_SSH} "$WEB_HOST" "rm -rf '$REMOTE_DIR'" 2>/dev/null || true
+          fi
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then kill "$CLOUDFLARED_PID" 2>/dev/null || true; fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true; fi
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
+
+      - name: Wipe summary
+        if: always()
+        env:
+          ACTOR: ${{ github.actor }}
+          PIN: ${{ inputs.expected_plaintext_volume_id }}
+          JOB_STATUS: ${{ job.status }}
+          PRE_OUTCOME: ${{ steps.pre.outcome }}
+          VERIFY_RUN: ${{ steps.pre.outputs.verify_run }}
+          WS_COUNT: ${{ steps.pre.outputs.workspace_count }}
+          WS_EXPECTED: ${{ steps.pre.outputs.workspace_expected }}
+          HOST_OUTCOME: ${{ steps.host.outcome }}
+          HOST_RESULT: ${{ steps.host.outputs.result }}
+          HOST_REASON: ${{ steps.host.outputs.reason }}
+          HOST_ABORT: ${{ steps.host.outputs.outcome }}
+          PLAINTEXT_ONLY: ${{ steps.host.outputs.plaintext_only }}
+          API_OUTCOME: ${{ steps.api.outcome }}
+          DETACH_ACTION: ${{ steps.api.outputs.detach_action }}
+          DELETE_ISSUED: ${{ steps.api.outputs.delete_issued }}
+          POST_OUTCOME: ${{ steps.post.outcome }}
+          POST_RESULT: ${{ steps.post.outputs.result }}
+          POST_REASON: ${{ steps.post.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## #6604 step 7 — PLAINTEXT WIPE"
+            echo ""
+            echo "**Mode:** WIPE — zero + verify + detach + delete of volume ${PIN} (irreversible once the host step reports wiped)"
+            echo "**Actor:** ${ACTOR}  **Status:** ${JOB_STATUS}  **Run:** ${RUN_URL}"
+            echo ""
+            echo "| stage | outcome |"
+            echo "|---|---|"
+            echo "| preconditions (presence, api_state, pause, verify baseline, write probe) | ${PRE_OUTCOME:-skipped} (verify run ${VERIFY_RUN:-none}: workspace_count=${WS_COUNT:-?} expected=${WS_EXPECTED:-?}) |"
+            echo "| host zero + read-back | ${HOST_OUTCOME:-skipped} (result=${HOST_RESULT:-none} reason=${HOST_REASON:-none} outcome=${HOST_ABORT:-none} plaintext_only=${PLAINTEXT_ONLY:-none}) |"
+            echo "| API detach + delete | ${API_OUTCOME:-skipped} (detach action ${DETACH_ACTION:-none}, delete issued: ${DELETE_ISSUED:-no}) |"
+            echo "| live mount re-check after the API step | ${POST_OUTCOME:-skipped} (result=${POST_RESULT:-none} reason=${POST_REASON:-none}) |"
+            echo ""
+            echo "Verdicts and the next action per reason slug: runbook \`knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md\` § Step 7 verdict table."
+            if [[ "${DELETE_ISSUED:-}" == true ]]; then
+              echo ""
+              echo "**Next:** \`gh workflow run workspaces-plaintext-forget.yml -f confirm=FORGET-RETIRED-PLAINTEXT-VOLUME -f expected_plaintext_volume_id=${PIN}\` — forget the two retired Terraform addresses (serialized with every apply)."
+            else
+              echo ""
+              echo "**No delete was made.** Do not leave the push-apply pause in place with nothing to protect: \`gh workflow enable apply-web-platform-infra.yml\`, \`gh workflow enable apply-deploy-pipeline-fix.yml\`, then \`gh workflow run apply-web-platform-infra.yml -f reason='#6604 wipe halted before the delete'\` (the default manual-rerun arm), and \`gh workflow run apply-deploy-pipeline-fix.yml\` if its paths changed while paused. Re-pause (runbook step 7 d) before re-dispatching D."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

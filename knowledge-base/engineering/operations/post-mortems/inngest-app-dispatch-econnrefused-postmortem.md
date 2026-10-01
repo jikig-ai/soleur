@@ -209,5 +209,5 @@ Two failures, and the second is the one worth keeping.
 
 | Issue | Action | Status |
 |---|---|---|
-| #7698 | Decide and implement the fix for app-originated dispatch — repoint web-1 at the co-located scheduler, or complete the cutover. Includes enumerating which callers, and therefore which user-visible behaviours, are affected. | open |
+| #7698 | Decide and implement the fix for app-originated dispatch — repoint web-1 at the co-located scheduler, or complete the cutover. Includes enumerating which callers, and therefore which user-visible behaviours, are affected. | closed 2026-09-07 (interim repoint #7897; cutover completed by #8191) |
 | #6616 | Cross-cutting sweep: `host_name` telemetry can be forged by a web host, so the eight other Better Stack readers that key on it alone share this incident's mis-attribution risk. | open |

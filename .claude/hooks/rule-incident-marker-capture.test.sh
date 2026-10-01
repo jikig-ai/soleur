@@ -105,10 +105,13 @@ assert "2b: unprefixed id is accepted, unattributed, and invisible to the orphan
   "the unprefixed acceptance path changed without the aggregator predicate changing (rows=$(rows) rule=$(last_rule) rc=$rc)"
 
 # --- 2c. The bound has a CARVE-OUT, and it is the half that was stated wrongly ------
-# The three prefixes the aggregator reads into NAMED SUMMARY FIELDS of the COMMITTED
-# rule-metrics.json (`grep 'startswith(' scripts/rule-metrics-aggregate.sh`) must be REJECTED here.
-# Accepting one lets a contributor-writable marker forge an attacker-chosen key into a tracked file
-# AND fire a false ADR-156/157/162 alarm claiming the ugrep shim was not neutralised and a hook ran
+# The three prefixes the aggregator reads into NAMED SUMMARY FIELDS of rule-metrics.json
+# (`grep 'startswith(' scripts/rule-metrics-aggregate.sh`) must be REJECTED here. rule-metrics.json
+# has been an UNTRACKED cache since #8377 / ADR-235, so the "forge a key into a tracked file" half
+# of the original threat model no longer applies -- but the aggregate still feeds
+# `rule-prune.sh --propose-retirement`, which appends to the TRACKED scripts/retired-rule-ids.txt,
+# and accepting a forged marker would ALSO fire a false ADR-156/157/162 alarm claiming the ugrep
+# shim was not neutralised and a hook ran
 # with guards disarmed. Demonstrated end-to-end on the `gh pr checkout` review path before this
 # carve-out existed; 2b's "no consumer reads it" bound was false for exactly these three.
 for _forge in grep-rewrite-disarm hook-input-unparseable net-issue-flow-mandated-filing--x; do

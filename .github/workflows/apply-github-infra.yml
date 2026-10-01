@@ -88,6 +88,7 @@ jobs:
           fi
 
   apply:
+    environment: infra-privileged
     needs: preflight
     # BOTH conjuncts are load-bearing; neither subsumes the other.
     #
@@ -136,8 +137,11 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Verify required secrets present
         env:
@@ -168,6 +172,17 @@ jobs:
             echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform. One-shot download at App creation; cannot be re-downloaded — recover from password manager or App admin UI."
             exit 1
           }
+          # The #8209 eviction sentinel, refused BY NAME. After operator step O10 this config holds
+          # `EVICTED_SEE_ADR_241` under this name instead of a key -- the eviction is an OVERRIDE,
+          # because the value is inherited from `prd` and cannot be deleted out of a branch config,
+          # so the read above SUCCEEDS and returns a non-empty string. `openssl rsa -check` further
+          # down does reject it, but as "not a valid RSA PEM" -- which reads as a CORRUPTED key, and
+          # the remedy that suggests is to paste a fresh key into prd_terraform, undoing the eviction
+          # on a config every branch can read. Rationale: ADR-241 D5; census row G4e keeps it here.
+          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
+            echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there; see knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
+            exit 1
+          fi
           if [[ -z "$APP_ID" || -z "$PEM" ]]; then
             echo "::error::GitHub App credentials are empty in Doppler prd_terraform."
             exit 1
@@ -218,11 +233,11 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
             echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
             exit 1
           }
-          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
             echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
             exit 1
           }
@@ -258,7 +273,7 @@ jobs:
               echo "Resource $addr already in state, skipping import."
             else
               echo "Importing ruleset $id as $addr (one-time bootstrap)."
-              doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+              doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
                 terraform import "$addr" "soleur:$id"
               state_list=$(terraform state list 2>/dev/null || true)  # refresh
             fi
@@ -277,7 +292,7 @@ jobs:
               echo "Resource $addr already in state, skipping import."
             else
               echo "Importing repository $name as $addr (one-time bootstrap)."
-              doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+              doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
                 terraform import "$addr" "$name"
               state_list=$(terraform state list 2>/dev/null || true)  # refresh
             fi
@@ -325,7 +340,7 @@ jobs:
           # apply-web-platform-infra.yml's plan_pr step.
           set -uo pipefail
           set +e
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -373,7 +388,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
       - name: Post-apply verify (ruleset required check counts — CI 14145388 + CLA 13304872)

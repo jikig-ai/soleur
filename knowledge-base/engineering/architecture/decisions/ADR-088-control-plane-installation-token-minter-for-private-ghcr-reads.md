@@ -46,6 +46,11 @@ supersedes: "ADR-087 D1 (credential-provisioning choice only; ADR-087 Design B�
 > warn-only" from a reversible preference into a structurally unavailable option, which is
 > exactly the distinction a future reader needs in order not to re-open it.
 
+> **IMPLEMENTATION DELETED (2026-09-27, #8714 / ADR-096 task 5.4).** `cron-ghcr-token-minter`,
+> `ghcr-minter-doppler-token.tf` (the `ghcr-minter-write-*` read/write service token and
+> `GHCR_MINTER_DOPPLER_TOKEN`) and `ghcr-read-credential.tf` (`GHCR_READ_USER` / `GHCR_READ_TOKEN`)
+> are removed; see ADR-096's 2026-09-27 amendment for what remains.
+
 ## Context
 
 #6005 makes the running-host cosign image-verify passable against the now-PRIVATE
@@ -102,7 +107,24 @@ Doppler-stored App key → `POST /app/installations/{id}/access_tokens` with bod
 writes the token to Doppler `soleur/prd` as `GHCR_READ_TOKEN` and sets `GHCR_READ_USER` to the
 installation-token login convention (`x-access-token`). **No consumer changes** — `ci-deploy.sh`
 and `soleur-host-bootstrap.sh` keep reading those two keys; only who writes the value + the
-username value change. The `doppler_secret` resources stay declared-existence with
+username value change.
+<!-- markdownlint-disable-next-line MD028 -->
+
+> **Amendment 2026-09-23 (#8036 item 1c):** the `ci-deploy.sh` half of that consumer list is
+> **gone**. 1c deleted the host-side GHCR read path — the prelude `docker login ghcr.io`, the
+> Doppler re-fetch/relogin helper (`refetch_ghcr_and_relogin`) and the GHCR leg of the pull — so
+> the rolling deploy reads neither `GHCR_READ_TOKEN` nor `GHCR_READ_USER`, and it sweeps any
+> inline `ghcr.io` entry out of the deploy docker config on every deploy. The fresh-boot
+> consumers remain and are tracked as 1d: `cloud-init.yml` and `soleur-host-bootstrap.sh` (both
+> web, both writing root's docker config) and `cloud-init-inngest.yml`. Retiring
+> `GHCR_READ_TOKEN` therefore does NOT break the deploy path — read this section's "no consumer
+> changes" as history, or a 1d/5.4 reader will defer a retirement that is already safe for the
+> deploy half.
+>
+> **Superseded 2026-09-24 (#8036 item 1d, PR #8708):** the fresh-boot consumers listed above are
+> gone. No host template passes or reads `GHCR_READ_TOKEN`/`GHCR_READ_USER` any more; the remaining
+> consumer is `doppler_secret.ghcr_read_*` itself, which 5.4 (#8714) retires together with the
+> minter. The `doppler_secret` resources stay declared-existence with
 `ignore_changes = [value]` (the minter owns value churn; terraform does not clobber it).
 
 **Prerequisite:** add `packages: read` to the App manifest (absent today) → one org-owner
