@@ -98,18 +98,22 @@
 #   docker      5   cloud-init-plugin-seed, git-data-cutover-access,
 #                   git-data-ownership, git-data-runcmd-rehearsal,
 #                   zot-config-deadlines (digest arm only — declines, not a whole-suite skip)
-#   terraform   9   cloud-init-inngest-bootstrap, generate-apex-rollback-pr, git-data-emit,
+#   terraform  10   cloud-init-inngest-bootstrap, generate-apex-rollback-pr, git-data-emit,
 #                   git-data-render-strip-parity, git-data-runcmd-rehearsal,
 #                   git-data-template-strip, inngest-boot-emitter, inngest,
-#                   registry-userdata-budget
+#                   registry-userdata-budget,
+#                   workspaces-luks-t2-rehearsal (added 2026-10-02, #9357: absent terraform or jq
+#                   exits non-zero when CI is set, exits 0 loudly otherwise; under CI it also
+#                   requires the installed version to equal TERRAFORM_VERSION)
 #   python3     7   canary-bundle-claim-check, git-data-emit,
 #                   git-data-render-strip-parity, git-data-root-key,
 #                   git-data-runcmd-rehearsal, git-data-rung2-rehearsal,
 #                   workspaces-luks-g4-mutation
 #   cloud-init  1   cloud-init-inngest-bootstrap
-#   jq          8   canary-bundle-claim-check, ci-deploy,
+#   jq          9   canary-bundle-claim-check, ci-deploy,
 #                   cosign-trusted-root-staleness, doppler-download-error-channel,
-#                   git-data-root-key, inngest, registry-boot-guard, zot-log-shipper
+#                   git-data-root-key, inngest, registry-boot-guard, zot-log-shipper,
+#                   workspaces-luks-t2-rehearsal
 #   curl        2   canary-bundle-claim-check, git-data-runcmd-rehearsal
 #
 #   (zot-config-deadlines also invokes python3 unconditionally — render/extract/

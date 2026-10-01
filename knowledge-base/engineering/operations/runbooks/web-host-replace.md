@@ -67,9 +67,11 @@ this path either.
 > prerequisite. Both were false — #6604 pinned the mount by-id before this path existed, and
 > ADR-119 has no §Sequencing — which made the refusal read as already relaxable. If you are
 > here to lift the refusal: **the #6931 code path is merged** (the fresh-boot guest-side LUKS path,
-> ADR-263; the live web-2 conversion is #9372), so the remaining blockers are key-conditional gate arms for
-> `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, a rehearsal on
-> a non-production host, and **#6964**; see ADR-148 §Alternatives item 4.
+> ADR-263; the live web-2 conversion is #9372). **The key-conditional gate arms for
+> `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app` now exist (#9356) and are
+> arms-only:** inert while the refusal holds, and blind to the by-id mount pin, the web-1-pinned SSH
+> provisioners and `-target` being upstream-only. The remaining blockers are a rehearsal on
+> a non-production host (the section below covers what a web-2 rehearsal does and does not prove), and **#6964**; see ADR-148 §Alternatives item 4.
 <!-- lint-infra-ignore end -->
 
 ## The procedure
@@ -291,6 +293,48 @@ runner (`judge_error`, from `probe_judge_error` / `ready_judge_error`). A held m
 (`red_delete_failed`, filed as RED) usually means a value in shared `prd` is showing through the branch config:
 remove it there.
 
+## Populated-volume rehearsal on web-2, after #9372
+
+**What this proves, and what it does not.** web-2 carries its own LUKS volume once #9372 has converted it. A replace of web-2
+meets a volume that already holds a LUKS container with an ext4 filesystem and content, which is the situation the provisioner's
+`opened` arm exists for (the arm opens the container and never formats, relabels or runs `mkfs`). A rehearsal therefore proves the
+**populated-volume-preserve path** and the **dispatch mechanics** (confirm token, digest pin, gate, boot-trail poll). It does **not**
+exercise the web-1 keyed arms of the gate (they apply to the `web-1` key alone and the refusal still stands), and it does not touch
+any of the web-1-only blockers above: those are proven only offline (the gate fixtures and mutation battery in
+`tests/scripts/test-web-host-replace-gate.sh`) and, for the superseded by-id pin, by the T2 topology (#9357). A green web-2 rehearsal
+is not evidence that web-1 is safe to replace.
+
+**Before the replace (sentinel).** The volume must carry something a wrongful format would destroy. Write a uniquely named sentinel file
+under web-2's `/mnt/data` through an authenticated, non-SSH channel, and record its name and content hash in the dispatch's tracking
+issue. No such write channel for a standby host's volume exists in the repository today, so it is authored together with the live run
+(a scripted verifier is written then, only if it proves useful). Without a sentinel the row query below still proves the arm taken
+(`opened`, never `formatted`) and the escrow state, which is the part the provisioner records on its own.
+
+**Dispatch.** The standard replace dispatch for `web-2`, exactly as in "The procedure" above. Nothing in this section dispatches anything.
+
+**Post-replace acceptance (no SSH).** One inline query through the existing rows library reads the newest readiness row for `soleur-web-2`
+(the row is emitted once per instance, at the replaced host's birth). It must report a GREEN verdict, `luks_arm=opened` and `escrow=ok`:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash -c '
+  set -euo pipefail
+  source scripts/lib/web2-luks-rows.sh
+  out="$(mktemp)"; trap "rm -f \"\$out\" \"\$out.err\"" EXIT
+  w2l_fetch_ready "$out" 1 5                      # lookback: 1 day, newest 5 rows
+  verdict="$(w2l_ready_verdict "$out")"; echo "$verdict"
+  msg="$(jq -rs "sort_by(.age_s | tonumber) | .[0].message" "$out")"; echo "$msg"
+  case "$verdict" in GREEN*) ;; *) echo "FAIL: readiness verdict is not GREEN" >&2; exit 1 ;; esac
+  case " $msg " in *" luks_arm=opened "*) ;; *) echo "FAIL: luks_arm is not opened (formatted means the populated volume was re-created)" >&2; exit 1 ;; esac
+  case " $msg " in *" escrow=ok "*) ;; *) echo "FAIL: escrow is not ok" >&2; exit 1 ;; esac
+  echo "ACCEPT: populated volume opened, never formatted; escrow ok"
+'
+```
+
+`luks_arm=formatted` on this rehearsal is a **stop-the-line** result, not a warning: it means the provisioner saw a raw volume, so the
+populated store was not the one attached. The verdict function accepts `formatted`, `opened` and `noop` for the daily marker, which is why
+this query adds the stricter `opened` requirement. The sentinel read-back, once a channel exists, is the second half of the acceptance;
+the row query alone cannot show that file content survived.
+
 ## If the apply fails partway
 
 A replace destroys before it creates, so check the apply output for whether the destroy
@@ -326,5 +370,5 @@ landed:
 - ADR-128 — fresh-boot observability (R1–R5)
 - ADR-119 — the workspaces-LUKS cutover (why web-1 is refused)
 - `tests/scripts/lib/web-host-replace-gate.sh` — the gate, with its full arm-by-arm rationale
-- `tests/scripts/test-web-host-replace-gate.sh` — the mutation battery proving no arm is vacuous
+- `tests/scripts/test-web-host-replace-gate.sh` — the mutation battery proving no arm is vacuous, including the key-conditional web-1 arms (#9356, arms-only)
 - [Runbook — birthing a web host](./web-host-birth.md)
