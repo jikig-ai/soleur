@@ -2014,7 +2014,7 @@ describe("postSentryHeartbeat — loud silent-skip on unset/malformed env (#4861
 // ---------------------------------------------------------------------------
 // ensureDedupIssue (#2756 starvation backstop) — a stable-title, open-issue
 // dedup sibling of ensureScheduledAuditIssue. Reuses the same read shape
-// (labels, sort:created desc, per_page:10) but matches the EXACT title and
+// (labels, sort:created desc, per_page:30) but matches the EXACT title and
 // scopes the dedup read to OPEN issues so an auto-closed prior alert never
 // suppresses a fresh drought (the standing-condition contract).
 // ---------------------------------------------------------------------------
@@ -2033,16 +2033,18 @@ describe("ensureDedupIssue (stable-title standing alert)", () => {
       title: "Content starvation: schedule empty",
       body: "drought",
       labels: ["action-required"],
+      missRetryDelayMs: 0,
     });
     expect(res.created).toBe(true);
     const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    // GET then POST
+    // GET, bounded re-read (the index-lag retry), then POST
     expect(calls[0][0]).toBe("GET /repos/{owner}/{repo}/issues");
     expect(calls[0][1].state).toBe("open");
     expect(calls[0][1].sort).toBe("created");
     expect(calls[0][1].direction).toBe("desc");
-    expect(calls[0][1].per_page).toBe(10);
-    expect(calls[1][0]).toBe("POST /repos/{owner}/{repo}/issues");
+    expect(calls[0][1].per_page).toBe(30);
+    expect(calls[1][0]).toBe("GET /repos/{owner}/{repo}/issues");
+    expect(calls[2][0]).toBe("POST /repos/{owner}/{repo}/issues");
   });
 
   it("does NOT create a duplicate when an open issue with the exact title exists", async () => {
@@ -2053,11 +2055,44 @@ describe("ensureDedupIssue (stable-title standing alert)", () => {
       title: "Content starvation: schedule empty",
       body: "drought",
       labels: ["action-required"],
+      missRetryDelayMs: 0,
     });
     expect(res.created).toBe(false);
     expect(res.issueNumber).toBe(99);
     const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls.length).toBe(1); // GET only, no POST
+  });
+
+  it("does NOT create a duplicate when the issue appears on the re-read (index lag)", async () => {
+    let n = 0;
+    const request = vi.fn(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        n++;
+        return {
+          data:
+            n === 1
+              ? []
+              : [{ title: "Content starvation: schedule empty", number: 88 }],
+        };
+      }
+      return { data: { number: 4242 } };
+    });
+    const client = {
+      request,
+    } as unknown as Parameters<typeof ensureDedupIssue>[0];
+    const res = await ensureDedupIssue(client, {
+      title: "Content starvation: schedule empty",
+      body: "drought",
+      labels: ["action-required"],
+      missRetryDelayMs: 0,
+    });
+    expect(res.created).toBe(false);
+    expect(res.issueNumber).toBe(88);
+    expect(
+      request.mock.calls.filter(
+        ([r]) => r === "POST /repos/{owner}/{repo}/issues",
+      ),
+    ).toHaveLength(0);
   });
 });
 

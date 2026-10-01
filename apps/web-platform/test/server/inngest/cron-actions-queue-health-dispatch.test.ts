@@ -170,7 +170,8 @@ describe("cronActionsQueueHealthDispatchHandler — dispatch behavior", () => {
       logger,
     });
 
-    expect(result).toEqual({ ok: false });
+    expect(result).toMatchObject({ ok: false });
+    expect(result.errorSummary).toBeTruthy();
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     const [errArg, options] = h.reportSilentFallbackSpy.mock.calls[0];
     expect(options).toMatchObject({ feature: "cron-actions-queue-health-dispatch" });

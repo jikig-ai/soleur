@@ -379,7 +379,8 @@ describe("cronBotPrReaperHandler — sweep", () => {
     });
   });
 
-  it("stuck PRs (dirty/blocked/unstable) → dedup issue + aggregated reportSilentFallback", async () => {
+  // ensureDedupIssue pays its production 5s miss-retry inside the step here.
+  it("stuck PRs (dirty/blocked/unstable) → dedup issue + aggregated reportSilentFallback", { timeout: 15_000 }, async () => {
     const pulls = [BOT_PR(20, "2026-09-30T08:00:00Z")];
     h.requestSpy.mockImplementation(async (route: string, _params: Record<string, unknown>) => {
       if (route === "GET /repos/{owner}/{repo}/pulls") return { data: pulls };
@@ -401,6 +402,7 @@ describe("cronBotPrReaperHandler — sweep", () => {
       "[ci/bot-pr-reaper] bot PRs unmergeable without intervention",
     );
     expect((create![1] as Record<string, unknown>).labels).toEqual([
+      "ci/bot-pr-reaper",
       "action-required",
       "domain/engineering",
     ]);

@@ -35,8 +35,8 @@ Two "Regressed issue" Sentry cron-monitor-failure emails for project web-platfor
 ## Incident Timeline
 
 - **Start time (detected):** 2026-09-30T00:30:00Z
-- **End time (recovered):** TBD
-- **Duration (MTTR):** TBD (status not resolved)
+- **End time (recovered):** pending — remediation shipped in PR #9280; recovery verified post-merge by follow-through soak #9326
+- **Duration (MTTR):** ~10h to remediation PR (detected 00:30Z, remediation PR ~10:30Z); page-noise stop confirmed at merge
 
 Order of events (load-bearing: the redaction sentinel scans this table; the Actor key feeds the Actor column):
 

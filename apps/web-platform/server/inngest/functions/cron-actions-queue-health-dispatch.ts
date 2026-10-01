@@ -69,7 +69,7 @@ const TOKEN_MIN_LIFETIME_MS = 5 * 60 * 1000;
 export async function cronActionsQueueHealthDispatchHandler({
   step,
   logger,
-}: HandlerArgs): Promise<{ ok: boolean }> {
+}: HandlerArgs): Promise<{ ok: boolean; errorSummary?: string }> {
   const installationToken = await step.run(
     "mint-installation-token",
     async () =>
@@ -105,19 +105,24 @@ export async function cronActionsQueueHealthDispatchHandler({
     );
     return { ok: true };
   } catch (err) {
-    const e = err as Error;
+    const e = err as { name?: string; message?: unknown };
     // Redact the minted token out of the message before it reaches Sentry,
     // preserving the original Error.name as a field (matches the
     // cron-weekly-analytics precedent).
-    const redacted = new Error(redactToken(e.message, installationToken));
-    redacted.name = e.name;
+    const redacted = new Error(
+      redactToken(
+        typeof e.message === "string" ? e.message : String(e),
+        installationToken,
+      ),
+    );
+    if (typeof e.name === "string") redacted.name = e.name;
     reportSilentFallback(redacted, {
       feature: FUNCTION_NAME,
       op: "dispatch-workflow",
       message: "actions-queue-health workflow_dispatch failed",
       extra: { fn: FUNCTION_NAME, workflow: WORKFLOW_FILE },
     });
-    return { ok: false };
+    return { ok: false, errorSummary: redacted.message };
   }
 }
 

@@ -122,8 +122,12 @@ jobs:
             --description "P1 — fix immediately" --color "B60205" 2>/dev/null || true
 
           ISSUE_TITLE="[ci/actions-queue-health] Runner under-assignment — deep queue with delivered concurrency below entitlement"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open -L 1 \
-            --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
+          # Label-scoped primary list, not --search: the search index lags
+          # minutes, and dispatch-primary + schedule fallback can double-fire a
+          # slot ~1-2 min apart — inside the lag — double-filing the incident.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+            --label "ci/actions-queue-health" --json number,title \
+            --jq --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' | head -1)
 
           QR=$(printf '%s' "$METRICS" | jq -r '.queued_runs // "?"')
           LQ=$(printf '%s' "$METRICS" | jq -r '.live_queued_runs // "?"')
@@ -169,8 +173,9 @@ jobs:
           # Soft issue — NOT action-required: an API blip must not page, and a
           # persistent failure keeps updating this one issue. (#6374 convention.)
           ISSUE_TITLE="[ci/actions-queue-health] Queue-health probe unavailable (API/prereq failure)"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open -L 1 \
-            --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+            --label "ci/actions-queue-health" --json number,title \
+            --jq --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' | head -1)
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
               --body "Probe still UNKNOWN at ${NOW}. Run: ${RUN_URL}"
@@ -197,8 +202,10 @@ jobs:
           # 5-min timeout — a larger bound could blow the budget while the
           # always() heartbeat still posts ok. The notice keeps a real
           # cap-hit audible; any remainder drains on subsequent sweeps.
+          # Label-scoped primary list (the search index lags minutes; every
+          # issue this file files carries the ci/actions-queue-health label).
           matches="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
-              --search 'in:title "[ci/actions-queue-health]"' \
+              --label 'ci/actions-queue-health' \
               --json number --jq '.[].number' 2>/dev/null || true)"
           if [ "$(printf '%s\n' "$matches" | grep -c .)" -ge 50 ]; then
             echo "::notice::queue-health self-close enumeration hit the -L 50 cap; oldest matching issues stay open until the next sweep"

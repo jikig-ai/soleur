@@ -972,7 +972,16 @@ export async function verifyScheduledIssueCreated(args: {
   }
 
   const client = octokit ?? (await createProbeOctokit());
-  for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt++) {
+  // Non-finite callers (Infinity/NaN) would unbound or disable the loop — clamp.
+  const attempts =
+    Number.isFinite(maxAttempts) && maxAttempts >= 1
+      ? Math.floor(maxAttempts)
+      : 3;
+  const delayMs =
+    Number.isFinite(retryDelayMs) && retryDelayMs >= 0
+      ? Math.min(retryDelayMs, 60_000)
+      : 12_000;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     const res = await client.request("GET /repos/{owner}/{repo}/issues", {
       owner: REPO_OWNER,
       repo: REPO_NAME,
@@ -1034,8 +1043,8 @@ export async function verifyScheduledIssueCreated(args: {
       }
       return true;
     }
-    if (attempt < Math.max(1, maxAttempts)) {
-      await sleep(retryDelayMs);
+    if (attempt < attempts) {
+      await sleep(delayMs);
     }
   }
   return false;
@@ -1406,7 +1415,6 @@ export async function resolveOutputAwareOk(args: {
   stdoutTail?: string;
   // #9272 — passthrough to verifyScheduledIssueCreated's bounded retry; tests
   // inject `verifyRetryDelayMs: 0` so the empty-read path does not sleep.
-  verifyMaxAttempts?: number;
   verifyRetryDelayMs?: number;
 }): Promise<boolean> {
   const {
@@ -1418,7 +1426,6 @@ export async function resolveOutputAwareOk(args: {
     stderrTail,
     exitCode,
     stdoutTail,
-    verifyMaxAttempts,
     verifyRetryDelayMs,
   } = args;
 
@@ -1429,7 +1436,6 @@ export async function resolveOutputAwareOk(args: {
       sinceIso: runStartedAt,
       octokit,
       feature: cronName,
-      maxAttempts: verifyMaxAttempts,
       retryDelayMs: verifyRetryDelayMs,
     });
   } catch (err) {
@@ -1831,8 +1837,8 @@ export async function ensureScheduledAuditIssue(args: {
 /**
  * Stable-title, open-issue dedup sibling of `ensureScheduledAuditIssue`, for a
  * STANDING condition (e.g. content starvation) rather than a dated per-run audit
- * stub. Reuses that helper's read shape verbatim — `GET .../issues` with
- * `labels`, `sort: created, direction: desc, per_page: 10` — but:
+ * stub. The read shape (findDedupIssue) is `GET .../issues` with
+ * `labels`, `sort: created, direction: desc, per_page: 30` — but:
  *   - matches the EXACT title (a standing alert has one canonical title, no
  *     date suffix — a persisting condition files ONE issue, not one per run), and
  *   - scopes the dedup read to `state: "open"` so an auto-CLOSED prior alert
@@ -1842,23 +1848,42 @@ export async function ensureScheduledAuditIssue(args: {
  * Caller passes a ready Octokit (this helper does no minting) — the starvation
  * check runs inside a failure-isolated try/catch and reuses the handler's token.
  */
-export async function ensureDedupIssue(
+export async function findDedupIssue(
   client: Octokit,
-  args: { title: string; body: string; labels: string[] },
-): Promise<{ created: boolean; issueNumber?: number }> {
-  const { title, body, labels } = args;
+  args: { title: string; labels: string[] },
+): Promise<number | undefined> {
   const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {
     owner: REPO_OWNER,
     repo: REPO_NAME,
     state: "open",
-    labels: labels.join(","),
+    labels: args.labels.join(","),
     sort: "created",
     direction: "desc",
-    per_page: 10,
+    per_page: 30,
     headers: { "X-GitHub-Api-Version": "2022-11-28" },
   })) as { data: Array<{ title: string; number: number }> };
-  const match = existing.data.find((i) => i.title === title);
-  if (match) return { created: false, issueNumber: match.number };
+  return existing.data.find((i) => i.title === args.title)?.number;
+}
+
+export async function ensureDedupIssue(
+  client: Octokit,
+  args: {
+    title: string;
+    body: string;
+    labels: string[];
+    // Tests inject 0 — the re-read only exists to outlast the issues-list
+    // index lag a just-created sibling issue can sit behind (#9272's class,
+    // here applied to the dedup read itself so a step-retry replay cannot
+    // double-file the tracking issue).
+    missRetryDelayMs?: number;
+  },
+): Promise<{ created: boolean; issueNumber?: number }> {
+  const { title, body, labels, missRetryDelayMs = 5_000 } = args;
+  const match = await findDedupIssue(client, { title, labels });
+  if (match !== undefined) return { created: false, issueNumber: match };
+  await sleep(missRetryDelayMs);
+  const rematch = await findDedupIssue(client, { title, labels });
+  if (rematch !== undefined) return { created: false, issueNumber: rematch };
 
   const created = (await client.request("POST /repos/{owner}/{repo}/issues", {
     owner: REPO_OWNER,

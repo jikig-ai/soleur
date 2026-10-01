@@ -45,6 +45,9 @@ case "$-" in
     ;;
 esac
 
+_TMPFILES=()
+trap 'rm -f "${_TMPFILES[@]:-}"' EXIT
+
 if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 if ! command -v gh >/dev/null 2>&1; then echo "TRANSIENT: gh CLI not installed" >&2; exit 2; fi
 
@@ -112,19 +115,41 @@ else
 fi
 
 # --- (b) zero missed/timeout check-ins on scheduled-actions-queue-health ---
+# Paginate (Link-header cursor, max 5 pages): at */30 the 3d window holds
+# ~144 check-ins — more than one page — and a `missed` in the truncated tail
+# must not be invisible to the assertion.
 URL="https://${API_HOST}/api/0/organizations/${ORG}/monitors/scheduled-actions-queue-health/checkins/?per_page=100"
-RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
-  -H "Accept: application/json" \
-  "$URL")
-HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
-BODY=$(printf '%s' "$RESP" | sed '$d')
-if [[ "$HTTP_STATUS" != "200" ]]; then
-  echo "TRANSIENT: Sentry checkins API returned $HTTP_STATUS" >&2
-  exit 2
-fi
+BODY="[]"
+for page in 1 2 3 4 5; do
+  HDR=$(mktemp)
+  _TMPFILES+=("$HDR")
+  RESP=$(curl --disable --noproxy '*' -sS -D "$HDR" -w '\nHTTP_STATUS:%{http_code}' \
+    -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
+    -H "Accept: application/json" \
+    "$URL")
+  HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
+  PAGE=$(printf '%s' "$RESP" | sed '$d')
+  if [[ "$HTTP_STATUS" != "200" ]]; then
+    rm -f "$HDR"
+    echo "TRANSIENT: Sentry checkins API returned $HTTP_STATUS (page $page)" >&2
+    exit 2
+  fi
+  if ! printf '%s' "$PAGE" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    rm -f "$HDR"
+    echo "TRANSIENT: checkins response is not a JSON array (schema drift?)" >&2
+    exit 2
+  fi
+  BODY=$(printf '%s\n%s\n' "$BODY" "$PAGE" | jq -s 'add')
+  # Results are newest-first; stop paging once the page's oldest entry is
+  # already outside the window.
+  OLDEST_IN_PAGE=$(printf '%s' "$PAGE" | jq -r '[.[] | (.dateAdded // .dateCreated)] | if length == 0 then "0" else min end | fromdateiso8601 // 0' 2>/dev/null || echo 0)
+  NEXT=$(grep -i '^link:' "$HDR" | grep -oE '<[^>]+>; rel="next"; results="true"' | sed -E 's/^<([^>]+)>.*/\1/')
+  rm -f "$HDR"
+  [[ "$NEXT" == "" || "$OLDEST_IN_PAGE" -lt "$CUTOFF" ]] && break
+  URL="$NEXT"
+done
 if ! printf '%s' "$BODY" | jq -e 'type == "array"' >/dev/null 2>&1; then
-  echo "TRANSIENT: checkins response is not a JSON array (schema drift?)" >&2
+  echo "TRANSIENT: could not accumulate checkins pages" >&2
   exit 2
 fi
 COUNTS=$(printf '%s' "$BODY" | jq -r --argjson cutoff "$CUTOFF" '
@@ -154,20 +179,30 @@ fi
 # distinction needs the REST `mergeable_state`; use the API directly. A PR is
 # stale when it is behind AND has been untouched (no update-branch run) for
 # >24h — a fresh `behind` is expected between merges.
+# Fail-safe: an errored `gh` read must NOT collapse to an empty loop (a
+# vacuous ok(c) on the assertion that detects reaper non-delivery).
 STALE=0
 NOW_S=$(date -u +%s)
+if ! ARMED_PRS=$(gh pr list --repo jikig-ai/soleur --state open --limit 100 \
+  --json number,author,autoMergeRequest \
+  --jq '.[] | select(.author.login == "soleur-ai" or .author.login == "app/soleur-ai" or .author.login == "soleur-ai[bot]") | select(.autoMergeRequest != null) | .number' 2>/dev/null); then
+  echo "TRANSIENT: gh pr list failed — (c) coverage unproven" >&2
+  exit 2
+fi
 while IFS=$'\t' read -r num; do
   [[ -n "$num" ]] || continue
-  mstate=$(gh api "repos/jikig-ai/soleur/pulls/${num}" --jq '.mergeable_state' 2>/dev/null) || continue
-  updated=$(gh api "repos/jikig-ai/soleur/pulls/${num}" --jq '.updated_at' 2>/dev/null) || continue
-  updated_s=$(date -u -d "$updated" +%s 2>/dev/null) || updated_s=$(date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$updated" +%s 2>/dev/null) || continue
+  if ! detail=$(gh api "repos/jikig-ai/soleur/pulls/${num}" --jq '.mergeable_state + "\t" + .updated_at' 2>/dev/null); then
+    echo "TRANSIENT: gh api pulls/${num} failed — (c) coverage unproven" >&2
+    exit 2
+  fi
+  mstate="${detail%%$'\t'*}"
+  updated="${detail##*$'\t'}"
+  updated_s=$(date -u -d "$updated" +%s 2>/dev/null) || updated_s=$(date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$updated" +%s 2>/dev/null) || { echo "TRANSIENT: unparseable updated_at for PR #${num}" >&2; exit 2; }
   if [[ "$mstate" == "behind" ]] && (( updated_s < NOW_S - 86400 )); then
     echo "FAIL(c): PR #${num} mergeable_state=behind and untouched >24h"
     STALE=$((STALE + 1))
   fi
-done < <(gh pr list --repo jikig-ai/soleur --state open --limit 100 \
-  --json number,author,autoMergeRequest \
-  --jq '.[] | select(.author.login == "soleur-ai" or .author.login == "app/soleur-ai" or .author.login == "soleur-ai[bot]") | select(.autoMergeRequest != null) | .number' 2>/dev/null)
+done <<< "$ARMED_PRS"
 if [[ "$STALE" -gt 0 ]]; then
   FAILURES=$((FAILURES + 1))
 else
