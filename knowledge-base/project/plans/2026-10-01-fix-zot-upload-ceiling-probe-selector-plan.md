@@ -627,3 +627,35 @@ it into `other5xx`; folding it can hide a real cut, so the safe direction was ke
   tracker; pre-existing, documented in the probe header (D7), not changed here.
 - Observability and IaC gates were evaluated and do not fire: no file under `apps/*/server|src|infra` or
   `plugins/*/scripts`, and no new infrastructure; the deliverable itself is the observability instrument.
+
+
+## Addendum — 2026-10-01 (#9353): review-round amendments
+
+Appended, not edited in place: the sections above record the plan as approved. Ten review seats (history,
+pattern, architecture, security, performance, data-integrity, agent-native, code-quality, test-design,
+structural enumeration) ran against SHA `6ff11a8165`. Their findings reduced to two structural causes, both fixed in
+commit `4bb492e35f`:
+
+1. **A decoded line is not necessarily one row from one emitter.** Fixed by one python decoder emitting exactly
+   one sanitized line per row (line breaks neutralised), a DELIVERY read pinned to the registry envelope and the
+   `message:configuration settings,params:{` shape, a count-once rule on `clientIP`/`method`/`statusCode`/`latency`
+   (a repeated or unmatched upload row is TRANSIENT, never counted), exact-duplicate rows counted once, the floor
+   counting PATCH **2xx** rows only, and decode accounting on the drop read (whose empty answer reads as clean).
+2. **The window was not tied to the boot that carries the deadlines, and the trailing edge was unobserved.** Fixed by
+   requiring every `configuration settings` start inside the window to carry the deadlines
+   (`window-spans-pre-delivery-start` otherwise), a 30-day config lookback, a host-pinned heartbeat at the window
+   start, and a heartbeat in the last 12 h (`heartbeat-stale`).
+
+Changes to the contract above: reason `latency-unparseable` is now `upload-rows-unparseable` (it also covers
+forged/unmatched rows); `span-arithmetic-failed` is now `anchor-bound-failed`; new reasons `window-spans-pre-delivery-start`,
+`heartbeat-stale`, `dropped-undecodable`, `decoder-failed`; the `µs` unit is dropped (the shipper strips non-ASCII);
+`jq` is no longer a dependency; the query tool's stderr is never printed. The live defect case now reads
+`patch_rows=43` (44 PATCH rows, one of them the 500). Measured on the hardened probe against the live warehouse
+(read-only): `config_starts=8` all at 1800 s, `patch_rows=37`, `long_ok=8` (uploads that outlived the old 60 s ceiling).
+
+Verification: harness 135 cases; mutation battery 39/39 killed against a green control (one survivor, a fixture gap on
+the row-shape check, closed by a User-Agent-forged config fixture and re-driven).
+
+Not applied (recorded in `decision-challenges.md`): requiring `long_ok >= 1`; grading a 2xx at deadline latency
+(ADR-190 Arm C; delivery parity is its guard); reading the heartbeat's `log_shipper_post_fail`; sharing the structural
+validator and decoder through `scripts/lib/` (tracked with the shipper follow-up).

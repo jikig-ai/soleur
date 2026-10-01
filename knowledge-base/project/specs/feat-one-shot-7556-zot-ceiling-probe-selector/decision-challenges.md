@@ -37,3 +37,16 @@ the plan's current direction is the default.
 
 - CTO would fold it into `other5xx`. Kept TRANSIENT: folding can hide a real cut behind an unparseable latency, and the
   contract says an unestablished state is never a pass.
+
+
+## Review-round additions (2026-10-01, #9353)
+
+- **Require `long_ok >= 1` before PASS?** Not applied. The probe prints `long_ok` (uploads that ran >= 60 s, i.e. past
+  the old ceiling); live is 8. Requiring it could wedge the probe on a quiet week with no long uploads, and 12 PATCH
+  rows is already the anti-vacuity floor. Operator may want it as the stronger closure condition for ADR-190.
+- **Grade a 2xx at deadline latency (ADR-190 Arm C)?** Not applied: delivery parity of BOTH keys is its guard, and a
+  slow success is not a cut.
+- **Read the heartbeat's `log_shipper_post_fail` / `last_ok_age_s` for the trailing edge?** Not applied; the
+  12 h newest-heartbeat check covers the same outage class with less coupling to the heartbeat's field list.
+- **Closure still lands on a tripwire-grade absence claim.** Unchanged from the plan: on today's data the next sweep
+  returns PASS and auto-closes #7556 (live read-only run of the hardened probe: PASS). The PR body states it.
