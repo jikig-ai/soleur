@@ -65,6 +65,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     const { ChatSurface } = await import("@/components/chat/chat-surface");
     wsReturn = createWebSocketMock({
       ...connection,
+      hasPendingCodexHistoryTransfer: true,
       realConversationId: "test-id",
       messages: [{ id: "user-held-turn", type: "text", role: "user", content: "Keep this original draft", delivery: "retryable" }],
       connection: { phase: "unrecoverable" },
@@ -96,6 +97,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     wsReturn = createWebSocketMock({
       status: "connected",
       sessionConfirmed: false,
+      hasPendingCodexHistoryTransfer: true,
       realConversationId: "test-id",
       messages: [{ id: "user-held-turn", type: "text", role: "user", content: "Keep this original draft", delivery: "retryable" }],
       connection: { phase: "unrecoverable" },
@@ -110,8 +112,40 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     expect(wsReturn.startSession).not.toHaveBeenCalled();
 
     wsReturn.sessionConfirmed = true;
+    wsReturn.hasPendingCodexHistoryTransfer = false;
     view.rerender(<ChatSurface variant="full" conversationId="new" />);
     expect(wsReturn.startSession).not.toHaveBeenCalled();
+    expect(screen.getByText("Keep this original draft")).toBeVisible();
+  });
+
+  it("does not bootstrap a new session for an unacknowledged held turn after reconnect", async () => {
+    const { ChatSurface } = await import("@/components/chat/chat-surface");
+    wsReturn = createWebSocketMock({
+      status: "connected",
+      sessionConfirmed: false,
+      hasPendingCodexHistoryTransfer: true,
+      realConversationId: "test-id",
+      messages: [{ id: "user-held-turn", type: "text", role: "user", content: "Keep this original draft", delivery: "unsent" }],
+      connection: { phase: "unrecoverable" },
+      lastError: {
+        code: "codex_history_transfer_required",
+        message: "OpenAI will receive this conversation's stored history. Acknowledge before resending.",
+        conversationId: "test-id",
+        authModeGeneration: 2,
+      },
+    });
+    const view = render(<ChatSurface variant="full" conversationId="new" />);
+
+    expect(wsReturn.startSession).not.toHaveBeenCalled();
+    expect(wsReturn.resumeSession).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Resume with full context" }));
+    expect(wsReturn.resumeAfterUnrecoverable).toHaveBeenCalledOnce();
+    expect(wsReturn.startSession).not.toHaveBeenCalled();
+
+    wsReturn.sessionConfirmed = true;
+    view.rerender(<ChatSurface variant="full" conversationId="new" />);
+    expect(wsReturn.startSession).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Acknowledge history transfer" })).toBeVisible();
     expect(screen.getByText("Keep this original draft")).toBeVisible();
   });
 });

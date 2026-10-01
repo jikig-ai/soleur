@@ -116,6 +116,7 @@ interface UseWebSocketReturn {
   ) => void;
   status: ConnectionStatus;
   sessionConfirmed: boolean;
+  hasPendingCodexHistoryTransfer: boolean;
   disconnectReason: string | undefined;
   lastError: WebSocketError | null;
   reconnect: () => void;
@@ -2066,7 +2067,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   }, [chatState.streamState, conversationId]);
 
   const reconnect = useCallback(() => {
-    setLastError(null);
+    const activeConvId = realConversationIdRef.current;
+    const hasHeldCodexTurns = activeConvId !== null && [...pendingCodexHistoryTurnsRef.current.values()]
+      .some((turn) => turn.conversationId === activeConvId);
+    setLastError((current) => hasHeldCodexTurns
+      && current?.code === "codex_history_transfer_required"
+      && current.conversationId === activeConvId
+      ? current
+      : null);
     setDisconnectReason(undefined);
     mountedRef.current = true;
     backoffRef.current = INITIAL_BACKOFF;
@@ -2102,6 +2110,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     resolveInteractivePrompt,
     status,
     sessionConfirmed,
+    hasPendingCodexHistoryTransfer: realConversationIdRef.current !== null
+      && [...pendingCodexHistoryTurnsRef.current.values()]
+        .some((turn) => turn.conversationId === realConversationIdRef.current),
     disconnectReason,
     lastError,
     reconnect,
