@@ -233,11 +233,14 @@ run_stage() {
 # The two expired secrets, the scopes each must be minted with, and the stores
 # they live in:
 #
-#   Secret                        Scopes to select in the token generator
+#   Secret                        App it is minted under + scopes to select
 #   --------------------------    ----------------------------------------
-#   LINKEDIN_ACCESS_TOKEN         openid, profile, w_member_social, email
-#   LINKEDIN_ORG_ACCESS_TOKEN     openid, profile, w_member_social,
-#                                 w_organization_social
+#   LINKEDIN_ACCESS_TOKEN         Soleur app — openid, profile,
+#                                 w_member_social, email
+#   LINKEDIN_ORG_ACCESS_TOKEN     Soleur Community app — all scopes it offers;
+#                                 w_organization_social (org posting) and
+#                                 rw_organization_admin (the org probe's own
+#                                 requirement) are mandatory
 #
 #   Store                         Consumer
 #   --------------------------    ----------------------------------------
@@ -246,12 +249,15 @@ run_stage() {
 #                                 container start, so a deploy is what picks
 #                                 the new value up
 #
-# The weekly cron (Monday 11:00 UTC, cron-linkedin-token-check) re-checks both
-# tokens against api.linkedin.com/v2/userinfo and auto-closes its own
-# action-required issues once they pass. This script runs the SAME probe before
-# anything is persisted, so a bad or wrong token is caught at paste time.
+# The weekly cron (Monday 11:00 UTC, cron-linkedin-token-check) re-checks each
+# token at the endpoint its app can authorize — userinfo for the personal token
+# (openid), organizationalEntityAcls for the org token (the Community app offers
+# no openid) — and auto-closes its own action-required issues once they pass.
+# This script runs the SAME per-token probes before anything is persisted, so
+# a bad or wrong token is caught at paste time.
 
-TOKEN_GENERATOR_URL="https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=78wtm2wu15iikn"
+TOKEN_GENERATOR_URL_PERSONAL="https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=78wtm2wu15iikn"
+TOKEN_GENERATOR_URL_ORG="https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=78s808ujpe6lve"
 LINKEDIN_USERINFO="https://api.linkedin.com/v2/userinfo"
 LINKEDIN_ORG_ACLS="https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED"
 GH_REPO="jikig-ai/soleur"
@@ -264,27 +270,45 @@ bound() {
   if command -v timeout >/dev/null 2>&1; then timeout 60 "$@"; else "$@"; fi
 }
 
-# token_probe <value> -> live | rejected | transport
-# The same probe the weekly cron runs (/v2/userinfo). Three states because the
-# failure arms below prescribe different remedies: `rejected` means mint again,
-# `transport` means the token may be fine and the network/proxy is the suspect —
-# conflating them sends a founder behind a TLS-inspecting proxy through a
-# needless re-mint loop. The Bearer header travels via `--config -` (stdin), not
-# argv — `/proc/<pid>/cmdline` would otherwise carry it for up to 15s per call.
+# token_probe <value> <url> -> live | rejected <code> | transport
+# The same per-token probe the weekly cron runs (userinfo for the personal
+# token, organizationalEntityAcls for the org token — the Community app has no
+# openid, so userinfo can never pass for it). Three states because the failure
+# arms below prescribe different remedies: `rejected` means mint again (401 =
+# expired; 403 = alive but minted under the wrong app or without the scopes the
+# endpoint requires — the code travels with the verdict so the remedy can name
+# the measured cause), `transport` means the token may be fine and the
+# network/proxy is the suspect — conflating them sends a founder behind a
+# TLS-inspecting proxy through a needless re-mint loop. The Bearer header
+# travels via `--config -` (stdin), not argv — `/proc/<pid>/cmdline` would
+# otherwise carry it for up to 15s per call.
 token_probe() {
-  local tok="$1" response code rc=0
+  local tok="$1" url="$2" response code rc=0
+  # Local charset gate: a quote or line break in $tok would terminate the
+  # quoted --config string and inject arbitrary curl directives — refuse
+  # before the header is ever composed.
+  if [[ "$tok" == *'"'* || "$tok" == *$'\n'* || "$tok" == *$'\r'* ]]; then
+    printf 'rejected malformed'; return
+  fi
   response="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" | \
     curl --disable --noproxy '*' -s -m 15 --config - \
       -w '\n%{http_code}' \
-      "$LINKEDIN_USERINFO" 2>/dev/null)" || rc=$?
+      "$url" 2>/dev/null)" || rc=$?
   if [[ $rc -ne 0 ]]; then printf 'transport'; return; fi
   code="$(printf '%s' "$response" | tail -1)"
-  if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then printf 'live';
-  elif [[ "$code" == 401 ]]; then printf 'rejected';
+  if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
+    # A 2xx must carry a JSON body — a TLS-inspecting proxy's 200-HTML is a
+    # transport condition, not proof the token works (cron parity).
+    if printf '%s' "$response" | head -n -1 | grep -q '{'; then printf 'live';
+    else printf 'transport'; fi
+  elif [[ "$code" == 401 || "$code" == 403 ]]; then printf 'rejected %s' "$code";
   else printf 'transport'; fi
 }
 
-token_is_live() { [[ "$(token_probe "$1")" == live ]]; }
+token_is_live() { [[ "$(token_probe "$1" "$2")" == live ]]; }
+
+# probe_endpoint_name <url> — last path segment ("userinfo", "organizationalEntityAcls")
+probe_endpoint_name() { local p="${1%%\?*}"; printf '%s' "${p##*/}"; }
 
 # token_fingerprint <value> — first 16 hex of sha256. Binds the gh-write marker
 # to the VALUE written: a stale marker from a previous token can never skip a
@@ -311,7 +335,7 @@ env_get() {
   [[ -f "$ENV_FILE" ]] && sed -n "s/^$1=//p" "$ENV_FILE" | head -1 || true
 }
 
-# mint_or_reuse <SECRET-NAME> <SKIP-VAR> <scope-list>
+# mint_or_reuse <SECRET-NAME> <SKIP-VAR> <scope-list> <generator-url> <probe-url>
 #   Sets MINTED_TOKEN. Ladder: Doppler live value -> .env
 #   recorded value -> credential entry. The entered token is verified BEFORE
 #   it is persisted anywhere, so a wrong paste fails here rather than
@@ -322,13 +346,13 @@ env_get() {
 MINTED_TOKEN=""
 
 mint_or_reuse() {
-  local name="$1" skipvar="$2" scopes="$3" tok="" probe=""
+  local name="$1" skipvar="$2" scopes="$3" gen_url="$4" probe_url="$5" tok="" probe=""
   MINTED_TOKEN=""
 
   if [[ "${SOLEUR_BOOTSTRAP_FORCE_MINT:-}" != "1" ]]; then
     local rc=0
     tok="$(doppler_get "$name")" || rc=$?
-    if [[ $rc -eq 0 && -n "$tok" ]] && token_is_live "$tok"; then
+    if [[ $rc -eq 0 && -n "$tok" ]] && token_is_live "$tok" "$probe_url"; then
       soleur_op_yellow "  already satisfied: ${name} in Doppler soleur/prd passes the live check"
       soleur_op_yellow "  (to replace this token anyway, re-run with SOLEUR_BOOTSTRAP_FORCE_MINT=1)"
       soleur_op_env_upsert "$ENV_FILE" "$name" "$tok"
@@ -337,7 +361,7 @@ mint_or_reuse() {
     fi
 
     tok="$(env_get "$name")"
-    if [[ -n "$tok" ]] && token_is_live "$tok"; then
+    if [[ -n "$tok" ]] && token_is_live "$tok" "$probe_url"; then
       soleur_op_yellow "  reusing the verified token a previous run recorded"
       soleur_op_yellow "  (to replace this token anyway, re-run with SOLEUR_BOOTSTRAP_FORCE_MINT=1)"
       MINTED_TOKEN="$tok"
@@ -357,19 +381,29 @@ mint_or_reuse() {
     echo "       sign in -> Allow"
     echo "    3. Copy the generated token"
     echo "    (automation: set ${skipvar} and re-run non-interactively)"
-    soleur_op_open_url "$TOKEN_GENERATOR_URL"
+    soleur_op_open_url "$gen_url"
     [[ -t 0 ]] || soleur_op_input_required "$skipvar"
     read -rs -p "  Paste the new ${name}: " tok
     echo ""
   fi
 
-  probe="$(token_probe "$tok")"
+  probe="$(token_probe "$tok" "$probe_url")"
   case "$probe" in
     live)
-      soleur_op_green "  live check passed (LinkedIn userinfo 2xx)." ;;
-    rejected)
-      printf 'SOLEUR_BOOTSTRAP_TOKEN_REJECTED name=%s http=401\n' "$name"
-      soleur_op_red "  ${name} was rejected by LinkedIn (401) — mint a different token."
+      soleur_op_green "  live check passed (LinkedIn $(probe_endpoint_name "$probe_url") 2xx)." ;;
+    rejected*)
+      local http="${probe##* }"
+      printf 'SOLEUR_BOOTSTRAP_TOKEN_REJECTED name=%s http=%s\n' "$name" "$http"
+      case "$http" in
+        403)
+          soleur_op_red "  ${name} is alive but cannot authorize its probe (403) — mint a new"
+          soleur_op_red "  token under the app named above and select every scope it offers." ;;
+        malformed)
+          soleur_op_red "  ${name} contains characters that cannot form an HTTP header"
+          soleur_op_red "  (quote or line break) — re-copy the token and re-run." ;;
+        *)
+          soleur_op_red "  ${name} was rejected by LinkedIn ($http) — mint a different token." ;;
+      esac
       [[ -n "$from_skip" ]] && soleur_op_red "  (this value came from ${skipvar} — fix or unset it and re-run)"
       return 1 ;;
     *)
@@ -383,12 +417,12 @@ mint_or_reuse() {
   MINTED_TOKEN="$tok"
 }
 
-# persist_token <SECRET-NAME> <value>
+# persist_token <SECRET-NAME> <value> <probe-url>
 #   Writes both stores. Each write sits behind its own per-command ack (a prod
 #   mutation), and each store's "already satisfied" check runs first so a
 #   re-run only asks for what is actually missing.
 persist_token() {
-  local name="$1" tok="$2" cur="" fp="" marker=""
+  local name="$1" tok="$2" probe_url="$3" cur="" fp="" marker=""
 
   # --- GitHub Actions secret ---
   # GitHub never discloses a stored secret's value, so presence in the list
@@ -409,7 +443,7 @@ persist_token() {
   # Vendor-side check: a LIVE token already in the config makes the write
   # unnecessary; an expired or missing one is overwritten.
   cur="$(doppler_token "$name")"
-  if [[ -n "$cur" ]] && token_is_live "$cur"; then
+  if [[ -n "$cur" ]] && token_is_live "$cur" "$probe_url"; then
     soleur_op_yellow "  already satisfied: Doppler soleur/prd ${name} passes the live check"
   else
     soleur_op_ack_or_die "  Write ${name} to Doppler soleur/prd (the app's env source)? Type 'yes': "
@@ -441,36 +475,22 @@ stage_1_personal() {
     return 1
   fi
   mint_or_reuse "LINKEDIN_ACCESS_TOKEN" SOLEUR_BOOTSTRAP_LINKEDIN_ACCESS_TOKEN \
-    "openid, profile, w_member_social, email" || return 1
-  persist_token "LINKEDIN_ACCESS_TOKEN" "$MINTED_TOKEN"
+    "openid, profile, w_member_social, email" \
+    "$TOKEN_GENERATOR_URL_PERSONAL" "$LINKEDIN_USERINFO" || return 1
+  persist_token "LINKEDIN_ACCESS_TOKEN" "$MINTED_TOKEN" "$LINKEDIN_USERINFO"
 }
 
 stage_2_org() {
+  # The decisive probe IS the org-capability endpoint — the Community app has
+  # no openid, so userinfo could never prove this token. An ACL 2xx proves
+  # liveness + rw_organization_admin (the probe's own requirement); the
+  # w_organization_social posting scope rides on the "select all scopes"
+  # instruction above.
   mint_or_reuse "LINKEDIN_ORG_ACCESS_TOKEN" SOLEUR_BOOTSTRAP_LINKEDIN_ORG_ACCESS_TOKEN \
-    "openid, profile, w_member_social, w_organization_social" || return 1
+    "all scopes the Community app offers — w_organization_social (org posting) and rw_organization_admin (the probe's own requirement) are mandatory" \
+    "$TOKEN_GENERATOR_URL_ORG" "$LINKEDIN_ORG_ACLS" || return 1
 
-  # Advisory org-scope probe: userinfo only proves the token is alive, not that
-  # it carries w_organization_social — the scope org posting needs. A 2xx here
-  # lists the Company Pages the token can administer/post to. A non-2xx is a
-  # WARNING, not a stage failure: the decisive check is the same userinfo probe
-  # the weekly cron runs, and this endpoint's scope requirements differ by app.
-  if [[ -n "$MINTED_TOKEN" ]]; then
-    local acl_body acl_code
-    acl_body="$(printf 'header = "Authorization: Bearer %s"\n' "$MINTED_TOKEN" | \
-      curl --disable --noproxy '*' -s -m 15 --config - \
-        -w '\n%{http_code}' \
-        "$LINKEDIN_ORG_ACLS" 2>/dev/null)" || acl_body=""
-    acl_code="$(printf '%s' "$acl_body" | tail -1)"
-    if [[ "$acl_code" =~ ^2[0-9][0-9]$ ]]; then
-      soleur_op_green "  org-scope probe passed (organizationalEntityAcls 2xx)."
-    else
-      soleur_op_yellow "  WARNING: org-scope probe returned ${acl_code:-<no response>} — if org"
-      soleur_op_yellow "  posting still fails after deploy, re-mint the token and confirm"
-      soleur_op_yellow "  w_organization_social was selected in the generator."
-    fi
-  fi
-
-  persist_token "LINKEDIN_ORG_ACCESS_TOKEN" "$MINTED_TOKEN"
+  persist_token "LINKEDIN_ORG_ACCESS_TOKEN" "$MINTED_TOKEN" "$LINKEDIN_ORG_ACLS"
 }
 
 stage_3_env_refresh() {
@@ -584,14 +604,23 @@ stage_3_env_refresh() {
 }
 
 stage_4_verify() {
-  local failed=0 name cur fp_env
+  local failed=0 name cur fp_env probe_url ep
   local gh_listed
   gh_listed="$(bound gh secret list -R "$GH_REPO" 2>/dev/null || true)"
 
   for name in LINKEDIN_ACCESS_TOKEN LINKEDIN_ORG_ACCESS_TOKEN; do
+    # Enumerated, not defaulted — a name added to the loop without a probe arm
+    # must fail the stage, never silently probe userinfo (the defect class the
+    # cron's TOKEN_PROBES table exists to remove).
+    case "$name" in
+      LINKEDIN_ACCESS_TOKEN) probe_url="$LINKEDIN_USERINFO" ;;
+      LINKEDIN_ORG_ACCESS_TOKEN) probe_url="$LINKEDIN_ORG_ACLS" ;;
+      *) printf 'SOLEUR_BOOTSTRAP_VERIFY_FAILED name=%s store=none (no probe configured)\n' "$name"; failed=1; continue ;;
+    esac
+    ep="$(probe_endpoint_name "$probe_url")"
     cur="$(doppler_token "$name")"
-    if [[ -n "$cur" ]] && token_is_live "$cur"; then
-      soleur_op_green "  ${name}: live in Doppler soleur/prd (userinfo 2xx)"
+    if [[ -n "$cur" ]] && token_is_live "$cur" "$probe_url"; then
+      soleur_op_green "  ${name}: live in Doppler soleur/prd (${ep} 2xx)"
       fp_env="$(env_get "$name")"
       if [[ -n "$fp_env" && "$fp_env" != "$cur" ]]; then
         soleur_op_yellow "  note: ${name} differs between Doppler and the recorded .env —"
@@ -628,9 +657,11 @@ stage_4_verify() {
   fi
 
   echo ""
-  echo "  Closeout is automatic: the weekly token check (Monday 11:00 UTC) calls"
-  echo "  userinfo against the app's env and auto-closes #7404 and #7606 once a"
-  echo "  deploy has picked the new values up. To close sooner, after the deploy:"
+  echo "  Closeout is automatic: the weekly token check (Monday 11:00 UTC) probes"
+  echo "  each token at its per-app endpoint (userinfo for the personal token,"
+  echo "  organizationalEntityAcls for the org token) and auto-closes #7404 and"
+  echo "  #7606 once a deploy has picked the new values up. To close sooner,"
+  echo "  after the deploy:"
   echo "    soleur:trigger-cron  ->  cron/linkedin-token-check.manual-trigger"
 }
 

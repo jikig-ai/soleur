@@ -58,8 +58,9 @@ readonly LOG_TAG="ci-deploy"
 # runs both. Three of the four values here are interpolated from var.sentry_dsn, whose regex
 # capture classes admit `$`, `(`, `)` and backtick.
 #
-# The loop below assigns only the four keys it recognises and never evaluates the value, so a
-# hostile or malformed line is inert data rather than code. This removes the class; the
+# The loop below assigns only the five keys it recognises (four exported; GITHUB_APP_DOPPLER_TOKEN
+# never, see #8609 below) and never evaluates the value, so a hostile or malformed line is inert
+# data rather than code. This removes the class; the
 # defence-in-depth layers (the terraform plan validation on var.doppler_token and var.sentry_dsn,
 # and the installer's shape rejection) remain, but nothing here depends on them being complete.
 #
@@ -78,11 +79,23 @@ readonly LOG_TAG="ci-deploy"
 # drifted, or webhook.service's ProtectSystem view differs from the delivering context). Those
 # route to different fixes, so collapsing them into one "no credential" value would discard the
 # discriminator at exactly the moment it is needed.
+#
+# #8609 (plan §3.1): GITHUB_APP_DOPPLER_TOKEN, the read token for the isolated soleur-github-app
+# project, is read here too but is NEVER exported — the container and every child process must not
+# see it; only overlay_github_app_key hands it to one `doppler` call. Reset and un-exported first,
+# so an inherited value can neither be used nor leak. The three GITHUB_APP_KEY_* state fields are
+# reset here too: write_state splices them into the state JSON, so an inherited value must never
+# reach it (write_state also enum-checks them).
+GITHUB_APP_DOPPLER_TOKEN=""
+export -n GITHUB_APP_DOPPLER_TOKEN
+GITHUB_APP_KEY_SOURCE=""
+GITHUB_APP_KEY_FETCH=""
+GITHUB_APP_KEY_PROBE=""
 CRED_FILE_STATE=present
 if [ -r /etc/default/soleur-doppler-token ]; then
   while IFS='=' read -r _cred_k _cred_v; do
     case "$_cred_k" in
-      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
+      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY|GITHUB_APP_DOPPLER_TOKEN)
         # Skip an empty value rather than blanking a working one. `EnvironmentFile=-` tolerates
         # ABSENT and UNREADABLE but NOT empty-valued, and the installer's shape check accepts a
         # bare `KEY=` (measured), so this is the layer that actually holds that line.
@@ -102,7 +115,7 @@ else
   CRED_FILE_STATE=absent
 fi
 
-# Sentry destination pin (#7873 Rule D drawdown). The seven Sentry POSTs below forward
+# Sentry destination pin (#7873 Rule D drawdown). Every Sentry POST below forwards
 # SENTRY_PUBLIC_KEY to "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/", and both
 # halves are env-settable. A value outside the shape Sentry issues (measured against Doppler prd,
 # 2026-09-15) is dropped, which disables the best-effort Sentry arm (every site is guarded on
@@ -137,18 +150,32 @@ fi
 # image, which is the artifact under verification) with `--offline` so no live
 # Fulcio/Rekor/TUF egress is needed. (`--offline` is deprecated-but-frozen under the
 # pinned cosign SHA — SOLEUR-DEBT below ties migration to the next SHA bump.)
-# Identity is pinned to the reusable release workflow on main/release-tags ONLY — an
-# intra-repo branch/tag signature must NOT verify (a loose `refs/(heads|tags)/.+`
-# would accept attacker-branch RCE).
+# Identity is pinned to the reusable release workflow on main ONLY — an intra-repo branch/tag
+# signature must NOT verify (a loose `refs/(heads|tags)/.+` would accept attacker-branch RCE).
+# #8609 (CTO ruling (b)): rc 0 from this verify is what hands the GitHub App key to an image, so
+# the SAN alone is not enough — it names the REUSABLE workflow's ref, which a branch run satisfies
+# by calling `reusable-release.yml@main`, and the former `refs/tags/v[0-9].+` arm admitted any
+# `v*` tag a branch can push. COSIGN_WORKFLOW_REF / COSIGN_WORKFLOW_REPOSITORY add the verifier-side
+# pin on the CALLER's run: Fulcio's GitHub Workflow Ref (OID 1.3.6.1.4.1.57264.1.6) and Repository
+# (…1.5) extensions, compared exactly by cosign v3.1.1 (`--certificate-github-workflow-ref`,
+# `--certificate-github-workflow-repository`; pkg/cosign/verify.go validateCertExtensions). One
+# verify serves both the deploy and the key decision. Accepted consequence: an image signed only
+# from a tag ref now reads as unverified (rc 3 in WARN: it runs, with NO App key; ENFORCE aborts).
 # SOURCE (#8714 step 5.3b-iii): gcr.io/projectsigstore is the Sigstore project's own registry and
 # serves the SAME manifest digest as the former ghcr.io/sigstore/cosign/cosign ref — same image ID,
 # same bytes (measured 2026-09-28: an anonymous pull under COSIGN_ANON_CONFIG runs v3.1.1 and both
 # refs resolve to one local image). The move retires this host's last ghcr.io pull; the digest pin,
 # not the registry, is the trust anchor. A pull failure from gcr.io classifies as cosign_absent below.
 readonly COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
-readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@(refs/heads/main|refs/tags/v[0-9].+)$'
+readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@refs/heads/main$'
+readonly COSIGN_WORKFLOW_REF="refs/heads/main"
+readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/soleur"
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
-readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enforce (soak-gated fast-follow)
+IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-enforce}" # enforce (default since #6129, after the #6122 zot soak) | warn (override only)
+# #6129: fail CLOSED on anything but the two known values. The consumers test `== "enforce"`, so a
+# typo such as `ENFORCE` or `enfrce` would otherwise run in warn mode without a word.
+case "$IMAGE_VERIFY_MODE" in enforce|warn) ;; *) IMAGE_VERIFY_MODE=enforce ;; esac
+readonly IMAGE_VERIFY_MODE
 # SOLEUR-DEBT(#6005): cosign `--offline` is deprecated (removed in cosign v4). It is
 # inert under the pinned SHA (v3.1.1). Upgrade trigger: the next COSIGN_IMAGE SHA
 # bump — migrate to the `--bundle`+`--trusted-root` new-bundle-format path (verify
@@ -389,6 +416,18 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
+# #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
+# /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
+# check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
+GITHUB_APP_KEY_PROBE_MJS="${GITHUB_APP_KEY_PROBE_MJS:-/app/scripts/github-app-key-probe.mjs}"
+# #8609 (c): the last image digest this host verified under the main-pinned cosign identity
+# (verify_image_signature rc 0). The fresh-boot overlay (soleur-host-bootstrap.sh
+# github_app_key_boot_finish) hands the App key to the Terraform-pinned image only when its digest
+# equals this record. On the durable, deploy-owned /mnt/data volume (the SANDBOX_CANARY_STATE_FILE
+# precedent below), written 0600: webhook.service runs ci-deploy as `deploy` under
+# ProtectSystem=strict, so a root-owned /var/lib path is not writable here, and a tmpfs one would
+# never survive to the only boot that reads it (a replaced host re-attaches this volume).
+GITHUB_APP_KEY_VERIFIED_REF_FILE="${GITHUB_APP_KEY_VERIFIED_REF_FILE:-/mnt/data/github-app-key-verified-ref}"
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The host seccomp profile
 # is delivered by terraform_data.docker_seccomp_config; the RUNNING container only
 # loads it at `docker run` (--security-opt seccomp=…). To let apply-deploy-pipeline-fix.yml
@@ -415,6 +454,15 @@ START_TS=$(date +%s)
 COMPONENT=""
 IMAGE=""
 TAG=""
+# #8609: the probe's closed `rejected` sub-reason (github-app-key-probe.mjs REJECT_REASONS, plus
+# no_verdict when the exec produced no verdict line, unspecified for a bare `rejected` line). Reset like the three fields at the top.
+GITHUB_APP_KEY_PROBE_REASON=""
+
+# _gak_enum <value> <a|b|…>: <value> when it is one of the alternatives, else `invalid`. write_state
+# splices these fields into JSON unescaped, so only a closed-enum value may reach it.
+_gak_enum() {
+  if [[ -n "$1" && "|$2|" == *"|$1|"* ]]; then printf '%s' "$1"; else printf 'invalid'; fi
+}
 
 # write_state always returns 0 so a failure inside state-writing (e.g. disk-full)
 # never converts an explicit failure reason into an "unhandled" trap on re-entry.
@@ -428,10 +476,22 @@ write_state() {
     logger -t "$LOG_TAG" "write_state: mktemp failed for STATE_FILE=$STATE_FILE"
     return 0
   }
+  # #8609: the GitHub App key fields ride only a deploy that reached the overlay (an ABSENT key =
+  # never ran, the cat-deploy-state convention). Each is checked against its closed enum here, so
+  # an unexpected value is written as `invalid`, never spliced into the JSON.
+  local gak=""
+  if [[ -n "${GITHUB_APP_KEY_FETCH:-}" ]]; then
+    gak=",\"github_app_key_source\":\"$(_gak_enum "${GITHUB_APP_KEY_SOURCE:-}" 'prd|isolated')\""
+    gak+=",\"github_app_key_fetch\":\"$(_gak_enum "$GITHUB_APP_KEY_FETCH" 'no_token|env_hijack|unverified_image|failed|merge_failed|ok')\""
+    gak+=",\"github_app_key_probe\":\"$(_gak_enum "${GITHUB_APP_KEY_PROBE:-}" 'not_run|missing|ok|rejected|transport|absent')\""
+    if [[ -n "${GITHUB_APP_KEY_PROBE_REASON:-}" ]]; then
+      gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
+    fi
+  fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -653,6 +713,102 @@ cosign_verify_event() {
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "IMAGE_VERIFY: Sentry POST failed"
   fi
+}
+
+# image_freshness_event <result> <ref> <expected> <actual> <detail>: loud, no-SSH page when the
+# pre-swap freshness check aborts a web deploy (#6428). Every result it is called with ABORTS the
+# deploy, so every event is level=error; `freshness_result` discriminates the cause in one event:
+#   version_mismatch — the image was built as another version (the stale-but-signed zot image);
+#   version_absent   — the image carries no usable BUILD_VERSION (missing, empty or `dev`);
+#   version_ambiguous — the image config carries more than one BUILD_VERSION entry;
+#   inspect_failed   — `docker inspect` of the ref about to be run failed.
+# <actual> comes from the image config, so it is DISPLAYED only through _freshness_display (a
+# bounded, printable shape) — a control character or an oversized value never reaches journald
+# or the Sentry payload, and cannot E2BIG the logger/jq argv and silence the page.
+# Paged by sentry_alert.image_freshness_mismatch (issue-alerts.tf, op == image-freshness). Tagged
+# host_id so the host is attributable from Sentry alone. Best-effort + env-guarded, mirrors
+# cosign_verify_event. Fail-open under set -e.
+_freshness_display() {
+  if [[ "${1:-}" =~ ^[0-9A-Za-z.+-]{1,64}$ ]]; then printf '%s' "$1"; else printf '<invalid:len=%d>' "${#1}"; fi
+}
+
+image_freshness_event() {
+  local result="$1" ref="$2" expected="$3" actual detail="${5:-}"
+  actual="$( [[ -z "${4:-}" ]] || _freshness_display "$4" )"
+  logger -t "$LOG_TAG" "IMAGE_FRESHNESS_FAIL: result=$result ref=$ref expected=$expected actual=${actual:-<none>} detail=$detail"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg r "$result" --arg ref "$ref" --arg e "$expected" --arg a "$actual" \
+      --arg d "$detail" --arg h "${HOST_ID:-}" \
+      '{message: ("image freshness " + $r + ": deploy of " + $e + " refused, image is " + (if $a == "" then "<no BUILD_VERSION>" else $a end)),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-freshness", freshness_result: $r, host_id: $h},
+        extra: {ref: $ref, expected: $e, actual: $a, detail: $d}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_FRESHNESS: Sentry POST failed"
+  fi
+}
+
+# verify_image_freshness <ref> <tag>: the pre-swap freshness gate (#6428). A zot that serves an OLD
+# but validly signed image for the requested tag passes verify_image_signature — the old image IS
+# validly signed — and before this check nothing noticed until the release workflow's post-deploy
+# /health version check, after the stale container was already serving (and never on web-2, which
+# serves no ingress). The release build bakes `ENV BUILD_VERSION=<next>` into the image it tags
+# `v<next>` (reusable-release.yml → apps/web-platform/Dockerfile), and every deploy caller sends
+# `v<BUILD_VERSION>`, so `BUILD_VERSION == ${tag#v}` holds for every correctly served image: a
+# release, a rollback to an older release, a seccomp same-version reload, a local-cache rescue.
+#
+# <ref> is VERIFIED_REF — the ref the canary and production run next — never "$IMAGE:$TAG", which
+# can be re-pointed after the verify. The value comes from the image's own config, so it is bound
+# to those bytes; it is covered by the cosign signature only when the verify passed (WARN mode also
+# runs an unverified digest, and the tag on inspect_failed).
+#
+# FAILS CLOSED: returns 1 (caller aborts, the OLD container stays live) on a mismatch AND whenever
+# the version cannot be established (inspect failure, no BUILD_VERSION line, empty, or `dev`), and
+# sets the global FRESHNESS_ABORT_REASON to the deploy-state reason: `image_stale_version` for a
+# mismatch, `image_version_unverifiable` otherwise (incl. a config with two BUILD_VERSION entries,
+# where the value the process sees is not decidable from here). Every
+# image zot can serve for a v-tag has carried BUILD_VERSION since 2026-03, so the closed arm costs
+# no legitimate deploy. Emits `IMAGE_FRESHNESS: ok …` on success — the Better Stack liveness marker
+# showing a host actually ran the check (a host still on an older ci-deploy.sh, e.g. web-2 until its
+# next replace per #9151, emits none). The comparison is exact string equality on the WHOLE key.
+verify_image_freshness() {
+  local ref="$1" tag="$2" expected="${2#v}" env_out="" rc=0 actual="" count=0 line
+  FRESHNESS_ABORT_REASON="image_version_unverifiable"
+  # Capture first, THEN parse: a `done < <(docker inspect …)` loop would lose the exit code, and a
+  # failed inspect would read as "no BUILD_VERSION line". `200>&-` closes the FD-200 deploy lock
+  # for this child (#5062). `--type image`: a container sharing the ref's name would otherwise win,
+  # and its Config.Env carries runtime -e/--env-file values, not what the image was built as.
+  env_out="$(docker inspect --type image --format '{{range .Config.Env}}{{println .}}{{end}}' "$ref" 2>/dev/null 200>&-)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    image_freshness_event "inspect_failed" "$ref" "$expected" "" "docker inspect rc=$rc"
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ "$line" == BUILD_VERSION=* ]]; then
+      actual="${line#BUILD_VERSION=}"; count=$((count + 1))
+    fi
+  done <<< "$env_out"
+  if [[ "$count" -gt 1 ]]; then
+    image_freshness_event "version_ambiguous" "$ref" "$expected" "" "the image config carries $count BUILD_VERSION entries"
+    return 1
+  fi
+  if [[ -z "$actual" || "$actual" == "dev" ]]; then
+    image_freshness_event "version_absent" "$ref" "$expected" "$actual" "the image carries no released BUILD_VERSION, so its version cannot be checked against $tag"
+    return 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    FRESHNESS_ABORT_REASON="image_stale_version"
+    image_freshness_event "version_mismatch" "$ref" "$expected" "$actual" "the registry served an image built as another version for $tag (stale-but-signed)"
+    return 1
+  fi
+  FRESHNESS_ABORT_REASON=""
+  logger -t "$LOG_TAG" "IMAGE_FRESHNESS: ok ref=$ref expected=$expected actual=$actual"
+  return 0
 }
 
 # _pull_result_is_auth_denied <stderr-content>: the SINGLE source of truth for
@@ -2241,10 +2397,12 @@ _cosign_anon_cleanup() {
 # identity-pinned) via the SHA-pinned cosign container. Echoes on stdout the ref
 # the caller should RUN: the verified digest on success (TOCTOU-safe), or the
 # original tag as a fail-open fallback in WARN mode. Emits a discriminating
-# Sentry event on every failure. Return: 0 in WARN mode always (never blocks);
-# in ENFORCE mode, 1 on any verify failure so the caller keeps the OLD container
-# live (downtime-safe). The mode branch is the ONLY behavioural difference — the
-# telemetry fires identically in both.
+# Sentry event on every failure. Return (#8609):
+#   0 = verified: stdout is the verified digest ref (the ONLY rc that may hand the GitHub App key);
+#   3 = WARN fail-open: stdout is runnable but NOT verified — run it, never hand it the key;
+#   1 = ENFORCE failure: the caller keeps the OLD container live (downtime-safe).
+# Never `if ! verify_image_signature …` or `… || true`: both collapse 3 into 0 or 1. The mode branch
+# is the ONLY behavioural difference — the telemetry fires identically in both.
 verify_image_signature() {
   local image_tag="$1" repo_digest err
   err="$(mktemp 2>/dev/null || echo /tmp/cosign-verify.err)"
@@ -2261,20 +2419,20 @@ verify_image_signature() {
     printf '%s' "$image_tag" # fail-open: run the tag (WARN); ENFORCE aborts below
     rm -f "$err" 2>/dev/null || true
     [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
-    return 0
+    return 3 # WARN fail-open: runnable but NOT verified (#8609 — no GitHub App key for it)
   fi
-  # Verify via the pinned cosign container (ADR-087 Design B′). The app image is a
-  # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
-  # through the host's unrestricted egress (no ghcr.io in the container allowlist),
-  # and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
+  # Verify via the pinned cosign container (ADR-087 Design B′). Since #8036 1c the image
+  # and its OCI-attached .sig are served by zot on the private net (no host-side GHCR
+  # pull remains): `--network host` routes the .sig fetch through the host network, so
+  # the verifier also resolves names through the host's /etc/hosts (where #9169 denies
+  # ghcr.io), and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
   # zot_gate_and_login) is mounted :ro so cosign can authenticate that fetch.
   # Trust is the locally-pinned trusted_root.json (mounted :ro) with `--offline`, so
   # no live Fulcio/Rekor/TUF egress is needed. `docker pull` of the image does NOT
-  # pull the .sig referrer, so the fetch (host egress) is still required.
+  # pull the .sig referrer, so the .sig fetch from zot is still required.
   # Edge B (#6122): a zot-pulled digest lives on plain-HTTP zot on the private net, so
-  # the .sig referrer fetch needs --allow-insecure-registry. When the pull fell back to
-  # GHCR the digest is a ghcr.io ref and the flag stays off — image+auth+sig move
-  # together. The zot auths entry was written into $GHCR_DOCKER_CONFIG by
+  # the .sig referrer fetch needs --allow-insecure-registry (off for any digest not on zot).
+  # The zot auths entry was written into $GHCR_DOCKER_CONFIG by
   # zot_gate_and_login, so the mounted :ro config authenticates the fetch — PROVIDED cosign
   # reads it. #8037: the pinned image runs as uid 65532 (home /home/nonroot) and sets neither
   # HOME nor DOCKER_CONFIG, so the original `/root/.docker/config.json` mount was never read and
@@ -2341,16 +2499,33 @@ verify_image_signature() {
   # host, and the classifier below reads stderr, so an unrelated verify failure on a first pull
   # would read as `cosign_absent`. Real pull errors still print. `200>&-` closes the FD-200 deploy
   # lock for this child (#5062): its implicit pull can hang like any other.
-  if "${verify_env[@]}" docker run --rm --network host --quiet \
-       --user "$cosign_user" -e "DOCKER_CONFIG=$cosign_cfg_dir" \
-       -v "$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro" \
-       -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
-       "$COSIGN_IMAGE" verify --offline \
-       ${zot_insecure:+--allow-insecure-registry} \
-       --trusted-root=/etc/cosign/trusted_root.json \
-       --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
-       --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
-       "$repo_digest" >/dev/null 2>"$err" 200>&-; then
+  # #6129: under ENFORCE a verify failure fails the release, and `docker image prune -af` removes the
+  # verifier image before every deploy, so each verify re-pulls $COSIGN_IMAGE from gcr.io. A
+  # daemon-side pull failure (the transient network/rate-limit class the cosign_absent classifier
+  # below matches) gets ONE retry. A cosign-side failure (unsigned, wrong identity, bad signature)
+  # is never retried.
+  local _v_attempt _v_ok=0
+  for _v_attempt in 1 2; do
+    if "${verify_env[@]}" docker run --rm --network host --quiet \
+         --user "$cosign_user" -e "DOCKER_CONFIG=$cosign_cfg_dir" \
+         -v "$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro" \
+         -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
+         "$COSIGN_IMAGE" verify --offline \
+         ${zot_insecure:+--allow-insecure-registry} \
+         --trusted-root=/etc/cosign/trusted_root.json \
+         --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
+         --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
+         --certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF" \
+         --certificate-github-workflow-repository="$COSIGN_WORKFLOW_REPOSITORY" \
+         "$repo_digest" >/dev/null 2>"$err" 200>&-; then
+      _v_ok=1; break
+    fi
+    [[ "$_v_attempt" == "1" ]] || break
+    grep -qiE '^docker: Error response from daemon: .*(toomanyrequests|received unexpected HTTP status: 5[0-9][0-9]|no such host|dial tcp|i/o timeout|connection reset by peer|TLS handshake timeout|Client\.Timeout|context deadline exceeded)' "$err" 2>/dev/null || break
+    logger -t "$LOG_TAG" "IMAGE_VERIFY_RETRY: verifier image pull failed; retrying once (#6129)"
+    sleep 5
+  done
+  if [[ "$_v_ok" == "1" ]]; then
     logger -t "$LOG_TAG" "IMAGE_VERIFY: ok ref=$repo_digest"
     printf '%s' "$repo_digest" # run the VERIFIED digest (TOCTOU-safe)
     rm -f "$err" 2>/dev/null || true
@@ -2362,7 +2537,7 @@ verify_image_signature() {
   local result="verify_failed" tail
   tail="$(tail -c 400 "$err" 2>/dev/null || true)"
   if   printf '%s' "$tail" | grep -qiE 'no matching signatures|no signatures found'; then result="unsigned"
-  elif printf '%s' "$tail" | grep -qiE 'certificate identity|none of the expected identities|subject.*mismatch'; then result="wrong_identity"
+  elif printf '%s' "$tail" | grep -qiE 'certificate identity|none of the expected identities|subject.*mismatch|expected GitHub Workflow'; then result="wrong_identity"
   elif printf '%s' "$tail" | grep -qiE 'rekor|tlog|transparency|tuf'; then result="rekor_unreachable"
   elif printf '%s' "$tail" | grep -qiE 'Unable to find image|manifest unknown|pull access denied|no such image'; then result="cosign_absent"
   # #8714: a daemon-side PULL failure of the verifier image (gcr.io rate limit or 5xx, DNS, TLS, reset, timeout).
@@ -2378,7 +2553,9 @@ verify_image_signature() {
   rm -f "$err" 2>/dev/null || true
   _cosign_anon_cleanup "$anon_dir"
   [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
-  return 0
+  # 3, not 0: the digest is immutable but its signature did NOT verify, so a digest-shaped ref alone
+  # cannot tell the caller "signed" — the #8609 overlay hands the App key only on rc 0.
+  return 3
 }
 
 # run_faithful_sandbox_canary: NON-BLOCKING dark-launch (#5875 / ADR-079). Runs
@@ -2514,6 +2691,198 @@ resolve_env_file() {
   return 0
 }
 
+# >>> github-app-key-overlay >>>
+# Byte-identical in ci-deploy.sh and soleur-host-bootstrap.sh (inside soleur-doppler-download);
+# ci-deploy.test.sh Guard 7 compares the two. POSIX sh, because the boot copy runs under dash.
+# Contract (#8609): knowledge-base/project/plans/
+# 2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md §3.2-§3.4, as amended by
+# the CTO ruling on PR #9263 (b)-(e). Each file defines its own emitter (<classification> <level>
+# [detail]); detail is numeric or enum k=v only — never Doppler stderr, key or token bytes.
+#
+# overlay_github_app_key <env-file> <verified-ref>: <verified-ref> is EMPTY unless the caller proved,
+# in this same run, that the image it is about to run passed the main-pinned cosign verify
+# (ci-deploy: verify_image_signature rc 0; boot: the digest matches the last one ci-deploy
+# verified). Anything but an exact `[<repo>@]sha256:<64 hex>` gets no key. Sets
+# GITHUB_APP_KEY_SOURCE and GITHUB_APP_KEY_FETCH. The merge is atomic: a sibling temp file (named
+# in _gak_tmp while it exists, so the caller's cleanup trap covers it) is renamed over <env-file>.
+# Returns 0, or 1 on the runtime-hijack refusal, or 2 when the merge failed (<env-file> is then
+# untouched) — both non-zero returns abort the deploy and the boot.
+#
+# Runtime-hijack refusal: a prd name in one of these classes can run code, or re-route TLS/egress,
+# inside a process that holds the key (node, git, a shell, a TLS stack), so the key is refused to
+# the whole env rather than to one name. The classes, not a name list (#8609 d): NODE_* (except
+# NODE_ENV), LD_*, GLIBC_*, GIT_* (except the app's own GIT_DATA_/GIT_PROVISION_/GIT_REMOVE_/
+# GIT_TRANSPORT_ config, none of which git reads), BASH_*, ENV, PATH, SHELL, HOME, TMPDIR, SSL_*,
+# OPENSSL_*, CURL_*, *_PROXY, *_proxy, npm_config_*, NPM_CONFIG_*, PYTHON*, PERL*. A bare NAME
+# line counts too (docker --env-file then copies the docker CLI's own value).
+overlay_github_app_key() {
+  GITHUB_APP_KEY_SOURCE=prd
+  GITHUB_APP_KEY_FETCH=no_token
+  _gak_tmp=
+  if [ ! -f "$1" ] || [ ! -r "$1" ]; then
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=read"
+    return 2
+  fi
+  _gak_hij=$(grep -E '^[[:space:]]*(NODE_[A-Za-z0-9_]*|LD_[A-Za-z0-9_]*|GLIBC_[A-Za-z0-9_]*|GIT_[A-Za-z0-9_]*|BASH_[A-Za-z0-9_]*|ENV|PATH|SHELL|HOME|TMPDIR|SSL_[A-Za-z0-9_]*|OPENSSL_[A-Za-z0-9_]*|CURL_[A-Za-z0-9_]*|[A-Za-z0-9_]*_PROXY|[A-Za-z0-9_]*_proxy|npm_config_[A-Za-z0-9_]*|NPM_CONFIG_[A-Za-z0-9_]*|PYTHON[A-Za-z0-9_]*|PERL[A-Za-z0-9_]*)[[:space:]]*(=|$)' "$1" \
+    | grep -cvE '^[[:space:]]*(NODE_ENV|GIT_(DATA|PROVISION|REMOVE|TRANSPORT)_[A-Za-z0-9_]*)[[:space:]]*(=|$)') || _gak_hij=0
+  if [ "$_gak_hij" -ne 0 ]; then
+    GITHUB_APP_KEY_FETCH=env_hijack
+    github_app_key_emit env_hijack error "names=$_gak_hij"
+    return 1
+  fi
+  if [ -z "${GITHUB_APP_DOPPLER_TOKEN:-}" ]; then
+    github_app_key_emit no_token info
+    return 0
+  fi
+  _gak_ref_ok=0
+  case "${2:-}" in
+    '' | *[!A-Za-z0-9@:/._-]*) ;;
+    *) if printf '%s\n' "$2" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;
+  esac
+  if [ "$_gak_ref_ok" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=unverified_image
+    github_app_key_emit unverified_image error
+    return 0
+  fi
+  # Bounded retry, like the prd download's: a transient Doppler error must not cost the key.
+  # Only a non-zero exit is retried; a wrong key-line count is a deterministic answer.
+  # The two knobs are test seams (digits only; anything else falls back to the default).
+  _gak_max=${GITHUB_APP_KEY_FETCH_ATTEMPTS:-3}
+  _gak_bo=${GITHUB_APP_KEY_FETCH_BACKOFF:-2}
+  case "$_gak_max" in '' | *[!0-9]*) _gak_max=3 ;; esac
+  case "$_gak_bo" in '' | *[!0-9]*) _gak_bo=2 ;; esac
+  _gak_try=1
+  while :; do
+    _gak_rc=0
+    _gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout -k 5 20 doppler secrets download --no-file --format docker --project soleur-github-app --config prd 2>/dev/null) || _gak_rc=$?
+    if [ "$_gak_rc" -eq 0 ] || [ "$_gak_try" -ge "$_gak_max" ]; then break; fi
+    sleep $((_gak_try * _gak_bo))
+    _gak_try=$((_gak_try + 1))
+  done
+  _gak_n=$(printf '%s\n' "$_gak_dl" | grep -cE '^GITHUB_APP_PRIVATE_KEY=.') || _gak_n=0
+  if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=failed
+    github_app_key_emit fetch_failed error "rc=$_gak_rc key_lines=$_gak_n len=${#_gak_dl} attempts=$_gak_try"
+    unset _gak_dl
+    return 0
+  fi
+  _gak_line=$(printf '%s\n' "$_gak_dl" | grep -E '^GITHUB_APP_PRIVATE_KEY=.') || _gak_line=
+  _gak_grc=0
+  _gak_rest=$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' "$1") || _gak_grc=$?
+  # grep -v: rc 1 = every line was a key line (an empty rest is fine); rc 2+ = a read error.
+  if [ "$_gak_grc" -le 1 ] && _gak_tmp=$(mktemp "$1.gak.XXXXXX") \
+    && printf '%s\n%s\n' "$_gak_rest" "$_gak_line" > "$_gak_tmp" && mv -f "$_gak_tmp" "$1"; then
+    _gak_tmp=
+  else
+    if [ -n "$_gak_tmp" ]; then rm -f "$_gak_tmp"; fi
+    _gak_tmp=
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"
+    unset _gak_dl _gak_line _gak_rest
+    return 2
+  fi
+  GITHUB_APP_KEY_SOURCE=isolated
+  GITHUB_APP_KEY_FETCH=ok
+  github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"
+  unset _gak_dl _gak_line _gak_rest
+  return 0
+}
+
+# github_app_key_present <env-file>: exactly one GITHUB_APP_PRIVATE_KEY line, neither empty nor the
+# eviction sentinel — the no-network half of the key check.
+github_app_key_present() {
+  [ "$(grep -c '^GITHUB_APP_PRIVATE_KEY=' "$1" 2>/dev/null)" = 1 ] || return 1
+  ! grep -qxE 'GITHUB_APP_PRIVATE_KEY=(EVICTED_SEE_ADR_241)?' "$1"
+}
+# <<< github-app-key-overlay <<<
+
+# github_app_key_emit <classification> <level> [detail]: ci-deploy.sh's half of the shared overlay
+# block's emitter contract (the boot path defines its own). journald always; a Sentry event
+# (feature=ci-deploy, op=github-app-key) for warning/error. Best-effort, fail-open under set -e.
+github_app_key_emit() {
+  local cls="$1" level="$2" detail="${3:-}" payload
+  logger -t "$LOG_TAG" "GITHUB_APP_KEY: class=$cls level=$level${detail:+ $detail}" || true
+  [[ "$level" == info ]] && return 0
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    payload="$(jq -nc --arg c "$cls" --arg l "$level" --arg d "$detail" --arg t "${TAG:-}" \
+      '{message: ("github app key " + $c), level: $l, platform: "other", logger: "ci-deploy",
+        tags: {feature: "ci-deploy", op: "github-app-key", classification: $c},
+        extra: {detail: $d, tag: $t}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "GITHUB_APP_KEY: Sentry POST failed" || true
+  fi
+  return 0
+}
+
+# record_github_app_key_verified_ref <digest-ref>: (#8609 c) persist the digest verify_image_signature
+# just verified under the main-pinned identity, for the fresh-boot overlay's equality check (see
+# GITHUB_APP_KEY_VERIFIED_REF_FILE). Atomic (mktemp 0600 beside the target, then mv). Best-effort:
+# a failed write only means a later fresh boot of this host gets no key (loud there), so it never
+# fails the deploy.
+record_github_app_key_verified_ref() {
+  local tmp=""
+  if tmp="$(mktemp "${GITHUB_APP_KEY_VERIFIED_REF_FILE}.XXXXXX" 2>/dev/null)" \
+    && chmod 600 "$tmp" && printf '%s\n' "$1" > "$tmp" && mv -f "$tmp" "$GITHUB_APP_KEY_VERIFIED_REF_FILE"; then
+    return 0
+  fi
+  if [[ -n "$tmp" ]]; then rm -f "$tmp" 2>/dev/null || true; fi
+  github_app_key_emit verified_ref_unrecorded info
+  return 0
+}
+
+# github_app_key_canary_check: the key check before the swap (#8609 plan §3.3), run against the
+# CANARY container. Presence first (no network), then acceptance: the baked probe signs an App JWT
+# from the canary's own env and calls GET /app. Returns 1 with CANARY_FAIL_REASON set to refuse
+# promotion — the existing rollback arm then keeps the running container serving. `transport`
+# (GitHub unreachable or rate-limited) promotes with a warning; a hotfix must not wait on GitHub.
+# `absent` (an image without the probe) promotes too, but at warning: after this PR bakes the probe,
+# a NEW image without it is a build regression that silently disables the acceptance half.
+#
+# The probe runs under `env -i` with absolute paths (#8609 d-2): only GITHUB_APP_ID and
+# GITHUB_APP_PRIVATE_KEY reach node, so no prd-set PATH / NODE_* / LD_* / proxy / CA variable can
+# pick the interpreter or hook the TLS stack. The values are expanded INSIDE the container from its
+# own env (the single-quoted script), never passed on this host's docker argv.
+github_app_key_canary_check() {
+  local out rc=0 ctx="source=${GITHUB_APP_KEY_SOURCE:-} fetch=${GITHUB_APP_KEY_FETCH:-}"
+  GITHUB_APP_KEY_PROBE_REASON=""
+  if ! github_app_key_present "$ENV_FILE"; then
+    GITHUB_APP_KEY_PROBE=missing
+    github_app_key_emit key_missing error "$ctx"
+    CANARY_FAIL_REASON="canary_github_app_key_missing"
+    return 1
+  fi
+  # `[ -f … ] || exit 127`: `node <absent file>` exits 1, the rejected class, and an image older
+  # than the probe must read as absent (127) instead. stderr is discarded, never forwarded.
+  out="$(docker exec soleur-web-platform-canary /bin/sh -c '[ -f "$1" ] || exit 127; exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' \
+    github-app-key-probe "$GITHUB_APP_KEY_PROBE_MJS" 2>/dev/null)" || rc=$?
+  # Anchored over the WHOLE output: exactly one line from the enum (a `rejected` line may carry
+  # the probe's closed reason), or no verdict at all.
+  if [[ "$out" =~ ^github_app_key_probe=(ok|transport)$ ]]; then
+    GITHUB_APP_KEY_PROBE="${BASH_REMATCH[1]}"
+  elif [[ "$out" =~ ^github_app_key_probe=rejected(\ reason=(no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other))?$ ]]; then
+    GITHUB_APP_KEY_PROBE=rejected
+    GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"
+  elif (( rc == 127 )); then
+    GITHUB_APP_KEY_PROBE=absent
+  else
+    GITHUB_APP_KEY_PROBE=rejected
+    GITHUB_APP_KEY_PROBE_REASON=no_verdict
+  fi
+  case "$GITHUB_APP_KEY_PROBE" in
+    ok)        github_app_key_emit probe_ok info "$ctx rc=$rc"; return 0 ;;
+    transport) github_app_key_emit probe_transport warning "$ctx rc=$rc"; return 0 ;;
+    absent)    github_app_key_emit probe_absent warning "$ctx rc=$rc"; return 0 ;;
+  esac
+  github_app_key_emit probe_rejected error "$ctx rc=$rc reason=$GITHUB_APP_KEY_PROBE_REASON"
+  CANARY_FAIL_REASON="canary_github_app_key_rejected"
+  return 1
+}
+
 # Verify inngest-server is healthy after restart (#4538), with an ADVISORY
 # cron-plan check (#4650 / AC9, reframed #5159).
 # /health is the HARD liveness gate: returns 1 if the server never became
@@ -2604,7 +2973,7 @@ verify_inngest_health() {
   # server's --poll-interval self-heal). Best-effort poll /v0/gql for a
   # re-armed cron trigger; if none appears, log an advisory and STILL succeed
   # (the Sentry cron monitors are the real safety net). GET /v1/functions is an
-  # unregistered 404 in inngest v1.19.4 (#5520); the GraphQL `functions` field
+  # unregistered 404 in inngest v1.45.1 (#5520); the GraphQL `functions` field
   # on /v0/gql returns triggers as {type,value} objects — cron triggers carry
   # type="CRON". Dependency-free substring match on `"type":"CRON"` in the
   # minified GQL response (jq is not a host dependency).
@@ -2873,7 +3242,8 @@ fi
 # was an already-revoked GHCR read PAT. Note web-2's text does not match either arm in this file
 # even at HEAD, so it is running a ci-deploy.sh that predates main and will not emit this marker
 # at all; that host's stale-script and unprovisioned-ZOT_REGISTRY_URL state is #7103 B4, filed
-# separately and deliberately not widened into this PR.
+# separately and deliberately not widened into this PR. (#9151 later delivered the current
+# script to web-2 through terraform_data.deploy_pipeline_fix_web2 — the B4 follow-through.)
 #
 # Emitted AFTER the credential-read block and BEFORE the flock, so it reports credential state
 # at the point of USE rather than at parse time. Four fields, deliberately not six: `peers` is
@@ -2887,8 +3257,12 @@ fi
 # up here as cred_file=present doppler_token=absent.
 _ci_deploy_script_sha=unknown
 if [ -r "${BASH_SOURCE[0]:-/nonexistent}" ]; then
-  _sha_out="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -c1-12)" || _sha_out=""
-  if [ -n "$_sha_out" ]; then _ci_deploy_script_sha="$_sha_out"; fi
+  # Compute the full sha256 once — the 12-char script_sha slices it, and the
+  # DEPLOY_SCRIPT_SHA marker below emits it whole.
+  _ci_deploy_script_sha_full="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -d' ' -f1 || true)"
+  if [ -n "$_ci_deploy_script_sha_full" ]; then
+    _ci_deploy_script_sha="$(printf '%s' "$_ci_deploy_script_sha_full" | cut -c1-12)"
+  fi
 fi
 # `if`, never `[ -n … ] && var=…`: as a bare trailing command the latter exits 1 when the test
 # is false, which under this script's `set -e` aborts the deploy. That exact trap is documented
@@ -2896,7 +3270,42 @@ fi
 _dt_state=absent
 if [ -n "${DOPPLER_TOKEN:-}" ]; then _dt_state=present; fi
 logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-unset} script_sha=${_ci_deploy_script_sha} cred_file=${CRED_FILE_STATE} doppler_token=${_dt_state}" 2>/dev/null || true
-unset _sha_out _dt_state _ci_deploy_script_sha
+# #9151 — DEPLOY_SCRIPT_SHA: the full sha256 of THIS script's bytes on THIS host,
+# emitted once per invocation so Better Stack rows prove which ci-deploy.sh each
+# web host actually runs. scripts/check-deploy-script-parity.sh compares the
+# newest row per host_name against the repo sha — the no-SSH parity read. The
+# INVOCATION line keeps its 12-char script_sha (closed format); this marker is
+# the parity anchor, so it is full-length and stable: `DEPLOY_SCRIPT_SHA sha256=<64hex>`
+# or `sha256=unknown` when the source file is unreadable (which also prevents a
+# deploy, making the line unreachable — kept for completeness).
+logger -t "$LOG_TAG" "DEPLOY_SCRIPT_SHA sha256=${_ci_deploy_script_sha_full:-unknown}" 2>/dev/null || true
+unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
+
+# #9169 — GHCR_DENY: is this host's ghcr.io hosts-file deny in force? Same semantics as the
+# registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
+# sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
+# (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
+# in server.tf proves pkg-containers.githubusercontent.com too. Fail-open: the probe is bounded by
+# `timeout 5` (this script already needs coreutils timeout; a missing one reads `unknown`) and can
+# never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
+# (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.
+_ghcr_blocked_state() {
+  local addrs=""
+  addrs=$(timeout 5 getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u) || addrs=""
+  # A herestring, not `printf | grep -q`: under this script's pipefail an early grep exit could
+  # turn a match into a non-zero pipeline status.
+  if [ -z "$addrs" ]; then
+    echo unknown
+  elif grep -qvxE '0\.0\.0\.0|::' <<<"$addrs"; then
+    echo 0
+  else
+    echo 1
+  fi
+}
+_ghcr_blocked=$(_ghcr_blocked_state 2>/dev/null) || _ghcr_blocked=unknown
+case "$_ghcr_blocked" in 1 | 0 | unknown) ;; *) _ghcr_blocked=unknown ;; esac
+logger -t "$LOG_TAG" "GHCR_DENY ghcr_blocked=$_ghcr_blocked" 2>/dev/null || true
+unset _ghcr_blocked
 
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
@@ -3253,11 +3662,38 @@ case "$COMPONENT" in
     # reused_local_reload cosign breadcrumb (verify_result=reused_local_reload) was already emitted inside
     # pull_image_with_fallback (an intentional amendment to the ADR-087 cosign contract,
     # never the warn-mode fail-open).
+    #
+    # #8609 (plan §3.2 step 2, CTO ruling (e)): GITHUB_APP_KEY_REF is the ref the overlay may hand
+    # the App key to. It has exactly ONE source: the stdout of verify_image_signature in THIS run, on
+    # rc 0 (the main-pinned identity verified). EMPTY on a WARN fail-open (rc 3), whose digest-shaped
+    # ref does not mean "signed", and EMPTY on the local-cache arm: the running image was never
+    # re-verified here and may have been promoted under WARN fail-open, so it gets no key
+    # (`unverified_image`; after R6 the canary then refuses and the running container keeps
+    # serving). Guard 7 row 7.e pins both the single assignment and the cache arm's empty ref.
+    GITHUB_APP_KEY_REF=""
     if [[ -n "${LOCAL_CACHE_VERIFIED_REF:-}" ]]; then
       VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"
-    elif ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
-      logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
-      final_write_state 1 "cosign_verify_failed"
+    else
+      VERIFY_RC=0
+      VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")" || VERIFY_RC=$?
+      if (( VERIFY_RC == 0 )); then
+        GITHUB_APP_KEY_REF="$VERIFIED_REF"
+        record_github_app_key_verified_ref "$VERIFIED_REF"
+      elif (( VERIFY_RC != 3 )); then
+        logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
+        final_write_state 1 "cosign_verify_failed"
+        exit 1
+      fi
+    fi
+
+    # #6428: pre-swap freshness — the image about to run must have been BUILT as the requested
+    # version. Runs on every VERIFIED_REF arm (the verified digest, the WARN-mode tag fallback, and
+    # the local-cache rescue) and
+    # before the plugin seed, the canary and the swap, so a stale-but-signed image never serves.
+    # Fails closed; the OLD container stays live (downtime-safe, like the ENFORCE abort above).
+    if ! verify_image_freshness "$VERIFIED_REF" "$TAG"; then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: image freshness check refused $VERIFIED_REF for $TAG ($FRESHNESS_ABORT_REASON) — keeping previous version"
+      final_write_state 1 "$FRESHNESS_ABORT_REASON"
       exit 1
     fi
 
@@ -3335,16 +3771,31 @@ case "$COMPONENT" in
     # Chain the env-file cleanup with the existing state-writing EXIT trap.
     # Replacing the trap entirely would lose the "unhandled" reason capture.
     # shellcheck disable=SC2064
-    trap 'rc=$?; rm -f "$ENV_FILE"; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
+    # ${_gak_tmp}: the overlay's merge temp file (the shared block names it there while it exists).
+    trap 'rc=$?; rm -f "$ENV_FILE" ${_gak_tmp:+"$_gak_tmp"}; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
 
-    # Compose NODE_OPTIONS by APPENDING our heap cap to any operator-set value
-    # in the Doppler env-file (#5417 review). `-e NODE_OPTIONS=...` on docker run
-    # overrides `--env-file` for the same key, so a bare `-e` would silently drop
-    # a Doppler-provided NODE_OPTIONS (e.g. --enable-source-maps, --dns-result-order).
-    # Our --max-old-space-size comes LAST so it wins if Doppler also set one.
-    DOPPLER_NODE_OPTIONS=$(grep -E '^NODE_OPTIONS=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)
-    PROD_NODE_OPTIONS="${DOPPLER_NODE_OPTIONS:+$DOPPLER_NODE_OPTIONS }--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
-    CANARY_NODE_OPTIONS="${DOPPLER_NODE_OPTIONS:+$DOPPLER_NODE_OPTIONS }--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
+    # #8609 (plan §3.2): overlay the isolated GitHub App key in THIS shell — resolve_env_file runs
+    # in a $(…) subshell, so nothing it set would reach deploy state. After the trap above, so the
+    # cleanup already covers the file the overlay rewrites.
+    GITHUB_APP_KEY_PROBE=not_run
+    GAK_OVERLAY_RC=0
+    overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC=$?
+    if (( GAK_OVERLAY_RC == 1 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the prd env carries a runtime-hijack variable class (GitHub App key overlay refused) — keeping previous version"
+      final_write_state 1 "github_app_key_env_hijack"
+      exit 1
+    elif (( GAK_OVERLAY_RC != 0 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the GitHub App key overlay could not rewrite the env-file — keeping previous version"
+      final_write_state 1 "github_app_key_merge_failed"
+      exit 1
+    fi
+
+    # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
+    # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
+    # retired under #8609: the overlay above refuses any prd env carrying a NODE_* name other than
+    # NODE_ENV, so such a value can never reach this point. Node flags belong in this composition.
+    PROD_NODE_OPTIONS="--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
+    CANARY_NODE_OPTIONS="--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
 
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
@@ -3529,11 +3980,18 @@ case "$COMPONENT" in
       # 128+n = signalled, which is what a process that prints nothing looks like), so losing it
       # would leave the message alone -- and the message was EMPTY both times this fired.
       #
-      # The bwrap argv is deliberately untouched. See the NOTE block above: a prior change added
-      # --unshare-user --proc /proc here and rolled back every web-platform deploy.
+      # The bwrap argv rule, both directions. ADDING flags that diverge from the real SDK argv
+      # (--unshare-user --proc /proc, see the NOTE block above) rolled back every web-platform
+      # deploy. --die-with-parent is deliberately ABSENT: under `docker exec` the process is a
+      # child of the short-lived runc exec parent, and the PR_SET_PDEATHSIG(SIGKILL) that flag
+      # arms races that parent's exit, SIGKILLing a healthy bwrap at startup (rc=137, empty
+      # stderr, container still running -- #8016). The faithful canary keeps the SDK argv,
+      # flag included, from a long-lived node parent. Measurements and the repro loop:
+      # knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md
+      # ci-deploy.test.sh Guard 2 pins the exact probe argv; Guard 1 is a lexical tripwire on the flag.
       BWRAP_RC=0
       BWRAP_T0="$(_now_ms)"
-      BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
+      BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
       BWRAP_T1="$(_now_ms)"
       # Guarded, not `$(( $(_now_ms) - BWRAP_T0 ))`. Two reasons, measured separately:
       #   - a non-numeric operand is NOT fatal here (bash reads `unknown` or `` as a name that
@@ -3552,7 +4010,7 @@ case "$COMPONENT" in
       BWRAP_CSTATE="${BWRAP_CSTATE:-unknown}"
       # Sanitize ONCE, up front: both sinks below egress to Better Stack.
       BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")"
-      # Re-emit on BOTH paths, before the branch. The probe passes ~97.6% of the time, and a
+      # Re-emit on BOTH paths, before the branch. The probe usually passes, and a
       # PASS that still wrote to stderr is the early signal that precedes the next rollback --
       # the old form surfaced that only incidentally, via the same 2>&1 that destroyed it on
       # failure. Moving this into the failure arm would silently swallow it again.
@@ -3602,6 +4060,11 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
+    fi
+
+    # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.
+    if [[ "$CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check; then
+      CANARY_HEALTHY=false
     fi
 
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
@@ -3802,8 +4265,10 @@ case "$COMPONENT" in
     fi
     # Inngest server bootstrap (PR-F follow-up, #3960).
     #
-    # No canary: inngest-server binds loopback only (127.0.0.1:8288/8289) so
-    # there is no external traffic to shadow. The bootstrap script's
+    # No canary: inngest-server binds 0.0.0.0:8288/8289 on the dedicated host
+    # (web-IP-scoped by the host's nftables input chain; the connect gRPC ports
+    # are open intra-subnet on both versions) so there is no PUBLIC traffic to
+    # shadow — traffic arrives from web-host producers only. The bootstrap script's
     # `systemctl is-active` + version-file check at /var/lib/inngest/version
     # provides idempotency; a second deploy of the same $TAG is a ~50ms no-op.
     #

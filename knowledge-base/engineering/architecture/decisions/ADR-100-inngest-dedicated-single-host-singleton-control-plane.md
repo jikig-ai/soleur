@@ -143,7 +143,11 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    (`:8288/v0/gql`, which the spike confirmed is **unauthenticated** in `start` mode) and Connect
    (`:8289`) are scoped by **host-local nftables on the inngest host's private interface**,
    allowing only the web-host private IPs (`10.0.1.10`/`.11`) and dropping peers (`.20` git-data,
-   `.30` registry); `:8289` binds loopback if Connect is unused. Delivered as a cloud-init
+   `.30` registry); ⚠ CORRECTED (2026-09-30, #7463 review): `:8289` binds wildcard on
+   every tested version (v1.19.4 and v1.45.1), not "loopback if Connect is unused" —
+   and the input chain is `policy accept` with targeted drops, so `:50052`/`:50053`
+   are reachable intra-subnet; the web-IP scoping above covers only 8288/8289.
+   Delivered as a cloud-init
    `write_files` script + a systemd oneshot re-run every boot (a reboot clears nftables), mirroring
    `cron-egress-nftables.sh`.
 4. **Fresh signing/event keys (SEC-H3).** `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` are freshly
@@ -1741,3 +1745,98 @@ verb has no image left to act on, since #8734 satisfied it for `411798619` ahead
 `scripts/followthroughs/inngest-soak-6178.sh` still names `411798619` in its `SNAPSHOTS` line, so
 its ACTION REQUIRED text for the release verb is stale; the #8626 branch rewrites that line. This
 addendum flips nothing and closes nothing.
+
+## Addendum — 2026-09-28 (#8562) — a new actor on the sole scheduler: the provision unit, and the ordering rule it creates
+
+[ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md) moves the dedicated
+host's zot login, isolation check and pull → bootstrap block out of once-per-instance `runcmd` into
+`soleur-inngest-provision.service`, a oneshot that retries (120 s at first, backing off to 15
+minutes) and is re-started 90 s after every boot until a latch is written after a non-degraded
+`inngest-bootstrap.sh` success. This addendum records what
+that means for this ADR. It amends no Decision.
+
+- **A new actor.** Each retry re-runs the bootstrap, and the bootstrap restarts `inngest-redis` and
+  `inngest-server` and re-enables the flip timer. Before #8562 only one first-boot run did that. The
+  unit can now do it again, on the fleet's sole scheduler, at any time until the host latches.
+- **The FSM quiesce.** Immediately before every bootstrap run, the unit stops
+  `inngest-cutover-flip.timer` and `inngest-luks-cutover.timer` and waits, bounded at 300 s, until
+  neither `inngest-cutover-flip.service` nor `inngest-luks-cutover.service` is activating. If the
+  bound expires it emits `provision-fsm-busy` and the attempt retries. Without it, a retry that
+  coincided with `op=resume` could restart the server inside the flip's `verify_serving` window and
+  drive the FSM to `aborted`, which `op=resume` does not accept and which needs a `/mnt/data` recut
+  to leave. The same bounded wait also holds while `/var/lib/inngest-luks-cutover/frozen-active`
+  is non-empty or the flip FSM's host state slot shows `"flag":"flipping"`. The timers come back
+  on both paths: on success the bootstrap re-enables them as before, and on a failed attempt the
+  unit's exit handler restarts every timer that was active when the quiesce stopped it.
+- **`op=resume` runs only after the new host's `bootstrap-done`.** `bootstrap-done` now carries
+  `iid=<cloud-init instance-id>`, so the new host's row cannot be confused with a late row from the
+  destroyed one (both share `host_name` during a replace). This is runbook order
+  (`inngest-server.md` § "Provision unit (#8562)"), backed by the unit-side quiesce. A cutover gate
+  row that refuses `op=resume` until the new `iid` has emitted `bootstrap-done` is a tracked
+  deferral, not part of this change.
+- **The singleton property is unchanged.** A host that provisions late never serves on its own
+  authority: `inngest-server-flip-guard.sh` refuses a production start on an inherited `done`, one
+  this host carries no `done-owner` marker for (Decision 6, added 2026-08-12, #7228). A replaced
+  host's fresh root disk has no marker until its own verified flip, which `op=resume` drives. systemd runs one instance of the unit, so the timer and `runcmd`'s single start
+  serialize onto one job.
+- **Delivery is unchanged.** The 2026-08-25 addendum's replace-only constraint holds: the unit
+  reaches the host only at its next `inngest-host-replace` plus `op=resume`, and a provisioned
+  host's reboot does not re-provision it. Recovery is never an SSH step or a latch delete;
+  re-provisioning is a replace.
+
+## Amendment (2026-09-29, Ref #7463/#7308) — the CLI pin gains a named freshness owner; Phase-0 findings re-spiked against v1.45.1
+
+### CLI pin freshness
+
+The `inngest_cli_version` / `inngest_cli_sha256{,_arm64}` pin in `inngest.tf` sat at
+v1.19.4 for ~4.5 months (29 stable releases behind `releases/latest` at bump time)
+with no owner — the gap #7308 named and #7463 fixed. The mechanism now has all three
+halves, matching the zot-pin precedent (#7282):
+
+- **Detection** — the `Detect inngest CLI pin drift` step on `.github/workflows/rule-audit.yml`
+  (1st + 15th — **lands in PR-B; absent until it merges**) computes the tag-ordered
+  release delta and pin age, and files one idempotent issue labeled
+  `inngest-pin-drift` + `action-required` at >= 5 releases or >= 45 days.
+- **Enforcement** — `apps/web-platform/infra/inngest-cli-staleness.test.sh` (offline,
+  per-PR, deploy-script-tests): arch-keyed tf<->sidecar coherence, exactly-once pin
+  form, single-source checksums.txt, 60-day capture-age backstop, previous-pin
+  rollback rows, version-scoped follower-claim register. Mutation battery:
+  `inngest-cli-staleness-mutation.test.sh` (25 cases, incl. the two declared
+  stay-green boundaries: a coherent two-file arch swap and a fully coherent
+  rollback are not offline-detectable — the poll is the network half).
+- **Analysis of record** — `apps/web-platform/infra/inngest-cli.provenance.md`
+  (same sidecar shape as `zot-image.provenance.md`), refreshed at every bump by its
+  `## Bump procedure`, which prescribes re-measuring rather than re-wording.
+- **Nothing auto-writes the pin.** The monitor files an issue; a human/agent opens
+  the CI-gated PR. This is deliberate, not an unfinished follow-up: an auto-bump
+  would land a scheduler upgrade without the re-spike the bump procedure requires.
+- Liveness probe for operators: `apps/web-platform/infra/inngest-cli-pin-probe.sh`
+  prints `PINNED=`, `CAPTURE_DATE=`, `VERDICT=` in under a second, offline.
+
+### Phase-0 findings re-spiked against v1.45.1 (evidence: `knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`)
+
+| Finding | Verdict on v1.45.1 |
+|---|---|
+| Route-once fan-out (multi `--sdk-url`, same app id) | **HOLDS** — one app, last-writer URL, 4/4 events on one instance |
+| `runs(filter: RunsFilterV2!)` enumeration + `startedAt` | **HOLDS** — and `cronSchedule` is now POPULATED on run nodes (was null on v1.19.4). Probes still bucket on `startedAt`; the invariant never depended on the field |
+| Postgres swap with retained Redis → FLUSHALL mandate | **HOLDS** — identical replay observed: stale continuation completed against the empty backend, cron fired from the stale Redis schedule |
+| Flag surface the repo passes | **HOLDS** — `start --help` diff is additions-only (`--connect-*-grpc-*`); `--postgres-conn-max-idle-time` is MINUTES per `cmd/start` source at tag, `signkey-prod-` strip still required |
+| `inngest pause` drain verb | **ABSENT on both endpoints** — the `warn`-guarded drain call in `inngest-bootstrap.sh` was dead on v1.19.4 too; not an upgrade regression (follow-up #9219 filed) |
+| Connect listeners | **UNCHANGED bind set, corrected in review** — v1.19.4 already binds `*:50052`/`*:50053`/`*:8289` wildcard (measured both binaries); v1.45.1 only adds the `--connect-*-grpc-ip/-port` ADVERTISE flags. And the host's nftables input chain is `policy accept` with drops on `:8288`/`:8289` only — the connect ports are reachable intra-subnet on BOTH versions. Decision 3's ":8289 binds loopback if Connect is unused" is stale (see correction marker there) |
+
+### Merge-vs-apply boundary (unchanged)
+
+Merging the pin is host-inert but pipeline-active: `mint-inngest-bootstrap-tag.yml`
+fires on the pin change, mints the next `vinngest-v*` tag (its own semver series —
+patch+1 over remote max, NOT the CLI version), and the ADR-232 bump bot opens the
+cloud-init pin PR. The LIVE flip still needs that auto-PR merged plus an
+operator-gated `inngest-host-replace` dispatch in its own window (the only flip
+path — `deploy inngest` posts to the web host where the inngest arm is quiesced and
+refuses; replace is destroy+recreate, i.e. minutes of scheduler-dark, and in-flight
+runs are SIGKILLed at destroy — the in-place drain never runs on that path) — after
+enumerating the FULL pending `user_data` delta, the shared-Postgres concurrency
+check, and a pre-flip Postgres backup, because `start` runs goose migrations and the
+v1.19.4→v1.45.1 delta includes two data-destroying migrations
+(`000006_apps_unique_active_name` force-archives+renames duplicate app names;
+`000007_spans_is_deferred` DROPs the column) plus rebuildable index DROP+recreates
+(000008/000009/000010). The follow-through tracker is filed at this PR's merge.

@@ -157,9 +157,34 @@ staleness gate's failure message points at. Do all of it, in order:
 5. **Re-check the `registry-boot-guard.test.sh` coupling** above if the config JSON moved.
 6. **Re-stamp `Capture date (UTC)`** and run `bash zot-image-staleness.test.sh` — it must
    exit 0.
+7. **Publish the boot asset BEFORE the bump merges** (#8714 5.3b-iii). The registry host boots
+   from a release asset, not from ghcr.io, so a merged pin with no asset refuses every replace
+   (preflight P6). On the bump branch, run
+   `gh workflow run zot-image-mirror.yml --ref <branch>`. The run's summary prints the
+   published `T`, and its `rehearse` job then boots it. Pin `zot_mirror_asset_sha256_amd64` (T)
+   and `zot_config_digest_amd64` (C, the manifest's `.config.digest`) in the `zot-mirror` block
+   of `zot-registry.tf`. The PR's own `rehearse` run rebuilds from upstream D and must reproduce
+   both. Upstream D anchors the bytes, so a branch dispatch is safe: it can only publish D's own
+   blobs, under a tag that carries D's prefix.
 
 Agent entry point:
 
 ```
 /soleur:one-shot "refresh the zot pin provenance sidecar per apps/web-platform/infra/zot-image.provenance.md section 'Bump procedure'"
 ```
+
+## Boot asset (release mirror, #8714 step 5.3b-iii)
+
+The registry host no longer pulls the pin above. It boots from the release asset
+`zot-image-<version>-<D12>` / `zot-linux-amd64-<version>.oci.tar`: upstream D's manifest and
+blobs, packaged reproducibly by `zot-image-oci-archive.sh` and published by `zot-image-mirror.yml`.
+The pins and the derivation live in the `zot-mirror` block of `zot-registry.tf`. The rationale is
+ADR-096's amendment of 2026-09-28 (part 2).
+
+- **Never delete or replace a `zot-image-*` release.** A registry replace fetches it by URL and
+  refuses any bytes other than T. Releases here are immutable once published, so a deleted one
+  cannot be re-created under the same tag: the only recovery is reverting the pin. A deleted one is
+  named by rule-audit's asset probe and refused at the next replace by preflight P6.
+- **Recovery.** It is workflow-only, with no SSH. Use the "zot boot image (#8714)" section of
+  `knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`: re-fire the
+  replace, re-publish the asset, or revert the PR.

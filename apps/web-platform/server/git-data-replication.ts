@@ -25,6 +25,12 @@ import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
 import { hashUserId, reportSilentFallback } from "./observability";
+import {
+  classifyGitDataPinFault,
+  GitDataHostKeyPinError,
+  reportGitDataPinFault,
+  SSH_HOST_KEY_MISMATCH,
+} from "./git-data-pin-fault";
 import { assertSafeWorktreeId } from "./worktree-write-lease";
 // D2 write-boundary sentinel (ADR-068 §6, epic #5274 Sub-PR 3.C). The membership
 // authority is shared with the fetch side (git-data-client.ts) so a single check
@@ -190,20 +196,12 @@ function inspectGitDataHostKeyPin(): GitDataHostKeyPinState {
 export function resolveGitDataHostKeyPin(): string {
   const s = inspectGitDataHostKeyPin();
   if (s.state === "present") return s.pin;
-  if (s.state === "invalid") {
-    // Never interpolate the value: it is only a public key, but a malformed secret can be
-    // anything (a pasted private key included).
-    throw new Error(
-      "git-data: GIT_DATA_SSH_HOST_KEY is malformed — expected exactly one " +
-        "`ssh-ed25519 <base64>` key with no host pattern, marker, comment or newline. " +
-        "Refusing to dial the git-data host.",
-    );
-  }
-  throw new Error(
-    `git-data: GIT_DATA_SSH_HOST_KEY is unset (${isGitDataStoreEnabled() ? "GIT_DATA_STORE_ENABLED=true" : "GIT_DATA_STORE_ENABLED is not true"}) — ` +
-      "refusing unpinned SSH to the git-data host. The replace job publishes it to Doppler prd; " +
-      "if the secret is already there, the container has not loaded it (re-run git-data-pin-redeploy.yml).",
-  );
+  // The error class builds its own fixed messages, so the value is never interpolated:
+  // it is only a public key, but a malformed secret can be anything (a pasted private key
+  // included). A typed error lets the push classify it as a pin fault (#8572).
+  throw new GitDataHostKeyPinError(s.state === "invalid" ? "pin_invalid" : "pin_absent", {
+    storeEnabled: isGitDataStoreEnabled(),
+  });
 }
 
 /**
@@ -259,13 +257,15 @@ export function logGitDataHostKeyPinAtStartup(): void {
         ? `git_data_pin=present fp=${gitDataHostKeyFingerprint(s.pin)}`
         : `git_data_pin=${s.state}`;
     log.warn({ gitDataPin: s.state }, line);
-    // Both reports use the MESSAGE path (err === null): an Error-path report is
+    // All three reports use the MESSAGE path (err === null): an Error-path report is
     // pre-captured by the pino mirror with only `feature=pino-mirror`, and the tagged
-    // capture is dropped (#8629), so an alert rule keyed on `op` would never see it.
+    // capture is dropped (#8629), so an alert rule keyed on a tag would never see it.
+    // They go through reportGitDataPinFault, which adds the `pin_fault` tag that
+    // `sentry_alert.git_data_host_key_pin_fault` pages on (#8572).
     if (s.state === "invalid") {
       // An invalid pin fails every git-data call closed, so it is an operator fault worth
       // an event at boot, not only a log line. The value is never included.
-      reportSilentFallback(null, {
+      reportGitDataPinFault("pin_invalid", {
         feature: "git_data_host_key_pin",
         op: "pin_invalid_at_startup",
         message: "git-data host-key pin invalid at startup",
@@ -274,7 +274,7 @@ export function logGitDataHostKeyPinAtStartup(): void {
       // Since #5914 an absent pin refuses every git-data dial (every Art. 17 erasure
       // returns `unconfigured` `pin_absent:`), so an armed container booting without one
       // is an event at boot, before any user's erasure is refused. Unarmed (dev) is silent.
-      reportSilentFallback(null, {
+      reportGitDataPinFault("pin_absent", {
         feature: "git_data_host_key_pin",
         op: "pin_absent_at_startup",
         message: "git-data host-key pin absent at startup",
@@ -284,12 +284,22 @@ export function logGitDataHostKeyPinAtStartup(): void {
     const sshPresent = sshClientOnPath();
     log.warn({ gitDataSshClient: sshPresent }, `git_data_ssh_client=${sshPresent ? "present" : "absent"}`);
     if (!sshPresent && gitDataArmedInProcess()) {
-      reportSilentFallback(null, {
+      reportGitDataPinFault("ssh_client_absent", {
         feature: "git_data_ssh_client",
         op: "ssh_client_absent_at_startup",
         message: "git-data ssh client absent at startup",
       });
     }
+    // #8211 PR2 — the cutover's per-host deploy proof. `git_data_store=` is the line the
+    // flip asserts on every web host via Better Stack (`--grep git_data_store=` keyed on
+    // Vector's host_name field): Doppler-says-on is not deploy proof, and web-2 has no
+    // pinned SSH ingress, so this warn-level line is the load-bearing check. Reads the same
+    // single source the workspace resolver branches on; a redeploy that never loaded the
+    // flag emits `disabled` and the flip fails rather than misreporting.
+    log.warn(
+      { gitDataStore: isGitDataStoreEnabled() },
+      `git_data_store=${isGitDataStoreEnabled() ? "enabled" : "disabled"}`,
+    );
   } catch (err) {
     // review: swallowed — observability must never take down startup; leave a trace.
     console.warn("git-data: startup host-key pin inspection failed", err);
@@ -461,15 +471,6 @@ function scrubErasureDetail(raw: string, workspaceId: string): string {
 
 /** ssh's own 255 covers both "could not connect" and "you may not in". Only stderr tells them apart. */
 const SSH_AUTH_FAILURE = /permission denied|publickey|too many authentication failures|load key|invalid format/i;
-
-/**
- * (#7226, H4) Host identity failures, checked BEFORE {@link SSH_AUTH_FAILURE} on a 255, in
- * the same order as git-data-cutover.sh `_access_reason`: no common host-key algorithm
- * (alg), no key known under the alias (unknown), then a changed key / failed verification
- * (changed).
- */
-const SSH_HOST_KEY_MISMATCH =
-  /no matching host key type found|no \S+ host key is known for|remote host identification has changed|host key verification failed/i;
 
 /**
  * (#8094) WHY THIS RETURNS AN OUTCOME INSTEAD OF void.
@@ -733,10 +734,17 @@ export async function replicateToGitData(params: {
     };
   }
 
+  // Which transport was running when a failure landed in the catch: `ssh` for the pin
+  // resolution and the provision dial, `git` for the push. The pin-fault classifier reads
+  // transport exit codes per transport (ssh 255, git 128) — #8572.
+  let via: "ssh" | "git" = "ssh";
   try {
     // (#7226) Resolved first, so a store-enabled run without a valid pin performs NO ssh
     // (neither the provision below nor the push) and lands in this catch's existing report.
     const hostKeyPin = resolveGitDataHostKeyPin();
+    // Provision MUST stay before the push (#8572): a missing ssh client reads as
+    // `spawn ssh` ENOENT only here. Under git it surfaces as `sh: ssh: not found`, which
+    // the classifier does not (and should not) treat as a pin fault.
     await provisionGitDataRepo(workspaceId, hostKeyPin);
     ensureGitDataRemote(workspacePath, workspaceId);
 
@@ -759,6 +767,7 @@ export async function replicateToGitData(params: {
     // durable replica — the ref-completeness the cutover's ref-set-equality check
     // depends on (#5817 review F1). NOT `--mirror`. Push-options ride THIS push
     // only, never origin/syncPush.
+    via = "git";
     await gitWithPrivateKeyAuth(
       [
         "push",
@@ -784,6 +793,31 @@ export async function replicateToGitData(params: {
 
     return { status: "replicated" };
   } catch (err) {
+    // (#8572) A pin fault (absent or invalid pin, no ssh client, host identity not
+    // established on the provision dial) goes to the message path with the `pin_fault` tag that
+    // `sentry_alert.git_data_host_key_pin_fault` pages on. The reason leads the message, so
+    // each reason is its own Sentry issue. No stderr and no err.message is sent. Exactly one
+    // capture per failure either way: the message path logs `{ err: null }`, so the pino
+    // mirror has nothing to capture a second time.
+    const pinFault = classifyGitDataPinFault(err, via);
+    if (pinFault !== null) {
+      reportGitDataPinFault(pinFault, {
+        feature: "worktree_lease",
+        op: "git_data_replication_push",
+        message:
+          `git-data replication push pin fault (${pinFault}): the workspace's objects were ` +
+          "NOT replicated to the shared store",
+        extra: {
+          workspaceIdHash: hashUserId(workspaceId),
+          worktreeIdHash: hashUserId(worktreeId),
+          leaseGeneration,
+          // Hashed here, not at the emit boundary: GitDataPinFaultExtra refuses a raw userId.
+          userIdHash: hashUserId(userId),
+          via,
+        },
+      });
+      throw err instanceof Error ? err : new Error(String(err));
+    }
     reportSilentFallback(err, {
       feature: "worktree_lease",
       op: "git_data_replication_push",

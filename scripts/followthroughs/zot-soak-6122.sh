@@ -16,9 +16,13 @@
 #   (a'') ZERO events under the three stage names #8036 1d RETIRED (app_ghcr_fallback,
 #       app_ghcr_served, inngest_ghcr_fallback) — a pre-1d-template boot inside the window still
 #       emits them; see RETIRED_QUERIES below;
-#   (b) a MIN_SAMPLE of zot-served pulls PER image (registry:"zot" image:"web" /
-#       image:"inngest") — so a vacuous "zero events because nothing deployed" cannot
-#       close the tracker. Proof the zot path was actually exercised.
+#   (b) proof the zot path was actually exercised — so a vacuous "zero events because nothing
+#       deployed/booted" cannot close the tracker: MIN_SAMPLE zot-served WEB deploy pulls
+#       (registry:"zot" image:"web"), AND >=1 zot-served boot of the dedicated inngest host
+#       (the INNGEST_ZOT count below). The inngest leg is boot evidence, not a pull count:
+#       the only `deploy inngest` sender (deploy-inngest-image.yml) dispatches to the quiesced
+#       web scheduler, so the retired image:"inngest" sample operand could only ever read 0
+#       post-cutover (#9097 — a permanently-failing leg, retired). It must not be re-added.
 #
 # The TWO watched signals and their emitters (anchored on EMIT NAMES, not line numbers —
 # ADR-096 mandates this; line citations rot), in TWO schema families (feature/op-prefixed vs
@@ -190,7 +194,7 @@ fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
-MIN_SAMPLE="${ZOT_SOAK_MIN_SAMPLE:-3}"   # min zot-served pulls per image to prove exercise
+MIN_SAMPLE="${ZOT_SOAK_MIN_SAMPLE:-3}"   # min zot-served WEB deploy pulls to prove exercise (the inngest leg of arm (b) is a hardcoded >=1 boot, not MIN_SAMPLE — see its comment)
 # Validate before use. `[[ -lt ]]` does ARITHMETIC evaluation, which coerces a non-numeric to
 # 0 and evaluates a command substitution: MIN_SAMPLE=0, "", or "abc" all make the sample arm
 # below pass vacuously and print PASS with zero evidence — silently disabling the ONLY detector
@@ -377,16 +381,18 @@ for k in $(printf '%s\n' "${!RETIRED_QUERIES[@]}" | sort); do
   RETIRED_BREAKDOWN="${RETIRED_BREAKDOWN}${RETIRED_BREAKDOWN:+ }$k=$n"
 done
 
-# --- (b) zot-served sample per image. >= MIN_SAMPLE required (proof of exercise). ---
+# --- (b) zot-served sample: >= MIN_SAMPLE web deploy pulls, AND >=1 dedicated-inngest zot
+#         boot (proof of exercise). The inngest leg rides INNGEST_ZOT below, not a pull count:
+#         the dedicated host pulls its image only at boot (once per host-replace), and the only
+#         `deploy inngest` sender targets the quiesced web scheduler, so a per-image deploy-pull
+#         count for inngest is structurally unreachable post-cutover (#9097). image:"inngest" is
+#         a retired sample operand — comments may name it, no code line may. ---
 ZOT_WEB=$(sentry_count 'feature:supply-chain op:image-pull registry:"zot" image:"web"')
-ZOT_INNGEST=$(sentry_count 'feature:supply-chain op:image-pull registry:"zot" image:"inngest"')
 
-for v in "$ZOT_WEB" "$ZOT_INNGEST"; do
-  if [[ "$v" == "TRANSIENT" ]]; then
-    echo "TRANSIENT: Sentry query failed (window $START..$END) — retry next sweep." >&2
-    exit 2
-  fi
-done
+if [[ ! "$ZOT_WEB" =~ ^[0-9]+$ ]]; then
+  echo "TRANSIENT: Sentry query 'web-pull-sample' failed (window $START..$END) — retry next sweep." >&2
+  exit 2
+fi
 
 if [[ "$FALLBACKS" -gt 0 ]]; then
   # Per-signal counts, not just the total: the remediation differs by signal.
@@ -434,7 +440,7 @@ if [[ ! "$APP_ZOT" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 # ⚠ HARDCODED == 0 — do NOT reuse MIN_SAMPLE and do NOT add a knob.
-#   MIN_SAMPLE counts zot-served PULLS PER IMAGE (rolling deploys); this counts fresh HOST
+#   MIN_SAMPLE counts zot-served WEB deploy pulls (rolling deploys); this counts fresh HOST
 #   BOOTS. Different quantities — reusing one threshold across both is a category error.
 #   And a knob's only useful value here is 1: 0 disarms the floor, >1 buys no extra evidence
 #   for the narrow thing this arm proves (the beacon emits and the flip was exercised on the
@@ -450,6 +456,11 @@ fi
 # ── The DEDICATED-HOST denominator (#6500). app_zot above is the WEB host's evidence; nothing
 # above proves the dedicated soleur-inngest host was observed. Same shape, same reasons: guard
 # the string before any arithmetic, hardcoded floor, no knob.
+# ⚠ Producer note (#9097): arm (b) below ALSO consumes this count (`INNGEST_ZOT -lt 1`). If this
+# arm is ever removed, BOTH shapes stay fail-closed — deleting only the `== 0` FAIL block leaves
+# arm (b)'s leg refusing a zero-evidence window (pinned by the suite's NB3 mutant), and deleting
+# the assignment too aborts on `set -u` at arm (b) (exit 1, unbound variable). The NB3 comment
+# and this note are the contract that removal is safe only because both arms refuse.
 # ⚠ HOST-PINNED, while `[freshboot]` stays bare. The colocated inngest block in cloud-init.yml is
 # gated by web_colocate_inngest, not deleted: a web host born with it on would emit inngest_zot
 # and satisfy a bare denominator while the dedicated host never reported — a false PASS on the
@@ -473,8 +484,15 @@ fi
 # unconfigured fleet report "retry next sweep" forever instead of blocking the retirement.
 # The sample arm is a floor on GOOD evidence, not a ceiling on BAD — except here, where it is
 # the only ceiling.
-if [[ "$ZOT_WEB" -lt "$MIN_SAMPLE" || "$ZOT_INNGEST" -lt "$MIN_SAMPLE" ]]; then
-  echo "FAIL(insufficient-sample): zot-served pulls web=$ZOT_WEB inngest=$ZOT_INNGEST (need >=$MIN_SAMPLE each) — zero watched events so far, but keep soaking until each image has been served by zot enough times to be conclusive.${START_NOTE}"
+#
+# The inngest leg is INNGEST_ZOT (the dedicated host's zot-served boot beacon), not a deploy
+# pull — retired post-cutover, per the arm (b) header. Its floor is HARDCODED 1, not
+# MIN_SAMPLE and not a knob, for the reasons the APP_ZOT denominator states: different
+# quantity (host boots, not pulls-per-image), and a knob is a bypass surface on a gate. The
+# leg is redundant with the denominator arm above ON PURPOSE: if the denominator is ever
+# removed (a still-open decision), this leg is what still refuses a zero-evidence window.
+if [[ "$ZOT_WEB" -lt "$MIN_SAMPLE" || "$INNGEST_ZOT" -lt 1 ]]; then
+  echo "FAIL(insufficient-sample): zot-served pulls web=$ZOT_WEB (need >=$MIN_SAMPLE), inngest-boots=$INNGEST_ZOT (need >=1) — zero watched events so far, but keep soaking until the web image has been served by zot enough times and the dedicated inngest host has booted zot-served at least once to be conclusive.${START_NOTE}"
   exit 1
 fi
 
@@ -527,7 +545,7 @@ if [[ "$st" != "OPEN" && "$st" != "CLOSED" ]]; then
   exit 2
 fi
 if [[ "$st" == "OPEN" ]]; then
-  echo "FAIL(blocked): soak criteria hold (0 watched events, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST, $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s)), but #$BLOCKER is OPEN — the operator has not yet authorized that the dedicated inngest host pulls zot-primary and reports on the Sentry stage: schema (RESULT: PASS on #$BLOCKER, then close it as completed). NOT authorized to proceed to 5.6 / #6129.${START_NOTE}"
+  echo "FAIL(blocked): soak criteria hold (0 watched events, zot served web=$ZOT_WEB pulls, $APP_ZOT web zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s)), but #$BLOCKER is OPEN — the operator has not yet authorized that the dedicated inngest host pulls zot-primary and reports on the Sentry stage: schema (RESULT: PASS on #$BLOCKER, then close it as completed). NOT authorized to proceed to 5.6 / #6129.${START_NOTE}"
   exit 1
 fi
 
@@ -670,5 +688,5 @@ if [[ "$web_st" == "CLOSED" && "$web_st_reason" != "COMPLETED" ]]; then
   exit 1
 fi
 
-echo "PASS: 0 watched events (gate-degraded=${COUNTS[gate]} inngest-pull-fatal=${COUNTS[freshboot]} web-pull-fatal=$WEB_FATAL), zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s), and #$BLOCKER + #$WEB_BLOCKER are both CLOSED as COMPLETED — since $START. The zot-only soak holds on Sentry evidence, which is forgeable with the public DSN: before acting on it, corroborate the dedicated host's inngest_zot on Better Stack (scripts/betterstack-query.sh --grep 'stage=inngest_zot'). Then this authorizes ADR-096 5.6 (adopting -> accepted) once 5.3b-iii and 5.4 are also done, and #6129 (WARN -> ENFORCE). It does NOT gate CI's GHCR push/read (DECISION: B3).${START_NOTE}"
+echo "PASS: 0 watched events (gate-degraded=${COUNTS[gate]} inngest-pull-fatal=${COUNTS[freshboot]} web-pull-fatal=$WEB_FATAL), zot served web=$ZOT_WEB pulls (>=$MIN_SAMPLE), $APP_ZOT web zot-served fresh boot(s), $INNGEST_ZOT dedicated-inngest zot-served fresh boot(s) (>=1), and #$BLOCKER + #$WEB_BLOCKER are both CLOSED as COMPLETED — since $START. The zot-only soak holds on Sentry evidence, which is forgeable with the public DSN: before acting on it, corroborate the dedicated host's inngest_zot on Better Stack (scripts/betterstack-query.sh --grep 'stage=inngest_zot'). Then this authorizes ADR-096 5.6 (adopting -> accepted) once 5.3b-iii and 5.4 are also done, and #6129 (WARN -> ENFORCE). It does NOT gate CI's GHCR push/read (DECISION: B3).${START_NOTE}"
 exit 0

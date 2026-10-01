@@ -22,6 +22,17 @@ export type ArchiveFilter = "active" | "archived";
 // RAIL_EXPAND_EVENT / OPEN_UPGRADE_MODAL_EVENT convention.
 export const CONVERSATION_CREATED_EVENT = "soleur:conversation-created";
 
+// Deterministic status-refresh signal for the VIEWED conversation (PR #9270):
+// chat-surface.tsx emits this when its derived `streamState` enters/leaves
+// `"streaming"` and on the `awaitingUserInput` (gate) transition. The rail's
+// realtime UPDATE subscription can miss or die unobserved mid-view (the
+// subscribe callback handles only SUBSCRIBED) — the same unobservable class
+// the CREATED event was built for — so the row's stale terminal badge
+// ("Done" while the turn is working) never corrects until remount. A quiet
+// debounced refetch is the recovery; the status value itself stays
+// server-owned (never patched optimistically client-side).
+export const CONVERSATION_ACTIVITY_EVENT = "soleur:conversation-activity";
+
 interface UseConversationsOptions {
   statusFilter?: ConversationStatus | null;
   domainFilter?: DomainLeaderId | "general" | null;
@@ -596,6 +607,30 @@ export function useConversations(
     return () => {
       cancelled = true;
       window.removeEventListener(CONVERSATION_CREATED_EVENT, onCreated);
+    };
+  }, [fetchConversations]);
+
+  // Deterministic live-status refresh for the viewed conversation
+  // (CONVERSATION_ACTIVITY_EVENT, PR #9270). Debounced: `streamState` can
+  // burst across multi-leader turns and gate transitions, and each burst
+  // would otherwise fire a list-RPC. `background: true` keeps the refetch
+  // quiet — a background reconcile must never blank or error-flash the rail
+  // (same quiet contract as the scope-resolve backfill above).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const DEBOUNCE_MS = 500;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onActivity = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void fetchConversations({ background: true });
+      }, DEBOUNCE_MS);
+    };
+    window.addEventListener(CONVERSATION_ACTIVITY_EVENT, onActivity);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener(CONVERSATION_ACTIVITY_EVENT, onActivity);
     };
   }, [fetchConversations]);
 

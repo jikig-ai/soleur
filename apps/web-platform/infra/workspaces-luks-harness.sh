@@ -172,6 +172,21 @@ harness_blockdev_other() {
 #   CRYPTSETUP_UUID           what `cryptsetup luksUUID` prints (default EMPTY: rc 1, nothing printed)
 #   READLINK_RC=<n>           force `readlink`'s exit status (the naive _same_dev fails OPEN here)
 #   READLINK_EMPTY=1          readlink exits 0 but prints NOTHING (the other fail-open half)
+#   PLAINTEXT_DEV_FSTYPE      what the _plaintext_dev_type seam (the physical probe under
+#                             _plaintext_record_status) reports for the recorded plaintext device:
+#                             default `ext4` = an intact plaintext; `none` (or empty) = no filesystem
+#                             signature; `absent` = not a block device; `crypto_LUKS` = a stale record
+#                             naming the LUKS volume; `blkid_error_<rc>`. The REAL probe's rc mapping is
+#                             exercised by the wipe suite's F6 row, not here.
+#   PLAINTEXT_DEV_UNSEEDED=1  skip the default record. Every case otherwise starts with
+#                             PLAINTEXT_DEV=/dev/sdz9 in its state file (the cutover's rollback
+#                             rehearsal records the plaintext mount source; reads are last-wins, so an
+#                             invocation's own persist_state PLAINTEXT_DEV overrides it). Device-based:
+#                             no case depends on a /dev/disk/by-label link.
+#   BLKID_BIN_PATH            what the _plaintext_blkid_bin seam prints (default `blkid`); the dead-man
+#                             fire bakes it, so a suite that executes the fire points it at a stub.
+#                             BLKID_ABSENT=1 (above) makes the seam print nothing, and the
+#                             _plaintext_dev_type seam answer `blkid_absent` (as production does).
 #
 # Dead-man unit model (#9045). `systemctl show|stop|reset-failed` and `systemd-run` answer PER UNIT
 # for workspaces-luks-deadman.{timer,service} (a bare `workspaces-luks-deadman` is the service,
@@ -230,6 +245,9 @@ run_case() {
       INVOCATION="$invocation" REQUIRE_FNS="$require" \
     bash -c '
       source "$CUTOVER"                                   # guard => functions only, no main body
+      # The default recorded plaintext device, written BEFORE any stub exists (real mkdir/printf, so it
+      # never lands in $CALLS). See PLAINTEXT_DEV_UNSEEDED above.
+      [ "${PLAINTEXT_DEV_UNSEEDED:-}" = 1 ] || persist_state PLAINTEXT_DEV /dev/sdz9
       rec() { printf "%s\n" "$*" >> "$CALLS"; }
       # --- dead-man unit model (#9045); see the knob list above run_case ---
       # NOTE: no apostrophes in this block — it lives inside a single-quoted bash -c body.
@@ -361,6 +379,13 @@ run_case() {
       }
       cryptsetup() {
         rec "cryptsetup $*"
+        # Drain stdin before any verdict arm when the call feeds the key on a pipe
+        # (--key-file -, either spelling): real cryptsetup reads it, and a stub
+        # that exits unread races the producer into EPIPE under pipefail (#9245).
+        # Gated on the FLAG, not the verb — a piped call without it must EPIPE
+        # exactly as the real binary would. First statement after rec so every
+        # arm drains; [ ! -t 0 ] keeps unpiped stdin untouched.
+        case " $* " in *" --key-file - "*|*" --key-file=- "*) { [ ! -t 0 ] && cat >/dev/null; } 2>/dev/null || true ;; esac
         if [ "${1:-}" = "status" ] && [ -n "${CRYPTSETUP_DEV:-}" ]; then
           printf "  type:    LUKS2\n  device:  %s\n" "$CRYPTSETUP_DEV"
         fi
@@ -612,6 +637,17 @@ run_case() {
         if [ "${1:-}" = "-v" ] && [ -n "${TOOL_ABSENT:-}" ] && [ "${2:-}" = "${TOOL_ABSENT}" ]; then return 1; fi
         builtin command "$@"
       }
+      # #6604 step 7 — the recorded-plaintext seams. Production probes the recorded device ([ -b ], then
+      # a blkid from a fixed root-owned path list); here the seam records its ARGUMENT (so a wrong key or
+      # an empty argument is visible) and answers PLAINTEXT_DEV_FSTYPE (default ext4 = intact). The
+      # composing _plaintext_record_status (validity, the mapper alias check, ok-vs-not) stays REAL.
+      _plaintext_dev_type() {
+        rec "SEAM _plaintext_dev_type ${1:-}"
+        [ -n "${1:-}" ] || { printf absent; return 0; }
+        [ "${BLKID_ABSENT:-}" = "1" ] && { printf blkid_absent; return 0; }
+        printf "%s" "${PLAINTEXT_DEV_FSTYPE-ext4}"
+      }
+      _plaintext_blkid_bin() { [ "${BLKID_ABSENT:-}" = "1" ] && return 0; printf "%s" "${BLKID_BIN_PATH:-blkid}"; }
       for f in ${REQUIRE_FNS:-}; do
         declare -F "$f" >/dev/null || { echo "HARNESS_UNDEFINED:$f"; exit 97; }
       done
@@ -630,6 +666,8 @@ run_case() {
 # functions.
 #
 # Sets: MON_RC, MON_OUT, CALLS (argv log), MNT, WSDIR (the workspaces root, pre-created empty).
+# Stub side-file: ${CALLS}.escrow-stdin captures the bytes a SUT pipes into
+# `cryptsetup ... --key-file -` — the wire assert in luks-monitor.test.sh reads it.
 #
 # Knobs (all optional):
 #   MON_MOUNT_SRC     findmnt -no SOURCE $MOUNT      (default: the fake mapper path — healthy)
@@ -686,6 +724,18 @@ STUB
   cat > "$d/bin/cryptsetup" <<'STUB'
 #!/usr/bin/env bash
 printf 'cryptsetup %s\n' "$*" >> "$CALLS"
+# Drain stdin the way real cryptsetup does — iff argv asks for it via
+# --key-file - (either spelling). Gated on the flag rather than the verb so a
+# future piped verb (luksFormat, open --type luks) is covered, and a piped call
+# WITHOUT the flag EPIPEs exactly as the real binary would. A stub that exits
+# unread races the producer's write (EPIPE under pipefail = a fake
+# escrow_passphrase_mismatch, #9245); the capture file is what the suite's wire
+# assert reads, and [ ! -t 0 ] keeps an unpiped interactive stdin out of the
+# drain.
+case " $* " in
+  *" --key-file - "*|*" --key-file=- "*)
+    { [ ! -t 0 ] && cat >"${CALLS}.escrow-stdin"; } 2>/dev/null || true ;;
+esac
 case "$1" in
   status)  printf '  type:    LUKS2\n  device:  %s\n' "${MON_REAL_DEV-$FAKE_MAPPER}" ;;
   luksUUID) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
@@ -765,17 +815,36 @@ printf 'df %s\n' "$*" >> "$CALLS"
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 41 59 %s /mnt\n' "${MON_DF_USE-41%}"
 STUB
   chmod +x "$d"/bin/*
+
+  # #9123 — the probe's delivered-state asserts read /etc/fstab and run a real
+  # bind-mount peek, neither of which a fixture can fabricate. Under the probe's
+  # LUKS_MONITOR_TEST_SEAM they read WL_FSTAB_FILE_OVERRIDE + WL_PEEK_*_OVERRIDE
+  # instead; mon_run seeds the HEALTHY defaults below, and a fixture that wants
+  # the failing arm rewrites $d/fstab or sets MON_PEEK_ATTRS / MON_PEEK_FAIL.
+  cat > "$d/fstab" <<'FSTAB'
+/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2
+FSTAB
+  # Clear the peek knobs so a fixture's failing arm cannot leak into the next case.
+  MON_PEEK_ATTRS=""; MON_PEEK_FAIL=""
 }
 
 # mon_run [env assignments...] — execute the prepared probe. Re-runnable against the same fixture,
 # so a case can assert on a baseline of 2 and then re-run with a baseline of 8 without rebuilding.
 mon_run() {
   local d="$MON_DIR"
+  # MON_PEEK_* are HARNESS vars (set on the call line or before it), not env
+  # assignments inside env's argv — `env A=1` does not make A visible to the
+  # shell expanding the rest of that same env line.
+  local _peek_attrs="${MON_PEEK_ATTRS:----------------e------i---}"
+  local _peek_fail="${MON_PEEK_FAIL:-0}"
   MON_OUT="$(
     env "$@" \
       PATH="$d/bin:$PATH" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" FAKE_MAPPER="$d/fake-mapper" \
       WORKSPACES_MOUNT="$MNT" WORKSPACES_MAPPER_PATH="$d/fake-mapper" LUKS_MONITOR_TEST_SEAM=1 \
       WORKSPACES_STATE_DIR="$STATE" LUKS_MONITOR_WORKSPACES_DIR="$WSDIR" \
+      WL_FSTAB_FILE_OVERRIDE="$d/fstab" \
+      WL_PEEK_ATTRS_OVERRIDE="$_peek_attrs" \
+      WL_PEEK_FAIL_OVERRIDE="$_peek_fail" \
     bash "$MON_PROBE" 2>&1
   )"
   MON_RC=$?

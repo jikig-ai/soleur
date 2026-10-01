@@ -24,6 +24,7 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Read ANY host/unit state | [§ Reading host state without SSH](#reading-host-state-without-ssh) |
 | Scheduler dead after a host replace | [§ Inherited `done`](#inherited-done-after-a-host-replace-7228) |
 | Private-NIC boot event after a host replace (#8539) | [§ Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539) |
+| `inngest_pull_fatal attempt=N` / provision-unit stages after a host replace (#8562) | [§ Provision unit (#8562)](#provision-unit-8562) |
 | Flush latch stands on a `done` host / `op=arm` refused at G3.7 | expected — [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
 
@@ -226,11 +227,299 @@ matches no filter and is query-only by design — a healthy replace must not pag
 is `noarg`, `noip`, `nogrep` or `iprc`); the pull outcome markers that follow still say whether
 the boot worked.
 
+> **Addendum 2026-09-28 (#8562): "it ends the boot" is now the live host's behavior only.** The
+> template retries: since ADR-257 the pull runs in `soleur-inngest-provision.service`, so a zot
+> miss ends one **attempt**, emits `inngest_pull_fatal` with `attempt=N`, and the unit tries again
+> (120 s later at first, backing off to 15 minutes). The live host keeps the old behavior until its next replace. Read a page from a
+> host born from the new template per [§ Provision unit (#8562)](#provision-unit-8562), and wait
+> for `bootstrap-done` before deciding on another replace.
+
 **Absence is detected by query only, and nothing pages on it.** If a boot has a `pre-zot-pull`
 marker and no `private_nic_*` marker within ±15 minutes of it on the same host, the helper
 crashed or never ran. Read the `pre-zot-pull` rows with the same query, `--grep pre-zot-pull`,
 and compare timestamps. `zot-login-*` is not a valid reference: the empty-credentials path emits
 `zot-creds-EMPTY` instead.
+
+## Provision unit (#8562)
+
+[ADR-257](../../architecture/decisions/ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md).
+The zot login, the isolation self-check and the pull → bootstrap block no longer run once in
+cloud-init `runcmd`. They run in `/usr/local/bin/soleur-inngest-provision`, under
+`soleur-inngest-provision.service`, which retries without limit until one attempt succeeds. The
+delay between attempts starts at 120 s and backs off to 15 minutes (`RestartSteps=4`,
+`RestartMaxDelaySec=15min`): about 8 attempts in the first hour, about 4 an hour once backed
+off (corrected 2026-09-30 from "about 26 fast failures", #9299). A full success writes a latch, and the latch switches the unit off for the rest of the host's
+life. `runcmd` only arms the unit; a boot timer starts it again 90 s after any later boot of a host
+that has not latched yet.
+
+Two design rules change what a reading means:
+
+- **A degraded success does not latch.** If the bootstrap exits 0 but `inngest-redis` is
+  inactive or the installed server unit lacks the durable ExecStart (the server serves
+  SQLite-only; a requested diagnostic boot is exempt), the attempt emits `bootstrap-done-DEGRADED`
+  with `why=` naming which, and exits 0 without the latch. The unit does not retry on that boot; the timer retries at the next boot.
+  The host serves degraded until then, as before #8562.
+- **The cutover timers are always put back.** Before each bootstrap run the unit stops the flip
+  and LUKS-cutover timers and waits (bounded at 300 s) for any running flip or LUKS-cutover step,
+  a non-empty `/var/lib/inngest-luks-cutover/frozen-active`, or a flip between steps (the flip
+  FSM's host state slot reads `"flag":"flipping"`). On success the bootstrap re-enables the
+  timers; on a failed attempt the unit's exit handler restarts every timer that was active when
+  it stopped them.
+
+Each attempt also re-runs the bounded private-NIC wait and, before the bootstrap, a bounded
+`dpkg --configure -a`.
+
+**When this applies.** Only to a host born from the #8562 template. The change reaches the host
+at its next `inngest-host-replace` (`apply-web-platform-infra.yml`, `apply_target=inngest-host-replace`)
+plus the human-approved `cutover-inngest.yml -f op=resume`. A host born before it keeps the old
+behavior until then: a zot miss ends that boot. Tell the two apart by the rows: a host running the
+unit emits `provision-unit-armed` once per host life.
+
+**Key every reading on `iid`.** Every stage row the unit emits carries
+`iid=<cloud-init instance-id>`. Old and new hosts share the hostname `soleur-inngest` during a
+replace, so a late row from the destroyed host looks like the new host's unless the `iid`
+matches the newest `provision-unit-armed` row's. An `iid` of `unknown` or `soleur-inngest` is the
+fallback every host life shares when the instance-id was unreadable; it cannot tell host lives
+apart, and the probe refuses it.
+
+**`scripts/inngest-host-state.sh` does not read these stages.** It reads the served FSM and unit
+state through journald → Vector → Better Stack, and Vector is installed by the bootstrap this unit
+runs. The readers for provision stages are the follow-through probe and the queries below.
+
+### Stages
+
+| Stage (channel) | Meaning |
+| --- | --- |
+| `provision-unit-armed iid=…` (Better Stack) | `runcmd` enabled the timer and started the unit. Once per host life. |
+| `provision-attempt-start attempt=N` (Better Stack) | Attempt N began. N counts every attempt since the host was born (the counter is on the root disk). |
+| `provision-env-MISSING keys=…` (Better Stack) | The env file exists but lacks a required key. The attempt ends before any Doppler call. |
+| `provision-nic-ABSENT ip=…` (Better Stack) | The private NIC was still absent after the NIC wait; the attempt ended and retries. |
+| `isolation-check-FAILED` (Better Stack) | The Doppler boot credential failed the isolation self-check; the attempt ended before any pull. |
+| `zot-creds-EMPTY` / `zot-login-FAILED` (Better Stack) | No baked zot credential, or the zot login was refused. The pull that follows misses. |
+| `inngest_pull_fatal` with `attempt=N` (Sentry, fatal, paged; Better Stack) | This attempt's zot pull missed. One missed attempt, not a dead host. |
+| `provision-fsm-busy` (Better Stack) | A flip or LUKS-cutover step was still running after the 300 s quiesce bound; the attempt ended and retries. |
+| `bootstrap-exit-<rc>` (Better Stack) | The bootstrap exited `rc`; its detail carries the output tail. `rc != 0` is followed by `bootstrap-failure-journal` and ends the attempt. |
+| `bootstrap-failure-journal` (Better Stack) | Written after a failed bootstrap: the failed units and the `inngest-server` journal for that attempt. |
+| `provision-attempt-exit-<rc>` (Better Stack) | Attempt ended with `rc` (`143` = killed at `TimeoutStartSec` or at shutdown). |
+| `provision_attempt_failed` (Sentry, warning, **paged** by `inngest-provision-failure`, #9176) | Same failure, on the channel that does not depend on Doppler. Its detail carries `rc=`, `attempt=`, `iid=` and `why=<last stage>`. `why=inngest_pull_fatal` is excluded from that rule: the pull miss already paged through `zot-mirror-fallback-rate`. |
+| `sentry-emit-FAILED stage=… rc=…` (Better Stack) | The Sentry POST for that stage failed; read the stage from Better Stack instead. |
+| `SOLEUR_INNGEST_BOOT_TRACE_LOST` (journald tag `inngest-boot-phone-home`) | The Better Stack channel was dead for that stage (token file missing or empty, or the POST failed). It leaves the host only once Vector runs, i.e. after a bootstrap; until then the Sentry rows are the trace. |
+| `bootstrap-done-DEGRADED why=… iid=…` (Better Stack); `bootstrap_done_degraded` (Sentry, warning, **paged** by `inngest-provision-degraded`, #9299; see [§ Reading an `inngest-provision-degraded` page](#reading-an-inngest-provision-degraded-page-9299)) | The bootstrap exited 0 but the host serves SQLite-only (`why=` is `.redis-inactive` and/or `.no-durable-execstart`). **No latch**; the next boot retries. Not a PASS. |
+| `bootstrap-done iid=…` (Better Stack) | Full success; the latch is written. This is the recovery signal. |
+
+Signatures that have no stage of their own:
+
+- **SIGKILL or power loss mid-attempt:** `provision-attempt-start attempt=N+1` with no
+  `provision-attempt-exit-*` and no `bootstrap-done*` for attempt N. The kill left nothing to
+  emit with; the next attempt's start is the durable trace.
+- **xtrace refusal or a missing env file:** `provision-unit-armed`, then no
+  `provision-attempt-start` ever. Both stop the attempt before its first emit: the script refuses
+  under xtrace (exit 78), and systemd will not start the unit without
+  `/etc/default/inngest-doppler`. The probe reads this as `FAIL reason=never-started`.
+
+### Reading a page
+
+- **A page carrying `attempt=N` is one missed attempt.** The unit retries (120 s at first, backing
+  off to 15 minutes), and `zot-mirror-fallback-rate` emails at most every 23 minutes while the
+  host stays dark (one grouped Sentry issue). A second email means the host is still dark, not
+  that a second host failed.
+- **After `inngest_pull_fatal`, wait for `bootstrap-done` with the same `iid` before deciding to
+  replace.** The host may recover on its own as soon as the cause clears (a late NIC, a zot blip).
+- **Run `op=resume` only after `bootstrap-done` for the new `iid`.** `bootstrap-done-DEGRADED` is
+  not enough. The unit's quiesce keeps a retry from restarting the server inside the flip's verify
+  window, but the ordering rule still stands.
+
+**Find the host life (`iid`).** The armed row is written once per host life, so the window must
+cover the whole life (30 days, as the probe uses); `raw` is double-encoded and must be decoded:
+
+```sh
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30d \
+  --grep provision-unit-armed --limit 200 \
+  | jq -R -r 'fromjson? | .raw? | fromjson?
+      | select(.marker == "SOLEUR_INNGEST_BOOT_STAGE" and .host == "soleur-inngest"
+               and .stage == "provision-unit-armed")
+      | "\(.dt) \(.detail)"' | sort | tail -n 1
+```
+
+**Read that life's stages.** Set `IID` from the `iid=` in the row above:
+
+```sh
+IID=<iid>
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30d \
+  --grep SOLEUR_INNGEST_BOOT_STAGE --limit 5000 \
+  | jq -R -r --arg iid "$IID" 'fromjson? | .raw? | fromjson?
+      | select(.marker == "SOLEUR_INNGEST_BOOT_STAGE" and .host == "soleur-inngest")
+      | select((.detail // "") | test("(^|\\s)iid=" + $iid + "(\\s|$)"))
+      | "\(.dt) \(.stage)"' | sort > life.txt
+cut -d' ' -f2 life.txt | sort | uniq -c                                   # per-stage counts
+awk '$2 == "provision-attempt-start" {buf = ""} {buf = buf $0 "\n"} END {printf "%s", buf}' life.txt
+                                                                          # the latest attempt only
+```
+
+- **"`isolation-check-FAILED` on every attempt"** reads as: its count equals the
+  `provision-attempt-start` count, over at least 3 attempts.
+- **"Repeating `provision-fsm-busy`"** reads as: it ends 3 or more consecutive attempts (the last
+  lines of `life.txt` alternate `provision-attempt-start` / `provision-fsm-busy`). That is a flip
+  or LUKS-cutover step wedged for well over 15 minutes. Read the FSM state with the read-only
+  `scripts/inngest-host-state.sh` (locally, or via the `inngest-host-state.yml` one-tap wrapper,
+  #8449 UC2; see [§ Reading host state without SSH](#reading-host-state-without-ssh)). Do not
+  replace blindly: the flip FSM's flag lives in Doppler and outlives the host (ADR-100
+  Decision 6), so read it first.
+
+**Read the Sentry side without a dashboard.** `provision_attempt_failed`,
+`bootstrap_done_degraded` and `inngest_pull_fatal` are Discover-readable per host and stage, with
+the read-only token:
+
+```sh
+doppler run -p soleur -c prd -- scripts/sentry-issue.sh --host-events soleur-inngest \
+  --stage provision_attempt_failed --stats-period 7d
+doppler run -p soleur -c prd -- scripts/sentry-issue.sh --host-events soleur-inngest \
+  --stage bootstrap_done_degraded --stats-period 7d
+```
+
+Each event's detail carries `iid=` and `why=`; filter on the `iid` above.
+
+**Print a stage's detail.** The `life.txt` recipe prints only the stage. For one stage's detail
+(for example the failed units in `bootstrap-failure-journal`), reuse the same query with a stage
+filter and print `.detail`:
+
+```sh
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30d \
+  --grep bootstrap-failure-journal --limit 200 \
+  | jq -R -r --arg iid "$IID" 'fromjson? | .raw? | fromjson?
+      | select(.marker == "SOLEUR_INNGEST_BOOT_STAGE" and .host == "soleur-inngest"
+               and .stage == "bootstrap-failure-journal")
+      | select((.detail // "") | test("(^|\\s)iid=" + $iid + "(\\s|$)"))
+      | "\(.dt) \(.detail)"' | sort
+```
+
+**The delivery probe is the same reading, automated.**
+`doppler run -p soleur -c prd_terraform -- scripts/followthroughs/inngest-provision-unit-8562.sh`
+prints one `verdict=` line on stdout:
+
+| Verdict | Exit | Meaning |
+| --- | --- | --- |
+| `PASS` | 0 | A `bootstrap-done` carries the newest armed row's `iid`. |
+| `FAIL reason=degraded cause=…` | 1 | The only completions are `bootstrap-done-DEGRADED`. |
+| `FAIL reason=never-started cause=…` | 1 | Armed over 10 minutes ago; no attempt ever started (see the signatures above). |
+| `FAIL reason=no-bootstrap-done cause=…` | 1 | Attempts for over 2 h, no `bootstrap-done`. |
+| `TRANSIENT reason=not-delivered` | 2 | No armed row in 30 days. |
+| `TRANSIENT reason=in-progress` | 2 | Armed, still inside the 10-minute / 2-hour bounds. |
+| `TRANSIENT reason=probe-fault` | 3 | The query failed, credentials are missing, or the armed row's `iid` is absent, `unknown` or the hostname. |
+
+`cause=` lists that `iid`'s counts of `isolation-check-FAILED`, `inngest_pull_fatal`,
+`provision-fsm-busy` and `bootstrap-done-DEGRADED`, so the verdict line alone names the next read.
+
+**Known gap: a never-armed host reads `TRANSIENT reason=not-delivered` forever.** If an earlier
+`runcmd` item hangs, or cloud-init fails before `runcmd`, no `provision-unit-armed` row is written,
+and the probe cannot tell that from "no replace has run yet". After a delivery replace, check for
+the armed row directly (the first query above); if it is missing, the host's `runcmd-entered` and
+the last stage it reached show where `runcmd` stopped. A LUKS-stage FATAL is **not** this case:
+`runcmd` has no top-level errexit, so the unit is armed and the host ends at
+`bootstrap-done-DEGRADED`.
+
+### Reading an `inngest-provision-failure` page (#9176)
+
+The email subject is the shared boot-stage group title ("soleur-cloud-init boot stage", issue
+`WEB-PLATFORM-4S`), the same as a pull-miss page and an `inngest-provision-degraded` page. Tell
+them apart by the rule name and the `stage` / `detail` tags: **a second email minutes after a
+failure page is not a duplicate**, it is usually the degraded page for the attempt that followed
+(read it in [§ Reading an `inngest-provision-degraded` page](#reading-an-inngest-provision-degraded-page-9299)). A page whose issue is NOT `WEB-PLATFORM-4S` did not come from the host
+emitter: treat it as forged (the DSN is semi-public). Map the page to the next read, top row first:
+
+| `stage` / `why=` | Next read |
+| --- | --- |
+| `rc=143` | A kill. If the attempt ran about 65 minutes (`provision-attempt-start` to `provision-attempt-exit-143` in `life.txt`), a step hung at `TimeoutStartSec`: read the `why=` row below. If it was short, it was a shutdown or reboot. |
+| `isolation-check-FAILED`, `provision-env-MISSING`, `provision-nic-ABSENT` | The matching rows in [§ Stages](#stages). This stage is the failure itself. |
+| `provision-fsm-busy` | The FSM state, via `scripts/inngest-host-state.sh` or `inngest-host-state.yml` (see "Repeating `provision-fsm-busy`" above). |
+| `bootstrap-failure-journal` | That attempt's `bootstrap-failure-journal` detail (recipe above). |
+| `bootstrap-exit-0` | The bootstrap succeeded but writing the latch failed (root disk). Read `life.txt`. |
+| any other `why=` | The attempt died at or after that stage. Read that attempt's rows in `life.txt`. |
+
+- **Each rule throttles on its own.** `inngest-provision-failure` re-pages at most every 2 hours
+  and `inngest-provision-degraded` at most every 34 minutes, per issue group, so a failure page no
+  longer suppresses a degraded page (#9299). After a failure page, confirm `bootstrap-done` (not
+  `bootstrap-done-DEGRADED`) for the same `iid`; a degraded page is never re-emitted, so treat it as
+  open until `bootstrap-done` appears.
+- **A benign or forged page can hide a real failure.** For a retrying failure the window is up to
+  2 h. For a degraded page it is up to 34 minutes, and a real degraded event inside that window is
+  silent until the next boot, because it is not re-emitted. Corroborate with the Better Stack
+  `provision-attempt-exit-<rc>` and `bootstrap-done-DEGRADED` rows, which need a Doppler-held token
+  to write.
+- **Not paged by any rule:** a unit that never armed or never started (see the signatures above),
+  a SIGKILL or power loss, a Sentry POST that failed (`sentry-emit-FAILED` in Better Stack; for
+  `sentry-emit-FAILED stage=bootstrap_done_degraded` the degraded state has no second paging path), and a
+  bootstrap that exits 0 while broken in ways the degraded check does not test (a refused server
+  start, a missing Vector, missing flip or LUKS-cutover assets). Read these from `life.txt`.
+- **To quiet either, change the rule in Terraform** (`sentry_alert.inngest_provision_failure` or
+  `sentry_alert.inngest_provision_degraded`): raise
+  `frequency_minutes`, or set `enabled = false`, and regenerate `alert-reference.json` in the same
+  PR (the `sentry-alert-reference-expected-<run>` artifact, see the Sentry root
+  [README § Drift detection](../../../../apps/web-platform/infra/sentry/README.md#drift-detection)).
+  Do not disable it in the Sentry UI (the daily drift job reports a live `DISABLED` as a fault),
+  and never mute `WEB-PLATFORM-4S`: that group carries every web and inngest host boot stage.
+
+### Reading an `inngest-provision-degraded` page (#9299)
+
+The bootstrap exited 0 but the host is not running on its durable store, so a restart can drop
+scheduled work. The `why=` names the missing piece: `.redis-inactive` (the `inngest-redis` unit is
+not active) and/or `.no-durable-execstart` (the installed `inngest-server` unit lacks
+`--postgres-max-open-conns`, the durable-ExecStart sentinel, or could not be read). The event is
+emitted **once per boot and not re-emitted before the next one**, and there is no latch, so
+nothing retries until the next boot: treat the page as open until `bootstrap-done` appears for the
+host's current `iid` (recipes in [§ Reading a page](#reading-a-page)). The #8562 delivery probe
+reads the same state as `FAIL reason=degraded` while that follow-through is open.
+
+- **Same subject as a failure page.** Both rules page `WEB-PLATFORM-4S`; read the rule name or the
+  `stage` tag. A degraded page minutes after a failure page is the next attempt ending degraded,
+  not a duplicate.
+- **A forged degraded event can hide a real one.** The DSN is semi-public, and a page whose issue
+  is NOT `WEB-PLATFORM-4S` is forged. Each forged event opens a 34-minute window, and a real
+  degraded event that arrives inside it is suppressed and, since it is not re-emitted, stays silent
+  until the next boot; a forger repeating every 34 minutes keeps that window open. A forged page
+  also carries a forged `iid`, so do not corroborate on the page's own `iid`: read the host's
+  current `iid` from its newest `provision-unit-armed` row (recipe in
+  [§ Reading a page](#reading-a-page)) and check that life for `bootstrap-done` or
+  `bootstrap-done-DEGRADED`.
+- **A lost POST is not paged.** If the Sentry POST failed, Better Stack carries
+  `sentry-emit-FAILED stage=bootstrap_done_degraded` and nothing pages on it. That row's detail has
+  no `iid=`, so the `iid`-filtered recipes miss it; read it by stage and match its time against the
+  attempt times in `life.txt`:
+
+  ```sh
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30d \
+    --grep sentry-emit-FAILED --limit 200 \
+    | jq -R -r 'fromjson? | .raw? | fromjson?
+        | select(.marker == "SOLEUR_INNGEST_BOOT_STAGE" and .host == "soleur-inngest"
+                 and .stage == "sentry-emit-FAILED")
+        | select((.detail // "") | test("(^|\\s)stage=bootstrap_done_degraded(\\s|$)"))
+        | "\(.dt) \(.detail)"' | sort
+  ```
+
+- **To quiet it**, see the Terraform note at the end of the section above.
+
+### Replace triggers
+
+A replace (the same `inngest-host-replace` dispatch plus `op=resume`) is the answer only when a
+retry cannot fix the cause:
+
+- `isolation-check-FAILED` on **every** attempt (as read above). The boot credential's scope is
+  wrong, and retries cannot change it. Fix the Doppler scope first, then replace.
+- No `bootstrap-done` for the new `iid` more than **2 h** after its first
+  `provision-attempt-start`. Read the latest attempt's stages (above) for the cause before
+  replacing.
+- No `provision-unit-armed` for the new host (the known gap above), or armed with no
+  `provision-attempt-start` within 10 minutes.
+
+### What does not happen, by design
+
+- **A provisioned host's reboot does not re-provision it.** The latch makes the unit a no-op, as
+  `runcmd`'s once-per-instance rule did before. A degraded host has no latch and does retry at
+  its next boot.
+- **There is no SSH, latch-delete or `systemctl` step anywhere in this recovery.** The latch has
+  one writer and is reset only by a fresh root disk. Re-provisioning a host is a replace.
+- **Rollback of #8562 itself** is a revert, then the same replace plus `op=resume`, at the same
+  bounded downtime as any inngest replace.
 
 ## Reading host state without SSH
 
@@ -352,6 +641,7 @@ Fields this runbook uses (all under `.services`):
 | Field | Answers |
 |---|---|
 | `inngest_server`, `inngest_redis` | unit states (see the caveat below) |
+| `inngest_server_version` | the **installed** `/usr/local/bin/inngest` self-reported version (`1.45.1-<sha>`; `#7308` — empty = no resolvable binary; the doppler wrap + yama ptrace scope make a running-process read dead, so this is installed≈running under the immutable-redeploy rule) |
 | `inngest_journal_tail`, `inngest_redis_journal_tail`, `inngest_heartbeat_journal_tail` | the unit's own stderr, scrubbed |
 | `inngest_redis_result` | `Result`/`ExecMainStatus`/**`NRestarts`**/`ActiveEnterTimestamp`/`LoadState`/`ActiveState`/**`SyslogIdentifier`** |
 | `inngest_redis_dropin` | the drop-ins systemd has actually **loaded** (basenames; empty = none merged) |
@@ -932,8 +1222,15 @@ Inngest CLI version is pinned in `apps/web-platform/infra/inngest.tf` `locals` b
    inngest-cli version) via the canonical flow below
    ([§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify)):
    annotated tag → build → cloud-init pin bump → `workflow_dispatch` deploy →
-   verify. On deploy, `inngest-bootstrap.sh` detects the version mismatch,
-   pauses → drains → restarts → resumes (~5s downtime on loopback).
+   verify. The dedicated host's live flip is `inngest-host-replace` (destroy +
+   recreate); `inngest-bootstrap.sh`'s in-place upgrade block never runs there —
+   see `apps/web-platform/infra/inngest-cli.provenance.md` § Bump procedure, step 7. Only
+   an in-place redeploy of an already-running server enters that block: it waits a
+   `DRAIN_SLEEP_SEC` settle delay, replaces the binary and restarts the unit.
+   Nothing pauses, drains or resumes (no such CLI verb exists, #9219); in-flight
+   step dispatches are interrupted at the restart. The success-path `upgrade …`
+   log lines stay on the host, so confirm an upgrade through the release verify
+   step, not by searching Better Stack.
 
 ## Bootstrap-image release (tag → build → deploy → verify)
 
@@ -983,11 +1280,11 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    git push origin vinngest-v1.1.16
    ```
 
-   Today this fires `build-inngest-bootstrap-image.yml` through `push: tags` → builds +
-   SHA-verifies + pushes the image. It does NOT deploy. **Once #8209 removes `push: tags`**, a
-   hand-pushed tag starts nothing: confirm no build run exists for it (below), then dispatch it
-   once with `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`
-   (ADR-232 §8, R1).
+   A hand-pushed tag starts nothing: `build-inngest-bootstrap-image.yml` has no `push: tags`
+   trigger (removed by #9262, ADR-232 A5), so every build is dispatched from `main`. Confirm no
+   build run exists for the tag (below), then dispatch it once:
+   `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` (ADR-232 §8, R1).
+   That run builds, SHA-verifies and pushes the image. It does NOT deploy.
 
    **Confirming no build run exists for a tag** (required before ANY manual dispatch — a
    second build of one tag moves its digest). Build runs are titled
@@ -1018,7 +1315,10 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    git push origin vinngest-v1.1.17
    ```
 
-   That push runs its own publish and bump; do not re-run the failed run. The deletion is
+   That push starts nothing (no `push: tags` trigger since #9262). Confirm no build run exists
+   for the new tag (above), then dispatch the build once from `main`:
+   `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-v1.1.17`. Do not
+   re-run the failed run. The deletion is
    **required**, not hygiene: AC6 of `cloud-init-inngest-bootstrap.test.sh` and the bump
    take the semver-max over tags merged into `main` (ADR-232 §7), so while the tag is off
    `main` it reds only the PR carrying its commit (and branches built on it) — but the
@@ -1063,8 +1363,9 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    | `::error::tag:` with NO `tag_state=unknown` (`workflows-permission`, `bad-response`, an `http-*` from the tag-object POST, `ls-remote-failed` at the re-read) | The failure came before the ref POST: nothing was published (a tag object alone is orphaned and harmless). For `workflows-permission` (R1), hand-tag per the fallback above. Otherwise re-run the mint; it re-decides from a fresh read of the remote tags. |
    | `::error::tag:` WITH `tag_state=unknown` (`verify-failed`, `ls-remote-failed` at verify, an `http-*` from the ref POST), or a ref POST / verify hang killed at the step timeout (no `::error::` line; the name was recorded before the POST); Slack says the tag MAY exist | The ref POST was attempted, so the tag may exist even though the step failed. Check `git ls-remote --tags origin refs/tags/<tag> 'refs/tags/<tag>^{}'`. **Absent:** re-run the mint. **Present and peeling to the commit the run logged:** confirm no build run exists for it (above), then dispatch exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. **Present but peeling elsewhere:** do not dispatch; delete it per ADR-232 §7 only when no build run exists for it, then re-run the mint. Never reuse the name. |
    | `::error::dispatch:` | The tag exists and is the merged max. Confirm no build run exists for it (above), then run the line the step printed, exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. Never delete or reuse the tag. `reason=ls-remote-failed` means the origin was unreachable, not that the tag is missing. |
-   | The build or the bump failed after a successful dispatch | Re-run that build run (it posts its own Slack). |
-   | R12: a bump PR held with signed ≠ target after two auto-mints in flight | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max-tag> -f mirror_only=true` (digest-preserving; the bump re-arms auto-merge). |
+   | `::error::mint-infra-app-token: …` (the App-token step of the mint job or of a build's `bump-cloud-init-pin` job), or `::error::DOPPLER_TOKEN_INFRA_PRIVILEGED is not available` | Nothing was tagged or pushed: both jobs mint before the tag and before the push. A permission refusal (`GitHub said: …`) or a grant mismatch (`differ from the requested`, `not limited to the requested repositories`) means the live `soleur-infra` App lacks the committed manifest's scopes: do step O4c of `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`. `DOPPLER_TOKEN_INFRA_PRIVILEGED is not available`, or a Doppler read failure (`not readable from Doppler soleur-infra-privileged/prd`), means the environment secret is unseeded: step O3 of the same runbook. A transport failure (`did not complete (curl rc=…)`) needs no fix. Then, for the mint: `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`. For a bump job: `gh run rerun <run-id> --failed` (reruns only the failed bump job: no rebuild, the digest does not move). |
+   | The build or the bump failed after a successful dispatch | If the bump job failed and the build job succeeded: `gh run rerun <run-id> --failed` (reruns only the bump job; no rebuild, the digest does not move). If the build job itself failed, re-run that build run (it posts its own Slack). |
+   | R12: a bump PR held with signed ≠ target after two auto-mints in flight | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max-tag> -f mirror_only=true` (digest-preserving). Since #9262 a `mirror_only` run never arms auto-merge, and disarms one an earlier run armed. On the existing PR it refreshes the branch, disables auto-merge if it was armed (`gh pr merge <n> --disable-auto`; the run dies at stage `pr` if that fails), and posts a hold comment; the PR body keeps its original text. Review the held PR, then merge it: `gh pr merge <n> --squash`. |
    | A later run ends `result=noop` with `::notice::base=<tag>`, but that tag has no build run | An earlier dispatch was lost. Confirm no build run exists for it (above), then run `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once. |
    | R8: `base=` names a tag that reached `main` through a merge commit and has no image | Delete that tag per ADR-232 §7 (it is off-main content), then re-run the mint. |
 
@@ -1078,10 +1379,10 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    AC6 reds `main` while it stands (main-health-monitor files `ci/main-broken`), and the
    next publish's bump moves the pin back up. A *rebuild* of an off-main tag is refused.
 2. **The pin bump is authored automatically** by the publish workflow's
-   `bump-cloud-init-pin` job (ADR-232): a `soleur-ai[bot]` PR on `soleur/inngest-pin-vX.Y.Z`
+   `bump-cloud-init-pin` job (ADR-232): a `soleur-infra[bot]` PR (`soleur-ai[bot]` before #9262) on `soleur/inngest-pin-vX.Y.Z`
    with auto-merge armed when this run's zot mirror reports `ok` and the image carries an
    `org.opencontainers.image.revision` label naming the tag's commit (unlabelled legacy images
-   are opened held). The detail below is the **manual fallback**, for when that job fails (it
+   are opened held, and since #9262 so is every `mirror_only` run's PR, which also disarms auto-merge on a reused PR). The detail below is the **manual fallback**, for when that job fails (it
    posts to Slack) or holds the PR. **Never use it after a refusal at stage `args`,
    `ancestry`, or `resolve`** — a hand-written pin fixes none of them:
    - `args`: a workflow copy from before #8747 (the tag is likely off `main`).

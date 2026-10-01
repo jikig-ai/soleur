@@ -263,7 +263,7 @@ rm -rf "$root"
 #     truncates its target (same uid can plant it: the root is git-owned). ---
 root=$(fresh_root); make_repo "$root" "ws-lock"
 victim="$(mktemp "${TMPDIR:-/tmp}/gdrm-victim.XXXXXX")"; printf 'keep\n' > "$victim"
-ln -s "$victim" "${root}/.ws-lock.init.lock"
+ln -s "$victim" "${root}/.init.lock"
 rc=$(run_remove "$root" "ws-lock")
 if [ "$rc" != "0" ]; then pass; else fail "T13 lock symlink: expected refusal (non-zero), got 0"; fi
 if grep -q 'lock path is a symlink' "$ERR" && [ "$(cat "$victim")" = "keep" ]; then pass; else fail "T13 lock symlink: refusal does not name it, or the target was truncated ($(head -c 200 "$ERR"))"; fi
@@ -275,7 +275,7 @@ rm -rf "$root" "$victim"
 #     — root-only to plant, so pinned on the line rather than reproduced here). ---
 root=$(fresh_root); make_repo "$root" "ws-keep"
 rc=$(run_remove "$root" "ws-keep")
-if [ "$rc" = "0" ] && [ -e "${root}/.ws-keep.init.lock" ]; then pass; else fail "T14 lock retained: expected rc 0 with the lock file still present (rc=$rc)"; fi
+if [ "$rc" = "0" ] && [ -e "${root}/.init.lock" ]; then pass; else fail "T14 lock retained: expected rc 0 with the lock file still present (rc=$rc)"; fi
 if grep -qE '^rm -rf --one-file-system "\$repo_real" \|\| reject ' "$WRAPPER"; then pass; else fail "T14 the destructive rm does not carry --one-file-system"; fi
 if ! grep -qE '^[[:space:]]*rm -f "\$lock_file"' "$WRAPPER"; then pass; else fail "T14 the wrapper still unlinks the lock file"; fi
 rm -rf "$root"

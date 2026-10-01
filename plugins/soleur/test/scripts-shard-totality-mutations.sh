@@ -949,14 +949,26 @@ in_range && erow "DIR1-LIBSUBDIR" "scripts/lib/zz/x.sh" \
   'test-all.sh/scripts/lib but'
 
 # LEGS-COLOCATE: pin -b onto -a's leg — the committed-TSV read must report
-# both halves on leg 3 (distinct-legs arm; with no manifest override bound the
-# realized-legs read runs too and co-fails — either signature would do, and
-# `pin to legs` names the committed-pin arm directly).
-in_range && row "LEGS-COLOCATE" "$REPO_ROOT/scripts/suite-shard-legs.tsv" \
-  "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t5')" \
-  "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t3')" \
-  RED "both --rows halves pinned to the same leg defeats the split while coverage stays total" \
-  'pin to legs'
+# both halves on the SAME leg (distinct-legs arm; with no manifest override
+# bound the realized-legs read runs too and co-fails — either signature would
+# do, and `pin to legs` names the committed-pin arm directly). The pin reads
+# -a's CURRENT leg from the TSV: a regen may move either half (#9232's
+# duration-aware regen put -a on leg 1 where the hardcoded 3 landed nothing,
+# and the mutant measured GREEN). Anchors verified up front so a renamed
+# label fails loudly instead of producing a no-op mutant.
+_co_a_leg=$(awk -F'\t' '$1=="scripts/lint-orphan-test-suites-mutations-a"{print $2; exit}' \
+  "$REPO_ROOT/scripts/suite-shard-legs.tsv")
+_co_b_row=$(grep -F $'scripts/lint-orphan-test-suites-mutations-b\t' \
+  "$REPO_ROOT/scripts/suite-shard-legs.tsv" || true)
+if [[ -n "$_co_a_leg" && -n "$_co_b_row" ]]; then
+  in_range && row "LEGS-COLOCATE" "$REPO_ROOT/scripts/suite-shard-legs.tsv" \
+    "$_co_b_row" \
+    "$(printf 'scripts/lint-orphan-test-suites-mutations-b\t%s' "$_co_a_leg")" \
+    RED "both --rows halves pinned to the same leg defeats the split while coverage stays total" \
+    'pin to legs'
+else
+  in_range && fail "LEGS-COLOCATE — manifest anchors missing (-a leg='${_co_a_leg:-none}', -b row='${_co_b_row:-none}')"
+fi
 
 # DECL-SCOPE-FOREIGN: an ephemeral battery under apps/ — outside the old
 # two-tree census — declaring DECLARED_TOTAL while no arm reaches it. The

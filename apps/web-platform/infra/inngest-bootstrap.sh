@@ -6,8 +6,8 @@
 #   - Writes systemd units for inngest-server.service + inngest-heartbeat.{service,timer}.
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
-#   - On version bump, pauses the running server (drains in-flight events),
-#     restarts, resumes.
+#   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then
+#     restart; in-flight step dispatches are interrupted at the restart (#7463/#9219).
 #
 # Self-hosted Inngest binds 0.0.0.0:8288 (events) + 8289 (connect-gateway).
 # ADR-030's "loopback only" intent — keep Inngest unreachable from the public
@@ -81,10 +81,8 @@ readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
 # oneshot that emits an ERR-priority `inngest-heartbeat` line when the heartbeat unit fails.
 readonly HEARTBEAT_FAILURE_LOG_UNIT="/etc/systemd/system/inngest-heartbeat-failure-log.service"
 readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_${INNGEST_CLI_ARCH}.tar.gz"
-# In-place upgrade drain. Override via env at install time if event volume
-# exceeds ~10 events/sec sustained — at higher rates the SQLite fsync window
-# can leave some inbound HTTP events unacknowledged. Default is fine for
-# alpha-internal (CFO autonomous-draft from Stripe webhooks, low volume).
+# In-place upgrade settle delay (DRAIN_SLEEP_SEC: the name is historical — nothing is drained).
+# Not overridable on the ci-deploy sudo path (--preserve-env omits it); edit the default.
 DRAIN_SLEEP_SEC="${DRAIN_SLEEP_SEC:-2}"
 
 # Defense-in-depth: refuse to operate if the writable host paths are symlinks
@@ -121,16 +119,15 @@ fi
 if [[ -z "$SKIP_BINARY_INSTALL" ]]; then
 
 # Detect in-place version upgrade (existing service running an older version).
-# Pause the server so the in-memory queue drains to the SQLite store before
-# replacing the binary, then resume after restart. Wall-clock downtime per
-# upgrade on loopback-only binding: ~5s.
+# No pause/resume verb exists (measured absent on v1.19.4 and v1.45.1, #7463/#9219);
+# the sleep is a settle delay, not a drain — nothing is quiesced before the restart,
+# and a host replace never enters this block.
 UPGRADE_FROM=""
 if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
   UPGRADE_FROM=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
   if [[ "$UPGRADE_FROM" != "$INNGEST_CLI_VERSION" ]]; then
-    log "upgrade detected: $UPGRADE_FROM → $INNGEST_CLI_VERSION; pausing for queue drain (${DRAIN_SLEEP_SEC}s)"
-    "$INSTALL_PATH" pause >/dev/null 2>&1 || log "warn: pause command failed (continuing)"
-    sleep "$DRAIN_SLEEP_SEC"  # allow in-flight events to drain to SQLite
+    log "upgrade detected: $UPGRADE_FROM → $INNGEST_CLI_VERSION; ${DRAIN_SLEEP_SEC}s settle delay before binary replace"
+    sleep "$DRAIN_SLEEP_SEC"
   fi
 fi
 
@@ -1448,7 +1445,7 @@ fi
 # where SKIP_BINARY_INSTALL fires; leaving the write inside the guard would
 # skip it and the host would keep the OLD ExecStart indefinitely (same masking
 # class as the #4144 heartbeat-fix cascade). The binary download/install +
-# upgrade-drain stay inside the guard above (no need to re-download on a
+# upgrade settle delay stay inside the guard above (no need to re-download on a
 # no-op redeploy); only the unit write + the restart below are reconciled
 # every bootstrap. Mirrors webhook.service hardening (User=deploy,
 # ProtectSystem=strict, PrivateTmp, ReadWritePaths).
@@ -1510,7 +1507,7 @@ fi
 #   --postgres-conn-max-idle-time 1  close idle conns after 1 MINUTE so they RELEASE their
 #                                 Supavisor session (this is the release lever). ⚠ UNIT TRAP:
 #                                 this IntFlag is MINUTES (default 5), NOT seconds — verified
-#                                 against inngest v1.19.4 cmd/start; the plan's "SECS=30" was
+#                                 against inngest v1.45.1 cmd/start; the plan's "SECS=30" was
 #                                 mis-labelled (30 would mean 30 MINUTES — worse than default).
 # default_pool_size stays 30 (the #5562 30→15 revert is SUPERSEDED — its premise "cap holds
 # total under 15" is falsified by the per-pool model; a 15-slot upstream while inngest bursts
@@ -1599,8 +1596,10 @@ UNITEOF
 # the fragments contain `/`, `&`, and the literal `$${...}` Doppler token, all of which
 # sed's replacement string would mangle. The fragments are single-quoted so `$${...}`
 # stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
-# injected env (same $${...} contract as before). The `exec` in the ExecStart keeps
-# inngest as the unit's main PID (Type=simple signal/drain/`inngest pause` semantics).
+# injected env (same $${...} contract as before). NOTE the `exec` inside the bash -c
+# payload does NOT make inngest the unit's main PID — `doppler run` forks the bash
+# child and stays the MainPID itself (signal-forwarding supervisor), which is why
+# /proc/<MainPID>/exe resolves to doppler, not inngest.
 # #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
 # the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
 # every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
@@ -1678,9 +1677,8 @@ systemctl daemon-reload
 # below (this file, "enable vector.service" + "restart vector.service") and
 # the same root cause documented there. Combined with the reconcile-always
 # unit write above, an ExecStart-only change is now deploy-reliable even on a
-# same-CLI-version redeploy (SKIP_BINARY_INSTALL path). The upgrade-drain
-# pause above runs before the binary replace; this restart subsumes the start
-# and the resume below runs after.
+# same-CLI-version redeploy (SKIP_BINARY_INSTALL path). The upgrade settle
+# delay above runs before the binary replace; this restart subsumes the start.
 systemctl enable inngest-server.service 2>/dev/null || true
 # --- #7228: a REFUSED start must not take the observability stack down with it -------------
 # This was the only unguarded systemctl call in this block, and under `set -euo pipefail` a
@@ -1735,10 +1733,9 @@ if [[ "${DEDICATED_LUKS_CUTOVER:-0}" == "1" ]]; then
   log "LUKS cutover poll timer enabled (#6894)"
 fi
 
-# Resume from upgrade pause (if any).
+# In-place upgrade completion marker. Logged even when the restart above was refused
+# (its warn line and inngest-server-start-REFUSED marker report that case).
 if [[ -n "${UPGRADE_FROM:-}" ]]; then
-  sleep 2  # let the new server bind loopback before resume
-  "$INSTALL_PATH" resume >/dev/null 2>&1 || log "warn: resume command failed (server is still running)"
   log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"
 fi
 

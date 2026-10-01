@@ -28,6 +28,7 @@
 import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { usePostFcp } from "@/hooks/use-post-fcp";
 import {
   NavCountBadge,
   useNavAttentionCount,
@@ -75,8 +76,13 @@ export function ConversationsNavBadge({ collapsed }: { collapsed: boolean }) {
   const workspaceId = activeRepo?.workspaceId ?? null;
   // Gate the count until the active repo+workspace resolves (a disconnected repo
   // → no key → no count, and the dashboard shows its empty state anyway).
+  // #9178 — also gated on post-FCP: the badge count is non-critical chrome and
+  // must not contend with first paint. The active-repo read above stays
+  // ungated — it shares its key with the always-mounted useActiveRepo
+  // consumers, so gating it here would save nothing.
+  const postFcp = usePostFcp();
   const key =
-    repoUrl && workspaceId
+    postFcp && repoUrl && workspaceId
       ? swrKeys.dashboardConversationAttention(repoUrl, workspaceId)
       : null;
 
