@@ -210,17 +210,18 @@ labelled `follow-through` (`followthrough-convention.md`) carrying:
 
 Its probe is notify-only while the hold stands, and reads only `gh`:
 
-- **exit 0 (close)** — #9348 is merged, or it is closed AND the abandon branch's ledger-extension PR is
-  merged;
+- **exit 0 (close)** — #9348 is merged;
 - **exit 5 (ACTION REQUIRED)** — #9348 is open on or after 2026-10-15 (the abandon/expiry decision is
   due), or the latest `workspaces-plaintext-forget.yml` run on `main` concluded `success` more than 48 h
-  before the sweep and #9348 is still unmerged (the post-forget bound);
+  before the sweep and #9348 is still unmerged (the post-forget bound), or #9348 was closed unmerged;
 - **exit 2 (NOT YET)** otherwise; **exit 3 (CANNOT ESTABLISH)** when `gh` fails.
 
 The `earliest=2026-10-15` gate means the 48 h bound is enforced by the sweep only from that date; before
 it, the Resume session's own clock carries it (Resume step 5 names the forget run's
-`updated_at`). The probe script and its suite are written by `soleur:ship` with the tracker, not by this
-draft.
+`updated_at`). The tracker is #9380. The probe script and its suite ship to `main` in their own PR (#9381),
+not in this draft: the sweeper runs probes from `main`, so a probe inside this PR would only
+reach `main` after the hold had already cleared. A closed-unmerged #9348 reads exit 5 (confirm
+the abandon branch's ledger-extension PR merged, then close the tracker by hand).
 
 **No step here is a production write.** This PR's own work touches no host, Hetzner object or
 Terraform state. D, the forget, and the post-merge re-enable + `manual-rerun` apply are the go-ahead
@@ -1194,7 +1195,7 @@ Ref #6588
 CLO has attested, and the destruction record is `complete` before ADR-119 flips to `accepted`; (4)
 `infra-validation` is re-run green after the forget (red until then by design). Draft base SHA: <sha>.
 
-**Time bounds (follow-through #<tracker>, `earliest=2026-10-15T00:00:00Z`).** If D has not run by
+**Time bounds (follow-through #9380, `earliest=2026-10-15T00:00:00Z`).** If D has not run by
 2026-10-15, the abandon/expiry branch applies. After the forget, this PR must merge within 48 h.
 **Resume:** `knowledge-base/project/plans/2026-10-01-feat-workspaces-plaintext-wipe-pr-b-convergence-plan.md`,
 `## Resume After the Hold`.
