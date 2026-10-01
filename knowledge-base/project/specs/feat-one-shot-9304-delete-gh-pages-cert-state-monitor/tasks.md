@@ -35,4 +35,4 @@ Plan: knowledge-base/project/plans/2026-10-01-chore-delete-scheduled-gh-pages-ce
 ## Phase 5 - Post-merge
 - 5.1 Find the merge commit's apply-sentry-infra.yml run; allow 30 min
 - 5.2 If cancelled/stuck: live probe first; if the monitor persists, gh run rerun that run (never workflow_dispatch), after checking nothing newer landed under infra/sentry
-- 5.3 Prove end state: detector 1227831 returns 404 and cron-monitor-failure still binds 59; post the result on #9304 (reopen on FAIL)
+- 5.3 Prove end state two-sided: apply log reads `1 destroyed`, and detector 1227831 is 404 or no longer bound (the repo notes a removed monitor may be deactivated rather than deleted); compare the detector count with the pre-merge read, not a literal; post the observed state on #9304 (reopen on FAIL)

@@ -42,7 +42,7 @@ locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
   cron_monitor_alert_unrouted = {
-    # #9274 — created in this PR (two-PR rule): deliberately not in
+    # #9274 — added under the two-PR rule: deliberately not in
     # monitor_ids; a future PR may route it once the loop is measured. Real
     # cover meanwhile: a dead reaper lets armed bot PRs sit >48h, which
     # cron-cloud-task-heartbeat's stale-bot-PR scan (#5138) feeds

@@ -203,7 +203,12 @@ red after a complete apply). So routing a new monitor takes two PRs:
   `alert-reference.json`); PR B deletes the `sentry_cron_monitor` and its unrouted
   entry. Do not do both in one apply: Terraform orders an update that depends on a
   destroyed resource AFTER the destroy, so the monitor would be deleted while the
-  workflow still binds it — and whether Sentry accepts that is unmeasured.
+  workflow still binds it — and whether Sentry accepts that is unmeasured. PR B also
+  owes three edits a bare delete misses: remove any `NON_INNGEST_MONITORS` exemption in
+  `function-registry-count.test.ts` (its `(c3)` guard reds on a stale entry), put
+  `[ack-destroy]` alone on a line in a commit BODY (never a subject, never the PR body
+  alone), and move the count citations that T25 and `c4-count-parity` read (this
+  README, the audit-script comment, `model.c4` and `model.likec4.json`).
 - **A monitor deleted outside Terraform** is recreated by the next plan with an
   id that does not exist yet, and the projection floor then refuses every Sentry
   plan. Recover by moving its label to `cron_monitor_alert_unrouted`, letting the

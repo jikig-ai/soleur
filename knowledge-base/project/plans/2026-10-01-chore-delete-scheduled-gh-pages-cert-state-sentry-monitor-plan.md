@@ -237,10 +237,14 @@ bypasses it, and a missing ack would otherwise surface only as a red post-merge 
    non-empty, stop and surface it to the operator, because a rerun re-applies the OLD sha's config under the same
    blanket ack. A later main push run is NOT an alternative: it carries no ack, so it either plans the still-pending
    destroy and fails closed, or does not run at all (the `paths:` filter).
-3. Prove the end state with the read-only probe (one PASS/FAIL line): `GET .../detectors/1227831/` returns 404 AND
-   workflow `cron-monitor-failure` still reports `detectors == 59` (the count also proves `SENTRY_ORG` and
-   `SENTRY_API_HOST` resolve, so the 404 is not a wrong-host artifact):
-   `doppler run --project soleur --config prd --command 'H="Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN"; B="https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}"; c=$(curl -s -o /dev/null -w "%{http_code}" -H "$H" "$B/detectors/1227831/"); n=$(curl -s -H "$H" "$B/workflows/" | jq "[.[]|select(.name==\"cron-monitor-failure\")|.detectorIds|length]|first"); [ "$c" = 404 ] && [ "$n" = 59 ] && echo PASS || echo "FAIL detector=$c detectors=$n"'`
+3. Prove the end state in two sides, because `cron-monitors.tf` records that a monitor removed from the file may be
+   DEACTIVATED in Sentry rather than deleted (the #3958 residual): (a) the apply run log for the merge sha reads
+   `1 destroyed` (`gh run view <apply-run> --log | grep -a 'Apply complete'`); (b) read the detector with the same
+   Doppler-held read token the discoverability test uses: `GET .../detectors/1227831/` returns 404 (deleted), or returns
+   the object with the monitor no longer bound to `cron-monitor-failure`. Post whichever is observed, verbatim, on #9304.
+   The detector count is compared with the count read immediately before the merge (59 at plan time), never a literal:
+   a Sentry-tree commit that lands in between legitimately moves it. FAIL only when the apply log shows no destroy, or
+   the detector is still bound.
 4. `Closes #9304` auto-closes the issue at merge, before this proof exists (the operator mandated that form). So the
    probe is a verification of an already-closed issue: on PASS, post the one-line result on #9304; on FAIL, reopen
    it and follow step 2. The next `scheduled-terraform-drift.yml` Sentry leg is an advisory backstop only.
@@ -264,8 +268,9 @@ bypasses it, and a missing ack would otherwise surface only as a red post-merge 
 - [ ] AC6 — `cron-gh-pages-cert-reissue.ts` differs from `main` by comments only, and no tracked file outside the
   "Files Deliberately NOT Edited" history set still names the deleted monitor as live.
 - [ ] AC7 — the PR body has the Phase 4 first line, `Closes #9304`, and no soak/post-deploy wording or plan/spec paths.
-- [ ] AC8 — after merge, the Phase 5 probe prints `PASS` (detector 404, 59 detectors bound), and the `sentry-monitors-audit`
-  Class A warning for this detector is absent from the first audit run after the apply.
+- [ ] AC8 — after merge, the Phase 5 two-sided proof holds (apply log reads `1 destroyed`; detector 404 or no longer bound,
+  recorded verbatim; detector count unchanged from the pre-merge read), and
+  `gh run view <apply-run> --log | grep -a 'Class A'` shows no warning naming this detector.
 
 ## Risks and Sharp Edges
 

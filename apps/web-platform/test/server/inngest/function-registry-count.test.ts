@@ -55,7 +55,10 @@ function extractSentryMonitorSlugs(): Map<string, string> {
 }
 
 function extractTfMonitorNames(): Set<string> {
-  return new Set([...tfSrc.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+  // Comment lines are stripped first: a commented `# name = "<slug>"` must not
+  // satisfy the (c2)/(c3) guards for a monitor that is no longer declared.
+  const code = tfSrc.replace(/^[ \t]*#.*$/gm, "");
+  return new Set([...code.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
 }
 
 const KNOWN_UNMONITORED_SLUGS = new Set([
