@@ -963,9 +963,11 @@ workflow-injection guidance. All action references are SHA-pinned.
   hardcoded to it (ForceNew), cloudflare_record.app is pinned to its ipv4_address, and all
   15 web-1-pinned terraform_data SSH provisioners would be left un-run against a dead IP.
   DECISIVELY, and invisible to any plan-shaped gate: /mnt/data pins by-id to the PLAINTEXT
-  hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded, and nothing
-  on a fresh boot opens the mapper (guest-side unlock deferred to #6931) — so a rebuilt
-  web-1 would serve every worktree rolled back to 2026-07-23. See
+  hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded. The guest-side
+  fresh-boot path (#6931, ADR-263) now refuses that ext4 volume (stage
+  workspaces_luks_provision_discriminate, zero writes, host powers off), so a rebuilt web-1
+  fails CLOSED instead of serving every worktree rolled back to 2026-07-23; the LUKS volume
+  still sits attached and unopened, which is why the refusal stands. See
   tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
 
   A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather

@@ -6,8 +6,9 @@
 # ADR-115 amendment: this oneshot is the accepted equivalent of the
 # crypttab/keyscript the blocker named; ADR-198 amendment: the passphrase is
 # fetched at boot, never baked. Delivered by
-# terraform_data.workspaces_boot_unlock_install (workspaces-luks.tf) — web-1
-# only; a fresh host must NOT get this unit (ADR-119 §(d), #6931).
+# terraform_data.workspaces_boot_unlock_install (workspaces-luks.tf) on web-1; a
+# FRESH host gets the same unit baked into the image and enabled by
+# workspaces-luks-provision.sh (ADR-263 reverses ADR-119 §(d), #6931).
 Description=Reopen the workspaces LUKS mapper from Doppler on every boot (#9123)
 Documentation=https://github.com/jikig-ai/soleur/issues/9123
 Wants=network-online.target
