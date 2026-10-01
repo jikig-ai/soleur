@@ -954,7 +954,8 @@ jobs:
 
       # --before pins the whole transitive tree, not just likec4 (#9300: npm's CDN 404s a
       # tarball published minutes ago). Version and date are a pair; the bump procedure is
-      # under BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh.
+      # under BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh. The Dockerfile
+      # install is version-only on purpose for now (#9343).
       # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
       # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
       # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
@@ -1106,8 +1107,9 @@ jobs:
     # rather than a line anchor.
     #
     # NOTE for the next author: `npx -y <pkg>@<version>` does NOT reuse the likec4
-    # install step below as an installation, only as a download cache. Both carry the
-    # same --before date (BUMPING LIKEC4 in render-c4-model.sh).
+    # install step below as an installation — verified with a control — only as a
+    # download cache (measured in #9300), so both carry the same --before date
+    # (BUMPING LIKEC4 in render-c4-model.sh).
     #
     # Two CLIs ARE installed for tests in this shard:
     #  - gitleaks: code-to-prd.test.sh (#2726), gitleaks-rules.test.sh,

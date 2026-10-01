@@ -33,13 +33,17 @@
 #   2. Move LIKEC4_VERSION and LIKEC4_BEFORE together in EVERY site in one commit: this
 #      script, plugins/soleur/lib/c4-from-components.ts, the `Install likec4 CLI` steps
 #      in .github/workflows/ci.yml and main-health-monitor.yml (the date is a literal
-#      there), the Dockerfile and package.json (version only).
+#      there). Sweep with: git grep 'likec4@1\.'
 #      c4-likec4-version-pin.test.ts asserts parity and the age floor.
+#   Deliberately version-only (no --before): apps/web-platform/Dockerfile and package.json
+#   (the image build; tracked in #9343), and the interactive `validate` recipes in the
+#   architecture skill docs (they are asserted for the version only).
 #   Policy: the date moves with a likec4 bump, or sooner if a transitive advisory affects
 #   the CLI; the tree is otherwise frozen on purpose. A version bump that forgets the date
 #   fails the install with ETARGET (the registry knows publish times; the offline guard
-#   does not). A private registry mirror that serves metadata without per-version publish
-#   times also fails with ETARGET under --before.
+#   does not). A private registry mirror that serves metadata WITHOUT per-version publish
+#   times does not fail: npm silently ignores --before there (measured against
+#   npm-pick-manifest), so the pin is inert on that mirror and the tree floats again.
 #
 # Renders OFF-TREE to a temp path and validates structurally BEFORE publishing:
 # `likec4 export json` exits 0 even on an unresolved-reference / empty model, so

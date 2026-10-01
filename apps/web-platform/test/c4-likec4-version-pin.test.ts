@@ -30,7 +30,7 @@ function readRepo(rel: string): string {
 // `checkLikec4Pins` is the single scanner: the real-file test asserts it returns
 // [], and the string-fed self-test below asserts mutated input does not.
 // ---------------------------------------------------------------------------
-export interface Likec4PinFiles {
+interface Likec4PinFiles {
   ci: string;
   monitor: string;
   renderSh: string;
@@ -41,20 +41,24 @@ export interface Likec4PinFiles {
 const MIN_DATE_AGE_DAYS = 3;
 const DAY_MS = 86_400_000;
 const BUMP_HINT =
-  "Bump procedure: when moving LIKEC4_VERSION, set the --before date to one >= the new " +
-  "version's publish time and >= 3 days old (`npm view likec4@<version> time --json`), " +
-  "then update EVERY site in one commit (see BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh).";
+  "Bump procedure: see BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh " +
+  "(date >= the version's publish time and >= 3 days old: `npm view likec4@<version> time --json`).";
 
-/** Drop whole-line `#`, `//` and block-comment lines so prose quoting a command is not a site. */
+/**
+ * Drop whole-line `#`, `//` and block-comment lines, then trailing ` # …` / ` // …` comments,
+ * so prose quoting a command (or a decoy flag after it) is not a site. A line starting `*)`
+ * (a shell case arm) is code, not a block-comment continuation.
+ */
 function stripComments(src: string): string {
   return src
     .split("\n")
-    .filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l))
+    .filter((l) => !/^\s*(#|\/\/|\/\*|\*(\s|$|\/))/.test(l))
+    .map((l) => l.replace(/\s+(#|\/\/)\s.*$/, "").replace(/\s+#$/, ""))
     .join("\n");
 }
 
 /** Every non-comment `npm install -g likec4@<digit…>` command line, derived — never a fixed count. */
-export function extractInstallLines(src: string): string[] {
+function extractInstallLines(src: string): string[] {
   return stripComments(src)
     .split("\n")
     .filter((l) => /npm install -g likec4@[0-9]/.test(l));
@@ -66,7 +70,8 @@ function exportJsonLines(src: string, needle: RegExp): string[] {
     .filter((l) => needle.test(l));
 }
 
-export function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
+function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
+  if (Number.isNaN(now.getTime())) throw new Error("checkLikec4Pins: invalid `now`");
   const violations: string[] = [];
   const dates = new Set<string>();
 
@@ -78,6 +83,14 @@ export function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
   ] as const) {
     const lines = extractInstallLines(src);
     sites += lines.length;
+    // Census: a resolution spelled any other way (`npm i -g`, `--global`, `npx`) is not
+    // discovered by extractInstallLines, so it must not exist undetected.
+    const census = stripComments(src)
+      .split("\n")
+      .filter((l) => /likec4@[0-9]/.test(l) && /\b(npm|npx|pnpm|bunx|yarn)\b/.test(l));
+    for (const l of census) {
+      if (!lines.includes(l)) violations.push(`${name}: unrecognised likec4 resolution (use the pinned \`npm install -g likec4@<v> --before=<date>\` form): ${l.trim()}`);
+    }
     if (lines.length === 0) violations.push(`${name}: no non-comment \`npm install -g likec4@\` line found`);
     lines.forEach((l, i) => {
       const m = l.match(/--before=(\S+)/);
@@ -92,7 +105,7 @@ export function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
   sites += renderExport.length;
   if (renderExport.length !== 1) {
     violations.push(`render-c4-model.sh: expected exactly one non-comment \`export json\` line, found ${renderExport.length}`);
-  } else if (!/--before=\S*LIKEC4_BEFORE/.test(renderExport[0])) {
+  } else if (!/--before="\$\{LIKEC4_BEFORE\}"(\s|$)/.test(renderExport[0])) {
     violations.push(`render-c4-model.sh: the \`export json\` line does not pass --before=LIKEC4_BEFORE: ${renderExport[0].trim()}`);
   }
   const shDecl = stripComments(files.renderSh).match(/^LIKEC4_BEFORE="([^"]*)"/m);
@@ -104,7 +117,7 @@ export function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
   sites += tsExport.length;
   if (tsExport.length !== 1) {
     violations.push(`generate-c4-from-components.ts: expected exactly one non-comment "export","json" argv line, found ${tsExport.length}`);
-  } else if (!/--before=\$\{LIKEC4_BEFORE\}/.test(tsExport[0])) {
+  } else if (!/--before=\$\{LIKEC4_BEFORE\}[`\s,\]]/.test(tsExport[0])) {
     violations.push(`generate-c4-from-components.ts: the export json argv line does not pass --before=\${LIKEC4_BEFORE}: ${tsExport[0].trim()}`);
   }
   const libDecl = stripComments(files.lib).match(/export const LIKEC4_BEFORE = "([^"]*)"/);
@@ -117,7 +130,9 @@ export function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
     violations.push(`--before dates differ across sites: ${[...dates].sort().join(", ")}. ${BUMP_HINT}`);
   }
   for (const d of dates) {
-    const t = /^\d{4}-\d{2}-\d{2}$/.test(d) ? Date.parse(`${d}T00:00:00Z`) : NaN;
+    const parsed = /^\d{4}-\d{2}-\d{2}$/.test(d) ? Date.parse(`${d}T00:00:00Z`) : NaN;
+    // Round-trip: Date.parse rolls 2026-02-31 over to 03-03.
+    const t = !Number.isNaN(parsed) && new Date(parsed).toISOString().slice(0, 10) === d ? parsed : NaN;
     if (Number.isNaN(t)) violations.push(`--before date "${d}" is not a valid YYYY-MM-DD date`);
     else if (now.getTime() - t < MIN_DATE_AGE_DAYS * DAY_MS) {
       violations.push(`--before date ${d} is younger than ${MIN_DATE_AGE_DAYS} days (UTC); a fresh cutoff re-admits CDN-lag tarballs. ${BUMP_HINT}`);
@@ -247,6 +262,13 @@ describe("likec4 dependency-tree pin (--before) parity (#9300)", () => {
   it("every likec4 resolution site carries the same, old-enough --before date", () => {
     expect(checkLikec4Pins(readPinFiles(), new Date())).toEqual([]);
   });
+
+  // Cardinality: the scanner derives sites, so deleting a step leaves it green. One install
+  // step per job that runs likec4 tests (test-webplat, test-scripts, test-scripts-heavy);
+  // bump this with a job, deliberately.
+  it("ci.yml carries exactly one pinned install step per likec4-testing job", () => {
+    expect(extractInstallLines(readPinFiles().ci)).toHaveLength(3);
+  });
 });
 
 describe("checkLikec4Pins self-test (string-fed mutations)", () => {
@@ -315,6 +337,68 @@ describe("checkLikec4Pins self-test (string-fed mutations)", () => {
     const junk = good();
     for (const k of ["ci", "monitor", "renderSh", "lib"] as const) junk[k] = junk[k].replaceAll(D, "yesterday");
     expect(checkLikec4Pins(junk, NOW).join("\n")).toMatch(/not a valid YYYY-MM-DD/);
+  });
+
+  // Escape rows: the guard is pristine and fed input it must refuse (review of #9338).
+  it("a flag that only appears in a TRAILING comment does not satisfy a site", () => {
+    const ci = good();
+    ci.ci = installBlock([` --before=${D}`, `   # --before=${D}`, ` --before=${D}`]);
+    expect(checkLikec4Pins(ci, NOW).join("\n")).toMatch(/install line #2 has no --before/);
+    const sh = good();
+    sh.renderSh = sh.renderSh.replace(` --before="\${LIKEC4_BEFORE}" "likec4@`, ` "likec4@`) + "";
+    sh.renderSh = sh.renderSh.replace(`export json --no-use-dot -o "$T" .`, `export json --no-use-dot -o "$T" .  # --before="\${LIKEC4_BEFORE}"`);
+    expect(checkLikec4Pins(sh, NOW).join("\n")).toMatch(/render-c4-model\.sh: the `export json` line does not pass/);
+    const ts = good();
+    ts.genTs = ts.genTs.replace(` \`--before=\${LIKEC4_BEFORE}\`,`, "").replace(`"."],`, `"."], // "--before=\${LIKEC4_BEFORE}"`);
+    expect(checkLikec4Pins(ts, NOW).join("\n")).toMatch(/generate-c4-from-components\.ts: the export json argv line does not pass/);
+  });
+
+  it("an install spelled another way (npm i -g / --global) is flagged, not silently undiscovered", () => {
+    for (const spelled of ["npm i -g likec4@1.50.0", "npm install --global likec4@1.50.0", "npx -y likec4@1.50.0 export json"]) {
+      const f = good();
+      f.ci += `\n      ${spelled}\n`;
+      expect(checkLikec4Pins(f, NOW).join("\n")).toMatch(/unrecognised likec4 resolution/);
+    }
+  });
+
+  it("a mangled variable name or suffix on the flag is not accepted", () => {
+    const sh = good();
+    // The header comment quotes the flag first, so anchor on the real line's `--ignore-scripts`.
+    sh.renderSh = sh.renderSh.replace(`--ignore-scripts --before="\${LIKEC4_BEFORE}"`, `--ignore-scripts --before="\${NOT_LIKEC4_BEFORE}"`);
+    expect(checkLikec4Pins(sh, NOW).join("\n")).toMatch(/does not pass/);
+    const ts = good();
+    ts.genTs = ts.genTs.replace("`--before=${LIKEC4_BEFORE}`", "`--before=${LIKEC4_BEFORE}x`");
+    expect(checkLikec4Pins(ts, NOW).join("\n")).toMatch(/does not pass/);
+  });
+
+  it("a missing LIKEC4_BEFORE declaration, or a second export line, is caught", () => {
+    const sh = good();
+    sh.renderSh = sh.renderSh.replace(`LIKEC4_BEFORE="${D}"\n`, "");
+    expect(checkLikec4Pins(sh, NOW).join("\n")).toMatch(/no LIKEC4_BEFORE="<date>" declaration/);
+    const lib = good();
+    lib.lib = lib.lib.replace(/export const LIKEC4_BEFORE.*\n?/, "");
+    expect(checkLikec4Pins(lib, NOW).join("\n")).toMatch(/no `export const LIKEC4_BEFORE/);
+    const two = good();
+    two.renderSh += `npx -y --ignore-scripts "likec4@\${LIKEC4_VERSION}" export json .\n`;
+    expect(checkLikec4Pins(two, NOW).join("\n")).toMatch(/exactly one non-comment `export json` line, found 2/);
+  });
+
+  it("the 3-day age floor is exact, an impossible date is refused, and an invalid `now` throws", () => {
+    const at = (d: string, now: string) => {
+      const f = good();
+      for (const k of ["ci", "monitor", "renderSh", "lib"] as const) f[k] = f[k].replaceAll(D, d);
+      return checkLikec4Pins(f, new Date(now));
+    };
+    expect(at("2026-10-02", "2026-10-05T00:00:00Z")).toEqual([]); // exactly 3 days: allowed
+    expect(at("2026-10-03", "2026-10-05T00:00:00Z").join("\n")).toMatch(/younger than 3 days/); // 2 days
+    expect(at("2026-02-31", "2026-10-05T00:00:00Z").join("\n")).toMatch(/not a valid YYYY-MM-DD/);
+    expect(() => checkLikec4Pins(good(), new Date("nope"))).toThrow(/invalid `now`/);
+  });
+
+  it("a shell case arm starting with `*)` is code, not a block comment", () => {
+    const f = good();
+    f.ci += "\n      *) npm install -g likec4@1.50.0 ;;\n";
+    expect(checkLikec4Pins(f, NOW).join("\n")).toMatch(/has no --before/);
   });
 
   it("must-PASS: every site moved together to another valid old date is clean (guard is not pinned to one literal)", () => {

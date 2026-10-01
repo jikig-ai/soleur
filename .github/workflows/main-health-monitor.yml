@@ -91,7 +91,7 @@ permissions:
 #                        and here. Guarded by Test 5 of
 #                        plugins/soleur/test/required-checks-canonical-parity.test.sh
 #                        (this file added to its list by #7307).
-#   LIKEC4_VERSION    -> 7 sites: Dockerfile, package.json (x2),
+#   LIKEC4_VERSION    -> sites: Dockerfile, package.json (x2),
 #                        plugins/soleur/scripts/render-c4-model.sh,
 #                        ci.yml (test-webplat + test-scripts + test-scripts-heavy),
 #                        and here.
