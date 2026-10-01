@@ -2637,14 +2637,19 @@ resource "hcloud_volume" "workspaces" {
   # web-2's LUKS-at-boot store.
   #
   # `ignore_changes = [format]` is CREATION-ONLY and load-bearing, and the two halves (no `format`
-  # above, this below) are pinned together by workspaces-luks-fresh-boot.test.sh. `format` is
-  # ForceNew; the LIVE volumes were created `ext4`, so dropping the attribute without ignoring it
-  # would plan a REPLACE that prevent_destroy turns into "Instance cannot be destroyed" on every
-  # targeted plan that transitively includes the volume (the class ADR-119's 2026-09-28 addendum
-  # measured: hcloud_firewall_attachment.web -> hcloud_server.web -> user_data ->
-  # workspaces_volume_id). Merging therefore changes NO live volume. The live web-2 volume is
-  # converted by a single-use, gated rebirth (ADR-263), never by this block. Do NOT "fix" this by
-  # deleting the ignore: it is the difference between a no-op merge and a wedged apply.
+  # above, this below) are pinned together by fresh-boot-parity.test.sh section 19. MEASURED on the
+  # pinned hcloud 1.63.0 (offline plan against a state shaped like the live volume, 2026-10-01):
+  # `format` is NOT ForceNew. Dropping it WITHOUT this ignore plans an in-place update
+  # (`format = "ext4" -> null`, "1 to change"), and so does changing it to another value; WITH the
+  # ignore the same plan is "No changes". (The assumption that it forces a replace that prevent_destroy
+  # turns into "Instance cannot be destroyed" was tested and is FALSE.) The ignore is still required:
+  # the LIVE volumes were created `ext4`, and without it every targeted plan that transitively reaches
+  # the volume (hcloud_firewall_attachment.web -> hcloud_server.web -> user_data -> workspaces_volume_id,
+  # the path ADR-119's 2026-09-28 addendum measured) carries a PENDING in-place change on a volume that
+  # holds user data, which the destroy-guard counters and the drift workflow would report on every run
+  # and the provider's update handling of which this repo does not exercise. With it, merging changes
+  # NO live volume. The live web-2 volume is converted by a single-use, gated rebirth (ADR-263), never
+  # by this block. Do NOT "fix" this by deleting the ignore.
   #
   # NOT in the push-apply `-target` allow-list directly, but REACHED transitively through
   # hcloud_server.web (see above), which is why the ignore matters.

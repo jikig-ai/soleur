@@ -68,8 +68,10 @@ stays web-1-bound and outside the birth fan-out (#6964); `web-host-birth-gate.sh
 `web-1` by name, which is the cheapest enforceable invariant under D1.
 
 **D2 - Raw at birth; the live web-2 is converted by a gated rebirth.** `hcloud_volume.workspaces` drops
-`format = "ext4"` and gains `lifecycle { ignore_changes = [format] }` beside `prevent_destroy`. `format` is
-ForceNew, so `ignore_changes` is what makes the merge a no-op for the live volume. New volumes are born
+`format = "ext4"` and gains `lifecycle { ignore_changes = [format] }` beside `prevent_destroy`. Measured on
+hcloud 1.63.0 (offline plan against a state shaped like the live volume): `format` is NOT ForceNew; dropping it
+plans an in-place `ext4 -> null` update on a volume that holds user data, and `ignore_changes` turns the same plan
+into "No changes", so it is what makes the merge a no-op for the live volume. New volumes are born
 raw. A born-ext4 volume reaching the provisioner is FATAL (a wrong plan), never reformatted.
 **Raw-at-birth is an exception to the "volume is never rebuilt" posture, not a loosening of it:** the
 only volume ever created raw is one that has never held data, and the one-time conversion of the live

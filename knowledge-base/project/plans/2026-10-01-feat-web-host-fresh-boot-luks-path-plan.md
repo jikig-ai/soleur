@@ -588,9 +588,9 @@ logs:
   where: journald (luks-monitor and workspaces-luks-reopen units) shipped by Vector to Better Stack source 2457081
   retention: Better Stack source retention; Sentry event retention
 discoverability_test:
-  command: bash scripts/betterstack-query.sh "host:soleur-web-2 SOLEUR_FRESH_BOOT_READY"
-  expected_output: luks=1
-  credentials_required: Better Stack ClickHouse read connection (Doppler soleur/prd_terraform BETTERSTACK_QUERY_*) - a remote host's boot row has no unauthenticated substitute
+  command: bash scripts/followthroughs/web2-luks-live-6931.sh
+  expected_output: PASS
+  credentials_required: Better Stack ClickHouse read connection (Doppler soleur/prd_terraform BETTERSTACK_QUERY_*) plus the marker config read token - a remote host's boot row has no unauthenticated substitute
 ```
 
 ## Encryption Posture
@@ -800,8 +800,10 @@ Quality gates:
   device and the app container does not start.
 - Given the web-2 probe row is 30 h old, when the verify leg runs, then `WORKSPACES_LUKS_CUTOVER_AT` is deleted.
 - Given a `web-host-create` dispatch for `web-1`, when the gate runs, then it refuses with the named reason.
-- Integration (for `soleur:qa`, deterministic, no SSH): `bash scripts/betterstack-query.sh "host:soleur-web-2
-  SOLEUR_FRESH_BOOT_READY"` expects a row containing `luks=1`.
+- Integration (for `soleur:qa`, deterministic, no SSH): `bash scripts/followthroughs/web2-luks-live-6931.sh` prints
+  `PASS` once web-2 is converted and has soaked (before that it exits 2 with `NOT YET`). The raw-row form
+  `scripts/betterstack-query.sh` has no host syntax (its `--grep` OR-combines terms), so the host-scoped read lives in
+  `scripts/lib/web2-luks-rows.sh` (explicit `host_name` equality), as `scripts/betterstack-assert-absence.sh` does.
 
 ## Domain Review
 
@@ -949,3 +951,14 @@ in-place web-2 reformat vs rebirth.
 - `apps/web-platform/infra/workspaces-luks.tf`, `workspaces-luks-reopen.sh`, `luks-monitor.sh`, `lb-weight-gate.sh`, `cloud-init-registry.yml`, `cloud-init-git-data.yml` (blkid-aware format guard).
 - Related issues: #6964 (attachment web-1-bound), #6604 and #6588 (cutover), #6730 (web-1 birth path), PR B #9348.
 - Brainstorm: none (direct one-shot planning); the CTO and CLO consults are recorded under Domain Review.
+
+## Work-phase measurements and corrections (2026-10-01, appended — the sections above are the planning-time record)
+
+- **Live volume (Phase 0.2).** Read-only Hetzner GET: `soleur-web-platform-data-web-2` (id 106466179) reports `format: ext4`, attached to the web-2 server, delete protection off; the `workspaces_luks` and inngest-LUKS volumes report no format. The "born ext4" premise holds on the affected resource.
+- **`format` is NOT ForceNew on the pinned provider (supersedes the Technical statements in D2, the merge-effect paragraph and Sharp Edges).** Offline `terraform plan -refresh=false` with hcloud 1.63.0 against a state shaped like the live volume: baseline No changes; dropping `format` without an ignore plans `format = "ext4" -> null` (1 to change, 0 to destroy); changing it to `xfs` is also an in-place update; dropping it WITH `ignore_changes = [format]` is No changes. The `ignore_changes` is therefore kept for a different reason than stated: it keeps a pending in-place change off every targeted plan that reaches a user-data volume, not to avoid a replace.
+- **Escrow transport (Phase 0.7).** `curl --aws-sigv4 'aws:amz:auto:s3'` with the credential pair on `--config -` and an `x-amz-content-sha256` header validates against an independent SigV4 verifier on Ubuntu 24.04's curl 8.5.0 (and 8.22): HEAD 404, PUT 200, HEAD 200 with the right length. Not yet exercised against R2; `escrow=ok` on the live rebirth is that proof.
+- **Probe characterization (Phase 0.3).** The shared Better Stack heartbeat push at the end of `luks-monitor.sh` is web-1's dead-probe switch; a second pusher would mask a dead web-1 probe, so a `standby` profile (written to `/etc/default/luks-monitor` by cloud-init) skips it. The host-timer-dark alert already scopes to `host_name = 'soleur-web-platform'`, so web-2's OK rows do not mask it.
+- **Row contract.** The readiness row is a direct-curl row with no host dimension, so it now carries `host=` (the baked Terraform host name) and `boot_id=`; `scripts/betterstack-query.sh` has no host syntax, so the host-scoped reads live in `scripts/lib/web2-luks-rows.sh`.
+- **Not-live-yet.** The daily marker job treats a well-formed zero-row answer with the marker absent as a notice, not a red run (the gate is closed either way); every defect and every disappearance after the marker exists is still RED.
+- **ADR ordinal.** ADR-262 was already taken on a sibling branch; this change uses ADR-263.
+- **Split out.** Phase 7 (the single-use web-2 volume rebirth, the destroy mechanism of 0.4, the explicit `image_tag` + content-hash check of 0.10) is its own PR/operation, per the plan's Delivery slicing; the ledger row stays a truthful `plaintext-exception` until it lands.
