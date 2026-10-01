@@ -217,6 +217,9 @@ _EMIT_COMMANDS=0
 #              or measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
 # --print-affected-set   Enumerate-shaped plumbing: walks every registration and
 #              emits AFFECTED_CLASS\t<label>\t<class> receipts, runs nothing.
+# --print-selection      The diff-aware counterpart (#9307): runs the pre-pass a real
+#              --affected run applies and prints AFFECTED_SELECTED\t<label>\t0|1
+#              per runnable suite plus one AFFECTED_SUMMARY, running nothing.
 #
 # Parsed as a WHILE-LOOP over leading flags, replacing the $1-only if/elif that
 # predated the mode flags — `--enumerate-commands --affected scripts` composes.
@@ -225,6 +228,23 @@ _EMIT_COMMANDS=0
 _AFFECTED_REQ=0        # --affected (or --print-affected-set) named explicitly
 _FULL_REQ=0            # --full named explicitly
 _PRINT_AFFECTED=0
+# --print-selection (#9307): run the affected pre-pass and print what THIS diff
+# selects (AFFECTED_SELECTED per runnable suite + one AFFECTED_SUMMARY), running
+# no suite. --print-affected-set prints CLASSES and ignores the diff.
+_PRINT_SELECTION=0
+# --paths=<a,b,...> (#9307): with --print-selection only, select against THESE paths
+# instead of the real diff -- "what would these files select?". Print-only by
+# construction (--print-selection exits before any suite runs), so it can never
+# narrow a real run's diff.
+_PRINT_PATHS=""
+_PRINT_PATHS_REQ=0
+# --affected-scope=branch|staged (#9173): which diff the affected axis selects
+# on. `staged` swaps the selection window to the index (`git diff --cached`) —
+# the pre-commit hook's unit of work is the commit, not the branch. Valid only
+# where an affected axis consumes _diff_names; rejected with --full, an unknown
+# enum, or a non-affected TEST_GROUP (post-parse validation below).
+_AFF_SCOPE=branch
+_AFF_SCOPE_REQ=0
 # Wall-clock bound for the enumerate family (#8761). Overridable by
 # SOLEUR_ENUM_DEADLINE_S (digits only, else the default holds); the deadline is
 # a safety bound on a seconds-scale walk, not a performance assertion — a clean
@@ -271,8 +291,20 @@ while [[ "${1:-}" == --* ]]; do
     --affected)
       _AFFECTED_REQ=1
       ;;
+    --affected-scope=*)
+      _AFF_SCOPE="${1#--affected-scope=}"
+      _AFF_SCOPE_REQ=1
+      ;;
     --full)
       _FULL_REQ=1
+      ;;
+    --print-selection)
+      _PRINT_SELECTION=1
+      _AFFECTED_REQ=1
+      ;;
+    --paths=*)
+      _PRINT_PATHS="${1#--paths=}"
+      _PRINT_PATHS_REQ=1
       ;;
     --print-affected-set)
       # Plumbing, not an early exit: it RAISES enumerate so the walk below emits
@@ -292,6 +324,13 @@ Modes (local default is --affected; CI always runs the full battery):
   --full                the whole battery. Refused under SOLEUR_SUBAGENT=1 or
                         measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
   --print-affected-set  emit AFFECTED_CLASS receipts per registration; runs nothing.
+  --print-selection     print what THIS diff selects (AFFECTED_SELECTED per suite +
+                        AFFECTED_SUMMARY); runs nothing. --print-affected-set prints
+                        classes and ignores the diff.
+  --paths=a,b           with --print-selection: select against these paths instead
+                        of the real diff (print-only; never narrows a real run).
+  --affected-scope=V    diff source for affected selection: branch (default) or
+                        staged (the index — what the pre-commit hook gates on).
   --enumerate           emit the leg's assigned registration labels; runs nothing.
   --enumerate-commands  emit each registration's argv as SUITE_COMMAND records.
   --capacity            report whether the box can absorb another full gate.
@@ -300,6 +339,14 @@ Modes (local default is --affected; CI always runs the full battery):
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
+
+Run machinery (#8993/#8940): the parent-death watchdog self-terminates an
+orphaned run plus its suite children — SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 opts
+out (deliberate backgrounding), SOLEUR_TEST_ALL_WD_POLL_S sets its poll
+interval (default 1, floor 1). Each suite tees to a per-run scratch log;
+non-ok classes copy it under
+${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/ and print
+log=<path> on the summary line — SOLEUR_TEST_ALL_LOG_DIR relocates it.
 
 Enumerate modes die at a hard wall-clock deadline — SOLEUR_ENUM_DEADLINE_S
 seconds (default 900); a deleted-cwd walk exits 4, it never spins.
@@ -958,6 +1005,51 @@ if [[ "$TEST_GROUP" == "affected" ]] \
   exit 2
 fi
 
+# --print-selection reports the affected pre-pass, which exists only for
+# TEST_GROUP=all and never alongside the class-only enumerate plumbing.
+if (( _PRINT_SELECTION == 1 )) && { (( _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" != "all" ]]; }; then
+  echo "ERROR: --print-selection needs TEST_GROUP=all and cannot combine with --print-affected-set." >&2
+  exit 2
+fi
+
+# --paths is print-only. Besides --print-selection it is accepted with --enumerate-commands,
+# because the affected pre-pass forwards it to its enumerate child (the child decides the
+# relevance-gated DECLINED records, which must read the same named paths as the parent).
+# --print-affected-set also raises enumerate, but it ignores the diff, so --paths there is
+# refused rather than silently dropped.
+if (( _PRINT_PATHS_REQ == 1 && _PRINT_SELECTION == 0 )) \
+  && { (( _ENUMERATE == 0 )) || (( _PRINT_AFFECTED == 1 )); }; then
+  echo "ERROR: --paths is print-only: it is valid only with --print-selection." >&2
+  exit 2
+fi
+
+# --affected-scope names WHICH diff an affected axis selects on (#9173). It is
+# meaningful only where an affected axis consumes _diff_names — `--affected`
+# (explicit or the local default) and `TEST_GROUP=affected` — so the three
+# mis-combinations below exit 2 with usage rather than silently scoping a run
+# the flag does not describe. `--affected-scope=branch` is the default spelled
+# out: accepted on the same axes, identical behaviour.
+if (( _AFF_SCOPE_REQ == 1 )); then
+  case "$_AFF_SCOPE" in
+    branch|staged) ;;
+    *)
+      echo "ERROR: --affected-scope must be one of: branch, staged (got: $_AFF_SCOPE)" >&2
+      echo "Usage: bash scripts/test-all.sh [--affected [--affected-scope=branch|staged]] [all|webplat|bun|scripts|scripts-heavy|infra|affected]" >&2
+      exit 2
+      ;;
+  esac
+  if (( _FULL_REQ == 1 )); then
+    echo "ERROR: --affected-scope cannot be combined with --full — the whole battery consults no diff." >&2
+    echo "       Valid invocations: --affected [--affected-scope=branch|staged] or TEST_GROUP=affected." >&2
+    exit 2
+  fi
+  if [[ "$TEST_GROUP" != "all" && "$TEST_GROUP" != "affected" ]]; then
+    echo "ERROR: --affected-scope scopes an affected selection only; TEST_GROUP=$TEST_GROUP is a different axis." >&2
+    echo "       Valid invocations: --affected (explicit or the local default) or TEST_GROUP=affected." >&2
+    exit 2
+  fi
+fi
+
 # --- Subagent full-gate refusal (Item 6 of the 2026-08-11 test-pipeline post-mortem) ---------
 # A spawned subagent runs only the suites targeting the files it was given. Three review agents
 # running lints and suites concurrently inflated a measurement of the registry mutation battery
@@ -1299,6 +1391,8 @@ _aff_ready=0
 _aff_fallback=""
 _aff_sel=()
 _aff_label=()
+_aff_cls=()
+_aff_edges=()
 
 # --- Shard selection at the registration chokepoint (#7902, #8006) ---------------------------
 #
@@ -1576,11 +1670,42 @@ run_suite() {
   _repo_last_suite="$label"
   local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
+  # #8940 — tee every suite's combined output into a per-suite file inside the
+  # session scratch root. The scratch root is deleted by
+  # _soleur_scratch_cleanup at run exit, which is exactly the loss window the
+  # issue names; a non-ok classification below copies the file to
+  # _durable_log_dir (outside the scratch root) and the summary line prints
+  # the durable path. Skipped/declined suites return before this point, so no
+  # artifact exists for a suite that never ran. When the scratch lib did not
+  # allocate a session root the tee is skipped and the suite runs bare — a
+  # missing log store must never change the run itself.
+  local _suite_log=""
+  if [[ -n "$_suite_log_dir" ]]; then
+    local _candidate="$_suite_log_dir/${label//\//__}.log"
+    # Probe-create BEFORE teeing: an unwritable log store would leave tee with
+    # a dead output, the suite would take SIGPIPE on its first write, and a
+    # healthy suite would classify phantom-KILLED (rc 141) with no log at
+    # all. A missing store degrades to the unchanged bare-exec path instead.
+    if mkdir -p "$_suite_log_dir" 2>/dev/null \
+       && : >"$_candidate" 2>/dev/null; then
+      _suite_log="$_candidate"
+    else
+      printf 'WARNING: suite log store unwritable — %s runs without tee capture (#8940)\n' "$label" >&2
+    fi
+  fi
   # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
   # it discards WHICH non-zero the suite returned, which is precisely the
   # information needed to tell a terminated suite from a failed one.
+  # PIPESTATUS[0] reads the SUITE's rc through the tee — the pipeline's own rc
+  # would be tee's without pipefail. The `||` arm neutralises set -e AND pipefail
+  # in one shape; PIPESTATUS inside the `||` operand still names the pipeline.
   local rc=0
-  "$@" || rc=$?
+  if [[ -n "$_suite_log" ]]; then
+    _suite_log_in_flight="$_suite_log"
+    "$@" 2>&1 | tee "$_suite_log" || rc=${PIPESTATUS[0]}
+  else
+    "$@" || rc=$?
+  fi
   # An ABORTING classifier is its own degradation and must not be absorbed into
   # the ordinary `failed` bucket: that would make a broken classifier — which can
   # mis-bucket every subsequent suite — indistinguishable from one honest test
@@ -1601,6 +1726,28 @@ run_suite() {
     *)      echo "WARNING: suite_exit_class returned unrecognized class '$status' for rc=$rc (classifier exit=$cls_rc); counting as FAILED." >&2
             status="failed"; failed=$((failed + 1)) ;;
   esac
+  # #8940 — retain a non-ok suite's tee'd log OUTSIDE the session scratch
+  # root: the scratch root is deleted at run exit, so a failure diagnosis
+  # that lives only inside it dies with the run. The durable path is printed
+  # on the suite's summary line below via `_log_field`; a suite that never
+  # produced output (skipped, declined, stillborn before the tee) has no
+  # file and prints no field.
+  local _log_field=""
+  if [[ "$status" != "ok" && -n "$_suite_log" && -f "$_suite_log" ]]; then
+    local _durable_path="$_durable_log_dir/${label//\//__}.log"
+    if mkdir -p "$_durable_log_dir" 2>/dev/null \
+       && cp "$_suite_log" "$_durable_path" 2>/dev/null; then
+      _log_field=" log=$_durable_path"
+    else
+      # A retention failure must be loud: silently omitting `log=` makes it
+      # indistinguishable from "nothing to retain" (#8940's own defect class).
+      printf 'WARNING: durable copy failed — %s log only at %s until scratch cleanup (#8940)\n' "$label" "$_suite_log" >&2
+    fi
+  fi
+  # Clear AFTER the retention copy: a TERM in the pipeline→copy window would
+  # otherwise lose the just-failed suite's log — the retention arm's exact
+  # purpose (#8940). The trap reads this variable, not the local.
+  _suite_log_in_flight=""
   # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
   # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
   # microseconds substring (a leading zero would otherwise trigger octal).
@@ -1646,7 +1793,7 @@ run_suite() {
     local _kb; _kb="$(_suite_budget_ms "$label")"
     local _bnote=""
     [[ -n "$_kb" ]] && _bnote=" This suite declares a ${_kb}ms budget, so compare the elapsed above against it before treating the duration as anomalous."
-    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}" >&2
+    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}${_log_field}" >&2
     printf '%s\t%d\tKILLED%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
     # rc 97 is the git-location tripwire (#7833), not an assertion failure. It means the runner
@@ -1657,10 +1804,10 @@ run_suite() {
     # "distinctive… attributable at a glance", and that was not true of the one runner in this repo
     # that classifies exit codes.
     if (( rc == 97 )); then
-      echo "[TRIPWIRE] $label (rc=97, ${elapsed_ms}ms) — the runner aborted on an inherited git-location environment; its coverage was NOT obtained. Fix the entry point that started it (see the FATAL block above for the exact unset), then re-run. This is not a failing assertion." >&2
+      echo "[TRIPWIRE] $label (rc=97, ${elapsed_ms}ms) — the runner aborted on an inherited git-location environment; its coverage was NOT obtained. Fix the entry point that started it (see the FATAL block above for the exact unset), then re-run. This is not a failing assertion.${_log_field}" >&2
       printf '%s\t%d\tTRIPWIRE%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     else
-      echo "[FAIL] $label (${elapsed_ms}ms)" >&2
+      echo "[FAIL] $label (${elapsed_ms}ms)${_log_field}" >&2
       printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     fi
   fi
@@ -1755,12 +1902,50 @@ skip_suite() {
 _diff_detect_ok=0
 _diff_head_ok=0
 _diff_names=""
-if _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
+# STAGED SCOPE (#9173; ADR-242 amendment). `--affected-scope=staged` swaps the
+# selection diff from the branch window to the index — a pre-commit gate's unit
+# of work is the commit, not the branch. `git diff --cached` runs in both forms
+# (name-only for the blob, --name-status -M for the rename-source parity the
+# branch assembly keeps below), and every branch-window source is guarded off:
+# the HEAD diff, the origin/main...HEAD range, and all three untracked appends
+# — untracked content is definitionally not in the commit. Detection keys on
+# the --name-only read; its failure leaves both arms 0, so the
+# undecidable-diff fail-safe fires unchanged.
+#
+# The `git diff --cached` reads sit AFTER this script's named `GIT_*` unset
+# list near the top of the file (GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+# GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+# GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH): lefthook injects
+# GIT_INDEX_FILE/GIT_DIR into hook subprocesses (data-loss class,
+# #7772/#7835), so post-unset the index reads rediscover the real worktree
+# index — never lefthook's bookkeeping index. A FUTURE hook-exported `GIT_*`
+# name not on that list would reopen the hole — the list is fixed, not a
+# sweep — so a new lefthook env var is a re-check obligation, not a covered
+# case.
+if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then
+  if _diff_out="$(git -c core.quotePath=false diff --cached --name-only 2>/dev/null)"; then
+    _diff_head_ok=1
+    _diff_detect_ok=1
+    _diff_names="${_diff_names}
+${_diff_out}"
+  fi
+  _diff_names="${_diff_names}
+$(git -c core.quotePath=false diff --cached --name-status -M 2>/dev/null || true)"
+  # The SANDBOX_STAGED_NAMES seam is INJECTED HERE by
+  # test-all-affected.test.sh's build_sandbox — never shipped inline (#9197
+  # security seat: an env-readable substitution in production is the first
+  # SANDBOX_* seam that could narrow a real run's diff). Intra-branch
+  # placement is still required: a post-assembly substitution cannot prove
+  # the branch sources below stayed dark, because a leak would land ON TOP
+  # of the substituted set. The anchor is the `diff --cached --name-status`
+  # line above — the injection asserts exactly one.
+fi
+if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
   _diff_head_ok=1
   _diff_names="${_diff_names}
 ${_diff_out}"
 fi
-if _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
+if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
   _diff_detect_ok=1
   _diff_names="${_diff_names}
 ${_diff_out}"
@@ -1768,20 +1953,30 @@ fi
 # RENAME SOURCES. `--name-only` emits only the DESTINATION of a rename, so `git mv` on a declared
 # predicate path leaves the OLD path — the one the array names — absent from the diff, and the
 # battery declines on the single most destructive edit possible to its own SUT. `--name-status -M`
-# emits `R100<TAB>old<TAB>new`, and since matching is substring-based over this whole blob, adding
-# it makes BOTH paths matchable. (The narrow window this closes is a rename WITHOUT a matching
+# emits `R100<TAB>old<TAB>new`; both matchers read the whole blob with TABs split to newlines (the
+# substring matcher natively, `_diff_edge_hit` by an explicit split), so BOTH paths are matchable
+# by an unanchored edge AND by an anchored one. (The narrow window this closes is a rename WITHOUT a matching
 # array update; `lint-orphan-test-suites.sh` already reds loudly in the same run for that case, so
 # it was never a silent green — this just stops the suite declining while that error prints.)
+# Skipped under staged scope: the staged branch above emits the --cached form
+# of this same rename-source pairing.
+if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
 _diff_names="${_diff_names}
 $(git -c core.quotePath=false diff --name-status -M HEAD 2>/dev/null || true)
 $(git -c core.quotePath=false diff --name-status -M origin/main...HEAD 2>/dev/null || true)"
+fi
 # WIDENED from `-- apps/web-platform/infra` to the union of every prefix the relevance
 # predicates declare. The narrow form was correct while the only consumer was the infra notice;
 # as a suite GATE it was a fail-open, because a brand-new UNTRACKED mutation target under
 # scripts/ or .github/ was invisible here — so the session that ADDS a target and runs the gate
 # before committing would have had the suite declined on the very diff that needed it.
+# Skipped under staged scope (untracked content is not in the commit). The
+# scope check lives INSIDE the command substitution, on ONE line: the infra
+# suite's real-state arm extracts this assembly by awk range terminating at
+# this append's line — a wrapping conditional truncates that extraction
+# mid-statement, and naming the command here would end it a line early.
 _diff_names="${_diff_names}
-$(git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true)"
+$(if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then :; else git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true; fi)"
 # Affected mode ALSO appends the UNSCOPED untracked list (#8322): any untracked
 # file can be an edge target — a brand-new suite file's own path is its
 # self-edge, and a new file under a declared prefix must select the suite
@@ -1800,18 +1995,82 @@ $(git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>
 # axis's regression suite anchors on its own opener line, and the modes are now disjoint
 # (TEST_GROUP=affected never arms _AFFECTED), so exactly one of these ever fires.
 if (( _AFFECTED == 1 )); then
+  # Skipped under staged scope — untracked content is not in the commit. The
+  # guard is nested rather than merged into the opener because
+  # test-all-affected.test.sh's w1 arm extracts this block from the exact
+  # `if (( _AFFECTED == 1 )); then` opener to its first column-0 `fi`.
+  if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
   _diff_names="${_diff_names}
 $(git ls-files --others --exclude-standard 2>/dev/null || true)"
+  fi
 fi
+# The TEST_GROUP=affected append below carries the same nested scope guard as
+# the _AFFECTED block above — and the guard MUST stay nested in the same
+# shape: test-all-group-affected.test.sh's A7 arm pins `git ls-files` at
+# exactly opener+3 via grep -A3, so ANY line inserted inside this block
+# (including a comment) pushes the command past the pin. If the layout must
+# change, change the sibling pin with it.
 if [[ "$TEST_GROUP" == "affected" ]]; then
+  if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
   _diff_names="${_diff_names}
 $(git ls-files --others --exclude-standard 2>/dev/null || true)"
+  fi
 fi
 
+# --paths (#9307): the caller named the paths, so they ARE the diff. Both detection
+# arms are set -- a named path list is fully determined, so neither undecidable-diff
+# arm can fire -- while the runner-changed arm still reads the names honestly (a
+# list naming the runner itself degrades, as a real diff would).
+if (( _PRINT_PATHS_REQ == 1 )); then
+  _diff_names="${_PRINT_PATHS//,/$'\n'}"
+  _diff_detect_ok=1
+  _diff_head_ok=1
+fi
+
+# Newline constant for the anchored edge matcher below. A variable rather than an
+# inline $'\n' so each mutation-battery row rewrites ONE plain line of it.
+_NL=$'\n'
+
+# Anchored edge match (#9307). `_affected_add_edge` mints `^`-prefixed edges:
+# `^dir/` is a path PREFIX (a diff line that STARTS with dir/), `^file` an EXACT
+# line. The legacy substring match let the bare command word `test` in
+# `bun test <file>` -- which resolves to the repo-root test/ directory -- select
+# its suite for any diff path that merely CONTAINED "test", a knowledge-base-only
+# diff included. Edges without the `^` mark (the relevance arrays, which reach
+# `_diff_touches` directly) keep the substring semantics.
+#
+# The blob also carries `--name-status -M` rows (`R100<TAB>old<TAB>new`, the rename-source
+# pairing above), so TABs are split to newlines first: an anchored edge must match the OLD
+# path of a rename exactly as it matches a plain `--name-only` line, or `git mv` out of a
+# declared directory would decline the suite that guards it. The split copy is memoised on
+# the blob (a string compare per call, not a rebuild), since the pre-pass calls this ~9000x.
+_DEH_SRC=""
+_DEH_N=""
+_diff_edge_hit() {
+  local e="$1"
+  if [[ "$_DEH_SRC" != "$_diff_names" ]]; then
+    _DEH_SRC="$_diff_names"
+    _DEH_N="${_NL}${_diff_names//$'\t'/${_NL}}${_NL}"
+    # git C-quotes a path holding a non-ASCII byte, `"`, `\` or a control character: the line
+    # arrives wrapped in `"…"`, which a line-start anchor can never match. Unwrap it (an
+    # ASCII prefix edge still matches the unescaped head of the name).
+    _DEH_N="${_DEH_N//${_NL}\"/${_NL}}"
+    _DEH_N="${_DEH_N//\"${_NL}/${_NL}}"
+  fi
+  local _n="$_DEH_N"
+  case "$e" in
+    */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
+    *)  [[ "$_n" == *"${_NL}${e}${_NL}"* ]] ;;
+  esac
+}
+
 # Does this run's diff touch any of the given paths? Used to decline suites that guard code the
-# diff does not reach. Substring match without a `^` anchor, matching the existing infra check:
-# over-matching a path that merely CONTAINS the string errs toward RUNNING the suite, which is
-# the safe direction.
+# diff does not reach. An entry WITHOUT a `^` mark is a substring match, matching the existing
+# infra check: over-matching a path that merely CONTAINS the string errs toward RUNNING the
+# suite, which is the safe direction. A `^`-marked entry (minted by `_affected_add_edge`) is
+# ANCHORED instead — see `_diff_edge_hit` above — and errs toward NOT running on a path that
+# only contains the word; knowledge-base/project/specs/feat-affected-parallel-test-gate/
+# edge-anchoring-corpus.md records the measurement behind that trade.
 #
 # Reads a VARIABLE via a herestring, never `producer | grep -q`. Under this script's `set -o
 # pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
@@ -1846,11 +2105,18 @@ _diff_touches() {
   if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
   local p
   for p in "$@"; do
-    # `[[ == ]]` with the operand quoted is a literal substring match — the
-    # same semantics as the fixed-string grep it replaces, minus one fork +
-    # herestring per edge per registration (the affected pre-pass calls this
-    # ~440 times against multi-element edge sets).
-    if [[ "$_diff_names" == *"$p"* ]]; then return 0; fi
+    case "$p" in
+      \^*)
+        if _diff_edge_hit "${p#^}"; then return 0; fi
+        ;;
+      *)
+        # `[[ == ]]` with the operand quoted is a literal substring match — the
+        # same semantics as the fixed-string grep it replaces, minus one fork +
+        # herestring per edge per registration (the affected pre-pass calls this
+        # ~440 times against multi-element edge sets).
+        if [[ "$_diff_names" == *"$p"* ]]; then return 0; fi
+        ;;
+    esac
   done
   return 1
 }
@@ -1909,11 +2175,21 @@ _affected_resolve_edges() {
 # Append an edge if it resolves inside the repo and is not already present.
 # `[[ -e ]]` is the whole test: argv words, `-c` payload tokens and resolved
 # source/import paths are all filtered through it, so garbage never lands in
-# the edge set and a DIRECTORY entry acts as a prefix edge under the substring
-# match _diff_touches uses.
+# the edge set. A surviving edge is stored ANCHORED (#9307): `^dir/` for a
+# directory (a path prefix), `^file` for a file (an exact line) -- see
+# _diff_edge_hit. Anything rooted at `.`/`..` keeps the legacy unanchored form:
+# `.` names the whole tree, and an anchored `^./` could never match a diff line,
+# which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
   local _p="$1"
   [[ -n "$_p" && -e "$_p" ]] || return 0
+  case "$_p" in
+    .|..|./*|../*) ;;
+    *)
+      if [[ -d "$_p" ]]; then _p="${_p%/}/"; fi
+      _p="^$_p"
+      ;;
+  esac
   _affected_in_list "$_p" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} && return 0
   _AC_EDGES+=("$_p")
 }
@@ -2140,6 +2416,13 @@ _affected_derive() {
         done
         ;;
     esac
+    # A runner SUBCOMMAND is not an operand (#9307): the word `test` in
+    # `bun test <file>` would resolve to the repo-root test/ directory and mint an
+    # edge that selects every `bun test` suite for any diff under it.
+    case "$_prev $_tok" in
+      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")
+        _prev="$_tok"; continue ;;
+    esac
     _prev="$_tok"
     case "$_tok" in
       /*)
@@ -2211,7 +2494,7 @@ _affected_derive() {
     if (( _PRINT_AFFECTED == 1 )); then
       local _e _ns=0
       for _e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do
-        [[ "$_e" == "$_suite_file" ]] || { _ns=1; break; }
+        [[ "${_e#^}" == "$_suite_file" ]] || { _ns=1; break; }
       done
       if (( _ns == 1 )); then _AC_SUITE_FILE="$_suite_file"; return 0; fi
     fi
@@ -2230,7 +2513,7 @@ _affected_derive() {
         _affected_file_edges "$_f"
         local _i _new
         for (( _i=_pre_n; _i<${#_AC_EDGES[@]}; _i++ )); do
-          _new="${_AC_EDGES[$_i]}"
+          _new="${_AC_EDGES[$_i]#^}"
           if [[ -f "$_new" ]] && ! _affected_in_list "$_new" "${_seen[@]+"${_seen[@]}"}"; then
             _seen+=("$_new"); _next+=("$_new")
           fi
@@ -2302,7 +2585,7 @@ _affected_classify() {
   if [[ -n "${_AC_SUITE_FILE:-}" ]]; then
     local _e _nonself=0
     for _e in "${_AC_EDGES[@]}"; do
-      [[ "$_e" == "$_AC_SUITE_FILE" ]] || { _nonself=1; break; }
+      [[ "${_e#^}" == "$_AC_SUITE_FILE" ]] || { _nonself=1; break; }
     done
     (( _nonself == 0 )) && _AC_CLASS="unclassified"
   fi
@@ -2558,32 +2841,64 @@ _infra_skip_reason=""
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=100
+_MIN_ALWAYS_ON_DECLARED=116
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
 # would buy nothing but a second ~440-registration walk.
 if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
+  # Runner/index membership, computed ONCE for both consumers — the
+  # branch-scope ladder arm and the staged-scope in-walk note — so the two
+  # sites cannot drift and a third runner-critical path updates one place.
+  # NOT _diff_touches: its unconditional bypasses (FORCE_ALL / _FULL_GATE /
+  # CI) are a policy verdict, not membership — `CI=1 --affected` would report
+  # runner-changed on a diff containing no such path.
+  _aff_runner_in_diff=0
+  if grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
+    || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; then
+    _aff_runner_in_diff=1
+  fi
   if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then
     _aff_fallback="force-all"
   elif (( _AFF_LIB_OK == 0 )); then
     _aff_fallback="index-missing"
   elif [[ "$_diff_detect_ok" == "0" || "$_diff_head_ok" == "0" ]]; then
     _aff_fallback="undecidable-diff"
-  elif grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
-    || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; then
+  elif [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && (( _aff_runner_in_diff == 1 )); then
     # The runner and the index are their own SUT: a diff touching either could
-    # be narrowing the very selection this run is about to apply.
+    # be narrowing the very selection this run is about to apply. Under staged
+    # scope this arm is DARK BY CONSTRUCTION (#9173, #9197 review): firing it
+    # here would consume the elif chain and skip the bounded-selection walk
+    # below — leaving _aff_ready=0, which the chokepoint reads as "select
+    # everything" — a SILENT full battery wearing a bounded-selection note.
+    # The staged case is handled inside the walk's else instead.
     _aff_fallback="runner-changed"
   elif (( ${#ALWAYS_ON_SUITES[@]} < _MIN_ALWAYS_ON_DECLARED )); then
     printf 'AFFECTED_UNRESOLVED\treason=below-floor declared=%d floor=%d\n' \
       "${#ALWAYS_ON_SUITES[@]}" "$_MIN_ALWAYS_ON_DECLARED"
+    # Refusal-path scope provenance (#9197 review): a refused staged run must
+    # still name which diff it consulted — the refusal exits before the
+    # scope line below fires.
+    [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && printf 'AFFECTED_SCOPE\tscope=staged\n'
     echo "ERROR: refusing affected-gate run — ALWAYS_ON_SUITES declares" >&2
     echo "       ${#ALWAYS_ON_SUITES[@]} suites, below the ${_MIN_ALWAYS_ON_DECLARED} floor." >&2
     echo "       The declarations lib looks gutted; run the whole battery instead:" >&2
     echo "         bash scripts/test-all.sh --full" >&2
     exit 4
   else
+    # Staged scope (#9173): a runner/index path in the STAGED set is covered by
+    # construction — declared self-edges plus the unconditional always-on
+    # runner-SUT battery (which includes this runner's own mutation suite) —
+    # so the bounded edge walk proceeds under a loud note instead of the
+    # full-corpus fallback that made ts commits unlandable inside the hook.
+    # This emit MUST stay inside the walk's else: hoisting it into the elif
+    # ladder consumed the chain and left every registration selecting
+    # (silent full battery — #9197 review P1). The below-floor census refusal
+    # above still precedes it, so a gutted-but-parseable index refuses first.
+    if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && (( _aff_runner_in_diff == 1 )); then
+      printf 'AFFECTED_RUNNER_IN_SCOPE\treason=runner-changed\n'
+      echo "[affected] staged diff contains a runner/index path — bounded selection via self-edges + always-on battery (no full-corpus fallback under --affected-scope=staged)." >&2
+    fi
     _aff_enum_rc=0
     # `env -u SCRIPTS_SHARD` is load-bearing, not hygiene: under a shard the
     # child's stream would pack only shard-selected records as ordinals 1..k
@@ -2592,7 +2907,19 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
     # label guard at the chokepoint is the second line. stderr goes to a file
     # rather than /dev/null so `enumerate-unavailable` can name its cause.
     _aff_enum_err="$(mktemp "${TMPDIR:-/tmp}/test-all-enum-err.XXXXXX")"
-    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
+    # `--affected-scope` is forwarded so the child's DECLINED records evaluate
+    # the SAME diff the parent's selection walk applies — under staged scope a
+    # child still reading the branch window would decline suites the commit
+    # actually reaches. `branch` is the default spelled out; explicit is the
+    # same value either way, and a flag (unlike an env var) cannot leak into
+    # the wrong axis — presence is ownership.
+    #
+    # `--paths` is forwarded for the same reason (#9307): under `--print-selection --paths=…`
+    # the parent's diff IS the named list, and a child reading the real branch diff would
+    # decline relevance-gated suites against a diff the report is not about.
+    _aff_child_paths=()
+    if (( _PRINT_PATHS_REQ == 1 )); then _aff_child_paths=(--paths="$_PRINT_PATHS"); fi
+    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands --affected-scope="${_AFF_SCOPE:-branch}" ${_aff_child_paths[@]+"${_aff_child_paths[@]}"} "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
     if (( _aff_enum_rc != 0 )); then
       _aff_fallback="enumerate-unavailable"
       if [[ -s "$_aff_enum_err" ]]; then
@@ -2612,6 +2939,12 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
             [[ "$_aff_line" == SUITE_COMMAND$'\t'* ]] || continue
             _aff_cmd_records=$(( _aff_cmd_records + 1 ))
             _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            _aff_cls[$_aff_ordinal]="$_AC_CLASS"
+            if (( _PRINT_SELECTION == 1 )); then
+              _aff_ej=""
+              for _aff_e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do _aff_ej+="${_aff_ej:+|}${_aff_e}"; done
+              _aff_edges[$_aff_ordinal]="$_aff_ej"
+            fi
             if [[ "$_AC_CLASS" == edge:* && ${#_AC_EDGES[@]} -gt 0 ]] \
               && ! _diff_touches ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; then
               _aff_sel[$_aff_ordinal]=0
@@ -2627,6 +2960,9 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
         # reachable selection is empty would exit green having executed
         # nothing — the zero-coverage shape the shard guard already refuses.
         printf 'AFFECTED_UNRESOLVED\treason=zero-selected\n'
+        # Refusal-path scope provenance — an empty selection under staged
+        # scope is a different diagnosis from an empty branch diff; name it.
+        [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && printf 'AFFECTED_SCOPE\tscope=staged\n'
         echo "ERROR: refusing affected-gate run — the diff selects ZERO of the" >&2
         echo "       ${_aff_ordinal} reachable registrations. That is not a green gate; it is" >&2
         echo "       no gate. Run the whole battery:" >&2
@@ -2654,6 +2990,50 @@ elif (( _ENUMERATE == 0 )); then
   else
     echo "[affected] MODE=full" >&2
   fi
+fi
+# Loud about WHICH diff selected (#9173): a staged-scope run always names its
+# scope beside the MODE line — silent narrowing is the failure class this
+# telemetry exists against. Gated on an axis that consumes the diff (the
+# `_AFFECTED` pre-pass or the TEST_GROUP=affected heuristic), not on
+# _ENUMERATE — `--print-affected-set` receipts must name their scope too. A
+# staged flag under CI/full (`_AFFECTED=0`) prints nothing: the flag is a
+# no-op there and the line would claim a scope no run consulted.
+if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
+  && { (( _AFFECTED == 1 || _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" == "affected" ]]; }; then
+  printf 'AFFECTED_SCOPE\tscope=staged\n'
+fi
+
+# Selection report (#9307). The pre-pass above is the ONLY place a selection bit
+# is decided, so this reads those bits rather than recomputing them: what is
+# printed is what the dispatch walk applies. Every real affected run states its
+# selection on stdout; --print-selection additionally prints one row per
+# runnable suite and stops here, running nothing. A degraded run has no
+# per-suite bits (the whole battery runs), so it says so instead of inventing a
+# selection.
+if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
+  if (( _aff_ready == 1 )); then
+    _aff_n_always=0
+    _aff_n_edge=0
+    for (( _aff_i=1; _aff_i<=_aff_ordinal; _aff_i++ )); do
+      # A DECLINED (relevance) record carries no selection bit: no row for it.
+      [[ -n "${_aff_sel[$_aff_i]:-}" ]] || continue
+      if (( _PRINT_SELECTION == 1 )); then
+        printf 'AFFECTED_SELECTED\t%s\t%s\t%s\t%s\n' "${_aff_label[$_aff_i]}" "${_aff_sel[$_aff_i]}" \
+          "${_aff_cls[$_aff_i]:-}" "${_aff_edges[$_aff_i]:-}"
+      fi
+      if [[ "${_aff_sel[$_aff_i]}" == "1" ]]; then
+        case "${_aff_cls[$_aff_i]:-}" in
+          always_on) _aff_n_always=$(( _aff_n_always + 1 )) ;;
+          edge:*)    _aff_n_edge=$(( _aff_n_edge + 1 )) ;;
+        esac
+      fi
+    done
+    printf 'AFFECTED_SUMMARY selected=%d of=%d always_on=%d edge=%d fallback=none\n' \
+      "$_aff_selected" "$_aff_cmd_records" "$_aff_n_always" "$_aff_n_edge"
+  elif [[ -n "$_aff_fallback" ]]; then
+    printf 'AFFECTED_SUMMARY selected=all of=all always_on=all edge=all fallback=%s\n' "$_aff_fallback"
+  fi
+  if (( _PRINT_SELECTION == 1 )); then exit 0; fi
 fi
 
 # WHY THE want_infra CONJUNCT IS LOAD-BEARING. These notices used to key on `_infra_in_diff`
@@ -2899,6 +3279,51 @@ _RUN_START_EPOCH="${EPOCHSECONDS:-0}"
 _ceiling_tripped=0
 _ceiling_declined=0
 
+# --- #8940 / #8993 state ---------------------------------------------------
+# Declared HERE, at top level, for the same splice-window reason as the
+# ceiling state above: run_suite and the EXIT trap live inside the region
+# sibling suites splice into their sandboxes, so a variable first assigned
+# below the acquire statement would be unbound there under `set -u`.
+#
+# _suite_log_in_flight: path of the tee'd log for the suite currently
+# executing — the EXIT trap retains it durably when the run dies mid-suite.
+# _RUN_WD_PID: the #8993 parent-death watchdog subshell; disarmed by the
+# EXIT trap. _durable_log_dir: outside the session scratch root so the
+# artifact survives `_soleur_scratch_cleanup`. Known residual: nothing
+# reaps it — failing-suite logs accumulate under SOLEUR_SCRATCH_BASE for
+# the box's normal /var/tmp hygiene to reclaim; accepted (only non-ok
+# suites produce files).
+_suite_log_in_flight=""
+_RUN_WD_PID=""
+_durable_log_dir="${SOLEUR_TEST_ALL_LOG_DIR:-${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs}/$(basename -- "$PWD")-$$-${EPOCHSECONDS:-0}"
+# Ownership, not presence: the exported SOLEUR_SCRATCH_SESSION_ROOT is
+# inherited by every nested runner a suite spawns (sandbox copies, fixture
+# invocations), and begin() deliberately keeps the parent's root for them.
+# A nested run taking the tee path would BOTH write into the parent's log
+# dir AND — measured — silently skip the else-branch the sandbox splices
+# replace (the affected suite asserted on missing RAN receipts precisely
+# this way). The allocating run is identified by the lib's own owner pid.
+_suite_log_dir=""
+if [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" \
+   && "${SOLEUR_SCRATCH_OWNER_PID:-}" == "$$" ]]; then
+  _suite_log_dir="${SOLEUR_SCRATCH_SESSION_ROOT}/suite-logs"
+elif [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" \
+   && -z "${SOLEUR_SCRATCH_OWNER_PID:-}" ]]; then
+  # SESSION_ROOT set with NO owner pid at all is not the nested-runner
+  # shape (begin() always pairs the two) — it is a hand-exported root, and
+  # the battery is about to run bare with no durable logs. Say so.
+  printf '[note] suite tee capture skipped — SOLEUR_SCRATCH_SESSION_ROOT exported without SOLEUR_SCRATCH_OWNER_PID (#8940)\n' >&2
+fi
+# A durable dir pointing INSIDE the scratch root would name files the
+# _soleur_scratch_cleanup deletes at exit — the `log=` path would fabricate
+# at read time. Relocate rather than refuse: the override's intent survives.
+case "${_durable_log_dir}/" in
+  "${SOLEUR_SCRATCH_SESSION_ROOT:-\0}/"* )
+    _durable_log_dir="${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/$(basename -- "$PWD")-$$-${EPOCHSECONDS:-0}"
+    printf '[note] SOLEUR_TEST_ALL_LOG_DIR inside the scratch root — relocated to %s (#8940)\n' "$_durable_log_dir" >&2
+    ;;
+esac
+
 # The ceiling is resolved ONCE, here, rather than re-parsed inside run_suite on each of its
 # ~194 invocations. Three defects collapse into this single evaluation:
 #
@@ -3010,7 +3435,65 @@ _enum_wd_disarm() {
     wait "$_ENUM_WD_PID" 2>/dev/null || true
   fi
 }
-trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm' EXIT
+
+# The #8993 run-path watchdog's disarm mirrors _enum_wd_disarm exactly: TERM,
+# a bounded stat!=Z poll for the live-trap exit, then KILL. Without it a
+# normal run's exit leaks the watchdog subshell's tracked sleep holding an
+# inherited stdout pipe open for up to _RUN_WD_POLL_S past process death —
+# the enumerate watchdog's own failure shape, one level up.
+_run_wd_disarm() {
+  if [[ -n "${_RUN_WD_PID:-}" ]]; then
+    kill "$_RUN_WD_PID" 2>/dev/null || true
+    local _d=0
+    while (( _d < 20 )) \
+      && kill -0 "$_RUN_WD_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_RUN_WD_PID" 2>/dev/null)" != Z* ]]; do
+      sleep 0.1; _d=$(( _d + 1 ))
+    done
+    kill -KILL "$_RUN_WD_PID" 2>/dev/null || true
+    wait "$_RUN_WD_PID" 2>/dev/null || true
+  fi
+}
+
+# Transitive descendants of the given pids, excluding the watchdog's own
+# subtree. `pgrep -P` enumerates ONE generation — a suite's vitest/worker
+# grandchildren inherit the same lock fd and would survive a direct-child
+# sweep, still holding the #8993 lock the reap exists to release. Walks the
+# ps table once: a pid prints when its ancestor chain reaches a root before
+# reaching the excluded pid.
+_wd_descendants() {  # _wd_descendants <exclude-pid> <root-pid...>
+  local _excl="$1"; shift
+  ps -eo pid=,ppid= 2>/dev/null | awk -v roots="$*" -v excl="$_excl" '
+    { pp[$1] = $2 }
+    END {
+      n = split(roots, R, " ")
+      for (p in pp) {
+        for (a = p; a != ""; a = pp[a]) {
+          if (a == excl) break
+          for (i = 1; i <= n; i++)
+            if (a == R[i] && p != a) { print p; a = ""; break }
+        }
+      }
+    }'
+}
+
+# #8940 — a run terminated MID-SUITE never reaches the classification block
+# that would copy the suite's tee'd log out of the scratch root, so the
+# trap is the only place that arm is reachable. Runs BEFORE
+# _soleur_scratch_cleanup in the trap chain — that cleanup deletes the
+# scratch root the source file lives in.
+_run_log_retain() {
+  local src="${_suite_log_in_flight:-}"
+  [[ -n "$src" && -f "$src" ]] || return 0
+  if mkdir -p "$_durable_log_dir" 2>/dev/null; then
+    local dst="$_durable_log_dir/$(basename -- "$src")"
+    if cp "$src" "$dst" 2>/dev/null; then
+      printf '[suite-log] mid-termination retention: %s\n' "$dst" >&2 || true
+    fi
+  fi
+  return 0
+}
+trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -3038,6 +3521,127 @@ trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup; _
 # verbatim in a comment takes the count above one and breaks every sandbox build before a single
 # assertion runs — which is why the prose above describes them instead of reproducing them.
 if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
+
+# --- Orphan watchdog, normal run path (#8993) --------------------------------
+#
+# The enumerate watchdog above covers --enumerate/--print-affected-set; the
+# NORMAL run path had no parent-death coverage at all — a runner orphaned
+# while QUEUED on the advisory lock, or mid-suite, kept running with nobody
+# to read the result and held the repo-global lock for the rest of its
+# suite list (observed: a lefthook-spawned run surviving its `git commit`
+# parent for hours, serializing every sibling worktree's gate behind it).
+#
+# Shape mirrors _ENUM_WATCHDOG, with two adaptations for a watch on the
+# PARENT rather than the runner itself:
+#   * $PPID is captured at SCRIPT scope — inside the watchdog subshell $PPID
+#     would be the runner, not its parent.
+#   * The parent's lstart is also captured at arm time and re-checked on every
+#     poll: a dead parent's pid can be RECYCLED by an unrelated process, and a
+#     recycled pid answers kill -0 with stat != Z — the lstart comparison is
+#     what closes that hole (the enumerate watchdog needed it only at fire
+#     time because its kill target is the runner, not the parent).
+# A zombie or reparented-dead parent fires the same way as a dead one:
+# `ps -o stat=` reports Z for an unreaped corpse.
+#
+# On fire: in-flight suite children are killed BEFORE the runner — a wedged
+# suite child inherits the lock fd (no CLOEXEC) so terminating the runner
+# alone releases nothing; killing children first is also what keeps the
+# suite's tee'd log writer from outliving the run. The child list is
+# snapshotted ONCE — after the runner dies the children reparent to init and
+# a second pgrep -P enumerates nothing. SOLEUR_TEST_ALL_WD_POLL_S pins the
+# poll interval for tests.
+_RUN_WD_POLL_S="${SOLEUR_TEST_ALL_WD_POLL_S:-1}"
+# 0 is not a valid floor — `sleep 0` busy-spins the poll into a CPU burn.
+[[ "$_RUN_WD_POLL_S" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_POLL_S >= 1 )) || _RUN_WD_POLL_S=1
+# Opt-out, stated rather than hidden: SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 skips the
+# arm for a caller that deliberately backgrounds this runner (a supervising
+# wrapper that must outlive the launcher). Silence here would make "watchdog
+# fired" and "watchdog never armed" indistinguishable.
+if [[ "${SOLEUR_TEST_ALL_ALLOW_ORPHAN:-}" == "1" ]]; then
+  printf '[contention] BANNER SOLEUR_TEST_ALL_ORPHAN_WATCHDOG_DISABLED — parent-death watchdog opted out via SOLEUR_TEST_ALL_ALLOW_ORPHAN=1; an orphaned run will hold the advisory lock until it finishes or is reaped.\n' >&2
+elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
+  _RUN_WD_TOP_PID=$$
+  _RUN_WD_PARENT_PID=$PPID
+  _RUN_WD_PARENT_LSTART="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+  _RUN_WD_TOP_LSTART="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+  (
+    _wd_sleep=""
+    # Nested bash's $PPID is THIS subshell's pid — the portable spelling
+    # (bash 3.2 lacks $BASHPID; the enumerate watchdog above uses the same
+    # idiom). Needed to exclude the watchdog itself from the child sweep.
+    _wd_self="$(bash -c 'echo "$PPID"')"
+    trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
+    # SIGPIPE must not kill the watchdog mid-fire: the run's stderr reader is
+    # often already gone on exactly the path that needs the kill.
+    trap '' PIPE
+    _wd_kids=""
+    while :; do
+      # Refresh the direct-child snapshot every poll — it is the ONLY record
+      # of the runner's suite children once the runner is dead (they
+      # reparent to init and pgrep -P on a dead pid enumerates nothing).
+      _wd_kids="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+      # Runner liveness FIRST: a runner-side untrappable death (SIGKILL/OOM)
+      # while the parent lives leaves this subshell holding the inherited
+      # stdout/stderr fds — a gone-but-held-pipe deadlock between a dead
+      # run's watchdog and a live parent whose pipe reader never sees EOF.
+      # The snapshot's children still hold the inherited lock fd — reap
+      # them, then exit: there is no runner left to signal.
+      if ! kill -0 "$_RUN_WD_TOP_PID" 2>/dev/null; then
+        printf 'ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' >&2 || true
+        _wd_kids="$(_wd_descendants "$_wd_self" $_wd_kids)"
+        for _wd_kid in $_wd_kids; do
+          kill -TERM "$_wd_kid" 2>/dev/null || true
+        done
+        sleep 2 & _wd_sleep=$!
+        wait "$_wd_sleep" 2>/dev/null || true
+        for _wd_kid in $_wd_kids; do
+          kill -KILL "$_wd_kid" 2>/dev/null || true
+        done
+        exit 0
+      fi
+      # Parent liveness = alive AND not-zombie AND (when we captured a
+      # baseline) the SAME process — pid reuse after parent death must not
+      # read as "parent still alive".
+      kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null || break
+      _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+      [[ "$_wd_pstat" == Z* ]] && break
+      if [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
+        _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+        [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && break
+      fi
+      sleep "$_RUN_WD_POLL_S" & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+    done
+    # Parent is gone (or unverifiably recycled). Runner identity check before
+    # the kill — same pid-reuse discipline as the enumerate watchdog.
+    _wd_now="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+    if [[ -z "$_RUN_WD_TOP_LSTART" || -z "$_wd_now" \
+        || "$_wd_now" == "$_RUN_WD_TOP_LSTART" ]]; then
+      # Announce FIRST: the runner's own EXIT trap disarms this watchdog,
+      # so a printf issued after the runner's TERM races our own teardown.
+      printf 'ERROR: parent process gone — orphaned test-all run terminating itself and in-flight suite children (#8993)\n' >&2 || true
+      # Escalate the CHILDREN to completion BEFORE signaling the runner:
+      # TERM → grace → KILL. The runner's EXIT trap disarms this watchdog,
+      # so a runner-TERM sent first lets a TERM-resistant suite child (the
+      # wedge class the reap exists for) survive holding the inherited lock
+      # fd — the disarm would land mid-grace and the -9 leg would never run.
+      _wd_kids="$(_wd_descendants "$_wd_self" "$_RUN_WD_TOP_PID")"
+      for _wd_kid in $_wd_kids; do
+        kill -TERM "$_wd_kid" 2>/dev/null || true
+      done
+      sleep 3 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+      for _wd_kid in $_wd_kids; do
+        kill -KILL "$_wd_kid" 2>/dev/null || true
+      done
+      kill -TERM "$_RUN_WD_TOP_PID" 2>/dev/null || true
+      sleep 5 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+      kill -KILL "$_RUN_WD_TOP_PID" 2>/dev/null || true
+    fi
+  ) &
+  _RUN_WD_PID=$!
+fi
 
 tc_acquire "test-all"
 
@@ -3616,18 +4220,17 @@ if want_scripts; then
   # #6475, and the probe's whole purpose is to be the fail-loud alarm, so a vacuous PASS (or a
   # false FAIL that pages a green codebase) must redden CI here.
   run_suite "scripts/ci-deploy-sentry-post-fail-6475" bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh
-  # #8016: exit-code harness for the bwrap deploy-gate self-report soak. Registered explicitly
-  # (orphan-suite class above). Its exit code decides whether the sweeper closes #8016 as an
-  # environmental non-recurrence (0) or leaves it open on the next occurrence (1); the
-  # load-bearing arms are FAIL-precedence over a liveness fault, SYSLOG_IDENTIFIER field
-  # isolation against webhook contamination, and withholding the free-text bwrap_err from the
-  # public issue comment. Mutation-proved at authoring (5/5 killed).
-  run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
   # #8651: exit-code harness for the web fresh-boot zot close probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #9237: exit-code harness for the watchdog-arm soak probe. Registered
+  # explicitly (orphan-suite class above). The probe is notify-only (never 0/1);
+  # its arms drive whether the sweeper reports NOT YET / CANNOT ESTABLISH /
+  # ACTION REQUIRED correctly — a vacuous or mis-routed verdict would either
+  # stall the arm silently or cry wolf daily.
+  run_suite "scripts/watchdog-arm-soak-9237" bash scripts/followthroughs/watchdog-arm-soak-9237.test.sh
   # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
   # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
   # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides
@@ -3686,6 +4289,14 @@ if want_scripts; then
   # qualifies ONLY when all six jobs (4 legs + fixed + done) are present, green, and
   # measured — a skipped leg is unmeasurable and fail-closed, never a green leg.
   run_suite "scripts/deploy-script-tests-legs-8736" bash scripts/followthroughs/deploy-script-tests-legs-8736.test.sh
+  # #9232: exit-code harness for the test-scripts leg-balance soak probe (the
+  # "every leg ~within 2x of the mean suite-time total" AC). Registered explicitly
+  # (orphan-suite class above). Its exit code is the closure of #9232 (0 closes;
+  # 1 = a qualifying run carried a breaching leg; 2 = NOT YET — under-sampled or
+  # every run non-qualifying; 3 = gh failed). A run qualifies ONLY when all N
+  # light legs uploaded their timing artifact — a leg that died pre-upload is
+  # unmeasurable and fail-closed, never a green leg.
+  run_suite "scripts/ci-leg-balance-9232" bash scripts/followthroughs/ci-leg-balance-9232.test.sh
   # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
   # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
   # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
@@ -3709,6 +4320,13 @@ if want_scripts; then
   # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
   # is decoration.
   run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # #7556 upload-ceiling probe (tracker #7556). Explicit registration, because
+  # scripts/followthroughs/*.test.sh is not in SUITE_GLOBS: an unregistered harness runs only when
+  # someone invokes it by hand, and this probe's exit code auto-closes a P1 tracker. Its sample floor
+  # counted a handler name that appears only on error lines, so a week of 44 real uploads read as 2
+  # rows for six weeks; the harness replays the real query tool's contract (newest-N truncation,
+  # OR-LIKE over double-encoded rows) so that class cannot return unseen.
+  run_suite "scripts/zot-upload-ceiling-7556" bash scripts/followthroughs/zot-upload-ceiling-7556.test.sh
   # #7500 zot_last_err redaction delivery watch (tracker #7960). Registered at birth rather than
   # after lint-orphan-test-suites.sh catches it: this probe is the only followthrough whose SUBJECT
   # is replaced mid-window by design (ADR-096 — the registry host is cloud-init-only, so delivery
@@ -3781,6 +4399,11 @@ if want_scripts; then
   # stream shape — without `-R` + `fromjson?` one malformed warehouse line aborts the whole parse
   # and a clean PASS window reports as `channel_dark`, i.e. "the host never booted".
   run_suite "scripts/inngest-zot-boot-7462" bash scripts/followthroughs/inngest-zot-boot-7462.test.sh
+  # #8562 (ADR-257): exit-code harness for the provision-unit delivery probe. Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Pins the host-life anchor:
+  # only a bootstrap-done carrying the NEWEST provision-unit-armed row's iid can PASS, so a late row
+  # from a destroyed host never closes #8562; and exactly one `verdict=` line on stdout per case.
+  run_suite "scripts/inngest-provision-unit-8562" bash scripts/followthroughs/inngest-provision-unit-8562.test.sh
   # Operator authorization for enrolling soleur-inngest as a zot client (#6500). This probe closes
   # the issue that GATES ADR-096 5.3b-i / 5.6 (#6500, CLOSED 2026-09-24), so the suite pins the two properties the #7437
   # sibling shipped wrong: the verdict is anchored at line start (an unanchored grep authorizes on
@@ -3805,6 +4428,10 @@ if want_scripts; then
   # (exit 0 would auto-close the issue). Explicit run_suite —
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
+  # #9178 CWV field-RUM followthrough (cwv-field-rum-9178.sh): Sentry
+  # transaction rows carry measurements.{lcp,fcp,cls,inp,ttfb}. Explicit
+  # run_suite — scripts/followthroughs/ is covered by no glob here.
+  run_suite "scripts/cwv-field-rum-9178" bash scripts/followthroughs/cwv-field-rum-9178.test.sh
   # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
   # logic behind scheduled-actions-queue-health.yml — live queue depth +
   # delivered-vs-entitled concurrency + median live queued age ->
@@ -3930,8 +4557,8 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-rung2-plan-shape" bash tests/scripts/test-git-data-rung2-plan-shape.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
-  # host-key option anywhere in the tree), its mutation harness, and Guard 7 (the
-  # git-data-pin-redeploy.yml tracker that loads a rotated git-data pin into the app).
+  # host-key option anywhere in the tree), its mutation harness, and the track.sh
+  # webhook contract (the same-version redeploy that loads a rotated git-data pin).
   run_suite "tests/scripts/no-tofu-ssh" bash tests/scripts/test-no-tofu-ssh.sh
   run_suite "tests/scripts/no-tofu-ssh-mutation" bash tests/scripts/test-no-tofu-ssh-mutation.sh
   run_suite "tests/scripts/dispatch-web-redeploy" bash tests/scripts/test-dispatch-web-redeploy.sh
@@ -3997,6 +4624,14 @@ if want_scripts; then
   # #7226: the web-1 pin capture script (refuses under CI; stubbed keyscan). scripts/*.test.sh is
   # not globbed, so this line is its only registration.
   run_suite "scripts/capture-web-1-host-key" bash scripts/capture-web-1-host-key.test.sh
+  # #9151: the web-2 twin (same hermetic stub harness; cattle-host re-key semantics).
+  run_suite "scripts/capture-web-2-host-key" bash scripts/capture-web-2-host-key.test.sh
+  # #9151: the no-SSH ci-deploy.sh parity read (fixture-driven; no network).
+  run_suite "scripts/check-deploy-script-parity" bash scripts/check-deploy-script-parity.test.sh
+  # #9239 Guard 1: the revision-bump gate's own fixture matrix (synthetic
+  # origin/clone per arm — untouched/introduced/bumped/same/decreased/removed/
+  # decoy-comment/lib-only-watched/BASE_REF override).
+  run_suite "scripts/check-backstop-revision" bash scripts/check-backstop-revision.test.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
   run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
   # tests/commands/ is registered by these explicit lines ONLY — there is no glob here, and
@@ -4137,6 +4772,10 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
+  # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
+  # auto-discovered, so this line IS the registration.
+  run_suite "tests/scripts/apply-github-infra-mint-shape" bash tests/scripts/test-apply-github-infra-mint-shape.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
   # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
@@ -4249,6 +4888,22 @@ if want_scripts; then
   # with fixtures padded past the 64 KiB pipe buffer so the SIGPIPE race the
   # probe was losing matches to is actually reachable (#7574).
   run_suite "scripts/followthroughs/t5-skip-persistence-bound-7510" bash scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
+  # #9168: the Supabase Postgres-hang restart classifier — the single verdict
+  # chokepoint for scheduled-supabase-watchdog.yml (signature + corroboration +
+  # sentinel-ledger restart gate). Explicit run_suite — scripts/*.test.sh is
+  # covered by no glob here. Registered LAST in the block deliberately: the
+  # positional (non-manifest) shard fallback keys leg membership on
+  # registration ordinal, so an end-of-block insert is the only insertion that
+  # shifts no existing suite's parity (scripts/test-all-affected.test.sh s1/s2
+  # measured ran=0 when a mid-block insert flipped leg assignment).
+  run_suite "scripts/supabase-watchdog-classify" bash scripts/supabase-watchdog-classify.test.sh
+  # (#9307) the dropped-consumer ratchet behind the always-on demotions: every registered suite
+  # that reads knowledge-base/ must be always-on or carry an edge covering the read. Registered
+  # explicitly for the reason its neighbours state (no `scripts/*.test.sh` glob; it was a
+  # never-run suite until the orphan census said so) and LAST in the block for the same
+  # ordinal-parity reason as the watchdog classifier above. Its cost is one `--print-selection`
+  # walk, so its edge set is declared (not always-on) in the declarations lib.
+  run_suite "scripts/test-affected-kb-consumers" bash scripts/test-affected-kb-consumers.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -4460,6 +5115,12 @@ if want_scripts; then
   # want_bun for the same reason as its neighbours — it shells out to python3 to build its
   # sandbox, and `test-scripts` is the shard documented as "bash + python3".
   run_suite "scripts/test-all-killed-classification" bash scripts/test-all-killed-classification.test.sh
+  # #8993 + #8940: the run-path parent-death watchdog and durable per-suite
+  # failure output. Drives sandbox copies (python3 splice, same builder
+  # discipline as killed-classification), sends real signals, and kills a
+  # real parent — the behaviour under test IS process supervision, so the
+  # fixtures are live processes, not mocked functions.
+  run_suite "scripts/test-all-orphan-log-retention" bash scripts/test-all-orphan-log-retention.test.sh
   # The #7545 pre-launch capacity signal: the verdict, --capacity, the wait
   # heartbeat and re-sample, and the diff-justification report. Registered
   # EXPLICITLY beside its neighbours for the same reason they state — repo-root

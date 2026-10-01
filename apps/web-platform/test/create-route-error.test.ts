@@ -62,6 +62,8 @@ vi.mock("@/server/github-app", () => ({
 }));
 
 vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(),
   captureException: mockCaptureException,
 }));
 

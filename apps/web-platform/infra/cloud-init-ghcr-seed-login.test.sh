@@ -28,8 +28,12 @@ _qgrep() { grep "$@" >/dev/null; }
 #      only from "$REF" — $IMAGE_REF only after IMAGE_REF="$REF"; $IREF only as a `docker create`
 #      after IREF="$ZIREF", never pulled), and no endpoint/registry map value naming ghcr.io. Runs
 #      on SOURCE bytes with comment lines stripped (in rendered bytes, IMAGE_REF='${image_name}'
-#      becomes a ghcr.io literal, so it is a named exemption, like the IREF= pin carrier; the
-#      registry host's run of the upstream '${zot_image}' is the one other, value-bound exemption).
+#      becomes a ghcr.io literal, so it is a named exemption, like the IREF= pin carrier). The
+#      registry host has NO ghcr exemption since #8714 5.3b-iii: it runs zot only by the image ID
+#      zot-image-fetch.sh verified ("$ZOT_IMAGE_ID", read from /run/soleur/zot-image-id), and its only
+#      ghcr.io code lines are the name-resolution DENY and the heartbeat's probe of it. (#9169) The
+#      deny header is admitted in cloud-init-registry.yml and cloud-init.yml only when its WHOLE
+#      runcmd entry equals DENY_BLOCK, so a pull added inside the entry costs it the admission.
 #      A narrower literal rule covers every local.host_script_files member + inngest-bootstrap.sh:
 #      no `docker login ghcr.io`, no pull/create/run of a ghcr.io/jikig-ai/ literal.
 
@@ -260,7 +264,6 @@ def resolve(text, defs, seen, depth=0):
 KEY_RE = re.compile(r"^\s*(ghcr_read_\w+)\s*=", re.M)
 ENTRY_RE = re.compile(r"^\s*(\w+)\s*=\s*(.+?)\s*$", re.M)
 derived, dmaps, nmaps = [], [], 0
-zot_image_ok = {}
 for tf in tfs:
     for rel, body in maps(open(os.path.join(root, tf)).read()):
         nmaps += 1
@@ -278,9 +281,6 @@ for tf in tfs:
             # (M1) a registry / endpoint value never names GHCR (literal, or through a local)
             if re.search(r"endpoint|registry", key) and "ghcr.io" in resolve(val, defs, set()):
                 out.append("VIOL %s tf-endpoint[%s->%s] %s" % (tf, key, tpl, val))
-            if key == "zot_image":
-                r = resolve(val, defs, set())
-                zot_image_ok[tpl] = "jikig-ai" not in r and "ghcr.io/" in r
 out += ["DERIVED " + t for t in derived] + ["DERIVED_MAP %s:%s" % p for p in dmaps]
 
 FORBIDDEN = ["ghcr_read_", "soleur-ghcr-read", "app_ghcr_", "inngest_ghcr_fallback", "echo '${image_name}'"]
@@ -288,6 +288,52 @@ ASSIGN_RE = re.compile(r"(?<![A-Za-z0-9_$])(IREF|IMAGE_REF|ZIREF|REF)=(\"[^\"]*\
 PIN_RE = re.compile(r"^\s*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}\s*(#.*)?$")
 IMAGE_NAME_OK = re.compile(r"^\s*IMAGE_REF='\$\{image_name\}'\s*$")
 GHCR_OK_TOKENS = ("in ghcr.io/*@sha256:*)", "IMAGE_REF#ghcr.io/}")
+# (#8714 5.3b-iii) the registry heartbeat's probe of the deny: a whole-line match, registry only.
+REGISTRY_DENY_LINES = {
+    "_gh_addrs=$(getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u)",
+}
+# (#9169) the ghcr.io name-resolution DENY header is admitted only in these files, and only when
+# its WHOLE `- |` runcmd entry (dedented) equals DENY_BLOCK — so a pull added inside the entry's
+# loop body (`docker pull "$h/…"`, which names no ghcr.io literal on its own line) or an extra
+# command appended to the entry costs the header its admission. DENY_BLOCK is a literal copy of
+# the registry's entry: the G1 "DENY_BLOCK admits" row below reds if the two diverge, and
+# web-ghcr-deny.test.sh pins cloud-init.yml and server.tf to the registry entry.
+DENY_HEADER = "for h in ghcr.io pkg-containers.githubusercontent.com; do"
+DENY_FILES = {"cloud-init-registry.yml", "cloud-init.yml"}
+# runcmd is ONE shell script, so a function or alias defined in an earlier entry would run inside
+# the admitted deny loop with h=ghcr.io. Redefining the commands the deny calls is refused outright.
+SHADOW_RE = re.compile(r"^\s*(?:-\s+)?(?:function\s+|alias\s+)?(?:grep|printf|getent|awk|sort)\s*(?:\(\s*\)|=)")
+DENY_BLOCK = """for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
+  [ -f "$f" ] || continue
+  for h in ghcr.io pkg-containers.githubusercontent.com; do
+    grep -qE "^0\\.0\\.0\\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\\n:: %s\\n' "$h" "$h" >> "$f"
+  done
+done"""
+
+def admitted_deny_headers(path, fname):
+    """Line numbers of DENY_HEADER lines whose whole `- |` entry equals DENY_BLOCK."""
+    if fname not in DENY_FILES:
+        return set()
+    L = open(path, encoding="utf-8", errors="replace").read().split("\n")
+    ok = set()
+    for i, l in enumerate(L):
+        m = re.match(r"^(\s*)- \|\s*$", l)
+        if not m:
+            continue
+        dash, body, nums = len(m.group(1)), [], []
+        for j in range(i + 1, len(L)):
+            b = L[j]
+            if b.strip() and len(b) - len(b.lstrip()) <= dash:
+                break
+            body.append(b); nums.append(j)
+        while body and not body[-1].strip():
+            body.pop(); nums.pop()
+        ind = min((len(b) - len(b.lstrip()) for b in body if b.strip()), default=0)
+        if "\n".join(b[ind:] for b in body) == DENY_BLOCK:
+            ok.update(n for n, b in zip(nums, body) if b.strip() == DENY_HEADER)
+    return ok
+# zot runs by "$ZOT_IMAGE_ID" only where that variable is read from the verified hand-off file.
+ZOT_ID_ASSIGN = re.compile(r'^\s*ZOT_IMAGE_ID="\$\(head -1 /run/soleur/zot-image-id 2>/dev/null \|\| true\)"\s*$', re.M)
 ZOT_REF_VALUES = re.compile(r'^("\$ZEP/.*|)$')
 ZOT_ZIREF_VALUES = re.compile(r'^"\$(ZURL|ZOT_EP)/.*')
 WRITER_RE = re.compile(r"(?:>>?|\btee\s+(?:-a\s+)?)\s*/run/soleur-image-ref(?![\w.-])")
@@ -301,7 +347,11 @@ for f in derived + extras:
     out.append("SCANNED " + f)
     last = {}  # last assignment value seen for IREF / IMAGE_REF / REF / ZIREF, in file order
     pins = fwriters = 0
-    for line in code_lines(p):
+    adm = admitted_deny_headers(p, f)
+    if f in DENY_FILES:
+        out.append("DENYADMITTED %s %d" % (f, len(adm)))
+    for ln, line in [(n, l.rstrip("\n")) for n, l in enumerate(open(p, encoding="utf-8", errors="replace"))
+                     if not l.lstrip().startswith("#")]:
         s = line.strip()
         # (1) forbidden tokens
         for tok in FORBIDDEN:
@@ -313,12 +363,19 @@ for f in derived + extras:
         # (5) ghcr.io on a code line only as the IREF= pin carrier or the seed case pattern
         if PIN_RE.match(line):
             pins += 1
+        elif f == "cloud-init-registry.yml" and s in REGISTRY_DENY_LINES:
+            pass
+        elif s == DENY_HEADER and ln in adm:
+            pass
         else:
             rest = line
             for t in GHCR_OK_TOKENS:
                 rest = rest.replace(t, "")
             if "ghcr.io" in rest:
                 out.append("VIOL %s ghcr.io %s" % (f, s))
+        # (8) (#9169) no redefinition of a command the admitted deny loop calls
+        if SHADOW_RE.match(line):
+            out.append("VIOL %s shadow %s" % (f, s))
         # (7) the sentinel is written from the zot-rewritten $REF, and nothing else
         for _ in WRITER_RE.finditer(line):
             writers += 1; fwriters += 1
@@ -356,10 +413,10 @@ for f in derived + extras:
                 continue
             if a == '"$IMAGE_REF"' and last.get("IMAGE_REF") == '"$REF"':
                 continue
-            # NAMED EXEMPTION: the registry host cannot pull zot from zot. Its `docker run` of the
-            # upstream zot image is allowed only while that map value resolves to a digest-pinned
-            # third-party GHCR ref and never to a jikig-ai one.
-            if a == "'${zot_image}'" and verb == "run" and zot_image_ok.get(f):
+            # The registry host runs zot by the image ID its boot fetch verified against the pinned
+            # release asset (#8714 5.3b-iii) -- never by a registry ref, so no pull can occur.
+            if (a == '"$ZOT_IMAGE_ID"' and verb == "run" and f == "cloud-init-registry.yml"
+                    and len(ZOT_ID_ASSIGN.findall(open(p).read())) == 1):
                 continue
             out.append("VIOL %s pull-src[%s:%s] %s" % (f, verb, a, s))
     # (6) the bump bot's contract: an inngest-bearing template carries exactly 2 refs (whole file,
@@ -432,6 +489,11 @@ dispatch_ok() {
 }
 
 C=$(census "$DIR")
+# (#9169) DENY_BLOCK is a literal copy of the registry entry; if it drifts, neither template's deny
+# header is admitted any more, and this row names that cause instead of a registry ghcr.io VIOL.
+adm_reg=$(sed -n 's/^DENYADMITTED cloud-init-registry.yml //p' <<<"$C"); adm_web=$(sed -n 's/^DENYADMITTED cloud-init.yml //p' <<<"$C")
+if [ "${adm_reg:-0}" = 1 ] && [ "${adm_web:-0}" = 1 ]; then ok "G1 DENY_BLOCK admits exactly one deny entry in cloud-init-registry.yml and in cloud-init.yml"
+else no "G1 DENY_BLOCK is stale vs the templates (admitted: registry=${adm_reg:-0} web=${adm_web:-0}, want 1 each) — re-sync it from cloud-init-registry.yml's runcmd entry"; fi
 if dispatch_ok "$C"; then ok "G1 dispatch: census scanned exactly the derived boot set + maps + host scripts ($DWHY)"
 else no "G1 dispatch: census must scan exactly the derived cloud-init*.yml renders + $EXTRA_BOOT + their maps, every host script, and find >=1 login/pull/writer, >=4 maps ($DWHY)"; fi
 # One row per scanned boot file and per rendering .tf (derived, so a new template gets its own row).
@@ -575,14 +637,61 @@ mrow "15 docker login ghcr.io added to ci-deploy.sh (a local.host_script_files m
 # 15b: a pull of a ghcr.io/jikig-ai/ literal in a host script, behind a global flag
 printf 'docker --config /tmp/c pull ghcr.io/jikig-ai/soleur-web-platform:latest\n' >> "$SB/disk-monitor.sh"
 mrow "15b docker --config … pull ghcr.io/jikig-ai/… added to disk-monitor.sh" disk-monitor.sh
-# 16: the registry host's zot-image exemption is value-bound, not name-bound
-py_sub zot-registry.tf '    zot_image     = local.zot_image' '    zot_image     = "ghcr.io/jikig-ai/soleur-web-platform:latest"'
-mrow "16 the registry map's zot_image repointed at a ghcr.io/jikig-ai/ ref (exemption revoked)" zot-registry.tf
+# 16: (#8714 5.3b-iii) the registry host has no ghcr exemption left: its launch reverting to the
+# templated upstream ref is a pull source like any other
+py_sub cloud-init-registry.yml '      "$ZOT_IMAGE_ID" serve /etc/zot/config.json' "      '\${zot_image}' serve /etc/zot/config.json"
+mrow "16 the registry launch reverts to '\${zot_image}' (the pre-mirror ghcr.io pull)" cloud-init-registry.yml
+# 16b: "$ZOT_IMAGE_ID" is admitted only while it is read from the verified hand-off file
+py_sub cloud-init-registry.yml 'ZOT_IMAGE_ID="$(head -1 /run/soleur/zot-image-id 2>/dev/null || true)"' 'ZOT_IMAGE_ID="ghcr.io/project-zot/zot-linux-amd64:v2.1.20"'
+mrow "16b ZOT_IMAGE_ID assigned a ghcr.io ref instead of the verified hand-off" cloud-init-registry.yml
+# 16c: a ghcr.io line in the registry template that is not the deny or its probe
+py_sub cloud-init-registry.yml '      for h in ghcr.io pkg-containers.githubusercontent.com; do' '      for h in ghcr.io pkg-containers.githubusercontent.com; do docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20 || true; done; for h in x; do'
+mrow "16c a ghcr.io pull appended to the deny line in cloud-init-registry.yml" cloud-init-registry.yml
 
-# Floor at the MEASURED count (45, PR #8708 review; the suite had 26 rows and no floor before): rows are derived from the file set, so a
+# ── #9169 Guard 1: the deny header is admitted only as part of a whole entry equal to DENY_BLOCK.
+# Each row asserts the SPECIFIC new violation (kind + line), not merely "some new VIOL".
+krow() {  # <label> <file> <expected new-VIOL prefix>
+  landed "$2"
+  local n; n=$(new_viols)
+  if grep -qF -- "$3" <<<"$n"; then ok "G1 mutation RED: $1 — $3"
+  else no "G1 mutation SURVIVED (or wrong kind): $1 — want '$3', new: $(head -1 <<<"$n" | cut -c1-110)"; fi
+  sandbox
+}
+DENY_HDR='      for h in ghcr.io pkg-containers.githubusercontent.com; do'
+DENY_BODY_PULL='        docker pull "$h/jikig-ai/soleur-web-platform:latest"'
+py_sub cloud-init.yml "$DENY_HDR" "$DENY_HDR docker pull ghcr.io/project-zot/zot-linux-amd64:v2.1.20 || true; done; for h in x; do"
+krow "17 a ghcr.io pull appended to the web deny header in cloud-init.yml" cloud-init.yml "VIOL cloud-init.yml ghcr.io for h in ghcr.io"
+py_sub cloud-init.yml "$DENY_HDR"$'\n' "$DENY_HDR"$'\n'"$DENY_BODY_PULL"$'\n'
+krow "18 header byte-identical, a \$h pull added inside the web deny entry's loop body" cloud-init.yml "VIOL cloud-init.yml ghcr.io $(sed 's/^ *//' <<<"$DENY_HDR")"
+py_sub cloud-init.yml "  # #8651/#6438: converge" "  - curl -fsS https://ghcr.io/v2/
+  # #8651/#6438: converge"
+krow "19 a second ghcr.io line after the compliant web deny entry" cloud-init.yml "VIOL cloud-init.yml ghcr.io - curl -fsS https://ghcr.io/v2/"
+py_sub cloud-init-registry.yml "$DENY_HDR"$'\n' "$DENY_HDR"$'\n'"$DENY_BODY_PULL"$'\n'
+krow "20 row 18's mutation on the REGISTRY entry (the pre-#9169 whole-line exemption missed it)" cloud-init-registry.yml "VIOL cloud-init-registry.yml ghcr.io $(sed 's/^ *//' <<<"$DENY_HDR")"
+# 21 (must-PASS harness row): the web entry re-indented under its `- |` parses to the same block.
+python3 - "$SB/cloud-init.yml" <<'PY' || { echo "[HARNESS] re-indent anchor not found" >&2; exit 2; }
+import sys
+p = sys.argv[1]
+L = open(p).read().split("\n")
+i = L.index("    for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do")
+for j in range(i, i + 6):
+    L[j] = "  " + L[j]
+open(p, "w").write("\n".join(L))
+PY
+landed cloud-init.yml
+if [ -z "$(new_viols)" ]; then ok "G1 harness PASS: 21 the web deny entry re-indented (same parsed block) stays admitted"
+else no "G1 harness: 21 a re-indented but identical web deny entry lost its admission: $(new_viols | head -1)"; fi
+sandbox
+# 22: a function defined in an earlier runcmd entry shadows `grep`, so it runs inside the admitted
+# deny loop with h=ghcr.io (runcmd is one shell). The entry itself stays byte-identical.
+py_sub cloud-init.yml "  # #9169: ghcr.io deny" '  - grep() { curl -sf "https://$h/v2/" >/dev/null; command grep "$@"; }
+  # #9169: ghcr.io deny'
+krow "22 a grep() shadow defined before the admitted web deny entry" cloud-init.yml "VIOL cloud-init.yml shadow - grep() {"
+
+# Floor at the MEASURED count (45, PR #8708 review; 47 after #8714 5.3b-iii replaced row 16 with 16/16b/16c; 54 after #9169 added rows 17-22 and the DENY_BLOCK-admits row; the suite had 26 rows and no floor before): rows are derived from the file set, so a
 # derivation that silently matched less would also shrink the row count. Reported with printf +
 # exit DIRECTLY, never through ok()/no() -- the floor polices those.
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=54
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

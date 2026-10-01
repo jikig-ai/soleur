@@ -60,7 +60,7 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 // Import the module under test
 // ---------------------------------------------------------------------------
 
-import { deleteAccount } from "../server/account-delete";
+import { ART17_ERASURE_FEATURE, ART17_ERASURE_OP, deleteAccount } from "../server/account-delete";
 import type { GitDataErasureOutcome } from "../server/git-data-replication";
 
 // ---------------------------------------------------------------------------
@@ -394,6 +394,32 @@ describe("deleteAccount", () => {
     )![1] as { tags: Record<string, string>; message: string };
     expect(opts.tags.erasure_reason).toBeUndefined();
     expect(opts.message).toMatch(/^git-data erasure unconfigured: /);
+  });
+
+  // #8572: the Art. 17 report routes through art17_erasure_incomplete ONLY. A `pin_fault`
+  // tag here would ALSO match git-data-host-key-pin-fault and send two emails per refusal
+  // (CLO ruling). Each case first proves the report was made, so "no pin_fault" cannot pass
+  // on a report that never happened.
+  test.each([
+    ...Object.values(PENDING_OUTCOMES).map((o) => [o.status, () => mockRemoveGitDataRepo.mockResolvedValue(o)] as const),
+    ["threw", () => mockRemoveGitDataRepo.mockRejectedValue(new Error("boom"))] as const,
+  ])("%s: the erasure report carries the rule's literals and never a pin_fault tag", async (outcome, arrange) => {
+    setupSupabaseMocks();
+    arrange();
+    await deleteAccount("user-123", "test@example.com");
+    const reports = mockReportSilentFallback.mock.calls.filter(
+      (c) => (c[1] as { op?: string }).op === ART17_ERASURE_OP,
+    );
+    expect(reports).toHaveLength(1);
+    const opts = reports[0][1] as { feature: string; tags: Record<string, string> };
+    expect(opts.feature).toBe(ART17_ERASURE_FEATURE);
+    expect(opts.tags.erasure_outcome).toBe(outcome);
+    expect(opts.tags).not.toHaveProperty("pin_fault");
+  });
+
+  test("the exported literals are the ones the report has always used", () => {
+    expect(ART17_ERASURE_FEATURE).toBe("account-delete");
+    expect(ART17_ERASURE_OP).toBe("git-data-bare-repo-erasure");
   });
 
   test("erasure succeeds: NOT pending, and no compliance report", async () => {

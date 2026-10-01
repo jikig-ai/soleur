@@ -27,7 +27,32 @@ import {
 
 const SENTRY_MONITOR_SLUG = "scheduled-linkedin-token-check";
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
-const LINKEDIN_USERINFO_URL = "https://api.linkedin.com/v2/userinfo";
+
+// Per-token probe table — each secret is checked at an endpoint its minting
+// app can authorize. There are two LinkedIn developer apps: the Soleur app
+// (OIDC scopes only — openid, profile, w_member_social, email) and the Soleur
+// Community app (Community Management API scopes — w_organization_social,
+// rw_organization_admin, analytics). The Community app does NOT offer openid,
+// so an org token can never pass /v2/userinfo; probing it there files
+// "expired" forever on a healthy token (issue #9181).
+const TOKEN_PROBES: Record<
+  string,
+  { url: string; app: string; clientId: string; scopeGuidance: string }
+> = {
+  LINKEDIN_ACCESS_TOKEN: {
+    url: "https://api.linkedin.com/v2/userinfo",
+    app: "Soleur",
+    clientId: "78wtm2wu15iikn",
+    scopeGuidance: "openid, profile, w_member_social, email",
+  },
+  LINKEDIN_ORG_ACCESS_TOKEN: {
+    url: "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED",
+    app: "Soleur Community",
+    clientId: "78s808ujpe6lve",
+    scopeGuidance:
+      "all scopes the Community app offers — w_organization_social (org posting) and rw_organization_admin (this probe's own requirement) are mandatory",
+  },
+};
 
 // =============================================================================
 // Token check logic — exported for tests
@@ -37,6 +62,33 @@ export interface TokenCheckResult {
   status: "skipped" | "valid" | "expired" | "unknown" | "invalid_json";
   tokenName: string;
   holder?: string;
+  // httpStatus keeps the 401-vs-403 distinction visible in the per-token
+  // logger.info extras — both share the `expired` status by design.
+  httpStatus?: number;
+  // reason disambiguates `unknown` for machine readers: a transport blip
+  // self-heals; no-probe-configured never does.
+  reason?: "no-probe-configured" | "transport" | "http";
+}
+
+// Token-holder-controlled display names can smuggle line separators into
+// log viewers — strip C0/C1 controls, DEL, and Unicode line separators.
+function sanitizeHolder(name: string): string {
+  // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
+  return name.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "");
+}
+
+async function findOpenRenewalIssue(
+  octokit: Octokit,
+  issueTitle: string,
+): Promise<{ number: number } | undefined> {
+  // Deliberately shared for 401 AND 403: one title per token keeps the
+  // file/comment/auto-close lifecycle single-threaded — a "correct the title
+  // for 403" edit would split the dedup key and strand auto-close.
+  const search = await octokit.request("GET /search/issues", {
+    q: `repo:${REPO_OWNER}/${REPO_NAME} is:issue is:open in:title "${issueTitle}"`,
+    per_page: 1,
+  });
+  return ((search.data as { items?: Array<{ number: number }> }).items ?? [])[0];
 }
 
 export async function checkToken(
@@ -48,39 +100,67 @@ export async function checkToken(
     return { status: "skipped", tokenName };
   }
 
+  // Fail loud on an unconfigured tokenName — silently defaulting to an
+  // endpoint would probe a future token where its app cannot authorize it,
+  // which is exactly the defect class this table exists to remove.
+  // Object.hasOwn (not a truthiness read) so an inherited member like
+  // "constructor" can't bypass the guard.
+  const probe = Object.hasOwn(TOKEN_PROBES, tokenName)
+    ? TOKEN_PROBES[tokenName]
+    : undefined;
+  if (!probe) {
+    reportSilentFallback(new Error(`no probe endpoint configured for ${tokenName}`), {
+      feature: "cron-linkedin-token-check",
+      op: "resolve-probe",
+      message: `No probe endpoint configured for ${tokenName}`,
+      extra: { fn: "cron-linkedin-token-check", tokenName },
+    });
+    return { status: "unknown", tokenName, reason: "no-probe-configured" };
+  }
+
   let response: Response;
   try {
-    response = await fetch(LINKEDIN_USERINFO_URL, {
+    // redirect:"manual" — never follow a redirect with a Bearer attached;
+    // a vendor 30x lands in the unknown arm instead of silently re-targeting.
+    response = await fetch(probe.url, {
       headers: { Authorization: `Bearer ${tokenValue}` },
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
     reportSilentFallback(err, {
       feature: "cron-linkedin-token-check",
-      op: "fetch-userinfo",
+      op: "token-probe",
       message: `Network error checking ${tokenName}`,
-      extra: { fn: "cron-linkedin-token-check", tokenName },
+      extra: { fn: "cron-linkedin-token-check", tokenName, probeUrl: probe.url },
     });
-    return { status: "unknown", tokenName };
+    return { status: "unknown", tokenName, reason: "transport" };
   }
 
+  // Deliberately shared for 401 AND 403: one title per token keeps the
+  // file/comment/auto-close lifecycle single-threaded — a "correct the title
+  // for 403" edit would split the dedup key and strand auto-close.
   const issueTitle = `[Action Required] LinkedIn OAuth token has expired (${tokenName})`;
 
-  // HTTP 401 → token is expired/invalid
-  if (response.status === 401) {
+  // HTTP 401 → expired/invalid. HTTP 403 → the token is alive but cannot
+  // authorize its own probe (minted under the wrong app, or without the
+  // scopes listed below) — also actionable, never silent `unknown`.
+  if (response.status === 401 || response.status === 403) {
+    const meaning =
+      response.status === 403
+        ? `The scheduled token check detected that \`${tokenName}\` is **alive but missing required scopes** — its probe returned HTTP 403, meaning the token was minted under a different LinkedIn app or without the scopes below.`
+        : `The scheduled token check detected that \`${tokenName}\` is **expired or invalid** (API returned HTTP 401).`;
     const body = [
-      `## LinkedIn Token Expired (${tokenName})`,
+      `## LinkedIn token probe failed (${tokenName})`,
       "",
-      `The scheduled token check detected that \`${tokenName}\` is **expired or invalid** (API returned HTTP 401).`,
+      meaning,
       "",
       "Content publisher LinkedIn posting via this token is currently **non-functional**.",
       "",
       "### Renewal steps",
       "",
-      "1. Go to https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=78wtm2wu15iikn",
-      "2. Select scopes appropriate to the token:",
-      "   - `LINKEDIN_ACCESS_TOKEN` (personal): openid, profile, w_member_social, email",
-      "   - `LINKEDIN_ORG_ACCESS_TOKEN` (org / Community Management API, #4046): openid, profile, w_member_social, w_organization_social",
+      `1. Go to https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=${probe.clientId} (the ${probe.app} app — the only app that can mint ${tokenName})`,
+      `2. Select scopes: ${probe.scopeGuidance}`,
       "3. Accept redirect URL confirmation -> Request access token -> Sign in -> Allow",
       "4. Copy the new token and run (printf, not echo):",
       "   ```bash",
@@ -92,11 +172,7 @@ export async function checkToken(
     ].join("\n");
 
     // Dedup: search for existing open issue
-    const search = await octokit.request("GET /search/issues", {
-      q: `repo:${REPO_OWNER}/${REPO_NAME} is:issue is:open in:title "${issueTitle}"`,
-      per_page: 1,
-    });
-    const existing = ((search.data as { items?: Array<{ number: number }> }).items ?? [])[0];
+    const existing = await findOpenRenewalIssue(octokit, issueTitle);
 
     if (existing) {
       await octokit.request(
@@ -105,7 +181,7 @@ export async function checkToken(
           owner: REPO_OWNER,
           repo: REPO_NAME,
           issue_number: existing.number,
-          body: `Token check ran ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC — ${tokenName} is still expired.`,
+          body: `Token check ran ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC — ${tokenName} is still failing its probe (HTTP ${response.status}).`,
         },
       );
     } else {
@@ -118,18 +194,20 @@ export async function checkToken(
       });
     }
 
-    return { status: "expired", tokenName };
+    return { status: "expired", tokenName, httpStatus: response.status };
   }
 
-  // Non-2xx, non-401 → unknown status, skip
+  // Other non-2xx (429, 5xx, …) → unknown status, skip — transport/vendor
+  // conditions must not file spurious issues.
   if (response.status < 200 || response.status >= 300) {
-    return { status: "unknown", tokenName };
+    return { status: "unknown", tokenName, httpStatus: response.status, reason: "http" };
   }
 
-  // HTTP 2xx — validate JSON before trusting response
-  let json: { name?: string };
+  // HTTP 2xx — validate JSON before trusting response. The ACL probe's shape
+  // is {elements: [{organizationalTarget, role, state}], paging} — no `name`.
+  let json: { name?: string; elements?: unknown[] };
   try {
-    json = (await response.json()) as { name?: string };
+    json = (await response.json()) as { name?: string; elements?: unknown[] };
   } catch {
     return { status: "invalid_json", tokenName };
   }
@@ -139,14 +217,15 @@ export async function checkToken(
     return { status: "invalid_json", tokenName };
   }
 
-  const holder = typeof json.name === "string" ? json.name : "unknown";
+  const holder =
+    typeof json.name === "string"
+      ? sanitizeHolder(json.name)
+      : Array.isArray(json.elements)
+        ? `${json.elements.length} administered org(s)`
+        : "unknown";
 
   // Token is valid — close any stale renewal issue
-  const search = await octokit.request("GET /search/issues", {
-    q: `repo:${REPO_OWNER}/${REPO_NAME} is:issue is:open in:title "${issueTitle}"`,
-    per_page: 1,
-  });
-  const stale = ((search.data as { items?: Array<{ number: number }> }).items ?? [])[0];
+  const stale = await findOpenRenewalIssue(octokit, issueTitle);
 
   if (stale) {
     await octokit.request(
@@ -188,7 +267,9 @@ export async function cronLinkedinTokenCheckHandler({
     },
   );
 
-  // Step 2: check both tokens
+  // Step 2: check every token the probe table knows about — a new token added
+  // to TOKEN_PROBES is probed without touching the call sites, and a call-site
+  // name missing from the table fails loud inside checkToken.
   const results = await step.run(
     "check-tokens",
     async (): Promise<TokenCheckResult[]> => {
@@ -197,31 +278,21 @@ export async function cronLinkedinTokenCheckHandler({
         auth: installationToken,
       }) as unknown as Octokit;
 
-      // Read tokens inside handler — NOT at module load
-      const personalToken = process.env.LINKEDIN_ACCESS_TOKEN;
-      const orgToken = process.env.LINKEDIN_ORG_ACCESS_TOKEN;
-
-      const personalResult = await checkToken(
-        "LINKEDIN_ACCESS_TOKEN",
-        personalToken,
-        octokit,
-      );
-      logger.info(
-        { fn: "cron-linkedin-token-check", ...personalResult },
-        `LINKEDIN_ACCESS_TOKEN: ${personalResult.status}`,
-      );
-
-      const orgResult = await checkToken(
-        "LINKEDIN_ORG_ACCESS_TOKEN",
-        orgToken,
-        octokit,
-      );
-      logger.info(
-        { fn: "cron-linkedin-token-check", ...orgResult },
-        `LINKEDIN_ORG_ACCESS_TOKEN: ${orgResult.status}`,
-      );
-
-      return [personalResult, orgResult];
+      const results: TokenCheckResult[] = [];
+      for (const tokenName of Object.keys(TOKEN_PROBES)) {
+        // Read tokens inside handler — NOT at module load
+        const result = await checkToken(
+          tokenName,
+          process.env[tokenName],
+          octokit,
+        );
+        logger.info(
+          { fn: "cron-linkedin-token-check", ...result },
+          `${tokenName}: ${result.status}`,
+        );
+        results.push(result);
+      }
+      return results;
     },
   );
 

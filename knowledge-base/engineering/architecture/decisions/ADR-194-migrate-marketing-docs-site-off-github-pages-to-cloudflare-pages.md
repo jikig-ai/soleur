@@ -731,3 +731,7 @@ success`, because `build_type: workflow` does not gate on that check. This
 matters beyond bookkeeping — it is why act 2 of the rollback (redeploy so
 GitHub Pages holds a current build) is executable BEFORE act 3 restores DNS. Had
 the prediction held, the documented rollback ordering would have been impossible.
+
+## Addendum — 2026-09-30 (#9303): the certificate poll is deleted, and its monitor follows
+
+The `cron-gh-pages-cert-state` routine (the daily GitHub Pages certificate poll) and its `[cert-poll]` machinery were deleted early, in #9303: the "What gets deleted" list above already named it, and Consequence 2 records that cert-expiry detection was deliberately retired, not replaced. Re-arming it would now be a `git revert` of #9303, not a boolean flip. Its disabled Sentry monitor `scheduled-gh-pages-cert-state` is deleted by a second PR tracked on #9304, because the Sentry two-PR rule (#8630) forbids unrouting and deleting a monitor in one apply. The #7799 conditions that gate the `ssl = "full"` rule do **not** apply to this item.

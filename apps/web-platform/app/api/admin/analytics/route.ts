@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { computeMetrics, computeFunnel } from "@/lib/analytics";
 import type { UserRow, ConversationRow } from "@/lib/analytics";
+import { verifiedUserId } from "@/server/request-auth";
 
 // GAP H (ADR-067 staleTimes amendment): admin-gated analytics data endpoint.
 // The all-tenant analytics data moved OFF the `admin/analytics` RSC (which the
@@ -9,18 +10,15 @@ import type { UserRow, ConversationRow } from "@/lib/analytics";
 // authz gate) and onto this route, whose `isAdmin` gate re-runs on EVERY fetch.
 // A de-provisioned admin gets a fresh 403 here — nothing sensitive is ever baked
 // into a cacheable RSC. Uses the RLS-bypassing service client (all-tenant read),
-// but only AFTER the getUser() + ADMIN_USER_IDS gate.
+// but only AFTER the verifiedUserId() + ADMIN_USER_IDS gate.
 export async function GET(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const isAdmin =
-    process.env.ADMIN_USER_IDS?.split(",").includes(user.id) ?? false;
+    process.env.ADMIN_USER_IDS?.split(",").includes(userId) ?? false;
   if (!isAdmin) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }

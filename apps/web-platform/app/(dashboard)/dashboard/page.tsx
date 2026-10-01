@@ -16,6 +16,10 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
 import { validateFiles } from "@/lib/validate-files";
+import {
+  ATTACHMENT_ACCEPT,
+  attachmentTileLabel,
+} from "@/lib/attachment-constants";
 import { setPendingFiles } from "@/lib/pending-attachments";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -61,13 +65,10 @@ interface PathStat {
 // ADR-067: the dashboard derives foundation-card completion only from a KNOWN
 // set of KB paths, so it fetches /api/dashboard/foundation-status (a targeted
 // stat) instead of the whole-KB-tree walk (/api/kb/tree buildTree()) that used
-// to gate first paint. It caches under its OWN key (NOT swrKeys.kbTree(), whose
-// richer payload + distinct error mapping would cross-contaminate this
-// consumer). Per-route instant warm render still holds.
-const DASHBOARD_FOUNDATION_STATUS_KEY = [
-  "/api/dashboard/foundation-status",
-  "dashboard",
-] as const;
+// to gate first paint. It caches under swrKeys.dashboardFoundationStatus()
+// (NOT swrKeys.kbTree(), whose richer payload + distinct error mapping would
+// cross-contaminate this consumer). Per-route instant warm render still holds.
+const DASHBOARD_FOUNDATION_STATUS_KEY = swrKeys.dashboardFoundationStatus();
 
 // Carries the dashboard's foundation-status error states through SWR's single
 // error channel (503 → "provisioning", everything else → "error"; 401 →
@@ -305,9 +306,14 @@ export default function DashboardPage() {
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
+      // Once the message is submitted the staged set has been handed to the
+      // chat page (setPendingFiles); a file added after that would be dropped.
+      if (sendSubmittingRef.current) return;
       const { valid, error } = validateFiles(files, firstRunAttachments.length);
 
-      if (error) setAttachError(error);
+      // The rejection message must survive a mixed batch: clearing it whenever
+      // any file was valid hid the reason the other file(s) were dropped.
+      setAttachError(error ?? null);
       if (valid.length > 0) {
         setFirstRunAttachments((prev) => [
           ...prev,
@@ -317,7 +323,6 @@ export default function DashboardPage() {
             preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
           })),
         ]);
-        setAttachError(null);
       }
     },
     [firstRunAttachments.length],
@@ -390,7 +395,7 @@ export default function DashboardPage() {
       setSendSubmitting(true);
       completeOnboarding();
 
-      // Store pending files for the chat page to upload after conversation creation
+      // Store pending files for the chat page to upload before its single first send
       if (firstRunAttachments.length > 0) {
         setPendingFiles(firstRunAttachments.map((a) => a.file));
         // Revoke preview URLs — the files are now in the singleton
@@ -410,6 +415,8 @@ export default function DashboardPage() {
 
       const params = new URLSearchParams();
       if (message) params.set("msg", message);
+      // First-run marker: the chat page consumes staged files only with fr=1.
+      if (firstRunAttachments.length > 0) params.set("fr", "1");
       router.push(`/dashboard/chat/new?${params.toString()}`);
     },
     [router, completeOnboarding, firstRunAttachments],
@@ -518,6 +525,7 @@ export default function DashboardPage() {
               {firstRunAttachments.map((att) => (
                 <div
                   key={att.id}
+                  title={att.file.name}
                   className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
                 >
                   {att.preview ? (
@@ -526,6 +534,15 @@ export default function DashboardPage() {
                       alt=""
                       className="h-8 w-8 rounded object-cover"
                     />
+                  ) : att.file.type.startsWith("text/") ? (
+                    // Text-only label for md/txt (intake canonicalizes file.type,
+                    // so this is the extension of the resolved type).
+                    <span
+                      data-testid="first-run-attachment-label"
+                      className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary"
+                    >
+                      {attachmentTileLabel(att.file.type)}
+                    </span>
                   ) : (
                     <svg className="h-4 w-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
@@ -536,7 +553,7 @@ export default function DashboardPage() {
                     variant="ghost"
                     type="button"
                     onClick={() => removeFirstRunAttachment(att.id)}
-                    className="ml-1 h-5 w-5 hover:text-soleur-text-primary"
+                    className="ml-1 h-6 w-6 hover:text-soleur-text-primary"
                     aria-label={`Remove ${att.file.name}`}
                   >
                     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -550,7 +567,7 @@ export default function DashboardPage() {
 
           {/* Error message */}
           {attachError && (
-            <p className="mb-2 text-xs text-red-400">{attachError}</p>
+            <p role="alert" className="mb-2 text-xs text-red-400">{attachError}</p>
           )}
 
           {/* Unified input box: the paperclip + send controls live *inside* one
@@ -573,7 +590,7 @@ export default function DashboardPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+              accept={ATTACHMENT_ACCEPT}
               multiple
               className="hidden"
               onChange={(e) => {

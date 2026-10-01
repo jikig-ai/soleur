@@ -6,9 +6,11 @@
 # workflow_dispatch-tested from a feature branch, so the logic is tested
 # out-of-band and this YAML stays a thin driver.
 #
-# Auth: the Soleur GitHub App (id in Doppler prd_terraform), minted to an
-# installation token per hr-github-app-auth-not-pat — the default GITHUB_TOKEN
-# is repo-scoped and CANNOT write an org Project v2. The App must be granted
+# Auth: the least-privilege `soleur-board` GitHub App (SOLEUR_BOARD_APP_* names
+# in Doppler prd_terraform), minted to an installation token per
+# hr-github-app-auth-not-pat — the default GITHUB_TOKEN is repo-scoped and
+# CANNOT write an org Project v2. The legacy soleur-ai pair is the fallback
+# while it survives (#8209 O10 evicts it). The App must be granted
 # `organization_projects: Read and write` (operator + org-owner consent); until
 # then this workflow FAILS LOUD (403) rather than silently no-op.
 #
@@ -62,26 +64,51 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
-          # soleur-ai App org installation (learning 2026-05-25-app-jwt-inline-mint).
-          INSTALLATION_ID: "122213433"
         run: |
           set -euo pipefail
 
-          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
-          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
-          # The #8209 eviction sentinel, refused BY NAME. After operator step O10 this config holds
-          # `EVICTED_SEE_ADR_241` under this name instead of a key -- the eviction is an OVERRIDE,
-          # because the value is inherited from `prd` and cannot be deleted out of a branch config,
-          # so the read above SUCCEEDS and returns a non-empty string. `openssl rsa -check` further
-          # down does reject it, but as "not a valid RSA PEM" -- which reads as a CORRUPTED key, and
-          # the remedy that suggests is to paste a fresh key into prd_terraform, undoing the eviction
-          # on a config every branch can read. Rationale: ADR-241 D5; census row G4e keeps it here.
-          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
-            echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there; see knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
+          # O1b (#8209, ADR-241): prefer the least-privilege `soleur-board` App minted for this job
+          # (issues/metadata/pull_requests read + organization_projects write, installed on this
+          # repo only). Fall back to the legacy soleur-ai pair until O10 evicts it -- this job
+          # carries no `environment:` grant, so it cannot read the Tier-B environment secrets, and
+          # the board identity was deliberately
+          # placed in prd_terraform where this job already reads.
+          BOARD_APP_ID=$(doppler secrets get SOLEUR_BOARD_APP_ID --plain 2>/dev/null) || BOARD_APP_ID=""
+          BOARD_PEM=$(doppler secrets get SOLEUR_BOARD_APP_PRIVATE_KEY --plain 2>/dev/null) || BOARD_PEM=""
+          # The pair is all-or-none: a half-seeded pair silently degrades to the
+          # wider-scope legacy identity while reading as "not yet seeded".
+          if [[ -n "$BOARD_APP_ID" || -n "$BOARD_PEM" ]] && [[ -z "$BOARD_APP_ID" || -z "$BOARD_PEM" ]]; then
+            echo "::error title=board-auth::verdict=board_app_pair_half_set — exactly one of SOLEUR_BOARD_APP_ID / SOLEUR_BOARD_APP_PRIVATE_KEY is set in prd_terraform. A half-set pair would silently keep minting the wider soleur-ai token; set both or neither."
             exit 1
           fi
+          if [[ -n "$BOARD_APP_ID" && -n "$BOARD_PEM" ]]; then
+            AUTH_SOURCE=soleur-board
+            APP_ID=$BOARD_APP_ID; PEM=$BOARD_PEM
+            PEM_NAME=SOLEUR_BOARD_APP_PRIVATE_KEY
+            INSTALLATION_ID="166065918"   # soleur-board org installation
+          else
+            AUTH_SOURCE=legacy
+            APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
+              echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
+            PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
+              echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
+            # The #8209 eviction sentinel, refused BY NAME. After operator step O10 this config holds
+            # `EVICTED_SEE_ADR_241` under this name instead of a key -- the eviction is an OVERRIDE,
+            # because the value is inherited from `prd` and cannot be deleted out of a branch config,
+            # so the read above SUCCEEDS and returns a non-empty string. `openssl rsa -check` further
+            # down does reject it, but as "not a valid RSA PEM" -- which reads as a CORRUPTED key, and
+            # the remedy that suggests is to paste a fresh key into prd_terraform, undoing the eviction
+            # on a config every branch can read. Rationale: ADR-241 D5; census row G4e keeps it here.
+            if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
+              echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there; see knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
+              exit 1
+            fi
+            PEM_NAME=GITHUB_APP_PRIVATE_KEY
+            # soleur-ai App org installation (learning 2026-05-25-app-jwt-inline-mint).
+            INSTALLATION_ID="122213433"
+            echo "::warning title=board-auth::source=legacy verdict=board_app_not_seeded — this run minted as the soleur-ai App, not soleur-board. Expected only until the SOLEUR_BOARD_APP_* names reach this config; the pair lives in prd_terraform (O1b)."
+          fi
+          echo "::notice title=board-auth::source=${AUTH_SOURCE} installation=${INSTALLATION_ID}"
           if [[ -z "$APP_ID" || -z "$PEM" ]]; then
             echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
           printf '::add-mask::%s\n' "$APP_ID"
@@ -91,14 +118,14 @@ jobs:
           done <<< "$PEM"
 
           umask 077
-          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
+          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" board-sync-app-pem.XXXXXX)
           printf '%s\n' "$PEM" > "$APP_PEM_FILE"
           chmod 600 "$APP_PEM_FILE"
           trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
           # Catch a corrupted PEM (literal \n, BOM, partial paste) HERE with a
           # routable error rather than a generic openssl "unable to load Private Key".
           if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
-            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
+            echo "::error::${PEM_NAME} in Doppler is not a valid RSA PEM."; exit 1; fi
 
           b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
 

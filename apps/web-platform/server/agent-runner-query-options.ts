@@ -108,7 +108,7 @@ export interface AgentQueryOptionsArgs {
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
   canUseTool: CanUseTool;
-  /** Defaults to "claude-sonnet-5" (matches both legacy + cc paths today). */
+  /** Defaults to "claude-sonnet-5-5" (matches both legacy + cc paths today). */
   model?: string;
   /** Defaults to "default" (matches both paths). */
   permissionMode?: SDKOptions["permissionMode"];
@@ -239,7 +239,7 @@ export function buildAgentQueryOptions(
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
   const opts: any = {
     cwd: resolvedCwd,
-    model: args.model ?? "claude-sonnet-5",
+    model: args.model ?? "claude-sonnet-5-5",
     permissionMode: args.permissionMode ?? "default",
     // settingSources: [] — defense-in-depth alongside `patchWorkspacePermissions`.
     // Prevents the SDK from loading `.claude/settings.json` whose

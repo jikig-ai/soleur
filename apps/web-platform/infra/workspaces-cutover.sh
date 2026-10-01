@@ -9,12 +9,20 @@
 # it NEVER sources or invokes it (that script calls services defined nowhere — R3).
 #
 # ⚠️ DP-6 — HOST-SIDE recovery. This script runs ON web-1 over the workflow's CF-Tunnel SSH bridge,
-# so `trap cleanup EXIT` is HOST-LOCAL and rolls back (unmount-mapper → remount-plaintext → restart)
-# even if the CI SSH session dies mid-freeze (F3). Freeze state is persisted to a HOST FILE
+# so `trap cleanup EXIT` is HOST-LOCAL (unmount-mapper → remount-plaintext → restart). When the CI
+# SSH session dies mid-freeze (F3) the script's next write to its dead stdout raises SIGPIPE (a HUP or
+# TERM from sshd does the same); bash then runs the EXIT trap, with `$?` reading 0, NOT the signal.
+# cleanup() is therefore signal-safe (#9098): it ignores PIPE/HUP/INT/TERM as its first act (so its
+# own logging into the dead pipe cannot kill it mid-rollback), and it treats rc 0 WITHOUT
+# RUN_COMPLETE=1 — which only the intentional success exits set — as an abnormal abort
+# (`abnormal_exit=1` on its outcome row). SIGPIPE is deliberately NOT ignored in the main body: a
+# dropped session must still abort the freeze into this trap. Freeze state is persisted to a HOST FILE
 # (/var/lib/workspaces-luks/state), not shell vars, so a deliberate reboot (C15) does not destroy
 # the trap or the recovery state; the post-reboot re-canary is its OWN gated step reading that file
 # (a pre-reboot CANARY_OK MUST NOT satisfy it — F5). A host-local dead-man timer auto-remounts
-# plaintext if no orchestrator heartbeat lands within the window.
+# plaintext if the run dies mid-freeze and nothing disarms it within the window. It guards the FREEZE
+# WINDOW only: the arm is verified (fail-closed) and the single disarm sits at the host-canary door,
+# before `docker start` (#9045, ADR-119 §(b) "the rollback door closes at docker start").
 #
 # ⚠️ R7/C3 — the escrow proof runs AFTER prepare_luks_target, against the REAL device via the host's
 # prd_workspaces_luks token path (`doppler secrets get WORKSPACES_LUKS_KEY --plain --config
@@ -34,8 +42,11 @@ case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
 
-log()  { echo "[workspaces-cutover] $*"; }
-step() { echo; echo "[workspaces-cutover] ===== $* ====="; }
+# log/step tolerate EPIPE (#9098 A): inside cleanup() SIGPIPE is ignored, so a write into the dead SSH
+# pipe returns an error instead of killing the trap — and that error must not print or propagate.
+# In the main body SIGPIPE is NOT ignored, so the same write still aborts the run into the trap (DP-6).
+log()  { { echo "[workspaces-cutover] $*"; } 2>/dev/null || true; }
+step() { { echo; echo "[workspaces-cutover] ===== $* ====="; } 2>/dev/null || true; }
 die()  { echo "[workspaces-cutover] FATAL: $*" >&2; exit 1; }
 
 # --- Configuration (overridable by the workflow; documented defaults) ---------
@@ -186,11 +197,32 @@ read_state()    { [ -f "$STATE_FILE" ] && (grep -E "^$1=" "$STATE_FILE" | tail -
 FREEZE_HELD=0
 FLIP_DONE=0
 CANARY_OK=0
+# #9045 — set to 1 the moment the dead-man's systemd-run returns 0 (BEFORE the arm is verified), so a
+# failed verification still reaches the disarm in cleanup(). Initialised here because `set -u`
+# would otherwise abort cleanup() inside the EXIT trap on an early die.
+DEADMAN_ARMED=0
+# #9098 C — set with DEADMAN_ARMED=1 and never cleared, so rollback() can tell "this run never armed"
+# (result=not_armed) from "this run armed and already disarmed at the door" (result=already_disarmed).
+DEADMAN_EVER_ARMED=0
+# #9098 A — set to 1 IMMEDIATELY before each intentional success exit (the ROLLBACK-mode end, the
+# CLEAN_STRAY end, the CONFIRM_WIPE end, and the one normal end shared by the dry-run and the green run). A signal-driven
+# EXIT trap sees `$?`=0, so rc 0 alone cannot mean success: cleanup() requires RUN_COMPLETE=1 too.
+RUN_COMPLETE=0
+# #6604 step 7 — set by rollback() when it REFUSES (no plaintext copy is left to remount), so its callers
+# record outcome=refused_plaintext_wiped / refused_plaintext_record_gone (_plaintext_gone_outcome) instead
+# of reading the untouched mapper mount as a failed remount.
+ROLLBACK_REFUSED=0
+# #9098 E — the IN-PROCESS G3 workspace count, the baseline the host-canary population assert compares
+# against. Initialised empty (never inherited from the environment): the persisted WORKSPACES_COUNT
+# is an append-only file across runs, so it cannot stand in for THIS run's count.
+WS_INVENTORY=""
 
-# Emit a discriminating drift event (any failed at-rest assert routes here).
+# Emit a discriminating drift event (any failed at-rest assert routes here). $2 is the Sentry level
+# (default fatal); a refused wipe REHEARSAL passes `warning` (#6604 step 7). The alert keys on the op,
+# not the level, so a warning still opens the issue — the level only tells a rehearsal from a real run.
 emit_drift() {
   WL_REASON="$1"; export WL_REASON
-  if command -v workspaces_luks_emit >/dev/null 2>&1; then WL_LEVEL=fatal workspaces_luks_emit;
+  if command -v workspaces_luks_emit >/dev/null 2>&1; then WL_LEVEL="${2:-fatal}" workspaces_luks_emit;
   else echo "[workspaces-cutover] DRIFT reason=$1 (workspaces_luks_emit unavailable — Sentry channel not reached; workflow-run log is the only sink)" >&2; fi
 }
 
@@ -695,9 +727,10 @@ resume_writers() {
 # (#6812). Both halves of that — the race and the silence — are fixed here.
 #
 # Retry bounds live in the shared helper (workspaces-luks-emit.sh) so this probe and the daily
-# monitor cannot drift apart. Worst case ~237s per probe (30 attempts x 5s max-time + 29 x 3s), so
-# ~474s for both; against DEAD_MAN_MIN=30min with ~181s of measured pre-canary elapsed, that leaves
-# roughly 19 minutes of margin. AC8 pins the inequality so a future knob change cannot quietly eat it.
+# monitor cannot drift apart. Worst case ~237s per probe (30 attempts x 5s max-time + 29 x 3s). The
+# budget no longer races the dead-man: since #9045 it is disarmed at the host-canary door, before
+# docker start, so nothing unattended is armed while this canary retries (the retired AC8 bounded that
+# race; it is gone with the race).
 app_canary() {
   local rc
   wl_probe_http "https://app.soleur.ai/health"; rc=$?
@@ -735,12 +768,197 @@ app_canary() {
   log "app canary PASSED — /health 200 and /internal/readyz ready=true (workspaces writable + populated)"
 }
 
+# assert_host_canary_population — #9045 (user-impact review), #9098 E. The host canary's last content
+# check BEFORE the door closes; until #9045 the only content check on $MOUNT was readyz, which runs
+# after `docker start` — past the door, where a rollback is no longer lossless.
+#
+# WHAT IT PROVES, AND WHAT IT DOES NOT. It compares the workspace count on the now-mounted $MOUNT
+# against $WS_INVENTORY — the count G3 took on $STAGING in THIS process, with the same counter the daily
+# monitor uses. The repoint mounts the very filesystem G3 counted, so equality re-proves that the
+# mounted filesystem IS the copy G3 counted and that the repoint landed (not a stale, empty or foreign
+# mount). It is NOT a plaintext-vs-copy population proof: that is G3 against G2, already enforced
+# before the repoint. It never reads the persisted WORKSPACES_COUNT: the state file is append-only
+# across runs, so an earlier run's count could stand in for this run's.
+#
+# FAILS CLOSED on an unset, empty, non-numeric or ZERO baseline (host_canary_baseline_missing): the door
+# must not close on an unproven population, and a zero count on an empty mount is the wipe shape
+# wl_count_workspace_dirs exists to catch. An uncountable mount is a mismatch, never a match.
+# Dies while CANARY_OK=0, so cleanup() still rolls back losslessly.
+assert_host_canary_population() {
+  local want="${WS_INVENTORY:-}" got
+  case "$want" in
+    ''|*[!0-9]*|0)
+      emit_drift host_canary_baseline_missing
+      die "host canary: the in-process G3 workspace count is '${want:-<unset>}' — refusing to close the rollback door without a positive baseline to compare $MOUNT/workspaces against (C13/#9098)" ;;
+  esac
+  got="$(wl_count_workspace_dirs "$MOUNT/workspaces" 2>/dev/null)" || got=""
+  if [ -z "$got" ] || [ "$got" != "$want" ]; then
+    emit_drift host_canary_workspace_count_mismatch
+    die "host canary: $MOUNT/workspaces holds '${got:-<uncountable>}' workspace(s), G3 counted '${want}' on the copy — refusing to close the rollback door on an unproven population (C13/#9045)"
+  fi
+  log "host canary population OK — $MOUNT/workspaces holds $got workspace(s) (= the G3 count of this run)"
+}
+
+# _plaintext_dev_valid <v> — syntax only: an absolute /dev path of [A-Za-z0-9/_.:-] with no `..`/`//`.
+# Every reader of the recorded PLAINTEXT_DEV calls this first: the value is baked unquoted into the
+# root dead-man fire and passed to mount/blkid, so a leading `-`, a non-device or NFS-shaped string,
+# or a quote must never reach them. Syntax only: it still admits non-device namespaces under /dev
+# (/dev/shm/x, /dev/fd/3); the `[ -b ]` in _plaintext_dev_type (via _plaintext_record_status, at the
+# arm, Guard 5 and the rollback remount) is what refuses those. Pure: reads nothing but its argument.
+_plaintext_dev_valid() {
+  local LC_ALL=C d="${1:-}"
+  case "$d" in /dev/?*) ;; *) return 1 ;; esac
+  case "$d" in *[!A-Za-z0-9/_.:-]*|*..*|*//*) return 1 ;; esac
+  return 0
+}
+
+# _plaintext_blkid_bin — blkid from a fixed root-owned list, never `command -v` (a PATH-resolved or
+# function name baked into the unattended root fire is an exec primitive). SEAM; reads no environment.
+_plaintext_blkid_bin() { local b; for b in /usr/sbin/blkid /sbin/blkid /usr/bin/blkid /bin/blkid; do [ -x "$b" ] && { printf '%s' "$b"; return 0; }; done; return 0; }
+# _plaintext_blkid_type <dev> — the blkid TYPE of <dev> through the fixed-path blkid, with blkid's rc
+# KEPT (a swallowed rc made "zeroed" and "could not probe" read the same): `<fstype>` on rc 0; `none` on
+# rc 2, or rc 0 with no TYPE — no filesystem signature (zeroed, blank, a partition table only, an
+# ambivalent probe); `blkid_error_<rc>` on any other rc; `blkid_absent` when no blkid sits at a fixed
+# path. Never empty. Reads only its argument.
+_plaintext_blkid_type() {
+  local b t rc
+  b="$(_plaintext_blkid_bin)"; [ -n "$b" ] || { printf blkid_absent; return 0; }
+  t="$("$b" -p -s TYPE -o value "$1" 2>/dev/null)"; rc=$?
+  case "$rc" in 0|2) printf '%s' "${t:-none}" ;; *) printf 'blkid_error_%s' "$rc" ;; esac
+}
+# _plaintext_dev_type <dev> — the PHYSICAL probe of the recorded plaintext: `absent` when <dev> is not a
+# block device (a kernel name gone after a reboot, a regular file), else _plaintext_blkid_type. Identity
+# is the cutover's recorded mount source, not a filesystem label — no artifact labels the retained
+# plaintext (ADR-119, corrected 2026-09-30). SEAM (the suites answer it); reads only its argument.
+_plaintext_dev_type() { [ -b "${1:-}" ] || { printf absent; return 0; }; _plaintext_blkid_type "$1"; }
+
+# _plaintext_record_status <dev> — THE one predicate for "the recorded plaintext is an intact restore
+# source", shared by _plaintext_gone, arm_dead_man and rollback()'s remount. Prints ONE token, and every
+# caller tests only `ok` vs not-ok:
+#   ok          valid, a block device, not the mapper, and ext4
+#   invalid     fails _plaintext_dev_valid (unrecorded, option-shaped, not a clean /dev path)
+#   is_mapper   resolves (readlink -f, so any alias) to the LUKS mapper: the LIVE copy, not a backstop
+#   absent | none | blkid_absent | blkid_error_<rc> | <fstype>   from _plaintext_dev_type
+# None of the non-ok values proves a wipe: only a persisted wipe marker does (the wipe writes BEGUN
+# before any zero). Without a marker, a non-ok status is drift, a detach or an unreadable device.
+_plaintext_record_status() {
+  local d="${1:-}" t
+  _plaintext_dev_valid "$d" || { printf invalid; return 0; }
+  # readlink equality, NOT _same_dev: _same_dev returns "different" when readlink fails or the mapper
+  # is not a block device — the wrong direction here, where unknown-or-same must read as not-ok.
+  [ "$(readlink -f -- "$d" 2>/dev/null)" != "$(readlink -f -- "$MAPPER" 2>/dev/null)" ] || { printf is_mapper; return 0; }
+  t="$(_plaintext_dev_type "$d")"
+  if [ "$t" = ext4 ]; then printf ok; else printf '%s' "${t:-none}"; fi
+}
+
+# _plaintext_gone — Guard 5 (#6604 step 7): is there NO intact plaintext copy left for a rollback to
+# remount? Two witnesses, either one sufficient:
+#   marker    PLAINTEXT_WIPE_BEGUN or PLAINTEXT_WIPED persisted (the wipe began, or finished) — the
+#             ONLY witness that proves a wipe;
+#   physical  $MOUNT is the LUKS mapper AND _plaintext_record_status of the recorded PLAINTEXT_DEV (the
+#             device rollback() remounts) is not `ok`. It reads the state file only for WHICH device to
+#             probe; a lost or invalid record reads as gone. That is fail-closed, but it strands a
+#             still-intact plaintext as a rollback source (accepted; the runbook escalates it).
+# Sets PLAINTEXT_GONE_WHY (marker|plaintext_dev_gone) and PLAINTEXT_RECORD_STATUS (the physical arm's
+# status; rollback()'s remount sets it too) for the caller's message and off-host row.
+PLAINTEXT_GONE_WHY=""; PLAINTEXT_RECORD_STATUS=""
+_plaintext_gone() {
+  PLAINTEXT_GONE_WHY=""; PLAINTEXT_RECORD_STATUS=""
+  if [ -n "$(read_state PLAINTEXT_WIPE_BEGUN)$(read_state PLAINTEXT_WIPED)" ]; then
+    PLAINTEXT_GONE_WHY=marker; return 0
+  fi
+  if [ "$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)" = "$MAPPER" ]; then
+    PLAINTEXT_RECORD_STATUS="$(_plaintext_record_status "$(read_state PLAINTEXT_DEV)")"
+    [ "$PLAINTEXT_RECORD_STATUS" = ok ] || { PLAINTEXT_GONE_WHY=plaintext_dev_gone; return 0; }
+  fi
+  return 1
+}
+# _plaintext_record_fields — ` recorded=<PLAINTEXT_DEV|none> recorded_status=<status|unprobed>`, each
+# scrubbed through _deadman_detail (`=` -> `_`) with spaces folded, so no field can be forged or split.
+_plaintext_record_fields() {
+  local r t
+  r="$(_deadman_detail "$(read_state PLAINTEXT_DEV)")"; t="$(_deadman_detail "${PLAINTEXT_RECORD_STATUS:-unprobed}")"
+  r="${r// /_}"
+  printf ' recorded=%s recorded_status=%s' "${r:-none}" "${t// /_}"
+}
+# _plaintext_gone_fields — ` why=…` for a Guard 5 refusal row, plus the record fields ONLY under
+# why=plaintext_dev_gone (the marker arm never probes the record, so it claims nothing about it).
+_plaintext_gone_fields() {
+  local w; w="$(_deadman_detail "${PLAINTEXT_GONE_WHY:-none}")"
+  printf ' why=%s' "${w// /_}"
+  [ "$PLAINTEXT_GONE_WHY" != plaintext_dev_gone ] || _plaintext_record_fields
+}
+# _plaintext_gone_msg — the refusal sentence, worded by why= (a marker proves a wipe; a physical
+# refusal without one never does).
+_plaintext_gone_msg() {
+  local f
+  if [ "$PLAINTEXT_GONE_WHY" = marker ]; then
+    printf 'ROLLBACK REFUSED (marker): a plaintext wipe began (PLAINTEXT_WIPE_BEGUN/PLAINTEXT_WIPED is persisted), so the copy may be partly or wholly zeroed — nothing to remount'
+  else
+    f="$(_plaintext_record_fields)"
+    printf 'ROLLBACK REFUSED (plaintext_dev_gone): %s is the LUKS mapper and the recorded plaintext is not an intact ext4 (%s). NO wipe marker exists, so this is NOT a wipe: the record drifted, or the device is detached or unreadable — halt and escalate' "$MOUNT" "${f# }"
+  fi
+}
+# _plaintext_gone_outcome — the outcome of a Guard 5 refusal, by why=. Sets `outcome` (cleanup()'s local
+# by dynamic scope, a global in ROLLBACK mode), as _rollback_outcome does.
+_plaintext_gone_outcome() {
+  if [ "$PLAINTEXT_GONE_WHY" = marker ]; then outcome=refused_plaintext_wiped; else outcome=refused_plaintext_record_gone; fi
+}
+
 # Host-local rollback: unmount the mapper, remount the RETAINED plaintext volume at $MOUNT, restart.
 # Reconcilable, not a one-way door (C13): the LUKS volume RETAINS post-cutover writes.
 # shellcheck disable=SC2317  # invoked indirectly via the EXIT trap / ROLLBACK mode
 rollback() {
+  # #6604 step 7 — FIRST, for EVERY caller (ROLLBACK mode, cleanup()'s freeze arm, and any future one):
+  # once the plaintext copy is gone there is nothing to remount, and unmounting $MAPPER would take the
+  # ONLY copy of every workspace offline. Refuse, touch nothing, page (a marker and a physical refusal
+  # page under different slugs: only the first is a wipe), and let the caller record the outcome
+  # (_plaintext_gone_outcome). (The dead-man FIRE cannot call this function — its command must stay
+  # self-contained — so arm_dead_man embeds a subset of the check in the fire string itself.)
+  if _plaintext_gone; then
+    ROLLBACK_REFUSED=1
+    if [ "$PLAINTEXT_GONE_WHY" = marker ]; then emit_drift rollback_refused_plaintext_wiped
+    else emit_drift rollback_refused_plaintext_record_gone; fi
+    log "$(_plaintext_gone_msg);$(_plaintext_gone_fields); $MOUNT stays on $MAPPER untouched"
+    return 1
+  fi
   step "ROLLBACK — remount the retained plaintext at $MOUNT + restart"
   [ "$DRY_RUN" = "1" ] && { log "(dry-run) would rollback"; return 0; }
+  # #9045/#9098 C — the dead-man FIRST, before any unmount, in race-free order:
+  #   1. STOP THE TIMER before waiting, so no NEW fire can start while this function waits out a
+  #      current one. When THIS run armed it, that stop is the verifying disarm (its check (a) reads
+  #      before its own stop; it returns a status and never dies, so a failed disarm cannot abort the
+  #      rollback halfway — its marker and page are already emitted). Otherwise read the timer's
+  #      SubState BEFORE stopping it (a stop collects the unit and empties every property), stop it,
+  #      and say which case this is without a false fatal page.
+  #   2. Wait, bounded by ATTEMPTS (never wall clock), for any fire already running to leave the live
+  #      state, or carrying a QUEUED start job (disarm check (b)'s second arm: an elapsed timer whose
+  #      fire systemd has not begun still reads inactive, and only `Job` shows it): unmounting under
+  #      it would race two restores over one mountpoint. On expiry report
+  #      check=fire_stuck and proceed — the plaintext remount the fire was performing is this
+  #      function's own end state. The page is emitted ONLY if the disarm above has not already paged.
+  local i=0 prior="" paged=0 src="" pdev=""
+  if [ "$DEADMAN_ARMED" = "1" ]; then
+    disarm_dead_man rollback_engaged || paged=1
+  else
+    prior="$(_dm_prop timer SubState)"
+    systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
+    if [ "$DEADMAN_EVER_ARMED" = "1" ]; then
+      _deadman_row "result=already_disarmed reason=rollback_engaged"
+    else
+      _deadman_row "result=not_armed reason=rollback_engaged prior=$(_deadman_detail "${prior:-empty}")"
+    fi
+  fi
+  while [ "$i" -lt 30 ]; do
+    i=$((i + 1))
+    _deadman_fire_live || [ -n "$(_dm_prop service Job)" ] || break
+    if [ "$i" -ge 30 ]; then
+      _deadman_row "result=disarm_failed reason=rollback_engaged check=fire_stuck"
+      [ "$paged" = "1" ] || emit_drift deadman_disarm_failed
+      break
+    fi
+    sleep 3
+  done
   systemctl stop webhook.service 2>/dev/null || true
   docker stop -t 30 "$CONTAINER" 2>/dev/null || true
   umount "$MOUNT" 2>/dev/null || true
@@ -757,38 +975,247 @@ rollback() {
   if [ -e "$MAPPER" ]; then
     cryptsetup close "$MAPPER_NAME" || emit_drift rollback_mapper_close_failed
   fi
-  # Remount the retained plaintext volume (its by-label / by-id device — never the mapper).
-  mount /dev/disk/by-label/workspaces_plain "$MOUNT" 2>/dev/null \
-    || mount "$(read_state PLAINTEXT_DEV)" "$MOUNT" 2>/dev/null || true
-  docker start "$CONTAINER" 2>/dev/null || true
-  # AFTER the remount — resume_writers() itself refuses to start anything if the remount above
-  # failed (the `|| true` swallows it), so webhook cannot land on the bare mountpoint directory.
-  mountpoint -q "$MOUNT" 2>/dev/null || emit_drift rollback_remount_failed
-  resume_writers
-  # Disarm HERE too, not only on the success path: an abort that reaches rollback has already
-  # restored the host, so leaving the transient timer armed means it fires DEAD_MAN_MIN later and
-  # takes a second, unannounced outage — one that now stops inngest-redis as well.
-  disarm_dead_man
+  # Remount the retained plaintext volume ONLY when its record is an intact restore source
+  # (_plaintext_record_status = ok: valid, a block device, not the mapper, ext4) — the predicate Guard 5
+  # and the arm use, applied HERE too because Guard 5's physical arm probes only while $MOUNT is the
+  # mapper. Otherwise mount nothing: the gate below leaves the app DOWN and the outcome row names
+  # recorded=/recorded_status=.
+  pdev="$(read_state PLAINTEXT_DEV)"; PLAINTEXT_RECORD_STATUS="$(_plaintext_record_status "$pdev")"
+  if [ "$PLAINTEXT_RECORD_STATUS" = ok ]; then
+    mount "$pdev" "$MOUNT" 2>/dev/null || true
+  else
+    log "WARN: the recorded plaintext is not an intact restore source$(_plaintext_record_fields) — mounting nothing"
+  fi
+  # #9098 C — restart the app (and the writers) ONLY onto a mounted, non-mapper $MOUNT. The remount
+  # above swallows its own failure, so a bare mountpoint directory or a mapper that would not unmount
+  # must leave the app DOWN (webhook/app writing to the root disk or to the LUKS copy is worse than an
+  # outage the page below names). resume_writers() re-checks `mountpoint -q` itself.
+  src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+  if mountpoint -q "$MOUNT" 2>/dev/null && [ -n "$src" ] && [ "$src" != "$MAPPER" ]; then
+    docker start "$CONTAINER" 2>/dev/null || true
+    resume_writers
+  else
+    emit_drift rollback_remount_failed
+    log "WARN: $MOUNT is not a mounted plaintext source after the remount (source='$(_vscrub "${src:-none}")'$(_plaintext_record_fields)) — leaving the app and the writers DOWN"
+  fi
   emit_drift rollback_engaged
+}
+
+# assert_rollback_not_post_cutover — #9098 J. A ROLLBACK=1 dispatch after a SUCCESSFUL cutover
+# remounts the plaintext copy frozen at the cutover and strands, on the LUKS volume, every write users
+# made since docker start — the #6812 stranding, by hand. So refuse it when the persisted run-keyed
+# CANARY_OK=1:<uuid> names the header now backing the mapper, WHATEVER $MOUNT is mounted on right now
+# (#9286 review: a reboot whose boot unlock failed leaves /mnt/data empty, and a plaintext mount after
+# an earlier rollback is still a completed cutover — keying on "the mapper is mounted" let an unacked
+# rollback serve the 2026-07-23 copy), unless the operator acknowledges the stranding
+# (ROLLBACK_ACK_LUKS_WRITES=1, the workflow's rollback_ack_luks_writes input). FAIL-CLOSED on an
+# unreadable live header UUID (a closed mapper included) while a CANARY_OK is persisted: "cannot tell"
+# is not "not cut over", and the ack is the override. Only a DIFFERENT live header (a later re-format)
+# is not this cutover and proceeds.
+# The key is the HEADER, not the run: STATE_FILE is append-only and read_state returns the LAST
+# CANARY_OK, so a later cutover that reuses the same header and dies before its own canary is refused
+# too, and the refusal text then overstates the stranding. That is fail-closed; the ack is the override.
+assert_rollback_not_post_cutover() {
+  local src persisted p_uuid mapper_dev live_uuid="" m
+  # #6604 step 7 — FIRST, before any other probe: once the plaintext copy is gone (a wipe marker, or the
+  # mapper mounted with the recorded PLAINTEXT_DEV not `ok`) there is nothing to remount. rollback()
+  # carries the same check as its own first line (it covers every caller); this copy runs it BEFORE the
+  # CANARY_OK probes so ROLLBACK mode refuses with these slugs, never the post-cutover one. NOT
+  # overridable by ROLLBACK_ACK_LUKS_WRITES (that ack is about stranding writes on a copy that still
+  # exists). The marker refusal and the physical one carry different slugs and outcomes.
+  if _plaintext_gone; then
+    if [ "$PLAINTEXT_GONE_WHY" = marker ]; then
+      _rollback_refuse rollback_refused_plaintext_wiped refused_plaintext_wiped "$(_plaintext_gone_msg). Unmounting $MAPPER would take every workspace offline. Fix forward on the LUKS volume; rollback_ack_luks_writes does not override this." "$(_plaintext_gone_fields)"
+    fi
+    _rollback_refuse rollback_refused_plaintext_record_gone refused_plaintext_record_gone "$(_plaintext_gone_msg). Unmounting $MAPPER would take every workspace offline; rollback_ack_luks_writes does not override this." "$(_plaintext_gone_fields)"
+  fi
+  src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+  persisted="$(read_state CANARY_OK)"
+  case "$persisted" in 1:*) ;; *) return 0 ;; esac
+  p_uuid="${persisted#1:}"
+  mapper_dev="$(cryptsetup status "$MAPPER_NAME" 2>/dev/null | sed -n 's/^ *device: *//p')"
+  [ -n "$mapper_dev" ] && live_uuid="$(cryptsetup luksUUID "$mapper_dev" 2>/dev/null || true)"
+  if [ -n "$live_uuid" ] && [ -n "$p_uuid" ] && [ "$live_uuid" != "$p_uuid" ]; then return 0; fi
+  if [ "${ROLLBACK_ACK_LUKS_WRITES:-0}" = "1" ]; then
+    log "WARN: ROLLBACK_ACK_LUKS_WRITES=1 — rolling back a COMPLETED cutover (mount=$(_vscrub "${src:-none}"), header $(_vscrub "${live_uuid:-<unreadable>}")); every write since docker start stays on the LUKS volume and must be reconciled by hand"
+    return 0
+  fi
+  m="$(_deadman_detail "${src:-none}")"
+  _rollback_refuse rollback_refused_post_cutover refused_post_cutover "ROLLBACK refused: the persisted CANARY_OK ($(_vscrub "$persisted")) matches the live header ($(_vscrub "${live_uuid:-<unreadable>}")) — this cutover COMPLETED ($MOUNT is on '$(_vscrub "${src:-nothing}")' now). Rolling back now would remount the plaintext frozen at the cutover and strand every write made on the LUKS volume since docker start. Fix forward instead; to roll back anyway, re-dispatch with rollback_ack_luks_writes=true (ROLLBACK_ACK_LUKS_WRITES=1) and reconcile the stranded writes by hand." " mount_src=${m// /_}"
+}
+
+# _rollback_refuse <drift slug> <outcome> <message> [row fields] — the ONE shape of a ROLLBACK-mode
+# refusal: the Sentry slug, ONE outcome row (mode=rollback, then the optional pre-scrubbed fields), the
+# EXIT trap dropped, then die. ROLLBACK mode has no cleanup()
+# arm of its own, so without its own row and the dropped trap a refusal would record a false
+# outcome=pre_freeze.
+_rollback_refuse() {
+  emit_drift "$1"
+  _deadman_row "result=cutover_aborted outcome=${2} mode=rollback${4:-}"
+  trap - EXIT
+  die "$3"
+}
+
+# _stop_app_and_writers — best-effort STOP of the app and every quiesced writer, webhook first (so a
+# CI deploy cannot restart the container behind the stop), in freeze_writers' order but without its
+# asserts: this runs in cleanup() on a mount that is already known to be wrong, where the only goal is
+# that nothing keeps writing to it. Timer-driven touchers are stopped as <timer> <service> pairs.
+_stop_app_and_writers() {
+  local u first=1
+  for u in $(_quiesce_list); do
+    systemctl stop "$u" 2>/dev/null || true
+    [ "$first" = "1" ] && { docker stop -t 30 "$CONTAINER" 2>/dev/null || true; first=0; }
+  done
+  for u in $QUIESCE_TIMERS; do
+    systemctl stop "${u}.timer" "${u}.service" 2>/dev/null || true
+  done
+}
+
+# _rollback_outcome — #9098 B: the outcome of a rollback() is read off the mount AND the mapper, never
+# assumed from rollback()'s own swallowed remount: rolled_back only for exactly ONE non-mapper source
+# with the mapper CLOSED. Two sources (a remount stacked over a mapper that would not unmount) or a
+# mapper still open (a decrypted copy still live) is rollback_stacked; nothing, or the mapper, is
+# remount_failed. Sets `outcome` — cleanup()'s local by dynamic scope, a global in ROLLBACK mode.
+_rollback_outcome() {
+  local src n_src
+  src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+  n_src="$(grep -c . <<<"$src" || true)"
+  if [ -z "$src" ] || [ "$src" = "$MAPPER" ]; then
+    outcome=rollback_remount_failed
+  elif [ "$n_src" -ne 1 ] || [ -e "$MAPPER" ]; then
+    outcome=rollback_stacked; emit_drift rollback_stacked
+  else
+    outcome=rolled_back
+  fi
 }
 
 # shellcheck disable=SC2317  # invoked indirectly via the EXIT trap
 cleanup() {
-  local rc=$?
+  # `$?` MUST be captured before any other builtin runs (the `trap` below resets it to 0). Then,
+  # FIRST, make the handler signal-safe (#9098 A): a dropped SSH session means this function's own
+  # log lines are written into a dead pipe, and with the default disposition the first one re-raises
+  # SIGPIPE and kills bash mid-rollback. HUP/INT/TERM are ignored for the same reason — a second
+  # signal must not abort the recovery halfway. (The main body keeps the default dispositions: an SSH
+  # drop mid-freeze must still abort INTO this trap, DP-6.)
+  local rc=$? outcome="" src="" abnormal="" detail="" derr="" drc=0 mode="" begun="" fields=""
+  trap '' PIPE HUP INT TERM
   trap - EXIT
-  if [ "$rc" -eq 0 ]; then exit 0; fi
-  log "ABORT (rc=$rc) — host-local auto-recovery"
+  if [ "$rc" -eq 0 ]; then
+    [ "$RUN_COMPLETE" = "1" ] && exit 0
+    # rc 0 WITHOUT RUN_COMPLETE=1 is not a success: a signal-driven EXIT trap reads `$?`=0. Handle it
+    # exactly like a failure, and say so on the outcome row.
+    rc=1; abnormal=" abnormal_exit=1"
+  fi
+  log "ABORT (rc=$rc${abnormal}) — host-local auto-recovery"
   # ONE rollback: fire iff we hold the freeze or completed the flip AND the canary has
   # not yet passed (post-canary the LUKS mount is authoritative and retains writes — do
   # not tear it down). Single condition avoids the double stop/umount/remount flap.
   if [ "$CANARY_OK" != "1" ] && { [ "$FLIP_DONE" = "1" ] || [ "$FREEZE_HELD" = "1" ]; }; then
-    rollback
+    # rollback() refuses (touching nothing) when the plaintext copy is gone; the untouched mapper mount
+    # is then NOT a failed remount, so the outcome says what happened (and why=). A failed remount names
+    # what the record read.
+    if rollback || [ "$ROLLBACK_REFUSED" != "1" ]; then
+      _rollback_outcome
+      [ "$outcome" != rollback_remount_failed ] || fields="$(_plaintext_record_fields)"
+    else
+      _plaintext_gone_outcome; fields="$(_plaintext_gone_fields)"
+    fi
+  elif [ "$CANARY_OK" = "1" ]; then
+    # #9045 — past the host-canary door the LUKS mount is authoritative (ADR-119 §(b)), and nothing
+    # unattended is armed any more. Roll FORWARD: a death between CANARY_OK=1 and the end of
+    # resume_writers would otherwise leave the app DOWN on a correct mount. Re-assert the mapper
+    # first — resume_writers() checks only `mountpoint -q`, never device identity. On a mismatch
+    # (including an EMPTY source) actively STOP the app and the writers and page (fix-forward, never
+    # ROLLBACK=1: that would strand every write made since docker start).
+    src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+    if [ "$src" = "$MAPPER" ]; then
+      derr="$(docker start "$CONTAINER" 2>&1 >/dev/null)"; drc=$?
+      if [ "$drc" -eq 0 ]; then
+        outcome=post_canary_luks_retained
+      else
+        # The error text rides the outcome row as a scrubbed LAST field; the drift gets the slug only.
+        outcome=post_canary_restart_failed; detail=" detail=$(_deadman_detail "${derr:-rc=$drc}")"
+        emit_drift cleanup_docker_start_failed
+      fi
+      # The mount is the mapper, so the writers are safe to resume whether or not the app started.
+      resume_writers
+    else
+      _stop_app_and_writers
+      outcome=post_canary_mount_not_mapper
+      emit_drift cleanup_mount_not_mapper
+    fi
+    emit_drift cutover_aborted_post_canary
+  elif [ "$DEADMAN_ARMED" = "1" ]; then
+    # The arm's systemd-run succeeded but its verification failed, before anything was frozen.
+    disarm_dead_man arm_aborted || true
+    outcome=arm_aborted
+  elif [ "$CONFIRM_WIPE" = "1" ]; then
+    # The wipe never sets CANARY_OK/FREEZE_HELD/FLIP_DONE/DEADMAN_ARMED, so none of the arms above can
+    # fire for it: an aborted wipe is recorded, never rolled back or rolled forward (#6604 step 7).
+    # A REAL wipe that aborts pages (obs P2-2): an SSH drop, a cancel or the job timeout mid-zero kills
+    # the run before any _wipe_refuse, and would otherwise reach nobody. `begun=1` on the row says the
+    # zero had started (PLAINTEXT_WIPE_BEGUN names the pin): the volume is partly zeroed, ROLLBACK is
+    # locked out, and a re-dispatch resumes on arm=re_zero. (PIPE is ignored here, so the send survives.)
+    outcome=wipe_aborted
+    if [ "$DRY_RUN" != "1" ]; then
+      case "$(read_state PLAINTEXT_WIPE_BEGUN)" in "${WORKSPACES_PLAINTEXT_VOLUME_ID:-<none>}":*) begun=" begun=1" ;; esac
+      emit_drift wipe_aborted
+    fi
+  elif [ "$CLEAN_STRAY" = "1" ]; then
+    outcome=clean_stray
+  else
+    outcome=pre_freeze
   fi
+  # A wipe abort sweeps the two fixed LUKS-header copies W5 may have left on the root disk, and says
+  # which mode it was (a refused rehearsal therefore reads `outcome=dry_run mode=wipe`).
+  if [ "$CONFIRM_WIPE" = "1" ]; then _wipe_shred_hdrs; mode=" mode=wipe${begun}"; fi
+  # A dry run froze, flipped and armed nothing (every mutation is DRY_RUN-gated), so whatever the flags
+  # say, the truthful outcome is dry_run — never a "rolled back" page for a rehearsal.
+  [ "$DRY_RUN" = "1" ] && outcome=dry_run
+  # ONE outcome row per abort, on the existing luks-monitor tag (readable off-host, no SSH). The scrubbed
+  # fields go before the free-text detail=, which stays LAST.
+  _deadman_row "result=cutover_aborted outcome=${outcome}${mode}${abnormal}${fields}${detail}"
   exit "$rc"
 }
 
-# NOTE: defined ABOVE the sourced-detection guard so rollback() (which disarms after a
-# restore) and the freeze test harness can both reach them. Definitions only — arm_dead_man is
+# _deadman_row <fields> — every dead-man marker is echoed to the run log AND logged on the existing
+# Vector-allowlisted luks-monitor tag (no new tag), the pattern the verify-diff rows already use. The
+# row prefix is added HERE, so a call site passes only `result=… reason=…`: one grep for the prefix
+# finds the whole story, and no call site can drift from it. EPIPE-tolerant: it runs inside cleanup()
+# after an SSH drop, where the echo lands in a dead pipe (#9098 A). (The FIRE rows inside the
+# systemd-run command string are literal: that string must stay self-contained.)
+_deadman_row() {
+  local row="SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman $1"
+  { echo "$row"; } 2>/dev/null || true
+  logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+}
+# _deadman_detail <free text> — the ONLY way free text enters a dead-man marker: first line, at most
+# 200 bytes, printable only, and every `=` mapped to `_`, so a refusal message that says `result=armed`
+# cannot spoof a marker field. A free-text `detail=` field always goes LAST; short scrubbed tokens with
+# spaces folded (the _plaintext_*_fields values) may sit mid-row. It is never passed to emit_drift or
+# WL_REASON: Sentry receives reason slugs only, never free text.
+_deadman_detail() {
+  local s
+  s="$(printf '%s\n' "${1:-}" | LC_ALL=C head -n1 | LC_ALL=C cut -c1-200)"
+  s="$(LC_ALL=C _vscrub "$s")"
+  printf '%s' "${s//=/_}"
+}
+# _dm_prop <timer|service> <Prop> — one property of a dead-man unit, empty when unreadable or absent.
+_dm_prop() { systemctl show "workspaces-luks-deadman.$1" -p "$2" --value 2>/dev/null || true; }
+# _deadman_fire_live — THE one "a fire is running" predicate (#9098 D), used by the arm refusal,
+# rollback()'s wait and disarm check (b). The dead-man's systemd-run passes no --service-type, so the
+# service is `simple`: a RUNNING fire reads `active` (measured, systemd 261: a running transient
+# /bin/sleep reads active), `activating` only for the instant before the fork, `deactivating` while
+# its stop is in progress. Sets DM_FIRE_STATE for the caller's message.
+DM_FIRE_STATE=""
+_deadman_fire_live() {
+  DM_FIRE_STATE="$(_dm_prop service ActiveState)"
+  case "$DM_FIRE_STATE" in active|activating|deactivating) return 0 ;; esac
+  return 1
+}
+
+# NOTE: defined ABOVE the sourced-detection guard so rollback() (which handles the dead-man before
+# any unmount) and the freeze test harness can both reach them. Definitions only — arm_dead_man is
 # not CALLED until the main body, so sourcing still has no side effect.
 # Arm a host-local dead-man timer: if the orchestrator does not clear it within DEAD_MAN_MIN,
 # systemd-run auto-remounts plaintext + restarts (closes "frozen-and-SSH-unreachable", F3).
@@ -808,8 +1235,21 @@ arm_dead_man() {
   # RESULTING string (no external binary at fire time), NOT how the string is built. Hardcoding the
   # units left the one UNATTENDED restore path asymmetric under a QUIESCE_UNITS override — the exact
   # drift _quiesce_list() exists to prevent, on the path nobody is watching.
-  local dev u stops="" starts="" tstarts=""
+  local dev u stops="" starts="" tstarts="" blkid_bin st
   dev="$(read_state PLAINTEXT_DEV)"
+  # #6604 fix-forward — refuse to arm a backstop that could restore NOTHING. The fire unmounts $MOUNT and
+  # remounts ${dev}; unless the record is an intact restore source (_plaintext_record_status = ok) and a
+  # blkid sits at a fixed root-owned path for the fire's own check, it would take the live copy offline
+  # and mount nothing. Pre-freeze and side-effect free. After this, $dev and $blkid_bin are charset-safe
+  # absolute paths, baked UNQUOTED into the fire like the existing mount clause — never relax
+  # _plaintext_dev_valid without re-adding quoting.
+  st="$(_plaintext_record_status "$dev")"; blkid_bin="$(_plaintext_blkid_bin)"
+  [ -n "$blkid_bin" ] || st=blkid_absent
+  if [ "$st" != ok ]; then
+    _deadman_row "result=arm_refused reason=plaintext_dev_unrestorable detail=$(_deadman_detail "${st}:${dev:-empty}")"
+    emit_drift deadman_arm_failed
+    die "no restorable recorded plaintext device (status=$(_vscrub "$st"), record '$(_vscrub "${dev:-<unrecorded>}")') — a dead-man armed now could unmount $MOUNT and restore nothing. Refusing to arm; nothing is frozen (runbook: result=arm_refused reason=plaintext_dev_unrestorable)"
+  fi
   for u in $(_quiesce_list); do
     stops="${stops}systemctl stop ${u} 2>/dev/null; "
     starts="systemctl reset-failed ${u} 2>/dev/null; systemctl start ${u} 2>/dev/null; ${starts}"  # reverse
@@ -818,36 +1258,133 @@ arm_dead_man() {
     stops="${stops}systemctl stop ${u}.timer ${u}.service 2>/dev/null; "
     tstarts="${tstarts}systemctl restart ${u}.timer 2>/dev/null; "
   done
-  systemd-run --on-active="${DEAD_MAN_MIN}min" --unit=workspaces-luks-deadman \
-    `# umount ${STAGING} BEFORE the close, in lockstep with rollback(): a mapper still mounted at` \
-    `# $STAGING makes cryptsetup close fail EBUSY. This is the UNATTENDED restore path, so the` \
-    `# swallowed failure leaves a complete DECRYPTED copy of every user's source live at $STAGING` \
-    `# through the still-open mapper, indefinitely, with zero telemetry on any channel — the exact` \
-    `# at-rest exposure #6588 exists to close, reached by a different door. The next run's stray` \
-    `# guard does NOT surface it either (it is a mountpoint, so that guard is skipped). The close` \
-    `# keeps its own error visible on the journal rather than 2>/dev/null.` \
-    `# #6807/#6812 OBSERVABILITY: the FIRE itself must emit. On 2026-07-20 this timer remounted the` \
-    `# plaintext over a healthy LUKS mount and NOTHING paged for ~6h, because a SUCCESSFUL remount` \
-    `# emitted no marker on any channel (only the close-EBUSY branch did). It fires at the TOP (the` \
-    `# event is "the backstop engaged" regardless of outcome), on the remount-failed else (the host` \
-    `# is now serving a bare mountpoint), and on success. logger -t luks-monitor is Vector-allowlisted.` \
-    `# #6921/#8077: the inngest-server start is guarded by an ESCAPED is-enabled = disabled test —` \
-    `# a disabled unit was quiesced by op=quiesce-web and only op=rollback may re-arm it (the same` \
-    `# guard as resume_writers). The backslash escapes render to plain quotes inside the sh -c string.` \
-    `# The skip logs the SAME INNGEST_START_SKIPPED marker as resume_writers (a separate test, so a` \
-    `# logger failure can never turn into a start). disabled alone suffices here: skipping the start of` \
-    `# an ACTIVE+disabled unit changes nothing, since start on an active unit is a no-op.` \
-    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] && logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
-    2>/dev/null || true
-  # ARM marker: the timer is now set. Pairs with the disarm marker so a cutover that armed but never
-  # disarmed (the 2026-07-20 shape — abort at app_canary before disarm_dead_man) is visible as an
-  # arm-without-disarm on the log timeline rather than inferred from an adjacent banner.
-  logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=armed reason=freeze_engaged deadline_min=${DEAD_MAN_MIN}" 2>/dev/null || true
-}
-disarm_dead_man() {
+  # The FIRE command (#6588/#6807/#6921 — kept byte-for-byte; T12/T12b/T12c pin it):
+  # umount ${STAGING} BEFORE the close, in lockstep with rollback(): a mapper still mounted at
+  # $STAGING makes cryptsetup close fail EBUSY. This is the UNATTENDED restore path, so the
+  # swallowed failure leaves a complete DECRYPTED copy of every user's source live at $STAGING
+  # through the still-open mapper, indefinitely, with zero telemetry on any channel — the exact
+  # at-rest exposure #6588 exists to close, reached by a different door. The next run's stray
+  # guard does NOT surface it either (it is a mountpoint, so that guard is skipped). The close
+  # keeps its own error visible on the journal rather than 2>/dev/null.
+  # #6807/#6812 OBSERVABILITY: the FIRE itself must emit. On 2026-07-20 this timer remounted the
+  # plaintext over a healthy LUKS mount and NOTHING paged for ~6h, because a SUCCESSFUL remount
+  # emitted no marker on any channel (only the close-EBUSY branch did). It fires at the TOP (the
+  # event is "the backstop engaged" regardless of outcome), on the remount-failed else (the host
+  # is now serving a bare mountpoint), and on success. logger -t luks-monitor is Vector-allowlisted.
+  # #6921/#8077: the inngest-server start is guarded by an ESCAPED is-enabled = disabled test —
+  # a disabled unit was quiesced by op=quiesce-web and only op=rollback may re-arm it (the same
+  # guard as resume_writers). The backslash escapes render to plain quotes inside the sh -c string.
+  # The skip logs the SAME INNGEST_START_SKIPPED marker as resume_writers (a separate test, so a
+  # logger failure can never turn into a start). disabled alone suffices here: skipping the start of
+  # an ACTIVE+disabled unit changes nothing, since start on an active unit is a no-op.
+  #
+  # #9045 — the ARM fails closed and verifies itself. Until #9045 this call ended in
+  # `2>/dev/null || true` and `result=armed` was logged unconditionally afterwards. The 2026-07-20
+  # fire had left workspaces-luks-deadman.service loaded and FAILED, a loaded failed unit makes a
+  # same-name systemd-run refuse ("already loaded or has a fragment file" — measured on systemd
+  # 261), and so the 2026-07-23 arm was most likely refused into /dev/null while the log said armed.
+  #   1. Refuse if a dead-man is LIVE — a waiting timer belongs to an earlier run's freeze, and a
+  #      running service is a fire in progress (_deadman_fire_live). Never stop either.
+  #   2. Pre-clear a STALE unit: stop the timer (exit 5 = not loaded, the fresh-host answer) and
+  #      reset-failed both units. Neither is gated: the verified systemd-run below is the gate.
+  #   3. systemd-run UN-swallowed, with a fixed --description= (the default description is the whole
+  #      command line, which the journal would echo). Its stderr is captured without a temp file.
+  #   4. DEADMAN_ARMED=1 the moment it returns 0 — BEFORE verification — so a failed verification
+  #      still reaches the disarm in cleanup() and no timer outlives the run with nothing frozen.
+  #   5. Verify SubState=waiting, bounded by ATTEMPTS (5 x 1s), never wall clock.
+  # EVERY failure DIES (never `return 1`): the main body calls a bare `arm_dead_man` under no `set -e`,
+  # so a returned status would start the freeze behind an unverified backstop.
+  # The unit name stays fixed: the installer's exit-17 guard, the forensic print, the runbook and
+  # the harness all key on it.
+  #
+  # #6604 step 7 — Guard 5 in the FIRE itself. The fire runs after this script is gone, so it cannot
+  # call rollback()'s _plaintext_gone; it carries a SUBSET of it inline, evaluated by /bin/sh AT FIRE
+  # TIME, before any stop/umount/close: the marker (a PLAINTEXT_WIPE_BEGUN/PLAINTEXT_WIPED line in the
+  # state file → reason=refused_plaintext_wiped why=marker), and ($MOUNT on the mapper AND the recorded
+  # device's blkid TYPE not ext4 → reason=refused_plaintext_record_gone why=plaintext_dev_gone recorded=
+  # recorded_status=). Either one exits with the LIVE mount untouched. The arm-time checks above cover
+  # validity, -b and not-the-mapper, and the transient timer cannot survive a reboot, so the baked ${dev}
+  # is only trusted within the same boot it was checked in. The physical test uses ${dev} and
+  # ${blkid_bin}, BAKED at arm time, so it is the one witness that survives a lost state file.
+  # Consequence stated plainly: with the record intact, a PRE-wipe fire on a cut-over host now RESTORES —
+  # it remounts the stale 2026-07-23 plaintext over the live LUKS mount. Arming is unreachable there (S6)
+  # and the wipe refuses while any dead-man is armed (W7); those are the protections.
+  local t_sub err rc n=0 gone_guard
+  gone_guard="if grep -qE '^PLAINTEXT_WIPE(_BEGUN|D)=' ${STATE_FILE} 2>/dev/null; then logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=refused_plaintext_wiped why=marker'; exit 0; fi; t=\$(${blkid_bin} -p -s TYPE -o value ${dev} 2>/dev/null); if [ \"\$(findmnt -no SOURCE ${MOUNT} 2>/dev/null)\" = ${MAPPER} ] && [ \"\$t\" != ext4 ]; then logger -t ${LUKS_LOG_TAG} -- \"SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=refused_plaintext_record_gone why=plaintext_dev_gone recorded=${dev} recorded_status=\${t:-none}\"; exit 0; fi;"
+  t_sub="$(_dm_prop timer SubState)"
+  if [ "$t_sub" = "waiting" ]; then
+    _deadman_row "result=arm_refused reason=already_armed"
+    emit_drift deadman_already_armed
+    die "a workspaces-luks-deadman timer is already WAITING — it belongs to an earlier run's freeze. Refusing to arm (and never stopping it): let it resolve within DEAD_MAN_MIN, read the next workspaces-luks-verify.yml run, then re-dispatch (runbook: deadman_already_armed)"
+  fi
+  if _deadman_fire_live; then
+    _deadman_row "result=arm_refused reason=fire_in_progress"
+    emit_drift deadman_already_armed
+    die "workspaces-luks-deadman.service is ${DM_FIRE_STATE} — a dead-man FIRE is in progress. Refusing to arm over it (runbook: deadman_already_armed)"
+  fi
   systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
-  systemctl reset-failed workspaces-luks-deadman 2>/dev/null || true
-  logger -t "${LUKS_LOG_TAG:-luks-monitor}" -- "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=disarmed reason=canary_passed" 2>/dev/null || true
+  systemctl reset-failed workspaces-luks-deadman.timer workspaces-luks-deadman.service 2>/dev/null || true
+  err="$(systemd-run --on-active="${DEAD_MAN_MIN}min" --unit=workspaces-luks-deadman \
+    --description="workspaces LUKS cutover dead-man (auto-remount plaintext)" \
+    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${gone_guard} ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] && logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted mount_source=${dev}'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed mount_source=${dev}'; fi" \
+    2>&1 >/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _deadman_row "result=arm_failed reason=systemd_run_refused rc=${rc} detail=$(_deadman_detail "$err")"
+    emit_drift deadman_arm_failed
+    die "systemd-run refused to arm the dead-man (rc=${rc}) — no freeze is held. Re-dispatch once (the stale unit was already reset-failed); on a second refusal escalate (runbook: deadman_arm_failed)"
+  fi
+  DEADMAN_ARMED=1; DEADMAN_EVER_ARMED=1
+  t_sub=""
+  while [ "$n" -lt 5 ]; do
+    n=$((n + 1))
+    t_sub="$(_dm_prop timer SubState)"
+    [ "$t_sub" = "waiting" ] && break
+    [ "$n" -lt 5 ] && sleep 1
+  done
+  if [ "$t_sub" != "waiting" ]; then
+    _deadman_row "result=arm_failed reason=timer_not_waiting substate=$(_deadman_detail "${t_sub:-empty}")"
+    emit_drift deadman_arm_failed
+    die "the dead-man timer never read SubState=waiting after systemd-run (last=${t_sub:-empty}) — refusing to freeze behind an unverified backstop; cleanup() disarms what this run created (runbook: deadman_arm_failed)"
+  fi
+  # ARM marker: the timer is VERIFIED waiting. Pairs with the disarm marker so a cutover that armed
+  # but never disarmed is visible as an arm-without-disarm on the log timeline.
+  _deadman_row "result=armed reason=freeze_engaged deadline_min=${DEAD_MAN_MIN}"
+}
+
+# disarm_dead_man <reason> — returns 0 (disarmed) or 1 (NOT proven disarmed). NEVER dies: a die
+# inside rollback() would abort the rollback halfway. Closed reason vocabulary: host_canary_passed
+# (the one main-body call, at the host-canary door), rollback_engaged (rollback(), only when THIS
+# run armed), arm_aborted (cleanup(), after a failed arm verification). Race-free order:
+#   (a) the timer LastTriggerUSec BEFORE the stop — stopping a transient timer unloads it, and
+#       garbage collection then empties every property, so a fired timer would read never-fired;
+#   stop the timer — from here no NEW fire can start;
+#   (b) AFTER the stop: the service is live (_deadman_fire_live — a fire that began before the stop is
+#       still running, and a running unit is not collected) OR it carries a queued start JOB (the
+#       timer elapsed and queued the fire, which systemd has not begun: ActiveState still reads
+#       inactive, only `Job` shows it — #9098 D);
+#   reset-failed both units, then (c) the timer must no longer read waiting.
+# (a) is any NON-EMPTY LastTriggerUSec. A loaded never-fired timer reads EMPTY with --value (measured,
+# systemd 261; L7d measures the runner's systemd), so the old `!= n/a` clause was dead and is gone.
+# GC can still erase (a) for a fire that finished and was collected before this ran, so the
+# CALLER's findmnt re-assert (the mount source cannot be garbage-collected) is the final proof.
+disarm_dead_man() {
+  local reason="${1:-}" last t_sub check=""
+  last="$(_dm_prop timer LastTriggerUSec)"
+  systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
+  if _deadman_fire_live || [ -n "$(_dm_prop service Job)" ]; then check=b; fi
+  systemctl reset-failed workspaces-luks-deadman.timer workspaces-luks-deadman.service 2>/dev/null || true
+  t_sub="$(_dm_prop timer SubState)"
+  if [ -n "$last" ]; then check=a
+  elif [ -z "$check" ] && [ "$t_sub" = "waiting" ]; then check=c
+  fi
+  if [ -n "$check" ]; then
+    _deadman_row "result=disarm_failed reason=${reason} check=${check}"
+    emit_drift deadman_disarm_failed
+    return 1
+  fi
+  DEADMAN_ARMED=0
+  _deadman_row "result=disarmed reason=${reason}"
+  return 0
 }
 
 # ============================================================================
@@ -994,7 +1531,7 @@ prepare_staging_target() {
     die "$MOUNT is ALREADY sourced from $MAPPER — this cutover has already completed; refusing to re-stage onto the live volume. ${_PREPARE_ABORT_NOTE}"
   fi
 
-  # --- DRY_RUN short-circuit, mirroring the rollback()/disarm_dead_man early-return idiom.
+  # --- DRY_RUN short-circuit, mirroring the rollback()/arm_dead_man `[ "$DRY_RUN" = "1" ]` early return.
   # Everything ABOVE is a read-only assert and runs in both arms. Everything BELOW touches the
   # mapper — which the dry-run arm never opens (the luksOpen call site is gated on DRY_RUN != 1),
   # so asserting `[ -b "$MAPPER" ]` here would abort every rehearsal.
@@ -1187,9 +1724,9 @@ emit_clean_stray() {
 # shellcheck disable=SC2317  # invoked from the main body, below the sourced-detection guard
 assert_mode_exclusive() {
   # Counted, not pairwise. A pairwise ROLLBACK-vs-CLEAN_STRAY test is correct today but silently
-  # stops covering the invariant the moment a THIRD mode block lands (CONFIRM_WIPE is already
-  # declared and its block is authored in the Phase-5 converge dispatch) — whichever block came
-  # first would win by `exit 0`, which is the exact failure this function exists to prevent.
+  # stops covering the invariant the moment a THIRD mode block lands — and one has: CONFIRM_WIPE
+  # (#6604 step 7). Whichever block came first would win by `exit 0`, which is the exact failure this
+  # function exists to prevent.
   # Each mode is counted by STRING equality against "1", never by arithmetic on the raw value:
   # these arrive from an operator-supplied .env, and $(( ... + CONFIRM_WIPE )) on a non-numeric
   # value is an evaluation hazard rather than a count.
@@ -1938,7 +2475,7 @@ fsck_advisory_probe() {
   # equality the pre-freeze abort depends on.
   probed="$(awk -F'\t' '$1 ~ /^[01]$/ { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
   probe_failed_n="$(awk -F'\t' '$2 == "probe_failed" { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
-  # Runs BEFORE `FREEZE_HELD=1; arm_dead_man`, so die() reaches cleanup() with both flags 0 and NO
+  # Runs BEFORE `arm_dead_man` and `FREEZE_HELD=1`, so die() reaches cleanup() with every flag 0 and NO
   # rollback runs. That is correct; do not "fix" it into a rollback. Language mirrors the script's
   # other pre-freeze dies.
   #
@@ -1969,6 +2506,531 @@ fsck_advisory_probe() {
   rm -rf "$work"
 }
 
+# ============================================================================
+# CONFIRM_WIPE — retire web-1's retained plaintext /workspaces volume (#6604 runbook step 7, ADR-119
+# §(f) "terminal mode"; the 2026-09-28 addendum records the design).
+#
+# WHAT IS DESTROYED, AND WHY IT MAY BE. The plaintext ext4 volume that /mnt/data was cut over FROM on
+# 2026-07-23 (run 29995956562) is a SUPERSEDED copy frozen at that cutover: the live LUKS volume was
+# certified at the cutover to hold at least its contents (C1 itemized verify, G3 counts, the git fsck
+# differential), has been green-verified daily since, and the soak passed 2026-09-24. It is NOT "a
+# duplicate": it holds workspaces as of 2026-07-23, including ones users have since deleted on the live
+# volume — which is exactly why it must go (it defeats every Art. 17 erasure made since). AP-009's
+# carve-out for it is recorded in the ADR-119 addendum.
+#
+# THE ONE PROPERTY: `blkdiscard -z` runs on exactly one device, the pinned plaintext volume, and never
+# on the device backing /dev/mapper/workspaces (the ONLY copy of every workspace after this runs).
+# Every check before the zero exists for that property or for the recoverability of that sole copy
+# (W4/W5: the escrowed passphrase opens the live header AND a restorable off-host header backup).
+#
+# SHAPE: Stage 1 environment (W0-W2) -> Stage 2 arm classification (first_wipe | re_zero | detached)
+# -> Stage 3 preconditions (W3-W9) -> DRY_RUN return -> the act (W10-W12). Every refusal this function
+# raises emits `result=refused reason=<slug>` BEFORE it dies (_wipe_refuse); a refusal raised inside a
+# REUSED helper that dies on its own (load_escrow_creds) surfaces as cleanup()'s `outcome=wipe_aborted
+# mode=wipe` row instead. The runbook's step-7 verdict table carries one row per slug (a suite census
+# pins that). NOTHING here sets CANARY_OK / FREEZE_HELD / FLIP_DONE / DEADMAN_ARMED: cleanup() keys its
+# rollback and roll-forward arms on those globals, and an in-process CANARY_OK=1 would make an aborted
+# wipe `docker start` the app.
+# ============================================================================
+# cgroup io.max, per device, on the zero AND the read-back: 150 MB/s, given to systemd as PLAIN BYTES.
+# A suffix is a trap: systemd parses IO*BandwidthMax suffixes in base 1000 (`150M` -> io.max rbps=150000000,
+# measured by loopback LW8 on a real kernel), not the 150*1024*1024 this constant once assumed — and the
+# in-scope gate compares io.max against WIPE_IO_CAP_BYTES exactly, so the two must be ONE number.
+WIPE_IO_CAP_BYTES=150000000
+WIPE_IO_CAP="$WIPE_IO_CAP_BYTES"
+WIPE_HDR_DL="${STATE_DIR}/wipe-header-download.img"
+WIPE_HDR_FRESH="${STATE_DIR}/wipe-header-fresh.img"
+# The plaintext was frozen by the 2026-07-23 cutover: run 29995956562's host step ran 09:37:15Z-09:40:41Z
+# (read back with `gh run view 29995956562 --json jobs`), and its flip unmounted the plaintext for the
+# last time. 09:45:00Z leaves a few minutes for host clock skew. W9 refuses a first wipe whose
+# superblock `Last write time` is LATER: that volume was written after the cutover (a dead-man fire or
+# a rollback remounted it read-write) and may hold writes that exist nowhere else.
+WIPE_PLAINTEXT_FROZEN_AT="2026-07-23T09:45:00Z"
+WIPE_ARM="none"
+WIPE_CMP_RC=""
+WIPE_DD_RC=""
+WIPE_CMP_LINE=""
+WIPE_DEVICE_UNITS=0
+WIPE_IOMAX=""
+WIPE_PLAINTEXT_ONLY=""
+
+# _wipe_dev_path <by-id path> — the DEVICE-RESOLUTION SEAM. Production returns its argument (the kernel
+# resolves the by-id symlink). It reads NO environment on purpose: the stubbed suite overrides the
+# FUNCTION to hand back a real block device, and a census row asserts this body reads nothing but $1, so
+# an .env line can never repoint the zero.
+_wipe_dev_path() { printf '%s' "$1"; }
+# _wipe_sysfs_block — the sysfs root for holders/, queue/ and dev reads (same seam rule: no environment).
+_wipe_sysfs_block() { printf '%s' /sys/class/block; }
+# _wipe_cgroup_root — the cgroup2 mount the in-scope io.max gate reads (same seam rule).
+_wipe_cgroup_root() { printf '%s' /sys/fs/cgroup; }
+# _wipe_frozen_at_epoch — WIPE_PLAINTEXT_FROZEN_AT (2026-07-23T09:45:00Z) as epoch seconds, a LITERAL (same
+# seam rule: the loopback suite, whose plaintext loop is formatted today, overrides the function; nothing
+# in the environment can). workspaces-luks-wipe.test.sh pins that the two agree.
+_wipe_frozen_at_epoch() { printf '%s' 1784799900; }
+
+# WIPE_IO_GATE — the io.max gate that runs INSIDE the transient scope, as its first act, so it reads the
+# cgroup the zero (or the read-back) itself runs in: systemd applies IO*BandwidthMax best-effort, and
+# when the io controller is not enabled on the path it logs a warning and starts the scope UNCAPPED with
+# rc 0 (measured, systemd 261). Args: $1 cgroup root, $2 MAJ:MIN, $3 required rbps, $4 required wbps
+# (`-` = not required), then the command, which runs only if io.max carries both limits for the device.
+# Prints the io.max line (or `absent`) on stderr as `WIPE_IOMAX <line>`; exits 97 when the cap is not in
+# force. A command, not a function: it must run in the scope's own process.
+# shellcheck disable=SC2016  # expanded by the in-scope bash, never here
+WIPE_IO_GATE='cg="$(sed -n "s/^0:://p" /proc/self/cgroup)"; line="$(grep -E "^$2 " "$1$cg/io.max" 2>/dev/null)"; printf "WIPE_IOMAX %s\n" "${line:-absent}" >&2; case " $line " in *" rbps=$3 "*) ;; *) exit 97 ;; esac; [ "$4" = - ] || case " $line " in *" wbps=$4 "*) ;; *) exit 97 ;; esac; shift 4; "$@"'
+
+# _wv <value> — one row VALUE: printable, single-line, spaces mapped to `_` (the workflow's success-row
+# parser splits fields on single spaces), never empty (`-` placeholder).
+_wv() { local v; v="$(_vscrub "${1:-}")"; v="${v// /_}"; printf '%s' "${v:--}"; }
+
+# emit_wipe <result> <arm> [key=value ...] — the ONE builder of the wipe row (the Observability
+# discoverability probe counts its prefix literal and expects exactly one). Field order is the contract
+# the wipe job's parser anchors on: result, arm, volume_id, then key=value pairs. The Vector-allowlisted
+# luks-monitor tag FIRST, then a bare echo at column 0: in the main body SIGPIPE keeps its default
+# disposition, so after an SSH drop the echo into the dead pipe KILLS the process — the off-host copy
+# must already be written by then (obs P2-1). EPIPE-tolerant inside cleanup(), which ignores PIPE.
+emit_wipe() {
+  local result="$1" arm="$2" kv k row
+  shift 2
+  row="SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=$(_wv "$result") arm=$(_wv "$arm") volume_id=$(_wv "${WORKSPACES_PLAINTEXT_VOLUME_ID:-}")"
+  for kv in "$@"; do
+    k="${kv%%=*}"
+    # Keys are lower-case identifiers. The wiped/already_wiped_detached rows the wipe job parses use
+    # [a-z_] keys only (its regex); the rehearsal row may carry a digit (hdr_sha256), it is never parsed.
+    # Every caller passes a literal key, so a malformed one is a bug in THIS file: die loudly rather than
+    # silently drop a field the wipe job parses or the destruction record is built from.
+    [[ "$k" =~ ^[a-z][a-z0-9_]*$ ]] || die "emit_wipe: malformed row key '$(_vscrub "$k")'"
+    row="$row $k=$(_wv "${kv#*=}")"
+  done
+  logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+  { echo "$row"; } 2>/dev/null || true
+}
+# emit_wipe_evidence <field> <free text> — FREE TEXT never rides the parsed row: the `cmp` first-difference
+# line and the dumpe2fs provenance times go here, through _deadman_detail (first line, <=200 bytes,
+# printable, `=` mapped to `_`), as the LAST field.
+emit_wipe_evidence() {
+  local row
+  row="SOLEUR_WORKSPACES_LUKS_WIPE_EVIDENCE feature=workspaces-luks op=workspaces-luks-wipe-evidence volume_id=$(_wv "${WORKSPACES_PLAINTEXT_VOLUME_ID:-}") field=$(_wv "$1") detail=$(_deadman_detail "${2:-}")"
+  logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+  { echo "$row"; } 2>/dev/null || true
+}
+# _wipe_refuse <reason> <message> [key=value ...] — the Sentry slug, then the refusal row, then die.
+# Row BEFORE die (learning 2026-07-19: a fail-closed gate must self-report). The Sentry send comes FIRST
+# because it writes nothing to stdout (the emit helper runs in a subshell), while the row's echo is the
+# first write that a dead SSH pipe turns into SIGPIPE (obs P2-1). A refused REHEARSAL pages at `warning`,
+# a real run at `fatal`. Called directly, never in $().
+_wipe_refuse() {
+  local reason="$1" msg="$2"
+  shift 2
+  if [ "$DRY_RUN" = "1" ]; then emit_drift "$reason" warning; else emit_drift "$reason"; fi
+  emit_wipe refused "$WIPE_ARM" "reason=$reason" "$@"
+  die "CONFIRM_WIPE refused (reason=${reason}, arm=${WIPE_ARM}): ${msg} — see the runbook step-7 verdict table for ${reason}"
+}
+# _wipe_shred_hdrs — the two fixed LUKS-header copies W5 writes to the root disk. A header left there
+# plus a leaked key decrypts every workspace, so they are shred -u'd on EVERY exit from W5 (explicitly
+# before each W5 refusal, after W5 passes, and by cleanup()'s wipe arm as the backstop).
+_wipe_shred_hdrs() {
+  local f
+  for f in "$WIPE_HDR_DL" "$WIPE_HDR_FRESH"; do
+    # Never shred THROUGH a symlink: `shred -u link` overwrites the link's TARGET (a device, if one were
+    # planted) and only then unlinks the link. Unlink it, leave its target alone.
+    [ -L "$f" ] && { rm -f -- "$f"; continue; }
+    [ -f "$f" ] || continue
+    shred -u "$f" 2>/dev/null || rm -f "$f"
+  done
+  return 0
+}
+
+# _wipe_assert_no_dependents <real device> — W6b detach safety. A hot detach makes systemd stop every
+# unit bound to the device, so it must have none. systemd makes ONE device unit PER SYMLINK (by-id,
+# by-label, by-uuid, by-path, wwn, diskseq), so every unit whose SysFSPath equals the target's is
+# checked. MEASURED 2026-09-28 (systemd 258): a device unit that does not exist still reads
+# LoadState=loaded (ActiveState=inactive), so an enumerated unit must read loaded AND active, and zero
+# matching units is itself a refusal (nothing proven). `mnt-data.mount`'s What= is the literal
+# scsi-0HC_Volume_* glob (#9123), so comparing it proves nothing; its BindsTo/Requires are checked
+# instead — a detach would otherwise make systemd stop the LIVE mapper mount.
+_wipe_assert_no_dependents() {
+  local real="$1" tsys units u deps dep mnt_unit binds
+  local -a tunits=()
+  tsys="$(udevadm info --query=path --name="$real" 2>/dev/null || true)"
+  [ -n "$tsys" ] || _wipe_refuse wipe_target_has_dependents "udevadm reports no sysfs path for $real — cannot enumerate its device units" "detail=no_sysfs_path"
+  tsys="/sys${tsys}"
+  units="$(systemctl list-units --all --type=device --plain --no-legend --no-pager 2>/dev/null | awk '{print $1}')"
+  while IFS= read -r u; do
+    [ -n "$u" ] || continue
+    [ "$(systemctl show -p SysFSPath --value -- "$u" 2>/dev/null)" = "$tsys" ] && tunits+=("$u")
+  done <<<"$units"
+  [ "${#tunits[@]}" -gt 0 ] || _wipe_refuse wipe_target_has_dependents "no systemd device unit maps to $real — its dependents cannot be proven absent" "device_units=0"
+  for u in "${tunits[@]}"; do
+    [ "$(systemctl show -p LoadState --value -- "$u" 2>/dev/null)" = loaded ] \
+      || _wipe_refuse wipe_target_has_dependents "device unit $u is not loaded — an unloaded unit lists no dependencies, which proves nothing" "unit=$u" "detail=not_loaded"
+    [ "$(systemctl show -p ActiveState --value -- "$u" 2>/dev/null)" = active ] \
+      || _wipe_refuse wipe_target_has_dependents "device unit $u is not active — a ghost unit reads loaded, so it proves nothing" "unit=$u" "detail=not_active"
+    deps="$(systemctl list-dependencies --reverse --plain --no-pager -- "$u" 2>/dev/null)" \
+      || _wipe_refuse wipe_target_has_dependents "systemctl list-dependencies failed for $u" "unit=$u" "detail=list_failed"
+    # Line 1 is the unit itself; dependents follow, indented.
+    dep="$(awk 'NR > 1 { sub(/^[[:space:]]+/, ""); if ($1 ~ /\.(mount|swap|service)$/) { print $1; exit } }' <<<"$deps")"
+    [ -z "$dep" ] || _wipe_refuse wipe_target_has_dependents "$dep depends on $u — detaching the volume would make systemd stop it" "unit=$u" "dependent=$dep"
+  done
+  mnt_unit="$(systemd-escape --path --suffix=mount "$MOUNT" 2>/dev/null || true)"
+  binds="$(systemctl show -p BindsTo,Requires,What -- "$mnt_unit" 2>/dev/null || true)"
+  for u in "${tunits[@]}"; do
+    case "$binds" in *"$u"*) _wipe_refuse wipe_target_has_dependents "${mnt_unit:-the live mount unit} binds $u — a detach would stop the LIVE mapper mount" "unit=$u" "dependent=${mnt_unit:-unknown}" ;; esac
+  done
+  WIPE_DEVICE_UNITS="${#tunits[@]}"
+}
+
+# _wipe_readback <real device> <size> <cgroup root> <MAJ:MIN> — W11, the gate that proves the zero took. A capped O_DIRECT read
+# of the whole device (never the page cache), compared by `cmp -n <size>` against /dev/zero. cmp
+# DECIDES: when cmp exits early on a difference, dd takes EPIPE/SIGPIPE, so dd's rc alone never
+# classifies; both rcs are required to be 0. Never `cmp -l`/`-b` (they print device bytes — user
+# content — into the log). Both PIPESTATUS values land in plain globals (never a $() capture, which
+# would lose them), cmp's stdout/stderr in mktemp files. Returns 0 iff zero; never dies.
+_wipe_readback() {
+  local real="$1" size="$2" cgroot="$3" devnum="$4" cout cerr
+  local -a ps
+  WIPE_CMP_RC=""; WIPE_DD_RC=""; WIPE_CMP_LINE=""
+  blockdev --flushbufs "$real" >/dev/null 2>&1 || log "WARN: blockdev --flushbufs $real failed — the read-back is O_DIRECT regardless"
+  # cmp's two capture files hold only its first-difference line / its own diagnostics (never device
+  # bytes — no -l/-b), so plain mktemp is fine here.
+  cout="$(mktemp)"; cerr="$(mktemp)"
+  # Behind the same in-scope io.max gate as the zero (read cap only); a gate refusal reads as dd rc 97.
+  systemd-run --scope --quiet -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" bash -c "$WIPE_IO_GATE" wipe-io-gate "$cgroot" "$devnum" "$WIPE_IO_CAP_BYTES" - dd if="$real" iflag=direct bs=4M status=none 2>/dev/null \
+    | cmp -n "$size" - /dev/zero >"$cout" 2>"$cerr"
+  ps=("${PIPESTATUS[@]}")
+  WIPE_DD_RC="${ps[0]:-x}"; WIPE_CMP_RC="${ps[1]:-x}"
+  WIPE_CMP_LINE="$(head -c 200 "$cout" 2>/dev/null) $(head -c 200 "$cerr" 2>/dev/null)"
+  rm -f "$cout" "$cerr"
+  [ "$WIPE_CMP_RC" = 0 ] && [ "$WIPE_DD_RC" = 0 ]
+}
+
+# wipe_plaintext — the whole mode. Called DIRECTLY by the CONFIRM_WIPE block (never in $() or a pipe), so
+# every die reaches the EXIT trap.
+wipe_plaintext() {
+  local id="${WORKSPACES_PLAINTEXT_VOLUME_ID:-}" byid="${WORKSPACES_PLAINTEXT_DEV:-}"
+  local size="${WORKSPACES_PLAINTEXT_SIZE_BYTES:-}" luks_dev="${WORKSPACES_LUKS_DEV:-}"
+  local tool ver maj min prc src begun wiped m dev sig brc canary c_uuid backing breal live_uuid key
+  local hkey dl_uuid hdr_bytes hdr_sha real tmm bmm kname sys got props label gran dmax wz sched magic
+  local last_mount last_write sig2 brc2 mk devnum cgroot iorc lw_epoch frozen e2 aerr arc aclass zrc
+  local plain_ls live_ls plain_only n_only nm pdev fsuuid bb
+  WIPE_ARM="none"; WIPE_DEVICE_UNITS=0
+  step "CONFIRM_WIPE — retire the retained plaintext volume ${id:-<unset>} (runbook step 7; dry_run=${DRY_RUN})"
+
+  # --- Stage 1: environment ----------------------------------------------------------------------
+  # W0 — tools present. aws must ALREADY be installed: ensure_aws can apt-get on prod web-1, and this
+  # mode never installs anything.
+  for tool in blkdiscard systemd-run aws cryptsetup blkid blockdev udevadm lsblk dumpe2fs debugfs findmnt pgrep systemctl systemd-escape; do
+    command -v "$tool" >/dev/null 2>&1 || _wipe_refuse wipe_tool_missing "required tool '$tool' is not on PATH (this mode installs nothing)" "tool=$tool"
+  done
+  # util-linux >= 2.36: blkdiscard opens the device O_EXCL, so a mounted or held device is refused by
+  # the kernel. Compared as a full major.minor so 3.x passes.
+  ver="$(blkdiscard --version 2>/dev/null || true)"
+  if [[ "$ver" =~ ([0-9]+)\.([0-9]+) ]]; then maj="${BASH_REMATCH[1]}"; min="${BASH_REMATCH[2]}"; else maj=0; min=0; fi
+  if [ "$maj" -lt 2 ] || { [ "$maj" -eq 2 ] && [ "$min" -lt 36 ]; }; then
+    _wipe_refuse wipe_tool_missing "blkdiscard reports util-linux ${maj}.${min} (< 2.36): no O_EXCL guarantee against a mounted/held device" "util_linux=${maj}.${min}"
+  fi
+  # No zero already running: an SSH drop orphans a running blkdiscard, and a re-dispatch would race it.
+  pgrep -x blkdiscard >/dev/null 2>&1; prc=$?
+  case "$prc" in
+    0) _wipe_refuse wipe_in_progress "a blkdiscard process is already running on this host (an orphaned zero from a dropped session?) — re-dispatch the read-only rehearsal until W0 passes" ;;
+    1) ;;
+    *) _wipe_refuse wipe_tool_missing "pgrep failed (rc=${prc}) — cannot prove no zero is already running" "pgrep_rc=$prc" ;;
+  esac
+  # W1 — inputs well-formed and bound to the PIN, never to a name. The two mode flags first: the rehearsal
+  # gate below is an exact `= "1"`, so a `true`/`yes`/` 1` would otherwise take the DESTRUCTIVE arm.
+  case "${DRY_RUN}:${CONFIRM_WIPE}" in 0:0|0:1|1:0|1:1) ;; *)
+    _wipe_refuse wipe_input_invalid "DRY_RUN and CONFIRM_WIPE must each be exactly 0 or 1 (got '$(_vscrub "$DRY_RUN")' / '$(_vscrub "$CONFIRM_WIPE")')" "detail=mode_flag" ;;
+  esac
+  [[ "$id" =~ ^[0-9]+$ ]] || _wipe_refuse wipe_input_invalid "WORKSPACES_PLAINTEXT_VOLUME_ID is not a numeric volume id"
+  [ "$byid" = "/dev/disk/by-id/scsi-0HC_Volume_${id}" ] || _wipe_refuse wipe_input_invalid "WORKSPACES_PLAINTEXT_DEV must be exactly /dev/disk/by-id/scsi-0HC_Volume_${id}" "dev=$byid"
+  [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -gt 0 ] || _wipe_refuse wipe_input_invalid "WORKSPACES_PLAINTEXT_SIZE_BYTES is not a positive byte count" "size=$size"
+  [ -n "$luks_dev" ] && [ "$luks_dev" != "$byid" ] || _wipe_refuse wipe_input_invalid "WORKSPACES_LUKS_DEV is empty or names the plaintext volume itself" "luks_dev=$luks_dev"
+  # W2 — the live data is where this mode assumes: /mnt/data on the LUKS mapper.
+  src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+  [ "$src" = "$MAPPER" ] || _wipe_refuse wipe_live_mount_not_mapper "$MOUNT is sourced from '${src:-<none>}', not $MAPPER — the wipe runs only on a cut-over host" "mount_src=${src:-none}"
+
+  # --- Stage 2: classify the arm -------------------------------------------------------------------
+  begun="$(read_state PLAINTEXT_WIPE_BEGUN)"; wiped="$(read_state PLAINTEXT_WIPED)"
+  for m in "$begun" "$wiped"; do
+    [ -n "$m" ] || continue
+    [ "${m%%:*}" = "$id" ] || _wipe_refuse wipe_marker_other_volume "a persisted wipe marker names volume ${m%%:*}, not the pin ${id}" "marker_id=${m%%:*}"
+  done
+  dev="$(_wipe_dev_path "$byid")"
+  if [ ! -b "$dev" ]; then
+    if [ -n "$wiped" ]; then
+      WIPE_ARM=detached
+      if [ "$DRY_RUN" = "1" ]; then emit_wipe rehearsal_ok detached "wiped_at=${wiped#*:}"
+      else emit_wipe already_wiped_detached detached "wiped_at=${wiped#*:}"; fi
+      log "plaintext volume $id is already wiped (${wiped#*:}) and detached from this host — nothing to do here"
+      return 0
+    fi
+    _wipe_refuse wipe_target_absent_unexplained "$byid is not a block device on this host and no PLAINTEXT_WIPED marker explains its absence — detached by hand without a wipe?"
+  fi
+  # blkid rc is mapped EXPLICITLY: 0 signature, 2 none, 8 ambivalent, anything else an error.
+  sig="$(blkid -p -s TYPE -o value "$dev" 2>/dev/null)"; brc=$?
+  case "$brc" in
+    0) [ -n "$sig" ] || sig=unknown ;;
+    2) sig=none ;;
+    8) sig=ambivalent ;;
+    *) _wipe_refuse wipe_blkid_probe_failed "blkid -p failed (rc=${brc}) on $dev — a failed probe is not an answer" "blkid_rc=$brc" ;;
+  esac
+  # An interrupted zero of ext4 cannot CREATE a LUKS header: crypto_LUKS here means the wrong device.
+  [ "$sig" != crypto_LUKS ] || _wipe_refuse wipe_target_not_ext4 "$dev carries a crypto_LUKS signature — that is the shape of the LIVE volume, never of the plaintext one" "sig=$sig"
+  if [ -z "$begun$wiped" ]; then
+    case "$sig" in
+      ext4) WIPE_ARM=first_wipe ;;
+      none|ambivalent) _wipe_refuse wipe_target_blank_unexplained "$dev carries no filesystem signature ($sig) and no wipe marker explains it" "sig=$sig" ;;
+      *) _wipe_refuse wipe_target_not_ext4 "$dev carries TYPE=$sig, not the ext4 of the retained plaintext" "sig=$sig" ;;
+    esac
+  else
+    case "$sig" in
+      ext4|none|ambivalent) WIPE_ARM=re_zero ;;
+      *) _wipe_refuse wipe_target_not_ext4 "$dev carries TYPE=$sig on a resumed wipe" "sig=$sig" ;;
+    esac
+  fi
+  log "arm=${WIPE_ARM} (signature=${sig}, begun=${begun:-none}, wiped=${wiped:-none})"
+
+  # --- Stage 3: preconditions ----------------------------------------------------------------------
+  # W3 (DP-7) — the persisted run-keyed CANARY_OK names the header now backing the live mapper, and that
+  # backing device is WORKSPACES_LUKS_DEV.
+  canary="$(read_state CANARY_OK)"
+  case "$canary" in 1:?*) ;; *) _wipe_refuse wipe_canary_ok_absent "no persisted CANARY_OK=1:<uuid> on this host — the cutover that this wipe retires is not on record" ;; esac
+  c_uuid="${canary#1:}"
+  backing="$(cryptsetup status "$MAPPER_NAME" 2>/dev/null | sed -n 's/^ *device: *//p')"
+  { [ -n "$backing" ] && _same_dev "$backing" "$luks_dev"; } \
+    || _wipe_refuse wipe_mapper_not_luks_volume "$MAPPER is backed by '${backing:-<unknown>}', not WORKSPACES_LUKS_DEV" "backing=${backing:-unknown}"
+  live_uuid="$(cryptsetup luksUUID "$backing" 2>/dev/null)" || live_uuid=""
+  [ -n "$live_uuid" ] && [ "$live_uuid" = "$c_uuid" ] \
+    || _wipe_refuse wipe_header_uuid_mismatch "the live header UUID '${live_uuid:-<unreadable>}' is not the persisted CANARY_OK UUID" "live_uuid=${live_uuid:-unreadable}"
+  # W4 (P3) — the escrowed passphrase opens the LIVE header. The luks-monitor form: printf '%s' into
+  # --key-file - (a piped raw read can carry a trailing newline, which is a different passphrase).
+  key="$(read_key)"
+  if [ -z "$key" ]; then
+    _wipe_refuse wipe_escrow_passphrase_mismatch "WORKSPACES_LUKS_KEY is unreadable from prd_workspaces_luks — the sole copy's recoverability cannot be proven" "key_state=unreadable"
+  fi
+  if ! printf '%s' "$key" | cryptsetup luksOpen --test-passphrase --key-file - "$backing" >/dev/null 2>&1; then
+    key=""
+    _wipe_refuse wipe_escrow_passphrase_mismatch "the escrowed WORKSPACES_LUKS_KEY does not open the live header — the sole copy would be unrecoverable" "key_state=mismatch"
+  fi
+  # W5 (P3) — the off-host header is RESTORABLE, not merely present: it downloads, its UUID matches, the
+  # escrowed passphrase opens ITS keyslot, and a fresh luksHeaderBackup is byte-identical (a UUID
+  # survives luksAddKey/luksKillSlot, so a UUID match alone can certify a stale backup).
+  load_escrow_creds
+  mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR" 2>/dev/null || true
+  _wipe_shred_hdrs
+  hkey="workspaces-luks-header-${live_uuid}.img"
+  # s3api get-object (the same API family as the escrow's head-object read-back): a GET, never a write.
+  # Its stderr is CLASSIFIED and then dropped — never logged: an S3/R2 error can carry the access key id
+  # (the #8054 class), and re-escrowing is the wrong remedy for a credential or network failure.
+  aerr="$(aws s3api get-object --bucket "$HEADER_BACKUP_BUCKET" --key "$hkey" --endpoint-url "$HEADER_R2_ENDPOINT" "$WIPE_HDR_DL" 2>&1 >/dev/null)"; arc=$?
+  if [ "$arc" -ne 0 ] || [ ! -s "$WIPE_HDR_DL" ]; then
+    case "$aerr" in
+      *NoSuchKey*|*"Not Found"*|*"(404)"*) aclass=not_found ;;
+      *AccessDenied*|*Forbidden*|*"(403)"*|*"(401)"*|*InvalidAccessKeyId*|*SignatureDoesNotMatch*|*ExpiredToken*) aclass=access_denied ;;
+      *"Could not connect"*|*EndpointConnectionError*|*"timed out"*|*"Connection reset"*|*"Name or service not known"*|*"name resolution"*|*SSL*) aclass=network ;;
+      *) if [ "$arc" -eq 0 ]; then aclass=empty_object; else aclass=other; fi ;;
+    esac
+    aerr=""; key=""; _wipe_shred_hdrs
+    _wipe_refuse wipe_header_backup_absent "the off-host header object $hkey could not be downloaded (aws rc=${arc}, ${aclass}) — not_found: re-escrow the header; access_denied/network: fix the escrow credential or the path, re-escrowing would fail the same way" "object=$hkey" "aws_rc=$arc" "class=$aclass"
+  fi
+  aerr=""
+  dl_uuid="$(cryptsetup luksUUID "$WIPE_HDR_DL" 2>/dev/null)" || dl_uuid=""
+  if [ "$dl_uuid" != "$live_uuid" ]; then
+    key=""; _wipe_shred_hdrs
+    _wipe_refuse wipe_header_backup_mismatch "the escrowed header's UUID '${dl_uuid:-<unreadable>}' is not the live one" "detail=uuid"
+  fi
+  if ! printf '%s' "$key" | cryptsetup luksOpen --test-passphrase --key-file - "$WIPE_HDR_DL" >/dev/null 2>&1; then
+    key=""; _wipe_shred_hdrs
+    _wipe_refuse wipe_header_backup_mismatch "the escrowed passphrase does not open the escrowed header's keyslot" "detail=keyslot"
+  fi
+  key=""; unset key
+  if ! cryptsetup luksHeaderBackup "$backing" --header-backup-file "$WIPE_HDR_FRESH" >/dev/null 2>&1; then
+    _wipe_shred_hdrs
+    _wipe_refuse wipe_header_backup_stale "a fresh luksHeaderBackup of the live header failed — the escrowed copy cannot be proven current" "detail=fresh_backup_failed"
+  fi
+  if ! cmp -s "$WIPE_HDR_DL" "$WIPE_HDR_FRESH"; then
+    _wipe_shred_hdrs
+    _wipe_refuse wipe_header_backup_stale "the escrowed header differs from a fresh backup of the live header (same UUID, different keyslots) — re-escrow before any wipe" "detail=bytes"
+  fi
+  hdr_bytes="$(stat -c %s "$WIPE_HDR_DL" 2>/dev/null || echo unknown)"
+  hdr_sha="$(sha256sum "$WIPE_HDR_DL" 2>/dev/null | cut -d' ' -f1)"
+  _wipe_shred_hdrs
+  # W6 (P2) — identity: the target is not the backing device (path AND major:minor), is unheld,
+  # unmounted, the pinned size, and carries the hypervisor serial for the pin.
+  real="$(readlink -f -- "$dev" 2>/dev/null)" || real=""
+  breal="$(readlink -f -- "$backing" 2>/dev/null)" || breal=""
+  { [ -n "$real" ] && [ -b "$real" ] && [ -n "$breal" ] && [ "$real" != "$breal" ]; } \
+    || _wipe_refuse wipe_target_is_mapper_backing "the target resolves to '${real:-<none>}', which is (or cannot be told apart from) the mapper's backing device '${breal:-<none>}'" "target=${real:-none}" "backing=${breal:-none}"
+  tmm="$(stat -Lc '%t:%T' "$real" 2>/dev/null)" || tmm=""
+  bmm="$(stat -Lc '%t:%T' "$breal" 2>/dev/null)" || bmm=""
+  { [ -n "$tmm" ] && [ -n "$bmm" ] && [ "$tmm" != "$bmm" ]; } \
+    || _wipe_refuse wipe_target_is_mapper_backing "the target's major:minor '${tmm:-?}' equals (or cannot be told apart from) the backing device's '${bmm:-?}'" "target_majmin=${tmm:-unknown}" "backing_majmin=${bmm:-unknown}"
+  kname="$(basename "$real")"
+  sys="$(_wipe_sysfs_block)/${kname}/holders"
+  [ -d "$sys" ] || _wipe_refuse wipe_target_held "cannot read $sys — an unreadable holders/ is not an empty one" "detail=holders_unreadable"
+  [ -z "$(ls -A "$sys" 2>/dev/null)" ] || _wipe_refuse wipe_target_held "$real has holders ($(ls -A "$sys" 2>/dev/null | tr '\n' ' ')) — something (dm, md) is layered on it" "holders=$(ls -A "$sys" 2>/dev/null | tr '\n' ',')"
+  got="$(findmnt -rn -S "$real" -o TARGET 2>/dev/null || true)"
+  [ -z "$got" ] || _wipe_refuse wipe_target_mounted "$real is mounted at $got" "mounted_at=$got"
+  got="$(blockdev --getsize64 "$real" 2>/dev/null || true)"
+  [ "$got" = "$size" ] || _wipe_refuse wipe_target_size_mismatch "$real is ${got:-?} bytes; the API reports ${size} for volume ${id}" "device_bytes=${got:-unknown}" "api_bytes=$size"
+  props="$(udevadm info --query=property --name="$real" 2>/dev/null || true)"
+  grep -Eq "^(ID_SERIAL|ID_SCSI_SERIAL)=.*HC_Volume_${id}([^0-9]|\$)" <<<"$props" \
+    || _wipe_refuse wipe_target_serial_mismatch "udev's ID_SERIAL/ID_SCSI_SERIAL for $real does not name HC_Volume_${id} (the hypervisor identity, independent of the by-id symlink)"
+  # W6 (first wipe only) — the target must be the device THIS cutover recorded as the plaintext's mount
+  # source (PLAINTEXT_DEV, the last line wins; its only writer is the rollback-rehearsal step), compared
+  # resolved on both sides. Identity is that record, never a filesystem label: no artifact ever labelled
+  # the retained plaintext (ADR-119, corrected 2026-09-30), so the label is observed evidence only. The
+  # resume arm is not bound here — the BEGUN marker and the serial already bind it. Hidden assumption:
+  # wherever this binding does not apply (the resume arm, or a future relaxed binding), the pin + serial
+  # are sufficient only while web-1 has ONE attached ext4 HC volume.
+  label="n/a"; pdev="n/a"; fsuuid="n/a"
+  if [ "$WIPE_ARM" = first_wipe ]; then
+    # The target's ext4 UUID, through the fixed-path blkid: rehearsal EVIDENCE captured off-host before
+    # any reboot — the content anchor a fix-forward could bind the first wipe to if a reboot ever renames
+    # the recorded kernel name (runbook step 7 verdict row). Never a gate here.
+    bb="$(_plaintext_blkid_bin)"
+    fsuuid="$({ [ -n "$bb" ] && "$bb" -p -s UUID -o value "$real" 2>/dev/null; } || true)"; fsuuid="${fsuuid:-none}"
+    # PATH `blkid` on purpose: the label is evidence on the row, never a gate and never baked into a fire,
+    # so it does not need the fixed-path _plaintext_blkid_bin.
+    label="$(blkid -p -s LABEL -o value "$real" 2>/dev/null || true)"; label="${label:-none}"   # observed evidence only
+    pdev="$(read_state PLAINTEXT_DEV)"
+    { _plaintext_dev_valid "$pdev" && [ "$(readlink -f -- "$pdev" 2>/dev/null)" = "$real" ]; } \
+      || _wipe_refuse wipe_target_not_recorded_plaintext \
+        "the target resolves to '$real', but the plaintext mount source this cutover recorded (PLAINTEXT_DEV) is '$(_vscrub "${pdev:-<unrecorded>}")' — the zero may only hit the device the cutover itself took the copy from" \
+        "target=$real" "recorded=${pdev:-none}" "recorded_real=$({ _plaintext_dev_valid "$pdev" && readlink -f -- "$pdev" 2>/dev/null; } || echo none)"
+  fi
+  # W6b — detach safety (see _wipe_assert_no_dependents).
+  _wipe_assert_no_dependents "$real"
+  # W7 — no dead-man armed, firing, or queued (its fire command remounts the plaintext by its recorded
+  # PLAINTEXT_DEV).
+  [ "$(_dm_prop timer ActiveState)" != active ] || _wipe_refuse wipe_deadman_armed "the workspaces-luks dead-man timer is active"
+  if _deadman_fire_live; then _wipe_refuse wipe_deadman_armed "a dead-man fire is ${DM_FIRE_STATE}"; fi
+  [ -z "$(_dm_prop service Job)$(_dm_prop timer Job)" ] || _wipe_refuse wipe_deadman_armed "a dead-man job is queued"
+  # W8 — evidence, plus the one capability the zero needs: the io.max cap must be IN FORCE (ionice is a
+  # no-op under mq-deadline/none, which is why the cap is a cgroup property, not a priority). The probe is
+  # a real scope carrying the zero's exact properties on the exact device, and the in-scope gate reads
+  # that scope's own io.max for the device's MAJ:MIN — rc 0 from systemd-run proves nothing on its own
+  # (it starts an uncapped scope when io.max cannot apply). The zero and the read-back then run behind
+  # the same gate, so neither can run uncapped even if the environment changed after this probe.
+  read -r gran dmax < <(lsblk -D -b -n -o DISC-GRAN,DISC-MAX "$real" 2>/dev/null || true)
+  wz="$(cat "$(_wipe_sysfs_block)/${kname}/queue/write_zeroes_max_bytes" 2>/dev/null || echo unknown)"
+  sched="$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$(_wipe_sysfs_block)/${kname}/queue/scheduler" 2>/dev/null || true)"
+  devnum="$(tr -d '[:space:]' < "$(_wipe_sysfs_block)/${kname}/dev" 2>/dev/null)"
+  cgroot="$(_wipe_cgroup_root)"
+  [[ "$devnum" =~ ^[0-9]+:[0-9]+$ ]] \
+    || _wipe_refuse wipe_io_cap_unavailable "cannot read $real's MAJ:MIN from sysfs — the io.max cap cannot be verified" "detail=no_devnum"
+  WIPE_IOMAX="$(systemd-run --scope --quiet -p "IOWriteBandwidthMax=$real $WIPE_IO_CAP" -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" \
+    bash -c "$WIPE_IO_GATE" wipe-io-gate "$cgroot" "$devnum" "$WIPE_IO_CAP_BYTES" "$WIPE_IO_CAP_BYTES" : 2>&1 >/dev/null)"; iorc=$?
+  WIPE_IOMAX="$(sed -n 's/^WIPE_IOMAX //p' <<<"$WIPE_IOMAX" | head -1)"
+  [ "$iorc" -eq 0 ] \
+    || _wipe_refuse wipe_io_cap_unavailable "the scope's io.max does not carry rbps=wbps=${WIPE_IO_CAP_BYTES} for $real (${devnum}) — the zero would run uncapped against the live volume's storage path" "io_max=${WIPE_IOMAX:-absent}" "gate_rc=$iorc"
+  # W9 — positive control (first wipe only): the ext4 magic 53 ef at bytes 1080-1081, read O_DIRECT. Then
+  # the PROVENANCE gate and the completeness EVIDENCE, both read from the unmounted device, read-only.
+  magic="n/a"; WIPE_PLAINTEXT_ONLY="n/a"
+  if [ "$WIPE_ARM" = first_wipe ]; then
+    magic="$(dd if="$real" iflag=direct bs=4096 count=1 status=none 2>/dev/null | od -An -tx1 -j1080 -N2 | tr -d ' \n')"
+    [ "$magic" = "53ef" ] || _wipe_refuse wipe_positive_control_failed "the first 4 KiB of $real does not carry the ext4 magic (got '${magic:-<unreadable>}') — the read path cannot be trusted to see what the zero did" "magic=${magic:-none}"
+    e2="$(dumpe2fs -h "$real" 2>/dev/null)"
+    last_mount="$(sed -n 's/^Last mount time:[[:space:]]*//p' <<<"$e2")"
+    last_write="$(sed -n 's/^Last write time:[[:space:]]*//p' <<<"$e2")"
+    emit_wipe_evidence last_mount "${last_mount:-unknown}"
+    emit_wipe_evidence last_write "${last_write:-unknown}"
+    # Provenance (data F5): the superblock must not have been written after the cutover froze this copy
+    # (WIPE_PLAINTEXT_FROZEN_AT). A later write means something remounted it read-write since (a dead-man
+    # fire, a rollback) and it may hold writes that exist on no other volume. dumpe2fs prints the host's
+    # local time and `date -d` parses it in the same zone. Unparseable is not "old enough".
+    frozen="$(_wipe_frozen_at_epoch)"
+    lw_epoch="$(date -d "${last_write:-unparseable}" +%s 2>/dev/null)" || lw_epoch=""
+    [[ "$lw_epoch" =~ ^[0-9]+$ ]] \
+      || _wipe_refuse wipe_plaintext_written_after_cutover "the plaintext's superblock Last write time '${last_write:-<none>}' is unreadable — its provenance cannot be proven" "detail=unparseable"
+    [ "$lw_epoch" -le "$frozen" ] \
+      || _wipe_refuse wipe_plaintext_written_after_cutover "the plaintext was written at '${last_write}' — AFTER the 2026-07-23 cutover froze it (${WIPE_PLAINTEXT_FROZEN_AT}); it may hold writes that exist nowhere else" "last_write_epoch=$lw_epoch" "frozen_at=$frozen"
+    # Completeness EVIDENCE, never a refusal (data F2): the workspace NAMES on the unmounted plaintext
+    # (debugfs opens it read-only; it is never mounted) that the live /mnt/data/workspaces lacks. An Art. 17
+    # deletion since 2026-07-23 is expected to appear here; anything else is a workspace the LUKS copy lost.
+    # Names only (workspace ids), never content. debugfs exits 0 even when it cannot open the device or find
+    # the path, so the listing counts only when it carries its own `.` and `..` entries.
+    plain_ls="$(debugfs -R 'ls -p /workspaces' "$real" 2>/dev/null)"
+    if grep -qE '^/[0-9]+/04[0-7]+/[0-9]+/[0-9]+/\.\./' <<<"$plain_ls" && grep -qE '^/[0-9]+/04[0-7]+/[0-9]+/[0-9]+/\./' <<<"$plain_ls"; then
+      plain_ls="$(awk -F/ 'NF >= 7 && $6 != "." && $6 != ".." && $6 != "" { print $6 }' <<<"$plain_ls" | LC_ALL=C sort -u)"
+      live_ls="$(ls -A "$MOUNT/workspaces" 2>/dev/null | LC_ALL=C sort -u)"
+      plain_only="$(grep -vxF -f <(printf '%s\n' "$live_ls") <<<"$plain_ls" || true)"
+      n_only="$(grep -c . <<<"$plain_only" || true)"
+      WIPE_PLAINTEXT_ONLY="$n_only"
+      emit_wipe_evidence plaintext_only "$n_only"
+      n_only=0
+      while IFS= read -r nm; do
+        [ -n "$nm" ] || continue
+        n_only=$((n_only + 1))
+        if [ "$n_only" -gt 200 ]; then emit_wipe_evidence plaintext_only_truncated "more than 200 names; the first 200 are listed"; break; fi
+        emit_wipe_evidence plaintext_only_name "$nm"
+      done <<<"$plain_only"
+    else
+      WIPE_PLAINTEXT_ONLY=unknown
+      emit_wipe_evidence plaintext_only unknown
+    fi
+  fi
+
+  if [ "$DRY_RUN" = "1" ]; then
+    emit_wipe rehearsal_ok "$WIPE_ARM" "uuid=$live_uuid" "target=$real" "backing=$breal" "size=$size" "serial=ok" \
+      "label=$label" "plaintext_dev=$pdev" "plaintext_fs_uuid=$fsuuid" "holders=0" "dependents=0" "device_units=${WIPE_DEVICE_UNITS}" "hdr_bytes=$hdr_bytes" "hdr_sha256=${hdr_sha:-unknown}" \
+      "discard_gran=${gran:-unknown}" "discard_max=${dmax:-unknown}" "write_zeroes_max=$wz" "scheduler=${sched:-unknown}" "magic=$magic" \
+      "io_max=${WIPE_IOMAX:-absent}" "plaintext_only=${WIPE_PLAINTEXT_ONLY}"
+    log "(dry-run) every wipe precondition passed for volume $id (arm=${WIPE_ARM}); nothing was written"
+    return 0
+  fi
+
+  # --- the act --------------------------------------------------------------------------------------
+  # W10 — the identity measured at W6 is re-asserted HERE, at the act (struct R-TOCTOU): `real` is a
+  # kernel name, and between W6 and now the pinned volume could have been hot-removed and another,
+  # unheld volume attached under the same name (O_EXCL protects only a held or mounted device). The by-id
+  # link must still resolve to `real`, and `real` must still carry the pin's hypervisor serial.
+  { [ "$(readlink -f -- "$dev" 2>/dev/null)" = "$real" ] \
+      && grep -Eq "^(ID_SERIAL|ID_SCSI_SERIAL)=.*HC_Volume_${id}([^0-9]|\$)" <<<"$(udevadm info --query=property --name="$real" 2>/dev/null || true)"; } \
+    || _wipe_refuse wipe_target_changed "$byid no longer resolves to $real carrying HC_Volume_${id} — the device changed after the identity checks; nothing was zeroed" "target=$real"
+  # Then BEGUN (an interrupted zero resumes on re_zero), then the zero. Never -f: util-linux opens the
+  # device O_EXCL, so a mounted or held device is refused by the kernel itself. stdin from /dev/null:
+  # blkdiscard asks for confirmation on a device with a signature when stdin is a terminal.
+  # BEGUN is Guard 5's precondition (the permanent ROLLBACK lockout) and the resume key, and this script
+  # has no `set -e`: its write is CHECKED and READ BACK, and an unwritable state file (root disk full or
+  # read-only) refuses here, before a single byte is zeroed.
+  mk="${id}:$(date -u +%s)"
+  if ! persist_state PLAINTEXT_WIPE_BEGUN "$mk" || [ "$(read_state PLAINTEXT_WIPE_BEGUN)" != "$mk" ]; then
+    _wipe_refuse wipe_marker_write_failed "PLAINTEXT_WIPE_BEGUN could not be written and read back in $STATE_FILE — nothing was zeroed (the marker is what locks ROLLBACK out and lets an interrupted zero resume)" "marker=begun"
+  fi
+  emit_wipe begun "$WIPE_ARM" "target=$real"
+  # The zero runs behind the in-scope io.max gate (rc 97 = the cap is not in force; nothing was zeroed).
+  systemd-run --scope --quiet -p "IOWriteBandwidthMax=$real $WIPE_IO_CAP" -p "IOReadBandwidthMax=$real $WIPE_IO_CAP" bash -c "$WIPE_IO_GATE" wipe-io-gate "$cgroot" "$devnum" "$WIPE_IO_CAP_BYTES" "$WIPE_IO_CAP_BYTES" blkdiscard -z -v "$real" </dev/null
+  zrc=$?
+  if [ "$zrc" -eq 97 ]; then
+    _wipe_refuse wipe_io_cap_unavailable "the zero's own scope did not carry the io.max cap for $real (${devnum}) — nothing was zeroed; PLAINTEXT_WIPE_BEGUN is persisted, so a re-dispatch resumes on arm=re_zero" "gate_rc=$zrc"
+  elif [ "$zrc" -ne 0 ]; then
+    _wipe_refuse wipe_blkdiscard_failed "blkdiscard -z on $real failed (rc=${zrc}) — PLAINTEXT_WIPE_BEGUN is persisted, so a re-dispatch resumes on arm=re_zero" "rc=$zrc"
+  fi
+  # W11 — the read-back decides.
+  emit_wipe readback_start "$WIPE_ARM"
+  if ! _wipe_readback "$real" "$size" "$cgroot" "$devnum"; then
+    emit_wipe_evidence cmp "${WIPE_CMP_LINE:-none}"
+    _wipe_refuse wipe_readback_failed "the full-device O_DIRECT read-back of $real is not all-zero over ${size} bytes" "cmp_rc=${WIPE_CMP_RC}" "dd_rc=${WIPE_DD_RC}"
+  fi
+  # W12 — no signature survives.
+  sig2="$(blkid -p -s TYPE -o value "$real" 2>/dev/null)"; brc2=$?
+  [ "$brc2" = 2 ] || _wipe_refuse wipe_signature_survived "blkid still reports a signature on $real after the zero (rc=${brc2} type=${sig2:-?})" "blkid_rc=$brc2" "type=${sig2:-none}"
+  # W6b again, AFTER the zero and right before the success row (struct R-W6B): the API detach follows
+  # this row, minutes later, and a dependent that appeared since W6b would be stopped by it.
+  _wipe_assert_no_dependents "$real"
+  # Only now is the volume recorded as wiped. WIPED is checked and read back the same way: no durable
+  # marker, no success row, so the wipe job makes no API write (BEGUN, already persisted, keeps ROLLBACK
+  # locked out).
+  mk="${id}:$(date -u +%s)"
+  if ! persist_state PLAINTEXT_WIPED "$mk" || [ "$(read_state PLAINTEXT_WIPED)" != "$mk" ]; then
+    _wipe_refuse wipe_marker_write_failed "PLAINTEXT_WIPED could not be written and read back in $STATE_FILE after a verified zero — no success row, so no API detach/delete" "marker=wiped"
+  fi
+  emit_wipe wiped "$WIPE_ARM" "bytes=$size" "readback=zero" "target=$real" "discard_gran=${gran:-unknown}" \
+    "discard_max=${dmax:-unknown}" "write_zeroes_max=$wz" "scheduler=${sched:-unknown}" "last_write=${last_write:-n/a}" \
+    "io_max=${WIPE_IOMAX:-absent}" "plaintext_only=${WIPE_PLAINTEXT_ONLY}"
+  log "plaintext volume $id zeroed and verified (${size} bytes read back as zero); the API detach + delete is the wipe job's next step"
+}
+
 # Sourced-detection guard: when this file is `source`d (the workspaces-luks-verify.test.sh harness
 # obtains verify_byte_identity/emit_verify_diff without running the cutover), return HERE — after all
 # functions the test needs are defined, but BEFORE `trap cleanup EXIT` and the main body. An executed
@@ -1986,7 +3048,31 @@ assert_mode_exclusive
 # ROLLBACK mode — operator recovery entrypoint
 # ============================================================================
 if [ "$ROLLBACK" = "1" ]; then
-  DRY_RUN=0 rollback
+  # DRY_RUN=0 for the whole mode (not just the call), so an abort inside it records its real outcome,
+  # not dry_run. The workflow's dry_run input DEFAULTS TO TRUE and does not gate this mode.
+  DRY_RUN=0
+  assert_rollback_not_post_cutover
+  rollback
+  # rollback() re-checks the plaintext itself (its first line); a refusal there touched nothing.
+  if [ "$ROLLBACK_REFUSED" = "1" ]; then
+    _plaintext_gone_outcome
+    _deadman_row "result=cutover_aborted outcome=${outcome} mode=rollback$(_plaintext_gone_fields)"
+    trap - EXIT
+    die "inside rollback(): $(_plaintext_gone_msg);$(_plaintext_gone_fields)"
+  fi
+  # The outcome is read off the mount, as cleanup() does: rollback() never fails, so an unconditional
+  # `exit 0` turned a failed remount (app and writers left DOWN) or a still-open mapper into a green
+  # run with no outcome row. Anything but rolled_back records its row and exits non-zero. The EXIT
+  # trap is dropped first: cleanup() would otherwise add a second, false pre_freeze row.
+  outcome=""
+  _rollback_outcome
+  if [ "$outcome" != "rolled_back" ]; then
+    _deadman_row "result=cutover_aborted outcome=${outcome} mode=rollback$([ "$outcome" != rollback_remount_failed ] || _plaintext_record_fields)"
+    log "ERROR: ROLLBACK=1 did not complete cleanly (outcome=${outcome}) — see the runbook's abort triage table"
+    trap - EXIT
+    exit 1
+  fi
+  RUN_COMPLETE=1
   exit 0
 fi
 
@@ -2000,6 +3086,23 @@ fi
 # ============================================================================
 if [ "$CLEAN_STRAY" = "1" ]; then
   clean_stray
+  RUN_COMPLETE=1
+  exit 0
+fi
+
+# ============================================================================
+# CONFIRM_WIPE mode — retire the retained plaintext volume (#6604 runbook step 7; ADR-119 addendum
+# 2026-09-28). The wipe_plaintext() header says what it destroys and why it may.
+#
+# Shape mirrors CLEAN_STRAY, with ONE deliberate difference: the wipe HAS a rehearsal. This block never
+# assigns DRY_RUN (ROLLBACK's force-set is what made its ungated arm destructive), so `DRY_RUN=1` — the
+# workflow's `cutover` job, which can only ever deliver CONFIRM_WIPE=1 together with DRY_RUN=1 — runs
+# every precondition and returns before the zero. The destructive DRY_RUN=0 delivery exists only in the
+# environment-gated `wipe` job.
+# ============================================================================
+if [ "$CONFIRM_WIPE" = "1" ]; then
+  wipe_plaintext
+  RUN_COMPLETE=1
   exit 0
 fi
 
@@ -2204,7 +3307,10 @@ fsck_advisory_probe "$MOUNT"
 # FREEZE (≤20 min budget) — quiesce, drain, copy the delta, verify, repoint
 # ============================================================================
 step "FREEZE — quiesce $QUIESCE_UNITS + docker stop -t 120 (C8) + interrupted-write asserts (G4)"
-FREEZE_HELD=1; persist_state FREEZE_HELD 1; arm_dead_man
+# #9045 — ARM FIRST, on its own line: arm_dead_man now fails closed (a refused or unverified arm
+# dies), so it must run before FREEZE_HELD=1 — a refused arm then aborts with nothing frozen.
+arm_dead_man
+FREEZE_HELD=1; persist_state FREEZE_HELD 1
 if [ "$DRY_RUN" != "1" ]; then
   freeze_writers
 else
@@ -2293,15 +3399,18 @@ if [ "$DRY_RUN" != "1" ]; then
   # Storing a value computed by a different rule than the one that reads it would persist a LOW
   # baseline on any run with a nonzero skip, and a later real shrink down to it would certify green
   # — relocating the counter-parity bug from the counter to the baseline.
+  #
+  # #9098 E — the same count ($WS_INVENTORY, in-process) is the baseline the host-canary population
+  # assert compares $MOUNT against at the door. A counter failure is therefore FATAL here, at G3:
+  # the door would refuse anyway (host_canary_baseline_missing), and aborting now — before the
+  # repoint, with the freeze held — rolls back losslessly and names the real cause.
   if WS_INVENTORY="$(wl_count_workspace_dirs "$STAGING/workspaces" 2>/dev/null)"; then
     persist_state WORKSPACES_COUNT "$WS_INVENTORY"
-    log "persisted workspace inventory baseline: WORKSPACES_COUNT=$WS_INVENTORY (verify compares against this)"
+    log "persisted workspace inventory baseline: WORKSPACES_COUNT=$WS_INVENTORY (verify compares against this; the host canary compares against the in-process value)"
   else
-    # Non-fatal: G3 above already gated the copy, so a counter failure must not abort a good
-    # cutover. But it must not be silent either — the next verify would fail closed on a missing
-    # baseline with no explanation of why it is missing.
+    WS_INVENTORY=""
     emit_drift workspace_count_persist_failed
-    log "WARN: could not count $STAGING/workspaces — WORKSPACES_COUNT not persisted; the next verify will fail closed on workspace_count_baseline_missing until it is seeded"
+    die "G3: could not count $STAGING/workspaces — without this run's workspace count the host canary cannot prove the population it would close the rollback door on; aborting while the rollback is still lossless (the freeze is held; cleanup() rolls back)"
   fi
 fi
 
@@ -2344,6 +3453,15 @@ if [ "$DRY_RUN" != "1" ]; then
   _same_dev "$_canary_mapper_dev" "$FRESH_DEV" \
     || { emit_drift canary_mapper_wrong_device; die "C13 canary: $MAPPER is backed by '${_canary_mapper_dev:-<unknown>}', not $FRESH_DEV — refusing to certify the repoint"; }
   mountpoint -q "$MOUNT" || { emit_drift not_mounted; die "mountpoint -q $MOUNT failed"; }
+  # #9045 — THE DOOR. Everything below CANARY_OK=1 rolls forward, never back (ADR-119 §(b): the
+  # rollback door closes at docker start), so the dead-man — which exists only to undo a frozen,
+  # unattended host — is disarmed HERE, exactly once, before either. First prove the population on
+  # the live mount; then disarm (a failed disarm dies while CANARY_OK=0, so cleanup() rolls back
+  # while that is still lossless); then re-assert the mount SOURCE, which a fire that raced the
+  # disarm would have changed and which garbage collection cannot hide.
+  assert_host_canary_population
+  disarm_dead_man host_canary_passed || die "the dead-man could not be PROVEN disarmed at the host canary (see the disarm_failed check= marker) — refusing to close the rollback door with a possibly-live backstop; cleanup() rolls back"
+  [ "$(findmnt -no SOURCE "$MOUNT" 2>/dev/null)" = "$MAPPER" ] || { emit_drift deadman_fired_before_disarm; die "findmnt: $MOUNT is no longer $MAPPER after the dead-man disarm — a fire raced the disarm; refusing to certify (cleanup() rolls back before docker start)"; }
   CANARY_OK=1; persist_state CANARY_OK "1:$(cryptsetup luksUUID "$FRESH_DEV")"  # DP-7: run-keyed + header UUID
   log "host canary PASSED — $MOUNT is the LUKS mapper"
 fi
@@ -2354,10 +3472,12 @@ if [ "$DRY_RUN" != "1" ]; then
   # Restore every unit freeze_writers() quiesced (webhook + inngest-redis) and reconcile
   # inngest-server — AFTER the mapper mount (see resume_writers' mount guard).
   resume_writers
-  # app_canary BEFORE disarm_dead_man. CANARY_OK=1 was set by the HOST canary above, so cleanup()
-  # will no longer roll back; if the dead-man were disarmed first, an app-level failure here would
-  # have ZERO automated recovery — on the one gate that actually proves user-facing health. Keeping
-  # the dead-man armed across the canary preserves the unattended backstop for exactly that window.
+  # The dead-man is ALREADY disarmed (at the host canary, #9045): it guards the freeze window, not
+  # app health. Before #9045 it stayed armed across this canary, and on 2026-07-20 an app-level abort
+  # here let it fire 27 minutes later and silently remount the plaintext over a correct LUKS mount,
+  # stranding every write since docker start (#6812). CANARY_OK=1 is set, so an abort from here on
+  # makes cleanup() roll FORWARD on the LUKS mount and page (cutover_aborted_post_canary); recovery
+  # is fix-forward, never ROLLBACK=1.
   app_canary
   # The durable Inngest queue must be up before this run may call itself green. A dead queue behind
   # a green cutover is the "component reports SUCCESS but its downstream effect is absent"
@@ -2367,7 +3487,6 @@ if [ "$DRY_RUN" != "1" ]; then
     emit_drift green_run_degraded_queue
     die "inngest-redis.service is not active after a successful repoint — the durable Inngest queue is DOWN and armed reminders would silently never fire. Refusing to report a green cutover. The mount is correct and retained; restart the unit and re-run workspaces-luks-verify.yml."
   }
-  disarm_dead_man
   # Deliver the standing observability to the LIVE host via THIS channel (ADR-119 §(e)).
   install -D -m 0755 "${SELF_DIR}/luks-monitor.sh" /usr/local/bin/luks-monitor 2>/dev/null || true
   install -D -m 0755 "$EMIT" /usr/local/bin/workspaces-luks-emit.sh 2>/dev/null || true
@@ -2397,17 +3516,24 @@ if [ "$DRY_RUN" != "1" ]; then
   # Fail loud if the timer did not arm (a silently-missing unit would leave the daily probe dark; the
   # `install … || true` above swallows delivery errors deliberately, so assert the end state here).
   systemctl is-enabled luks-monitor.timer >/dev/null 2>&1 || { emit_drift luks_monitor_timer_enable_failed; die "luks-monitor.timer failed to enable — the daily at-rest probe would not run (C15/ADR-119 §(e))"; }
-  # Reboot-once re-canary (C15): the realistic failure is the boot path (the structural gate + the
-  # --restart resurrection). This script does NOT auto-reboot — a reboot drops the CF-Tunnel SSH
-  # session mid-run. The run-keyed CANARY_OK is persisted to $STATE_FILE with the header UUID (above)
-  # so a pre-reboot value cannot satisfy a fresh post-reboot check. The boot-path proof is an
-  # OPERATOR step AFTER this run: reboot web-1 once, then dispatch workspaces-luks-verify.yml (the
-  # read-only re-assert) — a fresh green there proves the boot path. See the runbook.
-  log "cutover green. Operator: reboot web-1 once, then run workspaces-luks-verify.yml to prove the boot path (C15)."
+  # Boot path (C15) — delivered by #9123; the supervised restart stays operator-gated.
+  # terraform_data.workspaces_boot_unlock_install (workspaces-luks.tf) delivered the coupled
+  # fix: fstab names /dev/mapper/workspaces with nofail, workspaces-luks-reopen.service unlocks
+  # the mapper at boot (key via `doppler secrets get … --config prd_workspaces_luks`), crypttab
+  # declares the mapping `luks,noauto`, and the ADR-119 §(e) gate is armed (the docker.service.d
+  # RequiresMountsFor + After= drop-in, `chattr +i` on the covered root-disk inode). The C15
+  # proof — one reboot, then the read-only verify — is the runbook's separate supervised step
+  # (workspaces-luks-cutover-6604.md §4), not a step of this run.
+  # The run-keyed CANARY_OK is still persisted to $STATE_FILE with the header UUID (above), so a
+  # pre-reboot value cannot satisfy a post-reboot check.
+  log "cutover green. The boot path is delivered (#9123) — the C15 reboot proof is the runbook's separate supervised step. Run workspaces-luks-verify.yml for the read-only re-assert."
 fi
 
-step "cutover body complete (DRY_RUN=$DRY_RUN). The WIPE/converge is a SEPARATE environment-gated dispatch (DP-4)."
-# CONFIRM_WIPE path is authored in the Phase-5 soak/converge dispatch, not here (DP-4): the sweeper
-# cannot hold the creds for an irreversible blkdiscard, so the wipe rides its own env-gated workflow
-# that re-verifies the persisted run-keyed canary_ok header UUID against the live mapper (DP-7).
+step "cutover body complete (DRY_RUN=$DRY_RUN). The WIPE is a SEPARATE environment-gated dispatch (DP-4)."
+# The wipe is the CONFIRM_WIPE mode block above (wipe_plaintext, #6604 runbook step 7): it re-verifies
+# the persisted run-keyed CANARY_OK header UUID against the live mapper (DP-7) and is delivered with
+# DRY_RUN=0 only by the environment-gated `wipe` job of workspaces-luks-cutover.yml.
+# The ONE normal end, shared by the dry run and the green run (#9098 A: cleanup() exits 0 silently
+# only when RUN_COMPLETE=1).
+RUN_COMPLETE=1
 exit 0

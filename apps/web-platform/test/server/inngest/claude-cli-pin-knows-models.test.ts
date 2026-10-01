@@ -88,7 +88,11 @@ const HAVE_BIN = existsSync(BIN);
 // runs on its default (ADR-053 amendment #8603).
 const REVIEWED_DEFAULT_EFFORT: Record<string, string> = {
   [AUDIT_MODEL]: "medium",
-  [EXECUTION_MODEL]: "high",
+  // Sonnet 5.5's bundled row moved the execution default high→medium at the
+  // 5→5.5 swap (bundle-verified 2026-09-29, claude-code 2.1.284). Execution
+  // crons deliberately ride the CLI default (ADR-053 amendment #8603) — noted
+  // as drift, not pinned back.
+  [EXECUTION_MODEL]: "medium",
 };
 
 function readPin(): string {
@@ -329,11 +333,11 @@ describe("bundle helpers — semantics on synthesized blobs", () => {
     const row = (id: string, caps: string, eff: string) =>
       `{id:"${id}",family:"f",capabilities:[${caps}],default_effort:"${eff}"}`;
     const ok = blob(
-      `[${row(AUDIT_MODEL, '"effort"', "medium")},${row(EXECUTION_MODEL, '"effort"', "high")}]`,
+      `[${row(AUDIT_MODEL, '"effort"', "medium")},${row(EXECUTION_MODEL, '"effort"', "medium")}]`,
     );
     expect(tierRows(ok)).toEqual({ defaults: REVIEWED_DEFAULT_EFFORT, auditSupportsEffort: true });
     const noEffort = blob(
-      `[${row(AUDIT_MODEL, '"adaptive_thinking"', "medium")},${row(EXECUTION_MODEL, '"effort"', "high")}]`,
+      `[${row(AUDIT_MODEL, '"adaptive_thinking"', "medium")},${row(EXECUTION_MODEL, '"effort"', "medium")}]`,
     );
     expect(tierRows(noEffort).auditSupportsEffort).toBe(false);
     expect(() => tierRows(blob(row(AUDIT_MODEL, '"effort"', "medium")))).toThrow();

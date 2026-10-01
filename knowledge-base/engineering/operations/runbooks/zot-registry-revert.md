@@ -65,6 +65,11 @@ private-GHCR path — which, per the banner above, is now a path that fails.
 > A fresh boot pulls from zot only; a zot miss ends the boot and pages (`stage=pull` fatal on web,
 > `stage=inngest_pull_fatal` fatal on the dedicated inngest host). #8651 is fixed (PR #8660): the
 > web-2 replace in run 35951886838 booted zot-served (`stage=app_zot`, `fresh_boot_ready`).
+>
+> **Addendum 2026-09-28 (#8562), inngest half only:** the template retries. Since [ADR-257](../../architecture/decisions/ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md) the
+> dedicated inngest host's zot miss ends one provisioning **attempt** (`inngest_pull_fatal` now
+> carries `attempt=N`), and `soleur-inngest-provision.service` tries again (120 s at first,
+> backing off to 15 minutes). The live host keeps the old behavior until its next replace. The web half is unchanged.
 
 **Historical note (what this paragraph used to say).** It described revert as a safe
 Doppler flag flip because "GHCR remains dual-pushed + break-glass through the entire soak
@@ -266,6 +271,11 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
 >
 > The triage bullets below that name the three old stages are the pre-1d record; read them
 > through this note.
+>
+> **Addendum 2026-09-28 (#8562), inngest half only:** "the boot **ended**" is now true only of a
+> host born before #8562. The template retries: the pull runs in a unit that retries (120 s at
+> first, backing off to 15 minutes), so `inngest_pull_fatal attempt=N` is one missed attempt and the host may recover on its own. The
+> live host keeps the old behavior until its next replace.
 
 - **Since #8036 1d (2026-09-24), a fresh-boot page is a failed boot, not a slower one.** Triage:
   - `stage:"inngest_pull_fatal"` (paged by `zot-mirror-fallback-rate`): read the redacted pull
@@ -275,6 +285,10 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
     private NIC (below), then repair zot (`apply_target=registry-host-replace`) or backfill the
     missing tag (`build-inngest-bootstrap-image.yml -f mirror_only=true`), then run
     `inngest-host-replace` again.
+    (**Addendum 2026-09-28, #8562:** on a host born from the #8562 template, the unit retries
+    (120 s at first, backing off to 15 minutes), so repair zot first and wait for `bootstrap-done` with the same `iid` before
+    dispatching another replace; see [`inngest-server.md` § Provision unit (#8562)](./inngest-server.md#provision-unit-8562). The live host keeps the old behavior until its next
+    replace.)
     If the event's `host_name` is a WEB host (the colocated block, `web_colocate_inngest=true`),
     the web app is down too: the colocated item runs in the same runcmd shell and ends it.
   - web `stage=pull` fatal (paged by `web_terminal_boot_fatal`): the host is web-2 or a new host
@@ -332,6 +346,10 @@ as noise**: triage it. Revert is for a *sustained* zot degradation.
 > **Superseded 2026-09-24 (#8036 1d): this self-healing note no longer applies to fresh boots
 > either.** A fresh-boot zot miss now ends the boot (`inngest_pull_fatal` or web `stage=pull`,
 > both fatal). There is no GHCR to heal onto.
+>
+> **Addendum 2026-09-28 (#8562), inngest half only:** the template retries, so on a host born
+> from it an inngest zot miss ends one attempt and the unit heals onto zot itself once zot serves
+> again. The live host keeps the old behavior until its next replace. Web is unchanged.
 
 > **This self-healing note no longer extends to the rolling deploy.** Since #8036 1c there is no
 > fallback on that path, so the rolling-deploy equivalent of a "one-blip fallback" is a FAILED
@@ -428,7 +446,10 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   gated colocated block). The rule keeps the name `zot-mirror-fallback-rate` so the
   `alert-reference.json` keys stay stable, but its second member is **not a fallback**: it is a
   terminal boot. The list below is the pre-1d record, kept so a reader finding zero rows for a
-  retired stage finds why.
+  retired stage finds why. (**Addendum 2026-09-28, #8562, inngest half only:** the template
+  retries, so on a host born from it that member is one missed provisioning attempt and repeats
+  at the rule's 23-minute throttle while the host stays dark. The live host keeps the old
+  behavior until its next replace.)
 - **Signal (pre-1d record):** five warning tags. ⚠ They are NOT all `feature:supply-chain op:image-pull` — the
   prefix split is deliberate and the earlier "all `feature:supply-chain op:image-pull`" framing
   was wrong: only the `registry:` pair carries that prefix (ci-deploy.sh's jq payload writes
@@ -487,6 +508,7 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   > | `FAIL(web-pull-fatal)` | a web fresh boot failed its zot pull (`stage:"pull"` fatal) | the `stage=pull` bullet above; the event's `cause=` field |
   > | `FAIL(retired-names)` | a pre-1d template emitted `inngest_ghcr_fallback` / `app_ghcr_*` after START — a host booted from the OLD template inside the window | find the host from the event; replace it so it boots the 1d template |
   > | `FAIL(start-after-anchor)` | the script's default START is later than #8660's merge — the window was moved past its anchor | a code defect in the soak; restore START, never move it later to pass |
+  > | `FAIL(insufficient-sample)` | the exercise arm came up thin — read the per-leg counts: `web=N (need >=3)` is zot-served WEB deploy pulls (Sentry quiet or no deploys in the window; deploy enough times to satisfy it — TRANSIENT means Sentry was UNREACHABLE, a different line), and `inngest-boots=N (need >=1)` is the dedicated soleur-inngest host's `stage:"inngest_zot"` boot count. **Since #9097 the inngest leg is a BOOT beacon, not a deploy pull**: `image:"inngest"` pulls are un-emittable post-cutover (the only `deploy inngest` sender targets the quiesced web scheduler), so do NOT dispatch `deploy-inngest-image.yml` to raise it — wait for or dispatch an inngest-host replace (`apply_target=inngest-host-replace`) |
   >
   > A line ending `[START overridden (anchor check skipped)]` came from a manual run with
   > `ZOT_SOAK_START` set; it is not the sweeper's verdict and is not evidence for 5.6.

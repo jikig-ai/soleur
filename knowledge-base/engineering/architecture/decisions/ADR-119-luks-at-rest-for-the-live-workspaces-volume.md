@@ -151,6 +151,12 @@ properties:
   > reason (`After=local-fs.target mnt-data.mount`, the `inngest-cutover-flip.service` precedent,
   > #7228). `resume_writers()`'s `mountpoint -q` gate is what actually keeps writers off an
   > unmounted `$MOUNT`.
+  >
+  > **Qualified 2026-09-28 (#9045):** "the fstab can name the superseded plaintext volume" does not
+  > hold as stated. Apply run 36340195638 printed web-1's `/mnt/data` fstab source as the literal
+  > glob `/dev/disk/by-id/scsi-0HC_Volume_*`, the 2026-03-17 first-boot line. systemd does not expand
+  > it, so it names no device at all. The real hazard is a reboot into emergency mode, tracked in
+  > #9123.
 - `webhook.service` carries **no** `RequiresMountsFor`, only `ReadWritePaths=/mnt/data`, so it
   starts **successfully onto the bare root-disk mountpoint directory**. It is the CI deploy
   receiver, so a deploy landing during the incident writes user data into the root filesystem,
@@ -167,6 +173,12 @@ it cannot fail on an empty or unmounted volume — if the mapper mounts but `$MO
 absent, docker auto-creates an empty bind source and a cutover serving zero user data reports green.
 `app_canary` therefore also asserts `/internal/readyz` (`workspaces_writable` + `workspaces_populated`),
 and runs **before** `disarm_dead_man` so an app-level failure still has the unattended backstop.
+
+> **Superseded 2026-09-28 (#9045):** `app_canary` no longer runs before the disarm. The single
+> disarm now sits at the host-canary pass, before `docker start`, so the dead-man guards the freeze
+> window only. An app-level failure after `docker start` is fix-forward: `cleanup()` rolls forward on
+> the LUKS mount and pages. See the
+> [2026-09-28 addendum](#addendum-2026-09-28-the-dead-man-guards-the-freeze-window-only-9045).
 
 **`readyz` proves a FLOOR, not an INVENTORY (#6807).** `readiness.ts:81` is
 `countWorkspaceDirsAt(root) > 0`, and `isWorkspacesWritable` write+unlinks **one** probe file at the
@@ -265,6 +277,11 @@ web-1 is false until the cutover runs.
 > `SOLEUR_SENTRY_DSN=` line only. No real cutover reached the step that delivers them, so
 > `terraform_data.luks_monitor_install` now does. The mount-gate claim above stands. See the
 > 2026-09-27 addendum.
+>
+> **Superseded 2026-09-28 (#9123):** the mount-gate claim too. The §(e) gate and the boot
+> unlock reach web-1 through `terraform_data.workspaces_boot_unlock_install`, not the cutover
+> channel. See the
+> [2026-09-28 addendum](#addendum-2026-09-28-the-e-mount-gate-and-the-boot-unlock-have-a-terraform-owner-9123).
 
 **Reboot is the sharper edge.** `docker run --restart unless-stopped` means `dockerd` resurrects the
 container on reboot **without ever executing `docker run`** — so a pre-`docker run` gate catches
@@ -983,6 +1000,11 @@ armed: `cleanup()` does nothing once `CANARY_OK=1`, and both such runs died befo
 not inherit this silently. It is tracked in #9045. Meanwhile this installer's state print shows the
 dead-man units' state on every fire.
 
+> **Superseded 2026-09-28 (#9045):** the gap is closed. The dead-man is disarmed at the host-canary
+> pass, before `docker start`, so a post-canary abort has nothing armed. `cleanup()` also records a
+> `result=cutover_aborted outcome=<x>` marker on every abort. See the
+> [2026-09-28 addendum](#addendum-2026-09-28-the-dead-man-guards-the-freeze-window-only-9045).
+
 ### Review amendments (2026-09-27)
 
 Appended after the 10-agent review of PR #9044. Each item below changes or qualifies a claim above.
@@ -995,6 +1017,10 @@ Appended after the 10-agent review of PR #9044. Each item below changes or quali
   and reports `not_mounted` itself. Same downgrade as `inngest-cutover-flip.service` (#7228). This
   also corrects the §(a) claim that `RequiresMountsFor=` makes systemd "refuse to start" a unit (see
   the note there).
+
+  > **Qualified 2026-09-28 (#9045):** "that can be the superseded plaintext volume" does not hold.
+  > The fstab source is a literal glob that names no device. The ordering-only downgrade is still
+  > correct, because a mount the unit started would still be wrong. See the §(a) note and #9123.
 - **A cutover-freeze guard (exit 17).** Before it arms, the installer refuses with exit 17 when
   `workspaces-luks-deadman.timer` reads `SubState=waiting`: a cutover freeze is live. The apply goes
   red, the resource taints, and the next apply re-fires it. The plan cut an earlier freeze guard.
@@ -1002,6 +1028,15 @@ Appended after the 10-agent review of PR #9044. Each item below changes or quali
   transient timer keeps `ActiveState=active`, `SubState=elapsed` until reboot, so an old July
   dead-man would have blocked every install. `SubState=waiting` is reported only by a live transient
   timer that has not fired yet, which is exactly a freeze in progress.
+
+  > **Qualified 2026-09-28 (#9045):** "an elapsed transient timer keeps `ActiveState=active`,
+  > `SubState=elapsed` until reboot" was never measured. The same run's state print shows the timer
+  > `inactive/dead`. systemd.timer(5)'s `RemainAfterElapse=yes` default would keep it loaded, so the
+  > two sources disagree. #9045's real-systemd loopback case measures it on systemd 255. The guard
+  > keys on `SubState=waiting` and holds under either reading. Measured 2026-09-28 against a user
+  > systemd 261 (the same case body, run unprivileged): once a transient timer fires, systemd
+  > unloads it. It then reads `inactive/dead` with an empty `LastTriggerUSec`, which matches web-1's
+  > print. The privileged CI run on systemd 255 is the authoritative reading.
 - **Host scope.** The alert predicate gains `AND JSONExtractString(raw, 'host_name') =
   'soleur-web-platform'`. web-2 (`soleur-web-2`) ships to the same Logs source (measured
   2026-09-27). Its `incident_cause` no longer says "the volume is still encrypted": the alert also
@@ -1029,6 +1064,381 @@ Appended after the 10-agent review of PR #9044. Each item below changes or quali
   2026-09-27 a throwaway PAUSED alert was created on the live API with `query_period = 97200`, read
   back `query_period:97200 confirmation_period:0` (not clamped), and deleted.
 - **The dead-man gap** above is tracked in #9045.
+
+## Addendum (2026-09-28): the dead-man guards the freeze window only (#9045)
+
+**Decision.** The cutover disarms the dead-man once, at the host-canary pass, before
+`docker start`. This follows from §(b): the rollback door closes at `docker start`, so an unattended
+revert after it strands every write the app made on the LUKS mount. That is the 2026-07-20 incident.
+The cutover previously kept the dead-man armed across `app_canary`, as an app-health backstop. That
+intent is reversed: app health is attended, and the dead-man now guards the freeze only.
+
+The mechanics live in `workspaces-cutover.sh`:
+
+- **`arm_dead_man` fails closed and verifies itself.**
+  - It refuses when a timer already reads `SubState=waiting` or a fire is live
+    (`ActiveState` `active`, `activating` or `deactivating`; a running fire is a simple service,
+    so it reads `active`).
+  - It clears a stale unit before arming: it stops the timer, then runs `reset-failed` on both units.
+  - It no longer discards `systemd-run`'s error; a refusal emits `result=arm_failed` with the first
+    stderr line, scrubbed, as `detail=`. Every arm failure `die`s, so the freeze never starts behind an
+    unverified backstop.
+  - It sets `DEADMAN_ARMED=1` as soon as `systemd-run` returns, then polls for `waiting`.
+  - The arm runs BEFORE `FREEZE_HELD=1`, so a failed arm leaves no freeze to unwind.
+- **`disarm_dead_man <reason>` verifies and never `die`s.**
+  - It reads the timer's `LastTriggerUSec` before the stop, and after the stop the service's
+    `ActiveState` and any queued start `Job`.
+  - It checks that the timer is no longer `waiting`.
+  - Any failed check emits `result=disarm_failed … check=<a|b|c>`.
+  - The reasons are a closed set: `host_canary_passed`, `rollback_engaged`, `arm_aborted`.
+- **The host canary gates the disarm.**
+  - Before disarming, it compares the workspace count on the live `$MOUNT` against the count G3 took
+    in THIS run (an in-process value, never the append-only state file, which carries earlier runs'
+    counts). A missing count fails closed, and a G3 count failure is now fatal at G3
+    (`workspace_count_persist_failed`), where the rollback is lossless.
+  - This re-proves that the mounted filesystem is the copy G3 counted and that the repoint landed.
+    It is not a plaintext-versus-copy population proof; that proof is G3 against G2, plus C1.
+  - After disarming, `findmnt -no SOURCE "$MOUNT"` must still equal the mapper, because a fire that
+    raced the disarm unmounts `$MOUNT`.
+  - Either failure dies while `CANARY_OK=0`, so the rollback is still lossless.
+  - The `findmnt` re-assert is the real proof. A fired transient timer is unloaded, so its
+    `LastTriggerUSec` reads empty and check (a) only catches a fire in the short window before
+    that. This was measured on systemd 261; see the qualification under the 2026-09-27 review
+    amendments.
+- **`rollback()` stops the timer first, then waits.**
+  - With the dead-man armed it runs the verifying disarm, which stops the timer, so no new fire can
+    start. It then waits, bounded by attempt count, for a fire already in flight to finish, and
+    emits `check=fire_stuck` only if that wait expires.
+  - With nothing armed by this run it records the timer's prior state (`result=not_armed
+    prior=<substate>`). If this run armed and already disarmed, it records `result=already_disarmed`.
+  - It restarts the app only when the plaintext volume is mounted. A failed remount leaves the app
+    down and pages `rollback_remount_failed`, rather than starting it on the bare root-disk directory.
+- **`cleanup()` records one outcome on every abort**, on the existing `luks-monitor` tag:
+  `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<x>`. The values are:
+  - `rolled_back` — one plaintext mount and the mapper closed;
+  - `rollback_stacked` — a mount stacked on another, or the mapper still open (pages);
+  - `rollback_remount_failed` — nothing, or the mapper, is mounted;
+  - `post_canary_luks_retained` — rolled forward and the app restarted;
+  - `post_canary_restart_failed` — rolled forward, but `docker start` failed;
+  - `post_canary_mount_not_mapper` — the mount is no longer the mapper, so the app and writers were
+    stopped;
+  - `arm_aborted`, `pre_freeze`, `clean_stray`, `dry_run`.
+- **`cleanup()` is signal-safe.**
+  - The workflow runs the script over `ssh` without a pty, so a dropped connection does not deliver
+    SIGHUP. The script dies of SIGPIPE on its next write, and bash still runs the EXIT trap.
+  - Two defects made that trap silent, and both are fixed:
+    - `$?` inside the trap is the last command's status, usually 0, so the trap took the success
+      exit. A `RUN_COMPLETE` sentinel, set only at intentional exits, now separates a normal end
+      from a signal death, which is recorded with `abnormal_exit=1`.
+    - The trap's own first `log` raised SIGPIPE again and killed it. It now ignores PIPE, HUP,
+      INT and TERM.
+- **A post-canary abort rolls FORWARD.** `cleanup()` re-asserts the mapper, restarts the app with its
+  exit status checked, and resumes writers. It pages through the fatal Sentry drift
+  `cutover_aborted_post_canary`. If the mapper re-assert fails, it stops the app and the writers, so
+  nothing writes to a mount that is not the mapper. The runbook makes this path fix-forward only.
+- **`ROLLBACK=1` refuses after a successful cutover.** When the persisted `CANARY_OK` matches the
+  live volume's LUKS UUID, a rollback dispatch refuses unless the `rollback_ack_luks_writes` input
+  is set. Such a rollback strands every write made since `docker start` on the LUKS volume. It also
+  refuses, with the same override, when `CANARY_OK` is persisted but the live header UUID cannot be
+  read (a closed mapper included) or the persisted UUID is empty: an unmeasurable match fails closed.
+  A refusal records `outcome=refused_post_cutover mode=rollback mount_src=<source>`. (Corrected
+  2026-09-30, PR #9286 review: the check no longer requires `/mnt/data` to be on the mapper. Keyed on
+  the mount, an unacked rollback after a failed boot unlock, with `/mnt/data` empty, would have
+  served the stale plaintext.)
+- **An unattended fire pages.** `logtail_exploration_alert.workspaces_luks_deadman_fired` (ADR-218
+  semantics) matches `op=workspaces-luks-deadman result=fired` from `soleur-web-platform`. This
+  closes the #6812 six-hour silence. The alert auto-resolves after ten quiet minutes; that does not
+  mean the stranded writes were reconciled.
+
+**Rejected alternatives.**
+
+- **Keep the dead-man armed across `app_canary`, or only for data-shaped `readyz` failures.** Either
+  way an automated revert still strands writes. C1 byte-identity, the G3 count and the host-canary
+  device anchor already certify the data before the door.
+- **A fire-time guard inside the dead-man's `sh -c` keyed on `CANARY_OK`.** The state file persists
+  across runs, so a stale `CANARY_OK` could suppress a legitimate pre-canary revert.
+- **Clear web-1's failed dead-man unit now through Terraform.** That is a host mutation with no
+  functional gain, and it would destroy the evidence before the forensic print reads it.
+- **A watchdog for a SIGKILL.** Disproportionate. An SSH drop is SIGPIPE, not SIGKILL, and the
+  signal-safe `cleanup()` handles it. Two SIGKILL residuals are accepted:
+  - after the host-canary disarm, where nothing is armed and nothing records an outcome;
+  - mid-`rollback()` after its own disarm, where the app stays down with no backstop.
+
+  Neither loses data: both land before the app serves from the LUKS mount, or on a mount already
+  certified. The uptime monitor pages both.
+
+**Accepted narrowing.** The installer's exit-17 guard keys on the dead-man reading `waiting`, which
+now spans only the freeze, not the whole run. An apply that lands between the host-canary door and
+the cutover's tail passes the guard. It redelivers files the tail also installs, and kicks the monitor
+probe while `app_canary` boots the app. The worst case is a false readyz page during an attended
+cutover. No user data is touched.
+
+**What the dead-man did in July (H1/H2).** The 2026-09-27 state print showed
+`workspaces-luks-deadman.service` `failed` (`Result=exit-code`) and the timer `inactive/dead`.
+
+- **H1 (favoured).** The 2026-07-20 fire left the service loaded and failed, and only a dry run
+  touched the unit before 2026-07-23. On 07-23, `systemd-run --unit=workspaces-luks-deadman` was
+  refused, the refusal was discarded (`2>/dev/null || true`), and `result=armed` was logged anyway.
+  The 07-23 dead-man never armed, which is why the LUKS mount survived that post-canary abort.
+- **H2.** It armed and failed on firing. This is disfavoured, because the live mount is the mapper.
+
+The discriminator is the new forensic print. It shows `ExecMainExitTimestamp`, and whether the
+loaded unit's `ExecStart` contains `result=fired`, a substring that exists only in the post-#6807
+fire command. An exit on 2026-07-20 without that substring confirms H1. The verdict is posted on
+#9045 from the first apply after merge.
+
+**Print/installer coupling.** The forensic step's command list is `local.luks_monitor_forensic_print`,
+and it is folded into `terraform_data.luks_monitor_install`'s `triggers_replace`. So any later edit
+to the print re-delivers the installer on web-1: files byte-identical, the DSN line rewritten
+identically, one extra probe kick. The step runs BEFORE the exit-17 freeze guard, so a live freeze
+cannot suppress it. It reads manager-memory properties, which survive journal rotation. It never
+prints `ExecStart` itself or a journal tail, because a transient unit's journal echoes its command
+line into the public Actions log. This is another in-place web-1 change under ADR-154's standing
+exception (re-examined 2026-09-28: `cx33` is available in 0 of 6 datacenters).
+
+> **Qualified 2026-09-28 (#9123):** "available in 0 of 6 datacenters" was the 08:05Z sample.
+> The 21:31Z–21:34Z re-probe for #9123 reads `cx33` **available** in `hel1-dc2` and `fsn1-dc14`
+> — the first ✓ in web-1's DC since 2026-08-01. See the next addendum and ADR-154's #9123 note.
+
+**Reboot hazard.** The fstab finding moved the green-path reboot instruction (C15) to #9123. A
+web-1 restart currently lands in emergency mode, so no reboot is planned until the coupled
+fstab + crypttab + §(e) gate fix ships.
+
+> **Delivered 2026-09-28 (#9123):** the coupled fstab + crypttab + §(e) gate fix is the next
+> addendum. The C15 restart proof itself stays the runbook's separate supervised step — it is
+> unblocked, not performed, by this delivery.
+
+## Addendum (2026-09-28): the §(e) mount gate and the boot unlock have a Terraform owner (#9123)
+
+**What was wrong.** Three coupled boot-path defects made a web-1 restart a site-down event,
+measured in the apply-run prints (run 36340195638; `reboot-required=yes` on run 36425473000),
+not inferred:
+
+1. `/etc/fstab` on web-1 carries the **literal** glob `/dev/disk/by-id/scsi-0HC_Volume_*` — the
+   unexpanded first-boot line of 2026-03-17. systemd-fstab-generator expands no globs and the
+   line has no `nofail`, so `mnt-data.mount` waits on a device that can never appear and
+   `local-fs.target` fails into emergency mode.
+2. `/dev/mapper/workspaces` — the live `/mnt/data` source since the 2026-07-23 cutover — is in
+   neither fstab nor crypttab. Nothing unlocks it at boot: no crypttab line, no key-fetch unit.
+3. §(e)'s structural mount gate never reached web-1. It routed through the cutover channel and
+   no cutover tail ever ran to completion — the same delivery gap that left the monitor units
+   uninstalled for nine weeks (the 2026-09-27 addendum).
+
+The obvious one-line fix — rewrite fstab to `/dev/mapper/workspaces … nofail` alone — is worse
+than the defect: the boot then succeeds with `/mnt/data` as a bare root-disk directory, dockerd
+resurrects the app container over `--restart unless-stopped`, and sole-copy workspaces land on
+the unencrypted root disk. The three parts are coupled and land atomically.
+
+**Decision.** `terraform_data.workspaces_boot_unlock_install` in `workspaces-luks.tf` owns the
+delivery, riding the same CF-Tunnel-SSH apply stage as `terraform_data.luks_monitor_install`
+(the #8706 precedent extended), with `depends_on` on both monitor installers so the token and
+the probe channel land first. In one resource fire it:
+
+1. prints the read-only "before" state (field-selected fstab source, crypttab
+   `^[[:space:]]*workspaces[[:space:]]` count — an INDENTED `workspaces` mapping is live
+   crypttab syntax, so the anchor skips leading whitespace, unit states);
+2. delivers the `workspaces-luks-reopen` family — the phase-tagged reopen script
+   (`config → key → device → header → open → identity → target → mount → identity-mount →
+   emit`), the `Type=oneshot` unit with the bounded restart ladder, the `-failure.service`
+   reporter, and the standing-retry `.timer` — modelled on the `git-data-luks-reopen` family
+   (#8210);
+3. appends-if-absent the crypttab line `workspaces
+   /dev/disk/by-id/scsi-0HC_Volume_<hcloud_volume.workspaces_luks.id> none luks,noauto` —
+   FIRST of the mutating steps, so an exit-32 foreign-line refusal leaves the consistent OLD
+   pin pair;
+4. writes `/etc/default/workspaces-luks-boot` (0600 root: the by-id device pin and the Doppler
+   config name — a NEW env file; `/etc/default/luks-monitor`'s two-writer ownership is
+   untouched, the reopen unit reads `DOPPLER_TOKEN` through it and never writes);
+5. arms the §(e) gate: `docker.service.d/10-workspaces-luks-mount.conf` carrying
+   `RequiresMountsFor=/mnt/data` AND `After=workspaces-luks-reopen.service` (docker
+   fails-then-retries under `RequiresMountsFor` — its own restart policy re-queues it —
+   while `mnt-data.mount`'s device wait can still race `dev-mapper-workspaces.device`'s
+   timeout), plus
+   `chattr +i` on the **covered** root-disk `/mnt/data` inode through a non-recursive
+   `mount --bind /` peek — the mapper is mounted, so the baked gate's `mountpoint -q`-guarded
+   arm cannot reach that inode on web-1. The gate lands BEFORE the fstab rewrite: a
+   mid-window abort leaves the boot fail-closed (emergency mode), never
+   fstab-fixed-but-gate-absent;
+6. rewrites fstab idempotently to exactly one `/dev/mapper/workspaces /mnt/data ext4
+   defaults,nofail 0 2` line, commenting every superseded line and refusing on a zero- or
+   two-plus-`/mnt/data` post-edit table;
+7. daemon-reloads (docker is never restarted — the drop-in takes effect at the next
+   `docker.service` start), enables the units, and runs one proof start of the reopen service,
+   which takes the `noop` arm on the live system — the mapper is already open, so the run
+   exercises config/key/device/header/identity/target/mount end to end without touching the
+   mount;
+8. prints the post-state into the apply log: `findmnt --fstab`, `crypttab-workspaces-lines`,
+   unit states, `lsattr -d` through a second peek, `systemd-analyze verify`.
+
+Every remote-exec mutating step refuses with the exit-17 convention while
+`workspaces-luks-deadman.timer` reads `SubState=waiting` — the four file provisioners land
+inert payloads before the first remote-exec check (the units stay un-enabled until `arm`),
+and the installer and a live cutover are mutually exclusive around the /mnt/data mount
+epoch: the cutover never writes fstab, but a mid-flight fstab writer races its mount flip.
+`triggers_replace` hashes every delivered byte (the four files plus the writer locals), so
+an edit to delivered bytes re-fires the installer; host-side drift is caught by the units'
+and the daily probe's own asserts, not the apply — nothing marks the host done permanently.
+
+**What this changes in §(e).** §(e)'s last standing claim — "the live delivery path for web-1
+is the cutover job's SSH channel" — is superseded for the mount gate too. The gate and the
+unlock reach web-1 through Terraform, as the monitor units did under #8706. The cutover tail
+stays: it installs the same state a future re-cut re-verifies, and it remains the only writer
+*while a cutover owns the freeze* (which is why the exit-17 refusal exists). The bake
+(`soleur-luks-structural-gate`) is unchanged and stays the fresh-host convention; #6931 owns
+the fresh-host boot-unlock path and is deliberately not this work.
+
+**The §(e) gate's honest boundary.** The drop-in + covered-inode `chattr +i` is a tripwire
+for dockerd-class resurrection — a daemon or an unprivileged process cannot write the bare
+root-disk `/mnt/data` while the mapper is absent. It is NOT an adversarial boundary: root
+can still mount over the covered inode or rename it, and nothing here resists that. What
+covers that residual is the daily `luks-monitor` probe's mount-source/identity asserts
+(`findmnt` source == `/dev/mapper/workspaces`, cryptsetup mapper→device link, header UUID),
+which page the drift a mount-over would create.
+
+**The crypttab divergence is recorded, not reconciled.** The baked gate writes `workspaces
+/dev/disk/by-label/workspaces_luks none luks,nofail`; web-1's line is `workspaces
+/dev/disk/by-id/scsi-0HC_Volume_<id> none luks,noauto`. Two deliberate differences:
+
+- **by-id over by-label** — the repo's volume-pinning convention (#6604), Terraform-interpolated
+  from `hcloud_volume.workspaces_luks.id`. Nothing in the cutover writes a `workspaces_luks`
+  LUKS label, so the by-label spelling would not resolve on web-1 today.
+- **`noauto` over `nofail`** — on web-1 the reopen unit owns the unlock, so the
+  `systemd-cryptsetup@workspaces` ask-password job must not enter boot ordering at all: under
+  `nofail` it would sit in a bounded interactive-timeout window every boot and could race the
+  unit's `luksOpen`. crypttab stays declarative — the declared mapping and the manual-recovery
+  handle — while the unit does the work. The baked `nofail` was written for a host whose unlock
+  half is deferred; when #6931 lands, the baked line should be reconciled to this shape.
+
+**Delivery vs. decision.** The decision is true at merge; the *delivery* is verified
+post-apply — the installer's before/after prints must show the single mapper fstab line,
+`crypttab-workspaces-lines=1`, the units enabled, the peek `lsattr -d` showing `i`, and the
+proof run reporting `noop` — the #8706 print contract extended, plus the unchanged daily
+`workspaces-luks-verify` job. A success-path emit deliberately does NOT page: `op` is hardcoded
+to the sole paging op `workspaces-luks-drift`, so success is a journald row under
+`SyslogIdentifier=workspaces-luks-reopen` (registered in `vector.toml`, re-delivered by
+`terraform_data.journald_persistent`), and only an exhausted restart ladder emits one fatal
+envelope naming the failing phase.
+
+**Deviation from `hr-prod-host-config-change-immutable-redeploy`.** This is a multi-file
+in-place delivery on web-1 over SSH through Terraform — the same class as #8706, resting on
+ADR-154's standing exception. Re-examined the same day
+([ADR-154's #9123 note](./ADR-154-repair-the-credential-channel-not-the-host.md#consequences)):
+the probe reads `cx33` **available** in `hel1-dc2` for the first time since 2026-08-01, so the
+exception's expiry question is live and the immutable-redeploy route is re-weighed on #9123
+before this ships — the plan's own instruction when a probe reads ✓.
+
+**The runbook's C15 step is unblocked, not performed.** `workspaces-luks-cutover-6604.md` §4's
+"Boot-path re-canary (C15)" moved from blocked-on-#9123 to delivered-by-#9123: the proof itself
+is unchanged — one supervised restart, then the read-only verify — and it stays the runbook's
+separate gated step, not a step of this delivery.
+
+## Addendum (2026-09-28): retiring the plaintext backstop (CONFIRM_WIPE, #6604 step 7)
+
+**Status stays `adopting`.** It flips to `accepted` only in PR B, after the dispatch below has run and
+the Art. 5(2) destruction record is complete — the #6604 soak sweeper closes that issue on the string
+`accepted` alone.
+
+The soak passed on 2026-09-24. The last open item of this ADR is §(f)'s "terminal mode": until the
+retained plaintext volume (`105149570`) is gone, it holds every workspace as of the 2026-07-23 cutover,
+including ones users have deleted since, and defeats every Art. 17 erasure made on the live volume.
+
+**Decision.** Build the `CONFIRM_WIPE` slot this ADR reserved as a mode of `workspaces-cutover.sh`
+(`wipe_plaintext()`), reached through a separate, environment-gated `wipe` job in
+`workspaces-luks-cutover.yml`, followed by a single-use `workspaces-plaintext-forget.yml` for the
+Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
+`2026-09-28-feat-workspaces-plaintext-volume-wipe-plan.md`; runbook: Sequence step 7.
+
+- **AP-009 (Never delete user data): Deviation — documented carve-out.** The volume is **a superseded
+  copy frozen at the 2026-07-23 cutover** (run 29995956562), which the live LUKS volume was certified to
+  hold at least the contents of (C1 itemized verify, G3 counts, the git fsck differential),
+  green-verified daily since, soak passed 2026-09-24. It is *not* "a duplicate" (the CLEAN_STRAY basis):
+  it differs from the live volume by every deletion since the cutover, which is exactly why it must go.
+  Retaining it is the exposure #6588 exists to close. The accepted residual is stated, not hidden: after
+  the wipe the LUKS volume holds the **only** copy (tracked by #5274, #8625, #6964). W4/W5 exist so the
+  wipe never runs while that sole copy is unrecoverable.
+- **AP-001 (Terraform-only infrastructure provisioning): Deviation.** The delete is an API act, not a Terraform one: Terraform
+  cannot zero a device, and C5 requires a verified full-device zero to precede the delete. State
+  follows by `terraform state rm`, then config by PR B.
+- **The one property.** `blkdiscard -z` runs on exactly one device, the pinned volume, never the device
+  backing `/dev/mapper/workspaces`. The pin (`expected_plaintext_volume_id`) is bound through preflight's
+  API classification, the host's by-id path (W1), path + major:minor + holders + mount + size +
+  hypervisor `ID_SERIAL` + the cutover's recorded plaintext mount source `PLAINTEXT_DEV` (W6, first wipe only; the label
+  premise was false — no artifact labels the retained plaintext, corrected 2026-09-30), every systemd
+  device unit sharing the
+  target's `SysFSPath` (W6b), the success row the job parses, and the forget's state identity.
+  Recoverability of the sole copy is proven at wipe time: the persisted `CANARY_OK` UUID names the live
+  header (W3), the escrowed passphrase opens it (W4), and the off-host header object downloads, carries
+  that UUID, opens with that passphrase, and is byte-identical to a fresh `luksHeaderBackup` (W5 — a UUID
+  survives `luksAddKey`, so a UUID match alone could certify a stale backup).
+- **The zero is proven, not assumed.** `blkdiscard -z` (util-linux >= 2.36 opens O_EXCL; never `-f`)
+  under a 150 MB/s cgroup `io.max` cap (plain bytes, `150000000` — systemd reads a `150M` suffix in base 1000) (not `ionice`, a no-op under `mq-deadline`/`none`), then a full-device
+  O_DIRECT read-back that `cmp` decides (dd's rc alone never classifies), then no signature, and only
+  then `PLAINTEXT_WIPED`. The cap is **proven in force**, not assumed from `systemd-run`'s rc (0 even
+  when io.max cannot apply): a gate running inside the scope reads that scope's own `io.max` for the
+  device's MAJ:MIN and refuses unless `rbps`/`wbps` carry the cap; the zero and the read-back run behind
+  the same gate. The identity is re-asserted AT the act (the by-id link still resolves to the measured
+  kernel name, which still carries the pin's serial), and W6b re-runs after the zero, before the success
+  row. `PLAINTEXT_WIPE_BEGUN` is persisted first, so an interrupted zero resumes on `arm=re_zero`; a
+  zeroed-and-detached volume reports `arm=detached`. Both markers are written **and read back**; an
+  unwritable state file refuses before the zero (or before the success row).
+- **Provenance and completeness.** A first wipe refuses a plaintext whose superblock `Last write time`
+  is later than the cutover froze it (2026-07-23T09:45:00Z; run 29995956562's host step ended 09:40:41Z):
+  such a volume was remounted read-write since and may hold writes that exist nowhere else. As evidence
+  (never a refusal) the rehearsal lists the workspace names on the unmounted plaintext (read-only
+  `debugfs`) that the live mount lacks (`plaintext_only=`); the approver's ask accounts for each.
+- **Post-wipe rollback is refused permanently**, with or without the ack, on either of two witnesses: a
+  persisted wipe marker (`outcome=refused_plaintext_wiped`, the only proof of a wipe), or `/mnt/data`
+  on the mapper with the recorded `PLAINTEXT_DEV` not an intact restore source: invalid, resolving to
+  the mapper, not a block device, or not ext4 (`outcome=refused_plaintext_record_gone`, its own slug:
+  with no marker it is drift or a detach, never a wipe; a lost record reads as gone: it refuses). One
+  predicate, `_plaintext_record_status`, decides "intact" for this check, the dead-man arm and the
+  rollback remount (corrected 2026-09-30, PR #9286 review). The check is the first
+  line of `rollback()` itself, so every caller is covered, and the dead-man fire string carries its own
+  self-contained copy. Arming a dead-man stays unreachable on a cut-over host: `prepare_staging_target`
+  refuses it first.
+
+**Two PRs, because Terraform will not take one.** Measured on Terraform 1.10.5 against a scratch root:
+a narrowed `for_each` over state still holding `["web-1"]` makes every `-refresh=false` plan fail with
+`Instance cannot be destroyed` (`prevent_destroy`, which web-2 keeps); `moved` + `removed` makes every
+`-target`ed plan fail with `Moved resource instances excluded by targeting` until an untargeted apply
+this root never runs; and `state rm` with the OLD config still in place makes any push apply plan
+`+create` of a fresh plaintext volume through `-target` transitivity (`hcloud_firewall_attachment.web`
+→ `hcloud_server.web` → `user_data` → `hcloud_volume.workspaces[each.key]`), conditional or not. Only
+`state rm` then narrowed config plans `No changes`. So: PR A (the mode, no `.tf` change), the dispatch,
+the forget, PR B the same day.
+
+**The delete→PR-B window is closed by a pause, not a new guard.** Both push-apply workflows
+(`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`) are `gh workflow disable`d before the
+dispatch and re-enabled after PR B, with a `manual-rerun` apply. The `wipe` job and the forget
+workflow refuse unless both read `disabled_manually` with nothing queued. A create-counting surface on
+the shared destroy-guard filter would reverse #6919 (test T55 — volume creates were removed from the
+halt because they fired on valid dispatches) and needs an edit to a file a few hundred bytes under its
+size cap; #6919/T55 stands.
+
+**How the 2026-07-19 operand rule is kept.** "Every destructive mode contributes its own operand to the
+`cutover` job's `environment:` expression" holds by construction: the destructive wipe is not reachable
+from `cutover` at all. That job skips on a real wipe, and on a rehearsal delivers `CONFIRM_WIPE` only as
+`wipe_plaintext && dry_run`. The `wipe` job's environment is unconditional.
+
+**Serialization, and why the forget is its own workflow.** The forget runs in its own workflow on
+`terraform-apply-web-platform-host` (the lockless state's sole serializer). The reasons it is separate
+are **credential separation** — the destructive job (root SSH to web-1 and a Hetzner write token) never
+holds the R2 state credentials or runs `terraform init`, and the forget holds nothing that reaches web-1
+— and **idempotent re-runnability**: a failed forget is re-dispatched on its own (`already_forgotten`
+once state is clean) and never re-enters the wipe. Lock order is not the reason: with both appliers
+proven paused and idle, no apply can hold the host group, so nesting it could not deadlock in the
+window; the host group is belt.
+
+**A known gap, recorded, and the trade-off.** The `wipe` job's SSH delivery block is a **copy** of
+`cutover`'s. Byte-stability of the freeze path is not the reason any more — the freeze already ran and a
+cut-over host refuses it. The copy is kept because the two jobs differ where it matters (the wipe job
+fences all host output, keeps the tunnel alive through a silent zero, and parses a strict success row),
+and extracting a shared composite action would put the 2026-07-23-proven cutover delivery behind a new,
+unexercised abstraction. The cost: the rehearsal rides `cutover`'s copy, so the `wipe` job's copy first
+runs on the host at the real dispatch. It is mitigated, not closed: the remote `bash -c` delivery string
+is byte-identical in both (the workflow suite pins it), both copies' bodies are executed against an ssh
+stub, the host half is the same script, and every failure mode of the copy is fail-closed (a red run,
+never a wrong zero).
 
 ## References
 

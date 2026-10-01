@@ -14,7 +14,6 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: (err: unknown) => mockSentry(err),
 }));
 
-// The module under test — does not exist yet (RED).
 import { uploadPendingFiles } from "@/lib/upload-attachments";
 import { validateFiles } from "@/lib/validate-files";
 
@@ -56,6 +55,28 @@ describe("uploadPendingFiles", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+  });
+
+  it("a .md staged via validateFiles (Concierge / first-run path) presigns and uploads as text/markdown", async () => {
+    // The first-run composer stages files through validateFiles, which
+    // canonicalizes a browser-reported "" type; uploadPendingFiles then reads
+    // `file.type` unchanged, so the canonical type reaches presign + the PUT.
+    const raw = new File(["# notes"], "onboarding-notes.md", { type: "" });
+    const { valid } = validateFiles([raw], 0);
+    expect(valid).toHaveLength(1);
+
+    fetchSpy.mockResolvedValueOnce(fakePresignOk(valid[0]!));
+    const refs = await uploadPendingFiles(valid, "conv-1");
+
+    const presignBody = JSON.parse(fetchSpy.mock.calls[0]![1].body as string);
+    expect(presignBody.contentType).toBe("text/markdown");
+    expect(mockUpload).toHaveBeenCalledWith(
+      expect.any(String),
+      valid[0],
+      "text/markdown",
+      expect.any(Function),
+    );
+    expect(refs[0]).toMatchObject({ filename: "onboarding-notes.md", contentType: "text/markdown" });
   });
 
   it("presigns and uploads each file, returning AttachmentRefs in order", async () => {
@@ -186,6 +207,92 @@ describe("uploadPendingFiles", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  describe("cancellation and per-file results (first-run deadline salvage)", () => {
+    it("onUploaded fires once per finished file, in order, with the ref", async () => {
+      const fileA = new File(["a"], "a.png", { type: "image/png" });
+      const fileB = new File(["b"], "b.png", { type: "image/png" });
+      fetchSpy.mockResolvedValueOnce(fakePresignOk(fileA));
+      fetchSpy.mockResolvedValueOnce(fakePresignOk(fileB));
+      const seen: string[] = [];
+      const refs = await uploadPendingFiles([fileA, fileB], "conv-7", {
+        onUploaded: (ref) => seen.push(ref.filename),
+      });
+      expect(seen).toEqual(["a.png", "b.png"]);
+      expect(refs.map((r) => r.filename)).toEqual(["a.png", "b.png"]);
+    });
+
+    it("onUploaded does NOT fire for a failed file", async () => {
+      const fileA = new File(["a"], "a.png", { type: "image/png" });
+      const fileB = new File(["b"], "b.png", { type: "image/png" });
+      fetchSpy.mockResolvedValueOnce(fakePresignErr(500));
+      fetchSpy.mockResolvedValueOnce(fakePresignOk(fileB));
+      const seen: string[] = [];
+      await uploadPendingFiles([fileA, fileB], "conv-8", {
+        onUploaded: (ref) => seen.push(ref.filename),
+      });
+      expect(seen).toEqual(["b.png"]);
+    });
+
+    it("an already-aborted signal presigns nothing and returns []", async () => {
+      const fileA = new File(["a"], "a.png", { type: "image/png" });
+      const ac = new AbortController();
+      ac.abort();
+      const refs = await uploadPendingFiles([fileA], "conv-9", { signal: ac.signal });
+      expect(refs).toEqual([]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mockUpload).not.toHaveBeenCalled();
+    });
+
+    it("aborting after file 1 finishes: file 2 is never presigned and file 1's ref is returned", async () => {
+      const fileA = new File(["a"], "a.png", { type: "image/png" });
+      const fileB = new File(["b"], "b.png", { type: "image/png" });
+      fetchSpy.mockResolvedValueOnce(fakePresignOk(fileA));
+      fetchSpy.mockResolvedValueOnce(fakePresignOk(fileB));
+      const ac = new AbortController();
+      const refs = await uploadPendingFiles([fileA, fileB], "conv-10", {
+        signal: ac.signal,
+        onUploaded: () => ac.abort(),
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(mockUpload).toHaveBeenCalledTimes(1);
+      expect(refs.map((r) => r.filename)).toEqual(["a.png"]);
+    });
+
+    it("aborting mid-PUT aborts the in-flight XHR, adds no ref and reports nothing to Sentry", async () => {
+      const fileA = new File(["a"], "a.png", { type: "image/png" });
+      fetchSpy.mockResolvedValueOnce(fakePresignOk(fileA));
+      const xhrAbort = vi.fn();
+      let rejectPut!: (e: Error) => void;
+      mockUpload.mockImplementationOnce(() => ({
+        promise: new Promise<void>((_, rej) => (rejectPut = rej)),
+        xhr: { abort: xhrAbort } as unknown as XMLHttpRequest,
+      }));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const ac = new AbortController();
+        const onUploaded = vi.fn();
+        const p = uploadPendingFiles([fileA], "conv-11", { signal: ac.signal, onUploaded });
+        await vi.waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
+        ac.abort();
+        expect(xhrAbort).toHaveBeenCalledTimes(1);
+        rejectPut(new Error("Upload cancelled"));
+        expect(await p).toEqual([]);
+        expect(onUploaded).not.toHaveBeenCalled();
+        expect(mockSentry).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("the presign fetch carries the signal so an in-flight presign is cancelled too", async () => {
+      const fileA = new File(["a"], "a.png", { type: "image/png" });
+      fetchSpy.mockResolvedValueOnce(fakePresignOk(fileA));
+      const ac = new AbortController();
+      await uploadPendingFiles([fileA], "conv-12", { signal: ac.signal });
+      expect((fetchSpy.mock.calls[0]![1] as RequestInit).signal).toBe(ac.signal);
+    });
   });
 });
 

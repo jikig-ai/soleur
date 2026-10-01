@@ -243,6 +243,58 @@ else
   no "a missing inventory baseline did not fail closed (rc=$MON_RC): ${MON_OUT:0:300}"
 fi
 
+# (o2)–(o6) #9123 DELIVERED-STATE asserts — the daily probe re-checks what the boot-unlock
+# installer left behind (fstab exactly-one-mapper, the §(e) covered-inode flag). The harness
+# seeds a canonical fixture fstab + healthy peek attrs in mon_prepare/mon_run; each failing arm
+# below rewrites the fixture or sets MON_PEEK_*. Every reason must exit 1 via emit_and_die
+# (at-rest drift class in the verify workflow's classifier).
+mon_prepare "$PROBE"
+: > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mnt_data_lines'; then
+  ok "fstab with zero /mnt/data entries -> fstab_mnt_data_lines (rc=1, drift)"
+else
+  no "empty fstab did not fail fstab_mnt_data_lines (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+printf '/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2\n/dev/mapper/workspaces /mnt/data ext4 ro 0 2\n' > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mnt_data_lines'; then
+  ok "fstab with TWO /mnt/data entries -> fstab_mnt_data_lines (exactly-one assert)"
+else
+  no "duplicate fstab line did not fail fstab_mnt_data_lines (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+printf '/dev/disk/by-label/WRONG /mnt/data ext4 defaults,nofail 0 2\n' > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mapper_line_missing'; then
+  ok "a non-mapper /mnt/data fstab line -> fstab_mapper_line_missing (rc=1, drift)"
+else
+  no "wrong-source fstab did not fail fstab_mapper_line_missing (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+MON_PEEK_FAIL=1 mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'covered_inode_peek_failed'; then
+  ok "peek bind failure -> covered_inode_peek_failed (probe-integrity, proves nothing)"
+else
+  no "a failed peek did not fail covered_inode_peek_failed (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+MON_PEEK_ATTRS='---------------e------' mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'covered_inode_not_immutable'; then
+  ok "covered inode WITHOUT +i -> covered_inode_not_immutable (rc=1, drift)"
+else
+  no "non-immutable covered inode did not fail covered_inode_not_immutable (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+# Positive control for the new asserts: the default fixture fstab + healthy attrs keep the
+# probe green — run_monitor_case "$PROBE" (no flags) in (m) above already proves the healthy
+# arm end-to-end through them.
+
 # (p)(q)(r) INVENTORY, on ONE fixture exercised three ways. The fixture carries exactly the four
 # things session-metrics.ts excludes, plus a stray regular file: an unfiltered `ls | wc -l` reads 6
 # here and would certify a real shrink green, which is the whole reason parity is load-bearing.
@@ -376,20 +428,93 @@ shopt -q dotglob && no "wl_count_workspace_dirs leaked dotglob=on to the caller"
   || ok "wl_count_workspace_dirs restores the caller's glob state"
 rm -rf "$wc_root"
 
-# (x) DEAD-MAN OBSERVABILITY (#6812). A successful remount silently undid the 2026-07-20 cutover;
-# the fire, the arm, the disarm, and both remount outcomes must now each emit a marker.
+# (x) DEAD-MAN OBSERVABILITY (#6812, #9045, #9098). A successful remount silently undid the 2026-07-20
+# cutover; the fire, the arm, the disarm, and both remount outcomes must each emit a marker. #9045
+# added the arm's refusal/failure rows, the disarm's verified-failure row, the unarmed-rollback row
+# and one outcome row per abort, and retired the false `reason=canary_passed` (rollback() used to
+# log it). Every row shares the full prefix below, so ONE Better Stack grep finds the whole story.
+# #9098 K: `_deadman_row` now PREPENDS that prefix itself and call sites pass `result=…`, so the
+# fire rows (literal, inside the self-contained systemd-run string) and the _deadman_row rows are
+# checked separately. Every check reads COMMENT-STRIPPED source: a call commented out is gone.
+DM_PFX='SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman'
+DM_SRC="$(grep -vE '^[[:space:]]*#' "$CUT")"
 for pat in \
   "result=fired reason=timer_elapsed" \
-  "result=armed reason=freeze_engaged" \
-  "result=disarmed reason=canary_passed" \
   "result=ok reason=plaintext_remounted" \
-  "result=fail reason=remount_failed"; do
-  if grep -qF "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman $pat" "$CUT"; then
+  "result=fail reason=remount_failed" \
+  "result=fail reason=mapper_close_failed" \
+  "result=fail reason=refused_plaintext_wiped" \
+  "result=fail reason=refused_plaintext_record_gone"; do
+  if grep -qF "$DM_PFX $pat" <<<"$DM_SRC"; then
+    ok "dead-man FIRE emits marker: $pat"
+  else
+    no "dead-man FIRE MISSING marker ($pat) — the #6812 blind spot is not closed"
+  fi
+done
+if grep -qF "local row=\"$DM_PFX \$1\"" <<<"$DM_SRC"; then
+  ok "_deadman_row prepends the full dead-man prefix to every row"
+else
+  no "_deadman_row does not prepend '$DM_PFX' — its rows would not be found by the one prefix grep"
+fi
+for pat in \
+  "result=armed reason=freeze_engaged" \
+  "result=arm_refused reason=already_armed" \
+  "result=arm_refused reason=fire_in_progress" \
+  "result=arm_refused reason=plaintext_dev_unrestorable" \
+  "result=arm_failed reason=systemd_run_refused" \
+  "result=arm_failed reason=timer_not_waiting" \
+  'result=disarmed reason=${reason}' \
+  'result=disarm_failed reason=${reason} check=${check}' \
+  "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
+  "result=not_armed reason=rollback_engaged prior=" \
+  "result=already_disarmed reason=rollback_engaged" \
+  'result=cutover_aborted outcome=${outcome}${mode}${abnormal}${fields}${detail}' \
+  'result=cutover_aborted outcome=${outcome} mode=rollback' \
+  'result=cutover_aborted outcome=${2} mode=rollback'; do
+  if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
   else
     no "dead-man MISSING marker ($pat) — the #6812 blind spot is not closed"
   fi
 done
+# The closed OUTCOME vocabulary of cleanup() (#9098 B): each value is assigned somewhere, and the
+# abnormal-exit field exists. A renamed outcome would silently orphan the runbook's triage row.
+for o in rolled_back rollback_stacked rollback_remount_failed post_canary_luks_retained post_canary_restart_failed \
+         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted refused_plaintext_wiped \
+         refused_plaintext_record_gone; do
+  if grep -qE "(^|[;[:space:]])outcome=${o}([;[:space:]]|\$)" <<<"$DM_SRC"; then
+    ok "cleanup() outcome vocabulary carries outcome=$o"
+  else
+    no "cleanup() outcome=$o is never assigned — its runbook row is orphaned"
+  fi
+done
+for rr in 'rollback_refused_plaintext_wiped refused_plaintext_wiped' 'rollback_refused_plaintext_record_gone refused_plaintext_record_gone' \
+          'rollback_refused_post_cutover refused_post_cutover'; do
+  if grep -qE "^[[:space:]]*_rollback_refuse ${rr} \"" <<<"$DM_SRC"; then
+    ok "ROLLBACK-mode refusal '${rr%% *}' goes through _rollback_refuse with outcome=${rr##* } (never a false pre_freeze)"
+  else
+    no "ROLLBACK-mode refusal '${rr%% *}' does not use _rollback_refuse with outcome ${rr##* } — its row would read pre_freeze"
+  fi
+done
+if grep -qF 'abnormal=" abnormal_exit=1"' <<<"$DM_SRC"; then
+  ok "cleanup() marks a signal/incomplete exit with abnormal_exit=1"
+else
+  no "cleanup() never emits abnormal_exit=1 — a signal-driven abort is indistinguishable from a die"
+fi
+# Each reason of the CLOSED disarm vocabulary has exactly its call site (comment-stripped), and the
+# retired reason is gone: `canary_passed` described a rollback as a pass.
+for site in "disarm_dead_man host_canary_passed" "disarm_dead_man rollback_engaged" "disarm_dead_man arm_aborted"; do
+  if grep -qE "(^|[[:space:];&|{])${site}([[:space:]]|;|\$)" <<<"$DM_SRC"; then
+    ok "dead-man disarm call site present: $site"
+  else
+    no "dead-man disarm call site MISSING: $site — that reason can no longer be emitted"
+  fi
+done
+if grep -qE '(^|[^_])canary_passed' <<<"$DM_SRC"; then
+  no "dead-man still carries the retired bare canary_passed reason (a rollback logged as a pass)"
+else
+  ok "dead-man carries no retired reason=canary_passed"
+fi
 
 # (y) VERDICT-LINE ANCHOR PARITY. The verify workflow's positive control greps the probe output with
 # `^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ready=true `. That anchor depends on log()'s
@@ -427,6 +552,17 @@ if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
   ok "healthy probe PUSHES the heartbeat and exits 0 (positive control for the two fatal arms)"
 else
   no "healthy probe did not push the heartbeat (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:200}"
+fi
+
+# (t1b) WIRE assert (#9245) — the argv log proves cryptsetup was ASKED; this proves the
+# passphrase actually ARRIVED. The cryptsetup stub drains stdin into $CALLS.escrow-stdin;
+# without the drain the file is absent and this fails DETERMINISTICALLY — not at the
+# scheduler's discretion. `:-` (not `-`) keeps the compare discriminating even against an
+# exported-empty MON_KEY — `"" = ""` would read delivery that never happened.
+if [ "$(cat "$CALLS.escrow-stdin" 2>/dev/null)" = "${MON_KEY:-k}" ]; then
+  ok "escrow passphrase reached cryptsetup on the wire (\$CALLS.escrow-stdin == MON_KEY)"
+else
+  no "escrow passphrase never reached cryptsetup — stdin undrained (captured: $(cat "$CALLS.escrow-stdin" 2>/dev/null || echo '<absent>'))"
 fi
 
 # (t2) ABSENT URL => fatal. The exact state #6808 existed to remove.

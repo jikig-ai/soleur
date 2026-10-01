@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { kbGithubUrlPath } from "@/server/kb-github-path";
@@ -14,11 +14,17 @@ import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import path from "path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
-import { KB_UPLOAD_EXTENSIONS } from "@/lib/kb-constants";
+import {
+  KB_MAX_FILE_SIZE,
+  KB_UPLOAD_EXTENSIONS,
+  isReservedKbUploadFilename,
+} from "@/lib/kb-constants";
 import {
   MAX_AGENT_READABLE_PDF_SIZE,
+  fileExtension,
   isPdfAttachment,
 } from "@/lib/attachment-constants";
+import { verifiedUserId } from "@/server/request-auth";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -56,12 +62,10 @@ export async function POST(request: Request) {
     );
   }
 
-  // Authentication
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  // Authentication — middleware-verified identity (x-soleur-auth-user-id);
+  // absent header falls back to getUser() inside verifiedUserId (fail-closed).
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -75,7 +79,7 @@ export async function POST(request: Request) {
   // CALLER's `users.repo_url`/installation, which is the empty solo row for an
   // invited member uploading to a shared workspace → "No repository connected".
   const serviceClient = createServiceClient();
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     return NextResponse.json(
       { error: access.status === 404 ? "Workspace not found" : "Workspace not ready" },
@@ -86,7 +90,7 @@ export async function POST(request: Request) {
   // kb_files attribution write below all key to ONE membership-resolved id
   // (no divergence under a stale-claim self-heal; no redundant resolution).
   const repoMeta = await resolveActiveWorkspaceRepoMeta(
-    user.id,
+    userId,
     serviceClient,
     access.activeWorkspaceId,
   );
@@ -115,7 +119,7 @@ export async function POST(request: Request) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const errName = err instanceof Error ? err.name : "Unknown";
     logger.error(
-      { event: "kb_upload_formdata_error", errName, errMsg, userId: user?.id },
+      { event: "kb_upload_formdata_error", errName, errMsg, userId },
       "kb/upload: formData parsing failed",
     );
     Sentry.captureException(err);
@@ -137,7 +141,7 @@ export async function POST(request: Request) {
   }
 
   // Validate filename
-  const { valid: nameValid, sanitized: sanitizedName, error: nameError } =
+  const { valid: nameValid, sanitized: rawSanitizedName, error: nameError } =
     sanitizeFilename(file.name);
   if (!nameValid) {
     return NextResponse.json(
@@ -147,11 +151,37 @@ export async function POST(request: Request) {
   }
 
   // Validate extension
-  const ext = sanitizedName.split(".").pop()?.toLowerCase();
+  const ext = fileExtension(rawSanitizedName);
   if (!ext || !ALLOWED_EXTENSIONS.has(ext)) {
     return NextResponse.json(
       { error: `Unsupported file type: .${ext || "unknown"}` },
       { status: 415 },
+    );
+  }
+
+  // Store a markdown extension lowercased: kb-reader and classifyByExtension
+  // are case-sensitive, so `NOTES.MD` would otherwise render as a dead
+  // download. Other types keep their existing stored name. `ext` is the text
+  // after the last dot, so the slice is exact.
+  const sanitizedName =
+    ext === "md"
+      ? `${rawSanitizedName.slice(0, -ext.length)}${ext}`
+      : rawSanitizedName;
+
+  // Reserved instruction files (CLAUDE.md, AGENTS.md, ...) are auto-loaded by
+  // agent CLIs; a co-member must not be able to drop one into the shared KB.
+  if (isReservedKbUploadFilename(sanitizedName)) {
+    return NextResponse.json({ error: "Reserved filename" }, { status: 400 });
+  }
+
+  // Markdown is read whole by kb-reader, which skips files over
+  // KB_MAX_FILE_SIZE — refuse what could never be rendered.
+  if (ext === "md" && file.size > KB_MAX_FILE_SIZE) {
+    return NextResponse.json(
+      {
+        error: `Markdown files cannot exceed ${KB_MAX_FILE_SIZE / 1024 / 1024}MB`,
+      },
+      { status: 413 },
     );
   }
 
@@ -220,6 +250,17 @@ export async function POST(request: Request) {
     );
   }
 
+  // The KB PATCH/DELETE endpoints refuse to modify markdown (authored docs are
+  // edited elsewhere), so an upload must not be a way around that: a markdown
+  // file may be CREATED here, never REPLACED. No `sha` is honoured for it, and
+  // an existing file is a plain conflict with no overwrite offered.
+  if (ext === "md" && sha) {
+    return NextResponse.json(
+      { error: "Markdown files cannot be replaced through upload" },
+      { status: 400 },
+    );
+  }
+
   try {
     // If no sha provided, check if file exists (duplicate detection)
     if (!sha) {
@@ -228,6 +269,17 @@ export async function POST(request: Request) {
           userData.github_installation_id,
           `/repos/${owner}/${repo}/contents/${urlFilePath}`,
         );
+        // Markdown: refuse without offering an overwrite (no sha in the body).
+        if (ext === "md") {
+          return NextResponse.json(
+            {
+              error: "A markdown file with this name already exists",
+              code: "DUPLICATE_PROTECTED",
+              path: filePath,
+            },
+            { status: 409 },
+          );
+        }
         // File exists — return 409 with sha for client to use for overwrite
         return NextResponse.json(
           {
@@ -247,7 +299,7 @@ export async function POST(request: Request) {
     }
 
     const payloadBuffer = await prepareUploadPayload(file, sanitizedName, {
-      userId: user.id,
+      userId,
       path: filePath,
     });
 
@@ -277,7 +329,7 @@ export async function POST(request: Request) {
       userData.github_installation_id,
       userData.workspace_path,
       logger,
-      { userId: user.id, op: "upload" },
+      { userId, op: "upload" },
     );
     if (!sync.ok) {
       return NextResponse.json(
@@ -304,7 +356,7 @@ export async function POST(request: Request) {
         await serviceClient.from("kb_files").upsert(
           {
             workspace_id: wsId,
-            user_id: user.id,
+            user_id: userId,
             file_path: filePath,
             filename: sanitizedName,
             visibility: "workspace",
@@ -314,13 +366,13 @@ export async function POST(request: Request) {
       }
     } catch (kbFilesErr) {
       logger.warn(
-        { err: kbFilesErr, userId: user.id, path: filePath },
+        { err: kbFilesErr, userId, path: filePath },
         "kb/upload: kb_files INSERT failed (non-fatal)",
       );
     }
 
     logger.info(
-      { event: "kb_upload", userId: user.id, path: filePath },
+      { event: "kb_upload", userId, path: filePath },
       "kb/upload: file uploaded successfully",
     );
 
@@ -345,7 +397,7 @@ export async function POST(request: Request) {
 
     if (isTimeout) {
       logger.error(
-        { err: error, userId: user.id, path: filePath },
+        { err: error, userId, path: filePath },
         "kb/upload: GitHub API connect timeout",
       );
       return NextResponse.json(
@@ -356,7 +408,7 @@ export async function POST(request: Request) {
 
     if (error instanceof GitHubApiError) {
       logger.error(
-        { err: error, userId: user.id, path: filePath },
+        { err: error, userId, path: filePath },
         "kb/upload: GitHub API error",
       );
       return NextResponse.json(
@@ -369,7 +421,7 @@ export async function POST(request: Request) {
     }
 
     logger.error(
-      { err: error, userId: user.id },
+      { err: error, userId },
       "kb/upload: unexpected error",
     );
     return NextResponse.json(

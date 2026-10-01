@@ -8,7 +8,6 @@ applies_to:
   - apps/web-platform/infra/seo-config-rules.tf
   - apps/web-platform/infra/dns.tf
   - apps/web-platform/server/inngest/functions/cron-gh-pages-cert-reissue.ts
-  - apps/web-platform/server/inngest/functions/cron-gh-pages-cert-state.ts
 related_issues: [6691, 6698, 6657, 7539]
 related_prs: [7584, 7620]
 ---
@@ -48,8 +47,8 @@ never affected by anything on this page.**
 > - **The manual path cannot succeed either.** Eligibility requires the hostname to resolve to
 >   GitHub's anycast IPs; post-cutover it resolves to Cloudflare Pages, and repointing it to make
 >   a certificate issue *is* the rollback, not a renewal.
-> - `cron-gh-pages-cert-state`'s daily `0 3 * * *` trigger is **removed** (manual-trigger arm
->   retained), so the `[cert-poll]` issue that used to instruct a reader to fire the routine no
+> - `cron-gh-pages-cert-state` is **deleted** (2026-09-30, #9303; its daily trigger was removed
+>   earlier), so the `[cert-poll]` issue that used to instruct a reader to fire the routine no
 >   longer files itself. If you arrived here from an old one, stop.
 >
 > **How to tell which side of the cutover you are on**, without a dashboard:
@@ -260,13 +259,18 @@ with `soleur:trigger-cron`:
 
 ## Detection
 
+> **Superseded 2026-09-30 (#9303):** `cron-gh-pages-cert-state` is deleted, not merely
+> manual-trigger-only, and its `cron/gh-pages-cert-state.manual-trigger` event has no handler.
+> Nothing detects origin-certificate expiry any more, on purpose (ADR-194): the origin
+> certificate is abandoned, not renewed. Sending that event now returns 400 "Event not allowlisted", so the "Fire it with" instruction in the 2026-08-20 note below no longer works; that note is kept as the record it was.
+
 > **Superseded 2026-08-20 (#7640):** the daily `0 3 * * *` trigger described in this
 > section was REMOVED by the ADR-194 substrate PR; `cron-gh-pages-cert-state` is
 > manual-trigger-only, and its Sentry monitor carries `enabled = false`. Read the
 > steps below as the pre-cutover behaviour. Fire it with
 > `cron/gh-pages-cert-state.manual-trigger` via POST /api/internal/trigger-cron.
 
-`cron-gh-pages-cert-state` ran daily at 03:00 UTC (schedule now disarmed) and:
+`cron-gh-pages-cert-state` ran daily at 03:00 UTC (its schedule was later removed and the routine deleted, 2026-09-30) and:
 
 - files/updates a `[cert-poll]` issue below **21 days** to expiry (a log), and
 - **pages via Sentry** below **7 days** when the cert is wedged in a state ACME

@@ -39,6 +39,12 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
   rotated, by design: 5.3b-i (#8036 item 1d) removed the last host boot sites that read
   `GHCR_READ_TOKEN`, and B3 intends no host to read GHCR. The revoked value stays in Doppler
   `soleur/prd` until 5.4.
+- **5.3b-iii is done at template level** (2026-09-28, #8714): the cosign verifier pulls from gcr.io
+  (part 1), and the registry host boots zot from a pinned release asset with ghcr.io denied
+  (part 2). See the two "Amendment 2026-09-28 (#8714 step 5.3b-iii, …)" sections. 5.4 is done
+  (#9071). The web hosts deny ghcr.io as well (2026-09-30, #9169; see "Amendment 2026-09-30
+  (#9169)"); bridge-network containers and the `docker.pkg.github.com` alias are the remaining
+  gaps (#9275).
 
 This ADR flips to **accepted** (task 5.6) when 5.3b-iii and 5.4 are also complete (5.3b-i is done).
 
@@ -1633,6 +1639,28 @@ implies no second inngest replace.
   #8651's probe grades that script's output until #8651 closes, so its format must not move first.
   They are now a tripwire that cannot fire.
 
+### Addendum — 2026-09-28 (#8562): for inngest, a zot miss ends the attempt, not the boot
+
+*A dated note on this amendment; the text above is not edited.* The Decision bullet "Inngest: a
+new stage, `inngest_pull_fatal`, at level **fatal** … then the pull item exits non-zero" is
+narrowed **in the template** by
+[ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md):
+
+- The inngest pull no longer runs in a `runcmd` item. It runs in
+  `/usr/local/bin/soleur-inngest-provision`, under `soleur-inngest-provision.service`
+  (`Restart=on-failure`, `StartLimitIntervalSec=0`, a `RestartSec=120` delay that backs off to
+  15 minutes). A zot miss still emits `inngest_pull_fatal` at fatal on both channels, now with
+  `attempt=N`, and still fails; what it ends is the **attempt**. The unit retries until one
+  attempt succeeds and writes its latch.
+- zot stays the sole boot-time read path, and there is still no GHCR fallback behind the miss.
+  The `IREF`/`ZIREF` pin-carrier literals and their count of exactly 2 are unchanged.
+- `zot-mirror-fallback-rate` is unchanged. Because every missed attempt is a new event, a host
+  that stays dark now pages at the rule's 23-minute throttle instead of once.
+- **The live inngest host keeps the old behavior until its next replace.** `hcloud_server.inngest`
+  takes the new template only through `inngest-host-replace` plus `op=resume` (ADR-100,
+  replace-only delivery). Until then a zot miss on a fresh boot of the current host would still
+  end that boot. The web half of this amendment is untouched.
+
 ## Amendment 2026-09-27 (#8714) — 5.4: the GHCR token minter and the host-side GHCR credential plumbing are retired
 
 ### Decision
@@ -1675,3 +1703,205 @@ recorded.
   absence from the registry is not read as `registry_drift`.
 - **5.3b-iii and 5.6 are unchanged** (the anonymous `ghcr.io` pulls, the egress allow, and this
   ADR's status flip).
+
+## Amendment 2026-09-28 (#8714 step 5.3b-iii, part 1) — the cosign verifier leaves ghcr.io
+
+This supersedes the cosign half of the 2026-09-24 amendment's "The anonymous `ghcr.io` pulls … are
+unchanged" bullet. The zot half is part 2 (PR 2b of the same step).
+
+- **What moved.** `ci-deploy.sh` `COSIGN_IMAGE` now names
+  `gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870`.
+  That is the Sigstore project's own registry, at the **same manifest digest** as the former
+  `ghcr.io/sigstore/cosign/cosign` ref. Measured 2026-09-28: an anonymous pull under the exact
+  `COSIGN_ANON_CONFIG` (#8036 1a) ran `v3.1.1`, and both refs resolved to one local image ID. The
+  digest pin, not the registry, is the trust anchor, so no verification semantics change.
+- **Why this is not Alternatives row 6.** Row 6 rejects a managed registry for **our own images**.
+  This is a third-party verifier image fetched from its publisher, byte-identical and
+  digest-pinned. No Soleur image moves, and no credential is involved.
+- **The new dependency, stated plainly.** gcr.io becomes a per-deploy dependency of every web host,
+  anonymous and free. It sees the hosts' public IPs (it is Google infrastructure), and it is the
+  domain of Google's deprecated Container Registry product. If it stops serving this image, or
+  rate-limits it, every deploy logs `IMAGE_VERIFY_FAIL result=cosign_absent`. In `warn` mode that
+  deploy proceeds unverified, exactly as a ghcr.io outage did before. The classifier now reads
+  docker's measured pull-error shape for that case. The digest repeats twice, so the old
+  `tail -c 400` read missed it. The WARN→ENFORCE flip (#6129) inherits this dependency. Before
+  flipping, confirm Sigstore still publishes this digest here, or re-source it.
+- **C4.** The last `hetzner -> ghcr` edge is deleted and re-targeted as `hetzner -> sigstore` (an
+  image-distribution edge; verify stays offline). The zot boot image's `zotRegistry -> projectZot`
+  edge is unchanged until part 2.
+- **Also shipped here.** The mirror that part 2 consumes: `zot-image-oci-archive.sh` and
+  `.github/workflows/zot-image-mirror.yml`. They publish the exact upstream zot blobs as the
+  immutable prerelease `zot-image-<version>-<D12>`. No host reads it yet.
+
+## Amendment 2026-09-28 (#8714 step 5.3b-iii, part 2) — the registry host boots zot from a pinned release asset; ghcr.io is denied there
+
+This completes the 2026-09-24 amendment's "The anonymous `ghcr.io` pulls … are unchanged" bullet
+for the zot half. The cosign half moved in part 1 (the amendment above).
+
+- **What the host boots.** `cloud-init-registry.yml` no longer runs `'${zot_image}'` from ghcr.io.
+  `zot-image-fetch.sh` downloads the prerelease asset `zot-image-<version>-<D12>` /
+  `zot-linux-amd64-<version>.oci.tar` that part 1 publishes. It runs from its own runcmd entry under
+  `env -i`, because runcmd is one `/bin/sh` script and earlier entries export the Doppler service
+  token into it. It then:
+  1. refuses unless the tarball's sha256 is `T` (`zot_mirror_asset_sha256_amd64`);
+  2. refuses unless the tarball's manifest blob hashes to `D` (the digest in the upstream pin
+     `zot_image_amd64`) and names `C` (`zot_config_digest_amd64`) as its config. This makes `C` a
+     consequence of `D` on the host itself, not a second free literal;
+  3. runs `docker load` (bounded by a timeout) with its stdout sent to stderr;
+  4. refuses unless the loaded image ID is `sha256:<C>` (the classic image store) or `sha256:<D>`
+     (the containerd store).
+
+  zot runs **by that verified ID**, never by a registry reference. Each outcome records a verdict and
+  an exit code, which the heartbeat ships as `zot_image_fetch` / `zot_image_fetch_rc`. The verdict table
+  and recovery live in `runbooks/registry-host-replace-dispatch.md` § "zot boot image (#8714)".
+  `zot_image_digest` still reports D's first 12 hex, now mapped from the running ID.
+- **Why the bytes are upstream's.** The asset carries upstream D's manifest and blobs byte for
+  byte, so docker verifies layer content against `C`/`D` on load. `T` is anchored outside the
+  commit, twice: on every PR touching this path, the `rehearse` job in `zot-image-mirror.yml` rebuilds
+  the archive from upstream D and requires it to equal `T`, then boots the rendered fetch against the
+  real asset under the classic store, the containerd store and Ubuntu's own `docker.io`; and the host
+  itself refuses a `C` that D's manifest does not name. The trust root is still project-zot at D, as
+  before. What is new is GitHub's availability of one asset. Preflight P6 guards it on every route that
+  creates a registry host (ADR-169 amendment 2026-09-28), and rule-audit probes it on its cron. A
+  published release is immutable, so a deleted one cannot be re-created under its tag; the recovery is
+  to revert the pin.
+- **The ghcr.io deny.** The first runcmd entry sinkholes `ghcr.io` and
+  `pkg-containers.githubusercontent.com` to `0.0.0.0`/`::` in `/etc/hosts`, and in cloud-init's
+  hosts template when present. This is a name-resolution deny, not a firewall rule. The heartbeat
+  reports `ghcr_blocked` (1 when ghcr.io resolves only to the sinkhole). So `state_status=running`
+  together with `ghcr_blocked=1` is a live proof that the host booted and serves without ghcr.io.
+- **"The GHCR egress allow" had no object.** #8714 names removing a GHCR egress allow. Measured
+  2026-09-28: no hcloud firewall in this root has an `out` rule (5 rules, all `in`), and the
+  web-host container egress allowlist (`cron-egress-allowlist*.txt`) names no GHCR host. Host
+  egress is open, so there was no allow to remove. The step becomes an enforced, observed deny on
+  the one host whose boot needed ghcr.io. Web hosts still resolve ghcr.io. Nothing on them pulls
+  from it any more (cosign moved in part 1; app images come from zot), and a web-host deny is a
+  tracked follow-up. The C4 edge `zotRegistry -> projectZot` becomes `zotRegistry -> github`
+  (the asset fetch) plus `github -> projectZot` (the mirror workflow's build).
+
+  > **Superseded 2026-09-30 (#9169):** the web hosts now deny ghcr.io too (see "Amendment
+  > 2026-09-30 (#9169)"). The container-allowlist sentence above is true by NAME only: the CIDR
+  > half (`cron-egress-allowlist-cidr.txt`) admits `140.82.112.0/20` and `185.199.108.0/22`,
+  > which contain ghcr.io and pkg-containers.githubusercontent.com, so bridge-network containers
+  > can reach GHCR (#9275).
+- **amd64 only.** A precondition on `hcloud_server.registry` refuses an arm64 `registry_server_type`,
+  because no arm64 asset is mirrored. `zot_image_arm64` stays as the upstream record.
+- **Status.** 5.3b-iii is complete at template level once this merges. The live proof is the first
+  post-replace `SOLEUR_ZOT_DISK` row with a new `boot_id`, `zot_image_fetch=ok` and
+  `ghcr_blocked=1`. The ADR stays **Adopting**; 5.6 flips it.
+
+## Amendment 2026-09-29 (#9097) — the soak's inngest exercise evidence is the dedicated host's boot beacon, not a deploy pull
+
+`zot-soak-6122.sh` arm (b) used to require `MIN_SAMPLE` zot-served deploy pulls per image,
+including `registry:"zot" image:"inngest"`. The sole emitter of that event is `ci-deploy.sh
+deploy inngest`, sent only by a manual `deploy-inngest-image.yml` dispatch to the co-located web
+scheduler — quiesced since the 2026-09-15 dedicated-host cutover. The arm could only ever read 0,
+so the soak could never PASS even on a healthy fleet.
+
+Arm (b) is now two-legged: `MIN_SAMPLE` zot-served **web** deploy pulls (unchanged — the rolling
+deploy still emits `image:"web"`), AND `>= 1` dedicated-host `stage:"inngest_zot"
+host_name:"soleur-inngest"` boot event in the window (the already-fetched `INNGEST_ZOT`
+denominator count). The inngest floor is hardcoded at 1 — the dedicated host pulls zot only at
+boot, once per host-replace, so a per-image pull count or a `MIN_SAMPLE` floor would recreate the
+unreachable arm. Vacuity is unchanged: a zero-evidence window still fails at the
+`no-inngest-freshboot-evidence` denominator and again at arm (b), never exits 0, never reads
+TRANSIENT.
+
+This changes what evidence arm (b) samples, not what the soak authorizes: a PASS still requires
+zero watched events, zero retired-name events, both blocker issues closed-as-completed, and —
+before acting on it — the Better Stack corroboration named on the PASS line. 5.6's gate and the
+#6129 flip are unaffected.
+
+## Amendment 2026-09-30 (#9169) — the web hosts deny ghcr.io
+
+The registry host's deny (part 2 above) now covers both web hosts, with the same text and the same
+`ghcr_blocked` semantics.
+
+- **Three copies, one text.** The registry's runcmd entry (copy R) is copied byte for byte into
+  `cloud-init.yml` as runcmd[1], right after the #6090 trap arm (copy A: fresh and replaced
+  hosts), and into `server.tf` `local.ghcr_deny_sh` (copy B: the running hosts).
+  `web-ghcr-deny.test.sh` asserts all three are identical on both `web_tunnel_connector` render
+  arms, and the G1 census admits the deny line only as part of a whole entry equal to it.
+- **Delivery route: an in-place Terraform re-provision, not a replace.** web-1 cannot be replaced:
+  ADR-148 refuses it by name (§"web-1 is refused by name"), and a `-replace` also destroys first
+  on a server type with no guaranteed stock. web-1 gets the deny from
+  `terraform_data.zot_consumer_probe_install` (`apply-web-platform-infra.yml`); web-2 from
+  `terraform_data.deploy_pipeline_fix_web2` (`apply-deploy-pipeline-fix.yml`). web-2 could be
+  replaced under ADR-148, and a replace would add one thing: a live boot proof of copy A. It was
+  declined because copy A is proven offline by `web-ghcr-deny.test.sh` and a replace adds a
+  destroy-first host cycle; copy A's first live boot is the next web-host replace. Both resources hash the deny and its assertion in `triggers_replace` and
+  run them in a separate, last, secret-free `remote-exec` block: a sensitive value in a
+  provisioner's config hides its output, and a failed run leaves its script in `/root`. The web-1
+  route retires with active-active Phase 5 (ADR-143); copy A is the end state.
+- **Apply-time proof.** `local.ghcr_deny_assert_sh` requires both names to resolve, and only to
+  `0.0.0.0` / `::`. Otherwise it prints `FATAL: … (#9169). Route back: …` and fails the apply. An
+  unresolvable name fails it too.
+- **Per-release field, not a heartbeat.** No periodic web heartbeat reaches both running hosts.
+  `ci-deploy.sh` is the one host script `apply-deploy-pipeline-fix.yml` delivers to both hosts
+  (web-1 through the `deploy_pipeline_fix` webhook push, web-2 through `deploy_pipeline_fix_web2`;
+  on web-1 the marker and the deny therefore arrive through different workflows), so it logs
+  `GHCR_DENY ghcr_blocked=<1|0|unknown>` after `DEPLOY_SCRIPT_SHA` on every invocation. The
+  classifier matches the registry's, probes `ghcr.io` only, and fails open (`timeout 5`). The
+  evidence is as old as the last release. `pkg-containers.githubusercontent.com` is proven at
+  apply time only.
+- **Scope.** Host processes and host-network containers are covered: dockerd pulls, and the cosign
+  verifier, which runs `--network host` and so reads the host's `/etc/hosts`. Bridge-network
+  containers (the app, agent sandboxes) are NOT covered: they resolve through DNS, and the container
+  CIDR allowlist admits GitHub's frontend ranges. The `docker.pkg.github.com` alias is not denied
+  either, because adding it means editing `cloud-init-registry.yml`, which forces a registry-host
+  replace. Both are #9275. This is an accident guard on name resolution, not an egress control:
+  an IP literal, a client that bypasses NSS (DoH, `dig @…`), a `--network host` container created
+  before the deny, or a root edit of `/etc/hosts` all get past it. Two narrower gaps are accepted
+  as well: the idempotency grep keys on the `0.0.0.0` line only, so a hand-deleted `::` line is not
+  restored (changing that means editing copy R); and a `hcloud server rebuild` re-runs the host's
+  creation-time `user_data` without re-firing either route. Nothing alerts on a later
+  `ghcr_blocked=0`; that regression check is tracked with #9275.
+- **Loopback.** A connect to `0.0.0.0` or `::` reaches the local host on Linux, just as
+  `127.0.0.1` would: HTTPS on :443 fails fast (a connect was refused in 0 ms, measured with `curl`
+  on 2026-09-30), while plain HTTP on :80 reaches the web host's own app. No registry client talks
+  plain HTTP to ghcr.io, because ghcr.io is not in dockerd's `insecure-registries`. `127.0.0.1` is
+  still avoided, because dockerd treats every `127.0.0.0/8` registry as insecure by default and
+  would then accept a plain-HTTP answer; `0.0.0.0` is outside that range, and it keeps registry
+  parity.
+- **Live proof.** Green post-merge runs of both apply workflows, then the first release after them
+  logs `GHCR_DENY ghcr_blocked=1` from `soleur-web-platform` and `soleur-web-2` next to
+  `IMAGE_VERIFY: ok`. The ADR stays **Adopting**; 5.6 flips it.
+
+## Amendment 2026-09-30 (#6129) — cosign verification is ENFORCE by default
+
+The #6122 zot soak passed. The operator accepted the verdict on 2026-09-30, about 6.5 days into
+the 7-day window, and #6122 closed as completed. So the soak-gated fast-follow ships:
+`ci-deploy.sh` now defaults to `IMAGE_VERIFY_MODE=enforce`, and `warn` is an explicit override
+only. #6129 listed three conditions, all measured on the flip date:
+
+- **Clean verification over the soak.** Better Stack shows 0 `IMAGE_VERIFY_FAIL` rows (including
+  `cosign_absent`) against 263 `IMAGE_VERIFY: ok` rows across both web hosts over 7 days.
+- **Trusted-root staleness gate green.** `cosign-trusted-root-staleness.test.sh` passes 3/3;
+  capture age is 88 days, within the 150-day limit.
+- **No manually maintained credential.** The interim GHCR read PAT is revoked (AP-016 lapsed
+  2026-07-30, #7071).
+
+Under enforce, any verify failure keeps the old container running and fails the deploy. That
+includes `cosign_absent`, where the pinned verifier image can't be pulled from gcr.io. The
+§"Amendment 2026-09-24 (#6122)" note that B3's GHCR restore input depends on #6129 is now satisfied
+**for the web-platform image**: an app image altered on GHCR and restored is refused, not deployed
+with a warning (ADR-169 amendment of the same date). Two paths are not covered, and both are
+unchanged by this flip:
+
+- `ci-deploy.sh`'s `inngest)` arm calls `verify_image_signature` zero times. Its identity pattern
+  admits only `reusable-release.yml`, and the inngest bootstrap image is signed by
+  `build-inngest-bootstrap-image.yml`. The arm refuses to run while the web scheduler is
+  quiesced, which is the steady state.
+- The dedicated inngest host's boot pins the bootstrap image by digest (integrity) but verifies no
+  signature. `cloud-init-inngest.yml` records this state (#6617, #7410).
+
+The fresh-boot path runs no cosign verify either, because there is no old container to fall back
+to there. `soleur-host-bootstrap-observability.test.sh` AC1 pins that.
+
+Two more consequences of the flip:
+
+- **Break-glass is a reviewed revert.** No setting on the hosts can downgrade to warn without SSH,
+  which is deliberate: a Doppler-settable downgrade would let a Doppler writer switch off the
+  control that guards against a tampered registry.
+- **Resilience.** `ci-deploy.sh` retries a daemon-side verifier-image pull failure once, the
+  transient gcr.io class. An unknown `IMAGE_VERIFY_MODE` value fails closed to enforce.

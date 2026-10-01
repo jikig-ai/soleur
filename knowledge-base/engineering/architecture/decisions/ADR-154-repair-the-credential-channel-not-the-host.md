@@ -229,6 +229,41 @@ to deploy is to mint a new version.
 > 6 datacenters. Web-1 still cannot be redeployed. See
 > [ADR-119's 2026-09-27 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-27-the-monitor-units-and-the-dsn-line-have-a-terraform-owner-8706).
 
+> **Re-examined 2026-09-28 (#9045): the trigger fired again, and the exception STANDS.** #9045 adds
+> a read-only forensic step to `terraform_data.luks_monitor_install`, and its command list is folded
+> into `triggers_replace`. The merge therefore re-fires the installer once on web-1, in place:
+>
+> - the same files are redelivered byte-identical;
+> - the DSN line is rewritten identically;
+> - the probe is kicked once more.
+>
+> The forensic step itself writes nothing. Measured with `GET /v1/datacenters`
+> `.server_types.available` at 2026-09-28T08:05:28Z: `cx33` (id 115) is available in 0 of the 6
+> datacenters. Web-1 still cannot be redeployed. See
+> [ADR-119's 2026-09-28 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-28-the-dead-man-guards-the-freeze-window-only-9045).
+
+> **Re-examined 2026-09-28 (#9123) — the trigger fired, and for the first time the probe reads
+> ✓ in `hel1-dc2`; the expiry question is now live, not theoretical.** #9123 delivers web-1's
+> boot path in place through `terraform_data.workspaces_boot_unlock_install`: the
+> `workspaces-luks-reopen.{sh,service,-failure.service,timer}` family, the fstab rewrite to
+> `/dev/mapper/workspaces … nofail`, the crypttab `luks,noauto` line, the `docker.service.d`
+> §(e) drop-in, and `chattr +i` on the covered root-disk `/mnt/data` inode. See
+> [ADR-119's 2026-09-28 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-28-the-e-mount-gate-and-the-boot-unlock-have-a-terraform-owner-9123).
+>
+> Measured with `GET /v1/datacenters` `.server_types.available` at 2026-09-28T21:31Z,
+> 21:32Z and 21:34Z (three samples, identical): `cx33` (id 115) is **available in `hel1-dc2`** —
+> web-1's location — and in `fsn1-dc14`; still unavailable in `nbg1-dc3`, `ash-dc1`, `hil-dc1`
+> and `sin-dc1` (`supported` in `nbg1-dc3`, `hel1-dc2` and `fsn1-dc14` only). This is the first
+> probe since this ADR's 2026-08-01 baseline to read ✓ in web-1's DC, so the standing
+> justification — "a `-replace` has no create side" — is not true on today's data.
+>
+> Per the #7309 amendment above, one ✓ is a moment, not a capacity reservation: the trigger
+> reads as "sustained availability in web-1's DC", and three samples inside three minutes are
+> not a sustained sample. The exception's retirement therefore cannot be pronounced from this
+> note — but it can no longer be assumed either. The #9123 plan's own instruction applies:
+> **the immutable-redeploy route must be re-weighed before this ships.** That re-weigh is
+> recorded on #9123; the in-place delivery above is what it adjudicates.
+
 ## Rejected alternatives
 
 **Convert the Access tokens from Terraform `output`s to `doppler_secret` resources.** This was the

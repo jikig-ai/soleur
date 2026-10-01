@@ -110,6 +110,7 @@ import {
 } from "./narrate-tool";
 import { buildCrmTools } from "@/server/crm/crm-tools";
 import { updateConversationFor } from "./conversation-writer";
+import { registerLiveLoopProbe } from "./agent-session-registry";
 import {
   getUserServiceTokens,
   patchWorkspacePermissions,
@@ -163,7 +164,7 @@ import {
   resolveWorktreeId,
   type WorktreeLeaseHandle,
 } from "./worktree-write-lease";
-import { ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
+import { ERR_ATTACHMENT_NOT_FOUND, ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
 // ADR-044 PR-1 — dispatch-boundary not-ready states (transient db-error +
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
@@ -2956,6 +2957,12 @@ export function hasActiveCcQuery(conversationId: string): boolean {
   return _runner.hasActiveQuery(conversationId);
 }
 
+// Register into the shared cross-lineage liveness predicate
+// (agent-session-registry.ts): the stuck-active reaper and ws-handler's
+// dead-socket reap consult it, and the cc lineage's live Queries are
+// invisible to the legacy `activeSessions` registry without this probe.
+registerLiveLoopProbe(hasActiveCcQuery);
+
 /**
  * #5356 — signal the process-wide cc runner to close a conversation's live
  * `Query` from OUTSIDE a dispatch (the ws-handler disconnect grace timer).
@@ -3394,6 +3401,9 @@ export async function dispatchSoleurGo(
     });
     if (attachmentContext) {
       userMessage = `${rawUserMessage}\n\n${attachmentContext}`;
+    } else if (!rawUserMessage.trim()) {
+      // Attachments-only turn where every download failed: nothing to send.
+      throw new Error(ERR_ATTACHMENT_NOT_FOUND);
     }
   }
 
@@ -4226,6 +4236,28 @@ export async function dispatchSoleurGo(
     },
   };
 
+  // Turn-start status flip (rail-live-status fix, PR #9270): a follow-up
+  // `chat` message on an existing `completed`/`waiting_for_user`/`failed`
+  // conversation IS new activity, but nothing upstream flipped the row back
+  // to `active` — the conversations rail rendered the stale terminal badge
+  // for the whole run. This write sits immediately before `runner.dispatch`
+  // — NOT in the earlier ownership/`last_active` write — so a setup throw
+  // above (tenant mint, workspace_id read, messages INSERT) leaves the row
+  // at its previous honest value instead of falsely `active` (a bound
+  // session keeps the slot heartbeat fresh, so `find_stuck_active_…` would
+  // never reap such a row). `expectMatch: false`: a mid-setup-deleted row is
+  // silent-success; real errors still mirror inside the wrapper.
+  await updateConversationFor(
+    userId,
+    conversationId,
+    { status: "active" },
+    {
+      feature: "cc-dispatcher",
+      op: "turn-start-active",
+      expectMatch: false,
+    },
+  );
+
   try {
     await runner.dispatch({
       conversationId,
@@ -4262,6 +4294,40 @@ export async function dispatchSoleurGo(
       workspacePath: callerWorkspacePath ?? workspacePath,
     });
   } catch (err) {
+    // Turn-start revert: the flip above set the row `active`; this catch is
+    // the single boundary every dispatch failure funnels through, so revert
+    // here — `onlyIfStatusIn: ["active"]` confines the write to rows still
+    // holding the value we set (a concurrent gate-resolve / supersede write
+    // wins and is left untouched). Same shape as the legacy
+    // `updateConversationStatusIfActive` abort/result path (#3463).
+    //
+    // Provenance guard (review P-finding): the status-value guard cannot
+    // distinguish "active we just set" from "active a CONCURRENT live turn
+    // set" — ws-handler fires `chat` per frame without serialization, so a
+    // parallel dispatch on the same conversation is reachable. A live Query
+    // is the authoritative discriminator: when `hasActiveCcQuery` reports a
+    // running loop, THIS throw is a rejected duplicate and the row legitimately
+    // belongs to the other turn — `failed` would both lie on the badge and
+    // drop the row out of the orphan-ledger's live-status set (a live slot
+    // could then be force-released as orphaned). Best-effort: a revert
+    // write/mint failure must not mask the primary dispatch error below.
+    if (!hasActiveCcQuery(conversationId)) {
+      try {
+        await updateConversationFor(
+          userId,
+          conversationId,
+          { status: "failed" },
+          {
+            feature: "cc-dispatcher",
+            op: "turn-start-revert",
+            onlyIfStatusIn: ["active"],
+            expectMatch: false,
+          },
+        );
+      } catch {
+        // Mirror already fired inside updateConversationFor for real errors.
+      }
+    }
     const errorClass =
       err instanceof KeyInvalidError
         ? "KeyInvalidError"

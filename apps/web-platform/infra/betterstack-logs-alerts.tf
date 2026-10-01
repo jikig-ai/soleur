@@ -487,7 +487,7 @@ locals {
       AND multiSearchAny(JSONExtractString(raw, 'message', 'error'), ['invalid status code: 524', 'error parsing stream: error reading response body', 'Your server reset the connection while we were reading the reply'])
     GROUP BY time
   SQL
-  # The two later needles are the inngest-server v1.19.4 `error` texts for a step STREAM that
+  # The two later needles are the inngest v1.45.1 inngest-server `error` texts for a step STREAM that
   # dropped mid-response, measured in the #8611 spike (streaming-spike.md): S7's network cut and
   # app kill -> "error parsing stream: error reading response body to check for status code:
   # unexpected end of JSON input"; S3's ~20-min drop -> "Your server reset the connection while we
@@ -784,6 +784,102 @@ resource "logtail_exploration_alert" "luks_monitor_host_timer_dark" {
   incident_cause = "web-1's nightly encryption self-check (luks-monitor.service) has not recorded a PASSING run in about 27 hours. Either the host check is not running, or it runs and fails one of its checks; a failing check is the incident, so look first for a luks-monitor FAIL row or a workspaces-luks-drift event. First step: check whether ANY luks-monitor rows arrived at all; total silence means the log pipeline, not the host. The daily workspaces-luks-verify job checks the volume independently. Runbook: ${local.luks_monitor_runbook_url}"
   metadata = {
     runbook = local.luks_monitor_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9045: the workspaces-LUKS dead-man FIRED on web-1 ──────────────────────────────────────────
+# The cutover arms a transient systemd timer (workspaces-cutover.sh arm_dead_man) that reverts web-1
+# to the plaintext volume if the attended run dies inside the freeze window. A fire is unattended by
+# construction (the SIGKILL residual, or any future path that leaves the timer armed), and on
+# 2026-07-20 one remounted the plaintext over a healthy LUKS mount with nothing paging for ~6 h
+# (#6812). The fire command's FIRST act is
+#   logger -t luks-monitor -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'
+# and this alert pages on that row. Its later result=ok / result=fail rows say how the revert
+# ended; the runbook reads them. arm_failed / cutover_aborted are NOT here. Sentry
+# (sentry_alert.workspaces_luks_drift) pages only the rows whose path also calls emit_drift:
+# arm_failed (deadman_arm_failed), disarm_failed (deadman_disarm_failed), and a cutover_aborted
+# whose cleanup() rolled back (rollback_engaged) or rolled forward past the canary
+# (cutover_aborted_post_canary). A plain `result=cutover_aborted outcome=pre_freeze` row, from a
+# die() that never called emit_drift, pages NOTHING: it is only in the run log and Better Stack.
+# Nothing was frozen on that path, and no alert watches it.
+#
+# Paging semantics are monitor_send_failed's (ADR-218): any one matching row in a bucket pages,
+# treat_as_zero so the open incident observes recovery. Scoped by tag AND host (web-2 ships to the
+# same source) AND the marker at the start of the message, so a row that merely QUOTES the marker
+# (a systemd "Started …" line under another identifier, or an echoed command line) cannot page;
+# the cutover scrubs `=` to `_` in any free-text detail= field, so no arm-failure text can spoof it.
+# LIVE-PROBED 2026-09-28 (s3Cluster archive, 60 days; no fired row is retained, the only fire was
+# 2026-07-20): as written 0; the same tag+host with the marker swapped for SOLEUR_WORKSPACES_READYZ
+# and the needle for `ready=true writable=true` 36 (positive control: every conjunct shape is live
+# SQL that matches this tag's logger rows on web-1, which carry host_name='soleur-web-platform').
+locals {
+  workspaces_luks_deadman_fired_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
+      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
+      AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_WORKSPACES_LUKS_DEADMAN ')
+      AND position(JSONExtractString(raw, 'message'), 'op=workspaces-luks-deadman result=fired') > 0
+    GROUP BY time
+  SQL
+
+  workspaces_luks_deadman_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#dead-man-and-abort-triage-9045"
+}
+
+resource "logtail_exploration" "workspaces_luks_deadman_fired" {
+  name      = "soleur-workspaces-luks-deadman-fired-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.workspaces_luks_deadman_fired_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" {
+  exploration_id = logtail_exploration.workspaces_luks_deadman_fired.id
+  name           = "soleur-workspaces-luks-deadman-fired-prd"
+
+  # monitor_send_failed's values: one row pages within about a minute, the 5-min window holds ONE
+  # incident across the fire's result=fired / result=ok pair, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer stopped the app, unmounted the encrypted /workspaces volume and remounted the retained plaintext one. Writes since the freeze may be stranded on the LUKS volume. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result=ok or result=fail) to see how the revert ended, then follow the runbook. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the stranded writes were reconciled, only that no new fire row arrived. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
+  metadata = {
+    runbook = local.workspaces_luks_deadman_runbook_url
   }
 
   escalation_target {
