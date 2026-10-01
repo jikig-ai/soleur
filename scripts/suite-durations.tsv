@@ -262,7 +262,6 @@ scripts/battery-tag-authorship	18282	measured
 scripts/betterstack-assert-absence	343	measured
 scripts/betterstack-ingest-parity	129	measured
 scripts/board/set-board-status	598	measured
-scripts/bwrap-probe-selfreport-8016	213	measured
 scripts/capture-web-1-host-key	346	measured
 scripts/capture-web-2-host-key	579	measured
 scripts/cf-tunnel-liveness-gate-mutations	163457	measured
