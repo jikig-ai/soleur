@@ -2797,13 +2797,19 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // lines through `scripts/betterstack-query.sh` under `doppler run -c prd_terraform`
   // (BETTERSTACK_QUERY_*). NO SUBSTITUTE: those lines exist only in production logs, so no
   // unauthenticated read can verify the same property. Genuine.
-  // #6931 (2026-10-01): +1 (40 -> 41, after #8016 took 39 -> 40) for `2026-10-01-feat-web-host-fresh-boot-luks-path-plan.md`.
+  // #9342 (2026-10-01): +1 (40 -> 41) for `2026-10-01-chore-alert-on-deploy-rollback-bwrap-probe-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe reads the SANDBOX_PROBE_OK journald line through
+  // `scripts/betterstack-query.sh` under `doppler run -c prd_terraform` (BETTERSTACK_QUERY_*), which
+  // checks the pipeline feeding the new alert. NO SUBSTITUTE: that line exists only in production
+  // logs and Better Stack has no unauthenticated read path. Genuine.
+  // #6931 (2026-10-01): +1 (41 -> 42, after #9342 took 40 -> 41) for `2026-10-01-feat-web-host-fresh-boot-luks-path-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
   // (Doppler soleur/prd_terraform) alone: it grades from the probe and readiness rows and never reads the marker, so it
   // holds no other credential. NO SUBSTITUTE: web-2's probe and readiness rows land only in the Logs warehouse, which has
   // no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 41;
+  const BASELINE_DECLARED_PROBES = 42;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
