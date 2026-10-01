@@ -1595,6 +1595,14 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
     // token feeds a github_actions_secret, so the #5566 rule forbids excluding it as well.
     const freshBoot = [
       "doppler_service_token.workspaces_luks_fresh_boot",
+      // #9377 — the web-class escrow split: config, token, bucket and the three secrets must exist in state
+      // before any web-2 birth (a create inside a birth plan is out of scope for web-host-birth-gate.sh).
+      "doppler_config.workspaces_luks_web",
+      "doppler_service_token.workspaces_luks_fresh_boot_web",
+      "cloudflare_r2_bucket.workspaces_luks_header_web",
+      "doppler_secret.workspaces_luks_web_key",
+      "doppler_secret.workspaces_luks_web_header_bucket",
+      "doppler_secret.workspaces_luks_web_header_r2_endpoint",
       "doppler_config.workspaces_luks_marker",
       "doppler_service_token.workspaces_luks_marker_write",
       "github_actions_secret.doppler_token_workspaces_luks_marker",
@@ -2946,6 +2954,35 @@ describe("web-host-replace dispatch -target set + replace-gate pairing (#6969)",
     ].sort();
     expect(gateBases.length).toBe(WEB_HOST_REPLACE_TARGET_BASES.length);
     expect(gateBases).toEqual([...WEB_HOST_REPLACE_TARGET_BASES].sort());
+  });
+
+  test("the gate's keyed arms extension is exactly the LUKS attachment and the apex record (#9356)", () => {
+    // The arms-key extension widens the allow-set for ONE key beyond the workflow's -target
+    // list, on purpose: the arms are dead code while the refusal holds, and the workflow's
+    // -target list is NOT edited by the arms PR (byte budget + the refusal). So this is NOT a
+    // -target parity check; it pins the extension's exact membership, so a third address
+    // cannot ride in under "arms" without turning this red. hcloud_volume.workspaces_luks and the
+    // passphrase resources must never appear in it (they remain prohibitions).
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/web-host-replace-gate.sh"),
+      "utf8",
+    );
+    const defArms = /def allow_arms:\s*\[([\s\S]*?)\n\];/.exec(gateSrc);
+    expect(defArms).not.toBeNull();
+    const armsAddrs = [...defArms![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    expect(armsAddrs).toEqual(["cloudflare_record.app", "hcloud_volume_attachment.workspaces_luks"]);
+    // Neither extension member is a -target of the replace job (non-vacuity of the "NOT edited" claim).
+    const jobTargets = extractAllTargets(jobBlock);
+    expect(jobTargets.size).toBeGreaterThan(0);
+    for (const addr of armsAddrs) {
+      expect(jobTargets.has(addr)).toBe(false);
+    }
+    // The extension applies to the same key the refusal names: a different arms key would
+    // silently arm a host the refusal does not protect.
+    const armsKey = /_WEB_HOST_REPLACE_LUKS_ARMS_KEY="([^"]+)"/.exec(gateSrc);
+    const pinnedKey = /_WEB_HOST_REPLACE_LUKS_PINNED_KEY="([^"]+)"/.exec(gateSrc);
+    expect(armsKey).not.toBeNull();
+    expect(armsKey![1]).toBe(pinnedKey![1]);
   });
 
   test("the gate's LUKS-pinned refusal key matches the job's fail-fast key", () => {

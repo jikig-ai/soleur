@@ -556,7 +556,7 @@ runcmd:
   # END host-script extraction (#5921)
 
   # #6931: guest-side LUKS (baked provisioner, ADR-263). Hard gate: nothing below may write to /mnt/data unless the mapper backs it.
-  - printf 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks\n' '${workspaces_volume_id}' > /etc/default/workspaces-luks-boot
+  - printf 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web\n' '${workspaces_volume_id}' > /etc/default/workspaces-luks-boot
   - chmod 600 /etc/default/workspaces-luks-boot
   - /usr/local/bin/workspaces-luks-provision.sh
   - mountpoint -q /mnt/data && [ "$(findmnt -no SOURCE /mnt/data)" = /dev/mapper/workspaces ] || { soleur-boot-emit workspaces_luks_not_mounted fatal; poweroff -f; }

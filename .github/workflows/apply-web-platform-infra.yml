@@ -627,6 +627,12 @@ jobs:
               -target=doppler_service_token.workspaces_luks \
               -target=github_actions_secret.workspaces_luks_boot_token \
               -target=doppler_service_token.workspaces_luks_fresh_boot \
+              -target=doppler_config.workspaces_luks_web \
+              -target=doppler_service_token.workspaces_luks_fresh_boot_web \
+              -target=cloudflare_r2_bucket.workspaces_luks_header_web \
+              -target=doppler_secret.workspaces_luks_web_key \
+              -target=doppler_secret.workspaces_luks_web_header_bucket \
+              -target=doppler_secret.workspaces_luks_web_header_r2_endpoint \
               -target=doppler_config.workspaces_luks_marker \
               -target=doppler_service_token.workspaces_luks_marker_write \
               -target=github_actions_secret.doppler_token_workspaces_luks_marker \

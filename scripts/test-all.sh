@@ -4097,6 +4097,11 @@ if want_scripts; then
   # that reported a clean bill of health for a family it never enumerated, and an
   # unregistered suite is the same failure one level up.
   run_suite "scripts/check-cloudflare-token-drift" bash scripts/check-cloudflare-token-drift.test.sh
+  # #9377: the web-host escrow-split contract (Guard 3 census: every web-class path selects
+  # prd_workspaces_luks_web, web-1 keeps prd_workspaces_luks) plus its live-mode stub-doppler rows.
+  # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
+  # generated suite-shard-legs.tsv / suite-durations.tsv are NOT hand-edited.
+  run_suite "scripts/check-web-host-escrow-config" bash scripts/check-web-host-escrow-config.test.sh
   # #6789: arms for the contention instrumentation + advisory queue that this
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
