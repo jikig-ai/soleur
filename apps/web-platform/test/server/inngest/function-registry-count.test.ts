@@ -188,6 +188,11 @@ const NON_INNGEST_MONITORS = new Set([
   // cron-*.ts counterpart and no SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings
   // the check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
   "workspaces-luks-verify",
+  // #6931: the web-2 soak-marker job of the same workflow (workspaces-luks-verify.yml, job
+  // `web2_marker`, same on.schedule). Same anti-circularity class as the web-1 leg above: the
+  // verifier must not run on the host it verifies. No cron-*.ts counterpart and no
+  // SENTRY_MONITOR_SLUG const; its own check-in step pings sentry_cron_monitor.workspaces_luks_verify_web2.
+  "workspaces-luks-verify-web2",
   // #8160: GHA-fired (scheduled-devin-docs-drift.yml, on.schedule '23 7 * * *') — the
   // disposable docs.devin.ai capability-drift watcher. Its subject is OUTSIDE the
   // product (Cognition's public documentation, fetched anonymously), so it has no
