@@ -2374,12 +2374,19 @@ _affected_buf_add() {
 # Substitute only the vars actually PRESENT in the string against the file's
 # _vn/_vv map — a blind every-var sweep is ~60 expansions per token and was
 # the dominant pre-pass cost. Re-loops so a value carrying another $VAR also
-# resolves; the 12-iteration cap makes a self-referential value harmless.
+# resolves. Two caps bound it: 12 passes, and GROWTH of at most 4096 BYTES over the input (counted in the C
+# locale, so it does not depend on the user's locale). A self-referential value (`P="$P:x"`, or any value
+# repeating `$NAME` of itself or a partner) multiplies the string every pass: that is cost, not information,
+# and it dominated the pre-pass until capped. The cap is checked before each pass, so the first pass always
+# runs and one pass can overshoot it. LIMIT: a trip stops resolution, so a LATER variable on the same line stays
+# `$VAR` and dies at the caller's `-e` filter -- an edge behind a value that large is not minted (the 12-pass
+# cap alone would have resolved it). Selection is identical on today's corpus (scripts/affected-prepass-bench.sh);
+# a future line that trips the cap can under-select, which is why the bench is the gate for this function.
 _RV=""
 _affected_resolve_vars() {
   _RV="$1"
-  local _want _found _vi _iter=0
-  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 )); do
+  local LC_ALL=C _want _found _vi _iter=0 _cap=$(( ${#1} + 4096 ))
+  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 && ${#_RV} <= _cap )); do
     _iter=$(( _iter + 1 ))
     _want="${BASH_REMATCH[1]}"
     _found=0
