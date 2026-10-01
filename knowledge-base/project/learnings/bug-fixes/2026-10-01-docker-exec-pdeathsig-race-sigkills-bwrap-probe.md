@@ -89,3 +89,51 @@ loop 2500 bwrap --new-session --dev /dev --unshare-pid --bind / / -- true       
   cause; the cause came from reproducing the shape locally and bisecting the argv.
 - Reading guide for the fields and a recurrence note live in
   `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`.
+
+## Review findings worth keeping (9-seat panel, all fixed inline)
+
+- **The plan asserted the #8016 sweeper "goes inert with the issue" and nothing measured it.** The sweeper has a
+  closed-set pass (COMPLETED + 14-day lookback) that reopens a closed follow-through issue whose probe still fails,
+  and the probe's 7-day window still held ~16 pre-fix rollback rows. A claim about another automation's behaviour
+  needs the command that falsifies it run before it is written into a runbook (grep the sweeper for `COMPLETED`
+  and the reopen path). Fix: retire the script, test, registration, shard rows and the issue's label together.
+- **A token-presence guard is satisfied by extra flags, a prefix and a masking second exec.** Guard 2 first
+  asserted the three capability tokens and the absent flag; review showed `--unshare-user --proc /proc` (the #4932
+  regression), a `setpriv --pdeathsig` prefix and a second bwrap exec all passed. Pin the exact argv on exactly one
+  recorded exec. Same root as the repo's "assert the value that must never appear" rule: name the edit a
+  reasonable engineer makes next and say which check reds.
+- **A must-pass fixture that does not carry the thing the matcher keys on passes for the wrong reason.** The
+  `docker run ... soleur-bwrap` fixture had no flag at all, so a bare `/bwrap/` matcher stayed green; a fixture with
+  `docker exec` AND the flag but `soleur-bwrap` as an option name discriminates.
+- **The recurrence remedy named the wrong workflow.** `apply-deploy-pipeline-fix.yml` redeploys the running tag and
+  cannot ship past the canary gate; the release run's "Re-run failed jobs" is the lever (`reusable-release.yml`
+  documents this).
+
+## Session Errors
+
+1. **A stray stash-list probe was blocked by the never-stash hook.** Recovery: reran without it. Prevention: the
+   hook already enforces it; do not probe the stash stack at all (`rev-parse --verify refs/stash` is the sanctioned read).
+2. **A live-loop control arm was uninformative and unclaimed.** The `setpriv` arm used an image without `setpriv`
+   (and a later arm's stderr capture used an unset variable), so it reported 2500/2500 nonzero rc=1. Recovery:
+   did not cite it; the planning-time setpriv rows are labelled planning-time in this learning. Prevention: run each
+   arm once by hand and read its rc/stderr before looping it 2500 times.
+3. **A process kill built from a /proc scan matched my own shell and returned exit 144.** The scan keyed on the
+   substring `test-all.sh`, which is in the invoking command line. Recovery: re-listed processes, confirmed the runs
+   were gone. Prevention: key on an argv SLOT (`argv[1]`) rather than a substring, as the repo's pkill
+   self-match guard does.
+4. **Two overlapping Monitors were armed on one rc file** (flagged by the monitor-supersede hook). Recovery:
+   stopped the older one. Prevention: stop the previous watch before arming another.
+5. **Plan-phase friction (forwarded from session-state):** a PreToolUse hook refused the first deferral-issue create
+   (fixed with a `Mandated-By` trailer, filed as #9342); `lefthook` was not on PATH so every commit ran without hooks.
+   Prevention: gate evidence for this PR is CI, not the local pre-commit.
+6. **`c4-count-parity.test.sh` could not run locally** (python `yaml` module absent); the diff touches no `.c4`,
+   so CI owns it. Prevention: name it as not-run in the report.
+7. **I told review seats the suite takes "~10 min"; the repo's measured figure is ~86 s.** The 10 minutes was my
+   wall-clock under host contention. Prevention: read `scripts/suite-durations.tsv` before quoting a duration.
+8. **The final suite was not re-run after the review fixes** (operator chose to rely on CI because the host was
+   contended). Recovery: targeted checks only (audit test 10/10, trimmed Guard 1/2 harness 10/10, nine mutation rows
+   RED, controls green). Residual risk: the exact assertion floor (500) and shard registration after deleting the
+   sweeper suite; both are CI-gated.
+9. **A compound-phase command was blocked by a hook because the learning text I was appending quoted a forbidden
+   command form.** Recovery: reworded and wrote the section via a file. Prevention: write learning text with the
+   Write tool, not a shell heredoc, when it quotes guarded command spellings.
