@@ -24,3 +24,9 @@
 ### Operator constraints
 - No SSH, no dashboard, no prod writes, no dispatches. The destructive dispatch D, the forget, and the post-merge apply each need a per-command operator go-ahead.
 - Operator hold (plan `## Operator Holds`): PR B stays a draft until D concludes with delete_issued=true, the forget has run, the evidence is filled, CLO re-attests, and `infra-validation` is re-run green.
+
+## Review + Compound Phase
+- Review: 11/11 seats, 0 P1; fixes in 9cfcd1d486, trailer e333a4c3ec (`Reviewed-Coverage: full 11/11`).
+- Compound: learning `knowledge-base/project/learnings/2026-10-01-the-guards-i-wrote-to-protect-the-sole-copy-scanned-a-shape-the-attack-did-not-take.md`; routed one bullet to plan-sharp-edges.md.
+- Archival of this plan/spec is DEFERRED to the post-hold resume session (the resume reads them; archive-kb would orphan the PR body's resume pointer).
+- Local gate skipped by operator direction ("rely on CI"); lefthook absent from PATH (#8271).
