@@ -104,6 +104,11 @@ replace the example stages. Rules:
   cannot see, and it creates a second one. Keep the template's two controls: the vendor-side read
   and the `*_ATTEMPTED` marker written *before* the create, which stops a re-run and sends the
   founder to the console (`--reset <KEY>_ATTEMPTED` clears it once they have looked).
+- **A marker the script writes is not proof of vendor state, and "already satisfied" must be read from the vendor.**
+  Write the marker that skips a stage only AFTER the write and its verification succeed; treat an unreadable list as
+  INCONCLUSIVE (stop), never as "absent"; confirm a revoke by re-listing, not by its exit code; and when exactly one
+  vendor object exists that the script cannot show is the stored one, replace it new-before-old instead of dead-ending.
+  Environment secrets are write-only, so a name listing proves nothing about the value (#9321).
 - **Name skip variables by convention, and let `usage()` derive the list.** A class-1 value is
   `SOLEUR_BOOTSTRAP_<WHAT>` (`SOLEUR_BOOTSTRAP_ACCOUNT_ID`); a class-3 barrier is
   `SOLEUR_BOOTSTRAP_SKIP_<WHAT>_BARRIER`. The template's `--help` greps its own `soleur_op_value` /

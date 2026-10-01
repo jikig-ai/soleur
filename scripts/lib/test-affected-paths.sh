@@ -265,6 +265,16 @@ AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(
   "scripts/lib/test-affected-paths.sh"            # THIS FILE
 )
 
+# tests/scripts/apply-github-infra-mint-shape (#9360) — shape pins over the one
+# workflow job it reads through a $REPO_ROOT-built path, which no derivation
+# channel reaches; its name stem maps to no script.
+AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
+  ".github/workflows/apply-github-infra.yml"
+  ".github/actions/mint-infra-app-token/"
+  "tests/scripts/test-apply-github-infra-mint-shape.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
+)
+
 # Suites the repo-wide-idiom census arm flags (their fixture code walks a tree)
 # whose real subject is a narrow SUT set, declared here rather than always-on:
 # the scan is scoped, so the edges are honest.
@@ -1339,4 +1349,31 @@ AFFECTED_TESTS_SCRIPTS_SCRATCH_SESSION_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "scripts/tmpfs-guard.sh"
   "tests/scripts/test-scratch-session.sh"
+)
+
+# tests/scripts/soleur-sandbox — agent sandbox allocator (ADR-250 Amendment 1);
+# declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SOLEUR_SANDBOX_PATHS=(
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/soleur-sandbox.sh"
+  "tests/scripts/test-soleur-sandbox.sh"
+)
+
+# tests/scripts/scratch-residue — direct-run residue canary over the runner
+# chokepoints (ADR-250 Amendment 1); declared from the repo paths it names.
+AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
+  ".claude/hooks/grep-rewrite.test.sh"
+  ".claude/hooks/lib/test-incident-sandbox.sh"
+  "apps/web-platform/test/global-setup-git-tripwire.ts"
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "plugins/soleur/test/lib/git-tripwire.ts"
+  "plugins/soleur/test/lib/scratch-session.ts"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/conftest.py"
+  "tests/scripts/_git_fixture_env.py"
+  "tests/scripts/test-scratch-residue.sh"
+  "tests/scripts/test-weakness-miner.sh"
 )

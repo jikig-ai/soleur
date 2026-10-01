@@ -2487,8 +2487,9 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //   1. PLACEMENT — a correctly-indented child of the `discoverability_test:` sub-block,
   //      not a leftover template comment and not a stray top-level line.
   //   2. TRUTH — the probe reads BOTH of its signals out of the Better Stack Logs ClickHouse
-  //      warehouse (zot's boot `configuration settings` line for delivery, and the
-  //      PatchBlobUpload rows for absence), which needs
+  //      warehouse (zot's boot `configuration settings` line for delivery, and the PATCH
+  //      /blobs/uploads HTTP API rows plus the best-effort PatchBlobUpload error rows for
+  //      absence), which needs
   //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
   //   3. NO SUBSTITUTE — the property is the ABSENCE of a server-side upload failure on a
   //      deny-all-public private host (10.0.1.30, no ingress). Nothing unauthenticated can
