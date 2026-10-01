@@ -16,8 +16,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { WebSocket } from "ws";
 
 const USER_ID = "user-1";
-const PENDING_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
-const OTHER_CONV_ID = "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e";
+const PENDING_ID = "00000000-0000-4000-8000-000000000001";
+const OTHER_CONV_ID = "00000000-0000-4000-8000-000000000002";
 
 const {
   mockDispatchSoleurGo,
@@ -26,38 +26,38 @@ const {
   mockReportSilentFallback,
   mockInsert,
   mockRpc,
+  mockBoundRun,
   mockExistingRow,
-} = vi.hoisted(() => ({
-  mockDispatchSoleurGo: vi.fn().mockResolvedValue(undefined),
-  mockSendUserMessage: vi.fn().mockResolvedValue(undefined),
-  mockStartAgentSession: vi.fn().mockResolvedValue(undefined),
-  mockReportSilentFallback: vi.fn(),
-  mockInsert: vi.fn().mockResolvedValue({ error: null }),
-  mockRpc: vi.fn((name: string, args?: Record<string, unknown>) =>
-    Promise.resolve(
-      name === "bind_agent_engine_run"
-        ? {
-            data: {
-              binding: {
-                workspaceId: String(args?.p_workspace_id ?? "ws-mock-workspace-1"),
-                execution: {
-                  kind: "conversation",
-                  conversationId: String(args?.p_conversation_id ?? "conv-1"),
-                },
-                engineId: "claude-code",
-                authMode: "managed",
-                adapterVersion: "claude-code-v1",
-                boundAt: new Date().toISOString(),
-              },
-            },
-            error: null,
-          }
-        : { data: [{ status: "ok", active_count: 1, effective_cap: 2 }], error: null },
-    ),
-  ),
-  // The row the two-tab 23505 fallback resolves to (set per test).
-  mockExistingRow: { current: null as null | Record<string, unknown> },
-}));
+} = vi.hoisted(() => {
+  const mockBoundRun: { current: Record<string, unknown> | null } = { current: null };
+  return {
+    mockDispatchSoleurGo: vi.fn().mockResolvedValue(undefined),
+    mockSendUserMessage: vi.fn().mockResolvedValue(undefined),
+    mockStartAgentSession: vi.fn().mockResolvedValue(undefined),
+    mockReportSilentFallback: vi.fn(),
+    mockInsert: vi.fn().mockResolvedValue({ error: null }),
+    mockBoundRun,
+    mockRpc: vi.fn((name: string, args?: Record<string, unknown>) => {
+      if (name === "bind_agent_engine_run") {
+        const data = {
+          id: "run-1",
+          workspace_id: String(args?.p_workspace_id ?? "ws-mock-workspace-1"),
+          execution_kind: "conversation",
+          conversation_id: String(args?.p_conversation_id ?? "conv-1"),
+          engine_id: "claude-code",
+          auth_mode: "managed",
+          adapter_version: "claude-code-v1",
+          created_at: "2026-01-01T00:00:00.000Z",
+        };
+        mockBoundRun.current = data;
+        return Promise.resolve({ data, error: null });
+      }
+      return Promise.resolve({ data: [{ status: "ok", active_count: 1, effective_cap: 2 }], error: null });
+    }),
+    // The row the two-tab 23505 fallback resolves to (set per test).
+    mockExistingRow: { current: null as null | Record<string, unknown> },
+  };
+});
 
 vi.mock("@/lib/legal/tc-version", () => ({
   TC_VERSION: "1.0.0",
@@ -98,6 +98,13 @@ function makeUsersChain() {
 
 function tableChain(table: string) {
   if (table === "users") return makeUsersChain();
+  if (table === "agent_engine_runs") {
+    const chain: Record<string, unknown> = {};
+    chain.select = vi.fn(() => chain);
+    chain.eq = vi.fn(() => chain);
+    chain.maybeSingle = vi.fn(async () => ({ data: mockBoundRun.current, error: null }));
+    return chain;
+  }
   if (table === "workspaces") {
     const chain: Record<string, unknown> = {};
     chain.select = vi.fn(() => chain);
@@ -224,7 +231,7 @@ function createPendingSession(
 function att(storagePath: string, filename = "notes.md", contentType = "text/markdown") {
   return { storagePath, filename, contentType, sizeBytes: 12 };
 }
-const validAtt = () => att(`${USER_ID}/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`);
+const validAtt = () => att(`${USER_ID}/${PENDING_ID}/00000000-0000-4000-8000-000000000003.md`);
 
 async function sendChat(content: string, attachments?: unknown[]) {
   await handleMessage(
@@ -239,6 +246,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   sessions.clear();
   mockExistingRow.current = null;
+  mockBoundRun.current = null;
   mockInsert.mockResolvedValue({ error: null });
   mockDispatchSoleurGo.mockResolvedValue(undefined);
 });
@@ -342,65 +350,65 @@ describe("pending-session first message: attachments-only (#9297 D2)", () => {
 
     it("empty content + an attachment under ANOTHER conversation's prefix creates no row", async () => {
       const { session, sent } = createPendingSession();
-      await sendChat("", [att(`${USER_ID}/${OTHER_CONV_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      await sendChat("", [att(`${USER_ID}/${OTHER_CONV_ID}/00000000-0000-4000-8000-000000000003.md`)]);
       expectRejected(sent, session, /attachment could not be found/i);
     });
 
     it("empty content + an attachment under ANOTHER user's prefix creates no row", async () => {
       const { session, sent } = createPendingSession();
-      await sendChat("", [att(`user-2/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      await sendChat("", [att(`user-2/${PENDING_ID}/00000000-0000-4000-8000-000000000003.md`)]);
       expectRejected(sent, session, /attachment could not be found/i);
     });
 
     it("empty content + a '..' traversal attachment creates no row", async () => {
       const { session, sent } = createPendingSession();
-      await sendChat("", [att(`${USER_ID}/${PENDING_ID}/../x/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      await sendChat("", [att(`${USER_ID}/${PENDING_ID}/../x/00000000-0000-4000-8000-000000000003.md`)]);
       expectRejected(sent, session, /attachment could not be found/i);
     });
 
     it("empty content + an unsupported-type attachment creates no row", async () => {
       const { session, sent } = createPendingSession();
       await sendChat("", [
-        att(`${USER_ID}/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.exe`, "virus.exe", "application/x-msdownload"),
+        att(`${USER_ID}/${PENDING_ID}/00000000-0000-4000-8000-000000000003.exe`, "virus.exe", "application/x-msdownload"),
       ]);
       expectRejected(sent, session, /not supported/i);
     });
 
     it("a SIBLING-folder prefix (`<pending>x/`) is rejected (trailing slash is part of the prefix)", async () => {
       const { session, sent } = createPendingSession();
-      await sendChat("", [att(`${USER_ID}/${PENDING_ID}x/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      await sendChat("", [att(`${USER_ID}/${PENDING_ID}x/00000000-0000-4000-8000-000000000003.md`)]);
       expectRejected(sent, session, /attachment could not be found/i);
     });
 
     it("pre-validation also applies under LEGACY routing (no pending routing)", async () => {
       const { session, sent } = createPendingSession({ routing: undefined });
-      await sendChat("", [att(`user-2/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      await sendChat("", [att(`user-2/${PENDING_ID}/00000000-0000-4000-8000-000000000003.md`)]);
       expectRejected(sent, session, /attachment could not be found/i);
       expect(mockStartAgentSession).not.toHaveBeenCalled();
     });
 
     it("an extension-mismatched ref (right prefix + type, wrong suffix) is rejected BEFORE createConversation", async () => {
       const { session, sent } = createPendingSession();
-      await sendChat("", [att(`${USER_ID}/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.png`)]);
+      await sendChat("", [att(`${USER_ID}/${PENDING_ID}/00000000-0000-4000-8000-000000000003.png`)]);
       expectRejected(sent, session, /attachment could not be found/i);
     });
 
     it("text PRESENT + a forged ref creates no conversation row and no message (reconnect re-mint)", async () => {
       const { session, sent } = createPendingSession();
-      await sendChat("hello", [att(`${USER_ID}/${OTHER_CONV_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      await sendChat("hello", [att(`${USER_ID}/${OTHER_CONV_ID}/00000000-0000-4000-8000-000000000003.md`)]);
       expectRejected(sent, session, /attachment could not be found/i);
     });
 
     it("text PRESENT + a bad ref AFTER a good one rejects the whole message under LEGACY routing too", async () => {
       const { session, sent } = createPendingSession({ routing: undefined });
-      await sendChat("hello", [validAtt(), att(`${USER_ID}/${PENDING_ID}/../x/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      await sendChat("hello", [validAtt(), att(`${USER_ID}/${PENDING_ID}/../x/00000000-0000-4000-8000-000000000003.md`)]);
       expectRejected(sent, session, /attachment could not be found/i);
       expect(mockStartAgentSession).not.toHaveBeenCalled();
     });
 
     it("one bad ref among good ones rejects the whole message", async () => {
       const { session, sent } = createPendingSession();
-      await sendChat("", [validAtt(), att(`user-2/${PENDING_ID}/0f0e0d0c-0b0a-4908-8706-050403020100.md`)]);
+      await sendChat("", [validAtt(), att(`user-2/${PENDING_ID}/00000000-0000-4000-8000-000000000003.md`)]);
       expectRejected(sent, session, /attachment could not be found/i);
     });
   });
@@ -421,6 +429,16 @@ describe("pending-session first message: attachments-only (#9297 D2)", () => {
         active_workflow: "soleur_go_pending",
         context_path: CONTEXT_PATH,
         engine_binding_state: "bound",
+      };
+      mockBoundRun.current = {
+        id: "run-existing",
+        workspace_id: "ws-mock-workspace-1",
+        execution_kind: "conversation",
+        conversation_id: OTHER_CONV_ID,
+        engine_id: "claude-code",
+        auth_mode: "managed",
+        adapter_version: "claude-code-v1",
+        created_at: "2026-01-01T00:00:00.000Z",
       };
     }
 

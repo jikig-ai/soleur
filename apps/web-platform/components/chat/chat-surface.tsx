@@ -882,7 +882,7 @@ export function ChatSurface({
             <Button
               variant="ghost"
               onClick={() => {
-                if (!sessionConfirmed && hasPendingCodexHistoryTransfer) setSessionStarted(true);
+                if (hasPendingCodexHistoryTransfer) setSessionStarted(true);
                 resumeAfterUnrecoverable();
               }}
               className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
