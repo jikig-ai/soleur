@@ -621,6 +621,46 @@ Non-zero → HALT and surface the lint's own `FAIL:` lines verbatim. It rejects:
 
 **Why:** the preflight Check 10 work (merged 2026-08-10) cost five adversarial review rounds and ~880k subagent tokens on ~20 findings that all reduced to one class — a guard's window/chokepoint/identifier set narrower than the property it named. The plan that produced it had 13 Test Scenarios all shaped "command X -> terminal Y" and none shaped "mutation M -> guard G reddens", so the guards were written as assertions about the implementation as it happened to be shaped. This halt is the independent verifier that the enumeration happened at design time rather than being discovered five times at review time.
 
+### 4.12. Scope Check Halt (Always)
+
+Fires on every plan — every plan has asks. This is the enforcement half of plan Phase 2.4 (`plugins/soleur/skills/plan/references/plan-scope-check.md`): a plan that never emitted its `## Scope Check`, or emitted one with an unjustified row, cannot be deepened.
+
+**Step 1 — Detect.** Always — no trigger scan.
+
+**Step 2 — Locate the section.**
+
+```bash
+grep -q '^## Scope Check' <plan-file>
+```
+
+Absent → HALT with:
+
+> Error: Plan has no `## Scope Check` section. Per plan Phase 2.4 every plan emits
+> one (see `plugins/soleur/skills/plan/references/plan-scope-check.md`). Re-run
+> `soleur:plan` (or edit the plan directly) to add the section, then re-run
+> deepen-plan.
+
+**Step 3 — Verify it mechanically.** Reject and HALT (same message shape, first line naming the failure) when ANY of:
+
+- `### Ask Mapping`, `### Plan-Item Provenance`, or `### Split Assessment` is missing, or Ask Mapping carries zero data rows.
+- An Ask Mapping row's Status cell reads `unmapped` or `descoped` with an empty justification.
+- A Plan-Item Provenance row reads `inferred` with an empty justification.
+- `### Split Assessment` lacks a `Recommendation:` line.
+
+**Step 4 — Adequacy read (the part no lint can do).** Reject when the table is padding: justifications that are boilerplate ("needed", "required") naming no dependency or safety reason; `asked` rows quoting words the operator never wrote; a Split Assessment whose counts were not derived from the plan's `## Files to Edit`/`## Files to Create` lists; an ask invented to match the plan rather than quoted from the brief.
+
+**Step 5 — Emit telemetry on fire.** When the halt fires (Step 2, 3, OR 4), emit rule-application telemetry so the weekly aggregator records the enforcement event:
+
+```bash
+echo 'SOLEUR_RULE_APPLIED rule=plan-scope-check-blocks-unmapped-asks note=deepen-plan halted: plan missing/non-compliant Scope Check'
+```
+
+No telemetry on pass — the gate only records when it activates.
+
+**Step 6 — Pass-through.** Section present, mechanically compliant, adequate → proceed normally.
+
+**Why:** #9398 — on PR #9339 a brief listing tasks a–f grew a destructive `--attest` rung nobody asked for; the catch cost an 11-seat review and ~8 CI cycles. The deepen halt is what makes "an unmapped item blocks the plan unless justified" load-bearing rather than advisory.
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>
