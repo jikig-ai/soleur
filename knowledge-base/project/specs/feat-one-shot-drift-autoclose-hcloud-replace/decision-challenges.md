@@ -19,3 +19,9 @@ The plan follows the operator's stated direction in each case below; the reviewe
 
 - CTO: have `scheduled-terraform-drift.yml` label an issue `drift-host-replacement` when its raw plan shows an `hcloud_server` action; the closer then skips labelled issues and needs no parsing, truncation or escape logic.
 - Plan response: not adopted — the brief scopes the fix to the closer and says the filer is not the target; recorded as the cheaper long-term form (the filer holds the raw pre-redaction plan).
+
+## Rulings (lead, 2026-10-02; no operator question asked)
+
+1. Kept: entity normalization, R2 and the truncation-title check stay, as the operator specified. Mutation rows 2 and 4 stay.
+2. **Adopted: judge the newest plan-bearing artifact, not the union.** The union strands an issue open forever once any scan showed a server replacement, even after the host was replaced, which defeats closing. Classify the last artifact (comment, else body) containing `<summary>Plan output`; if that artifact is incomplete or shows a replacement, skip. This SUPERSEDES the plan's union wording wherever the plan says "union" or "any plan-bearing artifact"; the work phase implements the newest-artifact rule and updates the plan text to match.
+3. Not adopted: producer-side label stays a recorded long-term alternative; no issue filed (net-issue-flow).
