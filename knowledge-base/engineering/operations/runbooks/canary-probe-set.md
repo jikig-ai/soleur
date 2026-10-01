@@ -147,7 +147,7 @@ read `rc=` with a leading greedy `.*` or `grep -o … | tail -1` — the free te
 
 | Field | Meaning | Read it as |
 | --- | --- | --- |
-| `rc` | exit status of `docker exec … bwrap` | `1` = bwrap's own failure **or** docker "no such container" (tie broken by `cstate` and the message); `126`/`127` = could not exec (missing binary / shared object — the text names it); `128+n` = the child was signalled (`137` = SIGKILL, what an OOM or a timeout looks like) |
+| `rc` | exit status of `docker exec … bwrap` | `1` = bwrap's own failure **or** docker "no such container" (tie broken by `cstate` and the message); `126`/`127` = could not exec (missing binary / shared object — the text names it); `128+n` = the child was signalled (`137` = SIGKILL, what an OOM or a timeout looks like). **`rc=137` with `cstate=running`, `err_chars=0` and an `ms` equal to a passing run's was the PDEATHSIG race (#8016), now fixed by dropping `--die-with-parent` from the probe — HISTORICAL signature. After the fix any `rc=137` is unexplained**; discriminate by `ms` (far from the passing mean = a hang or OOM, not an instant kill). Next suspects: OOM at the canary's 1536m cap, a host reaper |
 | `ms` | wall time of the exec, or `unknown` when bash `EPOCHREALTIME` was unavailable | separates a fast refusal (tens of ms) from a killed hang (thousands); never fabricated |
 | `cstate` | `docker inspect .State.Status` taken **before** teardown, or `unknown` | `running` + `rc=1` → bwrap failed inside a live container; `exited`/`unknown` + `rc=1` → the container was already gone |
 | `err_chars` | length of the **raw** stderr before sanitization | `0` beside `128+n` = signalled child that printed nothing; treat `bwrap_err` as possibly truncated whenever this is anywhere near 200 — redaction changes length in both directions, so it is an approximate discriminator, not an exact one |
@@ -164,11 +164,17 @@ strips non-printable bytes, folds `"` to `'`, applies shape rules (Doppler `dp.*
 env-file value of ≥12 characters longest-first with `<redacted:NAME>`. Values under 12
 characters and values that runc `%q`-escaped are outside the value arm; the shape rules remain.
 
-**Closing #8016.** Enrolled in the follow-through sweeper via
-`scripts/followthroughs/bwrap-probe-selfreport-8016.sh`: any `DEPLOY_ROLLBACK` row in the window
-→ the sweeper comments the trusted fields and this query (arm a: fix the named cause, close by
-hand); ≥20 `SANDBOX_PROBE_OK` rows and zero rollbacks → the sweeper closes it as environmental
-(arm b).
+**Closing #8016.** The self-report named the cause: every rollback was `rc=137`, empty stderr,
+`cstate=running`, i.e. a spawn-timing race between `docker exec`'s short-lived runc parent and the
+`PR_SET_PDEATHSIG(SIGKILL)` that `--die-with-parent` arms, not a sandbox failure. The probe no
+longer passes that flag (mechanism, measurements and repro loop:
+`knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md`)
+and #8016 is closed by the fix PR. The follow-through sweeper
+(`scripts/followthroughs/bwrap-probe-selfreport-8016.sh`) goes inert with the issue, so **a
+recurrence does not reopen it**: it surfaces through the release-failure email, the workflow
+`::error::` annotation and the query above. A durable log-based alert is tracked in #9342.
+Remediation for a recurrence is a redeploy via `apply-deploy-pipeline-fix.yml`, never a host
+command.
 
 ## References
 

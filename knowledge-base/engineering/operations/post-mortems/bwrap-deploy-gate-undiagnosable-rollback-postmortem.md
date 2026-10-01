@@ -48,6 +48,11 @@ and sanitized stderr now ride the same journald line, plus a `SANDBOX_PROBE_OK` 
 deploy). The root cause of the two rollbacks remains unknown by construction and is tracked on #8016,
 whose closing arms are evaluated mechanically by the follow-through sweeper.
 
+> **Update 2026-10-01 (#8016):** the self-report named the cause on its first recurrences: a
+> `docker exec` PDEATHSIG race triggered by `--die-with-parent` on the probe argv (every row
+> `rc=137`, empty stderr, `cstate=running`). Fixed by dropping the flag; see
+> `knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md`.
+
 ## Symptom
 
 A release run fails at the canary stage with `reason=canary_sandbox_failed`; Better Stack shows exactly

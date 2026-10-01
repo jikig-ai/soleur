@@ -3980,11 +3980,18 @@ case "$COMPONENT" in
       # 128+n = signalled, which is what a process that prints nothing looks like), so losing it
       # would leave the message alone -- and the message was EMPTY both times this fired.
       #
-      # The bwrap argv is deliberately untouched. See the NOTE block above: a prior change added
-      # --unshare-user --proc /proc here and rolled back every web-platform deploy.
+      # The bwrap argv rule, both directions. ADDING flags that diverge from the real SDK argv
+      # (--unshare-user --proc /proc, see the NOTE block above) rolled back every web-platform
+      # deploy. --die-with-parent is deliberately ABSENT: under `docker exec` the process is a
+      # child of the short-lived runc exec parent, and the PR_SET_PDEATHSIG(SIGKILL) that flag
+      # arms races that parent's exit, SIGKILLing a healthy bwrap at startup (rc=137, empty
+      # stderr, container still running -- #8016). The faithful canary keeps the SDK argv,
+      # flag included, from a long-lived node parent. Measurements and the repro loop:
+      # knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md
+      # ci-deploy.test.sh Guard 1 / Guard 2 pin both the absence and the capability tokens.
       BWRAP_RC=0
       BWRAP_T0="$(_now_ms)"
-      BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
+      BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
       BWRAP_T1="$(_now_ms)"
       # Guarded, not `$(( $(_now_ms) - BWRAP_T0 ))`. Two reasons, measured separately:
       #   - a non-numeric operand is NOT fatal here (bash reads `unknown` or `` as a name that
@@ -4003,7 +4010,7 @@ case "$COMPONENT" in
       BWRAP_CSTATE="${BWRAP_CSTATE:-unknown}"
       # Sanitize ONCE, up front: both sinks below egress to Better Stack.
       BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")"
-      # Re-emit on BOTH paths, before the branch. The probe passes ~97.6% of the time, and a
+      # Re-emit on BOTH paths, before the branch. The probe passes almost every time, and a
       # PASS that still wrote to stderr is the early signal that precedes the next rollback --
       # the old form surfaced that only incidentally, via the same 2>&1 that destroyed it on
       # failure. Moving this into the failure arm would silently swallow it again.

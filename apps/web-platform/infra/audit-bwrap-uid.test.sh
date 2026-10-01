@@ -35,6 +35,10 @@ case "$1" in
     fi
     ;;
   exec)
+    # #8016: record the raw argv to a FILE (never stdout, which feeds the PASS message
+    # run_case asserts on). The /dev/null default keeps an unset variable from failing the
+    # mock; run_case passes the path through its extra-env arguments.
+    printf '%s\n' "$*" >> "${DOCKER_EXEC_ARGV_LOG:-/dev/null}"
     echo "${DOCKER_EXEC_STDOUT:-0}"
     exit "${DOCKER_EXEC_EXIT:-0}"
     ;;
@@ -137,6 +141,39 @@ echo "--- check 1 regression guard: bwrap exec failure ---"
 run_case "docker exec bwrap fails — CLONE_NEWUSER rejected" \
   "inspect-pass.txt" 1 "CLONE_NEWUSER rejected" \
   "DOCKER_EXEC_EXIT=1"
+
+echo ""
+echo "--- #8016: the docker-exec bwrap statement must not arm PDEATHSIG ---"
+
+# A bwrap spawned by `docker exec` is a child of the short-lived runc exec parent;
+# --die-with-parent arms PR_SET_PDEATHSIG(SIGKILL) on it and races that parent's exit, so a
+# healthy sandbox is SIGKILLed at startup (rc=137, empty stderr) and the audit reports a false
+# "CLONE_NEWUSER rejected". See the learning docker-exec-pdeathsig-race-sigkills-bwrap-probe.
+_ARGV_DIR=$(mktemp -d)
+_ARGV_LOG="$_ARGV_DIR/exec-argv.log"
+: > "$_ARGV_LOG"
+run_case "valid deploy — bwrap exec argv recorded" \
+  "inspect-pass.txt" 0 "CLONE_NEWUSER works" \
+  "DOCKER_EXEC_ARGV_LOG=$_ARGV_LOG"
+
+TOTAL=$((TOTAL + 1))
+_argv_line=$(cat "$_ARGV_LOG" 2>/dev/null || true)
+if [[ -z "$_argv_line" ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: no docker exec argv was recorded (the assertion below would be vacuous)"
+elif [[ " $_argv_line " == *" --die-with-parent "* ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: bwrap exec argv carries --die-with-parent (PDEATHSIG race under docker exec)"
+  echo "        argv: $_argv_line"
+elif [[ " $_argv_line " != *" --unshare-user "* || " $_argv_line " != *" --unshare-pid "* ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: bwrap exec argv lost --unshare-user/--unshare-pid (the capability under audit)"
+  echo "        argv: $_argv_line"
+else
+  PASS=$((PASS + 1))
+  echo "  PASS: bwrap exec argv has --unshare-user --unshare-pid and no --die-with-parent"
+fi
+rm -rf "$_ARGV_DIR"
 
 # --- Results ----------------------------------------------------------------
 
