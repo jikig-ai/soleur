@@ -693,11 +693,16 @@ key is corrupted", and the remedy it suggests is to paste a fresh key into `prd_
 **undoes the eviction**, on a config every branch of this public repository can read. A message
 that invites the operator to reverse the fix is worse than no message.
 
-Four consumers read this name and all four carry the refusal:
-`.github/actions/mint-soleur-ai-app-token/action.yml`, `apply-github-infra.yml`,
+Three consumers read this name and all three carry the refusal: `apply-github-infra.yml`,
 `board-status-sync.yml`, and this workflow. ADR-241 D5, the plan and the #8209 runbook all promised
 `verdict=legacy_app_key_evicted`; nothing implemented it until review round 3. Census row **G4e**
-is what keeps a fifth consumer from being added without it.
+(floor 3) is what keeps a fourth consumer from being added without it.
+
+*Updated 2026-09-30 (#9262):* this read "Four consumers" until #9262. The fourth was the pin-bump
+and auto-mint composite, `.github/actions/mint-soleur-ai-app-token/action.yml`, renamed to
+`.github/actions/mint-infra-app-token/action.yml` in #9262. It left the population: it no longer
+reads `GITHUB_APP_PRIVATE_KEY` (or `prd_terraform` at all), and it mints the Tier-B `soleur-infra`
+identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3.
 
 ### plan_only, belt-and-braces on the post-apply steps
 
