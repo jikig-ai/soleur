@@ -865,12 +865,46 @@ else:
 # longer reads GITHUB_APP_PRIVATE_KEY; it mints the Tier-B soleur-infra identity from the
 # fixed Tier-B project soleur-infra-privileged, so it left this population. The property
 # is unchanged over the three remaining inline readers.
-app_key_sites, app_key_missing = [], []
+#
+# Floor 3 -> exact 1 (#9360, 2026-10-01): apply-github-infra and
+# apply-web-platform-infra::entrypoint_audit no longer read GITHUB_APP_PRIVATE_KEY. The
+# first mints the Tier-B soleur-infra token through the composite; the second posts with
+# its own github.token. The one remaining reader is board-status-sync's legacy arm. The pin
+# is EXACT and holds on the fixture tree too (its one reader is appkey.yml), so a second
+# reader is a deliberate census edit with a dated rationale, never a silent pass because it
+# carries the refusal; and a tree with ZERO readers reds as well, which makes the pin the
+# row's own anti-vacuity floor.
+#
+# Tier clause (#9360): no reading site may sit in a job bound to a Tier-B environment. After
+# O10 such a read can only ever return the sentinel, which is exactly the #9360 incident
+# (apply-github-infra ran under environment infra-privileged and still read prd_terraform).
+# Composites are job-less, so never Tier B here.
+#
+# Sunset: the row retires once board-status-sync's legacy arm and the Doppler name
+# GITHUB_APP_PRIVATE_KEY are deleted.
+def step_sites(doc):
+    """(job-or-None, run body) per `run:` step; the same walk as step_bodies, keeping the job."""
+    if not isinstance(doc, dict):
+        return
+    for jn, j in (doc.get("jobs") or {}).items():
+        if isinstance(j, dict):
+            for st in (j.get("steps") or []):
+                if isinstance(st, dict) and st.get("run"):
+                    yield (jn, j), str(st["run"])
+    runs = doc.get("runs")
+    if isinstance(runs, dict):
+        for st in (runs.get("steps") or []):
+            if isinstance(st, dict) and st.get("run"):
+                yield None, str(st["run"])
+
+app_key_sites, app_key_missing, app_key_tierb = [], [], []
 for rel, (doc, text) in sorted(docs.items()):
-    for stepbody in step_bodies(doc):
+    for job, stepbody in step_sites(doc):
         if not any(True for _l, _m in cmd_sites(stepbody, APP_PEM_READ)):
             continue
         app_key_sites.append(rel)
+        if job is not None and set(env_arms(job[1].get("environment")) or []) & TIER_B_ENVIRONMENTS:
+            app_key_tierb.append("%s::%s" % (rel, job[0]))
         # Command position, not raw text: the sentinel name appears in COMMENTS at three of
         # these sites (the rationale pointer), so a raw `in` test passes on a site whose
         # refusal was deleted and whose comment was left behind -- which is the single most
@@ -881,14 +915,9 @@ for rel, (doc, text) in sorted(docs.items()):
             app_key_missing.append("%s guard=%s verdict=%s" % (rel, has_guard, has_verdict))
 check("G4e: every step that reads GITHUB_APP_PRIVATE_KEY from Doppler refuses the "
       "EVICTED_SEE_ADR_241 sentinel by name and emits verdict=legacy_app_key_evicted "
-      "[%d reading steps]" % len(app_key_sites),
-      # The floor is on the LIVE tree only. The mutation fixtures below are synthetic
-      # workflow trees that contain none of these consumers, and a floor of 3 applied to
-      # them would make every mutant red for a reason unrelated to what it mutates -- which
-      # reads as coverage and is the opposite of it. On a synthetic tree the row asserts the
-      # implication only: any site that DOES read the key carries the refusal.
-      (len(app_key_sites) >= (3 if CHECK_GIT else 0)) and not app_key_missing,
-      "sites=%d live=%s missing=%s" % (len(app_key_sites), CHECK_GIT, app_key_missing[:5]))
+      "[%d reading steps], exactly 1, none in a Tier-B job" % len(app_key_sites),
+      len(app_key_sites) == 1 and not app_key_missing and not app_key_tierb,
+      "sites=%d live=%s missing=%s tierb=%s" % (len(app_key_sites), CHECK_GIT, app_key_missing[:5], app_key_tierb[:5]))
 
 # ── Guard 5: `plan_only` only ever SUBTRACTS ────────────────────────────────────────
 #
@@ -2223,6 +2252,29 @@ MUTDIR="$(fixcopy g4-e2)"; assert_fixture_dir "$MUTDIR"
 if mutate g4-e2-verdict-dropped "$MUTDIR/tree/.github/workflows/appkey.yml" 2 's/verdict=legacy_app_key_evicted the key/the key/'; then
   fixcensus "$MUTDIR" "$T/mut/g4-e2.tsv" ""
   mutant_red g4-e2-verdict-dropped wf_row "$T/mut/g4-e2.tsv" "G4e:"
+fi
+# Row e3 (#9360) — a SECOND compliant reader. It carries the refusal, so the implication arm
+# stays satisfied; only the exact pin (2 != 1) can red it. This is the "second member" row: a
+# floor (>= N) would have passed it.
+MUTDIR="$(fixcopy g4-e3)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-e3-second-reader "$MUTDIR/tree/.github/workflows/appkey.yml" 1 '$a\      - run: PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain); if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then echo "::error::verdict=legacy_app_key_evicted"; exit 1; fi'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-e3.tsv" ""
+  mutant_red g4-e3-second-reader wf_row "$T/mut/g4-e3.tsv" "G4e:"
+fi
+# Row e4 (#9360) — the one compliant reader moves into a Tier-B job (environment
+# infra-privileged, push-triggered). Count and refusal are unchanged, so only the tier clause
+# can red it. This is the shape of the incident itself.
+MUTDIR="$(fixcopy g4-e4)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-e4-tier-b-reader "$MUTDIR/tree/.github/workflows/appkey.yml" 3 's/^on: pull_request$/on: push/; /^    runs-on: ubuntu-24.04$/a\    environment: infra-privileged'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-e4.tsv" ""
+  mutant_red g4-e4-tier-b-reader wf_row "$T/mut/g4-e4.tsv" "G4e:"
+fi
+# Row e5 (#9360) — the row's own dispatch: delete the only read, so it examines 0 sites. The
+# exact pin is the anti-vacuity floor (0 != 1); under the old ">= 0 on fixtures" this was green.
+MUTDIR="$(fixcopy g4-e5)"; assert_fixture_dir "$MUTDIR"
+if mutate g4-e5-no-reader "$MUTDIR/tree/.github/workflows/appkey.yml" 1 '/^          PEM=\$\(doppler secrets get GITHUB_APP_PRIVATE_KEY/d'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-e5.tsv" ""
+  mutant_red g4-e5-no-reader wf_row "$T/mut/g4-e5.tsv" "G4e:"
 fi
 
 # ── Guard 2 ──────────────────────────────────────────────────────────────────────────
