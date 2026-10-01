@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import {
   DIAG_RE,
   GENERATED_HEADER,
+  LIKEC4_BEFORE,
   LIKEC4_VERSION,
   C4_MARKER,
   C4_MARKER_FIELDS,
@@ -408,6 +409,12 @@ describe("drift guards", () => {
     const m = regenScript.match(/^LIKEC4_VERSION="([^"]+)"/m);
     expect(m).not.toBeNull();
     expect(LIKEC4_VERSION).toBe(m![1]);
+  });
+
+  it("pins the --before date to the same value as render-c4-model.sh", () => {
+    const m = regenScript.match(/^LIKEC4_BEFORE="([^"]+)"/m);
+    expect(m).not.toBeNull();
+    expect(LIKEC4_BEFORE).toBe(m![1]);
   });
 
   it("pins likec4 to the same version as the server-side renderer", () => {
