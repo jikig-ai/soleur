@@ -3988,7 +3988,7 @@ case "$COMPONENT" in
       # stderr, container still running -- #8016). The faithful canary keeps the SDK argv,
       # flag included, from a long-lived node parent. Measurements and the repro loop:
       # knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md
-      # ci-deploy.test.sh Guard 1 / Guard 2 pin both the absence and the capability tokens.
+      # ci-deploy.test.sh Guard 2 pins the exact probe argv; Guard 1 is a lexical tripwire on the flag.
       BWRAP_RC=0
       BWRAP_T0="$(_now_ms)"
       BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
@@ -4010,7 +4010,7 @@ case "$COMPONENT" in
       BWRAP_CSTATE="${BWRAP_CSTATE:-unknown}"
       # Sanitize ONCE, up front: both sinks below egress to Better Stack.
       BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")"
-      # Re-emit on BOTH paths, before the branch. The probe passes almost every time, and a
+      # Re-emit on BOTH paths, before the branch. The probe usually passes, and a
       # PASS that still wrote to stderr is the early signal that precedes the next rollback --
       # the old form surfaced that only incidentally, via the same 2>&1 that destroyed it on
       # failure. Moving this into the failure arm would silently swallow it again.

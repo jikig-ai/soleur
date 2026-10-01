@@ -164,16 +164,19 @@ strips non-printable bytes, folds `"` to `'`, applies shape rules (Doppler `dp.*
 env-file value of ≥12 characters longest-first with `<redacted:NAME>`. Values under 12
 characters and values that runc `%q`-escaped are outside the value arm; the shape rules remain.
 
-**Closing #8016.** The self-report named the cause: every rollback was `rc=137`, empty stderr,
-`cstate=running`, i.e. a spawn-timing race between `docker exec`'s short-lived runc parent and the
-`PR_SET_PDEATHSIG(SIGKILL)` that `--die-with-parent` arms, not a sandbox failure. The probe no
-longer passes that flag (mechanism, measurements and repro loop:
+**Closing #8016.** The self-report named the SHAPE of every rollback (`rc=137`, empty stderr,
+`cstate=running`); reproducing it locally named the cause: a spawn-timing race between
+`docker exec`'s short-lived runc parent and the `PR_SET_PDEATHSIG(SIGKILL)` that `--die-with-parent`
+arms, not a sandbox failure. The probe no longer passes that flag (mechanism, measurements and repro loop:
 `knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md`)
-and #8016 is closed by the fix PR. The follow-through sweeper
-(`scripts/followthroughs/bwrap-probe-selfreport-8016.sh`) goes inert with the issue, so **a
-recurrence does not reopen it**: it surfaces through the release-failure email, the workflow
-`::error::` annotation and the query above. A durable log-based alert is tracked in #9342.
-Remediation for a recurrence is a redeploy via `apply-deploy-pipeline-fix.yml`, never a host
+and #8016 is closed by the fix PR. The follow-through sweeper that watched it
+(`scripts/followthroughs/bwrap-probe-selfreport-8016.sh`) is retired in the same PR, together with
+its test, registration and the issue's `follow-through` label (the sweeper's closed-set pass would
+otherwise reopen a COMPLETED issue on the first matching row). **A recurrence therefore does not
+reopen it**, and detection is pull-only until #9342 lands: the release-failure email, the workflow
+`::error::` annotation and the query above. Remediation for a recurrence is GitHub's "Re-run failed
+jobs" on the release run, never `apply-deploy-pipeline-fix.yml` (it redeploys the already-running
+tag and cannot ship past the gate; see the comment in `reusable-release.yml`) and never a host
 command.
 
 ## References

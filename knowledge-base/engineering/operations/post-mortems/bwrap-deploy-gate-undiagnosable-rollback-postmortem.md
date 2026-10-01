@@ -229,6 +229,6 @@ Every action item and follow-up so this incident cannot recur (save logs, add te
 
 | Issue | Action | Status |
 |---|---|---|
-| #8016 | Root cause of the two rollbacks. Enrolled in the follow-through sweeper (`scripts/followthroughs/bwrap-probe-selfreport-8016.sh`): a recurrence comments the trusted fields and leaves it open for a fix; ≥20 clean self-reporting deploys close it as environmental. | open |
+| #8016 | Root cause of the two rollbacks. Enrolled in the follow-through sweeper (`scripts/followthroughs/bwrap-probe-selfreport-8016.sh`): a recurrence comments the trusted fields and leaves it open for a fix; ≥20 clean self-reporting deploys close it as environmental. | closed 2026-10-01: cause found and fixed (see the Update note under Status); the sweeper is retired with the fix |
 | #8036 | Adjacent, same deploy: `docker login ghcr.io` fails on every deploy (`stage=relogin_failed`), masked by the zot mirror. Not a cause of the rollbacks; found while reading the same Better Stack window. | open |
 | #8037 | Adjacent, same root as #8036: image signature verification has never succeeded (`cosign_absent`), so the `IMAGE_VERIFY_MODE=enforce` soak can never pass. | open |

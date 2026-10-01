@@ -22,6 +22,7 @@ readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 #                            verbatim for any `docker inspect` call.
 #   DOCKER_EXEC_EXIT       - exit code for `docker exec` calls (default 0).
 #   DOCKER_EXEC_STDOUT     - optional stdout for `docker exec` (default "0").
+#   DOCKER_EXEC_ARGV_LOG   - optional file; every `docker exec` appends its raw argv, one line each (#8016).
 
 create_docker_mock() {
   cat > "$1/docker" << 'MOCK'
@@ -158,20 +159,27 @@ run_case "valid deploy — bwrap exec argv recorded" \
 
 TOTAL=$((TOTAL + 1))
 _argv_line=$(cat "$_ARGV_LOG" 2>/dev/null || true)
+_argv_n=$(printf '%s\n' "$_argv_line" | grep -c . || true)
+_argv_expected="exec test-container bwrap --new-session --unshare-user --unshare-pid --dev /dev --bind / / -- id -u"
 if [[ -z "$_argv_line" ]]; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: no docker exec argv was recorded (the assertion below would be vacuous)"
-elif [[ " $_argv_line " == *" --die-with-parent "* ]]; then
+elif [[ "$_argv_n" -ne 1 ]]; then
   FAIL=$((FAIL + 1))
-  echo "  FAIL: bwrap exec argv carries --die-with-parent (PDEATHSIG race under docker exec)"
+  echo "  FAIL: expected exactly one docker exec, recorded $_argv_n"
   echo "        argv: $_argv_line"
-elif [[ " $_argv_line " != *" --unshare-user "* || " $_argv_line " != *" --unshare-pid "* ]]; then
+elif [[ "$_argv_line" == *"--die-with-parent"* || "$_argv_line" == *"--pdeathsig"* ]]; then
   FAIL=$((FAIL + 1))
-  echo "  FAIL: bwrap exec argv lost --unshare-user/--unshare-pid (the capability under audit)"
+  echo "  FAIL: bwrap exec argv arms PDEATHSIG (race under docker exec)"
   echo "        argv: $_argv_line"
+elif [[ "$_argv_line" != "$_argv_expected" ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: bwrap exec argv differs from the pinned argv"
+  echo "        expected: $_argv_expected"
+  echo "        argv:     $_argv_line"
 else
   PASS=$((PASS + 1))
-  echo "  PASS: bwrap exec argv has --unshare-user --unshare-pid and no --die-with-parent"
+  echo "  PASS: bwrap exec argv is exactly the pinned argv (no PDEATHSIG arm, --unshare-user --unshare-pid kept)"
 fi
 rm -rf "$_ARGV_DIR"
 

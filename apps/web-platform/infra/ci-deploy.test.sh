@@ -931,7 +931,7 @@ case "$mode" in
           fi
           printf '%s' "${MOCK_BWRAP_FAIL_STDERR-bwrap: No permissions to create new namespace}" >&2
           # rc is parameterised too: rc=0 with stderr is the pass-with-chatter shape,
-          # which is almost every run and the early signal before the next rollback.
+          # which is the common case and the early signal before the next rollback.
           exit "${MOCK_BWRAP_FAIL_RC-1}"
         fi
       done
@@ -2850,7 +2850,7 @@ echo "--- #8016 Guard 2: the blocking probe's recorded argv ---"
 
 # A bwrap spawned by `docker exec` is a child of the short-lived runc exec parent. --die-with-parent
 # arms PR_SET_PDEATHSIG(SIGKILL) on it and races that parent's exit, so a healthy sandbox is
-# SIGKILLed at startup (rc=137, empty stderr, container still running) on a few percent of deploys.
+# SIGKILLed at startup (rc=137, empty stderr, container still running) on a few to ~11% of deploys.
 # See knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md
 # The assertion reads the argv the script actually SENT (mock hook), not a grep of its source, so
 # a refactor that moves or builds the statement cannot hide the flag.
@@ -2866,32 +2866,36 @@ assert_bwrap_probe_argv() {
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  local contents line padded forbidden="" capable=0
+  # EXACT match on exactly ONE recorded line, deliberately. The #4932 lesson is that an argv ADDITION
+  # (--unshare-user --proc /proc) rolled back every deploy, and the #8016 lesson is that a PDEATHSIG
+  # arm under docker exec SIGKILLs the probe; a token-presence check passes both (extra flags, a
+  # setpriv prefix, a second bwrap exec carrying all the tokens). Any intended change to the probe
+  # argv is a conscious edit of EXPECTED here.
+  local expected="exec soleur-web-platform-canary bwrap --new-session --dev /dev --unshare-pid --bind / / -- true"
+  local contents n_lines
   contents=$(cat "$log" 2>/dev/null || true)
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    padded=" $line "
-    [[ "$padded" == *" --die-with-parent "* ]] && forbidden="$line"
-    if [[ "$padded" == *" --unshare-pid "* && "$padded" == *" --dev /dev "* && "$padded" == *" --bind / / "* ]]; then
-      capable=1
-    fi
-  done <<< "$contents"
+  n_lines=$(printf '%s\n' "$contents" | grep -c . || true)
 
   if [[ -z "$contents" ]]; then
     FAIL=$((FAIL + 1))
     echo "  FAIL: $label: no bwrap docker exec was recorded (the checks below would be vacuous; exit=$actual_exit)"
     echo "        output: $output"
-  elif [[ -n "$forbidden" ]]; then
+  elif [[ "$n_lines" -ne 1 ]]; then
     FAIL=$((FAIL + 1))
-    echo "  FAIL: $label: probe argv carries --die-with-parent (PDEATHSIG race under docker exec)"
+    echo "  FAIL: $label: expected exactly one bwrap docker exec, recorded $n_lines (a second one can mask a changed probe)"
     echo "        argv log: $contents"
-  elif [[ "$capable" -ne 1 ]]; then
+  elif [[ "$contents" == *"--die-with-parent"* || "$contents" == *"--pdeathsig"* ]]; then
     FAIL=$((FAIL + 1))
-    echo "  FAIL: $label: probe argv lost one of --unshare-pid, --dev /dev, --bind / / (the capability it gates on)"
+    echo "  FAIL: $label: probe argv arms PDEATHSIG (race under docker exec)"
+    echo "        argv log: $contents"
+  elif [[ "$contents" != "$expected" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label: probe argv differs from the pinned argv"
+    echo "        expected: $expected"
     echo "        argv log: $contents"
   else
     PASS=$((PASS + 1))
-    echo "  PASS: $label: probe argv keeps --unshare-pid --dev /dev --bind / / and omits --die-with-parent"
+    echo "  PASS: $label: probe argv is exactly the pinned argv (no PDEATHSIG arm, capability tokens intact)"
   fi
   rm -rf "$d"
 }
@@ -2905,8 +2909,10 @@ echo "--- #8016 Guard 1: no PDEATHSIG-arming flag on a docker-exec bwrap stateme
 # Every statement (backslash continuations joined, full-line comments dropped, trailing
 # ` # ...` comments stripped) that contains `docker exec` AND bwrap as a COMMAND token AND
 # --die-with-parent / --pdeathsig. `soleur-bwrap` (the AppArmor / seccomp option names on
-# `docker run`) is not a command token. Scope: *.sh only; a flag smuggled through a shell
-# variable is caught on the ci-deploy path by Guard 2, not here.
+# `docker run`) is not a command token. SCOPE, stated plainly: a lexical tripwire over the literal
+# spellings in non-test infra/**/*.sh. It does NOT see a flag carried in a variable, array or heredoc,
+# a non-.sh carrier, or the faithful-canary replay (sandbox-canary.mjs spawns bwrap from a long-lived
+# node parent via spawnSync, which is safe). The exact probe argv is pinned by Guard 2, not here.
 bwrap_exec_flag_violations() {
   local f
   for f in "$@"; do
@@ -2917,7 +2923,7 @@ bwrap_exec_flag_violations() {
         t = s
         sub(/[[:space:]]+#.*$/, "", t)
         re = "(^|[[:space:];|&(/\"" q "])bwrap([[:space:]\"" q "]|$)"
-        if (t ~ /docker[[:space:]]+exec/ && t ~ re && t ~ /(--die-with-parent|--pdeathsig)/)
+        if (t ~ /docker[^|;&]*[[:space:]]exec[[:space:]]/ && t ~ re && t ~ /(--die-with-parent|--pdeathsig)/)
           printf "%s:%d: %s\n", file, startline, s
       }
       /^[[:space:]]*#/ { next }
@@ -2934,17 +2940,16 @@ bwrap_exec_flag_violations() {
 }
 
 assert_bwrap_flag_guard() {
-  local d out n
+  local d out n f
   d=$(mktemp -d)
 
   # Real tree: every non-test shell script under infra/ (recursive) must be clean.
   TOTAL=$((TOTAL + 1))
   local -a files=()
   while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$SCRIPT_DIR" -type f -name '*.sh' ! -name '*.test.sh' -print0)
-  out=$(bwrap_exec_flag_violations "${files[@]}")
   if [[ ${#files[@]} -lt 1 ]]; then
     FAIL=$((FAIL + 1)); echo "  FAIL: G1 real tree: scanned zero files (vacuous)"
-  elif [[ -n "$out" ]]; then
+  elif out=$(bwrap_exec_flag_violations "${files[@]}"); [[ -n "$out" ]]; then
     FAIL=$((FAIL + 1)); echo "  FAIL: G1 real tree: a docker-exec bwrap statement arms PDEATHSIG:"; printf '        %s\n' "$out"
   else
     PASS=$((PASS + 1)); echo "  PASS: G1 real tree: ${#files[@]} infra scripts, no docker-exec bwrap statement arms PDEATHSIG"
@@ -2953,6 +2958,7 @@ assert_bwrap_flag_guard() {
   # Must-flag fixtures: the matcher is proven to see each shape, so an empty or broken matcher goes RED.
   printf '%s\n' 'docker exec c bwrap \' '  --new-session --die-with-parent \' '  -- true' > "$d/cont.sh"
   printf '%s\n' 'docker exec c setpriv --pdeathsig SIGKILL bwrap --dev /dev -- true' > "$d/setpriv.sh"
+  printf '%s\n' 'docker -H ssh://h container exec c bwrap --die-with-parent -- true' > "$d/dockerH.sh"
   printf '%s\n' 'docker exec a bwrap --dev /dev -- true' \
     'docker exec b bwrap --die-with-parent -- true' \
     'docker exec c bwrap --die-with-parent -- true' > "$d/two.sh"
@@ -2968,13 +2974,20 @@ assert_bwrap_flag_guard() {
   else FAIL=$((FAIL + 1)); echo "  FAIL: G1 missed --pdeathsig"; fi
 
   TOTAL=$((TOTAL + 1))
+  out=$(bwrap_exec_flag_violations "$d/dockerH.sh")
+  if [[ -n "$out" ]]; then PASS=$((PASS + 1)); echo "  PASS: G1 flags docker -H <host> container exec"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: G1 missed docker -H <host> container exec"; fi
+
+  TOTAL=$((TOTAL + 1))
   out=$(bwrap_exec_flag_violations "$d/two.sh")
   n=$(printf '%s\n' "$out" | grep -c . || true)
   if [[ "$n" -eq 2 ]]; then PASS=$((PASS + 1)); echo "  PASS: G1 reports both violating statements (does not stop at the first)"
   else FAIL=$((FAIL + 1)); echo "  FAIL: G1 reported $n violations for a file with 2 (expected 2)"; fi
 
   # Must-PASS inputs that differ from the real tree: none of these may be flagged.
-  printf '%s\n' 'docker run --security-opt apparmor=soleur-bwrap --security-opt seccomp=/etc/docker/seccomp-soleur-bwrap.json img' > "$d/run.sh"
+  # `soleur-bwrap` is an option/file NAME, not the command token: this fixture carries `docker exec` AND
+  # the flag, so it is flagged unless the matcher insists on bwrap as a command token.
+  printf '%s\n' 'docker exec c cat /etc/apparmor.d/soleur-bwrap --die-with-parent' > "$d/run.sh"
   printf '%s\n' '# docker exec c bwrap --die-with-parent -- true (a comment is not a statement)' > "$d/comment.sh"
   printf '%s\n' 'bwrap --die-with-parent --dev /dev -- true' > "$d/host.sh"
   local pass_case
@@ -3488,7 +3501,7 @@ MOCK_BWRAP_CSTATE=exited assert_blocking_probe_line \
   "" 137 "" \
   'rc=137' 'ms=[0-9]{1,3} ' 'cstate=exited ' 'err_chars=0' 'bwrap_err="<empty>"$'
 
-# Scenario 3 -- PASS-WITH-CHATTER: rc=0 but the probe wrote to stderr (almost every run).
+# Scenario 3 -- PASS-WITH-CHATTER: rc=0 but the probe wrote to stderr.
 # The deploy must NOT roll back, so there must be NO rollback line at all.
 assert_probe_pass_chatter_reemits() {
   TOTAL=$((TOTAL + 1))
@@ -9935,9 +9948,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # arm, atomic merge, retry, the boot ok/ok_no_token/ok_fallback split, the row machinery self-test).
 # Measured: 481 ran. Merged with #9169's 4 GHCR_DENY rows: 485 ran. The floor is that count.
 # #6129: raised 485 -> 490 with the ENFORCE-default rows (4 #6129 verify rows + the T-1a-4 enforce arm).
-# #8016: raised 490 -> 499 with the 9 PDEATHSIG rows (Guard 2: 2 recorded-argv rows; Guard 1: the
-# real-tree scan, 3 must-flag fixtures, 3 must-pass inputs). Measured: 499 ran.
-CI_DEPLOY_ASSERT_FLOOR=499
+# #8016: raised 490 -> 500 with the 10 PDEATHSIG rows (Guard 2: 2 recorded-argv rows; Guard 1: the
+# real-tree scan, 4 must-flag fixtures, 3 must-pass inputs). Measured: 500 ran.
+CI_DEPLOY_ASSERT_FLOOR=500
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

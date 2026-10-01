@@ -28,6 +28,11 @@ flag "a massive footgun" (containers/bubblewrap#692) and golang/go#9263 is the s
 
 ## Measurements (Docker 29.7 / runc, `--init`, bwrap 0.8, seccomp+AppArmor unconfined, SYS_ADMIN)
 
+The repro container is unconfined with `SYS_ADMIN`; production runs the `soleur-bwrap` AppArmor and custom
+seccomp profiles without `SYS_ADMIN`. The race is a process-start timing property independent of both
+(the bwrap-free `setpriv` row below reproduces it), but the local rate is a different host, not a copy of
+production's.
+
 Rows marked planning-time were measured during planning; the setpriv rows were not re-run at work time.
 
 | Arm | Result |
@@ -58,9 +63,12 @@ faithful canary, `c4-render.ts`) is safe, which is why those never flaked. This 
 direction of the #4932 revert, which concerned ADDING flags that diverge from the SDK argv.
 
 Pinned by `ci-deploy.test.sh` Guard 2 (the argv the script actually sent, recorded by the mock docker,
-keeps `--unshare-pid --dev /dev --bind / /` and omits the flag) and Guard 1 (a statement scan over
-every non-test `*.sh` under `apps/web-platform/infra/`), and by `audit-bwrap-uid.test.sh` for the
-sibling site.
+must equal the pinned probe argv exactly, on exactly one recorded exec) and Guard 1 (a lexical
+tripwire for the literal flag spellings on `docker exec ... bwrap` statements in non-test `*.sh` under
+`apps/web-platform/infra/`; it does not see a flag carried in a variable, array or heredoc, or a
+non-`.sh` carrier), and by `audit-bwrap-uid.test.sh` for the sibling site. The faithful-canary replay
+(`sandbox-canary.mjs`) is outside both on purpose: it spawns bwrap with `spawnSync` from node's main
+thread, a long-lived parent.
 
 ## Repro loop
 
