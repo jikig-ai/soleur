@@ -203,7 +203,7 @@ labelled `follow-through` (`followthrough-convention.md`) carrying:
 ```text
 <!-- soleur:followthrough
   script=scripts/followthroughs/workspaces-plaintext-hold-9348.sh
-  earliest=2026-10-15T00:00:00Z
+  earliest=2026-10-01T00:00:00Z
   secrets=GH_TOKEN
 -->
 ```
@@ -216,9 +216,15 @@ Its probe is notify-only while the hold stands, and reads only `gh`:
   before the sweep and #9348 is still unmerged (the post-forget bound), or #9348 was closed unmerged;
 - **exit 2 (NOT YET)** otherwise; **exit 3 (CANNOT ESTABLISH)** when `gh` fails.
 
-The `earliest=2026-10-15` gate means the 48 h bound is enforced by the sweep only from that date; before
-it, the Resume session's own clock carries it (Resume step 5 names the forget run's
-`updated_at`). The tracker is #9380. The probe script and its suite ship to `main` in their own PR (#9381),
+> **Superseded 2026-10-01 (#9381 review):** this paragraph originally accepted that the `earliest=2026-10-15`
+> gate meant the 48 h bound was enforced by the sweep only from that date. That made the probe's post-forget
+> arm unreachable in production (the sweeper skips a probe before `earliest`, and 2026-10-15 is also the probe's
+> own deadline). Tracker #9380 now carries `earliest=2026-10-01T00:00:00Z` (its filing date); the probe owns the
+> 2026-10-15 deadline itself and answers exit 2 before it, so the 48 h bound is evaluated on every daily sweep.
+> The Resume session's own clock (Resume step 5 names the forget run's `updated_at`) remains the belt to that brace.
+
+The probe's 48 h clock runs from the EARLIEST successful forget run on `main` (the run that removed the addresses),
+so an idempotent re-dispatch cannot restart it. The tracker is #9380. The probe script and its suite ship to `main` in their own PR (#9381),
 not in this draft: the sweeper runs probes from `main`, so a probe inside this PR would only
 reach `main` after the hold had already cleared. A closed-unmerged #9348 reads exit 5 (confirm
 the abandon branch's ledger-extension PR merged, then close the tracker by hand).
@@ -1195,7 +1201,7 @@ Ref #6588
 CLO has attested, and the destruction record is `complete` before ADR-119 flips to `accepted`; (4)
 `infra-validation` is re-run green after the forget (red until then by design). Draft base SHA: <sha>.
 
-**Time bounds (follow-through #9380, `earliest=2026-10-15T00:00:00Z`).** If D has not run by
+**Time bounds (follow-through #9380, `earliest=2026-10-01T00:00:00Z`; the probe owns the 2026-10-15 deadline).** If D has not run by
 2026-10-15, the abandon/expiry branch applies. After the forget, this PR must merge within 48 h.
 **Resume:** `knowledge-base/project/plans/2026-10-01-feat-workspaces-plaintext-wipe-pr-b-convergence-plan.md`,
 `## Resume After the Hold`.
