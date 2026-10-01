@@ -274,6 +274,7 @@ describe("AgentEngineSettings", () => {
     const mode = await view.findByLabelText("Authentication mode");
     fireEvent.change(mode, { target: { value: "api-key" } });
     const confirm = await view.findByRole("button", { name: "Apply to existing Codex conversations" });
+    expect(view.getByRole("alertdialog")).toHaveTextContent("Requested authentication mode: API key.");
     fireEvent.click(confirm);
     await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/dashboard/settings/agent-engine",

@@ -3,6 +3,12 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 
 // --- Mocks ---
 
+const { mockReportSilentFallback } = vi.hoisted(() => ({ mockReportSilentFallback: vi.fn() }));
+vi.mock("@/lib/client-observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: vi.fn(),
+}));
+
 const mockGetSession = vi.fn().mockResolvedValue({
   data: { session: { access_token: "test-token" } },
 });
@@ -27,6 +33,8 @@ let wsInstance: {
 class MockWebSocket {
   static OPEN = 1;
   static CONNECTING = 0;
+  static CLOSING = 2;
+  static CLOSED = 3;
   onopen: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
   onclose: ((ev: CloseEvent) => void) | null = null;
@@ -102,6 +110,175 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     });
   }
 
+  async function acknowledgeHeldDraft() {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    const attachments = [{ storagePath: "synthetic/draft.txt", filename: "draft.txt", contentType: "text/plain", sizeBytes: 42 }];
+    act(() => result.current.sendMessage("Keep this original draft", attachments));
+    if (!wsInstance) throw new Error("expected connected test socket");
+    const ws = wsInstance;
+    const chat = ws.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).find((frame) => frame.type === "chat");
+    serverSend({
+      type: "codex_history_transfer_required", conversationId: "conv-history-ack",
+      authModeGeneration: 2, authMode: "api-key", clientTurnId: chat.clientTurnId,
+    });
+    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2));
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
+    const retainedMessage = result.current.messages[0];
+    if (retainedMessage.type !== "text") throw new Error("expected retained text draft");
+    expect(retainedMessage.delivery).toBe("retryable");
+    ws.send.mockClear();
+    return { result, ws, chat, retainedMessage };
+  }
+
+  it.each([MockWebSocket.CLOSING, MockWebSocket.CLOSED])("retains the acknowledged draft when socket state %s precedes the close-status update", async (readyState) => {
+    const { result, ws, chat, retainedMessage } = await acknowledgeHeldDraft();
+    ws.readyState = readyState;
+    expect(result.current.status).toBe("connected");
+    act(() => result.current.resendMessage(retainedMessage));
+    expect(ws.send).not.toHaveBeenCalled();
+    expect(result.current.messages).toEqual([retainedMessage]);
+
+    ws.readyState = MockWebSocket.OPEN;
+    act(() => result.current.resendMessage(retainedMessage));
+    act(() => result.current.resendMessage(retainedMessage));
+    expect(ws.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([chat]);
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({
+      id: retainedMessage.id, content: retainedMessage.content, attachments: retainedMessage.attachments,
+    }));
+    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+  });
+
+  it("retains the acknowledged draft after a synchronous socket send failure", async () => {
+    const { result, ws, chat, retainedMessage } = await acknowledgeHeldDraft();
+    ws.send.mockImplementationOnce(() => { throw new DOMException("Socket is closing", "InvalidStateError"); });
+    expect(() => act(() => result.current.resendMessage(retainedMessage))).not.toThrow();
+    expect(result.current.messages).toEqual([retainedMessage]);
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(expect.any(DOMException), expect.objectContaining({
+      feature: "codex-history-transfer", op: "send-resend-throw",
+    }));
+
+    ws.send.mockClear();
+    act(() => result.current.resendMessage(retainedMessage));
+    act(() => result.current.resendMessage(retainedMessage));
+    expect(ws.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([chat]);
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+  });
+
+  it("waits for same-conversation session confirmation after reconnect auth before explicitly resending the original draft once", async () => {
+    const { result, ws: previousWs, chat, retainedMessage } = await acknowledgeHeldDraft();
+    act(() => result.current.reconnect());
+    await waitFor(() => {
+      expect(wsInstance).not.toBe(previousWs);
+      expect(wsInstance?.send).toHaveBeenCalled();
+    });
+    serverSend({ type: "auth_ok" });
+    expect(result.current.status).toBe("connected");
+    expect(result.current.sessionConfirmed).toBe(false);
+    expect(result.current.connection.phase).toBe("unrecoverable");
+    if (!wsInstance) throw new Error("expected reconnected test socket");
+    const reconnectedWs = wsInstance;
+    reconnectedWs.send.mockClear();
+    act(() => result.current.resendMessage(retainedMessage));
+    expect(reconnectedWs.send).not.toHaveBeenCalled();
+    expect(result.current.messages).toEqual([retainedMessage]);
+
+    act(() => result.current.resumeAfterUnrecoverable());
+    await waitFor(() => {
+      expect(wsInstance).not.toBe(reconnectedWs);
+      expect(wsInstance?.send).toHaveBeenCalled();
+    });
+    if (!wsInstance) throw new Error("expected explicit recovery socket");
+    const recoveryWs = wsInstance;
+    recoveryWs.send.mockClear();
+    serverSend({ type: "auth_ok" });
+    expect(result.current.sessionConfirmed).toBe(false);
+    expect(recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([
+      { type: "resume_session", conversationId: "conv-history-ack" },
+    ]);
+    act(() => result.current.resendMessage(retainedMessage));
+    expect(recoveryWs.send).toHaveBeenCalledTimes(1);
+    expect(result.current.messages).toEqual([retainedMessage]);
+
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    serverSend({
+      type: "session_resumed", conversationId: "conv-history-ack",
+      resumedFromTimestamp: "2026-09-30T00:00:00Z", messageCount: 0,
+    });
+    await waitFor(() => expect(result.current.historyLoading).toBe(false));
+    expect(result.current.sessionConfirmed).toBe(true);
+    expect(recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([
+      { type: "resume_session", conversationId: "conv-history-ack" },
+    ]);
+    act(() => result.current.resendMessage(retainedMessage));
+    act(() => result.current.resendMessage(retainedMessage));
+    const chats = recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat");
+    expect(chats).toEqual([chat]);
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({
+      id: retainedMessage.id, content: retainedMessage.content, attachments: retainedMessage.attachments,
+    }));
+    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+  });
+
+  it("keeps a held draft awaiting explicit session recovery even when stamped replay frames arrive", async () => {
+    const { result, ws: previousWs, chat, retainedMessage } = await acknowledgeHeldDraft();
+    serverSend({ type: "stream_start", leaderId: "cto", seq: 0 });
+    act(() => result.current.reconnect());
+    await waitFor(() => {
+      expect(wsInstance).not.toBe(previousWs);
+      expect(wsInstance?.send).toHaveBeenCalled();
+    });
+    serverSend({ type: "auth_ok" });
+    expect(result.current.sessionConfirmed).toBe(false);
+    expect(result.current.connection.phase).toBe("unrecoverable");
+    expect(wsInstance?.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toContainEqual({
+      type: "resume_stream", conversationId: "conv-history-ack", ackSeq: 0,
+    });
+    serverSend({ type: "stream", leaderId: "cto", content: "Unstamped frame", partial: true });
+    expect(result.current.sessionConfirmed).toBe(false);
+    serverSend({ type: "stream", leaderId: "cto", content: "Replayed reply", partial: true, seq: 1 });
+    expect(result.current.sessionConfirmed).toBe(false);
+    expect(result.current.connection.phase).toBe("unrecoverable");
+    expect(result.current.messages.find((message) => message.id === retainedMessage.id)).toEqual(retainedMessage);
+    act(() => result.current.resendMessage(retainedMessage));
+    expect(wsInstance?.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat")).toEqual([]);
+
+    const replayWs = wsInstance;
+    act(() => result.current.resumeAfterUnrecoverable());
+    await waitFor(() => {
+      expect(wsInstance).not.toBe(replayWs);
+      expect(wsInstance?.send).toHaveBeenCalled();
+    });
+    if (!wsInstance) throw new Error("expected explicit recovery socket");
+    const recoveryWs = wsInstance;
+    recoveryWs.send.mockClear();
+    serverSend({ type: "auth_ok" });
+    expect(recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([
+      { type: "resume_session", conversationId: "conv-history-ack" },
+    ]);
+    expect(result.current.sessionConfirmed).toBe(false);
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    serverSend({
+      type: "session_resumed", conversationId: "conv-history-ack",
+      resumedFromTimestamp: "2026-09-30T00:00:00Z", messageCount: 0,
+    });
+    await waitFor(() => expect(result.current.historyLoading).toBe(false));
+    expect(result.current.sessionConfirmed).toBe(true);
+    act(() => result.current.resendMessage(retainedMessage));
+    act(() => result.current.resendMessage(retainedMessage));
+    expect(recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat")).toEqual([chat]);
+    expect(result.current.messages.filter((message) => message.role === "user")).toHaveLength(1);
+  });
+
   it.each([
     { authMode: "api-key", billing: "your own credential", account: "your provider account" },
     { authMode: "managed", billing: "workspace’s connected ChatGPT account", account: "confirm applicable billing" },
@@ -164,6 +341,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(allExplicitRetries[1]).toEqual({
       type: "chat", content: "A separate turn", attachments: undefined, clientTurnId: chats[1].clientTurnId,
     });
+    expect(result.current.messages).toHaveLength(2);
     expect(result.current.messages[1]).not.toHaveProperty("delivery");
   });
 
@@ -202,9 +380,20 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     const { result } = renderHook(() => useWebSocket("new"));
     await connectAndAuth(result);
     serverSend({ type: "session_started", conversationId: "conv-history-ack" });
-    serverSend({ type: "codex_history_transfer_required", conversationId: "conv-history-ack", authModeGeneration: 2, authMode: "managed" });
+    act(() => result.current.sendMessage("Keep the unacknowledged draft"));
+    const chat = wsInstance?.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).find((frame) => frame.type === "chat");
+    serverSend({
+      type: "codex_history_transfer_required", conversationId: "conv-history-ack",
+      authModeGeneration: 2, authMode: "managed", clientTurnId: chat.clientTurnId,
+    });
+    const retainedMessage = result.current.messages[0];
+    if (retainedMessage.type !== "text") throw new Error("expected held text draft");
+    wsInstance?.send.mockClear();
     serverSend({ type: "codex_history_transfer_acknowledged", ...confirmation });
     expect(result.current.lastError).toEqual(expect.objectContaining({ conversationId: "conv-history-ack", authModeGeneration: 2 }));
+    expect(result.current.messages[0]).toEqual({ ...retainedMessage, delivery: "unsent" });
+    act(() => result.current.resendMessage({ ...retainedMessage, delivery: "retryable" }));
+    expect(wsInstance?.send).not.toHaveBeenCalled();
   });
 
   it.each(["codex_history_transfer_acknowledgment_rejected", "codex_history_transfer_acknowledgment_failed"])("keeps the notice after %s", async (errorCode) => {
@@ -227,6 +416,20 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     serverSend({ type: "codex_history_transfer_required", conversationId: "conv-history-ack", authModeGeneration: 2, authMode: "managed" });
     serverSend({ type: "session_started", conversationId: "conv-next" });
     expect(result.current.lastError).toBeNull();
+  });
+
+  it.each(["session_started", "session_resumed"])("invalidates an acknowledged held draft when another conversation emits %s", async (type) => {
+    const { result, ws, retainedMessage } = await acknowledgeHeldDraft();
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    serverSend({
+      type, conversationId: "conv-next",
+      ...(type === "session_resumed" ? { resumedFromTimestamp: "2026-09-30T00:00:00Z", messageCount: 0 } : {}),
+    });
+    expect(result.current.messages[0]).toEqual({ ...retainedMessage, delivery: "unsent" });
+    act(() => result.current.resendMessage(retainedMessage));
+    expect(ws.send).not.toHaveBeenCalled();
   });
 
   it("fetches history when realConversationId is set from session_resumed", async () => {

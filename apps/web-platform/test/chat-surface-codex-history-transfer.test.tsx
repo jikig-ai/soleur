@@ -57,4 +57,34 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resend message" }));
     expect(wsReturn.resendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: "Please continue this draft", delivery: "retryable" }));
   });
+
+  it.each([
+    { status: "reconnecting" as const, sessionConfirmed: true },
+    { status: "connected" as const, sessionConfirmed: false },
+  ])("disables held-draft resend until the connection and session are confirmed: %j", async (connection) => {
+    const { ChatSurface } = await import("@/components/chat/chat-surface");
+    wsReturn = createWebSocketMock({
+      ...connection,
+      realConversationId: "test-id",
+      messages: [{ id: "user-held-turn", type: "text", role: "user", content: "Keep this original draft", delivery: "retryable" }],
+      connection: { phase: "unrecoverable" },
+    });
+    const view = render(<ChatSurface variant="full" conversationId="test-id" />);
+    const resend = screen.getByRole("button", { name: "Resend message" });
+    expect(resend).toBeDisabled();
+    fireEvent.click(resend);
+    expect(wsReturn.resendMessage).not.toHaveBeenCalled();
+    expect(screen.getByText("Keep this original draft")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Resume with full context" }));
+    expect(wsReturn.resumeAfterUnrecoverable).toHaveBeenCalledOnce();
+    expect(wsReturn.resendMessage).not.toHaveBeenCalled();
+
+    wsReturn.status = "connected";
+    wsReturn.sessionConfirmed = true;
+    view.rerender(<ChatSurface variant="full" conversationId="test-id" />);
+    expect(screen.getByRole("button", { name: "Resend message" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Resend message" }));
+    expect(wsReturn.resendMessage).toHaveBeenCalledOnce();
+    expect(wsReturn.resendMessage).toHaveBeenCalledWith(wsReturn.messages[0]);
+  });
 });

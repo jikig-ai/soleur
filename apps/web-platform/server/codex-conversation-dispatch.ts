@@ -1,5 +1,5 @@
 import type { WSMessage } from "@/lib/types";
-import type { EngineEvent, EngineInput, EngineRunContext, EngineSelection } from "./agent-engine-contract";
+import type { EngineBinding, EngineEvent, EngineInput, EngineRunContext, EngineSelection } from "./agent-engine-contract";
 import { dispatchConversationEngineRun } from "./agent-engine-dispatch";
 import type { ReviewedEngineRegistry } from "./agent-engine-adapter-factory";
 import { createCodexWebEngineFactoriesForBinding, type CodexWebRuntimeOptions } from "./codex-web-runtime";
@@ -34,7 +34,7 @@ export interface CodexConversationDispatchOptions {
 export async function dispatchCodexConversationToWebSocket(options: CodexConversationDispatchOptions): Promise<void> {
   const persisted = await options.repository.getConversationRun(options.conversationId);
   const binding = persisted && typeof persisted === "object" && "binding" in persisted
-    ? (persisted as { binding: { engineId?: unknown; authMode?: unknown } }).binding
+    ? (persisted as { binding: Partial<EngineBinding> }).binding
     : null;
   if (!binding || binding.engineId !== "codex" || typeof binding.authMode !== "string") {
     throw Object.assign(new Error("persisted conversation is not Codex-bound"), { code: "codex_binding_mismatch" });
@@ -42,6 +42,24 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
   const bindingGeneration = "authModeGeneration" in binding ? binding.authModeGeneration : null;
   if (typeof bindingGeneration !== "number" || !Number.isSafeInteger(bindingGeneration) || bindingGeneration < 0) {
     throw Object.assign(new Error("persisted Codex binding generation is invalid"), { code: "codex_binding_generation_invalid" });
+  }
+  const runId = (persisted as { id?: unknown }).id;
+  const verifiedBinding = options.context.binding;
+  const verifiedGeneration = verifiedBinding.authModeGeneration ?? 0;
+  // Preserve the identity and generation whose history acknowledgment the
+  // WebSocket handler verified. A same-mode ABA switch still invalidates it.
+  if (runId !== options.context.runId
+    || binding.engineId !== verifiedBinding.engineId
+    || binding.authMode !== verifiedBinding.authMode
+    || bindingGeneration !== verifiedGeneration
+    || binding.workspaceId !== verifiedBinding.workspaceId
+    || binding.adapterVersion !== verifiedBinding.adapterVersion
+    || binding.execution?.kind !== "conversation"
+    || binding.execution.conversationId !== options.conversationId
+    || verifiedBinding.execution.kind !== "conversation"
+    || verifiedBinding.execution.conversationId !== options.conversationId
+    || (options.workspaceId !== undefined && binding.workspaceId !== options.workspaceId)) {
+    throw Object.assign(new Error("Codex conversation binding changed after acknowledgment"), { code: "codex_binding_stale" });
   }
   // The production catalog is default-off. Qualification and transfer evidence
   // must be checked before service-role attempt writes or provider invocation.
@@ -52,9 +70,8 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
   }
   registry.resolve(options.selection);
   authorizeEngineDataEgress(options.selection, options.evidence);
-  const runId = (persisted as { id?: unknown }).id;
   if (typeof runId !== "string" || !runId) throw new Error("persisted Codex run id is missing");
-  const attempt = await options.repository.startAttempt(runId, options.context.idempotencyKey, binding.authMode, bindingGeneration);
+  const attempt = await options.repository.startAttempt(runId, options.context.idempotencyKey, verifiedBinding.authMode, verifiedGeneration);
   const attemptId = attempt && typeof attempt === "object" && "id" in attempt
     ? (attempt as { id: unknown }).id : null;
   if (typeof attemptId !== "string") {

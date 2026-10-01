@@ -956,7 +956,7 @@ export function ChatSurface({
                       attachments={msg.attachments}
                       delivery={msg.delivery}
                       onResend={msg.delivery === "retryable" ? () => resendMessage(msg) : undefined}
-                      resendDisabled={status !== "connected"}
+                      resendDisabled={status !== "connected" || !sessionConfirmed}
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}
