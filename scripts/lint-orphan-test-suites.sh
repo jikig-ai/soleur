@@ -630,8 +630,11 @@ else
   # left the linter green and the harness green at one assertion fewer. The floor makes a deliberate
   # removal an explicit, reviewable edit to this number instead of a silent narrowing.
   RELEVANCE_ARRAYS=(
-    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|9"
-    "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|12"
+    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|14"
+    "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|17"
+    "LINT_ORPHAN_BATTERY_PATHS|scripts/lint-orphan-test-suites.test.sh|11"
+    "TAG_AUTHORSHIP_BATTERY_PATHS|scripts/battery-tag-authorship-mutations.test.sh|15"
+    "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts/test-all-affected.test.sh|9"
     "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh|6"
     "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh|9"
     "WEBPLAT_APP_PATHS|apps/web-platform/test/repo-wide-containment.test.ts|3"
@@ -646,6 +649,48 @@ else
     fails=$((fails + 1))
   fi
 
+  # PR-GATED SET AND SUBJECT-SET CLOSURE (ADR-262, Guard 2). A battery whose call site carries
+  # `_diff_touches --pr-gated` DECLINES on a pull_request CI run when the diff misses its array, so
+  # the array is the ONLY thing standing between a stale declaration and a silently skipped battery.
+  # The set is DERIVED from the runner — a hand list of "which arrays are gated" is exactly the
+  # declaration that falls behind. The closure check below compares each such array with what the
+  # battery file ITSELF names (`$REPO_ROOT/<path>` operands), which a commit that edits only the
+  # array cannot change. `grep -o` exits 1 on zero matches (a legitimate "none gated"); >= 2 is a
+  # real read error — the same split the dispatch floor below keeps, for the same reason.
+  pr_gated_set=""
+  pr_gated_out=$(sed 's/[[:space:]]*#.*$//' "$RUNNER" \
+                 | grep -oE '_diff_touches --pr-gated +"\$\{[A-Z0-9_]+' \
+                 | sed 's/.*{//' | LC_ALL=C sort -u | tr '\n' ' ') || {
+    grep_rc=$?
+    if (( grep_rc > 1 )); then
+      echo "ERROR: could not read ${RUNNER} to derive the --pr-gated arrays (exit ${grep_rc}) -- the closure check could not run, so it is not evidence about anything." >&2
+      fails=$((fails + 1))
+    fi
+    pr_gated_out=""
+  }
+  pr_gated_set=" ${pr_gated_out} "
+  g2_checked=0
+  # Directory and corpus operands a battery names that NO array element contains. Each needs a
+  # written reason: the battery copies or hardlinks a whole tree, so declaring the tree would arm it
+  # on nearly every diff (ADR-181: dependencies, not copy sets). They are ADR-262 residual R3 and
+  # an edit to an undeclared member of one is caught on the push run, not on the PR.
+  # Format: "<ARRAY>|<operand relative to the repo root>|<reason>".
+  PR_GATE_CORPUS_ALLOWLIST=(
+    "CF_TUNNEL_BATTERY_PATHS|.github|cp -a of the whole .github tree into the sandbox; its dependencies are the W7 workflows and the bridge action, declared individually"
+    "CF_TUNNEL_BATTERY_PATHS|scripts|cp -a of the whole scripts/ tree into the sandbox; its dependencies are the oracle and its SUT, declared individually"
+    "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts|cp -al hardlinks all of scripts/ into the census sandbox; declared by dependency (runner, libs, linter, itself)"
+  )
+  # An allowlist entry is a CLAIM that an operand is uncovered on purpose. It must carry a reason, and
+  # it must still be needed: an entry no operand uses any more silently licenses the next edit.
+  g2_used=" "
+  for g2_a in "${PR_GATE_CORPUS_ALLOWLIST[@]}"; do
+    g2_reason="${g2_a#*|}"; g2_reason="${g2_reason#*|}"
+    if [[ -z "${g2_reason// /}" ]]; then
+      echo "ERROR: PR_GATE_CORPUS_ALLOWLIST entry '${g2_a%%|*}|...' has no written reason -- an unexplained exemption is exactly what ADR-262 Guard 2 exists to refuse." >&2
+      fails=$((fails + 1))
+    fi
+  done
+
   # DISPATCH FLOOR, DERIVED FROM THE RUNNER — not a hand-typed literal.
   #
   # Today RELEVANCE_ARRAYS=() makes the ENTIRE anti-rot block below iterate zero times while this
@@ -657,7 +702,7 @@ else
   # time a list grows". It also catches strictly MORE — a literal floor can only see the list
   # SHRINK, while deriving `want` from the runner catches a gate ADDED to test-all.sh and never
   # registered here, which a literal cannot see at all. Verified: this pattern matches only the
-  # four real `_diff_touches "${ARRAY[@]}"` call sites and no comment in test-all.sh.
+  # the real `_diff_touches "${ARRAY[@]}"` call sites and no comment in test-all.sh.
   #
   # `[A-Z0-9_]+`, NOT `[A-Z_]+`. Measured: the first form counted 3 of 4 gates, because
   # C4_PRODUCER_PATHS carries a DIGIT and a digit-free class silently skips it. The failure is the
@@ -813,9 +858,68 @@ else
     # level up: an array can be correct, fully resolvable, and consumed by NOTHING. Anchored on
     # the call shape, never the bare name -- the name also appears in this script and in
     # test-all.sh's comments, either of which would satisfy a bare-token grep.
-    ref_re='_diff_touches "\$\{'"$arr_name"'\[@\]\}"'
+    ref_re='_diff_touches( --pr-gated)? "\$\{'"$arr_name"'\[@\]\}"'
     if ! grep -qE "$ref_re" "$RUNNER"; then
       echo "ERROR: test-all.sh no longer references \${${arr_name}[@]} in a _diff_touches call -- the predicate is declared but consumes nothing, so its suite is ungated or unreachable." >&2
+      fails=$((fails + 1))
+    fi
+
+    # SUBJECT-SET CLOSURE (ADR-262 Guard 2), for --pr-gated arrays only. Every repo path the battery
+    # file names as `$REPO_ROOT/<path>` or `${REPO_ROOT}/<path>` (comment lines dropped) must be an
+    # element of the array, sit under a directory element, or carry an allowlist reason above.
+    # Operands that are not repo paths (a `$TMPDIR` path, a variable suffix) are not tracked and are
+    # ignored, never guessed at. The scope is the battery file's explicit operands — the copy set and
+    # corpus reads are the allowlist's business, stated once.
+    if [[ "$pr_gated_set" == *" ${arr_name} "* ]]; then
+      g2_checked=$((g2_checked + 1))
+      g2_ops=$(grep -vE '^[[:space:]]*#' "$REPO_ROOT/$battery" \
+               | grep -oE '\$\{?(REPO_ROOT|ROOT)\}?"?/[A-Za-z0-9_./-]+' \
+               | sed -E 's/^\$\{?(REPO_ROOT|ROOT)\}?"?\///' | LC_ALL=C sort -u) || g2_ops=""
+      # A battery that yields ZERO operands is not "closed", it is UNREAD: the registry battery names
+      # its inputs through `${ROOT}`-rooted loop variables, which this extraction could not see until
+      # `ROOT` was added above. Counting such a battery toward the floor would certify nothing.
+      if [[ -z "$g2_ops" ]]; then
+        echo "ERROR: ${battery} names no \$REPO_ROOT/ or \${ROOT}/ operand, so the ADR-262 closure check examined nothing for ${arr_name}. Extend the operand extraction to this battery's root variable." >&2
+        fails=$((fails + 1))
+      fi
+      while IFS= read -r g2_op; do
+        g2_op="${g2_op%/.}"; g2_op="${g2_op%/}"
+        [[ -n "$g2_op" && "$g2_op" != "." ]] || continue
+        _tracked_member "$g2_op" || continue
+        g2_cov=""
+        for p in "${rel_elems[@]}"; do
+          [[ "$g2_op" == "$p" || "$g2_op" == "$p"/* ]] && g2_cov=1
+        done
+        if [[ -z "$g2_cov" ]]; then
+          g2_ok=""
+          for g2_a in "${PR_GATE_CORPUS_ALLOWLIST[@]}"; do
+            if [[ "$g2_a" == "${arr_name}|${g2_op}|"* ]]; then g2_ok=1; g2_used="${g2_used}${arr_name}|${g2_op} "; fi
+          done
+          if [[ -z "$g2_ok" ]]; then
+            echo "ERROR: ${battery} names '${g2_op}', which ${arr_name} does not contain -- on a pull_request run a diff touching it would DECLINE this battery. Add it to the array, or list it in PR_GATE_CORPUS_ALLOWLIST with a written reason (ADR-262 Guard 2)." >&2
+            fails=$((fails + 1))
+          fi
+        fi
+      done <<<"$g2_ops"
+    fi
+  done
+
+  # FLOOR ON THE CLOSURE CHECK. A derivation that finds no --pr-gated arrays would make Guard 2
+  # iterate nothing while this script still printed `orphan test suites: none` — the vacuity the
+  # dispatch floor above exists to catch, one layer up. Five batteries are gated today; the floor is
+  # the count, not a margin below it, and rises in the edit that gates a sixth.
+  # Two floors on purpose: the LITERAL catches an emptied derivation (a call site lost its flag, or the
+  # sed/grep that derives the set went blind); the DERIVED equality catches a gated array nothing
+  # examined. Raise the literal in the same edit that gates a sixth battery.
+  pr_gated_n=$(printf '%s\n' "$pr_gated_set" | tr -s ' ' '\n' | grep -c . || true)
+  if (( g2_checked < 5 || g2_checked != pr_gated_n )); then
+    echo "ERROR: the ADR-262 closure check examined ${g2_checked} --pr-gated array(s) of ${pr_gated_n} derived from the runner (expected >= 5, and equal) -- a gated battery was un-gated, its call site lost the --pr-gated flag, is missing from RELEVANCE_ARRAYS, or the derivation broke; raise the literal 5 when a sixth battery is gated." >&2
+    fails=$((fails + 1))
+  fi
+  for g2_a in "${PR_GATE_CORPUS_ALLOWLIST[@]}"; do
+    g2_key="${g2_a%%|*}|$(printf '%s' "$g2_a" | cut -d'|' -f2)"
+    if [[ "$g2_used" != *" ${g2_key} "* ]]; then
+      echo "ERROR: PR_GATE_CORPUS_ALLOWLIST entry '${g2_key}' matched no uncovered operand -- it is stale (the battery no longer names it, or its array now contains it). Delete it." >&2
       fails=$((fails + 1))
     fi
   done
