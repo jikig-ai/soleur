@@ -22,6 +22,120 @@ function readRepo(rel: string): string {
   return readFileSync(path.join(REPO_ROOT, rel), "utf8");
 }
 
+// ---------------------------------------------------------------------------
+// Dependency-tree pin (#9300). Pinning `likec4@<version>` pins ONE package; its
+// ~190-node transitive tree resolves to the newest releases at run time, and
+// npm's CDN can 404 a tarball published minutes earlier. Every place CI resolves
+// that tree therefore carries `--before=<D>` too, and (version, D) is a pair.
+// `checkLikec4Pins` is the single scanner: the real-file test asserts it returns
+// [], and the string-fed self-test below asserts mutated input does not.
+// ---------------------------------------------------------------------------
+export interface Likec4PinFiles {
+  ci: string;
+  monitor: string;
+  renderSh: string;
+  genTs: string;
+  lib: string;
+}
+
+const MIN_DATE_AGE_DAYS = 3;
+const DAY_MS = 86_400_000;
+const BUMP_HINT =
+  "Bump procedure: when moving LIKEC4_VERSION, set the --before date to one >= the new " +
+  "version's publish time and >= 3 days old (`npm view likec4@<version> time --json`), " +
+  "then update EVERY site in one commit (see BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh).";
+
+/** Drop whole-line `#`, `//` and block-comment lines so prose quoting a command is not a site. */
+function stripComments(src: string): string {
+  return src
+    .split("\n")
+    .filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+}
+
+/** Every non-comment `npm install -g likec4@<digit…>` command line, derived — never a fixed count. */
+export function extractInstallLines(src: string): string[] {
+  return stripComments(src)
+    .split("\n")
+    .filter((l) => /npm install -g likec4@[0-9]/.test(l));
+}
+
+function exportJsonLines(src: string, needle: RegExp): string[] {
+  return stripComments(src)
+    .split("\n")
+    .filter((l) => needle.test(l));
+}
+
+export function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
+  const violations: string[] = [];
+  const dates = new Set<string>();
+
+  // Workflows: EVERY install line must carry the flag (a first-match read misses the 2nd).
+  let sites = 0;
+  for (const [name, src] of [
+    [".github/workflows/ci.yml", files.ci],
+    [".github/workflows/main-health-monitor.yml", files.monitor],
+  ] as const) {
+    const lines = extractInstallLines(src);
+    sites += lines.length;
+    if (lines.length === 0) violations.push(`${name}: no non-comment \`npm install -g likec4@\` line found`);
+    lines.forEach((l, i) => {
+      const m = l.match(/--before=(\S+)/);
+      if (!m) violations.push(`${name}: install line #${i + 1} has no --before=<date>: ${l.trim()}`);
+      else dates.add(m[1]);
+    });
+  }
+
+  // render-c4-model.sh: the single `export json` line must use the declared date.
+  // `--ignore-scripts` distinguishes the real invocation from the human copy-paste hint echoes.
+  const renderExport = exportJsonLines(files.renderSh, /--ignore-scripts.*export json/);
+  sites += renderExport.length;
+  if (renderExport.length !== 1) {
+    violations.push(`render-c4-model.sh: expected exactly one non-comment \`export json\` line, found ${renderExport.length}`);
+  } else if (!/--before=\S*LIKEC4_BEFORE/.test(renderExport[0])) {
+    violations.push(`render-c4-model.sh: the \`export json\` line does not pass --before=LIKEC4_BEFORE: ${renderExport[0].trim()}`);
+  }
+  const shDecl = stripComments(files.renderSh).match(/^LIKEC4_BEFORE="([^"]*)"/m);
+  if (!shDecl) violations.push('render-c4-model.sh: no LIKEC4_BEFORE="<date>" declaration');
+  else dates.add(shDecl[1]);
+
+  // generate-c4-from-components.ts: the `export json` argv line must pass the constant.
+  const tsExport = exportJsonLines(files.genTs, /"export",\s*"json"/);
+  sites += tsExport.length;
+  if (tsExport.length !== 1) {
+    violations.push(`generate-c4-from-components.ts: expected exactly one non-comment "export","json" argv line, found ${tsExport.length}`);
+  } else if (!/--before=\$\{LIKEC4_BEFORE\}/.test(tsExport[0])) {
+    violations.push(`generate-c4-from-components.ts: the export json argv line does not pass --before=\${LIKEC4_BEFORE}: ${tsExport[0].trim()}`);
+  }
+  const libDecl = stripComments(files.lib).match(/export const LIKEC4_BEFORE = "([^"]*)"/);
+  if (!libDecl) violations.push('c4-from-components.ts: no `export const LIKEC4_BEFORE = "<date>"`');
+  else dates.add(libDecl[1]);
+
+  if (sites === 0) violations.push("examined 0 likec4 resolution sites — the guard is not looking at anything");
+
+  if (dates.size > 1) {
+    violations.push(`--before dates differ across sites: ${[...dates].sort().join(", ")}. ${BUMP_HINT}`);
+  }
+  for (const d of dates) {
+    const t = /^\d{4}-\d{2}-\d{2}$/.test(d) ? Date.parse(`${d}T00:00:00Z`) : NaN;
+    if (Number.isNaN(t)) violations.push(`--before date "${d}" is not a valid YYYY-MM-DD date`);
+    else if (now.getTime() - t < MIN_DATE_AGE_DAYS * DAY_MS) {
+      violations.push(`--before date ${d} is younger than ${MIN_DATE_AGE_DAYS} days (UTC); a fresh cutoff re-admits CDN-lag tarballs. ${BUMP_HINT}`);
+    }
+  }
+  return violations;
+}
+
+function readPinFiles(): Likec4PinFiles {
+  return {
+    ci: readRepo(".github/workflows/ci.yml"),
+    monitor: readRepo(".github/workflows/main-health-monitor.yml"),
+    renderSh: readRepo("plugins/soleur/scripts/render-c4-model.sh"),
+    genTs: readRepo("plugins/soleur/scripts/generate-c4-from-components.ts"),
+    lib: readRepo("plugins/soleur/lib/c4-from-components.ts"),
+  };
+}
+
 describe("likec4 CLI / client-renderer version parity", () => {
   it("Dockerfile `npm install -g likec4@X` matches @likec4/core and @likec4/diagram in package.json", () => {
     const dockerfile = read("Dockerfile");
@@ -64,8 +178,8 @@ describe("likec4 CLI / client-renderer version parity", () => {
     expect(scriptMatch![1]).toBe(cliVersion);
 
     const ci = readRepo(".github/workflows/ci.yml");
-    // matchAll, not match: `test-scripts-heavy` installs likec4 too, so ci.yml
-    // carries THREE `npm install -g likec4@` lines (test-webplat, test-scripts, test-scripts-heavy) — a first-match read would
+    // matchAll, not match: ci.yml carries several `npm install -g likec4@` lines
+    // (test-webplat, test-scripts, test-scripts-heavy) — a first-match read would
     // never see the second copy drift.
     const ciMatches = [
       ...ci.matchAll(/npm install -g likec4@([0-9][^\s"'`]*)/g),
@@ -126,5 +240,86 @@ describe("likec4 CLI / client-renderer version parity", () => {
       }
       expect(doc, `${path} must not float @latest`).not.toMatch(/likec4@latest/);
     }
+  });
+});
+
+describe("likec4 dependency-tree pin (--before) parity (#9300)", () => {
+  it("every likec4 resolution site carries the same, old-enough --before date", () => {
+    expect(checkLikec4Pins(readPinFiles(), new Date())).toEqual([]);
+  });
+});
+
+describe("checkLikec4Pins self-test (string-fed mutations)", () => {
+  const NOW = new Date("2026-10-05T00:00:00Z");
+  const D = "2026-09-28";
+  const installBlock = (flags: string[]) =>
+    flags.map((f, i) => `  - name: step ${i}\n    run: |\n      npm install -g likec4@1.50.0${f}\n      likec4 --version`).join("\n");
+  const good = (): Likec4PinFiles => ({
+    ci:
+      "# prose quoting npm install -g likec4@1.50.0 is a comment, not a site\n" +
+      installBlock([` --before=${D}`, ` --before=${D}`, ` --before=${D}`]),
+    monitor: `      npm install -g likec4@1.50.0 --before=${D}   # literal`,
+    renderSh:
+      `# header quotes: npx -y --ignore-scripts likec4@\${LIKEC4_VERSION} --before="\${LIKEC4_BEFORE}" export json\n` +
+      `LIKEC4_VERSION="1.50.0"\nLIKEC4_BEFORE="${D}"\n` +
+      `npx -y --ignore-scripts --before="\${LIKEC4_BEFORE}" "likec4@\${LIKEC4_VERSION}" export json --no-use-dot -o "$T" .\n` +
+      `echo "hint: npx -y likec4@\${LIKEC4_VERSION} validate ."`,
+    genTs:
+      `    // ["-y", "--before=\${LIKEC4_BEFORE}", "export", "json"] in a comment\n` +
+      `    ["-y", "--ignore-scripts", \`--before=\${LIKEC4_BEFORE}\`, \`likec4@\${LIKEC4_VERSION}\`, "export", "json", "--no-use-dot", "-o", out, "."],`,
+    lib: `export const LIKEC4_VERSION = "1.50.0";\nexport const LIKEC4_BEFORE = "${D}";`,
+  });
+
+  it("control: the canonical fixture is clean", () => {
+    expect(checkLikec4Pins(good(), NOW)).toEqual([]);
+  });
+
+  it("row 1: flag missing from the SECOND of three install lines is caught; a first-match read would not catch it", () => {
+    const f = good();
+    f.ci = installBlock([` --before=${D}`, "", ` --before=${D}`]);
+    expect(checkLikec4Pins(f, NOW).join("\n")).toMatch(/install line #2 has no --before/);
+    // Harness row (a): the scanner must read ALL lines — the first line alone is clean.
+    const lines = extractInstallLines(f.ci);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain("--before=");
+    expect(lines[1]).not.toContain("--before=");
+  });
+
+  it("row 2: a monitor date that differs by one day trips the single-date check", () => {
+    const f = good();
+    f.monitor = f.monitor.replace(D, "2026-09-27");
+    expect(checkLikec4Pins(f, NOW).join("\n")).toMatch(/dates differ across sites/);
+  });
+
+  it("row 3: flag removed from the renderer's export json line while a comment still quotes it", () => {
+    const f = good();
+    f.renderSh = f.renderSh.replace(` --before="\${LIKEC4_BEFORE}" "likec4@`, ` "likec4@`);
+    expect(checkLikec4Pins(f, NOW).join("\n")).toMatch(/render-c4-model\.sh: the `export json` line does not pass/);
+  });
+
+  it("row 4: flag removed from the TS export json argv line", () => {
+    const f = good();
+    f.genTs = f.genTs.replace(` \`--before=\${LIKEC4_BEFORE}\`,`, "");
+    expect(checkLikec4Pins(f, NOW).join("\n")).toMatch(/generate-c4-from-components\.ts: the export json argv line does not pass/);
+  });
+
+  it("row 5: zero likec4 sites fails instead of passing vacuously", () => {
+    const empty: Likec4PinFiles = { ci: "", monitor: "", renderSh: "", genTs: "", lib: "" };
+    expect(checkLikec4Pins(empty, NOW).join("\n")).toMatch(/examined 0 likec4 resolution sites/);
+  });
+
+  it("row 6: a date younger than 3 days, and a non-date, are both caught", () => {
+    const young = good();
+    for (const k of ["ci", "monitor", "renderSh", "lib"] as const) young[k] = young[k].replaceAll(D, "2026-10-04");
+    expect(checkLikec4Pins(young, NOW).join("\n")).toMatch(/younger than 3 days/);
+    const junk = good();
+    for (const k of ["ci", "monitor", "renderSh", "lib"] as const) junk[k] = junk[k].replaceAll(D, "yesterday");
+    expect(checkLikec4Pins(junk, NOW).join("\n")).toMatch(/not a valid YYYY-MM-DD/);
+  });
+
+  it("must-PASS: every site moved together to another valid old date is clean (guard is not pinned to one literal)", () => {
+    const f = good();
+    for (const k of ["ci", "monitor", "renderSh", "lib"] as const) f[k] = f[k].replaceAll(D, "2026-09-29");
+    expect(checkLikec4Pins(f, NOW)).toEqual([]);
   });
 });

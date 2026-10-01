@@ -952,6 +952,9 @@ jobs:
         run: ./node_modules/.bin/tsc --noEmit
         working-directory: apps/web-platform
 
+      # --before pins the whole transitive tree, not just likec4 (#9300: npm's CDN 404s a
+      # tarball published minutes ago). Version and date are a pair; the bump procedure is
+      # under BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh.
       # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
       # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
       # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
@@ -959,7 +962,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0
+          npm install -g likec4@1.50.0 --before=2026-09-28
           likec4 --version
 
       # #8696 — the render child runs inside bubblewrap, so the acceptance test
@@ -1102,10 +1105,9 @@ jobs:
     # If you are re-deriving this: use `grep -rlE '(^|[^[:alnum:]_-])bun[[:space:]]'`
     # rather than a line anchor.
     #
-    # NOTE for the next author: `npx -y <pkg>@<version>` does NOT reuse the
-    # `npm install -g likec4@1.50.0` step below — verified with a control. So a suite
-    # invoking the producer pays its own `npx` resolve even though the shard already
-    # has likec4 on PATH.
+    # NOTE for the next author: `npx -y <pkg>@<version>` does NOT reuse the likec4
+    # install step below as an installation, only as a download cache. Both carry the
+    # same --before date (BUMPING LIKEC4 in render-c4-model.sh).
     #
     # Two CLIs ARE installed for tests in this shard:
     #  - gitleaks: code-to-prd.test.sh (#2726), gitleaks-rules.test.sh,
@@ -1117,8 +1119,8 @@ jobs:
     #    suites go red here rather than skipping green. Version + SHA pinned
     #    identically to .github/workflows/secret-scan.yml — to upgrade, bump
     #    both files together.
-    #  - likec4@1.50.0: plugins/soleur/test/c4-model-freshness.test.sh renders
-    #    the .c4 sources and byte-diffs the committed model.likec4.json. The
+    #  - likec4 (version + --before date): plugins/soleur/test/c4-model-freshness.test.sh
+    #    renders the .c4 sources and byte-diffs the committed model.likec4.json. The
     #    version MUST match apps/web-platform/Dockerfile + package.json
     #    (@likec4/core/@likec4/diagram), guarded by c4-likec4-version-pin.test.ts.
     # Variables are workflow-internal literals; no untrusted input is
@@ -1165,7 +1167,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0
+          npm install -g likec4@1.50.0 --before=2026-09-28
           likec4 --version
 
       # #7332 — plugins/soleur/test/c4-from-components.test.sh drives the C4 producer
@@ -1279,7 +1281,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0
+          npm install -g likec4@1.50.0 --before=2026-09-28
           likec4 --version
 
       - name: Setup Bun
