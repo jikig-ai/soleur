@@ -269,7 +269,7 @@ on:
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
-          # issues:write App auth; posts findings to #6767). See the
+          # issues:write via the job's github.token; posts findings to #6767). See the
           # entrypoint_audit job below.
           # #7095 — re-mints the CF Access ci_ssh service token when Cloudflare has
           # stopped accepting it. Narrow by construction: a two-resource -target set
@@ -6841,8 +6841,8 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
           # The job's own token (issues:write, this repository only) posts the findings
           # (#9360): the soleur-ai App key this used to mint from is the #8209 eviction
-          # sentinel. Named AUDIT_POST_TOKEN, not GH_TOKEN, so the audit script below does
-          # not inherit gh auth.
+          # sentinel. Named AUDIT_POST_TOKEN, not GH_TOKEN, and unset for the audit script,
+          # so only the post below holds it.
           # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §legacy-app-key-evicted
           AUDIT_POST_TOKEN: ${{ github.token }}
         run: |
@@ -6853,7 +6853,7 @@ jobs:
           PREAPPLY_CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --plain 2>/dev/null || true)
           # `--plain` reads are NOT a secrets.* context, so GitHub does not
           # auto-mask them. Mask the CF token before export so an audit ::error::
-          # (or set -x) can never leak it into the log (mirrors KEY_ID/PEM above).
+          # (or set -x) can never leak it into the log.
           [[ -n "$PREAPPLY_CF_TOKEN" ]] && printf '::add-mask::%s\n' "$PREAPPLY_CF_TOKEN"
           export PREAPPLY_CF_TOKEN PREAPPLY_CF_ZONE_ID PREAPPLY_CF_ACCOUNT_ID
           # Static table + LIVE enumeration (GETs only — no import, no apply).
@@ -6863,7 +6863,7 @@ jobs:
           # watch` would show a false success. Keep the comment/system-of-record
           # path alive on failure (post below), then re-raise the rc at the end.
           rc=0
-          AUDIT_OUT=$(bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || rc=$?
+          AUDIT_OUT=$(env -u AUDIT_POST_TOKEN bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || rc=$?
           {
             echo "## Whole-list entrypoint drift audit (#6767)"
             echo ""
