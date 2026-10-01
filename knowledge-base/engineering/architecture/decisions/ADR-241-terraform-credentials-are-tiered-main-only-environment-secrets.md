@@ -700,7 +700,7 @@ the verify's inline mint used the evicted key.
   run will be recorded on #8209 after merge. The D5 Statuses row gains one dated condition.
 - No decision's status changes here.
 
-Plan: `knowledge-base/project/plans/2026-10-01-fix-retier-apply-github-infra-app-identity-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261001-161547-2026-10-01-fix-retier-apply-github-infra-app-identity-plan.md`.
 
 ## References
 
