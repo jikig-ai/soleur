@@ -76,6 +76,25 @@ MOCK
   chmod +x "$1/logger"
 }
 
+# #9169: ci-deploy.sh's GHCR_DENY probe runs `getent ahosts ghcr.io` on EVERY invocation. Installed
+# by default so no test ever does a real lookup (which could stall up to its 5 s bound on a
+# no-network runner). MOCK_GETENT_MODE: sink (default) | routable | unresolvable (exit 2) | hang.
+# Refuses any other argv (exit 64) so a changed probe query cannot pass against this fixture.
+create_mock_getent() {
+  cat > "$1/getent" << 'MOCK'
+#!/bin/bash
+[[ "$*" == "ahosts ghcr.io" ]] || { echo "getent mock: unexpected argv: $*" >&2; exit 64; }
+case "${MOCK_GETENT_MODE:-sink}" in
+  sink) printf '0.0.0.0         STREAM ghcr.io\n0.0.0.0         DGRAM\n::              STREAM\n' ;;
+  routable) printf '140.82.121.34   STREAM ghcr.io\n' ;;
+  unresolvable) exit 2 ;;
+  hang) exec /bin/sleep 30 ;;  # absolute: the default sleep mock returns at once
+esac
+exit 0
+MOCK
+  chmod +x "$1/getent"
+}
+
 create_mock_sudo() {
   cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
@@ -310,6 +329,45 @@ if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
   echo "mock-${3:-VALUE}"
   exit 0
 fi
+if [[ "${1:-}" == "secrets" && "${2:-}" == "download" ]]; then
+  # #8609 Guard 7: `secrets download` answers PER --project, and every call is logged with the
+  # DOPPLER_TOKEN it ran under (MOCK_DOPPLER_CALL_LOG) — the only channel that shows WHICH
+  # credential read WHICH project. The default prd body carries a key line, because a deploy whose
+  # env holds no GITHUB_APP_PRIVATE_KEY is now refused at the canary (github_app_key_missing).
+  # MOCK_GAK_PRD_BODY / MOCK_GAK_APP_BODY name files served verbatim; MOCK_GAK_APP_FAIL=1 fails the
+  # isolated project with a token-shaped stderr the overlay must never forward.
+  _dp=""; _dc=""; _dprev=""
+  for _a in "$@"; do
+    [[ "$_dprev" == "--project" ]] && _dp="$_a"
+    [[ "$_dprev" == "--config" ]] && _dc="$_a"
+    _dprev="$_a"
+  done
+  if [[ -n "${MOCK_DOPPLER_CALL_LOG:-}" ]]; then
+    printf 'project=%s config=%s token=%s\n' "$_dp" "$_dc" "${DOPPLER_TOKEN:-}" >> "$MOCK_DOPPLER_CALL_LOG"
+  fi
+  if [[ "$_dp" == "soleur-github-app" ]]; then
+    # MOCK_GAK_APP_FAIL_FIRST names a counter file: while it holds N > 0 the call fails and
+    # decrements it (a transient Doppler error the overlay's bounded retry must absorb).
+    if [[ -n "${MOCK_GAK_APP_FAIL_FIRST:-}" && -f "$MOCK_GAK_APP_FAIL_FIRST" ]]; then
+      _gn=$(cat "$MOCK_GAK_APP_FAIL_FIRST" 2>/dev/null || echo 0)
+      if [[ "$_gn" =~ ^[0-9]+$ ]] && (( _gn > 0 )); then
+        echo $(( _gn - 1 )) > "$MOCK_GAK_APP_FAIL_FIRST"
+        printf 'Doppler Error: transient %s\n' "${MOCK_GAK_STDERR_CANARY:-}" >&2
+        exit 1
+      fi
+    fi
+    if [[ "${MOCK_GAK_APP_FAIL:-}" == "1" ]]; then
+      printf 'Doppler Error: invalid service token %s\n' "${MOCK_GAK_STDERR_CANARY:-}" >&2
+      exit 1
+    fi
+    if [[ -n "${MOCK_GAK_APP_BODY:-}" ]]; then cat "$MOCK_GAK_APP_BODY"; exit 0; fi
+    printf 'GITHUB_APP_PRIVATE_KEY=%s\n' "mock-isolated-app-key"
+    exit 0
+  fi
+  if [[ -n "${MOCK_GAK_PRD_BODY:-}" ]]; then cat "$MOCK_GAK_PRD_BODY"; exit 0; fi
+  printf 'KEY=value\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=%s\n' "mock-prd-app-key"
+  exit 0
+fi
 if [[ "${1:-}" == "secrets" ]]; then
   echo "KEY=value"
   exit 0
@@ -347,6 +405,62 @@ if [[ "${1:-}" == "exec" ]]; then
       exit 1       # no claude in flight (default)
     fi
   done
+fi
+
+# #8016 Guard 2, BEFORE the mode case: record the RAW argv of every `docker exec` that carries a
+# bwrap argument, one space-joined line per exec, to MOCK_DOCKER_ARGV_LOG. It sits here and not
+# in the bwrap-trace / bwrap-fail arms because several modes (trace, apparmor-trace, default)
+# also answer the probe's exec and both of those arms `exit` early. A file, not stdout: the
+# probe's stdout is folded through _cred_err_tail (200-char tail), which would drop a token.
+if [[ "${1:-}" == "exec" && -n "${MOCK_DOCKER_ARGV_LOG:-}" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == *bwrap* ]]; then
+      printf '%s\n' "$*" >> "$MOCK_DOCKER_ARGV_LOG"
+      break
+    fi
+  done
+fi
+
+# #8609 Guard 7, BEFORE the mode case so it works in every mode.
+#   MOCK_GAK_LOG: every named `run` appends `run:<name> env_token=<0|1>` — env_token=1 when the
+#   App-key read token (MOCK_GAK_TOKEN) appears in ANY non-MOCK_ variable of the environment docker
+#   was handed OR anywhere in its argv (a `-e X=<token>`) — and its --env-file is snapshotted beside
+#   the log (ci-deploy.sh deletes the real one at exit). The probe exec appends
+#   `probe:<container> token=<0|1> key_argv=<0|1> isolated=<0|1>` (token: env or argv; key_argv:
+#   MOCK_GAK_KEY_MARK, a slice of a fixture key, on the HOST argv; isolated: the exec is exactly the
+#   `/bin/sh -c '… exec /usr/bin/env -i … /usr/local/bin/node "$1"'` form), so order, target and
+#   leaks are observable. Answered here WITHOUT a DOCKER_TRACE line, so the exact-order trace rows
+#   are untouched. Default: one `ok` verdict line. MOCK_GAK_PROBE_OUT (exact stdout, may be empty)
+#   and MOCK_GAK_PROBE_RC override it. MOCK_GAK_PLANTED_NODE=1 models a prd-planted `node` on the
+#   container PATH: an exec that is NOT isolated runs it, and it answers `ok` whatever the key.
+if [[ -n "${MOCK_GAK_LOG:-}" && "${1:-}" == "run" ]]; then
+  _gn=""; _gef=""; _gp=""
+  for _a in "$@"; do
+    [[ "$_gp" == "--name" ]] && _gn="$_a"
+    [[ "$_gp" == "--env-file" ]] && _gef="$_a"
+    _gp="$_a"
+  done
+  if [[ -n "$_gn" ]]; then
+    _gtok=0
+    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+    printf 'run:%s env_token=%s\n' "$_gn" "$_gtok" >> "$MOCK_GAK_LOG"
+    if [[ -n "$_gef" && -f "$_gef" ]]; then cp "$_gef" "$(dirname "$MOCK_GAK_LOG")/envfile.$_gn"; fi
+  fi
+fi
+if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
+  _gtok=0; _gkey=0; _giso=0
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
+  # shellcheck disable=SC2016
+  if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
+  if [[ -n "${MOCK_GAK_LOG:-}" ]]; then printf 'probe:%s token=%s key_argv=%s isolated=%s\n' "${2:-}" "$_gtok" "$_gkey" "$_giso" >> "$MOCK_GAK_LOG"; fi
+  if [[ "${MOCK_GAK_PLANTED_NODE:-}" == "1" && "$_giso" == 0 ]]; then printf 'github_app_key_probe=ok\n'; exit 0; fi
+  if [[ -n "${MOCK_GAK_PROBE_OUT+x}" ]]; then
+    printf '%s' "$MOCK_GAK_PROBE_OUT"
+  else
+    printf 'github_app_key_probe=ok\n'
+  fi
+  exit "${MOCK_GAK_PROBE_RC:-0}"
 fi
 
 # #5933 Item 4 image-verify handlers, BEFORE the mode case so they work in every
@@ -387,9 +501,42 @@ if [[ "${1:-}" == "run" ]]; then
           printf 'CANARY_VISIBLE_AT_VERIFY:%s\n' "$_seen" >> "$MOCK_COSIGN_ARGS_FILE"
         fi
       fi
+      # #6129: count verify attempts, and simulate a daemon-side verifier-image PULL failure —
+      # every time (MOCK_COSIGN_PULL_FAIL=always) or only on the first attempt (=once).
+      if [[ -n "${MOCK_COSIGN_ATTEMPTS_FILE:-}" ]]; then echo x >> "$MOCK_COSIGN_ATTEMPTS_FILE"; fi
+      if [[ "${MOCK_COSIGN_PULL_FAIL:-}" == "always" \
+            || ( "${MOCK_COSIGN_PULL_FAIL:-}" == "once" && "$(wc -l < "${MOCK_COSIGN_ATTEMPTS_FILE:-/dev/null}" 2>/dev/null)" -le 1 ) ]]; then
+        echo "docker: Error response from daemon: Get \"https://gcr.io/v2/\": dial tcp 142.250.0.1:443: i/o timeout" >&2
+        exit 125
+      fi
       if [[ "${MOCK_COSIGN_VERIFY_FAIL:-}" == "1" ]]; then
         echo "Error: no matching signatures found" >&2
         exit 1
+      fi
+      # #8609 (b) MOCK_COSIGN_IDENTITY_SIM=1: model the signature's Fulcio certificate and apply
+      # the verify argv to it as cosign v3.1.1 does — the SAN (…/reusable-release.yml@<MOCK_COSIGN_SAN_REF>)
+      # against --certificate-identity-regexp, and exact compares of the GitHub Workflow Ref
+      # (MOCK_COSIGN_WF_REF) and Repository (MOCK_COSIGN_WF_REPO) extensions against their flags. An
+      # absent flag checks nothing. Defaults: a release built from main of this repo.
+      if [[ "${MOCK_COSIGN_IDENTITY_SIM:-}" == "1" ]]; then
+        _cs_re=""; _cs_ref=""; _cs_repo=""
+        for _b in "$@"; do
+          case "$_b" in
+            --certificate-identity-regexp=*) _cs_re="${_b#*=}" ;;
+            --certificate-github-workflow-ref=*) _cs_ref="${_b#*=}" ;;
+            --certificate-github-workflow-repository=*) _cs_repo="${_b#*=}" ;;
+          esac
+        done
+        _cs_san="https://github.com/jikig-ai/soleur/.github/workflows/reusable-release.yml@${MOCK_COSIGN_SAN_REF:-refs/heads/main}"
+        if [[ -n "$_cs_re" ]] && ! [[ "$_cs_san" =~ $_cs_re ]]; then
+          echo "Error: none of the expected identities matched what was in the certificate" >&2; exit 1
+        fi
+        if [[ -n "$_cs_ref" && "$_cs_ref" != "${MOCK_COSIGN_WF_REF:-refs/heads/main}" ]]; then
+          echo "Error: expected GitHub Workflow Ref not found in certificate" >&2; exit 1
+        fi
+        if [[ -n "$_cs_repo" && "$_cs_repo" != "${MOCK_COSIGN_WF_REPO:-jikig-ai/soleur}" ]]; then
+          echo "Error: expected GitHub Workflow Repository not found in certificate" >&2; exit 1
+        fi
       fi
       exit 0
     fi
@@ -672,6 +819,35 @@ if [[ "${1:-}" == "image" && "${2:-}" == "inspect" ]]; then
   exit 1
 fi
 
+# #6428: `docker inspect --format '{{range .Config.Env}}…' <ref>` — the pre-swap freshness read of
+# the web image's baked BUILD_VERSION. Answered BEFORE the mode case, like the verify handlers, so
+# the trace-mode order rows do not gain an `inspect`. Scoped to non-inngest refs: the inngest
+# branch's own `.Config.Env` inspect keeps falling through to the mode case exactly as before.
+# Default BUILD_VERSION = the deploy tag without its `v` (a release-built image is self-consistent,
+# which is the realistic default). MOCK_IMAGE_BUILD_VERSION overrides it; `${VAR+x}` so an
+# explicitly EMPTY value means "the image has no BUILD_VERSION line". MOCK_IMAGE_INSPECT_FAIL=1
+# fails the inspect. MOCK_FRESHNESS_INSPECT_FILE records the inspected ref (the LAST argument), so
+# a row can assert the check read the verified digest and not the mutable tag.
+if [[ "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" != *inngest* ]]; then
+  [[ -n "${MOCK_FRESHNESS_INSPECT_FILE:-}" ]] && printf '%s\n' "${!#}" >> "$MOCK_FRESHNESS_INSPECT_FILE"
+  if [[ "${MOCK_IMAGE_INSPECT_FAIL:-}" == "1" ]]; then
+    printf 'Error: No such object: %s\n' "${!#}" >&2
+    exit 1
+  fi
+  if [[ -n "${MOCK_IMAGE_BUILD_VERSION+x}" ]]; then
+    _bv="$MOCK_IMAGE_BUILD_VERSION"
+  else
+    _bv="${SSH_ORIGINAL_COMMAND##* }"; _bv="${_bv#v}"
+  fi
+  printf 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n'
+  # MOCK_IMAGE_ENV_EXTRA: extra env lines printed BEFORE BUILD_VERSION (a decoy such as
+  # X_BUILD_VERSION=… kills a parse that matches the key as a substring instead of the whole key).
+  [[ -n "${MOCK_IMAGE_ENV_EXTRA:-}" ]] && printf '%s\n' "$MOCK_IMAGE_ENV_EXTRA"
+  [[ -n "$_bv" ]] && printf 'BUILD_VERSION=%s\n' "$_bv"
+  printf 'BUILD_SHA=0000000000000000000000000000000000000000\n'
+  exit 0
+fi
+
 case "$mode" in
   trace)
     # `ps` is read by the ADR-027 pre-run assertion; the script greps stdout
@@ -755,7 +931,7 @@ case "$mode" in
           fi
           printf '%s' "${MOCK_BWRAP_FAIL_STDERR-bwrap: No permissions to create new namespace}" >&2
           # rc is parameterised too: rc=0 with stderr is the pass-with-chatter shape,
-          # which is 97.6% of runs and the early signal before the next rollback.
+          # which is the common case and the early signal before the next rollback.
           exit "${MOCK_BWRAP_FAIL_RC-1}"
         fi
       done
@@ -1061,6 +1237,7 @@ create_base_mocks() {
     export MOCK_ZOT_CONFIGURED=1
   fi
   create_mock_logger "$mock_dir"
+  create_mock_getent "$mock_dir"
   create_docker_mock "$mock_dir"
   create_curl_mock "$mock_dir"
   create_mock_sudo "$mock_dir"
@@ -1916,15 +2093,15 @@ assert_doppler_success() {
 
 assert_doppler_success
 
-# --- #5933 Item 4: image signature verify (WARN default; ENFORCE gate) ---------
-# WARN mode (default) must NEVER block a healthy deploy on a verify failure —
+# --- #5933 Item 4: image signature verify (ENFORCE default since #6129; WARN override) ---
+# WARN mode (explicit IMAGE_VERIFY_MODE=warn override) must NEVER block a healthy deploy on a verify failure —
 # these two pass IDENTICALLY with or without the gate, so the ENFORCE test below
 # is what proves the gate is actually load-bearing (WARN and ENFORCE diverge on
 # the SAME MOCK_COSIGN_VERIFY_FAIL input).
 assert_verify_warn_does_not_block() {
   TOTAL=$((TOTAL + 1))
   local output actual_exit
-  output=$(export MOCK_COSIGN_VERIFY_FAIL=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  output=$(export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
   if [[ "$actual_exit" -eq 0 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: WARN cosign verify FAIL does not block the deploy (#5933 Item 4)"
   else
@@ -1936,7 +2113,7 @@ assert_verify_warn_does_not_block
 assert_inspect_warn_does_not_block() {
   TOTAL=$((TOTAL + 1))
   local output actual_exit
-  output=$(export MOCK_INSPECT_NO_DIGEST=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  output=$(export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
   if [[ "$actual_exit" -eq 0 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: WARN inspect_failed (no RepoDigest) does not block the deploy (#5933 Item 4)"
   else
@@ -1961,6 +2138,30 @@ assert_verify_enforce_blocks() {
   fi
 }
 assert_verify_enforce_blocks
+
+# #6129: ENFORCE is the DEFAULT (no IMAGE_VERIFY_MODE set), a transient verifier-image pull failure
+# is retried ONCE and the deploy proceeds, a persistent one blocks after exactly 2 attempts, a
+# cosign-side failure is never retried, and an unknown mode value fails CLOSED.
+assert_verify_6129() {
+  local label="$1" envs="$2" want_ok="$3" want_attempts="$4" want_reason="$5"
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit sf af reason exitc attempts
+  sf=$(mktemp); af=$(mktemp)
+  output=$(unset IMAGE_VERIFY_MODE; eval "export $envs"; export MOCK_COSIGN_ATTEMPTS_FILE="$af" CI_DEPLOY_STATE="$sf"; run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+  read_state_reason_and_exit "$sf" reason exitc
+  attempts="$(wc -l < "$af" | tr -d ' ')"
+  rm -f "$sf" "$af"
+  if { [[ "$want_ok" == 1 && "$actual_exit" -eq 0 ]] || [[ "$want_ok" == 0 && "$actual_exit" -ne 0 && "$reason" == "$want_reason" ]]; } \
+     && [[ "$attempts" == "$want_attempts" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #6129 $label (exit=$actual_exit attempts=$attempts${reason:+ reason=$reason})"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #6129 $label (exit=$actual_exit attempts=$attempts reason=$reason; want ok=$want_ok attempts=$want_attempts)"; echo "        output: $output"
+  fi
+}
+assert_verify_6129 "default mode blocks a signature failure, no retry" "MOCK_COSIGN_VERIFY_FAIL=1" 0 1 cosign_verify_failed
+assert_verify_6129 "transient verifier pull failure retried once, deploy proceeds" "MOCK_COSIGN_PULL_FAIL=once" 1 2 ""
+assert_verify_6129 "persistent verifier pull failure blocks after 2 attempts" "MOCK_COSIGN_PULL_FAIL=always" 0 2 cosign_verify_failed
+assert_verify_6129 "unknown mode value (ENFORCE) fails closed" "IMAGE_VERIFY_MODE=ENFORCE MOCK_COSIGN_VERIFY_FAIL=1" 0 1 cosign_verify_failed
 
 # --- #6005 Design B′: cosign invocation shape + SENTRY-before-verify ordering -----
 # The verify `docker run` MUST run `--network host` (host-egress .sig fetch, ADR-087),
@@ -2142,14 +2343,14 @@ rm -rf "$T1A_DIR"
 # T-1a-4: the anonymous dir is removed after BOTH the verify-ok and the verify-fail arms. The
 # recorded path is the one the mock saw at verify time, so this is the dir actually used.
 assert_anon_dir_removed() {
-  local label="$1" extra="$2" d dc
+  local label="$1" extra="$2" want_rc="${3:-0}" d dc
   TOTAL=$((TOTAL + 1))
   d="$(mktemp -d)"
   seed_canary_deploy_cfg "$d"
   run_cosign_anon_capture "$d" "$extra"
   dc="$(sed -n 's/^DOCKER_CONFIG_AT_VERIFY://p' "$d/cosign.args" | sed -n '1p')"
   if [[ -n "$dc" && "$dc" == /* && "$dc" != "$d/deploy-cfg" && ! -e "$dc" \
-        && -f "$d/deploy-cfg/config.json" && "$(cat "$d/rc")" == "0" ]]; then
+        && -f "$d/deploy-cfg/config.json" && "$(cat "$d/rc")" == "$want_rc" ]]; then
     PASS=$((PASS + 1)); echo "  PASS: T-1a-4 anonymous verifier config dir removed after the $label arm; deploy config untouched (#8036 1a)"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-4 anonymous dir after the $label arm (dc=$dc exists=$([[ -e "$dc" ]] && echo y || echo n) rc=$(cat "$d/rc"))"
@@ -2157,7 +2358,9 @@ assert_anon_dir_removed() {
   rm -rf "$d"
 }
 assert_anon_dir_removed "verify-ok" ""
-assert_anon_dir_removed "verify-fail" "export MOCK_COSIGN_VERIFY_FAIL=1"
+assert_anon_dir_removed "verify-fail" "export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1"
+# #6129: ENFORCE is the default, so its verify-fail arm (deploy exits 1) must clean up too.
+assert_anon_dir_removed "verify-fail (enforce default)" "export MOCK_COSIGN_VERIFY_FAIL=1" 1
 
 # T-1a-5a: the primary `mktemp -d` fails (the named seam, NOT a mktemp stub — ci-deploy.sh calls
 # mktemp ~20 times). The fallback dir is recreated (a PRE-SEEDED one holding a real-looking auth is
@@ -2252,32 +2455,38 @@ create_mock_logger "$T1A6_DIR/bin"
 cat > "$T1A6_DIR/harness.sh" <<'HARNESS'
 set -euo pipefail
 LOG_TAG="ci-deploy"; IMAGE_VERIFY_MODE="warn"; ZOT_REGISTRY_URL=""
-COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
+COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
 COSIGN_TRUSTED_ROOT_HOST="/nonexistent/trusted_root.json"
 COSIGN_IDENTITY_REGEXP='^x$'; COSIGN_OIDC_ISSUER='https://issuer.invalid'
+COSIGN_WORKFLOW_REF='refs/heads/main'; COSIGN_WORKFLOW_REPOSITORY='jikig-ai/soleur'
 DEPLOY_DOCKER_CONFIG_DIR="$T1A6_DIR/deploy-cfg"; export DOCKER_CONFIG="$DEPLOY_DOCKER_CONFIG_DIR"
 GHCR_DOCKER_CONFIG="$DOCKER_CONFIG/config.json"
 cosign_verify_event() { :; }
 # shellcheck source=/dev/null
 . "$T1A6_DIR/fn.sh"
-ref="$(verify_image_signature "ghcr.io/jikig-ai/soleur-web-platform:v1.0.0")"
+# #8609: the production call site's capture form — rc 3 is the WARN fail-open (runnable, NOT
+# verified), which the caller must be able to tell from rc 0 without aborting under set -e.
+vrc=0
+ref="$(verify_image_signature "ghcr.io/jikig-ai/soleur-web-platform:v1.0.0")" || vrc=$?
 printf '%s' "$ref" > "$T1A6_DIR/ref"
+printf '%s' "$vrc" > "$T1A6_DIR/vrc"
 HARNESS
 T1A6_WANT="ghcr.io/jikig-ai/soleur-web-platform@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 T1A6_BAD=""
-for _arm in "ok|" "verify-fail|MOCK_COSIGN_VERIFY_FAIL=1" "fallback|SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1" "fail-open|SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=all"; do
-  _name="${_arm%%|*}"; _env="${_arm#*|}"
-  rm -f "$T1A6_DIR/ref"
+for _arm in "ok|0|" "verify-fail|3|MOCK_COSIGN_VERIFY_FAIL=1" "fallback|0|SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=1" "fail-open|0|SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL=all"; do
+  _name="${_arm%%|*}"; _env="${_arm#*|}"; _wvrc="${_env%%|*}"; _env="${_env#*|}"
+  rm -f "$T1A6_DIR/ref" "$T1A6_DIR/vrc"
   _hrc=0
   # shellcheck disable=SC2086  # _env is one NAME=value word (or empty) by construction above
   env ${_env:+"$_env"} T1A6_DIR="$T1A6_DIR" PATH="$T1A6_DIR/bin:$TEST_PATH_BASE" \
     bash "$T1A6_DIR/harness.sh" >/dev/null 2>&1 || _hrc=$?
   _got="$(cat "$T1A6_DIR/ref" 2>/dev/null || true)"
-  if [[ "$_hrc" -ne 0 || "$_got" != "$T1A6_WANT" ]]; then T1A6_BAD="${T1A6_BAD} ${_name}(rc=${_hrc} ref=[${_got}])"; fi
+  _gvrc="$(cat "$T1A6_DIR/vrc" 2>/dev/null || true)"
+  if [[ "$_hrc" -ne 0 || "$_got" != "$T1A6_WANT" || "$_gvrc" != "$_wvrc" ]]; then T1A6_BAD="${T1A6_BAD} ${_name}(rc=${_hrc} verify_rc=${_gvrc} want=${_wvrc} ref=[${_got}])"; fi
 done
 TOTAL=$((TOTAL + 1))
 if [[ -z "$T1A6_BAD" && -s "$T1A6_DIR/fn.sh" ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: T-1a-6 VERIFIED_REF is exactly the repo digest on the ok / verify-fail / fallback / fail-open arms — no new stdout (#8036 1a)"
+  PASS=$((PASS + 1)); echo "  PASS: T-1a-6 VERIFIED_REF is exactly the repo digest on the ok / verify-fail / fallback / fail-open arms — no new stdout (#8036 1a); verify-fail alone returns 3 (#8609)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-1a-6 VERIFIED_REF corrupted or harness aborted:${T1A6_BAD}"
 fi
@@ -2327,12 +2536,14 @@ assert_no_ghcr_allowlist_widening() {
 }
 assert_no_ghcr_allowlist_widening
 
-# AC: the ENFORCE flip stays OUT OF SCOPE — the default MUST remain warn.
+# AC (#6129): the default is ENFORCE, flipped after the #6122 zot soak passed. warn is an
+# explicit override only; a revert to a warn default must red here.
 TOTAL=$((TOTAL + 1))
-if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DEPLOY_SCRIPT"; then
-  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is still 'warn' (no ENFORCE flip) (#6005)"
+if grep -qE '^IMAGE_VERIFY_MODE="\$\{IMAGE_VERIFY_MODE:-enforce\}"' "$DEPLOY_SCRIPT" \
+   && grep -qE '^case "\$IMAGE_VERIFY_MODE" in enforce\|warn\) ;; \*\) IMAGE_VERIFY_MODE=enforce ;; esac$' "$DEPLOY_SCRIPT"; then
+  PASS=$((PASS + 1)); echo "  PASS: IMAGE_VERIFY_MODE default is 'enforce' and an unknown value fails closed (#6129)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: IMAGE_VERIFY_MODE default must remain 'warn' — ENFORCE flip is out of scope (#6005)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: IMAGE_VERIFY_MODE default must be 'enforce' (#6129)"
 fi
 
 echo ""
@@ -2633,6 +2844,163 @@ assert_bwrap_canary_failure_rollback() {
 }
 
 assert_bwrap_canary_failure_rollback
+
+echo ""
+echo "--- #8016 Guard 2: the blocking probe's recorded argv ---"
+
+# A bwrap spawned by `docker exec` is a child of the short-lived runc exec parent. --die-with-parent
+# arms PR_SET_PDEATHSIG(SIGKILL) on it and races that parent's exit, so a healthy sandbox is
+# SIGKILLed at startup (rc=137, empty stderr, container still running) on a few to ~11% of deploys.
+# See knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md
+# The assertion reads the argv the script actually SENT (mock hook), not a grep of its source, so
+# a refactor that moves or builds the statement cannot hide the flag.
+assert_bwrap_probe_argv() {
+  local mode="$1" label="$2"
+  TOTAL=$((TOTAL + 1))
+
+  local d log output actual_exit
+  d=$(mktemp -d); log="$d/bwrap-argv.log"; : > "$log"
+  output=$(
+    export MOCK_DOCKER_MODE="$mode"
+    export MOCK_DOCKER_ARGV_LOG="$log"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  # EXACT match on exactly ONE recorded line, deliberately. The #4932 lesson is that an argv ADDITION
+  # (--unshare-user --proc /proc) rolled back every deploy, and the #8016 lesson is that a PDEATHSIG
+  # arm under docker exec SIGKILLs the probe; a token-presence check passes both (extra flags, a
+  # setpriv prefix, a second bwrap exec carrying all the tokens). Any intended change to the probe
+  # argv is a conscious edit of EXPECTED here.
+  local expected="exec soleur-web-platform-canary bwrap --new-session --dev /dev --unshare-pid --bind / / -- true"
+  local contents n_lines
+  contents=$(cat "$log" 2>/dev/null || true)
+  n_lines=$(printf '%s\n' "$contents" | grep -c . || true)
+
+  if [[ -z "$contents" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label: no bwrap docker exec was recorded (the checks below would be vacuous; exit=$actual_exit)"
+    echo "        output: $output"
+  elif [[ "$n_lines" -ne 1 ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label: expected exactly one bwrap docker exec, recorded $n_lines (a second one can mask a changed probe)"
+    echo "        argv log: $contents"
+  elif [[ "$contents" == *"--die-with-parent"* || "$contents" == *"--pdeathsig"* ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label: probe argv arms PDEATHSIG (race under docker exec)"
+    echo "        argv log: $contents"
+  elif [[ "$contents" != "$expected" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $label: probe argv differs from the pinned argv"
+    echo "        expected: $expected"
+    echo "        argv log: $contents"
+  else
+    PASS=$((PASS + 1))
+    echo "  PASS: $label: probe argv is exactly the pinned argv (no PDEATHSIG arm, capability tokens intact)"
+  fi
+  rm -rf "$d"
+}
+
+assert_bwrap_probe_argv "bwrap-trace" "G2 trace mode"
+assert_bwrap_probe_argv "bwrap-fail" "G2 fail mode"
+
+echo ""
+echo "--- #8016 Guard 1: no PDEATHSIG-arming flag on a docker-exec bwrap statement ---"
+
+# Every statement (backslash continuations joined, full-line comments dropped, trailing
+# ` # ...` comments stripped) that contains `docker exec` AND bwrap as a COMMAND token AND
+# --die-with-parent / --pdeathsig. `soleur-bwrap` (the AppArmor / seccomp option names on
+# `docker run`) is not a command token. SCOPE, stated plainly: a lexical tripwire over the literal
+# spellings in non-test infra/**/*.sh. It does NOT see a flag carried in a variable, array or heredoc,
+# a non-.sh carrier, or the faithful-canary replay (sandbox-canary.mjs spawns bwrap from a long-lived
+# node parent via spawnSync, which is safe). The exact probe argv is pinned by Guard 2, not here.
+bwrap_exec_flag_violations() {
+  local f
+  for f in "$@"; do
+    awk -v file="$f" -v q="'" '
+      function flush(   s, t, re) {
+        if (stmt == "") return
+        s = stmt; stmt = ""
+        t = s
+        sub(/[[:space:]]+#.*$/, "", t)
+        re = "(^|[[:space:];|&(/\"" q "])bwrap([[:space:]\"" q "]|$)"
+        if (t ~ /docker[^|;&]*[[:space:]]exec[[:space:]]/ && t ~ re && t ~ /(--die-with-parent|--pdeathsig)/)
+          printf "%s:%d: %s\n", file, startline, s
+      }
+      /^[[:space:]]*#/ { next }
+      {
+        line = $0
+        if (stmt == "") startline = NR
+        if (line ~ /\\[[:space:]]*$/) { sub(/\\[[:space:]]*$/, "", line); stmt = stmt " " line; next }
+        stmt = stmt " " line
+        flush()
+      }
+      END { flush() }
+    ' "$f"
+  done
+}
+
+assert_bwrap_flag_guard() {
+  local d out n f
+  d=$(mktemp -d)
+
+  # Real tree: every non-test shell script under infra/ (recursive) must be clean.
+  TOTAL=$((TOTAL + 1))
+  local -a files=()
+  while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$SCRIPT_DIR" -type f -name '*.sh' ! -name '*.test.sh' -print0)
+  if [[ ${#files[@]} -lt 1 ]]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: G1 real tree: scanned zero files (vacuous)"
+  elif out=$(bwrap_exec_flag_violations "${files[@]}"); [[ -n "$out" ]]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: G1 real tree: a docker-exec bwrap statement arms PDEATHSIG:"; printf '        %s\n' "$out"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: G1 real tree: ${#files[@]} infra scripts, no docker-exec bwrap statement arms PDEATHSIG"
+  fi
+
+  # Must-flag fixtures: the matcher is proven to see each shape, so an empty or broken matcher goes RED.
+  printf '%s\n' 'docker exec c bwrap \' '  --new-session --die-with-parent \' '  -- true' > "$d/cont.sh"
+  printf '%s\n' 'docker exec c setpriv --pdeathsig SIGKILL bwrap --dev /dev -- true' > "$d/setpriv.sh"
+  printf '%s\n' 'docker -H ssh://h container exec c bwrap --die-with-parent -- true' > "$d/dockerH.sh"
+  printf '%s\n' 'docker exec a bwrap --dev /dev -- true' \
+    'docker exec b bwrap --die-with-parent -- true' \
+    'docker exec c bwrap --die-with-parent -- true' > "$d/two.sh"
+
+  TOTAL=$((TOTAL + 1))
+  out=$(bwrap_exec_flag_violations "$d/cont.sh")
+  if [[ -n "$out" ]]; then PASS=$((PASS + 1)); echo "  PASS: G1 flags the flag on a backslash-continuation line"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: G1 missed --die-with-parent on a continuation line"; fi
+
+  TOTAL=$((TOTAL + 1))
+  out=$(bwrap_exec_flag_violations "$d/setpriv.sh")
+  if [[ -n "$out" ]]; then PASS=$((PASS + 1)); echo "  PASS: G1 flags the equivalent --pdeathsig form"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: G1 missed --pdeathsig"; fi
+
+  TOTAL=$((TOTAL + 1))
+  out=$(bwrap_exec_flag_violations "$d/dockerH.sh")
+  if [[ -n "$out" ]]; then PASS=$((PASS + 1)); echo "  PASS: G1 flags docker -H <host> container exec"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: G1 missed docker -H <host> container exec"; fi
+
+  TOTAL=$((TOTAL + 1))
+  out=$(bwrap_exec_flag_violations "$d/two.sh")
+  n=$(printf '%s\n' "$out" | grep -c . || true)
+  if [[ "$n" -eq 2 ]]; then PASS=$((PASS + 1)); echo "  PASS: G1 reports both violating statements (does not stop at the first)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: G1 reported $n violations for a file with 2 (expected 2)"; fi
+
+  # Must-PASS inputs that differ from the real tree: none of these may be flagged.
+  # `soleur-bwrap` is an option/file NAME, not the command token: this fixture carries `docker exec` AND
+  # the flag, so it is flagged unless the matcher insists on bwrap as a command token.
+  printf '%s\n' 'docker exec c cat /etc/apparmor.d/soleur-bwrap --die-with-parent' > "$d/run.sh"
+  printf '%s\n' '# docker exec c bwrap --die-with-parent -- true (a comment is not a statement)' > "$d/comment.sh"
+  printf '%s\n' 'bwrap --die-with-parent --dev /dev -- true' > "$d/host.sh"
+  local pass_case
+  for pass_case in run comment host; do
+    TOTAL=$((TOTAL + 1))
+    out=$(bwrap_exec_flag_violations "$d/$pass_case.sh")
+    if [[ -z "$out" ]]; then PASS=$((PASS + 1)); echo "  PASS: G1 does not flag the $pass_case input"
+    else FAIL=$((FAIL + 1)); echo "  FAIL: G1 false positive on the $pass_case input: $out"; fi
+  done
+  rm -rf "$d"
+}
+
+assert_bwrap_flag_guard
 
 echo ""
 echo "--- Bwrap userns sysctl drift detector (non-blocking) ---"
@@ -3133,7 +3501,7 @@ MOCK_BWRAP_CSTATE=exited assert_blocking_probe_line \
   "" 137 "" \
   'rc=137' 'ms=[0-9]{1,3} ' 'cstate=exited ' 'err_chars=0' 'bwrap_err="<empty>"$'
 
-# Scenario 3 -- PASS-WITH-CHATTER: rc=0 but the probe wrote to stderr. 97.6% of runs.
+# Scenario 3 -- PASS-WITH-CHATTER: rc=0 but the probe wrote to stderr.
 # The deploy must NOT roll back, so there must be NO rollback line at all.
 assert_probe_pass_chatter_reemits() {
   TOTAL=$((TOTAL + 1))
@@ -4367,7 +4735,7 @@ assert_zot_dark_is_terminal
 # CONDITIONALLY added on the zot branch (proven by T-ZOT-1/T-ZOT-2 above, which also assert
 # the trusted-root + identity flags ride BOTH the zot and the GHCR-fallback branch = 4.1).
 TOTAL=$((TOTAL + 1))
-if grep -qF 'ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$DEPLOY_SCRIPT" \
+if grep -qF 'gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870' "$DEPLOY_SCRIPT" \
    && grep -qF 'verify --offline' "$DEPLOY_SCRIPT" \
    && grep -qF -- '--trusted-root=/etc/cosign/trusted_root.json' "$DEPLOY_SCRIPT" \
    && grep -qF 'reusable-release' "$DEPLOY_SCRIPT"; then
@@ -4375,6 +4743,67 @@ if grep -qF 'ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31b
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: cosign trust anchor drifted (Phase 4 continuity)"
 fi
+
+# --- #8714 5.3b-iii: the verifier image is NOT pulled from ghcr.io ---------------------------------
+# The ONE `readonly COSIGN_IMAGE=` line (column 0, so a comment naming a ref cannot satisfy it) must
+# name a non-ghcr.io registry and carry EXACTLY the v3.1.1 digest the trust anchor was verified
+# against: the registry moved, the bytes did not. A digest bump is a deliberate edit to this row.
+TOTAL=$((TOTAL + 1))
+T8714_DECL="$(grep -E '^readonly COSIGN_IMAGE=' "$DEPLOY_SCRIPT" || true)"
+T8714_REF="$(printf '%s' "$T8714_DECL" | sed -n 's/^readonly COSIGN_IMAGE="\([^"]*\)".*$/\1/p')"
+if [[ "$(printf '%s' "$T8714_DECL" | grep -c . || true)" == 1 \
+      && "$T8714_REF" == */*@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870 \
+      && "$T8714_REF" != ghcr.io/* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-8714-1 COSIGN_IMAGE is off ghcr.io and pinned to the unchanged v3.1.1 digest (#8714 5.3b-iii)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-8714-1 COSIGN_IMAGE declaration is on ghcr.io, not the v3.1.1 digest, or not exactly one line: [$T8714_DECL]"
+fi
+
+# T-8714-2: a failed verifier-image PULL classifies as cosign_absent, not verify_failed. The classifier
+# is the if/elif chain in verify_image_signature, executed here on its real bytes against a stderr file
+# per case. The positive cases are docker 29.7.2's MEASURED pull-error shape (the digest repeated twice,
+# so the prefix falls outside the last 400 bytes) — one keyword per case. The negatives are the shapes a
+# weaker implementation would mislabel: a daemon error that is NOT a pull failure, and a cosign-side
+# error quoting a daemon-looking message from a hostile registry.
+T8714_CHAIN="$(awk '/^  local result="verify_failed" tail$/{f=1} f{print} f&&/^  fi$/{exit}' "$DEPLOY_SCRIPT")"
+T8714_BAD=""
+T8714_N=0
+_ref='gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870'
+_pre="docker: Error response from daemon: failed to resolve reference \\\"$_ref\\\": failed to do request: Head \\\"https://gcr.io/v2/projectsigstore/cosign/manifests/sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870\\\": "
+_run="\\nRun 'docker run --help' for more information\\n"
+if [[ "$(printf '%s\n' "$T8714_CHAIN" | grep -c 'result="cosign_absent"' || true)" -lt 2 ]]; then
+  T8714_BAD=" chain-not-extracted"
+else
+  while IFS='|' read -r _want _tail; do
+    [[ -n "$_want" ]] || continue
+    _err="$(mktemp)"; printf '%b' "$_tail" > "$_err"
+    _got="$(err="$_err" bash -c "set -uo pipefail; f() { $T8714_CHAIN
+      printf '%s' \"\$result\"; }; f" 2>/dev/null || true)"
+    rm -f "$_err"; T8714_N=$((T8714_N + 1))
+    [[ "$_got" == "$_want" ]] || T8714_BAD="${T8714_BAD} [${_tail:0:70}]->${_got:-<none>}(want ${_want})"
+  done <<CASES
+cosign_absent|${_pre}lookup gcr.io on 127.0.0.53:53: no such host${_run}
+cosign_absent|${_pre}GET https://gcr.io/v2/token: toomanyrequests: rate exceeded${_run}
+cosign_absent|${_pre}net/http: TLS handshake timeout${_run}
+cosign_absent|${_pre}read tcp 10.0.0.2:4420->142.250.0.1:443: i/o timeout${_run}
+cosign_absent|${_pre}net/http: request canceled (Client.Timeout exceeded while awaiting headers)${_run}
+cosign_absent|${_pre}connect: connection refused (dial tcp 142.250.0.1:443)${_run}
+cosign_absent|${_pre}received unexpected HTTP status: 503 Service Unavailable${_run}
+cosign_absent|${_pre}read tcp 10.0.0.2:4420->142.250.0.1:443: read: connection reset by peer${_run}
+cosign_absent|${_pre}context deadline exceeded${_run}
+cosign_absent|Unable to find image '${_ref}' locally
+unsigned|Error: no matching signatures: no signatures found
+verify_failed|docker: Error response from daemon: failed to create task: OCI runtime create failed: mount /etc/cosign/trusted_root.json: no such file or directory${_run}
+verify_failed|Error: GET http://10.0.1.30:5000/v2/: Error response from daemon: dial tcp 10.0.1.30:5000: connect: connection refused
+CASES
+fi
+TOTAL=$((TOTAL + 1))
+if [[ -z "$T8714_BAD" && "$T8714_N" -eq 13 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: T-8714-2 a verifier pull failure (DNS/429/5xx/TLS/i-o/reset/timeout/deadline/dial) is cosign_absent; a non-pull daemon error and a registry-quoted daemon message stay verify_failed"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-8714-2 classifier (cases run=$T8714_N of 13):${T8714_BAD}"
+fi
+unset T8714_DECL T8714_REF T8714_CHAIN T8714_BAD T8714_N _want _tail _got _err _ref _pre _run
 
 # #6665: the two properties the inverted sleep-mock default rests on (see create_mock_sleep's
 # header). Both are one-token edits away, so per ADR-139 they are pinned mechanically rather than
@@ -4664,6 +5093,20 @@ declare -A QI_PIN_B=(
   # is not started by it" and "with no record … a disabled unit is still not started".
   [apps/web-platform/infra/inngest-luks-cutover.sh]=1
   [apps/web-platform/infra/git-data-luks-reopen.sh]=1
+  # #8562 cloud-init-inngest.yml — ONE variable-unit start, in soleur-inngest-provision's on_exit.
+  # It restores the cutover-FSM timers the provision attempt paused. `_fsm_timers_stopped` is
+  # built only from the literal list `inngest-cutover-flip.timer inngest-luks-cutover.timer`, and
+  # only from those that were `active` before the stop. So the variable is provably never
+  # inngest-server, and it never starts a timer that was not already running. Behavioural row:
+  # cloud-init-inngest-provision-unit.test.sh G2-r15 ("the failed attempt restarts the flip
+  # timer"). Pinned as a change detector.
+  [apps/web-platform/infra/cloud-init-inngest.yml]=1
+  # #9123 workspaces-luks-reopen.sh — the web-1 sibling of the #8210 git-data line above:
+  # `systemctl start "$_munit"` where `_munit=$(systemd-escape -p --suffix=mount "$TARGET")`
+  # with TARGET allow-listed to /mnt/data — a `.mount` unit is provably never
+  # inngest-server.service, and web-1 carries no inngest-server unit regardless. Pinned as a
+  # change detector.
+  [apps/web-platform/infra/workspaces-luks-reopen.sh]=1
 )
 QS_REPO="$SCRIPT_DIR/../../.."
 # qi_inventory <regex> <pin-array-name> <label>: sets QI_BAD (appends) and QI_SEEN (hit count).
@@ -4701,10 +5144,13 @@ qi_inventory "$QI_RE_B" QI_PIN_B "variable-unit"
 TOTAL=$((TOTAL + 1))
 # 15 -> 16 at #6894: inngest-luks-cutover.sh's single variable-unit resume (see QI_PIN_B).
 # 16 -> 17 at #8210: git-data-luks-reopen.sh's mount-unit start (see QI_PIN_B).
-if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 17 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 8 files) (Guard 2 #6c)"
+# 17 -> 18 at #8562: cloud-init-inngest.yml's FSM-timer restore (see QI_PIN_B).
+# 18 -> 19 at #9123: workspaces-luks-reopen.sh's mount-unit start (see QI_PIN_B).
+if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 19 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 10 files) (Guard 2 #6c)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 17):${QI_BAD:- <per-file counts match but the total does not>}"
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 19):${QI_BAD:- <per-file counts match but the total does not>}"
 fi
 # Positive control: the inventory regex still MATCHES the flag-bearing forms it claims to cover
 # (a regex that silently matched nothing would pin an empty inventory as green).
@@ -4788,16 +5234,16 @@ TOTAL=$((TOTAL + 1))
 MEM_FLAG_COUNT=$(grep -cE -- '--memory "\$(PROD|CANARY)_MEMORY_CAP"' "$DEPLOY_SCRIPT" || true)
 SWAP_FLAG_COUNT=$(grep -cE -- '--memory-swap "\$(PROD|CANARY)_MEMORY_CAP"' "$DEPLOY_SCRIPT" || true)
 INIT_FLAG_COUNT=$(grep -cE -- '^[[:space:]]+--init \\' "$DEPLOY_SCRIPT" || true)
-# Both docker runs pass a COMPOSED NODE_OPTIONS (Doppler value + our cap appended
-# so -e does not clobber an operator-set value — #5417 review). Assert both
-# call-sites use the composed var AND that each composed var sets the heap cap.
+# Both docker runs pass a COMPOSED NODE_OPTIONS carrying our heap cap (the #5417 append-to-a-
+# Doppler-value lever is retired under #8609: the overlay refuses any prd NODE_* but NODE_ENV).
+# Assert both call-sites use the composed var AND that each composed var sets the heap cap.
 NODE_OPT_COUNT=$(grep -cE -- '-e NODE_OPTIONS="\$(PROD|CANARY)_NODE_OPTIONS"' "$DEPLOY_SCRIPT" || true)
 NODE_OPT_COMPOSE_COUNT=$(grep -cE -- '^[[:space:]]+(PROD|CANARY)_NODE_OPTIONS=.*--max-old-space-size=\$(PROD|CANARY)_NODE_MAX_OLD_SPACE_MB' "$DEPLOY_SCRIPT" || true)
 CAP_CONST_COUNT=$(grep -cE '^readonly (PROD_MEMORY_CAP|CANARY_MEMORY_CAP|PROD_NODE_MAX_OLD_SPACE_MB|CANARY_NODE_MAX_OLD_SPACE_MB)=' "$DEPLOY_SCRIPT" || true)
 if [[ "$MEM_FLAG_COUNT" -eq 2 && "$SWAP_FLAG_COUNT" -eq 2 && "$INIT_FLAG_COUNT" -eq 2 \
    && "$NODE_OPT_COUNT" -eq 2 && "$NODE_OPT_COMPOSE_COUNT" -eq 2 && "$CAP_CONST_COUNT" -eq 4 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: prod+canary docker run carry --memory/--memory-swap/--init from named caps; both set --max-old-space-size (appended to any Doppler NODE_OPTIONS) below the cap (#5417 AC1/AC3)"
+  echo "  PASS: prod+canary docker run carry --memory/--memory-swap/--init from named caps; both set --max-old-space-size below the cap (#5417 AC1/AC3)"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: memory-cap source gate (mem=$MEM_FLAG_COUNT/2 swap=$SWAP_FLAG_COUNT/2 init=$INIT_FLAG_COUNT/2 node_opt=$NODE_OPT_COUNT/2 compose=$NODE_OPT_COMPOSE_COUNT/2 consts=$CAP_CONST_COUNT/4; file: ci-deploy.sh)"
@@ -7388,6 +7834,72 @@ else
 fi
 unset _sha_field
 
+# --- #9151: DEPLOY_SCRIPT_SHA — the full-sha parity anchor ---
+# The INVOCATION marker's script_sha is a stable-format 12-char value; parity needs
+# the FULL sha256 of the executed script so scripts/check-deploy-script-parity.sh can
+# compare a Better Stack row against the repo bytes. Same capture harness: the
+# credential-path rewrite means the emitted sha must equal the sha of the EXECUTED
+# copy, not of the on-disk DEPLOY_SCRIPT — proving the value is measured, not canned.
+TOTAL=$((TOTAL + 1))
+_cap=$(mktemp -t shacap.XXXXXX); _cred=$(mktemp -t credfile.XXXXXX); _script=$(mktemp -t cideploy.XXXXXX)
+sed "s#/etc/default/soleur-doppler-token#$_cred#g" "$DEPLOY_SCRIPT" > "$_script"
+_want=$(sha256sum "$_script" | cut -d' ' -f1)
+rm -f "$_cred"
+(
+  export MOCK_LOGGER_CAPTURE_FILE="$_cap"
+  DEPLOY_SCRIPT="$_script"
+  run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 || true
+)
+_got=$(grep -h 'DEPLOY_SCRIPT_SHA' "$_cap" 2>/dev/null | grep -oE 'sha256=[0-9a-f]{64}' | head -1 | cut -d= -f2)
+if [[ "$_got" == "$_want" && -n "$_want" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: DEPLOY_SCRIPT_SHA is the sha256 of the executed script bytes"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: DEPLOY_SCRIPT_SHA — expected sha256=$_want, got '${_got:-<none emitted>}'"
+fi
+rm -f "$_cap" "$_cred" "$_script"; unset _cap _cred _script _want _got
+
+# --- #9169: GHCR_DENY — the per-release ghcr_blocked field, fail-open ---
+# _gd_run <getent mode>: one real deploy invocation with the logger captured; sets _GD_RC, _GD_CAP
+# (the captured journald lines) and _GD_SECS (wall clock).
+_gd_run() {
+  local cap _s
+  cap=$(mktemp -t gdcap.XXXXXX)
+  _s=$(date +%s)
+  _GD_RC=0
+  (
+    export MOCK_LOGGER_CAPTURE_FILE="$cap" MOCK_GETENT_MODE="$1"
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1
+  ) || _GD_RC=$?
+  _GD_SECS=$(( $(date +%s) - _s ))
+  _GD_CAP=$(cat "$cap"); rm -f "$cap"
+}
+_gd_row() {  # <ok 0|1> <description>
+  TOTAL=$((TOTAL + 1))
+  if [[ "$1" == 1 ]]; then PASS=$((PASS + 1)); echo "  PASS: $2"; else FAIL=$((FAIL + 1)); echo "  FAIL: $2"; fi
+}
+_gd_count() { grep -cE "$1" <<<"$_GD_CAP" || true; }
+_gd_run sink
+_GD_BASE_RC=$_GD_RC
+_ok=0
+if [[ "$(_gd_count '^-t ci-deploy DEPLOY_SCRIPT_SHA ')" == 1 && "$(_gd_count 'GHCR_DENY')" == 1 \
+  && "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=1$')" == 1 ]]; then
+  _sha_ln=$(grep -nE 'DEPLOY_SCRIPT_SHA ' <<<"$_GD_CAP" | cut -d: -f1)
+  _gd_ln=$(grep -nE 'GHCR_DENY ' <<<"$_GD_CAP" | cut -d: -f1)
+  [[ "$_gd_ln" -eq $((_sha_ln + 1)) ]] && _ok=1
+fi
+_gd_row "$_ok" "GHCR_DENY: sinkhole-only -> exactly one 'GHCR_DENY ghcr_blocked=1', right after the one DEPLOY_SCRIPT_SHA"
+_gd_run routable
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=0$')" == 1 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: a routable address -> ghcr_blocked=0"
+_gd_run unresolvable
+_after=$(sed -n '/GHCR_DENY/,$p' <<<"$_GD_CAP" | grep -vc 'GHCR_DENY' || true)
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_after" -gt 0 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: NXDOMAIN (getent exit 2) under set -euo pipefail -> ghcr_blocked=unknown, deploy continues (rc $_GD_RC == baseline $_GD_BASE_RC, $_after later lines)"
+_gd_run hang
+_gd_row "$([[ "$(_gd_count '^-t ci-deploy GHCR_DENY ghcr_blocked=unknown$')" == 1 && "$_GD_RC" == "$_GD_BASE_RC" && "$_GD_SECS" -le 10 ]] && echo 1 || echo 0)" \
+  "GHCR_DENY: a hanging getent is bounded by timeout 5 -> ghcr_blocked=unknown, rc unchanged (${_GD_SECS}s)"
+unset -f _gd_run _gd_row _gd_count; unset _GD_RC _GD_CAP _GD_SECS _GD_BASE_RC _ok _sha_ln _gd_ln _after
+
 # hooks.json.tmpl: both deploy hooks must carry a DISTINCT SOLEUR_DEPLOY_HOOK_ID. Two hooks
 # sharing one id would emit a clean-looking marker that discriminates nothing — the precise
 # failure this whole marker exists to prevent.
@@ -8250,6 +8762,1172 @@ else
 fi
 rm -rf "$T1C15"; unset T1C15 _1c15_reason _1c15_exit _1c15_lc
 
+echo "--- #6428 pre-swap image freshness (stale-but-signed image never reaches the canary) ---"
+# A zot that serves an OLD but validly signed image for the requested tag passes the cosign verify
+# (the old image IS validly signed). The only property that tells the two apart is the version the
+# image was BUILT as: the release bakes ENV BUILD_VERSION=<next> into the image it tags v<next>. The
+# check reads it from VERIFIED_REF and aborts before the plugin seed, the canary and the swap. It
+# fails CLOSED: a version it cannot establish (no BUILD_VERSION, `dev`, inspect failure) aborts too.
+# Every row runs in trace mode so the "never reached the canary" half of the property is observed
+# on the docker call stream itself: a check moved AFTER the canary run (a reorder, not a delete)
+# still ends image_stale_version, and only the absent `run`/`create` markers catch it.
+#
+# run_6428 <workdir> [extra] [tag]: one traced deploy (default v1.0.0) with the journald sink, the
+# Sentry sink, the freshness-inspect recorder, the state file and stdout/stderr pinned in <workdir>.
+run_6428() {
+  local d="$1" extra="${2:-}" tag="${3:-v1.0.0}" rc=0
+  assert_fixture_dir "$d"
+  : > "$d/logger.txt"; : > "$d/sentry.txt"; : > "$d/inspect.txt"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform $tag"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    # The plugin mount lives in <workdir> so an abort row can assert the seed never ran: the seed's
+    # `docker create` is redirected to /dev/null by ci-deploy.sh, so its trace marker never reaches
+    # out.txt and cannot witness the ordering on its own.
+    export PLUGIN_MOUNT_DIR="$d/plugin-mount"
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
+    export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$d/ci-deploy.state"
+    export MOCK_DOCKER_MODE="trace"
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"
+    export MOCK_SENTRY_CAPTURE_FILE="$d/sentry.txt"
+    export MOCK_FRESHNESS_INSPECT_FILE="$d/inspect.txt"
+    eval "$extra"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$DEPLOY_SCRIPT"
+  ) >"$d/out.txt" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+# _6428_started <workdir>: 1 when the deploy touched ANY app container: the canary/production `run`
+# (traced), or the plugin seed (its `docker create` is redirected to /dev/null, so it is witnessed by
+# the plugin mount directory the seed creates and fills). The cosign verify `run` is answered before
+# the mock's mode case and never traces.
+_6428_started() { if grep -qE '^DOCKER_TRACE:(run|create)$' "$1/out.txt" || [[ -e "$1/plugin-mount" ]]; then echo 1; else echo 0; fi; }
+# _6428_event <workdir> <field>: a field of the captured op=image-freshness Sentry event ("" if none).
+_6428_event() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="image-freshness")][0] | if . == null then "" elif $f == "level" then .level else .tags[$f] end' "$1/sentry.txt" 2>/dev/null; }
+# _6428_abort <label> <extra> <expected-reason> <expected-result> [tag]: one row asserting the
+# deploy aborted with <reason>, started NO app container, logged the fail marker and emitted an
+# error event carrying <result>.
+_6428_abort() {
+  local label="$1" extra="$2" want_reason="$3" want_result="$4" tag="${5:-v1.0.0}" d reason exitc
+  TOTAL=$((TOTAL + 1)); d="$(mktemp -d)"
+  run_6428 "$d" "$extra" "$tag"
+  read_state_reason_and_exit "$d/ci-deploy.state" reason exitc
+  if [[ "$(cat "$d/rc")" != "0" && "$reason" == "$want_reason" && "$exitc" == "1" && "$(_6428_started "$d")" == "0" ]] \
+     && grep -q "IMAGE_FRESHNESS_FAIL: result=$want_result " "$d/logger.txt" \
+     && grep -q "DEPLOY_ABORT: image freshness check refused .* ($want_reason)" "$d/logger.txt" \
+     && [[ "$(_6428_event "$d" level)" == "error" && "$(_6428_event "$d" freshness_result)" == "$want_result" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $label → $reason, no app container, error event freshness_result=$want_result (#6428)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $label (rc=$(cat "$d/rc") reason=$reason exit_code=$exitc want=$want_reason app_container_started=$(_6428_started "$d") event_level=$(_6428_event "$d" level) event_result=$(_6428_event "$d" freshness_result))"
+    printf '        traces: %s\n' "$(grep '^DOCKER_TRACE:' "$d/out.txt" | tr '\n' ' ')"
+  fi
+  rm -rf "$d"
+}
+
+# F1 (the RED fixture): the image zot served for v1.0.0 was built as 0.9.9. Before #6428 this
+# deploy verified the (valid) signature and went on to the canary and the swap.
+_6428_abort "F1 an image built as 0.9.9 served for v1.0.0" \
+  "export MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+# F8: exact comparison, not a prefix/suffix/substring one (a `$expected*` or `*$expected` glob, or an
+# unanchored grep, would pass these).
+_6428_abort "F8a BUILD_VERSION 1.0.00 for v1.0.0 (prefix)" \
+  "export MOCK_IMAGE_BUILD_VERSION=1.0.00" image_stale_version version_mismatch
+_6428_abort "F8b BUILD_VERSION 11.0.0 for v1.0.0 (suffix)" \
+  "export MOCK_IMAGE_BUILD_VERSION=11.0.0" image_stale_version version_mismatch
+# F9: the key is matched WHOLE — a decoy X_BUILD_VERSION=1.0.0 printed first must not be read as
+# the image's version (a `*BUILD_VERSION=*` parse would take it and pass).
+_6428_abort "F9a decoy X_BUILD_VERSION=1.0.0 before BUILD_VERSION=0.9.9" \
+  "export MOCK_IMAGE_ENV_EXTRA=X_BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+_6428_abort "F9b decoy X_BUILD_VERSION=1.0.0 and no BUILD_VERSION" \
+  "export MOCK_IMAGE_ENV_EXTRA=X_BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+# F3: fail CLOSED — a version the check cannot establish aborts rather than deploying unverified.
+# F10: two BUILD_VERSION entries (the matching one FIRST) — the value the process sees is not
+# decidable from the config, so it is refused rather than read first-wins.
+_6428_abort "F10 two BUILD_VERSION entries (1.0.0 then 0.9.9)" \
+  "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION=1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_version_unverifiable version_ambiguous
+# F12: an EMPTY `BUILD_VERSION=` line (present but valueless) is unverifiable, not a mismatch.
+_6428_abort "F12 an empty BUILD_VERSION= line" \
+  "export MOCK_IMAGE_ENV_EXTRA=BUILD_VERSION= MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+# F13 (the THIRD VERIFIED_REF arm): WARN mode with no resolvable RepoDigest runs the mutable TAG
+# (verify_image_signature's inspect_failed fallback) — the freshness check still reads it and aborts.
+_6428_abort "F13 WARN tag-fallback VERIFIED_REF with an image built as 0.9.9" \
+  "export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1 MOCK_IMAGE_BUILD_VERSION=0.9.9" image_stale_version version_mismatch
+_6428_abort "F3a image with no BUILD_VERSION" \
+  "export MOCK_IMAGE_BUILD_VERSION=" image_version_unverifiable version_absent
+_6428_abort "F3b image built as dev" \
+  "export MOCK_IMAGE_BUILD_VERSION=dev" image_version_unverifiable version_absent
+_6428_abort "F3c docker inspect of the verified ref fails" \
+  "export MOCK_IMAGE_INSPECT_FAIL=1" image_version_unverifiable inspect_failed
+# F5 (the SECOND member of the VERIFIED_REF assembly): the local-cache rescue arm (zot misses, the
+# running container's image is reused for a same-version reload) is checked like the verified arm.
+_6428_abort "F5a local-cache rescue whose running image was built as 0.9.9" \
+  "export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:6428ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff MOCK_RUNNING_IMAGE_TAG=v1.0.0 MOCK_IMAGE_BUILD_VERSION=0.9.9" \
+  image_stale_version version_mismatch
+
+# F11: a hostile BUILD_VERSION (an ANSI escape, a CR) still aborts, and never reaches journald or
+# the Sentry payload raw — both carry the bounded <invalid:len=N> display form instead.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_IMAGE_BUILD_VERSION=\$'0.9.9\\e[31m\\r'"
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f11_reason _f11_exit
+if [[ "$_f11_reason" == "image_stale_version" ]] \
+   && grep -q 'actual=<invalid:len=' "$T6428/logger.txt" \
+   && ! grep -q $'\e' "$T6428/logger.txt" && ! grep -q $'\r' "$T6428/logger.txt" \
+   && [[ "$(jq -rs '[.[] | select(.tags.op=="image-freshness")][0].extra.actual' "$T6428/sentry.txt" 2>/dev/null)" == "<invalid:len="* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F11 a control-character BUILD_VERSION aborts and is displayed only in its bounded form (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F11 (reason=$_f11_reason; logger: $(grep -c IMAGE_FRESHNESS_FAIL "$T6428/logger.txt"))"
+fi
+rm -rf "$T6428"; unset _f11_reason _f11_exit
+
+# F2 (must PASS, the canonical): a release-built image (BUILD_VERSION 1.0.0 for v1.0.0) deploys, the
+# canary docker trace is byte-identical to the canary-success row above, the liveness marker the
+# post-merge evidence greps for is written, and no freshness event is emitted.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428"
+_f2_traces=$(sed -n 's/^DOCKER_TRACE://p' "$T6428/out.txt" | tr '\n' '|' | sed 's/|$//')
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f2_traces" == "image|pull|stop|rm|run|exec|stop|rm|stop|rm|ps|run" ]] \
+   && grep -q 'IMAGE_FRESHNESS: ok ref=.* expected=1.0.0 actual=1.0.0$' "$T6428/logger.txt" \
+   && [[ -z "$(_6428_event "$T6428" level)" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F2 a self-consistent image deploys with the unchanged canary trace and logs IMAGE_FRESHNESS: ok, no freshness event (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F2 (rc=$(cat "$T6428/rc") traces=$_f2_traces ok_marker=$(grep -c 'IMAGE_FRESHNESS: ok ' "$T6428/logger.txt"))"
+fi
+# F4 (same run): the check read the VERIFIED DIGEST, not the mutable tag — the mock answers every
+# non-inngest ref the same way, so only the recorded ref tells VERIFIED_REF from $IMAGE:$TAG.
+TOTAL=$((TOTAL + 1))
+_f4_ref="$(head -1 "$T6428/inspect.txt")"
+if [[ "$(wc -l < "$T6428/inspect.txt")" -eq 1 && "$_f4_ref" == *"/jikig-ai/soleur-web-platform@sha256:"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F4 the freshness check inspects the verified digest ($_f4_ref), exactly once (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F4 inspected refs: $(tr '\n' ' ' < "$T6428/inspect.txt")"
+fi
+rm -rf "$T6428"; unset _f2_traces _f4_ref
+
+# F5b (must PASS): a same-version local-cache reload of a running image built as 1.0.0 reloads, and
+# the ref inspected is the running image ID (the rescue arm, not a digest).
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:6428ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff MOCK_RUNNING_IMAGE_TAG=v1.0.0"
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f5_reason _f5_exit
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f5_reason" == "ok" && "$_f5_exit" == "0" && "$(head -1 "$T6428/inspect.txt")" == "sha256:6428ffff"* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: F5b a same-version local-cache reload of a matching running image reloads, inspecting the running image ID (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F5b (rc=$(cat "$T6428/rc") reason=$_f5_reason inspected=$(head -1 "$T6428/inspect.txt"))"
+fi
+rm -rf "$T6428"; unset _f5_reason _f5_exit
+
+# F7 (must PASS, NOT the canonical): a different release (v10.20.30) with its version pinned
+# explicitly — a guard that rejects everything, or one hard-wired to the canonical v1.0.0, fails here.
+TOTAL=$((TOTAL + 1)); T6428="$(mktemp -d)"
+run_6428 "$T6428" "export MOCK_IMAGE_BUILD_VERSION=10.20.30" v10.20.30
+read_state_reason_and_exit "$T6428/ci-deploy.state" _f7_reason _f7_exit
+if [[ "$(cat "$T6428/rc")" == "0" && "$_f7_reason" == "ok" && "$_f7_exit" == "0" ]] \
+   && grep -q 'IMAGE_FRESHNESS: ok ref=.* expected=10.20.30 actual=10.20.30$' "$T6428/logger.txt"; then
+  PASS=$((PASS + 1)); echo "  PASS: F7 BUILD_VERSION=10.20.30 for v10.20.30 deploys (#6428)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: F7 (rc=$(cat "$T6428/rc") reason=$_f7_reason)"
+fi
+rm -rf "$T6428"; unset T6428 _f7_reason _f7_exit
+
+echo "--- #8609 Guard 7: GitHub App key overlay + canary key check, BOTH assembly sites ---"
+# Property (plan 2026-09-30-security-evict-runtime-app-key-from-prd-reachability §Guard 7, as amended
+# by the CTO ruling on PR #9263): a container gets exactly one GITHUB_APP_PRIVATE_KEY, taken from
+# soleur-github-app only when the read token is present, the image passed the MAIN-pinned cosign
+# verify in this run (ci) or its digest equals the last one ci-deploy verified (boot), no prd name
+# falls in a runtime-hijack class, and the fetch succeeds; every other prd line survives; it is
+# promoted only after the probe (under `env -i`) accepted that key IN THE CANARY (or could not reach
+# GitHub); the token itself never reaches an env-file, a child's env or argv, or a log/Sentry sink.
+# Two assembly sites carry the shared block: ci-deploy.sh (driven end to end, trace mode) and
+# soleur-host-bootstrap.sh's soleur-doppler-download + soleur-github-app-key-check (driven by the
+# boot-site driver below, under dash where available — the host's /bin/sh).
+#
+# Every mutation row: (1) the mutation is applied to a COPY and proven to have LANDED (the copy
+# differs from the pristine one), (2) the unmutated control is green on every site the row names,
+# (3) the mutant is RED on EVERY site it names — and RED means its own property check failed, never
+# a crash or an unrelated canary failure (those are scored as a FAILED row, test-design F11). A row
+# whose anchor drifted therefore fails loudly instead of measuring the pristine script. Fixture keys
+# are generated here (openssl) and never printed.
+GAK_FIX="$(mktemp -d)"
+GAK_TOKEN="dp.st.prd.""guard7-app-key-read-fixture"
+GAK_TOKEN_B64="$(printf '%s' "$GAK_TOKEN" | base64 | tr -d '\n')"
+GAK_PRD_TOKEN="dp.st.prd.""guard7-prd-read-fixture"
+GAK_STDERR_CANARY="dp.st.prd.""guard7-doppler-stderr-canary"
+GAK_DIGEST="sha256:$(printf '0%.0s' {1..64})"
+GAK_REF_OK="10.0.1.30:5000/jikig-ai/soleur-web-platform@$GAK_DIGEST"
+# What verify_image_signature echoes on rc 0 in this harness (zot armed by default, create_base_mocks).
+GAK_CI_VERIFIED="10.0.1.30:5000/jikig-ai/soleur-web-platform@$GAK_DIGEST"
+GAK_BOOT="$SCRIPT_DIR/soleur-host-bootstrap.sh"
+GAK_SH="$(command -v dash || command -v sh)"
+GAK_REAL_MV="$(command -v mv)"
+# One line, literal `\n` separators — the Doppler docker-format shape measured in plan §0.2.
+_gak_pem() {
+  local pem
+  pem="$(openssl genrsa 2048 2>/dev/null || true)"
+  [[ -n "$pem" ]] || pem="$(printf -- '-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----' "synthesized-$1")"
+  printf '%s' "$pem" | awk 'BEGIN{ORS=""} NR>1{print "\\n"} {print}'
+}
+GAK_PRD_KEY="$(_gak_pem prd)"; GAK_ISO_KEY="$(_gak_pem iso)"; GAK_RETIRED_KEY="$(_gak_pem retired)"
+# Slices from the middle of each key body: never header text two keys share.
+GAK_ISO_MARK="${GAK_ISO_KEY:80:40}"; GAK_PRD_MARK="${GAK_PRD_KEY:80:40}"
+# The base prd env carries one legitimate name of each excepted shape (NODE_ENV, the app's GIT_DATA_*
+# config), so every control proves the hijack refusal does not over-reach.
+_gak_prd_base() { printf 'KEY=value\nNODE_ENV=production\nGIT_DATA_SSH_HOST=git.example.invalid\nGITHUB_APP_ID=4242\n'; }
+{ _gak_prd_base; printf 'GITHUB_APP_PRIVATE_KEY=%s\nZZ_LAST=1\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd.env"
+{ printf 'GITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_PRD_KEY"; _gak_prd_base; printf 'GITHUB_APP_PRIVATE_KEY=%s\nZZ_LAST=1\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-twice.env"
+{ _gak_prd_base; printf 'ZZ_LAST=1\n'; } > "$GAK_FIX/prd-nokey.env"
+{ _gak_prd_base; printf 'GITHUB_APP_PRIVATE_KEY=EVICTED_SEE_ADR_241\nZZ_LAST=1\n'; } > "$GAK_FIX/prd-evicted.env"
+# The parked _RETIRED name shares the prefix (rows 7.2/7.2c); a real host token cannot see it, the stub can.
+printf 'GITHUB_APP_PRIVATE_KEY_RETIRED=%s\nGITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_RETIRED_KEY" "$GAK_ISO_KEY" > "$GAK_FIX/app.env"
+printf 'GITHUB_APP_PRIVATE_KEY_RETIRED=%s\n' "$GAK_RETIRED_KEY" > "$GAK_FIX/app-empty.env"
+printf 'GITHUB_APP_PRIVATE_KEY=%s\nGITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_ISO_KEY" "$GAK_RETIRED_KEY" > "$GAK_FIX/app-two.env"
+# A `mv` that refuses to rename the overlay's merge temp file (the atomic-write failure arm).
+mkdir -p "$GAK_FIX/mvfail"
+printf '#!/bin/bash\ncase "$*" in *.gak.*) exit 1 ;; esac\nexec %s "$@"\n' "$GAK_REAL_MV" > "$GAK_FIX/mvfail/mv"
+chmod +x "$GAK_FIX/mvfail/mv"
+
+# Runtime-hijack classes (#8609 d): <id> <one representative prd line> <the class's literal
+# alternative in the refusal regex, as a mutation removes it>.
+GAK_HIJACK_CLASSES=(
+  "node|NODE_PATH=/workspaces/x|NODE_[A-Za-z0-9_]*|"
+  "node_options|NODE_OPTIONS=--require /tmp/x.js|NODE_[A-Za-z0-9_]*|"
+  "ld|LD_AUDIT=/tmp/x.so|LD_[A-Za-z0-9_]*|"
+  "glibc|GLIBC_TUNABLES=glibc.malloc.x=1|GLIBC_[A-Za-z0-9_]*|"
+  "git|GIT_CONFIG_COUNT=1|GIT_[A-Za-z0-9_]*|"
+  "bash|BASH_ENV=/tmp/x|BASH_[A-Za-z0-9_]*|"
+  "env|ENV=/tmp/x|ENV|"
+  "path|PATH=/workspaces/bin:/usr/bin|PATH|"
+  "shell|SHELL=/tmp/sh|SHELL|"
+  "home|HOME=/workspaces|HOME|"
+  "tmpdir|TMPDIR=/workspaces|TMPDIR|"
+  "ssl|SSL_CERT_FILE=/tmp/ca.pem|SSL_[A-Za-z0-9_]*|"
+  "openssl|OPENSSL_CONF=/tmp/o.cnf|OPENSSL_[A-Za-z0-9_]*|"
+  "curl|CURL_CA_BUNDLE=/tmp/ca.pem|CURL_[A-Za-z0-9_]*|"
+  "proxy_uc|HTTPS_PROXY=http://10.9.9.9:3128|[A-Za-z0-9_]*_PROXY|"
+  "proxy_lc|https_proxy=http://10.9.9.9:3128|[A-Za-z0-9_]*_proxy|"
+  "npm_lc|npm_config_userconfig=/tmp/x|npm_config_[A-Za-z0-9_]*|"
+  "npm_uc|NPM_CONFIG_PREFIX=/tmp/x|NPM_CONFIG_[A-Za-z0-9_]*|"
+  "python|PYTHONPATH=/tmp/x|PYTHON[A-Za-z0-9_]*|"
+  "perl|PERL5OPT=-Mx|PERL[A-Za-z0-9_]*)"
+)
+for _hc in "${GAK_HIJACK_CLASSES[@]}"; do
+  IFS='|' read -r _hid _hline _ <<<"$_hc"
+  { _gak_prd_base; printf '%s\nGITHUB_APP_PRIVATE_KEY=%s\nZZ_LAST=1\n' "$_hline" "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-hijack-$_hid.env"
+done
+# A bare NAME line (docker --env-file then copies the docker CLI's own value) and a leading-blank line.
+{ _gak_prd_base; printf 'LD_PRELOAD\nGITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-hijack-bare.env"
+{ _gak_prd_base; printf '  NODE_OPTIONS=--require /tmp/x.js\nGITHUB_APP_PRIVATE_KEY=%s\n' "$GAK_PRD_KEY"; } > "$GAK_FIX/prd-hijack-ws.env"
+
+# gak_mut <src> <dst> <old> <new> [all]: literal replace (first occurrence, or every one with `all`).
+# An absent <old> copies <src> unchanged — the caller's landed-check then fails the row.
+gak_mut() {
+  GAK_OLD="$3" GAK_NEW="$4" GAK_ALL="${5:-}" python3 - "$1" "$2" <<'PY'
+import os, sys
+s = open(sys.argv[1]).read(); o = os.environ["GAK_OLD"]; n = os.environ["GAK_NEW"]
+s = s.replace(o, n) if os.environ["GAK_ALL"] else s.replace(o, n, 1)
+open(sys.argv[2], "w").write(s)
+PY
+}
+
+# gak_run_ci <dir> <token yes|no> <prd-body> <script> [extra]: one traced web-platform deploy.
+gak_run_ci() {
+  local d="$1" tok="$2" body="$3" script="$4" extra="${5:-}" rc=0
+  assert_fixture_dir "$d"
+  : > "$d/calls.log"; : > "$d/gak.log"; : > "$d/logger.txt"; : > "$d/sentry.txt"
+  { printf 'DOPPLER_TOKEN=%s\n' "$GAK_PRD_TOKEN"
+    if [[ "$tok" == yes ]]; then printf 'GITHUB_APP_DOPPLER_TOKEN=%s\n' "$GAK_TOKEN"; fi; } > "$d/cred"
+  sed "s#/etc/default/soleur-doppler-token#$d/cred#g" "$script" > "$d/ci-deploy.sh"
+  (
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d); trap 'rm -rf "$MOCK_DIR"' EXIT
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount" CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease" CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
+    export CI_DEPLOY_STATE="$d/ci-deploy.state" MOCK_DOCKER_MODE="trace"
+    export GITHUB_APP_KEY_VERIFIED_REF_FILE="$d/verified-ref" MOCK_COSIGN_IDENTITY_SIM=1
+    export MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt" MOCK_SENTRY_CAPTURE_FILE="$d/sentry.txt"
+    export MOCK_DOPPLER_CALL_LOG="$d/calls.log" MOCK_GAK_LOG="$d/gak.log" MOCK_GAK_TOKEN="$GAK_TOKEN"
+    export MOCK_GAK_PRD_BODY="$body" MOCK_GAK_APP_BODY="$GAK_FIX/app.env" MOCK_GAK_STDERR_CANARY="$GAK_STDERR_CANARY"
+    export MOCK_GAK_KEY_MARK="$GAK_ISO_MARK"
+    GAK_PATH_PREFIX=""
+    eval "$extra"
+    create_base_mocks "$MOCK_DIR"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token" PATH="${GAK_PATH_PREFIX:+$GAK_PATH_PREFIX:}$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
+    bash "$d/ci-deploy.sh"
+  ) > "$d/out.txt" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$d/rc"
+}
+
+# gak_run_boot <dir> <token yes|no> <prd-body> <bootstrap> [extra]: the boot-site driver. Extracts
+# the two baked helpers from <bootstrap> and replays cloud-init's terminal order: the download
+# helper (overlay included, which LAUNCHES the check through the systemd-run stub), then `docker run
+# --env-file` (snapshotted here, since that is the moment the container's env is fixed), then the
+# check exactly as it was launched (the stub records the argv; the driver never calls it itself,
+# so a helper that does not launch it emits nothing — test-design F3).
+gak_run_boot() {
+  local d="$1" tok="$2" body="$3" boot="$4" extra="${5:-}"
+  assert_fixture_dir "$d"
+  mkdir -p "$d/bin" "$d/detail"
+  : > "$d/calls.log"; : > "$d/gak.log"; : > "$d/logger.txt"; : > "$d/emits.txt"
+  awk "/cat > \/usr\/local\/bin\/soleur-doppler-download <[<]'DDLEOF'/{f=1;next} f&&/^DDLEOF\$/{f=0} f{print}" "$boot" > "$d/bin/soleur-doppler-download"
+  awk "/cat > \/usr\/local\/bin\/soleur-github-app-key-check <[<]'GAKEOF'/{f=1;next} f&&/^GAKEOF\$/{f=0} f{print}" "$boot" > "$d/bin/soleur-github-app-key-check"
+  create_mock_doppler "$d/bin"; create_mock_logger "$d/bin"
+  cat > "$d/bin/docker" <<'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "inspect" ]]; then echo "${MOCK_BOOT_RUNNING:-true}"; exit 0; fi
+if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
+  _gtok=0; _gkey=0; _giso=0
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
+  # shellcheck disable=SC2016
+  if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
+  printf 'probe:%s token=%s key_argv=%s isolated=%s\n' "${2:-}" "$_gtok" "$_gkey" "$_giso" >> "$MOCK_GAK_LOG"
+  if [[ "${MOCK_GAK_PLANTED_NODE:-}" == "1" && "$_giso" == 0 ]]; then printf 'github_app_key_probe=ok\n'; exit 0; fi
+  if [[ -n "${MOCK_GAK_PROBE_OUT+x}" ]]; then printf '%s' "$MOCK_GAK_PROBE_OUT"; else printf 'github_app_key_probe=ok\n'; fi
+  exit "${MOCK_GAK_PROBE_RC:-0}"
+fi
+exit 0
+MOCK
+  cat > "$d/bin/soleur-boot-emit" <<'MOCK'
+#!/bin/bash
+_t=0
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+printf 'emit:%s env_token=%s\n' "$1" "$_t" >> "$MOCK_GAK_LOG"
+printf '%s %s %s\n' "$1" "$2" "$(cat "$SOLEUR_STAGE_DETAIL_DIR/$1" 2>/dev/null)" >> "$MOCK_BOOT_EMITS"
+MOCK
+  cat > "$d/bin/systemd-run" <<'MOCK'
+#!/bin/bash
+_t=0
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ "${MOCK_SYSTEMD_RUN_FAIL:-}" == "1" ]]; then printf 'systemd-run-failed env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"; exit 1; fi
+printf 'systemd-run env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"
+exit 0
+MOCK
+  chmod +x "$d/bin/"*
+  { printf 'DOPPLER_TOKEN=%s\n' "$GAK_PRD_TOKEN"
+    if [[ "$tok" == yes ]]; then printf 'GITHUB_APP_DOPPLER_TOKEN=%s\n' "$GAK_TOKEN"; fi; } > "$d/cred"
+  printf '%s' "$GAK_REF_OK" > "$d/image-ref"
+  printf '%s\n' "$GAK_REF_OK" > "$d/verified-ref"
+  (
+    export PATH="$d/bin:$TEST_PATH_BASE" HOME="$d" DOPPLER_TOKEN="$GAK_PRD_TOKEN"
+    export SOLEUR_STAGE_DETAIL_DIR="$d/detail" SOLEUR_DOPPLER_ERRDIR="$d" SOLEUR_DOPPLER_ATTEMPTS=1
+    export SOLEUR_DOPPLER_TOKEN_FILE="$d/cred" SOLEUR_IMAGE_REF_FILE="$d/image-ref"
+    export SOLEUR_GAK_VERIFIED_REF_FILE="$d/verified-ref" GITHUB_APP_KEY_FETCH_BACKOFF=0
+    export SOLEUR_GAK_STATE_FILE="$d/gak.state" SOLEUR_GAK_CHECK="$d/bin/soleur-github-app-key-check"
+    export SOLEUR_GAK_WAIT_POLLS=1 SOLEUR_GAK_WAIT_SECS=0 MOCK_BOOT_EMITS="$d/emits.txt"
+    export MOCK_DOPPLER_CALL_LOG="$d/calls.log" MOCK_GAK_LOG="$d/gak.log" MOCK_LOGGER_CAPTURE_FILE="$d/logger.txt"
+    export MOCK_GAK_PRD_BODY="$body" MOCK_GAK_APP_BODY="$GAK_FIX/app.env" MOCK_GAK_STDERR_CANARY="$GAK_STDERR_CANARY"
+    export MOCK_GAK_TOKEN="$GAK_TOKEN" MOCK_GAK_KEY_MARK="$GAK_ISO_MARK"
+    GAK_PATH_PREFIX=""
+    eval "$extra"
+    if [[ -n "$GAK_PATH_PREFIX" ]]; then export PATH="$GAK_PATH_PREFIX:$PATH"; fi
+    rc=0; "$GAK_SH" "$d/bin/soleur-doppler-download" "$d/envfile" || rc=$?
+    printf '%s\n' "$rc" > "$d/rc"
+    if [[ "$rc" == 0 ]]; then
+      cp "$d/envfile" "$d/envfile.soleur-web-platform"
+      printf 'run:soleur-web-platform\n' >> "$d/gak.log"
+      if [[ "$(grep -c '^systemd-run ' "$d/gak.log")" == 1 ]]; then
+        "$GAK_SH" "$(sed -n 's/^systemd-run .* //p' "$d/gak.log")" || true
+      fi
+    fi
+  ) > "$d/out.txt" 2>&1
+}
+
+# --- readers -------------------------------------------------------------------------------------
+_gak_st() { jq -r --arg f "$2" '.[$f] // "<absent>"' "$1/ci-deploy.state" 2>/dev/null || echo "<nostate>"; }
+_gak_keys() { grep -c '^GITHUB_APP_PRIVATE_KEY=' "$1/envfile.$2" 2>/dev/null || true; }
+_gak_keyval() { sed -n 's/^GITHUB_APP_PRIVATE_KEY=//p' "$1/envfile.$2" 2>/dev/null | head -1; }
+_gak_appcalls() { grep -c '^project=soleur-github-app ' "$1/calls.log" 2>/dev/null || true; }
+_gak_appcalls_tok() { grep -cxF "project=soleur-github-app config=prd token=$GAK_TOKEN" "$1/calls.log" 2>/dev/null || true; }
+_gak_sentry() { jq -rs --arg f "$2" '[.[] | select(.tags.op=="github-app-key")] | map(if $f == "level" then .level elif $f == "detail" then .extra.detail else .tags.classification end) | join(",")' "$1/sentry.txt" 2>/dev/null; }
+_gak_line() { grep -n -m1 -xF "$2" "$1/gak.log" 2>/dev/null | cut -d: -f1; }
+_gak_emits() { cut -d' ' -f1,2 "$1/emits.txt" 2>/dev/null | tr '\n' ',' | sed 's/,$//'; }
+# _gak_env_intact <dir> <container> <prd-fixture>: every NON-key line of the prd env reached the
+# container in order, no GITHUB_APP_PRIVATE_KEY_* line did, and exactly one key line is present
+# (test-design F1/F4: an overlay that drops the prd env, or smuggles the _RETIRED key, is RED).
+_gak_env_intact() {
+  local f="$1/envfile.$2"
+  [[ -f "$f" ]] || { GAK_WHY="$2: no env-file snapshot"; return 1; }
+  if ! diff -q <(grep -v '^GITHUB_APP_PRIVATE_KEY=' "$3" | grep -v '^$') <(grep -v '^GITHUB_APP_PRIVATE_KEY=' "$f" | grep -v '^$') >/dev/null; then
+    GAK_WHY="$2: the non-key prd lines did not survive the overlay intact"; return 1
+  fi
+  if grep -q '^GITHUB_APP_PRIVATE_KEY_' "$f"; then GAK_WHY="$2: a GITHUB_APP_PRIVATE_KEY_* line reached the container"; return 1; fi
+  [[ "$(_gak_keys "$1" "$2")" == 1 ]] || { GAK_WHY="$2: $(_gak_keys "$1" "$2") key lines"; return 1; }
+}
+# _gak_no_token_leak <dir>: the app read token (raw or base64) and the isolated key's body appear in
+# no env-file (token only), no child env/argv the mocks saw, and no log, Sentry, state or detail sink.
+_gak_no_token_leak() {
+  local f
+  if grep -qF "$GAK_TOKEN" "$1"/envfile.* 2>/dev/null; then GAK_WHY="the app read token reached an env-file"; return 1; fi
+  if grep -qE '(env_token|token|key_argv)=1' "$1/gak.log" 2>/dev/null; then
+    GAK_WHY="the app read token (or the key, on the host argv) reached a child: $(grep -E '(env_token|token|key_argv)=1' "$1/gak.log" | head -1 | cut -c1-80)"; return 1
+  fi
+  for f in "$1/logger.txt" "$1/sentry.txt" "$1/out.txt" "$1/emits.txt" "$1/ci-deploy.state" "$1/gak.state" "$1"/detail/*; do
+    [[ -f "$f" ]] || continue
+    if grep -qF -e "$GAK_TOKEN" -e "$GAK_TOKEN_B64" -e "$GAK_ISO_MARK" -e "$GAK_PRD_MARK" "$f" 2>/dev/null; then
+      GAK_WHY="a token/key byte reached ${f##*/}"; return 1
+    fi
+  done
+  return 0
+}
+_gak_promoted() {  # predicate: 0 = promoted
+  if [[ "$(cat "$1/rc")" == 0 && "$(_gak_st "$1" reason)" == ok ]] && grep -q '^run:soleur-web-platform ' "$1/gak.log"; then return 0; fi
+  return 1
+}
+_gak_refused() {  # <dir> <reason>: predicate — refused with <reason>; production never started
+  if [[ "$(cat "$1/rc")" != 0 && "$(_gak_st "$1" reason)" == "$2" ]] && ! grep -q '^run:soleur-web-platform ' "$1/gak.log"; then return 0; fi
+  return 1
+}
+_gak_probe_in_canary_before_swap() {
+  local c p s
+  c="$(_gak_line "$1" 'run:soleur-web-platform-canary env_token=0')"
+  p="$(grep -n -m1 '^probe:soleur-web-platform-canary ' "$1/gak.log" | cut -d: -f1 || true)"
+  s="$(grep -n -m1 '^run:soleur-web-platform ' "$1/gak.log" | cut -d: -f1 || true)"
+  # A predicate, not an `if`: guard-vacuity-floor reads any `if [[ … -lt … ]]` naming a counter
+  # (`-n` matches the counter `n`) as an anti-vacuity floor, and this ordering check is not one.
+  [[ -n "$c" && -n "$p" && -n "$s" && "$c" -lt "$p" && "$p" -lt "$s" ]] || return 1
+  ! grep -q '^probe:soleur-web-platform ' "$1/gak.log"
+}
+_gak_record() { cat "$1/verified-ref" 2>/dev/null || echo "<absent>"; }
+# The boot launch: exactly one systemd-run, of the check, under a per-boot unique unit name.
+_gak_launched() {
+  local l
+  l="$(grep '^systemd-run ' "$1/gak.log" 2>/dev/null)" || l=""
+  [[ "$(printf '%s\n' "$l" | grep -c .)" == 1 ]] || { GAK_WHY="systemd-run launches: $(printf '%s\n' "$l" | grep -c .)"; return 1; }
+  [[ "$l" == *" $1/bin/soleur-github-app-key-check" ]] || { GAK_WHY="launched [$l]"; return 1; }
+  [[ "$l" =~ --unit=soleur-github-app-key-check-[0-9a-f]+-[0-9]+\  ]] || { GAK_WHY="unit name is not per-boot unique: [$l]"; return 1; }
+}
+
+# --- per-scenario property checks: <site> <dir> → 0 when the property holds; GAK_WHY otherwise ---
+_gak_chk_iso() {  # token present, both projects hold keys, verified image, probe ok (7.p2 and most rows' base)
+  local s="$1" d="$2" c
+  if [[ "$s" == ci ]]; then
+    _gak_promoted "$d" || { GAK_WHY="not promoted (rc=$(cat "$d/rc") reason=$(_gak_st "$d" reason))"; return 1; }
+    [[ "$(_gak_st "$d" github_app_key_source)/$(_gak_st "$d" github_app_key_fetch)/$(_gak_st "$d" github_app_key_probe)" == isolated/ok/ok ]] \
+      || { GAK_WHY="state $(_gak_st "$d" github_app_key_source)/$(_gak_st "$d" github_app_key_fetch)/$(_gak_st "$d" github_app_key_probe)"; return 1; }
+    for c in soleur-web-platform-canary soleur-web-platform; do
+      [[ "$(_gak_keyval "$d" "$c")" == "$GAK_ISO_KEY" ]] || { GAK_WHY="$c env-file: isolated=no"; return 1; }
+      _gak_env_intact "$d" "$c" "$GAK_FIX/prd.env" || return 1
+    done
+    _gak_probe_in_canary_before_swap "$d" || { GAK_WHY="probe not in the canary between its run and the swap: $(tr '\n' ' ' < "$d/gak.log")"; return 1; }
+    grep -q '^probe:soleur-web-platform-canary .* isolated=1$' "$d/gak.log" || { GAK_WHY="the probe exec is not the env -i form"; return 1; }
+    [[ -z "$(_gak_sentry "$d" cls)" ]] || { GAK_WHY="unexpected Sentry events: $(_gak_sentry "$d" cls)"; return 1; }
+    [[ "$(_gak_record "$d")" == "$GAK_CI_VERIFIED" ]] || { GAK_WHY="verified-ref record [$(_gak_record "$d")] (want the verified digest)"; return 1; }
+  else
+    [[ "$(cat "$d/rc")" == 0 ]] || { GAK_WHY="helper rc=$(cat "$d/rc")"; return 1; }
+    [[ "$(_gak_keyval "$d" soleur-web-platform)" == "$GAK_ISO_KEY" ]] || { GAK_WHY="env-file at docker run: isolated=no"; return 1; }
+    _gak_env_intact "$d" soleur-web-platform "$GAK_FIX/prd.env" || return 1
+    [[ "$(cat "$d/gak.state" 2>/dev/null)" == "source=isolated fetch=ok present=1 vref=match" ]] || { GAK_WHY="state [$(cat "$d/gak.state" 2>/dev/null)]"; return 1; }
+    _gak_launched "$d" || return 1
+    [[ "$(_gak_emits "$d")" == "github_app_key_ok info" ]] || { GAK_WHY="emits [$(_gak_emits "$d")]"; return 1; }
+    grep -qF 'source=isolated fetch=ok present=1 vref=match probe=ok rc=0 up=1' "$d/emits.txt" || { GAK_WHY="detail [$(cat "$d/emits.txt")]"; return 1; }
+    grep -q '^probe:soleur-web-platform .* isolated=1$' "$d/gak.log" || { GAK_WHY="the probe exec is not the env -i form"; return 1; }
+  fi
+  [[ "$(_gak_appcalls "$d")" == "${GAK_WANT_APPCALLS:-1}" && "$(_gak_appcalls_tok "$d")" == "${GAK_WANT_APPCALLS:-1}" ]] \
+    || { GAK_WHY="app-project calls=$(_gak_appcalls "$d") with the app token=$(_gak_appcalls_tok "$d") (want ${GAK_WANT_APPCALLS:-1})"; return 1; }
+  _gak_no_token_leak "$d" || return 1
+  return 0
+}
+_gak_chk_prd() {  # token absent: prd key, no isolated call, no Sentry; boot reports ok_no_token at info (7.p1)
+  local s="$1" d="$2"
+  if [[ "$s" == ci ]]; then
+    _gak_promoted "$d" && [[ "$(_gak_st "$d" github_app_key_source)/$(_gak_st "$d" github_app_key_fetch)" == prd/no_token ]] \
+      && [[ "$(_gak_keyval "$d" soleur-web-platform)" == "$GAK_PRD_KEY" && -z "$(_gak_sentry "$d" cls)" ]] \
+      || { GAK_WHY="rc=$(cat "$d/rc") state=$(_gak_st "$d" github_app_key_source)/$(_gak_st "$d" github_app_key_fetch) sentry=[$(_gak_sentry "$d" cls)]"; return 1; }
+  else
+    [[ "$(cat "$d/gak.state" 2>/dev/null)" == "source=prd fetch=no_token present=1 vref=match" && "$(_gak_emits "$d")" == "github_app_key_ok_no_token info" \
+       && "$(_gak_keyval "$d" soleur-web-platform)" == "$GAK_PRD_KEY" ]] \
+      || { GAK_WHY="state [$(cat "$d/gak.state" 2>/dev/null)] emits [$(_gak_emits "$d")]"; return 1; }
+  fi
+  _gak_env_intact "$d" soleur-web-platform "$GAK_FIX/prd.env" || return 1
+  [[ "$(_gak_appcalls "$d")" == 0 ]] || { GAK_WHY="isolated project fetched with no token"; return 1; }
+}
+_gak_chk_transport() {  # probe could not reach GitHub → promote/serve, loudly (7.p3)
+  if [[ "$1" == ci ]]; then
+    _gak_promoted "$2" && [[ "$(_gak_st "$2" github_app_key_probe)" == transport && "$(_gak_sentry "$2" cls)" == probe_transport && "$(_gak_sentry "$2" level)" == warning ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") probe=$(_gak_st "$2" github_app_key_probe) sentry=[$(_gak_sentry "$2" cls)/$(_gak_sentry "$2" level)]"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_transport warning" ]] || { GAK_WHY="emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+}
+_gak_chk_absent() {  # an image without the probe (rc 127) → promote, but at WARNING both sites (7.p4, 7.a1)
+  if [[ "$1" == ci ]]; then
+    _gak_promoted "$2" && [[ "$(_gak_st "$2" github_app_key_probe)" == absent ]] && grep -q 'GITHUB_APP_KEY: class=probe_absent level=warning' "$2/logger.txt" \
+      && [[ "$(_gak_sentry "$2" cls)" == probe_absent && "$(_gak_sentry "$2" level)" == warning ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") probe=$(_gak_st "$2" github_app_key_probe) sentry=[$(_gak_sentry "$2" cls)/$(_gak_sentry "$2" level)]"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_probe_absent warning" ]] || { GAK_WHY="emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+}
+_gak_chk_fetchfail() {  # token present, isolated fetch fails/answers wrong → degrade to prd, loudly, no stderr (7.p5, 7.2d)
+  local f
+  if [[ "$1" == ci ]]; then
+    _gak_promoted "$2" && [[ "$(_gak_st "$2" github_app_key_source)/$(_gak_st "$2" github_app_key_fetch)" == prd/failed \
+      && "$(_gak_keyval "$2" soleur-web-platform)" == "$GAK_PRD_KEY" && "$(_gak_sentry "$2" cls)" == fetch_failed && "$(_gak_sentry "$2" level)" == error ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") state=$(_gak_st "$2" github_app_key_source)/$(_gak_st "$2" github_app_key_fetch) sentry=[$(_gak_sentry "$2" cls)]"; return 1; }
+  else
+    [[ "$(cat "$2/gak.state" 2>/dev/null)" == "source=prd fetch=failed present=1 vref=match" && "$(_gak_emits "$2")" == "github_app_key_ok_fallback warning" \
+       && "$(_gak_keyval "$2" soleur-web-platform)" == "$GAK_PRD_KEY" ]] \
+      || { GAK_WHY="state [$(cat "$2/gak.state" 2>/dev/null)] emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+  _gak_env_intact "$2" soleur-web-platform "$GAK_FIX/prd.env" || return 1
+  for f in logger.txt sentry.txt out.txt emits.txt; do
+    if grep -qF "$GAK_STDERR_CANARY" "$2/$f" 2>/dev/null; then GAK_WHY="Doppler stderr reached $f"; return 1; fi
+  done
+}
+_gak_chk_flaky() {  # the isolated fetch fails once, then answers → the retry keeps the isolated key (7.r1)
+  local rc=0
+  GAK_WANT_APPCALLS=2 _gak_chk_iso "$@" || rc=1
+  (( rc == 0 )) || return 1
+  if [[ "$1" == ci ]]; then grep -q 'GITHUB_APP_KEY: class=ok level=info len=[0-9]* attempts=2' "$2/logger.txt" || { GAK_WHY="no attempts=2 ok line"; return 1; }
+  else grep -q 'GITHUB_APP_KEY_BOOT: class=ok level=info len=[0-9]* attempts=2' "$2/logger.txt" || { GAK_WHY="no attempts=2 ok line"; return 1; }; fi
+}
+_gak_chk_missing() {  # no usable key in the env → refuse (ci) / stage missing at error (boot) (7.3, 7.4)
+  if [[ "$1" == ci ]]; then
+    _gak_refused "$2" canary_github_app_key_missing && [[ "$(_gak_st "$2" github_app_key_probe)" == missing ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason)"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_missing error" ]] || { GAK_WHY="emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+}
+_gak_chk_rejected() {  # the probe's rejected verdict (reason http_401) → refuse / stage rejected at error (7.9, 7.10)
+  if [[ "$1" == ci ]]; then
+    _gak_refused "$2" canary_github_app_key_rejected && [[ "$(_gak_sentry "$2" cls)" == probe_rejected ]] \
+      && [[ "$(_gak_st "$2" github_app_key_probe_reason)" == http_401 && "$(_gak_sentry "$2" detail)" == *" reason=http_401" ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) probe_reason=$(_gak_st "$2" github_app_key_probe_reason)"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_rejected error" ]] && grep -q ' reason=http_401 ' "$2/emits.txt" \
+      || { GAK_WHY="emits [$(_gak_emits "$2")] detail [$(cat "$2/emits.txt")]"; return 1; }
+  fi
+}
+_gak_chk_noverdict() {  # probe exits 1 with no verdict line → rejected/no_verdict (ci) / exec_failed (boot) (7.12)
+  if [[ "$1" == ci ]]; then
+    _gak_refused "$2" canary_github_app_key_rejected && [[ "$(_gak_st "$2" github_app_key_probe_reason)" == no_verdict ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason)"; return 1; }
+  else
+    [[ "$(_gak_emits "$2")" == "github_app_key_exec_failed error" ]] || { GAK_WHY="emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+}
+# token present, image NOT verified → no isolated fetch, prd key, loud (7.14, 7.14b, 7.b*, 7.c*, 7.e1).
+# <want-vref> (boot only): the verified-ref verdict the state must carry.
+_gak_unverified_core() {
+  if [[ "$1" == ci ]]; then
+    _gak_promoted "$2" && [[ "$(_gak_st "$2" github_app_key_fetch)" == unverified_image && "$(_gak_sentry "$2" cls)" == unverified_image ]] \
+      || { GAK_WHY="rc=$(cat "$2/rc") fetch=$(_gak_st "$2" github_app_key_fetch) sentry=[$(_gak_sentry "$2" cls)]"; return 1; }
+    [[ "$(_gak_record "$2")" == "<absent>" ]] || { GAK_WHY="an unverified image was recorded as verified: [$(_gak_record "$2")]"; return 1; }
+  else
+    [[ "$(cat "$2/gak.state" 2>/dev/null)" == "source=prd fetch=unverified_image present=1 vref=$3" && "$(_gak_emits "$2")" == "github_app_key_ok_fallback warning" ]] \
+      || { GAK_WHY="state [$(cat "$2/gak.state" 2>/dev/null)] emits [$(_gak_emits "$2")]"; return 1; }
+  fi
+  [[ "$(_gak_appcalls "$2")" == 0 && "$(_gak_keyval "$2" soleur-web-platform)" == "$GAK_PRD_KEY" ]] \
+    || { GAK_WHY="app-project calls=$(_gak_appcalls "$2"); the unverified image received the isolated key"; return 1; }
+}
+_gak_chk_unverified() { _gak_unverified_core "$1" "$2" mismatch; }
+_gak_chk_norec() { _gak_unverified_core "$1" "$2" absent; }
+_gak_chk_recmismatch() { _gak_unverified_core "$1" "$2" mismatch; }
+_gak_chk_tagref() { _gak_unverified_core "$1" "$2" match; }  # the record matches, but the ref is no digest
+_gak_chk_sig() {  # a signature from a non-main ref / another repo → WARN fail-open, no key (7.b*)
+  _gak_unverified_core "$1" "$2" mismatch || return 1
+  grep -q 'IMAGE_VERIFY_FAIL: result=wrong_identity' "$2/logger.txt" || { GAK_WHY="the verify failure is not classified wrong_identity"; return 1; }
+}
+_gak_chk_cache() {  # the local-cache reload arm (#6512) → no key for a never-re-verified image (7.e1)
+  _gak_unverified_core "$1" "$2" mismatch || return 1
+  grep -q 'reused_local_reload' "$2/sentry.txt" || { GAK_WHY="the local-cache arm did not fire"; return 1; }
+}
+_gak_chk_hijack() {  # a runtime-hijack class in prd → refuse before any container (7.15*)
+  if [[ "$1" == ci ]]; then
+    [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_env_hijack && "$(_gak_st "$2" github_app_key_fetch)" == env_hijack ]] && ! grep -q '^run:' "$2/gak.log" \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) runs=$(grep -c '^run:' "$2/gak.log")"; return 1; }
+  else
+    [[ "$(cat "$2/rc")" == 72 ]] && grep -qF 'cond=github_app_key_env_hijack attempt=1/1' "$2/detail/doppler_download" 2>/dev/null \
+      && [[ ! -e "$2/envfile.soleur-web-platform" ]] || { GAK_WHY="helper rc=$(cat "$2/rc") detail=[$(cat "$2/detail/doppler_download" 2>/dev/null)]"; return 1; }
+  fi
+  [[ "$(_gak_appcalls "$2")" == 0 ]] || { GAK_WHY="isolated project fetched for a hijacked env"; return 1; }
+}
+_gak_chk_mergefail() {  # the atomic rename fails → abort (ci refuses, boot exits 72), env-file untouched (7.m*)
+  if [[ "$1" == ci ]]; then
+    [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == github_app_key_merge_failed && "$(_gak_st "$2" github_app_key_fetch)" == merge_failed ]] && ! grep -q '^run:' "$2/gak.log" \
+      || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) runs=$(grep -c '^run:' "$2/gak.log")"; return 1; }
+  else
+    [[ "$(cat "$2/rc")" == 72 ]] && grep -qF 'cond=github_app_key_merge_failed' "$2/detail/doppler_download" 2>/dev/null \
+      && [[ ! -e "$2/envfile.soleur-web-platform" ]] || { GAK_WHY="helper rc=$(cat "$2/rc")"; return 1; }
+    cmp -s "$2/envfile" "$GAK_FIX/prd.env" || { GAK_WHY="the env-file was modified in place by a failed merge"; return 1; }
+    if compgen -G "$2/envfile.gak.*" >/dev/null; then GAK_WHY="the merge temp file was left behind"; return 1; fi
+  fi
+}
+_gak_chk_launchfail() {  # systemd-run cannot launch the check → exec_failed at error, synchronously (7.l1)
+  [[ "$(cat "$2/rc")" == 0 && "$(_gak_emits "$2")" == "github_app_key_exec_failed error" ]] && grep -qF 'launch=failed' "$2/emits.txt" \
+    || { GAK_WHY="rc=$(cat "$2/rc") emits [$(_gak_emits "$2")]"; return 1; }
+}
+_gak_chk_planted() {  # a planted `node` answers ok, but the env -i probe says rejected → refused (7.16)
+  _gak_chk_rejected "$@"
+}
+_gak_chk_inherit() {  # inherited GITHUB_APP_KEY_* values never reach state on an abort before the overlay (7.s2)
+  [[ "$(cat "$2/rc")" != 0 && "$(_gak_st "$2" reason)" == cosign_verify_failed ]] \
+    && [[ "$(jq -r 'has("github_app_key_fetch") or has("github_app_key_source") or has("github_app_key_probe")' "$2/ci-deploy.state" 2>/dev/null)" == false ]] \
+    || { GAK_WHY="rc=$(cat "$2/rc") reason=$(_gak_st "$2" reason) fetch=$(_gak_st "$2" github_app_key_fetch)"; return 1; }
+}
+_gak_chk_twice() { _gak_chk_iso "$@"; }  # prd holds the key line twice (7.1b)
+
+# Scenario table: <token> <prd-body> <extra-env> (boot extra is the same unless GAK_BOOTX_<scn> is set).
+declare -A GAK_SCN=(
+  [iso]="yes|$GAK_FIX/prd.env|"
+  [prd]="no|$GAK_FIX/prd.env|"
+  [transport]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT=\$'github_app_key_probe=transport\\n'"
+  [absent]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT='' MOCK_GAK_PROBE_RC=127"
+  [fetchfail]="yes|$GAK_FIX/prd.env|export MOCK_GAK_APP_FAIL=1"
+  [appempty]="yes|$GAK_FIX/prd.env|export MOCK_GAK_APP_BODY=$GAK_FIX/app-empty.env"
+  [apptwo]="yes|$GAK_FIX/prd.env|export MOCK_GAK_APP_BODY=$GAK_FIX/app-two.env"
+  [flaky]="yes|$GAK_FIX/prd.env|printf 1 > \"\$MOCK_GAK_LOG.failfirst\"; export MOCK_GAK_APP_FAIL_FIRST=\"\$MOCK_GAK_LOG.failfirst\""
+  [missing]="yes|$GAK_FIX/prd-nokey.env|export MOCK_GAK_APP_FAIL=1"
+  [evicted]="no|$GAK_FIX/prd-evicted.env|"
+  [rejected]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT=\$'github_app_key_probe=rejected reason=http_401\\n' MOCK_GAK_PROBE_RC=1"
+  [planted]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT=\$'github_app_key_probe=rejected reason=http_401\\n' MOCK_GAK_PROBE_RC=1 MOCK_GAK_PLANTED_NODE=1"
+  [noverdict]="yes|$GAK_FIX/prd.env|export MOCK_GAK_PROBE_OUT='' MOCK_GAK_PROBE_RC=1"
+  # #6129: ENFORCE is the default, so an unverified or wrongly-signed image never reaches the key
+  # handoff at all. These five scenarios test the WARN fail-open override, where the image DOES
+  # run, and so must pin IMAGE_VERIFY_MODE=warn explicitly.
+  [unverified]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_INSPECT_NO_DIGEST=1"
+  [cosignfail]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_VERIFY_FAIL=1"
+  [sigtag]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_SAN_REF=refs/tags/v9.9.9 MOCK_COSIGN_WF_REF=refs/tags/v9.9.9"
+  [sigbranch]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_WF_REF=refs/heads/feat-branch"
+  [sigfork]="yes|$GAK_FIX/prd.env|export IMAGE_VERIFY_MODE=warn MOCK_COSIGN_WF_REPO=evil-fork/soleur"
+  [cache]="yes|$GAK_FIX/prd.env|export MOCK_ZOT_PULL_FAIL=1 MOCK_RUNNING_IMAGE_ID=sha256:$(printf '6%.0s' {1..64}) MOCK_RUNNING_IMAGE_TAG=v1.0.0"
+  [norec]="yes|$GAK_FIX/prd.env|rm -f \"\$SOLEUR_GAK_VERIFIED_REF_FILE\""
+  [tagref]="yes|$GAK_FIX/prd.env|printf '%s' 'ghcr.io/jikig-ai/soleur-web-platform:v1.0.0' > \"\$SOLEUR_IMAGE_REF_FILE\"; printf '%s\\n' 'ghcr.io/jikig-ai/soleur-web-platform:v1.0.0' > \"\$SOLEUR_GAK_VERIFIED_REF_FILE\""
+  [recmismatch]="yes|$GAK_FIX/prd.env|printf '%s\\n' '10.0.1.30:5000/jikig-ai/soleur-web-platform@sha256:$(printf 'f%.0s' {1..64})' > \"\$SOLEUR_GAK_VERIFIED_REF_FILE\""
+  [mergefail]="yes|$GAK_FIX/prd.env|GAK_PATH_PREFIX=$GAK_FIX/mvfail"
+  [launchfail]="yes|$GAK_FIX/prd.env|export MOCK_SYSTEMD_RUN_FAIL=1"
+  [inherit]="yes|$GAK_FIX/prd.env|export GITHUB_APP_KEY_FETCH=ok GITHUB_APP_KEY_SOURCE=isolated GITHUB_APP_KEY_PROBE=ok MOCK_COSIGN_VERIFY_FAIL=1 IMAGE_VERIFY_MODE=enforce"
+  [hijack_bare]="yes|$GAK_FIX/prd-hijack-bare.env|"
+  [hijack_ws]="yes|$GAK_FIX/prd-hijack-ws.env|"
+  [twice]="yes|$GAK_FIX/prd-twice.env|"
+)
+declare -A GAK_CHK=([iso]=_gak_chk_iso [prd]=_gak_chk_prd [transport]=_gak_chk_transport [absent]=_gak_chk_absent
+  [fetchfail]=_gak_chk_fetchfail [appempty]=_gak_chk_fetchfail [apptwo]=_gak_chk_fetchfail [flaky]=_gak_chk_flaky
+  [missing]=_gak_chk_missing [evicted]=_gak_chk_missing [rejected]=_gak_chk_rejected [planted]=_gak_chk_planted
+  [noverdict]=_gak_chk_noverdict [unverified]=_gak_chk_unverified [cosignfail]=_gak_chk_unverified
+  [sigtag]=_gak_chk_sig [sigbranch]=_gak_chk_sig [sigfork]=_gak_chk_sig [cache]=_gak_chk_cache
+  [norec]=_gak_chk_norec [recmismatch]=_gak_chk_recmismatch [tagref]=_gak_chk_tagref [mergefail]=_gak_chk_mergefail
+  [launchfail]=_gak_chk_launchfail [inherit]=_gak_chk_inherit
+  [hijack_bare]=_gak_chk_hijack [hijack_ws]=_gak_chk_hijack [twice]=_gak_chk_twice)
+for _hc in "${GAK_HIJACK_CLASSES[@]}"; do
+  IFS='|' read -r _hid _ _ <<<"$_hc"
+  GAK_SCN[hijack_$_hid]="yes|$GAK_FIX/prd-hijack-$_hid.env|"
+  GAK_CHK[hijack_$_hid]=_gak_chk_hijack
+done
+# The boot path's unverified arm is a ref file that is not a digest (the boot has no cosign step).
+declare -A GAK_BOOTX=([unverified]="printf '%s' 'ghcr.io/jikig-ai/soleur-web-platform:v1.0.0' > \"\$SOLEUR_IMAGE_REF_FILE\"")
+GAK_SITES_EXERCISED=""
+
+# gak_eval <site> <scenario> <script-or-bootstrap> → 0 the scenario's property holds; 1 the
+# property check failed (GAK_WHY names it); 2 the run CRASHED or failed for an unrelated reason
+# (a shell error, reason=unhandled, a canary health/login/dashboard failure) — never a kill (F11).
+gak_eval() {
+  local site="$1" scn="$2" file="$3" d tok body extra rc=0 r
+  IFS='|' read -r tok body extra <<<"${GAK_SCN[$scn]}"
+  d="$(mktemp -d)"
+  if [[ "$site" == ci ]]; then
+    gak_run_ci "$d" "$tok" "$body" "$file" "$extra"
+  else
+    gak_run_boot "$d" "$tok" "$body" "$file" "$extra${GAK_BOOTX[$scn]:+; ${GAK_BOOTX[$scn]}}"
+  fi
+  [[ " $GAK_SITES_EXERCISED " == *" $site "* ]] || GAK_SITES_EXERCISED="$GAK_SITES_EXERCISED $site"
+  GAK_WHY=""
+  "${GAK_CHK[$scn]}" "$site" "$d" || rc=1
+  if (( rc == 1 )); then
+    r="$(_gak_st "$d" reason)"
+    if grep -qE 'unbound variable|parameter not set|[Ss]yntax error|command not found|: not found' "$d/out.txt" 2>/dev/null \
+      || [[ "$site" == ci && "$r" =~ ^(unhandled|canary_health_failed|canary_login_failed|canary_dashboard_5xx|canary_error_boundary|image_pull_failed|doppler_fetch_failed)$ ]]; then
+      GAK_WHY="CRASH/unrelated (reason=$r; $(grep -m1 -E 'unbound variable|parameter not set|[Ss]yntax error|command not found|: not found' "$d/out.txt" 2>/dev/null | cut -c1-100)) — $GAK_WHY"
+      rc=2
+    fi
+  fi
+  rm -rf "$d"
+  return "$rc"
+}
+
+# Pristine controls, run once per (site, scenario) and reused by every row.
+declare -A GAK_CTRL=()
+gak_ctrl() {  # <site> <scn>
+  local k="$1/$2" f
+  if [[ -z "${GAK_CTRL[$k]:-}" ]]; then
+    if [[ "$1" == ci ]]; then f="$DEPLOY_SCRIPT"; else f="$GAK_BOOT"; fi
+    if gak_eval "$1" "$2" "$f"; then GAK_CTRL[$k]=green; else GAK_CTRL[$k]="RED($GAK_WHY)"; fi
+  fi
+  [[ "${GAK_CTRL[$k]}" == green ]]
+}
+
+# _gak_row_core <scenario> <sites> <old> <new> [all] → 0 when the row is a valid KILL: <sites> is
+# non-empty, and on EVERY site the mutation landed, the control is green, and the mutant failed its
+# own property check (gak_eval rc 1). Sets GAK_ROW_BAD / GAK_ROW_VERDICTS. Counts nothing.
+# shellcheck disable=SC2034  # GAK_ROW_RED is read through a nameref in _gak_dispatch_gaps (7.13)
+declare -A GAK_ROW_DECL=() GAK_ROW_RED=()
+_gak_row_core() {
+  local scn="$1" sites="$2" old="$3" new="$4" all="${5:-}" site src m erc n_sites=0
+  GAK_ROW_BAD=""; GAK_ROW_VERDICTS=""; GAK_ROW_WHY=""
+  for site in $sites; do
+    n_sites=$((n_sites + 1))
+    if [[ "$site" == ci ]]; then src="$DEPLOY_SCRIPT"; else src="$GAK_BOOT"; fi
+    m="$(mktemp)"; gak_mut "$src" "$m" "$old" "$new" "$all"
+    if cmp -s "$src" "$m"; then GAK_ROW_BAD="$GAK_ROW_BAD [$site: mutation did NOT land — anchor drifted, row would measure the pristine file]"; rm -f "$m"; continue; fi
+    gak_ctrl "$site" "$scn" || GAK_ROW_BAD="$GAK_ROW_BAD [$site: unmutated control is not green: ${GAK_CTRL[$site/$scn]}]"
+    erc=0; gak_eval "$site" "$scn" "$m" || erc=$?
+    case "$erc" in
+      0) GAK_ROW_BAD="$GAK_ROW_BAD [$site: mutant stayed GREEN]" ;;
+      1) GAK_ROW_VERDICTS="$GAK_ROW_VERDICTS $site=RED"; GAK_ROW_WHY="$GAK_ROW_WHY [$site: ${GAK_WHY:0:90}]" ;;
+      *) GAK_ROW_BAD="$GAK_ROW_BAD [$site: $GAK_WHY]" ;;
+    esac
+    rm -f "$m"
+  done
+  (( n_sites > 0 )) || GAK_ROW_BAD="$GAK_ROW_BAD [no site declared — nothing was measured]"
+  for site in $sites; do
+    [[ " $GAK_ROW_VERDICTS " == *" $site=RED "* ]] || GAK_ROW_BAD="$GAK_ROW_BAD [$site: no RED verdict]"
+  done
+  [[ -z "$GAK_ROW_BAD" ]]
+}
+# gak_row <id> <label> <scenario> <sites> <old> <new> [all]: one counted mutation row. The same
+# literal edit is applied to each site's file (the shared block is byte-identical, so a block
+# mutation lands in both); a site-specific edit names one site.
+gak_row() {
+  local id="$1" label="$2"
+  TOTAL=$((TOTAL + 1))
+  GAK_ROW_DECL[$id]="$4"
+  if _gak_row_core "$3" "$4" "$5" "$6" "${7:-}"; then
+    GAK_ROW_RED[$id]="$GAK_ROW_VERDICTS"
+    PASS=$((PASS + 1)); echo "  PASS: $id $label — mutant${GAK_ROW_VERDICTS}, control green; killed by:${GAK_ROW_WHY}"
+  else
+    GAK_ROW_RED[$id]="$GAK_ROW_VERDICTS"
+    FAIL=$((FAIL + 1)); echo "  FAIL: $id $label —$GAK_ROW_BAD"
+  fi
+}
+# gak_must_pass <id> <label> <scenario> <sites>
+gak_must_pass() {
+  local id="$1" label="$2" scn="$3" sites="$4" site bad=""
+  TOTAL=$((TOTAL + 1))
+  [[ -n "$sites" ]] || bad=" [no site declared]"
+  for site in $sites; do gak_ctrl "$site" "$scn" || bad="$bad [$site: ${GAK_CTRL[$site/$scn]}]"; done
+  if [[ -z "$bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: $id $label (PASS on: $sites)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: $id $label —$bad"; fi
+}
+
+GAK_BOTH="ci boot"
+# 7.st: the row machinery itself, both directions (test-design F10). A mutation that lands but is
+# harmless must NOT score as a kill; an empty site list must not score; a known killer must score.
+TOTAL=$((TOTAL + 1))
+_st_bad=""
+_gak_row_core iso ci 'github_app_key_present() {' $'# guard7 self-test: a harmless landed edit\ngithub_app_key_present() {' && _st_bad="$_st_bad [a harmless mutation scored as a kill]"
+_gak_row_core iso "" 'github_app_key_present() {' $'github_app_key_present() {\n  return 0' && _st_bad="$_st_bad [an empty site list scored as a kill]"
+_gak_row_core iso ci '_gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout' '_gak_dl=$(timeout' || _st_bad="$_st_bad [a known killer did not score:$GAK_ROW_BAD]"
+if [[ -z "$_st_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.st row machinery — a harmless mutant and an empty site list FAIL a row; a known killer PASSes"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.st row machinery —$_st_bad"; fi
+
+# 7.0 precondition: every token-present row is vacuous unless the isolated project was read exactly
+# once, with the APP token. Asserted on the iso control (both sites) and driven RED by handing the
+# fetch the ambient prd token instead.
+TOTAL=$((TOTAL + 1))
+_g0_bad=""
+for _s in $GAK_BOTH; do gak_ctrl "$_s" iso || _g0_bad="$_g0_bad [$_s: ${GAK_CTRL[$_s/iso]}]"; done
+if [[ -z "$_g0_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.0 precondition — one '--project soleur-github-app --config prd' call made with the app token, on both sites"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.0 precondition —$_g0_bad"; fi
+gak_row 7.0m "the isolated fetch runs under the ambient prd token instead of the app token" iso "$GAK_BOTH" \
+  '_gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout' '_gak_dl=$(timeout'
+gak_row 7.1 "overlay appends the isolated line but keeps the prd line" iso "$GAK_BOTH" \
+  "_gak_rest=\$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' \"\$1\")" '_gak_rest=$(cat "$1")'
+gak_row 7.1b "prd holds the key line twice and the overlay drops only the first" twice "$GAK_BOTH" \
+  "_gak_rest=\$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' \"\$1\")" "_gak_rest=\$(sed '0,/^GITHUB_APP_PRIVATE_KEY=/{//d}' \"\$1\")"
+# (The redirect is spliced in from $_g_gt so this line is not itself a redirect to a scanner.)
+_g_gt='>'
+gak_row 7.1c "the overlay keeps only the key lines of the prd env (the container loses DATABASE_URL & co)" iso "$GAK_BOTH" \
+  "printf '%s\\n%s\\n' \"\$_gak_rest\" \"\$_gak_line\" $_g_gt \"\$_gak_tmp\"" \
+  "printf '%s\\n%s\\n' \"\$(printf '%s\\n' \"\$_gak_rest\" | grep '^GITHUB_APP_PRIVATE_KEY=')\" \"\$_gak_line\" $_g_gt \"\$_gak_tmp\""
+gak_row 7.2 "overlay filter unanchored, so GITHUB_APP_PRIVATE_KEY_RETIRED= also passes" iso "$GAK_BOTH" \
+  "'^GITHUB_APP_PRIVATE_KEY=.'" "'^GITHUB_APP_PRIVATE_KEY'" all
+gak_row 7.2c "the key-line EXTRACTOR alone is unanchored: the _RETIRED key rides into the container" iso "$GAK_BOTH" \
+  "grep -E '^GITHUB_APP_PRIVATE_KEY=.') || _gak_line=" "grep -E '^GITHUB_APP_PRIVATE_KEY') || _gak_line="
+gak_row 7.2d "the one-key-line rule dropped: an isolated body with NO key line strips the prd key" appempty "$GAK_BOTH" \
+  'if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then' 'if [ "$_gak_rc" -ne 0 ]; then'
+gak_row 7.2e "the one-key-line rule dropped: an isolated body with TWO key lines is merged" apptwo "$GAK_BOTH" \
+  'if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then' 'if [ "$_gak_rc" -ne 0 ]; then'
+gak_row 7.2b "overlay fetches --project soleur instead of soleur-github-app" iso "$GAK_BOTH" \
+  '--project soleur-github-app --config prd' '--project soleur --config prd'
+gak_row 7.3 "token present, isolated fetch fails, prd holds no key: the presence check is neutered" missing "$GAK_BOTH" \
+  'github_app_key_present() {' $'github_app_key_present() {\n  return 0'
+gak_row 7.4 "the key is EVICTED_SEE_ADR_241 and the presence check accepts it" evicted "$GAK_BOTH" \
+  "! grep -qxE 'GITHUB_APP_PRIVATE_KEY=(EVICTED_SEE_ADR_241)?' \"\$1\"" "! grep -qxE 'GITHUB_APP_PRIVATE_KEY=' \"\$1\""
+_g5_call=$'    GAK_OVERLAY_RC=0\n    overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC=$?\n'
+# 7.5: reorder — the overlay MOVED ahead of the prd download, onto a file of its own (two edits: the
+# early call is added, the late one removed). NON-crashing (test-design F11): the deploy still runs
+# end to end, and the property check reds it on the prd key the container ends up holding.
+TOTAL=$((TOTAL + 1))
+_g5m="$(mktemp)"; gak_mut "$DEPLOY_SCRIPT" "$_g5m" $'    ENV_FILE=$(resolve_env_file)\n' $'    _g5_early=$(mktemp); overlay_github_app_key "$_g5_early" "$GITHUB_APP_KEY_REF" || true; rm -f "$_g5_early"\n    ENV_FILE=$(resolve_env_file)\n'
+gak_mut "$_g5m" "$_g5m" "$_g5_call" $'    GAK_OVERLAY_RC=0\n'
+_g5rc=0
+if cmp -s "$DEPLOY_SCRIPT" "$_g5m" || grep -qF 'overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC' "$_g5m"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.5 the overlay MOVE (early call + late call removed) did not land"
+else
+  gak_eval ci iso "$_g5m" || _g5rc=$?
+  if (( _g5rc == 1 )); then PASS=$((PASS + 1)); echo "  PASS: 7.5 overlay MOVED before the prd download (late call removed) — mutant ci=RED ($GAK_WHY)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: 7.5 overlay moved before the prd download — rc=$_g5rc ($GAK_WHY)"; fi
+fi
+rm -f "$_g5m"
+gak_row 7.5b "boot: the overlay runs after the first docker run" iso boot \
+  '[ "$rc" = 0 ] && github_app_key_boot_finish' '[ "$rc" = 0 ] && { ( sleep 1; github_app_key_boot_finish ) >/dev/null 2>/dev/null & exit 0; }'
+sleep 2  # let 7.5b's deferred overlay finish before its sandbox is gone
+
+# 7.6 / 7.6b / 7.6c / 7.6d are static: the shared block, its sentinels and each file's own emitter.
+_gak_static() {  # <ci-file> <boot-file>
+  local f n b1 b2 beg='# >>> github-app-key-overlay >>>' end=$'# <<\x3c github-app-key-overlay <<<'  # \x3c keeps a heredoc-opener shape out of the line (guard-vacuity-floor)
+  for f in "$1" "$2"; do
+    [[ "$(grep -cxF "$beg" "$f")" == 1 && "$(grep -cxF "$end" "$f")" == 1 ]] \
+      || { GAK_WHY="${f##*/}: $(grep -cxF "$beg" "$f") begin / $(grep -cxF "$end" "$f") end sentinels (want 1/1)"; return 1; }
+  done
+  b1="$(mktemp)"; b2="$(mktemp)"
+  sed -n "\\|^$beg\$|,\\|^$end\$|p" "$1" > "$b1"; sed -n "\\|^$beg\$|,\\|^$end\$|p" "$2" > "$b2"
+  # The emitter must be CALLED from code, not merely named in a comment (test-design F14): comment
+  # lines are stripped and the call shape (a classification and a level) is required.
+  if ! grep -qx 'overlay_github_app_key() {' "$b1" || ! grep -qx 'github_app_key_present() {' "$b1" \
+     || ! grep -v '^[[:space:]]*#' "$b1" | grep -qE '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
+    GAK_WHY="the ci-deploy block does not define the overlay/presence functions or never calls the emitter"; rm -f "$b1" "$b2"; return 1
+  fi
+  if ! cmp -s "$b1" "$b2"; then GAK_WHY="the two blocks differ ($(cmp "$b1" "$b2" 2>&1 | head -1))"; rm -f "$b1" "$b2"; return 1; fi
+  rm -f "$b1" "$b2"
+  for f in "$1" "$2"; do
+    n="$(sed "\\|^$beg\$|,\\|^$end\$|d" "$f" | grep -cx 'github_app_key_emit() {' || true)"
+    [[ "$n" == 1 ]] || { GAK_WHY="${f##*/} defines github_app_key_emit $n time(s) outside the block (want 1)"; return 1; }
+  done
+  # The boot emitter must live in the same baked helper as the block it serves.
+  # Captured, not piped into `grep -q`: an early grep exit SIGPIPEs awk and pipefail reads it as a miss.
+  n="$(awk "/cat > \/usr\/local\/bin\/soleur-doppler-download <[<]'DDLEOF'/{f=1;next} f&&/^DDLEOF\$/{f=0} f{print}" "$2" | grep -cx 'github_app_key_emit() {' || true)"
+  [[ "$n" == 1 ]] || { GAK_WHY="the boot emitter is not inside soleur-doppler-download ($n)"; return 1; }
+}
+TOTAL=$((TOTAL + 1))
+if _gak_static "$DEPLOY_SCRIPT" "$GAK_BOOT"; then PASS=$((PASS + 1)); echo "  PASS: 7.6-control the sentinel-bounded overlay block is byte-identical in both files; each file defines its own emitter"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.6-control $GAK_WHY"; fi
+# gak_static_row <id> <label> <which ci|boot|both> <old> <new> [all]
+gak_static_row() {
+  local id="$1" label="$2" which="$3" c b
+  TOTAL=$((TOTAL + 1)); c="$(mktemp)"; b="$(mktemp)"; cp "$DEPLOY_SCRIPT" "$c"; cp "$GAK_BOOT" "$b"
+  if [[ "$which" == ci || "$which" == both ]]; then gak_mut "$c" "$c" "$4" "$5" "${6:-}"; fi
+  if [[ "$which" == boot || "$which" == both ]]; then gak_mut "$b" "$b" "$4" "$5" "${6:-}"; fi
+  if cmp -s "$c" "$DEPLOY_SCRIPT" && cmp -s "$b" "$GAK_BOOT"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $id $label — mutation did NOT land"
+  elif _gak_static "$c" "$b"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $id $label — mutant stayed GREEN"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $id $label — mutant RED ($GAK_WHY)"
+  fi
+  rm -f "$c" "$b"
+}
+gak_static_row 7.6 "the boot block differs from the ci-deploy block by one byte" boot 'timeout -k 5 20 doppler' 'timeout -k 5 21 doppler'
+gak_static_row 7.6b "sentinel markers removed from BOTH files (7.6 would compare empty to empty)" both '# >>> github-app-key-overlay >>>' '# --- github-app-key-overlay ---' all
+gak_static_row 7.6b-dup "sentinel markers duplicated in one file" ci $'# <<\x3c github-app-key-overlay <<<\n' $'# <<\x3c github-app-key-overlay <<<\n# >>> github-app-key-overlay >>>\n# <<\x3c github-app-key-overlay <<<\n'
+gak_static_row 7.6c "the boot file lacks its own definition of the emitter the shared block calls" boot 'github_app_key_emit() {' 'github_app_key_emit_unused() {'
+gak_static_row 7.6c-ci "ci-deploy.sh lacks its own definition of the emitter the shared block calls" ci 'github_app_key_emit() {' 'github_app_key_emit_unused() {'
+gak_static_row 7.6d "every emitter CALL commented out, its text kept (a comment naming the emitter must not satisfy 7.6)" both 'github_app_key_emit ' ': # github_app_key_emit ' all
+gak_row 7.7 "the app read token is written into the container env-file" iso "$GAK_BOTH" \
+  $'  GITHUB_APP_KEY_SOURCE=isolated\n' $'  GITHUB_APP_KEY_SOURCE=isolated\n  printf \'X_TOKEN=%s\\n\' "$GITHUB_APP_DOPPLER_TOKEN" >> "$1"\n'
+gak_row 7.7b "the app read token is exported into the process env the docker CLI sees" iso ci \
+  'export DOPPLER_TOKEN SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY' 'export DOPPLER_TOKEN SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY GITHUB_APP_DOPPLER_TOKEN'
+gak_row 7.7c "the app read token is handed to the canary on the probe exec's argv" iso ci \
+  'github-app-key-probe "$GITHUB_APP_KEY_PROBE_MJS" 2>/dev/null)' 'github-app-key-probe "$GITHUB_APP_KEY_PROBE_MJS" "$GITHUB_APP_DOPPLER_TOKEN" 2>/dev/null)'
+gak_row 7.7d "the key is passed on the HOST docker exec argv (-e) instead of read in-container" iso ci \
+  'out="$(docker exec soleur-web-platform-canary /bin/sh' 'out="$(docker exec -e "$(grep ^GITHUB_APP_PRIVATE_KEY= "$ENV_FILE")" soleur-web-platform-canary /bin/sh'
+gak_row 7.7e "the app read token lands in the overlay's log/Sentry detail" iso "$GAK_BOTH" \
+  'github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"' 'github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try t=$GITHUB_APP_DOPPLER_TOKEN"'
+gak_row 7.7f "the app read token lands in the detail base64-encoded" iso "$GAK_BOTH" \
+  'github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"' 'github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try t=$(printf %s "$GITHUB_APP_DOPPLER_TOKEN" | base64 | tr -d "\n")"'
+gak_row 7.7g "boot: the read token is exported to the helper's children (systemd-run, soleur-boot-emit)" iso boot \
+  '      if [ "$_k" = GITHUB_APP_DOPPLER_TOKEN ] && [ -n "$_v" ]; then GITHUB_APP_DOPPLER_TOKEN=$_v; fi' '      if [ "$_k" = GITHUB_APP_DOPPLER_TOKEN ] && [ -n "$_v" ]; then GITHUB_APP_DOPPLER_TOKEN=$_v; export GITHUB_APP_DOPPLER_TOKEN; fi'
+# 7.8: the overlay moved INTO resolve_env_file's $(…) subshell — the env-file still gets the key,
+# so only deploy state (never `isolated`) can see it. Two edits, applied as one row.
+TOTAL=$((TOTAL + 1))
+_g8m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_g8m" $'  echo "$doppler_output" > "$tmpenv"\n' $'  echo "$doppler_output" > "$tmpenv"\n  overlay_github_app_key "$tmpenv" "$GITHUB_APP_KEY_REF" || true\n'
+gak_mut "$_g8m" "$_g8m" "$_g5_call" $'    GAK_OVERLAY_RC=0\n'
+_g8rc=0
+if cmp -s "$DEPLOY_SCRIPT" "$_g8m" || ! grep -q 'overlay_github_app_key "$tmpenv"' "$_g8m" || grep -qF 'overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC' "$_g8m"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.8 the move into resolve_env_file did not land"
+elif ! gak_ctrl ci iso; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.8 unmutated control not green: ${GAK_CTRL[ci/iso]}"
+else
+  gak_eval ci iso "$_g8m" || _g8rc=$?
+  if (( _g8rc == 1 )); then PASS=$((PASS + 1)); echo "  PASS: 7.8 overlay moved inside resolve_env_file (subshell) — mutant ci=RED ($GAK_WHY)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: 7.8 overlay inside the resolve_env_file subshell — rc=$_g8rc ($GAK_WHY)"; fi
+fi
+rm -f "$_g8m"
+gak_row 7.9 "probe says rejected (401) and the canary promotes anyway" rejected ci \
+  $'  CANARY_FAIL_REASON="canary_github_app_key_rejected"\n  return 1' $'  CANARY_FAIL_REASON="canary_github_app_key_rejected"\n  return 0'
+gak_row 7.9-boot "boot: probe says rejected and the check reports ok" rejected boot \
+  'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other) S=rejected; L=error ;;' 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other) S=ok; L=info ;;'
+gak_row 7.9r "the probe's rejected sub-reason is dropped (ci state/Sentry detail)" rejected ci \
+  'GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"' 'GITHUB_APP_KEY_PROBE_REASON=unspecified'
+gak_row 7.9r-boot "boot: the probe's rejected sub-reason is dropped from the detail" rejected boot \
+  '"${R:+ reason=$R}"' '""'
+# 7.10: the slug/id rule itself lives in the probe (test/github-app-key-probe.test.ts: "200 with
+# another App's slug ⇒ rejected"); the host half is that ANY verdict line is parsed, not assumed ok.
+gak_row 7.10 "a 200 for another App (probe verdict rejected) is parsed as ok" rejected ci \
+  'GITHUB_APP_KEY_PROBE=rejected
+    GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"' 'GITHUB_APP_KEY_PROBE=ok
+    GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"'
+gak_row 7.11 "the probe runs in soleur-web-platform instead of the canary" iso ci \
+  'out="$(docker exec soleur-web-platform-canary /bin/sh' 'out="$(docker exec soleur-web-platform /bin/sh'
+_g11_check=$'    # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.\n    if [[ "$CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check; then\n      CANARY_HEALTHY=false\n    fi\n'
+TOTAL=$((TOTAL + 1))
+_g11m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_g11m" "$_g11_check" ''
+gak_mut "$_g11m" "$_g11m" $'        write_seccomp_profile_hash\n' $'        write_seccomp_profile_hash\n        github_app_key_canary_check || true\n'
+_g11rc=0
+if cmp -s "$DEPLOY_SCRIPT" "$_g11m" || grep -qF 'CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check' "$_g11m"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.11b the move after promotion did not land"
+else
+  gak_eval ci iso "$_g11m" || _g11rc=$?
+  if (( _g11rc == 1 )); then PASS=$((PASS + 1)); echo "  PASS: 7.11b the probe moved after promotion (docker order) — mutant ci=RED ($GAK_WHY)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: 7.11b the probe after promotion — rc=$_g11rc ($GAK_WHY)"; fi
+fi
+rm -f "$_g11m"
+gak_row 7.12 "the probe exits 1 with no verdict and is treated as 'script absent'" noverdict ci \
+  'elif (( rc == 127 )); then' 'elif (( rc != 0 )); then'
+gak_row 7.12-boot "boot: no verdict with rc 1 is reported as probe_absent" noverdict boot \
+  'if [ "$UP" = 1 ] && [ "$RC" = 127 ]; then' 'if [ "$UP" = 1 ] && [ "$RC" != 0 ]; then'
+gak_row 7.14 "token present, image unverified (bare tag): the signed-image gate is neutered" unverified "$GAK_BOTH" \
+  '  if [ "$_gak_ref_ok" -ne 1 ]; then' '  if false; then'
+gak_row 7.14b "WARN-mode cosign FAILURE (digest ref, rc 3) is treated as verified" cosignfail ci \
+  'if (( VERIFY_RC == 0 )); then' 'if (( VERIFY_RC == 0 || VERIFY_RC == 3 )); then'
+gak_row 7.14c "the digest-shape gate accepts any non-empty ref again (a matching tag ref gets the key)" tagref boot \
+  "*) if printf '%s\\n' \"\$2\" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;" "*) _gak_ref_ok=1 ;;"
+
+# (b) the key decision's signing identity: main of jikig-ai/soleur only (verifier-side pin).
+gak_row 7.b1 "the workflow-REF pin is dropped: a branch run calling reusable-release.yml@main gets the key" sigbranch ci \
+  $'       --certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF" \\\n' ''
+gak_row 7.b2 "the workflow-REPOSITORY pin is dropped: a fork run calling this repo's reusable workflow gets the key" sigfork ci \
+  $'       --certificate-github-workflow-repository="$COSIGN_WORKFLOW_REPOSITORY" \\\n' ''
+gak_row 7.b3 "the tag arm is back and the ref pin is gone: a pushed v* tag's release gets the key" sigtag ci \
+  "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@refs/heads/main\$'
+readonly COSIGN_WORKFLOW_REF=\"refs/heads/main\"" \
+  "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@(refs/heads/main|refs/tags/v[0-9].+)\$'
+readonly COSIGN_WORKFLOW_REF=\"\""
+# 7.b4 static: the identity the key decision uses, pinned literally (a drift in any of the three
+# reads RED here before a behavioural row could miss it).
+_gak_identity_ok() {  # <ci-file>
+  local f="$1" call
+  grep -qxF "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@refs/heads/main\$'" "$f" \
+    || { GAK_WHY="COSIGN_IDENTITY_REGEXP is not the main-only literal"; return 1; }
+  grep -qxF 'readonly COSIGN_WORKFLOW_REF="refs/heads/main"' "$f" || { GAK_WHY="COSIGN_WORKFLOW_REF is not refs/heads/main"; return 1; }
+  grep -qxF 'readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/soleur"' "$f" || { GAK_WHY="COSIGN_WORKFLOW_REPOSITORY is not jikig-ai/soleur"; return 1; }
+  call="$(awk '/^verify_image_signature\(\) \{/,/^\}/' "$f")"
+  [[ "$(grep -cF -- '--certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF"' <<<"$call")" == 1 \
+     && "$(grep -cF -- '--certificate-github-workflow-repository="$COSIGN_WORKFLOW_REPOSITORY"' <<<"$call")" == 1 ]] \
+    || { GAK_WHY="the verify argv does not carry both workflow pins exactly once"; return 1; }
+}
+TOTAL=$((TOTAL + 1))
+_b4_bad=""
+_gak_identity_ok "$DEPLOY_SCRIPT" || _b4_bad="$_b4_bad [control: $GAK_WHY]"
+_b4m="$(mktemp)"
+_b4_old=(
+  "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@refs/heads/main\$'"
+  'readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/soleur"'
+  '       --certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF" \'
+)
+_b4_new=(
+  "readonly COSIGN_IDENTITY_REGEXP='^https://github\\.com/jikig-ai/soleur/\\.github/workflows/reusable-release\\.yml@(refs/heads/main|refs/tags/v[0-9].+)\$'"
+  'readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/.*"'
+  '       --certificate-github-workflow-ref="" \'
+)
+for _i in 0 1 2; do
+  gak_mut "$DEPLOY_SCRIPT" "$_b4m" "${_b4_old[$_i]}" "${_b4_new[$_i]}"
+  if cmp -s "$DEPLOY_SCRIPT" "$_b4m"; then _b4_bad="$_b4_bad [mutant $_i did not land]"
+  elif _gak_identity_ok "$_b4m"; then _b4_bad="$_b4_bad [mutant $_i stayed GREEN]"; fi
+done
+rm -f "$_b4m"
+if [[ -z "$_b4_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.b4 the key identity is pinned literally (main-only SAN, workflow ref + repository flags once each); 3 mutants RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.b4 key identity pin —$_b4_bad"; fi
+
+# (c) boot: the key only for the digest ci-deploy last verified.
+gak_row 7.c1 "boot: no verified-digest record, and the Terraform-pinned image gets the key anyway" norec boot \
+  $'  GAK_VREF=\n  GAK_VCHK=absent\n' $'  GAK_VREF=$GAK_REF\n  GAK_VCHK=absent\n'
+gak_row 7.c2 "boot: the record names ANOTHER digest, and the image gets the key anyway" recmismatch boot \
+  '[ "${GAK_REF##*@}" = "${GAK_REC##*@}" ]' '[ -n "${GAK_REC##*@}" ]'
+gak_row 7.c3 "ci: the verified digest is not recorded for the boot path" iso ci \
+  $'        record_github_app_key_verified_ref "$VERIFIED_REF"\n' ''
+gak_row 7.c4 "ci: an UNVERIFIED (WARN fail-open) digest is recorded as verified" cosignfail ci \
+  $'      elif (( VERIFY_RC != 3 )); then' $'      else record_github_app_key_verified_ref "$VERIFIED_REF"; fi\n      if (( VERIFY_RC != 0 && VERIFY_RC != 3 )); then'
+
+# (d) runtime-hijack refusal: one row per class — the class's alternative removed from the regex
+# lets its representative name through (both sites). Plus the bare-NAME and leading-blank forms,
+# and the two exceptions (a legitimate NODE_ENV / GIT_DATA_* must NOT be refused).
+for _hc in "${GAK_HIJACK_CLASSES[@]}"; do
+  IFS='|' read -r _hid _hline _halt <<<"$_hc"
+  _hsep='|'; [[ "$_hid" == perl ]] && _hsep=''
+  if [[ "$_hid" == node || "$_hid" == node_options ]]; then
+    gak_row "7.15/$_hid" "prd carries ${_hline%%=*} and the NODE_* class is dropped from the refusal" "hijack_$_hid" "$GAK_BOTH" \
+      '(NODE_[A-Za-z0-9_]*|LD_' '(LD_'
+  elif [[ "$_hid" == perl ]]; then
+    gak_row "7.15/$_hid" "prd carries ${_hline%%=*} and the PERL* class is dropped from the refusal" "hijack_$_hid" "$GAK_BOTH" \
+      '|PYTHON[A-Za-z0-9_]*|PERL[A-Za-z0-9_]*)' '|PYTHON[A-Za-z0-9_]*)'
+  else
+    gak_row "7.15/$_hid" "prd carries ${_hline%%=*} and its class ${_halt} is dropped from the refusal" "hijack_$_hid" "$GAK_BOTH" \
+      "|${_halt}${_hsep}" '|'
+  fi
+done
+gak_row 7.15-bare "a bare NAME line (docker copies the CLI's own value) is not refused" hijack_bare "$GAK_BOTH" \
+  "PERL[A-Za-z0-9_]*)[[:space:]]*(=|\$)' \"\$1\"" "PERL[A-Za-z0-9_]*)=' \"\$1\""
+gak_row 7.15-ws "a leading-blank NAME= line is not refused" hijack_ws "$GAK_BOTH" \
+  "_gak_hij=\$(grep -E '^[[:space:]]*(NODE_" "_gak_hij=\$(grep -E '^(NODE_"
+gak_row 7.15-all "the refusal is neutered outright" hijack_node_options "$GAK_BOTH" \
+  '  if [ "$_gak_hij" -ne 0 ]; then' '  if false; then'
+gak_row 7.15-exc-node "the NODE_ENV exception is dropped: a legitimate prd NODE_ENV refuses every deploy" iso "$GAK_BOTH" \
+  "(NODE_ENV|GIT_(DATA|" "(GIT_(DATA|"
+gak_row 7.15-exc-git "the app's GIT_DATA_* exception is dropped: the live prd names refuse every deploy" iso "$GAK_BOTH" \
+  "(NODE_ENV|GIT_(DATA|PROVISION|REMOVE|TRANSPORT)_[A-Za-z0-9_]*)" "(NODE_ENV)"
+gak_row 7.16 "the probe runs WITHOUT env -i/absolute node: a prd-planted node answers ok for a rejected key" planted "$GAK_BOTH" \
+  'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' 'exec node "$1"'
+
+# (e) the overlay's ref has ONE source: verify_image_signature's rc-0 stdout, in this run.
+gak_row 7.e1 "the local-cache arm hands the key to the never-re-verified running image" cache ci \
+  $'      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"\n' $'      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"\n      GITHUB_APP_KEY_REF="$VERIFIED_REF"\n'
+_gak_single_source() {  # <ci-file>: exactly two assignments, the non-empty one on the rc-0 verify arm
+  local f="$1" n want
+  n="$(grep -cE '^[[:space:]]*GITHUB_APP_KEY_REF=' "$f" || true)"
+  [[ "$n" == 2 ]] || { GAK_WHY="$n GITHUB_APP_KEY_REF assignments (want 2)"; return 1; }
+  [[ "$(grep -cxE '[[:space:]]*GITHUB_APP_KEY_REF=""' "$f")" == 1 ]] || { GAK_WHY="no single empty initialisation"; return 1; }
+  want=$'      VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")" || VERIFY_RC=$?\n      if (( VERIFY_RC == 0 )); then\n        GITHUB_APP_KEY_REF="$VERIFIED_REF"\n'
+  [[ "$(cat "$f")" == *"$want"* ]] || { GAK_WHY="the non-empty assignment is not the rc-0 arm of this run's verify"; return 1; }
+  [[ "$(grep -c 'overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF"' "$f")" == 1 ]] || { GAK_WHY="the overlay is not called with GITHUB_APP_KEY_REF exactly once"; return 1; }
+}
+TOTAL=$((TOTAL + 1))
+_e2_bad=""; _gak_single_source "$DEPLOY_SCRIPT" || _e2_bad=" [control: $GAK_WHY]"
+_e2m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_e2m" $'      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"\n' $'      VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"\n      GITHUB_APP_KEY_REF="$LOCAL_CACHE_VERIFIED_REF"\n'
+if cmp -s "$DEPLOY_SCRIPT" "$_e2m"; then _e2_bad="$_e2_bad [mutant did not land]"; elif _gak_single_source "$_e2m"; then _e2_bad="$_e2_bad [a second source stayed GREEN]"; fi
+gak_mut "$DEPLOY_SCRIPT" "$_e2m" $'      if (( VERIFY_RC == 0 )); then\n        GITHUB_APP_KEY_REF="$VERIFIED_REF"\n' $'      if (( VERIFY_RC == 0 )); then :; fi\n        GITHUB_APP_KEY_REF="$VERIFIED_REF"\n      if (( VERIFY_RC == 0 )); then\n'
+if cmp -s "$DEPLOY_SCRIPT" "$_e2m"; then _e2_bad="$_e2_bad [mutant 2 did not land]"; elif _gak_single_source "$_e2m"; then _e2_bad="$_e2_bad [an assignment outside the rc-0 arm stayed GREEN]"; fi
+rm -f "$_e2m"
+if [[ -z "$_e2_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.e2 GITHUB_APP_KEY_REF has one non-empty source, the rc-0 arm of this run's verify; 2 mutants RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.e2 single source —$_e2_bad"; fi
+
+# Atomic merge, abort on failure, bounded retry, and the boot verdict's source discrimination.
+gak_row 7.m1 "a failed merge does not abort (deploy continues / boot starts the container)" mergefail "$GAK_BOTH" \
+  $'    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"\n    unset _gak_dl _gak_line _gak_rest\n    return 2' $'    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"\n    unset _gak_dl _gak_line _gak_rest\n    return 0'
+gak_row 7.m2 "the merge rewrites the env-file IN PLACE (a failed rename can no longer be detected)" mergefail "$GAK_BOTH" \
+  '&& printf '"'"'%s\n%s\n'"'"' "$_gak_rest" "$_gak_line" > "$_gak_tmp" && mv -f "$_gak_tmp" "$1"; then' '&& printf '"'"'%s\n%s\n'"'"' "$_gak_rest" "$_gak_line" > "$1" && rm -f "$_gak_tmp"; then'
+gak_row 7.r1 "the isolated fetch is a single attempt again (a transient Doppler error costs the key)" flaky "$GAK_BOTH" \
+  '  _gak_max=${GITHUB_APP_KEY_FETCH_ATTEMPTS:-3}' '  _gak_max=1'
+# The boot probe-ok verdict splits three ways by key source: isolated → _ok (info); no token (pre-R3)
+# → _ok_no_token (info, not paged); a token but the prd key anyway → _ok_fallback (warning, paged).
+gak_row 7.f1 "boot: a probe-ok on the PRD key with no token is reported as github_app_key_ok" prd boot \
+  '          *" fetch=no_token "*) S=ok_no_token; L=info ;;' '          *" fetch=no_token "*) S=ok; L=info ;;'
+gak_row 7.f1b "boot: a probe-ok after a FAILED isolated fetch is reported as github_app_key_ok" fetchfail boot \
+  '          *) S=ok_fallback; L=warning ;;' '          *) S=ok; L=info ;;'
+gak_row 7.f1c "boot: a probe-ok on an UNVERIFIED image (no record) is reported as github_app_key_ok" norec boot \
+  '          *) S=ok_fallback; L=warning ;;' '          *) S=ok; L=info ;;'
+gak_row 7.f1d "boot: no_token is collapsed into ok_fallback (every pre-R3 boot pages)" prd boot \
+  '          *" fetch=no_token "*) S=ok_no_token; L=info ;;' '          *" fetch=no_token "*) S=ok_fallback; L=warning ;;'
+gak_row 7.f1e "boot: a failed fetch is collapsed into ok_no_token (a real fallback stops paging)" fetchfail boot \
+  '          *" fetch=no_token "*) S=ok_no_token; L=info ;;' '          *" fetch="*) S=ok_no_token; L=info ;;'
+gak_row 7.f1f "boot: the isolated key is reported as a fallback" iso boot \
+  '          "source=isolated fetch=ok "*) S=ok; L=info ;;' '          "source=isolated fetch=ok "*) S=ok_fallback; L=warning ;;'
+gak_row 7.a1 "ci: probe_absent (no probe in a NEW image) is silent again (info: no Sentry)" absent ci \
+  'absent)    github_app_key_emit probe_absent warning' 'absent)    github_app_key_emit probe_absent info'
+
+# The boot launch: the check must actually be launched (F3), under a unique unit, and a launch
+# failure must be reported synchronously.
+gak_row 7.l1 "boot: the systemd-run launch of the check is a no-op (nothing is ever emitted)" iso boot \
+  '    && systemd-run --no-block --quiet --collect --unit="$GAK_UNIT" "$GAK_CHECK" >/dev/null 2>/dev/null; then' '    && :; then'
+gak_row 7.l2 "boot: the unit name is fixed again (a leftover unit swallows the launch)" iso boot \
+  '--unit="$GAK_UNIT"' '--unit=soleur-github-app-key-check'
+gak_row 7.l3 "boot: a failed launch emits nothing" launchfail boot \
+  '  timeout "$EMIT_TMO" soleur-boot-emit github_app_key_exec_failed error >/dev/null 2>/dev/null || true' '  :'
+
+# write_state: closed enums (7.s1) and no inherited value (7.s2).
+_gak_ws_harness() {  # <ci-file> → 0 when a hostile fetch value is written as `invalid` in valid JSON
+  local f="$1" t rc=0
+  t="$(mktemp -d)"
+  { awk '/^_gak_enum\(\) \{/,/^\}/' "$f"; awk '/^write_state\(\) \{/,/^\}/' "$f"; } > "$t/fn.sh"
+  # shellcheck disable=SC2034,SC2329  # consumed by the sourced write_state; logger shadows the binary
+  ( set -euo pipefail
+    logger() { :; }
+    LOG_TAG=ci-deploy STATE_FILE="$t/state" START_TS=0 COMPONENT=web-platform IMAGE=x TAG=v1.0.0
+    GITHUB_APP_KEY_SOURCE='isolated' GITHUB_APP_KEY_FETCH='x","exit_code":0,"y":"' GITHUB_APP_KEY_PROBE='ok' GITHUB_APP_KEY_PROBE_REASON=''
+    # shellcheck source=/dev/null
+    . "$t/fn.sh"
+    write_state 7 "probe" ) >/dev/null 2>&1 || rc=1
+  if (( rc == 0 )) && jq -e '.exit_code == 7 and .github_app_key_fetch == "invalid" and .github_app_key_source == "isolated"' "$t/state" >/dev/null 2>&1; then rm -rf "$t"; return 0; fi
+  GAK_WHY="state=[$(head -c 200 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1
+}
+TOTAL=$((TOTAL + 1))
+_s1_bad=""; _gak_ws_harness "$DEPLOY_SCRIPT" || _s1_bad=" [control: $GAK_WHY]"
+_s1m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_s1m" $'  if [[ -n "$1" && "|$2|" == *"|$1|"* ]]; then printf \'%s\' "$1"; else printf \'invalid\'; fi' $'  printf \'%s\' "$1"'
+if cmp -s "$DEPLOY_SCRIPT" "$_s1m"; then _s1_bad="$_s1_bad [mutant did not land]"; elif _gak_ws_harness "$_s1m"; then _s1_bad="$_s1_bad [an unchecked value stayed GREEN]"; fi
+rm -f "$_s1m"
+if [[ -z "$_s1_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s1 write_state enum-checks the key fields (a JSON-breaking value is written as 'invalid'); the unchecked mutant is RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s1 write_state enum —$_s1_bad"; fi
+gak_row 7.s2 "inherited GITHUB_APP_KEY_* values reach deploy state (the top-of-script reset is gone)" inherit ci \
+  $'GITHUB_APP_KEY_SOURCE=""\nGITHUB_APP_KEY_FETCH=""\nGITHUB_APP_KEY_PROBE=""\n' ''
+
+# 7.w: the wire, image side (test-design F5 / patterns P3-9). The path the host execs is the path
+# the image bakes: the Dockerfile COPYs the probe to ./scripts/ under WORKDIR /app, .dockerignore
+# re-includes it, and both host defaults name /app/scripts/github-app-key-probe.mjs. A drift here
+# turns the acceptance check into `probe_absent` on every release.
+_gak_wire_ok() {  # <dockerfile> <dockerignore> <ci-file> <boot-file>
+  local want=/app/scripts/github-app-key-probe.mjs wd
+  wd="$(awk '/^WORKDIR /{w=$2} /^COPY --from=builder \/app\/scripts\/github-app-key-probe\.mjs \.\/scripts\/github-app-key-probe\.mjs$/{print w; exit}' "$1")"
+  [[ "$wd" == /app ]] || { GAK_WHY="the Dockerfile does not COPY the probe to ./scripts/ under WORKDIR /app (workdir=[$wd])"; return 1; }
+  grep -qxF '!scripts/github-app-key-probe.mjs' "$2" || { GAK_WHY=".dockerignore does not re-include the probe"; return 1; }
+  grep -qxF "GITHUB_APP_KEY_PROBE_MJS=\"\${GITHUB_APP_KEY_PROBE_MJS:-$want}\"" "$3" || { GAK_WHY="ci-deploy.sh's probe path is not $want"; return 1; }
+  grep -qxF "P=\"\${SOLEUR_GAK_PROBE_MJS:-$want}\"" "$4" || { GAK_WHY="the boot check's probe path is not $want"; return 1; }
+}
+TOTAL=$((TOTAL + 1))
+_w_df="$SCRIPT_DIR/../Dockerfile"; _w_di="$SCRIPT_DIR/../.dockerignore"
+_w_bad=""; _gak_wire_ok "$_w_df" "$_w_di" "$DEPLOY_SCRIPT" "$GAK_BOOT" || _w_bad=" [control: $GAK_WHY]"
+_wm="$(mktemp)"
+gak_mut "$_w_df" "$_wm" $'COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs\n' ''
+if cmp -s "$_w_df" "$_wm"; then _w_bad="$_w_bad [Dockerfile mutant did not land]"; elif _gak_wire_ok "$_wm" "$_w_di" "$DEPLOY_SCRIPT" "$GAK_BOOT"; then _w_bad="$_w_bad [COPY deleted stayed GREEN]"; fi
+gak_mut "$_w_di" "$_wm" $'!scripts/github-app-key-probe.mjs\n' ''
+if cmp -s "$_w_di" "$_wm"; then _w_bad="$_w_bad [.dockerignore mutant did not land]"; elif _gak_wire_ok "$_w_df" "$_wm" "$DEPLOY_SCRIPT" "$GAK_BOOT"; then _w_bad="$_w_bad [re-include deleted stayed GREEN]"; fi
+gak_mut "$GAK_BOOT" "$_wm" '-/app/scripts/github-app-key-probe.mjs}"' '-/app/scripts/github-app-key-probe.js}"'
+if cmp -s "$GAK_BOOT" "$_wm"; then _w_bad="$_w_bad [boot-path mutant did not land]"; elif _gak_wire_ok "$_w_df" "$_w_di" "$DEPLOY_SCRIPT" "$_wm"; then _w_bad="$_w_bad [boot path drift stayed GREEN]"; fi
+rm -f "$_wm"
+if [[ -z "$_w_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.w the probe the hosts exec is the probe the image bakes (Dockerfile COPY, .dockerignore, both host paths); 3 mutants RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.w probe wire —$_w_bad"; fi
+
+gak_must_pass 7.p1 "token absent, prd key, probe ok → promotes on prd, source=prd fetch=no_token, no Sentry; boot reports ok_no_token (info)" prd "$GAK_BOTH"
+gak_must_pass 7.p2 "token present, both projects keyed, escaped-\\n PEM, probe ok → the isolated key alone, prd env intact, promotes" iso "$GAK_BOTH"
+gak_must_pass 7.p3 "probe transport (5xx/429/403+rate-limit/timeout) → promotes with a Sentry warning" transport "$GAK_BOTH"
+gak_must_pass 7.p4 "probe script genuinely absent (rc 127, older image) → promotes, at warning on both sites" absent "$GAK_BOTH"
+gak_must_pass 7.p5 "isolated fetch fails, or answers 0 / 2 key lines → prd key, fetch=failed, Sentry error, no Doppler stderr" fetchfail "$GAK_BOTH"
+for _scn in appempty apptwo flaky; do gak_must_pass "7.p5/$_scn" "isolated-body control" "$_scn" "$GAK_BOTH"; done
+gak_must_pass 7.p6 "unverified image (bare tag) keeps the isolated key away" unverified "$GAK_BOTH"
+for _scn in cosignfail sigtag sigbranch sigfork cache; do gak_must_pass "7.p6/$_scn" "no key for a WARN-fail-open / non-main / fork / local-cache image" "$_scn" ci; done
+for _scn in norec recmismatch tagref; do gak_must_pass "7.p6/$_scn" "boot: no key without a matching verified-digest record" "$_scn" boot; done
+gak_must_pass 7.p7 "refusals hold: missing/evicted key, rejected verdict (+reason), no verdict, hijack classes, merge failure" missing "$GAK_BOTH"
+for _scn in evicted rejected planted noverdict hijack_node_options mergefail; do gak_must_pass "7.p7/$_scn" "refusal control" "$_scn" "$GAK_BOTH"; done
+gak_must_pass 7.p8 "boot: a launch failure is reported synchronously as exec_failed" launchfail boot
+gak_must_pass 7.p9 "an abort before the overlay writes no inherited key fields" inherit ci
+# 7.13: dispatch, PER ROW (test-design F2) — every gak_row declared on both sites produced a RED
+# verdict on both. Proven able to go RED by feeding the checker a row that lost its boot half.
+_gak_dispatch_gaps() {  # <assoc-decl-name> <assoc-red-name> → prints the ids missing a declared site
+  local -n _decl="$1" _red="$2"; local id s
+  for id in "${!_decl[@]}"; do
+    for s in ${_decl[$id]}; do [[ " ${_red[$id]:-} " == *" $s=RED "* ]] || printf '%s:%s ' "$id" "$s"; done
+  done
+}
+declare -A _g13_decl=([x]="ci boot") _g13_red=([x]=" ci=RED")
+TOTAL=$((TOTAL + 1))
+_g13_gaps="$(_gak_dispatch_gaps GAK_ROW_DECL GAK_ROW_RED)"
+_g13_both=0; for _id in "${!GAK_ROW_DECL[@]}"; do [[ "${GAK_ROW_DECL[$_id]}" == "$GAK_BOTH" ]] && _g13_both=$((_g13_both + 1)); done
+if [[ -z "$_g13_gaps" && "$_g13_both" -gt 0 && -n "$(_gak_dispatch_gaps _g13_decl _g13_red)" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: 7.13 dispatch — each of the $_g13_both both-site rows produced a RED verdict on ci AND boot; a row missing its boot half reads RED"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: 7.13 dispatch gaps: [${_g13_gaps}] (both-site rows: $_g13_both)"
+fi
+rm -rf "$GAK_FIX"
+unset GAK_PRD_KEY GAK_ISO_KEY GAK_RETIRED_KEY GAK_ISO_MARK GAK_PRD_MARK
+
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # Assertion-count floor (#8077 review): a suite that silently narrows (a block skipped, a loop that
@@ -8261,7 +9939,18 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # rows can be deleted before the one guard that detects truncation notices. The net is +6
 # over a churn of ~38 rows: 15 T-1c-* added, several GHCR-only rows deleted (§1A, #6400
 # AC1/AC2/AC4/AC14/AC13, #6497 T-5B-17 x2 / T-5B-18) and the rest re-pointed one-for-one.
-CI_DEPLOY_ASSERT_FLOOR=340
+# #8714 5.3b-iii: raised to 342 with T-8714-1/-2 (COSIGN_IMAGE off ghcr.io + the gcr.io pull classifier).
+# #6428: raised to 359 with the 17 pre-swap freshness rows (F1-F13).
+# #9169: raised to 364 (measured) with the 4 GHCR_DENY rows.
+# #8609: raised 359 -> 402 with the first 42 Guard 7 rows (main already ran 360: floor slack 1).
+# #8609 review round (CTO ruling b-e + six P1s + test-design F1-F14): Guard 7 re-cut to 121 rows
+# (per-class hijack refusals, the main-pinned identity, the boot verified-digest record, the cache
+# arm, atomic merge, retry, the boot ok/ok_no_token/ok_fallback split, the row machinery self-test).
+# Measured: 481 ran. Merged with #9169's 4 GHCR_DENY rows: 485 ran. The floor is that count.
+# #6129: raised 485 -> 490 with the ENFORCE-default rows (4 #6129 verify rows + the T-1a-4 enforce arm).
+# #8016: raised 490 -> 500 with the 10 PDEATHSIG rows (Guard 2: 2 recorded-argv rows; Guard 1: the
+# real-tree scan, 4 must-flag fixtures, 3 must-pass inputs). Measured: 500 ran.
+CI_DEPLOY_ASSERT_FLOOR=500
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

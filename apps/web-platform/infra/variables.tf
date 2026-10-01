@@ -564,6 +564,34 @@ variable "doppler_token" {
   # so the never-attempt property that made this worth having is preserved.
 }
 
+# #8609 / ADR-241 D10 — the web host's read token for the isolated `soleur-github-app` project
+# (github-app-runtime-project.tf). Rendered as one conditional line into soleur-doppler-token.tmpl.
+# autonomy-considered: operator-mint (ADR-241 D3: this root's state is Tier-A readable, so a
+# doppler_service_token minted here would be branch-readable; the operator mints it into Tier-B
+# `soleur-infra-privileged` instead, runbook step R2). Supplied as a real value ONLY to jobs that
+# opt in through the infra-credentials loader's `github-app-runtime-token` input; every other job
+# gets "". Default "" keeps every plan working before R2 and renders the credential file
+# byte-identical to its pre-#8609 content. NO `validation` block, for the reason on
+# `variable "doppler_token"` above: the shape gate is local.github_app_token_shape_ok (server.tf).
+variable "github_app_runtime_doppler_token" {
+  description = "Read-only Doppler service token for soleur-github-app/prd (#8609). Tier B, operator-minted; empty until runbook step R2."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# #8609 — NOT a secret: "is this the job that delivers the token above?". The infra-credentials
+# loader exports TF_VAR_github_app_runtime_token_delivered in EVERY job, "true" only where the job
+# opted in (github-app-runtime-token: true), so a prd_terraform plant cannot win under
+# --preserve-env. It gates ONE thing: local.github_app_token_shape_ok requires a non-empty token
+# only when this is true and local.github_app_key_isolated is true. Census row G6o keeps it out of
+# every plan-visible attribute (it differs between contexts by design).
+variable "github_app_runtime_token_delivered" {
+  description = "True only in the jobs that deliver github_app_runtime_doppler_token to a web host (infra-credentials loader opt-in, #8609). Not a secret."
+  type        = bool
+  default     = false
+}
+
 variable "sentry_dsn" {
   description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. ENFORCED as of #6730 (ADR-145): the web-host-create dispatch asserts this non-empty in Doppler prd_terraform BEFORE any create, and fails closed on an unreadable secret as well as an empty one (ADR-128 R1). The web-host-replace dispatch (#6969, ADR-148) carries the same assertion, where it matters MORE: a replace destroys the existing host first, so an empty DSN means the replacement boots dark with nothing to fall back to. Between #6575 (which deleted the web-2-recreate job that used to assert it) and #6730 nothing enforced it; the operator pinned-image chain in the host_creates HALT still carries the check for the break-glass path, where nothing else does."
   type        = string
@@ -712,23 +740,6 @@ variable "github_infra_app_private_key" {
   type        = string
   sensitive   = true
   default     = ""
-}
-
-# #6005: scoped read:packages credential (machine account) for the now-PRIVATE GHCR
-# packages. NO default (hr-tf-variable-no-operator-mint-default) — the operator mints
-# it and writes the value into Doppler `prd_terraform` (the TF_VAR source) BEFORE this
-# file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
-# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-087).
-variable "ghcr_read_user" {
-  description = "GitHub login that owns the scoped read:packages PAT (the docker login -u value). Measured 2026-09-24: the operator\u0027s own org-admin account, not a machine account (ADR-096 amendment 2026-09-24). Published to Doppler soleur/prd as GHCR_READ_USER. No host consumer since #8036 item 1d (2026-09-24): no fresh-boot template receives it. Remaining consumer: doppler_secret.ghcr_read_user, retired with this variable by ADR-096 task 5.4. NO default."
-  type        = string
-  sensitive   = true
-}
-
-variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages. Published to Doppler soleur/prd as GHCR_READ_TOKEN. The value is revoked (401, ADR-096 amendment 2026-07-30; 5.5 observed 2026-09-24). NO HOST CONSUMER since #8036 item 1d (2026-09-24): the three fresh-boot login sites (cloud-init.yml, soleur-host-bootstrap.sh, cloud-init-inngest.yml) are deleted and no templatefile call passes this variable into any host user_data. The ci-deploy.sh consumer was retired earlier, in #8036 item 1c (2026-09-23). Remaining consumer: doppler_secret.ghcr_read_token (ghcr-read-credential.tf), retired with this variable by ADR-096 task 5.4 (#8714), plus the dummy values in tests/web-hosts-eu-pin.tftest.hcl. Until then the revoked value stays in Doppler soleur/prd, which ci-deploy.sh downloads into the app container env; do not re-enable the minter before 5.4. NO default."
-  type        = string
-  sensitive   = true
 }
 
 # #6178 — post-cutover web-host scheduling toggle. When true, a freshly-CREATED web

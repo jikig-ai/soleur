@@ -5,7 +5,7 @@ date: 2026-07-15
 amends: none
 supersedes: none
 issue: 6415
-amended_by: [6497, 8539]
+amended_by: [6497, 8539, 8562]
 related: [6400, 6405, 6288, 6122, 6242, 6497]
 related_adrs: [ADR-096, ADR-100, ADR-103, ADR-068, ADR-082, ADR-114]
 brand_survival_threshold: single-user incident
@@ -426,6 +426,26 @@ an empty dir (404s fleet-wide) while `nic_ok=true`.
 | **(#8539) An inline `network {}` block on `hcloud_server.inngest`** instead of `hcloud_server_network` | **Rejected.** At hcloud v1.63.0 it is still a post-boot hot attach whenever public networking is enabled (the provider starts the server, then attaches), so it closes nothing. It would also need a `removed {}` block and ripple through the `-target` lists and the inngest replace and shape gates. |
 | **(#8539) A bounded wait only, before the zot login** | **Rejected as sufficient; kept as the reporting half.** A wait converts nothing: cloud-init's hotplug handler runs after `cloud-init.target`, i.e. after `runcmd`, so a wait inside `runcmd` cannot be healed by it and only moves the failure later. #6400's late attach stayed unconfigured for 14 days. |
 | **(#8539) Reboot-for-inngest** (a wait plus this ADR's reboot as fallback) | **Rejected.** inngest's `runcmd` is once-per-instance, so a rebooted host never re-runs the bootstrap pull and comes up with no scheduler, plus a power-cycle. It would also need the self-reboot authority this ADR grants the registry host only. |
+
+> **Addendum — 2026-09-28 (#8562), to the "(#8539) Reboot-for-inngest" row.** Its first ground,
+> "inngest's `runcmd` is once-per-instance, so a rebooted host never re-runs the bootstrap pull",
+> is narrowed in the template by
+> [ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md). The zot
+> login, isolation check and pull → bootstrap block now run in
+> `soleur-inngest-provision.service`, a unit that retries on the same boot (120 s at first,
+> backing off to 15 minutes) and is started again 90 s after every boot until a latch file,
+> written only after a non-degraded `inngest-bootstrap.sh` success, exists.
+> The once-per-instance premise now holds only for a host that has **provisioned**: a latched
+> host's reboot does not re-provision it. A host born before that change keeps the old behavior
+> until its next replace.
+>
+> What this note does **not** do:
+>
+> - It does not extend this ADR's acceptance to inngest. Status stays **registry-only**.
+> - It grants **no reboot authority** to the inngest host. The row's second ground (the
+>   self-reboot authority this ADR grants the registry host only) still stands, and the row stays
+>   rejected. ADR-257 retries on the same boot; it never reboots.
+> - It changes nothing in the #8539 static networkd fallback amendment above.
 
 ## Observability
 

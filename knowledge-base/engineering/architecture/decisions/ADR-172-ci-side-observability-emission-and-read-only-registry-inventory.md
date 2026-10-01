@@ -1,6 +1,6 @@
 # ADR-172 — CI may emit to the observability warehouse, and may measure the registry's read surface
 
-- **Status:** adopting
+- **Status:** accepted (flipped 2026-09-28, #7377; the flip condition below was met 2026-08-10)
 - **Date:** 2026-08-06
 - **Issue:** #7278
 - **Extends:**
@@ -18,8 +18,10 @@
 - **Enforced by:** `tests/scripts/test-zot-inventory.sh` (verb confinement, egress confinement,
   masking, marker field allow-list, the `ZOT_PUSH_*`-unset entry assertion),
   `tests/scripts/test-zot-inventory-assert-marker.sh` (the readback gate),
-  `apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh` (dispatch-only), all
-  registered in `scripts/test-all.sh`.
+  `apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh` (dispatch-only; since
+  #7377 also: no label route to the lever in any workflow, and the restart-loop alarm is its
+  automatic producer), `apps/web-platform/test/server/watchdog-workflow-idempotence.test.ts`
+  (the alarm's dispatch executed against a stubbed `gh`), all registered in their runners.
 
 ## Context
 
@@ -102,6 +104,11 @@ Two mechanical consequences, both from measurement rather than taste:
 event** and are recorded as blocked rather than dropped, with the measured reason for each. This
 matters because the blocked set is what a future reader will otherwise re-derive under incident
 pressure, and re-deriving it costs a live probe against a crash-looping origin.
+
+> **Resolved 2026-09-28 (#7377) — see *Amendment 2026-09-28* below.** The provisioning event
+> exists (the recut fired 2026-08-10 and a merge now fires a volume-preserving replace).
+> `push-config` is realized as that merge-to-replace path; `restart` and `reclaim` will not be
+> built. The paragraph above is left as written because it was true when written.
 
 ### 4. `skip-docker-login` exists to avoid a fail-closed abort — privilege reduction is secondary
 
@@ -268,7 +275,8 @@ tag-based signatures *"not Subject-field OCI referrers"*. The measurement shows 
 `sha256-<digest>.sig` tag **404s** and a Subject-field referrer **exists**. So the keep-set's
 `sha256-.*`×50 rule currently protects tags that do not exist, while `deleteReferrers=false`
 protects the referrers that do. Fixing it is a host config change, i.e. blocked. Recorded so it is
-not re-derived.
+not re-derived. *(2026-09-28, #7377: no longer blocked — it is a `push-config`, which ships as a
+merge to `main` that fires a volume-preserving replace. Not scheduled.)*
 
 ## Status flip condition
 
@@ -281,3 +289,93 @@ The blocked-action set in §3 is enrolled too — **#7340**, driven by
 trackers are **dedicated issues**: #7278 is closed by this PR and the sweeper lists `--state open`
 (so a probe hosted there would never run), and #7247 is a live P1 that will close and take any
 tracker on it with it.
+
+**Met, and both probes retired (2026-09-28, #7377).** #7339 closed 2026-08-10T18:40Z on an
+observed marker (the 2026-08-10T11:05Z dispatch went green, and it goes green only after the
+readback gate reads its marker back with `enumeration_complete=true`); that run also measured
+runner egress, the residual the *Bad* list named as the reason for `adopting`. #7340 closed
+2026-08-13. With both trackers closed the sweeper never runs either probe, so
+`zot-inventory-marker-7278.sh` and `registry-luks-blocker-6929.sh` are deleted. The question
+the second one proxied from issue state is answered live: `SOLEUR_ZOT_DISK` carries
+`store_luks=`, graded by `scripts/followthroughs/registry-luks-live-8386.sh` and alerted on by
+`registry_store_not_luks`.
+
+## Amendment 2026-09-28 — the blocked write set is resolved, not built (#7377)
+
+### Context
+
+§3 recorded `restart`, `push-config` and `reclaim` as blocked on a provisioning event, because a
+replace before the LUKS recut darked the sole pull path. Measured on 2026-09-28:
+
+- The recut fired: `registry_luks_recut` succeeded in run 31437037877 (2026-08-10T22:08Z; the
+  run's later `registry_store_restore` job failed, the recut job did not). #7287 and #7340 are
+  closed. The live heartbeat reads `store_luks=yes`, `store_mount_src=/dev/mapper/registry`.
+- A provisioning event is now routine. Since the ADR-169 amendment of 2026-08-16 (#7555), a merge
+  that changes the rendered `cloud-init-registry.yml` fires `registry-host-replace-dispatch.yml`,
+  which preflights and dispatches a replace that keeps the store volume. Five replaces ran
+  through that path (2026-08-16, 09-17, 09-18, 09-20, 09-22): three fired by a merge, two
+  manual re-fires of the same dispatcher; the current boot's `store_mount_devid` equals
+  `store_expected_devid`, and `zot_restarts=0`, `pcent=14`.
+- No zot user holds `delete` (`accessControl`: pull `read`; push `read,create,update`), and GC
+  plus retention run hourly.
+
+### Decision
+
+- **`push-config` is realized as merge to `main` → volume-preserving `registry-host-replace`.**
+  No in-place push-config lever will be built. Every future registry config change (keep-set
+  correction, a `delete` grant, per-path disk telemetry, the cosign keep-set drift recorded
+  above) is a `cloud-init-registry.yml` change that rides that path.
+- **`restart` will not be built.** It was refuted by measurement (15,640 restarts into a full
+  volume did not recover the store) and a replace strictly dominates it: a fresh boot restarts
+  zot and re-runs every cloud-init-written script. `--restart unless-stopped` already covers the
+  process-level restart.
+- **`reclaim` will not be built now.** There is no reclaim pressure (`pcent=14` on the 59 GB
+  store). Re-evaluate when `pcent >= 70` holds for 24 h; `SOLEUR_ZOT_DISK` carries `pcent`, and
+  the disk-absence beat withholds at 85 %. If it is ever needed, it is a `push-config` (a `delete`
+  grant or a keep-set change) shipped through the replace path, not a new lever.
+- **The inventory lever's automatic producer is the restart-loop alarm.** The label route
+  (`registry-zot-inventory-dispatch.yml`, `issues: labeled`) is deleted: nothing applied the
+  label (it did not exist in the repo), and nothing could have from inside the alarm, because a
+  label applied with `GITHUB_TOKEN` starts no workflow run, while `workflow_dispatch` is the
+  documented exception. Measured: 3,540 runs, 0 that did anything. `scheduled-zot-restart-loop.yml`
+  now dispatches `registry-zot-inventory.yml` once per new non-OOM tracker (prefix-matched on
+  the fixed cause literal that begins `non-OOM crash-loop`, which a test pins to the alarm
+  script's own `CAUSE=` line), from a separate `dispatch-inventory` job that is the only holder
+  of `actions: write` and checks nothing out. It is fail-soft, and it passes the tracker number
+  so the inventory run comments its result back onto that tracker as well as onto #7339.
+- **The END restart sample reaches the durable marker.** `zot-inventory.sh` takes its own END
+  sample after the enumeration (re-polling until a heartbeat newer than the START row lands,
+  bounded at 360 s), so `zot_restarts_at_end` carries a measured value and a restart or host
+  replace during the sweep is recorded as `reason=restart_during_sweep`. This adds one read-only
+  destination to the enumerator's process tree: the Better Stack query endpoint, reached only
+  through `betterstack-query.sh` (which allow-lists `*.betterstackdata.com`), in a child whose
+  environment is an allow-list holding the query credential and nothing else. The enumerator's
+  own curl still reaches exactly the bridge and the pinned ingest URL.
+- **The readback gate consumes `marker_schema`.** `zot-inventory-assert-marker.sh` certifies only
+  a `marker_schema=1` row; a row from any other schema yields `unknown` /
+  `marker_schema_unsupported` rather than a pass.
+
+### Options considered
+
+| Option | Verdict | Reason |
+|---|---|---|
+| (A) In-place config push (SSH, an agent, or a remote exec) | Rejected | Violates `hr-prod-host-config-change-immutable-redeploy` and `hr-no-ssh-fallback-in-runbooks`, and adds a mutable surface on the sole pull path. |
+| (B) Host-side pull agent (the host polls signed config and reloads zot) | Rejected | A second source of truth beside cloud-init; drift between the two becomes unobservable from the repo. |
+| (C) Merge to `main` → volume-preserving replace | **Chosen** | Already live and exercised five times (ADR-169 amendment 2026-08-16). |
+| (D) Keep §3's "blocked" wording | Rejected | False since 2026-08-10; a future reader would re-derive a deadlock that no longer exists. |
+| (E) Give the label route a producer (an App token in the alarm) | Rejected | A second workflow plus an App-token mint to do what one `gh workflow run` from the alarm does. |
+
+### Consequences
+
+- Every registry config change costs one planned pull outage of about 1-2 minutes and one
+  expected `soleur-registry-prd` monitor flap, gated by the replace preflight (P1/P3/P5).
+- A non-OOM crash-loop gets its store measured without an operator action. An OOM loop does
+  not: it is a different failure class, and the enumerator's GETs add load to a memory-starved
+  zot.
+- One job of the alarm workflow can now dispatch workflows (`actions: write`, which reaches
+  any `workflow_dispatch` workflow in the repo). It is scoped to the dispatch job only, not
+  granted at workflow scope as `scheduled-inngest-health.yml` does for its restart dispatch.
+- An alarm-dispatched sweep runs during an active crash loop, so it will usually end
+  `partial` / `restart_during_sweep` (a red run) with the marker still emitted and read back.
+  That is the correct report, not a fault: the enumeration crossed a restart, and `delta_gb`
+  must be read with that in mind.

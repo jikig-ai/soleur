@@ -217,6 +217,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.27 | Fix invalid `ollama launch claude` command on /getting-started/ (trust-breaking on install page) | P0 | [#2550](https://github.com/jikig-ai/soleur/issues/2550) | Done |
 | 3.28 | Cloudflare 403 blocks GPTBot/ClaudeBot/PerplexityBot on soleur.ai (WAF allowlist via terraform — blocks all AEO investment downstream) | P0 | [#2662](https://github.com/jikig-ai/soleur/issues/2662) | Done |
 | 3.29 | Command Center server-side agentic runtime (alignment + hardening) | P1 | [#3244](https://github.com/jikig-ai/soleur/issues/3244) | Done |
+| 3.30 | Chat + KB attachments: `.md`/`.txt` uploads across conversations, Concierge and KB (extends 3.19/3.20); restore composer attach/send icons collapsed by the Button primitive | P1 | [#9296](https://github.com/jikig-ai/soleur/issues/9296) | In progress (PR #9290) |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 

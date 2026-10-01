@@ -106,10 +106,15 @@ cat > "$WORK/bin/logger" <<'LOGEOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$LOGGER_OUT"
 LOGEOF
+# #8562 security review: the emitter now hands the bearer header to curl on STDIN (`-K -`), never
+# on argv. The stub records argv to CURL_OUT and stdin to CURL_OUT.stdin, and accepts the header
+# from either place so the refusal below still bites on a POST that sends it nowhere.
 cat > "$WORK/bin/curl" <<'CURLEOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$CURL_OUT"
-case "$*" in
+_in=""
+case " $* " in *" -K - "*) _in="$(cat)"; printf '%s\n' "$_in" >> "$CURL_OUT.stdin" ;; esac
+case "$* $_in" in
   *Authorization*) ;;
   *) echo "curl-stub: refusing a POST with no Authorization header" >&2; exit 64 ;;
 esac
@@ -124,6 +129,7 @@ fire() {
   # $1 = token-file path (may not exist), $2 = CURL_STUB_RC, $3 = stage
   : > "$LOGGER_OUT"
   : > "$CURL_OUT"
+  : > "$CURL_OUT.stdin"
   PATH="$WORK/bin:$PATH" LOGGER_OUT="$LOGGER_OUT" CURL_OUT="$CURL_OUT" \
     CURL_STUB_RC="$2" SOLEUR_INNGEST_BS_TOKEN_FILE="$1" \
     bash "$EMITTER" "$3" "detail-value-must-not-ship"
@@ -186,6 +192,12 @@ assert "ARM4 successful POST -> a POST was attempted" \
   "[[ -s '$CURL_OUT' ]]"
 assert "ARM4 successful POST -> emits NO logger row (silent on success; the quota stays bounded)" \
   "[[ ! -s '$LOGGER_OUT' ]]"
+# #8562 security review: the bearer token must never be on curl's argv (readable by any local user
+# from /proc/<pid>/cmdline for the life of the POST); it rides stdin as a `-K -` config header.
+assert "ARM4 the bearer token is NOT on curl's argv" \
+  "! grep -q 'synthetic-token-value' '$CURL_OUT'"
+assert "ARM4 the bearer token reaches curl on stdin as an Authorization header (-K -)" \
+  "grep -qF 'header = \"Authorization: Bearer synthetic-token-value\"' '$CURL_OUT.stdin'"
 
 # --- the stub's own non-vacuity ------------------------------------------------------------------
 # If the curl stub could not distinguish success from failure, ARM3 and ARM4 would be the same
@@ -682,9 +694,10 @@ EPH
     printf '[FATAL] anti-vacuity floor: only %s #6500 mutation rows ran, expected %s — a row was deleted\n' "$S6500_ROWS" "$S6500_EXPECTED_ROWS" >&2
     exit 1
   fi
-  # Whole-suite verdict floor: the 40 pre-#6500 assertions plus this section's 53.
+  # Whole-suite verdict floor: the 42 pre-#6500 assertions (40 + #8562's two argv/stdin rows) plus
+  # this section's 53.
   SUITE_VERDICTS=$((PASS + FAIL))
-  SUITE_EXPECTED_VERDICTS=93
+  SUITE_EXPECTED_VERDICTS=95
   if [[ "$SUITE_VERDICTS" -lt $SUITE_EXPECTED_VERDICTS ]]; then
     printf '[FATAL] anti-vacuity floor: only %s assertions ran, expected %s\n' "$SUITE_VERDICTS" "$SUITE_EXPECTED_VERDICTS" >&2
     exit 1

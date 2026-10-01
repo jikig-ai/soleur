@@ -631,6 +631,25 @@ resource "sentry_alert" "byok_art_33_breach" {
 # `unauthorized` in particular is fleet-wide when it fires — the REMOVE key is baked into
 # cloud-init authorized_keys, so a Doppler rotation without a host replace fails EVERY
 # deletion until the host is replaced.
+#
+# (2026-09-28, #8572) Two corrections to the paragraphs above, and one change:
+#   - "Keys on the `erasure_outcome` TAG" is wrong: the filters below are `feature` and
+#     `op` only, which is why EVERY outcome routes. `erasure_outcome` names the outcome; the
+#     message, which leads with the status, is what splits the Sentry issues. The tag is
+#     not a filter.
+#   - "The four routed values" is now refused | unauthorized | unconfigured | unreachable |
+#     host_key_mismatch | threw, and `unconfigured` also carries an `erasure_reason` tag
+#     (remove_key_absent | pin_absent | pin_invalid | ssh_client_absent).
+#   - The rule now also re-pages per event: `event_frequency_count {1h, 0}` fires on every
+#     event, not only on first-seen / reappeared / regression, so an issue left open no
+#     longer swallows the next refusal. The throttle is `frequency_minutes = 5` per issue:
+#     at most one email per issue per 5 minutes, and refusals inside that window share one
+#     email. Each event is one refused deletion, so the volume is the refusal count; 288 a
+#     day per issue is only the ceiling (CLO ruling, #8572). Triggers fire only on an
+#     UNRESOLVED issue: an archived or ignored Art. 17 issue silences every later refusal
+#     that groups into it, so these issues are resolved after the sweep, never archived.
+# The erasure report is deliberately NOT tagged `pin_fault`: that tag would also match
+# git-data-host-key-pin-fault below and send two emails for one refusal.
 resource "sentry_alert" "art17_erasure_incomplete" {
   organization      = var.sentry_org
   name              = "art17-erasure-incomplete"
@@ -642,6 +661,7 @@ resource "sentry_alert" "art17_erasure_incomplete" {
     { first_seen_event = {} },
     { reappeared_event = {} },
     { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
   ]
 
   action_filters = [
@@ -1816,6 +1836,101 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
   }
 }
 
+# #8609 / ADR-241 D10 — the web host's runtime GitHub App key, checked at boot and at deploy.
+#
+# BOOT (web_host_github_app_key_boot). After the first `docker run`, soleur-host-bootstrap.sh runs
+# the canary key probe (`GET /app`, slug soleur-ai) in the serving container and emits ONE
+# soleur-boot-emit stage per outcome: `github_app_key_ok` or one of the six below. A SEPARATE
+# rule, not six more stages on web_terminal_boot_fatal above: the boot is not aborted (the
+# container is already up), so folding them into "terminal-boot-fatal" would page a degraded key
+# as a dead host and teach the reader to discount that rule — the web_private_nic_boot_gate
+# precedent. Without a stage-filtered rule these events land in the shared, always-open
+# "soleur-cloud-init boot stage" group and page nobody (observability review P1-1).
+# `value = 0` pages the first event: every condition is a NON-ok emit (`github_app_key_ok` is
+# deliberately absent), the same failure-only precedent as web_terminal_boot_fatal.
+# `_transport` is included although it does not block a deploy: at boot it means the host could
+# not prove its key at all, and R5/R7 read web-2's key state from exactly these events.
+# `_ok_fallback` (warning) is a key GitHub ACCEPTED that did not come from the isolated project
+# (source != isolated: the prd copy, before R6). It is NOT an ok for R5/R6, which read only
+# `github_app_key_ok`; paging it keeps a fallback boot from passing silently. Expected on every
+# web host boot until R3 delivers the read token, so a page then is informational.
+#
+# DEPLOY (ci_deploy_github_app_key). ci-deploy.sh's curl emitter sends feature=ci-deploy
+# op=github-app-key for every classification at warning or error (a classification and a length
+# only, never Doppler stderr): env_hijack (a refused runtime-hijack name in prd; deploy ABORT),
+# unverified_image (unsigned or wrong identity; no key handed out), fetch_failed and merge_failed
+# (the isolated-project read or the env-file overlay), key_missing and probe_rejected (canary
+# refusal), probe_transport (warning: GitHub unreachable or rate-limited; promotes) and
+# probe_absent (warning: the image has no probe, so acceptance went unchecked; promotes — the same
+# level the boot rule pages on). The info classes (no_token, the pre-R3 state; ok; probe_ok;
+# verified_ref_unrecorded) are journald-only and never reach Sentry, so every event here is
+# non-ok. The rule matches the op, not a class list, so a new emitter class pages unedited.
+#
+# Distinct `frequency_minutes` 29 and 32 avoid Sentry POST-time exact-duplicate dedup (both unused).
+# Judge severity by the event's host_name / level, not by the rule name. Runbook:
+# infra-credential-tiers-8209.md, "Runtime App key (#8609)".
+resource "sentry_alert" "web_host_github_app_key_boot" {
+  organization      = var.sentry_org
+  name              = "web-host-github-app-key-boot"
+  enabled           = true
+  frequency_minutes = 29
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "any-short"
+      conditions = [
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_rejected" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_missing" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_transport" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_probe_absent" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_exec_failed" } },
+        { tagged_event = { key = "stage", match = "eq", value = "github_app_key_ok_fallback" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+resource "sentry_alert" "ci_deploy_github_app_key" {
+  organization      = var.sentry_org
+  name              = "ci-deploy-github-app-key"
+  enabled           = true
+  frequency_minutes = 32
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "ci-deploy" } },
+        { tagged_event = { key = "op", match = "eq", value = "github-app-key" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-workspace-sync-health.ts: a daily probe that
 # emits `feature=workspace-sync-health` events via reportSilentFallback for both
 # user-actionable findings (op ∈ {ready-null-installation, stale-sync-failed,
@@ -2184,6 +2299,290 @@ resource "sentry_alert" "spawn_agent_dead_letter" {
         { tagged_event = { key = "feature", match = "eq", value = "spawn-agent" } },
         { tagged_event = { key = "op", match = "eq", value = "agent-on-spawn-requested" } },
         { tagged_event = { key = "reason", match = "in", value = "acknowledgment_persist_failed,anthropic_request_rejected,leader_class_disabled,leader_internal_error,leader_refused,leader_response_truncated,leader_tool_invalid" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# git-data host-key pin faults (#8572). The web app reaches the git-data store only over
+# SSH pinned to the host key (ADR-237, #5914), so a missing or wrong pin, or a missing ssh
+# client, stops replication (and after the flag flip, rehydration reads) with nothing else
+# to notice.
+#
+# Keys on the `pin_fault` TAG, which the emitter sends on Sentry's MESSAGE path. The push
+# failure's own report goes through the Error path, where the pino mirror pre-captures it
+# as `feature=pino-mirror` and drops every tag (#8629), so a rule keyed on its `op` would
+# never fire. The single writer of the tag is `reportGitDataPinFault` in
+# apps/web-platform/server/git-data-pin-fault.ts, and the `in` value below is exactly its
+# GIT_DATA_PIN_FAULT_REASONS (sentry-git-data-pin-fault-alert-op-contract.test.ts holds it).
+#
+# Surfaces: boot (feature git_data_host_key_pin / git_data_ssh_client, ops
+# pin_invalid_at_startup | pin_absent_at_startup | ssh_client_absent_at_startup) and the
+# push (feature worktree_lease, op git_data_replication_push; `via` in the event's extra
+# says ssh = provision dial, git = push). Before the GIT_DATA_STORE_ENABLED flip only the
+# boot arm can fire. Not tagged, on purpose:
+#   - the Art. 17 erasure path, which pages through art17_erasure_incomplete;
+#   - the rehydration read (git-data-client.ts fetchFromGitData). Its pin is the same
+#     process-wide value the boot arm pages on, and it dials the same host as the next
+#     session-end provision dial, which pages a host identity fault. Its own stderr is
+#     git's, which a tenant can write into (below), so it is never read for host identity.
+# This rule is #8211's `pin_fault_paging_absent` anchor.
+#
+# Grouping is per message and the reason leads it, so each (surface, reason) is its own
+# Sentry issue. `frequency_minutes = 240` is Sentry's per-issue action interval and covers
+# all four triggers: a persisting fault re-pages at most every 4 h per issue (about 6 emails
+# a day per live issue). A fault that recurs within 4 h of a resolve is silent, so the
+# runbook has the operator run the `pin_fault:*` query after resolving. 240 was chosen over
+# 1443 (a 24 h blind window) and over hourly (the cadence that got the credit-probe monitor
+# muted, #8704), and is unused elsewhere in the root (Sentry dedups identical rules).
+#
+# The tag is ADVISORY. `host_key_mismatch` is read only from the provision dial's ssh
+# stderr (exit 255), never from git's: git exits 128 on every fatal error and some echo the
+# tenant's workspace (`fatal: unexpected line in .git/packed-refs: <line>`), so reading it
+# would let a tenant forge this page and, sharing its issue and 4 h window, mask a real one.
+# What remains: ssh passes the remote's stderr through, so a compromised host that already
+# holds the pinned key can print host-key text; under StrictHostKeyChecking=yes an absent or
+# unwritable known_hosts file reads the same; and anyone holding the public client DSN can
+# post an event with this tag (true of every tag-keyed rule in this root). So corroborate a
+# page against the Better Stack pino line (`pinFault`, not DSN-forgeable) before acting. A
+# network attacker can also fail the connection before the host-key check, which stays
+# unclassified. None of this leaks anything, because the pin still fails closed. The remedy
+# is never to re-pin to the key a host presents (runbook H4 rule).
+resource "sentry_alert" "git_data_host_key_pin_fault" {
+  organization      = var.sentry_org
+  name              = "git-data-host-key-pin-fault"
+  enabled           = true
+  frequency_minutes = 240
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "pin_fault", match = "in", value = "host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── Pre-swap image freshness abort (#6428) ────────────────────────────────────
+# ci-deploy.sh's verify_image_freshness refuses a web deploy when the image about to run was not
+# BUILT as the requested version (the stale-but-signed image a zot can serve: its cosign signature
+# is valid, so the verify alone passes it). Every event this rule matches is an ABORTED deploy,
+# emitted by image_freshness_event with level=error and `freshness_result` in
+# {version_mismatch, version_absent, inspect_failed} — the op alone is the filter, so a new result
+# value pages without editing this rule. The old container stays live, so nothing user-facing
+# breaks, but releases stop reaching the host until the registry serves the right image.
+#
+# Emitted from web-1 only until web-2's next replace: terraform_data.deploy_pipeline_fix pushes
+# ci-deploy.sh to web-1 alone (#9151).
+#
+# value = 0 pages on the FIRST event of any group (see zot_mirror_fallback_rate for why a threshold
+# above 0 is fleet-shape-dependent). The message embeds the expected and served versions, so each
+# stale version groups on its own.
+#
+# Distinct frequency_minutes = 28 avoids Sentry POST-time exact-duplicate dedup (taken:
+# 5,10-27,30,31,60-63,1440-1442). Events carry image refs, version strings and the host id — no
+# user content.
+resource "sentry_alert" "image_freshness_mismatch" {
+  organization      = var.sentry_org
+  name              = "image-freshness-mismatch"
+  enabled           = true
+  frequency_minutes = 28
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "op", match = "eq", value = "image-freshness" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── Cosign image-signature verify failure (#6129) ─────────────────────────────
+# ci-deploy.sh's verify_image_signature emits cosign_verify_event (op=image-verify, tags
+# verify_result + mode) on every verify failure: unsigned, wrong_identity, verify_failed,
+# rekor_unreachable, inspect_failed, cosign_absent. Under ENFORCE (the default from #6129, PR #9308) each
+# such event is a REFUSED web deploy: the old container stays live, but the release does not reach
+# that host. A web-1 refusal also reds the release run. A web-2 refusal is otherwise SILENT (the peer
+# fan-out does not wait on web-2's verdict), which would leave the standby on the previous version.
+# This rule is the page for both.
+#
+# EXCLUDED: verify_result=reused_local_reload. It rides the same op as a deliberate breadcrumb (the
+# #6512 same-version local-cache reload reuses the already-verified running image), and paging on
+# it would be noise. `nc`, the operator the inngest-provision-failure rule already uses, keeps the
+# exclusion to a single substring.
+#
+# value = 0 pages on the FIRST event of a group. Distinct frequency_minutes = 33 avoids Sentry
+# POST-time exact-duplicate dedup (taken: 5,10-32,60-63,120,240,1440-1442). Events carry the
+# image ref, the verify result and a stderr tail from cosign, with no user content.
+resource "sentry_alert" "image_verify_failed" {
+  organization      = var.sentry_org
+  name              = "image-verify-failed"
+  enabled           = true
+  frequency_minutes = 33
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "op", match = "eq", value = "image-verify" } },
+        { tagged_event = { key = "verify_result", match = "nc", value = "reused_local_reload" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── Inngest host provisioning failure, non-pull (#9176) ───────────────────────
+# The dedicated inngest host's soleur-inngest-provision unit (ADR-257) reports through
+# soleur-boot-emit (cloud-init-inngest.yml), which tags each event stage/detail/host_id/host_name.
+# Once its on_exit trap is armed, every non-zero exit emits stage=provision_attempt_failed at
+# warning with detail `rc=<rc>.attempt=<n>.why=<last_stage>.iid=<iid>` (the earlier xtrace refusal
+# and a SIGKILL emit nothing). So the isolation-check FATAL, provision-fsm-busy, a bootstrap exit,
+# an unnamed arm and a TimeoutStartSec kill all arrive as this one stage, told apart by why=. The
+# degraded-bootstrap stage has its own rule below (inngest_provision_degraded): a throttle is per
+# rule per issue group, and a once-per-boot signal cannot share a window with a repeating one
+# (#9299).
+#
+# logic_type = "all" is load-bearing. Every web and inngest host boot stage shares ONE issue group
+# (WEB-PLATFORM-4S, "soleur-cloud-init boot stage"), and the nc row alone passes for any event whose
+# detail lacks the string, so under "any" this rule would page on every boot.
+#
+# A pull miss is excluded: both pull-fatal arms set last_stage=inngest_pull_fatal and emit
+# stage=inngest_pull_fatal (paged by zot_mirror_fallback_rate) before exiting, so on_exit's
+# `why=inngest_pull_fatal` event would page the same group a second time. Emitted is not delivered
+# (soleur-boot-emit has no retry; a lost POST shows as sentry-emit-FAILED in Better Stack). nc is a
+# case-insensitive SUBSTRING match: keep pull-fatal stage names distinct from any stage that must
+# page.
+#
+# value = 0 pages on the first event (see zot_mirror_fallback_rate). frequency_minutes = 120: the
+# unit retries without limit (~8 attempts in the first hour, ~4/h once backed off — the comment on
+# soleur-inngest-provision.service), so this re-pages at most every 2 h. Distinct from every other
+# rule's frequency in the root (the op-contract test enforces it), which avoids Sentry POST-time
+# duplicate dedup. Arms dark until the next inngest-host-replace delivers the unit (ADR-257
+# §Status). Reading and quieting a page: runbook inngest-server.md § "Reading an
+# inngest-provision-failure page".
+resource "sentry_alert" "inngest_provision_failure" {
+  organization      = var.sentry_org
+  name              = "inngest-provision-failure"
+  enabled           = true
+  frequency_minutes = 120
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "stage", match = "eq", value = "provision_attempt_failed" } },
+        { tagged_event = { key = "detail", match = "nc", value = "why=inngest_pull_fatal" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  # Records the coupling (#9299): this rule is correct only while the degraded rule exists, so
+  # Terraform narrows it after that rule is created and skips the narrowing if the create fails
+  # (the degraded stage is never left paged by nothing). Keep it; the op-contract test pins it.
+  depends_on = [sentry_alert.inngest_provision_degraded]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── Inngest host provisioning degraded (#9299) ────────────────────────────────
+# A soleur-inngest-provision bootstrap that exits 0 without its durable store emits
+# stage=bootstrap_done_degraded at warning, once per boot, with detail
+# `why=<reasons>.attempt=<n>.iid=<iid>`, the reasons being .redis-inactive and/or
+# .no-durable-execstart. There is no latch, so nothing retries it until the next boot, and the
+# event is not re-emitted before then.
+#
+# A separate rule because Sentry throttles per rule per issue group and every boot stage shares
+# WEB-PLATFORM-4S: under #9176's single rule, a provision_attempt_failed page consumed the 2 h
+# window, so the degraded event that usually follows it minutes later would be suppressed until
+# the next boot. This rule has its own throttle state.
+#
+# No detail nc row: the degraded detail carries only those reasons, the attempt and the iid, so
+# it cannot contain why=inngest_pull_fatal. logic_type = "all" is still written, uniform with the
+# sibling; it keeps the rule safe if a second row is ever added (under "any" a lone nc-style row
+# pages every boot stage). value = 0 pages on the first event; not first_seen_event, see
+# git_data_boot_warning.
+#
+# frequency_minutes = 34: distinct from every other rule in the root (the op-contract test
+# enforces it; POST-time dedup keys on action shape + filter match + frequency, and this rule's
+# action and logic match the sibling's). Short because the signal does not repeat: it bounds, per
+# forged event from the semi-public DSN, the window in which a real degraded event is suppressed
+# (a suppressed real event stays silent until the next boot). Arms dark until the
+# next inngest-host-replace delivers the unit (ADR-257 §Status). Reading a page: runbook
+# inngest-server.md § "Reading an inngest-provision-degraded page".
+resource "sentry_alert" "inngest_provision_degraded" {
+  organization      = var.sentry_org
+  name              = "inngest-provision-degraded"
+  enabled           = true
+  frequency_minutes = 34
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "stage", match = "eq", value = "bootstrap_done_degraded" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },

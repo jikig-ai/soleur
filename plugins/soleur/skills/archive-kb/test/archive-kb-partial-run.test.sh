@@ -104,6 +104,33 @@ else
   fail "plan-only warning does not name the missing class: '$out'"
 fi
 
+# Anchor pin (#9091 review): the stamp this script mints at TIMESTAMP
+# (date +%Y%m%d-%H%M%S) is the FORMAT REFERENCE every worktree-manager reap
+# assertion cites, yet until this row nothing pinned the produced name — a
+# revert of the literal to the dashed form would have reintroduced the exact
+# divergence class of #9091 with every guard green. A real (non-dry) run is
+# required: --dry-run prints paths but writes nothing.
+d="$ROOT/stamp"
+mkdir -p "$d/knowledge-base/project/plans"
+assert_fixture_dir "$d"
+git -C "$d" init -q
+git -C "$d" config user.email t@example.invalid
+git -C "$d" config user.name t
+printf 'x\n' > "$d/knowledge-base/project/plans/2026-01-01-feat-demo-plan.md"
+out="$( cd "$d" && bash "$SUT" demo 2>&1 )"; rc=$?
+entry=""
+for f in "$d/knowledge-base/project/plans/archive/"*; do
+  [[ -f "$f" ]] || continue
+  entry="$(basename "$f")"
+done
+cases=$((cases + 1))
+if [[ "$rc" -eq 0 && -n "$entry" \
+      && "$entry" =~ ^[0-9]{8}-[0-9]{6}-2026-01-01-feat-demo-plan\.md$ ]]; then
+  pass "stamp: produced plans/archive basename carries the compact YYYYMMDD-HHMMSS stamp"
+else
+  fail "stamp: rc=$rc produced entry missing or not compact (got: '${entry:-<none>}') out='$out'"
+fi
+
 # Conservation first, then the floor. Both emitted by printf + exit 1 and never
 # routed through the pass()/fail() they backstop (ADR-193) — a floor dispatched
 # through the helper it protects is disarmed by the same one-line edit.
@@ -111,7 +138,7 @@ if [[ $((PASS + FAIL)) -ne "$cases" ]]; then
   printf '[FATAL] accounting conservation: %s + %s != %s\n' "$PASS" "$FAIL" "$cases" >&2
   exit 1
 fi
-MIN_ASSERTIONS=6
+MIN_ASSERTIONS=7
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s case(s) ran, floor is %s\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

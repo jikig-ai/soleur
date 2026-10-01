@@ -8,7 +8,7 @@
 // verdict. This cron calls the read-only `disk_io_pressure_signal()` RPC
 // (migration 095) via the service-role client, applies a deterministic
 // threshold verdict, files/auto-closes a GitHub [disk-io] issue, and posts a
-// Sentry Crons heartbeat — mirroring cron-gh-pages-cert-state.ts.
+// Sentry Crons heartbeat through the shared _cron-shared helpers.
 //
 // WHY AN RPC, NOT THE MANAGEMENT API: the signal lives in pg_catalog stat views
 // PostgREST does not expose, and the runtime container has the service-role key

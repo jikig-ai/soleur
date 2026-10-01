@@ -165,3 +165,25 @@ O1–O5 are non-blocking.
 - `grep -cF 'PA-16, PA-17' knowledge-base/legal/breach-register.md` → 1 after R2.
 - `grep -cF 'its load was measured on the live host only' knowledge-base/legal/article-30-register.md` → 1 after C3.
 - `for n in 8754 8867 8870; do gh issue view $n --json state -q .state; done` → OPEN ×3.
+
+## Addendum — 2026-09-27 (re-evaluation trigger (1) is met)
+
+This addendum amends nothing above.
+
+Re-evaluation trigger (1) is met. The post-replace check passed on 2026-09-27. Hetzner API reads at
+about 15:02Z show:
+
+- server 167651172 lists firewall 11269127 with status `applied`;
+- the firewall's `applied_to` lists server 167651172;
+- server 167310350 returns 404.
+
+Restored markers dated 2026-09-27 are appended at every record that carries a 2026-09-25 (#8754)
+marker. Item 6 of the determination's 2026-09-27 addendum lists them.
+
+The C1 re-read of interval 3's tail is recorded in item 4 of that addendum. It covers
+2026-09-25T00:00Z to 2026-09-27T15:10Z. It finds 0 sshd `Accepted publickey` and 0
+`session opened for user` from `soleur-inngest`. The five rows from that host that contain the
+phrase are Inngest event-log rows, not sshd rows.
+
+No count is non-zero, so this review does not re-open, and its disposition stands. Triggers (2),
+(3) and (4) are unchanged. Trigger (2) waits on #8867, which is open.

@@ -508,7 +508,19 @@ git_data_rung2_bound_files() {
   #     non-`path.module` prefix) breaks the binding, and that is exactly what this form check
   #     catches. A filename pin would assert a different property — identity, not
   #     admissibility — and would buy the digest nothing.
-  if ! printf '%s\n' "$_shape_src" | grep -qE 'templatefile\("\$\{path\.module\}/[^"]+"'; then
+  # A HERESTRING, NOT A PIPE, AND THE VERDICT IS SPLIT. The pipe-fed `grep -q` this replaces
+  # is the #9210 flake — grep -q closes the pipe on first match, the producer takes EPIPE,
+  # and pipefail reports a non-zero pipeline even though the pattern MATCHED (the run log's
+  # `printf: write error: Broken pipe` immediately before this arm's ABORT). rc >= 2 means
+  # the matcher could not evaluate at all: an instrument failure, reported as such so the
+  # next transport flake does not arrive dressed as a shape violation.
+  local _shape_rc=0
+  grep -qE 'templatefile\("\$\{path\.module\}/[^"]+"' <<< "$_shape_src" || _shape_rc=$?
+  if [[ "$_shape_rc" -ge 2 ]]; then
+    echo "git_data_rung2_bound_files: ABORT — could not evaluate the \`templatefile(\` shape check on ${module_tf}: the matcher exited ${_shape_rc} instead of returning a verdict. An instrument failure is not a shape violation; refuse to guess. Fail-closed."
+    return 1
+  fi
+  if [[ "$_shape_rc" -eq 1 ]]; then
     echo "git_data_rung2_bound_files: ABORT — ${module_tf}'s sole \`templatefile(\` argument is not a single-line \"\${path.module}/…\" literal. An indirected or multi-line template reference is not statically resolvable, so the evidence digest cannot bind the bytes that render into user_data. Fail-closed."
     return 1
   fi
@@ -1131,8 +1143,14 @@ _git_data_rung2_fetch() {
         # public. A rejected bearer retries ONCE anonymously rather than reporting a refusal
         # that is really an authorization gap. A rate-limit body is excluded — dropping the
         # bearer makes a rate limit strictly worse.
+        # Deliberately UNSPLIT (unlike the verdict arms): this is a retry heuristic, not a
+        # verdict — a matcher rc >= 2 resolves to "not a rate-limit body" and drops the
+        # bearer once (bounded by _anon_retried), and the de-permissioned direction is the
+        # safe one for an instrument failure.
+        local _rl_body
+        _rl_body="$(sed '$d' <<< "$_resp")"
         if [[ "$_anon_retried" -eq 0 && ${#_auth[@]} -gt 0 ]] \
-           && ! printf '%s' "$_resp" | sed '$d' | grep -qiE 'rate limit'; then
+           && ! grep -qiE 'rate limit' <<< "$_rl_body"; then
           _anon_retried=1; _auth=(); _attempt=0; continue
         fi
         ;;
@@ -2053,9 +2071,27 @@ git_data_authorization_map_gate() {
   # that writes it: `runcmd` runs AFTER write_files, so one appended line there adds a key
   # the gate's block-scoped read can never see. The property is "what this template puts on
   # authorized_keys", not "what the first write_files entry says".
-  if grep -nE '/home/git/\.ssh/authorized_keys' "$cloud_init" \
-     | grep -vE ':[[:space:]]*-[[:space:]]*path:' | grep -qvE ':[[:space:]]*#'; then
+  # CAPTURED STAGE BY STAGE, never `producer | grep -q` in the `if`: under pipefail an early
+  # `grep -q` exit EPIPEs the producer, and this arm's non-negated `if` then reads a mid-pipe
+  # death as "no outside references" — the #9210 mechanism, applied to the fail-OPEN arm:
+  # where site 1 false-ABORTed, this sweep would silently skip its HOLD. Each stage is
+  # captured separately because pipefail reports only the RIGHTMOST non-zero member, so a
+  # stage's rc >= 2 (instrument failure) would be masked behind a later stage's rc 1.
+  local _ak_outside _ak_rc=0
+  _ak_outside="$(grep -nE '/home/git/\.ssh/authorized_keys' "$cloud_init")" || _ak_rc=$?
+  if [[ "$_ak_rc" -lt 2 && -n "$_ak_outside" ]]; then
+    _ak_outside="$(printf '%s\n' "$_ak_outside" | grep -vE ':[[:space:]]*-[[:space:]]*path:')" || _ak_rc=$?
+  fi
+  if [[ "$_ak_rc" -lt 2 && -n "$_ak_outside" ]]; then
+    _ak_outside="$(printf '%s\n' "$_ak_outside" | grep -vE ':[[:space:]]*#')" || _ak_rc=$?
+  fi
+  if [[ "$_ak_rc" -ge 2 ]]; then
+    echo "git_data_authorization_map_gate: ABORT — could not evaluate the /home/git/.ssh/authorized_keys outside-write_files sweep on ${cloud_init}: the extraction exited ${_ak_rc}. An instrument failure is not a measured absence of runcmd/bootcmd references. Fail-closed."
+    return 2
+  fi
+  if [[ -n "$_ak_outside" ]]; then
     echo "git_data_authorization_map_gate: HOLD — ${cloud_init} references /home/git/.ssh/authorized_keys outside its write_files path declaration (a runcmd, a bootcmd, or another statement). cloud-init runs runcmd AFTER write_files, so any such statement decides the final authorization map and this gate reads only the write_files block."
+    printf '%s\n' "$_ak_outside" | sed 's/^/  /'
     return 1
   fi
 
@@ -2308,7 +2344,17 @@ git_data_authorization_map_gate() {
   # git-data.tf already carries `ignore_changes = [ssh_keys]`, so adding a second element is
   # exactly the edit a person makes. Measured rc=0. This joins the whole extracted server
   # block and matches across newlines instead.
-  if tr '\n' ' ' <<< "$_server_block" | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*\buser_data\b'; then
+  # Same conversion as the sites above: capture the flattened block, then herestring-grep —
+  # and split the verdict, because this arm is also non-negated (a mid-pipe death was a
+  # missed HOLD — fail-open on the gate's own premise).
+  local _flat_server _ic_rc=0
+  _flat_server="$(tr '\n' ' ' <<< "$_server_block")"
+  grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*\buser_data\b' <<< "$_flat_server" || _ic_rc=$?
+  if [[ "$_ic_rc" -ge 2 ]]; then
+    echo "git_data_authorization_map_gate: ABORT — could not evaluate the lifecycle.ignore_changes sweep on hcloud_server.git_data in ${root}: the matcher exited ${_ic_rc}. An instrument failure is not a measured absence. Fail-closed."
+    return 2
+  fi
+  if [[ "$_ic_rc" -eq 0 ]]; then
     echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data declares lifecycle.ignore_changes on user_data. That deletes this gate's own premise: user_data is ForceNew and ADR-115 bars git-data from the reboot primitive, so a replace is the ONLY route by which a corrected authorization map reaches the host. With it ignored, the map can drift with no apply able to correct it."
     return 1
   fi

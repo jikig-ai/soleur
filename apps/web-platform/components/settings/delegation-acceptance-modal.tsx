@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface DelegationAcceptanceModalProps {
   delegationId: string;
@@ -34,94 +35,84 @@ export function DelegationAcceptanceModal({
   onDeclined,
   onWithdrawn,
 }: DelegationAcceptanceModalProps) {
-  const [loading, setLoading] = useState(false);
   // Inline telemetry-visibility acknowledgment (CPO finding): the grantee
   // must actively acknowledge that the grantor sees their run cost telemetry
   // before "I accept" is enabled.
   const [telemetryAck, setTelemetryAck] = useState(false);
+  // New error surface (#9053): a failed write was reportSilentFallback-only —
+  // a silent dead click. Render the failure so the grantee knows it happened.
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const handleAccept = useCallback(async () => {
-    setLoading(true);
-    try {
-      // The version is server-owned; the route stamps
-      // BYOK_SIDE_LETTER_VERSION. We send only the delegationId (#4625
-      // Phase 1 / AC3). `sideLetterVersion` is a display-only prop below.
-      const res = await fetch("/api/workspace/delegations/accept", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delegationId }),
-      });
-      if (res.ok) {
-        onAccepted();
-      } else {
-        reportSilentFallback(
-          new Error(`delegation accept returned ${res.status}`),
-          { feature: "byok-delegation", op: "accept" },
-        );
+  // One shared flag for accept/decline/withdraw — a pending op must disable
+  // the sibling controls. asyncFn never throws.
+  const { run, pending: loading } = usePendingAction(
+    async (op: "accept" | "decline" | "withdraw") => {
+      setActionError(null);
+      try {
+        if (op === "accept") {
+          // The version is server-owned; the route stamps
+          // BYOK_SIDE_LETTER_VERSION. We send only the delegationId (#4625
+          // Phase 1 / AC3). `sideLetterVersion` is a display-only prop below.
+          const res = await fetch("/api/workspace/delegations/accept", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ delegationId }),
+          });
+          if (res.ok) {
+            onAccepted();
+          } else {
+            reportSilentFallback(
+              new Error(`delegation accept returned ${res.status}`),
+              { feature: "byok-delegation", op: "accept" },
+            );
+            setActionError("Couldn't accept the delegation. Please try again.");
+          }
+        } else if (op === "decline") {
+          const res = await fetch("/api/workspace/delegations", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ delegationId, reason: "grantee_decline" }),
+          });
+          if (res.ok) {
+            onDeclined();
+          } else {
+            reportSilentFallback(
+              new Error(`delegation decline returned ${res.status}`),
+              { feature: "byok-delegation", op: "decline" },
+            );
+            setActionError("Couldn't decline the delegation. Please try again.");
+          }
+        } else {
+          // Art. 7(3) withdrawal. The RPC derives the user from the session;
+          // we send only the delegationId (#4625 Phase 3).
+          const res = await fetch("/api/workspace/delegations/withdraw", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ delegationId }),
+          });
+          if (res.ok) {
+            onWithdrawn?.();
+          } else {
+            reportSilentFallback(
+              new Error(`delegation withdraw returned ${res.status}`),
+              { feature: "byok-delegation", op: "withdraw" },
+            );
+            setActionError("Couldn't withdraw consent. Please try again.");
+          }
+        }
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "byok-delegation",
+          op,
+        });
+        setActionError("Something went wrong. Please check your connection and try again.");
       }
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "byok-delegation",
-        op: "accept",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [delegationId, onAccepted]);
+    },
+  );
 
-  const handleDecline = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/workspace/delegations", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delegationId, reason: "grantee_decline" }),
-      });
-      if (res.ok) {
-        onDeclined();
-      } else {
-        reportSilentFallback(
-          new Error(`delegation decline returned ${res.status}`),
-          { feature: "byok-delegation", op: "decline" },
-        );
-      }
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "byok-delegation",
-        op: "decline",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [delegationId, onDeclined]);
-
-  const handleWithdraw = useCallback(async () => {
-    setLoading(true);
-    try {
-      // Art. 7(3) withdrawal. The RPC derives the user from the session;
-      // we send only the delegationId (#4625 Phase 3).
-      const res = await fetch("/api/workspace/delegations/withdraw", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delegationId }),
-      });
-      if (res.ok) {
-        onWithdrawn?.();
-      } else {
-        reportSilentFallback(
-          new Error(`delegation withdraw returned ${res.status}`),
-          { feature: "byok-delegation", op: "withdraw" },
-        );
-      }
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "byok-delegation",
-        op: "withdraw",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [delegationId, onWithdrawn]);
+  const handleAccept = () => run("accept");
+  const handleDecline = () => run("decline");
+  const handleWithdraw = () => run("withdraw");
 
   return (
     <ResponsiveModal
@@ -170,6 +161,15 @@ export function DelegationAcceptanceModal({
         Side Letter (version {sideLetterVersion}). See the Data Protection
         Disclosure Section 2.3(w) for full details.
       </p>
+
+      {actionError && (
+        <p
+          role="alert"
+          className="mt-3 rounded-md border border-red-800/50 bg-red-950/30 px-3 py-2 text-sm text-red-300"
+        >
+          {actionError}
+        </p>
+      )}
 
       {alreadyAccepted ? (
         <>

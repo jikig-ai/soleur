@@ -1,8 +1,9 @@
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 
 // feat-skip-api-key-onboarding (#4642). Persists the user's "Set up later"
@@ -15,12 +16,9 @@ export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/setup-key/skip", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -28,17 +26,17 @@ export async function POST(request: Request) {
   const { data, error } = await serviceClient
     .from("users")
     .update({ setup_key_skipped_at: new Date().toISOString() })
-    .eq("id", user.id)
+    .eq("id", userId)
     .select("id");
 
   if (error || !data || data.length !== 1) {
     Sentry.withIsolationScope(() => {
-      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
       reportSilentFallback(error, {
         feature: "setup-key-skip",
         op: "persist-skip",
         message: "setup_key_skipped_at update did not affect exactly one row",
-        extra: { userId: user.id, affectedRows: data?.length ?? 0 },
+        extra: { userId, affectedRows: data?.length ?? 0 },
       });
     });
     return NextResponse.json(

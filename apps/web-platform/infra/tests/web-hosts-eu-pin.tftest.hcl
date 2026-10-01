@@ -67,6 +67,19 @@ mock_provider "github" {
   }
 }
 mock_provider "tls" {}
+mock_provider "supabase" {
+  # #9168: supabase-project.tf adopts the live prd project with an unconditional
+  # `import` block — the same shape as the github adoption above. `mock_provider`
+  # does NOT mock `import` blocks, and leaving the provider unmocked would run the
+  # import read against the real Management API with the dummy
+  # supabase_access_token below, failing every run block on a credential error in
+  # a credential-free suite. Overriding the import target keeps the file
+  # credential-free. Remove with the import (the #9168 follow-up PR deletes the
+  # one-time import block post-apply).
+  override_resource {
+    target = supabase_project.prd
+  }
+}
 
 # Dummy values for the module's required (no-default) variables — terraform test
 # requires every required variable be set before it evaluates var.web_hosts's
@@ -116,8 +129,6 @@ variables {
   doppler_token_tf                = "dummy"
   github_app_id                   = "12345"
   github_app_private_key          = "dummy"
-  ghcr_read_user                  = "dummy"
-  ghcr_read_token                 = "dummy"
   hcloud_token                    = "dummy"
   kb_drift_operator_founder_id    = "00000000-0000-0000-0000-000000000000"
   resend_api_key                  = "dummy"

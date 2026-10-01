@@ -168,20 +168,27 @@ on:
       # gone), so the risk moved from a dropped allow-list line to a weakened
       # gate. Editing that workflow must still be able to trip this guard.
       # (#7278) registry-zot-inventory-workflow-guard.test.sh asserts the #6425 self-trigger
-      # guard on the inventory lever, the label+Bot authority boundary on its dispatch route,
-      # and the fail-closed `skip-docker-login` gate in the shared bridge composite. None of
-      # those three files is under apps/*/infra/**, so without these entries a PR editing ONLY
+      # guard on the inventory lever, its automatic producer (since #7377 the restart-loop
+      # alarm dispatches it; the label route, which nothing could fire, is deleted), and the
+      # fail-closed `skip-docker-login` gate in the shared bridge composite. None of those
+      # three files is under apps/*/infra/**, so without these entries a PR editing ONLY
       # one of them skips the suite whose entire job is protecting it — the same defect class
       # the #6454, #7025 and #7203 comments above describe. The composite entry is the sharpest
       # of the three: inverting its login gate to `== 'false'` would silently strip the push
       # credential from all four pre-existing callers, and that file is touched by no glob here.
       - ".github/workflows/registry-zot-inventory.yml"
-      - ".github/workflows/registry-zot-inventory-dispatch.yml"
+      - ".github/workflows/scheduled-zot-restart-loop.yml"
       - ".github/actions/cf-tunnel-registry-bridge/action.yml"
       # (#8449 UC2) inngest-host-state-workflow-guard.test.sh executes the dispatch wrapper's
       # run: block against the script's own exit-code header; neither file is under apps/*/infra/**.
       - ".github/workflows/inngest-host-state.yml"
       - "scripts/inngest-host-state.sh"
+      # (#7463 PR-B) rule-audit-inngest-pin-workflow-guard.test.sh asserts the
+      # `Detect inngest CLI pin drift` step's contract in this workflow — the file
+      # is not under apps/*/infra/**, so a PR editing only the step would skip the
+      # suite whose entire job is protecting it (same defect class as #7278/#8449
+      # above).
+      - ".github/workflows/rule-audit.yml"
       - ".github/workflows/scheduled-supabase-advisor-scan.yml"
       - ".github/workflows/apply-sentry-infra.yml"
       - "scripts/supabase-advisor-scan.sh"
@@ -755,6 +762,12 @@ jobs:
       # and six mutation rows that each require this guard to red.
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
+
+      # (#9045) The workspaces-LUKS dead-man FIRED Logs alert: the tag, host, marker and result=fired
+      # conjuncts (read against the fire command's own logger line), the paging semantics, both
+      # -target lines, and the mutation rows that each require this guard to red.
+      - name: Run workspaces-LUKS dead-man fired alert drift guard (#9045)
+        run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh
 
       # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
       # predicate, exact literals, unpaused, both -target lines, and its mutation rows.

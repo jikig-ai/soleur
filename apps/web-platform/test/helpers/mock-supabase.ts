@@ -24,6 +24,8 @@ export interface MockQueryChain {
   delete: Mock;
   single: Mock;
   maybeSingle: Mock;
+  /** postgrest `PostgrestTransformBuilder.abortSignal` — returns `this`. */
+  abortSignal: Mock;
   then: (onfulfilled?: (v: unknown) => unknown) => Promise<unknown>;
 }
 
@@ -87,6 +89,10 @@ export function mockQueryChain<T>(
   for (const method of chainingMethods) {
     (chain[method] as Mock) = vi.fn(() => chain);
   }
+
+  // postgrest `.abortSignal(signal)` returns `this` — mid-chain, not a
+  // terminal, so bounded-wait call sites can keep chaining to .single() etc.
+  chain.abortSignal = vi.fn(() => chain);
 
   // PromiseLike: allows `await chain.select().eq()`
   chain.then = (onfulfilled?: (v: unknown) => unknown) =>

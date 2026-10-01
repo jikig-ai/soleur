@@ -66,7 +66,6 @@ MIN_FILES="${NO_TOFU_MIN_FILES:-4750}"
 ALLOWLIST="$(cat <<'ALLOW'
 apps/web-platform/infra/git-data-ownership.test.sh|2|throwaway local container on 127.0.0.1:2222, never a real host (SHKC=no + UKHF=/dev/null on one line)
 apps/web-platform/infra/infra-config-gate.test.sh|1|detector fixture string inside the infra-config-gate test, never executed
-apps/web-platform/server/git-auth.ts|1|TOFU_FALLBACK_OPTS: the single transitional accept-new arm (#5914 removes it and this line)
 tests/scripts/test-no-tofu-ssh.sh|5|this guard's own banned-spellings documentation block
 ALLOW
 )"

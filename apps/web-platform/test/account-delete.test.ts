@@ -60,7 +60,7 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 // Import the module under test
 // ---------------------------------------------------------------------------
 
-import { deleteAccount } from "../server/account-delete";
+import { ART17_ERASURE_FEATURE, ART17_ERASURE_OP, deleteAccount } from "../server/account-delete";
 import type { GitDataErasureOutcome } from "../server/git-data-replication";
 
 // ---------------------------------------------------------------------------
@@ -330,7 +330,7 @@ describe("deleteAccount", () => {
   const PENDING_OUTCOMES = {
     refused: { status: "refused", exitCode: 3, detail: "refusing" },
     unauthorized: { status: "unauthorized", detail: "Permission denied (publickey)." },
-    unconfigured: { status: "unconfigured", detail: "pin_invalid: GIT_DATA_SSH_HOST_KEY is malformed" },
+    unconfigured: { status: "unconfigured", detail: "pin_absent: git-data: GIT_DATA_SSH_HOST_KEY is unset" },
     unreachable: { status: "unreachable", detail: "Connection refused" },
     host_key_mismatch: { status: "host_key_mismatch", detail: "Host key verification failed." },
   } satisfies { [S in PendingStatus]: Extract<GitDataErasureOutcome, { status: S }> };
@@ -345,12 +345,82 @@ describe("deleteAccount", () => {
 
       expect(result.success).toBe(true);
       expect(result.gitDataErasurePending).toBe(true);
+      // Message path (err === null, #5914 / #8629): an Error-path report is pre-captured by
+      // the pino mirror with only `feature=pino-mirror`, so the `feature`/`op`/
+      // `erasure_outcome` tags art17_erasure_incomplete filters on would never arrive.
       expect(mockReportSilentFallback).toHaveBeenCalledWith(
-        expect.any(Error),
-        expect.objectContaining({ tags: expect.objectContaining({ erasure_outcome: status }) }),
+        null,
+        expect.objectContaining({
+          feature: "account-delete",
+          op: "git-data-bare-repo-erasure",
+          tags: expect.objectContaining({ erasure_outcome: status }),
+          // Status first, so each outcome groups into its own Sentry issue.
+          message: expect.stringMatching(new RegExp(`^git-data erasure ${status}[: ]`)),
+          // The sweep locates the un-erased repo by gitDataRepoId, and `detail` is the only
+          // carrier of the fault's reason word — dropping either is silent without this.
+          extra: expect.objectContaining({ gitDataRepoId: "user-123", detail: outcome.detail }),
+        }),
       );
     },
   );
+
+  // An `unconfigured` has three different faults with three different remedies; they must
+  // not share one Sentry issue, or an open `remove_key_absent` issue hides a later
+  // `pin_absent` (the alert fires on first-seen / reappeared / regression only).
+  test.each([
+    ["pin_absent", "pin_absent: git-data: GIT_DATA_SSH_HOST_KEY is unset"],
+    ["pin_invalid", "pin_invalid: git-data: GIT_DATA_SSH_HOST_KEY is malformed"],
+    ["remove_key_absent", "remove_key_absent: GIT_REMOVE_SSH_PRIVATE_KEY is absent"],
+    ["ssh_client_absent", "ssh_client_absent: spawn ssh ENOENT, nothing dialed"],
+  ])("unconfigured %s: the reason word rides the message and a tag", async (reason, detail) => {
+    setupSupabaseMocks();
+    mockRemoveGitDataRepo.mockResolvedValue({ status: "unconfigured", detail });
+    await deleteAccount("user-123", "test@example.com");
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        tags: expect.objectContaining({ erasure_outcome: "unconfigured", erasure_reason: reason }),
+        message: expect.stringMatching(new RegExp(`^git-data erasure unconfigured \\(${reason}\\): `)),
+      }),
+    );
+  });
+
+  test("an unconfigured detail with no reason word gets no reason tag and the plain message", async () => {
+    setupSupabaseMocks();
+    mockRemoveGitDataRepo.mockResolvedValue({ status: "unconfigured", detail: "Weird Free Text: x" });
+    await deleteAccount("user-123", "test@example.com");
+    const opts = mockReportSilentFallback.mock.calls.find(
+      (c) => (c[1] as { op?: string }).op === "git-data-bare-repo-erasure",
+    )![1] as { tags: Record<string, string>; message: string };
+    expect(opts.tags.erasure_reason).toBeUndefined();
+    expect(opts.message).toMatch(/^git-data erasure unconfigured: /);
+  });
+
+  // #8572: the Art. 17 report routes through art17_erasure_incomplete ONLY. A `pin_fault`
+  // tag here would ALSO match git-data-host-key-pin-fault and send two emails per refusal
+  // (CLO ruling). Each case first proves the report was made, so "no pin_fault" cannot pass
+  // on a report that never happened.
+  test.each([
+    ...Object.values(PENDING_OUTCOMES).map((o) => [o.status, () => mockRemoveGitDataRepo.mockResolvedValue(o)] as const),
+    ["threw", () => mockRemoveGitDataRepo.mockRejectedValue(new Error("boom"))] as const,
+  ])("%s: the erasure report carries the rule's literals and never a pin_fault tag", async (outcome, arrange) => {
+    setupSupabaseMocks();
+    arrange();
+    await deleteAccount("user-123", "test@example.com");
+    const reports = mockReportSilentFallback.mock.calls.filter(
+      (c) => (c[1] as { op?: string }).op === ART17_ERASURE_OP,
+    );
+    expect(reports).toHaveLength(1);
+    const opts = reports[0][1] as { feature: string; tags: Record<string, string> };
+    expect(opts.feature).toBe(ART17_ERASURE_FEATURE);
+    expect(opts.tags.erasure_outcome).toBe(outcome);
+    expect(opts.tags).not.toHaveProperty("pin_fault");
+  });
+
+  test("the exported literals are the ones the report has always used", () => {
+    expect(ART17_ERASURE_FEATURE).toBe("account-delete");
+    expect(ART17_ERASURE_OP).toBe("git-data-bare-repo-erasure");
+  });
 
   test("erasure succeeds: NOT pending, and no compliance report", async () => {
     setupSupabaseMocks();
@@ -384,7 +454,23 @@ describe("deleteAccount", () => {
     // The throw path must reach the same honest answer as the refusal path — otherwise
     // the one route that bypasses the new outcome type silently restores the old lie.
     expect(result.gitDataErasurePending).toBe(true);
-    expect(mockReportSilentFallback).toHaveBeenCalled();
+    // Message path too (#8629): an Error-path report never reaches art17_erasure_incomplete.
+    // The thrown message is NOT copied into the Sentry message (assertSafeWorkspaceId's
+    // message embeds the raw id); only the error NAME rides extra.
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        feature: "account-delete",
+        op: "git-data-bare-repo-erasure",
+        tags: expect.objectContaining({ erasure_outcome: "threw" }),
+        message: expect.stringMatching(/^git-data erasure threw: /),
+        extra: expect.objectContaining({ errorName: "Error" }),
+      }),
+    );
+    const call = mockReportSilentFallback.mock.calls.find(
+      (c) => (c[1] as { tags?: Record<string, string> }).tags?.erasure_outcome === "threw",
+    )!;
+    expect(JSON.stringify(call)).not.toContain("boom");
   });
 
   test("when auth deletion fails, public.users data remains intact (no partial deletion)", async () => {

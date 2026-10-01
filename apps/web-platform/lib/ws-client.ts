@@ -38,7 +38,10 @@ type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnec
 /**
  * Per-turn stream lifecycle exposed on the hook return surface.
  *
- *   - `"idle"`     — no in-flight assistant turn for this conversation.
+ *   - `"idle"`     — no in-flight assistant turn for this conversation. A
+ *                    cc-soleur-go turn returns here on `stream_end` for the cc
+ *                    router once no stream is left (it emits no per-turn
+ *                    `session_ended{turn_complete}`).
  *   - `"streaming"` — at least one leader is mid-stream (entered on the first
  *                    `stream_start` after auth).
  *   - `"stopping"`  — user clicked Stop / pressed Esc; an `abort_turn` frame
@@ -234,9 +237,10 @@ export interface ChatState {
    * Folded into `ChatState` (rather than a parallel `useState`) so transitions
    * are atomic with the reducer-managed `activeStreams` and `messages` they
    * track — a render cannot observe `activeStreams.size === 0` while
-   * `streamState === "streaming"` (or vice versa). Also keeps all five
-   * transition sites (`stream_start`/`stream`/`tool_use`/`tool_progress` →
-   * "streaming"; `enter_stopping` → "stopping"; `clear_streams` → "idle")
+   * `streamState === "streaming"` (or vice versa). Also keeps every
+   * transition site (`stream_start`/`stream`/`tool_use`/`tool_progress` →
+   * "streaming"; `enter_stopping` → "stopping"; `clear_streams` → "idle";
+   * `stream_end` for the cc router with no active stream left → "idle")
    * inside the reducer's `: never` rail, where a future widening of
    * `StreamState` fails build instead of silently flowing into a Send branch.
    */
@@ -336,10 +340,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         action.msg.type === "stream" ||
         action.msg.type === "tool_use" ||
         action.msg.type === "tool_progress";
+      // The cc-soleur-go path emits no per-turn `session_ended{turn_complete}` (that
+      // would `clear_streams` and blank the sticky workflow bar every turn), so its
+      // turn boundary is `stream_end` for the cc router with the last stream drained.
+      // `onTextTurnEnd` fires only from the runner's result handler, so this marks the
+      // turn end, not a block boundary. "stopping" is released here too: `abort_turn`
+      // aborts only sessions in `activeSessions`, and a live cc turn is never
+      // registered there, so on a cc conversation Stop aborts nothing and no
+      // `session_ended:user_aborted` ever follows — without this the composer would
+      // stay on a disabled "Stopping…" after the turn completed. A later
+      // `session_ended` re-clears idempotently.
+      const isCcTurnEnd =
+        action.msg.type === "stream_end" &&
+        action.msg.leaderId === CC_ROUTER_LEADER_ID &&
+        result.activeStreams.size === 0;
       const nextStreamState: StreamState =
         state.streamState === "idle" && isTurnActive
           ? "streaming"
-          : state.streamState;
+          : isCcTurnEnd && state.streamState !== "idle"
+            ? "idle"
+            : state.streamState;
       return {
         messages: result.messages,
         activeStreams: result.activeStreams,

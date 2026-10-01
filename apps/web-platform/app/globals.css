@@ -204,6 +204,19 @@
 }
 
 @layer components {
+  /* Button primitive base box (components/ui/button.tsx). Lives in
+     @layer components, NOT as ordinary utilities in the component, so a
+     caller's utilities (px-3, w-[36px], rounded-md, flex ...) always win
+     regardless of emit order. Padding is split into .soleur-btn-pad, which the
+     primitive emits only for buttons with a text child; icon-only buttons get
+     no padding and must carry their own size. Guarded by
+     test/components/button-layer.test.ts. See components/ui/README.md. */
+  .soleur-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium;
+  }
+  .soleur-btn-pad {
+    @apply px-6 py-3;
+  }
   .safe-top {
     padding-top: env(safe-area-inset-top, 0px);
   }

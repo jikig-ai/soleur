@@ -116,6 +116,20 @@ vi.mock("../server/observability", () => ({
 }));
 
 import { tryLedgerDivergenceRecovery, sessions } from "../server/ws-handler";
+import {
+  registerLiveLoopProbe,
+  registerSession,
+  unregisterSession,
+} from "../server/agent-session-registry";
+
+// #9270 — the AC14 loop-protection predicate moved into the shared registry
+// (agent-session-registry.hasLiveAgentLoop), which consults the REAL
+// activeSessions map plus REGISTERED probes — a vi.mock on the cc-dispatcher
+// module export no longer reaches it. Mirror production's registration
+// (cc-dispatcher registers the real hasActiveCcQuery at module load) by
+// registering the MOCK as the probe: Set-deduped, so module scope is fine,
+// and each test's mockImplementation still steers the branch per-conv.
+registerLiveLoopProbe(mockHasActiveCcQuery);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -211,6 +225,11 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
     mockForEachSession.mockReset();
     mockHasActiveCcQuery.mockReset();
     mockHasActiveCcQuery.mockReturnValue(false);
+    // The REAL registry maps persist across tests too — unregister every
+    // live-loop injection below so a prior test's registerSession cannot
+    // leak a "live" flag into a sibling.
+    unregisterSession("user-1", "conv-real-1");
+    unregisterSession("user-1", "conv-live-1");
     // The module `sessions` map is real + shared across tests in this file;
     // clear it so a prior test's focused-session injection cannot leak into a
     // dead-socket test that assumes no focused conversation.
@@ -250,13 +269,11 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
   it("all slots reference visible conversations WITH a live loop → no recovery, didRecover: false", async () => {
     // Genuine cap_hit: every slot maps to a visible-active conversation that is
     // genuinely LIVE (has an agent loop). Post-AC14, "healthy" requires a live
-    // loop (or focus) — so mark conv-real-1 live. No divergence — recovery is a
+    // loop (or focus) — so mark conv-real-1 live via the REAL registry (the
+    // shared predicate reads the real map; mockForEachSession only steers
+    // ws-handler's own call sites now). No divergence — recovery is a
     // no-op and the caller should fall through to the existing close path.
-    mockForEachSession.mockImplementation(
-      (_u: string, convId: string, fn: (k: string, s: unknown) => unknown) => {
-        if (convId === "conv-real-1") fn("user-1:conv-real-1", {});
-      },
-    );
+    registerSession("user-1", "conv-real-1", {} as never);
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-real-1" }],
       slotRows: [{ conversation_id: "conv-real-1" }],
@@ -274,11 +291,7 @@ describe("tryLedgerDivergenceRecovery (AC4/AC7)", () => {
   it("multiple orphan slots → releases each, reports orphanCount", async () => {
     // Two orphan slots + one real-visible slot with a live loop. Recovery must
     // release BOTH orphans and leave the real (live-loop-protected) slot alone.
-    mockForEachSession.mockImplementation(
-      (_u: string, convId: string, fn: (k: string, s: unknown) => unknown) => {
-        if (convId === "conv-real-1") fn("user-1:conv-real-1", {});
-      },
-    );
+    registerSession("user-1", "conv-real-1", {} as never);
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-real-1" }],
       slotRows: [
@@ -342,6 +355,11 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     mockForEachSession.mockReset();
     mockHasActiveCcQuery.mockReset();
     mockHasActiveCcQuery.mockReturnValue(false);
+    // The REAL registry maps persist across tests too — unregister every
+    // live-loop injection below so a prior test's registerSession cannot
+    // leak a "live" flag into a sibling.
+    unregisterSession("user-1", "conv-real-1");
+    unregisterSession("user-1", "conv-live-1");
     // The module `sessions` map is real + shared across tests in this file;
     // clear it so a prior test's focused-session injection cannot leak into a
     // dead-socket test that assumes no focused conversation.
@@ -422,12 +440,9 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     // The load-bearing safety property (CTO ruling): a backgrounded-but-live
     // loop (e.g. after crash+reconnect, or paused on a review gate) has a live
     // registry entry and MUST NOT be reaped even though it is not the focused
-    // socket conversation. Simulate a live legacy loop for conv-live-1.
-    mockForEachSession.mockImplementation(
-      (_userId: string, _convId: string, fn: (k: string, s: unknown) => unknown) => {
-        fn("user-1:conv-live-1", {}); // one live session entry → hasLiveAgentLoop true
-      },
-    );
+    // socket conversation. Simulate a live legacy loop for conv-live-1 via the
+    // REAL registry — the shared predicate reads the real map.
+    registerSession("user-1", "conv-live-1", {} as never);
     setupSupabaseMock({
       visibleConversations: [{ id: "conv-live-1" }],
       slotRows: [{ conversation_id: "conv-live-1" }],

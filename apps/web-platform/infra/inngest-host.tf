@@ -1,7 +1,7 @@
 # #6178 (ADR-100) — the dedicated single-host Inngest singleton control plane.
 #
 # One dedicated Hetzner host running the self-hosted OSS Inngest server
-# (`inngest start`, pinned v1.19.4) as a systemd unit with host-local Redis (AOF
+# (inngest v1.45.1, `inngest start`) as a systemd unit with host-local Redis (AOF
 # on a block volume) + a Postgres backend, on the existing
 # private network (network.tf) at 10.0.1.40. EXTRACTED from the co-located web
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
@@ -365,7 +365,7 @@ locals {
     # (#8036 item 1d / ADR-096 5.3b-i: the `ghcr_read_user`/`ghcr_read_token` keys that baked a
     # GHCR read credential into this user_data are gone. The PAT they carried is revoked, the
     # template no longer logs in to ghcr.io or pulls from it, and zot is the only boot-time read
-    # path. `var.ghcr_read_*` survives only for `doppler_secret.ghcr_read_*` until task 5.4.)
+    # path. `var.ghcr_read_*` and `doppler_secret.ghcr_read_*` were retired by task 5.4, #8714.)
     # #7462 (ADR-096) — the zot arm for the cold-boot bootstrap pull, baked so that cold boot
     # does not depend on Doppler answering at the boot instant. When this landed it DIVERGED
     # from cloud-init.yml's web-host arm, which then read ZOT_REGISTRY_URL / ZOT_PULL_* from

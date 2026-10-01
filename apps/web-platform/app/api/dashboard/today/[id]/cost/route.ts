@@ -29,6 +29,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServiceClient } from "@/lib/supabase/service";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -51,10 +52,8 @@ export async function GET(
   if (!valid) return rejectCsrf("api/dashboard/today/[id]/cost", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -64,14 +63,14 @@ export async function GET(
     .from("messages")
     .select("id")
     .eq("id", messageId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (msgErr) {
     reportSilentFallback(msgErr, {
       feature: "dashboard-cost",
       op: "messages-owner-check",
       message: "messages select failed during cost lookup",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
@@ -98,13 +97,13 @@ export async function GET(
         feature: "dashboard-cost",
         op: "action-sends-read",
         message: "action_sends select failed during cost lookup",
-        extra: { userId: user.id, messageId },
+        extra: { userId, messageId },
       });
     }
     return NextResponse.json({ cumulativeCents: 0, turnCount: 0 });
   }
   const send = rawSend as ActionSendRow;
-  if (send.user_id !== user.id) {
+  if (send.user_id !== userId) {
     // Defense in depth — should be unreachable given the messages owner-
     // check, but a misconfigured RLS migration could let it through.
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -138,7 +137,7 @@ export async function GET(
     .from("audit_byok_use")
     .select("unit_cost_cents")
     .eq("agent_role", agentRole)
-    .eq("founder_id", user.id)
+    .eq("founder_id", userId)
     .gt("created_at", send.clicked_at)
     .lte("created_at", upper);
   if (auditErr) {
@@ -146,7 +145,7 @@ export async function GET(
       feature: "dashboard-cost",
       op: "audit-byok-use-sum",
       message: "audit_byok_use sum failed",
-      extra: { userId: user.id, messageId, agentRole },
+      extra: { userId, messageId, agentRole },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }

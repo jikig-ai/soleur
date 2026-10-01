@@ -724,15 +724,23 @@ else
   # test-all.sh or the index — including this suite's own. Leaving it armed
   # would degrade every --affected arm here to full and the exemption rows
   # would measure the refusal they are trying to prove absent. Disabled so the
-  # arms isolate the _AFFECTED conjunct, not the fallback ladder.
+  # arms isolate the _AFFECTED conjunct, not the fallback ladder. The neuter
+  # anchors on the membership COMPUTATION, not a consuming arm: #9197 moved
+  # the runner/index grep into a single `_aff_runner_in_diff` flag read by
+  # both the ladder arm and the staged-scope note — zeroing the flag darkens
+  # both consumers at once, which is exactly the old elif-replacement's
+  # semantic.
   python3 - "$SANDBOX_AFF" <<'PY' || { CASES=$((CASES + 1)); fail "could not neuter runner-changed in the aff sandbox"; }
 import sys
 p = sys.argv[1]
 s = open(p).read()
-old = ('elif grep -qF \'scripts/test-all.sh\' <<<"$_diff_names" \\\n'
-       '    || grep -qF \'scripts/lib/test-affected-paths.sh\' <<<"$_diff_names"; then')
-assert s.count(old) == 1, "runner-changed arm anchor drifted"
-s = s.replace(old, 'elif false; then  # sandbox: self-edge disabled to isolate the exemption')
+old = ('_aff_runner_in_diff=0\n'
+       '  if grep -qF \'scripts/test-all.sh\' <<<"$_diff_names" \\\n'
+       '    || grep -qF \'scripts/lib/test-affected-paths.sh\' <<<"$_diff_names"; then\n'
+       '    _aff_runner_in_diff=1\n'
+       '  fi')
+assert s.count(old) == 1, "runner-changed membership anchor drifted"
+s = s.replace(old, '_aff_runner_in_diff=0  # sandbox: self-edge disabled to isolate the exemption')
 open(p, 'w').write(s)
 PY
 

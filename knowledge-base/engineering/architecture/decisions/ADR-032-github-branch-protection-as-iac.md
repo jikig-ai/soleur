@@ -80,6 +80,10 @@ auth per `hr-github-app-auth-not-pat`. The current model uses the `soleur-ai`
 App (id `3261325`, installation `122213433`) — see §"Required-check
 inventory" below and `infra/github/main.tf`.
 
+> **Superseded 2026-10-01 (#9360):** for CI applies, superseded by ADR-241 D5 (#8209): the
+> soleur-infra App, installation `166065653`. `apply-github-infra.yml` no longer reads the
+> soleur-ai pair.
+
 The original PAT framing (kept for audit):
 
 > Fine-grained PAT named `terraform-infra-github-rulesets`, scoped to the
@@ -281,6 +285,10 @@ This ADR is validated by:
    GITHUB_APP_PRIVATE_KEY` from Doppler `prd_terraform`, not the
    deprecated `GH_RULESET_PAT`) MUST stay aligned with the provider
    block — drift means apply-time `401 Unauthorized`.
+
+   > **Superseded 2026-10-01 (#9360):** the workflow no longer fetches that pair; after #8209 O10
+   > it is the eviction sentinel. CI authenticates as the soleur-infra App through the
+   > infra-credentials loader (ADR-241 D5 and its 2026-10-01 Amendment-log entry).
 
 ## DHH dissent (kept for re-evaluation)
 

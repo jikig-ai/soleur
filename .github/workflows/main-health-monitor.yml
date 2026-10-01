@@ -91,13 +91,16 @@ permissions:
 #                        and here. Guarded by Test 5 of
 #                        plugins/soleur/test/required-checks-canonical-parity.test.sh
 #                        (this file added to its list by #7307).
-#   LIKEC4_VERSION    -> 6 sites: Dockerfile, package.json (x2),
+#   LIKEC4_VERSION    -> sites: Dockerfile, package.json (x2),
 #                        plugins/soleur/scripts/render-c4-model.sh,
-#                        ci.yml (test-scripts + test-scripts-heavy), and here.
+#                        ci.yml (test-webplat + test-scripts + test-scripts-heavy),
+#                        and here.
 #                        Guarded by apps/web-platform/test/c4-likec4-version-pin.test.ts
 #                        (this file added by #7307). NB the install below writes
 #                        the literal, not "likec4@${LIKEC4_VERSION}", because that
-#                        guard's regex requires a digit after `likec4@`.
+#                        guard's regex requires a digit after `likec4@`. The same
+#                        guard pairs the version with the `--before=<date>` literal on
+#                        that line (#9300); the date is literal-only, with no env entry.
 #   TERRAFORM_VERSION -> 8 declarations across .github/workflows/, ALL "1.10.5",
 #                        with no coupling guard anywhere. Naming one of them as
 #                        "the owner" would be a misleading map, so: they are peers;
@@ -268,7 +271,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0   # literal, not ${LIKEC4_VERSION}: see TOOLCHAIN PINS
+          npm install -g likec4@1.50.0 --before=2026-09-28   # literals, not env: see TOOLCHAIN PINS
           likec4 --version
 
       # ORDERED BEFORE the infra step, and that ordering is the invariant.
@@ -596,7 +599,7 @@ jobs:
             ACTIONS=(
               "1. Re-run this check: \`gh workflow run main-health-monitor.yml\`"
               "2. If the same suite is reported terminated again, file a tracking issue for it and link it here"
-              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill. Since #7429 the set of suites that can surface one is no longer just the six this runner starts via \`bun\`/\`node\` directly: the two nested shell runners now propagate the signal shape instead of flattening it, which adds the 98 infra suites behind \`run-registered-suites.sh\` and the 13 fixture suites behind \`.github/scripts/test/run-all.sh\`. For an INFRA suite the terminated member is named on the \`RED  <path>\` line, which this job greps separately. For a FIXTURE suite under \`.github/scripts/test/\` the member name does NOT reach this issue: that runner's own \`[KILLED]\` line is deliberately shaped so the RUNNER cannot forge the top-level marker, and it goes to stderr. Note the limit of that shaping: it constrains the runner, not an arbitrary suite -- a fixture suite's stdout is not captured, so a suite could in principle print the top-level anchor itself. Treat a \`[KILLED]\` line naming a fixture suite as unverified until you have read the shard log. In that case open the run log for the shard and read the runner's output directly. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
+              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill. Since #7429 the set of suites that can surface one is no longer just the six this runner starts via \`bun\`/\`node\` directly: the two nested shell runners now propagate the signal shape instead of flattening it, which adds the 98 infra suites behind \`run-registered-suites.sh\` and the 14 fixture suites behind \`.github/scripts/test/run-all.sh\`. For an INFRA suite the terminated member is named on the \`RED  <path>\` line, which this job greps separately. For a FIXTURE suite under \`.github/scripts/test/\` the member name does NOT reach this issue: that runner's own \`[KILLED]\` line is deliberately shaped so the RUNNER cannot forge the top-level marker, and it goes to stderr. Note the limit of that shaping: it constrains the runner, not an arbitrary suite -- a fixture suite's stdout is not captured, so a suite could in principle print the top-level anchor itself. Treat a \`[KILLED]\` line naming a fixture suite as unverified until you have read the shard log. In that case open the run log for the shard and read the runner's output directly. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
             )
           else
             # No marker of any kind in the capture. What this run MEASURED is the step

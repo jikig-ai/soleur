@@ -94,6 +94,14 @@ the host's page 8 every time, and only the dry run showed it
 | `secrets` | optional | Comma-separated GitHub secret names. Only these are exported into the script's environment. Omit if the script needs no secrets. |
 | **Placement** | yes | The `<!--` opener MUST be at **column 0 and outside any code fence**. Fenced blocks are skipped wholesale and the anchor is column-0, so an indented or fenced directive parses as no directive at all. This is a field of the directive in every sense that matters — get it wrong and the other three are never read. |
 
+**Where the gate resolves `script=` (worktree caveat).** The PreToolUse
+directive gate resolves `script=` under `HOOK_CWD` — the MAIN checkout, not
+the worktree — so a probe that exists only inside the PR worktree is
+reported "does not exist" at `gh issue create` time (measured on PR #9113).
+Copy the probe to `<main-checkout>/scripts/followthroughs/` (untracked; the
+PR lands the canonical copy) before filing, and give `earliest=` the full
+ISO-8601 form (`YYYY-MM-DDTHH:MM:SSZ`, not a bare date).
+
 ## Trigger → verification mapping
 
 Deferred-scope-out issues (filed by `/soleur:review` §5) carry a **re-evaluation
@@ -236,6 +244,8 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - **A probe that proves a ONE-TIME event through a `--since` window stops proving it once the window slides past the event, and on a CLOSED tracker the resulting exit 1 REOPENS it.** When the tracker closes, retire its directive in the same step, or key the verdict on a recurring terminal-state row instead of the transition row. **Why:** #8296 — `inngest-luks-cutover-6894.sh` read `--since 48h --grep cutover-complete`; the only such row was 2026-09-20 15:29Z, so every sweep from 2026-09-23 (its `earliest`) would have exited 1 and falsely reopened the operator-closed #8295.
 
 - **In a NOTIFY-ONLY probe, put the xtrace refusal first and the rc-remapping EXIT trap directly after it, with nothing in between.** `lint-shell-trace-credential-refusal.py` requires the refusal in the prologue, and the refusal can only exit 78, so no 0/1 path opens before the trap. Assert the ordering, exactly one `trap`, and no `exec`/`kill` in the probe's suite: `exec true` and `trap - EXIT` both bypass the remap. Also pin BOTH `.host` and `.host_name` on the rows: every host writes into one Logs source. **Why:** #8296 PR-2 review — the structural seat found all three open in a green 91-case suite (`inngest-luks-property-8296.sh`).
+
+- **A decoded warehouse line is not necessarily ONE row from ONE emitter — pin each signal to its emitter at offset 0 AND to its row shape, decode to exactly one line per row, and count server fields once (#7556).** The source is shared with webhook receipts that quote attacker-influenceable text; `jq -r` re-emits an embedded newline as a row break (one message can forge a whole sample floor), a client-controlled `User-Agent`/`path`/`username` inside a correctly-pinned row can quote the signal or carry a second `statusCode:`/`latency:`, and a read whose empty answer reads as "none" (a drop guard) must account for every row it fetched. Reference implementation: `scripts/followthroughs/zot-upload-ceiling-7556.sh` (`DECODE_PY`, `CONFIG_PY`, `CLASSIFIER_PY`) and its forgery rows in the `.test.sh`.
 
 ## What the sweeper does NOT cover
 

@@ -35,6 +35,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VARS_TF="${DIR}/variables.tf"
 WORKFLOW="${DIR}/../../../.github/workflows/web-platform-release.yml"
 APPLY_WORKFLOW="${DIR}/../../../.github/workflows/apply-web-platform-infra.yml"
+CUTOVER_WORKFLOW="${DIR}/../../../.github/workflows/git-data-cutover.yml"
 
 passes=0
 fails=0
@@ -105,9 +106,12 @@ check_all_copies() {
 
 # Operand 2: web-platform-release.yml — 1 copy (the tagged-release deploy fan-out).
 check_all_copies "$WORKFLOW" "release-workflow" 1
-# Operand 3: apply-web-platform-infra.yml — 0 copies today (both deleted with #6575), but the
-# content check stays armed for any copy that reappears. See the reason block in the header.
-check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 0
+# Operand 3: apply-web-platform-infra.yml — 2 copies (#8211 PR2: the inline pin_load steps in
+# git_data_host_replace + git_data_host_create each fan the webhook redeploy to the full peer set).
+check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 2
+# Operand 4: git-data-cutover.yml — 1 copy (the top-level env feeds the redeploy + finalizer steps;
+# a fleet change that drops a peer here would silently produce a mixed-flag fleet).
+check_all_copies "$CUTOVER_WORKFLOW" "cutover-workflow" 1
 
 total=$((passes + fails))
 echo "web-hosts-fanout-parity: ${passes} passed, ${fails} failed (${total} assertions)"

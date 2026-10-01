@@ -281,7 +281,7 @@ health_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$HEALTH_URL"
 [[ "$health_code" == "200" ]] || abort "health_not_200" "inngest /health returned $health_code after wipe+restart"
 
 # >= 1 cron re-registered after restart. Query /v0/gql `functions` — GET /v1/functions
-# is an UNREGISTERED 404 route in v1.19.4 (#5517): the old `if type=="array" else 0`
+# is an UNREGISTERED 404 route in inngest v1.45.1 (#5517): the old `if type=="array" else 0`
 # tolerated the 404 body as 0, so this assert would FALSELY fire `no_functions` on a
 # healthy restart. >= 1 proves the SDK re-synced (durability is in Postgres+Redis,
 # not the wiped /var/lib/inngest volume).

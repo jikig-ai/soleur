@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import {
   PROVIDER_CONFIG,
   EXCLUDED_FROM_SERVICES_UI,
@@ -53,29 +54,39 @@ function ProviderCard({
   const config = PROVIDER_CONFIG[provider];
   const [expanded, setExpanded] = useState(false);
   const [token, setToken] = useState("");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [removing, setRemoving] = useState(false);
+  // New error surface (#9053): a failed remove was silently swallowed by the
+  // parent — the row stayed connected-looking with no signal.
+  const [removeError, setRemoveError] = useState("");
 
-  const handleSubmit = async () => {
+  // Independent controls → one hook each (connect + remove).
+  // Both asyncFns never throw; failures land on their local error surfaces.
+  const { run: runConnect, pending: loading } = usePendingAction(async () => {
     if (!token.trim()) return;
-    setLoading(true);
     setError("");
-    const result = await onConnect(provider, token.trim());
-    setLoading(false);
-    if (result.valid) {
-      setExpanded(false);
-      setToken("");
-    } else {
-      setError(result.error ?? "Token validation failed. Please check and try again.");
+    try {
+      const result = await onConnect(provider, token.trim());
+      if (result.valid) {
+        setExpanded(false);
+        setToken("");
+      } else {
+        setError(result.error ?? "Token validation failed. Please check and try again.");
+      }
+    } catch {
+      setError("Something went wrong. Please check your connection and try again.");
     }
-  };
+  });
 
-  const handleRemove = async () => {
-    setRemoving(true);
-    await onRemove(provider);
-    setRemoving(false);
-  };
+  const { run: handleRemove, pending: removing } = usePendingAction(async () => {
+    setRemoveError("");
+    try {
+      await onRemove(provider);
+    } catch {
+      setRemoveError("Couldn't remove the token. Please try again.");
+    }
+  });
+
+  const handleSubmit = () => runConnect();
 
   return (
     <div
@@ -135,6 +146,12 @@ function ProviderCard({
           )}
         </div>
       </div>
+
+      {removeError && (
+        <p className="mt-2 text-sm text-red-400" role="alert">
+          {removeError}
+        </p>
+      )}
 
       {expanded && (
         <div className="mt-4 space-y-3">
@@ -221,9 +238,12 @@ export function ConnectedServicesContent({ initialServices }: Props) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider }),
     });
-    if (res.ok) {
-      setServices((prev) => prev.filter((s) => s.provider !== provider));
+    if (!res.ok) {
+      // #9053: non-OK used to resolve silently — the row stayed connected-
+      // looking with zero signal. Throw so the card's removeError surfaces it.
+      throw new Error(`remove failed (${res.status})`);
     }
+    setServices((prev) => prev.filter((s) => s.provider !== provider));
   };
 
   // Group providers by category
