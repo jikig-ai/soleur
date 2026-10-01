@@ -217,6 +217,9 @@ _EMIT_COMMANDS=0
 #              or measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
 # --print-affected-set   Enumerate-shaped plumbing: walks every registration and
 #              emits AFFECTED_CLASS\t<label>\t<class> receipts, runs nothing.
+# --print-selection      The diff-aware counterpart (#9307): runs the pre-pass a real
+#              --affected run applies and prints AFFECTED_SELECTED\t<label>\t0|1
+#              per runnable suite plus one AFFECTED_SUMMARY, running nothing.
 #
 # Parsed as a WHILE-LOOP over leading flags, replacing the $1-only if/elif that
 # predated the mode flags — `--enumerate-commands --affected scripts` composes.
@@ -225,6 +228,16 @@ _EMIT_COMMANDS=0
 _AFFECTED_REQ=0        # --affected (or --print-affected-set) named explicitly
 _FULL_REQ=0            # --full named explicitly
 _PRINT_AFFECTED=0
+# --print-selection (#9307): run the affected pre-pass and print what THIS diff
+# selects (AFFECTED_SELECTED per runnable suite + one AFFECTED_SUMMARY), running
+# no suite. --print-affected-set prints CLASSES and ignores the diff.
+_PRINT_SELECTION=0
+# --paths=<a,b,...> (#9307): with --print-selection only, select against THESE paths
+# instead of the real diff -- "what would these files select?". Print-only by
+# construction (--print-selection exits before any suite runs), so it can never
+# narrow a real run's diff.
+_PRINT_PATHS=""
+_PRINT_PATHS_REQ=0
 # --affected-scope=branch|staged (#9173): which diff the affected axis selects
 # on. `staged` swaps the selection window to the index (`git diff --cached`) —
 # the pre-commit hook's unit of work is the commit, not the branch. Valid only
@@ -285,6 +298,14 @@ while [[ "${1:-}" == --* ]]; do
     --full)
       _FULL_REQ=1
       ;;
+    --print-selection)
+      _PRINT_SELECTION=1
+      _AFFECTED_REQ=1
+      ;;
+    --paths=*)
+      _PRINT_PATHS="${1#--paths=}"
+      _PRINT_PATHS_REQ=1
+      ;;
     --print-affected-set)
       # Plumbing, not an early exit: it RAISES enumerate so the walk below emits
       # receipts without running a suite, and terminates at the enumerate exit.
@@ -303,6 +324,11 @@ Modes (local default is --affected; CI always runs the full battery):
   --full                the whole battery. Refused under SOLEUR_SUBAGENT=1 or
                         measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
   --print-affected-set  emit AFFECTED_CLASS receipts per registration; runs nothing.
+  --print-selection     print what THIS diff selects (AFFECTED_SELECTED per suite +
+                        AFFECTED_SUMMARY); runs nothing. --print-affected-set prints
+                        classes and ignores the diff.
+  --paths=a,b           with --print-selection: select against these paths instead
+                        of the real diff (print-only; never narrows a real run).
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
   --enumerate           emit the leg's assigned registration labels; runs nothing.
@@ -979,6 +1005,24 @@ if [[ "$TEST_GROUP" == "affected" ]] \
   exit 2
 fi
 
+# --print-selection reports the affected pre-pass, which exists only for
+# TEST_GROUP=all and never alongside the class-only enumerate plumbing.
+if (( _PRINT_SELECTION == 1 )) && { (( _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" != "all" ]]; }; then
+  echo "ERROR: --print-selection needs TEST_GROUP=all and cannot combine with --print-affected-set." >&2
+  exit 2
+fi
+
+# --paths is print-only. Besides --print-selection it is accepted with --enumerate-commands,
+# because the affected pre-pass forwards it to its enumerate child (the child decides the
+# relevance-gated DECLINED records, which must read the same named paths as the parent).
+# --print-affected-set also raises enumerate, but it ignores the diff, so --paths there is
+# refused rather than silently dropped.
+if (( _PRINT_PATHS_REQ == 1 && _PRINT_SELECTION == 0 )) \
+  && { (( _ENUMERATE == 0 )) || (( _PRINT_AFFECTED == 1 )); }; then
+  echo "ERROR: --paths is print-only: it is valid only with --print-selection." >&2
+  exit 2
+fi
+
 # --affected-scope names WHICH diff an affected axis selects on (#9173). It is
 # meaningful only where an affected axis consumes _diff_names — `--affected`
 # (explicit or the local default) and `TEST_GROUP=affected` — so the three
@@ -1347,6 +1391,8 @@ _aff_ready=0
 _aff_fallback=""
 _aff_sel=()
 _aff_label=()
+_aff_cls=()
+_aff_edges=()
 
 # --- Shard selection at the registration chokepoint (#7902, #8006) ---------------------------
 #
@@ -1907,8 +1953,9 @@ fi
 # RENAME SOURCES. `--name-only` emits only the DESTINATION of a rename, so `git mv` on a declared
 # predicate path leaves the OLD path — the one the array names — absent from the diff, and the
 # battery declines on the single most destructive edit possible to its own SUT. `--name-status -M`
-# emits `R100<TAB>old<TAB>new`, and since matching is substring-based over this whole blob, adding
-# it makes BOTH paths matchable. (The narrow window this closes is a rename WITHOUT a matching
+# emits `R100<TAB>old<TAB>new`; both matchers read the whole blob with TABs split to newlines (the
+# substring matcher natively, `_diff_edge_hit` by an explicit split), so BOTH paths are matchable
+# by an unanchored edge AND by an anchored one. (The narrow window this closes is a rename WITHOUT a matching
 # array update; `lint-orphan-test-suites.sh` already reds loudly in the same run for that case, so
 # it was never a silent green — this just stops the suite declining while that error prints.)
 # Skipped under staged scope: the staged branch above emits the --cached form
@@ -1970,10 +2017,60 @@ $(git ls-files --others --exclude-standard 2>/dev/null || true)"
   fi
 fi
 
+# --paths (#9307): the caller named the paths, so they ARE the diff. Both detection
+# arms are set -- a named path list is fully determined, so neither undecidable-diff
+# arm can fire -- while the runner-changed arm still reads the names honestly (a
+# list naming the runner itself degrades, as a real diff would).
+if (( _PRINT_PATHS_REQ == 1 )); then
+  _diff_names="${_PRINT_PATHS//,/$'\n'}"
+  _diff_detect_ok=1
+  _diff_head_ok=1
+fi
+
+# Newline constant for the anchored edge matcher below. A variable rather than an
+# inline $'\n' so each mutation-battery row rewrites ONE plain line of it.
+_NL=$'\n'
+
+# Anchored edge match (#9307). `_affected_add_edge` mints `^`-prefixed edges:
+# `^dir/` is a path PREFIX (a diff line that STARTS with dir/), `^file` an EXACT
+# line. The legacy substring match let the bare command word `test` in
+# `bun test <file>` -- which resolves to the repo-root test/ directory -- select
+# its suite for any diff path that merely CONTAINED "test", a knowledge-base-only
+# diff included. Edges without the `^` mark (the relevance arrays, which reach
+# `_diff_touches` directly) keep the substring semantics.
+#
+# The blob also carries `--name-status -M` rows (`R100<TAB>old<TAB>new`, the rename-source
+# pairing above), so TABs are split to newlines first: an anchored edge must match the OLD
+# path of a rename exactly as it matches a plain `--name-only` line, or `git mv` out of a
+# declared directory would decline the suite that guards it. The split copy is memoised on
+# the blob (a string compare per call, not a rebuild), since the pre-pass calls this ~9000x.
+_DEH_SRC=""
+_DEH_N=""
+_diff_edge_hit() {
+  local e="$1"
+  if [[ "$_DEH_SRC" != "$_diff_names" ]]; then
+    _DEH_SRC="$_diff_names"
+    _DEH_N="${_NL}${_diff_names//$'\t'/${_NL}}${_NL}"
+    # git C-quotes a path holding a non-ASCII byte, `"`, `\` or a control character: the line
+    # arrives wrapped in `"…"`, which a line-start anchor can never match. Unwrap it (an
+    # ASCII prefix edge still matches the unescaped head of the name).
+    _DEH_N="${_DEH_N//${_NL}\"/${_NL}}"
+    _DEH_N="${_DEH_N//\"${_NL}/${_NL}}"
+  fi
+  local _n="$_DEH_N"
+  case "$e" in
+    */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
+    *)  [[ "$_n" == *"${_NL}${e}${_NL}"* ]] ;;
+  esac
+}
+
 # Does this run's diff touch any of the given paths? Used to decline suites that guard code the
-# diff does not reach. Substring match without a `^` anchor, matching the existing infra check:
-# over-matching a path that merely CONTAINS the string errs toward RUNNING the suite, which is
-# the safe direction.
+# diff does not reach. An entry WITHOUT a `^` mark is a substring match, matching the existing
+# infra check: over-matching a path that merely CONTAINS the string errs toward RUNNING the
+# suite, which is the safe direction. A `^`-marked entry (minted by `_affected_add_edge`) is
+# ANCHORED instead — see `_diff_edge_hit` above — and errs toward NOT running on a path that
+# only contains the word; knowledge-base/project/specs/feat-affected-parallel-test-gate/
+# edge-anchoring-corpus.md records the measurement behind that trade.
 #
 # Reads a VARIABLE via a herestring, never `producer | grep -q`. Under this script's `set -o
 # pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
@@ -2008,11 +2105,18 @@ _diff_touches() {
   if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
   local p
   for p in "$@"; do
-    # `[[ == ]]` with the operand quoted is a literal substring match — the
-    # same semantics as the fixed-string grep it replaces, minus one fork +
-    # herestring per edge per registration (the affected pre-pass calls this
-    # ~440 times against multi-element edge sets).
-    if [[ "$_diff_names" == *"$p"* ]]; then return 0; fi
+    case "$p" in
+      \^*)
+        if _diff_edge_hit "${p#^}"; then return 0; fi
+        ;;
+      *)
+        # `[[ == ]]` with the operand quoted is a literal substring match — the
+        # same semantics as the fixed-string grep it replaces, minus one fork +
+        # herestring per edge per registration (the affected pre-pass calls this
+        # ~440 times against multi-element edge sets).
+        if [[ "$_diff_names" == *"$p"* ]]; then return 0; fi
+        ;;
+    esac
   done
   return 1
 }
@@ -2071,11 +2175,21 @@ _affected_resolve_edges() {
 # Append an edge if it resolves inside the repo and is not already present.
 # `[[ -e ]]` is the whole test: argv words, `-c` payload tokens and resolved
 # source/import paths are all filtered through it, so garbage never lands in
-# the edge set and a DIRECTORY entry acts as a prefix edge under the substring
-# match _diff_touches uses.
+# the edge set. A surviving edge is stored ANCHORED (#9307): `^dir/` for a
+# directory (a path prefix), `^file` for a file (an exact line) -- see
+# _diff_edge_hit. Anything rooted at `.`/`..` keeps the legacy unanchored form:
+# `.` names the whole tree, and an anchored `^./` could never match a diff line,
+# which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
   local _p="$1"
   [[ -n "$_p" && -e "$_p" ]] || return 0
+  case "$_p" in
+    .|..|./*|../*) ;;
+    *)
+      if [[ -d "$_p" ]]; then _p="${_p%/}/"; fi
+      _p="^$_p"
+      ;;
+  esac
   _affected_in_list "$_p" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} && return 0
   _AC_EDGES+=("$_p")
 }
@@ -2302,6 +2416,13 @@ _affected_derive() {
         done
         ;;
     esac
+    # A runner SUBCOMMAND is not an operand (#9307): the word `test` in
+    # `bun test <file>` would resolve to the repo-root test/ directory and mint an
+    # edge that selects every `bun test` suite for any diff under it.
+    case "$_prev $_tok" in
+      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")
+        _prev="$_tok"; continue ;;
+    esac
     _prev="$_tok"
     case "$_tok" in
       /*)
@@ -2373,7 +2494,7 @@ _affected_derive() {
     if (( _PRINT_AFFECTED == 1 )); then
       local _e _ns=0
       for _e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do
-        [[ "$_e" == "$_suite_file" ]] || { _ns=1; break; }
+        [[ "${_e#^}" == "$_suite_file" ]] || { _ns=1; break; }
       done
       if (( _ns == 1 )); then _AC_SUITE_FILE="$_suite_file"; return 0; fi
     fi
@@ -2392,7 +2513,7 @@ _affected_derive() {
         _affected_file_edges "$_f"
         local _i _new
         for (( _i=_pre_n; _i<${#_AC_EDGES[@]}; _i++ )); do
-          _new="${_AC_EDGES[$_i]}"
+          _new="${_AC_EDGES[$_i]#^}"
           if [[ -f "$_new" ]] && ! _affected_in_list "$_new" "${_seen[@]+"${_seen[@]}"}"; then
             _seen+=("$_new"); _next+=("$_new")
           fi
@@ -2464,7 +2585,7 @@ _affected_classify() {
   if [[ -n "${_AC_SUITE_FILE:-}" ]]; then
     local _e _nonself=0
     for _e in "${_AC_EDGES[@]}"; do
-      [[ "$_e" == "$_AC_SUITE_FILE" ]] || { _nonself=1; break; }
+      [[ "${_e#^}" == "$_AC_SUITE_FILE" ]] || { _nonself=1; break; }
     done
     (( _nonself == 0 )) && _AC_CLASS="unclassified"
   fi
@@ -2720,7 +2841,7 @@ _infra_skip_reason=""
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=100
+_MIN_ALWAYS_ON_DECLARED=116
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -2792,7 +2913,13 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
     # actually reaches. `branch` is the default spelled out; explicit is the
     # same value either way, and a flag (unlike an env var) cannot leak into
     # the wrong axis — presence is ownership.
-    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands --affected-scope="${_AFF_SCOPE:-branch}" "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
+    #
+    # `--paths` is forwarded for the same reason (#9307): under `--print-selection --paths=…`
+    # the parent's diff IS the named list, and a child reading the real branch diff would
+    # decline relevance-gated suites against a diff the report is not about.
+    _aff_child_paths=()
+    if (( _PRINT_PATHS_REQ == 1 )); then _aff_child_paths=(--paths="$_PRINT_PATHS"); fi
+    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands --affected-scope="${_AFF_SCOPE:-branch}" ${_aff_child_paths[@]+"${_aff_child_paths[@]}"} "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
     if (( _aff_enum_rc != 0 )); then
       _aff_fallback="enumerate-unavailable"
       if [[ -s "$_aff_enum_err" ]]; then
@@ -2812,6 +2939,12 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
             [[ "$_aff_line" == SUITE_COMMAND$'\t'* ]] || continue
             _aff_cmd_records=$(( _aff_cmd_records + 1 ))
             _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            _aff_cls[$_aff_ordinal]="$_AC_CLASS"
+            if (( _PRINT_SELECTION == 1 )); then
+              _aff_ej=""
+              for _aff_e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do _aff_ej+="${_aff_ej:+|}${_aff_e}"; done
+              _aff_edges[$_aff_ordinal]="$_aff_ej"
+            fi
             if [[ "$_AC_CLASS" == edge:* && ${#_AC_EDGES[@]} -gt 0 ]] \
               && ! _diff_touches ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; then
               _aff_sel[$_aff_ordinal]=0
@@ -2868,6 +3001,39 @@ fi
 if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
   && { (( _AFFECTED == 1 || _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" == "affected" ]]; }; then
   printf 'AFFECTED_SCOPE\tscope=staged\n'
+fi
+
+# Selection report (#9307). The pre-pass above is the ONLY place a selection bit
+# is decided, so this reads those bits rather than recomputing them: what is
+# printed is what the dispatch walk applies. Every real affected run states its
+# selection on stdout; --print-selection additionally prints one row per
+# runnable suite and stops here, running nothing. A degraded run has no
+# per-suite bits (the whole battery runs), so it says so instead of inventing a
+# selection.
+if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
+  if (( _aff_ready == 1 )); then
+    _aff_n_always=0
+    _aff_n_edge=0
+    for (( _aff_i=1; _aff_i<=_aff_ordinal; _aff_i++ )); do
+      # A DECLINED (relevance) record carries no selection bit: no row for it.
+      [[ -n "${_aff_sel[$_aff_i]:-}" ]] || continue
+      if (( _PRINT_SELECTION == 1 )); then
+        printf 'AFFECTED_SELECTED\t%s\t%s\t%s\t%s\n' "${_aff_label[$_aff_i]}" "${_aff_sel[$_aff_i]}" \
+          "${_aff_cls[$_aff_i]:-}" "${_aff_edges[$_aff_i]:-}"
+      fi
+      if [[ "${_aff_sel[$_aff_i]}" == "1" ]]; then
+        case "${_aff_cls[$_aff_i]:-}" in
+          always_on) _aff_n_always=$(( _aff_n_always + 1 )) ;;
+          edge:*)    _aff_n_edge=$(( _aff_n_edge + 1 )) ;;
+        esac
+      fi
+    done
+    printf 'AFFECTED_SUMMARY selected=%d of=%d always_on=%d edge=%d fallback=none\n' \
+      "$_aff_selected" "$_aff_cmd_records" "$_aff_n_always" "$_aff_n_edge"
+  elif [[ -n "$_aff_fallback" ]]; then
+    printf 'AFFECTED_SUMMARY selected=all of=all always_on=all edge=all fallback=%s\n' "$_aff_fallback"
+  fi
+  if (( _PRINT_SELECTION == 1 )); then exit 0; fi
 fi
 
 # WHY THE want_infra CONJUNCT IS LOAD-BEARING. These notices used to key on `_infra_in_diff`
@@ -4054,13 +4220,6 @@ if want_scripts; then
   # #6475, and the probe's whole purpose is to be the fail-loud alarm, so a vacuous PASS (or a
   # false FAIL that pages a green codebase) must redden CI here.
   run_suite "scripts/ci-deploy-sentry-post-fail-6475" bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh
-  # #8016: exit-code harness for the bwrap deploy-gate self-report soak. Registered explicitly
-  # (orphan-suite class above). Its exit code decides whether the sweeper closes #8016 as an
-  # environmental non-recurrence (0) or leaves it open on the next occurrence (1); the
-  # load-bearing arms are FAIL-precedence over a liveness fault, SYSLOG_IDENTIFIER field
-  # isolation against webhook contamination, and withholding the free-text bwrap_err from the
-  # public issue comment. Mutation-proved at authoring (5/5 killed).
-  run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
   # #8651: exit-code harness for the web fresh-boot zot close probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
@@ -4735,6 +4894,13 @@ if want_scripts; then
   # shifts no existing suite's parity (scripts/test-all-affected.test.sh s1/s2
   # measured ran=0 when a mid-block insert flipped leg assignment).
   run_suite "scripts/supabase-watchdog-classify" bash scripts/supabase-watchdog-classify.test.sh
+  # (#9307) the dropped-consumer ratchet behind the always-on demotions: every registered suite
+  # that reads knowledge-base/ must be always-on or carry an edge covering the read. Registered
+  # explicitly for the reason its neighbours state (no `scripts/*.test.sh` glob; it was a
+  # never-run suite until the orphan census said so) and LAST in the block for the same
+  # ordinal-parity reason as the watchdog classifier above. Its cost is one `--print-selection`
+  # walk, so its edge set is declared (not always-on) in the declarations lib.
+  run_suite "scripts/test-affected-kb-consumers" bash scripts/test-affected-kb-consumers.test.sh
 fi
 
 # Named bun-test entries — bun shard.

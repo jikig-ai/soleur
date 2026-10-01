@@ -2790,12 +2790,18 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // sub-block, value on one line (a double-quoted scalar). TRUTH: the probe GETs the Sentry detectors API
   // with SENTRY_IAC_AUTH_TOKEN (Doppler soleur/prd). NO SUBSTITUTE: the detectors API has no
   // unauthenticated read, and "this detector is gone" is unverifiable from outside the org. Genuine.
-  // #6931 (2026-10-01): +1 (39 -> 40) for `2026-10-01-feat-web-host-fresh-boot-luks-path-plan.md`.
+  // #8016 (2026-10-01): +1 (39 -> 40) for `2026-10-01-fix-deploy-bwrap-probe-sigkill-canary-rollback-plan.md`
+  // (archived under plans/archive/). PLACEMENT: a correctly-indented child of its `discoverability_test:`
+  // sub-block, value on one line. TRUTH: the probe reads the DEPLOY_ROLLBACK / SANDBOX_PROBE_OK journald
+  // lines through `scripts/betterstack-query.sh` under `doppler run -c prd_terraform`
+  // (BETTERSTACK_QUERY_*). NO SUBSTITUTE: those lines exist only in production logs, so no
+  // unauthenticated read can verify the same property. Genuine.
+  // #6931 (2026-10-01): +1 (40 -> 41, after #8016 took 39 -> 40) for `2026-10-01-feat-web-host-fresh-boot-luks-path-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
   // (Doppler soleur/prd_terraform) and the marker config's token. NO SUBSTITUTE: web-2's probe and readiness rows land
   // only in the Logs warehouse, which has no unauthenticated read path, and the marker is a Doppler secret. Genuine.
-  const BASELINE_DECLARED_PROBES = 40;
+  const BASELINE_DECLARED_PROBES = 41;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
