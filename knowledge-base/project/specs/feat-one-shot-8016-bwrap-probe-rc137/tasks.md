@@ -34,3 +34,7 @@ Plan: knowledge-base/project/plans/2026-10-01-fix-deploy-bwrap-probe-sigkill-can
 - 5.4 python3 scripts/lint-guard-contract.py on the plan; bash plugins/soleur/test/c4-count-parity.test.sh
 - 5.5 Post-merge informational read: confirm script-sha parity for web-1 and web-2 and SANDBOX_PROBE_OK rows (apply is fail-closed across both hosts)
 - 5.6 PR body: Closes #8016, measurement tables, 0 of 5000 result, statement that this removes a flag
+
+## Status (work phase)
+
+Phases 1-5.4 done: RED->GREEN, ci-deploy.test.sh 499/499, audit-bwrap-uid.test.sh 10/10, Guard 2 mutation rows M1-M5 RED + control green, live loop 0/5000 on the extracted argv, control rc=1. 5.5 is post-merge; 5.6 (PR body) belongs to ship.

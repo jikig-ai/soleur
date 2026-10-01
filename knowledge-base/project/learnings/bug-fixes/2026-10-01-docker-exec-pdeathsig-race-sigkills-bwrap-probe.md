@@ -28,16 +28,18 @@ flag "a massive footgun" (containers/bubblewrap#692) and golang/go#9263 is the s
 
 ## Measurements (Docker 29.7 / runc, `--init`, bwrap 0.8, seccomp+AppArmor unconfined, SYS_ADMIN)
 
+Rows marked planning-time were measured during planning; the setpriv rows were not re-run at work time.
+
 | Arm | Result |
 |---|---|
 | Probe argv WITH `--die-with-parent`, 2500 execs (planning) | 75 nonzero, all rc=137 (3.0%) |
-| Same, 1500 execs (work-time re-run) | 10 nonzero (0.7%) - the rate moves with host load |
+| Same, work-time re-runs (1500, then 2500 execs) | 10 (0.7%), then 47 (1.9%), every one rc=137 - the rate moves with host load |
 | Argv WITHOUT the flag, 2500 + 5000 execs (planning) | 0 / 7500 |
-| Argv WITHOUT the flag, 1500 execs (work-time re-run) | 0 / 1500 |
+| Final probe argv EXTRACTED from `ci-deploy.sh`, work-time, 5000 execs | **0 / 5000** (plus 0 / 1500 earlier) |
 | `setpriv --pdeathsig SIGKILL true`, no bwrap, 2500 execs | 120 nonzero (4.8%) - mechanism is independent of bwrap |
 | Same, arming delayed 200 ms | 0 / 2500 - a timing race at process start |
 | `sh -c 'exec bwrap --die-with-parent ...'` wrapper | 17 / 2500 (0.7%) - narrows, does not close |
-| Gate still bites: same argv, no SYS_ADMIN, default seccomp | rc=1 "No permissions to create new namespace" |
+| Gate still bites: final argv, no SYS_ADMIN, default seccomp (re-confirmed at work time) | rc=1 "No permissions to create new namespace" |
 
 ## Fix
 

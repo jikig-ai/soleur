@@ -513,18 +513,18 @@ catch-all and unchanged), ADR-079 (no decision changes).
 
 ## Acceptance Criteria
 
-- [ ] The probe statement in `ci-deploy.sh` no longer contains `--die-with-parent`; it still contains
+- [x] The probe statement in `ci-deploy.sh` no longer contains `--die-with-parent`; it still contains
   `--new-session --dev /dev --unshare-pid --bind / / -- true` and the `|| BWRAP_RC=$?` capture form.
-- [ ] `ci-deploy.test.sh` records the probe's raw argv in both mock modes, asserts the three capability
+- [x] `ci-deploy.test.sh` records the probe's raw argv in both mock modes, asserts the three capability
   tokens and the absent flag, and (verified by mutation) fails when a token is removed or the flag re-added.
-- [ ] `audit-bwrap-uid.sh` no longer arms PDEATHSIG; its test asserts the recorded argv.
-- [ ] The Guard 1 function returns nothing on the real infra scripts and flags both inline fixtures
+- [x] `audit-bwrap-uid.sh` no longer arms PDEATHSIG; its test asserts the recorded argv.
+- [x] The Guard 1 function returns nothing on the real infra scripts and flags both inline fixtures
   (continuation-line flag; `setpriv --pdeathsig`); it does not match `soleur-bwrap` option names.
-- [ ] `DEPLOY_ROLLBACK` / `SANDBOX_PROBE_OK` line shapes and `final_write_state 1 "canary_sandbox_failed"`
+- [x] `DEPLOY_ROLLBACK` / `SANDBOX_PROBE_OK` line shapes and `final_write_state 1 "canary_sandbox_failed"`
   are byte-identical to main (the diff touches none of those lines).
-- [ ] Live Docker loop on the extracted final argv: 0 nonzero in 5000 execs; control without SYS_ADMIN returns rc=1.
-- [ ] Runbook, post-mortem pointer and learning file written; markdownlint clean.
-- [ ] `lint-guard-contract.py` passes on this plan; shellcheck clean; c4-count-parity green.
+- [x] Live Docker loop on the extracted final argv: 0 nonzero in 5000 execs; control without SYS_ADMIN returns rc=1.
+- [x] Runbook, post-mortem pointer and learning file written; markdownlint clean.
+- [x] `lint-guard-contract.py` passes on this plan; shellcheck adds no new warnings (2 info-level SC1003 notes in the awk quoting, same class as the 359 already in the file; ci-deploy.sh unchanged at 3). c4-count-parity could not run locally (python yaml module absent on this host; diff touches no .c4 file) - CI owns it.
 - [ ] PR body contains `Closes #8016`, the measurement tables, and states that the PR removes a flag
   (the opposite direction of the #4932 revert, which concerned ADDING SDK-divergent flags) while the
   faithful canary keeps owning SDK-argv fidelity.
