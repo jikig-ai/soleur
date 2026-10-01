@@ -540,6 +540,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
   "plugins/soleur/scripts/lib/operator-script.sh"
   "plugins/soleur/test/lib/operator-stub-world.sh"
   "tests/scripts/test-infra-privileged-tier-census.sh"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
   "plugins/soleur/test/operator-9321-stages.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
