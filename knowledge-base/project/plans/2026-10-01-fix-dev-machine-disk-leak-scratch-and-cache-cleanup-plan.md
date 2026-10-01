@@ -272,7 +272,7 @@ error_reporting:
   destination: "stderr SOLEUR_TMP_PURGE FATAL/WARN lines + ledger ~/.local/state/soleur/tmp-purge-ledger.log"
   fail_loud: "non-zero exit (1 usage/fail-closed, 2 lock contention); a refused attest glob exits 1 with the refusal reason"
 failure_modes:
-  - mode: "attest glob matches a live or registered worktree"
+  - mode: "attest glob matches a live or registered worktree (CUT — rung not built; superseded)"
     detection: "classifier refuses (.git-bearing); report lists it under worktree:* with reason; test arm asserts it is untouched"
     alert_route: "report line + ledger SKIP entry"
   - mode: "runner root not removed (SIGKILL / worker OOM)"
@@ -372,6 +372,8 @@ the WORKING copy today, so Phase 4 step 3 builds the merge-base comparison and t
 tasks, not as a work-time check.
 
 ### Guard 3 — `--attest` rung safety conjunction
+
+> **Superseded 2026-10-01 (CUT — see Scope Decision at the top):** the `--attest` rung was not built; the guard below describes the rejected design and is kept as history. Nothing in the shipped tree implements or tests it.
 
 **Property.** `soleur-tmp-purge.sh --apply --attest GLOB` moves an entry only if every conjunct holds:
 base is `/tmp` or `/var/tmp` on a disk-backed device, same uid, no `.git` file or directory, no live
@@ -500,6 +502,8 @@ failing arm, then the fix. Bounded output on every command (`| head`, `--name-on
 
 ### Phase 3 — Report, attest, ADR (P4, task e)
 
+> **Superseded 2026-10-01 (CUT — see Scope Decision at the top):** steps naming `tc_attested_class` and `--attest` (and Phase 3b) were not built; `--report`, `--base`, `--older-than-days`, the runbook and the ADR amendment shipped.
+
 1. `plugins/soleur/scripts/lib/tmp-classify.sh`: add `tc_attested_class <dir> <glob>...` rung, placed
    AFTER every existing rung (so a git worktree, a protected name, a marker and a schema root keep their
    stronger attribution) and BEFORE the final `unattributable`. Checks: realpath under a configured base
@@ -617,7 +621,7 @@ by other sessions). Real-host destructive pruning is out of scope (#8786).
 - [ ] The marker-contract fixture passes for every writer built (shell, TS, and Python if built).
 - [ ] `bash scripts/soleur-sandbox.sh new mut` prints a path under a disk-backed base whose size is below 320 MB (the measured 302 MB tracked tree plus margin; `knowledge-base/` excluded by default shrinks it further), contains no `.git`, carries a valid marker, and `rm` removes it; `rm` refuses an unmarked path, a non-`soleur-sbx.*` name, and a path outside a scratch base; `new` refuses (non-zero) when only a tmpfs base exists.
 - [ ] `bash scripts/soleur-tmp-purge.sh --report --base scripts/lib` prints `SOLEUR_TMP_PURGE_REPORT` and per-prefix-family bytes with the `.git`/non-`.git` split, and mutates nothing (asserted by a before/after tree hash).
-- [ ] `--attest` never moves a `.git`-bearing, live-handle, young, other-uid, symlink-escaping, over-broad-glob (`*`, `?*`, `*foo`, `t*d*`, `[a-z]*`), or tmpfs-base entry (each is a fixture row in Guard 3, run by `tests/scripts/test-tmp-purge.sh`).
+- [ ] (CUT — rung not built) `--attest` never moves a `.git`-bearing, live-handle, young, other-uid, symlink-escaping, over-broad-glob (`*`, `?*`, `*foo`, `t*d*`, `[a-z]*`), or tmpfs-base entry (each is a fixture row in Guard 3, run by `tests/scripts/test-tmp-purge.sh`).
 - [ ] Lint rules (d)/(e) pass on main's tree at the recorded highwaters (shell and TS/PY), fail on each Guard 2 fixture (run by the lint's own `.test.sh`); `--check-highwater` compares against the merge base; `ci.yml` job set unchanged.
 - [ ] `python3 scripts/lint-skill-body-budget.py --base origin/main` is green: `work/SKILL.md` net delta <= 0 bytes and `review/SKILL.md` <= +900 bytes; no ceiling in `plugins/soleur/test/skill-body-budget.json` is raised.
 - [ ] `incident-sandbox-coverage.test.sh` asserts scratch-session-before-incident-sandbox at every chokepoint; its count floor is not lowered.
@@ -636,7 +640,7 @@ by other sessions). Real-host destructive pruning is out of scope (#8786).
 1. Direct `bun test` of a TS suite with `TMPDIR` set to a fresh dir, SIGTERM mid-run: root removed.
 2. Same under `SOLEUR_SCRATCH_SESSION_ROOT` exported by `test-all.sh`: runner adopts, does not delete the parent's root.
 3. SIGKILL a runner: a marker-bearing `soleur-run.<pid>.*` remains; sweep/Reaper 3 classify it dead-owner.
-4. Attest fixture matrix: registered worktree `td-123`, 1-hour-old `vac456`, 10-day-old `vac789` (moves), glob `*` (refused), dir with live cwd (skipped), tmpfs base (reported only).
+4. (CUT — rung not built) Attest fixture matrix: registered worktree `td-123`, 1-hour-old `vac456`, 10-day-old `vac789` (moves), glob `*` (refused), dir with live cwd (skipped), tmpfs base (reported only).
 5. `--report` on a base with 70 `soleur-run.*` and a 2 GB `perf-1` fixture: `perf-*` appears as an unattributable family with bytes.
 6. Lint fixtures per Guard 2.
 
