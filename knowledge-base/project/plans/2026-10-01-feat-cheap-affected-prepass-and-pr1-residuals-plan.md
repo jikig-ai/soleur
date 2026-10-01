@@ -14,6 +14,27 @@ requires_cpo_signoff: false
 
 # feat: make the affected pre-pass cheap and close the PR 1 residuals (#9307)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Sections enhanced:** Delivery shape, Research Reconciliation, Value-proposition measurement, PR-A phases (0, A1-A4), Guard Contract (1, 2), Acceptance Criteria, Quality Gates, References
+**Agents used:** architecture-strategist, pattern-recognition-specialist, performance-oracle, test-design-reviewer, code-quality-analyst, spec-flow-analyzer, security-sentinel, framework-docs-researcher, git-history-analyzer (after the plan-review panel: DHH, Kieran, code-simplicity, CTO)
+
+### Key Improvements
+
+1. The byte-identity contract now accounts for the one registration PR-A adds (row-set comparison with a declared added-label list and summary arithmetic) instead of demanding a stream that cannot exist.
+2. The bench times the base side too (interleaved), so the headline factor no longer compares a load-44 baseline with load-12 head runs; bench hardening added (rev resolution, `mktemp -d`, `GIT_*` scrub, `env -u` on the child).
+3. A3 is stated honestly as a constant-factor gain (O(length) string test, 4-7x smaller constant) and now covers the two other linear scans profiling found (`_seen`, `_FE_FILES`), with the per-token `_affected_normpath` fork as an A4 candidate.
+4. The shadow-set reset is one new function defined inside the range the t11/m9 helper evals; the `eval`-fed site rebuilds the set. Guard 2 gained boundary, placement, prefix-collision and per-assignment-site rows.
+5. CI-visible proof of identity is stated plainly: the bench is operator-attested; CI keeps the derive suite and the ratchet; the reference sha256 goes in the ADR amendment for PR-B.
+
+### New Considerations Discovered
+
+- A cap trip can silently drop a real edge (fail-open selection). Failing safe changes selection, so it is a PR-B item.
+- `BASH_COMPAT` does not disable `patsub_replacement`; the shopt is the only switch (bash manual).
+- ubuntu-24.04 ships bash 5.2.21 (runner-images README), so CI has the option on; the suite asserts the version rather than assuming it.
+- Locale changes post-A3 timing 3-4x; the bench records it.
+
 ## Overview
 
 Spec lacks a valid `lane:` (no `spec.md` exists for this branch) — defaulted to `cross-domain` (fail-closed).
@@ -37,7 +58,7 @@ local gate to a full run and leaves CI as the only gate.
 
 | PR | Scope | Acceptance | State |
 |---|---|---|---|
-| PR-A (this branch, draft #9375) | Phase 0 (bench, derive suite), A1, A2, A3, profile-gated A4, ADR-242 decision 16 and corrected cost figures, the learning | selection byte-identical; factor reported | planned in full below; implemented by `soleur:work` |
+| PR-A (this branch, draft #9375) | Phase 0 (bench, derive suite), A1, A2, A3 (edge set, `_seen`, `_FE_FILES` index), profile-gated A4, ADR-242 decision 16 and corrected cost figures, the learning | selection byte-identical; factor reported | planned in full below; implemented by `soleur:work` |
 | PR-B (own branch off main after PR-A) | B1 recorder, B2 re-demote `scripts/domain-model-drift`, B3 audit Round 2, D2 ratchet breadth, D3 subcommand forms, D4 deleted declared subject | selection changes by design; each re-baselined | planned below at design level; re-filed on #9307 at ship time |
 | PR-C (own branch off main after PR-B) | A5 runner as a closure leaf, D1 `REPO_ROOT` idiom, Phase C heavy batteries | selection changes by design; A5 and D1 decided together | planned below at design level; re-filed on #9307 at ship time |
 | Post-merge | D5 regenerate the shard manifest from CI timing artifacts | none (data refresh) | tracked issue |
@@ -68,8 +89,8 @@ mechanisms, in order of size:
 
 | Claim (issue #9307, ADR-242 amendment, always-on audit) | Reality (measured 2026-10-01 at HEAD c2564f1f6d, scratch worktrees, nothing committed) | Plan response |
 |---|---|---|
-| The pre-pass cost is the closure following comment tokens (a suite whose comment names `test-all.sh` pulls that file in) plus an O(n) `_affected_in_list` scan | `scripts/domain-model-drift`'s closure is ONE file and ONE edge; it never reaches `test-all.sh`. All 63 s of its CPU is inside `_affected_edge_token` on 250 KB tokens produced by variable resolution. Comment-following is not the cause for any of the eight suites profiled | Reorder the levers: bound variable resolution first (A1, A2), then the membership scan (A3). "Stop following comment tokens" is cut (Cut List); its principled cousin, the runner as a closure leaf, is A5 in PR-C |
-| Eight of 533 registrations are 73% of the cost | Confirmed: after bounding resolution the same eight suites drop from 18-72 s of CPU each to under 1 s, except `resolve-regenerable-conflicts` (3 s) | The eight are the first beneficiaries; PR-A's acceptance reports them |
+| The pre-pass cost is the closure following comment tokens (a suite whose comment names `test-all.sh` pulls that file in) plus an O(n) `_affected_in_list` scan | `scripts/domain-model-drift`'s closure is ONE file and ONE edge; it never reaches `test-all.sh`. All 63 s of its CPU (82 s under load, the audit's figure: a real measurement whose attached cause was an inference) is inside `_affected_edge_token` on 250 KB tokens produced by variable resolution. Comment-following is not the cause for any of the eight suites profiled | Reorder the levers: bound variable resolution first (A1, A2), then the membership scan (A3). "Stop following comment tokens" is cut (Cut List); its principled cousin, the runner as a closure leaf, is A5 in PR-C |
+| Eight of 533 registrations are 73% of the cost (534 are runnable today) | Confirmed: after bounding resolution the same eight suites drop from 18-72 s of CPU each to under 1 s, except `resolve-regenerable-conflicts` (3 s) | The eight are the first beneficiaries; PR-A's acceptance reports them |
 | `REPO_ROOT=...` "loses its `/..` in `_affected_edge_token`" | True on bash 3.2 to 5.1. On bash 5.2 and later the value is corrupted one step earlier: `&&` in the captured value becomes `$REPO_ROOT$REPO_ROOT`. Selection therefore depends on the bash version today (CI and the operator host are bash 5.x with `patsub_replacement` on; stock macOS is 3.2) | A1 (PR-A) makes resolution literal on every bash; D1 (PR-C) fixes the `/..` loss and needs A1 first. The version dependence is recorded as a defect in the ADR amendment |
 | Dropped-consumer ratchet costs about 11 minutes | Confirmed: baseline 938.7 s wall, 649.9 s user+sys for `--print-selection --paths=README.md` | The ratchet inherits the PR-A result |
 | `scripts/suite-shard-legs.tsv` has a row for the ratchet to rebalance | The label `scripts/test-affected-kb-consumers` is in neither `suite-shard-legs.tsv` nor `suite-durations.tsv`; it falls back to default weight | D5 is a regeneration from fresh CI timing artifacts, which need post-PR-A runs: a post-merge follow-up, not a same-PR edit |
@@ -127,7 +148,7 @@ identical configurations varied by about 30% run to run.
 |---|---|---|---|---|
 | Baseline HEAD | 938.7 s | 649.9 s | 44.3 -> 32.3 | reference (stdout sha256 e17071ce...) |
 | A1 only (`shopt -u patsub_replacement`) | 201.0 s | 204.9 s | 4 -> 6 | IDENTICAL |
-| A2 only (self-reference break, 4096-byte cap) | 168.6 s | 169.7 s | 24.0 -> 15.8 | IDENTICAL |
+| A2 only, prototype (self-reference break plus absolute 4096-byte cap; the prescribed A2 is a growth cap, re-measured in PR-A) | 168.6 s | 169.7 s | 24.0 -> 15.8 | IDENTICAL |
 | A1 + A2, run 1 | 185.5 s | 188.8 s | 13.7 -> 14.8 | IDENTICAL |
 | A1 + A2, run 2 | 136.1 s | 139.0 s | 14.8 -> 15.0 | IDENTICAL |
 | A2 + A3 (set-membership strings) | 97.6 s | 98.7 s | 16.9 -> 11.9 | IDENTICAL |
@@ -136,14 +157,17 @@ identical configurations varied by about 30% run to run.
 | A1 + A2 + A3 + A5 (runner as a leaf; selection-CHANGING, PR-C) | 58.5 s | 61.9 s | 11.2 -> 12.8 | 18 rows differ, all edge-only removals (8,102 edges, about 450 each); class and selected bit unchanged |
 | A1 + A2 + A3 + D1 prototype (PR-C) | 217.5 s | 223.7 s | not recorded | 108 rows differ, +10,120 edges; README-only diff selects 146 instead of 122 |
 
-Reading. The identity-preserving series (A1 + A2 + A3) measures 4.6x to 5.9x on CPU, not 10x; A3 is worth about
-a third on top of A1 + A2 (the membership scan is real), and A1 alone is worth 3x and is the one change that also
+Reading. All A rows are prototypes of the levers, not of the exact prescribed code; PR-A re-measures the series with
+the committed code. The identity-preserving series (A1 + A2 + A3) measures 4.6x to 5.9x on CPU, not 10x; A3 is worth
+about a third on top of A1 + A2 (the membership scan is real; the string test is O(length) with a 4-7x smaller
+constant than the array loop, 0.36-1.4 ms per call against 2.6-6.6 ms for a 26 KB set depending on locale), and A1 alone is worth 3x and is the one change that also
 makes selection bash-version independent. The only measured path to 10x or better is A5, which changes
 selection. PR-A therefore does not claim an order of magnitude: it claims the measured factor, honestly, and
 PR-C is where the order of magnitude is bought, with its selection delta stated. Of the identity-preserving
 remainder, a profile at plan time attributes about 58% to per-file scanning (776 files x 78 ms) and about 40% to
 closure replay (a throwaway harness, not a published procedure; PR-A's profile step re-derives it before any A4
-lever is taken).
+lever is taken). Locale matters: the same code ran 3-4x slower in a UTF-8 locale than in `C`, so the bench records
+`LANG`/`LC_ALL` and times both sides under the same locale.
 
 ## Research Insights
 
@@ -197,95 +221,150 @@ same arrays by the same normalisation. A declared edge nothing consults is inert
 with a `--print-selection --paths=<one declared path>` row that must select the suite.
 
 External binaries of the new tool: `git` (worktree), `cmp`, `awk`, the bash `time` keyword and `/proc/loadavg`.
-The bench is a Linux operator-host and CI tool and says so in its header; it prints `n/a` for the load average
-where `/proc/loadavg` is absent rather than carrying a portability layer. No `timeout`, `readlink -f`, `stat -c`,
-`date -d` or `sed -i`. (The PR-B recorder also needs `inotifywait` and is Linux-only; its test replays a
-synthesized event stream so CI needs no inotify.)
+The bench is a Linux operator-host and CI tool and says so in its header; it prints `?` for the load average
+where `/proc/loadavg` is absent (precedent: `scripts/lib/test-contention.sh`) rather than carrying a portability
+layer. No `timeout`, `readlink -f`, `stat -c`, `date -d` or `sed -i`. (The PR-B recorder also needs
+`inotifywait` and is Linux-only; its test replays a synthesized event stream so CI needs no inotify.)
 
 ## Implementation Phases
 
-### PR-A — Phase 0: bench and derive suite (test-first)
+### PR-A — Phase 0: bench and derive suite
 
-Each lever commit contains its rows and its change. The RED state is verified locally before the change and
-recorded in the commit message; suites are registered only when their rows are green, so every commit is
-bisectable and the pre-push suites pass on each.
+Commit discipline (test-first without red commits): each row is written and seen red locally before its change
+and the red is recorded in the commit message; a commit contains a lever and the rows it flips, and the suite is
+registered in the first commit with only rows that pass at that point (extraction floor, bench rows, must-PASS
+rows), so every commit is bisectable and the pre-push suites pass on each. Rows that need A1, A2 or A3 arrive in
+those commits.
 
-- 0.1 `scripts/affected-prepass-bench.sh`: `--base <rev>` (default: merge-base of HEAD and `origin/main`),
-  `--head <rev>` (default: the working tree; after PR-A merges, the PR-A tip is the certified identity commit),
+- 0.1 `scripts/affected-prepass-bench.sh`: `--base <rev>` (default: merge-base of HEAD and `origin/main`;
+  after PR-A merges that equals HEAD and the run exits 3 with a message saying `--base` is required, and the
+  certified identity commit for PR-B is `9c5252e644`), `--head <rev>` (default: the working tree),
   `--probe <paths>` (two defaults: `README.md`, and a multi-path probe that selects edge suites,
   `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh,knowledge-base/legal/article-30-register.md`),
-  `--runs N` (timing repeats on the head side only, default 3), `--compare-only <a> <b>` (pure compare of two
-  saved streams, used by the suite). The reference stream is produced once per probe and compared with `cmp`
-  against the head stream; the compare also covers `--print-affected-set` (the class-only surface that takes the
-  print-mode early-out in the derive, which A3 touches). The report prints the median head CPU (user+sys), wall,
-  load average before and after, `BASH_VERSION` and `patsub_replacement` state, and one plain line
-  ("selection identical; head CPU N s against the recorded baseline M s"). Exit 0 identical, 1 differs
-  (`--report-diff` lists the differing rows), 2 usage, 3 base and head are the same tree.
+  `--runs N` (timing repeats, interleaved base/head/base/head so both sides see the same load; head default 5,
+  base default 2), `--base-runner <path>` / `--head-runner <path>` (run a given runner script instead of a
+  worktree's, used by the suite with fake runners), `--compare-only <a> <b>` (pure compare of two saved
+  streams), `--report-diff` (list differing rows, always print the first differing row), `--json` (one
+  machine-readable result line for the row on #9307). The reference stream is produced once per probe and
+  compared with `cmp`; the compare also covers `--print-affected-set` (the class-only stream, which takes the
+  print-mode early-out in classify, so it is a cheap surface check for A1-A3, not a derive surface).
+  Row-set contract: PR-A registers one new suite, so the head stream has one more `AFFECTED_SELECTED` row than
+  the base; the bench compares byte for byte every row whose label exists in the base stream, requires the extra
+  labels to equal the added-label list (default: the difference of the two `--enumerate-commands all` label
+  sets), and requires the head summary to equal the base summary adjusted by the added rows (`of=` plus the
+  added count; `selected=` and `always_on=`/`edge=` per the added rows' own class and bit). The report prints,
+  per side, min and median CPU (user and sys separately) and wall, load average before and after, locale,
+  `BASH_VERSION` and `patsub_replacement` state, and one plain line. Exit 0 identical, 1 differs, 2 usage,
+  3 base and head are the same tree.
   Anti-vacuity: both sides must exit 0; the stream must end in an `AFFECTED_SUMMARY` whose `of=` equals the
   count of `SUITE_COMMAND` rows from `--enumerate-commands all` (a double crash at the same row cannot read as
-  identical); the harness unsets `CI` and `SOLEUR_TEST_FORCE_ALL` for both runs (`_diff_touches` returns 0 under
-  either, which would make every selected bit 1).
-- 0.2 `scripts/test-affected-derive.test.sh`: extracts the block from the `_AC_CLASS=""` declaration through
-  `_affected_derive` from the runner by content anchor (never by line number), evals it in a bare shell, and
-  drives it with synthesized files. One suite, one `run_suite` registration, one declared edge array. Rows:
-  R1 a captured variable value containing `&&` and `&` resolves literally (bash 5.2 or later; see Guard 2);
-  R2 a self-referential value terminates with growth bounded and the head before the first quote preserved;
-  R3 a mutually referential pair terminates under the growth bound; R3b (must-PASS) a 5000-byte line with no
-  self-reference whose edge still resolves; R4 the membership set stays in sync through
-  `_affected_reset_edges`; R7 the bench compare: identical, one-byte difference, reordered edges inside a row,
-  same tree (rc 3), zero rows, one side crashing, summary `of=` mismatch, stderr-only difference (must pass).
+  identical); the child runs under `env -u CI -u SOLEUR_TEST_FORCE_ALL` (`_diff_touches` returns 0 under either,
+  which would make every selected bit 1; scoped to the child, not unset in the bench shell).
+  Hardening (operator-only tool over trusted revisions; the header says so): resolve revs with
+  `git rev-parse --verify --end-of-options "$rev^{commit}"`, create the worktree under `mktemp -d` and remove
+  only that exact path in a trap, scrub `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` before any git call
+  (lefthook exports them), and refuse a `--probe` containing whitespace other than commas.
+- 0.2 `scripts/test-affected-derive.test.sh`: extracts the block from the column-0 `_AC_CLASS=""` declaration
+  (the first occurrence; a second, indented one sits inside `_affected_classify`) through the closing brace of
+  `_affected_derive` by content anchor (never by line number), asserts `declare -F _affected_derive` after the
+  eval (a floor: a missed anchor must not pass vacuously), and drives it with synthesized files. One suite, one
+  `run_suite` registration, appended after the `scripts/test-affected-kb-consumers` line as the last registration
+  of the scripts block with that "LAST" comment updated (the registration ordinal shifts shard-leg parity;
+  commit `abd29f4bcf` reverted a mid-block insert for exactly this), and one declared edge array
+  `AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_PATHS` listing the suite, the bench, `scripts/test-all.sh` and
+  `scripts/lib/test-affected-paths.sh` (the census linter fails unless the array contains the lib). The suite
+  reads no `knowledge-base/` path, so the ratchet baseline is unaffected; missing manifest rows in
+  `suite-shard-legs.tsv` are tolerated (the ratchet has none either) and D5 regenerates them. Rows:
+  R1 a captured variable value containing `&&` and `&` resolves literally, run twice (cold and warm) with a value
+  that only works if the option was off before the first derive; R2 a self-referential value terminates with the
+  head before the first quote preserved and the token far under a fixed absolute bound; R3 a mutually
+  referential pair terminates under the same bound; R3b (must-PASS) a 5000-byte line with no self-reference
+  whose edge still resolves to the exact expected value; R3c boundary rows at growth exactly 4096 (resolves) and
+  4097 (stops); R4 the membership set agrees with the array at every assignment site (derive entry, classify
+  entry, `_affected_resolve_edges`, an external reset), with a prefix-collision fixture (`a/b` against
+  `a/bc`) and a newline-bearing name that must not mint; R5 no `&` appears in the replacement of a
+  pattern-substitution inside the extracted block (a census, so a future site is caught); R7 the bench: a fake
+  runner pair through the full dispatch path (pristine pair rc 0, a pair with one edge dropped rc 1, the same
+  path twice rc 3, a pair differing by one added suite label rc 0), then `--compare-only` rows (identical,
+  one-byte difference in the last of 534 rows, edges reordered inside a row, zero rows, one side crashing,
+  summary `of=` mismatch, stderr-only difference rc 0, the same stream under `CI=1` rc 0). The conditional
+  `&&` rows print a counted `SKIPPED rows=N (bash < 5.2)` line and exit 0 locally, and fail under `CI`.
 
 ### PR-A — Phase A: make the pre-pass cheap, selection byte-identical (one commit per lever)
 
-Each lever: flip or write the RED row, apply the change, run the bench, record the measured row in the commit
+Each lever: write the row and see it red, apply the change, run the bench, record the measured row in the commit
 message.
 
-- A1: `shopt -u patsub_replacement 2>/dev/null || true` as the first statement of the derive block (immediately
-  after the `_AC_CLASS=""` declaration), so the derive suite's extraction includes it and Guard 2 mutation 1
-  can bite; it takes effect before the first derive call, and no earlier code in the runner or its index uses
-  `&` in a replacement (checked). It is a no-op on bash before 5.2, so selection becomes the same on CI, the
-  operator host and stock macOS by construction (the bash 3.2 behaviour is by documentation; no 3.2 host is
-  available to run it). Repo precedent quotes the replacement instead (`ci-deploy.sh`); that form is not used
-  because quoting inside a double-quoted `${..//../"x"}` differs across old bash versions and a future site
-  would reintroduce the hazard. Measured alone: 938.7 s -> 201.0 s wall, selection identical.
-- A2: bound the growth in `_affected_resolve_vars`. Record the input length on entry; before each
-  substitution stop (leave the token as it is) when `${#_RV}` exceeds the input length plus 4096. The first
-  substitution therefore always happens ("substitute once, then stop growing"), the head of an exploded token
-  before its first quote is preserved, and a long line (pass 2 resolves a whole grep line, not a token) with no
-  growth resolves exactly as before. The cap is on growth, not on absolute length, because a legitimate line
-  over 4096 bytes must still resolve. The unresolvable-variable behaviour (the loop stops on a name not in the
-  map) is unchanged. Add a self-reference rule (stop on a value that names its own variable) only if a
-  measurement shows the cap alone leaves cost; the boundary check (`$name2` is not `$name`) would then be
-  needed, and the baseline has the same substring behaviour, so the bench must cover it.
-- A3a: O(1)-per-call membership for the edge set. Keep `_AC_EDGES` as the ordered store and add one shadow set
-  `_AC_ESET` (newline-joined, membership as `[[ "$_AC_ESET" == *"${_nl}${_p}${_nl}"* ]]` with the newline a
-  local `$'\n'` inside `_affected_add_edge`). There is ONE reset chokepoint, `_affected_reset_edges`, which
-  clears the array and the set together and is called from derive entry, classify entry and
-  `_affected_resolve_edges`. `_affected_add_edge` reads `${_AC_ESET-}` with a default, so the extracted block
-  the existing `_edge_run` helper in `scripts/test-all-affected.test.sh` evals (from `_affected_in_list`
-  through `_affected_add_edge`) works unchanged in a fresh subshell, and the `-d` normalisation line stays
-  verbatim (mutation m9 counts it once). A count-comparison backstop is not used: it cannot see an equal-length
-  reassignment. Measured: A2 alone 168.6 s -> A2 + A3 97.6 s.
-- A3b and A4 (profile-gated; take a lever only if the committed profile step attributes more than 10% of the
-  remaining CPU to it, and only while the bench stays IDENTICAL): (a) a newline-joined set for the closure
-  queue's `_seen` list and for the per-file buffer `_FE_BUF` (small, no measurement yet); (b) an index for the
-  `_FE_FILES` memo lookup, a linear scan over about 780 files per call; (c) an O(1) variable-name lookup in
-  `_affected_resolve_vars` (the linear scan over the file's variable list was the top cost inside a scanned
-  file); (d) cache the already-minted anchored form per file so a replay is a set test and an append with no
-  `-e`/`-d` stats. There is no numeric stop target: stop when the next lever is below 10% or fails the bench, and
-  report the factor reached.
+- A1: `shopt -u patsub_replacement 2>/dev/null || true` as the first statement of the derive block, at column
+  0 and exactly once (the Observability probe counts it), immediately after the column-0 `_AC_CLASS=""`
+  declaration, so the derive suite's extraction includes it and Guard 2 mutation 1 can bite; it takes effect
+  before the first derive call, and no earlier code in the runner or its index uses `&` in a replacement
+  (checked; R5 keeps it that way inside the block). It is a no-op on bash before 5.2, so selection becomes the
+  same on CI (bash 5.2.21 on ubuntu-24.04), the operator host (5.3) and stock macOS (3.2) by construction (the
+  3.2 behaviour is by documentation; no 3.2 host is available to run it). The shopt is the only switch:
+  `BASH_COMPAT` does not disable the option. Repo precedent quotes the replacement instead (`ci-deploy.sh`,
+  valid on 5.2 and later per the manual); that form is not used because quote handling inside a double-quoted
+  `${..//../"x"}` is unverified on old bash here and a future site would reintroduce the hazard. Measured
+  alone: 938.7 s -> 201.0 s wall, selection identical. New idiom for this repo; the ADR amendment records it.
+- A2: bound the growth in `_affected_resolve_vars`. Record the input length on entry; before each substitution
+  stop (leave the token as it is) when `${#_RV}` exceeds the input length plus 4096. The first substitution
+  therefore always happens, the head of an exploded token before its first quote is preserved, and a long line
+  (pass 2 resolves a whole grep line, not a token) with no growth resolves exactly as before. The cap is on
+  growth, not absolute length, because a legitimate line over 4096 bytes must still resolve. A single global
+  substitution can overshoot the cap by occurrences times value length, so the property is "stops substituting
+  once growth exceeds 4096", and the tests assert an absolute bound far below the 250 KB tokens, not 4096
+  exactly. The unresolvable-variable behaviour (the loop stops on a name not in the map) is unchanged. Add a
+  self-reference rule only if a measurement shows the cap alone leaves cost (then with a word-boundary check;
+  the baseline's `${_RV//\$name/...}` also hits the prefix of `$name2`, and the bench covers that). Known
+  limit, stated: a cap trip leaves a `$VAR` in the token, which then dies at the `-e` filter, so a real
+  dependency behind a pathological value is not minted; the baseline has the same flaw with its 12-iteration
+  cap. Failing safe on a trip (classify as `unclassified`) would change selection for the suites that explode
+  today, so it is a PR-B item, not PR-A.
+- A3a: membership for the edge set. Keep `_AC_EDGES` as the ordered store and add one shadow set `_AC_ESET`
+  (newline-joined; membership as `[[ "$_AC_ESET" == *"${_nl}${_p}${_nl}"* ]]` with the newline a local `$'\n'`
+  inside `_affected_add_edge`, matching the repo's inline-`$'\n'` idiom). This is O(length) with a 4-7x smaller
+  constant than the array loop, not O(1). `_affected_reset_edges` is a NEW function, defined inside the range
+  the `_edge_run` helper in `scripts/test-all-affected.test.sh` evals (from `_affected_in_list` through
+  `_affected_add_edge`), and replaces the three inline resets of `_AC_EDGES` (derive entry, classify entry, the
+  `eval` copy in `_affected_resolve_edges`); the `eval` site additionally rebuilds `_AC_ESET` from the loaded
+  members, because it fills the array without going through `_affected_add_edge`. `_affected_add_edge` reads
+  `${_AC_ESET-}` with a default, so `_edge_run` works unchanged in a fresh subshell, and the `-d` normalisation
+  line stays verbatim (mutation m9 counts it once). `_affected_add_edge` skips a token containing a newline (it
+  cannot arise from `read` lines, and a newline would forge two set entries), and `_affected_resolve_edges` returns
+  early unless its argument is a valid identifier (`^[A-Za-z_][A-Za-z0-9_]*$`) before the `eval`. A
+  count-comparison backstop is not used: it cannot see an equal-length reassignment. Measured: A2 alone 168.6 s ->
+  A2 + A3 97.6 s.
+- A3b: the two other linear scans the profile found, taken with A3a through one shared string-set idiom (their
+  estimated share, about 25 s of the remaining 100 s, is above the 10% gate): the closure queue's `_seen` list
+  (a per-call copy of up to about 780 words) and the `_FE_FILES` memo lookup in `_affected_file_edges`; plus the
+  per-file buffer `_FE_BUF`. Each is taken only while the bench stays IDENTICAL.
+- A4 (profile-gated; take a lever only if the committed profile step attributes more than 10% of the remaining
+  CPU to it, and only while the bench stays IDENTICAL): (a) an O(1)-ish variable-name lookup in
+  `_affected_resolve_vars` (a linear scan over the file's variable list, 0.6 ms per token at 60 variables, the
+  top cost inside a scanned file); (b) cache the already-minted anchored form per file so a replay is a set test
+  and an append with no `-e`/`-d` stats; (c) replace the subshell, `printf` and `sed` that `_affected_normpath`
+  forks per `../` token (4.1 ms against 0.4 ms for the rest of `_affected_edge_token`; the "rare" comment is
+  wrong for `$SCRIPT_DIR/../lib/x`) with pure-bash segment stripping, which the bench proves identical. There is no
+  numeric stop target: stop when the next lever is below 10% or fails the bench, and report the factor reached.
+  The profile output goes in the PR body, not a committed file.
 - ADR-242 amendment (`## Amendment — 2026-10-01`, short): decision 16, the derive is bounded and bash-version
   independent (`patsub_replacement` off, growth-bounded resolution, the selection-identity bench as the
-  acceptance contract for any pre-pass change), and corrected figures in decision 15 (the cost attribution is
-  variable resolution and replay, not comment tokens; the pre-pass measures about 5x cheaper). A one-paragraph
-  correction to the "What the demotion costs" paragraph of
+  acceptance contract for any pre-pass change), the baseline and reference sha256 (e17071ce...) and the baseline
+  CPU, and corrected figures in decision 15 (the cost attribution is variable resolution and replay, not comment
+  tokens; the pre-pass measures about 5x cheaper). Later decisions are numbered in landing order: PR-B is
+  decision 17, PR-C decision 18. A one-paragraph correction to the "What the demotion costs" paragraph of
   `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`.
 - The learning (topic: bash 5.2 `patsub_replacement` multiplying the affected pre-pass while the issue blamed
   comment tokens; selection that depends on the bash version; "profile before choosing the lever").
 
-PR-A acceptance: `bash scripts/affected-prepass-bench.sh` exits 0 on both probes; the median CPU factor, the
-load averages and the bash version are quoted in plain terms in the PR body ("an affected run waited about 11
+PR-A acceptance: `bash scripts/affected-prepass-bench.sh --base <merge-base>` exits 0 on both probes and the
+class-only stream; the min and median CPU factor against the base side timed in the same run, the load averages,
+the locale and the bash version are quoted in plain terms in the PR body ("an affected run waited about 11
 minutes on selection and now waits about N").
+Identity is operator-attested by the bench (about 35 CPU-minutes for the interleaved timing; run it once at the
+end, not per commit; per commit run it with `--runs 1`). CI keeps the derive suite and the dropped-consumer
+ratchet's full walk as its regression coverage; the plan does not claim CI proves identity against the
+merge-base.
 
 ### PR-B (follow-on; design level) — re-price the demotions, ratchet breadth, minting fixes
 
@@ -298,8 +377,10 @@ minutes on selection and now waits about N").
   static probe scan of the suite and every script it executes for file tests (`-e -f -d -s -r -x -L -h`),
   `stat`, `ls`, `find` against repo-relative or root-variable paths, because open events never see a probe of a
   missing file. A probed path outside the proposed cover disqualifies. Test `scripts/audit-suite-reads.test.sh`
-  replays synthesized event streams. Built only because B2 and Phase C need its verdicts; if neither lands, it
-  is not built.
+  replays synthesized event streams. Hardening: run suites under `env -i` with a scratch `HOME` and no credential tokens; a path in an event
+  containing a newline is fatal (a suite-created file could forge event lines); refuse symlinked cover entries
+  (`-r` does not follow symlinks) and statically flag reads under `.git`, which the exclusion hides. Built only
+  because B2 and Phase C need its verdicts; if neither lands, it is not built.
 - B2: re-demote `scripts/domain-model-drift` (remove from `ALWAYS_ON_SUITES`, declare
   `plugins/soleur/scripts/domain-model-drift.sh`, `plugins/soleur/scripts/lib/domain-model-lib.sh` and
   `scripts/domain-model-drift.test.sh`); its derive cost is 0.3 s after PR-A (it was 82 s). Re-run the recorder
@@ -383,13 +464,46 @@ minutes on selection and now waits about N").
   not touch it. The diff touches no path in the preflight sensitive-path regex (`scripts/`, `knowledge-base/`
   only).
 
+## Observability
+
+Scope note: the deliverable is a repo-root developer tool and test-runner internals (`scripts/`), not a server,
+cron or customer-facing surface; the five-field block is declared anyway so the gate has something checkable.
+
+```yaml
+liveness_signal:
+  what: every affected-mode run prints one `AFFECTED_SUMMARY selected=N of=M ...` line on stdout and, in a degraded run, `fallback=<reason>`; the bench prints one plain line with head CPU against the recorded baseline
+  cadence: per local affected run and per CI battery run
+  alert_target: the developer's terminal and the CI log of the required `test` check
+  configured_in: scripts/test-all.sh (summary line, PR 1) and scripts/affected-prepass-bench.sh (PR-A)
+error_reporting:
+  destination: non-zero exit of the bench (1 differs, 2 usage, 3 same tree) and a red `scripts/test-affected-derive.test.sh` row in CI
+  fail_loud: true
+failure_modes:
+  - mode: a lever changes a selection row
+    detection: scripts/affected-prepass-bench.sh exits 1 with --report-diff rows; CI runs the derive suite
+    alert_route: red required `test` check
+  - mode: resolution grows a token without bound again (bash 5.2 patsub_replacement regression)
+    detection: derive suite rows R1-R3 and the eight-suite derive timing in the PR report
+    alert_route: red required `test` check
+  - mode: the bench compares a vacuous pair (same tree, crashed side, empty stream)
+    detection: rc 3 / rc 1 anti-vacuity arms of Guard 1
+    alert_route: red required `test` check
+logs:
+  where: stdout and stderr of the run; the CI job log retains them
+  retention: GitHub Actions log retention for the repository
+discoverability_test:
+  command: grep -c -e '^shopt -u patsub_replacement' scripts/test-all.sh
+  expected_output: 1
+```
+
 ## Guard Contract
 
 ### Guard 1 — selection-identity oracle (`scripts/affected-prepass-bench.sh`, PR-A)
 
 **Property.** For the same registration set and the same named paths, the optimized pre-pass emits stdout
-byte-identical to the reference revision's, row for row (class, selected bit, edge list in order, summary), and
-the same `--print-affected-set` stream.
+byte-identical to the reference revision's, row for row (class, selected bit, edge list in order) for every
+registration the reference has, with the summary equal to the reference's adjusted only by the declared added
+registrations (PR-A adds one suite), and the same `--print-affected-set` stream.
 
 **Assembly.** The population is every `SUITE_COMMAND` row of `test-all.sh --enumerate-commands all` (534 at HEAD,
 derived by the run, never listed), reached through ONE chokepoint: the pair of `--print-selection --paths=<probe>`
@@ -397,7 +511,9 @@ invocations the harness makes per probe (README.md, and a multi-path probe that 
 `--print-affected-set` pair. The reference is a detached worktree of the merge-base with `origin/main`, so no
 single diff can edit both the candidate and the reference; that merge-base is the anchor. A tree where base
 equals head (rc 3), a side that exits non-zero, a stream with no `AFFECTED_SUMMARY`, or a summary whose `of=`
-differs from the enumerated count is refused, never reported identical. Order is part of the contract.
+differs from the enumerated count is refused, never reported identical; a head row whose label is not in the
+base stream and not in the declared added-label list is a difference. Order is part of the contract. Under `CI`
+the bench would see every selected bit as 1, so it scrubs `CI` and `SOLEUR_TEST_FORCE_ALL` for the child only.
 
 **Mutation matrix:**
 
@@ -407,33 +523,38 @@ differs from the enumerated count is refused, never reported identical. Order is
 | 2 | Two edges swapped inside one row | RED (order is part of the contract) |
 | 3 | The harness is pointed at the same tree for base and head (its own dispatch), or the stream is empty, or one side crashes at the same row on both sides | RED (rc 3 / rc 1; never "0 differences") |
 | 4 | Summary `of=` differs from the enumerated registration count | RED |
-| 5 | Must-PASS: the head stream carries extra stderr lines only | PASS (the contract compares stdout only; a bench that rejects everything cannot pass it) |
+| 5 | Must-PASS: the head stream carries extra stderr lines only, and separately one added suite label that is on the declared list | PASS (the contract compares stdout only and allows declared additions; a bench that rejects everything cannot pass it) |
+| 6 | A head row for a label not on the declared added-label list (an undeclared extra registration) | RED |
+| 7 | Dispatch path through fake runners: a pristine pair rc 0, a pair with one edge dropped rc 1 (the bench is exercised end to end, not only `--compare-only`) | rc 0 / RED |
 
 ### Guard 2 — bounded resolution and membership drift (`scripts/test-affected-derive.test.sh`, PR-A)
 
-**Property.** Variable resolution never re-inserts matched text and never grows a token by more than 4096
-bytes beyond its input on any bash; a long input with no growth resolves exactly as before; the membership set
-never disagrees with the ordered edge array.
+**Property.** Variable resolution never re-inserts matched text and stops substituting once a token has grown
+more than 4096 bytes beyond its input, on any bash (one global substitution may overshoot by occurrences times
+value length, so the tests assert a fixed absolute bound far below the 250 KB tokens); a long input with no
+growth resolves exactly as before; the membership set never disagrees with the ordered edge array.
 
 **Assembly.** The single function `_affected_resolve_vars` (both of its call sites, the pass-2 whole-line loop
 and the pass-3 token loop in `_affected_file_edges_uncached`, flow through it); the entry of
 `_affected_edge_token`; every assignment site of `_AC_EDGES` (derive entry, classify entry,
-`_affected_resolve_edges`, all going through `_affected_reset_edges`) and the append site
-`_affected_add_edge`. The `shopt` line is the first statement of the extracted block, so the suite evals it.
+`_affected_resolve_edges`, all going through the new `_affected_reset_edges`, which sits inside the range the
+t11/m9 helper evals) and the append site `_affected_add_edge`. The `shopt` line is the first statement of the
+extracted block, so the suite evals it; the extraction is guarded by `declare -F _affected_derive`.
 
 A conditional row can go dark: the `&&` fixture is only meaningful on bash 5.2 or later. On older bash it prints
-a loud `SKIP (bash < 5.2: patsub_replacement absent)`; under `CI` the row fails (rc 1) if the host bash lacks the
-option, so the CI side asserts the row RAN.
+a counted `SKIPPED rows=N (bash < 5.2)` line and exits 0; under `CI` the row fails (rc 1) with a message naming
+`BASH_VERSION` if the host bash lacks the option, so the CI side asserts the row RAN and a runner-image change
+turns CI red readably rather than silently skipping.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the `shopt -u patsub_replacement` line from the block | RED on the `&&` fixture (bash 5.2 or later) |
+| 1 | Delete the `shopt -u patsub_replacement` line from the block, or move it after the first derive call or into a subshell | RED on the cold-and-warm `&&` fixture (bash 5.2 or later) |
 | 2 | Delete the growth cap in `_affected_resolve_vars` | RED on the self-referential and the mutually referential fixtures (token grows beyond input + 4096) |
-| 3 | Apply the cap to absolute length instead of growth | RED on the 5000-byte no-growth must-PASS fixture (its edge no longer resolves) |
-| 4 | `_affected_add_edge` appends without updating `_AC_ESET` (set not kept with the array), and a second fixture resets the array without `_affected_reset_edges` | RED (a later member is skipped) |
-| 5 | Dispatch: the extraction anchor matches nothing, so zero functions are driven | RED (floor on functions extracted) |
+| 3 | Apply the cap to absolute length instead of growth, skip substitution when the input is already long, or move the boundary by one (4097 against 4096) | RED on the 5000-byte no-growth must-PASS fixture (it must resolve to its exact value) and on the 4096/4097 boundary rows |
+| 4 | `_affected_add_edge` appends without updating `_AC_ESET`; or one assignment site (derive entry, classify entry, the `eval` copy, an external reset) is left as a raw `_AC_EDGES=()`; or the set test is a bare substring | RED (a later member is skipped; the `a/b` against `a/bc` prefix-collision fixture reddens the substring form) |
+| 5 | Dispatch: the extraction anchor matches nothing, so zero functions are driven | RED (`declare -F _affected_derive` floor, and rows counted) |
 | 6 | Must-PASS: a value containing `&`, `\`, `$(`, a space and a trailing quote that is NOT self-referential | PASS and resolves literally |
 
 ### Guard 3 — ratchet breadth (`scripts/test-affected-kb-consumers.test.sh`, D2, PR-B)
