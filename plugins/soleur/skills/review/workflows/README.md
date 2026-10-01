@@ -86,6 +86,7 @@ resume an interrupted run, add `resumeFromRunId: "<runId>"` — unchanged
 |---|---|---|
 | Class → fan-out decision | Model interprets a bash decision tree each run | Deterministic JS lookup (`CLASS_DIMENSIONS` + `conditionalDimensions`) |
 | Conditional agents | Prose "if PR contains X, spawn agent Y" | `triggers` flags → deterministic dimension list |
+| Risk-tier panel scaling | SKILL delegates to `references/risk-tier-and-fix-rounds.md` | `resolveTier` (fail-closed sensitive-path clamp) + `scaleAlwaysOn` trigger-gate {data-integrity, agent-native, performance} at `none` tier (ADR-265) |
 | Per-finding verification | None — CONCUR fires only on scope-out *filings* | Every finding adversarially refuted (1–3 skeptics) before surfacing |
 | Review→verify scheduling | Implicit barrier (waits for all reviewers) | No-barrier `pipeline()` — verify starts per-dimension |
 | Disposition (fix vs file) | Prose cost-of-filing gate, model-applied | `disposition()` — code, auditable, identical every run |
