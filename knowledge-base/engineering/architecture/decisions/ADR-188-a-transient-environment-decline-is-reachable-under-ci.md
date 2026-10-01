@@ -492,6 +492,15 @@ as the environment decline, because 100 is in every consumer's allowlist.
   same cycle succeeded in about 15 s on a fresh attempt. With the shared budget alone, one stalled first
   attempt spent a third of it.
 
+**Budgets and known limits.** Rehearsal 420 s, ownership 180 s: healthy apt cost measured on a slow box is ~32 s per
+container (386 s for the rehearsal's 12, 32-55 s for ownership), CI's healthy rehearsal step is ~100 s, and a total
+stall ends near 430-440 s against the 600 s bound. A stall that recovers on its retry uses most of the headroom on
+the slow box, which is why the `GD_APT: spent=` line is printed at the end of each suite. Accepted limits, recorded in
+`lib/apt-bounded.sh`: `timeout -k` signals the process group with TERM but tracks only its direct child, so a
+TERM-ignoring apt is not reaped; a cap kill mid-dpkg can leave "dpkg was interrupted" for the retry (no
+`dpkg --configure -a` repair, because the unit suite runs the helper on the host); an OOM kill at or after the cap is
+indistinguishable from a timeout kill by rc.
+
 **What this amendment does not do.** It creates no new skip path. T5 primary, T17 healthy and the R4
 driver stay hard, and the ownership runtime arm stays fail-closed under `CI=true` (#8744: "do not let an
 apt failure turn into a skip"). The honest consequence: during a SUSTAINED archive outage those legs are

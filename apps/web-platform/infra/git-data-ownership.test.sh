@@ -28,8 +28,10 @@ BOOTSTRAP="${DIR}/git-data-bootstrap.sh"
 # Pinned base image — the same digest git-data-runcmd-rehearsal.test.sh spins (#7544).
 UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
 # Bounded apt (#9379): one budget of apt seconds on the runtime arm's in-container apt cycle, armed at
-# its docker site. 180 s is ~3x the slowest measured healthy cost and well inside the 300 s suite bound. Expiry exits 100 with a FIXTURE_APT_CAUSE line; the arm's routing is UNCHANGED and stays
-# fail-closed under CI=true (#8744: do not let an apt failure turn into a skip). Contract: lib/apt-bounded.sh.
+# its docker site. 180 s is ~1.7x the slowest healthy apt cost measured on a slow box (32-104 s for the whole
+# suite, ~55 s of it apt) and well inside the 300 s suite bound. Expiry exits 100 with a FIXTURE_APT_CAUSE
+# line; the arm's routing is UNCHANGED and stays fail-closed under CI=true (#8744: do not let an apt failure
+# turn into a skip). Contract: lib/apt-bounded.sh.
 APT_LIB="${DIR}/lib/apt-bounded.sh"
 APT_BUDGET_S=180
 [ -r "$APT_LIB" ] || { echo "FAIL: ${APT_LIB} is missing — the runtime arm's apt cycle could not be bounded" >&2; exit 1; }
@@ -331,7 +333,7 @@ sshd_auth ssh_auth_control_0600
 echo "DRIVER_DONE"
 DRV
   : > "$TMP/out/rows"
-  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
+  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
   docker run --rm \
     -v "$GD_APT_STATE:/work/apt" \
     -e OG_HOME="$_og_home" -e M_HOME="$_m_home" -e OG_SSH="$_og_ssh" -e M_SSH="$_m_ssh" \

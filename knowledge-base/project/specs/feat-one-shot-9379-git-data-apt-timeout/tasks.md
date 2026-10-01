@@ -9,19 +9,19 @@ Plan: knowledge-base/project/plans/2026-10-01-fix-git-data-suites-bound-apt-wall
 
 ## Phase 1 — RED: host unit suite
 - [x] 1.1 Create `apps/web-platform/infra/apt-bounded.test.sh` with stub `apt-get` modes (ok, fail, hang with child, slow, fail-then-ok, oom)
-- [x] 1.2 Rows: healthy, hang bounded + no orphan + marker last, pre-expired deadline invokes no apt, retry kept, slow passes, oom keeps rc, credential scrub, unset deadline is loud
-- [x] 1.3 One derived assembly row: lib-mounting docker sites == `GD_APT_DEADLINE`-passing sites; no raw apt-get in command position
+- [x] 1.2 Rows (as built, 19): healthy, hang bounded + no orphan + marker last, budget already spent / spent == budget invoke no apt, retry kept, slow passes, oom keeps rc, credential scrub (every shape + retention), unarmed and half-armed are loud (98), shared budget, non-apt time uncharged, per-attempt cap and its validation, leading-zero budget, install stage named, backoff charged, host arm/summary executed
+- [x] 1.3 One derived assembly row (as built): per docker site the exact state mount token, the arm directly before it, the source line, a pass-through rc and a checked arm; one declared unmounted site (R1); no raw apt/dpkg/pip in command position
 - [x] 1.4 Floor emitted by `printf` + `exit 1` (ADR-193); observe every row RED against the missing helper
 
 ## Phase 2 — GREEN: helper
-- [x] 2.1 Create `apps/web-platform/infra/lib/apt-bounded.sh` (`gd_apt_deadline_arm`, `gd_apt_install_bounded`: one `timeout -k 5` per attempt, dpkg repair after a kill, scrub, cause line, marker; return not exit, explicit rc capture)
+- [x] 2.1 Create `apps/web-platform/infra/lib/apt-bounded.sh` (as built: `gd_apt_state_arm`, `gd_apt_state_summary`, `gd_apt_install_bounded`: one `timeout -k 5` per attempt capped at 90 s, shared apt-seconds budget in a mounted state dir, scrub, cause line, marker; return not exit, explicit rc capture). No dpkg repair after a kill: the unit suite runs this on the host; recorded as a known limit in the lib header and the ADR-188 amendment
 - [x] 2.2 Drive the seven Guard Contract mutations RED and record each in the PR body
 
 ## Phase 3 — Wire the two suites
-- [x] 3.1 Ownership: two-statement helper call (`|| exit 97` on source), mount, `-e GD_APT_DEADLINE`, existence guard, arm 150; leave `_runtime_skip` and the FIXTURE_APT_FAILED branch untouched (fail-closed, #8744)
+- [x] 3.1 Ownership: two-statement helper call (`|| exit 97` on source), state mount, arm (180 s, return checked); leave `_runtime_skip` and the FIXTURE_APT_FAILED branch untouched (fail-closed, #8744)
 - [x] 3.2 Rehearsal `run_case`, T5 mutation, T17 mutation `bash -c` blocks (`|| exit $?`)
 - [x] 3.3 Rehearsal S1 `sshd-drive.sh` and R4 `r4-drive.sh` (keep INJECT lines and FIXTURE-FAIL messages), `_s1_run` and R4 docker sites, mount-source guards for every site
-- [x] 3.4 Rehearsal: arm 300 at the first docker site; run the suite after each site
+- [x] 3.4 Rehearsal: arm 420 s (return checked) before each apt-bearing docker site; run the suite after each site
 
 ## Phase 4 — Real-docker stall reproduction
 - [x] 4.1 Throwaway docker shim inserting an unroutable `http_proxy` after `run`; `GD_APT_SUITE_BUDGET` for a quick pass

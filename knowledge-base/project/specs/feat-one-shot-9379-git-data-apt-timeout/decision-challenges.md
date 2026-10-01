@@ -13,12 +13,12 @@ The operator's stated direction is the default in every entry.
 - **Default taken:** keep those three hard. They fail fast with a named cause instead of being killed at
   600 s. Skip-eligible arms skip on expiry through the existing `arm_skip`.
 - **Consequence (measured on this branch, real docker):** under a sustained or repeated apt stall the
-  rehearsal leg is still red, but bounded (about 310 s against a 600 s bound, never `rc=124`) and
+  rehearsal leg is still red, but bounded (429 s against a 600 s bound in the stall reproduction, never `rc=124`) and
   attributable (`FIXTURE_APT_CAUSE`, `GD_APT: spent=`). When enough S1 arms starve, the existing S1 skip
   ceiling also fires; that is the designed signal for a total outage and was left untouched.
 - **Alternative:** amend ADR-188 to make T17 healthy and R4 eligible (and, separately, decide T5 primary).
   Cost: a green run that never exercised the supply-chain guard.
-- **Where it is tracked:** deferral issue filed at work time (Deferrals (a)).
+- **Where it is tracked:** #9394 (skip-eligibility decision); sibling suites in #9395.
 
 ## 2. User-Challenge (applied as the default) — ownership stays fail-closed
 
@@ -46,11 +46,11 @@ caps one attempt at 90 s. Recorded in the ADR-188 amendment. Not an operator-fac
 
 ## 5. Taste — `gd_docker_run` wrapper and a concrete image-revisit trigger (CTO)
 
-- **Default:** per-site wiring with a derived assembly row; revisit trigger recorded in Deferral (a).
+- **Default:** per-site wiring with a derived assembly row; revisit trigger recorded in #9394.
 - **Alternative:** a wrapper injecting the mount at every docker site; deferred because the rehearsal's
   meta-guards read its own `docker run` text.
 
 ## 6. Mechanical (applied) — cutover-access removed from scope
 
 Already host-bounded (`timeout -k 10 480 docker run` + `docker rm -f`) and not in the red set; recorded in
-Deferral (b). Not operator-requested scope.
+#9395. Not operator-requested scope.

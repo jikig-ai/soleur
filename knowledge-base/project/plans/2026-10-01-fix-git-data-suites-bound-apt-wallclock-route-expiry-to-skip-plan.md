@@ -14,6 +14,14 @@ brand_survival_threshold: none
 
 # fix(ci): bound the in-container apt wall-clock in the git-data suites and route expiry to the declared skip
 
+> **Superseded in part (work phase, 2026-10-01).** The design below specifies ONE absolute wall-clock deadline
+> (`GD_APT_DEADLINE`, arms of 300 s and 150 s) and a `dpkg --configure -a` repair. Real-docker runs falsified both:
+> non-apt container time spent the deadline and starved later healthy arms, about one apt cycle in three stalled
+> despite apt's own timeouts, and the repair would run a mutating command on the host in the unit suite. As built: a
+> shared budget of APT SECONDS in a mounted state dir (rehearsal 420 s, ownership 180 s), a 90 s per-attempt cap with
+> retry, no dpkg repair. See `ADR-188` (amendment 2026-10-01) and `specs/feat-one-shot-9379-git-data-apt-timeout/
+> decision-challenges.md` item 3. The rest of this plan is kept as the historical record.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-01. **Method:** targeted verification rather than a blanket fan-out. Four reviewers

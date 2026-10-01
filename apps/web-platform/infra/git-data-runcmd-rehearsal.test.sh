@@ -24,9 +24,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # (12: 2 run_case, T5/T17 mutation, 7 _s1_run, R4), armed at the first docker site. Only time spent
 # inside the apt cycle is charged, so the T5 tarball downloads and sshd work never spend it. The
 # rationale, the return-code contract and the marker live in lib/apt-bounded.sh; the terminal
-# `GD_APT: spent=` line records how much of it a run used. 420 s: measured healthy cost on a slow box is
-# ~27 s per container (~320 s for the 12), CI's healthy whole step is ~100 s, and non-apt time is ~15 s,
-# so a total stall ends near 450 s, below the 600 s suite bound with the margin the plan requires.
+# `GD_APT: spent=` line records how much of it a run used. 420 s: measured healthy apt cost on a slow box
+# is ~32 s per container (386 s for the 12, so a stall that recovers on its retry uses most of the headroom
+# there), CI's healthy whole step is ~100 s, and non-apt time is ~15 s, so a total stall ends near 430-440 s,
+# below the 600 s suite bound with the margin the plan requires. This 12-container count is of apt-bearing
+# invocations; the docker-site census near the S1 arm counts SOURCE sites and invocations of all docker runs.
 APT_LIB="${DIR}/lib/apt-bounded.sh"
 APT_BUDGET_S=420
 [ -r "$APT_LIB" ] || { echo "FIXTURE-FAIL: ${APT_LIB} is missing — no apt-bearing container could be bounded" >&2; exit 2; }
@@ -1061,7 +1063,7 @@ run_case() {
   rm -rf "$TMP/out"; mkdir -p "$TMP/out"; : > "$TMP/out/capture.log"
   cp "$TMP/doppler-dl.sh" "$TMP/dl.case.sh"
   [ -n "$mut" ] && sed -i "$mut" "$TMP/dl.case.sh"
-  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
+  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
   docker run --rm \
     -v "$GD_APT_STATE:/work/apt" \
     -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
@@ -1352,7 +1354,7 @@ else
       echo "FAIL: T5 mutation mount source is missing: ${_m} — docker would exit 125 and the verdict would misread a harness defect as an environment decline" >&2
       exit 1; }
   done
-  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
+  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
   docker run --rm \
     -v "$GD_APT_STATE:/work/apt" \
     -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
@@ -1567,7 +1569,7 @@ for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.n
     echo "FAIL: T17 mutation mount source is missing: ${_m} — docker would exit 125 and the verdict would misread a harness defect as an environment decline" >&2
     exit 1; }
 done
-gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
+gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
 docker run --rm \
   -v "$GD_APT_STATE:/work/apt" \
   -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
@@ -1872,7 +1874,7 @@ S1DRV
     for _m in "$1" "$_dropin" "$TMP/sshd-drive.sh" "$TMP/s1out" "$TMP/hostkey" "$TMP/hostkey.pub" "$APT_LIB"; do
       [ -e "$_m" ] || { echo "FIXTURE-FAIL: S1 mount source is absent: $_m" >&2; exit 2; }
     done
-    gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
+    gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
     docker run --rm \
       -v "$GD_APT_STATE:/work/apt" \
       -e "S1_RESTART_MODE=${S1_RESTART_MODE:-ok}" -e "SSHD_T_MODE=${SSHD_T_MODE:-real}" \
@@ -3044,10 +3046,11 @@ INJECT="${GIT_DATA_REHEARSAL_INJECT:-}"
 # Three of the eight injections produce this verdict shape, not one.
 [ "$INJECT" = "rc0-dead-capture" ] && exit 0
 
-# BOUNDED APT. `-o Acquire::Retries=3` covers transient mirror failures inside apt itself;
-# the backoff loop covers the ones it does not retry. This does NOT add Ubuntu's mirrors to
-# the merge gate -- they were already there, because a dead container yields 0 for all three
-# arms and the suite already exited non-zero. What changes is that the failure now says so.
+# BOUNDED APT (#9379). lib/apt-bounded.sh owns the retry loop, the per-attempt cap and the budget shared with
+# every other apt-bearing container in this run. This does NOT add Ubuntu's mirrors to the merge gate -- they
+# were already there, because a dead container yields 0 for all three arms and the suite already exited
+# non-zero. What changes is that the failure now says so, within the budget instead of at the suite bound.
+# The INJECT lines below stay ahead of the helper so a mutation row still costs one container run.
 [ "$INJECT" = "apt-update" ] && fixture_fail "apt-get update (injected)"
 [ "$INJECT" = "apt-install" ] && fixture_fail "apt-get install curl python3 failed past 3 attempts"
 . /work/apt/apt-bounded.sh || fixture_fail "apt-bounded.sh could not be sourced (mount missing)"
@@ -3154,7 +3157,7 @@ rm -rf "$TMP/r4out"; mkdir -p "$TMP/r4out"; : > "$TMP/r4out/capture.log"
 # AND any reason to open the stdout file -- referenced only inside failure-message details,
 # so nothing ever read it. Reproducing #7501 required patching the EXIT trap by hand.
 _r4_rc=0
-gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S"
+gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
 docker run --rm \
   -v "$GD_APT_STATE:/work/apt" \
   -e "GIT_DATA_REHEARSAL_INJECT=${GIT_DATA_REHEARSAL_INJECT:-}" \
